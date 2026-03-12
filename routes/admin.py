@@ -1,8 +1,9 @@
-# 管理端：最近窗口列表、白名单/黑名单、删除某一轮对话
+# 管理端：最近窗口列表、白名单/黑名单、删除某一轮对话、一键清空
 from flask import Blueprint, request, jsonify
 
 from storage import whitelist_store, blacklist_store
 from storage import r2_store
+from storage.wipe_local import wipe_local_data
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -126,3 +127,30 @@ def core_cache_sync_from_notion():
     if not ok:
         return jsonify({"ok": False, "error": err}), 500
     return jsonify({"ok": True})
+
+
+@bp.route("/wipe_all", methods=["POST", "DELETE"])
+def wipe_all_data():
+    """
+    一键清空：R2 所有记录 + 本地白名单/黑名单/最近窗口/上次回复时间。
+    仅测试/重置用。必须带 confirm=wipe_all 才执行（query 或 body 均可）。
+    """
+    data = request.get_json(silent=True) or {}
+    confirm = request.args.get("confirm") or data.get("confirm") or ""
+    if confirm != "wipe_all":
+        return jsonify({
+            "error": "未确认：请带 confirm=wipe_all（query 或 body）再调用",
+            "example_query": "POST /admin/wipe_all?confirm=wipe_all",
+            "example_body": '{"confirm": "wipe_all"}',
+        }), 400
+    r2_ok, r2_deleted, r2_err = r2_store.delete_all_gateway_data()
+    local_ok, local_cleared, local_err = wipe_local_data()
+    if not r2_ok:
+        return jsonify({"ok": False, "error": f"R2: {r2_err or '未知错误'}"}), 500
+    if not local_ok:
+        return jsonify({"ok": False, "error": f"本地: {local_err or '未知错误'}"}), 500
+    return jsonify({
+        "ok": True,
+        "r2_deleted_keys": r2_deleted,
+        "local_cleared_files": local_cleared,
+    })
