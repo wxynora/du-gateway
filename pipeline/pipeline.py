@@ -26,14 +26,27 @@ from services.deepseek_summary import fetch_new_summary
 
 
 def get_window_id(headers: dict, body: Optional[dict] = None) -> str:
-    """从请求头或 body 中取窗口 ID。"""
+    """从请求头或 body 中取窗口 ID。支持 body 里的 id、window_id，或 Headers 的 X-Window-Id。"""
     wid = (headers or {}).get(WINDOW_ID_HEADER) or (headers or {}).get(
         WINDOW_ID_HEADER.lower().replace("-", "_")
     )
     if wid:
-        return wid.strip()
-    if body and isinstance(body.get("window_id"), str):
-        return body["window_id"].strip()
+        return (wid if isinstance(wid, str) else str(wid)).strip()
+    if body:
+        for key in ("window_id", "id", "assistant_id"):
+            v = body.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    return ""
+
+
+def get_assistant_id(headers: dict, body: Optional[dict] = None) -> str:
+    """从请求里取 assistant_id（用于「只允许某 assistant_id 走后续进程」的过滤）。"""
+    aid = (headers or {}).get("X-Assistant-Id") or (headers or {}).get("x_assistant_id")
+    if aid and isinstance(aid, str) and aid.strip():
+        return aid.strip()
+    if body and isinstance(body.get("assistant_id"), str) and body["assistant_id"].strip():
+        return body["assistant_id"].strip()
     return ""
 
 

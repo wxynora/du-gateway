@@ -28,6 +28,84 @@ TARGET_AI_URL（真正出回复的对话 API）
 
 ---
 
+## 1.1 自定义 Headers / 自定义 Body 怎么填（傻瓜版）
+
+RikkaHub 有两个可配项：**自定义 Headers**、**自定义 Body**。网关用它们来识别「当前是哪个对话窗口」和「是否一键加白名单」。
+
+### 网关认哪些东西
+
+| 用途 | 从哪里读 | 填什么 |
+|------|----------|--------|
+| **窗口 ID**（区分不同对话，做白名单/黑名单/存档） | 先看请求头，再看 body | Headers 里 `X-Window-Id: 唯一值`，或 Body 里 `"assistant_id": "唯一值"` / `"id"` / `"window_id"`（RikkaHub 里可用变量如 `assistant_id`） |
+| **一键加白名单**（可选） | 只读请求头 | Headers 里 `X-Add-To-Whitelist: true` |
+
+窗口 ID 的「唯一值」要**每个对话不同**（同一对话里每条消息用同一个值）。这样网关才能按窗口做记忆、黑名单等。
+
+---
+
+### 自定义 Headers 怎么填
+
+在 RikkaHub 的「自定义 Headers」里加一行（或若干行）：
+
+**方式 A：RikkaHub 里用对话/助手 ID 变量时（推荐）**
+
+- 键：`X-Window-Id`
+- 值：填 RikkaHub 的变量，例如 `{{assistant_id}}` 或 `{{id}}`（按 RikkaHub 实际提供的变量名）。这样每个对话自动一个 ID。
+
+**方式 B：没有变量时**
+
+- 键：`X-Window-Id`
+- 值：自己写一个固定字符串，例如 `my-chat-1`。  
+  缺点：所有对话共用一个 ID，相当于只有一个窗口，白名单/黑名单/存档都混在一起。适合先试通再换方式 A。
+
+**可选：一键加白名单**
+
+- 键：`X-Add-To-Whitelist`
+- 值：`true`（只在你想「把当前对话加入白名单」的那次请求里加，不必每条都带）。
+
+---
+
+### 自定义 Body 怎么填
+
+网关还会从**请求 body 的顶层**读 `assistant_id`、`id` 或 `window_id`（字符串）。RikkaHub 里若变量叫 **`assistant_id`**，在「自定义 Body」里可以写：
+
+```json
+{
+  "assistant_id": "这里填唯一值或变量"
+}
+```
+
+值可写成 `"{{assistant_id}}"` 等。也支持 `"id"`、`"window_id"`。
+
+**注意**：Headers 和 Body 里都带时，网关**优先用 Headers 的 `X-Window-Id`**，再按 body 的 `window_id`、`id`、`assistant_id` 顺序读。
+
+---
+
+### 小结
+
+| 想达到的效果 | 在 RikkaHub 里怎么配 |
+|--------------|----------------------|
+| 每个对话单独记白名单/黑名单/存档 | 自定义 Headers 加 `X-Window-Id`，值用 `{{assistant_id}}`；或 Body 加 `"assistant_id": "{{assistant_id}}"` |
+| 没有变量、先试通 | Headers 加 `X-Window-Id: 任意固定值`，或 Body 加 `"assistant_id": "任意固定值"` |
+| 某次请求「把当前对话加白名单」 | 该次请求的 Headers 里加 `X-Add-To-Whitelist: true` |
+
+配好后发几条消息，在网关的 `GET /admin/status` 里看 `recent_windows.count`、`whitelist.count` 是否有变化，或 `GET /admin/windows` 看是否出现窗口，即可确认是否生效。
+
+---
+
+### 只允许某个对话走网关记忆（其余只转发）
+
+在网关 **.env** 里配置：
+
+```env
+ALLOWED_ASSISTANT_IDS=0950e2dc-9bd5-4801-afa3-aa887aa36b4e
+```
+
+多个用逗号分隔：`ALLOWED_ASSISTANT_IDS=id1,id2,id3`。  
+只有请求里的 **assistant_id**（Body 的 `assistant_id` 或 Header 的 `X-Assistant-Id`）在这个列表里时，才会走记忆、总结、白名单等后续进程；其他请求**只做转发**。留空表示不限制。
+
+---
+
 ## 2. 网关 .env 里 TARGET 填什么
 
 这里的 TARGET 是**网关收到 RikkaHub 的请求后，要转发的目标**，也就是**真正提供对话能力的 API**。
