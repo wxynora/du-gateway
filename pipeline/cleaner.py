@@ -1,5 +1,5 @@
 # 两条数据流用的清洗逻辑
-# 发给渡：只清 Rikka 预设 + 表情包→文字
+# 发给渡：只清 Rikka 预设，不替换表情包（让渡看到 (表情包:名字) 格式并按此输出）
 # 存 R2：完整清洗 = 清 Rikka + 表情包→文字 + 图片→占位符（描述在 images/）
 import copy
 import json
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from config import RIKKA_PRESET_PATTERNS, EMOJI_MAPPING_FILE
 
-# 表情包格式：(表情包:code) → [表情:描述] 或 [表情]（对照表在 data/emoji_mapping.json，老婆可编辑）
+# 表情包格式：(表情包:xxx) → [表情:描述]（对照表在 data/emoji_mapping.json）
 EMOJI_PACK_PATTERN = re.compile(r"\(表情包:([^)]*)\)", re.IGNORECASE)
 
 
@@ -50,17 +50,18 @@ def clean_rikka_from_text(text: str) -> str:
 
 
 def apply_text_cleaning_for_forward(text: str) -> str:
-    """发给渡用的文本清洗：Rikka + 表情包→文字。"""
+    """发给渡用的文本清洗：只清 Rikka 预设，不替换表情包，让渡看到并学会 (表情包:名字) 格式。"""
     if not text:
         return text
-    t = replace_emoji_with_text(text)
-    t = clean_rikka_from_text(t)
-    return t
+    return clean_rikka_from_text(text)
 
 
 def apply_text_cleaning_for_r2(text: str) -> str:
-    """存 R2 用的文本清洗：与发给渡相同（Rikka + 表情包→文字）。"""
-    return apply_text_cleaning_for_forward(text)
+    """存 R2 用的文本清洗：Rikka + 表情包→文字（存档可读）。"""
+    if not text:
+        return text
+    t = replace_emoji_with_text(text)
+    return clean_rikka_from_text(t)
 
 
 def clean_message_content_for_forward(content) -> str | list:

@@ -97,7 +97,7 @@ def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
 
 def step_clean_for_forward(body: dict) -> dict:
     """
-    发给当前窗口渡的清洗：只清 Rikka 预设 + 表情包→文字（图片保持原样）。
+    发给当前窗口渡的清洗：只清 Rikka 预设（不替换表情包，渡按 (表情包:名字) 格式）；图片保持原样。
     两条流之一：此 body 用于转发给 AI。
     """
     from pipeline.cleaner import clean_message_content_for_forward
