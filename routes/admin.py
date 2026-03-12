@@ -1,6 +1,13 @@
-# 管理端：最近窗口列表、白名单/黑名单、删除某一轮对话、一键清空
+# 管理端：最近窗口列表、白名单/黑名单、删除某一轮对话、一键清空、功能状态
+import os
 from flask import Blueprint, request, jsonify
 
+from config import (
+    TARGET_AI_URL,
+    DEEPSEEK_API_KEY,
+    NOTION_API_KEY,
+    LAST_USER_REPLY_FILE,
+)
 from storage import whitelist_store, blacklist_store
 from storage import r2_store
 from storage.wipe_local import wipe_local_data
@@ -90,6 +97,89 @@ def get_summary_preview():
         "summary": summary.strip(),
         "length": len(summary.strip()),
     })
+
+
+@bp.route("/status", methods=["GET"])
+def get_status():
+    """
+    各功能是否正常、是否有数据，一屏看完。
+    用于确认：总结、R2、动态层、核心缓存、小本本、白/黑名单、最近窗口、上次回复时间、配置是否齐全。
+    """
+    out = {}
+
+    # 总结记忆
+    try:
+        s = r2_store.get_summary("")
+        out["summary"] = {
+            "ok": True,
+            "has_summary": bool(s and s.strip()),
+            "length": len((s or "").strip()),
+        }
+    except Exception as e:
+        out["summary"] = {"ok": False, "error": str(e)}
+
+    # R2（用总结读作为连通性检测）
+    try:
+        r2_store.get_summary("")
+        out["r2"] = {"ok": True, "message": "可读"}
+    except Exception as e:
+        out["r2"] = {"ok": False, "error": str(e)}
+
+    # 动态层
+    try:
+        lst = r2_store.get_dynamic_memory_list() or []
+        out["dynamic_memory"] = {"ok": True, "count": len(lst)}
+    except Exception as e:
+        out["dynamic_memory"] = {"ok": False, "error": str(e)}
+
+    # 核心缓存待审
+    try:
+        pending = r2_store.get_core_cache_pending() or []
+        out["core_cache"] = {"ok": True, "pending_count": len(pending)}
+    except Exception as e:
+        out["core_cache"] = {"ok": False, "error": str(e)}
+
+    # 小本本
+    try:
+        entries = r2_store.get_notebook_entries() or []
+        out["notebook"] = {"ok": True, "count": len(entries)}
+    except Exception as e:
+        out["notebook"] = {"ok": False, "error": str(e)}
+
+    # 白名单 / 黑名单 / 最近窗口
+    try:
+        out["whitelist"] = {"ok": True, "count": len(whitelist_store.list_whitelist())}
+    except Exception as e:
+        out["whitelist"] = {"ok": False, "error": str(e)}
+    try:
+        out["blacklist"] = {"ok": True, "count": len(blacklist_store.list_blacklist())}
+    except Exception as e:
+        out["blacklist"] = {"ok": False, "error": str(e)}
+    try:
+        out["recent_windows"] = {"ok": True, "count": len(whitelist_store.list_recent_windows(limit=500))}
+    except Exception as e:
+        out["recent_windows"] = {"ok": False, "error": str(e)}
+
+    # 上次 user 回复时间（本地文件）
+    try:
+        out["last_user_reply"] = {"ok": True, "exists": LAST_USER_REPLY_FILE.exists()}
+    except Exception as e:
+        out["last_user_reply"] = {"ok": False, "error": str(e)}
+
+    # 配置是否齐全（不测连通性，只看出没填）
+    try:
+        cf_id = (os.environ.get("CF_ACCOUNT_ID") or "").strip()
+        cf_tok = (os.environ.get("CLOUDFLARE_API_TOKEN") or os.environ.get("CLOUDFLARE_AUTH_TOKEN") or "").strip()
+        out["config"] = {
+            "target_configured": bool(TARGET_AI_URL and TARGET_AI_URL.strip()),
+            "summary_deepseek_configured": bool(DEEPSEEK_API_KEY and DEEPSEEK_API_KEY.strip()),
+            "notion_configured": bool(NOTION_API_KEY and NOTION_API_KEY.strip()),
+            "embedding_configured": bool(cf_id and cf_tok),
+        }
+    except Exception as e:
+        out["config"] = {"ok": False, "error": str(e)}
+
+    return jsonify(out)
 
 
 @bp.route("/windows/<window_id>/rounds", methods=["GET"])
