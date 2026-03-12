@@ -27,6 +27,9 @@ RECENT_WINDOWS_FILE = DATA_DIR / "recent_windows.json"
 BLACKLIST_FILE = DATA_DIR / "blacklist.json"
 # 新窗口下 user 文本包含该词即视为测试窗，加入黑名单
 TEST_BLACKLIST_KEYWORD = os.environ.get("TEST_BLACKLIST_KEYWORD", "测试").strip()
+# 只允许这些 assistant_id 走网关后续进程（记忆、总结、白名单等）；逗号分隔；留空=不限制
+_ALLOWED_ASSISTANT_IDS_STR = os.environ.get("ALLOWED_ASSISTANT_IDS", "").strip()
+ALLOWED_ASSISTANT_IDS = [a.strip() for a in _ALLOWED_ASSISTANT_IDS_STR.split(",") if a.strip()] if _ALLOWED_ASSISTANT_IDS_STR else []
 # 白名单：最多保留窗口数，超了按 last_seen 最旧踢；超过 N 天未出现也踢
 MAX_WHITELIST_SIZE = int(os.environ.get("MAX_WHITELIST_SIZE", "50"))
 WHITELIST_EXPIRE_DAYS = int(os.environ.get("WHITELIST_EXPIRE_DAYS", "14"))

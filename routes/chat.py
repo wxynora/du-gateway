@@ -12,9 +12,11 @@ from config import (
     GATEWAY_MODELS,
     WINDOW_ID_HEADER,
     TEST_BLACKLIST_KEYWORD,
+    ALLOWED_ASSISTANT_IDS,
 )
 from pipeline.pipeline import (
     get_window_id,
+    get_assistant_id,
     step_whitelist_and_record,
     step_clean_images_and_save_desc,
     step_clean_for_forward,
@@ -176,6 +178,24 @@ def _forward_to_ai(body: dict, headers: dict):
                 continue
             # 只有 2xx 算成功，其余（4xx/5xx/429 等）都 fallback 到下一个
             if 200 <= r.status_code < 300:
+                # DEBUG 时打出上游原始响应的结构与内容摘要，便于核对格式
+                if data is not None and logger.isEnabledFor(10):  # DEBUG=10
+                    try:
+                        keys = list(data.keys()) if isinstance(data, dict) else []
+                        choices = (data or {}).get("choices") or []
+                        msg = (choices[0] or {}).get("message") if choices else None
+                        msg_keys = list(msg.keys()) if isinstance(msg, dict) else []
+                        content_preview = ""
+                        if isinstance(msg, dict) and "content" in msg:
+                            c = msg["content"]
+                            content_preview = (c[:200] + "…") if isinstance(c, str) and len(c) > 200 else str(c)[:200]
+                        logger.debug(
+                            "上游原始响应 top_keys=%s choices[0].message keys=%s content_preview=%s full_sample=%s",
+                            keys, msg_keys, content_preview,
+                            json.dumps(data, ensure_ascii=False)[:2500],
+                        )
+                    except Exception:
+                        pass
                 return data, r.status_code, None
             last_status = r.status_code
             last_err = f"HTTP {r.status_code}"
@@ -265,7 +285,7 @@ def chat_completions():
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # 1) 黑名单：只转发，响应末尾加「（黑名单）」提示
+    # 1) 黑名单：只转发，响应加「（黑名单）」前缀
     if blacklist_store.is_blacklisted(window_id):
         whitelist_store.record_recent_window(window_id)
         body_forward = step_clean_for_forward(body)
@@ -277,6 +297,19 @@ def chat_completions():
         if status >= 400:
             return jsonify(resp_json or {"error": "upstream error"}), status
         _prepend_blacklist_prefix_to_response(resp_json)
+        return jsonify(resp_json), 200
+
+    # 1.5) 配置了 ALLOWED_ASSISTANT_IDS 时：只允许列表内的 assistant_id 走后续进程，其余仅转发
+    assistant_id = get_assistant_id(headers, body)
+    if ALLOWED_ASSISTANT_IDS and assistant_id not in ALLOWED_ASSISTANT_IDS:
+        body_forward = step_clean_for_forward(body)
+        if body.get("stream"):
+            return _stream_response(_stream_forward_to_ai(body_forward, headers))
+        resp_json, status, err = _forward_to_ai(body_forward, headers)
+        if err:
+            return jsonify({"error": err}), status
+        if status >= 400:
+            return jsonify(resp_json or {"error": "upstream error"}), status
         return jsonify(resp_json), 200
 
     # 2) 已有历史窗口：白名单内走完整管道，否则只转发
