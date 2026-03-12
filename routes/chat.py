@@ -32,7 +32,7 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
 
-BLACKLIST_SUFFIX = "\n\n（黑名单）"
+BLACKLIST_PREFIX = "（黑名单）\n\n"
 
 
 def _user_message_contains_keyword(messages, keyword: str) -> bool:
@@ -58,8 +58,8 @@ def _user_message_contains_keyword(messages, keyword: str) -> bool:
     return False
 
 
-def _append_blacklist_suffix_to_response(resp_json: dict) -> None:
-    """在响应体里 assistant 内容末尾追加「（黑名单）」；就地修改。"""
+def _prepend_blacklist_prefix_to_response(resp_json: dict) -> None:
+    """在响应体里 assistant 内容开头加「（黑名单）」标识；就地修改。"""
     if not resp_json:
         return
     choices = resp_json.get("choices")
@@ -70,20 +70,20 @@ def _append_blacklist_suffix_to_response(resp_json: dict) -> None:
         return
     content = msg.get("content")
     if isinstance(content, str):
-        msg["content"] = content.rstrip() + BLACKLIST_SUFFIX
+        msg["content"] = BLACKLIST_PREFIX + content.lstrip()
         return
     if isinstance(content, list):
-        last_text_idx = -1
-        for i in range(len(content) - 1, -1, -1):
-            if (content[i] or {}).get("type") == "text":
-                last_text_idx = i
+        first_text_idx = -1
+        for i, part in enumerate(content):
+            if (part or {}).get("type") == "text":
+                first_text_idx = i
                 break
-        if last_text_idx >= 0:
-            content[last_text_idx]["text"] = (
-                (content[last_text_idx].get("text") or "").rstrip() + BLACKLIST_SUFFIX
+        if first_text_idx >= 0:
+            content[first_text_idx]["text"] = (
+                BLACKLIST_PREFIX + (content[first_text_idx].get("text") or "").lstrip()
             )
         else:
-            content.append({"type": "text", "text": BLACKLIST_SUFFIX.strip()})
+            content.insert(0, {"type": "text", "text": BLACKLIST_PREFIX.strip()})
 
 
 def _get_forward_targets():
@@ -276,7 +276,7 @@ def chat_completions():
             return jsonify({"error": err}), status
         if status >= 400:
             return jsonify(resp_json or {"error": "upstream error"}), status
-        _append_blacklist_suffix_to_response(resp_json)
+        _prepend_blacklist_prefix_to_response(resp_json)
         return jsonify(resp_json), 200
 
     # 2) 已有历史窗口：白名单内走完整管道，否则只转发
@@ -328,7 +328,7 @@ def chat_completions():
             return jsonify({"error": err}), status
         if status >= 400:
             return jsonify(resp_json or {"error": "upstream error"}), status
-        _append_blacklist_suffix_to_response(resp_json)
+        _prepend_blacklist_prefix_to_response(resp_json)
         logger.info("新窗含「测试」，已加入黑名单 window_id=%s", window_id)
         return jsonify(resp_json), 200
 
