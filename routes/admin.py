@@ -76,6 +76,22 @@ def delete_round(window_id, round_index):
     return jsonify({"ok": ok, "window_id": window_id, "round_index": round_index})
 
 
+@bp.route("/summary", methods=["GET"])
+def get_summary_preview():
+    """
+    查看当前是否有总结记忆（全局一份，白名单窗口共享）。
+    返回 has_summary、长度、全文，方便确认「有没有总结」。
+    """
+    summary = r2_store.get_summary("")
+    if not summary or not summary.strip():
+        return jsonify({"has_summary": False, "summary": None, "length": 0})
+    return jsonify({
+        "has_summary": True,
+        "summary": summary.strip(),
+        "length": len(summary.strip()),
+    })
+
+
 @bp.route("/windows/<window_id>/rounds", methods=["GET"])
 def list_rounds(window_id):
     """
