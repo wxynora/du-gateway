@@ -41,6 +41,10 @@ TARGET_AI_URLS = [u.strip() for u in _TARGET_AI_URLS_STR.split(",") if u.strip()
 _TARGET_AI_KEYS_STR = os.environ.get("TARGET_AI_API_KEYS", "").strip()
 TARGET_AI_API_KEYS = [k.strip() for k in _TARGET_AI_KEYS_STR.split(",")] if _TARGET_AI_KEYS_STR else []
 
+# 模型列表兜底：上游没有 /v1/models 或拉取失败时，返回此列表（逗号分隔），RikkaHub 才能显示模型
+_GATEWAY_MODELS_STR = os.environ.get("GATEWAY_MODELS", "").strip()
+GATEWAY_MODELS = [m.strip() for m in _GATEWAY_MODELS_STR.split(",") if m.strip()] if _GATEWAY_MODELS_STR else []
+
 # DeepSeek：窗口总结
 DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")

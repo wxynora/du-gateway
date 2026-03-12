@@ -8,6 +8,7 @@ from config import (
     TARGET_AI_API_KEY,
     TARGET_AI_URLS,
     TARGET_AI_API_KEYS,
+    GATEWAY_MODELS,
     WINDOW_ID_HEADER,
     TEST_BLACKLIST_KEYWORD,
 )
@@ -121,7 +122,20 @@ def _forward_to_ai(body: dict, headers: dict):
                 req_headers[h] = request.headers.get(h)
         try:
             r = requests.post(url, headers=req_headers, json=body, timeout=120)
-            data = r.json() if r.content else None
+            try:
+                data = r.json() if r.content else None
+            except (ValueError, requests.exceptions.JSONDecodeError):
+                # 上游返回了非 JSON（如 HTML 错误页、空 body、纯文本）
+                preview = (r.text or "")[:200]
+                if len((r.text or "")) > 200:
+                    preview += "..."
+                logger.warning(
+                    "转发目标 %s 返回非 JSON status=%s body_preview=%s",
+                    url[:50], r.status_code, preview,
+                )
+                last_status = r.status_code
+                last_err = "上游返回非 JSON"
+                continue
             # 只有 2xx 算成功，其余（4xx/5xx/429 等）都 fallback 到下一个
             if 200 <= r.status_code < 300:
                 return data, r.status_code, None
@@ -141,19 +155,36 @@ def _last_user_message(messages):
     return None
 
 
+def _static_models_response():
+    """用 GATEWAY_MODELS 拼成 OpenAI 风格的 /v1/models 响应。"""
+    if not GATEWAY_MODELS:
+        return None
+    data = [
+        {"id": mid, "object": "model", "created": 0}
+        for mid in GATEWAY_MODELS
+    ]
+    return {"object": "list", "data": data}
+
+
 @bp.route("/v1/models", methods=["GET"])
 @bp.route("/models", methods=["GET"])
 def list_models():
     """
     代理到中转站的 GET /v1/models，这样 RikkaHub 填网关地址时也能拉取到模型列表。
-    用第一个转发目标的地址和 Key。
+    若上游没有该接口或拉取失败，且配置了 GATEWAY_MODELS，则返回静态列表。
     """
     targets = _get_forward_targets()
     if not targets:
+        static = _static_models_response()
+        if static:
+            return jsonify(static), 200
         return jsonify({"error": "TARGET_AI_URL 或 TARGET_AI_URLS 未配置"}), 502
     url, api_key = targets[0]
     models_url = _chat_url_to_models_url(url)
     if not models_url:
+        static = _static_models_response()
+        if static:
+            return jsonify(static), 200
         return jsonify({"error": "无法解析模型列表地址"}), 502
     req_headers = {"Content-Type": "application/json"}
     if api_key:
@@ -161,9 +192,20 @@ def list_models():
     try:
         r = requests.get(models_url, headers=req_headers, timeout=30)
         data = r.json() if r.content else None
-        return jsonify(data or {}), r.status_code
+        # 上游返回 2xx 且带 data 列表则直接用
+        if r.status_code == 200 and data and isinstance(data.get("data"), list) and len(data.get("data", [])) > 0:
+            return jsonify(data), 200
+        # 否则用静态列表兜底（若配置了）
+        static = _static_models_response()
+        if static:
+            logger.info("上游模型列表不可用或为空，使用 GATEWAY_MODELS 兜底")
+            return jsonify(static), 200
+        return jsonify(data or {"error": "上游未返回模型列表"}), r.status_code if r.status_code != 200 else 502
     except Exception as e:
         logger.warning("拉取模型列表失败 %s error=%s", models_url, e)
+        static = _static_models_response()
+        if static:
+            return jsonify(static), 200
         return jsonify({"error": str(e)}), 502
 
 
