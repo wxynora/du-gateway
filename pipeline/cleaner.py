@@ -79,7 +79,9 @@ def clean_message_content_for_forward(content) -> str | list:
                 out.append(part)
                 continue
             if part.get("type") == "text":
-                out.append({"type": "text", "text": apply_text_cleaning_for_forward(part.get("text", ""))})
+                # 兼容 part 用 text 或 content 存文案（如部分前端/API）
+                raw = part.get("text") or part.get("content") or ""
+                out.append({"type": "text", "text": apply_text_cleaning_for_forward(raw)})
             else:
                 out.append(part)  # 图片等保留
         return out
@@ -105,7 +107,8 @@ def clean_message_for_r2(msg: dict) -> dict:
                 out.append(part)
                 continue
             if part.get("type") == "text":
-                out.append({"type": "text", "text": apply_text_cleaning_for_r2(part.get("text", ""))})
+                raw = part.get("text") or part.get("content") or ""
+                out.append({"type": "text", "text": apply_text_cleaning_for_r2(raw)})
             elif part.get("type") in ("image_url", "image"):
                 out.append({"type": "text", "text": "[图片]"})
             else:

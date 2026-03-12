@@ -370,7 +370,9 @@ def update_latest_4_rounds_global(rounds: list) -> bool:
 
 
 def has_window_history(window_id: str) -> bool:
-    """该窗口是否已有过存档（有则不是新窗口）。"""
+    """该窗口是否已有过存档（有则不是新窗口）。空 window_id 视为无历史，走新窗逻辑。"""
+    if not (window_id and window_id.strip()):
+        return False
     client = _s3_client()
     if not client:
         return False

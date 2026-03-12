@@ -36,7 +36,7 @@ BLACKLIST_SUFFIX = "\n\n（黑名单）"
 
 
 def _user_message_contains_keyword(messages, keyword: str) -> bool:
-    """最后一条 user 消息的纯文本是否包含 keyword。"""
+    """最后一条 user 消息的纯文本是否包含 keyword。兼容 content 为 list 时 part 用 text 或 content 字段。"""
     if not (keyword and keyword.strip()):
         return False
     for m in reversed(messages or []):
@@ -46,9 +46,13 @@ def _user_message_contains_keyword(messages, keyword: str) -> bool:
         if isinstance(content, str):
             return keyword in content
         if isinstance(content, list):
-            text = " ".join(
-                c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
-            )
+            parts = []
+            for c in content:
+                if isinstance(c, dict):
+                    parts.append(c.get("text") or c.get("content") or "")
+                else:
+                    parts.append(str(c))
+            text = " ".join(parts)
             return keyword in text
         return False
     return False
