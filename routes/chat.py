@@ -1,7 +1,8 @@
 # 聊天代理：黑名单只转发且响应末尾加「（黑名单）」；新窗默认白名单，新窗+user含「测试」→黑名单
+import json
 import requests
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from config import (
     TARGET_AI_URL,
@@ -106,8 +107,38 @@ def _chat_url_to_models_url(chat_url: str) -> str:
     return base.rstrip("/") + "/v1/models"
 
 
+def _stream_forward_to_ai(body: dict, headers: dict):
+    """流式转发：上游 SSE 原样逐行 yield，供 Flask 以 text/event-stream 返回。RikkaHub 等客户端要流式才正常显示。"""
+    targets = _get_forward_targets()
+    if not targets:
+        yield ("data: " + json.dumps({"error": "TARGET_AI_URL 或 TARGET_AI_URLS 未配置"}) + "\n\n").encode("utf-8")
+        return
+    url, api_key = targets[0]
+    req_headers = {"Content-Type": "application/json"}
+    if api_key:
+        req_headers["Authorization"] = f"Bearer {api_key}"
+    for h in ("Accept", "Accept-Encoding"):
+        if request.headers.get(h):
+            req_headers[h] = request.headers.get(h)
+    body_send = dict(body)
+    body_send["stream"] = True
+    try:
+        r = requests.post(url, headers=req_headers, json=body_send, timeout=120, stream=True)
+        if r.status_code != 200:
+            yield ("data: " + json.dumps({"error": f"上游 HTTP {r.status_code}"}) + "\n\n").encode("utf-8")
+            return
+        for line in r.iter_lines():
+            if line is not None:
+                yield line + b"\n"
+            else:
+                yield b"\n"
+    except Exception as e:
+        logger.warning("流式转发异常 %s %s", url[:50], e)
+        yield ("data: " + json.dumps({"error": str(e)}) + "\n\n").encode("utf-8")
+
+
 def _forward_to_ai(body: dict, headers: dict):
-    """将请求体转发到配置的 AI 接口，支持多目标 fallback：一个失败试下一个。返回 (response_json, status_code, error)。"""
+    """将请求体转发到配置的 AI 接口，支持多目标 fallback：一个失败试下一个。返回 (response_json, status_code, error)。非流式。"""
     targets = _get_forward_targets()
     if not targets:
         return None, 502, "TARGET_AI_URL 或 TARGET_AI_URLS 未配置"
@@ -121,7 +152,7 @@ def _forward_to_ai(body: dict, headers: dict):
             if request.headers.get(h):
                 req_headers[h] = request.headers.get(h)
         try:
-            # 强制非流式，否则上游返回 SSE（多行 data: {...}），无法用 r.json() 解析
+            # 非流式：上游返回单 JSON，便于解析、存档、追加黑名单后缀等
             body_send = dict(body)
             body_send["stream"] = False
             r = requests.post(url, headers=req_headers, json=body_send, timeout=120)
@@ -223,10 +254,19 @@ def chat_completions():
     headers = dict(request.headers) if request.headers else {}
     window_id = get_window_id(headers, body)
 
+    def _stream_response(gen):
+        return Response(
+            stream_with_context(gen),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     # 1) 黑名单：只转发，响应末尾加「（黑名单）」提示
     if blacklist_store.is_blacklisted(window_id):
         whitelist_store.record_recent_window(window_id)
         body_forward = step_clean_for_forward(body)
+        if body.get("stream"):
+            return _stream_response(_stream_forward_to_ai(body_forward, headers))
         resp_json, status, err = _forward_to_ai(body_forward, headers)
         if err:
             return jsonify({"error": err}), status
@@ -247,6 +287,8 @@ def chat_completions():
             body = step_inject_latest_4_rounds_for_new_window(body, window_id)
             body = step_inject_summary(body, window_id)
             body = step_inject_dynamic_memory(body, window_id)
+        if body.get("stream"):
+            return _stream_response(_stream_forward_to_ai(body, headers))
         resp_json, status, err = _forward_to_ai(body, headers)
         if err:
             logger.error("Chat 转发失败 window_id=%s error=%s", window_id, err, exc_info=True)
@@ -275,6 +317,8 @@ def chat_completions():
     if last_user_text_contains_test:
         blacklist_store.add_to_blacklist(window_id)
         body_forward = step_clean_for_forward(body)
+        if body.get("stream"):
+            return _stream_response(_stream_forward_to_ai(body_forward, headers))
         resp_json, status, err = _forward_to_ai(body_forward, headers)
         if err:
             return jsonify({"error": err}), status
@@ -290,6 +334,8 @@ def chat_completions():
     body = step_inject_latest_4_rounds_for_new_window(body, window_id)
     body = step_inject_summary(body, window_id)
     body = step_inject_dynamic_memory(body, window_id)
+    if body.get("stream"):
+        return _stream_response(_stream_forward_to_ai(body, headers))
     resp_json, status, err = _forward_to_ai(body, headers)
     if err:
         logger.error("Chat 转发失败 window_id=%s error=%s", window_id, err, exc_info=True)
