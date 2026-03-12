@@ -121,7 +121,10 @@ def _forward_to_ai(body: dict, headers: dict):
             if request.headers.get(h):
                 req_headers[h] = request.headers.get(h)
         try:
-            r = requests.post(url, headers=req_headers, json=body, timeout=120)
+            # 强制非流式，否则上游返回 SSE（多行 data: {...}），无法用 r.json() 解析
+            body_send = dict(body)
+            body_send["stream"] = False
+            r = requests.post(url, headers=req_headers, json=body_send, timeout=120)
             try:
                 data = r.json() if r.content else None
             except (ValueError, requests.exceptions.JSONDecodeError):
