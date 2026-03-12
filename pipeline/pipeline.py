@@ -26,14 +26,14 @@ from services.deepseek_summary import fetch_new_summary
 
 
 def get_window_id(headers: dict, body: Optional[dict] = None) -> str:
-    """从请求头或 body 中取窗口 ID。支持 body 里的 id、window_id，或 Headers 的 X-Window-Id。"""
+    """从请求头或 body 中取窗口 ID。RikkaHub 里字段名叫 id；也支持 window_id、assistant_id 或 Headers 的 X-Window-Id。"""
     wid = (headers or {}).get(WINDOW_ID_HEADER) or (headers or {}).get(
         WINDOW_ID_HEADER.lower().replace("-", "_")
     )
     if wid:
         return (wid if isinstance(wid, str) else str(wid)).strip()
     if body:
-        for key in ("window_id", "id", "assistant_id"):
+        for key in ("id", "window_id", "assistant_id"):
             v = body.get(key)
             if isinstance(v, str) and v.strip():
                 return v.strip()
