@@ -144,6 +144,30 @@ ls -la /root/du-gateway/gateway.log /root/du-gateway/nohup.out 2>/dev/null || tr
 
 若某一段完全没有输出，说明没有对应项（例如没有 gateway.log）；有输出就能看到端口、进程或日志文件路径。
 
+**若 tail -f gateway.log 里连 [Chat] 或 chat 四个字都没出现过**
+
+说明**真正在接请求、在写你看到的那份日志的，不是你在当前目录 nohup 起来的进程**。常见情况：云上另有进程（例如 systemd 服务、或之前起的 nohup）在监听 5000，请求被它接了，你 tail 的可能是它的输出，或你 nohup 的进程根本没收到请求。
+
+按下面在云服务器上执行，确认「谁在监听 5000、用的哪份代码、日志在哪」：
+
+```bash
+# 1) 谁在监听 5000（记下 PID 和 命令）
+sudo lsof -i :5000
+# 或
+sudo ss -tlnp | grep 5000
+
+# 2) 该进程的详细信息和启动目录（把 PID 换成上面看到的）
+sudo cat /proc/PID/cwd
+sudo cat /proc/PID/cmdline | tr '\0' ' '
+
+# 3) 是否有 systemd 在跑网关（若有，日志用 journalctl 看）
+systemctl list-units --type=service | grep -iE "gateway|flask|du|chat"
+```
+
+若发现是 **systemd 服务**在跑：停掉它再用手动 nohup，或改该服务的代码路径并重启服务，这样你改的代码才会生效、[Chat] 才会出现在你 tail 的日志里。若发现是**另一个 nohup/旧进程**：用 `kill PID` 停掉它，再在当前目录重新 `nohup ./venv/bin/python app.py >> gateway.log 2>&1 &`，再 tail 当前目录的 gateway.log，发请求应能看到 [Chat]。
+
+---
+
 **云服务器一次性配置：虚拟环境 + 后台常驻（以后每次打开不用重弄）**
 
 - **虚拟环境只建一次**：在项目目录执行一次即可，以后不会消失。

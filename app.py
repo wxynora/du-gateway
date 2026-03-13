@@ -56,4 +56,6 @@ def health():
 if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", 5000))
-    app.run(host=host, port=port, debug=os.environ.get("FLASK_ENV") == "development")
+    debug = os.environ.get("FLASK_ENV") == "development"
+    # nohup 时不要开 reloader：子进程的 stdout 可能不进你的 log 文件，导致看不到 [Chat] 等输出
+    app.run(host=host, port=port, debug=debug, use_reloader=False)

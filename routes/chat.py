@@ -36,6 +36,15 @@ bp = Blueprint("chat", __name__)
 
 BLACKLIST_PREFIX = "（黑名单）\n\n"
 
+# 上一次 /v1/chat/completions 收到的 window_id / assistant_id / 请求头，供 GET /admin/last-request-ids 查看（不依赖日志）
+last_request_ids = {
+    "window_id": "",
+    "assistant_id": "",
+    "all_x_headers": {},
+    "body_id": None,
+    "body_assistant_id": None,
+}
+
 
 def _user_message_contains_keyword(messages, keyword: str) -> bool:
     """最后一条 user 消息的纯文本是否包含 keyword。兼容 content 为 list 时 part 用 text 或 content 字段。"""
@@ -274,8 +283,6 @@ def chat_completions():
     统一入口：黑名单只转发；新窗观察期前 N 轮只转发并缓存，满 N 轮判定测试窗→黑名单否则进白名单并回放缓存；
     已有白名单窗口走完整管道。
     """
-    # 直接 print 到 stdout，确认请求是否进到当前进程、tail -f gateway.log 是否在看这个进程的输出
-    print("[Chat] POST /v1/chat/completions 收到请求", flush=True)
     body = request.get_json(silent=True) or {}
     headers = dict(request.headers) if request.headers else {}
     # DEBUG：打出 RikkaHub 发来的原始请求（未做任何清洗/注入），便于看结构、做关键字段提取
@@ -311,12 +318,12 @@ def chat_completions():
     assistant_id = get_assistant_id(headers, body)
     # 每条请求打一行，便于确认 RikkaHub 自定义请求头是否带到网关；若 id 一直为空，看 all_x_headers 里有没有
     all_x_headers = {k: v for k, v in (headers or {}).items() if k.upper().startswith("X-")}
-    # 同时 print 到 stdout，避免 logger 未生效时完全看不到（nohup >> gateway.log 时能直接 tail 到）
-    print(
-        "[Chat] window_id=%r assistant_id=%r all_x_headers=%s body_id=%r body_assistant_id=%r"
-        % (window_id, assistant_id, all_x_headers, body.get("id"), body.get("assistant_id")),
-        flush=True,
-    )
+    # 供 GET /admin/last-request-ids 查看，不依赖 tail 日志
+    last_request_ids["window_id"] = window_id
+    last_request_ids["assistant_id"] = assistant_id
+    last_request_ids["all_x_headers"] = dict(all_x_headers)
+    last_request_ids["body_id"] = body.get("id")
+    last_request_ids["body_assistant_id"] = body.get("assistant_id")
     logger.info(
         "chat 收到 window_id=%s assistant_id=%s all_x_headers=%s body_id=%s body_assistant_id=%s",
         repr(window_id),
