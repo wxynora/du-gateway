@@ -53,6 +53,31 @@ def health():
     return {"status": "ok"}
 
 
+@app.route("/summary", methods=["GET"])
+def root_summary():
+    """DS 四轮总结（渡的回忆）全文，与 GET /admin/summary 相同。"""
+    from storage import r2_store
+    summary = r2_store.get_summary("")
+    if not summary or not summary.strip():
+        return {"has_summary": False, "summary": None, "length": 0}
+    return {
+        "has_summary": True,
+        "summary": summary.strip(),
+        "length": len(summary.strip()),
+    }
+
+
+@app.route("/dynamic-memory", methods=["GET"])
+def root_dynamic_memory():
+    """动态层全文，与 GET /admin/dynamic-memory 相同。"""
+    from storage import r2_store
+    try:
+        lst = r2_store.get_dynamic_memory_list() or []
+        return {"ok": True, "count": len(lst), "memories": lst}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "memories": []}, 500
+
+
 if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", 5000))

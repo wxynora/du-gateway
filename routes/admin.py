@@ -86,8 +86,7 @@ def delete_round(window_id, round_index):
 @bp.route("/summary", methods=["GET"])
 def get_summary_preview():
     """
-    查看当前是否有总结记忆（全局一份，白名单窗口共享）。
-    返回 has_summary、长度、全文，方便确认「有没有总结」。
+    查看 DS 四轮总结（渡的回忆）全文。全局一份，存 R2 global/summary.txt。
     """
     summary = r2_store.get_summary("")
     if not summary or not summary.strip():
@@ -97,6 +96,18 @@ def get_summary_preview():
         "summary": summary.strip(),
         "length": len(summary.strip()),
     })
+
+
+@bp.route("/dynamic-memory", methods=["GET"])
+def get_dynamic_memory():
+    """
+    查看动态层全文。R2 dynamic_memory/current.json 的 memories 列表。
+    """
+    try:
+        lst = r2_store.get_dynamic_memory_list() or []
+        return jsonify({"ok": True, "count": len(lst), "memories": lst})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "memories": []}), 500
 
 
 @bp.route("/status", methods=["GET"])
