@@ -174,7 +174,8 @@ def step_inject_summary(body: dict, window_id: str) -> dict:
     period = get_time_period(now)
     head = (
         f"\n\n今日：{today}（{weekday}），当前大概：{period}\n"
-        f"如需知道当前几点，可使用网关提供的 get_time_info 时间工具（不要依赖前端自己的时间提示）。"
+        f"如需知道当前几点，可使用网关提供的 get_time_info 时间工具；"
+        f"如需查询天气，可使用专门的天气查询工具（两者都由后端实现，不依赖前端自己的提示）。"
     )
 
     # 老婆多久没回
