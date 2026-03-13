@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
 cd "$(dirname "$0")"
 
+# 云服务器常见只有 python3，没有 python
+PYTHON=""
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+    PYTHON=python
+else
+    echo "未找到 python3 或 python，请先安装 Python。"
+    exit 1
+fi
+
 if [ ! -f .venv/Scripts/python.exe ] && [ ! -f .venv/bin/python ]; then
     echo "[首次运行] 正在创建虚拟环境并安装依赖..."
-    python -m venv .venv
+    $PYTHON -m venv .venv
     if [ -f .venv/Scripts/pip ]; then
         .venv/Scripts/pip install -r requirements.txt
-    else
+    elif [ -f .venv/bin/pip ]; then
         .venv/bin/pip install -r requirements.txt
+    else
+        .venv/bin/python -m pip install -r requirements.txt
     fi
 fi
 
