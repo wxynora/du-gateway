@@ -87,6 +87,27 @@ RikkaHub 导出数据表里：**窗口** 对应字段 **id**，**不同助手** 
 
 ---
 
+### 网关日志在哪看（确认是否收到 window_id / assistant_id）
+
+网关每条聊天请求会打一行 **INFO** 日志，例如：
+
+```text
+2025-03-11 12:00:00 [Chat] INFO: chat 收到 window_id='xxx' assistant_id='yyy' header_X-Window-Id='xxx' ...
+```
+
+**看哪里：**
+
+| 运行方式 | 在哪看 |
+|----------|--------|
+| **本机命令行**（`python app.py` 或 `flask run`） | **运行网关的那个终端窗口**，每来一条聊天就多一行。 |
+| **服务器 systemd** | `journalctl -u 你的网关服务名 -f`，或该服务的「日志」输出。 |
+| **Docker** | `docker logs -f 容器名`。 |
+| **云平台**（如 Railway、Render、Fly.io） | 该平台控制台里的 **Logs / 日志** 面板，看标准输出。 |
+
+网关**没有默认写日志文件**，日志只打到**标准输出**。若需要落文件，可运行时重定向，例如：`python app.py >> gateway.log 2>&1`。
+
+---
+
 ### 只允许某个助手走网关记忆（其余只转发）
 
 在网关 **.env** 里配置：
