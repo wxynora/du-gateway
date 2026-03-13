@@ -35,10 +35,11 @@ def _header_get(headers: dict, name: str) -> Optional[str]:
 
 
 def get_assistant_id(headers: dict, body: Optional[dict] = None) -> str:
-    """从请求里取 assistant_id（用于「只允许某 assistant_id 走后续进程」的过滤）。"""
-    aid = _header_get(headers, "X-Assistant-Id")
-    if aid and aid.strip():
-        return aid.strip()
+    """从请求里取 assistant_id（用于「只允许某 assistant_id 走后续进程」的过滤）。支持 X-Assistant-Id 或 RikkaHub 自定义头 Assistant_id。"""
+    for header_name in ("X-Assistant-Id", "Assistant_id"):
+        aid = _header_get(headers, header_name)
+        if aid and aid.strip():
+            return aid.strip()
     if body and isinstance(body.get("assistant_id"), str) and body["assistant_id"].strip():
         return body["assistant_id"].strip()
     return ""
