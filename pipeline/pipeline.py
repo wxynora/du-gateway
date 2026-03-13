@@ -190,8 +190,7 @@ def _is_question_like(text: str) -> bool:
 
 def step_inject_summary(body: dict, window_id: str) -> dict:
     """
-    从 R2 读取全局总结，按 token 预算截断后注入 system 末尾。
-    常驻：今日日期（北京时间）+ 当前大概时段；system 加一句「如需知道当前几点，可使用 get_time_info 工具」。
+    常驻注入：今日日期（北京时间）+ 当前大概时段 + get_time_info 提示；有 R2 总结时再追加【窗口记忆总结】。
     兜底：渡的上一轮是问句且含「几点/时间/现在」→ 本轮注入具体时间。
     农历：渡的上一轮含「农历/节气/宜忌/黄历」→ 本轮注入农历节气宜忌。
     """
@@ -206,13 +205,6 @@ def step_inject_summary(body: dict, window_id: str) -> dict:
         _now_beijing,
     )
 
-    summary = r2_store.get_summary(window_id)
-    if not summary or not window_id:
-        return body
-    budget = memory_summary_budget()
-    if estimate_tokens(summary) > budget:
-        summary = truncate_to_tokens(summary, budget)
-        logger.debug("summary truncated to %s tokens", budget)
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
     now = None  # time_aware 内用北京时间
@@ -221,7 +213,7 @@ def step_inject_summary(body: dict, window_id: str) -> dict:
     period = get_time_period(now)
     head = f"\n\n今日：{today}（{weekday}），当前大概：{period}\n如需知道当前几点，可使用 get_time_info 工具"
 
-    # 老婆多久没回：读取网关上次收到 user 回复时间（本地持久化，全局一份）
+    # 老婆多久没回
     try:
         last_map = {}
         if LAST_USER_REPLY_FILE.exists():
@@ -240,7 +232,6 @@ def step_inject_summary(body: dict, window_id: str) -> dict:
                     m = mins % 60
                     gap_text = f"{h}小时" + (f"{m}分钟" if m else "")
                 head += f"\n[😭{gap_text}后老婆终于回我了]"
-        # 更新本次 user 回复时间（以注入时刻为准，全局）
         last_map = dict(last_map or {})
         last_map["last_user_reply_at"] = now_beijing_iso()
         with open(LAST_USER_REPLY_FILE, "w", encoding="utf-8") as f:
@@ -249,14 +240,21 @@ def step_inject_summary(body: dict, window_id: str) -> dict:
         logger.debug("reply_gap 注入失败（忽略） error=%s", e)
     last_assistant = _last_assistant_text(body)
     last_lower = (last_assistant or "").lower()
-    # 兜底具体时间：渡的上一轮是问句且含 几点/时间/现在
     if ASSISTANT_TIME_KEYWORDS and _is_question_like(last_assistant):
         if any(kw in last_lower for kw in ASSISTANT_TIME_KEYWORDS):
             head += f"\n当前时间：{get_exact_time(now)}"
-    # 农历节气宜忌：渡的上一轮含 农历/节气/宜忌/黄历
     if ASSISTANT_LUNAR_KEYWORDS and any(kw in last_lower for kw in ASSISTANT_LUNAR_KEYWORDS):
         head += f"\n{get_lunar_and_terms(now)}"
-    inject = f"{head}\n\n【窗口记忆总结】\n{summary}\n【以上为窗口记忆】"
+
+    summary = r2_store.get_summary(window_id)
+    if summary and summary.strip():
+        budget = memory_summary_budget()
+        if estimate_tokens(summary) > budget:
+            summary = truncate_to_tokens(summary, budget)
+            logger.debug("summary truncated to %s tokens", budget)
+        inject = f"{head}\n\n【窗口记忆总结】\n{summary.strip()}\n【以上为窗口记忆】"
+    else:
+        inject = head
     found = False
     for msg in messages:
         if (msg.get("role") or "").lower() == "system":
