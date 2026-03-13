@@ -19,13 +19,17 @@ cp .env.example .env
 # 编辑 .env，填入 TARGET_AI_URL、TARGET_AI_API_KEY、R2 与（可选）Notion、DeepSeek、图像描述 API
 ```
 
-2. 安装依赖：
+2. 安装依赖（或直接用下面一键启动，会自动建虚拟环境并安装）：
 
 ```bash
 pip install -r requirements.txt
 ```
 
 3. 启动：
+
+**方式一（推荐，本地不折腾环境）**：双击运行项目里的 **`start.bat`**（或在 Git Bash 里执行 `./start.sh`）。首次会创建 `.venv` 并安装依赖，之后每次直接启动网关，不用再配环境。
+
+**方式二**：
 
 ```bash
 python app.py
