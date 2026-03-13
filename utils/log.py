@@ -1,6 +1,7 @@
 # 统一日志：带模块名和错误来源，方便排查
 # 格式：[模块名] LEVEL: 消息 key=value ...
 import logging
+import os
 import sys
 
 from config import LOG_LEVEL
@@ -28,11 +29,20 @@ class ShortNameFormatter(logging.Formatter):
         return super().format(record)
 
 
+class FlushingStreamHandler(logging.StreamHandler):
+    """每次写日志后立即 flush，nohup 重定向到文件时也能马上看到 [Chat] INFO 等。"""
+
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
+
 def setup_logging():
     """在 app 启动时调用，配置全局日志。"""
     level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
     fmt = "%(asctime)s [%(short_name)s] %(levelname)s: %(message)s"
-    handler = logging.StreamHandler(sys.stdout)
+    # 用 FlushingStreamHandler，nohup ... >> gateway.log 时每条日志立即落盘，tail -f 能看到 [Chat] INFO
+    handler = FlushingStreamHandler(sys.stdout)
     handler.setFormatter(ShortNameFormatter(fmt))
     root = logging.getLogger()
     root.setLevel(level)
