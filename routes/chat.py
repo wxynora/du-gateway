@@ -276,6 +276,35 @@ def chat_completions():
     """
     body = request.get_json(silent=True) or {}
     headers = dict(request.headers) if request.headers else {}
+    # DEBUG：打出 RikkaHub 发来的原始请求（未做任何清洗/注入），便于看结构、做关键字段提取
+    if logger.isEnabledFor(10):
+        try:
+            h = {k: v for k, v in (headers or {}).items() if k.lower() in ("x-window-id", "x-assistant-id", "content-type")}
+            msgs = body.get("messages") or []
+            msg_preview = []
+            for i, m in enumerate(msgs[:3]):
+                role = (m or {}).get("role")
+                content = (m or {}).get("content")
+                if isinstance(content, str):
+                    preview = content[:80] + ("..." if len(content) > 80 else "")
+                    msg_preview.append(f"#{i} role={role} content_len={len(content)} content_preview={preview}")
+                else:
+                    msg_preview.append(f"#{i} role={role} content_type={type(content).__name__}")
+            if len(msgs) > 3:
+                msg_preview.append(f"... 共 {len(msgs)} 条")
+            raw_sample = json.dumps(body, ensure_ascii=False)[:3000]
+            logger.debug(
+                "收到原始请求 body_keys=%s body_id=%s body_assistant_id=%s body_window_id=%s headers=%s messages=%s raw_body_sample=%s",
+                list(body.keys()),
+                body.get("id"),
+                body.get("assistant_id"),
+                body.get("window_id"),
+                h,
+                msg_preview,
+                raw_sample,
+            )
+        except Exception:
+            pass
     window_id = get_window_id(headers, body)
 
     def _stream_response(gen):
