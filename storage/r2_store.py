@@ -121,6 +121,7 @@ def append_conversation_round(window_id: str, round_index: int, messages: list) 
             conv_existing = {"window_id": window_id, "date": today, "rounds": []}
         conv_existing.setdefault("rounds", []).append(round_entry)
         _write_json(client, conv_key, conv_existing)
+        logger.info("R2 已写入 对话轮次 window_id=%s round_index=%s key=%s", window_id, round_index, key)
         return True
     except Exception as e:
         logger.error("append_conversation_round 失败 window_id=%s round_index=%s error=%s", window_id, round_index, e, exc_info=True)

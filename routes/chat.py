@@ -238,7 +238,10 @@ def chat_completions():
         return jsonify(resp_json or {"error": "upstream error"}), status
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
-        if not is_failed_response(get_assistant_content_text(msg)):
+        content_text = get_assistant_content_text(msg)
+        if is_failed_response(content_text):
+            logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
+        else:
             last_user = _last_user_message(body.get("messages"))
             if last_user:
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg)
@@ -247,4 +250,6 @@ def chat_completions():
                 )
             else:
                 step_archive_and_maybe_summary(WINDOW_ID_DEFAULT, body.get("messages") or [], msg)
+    else:
+        logger.info("R2 未存档：上游无 choices 或响应为空")
     return jsonify(resp_json), 200
