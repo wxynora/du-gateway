@@ -12,13 +12,11 @@ from config import (
     TARGET_AI_API_KEYS,
     GATEWAY_MODELS,
     WINDOW_ID_HEADER,
-    TEST_BLACKLIST_KEYWORD,
     ALLOWED_ASSISTANT_IDS,
 )
 from pipeline.pipeline import (
     get_window_id,
     get_assistant_id,
-    step_whitelist_and_record,
     step_clean_images_and_save_desc,
     step_clean_for_forward,
     step_inject_latest_4_rounds_for_new_window,
@@ -28,17 +26,17 @@ from pipeline.pipeline import (
 )
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
-from storage import whitelist_store, blacklist_store
 from storage import r2_store
 from utils.log import get_logger
 
 logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
 
-BLACKLIST_PREFIX = "（黑名单）\n\n"
-
 # 每次聊天请求会写入 data/last_request_ids.json，本地 cat/tail 即可看
 LAST_REQUEST_IDS_FILE = DATA_DIR / "last_request_ids.json"
+
+# 用户消息包含以下任一则本轮只转发（不注入记忆、不存档）
+ONLY_FORWARD_KEYWORDS = ("测试", "test")
 
 
 def _user_message_contains_keyword(messages, keyword: str) -> bool:
@@ -64,32 +62,29 @@ def _user_message_contains_keyword(messages, keyword: str) -> bool:
     return False
 
 
-def _prepend_blacklist_prefix_to_response(resp_json: dict) -> None:
-    """在响应体里 assistant 内容开头加「（黑名单）」标识；就地修改。"""
-    if not resp_json:
-        return
-    choices = resp_json.get("choices")
-    if not choices:
-        return
-    msg = (choices[0] or {}).get("message")
-    if not msg:
-        return
-    content = msg.get("content")
-    if isinstance(content, str):
-        msg["content"] = BLACKLIST_PREFIX + content.lstrip()
-        return
-    if isinstance(content, list):
-        first_text_idx = -1
-        for i, part in enumerate(content):
-            if (part or {}).get("type") == "text":
-                first_text_idx = i
-                break
-        if first_text_idx >= 0:
-            content[first_text_idx]["text"] = (
-                BLACKLIST_PREFIX + (content[first_text_idx].get("text") or "").lstrip()
-            )
+def _user_message_contains_only_forward_keyword(messages) -> bool:
+    """最后一条 user 消息是否包含「测试」或「test」（不区分大小写），包含则本轮只转发。"""
+    for m in reversed(messages or []):
+        if (m.get("role") or "").lower() != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            parts = []
+            for c in content:
+                if isinstance(c, dict):
+                    parts.append(c.get("text") or c.get("content") or "")
+                else:
+                    parts.append(str(c))
+            text = " ".join(parts)
         else:
-            content.insert(0, {"type": "text", "text": BLACKLIST_PREFIX.strip()})
+            continue
+        for kw in ONLY_FORWARD_KEYWORDS:
+            if kw.lower() in text.lower():
+                return True
+        return False
+    return False
 
 
 def _get_forward_targets():
@@ -342,21 +337,7 @@ def chat_completions():
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # 1) 黑名单：只转发，响应加「（黑名单）」前缀
-    if blacklist_store.is_blacklisted(window_id):
-        whitelist_store.record_recent_window(window_id)
-        body_forward = step_clean_for_forward(body)
-        if body.get("stream"):
-            return _stream_response(_stream_forward_to_ai(body_forward, headers))
-        resp_json, status, err = _forward_to_ai(body_forward, headers)
-        if err:
-            return jsonify({"error": err}), status
-        if status >= 400:
-            return jsonify(resp_json or {"error": "upstream error"}), status
-        _prepend_blacklist_prefix_to_response(resp_json)
-        return jsonify(resp_json), 200
-
-    # 1.5) 配置了 ALLOWED_ASSISTANT_IDS 时：只允许列表内的 assistant_id 走后续进程，其余仅转发
+    # 1) 配置了 ALLOWED_ASSISTANT_IDS 时：只允许列表内的 assistant_id 走后续进程，其余仅转发
     if ALLOWED_ASSISTANT_IDS and assistant_id not in ALLOWED_ASSISTANT_IDS:
         body_forward = step_clean_for_forward(body)
         if body.get("stream"):
@@ -368,47 +349,8 @@ def chat_completions():
             return jsonify(resp_json or {"error": "upstream error"}), status
         return jsonify(resp_json), 200
 
-    # 2) 已有历史窗口：白名单内走完整管道，否则只转发
-    has_history = r2_store.has_window_history(window_id)
-    if has_history:
-        in_whitelist, err = step_whitelist_and_record(window_id, headers)
-        if err:
-            return jsonify({"error": err}), 400
-        if in_whitelist:
-            body = step_clean_images_and_save_desc(body, window_id)
-            body = step_clean_for_forward(body)
-            body = step_inject_latest_4_rounds_for_new_window(body, window_id)
-            body = step_inject_summary(body, window_id)
-            body = step_inject_dynamic_memory(body, window_id)
-        if body.get("stream"):
-            return _stream_response(_stream_forward_to_ai(body, headers))
-        resp_json, status, err = _forward_to_ai(body, headers)
-        if err:
-            logger.error("Chat 转发失败 window_id=%s error=%s", window_id, err, exc_info=True)
-            return jsonify({"error": err}), status
-        if status >= 400:
-            logger.warning("Chat 上游返回异常 window_id=%s status=%s", window_id, status)
-            return jsonify(resp_json or {"error": "upstream error"}), status
-        if in_whitelist and window_id and resp_json and (resp_json or {}).get("choices"):
-            msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
-            if not is_failed_response(get_assistant_content_text(msg)):
-                last_user = _last_user_message(body.get("messages"))
-                if last_user:
-                    round_cleaned = build_round_cleaned_for_r2(last_user, msg)
-                    step_archive_and_maybe_summary(
-                        window_id, body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned
-                    )
-                else:
-                    step_archive_and_maybe_summary(window_id, body.get("messages") or [], msg)
-        return jsonify(resp_json), 200
-
-    # 3) 新窗口：本条 user 含「测试」→黑名单（只转发+末尾提示）；否则进白名单并走完整管道
-    whitelist_store.record_recent_window(window_id)
-    last_user_text_contains_test = _user_message_contains_keyword(
-        body.get("messages"), TEST_BLACKLIST_KEYWORD
-    )
-    if last_user_text_contains_test:
-        blacklist_store.add_to_blacklist(window_id)
+    # 2) 用户本条消息包含「测试」或「test」→ 本轮只转发（不注入记忆、不存档）
+    if _user_message_contains_only_forward_keyword(body.get("messages")):
         body_forward = step_clean_for_forward(body)
         if body.get("stream"):
             return _stream_response(_stream_forward_to_ai(body_forward, headers))
@@ -417,11 +359,9 @@ def chat_completions():
             return jsonify({"error": err}), status
         if status >= 400:
             return jsonify(resp_json or {"error": "upstream error"}), status
-        _prepend_blacklist_prefix_to_response(resp_json)
-        logger.info("新窗含「测试」，已加入黑名单 window_id=%s", window_id)
         return jsonify(resp_json), 200
 
-    whitelist_store.add_to_whitelist(window_id)
+    # 3) 其余：走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, window_id)
     body = step_clean_for_forward(body)
     body = step_inject_latest_4_rounds_for_new_window(body, window_id)

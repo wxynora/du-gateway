@@ -22,68 +22,24 @@ TARGET_AI_URL（真正出回复的对话 API）
   - 本地：`http://你的电脑IP:5000` 或 `http://localhost:5000`（仅本机）
   - 已部署：`https://你的网关域名`（不要加 `/v1` 或 `/chat/completions`，RikkaHub 一般会自动拼）
 - **API Key**：看 RikkaHub 是否必填。若必填，可以随便填一个（网关不校验这个），或者用网关文档里说的请求头（如有）。
-- **窗口 ID**：若 RikkaHub 支持自定义请求头，建议加上 `X-Window-Id`，值为每个对话窗口的唯一 ID（网关靠这个做白名单、存档）。
-
 这样配置后，RikkaHub 会向「网关的 `/v1/chat/completions` 或 `/chat/completions`」发 POST，由网关处理后再转发。
 
----
+**当前逻辑（已移除窗口白名单/黑名单）**
 
-## 1.1 自定义请求头怎么填（傻瓜版）
-
-RikkaHub 导出数据表里：**窗口** 对应字段 **id**，**不同助手** 对应字段 **assistant_id**。在 RikkaHub 里用「自定义请求头」把这两个带给网关即可。
-
-### 网关认哪些请求头
-
-| 请求头 | 含义 | 对应 RikkaHub 导出字段 |
-|--------|------|------------------------|
-| **X-Window-Id** | 窗口 ID（区分对话、白名单/黑名单/存档） | 导出表里的 **id** |
-| **X-Assistant-Id** | 助手 ID（用于 ALLOWED_ASSISTANT_IDS 过滤：只允许某助手走后续进程） | 导出表里的 **assistant_id** |
-| **X-Add-To-Whitelist**（可选） | 一键加白名单 | 填 `true` 时生效 |
+- 用户本条消息里包含 **「测试」或「test」**（不区分大小写）→ 该轮**只转发**，不注入记忆、不存档。
+- 其余请求走完整管道（清洗、注入记忆/总结、转发、存档）。若配置了 **ALLOWED_ASSISTANT_IDS**，仅列表内的 assistant_id 走完整管道，其余只转发。
+- 记忆/存档仍按请求里的 **X-Window-Id** 或 body 的 **id** 区分（有则按该窗口，无则共用同一逻辑窗口）。
 
 ---
 
-### 在 RikkaHub 里具体加两行
+## 1.1 自定义请求头（可选）
 
-在 RikkaHub 的「自定义请求头」里加上：
+若需要按助手过滤（ALLOWED_ASSISTANT_IDS）或按窗口做记忆/存档，可带：
 
-| 键 | 值 |
-|----|-----|
-| **X-Window-Id** | `{{id}}`（若 RikkaHub 支持变量；否则填固定值先试通） |
-| **X-Assistant-Id** | `{{assistant_id}}` |
-
-这样网关收到的每次请求都会带上「窗口 id」和「助手 assistant_id」，和导出表里的字段一致。
-
-**可选：一键加白名单**
-
-- 键：`X-Add-To-Whitelist`
-- 值：`true`（只在需要把当前对话加白名单时带）。
-
----
-
-### 若用自定义 Body（可选）
-
-网关也会从 **body 顶层** 读：窗口用 **`id`**，助手用 **`assistant_id`**（与导出表一致）。若 RikkaHub 支持在 Body 里插变量，可写：
-
-```json
-{
-  "id": "{{id}}",
-  "assistant_id": "{{assistant_id}}"
-}
-```
-
-也支持 `window_id` 作为窗口 ID 的备用字段名。**有请求头时优先用 Headers**：`X-Window-Id`、`X-Assistant-Id` 优先于 body 里的 `id`、`assistant_id`。
-
----
-
-### 小结
-
-| 想达到的效果 | 在 RikkaHub 里怎么配 |
-|--------------|----------------------|
-| 窗口 + 助手与导出表一致 | 自定义请求头：`X-Window-Id: {{id}}`，`X-Assistant-Id: {{assistant_id}}` |
-| 只区分对话（白名单/黑名单/存档） | 至少带 `X-Window-Id: {{id}}`（或 Body 里 `"id": "{{id}}"`） |
-| 某次请求「把当前对话加白名单」 | 该次请求加 `X-Add-To-Whitelist: true` |
-
-配好后发几条消息，在网关的 `GET /admin/status` 里看 `recent_windows.count`、`whitelist.count` 是否有变化，或 `GET /admin/windows` 看是否出现窗口，即可确认是否生效。
+| 键 | 含义 |
+|----|------|
+| **X-Window-Id** | 窗口 ID，用于记忆/存档区分 |
+| **X-Assistant-Id** | 助手 ID，用于 ALLOWED_ASSISTANT_IDS 过滤 |
 
 ---
 
@@ -207,7 +163,7 @@ ALLOWED_ASSISTANT_IDS=0950e2dc-9bd5-4801-afa3-aa887aa36b4e
 ```
 
 多个用逗号分隔：`ALLOWED_ASSISTANT_IDS=id1,id2,id3`。  
-只有请求里的 **assistant_id**（Body 的 `assistant_id` 或 Header 的 `X-Assistant-Id`）在这个列表里时，才会走记忆、总结、白名单等后续进程；其他请求**只做转发**。留空表示不限制。
+只有请求里的 **assistant_id**（Body 的 `assistant_id` 或 Header 的 `X-Assistant-Id`）在这个列表里时，才会走记忆、总结等完整管道；其他请求**只做转发**。留空表示不限制。
 
 ---
 
