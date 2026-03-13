@@ -10,6 +10,7 @@ from utils.time_aware import today_beijing, now_beijing_iso
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from config import (
     R2_ACCOUNT_ID,
@@ -65,6 +66,12 @@ def _read_json(client, key: str) -> Optional[Any]:
         resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=key)
         body = resp["Body"].read().decode("utf-8")
         return json.loads(body)
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code == "NoSuchKey":
+            return None  # 首次无文件，正常
+        logger.error("R2 read_json 失败 key=%s error=%s", key, e, exc_info=True)
+        return None
     except Exception as e:
         logger.error("R2 read_json 失败 key=%s error=%s", key, e, exc_info=True)
         return None
