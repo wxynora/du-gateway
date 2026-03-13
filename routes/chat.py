@@ -306,6 +306,17 @@ def chat_completions():
         except Exception:
             pass
     window_id = get_window_id(headers, body)
+    assistant_id = get_assistant_id(headers, body)
+    # 每条请求打一行，便于确认 RikkaHub 自定义请求头是否带到网关
+    logger.info(
+        "chat 收到 window_id=%s assistant_id=%s header_X-Window-Id=%s header_X-Assistant-Id=%s body_id=%s body_assistant_id=%s",
+        repr(window_id),
+        repr(assistant_id),
+        repr((headers or {}).get("X-Window-Id") or (headers or {}).get("x-window-id")),
+        repr((headers or {}).get("X-Assistant-Id") or (headers or {}).get("x-assistant-id")),
+        repr(body.get("id")),
+        repr(body.get("assistant_id")),
+    )
 
     def _stream_response(gen):
         return Response(
@@ -329,7 +340,6 @@ def chat_completions():
         return jsonify(resp_json), 200
 
     # 1.5) 配置了 ALLOWED_ASSISTANT_IDS 时：只允许列表内的 assistant_id 走后续进程，其余仅转发
-    assistant_id = get_assistant_id(headers, body)
     if ALLOWED_ASSISTANT_IDS and assistant_id not in ALLOWED_ASSISTANT_IDS:
         body_forward = step_clean_for_forward(body)
         if body.get("stream"):
