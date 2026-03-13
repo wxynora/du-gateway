@@ -57,7 +57,7 @@ def step_clean_for_forward(body: dict) -> dict:
     for msg in body.get("messages") or []:
         c = msg.get("content")
         if c is not None:
-            msg["content"] = clean_message_content_for_forward(c)
+            msg["content"] = clean_message_content_for_forward(c, msg)
     return body
 
 
