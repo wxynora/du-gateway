@@ -95,7 +95,13 @@ RikkaHub 导出数据表里：**窗口** 对应字段 **id**，**不同助手** 
 2025-03-11 12:00:00 [Chat] INFO: chat 收到 window_id='xxx' assistant_id='yyy' all_x_headers={'X-Window-Id': 'xxx', 'X-Assistant-Id': 'yyy'} body_id=... body_assistant_id=...
 ```
 
-**配置到底有没有用**：看这行里的 **all_x_headers**。若里面有 `X-Window-Id`、`X-Assistant-Id` 且值不是空的，说明 RikkaHub 把自定义请求头带到网关了；若 all_x_headers 是 `{}` 或没有这两个键，说明请求里没带到，需在 RikkaHub 里检查自定义请求头是否填对、变量是否生效。
+**配置到底有没有用**：每次聊天请求会把本次的 window_id、assistant_id、all_x_headers 写入**本地文件**，直接在服务器上看即可（不依赖日志、不依赖浏览器）：
+
+```bash
+cat /root/du-gateway/data/last_request_ids.json
+```
+
+（路径按你项目目录改。）若 `all_x_headers` 里有 `X-Window-Id`、`X-Assistant-Id` 且值不是空的，说明 RikkaHub 把自定义请求头带到网关了；若为空，需在 RikkaHub 里检查自定义请求头是否填对、变量是否生效。
 
 **看哪里：**
 

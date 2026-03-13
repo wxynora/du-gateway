@@ -15,13 +15,6 @@ from storage.wipe_local import wipe_local_data
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
 
-@bp.route("/last-request-ids", methods=["GET"])
-def last_request_ids():
-    """上一次 /v1/chat/completions 收到的 window_id、assistant_id、请求头。用浏览器打开此地址即可确认 RikkaHub 是否把自定义头带到网关，无需看日志。"""
-    from routes.chat import last_request_ids as ids
-    return jsonify(ids)
-
-
 @bp.route("/windows", methods=["GET"])
 def list_windows():
     """返回最近出现过的窗口列表；whitelisted / blacklisted 供管理端展示与一键解除黑名单。"""

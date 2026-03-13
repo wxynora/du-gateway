@@ -5,6 +5,7 @@ import requests
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from config import (
+    DATA_DIR,
     TARGET_AI_URL,
     TARGET_AI_API_KEY,
     TARGET_AI_URLS,
@@ -36,14 +37,8 @@ bp = Blueprint("chat", __name__)
 
 BLACKLIST_PREFIX = "（黑名单）\n\n"
 
-# 上一次 /v1/chat/completions 收到的 window_id / assistant_id / 请求头，供 GET /admin/last-request-ids 查看（不依赖日志）
-last_request_ids = {
-    "window_id": "",
-    "assistant_id": "",
-    "all_x_headers": {},
-    "body_id": None,
-    "body_assistant_id": None,
-}
+# 每次聊天请求会写入 data/last_request_ids.json，本地 cat/tail 即可看
+LAST_REQUEST_IDS_FILE = DATA_DIR / "last_request_ids.json"
 
 
 def _user_message_contains_keyword(messages, keyword: str) -> bool:
@@ -276,12 +271,6 @@ def list_models():
         return jsonify({"error": str(e)}), 502
 
 
-@bp.route("/v1/last-request-ids", methods=["GET"])
-def get_last_request_ids():
-    """上一次聊天请求的 window_id、assistant_id、请求头。和 /v1/chat/completions 同前缀，代理能到就能用。"""
-    return jsonify(last_request_ids)
-
-
 @bp.route("/v1/chat/completions", methods=["POST"])
 @bp.route("/chat/completions", methods=["POST"])
 def chat_completions():
@@ -324,12 +313,19 @@ def chat_completions():
     assistant_id = get_assistant_id(headers, body)
     # 每条请求打一行，便于确认 RikkaHub 自定义请求头是否带到网关；若 id 一直为空，看 all_x_headers 里有没有
     all_x_headers = {k: v for k, v in (headers or {}).items() if k.upper().startswith("X-")}
-    # 供 GET /admin/last-request-ids 查看，不依赖 tail 日志
-    last_request_ids["window_id"] = window_id
-    last_request_ids["assistant_id"] = assistant_id
-    last_request_ids["all_x_headers"] = dict(all_x_headers)
-    last_request_ids["body_id"] = body.get("id")
-    last_request_ids["body_assistant_id"] = body.get("assistant_id")
+    # 写入本地文件，直接 cat data/last_request_ids.json 即可看
+    try:
+        payload = {
+            "window_id": window_id,
+            "assistant_id": assistant_id,
+            "all_x_headers": dict(all_x_headers),
+            "body_id": body.get("id"),
+            "body_assistant_id": body.get("assistant_id"),
+        }
+        with open(LAST_REQUEST_IDS_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
     logger.info(
         "chat 收到 window_id=%s assistant_id=%s all_x_headers=%s body_id=%s body_assistant_id=%s",
         repr(window_id),

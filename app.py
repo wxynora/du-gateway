@@ -11,8 +11,8 @@ from utils.log import setup_logging
 # 先配置日志，后续模块打 log 才能带 [R2]/[Pipeline] 等来源
 setup_logging()
 
-from flask import Flask, request, jsonify
-from routes.chat import bp as chat_bp, last_request_ids as chat_last_request_ids
+from flask import Flask, request
+from routes.chat import bp as chat_bp
 from routes.admin import bp as admin_bp
 from routes.notion_routes import bp as notion_bp
 
@@ -51,12 +51,6 @@ def index():
 @app.route("/health")
 def health():
     return {"status": "ok"}
-
-
-@app.route("/last-request-ids", methods=["GET"])
-def last_request_ids():
-    """上一次聊天请求收到的 window_id、assistant_id、请求头。根路径，不依赖 /admin 是否被代理。"""
-    return jsonify(chat_last_request_ids)
 
 
 if __name__ == "__main__":
