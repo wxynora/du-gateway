@@ -18,16 +18,11 @@ if load_dotenv:
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-# 窗口与白名单
-WINDOW_ID_HEADER = os.environ.get("WINDOW_ID_HEADER", "X-Window-Id")
-ADD_TO_WHITELIST_HEADER = os.environ.get("ADD_TO_WHITELIST_HEADER", "X-Add-To-Whitelist")
+# 白名单/黑名单/最近窗口（管理端用，聊天流程已不再按窗口 ID 判定）
 WHITELIST_FILE = DATA_DIR / "whitelist.json"
 RECENT_WINDOWS_FILE = DATA_DIR / "recent_windows.json"
-# 黑名单：新窗 + user 含「测试」则加入，只做纯转发，响应末尾加「（黑名单）」提示
 BLACKLIST_FILE = DATA_DIR / "blacklist.json"
-# 新窗口下 user 文本包含该词即视为测试窗，加入黑名单
-TEST_BLACKLIST_KEYWORD = os.environ.get("TEST_BLACKLIST_KEYWORD", "测试").strip()
-# 只允许这些 assistant_id 走网关后续进程（记忆、总结、白名单等）；逗号分隔；留空=不限制
+# 只允许这些 assistant_id 走网关后续进程（记忆、总结等）；逗号分隔；留空=不限制
 _ALLOWED_ASSISTANT_IDS_STR = os.environ.get("ALLOWED_ASSISTANT_IDS", "").strip()
 ALLOWED_ASSISTANT_IDS = [a.strip() for a in _ALLOWED_ASSISTANT_IDS_STR.split(",") if a.strip()] if _ALLOWED_ASSISTANT_IDS_STR else []
 # 白名单：最多保留窗口数，超了按 last_seen 最旧踢；超过 N 天未出现也踢

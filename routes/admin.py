@@ -14,6 +14,9 @@ from storage.wipe_local import wipe_local_data
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
+# 默认窗口 ID（聊天不再按请求判定窗口，统一用此）
+DEFAULT_WINDOW_ID = ""
+
 
 @bp.route("/windows", methods=["GET"])
 def list_windows():
@@ -74,13 +77,14 @@ def remove_blacklist(window_id):
 @bp.route("/windows/<window_id>/rounds/<int:round_index>", methods=["DELETE"])
 def delete_round(window_id, round_index):
     """
-    删除该窗口下指定轮次的对话（老婆在 RikkaHub 删掉这一轮后，可调此接口同步从记忆里删掉）。
+    删除该窗口下指定轮次的对话（兼容旧接口，现统一用默认窗口）。
     round_index 为存档中的轮次序号（从 1 开始）。
     """
-    if not window_id or round_index < 1:
-        return jsonify({"error": "window_id 或 round_index 无效"}), 400
-    ok = r2_store.delete_conversation_round(window_id, round_index)
-    return jsonify({"ok": ok, "window_id": window_id, "round_index": round_index})
+    if round_index < 1:
+        return jsonify({"error": "round_index 无效"}), 400
+    wid = window_id if window_id else DEFAULT_WINDOW_ID
+    ok = r2_store.delete_conversation_round(wid, round_index)
+    return jsonify({"ok": ok, "window_id": wid, "round_index": round_index})
 
 
 @bp.route("/summary", methods=["GET"])
@@ -193,21 +197,40 @@ def get_status():
     return jsonify(out)
 
 
-@bp.route("/windows/<window_id>/rounds", methods=["GET"])
-def list_rounds(window_id):
-    """
-    返回该窗口每一轮的序号 + 前几个字预览，便于管理端定位 round_index。
-    GET /admin/windows/<window_id>/rounds?preview_chars=24
-    """
-    if not window_id:
-        return jsonify({"error": "缺少 window_id"}), 400
+@bp.route("/rounds", methods=["GET"])
+def list_rounds_default():
+    """返回默认窗口的对话轮次预览。GET /admin/rounds?preview_chars=24"""
     preview_chars = request.args.get("preview_chars", type=int, default=24)
     if preview_chars < 0:
         preview_chars = 0
     if preview_chars > 200:
         preview_chars = 200
-    rounds = r2_store.list_conversation_rounds_preview(window_id, preview_chars=preview_chars)
-    return jsonify({"window_id": window_id, "rounds": rounds, "count": len(rounds)})
+    rounds = r2_store.list_conversation_rounds_preview(DEFAULT_WINDOW_ID, preview_chars=preview_chars)
+    return jsonify({"rounds": rounds, "count": len(rounds)})
+
+
+@bp.route("/rounds/<int:round_index>", methods=["DELETE"])
+def delete_round_default(round_index):
+    """删除默认窗口的指定轮次。DELETE /admin/rounds/1"""
+    if round_index < 1:
+        return jsonify({"error": "round_index 无效"}), 400
+    ok = r2_store.delete_conversation_round(DEFAULT_WINDOW_ID, round_index)
+    return jsonify({"ok": ok, "round_index": round_index})
+
+
+@bp.route("/windows/<window_id>/rounds", methods=["GET"])
+def list_rounds(window_id):
+    """
+    返回该窗口每一轮的序号 + 前几个字预览（兼容旧接口，现统一用默认窗口）。
+    GET /admin/windows/<window_id>/rounds?preview_chars=24
+    """
+    preview_chars = request.args.get("preview_chars", type=int, default=24)
+    if preview_chars < 0:
+        preview_chars = 0
+    if preview_chars > 200:
+        preview_chars = 200
+    rounds = r2_store.list_conversation_rounds_preview(window_id or DEFAULT_WINDOW_ID, preview_chars=preview_chars)
+    return jsonify({"window_id": window_id or DEFAULT_WINDOW_ID, "rounds": rounds, "count": len(rounds)})
 
 
 @bp.route("/core_cache", methods=["GET"])

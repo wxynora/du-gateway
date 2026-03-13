@@ -11,11 +11,9 @@ from config import (
     TARGET_AI_URLS,
     TARGET_AI_API_KEYS,
     GATEWAY_MODELS,
-    WINDOW_ID_HEADER,
     ALLOWED_ASSISTANT_IDS,
 )
 from pipeline.pipeline import (
-    get_window_id,
     get_assistant_id,
     step_clean_images_and_save_desc,
     step_clean_for_forward,
@@ -31,6 +29,9 @@ from utils.log import get_logger
 
 logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
+
+# 不再按窗口 ID 区分，所有对话共用同一逻辑窗口（R2 等存到固定 key）
+WINDOW_ID_DEFAULT = ""
 
 # 每次聊天请求会写入 data/last_request_ids.json，本地 cat/tail 即可看
 LAST_REQUEST_IDS_FILE = DATA_DIR / "last_request_ids.json"
@@ -278,7 +279,7 @@ def chat_completions():
     # DEBUG：打出 RikkaHub 发来的原始请求（未做任何清洗/注入），便于看结构、做关键字段提取
     if logger.isEnabledFor(10):
         try:
-            h = {k: v for k, v in (headers or {}).items() if k.lower() in ("x-window-id", "x-assistant-id", "content-type")}
+            h = {k: v for k, v in (headers or {}).items() if k.lower() in ("x-assistant-id", "content-type")}
             msgs = body.get("messages") or []
             msg_preview = []
             for i, m in enumerate(msgs[:3]):
@@ -293,42 +294,24 @@ def chat_completions():
                 msg_preview.append(f"... 共 {len(msgs)} 条")
             raw_sample = json.dumps(body, ensure_ascii=False)[:3000]
             logger.debug(
-                "收到原始请求 body_keys=%s body_id=%s body_assistant_id=%s body_window_id=%s headers=%s messages=%s raw_body_sample=%s",
+                "收到原始请求 body_keys=%s body_assistant_id=%s headers=%s messages=%s raw_body_sample=%s",
                 list(body.keys()),
-                body.get("id"),
                 body.get("assistant_id"),
-                body.get("window_id"),
                 h,
                 msg_preview,
                 raw_sample,
             )
         except Exception:
             pass
-    window_id = get_window_id(headers, body)
     assistant_id = get_assistant_id(headers, body)
-    # 每条请求打一行，便于确认 RikkaHub 自定义请求头是否带到网关；若 id 一直为空，看 all_x_headers 里有没有
     all_x_headers = {k: v for k, v in (headers or {}).items() if k.upper().startswith("X-")}
-    # 写入本地文件，直接 cat data/last_request_ids.json 即可看
     try:
-        payload = {
-            "window_id": window_id,
-            "assistant_id": assistant_id,
-            "all_x_headers": dict(all_x_headers),
-            "body_id": body.get("id"),
-            "body_assistant_id": body.get("assistant_id"),
-        }
+        payload = {"assistant_id": assistant_id, "all_x_headers": dict(all_x_headers)}
         with open(LAST_REQUEST_IDS_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
-    logger.info(
-        "chat 收到 window_id=%s assistant_id=%s all_x_headers=%s body_id=%s body_assistant_id=%s",
-        repr(window_id),
-        repr(assistant_id),
-        all_x_headers,
-        repr(body.get("id")),
-        repr(body.get("assistant_id")),
-    )
+    logger.info("chat 收到 assistant_id=%s", repr(assistant_id))
 
     def _stream_response(gen):
         return Response(
@@ -361,30 +344,30 @@ def chat_completions():
             return jsonify(resp_json or {"error": "upstream error"}), status
         return jsonify(resp_json), 200
 
-    # 3) 其余：走完整管道（清洗、注入记忆/总结、转发、存档）
-    body = step_clean_images_and_save_desc(body, window_id)
+    # 3) 其余：走完整管道（清洗、注入记忆/总结、转发、存档），统一用 WINDOW_ID_DEFAULT
+    body = step_clean_images_and_save_desc(body, WINDOW_ID_DEFAULT)
     body = step_clean_for_forward(body)
-    body = step_inject_latest_4_rounds_for_new_window(body, window_id)
-    body = step_inject_summary(body, window_id)
-    body = step_inject_dynamic_memory(body, window_id)
+    body = step_inject_latest_4_rounds_for_new_window(body, WINDOW_ID_DEFAULT)
+    body = step_inject_summary(body, WINDOW_ID_DEFAULT)
+    body = step_inject_dynamic_memory(body, WINDOW_ID_DEFAULT)
     if body.get("stream"):
         return _stream_response(_stream_forward_to_ai(body, headers))
     resp_json, status, err = _forward_to_ai(body, headers)
     if err:
-        logger.error("Chat 转发失败 window_id=%s error=%s", window_id, err, exc_info=True)
+        logger.error("Chat 转发失败 error=%s", err, exc_info=True)
         return jsonify({"error": err}), status
     if status >= 400:
-        logger.warning("Chat 上游返回异常 window_id=%s status=%s", window_id, status)
+        logger.warning("Chat 上游返回异常 status=%s", status)
         return jsonify(resp_json or {"error": "upstream error"}), status
-    if window_id and resp_json and (resp_json or {}).get("choices"):
+    if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
         if not is_failed_response(get_assistant_content_text(msg)):
             last_user = _last_user_message(body.get("messages"))
             if last_user:
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg)
                 step_archive_and_maybe_summary(
-                    window_id, body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned
+                    WINDOW_ID_DEFAULT, body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned
                 )
             else:
-                step_archive_and_maybe_summary(window_id, body.get("messages") or [], msg)
+                step_archive_and_maybe_summary(WINDOW_ID_DEFAULT, body.get("messages") or [], msg)
     return jsonify(resp_json), 200

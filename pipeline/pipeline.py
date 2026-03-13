@@ -1,4 +1,4 @@
-# 管道主流程：白名单判断 → 清洗(图片) → 新窗口注入 → 记忆注入 → 转发 → 存档/总结
+# 管道主流程：清洗(图片) → 新窗口注入 → 记忆注入 → 转发 → 存档/总结（不再按窗口 ID 判定）
 import copy
 import json
 import re
@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from config import (
-    WINDOW_ID_HEADER,
-    ADD_TO_WHITELIST_HEADER,
     SUMMARY_EVERY_N_ROUNDS,
     DYNAMIC_MEMORY_DAYS_VALID,
     ASSISTANT_TIME_KEYWORDS,
@@ -16,7 +14,7 @@ from config import (
     REPLY_GAP_THRESHOLD_MINUTES,
     LAST_USER_REPLY_FILE,
 )
-from storage import whitelist_store, r2_store
+from storage import r2_store
 from utils.log import get_logger
 from utils.tokens import estimate_tokens, memory_summary_budget, memory_dynamic_budget, truncate_to_tokens
 
@@ -26,7 +24,7 @@ from services.deepseek_summary import fetch_new_summary
 
 
 def _header_get(headers: dict, name: str) -> Optional[str]:
-    """按名字取请求头，不区分大小写（Flask/代理可能把 X-Window-Id 转成 x-window-id 等）。"""
+    """按名字取请求头，不区分大小写。"""
     if not headers:
         return None
     key_lower = name.lower()
@@ -34,19 +32,6 @@ def _header_get(headers: dict, name: str) -> Optional[str]:
         if k.lower() == key_lower and v is not None:
             return v if isinstance(v, str) else str(v)
     return None
-
-
-def get_window_id(headers: dict, body: Optional[dict] = None) -> str:
-    """从请求头或 body 中取窗口 ID。RikkaHub 里字段名叫 id；也支持 window_id、assistant_id 或 Headers 的 X-Window-Id。"""
-    wid = _header_get(headers, WINDOW_ID_HEADER)
-    if wid:
-        return wid.strip()
-    if body:
-        for key in ("id", "window_id", "assistant_id"):
-            v = body.get(key)
-            if isinstance(v, str) and v.strip():
-                return v.strip()
-    return ""
 
 
 def get_assistant_id(headers: dict, body: Optional[dict] = None) -> str:
@@ -57,27 +42,6 @@ def get_assistant_id(headers: dict, body: Optional[dict] = None) -> str:
     if body and isinstance(body.get("assistant_id"), str) and body["assistant_id"].strip():
         return body["assistant_id"].strip()
     return ""
-
-
-def should_add_to_whitelist(headers: dict) -> bool:
-    """是否本请求要求将当前窗口加入白名单。"""
-    v = _header_get(headers, ADD_TO_WHITELIST_HEADER)
-    return str(v).lower() in ("true", "1", "yes") if v else False
-
-
-def step_whitelist_and_record(
-    window_id: str, headers: dict
-) -> tuple[bool, Optional[str]]:
-    """
-    白名单判断 + 可选加入白名单 + 记录最近窗口。
-    返回 (是否走完整流程, 错误信息)。
-    """
-    # 一键加白名单
-    if should_add_to_whitelist(headers):
-        whitelist_store.add_to_whitelist(window_id)
-    whitelist_store.record_recent_window(window_id)
-    in_list = whitelist_store.is_whitelisted(window_id)
-    return in_list, None
 
 
 def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
@@ -496,8 +460,6 @@ def step_archive_and_maybe_summary(
     与文档三数据流程一致：① 原文存档（windows/ + conversations/）② 满 4 轮更新实时层 ③ 动态层处理占位。
     round_cleaned_for_r2: 可选，[user_msg_cleaned, assistant_msg_cleaned]。
     """
-    if not window_id:
-        return
     last_user = None
     for m in request_messages:
         if (m.get("role") or "").lower() == "user":
