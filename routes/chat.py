@@ -276,6 +276,12 @@ def list_models():
         return jsonify({"error": str(e)}), 502
 
 
+@bp.route("/v1/last-request-ids", methods=["GET"])
+def get_last_request_ids():
+    """上一次聊天请求的 window_id、assistant_id、请求头。和 /v1/chat/completions 同前缀，代理能到就能用。"""
+    return jsonify(last_request_ids)
+
+
 @bp.route("/v1/chat/completions", methods=["POST"])
 @bp.route("/chat/completions", methods=["POST"])
 def chat_completions():
