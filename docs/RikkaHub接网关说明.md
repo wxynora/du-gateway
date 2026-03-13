@@ -24,42 +24,11 @@ TARGET_AI_URL（真正出回复的对话 API）
 - **API Key**：看 RikkaHub 是否必填。若必填，可以随便填一个（网关不校验这个），或者用网关文档里说的请求头（如有）。
 这样配置后，RikkaHub 会向「网关的 `/v1/chat/completions` 或 `/chat/completions`」发 POST，由网关处理后再转发。
 
-**当前逻辑（已移除窗口白名单/黑名单）**
-
-- 用户本条消息里包含 **「测试」或「test」**（不区分大小写）→ 该轮**只转发**，不注入记忆、不存档。
-- 其余请求走完整管道（清洗、注入记忆/总结、转发、存档）。若配置了 **ALLOWED_ASSISTANT_IDS**，仅列表内的 assistant_id 走完整管道，其余只转发。
-- 记忆/存档仍按请求里的 **X-Window-Id** 或 body 的 **id** 区分（有则按该窗口，无则共用同一逻辑窗口）。
+**当前逻辑**：所有请求统一走完整管道（清洗、注入记忆/总结、转发、存档），无按助手或关键词的开头过滤。
 
 ---
 
-## 1.1 自定义请求头（可选）
-
-若需要按助手过滤（ALLOWED_ASSISTANT_IDS）或按窗口做记忆/存档，可带：
-
-| 键 | 含义 |
-|----|------|
-| **X-Window-Id** | 窗口 ID，用于记忆/存档区分 |
-| **X-Assistant-Id** | 助手 ID，用于 ALLOWED_ASSISTANT_IDS 过滤 |
-
----
-
-### 网关日志在哪看（确认是否收到 window_id / assistant_id）
-
-网关每条聊天请求会打一行 **INFO** 日志，例如：
-
-```text
-2025-03-11 12:00:00 [Chat] INFO: chat 收到 window_id='xxx' assistant_id='yyy' all_x_headers={'X-Window-Id': 'xxx', 'X-Assistant-Id': 'yyy'} body_id=... body_assistant_id=...
-```
-
-**配置到底有没有用**：每次聊天请求会把本次的 window_id、assistant_id、all_x_headers 写入**本地文件**，直接在服务器上看即可（不依赖日志、不依赖浏览器）：
-
-```bash
-cat /root/du-gateway/data/last_request_ids.json
-```
-
-（路径按你项目目录改。）若 `all_x_headers` 里有 `X-Window-Id`、`X-Assistant-Id` 且值不是空的，说明 RikkaHub 把自定义请求头带到网关了；若为空，需在 RikkaHub 里检查自定义请求头是否填对、变量是否生效。
-
-**看哪里：**
+**看网关日志/输出：**
 
 | 运行方式 | 在哪看 |
 |----------|--------|
@@ -151,19 +120,6 @@ systemctl list-units --type=service | grep -iE "gateway|flask|du|chat"
   - 只有要改代码或 .env 时，改完需要重启一次：先 `pkill -f "python app.py"`（或查到进程号后 `kill 进程号`），再重新执行上面的 `nohup ./venv/bin/python app.py ...`。
 
 - **小结**：虚拟环境 + nohup 各做一次，之后「每次打开」= 连上服务器看日志或改配置即可，不用每次重新装依赖、重新弄环境。
-
----
-
-### 只允许某个助手走网关记忆（其余只转发）
-
-在网关 **.env** 里配置：
-
-```env
-ALLOWED_ASSISTANT_IDS=0950e2dc-9bd5-4801-afa3-aa887aa36b4e
-```
-
-多个用逗号分隔：`ALLOWED_ASSISTANT_IDS=id1,id2,id3`。  
-只有请求里的 **assistant_id**（Body 的 `assistant_id` 或 Header 的 `X-Assistant-Id`）在这个列表里时，才会走记忆、总结等完整管道；其他请求**只做转发**。留空表示不限制。
 
 ---
 

@@ -1,20 +1,17 @@
-# 聊天代理：黑名单只转发且响应末尾加「（黑名单）」；新窗默认白名单，新窗+user含「测试」→黑名单
+# 聊天代理：统一走完整管道（清洗、注入、转发、存档），无开头过滤
 import json
 import requests
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from config import (
-    DATA_DIR,
     TARGET_AI_URL,
     TARGET_AI_API_KEY,
     TARGET_AI_URLS,
     TARGET_AI_API_KEYS,
     GATEWAY_MODELS,
-    ALLOWED_ASSISTANT_IDS,
 )
 from pipeline.pipeline import (
-    get_assistant_id,
     step_clean_images_and_save_desc,
     step_clean_for_forward,
     step_inject_latest_4_rounds_for_new_window,
@@ -24,68 +21,12 @@ from pipeline.pipeline import (
 )
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
-from storage import r2_store
 from utils.log import get_logger
 
 logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
 
-# 不再按窗口 ID 区分，所有对话共用同一逻辑窗口（R2 等存到固定 key）
 WINDOW_ID_DEFAULT = ""
-
-# 每次聊天请求会写入 data/last_request_ids.json，本地 cat/tail 即可看
-LAST_REQUEST_IDS_FILE = DATA_DIR / "last_request_ids.json"
-
-# 用户消息包含以下任一则本轮只转发（不注入记忆、不存档）
-ONLY_FORWARD_KEYWORDS = ("测试", "test")
-
-
-def _user_message_contains_keyword(messages, keyword: str) -> bool:
-    """最后一条 user 消息的纯文本是否包含 keyword。兼容 content 为 list 时 part 用 text 或 content 字段。"""
-    if not (keyword and keyword.strip()):
-        return False
-    for m in reversed(messages or []):
-        if (m.get("role") or "").lower() != "user":
-            continue
-        content = m.get("content")
-        if isinstance(content, str):
-            return keyword in content
-        if isinstance(content, list):
-            parts = []
-            for c in content:
-                if isinstance(c, dict):
-                    parts.append(c.get("text") or c.get("content") or "")
-                else:
-                    parts.append(str(c))
-            text = " ".join(parts)
-            return keyword in text
-        return False
-    return False
-
-
-def _user_message_contains_only_forward_keyword(messages) -> bool:
-    """最后一条 user 消息是否包含「测试」或「test」（不区分大小写），包含则本轮只转发。"""
-    for m in reversed(messages or []):
-        if (m.get("role") or "").lower() != "user":
-            continue
-        content = m.get("content")
-        if isinstance(content, str):
-            text = content
-        elif isinstance(content, list):
-            parts = []
-            for c in content:
-                if isinstance(c, dict):
-                    parts.append(c.get("text") or c.get("content") or "")
-                else:
-                    parts.append(str(c))
-            text = " ".join(parts)
-        else:
-            continue
-        for kw in ONLY_FORWARD_KEYWORDS:
-            if kw.lower() in text.lower():
-                return True
-        return False
-    return False
 
 
 def _get_forward_targets():
@@ -270,49 +211,9 @@ def list_models():
 @bp.route("/v1/chat/completions", methods=["POST"])
 @bp.route("/chat/completions", methods=["POST"])
 def chat_completions():
-    """
-    统一入口：黑名单只转发；新窗观察期前 N 轮只转发并缓存，满 N 轮判定测试窗→黑名单否则进白名单并回放缓存；
-    已有白名单窗口走完整管道。
-    """
+    """统一入口：所有请求走完整管道（清洗、注入、转发、存档），无开头过滤。"""
     body = request.get_json(silent=True) or {}
     headers = dict(request.headers) if request.headers else {}
-    # DEBUG：打出 RikkaHub 发来的原始请求（未做任何清洗/注入），便于看结构、做关键字段提取
-    if logger.isEnabledFor(10):
-        try:
-            h = {k: v for k, v in (headers or {}).items() if k.lower() in ("x-assistant-id", "content-type")}
-            msgs = body.get("messages") or []
-            msg_preview = []
-            for i, m in enumerate(msgs[:3]):
-                role = (m or {}).get("role")
-                content = (m or {}).get("content")
-                if isinstance(content, str):
-                    preview = content[:80] + ("..." if len(content) > 80 else "")
-                    msg_preview.append(f"#{i} role={role} content_len={len(content)} content_preview={preview}")
-                else:
-                    msg_preview.append(f"#{i} role={role} content_type={type(content).__name__}")
-            if len(msgs) > 3:
-                msg_preview.append(f"... 共 {len(msgs)} 条")
-            raw_sample = json.dumps(body, ensure_ascii=False)[:3000]
-            logger.debug(
-                "收到原始请求 body_keys=%s body_assistant_id=%s headers=%s messages=%s raw_body_sample=%s",
-                list(body.keys()),
-                body.get("assistant_id"),
-                h,
-                msg_preview,
-                raw_sample,
-            )
-        except Exception:
-            pass
-    assistant_id = get_assistant_id(headers, body)
-    all_x_headers = {k: v for k, v in (headers or {}).items() if k.upper().startswith("X-")}
-    try:
-        payload = {"assistant_id": assistant_id, "all_x_headers": dict(all_x_headers)}
-        with open(LAST_REQUEST_IDS_FILE, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-    logger.info("chat 收到 assistant_id=%s", repr(assistant_id))
-
     def _stream_response(gen):
         return Response(
             stream_with_context(gen),
@@ -320,31 +221,7 @@ def chat_completions():
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # 1) 配置了 ALLOWED_ASSISTANT_IDS 时：只允许列表内的 assistant_id 走后续进程，其余仅转发
-    if ALLOWED_ASSISTANT_IDS and assistant_id not in ALLOWED_ASSISTANT_IDS:
-        body_forward = step_clean_for_forward(body)
-        if body.get("stream"):
-            return _stream_response(_stream_forward_to_ai(body_forward, headers))
-        resp_json, status, err = _forward_to_ai(body_forward, headers)
-        if err:
-            return jsonify({"error": err}), status
-        if status >= 400:
-            return jsonify(resp_json or {"error": "upstream error"}), status
-        return jsonify(resp_json), 200
-
-    # 2) 用户本条消息包含「测试」或「test」→ 本轮只转发（不注入记忆、不存档）
-    if _user_message_contains_only_forward_keyword(body.get("messages")):
-        body_forward = step_clean_for_forward(body)
-        if body.get("stream"):
-            return _stream_response(_stream_forward_to_ai(body_forward, headers))
-        resp_json, status, err = _forward_to_ai(body_forward, headers)
-        if err:
-            return jsonify({"error": err}), status
-        if status >= 400:
-            return jsonify(resp_json or {"error": "upstream error"}), status
-        return jsonify(resp_json), 200
-
-    # 3) 其余：走完整管道（清洗、注入记忆/总结、转发、存档），统一用 WINDOW_ID_DEFAULT
+    # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, WINDOW_ID_DEFAULT)
     body = step_clean_for_forward(body)
     body = step_inject_latest_4_rounds_for_new_window(body, WINDOW_ID_DEFAULT)

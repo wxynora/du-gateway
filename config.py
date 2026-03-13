@@ -18,14 +18,10 @@ if load_dotenv:
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-# 白名单/黑名单/最近窗口（管理端用，聊天流程已不再按窗口 ID 判定）
+# 白名单/黑名单/最近窗口（管理端用）
 WHITELIST_FILE = DATA_DIR / "whitelist.json"
 RECENT_WINDOWS_FILE = DATA_DIR / "recent_windows.json"
 BLACKLIST_FILE = DATA_DIR / "blacklist.json"
-# 只允许这些 assistant_id 走网关后续进程（记忆、总结等）；逗号分隔；留空=不限制
-_ALLOWED_ASSISTANT_IDS_STR = os.environ.get("ALLOWED_ASSISTANT_IDS", "").strip()
-ALLOWED_ASSISTANT_IDS = [a.strip() for a in _ALLOWED_ASSISTANT_IDS_STR.split(",") if a.strip()] if _ALLOWED_ASSISTANT_IDS_STR else []
-# 白名单：最多保留窗口数，超了按 last_seen 最旧踢；超过 N 天未出现也踢
 MAX_WHITELIST_SIZE = int(os.environ.get("MAX_WHITELIST_SIZE", "50"))
 WHITELIST_EXPIRE_DAYS = int(os.environ.get("WHITELIST_EXPIRE_DAYS", "14"))
 

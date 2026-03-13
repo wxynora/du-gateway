@@ -23,28 +23,6 @@ from services import image_desc, deepseek_summary
 from services.deepseek_summary import fetch_new_summary
 
 
-def _header_get(headers: dict, name: str) -> Optional[str]:
-    """按名字取请求头，不区分大小写。"""
-    if not headers:
-        return None
-    key_lower = name.lower()
-    for k, v in headers.items():
-        if k.lower() == key_lower and v is not None:
-            return v if isinstance(v, str) else str(v)
-    return None
-
-
-def get_assistant_id(headers: dict, body: Optional[dict] = None) -> str:
-    """从请求里取 assistant_id（用于「只允许某 assistant_id 走后续进程」的过滤）。支持 X-Assistant-Id 或 RikkaHub 自定义头 Assistant_id。"""
-    for header_name in ("X-Assistant-Id", "Assistant_id"):
-        aid = _header_get(headers, header_name)
-        if aid and aid.strip():
-            return aid.strip()
-    if body and isinstance(body.get("assistant_id"), str) and body["assistant_id"].strip():
-        return body["assistant_id"].strip()
-    return ""
-
-
 def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
     """
     清洗层：保留原图用于转发，并行把图片用便宜 AI 转描述存 R2。
