@@ -11,7 +11,7 @@ from utils.log import setup_logging
 # 先配置日志，后续模块打 log 才能带 [R2]/[Pipeline] 等来源
 setup_logging()
 
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from routes.chat import bp as chat_bp
 from routes.admin import bp as admin_bp
 from routes.notion_routes import bp as notion_bp
@@ -76,6 +76,39 @@ def root_dynamic_memory():
         return {"ok": True, "count": len(lst), "memories": lst}
     except Exception as e:
         return {"ok": False, "error": str(e), "memories": []}, 500
+
+
+@app.route("/time-info", methods=["GET"])
+def time_info():
+    """
+    网关时间工具：返回当前北京时间的日期、星期、时间段、具体时间和农历信息。
+    供渡在工具调用里使用，不依赖前端自己的时间插件。
+    """
+    from utils.time_aware import (
+        get_date_only,
+        get_weekday_cn,
+        get_time_period,
+        get_exact_time,
+        get_lunar_and_terms,
+        now_beijing_iso,
+    )
+
+    iso = now_beijing_iso()
+    date = get_date_only()
+    weekday = get_weekday_cn()
+    period = get_time_period()
+    hm = get_exact_time()
+    lunar = get_lunar_and_terms()
+    return jsonify(
+        {
+            "iso": iso,
+            "date": date,
+            "weekday_cn": weekday,
+            "time_hm": hm,
+            "period": period,
+            "lunar": lunar,
+        }
+    )
 
 
 if __name__ == "__main__":
