@@ -111,6 +111,17 @@ def time_info():
     )
 
 
+@app.route("/time-now", methods=["GET"])
+def time_now():
+    """
+    极简时间工具：只返回当前北京时间的 HH:mm，供 get_time_info 工具直接使用。
+    """
+    from utils.time_aware import get_exact_time
+
+    hm = get_exact_time()
+    return jsonify({"time_hm": hm})
+
+
 if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", 5000))
