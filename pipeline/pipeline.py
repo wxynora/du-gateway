@@ -25,13 +25,22 @@ from services import image_desc, deepseek_summary
 from services.deepseek_summary import fetch_new_summary
 
 
+def _header_get(headers: dict, name: str) -> Optional[str]:
+    """按名字取请求头，不区分大小写（Flask/代理可能把 X-Window-Id 转成 x-window-id 等）。"""
+    if not headers:
+        return None
+    key_lower = name.lower()
+    for k, v in headers.items():
+        if k.lower() == key_lower and v is not None:
+            return v if isinstance(v, str) else str(v)
+    return None
+
+
 def get_window_id(headers: dict, body: Optional[dict] = None) -> str:
     """从请求头或 body 中取窗口 ID。RikkaHub 里字段名叫 id；也支持 window_id、assistant_id 或 Headers 的 X-Window-Id。"""
-    wid = (headers or {}).get(WINDOW_ID_HEADER) or (headers or {}).get(
-        WINDOW_ID_HEADER.lower().replace("-", "_")
-    )
+    wid = _header_get(headers, WINDOW_ID_HEADER)
     if wid:
-        return (wid if isinstance(wid, str) else str(wid)).strip()
+        return wid.strip()
     if body:
         for key in ("id", "window_id", "assistant_id"):
             v = body.get(key)
@@ -42,8 +51,8 @@ def get_window_id(headers: dict, body: Optional[dict] = None) -> str:
 
 def get_assistant_id(headers: dict, body: Optional[dict] = None) -> str:
     """从请求里取 assistant_id（用于「只允许某 assistant_id 走后续进程」的过滤）。"""
-    aid = (headers or {}).get("X-Assistant-Id") or (headers or {}).get("x_assistant_id")
-    if aid and isinstance(aid, str) and aid.strip():
+    aid = _header_get(headers, "X-Assistant-Id")
+    if aid and aid.strip():
         return aid.strip()
     if body and isinstance(body.get("assistant_id"), str) and body["assistant_id"].strip():
         return body["assistant_id"].strip()
@@ -52,10 +61,8 @@ def get_assistant_id(headers: dict, body: Optional[dict] = None) -> str:
 
 def should_add_to_whitelist(headers: dict) -> bool:
     """是否本请求要求将当前窗口加入白名单。"""
-    v = (headers or {}).get(ADD_TO_WHITELIST_HEADER) or (headers or {}).get(
-        ADD_TO_WHITELIST_HEADER.lower().replace("-", "_")
-    )
-    return str(v).lower() in ("true", "1", "yes")
+    v = _header_get(headers, ADD_TO_WHITELIST_HEADER)
+    return str(v).lower() in ("true", "1", "yes") if v else False
 
 
 def step_whitelist_and_record(

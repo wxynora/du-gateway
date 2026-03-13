@@ -307,13 +307,13 @@ def chat_completions():
             pass
     window_id = get_window_id(headers, body)
     assistant_id = get_assistant_id(headers, body)
-    # 每条请求打一行，便于确认 RikkaHub 自定义请求头是否带到网关
+    # 每条请求打一行，便于确认 RikkaHub 自定义请求头是否带到网关；若 id 一直为空，看 all_x_headers 里有没有
+    all_x_headers = {k: v for k, v in (headers or {}).items() if k.upper().startswith("X-")}
     logger.info(
-        "chat 收到 window_id=%s assistant_id=%s header_X-Window-Id=%s header_X-Assistant-Id=%s body_id=%s body_assistant_id=%s",
+        "chat 收到 window_id=%s assistant_id=%s all_x_headers=%s body_id=%s body_assistant_id=%s",
         repr(window_id),
         repr(assistant_id),
-        repr((headers or {}).get("X-Window-Id") or (headers or {}).get("x-window-id")),
-        repr((headers or {}).get("X-Assistant-Id") or (headers or {}).get("x-assistant-id")),
+        all_x_headers,
         repr(body.get("id")),
         repr(body.get("assistant_id")),
     )
