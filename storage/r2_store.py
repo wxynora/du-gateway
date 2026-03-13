@@ -555,3 +555,53 @@ def save_image_description(window_id: str, message_id: str, description: str) ->
         ContentType="text/plain; charset=utf-8",
     )
     return True
+
+
+# ---------- 一键清空（测试/重置用） ----------
+
+
+# 网关在 R2 里使用的所有前缀，清空时只删这些，不动桶里其他 key
+_R2_WIPE_PREFIXES = ("windows/", "conversations/", "global/", "dynamic_memory/", "core_cache/", "notebook/")
+
+
+def delete_all_gateway_data() -> tuple[bool, int, Optional[str]]:
+    """
+    一键删除当前网关在 R2 中存的所有记录（对话、总结、动态层、核心缓存、小本本、图片描述等）。
+    返回 (是否成功, 删除的 key 数量, 错误信息)。
+    """
+    client = _s3_client()
+    if not client:
+        return False, 0, "R2 未配置"
+    keys_to_delete = []
+    try:
+        for prefix in _R2_WIPE_PREFIXES:
+            token = None
+            while True:
+                kwargs = {"Bucket": R2_BUCKET_NAME, "Prefix": prefix}
+                if token:
+                    kwargs["ContinuationToken"] = token
+                resp = client.list_objects_v2(**kwargs)
+                for obj in (resp.get("Contents") or []):
+                    k = obj.get("Key")
+                    if k:
+                        keys_to_delete.append(k)
+                if resp.get("IsTruncated"):
+                    token = resp.get("NextContinuationToken")
+                else:
+                    break
+        if not keys_to_delete:
+            logger.info("delete_all_gateway_data 无数据可删")
+            return True, 0, None
+        deleted = 0
+        for i in range(0, len(keys_to_delete), 1000):
+            chunk = keys_to_delete[i : i + 1000]
+            client.delete_objects(
+                Bucket=R2_BUCKET_NAME,
+                Delete={"Objects": [{"Key": k} for k in chunk], "Quiet": True},
+            )
+            deleted += len(chunk)
+        logger.info("delete_all_gateway_data 已删除 %s 个 key", deleted)
+        return True, deleted, None
+    except Exception as e:
+        logger.error("delete_all_gateway_data 失败 error=%s", e, exc_info=True)
+        return False, 0, str(e)

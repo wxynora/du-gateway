@@ -22,18 +22,17 @@ def _save(path: Path, data):
 
 
 def is_blacklisted(window_id: str) -> bool:
-    if not window_id:
-        return False
+    """空字符串也算合法 window_id（未带 X-Window-Id 的请求统一视为同一窗）。"""
     data = _load(BLACKLIST_FILE, [])
-    return window_id in data
+    return (window_id if window_id is not None else "") in data
 
 
 def add_to_blacklist(window_id: str) -> bool:
-    if not window_id:
-        return False
+    """允许空字符串：未带 X-Window-Id 的新窗发「测试」也进黑名单。"""
+    w = window_id if window_id is not None else ""
     data = _load(BLACKLIST_FILE, [])
-    if window_id not in data:
-        data.append(window_id)
+    if w not in data:
+        data.append(w)
         _save(BLACKLIST_FILE, data)
     return True
 

@@ -11,7 +11,7 @@ from utils.log import setup_logging
 # 先配置日志，后续模块打 log 才能带 [R2]/[Pipeline] 等来源
 setup_logging()
 
-from flask import Flask
+from flask import Flask, request
 from routes.chat import bp as chat_bp
 from routes.admin import bp as admin_bp
 from routes.notion_routes import bp as notion_bp
@@ -23,6 +23,24 @@ app = Flask(__name__)
 app.register_blueprint(chat_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(notion_bp)
+
+# CORS：RikkaHub 等前端带自定义请求头（X-Window-Id、X-Assistant-Id）时，浏览器会先发 OPTIONS 预检，必须允许这些头否则会「无法连接」
+CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
+CORS_ALLOW_HEADERS = "Content-Type, Authorization, X-Window-Id, X-Assistant-Id, X-Add-To-Whitelist"
+
+
+@app.before_request
+def _cors_preflight():
+    if request.method == "OPTIONS":
+        return "", 204
+
+
+@app.after_request
+def _cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = CORS_ORIGIN
+    response.headers["Access-Control-Allow-Headers"] = CORS_ALLOW_HEADERS
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
 
 
 @app.route("/")
