@@ -18,7 +18,9 @@ elif [ -f .venv/bin/activate ]; then
 fi
 
 echo ""
-echo "启动网关 http://127.0.0.1:5000"
+echo "本机访问: http://127.0.0.1:5000"
+PUB=$(curl -s --max-time 2 ifconfig.me 2>/dev/null || true)
+if [ -n "$PUB" ]; then echo "公网访问: http://${PUB}:5000  （需路由器端口转发 5000）"; else echo "公网访问: 用你的公网IP:5000 并做路由器端口转发"; fi
 echo "按 Ctrl+C 停止"
 echo ""
 exec python app.py

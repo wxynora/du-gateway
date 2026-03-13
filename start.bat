@@ -12,7 +12,8 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo.
-echo 启动网关 http://127.0.0.1:5000
+echo 本机访问: http://127.0.0.1:5000
+echo 公网访问: http://你的公网IP:5000  （需路由器端口转发 5000，且 .env 勿设 HOST=127.0.0.1）
 echo 按 Ctrl+C 停止
 echo.
 python app.py
