@@ -13,6 +13,7 @@ from config import (
     ASSISTANT_LUNAR_KEYWORDS,
     REPLY_GAP_THRESHOLD_MINUTES,
     LAST_USER_REPLY_FILE,
+    RIKKA_SYSTEM_REPLACE,
 )
 from storage import r2_store
 from utils.log import get_logger
@@ -57,6 +58,23 @@ def step_clean_for_forward(body: dict) -> dict:
         c = msg.get("content")
         if c is not None:
             msg["content"] = clean_message_content_for_forward(c)
+    return body
+
+
+def step_replace_rikka_system(body: dict) -> dict:
+    """
+    发给 AI 之前：把 RikkaHub 自带的「你是一个助手…」第一条 system 替换成简短指令（如「请使用中文回复。」），
+    人设由你自己在别处配；留空 RIKKA_SYSTEM_REPLACE 则不替换。存记忆时不会存 system，只存 user+assistant 对话。
+    """
+    if not (RIKKA_SYSTEM_REPLACE and RIKKA_SYSTEM_REPLACE.strip()):
+        return body
+    messages = body.get("messages") or []
+    if not messages:
+        return body
+    body = copy.deepcopy(body)
+    first = body["messages"][0]
+    if (first.get("role") or "").lower() == "system":
+        first["content"] = RIKKA_SYSTEM_REPLACE.strip()
     return body
 
 
@@ -437,6 +455,7 @@ def step_archive_and_maybe_summary(
     """
     存档本轮对话到 R2（完整清洗版）；每 4 轮异步更新实时层「渡的回忆」；动态层演化占位。
     与文档三数据流程一致：① 原文存档（windows/ + conversations/）② 满 4 轮更新实时层 ③ 动态层处理占位。
+    存记忆只存对话（user + assistant），不含 system / RikkaHub 说明；内容必走 R2 清洗（Rikka 预设、表情包→文字）。
     round_cleaned_for_r2: 可选，[user_msg_cleaned, assistant_msg_cleaned]。
     """
     last_user = None
@@ -445,7 +464,13 @@ def step_archive_and_maybe_summary(
             last_user = m
     if not last_user or not assistant_message:
         return
-    round_messages = round_cleaned_for_r2 if round_cleaned_for_r2 else [last_user, assistant_message]
+    # 只存对话两条（user + assistant），且一律清洗，不存 system / Rikka 自带说明
+    from pipeline.cleaner import build_round_cleaned_for_r2
+    round_messages = (
+        round_cleaned_for_r2
+        if round_cleaned_for_r2
+        else build_round_cleaned_for_r2(last_user, assistant_message)
+    )
     # 小本本：网关提前拎出，打时间戳，存 R2（按时间排序）+ Notion，不动原文
     from services.notebook_gateway import extract_entries_from_round, save_entry
     for content in extract_entries_from_round(round_messages):

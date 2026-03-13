@@ -39,6 +39,11 @@ TARGET_AI_API_KEYS = [k.strip() for k in _TARGET_AI_KEYS_STR.split(",")] if _TAR
 _GATEWAY_MODELS_STR = os.environ.get("GATEWAY_MODELS", "").strip()
 GATEWAY_MODELS = [m.strip() for m in _GATEWAY_MODELS_STR.split(",") if m.strip()] if _GATEWAY_MODELS_STR else []
 
+# 聊天响应缓存：几分钟内相同请求直接返缓存，不调上游省费用（仅非流式）
+CHAT_CACHE_ENABLED = os.environ.get("CHAT_CACHE_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+CHAT_CACHE_TTL_SECONDS = int(os.environ.get("CHAT_CACHE_TTL_SECONDS", "300"))  # 默认 5 分钟
+CHAT_CACHE_MAX_SIZE = int(os.environ.get("CHAT_CACHE_MAX_SIZE", "500"))
+
 # DeepSeek：窗口总结
 DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -59,9 +64,9 @@ R2_PUBLIC_URL = os.environ.get("R2_PUBLIC_URL", "")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_VERSION = os.environ.get("NOTION_VERSION", "2022-06-28")
 # 小本本：网关拎出后追加到此页面（块子级）；留空则不写 Notion
-NOTION_NOTEBOOK_PAGE_ID = os.environ.get("NOTION_NOTEBOOK_PAGE_ID", "")
+NOTION_NOTEBOOK_PAGE_ID = os.environ.get("NOTION_NOTEBOOK_PAGE_ID", "322043f2b839808c8a26d664e4e6e6a9")
 # 卧室通道：网关识别 bedroom tag 后，将原文追加到此页面（块子级）；留空则不写 Notion
-NOTION_BEDROOM_PAGE_ID = os.environ.get("NOTION_BEDROOM_PAGE_ID", "")
+NOTION_BEDROOM_PAGE_ID = os.environ.get("NOTION_BEDROOM_PAGE_ID", "322043f2b83980ce92d9c5d831c7b782")
 # 核心缓存待审：sync_to_notion / sync_from_notion 用的 database ID
 NOTION_CORE_CACHE_DATABASE_ID = os.environ.get("NOTION_CORE_CACHE_DATABASE_ID", "321043f2b83980d088a5c6e2f7bd77bf")
 
@@ -75,9 +80,13 @@ SUMMARY_EVERY_N_ROUNDS = 4
 # 新窗口注入：R2 中“最新四轮”的存储键（全局）
 R2_KEY_LATEST_4_ROUNDS = "global/latest_4_rounds.json"
 
-# Rikka 等前端预设：要从 system/user/assistant 中移除的短语（逗号分隔，留空则不删）
+# Rikka 等前端预设：要从 user/assistant 正文中移除的短语（逗号分隔），发给渡 + 存 R2 都会用
+# 留空则「发给渡」的清洗层等于没动文案；存 R2 仍会做表情包→文字、图片→占位符。存记忆只存 user+assistant，不含 system
 _RIKKA_STR = os.environ.get("RIKKA_PRESET_PATTERNS", "")
 RIKKA_PRESET_PATTERNS = [p.strip() for p in _RIKKA_STR.split(",") if p.strip()]
+
+# RikkaHub 自带 system「你是一个助手…」替换成这句，人设用你自己的；留空则不替换第一条 system
+RIKKA_SYSTEM_REPLACE = os.environ.get("RIKKA_SYSTEM_REPLACE", "请使用中文回复。")
 
 # 失败对话初筛：低于此长度视为失败
 FAILED_RESPONSE_MIN_LENGTH = int(os.environ.get("FAILED_RESPONSE_MIN_LENGTH", "10"))

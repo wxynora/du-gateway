@@ -14,6 +14,7 @@ from config import (
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
     step_clean_for_forward,
+    step_replace_rikka_system,
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
     step_inject_dynamic_memory,
@@ -263,11 +264,20 @@ def chat_completions():
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, WINDOW_ID_DEFAULT)
     body = step_clean_for_forward(body)
+    body = step_replace_rikka_system(body)
     body = step_inject_latest_4_rounds_for_new_window(body, WINDOW_ID_DEFAULT)
     body = step_inject_summary(body, WINDOW_ID_DEFAULT)
     body = step_inject_dynamic_memory(body, WINDOW_ID_DEFAULT)
     if body.get("stream"):
         return _stream_response(_stream_with_r2_archive(body, headers))
+    # 非流式：命中响应缓存则直接返回，不调上游
+    from services.chat_response_cache import get_cache_key, get as cache_get, set as cache_set
+    cache_key = get_cache_key(body)
+    cached = cache_get(cache_key)
+    if cached:
+        resp_json, status = cached
+        logger.info("Chat 命中响应缓存，未调上游")
+        return jsonify(resp_json), status
     resp_json, status, err = _forward_to_ai(body, headers)
     if err:
         logger.error("Chat 转发失败 error=%s", err, exc_info=True)
@@ -275,6 +285,8 @@ def chat_completions():
     if status >= 400:
         logger.warning("Chat 上游返回异常 status=%s", status)
         return jsonify(resp_json or {"error": "upstream error"}), status
+    if status == 200 and resp_json:
+        cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
         content_text = get_assistant_content_text(msg)
