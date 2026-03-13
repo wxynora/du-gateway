@@ -84,6 +84,45 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         yield ("data: " + json.dumps({"error": str(e)}) + "\n\n").encode("utf-8")
 
 
+def _stream_with_r2_archive(body: dict, headers: dict):
+    """
+    包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
+    这样流式请求也会落库，与非流式行为一致。
+    """
+    content_parts = []
+    last_user = _last_user_message(body.get("messages") or [])
+    try:
+        for chunk in _stream_forward_to_ai(body, headers):
+            # 顺带解析 SSE 收集 assistant content（data: {...} 中 choices[0].delta.content）
+            try:
+                if chunk.startswith(b"data: "):
+                    payload = chunk[6:].strip()
+                    if payload != b"[DONE]" and payload:
+                        j = json.loads(payload.decode("utf-8", errors="ignore"))
+                        delta = (j.get("choices") or [{}])[0].get("delta") or {}
+                        if delta.get("content"):
+                            content_parts.append(delta["content"])
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+            yield chunk
+    finally:
+        full_content = "".join(content_parts)
+        if is_failed_response(full_content):
+            logger.info("R2 未存档：流式回复被判为失败（长度/关键词），跳过")
+        elif not full_content.strip():
+            logger.info("R2 未存档：流式回复为空，跳过")
+        else:
+            msg = {"role": "assistant", "content": full_content}
+            round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
+            step_archive_and_maybe_summary(
+                WINDOW_ID_DEFAULT,
+                body.get("messages") or [],
+                msg,
+                round_cleaned_for_r2=round_cleaned,
+            )
+            logger.info("R2 流式请求已存档")
+
+
 def _forward_to_ai(body: dict, headers: dict):
     """将请求体转发到配置的 AI 接口，支持多目标 fallback：一个失败试下一个。返回 (response_json, status_code, error)。非流式。"""
     targets = _get_forward_targets()
@@ -228,7 +267,7 @@ def chat_completions():
     body = step_inject_summary(body, WINDOW_ID_DEFAULT)
     body = step_inject_dynamic_memory(body, WINDOW_ID_DEFAULT)
     if body.get("stream"):
-        return _stream_response(_stream_forward_to_ai(body, headers))
+        return _stream_response(_stream_with_r2_archive(body, headers))
     resp_json, status, err = _forward_to_ai(body, headers)
     if err:
         logger.error("Chat 转发失败 error=%s", err, exc_info=True)

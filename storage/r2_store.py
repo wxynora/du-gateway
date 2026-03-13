@@ -110,6 +110,7 @@ def append_conversation_round(window_id: str, round_index: int, messages: list) 
     client = _s3_client()
     if not client:
         logger.warning("R2 client 未配置，跳过 append_conversation_round window_id=%s", window_id)
+        logger.info("R2 未存档：未配置 R2 凭证（R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY）")
         return False
     try:
         prefix = _prefix(window_id)
