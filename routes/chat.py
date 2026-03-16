@@ -155,6 +155,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         try:
+            # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
                 last_data_line = None
@@ -169,15 +170,17 @@ def _stream_forward_to_ai(body: dict, headers: dict):
                         yield line + b"\n"
                     else:
                         yield b"\n"
-                # 流正常结束时打一条日志：finish_reason=length 多为上游 max_tokens 截断，stop 为正常结束
+                # 流正常读完时打一条：stop=正常结束，length=被 max_tokens 截断，null/没有=异常中断
                 if last_data_line:
                     try:
                         j = json.loads(last_data_line[6:].strip().decode("utf-8", errors="ignore"))
                         fr = (j.get("choices") or [{}])[0].get("finish_reason")
-                        if fr:
-                            logger.info("流式上游结束 finish_reason=%s（length=可能被 max_tokens 截断）", fr)
+                        if fr is not None and fr != "":
+                            logger.info("流式上游结束 finish_reason=%s（stop=正常 length=max_tokens截断）", fr)
+                        else:
+                            logger.info("流式上游结束 finish_reason=null或未提供（可能异常中断）")
                     except Exception:
-                        pass
+                        logger.info("流式上游结束 末包解析失败，无法读取 finish_reason")
                 return
             last_err = f"上游 HTTP {r.status_code}"
         except Exception as e:
