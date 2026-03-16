@@ -355,7 +355,10 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     """
     每轮对话开始前：从 R2 读动态层，按关键词匹配 + 权重取 Top N 注入 system 末尾。
     匹配方式：当前为关键词匹配；以后可升级向量检索。
+    DYNAMIC_MEMORY_TOP_N<=0 时不注入、不调向量检索，便于测试延迟。
     """
+    if DYNAMIC_MEMORY_TOP_N <= 0:
+        return body
     memories = r2_store.get_dynamic_memory_list()
     if not memories:
         return body

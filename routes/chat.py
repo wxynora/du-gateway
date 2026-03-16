@@ -12,6 +12,7 @@ from config import (
     GATEWAY_MODELS,
     model_matches_gateway_keywords,
     MAX_COMPLETION_TOKENS,
+    STREAM_TIMEOUT_SECONDS,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -154,7 +155,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         try:
-            r = requests.post(url, headers=h, json=body_send, timeout=120, stream=True)
+            r = requests.post(url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
                 last_data_line = None
                 for line in r.iter_lines():
