@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Optional
 
-from memory_vector.config import VECTOR_MIN_SIM, VECTOR_TOPK, VECTOR_TOPN
+from memory_vector.config import (
+    VECTOR_MIN_SIM,
+    VECTOR_TOPK,
+    VECTOR_TOPN,
+    INCLUDE_DU_MEMORY_DOC_IN_VECTOR,
+    INCLUDE_CORE_PENDING_IN_VECTOR,
+)
 from memory_vector.cosine import cosine
 from memory_vector.embedding_client import embed_text
 from memory_vector.vector_index_store import load_index
@@ -82,8 +88,8 @@ def dynamic_vector_retrieve(
         if mid:
             mem_by_id[str(mid)] = m
 
-    # 可选：把「小渡的记忆文档」作为一条特殊记忆参与召回（不在 dynamic_memory 列表中，但参与向量匹配）
-    du_doc = r2_store.get_du_memory_doc()
+    # 可选：把「小渡的记忆文档」作为一条特殊记忆参与召回（默认关闭）
+    du_doc = r2_store.get_du_memory_doc() if INCLUDE_DU_MEMORY_DOC_IN_VECTOR else ""
     du_doc_id = "__du_memory_doc_v1__"
     if du_doc:
         du_mem = {
@@ -96,8 +102,8 @@ def dynamic_vector_retrieve(
         }
         mem_by_id[du_doc_id] = du_mem
 
-    # 可选：核心缓存 pending 也参与检索（作为高权重记忆）
-    core_pending = r2_store.get_core_cache_pending() or []
+    # 可选：核心缓存 pending 也参与检索（默认关闭）
+    core_pending = (r2_store.get_core_cache_pending() or []) if INCLUDE_CORE_PENDING_IN_VECTOR else []
     core_mems: list[dict] = []
     for p in core_pending:
         cid = p.get("id")

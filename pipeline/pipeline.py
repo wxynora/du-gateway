@@ -283,8 +283,6 @@ def _extract_keywords(text: str) -> list:
         p = p.strip()
         if len(p) >= 2:  # 至少 2 字符
             keywords.append(p)
-        elif len(p) == 1 and "\u4e00" <= p <= "\u9fff":
-            keywords.append(p)
     return list(set(keywords))
 
 

@@ -30,9 +30,15 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002").strip()
 EMBEDDING_MAX_CHARS = _env_int("EMBEDDING_MAX_CHARS", 8000)
 
-VECTOR_MIN_SIM = _env_float("VECTOR_MIN_SIM", 0.2)
-VECTOR_TOPK = _env_int("VECTOR_TOPK", 50)
-VECTOR_TOPN = _env_int("VECTOR_TOPN", 10)
+# 向量召回默认更保守，避免每轮注入过多不相关记忆
+VECTOR_MIN_SIM = _env_float("VECTOR_MIN_SIM", 0.35)
+VECTOR_TOPK = _env_int("VECTOR_TOPK", 30)
+VECTOR_TOPN = _env_int("VECTOR_TOPN", 5)
+
+# 是否把额外来源也并入向量召回（默认关闭，避免误注入）
+INCLUDE_DU_MEMORY_DOC_IN_VECTOR = os.getenv("INCLUDE_DU_MEMORY_DOC_IN_VECTOR", "0").strip().lower() in ("1", "true", "yes")
+# 核心缓存 pending 默认参与：你后续拆分后的“核心缓存层”会在这里发挥作用
+INCLUDE_CORE_PENDING_IN_VECTOR = os.getenv("INCLUDE_CORE_PENDING_IN_VECTOR", "1").strip().lower() in ("1", "true", "yes")
 
 # 是否按 tag 分片存储 embeddings/{tag}.embeddings.json
 SHARD_BY_TAG = os.getenv("SHARD_BY_TAG", "true").strip().lower() in ("1", "true", "yes")
