@@ -210,14 +210,17 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
 
     if not body.get("tools"):
         # 无工具：原样边收边发，顺带收集 content 用于 R2
+        data_chunk_count = 0
         try:
             for chunk in _stream_forward_to_ai(body, headers):
                 _collect_content_from_chunk(chunk)
+                if chunk.startswith(b"data:") and len(chunk) > 5:
+                    data_chunk_count += 1
                 yield chunk
         finally:
             full_content = "".join(content_parts)
-            # 方便排查截断：网关实际从上游收齐的回复长度（若此处就很小，说明是上游截断）
-            logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
+            # 方便排查丢 chunk：收集长度=网关从上游收齐的正文；data 块数=网关发给客户端的 SSE 条数
+            logger.info("本轮流式回复收集长度约 %s 字符，共转发 %s 个 data 块", len(full_content), data_chunk_count)
             if not is_failed_response(full_content) and full_content.strip():
                 msg = {"role": "assistant", "content": full_content}
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
