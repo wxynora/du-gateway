@@ -154,8 +154,8 @@ FAILED_RESPONSE_MIN_LENGTH = int(os.environ.get("FAILED_RESPONSE_MIN_LENGTH", "1
 _FAILED_KEYWORDS_STR = os.environ.get("FAILED_RESPONSE_ERROR_KEYWORDS", "error,出错,失败,超时,抱歉，我无法")
 FAILED_RESPONSE_ERROR_KEYWORDS = [k.strip() for k in _FAILED_KEYWORDS_STR.split(",") if k.strip()]
 
-# 动态层注入：取 Top N 条记忆注入（按 token 预算可调）
-DYNAMIC_MEMORY_TOP_N = int(os.environ.get("DYNAMIC_MEMORY_TOP_N", "8"))
+# 动态层注入：最多取 N 条记忆注入（默认 3，减少请求体长度）
+DYNAMIC_MEMORY_TOP_N = int(os.environ.get("DYNAMIC_MEMORY_TOP_N", "3"))
 # 动态层：记忆有效天数，超期参与权重衰减
 DYNAMIC_MEMORY_DAYS_VALID = 7
 
@@ -164,6 +164,10 @@ DYNAMIC_MEMORY_DAYS_VALID = 7
 MEMORY_INJECTION_MAX_TOKENS = int(os.environ.get("MEMORY_INJECTION_MAX_TOKENS", "3000"))
 # 其中总结占比例（余下给动态层）
 MEMORY_SUMMARY_TOKEN_RATIO = float(os.environ.get("MEMORY_SUMMARY_TOKEN_RATIO", "0.6"))
+
+# 请求总字符数上限（0=不限制）。超过时从对话中部删最老的轮次，保证渡的 prompt+前段 system 不被删，避免上游 input 超限截断输出
+# 50K token 约 10 万字符，可设 100000 或 90000 留余量
+MAX_REQUEST_CHARS = int(os.environ.get("MAX_REQUEST_CHARS", "0"))
 
 # 表情包对照表路径（老婆可直接编辑 JSON 增删改，保存即生效）
 EMOJI_MAPPING_FILE = DATA_DIR / "emoji_mapping.json"

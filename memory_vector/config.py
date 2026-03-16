@@ -33,7 +33,7 @@ EMBEDDING_MAX_CHARS = _env_int("EMBEDDING_MAX_CHARS", 8000)
 # 向量召回默认更保守，避免每轮注入过多不相关记忆
 VECTOR_MIN_SIM = _env_float("VECTOR_MIN_SIM", 0.35)
 VECTOR_TOPK = _env_int("VECTOR_TOPK", 30)
-VECTOR_TOPN = _env_int("VECTOR_TOPN", 5)
+VECTOR_TOPN = _env_int("VECTOR_TOPN", 3)
 
 # 是否把额外来源也并入向量召回（默认关闭，避免误注入）
 INCLUDE_DU_MEMORY_DOC_IN_VECTOR = os.getenv("INCLUDE_DU_MEMORY_DOC_IN_VECTOR", "0").strip().lower() in ("1", "true", "yes")

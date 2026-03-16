@@ -9,10 +9,12 @@ from typing import Any, Callable, Optional
 from config import (
     SUMMARY_EVERY_N_ROUNDS,
     DYNAMIC_MEMORY_DAYS_VALID,
+    DYNAMIC_MEMORY_TOP_N,
     ASSISTANT_TIME_KEYWORDS,
     ASSISTANT_LUNAR_KEYWORDS,
     REPLY_GAP_THRESHOLD_MINUTES,
     LAST_USER_REPLY_FILE,
+    MAX_REQUEST_CHARS,
 )
 from pathlib import Path
 from storage import r2_store
@@ -107,6 +109,63 @@ def step_replace_rikka_system(body: dict) -> dict:
         return body
     body = copy.deepcopy(body)
     body["messages"].insert(0, {"role": "system", "content": du_prompt})
+    return body
+
+
+def _messages_total_chars(messages: list) -> int:
+    """估算 messages 总字符数（content 转为字符串长度）。"""
+    total = 0
+    for m in messages or []:
+        c = m.get("content")
+        if c is None:
+            continue
+        if isinstance(c, str):
+            total += len(c)
+        elif isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict) and (part.get("text") or part.get("content")):
+                    total += len(str(part.get("text") or part.get("content") or ""))
+                else:
+                    total += len(str(part))
+        else:
+            total += len(str(c))
+    return total
+
+
+def step_trim_messages_if_over_limit(body: dict) -> dict:
+    """
+    当 MAX_REQUEST_CHARS > 0 且 messages 总字符数超限时，从对话中部删最老的轮次，
+    保证最前面的「渡的 prompt + 所有连续 system」不被删，避免上游 input 超限导致输出被截断。
+    """
+    if not MAX_REQUEST_CHARS or MAX_REQUEST_CHARS <= 0:
+        return body
+    messages = body.get("messages") or []
+    if not messages:
+        return body
+    total = _messages_total_chars(messages)
+    if total <= MAX_REQUEST_CHARS:
+        return body
+    # 前段：第 0 条（渡的 prompt）+ 其后所有连续的 system
+    i = 0
+    while i < len(messages) and (messages[i].get("role") or "").lower() == "system":
+        i += 1
+    leading = messages[:i]
+    conversation = messages[i:]
+    if not conversation:
+        return body
+    leading_chars = _messages_total_chars(leading)
+    if leading_chars >= MAX_REQUEST_CHARS:
+        logger.warning("请求前段（渡 prompt+system）已超 MAX_REQUEST_CHARS，无法再裁对话")
+        return body
+    # 从 conversation 前面删，直到总长 <= 限
+    body = copy.deepcopy(body)
+    conv = list(conversation)
+    while conv and leading_chars + _messages_total_chars(conv) > MAX_REQUEST_CHARS:
+        conv.pop(0)
+    dropped = len(conversation) - len(conv)
+    if dropped:
+        logger.info("请求超限已裁掉最老 %s 条对话，当前总字符约 %s（上限 %s）", dropped, leading_chars + _messages_total_chars(conv), MAX_REQUEST_CHARS)
+    body["messages"] = leading + conv
     return body
 
 
@@ -356,7 +415,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
 
     budget = memory_dynamic_budget()
     lines = []
-    for t in scored:
+    for t in scored[: max(1, DYNAMIC_MEMORY_TOP_N)]:
         line = f"- {t[2].get('content', '').strip()}"
         new_text = "\n".join(lines) + ("\n" + line if lines else line)
         if estimate_tokens(new_text) > budget:
