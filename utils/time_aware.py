@@ -15,6 +15,12 @@ try:
 except ImportError:
     _HAS_ZHDATE = False
 
+# 黄历缓存：按北京时间按日缓存一次，避免一天内多次请求外部黄历 API
+_ALMANAC_CACHE = {
+    "date": "",
+    "text": "",
+}
+
 
 # 按小时（0-23）映射到大概时间段（北京时间）
 _PERIODS = [
@@ -151,7 +157,7 @@ def get_weekday_cn(dt: Optional[datetime] = None) -> str:
 def get_lunar_and_terms(dt: Optional[datetime] = None) -> str:
     """
     农历 + 节气 + 宜忌 一行文案（渡想知道时才注入）；日期按北京时间。
-    农历用 zhdate；节气/宜忌当前为占位，可后续接表或 API。
+    农历用 zhdate；节气/宜忌优先调用外部黄历 API（按日缓存），失败时回退为占位。
     """
     if dt is None:
         dt = _now_beijing()
@@ -168,7 +174,25 @@ def get_lunar_and_terms(dt: Optional[datetime] = None) -> str:
             lunar = "农历（暂不可用）"
     else:
         lunar = "农历（需安装 zhdate）"
-    # 节气 / 宜忌：占位，后续可接 24 节气表 + 宜忌表或 API
+    # 节气 / 宜忌：优先调用黄历 API（按日缓存），失败或未配置时回退为占位
+    almanac_text = ""
+    try:
+        from services.weather_almanac import fetch_almanac
+
+        # 按北京时间的「今日」做缓存键
+        day = today_beijing()
+        global _ALMANAC_CACHE
+        if _ALMANAC_CACHE.get("date") != day:
+            text = fetch_almanac(day) or ""
+            _ALMANAC_CACHE = {"date": day, "text": text}
+        almanac_text = _ALMANAC_CACHE.get("text") or ""
+    except Exception:
+        almanac_text = ""
+
+    if almanac_text:
+        # fetch_almanac 已返回宜忌等完整文案，这里直接拼在农历后面
+        return f"{lunar} {almanac_text}".strip()
+
     solar_term = "节气：见黄历"
     yi_ji = "宜忌：见黄历"
     return f"{lunar} {solar_term} {yi_ji}".strip()
