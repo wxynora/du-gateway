@@ -90,13 +90,16 @@ def _load_core_prompt() -> str:
 
 def step_replace_rikka_system(body: dict) -> dict:
     """
-    发给 AI 之前：在保留前端（如 RikkaHub）自带 system 的前提下，额外注入一条「渡的核心 prompt」system。
-    文案来自 prompts/du_core_prompt.txt。若文件不存在则回退用 RIKKA_SYSTEM_REPLACE。
+    发给 AI 之前：在保留前端（如 RikkaHub）自带 system 的前提下，额外注入一条「核心人设 prompt」system。
+    当前版本只使用环境变量 RIKKA_SYSTEM_REPLACE，不再读取「小渡的记忆文档 1.0」文件：
+    - 不访问/不注入记忆文档 1.0；
+    - 仅注入 RIKKA_SYSTEM_REPLACE 的内容作为简短核心人设；
     - 不覆盖/修改前端传来的 system；
-    - 若当前对话里已经存在一条与核心 prompt 完全相同的 system，则不再重复注入；
-    - 存记忆时仍然不会存任何 system，只存 user+assistant 对话。
+    - 若当前对话里已经存在一条与核心 prompt 完全相同的 system，则不再重复注入。
     """
-    core_prompt = _load_core_prompt()
+    from config import RIKKA_SYSTEM_REPLACE
+
+    core_prompt = (RIKKA_SYSTEM_REPLACE or "").strip()
     if not core_prompt:
         return body
     messages = body.get("messages") or []
@@ -104,7 +107,7 @@ def step_replace_rikka_system(body: dict) -> dict:
         return body
     # 若已存在相同内容的 system，直接返回，避免一轮对话中重复注入
     for msg in messages:
-        if (msg.get("role") or "").lower() == "system" and str(msg.get("content") or "").strip() == core_prompt.strip():
+        if (msg.get("role") or "").lower() == "system" and str(msg.get("content") or "").strip() == core_prompt:
             return body
     body = copy.deepcopy(body)
     # 在最前面追加一条核心 prompt system，保留原有 RikkaHub system 等
