@@ -22,7 +22,7 @@ import argparse
 import json
 from typing import Any, Dict, List
 
-from pipeline.pipeline import SUMMARY_EVERY_N_ROUNDS, _step_dynamic_layer_evolve
+from pipeline.pipeline import SUMMARY_EVERY_N_ROUNDS
 from services.deepseek_summary import fetch_new_summary
 from storage import r2_store
 from utils.log import get_logger
@@ -118,6 +118,8 @@ def main() -> None:
     from pipeline.cleaner import build_round_cleaned_for_r2
 
     all_rounds_for_summary: List[Dict[str, Any]] = []
+    # 把这次重放当成「从零开始」：不继承旧 summary，而是在内存里从空串开始滚动总结
+    current_summary: str = ""
 
     total = len(rounds)
     for i, r in enumerate(rounds, start=1):
@@ -128,29 +130,23 @@ def main() -> None:
         round_messages = build_round_cleaned_for_r2(user_msg, asst_msg)
         all_rounds_for_summary.append({"index": i, "messages": round_messages})
 
-        # 窗口总结
+        # 窗口总结：每 SUMMARY_EVERY_N_ROUNDS 轮，用「当前内存里的 summary」+ 最近 4 轮做增量总结
         if i % SUMMARY_EVERY_N_ROUNDS == 0:
             recent = all_rounds_for_summary[-4:]
             if recent:
-                current = r2_store.get_summary(window_id) or ""
-                new_summary = fetch_new_summary(current, recent)
+                new_summary = fetch_new_summary(current_summary, recent)
                 if new_summary:
-                    r2_store.save_summary(window_id, new_summary)
+                    current_summary = new_summary
+                    r2_store.save_summary(window_id, current_summary)
                 else:
                     logger.warning(
                         "replay_rikka_segment_to_memory 触发总结但 DeepSeek 未返回新总结 window_id=%s", window_id
                     )
 
-        # 动态层
-        try:
-            _step_dynamic_layer_evolve(window_id, i, round_messages)
-        except Exception as e:
-            logger.error(
-                "replay_rikka_segment_to_memory 动态层第 %s 轮失败 error=%s", i, e, exc_info=True
-            )
+        # 动态层：按本次需求跳过，避免重复演化
 
         if i % 20 == 0 or i == total:
-            logger.info("已重放轮次 %s/%s（summary+dynamic，仅 node_index 区间）", i, total)
+            logger.info("已重放轮次 %s/%s（仅窗口总结，跳过动态层）", i, total)
 
 
 if __name__ == "__main__":

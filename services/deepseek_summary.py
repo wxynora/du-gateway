@@ -3,6 +3,7 @@ import requests
 
 from config import DEEPSEEK_API_URL, DEEPSEEK_API_KEY
 from utils.log import get_logger
+from utils.tokens import estimate_tokens, memory_summary_budget
 
 logger = get_logger(__name__)
 
@@ -117,7 +118,120 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
         r.raise_for_status()
         data = r.json()
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-        return content.strip() if content else None
+        if not content:
+            return None
+        summary = content.strip()
+        if not summary:
+            return None
+        # 固定窗口：summary 始终受注入预算约束，按结构从最早内容开始一点点削
+        budget = memory_summary_budget()
+        return _trim_summary_to_budget(summary, budget)
     except Exception as e:
         logger.error("DeepSeek 总结失败 error=%s", e, exc_info=True)
         return None
+
+
+def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
+    """
+    按「【最近】/【稍早】/【更早】/渡的小本本」结构，从最早的内容开始一点点削，
+    始终优先保留【最近】末尾、其次【稍早】末尾，最后才动【更早】。
+    """
+    if not text or estimate_tokens(text) <= budget_tokens:
+        return text
+
+    lines = text.splitlines()
+    n = len(lines)
+
+    def _find_block_idx(title: str) -> int:
+        for i, line in enumerate(lines):
+            if line.strip().startswith(title):
+                return i
+        return -1
+
+    idx_recent = _find_block_idx("【最近】")
+    idx_earlier = _find_block_idx("【稍早】")
+    idx_oldest = _find_block_idx("【更早】")
+    idx_notebook = _find_block_idx("渡的小本本")
+
+    # 若结构不完整，退回简单保留末尾一段
+    if idx_recent == -1:
+        s = text
+        CHUNK = 200
+        while s and estimate_tokens(s) > budget_tokens:
+            if len(s) <= CHUNK:
+                break
+            s = s[CHUNK:]
+        return s
+
+    def _block_slice(start: int, end: int | None) -> list[str]:
+        if start == -1:
+            return []
+        if end is None or end < 0:
+            end = n
+        return lines[start:end]
+
+    recent_end = min([i for i in (idx_earlier, idx_oldest, idx_notebook) if i != -1] or [n])
+    earlier_end = min([i for i in (idx_oldest, idx_notebook) if i != -1] or [n])
+    oldest_end = idx_notebook if idx_notebook != -1 else n
+
+    recent_block = _block_slice(idx_recent, recent_end)
+    earlier_block = _block_slice(idx_earlier, earlier_end) if idx_earlier != -1 else []
+    oldest_block = _block_slice(idx_oldest, oldest_end) if idx_oldest != -1 else []
+    notebook_block = _block_slice(idx_notebook, None) if idx_notebook != -1 else []
+
+    def _split_title(block: list[str]) -> tuple[list[str], list[str]]:
+        if not block:
+            return [], []
+        title = [block[0]]
+        body = block[1:]
+        return title, body
+
+    recent_title, recent_body = _split_title(recent_block)
+    earlier_title, earlier_body = _split_title(earlier_block)
+    oldest_title, oldest_body = _split_title(oldest_block)
+
+    def _compose() -> str:
+        parts: list[str] = []
+        if recent_title:
+            parts.extend(recent_title + recent_body)
+        if earlier_title and earlier_body:
+            parts.extend(earlier_title + earlier_body)
+        if oldest_title and oldest_body:
+            parts.extend(oldest_title + oldest_body)
+        if notebook_block:
+            parts.extend(notebook_block)
+        return "\n".join(parts).rstrip()
+
+    summary = _compose()
+    if estimate_tokens(summary) <= budget_tokens:
+        return summary
+
+    def _pop_from_front(body: list[str]) -> bool:
+        while body:
+            line = body[0]
+            body.pop(0)
+            if line.strip():
+                return True
+        return False
+
+    for _ in range(1000):
+        if estimate_tokens(summary) <= budget_tokens:
+            break
+        if oldest_body:
+            if not _pop_from_front(oldest_body):
+                oldest_body.clear()
+                continue
+        elif earlier_body:
+            if not _pop_from_front(earlier_body):
+                earlier_body.clear()
+                continue
+        elif recent_body:
+            if not _pop_from_front(recent_body):
+                recent_body.clear()
+                continue
+        else:
+            break
+        summary = _compose()
+
+    return summary
+
