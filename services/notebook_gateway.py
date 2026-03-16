@@ -1,12 +1,12 @@
-# 小本本：网关提前拎出、打时间戳、存 R2（按时间排序）+ Notion 双存，不动原文
+# 小本本：网关提前拎出、打时间戳；可单拎出来直接存 Notion（不写 R2），或 R2+Notion 双存，不动原文
 # 触发条件：消息里同时含有「笔记本 emoji」和「小本本更新」才截取（从「小本本更新」到句尾）
 from utils.time_aware import now_beijing_iso
 from typing import Any
 
-from config import NOTION_NOTEBOOK_PAGE_ID
+from config import NOTION_NOTEBOOK_PAGE_ID, NOTEBOOK_SAVE_ONLY_NOTION
 
-# 📝 + 「小本本更新」才触发截取，避免误触
-NOTEBOOK_EMOJI = "\U0001F4DD"  # 📝
+# 笔记本 emoji（📓📒📔📝）+ 「小本本更新」才触发截取，避免误触
+NOTEBOOK_EMOJI = "\U0001F4D3\U0001F4D2\U0001F4D4\U0001F4DD"  # 📓📒📔📝
 NOTEBOOK_PHRASE = "小本本更新"
 from storage import r2_store
 from services import notion_client
@@ -39,7 +39,7 @@ def _content_to_str(content: Any) -> str:
 
 
 def _has_notebook_emoji(text: str) -> bool:
-    """消息里是否含有 📝。"""
+    """消息里是否含有笔记本 emoji（📓📒📔📝）。"""
     if not text:
         return False
     for c in text:
@@ -73,27 +73,21 @@ def extract_entries_from_round(round_messages: list) -> list[str]:
 
 def save_entry(content: str) -> None:
     """
-    将一条小本本写入 R2（带时间戳、按时间排序）并追加到 Notion 页面。
+    小本本单拎：截取后直接存 Notion（优先）；若未开 NOTEBOOK_SAVE_ONLY_NOTION 则再写 R2。
     原文不动，仅加时间戳。
     """
     content = (content or "").strip()
     if not content:
         return
     ts = now_beijing_iso()
-    # R2（失败打 error 并重试一次）
-    ok = r2_store.notebook_append_entry(content)
-    if not ok:
-        logger.error("小本本写 R2 失败，重试一次")
-        ok = r2_store.notebook_append_entry(content)
-    if not ok:
-        logger.error("小本本写 R2 再次失败，仍尝试写 Notion")
-    # Notion：追加一段 [时间] 原文（失败打 error 并重试一次）
+    line = f"[{ts}] {content}"
+    # 先写 Notion（单拎出来直接存 Notion）
     if NOTION_NOTEBOOK_PAGE_ID:
-        line = f"[{ts}] {content}"
         children = []
-        while line:
-            chunk = line[:_NOTION_RICH_TEXT_MAX]
-            line = line[_NOTION_RICH_TEXT_MAX:]
+        rest = line
+        while rest:
+            chunk = rest[:_NOTION_RICH_TEXT_MAX]
+            rest = rest[_NOTION_RICH_TEXT_MAX:]
             children.append({
                 "object": "block",
                 "type": "paragraph",
@@ -107,5 +101,17 @@ def save_entry(content: str) -> None:
             _, err = notion_client.append_block_children(NOTION_NOTEBOOK_PAGE_ID, children)
         if err:
             logger.error("小本本写 Notion 再次失败 page_id=%s error=%s", NOTION_NOTEBOOK_PAGE_ID, err)
+        else:
+            logger.debug("小本本已直接写入 Notion")
     else:
         logger.debug("NOTION_NOTEBOOK_PAGE_ID 未配置，跳过 Notion 小本本写入")
+    # 未开「只存 Notion」时再写 R2
+    if not NOTEBOOK_SAVE_ONLY_NOTION:
+        ok = r2_store.notebook_append_entry(content)
+        if not ok:
+            logger.error("小本本写 R2 失败，重试一次")
+            ok = r2_store.notebook_append_entry(content)
+        if not ok:
+            logger.error("小本本写 R2 再次失败")
+        else:
+            logger.debug("小本本已写入 R2")

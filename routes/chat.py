@@ -10,6 +10,7 @@ from config import (
     TARGET_AI_URLS,
     TARGET_AI_API_KEYS,
     GATEWAY_MODELS,
+    model_matches_gateway_keywords,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -18,6 +19,8 @@ from pipeline.pipeline import (
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
     step_inject_dynamic_memory,
+    step_inject_notion_search,
+    step_inject_notion_tools,
     step_archive_and_maybe_summary,
 )
 from pipeline.cleaner import build_round_cleaned_for_r2
@@ -30,14 +33,31 @@ bp = Blueprint("chat", __name__)
 WINDOW_ID_DEFAULT = ""
 
 
-def _get_forward_targets():
-    """返回 [(url, api_key), ...]，按顺序尝试；未配置多目标时用 TARGET_AI_URL + TARGET_AI_API_KEY。"""
+def _get_window_id_from_request(body: dict) -> str:
+    """从请求获取 window_id：优先 X-Window-Id header，其次 body.window_id，缺省为空。供 Telegram 等客户端传 tg_{user_id}。"""
+    if request.headers.get("X-Window-Id"):
+        return (request.headers.get("X-Window-Id") or "").strip()
+    if isinstance(body, dict) and body.get("window_id") is not None:
+        return str(body.get("window_id", "")).strip()
+    return WINDOW_ID_DEFAULT
+
+
+def _get_forward_targets(request_model: str = None):
+    """
+    返回 [(url, api_key), ...]，按顺序尝试；未配置多目标时用 TARGET_AI_URL + TARGET_AI_API_KEY。
+    多目标时：若 request_model 匹配关键词（claude/opus/4或5/thinking），返回全部用于 fallback；
+    否则只返回第一个，避免非匹配模型打到所有中转站。
+    """
     if TARGET_AI_URLS:
         urls = TARGET_AI_URLS
         keys = TARGET_AI_API_KEYS
         while len(keys) < len(urls):
             keys.append(TARGET_AI_API_KEY)
-        return list(zip(urls, keys[: len(urls)]))
+        pairs = list(zip(urls, keys[: len(urls)]))
+        if len(pairs) > 1 and request_model is not None:
+            if not model_matches_gateway_keywords(request_model):
+                return [pairs[0]]
+        return pairs
     if TARGET_AI_URL:
         return [(TARGET_AI_URL, TARGET_AI_API_KEY)]
     return []
@@ -55,78 +75,180 @@ def _chat_url_to_models_url(chat_url: str) -> str:
     return base.rstrip("/") + "/v1/models"
 
 
+def _parse_stream_to_message(chunks: list) -> dict:
+    """
+    从流式 SSE chunks 解析出完整 assistant message（content + tool_calls）。
+    返回 {"content": str, "tool_calls": list or None}，tool_calls 为 OpenAI 格式。
+    """
+    content_parts = []
+    # tool_calls 按 index 聚合，arguments 可能多 delta 拼接
+    tool_calls_by_index = {}
+    for chunk in chunks:
+        if not chunk.startswith(b"data: "):
+            continue
+        payload = chunk[6:].strip()
+        if payload == b"[DONE]" or not payload:
+            continue
+        try:
+            j = json.loads(payload.decode("utf-8", errors="ignore"))
+            delta = (j.get("choices") or [{}])[0].get("delta") or {}
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+        if delta.get("content"):
+            content_parts.append(delta["content"])
+        for tc in delta.get("tool_calls") or []:
+            idx = tc.get("index")
+            if idx is None:
+                continue
+            if idx not in tool_calls_by_index:
+                tool_calls_by_index[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+            if tc.get("id"):
+                tool_calls_by_index[idx]["id"] = tc["id"]
+            if tc.get("type"):
+                tool_calls_by_index[idx]["type"] = tc["type"]
+            fn = tc.get("function") or {}
+            if fn.get("name"):
+                tool_calls_by_index[idx]["function"]["name"] = fn["name"]
+            if fn.get("arguments"):
+                tool_calls_by_index[idx]["function"]["arguments"] += fn["arguments"]
+    # 按 index 排序成列表
+    sorted_tcs = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index) if tool_calls_by_index[i].get("id")]
+    return {
+        "content": "".join(content_parts),
+        "tool_calls": sorted_tcs if sorted_tcs else None,
+    }
+
+
 def _stream_forward_to_ai(body: dict, headers: dict):
-    """流式转发：上游 SSE 原样逐行 yield，供 Flask 以 text/event-stream 返回。RikkaHub 等客户端要流式才正常显示。"""
-    targets = _get_forward_targets()
+    """流式转发：上游 SSE 原样逐行 yield；多目标时按顺序 fallback，一个失败试下一个。"""
+    request_model = (body or {}).get("model") or ""
+    targets = _get_forward_targets(request_model)
     if not targets:
         yield ("data: " + json.dumps({"error": "TARGET_AI_URL 或 TARGET_AI_URLS 未配置"}) + "\n\n").encode("utf-8")
         return
-    url, api_key = targets[0]
     req_headers = {"Content-Type": "application/json"}
-    if api_key:
-        req_headers["Authorization"] = f"Bearer {api_key}"
     for h in ("Accept", "Accept-Encoding"):
         if request.headers.get(h):
             req_headers[h] = request.headers.get(h)
     body_send = dict(body)
     body_send["stream"] = True
-    try:
-        r = requests.post(url, headers=req_headers, json=body_send, timeout=120, stream=True)
-        if r.status_code != 200:
-            yield ("data: " + json.dumps({"error": f"上游 HTTP {r.status_code}"}) + "\n\n").encode("utf-8")
-            return
-        for line in r.iter_lines():
-            if line is not None:
-                yield line + b"\n"
-            else:
-                yield b"\n"
-    except Exception as e:
-        logger.warning("流式转发异常 %s %s", url[:50], e)
-        yield ("data: " + json.dumps({"error": str(e)}) + "\n\n").encode("utf-8")
+    last_err = None
+    for url, api_key in targets:
+        h = dict(req_headers)
+        if api_key:
+            h["Authorization"] = f"Bearer {api_key}"
+        try:
+            r = requests.post(url, headers=h, json=body_send, timeout=120, stream=True)
+            if r.status_code == 200:
+                for line in r.iter_lines():
+                    if line is not None:
+                        yield line + b"\n"
+                    else:
+                        yield b"\n"
+                return
+            last_err = f"上游 HTTP {r.status_code}"
+        except Exception as e:
+            last_err = str(e)
+            logger.warning("流式转发异常 %s %s", url[:50], e)
+    yield ("data: " + json.dumps({"error": last_err or "所有中转站均失败"}) + "\n\n").encode("utf-8")
 
 
-def _stream_with_r2_archive(body: dict, headers: dict):
+def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
     """
     包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
-    这样流式请求也会落库，与非流式行为一致。
+    当请求带 tools 时：先缓冲整段流，解析 message；若有 tool_calls 则执行工具并继续请求（循环），
+    最后把「无 tool_calls」那一轮的流发给客户端，实现与 RikkaHub 类似的流式+工具行为。
+    无 tools 时：边收边发，不缓冲，保持原有实时流式。
     """
     content_parts = []
     last_user = _last_user_message(body.get("messages") or [])
+
+    def _collect_content_from_chunk(chunk):
+        try:
+            if chunk.startswith(b"data: "):
+                payload = chunk[6:].strip()
+                if payload != b"[DONE]" and payload:
+                    j = json.loads(payload.decode("utf-8", errors="ignore"))
+                    delta = (j.get("choices") or [{}])[0].get("delta") or {}
+                    if delta.get("content"):
+                        content_parts.append(delta["content"])
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+    if not body.get("tools"):
+        # 无工具：原样边收边发，顺带收集 content 用于 R2
+        try:
+            for chunk in _stream_forward_to_ai(body, headers):
+                _collect_content_from_chunk(chunk)
+                yield chunk
+        finally:
+            full_content = "".join(content_parts)
+            if not is_failed_response(full_content) and full_content.strip():
+                msg = {"role": "assistant", "content": full_content}
+                round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
+                logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
+                step_archive_and_maybe_summary(
+                    window_id, body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned,
+                )
+                try:
+                    from services.notion_write_from_assistant import process_assistant_content_for_notion_write
+                    process_assistant_content_for_notion_write(full_content)
+                except Exception:
+                    pass
+                logger.info("R2 流式请求已存档")
+            elif is_failed_response(full_content):
+                logger.info("R2 未存档：流式回复被判为失败，跳过")
+            elif not full_content.strip():
+                logger.info("R2 未存档：流式回复为空，跳过")
+        return
+
+    # 有 tools：缓冲 + 工具循环，最后把最后一轮流发给客户端
+    current_body = body
+    max_tool_rounds = 5
     try:
-        for chunk in _stream_forward_to_ai(body, headers):
-            # 顺带解析 SSE 收集 assistant content（data: {...} 中 choices[0].delta.content）
-            try:
-                if chunk.startswith(b"data: "):
-                    payload = chunk[6:].strip()
-                    if payload != b"[DONE]" and payload:
-                        j = json.loads(payload.decode("utf-8", errors="ignore"))
-                        delta = (j.get("choices") or [{}])[0].get("delta") or {}
-                        if delta.get("content"):
-                            content_parts.append(delta["content"])
-            except (json.JSONDecodeError, KeyError, TypeError):
-                pass
-            yield chunk
+        for _ in range(max_tool_rounds):
+            chunks = []
+            for chunk in _stream_forward_to_ai(current_body, headers):
+                chunks.append(chunk)
+            if len(chunks) == 1 and chunks[0].startswith(b"data: ") and b"error" in chunks[0]:
+                yield chunks[0]
+                return
+            parsed = _parse_stream_to_message(chunks)
+            tool_calls = parsed.get("tool_calls")
+            if tool_calls and isinstance(tool_calls, list):
+                from services.notion_tools import execute_tool
+                msg = {"content": parsed.get("content") or None, "tool_calls": tool_calls}
+                current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
+                continue
+            for ch in chunks:
+                yield ch
+            content_parts.append(parsed.get("content") or "")
+            break
     finally:
         full_content = "".join(content_parts)
         if is_failed_response(full_content):
-            logger.info("R2 未存档：流式回复被判为失败（长度/关键词），跳过")
+            logger.info("R2 未存档：流式回复被判为失败，跳过")
         elif not full_content.strip():
             logger.info("R2 未存档：流式回复为空，跳过")
         else:
             msg = {"role": "assistant", "content": full_content}
             round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
+            logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             step_archive_and_maybe_summary(
-                WINDOW_ID_DEFAULT,
-                body.get("messages") or [],
-                msg,
-                round_cleaned_for_r2=round_cleaned,
+                window_id, body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned,
             )
+            try:
+                from services.notion_write_from_assistant import process_assistant_content_for_notion_write
+                process_assistant_content_for_notion_write(full_content)
+            except Exception:
+                pass
             logger.info("R2 流式请求已存档")
 
 
 def _forward_to_ai(body: dict, headers: dict):
     """将请求体转发到配置的 AI 接口，支持多目标 fallback：一个失败试下一个。返回 (response_json, status_code, error)。非流式。"""
-    targets = _get_forward_targets()
+    request_model = (body or {}).get("model") or ""
+    targets = _get_forward_targets(request_model)
     if not targets:
         return None, 502, "TARGET_AI_URL 或 TARGET_AI_URLS 未配置"
     last_err = None
@@ -194,6 +316,31 @@ def _last_user_message(messages):
     return None
 
 
+def _append_tool_results_and_continue(body: dict, assistant_message: dict, tool_calls: list, execute_tool) -> dict:
+    """执行 tool_calls，将 assistant 消息与各 tool 结果追加到 body["messages"]，返回新 body 供继续请求。"""
+    import copy as _copy
+    body = _copy.deepcopy(body)
+    messages = body.get("messages") or []
+    # 保留 assistant 消息（含 tool_calls）
+    messages.append({
+        "role": "assistant",
+        "content": assistant_message.get("content") or None,
+        "tool_calls": assistant_message.get("tool_calls"),
+    })
+    for tc in tool_calls:
+        tid = (tc or {}).get("id") or ""
+        fn = (tc or {}).get("function") or {}
+        name = fn.get("name") or ""
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except Exception:
+            args = {}
+        result = execute_tool(name, args)
+        messages.append({"role": "tool", "tool_call_id": tid, "content": result})
+    body["messages"] = messages
+    return body
+
+
 def _static_models_response():
     """用 GATEWAY_MODELS 拼成 OpenAI 风格的 /v1/models 响应。"""
     if not GATEWAY_MODELS:
@@ -212,7 +359,7 @@ def list_models():
     代理到中转站的 GET /v1/models，这样 RikkaHub 填网关地址时也能拉取到模型列表。
     若上游没有该接口或拉取失败，且配置了 GATEWAY_MODELS，则返回静态列表。
     """
-    targets = _get_forward_targets()
+    targets = _get_forward_targets(None)
     if not targets:
         static = _static_models_response()
         if static:
@@ -251,9 +398,11 @@ def list_models():
 @bp.route("/v1/chat/completions", methods=["POST"])
 @bp.route("/chat/completions", methods=["POST"])
 def chat_completions():
-    """统一入口：所有请求走完整管道（清洗、注入、转发、存档），无开头过滤。"""
+    """统一入口：所有请求走完整管道（清洗、注入、转发、存档），无开头过滤。支持 X-Window-Id / body.window_id（如 Telegram 用 tg_{user_id}）。"""
     body = request.get_json(silent=True) or {}
     headers = dict(request.headers) if request.headers else {}
+    window_id = _get_window_id_from_request(body)
+
     def _stream_response(gen):
         return Response(
             stream_with_context(gen),
@@ -262,14 +411,16 @@ def chat_completions():
         )
 
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
-    body = step_clean_images_and_save_desc(body, WINDOW_ID_DEFAULT)
+    body = step_clean_images_and_save_desc(body, window_id)
     body = step_clean_for_forward(body)
     body = step_replace_rikka_system(body)
-    body = step_inject_latest_4_rounds_for_new_window(body, WINDOW_ID_DEFAULT)
-    body = step_inject_summary(body, WINDOW_ID_DEFAULT)
-    body = step_inject_dynamic_memory(body, WINDOW_ID_DEFAULT)
+    body = step_inject_latest_4_rounds_for_new_window(body, window_id)
+    body = step_inject_summary(body, window_id)
+    body = step_inject_dynamic_memory(body, window_id)
+    body = step_inject_notion_search(body, window_id)
+    body = step_inject_notion_tools(body)
     if body.get("stream"):
-        return _stream_response(_stream_with_r2_archive(body, headers))
+        return _stream_response(_stream_with_r2_archive(body, headers, window_id))
     # 非流式：命中响应缓存则直接返回，不调上游
     from services.chat_response_cache import get_cache_key, get as cache_get, set as cache_set
     cache_key = get_cache_key(body)
@@ -285,6 +436,18 @@ def chat_completions():
     if status >= 400:
         logger.warning("Chat 上游返回异常 status=%s", status)
         return jsonify(resp_json or {"error": "upstream error"}), status
+    # 非流式 + 有 Notion 工具时：若上游返回 tool_calls，执行工具并继续请求，直到无 tool_calls 或达到最大轮数
+    max_tool_rounds = 5
+    for _ in range(max_tool_rounds - 1):
+        msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
+        tool_calls = (msg or {}).get("tool_calls")
+        if not tool_calls or not isinstance(tool_calls, list):
+            break
+        from services.notion_tools import execute_tool
+        body = _append_tool_results_and_continue(body, msg, tool_calls, execute_tool)
+        resp_json, status, err = _forward_to_ai(body, headers)
+        if err or status >= 400:
+            break
     if status == 200 and resp_json:
         cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):
@@ -294,13 +457,14 @@ def chat_completions():
             logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
         else:
             last_user = _last_user_message(body.get("messages"))
+            logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             if last_user:
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg)
                 step_archive_and_maybe_summary(
-                    WINDOW_ID_DEFAULT, body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned
+                    window_id, body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned
                 )
             else:
-                step_archive_and_maybe_summary(WINDOW_ID_DEFAULT, body.get("messages") or [], msg)
+                step_archive_and_maybe_summary(window_id, body.get("messages") or [], msg)
     else:
         logger.info("R2 未存档：上游无 choices 或响应为空")
     return jsonify(resp_json), 200

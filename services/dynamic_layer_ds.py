@@ -5,6 +5,8 @@
 """
 
 import json
+import time
+from pathlib import Path
 from typing import Any, Optional
 
 import requests
@@ -98,6 +100,15 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 请对当前这一轮做单条决策，只输出上述格式的 JSON，不要其他内容。
 """
 
+# 批处理用：一次多轮，返回数组；本批内只 new/skip，不 merge
+_DYNAMIC_LAYER_BATCH_PROMPT = _DYNAMIC_LAYER_PROMPT.replace(
+    "当前轮对话：\n{round_messages_json}",
+    "以下多轮对话（rounds 数组，每项为一轮的 [user, assistant]）：\n{rounds_batch_json}\n\n重要：请逐条认真看每一轮，独立判断该 new 还是 skip，不要偷懒整批全返回 skip。有值得记的内容就 new，没有才 skip。\n\n请对每一轮做单条决策，返回一个 **JSON 数组** decisions，长度等于 rounds 长度，与 rounds 一一对应。每项格式同单条（action/importance/tag/content/fused_with_id）。本批内只允许 new 或 skip，不要 merge（不要引用本批内刚产生的记忆）。",
+).replace(
+    "请对当前这一轮做单条决策，只输出上述格式的 JSON，不要其他内容。",
+    "只输出上述格式的 JSON 数组，不要其他文字。",
+)
+
 
 def _extract_json_from_ds_response(text: str) -> Optional[dict]:
     """
@@ -126,6 +137,40 @@ def _extract_json_from_ds_response(text: str) -> Optional[dict]:
         if text[i] == "{":
             depth += 1
         elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end < 0:
+        return None
+    try:
+        return json.loads(text[start : end + 1])
+    except Exception:
+        return None
+
+
+def _extract_json_array_from_ds_response(text: str) -> Optional[list]:
+    """从 DS 返回中解析 JSON 数组 [...]。"""
+    if not text or not isinstance(text, str):
+        return None
+    text = text.strip()
+    if "```" in text:
+        for start in ("```json", "```"):
+            if start in text:
+                idx = text.find(start) + len(start)
+                text = text[idx:].lstrip()
+            if "```" in text:
+                text = text[: text.find("```")].strip()
+            break
+    start = text.find("[")
+    if start < 0:
+        return None
+    depth = 0
+    end = -1
+    for i in range(start, len(text)):
+        if text[i] in ("[", "{"):
+            depth += 1
+        elif text[i] in ("]", "}"):
             depth -= 1
             if depth == 0:
                 end = i
@@ -199,3 +244,173 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
     except Exception as e:
         logger.error("动态层 DS 调用失败 error=%s", e, exc_info=True)
         return default
+
+
+def _normalize_single_decision(obj: Any) -> dict:
+    """把 DS 返回的单条对象规范成网关用的 decision dict。"""
+    default = {"tag": "", "action": "skip", "importance": 0, "content": "", "fused_with_id": None}
+    if not isinstance(obj, dict):
+        return default
+    tag = (obj.get("tag") or "").strip()
+    action = (obj.get("action") or "skip").strip().lower()
+    action = action if action in ("new", "merge", "skip") else "skip"
+    importance = int(obj.get("importance") or 0)
+    importance = max(1, min(4, importance))
+    content_text = (obj.get("content") or "").strip()
+    fused_with_id = obj.get("fused_with_id")
+    if fused_with_id is not None and not isinstance(fused_with_id, str):
+        fused_with_id = str(fused_with_id) if fused_with_id else None
+    elif fused_with_id is not None and not fused_with_id.strip():
+        fused_with_id = None
+    return {
+        "tag": tag,
+        "action": action,
+        "importance": importance,
+        "content": content_text,
+        "fused_with_id": fused_with_id,
+        "timestamp": obj.get("timestamp"),
+        "last_mentioned": obj.get("last_mentioned"),
+        "mention_count": obj.get("mention_count"),
+    }
+
+
+def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> list:
+    """
+    一次请求处理多轮：把多轮对话发给 DS，返回决策数组，与 batch_rounds 一一对应。
+    本批内只做 new/skip（prompt 已约束不 merge 本批内新记忆）。
+    """
+    if not batch_rounds:
+        return []
+    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+        return [_normalize_single_decision(None) for _ in batch_rounds]
+
+    rounds_batch_json = json.dumps(batch_rounds or [], ensure_ascii=False)
+    prompt = _DYNAMIC_LAYER_BATCH_PROMPT.format(
+        current_memories_json=json.dumps(current_memories or [], ensure_ascii=False),
+        rounds_batch_json=rounds_batch_json,
+    )
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    # 多轮需要更大输出
+    max_tokens = min(8000, 500 * max(len(batch_rounds), 1))
+    payload: dict[str, Any] = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+    }
+    try:
+        r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
+        r.raise_for_status()
+        data = r.json()
+        content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        content = (content or "").strip()
+        arr = _extract_json_array_from_ds_response(content)
+        if not isinstance(arr, list) or len(arr) != len(batch_rounds):
+            logger.warning("动态层 DS batch 返回长度不符 期望=%s 实际=%s", len(batch_rounds), len(arr) if isinstance(arr, list) else "非数组")
+            if isinstance(arr, list):
+                out = [_normalize_single_decision(x) for x in arr]
+                while len(out) < len(batch_rounds):
+                    out.append(_normalize_single_decision(None))
+                return out[: len(batch_rounds)]
+            return [_normalize_single_decision(None) for _ in batch_rounds]
+        return [_normalize_single_decision(x) for x in arr]
+    except Exception as e:
+        logger.error("动态层 DS batch 调用失败 error=%s", e, exc_info=True)
+        return [_normalize_single_decision(None) for _ in batch_rounds]
+
+
+# ---------- 归档脚本专用：读 scripts/archive_ds_prompt.txt，批处理一次请求 ----------
+_ARCHIVE_PROMPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "archive_ds_prompt.txt"
+
+
+def _load_archive_batch_prompt_template() -> str:
+    """归档脚本批处理用 prompt，占位符 current_memories_json、rounds_batch_json。"""
+    if not _ARCHIVE_PROMPT_PATH.exists():
+        logger.warning("归档 prompt 文件不存在 path=%s，将回退网关批处理 prompt", _ARCHIVE_PROMPT_PATH)
+        return _DYNAMIC_LAYER_BATCH_PROMPT
+    try:
+        return _ARCHIVE_PROMPT_PATH.read_text(encoding="utf-8")
+    except Exception as e:
+        logger.warning("读取归档 prompt 失败 path=%s error=%s，将回退网关批处理 prompt", _ARCHIVE_PROMPT_PATH, e)
+        return _DYNAMIC_LAYER_BATCH_PROMPT
+
+
+def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
+    """
+    归档脚本批处理：用 scripts/archive_ds_prompt.txt 一次请求多轮，返回决策数组。
+    与 call_dynamic_layer_ds_batch 同逻辑，仅 prompt 来源不同。
+    """
+    if not batch_rounds:
+        return []
+    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+        return [_normalize_single_decision(None) for _ in batch_rounds]
+
+    template = _load_archive_batch_prompt_template()
+    # 只传最近 N 条记忆，避免单次请求超 131072 context（current_memories 会越积越多）
+    _ARCHIVE_MEMORIES_MAX = 50
+    memories_for_prompt = (current_memories or [])[-_ARCHIVE_MEMORIES_MAX:]
+    # 每轮对话截断到最多 2500 字再发给 DS，避免单批 6 轮合起来超长
+    _MAX_CHARS_PER_ROUND = 2500
+    rounds_for_prompt = []
+    for r in batch_rounds or []:
+        if not isinstance(r, dict):
+            rounds_for_prompt.append(r)
+            continue
+        msgs = r.get("messages") or []
+        parts = []
+        n = 0
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            s = (m.get("content") or "").strip()
+            if not s:
+                continue
+            if n + len(s) > _MAX_CHARS_PER_ROUND:
+                s = s[: max(0, _MAX_CHARS_PER_ROUND - n)] + "…"
+            parts.append({"role": m.get("role", "user"), "content": s})
+            n += len(s)
+            if n >= _MAX_CHARS_PER_ROUND:
+                break
+        rounds_for_prompt.append({"round_timestamp": r.get("round_timestamp") or "", "messages": parts})
+    prompt = template.replace(
+        "{current_memories_json}", json.dumps(memories_for_prompt, ensure_ascii=False)
+    ).replace(
+        "{rounds_batch_json}", json.dumps(rounds_for_prompt, ensure_ascii=False)
+    )
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    max_tokens = min(2000, 400 * max(len(batch_rounds), 1))
+    payload: dict[str, Any] = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+    }
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
+            if r.status_code >= 400:
+                logger.error(
+                    "归档 DS API 错误 status=%s body=%s",
+                    r.status_code,
+                    (r.text or "")[:800],
+                )
+            r.raise_for_status()
+            data = r.json()
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            content = (content or "").strip()
+            arr = _extract_json_array_from_ds_response(content)
+            if not isinstance(arr, list) or len(arr) != len(batch_rounds):
+                logger.warning("归档 DS batch 返回长度不符 期望=%s 实际=%s", len(batch_rounds), len(arr) if isinstance(arr, list) else "非数组")
+                if isinstance(arr, list):
+                    out = [_normalize_single_decision(x) for x in arr]
+                    while len(out) < len(batch_rounds):
+                        out.append(_normalize_single_decision(None))
+                    return out[: len(batch_rounds)]
+                return [_normalize_single_decision(None) for _ in batch_rounds]
+            return [_normalize_single_decision(x) for x in arr]
+        except Exception as e:
+            last_err = e
+            logger.warning("归档 DS batch 第 %s 次失败 error=%s", attempt + 1, e)
+            if attempt < 2:
+                time.sleep(2)
+    logger.error("归档 DS batch 调用失败（已重试 3 次） error=%s", last_err, exc_info=True)
+    raise RuntimeError("归档 DS 本批请求失败，不写断点以便重跑从本批重试") from last_err

@@ -1,5 +1,6 @@
 # Notion API：通过网关对 Notion 的读写删改（CRUD）
 import os
+import time
 from typing import Any, Optional
 
 import requests
@@ -13,27 +14,39 @@ HEADERS = {
     "Notion-Version": NOTION_VERSION,
 }
 
+# 网络/连接类错误时重试（如 10054 远程关闭连接）
+_NOTION_RETRY_EXCEPTIONS = (ConnectionError, ConnectionResetError, TimeoutError, requests.exceptions.Timeout, requests.exceptions.ConnectionError)
+_NOTION_RETRY_TIMES = 3
+_NOTION_RETRY_SLEEP = 1.5
+
 
 def _req(method: str, path: str, json_data: Optional[dict] = None, params: Optional[dict] = None):
     if not NOTION_API_KEY:
         return None, {"error": "NOTION_API_KEY not configured"}
     url = f"{BASE}{path}"
-    try:
-        if method.upper() == "GET":
-            r = requests.get(url, headers=HEADERS, params=params, timeout=30)
-        elif method.upper() == "POST":
-            r = requests.post(url, headers=HEADERS, json=json_data or {}, timeout=30)
-        elif method.upper() == "PATCH":
-            r = requests.patch(url, headers=HEADERS, json=json_data or {}, timeout=30)
-        elif method.upper() == "DELETE":
-            r = requests.delete(url, headers=HEADERS, timeout=30)
-        else:
-            return None, {"error": f"Unsupported method: {method}"}
-        if r.status_code >= 400:
-            return None, {"error": r.text, "status": r.status_code}
-        return (r.json() if r.content else None), None
-    except Exception as e:
-        return None, {"error": str(e)}
+    last_err = None
+    for attempt in range(_NOTION_RETRY_TIMES):
+        try:
+            if method.upper() == "GET":
+                r = requests.get(url, headers=HEADERS, params=params, timeout=30)
+            elif method.upper() == "POST":
+                r = requests.post(url, headers=HEADERS, json=json_data or {}, timeout=30)
+            elif method.upper() == "PATCH":
+                r = requests.patch(url, headers=HEADERS, json=json_data or {}, timeout=30)
+            elif method.upper() == "DELETE":
+                r = requests.delete(url, headers=HEADERS, timeout=30)
+            else:
+                return None, {"error": f"Unsupported method: {method}"}
+            if r.status_code >= 400:
+                return None, {"error": r.text, "status": r.status_code}
+            return (r.json() if r.content else None), None
+        except _NOTION_RETRY_EXCEPTIONS as e:
+            last_err = e
+            if attempt < _NOTION_RETRY_TIMES - 1:
+                time.sleep(_NOTION_RETRY_SLEEP)
+        except Exception as e:
+            return None, {"error": str(e)}
+    return None, {"error": str(last_err)}
 
 
 def search(query: Optional[str] = None) -> tuple[Optional[Any], Optional[dict]]:

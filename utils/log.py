@@ -18,6 +18,7 @@ LOG_NAMES = {
     "services.notion_client": "Notion",
     "services.dynamic_layer_ds": "DynDS",
     "services.bedroom_gateway": "Bedroom",
+    "services.telegram_bot": "TGBot",
 }
 
 

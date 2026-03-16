@@ -1,4 +1,5 @@
 # 时间与农历：全部北京时间；时间段（每次注入）+ 具体时间/农历（渡上一轮触发时注入）
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -44,14 +45,19 @@ def today_beijing() -> str:
 
 
 def parse_iso_to_beijing(iso_str: Optional[str]) -> Optional[datetime]:
-    """把存储的 ISO 时间（Z 或 +08:00）转成北京时间的 datetime，解析失败返回 None。"""
+    """
+    把存储的 ISO 时间转成北京时间的 datetime，解析失败返回 None。
+    - 带时区的（Z / +00:00 / +08:00 等）：按该时区转成北京时间。
+    - 无时区的（如 2026-03-06T15:59:25）：视为已是北京时间，不再按 UTC 转（避免导出里的本地时间被当成 UTC 导致错成「美国时间」）。
+    """
     if not iso_str or not isinstance(iso_str, str):
         return None
     s = iso_str.strip().replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=BEIJING_TZ)
+            return dt
         return dt.astimezone(BEIJING_TZ)
     except Exception:
         return None
@@ -92,6 +98,42 @@ def get_date_only(dt: Optional[datetime] = None) -> str:
     else:
         dt = dt.astimezone(BEIJING_TZ)
     return dt.strftime("%Y-%m-%d")
+
+
+def iso_to_display_time(iso_str: Optional[str]) -> str:
+    """
+    把 ISO 时间（如 2026-03-07T14:41:58.912533Z）转成给人看的版本（如 2026年03月07日 14:41）。
+    用于归档写入 Notion 时存成可读时间；解析失败返回空串。
+    """
+    dt = parse_iso_to_beijing(iso_str)
+    if dt is None:
+        return ""
+    return dt.strftime("%Y年%m月%d日 %H:%M")
+
+
+def display_time_to_iso(display_str: Optional[str]) -> str:
+    """
+    把给人看的时间（如 2026年03月07日 14:41）解析回北京时间的 ISO 串，供 R2/内部使用。
+    若已是 ISO 或解析失败，返回原字符串（不丢数据）。
+    """
+    if not display_str or not isinstance(display_str, str):
+        return ""
+    s = display_str.strip()
+    if not s:
+        return ""
+    # 已是 ISO 格式则直接返回
+    if parse_iso_to_beijing(s) is not None:
+        return s
+    # 匹配 2026年03月07日 14:41 或 2026年3月7日 14:41
+    m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{1,2})", s)
+    if m:
+        y, mon, d, h, mi = m.groups()
+        try:
+            dt = datetime(int(y), int(mon), int(d), int(h), int(mi), 0, 0, tzinfo=BEIJING_TZ)
+            return dt.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        except Exception:
+            pass
+    return s
 
 
 def get_weekday_cn(dt: Optional[datetime] = None) -> str:

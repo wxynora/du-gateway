@@ -16,6 +16,9 @@ env/
 # 本地/运行时数据
 data/
 *.log
+scripts/feed_archive_checkpoint.json
+scripts/feed_archive.lock
+scripts/feed_archive.stop
 
 # IDE / 编辑器
 .cursor/

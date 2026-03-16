@@ -349,6 +349,98 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     return body
 
 
+def step_inject_notion_tools(body: dict) -> dict:
+    """
+    当 NOTION_TOOLS_ENABLED=1 时，向 body 注入 Notion 工具（notion_search、notion_append_to_page 等），
+    渡可主动调用 Notion API 进行检索与写入。
+    """
+    from config import NOTION_TOOLS_ENABLED
+
+    if not NOTION_TOOLS_ENABLED:
+        return body
+    from services.notion_tools import get_notion_tools_for_inject
+
+    tools = get_notion_tools_for_inject()
+    if not tools:
+        return body
+    body = copy.deepcopy(body)
+    body["tools"] = tools
+    body["tool_choice"] = "auto"
+    from config import NOTION_CORE_CACHE_DATABASE_ID
+    if NOTION_CORE_CACHE_DATABASE_ID:
+        from services.gateway_tools import SYNC_REMINDER_FOR_WIFE
+        inject = "\n\n【核心缓存同步】" + SYNC_REMINDER_FOR_WIFE
+        messages = body.get("messages") or []
+        for msg in messages:
+            if (msg.get("role") or "").lower() == "system":
+                msg["content"] = (msg.get("content") or "") + inject
+                break
+        else:
+            body["messages"] = [{"role": "system", "content": inject}] + messages
+    return body
+
+
+def step_inject_notion_search(body: dict, window_id: str) -> dict:
+    """
+    用用户最后一句话搜 Notion，把结果注入 system，渡就能直接「看到」相关 Notion 内容并引用。
+    需开启 NOTION_INJECT_ENABLED=1。当 NOTION_TOOLS_ENABLED=1 时跳过（改用工具由渡自己检索）。
+    """
+    from config import NOTION_INJECT_ENABLED, NOTION_INJECT_MAX_RESULTS, NOTION_TOOLS_ENABLED
+
+    if NOTION_TOOLS_ENABLED or not NOTION_INJECT_ENABLED:
+        return body
+    messages = body.get("messages") or []
+    last_user_text = ""
+    for m in reversed(messages):
+        if (m.get("role") or "").lower() == "user":
+            content = m.get("content")
+            if isinstance(content, str):
+                last_user_text = (content or "").strip()
+            elif isinstance(content, list):
+                last_user_text = " ".join(
+                    c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
+                ).strip()
+            break
+    if len(last_user_text) < 2:
+        return body
+    try:
+        from services import notion_client
+        data, err = notion_client.search(query=last_user_text)
+        if err or not data or not isinstance(data.get("results"), list):
+            return body
+        results = data.get("results", [])[: NOTION_INJECT_MAX_RESULTS]
+        lines = []
+        for item in results:
+            title = ""
+            props = item.get("properties") or {}
+            for pid, prop in props.items():
+                if not isinstance(prop, dict):
+                    continue
+                if "title" in prop and isinstance(prop["title"], list):
+                    title = " ".join(
+                        t.get("plain_text", "") for t in prop["title"] if isinstance(t, dict)
+                    ).strip()
+                    break
+            url = (item.get("url") or "").strip()
+            if title or url:
+                lines.append(f"- {title or '(无标题)'} {url}")
+        if not lines:
+            return body
+        inject = "\n\n【Notion 相关】\n" + "\n".join(lines) + "\n【以上为 Notion 检索，可据此回答或让老婆点开】"
+        body = copy.deepcopy(body)
+        messages = body.get("messages") or []
+        for msg in messages:
+            if (msg.get("role") or "").lower() == "system":
+                msg["content"] = (msg.get("content") or "") + inject
+                break
+        else:
+            messages.insert(0, {"role": "system", "content": inject})
+        body["messages"] = messages
+    except Exception as e:
+        logger.debug("Notion 检索注入跳过 error=%s", e)
+    return body
+
+
 def _round_messages_to_raw_text(round_messages: list) -> str:
     """尽量把一轮消息转成可读原文（不用于注入，仅用于卧室 Notion 存档）。"""
     lines = []
@@ -371,37 +463,48 @@ def _round_messages_to_raw_text(round_messages: list) -> str:
     return "\n".join(lines).strip()
 
 
-def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages: list) -> None:
+def _apply_one_decision(
+    window_id: str,
+    round_index: int,
+    round_messages: list,
+    decision: dict,
+    current_memories: list,
+) -> Optional[dict]:
     """
-    动态层演化：调用 DS 得单条决策（tag / action / content / fused_with_id），网关单条应用。
-    卧室只看 tag === "卧室"，不写动态层，只写 Notion 卧室。
+    对单条 DS 决策做应用：卧室写 Notion 卧室房间（不写记忆库）；new/merge 更新 current_memories 并写 R2、promote。
+    不写记忆库 Notion；若调用方是批处理归档脚本，可根据返回值再写记忆库。
+    返回：若本条应写入记忆库（卧室/new/merge），返回 {"tag", "entry_id", "content", "promoted_at"}，否则 None。
     """
     from uuid import uuid4
 
-    from services.dynamic_layer_ds import call_dynamic_layer_ds
+    from utils.time_aware import now_beijing_iso
 
-    current_memories = r2_store.get_dynamic_memory_list()
-    current_memories, changed = r2_store.ensure_dynamic_memory_ids(current_memories)
-    if changed:
-        r2_store.save_dynamic_memory_list(current_memories)
-
-    decision = call_dynamic_layer_ds(round_messages, current_memories)
     tag = (decision.get("tag") or "").strip()
     action = (decision.get("action") or "skip").lower()
     content = (decision.get("content") or "").strip()
     fused_with_id = decision.get("fused_with_id")
     importance = int(decision.get("importance") or 0)
+    round_ts = decision.get("timestamp") or decision.get("last_mentioned")
+    now_iso = round_ts if isinstance(round_ts, str) and round_ts else now_beijing_iso()
+    mention_init = decision.get("mention_count")
+    if mention_init is not None and isinstance(mention_init, int):
+        pass
+    else:
+        mention_init = 0
 
-    # 卧室短路：只看 tag，不写动态层，只额外写 Notion 卧室房间
+    # 兜底：DS 标成 new 但给了客厅/书房等，若原文有明确亲密关键词则改标卧室，避免全进客厅
+    if (tag != "卧室" and "卧室" not in tag) and (action == "new" or content):
+        raw_check = _round_messages_to_raw_text(round_messages)
+        if any(kw in raw_check for kw in ("情话", "表白", "亲密", "私密", "二人私事", "老婆", "老公", "爱你", "想你了")):
+            tag = "卧室"
+
     if tag == "卧室" or "卧室" in tag:
         from services.bedroom_gateway import append_bedroom_raw
 
-        append_bedroom_raw(window_id, round_index, _round_messages_to_raw_text(round_messages))
-        logger.info("卧室通道触发 window_id=%s round_index=%s（已写 Notion，跳过动态层）", window_id, round_index)
-        return
-
-    from utils.time_aware import now_beijing_iso
-    now_iso = now_beijing_iso()
+        raw_text = _round_messages_to_raw_text(round_messages)
+        append_bedroom_raw(window_id, round_index, raw_text)
+        logger.info("卧室通道触发 window_id=%s round_index=%s（已写 Notion 卧室，跳过动态层）", window_id, round_index)
+        return {"tag": "卧室", "entry_id": f"{window_id}_{round_index}", "content": raw_text, "promoted_at": now_iso}
 
     if action == "new" and content:
         new_mem = {
@@ -409,7 +512,7 @@ def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages:
             "content": content,
             "importance": importance,
             "tag": tag,
-            "mention_count": 0,
+            "mention_count": mention_init if mention_init is not None else 0,
             "created_at": now_iso,
             "last_mentioned": now_iso,
         }
@@ -420,13 +523,14 @@ def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages:
             current_memories, touched_mem_id=new_mem["id"],
         )
         logger.debug("动态层 new window_id=%s", window_id)
-        return
+        return {"tag": tag, "entry_id": new_mem["id"], "content": content, "promoted_at": new_mem["created_at"]}
 
     if action == "merge":
         if not fused_with_id:
             logger.warning("动态层 merge 未返回 fused_with_id，本轮回退为 skip window_id=%s", window_id)
-            return
+            return None
         found = False
+        merged_mem = None
         for mem in current_memories:
             if mem.get("id") == fused_with_id:
                 mem["content"] = content if content else mem.get("content", "")
@@ -434,20 +538,37 @@ def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages:
                 mem["tag"] = tag
                 mem["last_mentioned"] = now_iso
                 mem["mention_count"] = int(mem.get("mention_count") or 0) + 1
+                merged_mem = mem
                 found = True
                 break
         if not found:
             logger.warning("动态层 merge 未找到 fused_with_id=%s，本轮回退为 skip window_id=%s", fused_with_id, window_id)
-            return
+            return None
         r2_store.save_dynamic_memory_list(current_memories)
         r2_store.promote_to_core_cache(
             window_id, round_index, _round_messages_to_raw_text(round_messages),
             current_memories, touched_mem_id=fused_with_id,
         )
+        mem_time = merged_mem.get("created_at") or merged_mem.get("last_mentioned") or now_iso
         logger.debug("动态层 merge window_id=%s fused_with_id=%s", window_id, fused_with_id)
-        return
+        return {"tag": tag, "entry_id": merged_mem["id"], "content": merged_mem.get("content") or "", "promoted_at": mem_time}
 
-    # skip（或 action 无效）：不写动态层
+    return None
+
+
+def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages: list) -> Optional[dict]:
+    """
+    动态层演化：调用 DS 得单条决策并应用。返回若应写记忆库则返回 archive 载荷，否则 None（实时对话忽略返回值）。
+    """
+    from services.dynamic_layer_ds import call_dynamic_layer_ds
+
+    current_memories = r2_store.get_dynamic_memory_list()
+    current_memories, changed = r2_store.ensure_dynamic_memory_ids(current_memories)
+    if changed:
+        r2_store.save_dynamic_memory_list(current_memories)
+
+    decision = call_dynamic_layer_ds(round_messages, current_memories)
+    return _apply_one_decision(window_id, round_index, round_messages, decision, current_memories)
 
 
 def step_archive_and_maybe_summary(

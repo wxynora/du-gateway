@@ -2,6 +2,7 @@
 # 与需求文档十一「R2 存储结构」对齐：global/、conversations/、dynamic_memory/、core_cache/
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
@@ -77,17 +78,30 @@ def _read_json(client, key: str) -> Optional[Any]:
         return None
 
 
+# 连接/超时类错误时重试（与 Notion 类似）
+_R2_RETRY_TIMES = 3
+_R2_RETRY_SLEEP = 2
+
+
 def _write_json(client, key: str, data: Any):
-    try:
-        client.put_object(
-            Bucket=R2_BUCKET_NAME,
-            Key=key,
-            Body=json.dumps(data, ensure_ascii=False).encode("utf-8"),
-            ContentType="application/json",
-        )
-    except Exception as e:
-        logger.error("R2 write_json 失败 key=%s error=%s", key, e, exc_info=True)
-        raise
+    body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    last_err = None
+    for attempt in range(_R2_RETRY_TIMES):
+        try:
+            client.put_object(
+                Bucket=R2_BUCKET_NAME,
+                Key=key,
+                Body=body,
+                ContentType="application/json",
+            )
+            return
+        except Exception as e:
+            last_err = e
+            if attempt < _R2_RETRY_TIMES - 1:
+                logger.warning("R2 write_json 第 %s 次失败 key=%s error=%s，%s 秒后重试", attempt + 1, key, e, _R2_RETRY_SLEEP)
+                time.sleep(_R2_RETRY_SLEEP)
+    logger.error("R2 write_json 失败 key=%s error=%s", key, last_err, exc_info=True)
+    raise last_err
 
 
 # ---------- 对话原文存档 ----------

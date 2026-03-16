@@ -6,6 +6,7 @@ from config import NOTION_CORE_CACHE_DATABASE_ID
 from storage import r2_store
 from services import notion_client
 from utils.log import get_logger
+from utils.time_aware import display_time_to_iso, iso_to_display_time
 
 logger = get_logger(__name__)
 
@@ -16,7 +17,7 @@ logger = get_logger(__name__)
 # promoted_by    Select           "importance" | "mention_count"
 # importance     Number           1–4
 # mention_count  Number
-# promoted_at    Date             北京时间 ISO
+# promoted_at    Text (Rich text) 给人看（如 2026年03月07日 14:41）
 # tag            Select           卧室 | 客厅 | 书房 | 图书馆
 CORE_CACHE_FIELD_NAMES = ("id", "content", "promoted_by", "importance", "mention_count", "promoted_at", "tag")
 
@@ -76,7 +77,8 @@ def _page_properties_for_pending(item: dict, name_to_id: dict) -> dict:
     if "mention_count" in name_to_id:
         out[name_to_id["mention_count"]] = _prop_number(item.get("mention_count"))
     if "promoted_at" in name_to_id:
-        out[name_to_id["promoted_at"]] = _prop_date(item.get("promoted_at"))
+        display_promoted = iso_to_display_time(item.get("promoted_at")) or ""
+        out[name_to_id["promoted_at"]] = _prop_rich_text(display_promoted)
     if "tag" in name_to_id:
         out[name_to_id["tag"]] = _prop_select(item.get("tag") or "")
     return out
@@ -197,7 +199,8 @@ def sync_from_notion() -> tuple[bool, str]:
             promoted_by = _extract_prop(page, kpromoted_by, "select") if kpromoted_by else "importance"
             importance = _extract_prop(page, kimportance, "number") if kimportance else 0
             mention_count = _extract_prop(page, kmention_count, "number") if kmention_count else 0
-            promoted_at = _extract_prop(page, kpromoted_at, "date") if kpromoted_at else ""
+            promoted_at_raw = _extract_prop(page, kpromoted_at, "rich_text") if kpromoted_at else ""
+            promoted_at = display_time_to_iso(promoted_at_raw) if promoted_at_raw else ""
             tag = _extract_prop(page, ktag, "select") if ktag else ""
             pending.append({
                 "id": entry_id,
