@@ -5,8 +5,9 @@ from typing import Any
 
 from config import NOTION_NOTEBOOK_PAGE_ID, NOTEBOOK_SAVE_ONLY_NOTION
 
-# 笔记本 emoji（📓📒📔📝）+ 「小本本更新」才触发截取，避免误触
-NOTEBOOK_EMOJI = "\U0001F4D3\U0001F4D2\U0001F4D4\U0001F4DD"  # 📓📒📔📝
+# 触发规则（2026-03-16 调整版）：
+# 必须是以「📝小本本更新」开头的消息才截取，避免误触。
+NOTEBOOK_EMOJI = "\U0001F4DD"  # 仅 📝
 NOTEBOOK_PHRASE = "小本本更新"
 from storage import r2_store
 from services import notion_client
@@ -51,7 +52,7 @@ def _has_notebook_emoji(text: str) -> bool:
 def extract_entries_from_round(round_messages: list) -> list[str]:
     """
     从本轮对话中识别「小本本」内容并拎出原文（不删改）。
-    仅当消息同时含有「笔记本 emoji」和「小本本更新」时，才从「小本本更新」截取到该条消息结尾写入。
+    仅当消息满足「以 📝 开头」且含有「小本本更新」时，才从「小本本更新」截取到该条消息结尾写入。
     可能返回 0/1/2 条。
     """
     if not round_messages:
@@ -60,12 +61,14 @@ def extract_entries_from_round(round_messages: list) -> list[str]:
     for m in round_messages:
         raw = m.get("content")
         text = _content_to_str(raw)
-        if not text or NOTEBOOK_PHRASE not in text:
+        if not text:
             continue
-        if not _has_notebook_emoji(text):
+        # 必须以 📝 开头，且包含「小本本更新」
+        stripped = text.strip()
+        if not (stripped.startswith(NOTEBOOK_EMOJI) and NOTEBOOK_PHRASE in stripped):
             continue
-        start_idx = text.find(NOTEBOOK_PHRASE)
-        snippet = text[start_idx:].strip()
+        start_idx = stripped.find(NOTEBOOK_PHRASE)
+        snippet = stripped[start_idx:].strip()
         if snippet:
             entries.append(snippet)
     return entries

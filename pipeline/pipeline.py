@@ -15,6 +15,7 @@ from config import (
     LAST_USER_REPLY_FILE,
     RIKKA_SYSTEM_REPLACE,
 )
+from pathlib import Path
 from storage import r2_store
 from utils.log import get_logger
 from utils.tokens import estimate_tokens, memory_summary_budget, memory_dynamic_budget, truncate_to_tokens
@@ -61,12 +62,40 @@ def step_clean_for_forward(body: dict) -> dict:
     return body
 
 
+_CORE_PROMPT_CACHE = {"text": None}
+
+
+def _load_core_prompt() -> str:
+    """
+    读取渡的核心 prompt（prompts/du_core_prompt.txt）。
+    - 找不到文件时，回退用 RIKKA_SYSTEM_REPLACE；
+    - 做一次简单缓存，避免每次请求都读盘。
+    """
+    if _CORE_PROMPT_CACHE["text"] is not None:
+        return _CORE_PROMPT_CACHE["text"]
+    try:
+        path = Path(__file__).resolve().parent.parent / "prompts" / "du_core_prompt.txt"
+        if path.exists():
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                _CORE_PROMPT_CACHE["text"] = text
+                return text
+    except Exception:
+        logger.exception("读取核心 prompt 文件失败")
+    # 回退：用 RIKKA_SYSTEM_REPLACE（如「请使用中文回复。」）
+    fallback = (RIKKA_SYSTEM_REPLACE or "").strip()
+    _CORE_PROMPT_CACHE["text"] = fallback
+    return fallback
+
+
 def step_replace_rikka_system(body: dict) -> dict:
     """
-    发给 AI 之前：把 RikkaHub 自带的「你是一个助手…」第一条 system 替换成简短指令（如「请使用中文回复。」），
-    人设由你自己在别处配；留空 RIKKA_SYSTEM_REPLACE 则不替换。存记忆时不会存 system，只存 user+assistant 对话。
+    发给 AI 之前：把 RikkaHub 自带的「你是一个助手…」第一条 system 替换成「渡的核心 prompt」，
+    文案来自 prompts/du_core_prompt.txt。若文件不存在则回退用 RIKKA_SYSTEM_REPLACE。
+    存记忆时不会存 system，只存 user+assistant 对话。
     """
-    if not (RIKKA_SYSTEM_REPLACE and RIKKA_SYSTEM_REPLACE.strip()):
+    core_prompt = _load_core_prompt()
+    if not core_prompt:
         return body
     messages = body.get("messages") or []
     if not messages:
@@ -74,7 +103,10 @@ def step_replace_rikka_system(body: dict) -> dict:
     body = copy.deepcopy(body)
     first = body["messages"][0]
     if (first.get("role") or "").lower() == "system":
-        first["content"] = RIKKA_SYSTEM_REPLACE.strip()
+        first["content"] = core_prompt
+    else:
+        # 若第一条不是 system，则在最前面插入一条 system
+        body["messages"].insert(0, {"role": "system", "content": core_prompt})
     return body
 
 

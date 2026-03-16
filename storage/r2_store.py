@@ -29,6 +29,8 @@ R2_KEY_DYNAMIC_MEMORY = "dynamic_memory/current.json"
 R2_KEY_CORE_CACHE = "core_cache/pending.json"
 # 小本本：网关拎出后按时间先后排序存储
 R2_KEY_NOTEBOOK = "notebook/entries.json"
+# 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
+R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
@@ -580,11 +582,54 @@ def save_image_description(window_id: str, message_id: str, description: str) ->
     return True
 
 
+# ---------- 小渡的记忆文档（固定文本） ----------
+
+
+def get_du_memory_doc() -> Optional[str]:
+    """读取小渡的记忆文档 1.0；不存在时返回 None。"""
+    client = _s3_client()
+    if not client:
+        return None
+    try:
+        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_KEY_DU_MEMORY_DOC)
+        return resp["Body"].read().decode("utf-8")
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code == "NoSuchKey":
+            return None
+        logger.error("get_du_memory_doc 失败 error=%s", e, exc_info=True)
+        return None
+    except Exception as e:
+        logger.error("get_du_memory_doc 失败 error=%s", e, exc_info=True)
+        return None
+
+
+def save_du_memory_doc(text: str) -> bool:
+    """
+    保存/覆盖小渡的记忆文档。
+    仅用于固定文档（不加锁；调用频率极低）。
+    """
+    client = _s3_client()
+    if not client:
+        return False
+    try:
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=R2_KEY_DU_MEMORY_DOC,
+            Body=(text or "").encode("utf-8"),
+            ContentType="text/plain; charset=utf-8",
+        )
+        return True
+    except Exception as e:
+        logger.error("save_du_memory_doc 失败 error=%s", e, exc_info=True)
+        return False
+
+
 # ---------- 一键清空（测试/重置用） ----------
 
 
 # 网关在 R2 里使用的所有前缀，清空时只删这些，不动桶里其他 key
-_R2_WIPE_PREFIXES = ("windows/", "conversations/", "global/", "dynamic_memory/", "core_cache/", "notebook/")
+_R2_WIPE_PREFIXES = ("windows/", "conversations/", "global/", "dynamic_memory/", "core_cache/", "notebook/", "docs/")
 
 
 def delete_all_gateway_data() -> tuple[bool, int, Optional[str]]:

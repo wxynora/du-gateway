@@ -62,8 +62,6 @@ def dynamic_vector_retrieve(
     min_sim = float(min_sim if min_sim is not None else VECTOR_MIN_SIM)
 
     memories = r2_store.get_dynamic_memory_list() or []
-    if not memories:
-        return []
 
     # tag：优先显式传入，其次从 query 猜一把；否则全量扫当前 memories 的 tag 集合
     tag = (tag or "").strip() or _guess_tag_from_query(query)
@@ -77,14 +75,50 @@ def dynamic_vector_retrieve(
     if not q_emb:
         return []
 
-    # 构建 memory_id -> memory
+    # 构建 memory_id -> memory（动态层）
     mem_by_id: dict[str, dict] = {}
     for m in memories:
         mid = m.get("id")
         if mid:
             mem_by_id[str(mid)] = m
 
-    # 向量召回
+    # 可选：把「小渡的记忆文档」作为一条特殊记忆参与召回（不在 dynamic_memory 列表中，但参与向量匹配）
+    du_doc = r2_store.get_du_memory_doc()
+    du_doc_id = "__du_memory_doc_v1__"
+    if du_doc:
+        du_mem = {
+            "id": du_doc_id,
+            "content": du_doc,
+            "importance": 4,
+            "mention_count": 3,
+            "last_mentioned": _now_beijing().isoformat(),
+            "tag": "图书馆",
+        }
+        mem_by_id[du_doc_id] = du_mem
+
+    # 可选：核心缓存 pending 也参与检索（作为高权重记忆）
+    core_pending = r2_store.get_core_cache_pending() or []
+    core_mems: list[dict] = []
+    for p in core_pending:
+        cid = p.get("id")
+        if not cid:
+            continue
+        mem_id = f"core::{cid}"
+        mem = {
+            "id": mem_id,
+            "content": (p.get("content") or "").strip(),
+            "importance": int(p.get("importance") or 0),
+            "mention_count": int(p.get("mention_count") or 0),
+            "last_mentioned": p.get("promoted_at") or _now_beijing().isoformat(),
+            "tag": (p.get("tag") or "").strip() or "图书馆",
+        }
+        core_mems.append(mem)
+        mem_by_id[mem_id] = mem
+
+    if not (memories or du_doc or core_mems):
+        return []
+
+    # 向量召回（动态层：用向量索引）
     candidates: list[tuple[float, dict]] = []
     for t in tags:
         idx = load_index(t)
@@ -97,6 +131,27 @@ def dynamic_vector_retrieve(
             if sim < min_sim:
                 continue
             candidates.append((sim, {"memory_id": str(mid), "cosine_sim": float(sim)}))
+
+    # 「小渡记忆文档」单独 embedding 参与召回（不依赖向量索引）
+    if du_doc:
+        du_text_for_embed = du_doc[:3000]
+        du_emb = embed_text(du_text_for_embed)
+        if du_emb:
+            sim = cosine(q_emb, du_emb)
+            if sim >= min_sim:
+                candidates.append((sim, {"memory_id": du_doc_id, "cosine_sim": float(sim)}))
+
+    # 核心缓存 pending：逐条 embedding 参与召回（体量不大，可接受）
+    for mem in core_mems:
+        text = (mem.get("content") or "")[:1000]
+        if not text:
+            continue
+        emb = embed_text(text)
+        if not emb:
+            continue
+        sim = cosine(q_emb, emb)
+        if sim >= min_sim:
+            candidates.append((sim, {"memory_id": mem["id"], "cosine_sim": float(sim)}))
 
     if not candidates:
         return []
