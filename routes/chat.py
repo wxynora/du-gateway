@@ -132,6 +132,14 @@ def _stream_forward_to_ai(body: dict, headers: dict):
             req_headers[h] = request.headers.get(h)
     body_send = dict(body)
     body_send["stream"] = True
+    # 经网关时请求体因注入会变大，便于排查「经网关截断、直连不截断」：打一条预估长度
+    try:
+        msg_len = sum(
+            len(str(m.get("content") or "")) for m in (body_send.get("messages") or [])
+        )
+        logger.info("转发前 messages 总字符数约 %s（过大时上游可能因 input+output 超限截断输出）", msg_len)
+    except Exception:
+        pass
     last_err = None
     for url, api_key in targets:
         h = dict(req_headers)
@@ -140,11 +148,23 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         try:
             r = requests.post(url, headers=h, json=body_send, timeout=120, stream=True)
             if r.status_code == 200:
+                last_data_line = None
                 for line in r.iter_lines():
                     if line is not None:
+                        if line.startswith(b"data: ") and b"[DONE]" not in line:
+                            last_data_line = line
                         yield line + b"\n"
                     else:
                         yield b"\n"
+                # 流正常结束时打一条日志：finish_reason=length 多为上游 max_tokens 截断，stop 为正常结束
+                if last_data_line:
+                    try:
+                        j = json.loads(last_data_line[6:].strip().decode("utf-8", errors="ignore"))
+                        fr = (j.get("choices") or [{}])[0].get("finish_reason")
+                        if fr:
+                            logger.info("流式上游结束 finish_reason=%s（length=可能被 max_tokens 截断）", fr)
+                    except Exception:
+                        pass
                 return
             last_err = f"上游 HTTP {r.status_code}"
         except Exception as e:
@@ -183,6 +203,8 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                 yield chunk
         finally:
             full_content = "".join(content_parts)
+            # 方便排查截断：网关实际从上游收齐的回复长度（若此处就很小，说明是上游截断）
+            logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
             if not is_failed_response(full_content) and full_content.strip():
                 msg = {"role": "assistant", "content": full_content}
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
@@ -226,6 +248,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             break
     finally:
         full_content = "".join(content_parts)
+        logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
         if is_failed_response(full_content):
             logger.info("R2 未存档：流式回复被判为失败，跳过")
         elif not full_content.strip():

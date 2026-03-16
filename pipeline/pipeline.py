@@ -13,7 +13,6 @@ from config import (
     ASSISTANT_LUNAR_KEYWORDS,
     REPLY_GAP_THRESHOLD_MINUTES,
     LAST_USER_REPLY_FILE,
-    RIKKA_SYSTEM_REPLACE,
 )
 from pathlib import Path
 from storage import r2_store
@@ -68,11 +67,10 @@ def step_clean_for_forward(body: dict) -> dict:
 _CORE_PROMPT_CACHE = {"text": None}
 
 
-def _load_core_prompt() -> str:
+def _load_du_core_prompt_from_file() -> str:
     """
-    读取渡的核心 prompt（prompts/du_core_prompt.txt）。
-    - 找不到文件时，回退用 RIKKA_SYSTEM_REPLACE；
-    - 做一次简单缓存，避免每次请求都读盘。
+    只从 prompts/du_core_prompt.txt 读取渡的 prompt（2026.3.16 版），不截断。
+    文件不存在或为空则返回空串（不 fallback 到 RIKKA_SYSTEM_REPLACE，两边分开用）。
     """
     if _CORE_PROMPT_CACHE["text"] is not None:
         return _CORE_PROMPT_CACHE["text"]
@@ -84,37 +82,31 @@ def _load_core_prompt() -> str:
                 _CORE_PROMPT_CACHE["text"] = text
                 return text
     except Exception:
-        logger.exception("读取核心 prompt 文件失败")
-    # 回退：用 RIKKA_SYSTEM_REPLACE（如「请使用中文回复。」）
-    fallback = (RIKKA_SYSTEM_REPLACE or "").strip()
-    _CORE_PROMPT_CACHE["text"] = fallback
-    return fallback
+        logger.exception("读取渡核心 prompt 文件失败")
+    _CORE_PROMPT_CACHE["text"] = ""
+    return ""
 
 
 def step_replace_rikka_system(body: dict) -> dict:
     """
-    发给 AI 之前：在保留前端（如 RikkaHub）自带 system 的前提下，额外注入一条「核心人设 prompt」system。
-    当前版本只使用环境变量 RIKKA_SYSTEM_REPLACE，不再读取「小渡的记忆文档 1.0」文件：
-    - 不访问/不注入记忆文档 1.0；
-    - 仅注入 RIKKA_SYSTEM_REPLACE 的内容作为简短核心人设；
-    - 不覆盖/修改前端传来的 system；
-    - 若当前对话里已经存在一条与核心 prompt 完全相同的 system，则不再重复注入。
+    发给 AI 之前：在最前面插入「渡的 prompt（2026.3.16 版）」一条。
+    内容来自 prompts/du_core_prompt.txt，不准改动、每次必须全文注入，不截断。
+    不注入 RIKKA_SYSTEM_REPLACE；Rikkahub 自带的 system 等保持原样接在后面。
     """
-    from config import RIKKA_SYSTEM_REPLACE
-
-    core_prompt = (RIKKA_SYSTEM_REPLACE or "").strip()
-    if not core_prompt:
+    du_prompt = _load_du_core_prompt_from_file()
+    if not du_prompt:
         return body
     messages = body.get("messages") or []
     if not messages:
+        body = copy.deepcopy(body)
+        body["messages"].insert(0, {"role": "system", "content": du_prompt})
         return body
-    # 若已存在相同内容的 system，直接返回，避免一轮对话中重复注入
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system" and str(msg.get("content") or "").strip() == core_prompt:
-            return body
+    # 若第一条已是同内容 system，不重复插
+    first = messages[0]
+    if (first.get("role") or "").lower() == "system" and str(first.get("content") or "").strip() == du_prompt:
+        return body
     body = copy.deepcopy(body)
-    # 在最前面追加一条核心 prompt system，保留原有 RikkaHub system 等
-    body["messages"].insert(0, {"role": "system", "content": core_prompt})
+    body["messages"].insert(0, {"role": "system", "content": du_prompt})
     return body
 
 
