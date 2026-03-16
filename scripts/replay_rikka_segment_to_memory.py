@@ -24,7 +24,7 @@ from typing import Any, Dict, List
 
 from pipeline.pipeline import SUMMARY_EVERY_N_ROUNDS
 from services.deepseek_summary import fetch_new_summary
-from storage import r2_store
+from storage import r2_store, overwrite_conversation_rounds
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -115,38 +115,40 @@ def main() -> None:
         len(rounds),
     )
 
-    from pipeline.cleaner import build_round_cleaned_for_r2
+    # 1）先用这批轮次覆盖写回该 window 的 conversation.json，
+    #    把这段当作当前窗口对话的唯一来源，后续窗口总结直接从 R2 拉最近 4 轮。
+    payload_rounds = [
+        {"index": r.get("index") or i + 1, "messages": r.get("messages") or []}
+        for i, r in enumerate(rounds)
+    ]
+    ok = overwrite_conversation_rounds(window_id, payload_rounds)
+    if not ok:
+        raise SystemExit("overwrite_conversation_rounds 失败，窗口原文未更新，终止重放。")
 
-    all_rounds_for_summary: List[Dict[str, Any]] = []
-    # 把这次重放当成「从零开始」：不继承旧 summary，而是在内存里从空串开始滚动总结
-    current_summary: str = ""
-
+    # 2）只跑窗口总结：每 SUMMARY_EVERY_N_ROUNDS 轮，用当前 summary + 最近 4 轮原文生成新 summary 并覆盖保存。
     total = len(rounds)
-    for i, r in enumerate(rounds, start=1):
-        msgs = r.get("messages") or []
-        if not (isinstance(msgs, list) and len(msgs) >= 2):
+    current_summary = r2_store.get_summary(window_id) or ""
+    for i in range(1, total + 1):
+        if i % SUMMARY_EVERY_N_ROUNDS != 0:
             continue
-        user_msg, asst_msg = msgs[0], msgs[1]
-        round_messages = build_round_cleaned_for_r2(user_msg, asst_msg)
-        all_rounds_for_summary.append({"index": i, "messages": round_messages})
+        recent = r2_store.get_conversation_rounds(window_id, last_n=4)
+        if not recent:
+            continue
+        new_summary = fetch_new_summary(current_summary, recent)
+        if new_summary:
+            current_summary = new_summary
+            r2_store.save_summary(window_id, current_summary)
+            logger.info("窗口总结已更新一次 window_id=%s round_index=%s", window_id, i)
+        else:
+            logger.warning(
+                "replay_rikka_segment_to_memory 触发总结但 DeepSeek 未返回新总结 window_id=%s", window_id
+            )
 
-        # 窗口总结：每 SUMMARY_EVERY_N_ROUNDS 轮，用「当前内存里的 summary」+ 最近 4 轮做增量总结
-        if i % SUMMARY_EVERY_N_ROUNDS == 0:
-            recent = all_rounds_for_summary[-4:]
-            if recent:
-                new_summary = fetch_new_summary(current_summary, recent)
-                if new_summary:
-                    current_summary = new_summary
-                    r2_store.save_summary(window_id, current_summary)
-                else:
-                    logger.warning(
-                        "replay_rikka_segment_to_memory 触发总结但 DeepSeek 未返回新总结 window_id=%s", window_id
-                    )
-
-        # 动态层：按本次需求跳过，避免重复演化
-
-        if i % 20 == 0 or i == total:
-            logger.info("已重放轮次 %s/%s（仅窗口总结，跳过动态层）", i, total)
+    logger.info(
+        "replay_rikka_segment_to_memory 完成 window_id=%s 覆盖轮次=%s（仅窗口总结，跳过动态层）",
+        window_id,
+        total,
+    )
 
 
 if __name__ == "__main__":

@@ -152,6 +152,34 @@ def append_conversation_round(window_id: str, round_index: int, messages: list) 
         return False
 
 
+def overwrite_conversation_rounds(window_id: str, rounds: list[dict]) -> bool:
+    """
+    覆盖写入某个窗口的对话存档（windows/<id>/conversation.json），用于重放/纠偏。
+    - rounds 结构需为 [{ "index": int, "messages": [...] }, ...]。
+    - 不改 conversations/YYYY-MM-DD/ 下面的按日备份（避免误删历史备份）。
+    """
+    client = _s3_client()
+    if not client:
+        logger.warning("R2 client 未配置，跳过 overwrite_conversation_rounds window_id=%s", window_id)
+        return False
+    try:
+        # 仅覆盖主存 windows/<id>/conversation.json
+        prefix = _prefix(window_id)
+        key = _get_key(prefix, "conversation.json")
+        payload = {"rounds": rounds or []}
+        _write_json(client, key, payload)
+        logger.info(
+            "overwrite_conversation_rounds 完成 window_id=%s rounds=%s key=%s",
+            window_id,
+            len(rounds or []),
+            key,
+        )
+        return True
+    except Exception as e:
+        logger.error("overwrite_conversation_rounds 失败 window_id=%s error=%s", window_id, e, exc_info=True)
+        return False
+
+
 # ---------- 小本本（按时间先后排序，滚动保留） ----------
 
 
