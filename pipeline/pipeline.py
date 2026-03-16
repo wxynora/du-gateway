@@ -90,9 +90,11 @@ def _load_core_prompt() -> str:
 
 def step_replace_rikka_system(body: dict) -> dict:
     """
-    发给 AI 之前：把 RikkaHub 自带的「你是一个助手…」第一条 system 替换成「渡的核心 prompt」，
+    发给 AI 之前：在保留前端（如 RikkaHub）自带 system 的前提下，额外注入一条「渡的核心 prompt」system。
     文案来自 prompts/du_core_prompt.txt。若文件不存在则回退用 RIKKA_SYSTEM_REPLACE。
-    存记忆时不会存 system，只存 user+assistant 对话。
+    - 不覆盖/修改前端传来的 system；
+    - 若当前对话里已经存在一条与核心 prompt 完全相同的 system，则不再重复注入；
+    - 存记忆时仍然不会存任何 system，只存 user+assistant 对话。
     """
     core_prompt = _load_core_prompt()
     if not core_prompt:
@@ -100,13 +102,13 @@ def step_replace_rikka_system(body: dict) -> dict:
     messages = body.get("messages") or []
     if not messages:
         return body
+    # 若已存在相同内容的 system，直接返回，避免一轮对话中重复注入
+    for msg in messages:
+        if (msg.get("role") or "").lower() == "system" and str(msg.get("content") or "").strip() == core_prompt.strip():
+            return body
     body = copy.deepcopy(body)
-    first = body["messages"][0]
-    if (first.get("role") or "").lower() == "system":
-        first["content"] = core_prompt
-    else:
-        # 若第一条不是 system，则在最前面插入一条 system
-        body["messages"].insert(0, {"role": "system", "content": core_prompt})
+    # 在最前面追加一条核心 prompt system，保留原有 RikkaHub system 等
+    body["messages"].insert(0, {"role": "system", "content": core_prompt})
     return body
 
 
