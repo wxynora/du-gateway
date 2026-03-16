@@ -65,7 +65,7 @@ tag：
 - 书房：技术 / debug
 - 客厅：日常 / 玩梗
 - 图书馆：重要时刻
-- 卧室：skip，不管（tag 为卧室时 action 必为 skip，不写 content）
+- 卧室：涉及私密/亲密/性行为/性暗示/露骨言语的内容；tag 为卧室时 action 必为 skip，不写 content
 
 importance：1 闲聊 2 有点意思 3 值得记 4 重要
 

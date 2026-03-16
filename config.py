@@ -106,6 +106,13 @@ NOTION_NOTEBOOK_PAGE_ID = os.environ.get("NOTION_NOTEBOOK_PAGE_ID", "").strip()
 NOTION_BEDROOM_PAGE_ID = os.environ.get("NOTION_BEDROOM_PAGE_ID", "").strip()
 # 核心缓存待审：sync_to_notion / sync_from_notion 用的 database ID
 NOTION_CORE_CACHE_DATABASE_ID = os.environ.get("NOTION_CORE_CACHE_DATABASE_ID", "321043f2b83980d088a5c6e2f7bd77bf")
+# 交换日记、日程本：渡可读正文与增改（NOTION_TOOLS_ENABLED=1 时）
+NOTION_EXCHANGE_DIARY_DATABASE_ID = os.environ.get(
+    "NOTION_EXCHANGE_DIARY_DATABASE_ID", "324043f2b83980a7a53de00c7edf6303"
+).strip()
+NOTION_SCHEDULE_DATABASE_ID = os.environ.get(
+    "NOTION_SCHEDULE_DATABASE_ID", "324043f2b839800e8968f92a880c0127"
+).strip()
 # 归档：① 一个数据库多分类：NOTION_ARCHIVE_DATABASE_ID 填记忆库 Database ID，表里要有 id、content、promoted_at、分类，见 docs/notion_建表傻瓜步骤.md
 # ② 四张表：NOTION_ARCHIVE_DATABASE_ID 不填，改填下面四个 ID
 NOTION_ARCHIVE_DATABASE_ID = os.environ.get("NOTION_ARCHIVE_DATABASE_ID", "323043f2b83980a48917c6495f5e2c00").strip()

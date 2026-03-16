@@ -221,3 +221,88 @@ def sync_from_notion() -> tuple[bool, str]:
         return False, "写回 R2 pending 失败"
     logger.info("sync_from_notion 完成 从 Notion 读回条数=%s，追加后 R2 总条数=%s", len(pending), len(new_pending))
     return True, ""
+
+
+def list_pending_entries_for_tools(limit: int = 50) -> tuple[list, Optional[str]]:
+    """
+    供渡工具用：列出待审表条目（含 page_id），不包含读后感。
+    返回 ([{ page_id, id, content, promoted_by, importance, mention_count, promoted_at, tag }], error)。
+    """
+    if not NOTION_CORE_CACHE_DATABASE_ID:
+        return [], "NOTION_CORE_CACHE_DATABASE_ID 未配置"
+    name_to_id, err = _get_property_ids()
+    if err or not name_to_id:
+        return [], (err or "无 properties")
+    kid = name_to_id.get("id")
+    kcontent = name_to_id.get("content")
+    kpromoted_by = name_to_id.get("promoted_by")
+    kimportance = name_to_id.get("importance")
+    kmention_count = name_to_id.get("mention_count")
+    kpromoted_at = name_to_id.get("promoted_at")
+    ktag = name_to_id.get("tag")
+    out = []
+    cursor = None
+    while len(out) < limit:
+        data, err = notion_client.query_database(
+            NOTION_CORE_CACHE_DATABASE_ID, start_cursor=cursor, page_size=min(limit - len(out), 100)
+        )
+        if err:
+            return [], str(err)
+        for page in (data or {}).get("results") or []:
+            page_id = page.get("id")
+            entry_id = _extract_prop(page, kid, "title") if kid else None
+            if not entry_id:
+                continue
+            out.append({
+                "page_id": page_id,
+                "id": entry_id,
+                "content": _extract_prop(page, kcontent, "rich_text") if kcontent else "",
+                "promoted_by": _extract_prop(page, kpromoted_by, "select") if kpromoted_by else "importance",
+                "importance": _extract_prop(page, kimportance, "number") if kimportance else 0,
+                "mention_count": _extract_prop(page, kmention_count, "number") if kmention_count else 0,
+                "promoted_at": _extract_prop(page, kpromoted_at, "rich_text") if kpromoted_at else "",
+                "tag": _extract_prop(page, ktag, "select") if ktag else "",
+            })
+        cursor = (data or {}).get("next_cursor")
+        if not cursor or not (data or {}).get("has_more"):
+            break
+    return out, None
+
+
+def update_pending_entry_by_page_id(
+    page_id: str,
+    content: Optional[str] = None,
+    promoted_by: Optional[str] = None,
+    importance: Optional[int] = None,
+    mention_count: Optional[int] = None,
+    promoted_at: Optional[str] = None,
+    tag: Optional[str] = None,
+) -> tuple[bool, str]:
+    """
+    按 page_id 更新待审表一条；只更新传入的字段，不碰读后感等其它列。
+    """
+    if not NOTION_CORE_CACHE_DATABASE_ID:
+        return False, "NOTION_CORE_CACHE_DATABASE_ID 未配置"
+    name_to_id, err = _get_property_ids()
+    if err or not name_to_id:
+        return False, (err or "无 properties")
+    props = {}
+    if content is not None and "content" in name_to_id:
+        props[name_to_id["content"]] = _prop_rich_text(content)
+    if promoted_by is not None and "promoted_by" in name_to_id:
+        props[name_to_id["promoted_by"]] = _prop_select(promoted_by)
+    if importance is not None and "importance" in name_to_id:
+        props[name_to_id["importance"]] = _prop_number(importance)
+    if mention_count is not None and "mention_count" in name_to_id:
+        props[name_to_id["mention_count"]] = _prop_number(mention_count)
+    if promoted_at is not None and "promoted_at" in name_to_id:
+        display = iso_to_display_time(promoted_at) or promoted_at
+        props[name_to_id["promoted_at"]] = _prop_rich_text(display)
+    if tag is not None and "tag" in name_to_id:
+        props[name_to_id["tag"]] = _prop_select(tag)
+    if not props:
+        return True, "无字段需要更新"
+    _, err = notion_client.update_page(page_id, props)
+    if err:
+        return False, str(err)
+    return True, ""

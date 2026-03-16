@@ -492,10 +492,10 @@ def _apply_one_decision(
     else:
         mention_init = 0
 
-    # 兜底：DS 标成 new 但给了客厅/书房等，若原文有明确亲密关键词则改标卧室，避免全进客厅
+    # 兜底：DS 标成 new 但给了客厅/书房等，若原文有私密/亲密/性相关关键词则改标卧室
     if (tag != "卧室" and "卧室" not in tag) and (action == "new" or content):
         raw_check = _round_messages_to_raw_text(round_messages)
-        if any(kw in raw_check for kw in ("情话", "表白", "亲密", "私密", "二人私事", "老婆", "老公", "爱你", "想你了")):
+        if any(kw in raw_check for kw in ("私密", "亲密", "性行为", "性暗示", "露骨", "露骨言语")):
             tag = "卧室"
 
     if tag == "卧室" or "卧室" in tag:

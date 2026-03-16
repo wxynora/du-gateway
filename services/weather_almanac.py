@@ -30,15 +30,17 @@ def fetch_weather(city: str) -> str:
         if r.status_code != 200:
             return f"天气接口请求异常，状态码 {r.status_code}。"
         data = r.json()
-        # 聚合 simpleWeather：reason + result
-        if data.get("reason") != "success" and data.get("error_code") != 0:
+        # 聚合数据：成功以 error_code==0 为准（reason 可能为「查询成功」等）
+        if data.get("error_code") != 0:
             return (data.get("reason") or data.get("message") or "接口返回失败") + "。"
         res = data.get("result") or {}
         realtime = res.get("realtime") or res
         temp = realtime.get("temperature") or res.get("temperature") or ""
         info = realtime.get("info") or res.get("weather") or "—"
         humidity = realtime.get("humidity") or res.get("humidity") or ""
-        wind = realtime.get("direct") or realtime.get("power") or ""
+        direct = (realtime.get("direct") or "").strip()
+        power = (realtime.get("power") or "").strip()
+        wind = f"{direct} {power}".strip() if (direct or power) else ""
         parts = [f"{city}：{info}"]
         if temp:
             parts.append(f"{temp}℃")
@@ -46,6 +48,9 @@ def fetch_weather(city: str) -> str:
             parts.append(f"湿度{humidity}%")
         if wind:
             parts.append(wind)
+        aqi = realtime.get("aqi")
+        if aqi:
+            parts.append(f"空气质量{aqi}")
         return "，".join(parts) if parts else "暂无天气数据。"
     except Exception as e:
         logger.exception("天气 API 请求异常 city=%s", city)
@@ -66,15 +71,17 @@ def fetch_almanac(date: Optional[str] = None) -> str:
         if r.status_code != 200:
             return f"黄历接口请求异常，状态码 {r.status_code}。"
         data = r.json()
-        if data.get("reason") != "success" and data.get("error_code") != 0:
+        # 成功以 error_code==0 为准（reason 可能为 "successed" 等）
+        if data.get("error_code") != 0:
             return (data.get("reason") or data.get("message") or "接口返回失败") + "。"
         res = data.get("result") or {}
-        date_str = res.get("date") or day
+        # 聚合黄历：阳历 yangli，农历 yinli，宜 yi，忌 ji
+        date_str = res.get("yangli") or res.get("date") or day
         week = res.get("week") or ""
-        lunar = res.get("lunar") or res.get("lunarYear") or ""
-        suit = res.get("suit") or "—"
-        avoid = res.get("avoid") or "—"
-        lines = [f"{date_str} {week} 农历{lunar}", f"宜：{suit}", f"忌：{avoid}"]
+        lunar = res.get("yinli") or res.get("lunar") or res.get("lunarYear") or ""
+        suit = res.get("yi") or res.get("suit") or "—"
+        avoid = res.get("ji") or res.get("avoid") or "—"
+        lines = [f"{date_str} {week} 农历 {lunar}", f"宜：{suit}", f"忌：{avoid}"]
         return "\n".join(lines)
     except Exception as e:
         logger.exception("黄历 API 请求异常 date=%s", day)

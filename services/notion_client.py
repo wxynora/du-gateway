@@ -109,6 +109,21 @@ def read_database(database_id: str) -> tuple[Optional[Any], Optional[dict]]:
     return _req("GET", f"/databases/{database_id}")
 
 
+def get_database_schema(database_id: str) -> tuple[Optional[dict], Optional[dict], Optional[dict]]:
+    """返回 (name_to_id, name_to_type, err)。name_to_type 为属性名 -> Notion 类型。"""
+    data, err = read_database(database_id)
+    if err or not data:
+        return None, None, (err or {"error": "read_database 为空"})
+    name_to_id = {}
+    name_to_type = {}
+    for pid, prop in (data.get("properties") or {}).items():
+        name = (prop.get("name") or "").strip()
+        if name:
+            name_to_id[name] = pid
+            name_to_type[name] = (prop.get("type") or "rich_text").strip()
+    return name_to_id, name_to_type, None
+
+
 def query_database(
     database_id: str,
     filter_obj: Optional[dict] = None,
@@ -128,3 +143,81 @@ def query_database(
     if start_cursor:
         body["start_cursor"] = start_cursor
     return _req("POST", f"/databases/{database_id}/query", json_data=body)
+
+
+def _block_to_plain_text(block: dict) -> str:
+    """从单个 block 提取纯文本（paragraph/heading/list 等）。"""
+    t = (block.get("type") or "").strip()
+    inner = block.get(t)
+    if not inner or not isinstance(inner, dict):
+        return ""
+    rich = inner.get("rich_text") or []
+    return " ".join(
+        (r.get("plain_text") or "") for r in rich if isinstance(r, dict)
+    ).strip()
+
+
+def get_page_content_as_text(page_id: str) -> tuple[Optional[str], Optional[str], Optional[dict]]:
+    """
+    读取页面：标题（从 properties 第一个 title 列）+ 正文（块内容拼接）。
+    返回 (title, body_text, err)。body_text 含所有子块文本，递归获取子块并分页。
+    """
+    page, err = read_page(page_id)
+    if err or not page:
+        return None, None, (err or {"error": "read_page 为空"})
+    props = page.get("properties") or {}
+    title_parts = []
+    for pid, prop in props.items():
+        if isinstance(prop, dict) and (prop.get("type") == "title"):
+            arr = (prop.get("title") or [])
+            title_parts.append(" ".join(
+                (t.get("plain_text") or "") for t in arr if isinstance(t, dict)
+            ))
+            break
+    title = " ".join(title_parts).strip() or "(无标题)"
+
+    parts = []
+    cursor = None
+    while True:
+        data, err = _req("GET", f"/blocks/{page_id}/children", params={
+            "page_size": 100,
+            **({"start_cursor": cursor} if cursor else {}),
+        })
+        if err or not data:
+            break
+        for block in (data.get("results") or []):
+            text = _block_to_plain_text(block)
+            if text:
+                parts.append(text)
+            if block.get("has_children"):
+                child_text = _blocks_children_to_text(block.get("id"))
+                if child_text:
+                    parts.append(child_text)
+        cursor = (data or {}).get("next_cursor")
+        if not cursor or not (data or {}).get("has_more"):
+            break
+    body = "\n".join(parts)
+    return title, body, None
+
+
+def _blocks_children_to_text(block_id: str) -> str:
+    """递归取块下所有子块文本。"""
+    parts = []
+    cursor = None
+    while True:
+        data, err = _req("GET", f"/blocks/{block_id}/children", params={
+            "page_size": 100,
+            **({"start_cursor": cursor} if cursor else {}),
+        })
+        if err or not data:
+            break
+        for block in (data.get("results") or []):
+            text = _block_to_plain_text(block)
+            if text:
+                parts.append(text)
+            if block.get("has_children"):
+                parts.append(_blocks_children_to_text(block.get("id")))
+        cursor = (data or {}).get("next_cursor")
+        if not cursor or not (data or {}).get("has_more"):
+            break
+    return "\n".join(parts)
