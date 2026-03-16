@@ -51,11 +51,14 @@ def step_clean_for_forward(body: dict) -> dict:
     """
     发给当前窗口渡的清洗：只清 Rikka 预设（不替换表情包，渡按 (表情包:名字) 格式）；图片保持原样。
     两条流之一：此 body 用于转发给 AI。
+    role=system 的消息（Rikkahub 设置的上下文/系统提示）不做任何清洗，原样保留。
     """
     from pipeline.cleaner import clean_message_content_for_forward
 
     body = copy.deepcopy(body)
     for msg in body.get("messages") or []:
+        if (msg.get("role") or "").lower() == "system":
+            continue  # 不清理 Rikkahub 的 system/上下文，原样保留
         c = msg.get("content")
         if c is not None:
             msg["content"] = clean_message_content_for_forward(c, msg)
