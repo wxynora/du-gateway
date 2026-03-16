@@ -11,6 +11,7 @@ from config import (
     TARGET_AI_API_KEYS,
     GATEWAY_MODELS,
     model_matches_gateway_keywords,
+    MAX_COMPLETION_TOKENS,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -133,6 +134,12 @@ def _stream_forward_to_ai(body: dict, headers: dict):
             req_headers[h] = request.headers.get(h)
     body_send = dict(body)
     body_send["stream"] = True
+    # 若未带 max_tokens 或过小，则设下限，避免中转站默认截断
+    if MAX_COMPLETION_TOKENS > 0:
+        cur = body_send.get("max_tokens")
+        if cur is None or (isinstance(cur, (int, float)) and int(cur) < MAX_COMPLETION_TOKENS):
+            body_send["max_tokens"] = MAX_COMPLETION_TOKENS
+            logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
     # 经网关时请求体因注入会变大，便于排查「经网关截断、直连不截断」：打一条预估长度
     try:
         msg_len = sum(
@@ -288,6 +295,11 @@ def _forward_to_ai(body: dict, headers: dict):
             # 非流式：上游返回单 JSON，便于解析、存档、追加黑名单后缀等
             body_send = dict(body)
             body_send["stream"] = False
+            if MAX_COMPLETION_TOKENS > 0:
+                cur = body_send.get("max_tokens")
+                if cur is None or (isinstance(cur, (int, float)) and int(cur) < MAX_COMPLETION_TOKENS):
+                    body_send["max_tokens"] = MAX_COMPLETION_TOKENS
+                    logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
             r = requests.post(url, headers=req_headers, json=body_send, timeout=120)
             try:
                 data = r.json() if r.content else None

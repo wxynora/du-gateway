@@ -169,6 +169,9 @@ MEMORY_SUMMARY_TOKEN_RATIO = float(os.environ.get("MEMORY_SUMMARY_TOKEN_RATIO", 
 # 50K token 约 10 万字符，可设 100000 或 90000 留余量
 MAX_REQUEST_CHARS = int(os.environ.get("MAX_REQUEST_CHARS", "0"))
 
+# 转发时若请求未带 max_tokens 或小于此值，则设为该值，避免中转站用默认小值导致回复被截断（0=不强制）
+MAX_COMPLETION_TOKENS = int(os.environ.get("MAX_COMPLETION_TOKENS", "8192"))
+
 # 表情包对照表路径（老婆可直接编辑 JSON 增删改，保存即生效）
 EMOJI_MAPPING_FILE = DATA_DIR / "emoji_mapping.json"
 
