@@ -60,38 +60,58 @@ def _load_rows(
     """
     rows: List[Tuple[int, Dict[str, Any]]] = []
     conv_id_used: Optional[str] = None
-    with open(path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        for row in reader:
-            conv_id = (row.get("conversation_id") or "").strip()
-            if not conv_id:
-                continue
-            if target_conv_id:
-                if conv_id != target_conv_id:
-                    continue
-            else:
-                # 若未指定 conversation_id，则取第一行的
-                if conv_id_used is None:
-                    conv_id_used = conv_id
-                if conv_id != conv_id_used:
-                    continue
-            try:
-                idx = int(row.get("node_index") or 0)
-            except ValueError:
-                continue
-            raw = row.get("messages") or ""
-            try:
-                arr = json.loads(raw)
-            except Exception:
-                logger.warning("解析 messages 失败 node_index=%s raw 截断=%s", idx, raw[:200])
-                continue
-            if not isinstance(arr, list) or not arr:
-                continue
-            msg = arr[0]
-            if not isinstance(msg, dict):
-                continue
-            rows.append((idx, msg))
+    # 尝试多种常见编码，兼容 Windows 上导出的文件（如 ANSI / GBK）
+    last_err: Optional[Exception] = None
+    for enc in ("utf-8", "utf-8-sig", "gbk", "mbcs"):
+        try:
+            f = open(path, "r", encoding=enc, errors="strict")
+        except LookupError:
+            continue
+        try:
+            with f:
+                reader = csv.DictReader(f, delimiter="\t")
+                # 访问一次 fieldnames 触发首行解析
+                _ = reader.fieldnames
+                for row in reader:
+                    conv_id = (row.get("conversation_id") or "").strip()
+                    if not conv_id:
+                        continue
+                    if target_conv_id:
+                        if conv_id != target_conv_id:
+                            continue
+                    else:
+                        # 若未指定 conversation_id，则取第一行的
+                        if conv_id_used is None:
+                            conv_id_used = conv_id
+                        if conv_id != conv_id_used:
+                            continue
+                    try:
+                        idx = int(row.get("node_index") or 0)
+                    except ValueError:
+                        continue
+                    raw = row.get("messages") or ""
+                    try:
+                        arr = json.loads(raw)
+                    except Exception as e:
+                        last_err = e
+                        logger.warning("解析 messages 失败 node_index=%s raw 截断=%s", idx, raw[:200])
+                        continue
+                    if not isinstance(arr, list) or not arr:
+                        continue
+                    msg = arr[0]
+                    if not isinstance(msg, dict):
+                        continue
+                    rows.append((idx, msg))
+        except Exception as e:
+            last_err = e
+            rows = []
+            conv_id_used = None
+            continue
+        if rows:
+            break
     if not rows:
+        if last_err:
+            raise SystemExit(f"未从文件中读到任何消息，最后一个解码错误: {last_err}")
         raise SystemExit("未从文件中读到任何消息，请检查路径/格式/会话 ID。")
     rows.sort(key=lambda x: x[0])
     if not target_conv_id and conv_id_used is None:

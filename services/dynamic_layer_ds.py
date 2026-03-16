@@ -183,6 +183,32 @@ def _extract_json_array_from_ds_response(text: str) -> Optional[list]:
         return None
 
 
+def _build_query_from_round(round_messages: list) -> str:
+    """从一轮消息中抽出合并后的文本，用于检索相关记忆。"""
+    if not round_messages:
+        return ""
+    parts: list[str] = []
+    for m in round_messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            txt = content.strip()
+        elif isinstance(content, list):
+            segs = []
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    segs.append(c.get("text", ""))
+            txt = " ".join(segs).strip()
+        else:
+            txt = ""
+        if txt:
+            parts.append(txt)
+    text = "\n".join(parts)
+    # 防止 query 过长影响 embedding，截断到适中长度
+    return text[:2000]
+
+
 def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
     """
     调用 DS，返回单条决策（无整表）。
@@ -194,8 +220,30 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
         return default
 
+    # 先在本地从 current_memories 里召回「候选记忆」，只把少量候选发给 DS，避免每轮灌入全部记忆导致 token 爆炸。
+    candidates = []
+    try:
+        from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
+
+        query_text = _build_query_from_round(round_messages)
+        if query_text:
+            recalled = dynamic_vector_retrieve(
+                query_text,
+                vector_topk=10,
+                final_topn=10,
+            )
+            if recalled:
+                candidates = recalled
+    except Exception as e:
+        logger.debug("dynamic_layer_ds 本地检索候选失败，将回退为最近 N 条 error=%s", e)
+
+    if not candidates:
+        # 回退：取最近 N 条记忆作为候选
+        N = 10
+        candidates = (current_memories or [])[-N:]
+
     prompt = _DYNAMIC_LAYER_PROMPT.format(
-        current_memories_json=json.dumps(current_memories or [], ensure_ascii=False),
+        current_memories_json=json.dumps(candidates or [], ensure_ascii=False),
         round_messages_json=json.dumps(round_messages or [], ensure_ascii=False),
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
@@ -208,6 +256,12 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
         content = None
         for attempt in range(2):  # 最多试 2 次
             r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
+            if r.status_code >= 400:
+                logger.error(
+                    "动态层 DS API 错误 status=%s body=%s",
+                    r.status_code,
+                    (r.text or "")[:800],
+                )
             r.raise_for_status()
             data = r.json()
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
