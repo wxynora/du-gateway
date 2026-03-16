@@ -158,8 +158,12 @@ def _stream_forward_to_ai(body: dict, headers: dict):
             r = requests.post(url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
                 last_data_line = None
+                first_chunk_logged = False
                 for line in r.iter_lines():
                     if line is not None:
+                        if not first_chunk_logged and line.startswith(b"data:") and len(line) > 5:
+                            logger.info("流式收到首包（上游已开始推流）")
+                            first_chunk_logged = True
                         if line.startswith(b"data: ") and b"[DONE]" not in line:
                             last_data_line = line
                         yield line + b"\n"

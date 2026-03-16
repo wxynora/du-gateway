@@ -154,8 +154,8 @@ FAILED_RESPONSE_MIN_LENGTH = int(os.environ.get("FAILED_RESPONSE_MIN_LENGTH", "1
 _FAILED_KEYWORDS_STR = os.environ.get("FAILED_RESPONSE_ERROR_KEYWORDS", "error,出错,失败,超时,抱歉，我无法")
 FAILED_RESPONSE_ERROR_KEYWORDS = [k.strip() for k in _FAILED_KEYWORDS_STR.split(",") if k.strip()]
 
-# 动态层注入：最多取 N 条记忆注入（0=不注入不调检索，便于测试延迟；默认 0）
-DYNAMIC_MEMORY_TOP_N = int(os.environ.get("DYNAMIC_MEMORY_TOP_N", "0"))
+# 动态层注入：最多取 N 条记忆注入（0=不注入不调检索；默认 3）
+DYNAMIC_MEMORY_TOP_N = int(os.environ.get("DYNAMIC_MEMORY_TOP_N", "3"))
 # 动态层：记忆有效天数，超期参与权重衰减
 DYNAMIC_MEMORY_DAYS_VALID = 7
 
