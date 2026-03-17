@@ -41,9 +41,9 @@ def tts_to_audio_bytes(text: str) -> Optional[bytes]:
         "stream": False,
         "voice_setting": {
             "voice_id": MINIMAX_VOICE_ID,
-            "speed": MINIMAX_VOICE_SPEED,
-            "vol": MINIMAX_VOICE_VOL,
-            "pitch": MINIMAX_VOICE_PITCH,
+            "speed": int(MINIMAX_VOICE_SPEED),
+            "vol": int(MINIMAX_VOICE_VOL),
+            "pitch": int(MINIMAX_VOICE_PITCH),
             "emotion": MINIMAX_VOICE_EMOTION,
         },
         "audio_setting": {
