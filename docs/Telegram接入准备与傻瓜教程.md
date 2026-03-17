@@ -82,7 +82,7 @@ python scripts/run_telegram_bot.py
 3. 若配置正确，会看到类似：
 
 ```
-[TGBot] INFO: Telegram Bot 开始轮询，网关=http://127.0.0.1:5000/v1/chat/completions
+[TGBot] INFO: Telegram Bot 开始轮询，网关=http://127.0.0.1:5000/v1/chat/completions model=xxx
 ```
 
 4. **保持这个窗口也开着**。若报错 `TELEGRAM_BOT_TOKEN 未配置`，回去检查 `.env` 里是否填了 `TELEGRAM_BOT_TOKEN` 并保存。
@@ -112,7 +112,8 @@ A：需要能访问 Telegram 的网络（🪜），否则 Bot 拉不到更新。
 A：多半是 Bot 连不上网关。检查：① 网关是否已启动；② `TELEGRAM_GATEWAY_URL` 是否填对（本机用 `http://127.0.0.1:5000`）；③ 若网关在云服务器，Bot 在本地，要把 URL 改成云服务器公网地址。
 
 **Q：想用指定模型？**  
-A：在 `.env` 里加一行，例如：`TELEGRAM_CHAT_MODEL=claude-3-5-sonnet-20241022`（填你网关支持的模型名）。
+A：在 `.env` 里加一行，例如：`TELEGRAM_CHAT_MODEL=claude-3-5-sonnet-20241022`（填你网关支持的模型名）。  
+补充：如果你的中转站**只允许特定模型名**或**多中转站模型名不一致**，则建议显式配置 `TELEGRAM_CHAT_MODEL`；否则 Bot 可能会用兜底模型名导致上游 403。
 
 **Q：Bot 和网关能放同一台服务器吗？**  
 A：可以。网关用 `python app.py`（或你现有方式），Bot 用 `python scripts/run_telegram_bot.py`，两个进程同时跑；`TELEGRAM_GATEWAY_URL` 填 `http://127.0.0.1:5000` 即可。

@@ -20,15 +20,59 @@ logger = logging.getLogger(__name__)
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 # 长轮询超时（秒），期间有消息会立即返回
 GET_UPDATES_TIMEOUT = 60
+_RESOLVED_CHAT_MODEL: Optional[str] = None
 
 
-def _get_chat_model() -> str:
-    """Bot 请求网关时使用的模型名。"""
-    if TELEGRAM_CHAT_MODEL:
-        return TELEGRAM_CHAT_MODEL
+def _fetch_gateway_first_model() -> Optional[str]:
+    """
+    从网关 /v1/models 拉取第一个模型 id，作为 Bot 的默认模型。
+    注意：网关会把该接口代理到上游（或用 GATEWAY_MODELS 兜底）。
+    """
+    url = TELEGRAM_GATEWAY_URL.rstrip("/") + "/v1/models"
+    try:
+        r = requests.get(url, timeout=20)
+        if r.status_code != 200:
+            logger.warning("网关 /v1/models 非 200 status=%s body=%s", r.status_code, (r.text or "")[:200])
+            return None
+        data = r.json() if r.content else None
+        lst = (data or {}).get("data") or []
+        if not lst:
+            return None
+        first = lst[0]
+        if isinstance(first, dict) and first.get("id"):
+            return str(first["id"]).strip()
+        if isinstance(first, str) and first.strip():
+            return first.strip()
+        return None
+    except Exception as e:
+        logger.warning("拉取网关模型列表失败: %s", e)
+        return None
+
+
+def _resolve_chat_model() -> str:
+    """
+    解析 Bot 请求网关时使用的模型名。
+    优先级：
+    1) TELEGRAM_CHAT_MODEL（显式配置）
+    2) 网关 /v1/models 第一个
+    3) GATEWAY_MODELS 第一个（静态兜底）
+    4) gpt-4（最后兜底：仅在上游兼容该字符串时才可用）
+    """
+    global _RESOLVED_CHAT_MODEL
+    if _RESOLVED_CHAT_MODEL:
+        return _RESOLVED_CHAT_MODEL
+    if TELEGRAM_CHAT_MODEL and TELEGRAM_CHAT_MODEL.strip():
+        _RESOLVED_CHAT_MODEL = TELEGRAM_CHAT_MODEL.strip()
+        return _RESOLVED_CHAT_MODEL
+    m = _fetch_gateway_first_model()
+    if m:
+        _RESOLVED_CHAT_MODEL = m
+        return _RESOLVED_CHAT_MODEL
     if GATEWAY_MODELS:
-        return GATEWAY_MODELS[0]
-    return "gpt-4"
+        _RESOLVED_CHAT_MODEL = GATEWAY_MODELS[0]
+        return _RESOLVED_CHAT_MODEL
+    _RESOLVED_CHAT_MODEL = "gpt-4"
+    return _RESOLVED_CHAT_MODEL
 
 
 def _call_gateway_chat(window_id: str, user_text: str) -> Optional[str]:
@@ -37,8 +81,9 @@ def _call_gateway_chat(window_id: str, user_text: str) -> Optional[str]:
     window_id 应为 tg_{telegram_user_id}，以便与 RikkaHub 同套记忆/总结/动态层。
     """
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
+    model = _resolve_chat_model()
     body = {
-        "model": _get_chat_model(),
+        "model": model,
         "messages": [{"role": "user", "content": user_text}],
         "stream": False,
     }
@@ -49,7 +94,12 @@ def _call_gateway_chat(window_id: str, user_text: str) -> Optional[str]:
     try:
         r = requests.post(url, headers=headers, json=body, timeout=120)
         if r.status_code != 200:
-            logger.warning("网关返回非 200 status=%s body=%s", r.status_code, (r.text or "")[:500])
+            logger.warning(
+                "网关返回非 200 status=%s model=%s body=%s",
+                r.status_code,
+                model,
+                (r.text or "")[:500],
+            )
             return None
         data = r.json() if r.content else None
         if not data or "choices" not in data or not data["choices"]:
@@ -129,7 +179,8 @@ def run_polling():
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN 未配置，无法启动 Bot")
         return
-    logger.info("Telegram Bot 开始轮询，网关=%s%s", TELEGRAM_GATEWAY_URL, TELEGRAM_CHAT_PATH)
+    model = _resolve_chat_model()
+    logger.info("Telegram Bot 开始轮询，网关=%s%s model=%s", TELEGRAM_GATEWAY_URL, TELEGRAM_CHAT_PATH, model)
     offset = None
     while True:
         try:
