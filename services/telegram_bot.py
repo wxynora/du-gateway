@@ -345,6 +345,34 @@ def send_message(chat_id: int, text: str) -> bool:
         return False
 
 
+def send_chat_action(chat_id: int, action: str = "typing") -> bool:
+    """发送 chat action（如 typing）用于“正在输入中…”指示器。"""
+    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/sendChatAction"
+    payload = {"chat_id": chat_id, "action": action}
+    try:
+        r = requests.post(url, json=payload, timeout=15)
+        if r.status_code != 200:
+            logger.debug("sendChatAction 失败 chat_id=%s status=%s %s", chat_id, r.status_code, r.text[:120])
+            return False
+        return True
+    except requests.RequestException:
+        return False
+
+
+def _start_typing_indicator(chat_id: int, stop_event: threading.Event, interval_seconds: float = 4.0):
+    """
+    轻量 typing：立即发一次；若 stop_event 未 set，则每 interval 再发一次。
+    用于“调用网关等待回复”这段时间。
+    """
+    try:
+        send_chat_action(chat_id=chat_id, action="typing")
+        # 先等一会再重复（避免刷太频繁）
+        while not stop_event.wait(max(1.0, float(interval_seconds))):
+            send_chat_action(chat_id=chat_id, action="typing")
+    except Exception:
+        return
+
+
 def send_message_to_user(telegram_user_id: int, text: str) -> bool:
     """
     向指定 Telegram 用户发消息（用于主动发消息等）。
@@ -375,7 +403,14 @@ def process_message(chat_id: int, user_id: int, text: str) -> bool:
     返回是否成功发回回复。
     """
     window_id = f"tg_{user_id}"
-    reply = _call_gateway_chat(window_id=window_id, user_id=user_id, user_text=text)
+    # 轻量 typing：只在真正要调网关时展示
+    stop = threading.Event()
+    t = threading.Thread(target=_start_typing_indicator, args=(int(chat_id), stop, 4.0), daemon=True)
+    t.start()
+    try:
+        reply = _call_gateway_chat(window_id=window_id, user_id=user_id, user_text=text)
+    finally:
+        stop.set()
     if reply is None:
         reply = "暂时没连上渡，稍后再试哦～"
     return send_message_segmented(chat_id=chat_id, text=reply)
