@@ -343,6 +343,17 @@ def _extract_keywords(text: str) -> list:
         "谢谢",
         "好的呀",
         "好的呢",
+        # 元问题（讨论系统本身）常见词：避免触发“乱塞一堆”
+        "记忆",
+        "动态记忆",
+        "窗口记忆",
+        "回忆",
+        "总结",
+        "注入",
+        "检索",
+        "向量",
+        "embedding",
+        "embeddings",
     }
     keywords = []
     for p in parts:
@@ -358,6 +369,22 @@ def _extract_keywords(text: str) -> list:
         if len(p) >= 2:
             keywords.append(p)
     return list(set(keywords))
+
+
+def _is_memory_meta_query(text: str) -> bool:
+    """
+    用户在问“系统/记忆如何工作”的元问题时，不应触发动态记忆检索与注入。
+    典型：问“你收到了哪些动态记忆/注入了什么/怎么检索的”等。
+    """
+    if not text or not isinstance(text, str):
+        return False
+    t = text.strip().lower()
+    if not t:
+        return False
+    # 包含“记忆”相关词 + “展示/有哪些/收到/注入/检索”等动词，认为是元问题
+    has_mem_word = any(w in t for w in ("动态记忆", "窗口记忆", "记忆", "回忆", "总结"))
+    has_meta_verb = any(w in t for w in ("哪些", "有什么", "收到", "注入", "检索", "匹配", "召回", "向量", "embedding"))
+    return bool(has_mem_word and has_meta_verb)
 
 
 def _memory_weight(m: dict) -> float:
@@ -398,6 +425,9 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                     c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
                 )
             break
+    # 元问题：不要触发动态记忆（避免“问记忆→召回一堆含记忆字样的记忆”）
+    if _is_memory_meta_query(last_user_text):
+        return body
     keywords = _extract_keywords(last_user_text)
     # 只保留有效期内（7 天）的记忆（按北京时间）
     from utils.time_aware import parse_iso_to_beijing, _now_beijing

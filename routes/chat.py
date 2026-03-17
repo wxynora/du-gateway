@@ -16,6 +16,8 @@ from config import (
     model_matches_gateway_keywords,
     MAX_COMPLETION_TOKENS,
     STREAM_TIMEOUT_SECONDS,
+    STREAM_SSE_HEARTBEAT_SECONDS,
+    STREAM_SSE_FLUSH_MAX_MS,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -133,9 +135,10 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         yield ("data: " + json.dumps({"error": "TARGET_AI_URL 或 TARGET_AI_URLS 未配置"}) + "\n\n").encode("utf-8")
         return
     req_headers = {"Content-Type": "application/json"}
-    for h in ("Accept", "Accept-Encoding"):
-        if request.headers.get(h):
-            req_headers[h] = request.headers.get(h)
+    # 上游尽量禁用压缩：避免 gzip/deflate 造成上游缓冲、攒包后才吐，降低流式不确定性
+    req_headers["Accept-Encoding"] = "identity"
+    if request.headers.get("Accept"):
+        req_headers["Accept"] = request.headers.get("Accept")
     body_send = dict(body)
     body_send["stream"] = True
     # 若未带 max_tokens 或过小，则设下限，避免中转站默认截断
@@ -232,14 +235,53 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
 
         t = threading.Thread(target=_producer, daemon=True)
         t.start()
+        heartbeat_s = max(0, int(STREAM_SSE_HEARTBEAT_SECONDS or 0))
+        flush_ms = max(0, int(STREAM_SSE_FLUSH_MAX_MS or 0))
+        flush_window_s = flush_ms / 1000.0
+        last_send_ts = time.time()
         try:
             while True:
-                chunk = chunk_queue.get()
+                buf = []
+                # 第一次阻塞等待：用心跳间隔作为超时，避免下游长时间无任何数据
+                try:
+                    chunk = chunk_queue.get(timeout=heartbeat_s if heartbeat_s > 0 else None)
+                except queue.Empty:
+                    # 心跳：SSE comment，不影响客户端拼接内容
+                    yield b": ping\n\n"
+                    last_send_ts = time.time()
+                    continue
+
                 if chunk is None:
                     break
+
+                buf.append(chunk)
                 if chunk.startswith(b"data:") and len(chunk) > 5:
                     data_chunk_count += 1
-                yield chunk
+
+                # 合并 flush：短窗口内尽量多取几块再发，减少小包抖动
+                if flush_window_s > 0:
+                    deadline = time.time() + flush_window_s
+                    while True:
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            break
+                        try:
+                            nxt = chunk_queue.get(timeout=remaining)
+                        except queue.Empty:
+                            break
+                        if nxt is None:
+                            chunk = None
+                            break
+                        buf.append(nxt)
+                        if nxt.startswith(b"data:") and len(nxt) > 5:
+                            data_chunk_count += 1
+                    if chunk is None:
+                        # 先把缓冲发完再结束
+                        yield b"".join(buf)
+                        break
+
+                yield b"".join(buf)
+                last_send_ts = time.time()
         finally:
             full_content = "".join(content_parts)
             stream_sec = time.time() - stream_start
