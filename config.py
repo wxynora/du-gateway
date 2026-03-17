@@ -226,3 +226,16 @@ TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_S
 
 # Telegram 上下文缓存：每次请求网关时携带最近 N 轮（user+assistant=一轮两条消息），默认 4
 TELEGRAM_CONTEXT_LAST_TURNS = int(os.environ.get("TELEGRAM_CONTEXT_LAST_TURNS", "4"))
+
+# Telegram 主动发消息（调度器）
+TELEGRAM_PROACTIVE_ENABLED = os.environ.get("TELEGRAM_PROACTIVE_ENABLED", "").strip().lower() in ("1", "true", "yes")
+TELEGRAM_PROACTIVE_TARGET_USER_ID = int(os.environ.get("TELEGRAM_PROACTIVE_TARGET_USER_ID", "0") or "0")
+TELEGRAM_PROACTIVE_INTERVAL_MINUTES = int(os.environ.get("TELEGRAM_PROACTIVE_INTERVAL_MINUTES", "30"))
+# 禁扰：北京时间 00:00–07:30（可改成例如 0:00-7:30）
+TELEGRAM_PROACTIVE_QUIET_START_HM = os.environ.get("TELEGRAM_PROACTIVE_QUIET_START_HM", "00:00").strip()
+TELEGRAM_PROACTIVE_QUIET_END_HM = os.environ.get("TELEGRAM_PROACTIVE_QUIET_END_HM", "07:30").strip()
+# 概率模型：P = min(1, base + k_per_hour * hours_since_last)
+TELEGRAM_PROACTIVE_BASE_P = float(os.environ.get("TELEGRAM_PROACTIVE_BASE_P", "0.05"))
+TELEGRAM_PROACTIVE_K_PER_HOUR = float(os.environ.get("TELEGRAM_PROACTIVE_K_PER_HOUR", "0.03"))
+# 渡决策标记：不联系时必须只输出该串
+TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN = os.environ.get("TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN", "NO_CONTACT").strip() or "NO_CONTACT"

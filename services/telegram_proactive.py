@@ -1,0 +1,184 @@
+import os
+import random
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
+
+import requests
+
+from config import (
+    TELEGRAM_GATEWAY_URL,
+    TELEGRAM_CHAT_PATH,
+    TELEGRAM_CHAT_MODEL,
+    GATEWAY_MODELS,
+    TELEGRAM_PROACTIVE_ENABLED,
+    TELEGRAM_PROACTIVE_TARGET_USER_ID,
+    TELEGRAM_PROACTIVE_QUIET_START_HM,
+    TELEGRAM_PROACTIVE_QUIET_END_HM,
+    TELEGRAM_PROACTIVE_BASE_P,
+    TELEGRAM_PROACTIVE_K_PER_HOUR,
+    TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN,
+    TELEGRAM_PROACTIVE_INTERVAL_MINUTES,
+)
+from storage import r2_store
+from utils.log import get_logger
+from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
+from services.telegram_bot import send_message_to_user
+
+logger = get_logger(__name__)
+
+
+@dataclass
+class ProactiveDecision:
+    should_send: bool
+    text: str = ""
+    reason: str = ""
+
+
+def _get_chat_model() -> str:
+    if TELEGRAM_CHAT_MODEL:
+        return TELEGRAM_CHAT_MODEL
+    if GATEWAY_MODELS:
+        return GATEWAY_MODELS[0]
+    return "gpt-4"
+
+
+def _parse_hm(hm: str) -> tuple[int, int]:
+    s = (hm or "").strip()
+    if not s:
+        return 0, 0
+    parts = s.split(":")
+    if len(parts) != 2:
+        return 0, 0
+    try:
+        return max(0, min(23, int(parts[0]))), max(0, min(59, int(parts[1])))
+    except Exception:
+        return 0, 0
+
+
+def _is_in_quiet_hours(now_bj: datetime) -> bool:
+    sh, sm = _parse_hm(TELEGRAM_PROACTIVE_QUIET_START_HM)
+    eh, em = _parse_hm(TELEGRAM_PROACTIVE_QUIET_END_HM)
+    cur = now_bj.hour * 60 + now_bj.minute
+    start = sh * 60 + sm
+    end = eh * 60 + em
+    # 只支持常见的「跨午夜」或「同日」区间
+    if start <= end:
+        return start <= cur < end
+    return cur >= start or cur < end
+
+
+def _hours_since_last(last_iso: Optional[str], now_bj: datetime) -> float:
+    dt = parse_iso_to_beijing(last_iso)
+    if not dt:
+        return 9999.0
+    delta = now_bj - dt
+    return max(0.0, delta.total_seconds() / 3600.0)
+
+
+def _probability(hours_since_last: float) -> float:
+    try:
+        p = float(TELEGRAM_PROACTIVE_BASE_P) + float(TELEGRAM_PROACTIVE_K_PER_HOUR) * float(hours_since_last)
+    except Exception:
+        p = 0.1
+    if p < 0:
+        p = 0.0
+    if p > 1:
+        p = 1.0
+    return p
+
+
+def _ask_du_should_contact(window_id: str, hours_since_last: float) -> ProactiveDecision:
+    """
+    让渡决定是否联系。要求：
+    - 不联系：只输出 NO_CONTACT_TOKEN
+    - 联系：只输出要发给用户的那句话（不带前缀）
+    """
+    url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
+    no_token = TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT"
+    user_prompt = (
+        "【系统任务：主动联系用户】\n"
+        f"你现在在考虑要不要主动找老婆说一句话。距上次你主动联系大约 {hours_since_last:.1f} 小时。\n"
+        "请你结合你对她的记忆与当下氛围做决定：\n"
+        f"- 如果不该联系：你必须只输出 {no_token}\n"
+        "- 如果该联系：你必须只输出要发给她的那一句话（不要任何前缀、不要解释、不要加标题）\n"
+    )
+    body = {
+        "model": _get_chat_model(),
+        "messages": [{"role": "user", "content": user_prompt}],
+        "stream": False,
+    }
+    headers = {"Content-Type": "application/json", "X-Window-Id": window_id}
+    try:
+        r = requests.post(url, headers=headers, json=body, timeout=120)
+        if r.status_code != 200:
+            return ProactiveDecision(False, "", f"gateway_status={r.status_code}")
+        data = r.json() if r.content else None
+        msg = (data or {}).get("choices") and (data.get("choices") or [{}])[0].get("message") or {}
+        content = (msg or {}).get("content")
+        text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
+        if not text:
+            return ProactiveDecision(False, "", "empty_reply")
+        if text == no_token:
+            return ProactiveDecision(False, "", "no_contact")
+        return ProactiveDecision(True, text, "contact")
+    except Exception as e:
+        return ProactiveDecision(False, "", f"exception={e}")
+
+
+def proactive_tick(target_user_id: int = 0) -> dict:
+    """
+    执行一次调度 tick。
+    返回结构化结果，方便日志/测试。
+    """
+    uid = int(target_user_id or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if uid <= 0:
+        return {"ok": False, "error": "missing_target_user_id"}
+
+    # 北京时间
+    now_iso = now_beijing_iso()
+    now_dt = parse_iso_to_beijing(now_iso)
+    if not now_dt:
+        return {"ok": False, "error": "time_parse_failed"}
+
+    if _is_in_quiet_hours(now_dt):
+        return {"ok": True, "quiet": True, "sent": False, "now": now_iso}
+
+    last_iso = r2_store.get_last_proactive_contact_at()
+    hours = _hours_since_last(last_iso, now_dt)
+    p = _probability(hours)
+    hit = random.random() < p
+    out = {"ok": True, "quiet": False, "sent": False, "now": now_iso, "last": last_iso, "hours": hours, "p": p, "hit": hit}
+    if not hit:
+        return out
+
+    window_id = f"tg_{uid}"
+    decision = _ask_du_should_contact(window_id=window_id, hours_since_last=hours)
+    out["du_reason"] = decision.reason
+    if not decision.should_send or not decision.text.strip():
+        return out
+
+    ok = send_message_to_user(uid, decision.text.strip())
+    out["sent"] = bool(ok)
+    out["text_preview"] = (decision.text.strip()[:120] + "…") if len(decision.text.strip()) > 120 else decision.text.strip()
+    if ok:
+        r2_store.save_last_proactive_contact_at(now_iso)
+    return out
+
+
+def run_scheduler_loop():
+    """常驻循环：按 interval 跑 proactive_tick。"""
+    if not TELEGRAM_PROACTIVE_ENABLED:
+        logger.warning("主动发消息调度未开启（TELEGRAM_PROACTIVE_ENABLED!=1），直接退出")
+        return
+    interval_min = max(1, int(TELEGRAM_PROACTIVE_INTERVAL_MINUTES or 30))
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    logger.info("主动发消息调度启动 interval_min=%s target_user_id=%s quiet=%s-%s", interval_min, uid, TELEGRAM_PROACTIVE_QUIET_START_HM, TELEGRAM_PROACTIVE_QUIET_END_HM)
+    while True:
+        try:
+            result = proactive_tick(uid)
+            logger.info("主动发消息 tick result=%s", result)
+        except Exception as e:
+            logger.exception("主动发消息 tick 异常: %s", e)
+        time.sleep(interval_min * 60)

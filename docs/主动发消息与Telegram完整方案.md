@@ -60,6 +60,17 @@
 - 每次「实际通过 Telegram 发出主动消息」后更新该时间。
 - 用户**在任意端（RikkaHub / Telegram）回复**时，可不更新该时间（仅「渡主动发」才更新），这样概率只随「距渡上次主动」增长。
 
+#### 2.5.1 本仓库落地（已实现）
+
+- 配置（`.env`）：
+  - `TELEGRAM_PROACTIVE_ENABLED=1`
+  - `TELEGRAM_PROACTIVE_TARGET_USER_ID=你的telegram_user_id`
+  - 以及 `TELEGRAM_GATEWAY_URL`、`TELEGRAM_BOT_TOKEN`
+- 启动调度器：
+  - `python scripts/run_telegram_proactive.py`
+- 上次主动联系时间存储：
+  - R2：`global/last_proactive_contact_at.txt`（北京时间 ISO）
+
 ### 2.6 日志
 
 - 每次调度：时间、是否在允许时段、距上次联系时长、本次概率 P、掷骰结果（命中/未命中）。

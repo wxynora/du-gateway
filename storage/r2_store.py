@@ -31,6 +31,8 @@ R2_KEY_CORE_CACHE = "core_cache/pending.json"
 R2_KEY_NOTEBOOK = "notebook/entries.json"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
 R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
+# 主动发消息：上一次成功主动联系的时间（北京时间 ISO）
+R2_KEY_LAST_PROACTIVE_CONTACT_AT = "global/last_proactive_contact_at.txt"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
@@ -437,6 +439,40 @@ def has_window_history(window_id: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def get_last_proactive_contact_at() -> Optional[str]:
+    """读取上次主动联系时间（北京时间 ISO）。未配置 R2 或不存在则返回 None。"""
+    client = _s3_client()
+    if not client:
+        return None
+    try:
+        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_KEY_LAST_PROACTIVE_CONTACT_AT)
+        v = resp["Body"].read().decode("utf-8").strip()
+        return v or None
+    except Exception:
+        return None
+
+
+def save_last_proactive_contact_at(iso_str: str) -> bool:
+    """保存上次主动联系时间（覆盖）。多窗口写同一 key 时加锁。"""
+    client = _s3_client()
+    if not client:
+        return False
+    s = (iso_str or "").strip()
+    if not s:
+        return False
+    with _global_write_lock:
+        try:
+            client.put_object(
+                Bucket=R2_BUCKET_NAME,
+                Key=R2_KEY_LAST_PROACTIVE_CONTACT_AT,
+                Body=s.encode("utf-8"),
+                ContentType="text/plain",
+            )
+            return True
+        except Exception:
+            return False
 
 
 # ---------- 动态层 current.json ----------
