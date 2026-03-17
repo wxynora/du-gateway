@@ -5,6 +5,7 @@ import logging
 import random
 import threading
 import time
+import re
 from typing import Optional
 
 import requests
@@ -33,6 +34,16 @@ _BUF_LOCK = threading.Lock()
 _INPUT_BUFFERS: dict[int, dict] = {}
 _CTX_LOCK = threading.Lock()
 _CONTEXT_MESSAGES: dict[int, list[dict]] = {}
+
+# Telegram 端的输出风格约束（只影响 Telegram，不影响 RikkaHub）
+_TELEGRAM_STYLE_SYSTEM = (
+    "你正在通过 Telegram 和辛玥聊天。请遵守以下输出格式要求：\n"
+    "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"
+    "2) 不要输出分割线（例如 ---、———、***）。\n"
+    "3) 不要使用 Markdown 强调符号 * 或 **（Telegram 会显得很奇怪）。\n"
+    "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji。\n"
+    "5) 允许自然分段，但不要为了格式刻意堆很多空行。\n"
+)
 
 
 def _fetch_gateway_first_model() -> Optional[str]:
@@ -198,6 +209,42 @@ def _split_reply_text(text: str) -> list[str]:
     return [x for x in (s.strip() for s in out) if x]
 
 
+def _sanitize_reply_for_telegram(text: str) -> str:
+    """
+    Telegram 兜底清洗：
+    - 去掉脑内OS段
+    - 去掉分割线
+    - 去掉星号（避免 Markdown）
+    - 去掉 (表情包:xxx) 占位
+    """
+    if not text:
+        return ""
+    t = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # 去掉 (表情包:xxx)
+    t = re.sub(r"\(表情包:[^)]+\)", "", t)
+
+    # 去掉分割线（整行 --- / *** / ——）
+    t = re.sub(r"(?m)^\s*[-\*—]{3,}\s*$\n?", "", t)
+
+    # 去掉脑内OS：从第一处“（脑内OS：”起，到遇到第一个空行或到文本末尾
+    m = re.search(r"（\s*脑内OS\s*：", t)
+    if m and m.start() <= 8:  # 只在开头附近触发，避免正文里提到“脑内OS”被误删
+        after = t[m.start():]
+        cut = re.split(r"\n\s*\n", after, maxsplit=1)
+        if len(cut) == 2:
+            t = (t[:m.start()] + cut[1]).lstrip()
+        else:
+            t = t[:m.start()].strip()
+
+    # 去掉星号（避免 Markdown 强调）
+    t = t.replace("*", "")
+
+    # 收敛多空行
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    return t
+
+
 def _trim_context_messages(msgs: list[dict]) -> list[dict]:
     """只保留最近 N 轮（每轮 user+assistant 两条）。"""
     n_turns = int(TELEGRAM_CONTEXT_LAST_TURNS or 0)
@@ -220,7 +267,8 @@ def _call_gateway_chat(window_id: str, user_id: int, user_text: str) -> Optional
     with _CTX_LOCK:
         history = list(_CONTEXT_MESSAGES.get(user_id) or [])
     history = _trim_context_messages(history)
-    messages = history + [{"role": "user", "content": user_text}]
+    # Telegram 端增加一条风格 system（网关还会在最前面插入 du_core_prompt）
+    messages = [{"role": "system", "content": _TELEGRAM_STYLE_SYSTEM}] + history + [{"role": "user", "content": user_text}]
     body = {
         "model": model,
         "messages": messages,
@@ -249,6 +297,7 @@ def _call_gateway_chat(window_id: str, user_id: int, user_text: str) -> Optional
         if content is None:
             return None
         reply_text = content.strip() if isinstance(content, str) else str(content).strip()
+        reply_text = _sanitize_reply_for_telegram(reply_text)
         # 更新上下文：只缓存 user/assistant（不存 system），下次请求自动带上
         with _CTX_LOCK:
             cur = list(_CONTEXT_MESSAGES.get(user_id) or [])
