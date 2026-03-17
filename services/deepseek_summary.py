@@ -11,7 +11,20 @@ logger = get_logger(__name__)
 def build_summary_prompt(current_summary: str, recent_4_rounds: list) -> str:
     """拼出实时层总结任务的 prompt（渡的回忆：分区 + 规则 + 小本本）。"""
     rounds_text = ""
+    last_bucket = ""
     for r in recent_4_rounds:
+        # 为避免「昨晚的事」和「今天」混在一起：按北京时间给每段对话加时间段标记（同一时间段不重复）
+        try:
+            from utils.time_aware import parse_iso_to_beijing, get_time_period, get_date_only
+
+            dt = parse_iso_to_beijing(r.get("timestamp"))
+            if dt is not None:
+                bucket = f"{get_date_only(dt)} {get_time_period(dt)}"
+                if bucket != last_bucket:
+                    rounds_text += f"（{bucket}）\n"
+                    last_bucket = bucket
+        except Exception:
+            pass
         msgs = r.get("messages", [])
         for m in msgs:
             role = m.get("role", "unknown")

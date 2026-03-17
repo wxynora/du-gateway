@@ -329,10 +329,33 @@ def _extract_keywords(text: str) -> list:
         return []
     # 按空格、常见标点分词，过滤过短
     parts = re.split(r"[\s,，。！？、；：]+", text)
+    stopwords = {
+        "好的",
+        "可以",
+        "行吧",
+        "行的",
+        "嗯嗯",
+        "哈哈",
+        "收到",
+        "知道了",
+        "明白了",
+        "没事",
+        "谢谢",
+        "好的呀",
+        "好的呢",
+    }
     keywords = []
     for p in parts:
         p = p.strip()
-        if len(p) >= 2:  # 至少 2 字符
+        if len(p) < 2:
+            continue
+        if p in stopwords:
+            continue
+        # 太长的整句不当关键词（避免把整段当一个词匹配过宽）
+        if len(p) > 24:
+            continue
+        # 至少 2 字符
+        if len(p) >= 2:
             keywords.append(p)
     return list(set(keywords))
 
@@ -407,6 +430,9 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         for mem in recalled:
             scored.append((0, _memory_weight(mem), mem))
     else:
+        # 没有可用关键词时，不做关键词匹配（避免 relevance 全为 0 时退化成“按权重乱塞”）
+        if not keywords:
+            return body
         # 相关性：关键词在 content 中出现次数
         for mem in memories:
             content = (mem.get("content") or "").lower()
@@ -692,10 +718,13 @@ def step_archive_and_maybe_summary(
     from services.notebook_gateway import extract_entries_from_round, save_entry
     for content in extract_entries_from_round(round_messages):
         save_entry(content)
+    from utils.time_aware import now_beijing_iso
+
     existing = r2_store.get_conversation_rounds(window_id, last_n=1000)
     round_index = len(existing) + 1
-    r2_store.append_conversation_round(window_id, round_index, round_messages)
-    all_rounds = existing + [{"index": round_index, "messages": round_messages}]
+    ts = now_beijing_iso()
+    r2_store.append_conversation_round(window_id, round_index, round_messages, timestamp=ts)
+    all_rounds = existing + [{"index": round_index, "timestamp": ts, "messages": round_messages}]
     r2_store.update_latest_4_rounds_global(all_rounds[-4:])
     # 实时层：每 4 轮 → DS 总结成「渡的回忆」（第一人称、详细版）
     if round_index % SUMMARY_EVERY_N_ROUNDS == 0:

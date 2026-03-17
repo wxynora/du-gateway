@@ -1,5 +1,8 @@
 # 聊天代理：统一走完整管道（清洗、注入、转发、存档），无开头过滤
 import json
+import queue
+import threading
+import time
 import requests
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
@@ -163,7 +166,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
                 for line in r.iter_lines():
                     if line is not None:
                         if not first_chunk_logged and line.startswith(b"data:") and len(line) > 5:
-                            logger.info("流式收到首包（上游已开始推流）")
+                            logger.debug("流式收到首包（上游已开始推流）")
                             first_chunk_logged = True
                         if line.startswith(b"data: ") and b"[DONE]" not in line:
                             last_data_line = line
@@ -176,11 +179,11 @@ def _stream_forward_to_ai(body: dict, headers: dict):
                         j = json.loads(last_data_line[6:].strip().decode("utf-8", errors="ignore"))
                         fr = (j.get("choices") or [{}])[0].get("finish_reason")
                         if fr is not None and fr != "":
-                            logger.info("流式上游结束 finish_reason=%s（stop=正常 length=max_tokens截断）", fr)
+                            logger.debug("流式上游结束 finish_reason=%s（stop=正常 length=max_tokens截断）", fr)
                         else:
-                            logger.info("流式上游结束 finish_reason=null或未提供（可能异常中断）")
+                            logger.debug("流式上游结束 finish_reason=null或未提供（可能异常中断）")
                     except Exception:
-                        logger.info("流式上游结束 末包解析失败，无法读取 finish_reason")
+                        logger.debug("流式上游结束 末包解析失败，无法读取 finish_reason")
                 return
             last_err = f"上游 HTTP {r.status_code}"
         except Exception as e:
@@ -212,18 +215,36 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             pass
 
     if not body.get("tools"):
-        # 无工具：原样边收边发，顺带收集 content 用于 R2
+        # 无工具：用「生产者线程+队列」解耦「读上游」和「发客户端」，避免发客户端慢拖累读上游导致上游断流
         data_chunk_count = 0
+        stream_start = time.time()
+        chunk_queue = queue.Queue()
+
+        def _producer():
+            try:
+                for chunk in _stream_forward_to_ai(body, headers):
+                    _collect_content_from_chunk(chunk)
+                    chunk_queue.put(chunk)
+                chunk_queue.put(None)
+            except Exception as e:
+                logger.warning("流式生产异常 %s", e)
+                chunk_queue.put(None)
+
+        t = threading.Thread(target=_producer, daemon=True)
+        t.start()
         try:
-            for chunk in _stream_forward_to_ai(body, headers):
-                _collect_content_from_chunk(chunk)
+            while True:
+                chunk = chunk_queue.get()
+                if chunk is None:
+                    break
                 if chunk.startswith(b"data:") and len(chunk) > 5:
                     data_chunk_count += 1
                 yield chunk
         finally:
             full_content = "".join(content_parts)
-            # 方便排查丢 chunk：收集长度=网关从上游收齐的正文；data 块数=网关发给客户端的 SSE 条数
-            logger.info("本轮流式回复收集长度约 %s 字符，共转发 %s 个 data 块", len(full_content), data_chunk_count)
+            stream_sec = time.time() - stream_start
+            # 若「流式持续时长」总是差不多（如 10–20s）而字数越来越短，可能是上游按时长限流
+            logger.debug("本轮流式回复收集长度约 %s 字符，共转发 %s 个 data 块，流式持续约 %.1f 秒", len(full_content), data_chunk_count, stream_sec)
             if not is_failed_response(full_content) and full_content.strip():
                 msg = {"role": "assistant", "content": full_content}
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None

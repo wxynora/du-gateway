@@ -117,7 +117,7 @@ def _conversations_key_for_date(window_id: str, date: str) -> str:
     return f"conversations/{date}/window_{safe_id}.json"
 
 
-def append_conversation_round(window_id: str, round_index: int, messages: list) -> bool:
+def append_conversation_round(window_id: str, round_index: int, messages: list, timestamp: str = "") -> bool:
     """
     追加一轮对话原文。
     ① 写 windows/<id>/conversation.json（主存，总结/读轮用）
@@ -134,7 +134,8 @@ def append_conversation_round(window_id: str, round_index: int, messages: list) 
         existing = _read_json(client, key)
         if existing is None:
             existing = {"rounds": []}
-        round_entry = {"index": round_index, "messages": messages}
+        ts = (timestamp or "").strip() or now_beijing_iso()
+        round_entry = {"index": round_index, "timestamp": ts, "messages": messages}
         existing.setdefault("rounds", []).append(round_entry)
         _write_json(client, key, existing)
         # 按日期备份到 conversations/（文档十一：原文存档）

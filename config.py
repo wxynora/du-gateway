@@ -154,14 +154,20 @@ FAILED_RESPONSE_MIN_LENGTH = int(os.environ.get("FAILED_RESPONSE_MIN_LENGTH", "1
 _FAILED_KEYWORDS_STR = os.environ.get("FAILED_RESPONSE_ERROR_KEYWORDS", "error,出错,失败,超时,抱歉，我无法")
 FAILED_RESPONSE_ERROR_KEYWORDS = [k.strip() for k in _FAILED_KEYWORDS_STR.split(",") if k.strip()]
 
-# 动态层注入：最多取 N 条记忆注入（0=不注入不调检索；默认 3）
-DYNAMIC_MEMORY_TOP_N = int(os.environ.get("DYNAMIC_MEMORY_TOP_N", "3"))
+# 动态层注入：最多取 N 条记忆注入（0=不注入不调检索；默认 5）
+DYNAMIC_MEMORY_TOP_N = int(os.environ.get("DYNAMIC_MEMORY_TOP_N", "5"))
 # 动态层：记忆有效天数，超期参与权重衰减
 DYNAMIC_MEMORY_DAYS_VALID = 7
 
-# 记忆注入 token 上限（总结+动态层合计，粗略按 1 中文字≈0.5 token）
-# 建议 2500–4000：省 API 费用且尽量保证渡的记忆连续
-MEMORY_INJECTION_MAX_TOKENS = int(os.environ.get("MEMORY_INJECTION_MAX_TOKENS", "3000"))
+# 记忆注入上限（总结+动态层合计）。
+# 默认按“字符数”控制：窗口记忆总结注入量与 R2 中 summary 上限是一套（约 8000 字符）。
+# tokens 预算用于粗略估算与截断（中文为主时 1 字≈0.5 token）。
+MEMORY_INJECTION_MAX_CHARS = int(os.environ.get("MEMORY_INJECTION_MAX_CHARS", "8000"))
+_mem_tokens_env = os.environ.get("MEMORY_INJECTION_MAX_TOKENS", "").strip()
+if _mem_tokens_env:
+    MEMORY_INJECTION_MAX_TOKENS = int(_mem_tokens_env)
+else:
+    MEMORY_INJECTION_MAX_TOKENS = max(1, int(MEMORY_INJECTION_MAX_CHARS * 0.5))
 # 其中总结占比例（余下给动态层）
 MEMORY_SUMMARY_TOKEN_RATIO = float(os.environ.get("MEMORY_SUMMARY_TOKEN_RATIO", "0.6"))
 
