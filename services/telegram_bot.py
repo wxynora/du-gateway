@@ -118,6 +118,27 @@ def _split_reply_text(text: str) -> list[str]:
     if not t:
         return []
 
+    # 有换行：优先按换行切（短信感），避免渡一整段糊在一起
+    if "\n" in t:
+        out: list[str] = []
+
+        def _flush_piece(piece: str):
+            piece = (piece or "").strip()
+            if not piece:
+                return
+            while len(piece) > max_len:
+                out.append(piece[:max_len])
+                piece = piece[max_len:].lstrip()
+            if piece:
+                out.append(piece)
+
+        for line in t.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            _flush_piece(line)
+        return [x for x in (s.strip() for s in out) if x]
+
     paras = [p.strip() for p in t.split("\n\n") if p.strip()]
     out: list[str] = []
     seps = set("。！？.!?")

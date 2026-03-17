@@ -218,8 +218,8 @@ TELEGRAM_CHAT_MODEL = os.environ.get("TELEGRAM_CHAT_MODEL", "").strip()
 TELEGRAM_INPUT_IDLE_SECONDS = float(os.environ.get("TELEGRAM_INPUT_IDLE_SECONDS", "15"))
 # Telegram 输入聚合：单条消息超过多少字符则立即提交（默认 200）
 TELEGRAM_INPUT_IMMEDIATE_CHARS = int(os.environ.get("TELEGRAM_INPUT_IMMEDIATE_CHARS", "200"))
-# Telegram 输出分段：每条发回 Telegram 的最大字符数（<=4096；默认 900 更像短信）
-TELEGRAM_OUTPUT_CHUNK_CHARS = int(os.environ.get("TELEGRAM_OUTPUT_CHUNK_CHARS", "900"))
+# Telegram 输出分段：每条发回 Telegram 的最大字符数（<=4096；默认 100 更短信化）
+TELEGRAM_OUTPUT_CHUNK_CHARS = int(os.environ.get("TELEGRAM_OUTPUT_CHUNK_CHARS", "100"))
 # Telegram 输出分段：每条之间的随机间隔（秒）
 TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS", "0.4"))
 TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS", "1.0"))
