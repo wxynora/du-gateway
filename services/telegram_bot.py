@@ -22,6 +22,7 @@ from config import (
     TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS,
     TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS,
     TELEGRAM_CONTEXT_LAST_TURNS,
+    TELEGRAM_VOICE_REPLY_ENABLED,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,9 @@ _TELEGRAM_STYLE_SYSTEM = (
     "3) 不要使用 Markdown 强调符号 * 或 **（Telegram 会显得很奇怪）。\n"
     "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji。\n"
     "5) 允许自然分段，但不要为了格式刻意堆很多空行。\n"
+    "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。\n"
+    "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。\n"
+    "   - 如果你不想发语音，就不要输出 <voice> 标签。\n"
 )
 
 
@@ -245,6 +249,23 @@ def _sanitize_reply_for_telegram(text: str) -> str:
     return t
 
 
+def _extract_voice_tag(text: str) -> tuple[str, str]:
+    """
+    提取 <voice>...</voice>。
+    返回 (clean_text, voice_text)。若没有则 voice_text=""。
+    """
+    if not text:
+        return "", ""
+    m = re.search(r"<voice>([\s\S]*?)</voice>", text, flags=re.IGNORECASE)
+    if not m:
+        return text, ""
+    voice_text = (m.group(1) or "").strip()
+    clean = (text[: m.start()] + text[m.end() :]).strip()
+    # 收敛多空行
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    return clean, voice_text
+
+
 def _trim_context_messages(msgs: list[dict]) -> list[dict]:
     """只保留最近 N 轮（每轮 user+assistant 两条）。"""
     n_turns = int(TELEGRAM_CONTEXT_LAST_TURNS or 0)
@@ -345,6 +366,22 @@ def send_message(chat_id: int, text: str) -> bool:
         return False
 
 
+def send_voice(chat_id: int, audio_bytes: bytes, filename: str = "voice.mp3") -> bool:
+    """发送语音消息（Telegram sendVoice）。"""
+    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/sendVoice"
+    try:
+        files = {"voice": (filename, audio_bytes, "audio/mpeg")}
+        data = {"chat_id": chat_id}
+        r = requests.post(url, data=data, files=files, timeout=60)
+        if r.status_code != 200:
+            logger.warning("sendVoice 失败 chat_id=%s status=%s %s", chat_id, r.status_code, (r.text or "")[:200])
+            return False
+        return True
+    except requests.RequestException as e:
+        logger.warning("sendVoice 异常 chat_id=%s: %s", chat_id, e)
+        return False
+
+
 def send_chat_action(chat_id: int, action: str = "typing") -> bool:
     """发送 chat action（如 typing）用于“正在输入中…”指示器。"""
     url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/sendChatAction"
@@ -413,7 +450,25 @@ def process_message(chat_id: int, user_id: int, text: str) -> bool:
         stop.set()
     if reply is None:
         reply = "暂时没连上渡，稍后再试哦～"
-    return send_message_segmented(chat_id=chat_id, text=reply)
+    # 解析语音标签
+    reply_clean, voice_text = _extract_voice_tag(reply)
+    reply_clean = _sanitize_reply_for_telegram(reply_clean)
+
+    # 先发文字（短信分段）
+    ok_text = send_message_segmented(chat_id=chat_id, text=reply_clean) if reply_clean else True
+
+    # 再按需发语音
+    if TELEGRAM_VOICE_REPLY_ENABLED and voice_text:
+        try:
+            from services.minimax_tts import tts_to_audio_bytes
+
+            audio = tts_to_audio_bytes(voice_text)
+            if audio:
+                send_chat_action(chat_id=int(chat_id), action="record_voice")
+                send_voice(chat_id=int(chat_id), audio_bytes=audio, filename="du.mp3")
+        except Exception:
+            pass
+    return ok_text
 
 
 def _schedule_flush_locked(user_id: int):

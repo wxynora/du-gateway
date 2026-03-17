@@ -239,3 +239,20 @@ TELEGRAM_PROACTIVE_BASE_P = float(os.environ.get("TELEGRAM_PROACTIVE_BASE_P", "0
 TELEGRAM_PROACTIVE_K_PER_HOUR = float(os.environ.get("TELEGRAM_PROACTIVE_K_PER_HOUR", "0.03"))
 # 渡决策标记：不联系时必须只输出该串
 TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN = os.environ.get("TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN", "NO_CONTACT").strip() or "NO_CONTACT"
+
+# MiniMax TTS（可选，用于 Telegram 语音回复）
+MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "").strip()
+MINIMAX_T2A_URL = os.environ.get("MINIMAX_T2A_URL", "https://api.minimaxi.com/v1/t2a_v2").strip()
+MINIMAX_T2A_MODEL = os.environ.get("MINIMAX_T2A_MODEL", "speech-2.8-hd").strip()
+MINIMAX_VOICE_ID = os.environ.get("MINIMAX_VOICE_ID", "male-qn-qingse").strip()
+MINIMAX_VOICE_SPEED = float(os.environ.get("MINIMAX_VOICE_SPEED", "1"))
+MINIMAX_VOICE_VOL = float(os.environ.get("MINIMAX_VOICE_VOL", "1"))
+MINIMAX_VOICE_PITCH = float(os.environ.get("MINIMAX_VOICE_PITCH", "0"))
+MINIMAX_VOICE_EMOTION = os.environ.get("MINIMAX_VOICE_EMOTION", "happy").strip()
+MINIMAX_AUDIO_SAMPLE_RATE = int(os.environ.get("MINIMAX_AUDIO_SAMPLE_RATE", "32000"))
+MINIMAX_AUDIO_BITRATE = int(os.environ.get("MINIMAX_AUDIO_BITRATE", "128000"))
+MINIMAX_AUDIO_FORMAT = os.environ.get("MINIMAX_AUDIO_FORMAT", "mp3").strip()
+MINIMAX_AUDIO_CHANNEL = int(os.environ.get("MINIMAX_AUDIO_CHANNEL", "1"))
+
+# Telegram 语音回复开关：允许渡用 <voice>...</voice> 触发发送语音
+TELEGRAM_VOICE_REPLY_ENABLED = os.environ.get("TELEGRAM_VOICE_REPLY_ENABLED", "1").strip().lower() in ("1", "true", "yes")
