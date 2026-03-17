@@ -213,3 +213,16 @@ TELEGRAM_GATEWAY_URL = os.environ.get("TELEGRAM_GATEWAY_URL", "http://127.0.0.1:
 TELEGRAM_CHAT_PATH = os.environ.get("TELEGRAM_CHAT_PATH", "/v1/chat/completions").strip()
 # Bot 请求网关时使用的模型（留空则用 GATEWAY_MODELS 第一个，再否则 gpt-4）
 TELEGRAM_CHAT_MODEL = os.environ.get("TELEGRAM_CHAT_MODEL", "").strip()
+
+# Telegram 输入聚合：用户停止输入多少秒后才合并提交到网关（默认 15 秒）
+TELEGRAM_INPUT_IDLE_SECONDS = float(os.environ.get("TELEGRAM_INPUT_IDLE_SECONDS", "15"))
+# Telegram 输入聚合：单条消息超过多少字符则立即提交（默认 200）
+TELEGRAM_INPUT_IMMEDIATE_CHARS = int(os.environ.get("TELEGRAM_INPUT_IMMEDIATE_CHARS", "200"))
+# Telegram 输出分段：每条发回 Telegram 的最大字符数（<=4096；默认 900 更像短信）
+TELEGRAM_OUTPUT_CHUNK_CHARS = int(os.environ.get("TELEGRAM_OUTPUT_CHUNK_CHARS", "900"))
+# Telegram 输出分段：每条之间的随机间隔（秒）
+TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS", "0.4"))
+TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS", "1.0"))
+
+# Telegram 上下文缓存：每次请求网关时携带最近 N 轮（user+assistant=一轮两条消息），默认 4
+TELEGRAM_CONTEXT_LAST_TURNS = int(os.environ.get("TELEGRAM_CONTEXT_LAST_TURNS", "4"))
