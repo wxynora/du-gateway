@@ -48,6 +48,7 @@ BTN_TODO_ADD = "➕ Todo：新增"
 BTN_TODO_DONE = "☑️ Todo：完成"
 BTN_TODO_DEL = "🗑️ Todo：删除"
 BTN_TODO_CLEAR = "🧼 Todo：清空全部"
+CMD_TODO = "/todo"
 
 
 def _todo_keyboard() -> dict:
@@ -497,6 +498,7 @@ def _set_my_commands() -> bool:
             {"command": "note", "description": "设置/覆盖置顶便签：/note 内容"},
             {"command": "note_show", "description": "查看当前置顶便签"},
             {"command": "note_clear", "description": "清空置顶便签"},
+            {"command": "todo", "description": "显示 Todo 按钮键盘"},
         ]
     }
     try:
@@ -901,6 +903,12 @@ def run_polling():
                     continue
                 if not text:
                     # 其他非文字（如纯语音）：暂不处理
+                    continue
+                # /start 或 /todo：强制发一条带 Todo 键盘的消息，覆盖旧键盘
+                cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
+                if cmd0 in ("/start", CMD_TODO):
+                    _set_state(int(user_id), None)
+                    _send_with_keyboard(int(chat_id), "Todo 键盘已就绪。需要做什么？")
                     continue
                 # Todo 按钮与交互（不进入聊天管道）
                 if _handle_todo_ui(chat_id=int(chat_id), user_id=int(user_id), text=text):
