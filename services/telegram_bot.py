@@ -591,11 +591,18 @@ def run_polling():
                 chat_id = msg.get("chat", {}).get("id")
                 from_user = msg.get("from") or {}
                 user_id = from_user.get("id")
+                if chat_id is None or user_id is None:
+                    continue
                 text = (msg.get("text") or "").strip()
                 if not text:
-                    # 后续可在此处理 voice/photo 等
-                    continue
-                if chat_id is None or user_id is None:
+                    # 纯图片/语音等：至少给个回复，避免「没反应」
+                    if msg.get("photo"):
+                        if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
+                            from utils.time_aware import now_beijing_iso
+                            from storage import r2_store
+                            r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+                        send_message(chat_id, "收到图片啦～我暂时还看不懂图片，发文字给我吧。")
+                    # 后续可在此处理 voice 等
                     continue
                 logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
                 # 若是主动消息目标用户，更新「最近活动时间」，供 proactive 判定「正在聊天时不主动发」

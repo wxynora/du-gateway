@@ -344,6 +344,27 @@ def step_inject_summary(body: dict, window_id: str) -> dict:
     return body
 
 
+def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
+    """
+    当请求不是来自 Telegram（window_id 为空或不以 tg_ 开头）时，注入「当前是在 RikkaHub」提醒。
+    一直提醒，实现简单。
+    """
+    if not body or not isinstance(body.get("messages"), list):
+        return body
+    if window_id and str(window_id).strip().startswith("tg_"):
+        return body
+    body = copy.deepcopy(body)
+    messages = body["messages"]
+    inject = "\n\n【当前是在 RikkaHub 和渡聊天】"
+    for msg in messages:
+        if (msg.get("role") or "").lower() == "system":
+            msg["content"] = (msg.get("content") or "") + inject
+            break
+    else:
+        messages.insert(0, {"role": "system", "content": inject.strip()})
+    return body
+
+
 def _extract_keywords(text: str) -> list:
     """从当前对话文本中提取简单关键词（用于匹配动态层）。"""
     if not text or not isinstance(text, str):

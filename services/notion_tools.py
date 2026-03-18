@@ -464,6 +464,11 @@ def execute_tool(name: str, arguments: dict) -> str:
         if name == "notion_diary_create":
             if not NOTION_EXCHANGE_DIARY_DATABASE_ID:
                 return "未配置交换日记数据库"
+            if not isinstance(arguments, dict):
+                logger.warning("notion_diary_create arguments 不是 dict，类型=%s", type(arguments).__name__)
+                arguments = {}
+            # 排查「渡说都写了但报至少填一个」：打工具入参和解析结果，便于看 Notion 日志
+            logger.info("notion_diary_create 入参 keys=%s", list(arguments.keys()))
             name_to_id, _, err = notion_client.get_database_schema(NOTION_EXCHANGE_DIARY_DATABASE_ID)
             if err:
                 return json.dumps({"error": str(err)}, ensure_ascii=False)
@@ -472,6 +477,7 @@ def execute_tool(name: str, arguments: dict) -> str:
             body = (arguments.get("正文") or arguments.get("content") or arguments.get("body") or "").strip()
             creator = (arguments.get("创建者") or arguments.get("creator") or "渡").strip()
             emoji = (arguments.get("心情emoji") or arguments.get("emoji") or "").strip()
+            logger.info("notion_diary_create 解析后 title_len=%s body_len=%s title_preview=%s", len(title), len(body), (title or "")[:80])
             if not title and not body:
                 return "标题和正文至少填一个"
             # 解析「标题」「正文」对应的 Notion 属性 id（数据库列名可能是中文或英文）

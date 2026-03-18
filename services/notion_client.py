@@ -1,4 +1,5 @@
 # Notion API：通过网关对 Notion 的读写删改（CRUD）
+import logging
 import os
 import time
 from typing import Any, Optional
@@ -6,6 +7,8 @@ from typing import Any, Optional
 import requests
 
 from config import NOTION_API_KEY, NOTION_VERSION
+
+logger = logging.getLogger(__name__)
 
 BASE = "https://api.notion.com/v1"
 HEADERS = {
@@ -38,6 +41,7 @@ def _req(method: str, path: str, json_data: Optional[dict] = None, params: Optio
             else:
                 return None, {"error": f"Unsupported method: {method}"}
             if r.status_code >= 400:
+                logger.warning("Notion API 错误 method=%s path=%s status=%s body=%s", method, path, r.status_code, (r.text or "")[:1000])
                 return None, {"error": r.text, "status": r.status_code}
             return (r.json() if r.content else None), None
         except _NOTION_RETRY_EXCEPTIONS as e:
