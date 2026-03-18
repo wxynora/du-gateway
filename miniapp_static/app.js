@@ -7,7 +7,7 @@ if (tg) {
 }
 
 const state = {
-  tab: "overview", // overview | logs | memory | windows
+  tab: "logs", // logs | windows(思维链)
   initData: tg?.initData || "",
   logPaused: false,
   logLines: [],
@@ -17,6 +17,7 @@ const state = {
   rounds: [],
   coreCache: null,
   notebook: null,
+  upstreams: null,
 };
 
 function el(tag, attrs = {}, children = []) {
@@ -75,6 +76,110 @@ async function loadNotebook() {
   state.notebook = j;
 }
 
+async function loadUpstreams() {
+  const r = await apiFetch("/miniapp-api/upstreams");
+  const j = await r.json();
+  if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
+  return j;
+}
+
+function showUpstreamsModal() {
+  // 简化版：直接加载一次并渲染；切换后重新加载即可
+  loadUpstreams()
+    .then((j) => {
+      const overlay = el("div", { class: "fixed inset-0 z-40 bg-black/40" }, []);
+      const modal = el(
+        "div",
+        {
+          class:
+            "fixed inset-x-0 bottom-0 z-50 max-w-xl mx-auto rounded-t-3xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-4 max-h-[80vh] overflow-auto safe-bottom",
+        },
+        [],
+      );
+
+      const title = el("div", { class: "font-semibold" }, ["上游中转站"]);
+      const sub = el(
+        "div",
+        { class: "mt-1 text-xs text-slate-600 dark:text-slate-300" },
+        ["说明：这里切换的是网关的全局默认上游，会影响所有客户端。"],
+      );
+
+      const list = el("div", { class: "mt-3 space-y-2" }, []);
+      const items = j?.items || [];
+      const active = Number(j?.active || 0);
+
+      const closeBtn = el(
+        "button",
+        {
+          class: "text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800",
+          onclick: () => {
+            overlay.remove();
+            modal.remove();
+          },
+        },
+        ["关闭"],
+      );
+
+      modal.appendChild(el("div", { class: "flex items-center justify-between" }, [title, closeBtn]));
+      modal.appendChild(sub);
+      modal.appendChild(list);
+      document.body.appendChild(overlay);
+      document.body.appendChild(modal);
+
+      overlay.addEventListener("click", () => {
+        overlay.remove();
+        modal.remove();
+      });
+
+      items.forEach((it, idx) => {
+        const isActive = idx === active;
+        const row = el(
+          "div",
+          {
+            class:
+              "rounded-xl border border-slate-200 dark:border-slate-800 p-3 " +
+              (isActive ? "bg-slate-100 dark:bg-slate-900" : "bg-transparent"),
+          },
+          [],
+        );
+
+        const head = el("div", { class: "flex items-center justify-between gap-2" }, []);
+        head.appendChild(el("div", { class: "font-medium text-sm" }, [it.name || `upstream${idx + 1}`]));
+        const btn = el(
+          "button",
+          {
+            class: "text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 " + (isActive ? "opacity-50" : ""),
+            onclick: async () => {
+              if (isActive) return;
+              try {
+                const rr = await apiFetch("/miniapp-api/upstreams/active", {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ active: idx }),
+                });
+                const jj = await rr.json();
+                if (!rr.ok || !jj?.ok) throw new Error(jj?.error || `HTTP ${rr.status}`);
+                toast("已切换并生效");
+                overlay.remove();
+                modal.remove();
+              } catch (e) {
+                toast(`切换失败：${e.message || e}`);
+              }
+            },
+          },
+          [isActive ? "当前" : "切换到此"],
+        );
+        head.appendChild(btn);
+        row.appendChild(head);
+        row.appendChild(el("div", { class: "mt-2 text-xs text-slate-600 dark:text-slate-300 break-all" }, [it.url || ""]));
+        list.appendChild(row);
+      });
+    })
+    .catch((e) => {
+      toast(`加载上游失败：${e.message || e}`);
+    });
+}
+
 function renderShell() {
   const root = document.getElementById("app");
   root.innerHTML = "";
@@ -82,27 +187,35 @@ function renderShell() {
   const header = el("div", { class: "sticky top-0 z-20 border-b border-slate-200/70 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-950/80 backdrop-blur" }, [
     el("div", { class: "px-4 pt-4 pb-3 flex items-center justify-between" }, [
       el("div", { class: "font-semibold tracking-tight" }, ["渡 · 躺着运维"]),
-      el(
-        "button",
-        {
-          class:
-            "text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60",
-          onClick: async () => {
-            try {
-              if (state.tab === "overview") await loadStatus();
-              if (state.tab === "windows") await loadWindows();
-              if (state.tab === "memory") {
-                await Promise.all([loadCoreCache(), loadNotebook()]);
-              }
-              toast("已刷新");
-              renderShell();
-            } catch (e) {
-              toast(`刷新失败：${e.message || e}`);
-            }
+      el("div", { class: "flex items-center gap-2" }, [
+        el(
+          "button",
+          {
+            class:
+              "text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60",
+            onClick: () => showUpstreamsModal(),
           },
-        },
-        ["刷新"],
-      ),
+          ["上游"],
+        ),
+        el(
+          "button",
+          {
+            class:
+              "text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60",
+            onClick: async () => {
+              try {
+                // 面板“刷新”只刷新当前 Tab 所需的数据，避免拉取核心缓存/记忆等不在第0版范围内的东西
+                if (state.tab === "windows") await loadWindows();
+                toast("已刷新");
+                renderShell();
+              } catch (e) {
+                toast(`刷新失败：${e.message || e}`);
+              }
+            },
+          },
+          ["刷新"],
+        ),
+      ]),
     ]),
   ]);
 
@@ -127,12 +240,8 @@ function tabBtn(id, label) {
       onClick: () => {
         state.tab = id;
         renderShell();
-        if (id === "overview") {
-          loadStatus().then(renderShell).catch((e) => toast(`加载失败：${e.message || e}`));
-        } else if (id === "windows") {
+        if (id === "windows") {
           loadWindows().then(renderShell).catch((e) => toast(`加载失败：${e.message || e}`));
-        } else if (id === "memory") {
-          Promise.all([loadCoreCache(), loadNotebook()]).then(renderShell).catch((e) => toast(`加载失败：${e.message || e}`));
         }
       },
     },
@@ -144,7 +253,7 @@ function renderBottomNav() {
   return el(
     "div",
     { class: "fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-slate-950/90 backdrop-blur safe-bottom" },
-    [el("div", { class: "max-w-xl mx-auto flex px-2" }, [tabBtn("overview", "概览"), tabBtn("logs", "日志"), tabBtn("memory", "记忆"), tabBtn("windows", "窗口")])],
+    [el("div", { class: "max-w-xl mx-auto flex px-2" }, [tabBtn("logs", "日志"), tabBtn("windows", "思维链")])],
   );
 }
 
@@ -173,9 +282,7 @@ function pill(ok, text) {
 
 function renderTabContent(contentRoot) {
   contentRoot.innerHTML = "";
-  if (state.tab === "overview") return renderOverview(contentRoot);
   if (state.tab === "logs") return renderLogs(contentRoot);
-  if (state.tab === "memory") return renderMemory(contentRoot);
   if (state.tab === "windows") return renderWindows(contentRoot);
 }
 
@@ -660,11 +767,6 @@ function showRoundDetailModal(windowId, round) {
 
 async function boot() {
   renderShell();
-  try {
-    await loadStatus();
-  } catch (e) {
-    toast(`鉴权/加载失败：${e.message || e}`);
-  }
   renderShell();
 }
 
