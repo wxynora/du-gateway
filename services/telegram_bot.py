@@ -15,6 +15,7 @@ import requests
 from config import (
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
+    TELEGRAM_WEBAPP_URL,
     TELEGRAM_CHAT_PATH,
     TELEGRAM_CHAT_MODEL,
     GATEWAY_MODELS,
@@ -42,15 +43,25 @@ BTN_OPS_PANEL = "🛠 运维面板"
 
 def _miniapp_url() -> str:
     """ReplyKeyboard 的 WebApp 入口 URL（必须是公网可访问的完整 URL）。"""
-    base = (TELEGRAM_GATEWAY_URL or "").strip().rstrip("/")
-    return base + "/miniapp" if base else "/miniapp"
+    base = (TELEGRAM_WEBAPP_URL or "").strip().rstrip("/") or (TELEGRAM_GATEWAY_URL or "").strip().rstrip("/")
+    if not base:
+        return ""
+    # Telegram WebApp 按钮强制要求 https，否则 sendMessage 会 400
+    if not base.lower().startswith("https://"):
+        return ""
+    return base + "/miniapp"
 
 
 def _ops_keyboard() -> dict:
     """常驻运维面板键盘（Reply Keyboard）。"""
+    url = _miniapp_url()
     return {
         "keyboard": [
-            [{"text": BTN_OPS_PANEL, "web_app": {"url": _miniapp_url()}}],
+            (
+                [{"text": BTN_OPS_PANEL, "web_app": {"url": url}}]
+                if url
+                else [{"text": "⚠️ 运维面板需要配置 HTTPS 域名"}]
+            ),
         ],
         "resize_keyboard": True,
         # 一次性键盘：点击一次后自动收起，平时不占输入区；需要时用户可点输入框旁的键盘图标再展开
