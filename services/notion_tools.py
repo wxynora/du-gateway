@@ -472,11 +472,17 @@ def execute_tool(name: str, arguments: dict) -> str:
             name_to_id, _, err = notion_client.get_database_schema(NOTION_EXCHANGE_DIARY_DATABASE_ID)
             if err:
                 return json.dumps({"error": str(err)}, ensure_ascii=False)
-            # 兼容模型传中文键或英文键（部分模型会输出 title/content）
-            title = (arguments.get("标题") or arguments.get("title") or "").strip()
-            body = (arguments.get("正文") or arguments.get("content") or arguments.get("body") or "").strip()
-            creator = (arguments.get("创建者") or arguments.get("creator") or "渡").strip()
-            emoji = (arguments.get("心情emoji") or arguments.get("emoji") or "").strip()
+            # 兼容模型传中文键或英文键；部分上游会把中文 key 转成 __/___ 等，按日志 keys=['__','___','___1','__emoji'] 做兼容
+            def _get_arg(*keys):
+                for k in keys:
+                    v = arguments.get(k)
+                    if v is not None and str(v).strip():
+                        return str(v).strip()
+                return ""
+            title = _get_arg("标题", "title", "__")
+            body = _get_arg("正文", "content", "body", "___")
+            creator = _get_arg("创建者", "creator", "___1") or "渡"
+            emoji = _get_arg("心情emoji", "emoji", "__emoji")
             logger.info("notion_diary_create 解析后 title_len=%s body_len=%s title_preview=%s", len(title), len(body), (title or "")[:80])
             if not title and not body:
                 return "标题和正文至少填一个"
