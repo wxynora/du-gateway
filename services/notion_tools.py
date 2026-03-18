@@ -467,27 +467,38 @@ def execute_tool(name: str, arguments: dict) -> str:
             name_to_id, _, err = notion_client.get_database_schema(NOTION_EXCHANGE_DIARY_DATABASE_ID)
             if err:
                 return json.dumps({"error": str(err)}, ensure_ascii=False)
-            title = (arguments.get("标题") or "").strip()
-            body = (arguments.get("正文") or "").strip()
-            creator = (arguments.get("创建者") or "渡").strip()
-            emoji = (arguments.get("心情emoji") or "").strip()
+            # 兼容模型传中文键或英文键（部分模型会输出 title/content）
+            title = (arguments.get("标题") or arguments.get("title") or "").strip()
+            body = (arguments.get("正文") or arguments.get("content") or arguments.get("body") or "").strip()
+            creator = (arguments.get("创建者") or arguments.get("creator") or "渡").strip()
+            emoji = (arguments.get("心情emoji") or arguments.get("emoji") or "").strip()
             if not title and not body:
                 return "标题和正文至少填一个"
+            # 解析「标题」「正文」对应的 Notion 属性 id（数据库列名可能是中文或英文）
+            title_prop_id = name_to_id.get("标题") or name_to_id.get("Title") or name_to_id.get("名称")
+            body_prop_id = name_to_id.get("正文") or name_to_id.get("Content") or name_to_id.get("Body") or name_to_id.get("内容")
+            if not title_prop_id and not body_prop_id:
+                return "交换日记数据库里需要有一列叫「标题」或 Title、一列叫「正文」或 Content，请检查 Notion 列名。"
             props = {}
-            if name_to_id.get("标题"):
-                props[name_to_id["标题"]] = _prop_title(title or body[:50])
-            if name_to_id.get("正文"):
-                props[name_to_id["正文"]] = _prop_rich(body)
-            if name_to_id.get("创建者"):
-                props[name_to_id["创建者"]] = _prop_select(creator)
-            if name_to_id.get("心情emoji") and emoji:
-                props[name_to_id["心情emoji"]] = _prop_rich(emoji)
+            if title_prop_id:
+                props[title_prop_id] = _prop_title(title or body[:50])
+            if body_prop_id:
+                props[body_prop_id] = _prop_rich(body)
+            if name_to_id.get("创建者") or name_to_id.get("Creator"):
+                creator_id = name_to_id.get("创建者") or name_to_id.get("Creator")
+                props[creator_id] = _prop_select(creator)
+            if emoji:
+                emoji_id = name_to_id.get("心情emoji") or name_to_id.get("emoji")
+                if emoji_id:
+                    props[emoji_id] = _prop_rich(emoji)
             _, err = notion_client.create_page(
                 parent={"database_id": NOTION_EXCHANGE_DIARY_DATABASE_ID},
                 properties=props,
             )
             if err:
-                return json.dumps({"error": str(err)}, ensure_ascii=False)
+                err_msg = err.get("error", str(err)) if isinstance(err, dict) else str(err)
+                logger.warning("Notion 交换日记写入失败 err=%s", err_msg)
+                return f"Notion 写入失败：{err_msg}"
             return "已写入交换日记。"
 
         if name == "notion_schedule_list":

@@ -169,21 +169,8 @@ def step_trim_messages_if_over_limit(body: dict) -> dict:
     return body
 
 
-def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str) -> dict:
-    """
-    若是新窗口（R2 中无该窗口历史），从 R2 读取全局「最新四轮」注入到请求。
-    注入方式：在 system 或 messages 开头插入一段「近期上下文」。
-    """
-    if not window_id:
-        return body
-    if r2_store.has_window_history(window_id):
-        return body
-    rounds = r2_store.get_latest_4_rounds_global()
-    if not rounds:
-        return body
-    body = copy.deepcopy(body)
-    messages = body.get("messages") or []
-    # 拼成一段文本，插入到第一条 system 消息末尾，若无 system 则插入一条
+def _rounds_to_context_text(rounds: list) -> str:
+    """把 rounds（含 messages 的列表）拼成一段可读的上下文文本。"""
     lines = []
     for r in rounds:
         for m in r.get("messages", []):
@@ -194,8 +181,42 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str) -> di
                     c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
                 )
             lines.append(f"[{role}]: {content}")
-    context = "\n".join(lines)
-    inject = f"\n\n【以下为注入的近期对话上下文（来自其他窗口）】\n{context}\n【以上为注入上下文】"
+    return "\n".join(lines) if lines else ""
+
+
+def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str) -> dict:
+    """
+    新窗口：从 R2 读取全局「最新四轮」注入。
+    已有历史但请求里消息很少（如主动发消息只发一条）：注入该窗口自己的最近四轮（如 Telegram 侧 Last4）。
+    """
+    if not window_id:
+        return body
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    inject_label = ""
+    rounds = []
+
+    if not r2_store.has_window_history(window_id):
+        # 主动发消息只在 Telegram 侧，tg_ 窗口不注入「其他窗口」的全局 4 轮，只带窗口总结 + 本窗口 Last4（无历史则无 Last4）
+        if window_id.startswith("tg_"):
+            rounds = []
+        else:
+            rounds = r2_store.get_latest_4_rounds_global()
+            inject_label = "以下为注入的近期对话上下文（来自其他窗口）"
+    else:
+        # 已有历史且当前请求消息很少（如 proactive 只发 1 条 user）→ 注入本窗口最近 4 轮（Telegram Last4）
+        if len(messages) <= 2:
+            rounds = r2_store.get_conversation_rounds(window_id, last_n=4)
+            inject_label = "以下为注入的本窗口近期对话（Last4 轮）"
+        else:
+            rounds = []
+
+    if not rounds:
+        return body
+    context = _rounds_to_context_text(rounds)
+    if not context:
+        return body
+    inject = f"\n\n【{inject_label}】\n{context}\n【以上为注入上下文】"
     found_system = False
     for i, msg in enumerate(messages):
         if (msg.get("role") or "").lower() == "system":

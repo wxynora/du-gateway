@@ -23,6 +23,7 @@ from config import (
     TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS,
     TELEGRAM_CONTEXT_LAST_TURNS,
     TELEGRAM_VOICE_REPLY_ENABLED,
+    TELEGRAM_PROACTIVE_TARGET_USER_ID,
 )
 
 logger = logging.getLogger(__name__)
@@ -352,7 +353,7 @@ def get_updates(offset: Optional[int] = None) -> dict:
 
 
 def send_message(chat_id: int, text: str) -> bool:
-    """向指定 chat 发送一条文字消息。"""
+    """向指定 chat 发送一条文字消息。HTTP 200 时也检查 body 里 ok，避免 Telegram 返回 200 但未送达（如被拉黑）。"""
     url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
     try:
@@ -360,6 +361,15 @@ def send_message(chat_id: int, text: str) -> bool:
         if r.status_code != 200:
             logger.warning("sendMessage 失败 chat_id=%s status=%s %s", chat_id, r.status_code, r.text[:200])
             return False
+        try:
+            data = r.json() if r.content else {}
+        except (ValueError, requests.exceptions.JSONDecodeError) as e:
+            logger.warning("sendMessage 响应非 JSON chat_id=%s body_preview=%s err=%s", chat_id, (r.text or "")[:150], e)
+            return False
+        if not data.get("ok", True):
+            logger.warning("sendMessage Telegram 未送达 chat_id=%s description=%s", chat_id, data.get("description", ""))
+            return False
+        logger.info("sendMessage 成功 chat_id=%s message_id=%s", chat_id, (data.get("result") or {}).get("message_id"))
         return True
     except requests.RequestException as e:
         logger.warning("sendMessage 异常 chat_id=%s: %s", chat_id, e)
@@ -588,6 +598,11 @@ def run_polling():
                 if chat_id is None or user_id is None:
                     continue
                 logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
+                # 若是主动消息目标用户，更新「最近活动时间」，供 proactive 判定「正在聊天时不主动发」
+                if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
+                    from utils.time_aware import now_beijing_iso
+                    from storage import r2_store
+                    r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
                 append_user_input(chat_id=chat_id, user_id=user_id, text=text)
         except Exception as e:
             logger.exception("轮询处理异常: %s", e)

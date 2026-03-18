@@ -239,6 +239,8 @@ TELEGRAM_PROACTIVE_BASE_P = float(os.environ.get("TELEGRAM_PROACTIVE_BASE_P", "0
 TELEGRAM_PROACTIVE_K_PER_HOUR = float(os.environ.get("TELEGRAM_PROACTIVE_K_PER_HOUR", "0.03"))
 # 渡决策标记：不联系时必须只输出该串
 TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN = os.environ.get("TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN", "NO_CONTACT").strip() or "NO_CONTACT"
+# 若用户在此分钟数内发过消息（正在聊天），则本 tick 不主动发，默认 30 分钟
+TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES = int(float(os.environ.get("TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES", "30") or "30"))
 
 # MiniMax TTS（可选，用于 Telegram 语音回复）
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "").strip()

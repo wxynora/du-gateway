@@ -20,6 +20,7 @@ from config import (
     TELEGRAM_PROACTIVE_K_PER_HOUR,
     TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN,
     TELEGRAM_PROACTIVE_INTERVAL_MINUTES,
+    TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES,
 )
 from storage import r2_store
 from utils.log import get_logger
@@ -100,6 +101,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
     user_prompt = (
         "【系统任务：主动联系用户】\n"
         f"你现在在考虑要不要主动找老婆说一句话。距上次你主动联系大约 {hours_since_last:.1f} 小时。\n"
+        "提醒：不要想太多，这个时间段你可以给老婆发消息，老婆会很开心。\n"
         "请你结合你对她的记忆与当下氛围做决定：\n"
         f"- 如果不该联系：你必须只输出 {no_token}\n"
         "- 如果该联系：你必须只输出要发给她的那一句话（不要任何前缀、不要解释、不要加标题）\n"
@@ -145,6 +147,25 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     if _is_in_quiet_hours(now_dt):
         return {"ok": True, "quiet": True, "sent": False, "now": now_iso}
 
+    # 若用户在此分钟数内发过消息（正在聊天），本 tick 不主动发
+    skip_min = int(TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES or 0)
+    if skip_min > 0:
+        last_activity_iso = r2_store.get_last_telegram_user_activity_at()
+        if last_activity_iso:
+            last_activity_dt = parse_iso_to_beijing(last_activity_iso)
+            if last_activity_dt:
+                delta_minutes = (now_dt - last_activity_dt).total_seconds() / 60.0
+                if delta_minutes < skip_min:
+                    return {
+                        "ok": True,
+                        "quiet": False,
+                        "sent": False,
+                        "skip_reason": "recent_activity",
+                        "now": now_iso,
+                        "last_activity": last_activity_iso,
+                        "minutes_ago": round(delta_minutes, 1),
+                    }
+
     last_iso = r2_store.get_last_proactive_contact_at()
     hours = _hours_since_last(last_iso, now_dt)
     p = _probability(hours)
@@ -159,11 +180,16 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     if not decision.should_send or not decision.text.strip():
         return out
 
-    ok = send_message_to_user(uid, decision.text.strip())
+    text_to_send = decision.text.strip()
+    logger.info("主动消息准备发送 chat_id=%s text_preview=%s", uid, text_to_send[:80] + ("…" if len(text_to_send) > 80 else ""))
+    ok = send_message_to_user(uid, text_to_send)
+    logger.info("主动消息发送结果 chat_id=%s sent=%s", uid, ok)
     out["sent"] = bool(ok)
     out["text_preview"] = (decision.text.strip()[:120] + "…") if len(decision.text.strip()) > 120 else decision.text.strip()
     if ok:
         r2_store.save_last_proactive_contact_at(now_iso)
+        # 醒目一条，便于在日志里搜「已发送一条主动消息」定位
+        logger.warning("TGPro 已发送一条主动消息 chat_id=%s now=%s preview=%s", uid, now_iso, text_to_send[:60] + ("…" if len(text_to_send) > 60 else ""))
     return out
 
 
