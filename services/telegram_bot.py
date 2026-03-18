@@ -370,10 +370,11 @@ def _get_telegram_file_bytes(file_id: str) -> Optional[tuple[bytes, str]]:
         path = (data.get("result") or {}).get("file_path") or ""
         if not path:
             return None
-        download_url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/{path}"
+        # 注意：下载文件要走 /file/bot<TOKEN>/...，不是 /bot<TOKEN>/...
+        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{path}"
         r2 = requests.get(download_url, timeout=30)
         if r2.status_code != 200:
-            logger.warning("下载 Telegram 文件失败 path=%s status=%s", path, r2.status_code)
+            logger.warning("下载 Telegram 文件失败 path=%s status=%s body=%s", path, r2.status_code, (r2.text or "")[:200])
             return None
         mime = "image/jpeg"
         if path.lower().endswith(".png"):
