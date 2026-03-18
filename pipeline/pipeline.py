@@ -365,6 +365,29 @@ def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
     return body
 
 
+def step_inject_tg_pinned_note(body: dict, window_id: str) -> dict:
+    """Telegram 置顶便签：对 tg_ 窗口把便签注入到 system，渡无需调用工具也能看到。"""
+    wid = (window_id or "").strip()
+    if not wid.startswith("tg_"):
+        return body
+    if not body or not isinstance(body.get("messages"), list):
+        return body
+    note = (r2_store.get_tg_pinned_note(wid) or "").strip()
+    if not note:
+        return body
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    inject = f"\n\n【Telegram 置顶便签】\n{note}\n【以上为置顶便签】"
+    for msg in messages:
+        if (msg.get("role") or "").lower() == "system":
+            msg["content"] = (msg.get("content") or "") + inject
+            break
+    else:
+        messages.insert(0, {"role": "system", "content": inject.strip()})
+    body["messages"] = messages
+    return body
+
+
 def _extract_keywords(text: str) -> list:
     """从当前对话文本中提取简单关键词（用于匹配动态层）。"""
     if not text or not isinstance(text, str):
