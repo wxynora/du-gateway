@@ -847,68 +847,73 @@ def run_polling():
             result = data.get("result") or []
             for upd in result:
                 offset = (upd.get("update_id") or 0) + 1
-                msg = upd.get("message")
-                if not msg:
-                    continue
-                chat_id = msg.get("chat", {}).get("id")
-                from_user = msg.get("from") or {}
-                user_id = from_user.get("id")
-                if chat_id is None or user_id is None:
-                    continue
-                text = (msg.get("text") or "").strip()
-                caption = (msg.get("caption") or "").strip()
-                if not text and msg.get("photo"):
-                    # 图片（带或不带 caption）：下载后以多模态发给渡，与 RikkaHub 一致
-                    photos = msg.get("photo") or []
-                    if not photos:
-                        continue
-                    largest = max(photos, key=lambda p: (p.get("width") or 0) * (p.get("height") or 0))
-                    file_id = largest.get("file_id")
-                    if not file_id:
-                        send_message(chat_id, "图片没拿到 file_id，再发一次试试～")
-                        continue
-                    file_result = _get_telegram_file_bytes(file_id)
-                    if not file_result:
-                        send_message(chat_id, "图片下载失败，稍后再试哦～")
-                        continue
-                    img_bytes, mime = file_result
-                    b64 = base64.b64encode(img_bytes).decode("ascii")
-                    data_url = f"data:{mime};base64,{b64}"
-                    if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
-                        from utils.time_aware import now_beijing_iso
-                        from storage import r2_store
-                        r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
-                    logger.info("收到 TG 图片(聚合) user_id=%s chat_id=%s caption_len=%d", user_id, chat_id, len(caption))
-                    # 追加到聚合缓冲：先 text 再 image
-                    with _BUF_LOCK:
-                        if caption:
-                            _append_user_part_locked(chat_id, user_id, {"type": "text", "text": caption})
-                        else:
-                            _append_user_part_locked(chat_id, user_id, {"type": "text", "text": "[图片]"})
-                        _append_user_part_locked(chat_id, user_id, {"type": "image_url", "image_url": {"url": data_url}})
-                        _schedule_flush_locked(user_id)
-                    continue
-                if not text:
-                    # 其他非文字（如纯语音）：暂不处理
-                    continue
-                # /start：强制发一条带 Todo 键盘的消息，覆盖旧键盘
-                cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
-                if cmd0 == "/start":
-                    _set_state(int(user_id), None)
-                    _send_with_keyboard(int(chat_id), "Todo 键盘已就绪。需要做什么？")
-                    continue
-                # Todo 按钮与交互（不进入聊天管道）
-                if _handle_todo_ui(chat_id=int(chat_id), user_id=int(user_id), text=text):
-                    continue
-                logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
-                # 若是主动消息目标用户，更新「最近活动时间」，供 proactive 判定「正在聊天时不主动发」
-                if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
-                    from utils.time_aware import now_beijing_iso
-                    from storage import r2_store
-                    r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
-                append_user_input(chat_id=chat_id, user_id=user_id, text=text)
+                handle_telegram_update(upd)
         except Exception as e:
             logger.exception("轮询处理异常: %s", e)
             time.sleep(5)
         if offset is None:
             time.sleep(1)
+
+
+def handle_telegram_update(upd: dict):
+    """处理一条 Telegram update（供 webhook 与轮询共用）。"""
+    msg = (upd or {}).get("message") or (upd or {}).get("edited_message")
+    if not msg:
+        return
+    chat_id = msg.get("chat", {}).get("id")
+    from_user = msg.get("from") or {}
+    user_id = from_user.get("id")
+    if chat_id is None or user_id is None:
+        return
+
+    text = (msg.get("text") or "").strip()
+    caption = (msg.get("caption") or "").strip()
+
+    # 图片（带或不带 caption）→ 追加到聚合缓冲
+    if (not text) and msg.get("photo"):
+        photos = msg.get("photo") or []
+        if not photos:
+            return
+        largest = max(photos, key=lambda p: (p.get("width") or 0) * (p.get("height") or 0))
+        file_id = largest.get("file_id")
+        if not file_id:
+            send_message(chat_id, "图片没拿到 file_id，再发一次试试～")
+            return
+        file_result = _get_telegram_file_bytes(file_id)
+        if not file_result:
+            send_message(chat_id, "图片下载失败，稍后再试哦～")
+            return
+        img_bytes, mime = file_result
+        b64 = base64.b64encode(img_bytes).decode("ascii")
+        data_url = f"data:{mime};base64,{b64}"
+        if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
+            from utils.time_aware import now_beijing_iso
+            from storage import r2_store
+            r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+        logger.info("收到 TG 图片(聚合) user_id=%s chat_id=%s caption_len=%d", user_id, chat_id, len(caption))
+        with _BUF_LOCK:
+            _append_user_part_locked(chat_id, user_id, {"type": "text", "text": caption or "[图片]"})
+            _append_user_part_locked(chat_id, user_id, {"type": "image_url", "image_url": {"url": data_url}})
+            _schedule_flush_locked(user_id)
+        return
+
+    if not text:
+        return
+
+    # /start：弹出 Todo 键盘（不进入聊天）
+    cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
+    if cmd0 == "/start":
+        _set_state(int(user_id), None)
+        _send_with_keyboard(int(chat_id), "Todo 键盘已就绪。需要做什么？")
+        return
+
+    # Todo 按钮与交互（不进入聊天）
+    if _handle_todo_ui(chat_id=int(chat_id), user_id=int(user_id), text=text):
+        return
+
+    logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
+    if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
+        from utils.time_aware import now_beijing_iso
+        from storage import r2_store
+        r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+    append_user_input(chat_id=chat_id, user_id=user_id, text=text)

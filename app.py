@@ -15,6 +15,7 @@ from flask import Flask, request, jsonify
 from routes.chat import bp as chat_bp
 from routes.admin import bp as admin_bp
 from routes.notion_routes import bp as notion_bp
+from routes.telegram_webhook import bp as telegram_webhook_bp
 
 # 确保数据目录存在
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -23,6 +24,7 @@ app = Flask(__name__)
 app.register_blueprint(chat_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(notion_bp)
+app.register_blueprint(telegram_webhook_bp)
 
 # CORS：RikkaHub 等前端带自定义请求头（如 X-Assistant-Id）时，浏览器会先发 OPTIONS 预检
 CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")

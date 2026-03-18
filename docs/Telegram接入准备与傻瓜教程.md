@@ -10,7 +10,7 @@
 | 4 | **网关已能正常跑** | 本机或云服务器上 `python app.py` 能起来，R2/Notion 等按你现有配置 | ✅ 必须 |
 | 5 | **.env 里已有网关相关配置** | 如 TARGET_AI_URL、TARGET_AI_API_KEY、R2、DeepSeek 等（你平时 RikkaHub 能用就行） | ✅ 必须 |
 | 6 | **Python 环境** | 项目能跑起来的那套（含 `requests`） | ✅ 必须 |
-| 7 | **TELEGRAM_GATEWAY_URL** | Bot 调网关的地址：本机测试填 `http://127.0.0.1:5000`，Bot 和网关同机；异机或公网填实际网关地址 | ✅ 必须 |
+| 7 | **TELEGRAM_GATEWAY_URL** | Bot 调网关的地址：Bot 和网关同机填 `http://127.0.0.1:5000`；公网访问填你的域名，例如 `https://duxy-home.com` | ✅ 必须 |
 | 8 | **TELEGRAM_CHAT_MODEL（可选）** | 想让渡用哪个模型；不填则用 GATEWAY_MODELS 第一个或 gpt-4 | 可选 |
 
 **总结：你必须准备的就是「一个 Telegram 账号 + 一个 Bot Token + 能上 Telegram 的网络 + 已经能跑的网关 + .env 里填好 TELEGRAM 相关项」。**
@@ -48,7 +48,7 @@ TELEGRAM_GATEWAY_URL=http://127.0.0.1:5000
 
 - **本机测试**：网关和 Bot 都在你电脑上跑，就填 `http://127.0.0.1:5000`（端口要和 `app.py` 里的一致，默认 5000）。
 - **Bot 和网关在同一台云服务器**：填 `http://127.0.0.1:5000`。
-- **Bot 在别的机器、要调公网网关**：填你的网关公网地址，例如 `https://your-gateway.com`，不要末尾斜杠。
+- **Bot 在别的机器、要调公网网关**：填你的网关公网地址，例如 `https://duxy-home.com`，不要末尾斜杠。
 
 3. 保存 `.env`。
 

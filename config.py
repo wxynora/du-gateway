@@ -207,6 +207,8 @@ LAST_USER_REPLY_FILE = DATA_DIR / "last_user_reply.json"
 
 # Telegram Bot（接入方案见 docs/主动发消息与Telegram完整方案.md）
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+# Telegram Webhook：网关接收更新的 secret（可选）。若设置了，Telegram 会在请求头携带 X-Telegram-Bot-Api-Secret-Token
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
 # Bot 调网关的 base URL（如 http://127.0.0.1:5000 或公网网关地址）
 TELEGRAM_GATEWAY_URL = os.environ.get("TELEGRAM_GATEWAY_URL", "http://127.0.0.1:5000").strip().rstrip("/")
 # 网关 chat 接口路径（与现有 /v1/chat/completions 一致）
