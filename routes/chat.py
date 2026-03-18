@@ -53,23 +53,32 @@ def _get_window_id_from_request(body: dict) -> str:
 
 def _get_forward_targets(request_model: str = None):
     """
-    返回 [(url, api_key), ...]，按顺序尝试；未配置多目标时用 TARGET_AI_URL + TARGET_AI_API_KEY。
+    返回 [(url, api_key), ...]，按顺序尝试。
+    先加入单独的 TARGET_AI_URL（若有），再加入 TARGET_AI_URLS 列表（同 URL 不重复）。
     多目标时：若 request_model 匹配关键词（claude/opus/4或5/thinking），返回全部用于 fallback；
     否则只返回第一个，避免非匹配模型打到所有中转站。
     """
+    pairs = []
+    seen_urls = set()
+    if TARGET_AI_URL and TARGET_AI_URL.strip():
+        u = TARGET_AI_URL.strip()
+        if u not in seen_urls:
+            pairs.append((u, TARGET_AI_API_KEY or ""))
+            seen_urls.add(u)
     if TARGET_AI_URLS:
         urls = TARGET_AI_URLS
-        keys = TARGET_AI_API_KEYS
+        keys = list(TARGET_AI_API_KEYS)
         while len(keys) < len(urls):
-            keys.append(TARGET_AI_API_KEY)
-        pairs = list(zip(urls, keys[: len(urls)]))
-        if len(pairs) > 1 and request_model is not None:
-            if not model_matches_gateway_keywords(request_model):
-                return [pairs[0]]
-        return pairs
-    if TARGET_AI_URL:
-        return [(TARGET_AI_URL, TARGET_AI_API_KEY)]
-    return []
+            keys.append(TARGET_AI_API_KEY or "")
+        for u, k in zip(urls, keys[: len(urls)]):
+            u = (u or "").strip()
+            if u and u not in seen_urls:
+                pairs.append((u, k or ""))
+                seen_urls.add(u)
+    if len(pairs) > 1 and request_model is not None:
+        if not model_matches_gateway_keywords(request_model):
+            return [pairs[0]]
+    return pairs
 
 
 def _chat_url_to_models_url(chat_url: str) -> str:

@@ -220,12 +220,12 @@ def get_notion_tools_for_inject() -> List[dict]:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "标题": {"type": "string", "description": "日记标题"},
-                            "正文": {"type": "string", "description": "正文内容"},
-                            "心情emoji": {"type": "string", "description": "可选，如 😊"},
-                            "创建者": {"type": "string", "description": "辛玥 或 渡，默认渡", "default": "渡"},
+                            "title": {"type": "string", "description": "日记标题（必填其一）"},
+                            "content": {"type": "string", "description": "正文内容（必填其一）"},
+                            "emoji": {"type": "string", "description": "可选心情，如 😊"},
+                            "creator": {"type": "string", "description": "创建者：渡 或 辛玥，默认渡", "default": "渡"},
                         },
-                        "required": ["标题", "正文"],
+                        "required": ["title", "content"],
                     },
                 },
             },
@@ -472,17 +472,17 @@ def execute_tool(name: str, arguments: dict) -> str:
             name_to_id, _, err = notion_client.get_database_schema(NOTION_EXCHANGE_DIARY_DATABASE_ID)
             if err:
                 return json.dumps({"error": str(err)}, ensure_ascii=False)
-            # 兼容模型传中文键或英文键；部分上游会把中文 key 转成 __/___ 等，按日志 keys=['__','___','___1','__emoji'] 做兼容
+            # schema 已改为英文 key（title/content/creator/emoji）避免渡搞混；兼容旧的中文与 __/___ 等
             def _get_arg(*keys):
                 for k in keys:
                     v = arguments.get(k)
                     if v is not None and str(v).strip():
                         return str(v).strip()
                 return ""
-            title = _get_arg("标题", "title", "__")
-            body = _get_arg("正文", "content", "body", "___")
-            creator = _get_arg("创建者", "creator", "___1") or "渡"
-            emoji = _get_arg("心情emoji", "emoji", "__emoji")
+            title = _get_arg("title", "标题", "__")
+            body = _get_arg("content", "正文", "body", "___")
+            creator = _get_arg("creator", "创建者", "___1") or "渡"
+            emoji = _get_arg("emoji", "心情emoji", "__emoji")
             logger.info("notion_diary_create 解析后 title_len=%s body_len=%s title_preview=%s", len(title), len(body), (title or "")[:80])
             if not title and not body:
                 return "标题和正文至少填一个"
