@@ -59,8 +59,9 @@ def _todo_keyboard() -> dict:
             [{"text": BTN_TODO_CLEAR}],
         ],
         "resize_keyboard": True,
-        "one_time_keyboard": False,
-        "is_persistent": True,
+        # 一次性键盘：点击一次后自动收起，平时不占输入区；需要时用户可点输入框旁的键盘图标再展开
+        "one_time_keyboard": True,
+        "is_persistent": False,
     }
 
 
