@@ -1,12 +1,13 @@
 # Telegram Bot 收发层：收用户消息 → 调网关 chat → 回复发回 Telegram
 # 方案见 docs/主动发消息与Telegram完整方案.md；window_id 约定为 tg_{telegram_user_id}
+import base64
 import json
 import logging
 import random
+import re
 import threading
 import time
-import re
-from typing import Optional
+from typing import Optional, Union
 
 import requests
 
@@ -278,10 +279,10 @@ def _trim_context_messages(msgs: list[dict]) -> list[dict]:
     return msgs[-max_msgs:]
 
 
-def _call_gateway_chat(window_id: str, user_id: int, user_text: str) -> Optional[str]:
+def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, list]) -> Optional[str]:
     """
     调网关 /v1/chat/completions（非流式），返回 assistant 文本。
-    window_id 应为 tg_{telegram_user_id}，以便与 RikkaHub 同套记忆/总结/动态层。
+    user_content 可为 str（纯文字）或 list（多模态，如 [{"type":"text","text":"..."},{"type":"image_url",...}]），与 RikkaHub 一致。
     """
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     model = _resolve_chat_model()
@@ -290,7 +291,7 @@ def _call_gateway_chat(window_id: str, user_id: int, user_text: str) -> Optional
         history = list(_CONTEXT_MESSAGES.get(user_id) or [])
     history = _trim_context_messages(history)
     # Telegram 端增加一条风格 system（网关还会在最前面插入 du_core_prompt）
-    messages = [{"role": "system", "content": _TELEGRAM_STYLE_SYSTEM}] + history + [{"role": "user", "content": user_text}]
+    messages = [{"role": "system", "content": _TELEGRAM_STYLE_SYSTEM}] + history + [{"role": "user", "content": user_content}]
     body = {
         "model": model,
         "messages": messages,
@@ -323,7 +324,7 @@ def _call_gateway_chat(window_id: str, user_id: int, user_text: str) -> Optional
         # 更新上下文：只缓存 user/assistant（不存 system），下次请求自动带上
         with _CTX_LOCK:
             cur = list(_CONTEXT_MESSAGES.get(user_id) or [])
-            cur.append({"role": "user", "content": user_text})
+            cur.append({"role": "user", "content": user_content})
             cur.append({"role": "assistant", "content": reply_text})
             _CONTEXT_MESSAGES[user_id] = _trim_context_messages(cur)
         return reply_text
@@ -350,6 +351,41 @@ def get_updates(offset: Optional[int] = None) -> dict:
     except requests.RequestException as e:
         logger.warning("getUpdates 请求异常: %s", e)
         return {}
+
+
+def _get_telegram_file_bytes(file_id: str) -> Optional[tuple[bytes, str]]:
+    """
+    通过 Telegram getFile 下载文件，返回 (bytes, mime_type)。
+    用于图片等，mime 根据 file_path 后缀猜测，默认 image/jpeg。
+    """
+    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/getFile"
+    try:
+        r = requests.get(url, params={"file_id": file_id}, timeout=15)
+        if r.status_code != 200:
+            logger.warning("getFile 非 200 file_id=%s %s", file_id[:20], r.text[:150])
+            return None
+        data = r.json() or {}
+        if not data.get("ok"):
+            return None
+        path = (data.get("result") or {}).get("file_path") or ""
+        if not path:
+            return None
+        download_url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/{path}"
+        r2 = requests.get(download_url, timeout=30)
+        if r2.status_code != 200:
+            logger.warning("下载 Telegram 文件失败 path=%s status=%s", path, r2.status_code)
+            return None
+        mime = "image/jpeg"
+        if path.lower().endswith(".png"):
+            mime = "image/png"
+        elif path.lower().endswith(".gif"):
+            mime = "image/gif"
+        elif path.lower().endswith(".webp"):
+            mime = "image/webp"
+        return (r2.content, mime)
+    except requests.RequestException as e:
+        logger.warning("Telegram 获取文件异常 file_id=%s: %s", file_id[:20], e)
+        return None
 
 
 def send_message(chat_id: int, text: str) -> bool:
@@ -443,19 +479,23 @@ def send_message_segmented(chat_id: int, text: str) -> bool:
     return ok_any
 
 
-def process_message(chat_id: int, user_id: int, text: str) -> bool:
+def process_message(chat_id: int, user_id: int, text: Optional[str] = None, user_content: Optional[list] = None) -> bool:
     """
-    处理一条用户文字消息：调网关得到回复，发回 Telegram。
-    user_id 用于 window_id = tg_{user_id}，保证同一用户同一窗口。
-    返回是否成功发回回复。
+    处理一条用户消息：调网关得到回复，发回 Telegram。
+    text：纯文字时传入；user_content：多模态时传入（如 [{"type":"text",...},{"type":"image_url",...}]）。二者传一即可。
     """
+    if user_content is not None:
+        content: Union[str, list] = user_content
+    elif text is not None:
+        content = text
+    else:
+        return False
     window_id = f"tg_{user_id}"
-    # 轻量 typing：只在真正要调网关时展示
     stop = threading.Event()
     t = threading.Thread(target=_start_typing_indicator, args=(int(chat_id), stop, 4.0), daemon=True)
     t.start()
     try:
-        reply = _call_gateway_chat(window_id=window_id, user_id=user_id, user_text=text)
+        reply = _call_gateway_chat(window_id=window_id, user_id=user_id, user_content=content)
     finally:
         stop.set()
     if reply is None:
@@ -594,15 +634,38 @@ def run_polling():
                 if chat_id is None or user_id is None:
                     continue
                 text = (msg.get("text") or "").strip()
+                caption = (msg.get("caption") or "").strip()
+                if not text and msg.get("photo"):
+                    # 图片（带或不带 caption）：下载后以多模态发给渡，与 RikkaHub 一致
+                    photos = msg.get("photo") or []
+                    if not photos:
+                        continue
+                    largest = max(photos, key=lambda p: (p.get("width") or 0) * (p.get("height") or 0))
+                    file_id = largest.get("file_id")
+                    if not file_id:
+                        send_message(chat_id, "图片没拿到 file_id，再发一次试试～")
+                        continue
+                    file_result = _get_telegram_file_bytes(file_id)
+                    if not file_result:
+                        send_message(chat_id, "图片下载失败，稍后再试哦～")
+                        continue
+                    img_bytes, mime = file_result
+                    b64 = base64.b64encode(img_bytes).decode("ascii")
+                    data_url = f"data:{mime};base64,{b64}"
+                    parts = [{"type": "image_url", "image_url": {"url": data_url}}]
+                    if caption:
+                        parts.insert(0, {"type": "text", "text": caption})
+                    else:
+                        parts.insert(0, {"type": "text", "text": "[图片]"})
+                    if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
+                        from utils.time_aware import now_beijing_iso
+                        from storage import r2_store
+                        r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+                    logger.info("收到 TG 图片 user_id=%s chat_id=%s caption_len=%d", user_id, chat_id, len(caption))
+                    process_message(chat_id=chat_id, user_id=user_id, user_content=parts)
+                    continue
                 if not text:
-                    # 纯图片/语音等：至少给个回复，避免「没反应」
-                    if msg.get("photo"):
-                        if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
-                            from utils.time_aware import now_beijing_iso
-                            from storage import r2_store
-                            r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
-                        send_message(chat_id, "收到图片啦～我暂时还看不懂图片，发文字给我吧。")
-                    # 后续可在此处理 voice 等
+                    # 其他非文字（如纯语音）：暂不处理
                     continue
                 logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
                 # 若是主动消息目标用户，更新「最近活动时间」，供 proactive 判定「正在聊天时不主动发」
