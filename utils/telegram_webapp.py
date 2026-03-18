@@ -11,6 +11,10 @@ from config import (
     TELEGRAM_BOT_TOKEN,
 )
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def _parse_init_data(init_data: str) -> dict[str, str]:
     # initData 是 querystring 格式（key=value&key2=value2），value 可能 urlencoded
@@ -79,5 +83,27 @@ def enforce_telegram_initdata():
 
     ok, err = verify_telegram_init_data(init_data, TELEGRAM_BOT_TOKEN)
     if not ok:
+        try:
+            # 记录最关键的诊断信息（不打印完整 initData，避免泄露）
+            src = "header" if (request.headers.get("X-Telegram-Init-Data") or "").strip() else ("query" if (request.args.get("initData") or "").strip() else "none")
+            init_len = len(init_data or "")
+            auth_date = 0
+            try:
+                auth_date = int(_parse_init_data(init_data).get("auth_date") or "0") if init_data else 0
+            except Exception:
+                auth_date = 0
+            now = int(time.time())
+            logger.warning(
+                "MiniApp initData 校验失败 path=%s src=%s len=%s auth_date=%s now=%s max_age=%s err=%s",
+                request.path,
+                src,
+                init_len,
+                auth_date,
+                now,
+                int(MINIAPP_INITDATA_MAX_AGE_SECONDS or 0),
+                err,
+            )
+        except Exception:
+            pass
         abort(401, description=err or "Unauthorized")
 
