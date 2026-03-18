@@ -48,7 +48,6 @@ BTN_TODO_ADD = "➕ Todo：新增"
 BTN_TODO_DONE = "☑️ Todo：完成"
 BTN_TODO_DEL = "🗑️ Todo：删除"
 BTN_TODO_CLEAR = "🧼 Todo：清空全部"
-CMD_TODO = "/todo"
 
 
 def _todo_keyboard() -> dict:
@@ -491,12 +490,10 @@ def _get_telegram_file_bytes(file_id: str) -> Optional[tuple[bytes, str]]:
 
 
 def _set_my_commands() -> bool:
-    """注册 Bot 命令，便于在 Telegram 菜单里点选。"""
+    """清空 Bot 命令菜单（不显示 /todo）。"""
     url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/setMyCommands"
     payload = {
-        "commands": [
-            {"command": "todo", "description": "显示 Todo 按钮键盘"},
-        ]
+        "commands": []
     }
     try:
         r = requests.post(url, json=payload, timeout=15)
@@ -866,9 +863,9 @@ def run_polling():
                 if not text:
                     # 其他非文字（如纯语音）：暂不处理
                     continue
-                # /start 或 /todo：强制发一条带 Todo 键盘的消息，覆盖旧键盘
+                # /start：强制发一条带 Todo 键盘的消息，覆盖旧键盘
                 cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
-                if cmd0 in ("/start", CMD_TODO):
+                if cmd0 == "/start":
                     _set_state(int(user_id), None)
                     _send_with_keyboard(int(chat_id), "Todo 键盘已就绪。需要做什么？")
                     continue
