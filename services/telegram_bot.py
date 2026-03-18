@@ -738,6 +738,16 @@ def _schedule_flush_locked(user_id: int):
     timer.start()
 
 
+def _append_user_part_locked(chat_id: int, user_id: int, part: dict):
+    """在 lock 内追加一个多模态 part（text/image_url）。"""
+    buf = _INPUT_BUFFERS.get(user_id)
+    if not buf:
+        buf = {"chat_id": chat_id, "parts": [], "timer": None, "flush_at": None}
+        _INPUT_BUFFERS[user_id] = buf
+    buf["chat_id"] = chat_id
+    buf.setdefault("parts", []).append(part)
+
+
 def append_user_input(chat_id: int, user_id: int, text: str):
     """
     输入聚合：把同一 user 的多条短消息先缓存，停输入 N 秒后合并成一条再调网关。
@@ -753,15 +763,11 @@ def append_user_input(chat_id: int, user_id: int, text: str):
         immediate_chars = 0
 
     with _BUF_LOCK:
-        buf = _INPUT_BUFFERS.get(user_id)
-        if not buf:
-            buf = {"chat_id": chat_id, "messages": [], "timer": None, "flush_at": None}
-            _INPUT_BUFFERS[user_id] = buf
-        buf["chat_id"] = chat_id
-        buf["messages"].append(t)
+        _append_user_part_locked(chat_id, user_id, {"type": "text", "text": t})
         # 长消息直接 flush（减少等待）
         if immediate_chars and len(t) >= immediate_chars:
             # 取消定时器，异步 flush
+            buf = _INPUT_BUFFERS.get(user_id) or {}
             if buf.get("timer"):
                 try:
                     buf["timer"].cancel()
@@ -774,14 +780,14 @@ def append_user_input(chat_id: int, user_id: int, text: str):
 
 
 def flush_user_buffer(user_id: int):
-    """把缓存的用户输入合并成一条，调用网关并回复（分段发送）。"""
+    """把缓存的用户输入（多模态 parts）合并成一条，调用网关并回复（分段发送）。"""
     with _BUF_LOCK:
         buf = _INPUT_BUFFERS.get(user_id)
         if not buf:
             return
         chat_id = buf.get("chat_id")
-        msgs = buf.get("messages") or []
-        buf["messages"] = []
+        parts = buf.get("parts") or []
+        buf["parts"] = []
         t: Optional[threading.Timer] = buf.get("timer")
         buf["timer"] = None
         buf["flush_at"] = None
@@ -791,17 +797,36 @@ def flush_user_buffer(user_id: int):
             except Exception:
                 pass
         # 空则直接返回
-        if not msgs:
+        if not parts:
             return
         # 没有 chat_id 也不处理
         if chat_id is None:
             return
 
-    merged = "\n".join(msgs).strip()
-    if not merged:
+    # 合并连续 text part，减少 token 与噪声
+    merged_parts = []
+    text_acc = []
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        if p.get("type") == "text":
+            s = str(p.get("text") or "").strip()
+            if s:
+                text_acc.append(s)
+            continue
+        # 非 text：先 flush 累积文本
+        if text_acc:
+            merged_parts.append({"type": "text", "text": "\n".join(text_acc).strip()})
+            text_acc = []
+        merged_parts.append(p)
+    if text_acc:
+        merged_parts.append({"type": "text", "text": "\n".join(text_acc).strip()})
+
+    merged_parts = [p for p in merged_parts if isinstance(p, dict) and p.get("type")]
+    if not merged_parts:
         return
-    logger.info("输入聚合 flush user_id=%s chat_id=%s merged_parts=%d len=%d", user_id, chat_id, len(msgs), len(merged))
-    process_message(chat_id=int(chat_id), user_id=user_id, text=merged)
+    logger.info("输入聚合 flush user_id=%s chat_id=%s parts=%d", user_id, chat_id, len(merged_parts))
+    process_message(chat_id=int(chat_id), user_id=user_id, user_content=merged_parts)
 
 
 def run_polling():
@@ -849,17 +874,19 @@ def run_polling():
                     img_bytes, mime = file_result
                     b64 = base64.b64encode(img_bytes).decode("ascii")
                     data_url = f"data:{mime};base64,{b64}"
-                    parts = [{"type": "image_url", "image_url": {"url": data_url}}]
-                    if caption:
-                        parts.insert(0, {"type": "text", "text": caption})
-                    else:
-                        parts.insert(0, {"type": "text", "text": "[图片]"})
                     if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
                         from utils.time_aware import now_beijing_iso
                         from storage import r2_store
                         r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
-                    logger.info("收到 TG 图片 user_id=%s chat_id=%s caption_len=%d", user_id, chat_id, len(caption))
-                    process_message(chat_id=chat_id, user_id=user_id, user_content=parts)
+                    logger.info("收到 TG 图片(聚合) user_id=%s chat_id=%s caption_len=%d", user_id, chat_id, len(caption))
+                    # 追加到聚合缓冲：先 text 再 image
+                    with _BUF_LOCK:
+                        if caption:
+                            _append_user_part_locked(chat_id, user_id, {"type": "text", "text": caption})
+                        else:
+                            _append_user_part_locked(chat_id, user_id, {"type": "text", "text": "[图片]"})
+                        _append_user_part_locked(chat_id, user_id, {"type": "image_url", "image_url": {"url": data_url}})
+                        _schedule_flush_locked(user_id)
                     continue
                 if not text:
                     # 其他非文字（如纯语音）：暂不处理
