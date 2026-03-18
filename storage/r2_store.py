@@ -37,6 +37,8 @@ R2_KEY_LAST_PROACTIVE_CONTACT_AT = "global/last_proactive_contact_at.txt"
 R2_KEY_LAST_TELEGRAM_USER_ACTIVITY_AT = "global/last_telegram_user_activity_at.txt"
 # Telegram：置顶便签（每个 tg 窗口一份）
 R2_KEY_TG_PINNED_NOTE = "tg/pinned_note.txt"
+# Telegram：TodoList（每个 tg 窗口一份 JSON）
+R2_KEY_TG_TODOS = "tg/todos.json"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
@@ -565,6 +567,40 @@ def delete_tg_pinned_note(window_id: str) -> bool:
     with _global_write_lock:
         try:
             client.delete_object(Bucket=R2_BUCKET_NAME, Key=key)
+            return True
+        except Exception:
+            return False
+
+
+def get_tg_todos(window_id: str) -> list[dict]:
+    """读取 Telegram 窗口的 TodoList。window_id 应为 tg_{user_id}。"""
+    if not (window_id and window_id.strip()):
+        return []
+    client = _s3_client()
+    if not client:
+        return []
+    prefix = _prefix(window_id)
+    key = _get_key(prefix, R2_KEY_TG_TODOS)
+    data = _read_json(client, key)
+    if not data:
+        return []
+    items = data.get("items") if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def save_tg_todos(window_id: str, items: list[dict]) -> bool:
+    """保存 Telegram 窗口的 TodoList（覆盖）。"""
+    if not (window_id and window_id.strip()):
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    prefix = _prefix(window_id)
+    key = _get_key(prefix, R2_KEY_TG_TODOS)
+    payload = {"items": items or []}
+    with _global_write_lock:
+        try:
+            _write_json(client, key, payload)
             return True
         except Exception:
             return False
