@@ -31,8 +31,6 @@ from config import (
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
-# 长轮询超时（秒），期间有消息会立即返回
-GET_UPDATES_TIMEOUT = 60
 _RESOLVED_CHAT_MODEL: Optional[str] = None
 _BUF_LOCK = threading.Lock()
 _INPUT_BUFFERS: dict[int, dict] = {}
@@ -437,23 +435,6 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         return None
 
 
-def get_updates(offset: Optional[int] = None) -> dict:
-    """拉取 Telegram 更新（长轮询）。"""
-    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/getUpdates"
-    params = {"timeout": GET_UPDATES_TIMEOUT}
-    if offset is not None:
-        params["offset"] = offset
-    try:
-        r = requests.get(url, params=params, timeout=GET_UPDATES_TIMEOUT + 10)
-        if r.status_code != 200:
-            logger.warning("getUpdates 非 200: %s %s", r.status_code, r.text[:200])
-            return {}
-        return r.json() or {}
-    except requests.RequestException as e:
-        logger.warning("getUpdates 请求异常: %s", e)
-        return {}
-
-
 def _get_telegram_file_bytes(file_id: str) -> Optional[tuple[bytes, str]]:
     """
     通过 Telegram getFile 下载文件，返回 (bytes, mime_type)。
@@ -829,30 +810,12 @@ def flush_user_buffer(user_id: int):
     process_message(chat_id=int(chat_id), user_id=user_id, user_content=merged_parts)
 
 
-def run_polling():
-    """
-    长轮询循环：拉取更新 → 处理文字消息 → 调网关 → 发回回复。
-    仅处理 text 消息；忽略其它类型（语音、图片等后续可接 STT/图像描述）。
-    """
+def init_telegram_bot_runtime():
+    """在服务启动时调用：初始化命令菜单等。Webhook 模式下无需轮询。"""
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN 未配置，无法启动 Bot")
+        logger.warning("TELEGRAM_BOT_TOKEN 未配置，Telegram 功能将不可用")
         return
     _set_my_commands()
-    model = _resolve_chat_model()
-    logger.info("Telegram Bot 开始轮询，网关=%s%s model=%s", TELEGRAM_GATEWAY_URL, TELEGRAM_CHAT_PATH, model)
-    offset = None
-    while True:
-        try:
-            data = get_updates(offset=offset)
-            result = data.get("result") or []
-            for upd in result:
-                offset = (upd.get("update_id") or 0) + 1
-                handle_telegram_update(upd)
-        except Exception as e:
-            logger.exception("轮询处理异常: %s", e)
-            time.sleep(5)
-        if offset is None:
-            time.sleep(1)
 
 
 def handle_telegram_update(upd: dict):
