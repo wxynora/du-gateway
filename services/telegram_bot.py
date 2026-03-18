@@ -37,24 +37,20 @@ _INPUT_BUFFERS: dict[int, dict] = {}
 _CTX_LOCK = threading.Lock()
 _CONTEXT_MESSAGES: dict[int, list[dict]] = {}
 
-# TG 本地交互状态：用于按钮式 Todo（等待用户输入内容/编号）
-_TG_STATE_LOCK = threading.Lock()
-_TG_STATES: dict[int, dict] = {}
-
-BTN_TODO_SHOW = "✅ Todo：查看"
-BTN_TODO_ADD = "➕ Todo：新增"
-BTN_TODO_DONE = "☑️ Todo：完成"
-BTN_TODO_DEL = "🗑️ Todo：删除"
-BTN_TODO_CLEAR = "🧼 Todo：清空全部"
+BTN_OPS_PANEL = "🛠 运维面板"
 
 
-def _todo_keyboard() -> dict:
-    """常驻 Todo 键盘。"""
+def _miniapp_url() -> str:
+    """ReplyKeyboard 的 WebApp 入口 URL（必须是公网可访问的完整 URL）。"""
+    base = (TELEGRAM_GATEWAY_URL or "").strip().rstrip("/")
+    return base + "/miniapp" if base else "/miniapp"
+
+
+def _ops_keyboard() -> dict:
+    """常驻运维面板键盘（Reply Keyboard）。"""
     return {
         "keyboard": [
-            [{"text": BTN_TODO_SHOW}, {"text": BTN_TODO_ADD}],
-            [{"text": BTN_TODO_DONE}, {"text": BTN_TODO_DEL}],
-            [{"text": BTN_TODO_CLEAR}],
+            [{"text": BTN_OPS_PANEL, "web_app": {"url": _miniapp_url()}}],
         ],
         "resize_keyboard": True,
         # 一次性键盘：点击一次后自动收起，平时不占输入区；需要时用户可点输入框旁的键盘图标再展开
@@ -63,69 +59,9 @@ def _todo_keyboard() -> dict:
     }
 
 
-def _set_state(user_id: int, state: Optional[str] = None):
-    with _TG_STATE_LOCK:
-        if not state:
-            _TG_STATES.pop(int(user_id), None)
-        else:
-            _TG_STATES[int(user_id)] = {"state": state, "ts": time.time()}
-
-
-def _get_state(user_id: int) -> str:
-    with _TG_STATE_LOCK:
-        s = (_TG_STATES.get(int(user_id)) or {}).get("state") or ""
-        return str(s)
-
-
-def _format_todos(items: list[dict], show_done: bool = False) -> str:
-    if not items:
-        return "Todo 为空。"
-    lines = []
-    for i, it in enumerate(items, 1):
-        if not isinstance(it, dict):
-            continue
-        done = bool(it.get("done"))
-        if (not show_done) and done:
-            continue
-        txt = str(it.get("text") or "").strip()
-        if not txt:
-            continue
-        mark = "✅" if done else "☐"
-        lines.append(f"{i}. {mark} {txt}")
-    return "\n".join(lines) if lines else ("Todo 为空。" if not show_done else "没有可显示的条目。")
-
-
-def _parse_indices(text: str, max_n: int) -> list[int]:
-    """把用户输入中的数字解析成 1-based 索引列表。支持 '1 2 3' / '1,2' / '1-3'。"""
-    if not text:
-        return []
-    t = text.replace("，", ",").replace("、", ",").strip()
-    nums: set[int] = set()
-    for part in re.split(r"[\s,]+", t):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            a, b = part.split("-", 1)
-            if a.strip().isdigit() and b.strip().isdigit():
-                start = int(a)
-                end = int(b)
-                if start > end:
-                    start, end = end, start
-                for x in range(start, end + 1):
-                    if 1 <= x <= max_n:
-                        nums.add(x)
-            continue
-        if part.isdigit():
-            x = int(part)
-            if 1 <= x <= max_n:
-                nums.add(x)
-    return sorted(nums)
-
-
 def _send_with_keyboard(chat_id: int, text: str) -> bool:
     url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "reply_markup": _todo_keyboard(), "disable_web_page_preview": True}
+    payload = {"chat_id": chat_id, "text": text, "reply_markup": _ops_keyboard(), "disable_web_page_preview": True}
     try:
         r = requests.post(url, json=payload, timeout=30)
         if r.status_code != 200:
@@ -472,7 +408,7 @@ def _get_telegram_file_bytes(file_id: str) -> Optional[tuple[bytes, str]]:
 
 
 def _set_my_commands() -> bool:
-    """清空 Bot 命令菜单（不显示 /todo）。"""
+    """清空 Bot 命令菜单。"""
     url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/setMyCommands"
     payload = {
         "commands": []
@@ -489,80 +425,7 @@ def _set_my_commands() -> bool:
         return False
 
 
-def _handle_todo_ui(chat_id: int, user_id: int, text: str) -> bool:
-    """
-    处理按钮式 TodoList。
-    - 点击按钮进入对应模式
-    - 在模式下用户发文本/编号执行动作
-    """
-    window_id = f"tg_{user_id}"
-    from storage import r2_store
-
-    state = _get_state(user_id)
-
-    # 先处理按钮点击
-    if text in (BTN_TODO_SHOW, BTN_TODO_ADD, BTN_TODO_DONE, BTN_TODO_DEL, BTN_TODO_CLEAR):
-        if text == BTN_TODO_SHOW:
-            items = r2_store.get_tg_todos(window_id)
-            _set_state(user_id, None)
-            return _send_with_keyboard(chat_id, "当前 Todo：\n" + _format_todos(items, show_done=True))
-        if text == BTN_TODO_ADD:
-            _set_state(user_id, "todo_add")
-            return _send_with_keyboard(chat_id, "发我一条要加入的 Todo 内容即可。")
-        if text == BTN_TODO_DONE:
-            _set_state(user_id, "todo_done")
-            items = r2_store.get_tg_todos(window_id)
-            return _send_with_keyboard(chat_id, "要完成哪几条？发编号，如：1 3 或 2-4\n\n当前未完成：\n" + _format_todos(items, show_done=False))
-        if text == BTN_TODO_DEL:
-            _set_state(user_id, "todo_del")
-            items = r2_store.get_tg_todos(window_id)
-            return _send_with_keyboard(chat_id, "要删除哪几条？发编号，如：1 3 或 2-4\n\n当前 Todo：\n" + _format_todos(items, show_done=True))
-        if text == BTN_TODO_CLEAR:
-            # 二次确认
-            _set_state(user_id, "todo_clear_confirm")
-            return _send_with_keyboard(chat_id, "确认清空全部 Todo？回复：清空")
-
-    # 再处理状态机
-    if state == "todo_add":
-        content = (text or "").strip()
-        if not content:
-            return _send_with_keyboard(chat_id, "内容为空，请重新发一条。")
-        items = r2_store.get_tg_todos(window_id)
-        items.append({"id": str(uuid4()), "text": content, "done": False, "created_at": time.time()})
-        ok = r2_store.save_tg_todos(window_id, items)
-        _set_state(user_id, None)
-        return _send_with_keyboard(chat_id, "已添加。" if ok else "添加失败，稍后再试。")
-
-    if state in ("todo_done", "todo_del"):
-        items = r2_store.get_tg_todos(window_id)
-        idxs = _parse_indices(text or "", len(items))
-        if not idxs:
-            return _send_with_keyboard(chat_id, "没识别到编号，请按 1 3 或 2-4 这种格式发。")
-        if state == "todo_done":
-            for i in idxs:
-                if 1 <= i <= len(items) and isinstance(items[i - 1], dict):
-                    items[i - 1]["done"] = True
-            ok = r2_store.save_tg_todos(window_id, items)
-            _set_state(user_id, None)
-            return _send_with_keyboard(chat_id, "已标记完成。" if ok else "操作失败，稍后再试。")
-        else:
-            # 删除：从后往前删避免索引错位
-            for i in sorted(idxs, reverse=True):
-                if 1 <= i <= len(items):
-                    items.pop(i - 1)
-            ok = r2_store.save_tg_todos(window_id, items)
-            _set_state(user_id, None)
-            return _send_with_keyboard(chat_id, "已删除。" if ok else "操作失败，稍后再试。")
-
-    if state == "todo_clear_confirm":
-        if (text or "").strip() != "清空":
-            _set_state(user_id, None)
-            return _send_with_keyboard(chat_id, "已取消。")
-        ok = r2_store.save_tg_todos(window_id, [])
-        _set_state(user_id, None)
-        return _send_with_keyboard(chat_id, "已清空。" if ok else "清空失败，稍后再试。")
-
-    return False
+## 已移除：按钮式 Todo 便签（避免占用输入区交互与 R2 写入）
 
 
 def send_message(chat_id: int, text: str) -> bool:
@@ -863,15 +726,10 @@ def handle_telegram_update(upd: dict):
     if not text:
         return
 
-    # /start：弹出 Todo 键盘（不进入聊天）
+    # /start：弹出运维面板键盘（不进入聊天）
     cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
     if cmd0 == "/start":
-        _set_state(int(user_id), None)
-        _send_with_keyboard(int(chat_id), "Todo 键盘已就绪。需要做什么？")
-        return
-
-    # Todo 按钮与交互（不进入聊天）
-    if _handle_todo_ui(chat_id=int(chat_id), user_id=int(user_id), text=text):
+        _send_with_keyboard(int(chat_id), "运维面板键盘已就绪。需要做什么？")
         return
 
     logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))

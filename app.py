@@ -12,10 +12,13 @@ from utils.log import setup_logging
 setup_logging()
 
 from flask import Flask, request, jsonify
+from flask import send_from_directory
 from routes.chat import bp as chat_bp
 from routes.admin import bp as admin_bp
 from routes.notion_routes import bp as notion_bp
 from routes.telegram_webhook import bp as telegram_webhook_bp
+from routes.miniapp_api import bp as miniapp_api_bp
+from config import MINIAPP_STATIC_DIR
 
 # 确保数据目录存在
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -25,6 +28,7 @@ app.register_blueprint(chat_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(notion_bp)
 app.register_blueprint(telegram_webhook_bp)
+app.register_blueprint(miniapp_api_bp)
 
 # Telegram（Webhook）运行时初始化：命令菜单等。放在 app 启动阶段，避免依赖 Blueprint 钩子。
 try:
@@ -56,6 +60,19 @@ def _cors_headers(response):
 @app.route("/")
 def index():
     return {"service": "渡の网关 Du Gateway", "status": "ok"}
+
+
+@app.route("/miniapp", methods=["GET"])
+@app.route("/miniapp/", methods=["GET"])
+def miniapp_index():
+    """Telegram Mini App 静态入口页。"""
+    return send_from_directory(MINIAPP_STATIC_DIR, "index.html")
+
+
+@app.route("/miniapp/assets/<path:filename>", methods=["GET"])
+def miniapp_assets(filename: str):
+    """Mini App 静态资源（JS/CSS/图标）。"""
+    return send_from_directory(MINIAPP_STATIC_DIR / "assets", filename)
 
 
 @app.route("/health")

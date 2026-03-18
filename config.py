@@ -260,3 +260,21 @@ MINIMAX_AUDIO_CHANNEL = int(os.environ.get("MINIMAX_AUDIO_CHANNEL", "1"))
 
 # Telegram 语音回复开关：允许渡用 <voice>...</voice> 触发发送语音
 TELEGRAM_VOICE_REPLY_ENABLED = os.environ.get("TELEGRAM_VOICE_REPLY_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+
+# -------------------- Telegram Mini App（手机端运维面板） --------------------
+# 静态站点目录：由 Flask 直接托管 /miniapp
+MINIAPP_STATIC_DIR = BASE_DIR / "miniapp_static"
+
+# 鉴权：Telegram WebApp initData 校验（推荐开启）
+MINIAPP_TELEGRAM_AUTH_ENABLED = os.environ.get("MINIAPP_TELEGRAM_AUTH_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+# initData 允许的最大时效（秒），避免旧链接被长期复用；默认 10 分钟
+MINIAPP_INITDATA_MAX_AGE_SECONDS = int(os.environ.get("MINIAPP_INITDATA_MAX_AGE_SECONDS", "600"))
+
+# IP 白名单（CIDR/单 IP，逗号分隔）。留空则不限制 IP。
+# 示例：MINIAPP_IP_ALLOWLIST=127.0.0.1,10.0.0.0/8,192.168.0.0/16
+MINIAPP_IP_ALLOWLIST = [x.strip() for x in os.environ.get("MINIAPP_IP_ALLOWLIST", "").split(",") if x.strip()]
+# 若在反代后面（Nginx/Caddy），可开启信任 X-Forwarded-For
+MINIAPP_TRUST_PROXY = os.environ.get("MINIAPP_TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
+
+# 日志文件路径：用于 Mini App 手机端查看；默认读当前工作目录下 gateway.log
+MINIAPP_LOG_FILE = os.environ.get("MINIAPP_LOG_FILE", "gateway.log").strip()

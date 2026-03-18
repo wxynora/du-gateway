@@ -186,6 +186,9 @@ def clean_message_for_r2(msg: dict) -> dict:
         if not strip_time:
             content = _normalize_rikkahub_time_tool_result(content)
         msg["content"] = apply_text_cleaning_for_r2(content, strip_rikkahub_time=strip_time)
+        # reasoning（思维链）不做清洗，仅透传保存，前端默认折叠展示
+        if msg.get("reasoning") is not None and not isinstance(msg.get("reasoning"), str):
+            msg["reasoning"] = str(msg.get("reasoning"))
         return msg
     if isinstance(content, list):
         out = []
@@ -203,6 +206,8 @@ def clean_message_for_r2(msg: dict) -> dict:
             else:
                 out.append(part)
         msg["content"] = out
+        if msg.get("reasoning") is not None and not isinstance(msg.get("reasoning"), str):
+            msg["reasoning"] = str(msg.get("reasoning"))
         return msg
     return msg
 

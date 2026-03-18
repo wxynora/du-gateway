@@ -146,6 +146,10 @@ flask run
 - **动态层**：`dynamic_memory/current.json`，读写与请求前注入已实现；演化走 DS 接口（入参：当前轮+现有记忆；出参：是否重要+演化后记忆），占位见 `services/dynamic_layer_ds.py`，约定见文档八.5。
 - **核心缓存层**：`core_cache/pending.json`，R2 读写已占位，每周筛选进 Notion 待实现。
 
+## Telegram Mini App 运维面板
+Mini App 的目标与升级路线（给后续 agent 快速接手用）见：
+- `docs/telegram-miniapp-运维面板升级路线.md`
+
 ## 数据与备份
 
 - 白名单与最近窗口在项目下 `data/whitelist.json`、`data/recent_windows.json`；改代码前可备份 `data/` 目录。

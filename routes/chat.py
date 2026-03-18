@@ -54,32 +54,63 @@ def _get_window_id_from_request(body: dict) -> str:
 
 def _get_forward_targets(request_model: str = None):
     """
-    返回 [(url, api_key), ...]，按顺序尝试。
-    先加入单独的 TARGET_AI_URL（若有），再加入 TARGET_AI_URLS 列表（同 URL 不重复）。
-    多目标时：若 request_model 匹配关键词（claude/opus/4或5/thinking），返回全部用于 fallback；
-    否则只返回第一个，避免非匹配模型打到所有中转站。
+    仅返回一个转发目标：当前 active 上游。
+    设计目的：关闭自动 fallback，多上游不可用时让你手动在 MiniApp 切换。
     """
-    pairs = []
-    seen_urls = set()
+    try:
+        from storage.upstream_store import get_active_item
+
+        active = get_active_item()
+    except Exception:
+        active = None
+
+    if active and active.get("url"):
+        u = (active.get("url") or "").strip()
+        k = (active.get("api_key") or "").strip()
+        if u:
+            return [(u, k)]
+
+    # active 不存在时：退回环境变量“第一个”配置（仍不做 fallback 链式重试）
     if TARGET_AI_URL and TARGET_AI_URL.strip():
-        u = TARGET_AI_URL.strip()
-        if u not in seen_urls:
-            pairs.append((u, TARGET_AI_API_KEY or ""))
-            seen_urls.add(u)
+        return [(TARGET_AI_URL.strip(), TARGET_AI_API_KEY or "")]
+
     if TARGET_AI_URLS:
-        urls = TARGET_AI_URLS
-        keys = list(TARGET_AI_API_KEYS)
-        while len(keys) < len(urls):
-            keys.append(TARGET_AI_API_KEY or "")
-        for u, k in zip(urls, keys[: len(urls)]):
-            u = (u or "").strip()
-            if u and u not in seen_urls:
-                pairs.append((u, k or ""))
-                seen_urls.add(u)
-    if len(pairs) > 1 and request_model is not None:
-        if not model_matches_gateway_keywords(request_model):
-            return [pairs[0]]
-    return pairs
+        u = (TARGET_AI_URLS[0] or "").strip()
+        if u:
+            keys = list(TARGET_AI_API_KEYS or [])
+            if not keys:
+                k0 = TARGET_AI_API_KEY or ""
+            else:
+                k0 = keys[0] or ""
+            return [(u, k0)]
+
+    return []
+
+
+def _active_upstream_label() -> str:
+    """用于错误提示：展示当前 active 上游（不返回 api_key）。"""
+    try:
+        from storage.upstream_store import get_active_item
+
+        active = get_active_item()
+        if not active:
+            return "未配置"
+        name = (active.get("name") or "active").strip()
+        url = (active.get("url") or "").strip()
+        return f"{name}{' (' + url + ')' if url else ''}"
+    except Exception:
+        return "未配置"
+
+
+def _build_upstream_error_hint(last_err: str) -> str:
+    """把上游错误改造成“像 rikkahub 一样清楚”的可读提示。"""
+    active_label = _active_upstream_label()
+    detail = (last_err or "").strip() or "未知错误"
+    return (
+        "【上游不可用】请先在 MiniApp -> 上游中转站切换后重试。\n"
+        f"当前 active：{active_label}\n"
+        f"错误详情：{detail}"
+    )
 
 
 def _chat_url_to_models_url(chat_url: str) -> str:
@@ -97,9 +128,11 @@ def _chat_url_to_models_url(chat_url: str) -> str:
 def _parse_stream_to_message(chunks: list) -> dict:
     """
     从流式 SSE chunks 解析出完整 assistant message（content + tool_calls）。
-    返回 {"content": str, "tool_calls": list or None}，tool_calls 为 OpenAI 格式。
+    返回 {"content": str, "tool_calls": list or None, "reasoning": str|None}。
+    reasoning 兼容不同上游字段：reasoning / reasoning_content / thinking。
     """
     content_parts = []
+    reasoning_parts = []
     # tool_calls 按 index 聚合，arguments 可能多 delta 拼接
     tool_calls_by_index = {}
     for chunk in chunks:
@@ -115,6 +148,10 @@ def _parse_stream_to_message(chunks: list) -> dict:
             continue
         if delta.get("content"):
             content_parts.append(delta["content"])
+        # 兼容常见字段名（不同中转/供应商可能不同）
+        for rk in ("reasoning", "reasoning_content", "thinking"):
+            if delta.get(rk):
+                reasoning_parts.append(str(delta.get(rk)))
         for tc in delta.get("tool_calls") or []:
             idx = tc.get("index")
             if idx is None:
@@ -135,15 +172,20 @@ def _parse_stream_to_message(chunks: list) -> dict:
     return {
         "content": "".join(content_parts),
         "tool_calls": sorted_tcs if sorted_tcs else None,
+        "reasoning": "".join(reasoning_parts).strip() or None,
     }
 
 
 def _stream_forward_to_ai(body: dict, headers: dict):
-    """流式转发：上游 SSE 原样逐行 yield；多目标时按顺序 fallback，一个失败试下一个。"""
+    """流式转发：上游 SSE 原样逐行 yield；不再自动 fallback。"""
     request_model = (body or {}).get("model") or ""
     targets = _get_forward_targets(request_model)
     if not targets:
-        yield ("data: " + json.dumps({"error": "TARGET_AI_URL 或 TARGET_AI_URLS 未配置"}) + "\n\n").encode("utf-8")
+        yield (
+            "data: "
+            + json.dumps({"error": _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置")})
+            + "\n\n"
+        ).encode("utf-8")
         return
     req_headers = {"Content-Type": "application/json"}
     # 上游尽量禁用压缩：避免 gzip/deflate 造成上游缓冲、攒包后才吐，降低流式不确定性
@@ -203,7 +245,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         except Exception as e:
             last_err = str(e)
             logger.warning("流式转发异常 %s %s", url[:50], e)
-    yield ("data: " + json.dumps({"error": last_err or "所有中转站均失败"}) + "\n\n").encode("utf-8")
+    yield ("data: " + json.dumps({"error": _build_upstream_error_hint(last_err or "")}) + "\n\n").encode("utf-8")
 
 
 def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
@@ -214,6 +256,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
     无 tools 时：边收边发，不缓冲，保持原有实时流式。
     """
     content_parts = []
+    reasoning_parts = []
     last_user = _last_user_message(body.get("messages") or [])
 
     def _collect_content_from_chunk(chunk):
@@ -225,6 +268,9 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                     delta = (j.get("choices") or [{}])[0].get("delta") or {}
                     if delta.get("content"):
                         content_parts.append(delta["content"])
+                    for rk in ("reasoning", "reasoning_content", "thinking"):
+                        if delta.get(rk):
+                            reasoning_parts.append(str(delta.get(rk)))
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
@@ -295,11 +341,14 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                 last_send_ts = time.time()
         finally:
             full_content = "".join(content_parts)
+            full_reasoning = "".join(reasoning_parts).strip()
             stream_sec = time.time() - stream_start
             # 若「流式持续时长」总是差不多（如 10–20s）而字数越来越短，可能是上游按时长限流
             logger.debug("本轮流式回复收集长度约 %s 字符，共转发 %s 个 data 块，流式持续约 %.1f 秒", len(full_content), data_chunk_count, stream_sec)
             if not is_failed_response(full_content) and full_content.strip():
                 msg = {"role": "assistant", "content": full_content}
+                if full_reasoning:
+                    msg["reasoning"] = full_reasoning
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
                 logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
                 step_archive_and_maybe_summary(
@@ -333,14 +382,19 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             if tool_calls and isinstance(tool_calls, list):
                 from services.notion_tools import execute_tool
                 msg = {"content": parsed.get("content") or None, "tool_calls": tool_calls}
+                if parsed.get("reasoning"):
+                    msg["reasoning"] = parsed.get("reasoning")
                 current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
                 continue
             for ch in chunks:
                 yield ch
             content_parts.append(parsed.get("content") or "")
+            if parsed.get("reasoning"):
+                reasoning_parts.append(parsed.get("reasoning") or "")
             break
     finally:
         full_content = "".join(content_parts)
+        full_reasoning = "".join(reasoning_parts).strip()
         logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
         if is_failed_response(full_content):
             logger.info("R2 未存档：流式回复被判为失败，跳过")
@@ -348,6 +402,8 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             logger.info("R2 未存档：流式回复为空，跳过")
         else:
             msg = {"role": "assistant", "content": full_content}
+            if full_reasoning:
+                msg["reasoning"] = full_reasoning
             round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             step_archive_and_maybe_summary(
@@ -362,11 +418,13 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
 
 
 def _forward_to_ai(body: dict, headers: dict):
-    """将请求体转发到配置的 AI 接口，支持多目标 fallback：一个失败试下一个。返回 (response_json, status_code, error)。非流式。"""
+    """将请求体转发到配置的 AI 接口：仅一个 active 上游（不再自动 fallback）。
+    返回 (response_json, status_code, error)。非流式。
+    """
     request_model = (body or {}).get("model") or ""
     targets = _get_forward_targets(request_model)
     if not targets:
-        return None, 502, "TARGET_AI_URL 或 TARGET_AI_URLS 未配置"
+        return None, 502, _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置")
     last_err = None
     last_status = 502
     for i, (url, api_key) in enumerate(targets):
@@ -400,7 +458,7 @@ def _forward_to_ai(body: dict, headers: dict):
                 last_status = r.status_code
                 last_err = "上游返回非 JSON"
                 continue
-            # 只有 2xx 算成功，其余（4xx/5xx/429 等）都 fallback 到下一个
+            # 只有 2xx 算成功，其余（4xx/5xx/429 等）直接失败（不再自动 fallback）
             if 200 <= r.status_code < 300:
                 # DEBUG 时打出上游原始响应的结构与内容摘要，便于核对格式
                 if data is not None and logger.isEnabledFor(10):  # DEBUG=10
@@ -422,12 +480,19 @@ def _forward_to_ai(body: dict, headers: dict):
                         pass
                 return data, r.status_code, None
             last_status = r.status_code
-            last_err = f"HTTP {r.status_code}"
-            logger.warning("转发目标 %s 失败 %s，尝试下一个", url[:50], r.status_code)
+            try:
+                if isinstance(data, dict):
+                    msg = (data.get("error") or data.get("message") or "").strip()
+                    last_err = msg if msg else f"HTTP {r.status_code}"
+                else:
+                    last_err = f"HTTP {r.status_code}"
+            except Exception:
+                last_err = f"HTTP {r.status_code}"
+            logger.warning("转发目标 %s 失败 %s（不再自动 fallback）", url[:50], r.status_code)
         except Exception as e:
             last_err = str(e)
-            logger.warning("转发目标 %s 异常 %s，尝试下一个", url[:50], e)
-    return None, last_status, last_err
+            logger.warning("转发目标 %s 异常 %s（不再自动 fallback）", url[:50], e)
+    return None, last_status, _build_upstream_error_hint(last_err or "")
 
 
 def _last_user_message(messages):
@@ -485,7 +550,7 @@ def list_models():
         static = _static_models_response()
         if static:
             return jsonify(static), 200
-        return jsonify({"error": "TARGET_AI_URL 或 TARGET_AI_URLS 未配置"}), 502
+        return jsonify({"error": _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置")}), 502
     url, api_key = targets[0]
     models_url = _chat_url_to_models_url(url)
     if not models_url:
@@ -580,6 +645,15 @@ def chat_completions():
         if is_failed_response(content_text):
             logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
         else:
+            # reasoning 兼容字段：尽量保存到 message 里，供手机端折叠查看
+            try:
+                if isinstance(msg, dict) and not msg.get("reasoning"):
+                    for rk in ("reasoning", "reasoning_content", "thinking"):
+                        if msg.get(rk):
+                            msg["reasoning"] = msg.get(rk)
+                            break
+            except Exception:
+                pass
             last_user = _last_user_message(body.get("messages"))
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             if last_user:

@@ -230,6 +230,34 @@ def notebook_append_entry(content: str) -> bool:
             return False
 
 
+def notebook_delete_entry_by_timestamp(timestamp: str) -> bool:
+    """按 timestamp 删除一条小本本记录（用于手机端管理）。"""
+    ts = (timestamp or "").strip()
+    if not ts:
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    with _notebook_write_lock:
+        try:
+            data = _read_json(client, R2_KEY_NOTEBOOK)
+            if data is None:
+                return False
+            entries = data.get("entries") or []
+            before = len(entries)
+            entries = [e for e in entries if (e.get("timestamp") or "").strip() != ts]
+            if len(entries) == before:
+                return False
+            entries.sort(key=lambda e: e.get("timestamp", ""))
+            data["entries"] = entries
+            _write_json(client, R2_KEY_NOTEBOOK, data)
+            logger.info("notebook_delete_entry_by_timestamp 已删除 ts=%s 剩余=%s", ts, len(entries))
+            return True
+        except Exception as e:
+            logger.error("notebook_delete_entry_by_timestamp 失败 ts=%s error=%s", ts, e, exc_info=True)
+            return False
+
+
 def get_conversation_rounds(window_id: str, last_n: int = 4) -> list:
     """获取该窗口最近 N 轮对话原文。"""
     client = _s3_client()
@@ -242,6 +270,24 @@ def get_conversation_rounds(window_id: str, last_n: int = 4) -> list:
         return []
     rounds = data["rounds"][-last_n:]
     return rounds
+
+
+def get_conversation_round_by_index(window_id: str, round_index: int) -> Optional[dict]:
+    """读取该窗口指定 index 的轮次（返回 {index,timestamp,messages} 或 None）。"""
+    if round_index < 1:
+        return None
+    client = _s3_client()
+    if not client:
+        return None
+    prefix = _prefix(window_id)
+    key = _get_key(prefix, "conversation.json")
+    data = _read_json(client, key)
+    if not data or not data.get("rounds"):
+        return None
+    for r in data.get("rounds") or []:
+        if (r.get("index") or 0) == round_index:
+            return r
+    return None
 
 
 def _content_to_text_for_preview(content) -> str:

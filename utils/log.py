@@ -3,8 +3,10 @@
 import logging
 import os
 import sys
+from pathlib import Path
 
-from config import LOG_LEVEL
+from config import LOG_LEVEL, MINIAPP_LOG_FILE
+from utils.log_buffer import add_log_line
 
 # 短模块名，一眼能看出错误来源
 LOG_NAMES = {
@@ -39,17 +41,63 @@ class FlushingStreamHandler(logging.StreamHandler):
         self.flush()
 
 
+class FlushingFileHandler(logging.FileHandler):
+    """写到文件时也 flush，确保手机端 tail 读得到最新日志。"""
+
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
+
+class LogBufferHandler(logging.Handler):
+    """进程内日志缓冲：当 gateway.log 不存在时，Mini App 仍可 tail/stream。"""
+
+    def emit(self, record):
+        try:
+            line = self.format(record)
+        except Exception:
+            line = record.getMessage()
+        add_log_line(line)
+
+
 def setup_logging():
     """在 app 启动时调用，配置全局日志。"""
     level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
     fmt = "%(asctime)s [%(short_name)s] %(levelname)s: %(message)s"
-    # 用 FlushingStreamHandler，nohup ... >> gateway.log 时每条日志立即落盘，tail -f 能看到 [Chat] INFO
-    handler = FlushingStreamHandler(sys.stdout)
-    handler.setFormatter(ShortNameFormatter(fmt))
     root = logging.getLogger()
     root.setLevel(level)
     root.handlers.clear()
-    root.addHandler(handler)
+
+    # 1) 标准输出：保留原行为，方便你直接 nohup + tail -f
+    stream_handler = FlushingStreamHandler(sys.stdout)
+    stream_handler.setFormatter(ShortNameFormatter(fmt))
+    root.addHandler(stream_handler)
+
+    # 进程内缓冲：fallback_stdio 使用
+    try:
+        buffer_handler = LogBufferHandler()
+        buffer_handler.setFormatter(ShortNameFormatter(fmt))
+        root.addHandler(buffer_handler)
+    except Exception:
+        pass
+
+    # 2) 可选：同时写入日志文件（供 Mini App 读取）
+    # 默认 `gateway.log`，如果配置为相对路径，则写到项目根目录。
+    try:
+        log_file = (MINIAPP_LOG_FILE or "").strip()
+        if log_file:
+            base_dir = Path(__file__).resolve().parent.parent
+            p = Path(log_file)
+            if not p.is_absolute():
+                p = base_dir / log_file
+            p.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = FlushingFileHandler(p, encoding="utf-8")
+            file_handler.setFormatter(ShortNameFormatter(fmt))
+            root.addHandler(file_handler)
+    except Exception:
+        # 日志文件失败不影响主服务
+        pass
+
     # 第三方库降噪
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("botocore").setLevel(logging.WARNING)
