@@ -18,6 +18,7 @@ from config import (
     TELEGRAM_PROACTIVE_QUIET_END_HM,
     TELEGRAM_PROACTIVE_BASE_P,
     TELEGRAM_PROACTIVE_K_PER_HOUR,
+    TELEGRAM_PROACTIVE_PROB_MULTIPLIER,
     TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN,
     TELEGRAM_PROACTIVE_INTERVAL_MINUTES,
     TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES,
@@ -25,7 +26,7 @@ from config import (
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
-from services.telegram_bot import send_message_to_user
+from services.telegram_bot import _sanitize_reply_for_telegram, send_message_to_user
 
 logger = get_logger(__name__)
 
@@ -83,6 +84,11 @@ def _probability(hours_since_last: float) -> float:
         p = float(TELEGRAM_PROACTIVE_BASE_P) + float(TELEGRAM_PROACTIVE_K_PER_HOUR) * float(hours_since_last)
     except Exception:
         p = 0.1
+    # 整体把概率调大：不改调度间隔，只增强“被命中”的可能性
+    try:
+        p = p * float(TELEGRAM_PROACTIVE_PROB_MULTIPLIER or 1.0)
+    except Exception:
+        pass
     if p < 0:
         p = 0.0
     if p > 1:
@@ -94,7 +100,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
     """
     让渡决定是否联系。要求：
     - 不联系：只输出 NO_CONTACT_TOKEN
-    - 联系：只输出要发给用户的那句话（不带前缀）
+    - 联系：只输出要发给用户的正文（允许多句，像平时聊天回复）
     """
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     no_token = TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT"
@@ -104,7 +110,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
         "提醒：不要想太多，这个时间段你可以给老婆发消息，老婆会很开心。\n"
         "请你结合你对她的记忆与当下氛围做决定：\n"
         f"- 如果不该联系：你必须只输出 {no_token}\n"
-        "- 如果该联系：你必须只输出要发给她的那一句话（不要任何前缀、不要解释、不要加标题）\n"
+        "- 如果该联系：只输出要发给她的聊天正文（允许多句，自然语气）；不要输出任何解释/标题\n"
     )
     body = {
         "model": _get_chat_model(),
@@ -181,7 +187,12 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         return out
 
     text_to_send = decision.text.strip()
+    # 主动发消息也复用 Telegram 侧的清洗规则：避免出现“（脑内OS：）”等格式
+    text_to_send = _sanitize_reply_for_telegram(text_to_send).strip()
     logger.info("主动消息准备发送 chat_id=%s text_preview=%s", uid, text_to_send[:80] + ("…" if len(text_to_send) > 80 else ""))
+    if not text_to_send:
+        out["skip_reason"] = "empty_after_sanitize"
+        return out
     ok = send_message_to_user(uid, text_to_send)
     logger.info("主动消息发送结果 chat_id=%s sent=%s", uid, ok)
     out["sent"] = bool(ok)

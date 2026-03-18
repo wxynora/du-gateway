@@ -242,6 +242,13 @@ TELEGRAM_PROACTIVE_QUIET_END_HM = os.environ.get("TELEGRAM_PROACTIVE_QUIET_END_H
 # 概率模型：P = min(1, base + k_per_hour * hours_since_last)
 TELEGRAM_PROACTIVE_BASE_P = float(os.environ.get("TELEGRAM_PROACTIVE_BASE_P", "0.05"))
 TELEGRAM_PROACTIVE_K_PER_HOUR = float(os.environ.get("TELEGRAM_PROACTIVE_K_PER_HOUR", "0.03"))
+# 概率整体倍率：不改调度间隔，只增强“命中后发消息”的概率
+try:
+    TELEGRAM_PROACTIVE_PROB_MULTIPLIER = float(os.environ.get("TELEGRAM_PROACTIVE_PROB_MULTIPLIER", "2.0"))
+except Exception:
+    TELEGRAM_PROACTIVE_PROB_MULTIPLIER = 2.0
+if TELEGRAM_PROACTIVE_PROB_MULTIPLIER < 0:
+    TELEGRAM_PROACTIVE_PROB_MULTIPLIER = 0.0
 # 渡决策标记：不联系时必须只输出该串
 TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN = os.environ.get("TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN", "NO_CONTACT").strip() or "NO_CONTACT"
 # 若用户在此分钟数内发过消息（正在聊天），则本 tick 不主动发，默认 30 分钟
