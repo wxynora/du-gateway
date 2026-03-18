@@ -26,6 +26,14 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(notion_bp)
 app.register_blueprint(telegram_webhook_bp)
 
+# Telegram（Webhook）运行时初始化：命令菜单等。放在 app 启动阶段，避免依赖 Blueprint 钩子。
+try:
+    from services.telegram_bot import init_telegram_bot_runtime
+
+    init_telegram_bot_runtime()
+except Exception:
+    pass
+
 # CORS：RikkaHub 等前端带自定义请求头（如 X-Assistant-Id）时，浏览器会先发 OPTIONS 预检
 CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
 CORS_ALLOW_HEADERS = "Content-Type, Authorization"

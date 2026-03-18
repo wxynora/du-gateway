@@ -37,13 +37,8 @@ def telegram_webhook():
     return jsonify({"ok": True})
 
 
-@bp.before_app_first_request
-def _init_bot():
-    """进程启动后初始化 Telegram 运行时（命令菜单等）。"""
-    try:
-        from services.telegram_bot import init_telegram_bot_runtime
-
-        init_telegram_bot_runtime()
-    except Exception:
-        return
+"""
+注意：不要在 Blueprint 上使用 before_app_first_request（不同 Flask 版本可能不存在）。
+Telegram 运行时初始化由 app.py 在启动时调用。
+"""
 
