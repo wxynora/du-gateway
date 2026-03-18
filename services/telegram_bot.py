@@ -495,9 +495,6 @@ def _set_my_commands() -> bool:
     url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/setMyCommands"
     payload = {
         "commands": [
-            {"command": "note", "description": "设置/覆盖置顶便签：/note 内容"},
-            {"command": "note_show", "description": "查看当前置顶便签"},
-            {"command": "note_clear", "description": "清空置顶便签"},
             {"command": "todo", "description": "显示 Todo 按钮键盘"},
         ]
     }
@@ -511,41 +508,6 @@ def _set_my_commands() -> bool:
     except Exception as e:
         logger.warning("setMyCommands 失败: %s", e)
         return False
-
-
-def _handle_note_commands(chat_id: int, user_id: int, text: str) -> bool:
-    """处理 /note /note_show /note_clear 命令。返回 True 表示已处理。"""
-    if not text:
-        return False
-    parts = text.strip().split(maxsplit=1)
-    cmd = (parts[0] or "").split("@", 1)[0].lower()
-    window_id = f"tg_{user_id}"
-    if cmd == "/note_show":
-        from storage import r2_store
-
-        note = (r2_store.get_tg_pinned_note(window_id) or "").strip()
-        if note:
-            send_message(chat_id, f"当前置顶便签：\n\n{note}")
-        else:
-            send_message(chat_id, "当前没有置顶便签。用 /note 内容 来设置。")
-        return True
-    if cmd == "/note_clear":
-        from storage import r2_store
-
-        ok = r2_store.delete_tg_pinned_note(window_id)
-        send_message(chat_id, "已清空置顶便签。" if ok else "清空失败，稍后再试。")
-        return True
-    if cmd == "/note":
-        content = (parts[1] if len(parts) > 1 else "").strip()
-        if not content:
-            send_message(chat_id, "用法：/note 便签内容\n例如：/note 下班先买牛奶")
-            return True
-        from storage import r2_store
-
-        ok = r2_store.save_tg_pinned_note(window_id, content)
-        send_message(chat_id, "已更新置顶便签。" if ok else "更新失败，稍后再试。")
-        return True
-    return False
 
 
 def _handle_todo_ui(chat_id: int, user_id: int, text: str) -> bool:
@@ -912,8 +874,6 @@ def run_polling():
                     continue
                 # Todo 按钮与交互（不进入聊天管道）
                 if _handle_todo_ui(chat_id=int(chat_id), user_id=int(user_id), text=text):
-                    continue
-                if _handle_note_commands(chat_id=int(chat_id), user_id=int(user_id), text=text):
                     continue
                 logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
                 # 若是主动消息目标用户，更新「最近活动时间」，供 proactive 判定「正在聊天时不主动发」

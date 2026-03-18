@@ -35,8 +35,6 @@ R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 R2_KEY_LAST_PROACTIVE_CONTACT_AT = "global/last_proactive_contact_at.txt"
 # 主动发消息：目标用户最近一次在 TG 发消息的时间（北京时间 ISO），用于「正在聊天时不主动发」
 R2_KEY_LAST_TELEGRAM_USER_ACTIVITY_AT = "global/last_telegram_user_activity_at.txt"
-# Telegram：置顶便签（每个 tg 窗口一份）
-R2_KEY_TG_PINNED_NOTE = "tg/pinned_note.txt"
 # Telegram：TodoList（每个 tg 窗口一份 JSON）
 R2_KEY_TG_TODOS = "tg/todos.json"
 
@@ -510,63 +508,6 @@ def save_last_telegram_user_activity_at(iso_str: str) -> bool:
                 Body=s.encode("utf-8"),
                 ContentType="text/plain",
             )
-            return True
-        except Exception:
-            return False
-
-
-def get_tg_pinned_note(window_id: str) -> Optional[str]:
-    """读取 Telegram 窗口的置顶便签文本。window_id 应为 tg_{user_id}。"""
-    if not (window_id and window_id.strip()):
-        return None
-    client = _s3_client()
-    if not client:
-        return None
-    prefix = _prefix(window_id)
-    key = _get_key(prefix, R2_KEY_TG_PINNED_NOTE)
-    try:
-        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=key)
-        v = resp["Body"].read().decode("utf-8").strip()
-        return v or None
-    except Exception:
-        return None
-
-
-def save_tg_pinned_note(window_id: str, text: str) -> bool:
-    """保存 Telegram 窗口的置顶便签文本（覆盖）。"""
-    if not (window_id and window_id.strip()):
-        return False
-    client = _s3_client()
-    if not client:
-        return False
-    s = (text or "").strip()
-    prefix = _prefix(window_id)
-    key = _get_key(prefix, R2_KEY_TG_PINNED_NOTE)
-    with _global_write_lock:
-        try:
-            client.put_object(
-                Bucket=R2_BUCKET_NAME,
-                Key=key,
-                Body=s.encode("utf-8"),
-                ContentType="text/plain",
-            )
-            return True
-        except Exception:
-            return False
-
-
-def delete_tg_pinned_note(window_id: str) -> bool:
-    """删除 Telegram 窗口的置顶便签。"""
-    if not (window_id and window_id.strip()):
-        return False
-    client = _s3_client()
-    if not client:
-        return False
-    prefix = _prefix(window_id)
-    key = _get_key(prefix, R2_KEY_TG_PINNED_NOTE)
-    with _global_write_lock:
-        try:
-            client.delete_object(Bucket=R2_BUCKET_NAME, Key=key)
             return True
         except Exception:
             return False
