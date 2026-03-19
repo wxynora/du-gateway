@@ -35,7 +35,8 @@ _TARGET_AI_URLS_STR = os.environ.get("TARGET_AI_URLS", "").strip()
 TARGET_AI_URLS = [u.strip() for u in _TARGET_AI_URLS_STR.split(",") if u.strip()] if _TARGET_AI_URLS_STR else []
 # 多目标对应的 Key，逗号分隔，与 URL 一一对应；不足的用 TARGET_AI_API_KEY 或空
 _TARGET_AI_KEYS_STR = os.environ.get("TARGET_AI_API_KEYS", "").strip()
-TARGET_AI_API_KEYS = [k.strip() for k in _TARGET_AI_KEYS_STR.split(",")] if _TARGET_AI_KEYS_STR else []
+# 过滤空 key：避免 env 里出现诸如 ",key" / 换行续接导致第一项为空，从而上游拿不到 Authorization 而 403
+TARGET_AI_API_KEYS = [k.strip() for k in _TARGET_AI_KEYS_STR.split(",") if k.strip()] if _TARGET_AI_KEYS_STR else []
 
 # 模型名匹配（用于多中转站）：请求的 model 含这些关键词时才走多目标 fallback，避免误转发
 # 必含：逗号分隔，全部出现才匹配，默认 claude,opus（thinking 可有可无，不加在默认里）
