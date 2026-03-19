@@ -75,6 +75,7 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 - 不确定几分 → 当 1 处理 → skip
 
 没有新信息、没有值得记的点就 skip；不确定就 skip。大部分时候该 skip。
+额外要求：若 action 是 new/merge，content 必须是“概括后的便签”，不要照抄原对话原文。
 
 ---
 

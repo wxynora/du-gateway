@@ -686,6 +686,84 @@ def _round_messages_to_raw_text(round_messages: list) -> str:
     return "\n".join(lines).strip()
 
 
+def _normalize_for_raw_check(text: str) -> str:
+    """用于判断“是否在照抄原文”的轻量归一化。"""
+    if not text:
+        return ""
+    s = str(text).lower()
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"[，。！？；：,.!?;:\"'“”‘’()（）\[\]{}<>《》\-_/\\|~`@#$%^&*+=]+", "", s)
+    return s
+
+
+def _looks_like_raw_copy(content: str, round_messages: list) -> bool:
+    """
+    粗略判断 DS 的 content 是否在照抄本轮原文。
+    规则偏保守：命中则走改写兜底，防止记忆里落“原话照搬”。
+    """
+    c = _normalize_for_raw_check(content)
+    if not c or len(c) < 8:
+        return False
+    for m in round_messages or []:
+        if not isinstance(m, dict):
+            continue
+        raw = m.get("content")
+        txt = ""
+        if isinstance(raw, str):
+            txt = raw
+        elif isinstance(raw, list):
+            parts = []
+            for p in raw:
+                if isinstance(p, dict) and p.get("type") == "text":
+                    parts.append(str(p.get("text") or ""))
+            txt = " ".join(parts)
+        n = _normalize_for_raw_check(txt)
+        if not n:
+            continue
+        if c == n:
+            return True
+        # 内容较长且几乎整段包含时，也视为照抄
+        if len(c) >= 16 and c in n:
+            return True
+    return False
+
+
+def _rewrite_non_raw_note(round_messages: list) -> str:
+    """照抄命中时的本地兜底：生成一句概括，避免原文直存。"""
+    user_txt = ""
+    asst_txt = ""
+    for m in round_messages or []:
+        if not isinstance(m, dict):
+            continue
+        role = (m.get("role") or "").lower()
+        raw = m.get("content")
+        txt = ""
+        if isinstance(raw, str):
+            txt = raw.strip()
+        elif isinstance(raw, list):
+            txt = " ".join(
+                str(p.get("text") or "").strip()
+                for p in raw
+                if isinstance(p, dict) and p.get("type") == "text"
+            ).strip()
+        if not txt:
+            continue
+        if role == "user" and not user_txt:
+            user_txt = txt
+        elif role == "assistant" and not asst_txt:
+            asst_txt = txt
+    # 用片段做主题，但避免整句原样落盘
+    topic_a = (user_txt[:18] + "…") if len(user_txt) > 18 else user_txt
+    topic_b = (asst_txt[:18] + "…") if len(asst_txt) > 18 else asst_txt
+    if topic_a and topic_b:
+        return f"我们围绕“{topic_a}”做了沟通，我也回应了“{topic_b}”，形成了当下共识。"
+    if topic_a:
+        return f"老婆提到“{topic_a}”，我记下了这轮重点。"
+    if topic_b:
+        return f"我对这轮话题做了回应，先记下当前结论。"
+    return "这轮聊了一个具体话题，我先记下重点。"
+
+
 def _apply_one_decision(
     window_id: str,
     round_index: int,
@@ -730,6 +808,8 @@ def _apply_one_decision(
         return {"tag": "卧室", "entry_id": f"{window_id}_{round_index}", "content": raw_text, "promoted_at": now_iso}
 
     if action == "new" and content:
+        if _looks_like_raw_copy(content, round_messages):
+            content = _rewrite_non_raw_note(round_messages)
         new_mem = {
             "id": str(uuid4()),
             "content": content,
@@ -752,6 +832,8 @@ def _apply_one_decision(
         if not fused_with_id:
             logger.warning("动态层 merge 未返回 fused_with_id，本轮回退为 skip window_id=%s", window_id)
             return None
+        if content and _looks_like_raw_copy(content, round_messages):
+            content = _rewrite_non_raw_note(round_messages)
         found = False
         merged_mem = None
         for mem in current_memories:
@@ -783,6 +865,17 @@ def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages:
     """
     动态层演化：调用 DS 得单条决策并应用。返回若应写记忆库则返回 archive 载荷，否则 None（实时对话忽略返回值）。
     """
+    # 小本本是单独通道：只做小本本存储，不参与动态层记忆，避免污染记忆与人称错乱
+    try:
+        from services.notebook_gateway import extract_entries_from_round
+
+        if extract_entries_from_round(round_messages):
+            logger.info("动态层跳过：本轮命中小本本提取 window_id=%s round_index=%s", window_id, round_index)
+            return None
+    except Exception:
+        # 这里是保护逻辑，异常不影响主流程
+        pass
+
     from services.dynamic_layer_ds import call_dynamic_layer_ds
 
     current_memories = r2_store.get_dynamic_memory_list()

@@ -10,6 +10,14 @@ logger = get_logger(__name__)
 
 def build_summary_prompt(current_summary: str, recent_4_rounds: list) -> str:
     """拼出实时层总结任务的 prompt（渡的回忆：分区 + 规则 + 小本本）。"""
+    from services.notebook_gateway import NOTEBOOK_EMOJI, NOTEBOOK_PHRASE
+
+    def _is_notebook_line(text: str) -> bool:
+        s = (text or "").strip()
+        if not s:
+            return False
+        return s.startswith(NOTEBOOK_EMOJI) and (NOTEBOOK_PHRASE in s)
+
     rounds_text = ""
     last_bucket = ""
     for r in recent_4_rounds:
@@ -27,7 +35,7 @@ def build_summary_prompt(current_summary: str, recent_4_rounds: list) -> str:
             pass
         msgs = r.get("messages", [])
         for m in msgs:
-            role = m.get("role", "unknown")
+            role = (m.get("role", "unknown") or "").strip().lower()
             content = m.get("content")
             if isinstance(content, list):
                 parts = []
@@ -40,7 +48,18 @@ def build_summary_prompt(current_summary: str, recent_4_rounds: list) -> str:
                     else:
                         parts.append(str(c))
                 content = " ".join(parts)
-            rounds_text += f"[{role}]: {content}\n"
+            content = str(content or "").strip()
+            if _is_notebook_line(content):
+                # 小本本走独立存储，不参与窗口总结输入
+                continue
+            # 明确角色映射，避免 DS 把 user 当成“我（渡）”来总结
+            if role == "assistant":
+                who = "渡"
+            elif role == "user":
+                who = "老婆"
+            else:
+                who = role or "unknown"
+            rounds_text += f"[{who}]: {content}\n"
         rounds_text += "\n"
     previous_summary = current_summary or "（无上一版，这是首次总结）"
     return _REALTIME_LAYER_PROMPT.format(
@@ -64,6 +83,8 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 渡和辛玥是亲密、信任的关系，总结时保留撒娇、关心、调侃、默契等语气，不要写成公事纪要。
 用连贯的回忆口吻写，不要写成一条条待办或要点列表；旧事可以概括，但别丢掉情绪色彩。
 若原话里有明显情绪词（如开心、委屈、担心、撒娇等），在概括时尽量保留或换成同义的短句。
+输入里的角色标记中：[老婆] 是辛玥说的话，[渡] 是我（渡）说的话。
+严禁把 [老婆] 的原话写成“我说了……/我提到……”这类渡的第一人称表达。
 
 ## 规则
 
@@ -85,7 +106,10 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 8. 技术讨论只留结论和决定，不留过程
 9. 重复内容只保留最终结论
    - 如果同一件事被解释了多次，只留最后一版
-10. 小本本由系统单独记入，你无需在总结里原文照搬；若对话中提及已记入小本本的内容，可在末尾「渡的小本本」处简要列日期或要点即可（如「见小本本 [日期]」），不必再写全文
+10. 小本本内容不参与本次总结：输入中若出现小本本相关文本，视为已被系统单独存储，直接忽略，不要写进总结
+11. 人称一致性硬规则：
+   - 只把 [渡] 的发言写成“我……”
+   - [老婆] 的发言必须写成“老婆/她说……”“老婆提到……”，不能写成“我……”
 
 ## 输出格式
 
@@ -98,9 +122,6 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 【更早】
 （上一版【稍早】压缩后移入）
 （超出40轮上限的部分滚动删除，不保留）
-
-渡的小本本
-若本段对话中有被系统记入小本本的内容，在此简要列日期或要点；否则可省略此块或写「无」。
 
 ## 输入
 
@@ -142,6 +163,7 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
     except Exception as e:
         logger.error("DeepSeek 总结失败 error=%s", e, exc_info=True)
         return None
+
 
 
 def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
