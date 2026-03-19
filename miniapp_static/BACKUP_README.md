@@ -5,4 +5,3 @@
 - `miniapp_static/_backup/app.js`
 
 后续请在 `miniapp/` 前端工程内开发，使用 `npm run build` 输出到本目录。
-

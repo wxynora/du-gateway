@@ -19,6 +19,11 @@ type ScheduleResp = {
   enabled_count?: number;
 };
 
+function normalizeItems(input: unknown): ScheduleItem[] {
+  if (!Array.isArray(input)) return [];
+  return input.filter((x): x is ScheduleItem => !!x && typeof x === "object");
+}
+
 function fmtDate(v: string): string {
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return v || "";
@@ -35,10 +40,11 @@ export function ScheduleTab() {
     setLoading(true);
     try {
       const j = await apiJson<ScheduleResp>("/miniapp-api/schedule/items");
-      setItems(j.items || []);
+      setItems(normalizeItems(j?.items));
       setError("");
     } catch (e: any) {
       setError(e?.message || String(e));
+      setItems([]);
       toast(`加载失败：${e?.message || e}`);
     } finally {
       setLoading(false);
@@ -51,11 +57,11 @@ export function ScheduleTab() {
   }, []);
 
   const enabledItems = useMemo(
-    () => items.filter((x) => x.enabled !== false).sort((a, b) => String(a.datetime || "").localeCompare(String(b.datetime || ""))),
+    () => normalizeItems(items).filter((x) => x.enabled !== false).sort((a, b) => String(a.datetime || "").localeCompare(String(b.datetime || ""))),
     [items]
   );
   const disabledItems = useMemo(
-    () => items.filter((x) => x.enabled === false).sort((a, b) => String(b.datetime || "").localeCompare(String(a.datetime || ""))),
+    () => normalizeItems(items).filter((x) => x.enabled === false).sort((a, b) => String(b.datetime || "").localeCompare(String(a.datetime || ""))),
     [items]
   );
 
@@ -92,6 +98,12 @@ export function ScheduleTab() {
       {error ? (
         <div className="rounded-xl2 bg-cream-pink/55 px-3 py-2 text-xs text-cream-text shadow-soft2">
           读取失败：{error}
+        </div>
+      ) : null}
+
+      {!loading && !error && !enabledItems.length && !disabledItems.length ? (
+        <div className="rounded-xl2 bg-white/46 border border-white/45 shadow-soft2 px-3 py-2 text-xs text-cream-muted">
+          暂无日历/提醒数据（已做兜底，不会白屏）。
         </div>
       ) : null}
 
