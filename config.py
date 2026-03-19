@@ -358,6 +358,8 @@ MCP_FORUM_DEFAULT_UID = os.environ.get("MCP_FORUM_DEFAULT_UID", "").strip()
 # 以下都是“相对 MCP_FORUM_BASE_URL 的 path”，可直接在 .env 覆盖。
 MCP_FORUM_VERIFY_UID_PATH = os.environ.get("MCP_FORUM_VERIFY_UID_PATH", "/verify-uid").strip()
 MCP_FORUM_REGISTER_PATH = os.environ.get("MCP_FORUM_REGISTER_PATH", "/register").strip()
+MCP_FORUM_VERIFY_UID_METHOD = os.environ.get("MCP_FORUM_VERIFY_UID_METHOD", "GET").strip().upper() or "GET"
+MCP_FORUM_REGISTER_METHOD = os.environ.get("MCP_FORUM_REGISTER_METHOD", "POST").strip().upper() or "POST"
 
 # 发帖/列表/详情
 MCP_FORUM_POST_CREATE_PATH = os.environ.get("MCP_FORUM_POST_CREATE_PATH", "/posts").strip()
@@ -366,3 +368,16 @@ MCP_FORUM_POST_DETAIL_PATH_TEMPLATE = os.environ.get("MCP_FORUM_POST_DETAIL_PATH
 
 # 评论
 MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE = os.environ.get("MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE", "/posts/{post_id}/comments").strip()
+
+# 兼容不同论坛实现的候选路径（逗号分隔），用于自动回退探测（主要解决 404）
+_MCP_FORUM_VERIFY_UID_PATHS_STR = os.environ.get(
+    "MCP_FORUM_VERIFY_UID_PATHS",
+    "/verify-uid,/api/verify-uid,/verify_uid,/api/verify_uid",
+).strip()
+MCP_FORUM_VERIFY_UID_PATHS = [x.strip() for x in _MCP_FORUM_VERIFY_UID_PATHS_STR.split(",") if x.strip()]
+
+_MCP_FORUM_POST_LIST_PATHS_STR = os.environ.get(
+    "MCP_FORUM_POST_LIST_PATHS",
+    "/posts,/api/posts,/forum/posts,/api/v1/posts",
+).strip()
+MCP_FORUM_POST_LIST_PATHS = [x.strip() for x in _MCP_FORUM_POST_LIST_PATHS_STR.split(",") if x.strip()]

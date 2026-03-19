@@ -11,8 +11,12 @@ from config import (
     MCP_FORUM_DEFAULT_UID,
     MCP_FORUM_VERIFY_UID_PATH,
     MCP_FORUM_REGISTER_PATH,
+    MCP_FORUM_VERIFY_UID_METHOD,
+    MCP_FORUM_REGISTER_METHOD,
+    MCP_FORUM_VERIFY_UID_PATHS,
     MCP_FORUM_POST_CREATE_PATH,
     MCP_FORUM_POST_LIST_PATH,
+    MCP_FORUM_POST_LIST_PATHS,
     MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
     MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE,
     MCP_HTTP_MAX_RESPONSE_CHARS,
@@ -320,6 +324,15 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
                 elif body is not None:
                     kwargs["data"] = str(body)
             resp = requests.request(**kwargs)
+            # 常见接口方法不匹配：自动在 GET/POST 间切换一次（405 -> retry）
+            if resp.status_code == 405 and method in ("GET", "POST"):
+                alt_method = "POST" if method == "GET" else "GET"
+                kwargs["method"] = alt_method
+                if alt_method == "GET":
+                    # GET 时避免带 json/data
+                    kwargs.pop("json", None)
+                    kwargs.pop("data", None)
+                resp = requests.request(**kwargs)
             try:
                 data = resp.json()
                 is_json = True
@@ -370,7 +383,8 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         if "Authorization" not in headers and "authorization" not in headers:
             headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
         payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
-        result, _ = invoke_forum_http("POST", url, headers, None, payload, args.get("timeout"))
+        method = (args.get("method") or MCP_FORUM_VERIFY_UID_METHOD).strip().upper()
+        result, _ = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
         return json.dumps(result, ensure_ascii=False)
 
     if name == "forum_post":
@@ -444,22 +458,30 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         return json.dumps(result, ensure_ascii=False)
 
     if name == "forum_verify_uid":
-        url = _build_url_from_base(args.get("path") or MCP_FORUM_VERIFY_UID_PATH, MCP_FORUM_VERIFY_UID_PATH)
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        method = (args.get("method") or "POST").strip().upper()
+        # 先用主路径，再按候选路径自动探测，减少 404
+        primary = (args.get("path") or MCP_FORUM_VERIFY_UID_PATH).strip()
+        candidates = [primary] + [p for p in (MCP_FORUM_VERIFY_UID_PATHS or []) if p != primary]
+        method = (args.get("method") or MCP_FORUM_VERIFY_UID_METHOD).strip().upper()
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         if "Authorization" not in headers and "authorization" not in headers:
             headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
         payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
-        result, _ = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
+        last = {"ok": False, "status": 404, "error": "未找到 verify-uid 路径"}
+        for p in candidates:
+            url = _build_url_from_base(p, p)
+            if not url:
+                continue
+            result, _ = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
+            last = result
+            if int(result.get("status") or 0) != 404:
+                return json.dumps(result, ensure_ascii=False)
+        return json.dumps(last, ensure_ascii=False)
 
     if name == "forum_register":
         url = _build_url_from_base(args.get("path") or MCP_FORUM_REGISTER_PATH, MCP_FORUM_REGISTER_PATH)
         if not url:
             return "未配置 MCP_FORUM_BASE_URL"
-        method = (args.get("method") or "POST").strip().upper()
+        method = (args.get("method") or MCP_FORUM_REGISTER_METHOD).strip().upper()
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         if "Authorization" not in headers and "authorization" not in headers:
             headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
@@ -468,9 +490,8 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         return json.dumps(result, ensure_ascii=False)
 
     if name == "forum_list_posts":
-        url = _build_url_from_base(args.get("path") or MCP_FORUM_POST_LIST_PATH, MCP_FORUM_POST_LIST_PATH)
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
+        primary = (args.get("path") or MCP_FORUM_POST_LIST_PATH).strip()
+        candidates = [primary] + [p for p in (MCP_FORUM_POST_LIST_PATHS or []) if p != primary]
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         if "Authorization" not in headers and "authorization" not in headers:
             headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
@@ -480,8 +501,16 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         if args.get("offset") is not None:
             params["offset"] = args.get("offset")
         params = params or None
-        result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
+        last = {"ok": False, "status": 404, "error": "未找到帖子列表路径"}
+        for p in candidates:
+            url = _build_url_from_base(p, p)
+            if not url:
+                continue
+            result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
+            last = result
+            if int(result.get("status") or 0) != 404:
+                return json.dumps(result, ensure_ascii=False)
+        return json.dumps(last, ensure_ascii=False)
 
     if name == "forum_get_post":
         post_id = str(args.get("post_id") or "").strip()

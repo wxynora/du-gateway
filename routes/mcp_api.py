@@ -4,8 +4,12 @@ from config import (
     MCP_ENABLED,
     MCP_FORUM_DEFAULT_UID,
     MCP_FORUM_VERIFY_UID_PATH,
+    MCP_FORUM_VERIFY_UID_METHOD,
+    MCP_FORUM_VERIFY_UID_PATHS,
     MCP_FORUM_REGISTER_PATH,
+    MCP_FORUM_REGISTER_METHOD,
     MCP_FORUM_POST_LIST_PATH,
+    MCP_FORUM_POST_LIST_PATHS,
     MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
 )
 from services.mcp_forum_tools import get_forum_tools_for_inject, invoke_forum_http
@@ -137,21 +141,28 @@ def mcp_invoke():
         return jsonify(result), status
 
     if tool == "forum_verify_uid":
-        method = (args.get("method") or "POST").strip().upper()
+        method = (args.get("method") or MCP_FORUM_VERIFY_UID_METHOD).strip().upper()
         from services.mcp_forum_tools import _build_url_from_base
 
-        url = _build_url_from_base(args.get("path") or MCP_FORUM_VERIFY_UID_PATH, MCP_FORUM_VERIFY_UID_PATH)
-        if not url:
-            return jsonify({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}), 400
+        primary = (args.get("path") or MCP_FORUM_VERIFY_UID_PATH).strip()
+        candidates = [primary] + [p for p in (MCP_FORUM_VERIFY_UID_PATHS or []) if p != primary]
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         if "Authorization" not in headers and "authorization" not in headers:
             headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
         payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
-        result, status = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
-        return jsonify(result), status
+        last = {"ok": False, "status": 404, "error": "未找到 verify-uid 路径"}
+        for p in candidates:
+            url = _build_url_from_base(p, p)
+            if not url:
+                continue
+            result, status = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
+            last = result
+            if int(result.get("status") or 0) != 404:
+                return jsonify(result), status
+        return jsonify(last), 200
 
     if tool == "forum_register":
-        method = (args.get("method") or "POST").strip().upper()
+        method = (args.get("method") or MCP_FORUM_REGISTER_METHOD).strip().upper()
         from services.mcp_forum_tools import _build_url_from_base
 
         url = _build_url_from_base(args.get("path") or MCP_FORUM_REGISTER_PATH, MCP_FORUM_REGISTER_PATH)
@@ -167,9 +178,8 @@ def mcp_invoke():
     if tool == "forum_list_posts":
         from services.mcp_forum_tools import _build_url_from_base
 
-        url = _build_url_from_base(args.get("path") or MCP_FORUM_POST_LIST_PATH, MCP_FORUM_POST_LIST_PATH)
-        if not url:
-            return jsonify({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}), 400
+        primary = (args.get("path") or MCP_FORUM_POST_LIST_PATH).strip()
+        candidates = [primary] + [p for p in (MCP_FORUM_POST_LIST_PATHS or []) if p != primary]
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         if "Authorization" not in headers and "authorization" not in headers:
             headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
@@ -179,8 +189,16 @@ def mcp_invoke():
         if args.get("offset") is not None:
             params["offset"] = args.get("offset")
         params = params or None
-        result, status = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
-        return jsonify(result), status
+        last = {"ok": False, "status": 404, "error": "未找到帖子列表路径"}
+        for p in candidates:
+            url = _build_url_from_base(p, p)
+            if not url:
+                continue
+            result, status = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
+            last = result
+            if int(result.get("status") or 0) != 404:
+                return jsonify(result), status
+        return jsonify(last), 200
 
     if tool == "forum_get_post":
         post_id = str(args.get("post_id") or "").strip()
