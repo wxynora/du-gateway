@@ -42,6 +42,9 @@ R2_KEY_LAST_PROACTIVE_CONTACT_AT = "global/last_proactive_contact_at.txt"
 R2_KEY_LAST_TELEGRAM_USER_ACTIVITY_AT = "global/last_telegram_user_activity_at.txt"
 # Telegram：TodoList（每个 tg 窗口一份 JSON）
 R2_KEY_TG_TODOS = "tg/todos.json"
+# 日历/提醒（V2 第一批：只读 + 禁用）
+R2_KEY_SCHEDULE_ITEMS = "schedule/items.json"
+R2_KEY_SCHEDULE_FIRED = "schedule/fired.json"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
@@ -596,6 +599,60 @@ def save_tg_todos(window_id: str, items: list[dict]) -> bool:
             return True
         except Exception:
             return False
+
+
+def get_schedule_items() -> list[dict]:
+    """读取日历/提醒条目列表。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_SCHEDULE_ITEMS)
+    if not data or not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    out = [x for x in items if isinstance(x, dict)]
+    out.sort(key=lambda x: (str(x.get("datetime") or ""), str(x.get("id") or "")))
+    return out
+
+
+def save_schedule_items(items: list[dict]) -> bool:
+    """保存日历/提醒条目列表（覆盖）。"""
+    client = _s3_client()
+    if not client:
+        return False
+    payload = {"items": items or []}
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_SCHEDULE_ITEMS, payload)
+            return True
+        except Exception as e:
+            logger.error("save_schedule_items 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def disable_schedule_item(item_id: str) -> bool:
+    """禁用某条提醒：enabled=false，未来不再触发。"""
+    iid = (item_id or "").strip()
+    if not iid:
+        return False
+    items = get_schedule_items()
+    if not items:
+        return False
+    changed = False
+    now_iso = now_beijing_iso()
+    for it in items:
+        if str(it.get("id") or "").strip() != iid:
+            continue
+        if bool(it.get("enabled")):
+            it["enabled"] = False
+            it["disabled_at"] = now_iso
+            changed = True
+        break
+    if not changed:
+        return False
+    return save_schedule_items(items)
 
 
 # ---------- 动态层 current.json ----------

@@ -190,6 +190,24 @@ def miniapp_reasoning_latest():
     return jsonify({"ok": True, "window_id": target, "items": out, "count": len(out)})
 
 
+@bp.route("/schedule/items", methods=["GET"])
+def miniapp_schedule_items():
+    items = r2_store.get_schedule_items() or []
+    enabled_count = len([x for x in items if bool(x.get("enabled", True))])
+    return jsonify({"ok": True, "items": items, "count": len(items), "enabled_count": enabled_count})
+
+
+@bp.route("/schedule/items/<item_id>/disable", methods=["PUT"])
+def miniapp_disable_schedule_item(item_id: str):
+    iid = (item_id or "").strip()
+    if not iid:
+        return jsonify({"ok": False, "error": "缺少 item_id"}), 400
+    ok = r2_store.disable_schedule_item(iid)
+    if not ok:
+        return jsonify({"ok": False, "error": "未找到条目或已是禁用状态"}), 404
+    return jsonify({"ok": True, "id": iid, "action": "disable_future"})
+
+
 @bp.route("/dynamic-memory", methods=["GET"])
 def miniapp_dynamic_memory():
     try:

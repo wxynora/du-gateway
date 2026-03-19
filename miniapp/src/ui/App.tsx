@@ -6,6 +6,7 @@ import { Btn, Modal } from "./components";
 import { LogsTab } from "./tabs/LogsTab";
 import { SettingsUpstream } from "./tabs/SettingsUpstream";
 import { ReasoningTab } from "./tabs/ReasoningTab";
+import { ScheduleTab } from "./tabs/ScheduleTab";
 
 type PanelId = "logs" | "reasoning" | null;
 type BgPreset = "cream" | "grid" | "soft";
@@ -18,6 +19,7 @@ function Shell() {
   const [showCorePrompt, setShowCorePrompt] = useState(false);
   const [showBgEditor, setShowBgEditor] = useState(false);
   const [showHomeMenu, setShowHomeMenu] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
   const version = new URLSearchParams(window.location.search).get("v") || "";
   const [bg, setBg] = useState<BgConfig>({
     preset: "cream",
@@ -106,9 +108,18 @@ function Shell() {
       {showSettings ? <SettingsUpstream onClose={() => setShowSettings(false)} /> : null}
       {showCorePrompt ? <CorePromptEditor onClose={() => setShowCorePrompt(false)} /> : null}
       {showBgEditor ? <BackgroundEditor bg={bg} onChange={setBg} onClose={() => setShowBgEditor(false)} /> : null}
+      {showSchedule ? (
+        <Modal title="日历与提醒" onClose={() => setShowSchedule(false)}>
+          <ScheduleTab />
+        </Modal>
+      ) : null}
       <HomeOrbMenu
         open={showHomeMenu}
         onToggle={() => setShowHomeMenu((v: boolean) => !v)}
+        onOpenSchedule={() => {
+          setShowHomeMenu(false);
+          setShowSchedule(true);
+        }}
         onOpenBackground={() => {
           setShowHomeMenu(false);
           setShowBgEditor(true);
@@ -169,10 +180,12 @@ function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt"
 function HomeOrbMenu({
   open,
   onToggle,
+  onOpenSchedule,
   onOpenBackground,
 }: {
   open: boolean;
   onToggle: () => void;
+  onOpenSchedule: () => void;
   onOpenBackground: () => void;
 }) {
   return (
@@ -188,11 +201,13 @@ function HomeOrbMenu({
               <LineIcon name="background" />
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-[92px] rounded-full bg-white/48 backdrop-blur-2xl border border-white/50 shadow-soft2 flex items-center justify-center text-[10px] text-cream-muted"
-              disabled
-              title="日历（预留）"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-[92px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              onClick={onOpenSchedule}
+              title="日历与提醒"
             >
-              日历
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M7 3v3M17 3v3M4 9h16M5 6h14a1 1 0 0 1 1 1v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a1 1 0 0 1 1-1z" />
+              </svg>
             </button>
             <button
               className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[44px] -translate-y-[64px] rounded-full bg-white/48 backdrop-blur-2xl border border-white/50 shadow-soft2 flex items-center justify-center text-[10px] text-cream-muted"

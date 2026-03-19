@@ -33,3 +33,19 @@ export type CoreCacheResponse = { pending?: CoreCacheEntry[]; count?: number };
 export type NotebookEntry = { timestamp?: string; content?: string };
 export type NotebookResponse = { entries?: NotebookEntry[]; count?: number };
 
+export type ScheduleItem = {
+  id?: string;
+  title?: string;
+  datetime?: string;
+  repeat?: string;
+  enabled?: boolean;
+  note?: string;
+};
+
+export type ScheduleResponse = {
+  ok?: boolean;
+  items?: ScheduleItem[];
+  count?: number;
+  enabled_count?: number;
+};
+
