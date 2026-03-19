@@ -34,7 +34,7 @@ export function Btn({
 }: {
   children: React.ReactNode;
   onClick?: () => void;
-  kind?: "default" | "danger" | "blue" | "pink" | "green";
+  kind?: "default" | "danger" | "blue" | "pink" | "green" | "dark";
   disabled?: boolean;
 }) {
   const base =
@@ -44,6 +44,7 @@ export function Btn({
     if (kind === "blue") return base + " bg-cream-blue/75 text-cream-text";
     if (kind === "pink") return base + " bg-cream-pink/70 text-cream-text";
     if (kind === "green") return base + " bg-cream-green/75 text-cream-text";
+    if (kind === "dark") return base + " bg-neutral-900 text-white border-neutral-900";
     return base + " text-cream-text";
   })();
   return (

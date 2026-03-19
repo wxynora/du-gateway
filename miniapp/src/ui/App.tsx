@@ -7,6 +7,7 @@ import { LogsTab } from "./tabs/LogsTab";
 import { SettingsUpstream } from "./tabs/SettingsUpstream";
 import { ReasoningTab } from "./tabs/ReasoningTab";
 import { ScheduleTab } from "./tabs/ScheduleTab";
+import { AlarmTab } from "./tabs/AlarmTab";
 
 type PanelId = "logs" | "reasoning" | null;
 type BgPreset = "cream" | "grid" | "soft";
@@ -20,6 +21,7 @@ function Shell() {
   const [showBgEditor, setShowBgEditor] = useState(false);
   const [showHomeMenu, setShowHomeMenu] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [showAlarm, setShowAlarm] = useState(false);
   const version = new URLSearchParams(window.location.search).get("v") || "";
   const [bg, setBg] = useState<BgConfig>({
     preset: "cream",
@@ -113,6 +115,11 @@ function Shell() {
           <ScheduleTab />
         </Modal>
       ) : null}
+      {showAlarm ? (
+        <Modal title="闹钟" onClose={() => setShowAlarm(false)}>
+          <AlarmTab />
+        </Modal>
+      ) : null}
       <HomeOrbMenu
         open={showHomeMenu}
         onToggle={() => setShowHomeMenu((v: boolean) => !v)}
@@ -123,6 +130,10 @@ function Shell() {
         onOpenBackground={() => {
           setShowHomeMenu(false);
           setShowBgEditor(true);
+        }}
+        onOpenAlarm={() => {
+          setShowHomeMenu(false);
+          setShowAlarm(true);
         }}
       />
     </div>
@@ -182,11 +193,13 @@ function HomeOrbMenu({
   onToggle,
   onOpenSchedule,
   onOpenBackground,
+  onOpenAlarm,
 }: {
   open: boolean;
   onToggle: () => void;
   onOpenSchedule: () => void;
   onOpenBackground: () => void;
+  onOpenAlarm: () => void;
 }) {
   return (
     <div className="fixed inset-x-0 bottom-10 z-30 flex justify-center pointer-events-none">
@@ -210,11 +223,14 @@ function HomeOrbMenu({
               </svg>
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[44px] -translate-y-[64px] rounded-full bg-white/48 backdrop-blur-2xl border border-white/50 shadow-soft2 flex items-center justify-center text-[10px] text-cream-muted"
-              disabled
-              title="闹钟（预留）"
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[44px] -translate-y-[64px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              onClick={onOpenAlarm}
+              title="闹钟"
             >
-              闹钟
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="12" cy="13" r="7" />
+                <path d="M12 13V9m0 4 3 2M7 4 4 7m13-3 3 3" />
+              </svg>
             </button>
           </>
         ) : null}
@@ -428,8 +444,8 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
           placeholder={loading ? "加载中..." : "在这里编辑核心 Prompt"}
         />
         <div className="flex items-center gap-2">
-          <Btn kind="blue" onClick={load} disabled={loading || saving}>刷新</Btn>
-          <Btn kind="green" onClick={save} disabled={loading || saving}>保存</Btn>
+          <Btn kind="dark" onClick={load} disabled={loading || saving}>刷新</Btn>
+          <Btn kind="dark" onClick={save} disabled={loading || saving}>保存</Btn>
         </div>
       </div>
     </Modal>

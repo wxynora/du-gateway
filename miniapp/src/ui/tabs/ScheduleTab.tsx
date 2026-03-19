@@ -49,6 +49,10 @@ function dateLabel(v: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function monthLabel(y: number, m: number): string {
+  return `${y}年${String(m + 1).padStart(2, "0")}月`;
+}
+
 export function ScheduleTab() {
   const toast = useToast();
   const [items, setItems] = useState<ScheduleItem[]>([]);
@@ -60,6 +64,10 @@ export function ScheduleTab() {
   const [formRepeat, setFormRepeat] = useState("once");
   const [formNote, setFormNote] = useState("");
   const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date().toISOString()));
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  });
 
   async function load() {
     setLoading(true);
@@ -98,9 +106,8 @@ export function ScheduleTab() {
     [allItems, selectedDate]
   );
   const calendarCells = useMemo(() => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
+    const year = visibleMonth.year;
+    const month = visibleMonth.month;
     const firstDay = new Date(year, month, 1);
     const firstWeekday = firstDay.getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -113,7 +120,7 @@ export function ScheduleTab() {
       body.push({ key: `d-${d}`, day: d, inMonth: true });
     }
     return [...prefix, ...body];
-  }, []);
+  }, [visibleMonth]);
   const dateCountMap = useMemo(() => {
     const m: Record<string, number> = {};
     allItems.forEach((it) => {
@@ -204,6 +211,13 @@ export function ScheduleTab() {
     }
   }
 
+  function switchMonth(step: number) {
+    setVisibleMonth((prev) => {
+      const d = new Date(prev.year, prev.month + step, 1);
+      return { year: d.getFullYear(), month: d.getMonth() };
+    });
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between px-1">
@@ -270,8 +284,24 @@ export function ScheduleTab() {
 
       <div className="rounded-xl3 bg-white/40 backdrop-blur-xl border border-white/50 shadow-soft p-3 space-y-2">
         <div className="flex items-center justify-between">
-          <div className="text-xs text-cream-muted">本月日历</div>
-          <div className="text-[11px] text-cream-muted">仅展示当月</div>
+          <div className="text-xs text-cream-muted">月视图日历</div>
+          <div className="flex items-center gap-1">
+            <button
+              className="h-7 rounded-xl2 bg-white/65 border border-white/55 px-2 text-[11px] text-cream-text shadow-soft2"
+              onClick={() => switchMonth(-1)}
+              title="上月"
+            >
+              上月
+            </button>
+            <div className="min-w-[84px] text-center text-[11px] text-cream-muted">{monthLabel(visibleMonth.year, visibleMonth.month)}</div>
+            <button
+              className="h-7 rounded-xl2 bg-white/65 border border-white/55 px-2 text-[11px] text-cream-text shadow-soft2"
+              onClick={() => switchMonth(1)}
+              title="下月"
+            >
+              下月
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-7 gap-1 text-[11px] text-cream-muted">
           {["日", "一", "二", "三", "四", "五", "六"].map((w) => (
@@ -281,8 +311,7 @@ export function ScheduleTab() {
         <div className="grid grid-cols-7 gap-1">
           {calendarCells.map((cell) => {
             if (!cell.inMonth) return <div key={cell.key} className="h-10 rounded-xl2 bg-white/10" />;
-            const current = new Date();
-            const k = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}`;
+            const k = `${visibleMonth.year}-${String(visibleMonth.month + 1).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}`;
             const selected = k === selectedDate;
             const count = dateCountMap[k] || 0;
             return (

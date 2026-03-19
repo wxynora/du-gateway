@@ -124,9 +124,9 @@ export function LogsTab() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <Btn kind="blue" onClick={loadTail}>拉取末尾 200 行</Btn>
+        <Btn kind="dark" onClick={loadTail}>拉取末尾 200 行</Btn>
         <Btn
-          kind="green"
+          kind="dark"
           onClick={() => {
             setPaused((p) => !p);
             toast(!paused ? "已暂停" : "已继续");
@@ -134,7 +134,7 @@ export function LogsTab() {
         >
           {paused ? "继续" : "暂停"}
         </Btn>
-        <Btn kind="pink" onClick={() => (connected ? disconnect() : connect())}>{connected ? "断开实时" : "连接实时"}</Btn>
+        <Btn kind="dark" onClick={() => (connected ? disconnect() : connect())}>{connected ? "断开实时" : "连接实时"}</Btn>
       </div>
 
       {loadError ? (
@@ -153,7 +153,7 @@ export function LogsTab() {
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
           />
-          <Btn kind="green"
+          <Btn kind="dark"
             onClick={() => {
               setFilterText("");
               toast("已清空过滤");
@@ -162,7 +162,7 @@ export function LogsTab() {
           >
             清空
           </Btn>
-          <Btn kind="pink"
+          <Btn kind="dark"
             onClick={() => {
               const k = (filterText || "").trim();
               const text = (filtered || []).slice(0, 200).join("\n") || "";
