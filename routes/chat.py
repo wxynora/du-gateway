@@ -476,6 +476,24 @@ def _forward_to_ai(body: dict, headers: dict):
                     body_send["max_tokens"] = MAX_COMPLETION_TOKENS
                     logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
             r = requests.post(url, headers=req_headers, json=body_send, timeout=120)
+            # 为排查上游 403：记录鉴权是否携带（不泄露 key），以及响应正文前缀
+            try:
+                api_key_len = len(api_key or "")
+            except Exception:
+                api_key_len = -1
+            try:
+                resp_text_preview = (r.text or "")[:300]
+            except Exception:
+                resp_text_preview = ""
+            logger.warning(
+                "Upstream resp hint: status=%s url=%s hasAuth=%s apiKeyLen=%s model=%s preview=%s",
+                getattr(r, "status_code", None),
+                (url or "")[:60],
+                bool(api_key),
+                api_key_len,
+                (body_send.get("model") or ""),
+                resp_text_preview,
+            )
             try:
                 data = r.json() if r.content else None
             except (ValueError, requests.exceptions.JSONDecodeError):
