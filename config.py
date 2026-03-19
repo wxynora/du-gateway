@@ -290,3 +290,33 @@ MINIAPP_TRUST_PROXY = os.environ.get("MINIAPP_TRUST_PROXY", "").strip().lower() 
 
 # 日志文件路径：用于 Mini App 手机端查看；默认读当前工作目录下 gateway.log
 MINIAPP_LOG_FILE = os.environ.get("MINIAPP_LOG_FILE", "gateway.log").strip()
+
+# -------------------- MCP 工具网关（论坛 HTTP 工具） --------------------
+# MCP 总开关：0=关闭，1=开启
+MCP_ENABLED = os.environ.get("MCP_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+# 鉴权模式：
+# - token：仅校验 token（推荐默认）
+# - token_ip：token + IP 白名单双重校验
+# - off：关闭鉴权（仅限内网调试）
+MCP_AUTH_MODE = os.environ.get("MCP_AUTH_MODE", "token").strip().lower()
+if MCP_AUTH_MODE not in ("token", "token_ip", "off"):
+    MCP_AUTH_MODE = "token"
+# Token（支持多个，逗号分隔；请求头支持 Authorization: Bearer xxx / X-MCP-Token: xxx）
+_MCP_TOKENS_STR = os.environ.get("MCP_TOKENS", "").strip()
+MCP_TOKENS = [x.strip() for x in _MCP_TOKENS_STR.split(",") if x.strip()]
+# 论坛 API 基础地址（给 forum_login/forum_post/forum_comment 这类预设工具拼 URL）
+# 示例：https://forum.example.com
+MCP_FORUM_BASE_URL = os.environ.get("MCP_FORUM_BASE_URL", "").strip().rstrip("/")
+# 白名单域名（forum_http 只允许访问这些域名；逗号分隔）
+# 示例：MCP_FORUM_ALLOWED_HOSTS=forum.example.com,api.forum.example.com
+_MCP_FORUM_ALLOWED_HOSTS_STR = os.environ.get("MCP_FORUM_ALLOWED_HOSTS", "").strip()
+MCP_FORUM_ALLOWED_HOSTS = [x.strip().lower() for x in _MCP_FORUM_ALLOWED_HOSTS_STR.split(",") if x.strip()]
+# 可选 IP 白名单（仅 MCP_AUTH_MODE=token_ip 时生效）
+MCP_IP_ALLOWLIST = [x.strip() for x in os.environ.get("MCP_IP_ALLOWLIST", "").split(",") if x.strip()]
+# 反代场景下是否信任 X-Forwarded-For（仅 MCP IP 白名单用）
+MCP_TRUST_PROXY = os.environ.get("MCP_TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
+# forum_http 请求超时与重试
+MCP_HTTP_TIMEOUT_SECONDS = int(os.environ.get("MCP_HTTP_TIMEOUT_SECONDS", "20"))
+MCP_HTTP_MAX_TIMEOUT_SECONDS = int(os.environ.get("MCP_HTTP_MAX_TIMEOUT_SECONDS", "60"))
+MCP_HTTP_RETRIES = int(os.environ.get("MCP_HTTP_RETRIES", "2"))
+MCP_HTTP_MAX_RESPONSE_CHARS = int(os.environ.get("MCP_HTTP_MAX_RESPONSE_CHARS", "12000"))

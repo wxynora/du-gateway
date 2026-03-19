@@ -18,6 +18,7 @@ from routes.admin import bp as admin_bp
 from routes.notion_routes import bp as notion_bp
 from routes.telegram_webhook import bp as telegram_webhook_bp
 from routes.miniapp_api import bp as miniapp_api_bp
+from routes.mcp_api import bp as mcp_api_bp
 from config import MINIAPP_STATIC_DIR
 
 # 确保数据目录存在
@@ -29,6 +30,7 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(notion_bp)
 app.register_blueprint(telegram_webhook_bp)
 app.register_blueprint(miniapp_api_bp)
+app.register_blueprint(mcp_api_bp)
 
 # Telegram（Webhook）运行时初始化：命令菜单等。放在 app 启动阶段，避免依赖 Blueprint 钩子。
 try:
