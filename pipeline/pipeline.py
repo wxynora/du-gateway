@@ -3,6 +3,7 @@ import copy
 import json
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
@@ -66,7 +67,7 @@ def step_clean_for_forward(body: dict) -> dict:
     return body
 
 
-_CORE_PROMPT_CACHE = {"text": None}
+_CORE_PROMPT_CACHE = {"text": None, "ts": 0.0}
 
 
 def _load_du_core_prompt_from_file() -> str:
@@ -89,13 +90,37 @@ def _load_du_core_prompt_from_file() -> str:
     return ""
 
 
+def _load_du_core_prompt() -> str:
+    """
+    读取全局核心 Prompt（优先 R2，可被 MiniApp 随时编辑）；若 R2 没有则回退本地 3.16 文件。
+    做一个很短的本地缓存，避免每次请求都读 R2。
+    """
+    now = time.time()
+    cache_ttl_s = 5.0
+    if _CORE_PROMPT_CACHE["text"] is not None and (now - float(_CORE_PROMPT_CACHE.get("ts") or 0.0) <= cache_ttl_s):
+        return _CORE_PROMPT_CACHE["text"] or ""
+
+    text = None
+    try:
+        text = r2_store.get_core_prompt_text()
+        if text is not None:
+            text = (text or "").strip()
+    except Exception:
+        text = None
+    if not text:
+        text = _load_du_core_prompt_from_file()
+    _CORE_PROMPT_CACHE["text"] = text or ""
+    _CORE_PROMPT_CACHE["ts"] = now
+    return _CORE_PROMPT_CACHE["text"] or ""
+
+
 def step_replace_rikka_system(body: dict) -> dict:
     """
     发给 AI 之前：在最前面插入「渡的 prompt（2026.3.16 版）」一条。
     内容来自 prompts/du_core_prompt.txt，不准改动、每次必须全文注入，不截断。
     不注入 RIKKA_SYSTEM_REPLACE；Rikkahub 自带的 system 等保持原样接在后面。
     """
-    du_prompt = _load_du_core_prompt_from_file()
+    du_prompt = _load_du_core_prompt()
     if not du_prompt:
         return body
     messages = body.get("messages") or []

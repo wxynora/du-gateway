@@ -184,6 +184,35 @@ def miniapp_notebook_delete(ts: str):
     return jsonify({"ok": ok, "timestamp": ts})
 
 
+@bp.route("/core-prompt", methods=["GET"])
+def miniapp_get_core_prompt():
+    """
+    读取“核心 Prompt（3.16）”：
+    - 若 R2 已有自定义内容，返回该内容
+    - 否则回退读取本地 prompts/du_core_prompt.txt（只读展示）
+    """
+    text = r2_store.get_core_prompt_text()
+    source = "r2"
+    if text is None:
+        source = "file"
+        try:
+            p = Path(__file__).resolve().parent.parent / "prompts" / "du_core_prompt.txt"
+            text = p.read_text(encoding="utf-8") if p.exists() else ""
+        except Exception:
+            text = ""
+    return jsonify({"ok": True, "source": source, "content": (text or "")})
+
+
+@bp.route("/core-prompt", methods=["PUT"])
+def miniapp_put_core_prompt():
+    data = request.get_json(silent=True) or {}
+    content = (data.get("content") or "").strip()
+    if not content:
+        return jsonify({"ok": False, "error": "content 不能为空"}), 400
+    ok = r2_store.save_core_prompt_text(content)
+    return jsonify({"ok": ok})
+
+
 @bp.route("/logs", methods=["GET"])
 def miniapp_logs_tail():
     lines = request.args.get("lines", type=int, default=200)

@@ -136,17 +136,17 @@ export function LogsTab() {
       </div>
 
       {loadError ? (
-        <div className="rounded-xl2 border border-cream-border bg-cream-pink/35 px-3 py-2 text-xs text-cream-text">
+        <div className="rounded-xl2 bg-cream-pink/65 px-3 py-2 text-xs text-cream-text shadow-soft2">
           接口加载失败：{loadError}
           <br />
           若在 Telegram 里半屏空白，通常是 initData 校验失败或反代吞头。
         </div>
       ) : null}
 
-      <div className="rounded-xl3 border border-cream-border bg-cream-blue/18 shadow-soft p-3 space-y-2">
+      <div className="rounded-xl3 bg-cream-blue/45 shadow-soft p-3 space-y-2">
         <div className="flex items-center gap-2">
           <input
-            className="flex-1 rounded-xl2 border border-cream-border bg-cream-card px-3 py-2 text-sm shadow-soft2"
+            className="flex-1 rounded-xl2 bg-cream-card px-3 py-2 text-sm shadow-soft2"
             placeholder="过滤关键字（不区分大小写）"
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
@@ -173,7 +173,7 @@ export function LogsTab() {
           </Btn>
         </div>
 
-        <div className="min-h-[50vh] rounded-2xl border border-cream-border bg-[#1F1A12] p-3 font-mono text-xs leading-relaxed text-[#FFF7E6] overflow-auto">
+        <div className="min-h-[50vh] rounded-2xl bg-[#1F1A12] p-3 font-mono text-xs leading-relaxed text-[#FFF7E6] overflow-auto shadow-soft2">
           {(filtered || []).slice(-800).map((l, idx) => (
             <div key={idx} className="whitespace-pre-wrap">
               {highlightLine(l, filterText)}

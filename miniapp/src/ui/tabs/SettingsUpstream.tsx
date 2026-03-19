@@ -53,8 +53,8 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
             <div
               key={idx}
               className={
-                "rounded-xl3 border p-3 shadow-soft2 " +
-                (idx === active ? "border-cream-border bg-cream-green/35" : "border-cream-border bg-cream-blue/18")
+                "rounded-xl3 p-3 shadow-soft2 " +
+                (idx === active ? "bg-cream-green/70" : "bg-cream-blue/45")
               }
             >
               <div className="flex items-center justify-between">

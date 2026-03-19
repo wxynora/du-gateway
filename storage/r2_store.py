@@ -29,6 +29,8 @@ R2_KEY_DYNAMIC_MEMORY = "dynamic_memory/current.json"
 R2_KEY_CORE_CACHE = "core_cache/pending.json"
 # 小本本：网关拎出后按时间先后排序存储
 R2_KEY_NOTEBOOK = "notebook/entries.json"
+# MiniApp 可编辑核心 Prompt（全局注入）
+R2_KEY_CORE_PROMPT = "global/core_prompt_316.txt"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
 R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 # 主动发消息：上一次成功主动联系的时间（北京时间 ISO）
@@ -805,6 +807,43 @@ def save_du_memory_doc(text: str) -> bool:
         return True
     except Exception as e:
         logger.error("save_du_memory_doc 失败 error=%s", e, exc_info=True)
+        return False
+
+
+def get_core_prompt_text() -> Optional[str]:
+    """读取全局核心 Prompt（MiniApp 可编辑）；不存在时返回 None。"""
+    client = _s3_client()
+    if not client:
+        return None
+    try:
+        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_KEY_CORE_PROMPT)
+        return resp["Body"].read().decode("utf-8")
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code == "NoSuchKey":
+            return None
+        logger.error("get_core_prompt_text 失败 error=%s", e, exc_info=True)
+        return None
+    except Exception as e:
+        logger.error("get_core_prompt_text 失败 error=%s", e, exc_info=True)
+        return None
+
+
+def save_core_prompt_text(text: str) -> bool:
+    """保存/覆盖全局核心 Prompt（MiniApp 编辑后实时生效）。"""
+    client = _s3_client()
+    if not client:
+        return False
+    try:
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=R2_KEY_CORE_PROMPT,
+            Body=(text or "").encode("utf-8"),
+            ContentType="text/plain; charset=utf-8",
+        )
+        return True
+    except Exception as e:
+        logger.error("save_core_prompt_text 失败 error=%s", e, exc_info=True)
         return False
 
 

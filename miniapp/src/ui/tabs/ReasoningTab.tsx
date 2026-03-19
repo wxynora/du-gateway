@@ -15,12 +15,18 @@ export function ReasoningTab() {
   const [rounds, setRounds] = useState<RoundPreview[]>([]);
   const [roundDetail, setRoundDetail] = useState<ConversationRound | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [roundsError, setRoundsError] = useState("");
 
   async function loadWindows() {
     try {
-      const j = await apiJson<WindowsResp>("/miniapp-api/windows?limit=30");
-      setWindows(j.windows || []);
+      const j = await apiJson<WindowsResp>("/miniapp-api/windows?limit=120");
+      const ws = j.windows || [];
+      setWindows(ws);
       setLoadError("");
+      // 打开思维链面板时，自动预取最近窗口的轮次，避免看起来像“没拉取到”
+      if (ws.length > 0 && ws[0]?.id) {
+        void openRounds(ws[0].id || "");
+      }
     } catch (e: any) {
       setLoadError(e?.message || String(e));
       toast(`加载失败：${e?.message || e}`);
@@ -39,7 +45,12 @@ export function ReasoningTab() {
       const j = await apiJson<RoundsResp>(`/miniapp-api/windows/${encodeURIComponent(wid)}/rounds?preview_chars=60`);
       setActiveWindowId(wid);
       setRounds(j.rounds || []);
+      setRoundsError("");
+      if (!(j.rounds || []).length) {
+        setRoundsError("该窗口暂无轮次，可能还没有归档到 R2。");
+      }
     } catch (e: any) {
+      setRoundsError(e?.message || String(e));
       toast(`加载轮次失败：${e?.message || e}`);
     }
   }
@@ -57,7 +68,7 @@ export function ReasoningTab() {
   return (
     <div className="space-y-3">
       {loadError ? (
-        <div className="rounded-xl2 border border-cream-border bg-cream-pink/35 px-3 py-2 text-xs text-cream-text">
+        <div className="rounded-xl2 bg-cream-pink/65 px-3 py-2 text-xs text-cream-text shadow-soft2">
           窗口加载失败：{loadError}
           <br />
           请从 Telegram 按钮重新打开面板，或稍后重试。
@@ -69,7 +80,7 @@ export function ReasoningTab() {
           {items.map((w) => (
             <button
               key={w.id}
-              className="w-full rounded-xl2 border border-cream-border bg-cream-green/30 shadow-soft2 p-3 text-left active:scale-[0.99] transition"
+              className="w-full rounded-xl2 bg-cream-green/60 shadow-soft2 p-3 text-left active:scale-[0.99] transition"
               onClick={() => openRounds(w.id || "")}
             >
               <div className="text-sm font-medium">{w.id || "(no id)"}</div>
@@ -88,8 +99,13 @@ export function ReasoningTab() {
       {activeWindowId ? (
         <Modal title={`轮次 · ${activeWindowId}`} onClose={() => setActiveWindowId(null)}>
           <div className="space-y-2">
+            {roundsError ? (
+              <div className="rounded-xl2 bg-cream-pink/65 px-3 py-2 text-xs text-cream-text shadow-soft2">
+                轮次加载提示：{roundsError}
+              </div>
+            ) : null}
             {rounds.map((r) => (
-              <div key={r.index} className="rounded-xl2 border border-cream-border bg-cream-blue/22 shadow-soft2 p-3">
+              <div key={r.index} className="rounded-xl2 bg-cream-blue/50 shadow-soft2 p-3">
                 <div className="text-xs text-cream-muted">#{String(r.index ?? "")}</div>
                 <div className="mt-1 text-sm">{String(r.preview || "")}</div>
                 <div className="mt-2">
@@ -113,11 +129,11 @@ export function ReasoningTab() {
                 typeof m?.content === "string" ? (m.content as string) : JSON.stringify(m?.content ?? "", null, 2);
               const reasoning = (m?.reasoning || m?.reasoning_content || m?.thinking || "") as string;
               return (
-                <div key={i} className="rounded-xl3 border border-cream-border bg-cream-card shadow-soft2 p-3">
+                <div key={i} className="rounded-xl3 bg-cream-card shadow-soft2 p-3">
                   <div className="text-xs text-cream-muted">{role}</div>
                   <div className="mt-1 whitespace-pre-wrap text-sm">{content || ""}</div>
                   {role.toLowerCase() === "assistant" && reasoning?.trim() ? (
-                    <details className="mt-2 rounded-xl2 border border-cream-border bg-cream-blue/35 p-2" open={false}>
+                    <details className="mt-2 rounded-xl2 bg-cream-blue/55 p-2 shadow-soft2" open={false}>
                       <summary className="cursor-pointer select-none text-xs text-cream-muted">
                         思维链（展开/收起）
                       </summary>
