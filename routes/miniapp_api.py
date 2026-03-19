@@ -208,6 +208,7 @@ def miniapp_create_schedule_item():
     enabled = bool(data.get("enabled", True))
     weekly_weekday = data.get("weekly_weekday", None)
     weekly_time = (data.get("weekly_time") or "").strip()
+    daily_time = (data.get("daily_time") or "").strip()
 
     if not title:
         return jsonify({"ok": False, "error": "title 不能为空"}), 400
@@ -229,6 +230,15 @@ def miniapp_create_schedule_item():
         except Exception:
             return jsonify({"ok": False, "error": "weekly_time 格式无效"}), 400
         weekly_weekday = w
+    elif repeat == "daily":
+        try:
+            hh, mm = (daily_time.split(":", 1) + ["0"])[:2]
+            hhi = int(hh)
+            mmi = int(mm)
+            if hhi < 0 or hhi > 23 or mmi < 0 or mmi > 59:
+                raise ValueError("invalid")
+        except Exception:
+            return jsonify({"ok": False, "error": "daily_time 格式无效"}), 400
     else:
         if not datetime_str:
             return jsonify({"ok": False, "error": "datetime 不能为空"}), 400
@@ -246,6 +256,7 @@ def miniapp_create_schedule_item():
         enabled=enabled,
         weekly_weekday=weekly_weekday,
         weekly_time=weekly_time,
+        daily_time=daily_time,
     )
     if not item:
         return jsonify({"ok": False, "error": "创建失败"}), 500

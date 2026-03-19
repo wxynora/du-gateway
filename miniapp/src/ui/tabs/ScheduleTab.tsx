@@ -10,6 +10,7 @@ type ScheduleItem = {
   repeat?: string;
   weekly_weekday?: number;
   weekly_time?: string;
+  daily_time?: string;
   enabled?: boolean;
   note?: string;
 };
@@ -38,7 +39,10 @@ function weekdayLabel(v: number): string {
 
 function repeatLabel(item: ScheduleItem): string {
   const v = String(item.repeat || "once");
-  if (v === "daily") return "每天";
+  if (v === "daily") {
+    const dt = String(item.daily_time || "").trim();
+    return `每天${dt ? ` ${dt}` : ""}`;
+  }
   if (v === "weekly") {
     const wd = Number(item.weekly_weekday ?? 0);
     const wt = String(item.weekly_time || "").trim();
@@ -63,6 +67,28 @@ function monthLabel(y: number, m: number): string {
   return `${y}年${String(m + 1).padStart(2, "0")}月`;
 }
 
+function weekdayMon0FromDateKey(k: string): number {
+  const d = new Date(`${k}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return 0;
+  // JS: Sun=0..Sat=6 -> Mon=0..Sun=6
+  return (d.getDay() + 6) % 7;
+}
+
+function occursOnDate(item: ScheduleItem, dayKey: string): boolean {
+  const rep = String(item.repeat || "once");
+  const anchor = dateKey(String(item.datetime || ""));
+  if (!anchor) return false;
+  if (dayKey < anchor) return false;
+  if (rep === "daily") return true;
+  if (rep === "weekly") {
+    const wk = Number.isFinite(Number(item.weekly_weekday))
+      ? Number(item.weekly_weekday)
+      : weekdayMon0FromDateKey(anchor);
+    return weekdayMon0FromDateKey(dayKey) === wk;
+  }
+  return dayKey === anchor;
+}
+
 export function ScheduleTab() {
   const toast = useToast();
   const [items, setItems] = useState<ScheduleItem[]>([]);
@@ -72,6 +98,7 @@ export function ScheduleTab() {
   const [formTitle, setFormTitle] = useState("");
   const [formDatetime, setFormDatetime] = useState("");
   const [formRepeat, setFormRepeat] = useState("once");
+  const [formDailyTime, setFormDailyTime] = useState("09:00");
   const [formWeeklyWeekday, setFormWeeklyWeekday] = useState(0);
   const [formWeeklyTime, setFormWeeklyTime] = useState("09:00");
   const [formNote, setFormNote] = useState("");
@@ -114,7 +141,7 @@ export function ScheduleTab() {
     [items]
   );
   const dayItems = useMemo(
-    () => allItems.filter((it) => dateKey(String(it.datetime || "")) === selectedDate),
+    () => allItems.filter((it) => occursOnDate(it, selectedDate)),
     [allItems, selectedDate]
   );
   const calendarCells = useMemo(() => {
@@ -135,13 +162,17 @@ export function ScheduleTab() {
   }, [visibleMonth]);
   const dateCountMap = useMemo(() => {
     const m: Record<string, number> = {};
-    allItems.forEach((it) => {
-      const k = dateKey(String(it.datetime || ""));
-      if (!k) return;
-      m[k] = (m[k] || 0) + 1;
+    calendarCells.forEach((cell) => {
+      if (!cell.inMonth) return;
+      const dayKey = `${visibleMonth.year}-${String(visibleMonth.month + 1).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}`;
+      let count = 0;
+      allItems.forEach((it) => {
+        if (occursOnDate(it, dayKey)) count += 1;
+      });
+      m[dayKey] = count;
     });
     return m;
-  }, [allItems]);
+  }, [allItems, calendarCells, visibleMonth]);
 
   async function disableItem(id: string) {
     try {
@@ -181,6 +212,11 @@ export function ScheduleTab() {
         toast("请选择每周提醒时间");
         return;
       }
+    } else if (formRepeat === "daily") {
+      if (!(formDailyTime || "").trim()) {
+        toast("请选择每天提醒时间");
+        return;
+      }
     } else if (!datetimeLocal) {
       toast("请选择提醒时间");
       return;
@@ -192,8 +228,9 @@ export function ScheduleTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title,
-          datetime: formRepeat === "weekly" ? "" : datetimeLocal,
+          datetime: formRepeat === "weekly" || formRepeat === "daily" ? "" : datetimeLocal,
           repeat: formRepeat || "once",
+          daily_time: formRepeat === "daily" ? formDailyTime : undefined,
           weekly_weekday: formRepeat === "weekly" ? formWeeklyWeekday : undefined,
           weekly_time: formRepeat === "weekly" ? formWeeklyTime : undefined,
           note: (formNote || "").trim(),
@@ -205,6 +242,7 @@ export function ScheduleTab() {
       setFormTitle("");
       setFormDatetime("");
       setFormRepeat("once");
+      setFormDailyTime("09:00");
       setFormWeeklyWeekday(0);
       setFormWeeklyTime("09:00");
       setFormNote("");
@@ -295,6 +333,14 @@ export function ScheduleTab() {
               disabled={creating}
             />
           </div>
+        ) : formRepeat === "daily" ? (
+          <input
+            type="time"
+            className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
+            value={formDailyTime}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormDailyTime(e.target.value)}
+            disabled={creating}
+          />
         ) : (
           <input
             type="datetime-local"

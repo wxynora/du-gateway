@@ -686,6 +686,7 @@ def create_schedule_item(
     enabled: bool = True,
     weekly_weekday: Optional[int] = None,
     weekly_time: str = "",
+    daily_time: str = "",
 ) -> Optional[dict]:
     """创建一条提醒并写入 schedule/items.json。"""
     t = (title or "").strip()
@@ -699,6 +700,7 @@ def create_schedule_item(
 
     wday = weekly_weekday if isinstance(weekly_weekday, int) else None
     wtime = (weekly_time or "").strip()
+    dtime = (daily_time or "").strip()
     if rep == "weekly":
         if wday is None or wday < 0 or wday > 6:
             return None
@@ -718,6 +720,20 @@ def create_schedule_item(
         if target <= now:
             target = target + timedelta(days=7)
         dt = target.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    elif rep == "daily":
+        try:
+            hh, mm = (dtime.split(":", 1) + ["0"])[:2]
+            hhi = int(hh)
+            mmi = int(mm)
+            if hhi < 0 or hhi > 23 or mmi < 0 or mmi > 59:
+                return None
+        except Exception:
+            return None
+        now = datetime.now(BEIJING_TZ)
+        target = now.replace(hour=hhi, minute=mmi, second=0, microsecond=0)
+        if target <= now:
+            target = target + timedelta(days=1)
+        dt = target.strftime("%Y-%m-%dT%H:%M:%S+08:00")
     else:
         if not dt:
             return None
@@ -734,6 +750,8 @@ def create_schedule_item(
     if rep == "weekly" and wday is not None:
         item["weekly_weekday"] = int(wday)
         item["weekly_time"] = wtime
+    if rep == "daily":
+        item["daily_time"] = dtime
     items = get_schedule_items()
     items.append(item)
     ok = save_schedule_items(items)
