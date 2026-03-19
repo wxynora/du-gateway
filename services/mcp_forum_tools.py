@@ -161,7 +161,7 @@ def get_forum_tools_for_inject() -> list[dict]:
     """返回给模型的论坛工具列表。"""
     if not MCP_ENABLED:
         return []
-    # 与你提供的流程一致：verify-uid -> register -> 发报到帖 -> 浏览帖子
+    # 默认策略：先浏览（list/get），仅在鉴权失败（401/403）或首次接入时再 verify/register
     return [
         TOOL_FORUM_HTTP,
         TOOL_FORUM_UID_HTTP,
@@ -170,11 +170,14 @@ def get_forum_tools_for_inject() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "forum_verify_uid",
-                "description": "verify-uid：确认 UID 对应的成员身份（默认 POST + MCP_FORUM_VERIFY_UID_PATH）。不需要手动输入 uid/auth。",
+                "description": (
+                    "verify-uid：确认 UID 对应的成员身份（默认 MCP_FORUM_VERIFY_UID_PATH）。\n"
+                    "建议仅在首次接入或出现 401/403 鉴权失败时调用，平时不要每次都调用。"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "method": {"type": "string", "description": "可选：默认 POST"},
+                        "method": {"type": "string", "description": "可选：默认 MCP_FORUM_VERIFY_UID_METHOD"},
                         "path": {"type": "string", "description": "可选：默认 MCP_FORUM_VERIFY_UID_PATH"},
                         "payload": {"description": "可选请求体（JSON）"},
                         "headers": {"type": "object"},
@@ -187,11 +190,14 @@ def get_forum_tools_for_inject() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "forum_register",
-                "description": "register：注册你的账号（默认 POST + MCP_FORUM_REGISTER_PATH）。不需要手动输入 uid/auth。",
+                "description": (
+                    "register：注册你的账号（默认 MCP_FORUM_REGISTER_PATH）。\n"
+                    "建议仅在首次接入或出现 401/403 鉴权失败时调用。"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "method": {"type": "string", "description": "可选：默认 POST"},
+                        "method": {"type": "string", "description": "可选：默认 MCP_FORUM_REGISTER_METHOD"},
                         "path": {"type": "string", "description": "可选：默认 MCP_FORUM_REGISTER_PATH"},
                         "payload": {"description": "可选请求体（JSON）"},
                         "headers": {"type": "object"},
@@ -204,7 +210,10 @@ def get_forum_tools_for_inject() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "forum_list_posts",
-                "description": "浏览帖子列表（默认 GET + MCP_FORUM_POST_LIST_PATH）。不需要手动输入 uid/auth。",
+                "description": (
+                    "浏览帖子列表（默认 GET + MCP_FORUM_POST_LIST_PATH）。不需要手动输入 uid/auth。\n"
+                    "建议优先调用这个工具；只有返回 401/403 时再调用 verify/register。"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -221,7 +230,10 @@ def get_forum_tools_for_inject() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "forum_get_post",
-                "description": "浏览帖子详情（GET + MCP_FORUM_POST_DETAIL_PATH_TEMPLATE，需要 post_id）。不需要手动输入 uid/auth。",
+                "description": (
+                    "浏览帖子详情（GET + MCP_FORUM_POST_DETAIL_PATH_TEMPLATE，需要 post_id）。不需要手动输入 uid/auth。\n"
+                    "建议优先调用；只有返回 401/403 时再调用 verify/register。"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
