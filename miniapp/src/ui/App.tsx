@@ -11,6 +11,7 @@ type PanelId = "logs" | "reasoning" | null;
 function Shell() {
   const [panel, setPanel] = useState<PanelId>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const version = new URLSearchParams(window.location.search).get("v") || "";
 
   useEffect(() => {
     // 默认不 expand：让 Telegram WebView 以“半屏”形式打开，更像面板弹出入口
@@ -25,6 +26,7 @@ function Shell() {
           <div className="font-semibold tracking-tight rounded-xl2 px-3 py-1 border border-cream-border bg-cream-green/35">
             躺着运维
           </div>
+          {version ? <div className="text-[11px] text-cream-muted">v{version}</div> : null}
           <div className="flex items-center gap-2">
             <Btn kind="pink" onClick={() => setShowSettings(true)}>上游</Btn>
           </div>

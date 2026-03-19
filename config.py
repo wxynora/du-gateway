@@ -214,6 +214,8 @@ TELEGRAM_GATEWAY_URL = os.environ.get("TELEGRAM_GATEWAY_URL", "http://127.0.0.1:
 # Telegram MiniApp（WebApp）对外入口：仅用于 ReplyKeyboard 的 web_app 按钮（Telegram 强制要求 HTTPS）
 # 说明：不要用它来让 Bot 调用网关；Bot 调网关请继续用 TELEGRAM_GATEWAY_URL（可保持 127.0.0.1）
 TELEGRAM_WEBAPP_URL = os.environ.get("TELEGRAM_WEBAPP_URL", "").strip().rstrip("/")
+# Telegram MiniApp 版本号：会拼到 WebApp URL 的 ?v=xxx，用于强制刷新 Telegram WebView 缓存
+TELEGRAM_WEBAPP_VERSION = os.environ.get("TELEGRAM_WEBAPP_VERSION", "").strip()
 # 网关 chat 接口路径（与现有 /v1/chat/completions 一致）
 TELEGRAM_CHAT_PATH = os.environ.get("TELEGRAM_CHAT_PATH", "/v1/chat/completions").strip()
 # Bot 请求网关时使用的模型（留空则用 GATEWAY_MODELS 第一个，再否则 gpt-4）
@@ -275,8 +277,8 @@ TELEGRAM_VOICE_REPLY_ENABLED = os.environ.get("TELEGRAM_VOICE_REPLY_ENABLED", "1
 # 静态站点目录：由 Flask 直接托管 /miniapp
 MINIAPP_STATIC_DIR = BASE_DIR / "miniapp_static"
 
-# 鉴权：Telegram WebApp initData 校验（推荐开启）
-MINIAPP_TELEGRAM_AUTH_ENABLED = os.environ.get("MINIAPP_TELEGRAM_AUTH_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+# 鉴权：Telegram WebApp initData 校验（当前先默认关闭，避免 WebView/反代链路导致 401）
+MINIAPP_TELEGRAM_AUTH_ENABLED = os.environ.get("MINIAPP_TELEGRAM_AUTH_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 # initData 允许的最大时效（秒），避免旧链接被长期复用；默认 10 分钟
 MINIAPP_INITDATA_MAX_AGE_SECONDS = int(os.environ.get("MINIAPP_INITDATA_MAX_AGE_SECONDS", "600"))
 

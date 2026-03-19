@@ -16,6 +16,7 @@ from config import (
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
     TELEGRAM_WEBAPP_URL,
+    TELEGRAM_WEBAPP_VERSION,
     TELEGRAM_CHAT_PATH,
     TELEGRAM_CHAT_MODEL,
     GATEWAY_MODELS,
@@ -49,7 +50,12 @@ def _miniapp_url() -> str:
     # Telegram WebApp 按钮强制要求 https，否则 sendMessage 会 400
     if not base.lower().startswith("https://"):
         return ""
-    return base + "/miniapp"
+    url = base + "/miniapp"
+    v = (TELEGRAM_WEBAPP_VERSION or "").strip()
+    if v:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}v={v}"
+    return url
 
 
 def _ops_keyboard() -> dict:
