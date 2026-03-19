@@ -23,7 +23,7 @@ TOOL_FORUM_HTTP = {
         "name": "forum_http",
         "description": (
             "论坛 HTTP 工具：可调用论坛 API 完成 verify-uid、register、发帖、评论等。"
-            "仅允许 MCP_FORUM_ALLOWED_HOSTS 白名单域名。"
+            "建议只填 path（不要填域名）或保证 url 域名在白名单；若域名不在白名单，会自动尝试用 MCP_FORUM_BASE_URL 替换。"
         ),
         "parameters": {
             "type": "object",
@@ -108,7 +108,7 @@ TOOL_FORUM_UID_HTTP = {
         "description": (
             "论坛 UID 鉴权 HTTP 工具（forum_uid_http）：会自动在请求头注入 Authorization: Bearer <uid>。\n"
             "适合用于 verify-uid、register、浏览帖子列表/详情、发帖、评论等需要同一 Bearer 的场景。\n"
-            "仅允许访问 MCP_FORUM_ALLOWED_HOSTS 白名单域名。"
+            "建议只填 path 或正确 url；若 url 域名不在白名单，会自动尝试替换为 MCP_FORUM_BASE_URL 的域名。"
         ),
         "parameters": {
             "type": "object",
@@ -152,7 +152,13 @@ def _host_allowed(hostname: str) -> bool:
             return False
     except ValueError:
         pass
+    # 如果 MCP_FORUM_ALLOWED_HOSTS 没配全，则至少允许 MCP_FORUM_BASE_URL 对应的 hostname
     if not MCP_FORUM_ALLOWED_HOSTS:
+        base = (MCP_FORUM_BASE_URL or "").strip()
+        if base:
+            bh = (urlparse(base).hostname or "").strip().lower()
+            if bh:
+                return host == bh
         return False
     return host in set(MCP_FORUM_ALLOWED_HOSTS)
 
@@ -180,8 +186,17 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
     u = urlparse(url)
     if u.scheme not in ("http", "https"):
         return {"ok": False, "error": "url 仅支持 http/https"}, 400
+    # 若 AI 提供了错误域名（但 path/query 正确），可自动替换成 MCP_FORUM_BASE_URL 的域名
     if not _host_allowed(u.hostname or ""):
-        return {"ok": False, "error": "目标域名不在白名单或属于内网地址"}, 403
+        base = (MCP_FORUM_BASE_URL or "").strip()
+        if base:
+            bu = urlparse(base)
+            if bu.scheme in ("http", "https") and _host_allowed(bu.hostname or ""):
+                normalized_url = f"{bu.scheme}://{bu.netloc}{u.path or ''}"
+                if u.query:
+                    normalized_url += f"?{u.query}"
+                url = normalized_url
+                u = urlparse(url)
 
     timeout = int(timeout_override or MCP_HTTP_TIMEOUT_SECONDS)
     timeout = max(1, min(timeout, MCP_HTTP_MAX_TIMEOUT_SECONDS))
