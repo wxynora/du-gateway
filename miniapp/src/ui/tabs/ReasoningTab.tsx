@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import { apiJson } from "../api";
-import { Btn } from "../components";
 import { useToast } from "../toast";
 
 type ReasoningItem = { index?: number; timestamp?: string; reasoning?: string };
@@ -34,7 +33,24 @@ export function ReasoningTab() {
   }, []);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
+      <div className="flex items-center justify-between px-1">
+        <div className="text-xs text-cream-muted">
+          最近 10 条 · 最新在上{windowId ? ` · ${windowId}` : ""}
+        </div>
+        <button
+          className="h-8 w-8 rounded-full bg-white/58 backdrop-blur-xl border border-white/50 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+          onClick={loadLatest}
+          disabled={loading}
+          title="刷新"
+        >
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M20 6v6h-6" />
+            <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8" />
+          </svg>
+        </button>
+      </div>
+
       {loadError ? (
         <div className="rounded-xl2 bg-cream-pink/65 px-3 py-2 text-xs text-cream-text shadow-soft2">
           思维链加载失败：{loadError}
@@ -43,30 +59,25 @@ export function ReasoningTab() {
         </div>
       ) : null}
 
-      <div className="rounded-xl3 bg-white/42 backdrop-blur-xl border border-white/50 shadow-soft p-3 space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="text-xs text-cream-muted">
-            最近 10 条思维链（最新在上）{windowId ? ` · ${windowId}` : ""}
-          </div>
-          <Btn kind="blue" onClick={loadLatest} disabled={loading}>刷新</Btn>
-        </div>
-        <div className="space-y-2">
-          {items.map((r, i) => (
-            <details key={`${r.index || 0}-${i}`} className="rounded-xl2 bg-white/56 border border-white/50 shadow-soft2 p-2" open={i === 0}>
-              <summary className="cursor-pointer select-none text-xs text-cream-muted">
-                #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""}
-              </summary>
-              <div className="mt-2 whitespace-pre-wrap font-mono text-xs text-cream-text">
-                {String(r.reasoning || "")}
-              </div>
-            </details>
-          ))}
-          {!items.length && !loadError ? (
-            <div className="rounded-xl2 bg-cream-pink/55 px-3 py-2 text-xs text-cream-text shadow-soft2">
-              暂无可展示的思维链（可能上游未返回 reasoning 字段）。
+      <div className="space-y-2">
+        {items.map((r, i) => (
+          <div
+            key={`${r.index || 0}-${i}`}
+            className="rounded-[20px] bg-white/48 backdrop-blur-xl border border-white/55 shadow-soft p-3"
+          >
+            <div className="text-[11px] text-cream-muted">
+              #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""}
             </div>
-          ) : null}
-        </div>
+            <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-cream-text">
+              {String(r.reasoning || "")}
+            </div>
+          </div>
+        ))}
+        {!items.length && !loadError ? (
+          <div className="rounded-xl2 bg-cream-pink/55 px-3 py-2 text-xs text-cream-text shadow-soft2">
+            暂无可展示的思维链（可能上游未返回 reasoning 字段）。
+          </div>
+        ) : null}
       </div>
     </div>
   );

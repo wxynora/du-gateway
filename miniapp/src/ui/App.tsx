@@ -176,7 +176,7 @@ function HomeOrbMenu({
   onOpenBackground: () => void;
 }) {
   return (
-    <div className="fixed inset-x-0 bottom-6 z-30 flex justify-center pointer-events-none">
+    <div className="fixed inset-x-0 bottom-10 z-30 flex justify-center pointer-events-none">
       <div className="relative pointer-events-auto">
         {open ? (
           <>

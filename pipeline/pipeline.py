@@ -391,39 +391,6 @@ def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
     return body
 
 
-def step_inject_tg_todos(body: dict, window_id: str) -> dict:
-    """Telegram TodoList：对 tg_ 窗口把「未完成事项」注入到 system，渡无需调用工具也能看到。"""
-    wid = (window_id or "").strip()
-    if not wid.startswith("tg_"):
-        return body
-    if not body or not isinstance(body.get("messages"), list):
-        return body
-    items = r2_store.get_tg_todos(wid) or []
-    pending = [x for x in items if isinstance(x, dict) and not bool(x.get("done"))]
-    if not pending:
-        return body
-    # 最多注入前 12 条，避免太长
-    pending = pending[:12]
-    lines = []
-    for i, it in enumerate(pending, 1):
-        txt = str(it.get("text") or "").strip()
-        if txt:
-            lines.append(f"{i}. {txt}")
-    if not lines:
-        return body
-    inject = "\n\n【Telegram Todo（未完成）】\n" + "\n".join(lines) + "\n【以上为 Todo】"
-    body = copy.deepcopy(body)
-    messages = body.get("messages") or []
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system":
-            msg["content"] = (msg.get("content") or "") + inject
-            break
-    else:
-        messages.insert(0, {"role": "system", "content": inject.strip()})
-    body["messages"] = messages
-    return body
-
-
 def _extract_keywords(text: str) -> list:
     """从当前对话文本中提取简单关键词（用于匹配动态层）。"""
     if not text or not isinstance(text, str):
