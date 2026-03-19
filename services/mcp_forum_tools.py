@@ -64,7 +64,10 @@ TOOL_FORUM_POST = {
     "type": "function",
     "function": {
         "name": "forum_post",
-        "description": "论坛发帖：默认 path=/api/posts，可带 auth_token（Bearer）。",
+        "description": (
+            "论坛发帖：默认 path=/api/posts，可带 auth_token（Bearer）。\n"
+            "提醒：你不需要手动输入 auth_token，只要服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动使用默认 Bearer。\n"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -72,7 +75,10 @@ TOOL_FORUM_POST = {
                 "content": {"type": "string"},
                 "category_id": {},
                 "path": {"type": "string", "description": "默认 /api/posts"},
-                "auth_token": {"type": "string"},
+                "auth_token": {
+                    "type": "string",
+                    "description": "Bearer token（不传则使用 MCP_FORUM_DEFAULT_UID）",
+                },
                 "headers": {"type": "object"},
                 "timeout": {"type": "integer"},
             },
@@ -85,14 +91,20 @@ TOOL_FORUM_COMMENT = {
     "type": "function",
     "function": {
         "name": "forum_comment",
-        "description": "论坛评论：默认 path_template=/api/posts/{post_id}/comments，可带 auth_token。",
+        "description": (
+            "论坛评论：默认 path_template=/api/posts/{post_id}/comments，可带 auth_token。\n"
+            "提醒：你不需要手动输入 auth_token，只要服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动使用默认 Bearer。\n"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "post_id": {"type": "string"},
                 "content": {"type": "string"},
                 "path_template": {"type": "string", "description": "默认 /api/posts/{post_id}/comments"},
-                "auth_token": {"type": "string"},
+                "auth_token": {
+                    "type": "string",
+                    "description": "Bearer token（不传则使用 MCP_FORUM_DEFAULT_UID）",
+                },
                 "headers": {"type": "object"},
                 "timeout": {"type": "integer"},
             },
@@ -109,6 +121,7 @@ TOOL_FORUM_UID_HTTP = {
         "description": (
             "论坛 UID 鉴权 HTTP 工具（forum_uid_http）：会自动在请求头注入 Authorization: Bearer <uid>。\n"
             "适合用于 verify-uid、register、浏览帖子列表/详情、发帖、评论等需要同一 Bearer 的场景。\n"
+            "提醒：你不需要手动输入 uid（以及不需要手动带 Authorization）。只要服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动使用默认 Bearer。\n"
             "建议只填 path 或正确 url；若 url 域名不在白名单，会自动尝试替换为 MCP_FORUM_BASE_URL 的域名。"
         ),
         "parameters": {
