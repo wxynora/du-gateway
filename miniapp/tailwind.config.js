@@ -13,6 +13,7 @@ export default {
           accent: "#F4D06F",
           blue: "#BFD7EA",
           pink: "#F3C6C6",
+          green: "#CFE8D1",
           danger: "#C65D4E"
         },
       },

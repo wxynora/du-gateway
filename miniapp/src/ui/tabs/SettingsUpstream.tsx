@@ -54,12 +54,13 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
               key={idx}
               className={
                 "rounded-xl3 border p-3 shadow-soft2 " +
-                (idx === active ? "border-cream-border bg-cream-accent/25" : "border-cream-border bg-cream-card")
+                (idx === active ? "border-cream-border bg-cream-green/35" : "border-cream-border bg-cream-blue/18")
               }
             >
               <div className="flex items-center justify-between">
                 <div className="font-medium">{it.name || `upstream${idx + 1}`}</div>
                 <Btn
+                  kind={idx === active ? "green" : "pink"}
                   onClick={() => {
                     setActive(idx);
                     switchActive(idx);

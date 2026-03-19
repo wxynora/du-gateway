@@ -14,12 +14,15 @@ export function ReasoningTab() {
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
   const [rounds, setRounds] = useState<RoundPreview[]>([]);
   const [roundDetail, setRoundDetail] = useState<ConversationRound | null>(null);
+  const [loadError, setLoadError] = useState("");
 
   async function loadWindows() {
     try {
       const j = await apiJson<WindowsResp>("/miniapp-api/windows?limit=30");
       setWindows(j.windows || []);
+      setLoadError("");
     } catch (e: any) {
+      setLoadError(e?.message || String(e));
       toast(`加载失败：${e?.message || e}`);
     }
   }
@@ -53,12 +56,20 @@ export function ReasoningTab() {
 
   return (
     <div className="space-y-3">
+      {loadError ? (
+        <div className="rounded-xl2 border border-cream-border bg-cream-pink/35 px-3 py-2 text-xs text-cream-text">
+          窗口加载失败：{loadError}
+          <br />
+          请从 Telegram 按钮重新打开面板，或稍后重试。
+        </div>
+      ) : null}
+
       <Card title="选择窗口（查看轮次里的思维链）">
         <div className="space-y-2">
           {items.map((w) => (
             <button
               key={w.id}
-              className="w-full rounded-xl2 border border-cream-border bg-cream-card shadow-soft2 p-3 text-left active:scale-[0.99] transition"
+              className="w-full rounded-xl2 border border-cream-border bg-cream-green/30 shadow-soft2 p-3 text-left active:scale-[0.99] transition"
               onClick={() => openRounds(w.id || "")}
             >
               <div className="text-sm font-medium">{w.id || "(no id)"}</div>
@@ -70,7 +81,7 @@ export function ReasoningTab() {
           {!items.length ? <div className="text-xs text-cream-muted">（暂无窗口）</div> : null}
         </div>
         <div className="mt-3">
-          <Btn onClick={loadWindows}>刷新窗口列表</Btn>
+          <Btn kind="blue" onClick={loadWindows}>刷新窗口列表</Btn>
         </div>
       </Card>
 
@@ -78,11 +89,11 @@ export function ReasoningTab() {
         <Modal title={`轮次 · ${activeWindowId}`} onClose={() => setActiveWindowId(null)}>
           <div className="space-y-2">
             {rounds.map((r) => (
-              <div key={r.index} className="rounded-xl2 border border-cream-border bg-cream-card shadow-soft2 p-3">
+              <div key={r.index} className="rounded-xl2 border border-cream-border bg-cream-blue/22 shadow-soft2 p-3">
                 <div className="text-xs text-cream-muted">#{String(r.index ?? "")}</div>
                 <div className="mt-1 text-sm">{String(r.preview || "")}</div>
                 <div className="mt-2">
-                  <Btn onClick={() => viewRound(activeWindowId, Number(r.index || 0))} disabled={!r.index}>
+                  <Btn kind="pink" onClick={() => viewRound(activeWindowId, Number(r.index || 0))} disabled={!r.index}>
                     查看原文 + 思维链
                   </Btn>
                 </div>

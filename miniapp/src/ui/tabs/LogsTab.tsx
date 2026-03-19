@@ -12,6 +12,7 @@ export function LogsTab() {
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const [filterText, setFilterText] = useState("");
+  const [loadError, setLoadError] = useState("");
 
   const filtered = useMemo(() => {
     const k = (filterText || "").trim().toLowerCase();
@@ -72,8 +73,10 @@ export function LogsTab() {
     try {
       const j = await apiJson<LogsResp>("/miniapp-api/logs?lines=200");
       setLines(j.lines || []);
+      setLoadError("");
       toast("已加载最新日志");
     } catch (e: any) {
+      setLoadError(e?.message || String(e));
       toast(`加载失败：${e?.message || e}`);
     }
   }
@@ -119,8 +122,9 @@ export function LogsTab() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <Btn onClick={loadTail}>拉取末尾 200 行</Btn>
+        <Btn kind="blue" onClick={loadTail}>拉取末尾 200 行</Btn>
         <Btn
+          kind="green"
           onClick={() => {
             setPaused((p) => !p);
             toast(!paused ? "已暂停" : "已继续");
@@ -128,10 +132,18 @@ export function LogsTab() {
         >
           {paused ? "继续" : "暂停"}
         </Btn>
-        <Btn onClick={() => (connected ? disconnect() : connect())}>{connected ? "断开实时" : "连接实时"}</Btn>
+        <Btn kind="pink" onClick={() => (connected ? disconnect() : connect())}>{connected ? "断开实时" : "连接实时"}</Btn>
       </div>
 
-      <div className="rounded-xl3 border border-cream-border bg-cream-card shadow-soft p-3 space-y-2">
+      {loadError ? (
+        <div className="rounded-xl2 border border-cream-border bg-cream-pink/35 px-3 py-2 text-xs text-cream-text">
+          接口加载失败：{loadError}
+          <br />
+          若在 Telegram 里半屏空白，通常是 initData 校验失败或反代吞头。
+        </div>
+      ) : null}
+
+      <div className="rounded-xl3 border border-cream-border bg-cream-blue/18 shadow-soft p-3 space-y-2">
         <div className="flex items-center gap-2">
           <input
             className="flex-1 rounded-xl2 border border-cream-border bg-cream-card px-3 py-2 text-sm shadow-soft2"
@@ -139,7 +151,7 @@ export function LogsTab() {
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
           />
-          <Btn
+          <Btn kind="green"
             onClick={() => {
               setFilterText("");
               toast("已清空过滤");
@@ -148,7 +160,7 @@ export function LogsTab() {
           >
             清空
           </Btn>
-          <Btn
+          <Btn kind="pink"
             onClick={() => {
               const k = (filterText || "").trim();
               const text = (filtered || []).slice(-200).join("\n") || "";

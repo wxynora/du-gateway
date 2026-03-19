@@ -34,15 +34,18 @@ export function Btn({
 }: {
   children: React.ReactNode;
   onClick?: () => void;
-  kind?: "default" | "danger";
+  kind?: "default" | "danger" | "blue" | "pink" | "green";
   disabled?: boolean;
 }) {
   const base =
     "text-xs px-3 py-2 rounded-xl2 border bg-cream-card shadow-soft2 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99] transition";
-  const cls =
-    kind === "danger"
-      ? base + " border-cream-border text-cream-danger"
-      : base + " border-cream-border text-cream-text";
+  const cls = (() => {
+    if (kind === "danger") return base + " border-cream-border text-cream-danger";
+    if (kind === "blue") return base + " border-cream-border bg-cream-blue/25 text-cream-text";
+    if (kind === "pink") return base + " border-cream-border bg-cream-pink/30 text-cream-text";
+    if (kind === "green") return base + " border-cream-border bg-cream-green/35 text-cream-text";
+    return base + " border-cream-border text-cream-text";
+  })();
   return (
     <button className={cls} onClick={onClick} disabled={disabled}>
       {children}

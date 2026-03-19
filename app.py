@@ -75,12 +75,6 @@ def miniapp_assets(filename: str):
     return send_from_directory(MINIAPP_STATIC_DIR / "assets", filename)
 
 
-@app.route("/miniapp/app.js", methods=["GET"])
-def miniapp_legacy_app_js():
-    """兼容旧路径：部分客户端/缓存会请求 /miniapp/app.js。"""
-    return send_from_directory(MINIAPP_STATIC_DIR, "app.js")
-
-
 @app.route("/favicon.ico", methods=["GET"])
 def favicon_ico():
     """避免默认 favicon 404 噪声（如不存在则仍返回 404）。"""

@@ -1,16 +1,15 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
-import { ToastProvider, useToast } from "./toast";
-import { Btn } from "./components";
+import { ToastProvider } from "./toast";
+import { Btn, Modal } from "./components";
 import { LogsTab } from "./tabs/LogsTab";
 import { SettingsUpstream } from "./tabs/SettingsUpstream";
 import { ReasoningTab } from "./tabs/ReasoningTab";
 
-type TabId = "logs" | "reasoning";
+type PanelId = "logs" | "reasoning" | null;
 
 function Shell() {
-  const toast = useToast();
-  const [tab, setTab] = useState<TabId>("logs");
+  const [panel, setPanel] = useState<PanelId>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
@@ -19,63 +18,72 @@ function Shell() {
     applyTelegramThemeToHtmlClass();
   }, []);
 
-  const activeTitle = useMemo(() => {
-    if (tab === "logs") return "日志";
-    return "思维链";
-  }, [tab]);
-
-  // 第一版只做：日志 / 思维链；状态接口不再强依赖
-
   return (
     <div className="min-h-dvh safe-top safe-bottom bg-cream-bg text-cream-text">
       <div className="sticky top-0 z-20 border-b border-cream-border/80 bg-cream-bg/85 backdrop-blur">
         <div className="flex items-center justify-between px-4 pb-3 pt-4">
-          <div className="font-semibold tracking-tight">{activeTitle}</div>
+          <div className="font-semibold tracking-tight rounded-xl2 px-3 py-1 border border-cream-border bg-cream-green/35">
+            躺着运维
+          </div>
           <div className="flex items-center gap-2">
-            <Btn onClick={() => setShowSettings(true)}>上游</Btn>
+            <Btn kind="pink" onClick={() => setShowSettings(true)}>上游</Btn>
           </div>
         </div>
       </div>
 
-      <div className="px-4 py-4 pb-24">
-        {tab === "logs" && <LogsTab />}
-        {tab === "reasoning" && <ReasoningTab />}
-      </div>
-
-      <div className="fixed bottom-0 left-0 right-0 z-30 safe-bottom">
-        <div className="mx-auto max-w-xl px-3 pb-3">
-          <div className="flex rounded-[22px] border border-cream-border bg-cream-card/90 shadow-soft backdrop-blur px-2">
-          <TabButton id="logs" active={tab === "logs"} onClick={() => setTab("logs")}>
-            日志
-          </TabButton>
-          <TabButton id="reasoning" active={tab === "reasoning"} onClick={() => setTab("reasoning")}>
-            思维链
-          </TabButton>
-          </div>
+      <div className="px-4 py-4 pb-6">
+        <div className="grid grid-cols-2 gap-3">
+          <FeatureTile title="日志" desc="查看/过滤/复制" color="bg-cream-blue/30" onClick={() => setPanel("logs")} />
+          <FeatureTile title="思维链" desc="窗口轮次与推理" color="bg-cream-pink/35" onClick={() => setPanel("reasoning")} />
+          <FeatureTile title="上游切换" desc="全局 active 切换" color="bg-cream-green/40" onClick={() => setShowSettings(true)} />
+          <FeatureTile title="更多功能" desc="后续继续扩展" color="bg-cream-card" onClick={() => {}} disabled />
         </div>
       </div>
+
+      {panel === "logs" ? (
+        <Modal title="日志" onClose={() => setPanel(null)}>
+          <LogsTab />
+        </Modal>
+      ) : null}
+      {panel === "reasoning" ? (
+        <Modal title="思维链" onClose={() => setPanel(null)}>
+          <ReasoningTab />
+        </Modal>
+      ) : null}
 
       {showSettings ? <SettingsUpstream onClose={() => setShowSettings(false)} /> : null}
     </div>
   );
 }
 
-function TabButton({
-  active,
+function FeatureTile({
+  title,
+  desc,
+  color,
   onClick,
-  children,
+  disabled,
 }: {
-  id: string;
-  active: boolean;
+  title: string;
+  desc: string;
+  color: string;
   onClick: () => void;
-  children: React.ReactNode;
+  disabled?: boolean;
 }) {
-  const cls =
-    "flex-1 py-2 text-xs font-medium " +
-    (active ? "text-cream-text" : "text-cream-muted");
   return (
-    <button className={cls} onClick={onClick}>
-      {children}
+    <button
+      className={
+        "aspect-square rounded-xl3 border border-cream-border p-4 text-left shadow-soft transition active:scale-[0.99] " +
+        color +
+        (disabled ? " opacity-60 cursor-not-allowed" : "")
+      }
+      onClick={() => {
+        if (disabled) return;
+        onClick();
+      }}
+      disabled={disabled}
+    >
+      <div className="text-base font-semibold">{title}</div>
+      <div className="mt-2 text-xs text-cream-muted">{desc}</div>
     </button>
   );
 }
