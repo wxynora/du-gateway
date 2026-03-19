@@ -8,6 +8,7 @@ from config import (
     MCP_ENABLED,
     MCP_FORUM_ALLOWED_HOSTS,
     MCP_FORUM_BASE_URL,
+    MCP_FORUM_DEFAULT_UID,
     MCP_HTTP_MAX_RESPONSE_CHARS,
     MCP_HTTP_MAX_TIMEOUT_SECONDS,
     MCP_HTTP_RETRIES,
@@ -113,7 +114,10 @@ TOOL_FORUM_UID_HTTP = {
         "parameters": {
             "type": "object",
             "properties": {
-                "uid": {"type": "string", "description": "小红书 UID（会作为 Bearer token 注入 Authorization）"},
+                "uid": {
+                    "type": "string",
+                    "description": "小红书 UID（作为 Bearer token 注入 Authorization；不传则使用 MCP_FORUM_DEFAULT_UID）",
+                },
                 "method": {"type": "string", "description": "GET/POST/PUT/DELETE"},
                 "url": {"type": "string", "description": "完整 URL（可选：与 path 二选一）"},
                 "path": {"type": "string", "description": "相对 MCP_FORUM_BASE_URL 的接口路径（可选：与 url 二选一）"},
@@ -122,7 +126,7 @@ TOOL_FORUM_UID_HTTP = {
                 "body": {"description": "可选请求体（JSON 对象或字符串）"},
                 "timeout": {"type": "integer", "description": "超时秒数"},
             },
-            "required": ["uid", "method"],
+            "required": ["method"],
         },
     },
 }
@@ -289,8 +293,12 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             return "缺少 title 或 content"
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         auth_token = (args.get("auth_token") or "").strip()
+        if not auth_token:
+            auth_token = MCP_FORUM_DEFAULT_UID
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
         body = {"title": title, "content": content}
         if args.get("category_id") is not None:
             body["category_id"] = args.get("category_id")
@@ -308,15 +316,19 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             return "未配置 MCP_FORUM_BASE_URL"
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         auth_token = (args.get("auth_token") or "").strip()
+        if not auth_token:
+            auth_token = MCP_FORUM_DEFAULT_UID
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
         result, _ = invoke_forum_http("POST", url, headers, None, {"content": content}, args.get("timeout"))
         return json.dumps(result, ensure_ascii=False)
 
     if name == "forum_uid_http":
-        uid = (args.get("uid") or "").strip()
+        uid = (args.get("uid") or "").strip() or MCP_FORUM_DEFAULT_UID
         if not uid:
-            return "uid 不能为空"
+            return "缺少 uid：请在工具参数传 uid，或在 env 配置 MCP_FORUM_DEFAULT_UID"
         method = (args.get("method") or "GET").strip().upper()
         url = (args.get("url") or "").strip()
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}

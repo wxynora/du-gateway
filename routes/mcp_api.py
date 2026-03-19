@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request
 
-from config import MCP_ENABLED
+from config import MCP_ENABLED, MCP_FORUM_DEFAULT_UID
 from services.mcp_forum_tools import get_forum_tools_for_inject, invoke_forum_http
 from utils.log import get_logger
 from utils.mcp_auth import enforce_mcp_auth
@@ -74,8 +74,12 @@ def mcp_invoke():
             return jsonify({"ok": False, "error": "缺少 title 或 content"}), 400
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         auth_token = (args.get("auth_token") or "").strip()
+        if not auth_token:
+            auth_token = MCP_FORUM_DEFAULT_UID
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            return jsonify({"ok": False, "error": "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"}), 400
         body = {"title": title, "content": content}
         if args.get("category_id") is not None:
             body["category_id"] = args.get("category_id")
@@ -94,16 +98,20 @@ def mcp_invoke():
             return jsonify({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}), 400
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         auth_token = (args.get("auth_token") or "").strip()
+        if not auth_token:
+            auth_token = MCP_FORUM_DEFAULT_UID
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            return jsonify({"ok": False, "error": "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"}), 400
         body = {"content": content}
         result, status = invoke_forum_http("POST", url, headers, None, body, args.get("timeout"))
         return jsonify(result), status
 
     if tool == "forum_uid_http":
-        uid = (args.get("uid") or "").strip()
+        uid = (args.get("uid") or "").strip() or MCP_FORUM_DEFAULT_UID
         if not uid:
-            return jsonify({"ok": False, "error": "uid 不能为空"}), 400
+            return jsonify({"ok": False, "error": "缺少 uid：请在工具参数传 uid，或在 env 配置 MCP_FORUM_DEFAULT_UID"}), 400
         method = (args.get("method") or "GET").strip().upper()
         url = (args.get("url") or "").strip()
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}

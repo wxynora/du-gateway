@@ -348,3 +348,7 @@ MCP_HTTP_TIMEOUT_SECONDS = int(os.environ.get("MCP_HTTP_TIMEOUT_SECONDS", "20"))
 MCP_HTTP_MAX_TIMEOUT_SECONDS = int(os.environ.get("MCP_HTTP_MAX_TIMEOUT_SECONDS", "60"))
 MCP_HTTP_RETRIES = int(os.environ.get("MCP_HTTP_RETRIES", "2"))
 MCP_HTTP_MAX_RESPONSE_CHARS = int(os.environ.get("MCP_HTTP_MAX_RESPONSE_CHARS", "12000"))
+
+# 论坛默认 UID（Bearer token）
+# 若为空，则 forum_uid_http/forum_post/forum_comment 在缺省 uid/auth_token 时会报错
+MCP_FORUM_DEFAULT_UID = os.environ.get("MCP_FORUM_DEFAULT_UID", "").strip()
