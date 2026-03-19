@@ -101,11 +101,38 @@ TOOL_FORUM_COMMENT = {
 }
 
 
+TOOL_FORUM_UID_HTTP = {
+    "type": "function",
+    "function": {
+        "name": "forum_uid_http",
+        "description": (
+            "论坛 UID 鉴权 HTTP 工具（forum_uid_http）：会自动在请求头注入 Authorization: Bearer <uid>。\n"
+            "适合用于 verify-uid、register、浏览帖子列表/详情、发帖、评论等需要同一 Bearer 的场景。\n"
+            "仅允许访问 MCP_FORUM_ALLOWED_HOSTS 白名单域名。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "uid": {"type": "string", "description": "小红书 UID（会作为 Bearer token 注入 Authorization）"},
+                "method": {"type": "string", "description": "GET/POST/PUT/DELETE"},
+                "url": {"type": "string", "description": "完整 URL（可选：与 path 二选一）"},
+                "path": {"type": "string", "description": "相对 MCP_FORUM_BASE_URL 的接口路径（可选：与 url 二选一）"},
+                "headers": {"type": "object", "description": "可选额外请求头（会保留你传入的 Authorization，但默认会注入）"},
+                "params": {"type": "object", "description": "可选 query 参数"},
+                "body": {"description": "可选请求体（JSON 对象或字符串）"},
+                "timeout": {"type": "integer", "description": "超时秒数"},
+            },
+            "required": ["uid", "method"],
+        },
+    },
+}
+
+
 def get_forum_tools_for_inject() -> list[dict]:
     """返回给模型的论坛工具列表。"""
     if not MCP_ENABLED:
         return []
-    return [TOOL_FORUM_HTTP, TOOL_FORUM_LOGIN, TOOL_FORUM_POST, TOOL_FORUM_COMMENT]
+    return [TOOL_FORUM_HTTP, TOOL_FORUM_UID_HTTP, TOOL_FORUM_LOGIN, TOOL_FORUM_POST, TOOL_FORUM_COMMENT]
 
 
 def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
@@ -269,6 +296,31 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
         result, _ = invoke_forum_http("POST", url, headers, None, {"content": content}, args.get("timeout"))
+        return json.dumps(result, ensure_ascii=False)
+
+    if name == "forum_uid_http":
+        uid = (args.get("uid") or "").strip()
+        if not uid:
+            return "uid 不能为空"
+        method = (args.get("method") or "GET").strip().upper()
+        url = (args.get("url") or "").strip()
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        # 若你没传 Authorization，就用 uid 作为 Bearer
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {uid}"
+        if not url:
+            path = (args.get("path") or "").strip()
+            if not path:
+                return "缺少 url 或 path"
+            url = _build_url_from_base(path, path)
+        result, _ = invoke_forum_http(
+            method=method,
+            url=url,
+            headers=headers,
+            params=args.get("params") if isinstance(args.get("params"), dict) else None,
+            body=args.get("body"),
+            timeout_override=args.get("timeout"),
+        )
         return json.dumps(result, ensure_ascii=False)
 
     return json.dumps({"ok": False, "error": f"未知论坛工具: {name}"}, ensure_ascii=False)

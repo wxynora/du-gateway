@@ -18,7 +18,9 @@ def _mcp_guard():
 
 @bp.route("/health", methods=["GET"])
 def mcp_health():
-    return jsonify({"ok": True, "service": "mcp_api", "tools": ["forum_http", "forum_login", "forum_post", "forum_comment"]})
+    tools = get_forum_tools_for_inject()
+    names = [(t.get("function") or {}).get("name") for t in (tools or [])]
+    return jsonify({"ok": True, "service": "mcp_api", "tools": [n for n in names if n]})
 
 
 @bp.route("/tools", methods=["GET"])
@@ -96,6 +98,27 @@ def mcp_invoke():
             headers["Authorization"] = f"Bearer {auth_token}"
         body = {"content": content}
         result, status = invoke_forum_http("POST", url, headers, None, body, args.get("timeout"))
+        return jsonify(result), status
+
+    if tool == "forum_uid_http":
+        uid = (args.get("uid") or "").strip()
+        if not uid:
+            return jsonify({"ok": False, "error": "uid 不能为空"}), 400
+        method = (args.get("method") or "GET").strip().upper()
+        url = (args.get("url") or "").strip()
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {uid}"
+        if not url:
+            from services.mcp_forum_tools import _build_url_from_base
+
+            path = (args.get("path") or "").strip()
+            if not path:
+                return jsonify({"ok": False, "error": "缺少 url 或 path"}), 400
+            url = _build_url_from_base(path, path)
+        result, status = invoke_forum_http(
+            method, url, headers, args.get("params") if isinstance(args.get("params"), dict) else None, args.get("body"), args.get("timeout")
+        )
         return jsonify(result), status
 
     return jsonify({"ok": False, "error": "不支持的 tool，请用 /mcp/tools 查看"}), 400
