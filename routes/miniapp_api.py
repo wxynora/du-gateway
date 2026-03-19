@@ -206,16 +206,37 @@ def miniapp_create_schedule_item():
     repeat = (data.get("repeat") or "once").strip().lower()
     note = (data.get("note") or "").strip()
     enabled = bool(data.get("enabled", True))
+    weekly_weekday = data.get("weekly_weekday", None)
+    weekly_time = (data.get("weekly_time") or "").strip()
 
     if not title:
         return jsonify({"ok": False, "error": "title 不能为空"}), 400
-    if not datetime_str:
-        return jsonify({"ok": False, "error": "datetime 不能为空"}), 400
-    # 允许 ISO（2026-03-20T09:30[:ss][+08:00]）及 datetime-local（2026-03-20T09:30）
-    try:
-        datetime.fromisoformat(datetime_str)
-    except Exception:
-        return jsonify({"ok": False, "error": "datetime 格式无效"}), 400
+    if repeat not in ("once", "daily", "weekly"):
+        repeat = "once"
+    if repeat == "weekly":
+        try:
+            w = int(weekly_weekday)
+        except Exception:
+            return jsonify({"ok": False, "error": "weekly_weekday 无效"}), 400
+        if w < 0 or w > 6:
+            return jsonify({"ok": False, "error": "weekly_weekday 需在 0-6"}), 400
+        try:
+            hh, mm = (weekly_time.split(":", 1) + ["0"])[:2]
+            hhi = int(hh)
+            mmi = int(mm)
+            if hhi < 0 or hhi > 23 or mmi < 0 or mmi > 59:
+                raise ValueError("invalid")
+        except Exception:
+            return jsonify({"ok": False, "error": "weekly_time 格式无效"}), 400
+        weekly_weekday = w
+    else:
+        if not datetime_str:
+            return jsonify({"ok": False, "error": "datetime 不能为空"}), 400
+        # 允许 ISO（2026-03-20T09:30[:ss][+08:00]）及 datetime-local（2026-03-20T09:30）
+        try:
+            datetime.fromisoformat(datetime_str)
+        except Exception:
+            return jsonify({"ok": False, "error": "datetime 格式无效"}), 400
 
     item = r2_store.create_schedule_item(
         title=title,
@@ -223,6 +244,8 @@ def miniapp_create_schedule_item():
         repeat=repeat,
         note=note,
         enabled=enabled,
+        weekly_weekday=weekly_weekday,
+        weekly_time=weekly_time,
     )
     if not item:
         return jsonify({"ok": False, "error": "创建失败"}), 500

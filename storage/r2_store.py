@@ -3,11 +3,11 @@
 import json
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 from uuid import uuid4
 
-from utils.time_aware import today_beijing, now_beijing_iso
+from utils.time_aware import today_beijing, now_beijing_iso, BEIJING_TZ
 
 import boto3
 from botocore.config import Config
@@ -684,16 +684,44 @@ def create_schedule_item(
     repeat: str = "once",
     note: str = "",
     enabled: bool = True,
+    weekly_weekday: Optional[int] = None,
+    weekly_time: str = "",
 ) -> Optional[dict]:
     """创建一条提醒并写入 schedule/items.json。"""
     t = (title or "").strip()
     dt = (datetime_str or "").strip()
     rep = (repeat or "once").strip().lower() or "once"
     n = (note or "").strip()
-    if not t or not dt:
+    if not t:
         return None
-    if rep not in ("once", "daily", "weekly", "monthly"):
+    if rep not in ("once", "daily", "weekly"):
         rep = "once"
+
+    wday = weekly_weekday if isinstance(weekly_weekday, int) else None
+    wtime = (weekly_time or "").strip()
+    if rep == "weekly":
+        if wday is None or wday < 0 or wday > 6:
+            return None
+        try:
+            hh, mm = (wtime.split(":", 1) + ["0"])[:2]
+            hhi = int(hh)
+            mmi = int(mm)
+            if hhi < 0 or hhi > 23 or mmi < 0 or mmi > 59:
+                return None
+        except Exception:
+            return None
+        # 计算“下一次该周几该时刻”的北京时间，保存为 datetime 锚点
+        now = datetime.now(BEIJING_TZ)
+        target = now.replace(hour=hhi, minute=mmi, second=0, microsecond=0)
+        delta_days = (wday - target.weekday()) % 7
+        target = target + timedelta(days=delta_days)
+        if target <= now:
+            target = target + timedelta(days=7)
+        dt = target.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    else:
+        if not dt:
+            return None
+
     item = {
         "id": str(uuid4()),
         "title": t,
@@ -703,6 +731,9 @@ def create_schedule_item(
         "note": n,
         "created_at": now_beijing_iso(),
     }
+    if rep == "weekly" and wday is not None:
+        item["weekly_weekday"] = int(wday)
+        item["weekly_time"] = wtime
     items = get_schedule_items()
     items.append(item)
     ok = save_schedule_items(items)

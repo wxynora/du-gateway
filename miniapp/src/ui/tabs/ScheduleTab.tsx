@@ -8,6 +8,8 @@ type ScheduleItem = {
   title?: string;
   datetime?: string;
   repeat?: string;
+  weekly_weekday?: number;
+  weekly_time?: string;
   enabled?: boolean;
   note?: string;
 };
@@ -30,10 +32,18 @@ function fmtDate(v: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-function repeatLabel(v: string): string {
+function weekdayLabel(v: number): string {
+  return ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][v] || "周一";
+}
+
+function repeatLabel(item: ScheduleItem): string {
+  const v = String(item.repeat || "once");
   if (v === "daily") return "每天";
-  if (v === "weekly") return "每周";
-  if (v === "monthly") return "每月";
+  if (v === "weekly") {
+    const wd = Number(item.weekly_weekday ?? 0);
+    const wt = String(item.weekly_time || "").trim();
+    return `每周 ${weekdayLabel(wd)}${wt ? ` ${wt}` : ""}`;
+  }
   return "仅一次";
 }
 
@@ -62,6 +72,8 @@ export function ScheduleTab() {
   const [formTitle, setFormTitle] = useState("");
   const [formDatetime, setFormDatetime] = useState("");
   const [formRepeat, setFormRepeat] = useState("once");
+  const [formWeeklyWeekday, setFormWeeklyWeekday] = useState(0);
+  const [formWeeklyTime, setFormWeeklyTime] = useState("09:00");
   const [formNote, setFormNote] = useState("");
   const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date().toISOString()));
   const [visibleMonth, setVisibleMonth] = useState(() => {
@@ -164,7 +176,12 @@ export function ScheduleTab() {
       toast("请填写提醒标题");
       return;
     }
-    if (!datetimeLocal) {
+    if (formRepeat === "weekly") {
+      if (!(formWeeklyTime || "").trim()) {
+        toast("请选择每周提醒时间");
+        return;
+      }
+    } else if (!datetimeLocal) {
       toast("请选择提醒时间");
       return;
     }
@@ -175,8 +192,10 @@ export function ScheduleTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title,
-          datetime: datetimeLocal,
+          datetime: formRepeat === "weekly" ? "" : datetimeLocal,
           repeat: formRepeat || "once",
+          weekly_weekday: formRepeat === "weekly" ? formWeeklyWeekday : undefined,
+          weekly_time: formRepeat === "weekly" ? formWeeklyTime : undefined,
           note: (formNote || "").trim(),
           enabled: true,
         }),
@@ -186,6 +205,8 @@ export function ScheduleTab() {
       setFormTitle("");
       setFormDatetime("");
       setFormRepeat("once");
+      setFormWeeklyWeekday(0);
+      setFormWeeklyTime("09:00");
       setFormNote("");
       await load();
     } catch (e: any) {
@@ -250,13 +271,39 @@ export function ScheduleTab() {
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormTitle(e.target.value)}
           disabled={creating}
         />
-        <input
-          type="datetime-local"
-          className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
-          value={formDatetime}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormDatetime(e.target.value)}
-          disabled={creating}
-        />
+        {formRepeat === "weekly" ? (
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
+              value={String(formWeeklyWeekday)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormWeeklyWeekday(Number(e.target.value || 0))}
+              disabled={creating}
+            >
+              <option value="0">周一</option>
+              <option value="1">周二</option>
+              <option value="2">周三</option>
+              <option value="3">周四</option>
+              <option value="4">周五</option>
+              <option value="5">周六</option>
+              <option value="6">周日</option>
+            </select>
+            <input
+              type="time"
+              className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
+              value={formWeeklyTime}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormWeeklyTime(e.target.value)}
+              disabled={creating}
+            />
+          </div>
+        ) : (
+          <input
+            type="datetime-local"
+            className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
+            value={formDatetime}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormDatetime(e.target.value)}
+            disabled={creating}
+          />
+        )}
         <div className="grid grid-cols-2 gap-2">
           <select
             className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
@@ -267,7 +314,6 @@ export function ScheduleTab() {
             <option value="once">仅一次</option>
             <option value="daily">每天</option>
             <option value="weekly">每周</option>
-            <option value="monthly">每月</option>
           </select>
           <Btn kind="green" onClick={createItem} disabled={creating}>
             {creating ? "创建中..." : "创建提醒"}
@@ -342,7 +388,7 @@ export function ScheduleTab() {
             <div key={`day-${String(it.id || "")}`} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
               <div className="text-sm font-medium text-cream-text">{it.title || "未命名提醒"}</div>
               <div className="mt-1 text-xs text-cream-muted">
-                {fmtDate(String(it.datetime || ""))} · {repeatLabel(String(it.repeat || "once"))} · {it.enabled === false ? "已禁用" : "启用中"}
+                {fmtDate(String(it.datetime || ""))} · {repeatLabel(it)} · {it.enabled === false ? "已禁用" : "启用中"}
               </div>
               {it.note ? <div className="mt-1 text-xs text-cream-muted">{it.note}</div> : null}
             </div>
@@ -365,7 +411,7 @@ export function ScheduleTab() {
           {enabledItems.map((it) => (
             <div key={String(it.id || "")} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
               <div className="text-sm font-medium text-cream-text">{it.title || "未命名提醒"}</div>
-              <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(String(it.repeat || "once"))}</div>
+              <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(it)}</div>
               {it.note ? <div className="mt-1 text-xs text-cream-muted">{it.note}</div> : null}
               <div className="mt-2 flex items-center gap-2">
                 <Btn kind="danger" onClick={() => disableItem(String(it.id || ""))} disabled={!it.id}>禁用未来触发</Btn>
@@ -385,7 +431,7 @@ export function ScheduleTab() {
           {disabledItems.map((it) => (
             <div key={String(it.id || "")} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
               <div className="text-sm text-cream-text">{it.title || "未命名提醒"}</div>
-              <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(String(it.repeat || "once"))} · 已禁用</div>
+              <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(it)} · 已禁用</div>
               <div className="mt-2 flex items-center gap-2">
                 <Btn kind="green" onClick={() => enableItem(String(it.id || ""))} disabled={!it.id}>重新启用</Btn>
                 <Btn kind="pink" onClick={() => deleteItem(String(it.id || ""))} disabled={!it.id}>删除</Btn>
