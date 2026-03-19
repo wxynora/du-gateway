@@ -341,7 +341,7 @@ def execute_tool(name: str, arguments: dict) -> str:
     from services.gateway_tools import SYNC_TOOL_NAMES, execute_gateway_tool
     if name in SYNC_TOOL_NAMES:
         return execute_gateway_tool(name, arguments)
-    if name in ("get_weather", "get_almanac"):
+    if name in ("get_time_info", "get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)
     if name in (

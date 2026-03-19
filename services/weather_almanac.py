@@ -9,7 +9,7 @@ from config import (
     ALMANAC_API_KEY,
 )
 from utils.log import get_logger
-from utils.time_aware import today_beijing
+from utils.time_aware import today_beijing, get_exact_time
 
 logger = get_logger(__name__)
 
@@ -90,7 +90,20 @@ def fetch_almanac(date: Optional[str] = None) -> str:
 
 def get_weather_almanac_tools() -> list:
     """返回天气、黄历工具定义，供注入到 chat；未配置则不返回。"""
-    tools = []
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_time_info",
+                "description": "获取当前北京时间（仅 HH:mm）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+    ]
     if WEATHER_API_URL and WEATHER_API_KEY:
         tools.append({
             "type": "function",
@@ -126,6 +139,9 @@ def get_weather_almanac_tools() -> list:
 
 def execute_weather_almanac_tool(name: str, arguments: dict) -> str:
     """执行天气/黄历工具，返回给渡的字符串。"""
+    if name == "get_time_info":
+        # 仅返回当前北京时间 HH:mm（用户明确不需要日期/农历等）
+        return get_exact_time()
     if name == "get_weather":
         return fetch_weather(arguments.get("city"))
     if name == "get_almanac":
