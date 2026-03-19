@@ -63,9 +63,9 @@ export function ReasoningTab() {
         {items.map((r, i) => (
           <div
             key={`${r.index || 0}-${i}`}
-            className="rounded-[20px] bg-white/48 backdrop-blur-xl border border-white/55 shadow-soft p-3"
+            className="rounded-[20px] bg-white border border-white/70 shadow-soft p-3"
           >
-            <div className="text-[11px] text-cream-muted">
+            <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3 py-1 text-[11px] font-medium text-white shadow-soft2">
               #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""}
             </div>
             <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-cream-text">
