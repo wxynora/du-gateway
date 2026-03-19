@@ -11,6 +11,7 @@ from config import (
     NOTION_TOOLS_ENABLED,
 )
 from services import notion_client
+from services.mcp_forum_tools import execute_forum_tool, get_forum_tools_for_inject
 from utils.log import get_logger
 from utils.time_aware import iso_to_display_time, now_beijing_iso, parse_iso_to_beijing
 
@@ -307,6 +308,8 @@ def get_notion_tools_for_inject() -> List[dict]:
         tools.extend(get_gateway_sync_tools())
     from services.weather_almanac import get_weather_almanac_tools
     tools.extend(get_weather_almanac_tools())
+    # MCP 论坛工具：开启 MCP 后一起注入，渡可直接 verify/register/发帖
+    tools.extend(get_forum_tools_for_inject())
     return tools
 
 
@@ -341,6 +344,8 @@ def execute_tool(name: str, arguments: dict) -> str:
     if name in ("get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)
+    if name in ("forum_http", "forum_login", "forum_post", "forum_comment"):
+        return execute_forum_tool(name, arguments)
     try:
         if name == "notion_search":
             query = (arguments.get("query") or "").strip()
