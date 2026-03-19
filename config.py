@@ -308,9 +308,32 @@ MCP_TOKENS = [x.strip() for x in _MCP_TOKENS_STR.split(",") if x.strip()]
 # 示例：https://forum.example.com
 MCP_FORUM_BASE_URL = os.environ.get("MCP_FORUM_BASE_URL", "").strip().rstrip("/")
 # 白名单域名（forum_http 只允许访问这些域名；逗号分隔）
-# 示例：MCP_FORUM_ALLOWED_HOSTS=forum.example.com,api.forum.example.com
+# 可写纯域名，也可写完整 URL（会自动提取 hostname），例如：
+# MCP_FORUM_ALLOWED_HOSTS=forum.example.com,https://api.forum.example.com/v1
+def _parse_forum_allowed_hosts(raw: str) -> list[str]:
+    """从逗号分隔的配置项解析出小写 hostname 列表（支持误写 https:// 或带路径）。"""
+    from urllib.parse import urlparse
+
+    out: list[str] = []
+    for part in (raw or "").split(","):
+        s = (part or "").strip().lower()
+        if not s:
+            continue
+        if "://" in s:
+            host = (urlparse(s).hostname or "").strip().lower()
+            if host:
+                out.append(host)
+            continue
+        # 无 scheme 但写了 path：example.com/foo → example.com
+        if "/" in s:
+            s = s.split("/", 1)[0].strip()
+        if s:
+            out.append(s)
+    return out
+
+
 _MCP_FORUM_ALLOWED_HOSTS_STR = os.environ.get("MCP_FORUM_ALLOWED_HOSTS", "").strip()
-MCP_FORUM_ALLOWED_HOSTS = [x.strip().lower() for x in _MCP_FORUM_ALLOWED_HOSTS_STR.split(",") if x.strip()]
+MCP_FORUM_ALLOWED_HOSTS = _parse_forum_allowed_hosts(_MCP_FORUM_ALLOWED_HOSTS_STR)
 # 可选 IP 白名单（仅 MCP_AUTH_MODE=token_ip 时生效）
 MCP_IP_ALLOWLIST = [x.strip() for x in os.environ.get("MCP_IP_ALLOWLIST", "").split(",") if x.strip()]
 # 反代场景下是否信任 X-Forwarded-For（仅 MCP IP 白名单用）
