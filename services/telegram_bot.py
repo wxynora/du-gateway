@@ -361,13 +361,19 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
 
             # 上游 403：常见原因是当前 token 没权限访问当前 model
             # 例：This token has no access to model xxx
-            if r.status_code in (401, 403) and ("no access to model" in lower or "token has no access to model" in lower):
-                new_model = _fetch_gateway_first_model()
-                if new_model and new_model != model:
+            if r.status_code in (401, 403):
+                # 注意：网关 body 可能不会透出上游原始错误文本，这里改成“兜底重试一次”。
+                # 目标：当当前 model 与 active upstream 的 token 权限不匹配时，自动切到 active 可用的第一个模型。
+                should_retry = ("no access to model" in lower) or ("token has no access to model" in lower)
+                if not should_retry:
+                    should_retry = True  # 兜底：只要 401/403，就尝试拉取网关可用模型重试一次
+
+                new_model = _fetch_gateway_first_model() if should_retry else None
+                if new_model and new_model != body.get("model"):
                     logger.warning(
-                        "模型无权限：当前 model=%s status=%s，重试一次 with model=%s preview=%s",
-                        model,
+                        "网关返回 %s：尝试切换 model=%s -> %s 并重试一次 preview=%s",
                         r.status_code,
+                        body.get("model"),
                         new_model,
                         preview[:220],
                     )
