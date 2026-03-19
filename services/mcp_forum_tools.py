@@ -9,6 +9,12 @@ from config import (
     MCP_FORUM_ALLOWED_HOSTS,
     MCP_FORUM_BASE_URL,
     MCP_FORUM_DEFAULT_UID,
+    MCP_FORUM_VERIFY_UID_PATH,
+    MCP_FORUM_REGISTER_PATH,
+    MCP_FORUM_POST_CREATE_PATH,
+    MCP_FORUM_POST_LIST_PATH,
+    MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
+    MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE,
     MCP_HTTP_MAX_RESPONSE_CHARS,
     MCP_HTTP_MAX_TIMEOUT_SECONDS,
     MCP_HTTP_RETRIES,
@@ -45,17 +51,19 @@ TOOL_FORUM_LOGIN = {
     "type": "function",
     "function": {
         "name": "forum_login",
-        "description": "论坛登录：用用户名密码请求登录接口，默认 path=/api/login。",
+        "description": (
+            "论坛认证（forum_login）：默认调用 verify-uid 接口。\n"
+            "你不需要手动输入 uid/auth；会自动使用 MCP_FORUM_DEFAULT_UID 并注入 Bearer。"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "username": {"type": "string"},
-                "password": {"type": "string"},
-                "path": {"type": "string", "description": "默认 /api/login"},
+                "path": {"type": "string", "description": "可选：默认 MCP_FORUM_VERIFY_UID_PATH"},
+                "payload": {"description": "可选请求体（JSON）"},
                 "timeout": {"type": "integer"},
                 "headers": {"type": "object"},
             },
-            "required": ["username", "password"],
+            "required": [],
         },
     },
 }
@@ -65,16 +73,16 @@ TOOL_FORUM_POST = {
     "function": {
         "name": "forum_post",
         "description": (
-            "论坛发帖：默认 path=/api/posts，可带 auth_token（Bearer）。\n"
+            "论坛发帖：默认调用 MCP_FORUM_POST_CREATE_PATH。\n"
             "提醒：你不需要手动输入 auth_token，只要服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动使用默认 Bearer。\n"
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "title": {"type": "string"},
                 "content": {"type": "string"},
+                "title": {"type": "string", "description": "可选：发帖标题，不传则用默认值"},
                 "category_id": {},
-                "path": {"type": "string", "description": "默认 /api/posts"},
+                "path": {"type": "string", "description": "可选：默认 MCP_FORUM_POST_CREATE_PATH"},
                 "auth_token": {
                     "type": "string",
                     "description": "Bearer token（不传则使用 MCP_FORUM_DEFAULT_UID）",
@@ -82,7 +90,7 @@ TOOL_FORUM_POST = {
                 "headers": {"type": "object"},
                 "timeout": {"type": "integer"},
             },
-            "required": ["title", "content"],
+            "required": ["content"],
         },
     },
 }
@@ -92,7 +100,7 @@ TOOL_FORUM_COMMENT = {
     "function": {
         "name": "forum_comment",
         "description": (
-            "论坛评论：默认 path_template=/api/posts/{post_id}/comments，可带 auth_token。\n"
+            "论坛评论：默认调用 MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE。\n"
             "提醒：你不需要手动输入 auth_token，只要服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动使用默认 Bearer。\n"
         ),
         "parameters": {
@@ -100,7 +108,7 @@ TOOL_FORUM_COMMENT = {
             "properties": {
                 "post_id": {"type": "string"},
                 "content": {"type": "string"},
-                "path_template": {"type": "string", "description": "默认 /api/posts/{post_id}/comments"},
+                "path_template": {"type": "string", "description": "可选：默认 MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE"},
                 "auth_token": {
                     "type": "string",
                     "description": "Bearer token（不传则使用 MCP_FORUM_DEFAULT_UID）",
@@ -149,7 +157,82 @@ def get_forum_tools_for_inject() -> list[dict]:
     """返回给模型的论坛工具列表。"""
     if not MCP_ENABLED:
         return []
-    return [TOOL_FORUM_HTTP, TOOL_FORUM_UID_HTTP, TOOL_FORUM_LOGIN, TOOL_FORUM_POST, TOOL_FORUM_COMMENT]
+    # 与你提供的流程一致：verify-uid -> register -> 发报到帖 -> 浏览帖子
+    return [
+        TOOL_FORUM_HTTP,
+        TOOL_FORUM_UID_HTTP,
+        TOOL_FORUM_LOGIN,
+        {
+            "type": "function",
+            "function": {
+                "name": "forum_verify_uid",
+                "description": "verify-uid：确认 UID 对应的成员身份（默认 POST + MCP_FORUM_VERIFY_UID_PATH）。不需要手动输入 uid/auth。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "method": {"type": "string", "description": "可选：默认 POST"},
+                        "path": {"type": "string", "description": "可选：默认 MCP_FORUM_VERIFY_UID_PATH"},
+                        "payload": {"description": "可选请求体（JSON）"},
+                        "headers": {"type": "object"},
+                        "timeout": {"type": "integer"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "forum_register",
+                "description": "register：注册你的账号（默认 POST + MCP_FORUM_REGISTER_PATH）。不需要手动输入 uid/auth。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "method": {"type": "string", "description": "可选：默认 POST"},
+                        "path": {"type": "string", "description": "可选：默认 MCP_FORUM_REGISTER_PATH"},
+                        "payload": {"description": "可选请求体（JSON）"},
+                        "headers": {"type": "object"},
+                        "timeout": {"type": "integer"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "forum_list_posts",
+                "description": "浏览帖子列表（默认 GET + MCP_FORUM_POST_LIST_PATH）。不需要手动输入 uid/auth。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer"},
+                        "offset": {"type": "integer"},
+                        "path": {"type": "string", "description": "可选：默认 MCP_FORUM_POST_LIST_PATH"},
+                        "headers": {"type": "object"},
+                        "timeout": {"type": "integer"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "forum_get_post",
+                "description": "浏览帖子详情（GET + MCP_FORUM_POST_DETAIL_PATH_TEMPLATE，需要 post_id）。不需要手动输入 uid/auth。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "post_id": {"type": "string"},
+                        "path_template": {"type": "string", "description": "可选：默认 MCP_FORUM_POST_DETAIL_PATH_TEMPLATE"},
+                        "headers": {"type": "object"},
+                        "timeout": {"type": "integer"},
+                    },
+                    "required": ["post_id"],
+                },
+            },
+        },
+        TOOL_FORUM_POST,
+        TOOL_FORUM_COMMENT,
+    ]
 
 
 def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
@@ -280,30 +363,24 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         return json.dumps(result, ensure_ascii=False)
 
     if name == "forum_login":
-        url = _build_url_from_base(args.get("path") or "", "/api/login")
+        url = _build_url_from_base(args.get("path") or MCP_FORUM_VERIFY_UID_PATH, MCP_FORUM_VERIFY_UID_PATH)
         if not url:
             return "未配置 MCP_FORUM_BASE_URL"
-        username = (args.get("username") or "").strip()
-        password = (args.get("password") or "").strip()
-        if not username or not password:
-            return "缺少 username 或 password"
-        result, _ = invoke_forum_http(
-            "POST", url,
-            args.get("headers") if isinstance(args.get("headers"), dict) else {},
-            None,
-            {"username": username, "password": password},
-            args.get("timeout"),
-        )
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+        result, _ = invoke_forum_http("POST", url, headers, None, payload, args.get("timeout"))
         return json.dumps(result, ensure_ascii=False)
 
     if name == "forum_post":
-        url = _build_url_from_base(args.get("path") or "", "/api/posts")
+        url = _build_url_from_base(args.get("path") or MCP_FORUM_POST_CREATE_PATH, MCP_FORUM_POST_CREATE_PATH)
         if not url:
             return "未配置 MCP_FORUM_BASE_URL"
-        title = (args.get("title") or "").strip()
+        title = (args.get("title") or "报到帖").strip()
         content = (args.get("content") or "").strip()
-        if not title or not content:
-            return "缺少 title 或 content"
+        if not content:
+            return "content 不能为空"
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         auth_token = (args.get("auth_token") or "").strip()
         if not auth_token:
@@ -323,8 +400,11 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         content = (args.get("content") or "").strip()
         if not post_id or not content:
             return "缺少 post_id 或 content"
-        template = _normalize_path(args.get("path_template") or "", "/api/posts/{post_id}/comments")
-        url = _build_url_from_base(template.replace("{post_id}", post_id), "")
+        template = _normalize_path(
+            args.get("path_template") or MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE,
+            MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE,
+        )
+        url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE)
         if not url:
             return "未配置 MCP_FORUM_BASE_URL"
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
@@ -361,6 +441,61 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             body=args.get("body"),
             timeout_override=args.get("timeout"),
         )
+        return json.dumps(result, ensure_ascii=False)
+
+    if name == "forum_verify_uid":
+        url = _build_url_from_base(args.get("path") or MCP_FORUM_VERIFY_UID_PATH, MCP_FORUM_VERIFY_UID_PATH)
+        if not url:
+            return "未配置 MCP_FORUM_BASE_URL"
+        method = (args.get("method") or "POST").strip().upper()
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+        result, _ = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
+        return json.dumps(result, ensure_ascii=False)
+
+    if name == "forum_register":
+        url = _build_url_from_base(args.get("path") or MCP_FORUM_REGISTER_PATH, MCP_FORUM_REGISTER_PATH)
+        if not url:
+            return "未配置 MCP_FORUM_BASE_URL"
+        method = (args.get("method") or "POST").strip().upper()
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+        result, _ = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
+        return json.dumps(result, ensure_ascii=False)
+
+    if name == "forum_list_posts":
+        url = _build_url_from_base(args.get("path") or MCP_FORUM_POST_LIST_PATH, MCP_FORUM_POST_LIST_PATH)
+        if not url:
+            return "未配置 MCP_FORUM_BASE_URL"
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        params = {}
+        if args.get("limit") is not None:
+            params["limit"] = args.get("limit")
+        if args.get("offset") is not None:
+            params["offset"] = args.get("offset")
+        params = params or None
+        result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
+        return json.dumps(result, ensure_ascii=False)
+
+    if name == "forum_get_post":
+        post_id = str(args.get("post_id") or "").strip()
+        if not post_id:
+            return "post_id 不能为空"
+        template = (args.get("path_template") or MCP_FORUM_POST_DETAIL_PATH_TEMPLATE).strip()
+        template = _normalize_path(template, MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
+        url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
+        if not url:
+            return "未配置 MCP_FORUM_BASE_URL"
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        result, _ = invoke_forum_http("GET", url, headers, None, None, args.get("timeout"))
         return json.dumps(result, ensure_ascii=False)
 
     return json.dumps({"ok": False, "error": f"未知论坛工具: {name}"}, ensure_ascii=False)

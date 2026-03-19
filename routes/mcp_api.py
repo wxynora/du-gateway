@@ -1,6 +1,13 @@
 from flask import Blueprint, jsonify, request
 
-from config import MCP_ENABLED, MCP_FORUM_DEFAULT_UID
+from config import (
+    MCP_ENABLED,
+    MCP_FORUM_DEFAULT_UID,
+    MCP_FORUM_VERIFY_UID_PATH,
+    MCP_FORUM_REGISTER_PATH,
+    MCP_FORUM_POST_LIST_PATH,
+    MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
+)
 from services.mcp_forum_tools import get_forum_tools_for_inject, invoke_forum_http
 from utils.log import get_logger
 from utils.mcp_auth import enforce_mcp_auth
@@ -127,6 +134,71 @@ def mcp_invoke():
         result, status = invoke_forum_http(
             method, url, headers, args.get("params") if isinstance(args.get("params"), dict) else None, args.get("body"), args.get("timeout")
         )
+        return jsonify(result), status
+
+    if tool == "forum_verify_uid":
+        method = (args.get("method") or "POST").strip().upper()
+        from services.mcp_forum_tools import _build_url_from_base
+
+        url = _build_url_from_base(args.get("path") or MCP_FORUM_VERIFY_UID_PATH, MCP_FORUM_VERIFY_UID_PATH)
+        if not url:
+            return jsonify({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}), 400
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+        result, status = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
+        return jsonify(result), status
+
+    if tool == "forum_register":
+        method = (args.get("method") or "POST").strip().upper()
+        from services.mcp_forum_tools import _build_url_from_base
+
+        url = _build_url_from_base(args.get("path") or MCP_FORUM_REGISTER_PATH, MCP_FORUM_REGISTER_PATH)
+        if not url:
+            return jsonify({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}), 400
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+        result, status = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
+        return jsonify(result), status
+
+    if tool == "forum_list_posts":
+        from services.mcp_forum_tools import _build_url_from_base
+
+        url = _build_url_from_base(args.get("path") or MCP_FORUM_POST_LIST_PATH, MCP_FORUM_POST_LIST_PATH)
+        if not url:
+            return jsonify({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}), 400
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        params = {}
+        if args.get("limit") is not None:
+            params["limit"] = args.get("limit")
+        if args.get("offset") is not None:
+            params["offset"] = args.get("offset")
+        params = params or None
+        result, status = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
+        return jsonify(result), status
+
+    if tool == "forum_get_post":
+        post_id = str(args.get("post_id") or "").strip()
+        if not post_id:
+            return jsonify({"ok": False, "error": "缺少 post_id"}), 400
+        from services.mcp_forum_tools import _build_url_from_base, _normalize_path
+
+        template = _normalize_path(
+            args.get("path_template") or MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
+            MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
+        )
+        url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
+        if not url:
+            return jsonify({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}), 400
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        result, status = invoke_forum_http("GET", url, headers, None, None, args.get("timeout"))
         return jsonify(result), status
 
     return jsonify({"ok": False, "error": "不支持的 tool，请用 /mcp/tools 查看"}), 400

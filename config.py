@@ -352,3 +352,17 @@ MCP_HTTP_MAX_RESPONSE_CHARS = int(os.environ.get("MCP_HTTP_MAX_RESPONSE_CHARS", 
 # 论坛默认 UID（Bearer token）
 # 若为空，则 forum_uid_http/forum_post/forum_comment 在缺省 uid/auth_token 时会报错
 MCP_FORUM_DEFAULT_UID = os.environ.get("MCP_FORUM_DEFAULT_UID", "").strip()
+
+# -------------------- 论坛接口预设路径（给论坛MCP工具默认使用） --------------------
+# 你给的流程：verify-uid -> register -> 发报到帖 -> 浏览帖子
+# 以下都是“相对 MCP_FORUM_BASE_URL 的 path”，可直接在 .env 覆盖。
+MCP_FORUM_VERIFY_UID_PATH = os.environ.get("MCP_FORUM_VERIFY_UID_PATH", "/verify-uid").strip()
+MCP_FORUM_REGISTER_PATH = os.environ.get("MCP_FORUM_REGISTER_PATH", "/register").strip()
+
+# 发帖/列表/详情
+MCP_FORUM_POST_CREATE_PATH = os.environ.get("MCP_FORUM_POST_CREATE_PATH", "/posts").strip()
+MCP_FORUM_POST_LIST_PATH = os.environ.get("MCP_FORUM_POST_LIST_PATH", "/posts").strip()
+MCP_FORUM_POST_DETAIL_PATH_TEMPLATE = os.environ.get("MCP_FORUM_POST_DETAIL_PATH_TEMPLATE", "/posts/{post_id}").strip()
+
+# 评论
+MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE = os.environ.get("MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE", "/posts/{post_id}/comments").strip()

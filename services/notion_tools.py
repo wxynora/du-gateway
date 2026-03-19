@@ -344,7 +344,17 @@ def execute_tool(name: str, arguments: dict) -> str:
     if name in ("get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)
-    if name in ("forum_http", "forum_uid_http", "forum_login", "forum_post", "forum_comment"):
+    if name in (
+        "forum_http",
+        "forum_uid_http",
+        "forum_login",
+        "forum_verify_uid",
+        "forum_register",
+        "forum_list_posts",
+        "forum_get_post",
+        "forum_post",
+        "forum_comment",
+    ):
         return execute_forum_tool(name, arguments)
     try:
         if name == "notion_search":
