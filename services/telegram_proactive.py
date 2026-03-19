@@ -135,6 +135,111 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
         return ProactiveDecision(False, "", f"exception={e}")
 
 
+def _hm_from_item(it: dict, field: str, fallback_dt: Optional[datetime]) -> tuple[int, int]:
+    raw = str(it.get(field) or "").strip()
+    if raw:
+        try:
+            hh, mm = (raw.split(":", 1) + ["0"])[:2]
+            h = int(hh)
+            m = int(mm)
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                return h, m
+        except Exception:
+            pass
+    if fallback_dt is not None:
+        return fallback_dt.hour, fallback_dt.minute
+    return 9, 0
+
+
+def _schedule_due_occurrence_key(it: dict, now_dt: datetime) -> str:
+    iid = str(it.get("id") or "").strip() or "unknown"
+    rep = str(it.get("repeat") or "once").strip().lower() or "once"
+    if rep == "once":
+        anchor = str(it.get("datetime") or "").strip()
+        return f"{iid}|once|{anchor}"
+    if rep == "daily":
+        return f"{iid}|daily|{now_dt.strftime('%Y-%m-%d')}"
+    return f"{iid}|weekly|{now_dt.strftime('%Y-%m-%d')}"
+
+
+def _is_schedule_due_now(it: dict, now_dt: datetime) -> bool:
+    if not bool(it.get("enabled", True)):
+        return False
+    rep = str(it.get("repeat") or "once").strip().lower() or "once"
+    anchor = parse_iso_to_beijing(str(it.get("datetime") or "").strip())
+    if rep == "once":
+        if not anchor:
+            return False
+        return now_dt >= anchor
+    if rep == "daily":
+        h, m = _hm_from_item(it, "daily_time", anchor)
+        return (now_dt.hour, now_dt.minute) >= (h, m)
+    if rep == "weekly":
+        w = it.get("weekly_weekday", None)
+        try:
+            target_w = int(w)
+        except Exception:
+            target_w = anchor.weekday() if anchor else 0
+        if target_w < 0 or target_w > 6:
+            target_w = 0
+        if now_dt.weekday() != target_w:
+            return False
+        h, m = _hm_from_item(it, "weekly_time", anchor)
+        return (now_dt.hour, now_dt.minute) >= (h, m)
+    return False
+
+
+def schedule_tick(target_user_id: int = 0) -> dict:
+    """
+    检查并触发日历/闹钟提醒（只发给目标用户），按 fired 去重。
+    """
+    uid = int(target_user_id or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if uid <= 0:
+        return {"ok": False, "error": "missing_target_user_id"}
+    now_iso = now_beijing_iso()
+    now_dt = parse_iso_to_beijing(now_iso)
+    if not now_dt:
+        return {"ok": False, "error": "time_parse_failed"}
+
+    items = r2_store.get_schedule_items() or []
+    fired = r2_store.get_schedule_fired_keys()
+    sent = 0
+    disabled_once = 0
+    changed = False
+
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        if not _is_schedule_due_now(it, now_dt):
+            continue
+        occ_key = _schedule_due_occurrence_key(it, now_dt)
+        if occ_key in fired:
+            continue
+        title = str(it.get("title") or "提醒").strip() or "提醒"
+        note = str(it.get("note") or "").strip()
+        when_text = now_dt.strftime("%Y-%m-%d %H:%M")
+        text = f"⏰ {title}\n时间：{when_text}"
+        if note:
+            text = f"{text}\n备注：{note}"
+        ok = send_message_to_user(uid, text)
+        if not ok:
+            continue
+        r2_store.add_schedule_fired_key(occ_key)
+        fired.add(occ_key)
+        sent += 1
+        # 一次性提醒触发后自动禁用，避免重复参与检查
+        rep = str(it.get("repeat") or "once").strip().lower() or "once"
+        if rep == "once" and bool(it.get("enabled", True)):
+            it["enabled"] = False
+            it["disabled_at"] = now_iso
+            changed = True
+            disabled_once += 1
+
+    if changed:
+        r2_store.save_schedule_items(items)
+    return {"ok": True, "sent": sent, "disabled_once": disabled_once, "checked": len(items), "now": now_iso}
+
+
 def proactive_tick(target_user_id: int = 0) -> dict:
     """
     执行一次调度 tick。
@@ -214,6 +319,8 @@ def run_scheduler_loop():
     logger.info("主动发消息调度启动 interval_min=%s target_user_id=%s quiet=%s-%s", interval_min, uid, TELEGRAM_PROACTIVE_QUIET_START_HM, TELEGRAM_PROACTIVE_QUIET_END_HM)
     while True:
         try:
+            sched = schedule_tick(uid)
+            logger.info("日历闹钟 tick result=%s", sched)
             result = proactive_tick(uid)
             logger.info("主动发消息 tick result=%s", result)
         except Exception as e:

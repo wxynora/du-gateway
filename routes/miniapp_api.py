@@ -207,6 +207,7 @@ def miniapp_create_schedule_item():
     note = (data.get("note") or "").strip()
     enabled = bool(data.get("enabled", True))
     weekly_weekday = data.get("weekly_weekday", None)
+    weekly_weekdays = data.get("weekly_weekdays", None)
     weekly_time = (data.get("weekly_time") or "").strip()
     daily_time = (data.get("daily_time") or "").strip()
 
@@ -215,12 +216,25 @@ def miniapp_create_schedule_item():
     if repeat not in ("once", "daily", "weekly"):
         repeat = "once"
     if repeat == "weekly":
-        try:
-            w = int(weekly_weekday)
-        except Exception:
-            return jsonify({"ok": False, "error": "weekly_weekday 无效"}), 400
-        if w < 0 or w > 6:
-            return jsonify({"ok": False, "error": "weekly_weekday 需在 0-6"}), 400
+        weekday_list: list[int] = []
+        if isinstance(weekly_weekdays, list):
+            for x in weekly_weekdays:
+                try:
+                    w = int(x)
+                except Exception:
+                    continue
+                if 0 <= w <= 6:
+                    weekday_list.append(w)
+        elif weekly_weekday is not None:
+            try:
+                w = int(weekly_weekday)
+                if 0 <= w <= 6:
+                    weekday_list.append(w)
+            except Exception:
+                pass
+        weekday_list = sorted(set(weekday_list))
+        if not weekday_list:
+            return jsonify({"ok": False, "error": "weekly_weekdays 无效"}), 400
         try:
             hh, mm = (weekly_time.split(":", 1) + ["0"])[:2]
             hhi = int(hh)
@@ -229,7 +243,23 @@ def miniapp_create_schedule_item():
                 raise ValueError("invalid")
         except Exception:
             return jsonify({"ok": False, "error": "weekly_time 格式无效"}), 400
-        weekly_weekday = w
+        created_items = []
+        for w in weekday_list:
+            item = r2_store.create_schedule_item(
+                title=title,
+                datetime_str="",
+                repeat=repeat,
+                note=note,
+                enabled=enabled,
+                weekly_weekday=w,
+                weekly_time=weekly_time,
+                daily_time=daily_time,
+            )
+            if item:
+                created_items.append(item)
+        if not created_items:
+            return jsonify({"ok": False, "error": "创建失败"}), 500
+        return jsonify({"ok": True, "items": created_items, "count": len(created_items)})
     elif repeat == "daily":
         try:
             hh, mm = (daily_time.split(":", 1) + ["0"])[:2]

@@ -772,6 +772,50 @@ def delete_schedule_item(item_id: str) -> bool:
     return save_schedule_items(new_items)
 
 
+def get_schedule_fired_keys() -> set[str]:
+    """读取已触发 occurrence_key 集合。"""
+    client = _s3_client()
+    if not client:
+        return set()
+    data = _read_json(client, R2_KEY_SCHEDULE_FIRED)
+    if not data or not isinstance(data, dict):
+        return set()
+    keys = data.get("keys")
+    if not isinstance(keys, list):
+        return set()
+    out = set()
+    for k in keys:
+        s = str(k or "").strip()
+        if s:
+            out.add(s)
+    return out
+
+
+def add_schedule_fired_key(occurrence_key: str) -> bool:
+    """写入一条已触发 occurrence_key（幂等）。"""
+    k = (occurrence_key or "").strip()
+    if not k:
+        return False
+    keys = get_schedule_fired_keys()
+    if k in keys:
+        return True
+    keys.add(k)
+    payload = {
+        "keys": sorted(keys),
+        "updated_at": now_beijing_iso(),
+    }
+    client = _s3_client()
+    if not client:
+        return False
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_SCHEDULE_FIRED, payload)
+            return True
+        except Exception as e:
+            logger.error("add_schedule_fired_key 失败 key=%s error=%s", k, e, exc_info=True)
+            return False
+
+
 # ---------- 动态层 current.json ----------
 
 

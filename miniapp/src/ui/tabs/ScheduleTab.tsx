@@ -99,7 +99,7 @@ export function ScheduleTab() {
   const [formDatetime, setFormDatetime] = useState("");
   const [formRepeat, setFormRepeat] = useState("once");
   const [formDailyTime, setFormDailyTime] = useState("09:00");
-  const [formWeeklyWeekday, setFormWeeklyWeekday] = useState(0);
+  const [formWeeklyWeekdays, setFormWeeklyWeekdays] = useState<number[]>([0]);
   const [formWeeklyTime, setFormWeeklyTime] = useState("09:00");
   const [formNote, setFormNote] = useState("");
   const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date().toISOString()));
@@ -212,6 +212,10 @@ export function ScheduleTab() {
         toast("请选择每周提醒时间");
         return;
       }
+      if (!formWeeklyWeekdays.length) {
+        toast("请至少选择一个周几");
+        return;
+      }
     } else if (formRepeat === "daily") {
       if (!(formDailyTime || "").trim()) {
         toast("请选择每天提醒时间");
@@ -231,7 +235,7 @@ export function ScheduleTab() {
           datetime: formRepeat === "weekly" || formRepeat === "daily" ? "" : datetimeLocal,
           repeat: formRepeat || "once",
           daily_time: formRepeat === "daily" ? formDailyTime : undefined,
-          weekly_weekday: formRepeat === "weekly" ? formWeeklyWeekday : undefined,
+          weekly_weekdays: formRepeat === "weekly" ? formWeeklyWeekdays : undefined,
           weekly_time: formRepeat === "weekly" ? formWeeklyTime : undefined,
           note: (formNote || "").trim(),
           enabled: true,
@@ -243,7 +247,7 @@ export function ScheduleTab() {
       setFormDatetime("");
       setFormRepeat("once");
       setFormDailyTime("09:00");
-      setFormWeeklyWeekday(0);
+      setFormWeeklyWeekdays([0]);
       setFormWeeklyTime("09:00");
       setFormNote("");
       await load();
@@ -274,6 +278,13 @@ export function ScheduleTab() {
     setVisibleMonth((prev) => {
       const d = new Date(prev.year, prev.month + step, 1);
       return { year: d.getFullYear(), month: d.getMonth() };
+    });
+  }
+
+  function toggleWeeklyWeekday(day: number) {
+    setFormWeeklyWeekdays((prev) => {
+      if (prev.includes(day)) return prev.filter((x) => x !== day);
+      return [...prev, day].sort((a, b) => a - b);
     });
   }
 
@@ -310,21 +321,28 @@ export function ScheduleTab() {
           disabled={creating}
         />
         {formRepeat === "weekly" ? (
-          <div className="grid grid-cols-2 gap-2">
-            <select
-              className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
-              value={String(formWeeklyWeekday)}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormWeeklyWeekday(Number(e.target.value || 0))}
-              disabled={creating}
-            >
-              <option value="0">周一</option>
-              <option value="1">周二</option>
-              <option value="2">周三</option>
-              <option value="3">周四</option>
-              <option value="4">周五</option>
-              <option value="5">周六</option>
-              <option value="6">周日</option>
-            </select>
+          <div className="space-y-2">
+            <div className="grid grid-cols-4 gap-2">
+              {["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map((w, idx) => {
+                const selected = formWeeklyWeekdays.includes(idx);
+                return (
+                  <button
+                    key={w}
+                    type="button"
+                    className={
+                      "rounded-xl2 border px-2 py-2 text-xs shadow-soft2 " +
+                      (selected
+                        ? "bg-neutral-900 border-neutral-900 text-white"
+                        : "bg-cream-card/90 border-white/55 text-cream-text")
+                    }
+                    onClick={() => toggleWeeklyWeekday(idx)}
+                    disabled={creating}
+                  >
+                    {w}
+                  </button>
+                );
+              })}
+            </div>
             <input
               type="time"
               className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
