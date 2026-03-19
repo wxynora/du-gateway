@@ -171,11 +171,35 @@ def _ensure_summary_has_bucket(summary: str, bucket: str) -> str:
             has_bucket = True
     except Exception:
         has_bucket = False
-    if has_bucket:
-        return s
-
     marker = f"（{bucket}）"
     lines = s.splitlines()
+
+    # 去重：同一时间段标记不重复出现（尤其是兜底多次触发时）
+    # 仅去重完全相同的“（YYYY-MM-DD 时间段）”标记行，不动正文内容。
+    deduped: list[str] = []
+    seen_markers: set[str] = set()
+    try:
+        import re
+
+        for line in lines:
+            stripped = line.strip()
+            if re.fullmatch(r"（\d{4}-\d{2}-\d{2}\s*(早上|上午|中午|下午|傍晚|晚上|深夜)）", stripped):
+                if stripped in seen_markers:
+                    continue
+                seen_markers.add(stripped)
+            deduped.append(line)
+    except Exception:
+        deduped = lines
+
+    lines = deduped
+    s = "\n".join(lines).strip()
+
+    # 若已有 bucket 且同一时间段已存在，不再重复补
+    if marker in s:
+        return s
+
+    # 已有其他时间段但没有当前 bucket：补上当前 bucket
+    # 没有任何时间段：也补当前 bucket
     for i, line in enumerate(lines):
         if line.strip().startswith("【最近】"):
             lines.insert(i + 1, marker)
