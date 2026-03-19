@@ -136,6 +136,60 @@ def miniapp_delete_round(window_id: str, round_index: int):
     return jsonify({"ok": ok, "window_id": window_id or "", "round_index": round_index})
 
 
+@bp.route("/reasoning/latest", methods=["GET"])
+def miniapp_reasoning_latest():
+    """
+    返回最新思维链（默认 10 条）：
+    - 优先最近窗口里最新的 tg_*
+    - 回退最近窗口第一条
+    - 仅返回 reasoning，不返回原文 content
+    """
+    limit = request.args.get("limit", type=int, default=10)
+    if limit < 1:
+        limit = 1
+    if limit > 30:
+        limit = 30
+
+    recent = whitelist_store.list_recent_windows(limit=200) or []
+    target = ""
+    for w in recent:
+        wid = (w.get("id") or "").strip()
+        if wid.startswith("tg_"):
+            target = wid
+            break
+    if not target and recent:
+        target = (recent[0].get("id") or "").strip()
+
+    if not target:
+        return jsonify({"ok": True, "window_id": "", "items": [], "count": 0})
+
+    rounds = r2_store.get_conversation_rounds(target, last_n=200) or []
+    out = []
+    for r in reversed(rounds):
+        idx = int(r.get("index") or 0)
+        ts = (r.get("timestamp") or "").strip()
+        msgs = r.get("messages") or []
+        reasoning_text = ""
+        for m in reversed(msgs):
+            role = (m.get("role") or "").strip().lower() if isinstance(m, dict) else ""
+            if role != "assistant":
+                continue
+            val = (
+                (m.get("reasoning") or m.get("reasoning_content") or m.get("thinking") or "").strip()
+                if isinstance(m, dict)
+                else ""
+            )
+            if val:
+                reasoning_text = val
+                break
+        if reasoning_text:
+            out.append({"index": idx, "timestamp": ts, "reasoning": reasoning_text})
+        if len(out) >= limit:
+            break
+
+    return jsonify({"ok": True, "window_id": target, "items": out, "count": len(out)})
+
+
 @bp.route("/dynamic-memory", methods=["GET"])
 def miniapp_dynamic_memory():
     try:

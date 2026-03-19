@@ -17,6 +17,7 @@ function Shell() {
   const [showSettings, setShowSettings] = useState(false);
   const [showCorePrompt, setShowCorePrompt] = useState(false);
   const [showBgEditor, setShowBgEditor] = useState(false);
+  const [showHomeMenu, setShowHomeMenu] = useState(false);
   const version = new URLSearchParams(window.location.search).get("v") || "";
   const [bg, setBg] = useState<BgConfig>({
     preset: "cream",
@@ -72,18 +73,22 @@ function Shell() {
           </div>
           {version ? <div className="text-[11px] text-cream-muted">v{version}</div> : null}
           <div className="flex items-center gap-2">
-            <Btn kind="pink" onClick={() => setShowSettings(true)}>上游</Btn>
+            <button
+              className="h-10 w-10 rounded-full bg-white/62 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              onClick={() => setShowSettings(true)}
+              title="上游切换"
+            >
+              <LineIcon name="upstream" />
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="px-4 py-4 pb-6">
+      <div className="px-4 py-4 pb-28">
         <div className="grid grid-cols-2 gap-3">
           <FeatureTile title="日志" desc="查看/过滤/复制" color="bg-white/38" icon={<LineIcon name="logs" />} onClick={() => setPanel("logs")} />
-          <FeatureTile title="思维链" desc="窗口轮次与推理" color="bg-white/38" icon={<LineIcon name="reasoning" />} onClick={() => setPanel("reasoning")} />
-          <FeatureTile title="上游切换" desc="全局 active 切换" color="bg-white/38" icon={<LineIcon name="upstream" />} onClick={() => setShowSettings(true)} />
+          <FeatureTile title="思维链" desc="最近10条（降序）" color="bg-white/38" icon={<LineIcon name="reasoning" />} onClick={() => setPanel("reasoning")} />
           <FeatureTile title="核心Prompt" desc="固定注入，可随时更新" color="bg-white/38" icon={<LineIcon name="prompt" />} onClick={() => setShowCorePrompt(true)} />
-          <FeatureTile title="背景设置" desc="可换风格/相册图" color="bg-white/38" icon={<LineIcon name="background" />} onClick={() => setShowBgEditor(true)} />
         </div>
       </div>
 
@@ -101,6 +106,14 @@ function Shell() {
       {showSettings ? <SettingsUpstream onClose={() => setShowSettings(false)} /> : null}
       {showCorePrompt ? <CorePromptEditor onClose={() => setShowCorePrompt(false)} /> : null}
       {showBgEditor ? <BackgroundEditor bg={bg} onChange={setBg} onClose={() => setShowBgEditor(false)} /> : null}
+      <HomeOrbMenu
+        open={showHomeMenu}
+        onToggle={() => setShowHomeMenu((v: boolean) => !v)}
+        onOpenBackground={() => {
+          setShowHomeMenu(false);
+          setShowBgEditor(true);
+        }}
+      />
     </div>
   );
 }
@@ -151,6 +164,57 @@ function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt"
   if (name === "upstream") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M14 7l3-3m-3 3 3 3M20 17H10m0 0-3-3m3 3-3 3" /></svg>;
   if (name === "prompt") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
   return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 20h16M4 8l4 4 4-6 4 5 4-3v12H4z" /></svg>;
+}
+
+function HomeOrbMenu({
+  open,
+  onToggle,
+  onOpenBackground,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  onOpenBackground: () => void;
+}) {
+  return (
+    <div className="fixed inset-x-0 bottom-6 z-30 flex justify-center pointer-events-none">
+      <div className="relative pointer-events-auto">
+        {open ? (
+          <>
+            <button
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[92px] -translate-y-[64px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
+              onClick={onOpenBackground}
+              title="背景设置"
+            >
+              <LineIcon name="background" />
+            </button>
+            <button
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-[92px] rounded-full bg-white/48 backdrop-blur-2xl border border-white/50 shadow-soft2 flex items-center justify-center text-[10px] text-cream-muted"
+              disabled
+              title="日历（预留）"
+            >
+              日历
+            </button>
+            <button
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[44px] -translate-y-[64px] rounded-full bg-white/48 backdrop-blur-2xl border border-white/50 shadow-soft2 flex items-center justify-center text-[10px] text-cream-muted"
+              disabled
+              title="闹钟（预留）"
+            >
+              闹钟
+            </button>
+          </>
+        ) : null}
+        <button
+          className="h-16 w-16 rounded-full bg-white/62 backdrop-blur-2xl border border-white/55 shadow-soft flex items-center justify-center text-cream-text"
+          onClick={onToggle}
+          title="Home"
+        >
+          <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M3 10.5 12 3l9 7.5V21h-6v-6h-6v6H3z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export function App() {
