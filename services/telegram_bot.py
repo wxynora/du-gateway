@@ -337,7 +337,9 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
     user_content 可为 str（纯文字）或 list（多模态，如 [{"type":"text","text":"..."},{"type":"image_url",...}]），与 RikkaHub 一致。
     """
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
-    model = _resolve_chat_model()
+    # 每次请求优先拉取网关当前可用模型（与 active upstream 同步），避免模型权限不匹配。
+    # 拉取失败时再用本地解析逻辑兜底。
+    model = _fetch_gateway_first_model() or _resolve_chat_model()
 
     with _CTX_LOCK:
         history = list(_CONTEXT_MESSAGES.get(user_id) or [])
