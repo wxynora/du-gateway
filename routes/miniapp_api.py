@@ -251,6 +251,17 @@ def miniapp_enable_schedule_item(item_id: str):
     return jsonify({"ok": True, "id": iid, "action": "enable"})
 
 
+@bp.route("/schedule/items/<item_id>", methods=["DELETE"])
+def miniapp_delete_schedule_item(item_id: str):
+    iid = (item_id or "").strip()
+    if not iid:
+        return jsonify({"ok": False, "error": "缺少 item_id"}), 400
+    ok = r2_store.delete_schedule_item(iid)
+    if not ok:
+        return jsonify({"ok": False, "error": "未找到该条目"}), 404
+    return jsonify({"ok": True, "id": iid, "action": "delete"})
+
+
 @bp.route("/dynamic-memory", methods=["GET"])
 def miniapp_dynamic_memory():
     try:

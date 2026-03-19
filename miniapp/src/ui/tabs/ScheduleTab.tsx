@@ -188,6 +188,22 @@ export function ScheduleTab() {
     }
   }
 
+  async function deleteItem(id: string) {
+    if (!id) return;
+    const ok = window.confirm("确认删除这条提醒？删除后不可恢复。");
+    if (!ok) return;
+    try {
+      const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/schedule/items/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!j?.ok) throw new Error(j?.error || "删除失败");
+      toast("已删除提醒");
+      await load();
+    } catch (e: any) {
+      toast(`删除失败：${e?.message || e}`);
+    }
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between px-1">
@@ -294,7 +310,7 @@ export function ScheduleTab() {
         </div>
         <div className="mt-3 space-y-2">
           {dayItems.map((it) => (
-            <div key={`day-${String(it.id || "")}`} className="rounded-xl2 bg-white/56 border border-white/50 shadow-soft2 p-3">
+            <div key={`day-${String(it.id || "")}`} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
               <div className="text-sm font-medium text-cream-text">{it.title || "未命名提醒"}</div>
               <div className="mt-1 text-xs text-cream-muted">
                 {fmtDate(String(it.datetime || ""))} · {repeatLabel(String(it.repeat || "once"))} · {it.enabled === false ? "已禁用" : "启用中"}
@@ -318,12 +334,13 @@ export function ScheduleTab() {
         </div>
         <div className="mt-3 space-y-2">
           {enabledItems.map((it) => (
-            <div key={String(it.id || "")} className="rounded-xl2 bg-white/56 border border-white/50 shadow-soft2 p-3">
+            <div key={String(it.id || "")} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
               <div className="text-sm font-medium text-cream-text">{it.title || "未命名提醒"}</div>
               <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(String(it.repeat || "once"))}</div>
               {it.note ? <div className="mt-1 text-xs text-cream-muted">{it.note}</div> : null}
-              <div className="mt-2">
+              <div className="mt-2 flex items-center gap-2">
                 <Btn kind="danger" onClick={() => disableItem(String(it.id || ""))} disabled={!it.id}>禁用未来触发</Btn>
+                <Btn kind="pink" onClick={() => deleteItem(String(it.id || ""))} disabled={!it.id}>删除</Btn>
               </div>
             </div>
           ))}
@@ -337,11 +354,12 @@ export function ScheduleTab() {
         </div>
         <div className="mt-3 space-y-2">
           {disabledItems.map((it) => (
-            <div key={String(it.id || "")} className="rounded-xl2 bg-white/46 border border-white/45 shadow-soft2 p-3">
+            <div key={String(it.id || "")} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
               <div className="text-sm text-cream-text">{it.title || "未命名提醒"}</div>
               <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(String(it.repeat || "once"))} · 已禁用</div>
-              <div className="mt-2">
+              <div className="mt-2 flex items-center gap-2">
                 <Btn kind="green" onClick={() => enableItem(String(it.id || ""))} disabled={!it.id}>重新启用</Btn>
+                <Btn kind="pink" onClick={() => deleteItem(String(it.id || ""))} disabled={!it.id}>删除</Btn>
               </div>
             </div>
           ))}

@@ -709,6 +709,20 @@ def create_schedule_item(
     return item if ok else None
 
 
+def delete_schedule_item(item_id: str) -> bool:
+    """删除某条提醒。"""
+    iid = (item_id or "").strip()
+    if not iid:
+        return False
+    items = get_schedule_items()
+    if not items:
+        return False
+    new_items = [it for it in items if str(it.get("id") or "").strip() != iid]
+    if len(new_items) == len(items):
+        return False
+    return save_schedule_items(new_items)
+
+
 # ---------- 动态层 current.json ----------
 
 
