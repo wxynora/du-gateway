@@ -596,6 +596,47 @@ def step_inject_notion_tools(body: dict) -> dict:
     return body
 
 
+def step_inject_forum_tools(body: dict) -> dict:
+    """
+    当 MCP_ENABLED=1 时，向 body 注入论坛工具（forum_http/forum_uid_http/forum_login 等）。
+    目的：与 Notion 工具开关解耦，避免 NOTION_TOOLS_ENABLED=0 时渡看不见论坛工具。
+    """
+    from config import MCP_ENABLED
+
+    if not MCP_ENABLED:
+        return body
+
+    from services.mcp_forum_tools import get_forum_tools_for_inject
+
+    tools = get_forum_tools_for_inject()
+    if not tools:
+        return body
+
+    body = copy.deepcopy(body)
+    existing = body.get("tools")
+    if isinstance(existing, list):
+        existing_names = set()
+        for t in existing:
+            if isinstance(t, dict):
+                fn = t.get("function") or {}
+                if isinstance(fn, dict):
+                    name = fn.get("name")
+                    if name:
+                        existing_names.add(name)
+        # 追加缺失的工具定义，避免重复
+        for t in tools:
+            fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+            if isinstance(fn, dict):
+                name = fn.get("name")
+                if name and name not in existing_names:
+                    existing.append(t)
+    else:
+        body["tools"] = tools
+
+    body["tool_choice"] = body.get("tool_choice") or "auto"
+    return body
+
+
 def step_inject_notion_search(body: dict, window_id: str) -> dict:
     """
     用用户最后一句话搜 Notion，把结果注入 system，渡就能直接「看到」相关 Notion 内容并引用。
