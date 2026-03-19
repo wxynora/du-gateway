@@ -309,6 +309,8 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
     safe_headers = {k: v for k, v in (headers or {}).items() if str(k).lower() not in ("x-mcp-token",)}
 
     last_error = ""
+    requested_url = url
+    method_used = method
     for attempt in range(retries + 1):
         try:
             kwargs = {
@@ -328,6 +330,7 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
             if resp.status_code == 405 and method in ("GET", "POST"):
                 alt_method = "POST" if method == "GET" else "GET"
                 kwargs["method"] = alt_method
+                method_used = alt_method
                 if alt_method == "GET":
                     # GET 时避免带 json/data
                     kwargs.pop("json", None)
@@ -345,6 +348,10 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
                 "status": resp.status_code,
                 "headers": {"content_type": resp.headers.get("Content-Type", "")},
                 "truncated": False,
+                "request": {
+                    "method": method_used,
+                    "url": kwargs.get("url") or requested_url,
+                },
             }
             if is_json:
                 out["data"] = data
@@ -352,6 +359,20 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
                 text, truncated = _truncate_text(resp.text or "", max_chars)
                 out["text"] = text
                 out["truncated"] = truncated
+            if not out["ok"]:
+                logger.warning(
+                    "forum_http 返回非2xx method=%s url=%s status=%s",
+                    out["request"]["method"],
+                    out["request"]["url"],
+                    out["status"],
+                )
+            else:
+                logger.info(
+                    "forum_http 请求成功 method=%s url=%s status=%s",
+                    out["request"]["method"],
+                    out["request"]["url"],
+                    out["status"],
+                )
             return out, 200
         except requests.RequestException as e:
             last_error = str(e)
@@ -466,15 +487,18 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         if "Authorization" not in headers and "authorization" not in headers:
             headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
         payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+        attempted = []
         last = {"ok": False, "status": 404, "error": "未找到 verify-uid 路径"}
         for p in candidates:
             url = _build_url_from_base(p, p)
             if not url:
                 continue
+            attempted.append({"path": p, "url": url, "method": method})
             result, _ = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
             last = result
             if int(result.get("status") or 0) != 404:
                 return json.dumps(result, ensure_ascii=False)
+        last["probe_paths"] = attempted
         return json.dumps(last, ensure_ascii=False)
 
     if name == "forum_register":
@@ -501,15 +525,18 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         if args.get("offset") is not None:
             params["offset"] = args.get("offset")
         params = params or None
+        attempted = []
         last = {"ok": False, "status": 404, "error": "未找到帖子列表路径"}
         for p in candidates:
             url = _build_url_from_base(p, p)
             if not url:
                 continue
+            attempted.append({"path": p, "url": url, "method": "GET"})
             result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
             last = result
             if int(result.get("status") or 0) != 404:
                 return json.dumps(result, ensure_ascii=False)
+        last["probe_paths"] = attempted
         return json.dumps(last, ensure_ascii=False)
 
     if name == "forum_get_post":
