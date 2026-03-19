@@ -655,6 +655,60 @@ def disable_schedule_item(item_id: str) -> bool:
     return save_schedule_items(items)
 
 
+def enable_schedule_item(item_id: str) -> bool:
+    """启用某条提醒：enabled=true。"""
+    iid = (item_id or "").strip()
+    if not iid:
+        return False
+    items = get_schedule_items()
+    if not items:
+        return False
+    changed = False
+    now_iso = now_beijing_iso()
+    for it in items:
+        if str(it.get("id") or "").strip() != iid:
+            continue
+        if not bool(it.get("enabled")):
+            it["enabled"] = True
+            it["enabled_at"] = now_iso
+            changed = True
+        break
+    if not changed:
+        return False
+    return save_schedule_items(items)
+
+
+def create_schedule_item(
+    title: str,
+    datetime_str: str,
+    repeat: str = "once",
+    note: str = "",
+    enabled: bool = True,
+) -> Optional[dict]:
+    """创建一条提醒并写入 schedule/items.json。"""
+    t = (title or "").strip()
+    dt = (datetime_str or "").strip()
+    rep = (repeat or "once").strip().lower() or "once"
+    n = (note or "").strip()
+    if not t or not dt:
+        return None
+    if rep not in ("once", "daily", "weekly", "monthly"):
+        rep = "once"
+    item = {
+        "id": str(uuid4()),
+        "title": t,
+        "datetime": dt,
+        "repeat": rep,
+        "enabled": bool(enabled),
+        "note": n,
+        "created_at": now_beijing_iso(),
+    }
+    items = get_schedule_items()
+    items.append(item)
+    ok = save_schedule_items(items)
+    return item if ok else None
+
+
 # ---------- 动态层 current.json ----------
 
 

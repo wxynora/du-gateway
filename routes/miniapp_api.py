@@ -1,6 +1,7 @@
 import time
 import os
 from pathlib import Path
+from datetime import datetime
 
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
@@ -197,6 +198,37 @@ def miniapp_schedule_items():
     return jsonify({"ok": True, "items": items, "count": len(items), "enabled_count": enabled_count})
 
 
+@bp.route("/schedule/items", methods=["POST"])
+def miniapp_create_schedule_item():
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip()
+    datetime_str = (data.get("datetime") or "").strip()
+    repeat = (data.get("repeat") or "once").strip().lower()
+    note = (data.get("note") or "").strip()
+    enabled = bool(data.get("enabled", True))
+
+    if not title:
+        return jsonify({"ok": False, "error": "title 不能为空"}), 400
+    if not datetime_str:
+        return jsonify({"ok": False, "error": "datetime 不能为空"}), 400
+    # 允许 ISO（2026-03-20T09:30[:ss][+08:00]）及 datetime-local（2026-03-20T09:30）
+    try:
+        datetime.fromisoformat(datetime_str)
+    except Exception:
+        return jsonify({"ok": False, "error": "datetime 格式无效"}), 400
+
+    item = r2_store.create_schedule_item(
+        title=title,
+        datetime_str=datetime_str,
+        repeat=repeat,
+        note=note,
+        enabled=enabled,
+    )
+    if not item:
+        return jsonify({"ok": False, "error": "创建失败"}), 500
+    return jsonify({"ok": True, "item": item})
+
+
 @bp.route("/schedule/items/<item_id>/disable", methods=["PUT"])
 def miniapp_disable_schedule_item(item_id: str):
     iid = (item_id or "").strip()
@@ -206,6 +238,17 @@ def miniapp_disable_schedule_item(item_id: str):
     if not ok:
         return jsonify({"ok": False, "error": "未找到条目或已是禁用状态"}), 404
     return jsonify({"ok": True, "id": iid, "action": "disable_future"})
+
+
+@bp.route("/schedule/items/<item_id>/enable", methods=["PUT"])
+def miniapp_enable_schedule_item(item_id: str):
+    iid = (item_id or "").strip()
+    if not iid:
+        return jsonify({"ok": False, "error": "缺少 item_id"}), 400
+    ok = r2_store.enable_schedule_item(iid)
+    if not ok:
+        return jsonify({"ok": False, "error": "未找到条目或已是启用状态"}), 404
+    return jsonify({"ok": True, "id": iid, "action": "enable"})
 
 
 @bp.route("/dynamic-memory", methods=["GET"])
