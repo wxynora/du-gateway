@@ -40,6 +40,14 @@ try:
 except Exception:
     pass
 
+# MiniApp 日历闹钟内置调度：网关启动后自动跑（不需要单独脚本）
+try:
+    from services.schedule_runtime import start_schedule_runtime_if_enabled
+
+    start_schedule_runtime_if_enabled()
+except Exception:
+    pass
+
 # CORS：RikkaHub 等前端带自定义请求头（如 X-Assistant-Id）时，浏览器会先发 OPTIONS 预检
 CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
 CORS_ALLOW_HEADERS = "Content-Type, Authorization"

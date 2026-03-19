@@ -16,6 +16,16 @@ from utils.telegram_webapp import enforce_telegram_initdata
 bp = Blueprint("miniapp_api", __name__, url_prefix="/miniapp-api")
 
 
+def _notify_schedule_runtime_changed():
+    """日历变更后通知网关内置调度线程立即重算。"""
+    try:
+        from services.schedule_runtime import notify_schedule_changed
+
+        notify_schedule_changed()
+    except Exception:
+        pass
+
+
 @bp.before_request
 def _miniapp_auth():
     # 双保险：先 IP，再 Telegram initData（更快拒绝无效来源）
@@ -259,6 +269,7 @@ def miniapp_create_schedule_item():
                 created_items.append(item)
         if not created_items:
             return jsonify({"ok": False, "error": "创建失败"}), 500
+        _notify_schedule_runtime_changed()
         return jsonify({"ok": True, "items": created_items, "count": len(created_items)})
     elif repeat == "daily":
         try:
@@ -290,6 +301,7 @@ def miniapp_create_schedule_item():
     )
     if not item:
         return jsonify({"ok": False, "error": "创建失败"}), 500
+    _notify_schedule_runtime_changed()
     return jsonify({"ok": True, "item": item})
 
 
@@ -301,6 +313,7 @@ def miniapp_disable_schedule_item(item_id: str):
     ok = r2_store.disable_schedule_item(iid)
     if not ok:
         return jsonify({"ok": False, "error": "未找到条目或已是禁用状态"}), 404
+    _notify_schedule_runtime_changed()
     return jsonify({"ok": True, "id": iid, "action": "disable_future"})
 
 
@@ -312,6 +325,7 @@ def miniapp_enable_schedule_item(item_id: str):
     ok = r2_store.enable_schedule_item(iid)
     if not ok:
         return jsonify({"ok": False, "error": "未找到条目或已是启用状态"}), 404
+    _notify_schedule_runtime_changed()
     return jsonify({"ok": True, "id": iid, "action": "enable"})
 
 
@@ -323,6 +337,7 @@ def miniapp_delete_schedule_item(item_id: str):
     ok = r2_store.delete_schedule_item(iid)
     if not ok:
         return jsonify({"ok": False, "error": "未找到该条目"}), 404
+    _notify_schedule_runtime_changed()
     return jsonify({"ok": True, "id": iid, "action": "delete"})
 
 

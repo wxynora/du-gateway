@@ -31,8 +31,8 @@ function Shell() {
   });
 
   useEffect(() => {
-    // 默认不 expand：让 Telegram WebView 以“半屏”形式打开，更像面板弹出入口
-    tgReady(false);
+    // 直接展开全屏，避免进入后还要手动上滑/多次点击
+    tgReady(true);
     applyTelegramThemeToHtmlClass();
     try {
       const raw = localStorage.getItem(BG_STORAGE_KEY);
