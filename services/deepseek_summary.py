@@ -112,6 +112,9 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 11. 人称一致性硬规则：
    - 只把 [渡] 的发言写成“我……”
    - [老婆] 的发言必须写成“老婆/她说……”“老婆提到……”，不能写成“我……”
+12. 时间段硬规则（必须执行）：
+   - 在【最近】部分必须明确写出时间段标记（例如：2026-03-20 早上 / 2026-03-20 下午 / 2026-03-20 晚上）
+   - 至少出现 1 个“日期+时间段”标记，不能省略
 
 ## 输出格式
 
@@ -133,6 +136,52 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 最新4轮对话：
 {latest_4_rounds}
 """
+
+
+def _latest_bucket_from_rounds(recent_4_rounds: list) -> str:
+    """取最近4轮里最后一个可解析时间，转成『YYYY-MM-DD 时间段』。"""
+    try:
+        from utils.time_aware import parse_iso_to_beijing, get_time_period, get_date_only
+
+        for r in reversed(recent_4_rounds or []):
+            dt = parse_iso_to_beijing((r or {}).get("timestamp"))
+            if dt is not None:
+                return f"{get_date_only(dt)} {get_time_period(dt)}"
+    except Exception:
+        pass
+    return ""
+
+
+def _ensure_summary_has_bucket(summary: str, bucket: str) -> str:
+    """
+    兜底：若 DS 输出未包含明显时间段标记，则在【最近】后补一行（YYYY-MM-DD 时间段）。
+    避免“又开始不带时间段”。
+    """
+    if not summary or not bucket:
+        return summary
+    s = summary.strip()
+    # 已含“日期+时间段”或常见时段词则认为满足
+    has_bucket = False
+    try:
+        import re
+
+        if re.search(r"\d{4}-\d{2}-\d{2}\s*(早上|上午|中午|下午|傍晚|晚上|深夜)", s):
+            has_bucket = True
+        elif any(x in s for x in ("早上", "上午", "中午", "下午", "傍晚", "晚上", "深夜")):
+            has_bucket = True
+    except Exception:
+        has_bucket = False
+    if has_bucket:
+        return s
+
+    marker = f"（{bucket}）"
+    lines = s.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("【最近】"):
+            lines.insert(i + 1, marker)
+            return "\n".join(lines).strip()
+    # 没有【最近】标题时，直接前置
+    return f"{marker}\n{s}".strip()
 
 
 def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None:
@@ -159,6 +208,8 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
         summary = content.strip()
         if not summary:
             return None
+        # 强制兜底：若 DS 没写时间段，这里补一行
+        summary = _ensure_summary_has_bucket(summary, _latest_bucket_from_rounds(recent_4_rounds))
         # 固定窗口：summary 始终受注入预算约束，按结构从最早内容开始一点点削
         budget = memory_summary_budget()
         return _trim_summary_to_budget(summary, budget)
