@@ -213,6 +213,75 @@ def miniapp_put_core_prompt():
     return jsonify({"ok": ok})
 
 
+@bp.route("/background-config", methods=["GET"])
+def miniapp_get_background_config():
+    data = r2_store.get_miniapp_bg_config() or {}
+    return jsonify(
+        {
+            "ok": True,
+            "config": {
+                "preset": (data.get("preset") or "cream"),
+                "useImage": bool(data.get("useImage")),
+                "imageVersion": int(data.get("imageVersion") or 0),
+                "dim": int(data.get("dim") or 20),
+            },
+        }
+    )
+
+
+@bp.route("/background-config", methods=["PUT"])
+def miniapp_put_background_config():
+    data = request.get_json(silent=True) or {}
+    preset = (data.get("preset") or "cream").strip()
+    if preset not in ("cream", "grid", "soft"):
+        preset = "cream"
+    dim = int(data.get("dim") or 20)
+    dim = max(0, min(70, dim))
+    use_image = bool(data.get("useImage"))
+    image_version = int(data.get("imageVersion") or 0)
+    payload = {
+        "preset": preset,
+        "useImage": use_image,
+        "imageVersion": max(0, image_version),
+        "dim": dim,
+    }
+    ok = r2_store.save_miniapp_bg_config(payload)
+    return jsonify({"ok": ok, "config": payload})
+
+
+@bp.route("/background-image", methods=["POST"])
+def miniapp_upload_background_image():
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"ok": False, "error": "缺少 file"}), 400
+    ctype = (f.mimetype or "").strip().lower()
+    if ctype not in ("image/jpeg", "image/png", "image/webp", "image/gif"):
+        return jsonify({"ok": False, "error": "仅支持 jpg/png/webp/gif"}), 400
+    content = f.read()
+    if not content:
+        return jsonify({"ok": False, "error": "文件为空"}), 400
+    if len(content) > 8 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "图片过大（最大 8MB）"}), 400
+    ok = r2_store.save_miniapp_bg_image(content, ctype)
+    if not ok:
+        return jsonify({"ok": False, "error": "保存失败"}), 500
+    conf = r2_store.get_miniapp_bg_config() or {}
+    conf["imageVersion"] = int(time.time())
+    conf["useImage"] = True
+    conf["dim"] = max(0, min(70, int(conf.get("dim") or 20)))
+    conf["preset"] = conf.get("preset") or "cream"
+    r2_store.save_miniapp_bg_config(conf)
+    return jsonify({"ok": True, "imageVersion": int(conf["imageVersion"])})
+
+
+@bp.route("/background-image", methods=["GET"])
+def miniapp_get_background_image():
+    data, ctype = r2_store.get_miniapp_bg_image()
+    if not data:
+        return jsonify({"ok": False, "error": "暂无背景图"}), 404
+    return Response(data, mimetype=ctype, headers={"Cache-Control": "public, max-age=300"})
+
+
 @bp.route("/logs", methods=["GET"])
 def miniapp_logs_tail():
     lines = request.args.get("lines", type=int, default=200)

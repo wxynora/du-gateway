@@ -5,15 +5,15 @@ export default {
     extend: {
       colors: {
         cream: {
-          bg: "#FFFBF3",
-          card: "#FFF8EE",
-          border: "#EDE2C8",
-          text: "#2A241B",
-          muted: "#6B5E4A",
+          bg: "#EEF0F3",
+          card: "#F5F6F8",
+          border: "#DFE3E8",
+          text: "#1F2733",
+          muted: "#677384",
           accent: "#F4D06F",
-          blue: "#95C2E4",
-          pink: "#EFAFB7",
-          green: "#A9D8AF",
+          blue: "#B7C7DF",
+          pink: "#D5C1D0",
+          green: "#BFD4CC",
           danger: "#C65D4E"
         },
       },
@@ -22,8 +22,8 @@ export default {
         xl3: "28px",
       },
       boxShadow: {
-        soft: "0 6px 14px rgba(42, 36, 27, 0.12)",
-        soft2: "0 3px 8px rgba(42, 36, 27, 0.1)",
+        soft: "0 8px 20px rgba(24, 34, 46, 0.10)",
+        soft2: "0 4px 12px rgba(24, 34, 46, 0.08)",
       },
     },
   },

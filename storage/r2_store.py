@@ -31,6 +31,9 @@ R2_KEY_CORE_CACHE = "core_cache/pending.json"
 R2_KEY_NOTEBOOK = "notebook/entries.json"
 # MiniApp 可编辑核心 Prompt（全局注入）
 R2_KEY_CORE_PROMPT = "global/core_prompt_316.txt"
+# MiniApp 背景配置与图片（跨设备同步）
+R2_KEY_MINIAPP_BG_CONFIG = "global/miniapp_bg_config.json"
+R2_KEY_MINIAPP_BG_IMAGE = "global/miniapp_bg_image"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
 R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 # 主动发消息：上一次成功主动联系的时间（北京时间 ISO）
@@ -845,6 +848,74 @@ def save_core_prompt_text(text: str) -> bool:
     except Exception as e:
         logger.error("save_core_prompt_text 失败 error=%s", e, exc_info=True)
         return False
+
+
+def get_miniapp_bg_config() -> Optional[dict]:
+    """读取 MiniApp 背景配置（JSON）。"""
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_MINIAPP_BG_CONFIG)
+    return data if isinstance(data, dict) else None
+
+
+def save_miniapp_bg_config(data: dict) -> bool:
+    """保存 MiniApp 背景配置（JSON）。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(data, dict):
+        return False
+    try:
+        _write_json(client, R2_KEY_MINIAPP_BG_CONFIG, data)
+        return True
+    except Exception as e:
+        logger.error("save_miniapp_bg_config 失败 error=%s", e, exc_info=True)
+        return False
+
+
+def save_miniapp_bg_image(content: bytes, content_type: str) -> bool:
+    """保存 MiniApp 背景图片。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not content:
+        return False
+    ctype = (content_type or "application/octet-stream").strip() or "application/octet-stream"
+    try:
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=R2_KEY_MINIAPP_BG_IMAGE,
+            Body=content,
+            ContentType=ctype,
+        )
+        return True
+    except Exception as e:
+        logger.error("save_miniapp_bg_image 失败 error=%s", e, exc_info=True)
+        return False
+
+
+def get_miniapp_bg_image() -> tuple[Optional[bytes], str]:
+    """读取 MiniApp 背景图片，返回 (bytes, content_type)。"""
+    client = _s3_client()
+    if not client:
+        return None, ""
+    try:
+        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_KEY_MINIAPP_BG_IMAGE)
+        body = resp["Body"].read()
+        ctype = ((resp.get("ContentType") or "") + "").strip() or "application/octet-stream"
+        if not body:
+            return None, ""
+        return body, ctype
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code == "NoSuchKey":
+            return None, ""
+        logger.error("get_miniapp_bg_image 失败 error=%s", e, exc_info=True)
+        return None, ""
+    except Exception as e:
+        logger.error("get_miniapp_bg_image 失败 error=%s", e, exc_info=True)
+        return None, ""
 
 
 # ---------- 一键清空（测试/重置用） ----------

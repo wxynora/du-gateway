@@ -35,6 +35,7 @@ from pipeline.pipeline import (
 )
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
+from storage import whitelist_store
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -588,6 +589,12 @@ def chat_completions():
     body = request.get_json(silent=True) or {}
     headers = dict(request.headers) if request.headers else {}
     window_id = _get_window_id_from_request(body)
+    # 记录最近窗口，供 MiniApp 思维链面板展示可选窗口列表
+    try:
+        wid_for_recent = window_id if (window_id or "").strip() else "__default__"
+        whitelist_store.record_recent_window(wid_for_recent)
+    except Exception:
+        pass
 
     def _stream_response(gen):
         return Response(

@@ -24,7 +24,15 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   const headers = new Headers(init?.headers || {});
   const initData = getInitData();
   if (initData) headers.set("X-Telegram-Init-Data", initData);
-  return fetch(path, { ...init, headers });
+  let finalPath = path;
+  if (initData) {
+    try {
+      const u = new URL(path, window.location.origin);
+      if (!u.searchParams.get("initData")) u.searchParams.set("initData", initData);
+      finalPath = u.pathname + u.search;
+    } catch {}
+  }
+  return fetch(finalPath, { ...init, headers });
 }
 
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {

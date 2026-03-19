@@ -20,6 +20,7 @@ export function ReasoningTab() {
   const [roundDetail, setRoundDetail] = useState<ConversationRound | null>(null);
   const [loadError, setLoadError] = useState("");
   const [roundsError, setRoundsError] = useState("");
+  const [detailHasReasoning, setDetailHasReasoning] = useState(true);
 
   async function loadWindows() {
     try {
@@ -64,7 +65,14 @@ export function ReasoningTab() {
     try {
       const j = await apiJson<RoundDetailResp>(`/miniapp-api/windows/${encodeURIComponent(wid)}/rounds/${idx}`);
       if (!j.ok) throw new Error(j?.error || "未找到该轮");
-      setRoundDetail(j.round || null);
+      const round = j.round || null;
+      setRoundDetail(round);
+      const has = !!(round?.messages || []).some((m: any) => {
+        const role = (m?.role || "").toString().toLowerCase();
+        const reasoning = (m?.reasoning || m?.reasoning_content || m?.thinking || "").toString().trim();
+        return role === "assistant" && !!reasoning;
+      });
+      setDetailHasReasoning(has);
     } catch (e: any) {
       toast(`查看失败：${e?.message || e}`);
     }
@@ -72,6 +80,9 @@ export function ReasoningTab() {
 
   return (
     <div className="space-y-3">
+      <div className="rounded-xl2 bg-cream-blue/40 px-3 py-2 text-xs text-cream-muted shadow-soft2">
+        窗口 ID = 会话标识（如 Telegram 常见为 <span className="font-mono">tg_用户ID</span>）。
+      </div>
       {loadError ? (
         <div className="rounded-xl2 bg-cream-pink/65 px-3 py-2 text-xs text-cream-text shadow-soft2">
           窗口加载失败：{loadError}
@@ -150,6 +161,11 @@ export function ReasoningTab() {
                 </div>
               );
             })}
+            {!detailHasReasoning ? (
+              <div className="rounded-xl2 bg-cream-pink/55 px-3 py-2 text-xs text-cream-text shadow-soft2">
+                该轮有对话内容，但上游未返回 reasoning 字段，所以没有可展示的思维链。
+              </div>
+            ) : null}
           </div>
         </Modal>
       ) : null}
