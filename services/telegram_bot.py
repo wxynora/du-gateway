@@ -356,13 +356,31 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
     try:
         r = requests.post(url, headers=headers, json=body, timeout=120)
         if r.status_code != 200:
-            logger.warning(
-                "网关返回非 200 status=%s model=%s body=%s",
-                r.status_code,
-                model,
-                (r.text or "")[:500],
-            )
-            return None
+            preview = (r.text or "")[:500]
+            lower = preview.lower()
+
+            # 上游 403：常见原因是当前 token 没权限访问当前 model
+            # 例：This token has no access to model xxx
+            if r.status_code in (401, 403) and ("no access to model" in lower or "token has no access to model" in lower):
+                new_model = _fetch_gateway_first_model()
+                if new_model and new_model != model:
+                    logger.warning(
+                        "模型无权限：当前 model=%s status=%s，重试一次 with model=%s preview=%s",
+                        model,
+                        r.status_code,
+                        new_model,
+                        preview[:220],
+                    )
+                    body["model"] = new_model
+                    r = requests.post(url, headers=headers, json=body, timeout=120)
+            if r.status_code != 200:
+                logger.warning(
+                    "网关返回非 200 status=%s model=%s body=%s",
+                    r.status_code,
+                    body.get("model") or model,
+                    (r.text or "")[:500],
+                )
+                return None
         data = r.json() if r.content else None
         if not data or "choices" not in data or not data["choices"]:
             logger.warning("网关响应无 choices: %s", (json.dumps(data)[:300] if data else "null"))
