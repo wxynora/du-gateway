@@ -48,6 +48,10 @@ GATEWAY_MODEL_KEYWORDS_VERSION = [k.strip().lower() for k in _GATEWAY_MODEL_KEYW
 # 模型列表兜底：上游没有 /v1/models 或拉取失败时，返回此列表（逗号分隔），RikkaHub 才能显示模型
 _GATEWAY_MODELS_STR = os.environ.get("GATEWAY_MODELS", "").strip()
 GATEWAY_MODELS = [m.strip() for m in _GATEWAY_MODELS_STR.split(",") if m.strip()] if _GATEWAY_MODELS_STR else []
+# 网关侧模型兜底：请求未带 model 时补这个；为空则回退 GATEWAY_MODELS 第一个，再否则 gpt-4
+DEFAULT_CHAT_MODEL = os.environ.get("DEFAULT_CHAT_MODEL", "").strip()
+# 网关侧模型强制覆盖：开启后无论请求传什么 model 都改成 DEFAULT_CHAT_MODEL（或回退值）
+FORCE_CHAT_MODEL_ENABLED = os.environ.get("FORCE_CHAT_MODEL_ENABLED", "").strip().lower() in ("1", "true", "yes")
 
 
 def model_matches_gateway_keywords(model_str: str) -> bool:

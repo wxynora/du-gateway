@@ -74,9 +74,19 @@ export function ScheduleTab() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between px-1">
         <div className="text-xs text-cream-muted">日历/提醒（只读 + 禁用）</div>
-        <Btn kind="blue" onClick={load} disabled={loading}>刷新</Btn>
+        <button
+          className="h-8 w-8 rounded-full bg-white/58 backdrop-blur-xl border border-white/50 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition disabled:opacity-50"
+          onClick={load}
+          disabled={loading}
+          title="刷新"
+        >
+          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M20 6v6h-6" />
+            <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8" />
+          </svg>
+        </button>
       </div>
 
       {error ? (
@@ -86,8 +96,10 @@ export function ScheduleTab() {
       ) : null}
 
       <div className="rounded-xl3 bg-white/42 backdrop-blur-xl border border-white/50 shadow-soft p-3">
-        <div className="text-xs text-cream-muted">启用中（{enabledItems.length}）</div>
-        <div className="mt-2 space-y-2">
+        <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
+          启用中 · {enabledItems.length}
+        </div>
+        <div className="mt-3 space-y-2">
           {enabledItems.map((it) => (
             <div key={String(it.id || "")} className="rounded-xl2 bg-white/56 border border-white/50 shadow-soft2 p-3">
               <div className="text-sm font-medium text-cream-text">{it.title || "未命名提醒"}</div>
@@ -103,8 +115,10 @@ export function ScheduleTab() {
       </div>
 
       <div className="rounded-xl3 bg-white/34 backdrop-blur-xl border border-white/45 shadow-soft p-3">
-        <div className="text-xs text-cream-muted">已禁用（{disabledItems.length}）</div>
-        <div className="mt-2 space-y-2">
+        <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
+          已禁用 · {disabledItems.length}
+        </div>
+        <div className="mt-3 space-y-2">
           {disabledItems.map((it) => (
             <div key={String(it.id || "")} className="rounded-xl2 bg-white/46 border border-white/45 shadow-soft2 p-3">
               <div className="text-sm text-cream-text">{it.title || "未命名提醒"}</div>
