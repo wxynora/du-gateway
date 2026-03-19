@@ -22,8 +22,8 @@ export default {
         xl3: "28px",
       },
       boxShadow: {
-        soft: "0 12px 28px rgba(42, 36, 27, 0.14)",
-        soft2: "0 8px 18px rgba(42, 36, 27, 0.12)",
+        soft: "0 6px 14px rgba(42, 36, 27, 0.12)",
+        soft2: "0 3px 8px rgba(42, 36, 27, 0.1)",
       },
     },
   },

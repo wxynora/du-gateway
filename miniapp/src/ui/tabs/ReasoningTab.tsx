@@ -8,6 +8,10 @@ type WindowsResp = { windows?: WindowItem[] };
 type RoundsResp = { rounds?: RoundPreview[] };
 type RoundDetailResp = { ok?: boolean; round?: ConversationRound; error?: string };
 
+function getWindowId(w: any): string {
+  return String(w?.id || w?.window_id || w?.windowId || "").trim();
+}
+
 export function ReasoningTab() {
   const toast = useToast();
   const [windows, setWindows] = useState<WindowItem[]>([]);
@@ -24,8 +28,9 @@ export function ReasoningTab() {
       setWindows(ws);
       setLoadError("");
       // 打开思维链面板时，自动预取最近窗口的轮次，避免看起来像“没拉取到”
-      if (ws.length > 0 && ws[0]?.id) {
-        void openRounds(ws[0].id || "");
+      const firstWid = ws.length > 0 ? getWindowId(ws[0]) : "";
+      if (firstWid) {
+        void openRounds(firstWid);
       }
     } catch (e: any) {
       setLoadError(e?.message || String(e));
@@ -77,13 +82,13 @@ export function ReasoningTab() {
 
       <Card title="选择窗口（查看轮次里的思维链）">
         <div className="space-y-2">
-          {items.map((w) => (
+          {items.map((w, idx) => (
             <button
-              key={w.id}
+              key={getWindowId(w) || `w-${idx}`}
               className="w-full rounded-xl2 bg-cream-green/60 shadow-soft2 p-3 text-left active:scale-[0.99] transition"
-              onClick={() => openRounds(w.id || "")}
+              onClick={() => openRounds(getWindowId(w))}
             >
-              <div className="text-sm font-medium">{w.id || "(no id)"}</div>
+              <div className="text-sm font-medium">{getWindowId(w) || "(no id)"}</div>
               <div className="mt-1 text-xs text-cream-muted">
                 最近：{String(w.last_seen || "")}
               </div>

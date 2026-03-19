@@ -2,7 +2,7 @@ import React from "react";
 
 export function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl3 bg-cream-card shadow-soft">
+    <div className="rounded-xl3 bg-white/45 backdrop-blur-md border border-white/35 shadow-soft">
       <div className="px-4 py-3">
         <div className="text-sm font-semibold text-cream-text">{title}</div>
       </div>
@@ -64,12 +64,12 @@ export function Modal({
 }) {
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} />
-      <div className="fixed inset-x-0 bottom-0 z-50 mx-auto max-w-xl max-h-[80vh] overflow-auto rounded-t-[32px] bg-cream-card p-4 shadow-soft safe-bottom">
+      <div className="fixed inset-0 z-40 bg-black/22 backdrop-blur-[1px]" onClick={onClose} />
+      <div className="fixed inset-x-0 bottom-0 z-50 mx-auto max-w-xl max-h-[80vh] overflow-auto rounded-t-[32px] bg-white/70 backdrop-blur-xl border border-white/45 p-4 shadow-soft safe-bottom">
         <div className="flex items-center justify-between">
           <div className="font-semibold text-cream-text">{title}</div>
           <button
-            className="text-xs px-2 py-1 rounded-xl2 bg-cream-card shadow-soft2 active:scale-[0.99] transition"
+            className="text-xs px-2 py-1 rounded-xl2 bg-white/65 border border-white/45 shadow-soft2 active:scale-[0.99] transition"
             onClick={onClose}
           >
             关闭

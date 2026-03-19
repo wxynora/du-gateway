@@ -72,7 +72,8 @@ export function LogsTab() {
   async function loadTail() {
     try {
       const j = await apiJson<LogsResp>("/miniapp-api/logs?lines=200");
-      setLines(j.lines || []);
+      // 降序展示：最新在最上
+      setLines((j.lines || []).slice().reverse());
       setLoadError("");
       toast("已加载最新日志");
     } catch (e: any) {
@@ -89,8 +90,9 @@ export function LogsTab() {
     es.onmessage = (ev) => {
       if (paused) return;
       setLines((prev) => {
-        const next = [...prev, ev.data];
-        if (next.length > 2000) next.splice(0, next.length - 2000);
+        // 实时日志也保持“最新在最上”
+        const next = [ev.data, ...prev];
+        if (next.length > 2000) next.splice(2000);
         return next;
       });
     };
@@ -163,7 +165,7 @@ export function LogsTab() {
           <Btn kind="pink"
             onClick={() => {
               const k = (filterText || "").trim();
-              const text = (filtered || []).slice(-200).join("\n") || "";
+              const text = (filtered || []).slice(0, 200).join("\n") || "";
               if (!text) return toast("暂无可复制内容");
               void copyText(text);
             }}
@@ -174,7 +176,7 @@ export function LogsTab() {
         </div>
 
         <div className="min-h-[50vh] rounded-2xl bg-[#1F1A12] p-3 font-mono text-xs leading-relaxed text-[#FFF7E6] overflow-auto shadow-soft2">
-          {(filtered || []).slice(-800).map((l, idx) => (
+          {(filtered || []).slice(0, 800).map((l, idx) => (
             <div key={idx} className="whitespace-pre-wrap">
               {highlightLine(l, filterText)}
             </div>
