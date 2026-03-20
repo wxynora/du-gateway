@@ -97,9 +97,10 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 3. 迭代更新：
    - 在上一版基础上更新，不是重写
    - 新内容最详细，旧内容逐步压缩
-4. 总篇幅严格控制：整段总结不超过 1800 字（目标覆盖 40 轮）
-   - 优先保证【最近】清楚；【稍早】【更早】必须进一步压缩
-   - 每一轮尽量用 1-2 句交代“发生了什么 + 结论/情绪”，不要展开复述
+4. 总篇幅做“软控制”：目标 2600-3200 字（建议靠近 3000 字）
+   - 允许在信息密度高时适度超出，最高不超过 3600 字；不要为了压字数硬删关键上下文
+   - 优先保证【最近】清楚；【稍早】【更早】按需压缩
+   - 每一轮尽量用 1-2 句交代“发生了什么 + 结论/情绪”，避免展开复述
 5. 不管内容重不重要都要覆盖
    - 你只负责总结"聊了什么"
    - 不负责判断"重不重要"
@@ -220,7 +221,8 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
     payload = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 1000,
+        # 约 3000 字中文总结（粗估 1 字≈0.5 token）通常需要 ~1500 token，留一些余量避免被截断。
+        "max_tokens": min(2200, max(1200, int(memory_summary_budget() * 0.45))),
     }
     try:
         r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)

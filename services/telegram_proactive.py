@@ -26,7 +26,12 @@ from config import (
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
-from services.telegram_bot import _sanitize_reply_for_telegram, send_message_to_user, process_message
+from services.telegram_bot import (
+    _sanitize_reply_for_telegram,
+    _TELEGRAM_STYLE_SYSTEM,
+    send_message_segmented,
+    process_message,
+)
 
 logger = get_logger(__name__)
 
@@ -110,10 +115,14 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
         "请你结合你对她的记忆与当下氛围做决定：\n"
         f"- 如果不该联系：你必须只输出 {no_token}\n"
         "- 如果该联系：只输出要发给她的聊天正文（允许多句，自然语气）；不要输出任何解释/标题\n"
+        "- 若你分成多句，请用换行分段，便于按条发送\n"
     )
     body = {
         "model": _get_chat_model(),
-        "messages": [{"role": "user", "content": user_prompt}],
+        "messages": [
+            {"role": "system", "content": _TELEGRAM_STYLE_SYSTEM},
+            {"role": "user", "content": user_prompt},
+        ],
         "stream": False,
     }
     headers = {"Content-Type": "application/json", "X-Window-Id": window_id}
@@ -223,6 +232,7 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             f"老婆设了一个「{title}」闹钟，现在到点了。"
             f"类型：{rep_label}；时间：{now_dt.strftime('%Y-%m-%d %H:%M')}。"
             f"{('备注：' + note + '。') if note else ''}"
+            "请像平时 Telegram 聊天那样自然回复；如果有多句，请用换行分段。"
         )
         ok = process_message(chat_id=uid, user_id=uid, text=reminder_prompt)
         if not ok:
@@ -299,7 +309,8 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     if not text_to_send:
         out["skip_reason"] = "empty_after_sanitize"
         return out
-    ok = send_message_to_user(uid, text_to_send)
+    # 与日常对话一致：按换行/长度分段发送，而不是一整条塞出去。
+    ok = send_message_segmented(uid, text_to_send)
     logger.info("主动消息发送结果 chat_id=%s sent=%s", uid, ok)
     out["sent"] = bool(ok)
     out["text_preview"] = (decision.text.strip()[:120] + "…") if len(decision.text.strip()) > 120 else decision.text.strip()
