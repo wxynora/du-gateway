@@ -857,14 +857,10 @@ function CyberTreeModal({
   const d = data;
   const toast = useToast();
   const [refreshing, setRefreshing] = useState(false);
-  const [moodPop, setMoodPop] = useState(false);
-  const [countPop, setCountPop] = useState(false);
   const growth = Number(d?.growth || 0);
   const moodScore = Number(d?.mood?.score ?? 0);
   const moodFace =
     moodScore >= 85 ? "(*^▽^*)" : moodScore >= 70 ? "(^_−)☆" : moodScore >= 55 ? "(•ᴗ•)" : moodScore >= 40 ? "(´･ω･`)" : "(T_T)";
-  const moodEggs = ["今天也想抱抱你", "检测到甜度上升", "情绪温度暖暖的", "小渡心情在线"];
-  const annEggs = ["又靠近纪念日一点点", "我们在好好长大", "今天也在认真喜欢你", "D 值减少中，开心增加中"];
   const stageLabel =
     growth < 10 ? "种子/发芽" : growth < 30 ? "小树苗" : growth < 60 ? "小树" : growth < 100 ? "大树" : "满级大树";
   const seasonLabel =
@@ -907,19 +903,6 @@ function CyberTreeModal({
     }
   }
 
-  function onMoodBubbleClick() {
-    setMoodPop(true);
-    window.setTimeout(() => setMoodPop(false), 220);
-    const msg = moodEggs[Math.floor(Math.random() * moodEggs.length)];
-    toast(msg);
-  }
-
-  function onCountBubbleClick() {
-    setCountPop(true);
-    window.setTimeout(() => setCountPop(false), 220);
-    const msg = annEggs[Math.floor(Math.random() * annEggs.length)];
-    toast(msg);
-  }
   return (
     <Modal title="小渡&小玥の树" onClose={onClose}>
       <div className="space-y-3 text-sm">
@@ -948,13 +931,13 @@ function CyberTreeModal({
               <div className="text-cream-muted">{d?.mood?.reason || "（暂无）"}</div>
               <div className="text-cream-muted">近7天：{Array.isArray(d?.mood?.history) ? d!.mood!.history!.map((x) => `${x.date || "--"}:${x.score ?? "-"}`).join(" | ") : "（暂无）"}</div>
             </div>
-            <button
-              className={`h-20 w-20 shrink-0 rounded-full bg-white/52 backdrop-blur-xl border border-white/65 shadow-[0_10px_24px_rgba(26,24,20,0.24)] flex items-center justify-center text-[18px] font-black text-[#111111] transition active:scale-[0.97] ${moodPop ? "scale-110" : ""}`}
-              onClick={onMoodBubbleClick}
-              title="点我有彩蛋"
-            >
-              {moodFace}
-            </button>
+            <div className="relative h-20 w-20 shrink-0">
+              <div className="h-20 w-20 rounded-full bg-white/70 backdrop-blur-lg border border-white/75 shadow-[0_2px_8px_rgba(40,34,26,0.14)] flex items-center justify-center text-[18px] font-black text-[#18140f]">
+                {moodFace}
+              </div>
+              <span className="absolute -bottom-1 left-3 h-4 w-4 rounded-full bg-white/70 border border-white/75 shadow-[0_1px_3px_rgba(40,34,26,0.12)]" />
+              <span className="absolute -bottom-3 left-1 h-2.5 w-2.5 rounded-full bg-white/68 border border-white/75 shadow-[0_1px_2px_rgba(40,34,26,0.10)]" />
+            </div>
           </div>
           <div className="pt-1">
             <Btn kind="dark" onClick={refreshMood} disabled={refreshing}>{refreshing ? "刷新中..." : "刷新温度"}</Btn>
@@ -967,16 +950,23 @@ function CyberTreeModal({
               <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
               <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
             </div>
-            <button
-              className={`h-32 min-w-32 px-3 shrink-0 rounded-3xl bg-white/52 backdrop-blur-xl border border-white/65 shadow-[0_12px_28px_rgba(26,24,20,0.26)] flex flex-col items-center justify-center transition active:scale-[0.97] ${countPop ? "translate-y-[-2px]" : ""}`}
-              onClick={onCountBubbleClick}
-              title="点我有彩蛋"
-            >
-              <div className="text-[16px] text-cream-muted leading-none">DAYS</div>
-              <div className="text-[44px] font-bold leading-none text-cream-text">
-                {String(d?.anniversary?.next?.days_left ?? "-")}
+            <div className="h-32 min-w-32 px-3 shrink-0 rounded-3xl bg-white/66 backdrop-blur-lg border border-white/70 shadow-[0_3px_10px_rgba(40,34,26,0.17)] flex flex-col items-center justify-center">
+              <div className="text-[15px] text-[#7d756a] leading-none">DAYS</div>
+              <div className="mt-2 flex items-center gap-1.5">
+                {String(d?.anniversary?.next?.days_left ?? "-")
+                  .padStart(3, "0")
+                  .slice(-3)
+                  .split("")
+                  .map((ch, i) => (
+                    <span
+                      key={`d-${i}-${ch}`}
+                      className="inline-flex h-11 w-8 items-center justify-center rounded-xl bg-[#f4ebe4] border border-white/75 text-[28px] font-semibold leading-none text-[#2a241d] shadow-[0_1px_3px_rgba(40,34,26,0.12)]"
+                    >
+                      {ch}
+                    </span>
+                  ))}
               </div>
-            </button>
+            </div>
           </div>
           <div className="pt-1">
             <Btn kind="dark" onClick={editAnniversary} disabled={refreshing}>编辑纪念日</Btn>
