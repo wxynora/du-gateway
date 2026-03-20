@@ -26,6 +26,24 @@ type CyberTreeData = {
   season: "spring" | "summer" | "autumn" | "winter";
   weatherFx?: "rainy" | "sunny" | "snowy";
   milestones: { reachedDays: number[]; reachedRounds: number[] };
+  mood?: {
+    date?: string;
+    score?: number;
+    reason?: string;
+    history?: Array<{ date?: string; score?: number; reason?: string }>;
+  };
+  anniversary?: {
+    startDate?: string;
+    next?: { name?: string; date?: string; days_left?: number };
+  };
+};
+type WeeklyReport = {
+  week_id?: string;
+  rounds?: number;
+  keywords?: string[];
+  done_count?: number;
+  summary_text?: string;
+  generated_at?: string;
 };
 const BG_STORAGE_KEY = "miniapp.bg.config.v1";
 
@@ -41,11 +59,19 @@ function Shell() {
   const [showDuDay, setShowDuDay] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [dailyWhisper, setDailyWhisper] = useState("");
+  const [weeklyReport, setWeeklyReport] = useState<WeeklyReport | null>(null);
+  const [weeklyRefreshing, setWeeklyRefreshing] = useState(false);
   const [tree, setTree] = useState<CyberTreeData | null>(null);
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
       .then((j) => {
         if (j?.ok) setTree(j);
+      })
+      .catch(() => {});
+  const loadWeeklyReport = () =>
+    apiJson<{ ok?: boolean; report?: WeeklyReport }>("/miniapp-api/weekly-report")
+      .then((j) => {
+        if (j?.ok && j?.report) setWeeklyReport(j.report);
       })
       .catch(() => {});
   const version = new URLSearchParams(window.location.search).get("v") || "";
@@ -94,8 +120,23 @@ function Shell() {
         if (text) setDailyWhisper(text);
       })
       .catch(() => {});
+    loadWeeklyReport();
     loadTree();
   }, []);
+  async function refreshWeeklyReport() {
+    setWeeklyRefreshing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; report?: WeeklyReport; error?: string }>("/miniapp-api/weekly-report/refresh", { method: "POST" });
+      if (!j?.ok) throw new Error(j?.error || "刷新失败");
+      if (j.report) setWeeklyReport(j.report);
+      toast("周报已刷新");
+    } catch (e: any) {
+      toast(`周报刷新失败：${e?.message || e}`);
+    } finally {
+      setWeeklyRefreshing(false);
+    }
+  }
+
 
   useEffect(() => {
     if (!showTree) return;
@@ -155,6 +196,26 @@ function Shell() {
           </div>
         </div>
       ) : null}
+      {weeklyReport ? (
+        <div className="px-4 pt-2">
+          <details className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 px-3 py-2 text-[12px] leading-relaxed text-cream-text">
+            <summary className="cursor-pointer select-none text-cream-text">
+              本周小报告：聊了 {String(weeklyReport.rounds || 0)} 轮 · {Array.isArray(weeklyReport.keywords) ? weeklyReport.keywords.join(" / ") : "暂无关键词"}
+            </summary>
+            <div className="mt-2 space-y-1 text-xs">
+              <div>周标识：{weeklyReport.week_id || "-"}</div>
+              <div>关键词：{Array.isArray(weeklyReport.keywords) ? weeklyReport.keywords.join(" / ") : "-"}</div>
+              <div className="text-cream-muted whitespace-pre-wrap">{weeklyReport.summary_text || "（暂无）"}</div>
+              <div className="text-cream-muted">更新时间：{weeklyReport.generated_at || "-"}</div>
+              <div className="pt-1">
+                <Btn kind="dark" onClick={refreshWeeklyReport} disabled={weeklyRefreshing}>
+                  {weeklyRefreshing ? "刷新中..." : "刷新周报"}
+                </Btn>
+              </div>
+            </div>
+          </details>
+        </div>
+      ) : null}
 
       <div className="px-4 pt-6 pb-28">
         <div className="grid grid-cols-2 gap-3">
@@ -205,7 +266,7 @@ function Shell() {
           <DuDayTab />
         </Modal>
       ) : null}
-      {showTree ? <CyberTreeModal data={tree} onClose={() => setShowTree(false)} /> : null}
+      {showTree ? <CyberTreeModal data={tree} onClose={() => setShowTree(false)} onRefresh={loadTree} /> : null}
       <HomeOrbMenu
         open={showHomeMenu}
         onToggle={() => setShowHomeMenu((v: boolean) => !v)}
@@ -784,13 +845,60 @@ function GrowthTreeSVG({
   );
 }
 
-function CyberTreeModal({ data, onClose }: { data: CyberTreeData | null; onClose: () => void }) {
+function CyberTreeModal({
+  data,
+  onClose,
+  onRefresh,
+}: {
+  data: CyberTreeData | null;
+  onClose: () => void;
+  onRefresh: () => void;
+}) {
   const d = data;
+  const toast = useToast();
+  const [refreshing, setRefreshing] = useState(false);
   const growth = Number(d?.growth || 0);
   const stageLabel =
     growth < 10 ? "种子/发芽" : growth < 30 ? "小树苗" : growth < 60 ? "小树" : growth < 100 ? "大树" : "满级大树";
   const seasonLabel =
     d?.season === "spring" ? "春天" : d?.season === "summer" ? "夏天" : d?.season === "autumn" ? "秋天" : "冬天";
+
+  async function refreshMood() {
+    setRefreshing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; error?: string }>("/miniapp-api/mood-meter/refresh", { method: "POST" });
+      if (!j?.ok) throw new Error(j?.error || "刷新失败");
+      onRefresh();
+      toast("心情温度已刷新");
+    } catch (e: any) {
+      toast(`刷新失败：${e?.message || e}`);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function editAnniversary() {
+    const current = String(d?.anniversary?.startDate || "").slice(0, 10);
+    const next = window.prompt("输入纪念日起始日（YYYY-MM-DD）", current);
+    if (next === null) return;
+    const val = (next || "").trim();
+    if (!val) return;
+    setRefreshing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; error?: string }>("/miniapp-api/anniversary", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startDate: val }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "保存失败");
+      onRefresh();
+      toast("纪念日已更新");
+    } catch (e: any) {
+      toast(`保存失败：${e?.message || e}`);
+    } finally {
+      setRefreshing(false);
+    }
+  }
   return (
     <Modal title="小渡&小玥の树" onClose={onClose}>
       <div className="space-y-3 text-sm">
@@ -810,6 +918,23 @@ function CyberTreeModal({ data, onClose }: { data: CyberTreeData | null; onClose
           <div>在一起第 <span className="font-semibold">{d?.daysTogether || 1}</span> 天</div>
           <div>聊了 <span className="font-semibold">{d?.totalRounds || 0}</span> 轮</div>
           <div className="text-cream-muted">起始日期：{d?.startDate || "-"}</div>
+        </div>
+        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-1">
+          <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">心情温度计</div>
+          <div className="pt-1">今日温度：<span className="font-semibold">{String(d?.mood?.score ?? "-")}</span> / 100</div>
+          <div className="text-cream-muted">{d?.mood?.reason || "（暂无）"}</div>
+          <div className="text-cream-muted">近7天：{Array.isArray(d?.mood?.history) ? d!.mood!.history!.map((x) => `${x.date || "--"}:${x.score ?? "-"}`).join(" | ") : "（暂无）"}</div>
+          <div className="pt-1">
+            <Btn kind="dark" onClick={refreshMood} disabled={refreshing}>{refreshing ? "刷新中..." : "刷新温度"}</Btn>
+          </div>
+        </div>
+        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-1">
+          <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">纪念日倒计时</div>
+          <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
+          <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
+          <div className="pt-1">
+            <Btn kind="dark" onClick={editAnniversary} disabled={refreshing}>编辑纪念日</Btn>
+          </div>
         </div>
       </div>
     </Modal>

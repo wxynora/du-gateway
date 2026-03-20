@@ -2,7 +2,7 @@ import time
 import os
 import math
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
@@ -48,6 +48,87 @@ def _default_cyber_tree_start_date(today: str) -> str:
     except Exception:
         return "2026-03-04"
     return f"{y:04d}-03-04"
+
+
+def _week_id_for_date(day: str) -> str:
+    try:
+        dt = datetime.strptime(day, "%Y-%m-%d")
+    except Exception:
+        return ""
+    y, w, _ = dt.isocalendar()
+    return f"{y}-W{int(w):02d}"
+
+
+def _generate_weekly_report(today: str) -> dict:
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    window_id = f"tg_{uid}" if uid > 0 else ""
+    rounds = r2_store.get_conversation_rounds(window_id, last_n=120) if window_id else []
+    rounds_count = len(rounds or [])
+    text = []
+    for r in rounds or []:
+        for m in (r.get("messages") or []):
+            c = m.get("content")
+            if isinstance(c, str):
+                text.append(c)
+            elif isinstance(c, list):
+                parts = []
+                for p in c:
+                    if isinstance(p, dict) and p.get("type") == "text":
+                        parts.append(str(p.get("text") or ""))
+                if parts:
+                    text.append(" ".join(parts))
+    raw = " ".join(text)
+    hot = [k for k in ("提醒", "闹钟", "老婆", "睡觉", "吃饭", "工作", "散步", "晚安", "想你", "记事本") if k in raw]
+    if not hot:
+        hot = ["陪伴", "日常", "关心"]
+    report = {
+        "week_id": _week_id_for_date(today),
+        "window_id": window_id,
+        "rounds": rounds_count,
+        "keywords": hot[:3],
+        "done_count": 0,
+        "summary_text": f"这周我们聊了 {rounds_count} 轮，关键词是 {' / '.join(hot[:3])}。",
+        "generated_at": now_beijing_iso(),
+    }
+    return report
+
+
+def _generate_mood_meter(today: str) -> dict:
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    window_id = f"tg_{uid}" if uid > 0 else ""
+    rounds = r2_store.get_conversation_rounds(window_id, last_n=24) if window_id else []
+    n = len(rounds or [])
+    score = max(35, min(95, 55 + n))
+    reason = "今天互动比较稳定，情绪温度偏暖。" if score >= 70 else "今天互动偏少，建议多抱抱多说两句。"
+    prev = r2_store.get_miniapp_mood_meter() or {}
+    history = prev.get("history") if isinstance(prev.get("history"), list) else []
+    history = [x for x in history if isinstance(x, dict) and str(x.get("date") or "") != today]
+    history.append({"date": today, "score": score, "reason": reason})
+    history = sorted(history, key=lambda x: str(x.get("date") or ""), reverse=True)[:7]
+    return {
+        "date": today,
+        "score": score,
+        "reason": reason,
+        "history": history,
+        "updated_at": now_beijing_iso(),
+    }
+
+
+def _next_anniversary(start_date: str, today: str) -> dict:
+    try:
+        s = datetime.strptime(start_date, "%Y-%m-%d")
+        t = datetime.strptime(today, "%Y-%m-%d")
+        target = datetime(t.year, s.month, s.day)
+        if target.date() < t.date():
+            target = datetime(t.year + 1, s.month, s.day)
+        days_left = (target.date() - t.date()).days
+        return {
+            "name": "纪念日",
+            "date": target.strftime("%Y-%m-%d"),
+            "days_left": days_left,
+        }
+    except Exception:
+        return {"name": "纪念日", "date": "", "days_left": 0}
 
 
 @bp.before_request
@@ -189,6 +270,12 @@ def miniapp_cyber_tree():
         "reachedDays": [x for x in (30, 100, 365) if days >= x],
         "reachedRounds": [x for x in (300, 1000, 3000) if rounds >= x],
     }
+    mood = r2_store.get_miniapp_mood_meter() or _generate_mood_meter(today)
+    if not (r2_store.get_miniapp_mood_meter() or {}).get("date"):
+        r2_store.save_miniapp_mood_meter(mood)
+    ann = r2_store.get_miniapp_anniversary() or {}
+    ann_start = str(ann.get("startDate") or "").strip() or start_date
+    next_ann = _next_anniversary(ann_start, today)
     return jsonify(
         {
             "ok": True,
@@ -201,8 +288,76 @@ def miniapp_cyber_tree():
             "season": season,
             "weatherFx": weather_fx,
             "milestones": milestones,
+            "mood": mood,
+            "anniversary": {"startDate": ann_start, "next": next_ann},
         }
     )
+
+
+@bp.route("/weekly-report", methods=["GET"])
+def miniapp_weekly_report():
+    today = today_beijing()
+    week_id = _week_id_for_date(today)
+    data = r2_store.get_miniapp_weekly_report() or {}
+    if str(data.get("week_id") or "") != week_id:
+        data = _generate_weekly_report(today)
+        r2_store.save_miniapp_weekly_report(data)
+    return jsonify({"ok": True, "report": data})
+
+
+@bp.route("/weekly-report/refresh", methods=["POST"])
+def miniapp_weekly_report_refresh():
+    today = today_beijing()
+    data = _generate_weekly_report(today)
+    ok = r2_store.save_miniapp_weekly_report(data)
+    return jsonify({"ok": bool(ok), "report": data})
+
+
+@bp.route("/mood-meter", methods=["GET"])
+def miniapp_mood_meter():
+    today = today_beijing()
+    data = r2_store.get_miniapp_mood_meter() or {}
+    if str(data.get("date") or "") != today:
+        data = _generate_mood_meter(today)
+        r2_store.save_miniapp_mood_meter(data)
+    return jsonify({"ok": True, "mood": data})
+
+
+@bp.route("/mood-meter/refresh", methods=["POST"])
+def miniapp_mood_meter_refresh():
+    today = today_beijing()
+    data = _generate_mood_meter(today)
+    ok = r2_store.save_miniapp_mood_meter(data)
+    return jsonify({"ok": bool(ok), "mood": data})
+
+
+@bp.route("/anniversary", methods=["GET"])
+def miniapp_anniversary():
+    today = today_beijing()
+    tree_meta = r2_store.get_cyber_tree_meta() or {}
+    default_start = str(tree_meta.get("startDate") or "").strip() or _default_cyber_tree_start_date(today)
+    data = r2_store.get_miniapp_anniversary() or {"startDate": default_start}
+    start_date = str(data.get("startDate") or "").strip() or default_start
+    next_ann = _next_anniversary(start_date, today)
+    return jsonify({"ok": True, "startDate": start_date, "next": next_ann})
+
+
+@bp.route("/anniversary", methods=["PUT"])
+def miniapp_anniversary_put():
+    today = today_beijing()
+    data = request.get_json(silent=True) or {}
+    start_date = str(data.get("startDate") or "").strip()
+    if start_date:
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+        except Exception:
+            return jsonify({"ok": False, "error": "startDate 格式需为 YYYY-MM-DD"}), 400
+    else:
+        start_date = _default_cyber_tree_start_date(today)
+    payload = {"startDate": start_date, "updatedAt": now_beijing_iso()}
+    ok = r2_store.save_miniapp_anniversary(payload)
+    next_ann = _next_anniversary(start_date, today)
+    return jsonify({"ok": bool(ok), "startDate": start_date, "next": next_ann})
 
 
 @bp.route("/cyber-tree/start-date", methods=["PUT"])
