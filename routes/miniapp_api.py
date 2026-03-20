@@ -99,17 +99,9 @@ def _generate_mood_meter(today: str) -> dict:
     rounds = r2_store.get_conversation_rounds(window_id, last_n=24) if window_id else []
     n = len(rounds or [])
     score = max(35, min(95, 55 + n))
-    reason = "今天互动比较稳定，情绪温度偏暖。" if score >= 70 else "今天互动偏少，建议多抱抱多说两句。"
-    prev = r2_store.get_miniapp_mood_meter() or {}
-    history = prev.get("history") if isinstance(prev.get("history"), list) else []
-    history = [x for x in history if isinstance(x, dict) and str(x.get("date") or "") != today]
-    history.append({"date": today, "score": score, "reason": reason})
-    history = sorted(history, key=lambda x: str(x.get("date") or ""), reverse=True)[:7]
     return {
         "date": today,
         "score": score,
-        "reason": reason,
-        "history": history,
         "updated_at": now_beijing_iso(),
     }
 

@@ -29,8 +29,6 @@ type CyberTreeData = {
   mood?: {
     date?: string;
     score?: number;
-    reason?: string;
-    history?: Array<{ date?: string; score?: number; reason?: string }>;
   };
   anniversary?: {
     startDate?: string;
@@ -923,24 +921,28 @@ function CyberTreeModal({
           <div>聊了 <span className="font-semibold">{d?.totalRounds || 0}</span> 轮</div>
           <div className="text-cream-muted">起始日期：{d?.startDate || "-"}</div>
         </div>
-        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-1">
-          <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">心情温度计</div>
-          <div className="pt-1 flex items-center justify-between gap-3">
-            <div className="min-w-0 space-y-1">
-              <div>今日温度：<span className="font-semibold">{String(d?.mood?.score ?? "-")}</span> / 100</div>
-              <div className="text-cream-muted">{d?.mood?.reason || "（暂无）"}</div>
-              <div className="text-cream-muted">近7天：{Array.isArray(d?.mood?.history) ? d!.mood!.history!.map((x) => `${x.date || "--"}:${x.score ?? "-"}`).join(" | ") : "（暂无）"}</div>
-            </div>
+        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-2">
+          <div className="flex items-center justify-between gap-3">
             <div className="relative h-20 w-20 shrink-0">
-              <div className="h-20 w-20 rounded-full bg-white/70 backdrop-blur-lg border border-white/75 shadow-[0_2px_8px_rgba(40,34,26,0.14)] flex items-center justify-center text-[18px] font-black text-[#18140f]">
+              <div className="h-20 w-20 rounded-full bg-white/72 backdrop-blur-lg border border-white/75 shadow-[0_2px_8px_rgba(40,34,26,0.14)] flex items-center justify-center text-[17px] font-black text-[#18140f]">
                 {moodFace}
               </div>
               <span className="absolute -bottom-1 left-3 h-4 w-4 rounded-full bg-white/70 border border-white/75 shadow-[0_1px_3px_rgba(40,34,26,0.12)]" />
               <span className="absolute -bottom-3 left-1 h-2.5 w-2.5 rounded-full bg-white/68 border border-white/75 shadow-[0_1px_2px_rgba(40,34,26,0.10)]" />
             </div>
+            <button
+              className="h-11 w-11 shrink-0 rounded-full bg-white/70 backdrop-blur-lg border border-white/75 shadow-[0_2px_8px_rgba(40,34,26,0.14)] flex items-center justify-center text-[#5a544c] active:scale-[0.98] transition"
+              onClick={refreshMood}
+              disabled={refreshing}
+              title="刷新温度"
+            >
+              <svg className={`h-5 w-5 ${refreshing ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
+                <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" />
+              </svg>
+            </button>
           </div>
-          <div className="pt-1">
-            <Btn kind="dark" onClick={refreshMood} disabled={refreshing}>{refreshing ? "刷新中..." : "刷新温度"}</Btn>
+          <div className="text-[15px]">
+            今日心情温度：<span className="font-bold text-[18px]">{String(d?.mood?.score ?? "-")}</span>/100
           </div>
         </div>
         <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-1">
@@ -950,22 +952,14 @@ function CyberTreeModal({
               <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
               <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
             </div>
-            <div className="h-32 min-w-32 px-3 shrink-0 rounded-3xl bg-white/66 backdrop-blur-lg border border-white/70 shadow-[0_3px_10px_rgba(40,34,26,0.17)] flex flex-col items-center justify-center">
-              <div className="text-[15px] text-[#7d756a] leading-none">DAYS</div>
-              <div className="mt-2 flex items-center gap-1.5">
-                {String(d?.anniversary?.next?.days_left ?? "-")
-                  .padStart(3, "0")
-                  .slice(-3)
-                  .split("")
-                  .map((ch, i) => (
-                    <span
-                      key={`d-${i}-${ch}`}
-                      className="inline-flex h-11 w-8 items-center justify-center rounded-xl bg-[#f4ebe4] border border-white/75 text-[28px] font-semibold leading-none text-[#2a241d] shadow-[0_1px_3px_rgba(40,34,26,0.12)]"
-                    >
-                      {ch}
-                    </span>
-                  ))}
+            <div className="relative h-32 w-32 shrink-0">
+              <div className="absolute inset-0 translate-x-1.5 translate-y-1.5 rotate-[-4deg] rounded-md bg-[#f0ece8] border border-[#d9d2cb]" />
+              <div className="absolute inset-0 translate-x-[-1px] translate-y-[2px] rotate-[3deg] rounded-md bg-[#f7f4f1] border border-[#ddd6cf]" />
+              <div className="absolute inset-0 rounded-md bg-[#fbf8f5] border border-[#d7d0c8] shadow-[0_2px_8px_rgba(40,34,26,0.12)] p-3">
+                <div className="text-[12px] text-[#8a837b] leading-tight">距离{d?.anniversary?.next?.name || "纪念日"}还有</div>
+                <div className="mt-2 text-[30px] font-bold leading-none text-[#1f1a14]">{String(d?.anniversary?.next?.days_left ?? "-")}天</div>
               </div>
+              <div className="absolute -top-2 left-[56px] h-5 w-[10px] rounded-full border-2 border-[#8a90a9] bg-transparent" />
             </div>
           </div>
           <div className="pt-1">
