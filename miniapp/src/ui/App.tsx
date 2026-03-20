@@ -68,7 +68,8 @@ function Shell() {
         setBg((prev: BgConfig) => ({
           preset: (j.config?.preset as BgPreset) || prev.preset,
           useImage: !!j.config?.useImage,
-          imageVersion: Number(j.config?.imageVersion || 0),
+          // 避免接口晚到的旧配置覆盖刚上传的新版本号（会导致看起来“又回到旧图”）。
+          imageVersion: Math.max(Number(prev.imageVersion || 0), Number(j.config?.imageVersion || 0)),
           dim: Number.isFinite(Number(j.config?.dim)) ? Math.max(0, Math.min(70, Number(j.config?.dim))) : prev.dim,
         }));
       })
