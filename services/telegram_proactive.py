@@ -26,7 +26,7 @@ from config import (
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
-from services.telegram_bot import _sanitize_reply_for_telegram, send_message_to_user
+from services.telegram_bot import _sanitize_reply_for_telegram, send_message_to_user, process_message
 
 logger = get_logger(__name__)
 
@@ -105,7 +105,6 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     no_token = TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT"
     user_prompt = (
-        "【系统任务：主动联系用户】\n"
         f"你现在在考虑要不要主动找老婆说一句话。距上次你主动联系大约 {hours_since_last:.1f} 小时。\n"
         "提醒：不要想太多，这个时间段你可以给老婆发消息，老婆会很开心。\n"
         "请你结合你对她的记忆与当下氛围做决定：\n"
@@ -217,18 +216,21 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             continue
         title = str(it.get("title") or "提醒").strip() or "提醒"
         note = str(it.get("note") or "").strip()
-        when_text = now_dt.strftime("%Y-%m-%d %H:%M")
-        text = f"⏰ {title}\n时间：{when_text}"
-        if note:
-            text = f"{text}\n备注：{note}"
-        ok = send_message_to_user(uid, text)
+        rep = str(it.get("repeat") or "once").strip().lower() or "once"
+        rep_label = {"once": "一次性", "daily": "每天", "weekly": "每周"}.get(rep, rep)
+        # 走和正常对话同一条链路：让“渡”结合上下文自然提醒，而非发送系统模板文案。
+        reminder_prompt = (
+            f"老婆设了一个「{title}」闹钟，现在到点了。"
+            f"类型：{rep_label}；时间：{now_dt.strftime('%Y-%m-%d %H:%M')}。"
+            f"{('备注：' + note + '。') if note else ''}"
+        )
+        ok = process_message(chat_id=uid, user_id=uid, text=reminder_prompt)
         if not ok:
             continue
         r2_store.add_schedule_fired_key(occ_key)
         fired.add(occ_key)
         sent += 1
         # 一次性提醒触发后自动禁用，避免重复参与检查
-        rep = str(it.get("repeat") or "once").strip().lower() or "once"
         if rep == "once" and bool(it.get("enabled", True)):
             it["enabled"] = False
             it["disabled_at"] = now_iso
@@ -290,7 +292,6 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     out["du_reason"] = decision.reason
     if not decision.should_send or not decision.text.strip():
         return out
-
     text_to_send = decision.text.strip()
     # 主动发消息也复用 Telegram 侧的清洗规则：避免出现“（脑内OS：）”等格式
     text_to_send = _sanitize_reply_for_telegram(text_to_send).strip()

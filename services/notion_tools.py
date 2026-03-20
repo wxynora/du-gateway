@@ -18,6 +18,37 @@ from utils.time_aware import iso_to_display_time, now_beijing_iso, parse_iso_to_
 logger = get_logger(__name__)
 
 
+def _extract_first_nonempty_prop(page: dict, name_to_id: dict, candidates: list[str], prop_type: str) -> str:
+    """按候选列名顺序取第一个非空属性值。"""
+    for name in candidates:
+        pid = (name_to_id or {}).get(name)
+        if not pid:
+            continue
+        val = _extract_prop_from_page(page, pid, prop_type)
+        if val is None:
+            continue
+        s = str(val).strip()
+        if s:
+            return s
+    return ""
+
+
+def _collect_rich_text_props_as_body(page: dict) -> str:
+    """把页面所有 rich_text 列拼成正文兜底（用于数据库条目无 block 正文时）。"""
+    props = (page or {}).get("properties") or {}
+    parts: list[str] = []
+    for prop in props.values():
+        if not isinstance(prop, dict):
+            continue
+        if (prop.get("type") or "").strip() != "rich_text":
+            continue
+        arr = prop.get("rich_text") or []
+        text = " ".join(t.get("plain_text", "") for t in arr if isinstance(t, dict)).strip()
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()
+
+
 def _extract_prop_from_page(page: dict, prop_id: str, prop_type: str) -> Any:
     """从页面 properties 按 id 和类型取值。"""
     p = (page.get("properties") or {}).get(prop_id)
@@ -390,6 +421,11 @@ def execute_tool(name: str, arguments: dict) -> str:
             title, body, err = notion_client.get_page_content_as_text(page_id)
             if err:
                 return json.dumps({"error": str(err)}, ensure_ascii=False)
+            # 数据库条目常把正文放在 rich_text 属性里，而不是 block children；为空时做属性兜底。
+            if not (body or "").strip():
+                page, page_err = notion_client.read_page(page_id)
+                if not page_err and isinstance(page, dict):
+                    body = _collect_rich_text_props_as_body(page)
             return f"标题：{title}\n\n正文：\n{body or '(无正文)'}"
 
         if name == "notion_append_to_page":
@@ -467,13 +503,16 @@ def execute_tool(name: str, arguments: dict) -> str:
             lines = []
             for page in (data or {}).get("results") or []:
                 pid = page.get("id")
-                title = _extract_prop_from_page(page, name_to_id.get("标题") or "", "title") if name_to_id.get("标题") else ""
-                body = _extract_prop_from_page(page, name_to_id.get("正文") or "", "rich_text") if name_to_id.get("正文") else ""
-                emoji = _extract_prop_from_page(page, name_to_id.get("心情emoji") or "", "rich_text") if name_to_id.get("心情emoji") else ""
+                title = _extract_first_nonempty_prop(page, name_to_id, ["标题", "Title", "名称"], "title")
+                body = _extract_first_nonempty_prop(page, name_to_id, ["正文", "Content", "内容", "Body"], "rich_text")
+                emoji = _extract_first_nonempty_prop(page, name_to_id, ["心情emoji", "emoji"], "rich_text")
                 created_type = _name_to_type.get("提交时间", "created_time")
                 created = _extract_prop_from_page(page, name_to_id.get("提交时间") or "", created_type) if name_to_id.get("提交时间") else ""
-                creator = _extract_prop_from_page(page, name_to_id.get("创建者") or "", "select") if name_to_id.get("创建者") else ""
-                lines.append(f"page_id={pid} | 标题={title} | 创建者={creator} | 提交时间={created} | 心情={emoji} | 正文={body[:100]}..." if len(body or "") > 100 else f"page_id={pid} | 标题={title} | 创建者={creator} | 正文={body}")
+                creator = _extract_first_nonempty_prop(page, name_to_id, ["创建者", "Creator"], "select")
+                # 不再截断正文，避免模型拿不到完整日记。
+                lines.append(
+                    f"page_id={pid} | 标题={title} | 创建者={creator} | 提交时间={created} | 心情={emoji} | 正文={body}"
+                )
             return "\n\n".join(lines) if lines else "暂无日记条目。"
 
         if name == "notion_diary_create":

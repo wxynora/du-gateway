@@ -21,7 +21,6 @@ from config import (
     TELEGRAM_CHAT_MODEL,
     GATEWAY_MODELS,
     TELEGRAM_INPUT_IDLE_SECONDS,
-    TELEGRAM_INPUT_IMMEDIATE_CHARS,
     TELEGRAM_OUTPUT_CHUNK_CHARS,
     TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS,
     TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS,
@@ -638,31 +637,15 @@ def _append_user_part_locked(chat_id: int, user_id: int, part: dict):
 def append_user_input(chat_id: int, user_id: int, text: str):
     """
     输入聚合：把同一 user 的多条短消息先缓存，停输入 N 秒后合并成一条再调网关。
-    - 超过 TELEGRAM_INPUT_IMMEDIATE_CHARS 的长消息：立即 flush（不等停输入）
     """
     if not text:
         return
     t = text.strip()
     if not t:
         return
-    immediate_chars = int(TELEGRAM_INPUT_IMMEDIATE_CHARS or 200)
-    if immediate_chars < 0:
-        immediate_chars = 0
-
     with _BUF_LOCK:
         _append_user_part_locked(chat_id, user_id, {"type": "text", "text": t})
-        # 长消息直接 flush（减少等待）
-        if immediate_chars and len(t) >= immediate_chars:
-            # 取消定时器，异步 flush
-            buf = _INPUT_BUFFERS.get(user_id) or {}
-            if buf.get("timer"):
-                try:
-                    buf["timer"].cancel()
-                except Exception:
-                    pass
-                buf["timer"] = None
-            threading.Thread(target=flush_user_buffer, args=(user_id,), daemon=True).start()
-            return
+        # 统一走输入缓冲聚合，避免长消息绕过缓存导致上下文不连续。
         _schedule_flush_locked(user_id)
 
 

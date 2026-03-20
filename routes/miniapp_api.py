@@ -471,7 +471,12 @@ def miniapp_upload_background_image():
     if not ok:
         return jsonify({"ok": False, "error": "保存失败"}), 500
     conf = r2_store.get_miniapp_bg_config() or {}
-    conf["imageVersion"] = int(time.time())
+    # 用毫秒时间戳，且保证严格递增，避免同一秒内二次上传命中同一个版本号导致前端继续读旧缓存。
+    old_ver = int(conf.get("imageVersion") or 0)
+    new_ver = int(time.time() * 1000)
+    if new_ver <= old_ver:
+        new_ver = old_ver + 1
+    conf["imageVersion"] = new_ver
     conf["useImage"] = True
     conf["dim"] = max(0, min(70, int(conf.get("dim") or 20)))
     conf["preset"] = conf.get("preset") or "cream"
@@ -484,7 +489,8 @@ def miniapp_get_background_image():
     data, ctype = r2_store.get_miniapp_bg_image()
     if not data:
         return jsonify({"ok": False, "error": "暂无背景图"}), 404
-    return Response(data, mimetype=ctype, headers={"Cache-Control": "public, max-age=300"})
+    # 背景图支持频繁替换：这里禁用强缓存，实际刷新仍由 imageVersion 控制兜底。
+    return Response(data, mimetype=ctype, headers={"Cache-Control": "no-store, max-age=0"})
 
 
 @bp.route("/logs", methods=["GET"])

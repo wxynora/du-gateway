@@ -17,7 +17,21 @@ export function tgReady(expand: boolean = false) {
   if (!tg) return;
   try {
     tg.ready();
-    if (expand) tg.expand();
+    if (expand) {
+      // Telegram 在部分机型上首次打开可能仍是半屏，这里做多次拉起兜底。
+      const ensureExpanded = () => {
+        try {
+          tg.expand?.();
+        } catch {}
+        try {
+          tg.requestFullscreen?.();
+        } catch {}
+      };
+      ensureExpanded();
+      setTimeout(ensureExpanded, 80);
+      setTimeout(ensureExpanded, 260);
+      setTimeout(ensureExpanded, 700);
+    }
   } catch {}
 }
 
