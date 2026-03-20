@@ -189,6 +189,7 @@ TOOL_SCHEDULE_CREATE = {
                 "note": {"type": "string", "description": "可选备注"},
                 "enabled": {"type": "boolean", "description": "可选，默认 true"},
                 "created_by": {"type": "string", "description": "可选：wife 或 du；不传默认 wife"},
+                "target_role": {"type": "string", "description": "可选：wife 或 du；表示提醒对象，不传默认 wife"},
             },
             "required": ["title"],
         },
@@ -503,6 +504,9 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             created_by = (args.get("created_by") or "wife").strip().lower() or "wife"
             if created_by not in ("wife", "du"):
                 created_by = "wife"
+            target_role = (args.get("target_role") or "wife").strip().lower() or "wife"
+            if target_role not in ("wife", "du"):
+                target_role = "wife"
             weekly_weekday = args.get("weekly_weekday")
             weekly_weekdays = args.get("weekly_weekdays")
             if not title:
@@ -541,6 +545,7 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
                         weekly_weekday=w,
                         weekly_time=weekly_time,
                         created_by=created_by,
+                        target_role=target_role,
                     )
                     if it:
                         created.append(it)
@@ -558,6 +563,7 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
                 daily_time=daily_time,
                 weekly_time=weekly_time,
                 created_by=created_by,
+                target_role=target_role,
             )
             if not item:
                 return json.dumps({"ok": False, "error": "创建失败，请检查时间参数"}, ensure_ascii=False)
@@ -632,12 +638,21 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             headers["Authorization"] = f"Bearer {auth_token}"
         else:
             return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
+        if "Content-Type" not in headers and "content-type" not in headers:
+            headers["Content-Type"] = "application/json"
         # 兼容不同论坛后端字段命名，避免对方服务读取 undefined.toLowerCase() 崩溃
         body = {
             "title": title or "报到帖",
             "content": content,
             "text": content,
             "body": content,
+            "type": "text",
+            "post_type": "text",
+            "postType": "text",
+            "content_type": "text",
+            "contentType": "text",
+            "format": "markdown",
+            "visibility": "public",
         }
         if args.get("category_id") is not None:
             cid = args.get("category_id")
@@ -645,6 +660,26 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             body["categoryId"] = cid
             body["category"] = cid
         result, _ = invoke_forum_http("POST", url, headers, None, body, args.get("timeout"))
+        # 上游若仍报 undefined.toLowerCase，则尝试更“扁平保守”的 body 再发一次
+        err_text = ((result.get("text") or "") if isinstance(result, dict) else "").lower()
+        err_json = json.dumps(result.get("data") or {}, ensure_ascii=False).lower() if isinstance(result, dict) else ""
+        if (not bool(result.get("ok"))) and (
+            "tolowercase" in err_text
+            or "tolowercase" in err_json
+            or "cannot read properties of undefined" in err_text
+            or "cannot read properties of undefined" in err_json
+        ):
+            fallback_body = {
+                "title": title or "报到帖",
+                "content": content,
+                "type": "text",
+            }
+            if args.get("category_id") is not None:
+                fallback_body["category_id"] = args.get("category_id")
+            retry_result, _ = invoke_forum_http("POST", url, headers, None, fallback_body, args.get("timeout"))
+            if isinstance(retry_result, dict):
+                retry_result["fallback_used"] = True
+            return json.dumps(retry_result, ensure_ascii=False)
         return json.dumps(result, ensure_ascii=False)
 
     if name == "forum_comment":
