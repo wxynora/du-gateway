@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { apiJson } from "../api";
 import { Btn } from "../components";
 import { useToast } from "../toast";
@@ -31,7 +31,7 @@ export function DuNotebookTab() {
   const [editingId, setEditingId] = useState("");
   const [editingText, setEditingText] = useState("");
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const j = await apiJson<DuNoteResp>("/miniapp-api/du-notebook");
@@ -42,12 +42,28 @@ export function DuNotebookTab() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [load]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      load();
+    }, 5000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    const onFocus = () => load();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [load]);
 
   const rows = useMemo(
     () =>
@@ -118,6 +134,11 @@ export function DuNotebookTab() {
       <div className="rounded-xl3 bg-white border border-white/70 shadow-soft p-3 space-y-2">
         <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
           新增记事
+        </div>
+        <div>
+          <Btn kind="dark" onClick={load} disabled={loading || saving}>
+            {loading ? "刷新中..." : "刷新列表"}
+          </Btn>
         </div>
         <textarea
           className="w-full min-h-[84px] rounded-xl2 bg-white border border-white/70 px-3 py-2 text-sm text-cream-text shadow-soft2"
