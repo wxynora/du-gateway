@@ -922,13 +922,12 @@ function CyberTreeModal({
           <div className="text-cream-muted">起始日期：{d?.startDate || "-"}</div>
         </div>
         <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="relative h-20 w-20 shrink-0">
-              <div className="h-20 w-20 rounded-full bg-white/72 backdrop-blur-lg border border-white/75 shadow-[0_2px_8px_rgba(40,34,26,0.14)] flex items-center justify-center text-[17px] font-black text-[#18140f]">
-                {moodFace}
-              </div>
-              <span className="absolute -bottom-1 left-3 h-4 w-4 rounded-full bg-white/70 border border-white/75 shadow-[0_1px_3px_rgba(40,34,26,0.12)]" />
-              <span className="absolute -bottom-3 left-1 h-2.5 w-2.5 rounded-full bg-white/68 border border-white/75 shadow-[0_1px_2px_rgba(40,34,26,0.10)]" />
+          <div className="flex items-center justify-between gap-2">
+            <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[13px] font-semibold text-white shadow-soft2">
+              {moodFace}
+            </div>
+            <div className="text-[16px] text-cream-text">
+              今日心情温度<span className="font-bold text-[20px]">{String(d?.mood?.score ?? "-")}</span>/100
             </div>
             <button
               className="h-11 w-11 shrink-0 rounded-full bg-white/70 backdrop-blur-lg border border-white/75 shadow-[0_2px_8px_rgba(40,34,26,0.14)] flex items-center justify-center text-[#5a544c] active:scale-[0.98] transition"
@@ -941,9 +940,6 @@ function CyberTreeModal({
               </svg>
             </button>
           </div>
-          <div className="text-[15px]">
-            今日心情温度：<span className="font-bold text-[18px]">{String(d?.mood?.score ?? "-")}</span>/100
-          </div>
         </div>
         <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-1">
           <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">纪念日倒计时</div>
@@ -952,14 +948,13 @@ function CyberTreeModal({
               <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
               <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
             </div>
-            <div className="relative h-32 w-32 shrink-0">
-              <div className="absolute inset-0 translate-x-1.5 translate-y-1.5 rotate-[-4deg] rounded-md bg-[#f0ece8] border border-[#d9d2cb]" />
-              <div className="absolute inset-0 translate-x-[-1px] translate-y-[2px] rotate-[3deg] rounded-md bg-[#f7f4f1] border border-[#ddd6cf]" />
-              <div className="absolute inset-0 rounded-md bg-[#fbf8f5] border border-[#d7d0c8] shadow-[0_2px_8px_rgba(40,34,26,0.12)] p-3">
-                <div className="text-[12px] text-[#8a837b] leading-tight">距离{d?.anniversary?.next?.name || "纪念日"}还有</div>
-                <div className="mt-2 text-[30px] font-bold leading-none text-[#1f1a14]">{String(d?.anniversary?.next?.days_left ?? "-")}天</div>
+            <div className="h-32 w-32 shrink-0 rounded-3xl bg-white/66 backdrop-blur-lg border border-white/75 shadow-[0_3px_10px_rgba(40,34,26,0.14)] p-3 flex flex-col justify-between">
+              <div className="text-[11px] tracking-[0.12em] text-[#8b847c]">COUNTDOWN</div>
+              <div>
+                <div className="text-[28px] leading-none font-semibold text-[#1f1a14] tabular-nums">{String(d?.anniversary?.next?.days_left ?? "-")}</div>
+                <div className="mt-1 text-[11px] text-[#8b847c]">days left</div>
               </div>
-              <div className="absolute -top-2 left-[56px] h-5 w-[10px] rounded-full border-2 border-[#8a90a9] bg-transparent" />
+              <div className="h-[2px] w-full bg-[#ece6df]" />
             </div>
           </div>
           <div className="pt-1">
