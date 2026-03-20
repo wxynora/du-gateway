@@ -385,6 +385,11 @@ def execute_tool(name: str, arguments: dict) -> str:
         "forum_get_post",
         "forum_post",
         "forum_comment",
+        "schedule_list",
+        "schedule_create",
+        "schedule_enable",
+        "schedule_disable",
+        "schedule_delete",
     ):
         return execute_forum_tool(name, arguments)
     try:

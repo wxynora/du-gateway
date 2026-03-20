@@ -219,4 +219,29 @@ def mcp_invoke():
         result, status = invoke_forum_http("GET", url, headers, None, None, args.get("timeout"))
         return jsonify(result), status
 
+    if tool == "schedule_list":
+        from services.mcp_forum_tools import execute_forum_tool
+        out = execute_forum_tool("schedule_list", args)
+        return jsonify({"ok": True, "result": out}), 200
+
+    if tool == "schedule_create":
+        from services.mcp_forum_tools import execute_forum_tool
+        out = execute_forum_tool("schedule_create", args)
+        return jsonify({"ok": True, "result": out}), 200
+
+    if tool == "schedule_enable":
+        from services.mcp_forum_tools import execute_forum_tool
+        out = execute_forum_tool("schedule_enable", args)
+        return jsonify({"ok": True, "result": out}), 200
+
+    if tool == "schedule_disable":
+        from services.mcp_forum_tools import execute_forum_tool
+        out = execute_forum_tool("schedule_disable", args)
+        return jsonify({"ok": True, "result": out}), 200
+
+    if tool == "schedule_delete":
+        from services.mcp_forum_tools import execute_forum_tool
+        out = execute_forum_tool("schedule_delete", args)
+        return jsonify({"ok": True, "result": out}), 200
+
     return jsonify({"ok": False, "error": "不支持的 tool，请用 /mcp/tools 查看"}), 400

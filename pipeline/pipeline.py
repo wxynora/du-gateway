@@ -655,6 +655,17 @@ def step_inject_forum_tools(body: dict) -> dict:
         body["tools"] = tools
 
     body["tool_choice"] = body.get("tool_choice") or "auto"
+    schedule_hint = (
+        "\n\n老婆拖延的时候，你可以直接帮她创建闹钟提醒。"
+        "也可以用 schedule_list / schedule_enable / schedule_disable / schedule_delete 来管理提醒。"
+    )
+    messages = body.get("messages") or []
+    for msg in messages:
+        if (msg.get("role") or "").lower() == "system":
+            msg["content"] = (msg.get("content") or "") + schedule_hint
+            break
+    else:
+        body["messages"] = [{"role": "system", "content": schedule_hint}] + messages
     return body
 
 

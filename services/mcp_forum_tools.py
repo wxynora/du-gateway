@@ -156,6 +156,71 @@ TOOL_FORUM_UID_HTTP = {
     },
 }
 
+TOOL_SCHEDULE_LIST = {
+    "type": "function",
+    "function": {
+        "name": "schedule_list",
+        "description": "查看当前提醒列表（可按启用状态筛选）。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "enabled_only": {"type": "boolean", "description": "可选：true 仅返回启用项"},
+                "limit": {"type": "integer", "description": "可选：返回条数上限，默认 50"},
+            },
+        },
+    },
+}
+
+TOOL_SCHEDULE_CREATE = {
+    "type": "function",
+    "function": {
+        "name": "schedule_create",
+        "description": "创建提醒。repeat 支持 once/daily/weekly；weekly 可传 weekly_weekdays（0-6，周一=0）一次创建多天。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "提醒标题"},
+                "repeat": {"type": "string", "description": "once/daily/weekly"},
+                "datetime": {"type": "string", "description": "once 模式必填：ISO 时间，例如 2026-03-20T21:30:00+08:00"},
+                "daily_time": {"type": "string", "description": "daily 模式必填：HH:mm"},
+                "weekly_time": {"type": "string", "description": "weekly 模式必填：HH:mm"},
+                "weekly_weekday": {"type": "integer", "description": "weekly 可选：0-6（周一=0）"},
+                "weekly_weekdays": {"type": "array", "items": {"type": "integer"}},
+                "note": {"type": "string", "description": "可选备注"},
+                "enabled": {"type": "boolean", "description": "可选，默认 true"},
+            },
+            "required": ["title"],
+        },
+    },
+}
+
+TOOL_SCHEDULE_ENABLE = {
+    "type": "function",
+    "function": {
+        "name": "schedule_enable",
+        "description": "启用一条提醒。",
+        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+    },
+}
+
+TOOL_SCHEDULE_DISABLE = {
+    "type": "function",
+    "function": {
+        "name": "schedule_disable",
+        "description": "禁用一条提醒。",
+        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+    },
+}
+
+TOOL_SCHEDULE_DELETE = {
+    "type": "function",
+    "function": {
+        "name": "schedule_delete",
+        "description": "删除一条提醒。",
+        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+    },
+}
+
 
 def get_forum_tools_for_inject() -> list[dict]:
     """返回给模型的论坛工具列表。"""
@@ -248,6 +313,11 @@ def get_forum_tools_for_inject() -> list[dict]:
         },
         TOOL_FORUM_POST,
         TOOL_FORUM_COMMENT,
+        TOOL_SCHEDULE_LIST,
+        TOOL_SCHEDULE_CREATE,
+        TOOL_SCHEDULE_ENABLE,
+        TOOL_SCHEDULE_DISABLE,
+        TOOL_SCHEDULE_DELETE,
     ]
 
 
@@ -397,6 +467,126 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
 def execute_forum_tool(name: str, arguments: dict) -> str:
     """在聊天工具链里执行论坛工具，返回字符串。"""
     args = arguments if isinstance(arguments, dict) else {}
+    if name.startswith("schedule_"):
+        from storage import r2_store
+        from utils.time_aware import now_beijing_iso
+
+        def _notify_schedule_changed():
+            try:
+                from services.schedule_runtime import notify_schedule_changed
+                notify_schedule_changed()
+            except Exception:
+                pass
+
+        if name == "schedule_list":
+            enabled_only = bool(args.get("enabled_only", False))
+            limit = int(args.get("limit") or 50)
+            if limit < 1:
+                limit = 1
+            if limit > 200:
+                limit = 200
+            items = r2_store.get_schedule_items() or []
+            if enabled_only:
+                items = [x for x in items if bool((x or {}).get("enabled", True))]
+            items = items[:limit]
+            return json.dumps({"ok": True, "count": len(items), "items": items, "now": now_beijing_iso()}, ensure_ascii=False)
+
+        if name == "schedule_create":
+            title = (args.get("title") or "").strip()
+            repeat = (args.get("repeat") or "once").strip().lower() or "once"
+            datetime_str = (args.get("datetime") or "").strip()
+            note = (args.get("note") or "").strip()
+            enabled = bool(args.get("enabled", True))
+            daily_time = (args.get("daily_time") or "").strip()
+            weekly_time = (args.get("weekly_time") or "").strip()
+            weekly_weekday = args.get("weekly_weekday")
+            weekly_weekdays = args.get("weekly_weekdays")
+            if not title:
+                return json.dumps({"ok": False, "error": "title 不能为空"}, ensure_ascii=False)
+            if repeat not in ("once", "daily", "weekly"):
+                repeat = "once"
+
+            if repeat == "weekly":
+                days = []
+                if isinstance(weekly_weekdays, list):
+                    for x in weekly_weekdays:
+                        try:
+                            v = int(x)
+                        except Exception:
+                            continue
+                        if 0 <= v <= 6:
+                            days.append(v)
+                elif weekly_weekday is not None:
+                    try:
+                        v = int(weekly_weekday)
+                        if 0 <= v <= 6:
+                            days.append(v)
+                    except Exception:
+                        pass
+                days = sorted(set(days))
+                if not days:
+                    return json.dumps({"ok": False, "error": "weekly_weekdays 无效（0-6，周一=0）"}, ensure_ascii=False)
+                created = []
+                for w in days:
+                    it = r2_store.create_schedule_item(
+                        title=title,
+                        datetime_str="",
+                        repeat="weekly",
+                        note=note,
+                        enabled=enabled,
+                        weekly_weekday=w,
+                        weekly_time=weekly_time,
+                    )
+                    if it:
+                        created.append(it)
+                if not created:
+                    return json.dumps({"ok": False, "error": "创建失败"}, ensure_ascii=False)
+                _notify_schedule_changed()
+                return json.dumps({"ok": True, "count": len(created), "items": created}, ensure_ascii=False)
+
+            item = r2_store.create_schedule_item(
+                title=title,
+                datetime_str=datetime_str,
+                repeat=repeat,
+                note=note,
+                enabled=enabled,
+                daily_time=daily_time,
+                weekly_time=weekly_time,
+            )
+            if not item:
+                return json.dumps({"ok": False, "error": "创建失败，请检查时间参数"}, ensure_ascii=False)
+            _notify_schedule_changed()
+            return json.dumps({"ok": True, "item": item}, ensure_ascii=False)
+
+        if name == "schedule_enable":
+            iid = (args.get("id") or "").strip()
+            if not iid:
+                return json.dumps({"ok": False, "error": "id 不能为空"}, ensure_ascii=False)
+            ok = r2_store.enable_schedule_item(iid)
+            if ok:
+                _notify_schedule_changed()
+            return json.dumps({"ok": bool(ok), "id": iid, "action": "enable"}, ensure_ascii=False)
+
+        if name == "schedule_disable":
+            iid = (args.get("id") or "").strip()
+            if not iid:
+                return json.dumps({"ok": False, "error": "id 不能为空"}, ensure_ascii=False)
+            ok = r2_store.disable_schedule_item(iid)
+            if ok:
+                _notify_schedule_changed()
+            return json.dumps({"ok": bool(ok), "id": iid, "action": "disable"}, ensure_ascii=False)
+
+        if name == "schedule_delete":
+            iid = (args.get("id") or "").strip()
+            if not iid:
+                return json.dumps({"ok": False, "error": "id 不能为空"}, ensure_ascii=False)
+            ok = r2_store.delete_schedule_item(iid)
+            if ok:
+                _notify_schedule_changed()
+            return json.dumps({"ok": bool(ok), "id": iid, "action": "delete"}, ensure_ascii=False)
+
+        return json.dumps({"ok": False, "error": f"未知 schedule 工具: {name}"}, ensure_ascii=False)
+
     if name == "forum_http":
         result, _ = invoke_forum_http(
             method=(args.get("method") or "GET"),
