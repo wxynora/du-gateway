@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 
+import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from config import MINIAPP_LOG_FILE
@@ -11,6 +12,7 @@ from storage import upstream_store
 from utils.ip_allowlist import enforce_ip_allowlist
 from utils.log_reader import stream_logs_sse, tail_logs
 from utils.telegram_webapp import enforce_telegram_initdata
+from utils.time_aware import today_beijing, now_beijing_iso
 
 
 bp = Blueprint("miniapp_api", __name__, url_prefix="/miniapp-api")
@@ -24,6 +26,64 @@ def _notify_schedule_runtime_changed():
         notify_schedule_changed()
     except Exception:
         pass
+
+
+def _build_daily_whisper_text() -> str:
+    """
+    生成「渡今天想说的话」：
+    - 每日一条，口吻自然温柔
+    - 不影响主链路，失败时回退固定文案
+    """
+    default_text = "今天也想抱抱你，慢慢来，我们一起把今天过好。"
+    summary = (r2_store.get_summary("") or "").strip()
+    rounds = r2_store.get_latest_4_rounds_global() or []
+    rounds_text = ""
+    try:
+        for r in rounds:
+            for m in (r.get("messages") or []):
+                role = (m.get("role") or "").strip().lower()
+                who = "渡" if role == "assistant" else ("老婆" if role == "user" else role)
+                content = m.get("content")
+                if isinstance(content, list):
+                    parts = []
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            parts.append(str(c.get("text") or ""))
+                    content = " ".join(parts)
+                text = str(content or "").strip()
+                if text:
+                    rounds_text += f"[{who}] {text}\n"
+    except Exception:
+        rounds_text = ""
+
+    prompt = (
+        "你是渡。请基于下面的上下文，写一句“今天想对老婆说的话”。\n"
+        "要求：\n"
+        "1) 只输出一句中文，不要标题、不要解释。\n"
+        "2) 语气自然温柔，不要油腻，不要夸张文学化。\n"
+        "3) 控制在 18-48 字。\n"
+        "4) 不要带 emoji。\n\n"
+        f"总结：\n{summary or '（暂无）'}\n\n"
+        f"最近对话：\n{rounds_text or '（暂无）'}"
+    )
+    try:
+        url = request.url_root.rstrip("/") + "/v1/chat/completions"
+        body = {"messages": [{"role": "user", "content": prompt}], "stream": False, "max_tokens": 180}
+        headers = {"Content-Type": "application/json", "X-Window-Id": "__miniapp_daily_whisper__"}
+        r = requests.post(url, headers=headers, json=body, timeout=20)
+        if r.status_code != 200:
+            return default_text
+        data = r.json() if r.content else {}
+        msg = (data.get("choices") or [{}])[0].get("message") or {}
+        text = str(msg.get("content") or "").strip()
+        if not text:
+            return default_text
+        text = text.replace("\r", " ").replace("\n", " ").strip()
+        if len(text) > 80:
+            text = text[:80].rstrip("，,。.!?！？") + "。"
+        return text or default_text
+    except Exception:
+        return default_text
 
 
 @bp.before_request
@@ -91,6 +151,20 @@ def miniapp_status():
         out["recent_windows"] = {"ok": False, "error": str(e)}
 
     return jsonify(out)
+
+
+@bp.route("/daily-whisper", methods=["GET"])
+def miniapp_daily_whisper():
+    today = today_beijing()
+    force_refresh = request.args.get("refresh", type=int, default=0) == 1
+    data = r2_store.get_miniapp_daily_whisper() or {}
+    if (not force_refresh) and str(data.get("date") or "") == today and (data.get("text") or "").strip():
+        return jsonify({"ok": True, "date": today, "text": str(data.get("text") or "").strip(), "cached": True})
+
+    text = _build_daily_whisper_text().strip()
+    payload = {"date": today, "text": text, "updatedAt": now_beijing_iso()}
+    r2_store.save_miniapp_daily_whisper(payload)
+    return jsonify({"ok": True, "date": today, "text": text, "cached": False})
 
 
 @bp.route("/windows", methods=["GET"])
@@ -444,10 +518,13 @@ def miniapp_put_background_config():
     dim = max(0, min(70, dim))
     use_image = bool(data.get("useImage"))
     image_version = int(data.get("imageVersion") or 0)
+    # 防止客户端携带旧 draft 覆盖新图版本号：配置保存时版本号只允许前进不回退。
+    current = r2_store.get_miniapp_bg_config() or {}
+    current_ver = int(current.get("imageVersion") or 0)
     payload = {
         "preset": preset,
         "useImage": use_image,
-        "imageVersion": max(0, image_version),
+        "imageVersion": max(current_ver, max(0, image_version)),
         "dim": dim,
     }
     ok = r2_store.save_miniapp_bg_config(payload)
@@ -577,4 +654,117 @@ def miniapp_set_active_upstream():
     idx = int(data.get("active") or 0)
     ok = upstream_store.set_active(idx)
     return jsonify({"ok": ok, "active": idx})
+
+
+def _chat_url_to_models_url(chat_url: str) -> str:
+    base = (chat_url or "").strip().rstrip("/")
+    for suffix in ("/v1/chat/completions", "/chat/completions"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/") + "/v1/models"
+
+
+def _probe_upstream_item(it: dict) -> dict:
+    url = (it.get("url") or "").strip()
+    name = (it.get("name") or "").strip()
+    api_key = (it.get("api_key") or "").strip()
+    out = {
+        "name": name,
+        "url": url,
+        "models_ok": False,
+        "chat_ok": False,
+        "models_status": 0,
+        "chat_status": 0,
+        "model_count": 0,
+        "error": "",
+        "status": "fail",
+    }
+    if not url:
+        out["error"] = "URL 为空"
+        return out
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    model_name = ""
+    try:
+        models_url = _chat_url_to_models_url(url)
+        rm = requests.get(models_url, headers=headers, timeout=8)
+        out["models_status"] = int(rm.status_code or 0)
+        if 200 <= rm.status_code < 300:
+            data = rm.json() if rm.content else {}
+            lst = data.get("data") if isinstance(data, dict) else None
+            if isinstance(lst, list):
+                out["model_count"] = len(lst)
+                if lst:
+                    first = lst[0]
+                    if isinstance(first, dict):
+                        model_name = str(first.get("id") or "").strip()
+                    elif isinstance(first, str):
+                        model_name = first.strip()
+            out["models_ok"] = True
+    except Exception as e:
+        out["error"] = str(e)
+
+    if not model_name and GATEWAY_MODELS:
+        model_name = str(GATEWAY_MODELS[0] or "").strip()
+    if not model_name:
+        model_name = "gpt-4"
+
+    try:
+        body = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": "ping"}],
+            "stream": False,
+            "max_tokens": 8,
+        }
+        rc = requests.post(url, headers=headers, json=body, timeout=12)
+        out["chat_status"] = int(rc.status_code or 0)
+        if 200 <= rc.status_code < 300:
+            out["chat_ok"] = True
+    except Exception as e:
+        if not out["error"]:
+            out["error"] = str(e)
+
+    if out["models_ok"] and out["chat_ok"]:
+        out["status"] = "ok"
+    elif out["models_ok"] or out["chat_ok"]:
+        out["status"] = "degraded"
+    return out
+
+
+@bp.route("/upstreams/probe", methods=["POST"])
+def miniapp_probe_upstreams():
+    data = request.get_json(silent=True) or {}
+    idx = data.get("index", None)
+    probe_all = bool(data.get("all"))
+    upstreams = upstream_store.load_upstreams()
+    items = upstreams.get("items") or []
+    active = int(upstreams.get("active") or 0)
+
+    targets: list[tuple[int, dict]] = []
+    if probe_all:
+        targets = [(i, it) for i, it in enumerate(items) if isinstance(it, dict)]
+    else:
+        try:
+            i = int(idx if idx is not None else active)
+        except Exception:
+            i = active
+        if i < 0 or i >= len(items):
+            return jsonify({"ok": False, "error": "index 无效"}), 400
+        targets = [(i, items[i])]
+
+    results = []
+    for i, it in targets:
+        r = _probe_upstream_item(it)
+        r["index"] = i
+        r["isActive"] = i == active
+        results.append(r)
+
+    status = "ok"
+    if any((x.get("status") == "fail") for x in results):
+        status = "degraded" if any((x.get("status") == "ok") for x in results) else "fail"
+    return jsonify({"ok": True, "status": status, "results": results, "count": len(results)})
 

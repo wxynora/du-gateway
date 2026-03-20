@@ -34,6 +34,8 @@ R2_KEY_CORE_PROMPT = "global/core_prompt_316.txt"
 # MiniApp 背景配置与图片（跨设备同步）
 R2_KEY_MINIAPP_BG_CONFIG = "global/miniapp_bg_config.json"
 R2_KEY_MINIAPP_BG_IMAGE = "global/miniapp_bg_image"
+# MiniApp 首页「渡今天想说的话」（按日缓存）
+R2_KEY_MINIAPP_DAILY_WHISPER = "global/miniapp_daily_whisper.json"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
 R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 # 主动发消息：上一次成功主动联系的时间（北京时间 ISO）
@@ -1134,6 +1136,31 @@ def get_miniapp_bg_image() -> tuple[Optional[bytes], str]:
     except Exception as e:
         logger.error("get_miniapp_bg_image 失败 error=%s", e, exc_info=True)
         return None, ""
+
+
+def get_miniapp_daily_whisper() -> Optional[dict]:
+    """读取 MiniApp 每日小气泡文案。"""
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_MINIAPP_DAILY_WHISPER)
+    return data if isinstance(data, dict) else None
+
+
+def save_miniapp_daily_whisper(data: dict) -> bool:
+    """保存 MiniApp 每日小气泡文案（JSON）。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(data, dict):
+        return False
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_MINIAPP_DAILY_WHISPER, data)
+            return True
+        except Exception as e:
+            logger.error("save_miniapp_daily_whisper 失败 error=%s", e, exc_info=True)
+            return False
 
 
 # ---------- 一键清空（测试/重置用） ----------

@@ -18,7 +18,7 @@ export function tgReady(expand: boolean = false) {
   try {
     tg.ready();
     if (expand) {
-      // Telegram 在部分机型上首次打开可能仍是半屏，这里做多次拉起兜底。
+      // Telegram 在部分机型上会先半屏再稳定，持续多次拉起并在视口变化时补拉，尽量首屏即全屏。
       const ensureExpanded = () => {
         try {
           tg.expand?.();
@@ -26,11 +26,24 @@ export function tgReady(expand: boolean = false) {
         try {
           tg.requestFullscreen?.();
         } catch {}
+        try {
+          tg.disableVerticalSwipes?.();
+        } catch {}
       };
       ensureExpanded();
       setTimeout(ensureExpanded, 80);
       setTimeout(ensureExpanded, 260);
       setTimeout(ensureExpanded, 700);
+      setTimeout(ensureExpanded, 1400);
+      setTimeout(ensureExpanded, 2600);
+      try {
+        tg.onEvent?.("viewportChanged", ensureExpanded);
+      } catch {}
+      try {
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden) ensureExpanded();
+        });
+      } catch {}
     }
   } catch {}
 }

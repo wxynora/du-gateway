@@ -22,6 +22,7 @@ function Shell() {
   const [showHomeMenu, setShowHomeMenu] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showAlarm, setShowAlarm] = useState(false);
+  const [dailyWhisper, setDailyWhisper] = useState("");
   const version = new URLSearchParams(window.location.search).get("v") || "";
   const [bg, setBg] = useState<BgConfig>({
     preset: "cream",
@@ -58,6 +59,12 @@ function Shell() {
         }));
       })
       .catch(() => {});
+    apiJson<{ ok?: boolean; text?: string }>("/miniapp-api/daily-whisper")
+      .then((j) => {
+        const text = (j?.text || "").toString().trim();
+        if (text) setDailyWhisper(text);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -69,26 +76,30 @@ function Shell() {
   const rootStyle = buildBackgroundStyle(bg);
 
   return (
-    <div className="min-h-dvh safe-top safe-bottom text-cream-text" style={rootStyle}>
+    <div className="min-h-dvh safe-bottom text-cream-text" style={rootStyle}>
       <div className="sticky top-0 z-20 bg-cream-bg/85 backdrop-blur">
-        <div className="flex items-center justify-between px-4 pb-3 pt-4">
+        <div
+          className="flex items-center justify-between px-4 pb-3"
+          style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 16px)" }}
+        >
           <div className="font-semibold tracking-tight rounded-xl2 px-3 py-1 bg-white/65 backdrop-blur-md border border-white/50 shadow-soft2">
             d&x home
           </div>
           {version ? <div className="text-[11px] text-cream-muted">v{version}</div> : null}
-          <div className="flex items-center gap-2">
-            <button
-              className="h-10 w-10 rounded-full bg-white/62 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
-              onClick={() => setShowSettings(true)}
-              title="上游切换"
-            >
-              <LineIcon name="upstream" />
-            </button>
-          </div>
+          <div className="h-10 w-10" />
         </div>
       </div>
 
-      <div className="px-4 py-4 pb-28">
+      {dailyWhisper ? (
+        <div className="px-4 pt-2">
+          <div className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 px-3 py-2 text-[12px] leading-relaxed text-cream-text">
+            <span className="text-cream-muted mr-1">渡今天想说：</span>
+            {dailyWhisper}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="px-4 pt-6 pb-28">
         <div className="grid grid-cols-2 gap-3">
           <FeatureTile title="日志" desc="查看/过滤/复制" color="bg-white/38" icon={<LineIcon name="logs" />} onClick={() => setPanel("logs")} />
           <FeatureTile title="思维链" desc="最近10条（降序）" color="bg-white/38" icon={<LineIcon name="reasoning" />} onClick={() => setPanel("reasoning")} />
@@ -134,6 +145,10 @@ function Shell() {
         onOpenAlarm={() => {
           setShowHomeMenu(false);
           setShowAlarm(true);
+        }}
+        onOpenUpstream={() => {
+          setShowHomeMenu(false);
+          setShowSettings(true);
         }}
       />
     </div>
@@ -194,12 +209,14 @@ function HomeOrbMenu({
   onOpenSchedule,
   onOpenBackground,
   onOpenAlarm,
+  onOpenUpstream,
 }: {
   open: boolean;
   onToggle: () => void;
   onOpenSchedule: () => void;
   onOpenBackground: () => void;
   onOpenAlarm: () => void;
+  onOpenUpstream: () => void;
 }) {
   return (
     <div className="fixed inset-x-0 bottom-10 z-30 flex justify-center pointer-events-none">
@@ -231,6 +248,13 @@ function HomeOrbMenu({
                 <circle cx="12" cy="13" r="7" />
                 <path d="M12 13V9m0 4 3 2M7 4 4 7m13-3 3 3" />
               </svg>
+            </button>
+            <button
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[92px] -translate-y-[16px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              onClick={onOpenUpstream}
+              title="上游切换"
+            >
+              <LineIcon name="upstream" />
             </button>
           </>
         ) : null}
