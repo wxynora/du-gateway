@@ -230,15 +230,26 @@ TOOL_SCHEDULE_DELETE = {
 }
 
 
-def get_forum_tools_for_inject() -> list[dict]:
-    """返回给模型的论坛工具列表。"""
+def get_forum_tools_for_inject(mode: str = "daily") -> list[dict]:
+    """
+    返回给模型的论坛/日程工具列表。
+    mode:
+    - daily: 仅日常高频（闹钟相关）
+    - forum: 日常 + 论坛高频（发帖/评论/看帖）
+    - debug: 全量（含底层 HTTP/鉴权工具）
+    """
     if not MCP_ENABLED:
         return []
-    # 默认策略：先浏览（list/get），仅在鉴权失败（401/403）或首次接入时再 verify/register
-    return [
-        TOOL_FORUM_HTTP,
-        TOOL_FORUM_UID_HTTP,
-        TOOL_FORUM_LOGIN,
+    schedule_tools = [
+        TOOL_SCHEDULE_LIST,
+        TOOL_SCHEDULE_CREATE,
+        TOOL_SCHEDULE_ENABLE,
+        TOOL_SCHEDULE_DISABLE,
+        TOOL_SCHEDULE_DELETE,
+    ]
+    if mode == "daily":
+        return schedule_tools
+    forum_tools = [
         {
             "type": "function",
             "function": {
@@ -319,13 +330,23 @@ def get_forum_tools_for_inject() -> list[dict]:
                 },
             },
         },
+    ]
+    # forum 场景：只给高频论坛工具，不给底层易混淆工具
+    high_level = [
+        t for t in forum_tools
+        if ((t.get("function") or {}).get("name") in ("forum_list_posts", "forum_get_post"))
+    ] + [TOOL_FORUM_POST, TOOL_FORUM_COMMENT]
+    if mode == "forum":
+        return schedule_tools + high_level
+    # debug 场景：全量工具
+    return [
+        TOOL_FORUM_HTTP,
+        TOOL_FORUM_UID_HTTP,
+        TOOL_FORUM_LOGIN,
+        *forum_tools,
         TOOL_FORUM_POST,
         TOOL_FORUM_COMMENT,
-        TOOL_SCHEDULE_LIST,
-        TOOL_SCHEDULE_CREATE,
-        TOOL_SCHEDULE_ENABLE,
-        TOOL_SCHEDULE_DISABLE,
-        TOOL_SCHEDULE_DELETE,
+        *schedule_tools,
     ]
 
 
