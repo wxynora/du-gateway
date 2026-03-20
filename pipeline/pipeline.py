@@ -541,9 +541,30 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         scored.sort(key=lambda x: (-x[0], -x[1]))
 
     budget = memory_dynamic_budget()
+    def _fuzzy_time_label(mem: dict) -> str:
+        from utils.time_aware import parse_iso_to_beijing, _now_beijing
+
+        last_mentioned = mem.get("last_mentioned") or mem.get("created_at") or ""
+        dt = parse_iso_to_beijing(last_mentioned)
+        if dt is None:
+            return "之前"
+        days = max(0, (_now_beijing() - dt).days)
+        if days == 0:
+            return "今天"
+        if days == 1:
+            return "昨天"
+        if days == 2:
+            return "前天"
+        if days <= 4:
+            return f"{days}天前"
+        if days <= 9:
+            return "几天前"
+        return "好些天前"
+
     lines = []
     for t in scored[: max(1, DYNAMIC_MEMORY_TOP_N)]:
-        line = f"- {t[2].get('content', '').strip()}"
+        mem = t[2]
+        line = f"- [{_fuzzy_time_label(mem)}] {mem.get('content', '').strip()}"
         new_text = "\n".join(lines) + ("\n" + line if lines else line)
         if estimate_tokens(new_text) > budget:
             break

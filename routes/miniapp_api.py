@@ -1,5 +1,6 @@
 import time
 import os
+import math
 from pathlib import Path
 from datetime import datetime
 
@@ -28,62 +29,25 @@ def _notify_schedule_runtime_changed():
         pass
 
 
-def _build_daily_whisper_text() -> str:
-    """
-    生成「渡今天想说的话」：
-    - 每日一条，口吻自然温柔
-    - 不影响主链路，失败时回退固定文案
-    """
-    default_text = "今天也想抱抱你，慢慢来，我们一起把今天过好。"
-    summary = (r2_store.get_summary("") or "").strip()
-    rounds = r2_store.get_latest_4_rounds_global() or []
-    rounds_text = ""
-    try:
-        for r in rounds:
-            for m in (r.get("messages") or []):
-                role = (m.get("role") or "").strip().lower()
-                who = "渡" if role == "assistant" else ("老婆" if role == "user" else role)
-                content = m.get("content")
-                if isinstance(content, list):
-                    parts = []
-                    for c in content:
-                        if isinstance(c, dict) and c.get("type") == "text":
-                            parts.append(str(c.get("text") or ""))
-                    content = " ".join(parts)
-                text = str(content or "").strip()
-                if text:
-                    rounds_text += f"[{who}] {text}\n"
-    except Exception:
-        rounds_text = ""
+def _season_label(month: int) -> str:
+    if month in (3, 4, 5):
+        return "spring"
+    if month in (6, 7, 8):
+        return "summer"
+    if month in (9, 10, 11):
+        return "autumn"
+    return "winter"
 
-    prompt = (
-        "你是渡。请基于下面的上下文，写一句“今天想对老婆说的话”。\n"
-        "要求：\n"
-        "1) 只输出一句中文，不要标题、不要解释。\n"
-        "2) 语气自然温柔，不要油腻，不要夸张文学化。\n"
-        "3) 控制在 18-48 字。\n"
-        "4) 不要带 emoji。\n\n"
-        f"总结：\n{summary or '（暂无）'}\n\n"
-        f"最近对话：\n{rounds_text or '（暂无）'}"
-    )
+
+def _default_cyber_tree_start_date(today: str) -> str:
+    """
+    默认从“今年”的纪念日 03-04 开始（不按每年回溯）。
+    """
     try:
-        url = request.url_root.rstrip("/") + "/v1/chat/completions"
-        body = {"messages": [{"role": "user", "content": prompt}], "stream": False, "max_tokens": 180}
-        headers = {"Content-Type": "application/json", "X-Window-Id": "__miniapp_daily_whisper__"}
-        r = requests.post(url, headers=headers, json=body, timeout=20)
-        if r.status_code != 200:
-            return default_text
-        data = r.json() if r.content else {}
-        msg = (data.get("choices") or [{}])[0].get("message") or {}
-        text = str(msg.get("content") or "").strip()
-        if not text:
-            return default_text
-        text = text.replace("\r", " ").replace("\n", " ").strip()
-        if len(text) > 80:
-            text = text[:80].rstrip("，,。.!?！？") + "。"
-        return text or default_text
+        y = int(str(today).split("-", 2)[0])
     except Exception:
-        return default_text
+        return "2026-03-04"
+    return f"{y:04d}-03-04"
 
 
 @bp.before_request
@@ -161,10 +125,86 @@ def miniapp_daily_whisper():
     if (not force_refresh) and str(data.get("date") or "") == today and (data.get("text") or "").strip():
         return jsonify({"ok": True, "date": today, "text": str(data.get("text") or "").strip(), "cached": True})
 
-    text = _build_daily_whisper_text().strip()
+    default_text = "今天也想抱抱你，慢慢来，我们一起把今天过好。"
+    try:
+        from services.deepseek_summary import fetch_daily_whisper_from_summary
+
+        text = (
+            fetch_daily_whisper_from_summary(
+                r2_store.get_summary("") or "",
+                r2_store.get_latest_4_rounds_global() or [],
+            )
+            or default_text
+        ).strip()
+    except Exception:
+        text = default_text
     payload = {"date": today, "text": text, "updatedAt": now_beijing_iso()}
     r2_store.save_miniapp_daily_whisper(payload)
     return jsonify({"ok": True, "date": today, "text": text, "cached": False})
+
+
+@bp.route("/cyber-tree", methods=["GET"])
+def miniapp_cyber_tree():
+    today = today_beijing()
+    meta = r2_store.get_cyber_tree_meta() or {}
+    start_date = str(meta.get("startDate") or "").strip() or _default_cyber_tree_start_date(today)
+    if not (meta.get("startDate")):
+        r2_store.save_cyber_tree_meta({"startDate": start_date, "createdAt": now_beijing_iso()})
+
+    try:
+        from datetime import datetime as _dt
+
+        d0 = _dt.strptime(start_date, "%Y-%m-%d").date()
+        d1 = _dt.strptime(today, "%Y-%m-%d").date()
+        days = max(1, (d1 - d0).days + 1)
+    except Exception:
+        days = 1
+    rounds = r2_store.get_total_conversation_rounds()
+    growth = float(days) * (1.0 + math.log(max(1, rounds)) / 10.0)
+    if growth < 15:
+        stage = "seedling"
+    elif growth < 60:
+        stage = "young"
+    elif growth < 220:
+        stage = "big"
+    else:
+        stage = "lush"
+    month = int(today.split("-", 2)[1]) if "-" in today else 1
+    season = _season_label(month)
+    milestones = {
+        "days": [30, 100, 365],
+        "rounds": [300, 1000, 3000],
+        "reachedDays": [x for x in (30, 100, 365) if days >= x],
+        "reachedRounds": [x for x in (300, 1000, 3000) if rounds >= x],
+    }
+    return jsonify(
+        {
+            "ok": True,
+            "startDate": start_date,
+            "today": today,
+            "daysTogether": days,
+            "totalRounds": rounds,
+            "growth": round(growth, 2),
+            "stage": stage,
+            "season": season,
+            "milestones": milestones,
+        }
+    )
+
+
+@bp.route("/cyber-tree/start-date", methods=["PUT"])
+def miniapp_set_cyber_tree_start_date():
+    data = request.get_json(silent=True) or {}
+    start_date = str(data.get("startDate") or "").strip()
+    try:
+        datetime.strptime(start_date, "%Y-%m-%d")
+    except Exception:
+        return jsonify({"ok": False, "error": "startDate 格式需为 YYYY-MM-DD"}), 400
+    meta = r2_store.get_cyber_tree_meta() or {}
+    meta["startDate"] = start_date
+    meta["updatedAt"] = now_beijing_iso()
+    ok = r2_store.save_cyber_tree_meta(meta)
+    return jsonify({"ok": bool(ok), "startDate": start_date})
 
 
 @bp.route("/windows", methods=["GET"])
@@ -678,6 +718,7 @@ def _probe_upstream_item(it: dict) -> dict:
         "chat_status": 0,
         "model_count": 0,
         "error": "",
+        "note": "",
         "status": "fail",
     }
     if not url:
@@ -691,7 +732,7 @@ def _probe_upstream_item(it: dict) -> dict:
     model_name = ""
     try:
         models_url = _chat_url_to_models_url(url)
-        rm = requests.get(models_url, headers=headers, timeout=8)
+        rm = requests.get(models_url, headers=headers, timeout=12)
         out["models_status"] = int(rm.status_code or 0)
         if 200 <= rm.status_code < 300:
             data = rm.json() if rm.content else {}
@@ -720,13 +761,16 @@ def _probe_upstream_item(it: dict) -> dict:
             "stream": False,
             "max_tokens": 8,
         }
-        rc = requests.post(url, headers=headers, json=body, timeout=12)
+        rc = requests.post(url, headers=headers, json=body, timeout=20)
         out["chat_status"] = int(rc.status_code or 0)
         if 200 <= rc.status_code < 300:
             out["chat_ok"] = True
     except Exception as e:
-        if not out["error"]:
-            out["error"] = str(e)
+        msg = str(e)
+        if "Read timed out" in msg and out["models_ok"]:
+            out["note"] = "chat 探活超时（上游可能可用，但较慢）"
+        elif not out["error"]:
+            out["error"] = msg
 
     if out["models_ok"] and out["chat_ok"]:
         out["status"] = "ok"

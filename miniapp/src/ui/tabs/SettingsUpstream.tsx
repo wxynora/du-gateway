@@ -15,6 +15,7 @@ type ProbeItem = {
   chat_status: number;
   model_count: number;
   error?: string;
+  note?: string;
 };
 type ProbeResp = { ok: boolean; status: "ok" | "degraded" | "fail"; results: ProbeItem[]; count: number };
 
@@ -148,7 +149,12 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
                   ? ` ｜ models=${probes[idx].models_status} (${probes[idx].model_count}) ｜ chat=${probes[idx].chat_status}`
                   : ""}
               </div>
-              {probes[idx]?.error ? <div className="mt-1 text-xs text-red-500 break-all">{probes[idx]?.error}</div> : null}
+              {probes[idx]?.note ? <div className="mt-1 text-xs text-amber-600 break-all">{probes[idx]?.note}</div> : null}
+              {probes[idx]?.error ? (
+                <div className={"mt-1 text-xs break-all " + (probes[idx]?.status === "degraded" ? "text-amber-600" : "text-red-500")}>
+                  {probes[idx]?.error}
+                </div>
+              ) : null}
             </div>
           ))}
           {!items.length ? <div className="text-xs text-cream-muted">（当前没有配置上游）</div> : null}

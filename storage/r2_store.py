@@ -36,6 +36,8 @@ R2_KEY_MINIAPP_BG_CONFIG = "global/miniapp_bg_config.json"
 R2_KEY_MINIAPP_BG_IMAGE = "global/miniapp_bg_image"
 # MiniApp 首页「渡今天想说的话」（按日缓存）
 R2_KEY_MINIAPP_DAILY_WHISPER = "global/miniapp_daily_whisper.json"
+# MiniApp 赛博种树：开始日期等元信息
+R2_KEY_CYBER_TREE_META = "global/cyber_tree_meta.json"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
 R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 # 主动发消息：上一次成功主动联系的时间（北京时间 ISO）
@@ -1161,6 +1163,63 @@ def save_miniapp_daily_whisper(data: dict) -> bool:
         except Exception as e:
             logger.error("save_miniapp_daily_whisper 失败 error=%s", e, exc_info=True)
             return False
+
+
+def get_cyber_tree_meta() -> Optional[dict]:
+    """读取赛博种树元信息。"""
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_CYBER_TREE_META)
+    return data if isinstance(data, dict) else None
+
+
+def save_cyber_tree_meta(data: dict) -> bool:
+    """保存赛博种树元信息。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(data, dict):
+        return False
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_CYBER_TREE_META, data)
+            return True
+        except Exception as e:
+            logger.error("save_cyber_tree_meta 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_total_conversation_rounds() -> int:
+    """
+    统计 windows/*/conversation.json 的总轮次。
+    用于 MiniApp 赛博种树展示（非高频调用）。
+    """
+    client = _s3_client()
+    if not client:
+        return 0
+    total = 0
+    try:
+        token = None
+        while True:
+            kwargs = {"Bucket": R2_BUCKET_NAME, "Prefix": "windows/"}
+            if token:
+                kwargs["ContinuationToken"] = token
+            resp = client.list_objects_v2(**kwargs)
+            for obj in (resp.get("Contents") or []):
+                key = str(obj.get("Key") or "")
+                if not key.endswith("/conversation.json"):
+                    continue
+                data = _read_json(client, key)
+                rounds = (data or {}).get("rounds") if isinstance(data, dict) else None
+                if isinstance(rounds, list):
+                    total += len(rounds)
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
+    except Exception as e:
+        logger.warning("get_total_conversation_rounds 失败 error=%s", e)
+    return max(0, int(total))
 
 
 # ---------- 一键清空（测试/重置用） ----------

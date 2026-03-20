@@ -245,6 +245,64 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
 
 
 
+def fetch_daily_whisper_from_summary(current_summary: str, recent_4_rounds: list) -> str | None:
+    """
+    基于「窗口总结+最近对话」生成一句当日小气泡文案（给 MiniApp 首页）。
+    只返回一句中文；失败返回 None。
+    """
+    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+        return None
+    summary = (current_summary or "").strip() or "（暂无）"
+    rounds_text = ""
+    try:
+        for r in recent_4_rounds or []:
+            for m in (r.get("messages") or []):
+                role = (m.get("role") or "").strip().lower()
+                who = "渡" if role == "assistant" else ("老婆" if role == "user" else role)
+                content = m.get("content")
+                if isinstance(content, list):
+                    parts = []
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            parts.append(str(c.get("text") or ""))
+                    content = " ".join(parts)
+                txt = str(content or "").strip()
+                if txt:
+                    rounds_text += f"[{who}] {txt}\n"
+    except Exception:
+        rounds_text = ""
+    prompt = (
+        "你是渡。请结合下面的窗口总结与最近对话，写一句今天想对老婆说的话。\n"
+        "要求：\n"
+        "1) 只输出一句中文，不要标题、不要解释；\n"
+        "2) 语气自然温柔，不油腻，不文学化过头；\n"
+        "3) 18-48 字，不要 emoji。\n\n"
+        f"窗口总结：\n{summary}\n\n"
+        f"最近对话：\n{rounds_text or '（暂无）'}"
+    )
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 120,
+    }
+    try:
+        r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+        text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
+        if not text:
+            return None
+        text = text.replace("\r", " ").replace("\n", " ").strip()
+        if len(text) > 80:
+            text = text[:80].rstrip("，,。.!?！？") + "。"
+        return text or None
+    except Exception as e:
+        logger.warning("DeepSeek 每日气泡生成失败 error=%s", e)
+        return None
+
+
 def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
     """
     按「【最近】/【稍早】/【更早】/渡的小本本」结构，从最早的内容开始一点点削，

@@ -12,9 +12,21 @@ import { AlarmTab } from "./tabs/AlarmTab";
 type PanelId = "logs" | "reasoning" | null;
 type BgPreset = "cream" | "grid" | "soft";
 type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number };
+type CyberTreeData = {
+  ok: boolean;
+  startDate: string;
+  today: string;
+  daysTogether: number;
+  totalRounds: number;
+  growth: number;
+  stage: "seedling" | "young" | "big" | "lush";
+  season: "spring" | "summer" | "autumn" | "winter";
+  milestones: { reachedDays: number[]; reachedRounds: number[] };
+};
 const BG_STORAGE_KEY = "miniapp.bg.config.v1";
 
 function Shell() {
+  const toast = useToast();
   const [panel, setPanel] = useState<PanelId>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showCorePrompt, setShowCorePrompt] = useState(false);
@@ -22,7 +34,9 @@ function Shell() {
   const [showHomeMenu, setShowHomeMenu] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showAlarm, setShowAlarm] = useState(false);
+  const [showTree, setShowTree] = useState(false);
   const [dailyWhisper, setDailyWhisper] = useState("");
+  const [tree, setTree] = useState<CyberTreeData | null>(null);
   const version = new URLSearchParams(window.location.search).get("v") || "";
   const [bg, setBg] = useState<BgConfig>({
     preset: "cream",
@@ -65,6 +79,11 @@ function Shell() {
         if (text) setDailyWhisper(text);
       })
       .catch(() => {});
+    apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
+      .then((j) => {
+        if (j?.ok) setTree(j);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -72,6 +91,26 @@ function Shell() {
       localStorage.setItem(BG_STORAGE_KEY, JSON.stringify(bg));
     } catch {}
   }, [bg]);
+
+  useEffect(() => {
+    if (!tree) return;
+    const dayMarks = tree.milestones?.reachedDays || [];
+    const roundMarks = tree.milestones?.reachedRounds || [];
+    for (const d of dayMarks) {
+      const key = `tree.milestone.day.${d}`;
+      if (!localStorage.getItem(key)) {
+        localStorage.setItem(key, "1");
+        toast(`🎉 在一起第 ${d} 天，种树里程碑达成！`);
+      }
+    }
+    for (const r of roundMarks) {
+      const key = `tree.milestone.round.${r}`;
+      if (!localStorage.getItem(key)) {
+        localStorage.setItem(key, "1");
+        toast(`🎉 聊到第 ${r} 轮，种树里程碑达成！`);
+      }
+    }
+  }, [tree, toast]);
 
   const rootStyle = buildBackgroundStyle(bg);
 
@@ -131,6 +170,7 @@ function Shell() {
           <AlarmTab />
         </Modal>
       ) : null}
+      {showTree ? <CyberTreeModal data={tree} onClose={() => setShowTree(false)} /> : null}
       <HomeOrbMenu
         open={showHomeMenu}
         onToggle={() => setShowHomeMenu((v: boolean) => !v)}
@@ -149,6 +189,10 @@ function Shell() {
         onOpenUpstream={() => {
           setShowHomeMenu(false);
           setShowSettings(true);
+        }}
+        onOpenTree={() => {
+          setShowHomeMenu(false);
+          setShowTree(true);
         }}
       />
     </div>
@@ -194,12 +238,13 @@ function FeatureTile({
   );
 }
 
-function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" }) {
+function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" }) {
   const cls = "h-4 w-4 text-cream-text";
   if (name === "logs") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 12h16M4 18h10" /></svg>;
   if (name === "reasoning") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 12h4l2-4 4 8 2-4h4" /></svg>;
   if (name === "upstream") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M14 7l3-3m-3 3 3 3M20 17H10m0 0-3-3m3 3-3 3" /></svg>;
   if (name === "prompt") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
+  if (name === "tree") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21v-5M12 16c-3.8 0-6-2.2-6-5 0-2.2 1.4-4 3.4-4.7A4.8 4.8 0 0 1 19 8c1.8.8 3 2.5 3 4.5 0 3-2.4 3.5-5 3.5h-5z" /></svg>;
   return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 20h16M4 8l4 4 4-6 4 5 4-3v12H4z" /></svg>;
 }
 
@@ -210,6 +255,7 @@ function HomeOrbMenu({
   onOpenBackground,
   onOpenAlarm,
   onOpenUpstream,
+  onOpenTree,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -217,6 +263,7 @@ function HomeOrbMenu({
   onOpenBackground: () => void;
   onOpenAlarm: () => void;
   onOpenUpstream: () => void;
+  onOpenTree: () => void;
 }) {
   return (
     <div className="fixed inset-x-0 bottom-10 z-30 flex justify-center pointer-events-none">
@@ -224,7 +271,7 @@ function HomeOrbMenu({
         {open ? (
           <>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[92px] -translate-y-[64px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[84px] -translate-y-[64px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
               onClick={onOpenBackground}
               title="背景设置"
             >
@@ -240,7 +287,7 @@ function HomeOrbMenu({
               </svg>
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[44px] -translate-y-[64px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[34px] -translate-y-[64px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenAlarm}
               title="闹钟"
             >
@@ -250,11 +297,18 @@ function HomeOrbMenu({
               </svg>
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[92px] -translate-y-[16px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[84px] -translate-y-[14px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenUpstream}
               title="上游切换"
             >
               <LineIcon name="upstream" />
+            </button>
+            <button
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[34px] -translate-y-[14px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              onClick={onOpenTree}
+              title="赛博种树"
+            >
+              <LineIcon name="tree" />
             </button>
           </>
         ) : null}
@@ -320,21 +374,38 @@ function BackgroundEditor({
 }) {
   const toast = useToast();
   const [draft, setDraft] = useState<BgConfig>(bg);
+  const [origin, setOrigin] = useState<BgConfig>(bg);
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     setDraft(bg);
+    setOrigin(bg);
   }, [bg]);
 
-  function save() {
-    onChange(draft);
-    apiJson<{ ok?: boolean }>("/miniapp-api/background-config", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(draft),
-    }).catch(() => {});
-    toast("背景已保存");
-    onClose();
+  function applyDraft(next: BgConfig) {
+    setDraft(next);
+    onChange(next);
+  }
+
+  async function save() {
+    try {
+      const j = await apiJson<{ ok?: boolean; config?: Partial<BgConfig> }>("/miniapp-api/background-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+      const next: BgConfig = {
+        preset: ((j?.config?.preset as BgPreset) || draft.preset) as BgPreset,
+        useImage: !!(j?.config?.useImage ?? draft.useImage),
+        imageVersion: Number(j?.config?.imageVersion ?? draft.imageVersion),
+        dim: Number.isFinite(Number(j?.config?.dim)) ? Math.max(0, Math.min(70, Number(j?.config?.dim))) : draft.dim,
+      };
+      onChange(next);
+      toast("背景已保存");
+      onClose();
+    } catch (e: any) {
+      toast(`保存失败：${e?.message || e}`);
+    }
   }
 
   async function uploadFromAlbum(file: File | null) {
@@ -368,9 +439,9 @@ function BackgroundEditor({
       <div className="space-y-3 text-sm">
         <div className="text-xs text-cream-muted">可选预设风格，或从手机相册上传背景图（跨设备同步）。</div>
         <div className="grid grid-cols-3 gap-2">
-          <Btn kind={draft.preset === "cream" ? "green" : "default"} onClick={() => setDraft({ ...draft, preset: "cream", useImage: false })}>米白</Btn>
-          <Btn kind={draft.preset === "grid" ? "green" : "default"} onClick={() => setDraft({ ...draft, preset: "grid", useImage: false })}>网格灰</Btn>
-          <Btn kind={draft.preset === "soft" ? "green" : "default"} onClick={() => setDraft({ ...draft, preset: "soft", useImage: false })}>柔和彩</Btn>
+          <Btn kind={draft.preset === "cream" ? "green" : "default"} onClick={() => applyDraft({ ...draft, preset: "cream", useImage: false })}>米白</Btn>
+          <Btn kind={draft.preset === "grid" ? "green" : "default"} onClick={() => applyDraft({ ...draft, preset: "grid", useImage: false })}>网格灰</Btn>
+          <Btn kind={draft.preset === "soft" ? "green" : "default"} onClick={() => applyDraft({ ...draft, preset: "soft", useImage: false })}>柔和彩</Btn>
         </div>
         <div className="rounded-xl2 bg-white/42 backdrop-blur-xl border border-white/50 p-3 shadow-soft2 space-y-2">
           <label className="text-xs text-cream-muted">从相册上传图片（jpg/png/webp/gif，最大 8MB）</label>
@@ -382,7 +453,7 @@ function BackgroundEditor({
             disabled={uploading}
           />
           <div className="flex items-center gap-2">
-            <Btn kind={draft.useImage ? "green" : "default"} onClick={() => setDraft({ ...draft, useImage: !draft.useImage })}>
+            <Btn kind={draft.useImage ? "green" : "default"} onClick={() => applyDraft({ ...draft, useImage: !draft.useImage })}>
               {draft.useImage ? "已启用图片" : "启用图片"}
             </Btn>
             {uploading ? <span className="text-xs text-cream-muted">上传中...</span> : null}
@@ -393,13 +464,48 @@ function BackgroundEditor({
             min={0}
             max={70}
             value={draft.dim}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, dim: Number(e.target.value || 20) })}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => applyDraft({ ...draft, dim: Number(e.target.value || 20) })}
             className="w-full"
           />
         </div>
         <div className="flex items-center gap-2">
-          <Btn kind="blue" onClick={onClose}>取消</Btn>
+          <Btn
+            kind="blue"
+            onClick={() => {
+              onChange(origin);
+              onClose();
+            }}
+          >
+            取消
+          </Btn>
           <Btn kind="green" onClick={save} disabled={uploading}>保存</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function CyberTreeModal({ data, onClose }: { data: CyberTreeData | null; onClose: () => void }) {
+  const d = data;
+  const stageLabel =
+    d?.stage === "seedling" ? "树苗" : d?.stage === "young" ? "小树" : d?.stage === "big" ? "大树" : "繁茂";
+  const seasonLabel =
+    d?.season === "spring" ? "春天" : d?.season === "summer" ? "夏天" : d?.season === "autumn" ? "秋天" : "冬天";
+  const seasonDecor =
+    d?.season === "spring" ? "🌸" : d?.season === "summer" ? "🍃" : d?.season === "autumn" ? "🍂" : "❄️";
+  const treeIcon = d?.stage === "seedling" ? "🌱" : d?.stage === "young" ? "🌿" : d?.stage === "big" ? "🌳" : "🌲";
+  return (
+    <Modal title="赛博种树" onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 p-3">
+          <div className="text-2xl">{seasonDecor} {treeIcon}</div>
+          <div className="mt-1 text-sm">当前：{seasonLabel} · {stageLabel}</div>
+          <div className="mt-1 text-xs text-cream-muted">成长值：{Number(d?.growth || 0).toFixed(2)}</div>
+        </div>
+        <div className="rounded-xl3 bg-white/45 backdrop-blur-xl border border-white/55 shadow-soft2 p-3 text-xs space-y-1">
+          <div>在一起第 <span className="font-semibold">{d?.daysTogether || 1}</span> 天</div>
+          <div>聊了 <span className="font-semibold">{d?.totalRounds || 0}</span> 轮</div>
+          <div className="text-cream-muted">起始日期：{d?.startDate || "-"}</div>
         </div>
       </div>
     </Modal>
