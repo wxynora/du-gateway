@@ -611,17 +611,37 @@ def step_inject_notion_tools(body: dict) -> dict:
         return body
     from services.notion_tools import get_notion_tools_for_inject
 
-    tools = get_notion_tools_for_inject()
+    messages = body.get("messages") or []
+    last_user_text = ""
+    for m in reversed(messages):
+        if (m.get("role") or "").lower() != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            last_user_text = content
+        elif isinstance(content, list):
+            last_user_text = " ".join(
+                c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
+            )
+        break
+    q = (last_user_text or "").lower()
+    expanded_keywords = (
+        "notion", "搜索", "检索", "查一下", "页面", "正文", "read_page",
+        "核心缓存", "待审", "同步", "sync", "小本本", "append",
+        "日程", "schedule", "天气", "黄历",
+    )
+    mode = "expanded" if any(k in q for k in expanded_keywords) else "daily"
+
+    tools = get_notion_tools_for_inject(mode=mode)
     if not tools:
         return body
     body = copy.deepcopy(body)
     body["tools"] = tools
     body["tool_choice"] = "auto"
     from config import NOTION_CORE_CACHE_DATABASE_ID
-    if NOTION_CORE_CACHE_DATABASE_ID:
+    if NOTION_CORE_CACHE_DATABASE_ID and mode == "expanded":
         from services.gateway_tools import SYNC_REMINDER_FOR_WIFE
         inject = "\n\n【核心缓存同步】" + SYNC_REMINDER_FOR_WIFE
-        messages = body.get("messages") or []
         for msg in messages:
             if (msg.get("role") or "").lower() == "system":
                 msg["content"] = (msg.get("content") or "") + inject

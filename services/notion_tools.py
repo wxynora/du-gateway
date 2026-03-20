@@ -11,7 +11,7 @@ from config import (
     NOTION_TOOLS_ENABLED,
 )
 from services import notion_client
-from services.mcp_forum_tools import execute_forum_tool, get_forum_tools_for_inject
+from services.mcp_forum_tools import execute_forum_tool
 from utils.log import get_logger
 from utils.time_aware import iso_to_display_time, now_beijing_iso, parse_iso_to_beijing
 
@@ -145,8 +145,8 @@ def write_notebook_entry_to_database(content: str, note_time: str | None = None)
     return True, ""
 
 
-def get_notion_tools_for_inject() -> List[dict]:
-    """返回要注入到 chat 的 tools 列表。"""
+def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
+    """返回要注入到 chat 的 tools 列表。mode=daily|expanded。"""
     tools = [
         {
             "type": "function",
@@ -339,9 +339,19 @@ def get_notion_tools_for_inject() -> List[dict]:
         tools.extend(get_gateway_sync_tools())
     from services.weather_almanac import get_weather_almanac_tools
     tools.extend(get_weather_almanac_tools())
-    # MCP 论坛工具：开启 MCP 后一起注入，渡可直接 verify/register/发帖
-    tools.extend(get_forum_tools_for_inject())
-    return tools
+
+    if mode != "daily":
+        return tools
+
+    # 日常最小集：只保留高频（日记 + 报时），其余在触发词命中后走 expanded 注入
+    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info"}
+    daily_tools = []
+    for t in tools:
+        fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+        name = (fn.get("name") or "").strip()
+        if name in keep_names:
+            daily_tools.append(t)
+    return daily_tools
 
 
 def _append_content_to_page(page_id: str, content: str, add_timestamp: bool = True) -> tuple[bool, str]:
