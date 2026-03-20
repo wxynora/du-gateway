@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { apiJson } from "../api";
 import { Btn } from "../components";
 import { useToast } from "../toast";
@@ -36,7 +36,7 @@ export function MemoryDebugTab() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<MemoryDebugResp | null>(null);
 
-  async function reload() {
+  const reload = useCallback(async () => {
     setLoading(true);
     try {
       const j = await apiJson<MemoryDebugResp>("/miniapp-api/memory-debug?limit=30");
@@ -47,12 +47,28 @@ export function MemoryDebugTab() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
 
   useEffect(() => {
     reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reload]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      reload();
+    }, 5000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reload();
+    };
+    const onFocus = () => reload();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [reload]);
 
   const recalls = Array.isArray(data?.recalls) ? data!.recalls! : [];
 

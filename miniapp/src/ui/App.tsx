@@ -848,6 +848,8 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
       toast("内容不能为空");
       return;
     }
+    const ok = window.confirm("确认保存核心 Prompt 吗？保存后会立即覆盖线上注入内容。");
+    if (!ok) return;
     setSaving(true);
     try {
       const j = await apiJson<{ ok?: boolean; error?: string }>("/miniapp-api/core-prompt", {
