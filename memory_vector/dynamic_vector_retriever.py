@@ -124,40 +124,51 @@ def dynamic_vector_retrieve(
     if not (memories or du_doc or core_mems):
         return []
 
-    # 向量召回（动态层：用向量索引）
-    candidates: list[tuple[float, dict]] = []
-    for t in tags:
-        idx = load_index(t)
-        for r in (idx.get("records") or []):
-            mid = (r or {}).get("memory_id")
-            emb = (r or {}).get("embedding")
-            if not mid or not isinstance(emb, list):
+    def _collect_candidates(sim_threshold: float) -> list[tuple[float, dict]]:
+        cands: list[tuple[float, dict]] = []
+        # 向量召回（动态层：用向量索引）
+        for t in tags:
+            idx = load_index(t)
+            for r in (idx.get("records") or []):
+                mid = (r or {}).get("memory_id")
+                emb = (r or {}).get("embedding")
+                if not mid or not isinstance(emb, list):
+                    continue
+                sim = cosine(q_emb, emb)
+                if sim < sim_threshold:
+                    continue
+                cands.append((sim, {"memory_id": str(mid), "cosine_sim": float(sim)}))
+
+        # 「小渡记忆文档」单独 embedding 参与召回（不依赖向量索引）
+        if du_doc:
+            du_text_for_embed = du_doc[:3000]
+            du_emb = embed_text(du_text_for_embed)
+            if du_emb:
+                sim = cosine(q_emb, du_emb)
+                if sim >= sim_threshold:
+                    cands.append((sim, {"memory_id": du_doc_id, "cosine_sim": float(sim)}))
+
+        # 核心缓存 pending：逐条 embedding 参与召回（体量不大，可接受）
+        for mem in core_mems:
+            text = (mem.get("content") or "")[:1000]
+            if not text:
+                continue
+            emb = embed_text(text)
+            if not emb:
                 continue
             sim = cosine(q_emb, emb)
-            if sim < min_sim:
-                continue
-            candidates.append((sim, {"memory_id": str(mid), "cosine_sim": float(sim)}))
+            if sim >= sim_threshold:
+                cands.append((sim, {"memory_id": mem["id"], "cosine_sim": float(sim)}))
+        return cands
 
-    # 「小渡记忆文档」单独 embedding 参与召回（不依赖向量索引）
-    if du_doc:
-        du_text_for_embed = du_doc[:3000]
-        du_emb = embed_text(du_text_for_embed)
-        if du_emb:
-            sim = cosine(q_emb, du_emb)
-            if sim >= min_sim:
-                candidates.append((sim, {"memory_id": du_doc_id, "cosine_sim": float(sim)}))
-
-    # 核心缓存 pending：逐条 embedding 参与召回（体量不大，可接受）
-    for mem in core_mems:
-        text = (mem.get("content") or "")[:1000]
-        if not text:
-            continue
-        emb = embed_text(text)
-        if not emb:
-            continue
-        sim = cosine(q_emb, emb)
-        if sim >= min_sim:
-            candidates.append((sim, {"memory_id": mem["id"], "cosine_sim": float(sim)}))
+    candidates = _collect_candidates(min_sim)
+    # 命中为 0 时再做一次温和放宽，避免“看起来完全不触发”
+    if not candidates:
+        relaxed = max(0.30, min_sim - 0.06)
+        if relaxed < min_sim:
+            candidates = _collect_candidates(relaxed)
+            if candidates:
+                logger.debug("dynamic_vector_retrieve relax min_sim %s -> %s hit=%s", min_sim, relaxed, len(candidates))
 
     if not candidates:
         return []

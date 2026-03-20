@@ -30,9 +30,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002").strip()
 EMBEDDING_MAX_CHARS = _env_int("EMBEDDING_MAX_CHARS", 8000)
 
-# 向量召回默认更保守，避免每轮注入过多不相关记忆
-# 0.45 相比 0.35 更严格，能明显减少“泛词命中一堆”的情况；需要更宽松可用环境变量覆盖
-VECTOR_MIN_SIM = _env_float("VECTOR_MIN_SIM", 0.45)
+# 向量召回阈值（默认适中）：过高会导致“几乎不触发”，过低会导致噪声注入
+# 可通过环境变量 VECTOR_MIN_SIM 覆盖。
+VECTOR_MIN_SIM = _env_float("VECTOR_MIN_SIM", 0.38)
 VECTOR_TOPK = _env_int("VECTOR_TOPK", 30)
 VECTOR_TOPN = _env_int("VECTOR_TOPN", 3)
 
