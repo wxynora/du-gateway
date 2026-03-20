@@ -177,6 +177,12 @@ def miniapp_cyber_tree():
         stage = "lush"
     month = int(today.split("-", 2)[1]) if "-" in today else 1
     season = _season_label(month)
+    if season == "winter":
+        weather_fx = "snowy"
+    elif season == "summer":
+        weather_fx = "sunny"
+    else:
+        weather_fx = "rainy"
     milestones = {
         "days": [30, 100, 365],
         "rounds": [300, 1000, 3000],
@@ -193,6 +199,7 @@ def miniapp_cyber_tree():
             "growth": round(growth, 2),
             "stage": stage,
             "season": season,
+            "weatherFx": weather_fx,
             "milestones": milestones,
         }
     )
@@ -557,6 +564,50 @@ def miniapp_notebook_delete(ts: str):
         return jsonify({"error": "缺少 timestamp"}), 400
     ok = r2_store.notebook_delete_entry_by_timestamp(ts)
     return jsonify({"ok": ok, "timestamp": ts})
+
+
+@bp.route("/du-notebook", methods=["GET"])
+def miniapp_du_notebook_list():
+    items = r2_store.get_du_notebook_entries() or []
+    return jsonify({"ok": True, "items": items, "count": len(items)})
+
+
+@bp.route("/du-notebook", methods=["POST"])
+def miniapp_du_notebook_add():
+    data = request.get_json(silent=True) or {}
+    content = (data.get("content") or "").strip()
+    if not content:
+        return jsonify({"ok": False, "error": "content 不能为空"}), 400
+    entry = r2_store.add_du_notebook_entry(content)
+    if not entry:
+        return jsonify({"ok": False, "error": "新增失败"}), 500
+    return jsonify({"ok": True, "entry": entry})
+
+
+@bp.route("/du-notebook/<entry_id>", methods=["PUT"])
+def miniapp_du_notebook_update(entry_id: str):
+    eid = (entry_id or "").strip()
+    if not eid:
+        return jsonify({"ok": False, "error": "缺少 entry_id"}), 400
+    data = request.get_json(silent=True) or {}
+    content = (data.get("content") or "").strip()
+    if not content:
+        return jsonify({"ok": False, "error": "content 不能为空"}), 400
+    ok = r2_store.update_du_notebook_entry(eid, content)
+    if not ok:
+        return jsonify({"ok": False, "error": "未找到条目或更新失败"}), 404
+    return jsonify({"ok": True, "id": eid})
+
+
+@bp.route("/du-notebook/<entry_id>", methods=["DELETE"])
+def miniapp_du_notebook_delete(entry_id: str):
+    eid = (entry_id or "").strip()
+    if not eid:
+        return jsonify({"ok": False, "error": "缺少 entry_id"}), 400
+    ok = r2_store.delete_du_notebook_entry(eid)
+    if not ok:
+        return jsonify({"ok": False, "error": "未找到该条目"}), 404
+    return jsonify({"ok": True, "id": eid})
 
 
 @bp.route("/core-prompt", methods=["GET"])

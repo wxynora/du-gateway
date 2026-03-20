@@ -600,6 +600,39 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     return body
 
 
+def step_inject_du_notebook(body: dict) -> dict:
+    """
+    固定注入：渡的记事本（按条目）。
+    仅注入最近若干条，防止请求体过长。
+    """
+    entries = r2_store.get_du_notebook_entries() or []
+    if not entries:
+        return body
+    lines = []
+    budget = 500
+    for it in entries[:20]:
+        line = f"- {(it.get('content') or '').strip()}"
+        if not line or line == "-":
+            continue
+        nxt = ("\n".join(lines) + ("\n" if lines else "") + line).strip()
+        if estimate_tokens(nxt) > budget:
+            break
+        lines.append(line)
+    if not lines:
+        return body
+    inject = "\n\n【渡的记事本】\n" + "\n".join(lines) + "\n【以上为固定记事本】"
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    for msg in messages:
+        if (msg.get("role") or "").lower() == "system":
+            msg["content"] = (msg.get("content") or "") + inject
+            break
+    else:
+        messages.insert(0, {"role": "system", "content": inject})
+    body["messages"] = messages
+    return body
+
+
 def step_inject_notion_tools(body: dict) -> dict:
     """
     当 NOTION_TOOLS_ENABLED=1 时，向 body 注入 Notion 工具（notion_search、notion_append_to_page 等），

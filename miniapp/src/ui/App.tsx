@@ -10,8 +10,9 @@ import { ScheduleTab } from "./tabs/ScheduleTab";
 import { AlarmTab } from "./tabs/AlarmTab";
 import { MemoryDebugTab } from "./tabs/MemoryDebugTab";
 import { DuDayTab } from "./tabs/DuDayTab";
+import { DuNotebookTab } from "./tabs/DuNotebookTab";
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | null;
 type BgPreset = "cream" | "grid" | "soft";
 type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number; imageStamp: number };
 type CyberTreeData = {
@@ -23,6 +24,7 @@ type CyberTreeData = {
   growth: number;
   stage: "seedling" | "young" | "big" | "lush";
   season: "spring" | "summer" | "autumn" | "winter";
+  weatherFx?: "rainy" | "sunny" | "snowy";
   milestones: { reachedDays: number[]; reachedRounds: number[] };
 };
 const BG_STORAGE_KEY = "miniapp.bg.config.v1";
@@ -159,6 +161,7 @@ function Shell() {
           <FeatureTile title="日志" desc="查看/过滤/复制" color="bg-white/38" icon={<LineIcon name="logs" />} onClick={() => setPanel("logs")} />
           <FeatureTile title="思维链" desc="最近10条（降序）" color="bg-white/38" icon={<LineIcon name="reasoning" />} onClick={() => setPanel("reasoning")} />
           <FeatureTile title="记忆调试" desc="窗口总结 + 动态召回" color="bg-white/38" icon={<LineIcon name="memory" />} onClick={() => setPanel("memory-debug")} />
+          <FeatureTile title="渡的记事本" desc="固定注入 · 条目管理" color="bg-white/38" icon={<LineIcon name="notebook" />} onClick={() => setPanel("du-notebook")} />
           <FeatureTile title="核心Prompt" desc="固定注入，可随时更新" color="bg-white/38" icon={<LineIcon name="prompt" />} onClick={() => setShowCorePrompt(true)} />
         </div>
       </div>
@@ -176,6 +179,11 @@ function Shell() {
       {panel === "memory-debug" ? (
         <Modal title="记忆调试" onClose={() => setPanel(null)}>
           <MemoryDebugTab />
+        </Modal>
+      ) : null}
+      {panel === "du-notebook" ? (
+        <Modal title="渡的记事本" onClose={() => setPanel(null)}>
+          <DuNotebookTab />
         </Modal>
       ) : null}
 
@@ -269,11 +277,12 @@ function FeatureTile({
   );
 }
 
-function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" }) {
+function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" | "notebook" }) {
   const cls = "h-4 w-4 text-cream-text";
   if (name === "logs") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 12h16M4 18h10" /></svg>;
   if (name === "reasoning") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 12h4l2-4 4 8 2-4h4" /></svg>;
   if (name === "memory") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
+  if (name === "notebook") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" /></svg>;
   if (name === "upstream") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M14 7l3-3m-3 3 3 3M20 17H10m0 0-3-3m3 3-3 3" /></svg>;
   if (name === "prompt") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
   if (name === "tree") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21v-5M12 16c-3.8 0-6-2.2-6-5 0-2.2 1.4-4 3.4-4.7A4.8 4.8 0 0 1 19 8c1.8.8 3 2.5 3 4.5 0 3-2.4 3.5-5 3.5h-5z" /></svg>;
@@ -604,7 +613,15 @@ function BackgroundEditor({
   );
 }
 
-function GrowthTreeSVG({ growthValue, season }: { growthValue: number; season: "spring" | "summer" | "autumn" | "winter" }) {
+function GrowthTreeSVG({
+  growthValue,
+  season,
+  weatherFx,
+}: {
+  growthValue: number;
+  season: "spring" | "summer" | "autumn" | "winter";
+  weatherFx?: "rainy" | "sunny" | "snowy";
+}) {
   const g = Number.isFinite(growthValue) ? Math.max(0, growthValue) : 0;
   const stage = g < 10 ? 0 : g < 30 ? 1 : g < 60 ? 2 : g < 100 ? 3 : 4;
   const fullness = Math.min(1, g / 100);
@@ -638,9 +655,12 @@ function GrowthTreeSVG({ growthValue, season }: { growthValue: number; season: "
     return { cx, cy, rx, ry, color, idx: i };
   });
 
+  const fx = weatherFx || (season === "winter" ? "snowy" : season === "summer" ? "sunny" : "rainy");
   const flowers = season === "spring" ? leaves.filter((_, i) => i % 5 === 0).slice(0, 8) : [];
-  const snowCaps = season === "winter" ? leaves.filter((_, i) => i % 3 === 0).slice(0, 10) : [];
+  const snowCaps = fx === "snowy" ? leaves.filter((_, i) => i % 3 === 0).slice(0, 10) : [];
   const petals = season === "spring" && stage >= 2 ? [0, 1, 2].map((i) => ({ i, x: 40 + i * 10 })) : [];
+  const rainDrops = fx === "rainy" ? Array.from({ length: 8 }).map((_, i) => ({ i, x: 18 + i * 9, y: 8 + (i % 3) * 4 })) : [];
+  const sunGlints = fx === "sunny" ? Array.from({ length: 6 }).map((_, i) => ({ i, x: 18 + i * 11, y: 16 + (i % 2) * 5 })) : [];
 
   return (
     <svg viewBox="0 0 100 100" className="w-full max-w-[280px] h-auto" aria-label="growth-tree-svg">
@@ -666,6 +686,8 @@ function GrowthTreeSVG({ growthValue, season }: { growthValue: number; season: "
         .grow-in { animation: grow-in .7s ease-out; transform-origin: center bottom; }
         @keyframes leaf-sway { 0%,100% { transform: rotate(-2deg) translateY(0px); } 50% { transform: rotate(2deg) translateY(-.4px); } }
         @keyframes petal-fall { 0% { transform: translateY(0px) translateX(0px); opacity: .75; } 100% { transform: translateY(20px) translateX(4px); opacity: 0; } }
+        @keyframes rain-fall { 0% { transform: translateY(-2px); opacity: .7; } 100% { transform: translateY(9px); opacity: .2; } }
+        @keyframes glint { 0%,100% { opacity: .18; } 50% { opacity: .42; } }
         @keyframes grow-in { from { transform: scale(.82); opacity: .45; } to { transform: scale(1); opacity: 1; } }
       `}</style>
 
@@ -724,6 +746,31 @@ function GrowthTreeSVG({ growthValue, season }: { growthValue: number; season: "
         <ellipse key={`snow-${i}`} cx={s.cx} cy={s.cy - 1} rx={s.rx * 0.9} ry="0.8" fill="#f2f7fb" opacity="0.95" />
       ))}
 
+      {rainDrops.map((d) => (
+        <line
+          key={`rain-${d.i}`}
+          x1={d.x}
+          y1={d.y}
+          x2={d.x - 1.5}
+          y2={d.y + 5}
+          stroke="#9ec7e8"
+          strokeWidth="1.2"
+          strokeLinecap="round"
+          style={{ animation: "rain-fall 1.2s linear infinite", animationDelay: `${d.i * 0.18}s` }}
+        />
+      ))}
+
+      {sunGlints.map((s) => (
+        <circle
+          key={`glint-${s.i}`}
+          cx={s.x}
+          cy={s.y}
+          r="1.8"
+          fill="#fff3bd"
+          style={{ animation: "glint 2.4s ease-in-out infinite", animationDelay: `${s.i * 0.22}s` }}
+        />
+      ))}
+
       {petals.map((p) => (
         <circle key={`petal-${p.i}`} cx={p.x} cy={trunkY - 6} r="1.1" fill="#f5a8ca" className="petal-fall" style={{ animationDelay: `${p.i * 1.15}s` }} />
       ))}
@@ -749,7 +796,11 @@ function CyberTreeModal({ data, onClose }: { data: CyberTreeData | null; onClose
       <div className="space-y-3 text-sm">
         <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3">
           <div className="flex items-center gap-2">
-            <GrowthTreeSVG growthValue={growth} season={(d?.season || "spring") as "spring" | "summer" | "autumn" | "winter"} />
+            <GrowthTreeSVG
+              growthValue={growth}
+              season={(d?.season || "spring") as "spring" | "summer" | "autumn" | "winter"}
+              weatherFx={(d?.weatherFx || undefined) as "rainy" | "sunny" | "snowy" | undefined}
+            />
             <div className="text-xs text-cream-muted">SVG 动态小树（随成长值 + 季节变化）</div>
           </div>
           <div className="mt-1 text-sm">当前：{seasonLabel} · {stageLabel}</div>

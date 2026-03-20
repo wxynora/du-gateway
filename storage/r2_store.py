@@ -36,6 +36,8 @@ R2_KEY_MINIAPP_BG_CONFIG = "global/miniapp_bg_config.json"
 R2_KEY_MINIAPP_BG_IMAGE = "global/miniapp_bg_image"
 # MiniApp 首页「渡今天想说的话」（按日缓存）
 R2_KEY_MINIAPP_DAILY_WHISPER = "global/miniapp_daily_whisper.json"
+# 渡的记事本：固定注入记忆（按条目维护）
+R2_KEY_DU_NOTEBOOK = "global/du_notebook.json"
 # MiniApp 赛博种树：开始日期等元信息
 R2_KEY_CYBER_TREE_META = "global/cyber_tree_meta.json"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
@@ -1218,6 +1220,88 @@ def get_miniapp_daily_whisper() -> Optional[dict]:
         return None
     data = _read_json(client, R2_KEY_MINIAPP_DAILY_WHISPER)
     return data if isinstance(data, dict) else None
+
+
+def get_du_notebook_entries() -> list[dict]:
+    """读取渡的记事本条目（按 updated_at 倒序）。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_DU_NOTEBOOK)
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    out = [x for x in items if isinstance(x, dict)]
+    out.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
+    return out
+
+
+def save_du_notebook_entries(items: list[dict]) -> bool:
+    """覆盖保存渡的记事本条目。"""
+    client = _s3_client()
+    if not client:
+        return False
+    with _global_write_lock:
+        try:
+            payload = {"items": items or [], "updated_at": now_beijing_iso()}
+            _write_json(client, R2_KEY_DU_NOTEBOOK, payload)
+            return True
+        except Exception as e:
+            logger.error("save_du_notebook_entries 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def add_du_notebook_entry(content: str) -> Optional[dict]:
+    """新增一条渡的记事本条目。"""
+    text = (content or "").strip()
+    if not text:
+        return None
+    items = get_du_notebook_entries()
+    now = now_beijing_iso()
+    entry = {
+        "id": str(uuid4()),
+        "content": text,
+        "created_at": now,
+        "updated_at": now,
+    }
+    items.append(entry)
+    ok = save_du_notebook_entries(items)
+    return entry if ok else None
+
+
+def update_du_notebook_entry(entry_id: str, content: str) -> bool:
+    """更新一条渡的记事本条目内容。"""
+    eid = (entry_id or "").strip()
+    text = (content or "").strip()
+    if not eid or not text:
+        return False
+    items = get_du_notebook_entries()
+    changed = False
+    now = now_beijing_iso()
+    for it in items:
+        if str(it.get("id") or "").strip() != eid:
+            continue
+        it["content"] = text
+        it["updated_at"] = now
+        changed = True
+        break
+    if not changed:
+        return False
+    return save_du_notebook_entries(items)
+
+
+def delete_du_notebook_entry(entry_id: str) -> bool:
+    """删除一条渡的记事本条目。"""
+    eid = (entry_id or "").strip()
+    if not eid:
+        return False
+    items = get_du_notebook_entries()
+    new_items = [it for it in items if str(it.get("id") or "").strip() != eid]
+    if len(new_items) == len(items):
+        return False
+    return save_du_notebook_entries(new_items)
 
 
 def save_miniapp_daily_whisper(data: dict) -> bool:

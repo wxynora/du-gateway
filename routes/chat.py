@@ -29,6 +29,7 @@ from pipeline.pipeline import (
     step_inject_summary,
     step_inject_rikkahub_reminder,
     step_inject_dynamic_memory,
+    step_inject_du_notebook,
     step_inject_notion_search,
     step_inject_notion_tools,
     step_inject_forum_tools,
@@ -661,6 +662,7 @@ def chat_completions():
     body = step_inject_summary(body, window_id)
     body = step_inject_rikkahub_reminder(body, window_id)
     body = step_inject_dynamic_memory(body, window_id)
+    body = step_inject_du_notebook(body)
     body = step_inject_notion_search(body, window_id)
     body = step_inject_notion_tools(body)
     body = step_inject_forum_tools(body)
