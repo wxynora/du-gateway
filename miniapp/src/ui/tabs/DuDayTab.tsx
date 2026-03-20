@@ -11,6 +11,7 @@ type ScheduleItem = {
   enabled?: boolean;
   note?: string;
   created_by?: string;
+  target_role?: string;
 };
 
 type ScheduleResp = {
@@ -58,7 +59,7 @@ export function DuDayTab() {
   const duItems = useMemo(
     () =>
       normalizeItems(items)
-        .filter((it) => String(it.created_by || "wife").toLowerCase() === "du")
+        .filter((it) => String(it.target_role || "wife").toLowerCase() === "du")
         .sort((a, b) => String(a.datetime || "").localeCompare(String(b.datetime || ""))),
     [items]
   );
