@@ -378,6 +378,7 @@ def miniapp_create_schedule_item():
                 weekly_weekday=w,
                 weekly_time=weekly_time,
                 daily_time=daily_time,
+                created_by="wife",
             )
             if item:
                 created_items.append(item)
@@ -412,6 +413,7 @@ def miniapp_create_schedule_item():
         weekly_weekday=weekly_weekday,
         weekly_time=weekly_time,
         daily_time=daily_time,
+        created_by="wife",
     )
     if not item:
         return jsonify({"ok": False, "error": "创建失败"}), 500

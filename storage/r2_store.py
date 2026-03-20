@@ -691,12 +691,16 @@ def create_schedule_item(
     weekly_weekday: Optional[int] = None,
     weekly_time: str = "",
     daily_time: str = "",
+    created_by: str = "wife",
 ) -> Optional[dict]:
     """创建一条提醒并写入 schedule/items.json。"""
     t = (title or "").strip()
     dt = (datetime_str or "").strip()
     rep = (repeat or "once").strip().lower() or "once"
     n = (note or "").strip()
+    creator = (created_by or "wife").strip().lower() or "wife"
+    if creator not in ("wife", "du"):
+        creator = "wife"
     if not t:
         return None
     if rep not in ("once", "daily", "weekly"):
@@ -749,6 +753,7 @@ def create_schedule_item(
         "repeat": rep,
         "enabled": bool(enabled),
         "note": n,
+        "created_by": creator,
         "created_at": now_beijing_iso(),
     }
     if rep == "weekly" and wday is not None:

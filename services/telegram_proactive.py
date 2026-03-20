@@ -226,10 +226,14 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         title = str(it.get("title") or "提醒").strip() or "提醒"
         note = str(it.get("note") or "").strip()
         rep = str(it.get("repeat") or "once").strip().lower() or "once"
+        created_by = str(it.get("created_by") or "wife").strip().lower() or "wife"
         rep_label = {"once": "一次性", "daily": "每天", "weekly": "每周"}.get(rep, rep)
         # 走和正常对话同一条链路：让“渡”结合上下文自然提醒，而非发送系统模板文案。
+        owner_prefix = "老婆设了一个"
+        if created_by == "du":
+            owner_prefix = "你之前主动帮老婆设了一个"
         reminder_prompt = (
-            f"老婆设了一个「{title}」闹钟，现在到点了。"
+            f"{owner_prefix}「{title}」闹钟，现在到点了。"
             f"类型：{rep_label}；时间：{now_dt.strftime('%Y-%m-%d %H:%M')}。"
             f"{('备注：' + note + '。') if note else ''}"
             "请像平时 Telegram 聊天那样自然回复；如果有多句，请用换行分段。"

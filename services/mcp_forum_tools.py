@@ -188,6 +188,7 @@ TOOL_SCHEDULE_CREATE = {
                 "weekly_weekdays": {"type": "array", "items": {"type": "integer"}},
                 "note": {"type": "string", "description": "可选备注"},
                 "enabled": {"type": "boolean", "description": "可选，默认 true"},
+                "created_by": {"type": "string", "description": "可选：wife 或 du；不传默认 wife"},
             },
             "required": ["title"],
         },
@@ -499,6 +500,9 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             enabled = bool(args.get("enabled", True))
             daily_time = (args.get("daily_time") or "").strip()
             weekly_time = (args.get("weekly_time") or "").strip()
+            created_by = (args.get("created_by") or "wife").strip().lower() or "wife"
+            if created_by not in ("wife", "du"):
+                created_by = "wife"
             weekly_weekday = args.get("weekly_weekday")
             weekly_weekdays = args.get("weekly_weekdays")
             if not title:
@@ -536,6 +540,7 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
                         enabled=enabled,
                         weekly_weekday=w,
                         weekly_time=weekly_time,
+                        created_by=created_by,
                     )
                     if it:
                         created.append(it)
@@ -552,6 +557,7 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
                 enabled=enabled,
                 daily_time=daily_time,
                 weekly_time=weekly_time,
+                created_by=created_by,
             )
             if not item:
                 return json.dumps({"ok": False, "error": "创建失败，请检查时间参数"}, ensure_ascii=False)
