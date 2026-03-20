@@ -13,7 +13,7 @@ from config import (
 from services import notion_client
 from services.mcp_forum_tools import execute_forum_tool
 from utils.log import get_logger
-from utils.time_aware import iso_to_display_time, now_beijing_iso, parse_iso_to_beijing
+from utils.time_aware import iso_to_display_time, now_beijing_iso, parse_iso_to_beijing, today_beijing
 
 logger = get_logger(__name__)
 
@@ -349,6 +349,21 @@ def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
             },
         },
     })
+    tools.append({
+        "type": "function",
+        "function": {
+            "name": "daily_whisper_write",
+            "description": "写入 MiniApp 首页“渡今天想说”的气泡文案。可选 date（YYYY-MM-DD），不传默认今天。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "气泡文案内容"},
+                    "date": {"type": "string", "description": "可选：YYYY-MM-DD，不传默认今天"},
+                },
+                "required": ["content"],
+            },
+        },
+    })
     if NOTION_CORE_CACHE_DATABASE_ID:
         from services.gateway_tools import get_gateway_sync_tools
         tools.extend(get_gateway_sync_tools())
@@ -359,7 +374,7 @@ def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
         return tools
 
     # 日常最小集：只保留高频（日记 + 报时），其余在触发词命中后走 expanded 注入
-    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info", "note_write"}
+    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info", "note_write", "daily_whisper_write"}
     daily_tools = []
     for t in tools:
         fn = (t.get("function") or {}) if isinstance(t, dict) else {}
@@ -761,6 +776,25 @@ def execute_tool(name: str, arguments: dict) -> str:
             if not entry:
                 return "写入失败"
             return f"写入成功 id={entry.get('id')} updated_at={entry.get('updated_at')}"
+
+        if name == "daily_whisper_write":
+            from storage import r2_store
+            content = (arguments.get("content") or "").strip()
+            if not content:
+                return "content 为空"
+            date = (arguments.get("date") or "").strip()
+            if not date:
+                date = today_beijing()
+            payload = {
+                "date": date,
+                "text": content,
+                "updatedAt": now_beijing_iso(),
+                "by": "du_tool",
+            }
+            ok = r2_store.save_miniapp_daily_whisper(payload)
+            if not ok:
+                return "写入失败"
+            return f"写入成功 date={date}"
 
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
     except Exception as e:
