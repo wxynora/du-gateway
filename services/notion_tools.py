@@ -272,7 +272,7 @@ def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "类型": {"type": "string", "description": "可选：待办 / 约会 / 纪念日，不传则全部"},
+                            "item_type": {"type": "string", "description": "可选：待办 / 约会 / 纪念日，不传则全部"},
                             "limit": {"type": "integer", "description": "最多返回条数，默认 30", "default": 30},
                         },
                         "required": [],
@@ -287,13 +287,13 @@ def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "内容": {"type": "string", "description": "标题/内容"},
-                            "日期": {"type": "string", "description": "日期，如 2025-03-15 或 ISO"},
-                            "类型": {"type": "string", "description": "待办 / 约会 / 纪念日"},
-                            "复选框": {"type": "boolean", "description": "仅待办：是否勾选，默认 false"},
-                            "纪念日日期": {"type": "string", "description": "仅纪念日：如 每年3月15日"},
+                            "content": {"type": "string", "description": "标题/内容"},
+                            "date": {"type": "string", "description": "日期，如 2025-03-15 或 ISO"},
+                            "item_type": {"type": "string", "description": "待办 / 约会 / 纪念日"},
+                            "checked": {"type": "boolean", "description": "仅待办：是否勾选，默认 false"},
+                            "anniversary_date": {"type": "string", "description": "仅纪念日：如 每年3月15日"},
                         },
-                        "required": ["内容", "日期", "类型"],
+                        "required": ["content", "date", "item_type"],
                     },
                 },
             },
@@ -306,11 +306,11 @@ def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
                         "type": "object",
                         "properties": {
                             "page_id": {"type": "string", "description": "条目的页面 ID"},
-                            "内容": {"type": "string", "description": "可选"},
-                            "日期": {"type": "string", "description": "可选"},
-                            "类型": {"type": "string", "description": "可选：待办/约会/纪念日"},
-                            "复选框": {"type": "boolean", "description": "可选，仅待办"},
-                            "纪念日日期": {"type": "string", "description": "可选，仅纪念日"},
+                            "content": {"type": "string", "description": "可选"},
+                            "date": {"type": "string", "description": "可选"},
+                            "item_type": {"type": "string", "description": "可选：待办/约会/纪念日"},
+                            "checked": {"type": "boolean", "description": "可选，仅待办"},
+                            "anniversary_date": {"type": "string", "description": "可选，仅纪念日"},
                         },
                         "required": ["page_id"],
                     },
@@ -589,7 +589,7 @@ def execute_tool(name: str, arguments: dict) -> str:
             if err:
                 return json.dumps({"error": str(err)}, ensure_ascii=False)
             limit = int(arguments.get("limit") or 30)
-            typ = (arguments.get("类型") or "").strip()
+            typ = (arguments.get("item_type") or arguments.get("类型") or "").strip()
             tid = name_to_id.get("类型")
             filt = {"property": tid, "select": {"equals": typ}} if typ and tid else None
             data, err = notion_client.query_database(
@@ -621,9 +621,9 @@ def execute_tool(name: str, arguments: dict) -> str:
             name_to_id, _, err = notion_client.get_database_schema(NOTION_SCHEDULE_DATABASE_ID)
             if err:
                 return json.dumps({"error": str(err)}, ensure_ascii=False)
-            content = (arguments.get("内容") or "").strip()
-            date = (arguments.get("日期") or "").strip()
-            typ = (arguments.get("类型") or "").strip()
+            content = (arguments.get("content") or arguments.get("内容") or "").strip()
+            date = (arguments.get("date") or arguments.get("日期") or "").strip()
+            typ = (arguments.get("item_type") or arguments.get("类型") or "").strip()
             if not content or not typ:
                 return "内容、类型为必填"
             props = {}
@@ -633,10 +633,16 @@ def execute_tool(name: str, arguments: dict) -> str:
                 props[name_to_id["日期"]] = _prop_date(date)
             if name_to_id.get("类型"):
                 props[name_to_id["类型"]] = _prop_select(typ)
+            checked_arg = arguments.get("checked")
+            if checked_arg is None:
+                checked_arg = arguments.get("复选框")
+            ann_arg = arguments.get("anniversary_date")
+            if ann_arg is None:
+                ann_arg = arguments.get("纪念日日期")
             if name_to_id.get("复选框") and typ == "待办":
-                props[name_to_id["复选框"]] = _prop_checkbox(bool(arguments.get("复选框")))
-            if name_to_id.get("纪念日日期") and typ == "纪念日" and arguments.get("纪念日日期"):
-                props[name_to_id["纪念日日期"]] = _prop_rich(str(arguments.get("纪念日日期")).strip())
+                props[name_to_id["复选框"]] = _prop_checkbox(bool(checked_arg))
+            if name_to_id.get("纪念日日期") and typ == "纪念日" and ann_arg:
+                props[name_to_id["纪念日日期"]] = _prop_rich(str(ann_arg).strip())
             _, err = notion_client.create_page(
                 parent={"database_id": NOTION_SCHEDULE_DATABASE_ID},
                 properties=props,
@@ -655,16 +661,31 @@ def execute_tool(name: str, arguments: dict) -> str:
             if not page_id:
                 return "page_id 不能为空"
             props = {}
-            if "内容" in name_to_id and arguments.get("内容") is not None:
-                props[name_to_id["内容"]] = _prop_title(str(arguments["内容"]).strip())
-            if "日期" in name_to_id and arguments.get("日期") is not None:
-                props[name_to_id["日期"]] = _prop_date(str(arguments["日期"]).strip())
-            if "类型" in name_to_id and arguments.get("类型") is not None:
-                props[name_to_id["类型"]] = _prop_select(str(arguments["类型"]).strip())
-            if "复选框" in name_to_id and arguments.get("复选框") is not None:
-                props[name_to_id["复选框"]] = _prop_checkbox(bool(arguments["复选框"]))
-            if "纪念日日期" in name_to_id and arguments.get("纪念日日期") is not None:
-                props[name_to_id["纪念日日期"]] = _prop_rich(str(arguments["纪念日日期"]).strip())
+            content_arg = arguments.get("content")
+            if content_arg is None:
+                content_arg = arguments.get("内容")
+            date_arg = arguments.get("date")
+            if date_arg is None:
+                date_arg = arguments.get("日期")
+            type_arg = arguments.get("item_type")
+            if type_arg is None:
+                type_arg = arguments.get("类型")
+            checked_arg = arguments.get("checked")
+            if checked_arg is None:
+                checked_arg = arguments.get("复选框")
+            ann_arg = arguments.get("anniversary_date")
+            if ann_arg is None:
+                ann_arg = arguments.get("纪念日日期")
+            if "内容" in name_to_id and content_arg is not None:
+                props[name_to_id["内容"]] = _prop_title(str(content_arg).strip())
+            if "日期" in name_to_id and date_arg is not None:
+                props[name_to_id["日期"]] = _prop_date(str(date_arg).strip())
+            if "类型" in name_to_id and type_arg is not None:
+                props[name_to_id["类型"]] = _prop_select(str(type_arg).strip())
+            if "复选框" in name_to_id and checked_arg is not None:
+                props[name_to_id["复选框"]] = _prop_checkbox(bool(checked_arg))
+            if "纪念日日期" in name_to_id and ann_arg is not None:
+                props[name_to_id["纪念日日期"]] = _prop_rich(str(ann_arg).strip())
             if not props:
                 return "未传入要更新的字段"
             _, err = notion_client.update_page(page_id, props)
