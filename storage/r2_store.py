@@ -49,6 +49,8 @@ R2_KEY_TG_TODOS = "tg/todos.json"
 # 日历/提醒（V2 第一批：只读 + 禁用）
 R2_KEY_SCHEDULE_ITEMS = "schedule/items.json"
 R2_KEY_SCHEDULE_FIRED = "schedule/fired.json"
+# 动态记忆召回调试记录（用于 MiniApp 可视化排查）
+R2_KEY_DYNAMIC_RECALL_DEBUG = "dynamic_memory/recall_debug.json"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
@@ -876,6 +878,65 @@ def save_dynamic_memory_list(memories: list) -> bool:
             return False
 
 
+def get_dynamic_recall_debug_events(limit: int = 30) -> list[dict]:
+    """读取动态记忆召回调试事件（按时间倒序取最近 N 条）。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_DYNAMIC_RECALL_DEBUG)
+    if not isinstance(data, dict):
+        return []
+    events = data.get("events")
+    if not isinstance(events, list):
+        return []
+    out = [x for x in events if isinstance(x, dict)]
+    out.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+    try:
+        n = int(limit or 30)
+    except Exception:
+        n = 30
+    if n < 1:
+        n = 1
+    if n > 200:
+        n = 200
+    return out[:n]
+
+
+def append_dynamic_recall_debug_event(event: dict, max_keep: int = 200) -> bool:
+    """追加一条动态记忆召回调试事件。"""
+    if not isinstance(event, dict):
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    try:
+        keep = int(max_keep or 200)
+    except Exception:
+        keep = 200
+    if keep < 20:
+        keep = 20
+    if keep > 1000:
+        keep = 1000
+    with _global_write_lock:
+        try:
+            data = _read_json(client, R2_KEY_DYNAMIC_RECALL_DEBUG)
+            events = []
+            if isinstance(data, dict) and isinstance(data.get("events"), list):
+                events = [x for x in data.get("events") if isinstance(x, dict)]
+            events.append(event)
+            if len(events) > keep:
+                events = events[-keep:]
+            _write_json(
+                client,
+                R2_KEY_DYNAMIC_RECALL_DEBUG,
+                {"events": events, "updated_at": now_beijing_iso()},
+            )
+            return True
+        except Exception as e:
+            logger.error("append_dynamic_recall_debug_event 失败 error=%s", e, exc_info=True)
+            return False
+
+
 # ---------- 核心缓存层 pending.json（待审；importance>=4 存当轮原文，mention_count>=5 存融合版） ----------
 
 
@@ -1225,6 +1286,27 @@ def get_total_conversation_rounds() -> int:
     except Exception as e:
         logger.warning("get_total_conversation_rounds 失败 error=%s", e)
     return max(0, int(total))
+
+
+def get_window_conversation_rounds(window_id: str) -> int:
+    """
+    统计单个窗口的对话轮次数。
+    """
+    wid = (window_id or "").strip()
+    if not wid:
+        return 0
+    client = _s3_client()
+    if not client:
+        return 0
+    try:
+        key = _get_key(_prefix(wid), "conversation.json")
+        data = _read_json(client, key)
+        rounds = (data or {}).get("rounds") if isinstance(data, dict) else None
+        if isinstance(rounds, list):
+            return len(rounds)
+    except Exception as e:
+        logger.warning("get_window_conversation_rounds 失败 window_id=%s error=%s", wid, e)
+    return 0
 
 
 # ---------- 一键清空（测试/重置用） ----------

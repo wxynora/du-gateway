@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from config import MINIAPP_LOG_FILE
+from config import MINIAPP_LOG_FILE, TELEGRAM_PROACTIVE_TARGET_USER_ID
 from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
 from utils.ip_allowlist import enforce_ip_allowlist
@@ -159,13 +159,19 @@ def miniapp_cyber_tree():
         days = max(1, (d1 - d0).days + 1)
     except Exception:
         days = 1
-    rounds = r2_store.get_total_conversation_rounds()
+    tg_uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    rounds = 0
+    if tg_uid > 0:
+        rounds = r2_store.get_window_conversation_rounds(f"tg_{tg_uid}")
+    if rounds <= 0:
+        rounds = r2_store.get_total_conversation_rounds()
     growth = float(days) * (1.0 + math.log(max(1, rounds)) / 10.0)
-    if growth < 15:
+    # 阶段阈值调高：按当前纪念日起点，默认应先处于树苗期。
+    if growth < 50:
         stage = "seedling"
-    elif growth < 60:
+    elif growth < 140:
         stage = "young"
-    elif growth < 220:
+    elif growth < 320:
         stage = "big"
     else:
         stage = "lush"
@@ -464,6 +470,46 @@ def miniapp_dynamic_memory():
         return jsonify({"ok": True, "count": len(lst), "memories": lst})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "memories": []}), 500
+
+
+@bp.route("/memory-debug", methods=["GET"])
+def miniapp_memory_debug():
+    """
+    记忆调试视图：
+    - 当前窗口记忆总结（summary）
+    - 最近动态记忆召回明细（每次注入时记录）
+    """
+    try:
+        limit = request.args.get("limit", type=int, default=30)
+        if limit < 1:
+            limit = 1
+        if limit > 100:
+            limit = 100
+        target = ""
+        recent = whitelist_store.list_recent_windows(limit=200) or []
+        for w in recent:
+            wid = (w.get("id") or "").strip()
+            if wid.startswith("tg_"):
+                target = wid
+                break
+        if not target and recent:
+            target = (recent[0].get("id") or "").strip()
+        summary = (r2_store.get_summary(target) or "").strip()
+        events = r2_store.get_dynamic_recall_debug_events(limit=limit) or []
+        if target:
+            events = [e for e in events if str((e or {}).get("window_id") or "").strip() in (target, "__default__")]
+        return jsonify(
+            {
+                "ok": True,
+                "window_id": target,
+                "summary": summary,
+                "summary_exists": bool(summary),
+                "recalls": events,
+                "count": len(events),
+            }
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "summary": "", "recalls": [], "count": 0}), 500
 
 
 @bp.route("/core_cache", methods=["GET"])

@@ -8,8 +8,9 @@ import { SettingsUpstream } from "./tabs/SettingsUpstream";
 import { ReasoningTab } from "./tabs/ReasoningTab";
 import { ScheduleTab } from "./tabs/ScheduleTab";
 import { AlarmTab } from "./tabs/AlarmTab";
+import { MemoryDebugTab } from "./tabs/MemoryDebugTab";
 
-type PanelId = "logs" | "reasoning" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | null;
 type BgPreset = "cream" | "grid" | "soft";
 type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number; imageStamp: number };
 type CyberTreeData = {
@@ -37,6 +38,12 @@ function Shell() {
   const [showTree, setShowTree] = useState(false);
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [tree, setTree] = useState<CyberTreeData | null>(null);
+  const loadTree = () =>
+    apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
+      .then((j) => {
+        if (j?.ok) setTree(j);
+      })
+      .catch(() => {});
   const version = new URLSearchParams(window.location.search).get("v") || "";
   const [bg, setBg] = useState<BgConfig>({
     preset: "cream",
@@ -83,12 +90,15 @@ function Shell() {
         if (text) setDailyWhisper(text);
       })
       .catch(() => {});
-    apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
-      .then((j) => {
-        if (j?.ok) setTree(j);
-      })
-      .catch(() => {});
+    loadTree();
   }, []);
+
+  useEffect(() => {
+    if (!showTree) return;
+    loadTree();
+    const timer = setInterval(() => loadTree(), 30000);
+    return () => clearInterval(timer);
+  }, [showTree]);
 
   useEffect(() => {
     try {
@@ -146,6 +156,7 @@ function Shell() {
         <div className="grid grid-cols-2 gap-3">
           <FeatureTile title="日志" desc="查看/过滤/复制" color="bg-white/38" icon={<LineIcon name="logs" />} onClick={() => setPanel("logs")} />
           <FeatureTile title="思维链" desc="最近10条（降序）" color="bg-white/38" icon={<LineIcon name="reasoning" />} onClick={() => setPanel("reasoning")} />
+          <FeatureTile title="记忆调试" desc="窗口总结 + 动态召回" color="bg-white/38" icon={<LineIcon name="memory" />} onClick={() => setPanel("memory-debug")} />
           <FeatureTile title="核心Prompt" desc="固定注入，可随时更新" color="bg-white/38" icon={<LineIcon name="prompt" />} onClick={() => setShowCorePrompt(true)} />
         </div>
       </div>
@@ -158,6 +169,11 @@ function Shell() {
       {panel === "reasoning" ? (
         <Modal title="思维链" onClose={() => setPanel(null)}>
           <ReasoningTab />
+        </Modal>
+      ) : null}
+      {panel === "memory-debug" ? (
+        <Modal title="记忆调试" onClose={() => setPanel(null)}>
+          <MemoryDebugTab />
         </Modal>
       ) : null}
 
@@ -242,10 +258,11 @@ function FeatureTile({
   );
 }
 
-function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" }) {
+function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" }) {
   const cls = "h-4 w-4 text-cream-text";
   if (name === "logs") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 12h16M4 18h10" /></svg>;
   if (name === "reasoning") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 12h4l2-4 4 8 2-4h4" /></svg>;
+  if (name === "memory") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
   if (name === "upstream") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M14 7l3-3m-3 3 3 3M20 17H10m0 0-3-3m3 3-3 3" /></svg>;
   if (name === "prompt") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
   if (name === "tree") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21v-5M12 16c-3.8 0-6-2.2-6-5 0-2.2 1.4-4 3.4-4.7A4.8 4.8 0 0 1 19 8c1.8.8 3 2.5 3 4.5 0 3-2.4 3.5-5 3.5h-5z" /></svg>;
@@ -302,11 +319,11 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-2xl bg-white border border-white shadow-soft2 flex items-center justify-center text-neutral-900 active:scale-[0.99] transition"
                 onClick={onOpenTree}
-                title="赛博种树"
+                title="小渡&小玥の树"
               >
-                <LineIcon name="tree" />
+                <div className="text-[12px] font-medium tracking-tight">小渡&小玥の树</div>
               </button>
               <button
                 className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
@@ -428,14 +445,69 @@ function BackgroundEditor({
     if (!file) return;
     setUploading(true);
     try {
+      const toDataUrl = (blob: Blob) =>
+        new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("读取图片失败"));
+          reader.readAsDataURL(blob);
+        });
+      const loadImage = (src: string) =>
+        new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error("图片解码失败"));
+          img.src = src;
+        });
+      const canvasToBlob = (canvas: HTMLCanvasElement, quality: number) =>
+        new Promise<Blob>((resolve, reject) => {
+          canvas.toBlob(
+            (blob) => {
+              if (blob) resolve(blob);
+              else reject(new Error("图片编码失败"));
+            },
+            "image/jpeg",
+            quality
+          );
+        });
+
+      // 上传前压缩：避免运营商/反向代理 413（体积过大）并降低上传失败概率
+      const maxUploadBytes = 1500 * 1024; // 约 1.5MB
+      const maxSide = 1920;
+      let uploadBlob: Blob = file;
+      if (file.size > maxUploadBytes || file.type !== "image/jpeg") {
+        const src = await toDataUrl(file);
+        const img = await loadImage(src);
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("浏览器不支持图片处理");
+        ctx.drawImage(img, 0, 0, w, h);
+        let q = 0.88;
+        let out = await canvasToBlob(canvas, q);
+        while (out.size > maxUploadBytes && q > 0.5) {
+          q -= 0.08;
+          out = await canvasToBlob(canvas, q);
+        }
+        uploadBlob = out;
+      }
+
       const fd = new FormData();
-      fd.append("file", file);
+      fd.append("file", uploadBlob, "miniapp-bg.jpg");
       const r = await apiFetch("/miniapp-api/background-image", {
         method: "POST",
         body: fd,
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      if (!r.ok || !j?.ok) {
+        if (r.status === 413) throw new Error("图片体积仍然过大（413），请换更小图片");
+        if (r.status === 403) throw new Error("鉴权失效（403），关闭重进 miniapp 后再试");
+        throw new Error(j?.error || `HTTP ${r.status}`);
+      }
       const version = Number(j?.imageVersion || Date.now());
       setDraft((v: BgConfig) => {
         const next = { ...v, useImage: true, imageVersion: version, imageStamp: Date.now() };
@@ -521,7 +593,7 @@ function CyberTreeModal({ data, onClose }: { data: CyberTreeData | null; onClose
   const decoColor =
     d?.season === "spring" ? "#f3a9c8" : d?.season === "summer" ? "#6bcf7a" : d?.season === "autumn" ? "#d9b06c" : "#dbe7ef";
   return (
-    <Modal title="赛博种树" onClose={onClose}>
+    <Modal title="小渡&小玥の树" onClose={onClose}>
       <div className="space-y-3 text-sm">
         <div className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 p-3">
           <div className="flex items-center gap-2">

@@ -571,6 +571,20 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         lines.append(line)
     if not lines:
         return body
+    try:
+        r2_store.append_dynamic_recall_debug_event(
+            {
+                "timestamp": now_beijing_iso(),
+                "window_id": (window_id or "").strip() or "__default__",
+                "query": (last_user_text or "").strip(),
+                "keywords": keywords,
+                "source": "vector" if recalled else "keyword",
+                "recalled_lines": lines,
+                "recalled_count": len(lines),
+            }
+        )
+    except Exception:
+        pass
     inject = "\n\n【动态记忆】\n" + "\n".join(lines) + "\n【以上为动态记忆】"
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
