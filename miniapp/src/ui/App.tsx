@@ -858,7 +858,7 @@ function CyberTreeModal({
   const growth = Number(d?.growth || 0);
   const moodScore = Number(d?.mood?.score ?? 0);
   const moodFace =
-    moodScore >= 85 ? "(*^▽^*)" : moodScore >= 70 ? "(^_−)☆" : moodScore >= 55 ? "(•ᴗ•)" : moodScore >= 40 ? "(´･ω･`)" : "(T_T)";
+    moodScore >= 85 ? "٩(ˊᗜˋ*)و" : moodScore >= 70 ? "(◕‿◕✿)" : moodScore >= 55 ? "(๑•ᴗ•๑)" : moodScore >= 40 ? "(｡•́︿•̀｡)" : "(╥﹏╥)";
   const stageLabel =
     growth < 10 ? "种子/发芽" : growth < 30 ? "小树苗" : growth < 60 ? "小树" : growth < 100 ? "大树" : "满级大树";
   const seasonLabel =
@@ -941,11 +941,11 @@ function CyberTreeModal({
             </button>
           </div>
         </div>
-        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-2 text-xs space-y-1">
+        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-2 text-xs space-y-0.5">
           <div className="flex items-center justify-start pl-1">
             <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">纪念日倒计时</div>
           </div>
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 min-h-[128px]">
             <div className="space-y-1 pl-1 self-center">
               <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
               <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
@@ -953,7 +953,7 @@ function CyberTreeModal({
                 <Btn kind="dark" onClick={editAnniversary} disabled={refreshing}>编辑纪念日</Btn>
               </div>
             </div>
-            <div className="h-28 w-30 shrink-0 rounded-3xl bg-white/66 backdrop-blur-lg border border-white/75 shadow-[0_3px_10px_rgba(40,34,26,0.14)] p-3 flex flex-col justify-between">
+            <div className="h-28 w-30 shrink-0 self-center rounded-3xl bg-white/66 backdrop-blur-lg border border-white/75 shadow-[0_3px_10px_rgba(40,34,26,0.14)] p-3 flex flex-col justify-between">
               <div className="text-[11px] tracking-[0.02em] text-[#8b847c]">距离纪念日还有</div>
               <div>
                 <div className="text-[28px] leading-none font-semibold text-[#1f1a14] tabular-nums">{String(d?.anniversary?.next?.days_left ?? "-")}</div>
