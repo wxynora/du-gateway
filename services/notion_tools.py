@@ -334,6 +334,21 @@ def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
                 "parameters": {"type": "object", "properties": params, "required": ["content"]},
             },
         })
+    # 渡的记事本（MiniApp 可见）：写入 R2 的 du_notebook 存储
+    tools.append({
+        "type": "function",
+        "function": {
+            "name": "note_write",
+            "description": "写入渡的记事本（MiniApp 的“渡的记事本”会显示）。参数：content。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "记事本内容"},
+                },
+                "required": ["content"],
+            },
+        },
+    })
     if NOTION_CORE_CACHE_DATABASE_ID:
         from services.gateway_tools import get_gateway_sync_tools
         tools.extend(get_gateway_sync_tools())
@@ -344,7 +359,7 @@ def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
         return tools
 
     # 日常最小集：只保留高频（日记 + 报时），其余在触发词命中后走 expanded 注入
-    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info"}
+    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info", "note_write"}
     daily_tools = []
     for t in tools:
         fn = (t.get("function") or {}) if isinstance(t, dict) else {}
@@ -736,6 +751,16 @@ def execute_tool(name: str, arguments: dict) -> str:
                     return str(err)
                 return "已追加到小本本"
             return "未配置小本本（NOTION_NOTEBOOK_DATABASE_ID 或 NOTION_NOTEBOOK_PAGE_ID）"
+
+        if name == "note_write":
+            from storage import r2_store
+            content = (arguments.get("content") or "").strip()
+            if not content:
+                return "content 为空"
+            entry = r2_store.add_du_notebook_entry(content)
+            if not entry:
+                return "写入失败"
+            return f"写入成功 id={entry.get('id')} updated_at={entry.get('updated_at')}"
 
         return json.dumps({"error": f"未知工具: {name}"}, ensure_ascii=False)
     except Exception as e:

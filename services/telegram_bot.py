@@ -414,7 +414,7 @@ def _merge_user_contents(contents: list[Union[str, list]]) -> Union[str, list]:
     return parts
 
 
-def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, list]) -> Optional[str]:
+def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, list], force_last4: bool = False) -> Optional[str]:
     """
     调网关 /v1/chat/completions（非流式），返回 assistant 文本。
     user_content 可为 str（纯文字）或 list（多模态，如 [{"type":"text","text":"..."},{"type":"image_url",...}]），与 RikkaHub 一致。
@@ -446,6 +446,8 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         "Content-Type": "application/json",
         "X-Window-Id": window_id,
     }
+    if force_last4:
+        headers["X-Force-Last4"] = "1"
     try:
         r = requests.post(url, headers=headers, json=body, timeout=120)
         if r.status_code != 200:
@@ -663,7 +665,13 @@ def send_message_segmented(chat_id: int, text: str) -> bool:
     return ok_any
 
 
-def process_message(chat_id: int, user_id: int, text: Optional[str] = None, user_content: Optional[list] = None) -> bool:
+def process_message(
+    chat_id: int,
+    user_id: int,
+    text: Optional[str] = None,
+    user_content: Optional[list] = None,
+    force_last4: bool = False,
+) -> bool:
     """
     处理一条用户消息：调网关得到回复，发回 Telegram。
     text：纯文字时传入；user_content：多模态时传入（如 [{"type":"text",...},{"type":"image_url",...}]）。二者传一即可。
@@ -679,7 +687,7 @@ def process_message(chat_id: int, user_id: int, text: Optional[str] = None, user
     t = threading.Thread(target=_start_typing_indicator, args=(int(chat_id), stop, 4.0), daemon=True)
     t.start()
     try:
-        reply = _call_gateway_chat(window_id=window_id, user_id=user_id, user_content=content)
+        reply = _call_gateway_chat(window_id=window_id, user_id=user_id, user_content=content, force_last4=force_last4)
     finally:
         stop.set()
     if reply is None:

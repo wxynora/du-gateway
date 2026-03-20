@@ -126,7 +126,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
         ],
         "stream": False,
     }
-    headers = {"Content-Type": "application/json", "X-Window-Id": window_id}
+    headers = {"Content-Type": "application/json", "X-Window-Id": window_id, "X-Force-Last4": "1"}
     try:
         r = requests.post(url, headers=headers, json=body, timeout=120)
         if r.status_code != 200:
@@ -253,7 +253,7 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             f"{('备注：' + note + '。') if note else ''}"
             "请像平时 Telegram 聊天那样自然回复；如果有多句，请用换行分段。"
         )
-        ok = process_message(chat_id=uid, user_id=uid, text=reminder_prompt)
+        ok = process_message(chat_id=uid, user_id=uid, text=reminder_prompt, force_last4=True)
         if not ok:
             continue
         r2_store.add_schedule_fired_key(occ_key)

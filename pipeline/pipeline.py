@@ -209,7 +209,7 @@ def _rounds_to_context_text(rounds: list) -> str:
     return "\n".join(lines) if lines else ""
 
 
-def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str) -> dict:
+def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force_last4: bool = False) -> dict:
     """
     新窗口：从 R2 读取全局「最新四轮」注入。
     已有历史但请求里消息很少（如主动发消息只发一条）：注入该窗口自己的最近四轮（如 Telegram 侧 Last4）。
@@ -230,7 +230,8 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str) -> di
             inject_label = "以下为注入的近期对话上下文（来自其他窗口）"
     else:
         # 已有历史且当前请求消息很少（如 proactive 只发 1 条 user）→ 注入本窗口最近 4 轮（Telegram Last4）
-        if len(messages) <= 2:
+        # force_last4=True 时即使 messages 较多也强制注入（用于调度主动消息，避免 Bot 本地 history 让注入失效）
+        if force_last4 or len(messages) <= 2:
             rounds = r2_store.get_conversation_rounds(window_id, last_n=4)
             inject_label = "以下为注入的本窗口近期对话（Last4 轮）"
         else:
