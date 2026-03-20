@@ -758,22 +758,22 @@ def create_schedule_item(
         hhi, mmi = hm
         # 计算“下一次该周几该时刻”的北京时间，保存为 datetime 锚点
         now = datetime.now(BEIJING_TZ)
-        target = now.replace(hour=hhi, minute=mmi, second=0, microsecond=0)
-        delta_days = (wday - target.weekday()) % 7
-        target = target + timedelta(days=delta_days)
-        if target <= now:
-            target = target + timedelta(days=7)
-        dt = target.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        next_dt = now.replace(hour=hhi, minute=mmi, second=0, microsecond=0)
+        delta_days = (wday - next_dt.weekday()) % 7
+        next_dt = next_dt + timedelta(days=delta_days)
+        if next_dt <= now:
+            next_dt = next_dt + timedelta(days=7)
+        dt = next_dt.strftime("%Y-%m-%dT%H:%M:%S+08:00")
     elif rep == "daily":
         hm = _parse_hhmm(dtime)
         if not hm:
             return None
         hhi, mmi = hm
         now = datetime.now(BEIJING_TZ)
-        target = now.replace(hour=hhi, minute=mmi, second=0, microsecond=0)
-        if target <= now:
-            target = target + timedelta(days=1)
-        dt = target.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        next_dt = now.replace(hour=hhi, minute=mmi, second=0, microsecond=0)
+        if next_dt <= now:
+            next_dt = next_dt + timedelta(days=1)
+        dt = next_dt.strftime("%Y-%m-%dT%H:%M:%S+08:00")
     else:
         if not dt:
             return None
