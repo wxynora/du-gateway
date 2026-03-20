@@ -39,6 +39,8 @@ _BUF_LOCK = threading.Lock()
 _INPUT_BUFFERS: dict[int, dict] = {}
 _CTX_LOCK = threading.Lock()
 _CONTEXT_MESSAGES: dict[int, list[dict]] = {}
+_PENDING_LOCK = threading.Lock()
+_PENDING_USER_CONTENTS: dict[int, list[Union[str, list]]] = {}
 
 BTN_OPS_PANEL = "🛠 运维面板"
 _AUTO_WEBAPP_VERSION: Optional[str] = None
@@ -356,6 +358,62 @@ def _trim_context_messages(msgs: list[dict]) -> list[dict]:
     return msgs[-max_msgs:]
 
 
+def _bootstrap_context_from_r2(window_id: str) -> list[dict]:
+    """
+    当 Telegram 进程内上下文为空时，从 R2 的该窗口最近 N 轮回填 user/assistant 上下文，
+    解决“Bot 侧 Last4 偶发为空（重启/波动后）”的问题。
+    """
+    try:
+        from storage import r2_store
+        rounds = r2_store.get_conversation_rounds(window_id, last_n=max(1, int(TELEGRAM_CONTEXT_LAST_TURNS or 4)))
+    except Exception:
+        rounds = []
+    if not rounds:
+        return []
+    out: list[dict] = []
+    for r in rounds:
+        for m in (r.get("messages") or []):
+            role = (m.get("role") or "").lower()
+            if role not in ("user", "assistant"):
+                continue
+            content = m.get("content")
+            if content is None:
+                continue
+            out.append({"role": role, "content": content})
+    return _trim_context_messages(out)
+
+
+def _normalize_user_content_to_parts(content: Union[str, list]) -> list[dict]:
+    """把 user_content 归一化为多模态 parts（text/image_url）。"""
+    if isinstance(content, str):
+        t = content.strip()
+        return [{"type": "text", "text": t}] if t else []
+    if isinstance(content, list):
+        out = []
+        for p in content:
+            if isinstance(p, dict) and p.get("type"):
+                out.append(p)
+        return out
+    return []
+
+
+def _merge_user_contents(contents: list[Union[str, list]]) -> Union[str, list]:
+    """
+    合并多次用户输入：
+    - 全是文本 -> 合并成一个字符串（按换行拼接）
+    - 含多模态 -> 统一转 parts 列表
+    """
+    if not contents:
+        return ""
+    if all(isinstance(x, str) for x in contents):
+        merged = "\n".join(str(x).strip() for x in contents if str(x).strip()).strip()
+        return merged
+    parts = []
+    for c in contents:
+        parts.extend(_normalize_user_content_to_parts(c))
+    return parts
+
+
 def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, list]) -> Optional[str]:
     """
     调网关 /v1/chat/completions（非流式），返回 assistant 文本。
@@ -368,9 +426,17 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
 
     with _CTX_LOCK:
         history = list(_CONTEXT_MESSAGES.get(user_id) or [])
+        if not history:
+            history = _bootstrap_context_from_r2(window_id)
+            if history:
+                _CONTEXT_MESSAGES[user_id] = list(history)
     history = _trim_context_messages(history)
+    # 上游波动时先缓存用户输入；下一次成功时一并带上，避免“我发了但丢轮次/Last4 断片”
+    with _PENDING_LOCK:
+        pending = list(_PENDING_USER_CONTENTS.get(user_id) or [])
+    merged_user_content = _merge_user_contents(pending + [user_content]) if pending else user_content
     # Telegram 端增加一条风格 system（网关还会在最前面插入 du_core_prompt）
-    messages = [{"role": "system", "content": _TELEGRAM_STYLE_SYSTEM}] + history + [{"role": "user", "content": user_content}]
+    messages = [{"role": "system", "content": _TELEGRAM_STYLE_SYSTEM}] + history + [{"role": "user", "content": merged_user_content}]
     body = {
         "model": model,
         "messages": messages,
@@ -413,10 +479,14 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
                     body.get("model") or model,
                     (r.text or "")[:500],
                 )
+                with _PENDING_LOCK:
+                    _PENDING_USER_CONTENTS.setdefault(user_id, []).append(user_content)
                 return None
         data = r.json() if r.content else None
         if not data or "choices" not in data or not data["choices"]:
             logger.warning("网关响应无 choices: %s", (json.dumps(data)[:300] if data else "null"))
+            with _PENDING_LOCK:
+                _PENDING_USER_CONTENTS.setdefault(user_id, []).append(user_content)
             return None
         msg = (data["choices"][0] or {}).get("message") or {}
         content = msg.get("content")
@@ -427,15 +497,21 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         # 更新上下文：只缓存 user/assistant（不存 system），下次请求自动带上
         with _CTX_LOCK:
             cur = list(_CONTEXT_MESSAGES.get(user_id) or [])
-            cur.append({"role": "user", "content": user_content})
+            cur.append({"role": "user", "content": merged_user_content})
             cur.append({"role": "assistant", "content": reply_text})
             _CONTEXT_MESSAGES[user_id] = _trim_context_messages(cur)
+        with _PENDING_LOCK:
+            _PENDING_USER_CONTENTS[user_id] = []
         return reply_text
     except requests.RequestException as e:
         logger.exception("请求网关失败: %s", e)
+        with _PENDING_LOCK:
+            _PENDING_USER_CONTENTS.setdefault(user_id, []).append(user_content)
         return None
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         logger.warning("解析网关响应失败: %s", e)
+        with _PENDING_LOCK:
+            _PENDING_USER_CONTENTS.setdefault(user_id, []).append(user_content)
         return None
 
 
