@@ -270,19 +270,20 @@ function HomeOrbMenu({
   onOpenTree: () => void;
 }) {
   return (
-    <div className="fixed inset-x-0 bottom-10 z-30 flex justify-center pointer-events-none">
+    <div className="fixed inset-x-0 bottom-14 z-30 flex justify-center pointer-events-none">
       <div className="relative pointer-events-auto">
         {open ? (
           <>
+            <div className="absolute left-1/2 top-1/2 h-64 w-64 -translate-x-1/2 -translate-y-[58%] rounded-full bg-white/30 backdrop-blur-2xl border border-white/45 shadow-soft pointer-events-none" />
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[96px] -translate-y-[42px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[94px] -translate-y-[54px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
               onClick={onOpenBackground}
               title="背景设置"
             >
               <LineIcon name="background" />
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-[112px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-[126px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenSchedule}
               title="日历与提醒"
             >
@@ -291,7 +292,7 @@ function HomeOrbMenu({
               </svg>
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[96px] -translate-y-[42px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[94px] -translate-y-[54px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenAlarm}
               title="闹钟"
             >
@@ -301,14 +302,14 @@ function HomeOrbMenu({
               </svg>
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[58px] translate-y-[84px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[78px] translate-y-[28px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenUpstream}
               title="上游切换"
             >
               <LineIcon name="upstream" />
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[58px] translate-y-[84px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[78px] translate-y-[28px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenTree}
               title="赛博种树"
             >
