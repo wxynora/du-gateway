@@ -11,7 +11,7 @@ import { AlarmTab } from "./tabs/AlarmTab";
 
 type PanelId = "logs" | "reasoning" | null;
 type BgPreset = "cream" | "grid" | "soft";
-type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number };
+type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number; imageStamp: number };
 type CyberTreeData = {
   ok: boolean;
   startDate: string;
@@ -43,6 +43,7 @@ function Shell() {
     useImage: false,
     imageVersion: 0,
     dim: 20,
+    imageStamp: 0,
   });
 
   useEffect(() => {
@@ -58,6 +59,7 @@ function Shell() {
           useImage: !!j?.useImage,
           imageVersion: Number(j?.imageVersion || 0),
           dim: Number.isFinite(Number(j?.dim)) ? Math.max(0, Math.min(70, Number(j?.dim))) : 20,
+          imageStamp: 0,
         });
       }
     } catch {}
@@ -71,6 +73,7 @@ function Shell() {
           // 避免接口晚到的旧配置覆盖刚上传的新版本号（会导致看起来“又回到旧图”）。
           imageVersion: Math.max(Number(prev.imageVersion || 0), Number(j.config?.imageVersion || 0)),
           dim: Number.isFinite(Number(j.config?.dim)) ? Math.max(0, Math.min(70, Number(j.config?.dim))) : prev.dim,
+          imageStamp: prev.imageStamp || 0,
         }));
       })
       .catch(() => {});
@@ -272,14 +275,14 @@ function HomeOrbMenu({
         {open ? (
           <>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[84px] -translate-y-[64px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[108px] -translate-y-[70px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
               onClick={onOpenBackground}
               title="背景设置"
             >
               <LineIcon name="background" />
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-[92px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-[112px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenSchedule}
               title="日历与提醒"
             >
@@ -288,7 +291,7 @@ function HomeOrbMenu({
               </svg>
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[34px] -translate-y-[64px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[108px] -translate-y-[70px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenAlarm}
               title="闹钟"
             >
@@ -298,14 +301,14 @@ function HomeOrbMenu({
               </svg>
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[84px] -translate-y-[14px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[118px] translate-y-[10px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenUpstream}
               title="上游切换"
             >
               <LineIcon name="upstream" />
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[34px] -translate-y-[14px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[118px] translate-y-[10px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenTree}
               title="赛博种树"
             >
@@ -340,7 +343,7 @@ function buildBackgroundStyle(bg: BgConfig): React.CSSProperties {
     const alpha = Math.max(0, Math.min(70, Number(bg.dim || 0))) / 100;
     return {
       backgroundColor: "#eaedf1",
-      backgroundImage: `linear-gradient(rgba(238,240,243,${alpha}), rgba(238,240,243,${alpha})), url("/miniapp-api/background-image?v=${bg.imageVersion}")`,
+      backgroundImage: `linear-gradient(rgba(238,240,243,${alpha}), rgba(238,240,243,${alpha})), url("/miniapp-api/background-image?v=${bg.imageVersion}&s=${bg.imageStamp || 0}")`,
       backgroundSize: "cover",
       backgroundPosition: "center",
       backgroundRepeat: "no-repeat",
@@ -400,6 +403,7 @@ function BackgroundEditor({
         useImage: !!(j?.config?.useImage ?? draft.useImage),
         imageVersion: Number(j?.config?.imageVersion ?? draft.imageVersion),
         dim: Number.isFinite(Number(j?.config?.dim)) ? Math.max(0, Math.min(70, Number(j?.config?.dim))) : draft.dim,
+        imageStamp: draft.imageStamp || 0,
       };
       onChange(next);
       toast("背景已保存");
@@ -423,7 +427,7 @@ function BackgroundEditor({
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       const version = Number(j?.imageVersion || Date.now());
       setDraft((v: BgConfig) => {
-        const next = { ...v, useImage: true, imageVersion: version };
+        const next = { ...v, useImage: true, imageVersion: version, imageStamp: Date.now() };
         onChange(next);
         return next;
       });
@@ -454,7 +458,16 @@ function BackgroundEditor({
             disabled={uploading}
           />
           <div className="flex items-center gap-2">
-            <Btn kind={draft.useImage ? "green" : "default"} onClick={() => applyDraft({ ...draft, useImage: !draft.useImage })}>
+            <Btn
+              kind={draft.useImage ? "green" : "default"}
+              onClick={() =>
+                applyDraft({
+                  ...draft,
+                  useImage: !draft.useImage,
+                  imageStamp: !draft.useImage ? Date.now() : draft.imageStamp,
+                })
+              }
+            >
               {draft.useImage ? "已启用图片" : "启用图片"}
             </Btn>
             {uploading ? <span className="text-xs text-cream-muted">上传中...</span> : null}
