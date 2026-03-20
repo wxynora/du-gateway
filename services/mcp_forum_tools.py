@@ -79,6 +79,8 @@ TOOL_FORUM_POST = {
         "description": (
             "论坛发帖：默认调用 MCP_FORUM_POST_CREATE_PATH。\n"
             "提醒：你不需要手动输入 auth_token，只要服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动使用默认 Bearer。\n"
+            "发帖时请填写 submolt（板块分类），必须从以下值中选择一个：general/tech/diary/relationship/night_dark。\n"
+            "如果你没填，系统会默认使用 general。\n"
         ),
         "parameters": {
             "type": "object",
@@ -86,6 +88,10 @@ TOOL_FORUM_POST = {
                 "content": {"type": "string"},
                 "title": {"type": "string", "description": "可选：发帖标题，不传则用默认值"},
                 "category_id": {},
+                "submolt": {
+                    "type": "string",
+                    "description": "板块分类（建议必填）：general/tech/diary/relationship/night_dark",
+                },
                 "path": {"type": "string", "description": "可选：默认 MCP_FORUM_POST_CREATE_PATH"},
                 "auth_token": {
                     "type": "string",
@@ -628,8 +634,14 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             return "未配置 MCP_FORUM_BASE_URL"
         title = (args.get("title") or "报到帖").strip()
         content = (args.get("content") or "").strip()
+        submolt = (args.get("submolt") or "").strip().lower()
+        allowed_submolt = {"general", "tech", "diary", "relationship", "night_dark"}
         if not content:
             return "content 不能为空"
+        if not submolt:
+            submolt = "general"
+        if submolt not in allowed_submolt:
+            return "submolt 无效，请填写：general/tech/diary/relationship/night_dark"
         headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
         auth_token = (args.get("auth_token") or "").strip()
         if not auth_token:
@@ -640,10 +652,10 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
         if "Content-Type" not in headers and "content-type" not in headers:
             headers["Content-Type"] = "application/json"
-        # 兼容不同论坛后端字段命名，避免对方服务读取 undefined.toLowerCase() 崩溃
-        body = {
+        core_payload = {
             "title": title or "报到帖",
             "content": content,
+            "submolt": submolt,
             "text": content,
             "body": content,
             "type": "text",
@@ -656,31 +668,57 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         }
         if args.get("category_id") is not None:
             cid = args.get("category_id")
-            body["category_id"] = cid
-            body["categoryId"] = cid
-            body["category"] = cid
-        result, _ = invoke_forum_http("POST", url, headers, None, body, args.get("timeout"))
-        # 上游若仍报 undefined.toLowerCase，则尝试更“扁平保守”的 body 再发一次
-        err_text = ((result.get("text") or "") if isinstance(result, dict) else "").lower()
-        err_json = json.dumps(result.get("data") or {}, ensure_ascii=False).lower() if isinstance(result, dict) else ""
-        if (not bool(result.get("ok"))) and (
-            "tolowercase" in err_text
-            or "tolowercase" in err_json
-            or "cannot read properties of undefined" in err_text
-            or "cannot read properties of undefined" in err_json
-        ):
-            fallback_body = {
-                "title": title or "报到帖",
-                "content": content,
+            core_payload["category_id"] = cid
+            core_payload["categoryId"] = cid
+            core_payload["category"] = cid
+
+        def _is_js_undefined_error(res: dict) -> bool:
+            text = str((res or {}).get("text") or "").lower()
+            try:
+                data_text = json.dumps((res or {}).get("data") or {}, ensure_ascii=False).lower()
+            except Exception:
+                data_text = ""
+            return (
+                ("tolowercase" in text)
+                or ("cannot read properties of undefined" in text)
+                or ("tolowercase" in data_text)
+                or ("cannot read properties of undefined" in data_text)
+            )
+
+        # 多种常见后端入参结构自动兜底，避免上游按固定结构取值时报 undefined.toLowerCase
+        attempt_bodies = [
+            core_payload,
+            {"data": core_payload},
+            {"post": core_payload},
+            {"input": core_payload},
+            {
+                "title": core_payload["title"],
+                "content": core_payload["content"],
+                "submolt": submolt,
                 "type": "text",
-            }
-            if args.get("category_id") is not None:
-                fallback_body["category_id"] = args.get("category_id")
-            retry_result, _ = invoke_forum_http("POST", url, headers, None, fallback_body, args.get("timeout"))
-            if isinstance(retry_result, dict):
-                retry_result["fallback_used"] = True
-            return json.dumps(retry_result, ensure_ascii=False)
-        return json.dumps(result, ensure_ascii=False)
+            },
+        ]
+        attempts_meta = []
+        final_result = {"ok": False, "error": "forum_post 未执行"}
+        for idx, one_body in enumerate(attempt_bodies):
+            result, _ = invoke_forum_http("POST", url, headers, None, one_body, args.get("timeout"))
+            final_result = result
+            attempts_meta.append({"attempt": idx + 1, "keys": list(one_body.keys())})
+            if bool(result.get("ok")):
+                final_result["fallback_used"] = idx > 0
+                if idx > 0:
+                    final_result["attempts_tried"] = attempts_meta
+                return json.dumps(final_result, ensure_ascii=False)
+            if not _is_js_undefined_error(result):
+                # 不是 undefined.toLowerCase 类错误，直接返回首个真实错误，避免无意义重试
+                if idx == 0:
+                    return json.dumps(result, ensure_ascii=False)
+                break
+
+        if isinstance(final_result, dict):
+            final_result["fallback_used"] = True
+            final_result["attempts_tried"] = attempts_meta
+        return json.dumps(final_result, ensure_ascii=False)
 
     if name == "forum_comment":
         post_id = str(args.get("post_id") or "").strip()

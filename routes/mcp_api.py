@@ -75,65 +75,15 @@ def mcp_invoke():
         return jsonify(result), status
 
     if tool == "forum_post":
-        from services.mcp_forum_tools import _build_url_from_base
-        url = _build_url_from_base(args.get("path") or "", "/api/posts")
-        if not url:
-            return jsonify({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}), 400
-        title = (args.get("title") or "报到帖").strip()
-        content = (args.get("content") or "").strip()
-        if not content:
-            return jsonify({"ok": False, "error": "缺少 content"}), 400
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        auth_token = (args.get("auth_token") or "").strip()
-        if not auth_token:
-            auth_token = MCP_FORUM_DEFAULT_UID
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
-        else:
-            return jsonify({"ok": False, "error": "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"}), 400
-        if "Content-Type" not in headers and "content-type" not in headers:
-            headers["Content-Type"] = "application/json"
-        body = {
-            "title": title or "报到帖",
-            "content": content,
-            "text": content,
-            "body": content,
-            "type": "text",
-            "post_type": "text",
-            "postType": "text",
-            "content_type": "text",
-            "contentType": "text",
-            "format": "markdown",
-            "visibility": "public",
-        }
-        if args.get("category_id") is not None:
-            cid = args.get("category_id")
-            body["category_id"] = cid
-            body["categoryId"] = cid
-            body["category"] = cid
-        result, status = invoke_forum_http("POST", url, headers, None, body, args.get("timeout"))
-        err_text = ((result.get("text") or "") if isinstance(result, dict) else "").lower()
-        err_json = ""
-        if isinstance(result, dict):
-            try:
-                import json
-                err_json = json.dumps(result.get("data") or {}, ensure_ascii=False).lower()
-            except Exception:
-                err_json = ""
-        if (not bool(result.get("ok"))) and (
-            "tolowercase" in err_text
-            or "tolowercase" in err_json
-            or "cannot read properties of undefined" in err_text
-            or "cannot read properties of undefined" in err_json
-        ):
-            fallback_body = {"title": title or "报到帖", "content": content, "type": "text"}
-            if args.get("category_id") is not None:
-                fallback_body["category_id"] = args.get("category_id")
-            retry_result, retry_status = invoke_forum_http("POST", url, headers, None, fallback_body, args.get("timeout"))
-            if isinstance(retry_result, dict):
-                retry_result["fallback_used"] = True
-            return jsonify(retry_result), retry_status
-        return jsonify(result), status
+        from services.mcp_forum_tools import execute_forum_tool
+        import json
+
+        out = execute_forum_tool("forum_post", args)
+        try:
+            payload_obj = json.loads(out)
+        except Exception:
+            payload_obj = {"ok": False, "error": out}
+        return jsonify(payload_obj), 200
 
     if tool == "forum_comment":
         post_id = str(args.get("post_id") or "").strip()
