@@ -857,10 +857,14 @@ function CyberTreeModal({
   const d = data;
   const toast = useToast();
   const [refreshing, setRefreshing] = useState(false);
+  const [moodPop, setMoodPop] = useState(false);
+  const [countPop, setCountPop] = useState(false);
   const growth = Number(d?.growth || 0);
   const moodScore = Number(d?.mood?.score ?? 0);
   const moodFace =
     moodScore >= 85 ? "(*^▽^*)" : moodScore >= 70 ? "(^_−)☆" : moodScore >= 55 ? "(•ᴗ•)" : moodScore >= 40 ? "(´･ω･`)" : "(T_T)";
+  const moodEggs = ["今天也想抱抱你", "检测到甜度上升", "情绪温度暖暖的", "小渡心情在线"];
+  const annEggs = ["又靠近纪念日一点点", "我们在好好长大", "今天也在认真喜欢你", "D 值减少中，开心增加中"];
   const stageLabel =
     growth < 10 ? "种子/发芽" : growth < 30 ? "小树苗" : growth < 60 ? "小树" : growth < 100 ? "大树" : "满级大树";
   const seasonLabel =
@@ -902,6 +906,20 @@ function CyberTreeModal({
       setRefreshing(false);
     }
   }
+
+  function onMoodBubbleClick() {
+    setMoodPop(true);
+    window.setTimeout(() => setMoodPop(false), 220);
+    const msg = moodEggs[Math.floor(Math.random() * moodEggs.length)];
+    toast(msg);
+  }
+
+  function onCountBubbleClick() {
+    setCountPop(true);
+    window.setTimeout(() => setCountPop(false), 220);
+    const msg = annEggs[Math.floor(Math.random() * annEggs.length)];
+    toast(msg);
+  }
   return (
     <Modal title="小渡&小玥の树" onClose={onClose}>
       <div className="space-y-3 text-sm">
@@ -930,9 +948,13 @@ function CyberTreeModal({
               <div className="text-cream-muted">{d?.mood?.reason || "（暂无）"}</div>
               <div className="text-cream-muted">近7天：{Array.isArray(d?.mood?.history) ? d!.mood!.history!.map((x) => `${x.date || "--"}:${x.score ?? "-"}`).join(" | ") : "（暂无）"}</div>
             </div>
-            <div className="h-16 w-16 shrink-0 rounded-full bg-white/52 backdrop-blur-xl border border-white/65 shadow-soft2 flex items-center justify-center text-[11px] text-cream-text">
+            <button
+              className={`h-20 w-20 shrink-0 rounded-full bg-white/52 backdrop-blur-xl border border-white/65 shadow-[0_10px_24px_rgba(26,24,20,0.24)] flex items-center justify-center text-[18px] font-black text-[#111111] transition active:scale-[0.97] ${moodPop ? "scale-110" : ""}`}
+              onClick={onMoodBubbleClick}
+              title="点我有彩蛋"
+            >
               {moodFace}
-            </div>
+            </button>
           </div>
           <div className="pt-1">
             <Btn kind="dark" onClick={refreshMood} disabled={refreshing}>{refreshing ? "刷新中..." : "刷新温度"}</Btn>
@@ -945,12 +967,16 @@ function CyberTreeModal({
               <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
               <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
             </div>
-            <div className="h-16 min-w-16 px-2 shrink-0 rounded-2xl bg-white/52 backdrop-blur-xl border border-white/65 shadow-soft2 flex flex-col items-center justify-center">
-              <div className="text-[10px] text-cream-muted leading-none">DAYS</div>
-              <div className="text-[20px] font-semibold leading-none text-cream-text">
+            <button
+              className={`h-32 min-w-32 px-3 shrink-0 rounded-3xl bg-white/52 backdrop-blur-xl border border-white/65 shadow-[0_12px_28px_rgba(26,24,20,0.26)] flex flex-col items-center justify-center transition active:scale-[0.97] ${countPop ? "translate-y-[-2px]" : ""}`}
+              onClick={onCountBubbleClick}
+              title="点我有彩蛋"
+            >
+              <div className="text-[16px] text-cream-muted leading-none">DAYS</div>
+              <div className="text-[44px] font-bold leading-none text-cream-text">
                 {String(d?.anniversary?.next?.days_left ?? "-")}
               </div>
-            </div>
+            </button>
           </div>
           <div className="pt-1">
             <Btn kind="dark" onClick={editAnniversary} disabled={refreshing}>编辑纪念日</Btn>
