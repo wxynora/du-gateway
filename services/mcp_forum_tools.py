@@ -230,7 +230,7 @@ TOOL_SCHEDULE_DELETE = {
 }
 
 
-def get_forum_tools_for_inject(mode: str = "daily") -> list[dict]:
+def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
     """
     返回给模型的论坛/日程工具列表。
     mode:
