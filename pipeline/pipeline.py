@@ -459,7 +459,7 @@ def _memory_weight(m: dict) -> float:
     """权重 = 基础重要度 + 提及加成 - 时间衰减。"""
     importance = int(m.get("importance") or 0)
     mention_count = int(m.get("mention_count") or 0)
-    from utils.time_aware import parse_iso_to_beijing, _now_beijing
+    from utils.time_aware import parse_iso_to_beijing, _now_beijing, now_beijing_iso
     last_mentioned = m.get("last_mentioned") or m.get("created_at") or ""
     dt = parse_iso_to_beijing(last_mentioned)
     if dt is None:
