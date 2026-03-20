@@ -354,8 +354,12 @@ def step_inject_summary(body: dict, window_id: str) -> dict:
     if summary and summary.strip():
         budget = memory_summary_budget()
         if estimate_tokens(summary) > budget:
-            summary = truncate_to_tokens(summary, budget)
-            logger.debug("summary truncated to %s tokens", budget)
+            # 结构化裁剪：优先压缩更早内容，避免把【更早】标题整体截没
+            try:
+                summary = deepseek_summary._trim_summary_to_budget(summary, budget)
+            except Exception:
+                summary = truncate_to_tokens(summary, budget)
+            logger.debug("summary trimmed to %s tokens", budget)
         inject = f"{head}\n\n【窗口记忆总结】\n{summary.strip()}\n【以上为窗口记忆】"
     else:
         inject = head

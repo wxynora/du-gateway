@@ -175,6 +175,10 @@ else:
     MEMORY_INJECTION_MAX_TOKENS = max(1, int(MEMORY_INJECTION_MAX_CHARS * 0.5))
 # 其中总结占比例（余下给动态层）
 MEMORY_SUMMARY_TOKEN_RATIO = float(os.environ.get("MEMORY_SUMMARY_TOKEN_RATIO", "0.6"))
+# 窗口总结分层压缩强度：mild / standard / aggressive（默认 standard）
+SUMMARY_COMPRESSION_PROFILE = os.environ.get("SUMMARY_COMPRESSION_PROFILE", "standard").strip().lower()
+if SUMMARY_COMPRESSION_PROFILE not in ("mild", "standard", "aggressive"):
+    SUMMARY_COMPRESSION_PROFILE = "standard"
 
 # 请求总字符数上限（0=不限制）。超过时从对话中部删最老的轮次，保证渡的 prompt+前段 system 不被删，避免上游 input 超限截断输出
 # 50K token 约 10 万字符，可设 100000 或 90000 留余量

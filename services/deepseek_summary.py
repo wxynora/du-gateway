@@ -1,7 +1,7 @@
 # 每 4 轮用 DeepSeek 生成/更新窗口总结
 import requests
 
-from config import DEEPSEEK_API_URL, DEEPSEEK_API_KEY
+from config import DEEPSEEK_API_URL, DEEPSEEK_API_KEY, SUMMARY_COMPRESSION_PROFILE
 from utils.log import get_logger
 from utils.tokens import estimate_tokens, memory_summary_budget
 
@@ -381,6 +381,66 @@ def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
     if estimate_tokens(summary) <= budget_tokens:
         return summary
 
+    def _compress_body(body: list[str], max_chars: int, max_fragments: int = 1) -> list[str]:
+        """
+        语义压缩（不是直接删行）：
+        - 每行只保留前 N 个语义片段（按常见句号/分号切分）
+        - 再做单行长度压缩
+        用于“越早越狠”的分层压缩。
+        """
+        if not body:
+            return body
+        import re
+
+        out: list[str] = []
+        for raw in body:
+            line = (raw or "").strip()
+            if not line:
+                continue
+            # 保留时间标记/括号标记，不做重写
+            if line.startswith("（") and line.endswith("）"):
+                out.append(line)
+                continue
+            # 先按句号/分号压缩语义片段
+            frags = [x.strip() for x in re.split(r"[。！？!?；;]+", line) if x.strip()]
+            if frags:
+                line = "；".join(frags[: max(1, max_fragments)])
+            # 再按长度收紧，保留句首核心信息
+            if len(line) > max_chars:
+                line = line[:max_chars].rstrip("，,；;、 ") + "…"
+            out.append(line)
+        return out
+
+    def _profile_limits(profile: str) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
+        """
+        返回 (更早, 稍早, 最近) 的 (max_chars, max_fragments)。
+        standard：默认平衡档。
+        """
+        if profile == "mild":
+            return (30, 1), (40, 2), (60, 2)
+        if profile == "aggressive":
+            return (18, 1), (28, 1), (44, 1)
+        return (24, 1), (34, 1), (52, 2)
+
+    oldest_cfg, earlier_cfg, recent_cfg = _profile_limits(SUMMARY_COMPRESSION_PROFILE)
+
+    # 第一阶段：分层“压缩”而非删除（更早最狠，稍早其次，最近最轻）
+    oldest_body = _compress_body(oldest_body, max_chars=oldest_cfg[0], max_fragments=oldest_cfg[1])
+    summary = _compose()
+    if estimate_tokens(summary) <= budget_tokens:
+        return summary
+
+    earlier_body = _compress_body(earlier_body, max_chars=earlier_cfg[0], max_fragments=earlier_cfg[1])
+    summary = _compose()
+    if estimate_tokens(summary) <= budget_tokens:
+        return summary
+
+    recent_body = _compress_body(recent_body, max_chars=recent_cfg[0], max_fragments=recent_cfg[1])
+    summary = _compose()
+    if estimate_tokens(summary) <= budget_tokens:
+        return summary
+
+    # 第二阶段：压缩仍不够时，才从最早段开始删行兜底
     def _pop_from_front(body: list[str]) -> bool:
         while body:
             line = body[0]

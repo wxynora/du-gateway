@@ -510,17 +510,24 @@ def miniapp_memory_debug():
         if not target and recent:
             target = (recent[0].get("id") or "").strip()
         summary = (r2_store.get_summary(target) or "").strip()
-        events = r2_store.get_dynamic_recall_debug_events(limit=limit) or []
-        if target:
-            events = [e for e in events if str((e or {}).get("window_id") or "").strip() in (target, "__default__")]
+        all_events = r2_store.get_dynamic_recall_debug_events(limit=limit) or []
+        scope = str(request.args.get("scope") or "all").strip().lower()
+        if scope not in ("all", "target"):
+            scope = "all"
+        if scope == "target" and target:
+            events = [e for e in all_events if str((e or {}).get("window_id") or "").strip() in (target, "__default__")]
+        else:
+            events = all_events
         return jsonify(
             {
                 "ok": True,
                 "window_id": target,
+                "scope": scope,
                 "summary": summary,
                 "summary_exists": bool(summary),
                 "recalls": events,
                 "count": len(events),
+                "total_count": len(all_events),
             }
         )
     except Exception as e:

@@ -16,10 +16,12 @@ type RecallEvent = {
 type MemoryDebugResp = {
   ok?: boolean;
   window_id?: string;
+  scope?: "all" | "target" | string;
   summary?: string;
   summary_exists?: boolean;
   recalls?: RecallEvent[];
   count?: number;
+  total_count?: number;
   error?: string;
 };
 
@@ -35,11 +37,12 @@ export function MemoryDebugTab() {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<MemoryDebugResp | null>(null);
+  const [scope, setScope] = useState<"all" | "target">("all");
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const j = await apiJson<MemoryDebugResp>("/miniapp-api/memory-debug?limit=30");
+      const j = await apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=60&scope=${scope}`);
       if (!j?.ok) throw new Error(j?.error || "加载失败");
       setData(j);
     } catch (e: any) {
@@ -47,7 +50,7 @@ export function MemoryDebugTab() {
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, scope]);
 
   useEffect(() => {
     reload();
@@ -79,9 +82,13 @@ export function MemoryDebugTab() {
           <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
             当前窗口总结
           </div>
-          <Btn kind="dark" onClick={reload} disabled={loading}>
+          <div className="flex items-center gap-2">
+            <Btn kind={scope === "all" ? "dark" : "blue"} onClick={() => setScope("all")} disabled={loading}>全部</Btn>
+            <Btn kind={scope === "target" ? "dark" : "blue"} onClick={() => setScope("target")} disabled={loading}>当前窗口</Btn>
+            <Btn kind="dark" onClick={reload} disabled={loading}>
             刷新
-          </Btn>
+            </Btn>
+          </div>
         </div>
         <div className="text-xs text-[#5f5a52]">窗口：{data?.window_id || "(未识别)"}</div>
         <details className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
@@ -96,7 +103,7 @@ export function MemoryDebugTab() {
 
       <div className="rounded-xl3 bg-white border border-white/70 shadow-soft p-3 space-y-2 text-cream-text">
         <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
-          动态记忆最近召回 · {String(data?.count ?? recalls.length)}
+          动态记忆最近召回 · {String(data?.count ?? recalls.length)} / 全部 {String(data?.total_count ?? recalls.length)}
         </div>
         <div className="space-y-2">
           {recalls.map((it, idx) => (
