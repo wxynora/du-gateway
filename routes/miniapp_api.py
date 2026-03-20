@@ -340,6 +340,12 @@ def miniapp_create_schedule_item():
     weekly_weekdays = data.get("weekly_weekdays", None)
     weekly_time = (data.get("weekly_time") or "").strip()
     daily_time = (data.get("daily_time") or "").strip()
+    created_by = (data.get("created_by") or "wife").strip().lower()
+    if created_by not in ("wife", "du"):
+        created_by = "wife"
+    target_role = (data.get("target_role") or "wife").strip().lower()
+    if target_role not in ("wife", "du"):
+        target_role = "wife"
 
     if not title:
         return jsonify({"ok": False, "error": "title 不能为空"}), 400
@@ -384,7 +390,8 @@ def miniapp_create_schedule_item():
                 weekly_weekday=w,
                 weekly_time=weekly_time,
                 daily_time=daily_time,
-                created_by="wife",
+                created_by=created_by,
+                target_role=target_role,
             )
             if item:
                 created_items.append(item)
@@ -419,7 +426,8 @@ def miniapp_create_schedule_item():
         weekly_weekday=weekly_weekday,
         weekly_time=weekly_time,
         daily_time=daily_time,
-        created_by="wife",
+        created_by=created_by,
+        target_role=target_role,
     )
     if not item:
         return jsonify({"ok": False, "error": "创建失败"}), 500

@@ -228,11 +228,15 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         note = str(it.get("note") or "").strip()
         rep = str(it.get("repeat") or "once").strip().lower() or "once"
         created_by = str(it.get("created_by") or "wife").strip().lower() or "wife"
+        target_role = str(it.get("target_role") or "wife").strip().lower() or "wife"
         rep_label = {"once": "一次性", "daily": "每天", "weekly": "每周"}.get(rep, rep)
         # 走和正常对话同一条链路：让“渡”结合上下文自然提醒，而非发送系统模板文案。
-        owner_prefix = "老婆设了一个"
-        if created_by == "du":
-            owner_prefix = "你之前主动帮老婆设了一个"
+        if target_role == "du":
+            owner_prefix = "你给自己定的"
+        elif created_by == "du":
+            owner_prefix = "你给老婆定的"
+        else:
+            owner_prefix = "老婆之前设的"
         reminder_prompt = (
             f"{owner_prefix}「{title}」闹钟，现在到点了。"
             f"类型：{rep_label}；时间：{now_dt.strftime('%Y-%m-%d %H:%M')}。"

@@ -9,6 +9,7 @@ import { ReasoningTab } from "./tabs/ReasoningTab";
 import { ScheduleTab } from "./tabs/ScheduleTab";
 import { AlarmTab } from "./tabs/AlarmTab";
 import { MemoryDebugTab } from "./tabs/MemoryDebugTab";
+import { DuDayTab } from "./tabs/DuDayTab";
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | null;
 type BgPreset = "cream" | "grid" | "soft";
@@ -35,6 +36,7 @@ function Shell() {
   const [showHomeMenu, setShowHomeMenu] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showAlarm, setShowAlarm] = useState(false);
+  const [showDuDay, setShowDuDay] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [tree, setTree] = useState<CyberTreeData | null>(null);
@@ -190,6 +192,11 @@ function Shell() {
           <AlarmTab />
         </Modal>
       ) : null}
+      {showDuDay ? (
+        <Modal title="渡的一天" onClose={() => setShowDuDay(false)}>
+          <DuDayTab />
+        </Modal>
+      ) : null}
       {showTree ? <CyberTreeModal data={tree} onClose={() => setShowTree(false)} /> : null}
       <HomeOrbMenu
         open={showHomeMenu}
@@ -209,6 +216,10 @@ function Shell() {
         onOpenUpstream={() => {
           setShowHomeMenu(false);
           setShowSettings(true);
+        }}
+        onOpenDuDay={() => {
+          setShowHomeMenu(false);
+          setShowDuDay(true);
         }}
         onOpenTree={() => {
           setShowHomeMenu(false);
@@ -276,6 +287,7 @@ function HomeOrbMenu({
   onOpenBackground,
   onOpenAlarm,
   onOpenUpstream,
+  onOpenDuDay,
   onOpenTree,
 }: {
   open: boolean;
@@ -284,6 +296,7 @@ function HomeOrbMenu({
   onOpenBackground: () => void;
   onOpenAlarm: () => void;
   onOpenUpstream: () => void;
+  onOpenDuDay: () => void;
   onOpenTree: () => void;
 }) {
   return (
@@ -316,6 +329,15 @@ function HomeOrbMenu({
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <circle cx="12" cy="13" r="7" />
                   <path d="M12 13V9m0 4 3 2M7 4 4 7m13-3 3 3" />
+                </svg>
+              </button>
+              <button
+                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                onClick={onOpenDuDay}
+                title="渡的一天"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M6 5h12M6 12h12M6 19h8" />
                 </svg>
               </button>
               <button
