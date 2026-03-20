@@ -3,10 +3,12 @@
 import base64
 import json
 import logging
+import os
 import random
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Optional, Union
 from uuid import uuid4
 
@@ -39,6 +41,30 @@ _CTX_LOCK = threading.Lock()
 _CONTEXT_MESSAGES: dict[int, list[dict]] = {}
 
 BTN_OPS_PANEL = "🛠 运维面板"
+_AUTO_WEBAPP_VERSION: Optional[str] = None
+
+
+def _resolve_webapp_version() -> str:
+    """
+    Telegram WebApp 版本号：
+    - 优先用 TELEGRAM_WEBAPP_VERSION（手动配置）
+    - 未配置时自动用 miniapp_static/index.html 的 mtime，静态包更新后会自动变化
+    """
+    manual = (TELEGRAM_WEBAPP_VERSION or "").strip()
+    if manual:
+        return manual
+    global _AUTO_WEBAPP_VERSION
+    if _AUTO_WEBAPP_VERSION is not None:
+        return _AUTO_WEBAPP_VERSION
+    try:
+        p = Path(__file__).resolve().parent.parent / "miniapp_static" / "index.html"
+        if p.exists():
+            _AUTO_WEBAPP_VERSION = str(int(os.path.getmtime(p)))
+            return _AUTO_WEBAPP_VERSION
+    except Exception:
+        pass
+    _AUTO_WEBAPP_VERSION = ""
+    return ""
 
 
 def _miniapp_url() -> str:
@@ -50,7 +76,7 @@ def _miniapp_url() -> str:
     if not base.lower().startswith("https://"):
         return ""
     url = base + "/miniapp"
-    v = (TELEGRAM_WEBAPP_VERSION or "").strip()
+    v = _resolve_webapp_version()
     if v:
         sep = "&" if "?" in url else "?"
         url = f"{url}{sep}v={v}"
