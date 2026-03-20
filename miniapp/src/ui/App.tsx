@@ -941,26 +941,26 @@ function CyberTreeModal({
             </button>
           </div>
         </div>
-        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-2.5 text-xs space-y-1">
-          <div className="flex items-center justify-center">
+        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-2 text-xs space-y-1">
+          <div className="flex items-center justify-start pl-1">
             <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">纪念日倒计时</div>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <div className="space-y-1 pl-1">
+            <div className="space-y-1 pl-1 self-center">
               <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
               <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
+              <div className="pt-0.5">
+                <Btn kind="dark" onClick={editAnniversary} disabled={refreshing}>编辑纪念日</Btn>
+              </div>
             </div>
-            <div className="h-32 w-32 shrink-0 rounded-3xl bg-white/66 backdrop-blur-lg border border-white/75 shadow-[0_3px_10px_rgba(40,34,26,0.14)] p-3 flex flex-col justify-between">
-              <div className="text-[11px] tracking-[0.12em] text-[#8b847c]">COUNTDOWN</div>
+            <div className="h-28 w-30 shrink-0 rounded-3xl bg-white/66 backdrop-blur-lg border border-white/75 shadow-[0_3px_10px_rgba(40,34,26,0.14)] p-3 flex flex-col justify-between">
+              <div className="text-[11px] tracking-[0.02em] text-[#8b847c]">距离纪念日还有</div>
               <div>
                 <div className="text-[28px] leading-none font-semibold text-[#1f1a14] tabular-nums">{String(d?.anniversary?.next?.days_left ?? "-")}</div>
                 <div className="mt-1 text-[11px] text-[#8b847c]">days left</div>
               </div>
               <div className="h-[2px] w-full bg-[#ece6df]" />
             </div>
-          </div>
-          <div className="pt-1 flex justify-center">
-            <Btn kind="dark" onClick={editAnniversary} disabled={refreshing}>编辑纪念日</Btn>
           </div>
         </div>
       </div>
