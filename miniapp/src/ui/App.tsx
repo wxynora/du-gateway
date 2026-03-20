@@ -921,30 +921,32 @@ function CyberTreeModal({
           <div>聊了 <span className="font-semibold">{d?.totalRounds || 0}</span> 轮</div>
           <div className="text-cream-muted">起始日期：{d?.startDate || "-"}</div>
         </div>
-        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-2">
+        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-2.5 text-xs space-y-2">
           <div className="flex items-center justify-between gap-2">
             <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[13px] font-semibold text-white shadow-soft2">
               {moodFace}
             </div>
-            <div className="text-[16px] text-cream-text">
-              今日心情温度<span className="font-bold text-[20px]">{String(d?.mood?.score ?? "-")}</span>/100
+            <div className="text-[15px] text-cream-text whitespace-nowrap">
+              今日心情温度&nbsp;<span className="font-bold text-[20px]">{String(d?.mood?.score ?? "-")}</span>/100
             </div>
             <button
-              className="h-11 w-11 shrink-0 rounded-full bg-white/70 backdrop-blur-lg border border-white/75 shadow-[0_2px_8px_rgba(40,34,26,0.14)] flex items-center justify-center text-[#5a544c] active:scale-[0.98] transition"
+              className="h-9 w-9 shrink-0 rounded-full bg-white/70 backdrop-blur-lg border border-white/75 shadow-[0_2px_8px_rgba(40,34,26,0.14)] flex items-center justify-center text-[#5a544c] active:scale-[0.98] transition"
               onClick={refreshMood}
               disabled={refreshing}
               title="刷新温度"
             >
-              <svg className={`h-5 w-5 ${refreshing ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
+              <svg className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
                 <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" />
               </svg>
             </button>
           </div>
         </div>
-        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-1">
-          <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">纪念日倒计时</div>
-          <div className="flex items-center justify-between gap-3">
-            <div className="space-y-1">
+        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-2.5 text-xs space-y-1">
+          <div className="flex items-center justify-center">
+            <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">纪念日倒计时</div>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="space-y-1 pl-1">
               <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
               <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
             </div>
@@ -957,7 +959,7 @@ function CyberTreeModal({
               <div className="h-[2px] w-full bg-[#ece6df]" />
             </div>
           </div>
-          <div className="pt-1">
+          <div className="pt-1 flex justify-center">
             <Btn kind="dark" onClick={editAnniversary} disabled={refreshing}>编辑纪念日</Btn>
           </div>
         </div>
