@@ -526,8 +526,20 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             datetime_str = (args.get("datetime") or "").strip()
             note = (args.get("note") or "").strip()
             enabled = bool(args.get("enabled", True))
-            daily_time = (args.get("daily_time") or "").strip()
-            weekly_time = (args.get("weekly_time") or "").strip()
+            daily_time = (
+                args.get("daily_time")
+                or args.get("dailyTime")
+                or args.get("time")
+                or ""
+            )
+            weekly_time = (
+                args.get("weekly_time")
+                or args.get("weeklyTime")
+                or args.get("time")
+                or ""
+            )
+            daily_time = str(daily_time).strip()
+            weekly_time = str(weekly_time).strip()
             created_by = (args.get("created_by") or "wife").strip().lower() or "wife"
             if created_by not in ("wife", "du"):
                 created_by = "wife"

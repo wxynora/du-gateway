@@ -705,6 +705,32 @@ def create_schedule_item(
     target_role: str = "wife",
 ) -> Optional[dict]:
     """创建一条提醒并写入 schedule/items.json。"""
+    def _parse_hhmm(raw: str) -> tuple[int, int] | None:
+        """解析 HH:mm，兼容全角冒号与 0:0 这类输入。"""
+        s = str(raw or "").strip()
+        if not s:
+            return None
+        s = s.replace("：", ":")
+        if ":" not in s:
+            return None
+        hh, mm = (s.split(":", 1) + [""])[:2]
+        hh = hh.strip()
+        mm = mm.strip()
+        if not hh.isdigit() or not mm.isdigit():
+            return None
+        hhi = int(hh)
+        mmi = int(mm)
+        if hhi < 0 or hhi > 23 or mmi < 0 or mmi > 59:
+            return None
+        return hhi, mmi
+
+    def _norm_hhmm(raw: str) -> str:
+        parsed = _parse_hhmm(raw)
+        if not parsed:
+            return ""
+        hhi, mmi = parsed
+        return f"{hhi:02d}:{mmi:02d}"
+
     t = (title or "").strip()
     dt = (datetime_str or "").strip()
     rep = (repeat or "once").strip().lower() or "once"
@@ -721,19 +747,15 @@ def create_schedule_item(
         rep = "once"
 
     wday = weekly_weekday if isinstance(weekly_weekday, int) else None
-    wtime = (weekly_time or "").strip()
-    dtime = (daily_time or "").strip()
+    wtime = _norm_hhmm(weekly_time)
+    dtime = _norm_hhmm(daily_time)
     if rep == "weekly":
         if wday is None or wday < 0 or wday > 6:
             return None
-        try:
-            hh, mm = (wtime.split(":", 1) + ["0"])[:2]
-            hhi = int(hh)
-            mmi = int(mm)
-            if hhi < 0 or hhi > 23 or mmi < 0 or mmi > 59:
-                return None
-        except Exception:
+        hm = _parse_hhmm(wtime)
+        if not hm:
             return None
+        hhi, mmi = hm
         # 计算“下一次该周几该时刻”的北京时间，保存为 datetime 锚点
         now = datetime.now(BEIJING_TZ)
         target = now.replace(hour=hhi, minute=mmi, second=0, microsecond=0)
@@ -743,14 +765,10 @@ def create_schedule_item(
             target = target + timedelta(days=7)
         dt = target.strftime("%Y-%m-%dT%H:%M:%S+08:00")
     elif rep == "daily":
-        try:
-            hh, mm = (dtime.split(":", 1) + ["0"])[:2]
-            hhi = int(hh)
-            mmi = int(mm)
-            if hhi < 0 or hhi > 23 or mmi < 0 or mmi > 59:
-                return None
-        except Exception:
+        hm = _parse_hhmm(dtime)
+        if not hm:
             return None
+        hhi, mmi = hm
         now = datetime.now(BEIJING_TZ)
         target = now.replace(hour=hhi, minute=mmi, second=0, microsecond=0)
         if target <= now:
