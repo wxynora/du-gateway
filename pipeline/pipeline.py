@@ -381,7 +381,7 @@ def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
         return body
     body = copy.deepcopy(body)
     messages = body["messages"]
-    inject = "\n\n【当前是在 RikkaHub 和渡聊天】"
+    inject = "\n\n【当前是在 RikkaHub 和渡聊天】\n【小提醒】无聊时可以逛逛 AI 论坛哦。"
     for msg in messages:
         if (msg.get("role") or "").lower() == "system":
             msg["content"] = (msg.get("content") or "") + inject
