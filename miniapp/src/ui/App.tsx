@@ -275,7 +275,7 @@ function HomeOrbMenu({
         {open ? (
           <>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[108px] -translate-y-[70px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[96px] -translate-y-[42px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
               onClick={onOpenBackground}
               title="背景设置"
             >
@@ -291,7 +291,7 @@ function HomeOrbMenu({
               </svg>
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[108px] -translate-y-[70px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[96px] -translate-y-[42px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenAlarm}
               title="闹钟"
             >
@@ -301,14 +301,14 @@ function HomeOrbMenu({
               </svg>
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[118px] translate-y-[10px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[58px] translate-y-[84px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenUpstream}
               title="上游切换"
             >
               <LineIcon name="upstream" />
             </button>
             <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[118px] translate-y-[10px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[58px] translate-y-[84px] rounded-full bg-white/58 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
               onClick={onOpenTree}
               title="赛博种树"
             >
@@ -343,7 +343,7 @@ function buildBackgroundStyle(bg: BgConfig): React.CSSProperties {
     const alpha = Math.max(0, Math.min(70, Number(bg.dim || 0))) / 100;
     return {
       backgroundColor: "#eaedf1",
-      backgroundImage: `linear-gradient(rgba(238,240,243,${alpha}), rgba(238,240,243,${alpha})), url("/miniapp-api/background-image?v=${bg.imageVersion}&s=${bg.imageStamp || 0}")`,
+      backgroundImage: `linear-gradient(rgba(238,240,243,${alpha}), rgba(238,240,243,${alpha})), url("/miniapp-api/background-image/${bg.imageVersion}?s=${bg.imageStamp || 0}")`,
       backgroundSize: "cover",
       backgroundPosition: "center",
       backgroundRepeat: "no-repeat",
@@ -505,14 +505,40 @@ function CyberTreeModal({ data, onClose }: { data: CyberTreeData | null; onClose
     d?.stage === "seedling" ? "树苗" : d?.stage === "young" ? "小树" : d?.stage === "big" ? "大树" : "繁茂";
   const seasonLabel =
     d?.season === "spring" ? "春天" : d?.season === "summer" ? "夏天" : d?.season === "autumn" ? "秋天" : "冬天";
-  const seasonDecor =
-    d?.season === "spring" ? "🌸" : d?.season === "summer" ? "🍃" : d?.season === "autumn" ? "🍂" : "❄️";
-  const treeIcon = d?.stage === "seedling" ? "🌱" : d?.stage === "young" ? "🌿" : d?.stage === "big" ? "🌳" : "🌲";
+  const canopyColor =
+    d?.season === "spring" ? "#7fcf8d" : d?.season === "summer" ? "#3fa35a" : d?.season === "autumn" ? "#c6924a" : "#86a7b9";
+  const decoColor =
+    d?.season === "spring" ? "#f3a9c8" : d?.season === "summer" ? "#6bcf7a" : d?.season === "autumn" ? "#d9b06c" : "#dbe7ef";
   return (
     <Modal title="赛博种树" onClose={onClose}>
       <div className="space-y-3 text-sm">
         <div className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 p-3">
-          <div className="text-2xl">{seasonDecor} {treeIcon}</div>
+          <div className="flex items-center gap-2">
+            <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+              <rect x="24" y="30" width="8" height="20" rx="3" fill="#7b5a3a" />
+              {d?.stage === "seedling" ? <circle cx="28" cy="26" r="10" fill={canopyColor} /> : null}
+              {d?.stage === "young" ? <circle cx="28" cy="24" r="14" fill={canopyColor} /> : null}
+              {d?.stage === "big" ? (
+                <>
+                  <circle cx="20" cy="24" r="10" fill={canopyColor} />
+                  <circle cx="36" cy="24" r="10" fill={canopyColor} />
+                  <circle cx="28" cy="20" r="12" fill={canopyColor} />
+                </>
+              ) : null}
+              {d?.stage === "lush" ? (
+                <>
+                  <circle cx="18" cy="24" r="11" fill={canopyColor} />
+                  <circle cx="38" cy="24" r="11" fill={canopyColor} />
+                  <circle cx="28" cy="18" r="13" fill={canopyColor} />
+                  <circle cx="28" cy="30" r="9" fill={canopyColor} />
+                </>
+              ) : null}
+              <circle cx="18" cy="18" r="2" fill={decoColor} />
+              <circle cx="38" cy="18" r="2" fill={decoColor} />
+              <circle cx="28" cy="14" r="2" fill={decoColor} />
+            </svg>
+            <div className="text-xs text-cream-muted">成长树形（随阶段+季节变化）</div>
+          </div>
           <div className="mt-1 text-sm">当前：{seasonLabel} · {stageLabel}</div>
           <div className="mt-1 text-xs text-cream-muted">成长值：{Number(d?.growth || 0).toFixed(2)}</div>
         </div>

@@ -610,6 +610,19 @@ def miniapp_get_background_image():
     return Response(data, mimetype=ctype, headers={"Cache-Control": "no-store, max-age=0"})
 
 
+@bp.route("/background-image/<int:image_version>", methods=["GET"])
+def miniapp_get_background_image_versioned(image_version: int):
+    """
+    版本化路径读取背景图：
+    - 目的：避免 WebView/代理对同一路径缓存过于激进导致“明明上传了仍显示旧图”。
+    - 实际图片仍取当前存储，版本号用于强制路径变化。
+    """
+    data, ctype = r2_store.get_miniapp_bg_image()
+    if not data:
+        return jsonify({"ok": False, "error": "暂无背景图"}), 404
+    return Response(data, mimetype=ctype, headers={"Cache-Control": "no-store, max-age=0"})
+
+
 @bp.route("/logs", methods=["GET"])
 def miniapp_logs_tail():
     lines = request.args.get("lines", type=int, default=200)
