@@ -273,49 +273,59 @@ function HomeOrbMenu({
     <div className="fixed inset-x-0 bottom-14 z-30 flex justify-center pointer-events-none">
       <div className="relative pointer-events-auto">
         {open ? (
-          <>
-            <div className="absolute left-1/2 top-1/2 h-64 w-64 -translate-x-1/2 -translate-y-[58%] rounded-full bg-white/30 backdrop-blur-2xl border border-white/45 shadow-soft pointer-events-none" />
-            <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[94px] -translate-y-[54px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text"
-              onClick={onOpenBackground}
-              title="背景设置"
-            >
-              <LineIcon name="background" />
-            </button>
-            <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-1/2 -translate-y-[126px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
-              onClick={onOpenSchedule}
-              title="日历与提醒"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M7 3v3M17 3v3M4 9h16M5 6h14a1 1 0 0 1 1 1v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a1 1 0 0 1 1-1z" />
-              </svg>
-            </button>
-            <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[94px] -translate-y-[54px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
-              onClick={onOpenAlarm}
-              title="闹钟"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <circle cx="12" cy="13" r="7" />
-                <path d="M12 13V9m0 4 3 2M7 4 4 7m13-3 3 3" />
-              </svg>
-            </button>
-            <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 translate-x-[78px] translate-y-[28px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
-              onClick={onOpenUpstream}
-              title="上游切换"
-            >
-              <LineIcon name="upstream" />
-            </button>
-            <button
-              className="absolute left-1/2 top-1/2 h-12 w-12 -translate-x-[78px] translate-y-[28px] rounded-full bg-white/60 backdrop-blur-2xl border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
-              onClick={onOpenTree}
-              title="赛博种树"
-            >
-              <LineIcon name="tree" />
-            </button>
-          </>
+          <div className="absolute left-1/2 top-1/2 w-[272px] -translate-x-1/2 -translate-y-[122%] rounded-3xl bg-white/36 backdrop-blur-2xl border border-white/50 shadow-soft p-4">
+            <div className="grid grid-cols-3 gap-3">
+              <button
+                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                onClick={onOpenBackground}
+                title="背景设置"
+              >
+                <LineIcon name="background" />
+              </button>
+              <button
+                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                onClick={onOpenSchedule}
+                title="日历与提醒"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M7 3v3M17 3v3M4 9h16M5 6h14a1 1 0 0 1 1 1v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a1 1 0 0 1 1-1z" />
+                </svg>
+              </button>
+              <button
+                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                onClick={onOpenAlarm}
+                title="闹钟"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <circle cx="12" cy="13" r="7" />
+                  <path d="M12 13V9m0 4 3 2M7 4 4 7m13-3 3 3" />
+                </svg>
+              </button>
+              <button
+                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                onClick={onOpenTree}
+                title="赛博种树"
+              >
+                <LineIcon name="tree" />
+              </button>
+              <button
+                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                onClick={onOpenUpstream}
+                title="上游切换"
+              >
+                <LineIcon name="upstream" />
+              </button>
+              <button
+                className="h-14 rounded-2xl bg-white/45 border border-white/45 shadow-soft2 flex items-center justify-center text-cream-muted active:scale-[0.99] transition"
+                onClick={onToggle}
+                title="收起"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M6 14l6-6 6 6" />
+                </svg>
+              </button>
+            </div>
+          </div>
         ) : null}
         <button
           className="h-16 w-16 rounded-full bg-white/62 backdrop-blur-2xl border border-white/55 shadow-soft flex items-center justify-center text-cream-text"
