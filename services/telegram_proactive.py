@@ -214,11 +214,21 @@ def schedule_tick(target_user_id: int = 0) -> dict:
     fired = r2_store.get_schedule_fired_keys()
     sent = 0
     disabled_once = 0
+    deleted_once_expired = 0
     changed = False
 
     for it in items:
         if not isinstance(it, dict):
             continue
+        # 兜底清理：一次性提醒触发后会先禁用，禁用超过 1 小时自动删除。
+        rep0 = str(it.get("repeat") or "once").strip().lower() or "once"
+        if rep0 == "once" and not bool(it.get("enabled", True)):
+            disabled_at = parse_iso_to_beijing(str(it.get("disabled_at") or "").strip())
+            if disabled_at and (now_dt - disabled_at).total_seconds() >= 3600:
+                it["_deleted"] = True
+                changed = True
+                deleted_once_expired += 1
+                continue
         if not _is_schedule_due_now(it, now_dt):
             continue
         occ_key = _schedule_due_occurrence_key(it, now_dt)
@@ -257,8 +267,16 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             disabled_once += 1
 
     if changed:
-        r2_store.save_schedule_items(items)
-    return {"ok": True, "sent": sent, "disabled_once": disabled_once, "checked": len(items), "now": now_iso}
+        kept = [x for x in items if isinstance(x, dict) and not bool(x.get("_deleted"))]
+        r2_store.save_schedule_items(kept)
+    return {
+        "ok": True,
+        "sent": sent,
+        "disabled_once": disabled_once,
+        "deleted_once_expired": deleted_once_expired,
+        "checked": len(items),
+        "now": now_iso,
+    }
 
 
 def proactive_tick(target_user_id: int = 0) -> dict:
