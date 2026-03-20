@@ -23,6 +23,14 @@ type MemoryDebugResp = {
   error?: string;
 };
 
+function firstLinePreview(text: string, maxChars = 96) {
+  const raw = (text || "").replace(/\r/g, "");
+  const first = raw.split("\n").find((x) => x.trim()) || raw.trim();
+  if (!first) return "（空）";
+  if (first.length <= maxChars) return first;
+  return `${first.slice(0, maxChars)}...`;
+}
+
 export function MemoryDebugTab() {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
@@ -60,9 +68,14 @@ export function MemoryDebugTab() {
           </Btn>
         </div>
         <div className="text-xs text-[#5f5a52]">窗口：{data?.window_id || "(未识别)"}</div>
-        <div className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3 text-sm text-cream-text whitespace-pre-wrap min-h-[64px]">
-          {(data?.summary || "").trim() || "（当前暂无窗口总结）"}
-        </div>
+        <details className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
+          <summary className="cursor-pointer select-none text-xs text-[#5f5a52]">
+            点击展开窗口总结：{firstLinePreview((data?.summary || "").trim() || "（当前暂无窗口总结）")}
+          </summary>
+          <div className="mt-2 text-sm text-cream-text whitespace-pre-wrap min-h-[64px]">
+            {(data?.summary || "").trim() || "（当前暂无窗口总结）"}
+          </div>
+        </details>
       </div>
 
       <div className="rounded-xl3 bg-white border border-white/70 shadow-soft p-3 space-y-2 text-cream-text">
@@ -77,7 +90,15 @@ export function MemoryDebugTab() {
               </div>
               <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">query: {String(it.query || "") || "(空)"}</div>
               <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">keywords: {Array.isArray(it.keywords) ? it.keywords.join(" / ") : ""}</div>
-              <div className="text-sm text-cream-text whitespace-pre-wrap">{Array.isArray(it.recalled_lines) && it.recalled_lines.length ? it.recalled_lines.join("\n") : "（本次无内容）"}</div>
+              <details className="rounded-xl border border-white/70 bg-white/70 p-2">
+                <summary className="cursor-pointer select-none text-xs text-[#5f5a52]">
+                  点击展开召回全文：
+                  {firstLinePreview(Array.isArray(it.recalled_lines) && it.recalled_lines.length ? it.recalled_lines.join("\n") : "（本次无内容）")}
+                </summary>
+                <div className="mt-2 text-sm text-cream-text whitespace-pre-wrap">
+                  {Array.isArray(it.recalled_lines) && it.recalled_lines.length ? it.recalled_lines.join("\n") : "（本次无内容）"}
+                </div>
+              </details>
             </div>
           ))}
           {!recalls.length ? <div className="text-xs text-[#5f5a52]">（暂无召回记录）</div> : null}

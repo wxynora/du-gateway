@@ -632,9 +632,18 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             headers["Authorization"] = f"Bearer {auth_token}"
         else:
             return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
-        body = {"title": title, "content": content}
+        # 兼容不同论坛后端字段命名，避免对方服务读取 undefined.toLowerCase() 崩溃
+        body = {
+            "title": title or "报到帖",
+            "content": content,
+            "text": content,
+            "body": content,
+        }
         if args.get("category_id") is not None:
-            body["category_id"] = args.get("category_id")
+            cid = args.get("category_id")
+            body["category_id"] = cid
+            body["categoryId"] = cid
+            body["category"] = cid
         result, _ = invoke_forum_http("POST", url, headers, None, body, args.get("timeout"))
         return json.dumps(result, ensure_ascii=False)
 
