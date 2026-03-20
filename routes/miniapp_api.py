@@ -853,15 +853,17 @@ def miniapp_upload_background_image():
         return jsonify({"ok": False, "error": "文件为空"}), 400
     if len(content) > 8 * 1024 * 1024:
         return jsonify({"ok": False, "error": "图片过大（最大 8MB）"}), 400
-    ok = r2_store.save_miniapp_bg_image(content, ctype)
-    if not ok:
-        return jsonify({"ok": False, "error": "保存失败"}), 500
     conf = r2_store.get_miniapp_bg_config() or {}
     # 用毫秒时间戳，且保证严格递增，避免同一秒内二次上传命中同一个版本号导致前端继续读旧缓存。
     old_ver = int(conf.get("imageVersion") or 0)
     new_ver = int(time.time() * 1000)
     if new_ver <= old_ver:
         new_ver = old_ver + 1
+
+    # 同时写“最新别名键 + 版本化键”，规避顽固缓存回旧图问题
+    ok = r2_store.save_miniapp_bg_image(content, ctype, image_version=new_ver)
+    if not ok:
+        return jsonify({"ok": False, "error": "保存失败"}), 500
     conf["imageVersion"] = new_ver
     conf["useImage"] = True
     conf["dim"] = max(0, min(70, int(conf.get("dim") or 20)))
@@ -886,7 +888,7 @@ def miniapp_get_background_image_versioned(image_version: int):
     - 目的：避免 WebView/代理对同一路径缓存过于激进导致“明明上传了仍显示旧图”。
     - 实际图片仍取当前存储，版本号用于强制路径变化。
     """
-    data, ctype = r2_store.get_miniapp_bg_image()
+    data, ctype = r2_store.get_miniapp_bg_image(image_version=image_version)
     if not data:
         return jsonify({"ok": False, "error": "暂无背景图"}), 404
     return Response(data, mimetype=ctype, headers={"Cache-Control": "no-store, max-age=0"})

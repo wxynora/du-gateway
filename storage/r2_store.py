@@ -34,6 +34,7 @@ R2_KEY_CORE_PROMPT = "global/core_prompt_316.txt"
 # MiniApp 背景配置与图片（跨设备同步）
 R2_KEY_MINIAPP_BG_CONFIG = "global/miniapp_bg_config.json"
 R2_KEY_MINIAPP_BG_IMAGE = "global/miniapp_bg_image"
+R2_KEY_MINIAPP_BG_IMAGE_PREFIX = "global/miniapp_bg_image_v"
 # MiniApp 首页「渡今天想说的话」（按日缓存）
 R2_KEY_MINIAPP_DAILY_WHISPER = "global/miniapp_daily_whisper.json"
 # MiniApp 每周小报告（按周缓存）
@@ -1193,8 +1194,12 @@ def save_miniapp_bg_config(data: dict) -> bool:
         return False
 
 
-def save_miniapp_bg_image(content: bytes, content_type: str) -> bool:
-    """保存 MiniApp 背景图片。"""
+def _miniapp_bg_image_versioned_key(image_version: int) -> str:
+    return f"{R2_KEY_MINIAPP_BG_IMAGE_PREFIX}_{int(image_version)}"
+
+
+def save_miniapp_bg_image(content: bytes, content_type: str, image_version: int | None = None) -> bool:
+    """保存 MiniApp 背景图片（可选写入版本化键）。"""
     client = _s3_client()
     if not client:
         return False
@@ -1202,30 +1207,51 @@ def save_miniapp_bg_image(content: bytes, content_type: str) -> bool:
         return False
     ctype = (content_type or "application/octet-stream").strip() or "application/octet-stream"
     try:
+        # 兼容旧逻辑：始终写最新别名键
         client.put_object(
             Bucket=R2_BUCKET_NAME,
             Key=R2_KEY_MINIAPP_BG_IMAGE,
             Body=content,
             ContentType=ctype,
         )
+        # 新逻辑：额外写版本化键，彻底规避“路径变了但对象仍是旧缓存”
+        if image_version and int(image_version) > 0:
+            client.put_object(
+                Bucket=R2_BUCKET_NAME,
+                Key=_miniapp_bg_image_versioned_key(int(image_version)),
+                Body=content,
+                ContentType=ctype,
+            )
         return True
     except Exception as e:
         logger.error("save_miniapp_bg_image 失败 error=%s", e, exc_info=True)
         return False
 
 
-def get_miniapp_bg_image() -> tuple[Optional[bytes], str]:
-    """读取 MiniApp 背景图片，返回 (bytes, content_type)。"""
+def get_miniapp_bg_image(image_version: int | None = None) -> tuple[Optional[bytes], str]:
+    """读取 MiniApp 背景图片，返回 (bytes, content_type)。支持按版本读取。"""
     client = _s3_client()
     if not client:
         return None, ""
+    keys: list[str] = []
+    if image_version and int(image_version) > 0:
+        keys.append(_miniapp_bg_image_versioned_key(int(image_version)))
+    # 回退旧键，兼容历史数据
+    keys.append(R2_KEY_MINIAPP_BG_IMAGE)
     try:
-        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_KEY_MINIAPP_BG_IMAGE)
-        body = resp["Body"].read()
-        ctype = ((resp.get("ContentType") or "") + "").strip() or "application/octet-stream"
-        if not body:
-            return None, ""
-        return body, ctype
+        for key in keys:
+            try:
+                resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=key)
+            except ClientError as e:
+                code = (e.response or {}).get("Error", {}).get("Code", "")
+                if code == "NoSuchKey":
+                    continue
+                raise
+            body = resp["Body"].read()
+            ctype = ((resp.get("ContentType") or "") + "").strip() or "application/octet-stream"
+            if body:
+                return body, ctype
+        return None, ""
     except ClientError as e:
         code = (e.response or {}).get("Error", {}).get("Code", "")
         if code == "NoSuchKey":
