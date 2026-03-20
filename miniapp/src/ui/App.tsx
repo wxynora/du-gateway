@@ -858,6 +858,9 @@ function CyberTreeModal({
   const toast = useToast();
   const [refreshing, setRefreshing] = useState(false);
   const growth = Number(d?.growth || 0);
+  const moodScore = Number(d?.mood?.score ?? 0);
+  const moodFace =
+    moodScore >= 85 ? "(*^▽^*)" : moodScore >= 70 ? "(^_−)☆" : moodScore >= 55 ? "(•ᴗ•)" : moodScore >= 40 ? "(´･ω･`)" : "(T_T)";
   const stageLabel =
     growth < 10 ? "种子/发芽" : growth < 30 ? "小树苗" : growth < 60 ? "小树" : growth < 100 ? "大树" : "满级大树";
   const seasonLabel =
@@ -921,17 +924,34 @@ function CyberTreeModal({
         </div>
         <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-1">
           <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">心情温度计</div>
-          <div className="pt-1">今日温度：<span className="font-semibold">{String(d?.mood?.score ?? "-")}</span> / 100</div>
-          <div className="text-cream-muted">{d?.mood?.reason || "（暂无）"}</div>
-          <div className="text-cream-muted">近7天：{Array.isArray(d?.mood?.history) ? d!.mood!.history!.map((x) => `${x.date || "--"}:${x.score ?? "-"}`).join(" | ") : "（暂无）"}</div>
+          <div className="pt-1 flex items-center justify-between gap-3">
+            <div className="min-w-0 space-y-1">
+              <div>今日温度：<span className="font-semibold">{String(d?.mood?.score ?? "-")}</span> / 100</div>
+              <div className="text-cream-muted">{d?.mood?.reason || "（暂无）"}</div>
+              <div className="text-cream-muted">近7天：{Array.isArray(d?.mood?.history) ? d!.mood!.history!.map((x) => `${x.date || "--"}:${x.score ?? "-"}`).join(" | ") : "（暂无）"}</div>
+            </div>
+            <div className="h-16 w-16 shrink-0 rounded-full bg-white/52 backdrop-blur-xl border border-white/65 shadow-soft2 flex items-center justify-center text-[11px] text-cream-text">
+              {moodFace}
+            </div>
+          </div>
           <div className="pt-1">
             <Btn kind="dark" onClick={refreshMood} disabled={refreshing}>{refreshing ? "刷新中..." : "刷新温度"}</Btn>
           </div>
         </div>
         <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 p-3 text-xs space-y-1">
           <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">纪念日倒计时</div>
-          <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
-          <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
+              <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
+            </div>
+            <div className="h-16 min-w-16 px-2 shrink-0 rounded-2xl bg-white/52 backdrop-blur-xl border border-white/65 shadow-soft2 flex flex-col items-center justify-center">
+              <div className="text-[10px] text-cream-muted leading-none">DAYS</div>
+              <div className="text-[20px] font-semibold leading-none text-cream-text">
+                {String(d?.anniversary?.next?.days_left ?? "-")}
+              </div>
+            </div>
+          </div>
           <div className="pt-1">
             <Btn kind="dark" onClick={editAnniversary} disabled={refreshing}>编辑纪念日</Btn>
           </div>
