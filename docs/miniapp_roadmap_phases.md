@@ -17,13 +17,11 @@
 
 - 首页气泡下新增“每周小报告”折叠栏。
 - 树模块新增“心情温度计”。
-- 树模块新增“纪念日倒计时”。
 
 ### 数据键（R2）
 
 - `global/miniapp_weekly_report.json`
 - `global/miniapp_mood_meter.json`
-- `global/miniapp_anniversary.json`
 
 ### API（后端）
 
@@ -31,20 +29,16 @@
 - `POST /miniapp-api/weekly-report/refresh`
 - `GET /miniapp-api/mood-meter`
 - `POST /miniapp-api/mood-meter/refresh`
-- `GET /miniapp-api/anniversary`
-- `PUT /miniapp-api/anniversary`
 
 ### UI（前端）
 
 - 首页：周报折叠栏（摘要 + 详情 + 刷新按钮）
 - 树弹窗：心情温度卡片（含刷新）
-- 树弹窗：纪念日倒计时卡片（含编辑入口）
 
 ### 第一批后续小优化（待做）
 
 - 周报支持“本周/上周”切换。
 - 心情温度支持迷你折线图（当前为文本列表）。
-- 纪念日支持多条配置（当前主要展示单条）。
 
 ---
 

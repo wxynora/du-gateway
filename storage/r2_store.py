@@ -41,8 +41,6 @@ R2_KEY_MINIAPP_DAILY_WHISPER = "global/miniapp_daily_whisper.json"
 R2_KEY_MINIAPP_WEEKLY_REPORT = "global/miniapp_weekly_report.json"
 # MiniApp 心情温度计（今日 + 历史）
 R2_KEY_MINIAPP_MOOD_METER = "global/miniapp_mood_meter.json"
-# MiniApp 纪念日配置
-R2_KEY_MINIAPP_ANNIVERSARY = "global/miniapp_anniversary.json"
 # 渡的记事本：固定注入记忆（按条目维护）
 R2_KEY_DU_NOTEBOOK = "global/du_notebook.json"
 # MiniApp 赛博种树：开始日期等元信息
@@ -1319,31 +1317,6 @@ def save_miniapp_mood_meter(data: dict) -> bool:
             return True
         except Exception as e:
             logger.error("save_miniapp_mood_meter 失败 error=%s", e, exc_info=True)
-            return False
-
-
-def get_miniapp_anniversary() -> Optional[dict]:
-    """读取 MiniApp 纪念日配置。"""
-    client = _s3_client()
-    if not client:
-        return None
-    data = _read_json(client, R2_KEY_MINIAPP_ANNIVERSARY)
-    return data if isinstance(data, dict) else None
-
-
-def save_miniapp_anniversary(data: dict) -> bool:
-    """保存 MiniApp 纪念日配置（JSON）。"""
-    client = _s3_client()
-    if not client:
-        return False
-    if not isinstance(data, dict):
-        return False
-    with _global_write_lock:
-        try:
-            _write_json(client, R2_KEY_MINIAPP_ANNIVERSARY, data)
-            return True
-        except Exception as e:
-            logger.error("save_miniapp_anniversary 失败 error=%s", e, exc_info=True)
             return False
 
 

@@ -30,10 +30,6 @@ type CyberTreeData = {
     date?: string;
     score?: number;
   };
-  anniversary?: {
-    startDate?: string;
-    next?: { name?: string; date?: string; days_left?: number };
-  };
 };
 type WeeklyReport = {
   week_id?: string;
@@ -878,29 +874,6 @@ function CyberTreeModal({
     }
   }
 
-  async function editAnniversary() {
-    const current = String(d?.anniversary?.startDate || "").slice(0, 10);
-    const next = window.prompt("输入纪念日起始日（YYYY-MM-DD）", current);
-    if (next === null) return;
-    const val = (next || "").trim();
-    if (!val) return;
-    setRefreshing(true);
-    try {
-      const j = await apiJson<{ ok?: boolean; error?: string }>("/miniapp-api/anniversary", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startDate: val }),
-      });
-      if (!j?.ok) throw new Error(j?.error || "保存失败");
-      onRefresh();
-      toast("纪念日已更新");
-    } catch (e: any) {
-      toast(`保存失败：${e?.message || e}`);
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
   return (
     <Modal title="小渡&小玥の树" onClose={onClose}>
       <div className="space-y-3 text-sm">
@@ -939,28 +912,6 @@ function CyberTreeModal({
                 <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" />
               </svg>
             </button>
-          </div>
-        </div>
-        <div className="rounded-xl3 bg-white border border-white/70 shadow-soft2 px-2 py-2 text-xs">
-          <div className="flex items-center justify-start pl-1 pt-1">
-            <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">纪念日倒计时</div>
-          </div>
-          <div className="mt-1.5 flex items-center justify-between gap-2 min-h-[104px]">
-            <div className="space-y-1 pl-1 self-center">
-              <div>下一个：<span className="font-semibold">{d?.anniversary?.next?.date || "-"}</span></div>
-              <div>D-{String(d?.anniversary?.next?.days_left ?? "-")} · {d?.anniversary?.next?.name || "纪念日"}</div>
-            </div>
-            <div className="h-28 w-30 shrink-0 self-center rounded-3xl bg-white/66 backdrop-blur-lg border border-white/75 shadow-[0_3px_10px_rgba(40,34,26,0.14)] p-3 flex flex-col justify-between">
-              <div className="text-[11px] tracking-[0.02em] text-[#8b847c]">距离纪念日还有</div>
-              <div>
-                <div className="text-[28px] leading-none font-semibold text-[#1f1a14] tabular-nums">{String(d?.anniversary?.next?.days_left ?? "-")}</div>
-                <div className="mt-1 text-[11px] text-[#8b847c]">days left</div>
-              </div>
-              <div className="h-[2px] w-full bg-[#ece6df]" />
-            </div>
-          </div>
-          <div className="flex items-center justify-start pl-1 pt-1 pb-1">
-            <Btn kind="dark" onClick={editAnniversary} disabled={refreshing}>编辑纪念日</Btn>
           </div>
         </div>
       </div>

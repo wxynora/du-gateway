@@ -106,23 +106,6 @@ def _generate_mood_meter(today: str) -> dict:
     }
 
 
-def _next_anniversary(start_date: str, today: str) -> dict:
-    try:
-        s = datetime.strptime(start_date, "%Y-%m-%d")
-        t = datetime.strptime(today, "%Y-%m-%d")
-        target = datetime(t.year, s.month, s.day)
-        if target.date() < t.date():
-            target = datetime(t.year + 1, s.month, s.day)
-        days_left = (target.date() - t.date()).days
-        return {
-            "name": "纪念日",
-            "date": target.strftime("%Y-%m-%d"),
-            "days_left": days_left,
-        }
-    except Exception:
-        return {"name": "纪念日", "date": "", "days_left": 0}
-
-
 @bp.before_request
 def _miniapp_auth():
     # 双保险：先 IP，再 Telegram initData（更快拒绝无效来源）
@@ -265,9 +248,6 @@ def miniapp_cyber_tree():
     mood = r2_store.get_miniapp_mood_meter() or _generate_mood_meter(today)
     if not (r2_store.get_miniapp_mood_meter() or {}).get("date"):
         r2_store.save_miniapp_mood_meter(mood)
-    ann = r2_store.get_miniapp_anniversary() or {}
-    ann_start = str(ann.get("startDate") or "").strip() or start_date
-    next_ann = _next_anniversary(ann_start, today)
     return jsonify(
         {
             "ok": True,
@@ -281,7 +261,6 @@ def miniapp_cyber_tree():
             "weatherFx": weather_fx,
             "milestones": milestones,
             "mood": mood,
-            "anniversary": {"startDate": ann_start, "next": next_ann},
         }
     )
 
@@ -321,35 +300,6 @@ def miniapp_mood_meter_refresh():
     data = _generate_mood_meter(today)
     ok = r2_store.save_miniapp_mood_meter(data)
     return jsonify({"ok": bool(ok), "mood": data})
-
-
-@bp.route("/anniversary", methods=["GET"])
-def miniapp_anniversary():
-    today = today_beijing()
-    tree_meta = r2_store.get_cyber_tree_meta() or {}
-    default_start = str(tree_meta.get("startDate") or "").strip() or _default_cyber_tree_start_date(today)
-    data = r2_store.get_miniapp_anniversary() or {"startDate": default_start}
-    start_date = str(data.get("startDate") or "").strip() or default_start
-    next_ann = _next_anniversary(start_date, today)
-    return jsonify({"ok": True, "startDate": start_date, "next": next_ann})
-
-
-@bp.route("/anniversary", methods=["PUT"])
-def miniapp_anniversary_put():
-    today = today_beijing()
-    data = request.get_json(silent=True) or {}
-    start_date = str(data.get("startDate") or "").strip()
-    if start_date:
-        try:
-            datetime.strptime(start_date, "%Y-%m-%d")
-        except Exception:
-            return jsonify({"ok": False, "error": "startDate 格式需为 YYYY-MM-DD"}), 400
-    else:
-        start_date = _default_cyber_tree_start_date(today)
-    payload = {"startDate": start_date, "updatedAt": now_beijing_iso()}
-    ok = r2_store.save_miniapp_anniversary(payload)
-    next_ann = _next_anniversary(start_date, today)
-    return jsonify({"ok": bool(ok), "startDate": start_date, "next": next_ann})
 
 
 @bp.route("/cyber-tree/start-date", methods=["PUT"])
