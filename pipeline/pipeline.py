@@ -555,6 +555,26 @@ def _upsert_dynamic_memory_index(mem: dict) -> None:
         logger.warning("动态层索引增量更新失败 memory_id=%s tag=%s error=%s", mid, tag, e)
 
 
+def _append_dynamic_recall_debug_event_safe(event: dict) -> None:
+    try:
+        ok = r2_store.append_dynamic_recall_debug_event(event)
+        if not ok:
+            logger.warning(
+                "动态记忆调试事件未落盘 window_id=%s reason=%s source=%s",
+                str((event or {}).get("window_id") or ""),
+                str((event or {}).get("reason") or ""),
+                str((event or {}).get("source") or ""),
+            )
+    except Exception as e:
+        logger.warning(
+            "动态记忆调试事件写入异常 window_id=%s reason=%s source=%s error=%s",
+            str((event or {}).get("window_id") or ""),
+            str((event or {}).get("reason") or ""),
+            str((event or {}).get("source") or ""),
+            e,
+        )
+
+
 def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     """
     每轮对话开始前：从 R2 读动态层，按关键词匹配 + 权重取 Top N 注入 system 末尾。
@@ -619,22 +639,19 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             keywords = _extract_keywords(re.sub(r"[\s,，。！？、；：]+", "", last_user_text or ""))
         if not keywords:
             # 无关键词且向量未命中：也写一条调试事件，便于 MiniApp 排查“为什么没触发”
-            try:
-                r2_store.append_dynamic_recall_debug_event(
-                    {
-                        "timestamp": now_beijing_iso(),
-                        "window_id": (window_id or "").strip() or "__default__",
-                        "query": (last_user_text or "").strip(),
-                        "keywords": [],
-                        "source": "vector" if not vector_error else "keyword",
-                        "recalled_lines": [],
-                        "recalled_count": 0,
-                        "reason": "no_keywords_and_no_vector_hit",
-                        "vector_error": vector_error,
-                    }
-                )
-            except Exception:
-                pass
+            _append_dynamic_recall_debug_event_safe(
+                {
+                    "timestamp": now_beijing_iso(),
+                    "window_id": (window_id or "").strip() or "__default__",
+                    "query": (last_user_text or "").strip(),
+                    "keywords": [],
+                    "source": "vector" if not vector_error else "keyword",
+                    "recalled_lines": [],
+                    "recalled_count": 0,
+                    "reason": "no_keywords_and_no_vector_hit",
+                    "vector_error": vector_error,
+                }
+            )
             return body
         # 相关性：关键词在 content 中出现次数
         for mem in memories:
@@ -676,37 +693,31 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         lines.append(line)
     if not lines:
         # 召回有候选但受预算/过滤后未注入：记录原因
-        try:
-            r2_store.append_dynamic_recall_debug_event(
-                {
-                    "timestamp": now_beijing_iso(),
-                    "window_id": (window_id or "").strip() or "__default__",
-                    "query": (last_user_text or "").strip(),
-                    "keywords": keywords,
-                    "source": "vector" if recalled else "keyword",
-                    "recalled_lines": [],
-                    "recalled_count": 0,
-                    "reason": "empty_after_budget_or_filter",
-                    "vector_error": vector_error,
-                }
-            )
-        except Exception:
-            pass
-        return body
-    try:
-        r2_store.append_dynamic_recall_debug_event(
+        _append_dynamic_recall_debug_event_safe(
             {
                 "timestamp": now_beijing_iso(),
                 "window_id": (window_id or "").strip() or "__default__",
                 "query": (last_user_text or "").strip(),
                 "keywords": keywords,
                 "source": "vector" if recalled else "keyword",
-                "recalled_lines": lines,
-                "recalled_count": len(lines),
+                "recalled_lines": [],
+                "recalled_count": 0,
+                "reason": "empty_after_budget_or_filter",
+                "vector_error": vector_error,
             }
         )
-    except Exception:
-        pass
+        return body
+    _append_dynamic_recall_debug_event_safe(
+        {
+            "timestamp": now_beijing_iso(),
+            "window_id": (window_id or "").strip() or "__default__",
+            "query": (last_user_text or "").strip(),
+            "keywords": keywords,
+            "source": "vector" if recalled else "keyword",
+            "recalled_lines": lines,
+            "recalled_count": len(lines),
+        }
+    )
     inject = "\n\n【动态记忆】\n" + "\n".join(lines) + "\n【以上为动态记忆】"
     body = copy.deepcopy(body)
     messages = body.get("messages") or []

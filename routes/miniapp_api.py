@@ -93,17 +93,198 @@ def _generate_weekly_report(today: str) -> dict:
     return report
 
 
+def _parse_beijing_dt(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(tz=None).astimezone()
+
+
+def _mood_day_wave(seed_text: str) -> int:
+    seed = sum(ord(ch) for ch in (seed_text or ""))
+    return (seed % 5) - 2
+
+
+def _message_text(content) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or "").strip())
+        return " ".join(x for x in parts if x).strip()
+    return ""
+
+
+def _mood_keyword_adjustment(text: str) -> tuple[int, list[str]]:
+    raw = str(text or "").strip()
+    if not raw:
+        return 0, []
+    negative = {
+        "吵架": -12,
+        "生气": -10,
+        "冷战": -12,
+        "委屈": -8,
+        "难过": -8,
+        "烦": -4,
+        "哭": -7,
+        "崩溃": -10,
+        "失望": -7,
+    }
+    positive = {
+        "爱你": 8,
+        "想你": 5,
+        "抱抱": 6,
+        "晚安": 3,
+        "开心": 6,
+        "高兴": 5,
+        "谢谢": 2,
+        "散步": 3,
+        "吃饭": 2,
+        "陪你": 5,
+    }
+    score = 0
+    hits: list[str] = []
+    for word, delta in negative.items():
+        if word in raw:
+            score += delta
+            hits.append(word)
+    for word, delta in positive.items():
+        if word in raw:
+            score += delta
+            hits.append(word)
+    return max(-22, min(18, score)), hits[:6]
+
+
 def _generate_mood_meter(today: str) -> dict:
     uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
     window_id = f"tg_{uid}" if uid > 0 else ""
     rounds = r2_store.get_conversation_rounds(window_id, last_n=24) if window_id else []
-    n = len(rounds or [])
-    score = max(35, min(95, 55 + n))
+    total_recent = len(rounds or [])
+    today_count = 0
+    latest_dt = None
+    today_text_parts: list[str] = []
+    for r in rounds or []:
+        dt = _parse_beijing_dt(r.get("timestamp"))
+        if not dt:
+            continue
+        if dt.strftime("%Y-%m-%d") == today:
+            today_count += 1
+            for msg in (r.get("messages") or []):
+                if not isinstance(msg, dict):
+                    continue
+                text = _message_text(msg.get("content"))
+                if text:
+                    today_text_parts.append(text)
+        if latest_dt is None or dt > latest_dt:
+            latest_dt = dt
+
+    recency_bonus = 0
+    if latest_dt is not None:
+        age_hours = max(0.0, (datetime.now(latest_dt.tzinfo) - latest_dt).total_seconds() / 3600.0)
+        if age_hours <= 6:
+            recency_bonus = 8
+        elif age_hours <= 24:
+            recency_bonus = 5
+        elif age_hours <= 48:
+            recency_bonus = 2
+        else:
+            recency_bonus = -2
+
+    activity_bonus = min(18, today_count * 4) + min(10, max(0, total_recent - 4))
+    keyword_bonus, keyword_hits = _mood_keyword_adjustment(" ".join(today_text_parts))
+    day_wave = _mood_day_wave(f"{window_id}:{today}")
+    score = max(35, min(95, 48 + activity_bonus + recency_bonus + keyword_bonus + day_wave))
     return {
         "date": today,
         "score": score,
+        "today_rounds": today_count,
+        "recent_rounds": total_recent,
+        "keyword_hits": keyword_hits,
         "updated_at": now_beijing_iso(),
     }
+
+
+def _latest_user_text_from_rounds(rounds: list[dict]) -> str:
+    for r in reversed(rounds or []):
+        for msg in reversed(r.get("messages") or []):
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "").strip().lower() != "user":
+                continue
+            text = _message_text(msg.get("content"))
+            if text:
+                return text
+    return ""
+
+
+def _extract_dynamic_memory_lines(system_text: str) -> list[str]:
+    raw = str(system_text or "")
+    start = raw.find("【动态记忆】")
+    end = raw.find("【以上为动态记忆】")
+    if start < 0 or end <= start:
+        return []
+    chunk = raw[start + len("【动态记忆】"):end].strip()
+    return [line.strip() for line in chunk.splitlines() if line.strip()]
+
+
+def _build_live_dynamic_recall_preview(window_id: str) -> dict | None:
+    wid = str(window_id or "").strip()
+    if not wid:
+        return None
+    rounds = r2_store.get_conversation_rounds(wid, last_n=6) or []
+    query = _latest_user_text_from_rounds(rounds)
+    if not query:
+        return None
+    try:
+        from pipeline.pipeline import step_inject_dynamic_memory
+
+        body = {
+            "messages": [
+                {"role": "system", "content": "debug"},
+                {"role": "user", "content": query},
+            ]
+        }
+        out = step_inject_dynamic_memory(body, wid)
+        messages = out.get("messages") or []
+        system_text = ""
+        for msg in messages:
+            if str(msg.get("role") or "").strip().lower() == "system":
+                system_text = str(msg.get("content") or "")
+                break
+        lines = _extract_dynamic_memory_lines(system_text)
+        refreshed = r2_store.get_dynamic_recall_debug_events(limit=1) or []
+        if refreshed:
+            return refreshed[0]
+        return {
+            "timestamp": now_beijing_iso(),
+            "window_id": wid,
+            "query": query,
+            "keywords": [],
+            "source": "live_preview",
+            "recalled_lines": lines,
+            "recalled_count": len(lines),
+            "reason": "live_preview_fallback",
+        }
+    except Exception as e:
+        return {
+            "timestamp": now_beijing_iso(),
+            "window_id": wid,
+            "query": query,
+            "keywords": [],
+            "source": "live_preview",
+            "recalled_lines": [],
+            "recalled_count": 0,
+            "reason": "live_preview_error",
+            "vector_error": str(e),
+        }
 
 
 @bp.before_request
@@ -287,10 +468,8 @@ def miniapp_weekly_report_refresh():
 @bp.route("/mood-meter", methods=["GET"])
 def miniapp_mood_meter():
     today = today_beijing()
-    data = r2_store.get_miniapp_mood_meter() or {}
-    if str(data.get("date") or "") != today:
-        data = _generate_mood_meter(today)
-        r2_store.save_miniapp_mood_meter(data)
+    data = _generate_mood_meter(today)
+    r2_store.save_miniapp_mood_meter(data)
     return jsonify({"ok": True, "mood": data})
 
 
@@ -608,6 +787,10 @@ def miniapp_memory_debug():
             target = (recent[0].get("id") or "").strip()
         summary = (r2_store.get_summary(target) or "").strip()
         all_events = r2_store.get_dynamic_recall_debug_events(limit=limit) or []
+        if not all_events:
+            live_preview = _build_live_dynamic_recall_preview(target)
+            if live_preview:
+                all_events = [live_preview]
         scope = str(request.args.get("scope") or "all").strip().lower()
         if scope not in ("all", "target"):
             scope = "all"
@@ -1054,4 +1237,3 @@ def miniapp_probe_upstreams():
     if any((x.get("status") == "fail") for x in results):
         status = "degraded" if any((x.get("status") == "ok") for x in results) else "fail"
     return jsonify({"ok": True, "status": status, "results": results, "count": len(results)})
-
