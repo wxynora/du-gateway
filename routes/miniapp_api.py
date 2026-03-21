@@ -1,6 +1,7 @@
 import time
 import os
 import math
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -17,6 +18,7 @@ from utils.time_aware import today_beijing, now_beijing_iso
 
 
 bp = Blueprint("miniapp_api", __name__, url_prefix="/miniapp-api")
+logger = logging.getLogger(__name__)
 
 
 def _notify_schedule_runtime_changed():
@@ -1160,6 +1162,14 @@ def _probe_upstream_item(it: dict) -> dict:
         models_url = _chat_url_to_models_url(url)
         rm = requests.get(models_url, headers=headers, timeout=12)
         out["models_status"] = int(rm.status_code or 0)
+        if rm.status_code >= 400:
+            logger.warning(
+                "上游探活 models 异常 name=%s status=%s url=%s body=%s",
+                name or "(empty)",
+                rm.status_code,
+                models_url,
+                (rm.text or "")[:300],
+            )
         if 200 <= rm.status_code < 300:
             data = rm.json() if rm.content else {}
             lst = data.get("data") if isinstance(data, dict) else None
@@ -1190,6 +1200,15 @@ def _probe_upstream_item(it: dict) -> dict:
         }
         rc = requests.post(url, headers=headers, json=body, timeout=20)
         out["chat_status"] = int(rc.status_code or 0)
+        if rc.status_code >= 400:
+            logger.warning(
+                "上游探活 chat 异常 name=%s status=%s model=%s url=%s body=%s",
+                name or "(empty)",
+                rc.status_code,
+                model_name,
+                url,
+                (rc.text or "")[:300],
+            )
         if 200 <= rc.status_code < 300:
             out["chat_ok"] = True
     except Exception as e:
