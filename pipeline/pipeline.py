@@ -212,6 +212,7 @@ def _rounds_to_context_text(rounds: list) -> str:
 def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force_last4: bool = False) -> dict:
     """
     新窗口：从 R2 读取全局「最新四轮」注入。
+    Telegram 窗口优先注入该窗口自己的最近四轮，不混入全局 latest_4_rounds。
     已有历史但请求里消息很少（如主动发消息只发一条）：注入该窗口自己的最近四轮（如 Telegram 侧 Last4）。
     """
     if not window_id:
@@ -220,22 +221,23 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
     messages = body.get("messages") or []
     inject_label = ""
     rounds = []
+    is_telegram_window = window_id.startswith("tg_")
 
-    if not r2_store.has_window_history(window_id):
-        # 主动发消息只在 Telegram 侧，tg_ 窗口不注入「其他窗口」的全局 4 轮，只带窗口总结 + 本窗口 Last4（无历史则无 Last4）
-        if window_id.startswith("tg_"):
-            rounds = []
-        else:
+    if is_telegram_window:
+        # Telegram 一律优先取自己窗口的最近四轮，不要混入其他窗口的全局缓存。
+        if force_last4 or len(messages) <= 2 or r2_store.has_window_history(window_id):
+            rounds = r2_store.get_conversation_rounds(window_id, last_n=4)
+            inject_label = "以下为注入的本窗口近期对话（Telegram Last4 轮）"
+    else:
+        if not r2_store.has_window_history(window_id):
             rounds = r2_store.get_latest_4_rounds_global()
             inject_label = "以下为注入的近期对话上下文（来自其他窗口）"
-    else:
-        # 已有历史且当前请求消息很少（如 proactive 只发 1 条 user）→ 注入本窗口最近 4 轮（Telegram Last4）
-        # force_last4=True 时即使 messages 较多也强制注入（用于调度主动消息，避免 Bot 本地 history 让注入失效）
-        if force_last4 or len(messages) <= 2:
-            rounds = r2_store.get_conversation_rounds(window_id, last_n=4)
-            inject_label = "以下为注入的本窗口近期对话（Last4 轮）"
         else:
-            rounds = []
+            # 已有历史且当前请求消息很少（如 proactive 只发 1 条 user）→ 注入本窗口最近 4 轮
+            # force_last4=True 时即使 messages 较多也强制注入。
+            if force_last4 or len(messages) <= 2:
+                rounds = r2_store.get_conversation_rounds(window_id, last_n=4)
+                inject_label = "以下为注入的本窗口近期对话（Last4 轮）"
 
     if not rounds:
         return body
@@ -428,20 +430,49 @@ def _extract_keywords(text: str) -> list:
         "embedding",
         "embeddings",
     }
+    def _extract_cjk_ngrams(s: str, max_keep: int = 24) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for seg in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]+", s or ""):
+            seg = seg.strip()
+            if len(seg) < 2:
+                continue
+            if len(seg) <= 24:
+                if seg not in seen:
+                    seen.add(seg)
+                    out.append(seg)
+                continue
+            # 长句不再直接丢弃，而是拆成 2-4 字窗口做宽松匹配。
+            for n in (4, 3, 2):
+                for i in range(0, max(0, len(seg) - n + 1)):
+                    token = seg[i : i + n].strip()
+                    if len(token) < 2 or token in seen:
+                        continue
+                    seen.add(token)
+                    out.append(token)
+                    if len(out) >= max_keep:
+                        return out
+        return out
+
     keywords = []
+    seen = set()
     for p in parts:
         p = p.strip()
         if len(p) < 2:
             continue
         if p in stopwords:
             continue
-        # 太长的整句不当关键词（避免把整段当一个词匹配过宽）
         if len(p) > 24:
+            for token in _extract_cjk_ngrams(p):
+                if token in stopwords or token in seen:
+                    continue
+                seen.add(token)
+                keywords.append(token)
             continue
-        # 至少 2 字符
-        if len(p) >= 2:
+        if p not in seen:
+            seen.add(p)
             keywords.append(p)
-    return list(set(keywords))
+    return keywords
 
 
 def _is_memory_meta_query(text: str) -> bool:
@@ -583,7 +614,9 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         for mem in recalled:
             scored.append((0, _memory_weight(mem), mem))
     else:
-        # 没有可用关键词时，不做关键词匹配（避免 relevance 全为 0 时退化成“按权重乱塞”）
+        if not keywords:
+            # 长句、口语句在上面的分词里可能提不出词，这里再做一次宽松拆片。
+            keywords = _extract_keywords(re.sub(r"[\s,，。！？、；：]+", "", last_user_text or ""))
         if not keywords:
             # 无关键词且向量未命中：也写一条调试事件，便于 MiniApp 排查“为什么没触发”
             try:
