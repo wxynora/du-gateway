@@ -10,7 +10,7 @@ from config import (
     R2_SECRET_ACCESS_KEY,
     R2_BUCKET_NAME,
 )
-from memory_vector.config import EMBEDDING_MODEL
+from memory_vector.config import current_embedding_model
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 
@@ -41,9 +41,10 @@ def _key_for_tag(tag: str) -> str:
 
 
 def load_index(tag: str) -> dict:
+    model_name = current_embedding_model()
     client = _s3_client()
     if not client:
-        return {"schema_version": 1, "tag": tag, "embedding_model": EMBEDDING_MODEL, "updated_at": now_beijing_iso(), "records": []}
+        return {"schema_version": 1, "tag": tag, "embedding_model": model_name, "updated_at": now_beijing_iso(), "records": []}
     key = _key_for_tag(tag)
     try:
         resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=key)
@@ -55,13 +56,14 @@ def load_index(tag: str) -> dict:
             data["records"] = []
         data.setdefault("schema_version", 1)
         data.setdefault("tag", tag)
-        data.setdefault("embedding_model", EMBEDDING_MODEL)
+        data.setdefault("embedding_model", model_name)
         return data
     except Exception:
-        return {"schema_version": 1, "tag": tag, "embedding_model": EMBEDDING_MODEL, "updated_at": now_beijing_iso(), "records": []}
+        return {"schema_version": 1, "tag": tag, "embedding_model": model_name, "updated_at": now_beijing_iso(), "records": []}
 
 
 def save_index(tag: str, index: dict) -> bool:
+    model_name = current_embedding_model()
     client = _s3_client()
     if not client:
         return False
@@ -70,7 +72,7 @@ def save_index(tag: str, index: dict) -> bool:
         index = dict(index or {})
         index["schema_version"] = int(index.get("schema_version") or 1)
         index["tag"] = tag
-        index["embedding_model"] = index.get("embedding_model") or EMBEDDING_MODEL
+        index["embedding_model"] = index.get("embedding_model") or model_name
         index["updated_at"] = now_beijing_iso()
         client.put_object(
             Bucket=R2_BUCKET_NAME,

@@ -1,4 +1,14 @@
 import os
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
+
+_BASE_DIR = Path(__file__).resolve().parent.parent
+if load_dotenv:
+    load_dotenv(_BASE_DIR / ".env", override=False)
 
 
 def _env_float(name: str, default: float) -> float:
@@ -27,8 +37,15 @@ CF_EMBEDDING_POOLING = os.getenv("CF_EMBEDDING_POOLING", "cls").strip().lower() 
 
 # 可选：OpenAI 兼容（未配置 CF 时可回退）
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002").strip()
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "").strip()
 EMBEDDING_MAX_CHARS = _env_int("EMBEDDING_MAX_CHARS", 8000)
+
+
+def current_embedding_model() -> str:
+    """返回当前实际使用的 embedding 模型名。"""
+    if CF_ACCOUNT_ID and CF_API_TOKEN:
+        return CF_EMBEDDING_MODEL
+    return EMBEDDING_MODEL
 
 # 向量召回阈值（默认适中）：过高会导致“几乎不触发”，过低会导致噪声注入
 # 可通过环境变量 VECTOR_MIN_SIM 覆盖。

@@ -474,6 +474,56 @@ def _memory_weight(m: dict) -> float:
     return importance + mention_count - time_decay
 
 
+def _is_dynamic_memory_valid(mem: dict, now=None) -> bool:
+    """动态层记忆是否仍在有效期内。"""
+    from utils.time_aware import parse_iso_to_beijing, _now_beijing
+
+    now = now or _now_beijing()
+    last_mentioned = mem.get("last_mentioned") or mem.get("created_at") or ""
+    dt = parse_iso_to_beijing(last_mentioned)
+    if dt is None:
+        return True
+    return (now - dt).days <= DYNAMIC_MEMORY_DAYS_VALID
+
+
+def _upsert_dynamic_memory_index(mem: dict) -> None:
+    """把单条动态记忆增量写入向量索引。失败只记日志，不影响主流程。"""
+    if not isinstance(mem, dict):
+        return
+    mid = str(mem.get("id") or "").strip()
+    text = str(mem.get("content") or "").strip()
+    tag = str(mem.get("tag") or "").strip() or "ALL"
+    if not mid or not text:
+        return
+    try:
+        from memory_vector.embedding_client import embed_text, content_hash, normalize_text
+        from memory_vector.vector_index_store import upsert_records
+
+        normalized = normalize_text(text)
+        emb = embed_text(normalized)
+        if not emb:
+            logger.warning("动态层索引跳过：embedding 为空 memory_id=%s tag=%s", mid, tag)
+            return
+        rec = {
+            "memory_id": mid,
+            "text": normalized,
+            "embedding": emb,
+            "content_hash": content_hash(normalized),
+            "metadata": {
+                "importance": int(mem.get("importance") or 0),
+                "mention_count": int(mem.get("mention_count") or 0),
+                "tag": tag,
+                "created_at": mem.get("created_at") or "",
+                "last_mentioned": mem.get("last_mentioned") or "",
+            },
+        }
+        ok = upsert_records(tag, [rec])
+        if not ok:
+            logger.warning("动态层索引写入失败 memory_id=%s tag=%s", mid, tag)
+    except Exception as e:
+        logger.warning("动态层索引增量更新失败 memory_id=%s tag=%s error=%s", mid, tag, e)
+
+
 def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     """
     每轮对话开始前：从 R2 读动态层，按关键词匹配 + 权重取 Top N 注入 system 末尾。
@@ -503,17 +553,9 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         return body
     keywords = _extract_keywords(last_user_text)
     # 只保留有效期内（7 天）的记忆（按北京时间）
-    from utils.time_aware import parse_iso_to_beijing, _now_beijing
+    from utils.time_aware import _now_beijing
     now = _now_beijing()
-    valid = []
-    for mem in memories:
-        last_mentioned = mem.get("last_mentioned") or mem.get("created_at") or ""
-        dt = parse_iso_to_beijing(last_mentioned)
-        if dt is None:
-            valid.append(mem)
-        elif (now - dt).days <= DYNAMIC_MEMORY_DAYS_VALID:
-            valid.append(mem)
-    memories = valid
+    memories = [mem for mem in memories if _is_dynamic_memory_valid(mem, now)]
     if not memories:
         return body
 
@@ -525,6 +567,12 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
 
         recalled = dynamic_vector_retrieve(last_user_text)
+        if recalled:
+            valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
+            recalled = [
+                mem for mem in recalled
+                if str(mem.get("id") or "") in valid_ids and _is_dynamic_memory_valid(mem, now)
+            ]
     except Exception as e:
         vector_error = str(e)
         logger.debug("dynamic_vector_retrieve 降级为关键词匹配 error=%s", e)
@@ -989,12 +1037,13 @@ def _apply_one_decision(
             "content": content,
             "importance": importance,
             "tag": tag,
-            "mention_count": mention_init if mention_init is not None else 0,
+            "mention_count": mention_init if mention_init is not None else 1,
             "created_at": now_iso,
             "last_mentioned": now_iso,
         }
         current_memories.append(new_mem)
         r2_store.save_dynamic_memory_list(current_memories)
+        _upsert_dynamic_memory_index(new_mem)
         r2_store.promote_to_core_cache(
             window_id, round_index, _round_messages_to_raw_text(round_messages),
             current_memories, touched_mem_id=new_mem["id"],
@@ -1024,6 +1073,7 @@ def _apply_one_decision(
             logger.warning("动态层 merge 未找到 fused_with_id=%s，本轮回退为 skip window_id=%s", fused_with_id, window_id)
             return None
         r2_store.save_dynamic_memory_list(current_memories)
+        _upsert_dynamic_memory_index(merged_mem)
         r2_store.promote_to_core_cache(
             window_id, round_index, _round_messages_to_raw_text(round_messages),
             current_memories, touched_mem_id=fused_with_id,
