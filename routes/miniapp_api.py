@@ -1175,10 +1175,11 @@ def _probe_upstream_item(it: dict) -> dict:
     except Exception as e:
         out["error"] = str(e)
 
-    if not model_name and GATEWAY_MODELS:
-        model_name = str(GATEWAY_MODELS[0] or "").strip()
     if not model_name:
-        model_name = "gpt-4"
+        out["note"] = "models 未返回可用模型，已跳过 chat 探活"
+        if out["models_ok"]:
+            out["status"] = "degraded"
+        return out
 
     try:
         body = {
@@ -1198,9 +1199,16 @@ def _probe_upstream_item(it: dict) -> dict:
         elif not out["error"]:
             out["error"] = msg
 
-    if out["models_ok"] and out["chat_ok"]:
+    # 探活以“chat 实际可用”优先：
+    # - chat_ok=True：即便 /v1/models 不标准或暂时失败，也至少算可用（或部分异常）
+    # - models_ok=True 但 chat_ok=False：只能算部分异常，不能算真正可用
+    if out["chat_ok"] and out["models_ok"]:
         out["status"] = "ok"
-    elif out["models_ok"] or out["chat_ok"]:
+    elif out["chat_ok"]:
+        out["status"] = "degraded"
+        if not out["note"]:
+            out["note"] = "chat 可用，但 models 探测失败或上游未标准实现 /v1/models"
+    elif out["models_ok"]:
         out["status"] = "degraded"
     return out
 
