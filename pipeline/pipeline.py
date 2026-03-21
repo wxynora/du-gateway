@@ -604,7 +604,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         return body
     keywords = _extract_keywords(last_user_text)
     # 只保留有效期内（7 天）的记忆（按北京时间）
-    from utils.time_aware import _now_beijing
+    from utils.time_aware import _now_beijing, now_beijing_iso
     now = _now_beijing()
     memories = [mem for mem in memories if _is_dynamic_memory_valid(mem, now)]
     if not memories:
