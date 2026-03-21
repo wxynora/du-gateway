@@ -39,6 +39,8 @@ _BUF_LOCK = threading.Lock()
 _INPUT_BUFFERS: dict[int, dict] = {}
 _CTX_LOCK = threading.Lock()
 _CONTEXT_MESSAGES: dict[int, list[dict]] = {}
+_PENDING_LOCK = threading.Lock()
+_PENDING_USER_CONTENTS: dict[int, list[Union[str, list]]] = {}
 
 BTN_OPS_PANEL = "🛠 运维面板"
 _AUTO_WEBAPP_VERSION: Optional[str] = None
@@ -469,12 +471,18 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
             if history:
                 _CONTEXT_MESSAGES[user_id] = list(history)
     history = _trim_context_messages(history)
+    # 上游波动时先缓存用户输入；下一次成功时一并带上，避免“我发了但丢轮次/Last4 断片”
+    with _PENDING_LOCK:
+        pending = list(_PENDING_USER_CONTENTS.get(user_id) or [])
+    merged_user_content = _merge_user_contents(pending + [user_content]) if pending else user_content
     # Telegram 端增加一条风格 system（网关还会在最前面插入 du_core_prompt）
-    messages = [{"role": "system", "content": _TELEGRAM_STYLE_SYSTEM}] + history + [{"role": "user", "content": user_content}]
+    messages = [{"role": "system", "content": _TELEGRAM_STYLE_SYSTEM}] + history + [{"role": "user", "content": merged_user_content}]
     messages_chars = sum(_message_content_len(m.get("content")) for m in messages if isinstance(m, dict))
     user_chars = _message_content_len(user_content)
+    merged_user_chars = _message_content_len(merged_user_content)
     history_turns = len(history) // 2
     user_preview = _content_preview(user_content)
+    merged_preview = _content_preview(merged_user_content)
     body = {
         "model": model,
         "messages": messages,
@@ -495,9 +503,9 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
             force_last4,
             len(history),
             history_turns,
-            user_chars,
+            merged_user_chars,
             messages_chars,
-            user_preview,
+            merged_preview,
         )
         r = requests.post(url, headers=headers, json=body, timeout=120)
         if r.status_code != 200:
@@ -529,22 +537,26 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
                     "网关返回非 200 status=%s model=%s user_chars=%s messages_chars=%s preview=%s body=%s",
                     r.status_code,
                     body.get("model") or model,
-                    user_chars,
+                    merged_user_chars,
                     messages_chars,
-                    user_preview,
+                    merged_preview,
                     (r.text or "")[:500],
                 )
+                with _PENDING_LOCK:
+                    _PENDING_USER_CONTENTS.setdefault(user_id, []).append(user_content)
                 return None
         data = r.json() if r.content else None
         if not data or "choices" not in data or not data["choices"]:
             logger.warning(
                 "网关响应无 choices model=%s user_chars=%s messages_chars=%s preview=%s resp=%s",
                 body.get("model") or model,
-                user_chars,
+                merged_user_chars,
                 messages_chars,
-                user_preview,
+                merged_preview,
                 (json.dumps(data)[:300] if data else "null"),
             )
+            with _PENDING_LOCK:
+                _PENDING_USER_CONTENTS.setdefault(user_id, []).append(user_content)
             return None
         msg = (data["choices"][0] or {}).get("message") or {}
         content = msg.get("content")
@@ -555,15 +567,21 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         # 更新上下文：只缓存 user/assistant（不存 system），下次请求自动带上
         with _CTX_LOCK:
             cur = list(_CONTEXT_MESSAGES.get(user_id) or [])
-            cur.append({"role": "user", "content": user_content})
+            cur.append({"role": "user", "content": merged_user_content})
             cur.append({"role": "assistant", "content": reply_text})
             _CONTEXT_MESSAGES[user_id] = _trim_context_messages(cur)
+        with _PENDING_LOCK:
+            _PENDING_USER_CONTENTS[user_id] = []
         return reply_text
     except requests.RequestException as e:
         logger.exception("请求网关失败: %s", e)
+        with _PENDING_LOCK:
+            _PENDING_USER_CONTENTS.setdefault(user_id, []).append(user_content)
         return None
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         logger.warning("解析网关响应失败: %s", e)
+        with _PENDING_LOCK:
+            _PENDING_USER_CONTENTS.setdefault(user_id, []).append(user_content)
         return None
 
 
