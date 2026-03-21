@@ -22,6 +22,14 @@ type MemoryDebugResp = {
   recalls?: RecallEvent[];
   count?: number;
   total_count?: number;
+  dynamic_stats?: {
+    memory_count?: number;
+    memory_tags?: string[];
+    index_tags?: string[];
+    vector_min_sim?: number;
+    vector_topk?: number;
+    vector_topn?: number;
+  };
   error?: string;
 };
 
@@ -102,6 +110,19 @@ export function MemoryDebugTab() {
       </div>
 
       <div className="rounded-xl3 bg-white border border-white/70 shadow-soft p-3 space-y-2 text-cream-text">
+        <div className="text-xs text-[#5f5a52]">
+          动态层状态：
+          记忆 {String(data?.dynamic_stats?.memory_count ?? 0)} 条；
+          索引标签 {(data?.dynamic_stats?.index_tags || []).length} 个；
+          阈值 {String(data?.dynamic_stats?.vector_min_sim ?? "-")}
+          （topK {String(data?.dynamic_stats?.vector_topk ?? "-")} / topN {String(data?.dynamic_stats?.vector_topn ?? "-")}）
+        </div>
+        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+          memory_tags: {Array.isArray(data?.dynamic_stats?.memory_tags) ? data!.dynamic_stats!.memory_tags!.join(" / ") : ""}
+        </div>
+        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+          index_tags: {Array.isArray(data?.dynamic_stats?.index_tags) ? data!.dynamic_stats!.index_tags!.join(" / ") : ""}
+        </div>
         <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
           动态记忆最近召回 · {String(data?.count ?? recalls.length)} / 全部 {String(data?.total_count ?? recalls.length)}
         </div>
@@ -113,6 +134,8 @@ export function MemoryDebugTab() {
               </div>
               <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">query: {String(it.query || "") || "(空)"}</div>
               <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">keywords: {Array.isArray(it.keywords) ? it.keywords.join(" / ") : ""}</div>
+              <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">reason: {String((it as any).reason || "")}</div>
+              <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">vector_error: {String((it as any).vector_error || "")}</div>
               <details className="rounded-xl border border-white/70 bg-white/70 p-2">
                 <summary className="cursor-pointer select-none text-xs text-[#5f5a52]">
                   点击展开召回全文：

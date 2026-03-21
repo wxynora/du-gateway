@@ -18,6 +18,46 @@ from utils.time_aware import iso_to_display_time, now_beijing_iso, parse_iso_to_
 logger = get_logger(__name__)
 
 
+def _normalize_note_write_content(raw: str) -> str:
+    """
+    规整 note_write 内容，避免把「渡的记事本」整段历史再次写成新条目。
+    规则：
+    1) 去掉标题/包裹标记（如【渡的记事本】）。
+    2) 按行拆分后优先取“新增且非重复”的短句。
+    3) 若无法判定，回退原文本（不做激进改写）。
+    """
+    text = str(raw or "").replace("\r", "").strip()
+    if not text:
+        return ""
+    lines = [x.strip() for x in text.split("\n") if x.strip()]
+    if not lines:
+        return text
+    # 去掉明显标题行
+    cleaned: list[str] = []
+    for ln in lines:
+        if ln.startswith("【") and ln.endswith("】"):
+            continue
+        if ln in ("渡的记事本", "以上为固定记事本"):
+            continue
+        if ln.startswith("- "):
+            ln = ln[2:].strip()
+        if ln:
+            cleaned.append(ln)
+    if not cleaned:
+        return text
+    try:
+        from storage import r2_store
+        existing = {str((x or {}).get("content") or "").strip() for x in (r2_store.get_du_notebook_entries() or [])}
+    except Exception:
+        existing = set()
+    # 倒序挑第一条“不是历史重复内容”的行（通常新内容在末尾）
+    for ln in reversed(cleaned):
+        if ln and ln not in existing:
+            return ln
+    # 都是重复内容时，取最后一行，至少不把整段旧内容再塞一遍
+    return cleaned[-1]
+
+
 def _extract_first_nonempty_prop(page: dict, name_to_id: dict, candidates: list[str], prop_type: str) -> str:
     """按候选列名顺序取第一个非空属性值。"""
     for name in candidates:
@@ -769,7 +809,7 @@ def execute_tool(name: str, arguments: dict) -> str:
 
         if name == "note_write":
             from storage import r2_store
-            content = (arguments.get("content") or "").strip()
+            content = _normalize_note_write_content(arguments.get("content") or "")
             if not content:
                 return "content 为空"
             entry = r2_store.add_du_notebook_entry(content)

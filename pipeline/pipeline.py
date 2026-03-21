@@ -520,11 +520,13 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     # 优先：向量召回 topK → 用现有 weight 重排 topN
     # 若未配置 OPENAI_API_KEY 或向量检索失败，则降级为关键词匹配
     recalled: list[dict] = []
+    vector_error = ""
     try:
         from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
 
         recalled = dynamic_vector_retrieve(last_user_text)
     except Exception as e:
+        vector_error = str(e)
         logger.debug("dynamic_vector_retrieve 降级为关键词匹配 error=%s", e)
 
     scored = []
@@ -535,6 +537,23 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     else:
         # 没有可用关键词时，不做关键词匹配（避免 relevance 全为 0 时退化成“按权重乱塞”）
         if not keywords:
+            # 无关键词且向量未命中：也写一条调试事件，便于 MiniApp 排查“为什么没触发”
+            try:
+                r2_store.append_dynamic_recall_debug_event(
+                    {
+                        "timestamp": now_beijing_iso(),
+                        "window_id": (window_id or "").strip() or "__default__",
+                        "query": (last_user_text or "").strip(),
+                        "keywords": [],
+                        "source": "vector" if not vector_error else "keyword",
+                        "recalled_lines": [],
+                        "recalled_count": 0,
+                        "reason": "no_keywords_and_no_vector_hit",
+                        "vector_error": vector_error,
+                    }
+                )
+            except Exception:
+                pass
             return body
         # 相关性：关键词在 content 中出现次数
         for mem in memories:
@@ -575,6 +594,23 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             break
         lines.append(line)
     if not lines:
+        # 召回有候选但受预算/过滤后未注入：记录原因
+        try:
+            r2_store.append_dynamic_recall_debug_event(
+                {
+                    "timestamp": now_beijing_iso(),
+                    "window_id": (window_id or "").strip() or "__default__",
+                    "query": (last_user_text or "").strip(),
+                    "keywords": keywords,
+                    "source": "vector" if recalled else "keyword",
+                    "recalled_lines": [],
+                    "recalled_count": 0,
+                    "reason": "empty_after_budget_or_filter",
+                    "vector_error": vector_error,
+                }
+            )
+        except Exception:
+            pass
         return body
     try:
         r2_store.append_dynamic_recall_debug_event(

@@ -615,6 +615,22 @@ def miniapp_memory_debug():
             events = [e for e in all_events if str((e or {}).get("window_id") or "").strip() in (target, "__default__")]
         else:
             events = all_events
+        dynamic_stats = {}
+        try:
+            from memory_vector.config import VECTOR_MIN_SIM, VECTOR_TOPK, VECTOR_TOPN
+            from memory_vector.vector_index_store import list_existing_tags
+            mems = r2_store.get_dynamic_memory_list() or []
+            mem_tags = sorted({str((m or {}).get("tag") or "").strip() for m in mems if str((m or {}).get("tag") or "").strip()})
+            dynamic_stats = {
+                "memory_count": len(mems),
+                "memory_tags": mem_tags[:30],
+                "index_tags": (list_existing_tags() or [])[:50],
+                "vector_min_sim": float(VECTOR_MIN_SIM),
+                "vector_topk": int(VECTOR_TOPK),
+                "vector_topn": int(VECTOR_TOPN),
+            }
+        except Exception:
+            dynamic_stats = {}
         return jsonify(
             {
                 "ok": True,
@@ -625,6 +641,7 @@ def miniapp_memory_debug():
                 "recalls": events,
                 "count": len(events),
                 "total_count": len(all_events),
+                "dynamic_stats": dynamic_stats,
             }
         )
     except Exception as e:
