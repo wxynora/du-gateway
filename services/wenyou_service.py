@@ -915,14 +915,14 @@ def _append_go_round_to_tg_window(user_id: int, user_blob: str, gm_text: str) ->
     except Exception:
         round_messages = [umsg, amsg]
 
-    existing = r2_store.get_conversation_rounds(window_id, last_n=1000)
-    round_index = len(existing) + 1
+    round_index = r2_store.get_next_round_index(window_id)
     ts = now_beijing_iso()
     r2_store.append_conversation_round(window_id, round_index, round_messages, timestamp=ts)
-    all_rounds = existing + [{"index": round_index, "timestamp": ts, "messages": round_messages}]
-    r2_store.update_latest_4_rounds_global(all_rounds[-4:])
+    tail4 = r2_store.get_conversation_rounds(window_id, last_n=4)
+    r2_store.update_latest_4_rounds_global(tail4)
 
     if round_index % SUMMARY_EVERY_N_ROUNDS == 0:
+        logger.info("文游实时层总结已调度 window_id=%s round_index=%s", window_id, round_index)
         recent = r2_store.get_conversation_rounds(window_id, last_n=4)
         if recent:
             current = r2_store.get_summary(window_id) or ""

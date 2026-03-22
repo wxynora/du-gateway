@@ -1204,14 +1204,15 @@ def step_archive_and_maybe_summary(
         save_entry(content)
     from utils.time_aware import now_beijing_iso
 
-    existing = r2_store.get_conversation_rounds(window_id, last_n=1000)
-    round_index = len(existing) + 1
+    round_index = r2_store.get_next_round_index(window_id)
     ts = now_beijing_iso()
     r2_store.append_conversation_round(window_id, round_index, round_messages, timestamp=ts)
-    all_rounds = existing + [{"index": round_index, "timestamp": ts, "messages": round_messages}]
-    r2_store.update_latest_4_rounds_global(all_rounds[-4:])
+    # 全局 Last4 只需最近四轮：append 后读即可，不必拉 last_n=1000 再拼（省内存、也避免误用 len 当总轮数）
+    tail4 = r2_store.get_conversation_rounds(window_id, last_n=4)
+    r2_store.update_latest_4_rounds_global(tail4)
     # 实时层：每 4 轮 → DS 总结成「渡的回忆」（第一人称、详细版）
     if round_index % SUMMARY_EVERY_N_ROUNDS == 0:
+        logger.info("实时层总结已调度 window_id=%s round_index=%s", window_id, round_index)
         recent = r2_store.get_conversation_rounds(window_id, last_n=4)
         if recent:
             current = r2_store.get_summary(window_id) or ""

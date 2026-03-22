@@ -281,8 +281,39 @@ def notebook_delete_entry_by_timestamp(timestamp: str) -> bool:
             return False
 
 
+def get_next_round_index(window_id: str) -> int:
+    """
+    根据主存全文计算下一轮应使用的 round index（从 1 起）。
+    不可用「最近 1000 轮的条数 + 1」：超过 1000 轮时该长度恒为 1000，会导致 index 卡在 1001，
+    round_index % 4 永远不为 0，实时层总结不再触发。
+    """
+    client = _s3_client()
+    if not client:
+        return 1
+    if not (window_id or "").strip():
+        return 1
+    prefix = _prefix(window_id)
+    key = _get_key(prefix, "conversation.json")
+    data = _read_json(client, key)
+    if not data or not data.get("rounds"):
+        return 1
+    rounds = data.get("rounds") or []
+    if not isinstance(rounds, list) or not rounds:
+        return 1
+    max_idx = 0
+    for r in rounds:
+        if not isinstance(r, dict):
+            continue
+        idx = r.get("index")
+        if isinstance(idx, int) and idx > max_idx:
+            max_idx = idx
+    if max_idx == 0:
+        return len(rounds) + 1
+    return max_idx + 1
+
+
 def get_conversation_rounds(window_id: str, last_n: int = 4) -> list:
-    """获取该窗口最近 N 轮对话原文。"""
+    """获取该窗口最近 N 轮对话原文（只读对象尾部，避免整文件过大时一次载入全部 rounds）。"""
     client = _s3_client()
     if not client:
         return []
