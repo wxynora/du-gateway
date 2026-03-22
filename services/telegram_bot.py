@@ -3,12 +3,10 @@
 import base64
 import json
 import logging
-import os
 import random
 import re
 import threading
 import time
-from pathlib import Path
 from typing import Optional, Union
 from uuid import uuid4
 
@@ -27,8 +25,6 @@ from config import (
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_GM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
-    TELEGRAM_WEBAPP_URL,
-    TELEGRAM_WEBAPP_VERSION,
     TELEGRAM_CHAT_PATH,
     TELEGRAM_CHAT_MODEL,
     GATEWAY_MODELS,
@@ -96,84 +92,6 @@ _CTX_LOCK = threading.Lock()
 _CONTEXT_MESSAGES: dict[int, list[dict]] = {}
 _PENDING_LOCK = threading.Lock()
 _PENDING_USER_CONTENTS: dict[int, list[Union[str, list]]] = {}
-
-BTN_OPS_PANEL = "🛠 运维面板"
-_AUTO_WEBAPP_VERSION: Optional[str] = None
-
-
-def _resolve_webapp_version() -> str:
-    """
-    Telegram WebApp 版本号：
-    - 优先用 TELEGRAM_WEBAPP_VERSION（手动配置）
-    - 未配置时自动用 miniapp_static/index.html 的 mtime，静态包更新后会自动变化
-    """
-    manual = (TELEGRAM_WEBAPP_VERSION or "").strip()
-    if manual:
-        return manual
-    global _AUTO_WEBAPP_VERSION
-    if _AUTO_WEBAPP_VERSION is not None:
-        return _AUTO_WEBAPP_VERSION
-    try:
-        p = Path(__file__).resolve().parent.parent / "miniapp_static" / "index.html"
-        if p.exists():
-            _AUTO_WEBAPP_VERSION = str(int(os.path.getmtime(p)))
-            return _AUTO_WEBAPP_VERSION
-    except Exception:
-        pass
-    _AUTO_WEBAPP_VERSION = ""
-    return ""
-
-
-def _miniapp_url() -> str:
-    """ReplyKeyboard 的 WebApp 入口 URL（必须是公网可访问的完整 URL）。"""
-    base = (TELEGRAM_WEBAPP_URL or "").strip().rstrip("/") or (TELEGRAM_GATEWAY_URL or "").strip().rstrip("/")
-    if not base:
-        return ""
-    # Telegram WebApp 按钮强制要求 https，否则 sendMessage 会 400
-    if not base.lower().startswith("https://"):
-        return ""
-    url = base + "/miniapp"
-    v = _resolve_webapp_version()
-    if v:
-        sep = "&" if "?" in url else "?"
-        url = f"{url}{sep}v={v}"
-    return url
-
-
-def _ops_keyboard() -> dict:
-    """常驻运维面板键盘（Reply Keyboard）。"""
-    url = _miniapp_url()
-    return {
-        "keyboard": [
-            (
-                [{"text": BTN_OPS_PANEL, "web_app": {"url": url}}]
-                if url
-                else [{"text": "⚠️ 运维面板需要配置 HTTPS 域名"}]
-            ),
-        ],
-        "resize_keyboard": True,
-        # 一次性键盘：点击一次后自动收起，平时不占输入区；需要时用户可点输入框旁的键盘图标再展开
-        "one_time_keyboard": True,
-        "is_persistent": False,
-    }
-
-
-def _send_with_keyboard(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
-    tok = _effective_tg_token(bot_token)
-    if not tok:
-        return False
-    url = f"{TELEGRAM_API_BASE}{tok}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "reply_markup": _ops_keyboard(), "disable_web_page_preview": True}
-    try:
-        r = requests.post(url, json=payload, timeout=30)
-        if r.status_code != 200:
-            logger.warning("sendMessage(键盘) 失败 chat_id=%s status=%s %s", chat_id, r.status_code, r.text[:200])
-            return False
-        data = r.json() if r.content else {}
-        return bool(data.get("ok", True))
-    except Exception as e:
-        logger.warning("sendMessage(键盘) 异常 chat_id=%s: %s", chat_id, e)
-        return False
 
 # Telegram 端的输出风格约束（只影响 Telegram，不影响 RikkaHub）
 _TELEGRAM_STYLE_SYSTEM = (
@@ -682,23 +600,21 @@ def _get_telegram_file_bytes(file_id: str, bot_token: Optional[str] = None) -> O
         return None
 
 
-def _set_my_commands_private() -> bool:
-    """私聊默认：/start（运维面板）。"""
-    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/setMyCommands"
-    payload = {
-        "commands": [
-            {"command": "start", "description": "运维面板与 MiniApp 入口"},
-        ]
-    }
+def _delete_my_commands_default() -> bool:
+    """
+    清空 Bot 默认命令列表（输入框旁 / 菜单）。
+    MiniApp 用 BotFather 的 Menu 按钮即可，避免与网关再注册的 /start 菜单重复。
+    """
+    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/deleteMyCommands"
     try:
-        r = requests.post(url, json=payload, timeout=15)
+        r = requests.post(url, json={}, timeout=15)
         if r.status_code != 200:
-            logger.warning("setMyCommands(private) 非 200 status=%s body=%s", r.status_code, (r.text or "")[:200])
+            logger.warning("deleteMyCommands(default) 非 200 status=%s body=%s", r.status_code, (r.text or "")[:200])
             return False
         data = r.json() if r.content else {}
         return bool(data.get("ok", True))
     except Exception as e:
-        logger.warning("setMyCommands(private) 失败: %s", e)
+        logger.warning("deleteMyCommands(default) 失败: %s", e)
         return False
 
 
@@ -733,13 +649,20 @@ def _set_my_commands_wenyou_group(cmd_token: str) -> bool:
 ## 已移除：按钮式 Todo 便签（避免占用输入区交互与 R2 写入）
 
 
-def send_message(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
+def send_message(
+    chat_id: int,
+    text: str,
+    bot_token: Optional[str] = None,
+    reply_markup: Optional[dict] = None,
+) -> bool:
     """向指定 chat 发送一条文字消息。HTTP 200 时也检查 body 里 ok，避免 Telegram 返回 200 但未送达（如被拉黑）。"""
     tok = _effective_tg_token(bot_token)
     if not tok:
         return False
     url = f"{TELEGRAM_API_BASE}{tok}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
+    payload: dict = {"chat_id": chat_id, "text": text}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
     try:
         r = requests.post(url, json=payload, timeout=30)
         if r.status_code != 200:
@@ -978,11 +901,11 @@ def flush_user_buffer(user_id: int):
 
 
 def init_telegram_bot_runtime():
-    """在服务启动时调用：初始化命令菜单等。Webhook 模式下无需轮询。"""
+    """在服务启动时调用：清主 Bot 默认命令菜单、设文游群专属命令等。Webhook 模式下无需轮询。"""
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN 未配置，Telegram 功能将不可用")
         return
-    _set_my_commands_private()
+    _delete_my_commands_default()
     if WENYOU_GROUP_CHAT_ID and TELEGRAM_WENYOU_OWNER_USER_ID:
         # 文游菜单挂在主 Bot 或专用 GM Bot（若配置了 TELEGRAM_GM_BOT_TOKEN）
         wtok = TELEGRAM_GM_BOT_TOKEN or TELEGRAM_BOT_TOKEN
@@ -1137,10 +1060,15 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         record_group_player_line(int(user_id), text)
         return
 
-    # /start：弹出运维面板键盘（不进入聊天）
+    # /start：仅收个口，不弹 Reply 键盘（MiniApp 用 Bot 自带 Menu 入口即可）
     cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
     if cmd0 == "/start":
-        _send_with_keyboard(int(chat_id), "运维面板键盘已就绪。需要做什么？", bot_token=token)
+        send_message(
+            int(chat_id),
+            "渡已就绪。MiniApp 请用聊天栏旁的 Menu 打开；此处不再弹出第二套键盘或命令菜单。",
+            bot_token=token,
+            reply_markup={"remove_keyboard": True},
+        )
         return
 
     logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
