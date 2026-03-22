@@ -17,16 +17,15 @@ import requests
 from services.wenyou_service import (
     cmd_end,
     cmd_go,
-    cmd_load,
-    cmd_save,
-    cmd_slots,
     cmd_story,
     is_wenyou_owner,
+    record_group_player2_line,
     record_group_player_line,
 )
 
 from config import (
     TELEGRAM_BOT_TOKEN,
+    TELEGRAM_GM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
     TELEGRAM_WEBAPP_URL,
     TELEGRAM_WEBAPP_VERSION,
@@ -47,7 +46,50 @@ from config import (
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
+
+
+def _get_main_bot_telegram_user_id() -> Optional[int]:
+    """缓存主 Bot 的 id（与群内发言 from.id 对齐）。"""
+    global _MAIN_BOT_TELEGRAM_USER_ID
+    if _MAIN_BOT_TELEGRAM_USER_ID is not None:
+        return _MAIN_BOT_TELEGRAM_USER_ID
+    if not TELEGRAM_BOT_TOKEN:
+        return None
+    try:
+        r = requests.get(f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/getMe", timeout=15)
+        data = r.json() if r.content else {}
+        if data.get("ok") and isinstance(data.get("result"), dict):
+            bid = (data.get("result") or {}).get("id")
+            if bid is not None:
+                _MAIN_BOT_TELEGRAM_USER_ID = int(bid)
+                return _MAIN_BOT_TELEGRAM_USER_ID
+    except Exception:
+        pass
+    return None
+
+
+def _is_message_from_main_bot(msg: dict) -> bool:
+    """是否为当前主 Bot 在群内发的消息（渡作为玩家二发言）。"""
+    fr = msg.get("from") or {}
+    if not fr.get("is_bot"):
+        return False
+    mid = _get_main_bot_telegram_user_id()
+    if mid is None:
+        return False
+    try:
+        return int(fr.get("id") or 0) == int(mid)
+    except (TypeError, ValueError):
+        return False
+
+
+def _effective_tg_token(bot_token: Optional[str]) -> str:
+    """发 Telegram API 时使用的 Token：显式传入优先，否则主 Bot。"""
+    if bot_token is not None and str(bot_token).strip():
+        return str(bot_token).strip()
+    return (TELEGRAM_BOT_TOKEN or "").strip()
 _RESOLVED_CHAT_MODEL: Optional[str] = None
+# 主 Bot 的 Telegram user id（getMe.id），用于识别群内「渡」的发言
+_MAIN_BOT_TELEGRAM_USER_ID: Optional[int] = None
 _BUF_LOCK = threading.Lock()
 _INPUT_BUFFERS: dict[int, dict] = {}
 _CTX_LOCK = threading.Lock()
@@ -116,8 +158,11 @@ def _ops_keyboard() -> dict:
     }
 
 
-def _send_with_keyboard(chat_id: int, text: str) -> bool:
-    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/sendMessage"
+def _send_with_keyboard(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
+    tok = _effective_tg_token(bot_token)
+    if not tok:
+        return False
+    url = f"{TELEGRAM_API_BASE}{tok}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "reply_markup": _ops_keyboard(), "disable_web_page_preview": True}
     try:
         r = requests.post(url, json=payload, timeout=30)
@@ -598,12 +643,15 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         return None
 
 
-def _get_telegram_file_bytes(file_id: str) -> Optional[tuple[bytes, str]]:
+def _get_telegram_file_bytes(file_id: str, bot_token: Optional[str] = None) -> Optional[tuple[bytes, str]]:
     """
     通过 Telegram getFile 下载文件，返回 (bytes, mime_type)。
     用于图片等，mime 根据 file_path 后缀猜测，默认 image/jpeg。
     """
-    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/getFile"
+    tok = _effective_tg_token(bot_token)
+    if not tok:
+        return None
+    url = f"{TELEGRAM_API_BASE}{tok}/getFile"
     try:
         r = requests.get(url, params={"file_id": file_id}, timeout=15)
         if r.status_code != 200:
@@ -616,7 +664,7 @@ def _get_telegram_file_bytes(file_id: str) -> Optional[tuple[bytes, str]]:
         if not path:
             return None
         # 注意：下载文件要走 /file/bot<TOKEN>/...，不是 /bot<TOKEN>/...
-        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{path}"
+        download_url = f"https://api.telegram.org/file/bot{tok}/{path}"
         r2 = requests.get(download_url, timeout=30)
         if r2.status_code != 200:
             logger.warning("下载 Telegram 文件失败 path=%s status=%s body=%s", path, r2.status_code, (r2.text or "")[:200])
@@ -654,19 +702,19 @@ def _set_my_commands_private() -> bool:
         return False
 
 
-def _set_my_commands_wenyou_group() -> bool:
-    """文游固定群：/story /go /end /save /load /slots（仅在该群菜单中显示）。"""
+def _set_my_commands_wenyou_group(cmd_token: str) -> bool:
+    """文游固定群：/story /go /end（仅在该群菜单中显示）；cmd_token 为承担文游菜单的 Bot。"""
     if not WENYOU_GROUP_CHAT_ID:
         return False
-    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/setMyCommands"
+    tok = (cmd_token or "").strip()
+    if not tok:
+        return False
+    url = f"{TELEGRAM_API_BASE}{tok}/setMyCommands"
     payload = {
         "commands": [
             {"command": "story", "description": "开局（随机或加关键词）"},
             {"command": "go", "description": "结算本轮，推进剧情"},
             {"command": "end", "description": "结束本局并归档"},
-            {"command": "save", "description": "存档到槽位 1/2/3，可加备注"},
-            {"command": "load", "description": "读档（发两次确认）"},
-            {"command": "slots", "description": "查看三个存档槽与备注"},
         ],
         "scope": {"type": "chat", "chat_id": int(WENYOU_GROUP_CHAT_ID)},
     }
@@ -685,9 +733,12 @@ def _set_my_commands_wenyou_group() -> bool:
 ## 已移除：按钮式 Todo 便签（避免占用输入区交互与 R2 写入）
 
 
-def send_message(chat_id: int, text: str) -> bool:
+def send_message(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
     """向指定 chat 发送一条文字消息。HTTP 200 时也检查 body 里 ok，避免 Telegram 返回 200 但未送达（如被拉黑）。"""
-    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/sendMessage"
+    tok = _effective_tg_token(bot_token)
+    if not tok:
+        return False
+    url = f"{TELEGRAM_API_BASE}{tok}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
     try:
         r = requests.post(url, json=payload, timeout=30)
@@ -725,9 +776,12 @@ def send_voice(chat_id: int, audio_bytes: bytes, filename: str = "voice.mp3") ->
         return False
 
 
-def send_chat_action(chat_id: int, action: str = "typing") -> bool:
+def send_chat_action(chat_id: int, action: str = "typing", bot_token: Optional[str] = None) -> bool:
     """发送 chat action（如 typing）用于“正在输入中…”指示器。"""
-    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/sendChatAction"
+    tok = _effective_tg_token(bot_token)
+    if not tok:
+        return False
+    url = f"{TELEGRAM_API_BASE}{tok}/sendChatAction"
     payload = {"chat_id": chat_id, "action": action}
     try:
         r = requests.post(url, json=payload, timeout=15)
@@ -739,36 +793,38 @@ def send_chat_action(chat_id: int, action: str = "typing") -> bool:
         return False
 
 
-def _start_typing_indicator(chat_id: int, stop_event: threading.Event, interval_seconds: float = 4.0):
+def _start_typing_indicator(
+    chat_id: int, stop_event: threading.Event, interval_seconds: float = 4.0, bot_token: Optional[str] = None
+):
     """
     轻量 typing：立即发一次；若 stop_event 未 set，则每 interval 再发一次。
     用于“调用网关等待回复”这段时间。
     """
     try:
-        send_chat_action(chat_id=chat_id, action="typing")
+        send_chat_action(chat_id=chat_id, action="typing", bot_token=bot_token)
         # 先等一会再重复（避免刷太频繁）
         while not stop_event.wait(max(1.0, float(interval_seconds))):
-            send_chat_action(chat_id=chat_id, action="typing")
+            send_chat_action(chat_id=chat_id, action="typing", bot_token=bot_token)
     except Exception:
         return
 
 
-def send_message_to_user(telegram_user_id: int, text: str) -> bool:
+def send_message_to_user(telegram_user_id: int, text: str, bot_token: Optional[str] = None) -> bool:
     """
     向指定 Telegram 用户发消息（用于主动发消息等）。
     chat_id 与 user 私聊时等于 telegram_user_id。
     """
-    return send_message(chat_id=telegram_user_id, text=text)
+    return send_message(chat_id=telegram_user_id, text=text, bot_token=bot_token)
 
 
-def send_message_segmented(chat_id: int, text: str) -> bool:
+def send_message_segmented(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
     """把一段长文本拆成多条发回 Telegram（带间隔）。"""
     parts = _split_reply_text(text)
     if not parts:
-        return send_message(chat_id=chat_id, text=text or "")
+        return send_message(chat_id=chat_id, text=text or "", bot_token=bot_token)
     ok_any = False
     for i, part in enumerate(parts):
-        ok = send_message(chat_id=chat_id, text=part)
+        ok = send_message(chat_id=chat_id, text=part, bot_token=bot_token)
         ok_any = ok_any or ok
         # 最后一条不 sleep
         if i != len(parts) - 1:
@@ -782,6 +838,7 @@ def process_message(
     text: Optional[str] = None,
     user_content: Optional[list] = None,
     force_last4: bool = False,
+    bot_token: Optional[str] = None,
 ) -> bool:
     """
     处理一条用户消息：调网关得到回复，发回 Telegram。
@@ -795,7 +852,7 @@ def process_message(
         return False
     window_id = f"tg_{user_id}"
     stop = threading.Event()
-    t = threading.Thread(target=_start_typing_indicator, args=(int(chat_id), stop, 4.0), daemon=True)
+    t = threading.Thread(target=_start_typing_indicator, args=(int(chat_id), stop, 4.0, bot_token), daemon=True)
     t.start()
     try:
         reply = _call_gateway_chat(window_id=window_id, user_id=user_id, user_content=content, force_last4=force_last4)
@@ -808,7 +865,7 @@ def process_message(
     reply_clean = _sanitize_reply_for_telegram(reply_clean)
 
     # 先发文字（短信分段）
-    ok_text = send_message_segmented(chat_id=chat_id, text=reply_clean) if reply_clean else True
+    ok_text = send_message_segmented(chat_id=chat_id, text=reply_clean, bot_token=bot_token) if reply_clean else True
 
     # 再按需发语音
     if TELEGRAM_VOICE_REPLY_ENABLED and voice_text:
@@ -817,8 +874,8 @@ def process_message(
 
             audio = tts_to_audio_bytes(voice_text)
             if audio:
-                send_chat_action(chat_id=int(chat_id), action="record_voice")
-                send_voice(chat_id=int(chat_id), audio_bytes=audio, filename="du.mp3")
+                send_chat_action(chat_id=int(chat_id), action="record_voice", bot_token=bot_token)
+                send_voice(chat_id=int(chat_id), audio_bytes=audio, filename="du.mp3", bot_token=bot_token)
         except Exception:
             pass
     return ok_text
@@ -927,17 +984,34 @@ def init_telegram_bot_runtime():
         return
     _set_my_commands_private()
     if WENYOU_GROUP_CHAT_ID and TELEGRAM_WENYOU_OWNER_USER_ID:
-        _set_my_commands_wenyou_group()
+        # 文游菜单挂在主 Bot 或专用 GM Bot（若配置了 TELEGRAM_GM_BOT_TOKEN）
+        wtok = TELEGRAM_GM_BOT_TOKEN or TELEGRAM_BOT_TOKEN
+        _set_my_commands_wenyou_group(wtok)
     elif WENYOU_GROUP_CHAT_ID and not TELEGRAM_WENYOU_OWNER_USER_ID:
         logger.warning("已配置 WENYOU_GROUP_CHAT_ID 但未配置 TELEGRAM_WENYOU_OWNER_USER_ID（或 TELEGRAM_PROACTIVE_TARGET_USER_ID），文游指令将不生效")
 
 
-def handle_telegram_update(upd: dict):
-    """处理一条 Telegram update（供 webhook 与轮询共用）。"""
+def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
+    """
+    处理一条 Telegram update。
+    - 主 Bot：POST /telegram/webhook，bot_token=TELEGRAM_BOT_TOKEN（私聊渡、运维 /start）。
+    - 文游 GM Bot（可选）：POST /telegram/webhook_gm，bot_token=TELEGRAM_GM_BOT_TOKEN（仅文游群）。
+    若未配置 TELEGRAM_GM_BOT_TOKEN，行为与旧版一致：文游仍在主 Bot 上处理。
+    """
+    token = _effective_tg_token(bot_token)
+    if not token:
+        return
+    gm_split = bool(TELEGRAM_GM_BOT_TOKEN)
+    is_gm = gm_split and token == TELEGRAM_GM_BOT_TOKEN
+    is_main = token == TELEGRAM_BOT_TOKEN
+    if gm_split and not is_gm and not is_main:
+        return
+
     msg = (upd or {}).get("message") or (upd or {}).get("edited_message")
     if not msg:
         return
     chat_id = msg.get("chat", {}).get("id")
+    chat_type = (msg.get("chat") or {}).get("type") or ""
     from_user = msg.get("from") or {}
     user_id = from_user.get("id")
     if chat_id is None or user_id is None:
@@ -946,7 +1020,48 @@ def handle_telegram_update(upd: dict):
     text = (msg.get("text") or "").strip()
     caption = (msg.get("caption") or "").strip()
 
-    # 图片（带或不带 caption）→ 追加到聚合缓冲
+    # —— 文游专用 GM Bot：只处理文游群；其它聊天仅简短提示 ——
+    if is_gm:
+        if (not text) and msg.get("photo"):
+            return
+        if not text:
+            return
+        if not WENYOU_GROUP_CHAT_ID or int(chat_id) != int(WENYOU_GROUP_CHAT_ID):
+            if chat_type == "private":
+                send_message(
+                    int(chat_id),
+                    "本 Bot 仅用于文游跑团群。与渡私聊请使用主 Bot。",
+                    bot_token=token,
+                )
+            return
+        if not is_wenyou_owner(int(user_id)):
+            return
+        parts = text.strip().split(maxsplit=1)
+        cmd0 = (parts[0] if parts else "").split("@", 1)[0].lower()
+        if cmd0 == "/start":
+            send_message(
+                int(chat_id),
+                "MiniApp 与运维面板请在私聊对主 Bot 发送 /start。本群文游：/story /go /end。",
+                bot_token=token,
+            )
+            return
+        if cmd0 == "/story":
+            rest = parts[1] if len(parts) > 1 else None
+            out = cmd_story(int(user_id), rest)
+            send_message_segmented(int(chat_id), out, bot_token=token)
+            return
+        if cmd0 == "/go":
+            out = cmd_go(int(user_id))
+            send_message_segmented(int(chat_id), out, bot_token=token)
+            return
+        if cmd0 == "/end":
+            out = cmd_end(int(user_id))
+            send_message(int(chat_id), out, bot_token=token)
+            return
+        record_group_player_line(int(user_id), text)
+        return
+
+    # 图片（带或不带 caption）→ 追加到聚合缓冲（仅主 Bot）
     if (not text) and msg.get("photo"):
         photos = msg.get("photo") or []
         if not photos:
@@ -954,11 +1069,11 @@ def handle_telegram_update(upd: dict):
         largest = max(photos, key=lambda p: (p.get("width") or 0) * (p.get("height") or 0))
         file_id = largest.get("file_id")
         if not file_id:
-            send_message(chat_id, "图片没拿到 file_id，再发一次试试～")
+            send_message(chat_id, "图片没拿到 file_id，再发一次试试～", bot_token=token)
             return
-        file_result = _get_telegram_file_bytes(file_id)
+        file_result = _get_telegram_file_bytes(file_id, bot_token=token)
         if not file_result:
-            send_message(chat_id, "图片下载失败，稍后再试哦～")
+            send_message(chat_id, "图片下载失败，稍后再试哦～", bot_token=token)
             return
         img_bytes, mime = file_result
         b64 = base64.b64encode(img_bytes).decode("ascii")
@@ -966,6 +1081,7 @@ def handle_telegram_update(upd: dict):
         if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
             from utils.time_aware import now_beijing_iso
             from storage import r2_store
+
             r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
         logger.info("收到 TG 图片(聚合) user_id=%s chat_id=%s caption_len=%d", user_id, chat_id, len(caption))
         with _BUF_LOCK:
@@ -977,8 +1093,23 @@ def handle_telegram_update(upd: dict):
     if not text:
         return
 
-    # 文游固定群：仅处理群主用户；指令与群内行动不走私聊聚合
-    if WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
+    # 文游群内：主 Bot 发的消息 = 玩家二（渡）发言，记入本轮（仅你发 /story /go /end 等指令）
+    if (
+        token == TELEGRAM_BOT_TOKEN
+        and WENYOU_GROUP_CHAT_ID
+        and int(chat_id) == int(WENYOU_GROUP_CHAT_ID)
+        and not text.startswith("/")
+        and _is_message_from_main_bot(msg)
+    ):
+        record_group_player2_line(text)
+        return
+
+    # 已配置 GM Bot 时：主 Bot 在文游群内不再处理文游指令与其它（避免重复；指令由 GM Webhook 处理）
+    if gm_split and WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
+        return
+
+    # 未配置 GM Bot 时：文游仍在主 Bot 上（与旧版一致）
+    if not gm_split and WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
         if not is_wenyou_owner(int(user_id)):
             return
         parts = text.strip().split(maxsplit=1)
@@ -986,46 +1117,22 @@ def handle_telegram_update(upd: dict):
         if cmd0 == "/start":
             send_message(
                 int(chat_id),
-                "MiniApp 与运维面板请在私聊对 Bot 发送 /start。本群文游：/story /go /end，存档 /save /load /slots。",
+                "MiniApp 与运维面板请在私聊对 Bot 发送 /start。本群文游：/story /go /end（主神积分、系统商店、等级阶位 D～S、血统与体力/智慧见剧情与状态栏）。",
+                bot_token=token,
             )
             return
         if cmd0 == "/story":
             rest = parts[1] if len(parts) > 1 else None
             out = cmd_story(int(user_id), rest)
-            send_message_segmented(int(chat_id), out)
+            send_message_segmented(int(chat_id), out, bot_token=token)
             return
         if cmd0 == "/go":
             out = cmd_go(int(user_id))
-            send_message_segmented(int(chat_id), out)
+            send_message_segmented(int(chat_id), out, bot_token=token)
             return
         if cmd0 == "/end":
             out = cmd_end(int(user_id))
-            send_message(int(chat_id), out)
-            return
-        if cmd0 == "/save":
-            rest = (parts[1] if len(parts) > 1 else "").strip()
-            sub = rest.split(maxsplit=1)
-            if not sub or not sub[0].isdigit():
-                send_message(int(chat_id), "文游：用法 /save 1 备注（槽位 1/2/3，备注可选）")
-                return
-            slot = int(sub[0])
-            desc = sub[1].strip() if len(sub) > 1 else ""
-            out = cmd_save(int(user_id), slot, desc)
-            send_message_segmented(int(chat_id), out)
-            return
-        if cmd0 == "/load":
-            rest = (parts[1] if len(parts) > 1 else "").strip()
-            tok = rest.split()[0] if rest else ""
-            if not tok.isdigit():
-                send_message(int(chat_id), "文游：用法 /load 1（槽位 1/2/3，需连发两次确认）")
-                return
-            slot = int(tok)
-            out = cmd_load(int(user_id), slot)
-            send_message_segmented(int(chat_id), out)
-            return
-        if cmd0 == "/slots":
-            out = cmd_slots(int(user_id))
-            send_message(int(chat_id), out)
+            send_message(int(chat_id), out, bot_token=token)
             return
         record_group_player_line(int(user_id), text)
         return
@@ -1033,12 +1140,13 @@ def handle_telegram_update(upd: dict):
     # /start：弹出运维面板键盘（不进入聊天）
     cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
     if cmd0 == "/start":
-        _send_with_keyboard(int(chat_id), "运维面板键盘已就绪。需要做什么？")
+        _send_with_keyboard(int(chat_id), "运维面板键盘已就绪。需要做什么？", bot_token=token)
         return
 
     logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
     if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
         from utils.time_aware import now_beijing_iso
         from storage import r2_store
+
         r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
     append_user_input(chat_id=chat_id, user_id=user_id, text=text)

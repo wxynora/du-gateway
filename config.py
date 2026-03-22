@@ -216,6 +216,8 @@ LAST_USER_REPLY_FILE = DATA_DIR / "last_user_reply.json"
 
 # Telegram Bot（接入方案见 docs/主动发消息与Telegram完整方案.md）
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+# 文游跑团专用 GM Bot（可选）：与主 Bot 区分时使用；Webhook 路径为 /telegram/webhook_gm（与主 Bot 的 /telegram/webhook 分开设）
+TELEGRAM_GM_BOT_TOKEN = os.environ.get("TELEGRAM_GM_BOT_TOKEN", "").strip()
 # Telegram Webhook：网关接收更新的 secret（可选）。若设置了，Telegram 会在请求头携带 X-Telegram-Bot-Api-Secret-Token
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
 # Bot 调网关的 base URL（如 http://127.0.0.1:5000 或公网网关地址）

@@ -29,21 +29,14 @@ _TEMPLATES_LOCK = threading.Lock()
 
 # 第二次 /story 确认开新局（仅内存，进程重启后需再确认）
 _PENDING_STORY_CONFIRM: dict[int, bool] = {}
-# 第二次 /load 确认：user_id -> 待确认的槽位 1/2/3
-_PENDING_LOAD_SLOT: dict[int, int] = {}
 _PENDING_LOCK = threading.Lock()
-
-WENYOU_SAVE_SLOTS = (1, 2, 3)
-
-
-def _clear_pending_load(uid: int) -> None:
-    with _PENDING_LOCK:
-        _PENDING_LOAD_SLOT.pop(int(uid), None)
 
 # 开局生成框架时注入的 system（无限流 / 副本）
 _FRAMEWORK_SYSTEM = """你在为一款「无限流」双人文字跑团生成**单个副本**的设定数据。
 整体世界观：存在主神空间；玩家被投入一个又一个副本世界，每个副本有独立规则与任务；你是数据侧，JSON 内用中性表述即可。
+**副本类型 instance_genre**（必须选其一，并决定节奏与机关侧重）：**规则怪谈**（条款式规则、告示、广播；**部分规则可为假**、矛盾或诱导，须由玩家自行判断）；**剧情解密**（线索、证言、机关、因果链）；**大逃杀**（缩圈、资源稀缺、淘汰压力）；**对抗**（阵营、互害、结盟与背叛）；**生存撤离**（物资、环境伤害、向撤离点转移）；**潜伏调查**（伪装身份、套取情报、搜查）；**限时任务**（硬性时限或阶段倒计时）。在 `genre_note` 中用一句话写清本局如何体现该类型。
 **编制硬性规则**：每个副本固定 **6 名任务者**——玩家两名（玩家一、玩家二「渡」）+ **恰好 4 名 NPC**，同场竞技或同规则约束；难度 **D～S**（D 最低、S 最高），难度越高环境越险、NPC 里越容易出现老练者或「大佬」，也可能更多炮灰；NPC **不一定友善**，可有害人、借刀、欺骗等，JSON 里直接写清立场倾向即可。
+须给出 **initial_stats**：两名玩家的初始血量/精神上限、**等级与阶位（D～S）、体力与智慧、血统名称**、主神积分、可选初始道具；体力/智慧会约束或暗示血/精神上限，数值为正整数即可。
 opening 建议包含传送/白光/提示音/主神刻板广播之一切入副本场景，但不要冗长。"""
 
 
@@ -52,43 +45,71 @@ _GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统*
 
 ## 当前副本
 - 副本编号 / 名称：{instance_line}
-- 副本内世界观与场景：{world}
+- **副本类型**：{instance_genre}
+{genre_note_line}- 副本内世界观与场景：{world}
 - 玩家一（{player1_name}）的身份：{player1_role}
 - 玩家二（{player2_name}）的身份：{player2_role}
 - 主神发布的核心任务（通关方向）：{conflict}
 - 失败或惩罚方向（虚构，勿过度血腥）：{failure_hint}
-- 通关奖励风味（积分、线索、豁免权等，可抽象不写具体数值）：{reward_hint}
+- 通关奖励风味（积分、线索、豁免权等）：{reward_hint}
+
+## 本类型玩法要点（整场必须遵守）
+{genre_rules_block}
 
 ## 难度与任务者编制（必须遵守）
 {tasker_regiment_block}
 
-## 无限流玩法（叙事层，由你自然化用，勿刷屏）
-- 每个故事都是**一次副本**；可在关键节点用一两句 **【主神提示】** 或系统播报（全角括号），平时少用，保持克制。
-- **六人场**：除两名玩家外，**四名 NPC 任务者**须在剧中保持可追溯的存在感（可分批登场、可退场或死亡，但须有因果，不得无交代蒸发）。
-- 可埋伏线：**隐藏任务**、**规则类陷阱**（规则必须说清楚，让玩家有破解空间）、**NPC 之间互害或坑玩家**、**时间或阶段压力**（虚构节奏，不必真实倒计时）。
-- **副本结算**仅在剧情自然抵达时暗示：如「副本通关评价」「传送白光」「任务失败后果」等，**不得**因玩家未选某选项就强行宣判；bad end 也要符合因果。
-- **积分 / 主神商店 / 回归现实**等只作**风味描写**，不要引入需要程序计算的数值系统；若提积分，一两句带过即可。
+## 主神空间 · 积分 · 系统商店 · 成长 · 生死与回程（叙事规则）
+- **主神积分**：用于复活、治疗、**系统商店**购物与强化；数值由你在【主神面板】中维护，扣减/奖励须与剧情因果一致。
+- **系统商店**（仅在场地为「主神空间」时重点呈现；副本内一般仅能通过剧情掉落或主神广播「预告」）：玩家可用积分 **购买道具**、**兑换治疗**（恢复血量、精神值）；可消耗积分 **升级血统**（血统名与强化阶位写在面板「血统」栏，阶位风味可与 D～S 挂钩）、**提升体力或智慧**（体力主要关联生命上限、智慧主要关联精神上限；升级后应在面板中同步 **HP/精神 上限** 与体力/智慧数值）。
+- **玩家等级与阶位**：每名玩家有 **等级（Lv）**，等级越高综合越强（伤害豁免、判定加值等由叙事体现）；另有 **阶位 D～S**（D 最低、S 最高），可与血统强化、主神评价挂钩。副本结算可发经验、升级或阶位提升契机，**必须**在【主神面板】中更新。
+- **死亡与复活**：若玩家角色死亡或判定出局，须给出主神选项感：可用**积分复活**（扣多少在面板中写明，可与难度挂钩），或消耗**指定道具**复活/续命；不得无故满血无代价复活。
+- **副本结束**：当副本以通关、失败或强制结算等方式**结束**时，须描写**白光/传送**回到**主神空间**（场地切到主神空间）；之后可逛**系统商店**、治疗、整备再接下一副本。
+- **主神空间内**：以休整、商店、治疗、兑换、接下一副本的**氛围**为主，仍可出现轻量事件。
+
+## 当前系统记录的状态（你必须在回复末尾用【主神面板】更新，与剧情一致）
+{current_stats_block}
+
+## 无限流玩法（叙事层）
+- 每个故事都是**一次副本**；关键节点可有一两句 **【主神提示】**，平时克制。
+- **六人场**：四名 NPC 须在剧中可追溯（可退场或死亡，须有因果）。
+- 可埋伏线：规则类陷阱、NPC 互害、时间压力等。
+- **副本结算**须符合因果；bad end 亦同。
 
 ## 你的职责
-- 描述副本内的环境、NPC、规则表现、事件结果（主神系统视角下的「世界演算」）
-- 根据两位玩家的行动推进副本，走向由玩家决定
-- 收到结算信号后，综合本轮行动做**本轮**剧情推进（仍遵守下条）
+- 描述环境、NPC、主神播报、事件结果；根据两位玩家行动推进；收到结算信号后做**本轮**推进。
 
 ## 回复规范
-- 每次回复约 150-300 字，有画面感
-- 结尾列出 2-3 个行动选项，最后一个固定为「C. 自由行动」
-- 选项仅供参考，玩家可以无视
+- 叙事约 150-300 字，有画面感；在【主神面板】**之前**，按**副本类型**附上对应**备忘**（见上「本类型玩法要点」）；其中 **规则怪谈** 类**每轮不可省略**【规则备忘】。
+- 叙事之后列出 2-3 个行动选项，最后一个固定为「C. 自由行动」。
+- **最后**必须附 **【主神面板】**（见下，不可省略）；备忘块始终在【主神面板】**上方**，便于玩家对照。
+
+## 【主神面板】固定格式（每次回复末尾必须原样包含，一行一项，便于系统解析）
+【主神面板】
+场地：副本 或 主神空间
+积分：整数
+玩家一 HP 当前/最大 精神 当前/最大
+玩家一等级：正整数
+玩家一阶位：D、C、B、A、S 之一
+玩家一体力：正整数（关联生命上限为主）
+玩家一智慧：正整数（关联精神上限为主）
+玩家一血统：简短名称（含强化说明亦可）
+玩家二 HP 当前/最大 精神 当前/最大
+玩家二等级：正整数
+玩家二阶位：D、C、B、A、S 之一
+玩家二体力：正整数
+玩家二智慧：正整数
+玩家二血统：简短名称
+道具：无 或 道具名用顿号分隔
+
+说明：场地为「主神空间」时表示已回到主神空间；购物、强化血统、加体力/智慧、治疗、升级与阶位变化，均须体现在面板与积分中。
 
 ## 严格禁止
 - 不得替玩家做决定，不得描写玩家角色的具体行动、表情、内心独白
-- 不得自行跳过玩家尚未经历的阶段
-- 不得随意添加两玩家设定里未出现的超规格能力或道具（主神给的「副本限定」规则除外，但需前后一致）
-- 不得强行单一真结局；在玩家发出结算信号之前，不得擅自做**跨大段**的剧情跳跃（开场后等待行动阶段只输出已给出的开场层次内容）
-- 禁止过度血腥、虐待细节；失败后果可冷峻暗示，点到为止
+- 不得擅自跳过阶段；禁止过度血腥虐待描写
 
 ## 你的边界
-你只负责：副本世界、NPC、主神播报感、环境、事件结果。
-玩家角色的一切行动，只由玩家自己决定。
+你只负责世界、NPC、主神播报、环境、事件结果；玩家的一切行动只由玩家决定。
 """
 
 
@@ -167,6 +188,8 @@ def _framework_prompt_random(seeds: dict) -> str:
 {{
   "instance_code": "副本编号，如 M-218、F-07",
   "instance_name": "副本常用名，2-8 字为宜",
+  "instance_genre": "必须是以下之一：规则怪谈、剧情解密、大逃杀、对抗、生存撤离、潜伏调查、限时任务",
+  "genre_note": "一句话说明本局如何体现该类型（如规则怪谈里哪些告示可疑；对抗里阵营关系等）",
   "difficulty": "必须是 D、C、B、A、S 之一（D 最低，S 最高；须与整体危险度、NPC 层次一致）",
   "world": "本副本**内部**世界观与场景 2-4 句（不写主神空间全貌，聚焦本图）",
   "player1_name": "玩家一在本副本中的称呼或名字",
@@ -182,13 +205,20 @@ def _framework_prompt_random(seeds: dict) -> str:
   "conflict": "主神发布的核心任务 / 通关条件 1-3 句，可略带残酷或幽默感",
   "failure_hint": "失败、抹杀或惩罚方向的**一句**提示（虚构，勿过度血腥）",
   "reward_hint": "通关后可能获得的奖励风味一句（如积分、线索、豁免；可不写具体数字）",
+  "initial_stats": {{
+    "points": 100,
+    "player1": {{"hp": 100, "hp_max": 100, "san": 100, "san_max": 100, "level": 1, "rank": "D", "vit": 10, "wis": 10, "bloodline": "凡人"}},
+    "player2": {{"hp": 100, "hp_max": 100, "san": 100, "san_max": 100, "level": 1, "rank": "D", "vit": 10, "wis": 10, "bloodline": "凡人"}},
+    "items": ["可选：与副本相关的消耗品或线索道具，无则 []"]
+  }},
   "opening": "开场 4-8 句：建议含传送/白光/提示音/主神刻板广播之一；**必须**出现与玩家同场的其他任务者（四名 NPC）的登场感或存在感，再进入场景，有画面感"
 }}
 
-**编制硬性规则**：`npc_taskers` 必须恰好 **4 个对象**，与两名玩家合计 **6 名任务者**；NPC 可有好人、坏人、坑货、炮灰、大佬，与 `difficulty` 相匹配。
+**编制硬性规则**：`npc_taskers` 必须恰好 **4 个对象**，与两名玩家合计 **6 名任务者**；NPC 可有好人、坏人、坑货、炮灰、大佬，与 `difficulty` 相匹配。**instance_genre** 须与 `world`、`conflict` 一致；**initial_stats** 须含主神积分、双方 HP/精神、**等级与阶位（D～S）、体力与智慧、血统名称**、背包（可为空数组）。
 
 随机种子（融入副本，不必照抄字面）：
 - 建议难度：{seeds.get("difficulty", "C")}
+- 建议副本类型：{seeds.get("instance_genre", "剧情解密")}
 - 世界基调：{seeds.get("world", "")}
 - 冲突类型：{seeds.get("conflict", "")}
 - 角色灵感一：{seeds.get("role_a", "")}
@@ -202,6 +232,8 @@ def _framework_prompt_custom(keywords: str) -> str:
 {{
   "instance_code": "副本编号",
   "instance_name": "副本名",
+  "instance_genre": "规则怪谈、剧情解密、大逃杀、对抗、生存撤离、潜伏调查、限时任务 之一",
+  "genre_note": "一句话说明本局如何体现该类型",
   "difficulty": "D、C、B、A、S 之一",
   "world": "本副本内部世界观与场景 2-4 句",
   "player1_name": "玩家一称呼",
@@ -217,10 +249,16 @@ def _framework_prompt_custom(keywords: str) -> str:
   "conflict": "主神核心任务 / 通关条件 1-3 句",
   "failure_hint": "失败或惩罚方向一句（虚构，勿过度血腥）",
   "reward_hint": "通关奖励风味一句（可不写具体数字）",
+  "initial_stats": {{
+    "points": 100,
+    "player1": {{"hp": 100, "hp_max": 100, "san": 100, "san_max": 100, "level": 1, "rank": "D", "vit": 10, "wis": 10, "bloodline": "凡人"}},
+    "player2": {{"hp": 100, "hp_max": 100, "san": 100, "san_max": 100, "level": 1, "rank": "D", "vit": 10, "wis": 10, "bloodline": "凡人"}},
+    "items": []
+  }},
   "opening": "开场 4-8 句，建议含主神传送或播报感；须体现与四名 NPC 任务者同场（6 人编制）"
 }}
 
-**编制**：`npc_taskers` 必须恰好 4 条，与两名玩家合计 6 名任务者；NPC 可炮灰可大佬、可善可恶。
+**编制**：`npc_taskers` 必须恰好 4 条，与两名玩家合计 6 名任务者；NPC 可炮灰可大佬、可善可恶。须带 **instance_genre**、**genre_note** 与 **initial_stats**（含等级、阶位 D～S、体力、智慧、血统）。
 
 关键词：{keywords}
 
@@ -230,10 +268,118 @@ def _framework_prompt_custom(keywords: str) -> str:
 # 副本难度 D～S（D 最低，S 最高）
 _WENYOU_DIFFICULTIES = frozenset({"D", "C", "B", "A", "S"})
 
+# 副本玩法类型（须与框架 JSON 字段 instance_genre 一致）
+_WENYOU_INSTANCE_GENRES = frozenset(
+    {
+        "规则怪谈",
+        "剧情解密",
+        "大逃杀",
+        "对抗",
+        "生存撤离",
+        "潜伏调查",
+        "限时任务",
+    }
+)
+
 
 def _normalize_difficulty(value: Any) -> str:
     s = str(value or "").strip().upper()
     return s if s in _WENYOU_DIFFICULTIES else "C"
+
+
+def _normalize_instance_genre(value: Any) -> str:
+    s = str(value or "").strip()
+    return s if s in _WENYOU_INSTANCE_GENRES else "剧情解密"
+
+
+def _format_genre_note_line(fw: dict) -> str:
+    """GM 模板中「本局类型说明」行；无则空串。"""
+    note = str(fw.get("genre_note") or "").strip()
+    if not note:
+        return ""
+    return f"- 本局类型说明：{note}\n"
+
+
+def _format_genre_rules_for_gm(fw: dict) -> str:
+    """按当前副本类型生成「本类型玩法要点」正文（类型说明见上「本局类型说明」行）。"""
+    g = _normalize_instance_genre(fw.get("instance_genre"))
+
+    blocks: dict[str, str] = {
+        "规则怪谈": (
+            "- **规则怪谈**：环境中须有**条款式规则**、告示、广播或系统音；**部分规则可能为假**、**相互矛盾**或**诱导送死**，玩家须自行判断；NPC 与「官方」也可能误导。\n"
+            "- **【规则备忘】**（本类型**每轮必附**，且放在**【主神面板】之前**）：用 2～5 条列出**当前已知的规则要点**（可缩写原文），并标注「待验证」「疑似假」「已证真」等，**避免玩家忘记**。\n"
+        ),
+        "剧情解密": (
+            "- **剧情解密**：以**线索、证言、机关、因果链**推进；避免无条件通关。\n"
+            "- **【线索备忘】**（每轮建议在【主神面板】之前**简短**）：列出当前已掌握关键线索或待解疑点 1～4 条。\n"
+        ),
+        "大逃杀": (
+            "- **大逃杀**：**缩圈、资源稀缺、淘汰或击杀威胁**构成压力；**【安全区·威胁备忘】**（每轮在【主神面板】之前**简短**）：安全区/倒计时/场上主要威胁。\n"
+        ),
+        "对抗": (
+            "- **对抗**：**阵营目标、互害、结盟与背叛**；**【阵营备忘】**（每轮【主神面板】之前**简短**）：已知阵营与当前目标。\n"
+        ),
+        "生存撤离": (
+            "- **生存撤离**：**物资、环境伤害、向撤离点推进**；**【撤离·物资备忘】**（每轮【主神面板】之前**简短**）：撤离点、物资、环境威胁。\n"
+        ),
+        "潜伏调查": (
+            "- **潜伏调查**：**身份伪装、套取情报、搜查**；**【身份·嫌疑备忘】**（每轮【主神面板】之前**简短**）：当前怀疑对象与已暴露信息。\n"
+        ),
+        "限时任务": (
+            "- **限时任务**：**硬性时限或阶段倒计时**；**【时限备忘】**（每轮【主神面板】之前**一行**）：剩余时间或阶段。\n"
+        ),
+    }
+    body = blocks.get(g, blocks["剧情解密"])
+    return body
+
+
+def _default_player_stats() -> dict:
+    """文游单名玩家运行时字段默认值（等级、阶位 D～S、体力/智慧、血统）。"""
+    return {
+        "hp": 100,
+        "hp_max": 100,
+        "san": 100,
+        "san_max": 100,
+        "level": 1,
+        "rank": "D",
+        "vit": 10,
+        "wis": 10,
+        "bloodline": "凡人",
+    }
+
+
+def _merge_one_player(cur: dict, new: dict) -> dict:
+    """将 GM 面板中的部分字段合并进玩家状态，并约束血/精神在上限内。"""
+    out = dict(cur)
+    for k in ("hp", "hp_max", "san", "san_max", "level", "vit", "wis"):
+        if k not in new:
+            continue
+        v = int(new[k])
+        if k == "level":
+            out[k] = max(1, v)
+        elif k in ("hp_max", "san_max"):
+            out[k] = max(1, v)
+        else:
+            out[k] = max(0, v)
+    if "rank" in new:
+        out["rank"] = _normalize_difficulty(new["rank"])
+    if "bloodline" in new:
+        bl = str(new["bloodline"]).strip()[:48]
+        if bl:
+            out["bloodline"] = bl
+    hm = max(1, int(out.get("hp_max") or 100))
+    sm = max(1, int(out.get("san_max") or 100))
+    out["hp_max"] = hm
+    out["san_max"] = sm
+    if "hp" in new:
+        out["hp"] = max(0, min(int(new["hp"]), hm))
+    else:
+        out["hp"] = max(0, min(int(out.get("hp", 0)), hm))
+    if "san" in new:
+        out["san"] = max(0, min(int(new["san"]), sm))
+    else:
+        out["san"] = max(0, min(int(out.get("san", 0)), sm))
+    return out
 
 
 def _normalize_npc_taskers(raw: dict) -> list[dict]:
@@ -266,9 +412,12 @@ def _normalize_npc_taskers(raw: dict) -> list[dict]:
 
 
 def _framework_for_runtime(fw: Optional[dict]) -> dict:
-    """旧存档补全 difficulty / npc_taskers，避免缺字段。"""
+    """旧存档补全 difficulty / npc_taskers / instance_genre，避免缺字段。"""
     out = dict(fw or {})
     out["difficulty"] = _normalize_difficulty(out.get("difficulty"))
+    out["instance_genre"] = _normalize_instance_genre(out.get("instance_genre"))
+    gn = str(out.get("genre_note") or "").strip()
+    out["genre_note"] = gn[:300] if gn else ""
     n = out.get("npc_taskers")
     if not isinstance(n, list) or len(n) != 4:
         out["npc_taskers"] = _normalize_npc_taskers(out)
@@ -305,10 +454,13 @@ def _normalize_framework(raw: dict) -> dict:
         code = "—"
     elif not name:
         name = "未命名副本"
+    gn = str(raw.get("genre_note") or "").strip()
     return {
         "instance_code": code,
         "instance_name": name,
         "world": str(raw.get("world") or "").strip(),
+        "instance_genre": _normalize_instance_genre(raw.get("instance_genre")),
+        "genre_note": gn[:300] if gn else "",
         "player1_name": str(raw.get("player1_name") or "玩家一").strip(),
         "player1_role": str(raw.get("player1_role") or "").strip(),
         "player2_name": str(raw.get("player2_name") or "渡").strip(),
@@ -319,7 +471,216 @@ def _normalize_framework(raw: dict) -> dict:
         "opening": str(raw.get("opening") or "").strip(),
         "difficulty": _normalize_difficulty(raw.get("difficulty")),
         "npc_taskers": _normalize_npc_taskers(raw),
+        "initial_stats": _normalize_initial_stats(raw),
     }
+
+
+def _normalize_initial_stats(raw: dict) -> dict:
+    """开局 JSON 中的 initial_stats：积分、双玩家血/精神/等级阶位/体力智慧/血统、道具列表。"""
+    ist = raw.get("initial_stats")
+    if not isinstance(ist, dict):
+        ist = {}
+
+    def _one(pk: str) -> dict:
+        d = ist.get(pk) if isinstance(ist.get(pk), dict) else {}
+        hm = max(1, int(d.get("hp_max") or 100))
+        sm = max(1, int(d.get("san_max") or 100))
+        h = max(0, min(int(d.get("hp") or hm), hm))
+        s = max(0, min(int(d.get("san") or sm), sm))
+        lv = max(1, int(d.get("level") or 1))
+        rk = _normalize_difficulty(d.get("rank") or d.get("tier") or "D")
+        vit = max(0, int(d.get("vit") or d.get("vitality") or 10))
+        wis = max(0, int(d.get("wis") or d.get("wisdom") or 10))
+        bl = str(d.get("bloodline") or "凡人").strip()[:48] or "凡人"
+        return {
+            "hp": h,
+            "hp_max": hm,
+            "san": s,
+            "san_max": sm,
+            "level": lv,
+            "rank": rk,
+            "vit": vit,
+            "wis": wis,
+            "bloodline": bl,
+        }
+
+    pts = max(0, int(ist.get("points") or 100))
+    items = ist.get("items")
+    if not isinstance(items, list):
+        items = []
+    items_clean = [str(x).strip()[:40] for x in items if str(x).strip()][:20]
+    return {
+        "points": pts,
+        "player1": _one("player1"),
+        "player2": _one("player2"),
+        "items": items_clean,
+    }
+
+
+def _stats_runtime_from_framework(fw: dict) -> dict:
+    """由 framework.initial_stats 生成运行时 stats（含 phase、inventory）。"""
+    fw = _framework_for_runtime(dict(fw or {}))
+    init = _normalize_initial_stats({"initial_stats": fw.get("initial_stats")})
+    return {
+        "phase": "instance",
+        "points": init["points"],
+        "player1": dict(init["player1"]),
+        "player2": dict(init["player2"]),
+        "inventory": list(init.get("items") or []),
+    }
+
+
+def _session_ensure_stats(session: dict) -> None:
+    """旧 session 无 stats 时从 framework 补全。"""
+    if session.get("stats") and isinstance(session["stats"], dict):
+        session["stats"].setdefault("phase", "instance")
+        session["stats"].setdefault("inventory", [])
+        session["stats"].setdefault("points", 100)
+        base = _default_player_stats()
+        for k in ("player1", "player2"):
+            cur = session["stats"].get(k)
+            if not isinstance(cur, dict):
+                session["stats"][k] = dict(base)
+            else:
+                for bk, bv in base.items():
+                    cur.setdefault(bk, bv)
+        return
+    fw = session.get("framework") or {}
+    session["stats"] = _stats_runtime_from_framework(_framework_for_runtime(fw))
+
+
+def _format_stats_for_gm_prompt(session: dict) -> str:
+    """供 GM system 占位：当前积分、场地、血精神、成长与血统、道具。"""
+    _session_ensure_stats(session)
+    st = session["stats"]
+    loc = "主神空间" if (st.get("phase") == "hub") else "副本"
+    p1 = st.get("player1") or {}
+    p2 = st.get("player2") or {}
+    inv = st.get("inventory") or []
+    inv_s = "、".join(inv) if inv else "无"
+
+    def _line_player(label: str, p: dict) -> str:
+        return (
+            f"- {label}：HP {p.get('hp', 0)}/{p.get('hp_max', 1)}，精神 {p.get('san', 0)}/{p.get('san_max', 1)}；"
+            f"Lv{p.get('level', 1)} 阶位{p.get('rank', 'D')}；"
+            f"体力 {p.get('vit', 0)} 智慧 {p.get('wis', 0)}；血统：{p.get('bloodline', '凡人')}"
+        )
+
+    return (
+        f"- 场地（系统记录）：{loc}\n"
+        f"- 主神积分：{int(st.get('points') or 0)}\n"
+        f"{_line_player('玩家一', p1)}\n"
+        f"{_line_player('玩家二', p2)}\n"
+        f"- 道具：{inv_s}"
+    )
+
+
+def _format_status_footer(session: dict) -> str:
+    """Telegram 固定展示的状态栏（与【主神面板】数值对齐，以 session 为准）。"""
+    _session_ensure_stats(session)
+    st = session["stats"]
+    loc = "主神空间" if st.get("phase") == "hub" else "副本"
+    p1 = st.get("player1") or {}
+    p2 = st.get("player2") or {}
+    inv = st.get("inventory") or []
+    inv_s = "、".join(inv) if inv else "无"
+
+    def _foot_player(p: dict) -> str:
+        return (
+            f"血{p.get('hp', 0)}/{p.get('hp_max', 1)} 精{p.get('san', 0)}/{p.get('san_max', 1)}｜"
+            f"Lv{p.get('level', 1)}·{p.get('rank', 'D')}阶｜体{p.get('vit', 0)} 智{p.get('wis', 0)}｜{p.get('bloodline', '凡人')}"
+        )
+
+    return (
+        "━━━━━━━━━━━━\n"
+        f"【状态】{loc}｜主神积分：{int(st.get('points') or 0)}\n"
+        f"玩家一 {_foot_player(p1)}\n"
+        f"玩家二 {_foot_player(p2)}\n"
+        f"道具：{inv_s}\n"
+        "━━━━━━━━━━━━"
+    )
+
+
+def _strip_main_god_panel(text: str) -> str:
+    """去掉【主神面板】及之后内容，供注入与展示叙事。"""
+    if not text or "【主神面板】" not in text:
+        return (text or "").strip()
+    return text.split("【主神面板】", 1)[0].strip()
+
+
+def _parse_player_panel_block(block: str, label: str) -> dict:
+    """解析【主神面板】中某一玩家的字段（可部分出现）。"""
+    out: dict[str, Any] = {}
+    m = re.search(rf"{label}\s*HP\s*(\d+)\s*/\s*(\d+)\s*精神\s*(\d+)\s*/\s*(\d+)", block)
+    if m:
+        out["hp"] = int(m.group(1))
+        out["hp_max"] = int(m.group(2))
+        out["san"] = int(m.group(3))
+        out["san_max"] = int(m.group(4))
+    m = re.search(rf"{label}等级[：:]\s*(\d+)", block)
+    if m:
+        out["level"] = int(m.group(1))
+    m = re.search(rf"{label}阶位[：:]\s*([DCSBA])", block)
+    if m:
+        out["rank"] = m.group(1).upper()
+    m = re.search(rf"{label}体力[：:]\s*(\d+)", block)
+    if m:
+        out["vit"] = int(m.group(1))
+    m = re.search(rf"{label}智慧[：:]\s*(\d+)", block)
+    if m:
+        out["wis"] = int(m.group(1))
+    m = re.search(rf"{label}血统[：:]\s*(.+?)(?:\n|$)", block)
+    if m:
+        out["bloodline"] = m.group(1).strip()
+    return out
+
+
+def _parse_main_god_panel(gm_text: str) -> Optional[dict]:
+    """解析 GM 输出的【主神面板】，失败返回 None。"""
+    if "【主神面板】" not in gm_text:
+        return None
+    block = gm_text.split("【主神面板】", 1)[-1]
+    out: dict[str, Any] = {}
+    loc_m = re.search(r"场地[：:]\s*(\S+)", block)
+    if loc_m:
+        v = loc_m.group(1).strip()
+        out["phase"] = "hub" if ("主神" in v or "空间" in v) else "instance"
+    pts_m = re.search(r"积分[：:]\s*(\d+)", block)
+    if pts_m:
+        out["points"] = int(pts_m.group(1))
+    p1 = _parse_player_panel_block(block, "玩家一")
+    p2 = _parse_player_panel_block(block, "玩家二")
+    if p1:
+        out["player1"] = p1
+    if p2:
+        out["player2"] = p2
+    inv_m = re.search(r"道具[：:]\s*(.+?)(?:\n|$)", block)
+    if inv_m:
+        raw_inv = inv_m.group(1).strip()
+        if raw_inv in ("无", "无。", "-", "——"):
+            out["inventory"] = []
+        else:
+            out["inventory"] = [x.strip() for x in re.split(r"[、，,]", raw_inv) if x.strip()][:20]
+    if not out:
+        return None
+    return out
+
+
+def _merge_panel_into_session_stats(session: dict, parsed: dict) -> None:
+    """将解析结果合并进 session['stats']，并做简单边界。"""
+    _session_ensure_stats(session)
+    st = session["stats"]
+    if "phase" in parsed:
+        st["phase"] = parsed["phase"]
+    if "points" in parsed:
+        st["points"] = max(0, int(parsed["points"]))
+    for pk in ("player1", "player2"):
+        if pk not in parsed:
+            continue
+        cur = st.get(pk) or _default_player_stats()
+        st[pk] = _merge_one_player(cur, parsed[pk])
+    if "inventory" in parsed:
+        st["inventory"] = list(parsed["inventory"])
 
 
 def generate_framework_random() -> tuple[Optional[dict], Optional[str]]:
@@ -327,8 +688,15 @@ def generate_framework_random() -> tuple[Optional[dict], Optional[str]]:
     worlds = tpl.get("worlds") or ["原创世界"]
     conflicts = tpl.get("conflicts") or ["一场冒险"]
     roles = tpl.get("roles") or ["旅人：在寻找某样东西"]
+    genres = tpl.get("genres")
+    if isinstance(genres, list) and genres:
+        g0 = random.choice(genres)
+        g_seed = str(g0).strip() if str(g0).strip() in _WENYOU_INSTANCE_GENRES else random.choice(list(_WENYOU_INSTANCE_GENRES))
+    else:
+        g_seed = random.choice(list(_WENYOU_INSTANCE_GENRES))
     seeds = {
         "difficulty": random.choice(["D", "C", "B", "A", "S"]),
+        "instance_genre": g_seed,
         "world": random.choice(worlds),
         "conflict": random.choice(conflicts),
         "role_a": random.choice(roles),
@@ -361,10 +729,12 @@ def _new_session(framework: dict) -> dict:
     gid = str(uuid4())
     ts = now_beijing_iso()
     opening = framework.get("opening") or "【主神提示】副本同步完成。白光散去，你们已抵达任务区域。"
+    fw = _framework_for_runtime(framework)
     return {
         "gameId": gid,
         "startedAt": ts,
         "framework": framework,
+        "stats": _stats_runtime_from_framework(fw),
         "history": [
             {"role": "gm", "content": opening, "timestamp": ts},
         ],
@@ -385,6 +755,9 @@ def _format_framework_lines(fw: dict) -> str:
     else:
         head = "【无限流 · 副本】\n"
     diff = _normalize_difficulty(fw.get("difficulty"))
+    g = _normalize_instance_genre(fw.get("instance_genre"))
+    gn = str(fw.get("genre_note") or "").strip()
+    genre_head = f"【副本类型】{g}" + (f"｜{gn}" if gn else "") + "\n\n"
     npc_lines = []
     for i, n in enumerate(fw.get("npc_taskers") or []):
         if isinstance(n, dict):
@@ -394,7 +767,8 @@ def _format_framework_lines(fw: dict) -> str:
     npc_block = "\n".join(npc_lines) if npc_lines else "  （无）"
     return (
         f"{head}"
-        f"【难度】{diff}（D 最低，S 最高）\n\n"
+        f"【难度】{diff}（D 最低，S 最高）\n"
+        f"{genre_head}"
         f"【任务者（固定 6 人：玩家 + 4 名 NPC）】\n"
         f"· 玩家一「{fw.get('player1_name', '玩家一')}」\n{fw.get('player1_role', '')}\n\n"
         f"· 玩家二「{fw.get('player2_name', '渡')}」\n{fw.get('player2_role', '')}\n\n"
@@ -421,7 +795,6 @@ def _framework_instance_line(fw: dict) -> str:
 def cmd_story(user_id: int, keywords: Optional[str]) -> str:
     """处理 /story [关键词]；含二次确认逻辑。"""
     uid = int(user_id)
-    _clear_pending_load(uid)
     existing = r2_store.get_wenyou_session(uid)
 
     with _PENDING_LOCK:
@@ -449,7 +822,8 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
         _PENDING_STORY_CONFIRM.pop(uid, None)
 
     head = "文游开局成功（无限流 · 主神副本模式）。\n\n" + _format_framework_lines(fw) + "\n\n—— 主神系统 / GM ——\n\n"
-    return head + fw.get("opening", "")
+    foot = _format_status_footer(session)
+    return head + fw.get("opening", "") + "\n\n" + foot
 
 
 def record_group_player_line(user_id: int, text: str) -> None:
@@ -457,7 +831,6 @@ def record_group_player_line(user_id: int, text: str) -> None:
     uid = int(user_id)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
-        _PENDING_LOAD_SLOT.pop(uid, None)
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return
@@ -473,11 +846,38 @@ def record_group_player_line(user_id: int, text: str) -> None:
     r2_store.save_wenyou_session(uid, session)
 
 
+def record_group_player2_line(text: str) -> None:
+    """
+    群内主 Bot（渡）发言：记入本轮玩家二行动。
+    文游会话始终挂在 TELEGRAM_WENYOU_OWNER_USER_ID（开局者）下，与玩家一同一局。
+    """
+    owner_uid = int(TELEGRAM_WENYOU_OWNER_USER_ID or 0)
+    if not owner_uid:
+        return
+    line = (text or "").strip()
+    if not line:
+        return
+    session = r2_store.get_wenyou_session(owner_uid)
+    if not session or not session.get("gameId"):
+        return
+    pr = session.setdefault("pending_round", {})
+    pr.setdefault("player2_lines", []).append(line)
+    ts = now_beijing_iso()
+    session.setdefault("history", []).append(
+        {"role": "player2", "content": f"[文游] {line}", "timestamp": ts}
+    )
+    r2_store.save_wenyou_session(owner_uid, session)
+
+
 def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
     """把 session 转成 GM API：system 文本 + 多轮 messages（仅 user/assistant 角色给模型）。"""
+    _session_ensure_stats(session)
     fw = _framework_for_runtime(session.get("framework") or {})
     system = _GM_SYSTEM_TEMPLATE.format(
         instance_line=_framework_instance_line(fw),
+        instance_genre=_normalize_instance_genre(fw.get("instance_genre")),
+        genre_note_line=_format_genre_note_line(fw),
+        genre_rules_block=_format_genre_rules_for_gm(fw),
         world=fw.get("world", ""),
         player1_name=fw.get("player1_name", "玩家一"),
         player1_role=fw.get("player1_role", ""),
@@ -487,6 +887,7 @@ def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
         failure_hint=fw.get("failure_hint") or "由主神规则判定。",
         reward_hint=fw.get("reward_hint") or "视表现给予风味向回报。",
         tasker_regiment_block=_format_tasker_regiment_for_gm(fw),
+        current_stats_block=_format_stats_for_gm_prompt(session),
     )
     msgs: list[dict] = []
     for h in session.get("history") or []:
@@ -545,17 +946,18 @@ def cmd_go(user_id: int) -> str:
     uid = int(user_id)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
-        _PENDING_LOAD_SLOT.pop(uid, None)
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return "文游：当前没有进行中的局，请先 /story 开局。"
 
+    _session_ensure_stats(session)
     pr = session.get("pending_round") or {}
     p1 = pr.get("player1_lines") or []
+    p2 = pr.get("player2_lines") or []
     p1_text = "\n".join(p1).strip() or "（玩家一未在群内留下行动描述）"
-    p2_text = "（玩家二渡的行动由私聊与上下文体现，本轮若未单独说明则略）"
+    p2_text = "\n".join(p2).strip() or "（玩家二渡本轮暂无群内发言）"
 
-    user_blob = f"玩家一（群内）本轮行动：\n{p1_text}\n\n玩家二：\n{p2_text}"
+    user_blob = f"玩家一（群内）本轮行动：\n{p1_text}\n\n玩家二（渡·群内）：\n{p2_text}\n"
 
     system, gm_msgs = _build_gm_messages(session)
     # 追加本轮结算 user 消息（作为对 GM 的输入）
@@ -565,17 +967,25 @@ def cmd_go(user_id: int) -> str:
     if not gm_out:
         return "文游：GM 调用失败，请稍后重试 /go。"
 
+    parsed = _parse_main_god_panel(gm_out)
+    if parsed:
+        _merge_panel_into_session_stats(session, parsed)
+
     ts = now_beijing_iso()
     session.setdefault("history", []).append({"role": "gm", "content": gm_out, "timestamp": ts})
     session["pending_round"] = {"player1_lines": [], "player2_lines": []}
     r2_store.save_wenyou_session(uid, session)
 
+    narrative = _strip_main_god_panel(gm_out)
+    foot = _format_status_footer(session)
+    display = f"{narrative}\n\n{foot}" if narrative.strip() else foot
+
     try:
-        _append_go_round_to_tg_window(uid, user_blob, gm_out)
+        _append_go_round_to_tg_window(uid, user_blob, display)
     except Exception:
         logger.exception("文游写入 tg 窗口失败 user_id=%s", uid)
 
-    return f"—— 主神系统 ——\n\n{gm_out}"
+    return f"—— 主神系统 ——\n\n{display}"
 
 
 def cmd_end(user_id: int) -> str:
@@ -583,7 +993,6 @@ def cmd_end(user_id: int) -> str:
     uid = int(user_id)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
-        _PENDING_LOAD_SLOT.pop(uid, None)
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         with _PENDING_LOCK:
@@ -594,6 +1003,7 @@ def cmd_end(user_id: int) -> str:
         "gameId": session.get("gameId"),
         "endedAt": now_beijing_iso(),
         "framework": session.get("framework"),
+        "stats": session.get("stats"),
         "history": session.get("history"),
     }
     gid = str(session.get("gameId") or "unknown")
@@ -603,91 +1013,7 @@ def cmd_end(user_id: int) -> str:
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
 
-    return "文游：本局已结束并归档。可在 MiniApp 查看最近一次归档。"
-
-
-def cmd_save(user_id: int, slot: int, description: str) -> str:
-    """将当前进行中的局写入固定槽位 1/2/3，可选备注。"""
-    uid = int(user_id)
-    with _PENDING_LOCK:
-        _PENDING_STORY_CONFIRM.pop(uid, None)
-    _clear_pending_load(uid)
-    if slot not in WENYOU_SAVE_SLOTS:
-        return "文游：槽位只能是 1、2、3。用法：/save 1 备注（备注可选）"
-
-    session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return "文游：没有进行中的局，无法存档。请先 /story 开局。"
-
-    snap = copy.deepcopy(session)
-    desc = (description or "").strip()
-    ok = r2_store.set_wenyou_save_slot(uid, slot, snap, desc)
-    if not ok:
-        return "文游：存档写入失败，请稍后再试。"
-    show = desc or "（无备注）"
-    return f"文游：已保存到槽位 {slot}。\n备注：{show}\n（全局 Last4 仍按当前对话最新状态，不受读档影响。）"
-
-
-def cmd_load(user_id: int, slot: int) -> str:
-    """读档：第一次展示备注与时间并请求二次确认，第二次覆盖 active session。"""
-    uid = int(user_id)
-    with _PENDING_LOCK:
-        _PENDING_STORY_CONFIRM.pop(uid, None)
-    if slot not in WENYOU_SAVE_SLOTS:
-        return "文游：槽位只能是 1、2、3。用法：/load 1"
-
-    entry = r2_store.get_wenyou_save_slot(uid, slot)
-    if not entry:
-        _clear_pending_load(uid)
-        return f"文游：槽位 {slot} 为空。请先用 /save {slot} 备注 存一个档。"
-
-    with _PENDING_LOCK:
-        pending = _PENDING_LOAD_SLOT.get(uid)
-
-    if pending != slot:
-        with _PENDING_LOCK:
-            _PENDING_LOAD_SLOT[uid] = slot
-        desc = entry.get("description") or "（无备注）"
-        saved_at = entry.get("savedAt") or ""
-        fw = _framework_for_runtime((entry.get("session") or {}).get("framework") or {})
-        hint = f"[{fw.get('difficulty', '?')}] " + (fw.get("conflict") or fw.get("world") or "")
-        hint = hint[:120]
-        return (
-            f"文游：即将读档到槽位 {slot}\n"
-            f"备注：{desc}\n"
-            f"存档时间：{saved_at}\n"
-            f"摘要：{hint}{'…' if len(hint or '') >= 100 else ''}\n\n"
-            f"再发一次 /load {slot} 确认读档（会覆盖当前局内进度，适合死亡/坏结局重来）。"
-        )
-
-    with _PENDING_LOCK:
-        _PENDING_LOAD_SLOT.pop(uid, None)
-
-    session = copy.deepcopy(entry["session"])
-    r2_store.save_wenyou_session(uid, session)
-    return (
-        f"文游：已读档到槽位 {slot}。\n"
-        f"当前剧情已回到存档点；私聊注入的 GM 正文会随最新档更新。\n"
-        f"（Telegram 全局 Last4 仍为最近对话，不受影响。）"
-    )
-
-
-def cmd_slots(user_id: int) -> str:
-    """列出三个槽位是否有档及备注。"""
-    uid = int(user_id)
-    with _PENDING_LOCK:
-        _PENDING_STORY_CONFIRM.pop(uid, None)
-    _clear_pending_load(uid)
-    lines: list[str] = ["文游：三个存档槽（固定 1 / 2 / 3）"]
-    for s in WENYOU_SAVE_SLOTS:
-        entry = r2_store.get_wenyou_save_slot(uid, s)
-        if entry and entry.get("session"):
-            desc = entry.get("description") or "（无备注）"
-            at = entry.get("savedAt") or ""
-            lines.append(f"【{s}】{desc}  |  {at}")
-        else:
-            lines.append(f"【{s}】空")
-    return "\n".join(lines)
+    return "文游：本局已结束并归档。叙事上你们已回到主神空间休整；下一局请再 /story。MiniApp 可查看最近一次归档。"
 
 
 def get_latest_gm_for_inject(user_id: int) -> str:
@@ -697,7 +1023,7 @@ def get_latest_gm_for_inject(user_id: int) -> str:
         return ""
     for h in reversed(session.get("history") or []):
         if (h.get("role") or "").lower() == "gm":
-            return (h.get("content") or "").strip()
+            return _strip_main_god_panel((h.get("content") or "").strip())
     return ""
 
 
