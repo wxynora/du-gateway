@@ -27,6 +27,7 @@ from pipeline.pipeline import (
     step_replace_rikka_system,
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
+    step_inject_sense_snapshot,
     step_inject_rikkahub_reminder,
     step_inject_dynamic_memory,
     step_inject_du_notebook,
@@ -662,6 +663,7 @@ def chat_completions():
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
     body = step_inject_summary(body, window_id)
+    body = step_inject_sense_snapshot(body, window_id)
     body = step_inject_wenyou_gm(body, window_id)
     body = step_inject_rikkahub_reminder(body, window_id)
     body = step_inject_dynamic_memory(body, window_id)

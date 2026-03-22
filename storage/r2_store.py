@@ -53,6 +53,8 @@ R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 R2_KEY_LAST_PROACTIVE_CONTACT_AT = "global/last_proactive_contact_at.txt"
 # 主动发消息：目标用户最近一次在 TG 发消息的时间（北京时间 ISO），用于「正在聊天时不主动发」
 R2_KEY_LAST_TELEGRAM_USER_ACTIVITY_AT = "global/last_telegram_user_activity_at.txt"
+# 主动联络「抽中后问渡」的决策记忆，新在前，最多 5 条（闹钟不参与）
+R2_KEY_PROACTIVE_DECISION_MEMORY = "global/proactive_decision_memory.json"
 # Telegram：TodoList（每个 tg 窗口一份 JSON）
 R2_KEY_TG_TODOS = "tg/todos.json"
 # 日历/提醒（V2 第一批：只读 + 禁用）
@@ -60,6 +62,8 @@ R2_KEY_SCHEDULE_ITEMS = "schedule/items.json"
 R2_KEY_SCHEDULE_FIRED = "schedule/fired.json"
 # 动态记忆召回调试记录（用于 MiniApp 可视化排查）
 R2_KEY_DYNAMIC_RECALL_DEBUG = "dynamic_memory/recall_debug.json"
+# 设备感知聚合：电量/位置/网络等（POST /api/sense 写入）
+R2_KEY_SENSE_LATEST = "sense/latest.json"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
@@ -520,6 +524,68 @@ def save_summary(window_id: str, summary: str) -> bool:
             return False
 
 
+# ---------- sense/latest.json（设备感知：电量/位置等） ----------
+
+
+def get_sense_latest() -> dict:
+    """读取 sense/latest.json，不存在或格式异常时返回 {}。"""
+    client = _s3_client()
+    if not client:
+        return {}
+    data = _read_json(client, R2_KEY_SENSE_LATEST)
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def merge_and_save_sense_bucket(sense_type: str, patch: dict) -> bool:
+    """
+    按 sense_type（如 battery）将 patch 合并进对应桶，并写入 updatedAt（UTC，形如 2025-03-23T14:00:00Z）。
+    其它顶层键（location、network 等）保持不变。patch 中不应含 type。
+    """
+    client = _s3_client()
+    if not client:
+        return False
+    key = (sense_type or "").strip()
+    if not key:
+        return False
+    with _global_write_lock:
+        try:
+            doc = _read_json(client, R2_KEY_SENSE_LATEST)
+            if doc is None or not isinstance(doc, dict):
+                doc = {}
+            bucket = doc.get(key)
+            if not isinstance(bucket, dict):
+                bucket = {}
+            merged = dict(bucket)
+            merged.update(patch)
+            merged["updatedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            doc[key] = merged
+            _write_json(client, R2_KEY_SENSE_LATEST, doc)
+            _append_sense_history_event(client, key, dict(merged))
+            return True
+        except Exception as e:
+            logger.error("merge_and_save_sense_bucket 失败 type=%s error=%s", key, e, exc_info=True)
+            return False
+
+
+def _append_sense_history_event(client, sense_type: str, bucket_snapshot: dict) -> None:
+    """按北京日期写入 sense/history/YYYY-MM-DD.json，仅归档，失败静默。"""
+    try:
+        d = today_beijing()
+        hk = f"sense/history/{d}.json"
+        existing = _read_json(client, hk)
+        if not isinstance(existing, list):
+            existing = []
+        existing.append({"type": sense_type, "at": now_beijing_iso(), "data": bucket_snapshot})
+        cap = 3000
+        if len(existing) > cap:
+            existing = existing[-cap:]
+        _write_json(client, hk, existing)
+    except Exception as e:
+        logger.warning("sense 历史归档失败 type=%s error=%s", sense_type, e)
+
+
 # ---------- 全局「最新四轮」供新窗口注入 ----------
 
 
@@ -599,6 +665,44 @@ def save_last_proactive_contact_at(iso_str: str) -> bool:
             )
             return True
         except Exception:
+            return False
+
+
+def get_proactive_decision_memory_items() -> list:
+    """读取主动决策记忆（新在前），最多 5 条；失败返回 []。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_PROACTIVE_DECISION_MEMORY)
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    return [x for x in items if isinstance(x, dict)][:5]
+
+
+def append_proactive_decision_memory(entry: dict) -> bool:
+    """在列表头部插入一条决策记录，整体最多保留 5 条。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(entry, dict):
+        return False
+    with _global_write_lock:
+        try:
+            data = _read_json(client, R2_KEY_PROACTIVE_DECISION_MEMORY)
+            if not isinstance(data, dict):
+                data = {}
+            items = data.get("items")
+            if not isinstance(items, list):
+                items = []
+            items.insert(0, dict(entry))
+            data["items"] = items[:5]
+            _write_json(client, R2_KEY_PROACTIVE_DECISION_MEMORY, data)
+            return True
+        except Exception as e:
+            logger.error("append_proactive_decision_memory 失败 error=%s", e, exc_info=True)
             return False
 
 
@@ -1664,7 +1768,17 @@ def get_wenyou_last_archive(user_id: int) -> Optional[Any]:
 
 
 # 网关在 R2 里使用的所有前缀，清空时只删这些，不动桶里其他 key
-_R2_WIPE_PREFIXES = ("windows/", "conversations/", "global/", "dynamic_memory/", "core_cache/", "notebook/", "docs/", "wenyou/")
+_R2_WIPE_PREFIXES = (
+    "windows/",
+    "conversations/",
+    "global/",
+    "dynamic_memory/",
+    "core_cache/",
+    "notebook/",
+    "docs/",
+    "wenyou/",
+    "sense/",
+)
 
 
 def delete_all_gateway_data() -> tuple[bool, int, Optional[str]]:

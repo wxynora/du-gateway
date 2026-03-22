@@ -700,6 +700,9 @@ def _parse_player_panel_block(block: str, label: str) -> dict:
     m = re.search(rf"{label}血统[：:]\s*(.+?)(?:\n|$)", block)
     if m:
         out["bloodline"] = m.group(1).strip()
+    m = re.search(rf"{label}能力[：:]\s*(.+?)(?:\n|$)", block)
+    if m:
+        out["abilities"] = _parse_abilities_line(m.group(1))
     return out
 
 

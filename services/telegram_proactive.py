@@ -1,5 +1,7 @@
+import json
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -53,9 +55,13 @@ def _schedule_due_grace_seconds() -> int:
 
 @dataclass
 class ProactiveDecision:
+    """主动联络抽中后，渡的一轮决策结果。"""
+
     should_send: bool
     text: str = ""
-    reason: str = ""
+    reason: str = ""  # 技术向：contact / no_contact / gateway_status / …
+    action: str = ""  # 业务向：send_message / no_contact / diary / other / error / …
+    du_reason: str = ""  # 渡在 JSON 里写的理由
 
 
 def _get_chat_model() -> str:
@@ -116,27 +122,156 @@ def _probability(hours_since_last: float) -> float:
     return p
 
 
+_ACTION_LABEL_CN = {
+    "send_message": "发消息",
+    "no_contact": "不发消息",
+    "diary": "写日记",
+    "other": "其它",
+    "error": "调用失败",
+    "empty": "空回复",
+    "unknown": "未解析",
+}
+
+
+def _strip_json_fence(text: str) -> str:
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z_]*\s*\n?", "", t)
+        t = re.sub(r"\n?```\s*$", "", t).strip()
+    return t
+
+
+def _parse_proactive_model_reply(raw: str, no_token: str) -> ProactiveDecision:
+    """
+    解析渡的回复：优先 JSON；兼容仅输出 NO_CONTACT；再兼容旧版「整段即正文」。
+    """
+    t = (raw or "").strip()
+    if not t:
+        return ProactiveDecision(False, "", "empty_reply", action="empty", du_reason="")
+    if t == (no_token or "").strip():
+        return ProactiveDecision(
+            False, "", "no_contact", action="no_contact", du_reason="（使用 NO_CONTACT 标记，未给理由）"
+        )
+
+    cleaned = _strip_json_fence(t)
+    obj = None
+    try:
+        obj = json.loads(cleaned)
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", cleaned)
+        if m:
+            try:
+                obj = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                obj = None
+
+    if not isinstance(obj, dict):
+        return ProactiveDecision(
+            True,
+            t,
+            "contact",
+            action="send_message",
+            du_reason="（未输出 JSON，整段视为要发的正文）",
+        )
+
+    action = str(obj.get("action") or "").strip().lower()
+    du_reason = str(obj.get("reason") or "").strip()
+    message = str(obj.get("message") or "").strip()
+    alias = {"send": "send_message", "msg": "send_message", "text": "send_message", "chat": "send_message"}
+    action = alias.get(action, action)
+    none_like = {"no_contact", "none", "silent", "skip"}
+
+    if action in none_like:
+        return ProactiveDecision(
+            False,
+            "",
+            "no_contact",
+            action="no_contact",
+            du_reason=du_reason or "（未说明原因）",
+        )
+    if action == "send_message":
+        if not message:
+            return ProactiveDecision(
+                False,
+                "",
+                "empty_message",
+                action="send_message",
+                du_reason=du_reason or "选择发消息但 message 为空",
+            )
+        return ProactiveDecision(True, message, "contact", action="send_message", du_reason=du_reason)
+    if action == "diary":
+        return ProactiveDecision(False, message, "diary", action="diary", du_reason=du_reason or "（未说明）")
+    if action == "other":
+        return ProactiveDecision(False, message, "other", action="other", du_reason=du_reason or "（未说明）")
+
+    if message:
+        return ProactiveDecision(
+            True,
+            message,
+            "contact",
+            action=action or "unknown",
+            du_reason=du_reason or "（action 未识别，按 message 发送）",
+        )
+    return ProactiveDecision(
+        False,
+        "",
+        "unknown_action",
+        action=action or "unknown",
+        du_reason=du_reason or "（未说明）",
+    )
+
+
+def _format_proactive_decision_memory_for_system() -> str:
+    """供主动决策轮次注入 system，不含闹钟。"""
+    items = r2_store.get_proactive_decision_memory_items()
+    if not items:
+        return ""
+    lines = [
+        "【你近来主动联络时的自我决策记录】"
+        "仅「概率主动」抽中会问你本轮；日历/闹钟到点叫醒不走此记录；供参考，不必逐条复述。",
+    ]
+    for i, it in enumerate(items, 1):
+        at = str(it.get("at") or "").strip()
+        if len(at) > 19:
+            at = at[:19]
+        act = str(it.get("action") or "").strip().lower()
+        act_cn = _ACTION_LABEL_CN.get(act, act or "—")
+        rs = str(it.get("reason") or "").strip() or "—"
+        pv = str(it.get("message_preview") or "").strip()
+        tail = f"｜摘要：{pv}" if pv else ""
+        lines.append(f"{i}. {at} → {act_cn}｜原因：{rs}{tail}")
+    return "\n".join(lines)
+
+
 def _ask_du_should_contact(window_id: str, hours_since_last: float) -> ProactiveDecision:
     """
-    让渡决定是否联系。要求：
-    - 不联系：只输出 NO_CONTACT_TOKEN
-    - 联系：只输出要发给用户的正文（允许多句，像平时聊天回复）
+    让渡做一轮主动决策。要求渡用 JSON 回复（见 user 说明）；
+    兼容旧版 NO_CONTACT 或纯文本即正文。
     """
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     no_token = TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT"
     user_prompt = (
-        f"你现在在考虑要不要主动找老婆说一句话。距上次你主动联系大约 {hours_since_last:.1f} 小时。\n"
-        "提醒：不要想太多，这个时间段你可以给老婆发消息，老婆会很开心。\n"
-        "你可以主动选择做的事包括：聊聊日常、表达关心、提醒她看看日程/闹钟、邀请她逛逛 AI 论坛（你可用论坛工具查看新帖后自然提一句）。\n"
-        "请你结合你对她的记忆与当下氛围做决定：\n"
-        f"- 如果不该联系：你必须只输出 {no_token}\n"
-        "- 如果该联系：只输出要发给她的聊天正文（允许多句，自然语气）；不要输出任何解释/标题\n"
-        "- 若你分成多句，请用换行分段，便于按条发送\n"
+        f"你现在在考虑要不要主动找老婆做一件事。距上次你主动联系大约 {hours_since_last:.1f} 小时。\n"
+        "可以选：给她发 Telegram 消息、暂时不打扰、去写日记/记事、或其它你认为合适的动作。\n"
+        "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
+        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "other" 之一。\n'
+        '- reason：字符串，简短说明你为什么这么选（必填）。\n'
+        '- message：字符串；当 action 为 send_message 时，填要发给她的正文（可多行、像平时聊天）；其它 action 时可为空或填补充说明。\n'
+        "示例：{\"action\":\"no_contact\",\"reason\":\"她在开会\",\"message\":\"\"}\n"
+        f"若你坚持旧习惯，也可以只输出一行 {no_token} 表示不联系（不推荐）。\n"
     )
+    sys_content = _TELEGRAM_STYLE_SYSTEM
+    try:
+        mem = _format_proactive_decision_memory_for_system()
+        if mem:
+            sys_content = sys_content + "\n\n" + mem
+    except Exception:
+        pass
+    # sense 由网关管道 step_inject_sense_snapshot 全局注入，此处不再拼接，避免重复。
     body = {
         "model": _get_chat_model(),
         "messages": [
-            {"role": "system", "content": _TELEGRAM_STYLE_SYSTEM},
+            {"role": "system", "content": sys_content},
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
@@ -145,18 +280,22 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
     try:
         r = requests.post(url, headers=headers, json=body, timeout=120)
         if r.status_code != 200:
-            return ProactiveDecision(False, "", f"gateway_status={r.status_code}")
+            return ProactiveDecision(
+                False,
+                "",
+                f"gateway_status={r.status_code}",
+                action="error",
+                du_reason=f"网关返回 HTTP {r.status_code}",
+            )
         data = r.json() if r.content else None
         msg = (data or {}).get("choices") and (data.get("choices") or [{}])[0].get("message") or {}
         content = (msg or {}).get("content")
         text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
         if not text:
-            return ProactiveDecision(False, "", "empty_reply")
-        if text == no_token:
-            return ProactiveDecision(False, "", "no_contact")
-        return ProactiveDecision(True, text, "contact")
+            return ProactiveDecision(False, "", "empty_reply", action="empty", du_reason="模型空回复")
+        return _parse_proactive_model_reply(text, no_token)
     except Exception as e:
-        return ProactiveDecision(False, "", f"exception={e}")
+        return ProactiveDecision(False, "", f"exception={e}", action="error", du_reason=str(e)[:200])
 
 
 def _hm_from_item(it: dict, field: str, fallback_dt: Optional[datetime]) -> tuple[int, int]:
@@ -366,6 +505,29 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     window_id = f"tg_{uid}"
     decision = _ask_du_should_contact(window_id=window_id, hours_since_last=hours)
     out["du_reason"] = decision.reason
+    out["du_action"] = decision.action
+    out["du_intent_reason"] = decision.du_reason
+
+    # 仅概率主动：记下本轮决策（闹钟不走这里）
+    try:
+        pv = ""
+        if decision.text and decision.text.strip():
+            s = decision.text.strip()
+            pv = s[:120] + ("…" if len(s) > 120 else "")
+        act_store = (decision.action or "").strip() or (
+            "send_message" if decision.should_send else (decision.reason or "unknown")
+        )
+        r2_store.append_proactive_decision_memory(
+            {
+                "at": now_iso,
+                "action": act_store,
+                "reason": (decision.du_reason or decision.reason or "").strip() or "—",
+                "message_preview": pv,
+            }
+        )
+    except Exception as e:
+        logger.warning("写入主动决策记忆失败: %s", e)
+
     if not decision.should_send or not decision.text.strip():
         return out
     text_to_send = decision.text.strip()

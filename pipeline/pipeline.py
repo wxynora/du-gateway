@@ -377,6 +377,37 @@ def step_inject_summary(body: dict, window_id: str) -> dict:
     return body
 
 
+def step_inject_sense_snapshot(body: dict, window_id: str) -> dict:
+    """
+    全局注入：不区分 window_id。凡走网关 /v1/chat/completions 完整管道的请求（Rikka、Telegram、闹钟叫醒等）
+    都在 system 末尾追加 sense/latest 快照；不写入 user。window_id 参数保留仅为与其它 step 签名一致。
+    R2 失败或无数据则跳过。
+    """
+    _ = window_id  # 感知数据为全局一份，不按窗口分桶
+    try:
+        from services.sense_context import format_sense_snapshot_for_system
+
+        block = format_sense_snapshot_for_system()
+    except Exception as e:
+        logger.debug("sense 注入跳过 error=%s", e)
+        return body
+    if not (block or "").strip():
+        return body
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    inject = "\n\n" + block.strip()
+    found = False
+    for msg in messages:
+        if (msg.get("role") or "").lower() == "system":
+            msg["content"] = (msg.get("content") or "") + inject
+            found = True
+            break
+    if not found:
+        messages.insert(0, {"role": "system", "content": inject.strip()})
+    body["messages"] = messages
+    return body
+
+
 def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
     """
     当请求不是来自 Telegram（window_id 为空或不以 tg_ 开头）时，注入「当前是在 RikkaHub」提醒。

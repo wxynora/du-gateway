@@ -168,6 +168,32 @@ def time_now():
     return jsonify({"time_hm": hm})
 
 
+@app.route("/api/sense", methods=["POST", "OPTIONS"])
+def api_sense():
+    """
+    设备感知上报：按 type 合并写入 R2 sense/latest.json，并为本桶设置 updatedAt（UTC）；
+    同时追加一条到 sense/history/YYYY-MM-DD.json（北京日期）。
+    请求体示例：{"type":"battery","level":87,"charging":false,"timestamp":1234567890}
+    """
+    if request.method == "OPTIONS":
+        return "", 204
+    from storage import r2_store
+
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "需要 application/json"}), 400
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "JSON 无效"}), 400
+    sense_type = body.get("type")
+    if not isinstance(sense_type, str) or not sense_type.strip():
+        return jsonify({"ok": False, "error": "缺少 type 或 type 非字符串"}), 400
+    patch = {k: v for k, v in body.items() if k != "type"}
+    ok = r2_store.merge_and_save_sense_bucket(sense_type.strip(), patch)
+    if not ok:
+        return jsonify({"ok": False, "error": "R2 未配置或写入失败"}), 503
+    return jsonify({"ok": True})
+
+
 if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", 5000))
