@@ -1632,6 +1632,61 @@ def get_wenyou_last_archive(user_id: int) -> Optional[Any]:
     return _read_json(client, wenyou_last_archive_key(user_id))
 
 
+def wenyou_saves_blob_key(user_id: int) -> str:
+    """三槽位存档：wenyou/saves/{user_id}.json，结构 { \"1\"|\"2\"|\"3\": { session, description, savedAt } }。"""
+    return f"wenyou/saves/{int(user_id)}.json"
+
+
+def get_wenyou_saves_blob(user_id: int) -> dict:
+    """读取全部槽位；无文件则返回空壳。"""
+    client = _s3_client()
+    if not client:
+        return {"1": None, "2": None, "3": None}
+    raw = _read_json(client, wenyou_saves_blob_key(user_id))
+    if not raw or not isinstance(raw, dict):
+        return {"1": None, "2": None, "3": None}
+    out: dict = {}
+    for k in ("1", "2", "3"):
+        v = raw.get(k)
+        out[k] = v if isinstance(v, dict) else None
+    return out
+
+
+def set_wenyou_save_slot(user_id: int, slot: int, session_snapshot: Any, description: str) -> bool:
+    """写入单个槽位（覆盖）；session_snapshot 为完整 session 深拷贝。"""
+    if slot not in (1, 2, 3):
+        return False
+    client = _s3_client()
+    if not client:
+        logger.warning("R2 未配置，跳过 set_wenyou_save_slot user_id=%s slot=%s", user_id, slot)
+        return False
+    try:
+        blob = get_wenyou_saves_blob(user_id)
+        blob[str(slot)] = {
+            "session": session_snapshot,
+            "description": (description or "").strip() or "（无备注）",
+            "savedAt": now_beijing_iso(),
+        }
+        _write_json(client, wenyou_saves_blob_key(user_id), blob)
+        return True
+    except Exception as e:
+        logger.error("set_wenyou_save_slot 失败 user_id=%s slot=%s error=%s", user_id, slot, e, exc_info=True)
+        return False
+
+
+def get_wenyou_save_slot(user_id: int, slot: int) -> Optional[Any]:
+    """读取单个槽位条目（含 session / description / savedAt）；空槽返回 None。"""
+    if slot not in (1, 2, 3):
+        return None
+    blob = get_wenyou_saves_blob(user_id)
+    entry = blob.get(str(slot))
+    if not entry or not isinstance(entry, dict):
+        return None
+    if not entry.get("session"):
+        return None
+    return entry
+
+
 # 网关在 R2 里使用的所有前缀，清空时只删这些，不动桶里其他 key
 _R2_WIPE_PREFIXES = ("windows/", "conversations/", "global/", "dynamic_memory/", "core_cache/", "notebook/", "docs/", "wenyou/")
 

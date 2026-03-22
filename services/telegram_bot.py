@@ -17,6 +17,9 @@ import requests
 from services.wenyou_service import (
     cmd_end,
     cmd_go,
+    cmd_load,
+    cmd_save,
+    cmd_slots,
     cmd_story,
     is_wenyou_owner,
     record_group_player_line,
@@ -652,7 +655,7 @@ def _set_my_commands_private() -> bool:
 
 
 def _set_my_commands_wenyou_group() -> bool:
-    """文游固定群：/story /go /end（仅在该群菜单中显示）。"""
+    """文游固定群：/story /go /end /save /load /slots（仅在该群菜单中显示）。"""
     if not WENYOU_GROUP_CHAT_ID:
         return False
     url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/setMyCommands"
@@ -661,6 +664,9 @@ def _set_my_commands_wenyou_group() -> bool:
             {"command": "story", "description": "开局（随机或加关键词）"},
             {"command": "go", "description": "结算本轮，推进剧情"},
             {"command": "end", "description": "结束本局并归档"},
+            {"command": "save", "description": "存档到槽位 1/2/3，可加备注"},
+            {"command": "load", "description": "读档（发两次确认）"},
+            {"command": "slots", "description": "查看三个存档槽与备注"},
         ],
         "scope": {"type": "chat", "chat_id": int(WENYOU_GROUP_CHAT_ID)},
     }
@@ -971,7 +977,6 @@ def handle_telegram_update(upd: dict):
     if not text:
         return
 
-    chat_type = (msg.get("chat") or {}).get("type") or ""
     # 文游固定群：仅处理群主用户；指令与群内行动不走私聊聚合
     if WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
         if not is_wenyou_owner(int(user_id)):
@@ -979,7 +984,10 @@ def handle_telegram_update(upd: dict):
         parts = text.strip().split(maxsplit=1)
         cmd0 = (parts[0] if parts else "").split("@", 1)[0].lower()
         if cmd0 == "/start":
-            send_message(int(chat_id), "MiniApp 与运维面板请在私聊对 Bot 发送 /start。本群用于文游：/story /go /end。")
+            send_message(
+                int(chat_id),
+                "MiniApp 与运维面板请在私聊对 Bot 发送 /start。本群文游：/story /go /end，存档 /save /load /slots。",
+            )
             return
         if cmd0 == "/story":
             rest = parts[1] if len(parts) > 1 else None
@@ -992,6 +1000,31 @@ def handle_telegram_update(upd: dict):
             return
         if cmd0 == "/end":
             out = cmd_end(int(user_id))
+            send_message(int(chat_id), out)
+            return
+        if cmd0 == "/save":
+            rest = (parts[1] if len(parts) > 1 else "").strip()
+            sub = rest.split(maxsplit=1)
+            if not sub or not sub[0].isdigit():
+                send_message(int(chat_id), "文游：用法 /save 1 备注（槽位 1/2/3，备注可选）")
+                return
+            slot = int(sub[0])
+            desc = sub[1].strip() if len(sub) > 1 else ""
+            out = cmd_save(int(user_id), slot, desc)
+            send_message_segmented(int(chat_id), out)
+            return
+        if cmd0 == "/load":
+            rest = (parts[1] if len(parts) > 1 else "").strip()
+            tok = rest.split()[0] if rest else ""
+            if not tok.isdigit():
+                send_message(int(chat_id), "文游：用法 /load 1（槽位 1/2/3，需连发两次确认）")
+                return
+            slot = int(tok)
+            out = cmd_load(int(user_id), slot)
+            send_message_segmented(int(chat_id), out)
+            return
+        if cmd0 == "/slots":
+            out = cmd_slots(int(user_id))
             send_message(int(chat_id), out)
             return
         record_group_player_line(int(user_id), text)

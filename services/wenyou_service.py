@@ -29,7 +29,16 @@ _TEMPLATES_LOCK = threading.Lock()
 
 # 第二次 /story 确认开新局（仅内存，进程重启后需再确认）
 _PENDING_STORY_CONFIRM: dict[int, bool] = {}
+# 第二次 /load 确认：user_id -> 待确认的槽位 1/2/3
+_PENDING_LOAD_SLOT: dict[int, int] = {}
 _PENDING_LOCK = threading.Lock()
+
+WENYOU_SAVE_SLOTS = (1, 2, 3)
+
+
+def _clear_pending_load(uid: int) -> None:
+    with _PENDING_LOCK:
+        _PENDING_LOAD_SLOT.pop(int(uid), None)
 
 _GM_SYSTEM_TEMPLATE = """你是一个跑团游戏的GM（游戏主持人）。
 
@@ -244,6 +253,7 @@ def _format_framework_lines(fw: dict) -> str:
 def cmd_story(user_id: int, keywords: Optional[str]) -> str:
     """处理 /story [关键词]；含二次确认逻辑。"""
     uid = int(user_id)
+    _clear_pending_load(uid)
     existing = r2_store.get_wenyou_session(uid)
 
     with _PENDING_LOCK:
@@ -279,6 +289,7 @@ def record_group_player_line(user_id: int, text: str) -> None:
     uid = int(user_id)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
+        _PENDING_LOAD_SLOT.pop(uid, None)
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return
@@ -362,6 +373,7 @@ def cmd_go(user_id: int) -> str:
     uid = int(user_id)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
+        _PENDING_LOAD_SLOT.pop(uid, None)
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return "文游：当前没有进行中的局，请先 /story 开局。"
@@ -399,6 +411,7 @@ def cmd_end(user_id: int) -> str:
     uid = int(user_id)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
+        _PENDING_LOAD_SLOT.pop(uid, None)
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         with _PENDING_LOCK:
@@ -419,6 +432,89 @@ def cmd_end(user_id: int) -> str:
         _PENDING_STORY_CONFIRM.pop(uid, None)
 
     return "文游：本局已结束并归档。可在 MiniApp 查看最近一次归档。"
+
+
+def cmd_save(user_id: int, slot: int, description: str) -> str:
+    """将当前进行中的局写入固定槽位 1/2/3，可选备注。"""
+    uid = int(user_id)
+    with _PENDING_LOCK:
+        _PENDING_STORY_CONFIRM.pop(uid, None)
+    _clear_pending_load(uid)
+    if slot not in WENYOU_SAVE_SLOTS:
+        return "文游：槽位只能是 1、2、3。用法：/save 1 备注（备注可选）"
+
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return "文游：没有进行中的局，无法存档。请先 /story 开局。"
+
+    snap = copy.deepcopy(session)
+    desc = (description or "").strip()
+    ok = r2_store.set_wenyou_save_slot(uid, slot, snap, desc)
+    if not ok:
+        return "文游：存档写入失败，请稍后再试。"
+    show = desc or "（无备注）"
+    return f"文游：已保存到槽位 {slot}。\n备注：{show}\n（全局 Last4 仍按当前对话最新状态，不受读档影响。）"
+
+
+def cmd_load(user_id: int, slot: int) -> str:
+    """读档：第一次展示备注与时间并请求二次确认，第二次覆盖 active session。"""
+    uid = int(user_id)
+    with _PENDING_LOCK:
+        _PENDING_STORY_CONFIRM.pop(uid, None)
+    if slot not in WENYOU_SAVE_SLOTS:
+        return "文游：槽位只能是 1、2、3。用法：/load 1"
+
+    entry = r2_store.get_wenyou_save_slot(uid, slot)
+    if not entry:
+        _clear_pending_load(uid)
+        return f"文游：槽位 {slot} 为空。请先用 /save {slot} 备注 存一个档。"
+
+    with _PENDING_LOCK:
+        pending = _PENDING_LOAD_SLOT.get(uid)
+
+    if pending != slot:
+        with _PENDING_LOCK:
+            _PENDING_LOAD_SLOT[uid] = slot
+        desc = entry.get("description") or "（无备注）"
+        saved_at = entry.get("savedAt") or ""
+        fw = (entry.get("session") or {}).get("framework") or {}
+        hint = (fw.get("conflict") or fw.get("world") or "")[:100]
+        return (
+            f"文游：即将读档到槽位 {slot}\n"
+            f"备注：{desc}\n"
+            f"存档时间：{saved_at}\n"
+            f"摘要：{hint}{'…' if len(hint or '') >= 100 else ''}\n\n"
+            f"再发一次 /load {slot} 确认读档（会覆盖当前局内进度，适合死亡/坏结局重来）。"
+        )
+
+    with _PENDING_LOCK:
+        _PENDING_LOAD_SLOT.pop(uid, None)
+
+    session = copy.deepcopy(entry["session"])
+    r2_store.save_wenyou_session(uid, session)
+    return (
+        f"文游：已读档到槽位 {slot}。\n"
+        f"当前剧情已回到存档点；私聊注入的 GM 正文会随最新档更新。\n"
+        f"（Telegram 全局 Last4 仍为最近对话，不受影响。）"
+    )
+
+
+def cmd_slots(user_id: int) -> str:
+    """列出三个槽位是否有档及备注。"""
+    uid = int(user_id)
+    with _PENDING_LOCK:
+        _PENDING_STORY_CONFIRM.pop(uid, None)
+    _clear_pending_load(uid)
+    lines: list[str] = ["文游：三个存档槽（固定 1 / 2 / 3）"]
+    for s in WENYOU_SAVE_SLOTS:
+        entry = r2_store.get_wenyou_save_slot(uid, s)
+        if entry and entry.get("session"):
+            desc = entry.get("description") or "（无备注）"
+            at = entry.get("savedAt") or ""
+            lines.append(f"【{s}】{desc}  |  {at}")
+        else:
+            lines.append(f"【{s}】空")
+    return "\n".join(lines)
 
 
 def get_latest_gm_for_inject(user_id: int) -> str:
