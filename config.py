@@ -282,6 +282,14 @@ MINIMAX_AUDIO_CHANNEL = int(os.environ.get("MINIMAX_AUDIO_CHANNEL", "1"))
 # Telegram 语音回复开关：允许渡用 <voice>...</voice> 触发发送语音
 TELEGRAM_VOICE_REPLY_ENABLED = os.environ.get("TELEGRAM_VOICE_REPLY_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 
+# 文游：固定 Telegram 群（仅该群内处理 /story /go /end；0=关闭）
+WENYOU_GROUP_CHAT_ID = int(os.environ.get("WENYOU_GROUP_CHAT_ID", "0") or "0")
+# 文游：只认该用户 ID 的指令（留空则沿用 TELEGRAM_PROACTIVE_TARGET_USER_ID）
+_WENYOU_OWNER_STR = os.environ.get("TELEGRAM_WENYOU_OWNER_USER_ID", "").strip()
+TELEGRAM_WENYOU_OWNER_USER_ID = int(_WENYOU_OWNER_STR) if _WENYOU_OWNER_STR else int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+# 文游 GM 使用的 DeepSeek 模型名
+WENYOU_DS_MODEL = os.environ.get("WENYOU_DS_MODEL", "deepseek-chat").strip()
+
 # -------------------- Telegram Mini App（手机端运维面板） --------------------
 # 静态站点目录：由 Flask 直接托管 /miniapp
 MINIAPP_STATIC_DIR = BASE_DIR / "miniapp_static"

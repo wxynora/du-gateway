@@ -1549,8 +1549,91 @@ def get_window_conversation_rounds(window_id: str) -> int:
 # ---------- 一键清空（测试/重置用） ----------
 
 
+# ---------- 文游（跑团）：active 局、最近一次归档快照（供 MiniApp 拉取） ----------
+
+
+def wenyou_active_session_key(user_id: int) -> str:
+    return f"wenyou/active/{int(user_id)}/session.json"
+
+
+def wenyou_last_archive_key(user_id: int) -> str:
+    return f"wenyou/last_archive/{int(user_id)}.json"
+
+
+def get_wenyou_session(user_id: int) -> Optional[Any]:
+    """读取进行中的文游局；无则 None。"""
+    client = _s3_client()
+    if not client:
+        return None
+    return _read_json(client, wenyou_active_session_key(user_id))
+
+
+def save_wenyou_session(user_id: int, data: Any) -> bool:
+    """保存文游 session 到 R2。"""
+    client = _s3_client()
+    if not client:
+        logger.warning("R2 未配置，跳过 save_wenyou_session user_id=%s", user_id)
+        return False
+    try:
+        _write_json(client, wenyou_active_session_key(user_id), data)
+        return True
+    except Exception as e:
+        logger.error("save_wenyou_session 失败 user_id=%s error=%s", user_id, e, exc_info=True)
+        return False
+
+
+def delete_wenyou_active_session(user_id: int) -> bool:
+    """删除进行中的文游 session 文件。"""
+    client = _s3_client()
+    if not client:
+        return False
+    key = wenyou_active_session_key(user_id)
+    try:
+        client.delete_object(Bucket=R2_BUCKET_NAME, Key=key)
+        return True
+    except Exception as e:
+        logger.warning("delete_wenyou_active_session 失败 key=%s error=%s", key, e)
+        return False
+
+
+def save_wenyou_archive_copy(user_id: int, game_id: str, data: Any) -> bool:
+    """归档一局到 wenyou/archive/{user_id}/{game_id}.json。"""
+    client = _s3_client()
+    if not client:
+        return False
+    safe_gid = "".join(c if c.isalnum() or c in "-_" else "_" for c in (game_id or ""))[:80]
+    key = f"wenyou/archive/{int(user_id)}/{safe_gid or 'unknown'}.json"
+    try:
+        _write_json(client, key, data)
+        return True
+    except Exception as e:
+        logger.error("save_wenyou_archive_copy 失败 key=%s error=%s", key, e, exc_info=True)
+        return False
+
+
+def save_wenyou_last_archive(user_id: int, data: Any) -> bool:
+    """保存「最近一次结束局」快照，供 MiniApp 只拉一次。"""
+    client = _s3_client()
+    if not client:
+        return False
+    try:
+        _write_json(client, wenyou_last_archive_key(user_id), data)
+        return True
+    except Exception as e:
+        logger.error("save_wenyou_last_archive 失败 user_id=%s error=%s", user_id, e, exc_info=True)
+        return False
+
+
+def get_wenyou_last_archive(user_id: int) -> Optional[Any]:
+    """读取最近一次结束局的快照。"""
+    client = _s3_client()
+    if not client:
+        return None
+    return _read_json(client, wenyou_last_archive_key(user_id))
+
+
 # 网关在 R2 里使用的所有前缀，清空时只删这些，不动桶里其他 key
-_R2_WIPE_PREFIXES = ("windows/", "conversations/", "global/", "dynamic_memory/", "core_cache/", "notebook/", "docs/")
+_R2_WIPE_PREFIXES = ("windows/", "conversations/", "global/", "dynamic_memory/", "core_cache/", "notebook/", "docs/", "wenyou/")
 
 
 def delete_all_gateway_data() -> tuple[bool, int, Optional[str]]:

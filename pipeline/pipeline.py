@@ -1129,10 +1129,28 @@ def _apply_one_decision(
     return None
 
 
+def _wenyou_round_skip_dynamic(round_messages: list) -> bool:
+    """文游回合带 [文游] 前缀，虚构内容不参与动态层便签。"""
+    for m in round_messages or []:
+        c = m.get("content")
+        if isinstance(c, str) and "[文游]" in (c[:120] if c else ""):
+            return True
+        if isinstance(c, list):
+            for p in c:
+                if isinstance(p, dict) and p.get("type") == "text":
+                    t = str(p.get("text") or "")
+                    if "[文游]" in t[:120]:
+                        return True
+    return False
+
+
 def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages: list) -> Optional[dict]:
     """
     动态层演化：调用 DS 得单条决策并应用。返回若应写记忆库则返回 archive 载荷，否则 None（实时对话忽略返回值）。
     """
+    if _wenyou_round_skip_dynamic(round_messages):
+        logger.info("动态层跳过：文游虚构回合 window_id=%s round_index=%s", window_id, round_index)
+        return None
     # 小本本是单独通道：只做小本本存储，不参与动态层记忆，避免污染记忆与人称错乱
     try:
         from services.notebook_gateway import extract_entries_from_round

@@ -19,6 +19,11 @@ def build_summary_prompt(current_summary: str, recent_4_rounds: list) -> str:
         return s.startswith(NOTEBOOK_EMOJI) and (NOTEBOOK_PHRASE in s)
 
     rounds_text = ""
+    # 文游：帮助 DS 区分跑团虚构与真实对话
+    rounds_text += (
+        "【说明】若下列对话含前缀 [文游] 或 [文游·GM]，表示跑团游戏虚构内容；"
+        "总结时请标注为游戏内容，勿与真实事件混淆。\n\n"
+    )
     last_bucket = ""
     for r in recent_4_rounds:
         # 为避免「昨晚的事」和「今天」混在一起：按北京时间给每段对话加时间段标记（同一时间段不重复）

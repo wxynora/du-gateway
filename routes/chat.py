@@ -36,6 +36,7 @@ from pipeline.pipeline import (
     step_trim_messages_if_over_limit,
     step_archive_and_maybe_summary,
 )
+from services.wenyou_service import step_inject_wenyou_gm
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import whitelist_store
@@ -661,6 +662,7 @@ def chat_completions():
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
     body = step_inject_summary(body, window_id)
+    body = step_inject_wenyou_gm(body, window_id)
     body = step_inject_rikkahub_reminder(body, window_id)
     body = step_inject_dynamic_memory(body, window_id)
     body = step_inject_du_notebook(body)

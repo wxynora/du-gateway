@@ -14,6 +14,14 @@ from uuid import uuid4
 
 import requests
 
+from services.wenyou_service import (
+    cmd_end,
+    cmd_go,
+    cmd_story,
+    is_wenyou_owner,
+    record_group_player_line,
+)
+
 from config import (
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
@@ -29,6 +37,8 @@ from config import (
     TELEGRAM_CONTEXT_LAST_TURNS,
     TELEGRAM_VOICE_REPLY_ENABLED,
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
+    WENYOU_GROUP_CHAT_ID,
+    TELEGRAM_WENYOU_OWNER_USER_ID,
 )
 
 logger = logging.getLogger(__name__)
@@ -621,21 +631,48 @@ def _get_telegram_file_bytes(file_id: str) -> Optional[tuple[bytes, str]]:
         return None
 
 
-def _set_my_commands() -> bool:
-    """清空 Bot 命令菜单。"""
+def _set_my_commands_private() -> bool:
+    """私聊默认：/start（运维面板）。"""
     url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/setMyCommands"
     payload = {
-        "commands": []
+        "commands": [
+            {"command": "start", "description": "运维面板与 MiniApp 入口"},
+        ]
     }
     try:
         r = requests.post(url, json=payload, timeout=15)
         if r.status_code != 200:
-            logger.warning("setMyCommands 非 200 status=%s body=%s", r.status_code, (r.text or "")[:200])
+            logger.warning("setMyCommands(private) 非 200 status=%s body=%s", r.status_code, (r.text or "")[:200])
             return False
         data = r.json() if r.content else {}
         return bool(data.get("ok", True))
     except Exception as e:
-        logger.warning("setMyCommands 失败: %s", e)
+        logger.warning("setMyCommands(private) 失败: %s", e)
+        return False
+
+
+def _set_my_commands_wenyou_group() -> bool:
+    """文游固定群：/story /go /end（仅在该群菜单中显示）。"""
+    if not WENYOU_GROUP_CHAT_ID:
+        return False
+    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/setMyCommands"
+    payload = {
+        "commands": [
+            {"command": "story", "description": "开局（随机或加关键词）"},
+            {"command": "go", "description": "结算本轮，推进剧情"},
+            {"command": "end", "description": "结束本局并归档"},
+        ],
+        "scope": {"type": "chat", "chat_id": int(WENYOU_GROUP_CHAT_ID)},
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=15)
+        if r.status_code != 200:
+            logger.warning("setMyCommands(wenyou) 非 200 status=%s body=%s", r.status_code, (r.text or "")[:200])
+            return False
+        data = r.json() if r.content else {}
+        return bool(data.get("ok", True))
+    except Exception as e:
+        logger.warning("setMyCommands(wenyou) 失败: %s", e)
         return False
 
 
@@ -882,7 +919,11 @@ def init_telegram_bot_runtime():
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN 未配置，Telegram 功能将不可用")
         return
-    _set_my_commands()
+    _set_my_commands_private()
+    if WENYOU_GROUP_CHAT_ID and TELEGRAM_WENYOU_OWNER_USER_ID:
+        _set_my_commands_wenyou_group()
+    elif WENYOU_GROUP_CHAT_ID and not TELEGRAM_WENYOU_OWNER_USER_ID:
+        logger.warning("已配置 WENYOU_GROUP_CHAT_ID 但未配置 TELEGRAM_WENYOU_OWNER_USER_ID（或 TELEGRAM_PROACTIVE_TARGET_USER_ID），文游指令将不生效")
 
 
 def handle_telegram_update(upd: dict):
@@ -928,6 +969,32 @@ def handle_telegram_update(upd: dict):
         return
 
     if not text:
+        return
+
+    chat_type = (msg.get("chat") or {}).get("type") or ""
+    # 文游固定群：仅处理群主用户；指令与群内行动不走私聊聚合
+    if WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
+        if not is_wenyou_owner(int(user_id)):
+            return
+        parts = text.strip().split(maxsplit=1)
+        cmd0 = (parts[0] if parts else "").split("@", 1)[0].lower()
+        if cmd0 == "/start":
+            send_message(int(chat_id), "MiniApp 与运维面板请在私聊对 Bot 发送 /start。本群用于文游：/story /go /end。")
+            return
+        if cmd0 == "/story":
+            rest = parts[1] if len(parts) > 1 else None
+            out = cmd_story(int(user_id), rest)
+            send_message_segmented(int(chat_id), out)
+            return
+        if cmd0 == "/go":
+            out = cmd_go(int(user_id))
+            send_message_segmented(int(chat_id), out)
+            return
+        if cmd0 == "/end":
+            out = cmd_end(int(user_id))
+            send_message(int(chat_id), out)
+            return
+        record_group_player_line(int(user_id), text)
         return
 
     # /start：弹出运维面板键盘（不进入聊天）

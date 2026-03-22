@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from config import MINIAPP_LOG_FILE, TELEGRAM_PROACTIVE_TARGET_USER_ID
+from config import MINIAPP_LOG_FILE, TELEGRAM_PROACTIVE_TARGET_USER_ID, TELEGRAM_WENYOU_OWNER_USER_ID
 from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
 from utils.ip_allowlist import enforce_ip_allowlist
@@ -463,6 +463,19 @@ def _miniapp_auth():
     # 双保险：先 IP，再 Telegram initData（更快拒绝无效来源）
     enforce_ip_allowlist()
     enforce_telegram_initdata()
+
+
+@bp.route("/wenyou/last-archive", methods=["GET"])
+def miniapp_wenyou_last_archive():
+    """
+    文游：最近一次 /end 后的归档快照（R2 wenyou/last_archive/{user_id}.json）。
+    前端可在结局页拉一次展示框架与历史。
+    """
+    uid = int(TELEGRAM_WENYOU_OWNER_USER_ID or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if uid <= 0:
+        return jsonify({"ok": False, "error": "未配置 TELEGRAM_WENYOU_OWNER_USER_ID 或 TELEGRAM_PROACTIVE_TARGET_USER_ID"}), 400
+    arch = r2_store.get_wenyou_last_archive(uid)
+    return jsonify({"ok": True, "archive": arch})
 
 
 @bp.route("/status", methods=["GET"])
