@@ -43,6 +43,7 @@ def _clear_pending_load(uid: int) -> None:
 # 开局生成框架时注入的 system（无限流 / 副本）
 _FRAMEWORK_SYSTEM = """你在为一款「无限流」双人文字跑团生成**单个副本**的设定数据。
 整体世界观：存在主神空间；玩家被投入一个又一个副本世界，每个副本有独立规则与任务；你是数据侧，JSON 内用中性表述即可。
+**编制硬性规则**：每个副本固定 **6 名任务者**——玩家两名（玩家一、玩家二「渡」）+ **恰好 4 名 NPC**，同场竞技或同规则约束；难度 **D～S**（D 最低、S 最高），难度越高环境越险、NPC 里越容易出现老练者或「大佬」，也可能更多炮灰；NPC **不一定友善**，可有害人、借刀、欺骗等，JSON 里直接写清立场倾向即可。
 opening 建议包含传送/白光/提示音/主神刻板广播之一切入副本场景，但不要冗长。"""
 
 
@@ -58,9 +59,13 @@ _GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统*
 - 失败或惩罚方向（虚构，勿过度血腥）：{failure_hint}
 - 通关奖励风味（积分、线索、豁免权等，可抽象不写具体数值）：{reward_hint}
 
+## 难度与任务者编制（必须遵守）
+{tasker_regiment_block}
+
 ## 无限流玩法（叙事层，由你自然化用，勿刷屏）
 - 每个故事都是**一次副本**；可在关键节点用一两句 **【主神提示】** 或系统播报（全角括号），平时少用，保持克制。
-- 可埋伏线：**隐藏任务**、**规则类陷阱**（规则必须说清楚，让玩家有破解空间）、**NPC 立场**、**时间或阶段压力**（虚构节奏，不必真实倒计时）。
+- **六人场**：除两名玩家外，**四名 NPC 任务者**须在剧中保持可追溯的存在感（可分批登场、可退场或死亡，但须有因果，不得无交代蒸发）。
+- 可埋伏线：**隐藏任务**、**规则类陷阱**（规则必须说清楚，让玩家有破解空间）、**NPC 之间互害或坑玩家**、**时间或阶段压力**（虚构节奏，不必真实倒计时）。
 - **副本结算**仅在剧情自然抵达时暗示：如「副本通关评价」「传送白光」「任务失败后果」等，**不得**因玩家未选某选项就强行宣判；bad end 也要符合因果。
 - **积分 / 主神商店 / 回归现实**等只作**风味描写**，不要引入需要程序计算的数值系统；若提积分，一两句带过即可。
 
@@ -162,18 +167,28 @@ def _framework_prompt_random(seeds: dict) -> str:
 {{
   "instance_code": "副本编号，如 M-218、F-07",
   "instance_name": "副本常用名，2-8 字为宜",
+  "difficulty": "必须是 D、C、B、A、S 之一（D 最低，S 最高；须与整体危险度、NPC 层次一致）",
   "world": "本副本**内部**世界观与场景 2-4 句（不写主神空间全貌，聚焦本图）",
   "player1_name": "玩家一在本副本中的称呼或名字",
   "player1_role": "职业、特质、一个秘密（简短）",
   "player2_name": "渡",
   "player2_role": "渡在本副本中的身份、特质、一个秘密（可与人设微妙呼应）",
+  "npc_taskers": [
+    {{"name": "NPC 代号或称呼", "tier_note": "炮灰|新人|老练|大佬 等定位", "stance": "合作|中立|损人利己|暗藏祸心 等", "blurb": "一句话外貌或特征"}},
+    {{"name": "...", "tier_note": "...", "stance": "...", "blurb": "..."}},
+    {{"name": "...", "tier_note": "...", "stance": "...", "blurb": "..."}},
+    {{"name": "...", "tier_note": "...", "stance": "...", "blurb": "..."}}
+  ],
   "conflict": "主神发布的核心任务 / 通关条件 1-3 句，可略带残酷或幽默感",
   "failure_hint": "失败、抹杀或惩罚方向的**一句**提示（虚构，勿过度血腥）",
   "reward_hint": "通关后可能获得的奖励风味一句（如积分、线索、豁免；可不写具体数字）",
-  "opening": "开场 4-8 句：建议含传送/白光/提示音/主神刻板广播之一，再进入场景，有画面感"
+  "opening": "开场 4-8 句：建议含传送/白光/提示音/主神刻板广播之一；**必须**出现与玩家同场的其他任务者（四名 NPC）的登场感或存在感，再进入场景，有画面感"
 }}
 
+**编制硬性规则**：`npc_taskers` 必须恰好 **4 个对象**，与两名玩家合计 **6 名任务者**；NPC 可有好人、坏人、坑货、炮灰、大佬，与 `difficulty` 相匹配。
+
 随机种子（融入副本，不必照抄字面）：
+- 建议难度：{seeds.get("difficulty", "C")}
 - 世界基调：{seeds.get("world", "")}
 - 冲突类型：{seeds.get("conflict", "")}
 - 角色灵感一：{seeds.get("role_a", "")}
@@ -187,20 +202,97 @@ def _framework_prompt_custom(keywords: str) -> str:
 {{
   "instance_code": "副本编号",
   "instance_name": "副本名",
+  "difficulty": "D、C、B、A、S 之一",
   "world": "本副本内部世界观与场景 2-4 句",
   "player1_name": "玩家一称呼",
   "player1_role": "职业、特质、一个秘密（简短）",
   "player2_name": "渡",
   "player2_role": "渡在本副本中的身份、特质、一个秘密（简短）",
+  "npc_taskers": [
+    {{"name": "", "tier_note": "", "stance": "", "blurb": ""}},
+    {{"name": "", "tier_note": "", "stance": "", "blurb": ""}},
+    {{"name": "", "tier_note": "", "stance": "", "blurb": ""}},
+    {{"name": "", "tier_note": "", "stance": "", "blurb": ""}}
+  ],
   "conflict": "主神核心任务 / 通关条件 1-3 句",
   "failure_hint": "失败或惩罚方向一句（虚构，勿过度血腥）",
   "reward_hint": "通关奖励风味一句（可不写具体数字）",
-  "opening": "开场 4-8 句，建议含主神传送或播报感切入"
+  "opening": "开场 4-8 句，建议含主神传送或播报感；须体现与四名 NPC 任务者同场（6 人编制）"
 }}
+
+**编制**：`npc_taskers` 必须恰好 4 条，与两名玩家合计 6 名任务者；NPC 可炮灰可大佬、可善可恶。
 
 关键词：{keywords}
 
 只输出 JSON，不要解释。"""
+
+
+# 副本难度 D～S（D 最低，S 最高）
+_WENYOU_DIFFICULTIES = frozenset({"D", "C", "B", "A", "S"})
+
+
+def _normalize_difficulty(value: Any) -> str:
+    s = str(value or "").strip().upper()
+    return s if s in _WENYOU_DIFFICULTIES else "C"
+
+
+def _normalize_npc_taskers(raw: dict) -> list[dict]:
+    """固定 4 条 NPC，与两名玩家合计 6 名任务者。"""
+    arr = raw.get("npc_taskers")
+    if not isinstance(arr, list):
+        arr = []
+    out: list[dict] = []
+    for i in range(4):
+        if i < len(arr) and isinstance(arr[i], dict):
+            d = arr[i]
+            out.append(
+                {
+                    "name": str(d.get("name") or f"NPC{i+1}")[:48].strip(),
+                    "tier_note": str(d.get("tier_note") or "未知")[:32].strip(),
+                    "stance": str(d.get("stance") or "立场未明")[:48].strip(),
+                    "blurb": str(d.get("blurb") or "")[:200].strip(),
+                }
+            )
+        else:
+            out.append(
+                {
+                    "name": f"任务者{i+3}",
+                    "tier_note": "待定",
+                    "stance": "立场未明",
+                    "blurb": "主神档案尚未同步",
+                }
+            )
+    return out
+
+
+def _framework_for_runtime(fw: Optional[dict]) -> dict:
+    """旧存档补全 difficulty / npc_taskers，避免缺字段。"""
+    out = dict(fw or {})
+    out["difficulty"] = _normalize_difficulty(out.get("difficulty"))
+    n = out.get("npc_taskers")
+    if not isinstance(n, list) or len(n) != 4:
+        out["npc_taskers"] = _normalize_npc_taskers(out)
+    return out
+
+
+def _format_tasker_regiment_for_gm(fw: dict) -> str:
+    """写入 GM system：难度 + 六人编制说明 + 四 NPC 档案。"""
+    diff = _normalize_difficulty(fw.get("difficulty"))
+    p1n = fw.get("player1_name") or "玩家一"
+    p2n = fw.get("player2_name") or "渡"
+    lines = [
+        f"- 难度等级：**{diff}**（D 最易，S 最险；越高则环境越危险、规则越苛刻，NPC 中越容易混有「大佬」或「炮灰」，恶意与博弈也更强）。",
+        f"- 编制：玩家一「{p1n}」、玩家二「{p2n}」+ **4 名 NPC 任务者**，共 **6 人**，须在同一副本规则下互动（NPC 可分批登场、可退场或死亡，但须有因果，不得无交代消失）。",
+        "- 四名 NPC 可与难度相应：低难度多为炮灰、新人；高难度可出现老练者或关键「大佬」；**并非全是好人**，可有坑害、借刀、欺骗、损人利己；禁止过度血腥虐待描写。",
+        "",
+        "四名 NPC 档案（须在剧情中落实）：",
+    ]
+    for i, n in enumerate(fw.get("npc_taskers") or []):
+        if isinstance(n, dict):
+            lines.append(
+                f"  · {i+1}. 「{n.get('name', '')}」｜{n.get('tier_note', '')}｜立场：{n.get('stance', '')}｜{n.get('blurb', '')}"
+            )
+    return "\n".join(lines)
 
 
 def _normalize_framework(raw: dict) -> dict:
@@ -225,6 +317,8 @@ def _normalize_framework(raw: dict) -> dict:
         "failure_hint": str(raw.get("failure_hint") or "由主神规则判定，细节在副本中逐步显露。").strip(),
         "reward_hint": str(raw.get("reward_hint") or "视通关表现给予积分或线索类回报（风味）。").strip(),
         "opening": str(raw.get("opening") or "").strip(),
+        "difficulty": _normalize_difficulty(raw.get("difficulty")),
+        "npc_taskers": _normalize_npc_taskers(raw),
     }
 
 
@@ -234,6 +328,7 @@ def generate_framework_random() -> tuple[Optional[dict], Optional[str]]:
     conflicts = tpl.get("conflicts") or ["一场冒险"]
     roles = tpl.get("roles") or ["旅人：在寻找某样东西"]
     seeds = {
+        "difficulty": random.choice(["D", "C", "B", "A", "S"]),
         "world": random.choice(worlds),
         "conflict": random.choice(conflicts),
         "role_a": random.choice(roles),
@@ -278,6 +373,7 @@ def _new_session(framework: dict) -> dict:
 
 
 def _format_framework_lines(fw: dict) -> str:
+    fw = _framework_for_runtime(fw)
     ic = (fw.get("instance_code") or "").strip()
     inn = (fw.get("instance_name") or "").strip()
     if ic and inn and ic != "—":
@@ -288,11 +384,22 @@ def _format_framework_lines(fw: dict) -> str:
         head = f"【无限流 · 副本 {ic}】\n"
     else:
         head = "【无限流 · 副本】\n"
+    diff = _normalize_difficulty(fw.get("difficulty"))
+    npc_lines = []
+    for i, n in enumerate(fw.get("npc_taskers") or []):
+        if isinstance(n, dict):
+            npc_lines.append(
+                f"  · NPC{i+1}「{n.get('name', '')}」{n.get('tier_note', '')}｜{n.get('stance', '')}｜{n.get('blurb', '')}"
+            )
+    npc_block = "\n".join(npc_lines) if npc_lines else "  （无）"
     return (
         f"{head}"
+        f"【难度】{diff}（D 最低，S 最高）\n\n"
+        f"【任务者（固定 6 人：玩家 + 4 名 NPC）】\n"
+        f"· 玩家一「{fw.get('player1_name', '玩家一')}」\n{fw.get('player1_role', '')}\n\n"
+        f"· 玩家二「{fw.get('player2_name', '渡')}」\n{fw.get('player2_role', '')}\n\n"
+        f"【四名 NPC 任务者】\n{npc_block}\n\n"
         f"【副本场景】\n{fw.get('world', '')}\n\n"
-        f"【{fw.get('player1_name', '玩家一')}】\n{fw.get('player1_role', '')}\n\n"
-        f"【{fw.get('player2_name', '渡')}】\n{fw.get('player2_role', '')}\n\n"
         f"【主神任务】\n{fw.get('conflict', '')}\n\n"
         f"【失败倾向】\n{fw.get('failure_hint', '')}\n\n"
         f"【通关回报（风味）】\n{fw.get('reward_hint', '')}"
@@ -366,9 +473,9 @@ def record_group_player_line(user_id: int, text: str) -> None:
     r2_store.save_wenyou_session(uid, session)
 
 
-def _build_gm_messages(session: dict) -> list[dict]:
-    """把 session 转成 GM API 多轮消息（仅 user/assistant 角色给模型）。"""
-    fw = session.get("framework") or {}
+def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
+    """把 session 转成 GM API：system 文本 + 多轮 messages（仅 user/assistant 角色给模型）。"""
+    fw = _framework_for_runtime(session.get("framework") or {})
     system = _GM_SYSTEM_TEMPLATE.format(
         instance_line=_framework_instance_line(fw),
         world=fw.get("world", ""),
@@ -379,6 +486,7 @@ def _build_gm_messages(session: dict) -> list[dict]:
         conflict=fw.get("conflict", ""),
         failure_hint=fw.get("failure_hint") or "由主神规则判定。",
         reward_hint=fw.get("reward_hint") or "视表现给予风味向回报。",
+        tasker_regiment_block=_format_tasker_regiment_for_gm(fw),
     )
     msgs: list[dict] = []
     for h in session.get("history") or []:
@@ -541,8 +649,9 @@ def cmd_load(user_id: int, slot: int) -> str:
             _PENDING_LOAD_SLOT[uid] = slot
         desc = entry.get("description") or "（无备注）"
         saved_at = entry.get("savedAt") or ""
-        fw = (entry.get("session") or {}).get("framework") or {}
-        hint = (fw.get("conflict") or fw.get("world") or "")[:100]
+        fw = _framework_for_runtime((entry.get("session") or {}).get("framework") or {})
+        hint = f"[{fw.get('difficulty', '?')}] " + (fw.get("conflict") or fw.get("world") or "")
+        hint = hint[:120]
         return (
             f"文游：即将读档到槽位 {slot}\n"
             f"备注：{desc}\n"
