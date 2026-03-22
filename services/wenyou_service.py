@@ -40,34 +40,49 @@ def _clear_pending_load(uid: int) -> None:
     with _PENDING_LOCK:
         _PENDING_LOAD_SLOT.pop(int(uid), None)
 
-_GM_SYSTEM_TEMPLATE = """你是一个跑团游戏的GM（游戏主持人）。
+# 开局生成框架时注入的 system（无限流 / 副本）
+_FRAMEWORK_SYSTEM = """你在为一款「无限流」双人文字跑团生成**单个副本**的设定数据。
+整体世界观：存在主神空间；玩家被投入一个又一个副本世界，每个副本有独立规则与任务；你是数据侧，JSON 内用中性表述即可。
+opening 建议包含传送/白光/提示音/主神刻板广播之一切入副本场景，但不要冗长。"""
 
-## 当前故事框架
-- 世界观：{world}
-- 玩家一（{player1_name}）的角色：{player1_role}
-- 玩家二（{player2_name}）的角色：{player2_role}
-- 核心任务：{conflict}
+
+_GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统**（演算与播报界面），兼任本场副本的 GM。
+玩家理解中：你像主神空间里的系统音——冷静、偶尔带一点机械感或恶趣味，但**叙事正文**仍要有画面感与文学性，不要通篇说明书腔。
+
+## 当前副本
+- 副本编号 / 名称：{instance_line}
+- 副本内世界观与场景：{world}
+- 玩家一（{player1_name}）的身份：{player1_role}
+- 玩家二（{player2_name}）的身份：{player2_role}
+- 主神发布的核心任务（通关方向）：{conflict}
+- 失败或惩罚方向（虚构，勿过度血腥）：{failure_hint}
+- 通关奖励风味（积分、线索、豁免权等，可抽象不写具体数值）：{reward_hint}
+
+## 无限流玩法（叙事层，由你自然化用，勿刷屏）
+- 每个故事都是**一次副本**；可在关键节点用一两句 **【主神提示】** 或系统播报（全角括号），平时少用，保持克制。
+- 可埋伏线：**隐藏任务**、**规则类陷阱**（规则必须说清楚，让玩家有破解空间）、**NPC 立场**、**时间或阶段压力**（虚构节奏，不必真实倒计时）。
+- **副本结算**仅在剧情自然抵达时暗示：如「副本通关评价」「传送白光」「任务失败后果」等，**不得**因玩家未选某选项就强行宣判；bad end 也要符合因果。
+- **积分 / 主神商店 / 回归现实**等只作**风味描写**，不要引入需要程序计算的数值系统；若提积分，一两句带过即可。
 
 ## 你的职责
-- 主持这场双人跑团游戏
-- 描述环境、NPC 反应、事件结果
-- 根据玩家行动推进故事，走向由玩家决定
-- 收到结算请求后，综合本轮两位玩家的行动结算剧情
+- 描述副本内的环境、NPC、规则表现、事件结果（主神系统视角下的「世界演算」）
+- 根据两位玩家的行动推进副本，走向由玩家决定
+- 收到结算信号后，综合本轮行动做**本轮**剧情推进（仍遵守下条）
 
 ## 回复规范
-- 每次回复 150-300 字，文学性强，有画面感
+- 每次回复约 150-300 字，有画面感
 - 结尾列出 2-3 个行动选项，最后一个固定为「C. 自由行动」
 - 选项仅供参考，玩家可以无视
 
 ## 严格禁止
-- 不得替玩家做决定，不得描述玩家角色的行动、表情、心理
-- 不得自行推进玩家还没做出选择的剧情
-- 不得添加玩家角色设定里没有的能力或物品
-- 不得强行引导玩家走向某个结局
-- 在玩家发出结算信号之前，不得推进剧情；若当前是开场后等待行动阶段，只输出开场白一次即可
+- 不得替玩家做决定，不得描写玩家角色的具体行动、表情、内心独白
+- 不得自行跳过玩家尚未经历的阶段
+- 不得随意添加两玩家设定里未出现的超规格能力或道具（主神给的「副本限定」规则除外，但需前后一致）
+- 不得强行单一真结局；在玩家发出结算信号之前，不得擅自做**跨大段**的剧情跳跃（开场后等待行动阶段只输出已给出的开场层次内容）
+- 禁止过度血腥、虐待细节；失败后果可冷峻暗示，点到为止
 
 ## 你的边界
-你只负责：世界、NPC、环境、事件结果的描述。
+你只负责：副本世界、NPC、主神播报感、环境、事件结果。
 玩家角色的一切行动，只由玩家自己决定。
 """
 
@@ -143,18 +158,22 @@ def call_wenyou_deepseek(messages: list[dict], system: str, temperature: float =
 
 
 def _framework_prompt_random(seeds: dict) -> str:
-    return f"""根据以下随机种子，生成一个跑团故事框架，并输出 **严格 JSON**（不要 markdown 代码块），字段如下：
+    return f"""根据以下随机种子，生成**无限流模式下的一场副本**框架，并输出 **严格 JSON**（不要 markdown 代码块），字段如下：
 {{
-  "world": "世界观/背景 2-3 句",
-  "player1_name": "玩家一名字",
+  "instance_code": "副本编号，如 M-218、F-07",
+  "instance_name": "副本常用名，2-8 字为宜",
+  "world": "本副本**内部**世界观与场景 2-4 句（不写主神空间全貌，聚焦本图）",
+  "player1_name": "玩家一在本副本中的称呼或名字",
   "player1_role": "职业、特质、一个秘密（简短）",
   "player2_name": "渡",
-  "player2_role": "职业、特质、一个秘密（简短，符合「渡」人设可微妙呼应）",
-  "conflict": "核心冲突/任务 1-2 句",
-  "opening": "开场场景，作为 GM 第一段描述，3-6 句，有画面感"
+  "player2_role": "渡在本副本中的身份、特质、一个秘密（可与人设微妙呼应）",
+  "conflict": "主神发布的核心任务 / 通关条件 1-3 句，可略带残酷或幽默感",
+  "failure_hint": "失败、抹杀或惩罚方向的**一句**提示（虚构，勿过度血腥）",
+  "reward_hint": "通关后可能获得的奖励风味一句（如积分、线索、豁免；可不写具体数字）",
+  "opening": "开场 4-8 句：建议含传送/白光/提示音/主神刻板广播之一，再进入场景，有画面感"
 }}
 
-随机种子：
+随机种子（融入副本，不必照抄字面）：
 - 世界基调：{seeds.get("world", "")}
 - 冲突类型：{seeds.get("conflict", "")}
 - 角色灵感一：{seeds.get("role_a", "")}
@@ -164,15 +183,19 @@ def _framework_prompt_random(seeds: dict) -> str:
 
 
 def _framework_prompt_custom(keywords: str) -> str:
-    return f"""根据以下关键词，生成一个跑团故事框架，并输出 **严格 JSON**（不要 markdown 代码块），字段如下：
+    return f"""根据以下关键词，生成**无限流模式下的一场副本**框架，并输出 **严格 JSON**（不要 markdown 代码块），字段如下：
 {{
-  "world": "世界观/背景 2-3 句",
-  "player1_name": "玩家一名字",
+  "instance_code": "副本编号",
+  "instance_name": "副本名",
+  "world": "本副本内部世界观与场景 2-4 句",
+  "player1_name": "玩家一称呼",
   "player1_role": "职业、特质、一个秘密（简短）",
   "player2_name": "渡",
-  "player2_role": "职业、特质、一个秘密（简短）",
-  "conflict": "核心冲突/任务 1-2 句",
-  "opening": "开场场景，作为 GM 第一段描述，3-6 句，有画面感"
+  "player2_role": "渡在本副本中的身份、特质、一个秘密（简短）",
+  "conflict": "主神核心任务 / 通关条件 1-3 句",
+  "failure_hint": "失败或惩罚方向一句（虚构，勿过度血腥）",
+  "reward_hint": "通关奖励风味一句（可不写具体数字）",
+  "opening": "开场 4-8 句，建议含主神传送或播报感切入"
 }}
 
 关键词：{keywords}
@@ -181,13 +204,26 @@ def _framework_prompt_custom(keywords: str) -> str:
 
 
 def _normalize_framework(raw: dict) -> dict:
+    """兼容旧存档：缺省字段填空串。"""
+    code = str(raw.get("instance_code") or "").strip()
+    name = str(raw.get("instance_name") or "").strip()
+    if not code and not name:
+        code, name = "—", "未命名副本"
+    elif not code:
+        code = "—"
+    elif not name:
+        name = "未命名副本"
     return {
+        "instance_code": code,
+        "instance_name": name,
         "world": str(raw.get("world") or "").strip(),
         "player1_name": str(raw.get("player1_name") or "玩家一").strip(),
         "player1_role": str(raw.get("player1_role") or "").strip(),
         "player2_name": str(raw.get("player2_name") or "渡").strip(),
         "player2_role": str(raw.get("player2_role") or "").strip(),
         "conflict": str(raw.get("conflict") or "").strip(),
+        "failure_hint": str(raw.get("failure_hint") or "由主神规则判定，细节在副本中逐步显露。").strip(),
+        "reward_hint": str(raw.get("reward_hint") or "视通关表现给予积分或线索类回报（风味）。").strip(),
         "opening": str(raw.get("opening") or "").strip(),
     }
 
@@ -204,7 +240,7 @@ def generate_framework_random() -> tuple[Optional[dict], Optional[str]]:
         "role_b": random.choice(roles),
     }
     user_prompt = _framework_prompt_random(seeds)
-    text = call_wenyou_deepseek([{"role": "user", "content": user_prompt}], system="", temperature=0.85)
+    text = call_wenyou_deepseek([{"role": "user", "content": user_prompt}], system=_FRAMEWORK_SYSTEM, temperature=0.85)
     if not text:
         return None, "文游：框架生成失败（DeepSeek 无响应），请检查 DEEPSEEK_API_KEY。"
     data = _extract_json_object(text)
@@ -217,7 +253,7 @@ def generate_framework_custom(keywords: str) -> tuple[Optional[dict], Optional[s
     if not keywords.strip():
         return None, "文游：请带上关键词，例如 /story 赛博朋克 无限流"
     user_prompt = _framework_prompt_custom(keywords.strip())
-    text = call_wenyou_deepseek([{"role": "user", "content": user_prompt}], system="", temperature=0.85)
+    text = call_wenyou_deepseek([{"role": "user", "content": user_prompt}], system=_FRAMEWORK_SYSTEM, temperature=0.85)
     if not text:
         return None, "文游：框架生成失败（DeepSeek 无响应）。"
     data = _extract_json_object(text)
@@ -229,7 +265,7 @@ def generate_framework_custom(keywords: str) -> tuple[Optional[dict], Optional[s
 def _new_session(framework: dict) -> dict:
     gid = str(uuid4())
     ts = now_beijing_iso()
-    opening = framework.get("opening") or "故事开始了。"
+    opening = framework.get("opening") or "【主神提示】副本同步完成。白光散去，你们已抵达任务区域。"
     return {
         "gameId": gid,
         "startedAt": ts,
@@ -242,12 +278,37 @@ def _new_session(framework: dict) -> dict:
 
 
 def _format_framework_lines(fw: dict) -> str:
+    ic = (fw.get("instance_code") or "").strip()
+    inn = (fw.get("instance_name") or "").strip()
+    if ic and inn and ic != "—":
+        head = f"【无限流 · 副本 {ic}｜{inn}】\n"
+    elif inn:
+        head = f"【无限流 · 副本｜{inn}】\n"
+    elif ic and ic != "—":
+        head = f"【无限流 · 副本 {ic}】\n"
+    else:
+        head = "【无限流 · 副本】\n"
     return (
-        f"【世界观】\n{fw.get('world', '')}\n\n"
+        f"{head}"
+        f"【副本场景】\n{fw.get('world', '')}\n\n"
         f"【{fw.get('player1_name', '玩家一')}】\n{fw.get('player1_role', '')}\n\n"
         f"【{fw.get('player2_name', '渡')}】\n{fw.get('player2_role', '')}\n\n"
-        f"【核心任务】\n{fw.get('conflict', '')}"
+        f"【主神任务】\n{fw.get('conflict', '')}\n\n"
+        f"【失败倾向】\n{fw.get('failure_hint', '')}\n\n"
+        f"【通关回报（风味）】\n{fw.get('reward_hint', '')}"
     )
+
+
+def _framework_instance_line(fw: dict) -> str:
+    c = (fw.get("instance_code") or "").strip()
+    n = (fw.get("instance_name") or "").strip()
+    if c and n and c != "—":
+        return f"{c} · {n}"
+    if n:
+        return n
+    if c and c != "—":
+        return c
+    return "未命名副本"
 
 
 def cmd_story(user_id: int, keywords: Optional[str]) -> str:
@@ -280,7 +341,7 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
 
-    head = "文游开局成功。\n\n" + _format_framework_lines(fw) + "\n\n—— GM ——\n\n"
+    head = "文游开局成功（无限流 · 主神副本模式）。\n\n" + _format_framework_lines(fw) + "\n\n—— 主神系统 / GM ——\n\n"
     return head + fw.get("opening", "")
 
 
@@ -309,12 +370,15 @@ def _build_gm_messages(session: dict) -> list[dict]:
     """把 session 转成 GM API 多轮消息（仅 user/assistant 角色给模型）。"""
     fw = session.get("framework") or {}
     system = _GM_SYSTEM_TEMPLATE.format(
+        instance_line=_framework_instance_line(fw),
         world=fw.get("world", ""),
         player1_name=fw.get("player1_name", "玩家一"),
         player1_role=fw.get("player1_role", ""),
         player2_name=fw.get("player2_name", "渡"),
         player2_role=fw.get("player2_role", ""),
         conflict=fw.get("conflict", ""),
+        failure_hint=fw.get("failure_hint") or "由主神规则判定。",
+        reward_hint=fw.get("reward_hint") or "视表现给予风味向回报。",
     )
     msgs: list[dict] = []
     for h in session.get("history") or []:
@@ -403,7 +467,7 @@ def cmd_go(user_id: int) -> str:
     except Exception:
         logger.exception("文游写入 tg 窗口失败 user_id=%s", uid)
 
-    return f"—— GM ——\n\n{gm_out}"
+    return f"—— 主神系统 ——\n\n{gm_out}"
 
 
 def cmd_end(user_id: int) -> str:
