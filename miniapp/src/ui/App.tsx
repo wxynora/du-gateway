@@ -30,6 +30,18 @@ type CyberTreeData = {
     date?: string;
     score?: number;
   };
+  /** 已点亮徽章时后端为 true，用于树轻量光效 */
+  badgeFx?: boolean;
+};
+type MiniappBadge = {
+  id: string;
+  title: string;
+  desc: string;
+  emoji: string;
+  target: number;
+  progress: number;
+  unlocked: boolean;
+  unlocked_at?: string;
 };
 type WeeklyReport = {
   week_id?: string;
@@ -55,6 +67,8 @@ function Shell() {
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [weeklyReport, setWeeklyReport] = useState<WeeklyReport | null>(null);
   const [weeklyRefreshing, setWeeklyRefreshing] = useState(false);
+  const [badges, setBadges] = useState<MiniappBadge[] | null>(null);
+  const [badgesRefreshing, setBadgesRefreshing] = useState(false);
   const [tree, setTree] = useState<CyberTreeData | null>(null);
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
@@ -68,6 +82,12 @@ function Shell() {
         if (j?.ok && j?.report) setWeeklyReport(j.report);
       })
       .catch(() => {});
+  const loadBadges = () =>
+    apiJson<{ ok?: boolean; badges?: MiniappBadge[] }>("/miniapp-api/badges")
+      .then((j) => {
+        if (j?.ok && Array.isArray(j?.badges)) setBadges(j.badges);
+      })
+      .catch(() => setBadges([]));
   const version = new URLSearchParams(window.location.search).get("v") || "";
   const [bg, setBg] = useState<BgConfig>({
     preset: "cream",
@@ -115,8 +135,24 @@ function Shell() {
       })
       .catch(() => {});
     loadWeeklyReport();
+    loadBadges();
     loadTree();
   }, []);
+  async function refreshBadges() {
+    setBadgesRefreshing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; badges?: MiniappBadge[]; error?: string }>("/miniapp-api/badges/refresh", { method: "POST" });
+      if (!j?.ok) throw new Error(j?.error || "刷新失败");
+      if (Array.isArray(j.badges)) setBadges(j.badges);
+      toast("徽章已刷新");
+      loadTree();
+    } catch (e: any) {
+      toast(`徽章刷新失败：${e?.message || e}`);
+    } finally {
+      setBadgesRefreshing(false);
+    }
+  }
+
   async function refreshWeeklyReport() {
     setWeeklyRefreshing(true);
     try {
@@ -208,6 +244,39 @@ function Shell() {
               </div>
             </div>
           </details>
+        </div>
+      ) : null}
+
+      {badges && badges.length > 0 ? (
+        <div className="px-4 pt-2">
+          <div className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 px-3 py-2 text-[12px] text-cream-text">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="font-semibold text-cream-text">成就徽章</span>
+              <Btn kind="dark" onClick={refreshBadges} disabled={badgesRefreshing}>
+                {badgesRefreshing ? "刷新中..." : "刷新"}
+              </Btn>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {badges.map((b) => (
+                <div
+                  key={b.id}
+                  title={b.desc}
+                  className={
+                    "rounded-2xl border px-2 py-2 text-center transition " +
+                    (b.unlocked
+                      ? "bg-white/70 border-white/70 shadow-soft2"
+                      : "bg-white/25 border-white/40 opacity-75 grayscale")
+                  }
+                >
+                  <div className="text-xl leading-none">{b.emoji}</div>
+                  <div className="mt-1 text-[10px] font-semibold leading-tight line-clamp-2">{b.title}</div>
+                  <div className="mt-0.5 text-[9px] text-cream-muted">
+                    {b.progress}/{b.target}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -672,10 +741,13 @@ function GrowthTreeSVG({
   growthValue,
   season,
   weatherFx,
+  sparkle,
 }: {
   growthValue: number;
   season: "spring" | "summer" | "autumn" | "winter";
   weatherFx?: "rainy" | "sunny" | "snowy";
+  /** 成就徽章联动：轻微光点飘动，不改成长逻辑 */
+  sparkle?: boolean;
 }) {
   const g = Number.isFinite(growthValue) ? Math.max(0, growthValue) : 0;
   const stage = g < 10 ? 0 : g < 30 ? 1 : g < 60 ? 2 : g < 100 ? 3 : 4;
@@ -744,9 +816,28 @@ function GrowthTreeSVG({
         @keyframes rain-fall { 0% { transform: translateY(-2px); opacity: .7; } 100% { transform: translateY(9px); opacity: .2; } }
         @keyframes glint { 0%,100% { opacity: .18; } 50% { opacity: .42; } }
         @keyframes grow-in { from { transform: scale(.82); opacity: .45; } to { transform: scale(1); opacity: 1; } }
+        @keyframes badge-sparkle { 0%,100% { opacity: .35; transform: translateY(0); } 50% { opacity: .85; transform: translateY(-1.2px); } }
       `}</style>
 
       <ellipse cx="50" cy="90" rx="28" ry="7" fill="url(#soilGrad)" />
+
+      {sparkle ? (
+        <g aria-hidden>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <circle
+              key={`sp-${i}`}
+              cx={22 + i * 14}
+              cy={18 + (i % 3) * 6}
+              r="1.2"
+              fill="#fff8e6"
+              style={{
+                animation: `badge-sparkle ${2.4 + i * 0.2}s ease-in-out infinite`,
+                animationDelay: `${i * 0.35}s`,
+              }}
+            />
+          ))}
+        </g>
+      ) : null}
 
       {stage === 0 ? (
         <g className="grow-in">
@@ -883,6 +974,7 @@ function CyberTreeModal({
               growthValue={growth}
               season={(d?.season || "spring") as "spring" | "summer" | "autumn" | "winter"}
               weatherFx={(d?.weatherFx || undefined) as "rainy" | "sunny" | "snowy" | undefined}
+              sparkle={!!d?.badgeFx}
             />
             <div className="text-xs text-cream-muted">SVG 动态小树（随成长值 + 季节变化）</div>
           </div>

@@ -4,7 +4,7 @@ import math
 import logging
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
@@ -212,6 +212,174 @@ def _generate_mood_meter(today: str) -> dict:
         "recent_rounds": total_recent,
         "keyword_hits": keyword_hits,
         "updated_at": now_beijing_iso(),
+    }
+
+
+def _beijing_date_from_round_ts(ts_raw) -> str:
+    """从轮次时间戳得到北京日期 YYYY-MM-DD。"""
+    dt = _parse_beijing_dt(ts_raw)
+    if not dt:
+        return ""
+    return dt.strftime("%Y-%m-%d")
+
+
+def _chat_streak_from_today(today: str, dates_with_chat: set[str]) -> int:
+    """从今天往回数连续有聊天的天数。"""
+    try:
+        d = datetime.strptime(today, "%Y-%m-%d").date()
+    except Exception:
+        return 0
+    streak = 0
+
+    while streak < 4000:
+        ds = d.strftime("%Y-%m-%d")
+        if ds not in dates_with_chat:
+            break
+        streak += 1
+        d = d - timedelta(days=1)
+    return streak
+
+
+def _week_bounds_dates(today: str) -> tuple:
+    """本周一～周日的 date 对象（与 today 同一周，周一为一周开始）。"""
+    try:
+        d = datetime.strptime(today, "%Y-%m-%d").date()
+    except Exception:
+        return date.today(), date.today()
+    monday = d - timedelta(days=d.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday, sunday
+
+
+def _count_schedule_fires_this_week(today: str) -> int:
+    """统计 schedule/fired 里落在本周的触发次数（按 occurrence 日期）。"""
+    monday, sunday = _week_bounds_dates(today)
+    fired = r2_store.get_schedule_fired_keys()
+    n = 0
+    for k in fired:
+        tail = str(k).split("|")[-1].strip()
+        if len(tail) < 10 or tail[4] != "-" or tail[7] != "-":
+            continue
+        ds = tail[:10]
+        try:
+            dd = datetime.strptime(ds, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if monday <= dd <= sunday:
+            n += 1
+    return n
+
+
+def _compute_badge_stats(today: str, window_id: str) -> dict:
+    """从对话与提醒触发数据计算徽章相关统计。"""
+    rounds = r2_store.get_conversation_rounds_all(window_id) if window_id else []
+    dates_chat: set[str] = set()
+    goodnight_dates: set[str] = set()
+    for r in rounds or []:
+        if not isinstance(r, dict):
+            continue
+        d = _beijing_date_from_round_ts(r.get("timestamp"))
+        if d:
+            dates_chat.add(d)
+        for msg in r.get("messages") or []:
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "").strip().lower() != "user":
+                continue
+            text = _message_text(msg.get("content"))
+            if "晚安" in text and d:
+                goodnight_dates.add(d)
+    streak = _chat_streak_from_today(today, dates_chat) if dates_chat else 0
+    reminders_week = _count_schedule_fires_this_week(today)
+    return {
+        "streak_days": streak,
+        "reminders_this_week": reminders_week,
+        "goodnight_days": len(goodnight_dates),
+    }
+
+
+def _build_badges_response(today: str, persist_unlock: bool) -> dict:
+    """
+    组装徽章列表；若 persist_unlock 为 True，则把新达成的徽章写入 R2。
+    """
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    window_id = f"tg_{uid}" if uid > 0 else ""
+    stats = _compute_badge_stats(today, window_id) if window_id else {
+        "streak_days": 0,
+        "reminders_this_week": 0,
+        "goodnight_days": 0,
+    }
+    stored = r2_store.get_miniapp_badges() or {}
+    unlocked_map = dict(stored.get("unlocked") or {})
+
+    defs = [
+        {
+            "id": "streak_chat_7d",
+            "title": "七日相伴",
+            "desc": "连续 7 天都有聊天",
+            "emoji": "🔥",
+            "target": 7,
+            "progress_raw": int(stats["streak_days"]),
+        },
+        {
+            "id": "reminder_hero_5",
+            "title": "提醒小能手",
+            "desc": "本周闹钟/提醒触发 ≥5 次",
+            "emoji": "⏰",
+            "target": 5,
+            "progress_raw": int(stats["reminders_this_week"]),
+        },
+        {
+            "id": "goodnight_3",
+            "title": "晚安收藏家",
+            "desc": "累积 3 天对渡说过晚安",
+            "emoji": "🌙",
+            "target": 3,
+            "progress_raw": int(stats["goodnight_days"]),
+        },
+    ]
+
+    now_iso = now_beijing_iso()
+    badges_out = []
+    changed = False
+    for row in defs:
+        bid = row["id"]
+        tgt = int(row["target"])
+        raw = int(row["progress_raw"])
+        prog = min(tgt, max(0, raw))
+        met = raw >= tgt
+        if met and bid not in unlocked_map:
+            unlocked_map[bid] = now_iso
+            changed = True
+        unlocked = bid in unlocked_map
+        badges_out.append(
+            {
+                "id": bid,
+                "title": row["title"],
+                "desc": row["desc"],
+                "emoji": row["emoji"],
+                "target": tgt,
+                "progress": prog,
+                "unlocked": unlocked,
+                "unlocked_at": unlocked_map.get(bid) or "",
+            }
+        )
+
+    out_updated = str(stored.get("updated_at") or "").strip() or now_iso
+    if changed and persist_unlock:
+        r2_store.save_miniapp_badges(
+            {
+                "unlocked": unlocked_map,
+                "updated_at": now_iso,
+                "stats": stats,
+            }
+        )
+        out_updated = now_iso
+
+    return {
+        "updated_at": out_updated,
+        "stats": stats,
+        "badges": badges_out,
     }
 
 
@@ -432,6 +600,8 @@ def miniapp_cyber_tree():
     mood = r2_store.get_miniapp_mood_meter() or _generate_mood_meter(today)
     if not (r2_store.get_miniapp_mood_meter() or {}).get("date"):
         r2_store.save_miniapp_mood_meter(mood)
+    # 轻量彩蛋：至少点亮一枚徽章时树可加光效（与成长值解耦）
+    badge_fx = len((r2_store.get_miniapp_badges() or {}).get("unlocked") or {}) > 0
     return jsonify(
         {
             "ok": True,
@@ -445,6 +615,7 @@ def miniapp_cyber_tree():
             "weatherFx": weather_fx,
             "milestones": milestones,
             "mood": mood,
+            "badgeFx": badge_fx,
         }
     )
 
@@ -482,6 +653,20 @@ def miniapp_mood_meter_refresh():
     data = _generate_mood_meter(today)
     ok = r2_store.save_miniapp_mood_meter(data)
     return jsonify({"ok": bool(ok), "mood": data})
+
+
+@bp.route("/badges", methods=["GET"])
+def miniapp_badges():
+    today = today_beijing()
+    payload = _build_badges_response(today, persist_unlock=True)
+    return jsonify({"ok": True, **payload})
+
+
+@bp.route("/badges/refresh", methods=["POST"])
+def miniapp_badges_refresh():
+    today = today_beijing()
+    payload = _build_badges_response(today, persist_unlock=True)
+    return jsonify({"ok": True, **payload})
 
 
 @bp.route("/cyber-tree/start-date", methods=["PUT"])

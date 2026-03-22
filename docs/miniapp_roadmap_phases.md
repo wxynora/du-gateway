@@ -42,27 +42,28 @@
 
 ---
 
-## 第二批（计划）
+## 第二批（已落地 · 徽章 + 树联动）
 
 ### 成就徽章系统
 
 - 目标：增加趣味反馈，不影响主链路。
 - 示例徽章：
   - 连续聊天 7 天
-  - 一周内完成提醒 5 次
-  - 晚安打卡 3 天
+  - 本周提醒触发 ≥5 次（`schedule/fired` 按 occurrence 日期落在本周）
+  - 累积 3 天用户消息含「晚安」
 - 数据键建议：
   - `global/miniapp_badges.json`
 - API 建议：
   - `GET /miniapp-api/badges`
   - `POST /miniapp-api/badges/refresh`
 - UI 建议：
-  - 首页或树页下方展示已点亮徽章墙。
+  - 首页周报下方展示徽章墙（含进度与刷新）。
 
 ### 树联动（轻量）
 
 - 徽章或周报可对树做轻量彩蛋联动（如光效或飘花）。
 - 禁止把树成长核心逻辑和徽章强绑定，避免牵一发而动全身。
+- **已实现**：`GET /miniapp-api/cyber-tree` 返回 `badgeFx`；至少点亮一枚徽章时树 SVG 有轻微光点动画（`GrowthTreeSVG` 的 `sparkle`）。
 
 ---
 

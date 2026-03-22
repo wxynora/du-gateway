@@ -31,6 +31,9 @@ scripts/feed_archive.stop
 .DS_Store
 Thumbs.db
 
+# Node（Miniapp 构建依赖，勿提交）
+node_modules/
+
 # 测试 / 覆盖率
 .pytest_cache/
 .coverage

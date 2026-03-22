@@ -41,6 +41,8 @@ R2_KEY_MINIAPP_DAILY_WHISPER = "global/miniapp_daily_whisper.json"
 R2_KEY_MINIAPP_WEEKLY_REPORT = "global/miniapp_weekly_report.json"
 # MiniApp 心情温度计（今日 + 历史）
 R2_KEY_MINIAPP_MOOD_METER = "global/miniapp_mood_meter.json"
+# MiniApp 成就徽章（解锁时间与进度快照）
+R2_KEY_MINIAPP_BADGES = "global/miniapp_badges.json"
 # 渡的记事本：固定注入记忆（按条目维护）
 R2_KEY_DU_NOTEBOOK = "global/du_notebook.json"
 # MiniApp 赛博种树：开始日期等元信息
@@ -290,6 +292,29 @@ def get_conversation_rounds(window_id: str, last_n: int = 4) -> list:
     if not data or not data.get("rounds"):
         return []
     rounds = data["rounds"][-last_n:]
+    return rounds
+
+
+def get_conversation_rounds_all(window_id: str, max_rounds: int = 8000) -> list:
+    """
+    读取该窗口全部对话轮次（用于统计类场景；默认上限避免极端大文件拖垮内存）。
+    """
+    client = _s3_client()
+    if not client:
+        return []
+    if not (window_id or "").strip():
+        return []
+    prefix = _prefix(window_id)
+    key = _get_key(prefix, "conversation.json")
+    data = _read_json(client, key)
+    if not data or not data.get("rounds"):
+        return []
+    rounds = data.get("rounds") or []
+    if not isinstance(rounds, list):
+        return []
+    cap = max(1, min(int(max_rounds or 8000), 20000))
+    if len(rounds) > cap:
+        return rounds[-cap:]
     return rounds
 
 
@@ -1317,6 +1342,31 @@ def save_miniapp_mood_meter(data: dict) -> bool:
             return True
         except Exception as e:
             logger.error("save_miniapp_mood_meter 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_miniapp_badges() -> Optional[dict]:
+    """读取 MiniApp 成就徽章状态（解锁时间等）。"""
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_MINIAPP_BADGES)
+    return data if isinstance(data, dict) else None
+
+
+def save_miniapp_badges(data: dict) -> bool:
+    """保存 MiniApp 成就徽章状态。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(data, dict):
+        return False
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_MINIAPP_BADGES, data)
+            return True
+        except Exception as e:
+            logger.error("save_miniapp_badges 失败 error=%s", e, exc_info=True)
             return False
 
 
