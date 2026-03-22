@@ -626,7 +626,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             ]
     except Exception as e:
         vector_error = str(e)
-        logger.debug("dynamic_vector_retrieve 降级为关键词匹配 error=%s", e)
+        logger.warning("dynamic_vector_retrieve 降级为关键词匹配 error=%s", e)
 
     scored = []
     if recalled:

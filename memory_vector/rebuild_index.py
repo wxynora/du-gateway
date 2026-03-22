@@ -7,7 +7,9 @@ python -m memory_vector.rebuild_index --batch-size 100 --start 0 --max-items 500
 """
 
 import argparse
+import json
 import time
+from pathlib import Path
 
 from memory_vector.embedding_client import embed_text, content_hash, normalize_text
 from memory_vector.vector_index_store import upsert_records
@@ -15,6 +17,7 @@ from storage import r2_store
 from utils.log import get_logger
 
 logger = get_logger(__name__)
+_FAILED_IDS_PATH = Path(__file__).resolve().parent.parent / "data" / "rebuild_index_failed_ids.json"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -23,6 +26,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--max-items", type=int, default=0, help="最多处理多少条，0 表示全部")
     p.add_argument("--batch-size", type=int, default=100, help="每批最多处理多少条")
     p.add_argument("--sleep-seconds", type=float, default=0.2, help="每批之间休眠秒数")
+    p.add_argument("--failed-only", action="store_true", help="只重试上次失败的 memory_id")
     return p.parse_args()
 
 
@@ -38,11 +42,41 @@ def _flush_records(batch_by_tag: dict[str, list[dict]]) -> int:
     return written
 
 
-def rebuild(start: int = 0, max_items: int = 0, batch_size: int = 100, sleep_seconds: float = 0.2) -> None:
+def _load_failed_ids() -> set[str]:
+    try:
+        if not _FAILED_IDS_PATH.exists():
+            return set()
+        data = json.loads(_FAILED_IDS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("failed_ids"), list):
+            return set()
+        return {str(x).strip() for x in data.get("failed_ids") if str(x).strip()}
+    except Exception:
+        return set()
+
+
+def _save_failed_ids(ids: set[str]) -> None:
+    try:
+        payload = {"failed_ids": sorted(ids)}
+        _FAILED_IDS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.warning("rebuild_index: 保存失败列表失败 error=%s", e)
+
+
+def rebuild(
+    start: int = 0,
+    max_items: int = 0,
+    batch_size: int = 100,
+    sleep_seconds: float = 0.2,
+    failed_only: bool = False,
+) -> None:
     memories = r2_store.get_dynamic_memory_list() or []
     if not memories:
         logger.info("rebuild_index: 无动态记忆，跳过")
         return
+
+    failed_filter = _load_failed_ids() if failed_only else set()
+    if failed_only:
+        memories = [m for m in memories if str((m or {}).get("id") or "").strip() in failed_filter]
 
     start = max(0, int(start or 0))
     batch_size = max(1, int(batch_size or 100))
@@ -58,6 +92,7 @@ def rebuild(start: int = 0, max_items: int = 0, batch_size: int = 100, sleep_sec
     batch_by_tag: dict[str, list[dict]] = {}
     batch_count = 0
     written_total = 0
+    failed_ids: set[str] = set()
     for i, m in enumerate(memories, start=1):
         mid = (m or {}).get("id")
         text = (m or {}).get("content") or ""
@@ -69,6 +104,7 @@ def rebuild(start: int = 0, max_items: int = 0, batch_size: int = 100, sleep_sec
             emb = embed_text(t)
         except Exception as e:
             logger.error("rebuild_index: embed 失败 memory_id=%s error=%s", mid, e)
+            failed_ids.add(str(mid))
             continue
         rec = {
             "memory_id": str(mid),
@@ -96,6 +132,7 @@ def rebuild(start: int = 0, max_items: int = 0, batch_size: int = 100, sleep_sec
 
     if batch_by_tag:
         written_total += _flush_records(batch_by_tag)
+    _save_failed_ids(failed_ids)
     logger.info("rebuild_index: done total=%s written=%s start=%s batch_size=%s", total, written_total, start, batch_size)
 
 
@@ -106,5 +143,6 @@ if __name__ == "__main__":
         max_items=args.max_items,
         batch_size=args.batch_size,
         sleep_seconds=args.sleep_seconds,
+        failed_only=args.failed_only,
     )
 

@@ -2,6 +2,7 @@ import time
 import os
 import math
 import logging
+import json
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -773,7 +774,7 @@ def miniapp_memory_debug():
     - 最近动态记忆召回明细（每次注入时记录）
     """
     try:
-        limit = request.args.get("limit", type=int, default=30)
+        limit = request.args.get("limit", type=int, default=10)
         if limit < 1:
             limit = 1
         if limit > 100:
@@ -802,10 +803,42 @@ def miniapp_memory_debug():
             events = all_events
         dynamic_stats = {}
         try:
-            from memory_vector.config import VECTOR_MIN_SIM, VECTOR_TOPK, VECTOR_TOPN
+            from memory_vector.config import (
+                VECTOR_MIN_SIM,
+                VECTOR_TOPK,
+                VECTOR_TOPN,
+                CF_ACCOUNT_ID,
+                CF_API_TOKEN,
+                CF_EMBEDDING_MODEL,
+                EMBEDDING_MODEL,
+                EMBED_REQUEST_TIMEOUT_SECONDS,
+                EMBED_MAX_RETRIES,
+                EMBED_RETRY_BACKOFF_SECONDS,
+                current_embedding_model,
+                current_embedding_backend,
+            )
             from memory_vector.vector_index_store import list_existing_tags
             mems = r2_store.get_dynamic_memory_list() or []
             mem_tags = sorted({str((m or {}).get("tag") or "").strip() for m in mems if str((m or {}).get("tag") or "").strip()})
+            recent_vector_error = ""
+            for e in all_events:
+                msg = str((e or {}).get("vector_error") or "").strip()
+                if msg:
+                    recent_vector_error = msg
+                    break
+            failed_ids_count = 0
+            failed_ids_preview: list[str] = []
+            try:
+                failed_path = Path(__file__).resolve().parent.parent / "data" / "rebuild_index_failed_ids.json"
+                if failed_path.exists():
+                    failed_payload = json.loads(failed_path.read_text(encoding="utf-8"))
+                    failed_ids = failed_payload.get("failed_ids") if isinstance(failed_payload, dict) else []
+                    if isinstance(failed_ids, list):
+                        failed_ids_preview = [str(x).strip() for x in failed_ids if str(x).strip()][:10]
+                        failed_ids_count = len([x for x in failed_ids if str(x).strip()])
+            except Exception:
+                failed_ids_count = 0
+                failed_ids_preview = []
             dynamic_stats = {
                 "memory_count": len(mems),
                 "memory_tags": mem_tags[:30],
@@ -813,6 +846,14 @@ def miniapp_memory_debug():
                 "vector_min_sim": float(VECTOR_MIN_SIM),
                 "vector_topk": int(VECTOR_TOPK),
                 "vector_topn": int(VECTOR_TOPN),
+                "embedding_backend": current_embedding_backend(),
+                "embedding_model": current_embedding_model() or (CF_EMBEDDING_MODEL if (CF_ACCOUNT_ID and CF_API_TOKEN) else EMBEDDING_MODEL),
+                "embed_timeout_seconds": int(EMBED_REQUEST_TIMEOUT_SECONDS),
+                "embed_max_retries": int(EMBED_MAX_RETRIES),
+                "embed_retry_backoff_seconds": float(EMBED_RETRY_BACKOFF_SECONDS),
+                "recent_vector_error": recent_vector_error,
+                "failed_ids_count": failed_ids_count,
+                "failed_ids_preview": failed_ids_preview,
             }
         except Exception:
             dynamic_stats = {}

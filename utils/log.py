@@ -22,6 +22,7 @@ LOG_NAMES = {
     "services.bedroom_gateway": "Bedroom",
     "services.telegram_bot": "TGBot",
     "services.telegram_proactive": "TGPro",
+    "services.schedule_runtime": "Alarm",
 }
 
 

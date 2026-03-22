@@ -12,13 +12,26 @@ export function LogsTab() {
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const [filterText, setFilterText] = useState("");
+  const [filterKind, setFilterKind] = useState<"all" | "proactive" | "alarm">("all");
   const [loadError, setLoadError] = useState("");
+
+  function lineKind(line: string): "proactive" | "alarm" | "other" {
+    const raw = String(line || "");
+    if (raw.includes("[TGPro]") || raw.includes("主动发消息")) return "proactive";
+    if (raw.includes("[Alarm]") || raw.includes("[schedule_runtime]") || raw.includes("日历闹钟") || raw.includes("闹钟")) return "alarm";
+    return "other";
+  }
 
   const filtered = useMemo(() => {
     const k = (filterText || "").trim().toLowerCase();
-    if (!k) return lines;
-    return (lines || []).filter((l) => (l || "").toLowerCase().includes(k));
-  }, [lines, filterText]);
+    return (lines || []).filter((l) => {
+      const kind = lineKind(l);
+      if (filterKind === "proactive" && kind !== "proactive") return false;
+      if (filterKind === "alarm" && kind !== "alarm") return false;
+      if (!k) return true;
+      return (l || "").toLowerCase().includes(k);
+    });
+  }, [lines, filterText, filterKind]);
 
   function highlightLine(line: string, keyword: string) {
     const k = (keyword || "").trim().toLowerCase();
@@ -147,6 +160,9 @@ export function LogsTab() {
 
       <div className="rounded-xl3 bg-cream-blue/45 shadow-soft p-3 space-y-2">
         <div className="flex items-center gap-2">
+          <Btn kind={filterKind === "all" ? "dark" : "blue"} onClick={() => setFilterKind("all")}>全部</Btn>
+          <Btn kind={filterKind === "proactive" ? "dark" : "blue"} onClick={() => setFilterKind("proactive")}>主动消息</Btn>
+          <Btn kind={filterKind === "alarm" ? "dark" : "blue"} onClick={() => setFilterKind("alarm")}>闹钟</Btn>
           <input
             className="flex-1 rounded-xl2 bg-cream-card px-3 py-2 text-sm shadow-soft2"
             placeholder="过滤关键字（不区分大小写）"
@@ -176,11 +192,19 @@ export function LogsTab() {
         </div>
 
         <div className="min-h-[50vh] rounded-2xl bg-[#1F1A12] p-3 font-mono text-xs leading-relaxed text-[#FFF7E6] overflow-auto shadow-soft2">
-          {(filtered || []).slice(0, 800).map((l, idx) => (
-            <div key={idx} className="whitespace-pre-wrap">
+          {(filtered || []).slice(0, 800).map((l, idx) => {
+            const kind = lineKind(l);
+            const lineClass =
+              kind === "proactive"
+                ? "mb-1 rounded-lg bg-[#20293A] px-2 py-1 text-[#DDEBFF]"
+                : kind === "alarm"
+                  ? "mb-1 rounded-lg bg-[#2E2516] px-2 py-1 text-[#FFF0C7]"
+                  : "";
+            return (
+            <div key={idx} className={`whitespace-pre-wrap ${lineClass}`}>
               {highlightLine(l, filterText)}
             </div>
-          ))}
+          )})}
           {!filtered.length ? <div>（暂无日志）</div> : null}
         </div>
       </div>

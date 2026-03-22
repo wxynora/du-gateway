@@ -39,6 +39,9 @@ CF_EMBEDDING_POOLING = os.getenv("CF_EMBEDDING_POOLING", "cls").strip().lower() 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "").strip()
 EMBEDDING_MAX_CHARS = _env_int("EMBEDDING_MAX_CHARS", 8000)
+EMBED_REQUEST_TIMEOUT_SECONDS = _env_int("EMBED_REQUEST_TIMEOUT_SECONDS", 45)
+EMBED_MAX_RETRIES = _env_int("EMBED_MAX_RETRIES", 3)
+EMBED_RETRY_BACKOFF_SECONDS = _env_float("EMBED_RETRY_BACKOFF_SECONDS", 1.0)
 
 
 def current_embedding_model() -> str:
@@ -46,6 +49,15 @@ def current_embedding_model() -> str:
     if CF_ACCOUNT_ID and CF_API_TOKEN:
         return CF_EMBEDDING_MODEL
     return EMBEDDING_MODEL
+
+
+def current_embedding_backend() -> str:
+    """返回当前 embedding 后端：cloudflare_bge / openai_compatible / disabled。"""
+    if CF_ACCOUNT_ID and CF_API_TOKEN:
+        return "cloudflare_bge"
+    if OPENAI_API_KEY and EMBEDDING_MODEL:
+        return "openai_compatible"
+    return "disabled"
 
 # 向量召回阈值（默认适中）：过高会导致“几乎不触发”，过低会导致噪声注入
 # 可通过环境变量 VECTOR_MIN_SIM 覆盖。

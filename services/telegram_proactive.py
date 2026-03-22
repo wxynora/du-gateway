@@ -36,6 +36,21 @@ from services.telegram_bot import (
 logger = get_logger(__name__)
 
 
+def _schedule_due_grace_seconds() -> int:
+    """
+    允许闹钟在到点后的一个很小窗口内触发：
+    - 正常轮询间隔是分钟级，给 2 个 tick 左右的容错
+    - 但不要大到“上午错过，下午补响”
+    """
+    try:
+        from config import MINIAPP_SCHEDULE_RUNTIME_INTERVAL_SECONDS
+
+        base = int(MINIAPP_SCHEDULE_RUNTIME_INTERVAL_SECONDS or 60)
+    except Exception:
+        base = 60
+    return max(90, min(600, base * 2 + 30))
+
+
 @dataclass
 class ProactiveDecision:
     should_send: bool
@@ -171,18 +186,16 @@ def _schedule_due_occurrence_key(it: dict, now_dt: datetime) -> str:
     return f"{iid}|weekly|{now_dt.strftime('%Y-%m-%d')}"
 
 
-def _is_schedule_due_now(it: dict, now_dt: datetime) -> bool:
+def _schedule_target_dt_for_now(it: dict, now_dt: datetime) -> Optional[datetime]:
     if not bool(it.get("enabled", True)):
-        return False
+        return None
     rep = str(it.get("repeat") or "once").strip().lower() or "once"
     anchor = parse_iso_to_beijing(str(it.get("datetime") or "").strip())
     if rep == "once":
-        if not anchor:
-            return False
-        return now_dt >= anchor
+        return anchor
     if rep == "daily":
         h, m = _hm_from_item(it, "daily_time", anchor)
-        return (now_dt.hour, now_dt.minute) >= (h, m)
+        return now_dt.replace(hour=h, minute=m, second=0, microsecond=0)
     if rep == "weekly":
         w = it.get("weekly_weekday", None)
         try:
@@ -192,10 +205,19 @@ def _is_schedule_due_now(it: dict, now_dt: datetime) -> bool:
         if target_w < 0 or target_w > 6:
             target_w = 0
         if now_dt.weekday() != target_w:
-            return False
+            return None
         h, m = _hm_from_item(it, "weekly_time", anchor)
-        return (now_dt.hour, now_dt.minute) >= (h, m)
-    return False
+        return now_dt.replace(hour=h, minute=m, second=0, microsecond=0)
+    return None
+
+
+def _is_schedule_due_now(it: dict, now_dt: datetime) -> bool:
+    target_dt = _schedule_target_dt_for_now(it, now_dt)
+    if not target_dt:
+        return False
+    grace = _schedule_due_grace_seconds()
+    delta = (now_dt - target_dt).total_seconds()
+    return 0 <= delta <= grace
 
 
 def schedule_tick(target_user_id: int = 0) -> dict:
@@ -228,6 +250,23 @@ def schedule_tick(target_user_id: int = 0) -> dict:
                 it["_deleted"] = True
                 changed = True
                 deleted_once_expired += 1
+                continue
+        if rep0 == "once" and bool(it.get("enabled", True)):
+            target_dt = _schedule_target_dt_for_now(it, now_dt)
+            grace = _schedule_due_grace_seconds()
+            if target_dt and (now_dt - target_dt).total_seconds() > grace:
+                logger.info(
+                    "一次性闹钟已错过触发窗口，自动禁用 id=%s title=%s target=%s now=%s grace_s=%s",
+                    str(it.get("id") or ""),
+                    str(it.get("title") or ""),
+                    target_dt.isoformat(),
+                    now_iso,
+                    grace,
+                )
+                it["enabled"] = False
+                it["disabled_at"] = now_iso
+                changed = True
+                disabled_once += 1
                 continue
         if not _is_schedule_due_now(it, now_dt):
             continue

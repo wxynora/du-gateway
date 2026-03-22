@@ -29,6 +29,14 @@ type MemoryDebugResp = {
     vector_min_sim?: number;
     vector_topk?: number;
     vector_topn?: number;
+    embedding_backend?: string;
+    embedding_model?: string;
+    embed_timeout_seconds?: number;
+    embed_max_retries?: number;
+    embed_retry_backoff_seconds?: number;
+    recent_vector_error?: string;
+    failed_ids_count?: number;
+    failed_ids_preview?: string[];
   };
   error?: string;
 };
@@ -50,7 +58,7 @@ export function MemoryDebugTab() {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const j = await apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=60&scope=${scope}`);
+      const j = await apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=10&scope=${scope}`);
       if (!j?.ok) throw new Error(j?.error || "加载失败");
       setData(j);
     } catch (e: any) {
@@ -118,13 +126,29 @@ export function MemoryDebugTab() {
           （topK {String(data?.dynamic_stats?.vector_topk ?? "-")} / topN {String(data?.dynamic_stats?.vector_topn ?? "-")}）
         </div>
         <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+          embedding: {String(data?.dynamic_stats?.embedding_backend || "-")} / {String(data?.dynamic_stats?.embedding_model || "-")}
+        </div>
+        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+          embed_timeout/retries: {String(data?.dynamic_stats?.embed_timeout_seconds ?? "-")}s / {String(data?.dynamic_stats?.embed_max_retries ?? "-")}
+          {" "}({String(data?.dynamic_stats?.embed_retry_backoff_seconds ?? "-")}s backoff)
+        </div>
+        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
           memory_tags: {Array.isArray(data?.dynamic_stats?.memory_tags) ? data!.dynamic_stats!.memory_tags!.join(" / ") : ""}
         </div>
         <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
           index_tags: {Array.isArray(data?.dynamic_stats?.index_tags) ? data!.dynamic_stats!.index_tags!.join(" / ") : ""}
         </div>
+        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+          recent_vector_error: {String(data?.dynamic_stats?.recent_vector_error || "") || "(空)"}
+        </div>
+        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+          rebuild_failed_ids: {String(data?.dynamic_stats?.failed_ids_count ?? 0)}
+          {Array.isArray(data?.dynamic_stats?.failed_ids_preview) && data!.dynamic_stats!.failed_ids_preview!.length
+            ? ` ｜ ${data!.dynamic_stats!.failed_ids_preview!.join(" / ")}`
+            : ""}
+        </div>
         <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
-          动态记忆最近召回 · {String(data?.count ?? recalls.length)} / 全部 {String(data?.total_count ?? recalls.length)}
+          动态记忆最近召回 · 最近 {String(data?.count ?? recalls.length)} 次 / 全部 {String(data?.total_count ?? recalls.length)}
         </div>
         <div className="space-y-2">
           {recalls.map((it, idx) => (
