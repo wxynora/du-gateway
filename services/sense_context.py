@@ -63,9 +63,23 @@ def _format_location_line(loc: dict) -> str | None:
     return _format_lat_lng(loc)
 
 
+def _format_health_line(health: dict) -> str | None:
+    """固定注入心率/步数：有哪个字段就显示哪个。"""
+    hr = health.get("heart_rate")
+    steps = health.get("steps")
+    parts: list[str] = []
+    if hr not in (None, ""):
+        parts.append(f"心率：{hr}")
+    if steps not in (None, ""):
+        parts.append(f"步数：{steps}")
+    if not parts:
+        return None
+    return "，".join(parts)
+
+
 def format_sense_snapshot_for_system() -> str:
     """
-    标题「老婆当前状态」+ 电量 / 定位（R2 里有的就写）；既无电量也无有效坐标则不注入。
+    标题「老婆当前状态」+ 电量 / 定位 / 心率步数（有数据就注入）。
     """
     try:
         doc = r2_store.get_sense_latest()
@@ -77,9 +91,11 @@ def format_sense_snapshot_for_system() -> str:
 
     bat = _as_dict(doc.get("battery"))
     loc = _as_dict(doc.get("location"))
+    health = _as_dict(doc.get("health"))
     has_battery = bool(bat) and "level" in bat
     loc_line = _format_location_line(loc)
-    if not has_battery and not loc_line:
+    health_line = _format_health_line(health)
+    if not has_battery and not loc_line and not health_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -93,6 +109,8 @@ def format_sense_snapshot_for_system() -> str:
             lines.append(f"电量：{lv}%")
     if loc_line:
         lines.append(loc_line)
+    if health_line:
+        lines.append(health_line)
 
     body = "\n".join(lines)
     if len(body) > _MAX_SNAPSHOT_CHARS:
