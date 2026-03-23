@@ -559,6 +559,9 @@ def merge_and_save_sense_bucket(sense_type: str, patch: dict) -> bool:
                 bucket = {}
             merged = dict(bucket)
             merged.update(patch)
+            # battery 桶不保留 power（Tasker 误传或未展开变量时污染快照）
+            if key == "battery":
+                merged.pop("power", None)
             merged["updatedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             doc[key] = merged
             _write_json(client, R2_KEY_SENSE_LATEST, doc)

@@ -23,6 +23,32 @@ def _as_dict(v: Any) -> dict:
     return v if isinstance(v, dict) else {}
 
 
+def _battery_charging_suffix(ch: Any) -> str | None:
+    """
+    charging 展示文案：Tasker/Android 整数状态码优先，其次兼容布尔与常见字符串。
+    2=充电中，3=放电，4=未充电，5=满电。
+    """
+    if ch is None:
+        return None
+    try:
+        n = int(ch)
+        if n == 2:
+            return "充电中"
+        if n == 3:
+            return "放电"
+        if n == 4:
+            return "未充电"
+        if n == 5:
+            return "满电"
+    except (TypeError, ValueError):
+        pass
+    if ch is True or str(ch).lower() in ("true", "1", "yes", "on"):
+        return "充电中"
+    if ch is False or str(ch).lower() in ("false", "0", "no", "off"):
+        return "未充电"
+    return None
+
+
 def format_sense_snapshot_for_system() -> str:
     """
     仅格式化 battery 桶；无有效电量数据时返回空串（不注入）。
@@ -43,10 +69,9 @@ def format_sense_snapshot_for_system() -> str:
     lines: list[str] = [f"[你的当前状态·{hm}]"]
     lv = bat.get("level")
     ch = bat.get("charging")
-    if ch is True or str(ch).lower() in ("true", "1", "yes"):
-        lines.append(f"电量：{lv}%，充电中")
-    elif ch is False or str(ch).lower() in ("false", "0", "no"):
-        lines.append(f"电量：{lv}%，未充电")
+    suffix = _battery_charging_suffix(ch)
+    if suffix:
+        lines.append(f"电量：{lv}%，{suffix}")
     else:
         lines.append(f"电量：{lv}%")
 
