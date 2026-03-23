@@ -93,6 +93,9 @@ WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY", "").strip()
 ALMANAC_API_URL = os.environ.get("ALMANAC_API_URL", "http://v.juhe.cn/laohuangli/d").strip()
 ALMANAC_API_KEY = os.environ.get("ALMANAC_API_KEY", "").strip()
 
+# 高德 Web 服务 Key（逆地理：经纬度→地址）；不配则只存经纬度、注入时只显示坐标
+AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "").strip()
+
 # R2（S3 兼容）
 R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID", "")
 R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID", "")

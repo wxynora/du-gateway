@@ -1,5 +1,6 @@
 # 渡の网关 - 入口
 import os
+import re
 
 from dotenv import load_dotenv
 
@@ -208,6 +209,35 @@ def _normalize_location_patch(patch: dict) -> tuple[dict | None, str | None]:
     return p, None
 
 
+def _normalize_health_patch(patch: dict) -> dict:
+    """
+    health 归一化：支持客户端直接上传 raw_text（如「88 脉搏/分 - 0 步数 - 63% 电池」），
+    网关端自动提取 heart_rate / steps。
+    """
+    p = dict(patch)
+    raw_text = str(p.get("raw_text") or p.get("text") or "").strip()
+    if not raw_text:
+        return p
+
+    # 心率：优先匹配「88 脉搏/分」，兼容 bpm 文案
+    m_hr = re.search(r"(\d+)\s*(?:脉搏/分|bpm)", raw_text, flags=re.IGNORECASE)
+    if m_hr:
+        try:
+            p["heart_rate"] = int(m_hr.group(1))
+        except Exception:
+            pass
+
+    # 步数：匹配「0 步数」或「1234 steps」
+    m_steps = re.search(r"(?:-\s*)?(\d+)\s*(?:步数|steps?)", raw_text, flags=re.IGNORECASE)
+    if m_steps:
+        try:
+            p["steps"] = int(m_steps.group(1))
+        except Exception:
+            pass
+
+    return p
+
+
 @app.route("/api/sense", methods=["POST", "OPTIONS"])
 def api_sense():
     """
@@ -215,6 +245,7 @@ def api_sense():
     同时追加一条到 sense/history/YYYY-MM-DD.json（北京日期）。
     请求体示例：{"type":"battery","level":87,"charging":false,"timestamp":1234567890}
     location 可传 loc 为 Tasker %LOC 展开串：{"type":"location","loc":"31.2,121.5","timestamp":...}
+    若配置 AMAP_API_KEY，会调用高德逆地理并写入 address。
     """
     if request.method == "OPTIONS":
         return "", 204
@@ -233,6 +264,11 @@ def api_sense():
         patch, loc_err = _normalize_location_patch(patch)
         if loc_err:
             return jsonify({"ok": False, "error": loc_err}), 400
+        from services.amap_geocode import enrich_location_patch_with_amap_address
+
+        patch = enrich_location_patch_with_amap_address(patch)
+    if sense_type.strip().lower() == "health":
+        patch = _normalize_health_patch(patch)
     ok = r2_store.merge_and_save_sense_bucket(sense_type.strip(), patch)
     if not ok:
         return jsonify({"ok": False, "error": "R2 未配置或写入失败"}), 503

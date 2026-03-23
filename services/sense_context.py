@@ -44,7 +44,7 @@ def _battery_charging_suffix(ch: Any) -> str | None:
 
 
 def _format_lat_lng(loc: dict) -> str | None:
-    """有有效 lat/lng 时返回一行文案，否则 None。"""
+    """有有效 lat/lng 时返回一行坐标文案，否则 None。"""
     lat, lng = loc.get("lat"), loc.get("lng")
     if lat is None or lng is None:
         return None
@@ -53,6 +53,14 @@ def _format_lat_lng(loc: dict) -> str | None:
     except (TypeError, ValueError):
         return None
     return f"定位：{la:.5f}，{ln:.5f}"
+
+
+def _format_location_line(loc: dict) -> str | None:
+    """优先高德写入的 address，否则退回经纬度。"""
+    addr = (loc.get("address") or "").strip()
+    if addr:
+        return f"定位：{addr}"
+    return _format_lat_lng(loc)
 
 
 def format_sense_snapshot_for_system() -> str:
@@ -70,7 +78,7 @@ def format_sense_snapshot_for_system() -> str:
     bat = _as_dict(doc.get("battery"))
     loc = _as_dict(doc.get("location"))
     has_battery = bool(bat) and "level" in bat
-    loc_line = _format_lat_lng(loc)
+    loc_line = _format_location_line(loc)
     if not has_battery and not loc_line:
         return ""
 
