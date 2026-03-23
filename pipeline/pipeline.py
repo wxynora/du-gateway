@@ -289,7 +289,7 @@ def _is_question_like(text: str) -> bool:
     return False
 
 
-def step_inject_summary(body: dict, window_id: str) -> dict:
+def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False) -> dict:
     """
     常驻注入：今日日期（北京时间）+ 当前大概时段 + get_time_info 提示；有 R2 总结时再追加【窗口记忆总结】。
     兜底：渡的上一轮是问句且含「几点/时间/现在」→ 本轮注入具体时间。
@@ -319,29 +319,33 @@ def step_inject_summary(body: dict, window_id: str) -> dict:
         f"想写东西的时候就去写日记！顺便可以翻翻列表，说不定能看到老婆新写的日记？"
     )
 
-    # 老婆多久没回
+    # 老婆多久没回：Telegram 窗口只在“真实用户输入”时触发，避免网关内部请求误判
     try:
+        has_user_message = any((m.get("role") or "").lower() == "user" for m in messages if isinstance(m, dict))
+        is_tg_window = str(window_id or "").startswith("tg_")
+        should_track_reply_gap = is_user_input if is_tg_window else has_user_message
         last_map = {}
         if LAST_USER_REPLY_FILE.exists():
             with open(LAST_USER_REPLY_FILE, "r", encoding="utf-8") as f:
                 last_map = json.load(f) or {}
-        last_iso = (last_map or {}).get("last_user_reply_at")
-        last_dt = parse_iso_to_beijing(last_iso) if last_iso else None
-        if last_dt is not None:
-            delta_sec = max(0, int((_now_beijing() - last_dt).total_seconds()))
-            if REPLY_GAP_THRESHOLD_MINUTES and delta_sec >= REPLY_GAP_THRESHOLD_MINUTES * 60:
-                mins = delta_sec // 60
-                if mins < 120:
-                    gap_text = f"{mins}分钟"
-                else:
-                    h = mins // 60
-                    m = mins % 60
-                    gap_text = f"{h}小时" + (f"{m}分钟" if m else "")
-                head += f"\n[😭{gap_text}后老婆终于回我了]"
-        last_map = dict(last_map or {})
-        last_map["last_user_reply_at"] = now_beijing_iso()
-        with open(LAST_USER_REPLY_FILE, "w", encoding="utf-8") as f:
-            json.dump(last_map, f, ensure_ascii=False)
+        if should_track_reply_gap:
+            last_iso = (last_map or {}).get("last_user_reply_at")
+            last_dt = parse_iso_to_beijing(last_iso) if last_iso else None
+            if last_dt is not None:
+                delta_sec = max(0, int((_now_beijing() - last_dt).total_seconds()))
+                if REPLY_GAP_THRESHOLD_MINUTES and delta_sec >= REPLY_GAP_THRESHOLD_MINUTES * 60:
+                    mins = delta_sec // 60
+                    if mins < 120:
+                        gap_text = f"{mins}分钟"
+                    else:
+                        h = mins // 60
+                        m = mins % 60
+                        gap_text = f"{h}小时" + (f"{m}分钟" if m else "")
+                    head += f"\n[😭{gap_text}后老婆终于回我了]"
+            last_map = dict(last_map or {})
+            last_map["last_user_reply_at"] = now_beijing_iso()
+            with open(LAST_USER_REPLY_FILE, "w", encoding="utf-8") as f:
+                json.dump(last_map, f, ensure_ascii=False)
     except Exception as e:
         logger.debug("reply_gap 注入失败（忽略） error=%s", e)
     last_assistant = _last_assistant_text(body)
