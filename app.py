@@ -168,12 +168,53 @@ def time_now():
     return jsonify({"time_hm": hm})
 
 
+def _normalize_location_patch(patch: dict) -> tuple[dict | None, str | None]:
+    """
+    Tasker 可把 %LOC 整串放在 loc 里（「纬度,经度」），网关拆成 lat/lng 再写入 R2。
+    若已带 lat+lng 则转 float，并去掉 loc/LOC。loc 格式错误时返回错误信息。
+    """
+    p = dict(patch)
+    has_lat = p.get("lat") not in (None, "")
+    has_lng = p.get("lng") not in (None, "")
+    has_loc = (p.get("loc") not in (None, "")) or (p.get("LOC") not in (None, ""))
+
+    if has_lat and has_lng:
+        try:
+            p["lat"] = float(p["lat"])
+            p["lng"] = float(p["lng"])
+        except (TypeError, ValueError):
+            return None, "lat/lng 须为数字"
+        p.pop("loc", None)
+        p.pop("LOC", None)
+        return p, None
+
+    if not has_loc:
+        p.pop("loc", None)
+        p.pop("LOC", None)
+        return p, None
+
+    raw = p.get("loc") if p.get("loc") not in (None, "") else p.get("LOC")
+    raw = str(raw).strip()
+    parts = [x.strip() for x in raw.split(",") if x.strip()]
+    if len(parts) != 2:
+        return None, 'loc 须为 "纬度,经度" 两段，英文逗号分隔'
+    try:
+        p["lat"] = float(parts[0])
+        p["lng"] = float(parts[1])
+    except ValueError:
+        return None, "loc 须为有效数字"
+    p.pop("loc", None)
+    p.pop("LOC", None)
+    return p, None
+
+
 @app.route("/api/sense", methods=["POST", "OPTIONS"])
 def api_sense():
     """
     设备感知上报：按 type 合并写入 R2 sense/latest.json，并为本桶设置 updatedAt（UTC）；
     同时追加一条到 sense/history/YYYY-MM-DD.json（北京日期）。
     请求体示例：{"type":"battery","level":87,"charging":false,"timestamp":1234567890}
+    location 可传 loc 为 Tasker %LOC 展开串：{"type":"location","loc":"31.2,121.5","timestamp":...}
     """
     if request.method == "OPTIONS":
         return "", 204
@@ -188,6 +229,10 @@ def api_sense():
     if not isinstance(sense_type, str) or not sense_type.strip():
         return jsonify({"ok": False, "error": "缺少 type 或 type 非字符串"}), 400
     patch = {k: v for k, v in body.items() if k != "type"}
+    if sense_type.strip().lower() == "location":
+        patch, loc_err = _normalize_location_patch(patch)
+        if loc_err:
+            return jsonify({"ok": False, "error": loc_err}), 400
     ok = r2_store.merge_and_save_sense_bucket(sense_type.strip(), patch)
     if not ok:
         return jsonify({"ok": False, "error": "R2 未配置或写入失败"}), 503

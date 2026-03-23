@@ -1,22 +1,16 @@
 # 设备感知（sense/latest.json）→ 渡的 system 注入。
-# 阶段一：仅展示 battery（level / charging / timestamp）；其它 type 可先写入 R2，下阶段再补展示。
+# battery + location（lat/lng）；其它 type 可先写入 R2，下阶段再补展示。
 # 字段约定见 docs/感知模块方案.md
 from __future__ import annotations
 
 from typing import Any
 
 from storage import r2_store
-from utils.time_aware import get_exact_time
 from utils.log import get_logger
 
 logger = get_logger(__name__)
 
 _MAX_SNAPSHOT_CHARS = 800
-
-_SENSE_INJECT_FOOTER = (
-    "【以上为网关汇总的老婆设备侧参考状态（Tasker 电量等上报，非她亲口打字）；"
-    "除非自然有用，不要在回复里硬复读电量数字。】"
-)
 
 
 def _as_dict(v: Any) -> dict:
@@ -49,9 +43,21 @@ def _battery_charging_suffix(ch: Any) -> str | None:
     return None
 
 
+def _format_lat_lng(loc: dict) -> str | None:
+    """有有效 lat/lng 时返回一行文案，否则 None。"""
+    lat, lng = loc.get("lat"), loc.get("lng")
+    if lat is None or lng is None:
+        return None
+    try:
+        la, ln = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return None
+    return f"定位：{la:.5f}，{ln:.5f}"
+
+
 def format_sense_snapshot_for_system() -> str:
     """
-    仅格式化 battery 桶；无有效电量数据时返回空串（不注入）。
+    标题「老婆当前状态」+ 电量 / 定位（R2 里有的就写）；既无电量也无有效坐标则不注入。
     """
     try:
         doc = r2_store.get_sense_latest()
@@ -62,20 +68,25 @@ def format_sense_snapshot_for_system() -> str:
         return ""
 
     bat = _as_dict(doc.get("battery"))
-    if not bat or "level" not in bat:
+    loc = _as_dict(doc.get("location"))
+    has_battery = bool(bat) and "level" in bat
+    loc_line = _format_lat_lng(loc)
+    if not has_battery and not loc_line:
         return ""
 
-    hm = get_exact_time()
-    lines: list[str] = [f"[你的当前状态·{hm}]"]
-    lv = bat.get("level")
-    ch = bat.get("charging")
-    suffix = _battery_charging_suffix(ch)
-    if suffix:
-        lines.append(f"电量：{lv}%，{suffix}")
-    else:
-        lines.append(f"电量：{lv}%")
+    lines: list[str] = ["老婆当前状态"]
+    if has_battery:
+        lv = bat.get("level")
+        ch = bat.get("charging")
+        suffix = _battery_charging_suffix(ch)
+        if suffix:
+            lines.append(f"电量：{lv}%，{suffix}")
+        else:
+            lines.append(f"电量：{lv}%")
+    if loc_line:
+        lines.append(loc_line)
 
-    body = "\n".join(lines) + "\n" + _SENSE_INJECT_FOOTER
+    body = "\n".join(lines)
     if len(body) > _MAX_SNAPSHOT_CHARS:
-        body = body[: _MAX_SNAPSHOT_CHARS - 40] + "\n…\n" + _SENSE_INJECT_FOOTER
+        body = body[: _MAX_SNAPSHOT_CHARS - 5] + "\n…"
     return body
