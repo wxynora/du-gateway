@@ -37,7 +37,9 @@ from config import (
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
     WENYOU_GROUP_CHAT_ID,
     TELEGRAM_WENYOU_OWNER_USER_ID,
+    R2_PUBLIC_URL,
 )
+from services.sticker_tags import STICKER_TAGS_SET
 from storage import r2_store
 
 logger = logging.getLogger(__name__)
@@ -109,6 +111,7 @@ _PENDING_USER_CONTENTS: dict[int, list[Union[str, list]]] = {}
 # Telegram 端的输出风格约束（只影响 Telegram，不影响 RikkaHub）
 _TELEGRAM_STYLE_SYSTEM = (
     "你正在通过 Telegram 和辛玥聊天。请遵守以下输出格式要求：\n"
+    "0) 情绪明显时可在整条回复末尾加一个标签（仅英文方括号，八选一）：[cute] [pitiful] [affectionate] [speechless] [angry] [sad] [happy] [shy]；每条最多一个，平淡时不加。\n"
     "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"
     "2) 不要输出分割线（例如 ---、———、***）。\n"
     "3) 不要使用 Markdown 强调符号 * 或 **（Telegram 会显得很奇怪）。\n"
@@ -317,6 +320,94 @@ def _sanitize_reply_for_telegram(text: str) -> str:
     # 收敛多空行
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
     return t
+
+
+# 表情包：[cute] [shy] 等，每条最多取第一个（与方案一致）
+_STICKER_TAG_PATTERN = re.compile(
+    r"\[(cute|pitiful|affectionate|speechless|angry|sad|happy|shy)\]",
+    flags=re.IGNORECASE,
+)
+
+
+def _extract_sticker_tag(text: str) -> tuple[str, Optional[str]]:
+    """
+    提取句末情绪标签，返回 (去掉标签后的正文, 小写 tag 或 None)。
+    匹配失败则原样返回，不抛错。
+    """
+    if not text or not isinstance(text, str):
+        return (text or "").strip(), None
+    m = _STICKER_TAG_PATTERN.search(text)
+    if not m:
+        return text.strip(), None
+    tag = (m.group(1) or "").strip().lower()
+    if tag not in STICKER_TAGS_SET:
+        return text.strip(), None
+    clean = (text[: m.start()] + text[m.end() :]).strip()
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    return clean, tag
+
+
+def _pick_random_sticker_key(tag: str) -> Optional[str]:
+    """从 R2 映射表随机取一张图的对象 key。"""
+    t = (tag or "").strip().lower()
+    if t not in STICKER_TAGS_SET:
+        return None
+    try:
+        m = r2_store.get_stickers_mapping() or {}
+        keys = m.get(t)
+        if not isinstance(keys, list):
+            return None
+        keys = [str(k).strip() for k in keys if str(k).strip()]
+        if not keys:
+            return None
+        return random.choice(keys)
+    except Exception:
+        return None
+
+
+def send_sticker_photo(chat_id: int, r2_key: str, bot_token: Optional[str] = None) -> bool:
+    """
+    发送表情包：优先 R2_PUBLIC_URL + key；未配置公网则读桶内字节 multipart 发送。
+    """
+    tok = _effective_tg_token(bot_token)
+    if not tok or not r2_key:
+        return False
+    url_api = f"{TELEGRAM_API_BASE}{tok}/sendPhoto"
+    base = (R2_PUBLIC_URL or "").strip().rstrip("/")
+    if base:
+        photo_url = f"{base}/{str(r2_key).lstrip('/')}"
+        try:
+            r = requests.post(url_api, json={"chat_id": chat_id, "photo": photo_url}, timeout=45)
+            if r.status_code == 200:
+                try:
+                    data = r.json() if r.content else {}
+                except (ValueError, requests.exceptions.JSONDecodeError):
+                    data = {}
+                if isinstance(data, dict) and data.get("ok", True):
+                    return True
+            logger.warning("sendPhoto URL 失败 chat_id=%s status=%s body=%s", chat_id, r.status_code, (r.text or "")[:200])
+        except requests.RequestException as e:
+            logger.warning("sendPhoto URL 异常 chat_id=%s: %s", chat_id, e)
+    # 回退：桶内字节
+    data, ctype = r2_store.get_object_bytes(r2_key)
+    if not data:
+        logger.warning("表情包无数据 key=%s", r2_key)
+        return False
+    name = str(r2_key).split("/")[-1] or "sticker.jpg"
+    mime = ctype if ctype and ctype.startswith("image/") else "image/jpeg"
+    try:
+        r = requests.post(url_api, data={"chat_id": str(chat_id)}, files={"photo": (name, data, mime)}, timeout=60)
+        if r.status_code != 200:
+            logger.warning("sendPhoto multipart 失败 chat_id=%s status=%s", chat_id, r.status_code)
+            return False
+        try:
+            j = r.json() if r.content else {}
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            j = {}
+        return bool(isinstance(j, dict) and j.get("ok", True))
+    except requests.RequestException as e:
+        logger.warning("sendPhoto multipart 异常 chat_id=%s: %s", chat_id, e)
+        return False
 
 
 def _extract_voice_tag(text: str) -> tuple[str, str]:
@@ -554,11 +645,15 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
             return None
         reply_text = content.strip() if isinstance(content, str) else str(content).strip()
         reply_text = _sanitize_reply_for_telegram(reply_text)
+        # 写入上下文时不带 <voice> 与 [情绪标签]，避免污染多轮记忆
+        for_ctx = reply_text
+        for_ctx, _ = _extract_voice_tag(for_ctx)
+        for_ctx, _ = _extract_sticker_tag(for_ctx)
         # 更新上下文：只缓存 user/assistant（不存 system），下次请求自动带上
         with _CTX_LOCK:
             cur = list(_CONTEXT_MESSAGES.get(user_id) or [])
             cur.append({"role": "user", "content": merged_user_content})
-            cur.append({"role": "assistant", "content": reply_text})
+            cur.append({"role": "assistant", "content": for_ctx})
             _CONTEXT_MESSAGES[user_id] = _trim_context_messages(cur)
         with _PENDING_LOCK:
             _PENDING_USER_CONTENTS[user_id] = []
@@ -849,9 +944,18 @@ def process_message(
     # 解析语音标签
     reply_clean, voice_text = _extract_voice_tag(reply)
     reply_clean = _sanitize_reply_for_telegram(reply_clean)
+    # 表情包：[tag] 拆出后先发正文再发图
+    reply_clean, sticker_tag = _extract_sticker_tag(reply_clean)
 
     # 先发文字（短信分段）
     ok_text = send_message_segmented(chat_id=chat_id, text=reply_clean, bot_token=bot_token) if reply_clean else True
+
+    # 再发表情包图片（随机一张）
+    if sticker_tag:
+        sk = _pick_random_sticker_key(sticker_tag)
+        if sk:
+            _sleep_between_sends()
+            send_sticker_photo(chat_id=int(chat_id), r2_key=sk, bot_token=bot_token)
 
     # 再按需发语音
     if TELEGRAM_VOICE_REPLY_ENABLED and voice_text:

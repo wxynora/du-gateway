@@ -9,7 +9,13 @@ from datetime import datetime, timedelta
 import requests
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
-from config import MINIAPP_LOG_FILE, TELEGRAM_PROACTIVE_TARGET_USER_ID, TELEGRAM_WENYOU_OWNER_USER_ID, WENYOU_GROUP_CHAT_ID
+from config import (
+    MINIAPP_LOG_FILE,
+    R2_PUBLIC_URL,
+    TELEGRAM_PROACTIVE_TARGET_USER_ID,
+    TELEGRAM_WENYOU_OWNER_USER_ID,
+    WENYOU_GROUP_CHAT_ID,
+)
 from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
 from utils.ip_allowlist import enforce_ip_allowlist
@@ -1196,6 +1202,78 @@ def miniapp_get_background_image_versioned(image_version: int):
     if not data:
         return jsonify({"ok": False, "error": "暂无背景图"}), 404
     return Response(data, mimetype=ctype, headers={"Cache-Control": "no-store, max-age=0"})
+
+
+# ---------- 表情包 stickers/（MiniApp 管理 + 无公网时读图代理） ----------
+
+
+@bp.route("/stickers/tags", methods=["GET"])
+def miniapp_stickers_tags():
+    from services.sticker_tags import STICKER_EMOTION_TAGS
+
+    return jsonify({"ok": True, "tags": list(STICKER_EMOTION_TAGS)})
+
+
+@bp.route("/stickers/mapping", methods=["GET"])
+def miniapp_stickers_mapping_get():
+    m = r2_store.get_stickers_mapping() or {}
+    return jsonify(
+        {
+            "ok": True,
+            "mapping": m,
+            "public_base": (R2_PUBLIC_URL or "").strip().rstrip("/"),
+        }
+    )
+
+
+@bp.route("/stickers/rebuild", methods=["POST"])
+def miniapp_stickers_rebuild():
+    data = r2_store.rebuild_stickers_mapping_from_r2()
+    ok = r2_store.save_stickers_mapping(data)
+    return jsonify({"ok": bool(ok), "mapping": data})
+
+
+@bp.route("/stickers/upload", methods=["POST"])
+def miniapp_stickers_upload():
+    tag = (request.form.get("tag") or "").strip().lower()
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"ok": False, "error": "缺少 file"}), 400
+    content = f.read()
+    if not content:
+        return jsonify({"ok": False, "error": "文件为空"}), 400
+    if len(content) > 8 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "单张不超过 8MB"}), 400
+    ctype = (f.mimetype or "").strip().lower() or "image/jpeg"
+    key = r2_store.upload_sticker_file(tag, f.filename or "sticker.jpg", content, ctype)
+    if not key:
+        return jsonify({"ok": False, "error": "上传失败（检查标签名与格式 jpg/png/webp/gif）"}), 400
+    return jsonify({"ok": True, "key": key})
+
+
+@bp.route("/stickers/item", methods=["DELETE"])
+def miniapp_stickers_delete():
+    body = request.get_json(silent=True) or {}
+    key = (body.get("key") or "").strip()
+    if not key:
+        return jsonify({"ok": False, "error": "缺少 key"}), 400
+    ok = r2_store.delete_sticker_object(key)
+    if not ok:
+        return jsonify({"ok": False, "error": "删除失败或 key 无效"}), 400
+    return jsonify({"ok": True, "key": key})
+
+
+@bp.route("/stickers/raw", methods=["GET"])
+def miniapp_stickers_raw():
+    """无 R2 公网域名时，前端用此 URL 预览图片（需 MiniApp 鉴权）。"""
+    key = (request.args.get("key") or "").strip()
+    if not key.startswith("stickers/") or ".." in key:
+        return jsonify({"ok": False, "error": "key 无效"}), 400
+    data, ctype = r2_store.get_object_bytes(key)
+    if not data:
+        return jsonify({"ok": False, "error": "未找到"}), 404
+    mt = ctype if ctype and ctype.startswith("image/") else "image/jpeg"
+    return Response(data, mimetype=mt, headers={"Cache-Control": "public, max-age=300"})
 
 
 @bp.route("/logs", methods=["GET"])

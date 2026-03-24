@@ -3,6 +3,7 @@
 import json
 import threading
 import time
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 from uuid import uuid4
@@ -64,6 +65,8 @@ R2_KEY_DYNAMIC_RECALL_DEBUG = "dynamic_memory/recall_debug.json"
 R2_KEY_SENSE_LATEST = "sense/latest.json"
 # 渡的心事：网关从助手回复截取后写入，仅注入渡侧 system
 R2_KEY_DU_THOUGHT_LATEST = "global/du_thought_latest.json"
+# Telegram 表情包：映射表（各 tag 下对象 key 列表）
+R2_KEY_STICKERS_MAPPING = "stickers/mapping.json"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
@@ -1831,6 +1834,171 @@ def get_wenyou_archive_by_game_id(user_id: int, game_id: str) -> Optional[Any]:
     return _read_json(client, key)
 
 
+# ---------- 表情包 stickers/（映射表 + 按标签目录存图） ----------
+
+
+def get_object_bytes(key: str) -> tuple[Optional[bytes], str]:
+    """读取任意对象字节，用于 Telegram sendPhoto 无公网 URL 时回退。"""
+    k = (key or "").strip()
+    if not k:
+        return None, ""
+    client = _s3_client()
+    if not client:
+        return None, ""
+    try:
+        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=k)
+        body = resp["Body"].read()
+        ctype = (resp.get("ContentType") or "application/octet-stream").strip()
+        return body, ctype
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code == "NoSuchKey":
+            return None, ""
+        logger.error("get_object_bytes 失败 key=%s error=%s", k, e, exc_info=True)
+        return None, ""
+    except Exception as e:
+        logger.error("get_object_bytes 失败 key=%s error=%s", k, e, exc_info=True)
+        return None, ""
+
+
+def rebuild_stickers_mapping_from_r2() -> dict[str, list[str]]:
+    """扫描 stickers/ 下各标签目录，生成 { tag: [key,...] }（不含 mapping.json 自身）。"""
+    from services.sticker_tags import STICKER_EMOTION_TAGS, STICKER_TAGS_SET
+
+    client = _s3_client()
+    out: dict[str, list[str]] = {t: [] for t in STICKER_EMOTION_TAGS}
+    if not client:
+        return out
+    token = None
+    try:
+        while True:
+            kwargs = {"Bucket": R2_BUCKET_NAME, "Prefix": "stickers/", "MaxKeys": 1000}
+            if token:
+                kwargs["ContinuationToken"] = token
+            resp = client.list_objects_v2(**kwargs)
+            for obj in resp.get("Contents") or []:
+                key = str(obj.get("Key") or "")
+                if not key or key.endswith("/"):
+                    continue
+                if key == R2_KEY_STICKERS_MAPPING or key.endswith("mapping.json"):
+                    continue
+                parts = key.split("/")
+                if len(parts) < 3:
+                    continue
+                tag = parts[1].strip().lower()
+                if tag in STICKER_TAGS_SET:
+                    out.setdefault(tag, []).append(key)
+            if not resp.get("IsTruncated"):
+                break
+            token = resp.get("NextContinuationToken")
+    except Exception as e:
+        logger.warning("rebuild_stickers_mapping_from_r2 列对象失败 error=%s", e)
+    for t in list(out.keys()):
+        out[t] = sorted(set(out[t]))
+    return out
+
+
+def save_stickers_mapping(mapping: dict[str, list[str]]) -> bool:
+    """写入 stickers/mapping.json；mapping 为 tag -> key 列表。"""
+    from services.sticker_tags import STICKER_EMOTION_TAGS
+
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(mapping, dict):
+        return False
+    payload: dict[str, Any] = {"updated_at": now_beijing_iso()}
+    for t in STICKER_EMOTION_TAGS:
+        arr = mapping.get(t)
+        if isinstance(arr, list):
+            payload[t] = [str(x).strip() for x in arr if str(x).strip()]
+        else:
+            payload[t] = []
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_STICKERS_MAPPING, payload)
+            return True
+        except Exception as e:
+            logger.error("save_stickers_mapping 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_stickers_mapping() -> dict[str, Any]:
+    """读取映射表；不存在或损坏时尝试重建。"""
+    client = _s3_client()
+    if not client:
+        return {}
+    data = _read_json(client, R2_KEY_STICKERS_MAPPING)
+    if not isinstance(data, dict):
+        m = rebuild_stickers_mapping_from_r2()
+        save_stickers_mapping(m)
+        data = _read_json(client, R2_KEY_STICKERS_MAPPING)
+    return data if isinstance(data, dict) else {}
+
+
+def upload_sticker_file(tag: str, filename: str, content: bytes, content_type: str) -> Optional[str]:
+    """上传一张表情包到 stickers/{tag}/，并重建映射。"""
+    from services.sticker_tags import STICKER_TAGS_SET
+
+    t = (tag or "").strip().lower()
+    if t not in STICKER_TAGS_SET:
+        return None
+    if not content:
+        return None
+    ext = Path(filename or "").suffix.lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+        ext = ".jpg"
+    ctype = (content_type or "").strip().lower() or "image/jpeg"
+    if "jpeg" in ctype or "jpg" in ctype:
+        ctype = "image/jpeg"
+    elif "png" in ctype:
+        ctype = "image/png"
+    elif "webp" in ctype:
+        ctype = "image/webp"
+    elif "gif" in ctype:
+        ctype = "image/gif"
+    else:
+        ctype = "image/jpeg"
+    safe = f"{uuid4().hex}{ext}"
+    key = f"stickers/{t}/{safe}"
+    client = _s3_client()
+    if not client:
+        return None
+    try:
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=key,
+            Body=content,
+            ContentType=ctype,
+        )
+        m = rebuild_stickers_mapping_from_r2()
+        save_stickers_mapping(m)
+        logger.info("sticker 已上传 key=%s", key)
+        return key
+    except Exception as e:
+        logger.error("upload_sticker_file 失败 error=%s", e, exc_info=True)
+        return None
+
+
+def delete_sticker_object(key: str) -> bool:
+    """删除指定 sticker 对象并重建映射。"""
+    k = (key or "").strip()
+    if not k.startswith("stickers/") or ".." in k or k == R2_KEY_STICKERS_MAPPING:
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    try:
+        client.delete_object(Bucket=R2_BUCKET_NAME, Key=k)
+        m = rebuild_stickers_mapping_from_r2()
+        save_stickers_mapping(m)
+        logger.info("sticker 已删除 key=%s", k)
+        return True
+    except Exception as e:
+        logger.error("delete_sticker_object 失败 key=%s error=%s", k, e, exc_info=True)
+        return False
+
+
 # 网关在 R2 里使用的所有前缀，清空时只删这些，不动桶里其他 key
 _R2_WIPE_PREFIXES = (
     "windows/",
@@ -1842,6 +2010,7 @@ _R2_WIPE_PREFIXES = (
     "docs/",
     "wenyou/",
     "sense/",
+    "stickers/",
 )
 
 

@@ -12,8 +12,9 @@ import { MemoryDebugTab } from "./tabs/MemoryDebugTab";
 import { DuDayTab } from "./tabs/DuDayTab";
 import { DuNotebookTab } from "./tabs/DuNotebookTab";
 import { WenyouTab } from "./tabs/WenyouTab";
+import { StickersTab } from "./tabs/StickersTab";
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "wenyou" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "wenyou" | "stickers" | null;
 type BgPreset = "cream" | "grid" | "soft";
 type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number; imageStamp: number };
 type CyberTreeData = {
@@ -220,6 +221,7 @@ function Shell() {
           <FeatureTile title="记忆调试" desc="窗口总结 + 动态召回" color="bg-white/38" icon={<LineIcon name="memory" />} onClick={() => setPanel("memory-debug")} />
           <FeatureTile title="渡的记事本" desc="固定注入 · 条目管理" color="bg-white/38" icon={<LineIcon name="notebook" />} onClick={() => setPanel("du-notebook")} />
           <FeatureTile title="文游模块" desc="系统空间 + 已完成副本" color="bg-white/38" icon={<LineIcon name="wenyou-hub" />} onClick={() => setPanel("wenyou")} />
+          <FeatureTile title="表情包" desc="情绪分类 · 上传管理" color="bg-white/38" icon={<LineIcon name="stickers" />} onClick={() => setPanel("stickers")} />
           <FeatureTile title="核心Prompt" desc="固定注入，可随时更新" color="bg-white/38" icon={<LineIcon name="prompt" />} onClick={() => setShowCorePrompt(true)} />
         </div>
       </div>
@@ -247,6 +249,11 @@ function Shell() {
       {panel === "wenyou" ? (
         <Modal title="文游模块" onClose={() => setPanel(null)}>
           <WenyouTab initialView="hub" />
+        </Modal>
+      ) : null}
+      {panel === "stickers" ? (
+        <Modal title="表情包" onClose={() => setPanel(null)}>
+          <StickersTab />
         </Modal>
       ) : null}
 
@@ -340,7 +347,7 @@ function FeatureTile({
   );
 }
 
-function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" | "notebook" | "wenyou-archives" | "wenyou-hub" }) {
+function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" | "notebook" | "wenyou-archives" | "wenyou-hub" | "stickers" }) {
   const cls = "h-4 w-4 text-cream-text";
   if (name === "logs") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 12h16M4 18h10" /></svg>;
   if (name === "reasoning") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 12h4l2-4 4 8 2-4h4" /></svg>;
@@ -348,6 +355,7 @@ function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt"
   if (name === "notebook") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" /></svg>;
   if (name === "wenyou-archives") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 8h8M8 12h8M8 16h6" /></svg>;
   if (name === "wenyou-hub") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3 4 7v5c0 5 3.4 8.7 8 9 4.6-.3 8-4 8-9V7l-8-4zM9 12h6M12 9v6" /></svg>;
+  if (name === "stickers") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="9" cy="10" r="1.2" fill="currentColor" /><circle cx="15" cy="10" r="1.2" fill="currentColor" /><path d="M8 14c1.6 2 6.4 2 8 0" /></svg>;
   if (name === "upstream") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M14 7l3-3m-3 3 3 3M20 17H10m0 0-3-3m3 3-3 3" /></svg>;
   if (name === "prompt") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
   if (name === "tree") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21v-5M12 16c-3.8 0-6-2.2-6-5 0-2.2 1.4-4 3.4-4.7A4.8 4.8 0 0 1 19 8c1.8.8 3 2.5 3 4.5 0 3-2.4 3.5-5 3.5h-5z" /></svg>;
