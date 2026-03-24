@@ -1067,7 +1067,6 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         data_url = f"data:{mime};base64,{b64}"
         if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
             from utils.time_aware import now_beijing_iso
-            from storage import r2_store
 
             r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
         logger.info("收到 TG 图片(聚合) user_id=%s chat_id=%s caption_len=%d", user_id, chat_id, len(caption))
