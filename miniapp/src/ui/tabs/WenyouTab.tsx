@@ -163,7 +163,7 @@ export function WenyouTab({ initialView = "archives" }: { initialView?: WenyouVi
           }
           onClick={() => setView("archives")}
         >
-          已通关副本
+          已完成副本
         </button>
         <button
           className={
@@ -179,7 +179,7 @@ export function WenyouTab({ initialView = "archives" }: { initialView?: WenyouVi
       {view === "archives" ? (
         <div className="space-y-2">
           <div className="rounded-xl3 bg-white border border-white/70 shadow-soft p-3 flex items-center justify-between">
-            <div className="text-xs text-cream-muted">按通关时间倒序展示</div>
+            <div className="text-xs text-cream-muted">按完成时间倒序展示</div>
             <Btn kind="dark" onClick={loadArchives} disabled={archivesLoading}>
               {archivesLoading ? "刷新中..." : "刷新列表"}
             </Btn>
@@ -221,7 +221,7 @@ export function WenyouTab({ initialView = "archives" }: { initialView?: WenyouVi
               ) : null}
             </div>
           ))}
-          {!sortedArchives.length && !archivesLoading ? <div className="text-xs text-cream-muted">还没有已通关副本归档。</div> : null}
+          {!sortedArchives.length && !archivesLoading ? <div className="text-xs text-cream-muted">还没有已完成副本归档。</div> : null}
         </div>
       ) : null}
 

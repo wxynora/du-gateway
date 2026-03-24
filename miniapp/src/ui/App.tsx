@@ -13,7 +13,7 @@ import { DuDayTab } from "./tabs/DuDayTab";
 import { DuNotebookTab } from "./tabs/DuNotebookTab";
 import { WenyouTab } from "./tabs/WenyouTab";
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "wenyou-archives" | "wenyou-hub" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "wenyou" | null;
 type BgPreset = "cream" | "grid" | "soft";
 type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number; imageStamp: number };
 type CyberTreeData = {
@@ -219,8 +219,7 @@ function Shell() {
           <FeatureTile title="思维链" desc="最近10条（降序）" color="bg-white/38" icon={<LineIcon name="reasoning" />} onClick={() => setPanel("reasoning")} />
           <FeatureTile title="记忆调试" desc="窗口总结 + 动态召回" color="bg-white/38" icon={<LineIcon name="memory" />} onClick={() => setPanel("memory-debug")} />
           <FeatureTile title="渡的记事本" desc="固定注入 · 条目管理" color="bg-white/38" icon={<LineIcon name="notebook" />} onClick={() => setPanel("du-notebook")} />
-          <FeatureTile title="已通关副本" desc="文游归档历史列表" color="bg-white/38" icon={<LineIcon name="wenyou-archives" />} onClick={() => setPanel("wenyou-archives")} />
-          <FeatureTile title="系统空间" desc="随机或自定义下一任务" color="bg-white/38" icon={<LineIcon name="wenyou-hub" />} onClick={() => setPanel("wenyou-hub")} />
+          <FeatureTile title="文游模块" desc="系统空间 + 已完成副本" color="bg-white/38" icon={<LineIcon name="wenyou-hub" />} onClick={() => setPanel("wenyou")} />
           <FeatureTile title="核心Prompt" desc="固定注入，可随时更新" color="bg-white/38" icon={<LineIcon name="prompt" />} onClick={() => setShowCorePrompt(true)} />
         </div>
       </div>
@@ -245,13 +244,8 @@ function Shell() {
           <DuNotebookTab />
         </Modal>
       ) : null}
-      {panel === "wenyou-archives" ? (
-        <Modal title="已通关副本" onClose={() => setPanel(null)}>
-          <WenyouTab initialView="archives" />
-        </Modal>
-      ) : null}
-      {panel === "wenyou-hub" ? (
-        <Modal title="系统空间" onClose={() => setPanel(null)}>
+      {panel === "wenyou" ? (
+        <Modal title="文游模块" onClose={() => setPanel(null)}>
           <WenyouTab initialView="hub" />
         </Modal>
       ) : null}
