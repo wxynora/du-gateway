@@ -605,7 +605,8 @@ def _difficulty_from_progress(user_id: int) -> str:
     新人（Lv1/D）优先 D/C；成长后逐步提升。
     """
     uid = int(user_id or 0)
-    if uid <= 0:
+    # 文游会话可能使用群 chat_id（Telegram 群为负数），仅 0 视为未配置。
+    if uid == 0:
         return "D"
     arch = r2_store.get_wenyou_last_archive(uid) or {}
     st = arch.get("stats") if isinstance(arch, dict) else {}
