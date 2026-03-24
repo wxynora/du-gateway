@@ -1078,10 +1078,8 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     #   同时 GM Bot 已在其 webhook 侧记录玩家行动，这里不再重复 record。
     if gm_split and WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
         if text.startswith("/"):
-            logger.info("文游群主Bot分流：忽略命令，交由GMBot处理 chat_id=%s user_id=%s cmd=%s", chat_id, user_id, text.split()[0] if text else "")
             return
         # 走主链路（聚合输入 -> 调网关 -> 主 Bot 回复）
-        logger.info("文游群主Bot分流：普通消息入队（将按私聊同逻辑聚合） chat_id=%s user_id=%s len=%s", chat_id, user_id, len(text or ""))
         append_user_input(chat_id=int(chat_id), user_id=int(user_id), text=text)
         return
 
