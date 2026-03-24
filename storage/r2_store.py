@@ -41,8 +41,6 @@ R2_KEY_MINIAPP_DAILY_WHISPER = "global/miniapp_daily_whisper.json"
 R2_KEY_MINIAPP_WEEKLY_REPORT = "global/miniapp_weekly_report.json"
 # MiniApp 心情温度计（今日 + 历史）
 R2_KEY_MINIAPP_MOOD_METER = "global/miniapp_mood_meter.json"
-# MiniApp 成就徽章（解锁时间与进度快照）
-R2_KEY_MINIAPP_BADGES = "global/miniapp_badges.json"
 # 渡的记事本：固定注入记忆（按条目维护）
 R2_KEY_DU_NOTEBOOK = "global/du_notebook.json"
 # MiniApp 赛博种树：开始日期等元信息
@@ -329,29 +327,6 @@ def get_conversation_rounds(window_id: str, last_n: int = 4) -> list:
     if not data or not data.get("rounds"):
         return []
     rounds = data["rounds"][-last_n:]
-    return rounds
-
-
-def get_conversation_rounds_all(window_id: str, max_rounds: int = 8000) -> list:
-    """
-    读取该窗口全部对话轮次（用于统计类场景；默认上限避免极端大文件拖垮内存）。
-    """
-    client = _s3_client()
-    if not client:
-        return []
-    if not (window_id or "").strip():
-        return []
-    prefix = _prefix(window_id)
-    key = _get_key(prefix, "conversation.json")
-    data = _read_json(client, key)
-    if not data or not data.get("rounds"):
-        return []
-    rounds = data.get("rounds") or []
-    if not isinstance(rounds, list):
-        return []
-    cap = max(1, min(int(max_rounds or 8000), 20000))
-    if len(rounds) > cap:
-        return rounds[-cap:]
     return rounds
 
 
@@ -1513,31 +1488,6 @@ def save_miniapp_mood_meter(data: dict) -> bool:
             return False
 
 
-def get_miniapp_badges() -> Optional[dict]:
-    """读取 MiniApp 成就徽章状态（解锁时间等）。"""
-    client = _s3_client()
-    if not client:
-        return None
-    data = _read_json(client, R2_KEY_MINIAPP_BADGES)
-    return data if isinstance(data, dict) else None
-
-
-def save_miniapp_badges(data: dict) -> bool:
-    """保存 MiniApp 成就徽章状态。"""
-    client = _s3_client()
-    if not client:
-        return False
-    if not isinstance(data, dict):
-        return False
-    with _global_write_lock:
-        try:
-            _write_json(client, R2_KEY_MINIAPP_BADGES, data)
-            return True
-        except Exception as e:
-            logger.error("save_miniapp_badges 失败 error=%s", e, exc_info=True)
-            return False
-
-
 def get_du_notebook_entries() -> list[dict]:
     """读取渡的记事本条目（按 updated_at 倒序）。"""
     client = _s3_client()
@@ -1798,6 +1748,87 @@ def get_wenyou_last_archive(user_id: int) -> Optional[Any]:
     if not client:
         return None
     return _read_json(client, wenyou_last_archive_key(user_id))
+
+
+def list_wenyou_archives(user_id: int, limit: int = 20) -> list[dict]:
+    """按结束时间倒序返回文游归档列表（含基础摘要）。"""
+    client = _s3_client()
+    if not client:
+        return []
+    lim = max(1, min(100, int(limit or 20)))
+    prefix = f"wenyou/archive/{int(user_id)}/"
+    objs: list[dict] = []
+    token = None
+    try:
+        while True:
+            kwargs = {"Bucket": R2_BUCKET_NAME, "Prefix": prefix, "MaxKeys": 1000}
+            if token:
+                kwargs["ContinuationToken"] = token
+            resp = client.list_objects_v2(**kwargs)
+            for obj in (resp.get("Contents") or []):
+                key = str(obj.get("Key") or "")
+                if key.endswith(".json"):
+                    objs.append(
+                        {
+                            "key": key,
+                            "last_modified": obj.get("LastModified"),
+                        }
+                    )
+            if resp.get("IsTruncated"):
+                token = resp.get("NextContinuationToken")
+            else:
+                break
+    except Exception as e:
+        logger.warning("list_wenyou_archives 列 key 失败 user_id=%s error=%s", user_id, e)
+        return []
+
+    # 优先按对象更新时间倒序，随后再按归档 endedAt 二次排序
+    objs.sort(key=lambda x: str(x.get("last_modified") or ""), reverse=True)
+    out: list[dict] = []
+    for row in objs[: max(lim * 3, lim)]:
+        key = row.get("key") or ""
+        if not key:
+            continue
+        data = _read_json(client, key)
+        if not isinstance(data, dict):
+            continue
+        fw = data.get("framework") if isinstance(data.get("framework"), dict) else {}
+        st = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+        p1 = st.get("player1") if isinstance(st.get("player1"), dict) else {}
+        p2 = st.get("player2") if isinstance(st.get("player2"), dict) else {}
+        out.append(
+            {
+                "key": key,
+                "gameId": str(data.get("gameId") or ""),
+                "endedAt": str(data.get("endedAt") or ""),
+                "instance_code": str(fw.get("instance_code") or ""),
+                "instance_name": str(fw.get("instance_name") or ""),
+                "instance_genre": str(fw.get("instance_genre") or ""),
+                "difficulty": str(fw.get("difficulty") or ""),
+                "points": int(st.get("points") or 0),
+                "player1_name": str(fw.get("player1_name") or "玩家一"),
+                "player2_name": str(fw.get("player2_name") or "渡"),
+                "player1_level": int(p1.get("level") or 1),
+                "player2_level": int(p2.get("level") or 1),
+                "history_count": len(data.get("history") or []) if isinstance(data.get("history"), list) else 0,
+            }
+        )
+        if len(out) >= lim:
+            break
+    out.sort(key=lambda x: str(x.get("endedAt") or ""), reverse=True)
+    return out[:lim]
+
+
+def get_wenyou_archive_by_game_id(user_id: int, game_id: str) -> Optional[Any]:
+    """按 game_id 读取单局归档。"""
+    client = _s3_client()
+    if not client:
+        return None
+    safe_gid = "".join(c if c.isalnum() or c in "-_" else "_" for c in (game_id or ""))[:80]
+    if not safe_gid:
+        return None
+    key = f"wenyou/archive/{int(user_id)}/{safe_gid}.json"
+    return _read_json(client, key)
 
 
 # 网关在 R2 里使用的所有前缀，清空时只删这些，不动桶里其他 key

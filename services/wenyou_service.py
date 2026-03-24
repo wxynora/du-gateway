@@ -16,6 +16,7 @@ from config import (
     DEEPSEEK_API_URL,
     SUMMARY_EVERY_N_ROUNDS,
     TELEGRAM_WENYOU_OWNER_USER_ID,
+    WENYOU_GROUP_CHAT_ID,
     WENYOU_DS_MODEL,
 )
 from storage import r2_store
@@ -917,18 +918,18 @@ def record_group_player_line(user_id: int, text: str) -> None:
     r2_store.save_wenyou_session(uid, session)
 
 
-def record_group_player2_line(text: str) -> None:
+def record_group_player2_line(text: str, session_id: Optional[int] = None) -> None:
     """
     群内主 Bot（渡）发言：记入本轮玩家二行动。
-    文游会话始终挂在 TELEGRAM_WENYOU_OWNER_USER_ID（开局者）下，与玩家一同一局。
+    文游会话优先挂在传入 session_id（群 chat_id），未传则回退 owner/group 配置。
     """
-    owner_uid = int(TELEGRAM_WENYOU_OWNER_USER_ID or 0)
-    if not owner_uid:
+    sid = int(session_id or TELEGRAM_WENYOU_OWNER_USER_ID or WENYOU_GROUP_CHAT_ID or 0)
+    if not sid:
         return
     line = (text or "").strip()
     if not line:
         return
-    session = r2_store.get_wenyou_session(owner_uid)
+    session = r2_store.get_wenyou_session(sid)
     if not session or not session.get("gameId"):
         return
     pr = session.setdefault("pending_round", {})
@@ -937,7 +938,7 @@ def record_group_player2_line(text: str) -> None:
     session.setdefault("history", []).append(
         {"role": "player2", "content": f"[文游] {line}", "timestamp": ts}
     )
-    r2_store.save_wenyou_session(owner_uid, session)
+    r2_store.save_wenyou_session(sid, session)
 
 
 def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
@@ -1099,7 +1100,7 @@ def get_latest_gm_for_inject(user_id: int) -> str:
 
 
 def is_wenyou_owner(user_id: int) -> bool:
-    return bool(TELEGRAM_WENYOU_OWNER_USER_ID and int(user_id) == int(TELEGRAM_WENYOU_OWNER_USER_ID))
+    return True
 
 
 def step_inject_wenyou_gm(body: dict, window_id: str) -> dict:

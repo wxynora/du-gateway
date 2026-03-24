@@ -16,7 +16,6 @@ from services.wenyou_service import (
     cmd_end,
     cmd_go,
     cmd_story,
-    is_wenyou_owner,
     record_group_player2_line,
     record_group_player_line,
 )
@@ -922,12 +921,10 @@ def init_telegram_bot_runtime():
         logger.warning("TELEGRAM_BOT_TOKEN 未配置，Telegram 功能将不可用")
         return
     _delete_my_commands_default()
-    if WENYOU_GROUP_CHAT_ID and TELEGRAM_WENYOU_OWNER_USER_ID:
+    if WENYOU_GROUP_CHAT_ID:
         # 文游菜单挂在主 Bot 或专用 GM Bot（若配置了 TELEGRAM_GM_BOT_TOKEN）
         wtok = TELEGRAM_GM_BOT_TOKEN or TELEGRAM_BOT_TOKEN
         _set_my_commands_wenyou_group(wtok)
-    elif WENYOU_GROUP_CHAT_ID and not TELEGRAM_WENYOU_OWNER_USER_ID:
-        logger.warning("已配置 WENYOU_GROUP_CHAT_ID 但未配置 TELEGRAM_WENYOU_OWNER_USER_ID（或 TELEGRAM_PROACTIVE_TARGET_USER_ID），文游指令将不生效")
 
 
 def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
@@ -973,8 +970,6 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
                     bot_token=token,
                 )
             return
-        if not is_wenyou_owner(int(user_id)):
-            return
         parts = text.strip().split(maxsplit=1)
         cmd0 = (parts[0] if parts else "").split("@", 1)[0].lower()
         if cmd0 == "/start":
@@ -986,18 +981,18 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
             return
         if cmd0 == "/story":
             rest = parts[1] if len(parts) > 1 else None
-            out = cmd_story(int(user_id), rest)
+            out = cmd_story(int(chat_id), rest)
             send_message_segmented(int(chat_id), out, bot_token=token)
             return
         if cmd0 == "/go":
-            out = cmd_go(int(user_id))
+            out = cmd_go(int(chat_id))
             send_message_segmented(int(chat_id), out, bot_token=token)
             return
         if cmd0 == "/end":
-            out = cmd_end(int(user_id))
+            out = cmd_end(int(chat_id))
             send_message(int(chat_id), out, bot_token=token)
             return
-        record_group_player_line(int(user_id), text)
+        record_group_player_line(int(chat_id), text)
         return
 
     # 图片（带或不带 caption）→ 追加到聚合缓冲（仅主 Bot）
@@ -1040,7 +1035,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         and not text.startswith("/")
         and _is_message_from_main_bot(msg)
     ):
-        record_group_player2_line(text)
+        record_group_player2_line(text, session_id=int(chat_id))
         return
 
     # 已配置 GM Bot 时：主 Bot 在文游群内不再处理文游指令与其它（避免重复；指令由 GM Webhook 处理）
@@ -1049,8 +1044,6 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
 
     # 未配置 GM Bot 时：文游仍在主 Bot 上（与旧版一致）
     if not gm_split and WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
-        if not is_wenyou_owner(int(user_id)):
-            return
         parts = text.strip().split(maxsplit=1)
         cmd0 = (parts[0] if parts else "").split("@", 1)[0].lower()
         if cmd0 == "/start":
@@ -1062,18 +1055,18 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
             return
         if cmd0 == "/story":
             rest = parts[1] if len(parts) > 1 else None
-            out = cmd_story(int(user_id), rest)
+            out = cmd_story(int(chat_id), rest)
             send_message_segmented(int(chat_id), out, bot_token=token)
             return
         if cmd0 == "/go":
-            out = cmd_go(int(user_id))
+            out = cmd_go(int(chat_id))
             send_message_segmented(int(chat_id), out, bot_token=token)
             return
         if cmd0 == "/end":
-            out = cmd_end(int(user_id))
+            out = cmd_end(int(chat_id))
             send_message(int(chat_id), out, bot_token=token)
             return
-        record_group_player_line(int(user_id), text)
+        record_group_player_line(int(chat_id), text)
         return
 
     # /start：仅收个口，不弹 Reply 键盘（MiniApp 用 Bot 自带 Menu 入口即可）

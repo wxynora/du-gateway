@@ -11,8 +11,9 @@ import { AlarmTab } from "./tabs/AlarmTab";
 import { MemoryDebugTab } from "./tabs/MemoryDebugTab";
 import { DuDayTab } from "./tabs/DuDayTab";
 import { DuNotebookTab } from "./tabs/DuNotebookTab";
+import { WenyouTab } from "./tabs/WenyouTab";
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "wenyou-archives" | "wenyou-hub" | null;
 type BgPreset = "cream" | "grid" | "soft";
 type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number; imageStamp: number };
 type CyberTreeData = {
@@ -30,18 +31,6 @@ type CyberTreeData = {
     date?: string;
     score?: number;
   };
-  /** 已点亮徽章时后端为 true，用于树轻量光效 */
-  badgeFx?: boolean;
-};
-type MiniappBadge = {
-  id: string;
-  title: string;
-  desc: string;
-  emoji: string;
-  target: number;
-  progress: number;
-  unlocked: boolean;
-  unlocked_at?: string;
 };
 type WeeklyReport = {
   week_id?: string;
@@ -67,8 +56,6 @@ function Shell() {
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [weeklyReport, setWeeklyReport] = useState<WeeklyReport | null>(null);
   const [weeklyRefreshing, setWeeklyRefreshing] = useState(false);
-  const [badges, setBadges] = useState<MiniappBadge[] | null>(null);
-  const [badgesRefreshing, setBadgesRefreshing] = useState(false);
   const [tree, setTree] = useState<CyberTreeData | null>(null);
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
@@ -82,12 +69,6 @@ function Shell() {
         if (j?.ok && j?.report) setWeeklyReport(j.report);
       })
       .catch(() => {});
-  const loadBadges = () =>
-    apiJson<{ ok?: boolean; badges?: MiniappBadge[] }>("/miniapp-api/badges")
-      .then((j) => {
-        if (j?.ok && Array.isArray(j?.badges)) setBadges(j.badges);
-      })
-      .catch(() => setBadges([]));
   const version = new URLSearchParams(window.location.search).get("v") || "";
   const [bg, setBg] = useState<BgConfig>({
     preset: "cream",
@@ -135,23 +116,8 @@ function Shell() {
       })
       .catch(() => {});
     loadWeeklyReport();
-    loadBadges();
     loadTree();
   }, []);
-  async function refreshBadges() {
-    setBadgesRefreshing(true);
-    try {
-      const j = await apiJson<{ ok?: boolean; badges?: MiniappBadge[]; error?: string }>("/miniapp-api/badges/refresh", { method: "POST" });
-      if (!j?.ok) throw new Error(j?.error || "刷新失败");
-      if (Array.isArray(j.badges)) setBadges(j.badges);
-      toast("徽章已刷新");
-      loadTree();
-    } catch (e: any) {
-      toast(`徽章刷新失败：${e?.message || e}`);
-    } finally {
-      setBadgesRefreshing(false);
-    }
-  }
 
   async function refreshWeeklyReport() {
     setWeeklyRefreshing(true);
@@ -247,45 +213,14 @@ function Shell() {
         </div>
       ) : null}
 
-      {badges && badges.length > 0 ? (
-        <div className="px-4 pt-2">
-          <div className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 px-3 py-2 text-[12px] text-cream-text">
-            <div className="flex items-center justify-between gap-2 mb-2">
-              <span className="font-semibold text-cream-text">成就徽章</span>
-              <Btn kind="dark" onClick={refreshBadges} disabled={badgesRefreshing}>
-                {badgesRefreshing ? "刷新中..." : "刷新"}
-              </Btn>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {badges.map((b) => (
-                <div
-                  key={b.id}
-                  title={b.desc}
-                  className={
-                    "rounded-2xl border px-2 py-2 text-center transition " +
-                    (b.unlocked
-                      ? "bg-white/70 border-white/70 shadow-soft2"
-                      : "bg-white/25 border-white/40 opacity-75 grayscale")
-                  }
-                >
-                  <div className="text-xl leading-none">{b.emoji}</div>
-                  <div className="mt-1 text-[10px] font-semibold leading-tight line-clamp-2">{b.title}</div>
-                  <div className="mt-0.5 text-[9px] text-cream-muted">
-                    {b.progress}/{b.target}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       <div className="px-4 pt-6 pb-28">
         <div className="grid grid-cols-2 gap-3">
           <FeatureTile title="日志" desc="查看/过滤/复制" color="bg-white/38" icon={<LineIcon name="logs" />} onClick={() => setPanel("logs")} />
           <FeatureTile title="思维链" desc="最近10条（降序）" color="bg-white/38" icon={<LineIcon name="reasoning" />} onClick={() => setPanel("reasoning")} />
           <FeatureTile title="记忆调试" desc="窗口总结 + 动态召回" color="bg-white/38" icon={<LineIcon name="memory" />} onClick={() => setPanel("memory-debug")} />
           <FeatureTile title="渡的记事本" desc="固定注入 · 条目管理" color="bg-white/38" icon={<LineIcon name="notebook" />} onClick={() => setPanel("du-notebook")} />
+          <FeatureTile title="已通关副本" desc="文游归档历史列表" color="bg-white/38" icon={<LineIcon name="wenyou-archives" />} onClick={() => setPanel("wenyou-archives")} />
+          <FeatureTile title="系统空间" desc="随机或自定义下一任务" color="bg-white/38" icon={<LineIcon name="wenyou-hub" />} onClick={() => setPanel("wenyou-hub")} />
           <FeatureTile title="核心Prompt" desc="固定注入，可随时更新" color="bg-white/38" icon={<LineIcon name="prompt" />} onClick={() => setShowCorePrompt(true)} />
         </div>
       </div>
@@ -308,6 +243,16 @@ function Shell() {
       {panel === "du-notebook" ? (
         <Modal title="渡的记事本" onClose={() => setPanel(null)}>
           <DuNotebookTab />
+        </Modal>
+      ) : null}
+      {panel === "wenyou-archives" ? (
+        <Modal title="已通关副本" onClose={() => setPanel(null)}>
+          <WenyouTab initialView="archives" />
+        </Modal>
+      ) : null}
+      {panel === "wenyou-hub" ? (
+        <Modal title="系统空间" onClose={() => setPanel(null)}>
+          <WenyouTab initialView="hub" />
         </Modal>
       ) : null}
 
@@ -401,12 +346,14 @@ function FeatureTile({
   );
 }
 
-function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" | "notebook" }) {
+function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" | "notebook" | "wenyou-archives" | "wenyou-hub" }) {
   const cls = "h-4 w-4 text-cream-text";
   if (name === "logs") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 12h16M4 18h10" /></svg>;
   if (name === "reasoning") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 12h4l2-4 4 8 2-4h4" /></svg>;
   if (name === "memory") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
   if (name === "notebook") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" /></svg>;
+  if (name === "wenyou-archives") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 8h8M8 12h8M8 16h6" /></svg>;
+  if (name === "wenyou-hub") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3 4 7v5c0 5 3.4 8.7 8 9 4.6-.3 8-4 8-9V7l-8-4zM9 12h6M12 9v6" /></svg>;
   if (name === "upstream") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M14 7l3-3m-3 3 3 3M20 17H10m0 0-3-3m3 3-3 3" /></svg>;
   if (name === "prompt") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
   if (name === "tree") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21v-5M12 16c-3.8 0-6-2.2-6-5 0-2.2 1.4-4 3.4-4.7A4.8 4.8 0 0 1 19 8c1.8.8 3 2.5 3 4.5 0 3-2.4 3.5-5 3.5h-5z" /></svg>;
@@ -741,13 +688,10 @@ function GrowthTreeSVG({
   growthValue,
   season,
   weatherFx,
-  sparkle,
 }: {
   growthValue: number;
   season: "spring" | "summer" | "autumn" | "winter";
   weatherFx?: "rainy" | "sunny" | "snowy";
-  /** 成就徽章联动：轻微光点飘动，不改成长逻辑 */
-  sparkle?: boolean;
 }) {
   const g = Number.isFinite(growthValue) ? Math.max(0, growthValue) : 0;
   const stage = g < 10 ? 0 : g < 30 ? 1 : g < 60 ? 2 : g < 100 ? 3 : 4;
@@ -816,28 +760,9 @@ function GrowthTreeSVG({
         @keyframes rain-fall { 0% { transform: translateY(-2px); opacity: .7; } 100% { transform: translateY(9px); opacity: .2; } }
         @keyframes glint { 0%,100% { opacity: .18; } 50% { opacity: .42; } }
         @keyframes grow-in { from { transform: scale(.82); opacity: .45; } to { transform: scale(1); opacity: 1; } }
-        @keyframes badge-sparkle { 0%,100% { opacity: .35; transform: translateY(0); } 50% { opacity: .85; transform: translateY(-1.2px); } }
       `}</style>
 
       <ellipse cx="50" cy="90" rx="28" ry="7" fill="url(#soilGrad)" />
-
-      {sparkle ? (
-        <g aria-hidden>
-          {[0, 1, 2, 3, 4].map((i) => (
-            <circle
-              key={`sp-${i}`}
-              cx={22 + i * 14}
-              cy={18 + (i % 3) * 6}
-              r="1.2"
-              fill="#fff8e6"
-              style={{
-                animation: `badge-sparkle ${2.4 + i * 0.2}s ease-in-out infinite`,
-                animationDelay: `${i * 0.35}s`,
-              }}
-            />
-          ))}
-        </g>
-      ) : null}
 
       {stage === 0 ? (
         <g className="grow-in">
@@ -974,7 +899,6 @@ function CyberTreeModal({
               growthValue={growth}
               season={(d?.season || "spring") as "spring" | "summer" | "autumn" | "winter"}
               weatherFx={(d?.weatherFx || undefined) as "rainy" | "sunny" | "snowy" | undefined}
-              sparkle={!!d?.badgeFx}
             />
             <div className="text-xs text-cream-muted">SVG 动态小树（随成长值 + 季节变化）</div>
           </div>
