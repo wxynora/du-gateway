@@ -38,10 +38,23 @@ from config import (
     WENYOU_GROUP_CHAT_ID,
     TELEGRAM_WENYOU_OWNER_USER_ID,
 )
+from storage import r2_store
 
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
+
+
+def _is_wenyou_active() -> bool:
+    """是否存在进行中的文游局（按文游群 chat_id 会话）。"""
+    gid = int(WENYOU_GROUP_CHAT_ID or 0)
+    if gid == 0:
+        return False
+    try:
+        s = r2_store.get_wenyou_session(gid)
+        return bool(isinstance(s, dict) and s.get("gameId"))
+    except Exception:
+        return False
 
 
 def _get_main_bot_telegram_user_id() -> Optional[int]:
@@ -1134,7 +1147,18 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
     if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
         from utils.time_aware import now_beijing_iso
-        from storage import r2_store
 
         r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
-    append_user_input(chat_id=chat_id, user_id=user_id, text=text)
+    # 文游进行中时，私聊自动给“切回日常聊天”提示，避免渡在私聊继续跑副本剧情。
+    final_text = text
+    if (
+        chat_type == "private"
+        and not text.startswith("/")
+        and _is_wenyou_active()
+        and "[当前在私聊" not in text
+    ):
+        final_text = (
+            "[当前在私聊，不在文游群；此消息按日常聊天处理，不推进副本剧情。]\n"
+            + text
+        )
+    append_user_input(chat_id=chat_id, user_id=user_id, text=final_text)
