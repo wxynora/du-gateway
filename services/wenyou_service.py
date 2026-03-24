@@ -1080,6 +1080,8 @@ def cmd_go(user_id: int) -> str:
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
         return "文游：当前没有进行中的局，请先 /story 开局。"
+    if str(session.get("phase") or "") == "settlement":
+        return "文游：当前处于系统空间结算阶段，不能 /go。请先完成结算后 /settle。"
 
     _session_ensure_stats(session)
     pr = session.get("pending_round") or {}
@@ -1120,7 +1122,7 @@ def cmd_go(user_id: int) -> str:
 
 
 def cmd_end(user_id: int) -> str:
-    """结束并归档。"""
+    """进入系统空间结算阶段（不立即归档）。"""
     uid = int(user_id)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
@@ -1129,6 +1131,30 @@ def cmd_end(user_id: int) -> str:
         with _PENDING_LOCK:
             _PENDING_STORY_CONFIRM.pop(uid, None)
         return "文游：当前没有进行中的局。"
+
+    _session_ensure_stats(session)
+    session["phase"] = "settlement"
+    session.setdefault("stats", {})["phase"] = "hub"
+    ts = now_beijing_iso()
+    session.setdefault("history", []).append(
+        {
+            "role": "gm",
+            "content": "【主神提示】副本已结束，进入系统空间结算阶段。可进行领取奖励、购买道具、强化血统与整备；整备完成后请使用 /settle 完成本局最终结算归档。",
+            "timestamp": ts,
+        }
+    )
+    r2_store.save_wenyou_session(uid, session)
+    return "文游：已进入系统空间结算阶段。现在可进行奖励与整备操作；结算完成后请发 /settle 归档本局。"
+
+
+def cmd_settle(user_id: int) -> str:
+    """结算完成并归档本局。"""
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return "文游：当前没有进行中的局。"
+    if str(session.get("phase") or "") != "settlement":
+        return "文游：当前不在结算阶段。请先 /end 进入系统空间结算。"
 
     archive = {
         "gameId": session.get("gameId"),
@@ -1143,8 +1169,7 @@ def cmd_end(user_id: int) -> str:
     r2_store.delete_wenyou_active_session(uid)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
-
-    return "文游：本局已结束并归档。叙事上你们已回到主神空间休整；下一局请再 /story。MiniApp 可查看最近一次归档。"
+    return "文游：本局已完成最终结算并归档。下一局请再 /story。MiniApp 可查看已完成副本。"
 
 
 def get_latest_gm_for_inject(user_id: int) -> str:

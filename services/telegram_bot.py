@@ -15,6 +15,7 @@ import requests
 from services.wenyou_service import (
     cmd_end,
     cmd_go,
+    cmd_settle,
     cmd_story,
     record_group_player2_line,
     record_group_player_line,
@@ -619,7 +620,7 @@ def _delete_my_commands_default() -> bool:
 
 
 def _set_my_commands_wenyou_group(cmd_token: str) -> bool:
-    """文游固定群：/story /go /end（仅在该群菜单中显示）；cmd_token 为承担文游菜单的 Bot。"""
+    """文游固定群：/story /go /end /settle（仅在该群菜单中显示）；cmd_token 为承担文游菜单的 Bot。"""
     if not WENYOU_GROUP_CHAT_ID:
         return False
     tok = (cmd_token or "").strip()
@@ -630,7 +631,8 @@ def _set_my_commands_wenyou_group(cmd_token: str) -> bool:
         "commands": [
             {"command": "story", "description": "开局（随机或加关键词）"},
             {"command": "go", "description": "结算本轮，推进剧情"},
-            {"command": "end", "description": "结束本局并归档"},
+            {"command": "end", "description": "结束副本并进入系统空间结算"},
+            {"command": "settle", "description": "完成最终结算并归档本局"},
         ],
         "scope": {"type": "chat", "chat_id": int(WENYOU_GROUP_CHAT_ID)},
     }
@@ -1008,7 +1010,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         if cmd0 == "/start":
             send_message(
                 int(chat_id),
-                "MiniApp 与运维面板请在私聊对主 Bot 发送 /start。本群文游：/story /go /end。",
+                "MiniApp 与运维面板请在私聊对主 Bot 发送 /start。本群文游：/story /go /end /settle。",
                 bot_token=token,
             )
             return
@@ -1023,6 +1025,10 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
             return
         if cmd0 == "/end":
             out = cmd_end(int(chat_id))
+            send_message(int(chat_id), out, bot_token=token)
+            return
+        if cmd0 == "/settle":
+            out = cmd_settle(int(chat_id))
             send_message(int(chat_id), out, bot_token=token)
             return
         # 群内普通发言也记入文游玩家行动，供后续 /go 让 GM 基于行动推进剧情。
@@ -1090,7 +1096,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         if cmd0 == "/start":
             send_message(
                 int(chat_id),
-                "MiniApp 与运维面板请在私聊对 Bot 发送 /start。本群文游：/story /go /end（主神积分、系统商店、等级阶位 D～S、血统与体力/智慧见剧情与状态栏）。",
+                "MiniApp 与运维面板请在私聊对 Bot 发送 /start。本群文游：/story /go /end /settle（主神积分、系统商店、等级阶位 D～S、血统与体力/智慧见剧情与状态栏）。",
                 bot_token=token,
             )
             return
@@ -1105,6 +1111,10 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
             return
         if cmd0 == "/end":
             out = cmd_end(int(chat_id))
+            send_message(int(chat_id), out, bot_token=token)
+            return
+        if cmd0 == "/settle":
+            out = cmd_settle(int(chat_id))
             send_message(int(chat_id), out, bot_token=token)
             return
         record_group_player_line(int(chat_id), text)
