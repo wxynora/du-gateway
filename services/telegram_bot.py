@@ -770,6 +770,39 @@ def send_message_segmented(chat_id: int, text: str, bot_token: Optional[str] = N
     return ok_any
 
 
+def _split_reply_text_by_len_only(text: str) -> list[str]:
+    """
+    仅按长度硬切分，不按换行/段落切。
+    用于 GM 回复：保留原始换行展示，避免“每行一条”。
+    """
+    t = (text or "").strip()
+    if not t:
+        return []
+    max_len = int(TELEGRAM_OUTPUT_CHUNK_CHARS or 1500)
+    max_len = max(200, min(4096, max_len))
+    out: list[str] = []
+    i = 0
+    n = len(t)
+    while i < n:
+        out.append(t[i : i + max_len])
+        i += max_len
+    return out
+
+
+def send_message_segmented_gm(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
+    """GM 专用发送：仅长度切分，保留换行，不按行拆条。"""
+    parts = _split_reply_text_by_len_only(text)
+    if not parts:
+        return send_message(chat_id=chat_id, text=text or "", bot_token=bot_token)
+    ok_any = False
+    for i, part in enumerate(parts):
+        ok = send_message(chat_id=chat_id, text=part, bot_token=bot_token)
+        ok_any = ok_any or ok
+        if i != len(parts) - 1:
+            _sleep_between_sends()
+    return ok_any
+
+
 def process_message(
     chat_id: int,
     user_id: int,
@@ -982,11 +1015,11 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         if cmd0 == "/story":
             rest = parts[1] if len(parts) > 1 else None
             out = cmd_story(int(chat_id), rest)
-            send_message_segmented(int(chat_id), out, bot_token=token)
+            send_message_segmented_gm(int(chat_id), out, bot_token=token)
             return
         if cmd0 == "/go":
             out = cmd_go(int(chat_id))
-            send_message_segmented(int(chat_id), out, bot_token=token)
+            send_message_segmented_gm(int(chat_id), out, bot_token=token)
             return
         if cmd0 == "/end":
             out = cmd_end(int(chat_id))
