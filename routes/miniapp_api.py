@@ -308,7 +308,7 @@ def miniapp_wenyou_last_archive():
     前端可在结局页拉一次展示框架与历史。
     """
     uid = _wenyou_session_id()
-    if uid <= 0:
+    if uid == 0:
         return jsonify({"ok": False, "error": "未配置 WENYOU_GROUP_CHAT_ID（或文游会话 ID）"}), 400
     arch = r2_store.get_wenyou_last_archive(uid)
     return jsonify({"ok": True, "archive": arch})
@@ -318,7 +318,7 @@ def miniapp_wenyou_last_archive():
 def miniapp_wenyou_archives():
     """文游：已通关副本历史列表（按 endedAt 倒序）。"""
     uid = _wenyou_session_id()
-    if uid <= 0:
+    if uid == 0:
         return jsonify({"ok": False, "error": "未配置 WENYOU_GROUP_CHAT_ID（或文游会话 ID）"}), 400
     limit = request.args.get("limit", type=int, default=20)
     items = r2_store.list_wenyou_archives(uid, limit=limit)
@@ -329,7 +329,7 @@ def miniapp_wenyou_archives():
 def miniapp_wenyou_archive_detail(game_id: str):
     """文游：单个已通关副本详情。"""
     uid = _wenyou_session_id()
-    if uid <= 0:
+    if uid == 0:
         return jsonify({"ok": False, "error": "未配置 WENYOU_GROUP_CHAT_ID（或文游会话 ID）"}), 400
     gid = (game_id or "").strip()
     if not gid:
@@ -364,7 +364,7 @@ def miniapp_wenyou_archive_detail(game_id: str):
 def miniapp_wenyou_status():
     """文游：进行中状态（系统空间用于开局前提示）。"""
     uid = _wenyou_session_id()
-    if uid <= 0:
+    if uid == 0:
         return jsonify({"ok": False, "error": "未配置 WENYOU_GROUP_CHAT_ID（或文游会话 ID）"}), 400
     session = r2_store.get_wenyou_session(uid)
     if not session or not session.get("gameId"):
@@ -390,7 +390,7 @@ def miniapp_wenyou_status():
 def miniapp_wenyou_story():
     """文游开局：系统空间可选随机或自定义长描述（keywords）。"""
     uid = _wenyou_session_id()
-    if uid <= 0:
+    if uid == 0:
         return jsonify({"ok": False, "error": "未配置 WENYOU_GROUP_CHAT_ID（或文游会话 ID）"}), 400
     data = request.get_json(silent=True) or {}
     mode = str(data.get("mode") or "random").strip().lower()
