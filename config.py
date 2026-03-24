@@ -247,11 +247,14 @@ TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_S
 
 # Telegram 上下文缓存：每次请求网关时携带最近 N 轮（user+assistant=一轮两条消息），默认 4
 TELEGRAM_CONTEXT_LAST_TURNS = int(os.environ.get("TELEGRAM_CONTEXT_LAST_TURNS", "4"))
-# 表情包 sendPhoto：长边像素上限（默认 256，聊天里更小；0 表示不缩放，需 Pillow）
-TELEGRAM_STICKER_MAX_EDGE = int(os.environ.get("TELEGRAM_STICKER_MAX_EDGE", "256") or "0")
+# 表情包 sendPhoto：内容区长边像素上限（默认 128；0 表示不缩放，需 Pillow）
+# 说明：Telegram 会把照片按聊天气泡宽度放大显示，只压像素仍会「占满宽」。因此配合下方「画布」留白。
+TELEGRAM_STICKER_MAX_EDGE = int(os.environ.get("TELEGRAM_STICKER_MAX_EDGE", "128") or "0")
 TELEGRAM_STICKER_JPEG_QUALITY = int(os.environ.get("TELEGRAM_STICKER_JPEG_QUALITY", "72") or "72")
 # 原图长边已达标但字节仍超过此值时强制重压缩（避免高清小图仍很大）
 TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS = int(os.environ.get("TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS", "380000") or "380000")
+# 输出正方形边长：把缩略后的图贴在中心，四周留白，这样客户端拉宽整图时主体只占中间一小块（默认 480；0 表示不用画布、仅缩放）
+TELEGRAM_STICKER_CANVAS_EDGE = int(os.environ.get("TELEGRAM_STICKER_CANVAS_EDGE", "480") or "0")
 
 # Telegram 主动发消息（调度器）
 TELEGRAM_PROACTIVE_ENABLED = os.environ.get("TELEGRAM_PROACTIVE_ENABLED", "").strip().lower() in ("1", "true", "yes")

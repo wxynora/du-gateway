@@ -43,6 +43,7 @@ from config import (
     TELEGRAM_STICKER_MAX_EDGE,
     TELEGRAM_STICKER_JPEG_QUALITY,
     TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS,
+    TELEGRAM_STICKER_CANVAS_EDGE,
 )
 from storage import r2_store
 
@@ -423,6 +424,36 @@ def _pick_random_sticker_key(tag: str) -> Optional[str]:
         return None
 
 
+def _letterbox_sticker_on_canvas(im, canvas_side: int):
+    """
+    将已缩小的图贴在正方形画布中心（透明或白底）。
+    Telegram 会把整张照片按气泡宽度拉伸；留白后主体在视觉上只占中间一部分。
+    """
+    from PIL import Image
+
+    if canvas_side <= 0:
+        return im
+    im = im.copy()
+    if im.mode == "P":
+        im = im.convert("RGBA") if "transparency" in im.info else im.convert("RGB")
+    if max(im.size) > canvas_side:
+        im.thumbnail((canvas_side, canvas_side), Image.Resampling.LANCZOS)
+    cw, ch = im.size
+    if cw <= 0 or ch <= 0:
+        return im
+    ox = (canvas_side - cw) // 2
+    oy = (canvas_side - ch) // 2
+    if im.mode in ("RGBA", "LA"):
+        if im.mode == "LA":
+            im = im.convert("RGBA")
+        canvas = Image.new("RGBA", (canvas_side, canvas_side), (0, 0, 0, 0))
+        canvas.paste(im, (ox, oy), im)
+        return canvas
+    canvas = Image.new("RGB", (canvas_side, canvas_side), (255, 255, 255))
+    canvas.paste(im.convert("RGB"), (ox, oy))
+    return canvas
+
+
 def _sticker_pil_to_send_bytes(im, stem: str, quality: int) -> tuple[bytes, str, str]:
     """将 PIL 图像编码为 Telegram 可发的 bytes（透明→PNG，否则 JPEG）。"""
     out = BytesIO()
@@ -440,21 +471,23 @@ def _sticker_pil_to_send_bytes(im, stem: str, quality: int) -> tuple[bytes, str,
 
 def _maybe_downscale_sticker_bytes(data: bytes, filename: str, mime: str) -> tuple[bytes, str, str]:
     """
-    缩小表情包长边并压体积；GIF 不动（避免拆帧）。
-    TELEGRAM_STICKER_MAX_EDGE=0 则跳过。
+    缩小表情包并可选中心画布留白（见 TELEGRAM_STICKER_CANVAS_EDGE）。
+    GIF 不动（避免拆帧）。TELEGRAM_STICKER_MAX_EDGE=0 则跳过。
     """
     max_edge = int(TELEGRAM_STICKER_MAX_EDGE or 0)
     max_bytes = int(TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS or 380_000)
+    canvas_edge = int(TELEGRAM_STICKER_CANVAS_EDGE or 0)
     if max_edge <= 0 or not data:
         return data, filename, mime
     try:
         from PIL import Image
     except ImportError:
-        logger.warning("表情包缩放需 Pillow（pip install Pillow），当前原图发送")
+        logger.warning("表情包缩放需 Pillow（pip install Pillow），当前原图发送，聊天里仍会很大")
         return data, filename, mime
 
     ext = Path(filename or "").suffix.lower()
     if ext == ".gif":
+        logger.debug("表情包 GIF 未缩放，如需变小请改用静图或后续再加拆帧")
         return data, filename, mime
 
     try:
@@ -471,18 +504,25 @@ def _maybe_downscale_sticker_bytes(data: bytes, filename: str, mime: str) -> tup
     stem = Path(filename or "sticker").stem or "sticker"
     base_q = min(95, max(50, int(TELEGRAM_STICKER_JPEG_QUALITY or 72)))
 
-    # 长边超过上限：先缩小再编码
+    # 长边超过上限：先缩小
     if max(w, h) > max_edge:
         try:
             im.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
         except Exception as e:
             logger.debug("表情包 thumbnail 失败，原样发送: %s", e)
             return data, filename, mime
-    elif len(data) <= max_bytes:
-        # 尺寸已够小且体积不大：不重复编码
+    elif len(data) <= max_bytes and canvas_edge <= 0:
+        # 无画布模式：尺寸与体积都可接受则不再编码
         return data, filename, mime
 
-    # 需要输出：含「仅压体积」（像素不大但文件仍很大）
+    # 中心画布：让 Telegram 拉宽整图时主体只占中间一块
+    if canvas_edge > 0:
+        try:
+            im = _letterbox_sticker_on_canvas(im, canvas_edge)
+        except Exception as e:
+            logger.warning("表情包画布合成失败，按无画布发送: %s", e)
+
+    # 输出字节
     try:
         out_b, out_name, out_mime = _sticker_pil_to_send_bytes(im, stem, base_q)
         if len(out_b) > int(max_bytes * 1.15) and out_mime == "image/jpeg":
