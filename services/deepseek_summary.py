@@ -108,6 +108,8 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
    - 每一轮尽量用 1-2 句交代“发生了什么 + 结论/情绪”，避免展开复述
    - 能合并就合并：同一主题跨多轮只写一次“最终进展/结论+当前情绪”，不要按轮次重复写过程
    - 少用修饰性句子，不写空泛感受词；每句尽量带可追溯事实点（谁、做了什么、结果）
+   - 每个时间段至少保留 1 处情绪温度（如开心、担心、委屈、放心、想念、撒娇、心疼），不要只剩事件流水账
+   - 优先保留“事实锚点”：时间、地点、人物、决定、未完成事项、数字/参数；健康信息仅在“生病/不适/就医”场景保留
 5. 不管内容重不重要都要覆盖
    - 你只负责总结"聊了什么"
    - 不负责判断"重不重要"
@@ -422,10 +424,10 @@ def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
         standard：默认平衡档。
         """
         if profile == "mild":
-            return (30, 1), (40, 2), (60, 2)
+            return (52, 2), (64, 2), (88, 3)
         if profile == "aggressive":
-            return (18, 1), (28, 1), (44, 1)
-        return (24, 1), (34, 1), (52, 2)
+            return (36, 1), (48, 2), (72, 2)
+        return (44, 2), (58, 2), (82, 3)
 
     oldest_cfg, earlier_cfg, recent_cfg = _profile_limits(SUMMARY_COMPRESSION_PROFILE)
 
@@ -446,7 +448,33 @@ def _trim_summary_to_budget(text: str, budget_tokens: int) -> str:
         return summary
 
     # 第二阶段：压缩仍不够时，才从最早段开始删行兜底
+    def _is_key_line(line: str) -> bool:
+        """尽量保护“事实锚点”行，避免预算裁剪把关键信息先删掉。"""
+        s = (line or "").strip()
+        if not s:
+            return False
+        if s.startswith("（") and s.endswith("）"):
+            return True
+        import re
+
+        if re.search(r"\d{4}-\d{2}-\d{2}", s):
+            return True
+        if re.search(r"\d+\s*(次|个|天|小时|分钟|%|km|mAh|bpm|步)", s):
+            return True
+        key_words = (
+            "决定", "结论", "已完成", "完成了", "待办", "下一步", "约好", "计划", "提醒", "截止",
+            "地址", "定位", "报错", "修复", "上线",
+            # 健康信息只在异常/生病场景视为关键锚点
+            "生病", "不舒服", "发烧", "感冒", "咳嗽", "头疼", "肚子疼", "就医", "看医生", "吃药",
+        )
+        return any(k in s for k in key_words)
+
     def _pop_from_front(body: list[str]) -> bool:
+        # 先删最前面的“非关键行”，尽量保关键事实；若全是关键行，再退化为删第一行。
+        for i, line in enumerate(body):
+            if not _is_key_line(line):
+                body.pop(i)
+                return True
         while body:
             line = body[0]
             body.pop(0)

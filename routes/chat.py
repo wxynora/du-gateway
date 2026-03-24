@@ -28,6 +28,7 @@ from pipeline.pipeline import (
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
     step_inject_sense_snapshot,
+    step_inject_du_thought,
     step_inject_rikkahub_reminder,
     step_inject_dynamic_memory,
     step_inject_du_notebook,
@@ -40,8 +41,10 @@ from pipeline.pipeline import (
 from services.wenyou_service import step_inject_wenyou_gm
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
-from storage import whitelist_store
+from storage import r2_store, whitelist_store
+from services.du_thought import DuThoughtStreamState, split_assistant_for_thought, transform_sse_chunk_bytes
 from utils.log import get_logger
+from utils.time_aware import now_beijing_iso
 
 logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
@@ -331,6 +334,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
         flush_ms = max(0, int(STREAM_SSE_FLUSH_MAX_MS or 0))
         flush_window_s = flush_ms / 1000.0
         last_send_ts = time.time()
+        du_state = DuThoughtStreamState()
         try:
             while True:
                 buf = []
@@ -369,19 +373,25 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                             data_chunk_count += 1
                     if chunk is None:
                         # 先把缓冲发完再结束
-                        yield b"".join(buf)
+                        yield b"".join([transform_sse_chunk_bytes(c, du_state) for c in buf])
                         break
 
-                yield b"".join(buf)
+                yield b"".join([transform_sse_chunk_bytes(c, du_state) for c in buf])
                 last_send_ts = time.time()
         finally:
             full_content = "".join(content_parts)
+            visible, thought = split_assistant_for_thought(full_content)
+            if thought:
+                try:
+                    r2_store.save_du_thought_latest(now_beijing_iso(), thought)
+                except Exception as e:
+                    logger.warning("save_du_thought_latest 失败 error=%s", e)
             full_reasoning = "".join(reasoning_parts).strip()
             stream_sec = time.time() - stream_start
             # 若「流式持续时长」总是差不多（如 10–20s）而字数越来越短，可能是上游按时长限流
             logger.debug("本轮流式回复收集长度约 %s 字符，共转发 %s 个 data 块，流式持续约 %.1f 秒", len(full_content), data_chunk_count, stream_sec)
-            if not is_failed_response(full_content) and full_content.strip():
-                msg = {"role": "assistant", "content": full_content}
+            if not is_failed_response(visible) and visible.strip():
+                msg = {"role": "assistant", "content": visible}
                 if full_reasoning:
                     msg["reasoning"] = full_reasoning
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
@@ -391,13 +401,13 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                 )
                 try:
                     from services.notion_write_from_assistant import process_assistant_content_for_notion_write
-                    process_assistant_content_for_notion_write(full_content)
+                    process_assistant_content_for_notion_write(visible)
                 except Exception:
                     pass
                 logger.info("R2 流式请求已存档")
-            elif is_failed_response(full_content):
+            elif is_failed_response(visible):
                 logger.info("R2 未存档：流式回复被判为失败，跳过")
-            elif not full_content.strip():
+            elif not visible.strip():
                 logger.info("R2 未存档：流式回复为空，跳过")
         return
 
@@ -421,22 +431,29 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                     msg["reasoning"] = parsed.get("reasoning")
                 current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
                 continue
+            du_state = DuThoughtStreamState()
             for ch in chunks:
-                yield ch
+                yield transform_sse_chunk_bytes(ch, du_state)
             content_parts.append(parsed.get("content") or "")
             if parsed.get("reasoning"):
                 reasoning_parts.append(parsed.get("reasoning") or "")
             break
     finally:
         full_content = "".join(content_parts)
+        visible, thought = split_assistant_for_thought(full_content)
+        if thought:
+            try:
+                r2_store.save_du_thought_latest(now_beijing_iso(), thought)
+            except Exception as e:
+                logger.warning("save_du_thought_latest 失败 error=%s", e)
         full_reasoning = "".join(reasoning_parts).strip()
         logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
-        if is_failed_response(full_content):
+        if is_failed_response(visible):
             logger.info("R2 未存档：流式回复被判为失败，跳过")
-        elif not full_content.strip():
+        elif not visible.strip():
             logger.info("R2 未存档：流式回复为空，跳过")
         else:
-            msg = {"role": "assistant", "content": full_content}
+            msg = {"role": "assistant", "content": visible}
             if full_reasoning:
                 msg["reasoning"] = full_reasoning
             round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
@@ -446,7 +463,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             )
             try:
                 from services.notion_write_from_assistant import process_assistant_content_for_notion_write
-                process_assistant_content_for_notion_write(full_content)
+                process_assistant_content_for_notion_write(visible)
             except Exception:
                 pass
             logger.info("R2 流式请求已存档")
@@ -553,6 +570,33 @@ def _last_user_message(messages):
         if (m.get("role") or "").lower() == "user":
             return m
     return None
+
+
+def _apply_du_thought_to_assistant_response(resp_json: dict) -> dict:
+    """
+    剥离助手回复中的心事块（老婆侧不可见）；若存在闭合块则写入 R2。
+    就地修改 choices[0].message.content。
+    """
+    if not resp_json or not isinstance(resp_json, dict):
+        return resp_json
+    choices = resp_json.get("choices") or []
+    if not choices:
+        return resp_json
+    msg = choices[0].get("message")
+    if not isinstance(msg, dict):
+        return resp_json
+    content_text = get_assistant_content_text(msg)
+    if not content_text:
+        return resp_json
+    visible, thought = split_assistant_for_thought(content_text)
+    if thought or visible != content_text:
+        msg["content"] = visible
+    if thought:
+        try:
+            r2_store.save_du_thought_latest(now_beijing_iso(), thought)
+        except Exception as e:
+            logger.warning("save_du_thought_latest 失败 error=%s", e)
+    return resp_json
 
 
 def _append_tool_results_and_continue(body: dict, assistant_message: dict, tool_calls: list, execute_tool) -> dict:
@@ -665,6 +709,7 @@ def chat_completions():
     body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
     body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
     body = step_inject_sense_snapshot(body, window_id)
+    body = step_inject_du_thought(body, window_id)
     body = step_inject_wenyou_gm(body, window_id)
     body = step_inject_rikkahub_reminder(body, window_id)
     body = step_inject_dynamic_memory(body, window_id)
@@ -702,6 +747,8 @@ def chat_completions():
         resp_json, status, err = _forward_to_ai(body, headers)
         if err or status >= 400:
             break
+    if resp_json:
+        resp_json = _apply_du_thought_to_assistant_response(resp_json)
     if status == 200 and resp_json:
         cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):

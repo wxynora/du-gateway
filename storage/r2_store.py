@@ -64,6 +64,8 @@ R2_KEY_SCHEDULE_FIRED = "schedule/fired.json"
 R2_KEY_DYNAMIC_RECALL_DEBUG = "dynamic_memory/recall_debug.json"
 # 设备感知聚合：电量/位置/网络等（POST /api/sense 写入）
 R2_KEY_SENSE_LATEST = "sense/latest.json"
+# 渡的心事：网关从助手回复截取后写入，仅注入渡侧 system
+R2_KEY_DU_THOUGHT_LATEST = "global/du_thought_latest.json"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
@@ -535,6 +537,34 @@ def get_sense_latest() -> dict:
     data = _read_json(client, R2_KEY_SENSE_LATEST)
     if not isinstance(data, dict):
         return {}
+    return data
+
+
+def save_du_thought_latest(at_iso: str, content: str) -> bool:
+    """写入 global/du_thought_latest.json（渡上一则心事）。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not content or not str(content).strip():
+        return False
+    payload = {"at": (at_iso or "").strip(), "content": str(content).strip()}
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_DU_THOUGHT_LATEST, payload)
+            return True
+        except Exception as e:
+            logger.error("save_du_thought_latest 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_du_thought_latest() -> Optional[dict]:
+    """读取 global/du_thought_latest.json。"""
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_DU_THOUGHT_LATEST)
+    if not isinstance(data, dict):
+        return None
     return data
 
 

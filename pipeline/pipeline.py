@@ -4,6 +4,7 @@ import json
 import re
 import threading
 import time
+import requests
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
@@ -16,6 +17,8 @@ from config import (
     REPLY_GAP_THRESHOLD_MINUTES,
     LAST_USER_REPLY_FILE,
     MAX_REQUEST_CHARS,
+    DEEPSEEK_API_URL,
+    DEEPSEEK_API_KEY,
 )
 from pathlib import Path
 from storage import r2_store
@@ -25,6 +28,8 @@ from utils.tokens import estimate_tokens, memory_summary_budget, memory_dynamic_
 logger = get_logger(__name__)
 from services import image_desc, deepseek_summary
 from services.deepseek_summary import fetch_new_summary
+from memory_vector.embedding_client import embed_text
+from memory_vector.cosine import cosine
 
 
 def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
@@ -412,6 +417,37 @@ def step_inject_sense_snapshot(body: dict, window_id: str) -> dict:
     return body
 
 
+def step_inject_du_thought(body: dict, window_id: str) -> dict:
+    """
+    全局注入：在 system 末尾追加「心事格式说明 + 上一则心事」。
+    渡在回复末尾写 <<<DU_THOUGHT>>>...<<<END_DU_THOUGHT>>>，网关截取后存 R2，老婆侧不可见。
+    """
+    _ = window_id
+    try:
+        from services.du_thought import format_inject_block
+
+        latest = r2_store.get_du_thought_latest()
+        block = format_inject_block(latest)
+    except Exception as e:
+        logger.debug("du_thought 注入跳过 error=%s", e)
+        return body
+    if not (block or "").strip():
+        return body
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    inject = "\n\n" + block.strip()
+    found = False
+    for msg in messages:
+        if (msg.get("role") or "").lower() == "system":
+            msg["content"] = (msg.get("content") or "") + inject
+            found = True
+            break
+    if not found:
+        messages.insert(0, {"role": "system", "content": inject.strip()})
+    body["messages"] = messages
+    return body
+
+
 def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
     """
     当请求不是来自 Telegram（window_id 为空或不以 tg_ 开头）时，注入「当前是在 RikkaHub」提醒。
@@ -524,6 +560,165 @@ def _is_memory_meta_query(text: str) -> bool:
     has_mem_word = any(w in t for w in ("动态记忆", "窗口记忆", "记忆", "回忆", "总结"))
     has_meta_verb = any(w in t for w in ("哪些", "有什么", "收到", "注入", "检索", "匹配", "召回", "向量", "embedding"))
     return bool(has_mem_word and has_meta_verb)
+
+
+def _last_4_turns_text_for_rewrite(messages: list[dict]) -> str:
+    """取最近 4 轮 user/assistant 文本，供检索查询改写。"""
+    ua_msgs: list[tuple[str, str]] = []
+    for m in messages or []:
+        role = (m.get("role") or "").lower()
+        if role not in ("user", "assistant"):
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    parts.append(str(c.get("text") or ""))
+            text = " ".join(parts).strip()
+        else:
+            text = ""
+        if not text:
+            continue
+        who = "老婆" if role == "user" else "渡"
+        ua_msgs.append((who, text))
+    if not ua_msgs:
+        return ""
+    recent = ua_msgs[-8:]  # 约 4 轮
+    return "\n".join([f"[{who}] {txt}" for who, txt in recent])
+
+
+def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> list[str]:
+    """
+    用 DeepSeek 生成 3 条扩展检索 query。
+    失败返回空列表（主流程必须可降级）。
+    """
+    if not (DEEPSEEK_API_KEY and DEEPSEEK_API_URL):
+        return []
+    user_message = (user_message or "").strip()
+    if not user_message:
+        return []
+    prompt = (
+        "以下是最近的对话上下文：\n"
+        f"{last_4_turns or '（无）'}\n\n"
+        f"当前用户消息：{user_message}\n\n"
+        "根据上下文，生成3个不同角度的检索查询，用于从长期记忆库中找到相关的背景信息。\n"
+        "要求：每行一个，不要编号，不要解释；每行 8-24 字，尽量包含实体词或事件词，避免空泛代词。\n"
+    )
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "max_tokens": 160}
+    try:
+        r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        lines = [ln.strip(" -\t\r") for ln in str(content).splitlines() if ln.strip()]
+        out: list[str] = []
+        seen: set[str] = set()
+        for ln in lines:
+            # 去掉常见编号前缀
+            ln = re.sub(r"^\d+[\.、\)\s]+", "", ln).strip()
+            if len(ln) < 2 or ln in seen:
+                continue
+            seen.add(ln)
+            out.append(ln)
+            if len(out) >= 3:
+                break
+        return out
+    except Exception as e:
+        logger.debug("rewrite memory queries with DS failed: %s", e)
+        return []
+
+
+def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str], context_query: str = "") -> list[dict]:
+    """
+    原始 query 保底 + 扩展 query 增广：
+    - 召回：每个 query 各取 top10
+    - 合并：按 memory_id 去重
+    - 重排：语义相关度(原始 query) + 记忆权重 + 命中源数
+    - 保护：至少保留 2 条原始 query 命中（如果有）
+    """
+    from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
+
+    base = (base_query or "").strip()
+    if not base:
+        return []
+    queries = [base] + [q.strip() for q in (expanded_queries or []) if (q or "").strip() and q.strip() != base]
+    query_hits: list[tuple[str, list[dict]]] = []
+    for q in queries:
+        try:
+            hit = dynamic_vector_retrieve(q, vector_topk=10, final_topn=10)
+            query_hits.append((q, hit or []))
+        except Exception as e:
+            logger.debug("dynamic_vector_retrieve failed query=%s err=%s", q[:40], e)
+            query_hits.append((q, []))
+
+    by_id: dict[str, dict] = {}
+    source_count: dict[str, int] = {}
+    base_hit_ids: list[str] = []
+    for idx, (_q, items) in enumerate(query_hits):
+        seen_local: set[str] = set()
+        for mem in items or []:
+            mid = str(mem.get("id") or "").strip()
+            if not mid:
+                continue
+            if mid not in by_id:
+                by_id[mid] = mem
+            if mid not in seen_local:
+                source_count[mid] = int(source_count.get(mid) or 0) + 1
+                seen_local.add(mid)
+            if idx == 0 and mid not in base_hit_ids:
+                base_hit_ids.append(mid)
+    if not by_id:
+        return []
+
+    q_emb_user = embed_text(base)
+    q_emb_ctx = embed_text((context_query or "").strip()) if (context_query or "").strip() else None
+    if not q_emb_user and not q_emb_ctx:
+        # 没有 embedding 时按“来源数 + 记忆权重”兜底
+        ranked = sorted(
+            by_id.values(),
+            key=lambda m: (-(source_count.get(str(m.get("id") or ""), 0)), -_memory_weight(m)),
+        )
+        return ranked[:5]
+
+    def _semantic_pair(mem: dict) -> tuple[float, float]:
+        text = str(mem.get("content") or "").strip()
+        if not text:
+            return 0.0, 0.0
+        emb = embed_text(text[:1000])
+        if not emb:
+            return 0.0, 0.0
+        sim_user = float(cosine(q_emb_user, emb)) if q_emb_user else 0.0
+        sim_ctx = float(cosine(q_emb_ctx, emb)) if q_emb_ctx else 0.0
+        return sim_user, sim_ctx
+
+    scored: list[tuple[float, dict]] = []
+    for mid, mem in by_id.items():
+        sem_user, sem_ctx = _semantic_pair(mem)
+        weight = _memory_weight(mem)
+        src = int(source_count.get(mid) or 0)
+        # 双语义相关：原始用户句优先 + 上下文语义兜底，再融合历史权重与多源命中
+        score = sem_user * 0.50 + sem_ctx * 0.20 + weight * 0.22 + src * 0.08
+        scored.append((score, mem))
+    scored.sort(key=lambda x: -x[0])
+    ranked = [m for _, m in scored]
+
+    # 原始 query 保底：若有命中，最终至少保留 2 条（不够则尽量补齐）
+    base_keep = [by_id[mid] for mid in base_hit_ids if mid in by_id][:2]
+    out: list[dict] = []
+    used: set[str] = set()
+    for m in base_keep + ranked:
+        mid = str(m.get("id") or "")
+        if not mid or mid in used:
+            continue
+        used.add(mid)
+        out.append(m)
+        if len(out) >= 5:
+            break
+    return out
 
 
 def _memory_weight(m: dict) -> float:
@@ -645,14 +840,16 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     if not memories:
         return body
 
-    # 优先：向量召回 topK → 用现有 weight 重排 topN
-    # 若未配置 OPENAI_API_KEY 或向量检索失败，则降级为关键词匹配
+    # 优先：多查询向量召回（原始 query 保底 + DS 查询改写增广）
+    # 改写失败或召回失败都必须降级，避免因改写走偏导致“源头漏召回”。
     recalled: list[dict] = []
     vector_error = ""
+    expanded_queries: list[str] = []
     try:
-        from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
-
-        recalled = dynamic_vector_retrieve(last_user_text)
+        turns_text = _last_4_turns_text_for_rewrite(messages)
+        expanded_queries = _rewrite_memory_queries_with_ds(turns_text, last_user_text)
+        context_query = f"{turns_text}\n{last_user_text}".strip()
+        recalled = _multi_query_recall_and_rerank(last_user_text, expanded_queries, context_query=context_query)
         if recalled:
             valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
             recalled = [
@@ -681,6 +878,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                     "query": (last_user_text or "").strip(),
                     "keywords": [],
                     "source": "vector" if not vector_error else "keyword",
+                    "expanded_queries": expanded_queries,
                     "recalled_lines": [],
                     "recalled_count": 0,
                     "reason": "no_keywords_and_no_vector_hit",
@@ -735,6 +933,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                 "query": (last_user_text or "").strip(),
                 "keywords": keywords,
                 "source": "vector" if recalled else "keyword",
+                "expanded_queries": expanded_queries,
                 "recalled_lines": [],
                 "recalled_count": 0,
                 "reason": "empty_after_budget_or_filter",
@@ -749,6 +948,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             "query": (last_user_text or "").strip(),
             "keywords": keywords,
             "source": "vector" if recalled else "keyword",
+            "expanded_queries": expanded_queries,
             "recalled_lines": lines,
             "recalled_count": len(lines),
         }
