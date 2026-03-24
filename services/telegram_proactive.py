@@ -30,7 +30,7 @@ from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 from services.telegram_bot import (
     _sanitize_reply_for_telegram,
-    _TELEGRAM_STYLE_SYSTEM,
+    build_telegram_style_system,
     send_message_segmented,
     process_message,
 )
@@ -260,7 +260,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
         "示例：{\"action\":\"no_contact\",\"reason\":\"她在开会\",\"message\":\"\"}\n"
         f"若你坚持旧习惯，也可以只输出一行 {no_token} 表示不联系（不推荐）。\n"
     )
-    sys_content = _TELEGRAM_STYLE_SYSTEM
+    sys_content = build_telegram_style_system()
     try:
         mem = _format_proactive_decision_memory_for_system()
         if mem:

@@ -247,9 +247,11 @@ TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_S
 
 # Telegram 上下文缓存：每次请求网关时携带最近 N 轮（user+assistant=一轮两条消息），默认 4
 TELEGRAM_CONTEXT_LAST_TURNS = int(os.environ.get("TELEGRAM_CONTEXT_LAST_TURNS", "4"))
-# 表情包 sendPhoto：长边像素上限（默认 512，避免聊天里整张占满屏）；0 表示不缩放（需安装 Pillow）
-TELEGRAM_STICKER_MAX_EDGE = int(os.environ.get("TELEGRAM_STICKER_MAX_EDGE", "512") or "0")
-TELEGRAM_STICKER_JPEG_QUALITY = int(os.environ.get("TELEGRAM_STICKER_JPEG_QUALITY", "85") or "85")
+# 表情包 sendPhoto：长边像素上限（默认 256，聊天里更小；0 表示不缩放，需 Pillow）
+TELEGRAM_STICKER_MAX_EDGE = int(os.environ.get("TELEGRAM_STICKER_MAX_EDGE", "256") or "0")
+TELEGRAM_STICKER_JPEG_QUALITY = int(os.environ.get("TELEGRAM_STICKER_JPEG_QUALITY", "72") or "72")
+# 原图长边已达标但字节仍超过此值时强制重压缩（避免高清小图仍很大）
+TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS = int(os.environ.get("TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS", "380000") or "380000")
 
 # Telegram 主动发消息（调度器）
 TELEGRAM_PROACTIVE_ENABLED = os.environ.get("TELEGRAM_PROACTIVE_ENABLED", "").strip().lower() in ("1", "true", "yes")

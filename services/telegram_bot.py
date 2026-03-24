@@ -42,6 +42,7 @@ from config import (
     R2_PUBLIC_URL,
     TELEGRAM_STICKER_MAX_EDGE,
     TELEGRAM_STICKER_JPEG_QUALITY,
+    TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS,
 )
 from storage import r2_store
 
@@ -111,19 +112,55 @@ _CONTEXT_MESSAGES: dict[int, list[dict]] = {}
 _PENDING_LOCK = threading.Lock()
 _PENDING_USER_CONTENTS: dict[int, list[Union[str, list]]] = {}
 
-# Telegram 端的输出风格约束（只影响 Telegram，不影响 RikkaHub）
-_TELEGRAM_STYLE_SYSTEM = (
-    "你正在通过 Telegram 和辛玥聊天。请遵守以下输出格式要求：\n"
-    "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号，与网关 stickers 分类代号一致，小写英文如 [cute] [shy]）；每条最多一个，平淡时不加。\n"
-    "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"
-    "2) 不要输出分割线（例如 ---、———、***）。\n"
-    "3) 不要使用 Markdown 强调符号 * 或 **（Telegram 会显得很奇怪）。\n"
-    "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji。\n"
-    "5) 允许自然分段，但不要为了格式刻意堆很多空行。\n"
-    "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。\n"
-    "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。\n"
-    "   - 如果你不想发语音，就不要输出 <voice> 标签。\n"
-)
+# Telegram 端的输出风格约束（只影响 Telegram）；表情包代号行从 R2 meta 动态生成，见 build_telegram_style_system
+_STICKER_SYS_LINE_CACHE_AT: float = 0.0
+_STICKER_SYS_LINE_CACHE_TEXT: str = ""
+
+
+def _sticker_tags_line_for_system_prompt() -> str:
+    """从 stickers/meta.json 读出当前全部英文代号，让模型知道 MiniApp 里有哪些分类。"""
+    global _STICKER_SYS_LINE_CACHE_AT, _STICKER_SYS_LINE_CACHE_TEXT
+    now = time.time()
+    if now - _STICKER_SYS_LINE_CACHE_AT < 45.0 and _STICKER_SYS_LINE_CACHE_TEXT:
+        return _STICKER_SYS_LINE_CACHE_TEXT
+    try:
+        meta = r2_store.get_stickers_meta()
+        keys: list[str] = []
+        for it in meta.get("tags") or []:
+            if isinstance(it, dict) and it.get("key"):
+                k = str(it["key"]).strip().lower()
+                if k:
+                    keys.append(k)
+        if not keys:
+            keys = sorted(r2_store.get_sticker_tag_keys())
+        if not keys:
+            text = "（暂无表情包分类元数据；可在 MiniApp 里添加分类后再用句末 [tag]。）"
+        else:
+            listed = " ".join(f"[{k}]" for k in keys)
+            text = f"当前全部可用英文代号（与 MiniApp/R2 一致，新增分类也会出现在此列表）：{listed}"
+    except Exception:
+        text = "表情包英文代号以 MiniApp 配置为准；句末可加小写 [tag]。"
+    _STICKER_SYS_LINE_CACHE_AT = now
+    _STICKER_SYS_LINE_CACHE_TEXT = text
+    return text
+
+
+def build_telegram_style_system() -> str:
+    """每次请求网关前调用，使渡掌握最新表情包分类列表。"""
+    tags_line = _sticker_tags_line_for_system_prompt()
+    return (
+        "你正在通过 Telegram 和辛玥聊天。请遵守以下输出格式要求：\n"
+        "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。\n"
+        f"   {tags_line}\n"
+        "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"
+        "2) 不要输出分割线（例如 ---、———、***）。\n"
+        "3) 不要使用 Markdown 强调符号 * 或 **（Telegram 会显得很奇怪）。\n"
+        "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji。\n"
+        "5) 允许自然分段，但不要为了格式刻意堆很多空行。\n"
+        "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。\n"
+        "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。\n"
+        "   - 如果你不想发语音，就不要输出 <voice> 标签。\n"
+    )
 
 
 def _fetch_gateway_first_model() -> Optional[str]:
@@ -386,12 +423,28 @@ def _pick_random_sticker_key(tag: str) -> Optional[str]:
         return None
 
 
+def _sticker_pil_to_send_bytes(im, stem: str, quality: int) -> tuple[bytes, str, str]:
+    """将 PIL 图像编码为 Telegram 可发的 bytes（透明→PNG，否则 JPEG）。"""
+    out = BytesIO()
+    q = min(95, max(50, int(quality)))
+    if im.mode == "P":
+        im = im.convert("RGBA") if "transparency" in im.info else im.convert("RGB")
+    if im.mode in ("RGBA", "LA"):
+        if im.mode == "LA":
+            im = im.convert("RGBA")
+        im.save(out, format="PNG", optimize=True)
+        return out.getvalue(), f"{stem}.png", "image/png"
+    im.convert("RGB").save(out, format="JPEG", quality=q, optimize=True)
+    return out.getvalue(), f"{stem}.jpg", "image/jpeg"
+
+
 def _maybe_downscale_sticker_bytes(data: bytes, filename: str, mime: str) -> tuple[bytes, str, str]:
     """
-    缩小表情包长边，减轻聊天里「整张图占满屏」；GIF 不动（避免拆帧）。
+    缩小表情包长边并压体积；GIF 不动（避免拆帧）。
     TELEGRAM_STICKER_MAX_EDGE=0 则跳过。
     """
     max_edge = int(TELEGRAM_STICKER_MAX_EDGE or 0)
+    max_bytes = int(TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS or 380_000)
     if max_edge <= 0 or not data:
         return data, filename, mime
     try:
@@ -414,30 +467,33 @@ def _maybe_downscale_sticker_bytes(data: bytes, filename: str, mime: str) -> tup
     w, h = im.size
     if w <= 0 or h <= 0:
         return data, filename, mime
-    if max(w, h) <= max_edge:
-        return data, filename, mime
 
-    try:
-        im.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
-    except Exception as e:
-        logger.debug("表情包 thumbnail 失败，原样发送: %s", e)
-        return data, filename, mime
-
-    q = min(95, max(50, int(TELEGRAM_STICKER_JPEG_QUALITY or 85)))
     stem = Path(filename or "sticker").stem or "sticker"
-    out = BytesIO()
+    base_q = min(95, max(50, int(TELEGRAM_STICKER_JPEG_QUALITY or 72)))
 
-    if im.mode == "P":
-        im = im.convert("RGBA") if "transparency" in im.info else im.convert("RGB")
+    # 长边超过上限：先缩小再编码
+    if max(w, h) > max_edge:
+        try:
+            im.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+        except Exception as e:
+            logger.debug("表情包 thumbnail 失败，原样发送: %s", e)
+            return data, filename, mime
+    elif len(data) <= max_bytes:
+        # 尺寸已够小且体积不大：不重复编码
+        return data, filename, mime
 
-    if im.mode in ("RGBA", "LA"):
-        if im.mode == "LA":
-            im = im.convert("RGBA")
-        im.save(out, format="PNG", optimize=True)
-        return out.getvalue(), f"{stem}.png", "image/png"
-
-    im.convert("RGB").save(out, format="JPEG", quality=q, optimize=True)
-    return out.getvalue(), f"{stem}.jpg", "image/jpeg"
+    # 需要输出：含「仅压体积」（像素不大但文件仍很大）
+    try:
+        out_b, out_name, out_mime = _sticker_pil_to_send_bytes(im, stem, base_q)
+        if len(out_b) > int(max_bytes * 1.15) and out_mime == "image/jpeg":
+            q2 = max(50, base_q - 18)
+            out_b2, out_name2, out_mime2 = _sticker_pil_to_send_bytes(im, stem, q2)
+            if len(out_b2) < len(out_b):
+                return out_b2, out_name2, out_mime2
+        return out_b, out_name, out_mime
+    except Exception as e:
+        logger.debug("表情包重编码失败，原样发送: %s", e)
+        return data, filename, mime
 
 
 def send_sticker_photo(chat_id: int, r2_key: str, bot_token: Optional[str] = None) -> bool:
@@ -633,7 +689,7 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         pending = list(_PENDING_USER_CONTENTS.get(user_id) or [])
     merged_user_content = _merge_user_contents(pending + [user_content]) if pending else user_content
     # Telegram 端增加一条风格 system（网关还会在最前面插入 du_core_prompt）
-    messages = [{"role": "system", "content": _TELEGRAM_STYLE_SYSTEM}] + history + [{"role": "user", "content": merged_user_content}]
+    messages = [{"role": "system", "content": build_telegram_style_system()}] + history + [{"role": "user", "content": merged_user_content}]
     messages_chars = sum(_message_content_len(m.get("content")) for m in messages if isinstance(m, dict))
     user_chars = _message_content_len(user_content)
     merged_user_chars = _message_content_len(merged_user_content)
