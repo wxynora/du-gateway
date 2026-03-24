@@ -1113,7 +1113,9 @@ def step_inject_wenyou_gm(body: dict, window_id: str) -> dict:
         uid = int(str(window_id).replace("tg_", "", 1))
     except ValueError:
         return body
-    gm = get_latest_gm_for_inject(uid)
+    # GM 注入优先读文游群会话（按 chat_id 分桶）；未配置群时回退当前窗口 uid。
+    sid = int(WENYOU_GROUP_CHAT_ID or uid or 0)
+    gm = get_latest_gm_for_inject(sid)
     if not gm:
         return body
 

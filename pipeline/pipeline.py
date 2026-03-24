@@ -19,6 +19,7 @@ from config import (
     MAX_REQUEST_CHARS,
     DEEPSEEK_API_URL,
     DEEPSEEK_API_KEY,
+    WENYOU_GROUP_CHAT_ID,
 )
 from pathlib import Path
 from storage import r2_store
@@ -229,10 +230,43 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
     is_telegram_window = window_id.startswith("tg_")
 
     if is_telegram_window:
-        # Telegram 一律优先取自己窗口的最近四轮，不要混入其他窗口的全局缓存。
+        # Telegram 默认仍按“本窗口 Last4”注入。
+        # 仅当文游进行中时，再叠加文游群窗口上下文，确保平时聊天不受干扰。
         if force_last4 or len(messages) <= 2 or r2_store.has_window_history(window_id):
-            rounds = r2_store.get_conversation_rounds(window_id, last_n=4)
-            inject_label = "以下为注入的本窗口近期对话（Telegram Last4 轮）"
+            private_rounds = r2_store.get_conversation_rounds(window_id, last_n=4) or []
+            merged = []
+
+            def _with_src(arr: list, src: str) -> list:
+                out = []
+                for r in arr:
+                    if isinstance(r, dict):
+                        rr = dict(r)
+                        rr["_inject_src"] = src
+                        out.append(rr)
+                return out
+
+            merged.extend(_with_src(private_rounds, "私聊"))
+
+            group_rounds = []
+            wenyou_active = False
+            gid_num = int(WENYOU_GROUP_CHAT_ID or 0)
+            if gid_num:
+                try:
+                    sid = r2_store.get_wenyou_session(gid_num)
+                    wenyou_active = bool(isinstance(sid, dict) and sid.get("gameId"))
+                except Exception:
+                    wenyou_active = False
+                if wenyou_active:
+                    gid = f"tg_{gid_num}"
+                    if gid != window_id:
+                        group_rounds = r2_store.get_conversation_rounds(gid, last_n=4) or []
+                    merged.extend(_with_src(group_rounds, "群聊"))
+
+            merged.sort(key=lambda x: str(x.get("timestamp") or ""))
+            rounds = merged[-4:]
+            inject_label = "以下为注入的 Telegram 近期对话（私聊 Last4 轮）"
+            if wenyou_active and group_rounds:
+                inject_label = "以下为注入的 Telegram 近期对话（私聊+群聊 Last4 轮，文游进行中）"
     else:
         if not r2_store.has_window_history(window_id):
             rounds = r2_store.get_latest_4_rounds_global()
@@ -246,7 +280,23 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
 
     if not rounds:
         return body
-    context = _rounds_to_context_text(rounds)
+    # Telegram 合并注入时，给每轮加来源标签，避免群聊/私聊语义混淆。
+    if is_telegram_window:
+        lines = []
+        for r in rounds:
+            src = str((r or {}).get("_inject_src") or "").strip()
+            src_tag = f"【{src}】" if src else ""
+            for m in (r.get("messages") or []):
+                role = m.get("role", "")
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
+                    )
+                lines.append(f"{src_tag}[{role}]: {content}")
+        context = "\n".join(lines) if lines else ""
+    else:
+        context = _rounds_to_context_text(rounds)
     if not context:
         return body
     inject = f"\n\n【{inject_label}】\n{context}\n【以上为注入上下文】"

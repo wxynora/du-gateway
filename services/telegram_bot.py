@@ -992,6 +992,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
             out = cmd_end(int(chat_id))
             send_message(int(chat_id), out, bot_token=token)
             return
+        # 群内普通发言也记入文游玩家行动，供后续 /go 让 GM 基于行动推进剧情。
         record_group_player_line(int(chat_id), text)
         return
 
@@ -1038,8 +1039,12 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         record_group_player2_line(text, session_id=int(chat_id))
         return
 
-    # 已配置 GM Bot 时：主 Bot 在文游群内不再处理文游指令与其它（避免重复；指令由 GM Webhook 处理）
+    # 已配置 GM Bot 时：
+    # - /story /go /end 等文游指令由 GM Webhook 处理
+    # - 群内普通发言由 GM Bot 负责记录，主 Bot 这里不再重复记录（避免同一条行动写入两次）
     if gm_split and WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
+        if text.startswith("/"):
+            return
         return
 
     # 未配置 GM Bot 时：文游仍在主 Bot 上（与旧版一致）
