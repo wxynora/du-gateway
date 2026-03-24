@@ -1074,10 +1074,13 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
 
     # 已配置 GM Bot 时：
     # - /story /go /end 等文游指令由 GM Webhook 处理
-    # - 群内普通发言由 GM Bot 负责记录，主 Bot 这里不再重复记录（避免同一条行动写入两次）
+    # - 群内普通发言仍由主 Bot 按“私聊同逻辑”走网关回复（玩家二发言）
+    #   同时 GM Bot 已在其 webhook 侧记录玩家行动，这里不再重复 record。
     if gm_split and WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
         if text.startswith("/"):
             return
+        # 走主链路（聚合输入 -> 调网关 -> 主 Bot 回复）
+        append_user_input(chat_id=int(chat_id), user_id=int(user_id), text=text)
         return
 
     # 未配置 GM Bot 时：文游仍在主 Bot 上（与旧版一致）
