@@ -39,7 +39,6 @@ from config import (
     TELEGRAM_WENYOU_OWNER_USER_ID,
     R2_PUBLIC_URL,
 )
-from services.sticker_tags import STICKER_TAGS_SET
 from storage import r2_store
 
 logger = logging.getLogger(__name__)
@@ -111,7 +110,7 @@ _PENDING_USER_CONTENTS: dict[int, list[Union[str, list]]] = {}
 # Telegram 端的输出风格约束（只影响 Telegram，不影响 RikkaHub）
 _TELEGRAM_STYLE_SYSTEM = (
     "你正在通过 Telegram 和辛玥聊天。请遵守以下输出格式要求：\n"
-    "0) 情绪明显时可在整条回复末尾加一个标签（仅英文方括号，八选一）：[cute] [pitiful] [affectionate] [speechless] [angry] [sad] [happy] [shy]；每条最多一个，平淡时不加。\n"
+    "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号，与网关 stickers 分类代号一致，小写英文如 [cute] [shy]）；每条最多一个，平淡时不加。\n"
     "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"
     "2) 不要输出分割线（例如 ---、———、***）。\n"
     "3) 不要使用 Markdown 强调符号 * 或 **（Telegram 会显得很奇怪）。\n"
@@ -322,11 +321,29 @@ def _sanitize_reply_for_telegram(text: str) -> str:
     return t
 
 
-# 表情包：[cute] [shy] 等，每条最多取第一个（与方案一致）
-_STICKER_TAG_PATTERN = re.compile(
-    r"\[(cute|pitiful|affectionate|speechless|angry|sad|happy|shy)\]",
-    flags=re.IGNORECASE,
-)
+# 表情包：[tag] 与 R2 meta ∪ 映射表中的英文代号一致，长名优先匹配；缓存避免每次请求扫桶
+_STICKER_BRACKET_REGEX_AT: float = 0.0
+_STICKER_BRACKET_REGEX: Optional[re.Pattern] = None
+_STICKER_BRACKET_TTL = 45.0
+
+
+def _get_sticker_bracket_regex() -> re.Pattern:
+    global _STICKER_BRACKET_REGEX_AT, _STICKER_BRACKET_REGEX
+    now = time.time()
+    if (
+        now - _STICKER_BRACKET_REGEX_AT < _STICKER_BRACKET_TTL
+        and _STICKER_BRACKET_REGEX is not None
+    ):
+        return _STICKER_BRACKET_REGEX
+    keys = sorted(r2_store.get_sticker_tag_keys(), key=len, reverse=True)
+    if not keys:
+        pat = re.compile(r"(?!x)x")  # 永不匹配
+    else:
+        escaped = [re.escape(k) for k in keys]
+        pat = re.compile(r"\[(" + "|".join(escaped) + r")\]", re.IGNORECASE)
+    _STICKER_BRACKET_REGEX_AT = now
+    _STICKER_BRACKET_REGEX = pat
+    return pat
 
 
 def _extract_sticker_tag(text: str) -> tuple[str, Optional[str]]:
@@ -336,11 +353,11 @@ def _extract_sticker_tag(text: str) -> tuple[str, Optional[str]]:
     """
     if not text or not isinstance(text, str):
         return (text or "").strip(), None
-    m = _STICKER_TAG_PATTERN.search(text)
+    m = _get_sticker_bracket_regex().search(text)
     if not m:
         return text.strip(), None
     tag = (m.group(1) or "").strip().lower()
-    if tag not in STICKER_TAGS_SET:
+    if tag not in r2_store.get_sticker_tag_keys():
         return text.strip(), None
     clean = (text[: m.start()] + text[m.end() :]).strip()
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
@@ -350,7 +367,7 @@ def _extract_sticker_tag(text: str) -> tuple[str, Optional[str]]:
 def _pick_random_sticker_key(tag: str) -> Optional[str]:
     """从 R2 映射表随机取一张图的对象 key。"""
     t = (tag or "").strip().lower()
-    if t not in STICKER_TAGS_SET:
+    if t not in r2_store.get_sticker_tag_keys():
         return None
     try:
         m = r2_store.get_stickers_mapping() or {}

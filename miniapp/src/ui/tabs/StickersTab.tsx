@@ -4,6 +4,8 @@ import { Btn } from "../components";
 import { useToast } from "../toast";
 import { getInitData } from "../tg";
 
+type TagRow = { key: string; label_zh: string };
+
 function stickerPreviewUrl(key: string, publicBase: string): string {
   const pb = (publicBase || "").trim().replace(/\/$/, "");
   if (pb) {
@@ -16,23 +18,41 @@ function stickerPreviewUrl(key: string, publicBase: string): string {
   return u.toString();
 }
 
+const TAG_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
+
 export function StickersTab() {
   const toast = useToast();
-  const [tags, setTags] = useState<string[]>([]);
+  const [tagRows, setTagRows] = useState<TagRow[]>([]);
   const [activeTag, setActiveTag] = useState("");
   const [publicBase, setPublicBase] = useState("");
   const [mapping, setMapping] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [newKey, setNewKey] = useState("");
+  const [newLabelZh, setNewLabelZh] = useState("");
+  const [adding, setAdding] = useState(false);
   const fileRef = React.useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const t = await apiJson<{ ok?: boolean; tags?: string[] }>("/miniapp-api/stickers/tags");
+      const t = await apiJson<{ ok?: boolean; tags?: unknown }>("/miniapp-api/stickers/tags");
       if (t?.ok && Array.isArray(t.tags) && t.tags.length) {
-        setTags(t.tags);
-        setActiveTag((prev) => (prev && t.tags!.includes(prev) ? prev : t.tags![0]));
+        const rows: TagRow[] = [];
+        for (const x of t.tags) {
+          if (typeof x === "string") {
+            rows.push({ key: x.trim().toLowerCase(), label_zh: x });
+          } else if (x && typeof x === "object" && "key" in (x as object)) {
+            const o = x as { key?: string; label_zh?: string };
+            const k = String(o.key || "").trim().toLowerCase();
+            if (!k) continue;
+            rows.push({ key: k, label_zh: String(o.label_zh || k).trim() || k });
+          }
+        }
+        if (rows.length) {
+          setTagRows(rows);
+          setActiveTag((prev) => (prev && rows.some((r) => r.key === prev) ? prev : rows[0].key));
+        }
       }
       const m = await apiJson<{ ok?: boolean; mapping?: Record<string, unknown>; public_base?: string }>("/miniapp-api/stickers/mapping");
       if (m?.ok && m.mapping && typeof m.mapping === "object") {
@@ -56,10 +76,10 @@ export function StickersTab() {
   }, [load]);
 
   const keysForTab = useMemo(() => {
-    const k = activeTag || tags[0] || "";
+    const k = activeTag || tagRows[0]?.key || "";
     const arr = mapping[k];
     return Array.isArray(arr) ? arr : [];
-  }, [activeTag, mapping, tags]);
+  }, [activeTag, mapping, tagRows]);
 
   async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -110,23 +130,74 @@ export function StickersTab() {
     }
   }
 
+  async function addCategory() {
+    const key = newKey.trim().toLowerCase();
+    if (!key) {
+      toast("请填写英文代号");
+      return;
+    }
+    if (!TAG_KEY_RE.test(key)) {
+      toast("代号须为小写英文：字母开头，仅 a-z、0-9、下划线，最长 64");
+      return;
+    }
+    setAdding(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; error?: string }>("/miniapp-api/stickers/category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, label_zh: newLabelZh.trim() }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "添加失败");
+      toast("已添加分类");
+      setNewKey("");
+      setNewLabelZh("");
+      await load();
+      setActiveTag(key);
+    } catch (e: any) {
+      toast(`添加失败：${e?.message || e}`);
+    } finally {
+      setAdding(false);
+    }
+  }
+
   return (
     <div className="space-y-3 pb-24">
       <div className="text-xs text-cream-muted leading-relaxed">
-        渡在 Telegram 回复句末可加 <code className="text-cream-text">[shy]</code> 等标签，网关会随机发一张该分类下的图。未配置公网时预览走网关代理。
+        渡在 Telegram 回复句末可加 <code className="text-cream-text">[shy]</code> 等<strong>英文</strong>标签，网关会随机发一张该分类下的图。未配置公网时预览走网关代理。
+      </div>
+      <div className="rounded-xl2 border border-white/70 bg-white/50 p-2 space-y-2">
+        <div className="text-[11px] text-cream-muted">新增分类（网关目录与 [tag] 均为英文代号；下方可填中文仅作本页展示名）</div>
+        <div className="flex flex-col gap-1.5">
+          <input
+            className="rounded-lg border border-white/80 bg-white px-2 py-1.5 text-xs"
+            placeholder="英文代号，如 smug"
+            value={newKey}
+            onChange={(e) => setNewKey(e.target.value)}
+          />
+          <input
+            className="rounded-lg border border-white/80 bg-white px-2 py-1.5 text-xs"
+            placeholder="展示名（可选，如 得意）"
+            value={newLabelZh}
+            onChange={(e) => setNewLabelZh(e.target.value)}
+          />
+          <Btn kind="dark" onClick={addCategory} disabled={adding}>
+            {adding ? "添加中…" : "添加分类"}
+          </Btn>
+        </div>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {tags.map((t) => (
+        {tagRows.map((row) => (
           <button
-            key={t}
+            key={row.key}
             type="button"
             className={
               "rounded-xl2 px-2.5 py-1 text-[11px] border transition " +
-              (activeTag === t ? "bg-neutral-900 text-white border-neutral-900" : "bg-white/70 text-cream-text border-white/70")
+              (activeTag === row.key ? "bg-neutral-900 text-white border-neutral-900" : "bg-white/70 text-cream-text border-white/70")
             }
-            onClick={() => setActiveTag(t)}
+            onClick={() => setActiveTag(row.key)}
+            title={row.key}
           >
-            {t}
+            {row.label_zh || row.key}
           </button>
         ))}
       </div>

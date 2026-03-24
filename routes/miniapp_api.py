@@ -1209,9 +1209,32 @@ def miniapp_get_background_image_versioned(image_version: int):
 
 @bp.route("/stickers/tags", methods=["GET"])
 def miniapp_stickers_tags():
-    from services.sticker_tags import STICKER_EMOTION_TAGS
+    """返回 [{ key, label_zh }]，网关目录与 [tag] 均为英文 key。"""
+    from services.sticker_tags import validate_sticker_tag_key
 
-    return jsonify({"ok": True, "tags": list(STICKER_EMOTION_TAGS)})
+    meta = r2_store.get_stickers_meta()
+    rows: list[dict] = []
+    for it in meta.get("tags") or []:
+        if not isinstance(it, dict):
+            continue
+        k = str(it.get("key") or "").strip().lower()
+        if not validate_sticker_tag_key(k):
+            continue
+        lab = str(it.get("label_zh") or k).strip() or k
+        rows.append({"key": k, "label_zh": lab})
+    return jsonify({"ok": True, "tags": rows})
+
+
+@bp.route("/stickers/category", methods=["POST"])
+def miniapp_stickers_category_add():
+    """新增分类：body { key: 英文代号, label_zh?: 展示名 }。"""
+    data = request.get_json(silent=True) or {}
+    key = (data.get("key") or "").strip()
+    label_zh = (data.get("label_zh") or "").strip()
+    ok, err = r2_store.add_sticker_category(key, label_zh)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True})
 
 
 @bp.route("/stickers/mapping", methods=["GET"])

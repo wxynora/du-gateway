@@ -65,8 +65,9 @@ R2_KEY_DYNAMIC_RECALL_DEBUG = "dynamic_memory/recall_debug.json"
 R2_KEY_SENSE_LATEST = "sense/latest.json"
 # 渡的心事：网关从助手回复截取后写入，仅注入渡侧 system
 R2_KEY_DU_THOUGHT_LATEST = "global/du_thought_latest.json"
-# Telegram 表情包：映射表（各 tag 下对象 key 列表）
+# Telegram 表情包：映射表（各 tag 下对象 key 列表）+ 分类元数据（中文名等）
 R2_KEY_STICKERS_MAPPING = "stickers/mapping.json"
+R2_KEY_STICKERS_META = "stickers/meta.json"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
@@ -1861,14 +1862,124 @@ def get_object_bytes(key: str) -> tuple[Optional[bytes], str]:
         return None, ""
 
 
-def rebuild_stickers_mapping_from_r2() -> dict[str, list[str]]:
-    """扫描 stickers/ 下各标签目录，生成 { tag: [key,...] }（不含 mapping.json 自身）。"""
-    from services.sticker_tags import STICKER_EMOTION_TAGS, STICKER_TAGS_SET
+def _sticker_reserved_keys() -> frozenset:
+    return frozenset({R2_KEY_STICKERS_MAPPING, R2_KEY_STICKERS_META, "stickers/mapping.json", "stickers/meta.json"})
+
+
+def _merge_default_sticker_meta(raw: dict) -> dict:
+    """默认 8 类 + 用户新增；网关仅英文代号；同名以存储中的 label 为准。"""
+    from services.sticker_tags import DEFAULT_STICKER_TAG_ROWS, validate_sticker_tag_key
+
+    by_key: dict[str, dict] = {r["key"]: dict(r) for r in DEFAULT_STICKER_TAG_ROWS}
+    incoming = raw.get("tags") if isinstance(raw.get("tags"), list) else []
+    for it in incoming:
+        if not isinstance(it, dict):
+            continue
+        k = str(it.get("key") or "").strip().lower()
+        if not k or not validate_sticker_tag_key(k):
+            continue
+        label = str(it.get("label_zh") or it.get("label") or "").strip() or k
+        if k in by_key:
+            by_key[k]["label_zh"] = label
+        else:
+            by_key[k] = {"key": k, "label_zh": label}
+    order = [r["key"] for r in DEFAULT_STICKER_TAG_ROWS]
+    default_set = set(order)
+    extras = sorted(k for k in by_key if k not in default_set)
+    rows = [by_key[k] for k in order if k in by_key]
+    rows.extend(by_key[k] for k in extras)
+    return {"tags": rows, "updated_at": str(raw.get("updated_at") or "")}
+
+
+def get_stickers_meta() -> dict:
+    """读取 stickers/meta.json；不存在则写入默认（含中文名）。"""
+    from services.sticker_tags import DEFAULT_STICKER_TAG_ROWS
 
     client = _s3_client()
-    out: dict[str, list[str]] = {t: [] for t in STICKER_EMOTION_TAGS}
+    if not client:
+        return {"tags": list(DEFAULT_STICKER_TAG_ROWS), "updated_at": ""}
+    data = _read_json(client, R2_KEY_STICKERS_META)
+    if not isinstance(data, dict) or not isinstance(data.get("tags"), list):
+        payload = {"tags": list(DEFAULT_STICKER_TAG_ROWS), "updated_at": now_beijing_iso()}
+        with _global_write_lock:
+            try:
+                _write_json(client, R2_KEY_STICKERS_META, payload)
+            except Exception:
+                pass
+        return payload
+    return _merge_default_sticker_meta(data)
+
+
+def save_stickers_meta(payload: dict) -> bool:
+    """保存 MiniApp 编辑后的分类元数据。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    p = dict(payload)
+    p["updated_at"] = now_beijing_iso()
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_STICKERS_META, p)
+            return True
+        except Exception as e:
+            logger.error("save_stickers_meta 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_sticker_tag_keys() -> set[str]:
+    """所有合法英文代号（小写，meta ∪ 映射表；非法键名忽略）。"""
+    from services.sticker_tags import validate_sticker_tag_key
+
+    keys: set[str] = set()
+    meta = get_stickers_meta()
+    for it in meta.get("tags") or []:
+        if isinstance(it, dict) and it.get("key"):
+            k = str(it["key"]).strip().lower()
+            if validate_sticker_tag_key(k):
+                keys.add(k)
+    client = _s3_client()
+    if client:
+        m = _read_json(client, R2_KEY_STICKERS_MAPPING)
+        if isinstance(m, dict):
+            for k in m:
+                if k != "updated_at" and isinstance(k, str) and k.strip():
+                    kk = k.strip().lower()
+                    if validate_sticker_tag_key(kk):
+                        keys.add(kk)
+    return keys
+
+
+def add_sticker_category(key: str, label_zh: str = "") -> tuple[bool, str]:
+    """新增分类：英文代号必填；label_zh 为 MiniApp 展示名（可选，默认同代号）。"""
+    from services.sticker_tags import validate_sticker_tag_key
+
+    key = (key or "").strip().lower()
+    if not key:
+        return False, "英文代号不能为空"
+    if not validate_sticker_tag_key(key):
+        return False, "代号须为小写英文：字母开头，仅 a-z、0-9、下划线"
+    label = (label_zh or "").strip() or key
+    meta = get_stickers_meta()
+    tags = [t for t in (meta.get("tags") or []) if isinstance(t, dict)]
+    for t in tags:
+        if str(t.get("key") or "").strip().lower() == key:
+            return False, "该代号已存在"
+    tags.append({"key": key, "label_zh": label})
+    meta["tags"] = tags
+    ok = save_stickers_meta(meta)
+    return (True, "") if ok else (False, "保存失败")
+
+
+def rebuild_stickers_mapping_from_r2() -> dict[str, list[str]]:
+    """扫描 stickers/ 下各标签目录，生成 { 代号: [对象key,...] }。"""
+
+    client = _s3_client()
+    out: dict[str, list[str]] = {}
     if not client:
         return out
+    reserved = _sticker_reserved_keys()
     token = None
     try:
         while True:
@@ -1880,14 +1991,15 @@ def rebuild_stickers_mapping_from_r2() -> dict[str, list[str]]:
                 key = str(obj.get("Key") or "")
                 if not key or key.endswith("/"):
                     continue
-                if key == R2_KEY_STICKERS_MAPPING or key.endswith("mapping.json"):
+                if key in reserved or key.endswith("mapping.json") or key.endswith("meta.json"):
                     continue
                 parts = key.split("/")
                 if len(parts) < 3:
                     continue
                 tag = parts[1].strip().lower()
-                if tag in STICKER_TAGS_SET:
-                    out.setdefault(tag, []).append(key)
+                if not tag:
+                    continue
+                out.setdefault(tag, []).append(key)
             if not resp.get("IsTruncated"):
                 break
             token = resp.get("NextContinuationToken")
@@ -1899,21 +2011,18 @@ def rebuild_stickers_mapping_from_r2() -> dict[str, list[str]]:
 
 
 def save_stickers_mapping(mapping: dict[str, list[str]]) -> bool:
-    """写入 stickers/mapping.json；mapping 为 tag -> key 列表。"""
-    from services.sticker_tags import STICKER_EMOTION_TAGS
-
+    """写入 stickers/mapping.json；mapping 为 代号 -> 对象 key 列表（任意数量键）。"""
     client = _s3_client()
     if not client:
         return False
     if not isinstance(mapping, dict):
         return False
     payload: dict[str, Any] = {"updated_at": now_beijing_iso()}
-    for t in STICKER_EMOTION_TAGS:
-        arr = mapping.get(t)
+    for t, arr in mapping.items():
+        if t == "updated_at":
+            continue
         if isinstance(arr, list):
-            payload[t] = [str(x).strip() for x in arr if str(x).strip()]
-        else:
-            payload[t] = []
+            payload[str(t)] = [str(x).strip() for x in arr if str(x).strip()]
     with _global_write_lock:
         try:
             _write_json(client, R2_KEY_STICKERS_MAPPING, payload)
@@ -1937,11 +2046,14 @@ def get_stickers_mapping() -> dict[str, Any]:
 
 
 def upload_sticker_file(tag: str, filename: str, content: bytes, content_type: str) -> Optional[str]:
-    """上传一张表情包到 stickers/{tag}/，并重建映射。"""
-    from services.sticker_tags import STICKER_TAGS_SET
+    """上传一张表情包到 stickers/{代号}/，并重建映射。"""
+    from services.sticker_tags import validate_sticker_tag_key
 
     t = (tag or "").strip().lower()
-    if t not in STICKER_TAGS_SET:
+    if not t or not validate_sticker_tag_key(t):
+        return None
+    allowed = get_sticker_tag_keys()
+    if t not in allowed:
         return None
     if not content:
         return None
@@ -1983,7 +2095,7 @@ def upload_sticker_file(tag: str, filename: str, content: bytes, content_type: s
 def delete_sticker_object(key: str) -> bool:
     """删除指定 sticker 对象并重建映射。"""
     k = (key or "").strip()
-    if not k.startswith("stickers/") or ".." in k or k == R2_KEY_STICKERS_MAPPING:
+    if not k.startswith("stickers/") or ".." in k or k in _sticker_reserved_keys():
         return False
     client = _s3_client()
     if not client:
