@@ -426,8 +426,8 @@ def _pick_random_sticker_key(tag: str) -> Optional[str]:
 
 def _letterbox_sticker_on_canvas(im, canvas_side: int):
     """
-    将已缩小的图贴在正方形画布中心（透明或白底）。
-    Telegram 会把整张照片按气泡宽度拉伸；留白后主体在视觉上只占中间一部分。
+    将已缩小的图贴在正方形透明画布中心（边距透明，自定义聊天背景可透出）。
+    无 Alpha 的 JPG 等会先转成不透明 RGBA 再贴到透明底。Telegram sendPhoto 是否保留透明取决于客户端。
     """
     from PIL import Image
 
@@ -435,7 +435,13 @@ def _letterbox_sticker_on_canvas(im, canvas_side: int):
         return im
     im = im.copy()
     if im.mode == "P":
-        im = im.convert("RGBA") if "transparency" in im.info else im.convert("RGB")
+        im = im.convert("RGBA") if "transparency" in im.info else im.convert("RGB").convert("RGBA")
+    elif im.mode == "LA":
+        im = im.convert("RGBA")
+    elif im.mode == "RGB":
+        im = im.convert("RGBA")
+    elif im.mode != "RGBA":
+        im = im.convert("RGB").convert("RGBA")
     if max(im.size) > canvas_side:
         im.thumbnail((canvas_side, canvas_side), Image.Resampling.LANCZOS)
     cw, ch = im.size
@@ -443,14 +449,8 @@ def _letterbox_sticker_on_canvas(im, canvas_side: int):
         return im
     ox = (canvas_side - cw) // 2
     oy = (canvas_side - ch) // 2
-    if im.mode in ("RGBA", "LA"):
-        if im.mode == "LA":
-            im = im.convert("RGBA")
-        canvas = Image.new("RGBA", (canvas_side, canvas_side), (0, 0, 0, 0))
-        canvas.paste(im, (ox, oy), im)
-        return canvas
-    canvas = Image.new("RGB", (canvas_side, canvas_side), (255, 255, 255))
-    canvas.paste(im.convert("RGB"), (ox, oy))
+    canvas = Image.new("RGBA", (canvas_side, canvas_side), (0, 0, 0, 0))
+    canvas.paste(im, (ox, oy), im)
     return canvas
 
 
@@ -515,7 +515,7 @@ def _maybe_downscale_sticker_bytes(data: bytes, filename: str, mime: str) -> tup
         # 无画布模式：尺寸与体积都可接受则不再编码
         return data, filename, mime
 
-    # 中心画布：让 Telegram 拉宽整图时主体只占中间一块
+    # 中心画布：透明边距，主体在画面中间
     if canvas_edge > 0:
         try:
             im = _letterbox_sticker_on_canvas(im, canvas_edge)
