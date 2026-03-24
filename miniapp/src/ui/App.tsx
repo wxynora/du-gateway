@@ -32,8 +32,8 @@ type CyberTreeData = {
     score?: number;
   };
 };
-type WeeklyReport = {
-  week_id?: string;
+type DailyReport = {
+  report_date?: string;
   rounds?: number;
   keywords?: string[];
   done_count?: number;
@@ -54,8 +54,8 @@ function Shell() {
   const [showDuDay, setShowDuDay] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [dailyWhisper, setDailyWhisper] = useState("");
-  const [weeklyReport, setWeeklyReport] = useState<WeeklyReport | null>(null);
-  const [weeklyRefreshing, setWeeklyRefreshing] = useState(false);
+  const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
+  const [dailyRefreshing, setDailyRefreshing] = useState(false);
   const [tree, setTree] = useState<CyberTreeData | null>(null);
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
@@ -63,10 +63,10 @@ function Shell() {
         if (j?.ok) setTree(j);
       })
       .catch(() => {});
-  const loadWeeklyReport = () =>
-    apiJson<{ ok?: boolean; report?: WeeklyReport }>("/miniapp-api/weekly-report")
+  const loadDailyReport = () =>
+    apiJson<{ ok?: boolean; report?: DailyReport }>("/miniapp-api/daily-report")
       .then((j) => {
-        if (j?.ok && j?.report) setWeeklyReport(j.report);
+        if (j?.ok && j?.report) setDailyReport(j.report);
       })
       .catch(() => {});
   const version = new URLSearchParams(window.location.search).get("v") || "";
@@ -115,21 +115,21 @@ function Shell() {
         if (text) setDailyWhisper(text);
       })
       .catch(() => {});
-    loadWeeklyReport();
+    loadDailyReport();
     loadTree();
   }, []);
 
-  async function refreshWeeklyReport() {
-    setWeeklyRefreshing(true);
+  async function refreshDailyReport() {
+    setDailyRefreshing(true);
     try {
-      const j = await apiJson<{ ok?: boolean; report?: WeeklyReport; error?: string }>("/miniapp-api/weekly-report/refresh", { method: "POST" });
+      const j = await apiJson<{ ok?: boolean; report?: DailyReport; error?: string }>("/miniapp-api/daily-report/refresh", { method: "POST" });
       if (!j?.ok) throw new Error(j?.error || "刷新失败");
-      if (j.report) setWeeklyReport(j.report);
-      toast("周报已刷新");
+      if (j.report) setDailyReport(j.report);
+      toast("日报已刷新");
     } catch (e: any) {
-      toast(`周报刷新失败：${e?.message || e}`);
+      toast(`日报刷新失败：${e?.message || e}`);
     } finally {
-      setWeeklyRefreshing(false);
+      setDailyRefreshing(false);
     }
   }
 
@@ -192,20 +192,20 @@ function Shell() {
           </div>
         </div>
       ) : null}
-      {weeklyReport ? (
+      {dailyReport ? (
         <div className="px-4 pt-2">
           <details className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 px-3 py-2 text-[12px] leading-relaxed text-cream-text">
             <summary className="cursor-pointer select-none text-cream-text">
-              本周小报告：聊了 {String(weeklyReport.rounds || 0)} 轮 · {Array.isArray(weeklyReport.keywords) ? weeklyReport.keywords.join(" / ") : "暂无关键词"}
+              今日小报告：聊了 {String(dailyReport.rounds || 0)} 轮 · {Array.isArray(dailyReport.keywords) ? dailyReport.keywords.join(" / ") : "暂无关键词"}
             </summary>
             <div className="mt-2 space-y-1 text-xs">
-              <div>周标识：{weeklyReport.week_id || "-"}</div>
-              <div>关键词：{Array.isArray(weeklyReport.keywords) ? weeklyReport.keywords.join(" / ") : "-"}</div>
-              <div className="text-cream-muted whitespace-pre-wrap">{weeklyReport.summary_text || "（暂无）"}</div>
-              <div className="text-cream-muted">更新时间：{weeklyReport.generated_at || "-"}</div>
+              <div>日期：{dailyReport.report_date || "-"}</div>
+              <div>关键词：{Array.isArray(dailyReport.keywords) ? dailyReport.keywords.join(" / ") : "-"}</div>
+              <div className="text-cream-muted whitespace-pre-wrap">{dailyReport.summary_text || "（暂无）"}</div>
+              <div className="text-cream-muted">更新时间：{dailyReport.generated_at || "-"}</div>
               <div className="pt-1">
-                <Btn kind="dark" onClick={refreshWeeklyReport} disabled={weeklyRefreshing}>
-                  {weeklyRefreshing ? "刷新中..." : "刷新周报"}
+                <Btn kind="dark" onClick={refreshDailyReport} disabled={dailyRefreshing}>
+                  {dailyRefreshing ? "刷新中..." : "刷新日报"}
                 </Btn>
               </div>
             </div>

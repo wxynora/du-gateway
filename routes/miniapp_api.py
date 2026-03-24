@@ -57,22 +57,21 @@ def _default_cyber_tree_start_date(today: str) -> str:
     return f"{y:04d}-03-04"
 
 
-def _week_id_for_date(day: str) -> str:
-    try:
-        dt = datetime.strptime(day, "%Y-%m-%d")
-    except Exception:
-        return ""
-    y, w, _ = dt.isocalendar()
-    return f"{y}-W{int(w):02d}"
-
-
-def _generate_weekly_report(today: str) -> dict:
+def _generate_daily_report(today: str) -> dict:
+    """按北京日期统计「今日」对话轮次与关键词（从最近存档中筛当日）。"""
     uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
     window_id = f"tg_{uid}" if uid > 0 else ""
-    rounds = r2_store.get_conversation_rounds(window_id, last_n=120) if window_id else []
-    rounds_count = len(rounds or [])
-    text = []
-    for r in rounds or []:
+    # 拉取足够多的最近轮次，再按日期过滤（单日上限通常远小于此）
+    all_rounds = r2_store.get_conversation_rounds(window_id, last_n=500) if window_id else []
+    day_rounds: list[dict] = []
+    text: list[str] = []
+    for r in all_rounds or []:
+        dt = _parse_beijing_dt(r.get("timestamp"))
+        if not dt:
+            continue
+        if dt.strftime("%Y-%m-%d") != today:
+            continue
+        day_rounds.append(r)
         for m in (r.get("messages") or []):
             c = m.get("content")
             if isinstance(c, str):
@@ -84,17 +83,18 @@ def _generate_weekly_report(today: str) -> dict:
                         parts.append(str(p.get("text") or ""))
                 if parts:
                     text.append(" ".join(parts))
+    rounds_count = len(day_rounds)
     raw = " ".join(text)
     hot = [k for k in ("提醒", "闹钟", "老婆", "睡觉", "吃饭", "工作", "散步", "晚安", "想你", "记事本") if k in raw]
     if not hot:
         hot = ["陪伴", "日常", "关心"]
     report = {
-        "week_id": _week_id_for_date(today),
+        "report_date": today,
         "window_id": window_id,
         "rounds": rounds_count,
         "keywords": hot[:3],
         "done_count": 0,
-        "summary_text": f"这周我们聊了 {rounds_count} 轮，关键词是 {' / '.join(hot[:3])}。",
+        "summary_text": f"今天我们聊了 {rounds_count} 轮，关键词是 {' / '.join(hot[:3])}。",
         "generated_at": now_beijing_iso(),
     }
     return report
@@ -558,23 +558,33 @@ def miniapp_cyber_tree():
     )
 
 
+@bp.route("/daily-report", methods=["GET"])
+def miniapp_daily_report():
+    today = today_beijing()
+    data = r2_store.get_miniapp_daily_report() or {}
+    if str(data.get("report_date") or "") != today:
+        data = _generate_daily_report(today)
+        r2_store.save_miniapp_daily_report(data)
+    return jsonify({"ok": True, "report": data})
+
+
+@bp.route("/daily-report/refresh", methods=["POST"])
+def miniapp_daily_report_refresh():
+    today = today_beijing()
+    data = _generate_daily_report(today)
+    ok = r2_store.save_miniapp_daily_report(data)
+    return jsonify({"ok": bool(ok), "report": data})
+
+
+# 兼容旧前端路径：与 daily-report 行为一致
 @bp.route("/weekly-report", methods=["GET"])
 def miniapp_weekly_report():
-    today = today_beijing()
-    week_id = _week_id_for_date(today)
-    data = r2_store.get_miniapp_weekly_report() or {}
-    if str(data.get("week_id") or "") != week_id:
-        data = _generate_weekly_report(today)
-        r2_store.save_miniapp_weekly_report(data)
-    return jsonify({"ok": True, "report": data})
+    return miniapp_daily_report()
 
 
 @bp.route("/weekly-report/refresh", methods=["POST"])
 def miniapp_weekly_report_refresh():
-    today = today_beijing()
-    data = _generate_weekly_report(today)
-    ok = r2_store.save_miniapp_weekly_report(data)
-    return jsonify({"ok": bool(ok), "report": data})
+    return miniapp_daily_report_refresh()
 
 
 @bp.route("/mood-meter", methods=["GET"])
