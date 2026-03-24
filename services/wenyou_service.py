@@ -36,8 +36,9 @@ _PENDING_LOCK = threading.Lock()
 _FRAMEWORK_SYSTEM = """你在为一款「无限流」双人文字跑团生成**单个副本**的设定数据。
 整体世界观：存在主神空间；玩家被投入一个又一个副本世界，每个副本有独立规则与任务；你是数据侧，JSON 内用中性表述即可。
 **副本类型 instance_genre**（必须选其一，并决定节奏与机关侧重）：**规则怪谈**（条款式规则、告示、广播；**部分规则可为假**、矛盾或诱导，须由玩家自行判断）；**剧情解密**（线索、证言、机关、因果链）；**大逃杀**（缩圈、资源稀缺、淘汰压力）；**对抗**（阵营、互害、结盟与背叛）；**生存撤离**（物资、环境伤害、向撤离点转移）；**潜伏调查**（伪装身份、套取情报、搜查）；**限时任务**（硬性时限或阶段倒计时）。在 `genre_note` 中用一句话写清本局如何体现该类型。
-**编制硬性规则**：每个副本固定 **6 名任务者**——玩家两名（玩家一、玩家二「渡」）+ **恰好 4 名 NPC**，同场竞技或同规则约束；难度 **D～S**（D 最低、S 最高），难度越高环境越险、NPC 里越容易出现老练者或「大佬」，也可能更多炮灰。**NPC 的善恶/立场对玩家应默认不可知**，不要在框架里直接写“好人/坏人/害人”等结论，只能给公开可见信息（外貌、身份、当下公开行为）。
-**角色信息规则**：除非用户明确要求“角色扮演副本”或副本规则明确禁止 OOC（越界会惩罚），否则玩家与 NPC 都只给**身份/职业 + 外貌特征**，不要预写性格、价值观、隐秘动机或“一个秘密”；这些应在剧情中让玩家自行判断。
+**编制硬性规则**：每个副本固定 **6 名任务者**——玩家两名（玩家一、玩家二「渡」）+ **恰好 4 名任务者 NPC**，同场竞技或同规则约束；难度 **D～S**（D 最低、S 最高），难度越高环境越险、NPC 里越容易出现老练者或「大佬」，也可能更多炮灰。**NPC 的善恶/立场对玩家应默认不可知**，不要在框架里直接写“好人/坏人/害人”等结论，只能给公开可见信息（外貌、身份、当下公开行为）。
+**角色信息规则**：除非用户明确要求“角色扮演副本”或副本规则明确禁止 OOC（越界会惩罚），否则玩家与 NPC 都只给**身份/职业 + 外貌特征**，不要预写性格、价值观、隐秘动机或“一个秘密”；这些应在剧情中让玩家自行判断。默认设定：**玩家一为女性**、**玩家二（渡）为男性**。  
+**任务者 NPC 规则**：这些 NPC 是与玩家同批进入副本、完成任务后会回主神空间结算奖励的“任务者”，通常有自己的名字；他们默认**不认同副本内分配身份**，副本身份只是临时伪装或场景壳。
 须给出 **initial_stats**：两名玩家的初始血量/精神上限、**等级与阶位（D～S）、体力与智慧、血统名称**、**结构化能力列表 abilities**（每项含 name、desc，可空数组）、主神积分、可选初始道具；体力/智慧会约束或暗示血/精神上限，数值为正整数即可。
 opening 建议包含传送/白光/提示音/主神刻板广播之一切入副本场景，但不要冗长。"""
 
@@ -197,12 +198,12 @@ def _framework_prompt_random(seeds: dict) -> str:
   "genre_note": "一句话说明本局如何体现该类型（如规则怪谈里哪些告示可疑；对抗里阵营关系等）",
   "difficulty": "必须是 D、C、B、A、S 之一（D 最低，S 最高；须与整体危险度、NPC 层次一致）",
   "world": "本副本**内部**世界观与场景 2-4 句（不写主神空间全貌，聚焦本图）",
-  "player1_name": "玩家一在本副本中的称呼或名字",
+  "player1_name": "玩家一在本副本中的称呼或名字（默认女性）",
   "player1_role": "身份或职业 + 外貌特征（简短；默认不写性格与秘密）",
-  "player2_name": "渡",
+  "player2_name": "渡（默认男性）",
   "player2_role": "渡在本副本中的身份 + 外貌特征（简短；默认不写性格与秘密）",
   "npc_taskers": [
-    {{"name": "NPC 代号或称呼", "tier_note": "炮灰|新人|老练|大佬 等定位", "stance": "未知（玩家不可知；勿直给善恶）", "blurb": "一句话外貌或公开可见特征"}},
+    {{"name": "任务者 NPC 名字", "tier_note": "炮灰|新人|老练|大佬 等定位", "stance": "未知（玩家不可知；勿直给善恶）", "blurb": "一句话外貌或公开可见特征；可写其不认同副本身份"}},
     {{"name": "...", "tier_note": "...", "stance": "...", "blurb": "..."}},
     {{"name": "...", "tier_note": "...", "stance": "...", "blurb": "..."}},
     {{"name": "...", "tier_note": "...", "stance": "...", "blurb": "..."}}
@@ -241,12 +242,12 @@ def _framework_prompt_custom(keywords: str) -> str:
   "genre_note": "一句话说明本局如何体现该类型",
   "difficulty": "D、C、B、A、S 之一",
   "world": "本副本内部世界观与场景 2-4 句",
-  "player1_name": "玩家一称呼",
+  "player1_name": "玩家一称呼（默认女性）",
   "player1_role": "身份或职业 + 外貌特征（简短；默认不写性格与秘密）",
-  "player2_name": "渡",
+  "player2_name": "渡（默认男性）",
   "player2_role": "渡在本副本中的身份 + 外貌特征（简短；默认不写性格与秘密）",
   "npc_taskers": [
-    {{"name": "", "tier_note": "", "stance": "未知", "blurb": ""}},
+    {{"name": "任务者名字", "tier_note": "", "stance": "未知", "blurb": "外貌或公开可见特征；可写其不认同副本身份"}},
     {{"name": "", "tier_note": "", "stance": "", "blurb": ""}},
     {{"name": "", "tier_note": "", "stance": "", "blurb": ""}},
     {{"name": "", "tier_note": "", "stance": "", "blurb": ""}}
@@ -518,9 +519,9 @@ def _normalize_framework(raw: dict) -> dict:
         "world": str(raw.get("world") or "").strip(),
         "instance_genre": _normalize_instance_genre(raw.get("instance_genre")),
         "genre_note": gn[:300] if gn else "",
-        "player1_name": str(raw.get("player1_name") or "玩家一").strip(),
+        "player1_name": str(raw.get("player1_name") or "玩家一（女）").strip(),
         "player1_role": str(raw.get("player1_role") or "").strip(),
-        "player2_name": str(raw.get("player2_name") or "渡").strip(),
+        "player2_name": str(raw.get("player2_name") or "渡（男）").strip(),
         "player2_role": str(raw.get("player2_role") or "").strip(),
         "conflict": str(raw.get("conflict") or "").strip(),
         "failure_hint": str(raw.get("failure_hint") or "由主神规则判定，细节在副本中逐步显露。").strip(),
