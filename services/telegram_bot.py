@@ -7,6 +7,8 @@ import random
 import re
 import threading
 import time
+from io import BytesIO
+from pathlib import Path
 from typing import Optional, Union
 from uuid import uuid4
 
@@ -38,6 +40,8 @@ from config import (
     WENYOU_GROUP_CHAT_ID,
     TELEGRAM_WENYOU_OWNER_USER_ID,
     R2_PUBLIC_URL,
+    TELEGRAM_STICKER_MAX_EDGE,
+    TELEGRAM_STICKER_JPEG_QUALITY,
 )
 from storage import r2_store
 
@@ -382,36 +386,92 @@ def _pick_random_sticker_key(tag: str) -> Optional[str]:
         return None
 
 
+def _maybe_downscale_sticker_bytes(data: bytes, filename: str, mime: str) -> tuple[bytes, str, str]:
+    """
+    缩小表情包长边，减轻聊天里「整张图占满屏」；GIF 不动（避免拆帧）。
+    TELEGRAM_STICKER_MAX_EDGE=0 则跳过。
+    """
+    max_edge = int(TELEGRAM_STICKER_MAX_EDGE or 0)
+    if max_edge <= 0 or not data:
+        return data, filename, mime
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.warning("表情包缩放需 Pillow（pip install Pillow），当前原图发送")
+        return data, filename, mime
+
+    ext = Path(filename or "").suffix.lower()
+    if ext == ".gif":
+        return data, filename, mime
+
+    try:
+        im = Image.open(BytesIO(data))
+        im.load()
+    except Exception as e:
+        logger.debug("表情包 PIL 无法打开，原样发送: %s", e)
+        return data, filename, mime
+
+    w, h = im.size
+    if w <= 0 or h <= 0:
+        return data, filename, mime
+    if max(w, h) <= max_edge:
+        return data, filename, mime
+
+    try:
+        im.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+    except Exception as e:
+        logger.debug("表情包 thumbnail 失败，原样发送: %s", e)
+        return data, filename, mime
+
+    q = min(95, max(50, int(TELEGRAM_STICKER_JPEG_QUALITY or 85)))
+    stem = Path(filename or "sticker").stem or "sticker"
+    out = BytesIO()
+
+    if im.mode == "P":
+        im = im.convert("RGBA") if "transparency" in im.info else im.convert("RGB")
+
+    if im.mode in ("RGBA", "LA"):
+        if im.mode == "LA":
+            im = im.convert("RGBA")
+        im.save(out, format="PNG", optimize=True)
+        return out.getvalue(), f"{stem}.png", "image/png"
+
+    im.convert("RGB").save(out, format="JPEG", quality=q, optimize=True)
+    return out.getvalue(), f"{stem}.jpg", "image/jpeg"
+
+
 def send_sticker_photo(chat_id: int, r2_key: str, bot_token: Optional[str] = None) -> bool:
     """
-    发送表情包：优先 R2_PUBLIC_URL + key；未配置公网则读桶内字节 multipart 发送。
+    发送表情包：拉取原图（公网 URL 或桶内字节），可选缩小后 multipart 发 sendPhoto。
     """
     tok = _effective_tg_token(bot_token)
     if not tok or not r2_key:
         return False
     url_api = f"{TELEGRAM_API_BASE}{tok}/sendPhoto"
+    data: Optional[bytes] = None
+    ctype: str = ""
+
     base = (R2_PUBLIC_URL or "").strip().rstrip("/")
     if base:
         photo_url = f"{base}/{str(r2_key).lstrip('/')}"
         try:
-            r = requests.post(url_api, json={"chat_id": chat_id, "photo": photo_url}, timeout=45)
-            if r.status_code == 200:
-                try:
-                    data = r.json() if r.content else {}
-                except (ValueError, requests.exceptions.JSONDecodeError):
-                    data = {}
-                if isinstance(data, dict) and data.get("ok", True):
-                    return True
-            logger.warning("sendPhoto URL 失败 chat_id=%s status=%s body=%s", chat_id, r.status_code, (r.text or "")[:200])
+            r = requests.get(photo_url, timeout=45)
+            if r.status_code == 200 and r.content:
+                data = r.content
+                ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         except requests.RequestException as e:
-            logger.warning("sendPhoto URL 异常 chat_id=%s: %s", chat_id, e)
-    # 回退：桶内字节
-    data, ctype = r2_store.get_object_bytes(r2_key)
+            logger.warning("表情包拉取公网图失败 key=%s: %s", r2_key, e)
+
+    if not data:
+        data, ctype = r2_store.get_object_bytes(r2_key)
     if not data:
         logger.warning("表情包无数据 key=%s", r2_key)
         return False
+
     name = str(r2_key).split("/")[-1] or "sticker.jpg"
     mime = ctype if ctype and ctype.startswith("image/") else "image/jpeg"
+    data, name, mime = _maybe_downscale_sticker_bytes(data, name, mime)
+
     try:
         r = requests.post(url_api, data={"chat_id": str(chat_id)}, files={"photo": (name, data, mime)}, timeout=60)
         if r.status_code != 200:
