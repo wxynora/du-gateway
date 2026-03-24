@@ -49,9 +49,13 @@ try:
 except Exception:
     pass
 
-# CORS：RikkaHub 等前端带自定义请求头（如 X-Assistant-Id）时，浏览器会先发 OPTIONS 预检
+# CORS：RikkaHub 等前端带自定义请求头时，浏览器会先发 OPTIONS 预检
+# MiniApp 表情包预览等请求需带 X-Telegram-Init-Data（仅 Header、不拼 URL），须在此列出否则跨域预检失败
 CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
-CORS_ALLOW_HEADERS = "Content-Type, Authorization"
+CORS_ALLOW_HEADERS = os.environ.get(
+    "CORS_ALLOW_HEADERS",
+    "Content-Type, Authorization, X-Telegram-Init-Data",
+).strip()
 
 
 @app.before_request

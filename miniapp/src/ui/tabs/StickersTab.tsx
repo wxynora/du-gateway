@@ -1,22 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch, apiJson } from "../api";
+import { apiFetch, apiJson, fetchWithInitDataHeaderOnly } from "../api";
 import { Btn } from "../components";
 import { useToast } from "../toast";
-import { getInitData } from "../tg";
 
 type TagRow = { key: string; label_zh: string };
 
 /**
  * 表情包预览：公网 R2 直链可直接 <img>。
- * 走网关 /stickers/raw 时不能用「initData 塞满 URL」的 img src（Telegram WebView 常截断超长 URL），
- * 须用 fetch + X-Telegram-Init-Data 再 blob: URL。
+ * 走网关 /stickers/raw：仅用 Header 传 initData（见 fetchWithInitDataHeaderOnly），再 blob:；部分 WebView 对 blob: 支持差，onError 时回退 data URL。
  */
 function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publicBase: string }) {
   const [src, setSrc] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [dataUrlFallback, setDataUrlFallback] = useState(false);
+  const blobRef = React.useRef<Blob | null>(null);
+  const objectUrlRef = React.useRef<string | null>(null);
 
   useEffect(() => {
-    setFailed(false);
+    setFailed(null);
+    setDataUrlFallback(false);
+    blobRef.current = null;
     const pb = (publicBase || "").trim().replace(/\/$/, "");
     if (pb) {
       setSrc(`${pb}/${String(objectKey).replace(/^\//, "")}`);
@@ -25,41 +28,77 @@ function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publi
 
     setSrc(null);
     let cancelled = false;
-    let objectUrl: string | null = null;
 
     (async () => {
       try {
-        const headers = new Headers();
-        const initData = getInitData();
-        if (initData) headers.set("X-Telegram-Init-Data", initData);
         const q = new URLSearchParams({ key: objectKey });
-        const r = await fetch(`${window.location.origin}/miniapp-api/stickers/raw?${q}`, { headers });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const r = await fetchWithInitDataHeaderOnly(`/miniapp-api/stickers/raw?${q}`);
+        if (!r.ok) {
+          const errText = (await r.text().catch(() => "")) || "";
+          throw new Error(`HTTP ${r.status} ${errText.slice(0, 80)}`);
+        }
+        const ct = (r.headers.get("Content-Type") || "").toLowerCase();
         const blob = await r.blob();
-        objectUrl = URL.createObjectURL(blob);
+        if (!blob || blob.size === 0) throw new Error("空文件");
+        if (ct.includes("json") || ct.includes("text/html")) throw new Error("非图片响应");
+        blobRef.current = blob;
+        const objectUrl = URL.createObjectURL(blob);
+        objectUrlRef.current = objectUrl;
         if (cancelled) {
           URL.revokeObjectURL(objectUrl);
+          objectUrlRef.current = null;
           return;
         }
         setSrc(objectUrl);
-      } catch {
-        if (!cancelled) setFailed(true);
+      } catch (e: any) {
+        if (!cancelled) setFailed(e?.message || "加载失败");
       }
     })();
 
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+      blobRef.current = null;
     };
   }, [objectKey, publicBase]);
 
   if (failed) {
-    return <div className="w-full h-full flex items-center justify-center text-[10px] text-cream-muted px-1 text-center">预览失败</div>;
+    return (
+      <div className="w-full h-full flex items-center justify-center text-[10px] text-cream-muted px-1 text-center leading-tight" title={failed}>
+        预览失败
+      </div>
+    );
   }
   if (!src) {
     return <div className="w-full h-full bg-white/30 animate-pulse" aria-hidden />;
   }
-  return <img src={src} alt="" className="w-full h-full object-cover" loading="lazy" />;
+
+  return (
+    <img
+      src={src}
+      alt=""
+      className="w-full h-full object-cover"
+      loading="lazy"
+      onError={() => {
+        const b = blobRef.current;
+        if (!b || dataUrlFallback) return;
+        setDataUrlFallback(true);
+        try {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const u = reader.result;
+            if (typeof u === "string") setSrc(u);
+          };
+          reader.readAsDataURL(b);
+        } catch {
+          setFailed("图片无法显示");
+        }
+      }}
+    />
+  );
 }
 
 const TAG_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;

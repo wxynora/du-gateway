@@ -20,6 +20,18 @@ async function parseJsonSafe(r: Response): Promise<any> {
   }
 }
 
+/**
+ * 只通过 Header 传 initData，不把 initData 拼进 URL。
+ * 用于拉取图片二进制等（避免 query 过长 414；与 <img src> 不同，fetch 仍可能受跨域预检限制，见 app.py CORS）。
+ */
+export async function fetchWithInitDataHeaderOnly(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers || {});
+  const initData = getInitData();
+  if (initData) headers.set("X-Telegram-Init-Data", initData);
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return fetch(p, { ...init, headers });
+}
+
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers || {});
   const initData = getInitData();
