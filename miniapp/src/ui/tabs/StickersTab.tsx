@@ -6,16 +6,60 @@ import { getInitData } from "../tg";
 
 type TagRow = { key: string; label_zh: string };
 
-function stickerPreviewUrl(key: string, publicBase: string): string {
-  const pb = (publicBase || "").trim().replace(/\/$/, "");
-  if (pb) {
-    return `${pb}/${String(key).replace(/^\//, "")}`;
+/**
+ * 表情包预览：公网 R2 直链可直接 <img>。
+ * 走网关 /stickers/raw 时不能用「initData 塞满 URL」的 img src（Telegram WebView 常截断超长 URL），
+ * 须用 fetch + X-Telegram-Init-Data 再 blob: URL。
+ */
+function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publicBase: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+    const pb = (publicBase || "").trim().replace(/\/$/, "");
+    if (pb) {
+      setSrc(`${pb}/${String(objectKey).replace(/^\//, "")}`);
+      return;
+    }
+
+    setSrc(null);
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    (async () => {
+      try {
+        const headers = new Headers();
+        const initData = getInitData();
+        if (initData) headers.set("X-Telegram-Init-Data", initData);
+        const q = new URLSearchParams({ key: objectKey });
+        const r = await fetch(`${window.location.origin}/miniapp-api/stickers/raw?${q}`, { headers });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const blob = await r.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        setSrc(objectUrl);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [objectKey, publicBase]);
+
+  if (failed) {
+    return <div className="w-full h-full flex items-center justify-center text-[10px] text-cream-muted px-1 text-center">预览失败</div>;
   }
-  const u = new URL("/miniapp-api/stickers/raw", window.location.origin);
-  u.searchParams.set("key", key);
-  const init = getInitData();
-  if (init) u.searchParams.set("initData", init);
-  return u.toString();
+  if (!src) {
+    return <div className="w-full h-full bg-white/30 animate-pulse" aria-hidden />;
+  }
+  return <img src={src} alt="" className="w-full h-full object-cover" loading="lazy" />;
 }
 
 const TAG_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
@@ -218,7 +262,7 @@ export function StickersTab() {
       <div className="grid grid-cols-3 gap-2">
         {keysForTab.map((k) => (
           <div key={k} className="relative aspect-square rounded-xl2 overflow-hidden border border-white/70 bg-white/40 shadow-soft">
-            <img src={stickerPreviewUrl(k, publicBase)} alt="" className="w-full h-full object-cover" loading="lazy" />
+            <StickerPreviewImg objectKey={k} publicBase={publicBase} />
             <button
               type="button"
               className="absolute top-1 right-1 h-6 w-6 rounded-full bg-black/55 text-white text-xs leading-6"
