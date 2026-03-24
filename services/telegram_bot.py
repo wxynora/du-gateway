@@ -684,15 +684,30 @@ def send_message(
         return False
 
 
-def send_voice(chat_id: int, audio_bytes: bytes, filename: str = "voice.mp3") -> bool:
+def send_voice(
+    chat_id: int,
+    audio_bytes: bytes,
+    filename: str = "voice.mp3",
+    bot_token: Optional[str] = None,
+) -> bool:
     """发送语音消息（Telegram sendVoice）。"""
-    url = f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/sendVoice"
+    tok = _effective_tg_token(bot_token)
+    if not tok:
+        return False
+    url = f"{TELEGRAM_API_BASE}{tok}/sendVoice"
     try:
         files = {"voice": (filename, audio_bytes, "audio/mpeg")}
         data = {"chat_id": chat_id}
         r = requests.post(url, data=data, files=files, timeout=60)
         if r.status_code != 200:
             logger.warning("sendVoice 失败 chat_id=%s status=%s %s", chat_id, r.status_code, (r.text or "")[:200])
+            return False
+        try:
+            j = r.json() if r.content else {}
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            j = {}
+        if isinstance(j, dict) and (j.get("ok") is False):
+            logger.warning("sendVoice Telegram 未送达 chat_id=%s description=%s", chat_id, j.get("description", ""))
             return False
         return True
     except requests.RequestException as e:
