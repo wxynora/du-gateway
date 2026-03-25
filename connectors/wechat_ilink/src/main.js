@@ -392,8 +392,8 @@ async function main() {
   const botToken = state.bot_token;
   const idleSeconds = Math.max(1, envInt("WECHAT_INPUT_IDLE_SECONDS", 15));
   const immediateChars = Math.max(20, envInt("WECHAT_INPUT_IMMEDIATE_CHARS", 200));
-  const outChunkChars = Math.max(20, envInt("WECHAT_OUTPUT_CHUNK_CHARS", 100));
-  const maxReplyTotalChars = Math.max(0, envInt("WECHAT_MAX_REPLY_TOTAL_CHARS", 4000));
+  const outChunkChars = Math.max(20, envInt("WECHAT_OUTPUT_CHUNK_CHARS", 200));
+  const maxReplyTotalChars = Math.max(0, envInt("WECHAT_MAX_REPLY_TOTAL_CHARS", 0));
   const typingEnabled = envBool("WECHAT_TYPING_ENABLED", true);
   const typingFirstDelayMs = Math.max(200, envInt("WECHAT_TYPING_FIRST_DELAY_MS", 1000));
   const typingIntervalMs = Math.max(800, envInt("WECHAT_TYPING_INTERVAL_MS", 4000));
