@@ -23,12 +23,46 @@
 
 ---
 
+## 2.1 iLink 协议要点（字段级，可直接按此落地）
+
+- iLink API 基础域名：`https://ilinkai.weixin.qq.com`
+- 登录二维码：
+  - `GET /ilink/bot/get_bot_qrcode?bot_type=3`
+  - `GET /ilink/bot/get_qrcode_status?qrcode=<qrcode>`
+- 收消息（长轮询）：
+  - `POST /ilink/bot/getupdates`
+- 发消息：
+  - `POST /ilink/bot/sendmessage`
+
+认证头（登录后请求常见套路）：
+- `Authorization: Bearer <bot_token>`
+- `AuthorizationType: ilink_bot_token`
+- `X-WECHAT-UIN: <随机 uint32 十进制串再 base64>`（每次请求都变）
+
+`getupdates` 的游标机制：
+
+```json
+{
+  "get_updates_buf": "<上次游标，首次为空>",
+  "base_info": { "channel_version": "1.0.2" }
+}
+```
+
+响应里会返回新的 `get_updates_buf`，下次必须带上，否则会重复收消息。
+
+入站消息关键字段：
+- `from_user_id`：对方用户唯一标识（建议用于 window_id）
+- `context_token`：回消息必须原样带回（否则回不到正确会话）
+- 文本在：`item_list[].type=1` → `text_item.text`
+
+---
+
 ## 3. 连接器必须具备的职责
 
 1. **鉴权材料**：按文档完成扫码/登录，得到并**安全保存** `bot_token`（或文档要求的等价凭证）；**禁止**写入仓库、**禁止**打完整日志。
 2. **收消息**：按文档对「拉取更新」类接口做**长轮询**（超时时间按文档，常见为数十秒级）。
 3. **筛私聊**：根据返回里的会话类型字段，**仅处理**私聊；其余直接忽略。
-4. **映射 window_id**：为每个微信私聊用户确定稳定的 `window_id` 字符串（例如 `wechat_<对方唯一标识>`），并在请求网关时通过 **`X-Window-Id` header** 或请求体 `window_id` 传入（与 `routes/chat.py` 现有逻辑一致）。
+4. **映射 window_id**：为每个微信私聊用户确定稳定的 `window_id` 字符串（例如 `wechat_<from_user_id>`），并在请求网关时通过 **`X-Window-Id` header** 或请求体 `window_id` 传入（与 `routes/chat.py` 现有逻辑一致）。
 5. **调网关**：将用户文本组装为 OpenAI 兼容 `messages`，**POST** 到网关聊天路径；模型名、是否流式等与 Telegram 侧对齐方式由你自选，但须与网关实际支持一致。
 6. **处理网关响应**：若为非流式，取 `choices[0].message.content`（或你网关实际返回结构）；若为流式，需按 SSE/分块约定拼出完整回复（实现复杂度显著高于非流式，**无特殊需求可先不做**）。
 7. **回微信**：使用 iLink 返回里提供的 **`context_token`（或文档要求字段）** 调用发送接口；**不得**丢字段导致无法关联原会话。
@@ -67,6 +101,6 @@
 ## 8. 自检清单（上线前）
 
 - [ ] 连接器仅监听私聊。
-- [ ] `window_id` 与预期用户一一对应。
+- [ ] `window_id` 与预期用户一一对应（前缀 `wechat_`）。
 - [ ] 网关返回能完整回传到微信（含多段/流式若已启用）。
 - [ ] 密钥仅存在于服务器环境或受限文件权限路径。
