@@ -11,6 +11,19 @@ function envStr(name, fallback = "") {
   return (process.env[name] || fallback || "").trim();
 }
 
+function envInt(name, fallback) {
+  const raw = envStr(name, "");
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function envBool(name, fallback = false) {
+  const raw = envStr(name, "");
+  if (!raw) return fallback;
+  return ["1", "true", "yes", "y", "on"].includes(raw.toLowerCase());
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -192,13 +205,27 @@ function isDirectChatMsg(msg) {
   return true;
 }
 
+function buildWechatStyleSystem() {
+  return [
+    "你正在微信（WeChat）平台与用户私聊对话。",
+    "请用中文回复，语气自然、简洁、温柔但不油腻。",
+    "不要输出脑内 OS / 思维过程；只输出给用户看的最终回复。",
+    "不要写“小本本/记事本更新”的指令或提示（除非用户明确要求）。",
+    "输出尽量分段：优先用换行分条；每条不要太长，方便在微信里阅读。",
+  ].join("\n");
+}
+
 async function callGatewayChat(windowId, userText) {
   const base = envStr("GATEWAY_BASE_URL", "http://127.0.0.1:5000").replace(/\/+$/, "");
   const chatPath = envStr("GATEWAY_CHAT_PATH", "/v1/chat/completions");
   const url = base + (chatPath.startsWith("/") ? chatPath : `/${chatPath}`);
   const model = envStr("GATEWAY_MODEL", "");
+  const styleSystem = buildWechatStyleSystem();
   const body = {
-    messages: [{ role: "user", content: String(userText || "") }],
+    messages: [
+      { role: "system", content: styleSystem },
+      { role: "user", content: String(userText || "") },
+    ],
     stream: false,
   };
   if (model) body.model = model;
@@ -206,6 +233,9 @@ async function callGatewayChat(windowId, userText) {
     "Content-Type": "application/json",
     "X-Window-Id": String(windowId || "").trim(),
   };
+  if (envBool("GATEWAY_TG_USER_INPUT", true)) {
+    headers["X-TG-User-Input"] = "1";
+  }
   const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
   const text = await r.text();
   let data = null;
@@ -221,25 +251,40 @@ async function callGatewayChat(windowId, userText) {
   return String(reply || "").trim();
 }
 
-function splitReply(text, maxChars) {
-  const s = String(text || "").trim();
-  if (!s) return [];
-  const n = Math.max(100, Number(maxChars || 800));
-  if (s.length <= n) return [s];
+function splitReplyByNewlineAndLen(text, chunkChars, maxTotalChars) {
+  const raw = String(text || "").trim();
+  if (!raw) return [];
+  const limit = Math.max(20, Number(chunkChars || 100));
+  const maxTotal = Math.max(0, Number(maxTotalChars || 0));
+  const clipped = maxTotal > 0 && raw.length > maxTotal ? raw.slice(0, maxTotal) : raw;
+  const lines = clipped.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  const src = lines.length ? lines : [clipped];
   const out = [];
-  for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n));
-  return out;
+  for (const line of src) {
+    if (line.length <= limit) {
+      out.push(line);
+      continue;
+    }
+    for (let i = 0; i < line.length; i += limit) {
+      out.push(line.slice(i, i + limit));
+    }
+  }
+  return out.filter(Boolean);
 }
 
 async function sendWeixinText(botToken, toUserId, contextToken, text) {
+  const clientId = `dg-${crypto.randomUUID()}`;
   const payload = {
     msg: {
+      from_user_id: "",
       to_user_id: String(toUserId || "").trim(),
+      client_id: clientId,
       message_type: 2,
       message_state: 2,
       context_token: String(contextToken || "").trim(),
       item_list: [{ type: 1, text_item: { text: String(text || "") } }],
     },
+    base_info: { channel_version: "1.0.2" },
   };
   const r = await ilinkPostJson("/ilink/bot/sendmessage", payload, botToken);
   if (r.status < 200 || r.status >= 300) {
@@ -266,9 +311,70 @@ async function main() {
   }
 
   const botToken = state.bot_token;
-  const maxReplyChars = Number(envStr("WECHAT_MAX_REPLY_CHARS", "800")) || 800;
+  const idleSeconds = Math.max(1, envInt("WECHAT_INPUT_IDLE_SECONDS", 15));
+  const immediateChars = Math.max(20, envInt("WECHAT_INPUT_IMMEDIATE_CHARS", 200));
+  const outChunkChars = Math.max(20, envInt("WECHAT_OUTPUT_CHUNK_CHARS", 100));
+  const maxReplyTotalChars = Math.max(0, envInt("WECHAT_MAX_REPLY_TOTAL_CHARS", 4000));
   const dedupe = new Set();
   const dedupeMax = 2000;
+
+  // 输入聚合（参考 Telegram）：同一用户 15s 内多条合并成一次请求
+  /** @type {Map<string, {parts: string[], toUserId: string, contextToken: string, timer: any, lastApologyAt: number}>} */
+  const pending = new Map();
+
+  async function flushUser(fromUserId) {
+    const it = pending.get(fromUserId);
+    if (!it) return;
+    if (it.timer) {
+      clearTimeout(it.timer);
+      it.timer = null;
+    }
+    const merged = it.parts.map((x) => String(x || "").trim()).filter(Boolean).join("\n").trim();
+    if (!merged) {
+      pending.delete(fromUserId);
+      return;
+    }
+
+    const windowId = `wechat_${fromUserId}`;
+    console.log(`[wechat-ilink] flush from=${fromUserId} window_id=${windowId} chars=${merged.length}`);
+
+    let reply = "";
+    let ok = false;
+    try {
+      reply = await callGatewayChat(windowId, merged);
+      ok = true;
+    } catch (e) {
+      ok = false;
+      console.log(`[wechat-ilink] 调网关失败：${String(e?.message || e)}`);
+    }
+
+    if (!ok) {
+      // 失败兜底：保留 pending，下次新消息触发时会一起合并再试；同时尽量只偶尔提示一次
+      const now = Date.now();
+      const shouldApologize = now - (it.lastApologyAt || 0) > 30_000;
+      if (shouldApologize) {
+        it.lastApologyAt = now;
+        try {
+          await sendWeixinText(botToken, it.toUserId, it.contextToken, "我这边刚刚有点忙，稍后再试一次好吗？");
+        } catch (e2) {
+          console.log(`[wechat-ilink] 发送兜底提示失败：${String(e2?.message || e2)}`);
+        }
+      }
+      // 重新挂定时器：避免一直不触发 flush
+      it.timer = setTimeout(() => flushUser(fromUserId), idleSeconds * 1000);
+      pending.set(fromUserId, it);
+      return;
+    }
+
+    const chunks = splitReplyByNewlineAndLen(reply, outChunkChars, maxReplyTotalChars);
+    for (const part of chunks) {
+      await sendWeixinText(botToken, it.toUserId, it.contextToken, part);
+      await sleep(250);
+    }
+
+    // 成功后清空该用户 pending
+    pending.delete(fromUserId);
+  }
 
   while (true) {
     try {
@@ -306,21 +412,29 @@ async function main() {
         dedupe.add(dedupeKey);
         if (dedupe.size > dedupeMax) dedupe.clear();
 
-        const windowId = `wechat_${fromUserId}`;
-        console.log(`[wechat-ilink] inbound from=${fromUserId} window_id=${windowId} text=${text.slice(0, 60)}`);
+        console.log(`[wechat-ilink] inbound from=${fromUserId} text=${text.slice(0, 60)}`);
 
-        let reply = "";
-        try {
-          reply = await callGatewayChat(windowId, text);
-        } catch (e) {
-          reply = "我这边刚刚有点忙，稍后再试一次好吗？";
-          console.log(`[wechat-ilink] 调网关失败：${String(e?.message || e)}`);
-        }
+        const existing = pending.get(fromUserId) || {
+          parts: [],
+          toUserId: fromUserId,
+          contextToken,
+          timer: null,
+          lastApologyAt: 0,
+        };
+        existing.parts.push(text);
+        // 以最新的 context_token 为准（一般更能保证回到当前会话）
+        existing.contextToken = contextToken;
+        existing.toUserId = fromUserId;
 
-        const parts = splitReply(reply, maxReplyChars);
-        for (const part of parts) {
-          await sendWeixinText(botToken, fromUserId, contextToken, part);
-          await sleep(250);
+        // 重新计时：idleSeconds 后 flush
+        if (existing.timer) clearTimeout(existing.timer);
+        existing.timer = setTimeout(() => flushUser(fromUserId), idleSeconds * 1000);
+        pending.set(fromUserId, existing);
+
+        const mergedLen = existing.parts.reduce((acc, s) => acc + String(s || "").length, 0);
+        if (String(text).length >= immediateChars || mergedLen >= immediateChars) {
+          // 超过阈值立即提交
+          await flushUser(fromUserId);
         }
       }
     } catch (e) {
