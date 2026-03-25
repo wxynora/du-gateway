@@ -215,15 +215,34 @@ function buildWechatStyleSystem() {
   ].join("\n");
 }
 
-async function callGatewayChat(windowId, userText) {
+function trimContextMessages(history, maxTurns) {
+  const turns = Math.max(0, Number(maxTurns || 0));
+  if (!Array.isArray(history) || turns <= 0) return [];
+  const maxMsgs = turns * 2;
+  if (history.length <= maxMsgs) return history;
+  return history.slice(history.length - maxMsgs);
+}
+
+function sanitizeAssistantForContext(text) {
+  let s = String(text || "").trim();
+  if (!s) return "";
+  // 对齐 Telegram 侧“避免污染多轮记忆”的思路：去掉 <voice> 与 [表情包tag] 的外壳（若有）
+  s = s.replace(/<voice>[\s\S]*?<\/voice>/gi, "").trim();
+  s = s.replace(/\[[a-zA-Z0-9_\-]{1,32}\]/g, "").trim();
+  return s;
+}
+
+async function callGatewayChat(windowId, userText, historyMessages) {
   const base = envStr("GATEWAY_BASE_URL", "http://127.0.0.1:5000").replace(/\/+$/, "");
   const chatPath = envStr("GATEWAY_CHAT_PATH", "/v1/chat/completions");
   const url = base + (chatPath.startsWith("/") ? chatPath : `/${chatPath}`);
   const model = envStr("GATEWAY_MODEL", "");
   const styleSystem = buildWechatStyleSystem();
+  const hist = Array.isArray(historyMessages) ? historyMessages : [];
   const body = {
     messages: [
       { role: "system", content: styleSystem },
+      ...hist,
       { role: "user", content: String(userText || "") },
     ],
     stream: false,
@@ -322,6 +341,11 @@ async function main() {
   /** @type {Map<string, {parts: string[], toUserId: string, contextToken: string, timer: any, lastApologyAt: number}>} */
   const pending = new Map();
 
+  // 上下文缓存（参考 Telegram）：每个用户维护最近 N 轮 user/assistant
+  /** @type {Map<string, {messages: any[]}>} */
+  const ctx = new Map();
+  const contextLastTurns = Math.max(0, envInt("WECHAT_CONTEXT_LAST_TURNS", 4));
+
   async function flushUser(fromUserId) {
     const it = pending.get(fromUserId);
     if (!it) return;
@@ -341,7 +365,8 @@ async function main() {
     let reply = "";
     let ok = false;
     try {
-      reply = await callGatewayChat(windowId, merged);
+      const history = trimContextMessages(ctx.get(fromUserId)?.messages || [], contextLastTurns);
+      reply = await callGatewayChat(windowId, merged, history);
       ok = true;
     } catch (e) {
       ok = false;
@@ -370,6 +395,17 @@ async function main() {
     for (const part of chunks) {
       await sendWeixinText(botToken, it.toUserId, it.contextToken, part);
       await sleep(250);
+    }
+
+    // 成功后更新上下文缓存（对齐 Telegram）：只缓存 user/assistant，不缓存 system
+    try {
+      const cur = Array.isArray(ctx.get(fromUserId)?.messages) ? [...ctx.get(fromUserId).messages] : [];
+      cur.push({ role: "user", content: merged });
+      const forCtx = sanitizeAssistantForContext(reply) || reply;
+      cur.push({ role: "assistant", content: forCtx });
+      ctx.set(fromUserId, { messages: trimContextMessages(cur, contextLastTurns) });
+    } catch {
+      // ignore
     }
 
     // 成功后清空该用户 pending
