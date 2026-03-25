@@ -375,7 +375,7 @@ async function main() {
   const dedupeMax = 2000;
 
   // 输入聚合（参考 Telegram）：同一用户 15s 内多条合并成一次请求
-  /** @type {Map<string, {parts: string[], toUserId: string, contextToken: string, timer: any, lastApologyAt: number}>} */
+  /** @type {Map<string, {parts: string[], toUserId: string, contextToken: string, timer: any, lastApologyAt: number, failureNotified: boolean}>} */
   const pending = new Map();
 
   // 上下文缓存（参考 Telegram）：每个用户维护最近 N 轮 user/assistant
@@ -437,11 +437,11 @@ async function main() {
     }
 
     if (!ok) {
-      // 失败兜底：保留 pending，下次新消息触发时会一起合并再试；同时尽量只偶尔提示一次
-      const now = Date.now();
-      const shouldApologize = now - (it.lastApologyAt || 0) > 30_000;
-      if (shouldApologize) {
-        it.lastApologyAt = now;
+      // 失败兜底：保留 pending，下次新消息触发时会一起合并再试；
+      // 连续失败期间仅提示一次，避免反复打扰用户。
+      if (!it.failureNotified) {
+        it.lastApologyAt = Date.now();
+        it.failureNotified = true;
         try {
           await sendWeixinText(botToken, it.toUserId, it.contextToken, "我这边刚刚有点忙，稍后再试一次好吗？");
         } catch (e2) {
@@ -519,6 +519,7 @@ async function main() {
           contextToken,
           timer: null,
           lastApologyAt: 0,
+          failureNotified: false,
         };
         existing.parts.push(text);
         // 以最新的 context_token 为准（一般更能保证回到当前会话）
