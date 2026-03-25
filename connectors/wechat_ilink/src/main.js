@@ -112,17 +112,26 @@ async function loginByQrcode() {
   const qrUrl = `${base}/ilink/bot/get_bot_qrcode?bot_type=3`;
   const r1 = await ilinkGetJson(qrUrl, "");
   const qrcodeToken = String(r1.data?.qrcode || "").trim();
-  if (!qrcodeToken) {
-    throw new Error(`get_bot_qrcode 未返回 qrcode status=${r1.status} body=${(r1.text || "").slice(0, 200)}`);
+  const qrcodeUrl =
+    String(r1.data?.url || r1.data?.qrcode_url || r1.data?.scan_url || "").trim() || "";
+  const qrContent = qrcodeUrl || qrcodeToken;
+  if (!qrContent) {
+    throw new Error(
+      `get_bot_qrcode 未返回可用二维码内容(status=${r1.status}) body=${(r1.text || "").slice(0, 220)}`
+    );
   }
-  qrcode.generate(qrcodeToken, { small: true });
+  qrcode.generate(qrContent, { small: true });
   console.log("[wechat-ilink] 已在终端打印二维码，用微信扫码确认绑定。");
+  if (qrcodeUrl) {
+    console.log(`[wechat-ilink] （调试）二维码URL=${qrcodeUrl}`);
+  }
 
   while (true) {
     await sleep(1200);
     const stUrl = `${base}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcodeToken)}`;
     const r2 = await ilinkGetJson(stUrl, "");
     const status = String(r2.data?.status || "").trim().toLowerCase();
+    if (status) console.log(`[wechat-ilink] login status=${status}`);
     if (status === "confirmed") {
       const botToken = String(r2.data?.bot_token || "").trim();
       if (!botToken) throw new Error("扫码已确认，但未返回 bot_token");
