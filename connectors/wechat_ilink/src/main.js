@@ -296,17 +296,37 @@ function splitReplyByNewlineAndLen(text, chunkChars, maxTotalChars) {
   const clipped = maxTotal > 0 && raw.length > maxTotal ? raw.slice(0, maxTotal) : raw;
   const lines = clipped.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
   const src = lines.length ? lines : [clipped];
+  // 先尽量“打包”多行到同一段，减少 sendmessage 次数，降低 ret=-2 概率
   const out = [];
+  let cur = "";
+  function pushCur() {
+    const s = cur.trim();
+    if (s) out.push(s);
+    cur = "";
+  }
   for (const line of src) {
-    if (line.length <= limit) {
-      out.push(line);
+    const one = String(line || "").trim();
+    if (!one) continue;
+    // 单行超长：先把当前包发出，再把该行按长度硬切
+    if (one.length > limit) {
+      pushCur();
+      for (let i = 0; i < one.length; i += limit) out.push(one.slice(i, i + limit));
       continue;
     }
-    for (let i = 0; i < line.length; i += limit) {
-      out.push(line.slice(i, i + limit));
+    if (!cur) {
+      cur = one;
+      continue;
+    }
+    const candidate = cur + "\n" + one;
+    if (candidate.length <= limit) {
+      cur = candidate;
+    } else {
+      pushCur();
+      cur = one;
     }
   }
-  return out.filter(Boolean);
+  pushCur();
+  return out;
 }
 
 async function sendWeixinText(botToken, toUserId, contextToken, text) {
@@ -325,12 +345,13 @@ async function sendWeixinText(botToken, toUserId, contextToken, text) {
   };
   const r = await ilinkPostJson("/ilink/bot/sendmessage", payload, botToken);
   if (r.status < 200 || r.status >= 300) {
-    throw new Error(`sendmessage 非 2xx status=${r.status} body=${(r.text || "").slice(0, 200)}`);
+    return { ok: false, ret: 0, status: r.status, body: (r.text || "").slice(0, 200) };
   }
   const ret = Number(r.data?.ret ?? 0);
   if (ret !== 0) {
-    throw new Error(`sendmessage ret=${ret} body=${JSON.stringify(r.data).slice(0, 200)}`);
+    return { ok: false, ret, status: r.status, body: JSON.stringify(r.data).slice(0, 200) };
   }
+  return { ok: true, ret: 0, status: r.status, body: "" };
 }
 
 // typing_ticket 需要通过 getconfig(ilink_user_id + context_token) 获取
@@ -394,6 +415,8 @@ async function main() {
   const immediateChars = Math.max(20, envInt("WECHAT_INPUT_IMMEDIATE_CHARS", 200));
   const outChunkChars = Math.max(20, envInt("WECHAT_OUTPUT_CHUNK_CHARS", 200));
   const maxReplyTotalChars = Math.max(0, envInt("WECHAT_MAX_REPLY_TOTAL_CHARS", 0));
+  const sendDelayMs = Math.max(0, envInt("WECHAT_OUTPUT_SEND_DELAY_MS", 600));
+  const retryDelayMs = Math.max(200, envInt("WECHAT_OUTPUT_RETRY_DELAY_MS", 1200));
   const typingEnabled = envBool("WECHAT_TYPING_ENABLED", true);
   const typingFirstDelayMs = Math.max(200, envInt("WECHAT_TYPING_FIRST_DELAY_MS", 1000));
   const typingIntervalMs = Math.max(800, envInt("WECHAT_TYPING_INTERVAL_MS", 4000));
@@ -491,8 +514,21 @@ async function main() {
 
     const chunks = splitReplyByNewlineAndLen(reply, outChunkChars, maxReplyTotalChars);
     for (const part of chunks) {
-      await sendWeixinText(botToken, it.toUserId, it.contextToken, part);
-      await sleep(250);
+      // sendmessage 可能返回 ret=-2（限频/临时失败）；这里重试一次并且不崩进程
+      let rSend = await sendWeixinText(botToken, it.toUserId, it.contextToken, part);
+      if (!rSend.ok && Number(rSend.ret) === -2) {
+        await sleep(retryDelayMs);
+        rSend = await sendWeixinText(botToken, it.toUserId, it.contextToken, part);
+      }
+      if (!rSend.ok) {
+        console.log(
+          `[wechat-ilink] sendmessage 失败 ret=${rSend.ret} status=${rSend.status} body=${rSend.body}`
+        );
+        // 不再继续发后续段，避免刷屏/连续失败；保留 pending 让下一次有机会补发（由你决定是否要做“补发队列”）
+        // 这里选择：直接停止发送后续段，但不崩溃。
+        break;
+      }
+      if (sendDelayMs > 0) await sleep(sendDelayMs);
     }
 
     // 成功后更新上下文缓存（对齐 Telegram）：只缓存 user/assistant，不缓存 system
