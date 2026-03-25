@@ -236,7 +236,7 @@ async function callGatewayChat(windowId, userText, historyMessages) {
   const base = envStr("GATEWAY_BASE_URL", "http://127.0.0.1:5000").replace(/\/+$/, "");
   const chatPath = envStr("GATEWAY_CHAT_PATH", "/v1/chat/completions");
   const url = base + (chatPath.startsWith("/") ? chatPath : `/${chatPath}`);
-  const model = envStr("GATEWAY_MODEL", "");
+  const configuredModel = envStr("GATEWAY_MODEL", "");
   const styleSystem = buildWechatStyleSystem();
   const hist = Array.isArray(historyMessages) ? historyMessages : [];
   const body = {
@@ -247,6 +247,24 @@ async function callGatewayChat(windowId, userText, historyMessages) {
     ],
     stream: false,
   };
+  // 对齐 Telegram：优先用网关当前 active 上游可用的第一个模型，避免默认模型与权限不匹配导致 403
+  async function fetchGatewayFirstModel() {
+    try {
+      const modelsUrl = `${base}/v1/models`;
+      const r = await fetch(modelsUrl, { method: "GET", headers: { "Content-Type": "application/json" } });
+      const text = await r.text();
+      if (!r.ok) return "";
+      const data = text ? JSON.parse(text) : null;
+      const arr = Array.isArray(data?.data) ? data.data : [];
+      if (!arr.length) return "";
+      const first = arr[0];
+      if (typeof first === "string") return first.trim();
+      return String(first?.id || "").trim();
+    } catch {
+      return "";
+    }
+  }
+  const model = configuredModel || (await fetchGatewayFirstModel());
   if (model) body.model = model;
   const headers = {
     "Content-Type": "application/json",
