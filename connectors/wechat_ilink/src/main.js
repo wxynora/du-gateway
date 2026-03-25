@@ -333,36 +333,45 @@ async function sendWeixinText(botToken, toUserId, contextToken, text) {
   }
 }
 
-let _typingTicketCache = "";
+// typing_ticket 需要通过 getconfig(ilink_user_id + context_token) 获取
+/** @type {Map<string, {ticket: string, updatedAt: number}>} */
+const _typingTicketCacheByUser = new Map();
 
-async function getTypingTicket(botToken) {
-  if (_typingTicketCache) return _typingTicketCache;
-  const r = await ilinkPostJson(
-    "/ilink/bot/getconfig",
-    { base_info: { channel_version: "1.0.2" } },
-    botToken
-  );
+async function getTypingTicket(botToken, toUserId, contextToken) {
+  const uid = String(toUserId || "").trim();
+  if (!uid) return "";
+  const cached = _typingTicketCacheByUser.get(uid);
+  if (cached?.ticket) return cached.ticket;
+
+  const payload = {
+    ilink_user_id: uid,
+    context_token: String(contextToken || "").trim(),
+    base_info: { channel_version: "1.0.2" },
+  };
+  const r = await ilinkPostJson("/ilink/bot/getconfig", payload, botToken);
   if (r.status < 200 || r.status >= 300) return "";
   const ret = Number(r.data?.ret ?? 0);
   if (ret !== 0) return "";
   const ticket = String(r.data?.typing_ticket || "").trim();
-  if (ticket) _typingTicketCache = ticket;
+  if (ticket) _typingTicketCacheByUser.set(uid, { ticket, updatedAt: Date.now() });
   return ticket;
 }
 
-async function sendTyping(botToken, toUserId) {
-  const ticket = await getTypingTicket(botToken);
+async function sendTypingStatus(botToken, toUserId, contextToken, status) {
+  const uid = String(toUserId || "").trim();
+  const ticket = await getTypingTicket(botToken, uid, contextToken);
   if (!ticket) return false;
   const payload = {
-    msg: {
-      to_user_id: String(toUserId || "").trim(),
-      typing_ticket: ticket,
-    },
+    ilink_user_id: uid,
+    typing_ticket: ticket,
+    status: Number(status || 1), // 1=Typing, 2=CancelTyping
     base_info: { channel_version: "1.0.2" },
   };
   const r = await ilinkPostJson("/ilink/bot/sendtyping", payload, botToken);
   if (r.status < 200 || r.status >= 300) return false;
   const ret = Number(r.data?.ret ?? 0);
+  // ret!=0 时可能是 ticket 失效：清缓存，留待下次重新 getconfig
+  if (ret !== 0) _typingTicketCacheByUser.delete(uid);
   return ret === 0;
 }
 
@@ -427,7 +436,7 @@ async function main() {
       if (typingSignals >= typingMaxSignals) return;
       typingSignals += 1;
       try {
-        await sendTyping(botToken, it.toUserId);
+        await sendTypingStatus(botToken, it.toUserId, it.contextToken, 1);
       } catch {
         // ignore typing failures
       }
@@ -451,6 +460,14 @@ async function main() {
       if (typingTimer) {
         clearTimeout(typingTimer);
         typingTimer = null;
+      }
+      if (typingEnabled) {
+        // 尽量取消输入状态（失败不影响主流程）
+        try {
+          await sendTypingStatus(botToken, it.toUserId, it.contextToken, 2);
+        } catch {
+          // ignore
+        }
       }
     }
 
