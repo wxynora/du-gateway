@@ -44,9 +44,17 @@ npm start
 - **输出切分**：优先按换行分条；每条超过 100 字再拆（`WECHAT_OUTPUT_CHUNK_CHARS`）
 - **失败兜底**：网关失败会保留 pending，下次再试，并最多每 30 秒提示一次
 - **微信风格 system**：不输出脑内 OS、不带小本本提示，并提示当前平台为微信
+- **正在输入中**：网关处理期间会发送 iLink `sendtyping`（可在 `.env` 调开关/间隔/次数）
 
 ## 当前限制
 
 - 仅处理文本（`item_list.type=1`）
 - 图片/语音/文件：协议支持，但要做 CDN 上传 + AES 加解密（建议作为 Phase 3）
+
+## typing 配置（可选）
+
+- `WECHAT_TYPING_ENABLED=1`
+- `WECHAT_TYPING_FIRST_DELAY_MS=1000`
+- `WECHAT_TYPING_INTERVAL_MS=4000`
+- `WECHAT_TYPING_MAX_SIGNALS=3`
 

@@ -315,6 +315,39 @@ async function sendWeixinText(botToken, toUserId, contextToken, text) {
   }
 }
 
+let _typingTicketCache = "";
+
+async function getTypingTicket(botToken) {
+  if (_typingTicketCache) return _typingTicketCache;
+  const r = await ilinkPostJson(
+    "/ilink/bot/getconfig",
+    { base_info: { channel_version: "1.0.2" } },
+    botToken
+  );
+  if (r.status < 200 || r.status >= 300) return "";
+  const ret = Number(r.data?.ret ?? 0);
+  if (ret !== 0) return "";
+  const ticket = String(r.data?.typing_ticket || "").trim();
+  if (ticket) _typingTicketCache = ticket;
+  return ticket;
+}
+
+async function sendTyping(botToken, toUserId) {
+  const ticket = await getTypingTicket(botToken);
+  if (!ticket) return false;
+  const payload = {
+    msg: {
+      to_user_id: String(toUserId || "").trim(),
+      typing_ticket: ticket,
+    },
+    base_info: { channel_version: "1.0.2" },
+  };
+  const r = await ilinkPostJson("/ilink/bot/sendtyping", payload, botToken);
+  if (r.status < 200 || r.status >= 300) return false;
+  const ret = Number(r.data?.ret ?? 0);
+  return ret === 0;
+}
+
 async function main() {
   const args = new Set(process.argv.slice(2));
   const forceLogin = args.has("--login");
@@ -334,6 +367,10 @@ async function main() {
   const immediateChars = Math.max(20, envInt("WECHAT_INPUT_IMMEDIATE_CHARS", 200));
   const outChunkChars = Math.max(20, envInt("WECHAT_OUTPUT_CHUNK_CHARS", 100));
   const maxReplyTotalChars = Math.max(0, envInt("WECHAT_MAX_REPLY_TOTAL_CHARS", 4000));
+  const typingEnabled = envBool("WECHAT_TYPING_ENABLED", true);
+  const typingFirstDelayMs = Math.max(200, envInt("WECHAT_TYPING_FIRST_DELAY_MS", 1000));
+  const typingIntervalMs = Math.max(800, envInt("WECHAT_TYPING_INTERVAL_MS", 4000));
+  const typingMaxSignals = Math.max(1, envInt("WECHAT_TYPING_MAX_SIGNALS", 3));
   const dedupe = new Set();
   const dedupeMax = 2000;
 
@@ -364,13 +401,39 @@ async function main() {
 
     let reply = "";
     let ok = false;
+    let typingTimer = null;
+    let typingSignals = 0;
+    let typingStopped = false;
+    async function emitTyping() {
+      if (!typingEnabled || typingStopped) return;
+      if (typingSignals >= typingMaxSignals) return;
+      typingSignals += 1;
+      try {
+        await sendTyping(botToken, it.toUserId);
+      } catch {
+        // ignore typing failures
+      }
+      if (!typingStopped && typingSignals < typingMaxSignals) {
+        typingTimer = setTimeout(emitTyping, typingIntervalMs);
+      }
+    }
+
     try {
+      if (typingEnabled) {
+        typingTimer = setTimeout(emitTyping, typingFirstDelayMs);
+      }
       const history = trimContextMessages(ctx.get(fromUserId)?.messages || [], contextLastTurns);
       reply = await callGatewayChat(windowId, merged, history);
       ok = true;
     } catch (e) {
       ok = false;
       console.log(`[wechat-ilink] 调网关失败：${String(e?.message || e)}`);
+    } finally {
+      typingStopped = true;
+      if (typingTimer) {
+        clearTimeout(typingTimer);
+        typingTimer = null;
+      }
     }
 
     if (!ok) {
