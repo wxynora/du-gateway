@@ -296,37 +296,18 @@ function splitReplyByNewlineAndLen(text, chunkChars, maxTotalChars) {
   const clipped = maxTotal > 0 && raw.length > maxTotal ? raw.slice(0, maxTotal) : raw;
   const lines = clipped.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
   const src = lines.length ? lines : [clipped];
-  // 先尽量“打包”多行到同一段，减少 sendmessage 次数，降低 ret=-2 概率
+  // 按“换行一条一条”切分；单行过长再按长度硬切
   const out = [];
-  let cur = "";
-  function pushCur() {
-    const s = cur.trim();
-    if (s) out.push(s);
-    cur = "";
-  }
   for (const line of src) {
     const one = String(line || "").trim();
     if (!one) continue;
-    // 单行超长：先把当前包发出，再把该行按长度硬切
-    if (one.length > limit) {
-      pushCur();
-      for (let i = 0; i < one.length; i += limit) out.push(one.slice(i, i + limit));
+    if (one.length <= limit) {
+      out.push(one);
       continue;
     }
-    if (!cur) {
-      cur = one;
-      continue;
-    }
-    const candidate = cur + "\n" + one;
-    if (candidate.length <= limit) {
-      cur = candidate;
-    } else {
-      pushCur();
-      cur = one;
-    }
+    for (let i = 0; i < one.length; i += limit) out.push(one.slice(i, i + limit));
   }
-  pushCur();
-  return out;
+  return out.filter(Boolean);
 }
 
 async function sendWeixinText(botToken, toUserId, contextToken, text) {
