@@ -212,6 +212,23 @@ ASSISTANT_LUNAR_KEYWORDS = [k.strip() for k in _ASSISTANT_LUNAR_KEYWORDS_STR.spl
 # 日志级别：DEBUG / INFO / WARNING / ERROR
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
+# 电脑指令队列鉴权：电脑端轮询/回执必须携带该 token
+PC_COMMAND_TOKEN = os.environ.get("PC_COMMAND_TOKEN", "").strip()
+
+# PC open: 白名单（逗号分隔，小写英文名）；[PCMD:open:xxx] 仅允许此处应用
+_PC_OPEN_APP_ALLOWLIST_STR = os.environ.get(
+    "PC_OPEN_APP_ALLOWLIST",
+    "notepad,chrome,vscode,wechat,notion",
+).strip()
+PC_OPEN_APP_ALLOWLIST = [x.strip().lower() for x in _PC_OPEN_APP_ALLOWLIST_STR.split(",") if x.strip()]
+
+# PC url: 允许的域名（逗号分隔）；须 https，且 hostname 匹配或为其子域
+_PC_URL_DOMAIN_ALLOWLIST_STR = os.environ.get(
+    "PC_URL_DOMAIN_ALLOWLIST",
+    "github.com,bilibili.com,openai.com,notion.so",
+).strip()
+PC_URL_DOMAIN_ALLOWLIST = [x.strip().lower() for x in _PC_URL_DOMAIN_ALLOWLIST_STR.split(",") if x.strip()]
+
 # “老婆隔多久回我”的提示：超过阈值才注入（分钟）
 REPLY_GAP_THRESHOLD_MINUTES = int(os.environ.get("REPLY_GAP_THRESHOLD_MINUTES", "30"))
 # 本地持久化：记录网关“上一次收到 user 回复”的时间（北京时间 ISO）

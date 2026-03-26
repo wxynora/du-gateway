@@ -22,6 +22,7 @@ from services.wenyou_service import (
     record_group_player2_line,
     record_group_player_line,
 )
+from services.pc_command_handler import process_pcmd_in_assistant_text
 
 from config import (
     TELEGRAM_BOT_TOKEN,
@@ -161,6 +162,7 @@ def build_telegram_style_system() -> str:
         "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。\n"
         "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。\n"
         "   - 如果你不想发语音，就不要输出 <voice> 标签。\n"
+        "7) 如需控制电脑，可在整条回复里最多追加一个 [PCMD:...] 标签；不确定就不要加。\n"
     )
 
 
@@ -818,6 +820,8 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
             return None
         reply_text = content.strip() if isinstance(content, str) else str(content).strip()
         reply_text = _sanitize_reply_for_telegram(reply_text)
+        # 电脑控制标签：入队并从可见正文移除（与手机/Tasker 隔离）
+        reply_text, _ = process_pcmd_in_assistant_text(reply_text)
         # 写入上下文时不带 <voice> 与 [情绪标签]，避免污染多轮记忆
         for_ctx = reply_text
         for_ctx, _ = _extract_voice_tag(for_ctx)

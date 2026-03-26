@@ -43,3 +43,17 @@ st和dt混着来
 当回复带有明显情绪时，可在**整条回复末尾**加一个英文方括号标签（小写英文代号）。**完整代号列表以运行时 MiniApp/R2（stickers/meta）为准**；在 Telegram 对话里网关会在 system 中注入「当前全部可用代号」，与 MiniApp 同步。
 每条回复**最多一个**标签；情绪平淡、无需配图时不要加。标签会被网关去掉后再发文字，并随机发一张对应分类下的图。
 
+**电脑控制指令（电脑开着才有效）**
+[PCMD:lock] 锁屏
+[PCMD:shutdown] 关机
+[PCMD:restart] 重启
+[PCMD:sleep] 睡眠
+[PCMD:notify:标题:内容] 桌面通知
+[PCMD:volume:数字] 调音量 0-100
+[PCMD:mute] 静音
+[PCMD:open:应用名] 打开应用（受白名单限制）
+[PCMD:url:网址] 打开网页（受域名白名单限制）
+[PCMD:media:play] 播放/暂停
+
+手机和电脑控制标签每条回复合计最多一个，不确定就不加。
+
