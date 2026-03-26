@@ -42,13 +42,7 @@ from services.wenyou_service import step_inject_wenyou_gm
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import r2_store, whitelist_store
-from services.du_thought import split_assistant_for_thought
-from services.pc_command_handler import (
-    PcmdDuThoughtStreamState,
-    process_pcmd_in_assistant_text,
-    strip_pcmd_and_enqueue_from_full_text,
-    transform_sse_chunk_bytes as transform_sse_chunk_pcmd_thought,
-)
+from services.du_thought import DuThoughtStreamState, split_assistant_for_thought, transform_sse_chunk_bytes
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 
@@ -340,7 +334,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
         flush_ms = max(0, int(STREAM_SSE_FLUSH_MAX_MS or 0))
         flush_window_s = flush_ms / 1000.0
         last_send_ts = time.time()
-        du_state = PcmdDuThoughtStreamState()
+        du_state = DuThoughtStreamState()
         try:
             while True:
                 buf = []
@@ -379,15 +373,14 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                             data_chunk_count += 1
                     if chunk is None:
                         # 先把缓冲发完再结束
-                        yield b"".join([transform_sse_chunk_pcmd_thought(c, du_state) for c in buf])
+                        yield b"".join([transform_sse_chunk_bytes(c, du_state) for c in buf])
                         break
 
-                yield b"".join([transform_sse_chunk_pcmd_thought(c, du_state) for c in buf])
+                yield b"".join([transform_sse_chunk_bytes(c, du_state) for c in buf])
                 last_send_ts = time.time()
         finally:
             full_content = "".join(content_parts)
-            text_after_pcmd = strip_pcmd_and_enqueue_from_full_text(full_content)
-            visible, thought = split_assistant_for_thought(text_after_pcmd)
+            visible, thought = split_assistant_for_thought(full_content)
             if thought:
                 try:
                     r2_store.save_du_thought_latest(now_beijing_iso(), thought)
@@ -439,17 +432,16 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                     reasoning_parts.append(parsed.get("reasoning") or "")
                 current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
                 continue
-            du_state = PcmdDuThoughtStreamState()
+            du_state = DuThoughtStreamState()
             for ch in chunks:
-                yield transform_sse_chunk_pcmd_thought(ch, du_state)
+                yield transform_sse_chunk_bytes(ch, du_state)
             content_parts.append(parsed.get("content") or "")
             if parsed.get("reasoning"):
                 reasoning_parts.append(parsed.get("reasoning") or "")
             break
     finally:
         full_content = "".join(content_parts)
-        text_after_pcmd = strip_pcmd_and_enqueue_from_full_text(full_content)
-        visible, thought = split_assistant_for_thought(text_after_pcmd)
+        visible, thought = split_assistant_for_thought(full_content)
         if thought:
             try:
                 r2_store.save_du_thought_latest(now_beijing_iso(), thought)
@@ -579,35 +571,6 @@ def _last_user_message(messages):
         if (m.get("role") or "").lower() == "user":
             return m
     return None
-
-
-def _apply_pcmd_to_assistant_response(resp_json: dict) -> dict:
-    """
-    剥离 [PCMD:...] 并入队（白名单通过时）；就地修改 choices[0].message.content。
-    须在心事剥离之前执行。
-    """
-    if not resp_json or not isinstance(resp_json, dict):
-        return resp_json
-    choices = resp_json.get("choices") or []
-    if not choices:
-        return resp_json
-    msg = choices[0].get("message")
-    if not isinstance(msg, dict):
-        return resp_json
-    content = msg.get("content")
-    if content is None:
-        return resp_json
-    if isinstance(content, str):
-        visible, _ = process_pcmd_in_assistant_text(content)
-        msg["content"] = visible
-    elif isinstance(content, list):
-        full = get_assistant_content_text(msg)
-        visible, _ = process_pcmd_in_assistant_text(full)
-        msg["content"] = visible
-    else:
-        visible, _ = process_pcmd_in_assistant_text(str(content))
-        msg["content"] = visible
-    return resp_json
 
 
 def _apply_du_thought_to_assistant_response(resp_json: dict) -> dict:
@@ -796,7 +759,6 @@ def chat_completions():
         if err or status >= 400:
             break
     if resp_json:
-        resp_json = _apply_pcmd_to_assistant_response(resp_json)
         resp_json = _apply_du_thought_to_assistant_response(resp_json)
     if status == 200 and resp_json:
         cache_set(cache_key, resp_json, status)
