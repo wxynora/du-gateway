@@ -756,100 +756,105 @@ def miniapp_reasoning_latest():
         limit = 30
 
     recent = whitelist_store.list_recent_windows(limit=200) or []
-    target = ""
+    targets: list[str] = []
     for w in recent:
         wid = (w.get("id") or "").strip()
-        if wid.startswith("tg_"):
-            target = wid
-            break
-    if not target and recent:
-        target = (recent[0].get("id") or "").strip()
+        if not wid:
+            continue
+        if wid.startswith("tg_") or wid.startswith("wechat_") or wid.startswith("wx_"):
+            if wid not in targets:
+                targets.append(wid)
+    if not targets and recent:
+        wid0 = (recent[0].get("id") or "").strip()
+        if wid0:
+            targets = [wid0]
 
-    if not target:
+    if not targets:
         return jsonify({"ok": True, "window_id": "", "items": [], "count": 0})
 
-    rounds = r2_store.get_conversation_rounds(target, last_n=200) or []
     out = []
-    for r in reversed(rounds):
-        idx = int(r.get("index") or 0)
-        ts = (r.get("timestamp") or "").strip()
-        msgs = r.get("messages") or []
-        reasoning_text = ""
-        tool_calls_out = []
-        tool_results_map: dict[str, str] = {}
-        for m in msgs:
-            if not isinstance(m, dict):
-                continue
-            role = (m.get("role") or "").strip().lower()
-            if role != "tool":
-                continue
-            tid = (m.get("tool_call_id") or "").strip()
-            if not tid:
-                continue
-            content = m.get("content")
-            if content is None:
-                val = ""
-            elif isinstance(content, str):
-                val = content
-            else:
-                try:
-                    val = json.dumps(content, ensure_ascii=False)
-                except Exception:
-                    val = str(content)
-            tool_results_map[tid] = val
-        for m in reversed(msgs):
-            role = (m.get("role") or "").strip().lower() if isinstance(m, dict) else ""
-            if role != "assistant":
-                continue
-            if not isinstance(m, dict):
-                continue
-            # 工具调用不依赖 reasoning 存在；有 tool_calls 就应返回给前端展示
-            if not tool_calls_out:
-                tcs = m.get("tool_calls") or []
-                if isinstance(tcs, list):
-                    for tc in tcs:
-                        if not isinstance(tc, dict):
-                            continue
-                        tid = (tc.get("id") or "").strip()
-                        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
-                        name = (fn.get("name") or "").strip()
-                        args = fn.get("arguments")
-                        if args is None:
-                            args_text = ""
-                        elif isinstance(args, str):
-                            args_text = args
-                        else:
-                            try:
-                                args_text = json.dumps(args, ensure_ascii=False)
-                            except Exception:
-                                args_text = str(args)
-                        tool_calls_out.append(
-                            {
-                                "id": tid,
-                                "name": name,
-                                "arguments": args_text,
-                                "result": tool_results_map.get(tid, str(tc.get("result") or "")),
-                            }
-                        )
-            if not reasoning_text:
-                val = (m.get("reasoning") or m.get("reasoning_content") or m.get("thinking") or "").strip()
-                if val:
-                    reasoning_text = val
-            if reasoning_text and tool_calls_out:
-                break
-        if reasoning_text or tool_calls_out:
-            out.append(
-                {
-                    "index": idx,
-                    "timestamp": ts,
-                    "reasoning": reasoning_text,
-                    "tool_calls": tool_calls_out,
-                }
-            )
-        if len(out) >= limit:
-            break
+    for target in targets:
+        rounds = r2_store.get_conversation_rounds(target, last_n=160) or []
+        for r in reversed(rounds):
+            idx = int(r.get("index") or 0)
+            ts = (r.get("timestamp") or "").strip()
+            msgs = r.get("messages") or []
+            reasoning_text = ""
+            tool_calls_out = []
+            tool_results_map: dict[str, str] = {}
+            for m in msgs:
+                if not isinstance(m, dict):
+                    continue
+                role = (m.get("role") or "").strip().lower()
+                if role != "tool":
+                    continue
+                tid = (m.get("tool_call_id") or "").strip()
+                if not tid:
+                    continue
+                content = m.get("content")
+                if content is None:
+                    val = ""
+                elif isinstance(content, str):
+                    val = content
+                else:
+                    try:
+                        val = json.dumps(content, ensure_ascii=False)
+                    except Exception:
+                        val = str(content)
+                tool_results_map[tid] = val
+            for m in reversed(msgs):
+                role = (m.get("role") or "").strip().lower() if isinstance(m, dict) else ""
+                if role != "assistant":
+                    continue
+                if not isinstance(m, dict):
+                    continue
+                if not tool_calls_out:
+                    tcs = m.get("tool_calls") or []
+                    if isinstance(tcs, list):
+                        for tc in tcs:
+                            if not isinstance(tc, dict):
+                                continue
+                            tid = (tc.get("id") or "").strip()
+                            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                            name = (fn.get("name") or "").strip()
+                            args = fn.get("arguments")
+                            if args is None:
+                                args_text = ""
+                            elif isinstance(args, str):
+                                args_text = args
+                            else:
+                                try:
+                                    args_text = json.dumps(args, ensure_ascii=False)
+                                except Exception:
+                                    args_text = str(args)
+                            tool_calls_out.append(
+                                {
+                                    "id": tid,
+                                    "name": name,
+                                    "arguments": args_text,
+                                    "result": tool_results_map.get(tid, str(tc.get("result") or "")),
+                                }
+                            )
+                if not reasoning_text:
+                    val = (m.get("reasoning") or m.get("reasoning_content") or m.get("thinking") or "").strip()
+                    if val:
+                        reasoning_text = val
+                if reasoning_text and tool_calls_out:
+                    break
+            if reasoning_text or tool_calls_out:
+                out.append(
+                    {
+                        "window_id": target,
+                        "index": idx,
+                        "timestamp": ts,
+                        "reasoning": reasoning_text,
+                        "tool_calls": tool_calls_out,
+                    }
+                )
 
-    resp = jsonify({"ok": True, "window_id": target, "items": out, "count": len(out)})
+    out.sort(key=lambda x: (_parse_beijing_dt(x.get("timestamp") or "") is not None, _parse_beijing_dt(x.get("timestamp") or "")), reverse=True)
+    out = out[:limit]
+    resp = jsonify({"ok": True, "window_id": targets[0] if targets else "", "window_ids": targets, "items": out, "count": len(out)})
     # 思维链刷新希望“按一下就见效”，这里显式禁缓存，避免移动端/代理命中旧响应。
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"

@@ -4,12 +4,13 @@ import { useToast } from "../toast";
 
 type ToolCallItem = { id?: string; name?: string; arguments?: string; result?: string };
 type ReasoningItem = {
+  window_id?: string;
   index?: number;
   timestamp?: string;
   reasoning?: string;
   tool_calls?: ToolCallItem[];
 };
-type ReasoningResp = { ok?: boolean; window_id?: string; items?: ReasoningItem[]; count?: number };
+type ReasoningResp = { ok?: boolean; window_id?: string; window_ids?: string[]; items?: ReasoningItem[]; count?: number };
 
 export function ReasoningTab() {
   const toast = useToast();
@@ -75,7 +76,7 @@ export function ReasoningTab() {
             className="rounded-[20px] bg-white border border-white/70 shadow-soft p-3"
           >
             <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3 py-1 text-[11px] font-medium text-white shadow-soft2">
-              #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""}
+              #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""} {r.window_id ? `· ${String(r.window_id)}` : ""}
             </div>
             {String(r.reasoning || "").trim() ? (
               <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-cream-text">
