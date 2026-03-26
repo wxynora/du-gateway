@@ -77,9 +77,13 @@ export function ReasoningTab() {
             <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3 py-1 text-[11px] font-medium text-white shadow-soft2">
               #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""}
             </div>
-            <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-cream-text">
-              {String(r.reasoning || "")}
-            </div>
+            {String(r.reasoning || "").trim() ? (
+              <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-cream-text">
+                {String(r.reasoning || "")}
+              </div>
+            ) : (
+              <div className="mt-2 text-[11px] text-cream-muted">本轮未返回思维链文本</div>
+            )}
             {Array.isArray(r.tool_calls) && r.tool_calls.length ? (
               <div className="mt-3 space-y-2">
                 {r.tool_calls.map((tc, ti) => {

@@ -3,6 +3,8 @@ import os
 import math
 import logging
 import json
+import re
+from collections import Counter
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -63,6 +65,65 @@ def _default_cyber_tree_start_date(today: str) -> str:
     return f"{y:04d}-03-04"
 
 
+_DAILY_KW_STOPWORDS = {
+    "今天",
+    "现在",
+    "这个",
+    "那个",
+    "然后",
+    "就是",
+    "还是",
+    "感觉",
+    "我们",
+    "你们",
+    "他们",
+    "自己",
+    "已经",
+    "一下",
+    "可能",
+    "因为",
+    "所以",
+    "如果",
+    "但是",
+    "而且",
+    "以及",
+    "其实",
+    "真的",
+    "不会",
+    "可以",
+    "不要",
+    "还有",
+    "一个",
+    "这个时候",
+    "然后呢",
+    "知道了",
+}
+
+
+def _extract_daily_keywords(texts: list[str], limit: int = 3) -> list[str]:
+    """
+    从文本中提取高频关键词（中英文），避免固定词表导致“每天都一样”。
+    """
+    tokens: list[str] = []
+    for raw in texts or []:
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        for t in re.findall(r"[\u4e00-\u9fff]{2,6}", s):
+            t = t.strip()
+            if t and t not in _DAILY_KW_STOPWORDS:
+                tokens.append(t)
+        for t in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,24}", s):
+            lo = t.lower().strip()
+            if lo and lo not in _DAILY_KW_STOPWORDS:
+                tokens.append(lo)
+    if not tokens:
+        return []
+    cnt = Counter(tokens)
+    ranked = sorted(cnt.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))
+    return [k for k, _ in ranked[: max(1, int(limit or 3))]]
+
+
 def _generate_daily_report(today: str) -> dict:
     """按北京日期统计「今日」对话轮次与关键词（从最近存档中筛当日）。"""
     uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
@@ -70,7 +131,8 @@ def _generate_daily_report(today: str) -> dict:
     # 拉取足够多的最近轮次，再按日期过滤（单日上限通常远小于此）
     all_rounds = r2_store.get_conversation_rounds(window_id, last_n=500) if window_id else []
     day_rounds: list[dict] = []
-    text: list[str] = []
+    user_text: list[str] = []
+    all_text: list[str] = []
     for r in all_rounds or []:
         dt = _parse_beijing_dt(r.get("timestamp"))
         if not dt:
@@ -79,19 +141,20 @@ def _generate_daily_report(today: str) -> dict:
             continue
         day_rounds.append(r)
         for m in (r.get("messages") or []):
-            c = m.get("content")
-            if isinstance(c, str):
-                text.append(c)
-            elif isinstance(c, list):
-                parts = []
-                for p in c:
-                    if isinstance(p, dict) and p.get("type") == "text":
-                        parts.append(str(p.get("text") or ""))
-                if parts:
-                    text.append(" ".join(parts))
+            if not isinstance(m, dict):
+                continue
+            tx = _message_text(m.get("content"))
+            if not tx:
+                continue
+            all_text.append(tx)
+            role = str(m.get("role") or "").strip().lower()
+            if role == "user":
+                user_text.append(tx)
     rounds_count = len(day_rounds)
-    raw = " ".join(text)
-    hot = [k for k in ("提醒", "闹钟", "老婆", "睡觉", "吃饭", "工作", "散步", "晚安", "想你", "记事本") if k in raw]
+    # 优先用户消息关键词，避免被助手高频措辞“刷屏”成固定词。
+    hot = _extract_daily_keywords(user_text, limit=3)
+    if not hot:
+        hot = _extract_daily_keywords(all_text, limit=3)
     if not hot:
         hot = ["陪伴", "日常", "关心"]
     report = {
@@ -738,13 +801,10 @@ def miniapp_reasoning_latest():
             role = (m.get("role") or "").strip().lower() if isinstance(m, dict) else ""
             if role != "assistant":
                 continue
-            val = (
-                (m.get("reasoning") or m.get("reasoning_content") or m.get("thinking") or "").strip()
-                if isinstance(m, dict)
-                else ""
-            )
-            if val:
-                reasoning_text = val
+            if not isinstance(m, dict):
+                continue
+            # 工具调用不依赖 reasoning 存在；有 tool_calls 就应返回给前端展示
+            if not tool_calls_out:
                 tcs = m.get("tool_calls") or []
                 if isinstance(tcs, list):
                     for tc in tcs:
@@ -771,8 +831,13 @@ def miniapp_reasoning_latest():
                                 "result": tool_results_map.get(tid, ""),
                             }
                         )
+            if not reasoning_text:
+                val = (m.get("reasoning") or m.get("reasoning_content") or m.get("thinking") or "").strip()
+                if val:
+                    reasoning_text = val
+            if reasoning_text and tool_calls_out:
                 break
-        if reasoning_text:
+        if reasoning_text or tool_calls_out:
             out.append(
                 {
                     "index": idx,
