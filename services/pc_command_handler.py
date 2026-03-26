@@ -14,8 +14,9 @@ from utils.log import get_logger
 
 logger = get_logger(__name__)
 
-# 仅匹配首个 [PCMD:...]（每条回复约定最多一个）
-PCMD_TAG_RE = re.compile(r"\[PCMD:([^\]]+)\]")
+# 仅匹配首个 PCMD 标签（每条回复约定最多一个）
+# 兼容中英文括号/冒号与大小写：如 [PCMD:lock]、［pcmd：lock］、【PCMD:lock】
+PCMD_TAG_RE = re.compile(r"[\[［【]\s*PCMD\s*[:：]\s*([^\]］】]+)\s*[\]］】]", re.IGNORECASE)
 
 # open: 别名 → 白名单中的规范名（小写）
 _OPEN_APP_ALIASES = {
@@ -122,7 +123,9 @@ def validate_pc_command_for_queue(inner: str) -> Optional[str]:
 
 def strip_first_pcmd_tag(text: str) -> str:
     """去掉首个 [PCMD:...] 标签（不改变其它内容）。"""
-    if not text or "[PCMD:" not in text:
+    if not text:
+        return text
+    if not PCMD_TAG_RE.search(text):
         return text
     return PCMD_TAG_RE.sub("", text, count=1).strip()
 
@@ -162,15 +165,15 @@ def visible_prefix_pcmd(acc: str) -> str:
         return ""
     s = acc
     while True:
-        m = re.search(r"\[PCMD:[^\]]+\]", s)
+        m = PCMD_TAG_RE.search(s)
         if not m:
             break
         s = s[: m.start()] + s[m.end() :]
-    idx = s.find("[PCMD:")
-    if idx >= 0:
-        rest = s[idx + len("[PCMD:") :]
-        if "]" not in rest:
-            s = s[:idx].rstrip()
+    start = re.search(r"[\[［【]\s*PCMD\s*[:：]", s, flags=re.IGNORECASE)
+    if start:
+        rest = s[start.end() :]
+        if not re.search(r"[\]］】]", rest):
+            s = s[: start.start()].rstrip()
     return s
 
 
