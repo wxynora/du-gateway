@@ -42,7 +42,12 @@ from services.wenyou_service import step_inject_wenyou_gm
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import r2_store, whitelist_store
-from services.du_thought import DuThoughtStreamState, split_assistant_for_thought, transform_sse_chunk_bytes
+from services.du_thought import split_assistant_for_thought
+from services.pc_command_handler import (
+    PcmdDuThoughtStreamState,
+    process_pcmd_in_assistant_text,
+    transform_sse_chunk_bytes as transform_sse_chunk_bytes_pcmd,
+)
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 
@@ -334,7 +339,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
         flush_ms = max(0, int(STREAM_SSE_FLUSH_MAX_MS or 0))
         flush_window_s = flush_ms / 1000.0
         last_send_ts = time.time()
-        du_state = DuThoughtStreamState()
+        du_state = PcmdDuThoughtStreamState()
         try:
             while True:
                 buf = []
@@ -373,14 +378,15 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                             data_chunk_count += 1
                     if chunk is None:
                         # 先把缓冲发完再结束
-                        yield b"".join([transform_sse_chunk_bytes(c, du_state) for c in buf])
+                        yield b"".join([transform_sse_chunk_bytes_pcmd(c, du_state) for c in buf])
                         break
 
-                yield b"".join([transform_sse_chunk_bytes(c, du_state) for c in buf])
+                yield b"".join([transform_sse_chunk_bytes_pcmd(c, du_state) for c in buf])
                 last_send_ts = time.time()
         finally:
             full_content = "".join(content_parts)
-            visible, thought = split_assistant_for_thought(full_content)
+            visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_content)
+            visible, thought = split_assistant_for_thought(visible_after_pcmd)
             if thought:
                 try:
                     r2_store.save_du_thought_latest(now_beijing_iso(), thought)
@@ -432,16 +438,17 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                     reasoning_parts.append(parsed.get("reasoning") or "")
                 current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
                 continue
-            du_state = DuThoughtStreamState()
+            du_state = PcmdDuThoughtStreamState()
             for ch in chunks:
-                yield transform_sse_chunk_bytes(ch, du_state)
+                yield transform_sse_chunk_bytes_pcmd(ch, du_state)
             content_parts.append(parsed.get("content") or "")
             if parsed.get("reasoning"):
                 reasoning_parts.append(parsed.get("reasoning") or "")
             break
     finally:
         full_content = "".join(content_parts)
-        visible, thought = split_assistant_for_thought(full_content)
+        visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_content)
+        visible, thought = split_assistant_for_thought(visible_after_pcmd)
         if thought:
             try:
                 r2_store.save_du_thought_latest(now_beijing_iso(), thought)
@@ -592,7 +599,8 @@ def _apply_du_thought_to_assistant_response(resp_json: dict) -> dict:
     content_text = get_assistant_content_text(msg)
     if not content_text:
         return resp_json
-    visible, thought = split_assistant_for_thought(content_text)
+    visible_after_pcmd, _ = process_pcmd_in_assistant_text(content_text)
+    visible, thought = split_assistant_for_thought(visible_after_pcmd)
     if thought or visible != content_text:
         msg["content"] = visible
     if thought:
