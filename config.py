@@ -93,6 +93,18 @@ WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY", "").strip()
 ALMANAC_API_URL = os.environ.get("ALMANAC_API_URL", "http://v.juhe.cn/laohuangli/d").strip()
 ALMANAC_API_KEY = os.environ.get("ALMANAC_API_KEY", "").strip()
 
+# WebSearch（Phase1：仅搜索，不抓取）
+WEBSEARCH_ENABLED = os.environ.get("WEBSEARCH_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+WEBSEARCH_PROVIDER_ORDER = [
+    x.strip().lower()
+    for x in os.environ.get("WEBSEARCH_PROVIDER_ORDER", "tavily").split(",")
+    if x.strip()
+]
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "").strip()
+TAVILY_SEARCH_ENDPOINT = os.environ.get("TAVILY_SEARCH_ENDPOINT", "https://api.tavily.com/search").strip()
+WEBSEARCH_TIMEOUT_SECONDS = int(os.environ.get("WEBSEARCH_TIMEOUT_SECONDS", "8"))
+WEBSEARCH_MAX_RESULTS = int(os.environ.get("WEBSEARCH_MAX_RESULTS", "5"))
+
 # 高德 Web 服务 Key（逆地理：经纬度→地址）；不配则只存经纬度、注入时只显示坐标
 AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "").strip()
 

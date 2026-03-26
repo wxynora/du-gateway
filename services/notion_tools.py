@@ -455,6 +455,9 @@ def execute_tool(name: str, arguments: dict) -> str:
     if name in ("get_time_info", "get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)
+    if name == "web_search":
+        from services.web_search_tools import execute_web_search
+        return execute_web_search(arguments if isinstance(arguments, dict) else {})
     if name in (
         "forum_http",
         "forum_uid_http",
