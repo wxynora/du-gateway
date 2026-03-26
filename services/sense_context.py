@@ -1,5 +1,5 @@
 # 设备感知（sense/latest.json）→ 渡的 system 注入。
-# battery + location（lat/lng）；其它 type 可先写入 R2，下阶段再补展示。
+# battery + location + health + music（当前播放）。
 # 字段约定见 docs/感知模块方案.md
 from __future__ import annotations
 
@@ -77,9 +77,42 @@ def _format_health_line(health: dict) -> str | None:
     return "，".join(parts)
 
 
+def _format_music_line(music: dict) -> str | None:
+    """格式化当前音乐：优先歌名，其次补充歌手/专辑与播放状态。"""
+    track = str(music.get("track") or "").strip()
+    artist = str(music.get("artist") or "").strip()
+    album = str(music.get("album") or "").strip()
+    playing = music.get("playing")
+
+    if not track and not artist and not album:
+        return None
+
+    parts: list[str] = []
+    if track:
+        parts.append(track)
+    if artist:
+        parts.append(artist)
+    if album:
+        parts.append(album)
+
+    state = ""
+    if playing is True or str(playing).lower() in ("true", "1", "yes", "on"):
+        state = "播放中"
+    elif playing is False or str(playing).lower() in ("false", "0", "no", "off"):
+        state = "已暂停"
+
+    text = " - ".join(parts) if parts else ""
+    if state:
+        if text:
+            text = f"{text}（{state}）"
+        else:
+            text = state
+    return f"音乐：{text}" if text else None
+
+
 def format_sense_snapshot_for_system() -> str:
     """
-    标题「老婆当前状态」+ 电量 / 定位 / 心率步数（有数据就注入）。
+    标题「老婆当前状态」+ 电量 / 定位 / 心率步数 / 音乐（有数据就注入）。
     """
     try:
         doc = r2_store.get_sense_latest()
@@ -92,10 +125,12 @@ def format_sense_snapshot_for_system() -> str:
     bat = _as_dict(doc.get("battery"))
     loc = _as_dict(doc.get("location"))
     health = _as_dict(doc.get("health"))
+    music = _as_dict(doc.get("music"))
     has_battery = bool(bat) and "level" in bat
     loc_line = _format_location_line(loc)
     health_line = _format_health_line(health)
-    if not has_battery and not loc_line and not health_line:
+    music_line = _format_music_line(music)
+    if not has_battery and not loc_line and not health_line and not music_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -111,6 +146,8 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(loc_line)
     if health_line:
         lines.append(health_line)
+    if music_line:
+        lines.append(music_line)
 
     body = "\n".join(lines)
     if len(body) > _MAX_SNAPSHOT_CHARS:
