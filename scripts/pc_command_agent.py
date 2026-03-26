@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 import webbrowser
 from pathlib import Path
@@ -58,6 +59,25 @@ def _headers() -> dict[str, str]:
     }
 
 
+def _safe_text(s: str) -> str:
+    text = str(s or "")
+    try:
+        text.encode(sys.stdout.encoding or "utf-8")
+        return text
+    except Exception:
+        return text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
+
+def _log(msg: str) -> None:
+    try:
+        print(_safe_text(msg))
+    except Exception:
+        try:
+            print(str(msg).encode("ascii", errors="replace").decode("ascii", errors="replace"))
+        except Exception:
+            pass
+
+
 def _audio_endpoint():
     from ctypes import POINTER, cast
     from comtypes import CLSCTX_ALL
@@ -68,11 +88,37 @@ def _audio_endpoint():
     return cast(interface, POINTER(IAudioEndpointVolume))
 
 
+def _mute_fallback_with_media_key() -> bool:
+    """
+    兜底静音：模拟系统静音媒体键（VK_VOLUME_MUTE=173）。
+    避免 pycaw/comtypes 在部分机器上接口不兼容导致静音失败。
+    """
+    try:
+        ps_exe = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+        if not Path(ps_exe).exists():
+            ps_exe = "powershell.exe"
+        subprocess.run(
+            [
+                ps_exe,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "(New-Object -ComObject WScript.Shell).SendKeys([char]173)",
+            ],
+            check=False,
+            timeout=8,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def execute_command(cmd: str) -> bool:
     cmd = (cmd or "").strip()
     if not cmd:
         return False
-    print(f"[PC] 执行指令: {cmd}")
+    _log(f"[PC] 执行指令: {cmd}")
     try:
         if cmd == "lock":
             import ctypes
@@ -112,9 +158,13 @@ def execute_command(cmd: str) -> bool:
             return True
 
         if cmd == "mute":
-            vol = _audio_endpoint()
-            vol.SetMute(1, None)
-            return True
+            try:
+                vol = _audio_endpoint()
+                vol.SetMute(1, None)
+                return True
+            except Exception as e:
+                _log(f"[PC] mute 主方案失败，尝试兜底: {e}")
+                return _mute_fallback_with_media_key()
 
         if cmd.startswith("volume:"):
             raw = cmd.split(":", 1)[1].strip()
@@ -169,16 +219,16 @@ def execute_command(cmd: str) -> bool:
             pyautogui.press("playpause")
             return True
 
-        print(f"[PC] 未支持指令: {cmd}")
+        _log(f"[PC] 未支持指令: {cmd}")
         return False
     except Exception as e:
-        print(f"[PC] 执行失败 {cmd}: {e}")
+        _log(f"[PC] 执行失败 {cmd}: {e}")
         return False
 
 
 def poll_once() -> None:
     if not GATEWAY_URL or not PC_COMMAND_TOKEN:
-        print("[PC] 缺少 GATEWAY_URL 或 PC_COMMAND_TOKEN，无法轮询")
+        _log("[PC] 缺少 GATEWAY_URL 或 PC_COMMAND_TOKEN，无法轮询")
         return
     base = GATEWAY_URL.rstrip("/")
     try:
@@ -188,7 +238,7 @@ def poll_once() -> None:
             timeout=20,
         )
         if res.status_code != 200:
-            print(f"[PC] 拉取失败 status={res.status_code} body={(res.text or '')[:200]}")
+            _log(f"[PC] 拉取失败 status={res.status_code} body={(res.text or '')[:200]}")
             return
         data: dict[str, Any] = res.json() if res.content else {}
         pending = data.get("pending") if isinstance(data, dict) else []
@@ -213,19 +263,19 @@ def poll_once() -> None:
                 timeout=20,
             )
             if ack.status_code != 200:
-                print(f"[PC] 回执失败 status={ack.status_code} body={(ack.text or '')[:200]}")
+                _log(f"[PC] 回执失败 status={ack.status_code} body={(ack.text or '')[:200]}")
                 return
             payload = ack.json() if ack.content else {}
             removed = payload.get("removedCount") if isinstance(payload, dict) else 0
-            print(f"[PC] 回执成功 done={len(done_ids)} removed={removed}")
+            _log(f"[PC] 回执成功 done={len(done_ids)} removed={removed}")
     except Exception as e:
-        print(f"[PC] 轮询异常: {e}")
+        _log(f"[PC] 轮询异常: {e}")
 
 
 def main() -> None:
-    print(f"[PC] 启动完成，每 {PC_POLL_SECONDS} 秒轮询一次")
+    _log(f"[PC] 启动完成，每 {PC_POLL_SECONDS} 秒轮询一次")
     if not GATEWAY_URL or not PC_COMMAND_TOKEN:
-        print("[PC] 请在桌面 .env（或系统环境变量）中设置 GATEWAY_URL 与 PC_COMMAND_TOKEN")
+        _log("[PC] 请在桌面 .env（或系统环境变量）中设置 GATEWAY_URL 与 PC_COMMAND_TOKEN")
     while True:
         poll_once()
         time.sleep(PC_POLL_SECONDS)
