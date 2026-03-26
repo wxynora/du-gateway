@@ -828,7 +828,7 @@ def miniapp_reasoning_latest():
                                 "id": tid,
                                 "name": name,
                                 "arguments": args_text,
-                                "result": tool_results_map.get(tid, ""),
+                                "result": tool_results_map.get(tid, str(tc.get("result") or "")),
                             }
                         )
             if not reasoning_text:

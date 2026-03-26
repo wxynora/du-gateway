@@ -457,6 +457,9 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             msg = {"role": "assistant", "content": visible}
             if full_reasoning:
                 msg["reasoning"] = full_reasoning
+            tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
+            if tc_trace:
+                msg["tool_calls"] = tc_trace
             round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             step_archive_and_maybe_summary(
@@ -625,6 +628,47 @@ def _append_tool_results_and_continue(body: dict, assistant_message: dict, tool_
     return body
 
 
+def _collect_tool_trace_from_messages(messages: list) -> list[dict]:
+    """
+    从消息链提取工具调用与结果，供存档后 MiniApp 展示。
+    返回项结构：{id,type,function:{name,arguments},result}
+    """
+    out: list[dict] = []
+    tool_result_by_id: dict[str, str] = {}
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "").strip().lower() != "tool":
+            continue
+        tid = str(m.get("tool_call_id") or "").strip()
+        if not tid:
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            tool_result_by_id[tid] = c
+        else:
+            try:
+                tool_result_by_id[tid] = json.dumps(c, ensure_ascii=False)
+            except Exception:
+                tool_result_by_id[tid] = str(c)
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "").strip().lower() != "assistant":
+            continue
+        tcs = m.get("tool_calls")
+        if not isinstance(tcs, list):
+            continue
+        for tc in tcs:
+            if not isinstance(tc, dict):
+                continue
+            tid = str(tc.get("id") or "").strip()
+            row = dict(tc)
+            row["result"] = tool_result_by_id.get(tid, "")
+            out.append(row)
+    return out
+
+
 def _static_models_response():
     """用 GATEWAY_MODELS 拼成 OpenAI 风格的 /v1/models 响应。"""
     if not GATEWAY_MODELS:
@@ -780,6 +824,9 @@ def chat_completions():
                         msg["reasoning"] = "".join(accumulated_reasoning_parts).strip()
             except Exception:
                 pass
+            tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
+            if tc_trace and isinstance(msg, dict) and not msg.get("tool_calls"):
+                msg["tool_calls"] = tc_trace
             last_user = _last_user_message(body.get("messages"))
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             if last_user:
