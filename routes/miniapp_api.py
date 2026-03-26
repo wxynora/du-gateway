@@ -684,7 +684,7 @@ def miniapp_reasoning_latest():
     返回最新思维链（默认 10 条）：
     - 优先最近窗口里最新的 tg_*
     - 回退最近窗口第一条
-    - 仅返回 reasoning，不返回原文 content
+    - 返回 reasoning + 工具调用/结果（用于 MiniApp COT 日志展示）
     """
     limit = request.args.get("limit", type=int, default=10)
     if limit < 1:
@@ -712,6 +712,28 @@ def miniapp_reasoning_latest():
         ts = (r.get("timestamp") or "").strip()
         msgs = r.get("messages") or []
         reasoning_text = ""
+        tool_calls_out = []
+        tool_results_map: dict[str, str] = {}
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            role = (m.get("role") or "").strip().lower()
+            if role != "tool":
+                continue
+            tid = (m.get("tool_call_id") or "").strip()
+            if not tid:
+                continue
+            content = m.get("content")
+            if content is None:
+                val = ""
+            elif isinstance(content, str):
+                val = content
+            else:
+                try:
+                    val = json.dumps(content, ensure_ascii=False)
+                except Exception:
+                    val = str(content)
+            tool_results_map[tid] = val
         for m in reversed(msgs):
             role = (m.get("role") or "").strip().lower() if isinstance(m, dict) else ""
             if role != "assistant":
@@ -723,13 +745,51 @@ def miniapp_reasoning_latest():
             )
             if val:
                 reasoning_text = val
+                tcs = m.get("tool_calls") or []
+                if isinstance(tcs, list):
+                    for tc in tcs:
+                        if not isinstance(tc, dict):
+                            continue
+                        tid = (tc.get("id") or "").strip()
+                        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                        name = (fn.get("name") or "").strip()
+                        args = fn.get("arguments")
+                        if args is None:
+                            args_text = ""
+                        elif isinstance(args, str):
+                            args_text = args
+                        else:
+                            try:
+                                args_text = json.dumps(args, ensure_ascii=False)
+                            except Exception:
+                                args_text = str(args)
+                        tool_calls_out.append(
+                            {
+                                "id": tid,
+                                "name": name,
+                                "arguments": args_text,
+                                "result": tool_results_map.get(tid, ""),
+                            }
+                        )
                 break
         if reasoning_text:
-            out.append({"index": idx, "timestamp": ts, "reasoning": reasoning_text})
+            out.append(
+                {
+                    "index": idx,
+                    "timestamp": ts,
+                    "reasoning": reasoning_text,
+                    "tool_calls": tool_calls_out,
+                }
+            )
         if len(out) >= limit:
             break
 
-    return jsonify({"ok": True, "window_id": target, "items": out, "count": len(out)})
+    resp = jsonify({"ok": True, "window_id": target, "items": out, "count": len(out)})
+    # 思维链刷新希望“按一下就见效”，这里显式禁缓存，避免移动端/代理命中旧响应。
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @bp.route("/schedule/items", methods=["GET"])
