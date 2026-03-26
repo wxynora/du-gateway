@@ -80,12 +80,28 @@ def execute_command(cmd: str) -> bool:
             ctypes.windll.user32.LockWorkStation()
             return True
 
-        if cmd == "shutdown":
-            subprocess.run(["shutdown", "/s", "/t", "60"], check=False)
+        if cmd == "shutdown" or cmd.startswith("shutdown:"):
+            sec = 60
+            if ":" in cmd:
+                raw_sec = cmd.split(":", 1)[1].strip()
+                if not raw_sec.isdigit():
+                    return False
+                sec = int(raw_sec)
+                if sec < 0 or sec > 86400:
+                    return False
+            subprocess.run(["shutdown", "/s", "/t", str(sec)], check=False)
             return True
 
-        if cmd == "restart":
-            subprocess.run(["shutdown", "/r", "/t", "60"], check=False)
+        if cmd == "restart" or cmd.startswith("restart:"):
+            sec = 60
+            if ":" in cmd:
+                raw_sec = cmd.split(":", 1)[1].strip()
+                if not raw_sec.isdigit():
+                    return False
+                sec = int(raw_sec)
+                if sec < 0 or sec > 86400:
+                    return False
+            subprocess.run(["shutdown", "/r", "/t", str(sec)], check=False)
             return True
 
         if cmd == "sleep":
@@ -121,9 +137,22 @@ def execute_command(cmd: str) -> bool:
             return True
 
         if cmd.startswith("open:"):
-            app = cmd.split(":", 1)[1].strip()
+            parts = cmd.split(":", 2)
+            app = (parts[1] if len(parts) > 1 else "").strip()
             if not app:
                 return False
+            note_text = (parts[2] if len(parts) > 2 else "").strip()
+            if app.lower() == "notepad" and note_text:
+                # 预填内容写入桌面临时文件，再用记事本打开，便于继续编辑
+                desktop = Path.home() / "Desktop"
+                desktop_alt = Path.home() / "OneDrive" / "Desktop"
+                base_dir = desktop if desktop.exists() else desktop_alt
+                if not base_dir.exists():
+                    base_dir = Path.cwd()
+                note_path = base_dir / "du_notepad_note.txt"
+                note_path.write_text(note_text + "\n", encoding="utf-8")
+                subprocess.Popen(["notepad.exe", str(note_path)], shell=False)
+                return True
             subprocess.Popen(["cmd", "/c", "start", "", app], shell=False)
             return True
 

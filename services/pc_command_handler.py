@@ -71,6 +71,19 @@ def validate_pc_command_for_queue(inner: str) -> Optional[str]:
     if low in ("lock", "shutdown", "restart", "sleep", "mute"):
         return low
 
+    if low.startswith("shutdown:") or low.startswith("restart:"):
+        parts = raw.split(":", 1)
+        if len(parts) != 2:
+            return None
+        action = parts[0].strip().lower()
+        sec_raw = parts[1].strip()
+        if not sec_raw.isdigit():
+            return None
+        sec = int(sec_raw)
+        if 0 <= sec <= 86400:
+            return f"{action}:{sec}"
+        return None
+
     if low.startswith("volume:"):
         rest = raw.split(":", 1)[1].strip()
         if not rest.isdigit():
@@ -93,10 +106,25 @@ def validate_pc_command_for_queue(inner: str) -> Optional[str]:
         return f"notify:{title}:{body}"
 
     if low.startswith("open:"):
-        arg = raw.split(":", 1)[1].strip() if ":" in raw else ""
-        canon = _open_app_canonical(arg)
+        rest = raw.split(":", 1)[1].strip() if ":" in raw else ""
+        if not rest:
+            return None
+        app_part = rest
+        note_text = ""
+        if ":" in rest:
+            app_part, note_text = rest.split(":", 1)
+            app_part = (app_part or "").strip()
+            note_text = (note_text or "").strip()
+        canon = _open_app_canonical(app_part)
         allow = {x.strip().lower() for x in (PC_OPEN_APP_ALLOWLIST or []) if x and str(x).strip()}
         if canon and canon in allow:
+            if note_text:
+                # 仅记事本支持携带预填内容，格式 open:notepad:内容
+                if canon != "notepad":
+                    return None
+                if len(note_text) > 4000:
+                    return None
+                return f"open:notepad:{note_text}"
             return f"open:{canon}"
         return None
 
