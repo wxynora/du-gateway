@@ -104,6 +104,9 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "").strip()
 TAVILY_SEARCH_ENDPOINT = os.environ.get("TAVILY_SEARCH_ENDPOINT", "https://api.tavily.com/search").strip()
 WEBSEARCH_TIMEOUT_SECONDS = int(os.environ.get("WEBSEARCH_TIMEOUT_SECONDS", "8"))
 WEBSEARCH_MAX_RESULTS = int(os.environ.get("WEBSEARCH_MAX_RESULTS", "5"))
+WEBSEARCH_FETCH_ENABLED = os.environ.get("WEBSEARCH_FETCH_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+WEBSEARCH_FETCH_TOP_K = int(os.environ.get("WEBSEARCH_FETCH_TOP_K", "2"))
+WEBSEARCH_MAX_PAGE_CHARS = int(os.environ.get("WEBSEARCH_MAX_PAGE_CHARS", "12000"))
 
 # 高德 Web 服务 Key（逆地理：经纬度→地址）；不配则只存经纬度、注入时只显示坐标
 AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "").strip()
