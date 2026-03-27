@@ -42,7 +42,7 @@ CoRead.default_settings = {
     -- chat | co_read_session
     mode = "co_read_session",
     -- 用于区分窗口记忆；建议填一个稳定值（例如 koreader）
-    window_id = "koreader",
+    window_id = "tg_8260066512",
     -- 可选：当你的网关需要额外鉴权时填 Bearer Token
     bearer_token = "",
     -- 单次上送片段最大字符数（超长会截断）
