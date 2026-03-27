@@ -95,19 +95,18 @@ def _format_music_line(music: dict) -> str | None:
     if album:
         parts.append(album)
 
-    state = ""
-    if playing is True or str(playing).lower() in ("true", "1", "yes", "on"):
-        state = "播放中"
-    elif playing is False or str(playing).lower() in ("false", "0", "no", "off"):
-        state = "已暂停"
-
     text = " - ".join(parts) if parts else ""
-    if state:
-        if text:
-            text = f"{text}（{state}）"
-        else:
-            text = state
     return f"音乐：{text}" if text else None
+
+
+def _format_music_playing_line(music: dict) -> str | None:
+    """单独格式化播放状态，便于在注入中直观看到当前是否在播。"""
+    playing = music.get("playing")
+    if playing is True or str(playing).lower() in ("true", "1", "yes", "on"):
+        return "播放状态：播放中"
+    if playing is False or str(playing).lower() in ("false", "0", "no", "off"):
+        return "播放状态：已暂停"
+    return None
 
 
 def format_sense_snapshot_for_system() -> str:
@@ -130,7 +129,8 @@ def format_sense_snapshot_for_system() -> str:
     loc_line = _format_location_line(loc)
     health_line = _format_health_line(health)
     music_line = _format_music_line(music)
-    if not has_battery and not loc_line and not health_line and not music_line:
+    music_playing_line = _format_music_playing_line(music)
+    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -148,6 +148,8 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(health_line)
     if music_line:
         lines.append(music_line)
+    if music_playing_line:
+        lines.append(music_playing_line)
 
     body = "\n".join(lines)
     if len(body) > _MAX_SNAPSHOT_CHARS:
