@@ -183,7 +183,10 @@ def execute_command(cmd: str) -> bool:
             parts = cmd.split(":", 2)
             title = (parts[1] if len(parts) > 1 else "渡").strip() or "渡"
             content = (parts[2] if len(parts) > 2 else "").strip()
-            notification.notify(title=title, message=content, timeout=5)
+            try:
+                notification.notify(title=title, message=content, timeout=5)
+            except Exception as e:
+                _log(f"[PC] 通知中心发送失败: {e}")
             return True
 
         if cmd.startswith("open:"):

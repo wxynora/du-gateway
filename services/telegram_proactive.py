@@ -105,6 +105,44 @@ def _hours_since_last(last_iso: Optional[str], now_bj: datetime) -> float:
     return max(0.0, delta.total_seconds() / 3600.0)
 
 
+def _pick_latest_iso(candidates: list[Optional[str]]) -> Optional[str]:
+    """从多个北京时间 ISO 中挑最近一个，非法值自动忽略。"""
+    latest_iso: Optional[str] = None
+    latest_dt: Optional[datetime] = None
+    for raw in candidates:
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        dt = parse_iso_to_beijing(s)
+        if not dt:
+            continue
+        if latest_dt is None or dt > latest_dt:
+            latest_dt = dt
+            latest_iso = s
+    return latest_iso
+
+
+def _get_last_message_activity_iso(uid: int) -> Optional[str]:
+    """
+    统一“最近消息活动”时间：
+    - 正常聊天/闹钟：取 tg 窗口最近一轮 conversation timestamp
+    - 用户主动发来消息：last_telegram_user_activity_at
+    - 主动消息：last_proactive_contact_at
+    三者取最近一个。
+    """
+    window_id = f"tg_{int(uid or 0)}"
+    last_round_iso = None
+    try:
+        rounds = r2_store.get_conversation_rounds(window_id, last_n=1) or []
+        if rounds and isinstance(rounds[0], dict):
+            last_round_iso = str(rounds[0].get("timestamp") or "").strip() or None
+    except Exception:
+        last_round_iso = None
+    last_user_iso = r2_store.get_last_telegram_user_activity_at()
+    last_proactive_iso = r2_store.get_last_proactive_contact_at()
+    return _pick_latest_iso([last_round_iso, last_user_iso, last_proactive_iso])
+
+
 def _probability(hours_since_last: float) -> float:
     try:
         p = float(TELEGRAM_PROACTIVE_BASE_P) + float(TELEGRAM_PROACTIVE_K_PER_HOUR) * float(hours_since_last)
@@ -251,7 +289,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     no_token = TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT"
     user_prompt = (
-        f"你现在在考虑要不要主动找老婆做一件事。距上次你主动联系大约 {hours_since_last:.1f} 小时。\n"
+        f"你现在在考虑要不要主动找老婆做一件事。距上次你们有消息互动大约 {hours_since_last:.1f} 小时。\n"
         "可以选：给她发 Telegram 消息、暂时不打扰、去写日记/记事、或其它你认为合适的动作。\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
         '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "other" 之一。\n'
@@ -494,7 +532,7 @@ def proactive_tick(target_user_id: int = 0) -> dict:
                         "minutes_ago": round(delta_minutes, 1),
                     }
 
-    last_iso = r2_store.get_last_proactive_contact_at()
+    last_iso = _get_last_message_activity_iso(uid)
     hours = _hours_since_last(last_iso, now_dt)
     p = _probability(hours)
     hit = random.random() < p
