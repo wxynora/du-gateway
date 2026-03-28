@@ -37,6 +37,10 @@ CoRead.default_settings = {
     gateway_chat_path = "/v1/chat/completions",
     -- 文档约定：/api/co-read/session（后续你实现后可切换到这里）
     gateway_co_read_path = "/api/co-read/session",
+    -- 保存划词注释时静默 POST（与网关 routes/koreader_api 一致）
+    gateway_koreader_path = "/api/koreader",
+    -- 是否与 KOReader AnnotationsModified（nb_notes_added=1）同步到网关
+    koreader_hook_enabled = true,
     -- chat | co_read_session
     mode = "co_read_session",
     -- 用于区分窗口记忆；建议填一个稳定值（例如 koreader）
@@ -148,6 +152,17 @@ function CoRead:addToMainMenu(menu_items)
                 callback = function()
                     self.runtime_settings.co_read_note_from_clipboard =
                         not self.runtime_settings.co_read_note_from_clipboard
+                    self:saveRuntimeSettings()
+                end,
+            },
+            {
+                text = _("划词保存注释时同步到网关（静默）"),
+                checked_func = function()
+                    return self.runtime_settings.koreader_hook_enabled ~= false
+                end,
+                callback = function()
+                    self.runtime_settings.koreader_hook_enabled =
+                        not (self.runtime_settings.koreader_hook_enabled ~= false)
                     self:saveRuntimeSettings()
                 end,
             },
@@ -296,6 +311,143 @@ function CoRead:guessChapterLabel(reader_highlight)
         if v then return tostring(v) end
     end
     return ""
+end
+
+-- 与 guessBookTitle 同源：从当前 ReaderUI 取书名（无 reader_highlight 时用 self.ui）
+function CoRead:bookTitleFromUi(ui)
+    ui = ui or self.ui
+    if ui and ui.doc_props and ui.doc_props.title and ui.doc_props.title ~= "" then
+        return tostring(ui.doc_props.title)
+    end
+    local doc = ui and ui.document
+    if doc and doc.file then
+        local file = tostring(doc.file)
+        return file:match("([^/\\]+)$") or file
+    end
+    return ""
+end
+
+function CoRead:bookAuthorFromUi(ui)
+    ui = ui or self.ui
+    local props = ui and ui.doc_props
+    if not props then
+        return ""
+    end
+    local a = props.authors or props.author
+    if type(a) == "table" then
+        a = table.concat(a, ", ")
+    end
+    return cleanupForPayload(tostring(a or ""))
+end
+
+-- 阅读进度 0–100；失败则 0（与 KOReader getCurrentPage / getPageCount 惯例一致）
+function CoRead:readingProgressPercent(ui)
+    ui = ui or self.ui
+    local doc = ui and ui.document
+    if not doc or not doc.getPageCount then
+        return 0
+    end
+    local total = doc:getPageCount()
+    if not total or total < 1 then
+        return 0
+    end
+    local cur
+    if ui.getCurrentPage then
+        cur = ui:getCurrentPage()
+    end
+    if not cur or cur < 1 then
+        return 0
+    end
+    return math.min(100, math.max(0, math.floor((cur / total) * 100 + 0.5)))
+end
+
+function CoRead:chapterForAnnotation(ui, ann)
+    if ann and ann.chapter and tostring(ann.chapter) ~= "" then
+        return tostring(ann.chapter)
+    end
+    local page = ann and ann.pageno
+    if ui and page and ui.toc and ui.toc.getTocTitleByPage then
+        local v = ui.toc:getTocTitleByPage(page)
+        if v then
+            return tostring(v)
+        end
+    end
+    return ""
+end
+
+-- KOReader 事件名 AnnotationsModified；须保留 on 前缀供框架派发。
+-- 仅在「高亮首次保存为带注释」时 readerbookmark 会带 nb_notes_added=1（见上游 setBookmarkNote）。
+function CoRead:onAnnotationsModified(items)
+    if self.runtime_settings.koreader_hook_enabled == false then
+        return
+    end
+    if type(items) ~= "table" or tonumber(items.nb_notes_added) ~= 1 then
+        return
+    end
+    local ann = items[1]
+    if not ann or not ann.drawer then
+        return
+    end
+    local hl = cleanupForPayload(ann.text or "")
+    if hl == "" then
+        return
+    end
+    local note_raw = ann.note
+    local note = (note_raw and cleanupForPayload(note_raw)) or ""
+
+    local ui = self.ui
+    local payload = {
+        book = {
+            title = self:bookTitleFromUi(ui),
+            author = self:bookAuthorFromUi(ui),
+            chapter = self:chapterForAnnotation(ui, ann),
+            progress = self:readingProgressPercent(ui),
+        },
+        highlight = hl,
+        note = note,
+        timestamp = os.time(),
+    }
+
+    UIManager:scheduleIn(0, function()
+        self:postKoreaderHighlightSilent(payload)
+    end)
+end
+
+-- 异步、失败仅 logger，不弹窗（与 doSendToDu 共用 postJson / 网关配置）
+function CoRead:postKoreaderHighlightSilent(payload)
+    UIManager:scheduleIn(0.08, function()
+        local settings = self.runtime_settings or {}
+        local base = (settings.gateway_base_url or ""):gsub("/$", "")
+        if base == "" then
+            return
+        end
+        local path = settings.gateway_koreader_path or "/api/koreader"
+        local url = base .. path
+        local wid = settings.window_id or ""
+        local bearer = settings.bearer_token or ""
+
+        local ok_enc, encoded = pcall(JSON.encode, payload)
+        if not ok_enc or type(encoded) ~= "string" or encoded == "" then
+            logger.err("du_co_read koreader JSON.encode 失败: " .. tostring(encoded))
+            return
+        end
+
+        local headers = {
+            ["Content-Type"] = "application/json; charset=utf-8",
+            ["content-length"] = tostring(#encoded),
+        }
+        if wid ~= "" then
+            headers["X-Window-Id"] = wid
+        end
+        if bearer ~= "" then
+            headers["Authorization"] = "Bearer " .. bearer
+        end
+
+        local ok, result = self:postJson(url, encoded, headers)
+        if not ok then
+            logger.warn("du_co_read koreader POST 失败: " .. tostring(result and result.kind or result))
+        end
+    end)
 end
 
 function CoRead:buildCoReadUserMessage(book_title, chapter_label, snippet, user_note)

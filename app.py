@@ -22,6 +22,7 @@ from routes.miniapp_api import bp as miniapp_api_bp
 from routes.mcp_api import bp as mcp_api_bp
 from routes.pc_command import bp as pc_command_bp
 from routes.co_read_api import bp as co_read_api_bp
+from routes.koreader_api import bp as koreader_api_bp
 from routes.html_preview import bp as html_preview_bp
 from config import MINIAPP_STATIC_DIR
 
@@ -37,6 +38,7 @@ app.register_blueprint(miniapp_api_bp)
 app.register_blueprint(mcp_api_bp)
 app.register_blueprint(pc_command_bp)
 app.register_blueprint(co_read_api_bp)
+app.register_blueprint(koreader_api_bp)
 app.register_blueprint(html_preview_bp)
 
 # Telegram（Webhook）运行时初始化：命令菜单等。放在 app 启动阶段，避免依赖 Blueprint 钩子。
