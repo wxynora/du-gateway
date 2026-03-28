@@ -235,8 +235,10 @@ HTML_PREVIEW_SECRET = os.environ.get("HTML_PREVIEW_SECRET", "").strip()
 HTML_PREVIEW_TTL_SECONDS = int(os.environ.get("HTML_PREVIEW_TTL_SECONDS", "7200"))  # 默认 2 小时
 HTML_PREVIEW_MAX_BYTES = int(os.environ.get("HTML_PREVIEW_MAX_BYTES", str(2 * 1024 * 1024)))  # 默认 2MB
 HTML_PREVIEW_MAX_ITEMS = int(os.environ.get("HTML_PREVIEW_MAX_ITEMS", "200"))
-# 返回 JSON 里完整预览 URL 的前缀；不填则用当前请求的 Host（反代后若不对请显式配置）
+# 预览链接用的公网根（https://域名，无尾斜杠）。勿填 127.0.0.1；与下面 GATEWAY_PUBLIC_BASE_URL 二选一或都填（前者优先）
 HTML_PREVIEW_PUBLIC_BASE_URL = os.environ.get("HTML_PREVIEW_PUBLIC_BASE_URL", "").strip().rstrip("/")
+# 网关对外访问根 URL（手机/外网能打开的域名）。Bot 仍可用 TELEGRAM_GATEWAY_URL=127.0.0.1 调本机，预览与工具拼链接会优先用本项
+GATEWAY_PUBLIC_BASE_URL = os.environ.get("GATEWAY_PUBLIC_BASE_URL", "").strip().rstrip("/")
 # 是否向模型注入 publish_html_preview 工具（默认开启；设 0 关闭）
 HTML_PREVIEW_TOOL_ENABLED = os.environ.get("HTML_PREVIEW_TOOL_ENABLED", "1").strip().lower() in (
     "1",

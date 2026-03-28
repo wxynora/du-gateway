@@ -7,8 +7,10 @@ import secrets
 import threading
 import time
 from typing import Any, Optional, Tuple, Union
+from urllib.parse import urlparse
 
 from config import (
+    GATEWAY_PUBLIC_BASE_URL,
     HTML_PREVIEW_MAX_BYTES,
     HTML_PREVIEW_MAX_ITEMS,
     HTML_PREVIEW_PUBLIC_BASE_URL,
@@ -36,9 +38,46 @@ def _trim_to_max() -> None:
         del _store[order.pop(0)]
 
 
+def _is_loopback_base(url: str) -> bool:
+    """本机地址不可给手机打开，预览链接一律不用。"""
+    u = (url or "").strip()
+    if not u:
+        return True
+    if not u.startswith(("http://", "https://")):
+        u = "https://" + u
+    try:
+        host = (urlparse(u).hostname or "").lower()
+    except Exception:
+        return True
+    if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        return True
+    if host.startswith("127."):
+        return True
+    return False
+
+
 def resolve_preview_base_url() -> str:
-    """生成分享链接用的站点根（无则空字符串）。"""
-    return (HTML_PREVIEW_PUBLIC_BASE_URL or TELEGRAM_GATEWAY_URL or "").strip().rstrip("/")
+    """
+    工具 publish_html_preview 拼链接：只认公网配置或非本机的 TELEGRAM_GATEWAY_URL。
+    """
+    for raw in (HTML_PREVIEW_PUBLIC_BASE_URL, GATEWAY_PUBLIC_BASE_URL, TELEGRAM_GATEWAY_URL):
+        base = (raw or "").strip().rstrip("/")
+        if base and not _is_loopback_base(base):
+            return base
+    return ""
+
+
+def resolve_preview_base_url_for_http_request(request_url_root: str) -> str:
+    """
+    HTTP POST /html-preview/：优先环境变量；仅当请求 Host 本身不是本机时，才用 request.url_root。
+    """
+    u = resolve_preview_base_url()
+    if u:
+        return u
+    root = (request_url_root or "").strip().rstrip("/")
+    if root and not _is_loopback_base(root):
+        return root
+    return ""
 
 
 def preview_url_for_token(token: str, base_override: Optional[str] = None) -> str:
@@ -48,7 +87,7 @@ def preview_url_for_token(token: str, base_override: Optional[str] = None) -> st
 
 def create_preview(html: str, url_base: Optional[str] = None) -> Tuple[bool, Union[dict, str]]:
     """
-    写入一条预览。url_base 非空时用于拼链接（HTTP 层可传 request.url_root）。
+    写入一条预览。url_base 由调用方传入时用于拼链接（HTTP 层传 resolve_preview_base_url_for_http_request 的结果）。
     返回 (True, {"url","token","expires_in"}) 或 (False, 错误说明)。
     """
     if html is None or (isinstance(html, str) and not html.strip()):
@@ -70,7 +109,11 @@ def create_preview(html: str, url_base: Optional[str] = None) -> Tuple[bool, Uni
 
     base = (url_base or "").strip().rstrip("/") if url_base else resolve_preview_base_url()
     if not base:
-        return False, "未配置 HTML_PREVIEW_PUBLIC_BASE_URL 或 TELEGRAM_GATEWAY_URL，无法生成可分享链接"
+        return (
+            False,
+            "未配置公网域名：请在 .env 设置 GATEWAY_PUBLIC_BASE_URL 或 HTML_PREVIEW_PUBLIC_BASE_URL（https://你的域名，勿用 127.0.0.1）；"
+            "Bot 可继续用 TELEGRAM_GATEWAY_URL=http://127.0.0.1:5000 调本机。",
+        )
 
     return True, {
         "url": preview_url_for_token(token, base),

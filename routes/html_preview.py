@@ -7,8 +7,12 @@ from typing import Optional
 
 from flask import Blueprint, Response, jsonify, request
 
-from config import HTML_PREVIEW_PUBLIC_BASE_URL, HTML_PREVIEW_SECRET
-from services.html_preview_store import create_preview, get_preview_row
+from config import HTML_PREVIEW_SECRET
+from services.html_preview_store import (
+    create_preview,
+    get_preview_row,
+    resolve_preview_base_url_for_http_request,
+)
 
 bp = Blueprint("html_preview", __name__, url_prefix="/html-preview")
 
@@ -56,7 +60,7 @@ def create_preview_http():
 
     if html is None:
         return jsonify({"ok": False, "error": "空内容"}), 400
-    base = HTML_PREVIEW_PUBLIC_BASE_URL or (request.url_root or "").rstrip("/")
+    base = resolve_preview_base_url_for_http_request(request.url_root or "")
     ok, payload = create_preview(html, url_base=base)
     if not ok:
         msg = str(payload)
@@ -64,6 +68,8 @@ def create_preview_http():
             return jsonify({"ok": False, "error": msg}), 413
         if msg == "内容为空":
             return jsonify({"ok": False, "error": msg}), 400
+        if "未配置公网域名" in msg:
+            return jsonify({"ok": False, "error": msg}), 503
         return jsonify({"ok": False, "error": msg}), 400
 
     data = payload  # ok 时为 dict
