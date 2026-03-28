@@ -324,8 +324,8 @@ function CoRead:postJson(url, body, headers)
         sink = ltn12.sink.table(response_chunks),
     }
 
-    -- 适度超时（避免卡死）
-    socketutil:set_timeout(10, 30)
+    -- 单次阻塞与整次请求上限都要留足：网关会再调 LLM，常超过 30s；原先 (10,30) 会误判成「网络错误」。
+    socketutil:set_timeout(45, 180)
     local ok_http, code, resp_headers, status = pcall(function()
         return socket.skip(1, http.request(request))
     end)
@@ -336,7 +336,17 @@ function CoRead:postJson(url, body, headers)
     end
 
     if resp_headers == nil then
-        return false, { kind = "network_error", code = code, status = status, body = nil }
+        local err_hint = tostring(code or "")
+        if err_hint == "timeout" or err_hint:find("timeout", 1, true) then
+            err_hint = err_hint .. " (" .. _("若网关已通，多为模型响应超过等待上限") .. ")"
+        end
+        return false, {
+            kind = "network_error",
+            code = code,
+            status = status,
+            detail = err_hint,
+            body = nil,
+        }
     end
 
     local resp_text = table.concat(response_chunks)
@@ -553,10 +563,24 @@ function CoRead:doSendToDu(book_title, chapter_label, snippet, user_note)
         safe_close(sending)
 
         if not ok then
-            local detail = result and (result.kind or result.detail) or ""
+            local detail = ""
+            if result then
+                if result.detail and result.detail ~= "" then
+                    detail = tostring(result.detail)
+                elseif result.kind == "network_error" then
+                    detail = _("无法连接网关或等待超时。")
+                        .. " "
+                        .. tostring(result.code or result.status or "")
+                else
+                    detail = tostring(result.kind or result.detail or "")
+                end
+            end
+            if detail == "" then
+                detail = _("未知错误")
+            end
             UIManager:show(InfoMessage:new{
-                text = _("发送失败：") .. tostring(detail),
-                timeout = 6,
+                text = _("发送失败：") .. detail,
+                timeout = 8,
             })
             return
         end
