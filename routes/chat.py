@@ -45,6 +45,10 @@ from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import r2_store, whitelist_store
 from services.du_thought import split_assistant_for_thought
+from services.html_preview_tools import (
+    merge_html_preview_urls_into_assistant_text,
+    missing_html_preview_url_suffix,
+)
 from services.pc_command_handler import (
     PcmdDuThoughtStreamState,
     process_pcmd_in_assistant_text,
@@ -444,6 +448,15 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             for ch in chunks:
                 yield transform_sse_chunk_bytes_pcmd(ch, du_state)
             content_parts.append(parsed.get("content") or "")
+            # 模型常不在正文复述预览链接：从 tool 结果补发 SSE + 存档拼接
+            suf = missing_html_preview_url_suffix(
+                parsed.get("content") or "", current_body.get("messages") or []
+            )
+            if suf:
+                extra_vis = du_state.feed_delta(suf)
+                if extra_vis:
+                    yield _sse_delta_chunk_bytes(extra_vis)
+                    content_parts.append(extra_vis)
             if parsed.get("reasoning"):
                 reasoning_parts.append(parsed.get("reasoning") or "")
             break
@@ -679,6 +692,35 @@ def _collect_tool_trace_from_messages(messages: list) -> list[dict]:
     return out
 
 
+def _sse_delta_chunk_bytes(delta_text: str) -> bytes:
+    """补发一段 OpenAI 风格 SSE，仅含 delta.content（用于工具后自动附带预览链接）。"""
+    payload = {
+        "choices": [
+            {"index": 0, "delta": {"content": delta_text}, "finish_reason": None},
+        ]
+    }
+    return ("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode("utf-8")
+
+
+def _merge_html_preview_into_nonstream_response(resp_json: dict, messages: list) -> dict:
+    """非流式：若调用了 publish_html_preview 但正文未含链接，写入 message.content。"""
+    if not resp_json or not isinstance(resp_json, dict):
+        return resp_json
+    choices = resp_json.get("choices") or []
+    if not choices:
+        return resp_json
+    msg = choices[0].get("message")
+    if not isinstance(msg, dict):
+        return resp_json
+    ct = msg.get("content")
+    if not isinstance(ct, str):
+        return resp_json
+    merged = merge_html_preview_urls_into_assistant_text(ct, messages)
+    if merged != ct:
+        msg["content"] = merged
+    return resp_json
+
+
 def _static_models_response():
     """用 GATEWAY_MODELS 拼成 OpenAI 风格的 /v1/models 响应。"""
     if not GATEWAY_MODELS:
@@ -817,6 +859,7 @@ def chat_completions():
             break
     if resp_json:
         resp_json = _apply_du_thought_to_assistant_response(resp_json)
+        resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
     if status == 200 and resp_json:
         cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):
