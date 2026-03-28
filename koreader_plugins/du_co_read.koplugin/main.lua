@@ -154,7 +154,13 @@ function CoRead:showSettingDialog(title, current_value, setter)
                     text = _("Cancel"),
                     id = "close",
                     callback = function()
-                        UIManager:close(dlg)
+                        -- 安卓上键盘未收起就关对话框，容易崩溃；先收键盘再延后关闭。
+                        if dlg.onCloseKeyboard then
+                            dlg:onCloseKeyboard()
+                        end
+                        UIManager:scheduleIn(0.08, function()
+                            UIManager:close(dlg)
+                        end)
                     end,
                 },
                 {
@@ -162,8 +168,23 @@ function CoRead:showSettingDialog(title, current_value, setter)
                     is_enter_default = true,
                     callback = function()
                         local v = dlg:getInputText()
-                        setter(v)
-                        UIManager:close(dlg)
+                        if dlg.onCloseKeyboard then
+                            dlg:onCloseKeyboard()
+                        end
+                        UIManager:scheduleIn(0.08, function()
+                            local ok_save, err_save = pcall(function()
+                                setter(v)
+                            end)
+                            if not ok_save then
+                                logger.err("du_co_read: 保存设置失败", err_save)
+                                UIManager:show(InfoMessage:new{
+                                    text = _("保存失败，请重试。"),
+                                    timeout = 4,
+                                })
+                                return
+                            end
+                            UIManager:close(dlg)
+                        end)
                     end,
                 },
             },
