@@ -210,6 +210,17 @@ function CoRead:onReaderReady()
         }
     end)
 
+    -- 附言在系统输入法里写好并复制，再点此项：不经过共读弹窗第三格，避免内置虚拟键盘打不了中文。
+    self.ui.highlight:addToHighlightDialog("du_co_read_clip", function(reader_highlight)
+        return {
+            text = _("发给渡（附言用剪贴板）"),
+            enabled = true,
+            callback = function()
+                CoRead.onSendSelectedClipboardNote(self, reader_highlight)
+            end,
+        }
+    end)
+
     self._highlight_button_added = true
 end
 
@@ -219,6 +230,39 @@ local function cleanupForPayload(s)
     s = s:gsub("%s+", " ")
     s = s:sub(1, 50000)
     return s
+end
+
+-- 安卓等平台上 Device.input 可读系统剪贴板，用于「附言用系统输入法写好再复制」。
+local function readClipboardAsNote()
+    local input = Device and Device.input
+    if not input or type(input.hasClipboardText) ~= "function" or type(input.getClipboardText) ~= "function" then
+        return ""
+    end
+    local ok_h, has = pcall(function()
+        return input.hasClipboardText()
+    end)
+    if not ok_h or not has then
+        return ""
+    end
+    local ok_t, text = pcall(function()
+        return input.getClipboardText()
+    end)
+    if not ok_t or not text or text == "" then
+        return ""
+    end
+    return cleanupForPayload(text)
+end
+
+-- 关掉高亮菜单后再执行 fn（勿在 fn 里再读 reader_highlight.selected_text）。
+function CoRead:afterHighlightMenuClosed(reader_highlight, fn)
+    UIManager:scheduleIn(0, function()
+        pcall(function()
+            if reader_highlight and reader_highlight.onClose then
+                reader_highlight:onClose(false)
+            end
+        end)
+        UIManager:scheduleIn(0.25, fn)
+    end)
 end
 
 function CoRead:guessBookTitle(reader_highlight)
@@ -340,66 +384,96 @@ function CoRead:onSendSelectedToDu(reader_highlight)
     local book_title = self:guessBookTitle(reader_highlight)
     local chapter_label = self:guessChapterLabel(reader_highlight)
 
-    -- 绝不能在高亮按钮的 callback 栈里同步 onClose：MIUI 上会触发 native 层
-    -- 「pthread_mutex_lock on destroyed mutex」（菜单/触摸/输入法互斥量未释放完就拆掉）。
-    -- 先 schedule 到下一拍再关高亮，再延后弹出共读输入框。
-    UIManager:scheduleIn(0, function()
-        pcall(function()
-            if reader_highlight and reader_highlight.onClose then
-                reader_highlight:onClose(false)
-            end
-        end)
-        UIManager:scheduleIn(0.25, function()
-            local note_dialog
-            note_dialog = MultiInputDialog:new{
-                title = _("共读：发给渡一起看"),
-                fields = {
-                    { text = book_title, hint = _("书名（可改）") },
-                    { text = chapter_label, hint = _("章节（可改/可留空）") },
-                    { text = "", hint = _("附言（可选）") },
-                },
-                buttons = {
+    -- 绝不能在高亮按钮 callback 栈里同步 onClose（MIUI 上易 native mutex 崩溃）。
+    self:afterHighlightMenuClosed(reader_highlight, function()
+        local note_dialog
+        note_dialog = MultiInputDialog:new{
+            title = _("共读：发给渡一起看"),
+            fields = {
+                { text = book_title, hint = _("书名（可改）") },
+                { text = chapter_label, hint = _("章节（可改/可留空）") },
+                { text = "", hint = _("附言（可选）") },
+            },
+            buttons = {
+                {
                     {
-                        {
-                            text = _("Cancel"),
-                            id = "close",
-                            callback = function()
-                                UIManager:close(note_dialog)
-                            end,
-                        },
-                        {
-                            text = _("发送"),
-                            is_enter_default = true,
-                            callback = function()
-                                local fields = note_dialog:getFields()
-                                local b = fields and fields[1] or ""
-                                local c = fields and fields[2] or ""
-                                local n = fields and fields[3] or ""
-                                UIManager:close(note_dialog)
-                                -- 等输入框与键盘完全收起后再走网络，减少 MIUI 上闪退。
-                                UIManager:scheduleIn(0.2, function()
-                                    self:doSendToDu(b, c, snippet, n)
-                                end)
-                            end,
-                        },
+                        text = _("Cancel"),
+                        id = "close",
+                        callback = function()
+                            UIManager:close(note_dialog)
+                        end,
+                    },
+                    {
+                        text = _("发送"),
+                        is_enter_default = true,
+                        callback = function()
+                            local fields = note_dialog:getFields()
+                            local b = fields and fields[1] or ""
+                            local c = fields and fields[2] or ""
+                            local n = fields and fields[3] or ""
+                            UIManager:close(note_dialog)
+                            UIManager:scheduleIn(0.2, function()
+                                self:doSendToDu(b, c, snippet, n)
+                            end)
+                        end,
                     },
                 },
-            }
-            UIManager:show(note_dialog)
-            -- 安卓上自动弹键盘易与 JNI/IME 状态机打架；让用户点输入框再出键盘更稳。
-            local auto_kb = true
-            if Device and type(Device.isAndroid) == "function" then
-                local ok, is_and = pcall(function()
-                    return Device:isAndroid()
-                end)
-                if ok and is_and then
-                    auto_kb = false
-                end
+            },
+        }
+        UIManager:show(note_dialog)
+        local auto_kb = true
+        if Device and type(Device.isAndroid) == "function" then
+            local ok, is_and = pcall(function()
+                return Device:isAndroid()
+            end)
+            if ok and is_and then
+                auto_kb = false
             end
-            if auto_kb and note_dialog.onShowKeyboard then
-                note_dialog:onShowKeyboard()
-            end
-        end)
+        end
+        if auto_kb and note_dialog.onShowKeyboard then
+            note_dialog:onShowKeyboard()
+        end
+    end)
+end
+
+-- 附言来自剪贴板（系统输入法里打好再复制）；书名/章节仍自动识别，无需第三格输入。
+function CoRead:onSendSelectedClipboardNote(reader_highlight)
+    if not (reader_highlight and reader_highlight.selected_text) then
+        UIManager:show(InfoMessage:new{ text = _("未获取到选中内容。") })
+        return
+    end
+
+    local selected = reader_highlight.selected_text
+    local snippet = cleanupForPayload(selected.text or "")
+    if snippet == "" then
+        UIManager:show(InfoMessage:new{ text = _("选中内容为空，请先选中一段文字/片段。") })
+        return
+    end
+
+    local max_chars = tonumber(self.runtime_settings.snippet_max_chars) or self.default_settings.snippet_max_chars
+    if #snippet > max_chars then
+        snippet = snippet:sub(1, max_chars) .. "…"
+    end
+
+    local user_note = readClipboardAsNote()
+    if user_note == "" then
+        UIManager:show(InfoMessage:new{
+            text = _("请先用系统输入法写好附言并复制到剪贴板，再点本项。\n（书名/章节仍会自动带上。）"),
+            timeout = 5,
+        })
+        return
+    end
+
+    local max_note = 4000
+    if #user_note > max_note then
+        user_note = user_note:sub(1, max_note) .. "…"
+    end
+
+    local book_title = self:guessBookTitle(reader_highlight)
+    local chapter_label = self:guessChapterLabel(reader_highlight)
+
+    self:afterHighlightMenuClosed(reader_highlight, function()
+        self:doSendToDu(book_title, chapter_label, snippet, user_note)
     end)
 end
 
