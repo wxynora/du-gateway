@@ -19,6 +19,7 @@ local logger = require("logger")
 local util = require("util")
 local Device = require("device")
 local Screen = Device.screen
+local NetworkMgr = require("ui/network/manager")
 
 local http = require("socket.http")
 local ltn12 = require("ltn12")
@@ -244,10 +245,9 @@ function CoRead:buildCoReadUserMessage(book_title, chapter_label, snippet, user_
     return msg
 end
 
-function CoRead:postJson(url, payload, headers)
+function CoRead:postJson(url, body, headers)
+    -- body 为已序列化的 JSON 字符串（便于统一设置 Content-Length，并避免编码异常直接把 UI 线程打崩）
     local response_chunks = {}
-    local body = JSON.encode(payload)
-
     local request = {
         url = url,
         method = "POST",
@@ -258,8 +258,14 @@ function CoRead:postJson(url, payload, headers)
 
     -- 适度超时（避免卡死）
     socketutil:set_timeout(10, 30)
-    local code, resp_headers, status = socket.skip(1, http.request(request))
+    local ok_http, code, resp_headers, status = pcall(function()
+        return socket.skip(1, http.request(request))
+    end)
     socketutil:reset_timeout()
+
+    if not ok_http then
+        return false, { kind = "http_exception", detail = tostring(code) }
+    end
 
     if resp_headers == nil then
         return false, { kind = "network_error", code = code, status = status, body = nil }
@@ -367,34 +373,29 @@ function CoRead:doSendToDu(book_title, chapter_label, snippet, user_note)
         gateway_url = base .. (settings.gateway_chat_path or "/v1/chat/completions")
     end
 
+    -- 不要在「发送」按钮回调栈里直接阻塞网络：部分安卓（尤其 MIUI）容易强退/崩溃。
+    -- 延后一帧再请求；发送中提示不要短 timeout 自动关，避免二次 close 把 UI 弄乱。
     local sending = InfoMessage:new{
         text = _("发送中…"),
-        timeout = 0.6,
     }
     UIManager:show(sending)
 
     local bearer = settings.bearer_token or ""
-    local headers = {
-        ["Content-Type"] = "application/json",
-    }
-    if bearer ~= "" then
-        headers["Authorization"] = "Bearer " .. bearer
-    end
+    local wid = settings.window_id or ""
+    local mode = settings.mode
 
     local payload
-    if settings.mode == "co_read_session" then
-        -- 未来模式：按文档直接调用共读会话接口
+    if mode == "co_read_session" then
         payload = {
-            window_id = settings.window_id or "",
+            window_id = wid,
             book_title = book_title,
             chapter_label = chapter_label,
             snippet = snippet,
             user_note = user_note or "",
         }
     else
-        -- 当前可跑通模式：走网关已有的 OpenAI 兼容 chat 管道
         payload = {
-            window_id = settings.window_id or "",
+            window_id = wid,
             stream = false,
             messages = {
                 {
@@ -405,38 +406,81 @@ function CoRead:doSendToDu(book_title, chapter_label, snippet, user_note)
         }
     end
 
-    local ok, result = self:postJson(gateway_url, payload, headers)
-    UIManager:close(sending)
+    UIManager:scheduleIn(0.05, function()
+        local function safe_close(widget)
+            if not widget then return end
+            pcall(function()
+                UIManager:close(widget)
+            end)
+        end
 
-    if not ok then
-        UIManager:show(InfoMessage:new{ text = _("发送失败：") .. tostring(result.kind or "") })
-        return
-    end
+        local function show_err(msg)
+            safe_close(sending)
+            UIManager:show(InfoMessage:new{ text = msg, timeout = 5 })
+        end
 
-    local resp = result.resp or {}
-    local assistant_content = ""
+        if NetworkMgr and NetworkMgr.isOnline and not NetworkMgr:isOnline() then
+            show_err(_("网络不可用，请先联网后再试。"))
+            return
+        end
 
-    if settings.mode == "co_read_session" then
-        -- co-read session 返回字段在你实现后再对齐；这里先做兜底
-        assistant_content = tostring(resp.du_reply or resp.reply or resp.content or resp._raw or "")
-    else
-        assistant_content = self:extractAssistantContent(resp)
-    end
+        local ok_enc, encoded = pcall(JSON.encode, payload)
+        if not ok_enc or type(encoded) ~= "string" or encoded == "" then
+            logger.err("du_co_read: JSON.encode 失败", encoded)
+            show_err(_("请求打包失败，请重试。"))
+            return
+        end
 
-    assistant_content = assistant_content:gsub("^%s+", "")
-    if assistant_content == "" then
-        assistant_content = _("已收到返回，但无法解析渡的内容。")
-    end
+        local headers = {
+            ["Content-Type"] = "application/json; charset=utf-8",
+            ["content-length"] = tostring(#encoded),
+        }
+        if wid ~= "" then
+            headers["X-Window-Id"] = wid
+        end
+        if bearer ~= "" then
+            headers["Authorization"] = "Bearer " .. bearer
+        end
 
-    local w = math.floor(math.min(Screen:getWidth(), Screen:getHeight()) * 0.95)
-    local h = math.floor(math.max(Screen:getHeight() * 0.55, 260))
-    UIManager:show(TextViewer:new{
-        title = _("渡的回应"),
-        show_menu = false,
-        text = assistant_content,
-        width = w,
-        height = h,
-    })
+        local ok, result = self:postJson(gateway_url, encoded, headers)
+        safe_close(sending)
+
+        if not ok then
+            local detail = result and (result.kind or result.detail) or ""
+            UIManager:show(InfoMessage:new{
+                text = _("发送失败：") .. tostring(detail),
+                timeout = 6,
+            })
+            return
+        end
+
+        local resp = result.resp or {}
+        local assistant_content = ""
+
+        if mode == "co_read_session" then
+            assistant_content = tostring(resp.du_reply or resp.reply or resp.content or resp._raw or "")
+        else
+            assistant_content = self:extractAssistantContent(resp)
+        end
+
+        if type(assistant_content) ~= "string" then
+            assistant_content = tostring(assistant_content or "")
+        end
+        assistant_content = assistant_content:gsub("^%s+", "")
+        if assistant_content == "" then
+            assistant_content = _("已收到返回，但无法解析渡的内容。")
+        end
+
+        local w = math.floor(math.min(Screen:getWidth(), Screen:getHeight()) * 0.95)
+        local h = math.floor(math.max(Screen:getHeight() * 0.55, 260))
+        UIManager:show(TextViewer:new{
+            title = _("渡的回应"),
+            show_menu = false,
+            text = assistant_content,
+            width = w,
+            height = h,
+        })
+    end)
 end
 
 return CoRead
