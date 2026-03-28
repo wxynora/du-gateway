@@ -230,6 +230,14 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 # 电脑指令队列鉴权：电脑端轮询/回执必须携带该 token
 PC_COMMAND_TOKEN = os.environ.get("PC_COMMAND_TOKEN", "").strip()
 
+# HTML 临时预览：POST 存稿、GET token 拉取整页（与聊天主链路无关）
+HTML_PREVIEW_SECRET = os.environ.get("HTML_PREVIEW_SECRET", "").strip()
+HTML_PREVIEW_TTL_SECONDS = int(os.environ.get("HTML_PREVIEW_TTL_SECONDS", "7200"))  # 默认 2 小时
+HTML_PREVIEW_MAX_BYTES = int(os.environ.get("HTML_PREVIEW_MAX_BYTES", str(2 * 1024 * 1024)))  # 默认 2MB
+HTML_PREVIEW_MAX_ITEMS = int(os.environ.get("HTML_PREVIEW_MAX_ITEMS", "200"))
+# 返回 JSON 里完整预览 URL 的前缀；不填则用当前请求的 Host（反代后若不对请显式配置）
+HTML_PREVIEW_PUBLIC_BASE_URL = os.environ.get("HTML_PREVIEW_PUBLIC_BASE_URL", "").strip().rstrip("/")
+
 # PC open: 白名单（逗号分隔，小写英文名）；[PCMD:open:xxx] 仅允许此处应用
 _PC_OPEN_APP_ALLOWLIST_STR = os.environ.get(
     "PC_OPEN_APP_ALLOWLIST",
