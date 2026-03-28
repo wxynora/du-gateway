@@ -450,6 +450,10 @@ def _append_content_to_page(page_id: str, content: str, add_timestamp: bool = Tr
 def execute_tool(name: str, arguments: dict) -> str:
     """执行单个工具（Notion、网关 sync、天气、黄历），返回给模型的字符串结果。"""
     from services.gateway_tools import SYNC_TOOL_NAMES, execute_gateway_tool
+    if name == "publish_html_preview":
+        from services.html_preview_tools import execute_publish_html_preview
+
+        return execute_publish_html_preview(arguments if isinstance(arguments, dict) else {})
     if name in SYNC_TOOL_NAMES:
         return execute_gateway_tool(name, arguments)
     if name in ("get_time_info", "get_weather", "get_almanac"):

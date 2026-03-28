@@ -237,6 +237,12 @@ HTML_PREVIEW_MAX_BYTES = int(os.environ.get("HTML_PREVIEW_MAX_BYTES", str(2 * 10
 HTML_PREVIEW_MAX_ITEMS = int(os.environ.get("HTML_PREVIEW_MAX_ITEMS", "200"))
 # 返回 JSON 里完整预览 URL 的前缀；不填则用当前请求的 Host（反代后若不对请显式配置）
 HTML_PREVIEW_PUBLIC_BASE_URL = os.environ.get("HTML_PREVIEW_PUBLIC_BASE_URL", "").strip().rstrip("/")
+# 是否向模型注入 publish_html_preview 工具（默认开启；设 0 关闭）
+HTML_PREVIEW_TOOL_ENABLED = os.environ.get("HTML_PREVIEW_TOOL_ENABLED", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # PC open: 白名单（逗号分隔，小写英文名）；[PCMD:open:xxx] 仅允许此处应用
 _PC_OPEN_APP_ALLOWLIST_STR = os.environ.get(

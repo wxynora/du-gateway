@@ -36,6 +36,7 @@ from pipeline.pipeline import (
     step_inject_notion_tools,
     step_inject_forum_tools,
     step_inject_websearch_tools,
+    step_inject_html_preview_tool,
     step_trim_messages_if_over_limit,
     step_archive_and_maybe_summary,
 )
@@ -773,6 +774,7 @@ def chat_completions():
     body = step_inject_notion_tools(body)
     body = step_inject_forum_tools(body)
     body = step_inject_websearch_tools(body)
+    body = step_inject_html_preview_tool(body)
     body = step_trim_messages_if_over_limit(body)
     if body.get("stream"):
         return _stream_response(_stream_with_r2_archive(body, headers, window_id))

@@ -3,41 +3,14 @@
 """
 from __future__ import annotations
 
-import secrets
-import threading
-import time
 from typing import Optional
 
 from flask import Blueprint, Response, jsonify, request
 
-from config import (
-    HTML_PREVIEW_MAX_BYTES,
-    HTML_PREVIEW_MAX_ITEMS,
-    HTML_PREVIEW_PUBLIC_BASE_URL,
-    HTML_PREVIEW_SECRET,
-    HTML_PREVIEW_TTL_SECONDS,
-)
+from config import HTML_PREVIEW_PUBLIC_BASE_URL, HTML_PREVIEW_SECRET
+from services.html_preview_store import create_preview, get_preview_row
 
 bp = Blueprint("html_preview", __name__, url_prefix="/html-preview")
-
-_lock = threading.Lock()
-# token -> {"html": str, "exp": float, "created": float}
-_store: dict[str, dict] = {}
-
-
-def _purge_expired() -> None:
-    now = time.time()
-    dead = [t for t, v in _store.items() if v["exp"] <= now]
-    for t in dead:
-        del _store[t]
-
-
-def _trim_to_max() -> None:
-    if len(_store) <= HTML_PREVIEW_MAX_ITEMS:
-        return
-    order = sorted(_store.keys(), key=lambda t: _store[t]["created"])
-    while len(_store) > HTML_PREVIEW_MAX_ITEMS and order:
-        del _store[order.pop(0)]
 
 
 def _extract_bearer_or_key() -> Optional[str]:
@@ -47,13 +20,8 @@ def _extract_bearer_or_key() -> Optional[str]:
     return (request.headers.get("X-HTML-Preview-Key") or "").strip() or None
 
 
-def _preview_url(token: str) -> str:
-    base = HTML_PREVIEW_PUBLIC_BASE_URL or (request.url_root or "").rstrip("/")
-    return f"{base}/html-preview/v/{token}"
-
-
 @bp.route("/", methods=["POST"])
-def create_preview():
+def create_preview_http():
     """存一段 HTML，返回带 token 的预览 URL（需密钥）。"""
     if not HTML_PREVIEW_SECRET:
         return jsonify({"ok": False, "error": "HTML_PREVIEW_SECRET 未配置"}), 503
@@ -74,7 +42,6 @@ def create_preview():
             return jsonify({"ok": False, "error": "html 须为字符串"}), 400
         html = raw
     elif ct in ("text/html", "text/plain"):
-        # text/plain 也收，方便 curl -d @file
         html = request.get_data(as_text=True)
     else:
         return (
@@ -89,33 +56,23 @@ def create_preview():
 
     if html is None:
         return jsonify({"ok": False, "error": "空内容"}), 400
-    encoded = html.encode("utf-8")
-    if len(encoded) > HTML_PREVIEW_MAX_BYTES:
-        return (
-            jsonify(
-                {
-                    "ok": False,
-                    "error": f"HTML 超过上限 {HTML_PREVIEW_MAX_BYTES} 字节",
-                }
-            ),
-            413,
-        )
+    base = HTML_PREVIEW_PUBLIC_BASE_URL or (request.url_root or "").rstrip("/")
+    ok, payload = create_preview(html, url_base=base)
+    if not ok:
+        msg = str(payload)
+        if "超过上限" in msg:
+            return jsonify({"ok": False, "error": msg}), 413
+        if msg == "内容为空":
+            return jsonify({"ok": False, "error": msg}), 400
+        return jsonify({"ok": False, "error": msg}), 400
 
-    token = secrets.token_urlsafe(32)
-    now = time.time()
-    exp = now + HTML_PREVIEW_TTL_SECONDS
-
-    with _lock:
-        _purge_expired()
-        _store[token] = {"html": html, "exp": exp, "created": now}
-        _trim_to_max()
-
+    data = payload  # ok 时为 dict
     return jsonify(
         {
             "ok": True,
-            "url": _preview_url(token),
-            "token": token,
-            "expires_in": HTML_PREVIEW_TTL_SECONDS,
+            "url": data["url"],
+            "token": data["token"],
+            "expires_in": data["expires_in"],
         }
     )
 
@@ -123,14 +80,8 @@ def create_preview():
 @bp.route("/v/<token>", methods=["GET"])
 def get_preview(token: str):
     """按 token 返回 HTML（无额外鉴权；token 需保密）。"""
-    if not token or len(token) > 200:
-        return Response("Not Found", status=404, mimetype="text/plain; charset=utf-8")
-
-    with _lock:
-        _purge_expired()
-        row = _store.get(token)
-
-    if not row or row["exp"] <= time.time():
+    row = get_preview_row(token)
+    if not row:
         return Response(
             "<!DOCTYPE html><html><head><meta charset=utf-8><title>预览失效</title></head>"
             "<body><p>链接已过期或无效。</p></body></html>",

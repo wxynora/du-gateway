@@ -1193,6 +1193,45 @@ def step_inject_websearch_tools(body: dict) -> dict:
     return body
 
 
+def step_inject_html_preview_tool(body: dict) -> dict:
+    """
+    注入 publish_html_preview：渡可把 HTML 发布为临时链接（与 /html-preview/ 共用存储）。
+    """
+    from config import HTML_PREVIEW_TOOL_ENABLED
+
+    if not HTML_PREVIEW_TOOL_ENABLED:
+        return body
+
+    from services.html_preview_tools import get_html_preview_tools_for_inject
+
+    tools = get_html_preview_tools_for_inject()
+    if not tools:
+        return body
+
+    body = copy.deepcopy(body)
+    existing = body.get("tools")
+    if isinstance(existing, list):
+        existing_names = set()
+        for t in existing:
+            if isinstance(t, dict):
+                fn = t.get("function") or {}
+                if isinstance(fn, dict):
+                    name = fn.get("name")
+                    if name:
+                        existing_names.add(name)
+        for t in tools:
+            fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+            if isinstance(fn, dict):
+                name = fn.get("name")
+                if name and name not in existing_names:
+                    existing.append(t)
+    else:
+        body["tools"] = tools
+
+    body["tool_choice"] = body.get("tool_choice") or "auto"
+    return body
+
+
 def step_inject_notion_search(body: dict, window_id: str) -> dict:
     """
     用用户最后一句话搜 Notion，把结果注入 system，渡就能直接「看到」相关 Notion 内容并引用。
