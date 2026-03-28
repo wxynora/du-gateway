@@ -15,7 +15,6 @@ local logger = require("logger")
 
 local util = require("util")
 local Device = require("device")
-local Screen = Device.screen
 local NetworkMgr = require("ui/network/manager")
 
 local http = require("socket.http")
@@ -46,6 +45,8 @@ CoRead.default_settings = {
     bearer_token = "",
     -- 单次上送片段最大字符数（超长会截断）
     snippet_max_chars = 4000,
+    -- 为 true 时：点「发给渡一起看」不再弹共读输入框，附言固定读系统剪贴板（系统输入法里先复制）。
+    co_read_note_from_clipboard = false,
 }
 
 function CoRead:loadRuntimeSettings()
@@ -139,6 +140,17 @@ function CoRead:addToMainMenu(menu_items)
                     )
                 end,
             },
+            {
+                text = _("共读附言：改用剪贴板（不弹编辑框）"),
+                checked_func = function()
+                    return self.runtime_settings.co_read_note_from_clipboard == true
+                end,
+                callback = function()
+                    self.runtime_settings.co_read_note_from_clipboard =
+                        not self.runtime_settings.co_read_note_from_clipboard
+                    self:saveRuntimeSettings()
+                end,
+            },
         },
     }
 end
@@ -191,37 +203,33 @@ function CoRead:showSettingDialog(title, current_value, setter)
 end
 
 function CoRead:onReaderReady()
-    if self._highlight_button_added then
-        return
-    end
-    if not (self.ui and self.ui.highlight and self.ui.highlight.addToHighlightDialog) then
-        return
-    end
+    -- 整段包 pcall：避免个别版本上注册高亮按钮失败导致日志里难查的静默问题。
+    local ok_reg, err_reg = pcall(function()
+        if self._highlight_button_added then
+            return
+        end
+        if not (self.ui and self.ui.highlight and self.ui.highlight.addToHighlightDialog) then
+            return
+        end
 
-    -- 挂在“选中高亮菜单”里；前提是你的 KOReader 长按默认动作需要弹出选择/编辑菜单（而不是直接查词）。
-    self.ui.highlight:addToHighlightDialog("du_co_read_send", function(reader_highlight)
-        return {
-            text = _("发给渡一起看"),
-            -- enabled 字段尽量用布尔值（避免不同版本里函数式 enabled 不生效）。
-            enabled = true,
-            callback = function()
-                CoRead.onSendSelectedToDu(self, reader_highlight)
-            end,
-        }
+        -- 只注册一个高亮按钮：部分设备/旧版上连续 addToHighlightDialog 两次曾导致异常。
+        -- 附言走剪贴板：在菜单里打开「共读附言：改用剪贴板」。
+        self.ui.highlight:addToHighlightDialog("du_co_read_send", function(reader_highlight)
+            return {
+                text = _("发给渡一起看"),
+                enabled = true,
+                callback = function()
+                    -- 必须用 self:xxx，且方法名不要以 on 开头，避免被 PluginLoader 包成沙箱后 dot 调用异常。
+                    self:sendSelectedToDu(reader_highlight)
+                end,
+            }
+        end)
+
+        self._highlight_button_added = true
     end)
-
-    -- 附言在系统输入法里写好并复制，再点此项：不经过共读弹窗第三格，避免内置虚拟键盘打不了中文。
-    self.ui.highlight:addToHighlightDialog("du_co_read_clip", function(reader_highlight)
-        return {
-            text = _("发给渡（附言用剪贴板）"),
-            enabled = true,
-            callback = function()
-                CoRead.onSendSelectedClipboardNote(self, reader_highlight)
-            end,
-        }
-    end)
-
-    self._highlight_button_added = true
+    if not ok_reg then
+        logger.err("du_co_read onReaderReady: " .. tostring(err_reg))
+    end
 end
 
 local function cleanupForPayload(s)
@@ -362,7 +370,8 @@ function CoRead:extractAssistantContent(chat_resp)
     return tostring(content)
 end
 
-function CoRead:onSendSelectedToDu(reader_highlight)
+-- 方法名勿用 on 前缀：KOReader 会把 on* 包成 HandlerSandbox，内部用 CoRead.onXxx(self) 易与部分版本不兼容。
+function CoRead:sendSelectedToDu(reader_highlight)
     if not (reader_highlight and reader_highlight.selected_text) then
         UIManager:show(InfoMessage:new{ text = _("未获取到选中内容。") })
         return
@@ -383,6 +392,26 @@ function CoRead:onSendSelectedToDu(reader_highlight)
 
     local book_title = self:guessBookTitle(reader_highlight)
     local chapter_label = self:guessChapterLabel(reader_highlight)
+
+    -- 菜单「共读附言：改用剪贴板」：不弹 MultiInputDialog，附言=剪贴板（系统里先复制）。
+    if self.runtime_settings.co_read_note_from_clipboard then
+        local user_note = readClipboardAsNote()
+        if user_note == "" then
+            UIManager:show(InfoMessage:new{
+                text = _("已开启「附言用剪贴板」。请先用系统输入法写好附言并复制，再点「发给渡一起看」。"),
+                timeout = 5,
+            })
+            return
+        end
+        local max_note = 4000
+        if #user_note > max_note then
+            user_note = user_note:sub(1, max_note) .. "…"
+        end
+        self:afterHighlightMenuClosed(reader_highlight, function()
+            self:doSendToDu(book_title, chapter_label, snippet, user_note)
+        end)
+        return
+    end
 
     -- 绝不能在高亮按钮 callback 栈里同步 onClose（MIUI 上易 native mutex 崩溃）。
     self:afterHighlightMenuClosed(reader_highlight, function()
@@ -433,47 +462,6 @@ function CoRead:onSendSelectedToDu(reader_highlight)
         if auto_kb and note_dialog.onShowKeyboard then
             note_dialog:onShowKeyboard()
         end
-    end)
-end
-
--- 附言来自剪贴板（系统输入法里打好再复制）；书名/章节仍自动识别，无需第三格输入。
-function CoRead:onSendSelectedClipboardNote(reader_highlight)
-    if not (reader_highlight and reader_highlight.selected_text) then
-        UIManager:show(InfoMessage:new{ text = _("未获取到选中内容。") })
-        return
-    end
-
-    local selected = reader_highlight.selected_text
-    local snippet = cleanupForPayload(selected.text or "")
-    if snippet == "" then
-        UIManager:show(InfoMessage:new{ text = _("选中内容为空，请先选中一段文字/片段。") })
-        return
-    end
-
-    local max_chars = tonumber(self.runtime_settings.snippet_max_chars) or self.default_settings.snippet_max_chars
-    if #snippet > max_chars then
-        snippet = snippet:sub(1, max_chars) .. "…"
-    end
-
-    local user_note = readClipboardAsNote()
-    if user_note == "" then
-        UIManager:show(InfoMessage:new{
-            text = _("请先用系统输入法写好附言并复制到剪贴板，再点本项。\n（书名/章节仍会自动带上。）"),
-            timeout = 5,
-        })
-        return
-    end
-
-    local max_note = 4000
-    if #user_note > max_note then
-        user_note = user_note:sub(1, max_note) .. "…"
-    end
-
-    local book_title = self:guessBookTitle(reader_highlight)
-    local chapter_label = self:guessChapterLabel(reader_highlight)
-
-    self:afterHighlightMenuClosed(reader_highlight, function()
-        self:doSendToDu(book_title, chapter_label, snippet, user_note)
     end)
 end
 
@@ -590,8 +578,13 @@ function CoRead:doSendToDu(book_title, chapter_label, snippet, user_note)
             assistant_content = _("已收到返回，但无法解析渡的内容。")
         end
 
-        local w = math.floor(math.min(Screen:getWidth(), Screen:getHeight()) * 0.95)
-        local h = math.floor(math.max(Screen:getHeight() * 0.55, 260))
+        local scr = Device and Device.screen
+        if not scr or not scr.getWidth then
+            show_err(_("无法获取屏幕尺寸，回应无法在窗口中显示。"))
+            return
+        end
+        local w = math.floor(math.min(scr:getWidth(), scr:getHeight()) * 0.95)
+        local h = math.floor(math.max(scr:getHeight() * 0.55, 260))
         UIManager:show(TextViewer:new{
             title = _("渡的回应"),
             show_menu = false,
