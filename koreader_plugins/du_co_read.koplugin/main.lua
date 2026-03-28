@@ -325,6 +325,7 @@ function CoRead:onSendSelectedToDu(reader_highlight)
         return
     end
 
+    -- 必须先拷贝数据：后面会关掉高亮菜单，selected_text 可能被清掉。
     local selected = reader_highlight.selected_text
     local snippet = cleanupForPayload(selected.text or "")
     if snippet == "" then
@@ -340,39 +341,53 @@ function CoRead:onSendSelectedToDu(reader_highlight)
     local book_title = self:guessBookTitle(reader_highlight)
     local chapter_label = self:guessChapterLabel(reader_highlight)
 
-    local note_dialog = MultiInputDialog:new{
-        title = _("共读：发给渡一起看"),
-        fields = {
-            { text = book_title, hint = _("书名（可改）") },
-            { text = chapter_label, hint = _("章节（可改/可留空）") },
-            { text = "", hint = _("附言（可选）") },
-        },
-        buttons = {
-            {
-                {
-                    text = _("Cancel"),
-                    id = "close",
-                    callback = function()
-                        UIManager:close(note_dialog)
-                    end,
-                },
-                {
-                    text = _("发送"),
-                    is_enter_default = true,
-                    callback = function()
-                        local fields = note_dialog:getFields()
-                        local b = fields and fields[1] or ""
-                        local c = fields and fields[2] or ""
-                        local n = fields and fields[3] or ""
+    -- 关键：不要在高亮「选择菜单」仍打开时叠 MultiInputDialog + 键盘。
+    -- 会与 ReaderHighlight / 虚拟键盘状态机打架 → 崩溃、且内置输入法切不了中文。
+    if reader_highlight.onClose then
+        pcall(function()
+            reader_highlight:onClose(false)
+        end)
+    end
 
-                        UIManager:close(note_dialog)
-                        self:doSendToDu(b, c, snippet, n)
-                    end,
+    UIManager:scheduleIn(0.15, function()
+        local note_dialog
+        note_dialog = MultiInputDialog:new{
+            title = _("共读：发给渡一起看"),
+            fields = {
+                { text = book_title, hint = _("书名（可改）") },
+                { text = chapter_label, hint = _("章节（可改/可留空）") },
+                { text = "", hint = _("附言（可选）") },
+            },
+            buttons = {
+                {
+                    {
+                        text = _("Cancel"),
+                        id = "close",
+                        callback = function()
+                            UIManager:close(note_dialog)
+                        end,
+                    },
+                    {
+                        text = _("发送"),
+                        is_enter_default = true,
+                        callback = function()
+                            local fields = note_dialog:getFields()
+                            local b = fields and fields[1] or ""
+                            local c = fields and fields[2] or ""
+                            local n = fields and fields[3] or ""
+                            UIManager:close(note_dialog)
+                            -- 等输入框与键盘完全收起后再走网络，减少 MIUI 上闪退。
+                            UIManager:scheduleIn(0.2, function()
+                                self:doSendToDu(b, c, snippet, n)
+                            end)
+                        end,
+                    },
                 },
             },
-        },
-    }
-    UIManager:show(note_dialog)
+        }
+        UIManager:show(note_dialog)
+        note_dialog:onShowKeyboard()
+    end)
 end
 
 function CoRead:doSendToDu(book_title, chapter_label, snippet, user_note)
@@ -423,7 +438,7 @@ function CoRead:doSendToDu(book_title, chapter_label, snippet, user_note)
         }
     end
 
-    UIManager:scheduleIn(0.05, function()
+    UIManager:scheduleIn(0.12, function()
         local function safe_close(widget)
             if not widget then return end
             pcall(function()
@@ -443,7 +458,7 @@ function CoRead:doSendToDu(book_title, chapter_label, snippet, user_note)
 
         local ok_enc, encoded = pcall(JSON.encode, payload)
         if not ok_enc or type(encoded) ~= "string" or encoded == "" then
-            logger.err("du_co_read: JSON.encode 失败", encoded)
+            logger.err("du_co_read JSON.encode 失败: " .. tostring(encoded))
             show_err(_("请求打包失败，请重试。"))
             return
         end
