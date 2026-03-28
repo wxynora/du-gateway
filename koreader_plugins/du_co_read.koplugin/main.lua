@@ -3,14 +3,11 @@
 --]]
 
 local Dispatcher = require("dispatcher") -- luacheck:ignore
-local DataStorage = require("datastorage")
 local InfoMessage = require("ui/widget/infomessage")
-local InputDialog = require("ui/widget/inputdialog")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local LuaSettings = require("luasettings")
 local _ = require("gettext")
 
 local JSON = require("json")
@@ -31,7 +28,8 @@ local CoRead = WidgetContainer:extend{
     is_doc_only = false,
 }
 
-local SETTINGS_FILE = "du_co_read.lua"
+-- 与 Wallabag / HighlightSync 等一致：走全局 G_reader_settings，避免单独 LuaSettings 文件在部分安卓上 flush 崩进程。
+local SETTINGS_KEY = "du_co_read"
 
 CoRead.default_settings = {
     -- 网关基址，例如 http://127.0.0.1:5000
@@ -50,29 +48,30 @@ CoRead.default_settings = {
     snippet_max_chars = 4000,
 }
 
-function CoRead:readSettings()
-    local s = LuaSettings:open(DataStorage:getSettingsDir() .. "/" .. SETTINGS_FILE)
-    s:readSetting("du_co_read", self.default_settings)
-    return s
-end
-
 function CoRead:loadRuntimeSettings()
-    local raw = self.settings:readSetting("du_co_read", self.default_settings) or {}
-    -- 简单兜底，避免 nil
-    for k, v in pairs(self.default_settings) do
-        if raw[k] == nil then raw[k] = v end
+    local raw = {}
+    if G_reader_settings and G_reader_settings.readSetting then
+        raw = G_reader_settings:readSetting(SETTINGS_KEY, {}) or {}
     end
-    self.runtime_settings = raw
+    if type(raw) ~= "table" then
+        raw = {}
+    end
+    local merged = {}
+    for k, v in pairs(self.default_settings) do
+        merged[k] = raw[k] ~= nil and raw[k] or v
+    end
+    self.runtime_settings = merged
 end
 
 function CoRead:saveRuntimeSettings()
-    self.settings:saveSetting("du_co_read", self.runtime_settings)
-    self.settings:flush()
+    if not (G_reader_settings and G_reader_settings.saveSetting) then
+        return
+    end
+    G_reader_settings:saveSetting(SETTINGS_KEY, self.runtime_settings)
 end
 
 function CoRead:init()
     self.ui.menu:registerToMainMenu(self)
-    self.settings = self:readSettings()
     self:loadRuntimeSettings()
     self._highlight_button_added = false
 end
@@ -145,46 +144,43 @@ function CoRead:addToMainMenu(menu_items)
 end
 
 function CoRead:showSettingDialog(title, current_value, setter)
-    local dlg = InputDialog:new{
+    -- 单字段用 MultiInputDialog（与内置插件一致），比 InputDialog 在安卓 MIUI 上稳得多。
+    local dlg
+    dlg = MultiInputDialog:new{
         title = title,
-        input = tostring(current_value or ""),
+        fields = {
+            {
+                text = tostring(current_value or ""),
+                hint = _("输入后点保存"),
+            },
+        },
         buttons = {
             {
                 {
                     text = _("Cancel"),
                     id = "close",
                     callback = function()
-                        -- 安卓上键盘未收起就关对话框，容易崩溃；先收键盘再延后关闭。
-                        if dlg.onCloseKeyboard then
-                            dlg:onCloseKeyboard()
-                        end
-                        UIManager:scheduleIn(0.08, function()
-                            UIManager:close(dlg)
-                        end)
+                        UIManager:close(dlg)
                     end,
                 },
                 {
                     text = _("Save"),
                     is_enter_default = true,
                     callback = function()
-                        local v = dlg:getInputText()
-                        if dlg.onCloseKeyboard then
-                            dlg:onCloseKeyboard()
-                        end
-                        UIManager:scheduleIn(0.08, function()
-                            local ok_save, err_save = pcall(function()
-                                setter(v)
-                            end)
-                            if not ok_save then
-                                logger.err("du_co_read: 保存设置失败", err_save)
-                                UIManager:show(InfoMessage:new{
-                                    text = _("保存失败，请重试。"),
-                                    timeout = 4,
-                                })
-                                return
-                            end
-                            UIManager:close(dlg)
+                        local fields = dlg:getFields()
+                        local v = fields and fields[1] or ""
+                        local ok_save, err_save = pcall(function()
+                            setter(v)
                         end)
+                        if not ok_save then
+                            logger.err("du_co_read save err: " .. tostring(err_save))
+                            UIManager:show(InfoMessage:new{
+                                text = _("保存失败，请重试。"),
+                                timeout = 4,
+                            })
+                            return
+                        end
+                        UIManager:close(dlg)
                     end,
                 },
             },
