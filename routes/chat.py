@@ -783,6 +783,8 @@ def chat_completions():
     body = _normalize_request_model(body)
     headers = dict(request.headers) if request.headers else {}
     window_id = _get_window_id_from_request(body)
+    # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
+    window_id = r2_store.normalize_window_id(window_id)
     # 记录最近窗口，供 MiniApp 思维链面板展示可选窗口列表
     try:
         wid_for_recent = window_id if (window_id or "").strip() else "__default__"

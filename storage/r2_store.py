@@ -80,9 +80,48 @@ _pc_command_write_lock = threading.Lock()
 from utils.log import get_logger
 logger = get_logger(__name__)
 
-# 每个窗口在 R2 下的前缀
+# 客户端未传 window_id（如 RikkaHub 默认）时在 R2 中使用的固定 id，与 chat 白名单记录一致
+WINDOW_ID_DEFAULT = "__default__"
+# 历史 bug：空 window_id 时主存写在 windows//conversation.json（prefix 为 "windows/"）
+LEGACY_EMPTY_CONVERSATION_KEY = "windows//conversation.json"
+
+
+def normalize_window_id(window_id: str) -> str:
+    """空或仅空白视为默认窗口，保证轮次累计与总结触发与显式 id 一致。"""
+    w = (window_id or "").strip()
+    return w if w else WINDOW_ID_DEFAULT
+
+
 def _prefix(window_id: str) -> str:
-    return f"windows/{window_id}"
+    return f"windows/{normalize_window_id(window_id)}"
+
+
+def _read_conversation_data_with_legacy_migrate(window_id: str) -> dict:
+    """
+    读取主存 conversation.json；若默认窗口在新路径无数据而 legacy（windows//）有，则迁移到新路径后返回。
+    """
+    client = _s3_client()
+    if not client:
+        return {}
+    wid = normalize_window_id(window_id)
+    prefix = _prefix(wid)
+    key = _get_key(prefix, "conversation.json")
+    data = _read_json(client, key) or {}
+    rounds = data.get("rounds")
+    if isinstance(rounds, list) and len(rounds) > 0:
+        return data
+    if wid == WINDOW_ID_DEFAULT:
+        legacy = _read_json(client, LEGACY_EMPTY_CONVERSATION_KEY) or {}
+        leg_rounds = legacy.get("rounds")
+        if isinstance(leg_rounds, list) and len(leg_rounds) > 0:
+            try:
+                _write_json(client, key, legacy)
+                logger.info("已迁移对话主存 %s -> %s", LEGACY_EMPTY_CONVERSATION_KEY, key)
+            except Exception as e:
+                logger.error("迁移 legacy 对话失败 error=%s", e, exc_info=True)
+                return legacy
+            return legacy
+    return data
 
 
 def _s3_client():
@@ -153,7 +192,7 @@ def _write_json(client, key: str, data: Any):
 
 def _conversations_key_for_date(window_id: str, date: str) -> str:
     """conversations/日期/window_<id>.json，用于按日期备份。"""
-    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in window_id)
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in normalize_window_id(window_id))
     return f"conversations/{date}/window_{safe_id}.json"
 
 
@@ -169,10 +208,11 @@ def append_conversation_round(window_id: str, round_index: int, messages: list, 
         logger.info("R2 未存档：未配置 R2 凭证（R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY）")
         return False
     try:
+        wid_norm = normalize_window_id(window_id)
         prefix = _prefix(window_id)
         key = _get_key(prefix, "conversation.json")
-        existing = _read_json(client, key)
-        if existing is None:
+        existing = _read_conversation_data_with_legacy_migrate(window_id)
+        if not existing.get("rounds"):
             existing = {"rounds": []}
         ts = (timestamp or "").strip() or now_beijing_iso()
         round_entry = {"index": round_index, "timestamp": ts, "messages": messages}
@@ -183,7 +223,7 @@ def append_conversation_round(window_id: str, round_index: int, messages: list, 
         conv_key = _conversations_key_for_date(window_id, today)
         conv_existing = _read_json(client, conv_key)
         if conv_existing is None:
-            conv_existing = {"window_id": window_id, "date": today, "rounds": []}
+            conv_existing = {"window_id": wid_norm, "date": today, "rounds": []}
         conv_existing.setdefault("rounds", []).append(round_entry)
         _write_json(client, conv_key, conv_existing)
         logger.info("R2 已写入 对话轮次 window_id=%s round_index=%s key=%s", window_id, round_index, key)
@@ -301,11 +341,7 @@ def get_next_round_index(window_id: str) -> int:
     client = _s3_client()
     if not client:
         return 1
-    if not (window_id or "").strip():
-        return 1
-    prefix = _prefix(window_id)
-    key = _get_key(prefix, "conversation.json")
-    data = _read_json(client, key)
+    data = _read_conversation_data_with_legacy_migrate(window_id)
     if not data or not data.get("rounds"):
         return 1
     rounds = data.get("rounds") or []
@@ -325,12 +361,9 @@ def get_next_round_index(window_id: str) -> int:
 
 def get_conversation_rounds(window_id: str, last_n: int = 4) -> list:
     """获取该窗口最近 N 轮对话原文（只读对象尾部，避免整文件过大时一次载入全部 rounds）。"""
-    client = _s3_client()
-    if not client:
+    if not _s3_client():
         return []
-    prefix = _prefix(window_id)
-    key = _get_key(prefix, "conversation.json")
-    data = _read_json(client, key)
+    data = _read_conversation_data_with_legacy_migrate(window_id)
     if not data or not data.get("rounds"):
         return []
     rounds = data["rounds"][-last_n:]
@@ -341,12 +374,9 @@ def get_conversation_round_by_index(window_id: str, round_index: int) -> Optiona
     """读取该窗口指定 index 的轮次（返回 {index,timestamp,messages} 或 None）。"""
     if round_index < 1:
         return None
-    client = _s3_client()
-    if not client:
+    if not _s3_client():
         return None
-    prefix = _prefix(window_id)
-    key = _get_key(prefix, "conversation.json")
-    data = _read_json(client, key)
+    data = _read_conversation_data_with_legacy_migrate(window_id)
     if not data or not data.get("rounds"):
         return None
     for r in data.get("rounds") or []:
@@ -380,12 +410,9 @@ def list_conversation_rounds_preview(window_id: str, preview_chars: int = 24) ->
     列出该窗口所有轮次的序号 + 前几个字预览（便于管理端定位 round_index）。
     返回：[{ "index": 1, "preview": "user:... | assistant:..." }, ...]
     """
-    client = _s3_client()
-    if not client:
+    if not _s3_client():
         return []
-    prefix = _prefix(window_id)
-    key = _get_key(prefix, "conversation.json")
-    data = _read_json(client, key)
+    data = _read_conversation_data_with_legacy_migrate(window_id)
     if not data or not data.get("rounds"):
         return []
 
@@ -426,7 +453,7 @@ def delete_conversation_round(window_id: str, round_index: int) -> bool:
     try:
         prefix = _prefix(window_id)
         key = _get_key(prefix, "conversation.json")
-        data = _read_json(client, key)
+        data = _read_conversation_data_with_legacy_migrate(window_id)
         if not data or not data.get("rounds"):
             return False
         new_rounds = [r for r in data["rounds"] if r.get("index") != round_index]
@@ -436,7 +463,7 @@ def delete_conversation_round(window_id: str, round_index: int) -> bool:
         data["rounds"] = new_rounds
         _write_json(client, key, data)
         # 回溯删除 conversations/ 下按日期备份
-        safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in window_id)
+        safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in normalize_window_id(window_id))
         suffix = f"/window_{safe_id}.json"
         token = None
         deleted_backup_files = 0
@@ -725,19 +752,12 @@ def update_latest_4_rounds_global(rounds: list) -> bool:
 
 
 def has_window_history(window_id: str) -> bool:
-    """该窗口是否已有过存档（有则不是新窗口）。空 window_id 视为无历史，走新窗逻辑。"""
-    if not (window_id and window_id.strip()):
+    """该窗口是否已有过存档（有则不是新窗口）。空 window_id 等价于默认窗口。"""
+    if not _s3_client():
         return False
-    client = _s3_client()
-    if not client:
-        return False
-    prefix = _prefix(window_id)
-    key = _get_key(prefix, "conversation.json")
-    try:
-        client.head_object(Bucket=R2_BUCKET_NAME, Key=key)
-        return True
-    except Exception:
-        return False
+    data = _read_conversation_data_with_legacy_migrate(window_id)
+    rounds = data.get("rounds") if isinstance(data, dict) else None
+    return isinstance(rounds, list) and len(rounds) > 0
 
 
 def get_last_proactive_contact_at() -> Optional[str]:
@@ -1745,15 +1765,9 @@ def get_window_conversation_rounds(window_id: str) -> int:
     """
     统计单个窗口的对话轮次数。
     """
-    wid = (window_id or "").strip()
-    if not wid:
-        return 0
-    client = _s3_client()
-    if not client:
-        return 0
+    wid = normalize_window_id(window_id)
     try:
-        key = _get_key(_prefix(wid), "conversation.json")
-        data = _read_json(client, key)
+        data = _read_conversation_data_with_legacy_migrate(window_id)
         rounds = (data or {}).get("rounds") if isinstance(data, dict) else None
         if isinstance(rounds, list):
             return len(rounds)
