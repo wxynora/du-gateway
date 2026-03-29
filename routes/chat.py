@@ -3,6 +3,7 @@ import json
 import queue
 import threading
 import time
+from datetime import datetime, timezone
 import requests
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
@@ -20,6 +21,8 @@ from config import (
     STREAM_TIMEOUT_SECONDS,
     STREAM_SSE_HEARTBEAT_SECONDS,
     STREAM_SSE_FLUSH_MAX_MS,
+    RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED,
+    RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -598,6 +601,86 @@ def _last_user_message(messages):
     return None
 
 
+def _extract_last_user_text(messages) -> str:
+    for m in reversed(messages or []):
+        if (m.get("role") or "").lower() != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            return (content or "").strip().lower()
+        if isinstance(content, list):
+            parts = []
+            for c in content:
+                if isinstance(c, dict) and (c.get("type") or "").lower() == "text":
+                    parts.append(str(c.get("text") or ""))
+            return " ".join(parts).strip().lower()
+        return str(content or "").strip().lower()
+    return ""
+
+
+def _parse_iso_ts(ts: str):
+    if not ts:
+        return None
+    s = str(ts).strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _is_suspected_rikkahub_phantom_one(body: dict, window_id: str, headers: dict) -> bool:
+    """拦截 RikkaHub 偶发误发的单独 '1'（短时间内紧跟上一轮）。"""
+    if not RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED:
+        return False
+    ua = (headers.get("User-Agent") or "").lower()
+    if "rikkahub" not in ua:
+        return False
+    cur_user = (_extract_last_user_text(body.get("messages") or []) or "").strip()
+    if cur_user not in ("1", "１"):
+        return False
+    try:
+        rounds = r2_store.get_conversation_rounds(window_id, last_n=1) or []
+        if not rounds:
+            return False
+        last_round = rounds[-1] if isinstance(rounds[-1], dict) else {}
+        last_ts = _parse_iso_ts(str(last_round.get("timestamp") or ""))
+        if not last_ts:
+            return False
+        gap_s = (datetime.now(timezone.utc) - last_ts.astimezone(timezone.utc)).total_seconds()
+        if gap_s < 0 or gap_s > max(1, int(RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS or 90)):
+            return False
+        prev_user = (_extract_last_user_text(last_round.get("messages") or []) or "").strip()
+        if prev_user in ("1", "１"):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _build_noop_chat_response(body: dict) -> dict:
+    model = (body.get("model") or "noop")
+    return {
+        "id": f"chatcmpl_noop_{int(time.time())}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "（检测到客户端误触发，已忽略本次空输入）"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+
 def _apply_du_thought_to_assistant_response(resp_json: dict) -> dict:
     """
     剥离助手回复中的心事块（老婆侧不可见）；若存在闭合块则写入 R2。
@@ -799,6 +882,16 @@ def chat_completions():
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    if _is_suspected_rikkahub_phantom_one(body, window_id, headers):
+        logger.warning("命中 RikkaHub 幽灵1保护：window_id=%s ua=%s", window_id, (headers.get("User-Agent") or "")[:80])
+        if body.get("stream"):
+            def _ghost_noop_stream():
+                yield _sse_delta_chunk_bytes("（检测到客户端误触发，已忽略本次空输入）")
+                yield b"data: [DONE]\n\n"
+
+            return _stream_response(_ghost_noop_stream())
+        return jsonify(_build_noop_chat_response(body)), 200
+
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, window_id)
     body = step_clean_for_forward(body)
@@ -818,7 +911,7 @@ def chat_completions():
     body = step_inject_notion_tools(body)
     body = step_inject_forum_tools(body)
     body = step_inject_websearch_tools(body)
-    body = step_inject_html_preview_tool(body)
+    body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
     body = step_trim_messages_if_over_limit(body)
     if body.get("stream"):
         return _stream_response(_stream_with_r2_archive(body, headers, window_id))

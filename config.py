@@ -181,6 +181,11 @@ FAILED_RESPONSE_ERROR_KEYWORDS = [k.strip() for k in _FAILED_KEYWORDS_STR.split(
 DYNAMIC_MEMORY_TOP_N = int(os.environ.get("DYNAMIC_MEMORY_TOP_N", "5"))
 # 动态层：记忆有效天数，超期参与权重衰减
 DYNAMIC_MEMORY_DAYS_VALID = 7
+# 动态层边缘落盘淘汰（不碰 core_cache）：同时满足「综合权重 ≤ 阈值」且「距上次提及 ≥ N 天」则从 current.json 与向量索引删除。关：DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED=0
+_marg_prune_en = os.environ.get("DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED", "1").strip().lower()
+DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED = _marg_prune_en in ("1", "true", "yes", "on")
+DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT = float(os.environ.get("DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT", "2"))
+DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS = int(os.environ.get("DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS", "10"))
 
 # 记忆注入上限（总结+动态层合计）。
 # 默认按“字符数”控制：窗口记忆总结注入量与 R2 中 summary 上限是一套（约 8000 字符）。
@@ -245,6 +250,12 @@ HTML_PREVIEW_TOOL_ENABLED = os.environ.get("HTML_PREVIEW_TOOL_ENABLED", "1").str
     "true",
     "yes",
 )
+# RikkaHub 客户端对工具流解析有已知问题：默认不对其 UA 注入 HTML 预览工具（设 0 则恢复注入）
+HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA = os.environ.get("HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # PC open: 白名单（逗号分隔，小写英文名）；[PCMD:open:xxx] 仅允许此处应用
 _PC_OPEN_APP_ALLOWLIST_STR = os.environ.get(
@@ -295,6 +306,14 @@ TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_S
 
 # Telegram 上下文缓存：每次请求网关时携带最近 N 轮（user+assistant=一轮两条消息），默认 4
 TELEGRAM_CONTEXT_LAST_TURNS = int(os.environ.get("TELEGRAM_CONTEXT_LAST_TURNS", "4"))
+
+# RikkaHub 客户端偶发“幽灵 1”误发保护：短时间内收到单独 "1" 时拦截为 no-op（仅 RikkaHub UA）
+RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED = os.environ.get("RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS = int(os.environ.get("RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS", "90"))
 # 表情包 sendPhoto：内容区长边像素上限（默认 100；0 表示不缩放，需 Pillow）
 # 重要：即使缩成 100×100，Telegram 仍会把「整张照片」按气泡宽度拉伸，单图仍会占满宽、看起来很大。
 # 真正让「画面里人/脸变小」靠的是下面「大画布」：小图贴中心、四周留白，拉宽的是整张画布，主体只占中间比例。

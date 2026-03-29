@@ -12,6 +12,9 @@ from config import (
     SUMMARY_EVERY_N_ROUNDS,
     DYNAMIC_MEMORY_DAYS_VALID,
     DYNAMIC_MEMORY_TOP_N,
+    DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED,
+    DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT,
+    DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS,
     ASSISTANT_TIME_KEYWORDS,
     ASSISTANT_LUNAR_KEYWORDS,
     REPLY_GAP_THRESHOLD_MINUTES,
@@ -771,18 +774,43 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str],
     return out
 
 
-def _memory_weight(m: dict) -> float:
+def _memory_weight(m: dict, now=None) -> float:
     """权重 = 基础重要度 + 提及加成 - 时间衰减。"""
     importance = int(m.get("importance") or 0)
     mention_count = int(m.get("mention_count") or 0)
-    from utils.time_aware import parse_iso_to_beijing, _now_beijing, now_beijing_iso
+    from utils.time_aware import parse_iso_to_beijing, _now_beijing
+
+    now = now or _now_beijing()
     last_mentioned = m.get("last_mentioned") or m.get("created_at") or ""
     dt = parse_iso_to_beijing(last_mentioned)
     if dt is None:
-        dt = _now_beijing()
-    days_since = (_now_beijing() - dt).days
+        dt = now
+    days_since = (now - dt).days
+    if days_since < 0:
+        days_since = 0
     time_decay = min(days_since * 0.5, 10)  # 每天 0.5，上限 10
-    return importance + mention_count - time_decay
+    return float(importance + mention_count - time_decay)
+
+
+def _is_marginal_dynamic_memory_for_prune(mem: dict, now) -> bool:
+    """
+    边缘化记忆：综合权重已很低且距上次提及已久，可从动态层落盘删除（不碰 core_cache）。
+    与「7 天内仍允许注入」的 _is_dynamic_memory_valid 无关。
+    """
+    if not DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED:
+        return False
+    from utils.time_aware import parse_iso_to_beijing
+
+    last_mentioned = mem.get("last_mentioned") or mem.get("created_at") or ""
+    dt = parse_iso_to_beijing(last_mentioned)
+    if dt is None:
+        return False
+    days_since = (now - dt).days
+    if days_since < 0:
+        days_since = 0
+    if days_since < DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS:
+        return False
+    return _memory_weight(mem, now) <= DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT
 
 
 def _is_dynamic_memory_valid(mem: dict, now=None) -> bool:
@@ -866,6 +894,36 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     memories = r2_store.get_dynamic_memory_list()
     if not memories:
         return body
+    # 动态层边缘落盘淘汰：权重很低且时间已久 → 从 current.json 物理删除并同步向量索引（不碰 core_cache）
+    from utils.time_aware import _now_beijing, now_beijing_iso
+
+    now = _now_beijing()
+    before_n = len(memories)
+    pruned = [mem for mem in memories if not _is_marginal_dynamic_memory_for_prune(mem, now)]
+    if len(pruned) < before_n:
+        removed_ids = {
+            str(m.get("id"))
+            for m in memories
+            if m.get("id") and _is_marginal_dynamic_memory_for_prune(m, now)
+        }
+        if r2_store.save_dynamic_memory_list(pruned):
+            try:
+                from memory_vector.vector_index_store import remove_memory_ids_from_all_indices
+
+                n_rm = remove_memory_ids_from_all_indices(removed_ids)
+                logger.info(
+                    "动态层边缘淘汰：条数 %s -> %s，索引删除记录数=%s（max_weight=%s min_days=%s）",
+                    before_n,
+                    len(pruned),
+                    n_rm,
+                    DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT,
+                    DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS,
+                )
+            except Exception as e:
+                logger.warning("动态层边缘淘汰后索引清理失败 error=%s", e, exc_info=True)
+    memories = pruned
+    # 注入侧仍只使用「7 天内」记忆，与落盘淘汰规则独立
+    memories = [mem for mem in memories if _is_dynamic_memory_valid(mem, now)]
     messages = body.get("messages") or []
     # 取最后一条 user 内容做关键词
     last_user_text = ""
@@ -883,10 +941,6 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     if _is_memory_meta_query(last_user_text):
         return body
     keywords = _extract_keywords(last_user_text)
-    # 只保留有效期内（7 天）的记忆（按北京时间）
-    from utils.time_aware import _now_beijing, now_beijing_iso
-    now = _now_beijing()
-    memories = [mem for mem in memories if _is_dynamic_memory_valid(mem, now)]
     if not memories:
         return body
 
@@ -1193,13 +1247,17 @@ def step_inject_websearch_tools(body: dict) -> dict:
     return body
 
 
-def step_inject_html_preview_tool(body: dict) -> dict:
+def step_inject_html_preview_tool(body: dict, user_agent: str = "") -> dict:
     """
     注入 publish_html_preview：渡可把 HTML 发布为临时链接（与 /html-preview/ 共用存储）。
+    user_agent：请求 User-Agent；RikkaHub 默认跳过注入（见 HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA）。
     """
-    from config import HTML_PREVIEW_TOOL_ENABLED
+    from config import HTML_PREVIEW_TOOL_ENABLED, HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA
 
     if not HTML_PREVIEW_TOOL_ENABLED:
+        return body
+    if HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA and "rikkahub" in (user_agent or "").lower():
+        logger.info("跳过 HTML 预览工具注入（RikkaHub UA）")
         return body
 
     from services.html_preview_tools import get_html_preview_tools_for_inject
