@@ -39,6 +39,11 @@ flask run
 
 默认监听 `http://0.0.0.0:5000`。
 
+### 电脑控制脚本自启动
+
+- macOS：运行 `zsh scripts/install_pc_command_launchagent.sh`，会安装为当前用户登录后自动启动的 `LaunchAgent`
+- 手动启动：运行 `zsh scripts/run_pc_command_agent.sh`
+
 ## 请求流水线
 
 1. **窗口识别 + 白名单**：请求头 `X-Window-Id` 为窗口 ID；在白名单内走完整流程，否则只转发。

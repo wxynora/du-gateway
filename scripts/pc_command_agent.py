@@ -1,5 +1,5 @@
 """
-Windows 电脑控制常驻脚本：
+电脑控制常驻脚本（Windows / macOS）：
 - 轮询网关 GET /api/pc_command
 - 执行指令
 - 成功项按 id 回执 POST /api/pc_command/done
@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -25,19 +26,14 @@ from dotenv import load_dotenv
 
 
 def _load_env_files() -> None:
-    """自动加载环境变量：优先桌面 .env，其次脚本同目录 .env。"""
-    candidates: list[Path] = []
-    home = Path.home()
-    candidates.append(home / "Desktop" / ".env")
-    candidates.append(home / "OneDrive" / "Desktop" / ".env")
-    candidates.append(Path(__file__).resolve().parent / ".env")
-    for p in candidates:
-        try:
-            if p.exists() and p.is_file():
-                load_dotenv(p, override=False)
-                print(f"[PC] 已加载环境变量文件: {p}")
-        except Exception as e:
-            print(f"[PC] 加载环境变量文件失败 {p}: {e}")
+    """自动加载环境变量：只读取下载目录下的 .env。"""
+    env_path = Path.home() / "Downloads" / ".env"
+    try:
+        if env_path.exists() and env_path.is_file():
+            load_dotenv(env_path, override=False)
+            print(f"[PC] 已加载环境变量文件: {env_path}")
+    except Exception as e:
+        print(f"[PC] 加载环境变量文件失败 {env_path}: {e}")
 
 
 _load_env_files()
@@ -70,10 +66,10 @@ def _safe_text(s: str) -> str:
 
 def _log(msg: str) -> None:
     try:
-        print(_safe_text(msg))
+        print(_safe_text(msg), flush=True)
     except Exception:
         try:
-            print(str(msg).encode("ascii", errors="replace").decode("ascii", errors="replace"))
+            print(str(msg).encode("ascii", errors="replace").decode("ascii", errors="replace"), flush=True)
         except Exception:
             pass
 
@@ -86,6 +82,85 @@ def _audio_endpoint():
     devices = AudioUtilities.GetSpeakers()
     interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
+
+
+def _is_windows() -> bool:
+    return sys.platform.startswith("win")
+
+
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _run_command(args: list[str], timeout: int = 15) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        check=False,
+        timeout=timeout,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_osascript(script: str, timeout: int = 15) -> bool:
+    try:
+        res = _run_command(["osascript", "-e", script], timeout=timeout)
+        if res.returncode == 0:
+            return True
+        _log(f"[PC] osascript 失败 code={res.returncode} stderr={(res.stderr or '').strip()[:300]}")
+        return False
+    except Exception as e:
+        _log(f"[PC] osascript 执行异常: {e}")
+        return False
+
+
+def _desktop_dir() -> Path:
+    desktop = Path.home() / "Desktop"
+    desktop_alt = Path.home() / "OneDrive" / "Desktop"
+    if desktop.exists():
+        return desktop
+    if desktop_alt.exists():
+        return desktop_alt
+    return Path.cwd()
+
+
+def _mac_app_name(name: str) -> str:
+    aliases = {
+        "notepad": "TextEdit",
+        "wechat": "WeChat",
+    }
+    text = (name or "").strip()
+    return aliases.get(text.lower(), text)
+
+
+def _mac_shutdown_args(restart: bool, sec: int) -> list[str]:
+    action = "-r" if restart else "-h"
+    if sec <= 0:
+        when = "now"
+    else:
+        when = f"+{ceil(sec / 60)}"
+    return ["sudo", "-n", "shutdown", action, when]
+
+
+def _mac_notify(title: str, content: str) -> bool:
+    escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    escaped_body = content.replace("\\", "\\\\").replace('"', '\\"')
+    script = f'display notification "{escaped_body}" with title "{escaped_title}" sound name "Glass"'
+    return _run_osascript(script)
+
+
+def _mac_media_play() -> bool:
+    primary = 'tell application "Music" to playpause'
+    if _run_osascript(primary):
+        return True
+    try:
+        import pyautogui
+
+        pyautogui.press("playpause")
+        return True
+    except Exception as e:
+        _log(f"[PC] media:play 兜底失败: {e}")
+        return False
 
 
 def _mute_fallback_with_media_key() -> bool:
@@ -121,10 +196,16 @@ def execute_command(cmd: str) -> bool:
     _log(f"[PC] 执行指令: {cmd}")
     try:
         if cmd == "lock":
-            import ctypes
+            if _is_windows():
+                import ctypes
 
-            ctypes.windll.user32.LockWorkStation()
-            return True
+                ctypes.windll.user32.LockWorkStation()
+                return True
+            if _is_macos():
+                return _run_osascript(
+                    'tell application "System Events" to keystroke "q" using {control down, command down}'
+                )
+            return False
 
         if cmd == "shutdown" or cmd.startswith("shutdown:"):
             sec = 60
@@ -135,8 +216,16 @@ def execute_command(cmd: str) -> bool:
                 sec = int(raw_sec)
                 if sec < 0 or sec > 86400:
                     return False
-            subprocess.run(["shutdown", "/s", "/t", str(sec)], check=False)
-            return True
+            if _is_windows():
+                subprocess.run(["shutdown", "/s", "/t", str(sec)], check=False)
+                return True
+            if _is_macos():
+                res = _run_command(_mac_shutdown_args(restart=False, sec=sec))
+                if res.returncode == 0:
+                    return True
+                _log(f"[PC] shutdown 失败，请确认已配置免密码 sudo。stderr={(res.stderr or '').strip()[:300]}")
+                return False
+            return False
 
         if cmd == "restart" or cmd.startswith("restart:"):
             sec = 60
@@ -147,24 +236,44 @@ def execute_command(cmd: str) -> bool:
                 sec = int(raw_sec)
                 if sec < 0 or sec > 86400:
                     return False
-            subprocess.run(["shutdown", "/r", "/t", str(sec)], check=False)
-            return True
+            if _is_windows():
+                subprocess.run(["shutdown", "/r", "/t", str(sec)], check=False)
+                return True
+            if _is_macos():
+                res = _run_command(_mac_shutdown_args(restart=True, sec=sec))
+                if res.returncode == 0:
+                    return True
+                _log(f"[PC] restart 失败，请确认已配置免密码 sudo。stderr={(res.stderr or '').strip()[:300]}")
+                return False
+            return False
 
         if cmd == "sleep":
-            subprocess.run(
-                ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
-                check=False,
-            )
-            return True
+            if _is_windows():
+                subprocess.run(
+                    ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
+                    check=False,
+                )
+                return True
+            if _is_macos():
+                res = _run_command(["pmset", "sleepnow"])
+                if res.returncode == 0:
+                    return True
+                _log(f"[PC] sleep 失败 stderr={(res.stderr or '').strip()[:300]}")
+                return False
+            return False
 
         if cmd == "mute":
-            try:
-                vol = _audio_endpoint()
-                vol.SetMute(1, None)
-                return True
-            except Exception as e:
-                _log(f"[PC] mute 主方案失败，尝试兜底: {e}")
-                return _mute_fallback_with_media_key()
+            if _is_windows():
+                try:
+                    vol = _audio_endpoint()
+                    vol.SetMute(1, None)
+                    return True
+                except Exception as e:
+                    _log(f"[PC] mute 主方案失败，尝试兜底: {e}")
+                    return _mute_fallback_with_media_key()
+            if _is_macos():
+                return _run_osascript("set volume with output muted")
+            return False
 
         if cmd.startswith("volume:"):
             raw = cmd.split(":", 1)[1].strip()
@@ -173,21 +282,31 @@ def execute_command(cmd: str) -> bool:
             value = int(raw)
             if value < 0 or value > 100:
                 return False
-            vol = _audio_endpoint()
-            vol.SetMasterVolumeLevelScalar(value / 100.0, None)
-            return True
+            if _is_windows():
+                vol = _audio_endpoint()
+                vol.SetMasterVolumeLevelScalar(value / 100.0, None)
+                return True
+            if _is_macos():
+                return _run_osascript(f"set volume output volume {value}")
+            return False
 
         if cmd.startswith("notify:"):
-            from plyer import notification
-
             parts = cmd.split(":", 2)
             title = (parts[1] if len(parts) > 1 else "渡").strip() or "渡"
             content = (parts[2] if len(parts) > 2 else "").strip()
+            if _is_macos():
+                if _mac_notify(title, content):
+                    return True
             try:
+                from plyer import notification
+
                 notification.notify(title=title, message=content, timeout=5)
+                return True
             except Exception as e:
                 _log(f"[PC] 通知中心发送失败: {e}")
-            return True
+            if _is_macos():
+                return _mac_notify(title, content)
+            return False
 
         if cmd.startswith("open:"):
             parts = cmd.split(":", 2)
@@ -196,18 +315,23 @@ def execute_command(cmd: str) -> bool:
                 return False
             note_text = (parts[2] if len(parts) > 2 else "").strip()
             if app.lower() == "notepad" and note_text:
-                # 预填内容写入桌面临时文件，再用记事本打开，便于继续编辑
-                desktop = Path.home() / "Desktop"
-                desktop_alt = Path.home() / "OneDrive" / "Desktop"
-                base_dir = desktop if desktop.exists() else desktop_alt
-                if not base_dir.exists():
-                    base_dir = Path.cwd()
-                note_path = base_dir / "du_notepad_note.txt"
+                # 预填内容写入桌面临时文件，再打开默认编辑器，便于继续编辑
+                note_path = _desktop_dir() / "du_notepad_note.txt"
                 note_path.write_text(note_text + "\n", encoding="utf-8")
-                subprocess.Popen(["notepad.exe", str(note_path)], shell=False)
+                if _is_windows():
+                    subprocess.Popen(["notepad.exe", str(note_path)], shell=False)
+                    return True
+                if _is_macos():
+                    subprocess.Popen(["open", "-a", "TextEdit", str(note_path)], shell=False)
+                    return True
+                return False
+            if _is_windows():
+                subprocess.Popen(["cmd", "/c", "start", "", app], shell=False)
                 return True
-            subprocess.Popen(["cmd", "/c", "start", "", app], shell=False)
-            return True
+            if _is_macos():
+                subprocess.Popen(["open", "-a", _mac_app_name(app)], shell=False)
+                return True
+            return False
 
         if cmd.startswith("url:"):
             url = cmd.split(":", 1)[1].strip()
@@ -217,10 +341,16 @@ def execute_command(cmd: str) -> bool:
             return True
 
         if cmd == "media:play":
-            import pyautogui
+            if _is_macos():
+                return _mac_media_play()
+            try:
+                import pyautogui
 
-            pyautogui.press("playpause")
-            return True
+                pyautogui.press("playpause")
+                return True
+            except Exception as e:
+                _log(f"[PC] media:play 执行失败: {e}")
+                return False
 
         _log(f"[PC] 未支持指令: {cmd}")
         return False

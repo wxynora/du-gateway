@@ -363,6 +363,18 @@ def _schedule_due_occurrence_key(it: dict, now_dt: datetime) -> str:
     return f"{iid}|weekly|{now_dt.strftime('%Y-%m-%d')}"
 
 
+def _item_already_fired_for_occurrence(it: dict, occ_key: str) -> bool:
+    """
+    条目级兜底去重：
+    - 正常情况依赖 schedule/fired.json
+    - 若 fired 持久化偶发失败，仍避免同一次 occurrence 重复提醒
+    """
+    last_key = str(it.get("last_fired_occurrence_key") or "").strip()
+    if not last_key:
+        return False
+    return last_key == occ_key
+
+
 def _schedule_target_dt_for_now(it: dict, now_dt: datetime) -> Optional[datetime]:
     if not bool(it.get("enabled", True)):
         return None
@@ -450,6 +462,8 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         occ_key = _schedule_due_occurrence_key(it, now_dt)
         if occ_key in fired:
             continue
+        if _item_already_fired_for_occurrence(it, occ_key):
+            continue
         title = str(it.get("title") or "提醒").strip() or "提醒"
         note = str(it.get("note") or "").strip()
         rep = str(it.get("repeat") or "once").strip().lower() or "once"
@@ -475,6 +489,9 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         r2_store.add_schedule_fired_key(occ_key)
         fired.add(occ_key)
         sent += 1
+        it["last_fired_at"] = now_iso
+        it["last_fired_occurrence_key"] = occ_key
+        changed = True
         # 一次性提醒触发后自动禁用，避免重复参与检查
         if rep == "once" and bool(it.get("enabled", True)):
             it["enabled"] = False
