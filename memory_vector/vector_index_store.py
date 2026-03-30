@@ -143,3 +143,34 @@ def list_existing_tags() -> list[str]:
         out.append(t)
     return out
 
+
+def remove_memory_ids_from_all_indices(memory_ids: set[str]) -> int:
+    """
+    从 R2 上所有 tag 的动态层向量索引里删除指定 memory_id。
+    用于动态层落盘淘汰过期记忆后，避免索引里残留死记录。
+    """
+    ids = {str(x).strip() for x in (memory_ids or set()) if str(x).strip()}
+    if not ids:
+        return 0
+    removed_total = 0
+    for tag in list_existing_tags():
+        idx = load_index(tag)
+        old = idx.get("records") or []
+        if not old:
+            continue
+        new_recs: list[dict] = []
+        dropped = 0
+        for r in old:
+            mid = str((r or {}).get("memory_id") or "").strip()
+            if mid in ids:
+                dropped += 1
+                continue
+            new_recs.append(r)
+        if dropped:
+            idx["records"] = new_recs
+            if save_index(tag, idx):
+                removed_total += dropped
+            else:
+                logger.warning("remove_memory_ids_from_all_indices 写回失败 tag=%s dropped=%s", tag, dropped)
+    return removed_total
+

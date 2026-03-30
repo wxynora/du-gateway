@@ -748,19 +748,32 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str],
         sim_ctx = float(cosine(q_emb_ctx, emb)) if q_emb_ctx else 0.0
         return sim_user, sim_ctx
 
-    scored: list[tuple[float, dict]] = []
+    scored: list[tuple[float, float, float, dict]] = []
     for mid, mem in by_id.items():
         sem_user, sem_ctx = _semantic_pair(mem)
         weight = _memory_weight(mem)
         src = int(source_count.get(mid) or 0)
         # 双语义相关：原始用户句优先 + 上下文语义兜底，再融合历史权重与多源命中
         score = sem_user * 0.50 + sem_ctx * 0.20 + weight * 0.22 + src * 0.08
-        scored.append((score, mem))
+        scored.append((score, sem_user, sem_ctx, mem))
     scored.sort(key=lambda x: -x[0])
-    ranked = [m for _, m in scored]
 
-    # 原始 query 保底：若有命中，最终至少保留 2 条（不够则尽量补齐）
-    base_keep = [by_id[mid] for mid in base_hit_ids if mid in by_id][:2]
+    # 为每条记忆附上打分明细（供调试事件记录）
+    score_map: dict[str, dict] = {}
+    for total, su, sc, mem in scored:
+        mid = str(mem.get("id") or "")
+        if mid:
+            score_map[mid] = {"total": round(total, 4), "sem_user": round(su, 4), "sem_ctx": round(sc, 4)}
+
+    # 综合分最低门槛：低于此分的不注入
+    from memory_vector.config import RERANK_MIN_SCORE
+    scored_above = [(s, su, sc, m) for s, su, sc, m in scored if s >= RERANK_MIN_SCORE]
+
+    ranked = [m for _, _, _, m in scored_above]
+
+    # 原始 query 保底：若有命中且过了阈值，最终至少保留 2 条
+    base_keep = [by_id[mid] for mid in base_hit_ids
+                 if mid in by_id and mid in score_map and score_map[mid]["total"] >= RERANK_MIN_SCORE][:2]
     out: list[dict] = []
     used: set[str] = set()
     for m in base_keep + ranked:
@@ -771,6 +784,13 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str],
         out.append(m)
         if len(out) >= 5:
             break
+
+    # 把 score 明细挂到每条记忆的 _recall_score 字段（临时，不持久化到 R2）
+    for m in out:
+        mid = str(m.get("id") or "")
+        if mid in score_map:
+            m["_recall_score"] = score_map[mid]
+
     return out
 
 
@@ -1045,6 +1065,13 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             }
         )
         return body
+    # 收集注入记忆的 score 明细
+    injected_scores = []
+    for t in scored[: len(lines)]:
+        mem = t[2]
+        s = mem.get("_recall_score")
+        if s:
+            injected_scores.append({"id": str(mem.get("id") or ""), "content": (mem.get("content") or "")[:60], **s})
     _append_dynamic_recall_debug_event_safe(
         {
             "timestamp": now_beijing_iso(),
@@ -1055,6 +1082,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             "expanded_queries": expanded_queries,
             "recalled_lines": lines,
             "recalled_count": len(lines),
+            "scores": injected_scores,
         }
     )
     inject = "\n\n【动态记忆】\n" + "\n".join(lines) + "\n【以上为动态记忆】"

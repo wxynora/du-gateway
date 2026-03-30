@@ -1,0 +1,13 @@
+{
+  "name": "du-memory-mcp",
+  "version": "1.0.0",
+  "description": "Claude Code MCP server for du-gateway memory context",
+  "type": "module",
+  "main": "du_memory.js",
+  "scripts": {
+    "start": "node du_memory.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  }
+}

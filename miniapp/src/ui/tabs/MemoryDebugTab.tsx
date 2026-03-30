@@ -3,6 +3,14 @@ import { apiJson } from "../api";
 import { Btn } from "../components";
 import { useToast } from "../toast";
 
+type RecallScore = {
+  id?: string;
+  content?: string;
+  total?: number;
+  sem_user?: number;
+  sem_ctx?: number;
+};
+
 type RecallEvent = {
   timestamp?: string;
   window_id?: string;
@@ -11,6 +19,7 @@ type RecallEvent = {
   source?: string;
   recalled_lines?: string[];
   recalled_count?: number;
+  scores?: RecallScore[];
 };
 
 type MemoryDebugResp = {
@@ -160,6 +169,19 @@ export function MemoryDebugTab() {
               <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">keywords: {Array.isArray(it.keywords) ? it.keywords.join(" / ") : ""}</div>
               <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">reason: {String((it as any).reason || "")}</div>
               <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">vector_error: {String((it as any).vector_error || "")}</div>
+              {Array.isArray(it.scores) && it.scores.length > 0 && (
+                <div className="space-y-0.5">
+                  {it.scores.map((s, si) => (
+                    <div key={si} className="text-xs text-[#5f5a52] flex gap-2 items-baseline">
+                      <span className="font-mono font-medium text-neutral-700">{String(s.total ?? "-")}</span>
+                      <span className="text-[10px] text-neutral-400">
+                        user {String(s.sem_user ?? "-")} · ctx {String(s.sem_ctx ?? "-")}
+                      </span>
+                      <span className="truncate">{s.content || s.id || ""}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <details className="rounded-xl border border-white/70 bg-white/70 p-2">
                 <summary className="cursor-pointer select-none text-xs text-[#5f5a52]">
                   点击展开召回全文：

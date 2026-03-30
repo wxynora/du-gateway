@@ -64,6 +64,9 @@ def current_embedding_backend() -> str:
 VECTOR_MIN_SIM = _env_float("VECTOR_MIN_SIM", 0.38)
 VECTOR_TOPK = _env_int("VECTOR_TOPK", 30)
 VECTOR_TOPN = _env_int("VECTOR_TOPN", 3)
+# 重排后综合分最低门槛：低于此分的记忆不注入，宁可空也不塞噪声
+# score = sem_user*0.50 + sem_ctx*0.20 + weight*0.22 + src*0.08
+RERANK_MIN_SCORE = _env_float("RERANK_MIN_SCORE", 0.35)
 
 # 是否把额外来源也并入向量召回（默认关闭，避免误注入）
 INCLUDE_DU_MEMORY_DOC_IN_VECTOR = os.getenv("INCLUDE_DU_MEMORY_DOC_IN_VECTOR", "0").strip().lower() in ("1", "true", "yes")

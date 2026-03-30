@@ -137,6 +137,61 @@ def root_dynamic_memory():
         return {"ok": False, "error": str(e), "memories": []}, 500
 
 
+@app.route("/api/memory/append", methods=["POST"])
+def api_memory_append():
+    """
+    向动态层追加一条记忆（供 MCP / CC 写回）。
+    Body JSON: { content: str, importance?: int(1-5), tag?: str }
+    鉴权：与 /mcp/* 相同的 Bearer token（MCP_AUTH_MODE / MCP_TOKENS）。
+    """
+    from utils.mcp_auth import enforce_mcp_auth
+    enforce_mcp_auth()
+
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "需要 application/json"}), 400
+    body = request.get_json(silent=True) or {}
+    content = (body.get("content") or "").strip()
+    if not content:
+        return jsonify({"ok": False, "error": "content 不能为空"}), 400
+
+    importance = body.get("importance", 3)
+    try:
+        importance = max(1, min(5, int(importance)))
+    except (TypeError, ValueError):
+        importance = 3
+    tag = (body.get("tag") or "CC").strip()
+
+    from uuid import uuid4
+    from utils.time_aware import now_beijing_iso
+    from storage import r2_store
+
+    now = now_beijing_iso()
+    new_entry = {
+        "id": str(uuid4()),
+        "content": content,
+        "importance": importance,
+        "tag": tag,
+        "mention_count": 0,
+        "created_at": now,
+        "last_mentioned": now,
+    }
+
+    memories = r2_store.get_dynamic_memory_list() or []
+    memories.append(new_entry)
+    ok = r2_store.save_dynamic_memory_list(memories)
+    if not ok:
+        return jsonify({"ok": False, "error": "R2 写入失败"}), 503
+
+    # 向量索引更新（best-effort，失败不影响写入结果）
+    try:
+        from pipeline.pipeline import _upsert_dynamic_memory_index
+        _upsert_dynamic_memory_index(new_entry)
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "id": new_entry["id"]})
+
+
 @app.route("/time-info", methods=["GET"])
 def time_info():
     """
