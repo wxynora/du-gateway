@@ -190,10 +190,7 @@ function Shell() {
             <span className="text-sm">🏠</span>
             <span className="text-[17px] font-semibold tracking-tight">d&x home</span>
           </div>
-          {version ? <div className="text-[11px] text-cream-muted">v{version}</div> : <div />}
-          <button className="flex h-10 w-10 items-center justify-center rounded-full bg-[rgba(244,247,251,0.78)] text-cream-muted shadow-[0_6px_16px_rgba(154,168,186,0.12)] backdrop-blur-xl">
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" /></svg>
-          </button>
+          {version ? <div className="text-[11px] text-cream-muted">{`v${version}`}</div> : <div />}
         </div>
       </div>
 
@@ -352,7 +349,7 @@ function FeatureTile({
   return (
     <button
       className={
-        "group relative min-h-[118px] overflow-hidden rounded-[26px] p-4 text-left shadow-[0_10px_22px_rgba(154,168,186,0.14)] backdrop-blur-xl transition active:scale-[0.99] " +
+        "group relative min-h-[118px] overflow-hidden rounded-[26px] p-4 text-left shadow-[8px_8px_18px_rgba(201,206,214,0.2),-5px_-5px_12px_rgba(255,255,255,0.42),inset_1px_1px_0_rgba(255,255,255,0.22)] backdrop-blur-xl transition active:scale-[0.99] " +
         toneMap.shell +
         (disabled ? " opacity-60 cursor-not-allowed" : "")
       }
@@ -363,7 +360,7 @@ function FeatureTile({
       disabled={disabled}
     >
       <div className="relative flex items-center gap-3">
-        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] shadow-[0_6px_14px_rgba(154,168,186,0.1)] " + toneMap.badge}>
+        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] shadow-[4px_4px_10px_rgba(201,206,214,0.16),-2px_-2px_6px_rgba(255,255,255,0.34)] " + toneMap.badge}>
           {icon}
         </span>
         <div className="min-w-0">
@@ -371,8 +368,7 @@ function FeatureTile({
           <div className="mt-1 text-[11px] leading-[1.45] text-cream-muted">{desc}</div>
         </div>
       </div>
-      <div className="relative mt-5 flex items-center justify-between">
-        <span className={"rounded-full px-2.5 py-1 text-[10px] font-medium tracking-[0.14em] text-cream-text " + toneMap.badge}>OPEN</span>
+      <div className="relative mt-5 flex justify-end">
         <svg className="h-4 w-4 text-cream-muted transition group-active:translate-x-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
           <path d="M8 6l8 6-8 6" />
         </svg>
