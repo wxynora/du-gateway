@@ -1,18 +1,19 @@
-import React, { useEffect, useState } from "react";
+import React, { Suspense, lazy, useEffect, useState } from "react";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
 import { apiFetch, apiJson } from "./api";
 import { Btn, Modal } from "./components";
-import { LogsTab } from "./tabs/LogsTab";
-import { SettingsUpstream } from "./tabs/SettingsUpstream";
-import { ReasoningTab } from "./tabs/ReasoningTab";
-import { ScheduleTab } from "./tabs/ScheduleTab";
-import { AlarmTab } from "./tabs/AlarmTab";
-import { MemoryDebugTab } from "./tabs/MemoryDebugTab";
-import { DuDayTab } from "./tabs/DuDayTab";
-import { DuNotebookTab } from "./tabs/DuNotebookTab";
-import { WenyouTab } from "./tabs/WenyouTab";
-import { StickersTab } from "./tabs/StickersTab";
+
+const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
+const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
+const ReasoningTab = lazy(() => import("./tabs/ReasoningTab").then((m) => ({ default: m.ReasoningTab })));
+const ScheduleTab = lazy(() => import("./tabs/ScheduleTab").then((m) => ({ default: m.ScheduleTab })));
+const AlarmTab = lazy(() => import("./tabs/AlarmTab").then((m) => ({ default: m.AlarmTab })));
+const MemoryDebugTab = lazy(() => import("./tabs/MemoryDebugTab").then((m) => ({ default: m.MemoryDebugTab })));
+const DuDayTab = lazy(() => import("./tabs/DuDayTab").then((m) => ({ default: m.DuDayTab })));
+const DuNotebookTab = lazy(() => import("./tabs/DuNotebookTab").then((m) => ({ default: m.DuNotebookTab })));
+const WenyouTab = lazy(() => import("./tabs/WenyouTab").then((m) => ({ default: m.WenyouTab })));
+const StickersTab = lazy(() => import("./tabs/StickersTab").then((m) => ({ default: m.StickersTab })));
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "wenyou" | "stickers" | null;
 type BgPreset = "cream" | "grid" | "soft";
@@ -58,6 +59,7 @@ function Shell() {
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [dailyRefreshing, setDailyRefreshing] = useState(false);
   const [tree, setTree] = useState<CyberTreeData | null>(null);
+  const [deferHomeExtras, setDeferHomeExtras] = useState(false);
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
       .then((j) => {
@@ -83,6 +85,9 @@ function Shell() {
     // 直接展开全屏，避免进入后还要手动上滑/多次点击
     tgReady(true);
     applyTelegramThemeToHtmlClass();
+    const timer = window.setTimeout(() => {
+      setDeferHomeExtras(true);
+    }, 320);
     try {
       const raw = localStorage.getItem(BG_STORAGE_KEY);
       if (raw) {
@@ -96,14 +101,17 @@ function Shell() {
         });
       }
     } catch {}
+    return () => window.clearTimeout(timer);
+  }, []);
 
+  useEffect(() => {
+    if (!deferHomeExtras) return;
     apiJson<{ ok?: boolean; config?: Partial<BgConfig> }>("/miniapp-api/background-config")
       .then((j) => {
         if (!j?.ok || !j?.config) return;
         setBg((prev: BgConfig) => ({
           preset: (j.config?.preset as BgPreset) || prev.preset,
           useImage: !!j.config?.useImage,
-          // 避免接口晚到的旧配置覆盖刚上传的新版本号（会导致看起来“又回到旧图”）。
           imageVersion: Math.max(Number(prev.imageVersion || 0), Number(j.config?.imageVersion || 0)),
           dim: Number.isFinite(Number(j.config?.dim)) ? Math.max(0, Math.min(70, Number(j.config?.dim))) : prev.dim,
           imageStamp: prev.imageStamp || 0,
@@ -118,7 +126,7 @@ function Shell() {
       .catch(() => {});
     loadDailyReport();
     loadTree();
-  }, []);
+  }, [deferHomeExtras]);
 
   async function refreshDailyReport() {
     setDailyRefreshing(true);
@@ -194,7 +202,7 @@ function Shell() {
         </div>
       </div>
 
-      {dailyWhisper ? (
+      {deferHomeExtras && dailyWhisper ? (
         <div className="px-4 pt-3">
           <details className="neo-panel px-4 py-3 text-[12px] leading-relaxed text-cream-text" open>
             <summary className="cursor-pointer select-none text-cream-text">
@@ -205,7 +213,7 @@ function Shell() {
           </details>
         </div>
       ) : null}
-      {dailyReport ? (
+      {deferHomeExtras && dailyReport ? (
         <div className="px-4 pt-2">
           <details className="neo-panel-soft px-4 py-2.5 text-[12px] leading-relaxed text-cream-text">
             <summary className="cursor-pointer select-none text-cream-text">
@@ -237,51 +245,51 @@ function Shell() {
 
       {panel === "logs" ? (
         <Modal title="日志" onClose={() => setPanel(null)}>
-          <LogsTab />
+          <LazyPane><LogsTab /></LazyPane>
         </Modal>
       ) : null}
       {panel === "reasoning" ? (
         <Modal title="思维链" onClose={() => setPanel(null)}>
-          <ReasoningTab />
+          <LazyPane><ReasoningTab /></LazyPane>
         </Modal>
       ) : null}
       {panel === "memory-debug" ? (
         <Modal title="记忆调试" onClose={() => setPanel(null)}>
-          <MemoryDebugTab />
+          <LazyPane><MemoryDebugTab /></LazyPane>
         </Modal>
       ) : null}
       {panel === "du-notebook" ? (
         <Modal title="渡的记事本" onClose={() => setPanel(null)}>
-          <DuNotebookTab />
+          <LazyPane><DuNotebookTab /></LazyPane>
         </Modal>
       ) : null}
       {panel === "wenyou" ? (
         <Modal title="文游模块" onClose={() => setPanel(null)}>
-          <WenyouTab initialView="hub" />
+          <LazyPane><WenyouTab initialView="hub" /></LazyPane>
         </Modal>
       ) : null}
       {panel === "stickers" ? (
         <Modal title="表情包" onClose={() => setPanel(null)}>
-          <StickersTab />
+          <LazyPane><StickersTab /></LazyPane>
         </Modal>
       ) : null}
 
-      {showSettings ? <SettingsUpstream onClose={() => setShowSettings(false)} /> : null}
+      {showSettings ? <LazyPane><SettingsUpstream onClose={() => setShowSettings(false)} /></LazyPane> : null}
       {showCorePrompt ? <CorePromptEditor onClose={() => setShowCorePrompt(false)} /> : null}
       {showBgEditor ? <BackgroundEditor bg={bg} onChange={setBg} onClose={() => setShowBgEditor(false)} /> : null}
       {showSchedule ? (
         <Modal title="日历与提醒" onClose={() => setShowSchedule(false)}>
-          <ScheduleTab />
+          <LazyPane><ScheduleTab /></LazyPane>
         </Modal>
       ) : null}
       {showAlarm ? (
         <Modal title="闹钟" onClose={() => setShowAlarm(false)}>
-          <AlarmTab />
+          <LazyPane><AlarmTab /></LazyPane>
         </Modal>
       ) : null}
       {showDuDay ? (
         <Modal title="渡的一天" onClose={() => setShowDuDay(false)}>
-          <DuDayTab />
+          <LazyPane><DuDayTab /></LazyPane>
         </Modal>
       ) : null}
       {showTree ? <CyberTreeModal data={tree} onClose={() => setShowTree(false)} onRefresh={loadTree} /> : null}
@@ -492,6 +500,20 @@ export function App() {
     <ToastProvider>
       <Shell />
     </ToastProvider>
+  );
+}
+
+function LazyPane({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="neo-panel-soft p-4 text-sm text-cream-muted">
+          加载中…
+        </div>
+      }
+    >
+      {children}
+    </Suspense>
   );
 }
 
