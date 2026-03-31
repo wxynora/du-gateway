@@ -10,10 +10,10 @@
     @apply bg-cream-bg text-cream-text;
   }
   :root {
-    --neo-shadow-lg: 10px 10px 22px rgba(196, 201, 209, 0.22), -8px -8px 18px rgba(255, 255, 255, 0.82);
-    --neo-shadow-md: 7px 7px 16px rgba(196, 201, 209, 0.18), -5px -5px 12px rgba(255, 255, 255, 0.8);
-    --neo-shadow-sm: 4px 4px 10px rgba(196, 201, 209, 0.16), -3px -3px 8px rgba(255, 255, 255, 0.76);
-    --neo-inset: inset 1px 1px 0 rgba(255, 255, 255, 0.84), inset -3px -3px 8px rgba(214, 220, 228, 0.26);
+    --neo-shadow-lg: 0 10px 26px rgba(154, 168, 186, 0.16);
+    --neo-shadow-md: 0 8px 18px rgba(154, 168, 186, 0.14);
+    --neo-shadow-sm: 0 4px 10px rgba(154, 168, 186, 0.12);
+    --neo-inset: inset 0 1px 0 rgba(255, 255, 255, 0.32);
   }
 }
 
@@ -27,39 +27,39 @@
 
 @layer components {
   .neo-panel {
-    @apply rounded-[30px] border border-white/75 backdrop-blur-xl;
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(245, 246, 248, 0.62));
+    @apply rounded-[30px] backdrop-blur-xl;
+    background: rgba(245, 248, 252, 0.52);
     box-shadow: var(--neo-shadow-lg);
   }
 
   .neo-panel-soft {
-    @apply rounded-[24px] border border-white/70 backdrop-blur-xl;
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(244, 245, 247, 0.56));
+    @apply rounded-[24px] backdrop-blur-xl;
+    background: rgba(245, 248, 252, 0.46);
     box-shadow: var(--neo-shadow-md);
   }
 
   .neo-panel-inset {
-    @apply rounded-[22px] border border-white/70;
-    background: rgba(255, 255, 255, 0.52);
+    @apply rounded-[22px];
+    background: rgba(255, 255, 255, 0.38);
     box-shadow: var(--neo-inset);
   }
 
   .neo-chip {
-    @apply inline-flex items-center rounded-full px-3 py-1 text-[11px] font-medium tracking-[0.14em] uppercase text-cream-muted border border-white/80;
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.84), rgba(239, 243, 248, 0.56));
+    @apply inline-flex items-center rounded-full px-3 py-1 text-[11px] font-medium tracking-[0.14em] uppercase text-cream-muted;
+    background: rgba(244, 247, 251, 0.72);
     box-shadow: var(--neo-shadow-sm);
   }
 
   .neo-segment {
-    @apply inline-flex items-center justify-center rounded-[18px] border border-white/80 px-3 py-2 text-xs font-medium text-cream-text transition;
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.84), rgba(239, 243, 248, 0.58));
+    @apply inline-flex items-center justify-center rounded-[18px] px-3 py-2 text-xs font-medium text-cream-text transition;
+    background: rgba(244, 247, 251, 0.74);
     box-shadow: var(--neo-shadow-sm);
   }
 
   .neo-segment-active {
-    @apply text-cream-text border-white/85;
-    background: linear-gradient(145deg, rgba(247, 249, 255, 0.95), rgba(214, 228, 245, 0.84));
-    box-shadow: var(--neo-shadow-md);
+    @apply text-cream-text;
+    background: rgba(213, 228, 246, 0.96);
+    box-shadow: none;
   }
 
   .neo-tag-dark {
@@ -69,28 +69,28 @@
   }
 
   .neo-tag-blue {
-    @apply inline-flex items-center rounded-full px-3.5 py-1.5 text-[11px] font-medium text-cream-text border border-white/80;
-    background: linear-gradient(145deg, rgba(247, 251, 255, 0.95), rgba(213, 228, 246, 0.76));
+    @apply inline-flex items-center rounded-full px-3.5 py-1.5 text-[11px] font-medium text-cream-text;
+    background: rgba(213, 228, 246, 0.92);
     box-shadow: var(--neo-shadow-sm);
   }
 
   .neo-tag-pink {
-    @apply inline-flex items-center rounded-full px-3.5 py-1.5 text-[11px] font-medium text-cream-text border border-white/80;
-    background: linear-gradient(145deg, rgba(255, 248, 251, 0.95), rgba(236, 206, 221, 0.78));
+    @apply inline-flex items-center rounded-full px-3.5 py-1.5 text-[11px] font-medium text-cream-text;
+    background: rgba(236, 206, 221, 0.92);
     box-shadow: var(--neo-shadow-sm);
   }
 
   .neo-tag-yellow {
-    @apply inline-flex items-center rounded-full px-3.5 py-1.5 text-[11px] font-medium text-cream-text border border-white/80;
-    background: linear-gradient(145deg, rgba(255, 251, 242, 0.95), rgba(244, 229, 189, 0.8));
+    @apply inline-flex items-center rounded-full px-3.5 py-1.5 text-[11px] font-medium text-cream-text;
+    background: rgba(244, 229, 189, 0.92);
     box-shadow: var(--neo-shadow-sm);
   }
 
   .neo-input,
   .neo-select,
   .neo-textarea {
-    @apply w-full rounded-[20px] border border-white/80 px-3 py-2 text-sm text-cream-text outline-none transition;
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(241, 245, 249, 0.62));
+    @apply w-full rounded-[20px] px-3 py-2 text-sm text-cream-text outline-none transition;
+    background: rgba(248, 250, 253, 0.72);
     box-shadow: var(--neo-inset);
   }
 
@@ -104,8 +104,8 @@
   }
 
   .neo-icon-btn {
-    @apply flex items-center justify-center rounded-full border border-white/80 text-cream-text transition active:scale-[0.99];
-    background: linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(239, 243, 248, 0.58));
+    @apply flex items-center justify-center rounded-full text-cream-text transition active:scale-[0.99];
+    background: rgba(244, 247, 251, 0.78);
     box-shadow: var(--neo-shadow-sm);
   }
 
