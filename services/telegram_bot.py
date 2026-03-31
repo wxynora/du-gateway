@@ -28,6 +28,8 @@ from config import (
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_GM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
+    TELEGRAM_WEBAPP_URL,
+    TELEGRAM_WEBAPP_VERSION,
     TELEGRAM_CHAT_PATH,
     TELEGRAM_CHAT_MODEL,
     GATEWAY_MODELS,
@@ -51,6 +53,17 @@ from storage import r2_store
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
+
+
+def _telegram_webapp_url() -> str:
+    base = (TELEGRAM_WEBAPP_URL or "").strip().rstrip("/")
+    if not base:
+        return ""
+    ver = (TELEGRAM_WEBAPP_VERSION or "").strip()
+    if not ver:
+        return base
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}v={ver}"
 
 
 def _is_wenyou_active() -> bool:
@@ -1432,14 +1445,23 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         record_group_player_line(int(chat_id), text)
         return
 
-    # /start：仅收个口，不弹 Reply 键盘（MiniApp 用 Bot 自带 Menu 入口即可）
+    # /start：先清掉旧 Reply Keyboard，再发一份新的 web_app 键盘，避免 Telegram 复用残留旧入口。
     cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
     if cmd0 == "/start":
+        webapp_url = _telegram_webapp_url()
+        send_message(int(chat_id), "先把旧入口清一下。", bot_token=token, reply_markup={"remove_keyboard": True})
+        if not webapp_url:
+            send_message(int(chat_id), "渡已就绪，但当前还没配 MiniApp URL。", bot_token=token)
+            return
         send_message(
             int(chat_id),
-            "渡已就绪。MiniApp 请用聊天栏旁的 Menu 打开；此处不再弹出第二套键盘或命令菜单。",
+            "渡已就绪。下面是新的 MiniApp 入口。",
             bot_token=token,
-            reply_markup={"remove_keyboard": True},
+            reply_markup={
+                "keyboard": [[{"text": "MiniApp", "web_app": {"url": webapp_url}}]],
+                "resize_keyboard": True,
+                "is_persistent": True,
+            },
         )
         return
 
