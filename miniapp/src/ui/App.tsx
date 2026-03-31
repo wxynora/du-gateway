@@ -349,7 +349,7 @@ function FeatureTile({
   return (
     <button
       className={
-        "group relative min-h-[116px] overflow-hidden rounded-[24px] p-4 text-left shadow-[7px_7px_16px_rgba(201,206,214,0.18),-4px_-4px_10px_rgba(255,255,255,0.36),inset_1px_1px_0_rgba(255,255,255,0.2)] backdrop-blur-xl transition active:scale-[0.99] " +
+        "group relative min-h-[116px] overflow-hidden rounded-[24px] p-4 text-left shadow-[7px_7px_16px_rgba(178,186,198,0.26),-4px_-4px_10px_rgba(255,255,255,0.34),inset_1px_1px_0_rgba(255,255,255,0.2)] backdrop-blur-xl transition active:scale-[0.99] " +
         toneMap.shell +
         (disabled ? " opacity-60 cursor-not-allowed" : "")
       }
