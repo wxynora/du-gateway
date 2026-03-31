@@ -9,6 +9,12 @@
   body {
     @apply bg-cream-bg text-cream-text;
   }
+  :root {
+    --neo-shadow-lg: 12px 12px 26px rgba(193, 199, 208, 0.24), -9px -9px 20px rgba(255, 255, 255, 0.86);
+    --neo-shadow-md: 8px 8px 18px rgba(193, 199, 208, 0.2), -6px -6px 14px rgba(255, 255, 255, 0.84);
+    --neo-shadow-sm: 4px 4px 12px rgba(193, 199, 208, 0.18), -3px -3px 8px rgba(255, 255, 255, 0.78);
+    --neo-inset: inset 1px 1px 0 rgba(255, 255, 255, 0.88), inset -4px -4px 10px rgba(214, 220, 228, 0.32);
+  }
 }
 
 /* 兼容 Telegram WebView 的安全区域 */
@@ -17,5 +23,72 @@
 }
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+@layer components {
+  .neo-panel {
+    @apply rounded-[30px] border border-white/75 backdrop-blur-xl;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(243, 247, 251, 0.54));
+    box-shadow: var(--neo-shadow-lg);
+  }
+
+  .neo-panel-soft {
+    @apply rounded-[24px] border border-white/70 backdrop-blur-xl;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(244, 247, 251, 0.48));
+    box-shadow: var(--neo-shadow-md);
+  }
+
+  .neo-panel-inset {
+    @apply rounded-[22px] border border-white/70;
+    background: rgba(255, 255, 255, 0.52);
+    box-shadow: var(--neo-inset);
+  }
+
+  .neo-chip {
+    @apply inline-flex items-center rounded-full px-3 py-1 text-[11px] font-medium tracking-[0.14em] uppercase text-cream-muted border border-white/80;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.84), rgba(239, 243, 248, 0.56));
+    box-shadow: var(--neo-shadow-sm);
+  }
+
+  .neo-tag-dark {
+    @apply inline-flex items-center rounded-full px-3.5 py-1.5 text-[11px] font-medium text-white;
+    background: linear-gradient(145deg, rgba(55, 61, 73, 0.96), rgba(31, 39, 51, 0.94));
+    box-shadow: 0 6px 14px rgba(31, 39, 51, 0.18);
+  }
+
+  .neo-input,
+  .neo-select,
+  .neo-textarea {
+    @apply w-full rounded-[20px] border border-white/80 px-3 py-2 text-sm text-cream-text outline-none transition;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(241, 245, 249, 0.62));
+    box-shadow: var(--neo-inset);
+  }
+
+  .neo-textarea {
+    @apply min-h-[84px];
+  }
+
+  .neo-input::placeholder,
+  .neo-textarea::placeholder {
+    @apply text-cream-muted;
+  }
+
+  .neo-icon-btn {
+    @apply flex items-center justify-center rounded-full border border-white/80 text-cream-text transition active:scale-[0.99];
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(239, 243, 248, 0.58));
+    box-shadow: var(--neo-shadow-sm);
+  }
+
+  .neo-console {
+    @apply min-h-[50vh] overflow-auto rounded-[24px] p-3 font-mono text-xs leading-relaxed;
+    background: linear-gradient(160deg, rgba(33, 36, 43, 0.96), rgba(24, 28, 36, 0.94));
+    color: #eef4ff;
+    box-shadow: var(--neo-shadow-md);
+  }
+
+  .neo-muted-box {
+    @apply rounded-[22px] px-3 py-2 text-xs text-cream-text;
+    box-shadow: var(--neo-shadow-sm);
+  }
 }
 

@@ -2,7 +2,7 @@ import React from "react";
 
 export function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl3 bg-white/42 backdrop-blur-xl border border-white/45 shadow-soft">
+    <div className="neo-panel">
       <div className="px-4 py-3">
         <div className="text-sm font-semibold text-cream-text">{title}</div>
       </div>
@@ -15,10 +15,10 @@ export function Pill({ ok, text }: { ok: boolean; text: string }) {
   return (
     <span
       className={
-        "inline-flex items-center rounded-full px-2 py-0.5 text-xs shadow-soft2 " +
+        "inline-flex items-center rounded-full px-2.5 py-1 text-xs shadow-soft2 border border-white/70 " +
         (ok
-          ? "bg-cream-green/65 text-cream-text"
-          : "bg-cream-pink/60 text-cream-text")
+          ? "bg-[linear-gradient(145deg,rgba(223,246,235,0.92),rgba(191,212,204,0.78))] text-cream-text"
+          : "bg-[linear-gradient(145deg,rgba(251,230,236,0.94),rgba(232,198,210,0.82))] text-cream-text")
       }
     >
       {text}
@@ -38,14 +38,14 @@ export function Btn({
   disabled?: boolean;
 }) {
   const base =
-    "text-xs px-3 py-2 rounded-xl2 bg-white/56 backdrop-blur-md border border-white/50 shadow-soft2 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99] transition";
+    "text-xs px-3 py-2 rounded-[18px] border border-white/80 shadow-soft2 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99] transition";
   const cls = (() => {
-    if (kind === "danger") return base + " text-cream-danger";
-    if (kind === "blue") return base + " bg-cream-blue/75 text-cream-text";
-    if (kind === "pink") return base + " bg-cream-pink/70 text-cream-text";
-    if (kind === "green") return base + " bg-cream-green/75 text-cream-text";
-    if (kind === "dark") return base + " bg-neutral-900 text-white border-neutral-900";
-    return base + " text-cream-text";
+    if (kind === "danger") return base + " bg-[linear-gradient(145deg,rgba(255,243,243,0.94),rgba(242,208,203,0.84))] text-cream-danger";
+    if (kind === "blue") return base + " bg-[linear-gradient(145deg,rgba(245,249,255,0.94),rgba(212,226,245,0.84))] text-cream-text";
+    if (kind === "pink") return base + " bg-[linear-gradient(145deg,rgba(255,248,251,0.94),rgba(236,206,221,0.84))] text-cream-text";
+    if (kind === "green") return base + " bg-[linear-gradient(145deg,rgba(245,251,248,0.94),rgba(205,227,218,0.84))] text-cream-text";
+    if (kind === "dark") return base + " bg-[linear-gradient(145deg,rgba(55,61,73,0.96),rgba(31,39,51,0.94))] text-white border-transparent";
+    return base + " bg-[linear-gradient(145deg,rgba(255,255,255,0.86),rgba(239,243,248,0.58))] text-cream-text";
   })();
   return (
     <button className={cls} onClick={onClick} disabled={disabled}>
@@ -65,15 +65,17 @@ export function Modal({
 }) {
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="fixed inset-x-0 bottom-0 z-50 mx-auto max-w-xl max-h-[80vh] overflow-auto rounded-t-[32px] bg-white/62 backdrop-blur-2xl border border-white/50 p-4 shadow-soft safe-bottom">
+      <div className="fixed inset-0 z-40 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.28),rgba(91,104,124,0.14))] backdrop-blur-[6px]" onClick={onClose} />
+      <div className="fixed inset-x-0 bottom-0 z-50 mx-auto max-w-xl max-h-[80vh] overflow-auto rounded-t-[34px] border border-white/78 bg-[linear-gradient(160deg,rgba(255,255,255,0.84),rgba(240,244,248,0.66))] p-4 shadow-[0_-12px_30px_rgba(193,199,208,0.18)] backdrop-blur-2xl safe-bottom">
         <div className="flex items-center justify-between">
-          <div className="font-semibold text-cream-text">{title}</div>
+          <div className="neo-chip">{
+            title
+          }</div>
           <button
-            className="text-xs px-2 py-1 rounded-xl2 bg-white/58 backdrop-blur-md border border-white/50 shadow-soft2 active:scale-[0.99] transition"
+            className="neo-icon-btn h-9 w-9 text-xs"
             onClick={onClose}
           >
-            关闭
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 6l12 12M18 6 6 18" /></svg>
           </button>
         </div>
         <div className="mt-3">{children}</div>

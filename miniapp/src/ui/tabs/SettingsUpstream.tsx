@@ -120,7 +120,7 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
             <div
               key={idx}
               className={
-                "rounded-xl3 p-3 shadow-soft2 bg-white border border-white/70"
+                "neo-panel-soft p-3"
               }
             >
               <div className="flex items-center justify-between">
@@ -141,8 +141,8 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
                   </Btn>
                 </div>
               </div>
-              <div className="mt-2 text-xs text-[#5f5a52] break-all">{it.url}</div>
-              <div className="mt-2 text-xs text-[#5f5a52]">
+              <div className="mt-2 text-xs text-cream-muted break-all">{it.url}</div>
+              <div className="mt-2 text-xs text-cream-muted">
                 探活：{statusText(probes[idx])}
                 {probes[idx]
                   ? ` ｜ models=${probes[idx].models_status} (${probes[idx].model_count}) ｜ chat=${probes[idx].chat_status}`

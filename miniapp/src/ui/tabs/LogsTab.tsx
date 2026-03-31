@@ -151,20 +151,20 @@ export function LogsTab() {
       </div>
 
       {loadError ? (
-        <div className="rounded-xl2 bg-cream-pink/65 px-3 py-2 text-xs text-cream-text shadow-soft2">
+        <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">
           接口加载失败：{loadError}
           <br />
           若在 Telegram 里半屏空白，通常是 initData 校验失败或反代吞头。
         </div>
       ) : null}
 
-      <div className="rounded-xl3 bg-cream-blue/45 shadow-soft p-3 space-y-2">
+      <div className="neo-panel p-3 space-y-2">
         <div className="flex items-center gap-2">
           <Btn kind={filterKind === "all" ? "dark" : "blue"} onClick={() => setFilterKind("all")}>全部</Btn>
           <Btn kind={filterKind === "proactive" ? "dark" : "blue"} onClick={() => setFilterKind("proactive")}>主动消息</Btn>
           <Btn kind={filterKind === "alarm" ? "dark" : "blue"} onClick={() => setFilterKind("alarm")}>闹钟</Btn>
           <input
-            className="flex-1 rounded-xl2 bg-cream-card px-3 py-2 text-sm shadow-soft2"
+            className="neo-input flex-1"
             placeholder="过滤关键字（不区分大小写）"
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
@@ -191,7 +191,7 @@ export function LogsTab() {
           </Btn>
         </div>
 
-        <div className="min-h-[50vh] rounded-2xl bg-[#1F1A12] p-3 font-mono text-xs leading-relaxed text-[#FFF7E6] overflow-auto shadow-soft2">
+        <div className="neo-console">
           {(filtered || []).slice(0, 800).map((l, idx) => {
             const kind = lineKind(l);
             const lineClass =

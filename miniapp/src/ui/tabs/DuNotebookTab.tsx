@@ -131,8 +131,8 @@ export function DuNotebookTab() {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-xl3 bg-white border border-white/70 shadow-soft p-3 space-y-2">
-        <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
+      <div className="neo-panel p-3 space-y-2">
+        <div className="neo-tag-dark">
           新增记事
         </div>
         <div>
@@ -141,7 +141,7 @@ export function DuNotebookTab() {
           </Btn>
         </div>
         <textarea
-          className="w-full min-h-[84px] rounded-xl2 bg-white border border-white/70 px-3 py-2 text-sm text-cream-text shadow-soft2"
+          className="neo-textarea"
           placeholder="写一条固定注入的记事..."
           value={text}
           onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value)}
@@ -154,12 +154,12 @@ export function DuNotebookTab() {
 
       <div className="space-y-2">
         {rows.map((it) => (
-          <div key={String(it.id || "")} className="rounded-xl3 bg-white border border-white/70 shadow-soft p-3 space-y-2">
-            <div className="text-xs text-[#5f5a52]">{String(it.updated_at || it.created_at || "")}</div>
+          <div key={String(it.id || "")} className="neo-panel p-3 space-y-2">
+            <div className="text-xs text-cream-muted">{String(it.updated_at || it.created_at || "")}</div>
             {editingId === String(it.id || "") ? (
               <>
                 <textarea
-                  className="w-full min-h-[84px] rounded-xl2 bg-white border border-white/70 px-3 py-2 text-sm text-cream-text shadow-soft2"
+                  className="neo-textarea"
                   value={editingText}
                   onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setEditingText(e.target.value)}
                   disabled={saving}
@@ -202,4 +202,3 @@ export function DuNotebookTab() {
     </div>
   );
 }
-

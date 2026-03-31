@@ -102,9 +102,9 @@ export function MemoryDebugTab() {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-xl3 bg-white border border-white/70 shadow-soft p-3 space-y-2 text-cream-text">
+      <div className="neo-panel p-3 space-y-2 text-cream-text">
         <div className="flex items-center justify-between">
-          <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
+          <div className="neo-tag-dark">
             当前窗口总结
           </div>
           <div className="flex items-center gap-2">
@@ -115,9 +115,9 @@ export function MemoryDebugTab() {
             </Btn>
           </div>
         </div>
-        <div className="text-xs text-[#5f5a52]">窗口：{data?.window_id || "(未识别)"}</div>
-        <details className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
-          <summary className="cursor-pointer select-none text-xs text-[#5f5a52]">
+        <div className="text-xs text-cream-muted">窗口：{data?.window_id || "(未识别)"}</div>
+        <details className="neo-panel-inset p-3">
+          <summary className="cursor-pointer select-none text-xs text-cream-muted">
             点击展开窗口总结：{firstLinePreview((data?.summary || "").trim() || "（当前暂无窗口总结）")}
           </summary>
           <div className="mt-2 text-sm text-cream-text whitespace-pre-wrap min-h-[64px]">
@@ -126,28 +126,28 @@ export function MemoryDebugTab() {
         </details>
       </div>
 
-      <div className="rounded-xl3 bg-white border border-white/70 shadow-soft p-3 space-y-2 text-cream-text">
-        <div className="text-xs text-[#5f5a52]">
+      <div className="neo-panel p-3 space-y-2 text-cream-text">
+        <div className="text-xs text-cream-muted">
           动态层状态：
           记忆 {String(data?.dynamic_stats?.memory_count ?? 0)} 条；
           索引标签 {(data?.dynamic_stats?.index_tags || []).length} 个；
           阈值 {String(data?.dynamic_stats?.vector_min_sim ?? "-")}
           （topK {String(data?.dynamic_stats?.vector_topk ?? "-")} / topN {String(data?.dynamic_stats?.vector_topn ?? "-")}）
         </div>
-        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+        <div className="text-xs text-cream-muted whitespace-pre-wrap">
           embedding: {String(data?.dynamic_stats?.embedding_backend || "-")} / {String(data?.dynamic_stats?.embedding_model || "-")}
         </div>
-        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+        <div className="text-xs text-cream-muted whitespace-pre-wrap">
           embed_timeout/retries: {String(data?.dynamic_stats?.embed_timeout_seconds ?? "-")}s / {String(data?.dynamic_stats?.embed_max_retries ?? "-")}
           {" "}({String(data?.dynamic_stats?.embed_retry_backoff_seconds ?? "-")}s backoff)
         </div>
-        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+        <div className="text-xs text-cream-muted whitespace-pre-wrap">
           memory_tags: {Array.isArray(data?.dynamic_stats?.memory_tags) ? data!.dynamic_stats!.memory_tags!.join(" / ") : ""}
         </div>
-        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+        <div className="text-xs text-cream-muted whitespace-pre-wrap">
           index_tags: {Array.isArray(data?.dynamic_stats?.index_tags) ? data!.dynamic_stats!.index_tags!.join(" / ") : ""}
         </div>
-        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+        <div className="text-xs text-cream-muted whitespace-pre-wrap">
           recent_vector_error: {String(data?.dynamic_stats?.recent_vector_error || "") || "(空)"}
         </div>
         <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
@@ -156,23 +156,23 @@ export function MemoryDebugTab() {
             ? ` ｜ ${data!.dynamic_stats!.failed_ids_preview!.join(" / ")}`
             : ""}
         </div>
-        <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
+        <div className="neo-tag-dark">
           动态记忆最近召回 · 最近 {String(data?.count ?? recalls.length)} 次 / 全部 {String(data?.total_count ?? recalls.length)}
         </div>
         <div className="space-y-2">
           {recalls.map((it, idx) => (
-            <div key={`${String(it.timestamp || "")}-${idx}`} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3 space-y-1">
-              <div className="text-xs text-[#5f5a52]">
+            <div key={`${String(it.timestamp || "")}-${idx}`} className="neo-panel-soft p-3 space-y-1">
+              <div className="text-xs text-cream-muted">
                 {String(it.timestamp || "")} · {String(it.source || "")} · 命中 {String(it.recalled_count ?? (it.recalled_lines || []).length)} 条
               </div>
-              <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">query: {String(it.query || "") || "(空)"}</div>
-              <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">keywords: {Array.isArray(it.keywords) ? it.keywords.join(" / ") : ""}</div>
-              <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">reason: {String((it as any).reason || "")}</div>
-              <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">vector_error: {String((it as any).vector_error || "")}</div>
+              <div className="text-xs text-cream-muted whitespace-pre-wrap">query: {String(it.query || "") || "(空)"}</div>
+              <div className="text-xs text-cream-muted whitespace-pre-wrap">keywords: {Array.isArray(it.keywords) ? it.keywords.join(" / ") : ""}</div>
+              <div className="text-xs text-cream-muted whitespace-pre-wrap">reason: {String((it as any).reason || "")}</div>
+              <div className="text-xs text-cream-muted whitespace-pre-wrap">vector_error: {String((it as any).vector_error || "")}</div>
               {Array.isArray(it.scores) && it.scores.length > 0 && (
                 <div className="space-y-0.5">
                   {it.scores.map((s, si) => (
-                    <div key={si} className="text-xs text-[#5f5a52] flex gap-2 items-baseline">
+                    <div key={si} className="text-xs text-cream-muted flex gap-2 items-baseline">
                       <span className="font-mono font-medium text-neutral-700">{String(s.total ?? "-")}</span>
                       <span className="text-[10px] text-neutral-400">
                         user {String(s.sem_user ?? "-")} · ctx {String(s.sem_ctx ?? "-")}
@@ -182,8 +182,8 @@ export function MemoryDebugTab() {
                   ))}
                 </div>
               )}
-              <details className="rounded-xl border border-white/70 bg-white/70 p-2">
-                <summary className="cursor-pointer select-none text-xs text-[#5f5a52]">
+              <details className="neo-panel-inset p-2">
+                <summary className="cursor-pointer select-none text-xs text-cream-muted">
                   点击展开召回全文：
                   {firstLinePreview(Array.isArray(it.recalled_lines) && it.recalled_lines.length ? it.recalled_lines.join("\n") : "（本次无内容）")}
                 </summary>
@@ -193,7 +193,7 @@ export function MemoryDebugTab() {
               </details>
             </div>
           ))}
-          {!recalls.length ? <div className="text-xs text-[#5f5a52]">（暂无召回记录）</div> : null}
+          {!recalls.length ? <div className="text-xs text-cream-muted">（暂无召回记录）</div> : null}
         </div>
       </div>
     </div>

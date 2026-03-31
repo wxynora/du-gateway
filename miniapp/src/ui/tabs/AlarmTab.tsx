@@ -127,7 +127,7 @@ export function AlarmTab() {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-xl3 bg-cream-blue/42 backdrop-blur-xl border border-white/50 shadow-soft p-3 space-y-2">
+      <div className="neo-panel p-3 space-y-2">
         <div className="text-xs text-cream-muted">快速闹钟</div>
         <div className="grid grid-cols-3 gap-2">
           <Btn kind="dark" onClick={() => createQuick(10)} disabled={creating}>+10 分钟</Btn>
@@ -135,7 +135,7 @@ export function AlarmTab() {
           <Btn kind="dark" onClick={() => createQuick(60)} disabled={creating}>+60 分钟</Btn>
         </div>
         <input
-          className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2 placeholder:text-cream-muted"
+          className="neo-input"
           placeholder="闹钟名称（可选）"
           value={label}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setLabel(e.target.value)}
@@ -144,7 +144,7 @@ export function AlarmTab() {
         <div className="grid grid-cols-2 gap-2">
           <input
             type="datetime-local"
-            className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
+            className="neo-input"
             value={customTime}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCustomTime(e.target.value)}
             disabled={creating}
@@ -155,13 +155,13 @@ export function AlarmTab() {
         </div>
       </div>
 
-      <div className="rounded-xl3 bg-white/40 backdrop-blur-xl border border-white/50 shadow-soft p-3">
-        <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
+      <div className="neo-panel p-3">
+        <div className="neo-tag-dark">
           闹钟列表 · {alarmItems.length}
         </div>
         <div className="mt-3 space-y-2">
           {alarmItems.map((it) => (
-            <div key={String(it.id || "")} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
+            <div key={String(it.id || "")} className="neo-panel-soft p-3">
               <div className="text-sm font-medium text-cream-text">{it.title || "未命名闹钟"}</div>
               <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {it.enabled === false ? "已禁用" : "启用中"}</div>
               <div className="mt-2 flex items-center gap-2">

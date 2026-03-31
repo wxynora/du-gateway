@@ -49,7 +49,7 @@ export function ReasoningTab() {
           最近 10 条 · 最新在上{windowId ? ` · ${windowId}` : ""}{lastRefreshedAt ? ` · 刷新于 ${lastRefreshedAt}` : ""}
         </div>
         <button
-          className="h-8 w-8 rounded-full bg-white/58 backdrop-blur-xl border border-white/50 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+          className="neo-icon-btn h-8 w-8"
           onClick={loadLatest}
           disabled={loading}
           title="刷新"
@@ -62,7 +62,7 @@ export function ReasoningTab() {
       </div>
 
       {loadError ? (
-        <div className="rounded-xl2 bg-cream-pink/65 px-3 py-2 text-xs text-cream-text shadow-soft2">
+        <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">
           思维链加载失败：{loadError}
           <br />
           请稍后重试，或从 Telegram 按钮重新打开面板。
@@ -73,9 +73,9 @@ export function ReasoningTab() {
         {items.map((r, i) => (
           <div
             key={`${r.index || 0}-${i}`}
-            className="rounded-[20px] bg-white border border-white/70 shadow-soft p-3"
+            className="neo-panel-soft p-3"
           >
-            <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3 py-1 text-[11px] font-medium text-white shadow-soft2">
+            <div className="neo-tag-dark">
               #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""} {r.window_id ? `· ${String(r.window_id)}` : ""}
             </div>
             {String(r.reasoning || "").trim() ? (
@@ -93,7 +93,7 @@ export function ReasoningTab() {
                   const result = String(tc?.result || "").trim();
                   return (
                     <div key={`${tc?.id || ""}-${ti}`} className="space-y-1.5">
-                      <div className="rounded-xl2 bg-[#f8efd8] border border-[#f1e5c8] px-3 py-2 shadow-soft">
+                      <div className="rounded-[20px] border border-white/75 bg-[linear-gradient(145deg,rgba(255,250,240,0.95),rgba(247,234,193,0.62))] px-3 py-2 shadow-soft2">
                         <div className="text-[11px] text-[#8a6f35] font-medium">工具调用 · {nm}</div>
                         {args ? (
                           <div className="mt-1 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-[#6f5b31]">
@@ -101,7 +101,7 @@ export function ReasoningTab() {
                           </div>
                         ) : null}
                       </div>
-                      <div className="rounded-xl2 bg-[#e8f3ff] border border-[#d6e8ff] px-3 py-2 shadow-soft">
+                      <div className="rounded-[20px] border border-white/75 bg-[linear-gradient(145deg,rgba(247,251,255,0.95),rgba(213,228,246,0.64))] px-3 py-2 shadow-soft2">
                         <div className="text-[11px] text-[#2f6eb4] font-medium">工具结果 · {nm}</div>
                         <div className="mt-1 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-[#2a4c77]">
                           {result || "（无返回内容）"}
@@ -115,7 +115,7 @@ export function ReasoningTab() {
           </div>
         ))}
         {!items.length && !loadError ? (
-          <div className="rounded-xl2 bg-cream-pink/55 px-3 py-2 text-xs text-cream-text shadow-soft2">
+          <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(255,247,250,0.92),rgba(240,229,235,0.72))]">
             暂无可展示的思维链（可能上游未返回 reasoning 字段）。
           </div>
         ) : null}

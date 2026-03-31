@@ -169,40 +169,75 @@ function Shell() {
   }, [tree, toast]);
 
   const rootStyle = buildBackgroundStyle(bg);
+  const featureTiles = [
+    { title: "日志", desc: "查看/过滤/复制", icon: <LineIcon name="logs" />, tone: "blue" as const, onClick: () => setPanel("logs") },
+    { title: "思维链", desc: "最近10条（降序）", icon: <LineIcon name="reasoning" />, tone: "pink" as const, onClick: () => setPanel("reasoning") },
+    { title: "记忆调试", desc: "窗口总结 + 动态召回", icon: <LineIcon name="memory" />, tone: "yellow" as const, onClick: () => setPanel("memory-debug") },
+    { title: "渡的记事本", desc: "固定注入 · 条目管理", icon: <LineIcon name="notebook" />, tone: "blue" as const, onClick: () => setPanel("du-notebook") },
+    { title: "文游模块", desc: "系统空间 + 已完成副本", icon: <LineIcon name="wenyou-hub" />, tone: "pink" as const, onClick: () => setPanel("wenyou") },
+    { title: "表情包", desc: "情绪分类 · 上传管理", icon: <LineIcon name="stickers" />, tone: "yellow" as const, onClick: () => setPanel("stickers") },
+    { title: "核心Prompt", desc: "固定注入，可随时更新", icon: <LineIcon name="prompt" />, tone: "blue" as const, onClick: () => setShowCorePrompt(true) },
+  ];
 
   return (
-    <div className="min-h-dvh safe-bottom text-cream-text" style={rootStyle}>
-      <div className="sticky top-0 z-20 bg-cream-bg/85 backdrop-blur">
+    <div className="relative min-h-dvh safe-bottom overflow-hidden text-cream-text" style={rootStyle}>
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[-36px] top-[88px] h-28 w-28 rounded-full bg-cream-pink/20 blur-3xl" />
+        <div className="absolute right-[-24px] top-[240px] h-32 w-32 rounded-full bg-cream-blue/22 blur-3xl" />
+        <div className="absolute bottom-[160px] left-[18%] h-24 w-24 rounded-full bg-cream-accent/20 blur-3xl" />
+      </div>
+
+      <div className="sticky top-0 z-20 bg-cream-bg/68 backdrop-blur-xl">
         <div
-          className="flex items-center justify-between px-4 pb-3"
+          className="px-4 pb-3"
           style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 16px)" }}
         >
-          <div className="font-semibold tracking-tight rounded-xl2 px-3 py-1 bg-white/65 backdrop-blur-md border border-white/50 shadow-soft2">
-            d&x home
+          <div className="flex items-center justify-between rounded-[28px] border border-white/70 bg-white/50 px-4 py-3 shadow-[8px_8px_18px_rgba(193,199,208,0.28),-8px_-8px_18px_rgba(255,255,255,0.9)]">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-[18px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.92),rgba(245,226,233,0.78))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.92),4px_4px_12px_rgba(195,201,211,0.35)]">
+                <span className="text-lg">🏠</span>
+              </div>
+              <div>
+                <div className="text-[19px] font-semibold tracking-tight">d&x home</div>
+                <div className="text-[11px] text-cream-muted">今天也慢慢整理小世界</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {version ? (
+                <div className="rounded-full border border-white/80 bg-[linear-gradient(145deg,rgba(255,249,250,0.96),rgba(226,235,247,0.82))] px-3 py-1.5 text-[11px] font-medium text-cream-muted shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),3px_3px_10px_rgba(196,203,213,0.32)]">
+                  v{version}
+                </div>
+              ) : null}
+              <button className="flex h-9 w-9 items-center justify-center rounded-full border border-white/80 bg-white/58 text-cream-muted shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),3px_3px_10px_rgba(196,203,213,0.28)]">
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" /></svg>
+              </button>
+            </div>
           </div>
-          {version ? <div className="text-[11px] text-cream-muted">v{version}</div> : null}
-          <div className="h-10 w-10" />
         </div>
       </div>
 
       {dailyWhisper ? (
         <div className="px-4 pt-2">
-          <div className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 px-3 py-2 text-[12px] leading-relaxed text-cream-text">
-            <span className="text-cream-muted mr-1">渡今天想说：</span>
-            {dailyWhisper}
+          <div className="rounded-[30px] border border-white/80 bg-[linear-gradient(150deg,rgba(255,255,255,0.8),rgba(248,250,252,0.54))] px-4 py-4 shadow-[10px_10px_24px_rgba(193,199,208,0.24),-8px_-8px_18px_rgba(255,255,255,0.84)] backdrop-blur-xl">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="rounded-full border border-white/80 bg-cream-pink/45 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cream-text">Today note</span>
+              <span className="text-[11px] text-cream-muted">渡今天想说</span>
+            </div>
+            <div className="text-[13px] leading-7 text-cream-text">{dailyWhisper}</div>
           </div>
         </div>
       ) : null}
       {dailyReport ? (
         <div className="px-4 pt-2">
-          <details className="rounded-xl3 bg-white/52 backdrop-blur-xl border border-white/55 shadow-soft2 px-3 py-2 text-[12px] leading-relaxed text-cream-text">
+          <details className="rounded-[28px] border border-white/76 bg-[linear-gradient(150deg,rgba(255,255,255,0.74),rgba(245,249,252,0.48))] px-4 py-3 text-[12px] leading-relaxed text-cream-text shadow-[8px_8px_20px_rgba(193,199,208,0.18),-6px_-6px_14px_rgba(255,255,255,0.75)] backdrop-blur-xl">
             <summary className="cursor-pointer select-none text-cream-text">
-              今日小报告：聊了 {String(dailyReport.rounds || 0)} 轮 · {Array.isArray(dailyReport.keywords) ? dailyReport.keywords.join(" / ") : "暂无关键词"}
+              <span className="mr-2 rounded-full border border-white/80 bg-cream-accent/38 px-2 py-0.5 text-[10px] font-semibold tracking-[0.16em] text-cream-text">REPORT</span>
+              聊了 {String(dailyReport.rounds || 0)} 轮 · {Array.isArray(dailyReport.keywords) ? dailyReport.keywords.join(" / ") : "暂无关键词"}
             </summary>
-            <div className="mt-2 space-y-1 text-xs">
+            <div className="mt-3 space-y-1 text-xs">
               <div>日期：{dailyReport.report_date || "-"}</div>
               <div>关键词：{Array.isArray(dailyReport.keywords) ? dailyReport.keywords.join(" / ") : "-"}</div>
-              <div className="text-cream-muted whitespace-pre-wrap">{dailyReport.summary_text || "（暂无）"}</div>
+              <div className="whitespace-pre-wrap rounded-[22px] bg-white/52 px-3 py-2 text-cream-muted shadow-[inset_1px_1px_0_rgba(255,255,255,0.82),inset_-3px_-3px_8px_rgba(214,220,228,0.28)]">{dailyReport.summary_text || "（暂无）"}</div>
               <div className="text-cream-muted">更新时间：{dailyReport.generated_at || "-"}</div>
               <div className="pt-1">
                 <Btn kind="dark" onClick={refreshDailyReport} disabled={dailyRefreshing}>
@@ -215,14 +250,13 @@ function Shell() {
       ) : null}
 
       <div className="px-4 pt-6 pb-28">
+        <div className="mb-3 px-1">
+          <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-cream-muted">workspace</div>
+        </div>
         <div className="grid grid-cols-2 gap-3">
-          <FeatureTile title="日志" desc="查看/过滤/复制" color="bg-white/38" icon={<LineIcon name="logs" />} onClick={() => setPanel("logs")} />
-          <FeatureTile title="思维链" desc="最近10条（降序）" color="bg-white/38" icon={<LineIcon name="reasoning" />} onClick={() => setPanel("reasoning")} />
-          <FeatureTile title="记忆调试" desc="窗口总结 + 动态召回" color="bg-white/38" icon={<LineIcon name="memory" />} onClick={() => setPanel("memory-debug")} />
-          <FeatureTile title="渡的记事本" desc="固定注入 · 条目管理" color="bg-white/38" icon={<LineIcon name="notebook" />} onClick={() => setPanel("du-notebook")} />
-          <FeatureTile title="文游模块" desc="系统空间 + 已完成副本" color="bg-white/38" icon={<LineIcon name="wenyou-hub" />} onClick={() => setPanel("wenyou")} />
-          <FeatureTile title="表情包" desc="情绪分类 · 上传管理" color="bg-white/38" icon={<LineIcon name="stickers" />} onClick={() => setPanel("stickers")} />
-          <FeatureTile title="核心Prompt" desc="固定注入，可随时更新" color="bg-white/38" icon={<LineIcon name="prompt" />} onClick={() => setShowCorePrompt(true)} />
+          {featureTiles.map((item) => (
+            <FeatureTile key={item.title} title={item.title} desc={item.desc} tone={item.tone} icon={item.icon} onClick={item.onClick} />
+          ))}
         </div>
       </div>
 
@@ -311,23 +345,40 @@ function Shell() {
 function FeatureTile({
   title,
   desc,
-  color,
+  tone,
   icon,
   onClick,
   disabled,
 }: {
   title: string;
   desc: string;
-  color: string;
+  tone: "blue" | "pink" | "yellow";
   icon: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
 }) {
+  const toneMap = {
+    blue: {
+      shell: "bg-[linear-gradient(145deg,rgba(255,255,255,0.72),rgba(231,240,250,0.52))]",
+      badge: "bg-cream-blue/46",
+      glow: "from-cream-blue/28",
+    },
+    pink: {
+      shell: "bg-[linear-gradient(145deg,rgba(255,255,255,0.72),rgba(247,232,240,0.55))]",
+      badge: "bg-cream-pink/44",
+      glow: "from-cream-pink/26",
+    },
+    yellow: {
+      shell: "bg-[linear-gradient(145deg,rgba(255,255,255,0.72),rgba(248,241,214,0.58))]",
+      badge: "bg-cream-accent/40",
+      glow: "from-cream-accent/24",
+    },
+  }[tone];
   return (
     <button
       className={
-        "h-24 rounded-xl3 p-3 text-left shadow-soft backdrop-blur-xl border border-white/50 transition active:scale-[0.99] " +
-        color +
+        "group relative h-28 overflow-hidden rounded-[30px] border border-white/75 p-4 text-left shadow-[10px_10px_24px_rgba(193,199,208,0.22),-8px_-8px_18px_rgba(255,255,255,0.84)] backdrop-blur-xl transition active:scale-[0.99] " +
+        toneMap.shell +
         (disabled ? " opacity-60 cursor-not-allowed" : "")
       }
       onClick={() => {
@@ -336,13 +387,22 @@ function FeatureTile({
       }}
       disabled={disabled}
     >
-      <div className="flex items-center gap-2">
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-xl2 bg-white/65 border border-white/50 shadow-soft2">
+      <div className={"pointer-events-none absolute right-3 top-3 h-14 w-14 rounded-full bg-gradient-to-br " + toneMap.glow + " to-transparent blur-2xl"} />
+      <div className="relative flex items-center gap-3">
+        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] border border-white/80 shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_10px_rgba(195,201,211,0.28)] " + toneMap.badge}>
           {icon}
         </span>
-        <div className="text-sm font-semibold">{title}</div>
+        <div className="min-w-0">
+          <div className="text-[17px] font-semibold tracking-tight">{title}</div>
+          <div className="mt-1 text-[11px] leading-tight text-cream-muted">{desc}</div>
+        </div>
       </div>
-      <div className="mt-1 text-[11px] text-cream-muted leading-tight">{desc}</div>
+      <div className="relative mt-4 flex items-center justify-between">
+        <span className="rounded-full bg-white/48 px-2.5 py-1 text-[10px] font-medium tracking-[0.14em] text-cream-muted">OPEN</span>
+        <svg className="h-4 w-4 text-cream-muted transition group-active:translate-x-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <path d="M8 6l8 6-8 6" />
+        </svg>
+      </div>
     </button>
   );
 }
@@ -385,17 +445,17 @@ function HomeOrbMenu({
     <div className="fixed inset-x-0 bottom-14 z-30 flex justify-center pointer-events-none">
       <div className="relative pointer-events-auto">
         {open ? (
-          <div className="absolute left-1/2 top-1/2 w-[272px] -translate-x-1/2 -translate-y-[122%] rounded-3xl bg-white/36 backdrop-blur-2xl border border-white/50 shadow-soft p-4">
+          <div className="absolute left-1/2 top-1/2 w-[272px] -translate-x-1/2 -translate-y-[122%] rounded-[32px] border border-white/75 bg-[linear-gradient(145deg,rgba(255,255,255,0.76),rgba(240,244,248,0.58))] p-4 shadow-[12px_12px_24px_rgba(193,199,208,0.24),-8px_-8px_18px_rgba(255,255,255,0.84)] backdrop-blur-2xl">
             <div className="grid grid-cols-3 gap-3">
               <button
-                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(236,242,248,0.55))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenBackground}
                 title="背景设置"
               >
                 <LineIcon name="background" />
               </button>
               <button
-                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(248,238,244,0.58))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenSchedule}
                 title="日历与提醒"
               >
@@ -404,7 +464,7 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(248,242,218,0.58))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenAlarm}
                 title="闹钟"
               >
@@ -414,7 +474,7 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(236,242,248,0.55))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenDuDay}
                 title="渡的一天"
               >
@@ -423,21 +483,21 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(248,238,244,0.58))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenTree}
                 title="小渡&小玥の树"
               >
                 <LineIcon name="tree" />
               </button>
               <button
-                className="h-14 rounded-2xl bg-white/60 border border-white/55 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(248,242,218,0.58))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenUpstream}
                 title="上游切换"
               >
                 <LineIcon name="upstream" />
               </button>
               <button
-                className="h-14 rounded-2xl bg-white/45 border border-white/45 shadow-soft2 flex items-center justify-center text-cream-muted active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/70 bg-white/48 shadow-[inset_1px_1px_0_rgba(255,255,255,0.88),4px_4px_12px_rgba(195,201,211,0.24)] flex items-center justify-center text-cream-muted active:scale-[0.99] transition"
                 onClick={onToggle}
                 title="收起"
               >
@@ -449,11 +509,11 @@ function HomeOrbMenu({
           </div>
         ) : null}
         <button
-          className="h-16 w-16 rounded-full bg-white/62 backdrop-blur-2xl border border-white/55 shadow-soft flex items-center justify-center text-cream-text"
+          className="h-[74px] w-[74px] rounded-full border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(236,242,248,0.52))] shadow-[10px_10px_24px_rgba(193,199,208,0.26),-8px_-8px_18px_rgba(255,255,255,0.88)] backdrop-blur-2xl flex items-center justify-center text-cream-text"
           onClick={onToggle}
           title="Home"
         >
-          <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
             <path d="M3 10.5 12 3l9 7.5V21h-6v-6h-6v6H3z" />
           </svg>
         </button>
@@ -1008,4 +1068,3 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
     </Modal>
   );
 }
-

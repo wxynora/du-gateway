@@ -293,7 +293,7 @@ export function ScheduleTab() {
       <div className="flex items-center justify-between px-1">
         <div className="text-xs text-cream-muted">日历与闹钟 · 轻量管理</div>
         <button
-          className="h-8 w-8 rounded-full bg-white/58 backdrop-blur-xl border border-white/50 shadow-soft2 flex items-center justify-center text-cream-text active:scale-[0.99] transition disabled:opacity-50"
+          className="neo-icon-btn h-8 w-8 disabled:opacity-50"
           onClick={load}
           disabled={loading}
           title="刷新"
@@ -306,15 +306,15 @@ export function ScheduleTab() {
       </div>
 
       {error ? (
-        <div className="rounded-xl2 bg-cream-pink/65 px-3 py-2 text-xs text-cream-text shadow-soft2">
+        <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">
           读取失败：{error}
         </div>
       ) : null}
 
-      <div className="rounded-xl3 bg-cream-blue/42 backdrop-blur-xl border border-white/50 shadow-soft p-3 space-y-2">
+      <div className="neo-panel p-3 space-y-2">
         <div className="text-xs text-cream-muted">新增提醒（闹钟）</div>
         <input
-          className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2 placeholder:text-cream-muted"
+          className="neo-input"
           placeholder="提醒标题，例如：吃药"
           value={formTitle}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormTitle(e.target.value)}
@@ -330,10 +330,10 @@ export function ScheduleTab() {
                     key={w}
                     type="button"
                     className={
-                      "rounded-xl2 border px-2 py-2 text-xs shadow-soft2 " +
+                      "rounded-[18px] border px-2 py-2 text-xs shadow-soft2 " +
                       (selected
                         ? "bg-neutral-900 border-neutral-900 text-white"
-                        : "bg-cream-card/90 border-white/55 text-cream-text")
+                        : "bg-[linear-gradient(145deg,rgba(255,255,255,0.86),rgba(239,243,248,0.62))] border-white/80 text-cream-text")
                     }
                     onClick={() => toggleWeeklyWeekday(idx)}
                     disabled={creating}
@@ -345,7 +345,7 @@ export function ScheduleTab() {
             </div>
             <input
               type="time"
-              className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
+              className="neo-input"
               value={formWeeklyTime}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormWeeklyTime(e.target.value)}
               disabled={creating}
@@ -354,7 +354,7 @@ export function ScheduleTab() {
         ) : formRepeat === "daily" ? (
           <input
             type="time"
-            className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
+            className="neo-input"
             value={formDailyTime}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormDailyTime(e.target.value)}
             disabled={creating}
@@ -362,7 +362,7 @@ export function ScheduleTab() {
         ) : (
           <input
             type="datetime-local"
-            className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
+            className="neo-input"
             value={formDatetime}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormDatetime(e.target.value)}
             disabled={creating}
@@ -370,7 +370,7 @@ export function ScheduleTab() {
         )}
         <div className="grid grid-cols-2 gap-2">
           <select
-            className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2"
+            className="neo-select"
             value={formRepeat}
             onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormRepeat(e.target.value)}
             disabled={creating}
@@ -384,7 +384,7 @@ export function ScheduleTab() {
           </Btn>
         </div>
         <input
-          className="w-full rounded-xl2 bg-cream-card/90 border border-white/55 px-3 py-2 text-sm text-cream-text shadow-soft2 placeholder:text-cream-muted"
+          className="neo-input"
           placeholder="备注（可选）"
           value={formNote}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormNote(e.target.value)}
@@ -392,12 +392,12 @@ export function ScheduleTab() {
         />
       </div>
 
-      <div className="rounded-xl3 bg-white/40 backdrop-blur-xl border border-white/50 shadow-soft p-3 space-y-2">
+      <div className="neo-panel p-3 space-y-2">
         <div className="flex items-center justify-between">
           <div className="text-xs text-cream-muted">月视图日历</div>
           <div className="flex items-center gap-1">
             <button
-              className="h-7 rounded-xl2 bg-white/65 border border-white/55 px-2 text-[11px] text-cream-text shadow-soft2"
+              className="h-7 rounded-[16px] bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(239,243,248,0.62))] border border-white/80 px-2 text-[11px] text-cream-text shadow-soft2"
               onClick={() => switchMonth(-1)}
               title="上月"
             >
@@ -405,7 +405,7 @@ export function ScheduleTab() {
             </button>
             <div className="min-w-[84px] text-center text-[11px] text-cream-muted">{monthLabel(visibleMonth.year, visibleMonth.month)}</div>
             <button
-              className="h-7 rounded-xl2 bg-white/65 border border-white/55 px-2 text-[11px] text-cream-text shadow-soft2"
+              className="h-7 rounded-[16px] bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(239,243,248,0.62))] border border-white/80 px-2 text-[11px] text-cream-text shadow-soft2"
               onClick={() => switchMonth(1)}
               title="下月"
             >
@@ -443,13 +443,13 @@ export function ScheduleTab() {
         </div>
       </div>
 
-      <div className="rounded-xl3 bg-white/38 backdrop-blur-xl border border-white/45 shadow-soft p-3">
-        <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
+      <div className="neo-panel p-3">
+        <div className="neo-tag-dark">
           当日提醒 · {dateLabel(selectedDate)} · {dayItems.length}
         </div>
         <div className="mt-3 space-y-2">
           {dayItems.map((it) => (
-            <div key={`day-${String(it.id || "")}`} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
+            <div key={`day-${String(it.id || "")}`} className="neo-panel-soft p-3">
               <div className="text-sm font-medium text-cream-text">{it.title || "未命名提醒"}</div>
               <div className="mt-1 text-xs text-cream-muted">
                 {fmtDate(String(it.datetime || ""))} · {repeatLabel(it)} · {it.enabled === false ? "已禁用" : "启用中"}
@@ -462,18 +462,18 @@ export function ScheduleTab() {
       </div>
 
       {!loading && !error && !enabledItems.length && !disabledItems.length ? (
-        <div className="rounded-xl2 bg-white/46 border border-white/45 shadow-soft2 px-3 py-2 text-xs text-cream-muted">
+        <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(255,255,255,0.86),rgba(239,243,248,0.62))] text-cream-muted">
           还没有提醒，先创建一条试试。
         </div>
       ) : null}
 
-      <div className="rounded-xl3 bg-white/42 backdrop-blur-xl border border-white/50 shadow-soft p-3">
-        <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
+      <div className="neo-panel p-3">
+        <div className="neo-tag-dark">
           启用中 · {enabledItems.length}
         </div>
         <div className="mt-3 space-y-2">
           {enabledItems.map((it) => (
-            <div key={String(it.id || "")} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
+            <div key={String(it.id || "")} className="neo-panel-soft p-3">
               <div className="text-sm font-medium text-cream-text">{it.title || "未命名提醒"}</div>
               <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(it)}</div>
               {it.note ? <div className="mt-1 text-xs text-cream-muted">{it.note}</div> : null}
@@ -487,13 +487,13 @@ export function ScheduleTab() {
         </div>
       </div>
 
-      <div className="rounded-xl3 bg-white/34 backdrop-blur-xl border border-white/45 shadow-soft p-3">
-        <div className="inline-flex items-center rounded-2xl bg-neutral-900 px-3.5 py-1.5 text-[11px] font-medium text-white shadow-soft2">
+      <div className="neo-panel p-3">
+        <div className="neo-tag-dark">
           已禁用 · {disabledItems.length}
         </div>
         <div className="mt-3 space-y-2">
           {disabledItems.map((it) => (
-            <div key={String(it.id || "")} className="rounded-xl2 bg-white border border-white/70 shadow-soft2 p-3">
+            <div key={String(it.id || "")} className="neo-panel-soft p-3">
               <div className="text-sm text-cream-text">{it.title || "未命名提醒"}</div>
               <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(it)} · 已禁用</div>
               <div className="mt-2 flex items-center gap-2">
