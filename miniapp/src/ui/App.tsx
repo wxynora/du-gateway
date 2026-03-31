@@ -186,7 +186,7 @@ function Shell() {
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 10px)" }}
       >
         <div className="flex items-center justify-between">
-          <div className="inline-flex items-center gap-2 rounded-full bg-[rgba(244,247,251,0.78)] px-3 py-2 shadow-[0_6px_16px_rgba(154,168,186,0.12)] backdrop-blur-xl">
+          <div className="inline-flex items-center gap-2 rounded-full bg-[rgba(244,247,251,0.78)] px-3 py-2 shadow-[0_4px_10px_rgba(154,168,186,0.1)] backdrop-blur-xl">
             <span className="text-sm">🏠</span>
             <span className="text-[17px] font-semibold tracking-tight">d&x home</span>
           </div>
@@ -349,7 +349,7 @@ function FeatureTile({
   return (
     <button
       className={
-        "group relative min-h-[118px] overflow-hidden rounded-[26px] p-4 text-left shadow-[8px_8px_18px_rgba(201,206,214,0.2),-5px_-5px_12px_rgba(255,255,255,0.42),inset_1px_1px_0_rgba(255,255,255,0.22)] backdrop-blur-xl transition active:scale-[0.99] " +
+        "group relative min-h-[116px] overflow-hidden rounded-[24px] p-4 text-left shadow-[5px_5px_12px_rgba(201,206,214,0.18),-3px_-3px_8px_rgba(255,255,255,0.34),inset_1px_1px_0_rgba(255,255,255,0.18)] backdrop-blur-xl transition active:scale-[0.99] " +
         toneMap.shell +
         (disabled ? " opacity-60 cursor-not-allowed" : "")
       }
@@ -360,18 +360,13 @@ function FeatureTile({
       disabled={disabled}
     >
       <div className="relative flex items-center gap-3">
-        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] shadow-[4px_4px_10px_rgba(201,206,214,0.16),-2px_-2px_6px_rgba(255,255,255,0.34)] " + toneMap.badge}>
+        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] shadow-[2px_2px_6px_rgba(201,206,214,0.12),-1px_-1px_3px_rgba(255,255,255,0.22)] " + toneMap.badge}>
           {icon}
         </span>
         <div className="min-w-0">
           <div className="text-[16px] font-semibold tracking-tight">{title}</div>
           <div className="mt-1 text-[11px] leading-[1.45] text-cream-muted">{desc}</div>
         </div>
-      </div>
-      <div className="relative mt-5 flex justify-end">
-        <svg className="h-4 w-4 text-cream-muted transition group-active:translate-x-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-          <path d="M8 6l8 6-8 6" />
-        </svg>
       </div>
     </button>
   );
