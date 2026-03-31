@@ -66,6 +66,23 @@ def _telegram_webapp_url() -> str:
     return f"{base}{sep}v={ver}"
 
 
+def _private_miniapp_reply_markup(chat_id: int) -> Optional[dict]:
+    """私聊里常驻一个 MiniApp WebApp 按钮，避免每次都要靠 /start 重建。"""
+    try:
+        if int(chat_id) <= 0:
+            return None
+    except (TypeError, ValueError):
+        return None
+    webapp_url = _telegram_webapp_url()
+    if not webapp_url:
+        return None
+    return {
+        "keyboard": [[{"text": "MiniApp", "web_app": {"url": webapp_url}}]],
+        "resize_keyboard": True,
+        "is_persistent": True,
+    }
+
+
 def _is_wenyou_active() -> bool:
     """是否存在进行中的文游局（按文游群 chat_id 会话）。"""
     gid = int(WENYOU_GROUP_CHAT_ID or 0)
@@ -980,8 +997,9 @@ def send_message(
         return False
     url = f"{TELEGRAM_API_BASE}{tok}/sendMessage"
     payload: dict = {"chat_id": chat_id, "text": text}
-    if reply_markup is not None:
-        payload["reply_markup"] = reply_markup
+    final_reply_markup = reply_markup if reply_markup is not None else _private_miniapp_reply_markup(chat_id)
+    if final_reply_markup is not None:
+        payload["reply_markup"] = final_reply_markup
     try:
         r = requests.post(url, json=payload, timeout=30)
         if r.status_code != 200:
@@ -1445,24 +1463,12 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         record_group_player_line(int(chat_id), text)
         return
 
-    # /start：先清掉旧 Reply Keyboard，再发一份新的 web_app 键盘，避免 Telegram 复用残留旧入口。
     cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
     if cmd0 == "/start":
-        webapp_url = _telegram_webapp_url()
-        send_message(int(chat_id), "先把旧入口清一下。", bot_token=token, reply_markup={"remove_keyboard": True})
-        if not webapp_url:
+        if not _telegram_webapp_url():
             send_message(int(chat_id), "渡已就绪，但当前还没配 MiniApp URL。", bot_token=token)
             return
-        send_message(
-            int(chat_id),
-            "渡已就绪。下面是新的 MiniApp 入口。",
-            bot_token=token,
-            reply_markup={
-                "keyboard": [[{"text": "MiniApp", "web_app": {"url": webapp_url}}]],
-                "resize_keyboard": True,
-                "is_persistent": True,
-            },
-        )
+        send_message(int(chat_id), "渡已就绪，输入区上方会常驻 MiniApp 按钮。", bot_token=token)
         return
 
     logger.info("收到 TG 消息 user_id=%s chat_id=%s len=%d", user_id, chat_id, len(text))
