@@ -72,11 +72,11 @@ export function WindowsTab() {
           {items.map((w) => (
             <button
               key={w.id}
-              className="w-full rounded-xl border border-slate-200 bg-white/60 p-3 text-left dark:border-slate-800 dark:bg-slate-900/30"
+              className="w-full neo-panel-soft p-3 text-left"
               onClick={() => openRounds(w.id || "")}
             >
-              <div className="text-sm font-medium">{w.id || "(no id)"}</div>
-              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              <div className="text-sm font-medium text-cream-text">{w.id || "(no id)"}</div>
+              <div className="mt-1 text-xs text-cream-muted">
                 {(w.whitelisted ? "白名单" : "非白") +
                   " · " +
                   (w.blacklisted ? "黑名单" : "非黑") +
@@ -85,7 +85,7 @@ export function WindowsTab() {
               </div>
             </button>
           ))}
-          {!items.length ? <div className="text-xs text-slate-500">（暂无）</div> : null}
+          {!items.length ? <div className="text-xs text-cream-muted">（暂无）</div> : null}
         </div>
       </Card>
 
@@ -93,11 +93,11 @@ export function WindowsTab() {
         <Modal title={`轮次 · ${activeWindowId}`} onClose={() => setActiveWindowId(null)}>
           <div className="space-y-2">
             {rounds.map((r) => (
-              <div key={r.index} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                <div className="text-xs text-slate-500 dark:text-slate-400">#{String(r.index ?? "")}</div>
-                <div className="mt-1 text-sm">{String(r.preview || "")}</div>
+              <div key={r.index} className="neo-panel-soft p-3">
+                <div className="text-xs text-cream-muted">#{String(r.index ?? "")}</div>
+                <div className="mt-1 text-sm text-cream-text">{String(r.preview || "")}</div>
                 <div className="mt-2 flex gap-2">
-                  <Btn onClick={() => viewRound(activeWindowId, Number(r.index || 0))} disabled={!r.index}>
+                  <Btn kind="blue" onClick={() => viewRound(activeWindowId, Number(r.index || 0))} disabled={!r.index}>
                     查看
                   </Btn>
                   <Btn kind="danger" onClick={() => deleteRound(activeWindowId, Number(r.index || 0))} disabled={!r.index}>
@@ -106,7 +106,7 @@ export function WindowsTab() {
                 </div>
               </div>
             ))}
-            {!rounds.length ? <div className="text-xs text-slate-500">（暂无轮次）</div> : null}
+            {!rounds.length ? <div className="text-xs text-cream-muted">（暂无轮次）</div> : null}
           </div>
         </Modal>
       ) : null}
@@ -120,15 +120,15 @@ export function WindowsTab() {
                 typeof m?.content === "string" ? (m.content as string) : JSON.stringify(m?.content ?? "", null, 2);
               const reasoning = (m?.reasoning || m?.reasoning_content || m?.thinking || "") as string;
               return (
-                <div key={i} className="rounded-2xl border border-slate-200 p-3 dark:border-slate-800">
-                  <div className="text-xs text-slate-500 dark:text-slate-400">{role}</div>
-                  <div className="mt-1 whitespace-pre-wrap text-sm">{content || ""}</div>
+                <div key={i} className="neo-panel-soft p-3">
+                  <div className="text-xs text-cream-muted">{role}</div>
+                  <div className="mt-1 whitespace-pre-wrap text-sm text-cream-text">{content || ""}</div>
                   {role.toLowerCase() === "assistant" && reasoning?.trim() ? (
-                    <details className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900/30">
-                      <summary className="cursor-pointer select-none text-xs text-slate-600 dark:text-slate-300">
+                    <details className="mt-2 neo-panel-inset p-2">
+                      <summary className="cursor-pointer select-none text-xs text-cream-muted">
                         思维链（展开/收起）
                       </summary>
-                      <div className="mt-2 whitespace-pre-wrap font-mono text-xs text-slate-700 dark:text-slate-200">
+                      <div className="mt-2 whitespace-pre-wrap font-mono text-xs text-cream-text">
                         {reasoning}
                       </div>
                     </details>

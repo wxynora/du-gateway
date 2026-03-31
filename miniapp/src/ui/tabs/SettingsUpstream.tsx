@@ -110,7 +110,7 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
           说明：这里切换的是网关的“全局默认上游”，会影响 RikkaHub/Telegram 等所有客户端。API Key 暂不在手机端维护（更安全）。
         </div>
         <div className="flex justify-end">
-          <Btn kind="dark" onClick={probeAll} disabled={probingAll || !items.length}>
+          <Btn kind="blue" onClick={probeAll} disabled={probingAll || !items.length}>
             {probingAll ? "探活中..." : "一键探活"}
           </Btn>
         </div>
@@ -124,13 +124,13 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
               }
             >
               <div className="flex items-center justify-between">
-                <div className="font-medium">{it.name || `upstream${idx + 1}`}</div>
+                <div className="font-medium text-cream-text">{it.name || `upstream${idx + 1}`}</div>
                 <div className="flex items-center gap-2">
-                  <Btn kind="dark" onClick={() => probeOne(idx)} disabled={probingIndex === idx || probingAll}>
+                  <Btn kind="yellow" onClick={() => probeOne(idx)} disabled={probingIndex === idx || probingAll}>
                     {probingIndex === idx ? "检测中..." : "探活"}
                   </Btn>
                   <Btn
-                    kind="dark"
+                    kind={idx === active ? "blue" : "pink"}
                     onClick={() => {
                       setActive(idx);
                       switchActive(idx);

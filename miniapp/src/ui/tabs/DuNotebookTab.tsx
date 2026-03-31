@@ -132,11 +132,11 @@ export function DuNotebookTab() {
   return (
     <div className="space-y-3">
       <div className="neo-panel p-3 space-y-2">
-        <div className="neo-tag-dark">
+        <div className="neo-tag-pink">
           新增记事
         </div>
         <div>
-          <Btn kind="dark" onClick={load} disabled={loading || saving}>
+          <Btn kind="blue" onClick={load} disabled={loading || saving}>
             {loading ? "刷新中..." : "刷新列表"}
           </Btn>
         </div>
@@ -147,7 +147,7 @@ export function DuNotebookTab() {
           onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value)}
           disabled={saving}
         />
-        <Btn kind="dark" onClick={add} disabled={saving}>
+        <Btn kind="pink" onClick={add} disabled={saving}>
           {saving ? "保存中..." : "写入记事本"}
         </Btn>
       </div>
@@ -165,7 +165,7 @@ export function DuNotebookTab() {
                   disabled={saving}
                 />
                 <div className="flex items-center gap-2">
-                  <Btn kind="dark" onClick={() => saveEdit(String(it.id || ""))} disabled={saving}>保存</Btn>
+                  <Btn kind="yellow" onClick={() => saveEdit(String(it.id || ""))} disabled={saving}>保存</Btn>
                   <Btn
                     kind="blue"
                     onClick={() => {
@@ -183,7 +183,7 @@ export function DuNotebookTab() {
                 <div className="text-sm text-cream-text whitespace-pre-wrap">{String(it.content || "")}</div>
                 <div className="flex items-center gap-2">
                   <Btn
-                    kind="dark"
+                    kind="blue"
                     onClick={() => {
                       setEditingId(String(it.id || ""));
                       setEditingText(String(it.content || ""));

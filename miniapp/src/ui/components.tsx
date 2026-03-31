@@ -34,7 +34,7 @@ export function Btn({
 }: {
   children: React.ReactNode;
   onClick?: () => void;
-  kind?: "default" | "danger" | "blue" | "pink" | "green" | "dark";
+  kind?: "default" | "danger" | "blue" | "pink" | "yellow" | "green" | "dark";
   disabled?: boolean;
 }) {
   const base =
@@ -43,6 +43,7 @@ export function Btn({
     if (kind === "danger") return base + " bg-[linear-gradient(145deg,rgba(255,243,243,0.94),rgba(242,208,203,0.84))] text-cream-danger";
     if (kind === "blue") return base + " bg-[linear-gradient(145deg,rgba(245,249,255,0.94),rgba(212,226,245,0.84))] text-cream-text";
     if (kind === "pink") return base + " bg-[linear-gradient(145deg,rgba(255,248,251,0.94),rgba(236,206,221,0.84))] text-cream-text";
+    if (kind === "yellow") return base + " bg-[linear-gradient(145deg,rgba(255,251,242,0.95),rgba(244,229,189,0.82))] text-cream-text";
     if (kind === "green") return base + " bg-[linear-gradient(145deg,rgba(245,251,248,0.94),rgba(205,227,218,0.84))] text-cream-text";
     if (kind === "dark") return base + " bg-[linear-gradient(145deg,rgba(55,61,73,0.96),rgba(31,39,51,0.94))] text-white border-transparent";
     return base + " bg-[linear-gradient(145deg,rgba(255,255,255,0.86),rgba(239,243,248,0.58))] text-cream-text";
@@ -65,8 +66,8 @@ export function Modal({
 }) {
   return (
     <>
-      <div className="fixed inset-0 z-40 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.28),rgba(91,104,124,0.14))] backdrop-blur-[6px]" onClick={onClose} />
-      <div className="fixed inset-x-0 bottom-0 z-50 mx-auto max-w-xl max-h-[80vh] overflow-auto rounded-t-[34px] border border-white/78 bg-[linear-gradient(160deg,rgba(255,255,255,0.84),rgba(240,244,248,0.66))] p-4 shadow-[0_-12px_30px_rgba(193,199,208,0.18)] backdrop-blur-2xl safe-bottom">
+      <div className="fixed inset-0 z-40 bg-black/10 backdrop-blur-[4px]" onClick={onClose} />
+      <div className="fixed inset-x-0 bottom-0 z-50 mx-auto max-w-xl max-h-[80vh] overflow-auto rounded-t-[34px] border border-white/78 bg-[linear-gradient(160deg,rgba(255,255,255,0.88),rgba(243,244,246,0.72))] p-4 shadow-[0_-8px_22px_rgba(196,201,209,0.14)] backdrop-blur-2xl safe-bottom">
         <div className="flex items-center justify-between">
           <div className="neo-chip">{
             title

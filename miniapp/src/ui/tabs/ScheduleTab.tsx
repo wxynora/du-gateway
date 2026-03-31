@@ -330,10 +330,8 @@ export function ScheduleTab() {
                     key={w}
                     type="button"
                     className={
-                      "rounded-[18px] border px-2 py-2 text-xs shadow-soft2 " +
-                      (selected
-                        ? "bg-neutral-900 border-neutral-900 text-white"
-                        : "bg-[linear-gradient(145deg,rgba(255,255,255,0.86),rgba(239,243,248,0.62))] border-white/80 text-cream-text")
+                      "neo-segment " +
+                      (selected ? "neo-segment-active" : "")
                     }
                     onClick={() => toggleWeeklyWeekday(idx)}
                     disabled={creating}
@@ -397,7 +395,7 @@ export function ScheduleTab() {
           <div className="text-xs text-cream-muted">月视图日历</div>
           <div className="flex items-center gap-1">
             <button
-              className="h-7 rounded-[16px] bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(239,243,248,0.62))] border border-white/80 px-2 text-[11px] text-cream-text shadow-soft2"
+              className="neo-segment h-7 px-2 text-[11px]"
               onClick={() => switchMonth(-1)}
               title="上月"
             >
@@ -405,7 +403,7 @@ export function ScheduleTab() {
             </button>
             <div className="min-w-[84px] text-center text-[11px] text-cream-muted">{monthLabel(visibleMonth.year, visibleMonth.month)}</div>
             <button
-              className="h-7 rounded-[16px] bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(239,243,248,0.62))] border border-white/80 px-2 text-[11px] text-cream-text shadow-soft2"
+              className="neo-segment h-7 px-2 text-[11px]"
               onClick={() => switchMonth(1)}
               title="下月"
             >

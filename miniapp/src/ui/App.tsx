@@ -181,34 +181,25 @@ function Shell() {
 
   return (
     <div className="relative min-h-dvh safe-bottom overflow-hidden text-cream-text" style={rootStyle}>
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-[-36px] top-[88px] h-28 w-28 rounded-full bg-cream-pink/20 blur-3xl" />
-        <div className="absolute right-[-24px] top-[240px] h-32 w-32 rounded-full bg-cream-blue/22 blur-3xl" />
-        <div className="absolute bottom-[160px] left-[18%] h-24 w-24 rounded-full bg-cream-accent/20 blur-3xl" />
-      </div>
-
       <div className="sticky top-0 z-20 bg-cream-bg/68 backdrop-blur-xl">
         <div
-          className="px-4 pb-3"
-          style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 16px)" }}
+          className="px-4 pb-2"
+          style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
         >
-          <div className="flex items-center justify-between rounded-[28px] border border-white/70 bg-white/50 px-4 py-3 shadow-[8px_8px_18px_rgba(193,199,208,0.28),-8px_-8px_18px_rgba(255,255,255,0.9)]">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-[18px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.92),rgba(245,226,233,0.78))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.92),4px_4px_12px_rgba(195,201,211,0.35)]">
-                <span className="text-lg">🏠</span>
+          <div className="flex items-center justify-between gap-3 rounded-[24px] border border-white/70 bg-[linear-gradient(145deg,rgba(255,255,255,0.84),rgba(244,245,247,0.7))] px-3 py-2.5 shadow-[8px_8px_18px_rgba(196,201,209,0.18),-7px_-7px_16px_rgba(255,255,255,0.8)]">
+            <div className="min-w-0 flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-[16px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.92),rgba(246,240,243,0.76))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_10px_rgba(196,201,209,0.22)]">
+                <span className="text-base">🏠</span>
               </div>
-              <div>
-                <div className="text-[19px] font-semibold tracking-tight">d&x home</div>
-                <div className="text-[11px] text-cream-muted">今天也慢慢整理小世界</div>
-              </div>
+              <div className="truncate text-[18px] font-semibold tracking-tight">d&x home</div>
             </div>
             <div className="flex items-center gap-2">
               {version ? (
-                <div className="rounded-full border border-white/80 bg-[linear-gradient(145deg,rgba(255,249,250,0.96),rgba(226,235,247,0.82))] px-3 py-1.5 text-[11px] font-medium text-cream-muted shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),3px_3px_10px_rgba(196,203,213,0.32)]">
+                <div className="rounded-full border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.92),rgba(244,245,247,0.74))] px-2.5 py-1 text-[10px] font-medium text-cream-muted shadow-[inset_1px_1px_0_rgba(255,255,255,0.88),3px_3px_8px_rgba(196,201,209,0.18)]">
                   v{version}
                 </div>
               ) : null}
-              <button className="flex h-9 w-9 items-center justify-center rounded-full border border-white/80 bg-white/58 text-cream-muted shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),3px_3px_10px_rgba(196,203,213,0.28)]">
+              <button className="flex h-8 w-8 items-center justify-center rounded-full border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.9),rgba(244,245,247,0.72))] text-cream-muted shadow-[inset_1px_1px_0_rgba(255,255,255,0.88),3px_3px_8px_rgba(196,201,209,0.18)]">
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" /></svg>
               </button>
             </div>
@@ -217,21 +208,21 @@ function Shell() {
       </div>
 
       {dailyWhisper ? (
-        <div className="px-4 pt-2">
-          <div className="rounded-[30px] border border-white/80 bg-[linear-gradient(150deg,rgba(255,255,255,0.8),rgba(248,250,252,0.54))] px-4 py-4 shadow-[10px_10px_24px_rgba(193,199,208,0.24),-8px_-8px_18px_rgba(255,255,255,0.84)] backdrop-blur-xl">
+        <div className="px-4 pt-3">
+          <div className="rounded-[28px] border border-white/80 bg-[linear-gradient(150deg,rgba(255,255,255,0.82),rgba(244,245,247,0.68))] px-4 py-3.5 shadow-[10px_10px_22px_rgba(196,201,209,0.16),-8px_-8px_16px_rgba(255,255,255,0.8)] backdrop-blur-xl">
             <div className="mb-2 flex items-center gap-2">
-              <span className="rounded-full border border-white/80 bg-cream-pink/45 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cream-text">Today note</span>
+              <span className="rounded-full border border-white/80 bg-[rgba(241,224,231,0.9)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cream-text">Today note</span>
               <span className="text-[11px] text-cream-muted">渡今天想说</span>
             </div>
-            <div className="text-[13px] leading-7 text-cream-text">{dailyWhisper}</div>
+            <div className="text-[13px] leading-6 text-cream-text">{dailyWhisper}</div>
           </div>
         </div>
       ) : null}
       {dailyReport ? (
         <div className="px-4 pt-2">
-          <details className="rounded-[28px] border border-white/76 bg-[linear-gradient(150deg,rgba(255,255,255,0.74),rgba(245,249,252,0.48))] px-4 py-3 text-[12px] leading-relaxed text-cream-text shadow-[8px_8px_20px_rgba(193,199,208,0.18),-6px_-6px_14px_rgba(255,255,255,0.75)] backdrop-blur-xl">
+          <details className="rounded-[24px] border border-white/76 bg-[linear-gradient(150deg,rgba(255,255,255,0.8),rgba(244,245,247,0.64))] px-4 py-2.5 text-[12px] leading-relaxed text-cream-text shadow-[8px_8px_18px_rgba(196,201,209,0.15),-6px_-6px_12px_rgba(255,255,255,0.76)] backdrop-blur-xl">
             <summary className="cursor-pointer select-none text-cream-text">
-              <span className="mr-2 rounded-full border border-white/80 bg-cream-accent/38 px-2 py-0.5 text-[10px] font-semibold tracking-[0.16em] text-cream-text">REPORT</span>
+              <span className="mr-2 rounded-full border border-white/80 bg-[rgba(243,235,209,0.92)] px-2 py-0.5 text-[10px] font-semibold tracking-[0.16em] text-cream-text">REPORT</span>
               聊了 {String(dailyReport.rounds || 0)} 轮 · {Array.isArray(dailyReport.keywords) ? dailyReport.keywords.join(" / ") : "暂无关键词"}
             </summary>
             <div className="mt-3 space-y-1 text-xs">
@@ -249,11 +240,11 @@ function Shell() {
         </div>
       ) : null}
 
-      <div className="px-4 pt-6 pb-28">
-        <div className="mb-3 px-1">
+      <div className="px-4 pt-7 pb-28">
+        <div className="mb-4 px-1">
           <div className="text-[12px] font-semibold uppercase tracking-[0.18em] text-cream-muted">workspace</div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-4">
           {featureTiles.map((item) => (
             <FeatureTile key={item.title} title={item.title} desc={item.desc} tone={item.tone} icon={item.icon} onClick={item.onClick} />
           ))}
@@ -359,25 +350,22 @@ function FeatureTile({
 }) {
   const toneMap = {
     blue: {
-      shell: "bg-[linear-gradient(145deg,rgba(255,255,255,0.72),rgba(231,240,250,0.52))]",
-      badge: "bg-cream-blue/46",
-      glow: "from-cream-blue/28",
+      shell: "bg-[linear-gradient(145deg,rgba(255,255,255,0.76),rgba(244,245,247,0.64))]",
+      badge: "bg-[rgba(220,230,244,0.9)]",
     },
     pink: {
-      shell: "bg-[linear-gradient(145deg,rgba(255,255,255,0.72),rgba(247,232,240,0.55))]",
-      badge: "bg-cream-pink/44",
-      glow: "from-cream-pink/26",
+      shell: "bg-[linear-gradient(145deg,rgba(255,255,255,0.76),rgba(244,245,247,0.64))]",
+      badge: "bg-[rgba(239,224,232,0.92)]",
     },
     yellow: {
-      shell: "bg-[linear-gradient(145deg,rgba(255,255,255,0.72),rgba(248,241,214,0.58))]",
-      badge: "bg-cream-accent/40",
-      glow: "from-cream-accent/24",
+      shell: "bg-[linear-gradient(145deg,rgba(255,255,255,0.76),rgba(244,245,247,0.64))]",
+      badge: "bg-[rgba(243,235,209,0.92)]",
     },
   }[tone];
   return (
     <button
       className={
-        "group relative h-28 overflow-hidden rounded-[30px] border border-white/75 p-4 text-left shadow-[10px_10px_24px_rgba(193,199,208,0.22),-8px_-8px_18px_rgba(255,255,255,0.84)] backdrop-blur-xl transition active:scale-[0.99] " +
+        "group relative min-h-[124px] overflow-hidden rounded-[28px] border border-white/75 p-4 text-left shadow-[10px_10px_22px_rgba(196,201,209,0.18),-8px_-8px_16px_rgba(255,255,255,0.8)] backdrop-blur-xl transition active:scale-[0.99] " +
         toneMap.shell +
         (disabled ? " opacity-60 cursor-not-allowed" : "")
       }
@@ -387,17 +375,16 @@ function FeatureTile({
       }}
       disabled={disabled}
     >
-      <div className={"pointer-events-none absolute right-3 top-3 h-14 w-14 rounded-full bg-gradient-to-br " + toneMap.glow + " to-transparent blur-2xl"} />
       <div className="relative flex items-center gap-3">
         <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] border border-white/80 shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_10px_rgba(195,201,211,0.28)] " + toneMap.badge}>
           {icon}
         </span>
         <div className="min-w-0">
-          <div className="text-[17px] font-semibold tracking-tight">{title}</div>
-          <div className="mt-1 text-[11px] leading-tight text-cream-muted">{desc}</div>
+          <div className="text-[16px] font-semibold tracking-tight">{title}</div>
+          <div className="mt-1 text-[11px] leading-[1.45] text-cream-muted">{desc}</div>
         </div>
       </div>
-      <div className="relative mt-4 flex items-center justify-between">
+      <div className="relative mt-5 flex items-center justify-between">
         <span className="rounded-full bg-white/48 px-2.5 py-1 text-[10px] font-medium tracking-[0.14em] text-cream-muted">OPEN</span>
         <svg className="h-4 w-4 text-cream-muted transition group-active:translate-x-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
           <path d="M8 6l8 6-8 6" />
@@ -445,17 +432,17 @@ function HomeOrbMenu({
     <div className="fixed inset-x-0 bottom-14 z-30 flex justify-center pointer-events-none">
       <div className="relative pointer-events-auto">
         {open ? (
-          <div className="absolute left-1/2 top-1/2 w-[272px] -translate-x-1/2 -translate-y-[122%] rounded-[32px] border border-white/75 bg-[linear-gradient(145deg,rgba(255,255,255,0.76),rgba(240,244,248,0.58))] p-4 shadow-[12px_12px_24px_rgba(193,199,208,0.24),-8px_-8px_18px_rgba(255,255,255,0.84)] backdrop-blur-2xl">
+          <div className="absolute left-1/2 top-1/2 w-[272px] -translate-x-1/2 -translate-y-[122%] rounded-[32px] border border-white/75 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(244,245,247,0.7))] p-4 shadow-[10px_10px_20px_rgba(196,201,209,0.18),-7px_-7px_16px_rgba(255,255,255,0.8)] backdrop-blur-2xl">
             <div className="grid grid-cols-3 gap-3">
               <button
-                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(236,242,248,0.55))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.88),rgba(244,245,247,0.72))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.88),4px_4px_10px_rgba(196,201,209,0.22)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenBackground}
                 title="背景设置"
               >
                 <LineIcon name="background" />
               </button>
               <button
-                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(248,238,244,0.58))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.88),rgba(244,245,247,0.72))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.88),4px_4px_10px_rgba(196,201,209,0.22)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenSchedule}
                 title="日历与提醒"
               >
@@ -464,7 +451,7 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(248,242,218,0.58))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.88),rgba(244,245,247,0.72))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.88),4px_4px_10px_rgba(196,201,209,0.22)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenAlarm}
                 title="闹钟"
               >
@@ -474,7 +461,7 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(236,242,248,0.55))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.88),rgba(244,245,247,0.72))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.88),4px_4px_10px_rgba(196,201,209,0.22)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenDuDay}
                 title="渡的一天"
               >
@@ -483,14 +470,14 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(248,238,244,0.58))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.88),rgba(244,245,247,0.72))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.88),4px_4px_10px_rgba(196,201,209,0.22)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenTree}
                 title="小渡&小玥の树"
               >
                 <LineIcon name="tree" />
               </button>
               <button
-                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(248,242,218,0.58))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.9),4px_4px_12px_rgba(195,201,211,0.28)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.88),rgba(244,245,247,0.72))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.88),4px_4px_10px_rgba(196,201,209,0.22)] flex items-center justify-center text-cream-text active:scale-[0.99] transition"
                 onClick={onOpenUpstream}
                 title="上游切换"
               >
@@ -509,7 +496,7 @@ function HomeOrbMenu({
           </div>
         ) : null}
         <button
-          className="h-[74px] w-[74px] rounded-full border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(236,242,248,0.52))] shadow-[10px_10px_24px_rgba(193,199,208,0.26),-8px_-8px_18px_rgba(255,255,255,0.88)] backdrop-blur-2xl flex items-center justify-center text-cream-text"
+          className="h-[74px] w-[74px] rounded-full border border-white/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.88),rgba(244,245,247,0.72))] shadow-[10px_10px_20px_rgba(196,201,209,0.18),-7px_-7px_16px_rgba(255,255,255,0.8)] backdrop-blur-2xl flex items-center justify-center text-cream-text"
           onClick={onToggle}
           title="Home"
         >

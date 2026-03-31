@@ -130,9 +130,9 @@ export function AlarmTab() {
       <div className="neo-panel p-3 space-y-2">
         <div className="text-xs text-cream-muted">快速闹钟</div>
         <div className="grid grid-cols-3 gap-2">
-          <Btn kind="dark" onClick={() => createQuick(10)} disabled={creating}>+10 分钟</Btn>
-          <Btn kind="dark" onClick={() => createQuick(30)} disabled={creating}>+30 分钟</Btn>
-          <Btn kind="dark" onClick={() => createQuick(60)} disabled={creating}>+60 分钟</Btn>
+          <Btn kind="blue" onClick={() => createQuick(10)} disabled={creating}>+10 分钟</Btn>
+          <Btn kind="pink" onClick={() => createQuick(30)} disabled={creating}>+30 分钟</Btn>
+          <Btn kind="yellow" onClick={() => createQuick(60)} disabled={creating}>+60 分钟</Btn>
         </div>
         <input
           className="neo-input"
@@ -149,14 +149,14 @@ export function AlarmTab() {
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCustomTime(e.target.value)}
             disabled={creating}
           />
-          <Btn kind="dark" onClick={() => createAt(customTime)} disabled={creating || !customTime}>
+          <Btn kind="pink" onClick={() => createAt(customTime)} disabled={creating || !customTime}>
             自定义时间创建
           </Btn>
         </div>
       </div>
 
       <div className="neo-panel p-3">
-        <div className="neo-tag-dark">
+        <div className="neo-tag-yellow">
           闹钟列表 · {alarmItems.length}
         </div>
         <div className="mt-3 space-y-2">

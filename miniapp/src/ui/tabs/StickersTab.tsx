@@ -73,7 +73,7 @@ function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publi
     );
   }
   if (!src) {
-    return <div className="w-full h-full bg-white/30 animate-pulse" aria-hidden />;
+    return <div className="w-full h-full bg-[linear-gradient(145deg,rgba(255,255,255,0.64),rgba(236,241,247,0.52))] animate-pulse" aria-hidden />;
   }
 
   return (
@@ -248,22 +248,22 @@ export function StickersTab() {
       <div className="text-xs text-cream-muted leading-relaxed">
         渡在 Telegram 回复句末可加 <code className="text-cream-text">[shy]</code> 等<strong>英文</strong>标签，网关会随机发一张该分类下的图。未配置公网时预览走网关代理。
       </div>
-      <div className="rounded-xl2 border border-white/70 bg-white/50 p-2 space-y-2">
+      <div className="neo-panel p-3 space-y-2">
         <div className="text-[11px] text-cream-muted">新增分类（网关目录与 [tag] 均为英文代号；下方可填中文仅作本页展示名）</div>
         <div className="flex flex-col gap-1.5">
           <input
-            className="rounded-lg border border-white/80 bg-white px-2 py-1.5 text-xs"
+            className="neo-input text-xs"
             placeholder="英文代号，如 smug"
             value={newKey}
             onChange={(e) => setNewKey(e.target.value)}
           />
           <input
-            className="rounded-lg border border-white/80 bg-white px-2 py-1.5 text-xs"
+            className="neo-input text-xs"
             placeholder="展示名（可选，如 得意）"
             value={newLabelZh}
             onChange={(e) => setNewLabelZh(e.target.value)}
           />
-          <Btn kind="dark" onClick={addCategory} disabled={adding}>
+          <Btn kind="pink" onClick={addCategory} disabled={adding}>
             {adding ? "添加中…" : "添加分类"}
           </Btn>
         </div>
@@ -274,8 +274,8 @@ export function StickersTab() {
             key={row.key}
             type="button"
             className={
-              "rounded-xl2 px-2.5 py-1 text-[11px] border transition " +
-              (activeTag === row.key ? "bg-neutral-900 text-white border-neutral-900" : "bg-white/70 text-cream-text border-white/70")
+              "neo-segment px-2.5 py-1 text-[11px] " +
+              (activeTag === row.key ? "neo-segment-active" : "")
             }
             onClick={() => setActiveTag(row.key)}
             title={row.key}
@@ -285,10 +285,10 @@ export function StickersTab() {
         ))}
       </div>
       <div className="flex items-center gap-2">
-        <Btn kind="dark" onClick={load} disabled={loading}>
+        <Btn kind="blue" onClick={load} disabled={loading}>
           {loading ? "刷新中..." : "刷新"}
         </Btn>
-        <Btn kind="default" onClick={rebuild}>
+        <Btn kind="yellow" onClick={rebuild}>
           重建映射
         </Btn>
       </div>
@@ -300,11 +300,11 @@ export function StickersTab() {
 
       <div className="grid grid-cols-3 gap-2">
         {keysForTab.map((k) => (
-          <div key={k} className="relative aspect-square rounded-xl2 overflow-hidden border border-white/70 bg-white/40 shadow-soft">
+          <div key={k} className="relative aspect-square overflow-hidden neo-panel-soft">
             <StickerPreviewImg objectKey={k} publicBase={publicBase} />
             <button
               type="button"
-              className="absolute top-1 right-1 h-6 w-6 rounded-full bg-black/55 text-white text-xs leading-6"
+              className="absolute top-1 right-1 neo-icon-btn h-6 w-6 text-xs leading-6"
               onClick={() => removeKey(k)}
               aria-label="删除"
             >
@@ -320,7 +320,7 @@ export function StickersTab() {
       <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={onPickFile} />
       <button
         type="button"
-        className="fixed bottom-24 right-5 z-30 h-12 w-12 rounded-full bg-neutral-900 text-white text-2xl leading-[48px] shadow-soft2 border border-white/20"
+        className="fixed bottom-24 right-5 z-30 h-12 w-12 rounded-full border border-white/85 text-[28px] leading-[46px] text-cream-text shadow-soft2 bg-[linear-gradient(145deg,rgba(255,248,251,0.96),rgba(236,206,221,0.82))]"
         disabled={uploading || !activeTag}
         onClick={() => fileRef.current?.click()}
         aria-label="上传"

@@ -79,17 +79,17 @@ export function MemoryTab() {
     <div className="space-y-3">
       <Card title="核心缓存（待审）">
         <div className="text-sm">
-          <div className="mb-2 text-slate-600 dark:text-slate-300">条数：{String(core?.count ?? "-")}</div>
+          <div className="mb-2 text-cream-muted">条数：{String(core?.count ?? "-")}</div>
           <div className="flex gap-2">
-            <Btn onClick={reload}>刷新列表</Btn>
+            <Btn kind="blue" onClick={reload}>刷新列表</Btn>
           </div>
           <div className="mt-3 space-y-2">
             {coreItems.map((it: CoreCacheEntry) => (
-              <div key={it.id} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                <div className="text-xs text-slate-500 dark:text-slate-400">
+              <div key={it.id} className="neo-panel-soft p-3">
+                <div className="text-xs text-cream-muted">
                   {it.id || ""} · imp={String(it.importance ?? "")} · mention={String(it.mention_count ?? "")}
                 </div>
-                <div className="mt-1 whitespace-pre-wrap text-sm">{String(it.content || "")}</div>
+                <div className="mt-1 whitespace-pre-wrap text-sm text-cream-text">{String(it.content || "")}</div>
                 {it.id ? (
                   <div className="mt-2">
                     <Btn kind="danger" onClick={() => deleteCore(it.id!)}>
@@ -99,28 +99,28 @@ export function MemoryTab() {
                 ) : null}
               </div>
             ))}
-            {!coreItems.length ? <div className="text-xs text-slate-500">（暂无）</div> : null}
+            {!coreItems.length ? <div className="text-xs text-cream-muted">（暂无）</div> : null}
           </div>
         </div>
       </Card>
 
       <Card title="小本本">
         <div className="text-sm">
-          <div className="mb-2 text-slate-600 dark:text-slate-300">条数：{String(notebook?.count ?? "-")}</div>
+          <div className="mb-2 text-cream-muted">条数：{String(notebook?.count ?? "-")}</div>
           <div className="flex gap-2">
             <input
-              className="flex-1 rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-900/40"
+              className="neo-input flex-1"
               placeholder="新增一条…"
               value={nbText}
               onChange={(e) => setNbText(e.target.value)}
             />
-            <Btn onClick={addNotebook}>添加</Btn>
+            <Btn kind="pink" onClick={addNotebook}>添加</Btn>
           </div>
           <div className="mt-3 space-y-2">
             {nbItems.map((it: NotebookEntry) => (
-              <div key={it.timestamp} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                <div className="text-xs text-slate-500 dark:text-slate-400">{String(it.timestamp || "")}</div>
-                <div className="mt-1 whitespace-pre-wrap text-sm">{String(it.content || "")}</div>
+              <div key={it.timestamp} className="neo-panel-soft p-3">
+                <div className="text-xs text-cream-muted">{String(it.timestamp || "")}</div>
+                <div className="mt-1 whitespace-pre-wrap text-sm text-cream-text">{String(it.content || "")}</div>
                 {it.timestamp ? (
                   <div className="mt-2">
                     <Btn kind="danger" onClick={() => deleteNotebook(it.timestamp!)}>
@@ -130,7 +130,7 @@ export function MemoryTab() {
                 ) : null}
               </div>
             ))}
-            {!nbItems.length ? <div className="text-xs text-slate-500">（暂无）</div> : null}
+            {!nbItems.length ? <div className="text-xs text-cream-muted">（暂无）</div> : null}
           </div>
         </div>
       </Card>

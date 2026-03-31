@@ -137,9 +137,9 @@ export function LogsTab() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <Btn kind="dark" onClick={loadTail}>拉取末尾 200 行</Btn>
+        <Btn kind="blue" onClick={loadTail}>拉取末尾 200 行</Btn>
         <Btn
-          kind="dark"
+          kind="yellow"
           onClick={() => {
             setPaused((p) => !p);
             toast(!paused ? "已暂停" : "已继续");
@@ -147,7 +147,7 @@ export function LogsTab() {
         >
           {paused ? "继续" : "暂停"}
         </Btn>
-        <Btn kind="dark" onClick={() => (connected ? disconnect() : connect())}>{connected ? "断开实时" : "连接实时"}</Btn>
+        <Btn kind="pink" onClick={() => (connected ? disconnect() : connect())}>{connected ? "断开实时" : "连接实时"}</Btn>
       </div>
 
       {loadError ? (
@@ -160,16 +160,16 @@ export function LogsTab() {
 
       <div className="neo-panel p-3 space-y-2">
         <div className="flex items-center gap-2">
-          <Btn kind={filterKind === "all" ? "dark" : "blue"} onClick={() => setFilterKind("all")}>全部</Btn>
-          <Btn kind={filterKind === "proactive" ? "dark" : "blue"} onClick={() => setFilterKind("proactive")}>主动消息</Btn>
-          <Btn kind={filterKind === "alarm" ? "dark" : "blue"} onClick={() => setFilterKind("alarm")}>闹钟</Btn>
+          <Btn kind={filterKind === "all" ? "blue" : "default"} onClick={() => setFilterKind("all")}>全部</Btn>
+          <Btn kind={filterKind === "proactive" ? "pink" : "default"} onClick={() => setFilterKind("proactive")}>主动消息</Btn>
+          <Btn kind={filterKind === "alarm" ? "yellow" : "default"} onClick={() => setFilterKind("alarm")}>闹钟</Btn>
           <input
             className="neo-input flex-1"
             placeholder="过滤关键字（不区分大小写）"
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
           />
-          <Btn kind="dark"
+          <Btn kind="yellow"
             onClick={() => {
               setFilterText("");
               toast("已清空过滤");
@@ -178,7 +178,7 @@ export function LogsTab() {
           >
             清空
           </Btn>
-          <Btn kind="dark"
+          <Btn kind="pink"
             onClick={() => {
               const k = (filterText || "").trim();
               const text = (filtered || []).slice(0, 200).join("\n") || "";
@@ -196,9 +196,9 @@ export function LogsTab() {
             const kind = lineKind(l);
             const lineClass =
               kind === "proactive"
-                ? "mb-1 rounded-lg bg-[#20293A] px-2 py-1 text-[#DDEBFF]"
+                ? "neo-line-proactive"
                 : kind === "alarm"
-                  ? "mb-1 rounded-lg bg-[#2E2516] px-2 py-1 text-[#FFF0C7]"
+                  ? "neo-line-alarm"
                   : "";
             return (
             <div key={idx} className={`whitespace-pre-wrap ${lineClass}`}>

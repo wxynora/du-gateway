@@ -104,14 +104,14 @@ export function MemoryDebugTab() {
     <div className="space-y-3">
       <div className="neo-panel p-3 space-y-2 text-cream-text">
         <div className="flex items-center justify-between">
-          <div className="neo-tag-dark">
+          <div className="neo-tag-blue">
             当前窗口总结
           </div>
           <div className="flex items-center gap-2">
-            <Btn kind={scope === "all" ? "dark" : "blue"} onClick={() => setScope("all")} disabled={loading}>全部</Btn>
-            <Btn kind={scope === "target" ? "dark" : "blue"} onClick={() => setScope("target")} disabled={loading}>当前窗口</Btn>
-            <Btn kind="dark" onClick={reload} disabled={loading}>
-            刷新
+            <Btn kind={scope === "all" ? "blue" : "default"} onClick={() => setScope("all")} disabled={loading}>全部</Btn>
+            <Btn kind={scope === "target" ? "pink" : "default"} onClick={() => setScope("target")} disabled={loading}>当前窗口</Btn>
+            <Btn kind="yellow" onClick={reload} disabled={loading}>
+              刷新
             </Btn>
           </div>
         </div>
@@ -150,13 +150,13 @@ export function MemoryDebugTab() {
         <div className="text-xs text-cream-muted whitespace-pre-wrap">
           recent_vector_error: {String(data?.dynamic_stats?.recent_vector_error || "") || "(空)"}
         </div>
-        <div className="text-xs text-[#5f5a52] whitespace-pre-wrap">
+        <div className="text-xs text-cream-muted whitespace-pre-wrap">
           rebuild_failed_ids: {String(data?.dynamic_stats?.failed_ids_count ?? 0)}
           {Array.isArray(data?.dynamic_stats?.failed_ids_preview) && data!.dynamic_stats!.failed_ids_preview!.length
             ? ` ｜ ${data!.dynamic_stats!.failed_ids_preview!.join(" / ")}`
             : ""}
         </div>
-        <div className="neo-tag-dark">
+        <div className="neo-tag-pink">
           动态记忆最近召回 · 最近 {String(data?.count ?? recalls.length)} 次 / 全部 {String(data?.total_count ?? recalls.length)}
         </div>
         <div className="space-y-2">
@@ -173,8 +173,8 @@ export function MemoryDebugTab() {
                 <div className="space-y-0.5">
                   {it.scores.map((s, si) => (
                     <div key={si} className="text-xs text-cream-muted flex gap-2 items-baseline">
-                      <span className="font-mono font-medium text-neutral-700">{String(s.total ?? "-")}</span>
-                      <span className="text-[10px] text-neutral-400">
+                      <span className="font-mono font-medium text-cream-text">{String(s.total ?? "-")}</span>
+                      <span className="text-[10px] text-cream-muted/80">
                         user {String(s.sem_user ?? "-")} · ctx {String(s.sem_ctx ?? "-")}
                       </span>
                       <span className="truncate">{s.content || s.id || ""}</span>
