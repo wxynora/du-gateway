@@ -10,10 +10,10 @@
     @apply bg-cream-bg text-cream-text;
   }
   :root {
-    --neo-shadow-lg: 5px 5px 12px rgba(201, 206, 214, 0.18), -3px -3px 8px rgba(255, 255, 255, 0.36);
-    --neo-shadow-md: 4px 4px 10px rgba(201, 206, 214, 0.15), -2px -2px 6px rgba(255, 255, 255, 0.32);
-    --neo-shadow-sm: 2px 2px 6px rgba(201, 206, 214, 0.12), -1px -1px 3px rgba(255, 255, 255, 0.24);
-    --neo-inset: inset 1px 1px 0 rgba(255, 255, 255, 0.22), inset -1px -1px 4px rgba(212, 219, 228, 0.14);
+    --neo-shadow-lg: 7px 7px 16px rgba(201, 206, 214, 0.2), -4px -4px 10px rgba(255, 255, 255, 0.4);
+    --neo-shadow-md: 5px 5px 12px rgba(201, 206, 214, 0.17), -3px -3px 8px rgba(255, 255, 255, 0.34);
+    --neo-shadow-sm: 3px 3px 8px rgba(201, 206, 214, 0.13), -1px -1px 4px rgba(255, 255, 255, 0.26);
+    --neo-inset: inset 1px 1px 0 rgba(255, 255, 255, 0.24), inset -1px -1px 5px rgba(212, 219, 228, 0.16);
   }
 }
 
@@ -90,7 +90,7 @@
   .neo-select,
   .neo-textarea {
     @apply w-full rounded-[20px] px-3 py-2 text-sm text-cream-text outline-none transition;
-    background: rgba(248, 250, 253, 0.72);
+    background: rgba(248, 241, 205, 0.82);
     box-shadow: var(--neo-inset);
   }
 

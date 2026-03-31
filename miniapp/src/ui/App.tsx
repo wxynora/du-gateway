@@ -196,13 +196,13 @@ function Shell() {
 
       {dailyWhisper ? (
         <div className="px-4 pt-3">
-          <div className="neo-panel px-4 py-3.5">
-            <div className="mb-2 flex items-center gap-2">
-              <span className="rounded-full bg-[#EFD5E1] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cream-text">Today note</span>
-              <span className="text-[11px] text-cream-muted">渡今天想说</span>
-            </div>
-            <div className="text-[13px] leading-6 text-cream-text">{dailyWhisper}</div>
-          </div>
+          <details className="neo-panel px-4 py-3 text-[12px] leading-relaxed text-cream-text" open>
+            <summary className="cursor-pointer select-none text-cream-text">
+              <span className="mr-2 rounded-full bg-[#EFD5E1] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cream-text">Today note</span>
+              渡今天想说
+            </summary>
+            <div className="mt-3 text-[13px] leading-6 text-cream-text">{dailyWhisper}</div>
+          </details>
         </div>
       ) : null}
       {dailyReport ? (
@@ -227,7 +227,7 @@ function Shell() {
         </div>
       ) : null}
 
-      <div className="px-4 pt-6 pb-28">
+      <div className="px-4 pt-4 pb-28">
         <div className="grid grid-cols-2 gap-x-3 gap-y-3">
           {featureTiles.map((item) => (
             <FeatureTile key={item.title} title={item.title} desc={item.desc} tone={item.tone} icon={item.icon} onClick={item.onClick} />
@@ -349,7 +349,7 @@ function FeatureTile({
   return (
     <button
       className={
-        "group relative min-h-[116px] overflow-hidden rounded-[24px] p-4 text-left shadow-[5px_5px_12px_rgba(201,206,214,0.18),-3px_-3px_8px_rgba(255,255,255,0.34),inset_1px_1px_0_rgba(255,255,255,0.18)] backdrop-blur-xl transition active:scale-[0.99] " +
+        "group relative min-h-[116px] overflow-hidden rounded-[24px] p-4 text-left shadow-[7px_7px_16px_rgba(201,206,214,0.18),-4px_-4px_10px_rgba(255,255,255,0.36),inset_1px_1px_0_rgba(255,255,255,0.2)] backdrop-blur-xl transition active:scale-[0.99] " +
         toneMap.shell +
         (disabled ? " opacity-60 cursor-not-allowed" : "")
       }
@@ -360,7 +360,7 @@ function FeatureTile({
       disabled={disabled}
     >
       <div className="relative flex items-center gap-3">
-        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] shadow-[2px_2px_6px_rgba(201,206,214,0.12),-1px_-1px_3px_rgba(255,255,255,0.22)] " + toneMap.badge}>
+        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] shadow-[3px_3px_8px_rgba(201,206,214,0.14),-1px_-1px_4px_rgba(255,255,255,0.24)] " + toneMap.badge}>
           {icon}
         </span>
         <div className="min-w-0">
