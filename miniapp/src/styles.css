@@ -90,8 +90,8 @@
   .neo-select,
   .neo-textarea {
     @apply w-full rounded-[20px] px-3 py-2 text-sm text-cream-text outline-none transition;
-    background: rgba(248, 241, 205, 0.82);
-    box-shadow: var(--neo-inset);
+    background: rgba(251, 247, 225, 0.9);
+    box-shadow: none;
   }
 
   .neo-textarea {
