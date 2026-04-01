@@ -657,26 +657,26 @@ function AppWithAuth() {
   return (
     <div className="min-h-dvh bg-[#EEF0F3] px-5 py-6 text-cream-text">
       <div className="mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md items-center">
-        <div className="neo-panel w-full p-5">
+        <div className="neo-panel w-full p-5" style={{ fontFamily: '"Cormorant Garamond", "Times New Roman", serif' }}>
           <div className="flex items-center justify-between gap-3">
             <div className="neo-chip">Private Access</div>
-            <div className="flex h-14 w-14 items-center justify-center rounded-[16px] bg-[rgba(255,255,255,0.34)] shadow-[0_6px_14px_rgba(154,168,186,0.1)]">
+            <div className="flex h-14 w-14 items-center justify-center rounded-[16px] bg-[rgba(244,247,251,0.82)] shadow-[0_6px_14px_rgba(154,168,186,0.12)]">
               <ClaudePixelCrabIcon />
             </div>
           </div>
-          <div className="mt-4 text-center text-[28px] font-semibold tracking-tight">
+          <div className="mt-4 text-center text-[31px] font-semibold tracking-[0.01em]">
             {secondPrompt && loginStep === "question" ? "Security Check" : "Sign In"}
           </div>
-          <div className="mt-2 text-center text-sm leading-6 text-cream-muted">
+          <div className="mt-2 text-center text-[17px] leading-6 text-cream-muted">
             {secondPrompt && loginStep === "question" ? "Answer the question to continue." : "Continue to the mini app panel."}
           </div>
 
           <div className="mt-5 space-y-3">
             {loginStep === "password" || !secondPrompt ? (
               <label className="block">
-                <div className="mb-2 text-center text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">Password</div>
+                <div className="mb-2 text-center text-[13px] font-semibold uppercase tracking-[0.14em] text-cream-muted">Password</div>
                 <input
-                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.88)] bg-[#eef1f5] px-5 text-center text-[15px] text-cream-text outline-none shadow-[inset_9px_9px_18px_rgba(193,201,212,0.58),inset_-9px_-9px_18px_rgba(255,255,255,0.98)] placeholder:text-center placeholder:text-cream-muted"
+                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.96)] bg-[#eef0f3] px-5 text-center text-[18px] text-cream-text outline-none shadow-[inset_4px_4px_8px_rgba(188,197,209,0.42),inset_-4px_-4px_8px_rgba(255,255,255,0.92)] placeholder:text-center placeholder:text-cream-muted"
                   type="password"
                   placeholder="Enter password"
                   value={password}
@@ -690,9 +690,9 @@ function AppWithAuth() {
 
             {secondPrompt && loginStep === "question" ? (
               <label className="block">
-                <div className="mb-2 text-center text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">{secondPrompt}</div>
+                <div className="mb-2 text-center text-[13px] font-semibold uppercase tracking-[0.14em] text-cream-muted">{secondPrompt}</div>
                 <input
-                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.88)] bg-[#eef1f5] px-5 text-center text-[15px] text-cream-text outline-none shadow-[inset_9px_9px_18px_rgba(193,201,212,0.58),inset_-9px_-9px_18px_rgba(255,255,255,0.98)] placeholder:text-center placeholder:text-cream-muted"
+                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.96)] bg-[#eef0f3] px-5 text-center text-[18px] text-cream-text outline-none shadow-[inset_4px_4px_8px_rgba(188,197,209,0.42),inset_-4px_-4px_8px_rgba(255,255,255,0.92)] placeholder:text-center placeholder:text-cream-muted"
                   type="text"
                   placeholder="Enter answer"
                   value={secondAnswer}
@@ -714,7 +714,7 @@ function AppWithAuth() {
               {secondPrompt && loginStep === "question" ? (
                 <button
                   type="button"
-                  className="min-w-[108px] rounded-[999px] bg-[#eef1f5] px-5 py-3 text-center text-[14px] font-medium text-cream-text shadow-[-8px_-8px_18px_rgba(255,255,255,0.96),8px_8px_18px_rgba(189,198,210,0.58)] transition active:translate-y-[1px] active:shadow-[-4px_-4px_10px_rgba(255,255,255,0.92),4px_4px_10px_rgba(189,198,210,0.52)] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="min-w-[108px] rounded-[999px] bg-[#eef0f3] px-5 py-3 text-center text-[17px] font-semibold text-cream-text shadow-[-4px_-4px_10px_rgba(255,255,255,0.94),4px_4px_10px_rgba(188,197,209,0.46)] transition active:translate-y-[1px] active:shadow-[-2px_-2px_6px_rgba(255,255,255,0.9),2px_2px_6px_rgba(188,197,209,0.4)] disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={() => {
                     setLoginStep("password");
                     setSecondAnswer("");
@@ -727,7 +727,7 @@ function AppWithAuth() {
               ) : null}
               <button
                 type="button"
-                className="min-w-[148px] rounded-[999px] bg-[#eef1f5] px-7 py-3 text-center text-[14px] font-semibold text-cream-text shadow-[-10px_-10px_20px_rgba(255,255,255,0.98),10px_10px_20px_rgba(189,198,210,0.62)] transition active:translate-y-[1px] active:shadow-[-5px_-5px_12px_rgba(255,255,255,0.94),5px_5px_12px_rgba(189,198,210,0.56)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="min-w-[148px] rounded-[999px] bg-[linear-gradient(145deg,rgba(244,247,251,0.96),rgba(213,228,246,0.78))] px-7 py-3 text-center text-[17px] font-semibold text-cream-text shadow-[-5px_-5px_12px_rgba(255,255,255,0.96),5px_5px_12px_rgba(186,197,212,0.5)] transition active:translate-y-[1px] active:shadow-[-2px_-2px_7px_rgba(255,255,255,0.92),2px_2px_7px_rgba(186,197,212,0.42)] disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => void login()}
                 disabled={submitting}
               >
