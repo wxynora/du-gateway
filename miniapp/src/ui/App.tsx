@@ -664,19 +664,19 @@ function AppWithAuth() {
               <ClaudePixelCrabIcon />
             </div>
           </div>
-          <div className="mt-4 text-[28px] font-semibold tracking-tight">
+          <div className="mt-4 text-center text-[28px] font-semibold tracking-tight">
             {secondPrompt && loginStep === "question" ? "Security Check" : "Sign In"}
           </div>
-          <div className="mt-2 text-sm leading-6 text-cream-muted">
+          <div className="mt-2 text-center text-sm leading-6 text-cream-muted">
             {secondPrompt && loginStep === "question" ? "Answer the question to continue." : "Continue to the mini app panel."}
           </div>
 
           <div className="mt-5 space-y-3">
             {loginStep === "password" || !secondPrompt ? (
               <label className="block">
-                <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">Password</div>
+                <div className="mb-2 text-center text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">Password</div>
                 <input
-                  className="neo-input h-12 rounded-[22px] px-4 text-[15px]"
+                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.88)] bg-[#eef1f5] px-5 text-center text-[15px] text-cream-text outline-none shadow-[inset_9px_9px_18px_rgba(193,201,212,0.58),inset_-9px_-9px_18px_rgba(255,255,255,0.98)] placeholder:text-center placeholder:text-cream-muted"
                   type="password"
                   placeholder="Enter password"
                   value={password}
@@ -690,9 +690,9 @@ function AppWithAuth() {
 
             {secondPrompt && loginStep === "question" ? (
               <label className="block">
-                <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">{secondPrompt}</div>
+                <div className="mb-2 text-center text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">{secondPrompt}</div>
                 <input
-                  className="neo-input h-12 rounded-[22px] px-4 text-[15px]"
+                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.88)] bg-[#eef1f5] px-5 text-center text-[15px] text-cream-text outline-none shadow-[inset_9px_9px_18px_rgba(193,201,212,0.58),inset_-9px_-9px_18px_rgba(255,255,255,0.98)] placeholder:text-center placeholder:text-cream-muted"
                   type="text"
                   placeholder="Enter answer"
                   value={secondAnswer}
@@ -710,10 +710,11 @@ function AppWithAuth() {
               </div>
             ) : null}
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-center gap-3">
               {secondPrompt && loginStep === "question" ? (
-                <Btn
-                  kind="default"
+                <button
+                  type="button"
+                  className="min-w-[108px] rounded-[999px] bg-[#eef1f5] px-5 py-3 text-center text-[14px] font-medium text-cream-text shadow-[-8px_-8px_18px_rgba(255,255,255,0.96),8px_8px_18px_rgba(189,198,210,0.58)] transition active:translate-y-[1px] active:shadow-[-4px_-4px_10px_rgba(255,255,255,0.92),4px_4px_10px_rgba(189,198,210,0.52)] disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={() => {
                     setLoginStep("password");
                     setSecondAnswer("");
@@ -722,11 +723,16 @@ function AppWithAuth() {
                   disabled={submitting}
                 >
                   Back
-                </Btn>
+                </button>
               ) : null}
-              <Btn kind="blue" onClick={() => void login()} disabled={submitting}>
+              <button
+                type="button"
+                className="min-w-[148px] rounded-[999px] bg-[#eef1f5] px-7 py-3 text-center text-[14px] font-semibold text-cream-text shadow-[-10px_-10px_20px_rgba(255,255,255,0.98),10px_10px_20px_rgba(189,198,210,0.62)] transition active:translate-y-[1px] active:shadow-[-5px_-5px_12px_rgba(255,255,255,0.94),5px_5px_12px_rgba(189,198,210,0.56)] disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void login()}
+                disabled={submitting}
+              >
                 {submitting ? "Verifying..." : secondPrompt && loginStep === "password" ? "Continue" : "Sign In"}
-              </Btn>
+              </button>
             </div>
           </div>
         </div>
