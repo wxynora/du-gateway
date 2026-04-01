@@ -591,30 +591,100 @@ function AppWithAuth() {
     return <ShellWithLogout onLogout={authEnabled ? logout : undefined} />;
   }
   return (
-    <div className="min-h-dvh bg-[#EEF0F3] px-5 py-6 text-cream-text">
-      <div className="mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md items-center">
-        <div className="neo-panel w-full p-5">
-          <div className="neo-chip">Mini App Login</div>
-          <div className="mt-4 text-[26px] font-semibold tracking-tight">输入密码进入面板</div>
-          <div className="mt-2 text-sm leading-6 text-cream-muted">
-            第一阶段先用浏览器密码登录。登录成功后，这个浏览器会记住你的登录态。
+    <div className="relative min-h-dvh overflow-hidden bg-[#e9edf0] px-5 py-6 text-cream-text">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[-10%] top-[-4%] h-44 w-44 rounded-full bg-[rgba(214,228,242,0.62)] blur-3xl" />
+        <div className="absolute right-[-6%] top-[12%] h-52 w-52 rounded-full bg-[rgba(236,206,221,0.46)] blur-3xl" />
+        <div className="absolute bottom-[10%] left-[12%] h-48 w-48 rounded-full bg-[rgba(212,229,221,0.42)] blur-3xl" />
+      </div>
+
+      <div className="relative mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md items-center">
+        <div className="w-full space-y-4">
+          <div className="px-1">
+            <div className="inline-flex items-center gap-2 rounded-full bg-[rgba(244,247,251,0.74)] px-3 py-2 shadow-[0_6px_14px_rgba(154,168,186,0.12)] backdrop-blur-xl">
+              <span className="text-sm">🏠</span>
+              <span className="text-[16px] font-semibold tracking-tight">d&x home</span>
+            </div>
           </div>
-          <div className="mt-5 space-y-3">
-            <input
-              className="neo-input"
-              type="password"
-              placeholder="面板密码"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !submitting) void login();
-              }}
-            />
-            {errorText ? <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">{errorText}</div> : null}
-            <div className="flex items-center gap-2">
-              <Btn kind="blue" onClick={() => void login()} disabled={submitting}>
-                {submitting ? "验证中..." : "进入面板"}
-              </Btn>
+
+          <div className="neo-panel w-full overflow-hidden p-0">
+            <div className="relative border-b border-white/40 px-5 pb-4 pt-5">
+              <div className="absolute inset-x-0 top-0 h-[92px] bg-[linear-gradient(135deg,rgba(214,228,242,0.76),rgba(239,213,225,0.58)_58%,rgba(244,229,189,0.46))]" />
+              <div className="relative">
+                <div className="neo-chip">Panel Access</div>
+                <div className="mt-4 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[29px] font-semibold leading-[1.05] tracking-[-0.03em]">先登录，再回家</div>
+                    <div className="mt-2 max-w-[16rem] text-[13px] leading-6 text-cream-muted">
+                      这一页专门给浏览器入口使用。登录成功后，这个浏览器会保留登录态，不用每次都重新输。
+                    </div>
+                  </div>
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-[rgba(255,255,255,0.38)] shadow-[inset_1px_1px_0_rgba(255,255,255,0.46),0_8px_18px_rgba(154,168,186,0.12)]">
+                    <svg className="h-7 w-7 text-cream-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                      <path d="M12 3 5 7v5c0 4.7 3.1 8.1 7 9 3.9-.9 7-4.3 7-9V7l-7-4z" />
+                      <path d="M9.5 12.5 11 14l3.5-4" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-5 py-4">
+              <div className="grid grid-cols-3 gap-2 text-[11px] text-cream-muted">
+                <div className="rounded-[18px] bg-[rgba(255,255,255,0.34)] px-3 py-2">
+                  <div className="font-semibold text-cream-text">浏览器</div>
+                  <div className="mt-1 leading-5">Chrome / Safari / Edge 都能单独登录</div>
+                </div>
+                <div className="rounded-[18px] bg-[rgba(255,255,255,0.34)] px-3 py-2">
+                  <div className="font-semibold text-cream-text">记住状态</div>
+                  <div className="mt-1 leading-5">刷新页面后继续可用</div>
+                </div>
+                <div className="rounded-[18px] bg-[rgba(255,255,255,0.34)] px-3 py-2">
+                  <div className="font-semibold text-cream-text">独立入口</div>
+                  <div className="mt-1 leading-5">不再把 Telegram 当唯一入口</div>
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                <label className="block">
+                  <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">Password</div>
+                  <input
+                    className="neo-input h-12 rounded-[22px] px-4 text-[15px]"
+                    type="password"
+                    placeholder="输入面板密码"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !submitting) void login();
+                    }}
+                  />
+                </label>
+
+                {errorText ? (
+                  <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">
+                    {errorText}
+                  </div>
+                ) : (
+                  <div className="rounded-[20px] bg-[rgba(255,255,255,0.32)] px-3 py-2 text-[12px] leading-6 text-cream-muted">
+                    这一阶段是密码登录。后面我们还会把设备管理和撤销登录接上。
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="flex h-12 flex-1 items-center justify-center rounded-[22px] bg-[linear-gradient(135deg,#d6e4f2,#ead5e3)] text-[14px] font-semibold text-cream-text shadow-[0_10px_20px_rgba(154,168,186,0.18)] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => void login()}
+                    disabled={submitting}
+                  >
+                    {submitting ? "验证中..." : "进入 mini app"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="border-t border-white/35 px-5 py-3 text-[11px] leading-5 text-cream-muted">
+              如果你换了一个浏览器，第一次打开时会再次要求登录，这样每个浏览器的访问权限都是独立的。
             </div>
           </div>
         </div>
