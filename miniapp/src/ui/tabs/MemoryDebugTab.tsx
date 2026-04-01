@@ -161,30 +161,71 @@ export function MemoryDebugTab() {
         </div>
         <div className="space-y-2">
           {recalls.map((it, idx) => (
-            <div key={`${String(it.timestamp || "")}-${idx}`} className="neo-panel-soft p-3 space-y-1">
-              <div className="text-xs text-cream-muted">
-                {String(it.timestamp || "")} · {String(it.source || "")} · 命中 {String(it.recalled_count ?? (it.recalled_lines || []).length)} 条
+            <div key={`${String(it.timestamp || "")}-${idx}`} className="neo-panel-soft p-3 space-y-2.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="neo-tag-dark px-2.5 py-1 text-[10px]">
+                  {String(it.source || "recall")}
+                </span>
+                <span className="neo-tag-blue px-2.5 py-1 text-[10px]">
+                  命中 {String(it.recalled_count ?? (it.recalled_lines || []).length)} 条
+                </span>
+                <span className="text-[11px] text-cream-muted">{String(it.timestamp || "")}</span>
               </div>
-              <div className="text-xs text-cream-muted whitespace-pre-wrap">query: {String(it.query || "") || "(空)"}</div>
-              <div className="text-xs text-cream-muted whitespace-pre-wrap">keywords: {Array.isArray(it.keywords) ? it.keywords.join(" / ") : ""}</div>
-              <div className="text-xs text-cream-muted whitespace-pre-wrap">reason: {String((it as any).reason || "")}</div>
-              <div className="text-xs text-cream-muted whitespace-pre-wrap">vector_error: {String((it as any).vector_error || "")}</div>
+              <div className="grid gap-2">
+                <div className="neo-panel-inset p-2.5">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">Query</div>
+                  <div className="mt-1 text-sm text-cream-text whitespace-pre-wrap break-words">{String(it.query || "") || "(空)"}</div>
+                  {Array.isArray(it.keywords) && it.keywords.length ? (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {it.keywords.map((kw, ki) => (
+                        <span key={`${kw}-${ki}`} className="neo-segment px-2.5 py-1 text-[11px]">
+                          {kw}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                {(String((it as any).reason || "").trim() || String((it as any).vector_error || "").trim()) ? (
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <div className="neo-panel-inset p-2.5">
+                      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">Reason</div>
+                      <div className="mt-1 text-xs text-cream-muted whitespace-pre-wrap break-words">
+                        {String((it as any).reason || "") || "(空)"}
+                      </div>
+                    </div>
+                    <div className="neo-panel-inset p-2.5">
+                      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">Vector Error</div>
+                      <div className="mt-1 text-xs text-cream-muted whitespace-pre-wrap break-words">
+                        {String((it as any).vector_error || "") || "(空)"}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
               {Array.isArray(it.scores) && it.scores.length > 0 && (
-                <div className="space-y-0.5">
+                <div className="space-y-2">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">Scores</div>
                   {it.scores.map((s, si) => (
-                    <div key={si} className="text-xs text-cream-muted flex gap-2 items-baseline">
-                      <span className="font-mono font-medium text-cream-text">{String(s.total ?? "-")}</span>
-                      <span className="text-[10px] text-cream-muted/80">
-                        user {String(s.sem_user ?? "-")} · ctx {String(s.sem_ctx ?? "-")}
-                      </span>
-                      <span className="truncate">{s.content || s.id || ""}</span>
+                    <div key={si} className="neo-panel-inset p-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="font-mono text-sm font-semibold text-cream-text">{String(s.total ?? "-")}</div>
+                        <div className="text-[11px] text-cream-muted">
+                          user {String(s.sem_user ?? "-")} · ctx {String(s.sem_ctx ?? "-")}
+                        </div>
+                      </div>
+                      <div className="mt-1 text-sm text-cream-text break-words">
+                        {s.content || s.id || "(空)"}
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
               <details className="neo-panel-inset p-2">
                 <summary className="cursor-pointer select-none text-xs text-cream-muted">
-                  点击展开召回全文：
+                  点击展开召回全文
+                  {" · "}
                   {firstLinePreview(Array.isArray(it.recalled_lines) && it.recalled_lines.length ? it.recalled_lines.join("\n") : "（本次无内容）")}
                 </summary>
                 <div className="mt-2 text-sm text-cream-text whitespace-pre-wrap">
