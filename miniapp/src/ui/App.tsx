@@ -636,32 +636,31 @@ function AppWithAuth() {
   return (
     <div className="relative min-h-dvh overflow-hidden bg-[#e9edf0] px-5 py-6 text-cream-text">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute left-[-10%] top-[-4%] h-44 w-44 rounded-full bg-[rgba(214,228,242,0.62)] blur-3xl" />
-        <div className="absolute right-[-6%] top-[12%] h-52 w-52 rounded-full bg-[rgba(236,206,221,0.46)] blur-3xl" />
-        <div className="absolute bottom-[10%] left-[12%] h-48 w-48 rounded-full bg-[rgba(212,229,221,0.42)] blur-3xl" />
+        <div className="absolute left-[-10%] top-[-6%] h-52 w-52 rounded-full bg-[rgba(190,205,224,0.58)] blur-3xl" />
+        <div className="absolute right-[-10%] top-[10%] h-60 w-60 rounded-full bg-[rgba(220,206,198,0.34)] blur-3xl" />
+        <div className="absolute bottom-[6%] left-[10%] h-56 w-56 rounded-full bg-[rgba(203,213,207,0.34)] blur-3xl" />
+        <div className="absolute inset-0 opacity-[0.28]" style={{ backgroundImage: "linear-gradient(rgba(44,52,64,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(44,52,64,0.06) 1px, transparent 1px)", backgroundSize: "30px 30px" }} />
       </div>
 
       <div className="relative mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md items-center">
         <div className="w-full">
-          <div className="neo-panel mx-auto w-full max-w-[420px] px-6 py-7">
+          <div className="mx-auto w-full max-w-[430px] overflow-hidden rounded-[30px] border border-white/40 bg-[linear-gradient(160deg,rgba(248,250,252,0.76),rgba(236,240,244,0.68))] px-6 py-7 shadow-[0_18px_50px_rgba(90,102,120,0.16)] backdrop-blur-2xl">
             <div className="mb-6 text-center">
-              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-[20px] bg-[rgba(255,255,255,0.42)] shadow-[inset_1px_1px_0_rgba(255,255,255,0.48),0_8px_18px_rgba(154,168,186,0.12)]">
-                <svg className="h-7 w-7 text-cream-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M12 3 5 7v5c0 4.7 3.1 8.1 7 9 3.9-.9 7-4.3 7-9V7l-7-4z" />
-                  <path d="M9.5 12.5 11 14l3.5-4" />
-                </svg>
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[24px] bg-[linear-gradient(145deg,rgba(255,255,255,0.78),rgba(227,233,239,0.62))] shadow-[inset_1px_1px_0_rgba(255,255,255,0.72),0_12px_26px_rgba(108,121,140,0.16)]">
+                <ClaudeCrabIcon />
               </div>
-              <div className="text-[28px] font-semibold tracking-[-0.03em]">登录</div>
-              <div className="mt-2 text-sm text-cream-muted">进入 mini app 面板</div>
+              <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-cream-muted">Private Access</div>
+              <div className="mt-3 text-[30px] font-semibold tracking-[-0.04em] text-[#202835]">Sign in</div>
+              <div className="mt-2 text-sm text-cream-muted">Continue to the control panel.</div>
             </div>
 
             <div className="space-y-3">
               <label className="block">
-                <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">Password</div>
+                <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-cream-muted">Password</div>
                 <input
-                  className="neo-input h-12 rounded-[18px] px-4 text-[15px]"
+                  className="h-12 w-full rounded-[18px] border border-white/50 bg-[rgba(255,255,255,0.56)] px-4 text-[15px] text-cream-text outline-none shadow-[inset_0_1px_0_rgba(255,255,255,0.46)] placeholder:text-cream-muted"
                   type="password"
-                  placeholder="输入密码"
+                  placeholder="Enter password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => {
@@ -672,11 +671,11 @@ function AppWithAuth() {
 
               {secondPrompt ? (
                 <label className="block">
-                  <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">{secondPrompt}</div>
+                  <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-cream-muted">{secondPrompt}</div>
                   <input
-                    className="neo-input h-12 rounded-[18px] px-4 text-[15px]"
+                    className="h-12 w-full rounded-[18px] border border-white/50 bg-[rgba(255,255,255,0.56)] px-4 text-[15px] text-cream-text outline-none shadow-[inset_0_1px_0_rgba(255,255,255,0.46)] placeholder:text-cream-muted"
                     type="text"
-                    placeholder="输入答案"
+                    placeholder="Enter answer"
                     value={secondAnswer}
                     onChange={(e) => setSecondAnswer(e.target.value)}
                     onKeyDown={(e) => {
@@ -687,24 +686,42 @@ function AppWithAuth() {
               ) : null}
 
               {errorText ? (
-                <div className="rounded-[16px] bg-[rgba(236,206,221,0.72)] px-3 py-2 text-sm text-cream-text">
+                <div className="rounded-[16px] border border-[rgba(201,117,128,0.18)] bg-[rgba(236,206,221,0.62)] px-3 py-2 text-sm text-[#5d3941]">
                   {errorText}
                 </div>
               ) : null}
 
               <button
                 type="button"
-                className="mt-2 flex h-12 w-full items-center justify-center rounded-[18px] bg-[linear-gradient(135deg,#d6e4f2,#ead5e3)] text-[14px] font-semibold text-cream-text shadow-[0_10px_20px_rgba(154,168,186,0.18)] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+                className="mt-3 flex h-12 w-full items-center justify-center rounded-[18px] bg-[linear-gradient(135deg,#273243,#4d5d73)] text-[14px] font-semibold tracking-[0.01em] text-white shadow-[0_14px_28px_rgba(52,63,80,0.24)] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => void login()}
                 disabled={submitting}
               >
-                {submitting ? "验证中..." : "登录"}
+                {submitting ? "Verifying..." : "Sign in"}
               </button>
             </div>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function ClaudeCrabIcon() {
+  return (
+    <svg className="h-9 w-9 text-[#202835]" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M18 26 9 20m10 11L6 29m13 6-11 6" opacity="0.9" />
+      <path d="M46 26l9-6m-10 11 13-2m-13 6 11 6" opacity="0.9" />
+      <path d="M22 18c2.6-3.8 5.8-5.8 10-5.8S39.4 14.2 42 18" />
+      <path d="M17 28c0-7.4 6.7-13.4 15-13.4S47 20.6 47 28" />
+      <path d="M20 29c0 8.7 5.4 15.7 12 15.7S44 37.7 44 29" />
+      <path d="M24 45c-1.1 4.5-4 7.4-8.8 8.8m24.8-8.8c1.1 4.5 4 7.4 8.8 8.8" />
+      <path d="M23 23c2.2-2.4 5.2-3.6 9-3.6s6.8 1.2 9 3.6" opacity="0.75" />
+      <circle cx="26" cy="27" r="2.2" fill="currentColor" stroke="none" />
+      <circle cx="38" cy="27" r="2.2" fill="currentColor" stroke="none" />
+      <path d="M27 36c1.6 1.6 3.2 2.3 5 2.3s3.4-.7 5-2.3" />
+      <path d="M23.5 11.5c0-2.7 1.8-4.5 4.4-4.5 2.1 0 3.8 1.1 4.6 3M40.5 11.5c0-2.7-1.8-4.5-4.4-4.5-2.1 0-3.8 1.1-4.6 3" opacity="0.9" />
+    </svg>
   );
 }
 
