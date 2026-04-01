@@ -13,15 +13,17 @@ function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publi
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [dataUrlFallback, setDataUrlFallback] = useState(false);
+  const [preferProxy, setPreferProxy] = useState(false);
   const blobRef = React.useRef<Blob | null>(null);
   const objectUrlRef = React.useRef<string | null>(null);
 
   useEffect(() => {
     setFailed(null);
     setDataUrlFallback(false);
+    setPreferProxy(false);
     blobRef.current = null;
     const pb = (publicBase || "").trim().replace(/\/$/, "");
-    if (pb) {
+    if (pb && !preferProxy) {
       setSrc(`${pb}/${String(objectKey).replace(/^\//, "")}`);
       return;
     }
@@ -63,7 +65,7 @@ function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publi
       }
       blobRef.current = null;
     };
-  }, [objectKey, publicBase]);
+  }, [objectKey, publicBase, preferProxy]);
 
   if (failed) {
     return (
@@ -83,6 +85,12 @@ function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publi
       className="w-full h-full object-cover"
       loading="lazy"
       onError={() => {
+        const pb = (publicBase || "").trim().replace(/\/$/, "");
+        if (pb && !preferProxy) {
+          setSrc(null);
+          setPreferProxy(true);
+          return;
+        }
         const b = blobRef.current;
         if (!b || dataUrlFallback) return;
         setDataUrlFallback(true);
