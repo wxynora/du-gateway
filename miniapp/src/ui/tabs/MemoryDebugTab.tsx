@@ -58,6 +58,19 @@ function firstLinePreview(text: string, maxChars = 96) {
   return `${first.slice(0, maxChars)}...`;
 }
 
+function recallBoxClass(tone: "blue" | "pink" | "yellow" | "neutral" = "neutral") {
+  if (tone === "blue") {
+    return "rounded-[22px] bg-[linear-gradient(145deg,rgba(244,248,252,0.96),rgba(214,228,242,0.58))] shadow-[0_3px_8px_rgba(154,168,186,0.10)]";
+  }
+  if (tone === "pink") {
+    return "rounded-[22px] bg-[linear-gradient(145deg,rgba(251,244,247,0.96),rgba(239,213,225,0.56))] shadow-[0_3px_8px_rgba(154,168,186,0.10)]";
+  }
+  if (tone === "yellow") {
+    return "rounded-[22px] bg-[linear-gradient(145deg,rgba(255,250,239,0.98),rgba(244,229,189,0.5))] shadow-[0_3px_8px_rgba(154,168,186,0.10)]";
+  }
+  return "rounded-[22px] bg-[linear-gradient(145deg,rgba(255,255,255,0.82),rgba(240,244,248,0.68))] shadow-[0_3px_8px_rgba(154,168,186,0.10)]";
+}
+
 export function MemoryDebugTab() {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
@@ -161,40 +174,40 @@ export function MemoryDebugTab() {
         </div>
         <div className="space-y-2">
           {recalls.map((it, idx) => (
-            <div key={`${String(it.timestamp || "")}-${idx}`} className="neo-panel-soft p-3 space-y-2.5">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="neo-tag-dark px-2.5 py-1 text-[10px]">
-                  {String(it.source || "recall")}
-                </span>
-                <span className="neo-tag-blue px-2.5 py-1 text-[10px]">
-                  命中 {String(it.recalled_count ?? (it.recalled_lines || []).length)} 条
-                </span>
-                <span className="text-[11px] text-cream-muted">{String(it.timestamp || "")}</span>
-              </div>
-              <div className="grid gap-2">
-                <div className="neo-panel-inset p-2.5">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">Query</div>
-                  <div className="mt-1 text-sm text-cream-text whitespace-pre-wrap break-words">{String(it.query || "") || "(空)"}</div>
-                  {Array.isArray(it.keywords) && it.keywords.length ? (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {it.keywords.map((kw, ki) => (
-                        <span key={`${kw}-${ki}`} className="neo-segment px-2.5 py-1 text-[11px]">
-                          {kw}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
+            <details key={`${String(it.timestamp || "")}-${idx}`} className="neo-panel-soft p-3 shadow-[0_4px_10px_rgba(154,168,186,0.10)]">
+              <summary className="cursor-pointer select-none list-none">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="neo-tag-dark px-2.5 py-1 text-[10px]">
+                    {String(it.source || "recall")}
+                  </span>
+                  <span className="neo-tag-blue px-2.5 py-1 text-[10px]">
+                    命中 {String(it.recalled_count ?? (it.recalled_lines || []).length)} 条
+                  </span>
+                  <span className="text-[11px] text-cream-muted">{String(it.timestamp || "")}</span>
                 </div>
-
+                <div className="mt-2 text-sm text-cream-text break-words">
+                  {String(it.query || "") || "（空）"}
+                </div>
+                {Array.isArray(it.keywords) && it.keywords.length ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {it.keywords.slice(0, 4).map((kw, ki) => (
+                      <span key={`${kw}-${ki}`} className="neo-segment px-2.5 py-1 text-[11px]">
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </summary>
+              <div className="mt-3 space-y-2.5">
                 {(String((it as any).reason || "").trim() || String((it as any).vector_error || "").trim()) ? (
                   <div className="grid gap-2 md:grid-cols-2">
-                    <div className="neo-panel-inset p-2.5">
+                    <div className={`${recallBoxClass("pink")} p-2.5`}>
                       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">Reason</div>
                       <div className="mt-1 text-xs text-cream-muted whitespace-pre-wrap break-words">
                         {String((it as any).reason || "") || "(空)"}
                       </div>
                     </div>
-                    <div className="neo-panel-inset p-2.5">
+                    <div className={`${recallBoxClass("yellow")} p-2.5`}>
                       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">Vector Error</div>
                       <div className="mt-1 text-xs text-cream-muted whitespace-pre-wrap break-words">
                         {String((it as any).vector_error || "") || "(空)"}
@@ -202,37 +215,40 @@ export function MemoryDebugTab() {
                     </div>
                   </div>
                 ) : null}
-              </div>
 
-              {Array.isArray(it.scores) && it.scores.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">Scores</div>
-                  {it.scores.map((s, si) => (
-                    <div key={si} className="neo-panel-inset p-2.5">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="font-mono text-sm font-semibold text-cream-text">{String(s.total ?? "-")}</div>
-                        <div className="text-[11px] text-cream-muted">
-                          user {String(s.sem_user ?? "-")} · ctx {String(s.sem_ctx ?? "-")}
+                {Array.isArray(it.scores) && it.scores.length > 0 && (
+                  <details className={`${recallBoxClass("blue")} p-2.5`}>
+                    <summary className="cursor-pointer select-none text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">
+                      Scores · {it.scores.length} 条
+                    </summary>
+                    <div className="mt-2 space-y-2">
+                      {it.scores.map((s, si) => (
+                        <div key={si} className={`${recallBoxClass("neutral")} p-2.5`}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-mono text-sm font-semibold text-cream-text">{String(s.total ?? "-")}</div>
+                            <div className="text-[11px] text-cream-muted">
+                              user {String(s.sem_user ?? "-")} · ctx {String(s.sem_ctx ?? "-")}
+                            </div>
+                          </div>
+                          <div className="mt-1 text-sm text-cream-text break-words">
+                            {s.content || s.id || "(空)"}
+                          </div>
                         </div>
-                      </div>
-                      <div className="mt-1 text-sm text-cream-text break-words">
-                        {s.content || s.id || "(空)"}
-                      </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              )}
-              <details className="neo-panel-inset p-2">
-                <summary className="cursor-pointer select-none text-xs text-cream-muted">
-                  点击展开召回全文
-                  {" · "}
-                  {firstLinePreview(Array.isArray(it.recalled_lines) && it.recalled_lines.length ? it.recalled_lines.join("\n") : "（本次无内容）")}
-                </summary>
-                <div className="mt-2 text-sm text-cream-text whitespace-pre-wrap">
-                  {Array.isArray(it.recalled_lines) && it.recalled_lines.length ? it.recalled_lines.join("\n") : "（本次无内容）"}
-                </div>
-              </details>
-            </div>
+                  </details>
+                )}
+
+                <details className={`${recallBoxClass("neutral")} p-2.5`}>
+                  <summary className="cursor-pointer select-none text-xs text-cream-muted">
+                    召回全文 · {firstLinePreview(Array.isArray(it.recalled_lines) && it.recalled_lines.length ? it.recalled_lines.join("\n") : "（本次无内容）")}
+                  </summary>
+                  <div className="mt-2 text-sm text-cream-text whitespace-pre-wrap">
+                    {Array.isArray(it.recalled_lines) && it.recalled_lines.length ? it.recalled_lines.join("\n") : "（本次无内容）"}
+                  </div>
+                </details>
+              </div>
+            </details>
           ))}
           {!recalls.length ? <div className="text-xs text-cream-muted">（暂无召回记录）</div> : null}
         </div>
