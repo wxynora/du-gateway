@@ -518,6 +518,7 @@ function AppWithAuth() {
   const [ready, setReady] = useState(false);
   const [password, setPassword] = useState("");
   const [secondAnswer, setSecondAnswer] = useState("");
+  const [loginStep, setLoginStep] = useState<"password" | "question">("password");
   const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState("");
   const [secondPrompt, setSecondPrompt] = useState("");
@@ -567,6 +568,7 @@ function AppWithAuth() {
       setReady(false);
       setPassword("");
       setSecondAnswer("");
+      setLoginStep("password");
       setErrorText(String(detail.message || "登录已失效，请重新验证"));
       toast(String(detail.message || "当前浏览器访问已失效"));
     }
@@ -578,12 +580,29 @@ function AppWithAuth() {
 
   async function login() {
     if (!password.trim()) {
-      setErrorText("请输入密码");
+      setErrorText("Please enter your password.");
+      return;
+    }
+    if (secondPrompt && loginStep === "question" && !secondAnswer.trim()) {
+      setErrorText("Please answer the security question.");
       return;
     }
     setSubmitting(true);
     setErrorText("");
     try {
+      if (secondPrompt && loginStep === "password") {
+        const first = await fetch("/miniapp-api/panel-auth/check-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: password.trim() }),
+        }).then(async (r) => ({ ok: r.ok, body: await r.json().catch(() => ({})) }));
+        if (!first.ok || !first.body?.ok) {
+          throw new Error(first.body?.error || "Password verification failed");
+        }
+        setLoginStep("question");
+        setErrorText("");
+        return;
+      }
       const deviceId = getOrCreatePanelDeviceId();
       const j = await fetch("/miniapp-api/panel-auth/verify", {
         method: "POST",
@@ -601,6 +620,7 @@ function AppWithAuth() {
       setPanelToken(String(j.body.panel_token));
       setPassword("");
       setSecondAnswer("");
+      setLoginStep("password");
       setReady(true);
       toast("已进入 mini app");
     } catch (e: any) {
@@ -615,6 +635,7 @@ function AppWithAuth() {
     setReady(false);
     setPassword("");
     setSecondAnswer("");
+    setLoginStep("password");
     setErrorText("");
     setShowDeviceManager(false);
     toast("已退出登录");
@@ -650,26 +671,32 @@ function AppWithAuth() {
                 <ClaudeCrabIcon />
               </div>
               <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-cream-muted">Private Access</div>
-              <div className="mt-3 text-[30px] font-semibold tracking-[-0.04em] text-[#202835]">Sign in</div>
-              <div className="mt-2 text-sm text-cream-muted">Continue to the control panel.</div>
+              <div className="mt-3 text-[30px] font-semibold tracking-[-0.04em] text-[#202835]">
+                {secondPrompt && loginStep === "question" ? "Security check" : "Sign in"}
+              </div>
+              <div className="mt-2 text-sm text-cream-muted">
+                {secondPrompt && loginStep === "question" ? "One more step to continue." : "Continue to the control panel."}
+              </div>
             </div>
 
             <div className="space-y-3">
-              <label className="block">
-                <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-cream-muted">Password</div>
-                <input
-                  className="h-12 w-full rounded-[18px] border border-white/50 bg-[rgba(255,255,255,0.56)] px-4 text-[15px] text-cream-text outline-none shadow-[inset_0_1px_0_rgba(255,255,255,0.46)] placeholder:text-cream-muted"
-                  type="password"
-                  placeholder="Enter password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !submitting) void login();
-                  }}
-                />
-              </label>
+              {loginStep === "password" || !secondPrompt ? (
+                <label className="block">
+                  <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-cream-muted">Password</div>
+                  <input
+                    className="h-12 w-full rounded-[18px] border border-white/50 bg-[rgba(255,255,255,0.56)] px-4 text-[15px] text-cream-text outline-none shadow-[inset_0_1px_0_rgba(255,255,255,0.46)] placeholder:text-cream-muted"
+                    type="password"
+                    placeholder="Enter password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !submitting) void login();
+                    }}
+                  />
+                </label>
+              ) : null}
 
-              {secondPrompt ? (
+              {secondPrompt && loginStep === "question" ? (
                 <label className="block">
                   <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-cream-muted">{secondPrompt}</div>
                   <input
@@ -691,14 +718,30 @@ function AppWithAuth() {
                 </div>
               ) : null}
 
-              <button
-                type="button"
-                className="mt-3 flex h-12 w-full items-center justify-center rounded-[18px] bg-[linear-gradient(135deg,#273243,#4d5d73)] text-[14px] font-semibold tracking-[0.01em] text-white shadow-[0_14px_28px_rgba(52,63,80,0.24)] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={() => void login()}
-                disabled={submitting}
-              >
-                {submitting ? "Verifying..." : "Sign in"}
-              </button>
+              <div className="mt-3 flex items-center gap-3">
+                {secondPrompt && loginStep === "question" ? (
+                  <button
+                    type="button"
+                    className="flex h-12 items-center justify-center rounded-[18px] border border-white/45 bg-[rgba(255,255,255,0.44)] px-4 text-[14px] font-medium text-cream-text shadow-[0_10px_18px_rgba(108,121,140,0.08)] transition active:scale-[0.99]"
+                    onClick={() => {
+                      setLoginStep("password");
+                      setSecondAnswer("");
+                      setErrorText("");
+                    }}
+                    disabled={submitting}
+                  >
+                    Back
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="flex h-12 w-full items-center justify-center rounded-[18px] bg-[linear-gradient(135deg,#273243,#4d5d73)] text-[14px] font-semibold tracking-[0.01em] text-white shadow-[0_14px_28px_rgba(52,63,80,0.24)] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => void login()}
+                  disabled={submitting}
+                >
+                  {submitting ? "Verifying..." : secondPrompt && loginStep === "password" ? "Continue" : "Sign in"}
+                </button>
+              </div>
             </div>
           </div>
         </div>

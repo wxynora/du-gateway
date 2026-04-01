@@ -374,7 +374,11 @@ def _build_live_dynamic_recall_preview(window_id: str) -> dict | None:
 @bp.before_request
 def _miniapp_auth():
     # 双保险：先 IP，再 Telegram initData（更快拒绝无效来源）
-    if request.path.rstrip("/").endswith("/panel-auth/meta") or request.path.rstrip("/").endswith("/panel-auth/verify"):
+    if (
+        request.path.rstrip("/").endswith("/panel-auth/meta")
+        or request.path.rstrip("/").endswith("/panel-auth/check-password")
+        or request.path.rstrip("/").endswith("/panel-auth/verify")
+    ):
         return None
     enforce_ip_allowlist()
     panel_block = enforce_panel_token()
@@ -387,6 +391,19 @@ def _miniapp_auth():
 def miniapp_panel_auth_meta():
     meta = panel_auth_meta()
     return jsonify({"ok": True, **meta})
+
+
+@bp.route("/panel-auth/check-password", methods=["POST"])
+def miniapp_panel_auth_check_password():
+    if not panel_auth_enabled():
+        return panel_auth_error("panel_auth_misconfigured", 503)
+    body = request.get_json(silent=True) or {}
+    password = str(body.get("password") or "").strip()
+    from config import MINIAPP_PANEL_PASSWORD
+
+    if not password or password != MINIAPP_PANEL_PASSWORD:
+        return jsonify({"ok": False, "code": "password_invalid", "error": "密码不正确"}), 401
+    return jsonify({"ok": True, "password_ok": True})
 
 
 @bp.route("/panel-auth/verify", methods=["POST"])
