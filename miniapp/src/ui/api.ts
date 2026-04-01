@@ -1,6 +1,7 @@
 import { getInitData } from "./tg";
 
 const PANEL_TOKEN_STORAGE_KEY = "miniapp.panel.token.v1";
+const PANEL_DEVICE_ID_STORAGE_KEY = "miniapp.panel.device-id.v1";
 
 export class ApiError extends Error {
   status: number;
@@ -35,6 +36,44 @@ export function setPanelToken(token: string) {
     if (token) window.localStorage.setItem(PANEL_TOKEN_STORAGE_KEY, token);
     else window.localStorage.removeItem(PANEL_TOKEN_STORAGE_KEY);
   } catch {}
+}
+
+function randomId(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let out = "";
+  for (let i = 0; i < 24; i += 1) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
+}
+
+export function getOrCreatePanelDeviceId(): string {
+  try {
+    const existing = (window.localStorage.getItem(PANEL_DEVICE_ID_STORAGE_KEY) || "").trim();
+    if (existing) return existing;
+    const next = `device_${randomId()}`;
+    window.localStorage.setItem(PANEL_DEVICE_ID_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return `device_${randomId()}`;
+  }
+}
+
+export function getPanelDeviceLabel(): string {
+  const platform = [
+    navigator.platform || "",
+    navigator.language || "",
+  ]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .join(" · ");
+  const ua = String(navigator.userAgent || "");
+  let browser = "Browser";
+  if (ua.includes("Edg/")) browser = "Edge";
+  else if (ua.includes("Chrome/")) browser = "Chrome";
+  else if (ua.includes("Safari/") && !ua.includes("Chrome/")) browser = "Safari";
+  else if (ua.includes("Firefox/")) browser = "Firefox";
+  return platform ? `${browser} @ ${platform}` : browser;
 }
 
 function withAuthUrl(path: string): string {
@@ -79,6 +118,13 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await apiFetch(path, init);
   const j = await parseJsonSafe(r);
   if (!r.ok) {
+    const code = String(j?.code || "").trim();
+    if (code === "panel_token_invalid" || code === "not_trusted") {
+      setPanelToken("");
+      try {
+        window.dispatchEvent(new CustomEvent("miniapp-auth-expired", { detail: { code, message: j?.error || "" } }));
+      } catch {}
+    }
     throw new ApiError(j?.error || j?.message || `HTTP ${r.status}`, r.status, j);
   }
   return j as T;

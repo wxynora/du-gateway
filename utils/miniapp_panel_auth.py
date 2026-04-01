@@ -9,9 +9,12 @@ from flask import jsonify, request
 
 from config import (
     MINIAPP_PANEL_PASSWORD,
+    MINIAPP_PANEL_SECOND_ANSWER,
+    MINIAPP_PANEL_SECOND_PROMPT,
     MINIAPP_PANEL_SIGNING_SECRET,
     MINIAPP_PANEL_TOKEN_TTL_SECONDS,
 )
+from storage.miniapp_panel_store import is_trusted_device, touch_trusted_device
 
 
 def _b64url_encode(raw: bytes) -> str:
@@ -34,6 +37,8 @@ def panel_auth_meta() -> dict:
         "password_login_enabled": enabled,
         "misconfigured": bool(MINIAPP_PANEL_PASSWORD) != bool(MINIAPP_PANEL_SIGNING_SECRET),
         "token_ttl_seconds": max(300, int(MINIAPP_PANEL_TOKEN_TTL_SECONDS or 0)),
+        "second_prompt": MINIAPP_PANEL_SECOND_PROMPT,
+        "second_factor_enabled": bool(MINIAPP_PANEL_SECOND_PROMPT and MINIAPP_PANEL_SECOND_ANSWER),
     }
 
 
@@ -46,11 +51,12 @@ def _sign(payload_b64: str) -> str:
     return _b64url_encode(mac)
 
 
-def issue_panel_token(subject: str = "browser") -> tuple[str, int]:
+def issue_panel_token(subject: str = "browser", device_id: str = "") -> tuple[str, int]:
     ttl = max(300, int(MINIAPP_PANEL_TOKEN_TTL_SECONDS or 0))
     now = int(time.time())
     payload = {
         "sub": str(subject or "browser"),
+        "device_id": str(device_id or "").strip(),
         "iat": now,
         "exp": now + ttl,
         "nonce": secrets.token_urlsafe(8),
@@ -93,6 +99,11 @@ def verify_panel_token(token: str) -> tuple[bool, dict | None, str]:
         exp = 0
     if exp <= int(time.time()):
         return False, payload, "panel_token_invalid"
+    device_id = str(payload.get("device_id") or "").strip()
+    if device_id:
+        if not is_trusted_device(device_id):
+            return False, payload, "not_trusted"
+        touch_trusted_device(device_id)
     return True, payload, ""
 
 
@@ -100,6 +111,7 @@ def panel_auth_error(code: str, status: int):
     messages = {
         "panel_token_missing": "请先输入面板密码",
         "panel_token_invalid": "登录已失效，请重新输入密码",
+        "not_trusted": "这个浏览器已被撤销，请重新验证",
         "panel_auth_misconfigured": "服务端未完成面板密码配置",
     }
     return jsonify({"ok": False, "code": code, "error": messages.get(code, code)}), status
@@ -112,5 +124,5 @@ def enforce_panel_token():
     if ok:
         request.environ["miniapp_panel_payload"] = payload or {}
         return None
-    status = 503 if code == "panel_auth_misconfigured" else 401
+    status = 503 if code == "panel_auth_misconfigured" else (403 if code == "not_trusted" else 401)
     return panel_auth_error(code, status)

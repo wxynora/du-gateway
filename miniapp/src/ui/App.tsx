@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
-import { apiFetch, apiJson, buildApiAssetUrl, getPanelToken, setPanelToken } from "./api";
+import { apiFetch, apiJson, buildApiAssetUrl, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
@@ -41,6 +41,14 @@ type DailyReport = {
   done_count?: number;
   summary_text?: string;
   generated_at?: string;
+};
+type DeviceItem = {
+  id?: string;
+  note?: string;
+  added_at?: string;
+  last_seen?: string;
+  revoked?: boolean;
+  current?: boolean;
 };
 const BG_STORAGE_KEY = "miniapp.bg.config.v1";
 
@@ -509,8 +517,11 @@ function AppWithAuth() {
   const [authEnabled, setAuthEnabled] = useState(false);
   const [ready, setReady] = useState(false);
   const [password, setPassword] = useState("");
+  const [secondAnswer, setSecondAnswer] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState("");
+  const [secondPrompt, setSecondPrompt] = useState("");
+  const [showDeviceManager, setShowDeviceManager] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -520,6 +531,7 @@ function AppWithAuth() {
         if (cancelled) return;
         const enabled = !!j?.enabled;
         setAuthEnabled(enabled);
+        setSecondPrompt(String(j?.second_prompt || ""));
         if (!enabled) {
           setReady(true);
           return;
@@ -549,6 +561,21 @@ function AppWithAuth() {
     };
   }, []);
 
+  useEffect(() => {
+    function onExpired(ev: Event) {
+      const detail = (ev as CustomEvent<{ code?: string; message?: string }>).detail || {};
+      setReady(false);
+      setPassword("");
+      setSecondAnswer("");
+      setErrorText(String(detail.message || "登录已失效，请重新验证"));
+      toast(String(detail.message || "当前浏览器访问已失效"));
+    }
+    window.addEventListener("miniapp-auth-expired", onExpired as EventListener);
+    return () => {
+      window.removeEventListener("miniapp-auth-expired", onExpired as EventListener);
+    };
+  }, [toast]);
+
   async function login() {
     if (!password.trim()) {
       setErrorText("请输入密码");
@@ -557,16 +584,23 @@ function AppWithAuth() {
     setSubmitting(true);
     setErrorText("");
     try {
+      const deviceId = getOrCreatePanelDeviceId();
       const j = await fetch("/miniapp-api/panel-auth/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: password.trim() }),
+        body: JSON.stringify({
+          password: password.trim(),
+          second_answer: secondAnswer.trim(),
+          device_id: deviceId,
+          device_name: getPanelDeviceLabel(),
+        }),
       }).then(async (r) => ({ ok: r.ok, body: await r.json().catch(() => ({})) }));
       if (!j.ok || !j.body?.ok || !j.body?.panel_token) {
         throw new Error(j.body?.error || "密码校验失败");
       }
       setPanelToken(String(j.body.panel_token));
       setPassword("");
+      setSecondAnswer("");
       setReady(true);
       toast("已进入 mini app");
     } catch (e: any) {
@@ -580,7 +614,9 @@ function AppWithAuth() {
     setPanelToken("");
     setReady(false);
     setPassword("");
+    setSecondAnswer("");
     setErrorText("");
+    setShowDeviceManager(false);
     toast("已退出登录");
   }
 
@@ -588,7 +624,14 @@ function AppWithAuth() {
     return <LoadingScreen text="正在检查面板登录状态..." />;
   }
   if (!authEnabled || ready) {
-    return <ShellWithLogout onLogout={authEnabled ? logout : undefined} />;
+    return (
+      <ShellWithLogout
+        onLogout={authEnabled ? logout : undefined}
+        onOpenDevices={authEnabled ? () => setShowDeviceManager(true) : undefined}
+        deviceManagerOpen={showDeviceManager}
+        onCloseDevices={() => setShowDeviceManager(false)}
+      />
+    );
   }
   return (
     <div className="relative min-h-dvh overflow-hidden bg-[#e9edf0] px-5 py-6 text-cream-text">
@@ -599,92 +642,64 @@ function AppWithAuth() {
       </div>
 
       <div className="relative mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md items-center">
-        <div className="w-full space-y-4">
-          <div className="px-1">
-            <div className="inline-flex items-center gap-2 rounded-full bg-[rgba(244,247,251,0.74)] px-3 py-2 shadow-[0_6px_14px_rgba(154,168,186,0.12)] backdrop-blur-xl">
-              <span className="text-sm">🏠</span>
-              <span className="text-[16px] font-semibold tracking-tight">d&x home</span>
-            </div>
-          </div>
-
-          <div className="neo-panel w-full overflow-hidden p-0">
-            <div className="relative border-b border-white/40 px-5 pb-4 pt-5">
-              <div className="absolute inset-x-0 top-0 h-[92px] bg-[linear-gradient(135deg,rgba(214,228,242,0.76),rgba(239,213,225,0.58)_58%,rgba(244,229,189,0.46))]" />
-              <div className="relative">
-                <div className="neo-chip">Panel Access</div>
-                <div className="mt-4 flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-[29px] font-semibold leading-[1.05] tracking-[-0.03em]">先登录，再回家</div>
-                    <div className="mt-2 max-w-[16rem] text-[13px] leading-6 text-cream-muted">
-                      这一页专门给浏览器入口使用。登录成功后，这个浏览器会保留登录态，不用每次都重新输。
-                    </div>
-                  </div>
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-[rgba(255,255,255,0.38)] shadow-[inset_1px_1px_0_rgba(255,255,255,0.46),0_8px_18px_rgba(154,168,186,0.12)]">
-                    <svg className="h-7 w-7 text-cream-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                      <path d="M12 3 5 7v5c0 4.7 3.1 8.1 7 9 3.9-.9 7-4.3 7-9V7l-7-4z" />
-                      <path d="M9.5 12.5 11 14l3.5-4" />
-                    </svg>
-                  </div>
-                </div>
+        <div className="w-full">
+          <div className="neo-panel mx-auto w-full max-w-[420px] px-6 py-7">
+            <div className="mb-6 text-center">
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-[20px] bg-[rgba(255,255,255,0.42)] shadow-[inset_1px_1px_0_rgba(255,255,255,0.48),0_8px_18px_rgba(154,168,186,0.12)]">
+                <svg className="h-7 w-7 text-cream-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M12 3 5 7v5c0 4.7 3.1 8.1 7 9 3.9-.9 7-4.3 7-9V7l-7-4z" />
+                  <path d="M9.5 12.5 11 14l3.5-4" />
+                </svg>
               </div>
+              <div className="text-[28px] font-semibold tracking-[-0.03em]">登录</div>
+              <div className="mt-2 text-sm text-cream-muted">进入 mini app 面板</div>
             </div>
 
-            <div className="px-5 py-4">
-              <div className="grid grid-cols-3 gap-2 text-[11px] text-cream-muted">
-                <div className="rounded-[18px] bg-[rgba(255,255,255,0.34)] px-3 py-2">
-                  <div className="font-semibold text-cream-text">浏览器</div>
-                  <div className="mt-1 leading-5">Chrome / Safari / Edge 都能单独登录</div>
-                </div>
-                <div className="rounded-[18px] bg-[rgba(255,255,255,0.34)] px-3 py-2">
-                  <div className="font-semibold text-cream-text">记住状态</div>
-                  <div className="mt-1 leading-5">刷新页面后继续可用</div>
-                </div>
-                <div className="rounded-[18px] bg-[rgba(255,255,255,0.34)] px-3 py-2">
-                  <div className="font-semibold text-cream-text">独立入口</div>
-                  <div className="mt-1 leading-5">不再把 Telegram 当唯一入口</div>
-                </div>
-              </div>
+            <div className="space-y-3">
+              <label className="block">
+                <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">Password</div>
+                <input
+                  className="neo-input h-12 rounded-[18px] px-4 text-[15px]"
+                  type="password"
+                  placeholder="输入密码"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !submitting) void login();
+                  }}
+                />
+              </label>
 
-              <div className="mt-4 space-y-3">
+              {secondPrompt ? (
                 <label className="block">
-                  <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">Password</div>
+                  <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-cream-muted">{secondPrompt}</div>
                   <input
-                    className="neo-input h-12 rounded-[22px] px-4 text-[15px]"
-                    type="password"
-                    placeholder="输入面板密码"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    className="neo-input h-12 rounded-[18px] px-4 text-[15px]"
+                    type="text"
+                    placeholder="输入答案"
+                    value={secondAnswer}
+                    onChange={(e) => setSecondAnswer(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !submitting) void login();
                     }}
                   />
                 </label>
+              ) : null}
 
-                {errorText ? (
-                  <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">
-                    {errorText}
-                  </div>
-                ) : (
-                  <div className="rounded-[20px] bg-[rgba(255,255,255,0.32)] px-3 py-2 text-[12px] leading-6 text-cream-muted">
-                    这一阶段是密码登录。后面我们还会把设备管理和撤销登录接上。
-                  </div>
-                )}
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="flex h-12 flex-1 items-center justify-center rounded-[22px] bg-[linear-gradient(135deg,#d6e4f2,#ead5e3)] text-[14px] font-semibold text-cream-text shadow-[0_10px_20px_rgba(154,168,186,0.18)] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={() => void login()}
-                    disabled={submitting}
-                  >
-                    {submitting ? "验证中..." : "进入 mini app"}
-                  </button>
+              {errorText ? (
+                <div className="rounded-[16px] bg-[rgba(236,206,221,0.72)] px-3 py-2 text-sm text-cream-text">
+                  {errorText}
                 </div>
-              </div>
-            </div>
+              ) : null}
 
-            <div className="border-t border-white/35 px-5 py-3 text-[11px] leading-5 text-cream-muted">
-              如果你换了一个浏览器，第一次打开时会再次要求登录，这样每个浏览器的访问权限都是独立的。
+              <button
+                type="button"
+                className="mt-2 flex h-12 w-full items-center justify-center rounded-[18px] bg-[linear-gradient(135deg,#d6e4f2,#ead5e3)] text-[14px] font-semibold text-cream-text shadow-[0_10px_20px_rgba(154,168,186,0.18)] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void login()}
+                disabled={submitting}
+              >
+                {submitting ? "验证中..." : "登录"}
+              </button>
             </div>
           </div>
         </div>
@@ -693,20 +708,139 @@ function AppWithAuth() {
   );
 }
 
-function ShellWithLogout({ onLogout }: { onLogout?: () => void }) {
+function ShellWithLogout({
+  onLogout,
+  onOpenDevices,
+  deviceManagerOpen,
+  onCloseDevices,
+}: {
+  onLogout?: () => void;
+  onOpenDevices?: () => void;
+  deviceManagerOpen?: boolean;
+  onCloseDevices?: () => void;
+}) {
   return (
     <>
       <Shell />
-      {onLogout ? (
-        <button
-          type="button"
-          className="fixed right-4 top-4 z-[70] rounded-full bg-[rgba(244,247,251,0.88)] px-3 py-1.5 text-[11px] text-cream-muted shadow-[0_6px_14px_rgba(154,168,186,0.12)] backdrop-blur-xl"
-          onClick={onLogout}
-        >
-          退出登录
-        </button>
+      {onLogout || onOpenDevices ? (
+        <div className="fixed right-4 top-4 z-[70] flex items-center gap-2">
+          {onOpenDevices ? (
+            <button
+              type="button"
+              className="rounded-full bg-[rgba(244,247,251,0.88)] px-3 py-1.5 text-[11px] text-cream-muted shadow-[0_6px_14px_rgba(154,168,186,0.12)] backdrop-blur-xl"
+              onClick={onOpenDevices}
+            >
+              设备管理
+            </button>
+          ) : null}
+          {onLogout ? (
+            <button
+              type="button"
+              className="rounded-full bg-[rgba(244,247,251,0.88)] px-3 py-1.5 text-[11px] text-cream-muted shadow-[0_6px_14px_rgba(154,168,186,0.12)] backdrop-blur-xl"
+              onClick={onLogout}
+            >
+              退出登录
+            </button>
+          ) : null}
+        </div>
       ) : null}
+      {deviceManagerOpen && onCloseDevices ? <DeviceManagerModal onClose={onCloseDevices} onLogout={onLogout} /> : null}
     </>
+  );
+}
+
+function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogout?: () => void }) {
+  const toast = useToast();
+  const [items, setItems] = useState<DeviceItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState("");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; items?: DeviceItem[] }>("/miniapp-api/panel-auth/list");
+      setItems(Array.isArray(j?.items) ? j.items : []);
+    } catch (e: any) {
+      toast(`加载设备失败：${e?.message || e}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function revoke(deviceId: string, current: boolean) {
+    if (!deviceId) return;
+    const ok = window.confirm(current ? "撤销当前浏览器后会立刻退出，继续吗？" : "确认撤销这个浏览器的访问权限吗？");
+    if (!ok) return;
+    setBusyId(deviceId);
+    try {
+      const j = await apiJson<{ ok?: boolean; revoked_current?: boolean }>("/miniapp-api/panel-auth/revoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: deviceId }),
+      });
+      if (!j?.ok) throw new Error("撤销失败");
+      if (j.revoked_current) {
+        toast("当前浏览器已被撤销");
+        onClose();
+        onLogout?.();
+        return;
+      }
+      toast("设备已撤销");
+      await load();
+    } catch (e: any) {
+      toast(`撤销失败：${e?.message || e}`);
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  return (
+    <Modal title="设备管理" onClose={onClose}>
+      <div className="space-y-3 pb-6">
+        <div className="neo-panel-soft p-3 text-xs leading-6 text-cream-muted">
+          每个浏览器都会有一个独立设备身份。撤销后，该浏览器下一次请求会立刻失效。
+        </div>
+        <div className="flex items-center gap-2">
+          <Btn kind="blue" onClick={() => void load()} disabled={loading}>
+            {loading ? "刷新中..." : "刷新列表"}
+          </Btn>
+        </div>
+        <div className="space-y-2">
+          {items.map((item) => {
+            const id = String(item.id || "");
+            const current = !!item.current;
+            const revoked = !!item.revoked;
+            return (
+              <div key={id} className="neo-panel p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-sm font-semibold">{item.note || "Browser"}</span>
+                      {current ? <span className="neo-tag-blue px-2.5 py-1 text-[10px]">当前设备</span> : null}
+                      {revoked ? <span className="neo-tag-pink px-2.5 py-1 text-[10px]">已撤销</span> : null}
+                    </div>
+                    <div className="mt-1 break-all text-[11px] leading-5 text-cream-muted">{id}</div>
+                    <div className="mt-2 text-[11px] leading-5 text-cream-muted">
+                      首次加入：{item.added_at || "-"}
+                      <br />
+                      最近访问：{item.last_seen || "-"}
+                    </div>
+                  </div>
+                  <Btn kind="danger" onClick={() => void revoke(id, current)} disabled={busyId === id || revoked}>
+                    {revoked ? "已撤销" : busyId === id ? "处理中..." : "撤销"}
+                  </Btn>
+                </div>
+              </div>
+            );
+          })}
+          {!items.length && !loading ? <div className="text-xs text-cream-muted">暂无设备记录。</div> : null}
+        </div>
+      </div>
+    </Modal>
   );
 }
 
