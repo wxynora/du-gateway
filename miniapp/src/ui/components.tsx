@@ -38,7 +38,7 @@ export function Btn({
   disabled?: boolean;
 }) {
   const base =
-    "text-xs px-3 py-2 rounded-[18px] shadow-[0_4px_10px_rgba(188,196,207,0.18),-2px_-2px_6px_rgba(255,255,255,0.34)] disabled:opacity-60 disabled:cursor-not-allowed active:translate-y-[1px] active:shadow-[0_2px_6px_rgba(188,196,207,0.16),-1px_-1px_4px_rgba(255,255,255,0.28)] transition";
+    "text-xs px-3 py-2 rounded-[18px] shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.44)] disabled:opacity-60 disabled:cursor-not-allowed active:translate-y-[1px] active:shadow-[2px_2px_6px_rgba(173,182,196,0.18),-1px_-1px_3px_rgba(255,255,255,0.34)] transition";
   const cls = (() => {
     if (kind === "danger") return base + " bg-[#E8B9B3] text-[#7C3A33]";
     if (kind === "blue") return base + " bg-[#D6E4F2] text-cream-text";
@@ -67,7 +67,7 @@ export function Modal({
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/10 backdrop-blur-[4px]" onClick={onClose} />
-      <div className="fixed inset-x-0 bottom-0 z-50 mx-auto max-w-xl max-h-[80vh] overflow-auto rounded-t-[34px] bg-[rgba(244,247,251,0.84)] p-4 shadow-[0_-10px_24px_rgba(154,168,186,0.14)] backdrop-blur-2xl safe-bottom">
+      <div className="fixed inset-x-0 bottom-0 z-50 mx-auto max-w-xl max-h-[80vh] overflow-auto rounded-t-[34px] bg-[rgba(244,247,251,0.84)] p-4 shadow-[0_-8px_18px_rgba(173,182,196,0.22)] backdrop-blur-2xl safe-bottom">
         <div className="flex items-center justify-between">
           <div className="neo-chip">{
             title

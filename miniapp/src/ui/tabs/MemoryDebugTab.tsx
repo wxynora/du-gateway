@@ -60,9 +60,9 @@ function firstLinePreview(text: string, maxChars = 96) {
 
 function recallBoxClass(tone: "blue" | "neutral" = "neutral") {
   if (tone === "blue") {
-    return "rounded-[22px] bg-[#dfeaf6] shadow-[0_4px_10px_rgba(188,196,207,0.16),-2px_-2px_6px_rgba(255,255,255,0.28)]";
+    return "rounded-[22px] bg-[#dfeaf6] shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)]";
   }
-  return "rounded-[22px] bg-[#f5f7fa] shadow-[0_4px_10px_rgba(188,196,207,0.16),-2px_-2px_6px_rgba(255,255,255,0.28)]";
+  return "rounded-[22px] bg-[#f5f7fa] shadow-[4px_4px_10px_rgba(173,182,196,0.2),-2px_-2px_5px_rgba(255,255,255,0.4)]";
 }
 
 export function MemoryDebugTab() {
@@ -168,7 +168,7 @@ export function MemoryDebugTab() {
         </div>
         <div className="space-y-2">
           {recalls.map((it, idx) => (
-            <details key={`${String(it.timestamp || "")}-${idx}`} className="neo-panel-soft p-3 shadow-[0_5px_12px_rgba(188,196,207,0.16),-2px_-2px_6px_rgba(255,255,255,0.26)]">
+            <details key={`${String(it.timestamp || "")}-${idx}`} className="neo-panel-soft p-3 shadow-[5px_5px_11px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.38)]">
               <summary className="cursor-pointer select-none list-none">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="neo-tag-dark px-2.5 py-1 text-[10px]">

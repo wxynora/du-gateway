@@ -202,7 +202,7 @@ function Shell() {
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 10px)" }}
       >
         <div className="flex items-center justify-between">
-          <div className="inline-flex items-center gap-2 rounded-full bg-[rgba(244,247,251,0.78)] px-3 py-2 shadow-[0_4px_10px_rgba(154,168,186,0.1)] backdrop-blur-xl">
+          <div className="inline-flex items-center gap-2 rounded-full bg-[rgba(244,247,251,0.78)] px-3 py-2 shadow-[4px_4px_10px_rgba(173,182,196,0.2),-2px_-2px_5px_rgba(255,255,255,0.42)] backdrop-blur-xl">
             <span className="text-sm">🏠</span>
             <span className="text-[17px] font-semibold tracking-tight">d&x home</span>
           </div>
@@ -365,7 +365,7 @@ function FeatureTile({
   return (
     <button
       className={
-        "group relative min-h-[116px] overflow-hidden rounded-[24px] p-4 text-left shadow-[7px_7px_16px_rgba(178,186,198,0.26),-4px_-4px_10px_rgba(255,255,255,0.34),inset_1px_1px_0_rgba(255,255,255,0.2)] backdrop-blur-xl transition active:scale-[0.99] " +
+        "group relative min-h-[116px] overflow-hidden rounded-[24px] p-4 text-left shadow-[6px_6px_13px_rgba(170,180,194,0.28),-3px_-3px_7px_rgba(255,255,255,0.52),inset_1px_1px_0_rgba(255,255,255,0.22)] backdrop-blur-xl transition active:scale-[0.99] " +
         toneMap.shell +
         (disabled ? " opacity-60 cursor-not-allowed" : "")
       }
@@ -376,7 +376,7 @@ function FeatureTile({
       disabled={disabled}
     >
       <div className="relative flex items-center gap-3">
-        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] shadow-[3px_3px_8px_rgba(201,206,214,0.14),-1px_-1px_4px_rgba(255,255,255,0.24)] " + toneMap.badge}>
+        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] shadow-[4px_4px_9px_rgba(173,182,196,0.18),-1px_-1px_3px_rgba(255,255,255,0.34)] " + toneMap.badge}>
           {icon}
         </span>
         <div className="min-w-0">
@@ -426,17 +426,17 @@ function HomeOrbMenu({
     <div className="fixed inset-x-0 bottom-14 z-30 flex justify-center pointer-events-none">
       <div className="relative pointer-events-auto">
         {open ? (
-          <div className="absolute left-1/2 top-1/2 w-[272px] -translate-x-1/2 -translate-y-[122%] rounded-[32px] bg-[rgba(244,247,251,0.84)] p-4 shadow-[0_10px_22px_rgba(154,168,186,0.14)] backdrop-blur-2xl">
+          <div className="absolute left-1/2 top-1/2 w-[272px] -translate-x-1/2 -translate-y-[122%] rounded-[32px] bg-[rgba(244,247,251,0.84)] p-4 shadow-[0_8px_18px_rgba(173,182,196,0.22)] backdrop-blur-2xl">
             <div className="grid grid-cols-3 gap-3">
               <button
-                className="h-14 rounded-[20px] bg-[#D6E4F2] flex items-center justify-center text-cream-text shadow-[0_6px_14px_rgba(154,168,186,0.12)] active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] bg-[#D6E4F2] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
                 onClick={onOpenBackground}
                 title="背景设置"
               >
                 <LineIcon name="background" />
               </button>
               <button
-                className="h-14 rounded-[20px] bg-[#F2E7BF] flex items-center justify-center text-cream-text shadow-[0_6px_14px_rgba(154,168,186,0.12)] active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] bg-[#F2E7BF] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
                 onClick={onOpenSchedule}
                 title="日历与提醒"
               >
@@ -445,7 +445,7 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-[20px] bg-[#EFD5E1] flex items-center justify-center text-cream-text shadow-[0_6px_14px_rgba(154,168,186,0.12)] active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] bg-[#EFD5E1] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
                 onClick={onOpenAlarm}
                 title="闹钟"
               >
@@ -455,7 +455,7 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-[20px] bg-[#D6E4F2] flex items-center justify-center text-cream-text shadow-[0_6px_14px_rgba(154,168,186,0.12)] active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] bg-[#D6E4F2] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
                 onClick={onOpenDuDay}
                 title="渡的一天"
               >
@@ -464,21 +464,21 @@ function HomeOrbMenu({
                 </svg>
               </button>
               <button
-                className="h-14 rounded-[20px] bg-[#F2E7BF] flex items-center justify-center text-cream-text shadow-[0_6px_14px_rgba(154,168,186,0.12)] active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] bg-[#F2E7BF] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
                 onClick={onOpenTree}
                 title="小渡&小玥の树"
               >
                 <LineIcon name="tree" />
               </button>
               <button
-                className="h-14 rounded-[20px] bg-[#EFD5E1] flex items-center justify-center text-cream-text shadow-[0_6px_14px_rgba(154,168,186,0.12)] active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] bg-[#EFD5E1] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
                 onClick={onOpenUpstream}
                 title="上游切换"
               >
                 <LineIcon name="upstream" />
               </button>
               <button
-                className="h-14 rounded-[20px] bg-[rgba(244,247,251,0.92)] flex items-center justify-center text-cream-muted shadow-[0_6px_14px_rgba(154,168,186,0.12)] active:scale-[0.99] transition"
+                className="h-14 rounded-[20px] bg-[rgba(244,247,251,0.92)] flex items-center justify-center text-cream-muted shadow-[4px_4px_10px_rgba(173,182,196,0.2),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
                 onClick={onToggle}
                 title="收起"
               >
@@ -490,7 +490,7 @@ function HomeOrbMenu({
           </div>
         ) : null}
         <button
-          className="h-[74px] w-[74px] rounded-full bg-[rgba(244,247,251,0.84)] shadow-[0_10px_22px_rgba(154,168,186,0.14)] backdrop-blur-2xl flex items-center justify-center text-cream-text"
+          className="h-[74px] w-[74px] rounded-full bg-[rgba(244,247,251,0.84)] shadow-[6px_6px_14px_rgba(170,180,194,0.24),-3px_-3px_7px_rgba(255,255,255,0.48)] backdrop-blur-2xl flex items-center justify-center text-cream-text"
           onClick={onToggle}
           title="Home"
         >
@@ -523,6 +523,7 @@ function AppWithAuth() {
   const [errorText, setErrorText] = useState("");
   const [secondPrompt, setSecondPrompt] = useState("");
   const [showDeviceManager, setShowDeviceManager] = useState(false);
+  const [showSecurityManager, setShowSecurityManager] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -638,6 +639,7 @@ function AppWithAuth() {
     setLoginStep("password");
     setErrorText("");
     setShowDeviceManager(false);
+    setShowSecurityManager(false);
     toast("已退出登录");
   }
 
@@ -648,9 +650,15 @@ function AppWithAuth() {
     return (
       <ShellWithLogout
         onLogout={authEnabled ? logout : undefined}
-        onOpenDevices={authEnabled ? () => setShowDeviceManager(true) : undefined}
+        onOpenDevices={authEnabled ? () => setShowSecurityManager(true) : undefined}
         deviceManagerOpen={showDeviceManager}
         onCloseDevices={() => setShowDeviceManager(false)}
+        securityManagerOpen={showSecurityManager}
+        onCloseSecurityManager={() => setShowSecurityManager(false)}
+        onOpenDeviceManagerFromSecurity={() => {
+          setShowSecurityManager(false);
+          setShowDeviceManager(true);
+        }}
       />
     );
   }
@@ -660,7 +668,7 @@ function AppWithAuth() {
         <div className="neo-panel w-full p-5" style={{ fontFamily: '"Cormorant Garamond", "Times New Roman", serif' }}>
           <div className="flex items-center justify-between gap-3">
             <div className="neo-chip">Private Access</div>
-            <div className="flex h-14 w-14 items-center justify-center rounded-[16px] bg-[rgba(244,247,251,0.82)] shadow-[0_6px_14px_rgba(154,168,186,0.12)]">
+            <div className="flex h-14 w-14 items-center justify-center rounded-[16px] bg-[rgba(244,247,251,0.82)] shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)]">
               <ClaudePixelCrabIcon />
             </div>
           </div>
@@ -676,7 +684,7 @@ function AppWithAuth() {
               <label className="block">
                 <div className="mb-2 text-center text-[13px] font-semibold uppercase tracking-[0.14em] text-cream-muted">Password</div>
                 <input
-                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.96)] bg-[#eef0f3] px-5 text-center text-[18px] text-cream-text outline-none shadow-[inset_4px_4px_8px_rgba(188,197,209,0.42),inset_-4px_-4px_8px_rgba(255,255,255,0.92)] placeholder:text-center placeholder:text-cream-muted"
+                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.96)] bg-[#eef0f3] px-5 text-center text-[18px] text-cream-text outline-none shadow-[inset_3px_3px_7px_rgba(173,182,196,0.34),inset_-2px_-2px_4px_rgba(255,255,255,0.7)] placeholder:text-center placeholder:text-cream-muted"
                   type="password"
                   placeholder="Enter password"
                   value={password}
@@ -692,7 +700,7 @@ function AppWithAuth() {
               <label className="block">
                 <div className="mb-2 text-center text-[13px] font-semibold uppercase tracking-[0.14em] text-cream-muted">{secondPrompt}</div>
                 <input
-                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.96)] bg-[#eef0f3] px-5 text-center text-[18px] text-cream-text outline-none shadow-[inset_4px_4px_8px_rgba(188,197,209,0.42),inset_-4px_-4px_8px_rgba(255,255,255,0.92)] placeholder:text-center placeholder:text-cream-muted"
+                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.96)] bg-[#eef0f3] px-5 text-center text-[18px] text-cream-text outline-none shadow-[inset_3px_3px_7px_rgba(173,182,196,0.34),inset_-2px_-2px_4px_rgba(255,255,255,0.7)] placeholder:text-center placeholder:text-cream-muted"
                   type="text"
                   placeholder="Enter answer"
                   value={secondAnswer}
@@ -714,7 +722,7 @@ function AppWithAuth() {
               {secondPrompt && loginStep === "question" ? (
                 <button
                   type="button"
-                  className="min-w-[108px] rounded-[999px] bg-[#eef0f3] px-5 py-3 text-center text-[17px] font-semibold text-cream-text shadow-[-4px_-4px_10px_rgba(255,255,255,0.94),4px_4px_10px_rgba(188,197,209,0.46)] transition active:translate-y-[1px] active:shadow-[-2px_-2px_6px_rgba(255,255,255,0.9),2px_2px_6px_rgba(188,197,209,0.4)] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="min-w-[108px] rounded-[999px] bg-[#eef0f3] px-5 py-3 text-center text-[17px] font-semibold text-cream-text shadow-[-3px_-3px_6px_rgba(255,255,255,0.86),4px_4px_9px_rgba(173,182,196,0.28)] transition active:translate-y-[1px] active:shadow-[-1px_-1px_3px_rgba(255,255,255,0.7),2px_2px_5px_rgba(173,182,196,0.2)] disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={() => {
                     setLoginStep("password");
                     setSecondAnswer("");
@@ -727,7 +735,7 @@ function AppWithAuth() {
               ) : null}
               <button
                 type="button"
-                className="min-w-[148px] rounded-[999px] bg-[linear-gradient(145deg,rgba(244,247,251,0.96),rgba(213,228,246,0.78))] px-7 py-3 text-center text-[17px] font-semibold text-cream-text shadow-[-5px_-5px_12px_rgba(255,255,255,0.96),5px_5px_12px_rgba(186,197,212,0.5)] transition active:translate-y-[1px] active:shadow-[-2px_-2px_7px_rgba(255,255,255,0.92),2px_2px_7px_rgba(186,197,212,0.42)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="min-w-[148px] rounded-[999px] bg-[linear-gradient(145deg,rgba(244,247,251,0.96),rgba(213,228,246,0.78))] px-7 py-3 text-center text-[17px] font-semibold text-cream-text shadow-[-3px_-3px_7px_rgba(255,255,255,0.9),5px_5px_10px_rgba(173,182,196,0.3)] transition active:translate-y-[1px] active:shadow-[-1px_-1px_4px_rgba(255,255,255,0.72),2px_2px_5px_rgba(173,182,196,0.22)] disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => void login()}
                 disabled={submitting}
               >
@@ -763,39 +771,79 @@ function ShellWithLogout({
   onOpenDevices,
   deviceManagerOpen,
   onCloseDevices,
+  securityManagerOpen,
+  onCloseSecurityManager,
+  onOpenDeviceManagerFromSecurity,
 }: {
   onLogout?: () => void;
   onOpenDevices?: () => void;
   deviceManagerOpen?: boolean;
   onCloseDevices?: () => void;
+  securityManagerOpen?: boolean;
+  onCloseSecurityManager?: () => void;
+  onOpenDeviceManagerFromSecurity?: () => void;
 }) {
   return (
     <>
       <Shell />
-      {onLogout || onOpenDevices ? (
-        <div className="fixed right-4 top-4 z-[70] flex items-center gap-2">
-          {onOpenDevices ? (
-            <button
-              type="button"
-              className="rounded-full bg-[rgba(244,247,251,0.88)] px-3 py-1.5 text-[11px] text-cream-muted shadow-[0_6px_14px_rgba(154,168,186,0.12)] backdrop-blur-xl"
-              onClick={onOpenDevices}
-            >
-              设备管理
-            </button>
-          ) : null}
-          {onLogout ? (
-            <button
-              type="button"
-              className="rounded-full bg-[rgba(244,247,251,0.88)] px-3 py-1.5 text-[11px] text-cream-muted shadow-[0_6px_14px_rgba(154,168,186,0.12)] backdrop-blur-xl"
-              onClick={onLogout}
-            >
-              退出登录
-            </button>
-          ) : null}
+      {onOpenDevices ? (
+        <div className="fixed right-4 top-4 z-[70]">
+          <button
+            type="button"
+            className="rounded-full bg-[rgba(244,247,251,0.88)] px-3 py-1.5 text-[11px] text-cream-muted shadow-[4px_4px_10px_rgba(173,182,196,0.2),-2px_-2px_5px_rgba(255,255,255,0.42)] backdrop-blur-xl"
+            onClick={onOpenDevices}
+          >
+            安全管理
+          </button>
         </div>
+      ) : null}
+      {securityManagerOpen && onCloseSecurityManager ? (
+        <SecurityManagerModal
+          onClose={onCloseSecurityManager}
+          onOpenDevices={onOpenDeviceManagerFromSecurity}
+          onLogout={onLogout}
+        />
       ) : null}
       {deviceManagerOpen && onCloseDevices ? <DeviceManagerModal onClose={onCloseDevices} onLogout={onLogout} /> : null}
     </>
+  );
+}
+
+function SecurityManagerModal({
+  onClose,
+  onOpenDevices,
+  onLogout,
+}: {
+  onClose: () => void;
+  onOpenDevices?: () => void;
+  onLogout?: () => void;
+}) {
+  return (
+    <Modal title="安全管理" onClose={onClose}>
+      <div className="space-y-3 pb-4">
+        <div className="neo-panel-soft p-3 text-xs leading-6 text-cream-muted">
+          这里可以管理当前登录安全相关的操作。
+        </div>
+        {onOpenDevices ? (
+          <div className="neo-panel p-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-cream-text">设备管理</div>
+              <div className="mt-1 text-xs text-cream-muted">查看已登录设备，撤销某个浏览器的访问权限。</div>
+            </div>
+            <Btn kind="blue" onClick={onOpenDevices}>进入</Btn>
+          </div>
+        ) : null}
+        {onLogout ? (
+          <div className="neo-panel p-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-cream-text">退出登录</div>
+              <div className="mt-1 text-xs text-cream-muted">清掉当前浏览器的登录态，回到登录页。</div>
+            </div>
+            <Btn kind="danger" onClick={onLogout}>退出</Btn>
+          </div>
+        ) : null}
+      </div>
+    </Modal>
   );
 }
 
