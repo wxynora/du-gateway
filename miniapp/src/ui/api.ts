@@ -1,5 +1,7 @@
 import { getInitData } from "./tg";
 
+const PANEL_TOKEN_STORAGE_KEY = "miniapp.panel.token.v1";
+
 export class ApiError extends Error {
   status: number;
   payload: any;
@@ -20,30 +22,56 @@ async function parseJsonSafe(r: Response): Promise<any> {
   }
 }
 
+export function getPanelToken(): string {
+  try {
+    return (window.localStorage.getItem(PANEL_TOKEN_STORAGE_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+export function setPanelToken(token: string) {
+  try {
+    if (token) window.localStorage.setItem(PANEL_TOKEN_STORAGE_KEY, token);
+    else window.localStorage.removeItem(PANEL_TOKEN_STORAGE_KEY);
+  } catch {}
+}
+
+function withAuthUrl(path: string): string {
+  try {
+    const u = new URL(path, window.location.origin);
+    const initData = getInitData();
+    const panelToken = getPanelToken();
+    if (initData && !u.searchParams.get("initData")) u.searchParams.set("initData", initData);
+    if (panelToken && !u.searchParams.get("panel_token")) u.searchParams.set("panel_token", panelToken);
+    return u.pathname + u.search;
+  } catch {
+    return path;
+  }
+}
+
+function withAuthHeaders(init?: RequestInit): Headers {
+  const headers = new Headers(init?.headers || {});
+  const initData = getInitData();
+  const panelToken = getPanelToken();
+  if (initData) headers.set("X-Telegram-Init-Data", initData);
+  if (panelToken) headers.set("Authorization", `Bearer ${panelToken}`);
+  return headers;
+}
+
 /**
  * 只通过 Header 传 initData，不把 initData 拼进 URL。
  * 用于拉取图片二进制等（避免 query 过长 414；与 <img src> 不同，fetch 仍可能受跨域预检限制，见 app.py CORS）。
  */
 export async function fetchWithInitDataHeaderOnly(path: string, init?: RequestInit): Promise<Response> {
-  const headers = new Headers(init?.headers || {});
-  const initData = getInitData();
-  if (initData) headers.set("X-Telegram-Init-Data", initData);
+  const headers = withAuthHeaders(init);
   const p = path.startsWith("/") ? path : `/${path}`;
   return fetch(p, { ...init, headers });
 }
 
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  const headers = new Headers(init?.headers || {});
-  const initData = getInitData();
-  if (initData) headers.set("X-Telegram-Init-Data", initData);
-  let finalPath = path;
-  if (initData) {
-    try {
-      const u = new URL(path, window.location.origin);
-      if (!u.searchParams.get("initData")) u.searchParams.set("initData", initData);
-      finalPath = u.pathname + u.search;
-    } catch {}
-  }
+  const headers = withAuthHeaders(init);
+  const finalPath = withAuthUrl(path);
   return fetch(finalPath, { ...init, headers });
 }
 
@@ -57,11 +85,17 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function buildLogStreamUrl(startLines: number): string {
-  const initData = getInitData();
   const url = new URL("/miniapp-api/logs/stream", window.location.origin);
   url.searchParams.set("start_lines", String(startLines));
+  const initData = getInitData();
+  const panelToken = getPanelToken();
   // EventSource 不能自定义 Header，所以走 query
   if (initData) url.searchParams.set("initData", initData);
+  if (panelToken) url.searchParams.set("panel_token", panelToken);
   return url.toString();
 }
 
+export function buildApiAssetUrl(path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return withAuthUrl(p);
+}

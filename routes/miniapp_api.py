@@ -22,6 +22,13 @@ from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
 from utils.ip_allowlist import enforce_ip_allowlist
 from utils.log_reader import stream_logs_sse, tail_logs
+from utils.miniapp_panel_auth import (
+    enforce_panel_token,
+    issue_panel_token,
+    panel_auth_enabled,
+    panel_auth_error,
+    panel_auth_meta,
+)
 from utils.telegram_webapp import enforce_telegram_initdata
 from utils.time_aware import today_beijing, now_beijing_iso
 
@@ -366,8 +373,39 @@ def _build_live_dynamic_recall_preview(window_id: str) -> dict | None:
 @bp.before_request
 def _miniapp_auth():
     # 双保险：先 IP，再 Telegram initData（更快拒绝无效来源）
+    if request.path.rstrip("/").endswith("/panel-auth/meta") or request.path.rstrip("/").endswith("/panel-auth/verify"):
+        return None
     enforce_ip_allowlist()
+    panel_block = enforce_panel_token()
+    if panel_block is not None:
+        return panel_block
     enforce_telegram_initdata()
+
+
+@bp.route("/panel-auth/meta", methods=["GET"])
+def miniapp_panel_auth_meta():
+    meta = panel_auth_meta()
+    return jsonify({"ok": True, **meta})
+
+
+@bp.route("/panel-auth/verify", methods=["POST"])
+def miniapp_panel_auth_verify():
+    if not panel_auth_enabled():
+        return panel_auth_error("panel_auth_misconfigured", 503)
+    body = request.get_json(silent=True) or {}
+    password = str(body.get("password") or "").strip()
+    from config import MINIAPP_PANEL_PASSWORD
+
+    if not password or password != MINIAPP_PANEL_PASSWORD:
+        return jsonify({"ok": False, "code": "password_invalid", "error": "密码不正确"}), 401
+    token, ttl = issue_panel_token(subject="browser")
+    return jsonify({"ok": True, "panel_token": token, "expires_in": ttl})
+
+
+@bp.route("/panel-auth/session", methods=["GET"])
+def miniapp_panel_auth_session():
+    payload = request.environ.get("miniapp_panel_payload") or {}
+    return jsonify({"ok": True, "authenticated": True, "subject": payload.get("sub") or "browser", "exp": payload.get("exp")})
 
 
 @bp.route("/wenyou/last-archive", methods=["GET"])

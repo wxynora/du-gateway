@@ -380,6 +380,11 @@ MINIAPP_TELEGRAM_AUTH_ENABLED = os.environ.get("MINIAPP_TELEGRAM_AUTH_ENABLED", 
 # initData 允许的最大时效（秒），避免旧链接被长期复用；默认 10 分钟
 MINIAPP_INITDATA_MAX_AGE_SECONDS = int(os.environ.get("MINIAPP_INITDATA_MAX_AGE_SECONDS", "600"))
 
+# 面板密码登录：第一阶段先做浏览器密码 + token，不依赖 Telegram initData。
+MINIAPP_PANEL_PASSWORD = os.environ.get("MINIAPP_PANEL_PASSWORD", "").strip()
+MINIAPP_PANEL_SIGNING_SECRET = os.environ.get("MINIAPP_PANEL_SIGNING_SECRET", "").strip()
+MINIAPP_PANEL_TOKEN_TTL_SECONDS = int(os.environ.get("MINIAPP_PANEL_TOKEN_TTL_SECONDS", "2592000"))
+
 # IP 白名单（CIDR/单 IP，逗号分隔）。留空则不限制 IP。
 # 示例：MINIAPP_IP_ALLOWLIST=127.0.0.1,10.0.0.0/8,192.168.0.0/16
 MINIAPP_IP_ALLOWLIST = [x.strip() for x in os.environ.get("MINIAPP_IP_ALLOWLIST", "").split(",") if x.strip()]

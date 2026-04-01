@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
-import { apiFetch, apiJson } from "./api";
+import { apiFetch, apiJson, buildApiAssetUrl, getPanelToken, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
@@ -82,8 +82,8 @@ function Shell() {
   });
 
   useEffect(() => {
-    // 直接展开全屏，避免进入后还要手动上滑/多次点击
-    tgReady(true);
+    // 不强制全屏，保持 Telegram 默认的半屏/弹层体验。
+    tgReady(false);
     applyTelegramThemeToHtmlClass();
     const timer = window.setTimeout(() => {
       setDeferHomeExtras(true);
@@ -498,8 +498,145 @@ function HomeOrbMenu({
 export function App() {
   return (
     <ToastProvider>
-      <Shell />
+      <AppWithAuth />
     </ToastProvider>
+  );
+}
+
+function AppWithAuth() {
+  const toast = useToast();
+  const [metaLoading, setMetaLoading] = useState(true);
+  const [authEnabled, setAuthEnabled] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [errorText, setErrorText] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const j = await fetch("/miniapp-api/panel-auth/meta").then((r) => r.json());
+        if (cancelled) return;
+        const enabled = !!j?.enabled;
+        setAuthEnabled(enabled);
+        if (!enabled) {
+          setReady(true);
+          return;
+        }
+        const token = getPanelToken();
+        if (!token) {
+          setReady(false);
+          return;
+        }
+        const s = await apiJson<{ ok?: boolean; authenticated?: boolean }>("/miniapp-api/panel-auth/session");
+        if (cancelled) return;
+        if (s?.ok && s?.authenticated) {
+          setReady(true);
+          return;
+        }
+        setPanelToken("");
+        setReady(false);
+      } catch {
+        if (cancelled) return;
+        setReady(false);
+      } finally {
+        if (!cancelled) setMetaLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function login() {
+    if (!password.trim()) {
+      setErrorText("请输入密码");
+      return;
+    }
+    setSubmitting(true);
+    setErrorText("");
+    try {
+      const j = await fetch("/miniapp-api/panel-auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: password.trim() }),
+      }).then(async (r) => ({ ok: r.ok, body: await r.json().catch(() => ({})) }));
+      if (!j.ok || !j.body?.ok || !j.body?.panel_token) {
+        throw new Error(j.body?.error || "密码校验失败");
+      }
+      setPanelToken(String(j.body.panel_token));
+      setPassword("");
+      setReady(true);
+      toast("已进入 mini app");
+    } catch (e: any) {
+      setErrorText(e?.message || "登录失败");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function logout() {
+    setPanelToken("");
+    setReady(false);
+    setPassword("");
+    setErrorText("");
+    toast("已退出登录");
+  }
+
+  if (metaLoading) {
+    return <LoadingScreen text="正在检查面板登录状态..." />;
+  }
+  if (!authEnabled || ready) {
+    return <ShellWithLogout onLogout={authEnabled ? logout : undefined} />;
+  }
+  return (
+    <div className="min-h-dvh bg-[#EEF0F3] px-5 py-6 text-cream-text">
+      <div className="mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md items-center">
+        <div className="neo-panel w-full p-5">
+          <div className="neo-chip">Mini App Login</div>
+          <div className="mt-4 text-[26px] font-semibold tracking-tight">输入密码进入面板</div>
+          <div className="mt-2 text-sm leading-6 text-cream-muted">
+            第一阶段先用浏览器密码登录。登录成功后，这个浏览器会记住你的登录态。
+          </div>
+          <div className="mt-5 space-y-3">
+            <input
+              className="neo-input"
+              type="password"
+              placeholder="面板密码"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !submitting) void login();
+              }}
+            />
+            {errorText ? <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">{errorText}</div> : null}
+            <div className="flex items-center gap-2">
+              <Btn kind="blue" onClick={() => void login()} disabled={submitting}>
+                {submitting ? "验证中..." : "进入面板"}
+              </Btn>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShellWithLogout({ onLogout }: { onLogout?: () => void }) {
+  return (
+    <>
+      <Shell />
+      {onLogout ? (
+        <button
+          type="button"
+          className="fixed right-4 top-4 z-[70] rounded-full bg-[rgba(244,247,251,0.88)] px-3 py-1.5 text-[11px] text-cream-muted shadow-[0_6px_14px_rgba(154,168,186,0.12)] backdrop-blur-xl"
+          onClick={onLogout}
+        >
+          退出登录
+        </button>
+      ) : null}
+    </>
   );
 }
 
@@ -517,12 +654,22 @@ function LazyPane({ children }: { children: React.ReactNode }) {
   );
 }
 
+function LoadingScreen({ text }: { text: string }) {
+  return (
+    <div className="min-h-dvh bg-[#EEF0F3] px-5 py-6 text-cream-text">
+      <div className="mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md items-center">
+        <div className="neo-panel-soft w-full p-5 text-sm text-cream-muted">{text}</div>
+      </div>
+    </div>
+  );
+}
+
 function buildBackgroundStyle(bg: BgConfig): React.CSSProperties {
   if (bg.useImage && bg.imageVersion > 0) {
     const alpha = Math.max(0, Math.min(70, Number(bg.dim || 0))) / 100;
     return {
       backgroundColor: "#eaedf1",
-      backgroundImage: `linear-gradient(rgba(238,240,243,${alpha}), rgba(238,240,243,${alpha})), url("/miniapp-api/background-image/${bg.imageVersion}?s=${bg.imageStamp || 0}")`,
+      backgroundImage: `linear-gradient(rgba(238,240,243,${alpha}), rgba(238,240,243,${alpha})), url("${buildApiAssetUrl(`/miniapp-api/background-image/${bg.imageVersion}?s=${bg.imageStamp || 0}`)}")`,
       backgroundSize: "cover",
       backgroundPosition: "center",
       backgroundRepeat: "no-repeat",
