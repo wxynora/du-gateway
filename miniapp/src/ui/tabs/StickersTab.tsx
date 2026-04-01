@@ -20,7 +20,6 @@ function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publi
   useEffect(() => {
     setFailed(null);
     setDataUrlFallback(false);
-    setPreferProxy(false);
     blobRef.current = null;
     const pb = (publicBase || "").trim().replace(/\/$/, "");
     if (pb && !preferProxy) {
@@ -66,6 +65,10 @@ function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publi
       blobRef.current = null;
     };
   }, [objectKey, publicBase, preferProxy]);
+
+  useEffect(() => {
+    setPreferProxy(false);
+  }, [objectKey, publicBase]);
 
   if (failed) {
     return (
