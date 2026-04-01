@@ -10,10 +10,10 @@
     @apply bg-cream-bg text-cream-text;
   }
   :root {
-    --neo-shadow-lg: 7px 7px 16px rgba(201, 206, 214, 0.2), -4px -4px 10px rgba(255, 255, 255, 0.4);
-    --neo-shadow-md: 5px 5px 12px rgba(201, 206, 214, 0.17), -3px -3px 8px rgba(255, 255, 255, 0.34);
-    --neo-shadow-sm: 3px 3px 8px rgba(201, 206, 214, 0.13), -1px -1px 4px rgba(255, 255, 255, 0.26);
-    --neo-inset: inset 1px 1px 0 rgba(255, 255, 255, 0.24), inset -1px -1px 5px rgba(212, 219, 228, 0.16);
+    --neo-shadow-lg: 5px 5px 12px rgba(188, 196, 207, 0.22), -3px -3px 8px rgba(255, 255, 255, 0.46);
+    --neo-shadow-md: 4px 4px 10px rgba(188, 196, 207, 0.18), -2px -2px 6px rgba(255, 255, 255, 0.38);
+    --neo-shadow-sm: 3px 3px 7px rgba(188, 196, 207, 0.16), -1px -1px 4px rgba(255, 255, 255, 0.3);
+    --neo-inset: inset 3px 3px 7px rgba(188, 196, 207, 0.18), inset -2px -2px 5px rgba(255, 255, 255, 0.52);
   }
 }
 

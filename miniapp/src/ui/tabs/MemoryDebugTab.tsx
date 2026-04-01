@@ -60,9 +60,9 @@ function firstLinePreview(text: string, maxChars = 96) {
 
 function recallBoxClass(tone: "blue" | "neutral" = "neutral") {
   if (tone === "blue") {
-    return "rounded-[22px] bg-[#dfeaf6] shadow-[0_3px_8px_rgba(154,168,186,0.10)]";
+    return "rounded-[22px] bg-[#dfeaf6] shadow-[0_4px_10px_rgba(188,196,207,0.16),-2px_-2px_6px_rgba(255,255,255,0.28)]";
   }
-  return "rounded-[22px] bg-[#f5f7fa] shadow-[0_3px_8px_rgba(154,168,186,0.10)]";
+  return "rounded-[22px] bg-[#f5f7fa] shadow-[0_4px_10px_rgba(188,196,207,0.16),-2px_-2px_6px_rgba(255,255,255,0.28)]";
 }
 
 export function MemoryDebugTab() {
@@ -168,7 +168,7 @@ export function MemoryDebugTab() {
         </div>
         <div className="space-y-2">
           {recalls.map((it, idx) => (
-            <details key={`${String(it.timestamp || "")}-${idx}`} className="neo-panel-soft p-3 shadow-[0_4px_10px_rgba(154,168,186,0.10)]">
+            <details key={`${String(it.timestamp || "")}-${idx}`} className="neo-panel-soft p-3 shadow-[0_5px_12px_rgba(188,196,207,0.16),-2px_-2px_6px_rgba(255,255,255,0.26)]">
               <summary className="cursor-pointer select-none list-none">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="neo-tag-dark px-2.5 py-1 text-[10px]">
@@ -181,13 +181,6 @@ export function MemoryDebugTab() {
                 </div>
               </summary>
               <div className="mt-3 space-y-2.5">
-                <div className={`${recallBoxClass("neutral")} p-2.5`}>
-                  <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">原文</div>
-                  <div className="mt-1 text-sm text-cream-text break-words">
-                    {String(it.query || "") || "（空）"}
-                  </div>
-                </div>
-
                 {Array.isArray(it.scores) && it.scores.length > 0 && (
                   <details className={`${recallBoxClass("blue")} p-2.5`}>
                     <summary className="cursor-pointer select-none text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">

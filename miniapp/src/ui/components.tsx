@@ -38,7 +38,7 @@ export function Btn({
   disabled?: boolean;
 }) {
   const base =
-    "text-xs px-3 py-2 rounded-[18px] shadow-soft2 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99] transition";
+    "text-xs px-3 py-2 rounded-[18px] shadow-[0_4px_10px_rgba(188,196,207,0.18),-2px_-2px_6px_rgba(255,255,255,0.34)] disabled:opacity-60 disabled:cursor-not-allowed active:translate-y-[1px] active:shadow-[0_2px_6px_rgba(188,196,207,0.16),-1px_-1px_4px_rgba(255,255,255,0.28)] transition";
   const cls = (() => {
     if (kind === "danger") return base + " bg-[#E8B9B3] text-[#7C3A33]";
     if (kind === "blue") return base + " bg-[#D6E4F2] text-cream-text";
