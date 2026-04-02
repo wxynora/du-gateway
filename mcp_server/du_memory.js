@@ -110,6 +110,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "set_volume",
+      description:
+        "设置老婆手机音量。叫醒前可以先把音量调高。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          volume: {
+            type: "number",
+            description: "音量 0-100",
+          },
+        },
+        required: ["volume"],
+      },
+    },
+    {
       name: "check_phone_command",
       description:
         "查询手机命令执行状态。调完 ring_phone 后可查看是否已响铃。",
@@ -286,6 +301,35 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
     return {
       content: [{ type: "text", text: `暂停命令下发失败：${res.error || JSON.stringify(res)}` }],
+      isError: true,
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // set_volume：POST /api/mobile_command 入队 set_volume
+  // ------------------------------------------------------------------
+  if (name === "set_volume") {
+    const volume = typeof args.volume === "number" ? Math.max(0, Math.min(100, args.volume)) : 50;
+    const idempotency_key = `vol_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const res = await fetchGateway("/api/mobile_command", {
+      method: "POST",
+      headers: { "X-Mobile-Token": TOKEN },
+      body: JSON.stringify({
+        cmd: "set_volume",
+        payload: { volume },
+        expires_in_sec: 60,
+        idempotency_key,
+      }),
+    }).catch((e) => ({ ok: false, error: e.message }));
+
+    if (res.ok) {
+      return {
+        content: [{ type: "text", text: `已下发音量设置命令：${volume}%` }],
+      };
+    }
+    return {
+      content: [{ type: "text", text: `音量设置失败：${res.error || JSON.stringify(res)}` }],
       isError: true,
     };
   }

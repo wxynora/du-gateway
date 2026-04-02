@@ -2284,7 +2284,7 @@ def delete_all_gateway_data() -> tuple[bool, int, Optional[str]]:
 # 手机指令队列（mobile_command）
 # ---------------------------------------------------------------------------
 
-_MOBILE_CMD_ALLOWLIST = {"alarm_ring", "music_play", "music_pause", "music_play_uri"}
+_MOBILE_CMD_ALLOWLIST = {"alarm_ring", "music_play", "music_pause", "music_play_uri", "set_volume"}
 _MOBILE_HISTORY_MAX = 50
 _MOBILE_EXPIRES_MIN = 10
 _MOBILE_EXPIRES_MAX = 600
