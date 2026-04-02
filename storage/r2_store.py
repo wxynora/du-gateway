@@ -2325,6 +2325,36 @@ def _expire_idempotency_keys(keys: dict) -> dict:
     return {k: v for k, v in keys.items() if _parse_iso(v.get("expires", "")) and _parse_iso(v["expires"]) > now}
 
 
+def _has_recent_set_volume(data: dict, now: datetime, window_sec: int = 300) -> bool:
+    """检查是否已有待执行或最近成功的 set_volume。"""
+    pending = data.get("pending") if isinstance(data, dict) else []
+    if isinstance(pending, list):
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("cmd") or "").strip() != "set_volume":
+                continue
+            exp = _parse_iso(str(item.get("expires_at") or ""))
+            if exp and exp <= now:
+                continue
+            return True
+
+    history = data.get("history") if isinstance(data, dict) else []
+    if isinstance(history, list):
+        cutoff = now - timedelta(seconds=max(1, int(window_sec or 300)))
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("cmd") or "").strip() != "set_volume":
+                continue
+            if str(item.get("status") or "").strip() != "done":
+                continue
+            finished_at = _parse_iso(str(item.get("finished_at") or ""))
+            if finished_at and finished_at >= cutoff:
+                return True
+    return False
+
+
 def _has_active_pending_command(data: dict, cmd: str, now: datetime) -> bool:
     """检查是否已有同类未过期 pending 命令，避免重复入队。"""
     pending = data.get("pending") if isinstance(data, dict) else []
@@ -2391,6 +2421,19 @@ def _normalize_mobile_command_payload(cmd: str, payload: dict) -> tuple[Optional
     return payload, None
 
 
+def _build_mobile_command_item(cmd: str, payload: dict, now_iso: str, expires_at: str, source: str = "mcp") -> dict:
+    return {
+        "id": str(uuid4()),
+        "cmd": cmd,
+        "payload": payload,
+        "created_at": now_iso,
+        "expires_at": expires_at,
+        "leased_until": None,
+        "retry_count": 0,
+        "source": source,
+    }
+
+
 def append_mobile_command(cmd: str, payload: dict, expires_in_sec: int = _MOBILE_EXPIRES_DEFAULT,
                           idempotency_key: str = "") -> tuple[Optional[dict], Optional[str]]:
     """入队手机命令。返回 (item, error)。若幂等键重复返回已有 item。"""
@@ -2430,16 +2473,19 @@ def append_mobile_command(cmd: str, payload: dict, expires_in_sec: int = _MOBILE
             if cmd == "alarm_ring" and _has_active_pending_command(data, "alarm_ring", now):
                 return None, "已有未完成的 alarm_ring，暂不重复入队"
 
-            item = {
-                "id": str(uuid4()),
-                "cmd": cmd,
-                "payload": payload,
-                "created_at": now_iso,
-                "expires_at": expires_at,
-                "leased_until": None,
-                "retry_count": 0,
-                "source": "mcp",
-            }
+            if cmd == "alarm_ring" and payload.get("volume") is not None and not _has_recent_set_volume(data, now=now, window_sec=300):
+                # 网关兜底：如果调用方先 ring_phone，且请求里带了 volume，就先补一条 set_volume。
+                data["pending"].append(
+                    _build_mobile_command_item(
+                        cmd="set_volume",
+                        payload={"volume": int(payload["volume"])},
+                        now_iso=now_iso,
+                        expires_at=expires_at,
+                        source="gateway_fallback",
+                    )
+                )
+
+            item = _build_mobile_command_item(cmd=cmd, payload=payload, now_iso=now_iso, expires_at=expires_at)
             data["pending"].append(item)
             idem_keys[idempotency_key] = {"command_id": item["id"], "expires": idem_expires}
             data["idempotency_keys"] = idem_keys
