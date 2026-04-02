@@ -21,6 +21,7 @@ from routes.telegram_webhook import bp as telegram_webhook_bp
 from routes.miniapp_api import bp as miniapp_api_bp
 from routes.mcp_api import bp as mcp_api_bp
 from routes.pc_command import bp as pc_command_bp
+from routes.mobile_command import bp as mobile_command_bp
 from routes.co_read_api import bp as co_read_api_bp
 from routes.koreader_api import bp as koreader_api_bp
 from routes.html_preview import bp as html_preview_bp
@@ -37,6 +38,7 @@ app.register_blueprint(telegram_webhook_bp)
 app.register_blueprint(miniapp_api_bp)
 app.register_blueprint(mcp_api_bp)
 app.register_blueprint(pc_command_bp)
+app.register_blueprint(mobile_command_bp)
 app.register_blueprint(co_read_api_bp)
 app.register_blueprint(koreader_api_bp)
 app.register_blueprint(html_preview_bp)

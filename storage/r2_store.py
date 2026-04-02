@@ -70,11 +70,14 @@ R2_KEY_STICKERS_MAPPING = "stickers/mapping.json"
 R2_KEY_STICKERS_META = "stickers/meta.json"
 # 电脑控制：待执行指令队列（单设备轮询）
 R2_KEY_PC_COMMAND_QUEUE = "pc_commands/queue.json"
+# 手机控制：待执行指令队列（Tasker 轮询）
+R2_KEY_MOBILE_COMMAND_QUEUE = "mobile_command/queue.json"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
 _notebook_write_lock = threading.Lock()
 _pc_command_write_lock = threading.Lock()
+_mobile_command_write_lock = threading.Lock()
 
 # 日志
 from utils.log import get_logger
@@ -2275,3 +2278,269 @@ def delete_all_gateway_data() -> tuple[bool, int, Optional[str]]:
     except Exception as e:
         logger.error("delete_all_gateway_data 失败 error=%s", e, exc_info=True)
         return False, 0, str(e)
+
+
+# ---------------------------------------------------------------------------
+# 手机指令队列（mobile_command）
+# ---------------------------------------------------------------------------
+
+_MOBILE_CMD_ALLOWLIST = {"alarm_ring", "music_play", "music_pause", "music_play_uri"}
+_MOBILE_HISTORY_MAX = 50
+_MOBILE_EXPIRES_MIN = 10
+_MOBILE_EXPIRES_MAX = 600
+_MOBILE_EXPIRES_DEFAULT = 300
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_iso(s: str) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _mobile_queue_raw(client) -> dict:
+    data = _read_json(client, R2_KEY_MOBILE_COMMAND_QUEUE)
+    if not isinstance(data, dict):
+        return {"pending": [], "history": [], "idempotency_keys": {}}
+    if not isinstance(data.get("pending"), list):
+        data["pending"] = []
+    if not isinstance(data.get("history"), list):
+        data["history"] = []
+    if not isinstance(data.get("idempotency_keys"), dict):
+        data["idempotency_keys"] = {}
+    return data
+
+
+def _trim_history(history: list) -> list:
+    history.sort(key=lambda x: x.get("finished_at", ""), reverse=True)
+    return history[:_MOBILE_HISTORY_MAX]
+
+
+def _expire_idempotency_keys(keys: dict) -> dict:
+    now = datetime.now(timezone.utc)
+    return {k: v for k, v in keys.items() if _parse_iso(v.get("expires", "")) and _parse_iso(v["expires"]) > now}
+
+
+def append_mobile_command(cmd: str, payload: dict, expires_in_sec: int = _MOBILE_EXPIRES_DEFAULT,
+                          idempotency_key: str = "") -> tuple[Optional[dict], Optional[str]]:
+    """入队手机命令。返回 (item, error)。若幂等键重复返回已有 item。"""
+    if cmd not in _MOBILE_CMD_ALLOWLIST:
+        return None, f"不允许的命令: {cmd}"
+    if not isinstance(payload, dict):
+        payload = {}
+    expires_in_sec = max(_MOBILE_EXPIRES_MIN, min(_MOBILE_EXPIRES_MAX, int(expires_in_sec or _MOBILE_EXPIRES_DEFAULT)))
+    if not idempotency_key:
+        return None, "idempotency_key 必填"
+
+    client = _s3_client()
+    if not client:
+        return None, "R2 不可用"
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    expires_at = (now + timedelta(seconds=expires_in_sec)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    idem_expires = (now + timedelta(seconds=300)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    with _mobile_command_write_lock:
+        try:
+            data = _mobile_queue_raw(client)
+
+            # 幂等检查
+            idem_keys = _expire_idempotency_keys(data.get("idempotency_keys", {}))
+            if idempotency_key in idem_keys:
+                existing_id = idem_keys[idempotency_key].get("command_id", "")
+                for item in data["pending"]:
+                    if item.get("id") == existing_id:
+                        return item, None
+                return {"id": existing_id, "duplicate": True}, None
+
+            item = {
+                "id": str(uuid4()),
+                "cmd": cmd,
+                "payload": payload,
+                "created_at": now_iso,
+                "expires_at": expires_at,
+                "leased_until": None,
+                "retry_count": 0,
+                "source": "mcp",
+            }
+            data["pending"].append(item)
+            idem_keys[idempotency_key] = {"command_id": item["id"], "expires": idem_expires}
+            data["idempotency_keys"] = idem_keys
+            _write_json(client, R2_KEY_MOBILE_COMMAND_QUEUE, data)
+            return item, None
+        except Exception as e:
+            logger.error("append_mobile_command 失败 cmd=%s error=%s", cmd, e, exc_info=True)
+            return None, str(e)
+
+
+def poll_mobile_commands() -> dict:
+    """Tasker 拉取待执行命令。过滤过期/已租约的，对返回的设置租约。"""
+    client = _s3_client()
+    if not client:
+        return {"commands": [], "poll_after_sec": 30}
+
+    now = datetime.now(timezone.utc)
+    need_write = False
+
+    with _mobile_command_write_lock:
+        try:
+            data = _mobile_queue_raw(client)
+            pending = data["pending"]
+            history = data["history"]
+
+            new_pending = []
+            commands_to_send = []
+
+            for item in pending:
+                # 过期检查
+                exp = _parse_iso(item.get("expires_at", ""))
+                if exp and exp <= now:
+                    history.append({"id": item["id"], "cmd": item["cmd"], "status": "expired",
+                                    "finished_at": _now_iso()})
+                    need_write = True
+                    continue
+
+                # 重试耗尽
+                if item.get("retry_count", 0) >= 3:
+                    history.append({"id": item["id"], "cmd": item["cmd"], "status": "abandoned",
+                                    "finished_at": _now_iso()})
+                    need_write = True
+                    continue
+
+                # 租约检查
+                leased = _parse_iso(item.get("leased_until") or "")
+                if leased and leased > now:
+                    new_pending.append(item)
+                    continue
+
+                # 如果租约过期了但没回执，retry_count + 1
+                if leased and leased <= now:
+                    item["retry_count"] = item.get("retry_count", 0) + 1
+                    need_write = True
+
+                # 设置租约
+                cmd = item.get("cmd", "")
+                if cmd == "alarm_ring":
+                    lease_sec = (item.get("payload") or {}).get("duration_sec", 30) + 30
+                else:
+                    lease_sec = 15
+                item["leased_until"] = (now + timedelta(seconds=lease_sec)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                need_write = True
+
+                new_pending.append(item)
+                commands_to_send.append({
+                    "id": item["id"],
+                    "cmd": item["cmd"],
+                    "payload": item.get("payload", {}),
+                })
+
+            data["pending"] = new_pending
+            data["history"] = _trim_history(history)
+
+            if need_write:
+                _write_json(client, R2_KEY_MOBILE_COMMAND_QUEUE, data)
+
+            # poll_after_sec
+            if commands_to_send:
+                poll = 3
+            elif any(_parse_iso(it.get("leased_until") or "") and _parse_iso(it["leased_until"]) > now
+                     for it in new_pending):
+                poll = 15
+            else:
+                poll = 30
+
+            return {"commands": commands_to_send, "poll_after_sec": poll}
+        except Exception as e:
+            logger.error("poll_mobile_commands 失败 error=%s", e, exc_info=True)
+            return {"commands": [], "poll_after_sec": 30}
+
+
+def report_mobile_commands(results: list) -> dict:
+    """处理 Tasker 回执。返回 {"ok": True, "processed": N}。"""
+    if not isinstance(results, list):
+        return {"ok": False, "error": "results 必须是数组"}
+
+    client = _s3_client()
+    if not client:
+        return {"ok": False, "error": "R2 不可用"}
+
+    now = datetime.now(timezone.utc)
+
+    with _mobile_command_write_lock:
+        try:
+            data = _mobile_queue_raw(client)
+            pending = data["pending"]
+            history = data["history"]
+            pending_map = {it["id"]: it for it in pending if isinstance(it, dict) and it.get("id")}
+            processed = 0
+
+            for r in results:
+                if not isinstance(r, dict):
+                    continue
+                rid = str(r.get("id", "")).strip()
+                status = str(r.get("status", "")).strip()
+                if not rid or not status:
+                    continue
+
+                item = pending_map.get(rid)
+                if not item:
+                    continue
+
+                # 租约校验：必须在有效租约内
+                leased = _parse_iso(item.get("leased_until") or "")
+                if not leased or leased <= now:
+                    continue
+
+                if status == "done":
+                    history.append({"id": rid, "cmd": item["cmd"], "status": "done",
+                                    "finished_at": _now_iso()})
+                    del pending_map[rid]
+                    processed += 1
+                elif status == "fail":
+                    retryable = r.get("retryable", False)
+                    if retryable:
+                        item["retry_count"] = item.get("retry_count", 0) + 1
+                        item["leased_until"] = None
+                        if item["retry_count"] >= 3:
+                            history.append({"id": rid, "cmd": item["cmd"], "status": "abandoned",
+                                            "finished_at": _now_iso()})
+                            del pending_map[rid]
+                    else:
+                        history.append({"id": rid, "cmd": item["cmd"], "status": "failed",
+                                        "reason": r.get("reason", ""),
+                                        "finished_at": _now_iso()})
+                        del pending_map[rid]
+                    processed += 1
+
+            data["pending"] = list(pending_map.values())
+            data["history"] = _trim_history(history)
+            _write_json(client, R2_KEY_MOBILE_COMMAND_QUEUE, data)
+            return {"ok": True, "processed": processed}
+        except Exception as e:
+            logger.error("report_mobile_commands 失败 error=%s", e, exc_info=True)
+            return {"ok": False, "error": str(e)}
+
+
+def get_mobile_command_status(command_id: str = "", limit: int = 10, offset: int = 0) -> dict:
+    """查询命令状态。供 MCP check_phone_command 使用。"""
+    client = _s3_client()
+    if not client:
+        return {"pending": [], "recent_history": []}
+
+    data = _mobile_queue_raw(client)
+    pending = data["pending"]
+    history = data["history"]
+
+    if command_id:
+        pending = [it for it in pending if it.get("id") == command_id]
+        history = [it for it in history if it.get("id") == command_id]
+
+    history.sort(key=lambda x: x.get("finished_at", ""), reverse=True)
+    history_page = history[offset:offset + limit]
+
+    return {"pending": pending, "recent_history": history_page}

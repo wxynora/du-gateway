@@ -62,6 +62,69 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "ring_phone",
+      description:
+        "让老婆手机响铃。用于叫醒或提醒。" +
+        "调用后命令入队，手机 Tasker 会在几秒内拉取并执行。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          duration_sec: {
+            type: "number",
+            description: "响铃时长（秒），默认 30",
+          },
+          volume: {
+            type: "number",
+            description: "音量 0-100，默认 80",
+          },
+          sound: {
+            type: "string",
+            description: "铃声名称，默认 default",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "play_music",
+      description:
+        "让老婆手机播放音乐。不传 uri 则播放当前播放器。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          uri: {
+            type: "string",
+            description: "可选，指定歌曲/歌单链接",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "pause_music",
+      description: "暂停老婆手机音乐播放。",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "check_phone_command",
+      description:
+        "查询手机命令执行状态。调完 ring_phone 后可查看是否已响铃。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          command_id: {
+            type: "string",
+            description: "可选，查特定命令。不传则返回最近状态。",
+          },
+        },
+        required: [],
+      },
+    },
+    {
       name: "save_memory",
       description:
         "向动态层追加一条记忆。" +
@@ -134,6 +197,136 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     return {
       content: [{ type: "text", text: lines.join("\n\n") }],
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // ring_phone：POST /api/mobile_command 入队 alarm_ring
+  // ------------------------------------------------------------------
+  if (name === "ring_phone") {
+    const duration_sec = typeof args.duration_sec === "number" ? args.duration_sec : 30;
+    const volume = typeof args.volume === "number" ? args.volume : 80;
+    const sound = (args.sound || "default").trim();
+    const idempotency_key = `ring_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const res = await fetchGateway("/api/mobile_command", {
+      method: "POST",
+      headers: { "X-Mobile-Token": TOKEN },
+      body: JSON.stringify({
+        cmd: "alarm_ring",
+        payload: { sound, duration_sec, volume },
+        expires_in_sec: Math.min(duration_sec + 120, 600),
+        idempotency_key,
+      }),
+    }).catch((e) => ({ ok: false, error: e.message }));
+
+    if (res.ok) {
+      return {
+        content: [{ type: "text", text: `已下发响铃命令（id: ${res.id}），手机会在几秒内开始响铃 ${duration_sec}s，音量 ${volume}%` }],
+      };
+    }
+    return {
+      content: [{ type: "text", text: `响铃命令下发失败：${res.error || JSON.stringify(res)}` }],
+      isError: true,
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // play_music：POST /api/mobile_command 入队 music_play 或 music_play_uri
+  // ------------------------------------------------------------------
+  if (name === "play_music") {
+    const uri = (args.uri || "").trim();
+    const cmd = uri ? "music_play_uri" : "music_play";
+    const payload = uri ? { uri } : {};
+    const idempotency_key = `music_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const res = await fetchGateway("/api/mobile_command", {
+      method: "POST",
+      headers: { "X-Mobile-Token": TOKEN },
+      body: JSON.stringify({
+        cmd,
+        payload,
+        expires_in_sec: 300,
+        idempotency_key,
+      }),
+    }).catch((e) => ({ ok: false, error: e.message }));
+
+    if (res.ok) {
+      return {
+        content: [{ type: "text", text: uri ? `已下发播放命令：${uri}` : "已下发播放命令，手机会开始播放当前音乐" }],
+      };
+    }
+    return {
+      content: [{ type: "text", text: `播放命令下发失败：${res.error || JSON.stringify(res)}` }],
+      isError: true,
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // pause_music：POST /api/mobile_command 入队 music_pause
+  // ------------------------------------------------------------------
+  if (name === "pause_music") {
+    const idempotency_key = `pause_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const res = await fetchGateway("/api/mobile_command", {
+      method: "POST",
+      headers: { "X-Mobile-Token": TOKEN },
+      body: JSON.stringify({
+        cmd: "music_pause",
+        payload: {},
+        expires_in_sec: 60,
+        idempotency_key,
+      }),
+    }).catch((e) => ({ ok: false, error: e.message }));
+
+    if (res.ok) {
+      return {
+        content: [{ type: "text", text: "已下发暂停命令" }],
+      };
+    }
+    return {
+      content: [{ type: "text", text: `暂停命令下发失败：${res.error || JSON.stringify(res)}` }],
+      isError: true,
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // check_phone_command：GET /api/mobile_command/status
+  // ------------------------------------------------------------------
+  if (name === "check_phone_command") {
+    const command_id = (args.command_id || "").trim();
+    const qs = command_id ? `?command_id=${encodeURIComponent(command_id)}` : "";
+
+    const res = await fetchGateway(`/api/mobile_command/status${qs}`, {
+      headers: { "X-Mobile-Token": TOKEN },
+    }).catch((e) => ({ error: e.message }));
+
+    if (res.error) {
+      return {
+        content: [{ type: "text", text: `查询失败：${res.error}` }],
+        isError: true,
+      };
+    }
+
+    const pending = res.pending || [];
+    const history = res.recent_history || [];
+    const lines = [];
+    if (pending.length) {
+      lines.push("⏳ 等待执行：");
+      for (const p of pending) {
+        lines.push(`  - ${p.cmd} (id: ${p.id}, 创建: ${p.created_at})`);
+      }
+    }
+    if (history.length) {
+      lines.push("📋 最近记录：");
+      for (const h of history) {
+        lines.push(`  - ${h.cmd} → ${h.status} (${h.finished_at})`);
+      }
+    }
+    if (!lines.length) lines.push("无待执行命令，无历史记录");
+
+    return {
+      content: [{ type: "text", text: lines.join("\n") }],
     };
   }
 
