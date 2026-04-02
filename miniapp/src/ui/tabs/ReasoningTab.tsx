@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiJson } from "../api";
+import { Btn } from "../components";
 import { useToast } from "../toast";
 
 type ToolCallItem = { id?: string; name?: string; arguments?: string; result?: string };
@@ -11,6 +12,7 @@ type ReasoningItem = {
   tool_calls?: ToolCallItem[];
 };
 type ReasoningResp = { ok?: boolean; window_id?: string; window_ids?: string[]; items?: ReasoningItem[]; count?: number };
+type TranslateResp = { ok?: boolean; translated?: string; error?: string };
 
 export function ReasoningTab() {
   const toast = useToast();
@@ -19,6 +21,13 @@ export function ReasoningTab() {
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState("");
+  const [translating, setTranslating] = useState<Record<string, boolean>>({});
+  const [translated, setTranslated] = useState<Record<string, string>>({});
+  const [translationOpen, setTranslationOpen] = useState<Record<string, boolean>>({});
+
+  function itemKey(r: ReasoningItem, i: number) {
+    return `${r.window_id || ""}::${r.index || 0}::${i}`;
+  }
 
   async function loadLatest() {
     setLoading(true);
@@ -34,6 +43,33 @@ export function ReasoningTab() {
       toast(`加载失败：${e?.message || e}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function translateReasoning(key: string, text: string) {
+    if (!String(text || "").trim()) {
+      toast("这一条没有可翻译的思维链");
+      return;
+    }
+    if (translated[key]) {
+      setTranslationOpen((prev) => ({ ...prev, [key]: !prev[key] }));
+      return;
+    }
+    setTranslating((prev) => ({ ...prev, [key]: true }));
+    try {
+      const j = await apiJson<TranslateResp>("/miniapp-api/reasoning/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const zh = String(j.translated || "").trim();
+      setTranslated((prev) => ({ ...prev, [key]: zh }));
+      setTranslationOpen((prev) => ({ ...prev, [key]: true }));
+      toast("已翻译成中文");
+    } catch (e: any) {
+      toast(`翻译失败：${e?.message || e}`);
+    } finally {
+      setTranslating((prev) => ({ ...prev, [key]: false }));
     }
   }
 
@@ -70,13 +106,25 @@ export function ReasoningTab() {
       ) : null}
 
       <div className="space-y-2">
-        {items.map((r, i) => (
+        {items.map((r, i) => {
+          const key = itemKey(r, i);
+          const hasReasoning = Boolean(String(r.reasoning || "").trim());
+          const hasTranslated = Boolean(String(translated[key] || "").trim());
+          const open = Boolean(translationOpen[key]);
+          return (
           <div
-            key={`${r.index || 0}-${i}`}
+            key={key}
             className="neo-panel-soft p-3"
           >
-            <div className="neo-tag-dark">
-              #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""} {r.window_id ? `· ${String(r.window_id)}` : ""}
+            <div className="flex items-center justify-between gap-2">
+              <div className="neo-tag-dark">
+                #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""} {r.window_id ? `· ${String(r.window_id)}` : ""}
+              </div>
+              {hasReasoning ? (
+                <Btn kind={hasTranslated && open ? "green" : "blue"} onClick={() => translateReasoning(key, String(r.reasoning || ""))} disabled={Boolean(translating[key])}>
+                  {translating[key] ? "翻译中..." : hasTranslated ? (open ? "收起译文" : "查看译文") : "翻译"}
+                </Btn>
+              ) : null}
             </div>
             {String(r.reasoning || "").trim() ? (
               <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-cream-text">
@@ -85,6 +133,14 @@ export function ReasoningTab() {
             ) : (
               <div className="mt-2 text-[11px] text-cream-muted">本轮未返回思维链文本</div>
             )}
+            {hasTranslated && open ? (
+              <div className="mt-3 rounded-[20px] border border-white/75 bg-[linear-gradient(145deg,rgba(247,251,255,0.95),rgba(213,228,246,0.64))] px-3 py-3 shadow-soft2">
+                <div className="text-[11px] font-medium text-[#2f6eb4]">中文翻译</div>
+                <div className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-[#2a4c77]">
+                  {translated[key]}
+                </div>
+              </div>
+            ) : null}
             {Array.isArray(r.tool_calls) && r.tool_calls.length ? (
               <div className="mt-3 space-y-2">
                 {r.tool_calls.map((tc, ti) => {
@@ -113,7 +169,7 @@ export function ReasoningTab() {
               </div>
             ) : null}
           </div>
-        ))}
+        )})}
         {!items.length && !loadError ? (
           <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(255,247,250,0.92),rgba(240,229,235,0.72))]">
             暂无可展示的思维链（可能上游未返回 reasoning 字段）。

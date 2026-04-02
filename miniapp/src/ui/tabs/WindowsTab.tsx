@@ -7,6 +7,7 @@ import type { ConversationRound, RoundPreview, WindowItem } from "../types";
 type WindowsResp = { windows?: WindowItem[] };
 type RoundsResp = { rounds?: RoundPreview[]; window_id?: string };
 type RoundDetailResp = { ok?: boolean; round?: ConversationRound; error?: string };
+type TranslateResp = { ok?: boolean; translated?: string; error?: string };
 
 export function WindowsTab() {
   const toast = useToast();
@@ -14,6 +15,9 @@ export function WindowsTab() {
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
   const [rounds, setRounds] = useState<RoundPreview[]>([]);
   const [roundDetail, setRoundDetail] = useState<ConversationRound | null>(null);
+  const [translating, setTranslating] = useState<Record<string, boolean>>({});
+  const [translated, setTranslated] = useState<Record<string, string>>({});
+  const [translationOpen, setTranslationOpen] = useState<Record<string, boolean>>({});
 
   async function loadWindows() {
     try {
@@ -62,6 +66,33 @@ export function WindowsTab() {
       await openRounds(wid);
     } catch (e: any) {
       toast(`删除失败：${e?.message || e}`);
+    }
+  }
+
+  async function translateReasoning(key: string, text: string) {
+    if (!String(text || "").trim()) {
+      toast("这一条没有可翻译的思维链");
+      return;
+    }
+    if (translated[key]) {
+      setTranslationOpen((prev) => ({ ...prev, [key]: !prev[key] }));
+      return;
+    }
+    setTranslating((prev) => ({ ...prev, [key]: true }));
+    try {
+      const j = await apiJson<TranslateResp>("/miniapp-api/reasoning/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const zh = String(j.translated || "").trim();
+      setTranslated((prev) => ({ ...prev, [key]: zh }));
+      setTranslationOpen((prev) => ({ ...prev, [key]: true }));
+      toast("已翻译成中文");
+    } catch (e: any) {
+      toast(`翻译失败：${e?.message || e}`);
+    } finally {
+      setTranslating((prev) => ({ ...prev, [key]: false }));
     }
   }
 
@@ -119,6 +150,9 @@ export function WindowsTab() {
               const content =
                 typeof m?.content === "string" ? (m.content as string) : JSON.stringify(m?.content ?? "", null, 2);
               const reasoning = (m?.reasoning || m?.reasoning_content || m?.thinking || "") as string;
+              const translationKey = `${activeWindowId || ""}::${roundDetail.index || 0}::${i}`;
+              const hasTranslated = Boolean(String(translated[translationKey] || "").trim());
+              const open = Boolean(translationOpen[translationKey]);
               return (
                 <div key={i} className="neo-panel-soft p-3">
                   <div className="text-xs text-cream-muted">{role}</div>
@@ -128,9 +162,26 @@ export function WindowsTab() {
                       <summary className="cursor-pointer select-none text-xs text-cream-muted">
                         思维链（展开/收起）
                       </summary>
+                      <div className="mt-2 flex justify-end">
+                        <Btn
+                          kind={hasTranslated && open ? "green" : "blue"}
+                          onClick={() => translateReasoning(translationKey, reasoning)}
+                          disabled={Boolean(translating[translationKey])}
+                        >
+                          {translating[translationKey] ? "翻译中..." : hasTranslated ? (open ? "收起译文" : "查看译文") : "翻译"}
+                        </Btn>
+                      </div>
                       <div className="mt-2 whitespace-pre-wrap font-mono text-xs text-cream-text">
                         {reasoning}
                       </div>
+                      {hasTranslated && open ? (
+                        <div className="mt-3 rounded-[18px] border border-white/75 bg-[linear-gradient(145deg,rgba(247,251,255,0.95),rgba(213,228,246,0.64))] px-3 py-3">
+                          <div className="text-[11px] font-medium text-[#2f6eb4]">中文翻译</div>
+                          <div className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-[#2a4c77]">
+                            {translated[translationKey]}
+                          </div>
+                        </div>
+                      ) : null}
                     </details>
                   ) : null}
                 </div>

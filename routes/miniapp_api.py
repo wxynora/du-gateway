@@ -17,6 +17,12 @@ from config import (
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
     TELEGRAM_WENYOU_OWNER_USER_ID,
     WENYOU_GROUP_CHAT_ID,
+    DEFAULT_CHAT_MODEL,
+    GATEWAY_MODELS,
+    TARGET_AI_URL,
+    TARGET_AI_API_KEY,
+    TARGET_AI_URLS,
+    TARGET_AI_API_KEYS,
 )
 from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
@@ -1719,6 +1725,117 @@ def _probe_upstream_item(it: dict) -> dict:
     return out
 
 
+def _resolve_translation_upstream() -> tuple[str, str]:
+    """优先使用当前 active 上游；若不存在则退回环境变量首项。"""
+    try:
+        active = upstream_store.get_active_item() or {}
+    except Exception:
+        active = {}
+    url = str(active.get("url") or "").strip()
+    api_key = str(active.get("api_key") or "").strip()
+    if url:
+        return url, api_key
+
+    if TARGET_AI_URL and str(TARGET_AI_URL).strip():
+        return str(TARGET_AI_URL).strip(), str(TARGET_AI_API_KEY or "").strip()
+
+    urls = list(TARGET_AI_URLS or [])
+    keys = list(TARGET_AI_API_KEYS or [])
+    if urls:
+        fallback_key = keys[0] if keys else TARGET_AI_API_KEY
+        return str(urls[0] or "").strip(), str(fallback_key or "").strip()
+    return "", ""
+
+
+def _pick_translation_model(url: str, api_key: str) -> str:
+    """尽量从 /v1/models 里拿第一个模型；失败时退回默认模型配置。"""
+    fallback = str(DEFAULT_CHAT_MODEL or "").strip()
+    if not fallback:
+        gateway_models = [str(x or "").strip() for x in (GATEWAY_MODELS or []) if str(x or "").strip()]
+        fallback = gateway_models[0] if gateway_models else "gpt-4"
+    if not url:
+        return fallback
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        rm = requests.get(_chat_url_to_models_url(url), headers=headers, timeout=12)
+        if 200 <= rm.status_code < 300:
+            data = rm.json() if rm.content else {}
+            items = data.get("data") if isinstance(data, dict) else None
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict) and str(item.get("id") or "").strip():
+                        return str(item.get("id") or "").strip()
+                    if isinstance(item, str) and item.strip():
+                        return item.strip()
+    except Exception:
+        pass
+    return fallback
+
+
+def _translate_reasoning_text(text: str) -> str:
+    src = str(text or "").strip()
+    if not src:
+        return ""
+
+    url, api_key = _resolve_translation_upstream()
+    if not url:
+        raise RuntimeError("当前没有可用上游，无法翻译")
+    model = _pick_translation_model(url, api_key)
+
+    system_prompt = (
+        "你是一个高保真翻译器。请把用户提供的 reasoning 或 thinking 全文翻译成简体中文。"
+        "必须完整保留原意、顺序与细节，不要总结，不要省略，不要扩写。"
+        "代码、函数名、变量名、接口名、JSON 字段名、报错原文、英文专有名词可保留原文。"
+        "输出只允许是译文正文，不要加任何前言、标题、注释或解释。"
+    )
+    user_prompt = f"请把下面内容全文翻译成简体中文：\n\n{src}"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+        "temperature": 0,
+        "max_tokens": max(1024, min(8192, len(src) * 3)),
+    }
+    try:
+        rc = requests.post(url, headers=headers, json=body, timeout=90)
+        rc.raise_for_status()
+        data = rc.json() if rc.content else {}
+        choices = data.get("choices") if isinstance(data, dict) else None
+        msg = (choices or [{}])[0].get("message", {}) if isinstance(choices, list) else {}
+        content = msg.get("content")
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(str(part.get("text") or ""))
+                elif isinstance(part, str):
+                    parts.append(part)
+            out = "".join(parts).strip()
+        else:
+            out = str(content or "").strip()
+        if not out:
+            raise RuntimeError("上游未返回翻译内容")
+        return out
+    except requests.HTTPError as e:
+        detail = ""
+        try:
+            detail = (e.response.text or "").strip()
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"翻译请求失败：{detail[:240] or e}")
+    except Exception as e:
+        raise RuntimeError(f"翻译失败：{e}")
+
+
 @bp.route("/upstreams/probe", methods=["POST"])
 def miniapp_probe_upstreams():
     data = request.get_json(silent=True) or {}
@@ -1751,3 +1868,15 @@ def miniapp_probe_upstreams():
     if any((x.get("status") == "fail") for x in results):
         status = "degraded" if any((x.get("status") == "ok") for x in results) else "fail"
     return jsonify({"ok": True, "status": status, "results": results, "count": len(results)})
+
+
+@bp.route("/reasoning/translate", methods=["POST"])
+def miniapp_translate_reasoning():
+    data = request.get_json(silent=True) or {}
+    text = str(data.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "text 不能为空"}), 400
+    if len(text) > 120000:
+        return jsonify({"ok": False, "error": "text 过长，暂不支持翻译"}), 400
+    translated = _translate_reasoning_text(text)
+    return jsonify({"ok": True, "translated": translated})
