@@ -212,7 +212,12 @@ def build_telegram_style_system() -> str:
         "     [PCMD:url:https://... ] 打开网页（仅 https）\n"
         "     [PCMD:media:play] 播放/暂停媒体\n"
         "   - 严禁输出未列出的 PCMD；若不确定，请不要输出 PCMD。\n"
+        "   - 仅在确有必要时输出；平时不要输出。\n"
     )
+
+
+
+
 
 
 def _fetch_gateway_first_model() -> Optional[str]:
@@ -1173,9 +1178,9 @@ def process_message(
     reply_clean = _sanitize_reply_for_telegram(reply_clean)
     # 表情包：[tag] 拆出后先发正文再发图
     reply_clean, sticker_tag = _extract_sticker_tag(reply_clean)
-
     # 先发文字（短信分段）
-    ok_text = send_message_segmented(chat_id=chat_id, text=reply_clean, bot_token=bot_token) if reply_clean else True
+    outbound = reply_clean or ""
+    ok_text = send_message_segmented(chat_id=chat_id, text=outbound, bot_token=bot_token) if outbound else True
 
     # 再发表情包图片（随机一张）
     if sticker_tag:
