@@ -2355,6 +2355,72 @@ def _has_recent_set_volume(data: dict, now: datetime, window_sec: int = 300) -> 
     return False
 
 
+def _has_active_pending_command(data: dict, cmd: str, now: datetime) -> bool:
+    """检查是否已有同类未过期 pending 命令，避免重复入队。"""
+    pending = data.get("pending") if isinstance(data, dict) else []
+    if not isinstance(pending, list):
+        return False
+    for item in pending:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("cmd") or "").strip() != cmd:
+            continue
+        exp = _parse_iso(str(item.get("expires_at") or ""))
+        if exp and exp <= now:
+            continue
+        return True
+    return False
+
+
+def _normalize_mobile_command_payload(cmd: str, payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    """按命令类型校验并标准化 payload。"""
+    if cmd == "set_volume":
+        try:
+            volume = int(payload.get("volume"))
+        except Exception:
+            return None, "set_volume 需要 volume（音量，0-100）"
+        if volume < 0 or volume > 100:
+            return None, "set_volume 的 volume（音量）必须在 0-100"
+        return {"volume": volume}, None
+
+    if cmd == "alarm_ring":
+        try:
+            duration_sec = int(payload.get("duration_sec", 30))
+        except Exception:
+            return None, "alarm_ring 的 duration_sec 必须是数字"
+        if duration_sec < 5 or duration_sec > 180:
+            return None, "alarm_ring 的 duration_sec 必须在 5-180 秒"
+
+        sound = str(payload.get("sound") or "default").strip() or "default"
+        if sound != "default":
+            return None, "alarm_ring 当前只支持 sound=default"
+
+        normalized = {"sound": sound, "duration_sec": duration_sec}
+        if "volume" in payload and payload.get("volume") is not None:
+            try:
+                volume = int(payload.get("volume"))
+            except Exception:
+                return None, "alarm_ring 的 volume（音量）必须是数字"
+            if volume < 0 or volume > 100:
+                return None, "alarm_ring 的 volume（音量）必须在 0-100"
+            normalized["volume"] = volume
+        return normalized, None
+
+    if cmd == "music_play":
+        return {}, None
+
+    if cmd == "music_pause":
+        return {}, None
+
+    if cmd == "music_play_uri":
+        uri = str(payload.get("uri") or "").strip()
+        if not uri:
+            return None, "music_play_uri 需要 uri"
+        return {"uri": uri}, None
+
+    return payload, None
+
+
 def append_mobile_command(cmd: str, payload: dict, expires_in_sec: int = _MOBILE_EXPIRES_DEFAULT,
                           idempotency_key: str = "") -> tuple[Optional[dict], Optional[str]]:
     """入队手机命令。返回 (item, error)。若幂等键重复返回已有 item。"""
@@ -2362,6 +2428,9 @@ def append_mobile_command(cmd: str, payload: dict, expires_in_sec: int = _MOBILE
         return None, f"不允许的命令: {cmd}"
     if not isinstance(payload, dict):
         payload = {}
+    payload, payload_err = _normalize_mobile_command_payload(cmd, payload)
+    if payload_err:
+        return None, payload_err
     expires_in_sec = max(_MOBILE_EXPIRES_MIN, min(_MOBILE_EXPIRES_MAX, int(expires_in_sec or _MOBILE_EXPIRES_DEFAULT)))
     if not idempotency_key:
         return None, "idempotency_key 必填"
@@ -2391,6 +2460,8 @@ def append_mobile_command(cmd: str, payload: dict, expires_in_sec: int = _MOBILE
             # 业务约束：响铃前必须先设置音量
             if cmd == "alarm_ring" and not _has_recent_set_volume(data, now=now, window_sec=300):
                 return None, "alarm_ring 前需先调用 set_volume（最近5分钟内）"
+            if cmd == "alarm_ring" and _has_active_pending_command(data, "alarm_ring", now):
+                return None, "已有未完成的 alarm_ring，暂不重复入队"
 
             item = {
                 "id": str(uuid4()),
