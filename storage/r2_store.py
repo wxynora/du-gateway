@@ -2325,6 +2325,36 @@ def _expire_idempotency_keys(keys: dict) -> dict:
     return {k: v for k, v in keys.items() if _parse_iso(v.get("expires", "")) and _parse_iso(v["expires"]) > now}
 
 
+def _has_recent_set_volume(data: dict, now: datetime, window_sec: int = 300) -> bool:
+    """检查是否有最近的 set_volume（pending 或 history done）。"""
+    pending = data.get("pending") if isinstance(data, dict) else []
+    if isinstance(pending, list):
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("cmd") or "").strip() != "set_volume":
+                continue
+            exp = _parse_iso(str(item.get("expires_at") or ""))
+            if exp and exp <= now:
+                continue
+            return True
+
+    history = data.get("history") if isinstance(data, dict) else []
+    if isinstance(history, list):
+        cutoff = now - timedelta(seconds=max(1, int(window_sec or 300)))
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("cmd") or "").strip() != "set_volume":
+                continue
+            if str(item.get("status") or "").strip() != "done":
+                continue
+            finished_at = _parse_iso(str(item.get("finished_at") or ""))
+            if finished_at and finished_at >= cutoff:
+                return True
+    return False
+
+
 def append_mobile_command(cmd: str, payload: dict, expires_in_sec: int = _MOBILE_EXPIRES_DEFAULT,
                           idempotency_key: str = "") -> tuple[Optional[dict], Optional[str]]:
     """入队手机命令。返回 (item, error)。若幂等键重复返回已有 item。"""
@@ -2357,6 +2387,10 @@ def append_mobile_command(cmd: str, payload: dict, expires_in_sec: int = _MOBILE
                     if item.get("id") == existing_id:
                         return item, None
                 return {"id": existing_id, "duplicate": True}, None
+
+            # 业务约束：响铃前必须先设置音量
+            if cmd == "alarm_ring" and not _has_recent_set_volume(data, now=now, window_sec=300):
+                return None, "alarm_ring 前需先调用 set_volume（最近5分钟内）"
 
             item = {
                 "id": str(uuid4()),

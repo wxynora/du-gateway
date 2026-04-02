@@ -65,6 +65,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "ring_phone",
       description:
         "让老婆手机响铃。用于叫醒或提醒。" +
+        "建议先调用 set_volume 设置好音量，再调用本工具；本工具本身不自动先改音量。" +
         "调用后命令入队，手机 Tasker 会在几秒内拉取并执行。",
       inputSchema: {
         type: "object",
@@ -112,7 +113,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "set_volume",
       description:
-        "设置老婆手机音量。叫醒前可以先把音量调高。",
+        "设置老婆手机音量。叫醒流程建议先调用本工具，再调用 ring_phone。",
       inputSchema: {
         type: "object",
         properties: {
