@@ -140,6 +140,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "cc_log",
+      description:
+        "将 CC 侧的重要进展写入对话历史，会被窗口总结自然消化。" +
+        "用于记录开发进展、重要决策等需要持久化的信息。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          content: {
+            type: "string",
+            description: "要记录的内容",
+          },
+          tag: {
+            type: "string",
+            description: "标签，如 开发、心动、重要，默认 CC",
+          },
+        },
+        required: ["content"],
+      },
+    },
+    {
       name: "save_memory",
       description:
         "向动态层追加一条记忆。" +
@@ -371,6 +391,37 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     return {
       content: [{ type: "text", text: lines.join("\n") }],
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // cc_log：POST /api/cc_log 写入对话历史
+  // ------------------------------------------------------------------
+  if (name === "cc_log") {
+    const content = (args.content || "").trim();
+    if (!content) {
+      return {
+        content: [{ type: "text", text: "错误：content 不能为空" }],
+        isError: true,
+      };
+    }
+    const tag = (args.tag || "CC").trim();
+
+    const res = await fetchGateway("/api/cc_log", {
+      method: "POST",
+      body: JSON.stringify({ content, tag }),
+    }).catch((e) => ({ ok: false, error: e.message }));
+
+    if (res.ok) {
+      return {
+        content: [{ type: "text", text: `已写入对话历史（轮次 ${res.round_index}），会被下次总结消化` }],
+      };
+    }
+    return {
+      content: [
+        { type: "text", text: `写入失败：${res.error || JSON.stringify(res)}` },
+      ],
+      isError: true,
     };
   }
 

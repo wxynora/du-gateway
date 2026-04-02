@@ -194,6 +194,40 @@ def api_memory_append():
     return jsonify({"ok": True, "id": new_entry["id"]})
 
 
+@app.route("/api/cc_log", methods=["POST"])
+def api_cc_log():
+    """
+    CC 侧写入一条记录到默认窗口对话历史，伪装成一轮对话，
+    后续会被 DS 总结自然消化。
+    Body JSON: { content: str, tag?: str }
+    """
+    from utils.mcp_auth import enforce_mcp_auth
+    enforce_mcp_auth()
+
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "需要 application/json"}), 400
+    body = request.get_json(silent=True) or {}
+    content = (body.get("content") or "").strip()
+    if not content:
+        return jsonify({"ok": False, "error": "content 不能为空"}), 400
+    tag = (body.get("tag") or "CC").strip()
+
+    from utils.time_aware import now_beijing_iso
+    from storage import r2_store
+
+    window_id = ""  # 默认窗口
+    round_index = r2_store.next_round_index(window_id)
+    timestamp = now_beijing_iso()
+    messages = [
+        {"role": "user", "content": f"[{tag} 记录]"},
+        {"role": "assistant", "content": content},
+    ]
+    ok = r2_store.append_conversation_round(window_id, round_index, messages, timestamp)
+    if not ok:
+        return jsonify({"ok": False, "error": "写入失败"}), 503
+    return jsonify({"ok": True, "round_index": round_index})
+
+
 @app.route("/time-info", methods=["GET"])
 def time_info():
     """
