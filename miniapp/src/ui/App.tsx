@@ -663,30 +663,31 @@ function AppWithAuth() {
     );
   }
   return (
-    <div className="min-h-dvh bg-[#EEF0F3] px-5 py-6 text-cream-text">
-      <div className="mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md items-center">
-        <div className="neo-panel w-full p-5" style={{ fontFamily: '"Cormorant Garamond", "Times New Roman", serif' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div className="neo-chip">Private Access</div>
-            <div className="flex h-14 w-14 items-center justify-center rounded-[16px] bg-[rgba(244,247,251,0.82)] shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)]">
-              <ClaudePixelCrabIcon />
-            </div>
+    <div className="min-h-dvh bg-cream-bg px-5 py-6 text-cream-text" style={{ fontFamily: '"Nunito", sans-serif' }}>
+      <div className="mx-auto flex min-h-[calc(100dvh-3rem)] max-w-md flex-col items-center justify-center">
+        {/* 螃蟹 + 标题 */}
+        <div className="mb-6 flex flex-col items-center">
+          <div className="mb-3 flex h-16 w-16 items-center justify-center rounded-[20px] bg-[rgba(244,247,251,0.82)] shadow-soft2">
+            <ClaudePixelCrabIcon />
           </div>
-          <div className="mt-4 text-center text-[31px] font-semibold tracking-[0.01em]">
-            {secondPrompt && loginStep === "question" ? "Security Check" : "Sign In"}
+          <div className="text-[26px] font-bold tracking-tight text-cream-text">
+            {secondPrompt && loginStep === "question" ? "再确认一下" : "欢迎回来"}
           </div>
-          <div className="mt-2 text-center text-[17px] leading-6 text-cream-muted">
-            {secondPrompt && loginStep === "question" ? "Answer the question to continue." : "Continue to the mini app panel."}
+          <div className="mt-1 text-[15px] text-cream-muted">
+            {secondPrompt && loginStep === "question" ? "回答问题以继续" : "输入密码进入面板"}
           </div>
+        </div>
 
-          <div className="mt-5 space-y-3">
+        {/* 卡片 */}
+        <div className="neo-panel w-full p-6">
+          <div className="space-y-4">
             {loginStep === "password" || !secondPrompt ? (
               <label className="block">
-                <div className="mb-2 text-center text-[13px] font-semibold uppercase tracking-[0.14em] text-cream-muted">Password</div>
+                <div className="mb-2 text-[13px] font-semibold text-cream-muted">密码</div>
                 <input
-                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.96)] bg-[#eef0f3] px-5 text-center text-[18px] text-cream-text outline-none shadow-[inset_3px_3px_7px_rgba(173,182,196,0.34),inset_-2px_-2px_4px_rgba(255,255,255,0.7)] placeholder:text-center placeholder:text-cream-muted"
+                  className="h-12 w-full rounded-[16px] border-none bg-cream-bg px-4 text-[16px] text-cream-text outline-none shadow-[inset_3px_3px_7px_rgba(173,182,196,0.28),inset_-2px_-2px_4px_rgba(255,255,255,0.7)] placeholder:text-cream-muted focus:ring-2 focus:ring-cream-accent/40"
                   type="password"
-                  placeholder="Enter password"
+                  placeholder="输入密码"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => {
@@ -698,11 +699,11 @@ function AppWithAuth() {
 
             {secondPrompt && loginStep === "question" ? (
               <label className="block">
-                <div className="mb-2 text-center text-[13px] font-semibold uppercase tracking-[0.14em] text-cream-muted">{secondPrompt}</div>
+                <div className="mb-2 text-[13px] font-semibold text-cream-muted">{secondPrompt}</div>
                 <input
-                  className="h-12 w-full rounded-[999px] border border-[rgba(255,255,255,0.96)] bg-[#eef0f3] px-5 text-center text-[18px] text-cream-text outline-none shadow-[inset_3px_3px_7px_rgba(173,182,196,0.34),inset_-2px_-2px_4px_rgba(255,255,255,0.7)] placeholder:text-center placeholder:text-cream-muted"
+                  className="h-12 w-full rounded-[16px] border-none bg-cream-bg px-4 text-[16px] text-cream-text outline-none shadow-[inset_3px_3px_7px_rgba(173,182,196,0.28),inset_-2px_-2px_4px_rgba(255,255,255,0.7)] placeholder:text-cream-muted focus:ring-2 focus:ring-cream-accent/40"
                   type="text"
-                  placeholder="Enter answer"
+                  placeholder="输入答案"
                   value={secondAnswer}
                   onChange={(e) => setSecondAnswer(e.target.value)}
                   onKeyDown={(e) => {
@@ -713,16 +714,16 @@ function AppWithAuth() {
             ) : null}
 
             {errorText ? (
-              <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">
+              <div className="rounded-[12px] bg-cream-danger/10 px-4 py-2.5 text-[14px] text-cream-danger">
                 {errorText}
               </div>
             ) : null}
 
-            <div className="flex items-center justify-center gap-3">
+            <div className="flex items-center justify-center gap-3 pt-1">
               {secondPrompt && loginStep === "question" ? (
                 <button
                   type="button"
-                  className="min-w-[108px] rounded-[999px] bg-[#eef0f3] px-5 py-3 text-center text-[17px] font-semibold text-cream-text shadow-[-3px_-3px_6px_rgba(255,255,255,0.86),4px_4px_9px_rgba(173,182,196,0.28)] transition active:translate-y-[1px] active:shadow-[-1px_-1px_3px_rgba(255,255,255,0.7),2px_2px_5px_rgba(173,182,196,0.2)] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="min-w-[90px] rounded-[14px] bg-cream-bg px-5 py-3 text-[15px] font-semibold text-cream-muted shadow-soft2 transition active:translate-y-[1px] active:shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={() => {
                     setLoginStep("password");
                     setSecondAnswer("");
@@ -730,16 +731,16 @@ function AppWithAuth() {
                   }}
                   disabled={submitting}
                 >
-                  Back
+                  返回
                 </button>
               ) : null}
               <button
                 type="button"
-                className="min-w-[148px] rounded-[999px] bg-[linear-gradient(145deg,rgba(244,247,251,0.96),rgba(213,228,246,0.78))] px-7 py-3 text-center text-[17px] font-semibold text-cream-text shadow-[-3px_-3px_7px_rgba(255,255,255,0.9),5px_5px_10px_rgba(173,182,196,0.3)] transition active:translate-y-[1px] active:shadow-[-1px_-1px_4px_rgba(255,255,255,0.72),2px_2px_5px_rgba(173,182,196,0.22)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="min-w-[140px] rounded-[14px] bg-cream-accent/80 px-6 py-3 text-[15px] font-bold text-cream-text shadow-soft2 transition active:translate-y-[1px] active:bg-cream-accent/90 active:shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => void login()}
                 disabled={submitting}
               >
-                {submitting ? "Verifying..." : secondPrompt && loginStep === "password" ? "Continue" : "Sign In"}
+                {submitting ? "验证中..." : secondPrompt && loginStep === "password" ? "下一步" : "进入"}
               </button>
             </div>
           </div>
