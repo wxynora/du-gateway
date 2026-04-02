@@ -671,10 +671,10 @@ function AppWithAuth() {
             <ClaudePixelCrabIcon />
           </div>
           <div className="text-[26px] font-bold tracking-tight text-cream-text">
-            {secondPrompt && loginStep === "question" ? "再确认一下" : "欢迎回来"}
+            {secondPrompt && loginStep === "question" ? "Security Check" : "Welcome Back"}
           </div>
           <div className="mt-1 text-[15px] text-cream-muted">
-            {secondPrompt && loginStep === "question" ? "回答问题以继续" : "输入密码进入面板"}
+            {secondPrompt && loginStep === "question" ? "Answer the question to continue." : "Enter password to continue."}
           </div>
         </div>
 
@@ -683,11 +683,11 @@ function AppWithAuth() {
           <div className="space-y-4">
             {loginStep === "password" || !secondPrompt ? (
               <label className="block">
-                <div className="mb-2 text-[13px] font-semibold text-cream-muted">密码</div>
+                <div className="mb-2 text-[13px] font-semibold text-cream-muted">Password</div>
                 <input
                   className="h-12 w-full rounded-[16px] border-none bg-cream-bg px-4 text-[16px] text-cream-text outline-none shadow-[inset_3px_3px_7px_rgba(173,182,196,0.28),inset_-2px_-2px_4px_rgba(255,255,255,0.7)] placeholder:text-cream-muted focus:ring-2 focus:ring-cream-accent/40"
                   type="password"
-                  placeholder="输入密码"
+                  placeholder="Enter password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => {
@@ -703,7 +703,7 @@ function AppWithAuth() {
                 <input
                   className="h-12 w-full rounded-[16px] border-none bg-cream-bg px-4 text-[16px] text-cream-text outline-none shadow-[inset_3px_3px_7px_rgba(173,182,196,0.28),inset_-2px_-2px_4px_rgba(255,255,255,0.7)] placeholder:text-cream-muted focus:ring-2 focus:ring-cream-accent/40"
                   type="text"
-                  placeholder="输入答案"
+                  placeholder="Enter answer"
                   value={secondAnswer}
                   onChange={(e) => setSecondAnswer(e.target.value)}
                   onKeyDown={(e) => {
@@ -731,7 +731,7 @@ function AppWithAuth() {
                   }}
                   disabled={submitting}
                 >
-                  返回
+                  Back
                 </button>
               ) : null}
               <button
@@ -740,7 +740,7 @@ function AppWithAuth() {
                 onClick={() => void login()}
                 disabled={submitting}
               >
-                {submitting ? "验证中..." : secondPrompt && loginStep === "password" ? "下一步" : "进入"}
+                {submitting ? "Verifying..." : secondPrompt && loginStep === "password" ? "Next" : "Sign In"}
               </button>
             </div>
           </div>
