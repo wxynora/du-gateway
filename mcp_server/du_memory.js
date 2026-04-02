@@ -53,7 +53,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "get_context",
       description:
-        "拉取渡的记忆上下文：总结（渡的回忆）+ 动态层记忆。" +
+        "拉取渡的窗口总结（渡的回忆）。" +
         "新任务开始前调用，获取与 Telegram 共享的最新记忆状态。",
       inputSchema: {
         type: "object",
@@ -194,44 +194,19 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   // get_context：GET /summary + GET /dynamic-memory，合并输出
   // ------------------------------------------------------------------
   if (name === "get_context") {
-    const [summaryRes, memoryRes] = await Promise.all([
-      fetchGateway("/summary").catch((e) => ({ error: e.message })),
-      fetchGateway("/dynamic-memory").catch((e) => ({ error: e.message })),
-    ]);
+    const summaryRes = await fetchGateway("/summary").catch((e) => ({ error: e.message }));
 
-    const lines = [];
-
-    // 总结
+    let text;
     if (summaryRes.error) {
-      lines.push(`## 渡的回忆（总结）\n⚠️ 读取失败：${summaryRes.error}`);
+      text = `⚠️ 读取失败：${summaryRes.error}`;
     } else if (summaryRes.has_summary) {
-      lines.push("## 渡的回忆（总结）\n" + summaryRes.summary);
+      text = summaryRes.summary;
     } else {
-      lines.push("## 渡的回忆（总结）\n（暂无）");
-    }
-
-    // 动态层
-    if (memoryRes.error) {
-      lines.push(`## 动态层记忆\n⚠️ 读取失败：${memoryRes.error}`);
-    } else {
-      const memories = (memoryRes.memories || []).map((m) => {
-        if (typeof m === "string") return m;
-        const parts = [];
-        if (m.content) parts.push(m.content);
-        if (m.tag) parts.push(`[${m.tag}]`);
-        if (m.importance) parts.push(`重要度:${m.importance}`);
-        return parts.join(" ") || JSON.stringify(m);
-      });
-      lines.push(
-        "## 动态层记忆\n" +
-          (memories.length
-            ? memories.map((m, i) => `${i + 1}. ${m}`).join("\n")
-            : "（暂无）")
-      );
+      text = "（暂无总结）";
     }
 
     return {
-      content: [{ type: "text", text: lines.join("\n\n") }],
+      content: [{ type: "text", text }],
     };
   }
 
