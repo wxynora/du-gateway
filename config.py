@@ -415,7 +415,7 @@ MCP_AUTH_MODE = os.environ.get("MCP_AUTH_MODE", "token").strip().lower()
 if MCP_AUTH_MODE not in ("token", "token_ip", "off"):
     MCP_AUTH_MODE = "token"
 # Token（支持多个，逗号分隔；请求头支持 Authorization: Bearer xxx / X-MCP-Token: xxx）
-_MCP_TOKENS_STR = os.environ.get("MCP_TOKENS", "").strip()
+_MCP_TOKENS_STR = os.environ.get("CC_MCP_TOKENS", "").strip()
 MCP_TOKENS = [x.strip() for x in _MCP_TOKENS_STR.split(",") if x.strip()]
 # 论坛 API 基础地址（给 forum_login/forum_post/forum_comment 这类预设工具拼 URL）
 # 示例：https://forum.example.com
