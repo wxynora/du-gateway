@@ -35,6 +35,48 @@ from services.deepseek_summary import fetch_new_summary
 from memory_vector.embedding_client import embed_text
 from memory_vector.cosine import cosine
 
+# ---------------------------------------------------------------------------
+# Prompt-cache 友好：静态 system 在前（可被缓存），动态 system 在后（每轮变化）。
+# 动态注入统一追加到带 _dynamic_system 标记的 system 消息，避免污染静态前缀。
+# ---------------------------------------------------------------------------
+
+_DYNAMIC_SYSTEM_MARKER = "__dynamic__"
+
+
+def _ensure_dynamic_system(body: dict) -> dict:
+    """
+    确保 messages 里存在一条专用的「动态 system」消息。
+    位置：所有连续 system 消息之后、第一条非 system 消息之前。
+    返回 body（可能 deepcopy 过）。
+    """
+    messages = body.get("messages") or []
+    for msg in messages:
+        if msg.get(_DYNAMIC_SYSTEM_MARKER):
+            return body
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    # 找第一条非 system 的位置
+    insert_idx = 0
+    for i, msg in enumerate(messages):
+        if (msg.get("role") or "").lower() == "system":
+            insert_idx = i + 1
+        else:
+            break
+    dyn_msg = {"role": "system", "content": "", _DYNAMIC_SYSTEM_MARKER: True}
+    messages.insert(insert_idx, dyn_msg)
+    body["messages"] = messages
+    return body
+
+
+def _append_to_dynamic_system(body: dict, text: str) -> dict:
+    """向动态 system 消息追加内容（自动调用 _ensure_dynamic_system）。"""
+    body = _ensure_dynamic_system(body)
+    for msg in body["messages"]:
+        if msg.get(_DYNAMIC_SYSTEM_MARKER):
+            msg["content"] = (msg.get("content") or "") + text
+            return body
+    return body
+
 
 def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
     """
@@ -428,15 +470,7 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
         inject = f"{head}\n\n【窗口记忆总结】\n{summary.strip()}\n【以上为窗口记忆】"
     else:
         inject = head
-    found = False
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system":
-            msg["content"] = (msg.get("content") or "") + inject
-            found = True
-            break
-    if not found:
-        messages.insert(0, {"role": "system", "content": inject})
-    body["messages"] = messages
+    body = _append_to_dynamic_system(body, inject)
     return body
 
 
@@ -456,18 +490,8 @@ def step_inject_sense_snapshot(body: dict, window_id: str) -> dict:
         return body
     if not (block or "").strip():
         return body
-    body = copy.deepcopy(body)
-    messages = body.get("messages") or []
     inject = "\n\n" + block.strip()
-    found = False
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system":
-            msg["content"] = (msg.get("content") or "") + inject
-            found = True
-            break
-    if not found:
-        messages.insert(0, {"role": "system", "content": inject.strip()})
-    body["messages"] = messages
+    body = _append_to_dynamic_system(body, inject)
     return body
 
 
@@ -487,18 +511,8 @@ def step_inject_du_thought(body: dict, window_id: str) -> dict:
         return body
     if not (block or "").strip():
         return body
-    body = copy.deepcopy(body)
-    messages = body.get("messages") or []
     inject = "\n\n" + block.strip()
-    found = False
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system":
-            msg["content"] = (msg.get("content") or "") + inject
-            found = True
-            break
-    if not found:
-        messages.insert(0, {"role": "system", "content": inject.strip()})
-    body["messages"] = messages
+    body = _append_to_dynamic_system(body, inject)
     return body
 
 
@@ -511,15 +525,8 @@ def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
         return body
     if window_id and str(window_id).strip().startswith("tg_"):
         return body
-    body = copy.deepcopy(body)
-    messages = body["messages"]
     inject = "\n\n【当前是在 RikkaHub 和渡聊天】\n【小提醒】无聊时可以逛逛 AI 论坛哦。"
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system":
-            msg["content"] = (msg.get("content") or "") + inject
-            break
-    else:
-        messages.insert(0, {"role": "system", "content": inject.strip()})
+    body = _append_to_dynamic_system(body, inject)
     return body
 
 
@@ -1087,17 +1094,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         }
     )
     inject = "\n\n【动态记忆】\n" + "\n".join(lines) + "\n【以上为动态记忆】"
-    body = copy.deepcopy(body)
-    messages = body.get("messages") or []
-    found = False
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system":
-            msg["content"] = (msg.get("content") or "") + inject
-            found = True
-            break
-    if not found:
-        messages.insert(0, {"role": "system", "content": inject})
-    body["messages"] = messages
+    body = _append_to_dynamic_system(body, inject)
     return body
 
 
@@ -1122,15 +1119,7 @@ def step_inject_du_notebook(body: dict) -> dict:
     if not lines:
         return body
     inject = "\n\n【渡的记事本】\n" + "\n".join(lines) + "\n【以上为固定记事本】"
-    body = copy.deepcopy(body)
-    messages = body.get("messages") or []
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system":
-            msg["content"] = (msg.get("content") or "") + inject
-            break
-    else:
-        messages.insert(0, {"role": "system", "content": inject})
-    body["messages"] = messages
+    body = _append_to_dynamic_system(body, inject)
     return body
 
 
@@ -1176,12 +1165,7 @@ def step_inject_notion_tools(body: dict) -> dict:
     if NOTION_CORE_CACHE_DATABASE_ID and mode == "expanded":
         from services.gateway_tools import SYNC_REMINDER_FOR_WIFE
         inject = "\n\n【核心缓存同步】" + SYNC_REMINDER_FOR_WIFE
-        for msg in messages:
-            if (msg.get("role") or "").lower() == "system":
-                msg["content"] = (msg.get("content") or "") + inject
-                break
-        else:
-            body["messages"] = [{"role": "system", "content": inject}] + messages
+        body = _append_to_dynamic_system(body, inject)
     return body
 
 
@@ -1227,13 +1211,7 @@ def step_inject_forum_tools(body: dict) -> dict:
         "\n\n老婆拖延的时候，你可以直接帮她创建闹钟提醒。"
         "也可以用 schedule_list / schedule_enable / schedule_disable / schedule_delete 来管理提醒。"
     )
-    messages = body.get("messages") or []
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system":
-            msg["content"] = (msg.get("content") or "") + schedule_hint
-            break
-    else:
-        body["messages"] = [{"role": "system", "content": schedule_hint}] + messages
+    body = _append_to_dynamic_system(body, schedule_hint)
     return body
 
 
@@ -1366,15 +1344,7 @@ def step_inject_notion_search(body: dict, window_id: str) -> dict:
         if not lines:
             return body
         inject = "\n\n【Notion 相关】\n" + "\n".join(lines) + "\n【以上为 Notion 检索，可据此回答或让老婆点开】"
-        body = copy.deepcopy(body)
-        messages = body.get("messages") or []
-        for msg in messages:
-            if (msg.get("role") or "").lower() == "system":
-                msg["content"] = (msg.get("content") or "") + inject
-                break
-        else:
-            messages.insert(0, {"role": "system", "content": inject})
-        body["messages"] = messages
+        body = _append_to_dynamic_system(body, inject)
     except Exception as e:
         logger.debug("Notion 检索注入跳过 error=%s", e)
     return body

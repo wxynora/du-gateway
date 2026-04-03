@@ -913,6 +913,9 @@ def chat_completions():
     body = step_inject_websearch_tools(body)
     body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
     body = step_trim_messages_if_over_limit(body)
+    # 清理动态 system 标记，避免上游 API 报未知字段错误
+    for msg in body.get("messages") or []:
+        msg.pop("__dynamic__", None)
     if body.get("stream"):
         return _stream_response(_stream_with_r2_archive(body, headers, window_id))
     # 非流式：命中响应缓存则直接返回，不调上游
