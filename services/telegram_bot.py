@@ -1314,6 +1314,20 @@ def flush_user_buffer(user_id: int, expected_version: int = 0):
     logger.info("输入聚合 flush user_id=%s chat_id=%s parts=%d", user_id, chat_id, len(merged_parts))
     process_message(chat_id=int(chat_id), user_id=user_id, user_content=merged_parts)
 
+    # 处理期间可能有"迟到"的消息（网络波动导致 webhook 延迟投递）
+    # 如果 buffer 里又有新消息且当前没有 timer 在跑，用短延迟快速 flush
+    with _BUF_LOCK:
+        buf = _INPUT_BUFFERS.get(user_id)
+        if buf and buf.get("parts") and not buf.get("timer"):
+            logger.info("输入聚合 检测到迟到消息 user_id=%s pending_parts=%d，3秒后快速 flush", user_id, len(buf["parts"]))
+            version = buf.get("flush_version", 0) + 1
+            buf["flush_version"] = version
+            timer = threading.Timer(3.0, flush_user_buffer, args=(user_id, version))
+            timer.daemon = True
+            buf["timer"] = timer
+            buf["flush_at"] = time.time() + 3.0
+            timer.start()
+
 
 def init_telegram_bot_runtime():
     """在服务启动时调用：清主 Bot 默认命令菜单、设文游群专属命令等。Webhook 模式下无需轮询。"""
