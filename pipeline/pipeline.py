@@ -1253,29 +1253,29 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     cached_results = _recall_cache_hit(window_id, keywords)
     if cached_results is not None:
         recalled = cached_results
-        vector_error = “”
+        vector_error = ""
         expanded_queries = []
-        logger.info(“动态记忆检索缓存命中 window_id=%s keywords=%d results=%d”, window_id, len(keywords), len(recalled))
+        logger.info("动态记忆检索缓存命中 window_id=%s keywords=%d results=%d", window_id, len(keywords), len(recalled))
     else:
         # 优先：多查询向量召回（原始 query 保底 + DS 查询改写增广）
         # 改写失败或召回失败都必须降级，避免因改写走偏导致”源头漏召回”。
         recalled: list[dict] = []
-        vector_error = “”
+        vector_error = ""
         expanded_queries: list[str] = []
         try:
             turns_text = _last_4_turns_text_for_rewrite(messages)
             expanded_queries = _rewrite_memory_queries_with_ds(turns_text, last_user_text)
-            context_query = f”{turns_text}\n{last_user_text}”.strip()
+            context_query = f"{turns_text}\n{last_user_text}".strip()
             recalled = _multi_query_recall_and_rerank(last_user_text, expanded_queries, context_query=context_query)
             if recalled:
-                valid_ids = {str(mem.get(“id”)) for mem in memories if mem.get(“id”)}
+                valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
                 recalled = [
                     mem for mem in recalled
-                    if str(mem.get(“id”) or “”) in valid_ids and _is_dynamic_memory_valid(mem, now)
+                    if str(mem.get("id") or "") in valid_ids and _is_dynamic_memory_valid(mem, now)
                 ]
         except Exception as e:
             vector_error = str(e)
-            logger.warning(“dynamic_vector_retrieve 降级为关键词匹配 error=%s”, e)
+            logger.warning("dynamic_vector_retrieve 降级为关键词匹配 error=%s", e)
         # 写入缓存
         _recall_cache_set(window_id, keywords, recalled)
 
