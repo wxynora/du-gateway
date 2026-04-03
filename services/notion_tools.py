@@ -462,6 +462,9 @@ def execute_tool(name: str, arguments: dict) -> str:
     if name == "web_search":
         from services.web_search_tools import execute_web_search
         return execute_web_search(arguments if isinstance(arguments, dict) else {})
+    if name == "read_url":
+        from services.web_search_tools import execute_read_url
+        return execute_read_url(arguments if isinstance(arguments, dict) else {})
     if name in (
         "forum_http",
         "forum_uid_http",

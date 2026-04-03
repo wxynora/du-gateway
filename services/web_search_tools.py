@@ -38,8 +38,24 @@ TOOL_WEB_SEARCH = {
 }
 
 
+TOOL_READ_URL = {
+    "type": "function",
+    "function": {
+        "name": "read_url",
+        "description": "读取指定 URL 的网页内容，提取正文文本返回。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "要读取的网页链接"},
+            },
+            "required": ["url"],
+        },
+    },
+}
+
+
 def get_web_search_tools_for_inject() -> list[dict]:
-    return [TOOL_WEB_SEARCH]
+    return [TOOL_WEB_SEARCH, TOOL_READ_URL]
 
 
 def _normalize_max_results(raw: Any) -> int:
@@ -253,3 +269,21 @@ def execute_web_search(arguments: dict) -> str:
         },
         ensure_ascii=False,
     )
+
+
+def execute_read_url(arguments: dict) -> str:
+    url = str((arguments or {}).get("url") or "").strip()
+    if not url:
+        return json.dumps({"ok": False, "error": "url 不能为空"}, ensure_ascii=False)
+    timeout_seconds = max(2, int(WEBSEARCH_TIMEOUT_SECONDS))
+    page = _fetch_page(url, timeout_seconds)
+    if page["status"] in ("error", "blocked"):
+        return json.dumps({"ok": False, "error": f"读取失败: {page['status']}", "url": url}, ensure_ascii=False)
+    return json.dumps({
+        "ok": True,
+        "url": url,
+        "title": page.get("title", ""),
+        "content": page.get("content", ""),
+        "is_truncated": page.get("is_truncated", False),
+        "content_chars": page.get("content_chars", 0),
+    }, ensure_ascii=False)
