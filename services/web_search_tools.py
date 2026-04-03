@@ -94,23 +94,38 @@ def _search_tavily(query: str, max_results: int, timeout_seconds: int) -> tuple[
 
 
 class _SimpleTextExtractor(HTMLParser):
+    _SKIP_TAGS = frozenset(("script", "style", "noscript", "footer", "nav", "header", "aside", "svg"))
+    _MAX_IMAGES = 3
+
     def __init__(self) -> None:
         super().__init__()
         self._skip_depth = 0
         self._parts: list[str] = []
         self._title_parts: list[str] = []
         self._in_title = False
+        self._og_image: str = ""
+        self._img_urls: list[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         t = (tag or "").lower()
-        if t in ("script", "style", "noscript"):
+        if t in self._SKIP_TAGS:
             self._skip_depth += 1
         elif t == "title":
             self._in_title = True
+        elif t == "meta":
+            attr_dict = dict(attrs or [])
+            prop = (attr_dict.get("property") or "").lower()
+            if prop == "og:image" and not self._og_image:
+                self._og_image = (attr_dict.get("content") or "").strip()
+        elif t == "img" and self._skip_depth <= 0 and len(self._img_urls) < self._MAX_IMAGES:
+            attr_dict = dict(attrs or [])
+            src = (attr_dict.get("src") or "").strip()
+            if src and src.startswith("http") and not any(x in src for x in ("icon", "logo", "avatar", "emoji")):
+                self._img_urls.append(src)
 
     def handle_endtag(self, tag: str) -> None:
         t = (tag or "").lower()
-        if t in ("script", "style", "noscript") and self._skip_depth > 0:
+        if t in self._SKIP_TAGS and self._skip_depth > 0:
             self._skip_depth -= 1
         elif t == "title":
             self._in_title = False
@@ -128,10 +143,45 @@ class _SimpleTextExtractor(HTMLParser):
     def title(self) -> str:
         return " ".join(self._title_parts).strip()
 
+    def image_urls(self) -> list[str]:
+        """返回去重后的图片 URL 列表（og:image 优先）。"""
+        seen: set[str] = set()
+        out: list[str] = []
+        for url in ([self._og_image] if self._og_image else []) + self._img_urls:
+            if url and url not in seen:
+                seen.add(url)
+                out.append(url)
+        return out[:self._MAX_IMAGES]
+
     def text(self) -> str:
         merged = " ".join(self._parts).strip()
         merged = re.sub(r"\s+", " ", merged)
+        # 去除常见页脚噪音（备案号、营业执照等）
+        merged = re.sub(r"[\s\S]{0,20}(?:ICP备|网安备|营业执照|经营许可证|违法不良信息举报|互联网举报中心)[\s\S]{0,60}(?:\||$)", " ", merged)
+        merged = re.sub(r"\s+", " ", merged).strip()
         return merged
+
+
+def _describe_image_urls(img_urls: list[str], timeout: int = 10) -> list[str]:
+    """下载图片并调用 IMAGE_DESC_API 生成描述，失败静默跳过。"""
+    from services.image_desc import image_to_description
+
+    descs: list[str] = []
+    for img_url in (img_urls or [])[:3]:
+        try:
+            r = requests.get(img_url, timeout=timeout, headers={"User-Agent": "du-gateway/1.0"})
+            if r.status_code != 200 or not r.content:
+                continue
+            ct = (r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
+            if not ct.startswith("image/"):
+                continue
+            b64 = __import__("base64").b64encode(r.content).decode("ascii")
+            desc = image_to_description(b64, ct)
+            if desc:
+                descs.append(desc.strip())
+        except Exception:
+            continue
+    return descs
 
 
 def _fetch_page(url: str, timeout_seconds: int) -> dict:
@@ -165,6 +215,14 @@ def _fetch_page(url: str, timeout_seconds: int) -> dict:
         parser.feed(html)
         title = parser.title()
         text = parser.text()
+
+        # 提取页面图片并生成描述
+        img_urls = parser.image_urls()
+        img_descs = _describe_image_urls(img_urls, timeout=timeout_seconds) if img_urls else []
+        if img_descs:
+            img_block = "\n".join(f"[图片：{d}]" for d in img_descs)
+            text = img_block + "\n\n" + text
+
         max_chars = max(1000, int(WEBSEARCH_MAX_PAGE_CHARS))
         original_chars = len(text)
         truncated = original_chars > max_chars
