@@ -358,6 +358,8 @@ def _build_live_dynamic_recall_preview(window_id: str) -> dict | None:
             "window_id": wid,
             "query": query,
             "keywords": [],
+            "keyword_debug": [],
+            "retrieval_query": "",
             "source": "live_preview",
             "recalled_lines": lines,
             "recalled_count": len(lines),
@@ -369,6 +371,8 @@ def _build_live_dynamic_recall_preview(window_id: str) -> dict | None:
             "window_id": wid,
             "query": query,
             "keywords": [],
+            "keyword_debug": [],
+            "retrieval_query": "",
             "source": "live_preview",
             "recalled_lines": [],
             "recalled_count": 0,
@@ -1211,6 +1215,7 @@ def miniapp_memory_debug():
                 "recent_vector_error": recent_vector_error,
                 "failed_ids_count": failed_ids_count,
                 "failed_ids_preview": failed_ids_preview,
+                "maintenance_report": r2_store.get_dynamic_memory_maintenance_report() or {},
             }
         except Exception:
             dynamic_stats = {}
@@ -1229,6 +1234,25 @@ def miniapp_memory_debug():
         )
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "summary": "", "recalls": [], "count": 0}), 500
+
+
+@bp.route("/memory-maintenance", methods=["POST"])
+def miniapp_memory_maintenance():
+    """手动触发一次动态记忆离线慢整理。"""
+    try:
+        body = request.get_json(silent=True) or {}
+        dry_run = bool(body.get("dry_run"))
+        limit_candidates = int(body.get("limit_candidates") or 20)
+        if limit_candidates < 1:
+            limit_candidates = 1
+        if limit_candidates > 50:
+            limit_candidates = 50
+        from services.memory_maintenance import run_memory_maintenance
+
+        report = run_memory_maintenance(limit_candidates=limit_candidates, dry_run=dry_run)
+        return jsonify({"ok": True, "report": report})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @bp.route("/core_cache", methods=["GET"])

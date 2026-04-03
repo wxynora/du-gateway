@@ -95,7 +95,11 @@ def rebuild(
     failed_ids: set[str] = set()
     for i, m in enumerate(memories, start=1):
         mid = (m or {}).get("id")
-        text = (m or {}).get("content") or ""
+        retrieval_text = str((m or {}).get("retrieval_text") or "").strip()
+        content_text = str((m or {}).get("content") or "").strip()
+        text = retrieval_text if retrieval_text else content_text
+        if retrieval_text and content_text and retrieval_text not in content_text:
+            text = f"{retrieval_text}\n{content_text}"
         tag = ((m or {}).get("tag") or "").strip() or "ALL"
         if not mid or not str(text).strip():
             continue

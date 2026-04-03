@@ -61,6 +61,8 @@ R2_KEY_SCHEDULE_ITEMS = "schedule/items.json"
 R2_KEY_SCHEDULE_FIRED = "schedule/fired.json"
 # 动态记忆召回调试记录（用于 MiniApp 可视化排查）
 R2_KEY_DYNAMIC_RECALL_DEBUG = "dynamic_memory/recall_debug.json"
+# 动态记忆离线慢整理最近一次结果
+R2_KEY_DYNAMIC_MAINTENANCE_REPORT = "dynamic_memory/maintenance_report.json"
 # 设备感知聚合：电量/位置/网络等（POST /api/sense 写入）
 R2_KEY_SENSE_LATEST = "sense/latest.json"
 # 渡的心事：网关从助手回复截取后写入，仅注入渡侧 system
@@ -199,7 +201,7 @@ def _conversations_key_for_date(window_id: str, date: str) -> str:
     return f"conversations/{date}/window_{safe_id}.json"
 
 
-def append_conversation_round(window_id: str, round_index: int, messages: list, timestamp: str = "") -> bool:
+def append_conversation_round(window_id: str, round_index: int, messages: list, timestamp: str = "", action_note: str = "") -> bool:
     """
     追加一轮对话原文。
     ① 写 windows/<id>/conversation.json（主存，总结/读轮用）
@@ -219,6 +221,8 @@ def append_conversation_round(window_id: str, round_index: int, messages: list, 
             existing = {"rounds": []}
         ts = (timestamp or "").strip() or now_beijing_iso()
         round_entry = {"index": round_index, "timestamp": ts, "messages": messages}
+        if str(action_note or "").strip():
+            round_entry["action_note"] = str(action_note).strip()
         existing.setdefault("rounds", []).append(round_entry)
         _write_json(client, key, existing)
         # 按日期备份到 conversations/（文档十一：原文存档）
@@ -1253,6 +1257,31 @@ def append_dynamic_recall_debug_event(event: dict, max_keep: int = 200) -> bool:
             return True
         except Exception as e:
             logger.error("append_dynamic_recall_debug_event 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_dynamic_memory_maintenance_report() -> dict:
+    """读取最近一次动态记忆离线慢整理结果。"""
+    client = _s3_client()
+    if not client:
+        return {}
+    data = _read_json(client, R2_KEY_DYNAMIC_MAINTENANCE_REPORT)
+    return data if isinstance(data, dict) else {}
+
+
+def save_dynamic_memory_maintenance_report(report: dict) -> bool:
+    """写入最近一次动态记忆离线慢整理结果。"""
+    if not isinstance(report, dict):
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_DYNAMIC_MAINTENANCE_REPORT, report)
+            return True
+        except Exception as e:
+            logger.error("save_dynamic_memory_maintenance_report 失败 error=%s", e, exc_info=True)
             return False
 
 

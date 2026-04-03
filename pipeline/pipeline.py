@@ -257,7 +257,67 @@ def _rounds_to_context_text(rounds: list) -> str:
                     c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
                 )
             lines.append(f"[{role}]: {content}")
+        action_note = str((r or {}).get("action_note") or "").strip()
+        if action_note:
+            lines.append(f"[action_note]: {action_note}")
     return "\n".join(lines) if lines else ""
+
+
+def _build_action_note_from_tool_calls(tool_calls: list) -> str:
+    """把本轮工具调用压成一条很短的动作印象，供后续 Last4 短程上下文使用。"""
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return ""
+
+    def _summarize_one_tool(tc: dict) -> str:
+        if not isinstance(tc, dict):
+            return ""
+        fn = (tc.get("function") or {}) if isinstance(tc.get("function"), dict) else {}
+        name = str(fn.get("name") or "").strip()
+        if not name:
+            return ""
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except Exception:
+            args = {}
+        result_text = str(tc.get("result") or "").strip()
+        target = ""
+        for key in ("url", "query", "keyword", "page_id", "title", "content", "window_id"):
+            val = args.get(key)
+            if isinstance(val, str) and val.strip():
+                target = val.strip()
+                break
+        if len(target) > 48:
+            target = target[:48] + "..."
+        if result_text:
+            result_kind = "已拿到结果"
+            lower = result_text.lower()
+            if name == "read_url":
+                result_kind = "已拿到页面内容"
+            elif "未找到" in result_text or "没有找到" in result_text or "not found" in lower:
+                result_kind = "未找到有效结果"
+            elif "error" in lower or "失败" in result_text:
+                result_kind = "调用未成功"
+            elif "http" in result_text or "https" in result_text:
+                result_kind = "已拿到链接结果"
+            elif "[" in result_text and "]" in result_text:
+                result_kind = "已拿到候选列表"
+        else:
+            result_kind = "已执行"
+        if target:
+            return f"{name}（{target}，{result_kind}）"
+        return f"{name}（{result_kind}）"
+
+    parts: list[str] = []
+    seen: set[str] = set()
+    for tc in tool_calls[:4]:
+        piece = _summarize_one_tool(tc)
+        if not piece or piece in seen:
+            continue
+        seen.add(piece)
+        parts.append(piece)
+    if not parts:
+        return ""
+    return f"上一轮已调用：{'、'.join(parts)}。"
 
 
 def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force_last4: bool = False) -> dict:
@@ -339,6 +399,9 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
                         c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
                     )
                 lines.append(f"{src_tag}[{role}]: {content}")
+            action_note = str((r or {}).get("action_note") or "").strip()
+            if action_note:
+                lines.append(f"{src_tag}[action_note]: {action_note}")
         context = "\n".join(lines) if lines else ""
     else:
         context = _rounds_to_context_text(rounds)
@@ -530,12 +593,11 @@ def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
     return body
 
 
-def _extract_keywords(text: str) -> list:
-    """从当前对话文本中提取简单关键词（用于匹配动态层）。"""
+def _extract_keyword_candidates(text: str) -> list[dict]:
+    """提取用于匹配动态层的关键词候选，并标注是否来自短语收敛层。"""
     if not text or not isinstance(text, str):
         return []
-    # 按空格、常见标点分词，过滤过短
-    parts = re.split(r"[\s,，。！？、；：]+", text)
+
     stopwords = {
         "好的",
         "可以",
@@ -550,7 +612,6 @@ def _extract_keywords(text: str) -> list:
         "谢谢",
         "好的呀",
         "好的呢",
-        # 元问题（讨论系统本身）常见词：避免触发“乱塞一堆”
         "记忆",
         "动态记忆",
         "窗口记忆",
@@ -562,6 +623,64 @@ def _extract_keywords(text: str) -> list:
         "embedding",
         "embeddings",
     }
+    shell_words = {
+        "今天",
+        "昨天",
+        "刚刚",
+        "最近",
+        "这几天",
+        "这个",
+        "那个",
+        "这样",
+        "那样",
+        "感觉",
+        "觉得",
+        "就是",
+        "然后",
+        "所以",
+        "因为",
+        "但是",
+    }
+    attitude_patterns = [
+        r"(不太想[^\s,，。！？、；：]{1,8})",
+        r"(不想[^\s,，。！？、；：]{1,8})",
+        r"(想让[^\s,，。！？、；：]{1,8})",
+        r"(想要[^\s,，。！？、；：]{1,8})",
+        r"(更喜欢[^\s,，。！？、；：]{1,8})",
+        r"(不喜欢[^\s,，。！？、；：]{1,8})",
+        r"(喜欢[^\s,，。！？、；：]{1,8})",
+        r"(讨厌[^\s,，。！？、；：]{1,8})",
+        r"(更想[^\s,，。！？、；：]{1,8})",
+        r"(宁愿[^\s,，。！？、；：]{1,8})",
+        r"(不希望[^\s,，。！？、；：]{1,8})",
+        r"(希望[^\s,，。！？、；：]{1,8})",
+        r"(?:有点|有一点|很|特别|真的)?(?:委屈|生气|开心|难过|烦|不爽|害怕|担心|紧张|难受)",
+        r"(?:很|特别|真的)?(?:在意|介意|失望|安心|心疼|依赖)",
+        r"(?:受不了|接受不了)",
+        r"(?:可以|不行)",
+    ]
+    fact_patterns = [
+        r"(?:肚子|胃|头|喉咙|牙|鼻子|身上)[^\s,，。！？、；：]{0,4}(?:不舒服|疼|痛)",
+        r"(?:不舒服|头疼|肚子疼|想吐|累|困|压力大|没睡好)",
+        r"(?:跟|和)[^\s,，。！？、；：]{1,6}(?:吵架|冷战|和好)",
+        r"(?:上班|请假|去医院|看书|搬家)",
+    ]
+    trim_prefix_re = re.compile(r"^(?:我(?:最近|今天|昨天)?|最近|今天|昨天|刚刚|其实|就是|感觉|觉得)+")
+    clause_split_re = re.compile(r"(?:但是|但|不过|而且|然后|所以|因为)")
+
+    def _dedup_keep_order(items: list[dict], limit: int = 24) -> list[dict]:
+        out: list[dict] = []
+        seen: set[str] = set()
+        for item in items:
+            s = str((item or {}).get("text") or "").strip()
+            if len(s) < 2 or s in seen or s in stopwords:
+                continue
+            seen.add(s)
+            out.append({"text": s, "is_phrase": bool((item or {}).get("is_phrase"))})
+            if len(out) >= limit:
+                break
+        return out
+
     def _extract_cjk_ngrams(s: str, max_keep: int = 24) -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
@@ -574,7 +693,6 @@ def _extract_keywords(text: str) -> list:
                     seen.add(seg)
                     out.append(seg)
                 continue
-            # 长句不再直接丢弃，而是拆成 2-4 字窗口做宽松匹配。
             for n in (4, 3, 2):
                 for i in range(0, max(0, len(seg) - n + 1)):
                     token = seg[i : i + n].strip()
@@ -586,25 +704,114 @@ def _extract_keywords(text: str) -> list:
                         return out
         return out
 
-    keywords = []
-    seen = set()
-    for p in parts:
-        p = p.strip()
-        if len(p) < 2:
+    def _extract_raw_keywords(s: str) -> list[str]:
+        parts = re.split(r"[\s,，。！？、；：]+", s)
+        keywords: list[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            p = p.strip()
+            if len(p) < 2 or p in stopwords:
+                continue
+            if len(p) > 24:
+                for token in _extract_cjk_ngrams(p):
+                    if token in stopwords or token in seen:
+                        continue
+                    seen.add(token)
+                    keywords.append(token)
+                continue
+            if p not in seen:
+                seen.add(p)
+                keywords.append(p)
+        return keywords
+
+    def _extract_phrase_keywords(s: str) -> list[dict]:
+        candidates: list[dict] = []
+        clean = re.sub(r"[\n\r\t]+", " ", s or "")
+        for pattern in attitude_patterns + fact_patterns:
+            for m in re.finditer(pattern, clean):
+                phrase = trim_prefix_re.sub("", m.group(0).strip())
+                phrase = clause_split_re.split(phrase, maxsplit=1)[0].strip()
+                phrase = re.sub(r"^(?:这次|还是|又)", "", phrase).strip()
+                if 2 <= len(phrase) <= 12:
+                    candidates.append({"text": phrase, "is_phrase": True})
+        return _dedup_keep_order(candidates, limit=6)
+
+    def _build_clause_fallback(s: str) -> str:
+        clean = re.sub(r"[\n\r\t]+", " ", s or "").strip()
+        if not clean:
+            return ""
+        clause = re.split(r"[，。！？；：,.!?;:]", clean, maxsplit=1)[0].strip()
+        clause = clause_split_re.split(clause, maxsplit=1)[0].strip()
+        clause = trim_prefix_re.sub("", clause).strip()
+        clause = re.sub(r"^(?:这次|还是|又)", "", clause).strip()
+        if 2 <= len(clause) <= 18 and clause not in shell_words:
+            return clause
+        return ""
+
+    raw_keywords = _extract_raw_keywords(text)
+    phrase_keywords = _extract_phrase_keywords(text)
+
+    merged: list[dict] = []
+    seen: set[str] = set()
+    phrase_texts = [str((item or {}).get("text") or "").strip() for item in phrase_keywords]
+    for item in phrase_keywords + [{"text": kw, "is_phrase": False} for kw in raw_keywords]:
+        kw = str((item or {}).get("text") or "").strip()
+        if len(kw) < 2 or kw in stopwords or kw in shell_words or kw in seen:
             continue
-        if p in stopwords:
+        if any((kw != other and kw in other) for other in phrase_texts):
             continue
-        if len(p) > 24:
-            for token in _extract_cjk_ngrams(p):
-                if token in stopwords or token in seen:
-                    continue
-                seen.add(token)
-                keywords.append(token)
+        seen.add(kw)
+        merged.append({"text": kw, "is_phrase": bool((item or {}).get("is_phrase"))})
+    if not any(bool((item or {}).get("is_phrase")) for item in merged):
+        clause = _build_clause_fallback(text)
+        if clause and clause not in seen:
+            merged.insert(0, {"text": clause, "is_phrase": True})
+    return merged
+
+
+def _extract_keywords(text: str) -> list:
+    """从当前对话文本中提取用于匹配动态层的关键词/短语。"""
+    return [str((item or {}).get("text") or "").strip() for item in _extract_keyword_candidates(text)]
+
+
+def _build_retrieval_text(text: str) -> str:
+    """生成更适合检索的内部短语表示，优先保留态度/感受/偏好短语。"""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    candidates = _extract_keyword_candidates(text)
+    if not candidates:
+        return text
+    pieces: list[str] = []
+    seen: set[str] = set()
+    phrase_count = 0
+    for item in candidates:
+        s = str((item or {}).get("text") or "").strip()
+        if len(s) < 2 or s in seen:
             continue
-        if p not in seen:
-            seen.add(p)
-            keywords.append(p)
-    return keywords
+        is_phrase = bool((item or {}).get("is_phrase"))
+        if is_phrase:
+            phrase_count += 1
+        seen.add(s)
+        pieces.append(s)
+        if len(pieces) >= 5 or phrase_count >= 3:
+            break
+    if not pieces:
+        return text
+    return " ".join(pieces)
+
+
+def _memory_retrieval_text(mem: dict) -> str:
+    """读取记忆的检索文本；旧数据无 retrieval_text 时回退即时生成。"""
+    if not isinstance(mem, dict):
+        return ""
+    retrieval_text = str(mem.get("retrieval_text") or "").strip()
+    content = str(mem.get("content") or "").strip()
+    if not retrieval_text:
+        retrieval_text = _build_retrieval_text(content)
+    if retrieval_text and content and retrieval_text not in content:
+        return f"{retrieval_text}\n{content}"
+    return retrieval_text or content
 
 
 def _is_memory_meta_query(text: str) -> bool:
@@ -858,7 +1065,7 @@ def _upsert_dynamic_memory_index(mem: dict) -> None:
     if not isinstance(mem, dict):
         return
     mid = str(mem.get("id") or "").strip()
-    text = str(mem.get("content") or "").strip()
+    text = _memory_retrieval_text(mem)
     tag = str(mem.get("tag") or "").strip() or "ALL"
     if not mid or not text:
         return
@@ -968,7 +1175,17 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     # 元问题：不要触发动态记忆（避免“问记忆→召回一堆含记忆字样的记忆”）
     if _is_memory_meta_query(last_user_text):
         return body
-    keywords = _extract_keywords(last_user_text)
+    keyword_candidates = _extract_keyword_candidates(last_user_text)
+    keywords = [str((item or {}).get("text") or "").strip() for item in keyword_candidates]
+    keyword_debug = [
+        {
+            "text": str((item or {}).get("text") or "").strip(),
+            "is_phrase": bool((item or {}).get("is_phrase")),
+        }
+        for item in keyword_candidates
+        if str((item or {}).get("text") or "").strip()
+    ]
+    retrieval_query = _build_retrieval_text(last_user_text)
     if not memories:
         return body
 
@@ -1009,6 +1226,8 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                     "window_id": (window_id or "").strip() or "__default__",
                     "query": (last_user_text or "").strip(),
                     "keywords": [],
+                    "keyword_debug": keyword_debug,
+                    "retrieval_query": retrieval_query,
                     "source": "vector" if not vector_error else "keyword",
                     "expanded_queries": expanded_queries,
                     "recalled_lines": [],
@@ -1018,10 +1237,14 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                 }
             )
             return body
-        # 相关性：关键词在 content 中出现次数
+        # 相关性：关键词/短语在 retrieval_text 中的命中强度，长短语更高权重。
         for mem in memories:
-            content = (mem.get("content") or "").lower()
-            relevance = sum(1 for kw in keywords if kw.lower() in content) if keywords else 0
+            retrieval_text = _memory_retrieval_text(mem).lower()
+            relevance = 0.0
+            for item in keyword_candidates or []:
+                kw_lower = str((item or {}).get("text") or "").strip().lower()
+                if kw_lower and kw_lower in retrieval_text:
+                    relevance += 2.0 if bool((item or {}).get("is_phrase")) else 1.0
             weight = _memory_weight(mem)
             scored.append((relevance, weight, mem))
         # 按「话题匹配度 + 权重」排序；按 token 上限分配（不固定条数，在预算内尽量多塞）
@@ -1059,14 +1282,16 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     if not lines:
         # 召回有候选但受预算/过滤后未注入：记录原因
         _append_dynamic_recall_debug_event_safe(
-            {
-                "timestamp": now_beijing_iso(),
-                "window_id": (window_id or "").strip() or "__default__",
-                "query": (last_user_text or "").strip(),
-                "keywords": keywords,
-                "source": "vector" if recalled else "keyword",
-                "expanded_queries": expanded_queries,
-                "recalled_lines": [],
+                {
+                    "timestamp": now_beijing_iso(),
+                    "window_id": (window_id or "").strip() or "__default__",
+                    "query": (last_user_text or "").strip(),
+                    "keywords": keywords,
+                    "keyword_debug": keyword_debug,
+                    "retrieval_query": retrieval_query,
+                    "source": "vector" if recalled else "keyword",
+                    "expanded_queries": expanded_queries,
+                    "recalled_lines": [],
                 "recalled_count": 0,
                 "reason": "empty_after_budget_or_filter",
                 "vector_error": vector_error,
@@ -1079,13 +1304,22 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         mem = t[2]
         s = mem.get("_recall_score")
         if s:
-            injected_scores.append({"id": str(mem.get("id") or ""), "content": (mem.get("content") or "")[:60], **s})
+            injected_scores.append(
+                {
+                    "id": str(mem.get("id") or ""),
+                    "content": (mem.get("content") or "")[:60],
+                    "retrieval_text": str(mem.get("retrieval_text") or "")[:60],
+                    **s,
+                }
+            )
     _append_dynamic_recall_debug_event_safe(
         {
             "timestamp": now_beijing_iso(),
             "window_id": (window_id or "").strip() or "__default__",
             "query": (last_user_text or "").strip(),
             "keywords": keywords,
+            "keyword_debug": keyword_debug,
+            "retrieval_query": retrieval_query,
             "source": "vector" if recalled else "keyword",
             "expanded_queries": expanded_queries,
             "recalled_lines": lines,
@@ -1499,6 +1733,7 @@ def _apply_one_decision(
         new_mem = {
             "id": str(uuid4()),
             "content": content,
+            "retrieval_text": _build_retrieval_text(content),
             "importance": importance,
             "tag": tag,
             "mention_count": mention_init if mention_init is not None else 1,
@@ -1526,6 +1761,7 @@ def _apply_one_decision(
         for mem in current_memories:
             if mem.get("id") == fused_with_id:
                 mem["content"] = content if content else mem.get("content", "")
+                mem["retrieval_text"] = _build_retrieval_text(mem["content"])
                 mem["importance"] = importance
                 mem["tag"] = tag
                 mem["last_mentioned"] = now_iso
@@ -1618,6 +1854,7 @@ def step_archive_and_maybe_summary(
         if round_cleaned_for_r2
         else build_round_cleaned_for_r2(last_user, assistant_message)
     )
+    action_note = _build_action_note_from_tool_calls((assistant_message or {}).get("tool_calls"))
     # 小本本：网关提前拎出，打时间戳，存 R2（按时间排序）+ Notion，不动原文
     from services.notebook_gateway import extract_entries_from_round, save_entry
     for content in extract_entries_from_round(round_messages):
@@ -1626,7 +1863,7 @@ def step_archive_and_maybe_summary(
 
     round_index = r2_store.get_next_round_index(window_id)
     ts = now_beijing_iso()
-    r2_store.append_conversation_round(window_id, round_index, round_messages, timestamp=ts)
+    r2_store.append_conversation_round(window_id, round_index, round_messages, timestamp=ts, action_note=action_note)
     # 全局 Last4 只需最近四轮：append 后读即可，不必拉 last_n=1000 再拼（省内存、也避免误用 len 当总轮数）
     tail4 = r2_store.get_conversation_rounds(window_id, last_n=4)
     r2_store.update_latest_4_rounds_global(tail4)

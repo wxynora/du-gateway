@@ -6,6 +6,7 @@ import { useToast } from "../toast";
 type RecallScore = {
   id?: string;
   content?: string;
+  retrieval_text?: string;
   total?: number;
   sem_user?: number;
   sem_ctx?: number;
@@ -16,6 +17,8 @@ type RecallEvent = {
   window_id?: string;
   query?: string;
   keywords?: string[];
+  keyword_debug?: Array<{ text?: string; is_phrase?: boolean }>;
+  retrieval_query?: string;
   source?: string;
   recalled_lines?: string[];
   recalled_count?: number;
@@ -46,6 +49,21 @@ type MemoryDebugResp = {
     recent_vector_error?: string;
     failed_ids_count?: number;
     failed_ids_preview?: string[];
+    maintenance_report?: {
+      timestamp?: string;
+      dry_run?: boolean;
+      memory_count_before?: number;
+      memory_count_after?: number;
+      backfilled_count?: number;
+      pruned_count?: number;
+      duplicate_candidate_count?: number;
+      duplicate_candidates?: Array<{
+        tag?: string;
+        retrieval_text?: string;
+        count?: number;
+        ids?: string[];
+      }>;
+    };
   };
   error?: string;
 };
@@ -68,6 +86,7 @@ function recallBoxClass(tone: "blue" | "neutral" = "neutral") {
 export function MemoryDebugTab() {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
   const [data, setData] = useState<MemoryDebugResp | null>(null);
   const [scope, setScope] = useState<"all" | "target">("all");
 
@@ -106,6 +125,25 @@ export function MemoryDebugTab() {
   }, [reload]);
 
   const recalls = Array.isArray(data?.recalls) ? data!.recalls! : [];
+  const maintenance = data?.dynamic_stats?.maintenance_report;
+
+  async function runMaintenance() {
+    setMaintenanceLoading(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/memory-maintenance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit_candidates: 20 }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "整理失败");
+      toast("离线整理已执行");
+      await reload();
+    } catch (e: any) {
+      toast(`整理失败：${e?.message || e}`);
+    } finally {
+      setMaintenanceLoading(false);
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -117,6 +155,9 @@ export function MemoryDebugTab() {
           <div className="flex items-center gap-2">
             <Btn kind={scope === "all" ? "blue" : "default"} onClick={() => setScope("all")} disabled={loading}>全部</Btn>
             <Btn kind={scope === "target" ? "pink" : "default"} onClick={() => setScope("target")} disabled={loading}>当前窗口</Btn>
+            <Btn kind="default" onClick={runMaintenance} disabled={loading || maintenanceLoading}>
+              {maintenanceLoading ? "整理中" : "离线整理"}
+            </Btn>
             <Btn kind="yellow" onClick={reload} disabled={loading}>
               刷新
             </Btn>
@@ -163,6 +204,23 @@ export function MemoryDebugTab() {
             ? ` ｜ ${data!.dynamic_stats!.failed_ids_preview!.join(" / ")}`
             : ""}
         </div>
+        <div className="text-xs text-cream-muted whitespace-pre-wrap">
+          maintenance: {String(maintenance?.timestamp || "") || "(暂无)"} ｜ backfill {String(maintenance?.backfilled_count ?? 0)} ｜ prune {String(maintenance?.pruned_count ?? 0)} ｜ dup {String(maintenance?.duplicate_candidate_count ?? 0)}
+        </div>
+        {Array.isArray(maintenance?.duplicate_candidates) && maintenance!.duplicate_candidates!.length > 0 && (
+          <details className="neo-panel-inset p-3">
+            <summary className="cursor-pointer select-none text-xs text-cream-muted">
+              最近慢整理候选：{maintenance!.duplicate_candidates!.length} 组
+            </summary>
+            <div className="mt-2 space-y-2">
+              {maintenance!.duplicate_candidates!.map((it, idx) => (
+                <div key={idx} className="text-xs text-cream-muted break-words">
+                  [{String(it.tag || "-")}] {String(it.retrieval_text || "(空)")} · {String(it.count || 0)} 条
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
         <div className="neo-tag-pink">
           动态记忆最近召回 · 最近 {String(data?.count ?? recalls.length)} 次 / 全部 {String(data?.total_count ?? recalls.length)}
         </div>
@@ -181,6 +239,25 @@ export function MemoryDebugTab() {
                 </div>
               </summary>
               <div className="mt-3 space-y-2.5">
+                <div className="text-xs text-cream-muted break-words">
+                  retrieval_query: {String(it.retrieval_query || "") || "(空)"}
+                </div>
+                <div className="text-xs text-cream-muted break-words">
+                  keywords: {Array.isArray(it.keywords) && it.keywords.length ? it.keywords.join(" / ") : "(空)"}
+                </div>
+                {Array.isArray(it.keyword_debug) && it.keyword_debug.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {it.keyword_debug.map((kw, ki) => (
+                      <span
+                        key={`${String(kw.text || "")}-${ki}`}
+                        className={kw.is_phrase ? "neo-tag-pink px-2 py-1 text-[10px]" : "neo-tag-blue px-2 py-1 text-[10px]"}
+                        title={kw.is_phrase ? "收敛短语" : "散词回退"}
+                      >
+                        {kw.is_phrase ? "phrase" : "raw"} · {String(kw.text || "")}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {Array.isArray(it.scores) && it.scores.length > 0 && (
                   <details className={`${recallBoxClass("blue")} p-2.5`}>
                     <summary className="cursor-pointer select-none text-[10px] font-medium uppercase tracking-[0.14em] text-cream-muted">
@@ -194,6 +271,9 @@ export function MemoryDebugTab() {
                             <div className="text-[11px] text-cream-muted">
                               user {String(s.sem_user ?? "-")} · ctx {String(s.sem_ctx ?? "-")}
                             </div>
+                          </div>
+                          <div className="mt-1 text-xs text-cream-muted break-words">
+                            {s.retrieval_text ? `检索短语：${s.retrieval_text}` : ""}
                           </div>
                           <div className="mt-1 text-sm text-cream-text break-words">
                             {s.content || s.id || "(空)"}
