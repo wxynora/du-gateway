@@ -216,7 +216,7 @@ def api_cc_log():
     from storage import r2_store
 
     window_id = ""  # 默认窗口
-    round_index = r2_store.next_round_index(window_id)
+    round_index = r2_store.get_next_round_index(window_id)
     timestamp = now_beijing_iso()
     messages = [
         {"role": "user", "content": f"[{tag} 记录]"},
