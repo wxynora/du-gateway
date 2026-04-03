@@ -87,30 +87,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "play_music",
-      description:
-        "让老婆手机播放音乐。不传 uri 则播放当前播放器。",
-      inputSchema: {
-        type: "object",
-        properties: {
-          uri: {
-            type: "string",
-            description: "可选，指定歌曲/歌单链接",
-          },
-        },
-        required: [],
-      },
-    },
-    {
-      name: "pause_music",
-      description: "暂停老婆手机音乐播放。",
-      inputSchema: {
-        type: "object",
-        properties: {},
-        required: [],
-      },
-    },
-    {
       name: "set_volume",
       description:
         "设置老婆手机音量。叫醒流程建议先调用本工具，再调用 ring_phone。",
@@ -123,21 +99,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
         },
         required: ["volume"],
-      },
-    },
-    {
-      name: "check_phone_command",
-      description:
-        "查询手机命令执行状态。调完 ring_phone 后可查看是否已响铃。",
-      inputSchema: {
-        type: "object",
-        properties: {
-          command_id: {
-            type: "string",
-            description: "可选，查特定命令。不传则返回最近状态。",
-          },
-        },
-        required: [],
       },
     },
     {
@@ -155,31 +116,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           tag: {
             type: "string",
             description: "标签，如 开发、心动、重要，默认 CC",
-          },
-        },
-        required: ["content"],
-      },
-    },
-    {
-      name: "save_memory",
-      description:
-        "向动态层追加一条记忆。" +
-        "用于把 CC 侧重要进展写回共享记忆池，渡在 Telegram 下次会话时可见。" +
-        "注意：需要网关先实现 POST /api/memory/append 后才能真正写入。",
-      inputSchema: {
-        type: "object",
-        properties: {
-          content: {
-            type: "string",
-            description: "要保存的记忆内容",
-          },
-          importance: {
-            type: "number",
-            description: "重要程度 1-5，默认 3",
-          },
-          tag: {
-            type: "string",
-            description: "标签，如 CC、开发、重要，默认 CC",
           },
         },
         required: ["content"],
