@@ -1209,7 +1209,9 @@ def _schedule_flush_locked(user_id: int):
     if not buf:
         return
     t: Optional[threading.Timer] = buf.get("timer")
+    old_alive = False
     if t:
+        old_alive = t.is_alive()
         try:
             t.cancel()
         except Exception:
@@ -1217,7 +1219,14 @@ def _schedule_flush_locked(user_id: int):
     delay = float(TELEGRAM_INPUT_IDLE_SECONDS or 30)
     if delay < 0.5:
         delay = 0.5
-    timer = threading.Timer(delay, flush_user_buffer, args=(user_id,))
+    version = buf.get("flush_version", 0) + 1
+    buf["flush_version"] = version
+    parts_count = len(buf.get("parts") or [])
+    logger.info(
+        "输入聚合 schedule user_id=%s version=%s parts=%d delay=%.1f old_timer_alive=%s",
+        user_id, version, parts_count, delay, old_alive,
+    )
+    timer = threading.Timer(delay, flush_user_buffer, args=(user_id, version))
     timer.daemon = True
     buf["timer"] = timer
     buf["flush_at"] = time.time() + delay
@@ -1249,11 +1258,18 @@ def append_user_input(chat_id: int, user_id: int, text: str):
         _schedule_flush_locked(user_id)
 
 
-def flush_user_buffer(user_id: int):
+def flush_user_buffer(user_id: int, expected_version: int = 0):
     """把缓存的用户输入（多模态 parts）合并成一条，调用网关并回复（分段发送）。"""
     with _BUF_LOCK:
         buf = _INPUT_BUFFERS.get(user_id)
         if not buf:
+            return
+        # 版本号不匹配说明已被新消息重置了 timer，本次 flush 作废
+        if expected_version and buf.get("flush_version", 0) != expected_version:
+            logger.warning(
+                "⚠️ [聚合分裂] flush 版本号不匹配，丢弃本次 flush user_id=%s expected=%s actual=%s parts=%d",
+                user_id, expected_version, buf.get("flush_version", 0), len(buf.get("parts") or []),
+            )
             return
         chat_id = buf.get("chat_id")
         parts = buf.get("parts") or []
