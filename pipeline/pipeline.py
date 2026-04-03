@@ -667,7 +667,6 @@ def _extract_keyword_candidates(text: str) -> list[dict]:
     ]
     trim_prefix_re = re.compile(r"^(?:我(?:最近|今天|昨天)?|最近|今天|昨天|刚刚|其实|就是|感觉|觉得)+")
     clause_split_re = re.compile(r"(?:但是|但|不过|而且|然后|所以|因为)")
-
     def _dedup_keep_order(items: list[dict], limit: int = 24) -> list[dict]:
         out: list[dict] = []
         seen: set[str] = set()
@@ -814,6 +813,52 @@ def _memory_retrieval_text(mem: dict) -> str:
     return retrieval_text or content
 
 
+def _is_trivial_user_message(text: str) -> bool:
+    """纯语气词/极短回应，不值得触发向量检索。只过滤最明确的无意义消息。"""
+    t = (text or "").strip()
+    if not t:
+        return True
+    if len(t) > 8:
+        return False
+    trivial = {
+        "嗯嗯", "好的", "哈哈", "行吧", "收到", "知道了", "明白了", "没事",
+        "谢谢", "ok", "好", "嗯", "哦", "啊", "噢", "哈", "嘿",
+        "好的呀", "好的呢", "行", "可以", "好吧", "嗯嗯嗯",
+    }
+    return t in trivial
+
+
+# ---------------------------------------------------------------------------
+# 检索结果缓存：连续聊同一话题时复用上次结果，避免重复向量检索
+# ---------------------------------------------------------------------------
+_RECALL_CACHE: dict[str, dict] = {}  # {window_id: {"keywords": [...], "results": [...], "ts": float}}
+_RECALL_CACHE_TTL = 120  # 秒
+
+
+def _recall_cache_hit(window_id: str, keywords: list[str]) -> list[dict] | None:
+    """关键词重叠 >= 70% 且未过期则命中缓存。"""
+    import time as _time
+    cache = _RECALL_CACHE.get(window_id)
+    if not cache:
+        return None
+    if _time.time() - cache.get("ts", 0) > _RECALL_CACHE_TTL:
+        _RECALL_CACHE.pop(window_id, None)
+        return None
+    old_kw = set(cache.get("keywords") or [])
+    new_kw = set(keywords)
+    if not old_kw or not new_kw:
+        return None
+    overlap = len(old_kw & new_kw) / max(len(old_kw), len(new_kw))
+    if overlap >= 0.7:
+        return cache.get("results")
+    return None
+
+
+def _recall_cache_set(window_id: str, keywords: list[str], results: list[dict]) -> None:
+    import time as _time
+    _RECALL_CACHE[window_id] = {"keywords": keywords, "results": results, "ts": _time.time()}
+
+
 def _is_memory_meta_query(text: str) -> bool:
     """
     用户在问“系统/记忆如何工作”的元问题时，不应触发动态记忆检索与注入。
@@ -869,11 +914,23 @@ def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> lis
     if not user_message:
         return []
     prompt = (
+        "你在帮我生成“记忆检索扩展 query”。\n\n"
+        "规则：\n"
+        "1. 当前用户消息优先级最高，必须围绕它生成 query，不能被前几轮话题带偏。\n"
+        "2. 最近对话上下文只能用于补充指代、省略、人物、事件背景，不能替换当前消息主题。\n"
+        "3. 优先保留当前消息里的事件、对象、状态、偏好；不要只提纯情绪词，不要只提前几轮内容。\n"
+        "4. 如果当前消息已经很明确，就直接围绕当前消息改写，不要硬扩展到旧话题。\n"
+        "5. 输出要适合检索记忆：尽量具体，少用空泛代词；避免只有“很烦/难受/委屈”这类脱离事件的情绪词。\n\n"
         "以下是最近的对话上下文：\n"
         f"{last_4_turns or '（无）'}\n\n"
         f"当前用户消息：{user_message}\n\n"
-        "根据上下文，生成3个不同角度的检索查询，用于从长期记忆库中找到相关的背景信息。\n"
-        "要求：每行一个，不要编号，不要解释；每行 8-24 字，尽量包含实体词或事件词，避免空泛代词。\n"
+        "请生成 3 个不同角度的检索 query。\n"
+        "要求：\n"
+        "- 每行一个，不要编号，不要解释\n"
+        "- 每行 8-24 字\n"
+        "- 必须和“当前用户消息”直接相关\n"
+        "- 优先包含实体词、事件词、状态词、偏好词\n"
+        "- 不要让前几轮上下文喧宾夺主\n"
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "max_tokens": 160}
@@ -1172,8 +1229,11 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                     c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
                 )
             break
-    # 元问题：不要触发动态记忆（避免“问记忆→召回一堆含记忆字样的记忆”）
+    # 元问题：不要触发动态记忆（避免”问记忆→召回一堆含记忆字样的记忆”）
     if _is_memory_meta_query(last_user_text):
+        return body
+    # 短消息 / 日常闲聊跳过检索，省 token
+    if _is_trivial_user_message(last_user_text):
         return body
     keyword_candidates = _extract_keyword_candidates(last_user_text)
     keywords = [str((item or {}).get("text") or "").strip() for item in keyword_candidates]
@@ -1189,25 +1249,35 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     if not memories:
         return body
 
-    # 优先：多查询向量召回（原始 query 保底 + DS 查询改写增广）
-    # 改写失败或召回失败都必须降级，避免因改写走偏导致“源头漏召回”。
-    recalled: list[dict] = []
-    vector_error = ""
-    expanded_queries: list[str] = []
-    try:
-        turns_text = _last_4_turns_text_for_rewrite(messages)
-        expanded_queries = _rewrite_memory_queries_with_ds(turns_text, last_user_text)
-        context_query = f"{turns_text}\n{last_user_text}".strip()
-        recalled = _multi_query_recall_and_rerank(last_user_text, expanded_queries, context_query=context_query)
-        if recalled:
-            valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
-            recalled = [
-                mem for mem in recalled
-                if str(mem.get("id") or "") in valid_ids and _is_dynamic_memory_valid(mem, now)
-            ]
-    except Exception as e:
-        vector_error = str(e)
-        logger.warning("dynamic_vector_retrieve 降级为关键词匹配 error=%s", e)
+    # 缓存命中：连续聊同一话题时复用上次检索结果，跳过向量检索和 DS 改写
+    cached_results = _recall_cache_hit(window_id, keywords)
+    if cached_results is not None:
+        recalled = cached_results
+        vector_error = “”
+        expanded_queries = []
+        logger.info(“动态记忆检索缓存命中 window_id=%s keywords=%d results=%d”, window_id, len(keywords), len(recalled))
+    else:
+        # 优先：多查询向量召回（原始 query 保底 + DS 查询改写增广）
+        # 改写失败或召回失败都必须降级，避免因改写走偏导致”源头漏召回”。
+        recalled: list[dict] = []
+        vector_error = “”
+        expanded_queries: list[str] = []
+        try:
+            turns_text = _last_4_turns_text_for_rewrite(messages)
+            expanded_queries = _rewrite_memory_queries_with_ds(turns_text, last_user_text)
+            context_query = f”{turns_text}\n{last_user_text}”.strip()
+            recalled = _multi_query_recall_and_rerank(last_user_text, expanded_queries, context_query=context_query)
+            if recalled:
+                valid_ids = {str(mem.get(“id”)) for mem in memories if mem.get(“id”)}
+                recalled = [
+                    mem for mem in recalled
+                    if str(mem.get(“id”) or “”) in valid_ids and _is_dynamic_memory_valid(mem, now)
+                ]
+        except Exception as e:
+            vector_error = str(e)
+            logger.warning(“dynamic_vector_retrieve 降级为关键词匹配 error=%s”, e)
+        # 写入缓存
+        _recall_cache_set(window_id, keywords, recalled)
 
     scored = []
     if recalled:
