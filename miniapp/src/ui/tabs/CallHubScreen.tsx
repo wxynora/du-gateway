@@ -36,6 +36,8 @@ type CallRecordDetail = CallRecordSummary & {
 
 type ViewMode = "home" | "voice" | "records" | "record-detail";
 
+const LOCAL_AVATAR_STORAGE_KEY = "miniapp.voice.avatar.local.v1";
+
 const DEFAULT_CONFIG: VoiceConfig = {
   displayName: "渡",
   subtitle: "语音通话中",
@@ -72,6 +74,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
   const toast = useToast();
   const [view, setView] = useState<ViewMode>("home");
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
+  const [dailyWhisper, setDailyWhisper] = useState("");
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState("");
@@ -82,12 +85,24 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     let cancelled = false;
+    try {
+      const localAvatar = window.localStorage.getItem(LOCAL_AVATAR_STORAGE_KEY) || "";
+      if (localAvatar) setAvatarPreviewUrl(localAvatar);
+    } catch {}
     apiFetch("/miniapp-api/voice-config")
       .then((resp) => resp.json().then((data) => ({ resp, data })))
       .then(({ resp, data }) => {
         if (cancelled) return;
         if (!resp.ok || !data?.ok) return;
         setConfig({ ...DEFAULT_CONFIG, ...(data.config || {}) });
+      })
+      .catch(() => {});
+    apiFetch("/miniapp-api/daily-whisper")
+      .then((resp) => resp.json().then((data) => ({ resp, data })))
+      .then(({ resp, data }) => {
+        if (cancelled) return;
+        if (!resp.ok || !data?.ok) return;
+        setDailyWhisper(String(data.text || "").trim());
       })
       .catch(() => {});
     return () => {
@@ -97,7 +112,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     return () => {
-      if (avatarPreviewUrl) {
+      if (avatarPreviewUrl && avatarPreviewUrl.startsWith("blob:")) {
         try {
           URL.revokeObjectURL(avatarPreviewUrl);
         } catch {}
@@ -159,15 +174,27 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
 
   async function uploadAvatar(file: File | null) {
     if (!file || uploadingAvatar) return;
-    const localPreview = URL.createObjectURL(file);
+    const localPreview = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.readAsDataURL(file);
+    }).catch((e: any) => {
+      toast(e?.message || "读取图片失败");
+      return "";
+    });
+    if (!localPreview) return;
     setAvatarPreviewUrl((prev) => {
-      if (prev) {
+      if (prev && prev.startsWith("blob:")) {
         try {
           URL.revokeObjectURL(prev);
         } catch {}
       }
       return localPreview;
     });
+    try {
+      window.localStorage.setItem(LOCAL_AVATAR_STORAGE_KEY, localPreview);
+    } catch {}
     setUploadingAvatar(true);
     try {
       const form = new FormData();
@@ -183,8 +210,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
       }));
       toast("头像已更新");
     } catch (e: any) {
-      setAvatarPreviewUrl("");
-      toast(e?.message || "头像上传失败");
+      toast(`服务端头像同步失败：${e?.message || e}，先用本地头像`);
     } finally {
       setUploadingAvatar(false);
     }
@@ -238,9 +264,9 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
                 </span>
               </label>
               <div className="min-w-0">
-                <div className="text-[18px] font-semibold tracking-tight">{config.displayName || "渡"}</div>
-                <div className="mt-1 text-xs text-cream-muted">{config.subtitle || "语音通话中"}</div>
-                <div className="mt-1 text-[11px] text-cream-muted">点头像可从本地相册替换</div>
+                <div className="rounded-[22px] bg-[rgba(255,255,255,0.38)] px-3 py-2 text-[12px] leading-5 text-cream-text shadow-[inset_2px_2px_5px_rgba(173,182,196,0.18),inset_-1px_-1px_3px_rgba(255,255,255,0.55)]">
+                  {dailyWhisper || "今天也可以来和渡说说话。"}
+                </div>
               </div>
             </div>
 

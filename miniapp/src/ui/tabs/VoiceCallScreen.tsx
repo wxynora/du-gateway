@@ -15,6 +15,8 @@ type VoiceConfig = {
 
 type CallStatus = "connecting" | "ready" | "recording" | "recognizing" | "speaking" | "error";
 
+const LOCAL_AVATAR_STORAGE_KEY = "miniapp.voice.avatar.local.v1";
+
 const DEFAULT_CONFIG: VoiceConfig = {
   displayName: "渡",
   subtitle: "语音通话中",
@@ -59,13 +61,13 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const [callStartedAt] = useState(() => Date.now());
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
+  const [localAvatarUrl, setLocalAvatarUrl] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [draftName, setDraftName] = useState(DEFAULT_CONFIG.displayName);
   const [draftSubtitle, setDraftSubtitle] = useState(DEFAULT_CONFIG.subtitle);
   const [useAvatarImage, setUseAvatarImage] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
-  const [muted, setMuted] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
   const [callId, setCallId] = useState(() => `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const [callStartedAtIso] = useState(() => new Date().toISOString());
@@ -78,9 +80,10 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const isClosingRef = useRef(false);
 
   const avatarSrc = useMemo(() => {
+    if (localAvatarUrl) return localAvatarUrl;
     if (!config.useAvatarImage || !config.avatarUrl) return "";
     return buildApiAssetUrl(config.avatarUrl);
-  }, [config.avatarUrl, config.useAvatarImage]);
+  }, [config.avatarUrl, config.useAvatarImage, localAvatarUrl]);
 
   useEffect(() => {
     tgReady(true);
@@ -88,6 +91,10 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
 
     async function bootstrap() {
       try {
+        try {
+          const localAvatar = window.localStorage.getItem(LOCAL_AVATAR_STORAGE_KEY) || "";
+          if (localAvatar) setLocalAvatarUrl(localAvatar);
+        } catch {}
         const resp = await apiFetch("/miniapp-api/voice-config");
         const data = await resp.json().catch(() => ({}));
         if (cancelled) return;
@@ -154,10 +161,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   }
 
   async function beginRecording() {
-    if (muted) {
-      toast("麦克风已静音");
-      return;
-    }
     if (status === "recognizing" || status === "speaking") return;
     try {
       const stream = await ensureStream();
@@ -281,6 +284,20 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
 
   async function uploadAvatar(file: File | null) {
     if (!file) return;
+    const localPreview = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.readAsDataURL(file);
+    }).catch((e: any) => {
+      toast(e?.message || "读取图片失败");
+      return "";
+    });
+    if (!localPreview) return;
+    setLocalAvatarUrl(localPreview);
+    try {
+      window.localStorage.setItem(LOCAL_AVATAR_STORAGE_KEY, localPreview);
+    } catch {}
     setUploadingAvatar(true);
     try {
       const form = new FormData();
@@ -297,7 +314,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       setUseAvatarImage(true);
       toast("头像已上传");
     } catch (e: any) {
-      toast(e?.message || "头像上传失败");
+      toast(`服务端头像同步失败：${e?.message || e}，先用本地头像`);
     } finally {
       setUploadingAvatar(false);
     }
@@ -364,9 +381,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
             type="button"
             className={
               "mt-10 flex h-[112px] w-[112px] items-center justify-center rounded-full border border-white/10 text-center text-sm font-medium transition " +
-              (muted
-                ? "bg-white/8 text-white/35"
-                : status === "recording"
+              (status === "recording"
                 ? "bg-[#8fd4bf] text-[#0d2c25] shadow-[0_22px_44px_rgba(143,212,191,0.28)]"
                 : "bg-white/12 text-white shadow-[0_12px_28px_rgba(0,0,0,0.18)]")
             }
@@ -382,7 +397,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
             onPointerLeave={() => {
               if (status === "recording") stopRecording();
             }}
-            disabled={muted || status === "recognizing" || status === "speaking" || status === "connecting"}
+            disabled={status === "recognizing" || status === "speaking" || status === "connecting"}
           >
             <div>
               <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-white/10">
@@ -396,17 +411,8 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
-          <button type="button" className="voice-call-action-btn" onClick={() => setMuted((v) => !v)}>
-            <span className={`voice-call-action-icon ${muted ? "bg-[#e9b7b2] text-[#6b2924]" : ""}`}>
-              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                {muted ? <path d="M4 4l16 16M9 9v3a3 3 0 0 0 5.8 1.2M15 11V7a3 3 0 0 0-5.6-1.4M5 11a7 7 0 0 0 11.7 5M12 18v3M8 21h8" /> : <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Z M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />}
-              </svg>
-            </span>
-            <span>{muted ? "已静音" : "麦克风"}</span>
-          </button>
-
-          <button type="button" className="voice-call-action-btn" onClick={() => setSpeakerOn((v) => !v)}>
+        <div className="flex items-start justify-center gap-12 pt-1">
+          <button type="button" className="flex flex-col items-center gap-2 text-xs text-white/72" onClick={() => setSpeakerOn((v) => !v)}>
             <span className={`voice-call-action-icon ${speakerOn ? "bg-[#d7e8ff] text-[#183a6f]" : ""}`}>
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                 <path d="M5 10h4l5-4v12l-5-4H5zM17 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" />
@@ -415,7 +421,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
             <span>{speakerOn ? "扬声器" : "已静音"}</span>
           </button>
 
-          <button type="button" className="voice-call-action-btn" onClick={endCall}>
+          <button type="button" className="flex flex-col items-center gap-2 text-xs text-white/72" onClick={endCall}>
             <span className="voice-call-action-icon bg-[#ef6d63] text-white">
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                 <path d="M4 15c4-5 12-5 16 0M8 15l-2 4m10-4 2 4" />
