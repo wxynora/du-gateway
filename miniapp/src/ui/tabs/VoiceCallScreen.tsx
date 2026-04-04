@@ -329,7 +329,10 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[80] overflow-hidden bg-[#111214] text-white voice-call-screen">
       <div className="relative z-10 flex min-h-dvh flex-col px-5 pb-8 pt-4 safe-bottom">
-        <div className="flex items-center justify-between">
+        <div
+          className="flex items-center justify-between"
+          style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
+        >
           <button className="voice-call-top-btn bg-white/10" onClick={endCall} type="button">
             <span className="text-lg leading-none">×</span>
           </button>
