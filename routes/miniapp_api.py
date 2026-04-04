@@ -311,8 +311,11 @@ def _call_voice_chat_pipeline(user_text: str, window_id: str) -> tuple[str, str 
     text = str(user_text or "").strip()
     if not text:
         return "", "语音识别结果为空"
+    url, api_key = _resolve_translation_upstream()
+    model = _pick_translation_model(url, api_key)
     body = {
         "messages": [{"role": "user", "content": text}],
+        "model": model,
         "stream": False,
     }
     headers = {
