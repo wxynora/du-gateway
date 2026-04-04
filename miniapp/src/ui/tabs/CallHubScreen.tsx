@@ -181,7 +181,6 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
         avatarUrl: String(data.avatarUrl || prev.avatarUrl || ""),
         useAvatarImage: true,
       }));
-      setAvatarPreviewUrl("");
       toast("头像已更新");
     } catch (e: any) {
       setAvatarPreviewUrl("");

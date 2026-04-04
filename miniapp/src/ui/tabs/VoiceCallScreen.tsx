@@ -13,13 +13,6 @@ type VoiceConfig = {
   theme?: string;
 };
 
-type CallTurn = {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  createdAt: number;
-};
-
 type CallStatus = "connecting" | "ready" | "recording" | "recognizing" | "speaking" | "error";
 
 const DEFAULT_CONFIG: VoiceConfig = {
@@ -46,15 +39,6 @@ function formatSeconds(total: number): string {
   return `${mm}:${ss}`;
 }
 
-function makeTurn(role: "user" | "assistant", text: string): CallTurn {
-  return {
-    id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    role,
-    text,
-    createdAt: Date.now(),
-  };
-}
-
 function resolveRecorderMimeType(): string {
   if (typeof window === "undefined" || typeof window.MediaRecorder === "undefined") return "";
   const mediaRecorderCtor = window.MediaRecorder as typeof MediaRecorder;
@@ -76,7 +60,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [draftName, setDraftName] = useState(DEFAULT_CONFIG.displayName);
   const [draftSubtitle, setDraftSubtitle] = useState(DEFAULT_CONFIG.subtitle);
   const [useAvatarImage, setUseAvatarImage] = useState(false);
@@ -84,7 +67,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [muted, setMuted] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
-  const [turns, setTurns] = useState<CallTurn[]>([]);
   const [callId, setCallId] = useState(() => `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const [callStartedAtIso] = useState(() => new Date().toISOString());
 
@@ -226,11 +208,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       if (data.call_id) setCallId(String(data.call_id));
 
-      const userText = String(data.user_text || "").trim();
-      const replyText = String(data.reply_text || "").trim();
-      if (userText) setTurns((prev) => [...prev, makeTurn("user", userText)]);
-      if (replyText) setTurns((prev) => [...prev, makeTurn("assistant", replyText)]);
-
       if (data.audio_b64) {
         setStatus("speaking");
         setStatusText("渡正在讲话...");
@@ -333,19 +310,16 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[80] overflow-hidden bg-[#0b121d] text-white voice-call-screen">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(83,145,216,0.32),transparent_38%),radial-gradient(circle_at_80%_20%,rgba(137,216,200,0.2),transparent_28%),linear-gradient(180deg,#0f1824_0%,#08111c_100%)]" />
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.02),transparent_30%,rgba(0,0,0,0.2)_100%)]" />
+    <div className="fixed inset-0 z-[80] overflow-hidden bg-[#111214] text-white voice-call-screen">
       <div className="relative z-10 flex min-h-dvh flex-col px-5 pb-8 pt-4 safe-bottom">
         <div className="flex items-center justify-between">
-          <button className="voice-call-top-btn" onClick={endCall} type="button">
+          <button className="voice-call-top-btn bg-white/10" onClick={endCall} type="button">
             <span className="text-lg leading-none">×</span>
           </button>
           <div className="text-center">
-            <div className="text-[12px] uppercase tracking-[0.35em] text-white/45">Voice Call</div>
-            <div className="mt-1 text-sm text-white/75">{formatSeconds(elapsedSeconds)}</div>
+            <div className="text-[13px] text-white/72">{formatSeconds(elapsedSeconds)}</div>
           </div>
-          <button className="voice-call-top-btn" onClick={() => setSettingsOpen(true)} type="button">
+          <button className="voice-call-top-btn bg-white/10" onClick={() => setSettingsOpen(true)} type="button">
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
               <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1" />
             </svg>
@@ -357,7 +331,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
             {avatarSrc ? (
               <img src={avatarSrc} alt={config.displayName} className="h-full w-full object-cover" />
             ) : (
-              <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(145deg,#5886d7,#7cd1c0)] text-[64px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]">
+              <div className="flex h-full w-full items-center justify-center bg-[#2b2d31] text-[64px] font-semibold text-white">
                 {(config.displayName || "渡").slice(0, 1)}
               </div>
             )}
@@ -370,7 +344,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
 
           <div className="mt-8 flex items-center gap-2">
             <span className={`voice-call-dot ${status === "recording" ? "voice-call-dot-live" : ""}`} />
-            <span className="text-sm text-white/82">{statusText}</span>
+            <span className="text-sm text-white/74">{statusText}</span>
           </div>
 
           <div className="mt-8 flex items-end gap-2">
@@ -394,7 +368,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
                 ? "bg-white/8 text-white/35"
                 : status === "recording"
                 ? "bg-[#8fd4bf] text-[#0d2c25] shadow-[0_22px_44px_rgba(143,212,191,0.28)]"
-                : "bg-white/14 text-white shadow-[0_20px_40px_rgba(0,0,0,0.22)]")
+                : "bg-white/12 text-white shadow-[0_12px_28px_rgba(0,0,0,0.18)]")
             }
             onPointerDown={(e) => {
               e.preventDefault();
@@ -411,7 +385,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
             disabled={muted || status === "recognizing" || status === "speaking" || status === "connecting"}
           >
             <div>
-              <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-white/12">
+              <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-white/10">
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Z" />
                   <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
@@ -420,17 +394,9 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
               {status === "recording" ? "松开发送" : "按住说话"}
             </div>
           </button>
-
-          <button
-            type="button"
-            className="mt-4 text-sm text-white/56 underline-offset-4 transition hover:text-white/80"
-            onClick={() => setHistoryOpen(true)}
-          >
-            查看本次通话记录
-          </button>
         </div>
 
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <button type="button" className="voice-call-action-btn" onClick={() => setMuted((v) => !v)}>
             <span className={`voice-call-action-icon ${muted ? "bg-[#e9b7b2] text-[#6b2924]" : ""}`}>
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -449,15 +415,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
             <span>{speakerOn ? "扬声器" : "已静音"}</span>
           </button>
 
-          <button type="button" className="voice-call-action-btn" onClick={() => setHistoryOpen(true)}>
-            <span className="voice-call-action-icon">
-              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M5 5h14v14H5zM8 9h8M8 13h6M8 17h8" />
-              </svg>
-            </span>
-            <span>记录</span>
-          </button>
-
           <button type="button" className="voice-call-action-btn" onClick={endCall}>
             <span className="voice-call-action-icon bg-[#ef6d63] text-white">
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -468,39 +425,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </div>
-
-      {historyOpen ? (
-        <div className="absolute inset-x-0 bottom-0 z-20 rounded-t-[30px] bg-[rgba(9,15,23,0.96)] px-5 pb-8 pt-4 backdrop-blur-xl">
-          <div className="mb-4 flex items-center justify-between">
-            <div className="text-sm font-medium text-white/85">本次通话记录</div>
-            <button className="voice-call-top-btn" type="button" onClick={() => setHistoryOpen(false)}>
-              <span className="text-lg leading-none">×</span>
-            </button>
-          </div>
-          <div className="max-h-[46vh] space-y-3 overflow-auto pr-1">
-            {turns.length ? (
-              turns.map((turn) => (
-                <div
-                  key={turn.id}
-                  className={
-                    "rounded-[20px] px-4 py-3 text-sm leading-6 " +
-                    (turn.role === "assistant"
-                      ? "bg-[rgba(136,207,194,0.18)] text-white"
-                      : "bg-white/8 text-white/82")
-                  }
-                >
-                  <div className="mb-1 text-[11px] uppercase tracking-[0.24em] text-white/38">
-                    {turn.role === "assistant" ? config.displayName || "渡" : "你"}
-                  </div>
-                  <div>{turn.text}</div>
-                </div>
-              ))
-            ) : (
-              <div className="rounded-[22px] bg-white/6 px-4 py-6 text-center text-sm text-white/52">还没有通话内容</div>
-            )}
-          </div>
-        </div>
-      ) : null}
 
       {settingsOpen ? (
         <div className="absolute inset-0 z-30 bg-black/35 backdrop-blur-[2px]">

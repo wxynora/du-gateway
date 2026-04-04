@@ -1610,7 +1610,13 @@ def miniapp_get_voice_config():
     avatar_version = int(merged.get("avatarVersion") or 0)
     merged["avatarVersion"] = avatar_version
     merged["useAvatarImage"] = bool(merged.get("useAvatarImage"))
+    if not merged["useAvatarImage"]:
+        data, _ = r2_store.get_miniapp_voice_avatar()
+        if data:
+            merged["useAvatarImage"] = True
     merged["avatarUrl"] = _miniapp_voice_avatar_url(avatar_version) if avatar_version > 0 and merged["useAvatarImage"] else ""
+    if merged["useAvatarImage"] and not merged["avatarUrl"]:
+        merged["avatarUrl"] = "/miniapp-api/voice-avatar"
     return jsonify({"ok": True, "config": merged})
 
 
@@ -1661,7 +1667,9 @@ def miniapp_upload_voice_avatar():
         return jsonify({"ok": False, "error": "头像保存失败"}), 500
     conf["avatarVersion"] = new_ver
     conf["useAvatarImage"] = True
-    r2_store.save_miniapp_voice_config(conf)
+    conf_ok = r2_store.save_miniapp_voice_config(conf)
+    if not conf_ok:
+        return jsonify({"ok": False, "error": "头像配置保存失败"}), 500
     return jsonify({"ok": True, "avatarVersion": new_ver, "avatarUrl": _miniapp_voice_avatar_url(new_ver)})
 
 
