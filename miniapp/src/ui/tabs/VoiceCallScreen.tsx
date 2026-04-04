@@ -625,8 +625,8 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[80] overflow-hidden bg-[#111214] text-white voice-call-screen">
-      <div className="relative z-10 flex min-h-dvh flex-col px-5 pb-8 pt-4 safe-bottom">
+    <div className="min-h-dvh overflow-hidden bg-[#111214] text-white voice-call-screen">
+      <div className="relative z-10 mx-auto flex min-h-dvh max-w-xl flex-col px-5 pb-8 pt-4 safe-bottom">
         <div className="text-center" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 28px)" }}>
           <div className="text-[13px] text-white/72">{formatSeconds(elapsedSeconds)}</div>
         </div>
