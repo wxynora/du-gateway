@@ -876,7 +876,7 @@ def _is_memory_meta_query(text: str) -> bool:
 
 
 def _last_4_turns_text_for_rewrite(messages: list[dict]) -> str:
-    """取最近 4 轮 user/assistant 文本，供检索查询改写。"""
+    """取最近 4 轮 user/assistant 文本，供检索查询改写时做参考。"""
     ua_msgs: list[tuple[str, str]] = []
     for m in messages or []:
         role = (m.get("role") or "").lower()
@@ -916,21 +916,24 @@ def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> lis
     prompt = (
         "你在帮我生成“记忆检索扩展 query”。\n\n"
         "规则：\n"
-        "1. 当前用户消息优先级最高，必须围绕它生成 query，不能被前几轮话题带偏。\n"
-        "2. 最近对话上下文只能用于补充指代、省略、人物、事件背景，不能替换当前消息主题。\n"
-        "3. 优先保留当前消息里的事件、对象、状态、偏好；不要只提纯情绪词，不要只提前几轮内容。\n"
-        "4. 如果当前消息已经很明确，就直接围绕当前消息改写，不要硬扩展到旧话题。\n"
-        "5. 输出要适合检索记忆：尽量具体，少用空泛代词；避免只有“很烦/难受/委屈”这类脱离事件的情绪词。\n\n"
-        "以下是最近的对话上下文：\n"
+        "1. 只能把“当前用户消息”当作 query 主体，扩展 query 必须直接围绕当前用户消息改写。\n"
+        "2. 最近对话上下文只是参考，只有在当前用户消息存在指代、省略、承接时，才允许用它补人物、对象、事件背景。\n"
+        "3. 不要把前几轮单独提到的话题拿来当 query；如果前文和当前用户消息不是同一件事，就忽略前文。\n"
+        "4. 优先保留当前用户消息里的事件、对象、状态、偏好；不要只提纯情绪词，不要把前几轮内容当主词。\n"
+        "5. 如果当前用户消息已经很明确，就直接围绕当前用户消息改写，不要硬扩展到旧话题。\n"
+        "6. 输出要适合检索记忆：尽量具体，少用空泛代词；避免只有“很烦/难受/委屈”这类脱离事件的情绪词。\n\n"
+        "当前用户消息（唯一主体）：\n"
+        f"{user_message}\n\n"
+        "最近对话上下文（仅供参考，不能喧宾夺主）：\n"
         f"{last_4_turns or '（无）'}\n\n"
-        f"当前用户消息：{user_message}\n\n"
         "请生成 3 个不同角度的检索 query。\n"
         "要求：\n"
         "- 每行一个，不要编号，不要解释\n"
         "- 每行 8-24 字\n"
         "- 必须和“当前用户消息”直接相关\n"
         "- 优先包含实体词、事件词、状态词、偏好词\n"
-        "- 不要让前几轮上下文喧宾夺主\n"
+        "- 如果用了上下文，也只能是为了补全当前用户消息里的指代或省略\n"
+        "- 不要直接复述前几轮内容，不要让前几轮上下文喧宾夺主\n"
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "max_tokens": 160}
