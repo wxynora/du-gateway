@@ -14,6 +14,7 @@ const DuDayTab = lazy(() => import("./tabs/DuDayTab").then((m) => ({ default: m.
 const DuNotebookTab = lazy(() => import("./tabs/DuNotebookTab").then((m) => ({ default: m.DuNotebookTab })));
 const WenyouTab = lazy(() => import("./tabs/WenyouTab").then((m) => ({ default: m.WenyouTab })));
 const StickersTab = lazy(() => import("./tabs/StickersTab").then((m) => ({ default: m.StickersTab })));
+const CallHubScreen = lazy(() => import("./tabs/CallHubScreen").then((m) => ({ default: m.CallHubScreen })));
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "wenyou" | "stickers" | null;
 type BgPreset = "cream" | "grid" | "soft";
@@ -63,6 +64,7 @@ function Shell() {
   const [showAlarm, setShowAlarm] = useState(false);
   const [showDuDay, setShowDuDay] = useState(false);
   const [showTree, setShowTree] = useState(false);
+  const [showCallHub, setShowCallHub] = useState(false);
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [dailyRefreshing, setDailyRefreshing] = useState(false);
@@ -192,6 +194,7 @@ function Shell() {
     { title: "渡的记事本", desc: "固定注入 · 条目管理", icon: <LineIcon name="notebook" />, tone: "blue" as const, onClick: () => setPanel("du-notebook") },
     { title: "文游模块", desc: "系统空间 + 已完成副本", icon: <LineIcon name="wenyou-hub" />, tone: "pink" as const, onClick: () => setPanel("wenyou") },
     { title: "表情包", desc: "情绪分类 · 上传管理", icon: <LineIcon name="stickers" />, tone: "yellow" as const, onClick: () => setPanel("stickers") },
+    { title: "通话", desc: "语音 / 视频占位 / 通话记录", icon: <LineIcon name="voice-call" />, tone: "pink" as const, onClick: () => setShowCallHub(true) },
     { title: "核心Prompt", desc: "固定注入，可随时更新", icon: <LineIcon name="prompt" />, tone: "blue" as const, onClick: () => setShowCorePrompt(true) },
   ];
 
@@ -301,6 +304,7 @@ function Shell() {
         </Modal>
       ) : null}
       {showTree ? <CyberTreeModal data={tree} onClose={() => setShowTree(false)} onRefresh={loadTree} /> : null}
+      {showCallHub ? <LazyPane><CallHubScreen onClose={() => setShowCallHub(false)} /></LazyPane> : null}
       <HomeOrbMenu
         open={showHomeMenu}
         onToggle={() => setShowHomeMenu((v: boolean) => !v)}
@@ -388,7 +392,7 @@ function FeatureTile({
   );
 }
 
-function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" | "notebook" | "wenyou-archives" | "wenyou-hub" | "stickers" }) {
+function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" | "notebook" | "wenyou-archives" | "wenyou-hub" | "stickers" | "voice-call" }) {
   const cls = "h-4 w-4 text-cream-text";
   if (name === "logs") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 12h16M4 18h10" /></svg>;
   if (name === "reasoning") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 12h4l2-4 4 8 2-4h4" /></svg>;
@@ -397,6 +401,7 @@ function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt"
   if (name === "wenyou-archives") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 8h8M8 12h8M8 16h6" /></svg>;
   if (name === "wenyou-hub") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3 4 7v5c0 5 3.4 8.7 8 9 4.6-.3 8-4 8-9V7l-8-4zM9 12h6M12 9v6" /></svg>;
   if (name === "stickers") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="9" cy="10" r="1.2" fill="currentColor" /><circle cx="15" cy="10" r="1.2" fill="currentColor" /><path d="M8 14c1.6 2 6.4 2 8 0" /></svg>;
+  if (name === "voice-call") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M7 5c4-2 6 0 6 0l2 2c.7.7.9 1.9.4 2.8l-1.3 2.3a1.8 1.8 0 0 0 .2 2l1.5 1.8c.7.8.6 2.1-.2 2.8l-1.3 1.1c-.8.6-1.8.7-2.7.3-3.4-1.7-6.2-4.6-7.9-8-.4-.8-.3-1.9.3-2.6l1.1-1.3c.7-.8 1.9-.9 2.8-.2l1.8 1.5a1.8 1.8 0 0 0 2 .2l2.3-1.3c.9-.5 2.1-.4 2.8.4l2 2s2 2 0 6" /></svg>;
   if (name === "upstream") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M14 7l3-3m-3 3 3 3M20 17H10m0 0-3-3m3 3-3 3" /></svg>;
   if (name === "prompt") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
   if (name === "tree") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21v-5M12 16c-3.8 0-6-2.2-6-5 0-2.2 1.4-4 3.4-4.7A4.8 4.8 0 0 1 19 8c1.8.8 3 2.5 3 4.5 0 3-2.4 3.5-5 3.5h-5z" /></svg>;

@@ -4,12 +4,14 @@ import math
 import logging
 import json
 import re
+import base64
+from uuid import uuid4
 from collections import Counter
 from pathlib import Path
 from datetime import datetime, timedelta
 
 import requests
-from flask import Blueprint, Response, jsonify, request, stream_with_context
+from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
 from config import (
     MINIAPP_LOG_FILE,
@@ -23,6 +25,8 @@ from config import (
     TARGET_AI_API_KEY,
     TARGET_AI_URLS,
     TARGET_AI_API_KEYS,
+    VOICE_CALL_MAX_BYTES,
+    VOICE_CALL_WINDOW_ID,
 )
 from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
@@ -199,6 +203,144 @@ def _parse_beijing_dt(value: str) -> datetime | None:
 def _mood_day_wave(seed_text: str) -> int:
     seed = sum(ord(ch) for ch in (seed_text or ""))
     return (seed % 5) - 2
+
+
+def _voice_call_default_config() -> dict:
+    return {
+        "displayName": "渡",
+        "subtitle": "语音通话中",
+        "avatarVersion": 0,
+        "useAvatarImage": False,
+        "theme": "night",
+    }
+
+
+def _miniapp_voice_avatar_url(avatar_version: int) -> str:
+    v = max(0, int(avatar_version or 0))
+    if v > 0:
+        return f"/miniapp-api/voice-avatar/{v}"
+    return "/miniapp-api/voice-avatar"
+
+
+def _resolve_voice_call_window_id(explicit_window_id: str = "") -> str:
+    wid = str(explicit_window_id or "").strip()
+    if wid:
+        return wid
+    tg_uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if tg_uid > 0:
+        return f"tg_{tg_uid}"
+    return (VOICE_CALL_WINDOW_ID or "miniapp_voice_call").strip() or "miniapp_voice_call"
+
+
+def _sort_call_records(items: list[dict]) -> list[dict]:
+    return sorted(items or [], key=lambda x: str(x.get("updated_at") or x.get("started_at") or ""), reverse=True)
+
+
+def _call_record_summary(item: dict) -> dict:
+    turns = item.get("turns") or []
+    started_at = str(item.get("started_at") or "").strip()
+    title = str(item.get("title") or "").strip()
+    if not title:
+        title = "语音通话"
+    preview = ""
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        text = str(turn.get("text") or "").strip()
+        if text:
+            preview = text[:48]
+            break
+    return {
+        "id": str(item.get("id") or "").strip(),
+        "mode": str(item.get("mode") or "voice"),
+        "started_at": started_at,
+        "updated_at": str(item.get("updated_at") or started_at).strip() or started_at,
+        "title": title,
+        "preview": preview,
+        "turn_count": len(turns),
+    }
+
+
+def _append_call_record_turns(call_id: str, started_at: str, turns: list[dict], mode: str = "voice") -> bool:
+    cid = str(call_id or "").strip()
+    if not cid or not turns:
+        return False
+    items = r2_store.get_miniapp_call_records() or []
+    now_ts = now_beijing_iso()
+    found = None
+    for item in items:
+        if str(item.get("id") or "").strip() == cid:
+            found = item
+            break
+    if found is None:
+        found = {
+            "id": cid,
+            "mode": mode or "voice",
+            "started_at": started_at or now_ts,
+            "updated_at": now_ts,
+            "title": "语音通话",
+            "turns": [],
+        }
+        items.append(found)
+    found["updated_at"] = now_ts
+    found.setdefault("turns", [])
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        text = str(turn.get("text") or "").strip()
+        role = str(turn.get("role") or "").strip().lower()
+        if not text or role not in ("user", "assistant"):
+            continue
+        found["turns"].append(
+            {
+                "id": str(uuid4()),
+                "role": role,
+                "text": text,
+                "kind": str(turn.get("kind") or "voice").strip() or "voice",
+                "timestamp": str(turn.get("timestamp") or now_ts).strip() or now_ts,
+            }
+        )
+    if found.get("turns"):
+        first_text = str((found.get("turns") or [{}])[0].get("text") or "").strip()
+        found["title"] = first_text[:24] if first_text else "语音通话"
+    items = _sort_call_records(items)
+    return r2_store.save_miniapp_call_records(items)
+
+
+def _call_voice_chat_pipeline(user_text: str, window_id: str) -> tuple[str, str | None]:
+    text = str(user_text or "").strip()
+    if not text:
+        return "", "语音识别结果为空"
+    body = {
+        "messages": [{"role": "user", "content": text}],
+        "stream": False,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Window-Id": _resolve_voice_call_window_id(window_id),
+    }
+    try:
+        from routes.chat import chat_completions
+
+        with current_app.test_request_context("/v1/chat/completions", method="POST", json=body, headers=headers):
+            rv = chat_completions()
+            resp = current_app.make_response(rv)
+        data = json.loads(resp.get_data(as_text=True) or "{}")
+    except Exception as e:
+        logger.warning("voice chat pipeline 请求失败 err=%s", e)
+        return "", "聊天服务暂时不可用"
+    if resp.status_code != 200:
+        msg = ""
+        if isinstance(data, dict):
+            msg = str(data.get("error") or data.get("message") or "").strip()
+        return "", (msg or f"聊天服务返回 HTTP {resp.status_code}")
+    try:
+        reply_text = str((((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+    except Exception:
+        reply_text = ""
+    if not reply_text:
+        return "", "聊天服务没有返回正文"
+    return reply_text, None
 
 
 def _message_text(content) -> str:
@@ -1458,6 +1600,181 @@ def miniapp_get_background_image_versioned(image_version: int):
     if not data:
         return jsonify({"ok": False, "error": "暂无背景图"}), 404
     return Response(data, mimetype=ctype, headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@bp.route("/voice-config", methods=["GET"])
+def miniapp_get_voice_config():
+    raw = r2_store.get_miniapp_voice_config() or {}
+    merged = _voice_call_default_config()
+    merged.update({k: v for k, v in raw.items() if v is not None})
+    avatar_version = int(merged.get("avatarVersion") or 0)
+    merged["avatarVersion"] = avatar_version
+    merged["useAvatarImage"] = bool(merged.get("useAvatarImage"))
+    merged["avatarUrl"] = _miniapp_voice_avatar_url(avatar_version) if avatar_version > 0 and merged["useAvatarImage"] else ""
+    return jsonify({"ok": True, "config": merged})
+
+
+@bp.route("/voice-config", methods=["PUT"])
+def miniapp_put_voice_config():
+    data = request.get_json(silent=True) or {}
+    current = r2_store.get_miniapp_voice_config() or {}
+    payload = _voice_call_default_config()
+    payload.update({k: v for k, v in current.items() if v is not None})
+    display_name = str(data.get("displayName") or payload.get("displayName") or "渡").strip()[:24] or "渡"
+    subtitle = str(data.get("subtitle") or payload.get("subtitle") or "语音通话中").strip()[:40] or "语音通话中"
+    theme = str(data.get("theme") or payload.get("theme") or "night").strip()[:16] or "night"
+    avatar_version = max(int(payload.get("avatarVersion") or 0), int(data.get("avatarVersion") or 0))
+    payload.update(
+        {
+            "displayName": display_name,
+            "subtitle": subtitle,
+            "theme": theme,
+            "avatarVersion": avatar_version,
+            "useAvatarImage": bool(data.get("useAvatarImage", payload.get("useAvatarImage"))),
+        }
+    )
+    ok = r2_store.save_miniapp_voice_config(payload)
+    payload["avatarUrl"] = _miniapp_voice_avatar_url(avatar_version) if avatar_version > 0 and payload["useAvatarImage"] else ""
+    return jsonify({"ok": ok, "config": payload})
+
+
+@bp.route("/voice-avatar", methods=["POST"])
+def miniapp_upload_voice_avatar():
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"ok": False, "error": "缺少 file"}), 400
+    ctype = (f.mimetype or "").strip().lower()
+    if ctype not in ("image/jpeg", "image/png", "image/webp", "image/gif"):
+        return jsonify({"ok": False, "error": "仅支持 jpg/png/webp/gif"}), 400
+    content = f.read()
+    if not content:
+        return jsonify({"ok": False, "error": "文件为空"}), 400
+    if len(content) > 8 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "头像过大（最大 8MB）"}), 400
+    conf = r2_store.get_miniapp_voice_config() or _voice_call_default_config()
+    old_ver = int(conf.get("avatarVersion") or 0)
+    new_ver = int(time.time() * 1000)
+    if new_ver <= old_ver:
+        new_ver = old_ver + 1
+    ok = r2_store.save_miniapp_voice_avatar(content, ctype, image_version=new_ver)
+    if not ok:
+        return jsonify({"ok": False, "error": "头像保存失败"}), 500
+    conf["avatarVersion"] = new_ver
+    conf["useAvatarImage"] = True
+    r2_store.save_miniapp_voice_config(conf)
+    return jsonify({"ok": True, "avatarVersion": new_ver, "avatarUrl": _miniapp_voice_avatar_url(new_ver)})
+
+
+@bp.route("/voice-avatar", methods=["GET"])
+def miniapp_get_voice_avatar():
+    data, ctype = r2_store.get_miniapp_voice_avatar()
+    if not data:
+        return jsonify({"ok": False, "error": "暂无头像"}), 404
+    return Response(data, mimetype=ctype, headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@bp.route("/voice-avatar/<int:image_version>", methods=["GET"])
+def miniapp_get_voice_avatar_versioned(image_version: int):
+    data, ctype = r2_store.get_miniapp_voice_avatar(image_version=image_version)
+    if not data:
+        return jsonify({"ok": False, "error": "暂无头像"}), 404
+    return Response(data, mimetype=ctype, headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@bp.route("/voice-call", methods=["POST"])
+def miniapp_voice_call():
+    f = request.files.get("audio")
+    if not f:
+        return jsonify({"ok": False, "error": "缺少 audio"}), 400
+    mime_type = (f.mimetype or request.form.get("mime_type") or "application/octet-stream").strip().lower()
+    if mime_type not in ("audio/webm", "audio/mp4", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg"):
+        return jsonify({"ok": False, "error": f"暂不支持的音频格式：{mime_type or 'unknown'}"}), 400
+    audio_bytes = f.read()
+    if not audio_bytes:
+        return jsonify({"ok": False, "error": "音频为空"}), 400
+    if len(audio_bytes) > max(1024, int(VOICE_CALL_MAX_BYTES or 0)):
+        return jsonify({"ok": False, "error": "音频太大了，缩短一点再试"}), 400
+
+    filename = (f.filename or "voice.webm").strip() or "voice.webm"
+    try:
+        from services.stt import speech_to_text
+        from services.minimax_tts import tts_to_audio_bytes
+    except Exception as e:
+        logger.warning("voice-call 依赖加载失败 err=%s", e)
+        return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
+
+    user_text = speech_to_text(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename)
+    if not user_text:
+        return jsonify({"ok": False, "error": "没识别出内容，再说一遍试试"}), 422
+
+    window_id = _resolve_voice_call_window_id(request.form.get("window_id") or "")
+    call_id = (request.form.get("call_id") or "").strip() or str(uuid4())
+    call_started_at = (request.form.get("call_started_at") or "").strip() or now_beijing_iso()
+    reply_text, reply_err = _call_voice_chat_pipeline(user_text=user_text, window_id=window_id)
+    if reply_err:
+        return jsonify({"ok": False, "error": reply_err, "user_text": user_text}), 502
+
+    audio_reply = tts_to_audio_bytes(reply_text)
+    audio_b64 = base64.b64encode(audio_reply).decode("ascii") if audio_reply else ""
+    _append_call_record_turns(
+        call_id=call_id,
+        started_at=call_started_at,
+        turns=[
+            {"role": "user", "text": user_text, "kind": "voice", "timestamp": now_beijing_iso()},
+            {"role": "assistant", "text": reply_text, "kind": "voice", "timestamp": now_beijing_iso()},
+        ],
+        mode="voice",
+    )
+    return jsonify(
+        {
+            "ok": True,
+            "call_id": call_id,
+            "call_started_at": call_started_at,
+            "user_text": user_text,
+            "reply_text": reply_text,
+            "audio_b64": audio_b64,
+            "audio_format": "mp3" if audio_b64 else "",
+        }
+    )
+
+
+@bp.route("/call-records", methods=["GET"])
+def miniapp_get_call_records():
+    items = _sort_call_records(r2_store.get_miniapp_call_records() or [])
+    rows = [_call_record_summary(item) for item in items]
+    return jsonify({"ok": True, "items": rows})
+
+
+@bp.route("/call-records/<string:call_id>", methods=["GET"])
+def miniapp_get_call_record_detail(call_id: str):
+    cid = str(call_id or "").strip()
+    if not cid:
+        return jsonify({"ok": False, "error": "缺少通话 id"}), 400
+    items = r2_store.get_miniapp_call_records() or []
+    for item in items:
+        if str(item.get("id") or "").strip() != cid:
+            continue
+        return jsonify(
+            {
+                "ok": True,
+                "item": {
+                    **_call_record_summary(item),
+                    "turns": item.get("turns") or [],
+                },
+            }
+        )
+    return jsonify({"ok": False, "error": "找不到这条通话记录"}), 404
+
+
+@bp.route("/call-records/<string:call_id>", methods=["DELETE"])
+def miniapp_delete_call_record(call_id: str):
+    cid = str(call_id or "").strip()
+    if not cid:
+        return jsonify({"ok": False, "error": "缺少通话 id"}), 400
+    ok = r2_store.delete_miniapp_call_record(cid)
+    if not ok:
+        return jsonify({"ok": False, "error": "删除失败或记录不存在"}), 404
+    return jsonify({"ok": True, "id": cid})
 
 
 # ---------- 表情包 stickers/（MiniApp 管理 + 无公网时读图代理） ----------

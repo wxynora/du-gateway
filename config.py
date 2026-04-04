@@ -366,6 +366,16 @@ MINIMAX_AUDIO_CHANNEL = int(os.environ.get("MINIMAX_AUDIO_CHANNEL", "1"))
 # Telegram 语音回复开关：允许渡用 <voice>...</voice> 触发发送语音
 TELEGRAM_VOICE_REPLY_ENABLED = os.environ.get("TELEGRAM_VOICE_REPLY_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 
+# MiniApp 语音通话（STT）
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "").strip()
+DEEPGRAM_STT_URL = os.environ.get("DEEPGRAM_STT_URL", "https://api.deepgram.com/v1/listen").strip()
+DEEPGRAM_STT_MODEL = os.environ.get("DEEPGRAM_STT_MODEL", "nova-3").strip()
+DEEPGRAM_STT_LANGUAGE = os.environ.get("DEEPGRAM_STT_LANGUAGE", "zh-CN").strip()
+DEEPGRAM_STT_SMART_FORMAT = os.environ.get("DEEPGRAM_STT_SMART_FORMAT", "1").strip().lower() in ("1", "true", "yes")
+VOICE_CALL_MAX_SECONDS = int(float(os.environ.get("VOICE_CALL_MAX_SECONDS", "90") or "90"))
+VOICE_CALL_MAX_BYTES = int(float(os.environ.get("VOICE_CALL_MAX_BYTES", str(12 * 1024 * 1024)) or str(12 * 1024 * 1024)))
+VOICE_CALL_WINDOW_ID = os.environ.get("VOICE_CALL_WINDOW_ID", "miniapp_voice_call").strip() or "miniapp_voice_call"
+
 # 文游：固定 Telegram 群（仅该群内处理 /story /go /end；0=关闭）
 WENYOU_GROUP_CHAT_ID = int(os.environ.get("WENYOU_GROUP_CHAT_ID", "0") or "0")
 # 文游：只认该用户 ID 的指令（留空则沿用 TELEGRAM_PROACTIVE_TARGET_USER_ID）

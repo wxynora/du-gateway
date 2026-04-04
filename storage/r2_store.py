@@ -36,6 +36,12 @@ R2_KEY_CORE_PROMPT = "global/core_prompt_316.txt"
 R2_KEY_MINIAPP_BG_CONFIG = "global/miniapp_bg_config.json"
 R2_KEY_MINIAPP_BG_IMAGE = "global/miniapp_bg_image"
 R2_KEY_MINIAPP_BG_IMAGE_PREFIX = "global/miniapp_bg_image_v"
+# MiniApp 语音通话头像与界面配置
+R2_KEY_MINIAPP_VOICE_CONFIG = "global/miniapp_voice_config.json"
+R2_KEY_MINIAPP_VOICE_AVATAR = "global/miniapp_voice_avatar"
+R2_KEY_MINIAPP_VOICE_AVATAR_PREFIX = "global/miniapp_voice_avatar_v"
+# MiniApp 通话记录
+R2_KEY_MINIAPP_CALL_RECORDS = "global/miniapp_call_records.json"
 # MiniApp 首页「渡今天想说的话」（按日缓存）
 R2_KEY_MINIAPP_DAILY_WHISPER = "global/miniapp_daily_whisper.json"
 # MiniApp 每日小报告（按北京日期缓存）
@@ -1577,6 +1583,134 @@ def get_miniapp_bg_image(image_version: int | None = None) -> tuple[Optional[byt
     except Exception as e:
         logger.error("get_miniapp_bg_image 失败 error=%s", e, exc_info=True)
         return None, ""
+
+
+def get_miniapp_voice_config() -> Optional[dict]:
+    """读取 MiniApp 语音通话配置（JSON）。"""
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_MINIAPP_VOICE_CONFIG)
+    return data if isinstance(data, dict) else None
+
+
+def save_miniapp_voice_config(data: dict) -> bool:
+    """保存 MiniApp 语音通话配置（JSON）。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(data, dict):
+        return False
+    try:
+        _write_json(client, R2_KEY_MINIAPP_VOICE_CONFIG, data)
+        return True
+    except Exception as e:
+        logger.error("save_miniapp_voice_config 失败 error=%s", e, exc_info=True)
+        return False
+
+
+def _miniapp_voice_avatar_versioned_key(image_version: int) -> str:
+    return f"{R2_KEY_MINIAPP_VOICE_AVATAR_PREFIX}_{int(image_version)}"
+
+
+def save_miniapp_voice_avatar(content: bytes, content_type: str, image_version: int | None = None) -> bool:
+    """保存 MiniApp 语音通话头像（可选写入版本化键）。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not content:
+        return False
+    ctype = (content_type or "application/octet-stream").strip() or "application/octet-stream"
+    try:
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=R2_KEY_MINIAPP_VOICE_AVATAR,
+            Body=content,
+            ContentType=ctype,
+        )
+        if image_version and int(image_version) > 0:
+            client.put_object(
+                Bucket=R2_BUCKET_NAME,
+                Key=_miniapp_voice_avatar_versioned_key(int(image_version)),
+                Body=content,
+                ContentType=ctype,
+            )
+        return True
+    except Exception as e:
+        logger.error("save_miniapp_voice_avatar 失败 error=%s", e, exc_info=True)
+        return False
+
+
+def get_miniapp_voice_avatar(image_version: int | None = None) -> tuple[Optional[bytes], str]:
+    """读取 MiniApp 语音通话头像，返回 (bytes, content_type)。支持按版本读取。"""
+    client = _s3_client()
+    if not client:
+        return None, ""
+    keys: list[str] = []
+    if image_version and int(image_version) > 0:
+        keys.append(_miniapp_voice_avatar_versioned_key(int(image_version)))
+    keys.append(R2_KEY_MINIAPP_VOICE_AVATAR)
+    try:
+        for key in keys:
+            try:
+                resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=key)
+            except ClientError as e:
+                code = (e.response or {}).get("Error", {}).get("Code", "")
+                if code == "NoSuchKey":
+                    continue
+                raise
+            body = resp["Body"].read()
+            ctype = ((resp.get("ContentType") or "") + "").strip() or "application/octet-stream"
+            if body:
+                return body, ctype
+        return None, ""
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code == "NoSuchKey":
+            return None, ""
+        logger.error("get_miniapp_voice_avatar 失败 error=%s", e, exc_info=True)
+        return None, ""
+    except Exception as e:
+        logger.error("get_miniapp_voice_avatar 失败 error=%s", e, exc_info=True)
+        return None, ""
+
+
+def get_miniapp_call_records() -> list[dict]:
+    """读取 MiniApp 通话记录列表。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_MINIAPP_CALL_RECORDS)
+    items = (data or {}).get("items") if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def save_miniapp_call_records(items: list[dict]) -> bool:
+    """保存 MiniApp 通话记录列表。"""
+    client = _s3_client()
+    if not client:
+        return False
+    payload = {"items": items if isinstance(items, list) else []}
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_MINIAPP_CALL_RECORDS, payload)
+            return True
+        except Exception as e:
+            logger.error("save_miniapp_call_records 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def delete_miniapp_call_record(call_id: str) -> bool:
+    """按 id 删除一条 MiniApp 通话记录。"""
+    cid = str(call_id or "").strip()
+    if not cid:
+        return False
+    items = get_miniapp_call_records() or []
+    before = len(items)
+    kept = [item for item in items if str((item or {}).get("id") or "").strip() != cid]
+    if len(kept) == before:
+        return False
+    return save_miniapp_call_records(kept)
 
 
 def get_miniapp_daily_whisper() -> Optional[dict]:
