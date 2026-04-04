@@ -74,6 +74,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState("");
   const [deletingId, setDeletingId] = useState("");
   const [records, setRecords] = useState<CallRecordSummary[]>([]);
   const [activeRecord, setActiveRecord] = useState<CallRecordDetail | null>(null);
@@ -93,6 +94,16 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (avatarPreviewUrl) {
+        try {
+          URL.revokeObjectURL(avatarPreviewUrl);
+        } catch {}
+      }
+    };
+  }, [avatarPreviewUrl]);
 
   async function loadRecords() {
     setRecordsLoading(true);
@@ -148,6 +159,15 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
 
   async function uploadAvatar(file: File | null) {
     if (!file || uploadingAvatar) return;
+    const localPreview = URL.createObjectURL(file);
+    setAvatarPreviewUrl((prev) => {
+      if (prev) {
+        try {
+          URL.revokeObjectURL(prev);
+        } catch {}
+      }
+      return localPreview;
+    });
     setUploadingAvatar(true);
     try {
       const form = new FormData();
@@ -161,15 +181,17 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
         avatarUrl: String(data.avatarUrl || prev.avatarUrl || ""),
         useAvatarImage: true,
       }));
+      setAvatarPreviewUrl("");
       toast("头像已更新");
     } catch (e: any) {
+      setAvatarPreviewUrl("");
       toast(e?.message || "头像上传失败");
     } finally {
       setUploadingAvatar(false);
     }
   }
 
-  const avatarSrc = config.useAvatarImage && config.avatarUrl ? buildApiAssetUrl(config.avatarUrl) : "";
+  const avatarSrc = avatarPreviewUrl || (config.useAvatarImage && config.avatarUrl ? buildApiAssetUrl(config.avatarUrl) : "");
   const rowBase =
     "flex w-full items-center gap-3 px-4 py-4 text-left transition active:scale-[0.995]";
 
