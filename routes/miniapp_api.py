@@ -321,6 +321,7 @@ def _call_voice_chat_pipeline(user_text: str, window_id: str) -> tuple[str, str 
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": _resolve_voice_call_window_id(window_id),
+        "X-Voice-Call-Slim": "1",
     }
     try:
         from routes.chat import chat_completions
@@ -341,9 +342,23 @@ def _call_voice_chat_pipeline(user_text: str, window_id: str) -> tuple[str, str 
         reply_text = str((((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
     except Exception:
         reply_text = ""
+    reply_text = _sanitize_voice_call_reply(reply_text)
     if not reply_text:
         return "", "聊天服务没有返回正文"
     return reply_text, None
+
+
+def _sanitize_voice_call_reply(text: str) -> str:
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    t = re.sub(r"^\s*[（(]\s*脑内\s*OS\s*[：:][\s\S]*?[)）]\s*", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"[（(][^()（）]{0,200}[)）]", "", t)
+    t = re.sub(r"[【\[][^【】\[\]]{0,200}[】\]]", "", t)
+    t = re.sub(r"[()（）【】\[\]]", "", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
 
 
 def _message_text(content) -> str:
