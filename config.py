@@ -369,9 +369,11 @@ TELEGRAM_VOICE_REPLY_ENABLED = os.environ.get("TELEGRAM_VOICE_REPLY_ENABLED", "1
 # MiniApp 语音通话（STT）
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_STT_URL = os.environ.get("DEEPGRAM_STT_URL", "https://api.deepgram.com/v1/listen").strip()
-DEEPGRAM_STT_MODEL = os.environ.get("DEEPGRAM_STT_MODEL", "nova-3").strip()
+DEEPGRAM_STT_WS_URL = os.environ.get("DEEPGRAM_STT_WS_URL", "wss://api.deepgram.com/v1/listen").strip()
+DEEPGRAM_STT_MODEL = os.environ.get("DEEPGRAM_STT_MODEL", "flux").strip()
 DEEPGRAM_STT_LANGUAGE = os.environ.get("DEEPGRAM_STT_LANGUAGE", "zh-CN").strip()
 DEEPGRAM_STT_SMART_FORMAT = os.environ.get("DEEPGRAM_STT_SMART_FORMAT", "1").strip().lower() in ("1", "true", "yes")
+DEEPGRAM_STT_ENDPOINTING = os.environ.get("DEEPGRAM_STT_ENDPOINTING", "10").strip() or "10"
 VOICE_CALL_MAX_SECONDS = int(float(os.environ.get("VOICE_CALL_MAX_SECONDS", "90") or "90"))
 VOICE_CALL_MAX_BYTES = int(float(os.environ.get("VOICE_CALL_MAX_BYTES", str(12 * 1024 * 1024)) or str(12 * 1024 * 1024)))
 VOICE_CALL_WINDOW_ID = os.environ.get("VOICE_CALL_WINDOW_ID", "miniapp_voice_call").strip() or "miniapp_voice_call"
