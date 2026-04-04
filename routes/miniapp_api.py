@@ -5,6 +5,7 @@ import logging
 import json
 import re
 import base64
+import threading
 from uuid import uuid4
 from collections import Counter
 from pathlib import Path
@@ -39,13 +40,17 @@ from utils.miniapp_panel_auth import (
     panel_auth_enabled,
     panel_auth_error,
     panel_auth_meta,
+    verify_panel_token,
 )
-from utils.telegram_webapp import enforce_telegram_initdata
+from utils.telegram_webapp import enforce_telegram_initdata, verify_telegram_init_data
 from utils.time_aware import today_beijing, now_beijing_iso
+from config import MINIAPP_TELEGRAM_AUTH_ENABLED, TELEGRAM_BOT_TOKEN
 
 
 bp = Blueprint("miniapp_api", __name__, url_prefix="/miniapp-api")
 logger = logging.getLogger(__name__)
+_VOICE_STREAM_LOCK = threading.Lock()
+_VOICE_STREAM_SESSIONS: dict[str, dict] = {}
 
 
 def _wenyou_session_id() -> int:
@@ -307,6 +312,429 @@ def _append_call_record_turns(call_id: str, started_at: str, turns: list[dict], 
     return r2_store.save_miniapp_call_records(items)
 
 
+def _cleanup_voice_stream_sessions(now_ts: float | None = None) -> None:
+    now_ts = float(now_ts or time.time())
+    expired: list[str] = []
+    with _VOICE_STREAM_LOCK:
+        for sid, session in list(_VOICE_STREAM_SESSIONS.items()):
+            updated_at = float(session.get("updated_at") or 0)
+            if now_ts - updated_at > 20 * 60:
+                expired.append(sid)
+        for sid in expired:
+            _VOICE_STREAM_SESSIONS.pop(sid, None)
+
+
+def _create_voice_stream_session(call_id: str, call_started_at: str) -> dict:
+    _cleanup_voice_stream_sessions()
+    session = {
+        "id": str(uuid4()),
+        "call_id": str(call_id or "").strip() or str(uuid4()),
+        "call_started_at": str(call_started_at or "").strip() or now_beijing_iso(),
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "mime_type": "",
+        "filename": "voice.webm",
+        "chunks": [],
+        "total_bytes": 0,
+        "last_preview_at": 0.0,
+        "last_preview_text": "",
+        "stt_stream": None,
+        "stt_live_partial_text": "",
+        "stt_live_final_segments": [],
+        "prefetch_source_text": "",
+        "prefetch_reply_text": "",
+        "prefetch_error": "",
+        "prefetch_inflight": False,
+    }
+    with _VOICE_STREAM_LOCK:
+        _VOICE_STREAM_SESSIONS[session["id"]] = session
+    return session
+
+
+def _get_voice_stream_session(session_id: str) -> dict | None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    _cleanup_voice_stream_sessions()
+    with _VOICE_STREAM_LOCK:
+        session = _VOICE_STREAM_SESSIONS.get(sid)
+        if session:
+            session["updated_at"] = time.time()
+        return session
+
+
+def _pop_voice_stream_session(session_id: str) -> dict | None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    with _VOICE_STREAM_LOCK:
+        return _VOICE_STREAM_SESSIONS.pop(sid, None)
+
+
+def _append_voice_stream_chunk(session_id: str, chunk: bytes, mime_type: str, filename: str) -> tuple[bool, str]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False, "缺少 session_id"
+    if not chunk:
+        return False, "音频分片为空"
+    with _VOICE_STREAM_LOCK:
+        session = _VOICE_STREAM_SESSIONS.get(sid)
+        if not session:
+            return False, "语音会话不存在或已过期"
+        total_bytes = int(session.get("total_bytes") or 0) + len(chunk)
+        if total_bytes > max(1024, int(VOICE_CALL_MAX_BYTES or 0)):
+            return False, "音频太大了，缩短一点再试"
+        session.setdefault("chunks", []).append(bytes(chunk))
+        session["total_bytes"] = total_bytes
+        session["updated_at"] = time.time()
+        if mime_type:
+            session["mime_type"] = str(mime_type or "").strip().lower()
+        if filename:
+            session["filename"] = str(filename or "").strip() or session.get("filename") or "voice.webm"
+    return True, ""
+
+
+def _ensure_voice_live_stt(session_id: str, mime_type: str) -> bool:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    with _VOICE_STREAM_LOCK:
+        session = _VOICE_STREAM_SESSIONS.get(sid)
+        if not session:
+            return False
+        if session.get("stt_stream") is not None:
+            return True
+    try:
+        from services.stt import create_live_transcriber
+    except Exception:
+        return False
+    try:
+        transcriber = create_live_transcriber(mime_type=mime_type)
+    except Exception as e:
+        logger.warning("voice-call live stt 初始化失败 err=%s", e)
+        return False
+    if not transcriber:
+        return False
+    with _VOICE_STREAM_LOCK:
+        session = _VOICE_STREAM_SESSIONS.get(sid)
+        if not session:
+            try:
+                transcriber.close()
+            except Exception:
+                pass
+            return False
+        if session.get("stt_stream") is None:
+            session["stt_stream"] = transcriber
+        else:
+            try:
+                transcriber.close()
+            except Exception:
+                pass
+    return True
+
+
+def _compose_voice_stream_preview(session: dict) -> str:
+    finals = [str(x or "").strip() for x in (session.get("stt_live_final_segments") or []) if str(x or "").strip()]
+    partial = str(session.get("stt_live_partial_text") or "").strip()
+    parts = finals[:]
+    if partial:
+        parts.append(partial)
+    return " ".join(x for x in parts if x).strip()
+
+
+def _pull_live_stt_events(session_id: str) -> list[dict]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return []
+    with _VOICE_STREAM_LOCK:
+        session = _VOICE_STREAM_SESSIONS.get(sid)
+        transcriber = (session or {}).get("stt_stream")
+    if not transcriber:
+        return []
+    try:
+        events = transcriber.poll_events()
+    except Exception as e:
+        logger.warning("voice-call live stt 拉取事件失败 err=%s", e)
+        return []
+    outgoing: list[dict] = []
+    if not events:
+        return outgoing
+    with _VOICE_STREAM_LOCK:
+        session = _VOICE_STREAM_SESSIONS.get(sid)
+        if not session:
+            return outgoing
+        for event in events:
+            if str(event.get("type") or "") != "transcript":
+                continue
+            text = str(event.get("text") or "").strip()
+            if not text:
+                continue
+            if event.get("is_final"):
+                session.setdefault("stt_live_final_segments", []).append(text)
+                session["stt_live_partial_text"] = ""
+            else:
+                session["stt_live_partial_text"] = text
+            preview_text = _compose_voice_stream_preview(session)
+            if not preview_text or preview_text == str(session.get("last_preview_text") or ""):
+                continue
+            session["last_preview_text"] = preview_text
+            outgoing.append(
+                {
+                    "type": "transcript_partial",
+                    "text": preview_text,
+                    "prefetching": False,
+                    "is_final": bool(event.get("is_final")),
+                }
+            )
+    return outgoing
+
+
+def _finish_voice_live_stt(session: dict | None) -> str:
+    if not isinstance(session, dict):
+        return ""
+    transcriber = session.get("stt_stream")
+    if transcriber:
+        try:
+            events = transcriber.finish()
+        except Exception as e:
+            logger.warning("voice-call live stt finish 失败 err=%s", e)
+            events = []
+        for event in events:
+            if str(event.get("type") or "") != "transcript":
+                continue
+            text = str(event.get("text") or "").strip()
+            if not text:
+                continue
+            if event.get("is_final"):
+                session.setdefault("stt_live_final_segments", []).append(text)
+            elif not session.get("stt_live_final_segments"):
+                session["stt_live_partial_text"] = text
+        session["stt_stream"] = None
+    text = _compose_voice_stream_preview(session)
+    if text:
+        session["last_preview_text"] = text
+    return text
+
+
+def _close_voice_live_stt(session: dict | None) -> None:
+    if not isinstance(session, dict):
+        return
+    transcriber = session.get("stt_stream")
+    if transcriber:
+        try:
+            transcriber.close()
+        except Exception:
+            pass
+        session["stt_stream"] = None
+
+
+def _maybe_preview_voice_stream(session_id: str) -> str:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return ""
+    now_ts = time.time()
+    with _VOICE_STREAM_LOCK:
+        session = _VOICE_STREAM_SESSIONS.get(sid)
+        if not session:
+            return ""
+        if int(session.get("total_bytes") or 0) < 24 * 1024:
+            return ""
+        last_preview_at = float(session.get("last_preview_at") or 0)
+        if now_ts - last_preview_at < 2.4:
+            return ""
+        audio_bytes = b"".join(session.get("chunks") or [])
+        mime_type = str(session.get("mime_type") or "audio/webm").strip().lower()
+        filename = str(session.get("filename") or "voice.webm").strip() or "voice.webm"
+        last_preview_text = str(session.get("last_preview_text") or "")
+        session["last_preview_at"] = now_ts
+    try:
+        from services.stt import speech_to_text
+    except Exception:
+        return ""
+    try:
+        text = str(speech_to_text(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename) or "").strip()
+    except Exception:
+        return ""
+    if not text or text == last_preview_text:
+        return ""
+    with _VOICE_STREAM_LOCK:
+        session = _VOICE_STREAM_SESSIONS.get(sid)
+        if session:
+            session["last_preview_text"] = text
+    return text
+
+
+def _start_voice_reply_prefetch(session_id: str, preview_text: str) -> bool:
+    sid = str(session_id or "").strip()
+    text = str(preview_text or "").strip()
+    if not sid or len(text) < 8:
+        return False
+    with _VOICE_STREAM_LOCK:
+        session = _VOICE_STREAM_SESSIONS.get(sid)
+        if not session:
+            return False
+        if session.get("prefetch_inflight") and str(session.get("prefetch_source_text") or "").strip() == text:
+            return False
+        if str(session.get("prefetch_reply_text") or "").strip() and str(session.get("prefetch_source_text") or "").strip() == text:
+            return False
+        session["prefetch_inflight"] = True
+        session["prefetch_source_text"] = text
+        session["prefetch_reply_text"] = ""
+        session["prefetch_error"] = ""
+
+    def _worker():
+        reply_text, reply_err = _call_voice_chat_pipeline(user_text=text, window_id="")
+        with _VOICE_STREAM_LOCK:
+            session = _VOICE_STREAM_SESSIONS.get(sid)
+            if not session:
+                return
+            if str(session.get("prefetch_source_text") or "").strip() != text:
+                session["prefetch_inflight"] = False
+                return
+            session["prefetch_inflight"] = False
+            session["prefetch_reply_text"] = reply_text or ""
+            session["prefetch_error"] = reply_err or ""
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return True
+
+
+def _prefetch_text_matches(user_text: str, source_text: str) -> bool:
+    a = str(user_text or "").strip()
+    b = str(source_text or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if len(short) >= 6 and short in long_:
+        return True
+    prefix_len = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        prefix_len += 1
+    return prefix_len >= 6
+
+
+def _take_prefetched_reply(session: dict | None, user_text: str) -> tuple[str, str]:
+    if not isinstance(session, dict):
+        return "", ""
+    source_text = str(session.get("prefetch_source_text") or "").strip()
+    if not _prefetch_text_matches(user_text, source_text):
+        return "", ""
+    if session.get("prefetch_inflight"):
+        deadline = time.time() + 1.2
+        while time.time() < deadline:
+            time.sleep(0.08)
+            if not session.get("prefetch_inflight"):
+                break
+    reply_text = str(session.get("prefetch_reply_text") or "").strip()
+    reply_err = str(session.get("prefetch_error") or "").strip()
+    return reply_text, reply_err
+
+
+def _run_voice_call_audio(
+    audio_bytes: bytes,
+    mime_type: str,
+    filename: str,
+    call_id: str,
+    call_started_at: str,
+    window_id: str,
+    status_cb=None,
+    stream_session: dict | None = None,
+    audio_chunk_cb=None,
+    user_text_override: str = "",
+) -> tuple[dict, int]:
+    if not audio_bytes:
+        return {"ok": False, "error": "音频为空"}, 400
+    if len(audio_bytes) > max(1024, int(VOICE_CALL_MAX_BYTES or 0)):
+        return {"ok": False, "error": "音频太大了，缩短一点再试"}, 400
+    try:
+        from services.stt import speech_to_text
+        from services.minimax_tts import tts_to_audio_bytes
+    except Exception as e:
+        logger.warning("voice-call 依赖加载失败 err=%s", e)
+        return {"ok": False, "error": "语音服务初始化失败"}, 500
+
+    if callable(status_cb):
+        try:
+            status_cb("recognizing", "识别中...")
+        except Exception:
+            pass
+    user_text = str(user_text_override or "").strip()
+    if not user_text:
+        user_text = speech_to_text(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename)
+    if not user_text:
+        return {"ok": False, "error": "没识别出内容，再说一遍试试"}, 422
+
+    reply_text, reply_err = _take_prefetched_reply(stream_session, user_text)
+    if not reply_text and not reply_err:
+        if callable(status_cb):
+            try:
+                status_cb("thinking", "思考中...")
+            except Exception:
+                pass
+        reply_text, reply_err = _call_voice_chat_pipeline(user_text=user_text, window_id=window_id)
+    if reply_err:
+        return {"ok": False, "error": reply_err, "user_text": user_text}, 502
+
+    if callable(status_cb):
+        try:
+            status_cb("speaking", "渡正在讲话...")
+        except Exception:
+            pass
+    audio_reply = None
+    audio_b64 = ""
+    streamed_audio = False
+    if callable(audio_chunk_cb):
+        try:
+            from services.minimax_tts_stream import stream_tts_pcm_chunks
+
+            chunk_parts: list[bytes] = []
+
+            def _on_chunk(chunk: bytes, meta: dict):
+                if not chunk:
+                    return
+                chunk_parts.append(bytes(chunk))
+                audio_chunk_cb(bytes(chunk), dict(meta or {}))
+
+            streamed_audio = bool(stream_tts_pcm_chunks(reply_text, _on_chunk))
+            if chunk_parts:
+                audio_reply = b"".join(chunk_parts)
+        except Exception as e:
+            logger.warning("voice-call 流式 TTS 失败，回退非流式 err=%s", e)
+            streamed_audio = False
+    if audio_reply is None:
+        audio_reply = tts_to_audio_bytes(reply_text)
+    if audio_reply and not streamed_audio:
+        audio_b64 = base64.b64encode(audio_reply).decode("ascii")
+    _append_call_record_turns(
+        call_id=call_id,
+        started_at=call_started_at,
+        turns=[
+            {"role": "user", "text": user_text, "kind": "voice", "timestamp": now_beijing_iso()},
+            {"role": "assistant", "text": reply_text, "kind": "voice", "timestamp": now_beijing_iso()},
+        ],
+        mode="voice",
+    )
+    return {
+        "ok": True,
+        "call_id": call_id,
+        "call_started_at": call_started_at,
+        "user_text": user_text,
+        "reply_text": reply_text,
+        "audio_b64": audio_b64,
+        "audio_format": "mp3" if audio_b64 else "",
+        "streamed_audio": streamed_audio,
+    }, 200
+
+
+def _process_voice_call_audio(audio_bytes: bytes, mime_type: str, filename: str, call_id: str, call_started_at: str, window_id: str) -> Response:
+    payload, status = _run_voice_call_audio(audio_bytes, mime_type, filename, call_id, call_started_at, window_id)
+    return jsonify(payload), status
+
+
 def _call_voice_chat_pipeline(user_text: str, window_id: str) -> tuple[str, str | None]:
     text = str(user_text or "").strip()
     if not text:
@@ -359,6 +787,205 @@ def _sanitize_voice_call_reply(text: str) -> str:
     t = re.sub(r"\s{2,}", " ", t)
     t = re.sub(r"\n{3,}", "\n\n", t)
     return t.strip()
+
+
+def _miniapp_ws_auth_error() -> str:
+    try:
+        enforce_ip_allowlist()
+    except Exception as e:
+        return str(e)
+    panel_token = (request.args.get("panel_token") or "").strip()
+    if panel_auth_enabled():
+        ok, payload, code = verify_panel_token(panel_token)
+        if not ok:
+            return code or "panel_token_invalid"
+        request.environ["miniapp_panel_payload"] = payload or {}
+    if MINIAPP_TELEGRAM_AUTH_ENABLED:
+        init_data = (request.args.get("initData") or "").strip()
+        ok, err = verify_telegram_init_data(init_data, TELEGRAM_BOT_TOKEN)
+        if not ok:
+            return err or "initdata_invalid"
+    return ""
+
+
+def register_ws_routes(sock) -> None:
+    @sock.route("/miniapp-api/voice-call/ws")
+    def miniapp_voice_call_ws(ws):
+        err = _miniapp_ws_auth_error()
+        if err:
+            try:
+                ws.send(json.dumps({"type": "error", "error": err}, ensure_ascii=False))
+            except Exception:
+                pass
+            try:
+                ws.close()
+            except Exception:
+                pass
+            return
+
+        session_id = ""
+        while True:
+            raw = ws.receive()
+            if raw is None:
+                if session_id:
+                    session = _pop_voice_stream_session(session_id)
+                    _close_voice_live_stt(session)
+                    session_id = ""
+                break
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                ws.send(json.dumps({"type": "error", "error": "消息格式不对"}, ensure_ascii=False))
+                continue
+            evt = str((msg or {}).get("type") or "").strip()
+            if evt == "start":
+                session = _create_voice_stream_session(
+                    call_id=str(msg.get("call_id") or "").strip(),
+                    call_started_at=str(msg.get("call_started_at") or "").strip(),
+                )
+                session_id = str(session["id"])
+                ws.send(
+                    json.dumps(
+                        {
+                            "type": "ready",
+                            "session_id": session["id"],
+                            "call_id": session["call_id"],
+                            "call_started_at": session["call_started_at"],
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                ws.send(json.dumps({"type": "status", "status": "recording", "text": "正在听你说话..."}, ensure_ascii=False))
+                continue
+            if evt == "audio_chunk":
+                if not session_id:
+                    ws.send(json.dumps({"type": "error", "error": "语音会话还没开始"}, ensure_ascii=False))
+                    continue
+                audio_b64 = str(msg.get("audio_b64") or "").strip()
+                if not audio_b64:
+                    continue
+                try:
+                    chunk = base64.b64decode(audio_b64)
+                except Exception:
+                    ws.send(json.dumps({"type": "error", "error": "音频分片解码失败"}, ensure_ascii=False))
+                    continue
+                ok, err = _append_voice_stream_chunk(
+                    session_id,
+                    chunk,
+                    str(msg.get("mime_type") or "audio/webm").strip().lower(),
+                    str(msg.get("filename") or "voice.webm").strip() or "voice.webm",
+                )
+                if not ok:
+                    ws.send(json.dumps({"type": "error", "error": err}, ensure_ascii=False))
+                else:
+                    _ensure_voice_live_stt(
+                        session_id,
+                        str(msg.get("mime_type") or "audio/webm").strip().lower(),
+                    )
+                    session_for_stream = _get_voice_stream_session(session_id) or {}
+                    transcriber = session_for_stream.get("stt_stream")
+                    if transcriber is not None:
+                        try:
+                            transcriber.send_audio(chunk)
+                        except Exception as e:
+                            logger.warning("voice-call live stt 发送分片失败 err=%s", e)
+                    session = _get_voice_stream_session(session_id) or {}
+                    ws.send(
+                        json.dumps(
+                            {
+                                "type": "status",
+                                "status": "recording",
+                                "text": "正在听你说话...",
+                                "received_bytes": int(session.get("total_bytes") or 0),
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                    live_events = _pull_live_stt_events(session_id)
+                    if live_events:
+                        prefetch_started = False
+                        latest_preview_text = ""
+                        for event in live_events:
+                            latest_preview_text = str(event.get("text") or "").strip()
+                            ws.send(json.dumps(event, ensure_ascii=False))
+                        if latest_preview_text:
+                            prefetch_started = _start_voice_reply_prefetch(session_id, latest_preview_text)
+                            if prefetch_started:
+                                ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "transcript_partial",
+                                            "text": latest_preview_text,
+                                            "prefetching": True,
+                                            "is_final": False,
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                )
+                    else:
+                        preview_text = _maybe_preview_voice_stream(session_id)
+                        if preview_text:
+                            prefetch_started = _start_voice_reply_prefetch(session_id, preview_text)
+                            ws.send(
+                                json.dumps(
+                                    {
+                                        "type": "transcript_partial",
+                                        "text": preview_text,
+                                        "prefetching": prefetch_started,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            )
+                continue
+            if evt == "finish":
+                if not session_id:
+                    ws.send(json.dumps({"type": "error", "error": "语音会话还没开始"}, ensure_ascii=False))
+                    continue
+                session = _pop_voice_stream_session(session_id)
+                session_id = ""
+                if not session:
+                    ws.send(json.dumps({"type": "error", "error": "语音会话不存在或已过期"}, ensure_ascii=False))
+                    continue
+                final_user_text = _finish_voice_live_stt(session)
+                payload, status = _run_voice_call_audio(
+                    audio_bytes=b"".join(session.get("chunks") or []),
+                    mime_type=str(session.get("mime_type") or msg.get("mime_type") or "audio/webm").strip().lower(),
+                    filename=str(session.get("filename") or "voice.webm").strip() or "voice.webm",
+                    call_id=str(msg.get("call_id") or session.get("call_id") or "").strip() or str(uuid4()),
+                    call_started_at=str(msg.get("call_started_at") or session.get("call_started_at") or "").strip() or now_beijing_iso(),
+                    window_id=str(msg.get("window_id") or "").strip(),
+                    status_cb=lambda st, text: ws.send(json.dumps({"type": "status", "status": st, "text": text}, ensure_ascii=False)),
+                    stream_session=session,
+                    audio_chunk_cb=lambda chunk, meta: ws.send(
+                        json.dumps(
+                            {
+                                "type": "audio_chunk",
+                                "audio_b64": base64.b64encode(chunk).decode("ascii"),
+                                "audio_format": str(meta.get("audio_format") or "pcm"),
+                                "sample_rate": int(meta.get("sample_rate") or 32000),
+                                "audio_channel": int(meta.get("audio_channel") or 1),
+                                "is_final": bool(meta.get("is_final")),
+                            },
+                            ensure_ascii=False,
+                        )
+                    ),
+                    user_text_override=final_user_text,
+                )
+                if status >= 400:
+                    ws.send(json.dumps({"type": "error", "error": str(payload.get("error") or f"HTTP {status}")}, ensure_ascii=False))
+                else:
+                    ws.send(json.dumps({"type": "result", **payload}, ensure_ascii=False))
+                    if payload.get("streamed_audio"):
+                        ws.send(json.dumps({"type": "audio_stream_end"}, ensure_ascii=False))
+                continue
+            if evt == "cancel":
+                if session_id:
+                    session = _pop_voice_stream_session(session_id)
+                    _close_voice_live_stt(session)
+                    session_id = ""
+                ws.send(json.dumps({"type": "cancelled"}, ensure_ascii=False))
+                continue
+            ws.send(json.dumps({"type": "error", "error": "未知消息类型"}, ensure_ascii=False))
 
 
 def _message_text(content) -> str:
@@ -1707,6 +2334,63 @@ def miniapp_get_voice_avatar_versioned(image_version: int):
     return Response(data, mimetype=ctype, headers={"Cache-Control": "no-store, max-age=0"})
 
 
+@bp.route("/voice-call/session/start", methods=["POST"])
+def miniapp_voice_call_session_start():
+    body = request.get_json(silent=True) or {}
+    session = _create_voice_stream_session(
+        call_id=str(body.get("call_id") or "").strip(),
+        call_started_at=str(body.get("call_started_at") or "").strip(),
+    )
+    return jsonify(
+        {
+            "ok": True,
+            "session_id": session["id"],
+            "call_id": session["call_id"],
+            "call_started_at": session["call_started_at"],
+        }
+    )
+
+
+@bp.route("/voice-call/session/chunk", methods=["POST"])
+def miniapp_voice_call_session_chunk():
+    session_id = (request.form.get("session_id") or "").strip()
+    f = request.files.get("audio")
+    if not f:
+        return jsonify({"ok": False, "error": "缺少 audio"}), 400
+    mime_type = (f.mimetype or request.form.get("mime_type") or "application/octet-stream").strip().lower()
+    if mime_type not in ("audio/webm", "audio/mp4", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg"):
+        return jsonify({"ok": False, "error": f"暂不支持的音频格式：{mime_type or 'unknown'}"}), 400
+    chunk = f.read()
+    ok, err = _append_voice_stream_chunk(session_id, chunk, mime_type, (f.filename or "voice.webm").strip() or "voice.webm")
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    session = _get_voice_stream_session(session_id) or {}
+    return jsonify({"ok": True, "session_id": session_id, "received_bytes": int(session.get("total_bytes") or 0)})
+
+
+@bp.route("/voice-call/session/finish", methods=["POST"])
+def miniapp_voice_call_session_finish():
+    body = request.get_json(silent=True) or {}
+    session_id = str(body.get("session_id") or "").strip()
+    session = _pop_voice_stream_session(session_id)
+    if not session:
+        return jsonify({"ok": False, "error": "语音会话不存在或已过期"}), 404
+    audio_bytes = b"".join(session.get("chunks") or [])
+    mime_type = str(session.get("mime_type") or body.get("mime_type") or "audio/webm").strip().lower()
+    filename = str(session.get("filename") or "voice.webm").strip() or "voice.webm"
+    call_id = str(body.get("call_id") or session.get("call_id") or "").strip() or str(uuid4())
+    call_started_at = str(body.get("call_started_at") or session.get("call_started_at") or "").strip() or now_beijing_iso()
+    window_id = str(body.get("window_id") or "").strip()
+    return _process_voice_call_audio(
+        audio_bytes=audio_bytes,
+        mime_type=mime_type,
+        filename=filename,
+        call_id=call_id,
+        call_started_at=call_started_at,
+        window_id=window_id,
+    )
+
+
 @bp.route("/voice-call", methods=["POST"])
 def miniapp_voice_call():
     f = request.files.get("audio")
@@ -1718,49 +2402,17 @@ def miniapp_voice_call():
     audio_bytes = f.read()
     if not audio_bytes:
         return jsonify({"ok": False, "error": "音频为空"}), 400
-    if len(audio_bytes) > max(1024, int(VOICE_CALL_MAX_BYTES or 0)):
-        return jsonify({"ok": False, "error": "音频太大了，缩短一点再试"}), 400
-
     filename = (f.filename or "voice.webm").strip() or "voice.webm"
-    try:
-        from services.stt import speech_to_text
-        from services.minimax_tts import tts_to_audio_bytes
-    except Exception as e:
-        logger.warning("voice-call 依赖加载失败 err=%s", e)
-        return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
-
-    user_text = speech_to_text(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename)
-    if not user_text:
-        return jsonify({"ok": False, "error": "没识别出内容，再说一遍试试"}), 422
-
-    window_id = _resolve_voice_call_window_id(request.form.get("window_id") or "")
     call_id = (request.form.get("call_id") or "").strip() or str(uuid4())
     call_started_at = (request.form.get("call_started_at") or "").strip() or now_beijing_iso()
-    reply_text, reply_err = _call_voice_chat_pipeline(user_text=user_text, window_id=window_id)
-    if reply_err:
-        return jsonify({"ok": False, "error": reply_err, "user_text": user_text}), 502
-
-    audio_reply = tts_to_audio_bytes(reply_text)
-    audio_b64 = base64.b64encode(audio_reply).decode("ascii") if audio_reply else ""
-    _append_call_record_turns(
+    window_id = (request.form.get("window_id") or "").strip()
+    return _process_voice_call_audio(
+        audio_bytes=audio_bytes,
+        mime_type=mime_type,
+        filename=filename,
         call_id=call_id,
-        started_at=call_started_at,
-        turns=[
-            {"role": "user", "text": user_text, "kind": "voice", "timestamp": now_beijing_iso()},
-            {"role": "assistant", "text": reply_text, "kind": "voice", "timestamp": now_beijing_iso()},
-        ],
-        mode="voice",
-    )
-    return jsonify(
-        {
-            "ok": True,
-            "call_id": call_id,
-            "call_started_at": call_started_at,
-            "user_text": user_text,
-            "reply_text": reply_text,
-            "audio_b64": audio_b64,
-            "audio_format": "mp3" if audio_b64 else "",
-        }
+        call_started_at=call_started_at,
+        window_id=window_id,
     )
 
 

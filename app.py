@@ -3,6 +3,7 @@ import os
 import re
 
 from dotenv import load_dotenv
+from flask_sock import Sock
 
 load_dotenv()
 
@@ -19,6 +20,7 @@ from routes.admin import bp as admin_bp
 from routes.notion_routes import bp as notion_bp
 from routes.telegram_webhook import bp as telegram_webhook_bp
 from routes.miniapp_api import bp as miniapp_api_bp
+from routes.miniapp_api import register_ws_routes as register_miniapp_ws_routes
 from routes.mcp_api import bp as mcp_api_bp
 from routes.pc_command import bp as pc_command_bp
 from routes.mobile_command import bp as mobile_command_bp
@@ -31,6 +33,7 @@ from config import MINIAPP_STATIC_DIR
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
+sock = Sock(app)
 app.register_blueprint(chat_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(notion_bp)
@@ -42,6 +45,7 @@ app.register_blueprint(mobile_command_bp)
 app.register_blueprint(co_read_api_bp)
 app.register_blueprint(koreader_api_bp)
 app.register_blueprint(html_preview_bp)
+register_miniapp_ws_routes(sock)
 
 # Telegram（Webhook）运行时初始化：命令菜单等。放在 app 启动阶段，避免依赖 Blueprint 钩子。
 try:

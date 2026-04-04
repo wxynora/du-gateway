@@ -351,7 +351,9 @@ TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES = int(float(os.environ.get("TELEGRAM_P
 
 # MiniMax TTS（可选，用于 Telegram 语音回复）
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "").strip()
+MINIMAX_GROUP_ID = os.environ.get("MINIMAX_GROUP_ID", "").strip()
 MINIMAX_T2A_URL = os.environ.get("MINIMAX_T2A_URL", "https://api.minimaxi.com/v1/t2a_v2").strip()
+MINIMAX_T2A_WS_URL = os.environ.get("MINIMAX_T2A_WS_URL", "wss://api.minimaxi.com/ws/v1/t2a_v2").strip()
 MINIMAX_T2A_MODEL = os.environ.get("MINIMAX_T2A_MODEL", "speech-2.8-hd").strip()
 MINIMAX_VOICE_ID = os.environ.get("MINIMAX_VOICE_ID", "du_123456").strip()
 MINIMAX_VOICE_SPEED = int(float(os.environ.get("MINIMAX_VOICE_SPEED", "1")))
@@ -369,9 +371,12 @@ TELEGRAM_VOICE_REPLY_ENABLED = os.environ.get("TELEGRAM_VOICE_REPLY_ENABLED", "1
 # MiniApp 语音通话（STT）
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_STT_URL = os.environ.get("DEEPGRAM_STT_URL", "https://api.deepgram.com/v1/listen").strip()
-DEEPGRAM_STT_MODEL = os.environ.get("DEEPGRAM_STT_MODEL", "nova-3").strip()
+DEEPGRAM_STT_WS_URL = os.environ.get("DEEPGRAM_STT_WS_URL", "wss://api.deepgram.com/v1/listen").strip()
+DEEPGRAM_STT_MODEL = os.environ.get("DEEPGRAM_STT_MODEL", "flux").strip()
 DEEPGRAM_STT_LANGUAGE = os.environ.get("DEEPGRAM_STT_LANGUAGE", "zh-CN").strip()
 DEEPGRAM_STT_SMART_FORMAT = os.environ.get("DEEPGRAM_STT_SMART_FORMAT", "1").strip().lower() in ("1", "true", "yes")
+DEEPGRAM_STT_ENDPOINTING = os.environ.get("DEEPGRAM_STT_ENDPOINTING", "10").strip() or "10"
+DEEPGRAM_STT_LIVE_SAMPLE_RATE = int(float(os.environ.get("DEEPGRAM_STT_LIVE_SAMPLE_RATE", "48000") or "48000"))
 VOICE_CALL_MAX_SECONDS = int(float(os.environ.get("VOICE_CALL_MAX_SECONDS", "90") or "90"))
 VOICE_CALL_MAX_BYTES = int(float(os.environ.get("VOICE_CALL_MAX_BYTES", str(12 * 1024 * 1024)) or str(12 * 1024 * 1024)))
 VOICE_CALL_WINDOW_ID = os.environ.get("VOICE_CALL_WINDOW_ID", "miniapp_voice_call").strip() or "miniapp_voice_call"
