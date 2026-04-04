@@ -60,11 +60,20 @@ function groupByDate(items: CallRecordSummary[]): Array<{ date: string; items: C
   return Array.from(map.entries()).map(([date, rows]) => ({ date, items: rows }));
 }
 
+function RowArrow() {
+  return (
+    <svg className="h-4 w-4 text-cream-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  );
+}
+
 export function CallHubScreen({ onClose }: { onClose: () => void }) {
   const toast = useToast();
   const [view, setView] = useState<ViewMode>("home");
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
   const [recordsLoading, setRecordsLoading] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [deletingId, setDeletingId] = useState("");
   const [records, setRecords] = useState<CallRecordSummary[]>([]);
   const [activeRecord, setActiveRecord] = useState<CallRecordDetail | null>(null);
@@ -137,113 +146,140 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function uploadAvatar(file: File | null) {
+    if (!file || uploadingAvatar) return;
+    setUploadingAvatar(true);
+    try {
+      const form = new FormData();
+      form.append("file", file, file.name || "voice-avatar.jpg");
+      const resp = await apiFetch("/miniapp-api/voice-avatar", { method: "POST", body: form });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      setConfig((prev) => ({
+        ...prev,
+        avatarVersion: Number(data.avatarVersion || prev.avatarVersion || 0),
+        avatarUrl: String(data.avatarUrl || prev.avatarUrl || ""),
+        useAvatarImage: true,
+      }));
+      toast("头像已更新");
+    } catch (e: any) {
+      toast(e?.message || "头像上传失败");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }
+
   const avatarSrc = config.useAvatarImage && config.avatarUrl ? buildApiAssetUrl(config.avatarUrl) : "";
+  const rowBase =
+    "flex w-full items-center gap-3 px-4 py-4 text-left transition active:scale-[0.995]";
 
   if (view === "voice") {
     return <VoiceCallScreen onClose={() => setView("home")} />;
   }
 
   return (
-    <div className="fixed inset-0 z-[80] overflow-hidden bg-[#0b121d] text-white">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(83,145,216,0.26),transparent_36%),linear-gradient(180deg,#0f1824_0%,#08111c_100%)]" />
-      <div className="relative z-10 flex min-h-dvh flex-col px-5 pb-8 pt-5 safe-bottom">
+    <div className="fixed inset-0 z-[80] overflow-auto bg-[rgba(238,241,245,0.96)] text-cream-text backdrop-blur-xl">
+      <div className="mx-auto min-h-dvh max-w-xl px-4 pb-8 pt-4 safe-bottom">
         <div className="flex items-center justify-between">
-          <button className="voice-call-top-btn" onClick={view === "home" ? onClose : () => setView("home")} type="button">
-            <span className="text-lg leading-none">{view === "home" ? "×" : "←"}</span>
+          <button className="neo-icon-btn h-10 w-10 text-sm" onClick={view === "home" ? onClose : () => setView("home")} type="button">
+            {view === "home" ? (
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            ) : (
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 6-6 6 6 6" /></svg>
+            )}
           </button>
-          <div className="text-center">
-            <div className="text-[12px] uppercase tracking-[0.35em] text-white/45">Call Center</div>
-            <div className="mt-1 text-sm text-white/75">通话</div>
-          </div>
+          <div className="neo-chip">{view === "home" ? "通话" : view === "records" ? "通话记录" : "通话详情"}</div>
           <div className="w-10" />
         </div>
 
         {view === "home" ? (
-          <div className="flex flex-1 flex-col pt-10">
-            <div className="mb-8 flex items-center gap-4 rounded-[28px] bg-white/6 p-4">
-              <div className="h-20 w-20 overflow-hidden rounded-full bg-white/10">
-                {avatarSrc ? (
-                  <img src={avatarSrc} alt={config.displayName} className="h-full w-full object-cover" />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(145deg,#5886d7,#7cd1c0)] text-3xl font-semibold">
-                    {(config.displayName || "渡").slice(0, 1)}
-                  </div>
-                )}
-              </div>
-              <div>
-                <div className="text-2xl font-semibold">{config.displayName || "渡"}</div>
-                <div className="mt-1 text-sm text-white/58">{config.subtitle || "语音通话中"}</div>
+          <div className="pt-4">
+            <div className="neo-panel-soft flex items-center gap-4 px-4 py-4">
+              <label className="relative block cursor-pointer">
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(e) => uploadAvatar(e.target.files?.[0] || null)}
+                  disabled={uploadingAvatar}
+                />
+                <div className="h-16 w-16 overflow-hidden rounded-full bg-[rgba(255,255,255,0.52)] shadow-[4px_4px_9px_rgba(173,182,196,0.18),-2px_-2px_4px_rgba(255,255,255,0.5)]">
+                  {avatarSrc ? (
+                    <img src={avatarSrc} alt={config.displayName} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-[#D6E4F2] text-2xl font-semibold text-cream-text">
+                      {(config.displayName || "渡").slice(0, 1)}
+                    </div>
+                  )}
+                </div>
+                <span className="absolute -bottom-1 -right-1 rounded-full bg-[#EFD5E1] px-2 py-0.5 text-[10px] text-cream-text shadow-[3px_3px_8px_rgba(173,182,196,0.2),-1px_-1px_3px_rgba(255,255,255,0.5)]">
+                  {uploadingAvatar ? "上传中" : "换头像"}
+                </span>
+              </label>
+              <div className="min-w-0">
+                <div className="text-[18px] font-semibold tracking-tight">{config.displayName || "渡"}</div>
+                <div className="mt-1 text-xs text-cream-muted">{config.subtitle || "语音通话中"}</div>
+                <div className="mt-1 text-[11px] text-cream-muted">点头像可从本地相册替换</div>
               </div>
             </div>
 
-            <div className="space-y-3">
-              <button type="button" className="call-hub-row" onClick={() => setView("voice")}>
-                <span className="call-hub-row-icon bg-[#d7e8ff] text-[#17386a]">1</span>
-                <span className="min-w-0 flex-1 text-left">
-                  <span className="block text-base font-medium text-white">语音通话</span>
-                  <span className="mt-1 block text-sm text-white/48">点进去就是通话界面</span>
+            <div className="mt-4 overflow-hidden rounded-[28px] bg-[rgba(244,247,251,0.74)] shadow-[6px_6px_13px_rgba(170,180,194,0.22),-3px_-3px_7px_rgba(255,255,255,0.5)] backdrop-blur-xl">
+              <button type="button" className={rowBase} onClick={() => setView("voice")}>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium">语音通话</span>
+                  <span className="mt-1 block text-xs text-cream-muted">点进去就是通话界面</span>
                 </span>
-                <span className="text-white/36">›</span>
+                <RowArrow />
               </button>
-
-              <button
-                type="button"
-                className="call-hub-row"
-                onClick={() => toast("视频通话先占位，后面再接")}
-              >
-                <span className="call-hub-row-icon bg-[#f3dfb5] text-[#654c11]">2</span>
-                <span className="min-w-0 flex-1 text-left">
-                  <span className="block text-base font-medium text-white">视频通话</span>
-                  <span className="mt-1 block text-sm text-white/48">先占位，后面再做</span>
+              <button type="button" className={rowBase + " border-t border-white/40"} onClick={() => toast("视频通话先占位，后面再接")}>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium">视频通话</span>
+                  <span className="mt-1 block text-xs text-cream-muted">先占位，后面再做</span>
                 </span>
-                <span className="rounded-full bg-white/8 px-2 py-1 text-[11px] text-white/52">占位</span>
+                <span className="neo-tag-yellow">占位</span>
               </button>
-
-              <button type="button" className="call-hub-row" onClick={openRecords}>
-                <span className="call-hub-row-icon bg-[#dceecf] text-[#244c1d]">3</span>
-                <span className="min-w-0 flex-1 text-left">
-                  <span className="block text-base font-medium text-white">通话记录</span>
-                  <span className="mt-1 block text-sm text-white/48">按日期时间查看每次通话</span>
+              <button type="button" className={rowBase + " border-t border-white/40"} onClick={openRecords}>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium">通话记录</span>
+                  <span className="mt-1 block text-xs text-cream-muted">按日期时间查看每次通话</span>
                 </span>
-                <span className="text-white/36">›</span>
+                <RowArrow />
               </button>
             </div>
           </div>
         ) : null}
 
         {view === "records" ? (
-          <div className="flex flex-1 flex-col pt-6">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="text-lg font-medium">通话记录</div>
+          <div className="pt-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-sm font-medium text-cream-text">最近通话</div>
               <Btn kind="blue" onClick={loadRecords} disabled={recordsLoading}>{recordsLoading ? "刷新中..." : "刷新"}</Btn>
             </div>
-            <div className="flex-1 overflow-auto">
+            <div className="space-y-4">
               {grouped.length ? (
                 grouped.map((group) => (
-                  <div key={group.date} className="mb-6">
-                    <div className="mb-3 text-xs uppercase tracking-[0.28em] text-white/38">{group.date}</div>
-                    <div className="space-y-3">
-                      {group.items.map((item) => (
-                        <div key={item.id} className="call-record-card">
-                          <button type="button" className="block w-full text-left" onClick={() => openRecordDetail(item.id)}>
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-medium text-white">{item.title || "语音通话"}</div>
-                                <div className="mt-1 text-xs text-white/42">{formatDateTime(item.started_at)}</div>
+                  <div key={group.date}>
+                    <div className="mb-2 px-1 text-[11px] uppercase tracking-[0.18em] text-cream-muted">{group.date}</div>
+                    <div className="overflow-hidden rounded-[26px] bg-[rgba(244,247,251,0.72)] shadow-[6px_6px_13px_rgba(170,180,194,0.22),-3px_-3px_7px_rgba(255,255,255,0.48)] backdrop-blur-xl">
+                      {group.items.map((item, idx) => (
+                        <div key={item.id} className={idx > 0 ? "border-t border-white/40" : ""}>
+                          <div className="flex items-center gap-3 px-4 py-3">
+                            <button type="button" className="min-w-0 flex-1 text-left" onClick={() => openRecordDetail(item.id)}>
+                              <div className="truncate text-sm font-medium text-cream-text">{item.title || "语音通话"}</div>
+                              <div className="mt-1 text-[11px] text-cream-muted">
+                                {formatDateTime(item.started_at)} · {item.turn_count} 条
                               </div>
-                              <div className="text-xs text-white/38">{item.turn_count} 条</div>
-                            </div>
-                            <div className="mt-3 text-left text-sm text-white/58">{item.preview || "暂无文字记录"}</div>
-                          </button>
-                          <div className="mt-3 flex justify-end">
+                              <div className="mt-2 truncate text-xs text-cream-muted">{item.preview || "暂无文字记录"}</div>
+                            </button>
                             <button
                               type="button"
-                              className="rounded-full bg-[rgba(239,109,99,0.14)] px-3 py-1.5 text-xs text-[#ffb1aa]"
+                              className="rounded-full bg-[rgba(232,185,179,0.42)] px-3 py-1.5 text-[11px] text-[#8a4a43]"
                               onClick={() => deleteRecord(item.id)}
                               disabled={deletingId === item.id}
                             >
                               {deletingId === item.id ? "删除中..." : "删除"}
                             </button>
+                            <RowArrow />
                           </div>
                         </div>
                       ))}
@@ -251,7 +287,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
                   </div>
                 ))
               ) : (
-                <div className="rounded-[26px] bg-white/6 px-4 py-8 text-center text-sm text-white/50">
+                <div className="neo-panel-soft px-4 py-8 text-center text-sm text-cream-muted">
                   {recordsLoading ? "加载中..." : "还没有通话记录"}
                 </div>
               )}
@@ -260,38 +296,45 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
         ) : null}
 
         {view === "record-detail" ? (
-          <div className="flex flex-1 flex-col pt-6">
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <div className="text-lg font-medium">{activeRecord?.title || "通话详情"}</div>
-                <div className="mt-1 text-sm text-white/44">{formatDateTime(activeRecord?.started_at || "")}</div>
+          <div className="pt-4">
+            <div className="neo-panel-soft px-4 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[16px] font-semibold tracking-tight">{activeRecord?.title || "通话详情"}</div>
+                  <div className="mt-1 text-xs text-cream-muted">{formatDateTime(activeRecord?.started_at || "")}</div>
+                </div>
+                {activeRecord?.id ? (
+                  <button
+                    type="button"
+                    className="rounded-full bg-[rgba(232,185,179,0.42)] px-3 py-1.5 text-[11px] text-[#8a4a43]"
+                    onClick={() => deleteRecord(activeRecord.id)}
+                    disabled={deletingId === activeRecord.id}
+                  >
+                    {deletingId === activeRecord.id ? "删除中..." : "删除"}
+                  </button>
+                ) : null}
               </div>
-              {activeRecord?.id ? (
-                <button
-                  type="button"
-                  className="rounded-full bg-[rgba(239,109,99,0.14)] px-3 py-1.5 text-xs text-[#ffb1aa]"
-                  onClick={() => deleteRecord(activeRecord.id)}
-                  disabled={deletingId === activeRecord.id}
-                >
-                  {deletingId === activeRecord.id ? "删除中..." : "删除"}
-                </button>
-              ) : null}
             </div>
-            <div className="flex-1 overflow-auto space-y-3 pr-1">
+
+            <div className="mt-4 space-y-3">
               {activeRecord?.turns?.length ? (
                 activeRecord.turns.map((turn) => (
-                  <div key={turn.id} className={turn.role === "user" ? "flex justify-end" : "flex justify-start"}>
-                    <div className={turn.role === "user" ? "call-turn-bubble call-turn-user" : "call-turn-bubble call-turn-assistant"}>
-                      <div className="mb-1 text-[11px] uppercase tracking-[0.22em] text-white/36">
-                        {turn.role === "user" ? "我的语音" : "他的语音"}
-                      </div>
-                      <div className="text-sm leading-6">{turn.text}</div>
-                      <div className="mt-2 text-[11px] text-white/34">{formatDateTime(turn.timestamp)}</div>
+                  <div
+                    key={turn.id}
+                    className={
+                      "neo-panel-soft px-4 py-3 " +
+                      (turn.role === "user" ? "ml-10" : "mr-10")
+                    }
+                  >
+                    <div className="mb-1 text-[11px] uppercase tracking-[0.16em] text-cream-muted">
+                      {turn.role === "user" ? "我的语音" : "他的语音"}
                     </div>
+                    <div className="text-sm leading-6 text-cream-text">{turn.text}</div>
+                    <div className="mt-2 text-[11px] text-cream-muted">{formatDateTime(turn.timestamp)}</div>
                   </div>
                 ))
               ) : (
-                <div className="rounded-[26px] bg-white/6 px-4 py-8 text-center text-sm text-white/50">这条通话还没有内容</div>
+                <div className="neo-panel-soft px-4 py-8 text-center text-sm text-cream-muted">这条通话还没有内容</div>
               )}
             </div>
           </div>
