@@ -377,58 +377,58 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
             ))}
           </div>
 
-          <button
-            type="button"
-            className={
-              "mt-10 flex h-[112px] w-[112px] items-center justify-center rounded-full border border-white/10 text-center text-sm font-medium transition " +
-              (status === "recording"
-                ? "bg-[#8fd4bf] text-[#0d2c25] shadow-[0_22px_44px_rgba(143,212,191,0.28)]"
-                : "bg-white/12 text-white shadow-[0_12px_28px_rgba(0,0,0,0.18)]")
-            }
-            onPointerDown={(e) => {
-              e.preventDefault();
-              beginRecording();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              stopRecording();
-            }}
-            onPointerCancel={stopRecording}
-            onPointerLeave={() => {
-              if (status === "recording") stopRecording();
-            }}
-            disabled={status === "recognizing" || status === "speaking" || status === "connecting"}
-          >
-            <div>
-              <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-white/10">
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Z" />
-                  <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
+          <div className="mt-10 flex items-center justify-center gap-8">
+            <button type="button" className="flex flex-col items-center gap-2 text-xs text-white/72" onClick={() => setSpeakerOn((v) => !v)}>
+              <span className={`voice-call-action-icon ${speakerOn ? "bg-[#d7e8ff] text-[#183a6f]" : ""}`}>
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M5 10h4l5-4v12l-5-4H5zM17 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" />
                 </svg>
+              </span>
+              <span>{speakerOn ? "扬声器" : "已静音"}</span>
+            </button>
+
+            <button
+              type="button"
+              className={
+                "flex h-[112px] w-[112px] items-center justify-center rounded-full border border-white/10 text-center text-sm font-medium transition " +
+                (status === "recording"
+                  ? "bg-[#8fd4bf] text-[#0d2c25] shadow-[0_22px_44px_rgba(143,212,191,0.28)]"
+                  : "bg-white/12 text-white shadow-[0_12px_28px_rgba(0,0,0,0.18)]")
+              }
+              onPointerDown={(e) => {
+                e.preventDefault();
+                beginRecording();
+              }}
+              onPointerUp={(e) => {
+                e.preventDefault();
+                stopRecording();
+              }}
+              onPointerCancel={stopRecording}
+              onPointerLeave={() => {
+                if (status === "recording") stopRecording();
+              }}
+              disabled={status === "recognizing" || status === "speaking" || status === "connecting"}
+            >
+              <div>
+                <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-white/10">
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Z" />
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
+                  </svg>
+                </div>
+                {status === "recording" ? "松开发送" : "按住说话"}
               </div>
-              {status === "recording" ? "松开发送" : "按住说话"}
-            </div>
-          </button>
-        </div>
+            </button>
 
-        <div className="flex items-start justify-center gap-12 pt-1">
-          <button type="button" className="flex flex-col items-center gap-2 text-xs text-white/72" onClick={() => setSpeakerOn((v) => !v)}>
-            <span className={`voice-call-action-icon ${speakerOn ? "bg-[#d7e8ff] text-[#183a6f]" : ""}`}>
-              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M5 10h4l5-4v12l-5-4H5zM17 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" />
-              </svg>
-            </span>
-            <span>{speakerOn ? "扬声器" : "已静音"}</span>
-          </button>
-
-          <button type="button" className="flex flex-col items-center gap-2 text-xs text-white/72" onClick={endCall}>
-            <span className="voice-call-action-icon bg-[#ef6d63] text-white">
-              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M4 15c4-5 12-5 16 0M8 15l-2 4m10-4 2 4" />
-              </svg>
-            </span>
-            <span>挂断</span>
-          </button>
+            <button type="button" className="flex flex-col items-center gap-2 text-xs text-white/72" onClick={endCall}>
+              <span className="voice-call-action-icon bg-[#ef6d63] text-white">
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M4 15c4-5 12-5 16 0M8 15l-2 4m10-4 2 4" />
+                </svg>
+              </span>
+              <span>挂断</span>
+            </button>
+          </div>
         </div>
       </div>
 
