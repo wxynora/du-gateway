@@ -625,17 +625,10 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[80] overflow-auto bg-[rgba(17,18,20,0.94)] text-white backdrop-blur-xl voice-call-screen">
-      <div className="relative z-10 mx-auto min-h-dvh max-w-xl px-4 pb-8 pt-4 safe-bottom">
-        <div className="flex min-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-[32px] bg-[#111214] px-5 pb-8 pt-4 shadow-[0_24px_60px_rgba(0,0,0,0.28)]">
-        <div className="text-center" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 28px)" }}>
-          <div className="text-[13px] text-white/72">{formatSeconds(elapsedSeconds)}</div>
-        </div>
-
-        <div className="mt-3 flex items-center justify-between">
-          <button className="voice-call-top-btn bg-white/10" onClick={endCall} type="button">
-            <span className="text-lg leading-none">×</span>
-          </button>
+    <div className="neo-panel-soft overflow-hidden rounded-[28px] text-white shadow-[6px_6px_13px_rgba(170,180,194,0.18),-3px_-3px_7px_rgba(255,255,255,0.35)] voice-call-screen">
+      <div className="relative z-10 flex min-h-[calc(100dvh-14rem)] flex-col bg-[#111214] px-5 pb-8 pt-5">
+        <div className="flex items-center justify-end">
+          <div className="mr-3 text-[13px] text-white/72">{formatSeconds(elapsedSeconds)}</div>
           <button className="voice-call-top-btn bg-white/10" onClick={() => setSettingsOpen(true)} type="button">
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
               <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1" />
@@ -643,7 +636,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="flex flex-1 flex-col items-center justify-center" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
+        <div className="flex flex-1 flex-col items-center justify-center pt-8">
           <div className="voice-call-avatar-wrap">
             {avatarSrc ? (
               <img src={avatarSrc} alt={config.displayName} className="h-full w-full object-cover" />
@@ -719,7 +712,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         </div>
-      </div>
       </div>
 
       {settingsOpen ? (

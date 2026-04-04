@@ -236,10 +236,6 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
   const rowBase =
     "flex w-full items-center gap-3 px-4 py-4 text-left transition active:scale-[0.995]";
 
-  if (view === "voice") {
-    return <VoiceCallScreen onClose={() => setView("home")} />;
-  }
-
   return (
     <div className="fixed inset-0 z-[80] overflow-auto bg-[rgba(238,241,245,0.96)] text-cream-text backdrop-blur-xl">
       <div className="mx-auto min-h-dvh max-w-xl px-4 pb-8 pt-4 safe-bottom">
@@ -251,7 +247,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 6-6 6 6 6" /></svg>
             )}
           </button>
-          <div className="neo-chip">{view === "home" ? "通话" : view === "records" ? "通话记录" : "通话详情"}</div>
+          <div className="neo-chip">{view === "home" ? "通话" : view === "voice" ? "语音通话" : view === "records" ? "通话记录" : "通话详情"}</div>
           <div className="w-10" />
         </div>
 
@@ -309,6 +305,12 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
                 <RowArrow />
               </button>
             </div>
+          </div>
+        ) : null}
+
+        {view === "voice" ? (
+          <div className="pt-4">
+            <VoiceCallScreen onClose={() => setView("home")} />
           </div>
         ) : null}
 
