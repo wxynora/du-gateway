@@ -10,6 +10,7 @@ type VoiceConfig = {
   avatarVersion: number;
   useAvatarImage: boolean;
   avatarUrl: string;
+  voiceWsBase?: string;
   theme?: string;
 };
 
@@ -200,8 +201,10 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   }
 
   function buildVoiceSocketUrl(): string {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = new URL(`${proto}//${window.location.host}/miniapp-api/voice-call/ws`);
+    const base = String(config.voiceWsBase || "").trim();
+    const url = base
+      ? new URL("/miniapp-api/voice-call/ws", base.endsWith("/") ? base : `${base}/`)
+      : new URL(`${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/miniapp-api/voice-call/ws`);
     const initData = getInitData();
     const panelToken = getPanelToken();
     if (initData) url.searchParams.set("initData", initData);

@@ -2,9 +2,16 @@ import base64
 import json
 import re
 
-from flask import current_app
+import requests
 
-from config import DEFAULT_CHAT_MODEL, GATEWAY_MODELS, TELEGRAM_PROACTIVE_TARGET_USER_ID, VOICE_CALL_WINDOW_ID
+from config import (
+    DEFAULT_CHAT_MODEL,
+    GATEWAY_MODELS,
+    MAIN_GATEWAY_BASE_URL,
+    MAIN_GATEWAY_BEARER_TOKEN,
+    TELEGRAM_PROACTIVE_TARGET_USER_ID,
+    VOICE_CALL_WINDOW_ID,
+)
 from utils.time_aware import now_beijing_iso
 from utils.log import get_logger
 
@@ -48,13 +55,13 @@ def call_voice_chat_pipeline(user_text, window_id=""):
         "X-Window-Id": resolve_voice_call_window_id(window_id),
         "X-Voice-Call-Slim": "1",
     }
+    if MAIN_GATEWAY_BEARER_TOKEN:
+        headers["Authorization"] = "Bearer %s" % MAIN_GATEWAY_BEARER_TOKEN
+    base_url = str(MAIN_GATEWAY_BASE_URL or "").strip().rstrip("/")
+    url = "%s/v1/chat/completions" % base_url
     try:
-        from routes.chat import chat_completions
-
-        with current_app.test_request_context("/v1/chat/completions", method="POST", json=body, headers=headers):
-            rv = chat_completions()
-            resp = current_app.make_response(rv)
-        data = json.loads(resp.get_data(as_text=True) or "{}")
+        resp = requests.post(url, headers=headers, json=body, timeout=180)
+        data = resp.json() if resp.content else {}
     except Exception as e:
         logger.warning("voice chat pipeline 异常 err=%s", e)
         return "", "聊天服务暂时不可用"
