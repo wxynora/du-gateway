@@ -77,6 +77,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const [useAvatarImage, setUseAvatarImage] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarRefreshKey, setAvatarRefreshKey] = useState(0);
   const [speakerOn, setSpeakerOn] = useState(true);
   const [callId, setCallId] = useState(() => `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const [callStartedAtIso] = useState(() => new Date().toISOString());
@@ -101,8 +102,11 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
 
   const avatarSrc = useMemo(() => {
     if (!config.useAvatarImage || !config.avatarUrl) return "";
-    return buildApiAssetUrl(config.avatarUrl);
-  }, [config.avatarUrl, config.useAvatarImage]);
+    const base = buildApiAssetUrl(config.avatarUrl);
+    const ver = config.avatarVersion || avatarRefreshKey || 0;
+    if (!ver) return base;
+    return `${base}${String(base).includes("?") ? "&" : "?"}v=${ver}`;
+  }, [avatarRefreshKey, config.avatarUrl, config.avatarVersion, config.useAvatarImage]);
 
   useEffect(() => {
     tgReady(true);
@@ -552,6 +556,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
         avatarUrl: String(data.avatarUrl || prev.avatarUrl || ""),
         useAvatarImage: true,
       }));
+      setAvatarRefreshKey(Date.now());
       setUseAvatarImage(true);
       toast("头像已上传");
     } catch (e: any) {
