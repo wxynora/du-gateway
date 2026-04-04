@@ -3,7 +3,11 @@ import os
 import re
 
 from dotenv import load_dotenv
-from flask_sock import Sock
+
+try:
+    from flask_sock import Sock
+except Exception:
+    Sock = None
 
 load_dotenv()
 
@@ -33,7 +37,12 @@ from config import MINIAPP_STATIC_DIR
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
-sock = Sock(app)
+sock = None
+if Sock:
+    try:
+        sock = Sock(app)
+    except Exception:
+        sock = None
 app.register_blueprint(chat_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(notion_bp)
@@ -45,7 +54,11 @@ app.register_blueprint(mobile_command_bp)
 app.register_blueprint(co_read_api_bp)
 app.register_blueprint(koreader_api_bp)
 app.register_blueprint(html_preview_bp)
-register_miniapp_ws_routes(sock)
+if sock:
+    try:
+        register_miniapp_ws_routes(sock)
+    except Exception:
+        pass
 
 # Telegram（Webhook）运行时初始化：命令菜单等。放在 app 启动阶段，避免依赖 Blueprint 钩子。
 try:
