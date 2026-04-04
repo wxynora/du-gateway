@@ -331,7 +331,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       <div className="relative z-10 flex min-h-dvh flex-col px-5 pb-8 pt-4 safe-bottom">
         <div
           className="flex items-center justify-between"
-          style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
+          style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 28px)" }}
         >
           <button className="voice-call-top-btn bg-white/10" onClick={endCall} type="button">
             <span className="text-lg leading-none">×</span>
@@ -346,7 +346,10 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="flex flex-1 flex-col items-center justify-center">
+        <div
+          className="flex flex-1 flex-col items-center justify-center"
+          style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}
+        >
           <div className="voice-call-avatar-wrap">
             {avatarSrc ? (
               <img src={avatarSrc} alt={config.displayName} className="h-full w-full object-cover" />
