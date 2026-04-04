@@ -9,7 +9,6 @@ type VoiceConfig = {
   subtitle: string;
   avatarVersion: number;
   useAvatarImage: boolean;
-  avatarUrl: string;
   voiceWsBase?: string;
   theme?: string;
 };
@@ -21,7 +20,6 @@ const DEFAULT_CONFIG: VoiceConfig = {
   subtitle: "语音通话中",
   avatarVersion: 0,
   useAvatarImage: false,
-  avatarUrl: "",
   theme: "night",
 };
 
@@ -77,7 +75,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const [useAvatarImage, setUseAvatarImage] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
-  const [avatarRefreshKey, setAvatarRefreshKey] = useState(0);
+  const [avatarStamp, setAvatarStamp] = useState(0);
   const [speakerOn, setSpeakerOn] = useState(true);
   const [callId, setCallId] = useState(() => `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const [callStartedAtIso] = useState(() => new Date().toISOString());
@@ -101,12 +99,9 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const streamAudioEndingRef = useRef(false);
 
   const avatarSrc = useMemo(() => {
-    if (!config.useAvatarImage || !config.avatarUrl) return "";
-    const base = buildApiAssetUrl(config.avatarUrl);
-    const ver = config.avatarVersion || avatarRefreshKey || 0;
-    if (!ver) return base;
-    return `${base}${String(base).includes("?") ? "&" : "?"}v=${ver}`;
-  }, [avatarRefreshKey, config.avatarUrl, config.avatarVersion, config.useAvatarImage]);
+    if (!config.useAvatarImage || config.avatarVersion <= 0) return "";
+    return buildApiAssetUrl(`/miniapp-api/voice-avatar/${config.avatarVersion}?s=${avatarStamp || 0}`);
+  }, [avatarStamp, config.avatarVersion, config.useAvatarImage]);
 
   useEffect(() => {
     tgReady(true);
@@ -118,7 +113,11 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
         const data = await resp.json().catch(() => ({}));
         if (cancelled) return;
         if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
-        const next: VoiceConfig = { ...DEFAULT_CONFIG, ...(data.config || {}) };
+        const next: VoiceConfig = {
+          ...DEFAULT_CONFIG,
+          ...(data.config || {}),
+          avatarVersion: Math.max(0, Number(data?.config?.avatarVersion || 0)),
+        };
         setConfig(next);
         setDraftName(next.displayName || DEFAULT_CONFIG.displayName);
         setDraftSubtitle(next.subtitle || DEFAULT_CONFIG.subtitle);
@@ -545,18 +544,65 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
     if (!file) return;
     setUploadingAvatar(true);
     try {
+      const toDataUrl = (blob: Blob) =>
+        new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("读取图片失败"));
+          reader.readAsDataURL(blob);
+        });
+      const loadImage = (src: string) =>
+        new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error("图片解码失败"));
+          img.src = src;
+        });
+      const canvasToBlob = (canvas: HTMLCanvasElement, quality: number) =>
+        new Promise<Blob>((resolve, reject) => {
+          canvas.toBlob(
+            (blob) => {
+              if (blob) resolve(blob);
+              else reject(new Error("图片编码失败"));
+            },
+            "image/jpeg",
+            quality,
+          );
+        });
+      const maxUploadBytes = 1200 * 1024;
+      const maxSide = 1200;
+      let uploadBlob: Blob = file;
+      if (file.size > maxUploadBytes || file.type !== "image/jpeg") {
+        const src = await toDataUrl(file);
+        const img = await loadImage(src);
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("浏览器不支持图片处理");
+        ctx.drawImage(img, 0, 0, w, h);
+        let q = 0.9;
+        let out = await canvasToBlob(canvas, q);
+        while (out.size > maxUploadBytes && q > 0.55) {
+          q -= 0.08;
+          out = await canvasToBlob(canvas, q);
+        }
+        uploadBlob = out;
+      }
       const form = new FormData();
-      form.append("file", file, file.name || "voice-avatar.jpg");
+      form.append("file", uploadBlob, "voice-avatar.jpg");
       const resp = await apiFetch("/miniapp-api/voice-avatar", { method: "POST", body: form });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
       setConfig((prev) => ({
         ...prev,
         avatarVersion: Number(data.avatarVersion || prev.avatarVersion || 0),
-        avatarUrl: String(data.avatarUrl || prev.avatarUrl || ""),
         useAvatarImage: true,
       }));
-      setAvatarRefreshKey(Date.now());
+      setAvatarStamp(Date.now());
       setUseAvatarImage(true);
       toast("头像已上传");
     } catch (e: any) {
