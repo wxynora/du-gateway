@@ -625,7 +625,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="neo-panel-soft overflow-hidden rounded-[28px] text-white shadow-[6px_6px_13px_rgba(170,180,194,0.18),-3px_-3px_7px_rgba(255,255,255,0.35)] voice-call-screen">
+    <div className="overflow-hidden text-white voice-call-screen">
       <div className="relative z-10 flex min-h-[calc(100dvh-14rem)] flex-col bg-[#111214] px-5 pb-8 pt-5">
         <div className="flex items-center justify-end">
           <div className="mr-3 text-[13px] text-white/72">{formatSeconds(elapsedSeconds)}</div>
