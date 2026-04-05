@@ -45,24 +45,13 @@ def _models_url(base_url):
 
 
 def _fetch_gateway_first_model():
-    try:
-        from storage.upstream_store import get_active_item
-    except Exception as e:
-        logger.warning("voice fetch active upstream 异常 err=%s", e)
-        return ""
-    try:
-        active = get_active_item() or {}
-    except Exception as e:
-        logger.warning("voice fetch active upstream 失败 err=%s", e)
-        return ""
-    base_url = str(active.get("url") or "").strip().rstrip("/")
-    api_key = str(active.get("api_key") or "").strip()
+    base_url = str(MAIN_GATEWAY_BASE_URL or "").strip().rstrip("/")
     url = _models_url(base_url)
     if not url:
         return ""
     headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = "Bearer %s" % api_key
+    if MAIN_GATEWAY_BEARER_TOKEN:
+        headers["Authorization"] = "Bearer %s" % MAIN_GATEWAY_BEARER_TOKEN
     try:
         resp = requests.get(url, headers=headers, timeout=12)
         if resp.status_code != 200:
