@@ -67,9 +67,7 @@ class ProactiveDecision:
 def _get_chat_model() -> str:
     if TELEGRAM_CHAT_MODEL:
         return TELEGRAM_CHAT_MODEL
-    if GATEWAY_MODELS:
-        return GATEWAY_MODELS[0]
-    return "gpt-4"
+    return ""
 
 
 def _parse_hm(hm: str) -> tuple[int, int]:

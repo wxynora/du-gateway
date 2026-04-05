@@ -252,8 +252,7 @@ def _resolve_chat_model() -> str:
     优先级：
     1) TELEGRAM_CHAT_MODEL（显式配置）
     2) 网关 /v1/models 第一个
-    3) GATEWAY_MODELS 第一个（静态兜底）
-    4) gpt-4（最后兜底：仅在上游兼容该字符串时才可用）
+    3) 拉不到就返回空，不做默认兜底
     """
     global _RESOLVED_CHAT_MODEL
     if _RESOLVED_CHAT_MODEL:
@@ -265,11 +264,7 @@ def _resolve_chat_model() -> str:
     if m:
         _RESOLVED_CHAT_MODEL = m
         return _RESOLVED_CHAT_MODEL
-    if GATEWAY_MODELS:
-        _RESOLVED_CHAT_MODEL = GATEWAY_MODELS[0]
-        return _RESOLVED_CHAT_MODEL
-    _RESOLVED_CHAT_MODEL = "gpt-4"
-    return _RESOLVED_CHAT_MODEL
+    return ""
 
 
 def _sleep_between_sends():
