@@ -5,6 +5,7 @@ import process from "node:process";
 import QRCode from "qrcode";
 import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
+import { encode as encodeSilk } from "silk-wasm";
 
 dotenv.config();
 
@@ -292,7 +293,7 @@ async function callGatewayTts(text) {
   const r = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: String(text || "") }),
+    body: JSON.stringify({ text: String(text || ""), audio_format: "wav" }),
   });
   const raw = await r.text();
   let data = null;
@@ -320,6 +321,109 @@ function extractVoiceTag(text) {
   const voiceText = String(m[1] || "").trim();
   const cleanText = raw.replace(/<voice>[\s\S]*?<\/voice>/gi, "").trim();
   return { cleanText, voiceText };
+}
+
+function _syncsafeInt4(b0, b1, b2, b3) {
+  return ((b0 & 0x7f) << 21) | ((b1 & 0x7f) << 14) | ((b2 & 0x7f) << 7) | (b3 & 0x7f);
+}
+
+function stripId3v2(buf) {
+  const data = Buffer.isBuffer(buf) ? buf : Buffer.from(buf || []);
+  if (data.length < 10) return data;
+  if (data.slice(0, 3).toString("ascii") !== "ID3") return data;
+  const size = _syncsafeInt4(data[6], data[7], data[8], data[9]);
+  const total = 10 + size;
+  return total < data.length ? data.slice(total) : data;
+}
+
+function findMp3FrameHeader(buf) {
+  const data = stripId3v2(buf);
+  for (let i = 0; i <= data.length - 4; i += 1) {
+    if (data[i] !== 0xff || (data[i + 1] & 0xe0) !== 0xe0) continue;
+    return { header: data.readUInt32BE(i), offset: i, data };
+  }
+  return null;
+}
+
+function parseMp3Info(buf) {
+  const found = findMp3FrameHeader(buf);
+  if (!found) return { bitrateKbps: 0, sampleRate: 0, durationMs: 0 };
+  const { header, data } = found;
+  const versionBits = (header >> 19) & 0x3;
+  const layerBits = (header >> 17) & 0x3;
+  const bitrateIndex = (header >> 12) & 0xf;
+  const sampleRateIndex = (header >> 10) & 0x3;
+  if (versionBits === 1 || layerBits !== 1 || bitrateIndex === 0 || bitrateIndex === 0xf || sampleRateIndex === 3) {
+    return { bitrateKbps: 0, sampleRate: 0, durationMs: 0 };
+  }
+
+  const versionKey =
+    versionBits === 3 ? "v1" :
+    versionBits === 2 ? "v2" :
+    versionBits === 0 ? "v25" : "";
+  const sampleRates = {
+    v1: [44100, 48000, 32000],
+    v2: [22050, 24000, 16000],
+    v25: [11025, 12000, 8000],
+  };
+  const bitrates = {
+    v1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],
+    v2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+    v25: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+  };
+  const sampleRate = sampleRates[versionKey]?.[sampleRateIndex] || 0;
+  const bitrateKbps = bitrates[versionKey]?.[bitrateIndex] || 0;
+  if (!sampleRate || !bitrateKbps) return { bitrateKbps: 0, sampleRate: 0, durationMs: 0 };
+
+  const durationMs = Math.max(1000, Math.round((data.length * 8 * 1000) / (bitrateKbps * 1000)));
+  return { bitrateKbps, sampleRate, durationMs };
+}
+
+function detectVoiceEncoding(format, audioBytes) {
+  const fmt = String(format || "").trim().toLowerCase();
+  if (fmt === "mp3" || fmt === "mpeg" || fmt === "audio/mpeg") {
+    const info = parseMp3Info(audioBytes);
+    return {
+      encodeType: 7,
+      playtimeMs: info.durationMs || 1000,
+      sampleRate: info.sampleRate || 0,
+      bitsPerSample: 16,
+    };
+  }
+  if (fmt === "wav" || fmt === "wave" || fmt === "audio/wav" || fmt === "audio/x-wav" || fmt === "pcm") {
+    return { encodeType: 1, playtimeMs: 1000, sampleRate: 16000, bitsPerSample: 16 };
+  }
+  if (fmt === "amr") {
+    return { encodeType: 5, playtimeMs: 1000, sampleRate: 8000, bitsPerSample: 16 };
+  }
+  if (fmt === "silk") {
+    return { encodeType: 6, playtimeMs: 1000, sampleRate: 16000, bitsPerSample: 16 };
+  }
+  if (fmt === "ogg" || fmt === "oga" || fmt === "ogg-speex") {
+    return { encodeType: 8, playtimeMs: 1000, sampleRate: 16000, bitsPerSample: 16 };
+  }
+  return { encodeType: 7, playtimeMs: 1000, sampleRate: 0, bitsPerSample: 16 };
+}
+
+async function transcodeTtsToSilk(ttsResult) {
+  const fmt = String(ttsResult?.format || "").trim().toLowerCase();
+  const input = Buffer.from(ttsResult?.audio || []);
+  if (!input.length) throw new Error("空音频，无法转 silk");
+  if (fmt !== "wav") {
+    throw new Error(`当前只支持把 wav 转 silk，实际收到：${fmt || "unknown"}`);
+  }
+  const encoded = await encodeSilk(input, 0);
+  const silkBytes = Buffer.from(encoded?.data || []);
+  if (!silkBytes.length) throw new Error("silk 编码结果为空");
+  return {
+    audio: silkBytes,
+    meta: {
+      encodeType: 6,
+      playtimeMs: Math.max(1000, Number(encoded?.duration || 0)),
+      sampleRate: 24000,
+      bitsPerSample: 16,
+    },
+  };
 }
 
 function aesEcbPaddedSize(plaintextSize) {
@@ -408,8 +512,9 @@ async function uploadVoiceToWeixin(botToken, toUserId, audioBytes) {
   };
 }
 
-async function sendWeixinVoice(botToken, toUserId, contextToken, uploaded, voiceText = "") {
+async function sendWeixinVoice(botToken, toUserId, contextToken, uploaded, voiceText = "", voiceMeta = null) {
   const clientId = `dg-${crypto.randomUUID()}`;
+  const meta = voiceMeta || {};
   const payload = {
     msg: {
       from_user_id: "",
@@ -427,9 +532,11 @@ async function sendWeixinVoice(botToken, toUserId, contextToken, uploaded, voice
               aes_key: String(uploaded?.aes_key || "").trim(),
               encrypt_type: 1,
             },
-            encode_type: 7,
+            encode_type: Number(meta.encodeType || 7),
+            bits_per_sample: Number(meta.bitsPerSample || 16),
+            sample_rate: Number(meta.sampleRate || 0),
             text: String(voiceText || "").trim(),
-            playtime: 0,
+            playtime: Number(meta.playtimeMs || 1000),
           },
         },
       ],
@@ -684,14 +791,25 @@ async function main() {
         console.log(`[wechat-ilink] 开始发送语音 voice_chars=${voiceText.length}`);
         const ttsResult = await callGatewayTts(voiceText);
         if (ttsResult?.audio?.length) {
-          const uploadedVoice = await uploadVoiceToWeixin(botToken, it.toUserId, ttsResult.audio);
-          const voiceResp = await sendWeixinVoice(botToken, it.toUserId, it.contextToken, uploadedVoice, voiceText);
+          const silkResult = await transcodeTtsToSilk(ttsResult);
+          const voiceMeta = silkResult.meta;
+          const uploadedVoice = await uploadVoiceToWeixin(botToken, it.toUserId, silkResult.audio);
+          const voiceResp = await sendWeixinVoice(
+            botToken,
+            it.toUserId,
+            it.contextToken,
+            uploadedVoice,
+            voiceText,
+            voiceMeta
+          );
           if (!voiceResp.ok) {
             console.log(
               `[wechat-ilink] send voice 失败 ret=${voiceResp.ret} status=${voiceResp.status} body=${voiceResp.body}`
             );
           } else {
-            console.log(`[wechat-ilink] send voice ok bytes=${ttsResult.audio.length}`);
+            console.log(
+              `[wechat-ilink] send voice ok bytes=${silkResult.audio.length} src_format=${ttsResult.format} encode_type=${voiceMeta.encodeType} playtime_ms=${voiceMeta.playtimeMs}`
+            );
           }
         } else {
           console.log("[wechat-ilink] TTS 未返回音频，跳过语音发送");

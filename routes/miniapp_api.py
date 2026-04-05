@@ -1729,21 +1729,24 @@ def miniapp_voice_call_preview():
 def miniapp_tts_preview():
     body = request.get_json(silent=True) or {}
     text = str(body.get("text") or "").strip()
+    audio_format = str(body.get("audio_format") or "mp3").strip().lower() or "mp3"
     if not text:
         return jsonify({"ok": False, "error": "缺少 text"}), 400
+    if audio_format not in ("mp3", "wav"):
+        return jsonify({"ok": False, "error": f"暂不支持的 audio_format：{audio_format}"}), 400
     try:
         from services.minimax_tts import tts_to_audio_bytes
     except Exception as e:
         logger.warning("tts-preview 依赖加载失败 err=%s", e)
         return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
-    audio_bytes = tts_to_audio_bytes(text)
+    audio_bytes = tts_to_audio_bytes(text, audio_format=audio_format)
     if not audio_bytes:
         return jsonify({"ok": False, "error": "语音生成失败"}), 502
     return jsonify(
         {
             "ok": True,
             "audio_b64": base64.b64encode(audio_bytes).decode("ascii"),
-            "audio_format": "mp3",
+            "audio_format": audio_format,
         }
     )
 

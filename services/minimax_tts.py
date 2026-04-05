@@ -22,7 +22,7 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 
 
-def tts_to_audio_bytes(text: str) -> Optional[bytes]:
+def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optional[bytes]:
     """
     MiniMax T2A v2：返回音频 bytes（默认 mp3）。
     文档：POST https://api.minimaxi.com/v1/t2a_v2
@@ -35,6 +35,7 @@ def tts_to_audio_bytes(text: str) -> Optional[bytes]:
     if not t:
         return None
     headers = {"Authorization": f"Bearer {MINIMAX_API_KEY}", "Content-Type": "application/json"}
+    fmt = str(audio_format or MINIMAX_AUDIO_FORMAT or "").strip() or "mp3"
     payload = {
         "model": MINIMAX_T2A_MODEL,
         "text": t,
@@ -49,7 +50,7 @@ def tts_to_audio_bytes(text: str) -> Optional[bytes]:
         "audio_setting": {
             "sample_rate": MINIMAX_AUDIO_SAMPLE_RATE,
             "bitrate": MINIMAX_AUDIO_BITRATE,
-            "format": MINIMAX_AUDIO_FORMAT,
+            "format": fmt,
             "channel": MINIMAX_AUDIO_CHANNEL,
         },
         "subtitle_enable": False,
