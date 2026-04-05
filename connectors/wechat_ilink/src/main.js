@@ -119,7 +119,15 @@ async function ilinkPostJson(pathname, body, botToken) {
     "X-WECHAT-UIN": randomWechatUinHeader(),
     "Authorization": `Bearer ${botToken}`,
   };
-  const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body || {}) });
+  const controller = new AbortController();
+  const timeoutMs = Math.max(3000, envInt("WECHAT_ILINK_HTTP_TIMEOUT_MS", 15000));
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let r;
+  try {
+    r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body || {}), signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   const text = await r.text();
   let data = null;
   try {
@@ -329,17 +337,13 @@ function isDirectChatMsg(msg) {
 }
 
 function buildWechatStyleSystem() {
-  const tagsLine = getStickerTagsLineForSystemPrompt();
   return [
     "请遵守以下输出格式要求：",
-    "0) 要发表情包时，可在整条回复末尾加一个英文标签（方括号）；每条最多一个，不想发表情包就不要加。",
-    `   ${tagsLine}`,
     "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",
     "2) 不要输出分割线（例如 ---、———、***）。",
     "3) 不要使用 Markdown 强调符号 * 或 **。",
-    "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji。",
-    "5) 允许自然分段，但不要为了格式刻意堆很多空行。",
-    "6) 如需控制电脑，可在整条回复里最多追加一个 [PCMD:...] 标签；不确定就不要加。",
+    "4) 允许自然分段，但不要为了格式刻意堆很多空行。",
+    "5) 如需控制电脑，可在整条回复里最多追加一个 [PCMD:...] 标签；不确定就不要加。",
     "   - 仅允许这些指令：",
     "     [PCMD:lock] 锁屏",
     "     [PCMD:shutdown] 关机（默认 60 秒后）",
@@ -423,108 +427,6 @@ async function callGatewayChat(windowId, userContent) {
   }
   const reply = data?.choices?.[0]?.message?.content;
   return String(reply || "").trim();
-}
-
-const DEFAULT_STICKER_TAGS = [
-  "affectionate",
-  "angry",
-  "cute",
-  "good_night",
-  "happy",
-  "kiss",
-  "pitiful",
-  "sad",
-  "shy",
-  "sorry",
-  "speechless",
-];
-
-let _STICKER_TAGS_CACHE_AT = 0;
-let _STICKER_TAGS_CACHE = [...DEFAULT_STICKER_TAGS];
-let _STICKER_MAPPING_CACHE_AT = 0;
-let _STICKER_MAPPING_CACHE = {};
-let _STICKER_REGEX_CACHE_AT = 0;
-let _STICKER_REGEX_CACHE = /(?!x)x/;
-const _STICKER_CACHE_TTL_MS = 45_000;
-
-async function fetchStickerTags() {
-  const now = Date.now();
-  if (now - _STICKER_TAGS_CACHE_AT < _STICKER_CACHE_TTL_MS && _STICKER_TAGS_CACHE.length) {
-    return _STICKER_TAGS_CACHE;
-  }
-  try {
-    const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/tags-public`);
-    const text = await r.text();
-    if (!r.ok) return _STICKER_TAGS_CACHE;
-    const data = text ? JSON.parse(text) : null;
-    const rows = Array.isArray(data?.tags) ? data.tags : [];
-    const keys = rows.map((it) => String(it || "").trim().toLowerCase()).filter(Boolean);
-    _STICKER_TAGS_CACHE_AT = now;
-    _STICKER_TAGS_CACHE = [...new Set(keys)];
-    return _STICKER_TAGS_CACHE;
-  } catch {
-    return _STICKER_TAGS_CACHE;
-  }
-}
-
-async function fetchStickerMapping() {
-  return {};
-}
-
-function getStickerTagsLineForSystemPrompt() {
-  if (_STICKER_TAGS_CACHE.length) {
-    return `当前全部可用英文代号：${_STICKER_TAGS_CACHE.map((k) => `[${k}]`).join(" ")}`;
-  }
-  return "表情包英文代号以 MiniApp 配置为准；句末可加小写 [tag]。";
-}
-
-async function refreshStickerRegex() {
-  const now = Date.now();
-  if (now - _STICKER_REGEX_CACHE_AT < _STICKER_CACHE_TTL_MS) {
-    return _STICKER_REGEX_CACHE;
-  }
-  const keys = (await fetchStickerTags()).slice().sort((a, b) => b.length - a.length);
-  _STICKER_REGEX_CACHE = keys.length
-    ? new RegExp(`\\[(${keys.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\]`, "i")
-    : /(?!x)x/;
-  _STICKER_REGEX_CACHE_AT = now;
-  return _STICKER_REGEX_CACHE;
-}
-
-async function extractStickerTag(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return { cleanText: "", tag: "" };
-  const pat = await refreshStickerRegex();
-  const m = pat.exec(raw);
-  if (!m) return { cleanText: raw, tag: "" };
-  const tag = String(m[1] || "").trim().toLowerCase();
-  if (!tag) return { cleanText: raw, tag: "" };
-  const cleanText = (raw.slice(0, m.index) + raw.slice(m.index + m[0].length)).replace(/\n{3,}/g, "\n\n").trim();
-  return { cleanText, tag };
-}
-
-async function pickRandomStickerKey(tag) {
-  const t = String(tag || "").trim().toLowerCase();
-  if (!t) return null;
-  try {
-    const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/resolve?tag=${encodeURIComponent(t)}`);
-    const text = await r.text();
-    if (!r.ok) {
-      console.log(`[wechat-ilink] sticker resolve failed tag=${t} status=${r.status} body=${text.slice(0, 200)}`);
-      return null;
-    }
-    const data = text ? JSON.parse(text) : null;
-    const count = Number(data?.count || 0);
-    const url = String(data?.url || "").trim();
-    const fallbackUrl = String(data?.fallback_url || "").trim();
-    console.log(
-      `[wechat-ilink] sticker resolve tag=${t} count=${count} url=${url ? url.slice(0, 160) : "-"} fallback=${fallbackUrl ? fallbackUrl.slice(0, 160) : "-"}`
-    );
-    return { url, fallbackUrl };
-  } catch (e) {
-    console.log(`[wechat-ilink] sticker resolve error tag=${t} err=${String(e?.message || e)}`);
-    return null;
-  }
 }
 
 function extractVoiceTag(text) {
@@ -775,6 +677,8 @@ async function sendWeixinText(botToken, toUserId, contextToken, text) {
     },
     base_info: { channel_version: "1.0.2" },
   };
+  const startedAt = Date.now();
+  console.log(`[wechat-ilink] send text start chars=${String(text || "").length} preview=${String(text || "").slice(0, 80)}`);
   const r = await ilinkPostJson("/ilink/bot/sendmessage", payload, botToken);
   if (r.status < 200 || r.status >= 300) {
     return { ok: false, ret: 0, status: r.status, body: (r.text || "").slice(0, 200) };
@@ -783,6 +687,7 @@ async function sendWeixinText(botToken, toUserId, contextToken, text) {
   if (ret !== 0) {
     return { ok: false, ret, status: r.status, body: JSON.stringify(r.data).slice(0, 200) };
   }
+  console.log(`[wechat-ilink] send text ok ms=${Date.now() - startedAt}`);
   return { ok: true, ret: 0, status: r.status, body: "" };
 }
 
@@ -903,16 +808,7 @@ async function main() {
       }
       reply = await callGatewayChat(windowId, merged);
       const noVoice = extractVoiceTag(reply).cleanText;
-      const stickerParsed = await extractStickerTag(noVoice);
-      ({ cleanText: replyClean, imageUrls } = extractImageUrls(stickerParsed.cleanText));
-      const stickerResolved = await pickRandomStickerKey(stickerParsed.tag);
-      console.log(
-        `[wechat-ilink] sticker parsed tag=${stickerParsed.tag || "-"} clean_preview=${replyClean.slice(0, 160)}`
-      );
-      console.log(`[wechat-ilink] sticker key=${stickerResolved?.url || "-"}`);
-      if (stickerResolved?.url) {
-        imageUrls.push(stickerResolved);
-      }
+      ({ cleanText: replyClean, imageUrls } = extractImageUrls(noVoice));
       console.log(
         `[wechat-ilink] gateway reply chars=${reply.length} clean_chars=${replyClean.length} image_count=${imageUrls.length} preview=${reply.slice(0, 120)}`
       );
@@ -978,18 +874,8 @@ async function main() {
         const tempDir = path.join(process.cwd(), ".tmp_wechat_outbound_media");
         for (const imageItem of imageUrls) {
           const imageUrl = typeof imageItem === "string" ? imageItem : String(imageItem?.url || "").trim();
-          const fallbackUrl = typeof imageItem === "object" ? String(imageItem?.fallbackUrl || "").trim() : "";
           console.log(`[wechat-ilink] 开始发送图片 url=${imageUrl.slice(0, 160)}`);
-          let filePath = "";
-          try {
-            filePath = await downloadRemoteImageToTemp(imageUrl, tempDir);
-          } catch (e) {
-            if (!fallbackUrl || fallbackUrl === imageUrl) throw e;
-            console.log(
-              `[wechat-ilink] 图片主地址失败，改走兜底 url=${fallbackUrl.slice(0, 160)} err=${String(e?.message || e)}`
-            );
-            filePath = await downloadRemoteImageToTemp(fallbackUrl, tempDir);
-          }
+          const filePath = await downloadRemoteImageToTemp(imageUrl, tempDir);
           try {
             const uploadedImage = await uploadImageToWeixin(botToken, it.toUserId, filePath);
             const imageResp = await sendWeixinImage(botToken, it.toUserId, it.contextToken, uploadedImage);
