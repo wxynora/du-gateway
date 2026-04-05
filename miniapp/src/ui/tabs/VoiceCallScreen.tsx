@@ -104,7 +104,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   }, [avatarStamp, config.avatarVersion, config.useAvatarImage]);
 
   useEffect(() => {
-    tgReady(true);
+    tgReady(false);
     let cancelled = false;
 
     async function bootstrap() {
