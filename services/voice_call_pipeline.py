@@ -4,14 +4,8 @@ import re
 
 import requests
 
-from config import (
-    DEFAULT_CHAT_MODEL,
-    GATEWAY_MODELS,
-    MAIN_GATEWAY_BASE_URL,
-    MAIN_GATEWAY_BEARER_TOKEN,
-    TELEGRAM_PROACTIVE_TARGET_USER_ID,
-    VOICE_CALL_WINDOW_ID,
-)
+# 项目约定：语音通话禁止默认兜底模型。拉不到当前可用模型就直接报错，不要补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
+from config import MAIN_GATEWAY_BASE_URL, MAIN_GATEWAY_BEARER_TOKEN, TELEGRAM_PROACTIVE_TARGET_USER_ID, VOICE_CALL_WINDOW_ID
 from utils.time_aware import now_beijing_iso
 from utils.log import get_logger
 
@@ -41,14 +35,54 @@ def sanitize_voice_call_reply(text):
     return t.strip()
 
 
+def _models_url(base_url):
+    base = str(base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if base.endswith("/v1/chat/completions"):
+        return base[: -len("/v1/chat/completions")] + "/v1/models"
+    return base + "/v1/models"
+
+
+def _fetch_gateway_first_model():
+    base_url = str(MAIN_GATEWAY_BASE_URL or "").strip().rstrip("/")
+    url = _models_url(base_url)
+    if not url:
+        return ""
+    headers = {"Content-Type": "application/json"}
+    if MAIN_GATEWAY_BEARER_TOKEN:
+        headers["Authorization"] = "Bearer %s" % MAIN_GATEWAY_BEARER_TOKEN
+    try:
+        resp = requests.get(url, headers=headers, timeout=12)
+        if resp.status_code != 200:
+            return ""
+        data = resp.json() if resp.content else {}
+        items = data.get("data") if isinstance(data, dict) else None
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and str(item.get("id") or "").strip():
+                    return str(item.get("id") or "").strip()
+                if isinstance(item, str) and item.strip():
+                    return item.strip()
+    except Exception as e:
+        logger.warning("voice fetch models 异常 err=%s", e)
+    return ""
+
+
+# 注意：语音通话禁止默认兜底模型。
+# 拉不到当前可用模型就直接报错，不要补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
+def _resolve_voice_model():
+    model = _fetch_gateway_first_model()
+    return str(model or "").strip()
+
+
 def call_voice_chat_pipeline(user_text, window_id=""):
     text = str(user_text or "").strip()
     if not text:
         return "", "语音识别结果为空"
-    model = str(DEFAULT_CHAT_MODEL or "").strip()
+    model = _resolve_voice_model()
     if not model:
-        gateway_models = [str(x or "").strip() for x in (GATEWAY_MODELS or []) if str(x or "").strip()]
-        model = gateway_models[0] if gateway_models else "gpt-4"
+        return "", "当前没有可用模型"
     body = {"messages": [{"role": "user", "content": text}], "model": model, "stream": False}
     headers = {
         "Content-Type": "application/json",
@@ -65,6 +99,17 @@ def call_voice_chat_pipeline(user_text, window_id=""):
     except Exception as e:
         logger.warning("voice chat pipeline 异常 err=%s", e)
         return "", "聊天服务暂时不可用"
+    if resp.status_code in (401, 403):
+        new_model = _fetch_gateway_first_model()
+        if new_model and new_model != body.get("model"):
+            logger.warning("voice chat %s: model=%s -> %s 重试一次", resp.status_code, body.get("model"), new_model)
+            body["model"] = new_model
+            try:
+                resp = requests.post(url, headers=headers, json=body, timeout=180)
+                data = resp.json() if resp.content else {}
+            except Exception as e:
+                logger.warning("voice chat retry 异常 err=%s", e)
+                return "", "聊天服务暂时不可用"
     if resp.status_code != 200:
         msg = ""
         if isinstance(data, dict):

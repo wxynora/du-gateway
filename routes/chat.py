@@ -1,4 +1,5 @@
 # 聊天代理：统一走完整管道（清洗、注入、转发、存档），无开头过滤
+# 项目约定：主聊天禁止默认兜底模型。没传 model 就直接报错，不要偷偷补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
 import json
 import queue
 import threading
@@ -15,8 +16,6 @@ from config import (
     TARGET_AI_API_KEYS,
     GATEWAY_MODELS,
     model_matches_gateway_keywords,
-    DEFAULT_CHAT_MODEL,
-    FORCE_CHAT_MODEL_ENABLED,
     MAX_COMPLETION_TOKENS,
     STREAM_TIMEOUT_SECONDS,
     STREAM_SSE_HEARTBEAT_SECONDS,
@@ -75,33 +74,10 @@ def _get_window_id_from_request(body: dict) -> str:
     return WINDOW_ID_DEFAULT
 
 
-def _resolve_default_model_name() -> str:
-    """解析网关默认模型名：DEFAULT_CHAT_MODEL > GATEWAY_MODELS[0] > gpt-4。"""
-    if DEFAULT_CHAT_MODEL:
-        return DEFAULT_CHAT_MODEL
-    if GATEWAY_MODELS:
-        return str(GATEWAY_MODELS[0] or "").strip() or "gpt-4"
-    return "gpt-4"
-
-
+# 注意：主聊天与语音通话都禁止再写“默认兜底模型”逻辑。
+# 没传 model 或拿不到当前可用模型时，直接报错，不要偷偷补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
 def _normalize_request_model(body: dict) -> dict:
-    """
-    统一处理请求 model：
-    - FORCE_CHAT_MODEL_ENABLED=1：强制覆盖为默认模型
-    - 否则仅在请求缺失 model 时补默认模型
-    """
-    b = dict(body or {})
-    default_model = _resolve_default_model_name()
-    cur = (b.get("model") or "").strip() if isinstance(b.get("model"), str) else ""
-    if FORCE_CHAT_MODEL_ENABLED:
-        if cur != default_model:
-            logger.info("模型已强制覆盖：%s -> %s", cur or "(empty)", default_model)
-        b["model"] = default_model
-        return b
-    if not cur:
-        b["model"] = default_model
-        logger.info("请求未带 model，已自动补默认模型：%s", default_model)
-    return b
+    return dict(body or {})
 
 
 def _get_forward_targets(request_model: str = None):
@@ -864,6 +840,9 @@ def chat_completions():
     """统一入口：所有请求走完整管道（清洗、注入、转发、存档），无开头过滤。支持 X-Window-Id / body.window_id（如 Telegram 用 tg_{user_id}）。"""
     body = request.get_json(silent=True) or {}
     body = _normalize_request_model(body)
+    req_model = (body.get("model") or "").strip() if isinstance(body.get("model"), str) else ""
+    if not req_model:
+        return jsonify({"error": "缺少 model"}), 400
     headers = dict(request.headers) if request.headers else {}
     window_id = _get_window_id_from_request(body)
     # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
