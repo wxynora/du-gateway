@@ -4,8 +4,14 @@ import crypto from "node:crypto";
 import process from "node:process";
 import QRCode from "qrcode";
 import dotenv from "dotenv";
+import { fileURLToPath } from "node:url";
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const REPO_ROOT = path.resolve(__dirname, "../../..");
+dotenv.config({ path: path.join(REPO_ROOT, ".env"), override: false });
 
 function envStr(name, fallback = "") {
   return (process.env[name] || fallback || "").trim();
@@ -207,12 +213,19 @@ function isDirectChatMsg(msg) {
 
 function buildWechatStyleSystem() {
   return [
-    "你正在微信（WeChat）平台与用户私聊对话。",
     "请用中文回复，语气自然、简洁、温柔但不油腻。",
     "不要输出脑内 OS / 思维过程；只输出给用户看的最终回复。",
     "不要写“小本本/记事本更新”的指令或提示（除非用户明确要求）。",
-    "输出尽量分段：优先用换行分条；每条不要太长，方便在微信里阅读。",
+    "输出尽量分段：优先用换行分条；每条不要太长，方便聊天窗口阅读。",
   ].join("\n");
+}
+
+function resolveWechatWindowId() {
+  const tgUserId = envStr("TELEGRAM_PROACTIVE_TARGET_USER_ID", "");
+  if (!tgUserId) {
+    throw new Error("缺少 TELEGRAM_PROACTIVE_TARGET_USER_ID，无法把微信入口并到 TG 上下文");
+  }
+  return `tg_${tgUserId}`;
 }
 
 function trimContextMessages(history, maxTurns) {
@@ -427,7 +440,7 @@ async function main() {
       return;
     }
 
-    const windowId = `wechat_${fromUserId}`;
+    const windowId = resolveWechatWindowId();
     console.log(`[wechat-ilink] flush from=${fromUserId} window_id=${windowId} chars=${merged.length}`);
 
     let reply = "";

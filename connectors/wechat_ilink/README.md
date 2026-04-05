@@ -16,6 +16,7 @@ cp .env.example .env
 
 - `GATEWAY_BASE_URL`
 - `GATEWAY_CHAT_PATH`（默认 `/v1/chat/completions`）
+- 根目录 `.env` 里的 `TELEGRAM_PROACTIVE_TARGET_USER_ID`
 
 ### 2) 第一次扫码登录（拿 bot_token）
 
@@ -43,7 +44,7 @@ npm start
 - **超过阈值立即提交**：单条/累计超过 200 字就立即提交（`WECHAT_INPUT_IMMEDIATE_CHARS`）
 - **输出切分**：优先按换行分条；每条超过 100 字再拆（`WECHAT_OUTPUT_CHUNK_CHARS`）
 - **失败兜底**：网关失败会保留 pending，下次再试，并最多每 30 秒提示一次
-- **微信风格 system**：不输出脑内 OS、不带小本本提示，并提示当前平台为微信
+- **统一聊天 system**：不输出脑内 OS、不带小本本提示，不区分消息来源
 - **正在输入中**：网关处理期间会发送 iLink `sendtyping`（可在 `.env` 调开关/间隔/次数）
 
 ## 当前限制
