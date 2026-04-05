@@ -236,9 +236,12 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
   const rowBase =
     "flex w-full items-center gap-3 px-4 py-4 text-left transition active:scale-[0.995]";
 
+  const isVoiceView = view === "voice";
+
   return (
-    <div className="fixed inset-0 z-[80] overflow-auto bg-[rgba(238,241,245,0.96)] text-cream-text backdrop-blur-xl">
-      <div className="mx-auto min-h-dvh max-w-xl px-4 pb-8 pt-4 safe-bottom">
+    <div className={isVoiceView ? "fixed inset-0 z-[80] overflow-auto bg-[#111214] text-white" : "fixed inset-0 z-[80] overflow-auto bg-[rgba(238,241,245,0.96)] text-cream-text backdrop-blur-xl"}>
+      <div className={isVoiceView ? "mx-auto min-h-dvh max-w-xl px-0 pb-0 pt-0 safe-bottom" : "mx-auto min-h-dvh max-w-xl px-4 pb-8 pt-4 safe-bottom"}>
+        {!isVoiceView ? (
         <div className="flex items-center justify-between">
           <button className="neo-icon-btn h-10 w-10 text-sm" onClick={view === "home" ? onClose : () => setView("home")} type="button">
             {view === "home" ? (
@@ -250,6 +253,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
           <div className="neo-chip">{view === "home" ? "通话" : view === "voice" ? "语音通话" : view === "records" ? "通话记录" : "通话详情"}</div>
           <div className="w-10" />
         </div>
+        ) : null}
 
         {view === "home" ? (
           <div className="pt-4">
@@ -309,7 +313,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
         ) : null}
 
         {view === "voice" ? (
-          <div className="pt-4">
+          <div className="pt-0">
             <VoiceCallScreen onClose={() => setView("home")} />
           </div>
         ) : null}
