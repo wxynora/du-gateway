@@ -619,6 +619,9 @@ async function main() {
       }
       reply = await callGatewayChat(windowId, merged);
       ({ cleanText: replyClean, voiceText } = extractVoiceTag(reply));
+      console.log(
+        `[wechat-ilink] gateway reply chars=${reply.length} clean_chars=${replyClean.length} voice_chars=${voiceText.length} preview=${reply.slice(0, 120)}`
+      );
       ok = true;
     } catch (e) {
       ok = false;
@@ -678,6 +681,7 @@ async function main() {
 
     if (voiceText) {
       try {
+        console.log(`[wechat-ilink] 开始发送语音 voice_chars=${voiceText.length}`);
         const ttsResult = await callGatewayTts(voiceText);
         if (ttsResult?.audio?.length) {
           const uploadedVoice = await uploadVoiceToWeixin(botToken, it.toUserId, ttsResult.audio);
@@ -686,11 +690,17 @@ async function main() {
             console.log(
               `[wechat-ilink] send voice 失败 ret=${voiceResp.ret} status=${voiceResp.status} body=${voiceResp.body}`
             );
+          } else {
+            console.log(`[wechat-ilink] send voice ok bytes=${ttsResult.audio.length}`);
           }
+        } else {
+          console.log("[wechat-ilink] TTS 未返回音频，跳过语音发送");
         }
       } catch (e) {
         console.log(`[wechat-ilink] 发送语音失败：${String(e?.message || e)}`);
       }
+    } else {
+      console.log("[wechat-ilink] 本次回复未产出 <voice>，仅发送文字");
     }
 
     // 成功后清空该用户 pending
