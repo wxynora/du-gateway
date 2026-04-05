@@ -163,24 +163,10 @@ def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=Non
         except Exception:
             pass
 
-    audio_reply = None
     audio_b64 = ""
-    streamed_audio = False
-    if callable(audio_chunk_cb):
-        try:
-            from services.minimax_tts_stream import stream_tts_pcm_chunks
-
-            def _on_chunk(chunk, meta):
-                audio_chunk_cb(chunk, meta or {})
-
-            streamed_audio = bool(stream_tts_pcm_chunks(reply_text, _on_chunk))
-        except Exception as e:
-            logger.warning("voice-call 流式 TTS 失败，回退非流式 err=%s", e)
-            streamed_audio = False
-    if not streamed_audio:
-        audio_reply = tts_to_audio_bytes(reply_text)
-        if audio_reply:
-            audio_b64 = base64.b64encode(audio_reply).decode("ascii")
+    audio_reply = tts_to_audio_bytes(reply_text)
+    if audio_reply:
+        audio_b64 = base64.b64encode(audio_reply).decode("ascii")
 
     return {
         "ok": True,
@@ -188,6 +174,6 @@ def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=Non
         "reply_text": reply_text,
         "audio_b64": audio_b64,
         "audio_format": "mp3" if audio_b64 else "",
-        "streamed_audio": streamed_audio,
+        "streamed_audio": False,
         "timestamp": now_beijing_iso(),
     }, 200

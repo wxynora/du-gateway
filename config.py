@@ -380,7 +380,6 @@ DEEPGRAM_STT_ENDPOINTING = os.environ.get("DEEPGRAM_STT_ENDPOINTING", "10").stri
 VOICE_CALL_MAX_SECONDS = int(float(os.environ.get("VOICE_CALL_MAX_SECONDS", "90") or "90"))
 VOICE_CALL_MAX_BYTES = int(float(os.environ.get("VOICE_CALL_MAX_BYTES", str(12 * 1024 * 1024)) or str(12 * 1024 * 1024)))
 VOICE_CALL_WINDOW_ID = os.environ.get("VOICE_CALL_WINDOW_ID", "miniapp_voice_call").strip() or "miniapp_voice_call"
-MINIAPP_VOICE_WS_BASE = os.environ.get("MINIAPP_VOICE_WS_BASE", "").strip()
 MAIN_GATEWAY_BASE_URL = os.environ.get("MAIN_GATEWAY_BASE_URL", "http://127.0.0.1:5000").strip()
 MAIN_GATEWAY_BEARER_TOKEN = os.environ.get("MAIN_GATEWAY_BEARER_TOKEN", "").strip()
 

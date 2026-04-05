@@ -6,5 +6,3 @@ python-dotenv>=1.0.0
 # 农历（实时层按需注入「农历节气宜忌」用；无则仅返回占位），建议使用较新版本
 zhdate>=0.4.0
 Pillow>=10.0.0
-flask-sock>=0.7.0
-websockets>=13.0

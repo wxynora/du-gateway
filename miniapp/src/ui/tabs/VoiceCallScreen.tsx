@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, buildApiAssetUrl, getPanelToken } from "../api";
+import { apiFetch, buildApiAssetUrl } from "../api";
 import { Btn } from "../components";
-import { getInitData, tgReady } from "../tg";
+import { tgReady } from "../tg";
 import { useToast } from "../toast";
 
 type VoiceConfig = {
@@ -9,11 +9,10 @@ type VoiceConfig = {
   subtitle: string;
   avatarVersion: number;
   useAvatarImage: boolean;
-  voiceWsBase?: string;
   theme?: string;
 };
 
-type CallStatus = "connecting" | "ready" | "recording" | "recognizing" | "thinking" | "speaking" | "error";
+type CallStatus = "connecting" | "ready" | "recording" | "recognizing" | "speaking" | "error";
 
 const DEFAULT_CONFIG: VoiceConfig = {
   displayName: "渡",
@@ -51,17 +50,6 @@ function resolveRecorderMimeType(): string {
   return supported || "";
 }
 
-function toBase64(buffer: ArrayBuffer): string {
-  let binary = "";
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const part = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-    binary += String.fromCharCode(...part);
-  }
-  return window.btoa(binary);
-}
-
 export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const toast = useToast();
   const [status, setStatus] = useState<CallStatus>("connecting");
@@ -82,21 +70,11 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksCountRef = useRef(0);
+  const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mimeTypeRef = useRef("");
   const isClosingRef = useRef(false);
-  const statusTextRef = useRef("正在接通...");
-
-  const voiceSocketRef = useRef<WebSocket | null>(null);
-  const streamSessionIdRef = useRef("");
-  const sessionReadyResolverRef = useRef<((sessionId: string) => void) | null>(null);
-  const sessionReadyRejectRef = useRef<((reason?: unknown) => void) | null>(null);
-
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const nextPcmPlayTimeRef = useRef(0);
-  const activePcmSourcesRef = useRef<AudioBufferSourceNode[]>([]);
-  const streamAudioEndingRef = useRef(false);
+  const actionBusyRef = useRef(false);
 
   const avatarSrc = useMemo(() => {
     if (!config.useAvatarImage || config.avatarVersion <= 0) return "";
@@ -123,14 +101,14 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
         setDraftSubtitle(next.subtitle || DEFAULT_CONFIG.subtitle);
         setUseAvatarImage(!!next.useAvatarImage);
         setStatus("ready");
-        setStatusText("已接通，点一下接通");
+        setStatusText("已接通，点一下录音");
       } catch (e: any) {
         setStatus("error");
         setStatusText(e?.message || "语音配置加载失败");
       }
     }
 
-    bootstrap();
+    void bootstrap();
     return () => {
       cancelled = true;
       cleanupMedia();
@@ -148,45 +126,21 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
     if (audioRef.current) audioRef.current.muted = !speakerOn;
   }, [speakerOn]);
 
-  useEffect(() => {
-    statusTextRef.current = statusText;
-  }, [statusText]);
-
   function cleanupMedia() {
     try {
       if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
     } catch {}
     recorderRef.current = null;
-    try {
-      voiceSocketRef.current?.close();
-    } catch {}
-    voiceSocketRef.current = null;
-    streamSessionIdRef.current = "";
-    chunksCountRef.current = 0;
+    chunksRef.current = [];
     try {
       audioRef.current?.pause();
       audioRef.current = null;
     } catch {}
-    try {
-      for (const source of activePcmSourcesRef.current) {
-        try {
-          source.stop();
-        } catch {}
-      }
-    } catch {}
-    activePcmSourcesRef.current = [];
-    nextPcmPlayTimeRef.current = 0;
-    streamAudioEndingRef.current = false;
-    try {
-      if (audioContextRef.current && audioContextRef.current.state !== "closed") {
-        audioContextRef.current.close().catch(() => {});
-      }
-    } catch {}
-    audioContextRef.current = null;
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    actionBusyRef.current = false;
   }
 
   async function ensureStream(): Promise<MediaStream> {
@@ -203,280 +157,81 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
     return stream;
   }
 
-  function buildVoiceSocketUrl(): string {
-    const base = String(config.voiceWsBase || "").trim();
-    const url = base
-      ? new URL("/miniapp-api/voice-call/ws", base.endsWith("/") ? base : `${base}/`)
-      : new URL(`${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/miniapp-api/voice-call/ws`);
-    const initData = getInitData();
-    const panelToken = getPanelToken();
-    if (initData) url.searchParams.set("initData", initData);
-    if (panelToken) url.searchParams.set("panel_token", panelToken);
-    return url.toString();
-  }
-
-  function ensureVoiceSocket(): Promise<WebSocket> {
-    const existing = voiceSocketRef.current;
-    if (existing && existing.readyState === WebSocket.OPEN) return Promise.resolve(existing);
-    if (existing && existing.readyState === WebSocket.CONNECTING) {
-      return new Promise((resolve, reject) => {
-        const onOpen = () => {
-          existing.removeEventListener("open", onOpen);
-          existing.removeEventListener("error", onError);
-          resolve(existing);
-        };
-        const onError = () => {
-          existing.removeEventListener("open", onOpen);
-          existing.removeEventListener("error", onError);
-          reject(new Error("语音连接建立失败"));
-        };
-        existing.addEventListener("open", onOpen);
-        existing.addEventListener("error", onError);
-      });
-    }
-    return new Promise((resolve, reject) => {
-      const socket = new WebSocket(buildVoiceSocketUrl());
-      voiceSocketRef.current = socket;
-      socket.onopen = () => resolve(socket);
-      socket.onerror = () => reject(new Error("语音连接建立失败"));
-      socket.onclose = () => {
-        if (voiceSocketRef.current === socket) voiceSocketRef.current = null;
-        if (sessionReadyRejectRef.current) {
-          sessionReadyRejectRef.current(new Error("语音连接已断开"));
-          sessionReadyRejectRef.current = null;
-          sessionReadyResolverRef.current = null;
-        }
-      };
-      socket.onmessage = async (event) => {
-        try {
-          const msg = JSON.parse(String(event.data || "{}"));
-          const type = String(msg?.type || "");
-          if (type === "ready") {
-            streamSessionIdRef.current = String(msg.session_id || "");
-            if (msg.call_id) setCallId(String(msg.call_id));
-            if (sessionReadyResolverRef.current) {
-              sessionReadyResolverRef.current(streamSessionIdRef.current);
-              sessionReadyResolverRef.current = null;
-              sessionReadyRejectRef.current = null;
-            }
-            return;
-          }
-          if (type === "status") {
-            const nextStatus = String(msg.status || "");
-            if (nextStatus === "recording") setStatus("recording");
-            else if (nextStatus === "recognizing") setStatus("recognizing");
-            else if (nextStatus === "thinking") setStatus("thinking");
-            else if (nextStatus === "speaking") setStatus("speaking");
-            setStatusText(String(msg.text || statusTextRef.current || ""));
-            return;
-          }
-          if (type === "transcript_partial") {
-            const partial = String(msg.text || "").trim();
-            if (partial) {
-              setStatus("recording");
-              setStatusText(`你在说：${partial}`);
-            }
-            return;
-          }
-          if (type === "audio_chunk") {
-            setStatus("speaking");
-            setStatusText("渡正在讲话...");
-            playPcmChunk(String(msg.audio_b64 || ""), Number(msg.sample_rate || 32000), Number(msg.audio_channel || 1));
-            return;
-          }
-          if (type === "audio_stream_end") {
-            streamAudioEndingRef.current = true;
-            if (activePcmSourcesRef.current.length === 0) {
-              streamAudioEndingRef.current = false;
-              setStatus("ready");
-              setStatusText("已接通，点一下接通");
-            }
-            return;
-          }
-          if (type === "result") {
-            streamSessionIdRef.current = "";
-            chunksCountRef.current = 0;
-            if (msg.call_id) setCallId(String(msg.call_id));
-            if (msg.streamed_audio) {
-              setStatus("speaking");
-              setStatusText("渡正在讲话...");
-            } else if (msg.audio_b64) {
-              setStatus("speaking");
-              setStatusText("渡正在讲话...");
-              await playReplyAudio(String(msg.audio_b64 || ""), String(msg.audio_format || "mp3"));
-            } else {
-              setStatus("ready");
-              setStatusText("已接通，点一下接通");
-            }
-            return;
-          }
-          if (type === "error") {
-            throw new Error(String(msg.error || "语音连接异常"));
-          }
-        } catch (e: any) {
-          setStatus("error");
-          setStatusText(e?.message || "语音连接异常");
-          toast(e?.message || "语音连接异常");
-        }
-      };
-    });
-  }
-
-  async function startVoiceStreamSession(socket: WebSocket): Promise<string> {
-    streamSessionIdRef.current = "";
-    const readyPromise = new Promise<string>((resolve, reject) => {
-      sessionReadyResolverRef.current = resolve;
-      sessionReadyRejectRef.current = reject;
-      window.setTimeout(() => {
-        if (sessionReadyRejectRef.current === reject) {
-          sessionReadyRejectRef.current = null;
-          sessionReadyResolverRef.current = null;
-          reject(new Error("语音会话建立超时"));
-        }
-      }, 4000);
-    });
-    socket.send(JSON.stringify({ type: "start", call_id: callId, call_started_at: callStartedAtIso }));
-    return readyPromise;
-  }
-
-  function interruptPlayback() {
-    try {
-      audioRef.current?.pause();
-    } catch {}
-    audioRef.current = null;
-    try {
-      for (const source of activePcmSourcesRef.current) {
-        try {
-          source.stop();
-        } catch {}
-      }
-    } catch {}
-    activePcmSourcesRef.current = [];
-    nextPcmPlayTimeRef.current = 0;
-    streamAudioEndingRef.current = false;
-  }
-
-  function ensureAudioContext(): AudioContext {
-    if (audioContextRef.current) return audioContextRef.current;
-    const Ctor = window.AudioContext || (window as any).webkitAudioContext;
-    const ctx = new Ctor();
-    audioContextRef.current = ctx;
-    nextPcmPlayTimeRef.current = ctx.currentTime;
-    return ctx;
-  }
-
-  function playPcmChunk(audioB64: string, sampleRate: number, channelCount: number) {
-    if (!speakerOn || !audioB64) return;
-    const binary = window.atob(audioB64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-    const ctx = ensureAudioContext();
-    if (ctx.state === "suspended") ctx.resume().catch(() => {});
-    const safeChannels = Math.max(1, channelCount || 1);
-    const frameCount = Math.max(1, Math.floor(bytes.length / 2 / safeChannels));
-    const audioBuffer = ctx.createBuffer(safeChannels, frameCount, sampleRate || 32000);
-    const pcm = new DataView(bytes.buffer);
-    for (let ch = 0; ch < safeChannels; ch += 1) {
-      const channel = audioBuffer.getChannelData(ch);
-      for (let i = 0; i < frameCount; i += 1) {
-        const idx = (i * safeChannels + ch) * 2;
-        channel[i] = Math.max(-1, Math.min(1, pcm.getInt16(idx, true) / 32768));
-      }
-    }
-    const source = ctx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(ctx.destination);
-    const startAt = Math.max(ctx.currentTime, nextPcmPlayTimeRef.current || ctx.currentTime);
-    source.start(startAt);
-    nextPcmPlayTimeRef.current = startAt + audioBuffer.duration;
-    activePcmSourcesRef.current.push(source);
-    source.onended = () => {
-      activePcmSourcesRef.current = activePcmSourcesRef.current.filter((item) => item !== source);
-      if (streamAudioEndingRef.current && activePcmSourcesRef.current.length === 0) {
-        streamAudioEndingRef.current = false;
-        setStatus("ready");
-        setStatusText("已接通，点一下接通");
-      }
-    };
-  }
-
   async function beginRecording() {
-    if (status === "recognizing" || status === "connecting") return;
+    if (status === "recording" || status === "recognizing" || status === "speaking" || actionBusyRef.current) return;
+    actionBusyRef.current = true;
     try {
-      interruptPlayback();
-      const socket = await ensureVoiceSocket();
-      await startVoiceStreamSession(socket);
+      try {
+        audioRef.current?.pause();
+      } catch {}
+      audioRef.current = null;
       const stream = await ensureStream();
-      chunksCountRef.current = 0;
+      chunksRef.current = [];
       mimeTypeRef.current = resolveRecorderMimeType();
       const recorder = mimeTypeRef.current ? new MediaRecorder(stream, { mimeType: mimeTypeRef.current }) : new MediaRecorder(stream);
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          chunksCountRef.current += 1;
-          void sendVoiceChunk(event.data, event.data.type || mimeTypeRef.current || recorder.mimeType || "audio/webm");
-        }
+        if (event.data && event.data.size > 0) chunksRef.current.push(event.data);
       };
-      recorder.onstop = async () => {
-        if (isClosingRef.current) {
-          setStatus("ready");
-          setStatusText("已接通，点一下接通");
-          return;
-        }
-        await finishVoiceStream(mimeTypeRef.current || recorder.mimeType || "audio/webm");
+      recorder.onstop = () => {
       };
-      recorder.start(350);
+      recorder.start();
+      actionBusyRef.current = false;
       setStatus("recording");
       setStatusText("正在听你说话...");
     } catch (e: any) {
+      actionBusyRef.current = false;
       setStatus("error");
       setStatusText(e?.message || "麦克风打开失败");
     }
   }
 
-  function stopRecording() {
+  async function stopRecordingAndSend() {
     const recorder = recorderRef.current;
-    if (!recorder || recorder.state === "inactive") return;
+    if (!recorder || recorder.state === "inactive" || actionBusyRef.current) return;
+    actionBusyRef.current = true;
     setStatus("recognizing");
     setStatusText("识别中...");
     recorder.stop();
+    const mimeType = mimeTypeRef.current || recorder.mimeType || "audio/webm";
+    const blob = await new Promise<Blob>((resolve) => {
+      const finalize = () => {
+        recorder.removeEventListener("stop", finalize);
+        resolve(new Blob(chunksRef.current, { type: mimeType }));
+      };
+      recorder.addEventListener("stop", finalize);
+    });
+    chunksRef.current = [];
+    if (blob.size <= 0 || isClosingRef.current) {
+      actionBusyRef.current = false;
+      setStatus("ready");
+      setStatusText("已接通，点一下录音");
+      return;
+    }
+    await sendVoice(blob, mimeType);
+    actionBusyRef.current = false;
   }
 
-  async function sendVoiceChunk(blob: Blob, mimeType: string) {
-    const socket = await ensureVoiceSocket();
-    const sessionId = streamSessionIdRef.current;
-    if (!sessionId || !blob || blob.size <= 0) return;
-    const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : mimeType.includes("mpeg") ? "mp3" : "webm";
-    const buffer = await blob.arrayBuffer();
-    socket.send(
-      JSON.stringify({
-        type: "audio_chunk",
-        session_id: sessionId,
-        mime_type: mimeType,
-        filename: `voice-call.${ext}`,
-        audio_b64: toBase64(buffer),
-      }),
-    );
-  }
-
-  async function finishVoiceStream(mimeType: string) {
+  async function sendVoice(blob: Blob, mimeType: string) {
     try {
-      const socket = await ensureVoiceSocket();
-      const sessionId = streamSessionIdRef.current;
-      if (!sessionId || chunksCountRef.current <= 0) {
+      const form = new FormData();
+      const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : mimeType.includes("mpeg") ? "mp3" : "webm";
+      form.append("audio", blob, `voice-call.${ext}`);
+      form.append("mime_type", mimeType);
+      form.append("call_id", callId);
+      form.append("call_started_at", callStartedAtIso);
+      const resp = await apiFetch("/miniapp-api/voice-call", { method: "POST", body: form });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      if (data.call_id) setCallId(String(data.call_id));
+      if (data.audio_b64) {
+        setStatus("speaking");
+        setStatusText("渡正在讲话...");
+        await playReplyAudio(String(data.audio_b64 || ""), String(data.audio_format || "mp3"));
+      } else {
         setStatus("ready");
-        setStatusText("已接通，点一下接通");
-        return;
+        setStatusText("已接通，点一下录音");
       }
-      socket.send(
-        JSON.stringify({
-          type: "finish",
-          session_id: sessionId,
-          mime_type: mimeType,
-          call_id: callId,
-          call_started_at: callStartedAtIso,
-        }),
-      );
     } catch (e: any) {
       setStatus("error");
       setStatusText(e?.message || "语音请求失败");
@@ -494,12 +249,12 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       audio.muted = !speakerOn;
       audio.onended = () => {
         setStatus("ready");
-        setStatusText("已接通，点一下接通");
+        setStatusText("已接通，点一下录音");
         resolve();
       };
       audio.onerror = () => {
         setStatus("ready");
-        setStatusText("已接通，点一下接通");
+        setStatusText("已接通，点一下录音");
         resolve();
       };
       audio.play().catch(() => {
@@ -560,22 +315,14 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
         });
       const canvasToBlob = (canvas: HTMLCanvasElement, quality: number) =>
         new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob(
-            (blob) => {
-              if (blob) resolve(blob);
-              else reject(new Error("图片编码失败"));
-            },
-            "image/jpeg",
-            quality,
-          );
+          canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("图片编码失败"))), "image/jpeg", quality);
         });
       const maxUploadBytes = 1200 * 1024;
-      const maxSide = 1200;
       let uploadBlob: Blob = file;
       if (file.size > maxUploadBytes || file.type !== "image/jpeg") {
         const src = await toDataUrl(file);
         const img = await loadImage(src);
-        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const scale = Math.min(1, 1200 / Math.max(img.width, img.height));
         const w = Math.max(1, Math.round(img.width * scale));
         const h = Math.max(1, Math.round(img.height * scale));
         const canvas = document.createElement("canvas");
@@ -584,11 +331,11 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
         const ctx = canvas.getContext("2d");
         if (!ctx) throw new Error("浏览器不支持图片处理");
         ctx.drawImage(img, 0, 0, w, h);
-        let q = 0.9;
-        let out = await canvasToBlob(canvas, q);
-        while (out.size > maxUploadBytes && q > 0.55) {
-          q -= 0.08;
-          out = await canvasToBlob(canvas, q);
+        let quality = 0.9;
+        let out = await canvasToBlob(canvas, quality);
+        while (out.size > maxUploadBytes && quality > 0.55) {
+          quality -= 0.08;
+          out = await canvasToBlob(canvas, quality);
         }
         uploadBlob = out;
       }
@@ -614,12 +361,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
 
   function endCall() {
     isClosingRef.current = true;
-    try {
-      const socket = voiceSocketRef.current;
-      if (socket && socket.readyState === WebSocket.OPEN && streamSessionIdRef.current) {
-        socket.send(JSON.stringify({ type: "cancel", session_id: streamSessionIdRef.current }));
-      }
-    } catch {}
     cleanupMedia();
     onClose();
   }
@@ -686,10 +427,13 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
                   : "bg-white/12 text-white shadow-[0_12px_28px_rgba(0,0,0,0.18)]")
               }
               onClick={() => {
-                if (status === "recording") stopRecording();
-                else beginRecording();
+                if (status === "recording") {
+                  void stopRecordingAndSend();
+                } else {
+                  void beginRecording();
+                }
               }}
-              disabled={status === "recognizing" || status === "connecting"}
+              disabled={status === "recognizing" || actionBusyRef.current}
             >
               <div>
                 <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-white/10">
@@ -698,7 +442,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
                     <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
                   </svg>
                 </div>
-                {status === "recording" ? "点一下发送" : "点一下接通"}
+                {status === "recording" ? "点一下发送" : "点一下录音"}
               </div>
             </button>
 

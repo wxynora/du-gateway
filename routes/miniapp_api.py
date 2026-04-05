@@ -15,7 +15,6 @@ from flask import Blueprint, Response, current_app, jsonify, request, stream_wit
 
 from config import (
     MINIAPP_LOG_FILE,
-    MINIAPP_VOICE_WS_BASE,
     R2_PUBLIC_URL,
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
     TELEGRAM_WENYOU_OWNER_USER_ID,
@@ -1581,7 +1580,6 @@ def miniapp_get_voice_config():
     merged["avatarUrl"] = _miniapp_voice_avatar_url(avatar_version) if avatar_version > 0 and merged["useAvatarImage"] else ""
     if merged["useAvatarImage"] and not merged["avatarUrl"]:
         merged["avatarUrl"] = "/miniapp-api/voice-avatar"
-    merged["voiceWsBase"] = str(MINIAPP_VOICE_WS_BASE or "").strip()
     return jsonify({"ok": True, "config": merged})
 
 
