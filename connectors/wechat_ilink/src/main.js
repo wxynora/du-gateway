@@ -477,13 +477,18 @@ async function fetchStickerMapping() {
   try {
     const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/mapping`);
     const text = await r.text();
-    if (!r.ok) return _STICKER_MAPPING_CACHE;
+    if (!r.ok) {
+      console.log(`[wechat-ilink] sticker mapping fetch failed status=${r.status} body=${text.slice(0, 200)}`);
+      return _STICKER_MAPPING_CACHE;
+    }
     const data = text ? JSON.parse(text) : null;
     const mapping = (data?.mapping && typeof data.mapping === "object") ? data.mapping : {};
     _STICKER_MAPPING_CACHE_AT = now;
     _STICKER_MAPPING_CACHE = mapping;
+    console.log(`[wechat-ilink] sticker mapping loaded tags=${Object.keys(mapping).length}`);
     return _STICKER_MAPPING_CACHE;
   } catch {
+    console.log("[wechat-ilink] sticker mapping fetch error");
     return _STICKER_MAPPING_CACHE;
   }
 }
@@ -525,6 +530,7 @@ async function pickRandomStickerKey(tag) {
   if (!t) return "";
   const mapping = await fetchStickerMapping();
   const keys = Array.isArray(mapping?.[t]) ? mapping[t].map((k) => String(k || "").trim()).filter(Boolean) : [];
+  console.log(`[wechat-ilink] sticker mapping entries tag=${t} count=${keys.length}`);
   if (!keys.length) return "";
   return keys[Math.floor(Math.random() * keys.length)] || "";
 }
