@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 import requests
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
+from urllib.parse import quote
 
 from config import (
     MINIAPP_LOG_FILE,
@@ -1867,12 +1868,13 @@ def miniapp_stickers_resolve():
     import random
 
     key = random.choice(keys)
+    fallback_url = f"{request.host_url.rstrip('/')}/miniapp-api/stickers/raw-public?key={quote(key, safe='/')}"
     public_base = (R2_PUBLIC_URL or "").strip().rstrip("/")
     if public_base:
         url = f"{public_base}/{key.lstrip('/')}"
     else:
-        url = f"/miniapp-api/stickers/raw-public?key={key}"
-    return jsonify({"ok": True, "tag": tag, "key": key, "url": url, "count": len(keys)})
+        url = fallback_url
+    return jsonify({"ok": True, "tag": tag, "key": key, "url": url, "fallback_url": fallback_url, "count": len(keys)})
 
 
 @bp.route("/stickers/rebuild", methods=["POST"])

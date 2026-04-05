@@ -505,22 +505,25 @@ async function extractStickerTag(text) {
 
 async function pickRandomStickerKey(tag) {
   const t = String(tag || "").trim().toLowerCase();
-  if (!t) return "";
+  if (!t) return null;
   try {
     const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/resolve?tag=${encodeURIComponent(t)}`);
     const text = await r.text();
     if (!r.ok) {
       console.log(`[wechat-ilink] sticker resolve failed tag=${t} status=${r.status} body=${text.slice(0, 200)}`);
-      return "";
+      return null;
     }
     const data = text ? JSON.parse(text) : null;
     const count = Number(data?.count || 0);
     const url = String(data?.url || "").trim();
-    console.log(`[wechat-ilink] sticker resolve tag=${t} count=${count} url=${url ? url.slice(0, 160) : "-"}`);
-    return url;
+    const fallbackUrl = String(data?.fallback_url || "").trim();
+    console.log(
+      `[wechat-ilink] sticker resolve tag=${t} count=${count} url=${url ? url.slice(0, 160) : "-"} fallback=${fallbackUrl ? fallbackUrl.slice(0, 160) : "-"}`
+    );
+    return { url, fallbackUrl };
   } catch (e) {
     console.log(`[wechat-ilink] sticker resolve error tag=${t} err=${String(e?.message || e)}`);
-    return "";
+    return null;
   }
 }
 
@@ -902,13 +905,13 @@ async function main() {
       const noVoice = extractVoiceTag(reply).cleanText;
       const stickerParsed = await extractStickerTag(noVoice);
       ({ cleanText: replyClean, imageUrls } = extractImageUrls(stickerParsed.cleanText));
-      const stickerUrl = await pickRandomStickerKey(stickerParsed.tag);
+      const stickerResolved = await pickRandomStickerKey(stickerParsed.tag);
       console.log(
         `[wechat-ilink] sticker parsed tag=${stickerParsed.tag || "-"} clean_preview=${replyClean.slice(0, 160)}`
       );
-      console.log(`[wechat-ilink] sticker key=${stickerUrl || "-"}`);
-      if (stickerUrl) {
-        imageUrls.push(stickerUrl);
+      console.log(`[wechat-ilink] sticker key=${stickerResolved?.url || "-"}`);
+      if (stickerResolved?.url) {
+        imageUrls.push(stickerResolved);
       }
       console.log(
         `[wechat-ilink] gateway reply chars=${reply.length} clean_chars=${replyClean.length} image_count=${imageUrls.length} preview=${reply.slice(0, 120)}`
@@ -973,9 +976,20 @@ async function main() {
     if (imageUrls.length) {
       try {
         const tempDir = path.join(process.cwd(), ".tmp_wechat_outbound_media");
-        for (const imageUrl of imageUrls) {
+        for (const imageItem of imageUrls) {
+          const imageUrl = typeof imageItem === "string" ? imageItem : String(imageItem?.url || "").trim();
+          const fallbackUrl = typeof imageItem === "object" ? String(imageItem?.fallbackUrl || "").trim() : "";
           console.log(`[wechat-ilink] 开始发送图片 url=${imageUrl.slice(0, 160)}`);
-          const filePath = await downloadRemoteImageToTemp(imageUrl, tempDir);
+          let filePath = "";
+          try {
+            filePath = await downloadRemoteImageToTemp(imageUrl, tempDir);
+          } catch (e) {
+            if (!fallbackUrl || fallbackUrl === imageUrl) throw e;
+            console.log(
+              `[wechat-ilink] 图片主地址失败，改走兜底 url=${fallbackUrl.slice(0, 160)} err=${String(e?.message || e)}`
+            );
+            filePath = await downloadRemoteImageToTemp(fallbackUrl, tempDir);
+          }
           try {
             const uploadedImage = await uploadImageToWeixin(botToken, it.toUserId, filePath);
             const imageResp = await sendWeixinImage(botToken, it.toUserId, it.contextToken, uploadedImage);
