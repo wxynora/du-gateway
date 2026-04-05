@@ -356,8 +356,8 @@ async function getUploadUrl(botToken, body) {
 
 function buildCdnUploadUrl(cdnBaseUrl, uploadParam, filekey) {
   const base = String(cdnBaseUrl || "https://novac2c.cdn.weixin.qq.com/c2c").replace(/\/+$/, "");
-  const u = new URL(base + "/");
-  u.searchParams.set("upload_param", uploadParam);
+  const u = new URL(base + "/upload");
+  u.searchParams.set("encrypted_query_param", uploadParam);
   u.searchParams.set("filekey", filekey);
   return u.toString();
 }
