@@ -410,8 +410,22 @@ async function callGatewayChat(windowId, userContent) {
   return String(reply || "").trim();
 }
 
+const DEFAULT_STICKER_TAGS = [
+  "affectionate",
+  "angry",
+  "cute",
+  "good_night",
+  "happy",
+  "kiss",
+  "pitiful",
+  "sad",
+  "shy",
+  "sorry",
+  "speechless",
+];
+
 let _STICKER_TAGS_CACHE_AT = 0;
-let _STICKER_TAGS_CACHE = [];
+let _STICKER_TAGS_CACHE = [...DEFAULT_STICKER_TAGS];
 let _STICKER_MAPPING_CACHE_AT = 0;
 let _STICKER_MAPPING_CACHE = {};
 let _STICKER_REGEX_CACHE_AT = 0;
@@ -697,6 +711,7 @@ function splitReplyByNewlineAndLen(text, chunkChars, maxTotalChars) {
   const limit = Math.max(20, Number(chunkChars || 100));
   const maxTotal = Math.max(0, Number(maxTotalChars || 0));
   const attachThreshold = 10;
+  const maxChunks = 10;
   const clipped = maxTotal > 0 && raw.length > maxTotal ? raw.slice(0, maxTotal) : raw;
   const lines = clipped.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
   const src = lines.length ? lines : [clipped];
@@ -730,7 +745,11 @@ function splitReplyByNewlineAndLen(text, chunkChars, maxTotalChars) {
 
     for (let i = 0; i < one.length; i += limit) out.push(one.slice(i, i + limit));
   }
-  return out.filter(Boolean);
+  const filtered = out.filter(Boolean);
+  if (filtered.length <= maxChunks) return filtered;
+  const head = filtered.slice(0, maxChunks - 1);
+  const tail = filtered.slice(maxChunks - 1).join(" ").replace(/\s+/g, " ").trim();
+  return [...head, tail].filter(Boolean);
 }
 
 async function sendWeixinText(botToken, toUserId, contextToken, text) {
