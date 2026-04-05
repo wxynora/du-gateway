@@ -493,7 +493,9 @@ def _miniapp_auth():
         request.path.rstrip("/").endswith("/panel-auth/meta")
         or request.path.rstrip("/").endswith("/panel-auth/check-password")
         or request.path.rstrip("/").endswith("/panel-auth/verify")
+        or request.path.rstrip("/").endswith("/tts-preview")
     ):
+        enforce_ip_allowlist()
         return None
     enforce_ip_allowlist()
     panel_block = enforce_panel_token()
