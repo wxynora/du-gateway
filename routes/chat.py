@@ -796,20 +796,14 @@ def _static_models_response():
 def list_models():
     """
     代理到中转站的 GET /v1/models，这样 RikkaHub 填网关地址时也能拉取到模型列表。
-    若上游没有该接口或拉取失败，且配置了 GATEWAY_MODELS，则返回静态列表。
+    禁止静态默认模型兜底：拉不到当前 active upstream 的真实模型列表时，直接报错。
     """
     targets = _get_forward_targets(None)
     if not targets:
-        static = _static_models_response()
-        if static:
-            return jsonify(static), 200
         return jsonify({"error": _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置")}), 502
     url, api_key = targets[0]
     models_url = _chat_url_to_models_url(url)
     if not models_url:
-        static = _static_models_response()
-        if static:
-            return jsonify(static), 200
         return jsonify({"error": "无法解析模型列表地址"}), 502
     req_headers = {"Content-Type": "application/json"}
     if api_key:
@@ -820,17 +814,9 @@ def list_models():
         # 上游返回 2xx 且带 data 列表则直接用
         if r.status_code == 200 and data and isinstance(data.get("data"), list) and len(data.get("data", [])) > 0:
             return jsonify(data), 200
-        # 否则用静态列表兜底（若配置了）
-        static = _static_models_response()
-        if static:
-            logger.info("上游模型列表不可用或为空，使用 GATEWAY_MODELS 兜底")
-            return jsonify(static), 200
         return jsonify(data or {"error": "上游未返回模型列表"}), r.status_code if r.status_code != 200 else 502
     except Exception as e:
         logger.warning("拉取模型列表失败 %s error=%s", models_url, e)
-        static = _static_models_response()
-        if static:
-            return jsonify(static), 200
         return jsonify({"error": str(e)}), 502
 
 
