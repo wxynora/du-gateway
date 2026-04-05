@@ -307,29 +307,6 @@ def _append_call_record_turns(call_id: str, started_at: str, turns: list[dict], 
     items = _sort_call_records(items)
     return r2_store.save_miniapp_call_records(items)
 
-
-def _call_voice_chat_pipeline(user_text: str, window_id: str) -> tuple[str, str | None]:
-    try:
-        from services.voice_call_pipeline import call_voice_chat_pipeline
-    except Exception as e:
-        logger.warning("voice chat pipeline 请求失败 err=%s", e)
-        return "", "聊天服务暂时不可用"
-    return call_voice_chat_pipeline(user_text=user_text, window_id=_resolve_voice_call_window_id(window_id))
-
-
-def _sanitize_voice_call_reply(text: str) -> str:
-    t = str(text or "").strip()
-    if not t:
-        return ""
-    t = re.sub(r"^\s*[（(]\s*脑内\s*OS\s*[：:][\s\S]*?[)）]\s*", "", t, flags=re.IGNORECASE)
-    t = re.sub(r"[（(][^()（）]{0,200}[)）]", "", t)
-    t = re.sub(r"[【\[][^【】\[\]]{0,200}[】\]]", "", t)
-    t = re.sub(r"[()（）【】\[\]]", "", t)
-    t = re.sub(r"\s{2,}", " ", t)
-    t = re.sub(r"\n{3,}", "\n\n", t)
-    return t.strip()
-
-
 def _message_text(content) -> str:
     if isinstance(content, str):
         return content.strip()
