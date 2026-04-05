@@ -309,44 +309,12 @@ def _append_call_record_turns(call_id: str, started_at: str, turns: list[dict], 
 
 
 def _call_voice_chat_pipeline(user_text: str, window_id: str) -> tuple[str, str | None]:
-    text = str(user_text or "").strip()
-    if not text:
-        return "", "语音识别结果为空"
-    url, api_key = _resolve_translation_upstream()
-    model = _pick_translation_model(url, api_key)
-    body = {
-        "messages": [{"role": "user", "content": text}],
-        "model": model,
-        "stream": False,
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "X-Window-Id": _resolve_voice_call_window_id(window_id),
-        "X-Voice-Call-Slim": "1",
-    }
     try:
-        from routes.chat import chat_completions
-
-        with current_app.test_request_context("/v1/chat/completions", method="POST", json=body, headers=headers):
-            rv = chat_completions()
-            resp = current_app.make_response(rv)
-        data = json.loads(resp.get_data(as_text=True) or "{}")
+        from services.voice_call_pipeline import call_voice_chat_pipeline
     except Exception as e:
         logger.warning("voice chat pipeline 请求失败 err=%s", e)
         return "", "聊天服务暂时不可用"
-    if resp.status_code != 200:
-        msg = ""
-        if isinstance(data, dict):
-            msg = str(data.get("error") or data.get("message") or "").strip()
-        return "", (msg or f"聊天服务返回 HTTP {resp.status_code}")
-    try:
-        reply_text = str((((data or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-    except Exception:
-        reply_text = ""
-    reply_text = _sanitize_voice_call_reply(reply_text)
-    if not reply_text:
-        return "", "聊天服务没有返回正文"
-    return reply_text, None
+    return call_voice_chat_pipeline(user_text=user_text, window_id=_resolve_voice_call_window_id(window_id))
 
 
 def _sanitize_voice_call_reply(text: str) -> str:
@@ -1726,46 +1694,35 @@ def miniapp_voice_call():
         return jsonify({"ok": False, "error": "音频太大了，缩短一点再试"}), 400
 
     filename = (f.filename or "voice.webm").strip() or "voice.webm"
+    window_id = _resolve_voice_call_window_id(request.form.get("window_id") or "")
+    call_id = (request.form.get("call_id") or "").strip() or str(uuid4())
+    call_started_at = (request.form.get("call_started_at") or "").strip() or now_beijing_iso()
     try:
-        from services.stt import speech_to_text
-        from services.minimax_tts import tts_to_audio_bytes
+        from services.voice_call_pipeline import run_voice_call
     except Exception as e:
         logger.warning("voice-call 依赖加载失败 err=%s", e)
         return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
 
-    user_text = speech_to_text(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename)
-    if not user_text:
-        return jsonify({"ok": False, "error": "没识别出内容，再说一遍试试"}), 422
-
-    window_id = _resolve_voice_call_window_id(request.form.get("window_id") or "")
-    call_id = (request.form.get("call_id") or "").strip() or str(uuid4())
-    call_started_at = (request.form.get("call_started_at") or "").strip() or now_beijing_iso()
-    reply_text, reply_err = _call_voice_chat_pipeline(user_text=user_text, window_id=window_id)
-    if reply_err:
-        return jsonify({"ok": False, "error": reply_err, "user_text": user_text}), 502
-
-    audio_reply = tts_to_audio_bytes(reply_text)
-    audio_b64 = base64.b64encode(audio_reply).decode("ascii") if audio_reply else ""
+    payload, status = run_voice_call(
+        audio_bytes=audio_bytes,
+        mime_type=mime_type,
+        filename=filename,
+        window_id=window_id,
+    )
+    if status >= 400:
+        return jsonify(payload), status
     _append_call_record_turns(
         call_id=call_id,
         started_at=call_started_at,
         turns=[
-            {"role": "user", "text": user_text, "kind": "voice", "timestamp": now_beijing_iso()},
-            {"role": "assistant", "text": reply_text, "kind": "voice", "timestamp": now_beijing_iso()},
+            {"role": "user", "text": payload.get("user_text"), "kind": "voice", "timestamp": now_beijing_iso()},
+            {"role": "assistant", "text": payload.get("reply_text"), "kind": "voice", "timestamp": now_beijing_iso()},
         ],
         mode="voice",
     )
-    return jsonify(
-        {
-            "ok": True,
-            "call_id": call_id,
-            "call_started_at": call_started_at,
-            "user_text": user_text,
-            "reply_text": reply_text,
-            "audio_b64": audio_b64,
-            "audio_format": "mp3" if audio_b64 else "",
-        }
-    )
+    payload["call_id"] = call_id
+    payload["call_started_at"] = call_started_at
+    return jsonify(payload), status
 
 
 @bp.route("/call-records", methods=["GET"])
