@@ -5,7 +5,6 @@ import process from "node:process";
 import QRCode from "qrcode";
 import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
-import { encode as encodeSilk } from "silk-wasm";
 
 dotenv.config();
 
@@ -206,6 +205,119 @@ function extractTextFromMsg(msg) {
   return "";
 }
 
+function decryptAesEcb(ciphertext, key) {
+  const decipher = crypto.createDecipheriv("aes-128-ecb", key, null);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
+function parseAesKey(aesKeyBase64) {
+  const decoded = Buffer.from(String(aesKeyBase64 || ""), "base64");
+  if (decoded.length === 16) return decoded;
+  if (decoded.length === 32 && /^[0-9a-fA-F]{32}$/.test(decoded.toString("ascii"))) {
+    return Buffer.from(decoded.toString("ascii"), "hex");
+  }
+  throw new Error(`无法解析 aes_key，解码后长度=${decoded.length}`);
+}
+
+function buildCdnDownloadUrl(cdnBaseUrl, encryptedQueryParam) {
+  const base = String(cdnBaseUrl || "https://novac2c.cdn.weixin.qq.com/c2c").replace(/\/+$/, "");
+  return `${base}/download?encrypted_query_param=${encodeURIComponent(String(encryptedQueryParam || ""))}`;
+}
+
+async function downloadAndDecryptImageFromItem(item) {
+  const img = item?.image_item;
+  const media = img?.media || {};
+  const fullUrl = String(media.full_url || "").trim();
+  const encryptedQueryParam = String(media.encrypt_query_param || "").trim();
+  if (!fullUrl && !encryptedQueryParam) return null;
+  const url = fullUrl || buildCdnDownloadUrl(envStr("WECHAT_CDN_BASE_URL", "https://novac2c.cdn.weixin.qq.com/c2c"), encryptedQueryParam);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`图片下载失败 status=${r.status}`);
+  const encrypted = Buffer.from(await r.arrayBuffer());
+  const aesKeyBase64 = img?.aeskey
+    ? Buffer.from(String(img.aeskey || "").trim(), "hex").toString("base64")
+    : String(media.aes_key || "").trim();
+  return aesKeyBase64 ? decryptAesEcb(encrypted, parseAesKey(aesKeyBase64)) : encrypted;
+}
+
+function guessImageMime(buf) {
+  const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf || []);
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length >= 6 && (b.slice(0, 6).toString("ascii") === "GIF87a" || b.slice(0, 6).toString("ascii") === "GIF89a")) return "image/gif";
+  if (b.length >= 12 && b.slice(0, 4).toString("ascii") === "RIFF" && b.slice(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  if (b.length >= 2 && b[0] === 0x42 && b[1] === 0x4d) return "image/bmp";
+  return "image/jpeg";
+}
+
+async function extractUserContentFromMsg(msg) {
+  const items = Array.isArray(msg?.item_list) ? msg.item_list : [];
+  const parts = [];
+  for (const it of items) {
+    if (!it || typeof it !== "object") continue;
+    const t = Number(it.type || 0);
+    if (t === 1 && it.text_item && typeof it.text_item === "object") {
+      const text = String(it.text_item.text || "").trim();
+      if (text) parts.push({ type: "text", text });
+      continue;
+    }
+    if (t === 2) {
+      try {
+        const buf = await downloadAndDecryptImageFromItem(it);
+        if (!buf?.length) continue;
+        const mime = guessImageMime(buf);
+        parts.push({ type: "image_url", image_url: { url: `data:${mime};base64,${buf.toString("base64")}` } });
+      } catch (e) {
+        console.log(`[wechat-ilink] 入站图片解密失败：${String(e?.message || e)}`);
+      }
+    }
+  }
+  if (!parts.length) return "";
+  const hasText = parts.some((p) => p?.type === "text" && String(p.text || "").trim());
+  if (!hasText) {
+    return [{ type: "text", text: "[图片]" }, ...parts];
+  }
+  return parts.length === 1 && parts[0]?.type === "text" ? String(parts[0].text || "") : parts;
+}
+
+function normalizeUserContentToParts(content) {
+  if (typeof content === "string") {
+    const t = String(content || "").trim();
+    return t ? [{ type: "text", text: t }] : [];
+  }
+  if (Array.isArray(content)) {
+    return content.filter((p) => p && typeof p === "object" && p.type);
+  }
+  return [];
+}
+
+function mergeUserContents(contents) {
+  if (!contents.length) return "";
+  if (contents.every((x) => typeof x === "string")) {
+    return contents.map((x) => String(x || "").trim()).filter(Boolean).join("\n").trim();
+  }
+  const parts = [];
+  for (const c of contents) {
+    parts.push(...normalizeUserContentToParts(c));
+  }
+  return parts;
+}
+
+function userContentPreview(content, limit = 80) {
+  if (typeof content === "string") {
+    const t = String(content || "").trim();
+    return t.length > limit ? `${t.slice(0, limit)}...` : t;
+  }
+  if (Array.isArray(content)) {
+    const flat = content
+      .map((p) => (p?.type === "image_url" ? "[image]" : String(p?.text || "").trim()))
+      .filter(Boolean)
+      .join(" ");
+    return flat.length > limit ? `${flat.slice(0, limit)}...` : flat;
+  }
+  return "";
+}
+
 function isDirectChatMsg(msg) {
   const gid = msg?.group_id ?? msg?.groupId ?? msg?.room_id ?? msg?.roomId;
   if (gid) return false;
@@ -218,9 +330,9 @@ function buildWechatStyleSystem() {
     "不要输出脑内 OS / 思维过程；只输出给用户看的最终回复。",
     "不要写“小本本/记事本更新”的指令或提示（除非用户明确要求）。",
     "输出尽量分段：优先用换行分条；每条不要太长，方便聊天窗口阅读。",
-    "你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。",
-    "你可以同时输出文字正文；连接器会额外发送一条语音。",
-    "如果你不想发语音，就不要输出 <voice> 标签。",
+    "如果你想发图片，直接输出 Markdown 图片，例如 ![图](https://example.com/a.jpg) 。",
+    "可以同时输出文字正文；连接器会尽量把图片单独发出去。",
+    "不要输出 <voice> 标签，微信连接器当前不走语音回发。",
   ].join("\n");
 }
 
@@ -232,7 +344,7 @@ function resolveWechatWindowId() {
   return `tg_${tgUserId}`;
 }
 
-async function callGatewayChat(windowId, userText) {
+async function callGatewayChat(windowId, userContent) {
   const base = envStr("GATEWAY_BASE_URL", "http://127.0.0.1:5000").replace(/\/+$/, "");
   const chatPath = envStr("GATEWAY_CHAT_PATH", "/v1/chat/completions");
   const url = base + (chatPath.startsWith("/") ? chatPath : `/${chatPath}`);
@@ -241,7 +353,7 @@ async function callGatewayChat(windowId, userText) {
   const body = {
     messages: [
       { role: "system", content: styleSystem },
-      { role: "user", content: String(userText || "") },
+      { role: "user", content: userContent },
     ],
     stream: false,
   };
@@ -286,34 +398,6 @@ async function callGatewayChat(windowId, userText) {
   return String(reply || "").trim();
 }
 
-async function callGatewayTts(text) {
-  const base = envStr("GATEWAY_BASE_URL", "http://127.0.0.1:5000").replace(/\/+$/, "");
-  const ttsPath = envStr("GATEWAY_TTS_PREVIEW_PATH", "/miniapp-api/tts-preview");
-  const url = base + (ttsPath.startsWith("/") ? ttsPath : `/${ttsPath}`);
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: String(text || ""), audio_format: "wav" }),
-  });
-  const raw = await r.text();
-  let data = null;
-  try {
-    data = raw ? JSON.parse(raw) : null;
-  } catch {
-    data = null;
-  }
-  if (!r.ok) {
-    throw new Error(`TTS 返回 ${r.status}: ${(raw || "").slice(0, 200)}`);
-  }
-  const audioB64 = String(data?.audio_b64 || "").trim();
-  const audioFormat = String(data?.audio_format || "mp3").trim() || "mp3";
-  if (!audioB64) return null;
-  return {
-    audio: Buffer.from(audioB64, "base64"),
-    format: audioFormat,
-  };
-}
-
 function extractVoiceTag(text) {
   const raw = String(text || "");
   const m = raw.match(/<voice>([\s\S]*?)<\/voice>/i);
@@ -323,107 +407,124 @@ function extractVoiceTag(text) {
   return { cleanText, voiceText };
 }
 
-function _syncsafeInt4(b0, b1, b2, b3) {
-  return ((b0 & 0x7f) << 21) | ((b1 & 0x7f) << 14) | ((b2 & 0x7f) << 7) | (b3 & 0x7f);
+function extractImageUrls(text) {
+  const raw = String(text || "");
+  const urls = [];
+  const seen = new Set();
+  const mdRe = /!\[[^\]]*?\]\((https?:\/\/[^\s)]+)\)/g;
+  const plainRe = /\bhttps?:\/\/[^\s<>()]+?\.(?:png|jpe?g|gif|webp|bmp)(?:\?[^\s<>()]*)?/gi;
+  let m;
+  while ((m = mdRe.exec(raw)) !== null) {
+    const url = String(m[1] || "").trim();
+    if (url && !seen.has(url)) {
+      seen.add(url);
+      urls.push(url);
+    }
+  }
+  while ((m = plainRe.exec(raw)) !== null) {
+    const url = String(m[0] || "").trim();
+    if (url && !seen.has(url)) {
+      seen.add(url);
+      urls.push(url);
+    }
+  }
+  const cleanText = raw
+    .replace(mdRe, "")
+    .replace(plainRe, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { cleanText, imageUrls: urls };
 }
 
-function stripId3v2(buf) {
-  const data = Buffer.isBuffer(buf) ? buf : Buffer.from(buf || []);
-  if (data.length < 10) return data;
-  if (data.slice(0, 3).toString("ascii") !== "ID3") return data;
-  const size = _syncsafeInt4(data[6], data[7], data[8], data[9]);
-  const total = 10 + size;
-  return total < data.length ? data.slice(total) : data;
+async function downloadRemoteImageToTemp(url, destDir) {
+  const r = await fetch(url);
+  if (!r.ok) {
+    throw new Error(`图片下载失败 status=${r.status} url=${String(url || "").slice(0, 120)}`);
+  }
+  const ab = await r.arrayBuffer();
+  const buf = Buffer.from(ab);
+  const ctype = String(r.headers.get("content-type") || "").toLowerCase();
+  let ext = ".jpg";
+  if (ctype.includes("png")) ext = ".png";
+  else if (ctype.includes("gif")) ext = ".gif";
+  else if (ctype.includes("webp")) ext = ".webp";
+  else if (ctype.includes("bmp")) ext = ".bmp";
+  else {
+    const pathname = new URL(url).pathname.toLowerCase();
+    if (pathname.endsWith(".png")) ext = ".png";
+    else if (pathname.endsWith(".gif")) ext = ".gif";
+    else if (pathname.endsWith(".webp")) ext = ".webp";
+    else if (pathname.endsWith(".bmp")) ext = ".bmp";
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  const filePath = path.join(destDir, `wechat-outbound-${Date.now()}-${crypto.randomUUID()}${ext}`);
+  fs.writeFileSync(filePath, buf);
+  return filePath;
 }
 
-function findMp3FrameHeader(buf) {
-  const data = stripId3v2(buf);
-  for (let i = 0; i <= data.length - 4; i += 1) {
-    if (data[i] !== 0xff || (data[i + 1] & 0xe0) !== 0xe0) continue;
-    return { header: data.readUInt32BE(i), offset: i, data };
-  }
-  return null;
-}
-
-function parseMp3Info(buf) {
-  const found = findMp3FrameHeader(buf);
-  if (!found) return { bitrateKbps: 0, sampleRate: 0, durationMs: 0 };
-  const { header, data } = found;
-  const versionBits = (header >> 19) & 0x3;
-  const layerBits = (header >> 17) & 0x3;
-  const bitrateIndex = (header >> 12) & 0xf;
-  const sampleRateIndex = (header >> 10) & 0x3;
-  if (versionBits === 1 || layerBits !== 1 || bitrateIndex === 0 || bitrateIndex === 0xf || sampleRateIndex === 3) {
-    return { bitrateKbps: 0, sampleRate: 0, durationMs: 0 };
-  }
-
-  const versionKey =
-    versionBits === 3 ? "v1" :
-    versionBits === 2 ? "v2" :
-    versionBits === 0 ? "v25" : "";
-  const sampleRates = {
-    v1: [44100, 48000, 32000],
-    v2: [22050, 24000, 16000],
-    v25: [11025, 12000, 8000],
-  };
-  const bitrates = {
-    v1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],
-    v2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
-    v25: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
-  };
-  const sampleRate = sampleRates[versionKey]?.[sampleRateIndex] || 0;
-  const bitrateKbps = bitrates[versionKey]?.[bitrateIndex] || 0;
-  if (!sampleRate || !bitrateKbps) return { bitrateKbps: 0, sampleRate: 0, durationMs: 0 };
-
-  const durationMs = Math.max(1000, Math.round((data.length * 8 * 1000) / (bitrateKbps * 1000)));
-  return { bitrateKbps, sampleRate, durationMs };
-}
-
-function detectVoiceEncoding(format, audioBytes) {
-  const fmt = String(format || "").trim().toLowerCase();
-  if (fmt === "mp3" || fmt === "mpeg" || fmt === "audio/mpeg") {
-    const info = parseMp3Info(audioBytes);
-    return {
-      encodeType: 7,
-      playtimeMs: info.durationMs || 1000,
-      sampleRate: info.sampleRate || 0,
-      bitsPerSample: 16,
-    };
-  }
-  if (fmt === "wav" || fmt === "wave" || fmt === "audio/wav" || fmt === "audio/x-wav" || fmt === "pcm") {
-    return { encodeType: 1, playtimeMs: 1000, sampleRate: 16000, bitsPerSample: 16 };
-  }
-  if (fmt === "amr") {
-    return { encodeType: 5, playtimeMs: 1000, sampleRate: 8000, bitsPerSample: 16 };
-  }
-  if (fmt === "silk") {
-    return { encodeType: 6, playtimeMs: 1000, sampleRate: 16000, bitsPerSample: 16 };
-  }
-  if (fmt === "ogg" || fmt === "oga" || fmt === "ogg-speex") {
-    return { encodeType: 8, playtimeMs: 1000, sampleRate: 16000, bitsPerSample: 16 };
-  }
-  return { encodeType: 7, playtimeMs: 1000, sampleRate: 0, bitsPerSample: 16 };
-}
-
-async function transcodeTtsToSilk(ttsResult) {
-  const fmt = String(ttsResult?.format || "").trim().toLowerCase();
-  const input = Buffer.from(ttsResult?.audio || []);
-  if (!input.length) throw new Error("空音频，无法转 silk");
-  if (fmt !== "wav") {
-    throw new Error(`当前只支持把 wav 转 silk，实际收到：${fmt || "unknown"}`);
-  }
-  const encoded = await encodeSilk(input, 0);
-  const silkBytes = Buffer.from(encoded?.data || []);
-  if (!silkBytes.length) throw new Error("silk 编码结果为空");
+async function uploadImageToWeixin(botToken, toUserId, filePath) {
+  const plaintext = fs.readFileSync(filePath);
+  const rawsize = plaintext.length;
+  const rawfilemd5 = crypto.createHash("md5").update(plaintext).digest("hex");
+  const filesize = aesEcbPaddedSize(rawsize);
+  const filekey = crypto.randomBytes(16).toString("hex");
+  const aeskeyHex = crypto.randomBytes(16).toString("hex");
+  const uploadMeta = await getUploadUrl(botToken, {
+    filekey,
+    media_type: 1,
+    to_user_id: String(toUserId || "").trim(),
+    rawsize,
+    rawfilemd5,
+    filesize,
+    no_need_thumb: true,
+    aeskey: aeskeyHex,
+  });
+  const uploadParam = String(uploadMeta?.upload_param || "").trim();
+  if (!uploadParam) throw new Error("图片 getuploadurl 未返回 upload_param");
+  const uploaded = await uploadBufferToCdn(plaintext, uploadParam, filekey, aeskeyHex);
   return {
-    audio: silkBytes,
-    meta: {
-      encodeType: 6,
-      playtimeMs: Math.max(1000, Number(encoded?.duration || 0)),
-      sampleRate: 24000,
-      bitsPerSample: 16,
-    },
+    encrypt_query_param: uploaded.encryptedParam,
+    aes_key: Buffer.from(aeskeyHex, "hex").toString("base64"),
+    file_size: rawsize,
+    ciphertext_size: uploaded.ciphertextSize,
   };
+}
+
+async function sendWeixinImage(botToken, toUserId, contextToken, uploaded) {
+  const clientId = `dg-${crypto.randomUUID()}`;
+  const payload = {
+    msg: {
+      from_user_id: "",
+      to_user_id: String(toUserId || "").trim(),
+      client_id: clientId,
+      message_type: 2,
+      message_state: 2,
+      context_token: String(contextToken || "").trim(),
+      item_list: [
+        {
+          type: 2,
+          image_item: {
+            media: {
+              encrypt_query_param: String(uploaded?.encrypt_query_param || "").trim(),
+              aes_key: String(uploaded?.aes_key || "").trim(),
+              encrypt_type: 1,
+            },
+            mid_size: Number(uploaded?.ciphertext_size || 0),
+          },
+        },
+      ],
+    },
+    base_info: { channel_version: "1.0.2" },
+  };
+  const r = await ilinkPostJson("/ilink/bot/sendmessage", payload, botToken);
+  if (r.status < 200 || r.status >= 300) {
+    return { ok: false, ret: 0, status: r.status, body: (r.text || "").slice(0, 200) };
+  }
+  const ret = Number(r.data?.ret ?? 0);
+  if (ret !== 0) {
+    return { ok: false, ret, status: r.status, body: JSON.stringify(r.data).slice(0, 200) };
+  }
+  return { ok: true, ret: 0, status: r.status, body: "" };
 }
 
 function aesEcbPaddedSize(plaintextSize) {
@@ -484,101 +585,43 @@ async function uploadBufferToCdn(buf, uploadParam, filekey, aeskeyHex) {
   return { encryptedParam, ciphertextSize: ciphertext.length };
 }
 
-async function uploadVoiceToWeixin(botToken, toUserId, audioBytes) {
-  const plaintext = Buffer.from(audioBytes || []);
-  const rawsize = plaintext.length;
-  const rawfilemd5 = crypto.createHash("md5").update(plaintext).digest("hex");
-  const filesize = aesEcbPaddedSize(rawsize);
-  const filekey = crypto.randomBytes(16).toString("hex");
-  const aeskeyHex = crypto.randomBytes(16).toString("hex");
-  const uploadMeta = await getUploadUrl(botToken, {
-    filekey,
-    media_type: 4,
-    to_user_id: String(toUserId || "").trim(),
-    rawsize,
-    rawfilemd5,
-    filesize,
-    no_need_thumb: true,
-    aeskey: aeskeyHex,
-  });
-  const uploadParam = String(uploadMeta?.upload_param || "").trim();
-  if (!uploadParam) throw new Error("getuploadurl 未返回 upload_param");
-  const uploaded = await uploadBufferToCdn(plaintext, uploadParam, filekey, aeskeyHex);
-  return {
-    encrypt_query_param: uploaded.encryptedParam,
-    aes_key: Buffer.from(aeskeyHex, "hex").toString("base64"),
-    file_size: rawsize,
-    ciphertext_size: uploaded.ciphertextSize,
-  };
-}
-
-async function sendWeixinVoice(botToken, toUserId, contextToken, uploaded, voiceText = "", voiceMeta = null) {
-  const clientId = `dg-${crypto.randomUUID()}`;
-  const meta = voiceMeta || {};
-  const payload = {
-    msg: {
-      from_user_id: "",
-      to_user_id: String(toUserId || "").trim(),
-      client_id: clientId,
-      message_type: 2,
-      message_state: 2,
-      context_token: String(contextToken || "").trim(),
-      item_list: [
-        {
-          type: 3,
-          voice_item: {
-            media: {
-              encrypt_query_param: String(uploaded?.encrypt_query_param || "").trim(),
-              aes_key: String(uploaded?.aes_key || "").trim(),
-              encrypt_type: 1,
-            },
-            encode_type: Number(meta.encodeType || 7),
-            bits_per_sample: Number(meta.bitsPerSample || 16),
-            sample_rate: Number(meta.sampleRate || 0),
-            text: String(voiceText || "").trim(),
-            playtime: Number(meta.playtimeMs || 1000),
-          },
-        },
-      ],
-    },
-    base_info: { channel_version: "1.0.2" },
-  };
-  const r = await ilinkPostJson("/ilink/bot/sendmessage", payload, botToken);
-  if (r.status < 200 || r.status >= 300) {
-    return { ok: false, ret: 0, status: r.status, body: (r.text || "").slice(0, 200) };
-  }
-  const ret = Number(r.data?.ret ?? 0);
-  if (ret !== 0) {
-    return { ok: false, ret, status: r.status, body: JSON.stringify(r.data).slice(0, 200) };
-  }
-  return { ok: true, ret: 0, status: r.status, body: "" };
-}
-
 function splitReplyByNewlineAndLen(text, chunkChars, maxTotalChars) {
   const raw = String(text || "").trim();
   if (!raw) return [];
   const limit = Math.max(20, Number(chunkChars || 100));
   const maxTotal = Math.max(0, Number(maxTotalChars || 0));
-  const minStandaloneChars = 10;
+  const attachThreshold = 10;
   const clipped = maxTotal > 0 && raw.length > maxTotal ? raw.slice(0, maxTotal) : raw;
   const lines = clipped.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
   const src = lines.length ? lines : [clipped];
-  // 按“换行一条一条”切分；单行过长再按长度硬切
   const out = [];
-  for (const line of src) {
-    const one = String(line || "").trim();
+  for (let idx = 0; idx < src.length; idx += 1) {
+    const one = String(src[idx] || "").trim();
     if (!one) continue;
-    if (one.length <= limit) {
-      if (one.length < minStandaloneChars && out.length > 0) {
-        const prev = out[out.length - 1];
-        if ((prev + "\n" + one).length <= limit) {
-          out[out.length - 1] = prev + "\n" + one;
-          continue;
+
+    if (one.length <= attachThreshold) {
+      const next = String(src[idx + 1] || "").trim();
+      if (next) {
+        const merged = `${one} ${next}`.trim();
+        if (merged.length <= limit) {
+          out.push(merged);
+        } else {
+          out.push(one);
+          out.push(next);
         }
+        idx += 1;
+        continue;
       }
+      // 最后一条很短时，不再并到上一条，避免把多条内容揉成一坨
       out.push(one);
       continue;
     }
+
+    if (one.length <= limit) {
+      out.push(one);
+      continue;
+    }
+
     for (let i = 0; i < one.length; i += limit) out.push(one.slice(i, i + limit));
   }
   return out.filter(Boolean);
@@ -680,7 +723,7 @@ async function main() {
   const dedupeMax = 2000;
 
   // 输入聚合（参考 Telegram）：同一用户 15s 内多条合并成一次请求
-  /** @type {Map<string, {parts: string[], toUserId: string, contextToken: string, timer: any, lastApologyAt: number, failureNotified: boolean}>} */
+  /** @type {Map<string, {parts: any[], toUserId: string, contextToken: string, timer: any, lastApologyAt: number, failureNotified: boolean}>} */
   const pending = new Map();
 
   async function flushUser(fromUserId) {
@@ -690,18 +733,18 @@ async function main() {
       clearTimeout(it.timer);
       it.timer = null;
     }
-    const merged = it.parts.map((x) => String(x || "").trim()).filter(Boolean).join("\n").trim();
+    const merged = mergeUserContents(it.parts || []);
     if (!merged) {
       pending.delete(fromUserId);
       return;
     }
 
     const windowId = resolveWechatWindowId();
-    console.log(`[wechat-ilink] flush from=${fromUserId} window_id=${windowId} chars=${merged.length}`);
+    console.log(`[wechat-ilink] flush from=${fromUserId} window_id=${windowId} preview=${userContentPreview(merged)}`);
 
     let reply = "";
     let replyClean = "";
-    let voiceText = "";
+    let imageUrls = [];
     let ok = false;
     let typingTimer = null;
     let typingSignals = 0;
@@ -725,9 +768,10 @@ async function main() {
         typingTimer = setTimeout(emitTyping, typingFirstDelayMs);
       }
       reply = await callGatewayChat(windowId, merged);
-      ({ cleanText: replyClean, voiceText } = extractVoiceTag(reply));
+      const noVoice = extractVoiceTag(reply).cleanText;
+      ({ cleanText: replyClean, imageUrls } = extractImageUrls(noVoice));
       console.log(
-        `[wechat-ilink] gateway reply chars=${reply.length} clean_chars=${replyClean.length} voice_chars=${voiceText.length} preview=${reply.slice(0, 120)}`
+        `[wechat-ilink] gateway reply chars=${reply.length} clean_chars=${replyClean.length} image_count=${imageUrls.length} preview=${reply.slice(0, 120)}`
       );
       ok = true;
     } catch (e) {
@@ -786,39 +830,32 @@ async function main() {
       if (sendDelayMs > 0) await sleep(sendDelayMs);
     }
 
-    if (voiceText) {
+    if (imageUrls.length) {
       try {
-        console.log(`[wechat-ilink] 开始发送语音 voice_chars=${voiceText.length}`);
-        const ttsResult = await callGatewayTts(voiceText);
-        if (ttsResult?.audio?.length) {
-          const silkResult = await transcodeTtsToSilk(ttsResult);
-          const voiceMeta = silkResult.meta;
-          const uploadedVoice = await uploadVoiceToWeixin(botToken, it.toUserId, silkResult.audio);
-          const voiceResp = await sendWeixinVoice(
-            botToken,
-            it.toUserId,
-            it.contextToken,
-            uploadedVoice,
-            voiceText,
-            voiceMeta
-          );
-          if (!voiceResp.ok) {
-            console.log(
-              `[wechat-ilink] send voice 失败 ret=${voiceResp.ret} status=${voiceResp.status} body=${voiceResp.body}`
-            );
-          } else {
-            console.log(
-              `[wechat-ilink] send voice ok bytes=${silkResult.audio.length} src_format=${ttsResult.format} encode_type=${voiceMeta.encodeType} playtime_ms=${voiceMeta.playtimeMs}`
-            );
+        const tempDir = path.join(process.cwd(), ".tmp_wechat_outbound_media");
+        for (const imageUrl of imageUrls) {
+          console.log(`[wechat-ilink] 开始发送图片 url=${imageUrl.slice(0, 160)}`);
+          const filePath = await downloadRemoteImageToTemp(imageUrl, tempDir);
+          try {
+            const uploadedImage = await uploadImageToWeixin(botToken, it.toUserId, filePath);
+            const imageResp = await sendWeixinImage(botToken, it.toUserId, it.contextToken, uploadedImage);
+            if (!imageResp.ok) {
+              console.log(
+                `[wechat-ilink] send image 失败 ret=${imageResp.ret} status=${imageResp.status} body=${imageResp.body}`
+              );
+              break;
+            }
+            console.log(`[wechat-ilink] send image ok path=${filePath}`);
+          } finally {
+            try { fs.unlinkSync(filePath); } catch {}
           }
-        } else {
-          console.log("[wechat-ilink] TTS 未返回音频，跳过语音发送");
+          if (sendDelayMs > 0) await sleep(sendDelayMs);
         }
       } catch (e) {
-        console.log(`[wechat-ilink] 发送语音失败：${String(e?.message || e)}`);
+        console.log(`[wechat-ilink] 发送图片失败：${String(e?.message || e)}`);
       }
     } else {
-      console.log("[wechat-ilink] 本次回复未产出 <voice>，仅发送文字");
+      console.log("[wechat-ilink] 本次回复未产出图片，仅发送文字");
     }
 
     // 成功后清空该用户 pending
@@ -853,15 +890,15 @@ async function main() {
 
         const fromUserId = String(msg.from_user_id || "").trim();
         const contextToken = String(msg.context_token || "").trim();
-        const text = extractTextFromMsg(msg);
-        if (!fromUserId || !contextToken || !text) continue;
+        const content = await extractUserContentFromMsg(msg);
+        if (!fromUserId || !contextToken || !content) continue;
 
         const dedupeKey = `${fromUserId}::${contextToken}`;
         if (dedupe.has(dedupeKey)) continue;
         dedupe.add(dedupeKey);
         if (dedupe.size > dedupeMax) dedupe.clear();
 
-        console.log(`[wechat-ilink] inbound from=${fromUserId} text=${text.slice(0, 60)}`);
+        console.log(`[wechat-ilink] inbound from=${fromUserId} content=${userContentPreview(content, 60)}`);
 
         const existing = pending.get(fromUserId) || {
           parts: [],
@@ -871,7 +908,7 @@ async function main() {
           lastApologyAt: 0,
           failureNotified: false,
         };
-        existing.parts.push(text);
+        existing.parts.push(content);
         // 以最新的 context_token 为准（一般更能保证回到当前会话）
         existing.contextToken = contextToken;
         existing.toUserId = fromUserId;
@@ -881,8 +918,9 @@ async function main() {
         existing.timer = setTimeout(() => flushUser(fromUserId), idleSeconds * 1000);
         pending.set(fromUserId, existing);
 
-        const mergedLen = existing.parts.reduce((acc, s) => acc + String(s || "").length, 0);
-        if (String(text).length >= immediateChars || mergedLen >= immediateChars) {
+        const mergedLen = userContentPreview(mergeUserContents(existing.parts || []), 10000).length;
+        const currentLen = userContentPreview(content, 10000).length;
+        if (currentLen >= immediateChars || mergedLen >= immediateChars) {
           // 超过阈值立即提交
           await flushUser(fromUserId);
         }

@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "dotenv": "^16.6.1",
-    "qrcode": "^1.5.4",
-    "silk-wasm": "^3.7.1"
+    "qrcode": "^1.5.4"
   }
 }
