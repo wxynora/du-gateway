@@ -331,20 +331,35 @@ function isDirectChatMsg(msg) {
 function buildWechatStyleSystem() {
   const tagsLine = getStickerTagsLineForSystemPrompt();
   return [
-    "请用中文回复，语气自然、简洁、温柔但不油腻。",
-    "情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。",
-    tagsLine,
-    "只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",
-    "不要输出分割线（例如 ---、———、***）。",
-    "不要使用 Markdown 强调符号 * 或 **。",
-    "不要输出“(表情包:xxx)”这类占位符。",
-    "允许自然分段，但不要为了格式刻意堆很多空行。",
-    "不要写“小本本/记事本更新”的指令或提示（除非用户明确要求）。",
-    "如果你想发图片，直接输出 Markdown 图片，例如 ![图](https://example.com/a.jpg) 。",
-    "可以同时输出文字正文；连接器会尽量把图片单独发出去。",
-    "如需控制电脑，可在整条回复里最多追加一个 [PCMD:...] 标签；不确定就不要加。",
-    "仅允许这些指令：[PCMD:lock] [PCMD:shutdown] [PCMD:shutdown:秒数] [PCMD:restart] [PCMD:restart:秒数] [PCMD:sleep] [PCMD:mute] [PCMD:volume:0-100] [PCMD:notify:标题:内容] [PCMD:open:notepad] [PCMD:open:notepad:要写入的内容] [PCMD:open:chrome] [PCMD:open:vscode] [PCMD:open:wechat] [PCMD:open:notion] [PCMD:url:https://...] [PCMD:media:play]",
-    "严禁输出未列出的 PCMD；若不确定，请不要输出 PCMD。仅在确有必要时输出；平时不要输出。",
+    "请遵守以下输出格式要求：",
+    "0) 要发表情包时，可在整条回复末尾加一个英文标签（方括号）；每条最多一个，不想发表情包就不要加。",
+    `   ${tagsLine}`,
+    "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",
+    "2) 不要输出分割线（例如 ---、———、***）。",
+    "3) 不要使用 Markdown 强调符号 * 或 **。",
+    "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji。",
+    "5) 允许自然分段，但不要为了格式刻意堆很多空行。",
+    "6) 如需控制电脑，可在整条回复里最多追加一个 [PCMD:...] 标签；不确定就不要加。",
+    "   - 仅允许这些指令：",
+    "     [PCMD:lock] 锁屏",
+    "     [PCMD:shutdown] 关机（默认 60 秒后）",
+    "     [PCMD:shutdown:秒数] 定时关机（0-86400）",
+    "     [PCMD:restart] 重启（默认 60 秒后）",
+    "     [PCMD:restart:秒数] 定时重启（0-86400）",
+    "     [PCMD:sleep] 睡眠",
+    "     [PCMD:mute] 静音",
+    "     [PCMD:volume:0-100] 设置音量（整数）",
+    "     [PCMD:notify:标题:内容] 电脑通知",
+    "     [PCMD:open:notepad] 打开记事本",
+    "     [PCMD:open:notepad:要写入的内容] 打开记事本并预填内容",
+    "     [PCMD:open:chrome] 打开 Chrome",
+    "     [PCMD:open:vscode] 打开 VS Code",
+    "     [PCMD:open:wechat] 打开微信",
+    "     [PCMD:open:notion] 打开 Notion",
+    "     [PCMD:url:https://... ] 打开网页（仅 https）",
+    "     [PCMD:media:play] 播放/暂停媒体",
+    "   - 严禁输出未列出的 PCMD；若不确定，请不要输出 PCMD。",
+    "   - 仅在确有必要时输出；平时不要输出。",
   ].join("\n");
 }
 
@@ -897,6 +912,10 @@ async function main() {
       const stickerParsed = await extractStickerTag(noVoice);
       ({ cleanText: replyClean, imageUrls } = extractImageUrls(stickerParsed.cleanText));
       const stickerKey = await pickRandomStickerKey(stickerParsed.tag);
+      console.log(
+        `[wechat-ilink] sticker parsed tag=${stickerParsed.tag || "-"} clean_preview=${replyClean.slice(0, 160)}`
+      );
+      console.log(`[wechat-ilink] sticker key=${stickerKey || "-"}`);
       if (stickerKey) {
         imageUrls.push(buildStickerRawUrl(stickerKey));
       }
