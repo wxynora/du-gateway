@@ -25,12 +25,12 @@ def speech_to_text(audio_bytes: bytes, mime_type: str = "audio/webm", filename: 
         return None
 
     params = {
-        "model": DEEPGRAM_STT_MODEL or "nova-3",
+        "model": str(DEEPGRAM_STT_MODEL or "nova-3").strip() or "nova-3",
         "smart_format": "true" if DEEPGRAM_STT_SMART_FORMAT else "false",
         "punctuate": "true",
         "detect_language": "false",
     }
-    language = (DEEPGRAM_STT_LANGUAGE or "").strip()
+    language = str(DEEPGRAM_STT_LANGUAGE or "").strip()
     if language:
         params["language"] = language
 

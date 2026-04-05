@@ -18,7 +18,7 @@ try:
 except Exception:
     DEEPGRAM_API_KEY = ""
     DEEPGRAM_STT_LANGUAGE = "zh-CN"
-    DEEPGRAM_STT_MODEL = "flux"
+    DEEPGRAM_STT_MODEL = "nova-3"
     DEEPGRAM_STT_SMART_FORMAT = True
     DEEPGRAM_STT_WS_URL = "wss://api.deepgram.com/v1/listen"
 
@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 def _build_ws_url(mime_type: str) -> str:
     mime = str(mime_type or "").strip().lower()
     params = {
-        "model": str(DEEPGRAM_STT_MODEL or "flux").strip() or "flux",
+        "model": str(DEEPGRAM_STT_MODEL or "nova-3").strip() or "nova-3",
         "interim_results": "true",
         "punctuate": "true",
         "smart_format": "true" if DEEPGRAM_STT_SMART_FORMAT else "false",

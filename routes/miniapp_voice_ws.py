@@ -152,7 +152,6 @@ def register_voice_call_ws(sock):
             if event_type == "start":
                 session = _new_session(msg.get("call_id"), msg.get("call_started_at"))
                 session_id = session["id"]
-                session["stt_client"] = create_live_stt(mime_type="audio/webm")
                 _save_session(session)
                 ws.send(json.dumps({"type": "ready", "session_id": session_id, "call_id": session["call_id"], "call_started_at": session["call_started_at"]}, ensure_ascii=False))
                 ws.send(json.dumps({"type": "status", "status": "recording", "text": "正在听你说话..."}, ensure_ascii=False))
@@ -177,6 +176,9 @@ def register_voice_call_ws(sock):
                     ws.send(json.dumps({"type": "error", "error": err}, ensure_ascii=False))
                     continue
                 client = session.get("stt_client")
+                if not client:
+                    session["stt_client"] = create_live_stt(mime_type=session.get("mime_type") or "audio/webm")
+                    client = session.get("stt_client")
                 if client:
                     try:
                         client.send_audio(chunk)
