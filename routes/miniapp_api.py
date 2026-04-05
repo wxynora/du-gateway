@@ -1672,6 +1672,7 @@ def miniapp_voice_call():
     window_id = _resolve_voice_call_window_id(request.form.get("window_id") or "")
     call_id = (request.form.get("call_id") or "").strip() or str(uuid4())
     call_started_at = (request.form.get("call_started_at") or "").strip() or now_beijing_iso()
+    user_text_override = (request.form.get("user_text_override") or "").strip()
     try:
         from services.voice_call_pipeline import run_voice_call
     except Exception as e:
@@ -1683,6 +1684,7 @@ def miniapp_voice_call():
         mime_type=mime_type,
         filename=filename,
         window_id=window_id,
+        user_text_override=user_text_override,
     )
     if status >= 400:
         return jsonify(payload), status
@@ -1698,6 +1700,50 @@ def miniapp_voice_call():
     payload["call_id"] = call_id
     payload["call_started_at"] = call_started_at
     return jsonify(payload), status
+
+
+@bp.route("/voice-call-preview", methods=["POST"])
+def miniapp_voice_call_preview():
+    f = request.files.get("audio")
+    if not f:
+        return jsonify({"ok": False, "error": "缺少 audio"}), 400
+    mime_type = (f.mimetype or request.form.get("mime_type") or "application/octet-stream").strip().lower()
+    if mime_type not in ("audio/webm", "audio/mp4", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg"):
+        return jsonify({"ok": False, "error": f"暂不支持的音频格式：{mime_type or 'unknown'}"}), 400
+    audio_bytes = f.read()
+    if not audio_bytes:
+        return jsonify({"ok": False, "error": "音频为空"}), 400
+    filename = (f.filename or "voice.webm").strip() or "voice.webm"
+    try:
+        from services.stt import speech_to_text
+    except Exception as e:
+        logger.warning("voice-call-preview 依赖加载失败 err=%s", e)
+        return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
+    text = speech_to_text(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename) or ""
+    return jsonify({"ok": True, "text": text})
+
+
+@bp.route("/tts-preview", methods=["POST"])
+def miniapp_tts_preview():
+    body = request.get_json(silent=True) or {}
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "缺少 text"}), 400
+    try:
+        from services.minimax_tts import tts_to_audio_bytes
+    except Exception as e:
+        logger.warning("tts-preview 依赖加载失败 err=%s", e)
+        return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
+    audio_bytes = tts_to_audio_bytes(text)
+    if not audio_bytes:
+        return jsonify({"ok": False, "error": "语音生成失败"}), 502
+    return jsonify(
+        {
+            "ok": True,
+            "audio_b64": base64.b64encode(audio_bytes).decode("ascii"),
+            "audio_format": "mp3",
+        }
+    )
 
 
 @bp.route("/call-records", methods=["GET"])

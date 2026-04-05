@@ -43,14 +43,22 @@ npm start
 - **15 秒输入聚合**：同一用户 15 秒内多条消息会合并成一次请求（可用 `WECHAT_INPUT_IDLE_SECONDS` 调）
 - **超过阈值立即提交**：单条/累计超过 200 字就立即提交（`WECHAT_INPUT_IMMEDIATE_CHARS`）
 - **输出切分**：优先按换行分条；每条超过 100 字再拆（`WECHAT_OUTPUT_CHUNK_CHARS`）
+- **不保留微信本地上下文缓存**：直接走共享的 TG 窗口上下文，不在微信入口重复补最近几轮
 - **失败兜底**：网关失败会保留 pending，下次再试，并最多每 30 秒提示一次
 - **统一聊天 system**：不输出脑内 OS、不带小本本提示，不区分消息来源
+- **支持回语音**：若网关回复里带 `<voice>...</voice>`，微信连接器会调用网关 TTS 接口生成音频并回发语音
 - **正在输入中**：网关处理期间会发送 iLink `sendtyping`（可在 `.env` 调开关/间隔/次数）
 
 ## 当前限制
 
-- 仅处理文本（`item_list.type=1`）
-- 图片/语音/文件：协议支持，但要做 CDN 上传 + AES 加解密（建议作为 Phase 3）
+- 当前已处理：
+  - 文本（`item_list.type=1`）
+  - 回复侧语音（`<voice>...</voice>` -> TTS -> 语音消息）
+- 当前还没处理：
+  - 微信入站语音下载/解密
+  - 图片
+  - 文件
+  - 视频
 
 ## typing 配置（可选）
 
@@ -58,4 +66,3 @@ npm start
 - `WECHAT_TYPING_FIRST_DELAY_MS=1000`
 - `WECHAT_TYPING_INTERVAL_MS=4000`
 - `WECHAT_TYPING_MAX_SIGNALS=3`
-

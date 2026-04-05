@@ -228,34 +228,15 @@ function resolveWechatWindowId() {
   return `tg_${tgUserId}`;
 }
 
-function trimContextMessages(history, maxTurns) {
-  const turns = Math.max(0, Number(maxTurns || 0));
-  if (!Array.isArray(history) || turns <= 0) return [];
-  const maxMsgs = turns * 2;
-  if (history.length <= maxMsgs) return history;
-  return history.slice(history.length - maxMsgs);
-}
-
-function sanitizeAssistantForContext(text) {
-  let s = String(text || "").trim();
-  if (!s) return "";
-  // 对齐 Telegram 侧“避免污染多轮记忆”的思路：去掉 <voice> 与 [表情包tag] 的外壳（若有）
-  s = s.replace(/<voice>[\s\S]*?<\/voice>/gi, "").trim();
-  s = s.replace(/\[[a-zA-Z0-9_\-]{1,32}\]/g, "").trim();
-  return s;
-}
-
-async function callGatewayChat(windowId, userText, historyMessages) {
+async function callGatewayChat(windowId, userText) {
   const base = envStr("GATEWAY_BASE_URL", "http://127.0.0.1:5000").replace(/\/+$/, "");
   const chatPath = envStr("GATEWAY_CHAT_PATH", "/v1/chat/completions");
   const url = base + (chatPath.startsWith("/") ? chatPath : `/${chatPath}`);
   const configuredModel = envStr("GATEWAY_MODEL", "");
   const styleSystem = buildWechatStyleSystem();
-  const hist = Array.isArray(historyMessages) ? historyMessages : [];
   const body = {
     messages: [
       { role: "system", content: styleSystem },
-      ...hist,
       { role: "user", content: String(userText || "") },
     ],
     stream: false,
@@ -301,11 +282,174 @@ async function callGatewayChat(windowId, userText, historyMessages) {
   return String(reply || "").trim();
 }
 
+async function callGatewayTts(text) {
+  const base = envStr("GATEWAY_BASE_URL", "http://127.0.0.1:5000").replace(/\/+$/, "");
+  const ttsPath = envStr("GATEWAY_TTS_PREVIEW_PATH", "/miniapp-api/tts-preview");
+  const url = base + (ttsPath.startsWith("/") ? ttsPath : `/${ttsPath}`);
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: String(text || "") }),
+  });
+  const raw = await r.text();
+  let data = null;
+  try {
+    data = raw ? JSON.parse(raw) : null;
+  } catch {
+    data = null;
+  }
+  if (!r.ok) {
+    throw new Error(`TTS 返回 ${r.status}: ${(raw || "").slice(0, 200)}`);
+  }
+  const audioB64 = String(data?.audio_b64 || "").trim();
+  const audioFormat = String(data?.audio_format || "mp3").trim() || "mp3";
+  if (!audioB64) return null;
+  return {
+    audio: Buffer.from(audioB64, "base64"),
+    format: audioFormat,
+  };
+}
+
+function extractVoiceTag(text) {
+  const raw = String(text || "");
+  const m = raw.match(/<voice>([\s\S]*?)<\/voice>/i);
+  if (!m) return { cleanText: raw.trim(), voiceText: "" };
+  const voiceText = String(m[1] || "").trim();
+  const cleanText = raw.replace(/<voice>[\s\S]*?<\/voice>/gi, "").trim();
+  return { cleanText, voiceText };
+}
+
+function aesEcbPaddedSize(plaintextSize) {
+  return Math.ceil((plaintextSize + 1) / 16) * 16;
+}
+
+function encryptAesEcb(plaintext, key) {
+  const cipher = crypto.createCipheriv("aes-128-ecb", key, null);
+  return Buffer.concat([cipher.update(plaintext), cipher.final()]);
+}
+
+async function getUploadUrl(botToken, body) {
+  const url = ilinkBaseUrl() + "/ilink/bot/getuploadurl";
+  const payload = { ...(body || {}), base_info: { channel_version: "1.0.2" } };
+  const raw = JSON.stringify(payload);
+  const headers = {
+    "Content-Type": "application/json",
+    "Content-Length": String(Buffer.byteLength(raw, "utf-8")),
+    "AuthorizationType": "ilink_bot_token",
+    "X-WECHAT-UIN": randomWechatUinHeader(),
+    "Authorization": `Bearer ${botToken}`,
+  };
+  const r = await fetch(url, { method: "POST", headers, body: raw });
+  const text = await r.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!r.ok) throw new Error(`getuploadurl ${r.status}: ${(text || "").slice(0, 200)}`);
+  return data || {};
+}
+
+function buildCdnUploadUrl(cdnBaseUrl, uploadParam, filekey) {
+  const base = String(cdnBaseUrl || "https://novac2c.cdn.weixin.qq.com/c2c").replace(/\/+$/, "");
+  const u = new URL(base + "/");
+  u.searchParams.set("upload_param", uploadParam);
+  u.searchParams.set("filekey", filekey);
+  return u.toString();
+}
+
+async function uploadBufferToCdn(buf, uploadParam, filekey, aeskeyHex) {
+  const aeskey = Buffer.from(String(aeskeyHex || ""), "hex");
+  const ciphertext = encryptAesEcb(buf, aeskey);
+  const cdnUrl = buildCdnUploadUrl(envStr("WECHAT_CDN_BASE_URL", "https://novac2c.cdn.weixin.qq.com/c2c"), uploadParam, filekey);
+  const r = await fetch(cdnUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: new Uint8Array(ciphertext),
+  });
+  if (!r.ok) {
+    const errText = await r.text();
+    throw new Error(`cdn upload ${r.status}: ${(errText || "").slice(0, 200)}`);
+  }
+  const encryptedParam = r.headers.get("x-encrypted-param") || "";
+  if (!encryptedParam) throw new Error("cdn upload 缺少 x-encrypted-param");
+  return { encryptedParam, ciphertextSize: ciphertext.length };
+}
+
+async function uploadVoiceToWeixin(botToken, toUserId, audioBytes) {
+  const plaintext = Buffer.from(audioBytes || []);
+  const rawsize = plaintext.length;
+  const rawfilemd5 = crypto.createHash("md5").update(plaintext).digest("hex");
+  const filesize = aesEcbPaddedSize(rawsize);
+  const filekey = crypto.randomBytes(16).toString("hex");
+  const aeskeyHex = crypto.randomBytes(16).toString("hex");
+  const uploadMeta = await getUploadUrl(botToken, {
+    filekey,
+    media_type: 4,
+    to_user_id: String(toUserId || "").trim(),
+    rawsize,
+    rawfilemd5,
+    filesize,
+    no_need_thumb: true,
+    aeskey: aeskeyHex,
+  });
+  const uploadParam = String(uploadMeta?.upload_param || "").trim();
+  if (!uploadParam) throw new Error("getuploadurl 未返回 upload_param");
+  const uploaded = await uploadBufferToCdn(plaintext, uploadParam, filekey, aeskeyHex);
+  return {
+    encrypt_query_param: uploaded.encryptedParam,
+    aes_key: Buffer.from(aeskeyHex, "hex").toString("base64"),
+    file_size: rawsize,
+    ciphertext_size: uploaded.ciphertextSize,
+  };
+}
+
+async function sendWeixinVoice(botToken, toUserId, contextToken, uploaded, voiceText = "") {
+  const clientId = `dg-${crypto.randomUUID()}`;
+  const payload = {
+    msg: {
+      from_user_id: "",
+      to_user_id: String(toUserId || "").trim(),
+      client_id: clientId,
+      message_type: 2,
+      message_state: 2,
+      context_token: String(contextToken || "").trim(),
+      item_list: [
+        {
+          type: 3,
+          voice_item: {
+            media: {
+              encrypt_query_param: String(uploaded?.encrypt_query_param || "").trim(),
+              aes_key: String(uploaded?.aes_key || "").trim(),
+              encrypt_type: 1,
+            },
+            encode_type: 7,
+            text: String(voiceText || "").trim(),
+            playtime: 0,
+          },
+        },
+      ],
+    },
+    base_info: { channel_version: "1.0.2" },
+  };
+  const r = await ilinkPostJson("/ilink/bot/sendmessage", payload, botToken);
+  if (r.status < 200 || r.status >= 300) {
+    return { ok: false, ret: 0, status: r.status, body: (r.text || "").slice(0, 200) };
+  }
+  const ret = Number(r.data?.ret ?? 0);
+  if (ret !== 0) {
+    return { ok: false, ret, status: r.status, body: JSON.stringify(r.data).slice(0, 200) };
+  }
+  return { ok: true, ret: 0, status: r.status, body: "" };
+}
+
 function splitReplyByNewlineAndLen(text, chunkChars, maxTotalChars) {
   const raw = String(text || "").trim();
   if (!raw) return [];
   const limit = Math.max(20, Number(chunkChars || 100));
   const maxTotal = Math.max(0, Number(maxTotalChars || 0));
+  const minStandaloneChars = 10;
   const clipped = maxTotal > 0 && raw.length > maxTotal ? raw.slice(0, maxTotal) : raw;
   const lines = clipped.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
   const src = lines.length ? lines : [clipped];
@@ -315,6 +459,13 @@ function splitReplyByNewlineAndLen(text, chunkChars, maxTotalChars) {
     const one = String(line || "").trim();
     if (!one) continue;
     if (one.length <= limit) {
+      if (one.length < minStandaloneChars && out.length > 0) {
+        const prev = out[out.length - 1];
+        if ((prev + "\n" + one).length <= limit) {
+          out[out.length - 1] = prev + "\n" + one;
+          continue;
+        }
+      }
       out.push(one);
       continue;
     }
@@ -422,11 +573,6 @@ async function main() {
   /** @type {Map<string, {parts: string[], toUserId: string, contextToken: string, timer: any, lastApologyAt: number, failureNotified: boolean}>} */
   const pending = new Map();
 
-  // 上下文缓存（参考 Telegram）：每个用户维护最近 N 轮 user/assistant
-  /** @type {Map<string, {messages: any[]}>} */
-  const ctx = new Map();
-  const contextLastTurns = Math.max(0, envInt("WECHAT_CONTEXT_LAST_TURNS", 4));
-
   async function flushUser(fromUserId) {
     const it = pending.get(fromUserId);
     if (!it) return;
@@ -444,6 +590,8 @@ async function main() {
     console.log(`[wechat-ilink] flush from=${fromUserId} window_id=${windowId} chars=${merged.length}`);
 
     let reply = "";
+    let replyClean = "";
+    let voiceText = "";
     let ok = false;
     let typingTimer = null;
     let typingSignals = 0;
@@ -466,8 +614,8 @@ async function main() {
       if (typingEnabled) {
         typingTimer = setTimeout(emitTyping, typingFirstDelayMs);
       }
-      const history = trimContextMessages(ctx.get(fromUserId)?.messages || [], contextLastTurns);
-      reply = await callGatewayChat(windowId, merged, history);
+      reply = await callGatewayChat(windowId, merged);
+      ({ cleanText: replyClean, voiceText } = extractVoiceTag(reply));
       ok = true;
     } catch (e) {
       ok = false;
@@ -506,7 +654,7 @@ async function main() {
       return;
     }
 
-    const chunks = splitReplyByNewlineAndLen(reply, outChunkChars, maxReplyTotalChars);
+    const chunks = splitReplyByNewlineAndLen(replyClean, outChunkChars, maxReplyTotalChars);
     for (const part of chunks) {
       // sendmessage 可能返回 ret=-2（限频/临时失败）；这里重试一次并且不崩进程
       let rSend = await sendWeixinText(botToken, it.toUserId, it.contextToken, part);
@@ -525,15 +673,21 @@ async function main() {
       if (sendDelayMs > 0) await sleep(sendDelayMs);
     }
 
-    // 成功后更新上下文缓存（对齐 Telegram）：只缓存 user/assistant，不缓存 system
-    try {
-      const cur = Array.isArray(ctx.get(fromUserId)?.messages) ? [...ctx.get(fromUserId).messages] : [];
-      cur.push({ role: "user", content: merged });
-      const forCtx = sanitizeAssistantForContext(reply) || reply;
-      cur.push({ role: "assistant", content: forCtx });
-      ctx.set(fromUserId, { messages: trimContextMessages(cur, contextLastTurns) });
-    } catch {
-      // ignore
+    if (voiceText) {
+      try {
+        const ttsResult = await callGatewayTts(voiceText);
+        if (ttsResult?.audio?.length) {
+          const uploadedVoice = await uploadVoiceToWeixin(botToken, it.toUserId, ttsResult.audio);
+          const voiceResp = await sendWeixinVoice(botToken, it.toUserId, it.contextToken, uploadedVoice, voiceText);
+          if (!voiceResp.ok) {
+            console.log(
+              `[wechat-ilink] send voice 失败 ret=${voiceResp.ret} status=${voiceResp.status} body=${voiceResp.body}`
+            );
+          }
+        }
+      } catch (e) {
+        console.log(`[wechat-ilink] 发送语音失败：${String(e?.message || e)}`);
+      }
     }
 
     // 成功后清空该用户 pending
@@ -613,4 +767,3 @@ main().catch((e) => {
   console.error(`[wechat-ilink] fatal: ${String(e?.message || e)}`);
   process.exit(1);
 });
-
