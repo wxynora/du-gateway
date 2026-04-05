@@ -38,6 +38,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function gatewayBaseUrl() {
+  return envStr("GATEWAY_BASE_URL", "http://127.0.0.1:5000").replace(/\/+$/, "");
+}
+
 function maskToken(s) {
   const t = String(s || "").trim();
   if (t.length <= 10) return "***";
@@ -325,14 +329,22 @@ function isDirectChatMsg(msg) {
 }
 
 function buildWechatStyleSystem() {
+  const tagsLine = getStickerTagsLineForSystemPrompt();
   return [
     "请用中文回复，语气自然、简洁、温柔但不油腻。",
-    "不要输出脑内 OS / 思维过程；只输出给用户看的最终回复。",
+    "情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。",
+    tagsLine,
+    "只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",
+    "不要输出分割线（例如 ---、———、***）。",
+    "不要使用 Markdown 强调符号 * 或 **。",
+    "不要输出“(表情包:xxx)”这类占位符。",
+    "允许自然分段，但不要为了格式刻意堆很多空行。",
     "不要写“小本本/记事本更新”的指令或提示（除非用户明确要求）。",
-    "输出尽量分段：优先用换行分条；每条不要太长，方便聊天窗口阅读。",
     "如果你想发图片，直接输出 Markdown 图片，例如 ![图](https://example.com/a.jpg) 。",
     "可以同时输出文字正文；连接器会尽量把图片单独发出去。",
-    "不要输出 <voice> 标签，微信连接器当前不走语音回发。",
+    "如需控制电脑，可在整条回复里最多追加一个 [PCMD:...] 标签；不确定就不要加。",
+    "仅允许这些指令：[PCMD:lock] [PCMD:shutdown] [PCMD:shutdown:秒数] [PCMD:restart] [PCMD:restart:秒数] [PCMD:sleep] [PCMD:mute] [PCMD:volume:0-100] [PCMD:notify:标题:内容] [PCMD:open:notepad] [PCMD:open:notepad:要写入的内容] [PCMD:open:chrome] [PCMD:open:vscode] [PCMD:open:wechat] [PCMD:open:notion] [PCMD:url:https://...] [PCMD:media:play]",
+    "严禁输出未列出的 PCMD；若不确定，请不要输出 PCMD。仅在确有必要时输出；平时不要输出。",
   ].join("\n");
 }
 
@@ -345,7 +357,7 @@ function resolveWechatWindowId() {
 }
 
 async function callGatewayChat(windowId, userContent) {
-  const base = envStr("GATEWAY_BASE_URL", "http://127.0.0.1:5000").replace(/\/+$/, "");
+  const base = gatewayBaseUrl();
   const chatPath = envStr("GATEWAY_CHAT_PATH", "/v1/chat/completions");
   const url = base + (chatPath.startsWith("/") ? chatPath : `/${chatPath}`);
   const configuredModel = envStr("GATEWAY_MODEL", "");
@@ -396,6 +408,100 @@ async function callGatewayChat(windowId, userContent) {
   }
   const reply = data?.choices?.[0]?.message?.content;
   return String(reply || "").trim();
+}
+
+let _STICKER_TAGS_CACHE_AT = 0;
+let _STICKER_TAGS_CACHE = [];
+let _STICKER_MAPPING_CACHE_AT = 0;
+let _STICKER_MAPPING_CACHE = {};
+let _STICKER_REGEX_CACHE_AT = 0;
+let _STICKER_REGEX_CACHE = /(?!x)x/;
+const _STICKER_CACHE_TTL_MS = 45_000;
+
+async function fetchStickerTags() {
+  const now = Date.now();
+  if (now - _STICKER_TAGS_CACHE_AT < _STICKER_CACHE_TTL_MS && _STICKER_TAGS_CACHE.length) {
+    return _STICKER_TAGS_CACHE;
+  }
+  try {
+    const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/tags`);
+    const text = await r.text();
+    if (!r.ok) return _STICKER_TAGS_CACHE;
+    const data = text ? JSON.parse(text) : null;
+    const rows = Array.isArray(data?.tags) ? data.tags : [];
+    const keys = rows
+      .map((it) => String(it?.key || "").trim().toLowerCase())
+      .filter(Boolean);
+    _STICKER_TAGS_CACHE_AT = now;
+    _STICKER_TAGS_CACHE = [...new Set(keys)];
+    return _STICKER_TAGS_CACHE;
+  } catch {
+    return _STICKER_TAGS_CACHE;
+  }
+}
+
+async function fetchStickerMapping() {
+  const now = Date.now();
+  if (now - _STICKER_MAPPING_CACHE_AT < _STICKER_CACHE_TTL_MS && Object.keys(_STICKER_MAPPING_CACHE).length) {
+    return _STICKER_MAPPING_CACHE;
+  }
+  try {
+    const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/mapping`);
+    const text = await r.text();
+    if (!r.ok) return _STICKER_MAPPING_CACHE;
+    const data = text ? JSON.parse(text) : null;
+    const mapping = (data?.mapping && typeof data.mapping === "object") ? data.mapping : {};
+    _STICKER_MAPPING_CACHE_AT = now;
+    _STICKER_MAPPING_CACHE = mapping;
+    return _STICKER_MAPPING_CACHE;
+  } catch {
+    return _STICKER_MAPPING_CACHE;
+  }
+}
+
+function getStickerTagsLineForSystemPrompt() {
+  if (_STICKER_TAGS_CACHE.length) {
+    return `当前全部可用英文代号：${_STICKER_TAGS_CACHE.map((k) => `[${k}]`).join(" ")}`;
+  }
+  return "表情包英文代号以 MiniApp 配置为准；句末可加小写 [tag]。";
+}
+
+async function refreshStickerRegex() {
+  const now = Date.now();
+  if (now - _STICKER_REGEX_CACHE_AT < _STICKER_CACHE_TTL_MS) {
+    return _STICKER_REGEX_CACHE;
+  }
+  const keys = (await fetchStickerTags()).slice().sort((a, b) => b.length - a.length);
+  _STICKER_REGEX_CACHE = keys.length
+    ? new RegExp(`\\[(${keys.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\]`, "i")
+    : /(?!x)x/;
+  _STICKER_REGEX_CACHE_AT = now;
+  return _STICKER_REGEX_CACHE;
+}
+
+async function extractStickerTag(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return { cleanText: "", tag: "" };
+  const pat = await refreshStickerRegex();
+  const m = pat.exec(raw);
+  if (!m) return { cleanText: raw, tag: "" };
+  const tag = String(m[1] || "").trim().toLowerCase();
+  if (!tag) return { cleanText: raw, tag: "" };
+  const cleanText = (raw.slice(0, m.index) + raw.slice(m.index + m[0].length)).replace(/\n{3,}/g, "\n\n").trim();
+  return { cleanText, tag };
+}
+
+async function pickRandomStickerKey(tag) {
+  const t = String(tag || "").trim().toLowerCase();
+  if (!t) return "";
+  const mapping = await fetchStickerMapping();
+  const keys = Array.isArray(mapping?.[t]) ? mapping[t].map((k) => String(k || "").trim()).filter(Boolean) : [];
+  if (!keys.length) return "";
+  return keys[Math.floor(Math.random() * keys.length)] || "";
+}
+
+function buildStickerRawUrl(key) {
+  return `${gatewayBaseUrl()}/miniapp-api/stickers/raw?key=${encodeURIComponent(String(key || ""))}`;
 }
 
 function extractVoiceTag(text) {
@@ -769,7 +875,12 @@ async function main() {
       }
       reply = await callGatewayChat(windowId, merged);
       const noVoice = extractVoiceTag(reply).cleanText;
-      ({ cleanText: replyClean, imageUrls } = extractImageUrls(noVoice));
+      const stickerParsed = await extractStickerTag(noVoice);
+      ({ cleanText: replyClean, imageUrls } = extractImageUrls(stickerParsed.cleanText));
+      const stickerKey = await pickRandomStickerKey(stickerParsed.tag);
+      if (stickerKey) {
+        imageUrls.push(buildStickerRawUrl(stickerKey));
+      }
       console.log(
         `[wechat-ilink] gateway reply chars=${reply.length} clean_chars=${replyClean.length} image_count=${imageUrls.length} preview=${reply.slice(0, 120)}`
       );
