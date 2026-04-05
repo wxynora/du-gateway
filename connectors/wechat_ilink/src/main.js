@@ -453,14 +453,12 @@ async function fetchStickerTags() {
     return _STICKER_TAGS_CACHE;
   }
   try {
-    const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/tags`);
+    const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/tags-public`);
     const text = await r.text();
     if (!r.ok) return _STICKER_TAGS_CACHE;
     const data = text ? JSON.parse(text) : null;
     const rows = Array.isArray(data?.tags) ? data.tags : [];
-    const keys = rows
-      .map((it) => String(it?.key || "").trim().toLowerCase())
-      .filter(Boolean);
+    const keys = rows.map((it) => String(it || "").trim().toLowerCase()).filter(Boolean);
     _STICKER_TAGS_CACHE_AT = now;
     _STICKER_TAGS_CACHE = [...new Set(keys)];
     return _STICKER_TAGS_CACHE;
@@ -470,27 +468,7 @@ async function fetchStickerTags() {
 }
 
 async function fetchStickerMapping() {
-  const now = Date.now();
-  if (now - _STICKER_MAPPING_CACHE_AT < _STICKER_CACHE_TTL_MS && Object.keys(_STICKER_MAPPING_CACHE).length) {
-    return _STICKER_MAPPING_CACHE;
-  }
-  try {
-    const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/mapping`);
-    const text = await r.text();
-    if (!r.ok) {
-      console.log(`[wechat-ilink] sticker mapping fetch failed status=${r.status} body=${text.slice(0, 200)}`);
-      return _STICKER_MAPPING_CACHE;
-    }
-    const data = text ? JSON.parse(text) : null;
-    const mapping = (data?.mapping && typeof data.mapping === "object") ? data.mapping : {};
-    _STICKER_MAPPING_CACHE_AT = now;
-    _STICKER_MAPPING_CACHE = mapping;
-    console.log(`[wechat-ilink] sticker mapping loaded tags=${Object.keys(mapping).length}`);
-    return _STICKER_MAPPING_CACHE;
-  } catch {
-    console.log("[wechat-ilink] sticker mapping fetch error");
-    return _STICKER_MAPPING_CACHE;
-  }
+  return {};
 }
 
 function getStickerTagsLineForSystemPrompt() {
@@ -528,15 +506,22 @@ async function extractStickerTag(text) {
 async function pickRandomStickerKey(tag) {
   const t = String(tag || "").trim().toLowerCase();
   if (!t) return "";
-  const mapping = await fetchStickerMapping();
-  const keys = Array.isArray(mapping?.[t]) ? mapping[t].map((k) => String(k || "").trim()).filter(Boolean) : [];
-  console.log(`[wechat-ilink] sticker mapping entries tag=${t} count=${keys.length}`);
-  if (!keys.length) return "";
-  return keys[Math.floor(Math.random() * keys.length)] || "";
-}
-
-function buildStickerRawUrl(key) {
-  return `${gatewayBaseUrl()}/miniapp-api/stickers/raw?key=${encodeURIComponent(String(key || ""))}`;
+  try {
+    const r = await fetch(`${gatewayBaseUrl()}/miniapp-api/stickers/resolve?tag=${encodeURIComponent(t)}`);
+    const text = await r.text();
+    if (!r.ok) {
+      console.log(`[wechat-ilink] sticker resolve failed tag=${t} status=${r.status} body=${text.slice(0, 200)}`);
+      return "";
+    }
+    const data = text ? JSON.parse(text) : null;
+    const count = Number(data?.count || 0);
+    const url = String(data?.url || "").trim();
+    console.log(`[wechat-ilink] sticker resolve tag=${t} count=${count} url=${url ? url.slice(0, 160) : "-"}`);
+    return url;
+  } catch (e) {
+    console.log(`[wechat-ilink] sticker resolve error tag=${t} err=${String(e?.message || e)}`);
+    return "";
+  }
 }
 
 function extractVoiceTag(text) {
@@ -917,13 +902,13 @@ async function main() {
       const noVoice = extractVoiceTag(reply).cleanText;
       const stickerParsed = await extractStickerTag(noVoice);
       ({ cleanText: replyClean, imageUrls } = extractImageUrls(stickerParsed.cleanText));
-      const stickerKey = await pickRandomStickerKey(stickerParsed.tag);
+      const stickerUrl = await pickRandomStickerKey(stickerParsed.tag);
       console.log(
         `[wechat-ilink] sticker parsed tag=${stickerParsed.tag || "-"} clean_preview=${replyClean.slice(0, 160)}`
       );
-      console.log(`[wechat-ilink] sticker key=${stickerKey || "-"}`);
-      if (stickerKey) {
-        imageUrls.push(buildStickerRawUrl(stickerKey));
+      console.log(`[wechat-ilink] sticker key=${stickerUrl || "-"}`);
+      if (stickerUrl) {
+        imageUrls.push(stickerUrl);
       }
       console.log(
         `[wechat-ilink] gateway reply chars=${reply.length} clean_chars=${replyClean.length} image_count=${imageUrls.length} preview=${reply.slice(0, 120)}`
