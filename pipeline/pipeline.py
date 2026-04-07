@@ -268,7 +268,10 @@ def _build_action_note_from_tool_calls(tool_calls: list) -> str:
     if not isinstance(tool_calls, list) or not tool_calls:
         return ""
 
+    has_success = False
+
     def _summarize_one_tool(tc: dict) -> str:
+        nonlocal has_success
         if not isinstance(tc, dict):
             return ""
         fn = (tc.get("function") or {}) if isinstance(tc.get("function"), dict) else {}
@@ -293,14 +296,19 @@ def _build_action_note_from_tool_calls(tool_calls: list) -> str:
             lower = result_text.lower()
             if name == "read_url":
                 result_kind = "已拿到页面内容"
+                has_success = True
             elif "未找到" in result_text or "没有找到" in result_text or "not found" in lower:
                 result_kind = "未找到有效结果"
             elif "error" in lower or "失败" in result_text:
                 result_kind = "调用未成功"
             elif "http" in result_text or "https" in result_text:
                 result_kind = "已拿到链接结果"
+                has_success = True
             elif "[" in result_text and "]" in result_text:
                 result_kind = "已拿到候选列表"
+                has_success = True
+            else:
+                has_success = True
         else:
             result_kind = "已执行"
         if target:
@@ -317,7 +325,9 @@ def _build_action_note_from_tool_calls(tool_calls: list) -> str:
         parts.append(piece)
     if not parts:
         return ""
-    return f"上一轮已调用：{'、'.join(parts)}。"
+    if has_success:
+        return f"上一轮工具结果：{'、'.join(parts)}；这些结果已经拿到，除非参数变化或用户明确要求刷新，否则不要重复调用相同工具。"
+    return f"上一轮工具记录：{'、'.join(parts)}；若还是同一目标，先基于上面结果继续，不要立刻原样重调。"
 
 
 def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force_last4: bool = False) -> dict:
