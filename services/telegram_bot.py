@@ -143,6 +143,10 @@ _CTX_LOCK = threading.Lock()
 _CONTEXT_MESSAGES: dict[int, list[dict]] = {}
 _PENDING_LOCK = threading.Lock()
 _PENDING_USER_CONTENTS: dict[int, list[Union[str, list]]] = {}
+_UPDATE_DEDUP_LOCK = threading.Lock()
+_PROCESSED_UPDATE_IDS: dict[str, float] = {}
+_UPDATE_DEDUP_TTL_SECONDS = 10 * 60
+_UPDATE_DEDUP_MAX = 20000
 
 # Telegram 端的输出风格约束（只影响 Telegram）；表情包代号行从 R2 meta 动态生成，见 build_telegram_style_system
 _STICKER_SYS_LINE_CACHE_AT: float = 0.0
@@ -175,6 +179,30 @@ def _sticker_tags_line_for_system_prompt() -> str:
     _STICKER_SYS_LINE_CACHE_AT = now
     _STICKER_SYS_LINE_CACHE_TEXT = text
     return text
+
+
+def _register_update_once(update_id, token: str, user_id, chat_id) -> bool:
+    """按 bot_token + update_id 去重，避免 Telegram 重投导致重复聚合/重复回复。"""
+    if update_id is None:
+        return True
+    key = f"{token}:{update_id}"
+    now = time.time()
+    expire_before = now - float(_UPDATE_DEDUP_TTL_SECONDS)
+    with _UPDATE_DEDUP_LOCK:
+        if _PROCESSED_UPDATE_IDS:
+            expired = [k for k, ts in _PROCESSED_UPDATE_IDS.items() if ts < expire_before]
+            for k in expired:
+                _PROCESSED_UPDATE_IDS.pop(k, None)
+        if key in _PROCESSED_UPDATE_IDS:
+            logger.info("忽略重复 Telegram update update_id=%s user_id=%s chat_id=%s", update_id, user_id, chat_id)
+            return False
+        _PROCESSED_UPDATE_IDS[key] = now
+        if len(_PROCESSED_UPDATE_IDS) > int(_UPDATE_DEDUP_MAX):
+            extra = len(_PROCESSED_UPDATE_IDS) - int(_UPDATE_DEDUP_MAX)
+            oldest = sorted(_PROCESSED_UPDATE_IDS.items(), key=lambda kv: kv[1])[:extra]
+            for k, _ in oldest:
+                _PROCESSED_UPDATE_IDS.pop(k, None)
+    return True
 
 
 def build_telegram_style_system() -> str:
@@ -1338,6 +1366,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     if gm_split and not is_gm and not is_main:
         return
 
+    update_id = (upd or {}).get("update_id")
     msg = (upd or {}).get("message") or (upd or {}).get("edited_message")
     if not msg:
         return
@@ -1346,6 +1375,8 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     from_user = msg.get("from") or {}
     user_id = from_user.get("id")
     if chat_id is None or user_id is None:
+        return
+    if not _register_update_once(update_id=update_id, token=token, user_id=user_id, chat_id=chat_id):
         return
 
     text = (msg.get("text") or "").strip()
