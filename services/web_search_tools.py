@@ -20,6 +20,41 @@ from utils.log import get_logger
 
 logger = get_logger(__name__)
 
+_NOISE_PATTERNS = (
+    r"(?:个性化推荐算法备案编号|推荐算法备案编号)[\s\S]{0,160}(?:\||$)",
+    r"(?:信息服务资质提示|信息服务商备案)[\s\S]{0,160}(?:\||$)",
+    r"(?:增值电信业务经营许可证|网络文化经营许可证|互联网药品信息服务资格证书)[\s\S]{0,160}(?:\||$)",
+    r"(?:ICP备案|ICP证|网安备|公网安备)[\s\S]{0,120}(?:\||$)",
+    r"(?:版权所有|Copyright)[\s\S]{0,120}(?:\||$)",
+)
+
+
+def _strip_common_noise(text: str) -> str:
+    s = text or ""
+    for p in _NOISE_PATTERNS:
+        s = re.sub(rf"[\s\S]{{0,24}}{p}", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _dedup_sentences(text: str) -> str:
+    parts = re.split(r"(?<=[。！？!?；;])|\s{2,}|\n+", text or "")
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        s = (p or "").strip()
+        if not s:
+            continue
+        key = re.sub(r"\s+", "", s)
+        if len(key) < 6:
+            out.append(s)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return " ".join(out).strip()
+
 
 TOOL_WEB_SEARCH = {
     "type": "function",
@@ -158,7 +193,8 @@ class _SimpleTextExtractor(HTMLParser):
         merged = re.sub(r"\s+", " ", merged)
         # 去除常见页脚噪音（备案号、营业执照等）
         merged = re.sub(r"[\s\S]{0,20}(?:ICP备|网安备|营业执照|经营许可证|违法不良信息举报|互联网举报中心)[\s\S]{0,60}(?:\||$)", " ", merged)
-        merged = re.sub(r"\s+", " ", merged).strip()
+        merged = _strip_common_noise(merged)
+        merged = _dedup_sentences(merged)
         return merged
 
 
