@@ -475,6 +475,7 @@ def execute_tool(name: str, arguments: dict) -> str:
         "forum_get_post",
         "forum_post",
         "forum_comment",
+        "forum_delete_post",
         "schedule_list",
         "schedule_create",
         "schedule_enable",

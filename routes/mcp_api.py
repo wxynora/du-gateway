@@ -107,6 +107,32 @@ def mcp_invoke():
         result, status = invoke_forum_http("POST", url, headers, None, body, args.get("timeout"))
         return jsonify(result), status
 
+    if tool == "forum_delete_post":
+        from services.mcp_forum_tools import _build_url_from_base, _normalize_path
+
+        post_id = str(args.get("post_id") or "").strip()
+        if not post_id:
+            return jsonify({"ok": False, "error": "缺少 post_id"}), 400
+        template = _normalize_path(
+            args.get("path_template") or MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
+            MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
+        )
+        url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
+        if not url:
+            return jsonify({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}), 400
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        auth_token = (args.get("auth_token") or "").strip()
+        if not auth_token:
+            auth_token = MCP_FORUM_DEFAULT_UID
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            return jsonify({"ok": False, "error": "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"}), 400
+        result, status = invoke_forum_http("DELETE", url, headers, None, None, args.get("timeout"))
+        if isinstance(result, dict):
+            result.setdefault("post_id", post_id)
+        return jsonify(result), status
+
     if tool == "forum_uid_http":
         uid = (args.get("uid") or "").strip() or MCP_FORUM_DEFAULT_UID
         if not uid:

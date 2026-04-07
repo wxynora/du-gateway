@@ -131,6 +131,32 @@ TOOL_FORUM_COMMENT = {
     },
 }
 
+TOOL_FORUM_DELETE_POST = {
+    "type": "function",
+    "function": {
+        "name": "forum_delete_post",
+        "description": (
+            "论坛删帖：默认对 MCP_FORUM_POST_DETAIL_PATH_TEMPLATE 对应的帖子详情地址发 DELETE。\n"
+            "你只需要传 post_id；如果服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动带默认 Bearer。\n"
+            "如论坛删帖接口不是帖子详情地址，可用 path_template 覆盖，例如 /posts/{post_id} 或 /api/posts/{post_id}。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "post_id": {"type": "string", "description": "必填：要删除的帖子 ID"},
+                "path_template": {"type": "string", "description": "可选：默认 MCP_FORUM_POST_DETAIL_PATH_TEMPLATE"},
+                "auth_token": {
+                    "type": "string",
+                    "description": "Bearer token（不传则使用 MCP_FORUM_DEFAULT_UID）",
+                },
+                "headers": {"type": "object"},
+                "timeout": {"type": "integer"},
+            },
+            "required": ["post_id"],
+        },
+    },
+}
+
 
 TOOL_FORUM_UID_HTTP = {
     "type": "function",
@@ -335,7 +361,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
     high_level = [
         t for t in forum_tools
         if ((t.get("function") or {}).get("name") in ("forum_list_posts", "forum_get_post"))
-    ] + [TOOL_FORUM_POST, TOOL_FORUM_COMMENT]
+    ] + [TOOL_FORUM_POST, TOOL_FORUM_COMMENT, TOOL_FORUM_DELETE_POST]
     if mode == "forum":
         return schedule_tools + high_level
     # debug 场景：全量工具
@@ -346,6 +372,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         *forum_tools,
         TOOL_FORUM_POST,
         TOOL_FORUM_COMMENT,
+        TOOL_FORUM_DELETE_POST,
         *schedule_tools,
     ]
 
@@ -774,6 +801,30 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         else:
             return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
         result, _ = invoke_forum_http("POST", url, headers, None, {"content": content}, args.get("timeout"))
+        return json.dumps(result, ensure_ascii=False)
+
+    if name == "forum_delete_post":
+        post_id = str(args.get("post_id") or "").strip()
+        if not post_id:
+            return "post_id 不能为空"
+        template = _normalize_path(
+            args.get("path_template") or MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
+            MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
+        )
+        url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
+        if not url:
+            return "未配置 MCP_FORUM_BASE_URL"
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        auth_token = (args.get("auth_token") or "").strip()
+        if not auth_token:
+            auth_token = MCP_FORUM_DEFAULT_UID
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
+        else:
+            return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
+        result, _ = invoke_forum_http("DELETE", url, headers, None, None, args.get("timeout"))
+        if isinstance(result, dict):
+            result.setdefault("post_id", post_id)
         return json.dumps(result, ensure_ascii=False)
 
     if name == "forum_uid_http":
