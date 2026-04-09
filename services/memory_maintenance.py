@@ -21,6 +21,7 @@ _BACKFILL_UPSERT_SLEEP_SECONDS = 0.15
 _DUP_EMBED_MAX = 80
 _DUP_EMBED_SLEEP_SECONDS = 0.05
 _DS_GROUP_MAX = 8
+_EMBED_HEALTH_TIMEOUT_SECONDS = 3.0
 
 _DUPLICATE_RESOLVE_PROMPT = """你在帮我整理一组疑似重复的动态记忆。
 
@@ -125,6 +126,60 @@ def _resolve_duplicate_group_with_ds(group: list[dict]) -> dict | None:
         return None
 
 
+def _embedding_backend_healthy() -> tuple[bool, str]:
+    """
+    离线整理的快速探针：embedding 后端不通时直接降级，避免长时间卡住请求。
+    """
+    try:
+        from memory_vector.config import (
+            CF_ACCOUNT_ID,
+            CF_API_TOKEN,
+            CF_EMBEDDING_MODEL,
+            OPENAI_API_KEY,
+            EMBEDDING_MODEL,
+            current_embedding_backend,
+        )
+    except Exception as e:
+        return False, f"embedding_config_import_failed: {e}"
+
+    backend = str(current_embedding_backend() or "").strip()
+    try:
+        if backend == "cloudflare_bge":
+            if not (CF_ACCOUNT_ID and CF_API_TOKEN and CF_EMBEDDING_MODEL):
+                return False, "cloudflare_config_missing"
+            url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_EMBEDDING_MODEL}"
+            headers = {"Authorization": f"Bearer {CF_API_TOKEN}"}
+            payload = {"text": "health-check", "truncate_inputs": True}
+            resp = requests.post(url, headers=headers, json=payload, timeout=_EMBED_HEALTH_TIMEOUT_SECONDS)
+            if resp.status_code >= 400:
+                return False, f"cloudflare_http_{resp.status_code}"
+            data = resp.json() if resp.text else {}
+            result = data.get("result") if isinstance(data, dict) else None
+            obj = result if isinstance(result, dict) else (data if isinstance(data, dict) else {})
+            emb_list = obj.get("data")
+            if not isinstance(emb_list, list) or not emb_list:
+                return False, "cloudflare_no_data"
+            return True, ""
+
+        if backend == "openai_compatible":
+            if not (OPENAI_API_KEY and EMBEDDING_MODEL):
+                return False, "openai_config_missing"
+            url = "https://api.openai.com/v1/embeddings"
+            headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+            payload = {"model": EMBEDDING_MODEL, "input": "health-check"}
+            resp = requests.post(url, headers=headers, json=payload, timeout=_EMBED_HEALTH_TIMEOUT_SECONDS)
+            if resp.status_code >= 400:
+                return False, f"openai_http_{resp.status_code}"
+            data = resp.json() if resp.text else {}
+            emb = (((data.get("data") or [{}])[0]) or {}).get("embedding")
+            if not isinstance(emb, list):
+                return False, "openai_no_embedding"
+            return True, ""
+        return False, "embedding_backend_disabled"
+    except Exception as e:
+        return False, f"embedding_probe_failed: {e}"
+
+
 def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) -> dict:
     """
     动态记忆离线慢整理：
@@ -183,64 +238,68 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
     candidate_groups: list[list[dict]] = []
     duplicate_candidates: list[dict] = []
     duplicate_embed_count = 0
+    embed_ok, embed_skip_reason = _embedding_backend_healthy()
 
-    for tag, items in tag_buckets.items():
-        if len(items) < 2:
-            continue
-        emb_cache: dict[str, list[float]] = {}
-        for mem in items:
-            if duplicate_embed_count >= _DUP_EMBED_MAX:
-                break
-            mid = str(mem.get("id") or "").strip()
-            retrieval_text = str(mem.get("retrieval_text") or "").strip()
-            if not mid or not retrieval_text:
+    if embed_ok:
+        for tag, items in tag_buckets.items():
+            if len(items) < 2:
                 continue
-            try:
-                emb = embed_text(retrieval_text)
-            except Exception as e:
-                logger.warning("memory maintenance duplicate embed failed memory_id=%s error=%s", mid, e)
-                continue
-            if emb:
-                emb_cache[mid] = emb
-                duplicate_embed_count += 1
-                if _DUP_EMBED_SLEEP_SECONDS > 0:
-                    time.sleep(_DUP_EMBED_SLEEP_SECONDS)
-        if duplicate_embed_count >= _DUP_EMBED_MAX:
-            logger.info("memory maintenance duplicate embed reached limit=%s", _DUP_EMBED_MAX)
-
-        visited: set[str] = set()
-        for i, base in enumerate(items):
-            base_id = str(base.get("id") or "").strip()
-            base_text = str(base.get("retrieval_text") or "").strip()
-            if not base_id or not base_text or base_id in visited or base_id not in emb_cache:
-                continue
-            group = [base]
-            visited.add(base_id)
-            for cand in items[i + 1 :]:
-                cand_id = str(cand.get("id") or "").strip()
-                cand_text = str(cand.get("retrieval_text") or "").strip()
-                if not cand_id or not cand_text or cand_id in visited or cand_id not in emb_cache:
+            emb_cache: dict[str, list[float]] = {}
+            for mem in items:
+                if duplicate_embed_count >= _DUP_EMBED_MAX:
+                    break
+                mid = str(mem.get("id") or "").strip()
+                retrieval_text = str(mem.get("retrieval_text") or "").strip()
+                if not mid or not retrieval_text:
                     continue
-                sim = cosine(emb_cache[base_id], emb_cache[cand_id])
-                if sim >= _DUP_SIM_THRESHOLD:
-                    cc = dict(cand)
-                    cc["_dup_sim"] = round(float(sim), 4)
-                    group.append(cc)
-                    visited.add(cand_id)
-            if len(group) < 2:
-                continue
-            candidate_groups.append(group)
-            sims = [float((m or {}).get("_dup_sim") or 1.0) for m in group[1:]]
-            duplicate_candidates.append(
-                {
-                    "tag": tag,
-                    "retrieval_text": base_text,
-                    "count": len(group),
-                    "avg_sim": round(sum(sims) / len(sims), 4) if sims else 1.0,
-                    "ids": [str((m or {}).get("id") or "") for m in group[:5]],
-                    "contents": [str((m or {}).get("content") or "")[:80] for m in group[:3]],
-                }
-            )
+                try:
+                    emb = embed_text(retrieval_text)
+                except Exception as e:
+                    logger.warning("memory maintenance duplicate embed failed memory_id=%s error=%s", mid, e)
+                    continue
+                if emb:
+                    emb_cache[mid] = emb
+                    duplicate_embed_count += 1
+                    if _DUP_EMBED_SLEEP_SECONDS > 0:
+                        time.sleep(_DUP_EMBED_SLEEP_SECONDS)
+            if duplicate_embed_count >= _DUP_EMBED_MAX:
+                logger.info("memory maintenance duplicate embed reached limit=%s", _DUP_EMBED_MAX)
+
+            visited: set[str] = set()
+            for i, base in enumerate(items):
+                base_id = str(base.get("id") or "").strip()
+                base_text = str(base.get("retrieval_text") or "").strip()
+                if not base_id or not base_text or base_id in visited or base_id not in emb_cache:
+                    continue
+                group = [base]
+                visited.add(base_id)
+                for cand in items[i + 1 :]:
+                    cand_id = str(cand.get("id") or "").strip()
+                    cand_text = str(cand.get("retrieval_text") or "").strip()
+                    if not cand_id or not cand_text or cand_id in visited or cand_id not in emb_cache:
+                        continue
+                    sim = cosine(emb_cache[base_id], emb_cache[cand_id])
+                    if sim >= _DUP_SIM_THRESHOLD:
+                        cc = dict(cand)
+                        cc["_dup_sim"] = round(float(sim), 4)
+                        group.append(cc)
+                        visited.add(cand_id)
+                if len(group) < 2:
+                    continue
+                candidate_groups.append(group)
+                sims = [float((m or {}).get("_dup_sim") or 1.0) for m in group[1:]]
+                duplicate_candidates.append(
+                    {
+                        "tag": tag,
+                        "retrieval_text": base_text,
+                        "count": len(group),
+                        "avg_sim": round(sum(sims) / len(sims), 4) if sims else 1.0,
+                        "ids": [str((m or {}).get("id") or "") for m in group[:5]],
+                        "contents": [str((m or {}).get("content") or "")[:80] for m in group[:3]],
+                    }
+                )
+    else:
+        logger.warning("memory maintenance skip duplicate scan: %s", embed_skip_reason)
 
     candidate_groups.sort(
         key=lambda group: (
@@ -298,6 +357,8 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
     report = {
         "timestamp": now_beijing_iso(),
         "dry_run": bool(dry_run),
+        "embedding_skipped": (not embed_ok),
+        "embedding_skip_reason": embed_skip_reason if not embed_ok else "",
         "memory_count_before": before_count,
         "memory_count_after": len(retained),
         "backfilled_count": len(backfilled_ids),
@@ -324,19 +385,24 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
                 logger.warning("memory maintenance remove indices failed: %s", e, exc_info=True)
         updated_ids = set(backfilled_ids)
         upserted_count = 0
-        for mem in retained:
-            mid = str(mem.get("id") or "").strip()
-            if mid in updated_ids:
-                if upserted_count >= _BACKFILL_UPSERT_MAX:
-                    break
-                try:
-                    _upsert_dynamic_memory_index(mem)
-                    upserted_count += 1
-                    if _BACKFILL_UPSERT_SLEEP_SECONDS > 0:
-                        time.sleep(_BACKFILL_UPSERT_SLEEP_SECONDS)
-                except Exception as e:
-                    logger.warning("memory maintenance upsert failed memory_id=%s error=%s", mid, e, exc_info=True)
+        if embed_ok:
+            for mem in retained:
+                mid = str(mem.get("id") or "").strip()
+                if mid in updated_ids:
+                    if upserted_count >= _BACKFILL_UPSERT_MAX:
+                        break
+                    try:
+                        _upsert_dynamic_memory_index(mem)
+                        upserted_count += 1
+                        if _BACKFILL_UPSERT_SLEEP_SECONDS > 0:
+                            time.sleep(_BACKFILL_UPSERT_SLEEP_SECONDS)
+                    except Exception as e:
+                        logger.warning("memory maintenance upsert failed memory_id=%s error=%s", mid, e, exc_info=True)
+        else:
+            report["backfill_upsert_skipped_reason"] = embed_skip_reason
         report["backfill_upserted_count"] = upserted_count
 
-    r2_store.save_dynamic_memory_maintenance_report(report)
+    saved = r2_store.save_dynamic_memory_maintenance_report(report)
+    if not saved:
+        raise RuntimeError("保存离线整理报告失败")
     return report
