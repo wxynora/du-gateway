@@ -1328,7 +1328,8 @@ def promote_to_core_cache(
 ) -> None:
     """
     动态层写入/更新后调用：满足条件则加入 pending，去重（已存在 id 不重复加）。
-    - 条件A：本轮触及的记忆 importance>=4 → 存当轮对话原文，id=imp_{window_id}_{round_index}，promoted_by=importance
+    只存“动态层总结后的记忆内容”，不存 user/assistant 原始对话。
+    - 条件A：本轮触及的记忆 importance>=4 → 存该记忆的 summary content，id=imp_{window_id}_{round_index}，promoted_by=importance
     - 条件B：任一条记忆 mention_count>=5 → 存该条融合版 content，id=记忆 id，promoted_by=mention_count
     """
     client = _s3_client()
@@ -1339,18 +1340,19 @@ def promote_to_core_cache(
     promoted_at = now_beijing_iso()
     added = False
 
-    # 条件A：本轮触及的那条 importance>=4 → 存当轮原文
-    if touched_mem_id and round_messages_text:
+    # 条件A：本轮触及记忆 importance>=4，存动态层 summary（不是原始对话）
+    if touched_mem_id:
         for m in current_memories:
             if m.get("id") != touched_mem_id:
                 continue
             if int(m.get("importance") or 0) >= 4:
                 imp_id = f"imp_{window_id}_{round_index}"
-                if imp_id not in existing_ids:
+                summary_content = str(m.get("content") or "").strip()
+                if imp_id not in existing_ids and summary_content:
                     pending.append({
                         "id": imp_id,
                         "promoted_by": "importance",
-                        "content": round_messages_text,
+                        "content": summary_content,
                         "importance": int(m.get("importance") or 0),
                         "mention_count": int(m.get("mention_count") or 0),
                         "promoted_at": promoted_at,
