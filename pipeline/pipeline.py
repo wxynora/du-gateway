@@ -1284,7 +1284,12 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                 valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
                 recalled = [
                     mem for mem in recalled
-                    if str(mem.get("id") or "") in valid_ids and _is_dynamic_memory_valid(mem, now)
+                    if (
+                        # 动态层：保留原有效期过滤
+                        (str(mem.get("id") or "") in valid_ids and _is_dynamic_memory_valid(mem, now))
+                        # 核心缓存层：dynamic_vector_retriever 产出的临时 id 形如 core::<entry_id>，不走动态层 7 天过滤
+                        or str(mem.get("id") or "").startswith("core::")
+                    )
                 ]
         except Exception as e:
             vector_error = str(e)
