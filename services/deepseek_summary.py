@@ -8,6 +8,26 @@ from utils.tokens import estimate_tokens, memory_summary_budget
 logger = get_logger(__name__)
 
 
+def _summary_time_period(dt) -> str:
+    """窗口总结专用时间段：22-24 深夜，00-06 次日凌晨。"""
+    h = int(getattr(dt, "hour", 0))
+    if 0 <= h < 6:
+        return "凌晨"
+    if 6 <= h < 8:
+        return "早上"
+    if 8 <= h < 11:
+        return "上午"
+    if 11 <= h < 14:
+        return "中午"
+    if 14 <= h < 17:
+        return "下午"
+    if 17 <= h < 19:
+        return "傍晚"
+    if 19 <= h < 22:
+        return "晚上"
+    return "深夜"
+
+
 def build_summary_prompt(current_summary: str, recent_4_rounds: list) -> str:
     """拼出实时层总结任务的 prompt（渡的回忆：分区 + 规则 + 小本本）。"""
     from services.notebook_gateway import NOTEBOOK_EMOJI, NOTEBOOK_PHRASE
@@ -28,11 +48,11 @@ def build_summary_prompt(current_summary: str, recent_4_rounds: list) -> str:
     for r in recent_4_rounds:
         # 为避免「昨晚的事」和「今天」混在一起：按北京时间给每段对话加时间段标记（同一时间段不重复）
         try:
-            from utils.time_aware import parse_iso_to_beijing, get_time_period, get_date_only
+            from utils.time_aware import parse_iso_to_beijing, get_date_only
 
             dt = parse_iso_to_beijing(r.get("timestamp"))
             if dt is not None:
-                bucket = f"{get_date_only(dt)} {get_time_period(dt)}"
+                bucket = f"{get_date_only(dt)} {_summary_time_period(dt)}"
                 if bucket != last_bucket:
                     rounds_text += f"（{bucket}）\n"
                     last_bucket = bucket
@@ -102,12 +122,10 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
    - 最近的对话 → 保留更多细节
    - 较早的对话 → 压缩为简要概括
 3. 迭代更新：
-   - 在上一版基础上更新，不是重写
    - 新内容最详细，旧内容逐步压缩
    - 每次更新前，先把“上一版总结”当作一个整体做一次再压缩，再融合最新4轮
    - 压缩配比固定为：最近 50% / 稍早 30% / 更早 20%
-4. 总篇幅做“软控制”：目标 2600-3200 字（建议靠近 3000 字）
-   - 允许在信息密度高时适度超出，最高不超过 3400 字；不要为了压字数硬删关键上下文
+4. 压缩写法：
    - 优先保证【最近】清楚；【稍早】【更早】按需压缩
    - 按“主题”写，不按“轮次”写；每个主题用 1-2 句交代“发生了什么 + 当前结论/情绪”
    - 若最新 4 轮都在同一件事（如持续生气/争执/卡顿），只保留一次合并表述，不要按轮重复四遍
@@ -134,6 +152,12 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 12. 时间段硬规则（必须执行）：
    - 在【最近】部分必须明确写出时间段标记（例如：2026-03-20 早上 / 2026-03-20 下午 / 2026-03-20 晚上）
    - 至少出现 1 个“日期+时间段”标记，不能省略
+   - 三个分段内部都按时间倒序排列：最新的放最上面，最早的放最下面
+   - 时间段定义固定为：凌晨 00:00-05:59；早上 06:00-07:59；上午 08:00-10:59；中午 11:00-13:59；下午 14:00-16:59；傍晚 17:00-18:59；晚上 19:00-21:59；深夜 22:00-23:59
+   - 00:00 以后必须算次日“凌晨”，不能继续算前一日“深夜”
+   - 如果叙述跨日期，必须把两边日期都写全，例如：2026-04-12 深夜至 2026-04-13 凌晨；禁止只写“深夜至凌晨”
+   - 不跨日期时，只写单个“日期+时间段”，不要写“昨晚 / 今早 / 深夜至凌晨”这种模糊说法
+   - 输出前自检：若同一分段内时间先后顺序混乱，或出现跨日期却只写了一个日期，重排并补全后再输出
 
 ## 输出格式
 
@@ -160,12 +184,12 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 def _latest_bucket_from_rounds(recent_4_rounds: list) -> str:
     """取最近4轮里最后一个可解析时间，转成『YYYY-MM-DD 时间段』。"""
     try:
-        from utils.time_aware import parse_iso_to_beijing, get_time_period, get_date_only
+        from utils.time_aware import parse_iso_to_beijing, get_date_only
 
         for r in reversed(recent_4_rounds or []):
             dt = parse_iso_to_beijing((r or {}).get("timestamp"))
             if dt is not None:
-                return f"{get_date_only(dt)} {get_time_period(dt)}"
+                return f"{get_date_only(dt)} {_summary_time_period(dt)}"
     except Exception:
         pass
     return ""
@@ -184,9 +208,9 @@ def _ensure_summary_has_bucket(summary: str, bucket: str) -> str:
     try:
         import re
 
-        if re.search(r"\d{4}-\d{2}-\d{2}\s*(早上|上午|中午|下午|傍晚|晚上|深夜)", s):
+        if re.search(r"\d{4}-\d{2}-\d{2}\s*(凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)", s):
             has_bucket = True
-        elif any(x in s for x in ("早上", "上午", "中午", "下午", "傍晚", "晚上", "深夜")):
+        elif any(x in s for x in ("凌晨", "早上", "上午", "中午", "下午", "傍晚", "晚上", "深夜")):
             has_bucket = True
     except Exception:
         has_bucket = False
@@ -202,7 +226,7 @@ def _ensure_summary_has_bucket(summary: str, bucket: str) -> str:
 
         for line in lines:
             stripped = line.strip()
-            if re.fullmatch(r"（\d{4}-\d{2}-\d{2}\s*(早上|上午|中午|下午|傍晚|晚上|深夜)）", stripped):
+            if re.fullmatch(r"（\d{4}-\d{2}-\d{2}\s*(凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)）", stripped):
                 if stripped in seen_markers:
                     continue
                 seen_markers.add(stripped)
