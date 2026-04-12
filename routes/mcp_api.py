@@ -258,4 +258,15 @@ def mcp_invoke():
         out = execute_forum_tool("schedule_delete", args)
         return jsonify({"ok": True, "result": out}), 200
 
+    if tool == "search_memory":
+        from services.mcp_forum_tools import execute_forum_tool
+        import json
+
+        out = execute_forum_tool("search_memory", args)
+        try:
+            payload_obj = json.loads(out)
+        except Exception:
+            payload_obj = {"ok": False, "error": out}
+        return jsonify(payload_obj), 200
+
     return jsonify({"ok": False, "error": "不支持的 tool，请用 /mcp/tools 查看"}), 400

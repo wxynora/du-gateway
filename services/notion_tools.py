@@ -404,6 +404,30 @@ def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
             },
         },
     })
+    tools.append({
+        "type": "function",
+        "function": {
+            "name": "search_memory",
+            "description": (
+                "当你怀疑当前自动召回的动态记忆不够准或漏了熟悉话题时，主动补检动态记忆层。"
+                "只有当当前召回明显和用户这句话对不上，或你强烈怀疑用户在提熟悉主题但召回缺失时才调用。"
+                "query 必填，且只能基于用户当前原始消息；不能参考已召回内容来拼 query；"
+                "不要为了多搜一遍看看而调用；suspicion_level=low 时禁止调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "必填，只能基于用户当前原始消息"},
+                    "scene_type": {"type": "string", "description": "可选：problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict"},
+                    "target_type": {"type": "string", "description": "可选：external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic"},
+                    "time_range": {"type": "string", "description": "可选：recent_7d / recent_15d / recent_30d / all / between:YYYY-MM-DD,YYYY-MM-DD"},
+                    "reason": {"type": "string", "description": "一句话说明为什么怀疑当前召回不够"},
+                    "suspicion_level": {"type": "string", "description": "必填：high / medium / low"},
+                },
+                "required": ["query", "reason", "suspicion_level"],
+            },
+        },
+    })
     if NOTION_CORE_CACHE_DATABASE_ID:
         from services.gateway_tools import get_gateway_sync_tools
         tools.extend(get_gateway_sync_tools())
@@ -481,6 +505,7 @@ def execute_tool(name: str, arguments: dict) -> str:
         "schedule_enable",
         "schedule_disable",
         "schedule_delete",
+        "search_memory",
     ):
         return execute_forum_tool(name, arguments)
     try:

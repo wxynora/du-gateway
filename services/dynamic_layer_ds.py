@@ -1,6 +1,7 @@
 """
 动态层 DS 调用（与「终稿」prompt 对接）：
 - DS 每轮返回单条决策：action(new/merge/skip)、importance(1-4)、tag(单值)、content、fused_with_id(merge 时)。
+- 同时返回 emotion_label / scene_type / target_type 三个稳定标签。
 - 网关按 tag 判定卧室（tag === "卧室"）；按 action 单条应用：new 追加、merge 按 id 更新+mention_count+1、skip 不写。
 """
 
@@ -79,6 +80,12 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 但如果本轮出现关键事实锚点（时间/地点/明确决定/待办结论）或明显情绪起伏，不要因为“太短”而 skip。
 健康数据默认不记；只有出现生病/不适/就医相关情境时才记。
 额外要求：若 action 是 new/merge，content 必须是“概括后的便签”，不要照抄原对话原文。
+额外要求：
+- emotion_label 只标“当前/latest 的态度”，不要写历史态度
+- scene_type 只能从这些值里选一个：problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict
+- target_type 只能从这些值里选一个：external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic
+- emotion_label 只能从这些值里选一个：positive / negative / neutral
+- 如果 action=skip，也要尽量给出最合理的 emotion_label / scene_type / target_type，便于后续统一结构
 
 ---
 
@@ -87,6 +94,9 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
   "action": "new / merge / skip",
   "importance": 1-4,
   "tag": "客厅 / 书房 / 图书馆 / 卧室",
+  "emotion_label": "positive / negative / neutral",
+  "scene_type": "problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict",
+  "target_type": "external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic",
   "content": "记忆正文（简短一句，禁止段落或散文）",
   "fused_with_id": "（仅 merge 时填写，已有记忆的 id）"
 }}
@@ -219,7 +229,16 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
     返回字段：tag(str), action(str), importance(int), content(str), fused_with_id(str|None)。
     网关据此做单条应用；卧室只看 tag === "卧室"。
     """
-    default = {"tag": "", "action": "skip", "importance": 0, "content": "", "fused_with_id": None}
+    default = {
+        "tag": "",
+        "action": "skip",
+        "importance": 0,
+        "content": "",
+        "fused_with_id": None,
+        "emotion_label": "",
+        "scene_type": "",
+        "target_type": "",
+    }
 
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
         return default
@@ -284,6 +303,9 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
         importance = max(1, min(4, importance))  # 1-4
         content_text = (obj.get("content") or "").strip()
         fused_with_id = obj.get("fused_with_id")
+        emotion_label = str(obj.get("emotion_label") or "").strip().lower()
+        scene_type = str(obj.get("scene_type") or "").strip()
+        target_type = str(obj.get("target_type") or "").strip()
         if fused_with_id is not None and not isinstance(fused_with_id, str):
             fused_with_id = str(fused_with_id) if fused_with_id else None
         elif fused_with_id is not None and not fused_with_id.strip():
@@ -298,6 +320,9 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
             "importance": importance,
             "content": content_text,
             "fused_with_id": fused_with_id,
+            "emotion_label": emotion_label if emotion_label in ("positive", "negative", "neutral") else "neutral",
+            "scene_type": scene_type,
+            "target_type": target_type,
         }
     except Exception as e:
         logger.error("动态层 DS 调用失败 error=%s", e, exc_info=True)
@@ -306,7 +331,16 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
 
 def _normalize_single_decision(obj: Any) -> dict:
     """把 DS 返回的单条对象规范成网关用的 decision dict。"""
-    default = {"tag": "", "action": "skip", "importance": 0, "content": "", "fused_with_id": None}
+    default = {
+        "tag": "",
+        "action": "skip",
+        "importance": 0,
+        "content": "",
+        "fused_with_id": None,
+        "emotion_label": "",
+        "scene_type": "",
+        "target_type": "",
+    }
     if not isinstance(obj, dict):
         return default
     tag = (obj.get("tag") or "").strip()
@@ -316,6 +350,9 @@ def _normalize_single_decision(obj: Any) -> dict:
     importance = max(1, min(4, importance))
     content_text = (obj.get("content") or "").strip()
     fused_with_id = obj.get("fused_with_id")
+    emotion_label = str(obj.get("emotion_label") or "").strip().lower()
+    scene_type = str(obj.get("scene_type") or "").strip()
+    target_type = str(obj.get("target_type") or "").strip()
     if fused_with_id is not None and not isinstance(fused_with_id, str):
         fused_with_id = str(fused_with_id) if fused_with_id else None
     elif fused_with_id is not None and not fused_with_id.strip():
@@ -326,6 +363,9 @@ def _normalize_single_decision(obj: Any) -> dict:
         "importance": importance,
         "content": content_text,
         "fused_with_id": fused_with_id,
+        "emotion_label": emotion_label if emotion_label in ("positive", "negative", "neutral") else "neutral",
+        "scene_type": scene_type,
+        "target_type": target_type,
         "timestamp": obj.get("timestamp"),
         "last_mentioned": obj.get("last_mentioned"),
         "mention_count": obj.get("mention_count"),

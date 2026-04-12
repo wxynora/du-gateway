@@ -143,7 +143,7 @@ def root_dynamic_memory():
 def api_memory_append():
     """
     向动态层追加一条记忆（供 MCP / CC 写回）。
-    Body JSON: { content: str, importance?: int(1-5), tag?: str }
+    Body JSON: { content: str, importance?: int(1-5), tag?: str, emotion_label?: str, scene_type?: str, target_type?: str }
     鉴权：与 /mcp/* 相同的 Bearer token（MCP_AUTH_MODE / MCP_TOKENS）。
     """
     from utils.mcp_auth import enforce_mcp_auth
@@ -162,17 +162,37 @@ def api_memory_append():
     except (TypeError, ValueError):
         importance = 3
     tag = (body.get("tag") or "CC").strip()
+    emotion_label = (body.get("emotion_label") or "").strip().lower()
+    scene_type = (body.get("scene_type") or "").strip()
+    target_type = (body.get("target_type") or "").strip()
+    if emotion_label not in ("positive", "negative", "neutral"):
+        emotion_label = "neutral"
+    if scene_type not in (
+        "problem_solving", "learning", "planning", "emotional_venting",
+        "heart_to_heart", "casual_chat", "affection", "conflict",
+    ):
+        scene_type = ""
+    if target_type not in (
+        "external_tools", "self_state", "work_career", "our_project",
+        "our_relationship", "about_me", "third_party_people", "other_topic",
+    ):
+        target_type = ""
 
     from uuid import uuid4
     from utils.time_aware import now_beijing_iso
     from storage import r2_store
+    from pipeline.pipeline import _build_retrieval_text
 
     now = now_beijing_iso()
     new_entry = {
         "id": str(uuid4()),
         "content": content,
+        "retrieval_text": _build_retrieval_text(content),
         "importance": importance,
         "tag": tag,
+        "emotion_label": emotion_label,
+        "scene_type": scene_type,
+        "target_type": target_type,
         "mention_count": 0,
         "created_at": now,
         "last_mentioned": now,

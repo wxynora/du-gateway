@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, time, timedelta
 from typing import Optional
 
 from memory_vector.config import (
@@ -20,6 +21,7 @@ logger = get_logger(__name__)
 
 
 ROOM_TAGS = ("客厅", "书房", "图书馆", "卧室")
+_RECENT_RANGE_DAYS = {"recent_7d": 7, "recent_15d": 15, "recent_30d": 30}
 
 
 def _memory_weight(m: dict) -> float:
@@ -45,12 +47,65 @@ def _guess_tag_from_query(query: str) -> str:
     return ""
 
 
+def _memory_matches_time_range(mem: dict, time_range: str) -> bool:
+    s = str(time_range or "").strip()
+    if not s or s == "all":
+        return True
+    now = _now_beijing()
+    start_dt = None
+    end_dt = None
+    if s in _RECENT_RANGE_DAYS:
+        start_dt = now - timedelta(days=_RECENT_RANGE_DAYS[s])
+        end_dt = now
+    else:
+        import re
+
+        m = re.fullmatch(r"between:(\d{4}-\d{2}-\d{2}),(\d{4}-\d{2}-\d{2})", s)
+        if not m:
+            return False
+        start_s, end_s = m.groups()
+        try:
+            start = datetime.fromisoformat(start_s).replace(tzinfo=now.tzinfo)
+            end = datetime.fromisoformat(end_s).replace(tzinfo=now.tzinfo)
+        except Exception:
+            return False
+        if end < start:
+            return False
+        start_dt = datetime.combine(start.date(), time.min, tzinfo=now.tzinfo)
+        end_dt = datetime.combine(end.date(), time.max, tzinfo=now.tzinfo)
+    ts = parse_iso_to_beijing(mem.get("last_mentioned") or mem.get("created_at") or "")
+    if ts is None:
+        return False
+    if start_dt and ts < start_dt:
+        return False
+    if end_dt and ts > end_dt:
+        return False
+    return True
+
+
+def _memory_matches_filters(mem: dict, scene_type: str = "", target_type: str = "", time_range: str = "") -> bool:
+    if scene_type and str(mem.get("scene_type") or "").strip() != scene_type:
+        return False
+    if target_type and str(mem.get("target_type") or "").strip() != target_type:
+        return False
+    if time_range:
+        if not _memory_matches_time_range(mem, time_range):
+            return False
+    return True
+
+
 def dynamic_vector_retrieve(
     query: str,
     tag: Optional[str] = None,
     vector_topk: Optional[int] = None,
     final_topn: Optional[int] = None,
     min_sim: Optional[float] = None,
+    include_du_memory_doc: Optional[bool] = None,
+    include_core_pending: Optional[bool] = None,
+    scene_type: Optional[str] = None,
+    target_type: Optional[str] = None,
+    time_range: Optional[str] = None,
+    return_scores: bool = False,
 ) -> list[dict]:
     """
     两阶段：
@@ -68,6 +123,11 @@ def dynamic_vector_retrieve(
     min_sim = float(min_sim if min_sim is not None else VECTOR_MIN_SIM)
 
     memories = r2_store.get_dynamic_memory_list() or []
+    scene_type = str(scene_type or "").strip()
+    target_type = str(target_type or "").strip()
+    time_range = str(time_range or "").strip()
+    if scene_type or target_type or time_range:
+        memories = [m for m in memories if _memory_matches_filters(m, scene_type, target_type, time_range)]
 
     # tag：优先显式传入，其次从 query 猜一把；否则全量扫当前 memories 的 tag 集合
     tag = (tag or "").strip() or _guess_tag_from_query(query)
@@ -89,7 +149,9 @@ def dynamic_vector_retrieve(
             mem_by_id[str(mid)] = m
 
     # 可选：把「小渡的记忆文档」作为一条特殊记忆参与召回（默认关闭）
-    du_doc = r2_store.get_du_memory_doc() if INCLUDE_DU_MEMORY_DOC_IN_VECTOR else ""
+    if include_du_memory_doc is None:
+        include_du_memory_doc = INCLUDE_DU_MEMORY_DOC_IN_VECTOR
+    du_doc = r2_store.get_du_memory_doc() if include_du_memory_doc else ""
     du_doc_id = "__du_memory_doc_v1__"
     if du_doc:
         du_mem = {
@@ -103,7 +165,9 @@ def dynamic_vector_retrieve(
         mem_by_id[du_doc_id] = du_mem
 
     # 可选：核心缓存 pending 也参与检索（默认关闭）
-    core_pending = (r2_store.get_core_cache_pending() or []) if INCLUDE_CORE_PENDING_IN_VECTOR else []
+    if include_core_pending is None:
+        include_core_pending = INCLUDE_CORE_PENDING_IN_VECTOR
+    core_pending = (r2_store.get_core_cache_pending() or []) if include_core_pending else []
     core_mems: list[dict] = []
     for p in core_pending:
         cid = p.get("id")
@@ -187,7 +251,14 @@ def dynamic_vector_retrieve(
         ranked.append((w, sim, mem))
 
     ranked.sort(key=lambda x: (-x[0], -x[1]))
-    out = [m for _, _, m in ranked[: max(1, final_topn)]]
+    out: list[dict] = []
+    for w, sim, mem in ranked[: max(1, final_topn)]:
+        if return_scores:
+            mm = dict(mem)
+            mm["_semantic_score"] = round(float(sim), 4)
+            mm["_final_score"] = round(float(w), 4)
+            out.append(mm)
+        else:
+            out.append(mem)
     logger.debug("dynamic_vector_retrieve query_len=%s tags=%s hit=%s out=%s", len(query), tags, len(candidates), len(out))
     return out
-

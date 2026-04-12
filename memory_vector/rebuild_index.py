@@ -119,6 +119,9 @@ def rebuild(
                 "importance": int((m or {}).get("importance") or 0),
                 "mention_count": int((m or {}).get("mention_count") or 0),
                 "tag": tag,
+                "emotion_label": str((m or {}).get("emotion_label") or "").strip(),
+                "scene_type": str((m or {}).get("scene_type") or "").strip(),
+                "target_type": str((m or {}).get("target_type") or "").strip(),
                 "created_at": (m or {}).get("created_at") or "",
                 "last_mentioned": (m or {}).get("last_mentioned") or "",
             },
@@ -149,4 +152,3 @@ if __name__ == "__main__":
         sleep_seconds=args.sleep_seconds,
         failed_only=args.failed_only,
     )
-

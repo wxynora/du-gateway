@@ -823,6 +823,42 @@ def _memory_retrieval_text(mem: dict) -> str:
     return retrieval_text or content
 
 
+_EMOTION_LABELS = {"positive", "negative", "neutral"}
+_SCENE_TYPES = {
+    "problem_solving",
+    "learning",
+    "planning",
+    "emotional_venting",
+    "heart_to_heart",
+    "casual_chat",
+    "affection",
+    "conflict",
+}
+_TARGET_TYPES = {
+    "external_tools",
+    "self_state",
+    "work_career",
+    "our_project",
+    "our_relationship",
+    "about_me",
+    "third_party_people",
+    "other_topic",
+}
+
+
+def _normalize_memory_labels(decision: dict) -> tuple[str, str, str]:
+    emotion_label = str(decision.get("emotion_label") or "").strip().lower()
+    scene_type = str(decision.get("scene_type") or "").strip()
+    target_type = str(decision.get("target_type") or "").strip()
+    if emotion_label not in _EMOTION_LABELS:
+        emotion_label = "neutral"
+    if scene_type not in _SCENE_TYPES:
+        scene_type = ""
+    if target_type not in _TARGET_TYPES:
+        target_type = ""
+    return emotion_label, scene_type, target_type
+
+
 def _is_trivial_user_message(text: str) -> bool:
     """纯语气词/极短回应，不值得触发向量检索。只过滤最明确的无意义消息。"""
     t = (text or "").strip()
@@ -1157,6 +1193,9 @@ def _upsert_dynamic_memory_index(mem: dict) -> None:
                 "importance": int(mem.get("importance") or 0),
                 "mention_count": int(mem.get("mention_count") or 0),
                 "tag": tag,
+                "emotion_label": str(mem.get("emotion_label") or "").strip(),
+                "scene_type": str(mem.get("scene_type") or "").strip(),
+                "target_type": str(mem.get("target_type") or "").strip(),
                 "created_at": mem.get("created_at") or "",
                 "last_mentioned": mem.get("last_mentioned") or "",
             },
@@ -1793,6 +1832,7 @@ def _apply_one_decision(
     content = (decision.get("content") or "").strip()
     fused_with_id = decision.get("fused_with_id")
     importance = int(decision.get("importance") or 0)
+    emotion_label, scene_type, target_type = _normalize_memory_labels(decision)
     round_ts = decision.get("timestamp") or decision.get("last_mentioned")
     now_iso = round_ts if isinstance(round_ts, str) and round_ts else now_beijing_iso()
     mention_init = decision.get("mention_count")
@@ -1824,6 +1864,9 @@ def _apply_one_decision(
             "retrieval_text": _build_retrieval_text(content),
             "importance": importance,
             "tag": tag,
+            "emotion_label": emotion_label,
+            "scene_type": scene_type,
+            "target_type": target_type,
             "mention_count": mention_init if mention_init is not None else 1,
             "created_at": now_iso,
             "last_mentioned": now_iso,
@@ -1852,6 +1895,9 @@ def _apply_one_decision(
                 mem["retrieval_text"] = _build_retrieval_text(mem["content"])
                 mem["importance"] = importance
                 mem["tag"] = tag
+                mem["emotion_label"] = emotion_label
+                mem["scene_type"] = scene_type
+                mem["target_type"] = target_type
                 mem["last_mentioned"] = now_iso
                 mem["mention_count"] = int(mem.get("mention_count") or 0) + 1
                 merged_mem = mem

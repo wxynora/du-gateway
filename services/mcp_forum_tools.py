@@ -255,6 +255,32 @@ TOOL_SCHEDULE_DELETE = {
     },
 }
 
+TOOL_SEARCH_MEMORY = {
+    "type": "function",
+    "function": {
+        "name": "search_memory",
+        "description": (
+            "当你怀疑当前自动召回的动态记忆不够准或漏了熟悉话题时，主动补检动态记忆层。\n"
+            "要求：query 必填，且只能基于用户当前原始消息；scene_type/target_type/time_range 只是辅助筛选。\n"
+            "限制：suspicion_level=low 时禁止调用。第一版只查动态层，不查核心缓存层。\n"
+            "触发条件：只有当当前召回明显和用户这句话对不上，或你强烈怀疑用户在提一个熟悉主题但召回缺失时才调用。\n"
+            "禁止：不要把已召回记忆内容反过来拼成 query，不要为了“多搜一遍看看”而调用，不要在当前召回已经够用时调用。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "必填，只能基于用户当前原始消息"},
+                "scene_type": {"type": "string", "description": "可选：problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict"},
+                "target_type": {"type": "string", "description": "可选：external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic"},
+                "time_range": {"type": "string", "description": "可选：recent_7d / recent_15d / recent_30d / all / between:YYYY-MM-DD,YYYY-MM-DD"},
+                "reason": {"type": "string", "description": "一句话说明为什么怀疑当前召回不够"},
+                "suspicion_level": {"type": "string", "description": "必填：high / medium / low"},
+            },
+            "required": ["query", "reason", "suspicion_level"],
+        },
+    },
+}
+
 
 def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
     """
@@ -363,7 +389,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         if ((t.get("function") or {}).get("name") in ("forum_list_posts", "forum_get_post"))
     ] + [TOOL_FORUM_POST, TOOL_FORUM_COMMENT, TOOL_FORUM_DELETE_POST]
     if mode == "forum":
-        return schedule_tools + high_level
+        return schedule_tools + high_level + [TOOL_SEARCH_MEMORY]
     # debug 场景：全量工具
     return [
         TOOL_FORUM_HTTP,
@@ -374,6 +400,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         TOOL_FORUM_COMMENT,
         TOOL_FORUM_DELETE_POST,
         *schedule_tools,
+        TOOL_SEARCH_MEMORY,
     ]
 
 
@@ -675,6 +702,11 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             timeout_override=args.get("timeout"),
         )
         return json.dumps(result, ensure_ascii=False)
+
+    if name == "search_memory":
+        from services.dynamic_memory_search import execute_search_memory_tool
+
+        return execute_search_memory_tool(args if isinstance(args, dict) else {})
 
     if name == "forum_login":
         url = _build_url_from_base(args.get("path") or MCP_FORUM_VERIFY_UID_PATH, MCP_FORUM_VERIFY_UID_PATH)

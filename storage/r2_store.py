@@ -1160,7 +1160,7 @@ def add_schedule_fired_key(occurrence_key: str) -> bool:
 
 
 def get_dynamic_memory_list() -> list:
-    """读取动态层记忆列表。结构：[ { id, content, importance, mention_count, last_mentioned, created_at }, ... ]"""
+    """读取动态层记忆列表。"""
     client = _s3_client()
     if not client:
         return []
@@ -1189,6 +1189,10 @@ def ensure_dynamic_memory_ids(memories: list) -> tuple[list, bool]:
         if mm.get("mention_count") is None:
             mm["mention_count"] = 0
             changed = True
+        for key in ("emotion_label", "scene_type", "target_type"):
+            if key not in mm:
+                mm[key] = ""
+                changed = True
         out.append(mm)
     return out, changed
 
@@ -1357,6 +1361,9 @@ def promote_to_core_cache(
                         "mention_count": int(m.get("mention_count") or 0),
                         "promoted_at": promoted_at,
                         "tag": (m.get("tag") or "").strip(),
+                        "emotion_label": (m.get("emotion_label") or "").strip(),
+                        "scene_type": (m.get("scene_type") or "").strip(),
+                        "target_type": (m.get("target_type") or "").strip(),
                     })
                     existing_ids.add(imp_id)
                     added = True
@@ -1377,6 +1384,9 @@ def promote_to_core_cache(
             "mention_count": int(m.get("mention_count") or 0),
             "promoted_at": promoted_at,
             "tag": (m.get("tag") or "").strip(),
+            "emotion_label": (m.get("emotion_label") or "").strip(),
+            "scene_type": (m.get("scene_type") or "").strip(),
+            "target_type": (m.get("target_type") or "").strip(),
         })
         existing_ids.add(mid)
         added = True
