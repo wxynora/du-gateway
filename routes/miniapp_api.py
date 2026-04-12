@@ -5,6 +5,7 @@ import logging
 import json
 import re
 import base64
+import threading
 from uuid import uuid4
 from collections import Counter
 from pathlib import Path
@@ -47,6 +48,11 @@ from utils.time_aware import today_beijing, now_beijing_iso
 
 bp = Blueprint("miniapp_api", __name__, url_prefix="/miniapp-api")
 logger = logging.getLogger(__name__)
+_MEMORY_MAINTENANCE_LOCK = threading.Lock()
+_MEMORY_MAINTENANCE_RUNNING = False
+_MEMORY_MAINTENANCE_LAST_STARTED = ""
+_MEMORY_MAINTENANCE_LAST_FINISHED = ""
+_MEMORY_MAINTENANCE_LAST_ERROR = ""
 
 
 def _wenyou_session_id() -> int:
@@ -495,6 +501,9 @@ def _miniapp_auth():
         or request.path.rstrip("/").endswith("/panel-auth/check-password")
         or request.path.rstrip("/").endswith("/panel-auth/verify")
         or request.path.rstrip("/").endswith("/tts-preview")
+        or request.path.rstrip("/").endswith("/stickers/tags-public")
+        or request.path.rstrip("/").endswith("/stickers/resolve")
+        or request.path.rstrip("/").endswith("/stickers/raw-public")
     ):
         enforce_ip_allowlist()
         return None
@@ -1258,7 +1267,7 @@ def miniapp_memory_debug():
         if not target and recent:
             target = (recent[0].get("id") or "").strip()
         summary = (r2_store.get_summary(target) or "").strip()
-        all_events = r2_store.get_dynamic_recall_debug_events(limit=limit) or []
+        all_events = r2_store.get_dynamic_recall_debug_events(limit=limit * 3) or []
         if not all_events:
             live_preview = _build_live_dynamic_recall_preview(target)
             if live_preview:
@@ -1267,10 +1276,13 @@ def miniapp_memory_debug():
         if scope not in ("all", "target"):
             scope = "all"
         if scope == "target" and target:
-            events = [e for e in all_events if str((e or {}).get("window_id") or "").strip() in (target, "__default__")]
+            events = [e for e in all_events if str((e or {}).get("window_id") or "").strip() in (target, "__default__", "__search_memory__")]
         else:
             events = all_events
-        dynamic_stats = {}
+        recall_events = [e for e in events if str((e or {}).get("source") or "").strip() != "search_memory"]
+        search_events = [e for e in events if str((e or {}).get("source") or "").strip() == "search_memory"]
+        maintenance_report = r2_store.get_dynamic_memory_maintenance_report() or {}
+        dynamic_stats = {"maintenance_report": maintenance_report}
         try:
             from memory_vector.config import (
                 VECTOR_MIN_SIM,
@@ -1289,7 +1301,17 @@ def miniapp_memory_debug():
             from memory_vector.vector_index_store import list_existing_tags
             mems = r2_store.get_dynamic_memory_list() or []
             mem_tags = sorted({str((m or {}).get("tag") or "").strip() for m in mems if str((m or {}).get("tag") or "").strip()})
+            label_complete_count = 0
+            label_missing_count = 0
             recent_vector_error = ""
+            for m in mems:
+                emotion_label = str((m or {}).get("emotion_label") or "").strip()
+                scene_type = str((m or {}).get("scene_type") or "").strip()
+                target_type = str((m or {}).get("target_type") or "").strip()
+                if emotion_label and scene_type and target_type:
+                    label_complete_count += 1
+                else:
+                    label_missing_count += 1
             for e in all_events:
                 msg = str((e or {}).get("vector_error") or "").strip()
                 if msg:
@@ -1308,9 +1330,11 @@ def miniapp_memory_debug():
             except Exception:
                 failed_ids_count = 0
                 failed_ids_preview = []
-            dynamic_stats = {
+            dynamic_stats.update({
                 "memory_count": len(mems),
                 "memory_tags": mem_tags[:30],
+                "label_complete_count": label_complete_count,
+                "label_missing_count": label_missing_count,
                 "index_tags": (list_existing_tags() or [])[:50],
                 "vector_min_sim": float(VECTOR_MIN_SIM),
                 "vector_topk": int(VECTOR_TOPK),
@@ -1323,10 +1347,9 @@ def miniapp_memory_debug():
                 "recent_vector_error": recent_vector_error,
                 "failed_ids_count": failed_ids_count,
                 "failed_ids_preview": failed_ids_preview,
-                "maintenance_report": r2_store.get_dynamic_memory_maintenance_report() or {},
-            }
+            })
         except Exception:
-            dynamic_stats = {}
+            dynamic_stats = {"maintenance_report": maintenance_report}
         return jsonify(
             {
                 "ok": True,
@@ -1334,9 +1357,12 @@ def miniapp_memory_debug():
                 "scope": scope,
                 "summary": summary,
                 "summary_exists": bool(summary),
-                "recalls": events,
-                "count": len(events),
-                "total_count": len(all_events),
+                "recalls": recall_events[:limit],
+                "count": len(recall_events[:limit]),
+                "total_count": len(recall_events),
+                "search_memory_events": search_events[:limit],
+                "search_count": len(search_events[:limit]),
+                "search_total_count": len(search_events),
                 "dynamic_stats": dynamic_stats,
             }
         )
@@ -1347,6 +1373,10 @@ def miniapp_memory_debug():
 @bp.route("/memory-maintenance", methods=["POST"])
 def miniapp_memory_maintenance():
     """手动触发一次动态记忆离线慢整理。"""
+    global _MEMORY_MAINTENANCE_RUNNING
+    global _MEMORY_MAINTENANCE_LAST_STARTED
+    global _MEMORY_MAINTENANCE_LAST_FINISHED
+    global _MEMORY_MAINTENANCE_LAST_ERROR
     try:
         body = request.get_json(silent=True) or {}
         dry_run = bool(body.get("dry_run"))
@@ -1355,10 +1385,49 @@ def miniapp_memory_maintenance():
             limit_candidates = 1
         if limit_candidates > 50:
             limit_candidates = 50
-        from services.memory_maintenance import run_memory_maintenance
 
-        report = run_memory_maintenance(limit_candidates=limit_candidates, dry_run=dry_run)
-        return jsonify({"ok": True, "report": report})
+        with _MEMORY_MAINTENANCE_LOCK:
+            if _MEMORY_MAINTENANCE_RUNNING:
+                return jsonify(
+                    {
+                        "ok": True,
+                        "started": False,
+                        "running": True,
+                        "last_started": _MEMORY_MAINTENANCE_LAST_STARTED,
+                        "last_finished": _MEMORY_MAINTENANCE_LAST_FINISHED,
+                        "last_error": _MEMORY_MAINTENANCE_LAST_ERROR,
+                    }
+                )
+            _MEMORY_MAINTENANCE_RUNNING = True
+            _MEMORY_MAINTENANCE_LAST_STARTED = now_beijing_iso()
+            _MEMORY_MAINTENANCE_LAST_ERROR = ""
+
+        def _run_job():
+            global _MEMORY_MAINTENANCE_RUNNING
+            global _MEMORY_MAINTENANCE_LAST_FINISHED
+            global _MEMORY_MAINTENANCE_LAST_ERROR
+            try:
+                from services.memory_maintenance import run_memory_maintenance
+
+                run_memory_maintenance(limit_candidates=limit_candidates, dry_run=dry_run)
+            except Exception as e:
+                _MEMORY_MAINTENANCE_LAST_ERROR = str(e)
+                logger.warning("miniapp memory maintenance background job failed: %s", e, exc_info=True)
+            finally:
+                _MEMORY_MAINTENANCE_LAST_FINISHED = now_beijing_iso()
+                with _MEMORY_MAINTENANCE_LOCK:
+                    _MEMORY_MAINTENANCE_RUNNING = False
+
+        th = threading.Thread(target=_run_job, daemon=True)
+        th.start()
+        return jsonify(
+            {
+                "ok": True,
+                "started": True,
+                "running": True,
+                "last_started": _MEMORY_MAINTENANCE_LAST_STARTED,
+            }
+        )
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -1836,6 +1905,43 @@ def miniapp_stickers_mapping_get():
     )
 
 
+@bp.route("/stickers/tags-public", methods=["GET"])
+def miniapp_stickers_tags_public():
+    """给服务端入口用：仅返回可用英文 tag 列表，不走 panel 鉴权。"""
+    meta = r2_store.get_stickers_meta()
+    keys: list[str] = []
+    for it in meta.get("tags") or []:
+        if not isinstance(it, dict):
+            continue
+        k = str(it.get("key") or "").strip().lower()
+        if k:
+            keys.append(k)
+    if not keys:
+        keys = sorted(r2_store.get_sticker_tag_keys())
+    return jsonify({"ok": True, "tags": sorted(set(keys))})
+
+
+@bp.route("/stickers/resolve", methods=["GET"])
+def miniapp_stickers_resolve():
+    """给服务端入口用：按 tag 随机解析一张图。"""
+    tag = (request.args.get("tag") or "").strip().lower()
+    if not tag:
+        return jsonify({"ok": False, "error": "缺少 tag"}), 400
+    mapping = r2_store.get_stickers_mapping() or {}
+    keys = [str(k or "").strip() for k in (mapping.get(tag) or []) if str(k or "").strip()]
+    if not keys:
+        return jsonify({"ok": False, "tag": tag, "error": "tag 未找到图片", "count": 0}), 404
+    import random
+
+    key = random.choice(keys)
+    public_base = (R2_PUBLIC_URL or "").strip().rstrip("/")
+    if public_base:
+        url = f"{public_base}/{key.lstrip('/')}"
+    else:
+        url = f"/miniapp-api/stickers/raw-public?key={quote(key, safe='/')}"
+    return jsonify({"ok": True, "tag": tag, "key": key, "url": url, "count": len(keys)})
+
+
 @bp.route("/stickers/rebuild", methods=["POST"])
 def miniapp_stickers_rebuild():
     data = r2_store.rebuild_stickers_mapping_from_r2()
@@ -1876,6 +1982,19 @@ def miniapp_stickers_delete():
 @bp.route("/stickers/raw", methods=["GET"])
 def miniapp_stickers_raw():
     """无 R2 公网域名时，前端用此 URL 预览图片（需 MiniApp 鉴权）。"""
+    key = (request.args.get("key") or "").strip()
+    if not key.startswith("stickers/") or ".." in key:
+        return jsonify({"ok": False, "error": "key 无效"}), 400
+    data, ctype = r2_store.get_object_bytes(key)
+    if not data:
+        return jsonify({"ok": False, "error": "未找到"}), 404
+    mt = ctype if ctype and ctype.startswith("image/") else "image/jpeg"
+    return Response(data, mimetype=mt, headers={"Cache-Control": "public, max-age=300"})
+
+
+@bp.route("/stickers/raw-public", methods=["GET"])
+def miniapp_stickers_raw_public():
+    """给服务端入口用：无公网 R2 时通过网关直接取图，不走 panel 鉴权。"""
     key = (request.args.get("key") or "").strip()
     if not key.startswith("stickers/") or ".." in key:
         return jsonify({"ok": False, "error": "key 无效"}), 400

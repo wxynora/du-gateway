@@ -161,7 +161,9 @@ def api_memory_append():
         importance = max(1, min(5, int(importance)))
     except (TypeError, ValueError):
         importance = 3
-    tag = (body.get("tag") or "CC").strip()
+    tag = (body.get("tag") or "书房").strip()
+    if tag not in ("客厅", "书房", "图书馆", "卧室"):
+        tag = "书房"
     emotion_label = (body.get("emotion_label") or "").strip().lower()
     scene_type = (body.get("scene_type") or "").strip()
     target_type = (body.get("target_type") or "").strip()
@@ -230,7 +232,9 @@ def api_cc_log():
     content = (body.get("content") or "").strip()
     if not content:
         return jsonify({"ok": False, "error": "content 不能为空"}), 400
-    tag = (body.get("tag") or "CC").strip()
+    tag = (body.get("tag") or "书房").strip()
+    if tag not in ("客厅", "书房", "图书馆", "卧室"):
+        tag = "书房"
 
     from utils.time_aware import now_beijing_iso
     from storage import r2_store

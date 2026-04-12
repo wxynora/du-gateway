@@ -6,6 +6,8 @@ from datetime import datetime, time, timedelta
 from typing import Optional
 
 from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
+from storage import r2_store
+from utils.time_aware import now_beijing_iso
 from utils.time_aware import BEIJING_TZ, _now_beijing, parse_iso_to_beijing
 
 
@@ -259,4 +261,36 @@ def execute_search_memory_tool(args: dict | None) -> str:
     )
     result["reason"] = normalized["reason"]
     result["suspicion_level"] = normalized["suspicion_level"]
+    try:
+        recalled_lines = []
+        for row in result.get("results") or []:
+            if not isinstance(row, dict):
+                continue
+            line = {
+                "id": str(row.get("id") or ""),
+                "content": str(row.get("content") or "")[:120],
+                "emotion_label": str(row.get("emotion_label") or ""),
+                "scene_type": str(row.get("scene_type") or ""),
+                "target_type": str(row.get("target_type") or ""),
+                "semantic_score": row.get("semantic_score"),
+                "final_score": row.get("final_score"),
+            }
+            recalled_lines.append(line)
+        r2_store.append_dynamic_recall_debug_event(
+            {
+                "timestamp": now_beijing_iso(),
+                "window_id": "__search_memory__",
+                "query": normalized["query"],
+                "scene_type": normalized["scene_type"],
+                "target_type": normalized["target_type"],
+                "time_range": normalized["time_range"] or "all",
+                "reason": normalized["reason"],
+                "suspicion_level": normalized["suspicion_level"],
+                "source": "search_memory",
+                "recalled_lines": recalled_lines,
+                "recalled_count": len(recalled_lines),
+            }
+        )
+    except Exception:
+        pass
     return json.dumps(result, ensure_ascii=False)
