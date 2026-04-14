@@ -160,10 +160,31 @@ def _is_claude_model(model_name: str) -> bool:
 def _apply_claude_prompt_caching(body: dict) -> dict:
     """
     仅当手动开关开启且当前模型看起来是 Claude 时，
-    给静态前缀最后一条普通 system 的最后一个文本内容块打上 cache_control 断点。
-    切到别的模型或关闭开关时，顺手清掉旧字段。
+    按 Anthropic 官方格式打显式断点：
+    1) tools 最后一个工具定义
+    2) 静态前缀最后一条普通 system 的最后一个文本内容块
     """
     body = dict(body or {})
+    body.pop("cache_control", None)
+    if not _claude_prompt_cache_enabled():
+        return body
+    if not _is_claude_model(body.get("model") or ""):
+        return body
+
+    tools = []
+    for tool in body.get("tools") or []:
+        if isinstance(tool, dict):
+            tt = dict(tool)
+            tt.pop("cache_control", None)
+            tools.append(tt)
+        else:
+            tools.append(tool)
+    if tools:
+        last_tool = tools[-1]
+        if isinstance(last_tool, dict):
+            last_tool["cache_control"] = {"type": "ephemeral"}
+    body["tools"] = tools
+
     messages = []
     for msg in body.get("messages") or []:
         if isinstance(msg, dict):
@@ -177,6 +198,8 @@ def _apply_claude_prompt_caching(body: dict) -> dict:
                         pp = dict(part)
                         pp.pop("cache_control", None)
                         cleaned.append(pp)
+                    elif isinstance(part, str):
+                        cleaned.append({"type": "text", "text": part})
                     else:
                         cleaned.append(part)
                 mm["content"] = cleaned
@@ -184,10 +207,7 @@ def _apply_claude_prompt_caching(body: dict) -> dict:
         else:
             messages.append(msg)
     body["messages"] = messages
-    if not _claude_prompt_cache_enabled():
-        return body
-    if not _is_claude_model(body.get("model") or ""):
-        return body
+
     last_plain_system_idx = -1
     for i, msg in enumerate(messages):
         if not isinstance(msg, dict):
