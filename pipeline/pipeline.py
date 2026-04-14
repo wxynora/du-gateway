@@ -445,16 +445,7 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
     if not context:
         return body
     inject = f"\n\n【{inject_label}】\n{context}\n【以上为注入上下文】"
-    found_system = False
-    for i, msg in enumerate(messages):
-        if (msg.get("role") or "").lower() == "system":
-            msg["content"] = (msg.get("content") or "") + inject
-            found_system = True
-            break
-    if not found_system:
-        messages.insert(0, {"role": "system", "content": inject})
-    body["messages"] = messages
-    return body
+    return _append_to_dynamic_system(body, inject)
 
 
 def _last_assistant_text(body: dict) -> str:
