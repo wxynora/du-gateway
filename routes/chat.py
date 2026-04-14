@@ -31,6 +31,7 @@ from pipeline.pipeline import (
     step_inject_summary,
     step_inject_sense_snapshot,
     step_inject_du_thought,
+    step_inject_interaction_candidate,
     step_inject_rikkahub_reminder,
     step_inject_dynamic_memory,
     step_inject_du_notebook,
@@ -47,6 +48,7 @@ from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import r2_store, whitelist_store
 from services.du_thought import split_assistant_for_thought
+from services.interaction_memory import split_assistant_for_interaction
 from services.html_preview_tools import (
     merge_html_preview_urls_into_assistant_text,
     missing_html_preview_url_suffix,
@@ -372,11 +374,17 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             full_content = "".join(content_parts)
             visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_content)
             visible, thought = split_assistant_for_thought(visible_after_pcmd)
+            visible, interaction = split_assistant_for_interaction(visible)
             if thought:
                 try:
                     r2_store.save_du_thought_latest(now_beijing_iso(), thought)
                 except Exception as e:
                     logger.warning("save_du_thought_latest 失败 error=%s", e)
+            if interaction:
+                try:
+                    r2_store.append_interaction_candidate(interaction)
+                except Exception as e:
+                    logger.warning("append_interaction_candidate 失败 error=%s", e)
             full_reasoning = "".join(reasoning_parts).strip()
             stream_sec = time.time() - stream_start
             # 若「流式持续时长」总是差不多（如 10–20s）而字数越来越短，可能是上游按时长限流
@@ -443,11 +451,17 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
         full_content = "".join(content_parts)
         visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_content)
         visible, thought = split_assistant_for_thought(visible_after_pcmd)
+        visible, interaction = split_assistant_for_interaction(visible)
         if thought:
             try:
                 r2_store.save_du_thought_latest(now_beijing_iso(), thought)
             except Exception as e:
                 logger.warning("save_du_thought_latest 失败 error=%s", e)
+        if interaction:
+            try:
+                r2_store.append_interaction_candidate(interaction)
+            except Exception as e:
+                logger.warning("append_interaction_candidate 失败 error=%s", e)
         full_reasoning = "".join(reasoning_parts).strip()
         logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
         if is_failed_response(visible):
@@ -675,13 +689,19 @@ def _apply_du_thought_to_assistant_response(resp_json: dict) -> dict:
         return resp_json
     visible_after_pcmd, _ = process_pcmd_in_assistant_text(content_text)
     visible, thought = split_assistant_for_thought(visible_after_pcmd)
-    if thought or visible != content_text:
+    visible, interaction = split_assistant_for_interaction(visible)
+    if thought or interaction or visible != content_text:
         msg["content"] = visible
     if thought:
         try:
             r2_store.save_du_thought_latest(now_beijing_iso(), thought)
         except Exception as e:
             logger.warning("save_du_thought_latest 失败 error=%s", e)
+    if interaction:
+        try:
+            r2_store.append_interaction_candidate(interaction)
+        except Exception as e:
+            logger.warning("append_interaction_candidate 失败 error=%s", e)
     return resp_json
 
 
@@ -868,6 +888,7 @@ def chat_completions():
     if not slim_voice_call:
         body = step_inject_sense_snapshot(body, window_id)
         body = step_inject_du_thought(body, window_id)
+        body = step_inject_interaction_candidate(body, window_id)
         body = step_inject_wenyou_gm(body, window_id)
         body = step_inject_rikkahub_reminder(body, window_id)
         body = step_inject_dynamic_memory(body, window_id)

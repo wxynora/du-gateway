@@ -589,6 +589,26 @@ def step_inject_du_thought(body: dict, window_id: str) -> dict:
     return body
 
 
+def step_inject_interaction_candidate(body: dict, window_id: str) -> dict:
+    """
+    全局注入：在 system 末尾追加「相处模式候选格式说明」。
+    渡在回复末尾写 <<<DU_INTERACTION>>>...<<<END_DU_INTERACTION>>>，网关截取后存 R2，老婆侧不可见。
+    """
+    _ = window_id
+    try:
+        from services.interaction_memory import format_inject_block
+
+        block = format_inject_block()
+    except Exception as e:
+        logger.debug("interaction candidate 注入跳过 error=%s", e)
+        return body
+    if not (block or "").strip():
+        return body
+    inject = "\n\n" + block.strip()
+    body = _append_to_dynamic_system(body, inject)
+    return body
+
+
 def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
     """
     当请求不是来自 Telegram（window_id 为空或不以 tg_ 开头）时，注入「当前是在 RikkaHub」提醒。
@@ -1874,6 +1894,12 @@ def _apply_one_decision(
         current_memories.append(new_mem)
         r2_store.save_dynamic_memory_list(current_memories)
         _upsert_dynamic_memory_index(new_mem)
+        try:
+            from services.portrait_memory import sync_portrait_candidate_from_memory
+
+            sync_portrait_candidate_from_memory(new_mem)
+        except Exception as e:
+            logger.warning("画像候选同步失败 memory_id=%s error=%s", new_mem.get("id"), e)
         r2_store.promote_to_core_cache(
             window_id, round_index, _round_messages_to_raw_text(round_messages),
             current_memories, touched_mem_id=new_mem["id"],
@@ -1908,6 +1934,12 @@ def _apply_one_decision(
             return None
         r2_store.save_dynamic_memory_list(current_memories)
         _upsert_dynamic_memory_index(merged_mem)
+        try:
+            from services.portrait_memory import sync_portrait_candidate_from_memory
+
+            sync_portrait_candidate_from_memory(merged_mem)
+        except Exception as e:
+            logger.warning("画像候选同步失败 memory_id=%s error=%s", fused_with_id, e)
         r2_store.promote_to_core_cache(
             window_id, round_index, _round_messages_to_raw_text(round_messages),
             current_memories, touched_mem_id=fused_with_id,
