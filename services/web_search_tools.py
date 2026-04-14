@@ -7,6 +7,8 @@ from typing import Any
 import requests
 
 from config import (
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_API_URL,
     TAVILY_API_KEY,
     TAVILY_SEARCH_ENDPOINT,
     WEBSEARCH_FETCH_ENABLED,
@@ -20,12 +22,19 @@ from utils.log import get_logger
 
 logger = get_logger(__name__)
 
+_WEBSEARCH_COMPRESS_MODEL = "deepseek-chat"
+_WEBSEARCH_COMPRESS_MAX_INPUT_CHARS = 6000
+_WEBSEARCH_COMPRESS_MAX_TOKENS = 900
+_WEBSEARCH_COMPRESS_TIMEOUT_SECONDS = 25
+
 _NOISE_PATTERNS = (
     r"(?:个性化推荐算法备案编号|推荐算法备案编号)[\s\S]{0,160}(?:\||$)",
     r"(?:信息服务资质提示|信息服务商备案)[\s\S]{0,160}(?:\||$)",
     r"(?:增值电信业务经营许可证|网络文化经营许可证|互联网药品信息服务资格证书)[\s\S]{0,160}(?:\||$)",
     r"(?:ICP备案|ICP证|网安备|公网安备)[\s\S]{0,120}(?:\||$)",
     r"(?:版权所有|Copyright)[\s\S]{0,120}(?:\||$)",
+    r"(?:营业执照|公司名称|公司地址|联系电话|邮箱|隐私政策|用户协议|免责声明|友情链接)[\s\S]{0,160}(?:\||$)",
+    r"(?:证书编号|许可证编号|备案号|备案编号|客服热线|违法和不良信息举报)[\s\S]{0,180}(?:\||$)",
 )
 
 
@@ -33,6 +42,7 @@ def _strip_common_noise(text: str) -> str:
     s = text or ""
     for p in _NOISE_PATTERNS:
         s = re.sub(rf"[\s\S]{{0,24}}{p}", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"(?:点击展开全文|展开剩余\d+%?|责任编辑[:：].*?|来源[:：].*?|返回顶部)", " ", s, flags=re.IGNORECASE)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -54,6 +64,16 @@ def _dedup_sentences(text: str) -> str:
         seen.add(key)
         out.append(s)
     return " ".join(out).strip()
+
+
+def _post_clean_text(text: str) -> str:
+    s = text or ""
+    s = re.sub(r"(?:原标题[:：].{0,80}?)(?=(?:\s|$))", " ", s)
+    s = re.sub(r"(?:编辑[:：]|责编[:：]|记者[:：]|作者[:：]).{0,40}(?=(?:\s|$))", " ", s)
+    s = re.sub(r"(?:本文来源|文章来源|本文地址)[:：].{0,80}(?=(?:\s|$))", " ", s)
+    s = _strip_common_noise(s)
+    s = _dedup_sentences(s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 TOOL_WEB_SEARCH = {
@@ -295,6 +315,89 @@ def _build_fetched_pages(items: list[dict], timeout_seconds: int) -> list[dict]:
     return pages
 
 
+def _compress_page_with_deepseek(query: str, page: dict) -> dict:
+    result = {
+        "url": str((page or {}).get("url") or "").strip(),
+        "title": str((page or {}).get("title") or "").strip(),
+        "content": "",
+        "status": "skipped",
+        "source_status": str((page or {}).get("status") or "").strip(),
+    }
+    source_text = _post_clean_text(str((page or {}).get("content") or ""))
+    if not source_text:
+        return result
+    if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
+        result["status"] = "config_error"
+        return result
+
+    source_text = source_text[:_WEBSEARCH_COMPRESS_MAX_INPUT_CHARS]
+    prompt = (
+        "你是网页信息清洗器。请把下面网页正文压成干净、可直接给主模型使用的中文信息块。\n"
+        "要求：\n"
+        "1. 只保留和搜索问题直接相关的事实、结论、时间、数字、条件。\n"
+        "2. 删掉广告、导航、页脚、版权、备案、证书、公司介绍、联系方式、免责声明、作者编辑信息。\n"
+        "3. 不要寒暄，不要总结废话，不要写“该网页主要讲了”。\n"
+        "4. 输出纯文字，优先用短段落；信息不够就少写，不要编。\n"
+        "5. 如果正文和问题关系很弱，只输出一句“相关信息很少”。\n\n"
+        f"搜索问题：{query}\n"
+        f"网页标题：{result['title'] or '（无标题）'}\n"
+        f"网页链接：{result['url'] or '（无链接）'}\n\n"
+        f"网页正文：\n{source_text}"
+    )
+    payload = {
+        "model": _WEBSEARCH_COMPRESS_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": _WEBSEARCH_COMPRESS_MAX_TOKENS,
+        "temperature": 0.2,
+    }
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
+    try:
+        r = requests.post(
+            DEEPSEEK_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=_WEBSEARCH_COMPRESS_TIMEOUT_SECONDS,
+        )
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+        content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
+        text = _post_clean_text(str(content or "").strip())
+        if not text:
+            result["status"] = "error"
+            return result
+        result["content"] = text
+        result["status"] = "ok"
+        return result
+    except requests.Timeout:
+        result["status"] = "timeout"
+        return result
+    except Exception as e:
+        logger.warning("web_search compress failed url=%s err=%s", result["url"][:120], e)
+        result["status"] = "error"
+        return result
+
+
+def _build_compressed_pages(query: str, fetched_pages: list[dict]) -> list[dict]:
+    if not fetched_pages:
+        return []
+    out: list[dict] = []
+    for page in fetched_pages:
+        page_status = str((page or {}).get("status") or "").strip()
+        if page_status not in ("ok", "truncated"):
+            out.append(
+                {
+                    "url": str((page or {}).get("url") or "").strip(),
+                    "title": str((page or {}).get("title") or "").strip(),
+                    "content": "",
+                    "status": "skipped",
+                    "source_status": page_status,
+                }
+            )
+            continue
+        out.append(_compress_page_with_deepseek(query, page))
+    return out
+
+
 def execute_web_search(arguments: dict) -> str:
     query = str((arguments or {}).get("query") or "").strip()
     if not query:
@@ -319,6 +422,7 @@ def execute_web_search(arguments: dict) -> str:
                 last_error = f"{provider}:{err}"
                 continue
             fetched_pages = _build_fetched_pages(items, timeout_seconds)
+            compressed_pages = _build_compressed_pages(query, fetched_pages)
             latency_ms = int((time.time() - started) * 1000)
             return json.dumps(
                 {
@@ -326,13 +430,16 @@ def execute_web_search(arguments: dict) -> str:
                     "query": query,
                     "items": items,
                     "fetched_pages": fetched_pages,
+                    "compressed_pages": compressed_pages,
                     "meta": {
                         "provider_used": provider,
                         "fallback_chain": tried,
                         "result_count": len(items),
                         "fetched_count": len(fetched_pages),
+                        "compressed_count": len([p for p in compressed_pages if (p.get("status") or "") == "ok"]),
                         "latency_ms": latency_ms,
-                        "degraded": any((p.get("status") or "") != "ok" for p in fetched_pages),
+                        "degraded": any((p.get("status") or "") != "ok" for p in fetched_pages)
+                        or any((p.get("status") or "") not in ("ok", "skipped") for p in compressed_pages),
                     },
                 },
                 ensure_ascii=False,
@@ -351,11 +458,13 @@ def execute_web_search(arguments: dict) -> str:
             "query": query,
             "items": [],
             "fetched_pages": [],
+            "compressed_pages": [],
             "meta": {
                 "provider_used": "",
                 "fallback_chain": tried,
                 "result_count": 0,
                 "fetched_count": 0,
+                "compressed_count": 0,
                 "latency_ms": latency_ms,
                 "degraded": bool(tried),
                 "last_error": last_error,

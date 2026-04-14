@@ -1,8 +1,8 @@
-# WebSearch 工具接入说明（Phase1）
+# WebSearch 工具接入说明
 
 ## 能力范围
 - 工具名：`web_search`
-- 当前阶段：搜索 + 轻量抓取解析
+- 当前阶段：搜索 + 轻量抓取解析 + DeepSeek 二次压缩
 - Provider 策略：`tavily`
 
 ## 配置项
@@ -17,6 +17,9 @@
 - `WEBSEARCH_FETCH_ENABLED=1`
 - `WEBSEARCH_FETCH_TOP_K=2`
 - `WEBSEARCH_MAX_PAGE_CHARS=12000`
+- 复用现有 `DEEPSEEK_API_URL`
+- 复用现有 `DEEPSEEK_API_KEY`
+- 压缩模型固定为 `deepseek-chat`
 
 ## 返回结构
 工具返回 JSON 字符串，核心字段：
@@ -25,7 +28,9 @@
 - `query`: 搜索词
 - `items`: 搜索结果列表（`title/url/snippet/source/published_at`）
 - `fetched_pages`: 抓取解析结果（仅前 N 条）
+- `compressed_pages`: 对抓取正文再压缩后的结果（仅开启压缩时返回）
 - `fetched_pages.status`: `ok|truncated|timeout|blocked|error`
+- `compressed_pages.status`: `ok|skipped|config_error|timeout|error`
 - `meta.provider_used`: 实际命中的 provider
 - `meta.fallback_chain`: 本次尝试过的 provider 顺序
 - `meta.degraded`: 是否发生降级
@@ -35,3 +40,4 @@
 - `所有 provider 均不可用`：检查 API key、endpoint、网络连通性
 - 结果为空：检查关键词是否过窄，或 provider 暂无匹配结果
 - `fetched_pages.status=truncated`：表示正文超限被截断，非失败态
+- `compressed_pages.status=config_error`：通常是缺 `DEEPSEEK_API_KEY / DEEPSEEK_API_URL`
