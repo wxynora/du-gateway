@@ -143,6 +143,53 @@ def _build_upstream_error_hint(last_err: str) -> str:
     )
 
 
+def _claude_prompt_cache_enabled() -> bool:
+    try:
+        from storage.upstream_store import load_upstreams
+
+        data = load_upstreams() or {}
+        return bool(data.get("anthropic_prompt_caching_enabled", False))
+    except Exception:
+        return False
+
+
+def _is_claude_model(model_name: str) -> bool:
+    return "claude" in str(model_name or "").strip().lower()
+
+
+def _apply_claude_prompt_caching(body: dict) -> dict:
+    """
+    仅当手动开关开启且当前模型看起来是 Claude 时，
+    给静态前缀最后一条普通 system 打上 cache_control 断点。
+    切到别的模型或关闭开关时，顺手清掉旧字段。
+    """
+    body = dict(body or {})
+    messages = []
+    for msg in body.get("messages") or []:
+        if isinstance(msg, dict):
+            mm = dict(msg)
+            mm.pop("cache_control", None)
+            messages.append(mm)
+        else:
+            messages.append(msg)
+    body["messages"] = messages
+    if not _claude_prompt_cache_enabled():
+        return body
+    if not _is_claude_model(body.get("model") or ""):
+        return body
+    last_plain_system_idx = -1
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            continue
+        if (msg.get("role") or "").lower() != "system":
+            break
+        if not msg.get("__dynamic__"):
+            last_plain_system_idx = i
+    if last_plain_system_idx >= 0:
+        messages[last_plain_system_idx]["cache_control"] = {"type": "ephemeral"}
+    return body
+
+
 def _chat_url_to_models_url(chat_url: str) -> str:
     """从 chat completions URL 推出 /v1/models 的 URL。"""
     if not chat_url:
@@ -900,6 +947,7 @@ def chat_completions():
         body = step_inject_forum_tools(body)
         body = step_inject_websearch_tools(body)
         body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
+    body = _apply_claude_prompt_caching(body)
     body = step_trim_messages_if_over_limit(body)
     # 清理动态 system 标记，避免上游 API 报未知字段错误
     for msg in body.get("messages") or []:

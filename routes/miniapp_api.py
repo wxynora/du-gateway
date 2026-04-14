@@ -2131,7 +2131,13 @@ def miniapp_get_upstreams():
         {"name": it.get("name") or "", "url": it.get("url") or ""}
         for it in (data.get("items") or [])
     ]
-    return jsonify({"active": int(data.get("active") or 0), "items": items})
+    return jsonify(
+        {
+            "active": int(data.get("active") or 0),
+            "items": items,
+            "anthropic_prompt_caching_enabled": bool(data.get("anthropic_prompt_caching_enabled", False)),
+        }
+    )
 
 
 @bp.route("/upstreams", methods=["PUT"])
@@ -2143,7 +2149,13 @@ def miniapp_put_upstreams():
     active = int(data.get("active") or 0)
     ok = upstream_store.set_active(active)
     saved = upstream_store.load_upstreams()
-    return jsonify({"ok": ok, "active": int(saved.get("active") or 0)})
+    return jsonify(
+        {
+            "ok": ok,
+            "active": int(saved.get("active") or 0),
+            "anthropic_prompt_caching_enabled": bool(saved.get("anthropic_prompt_caching_enabled", False)),
+        }
+    )
 
 
 @bp.route("/upstreams/active", methods=["PUT"])
@@ -2151,7 +2163,28 @@ def miniapp_set_active_upstream():
     data = request.get_json(silent=True) or {}
     idx = int(data.get("active") or 0)
     ok = upstream_store.set_active(idx)
-    return jsonify({"ok": ok, "active": idx})
+    saved = upstream_store.load_upstreams()
+    return jsonify(
+        {
+            "ok": ok,
+            "active": idx,
+            "anthropic_prompt_caching_enabled": bool(saved.get("anthropic_prompt_caching_enabled", False)),
+        }
+    )
+
+
+@bp.route("/upstreams/prompt-caching", methods=["PUT"])
+def miniapp_set_upstream_prompt_caching():
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled", False))
+    ok = upstream_store.set_anthropic_prompt_caching_enabled(enabled)
+    saved = upstream_store.load_upstreams()
+    return jsonify(
+        {
+            "ok": ok,
+            "anthropic_prompt_caching_enabled": bool(saved.get("anthropic_prompt_caching_enabled", False)),
+        }
+    )
 
 
 def _chat_url_to_models_url(chat_url: str) -> str:

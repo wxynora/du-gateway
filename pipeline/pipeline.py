@@ -78,6 +78,33 @@ def _append_to_dynamic_system(body: dict, text: str) -> dict:
     return body
 
 
+def _append_to_static_system(body: dict, text: str) -> dict:
+    """
+    向静态 system 段追加内容。
+    优先追加到 dynamic system 之前最后一条普通 system；若没有则在第一条非 system 前插入。
+    """
+    messages = body.get("messages") or []
+    if not messages:
+        body = copy.deepcopy(body)
+        body["messages"] = [{"role": "system", "content": text}]
+        return body
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    insert_idx = 0
+    last_plain_system_idx = -1
+    for i, msg in enumerate(messages):
+        if (msg.get("role") or "").lower() != "system":
+            break
+        insert_idx = i + 1
+        if not msg.get(_DYNAMIC_SYSTEM_MARKER):
+            last_plain_system_idx = i
+    if last_plain_system_idx >= 0:
+        messages[last_plain_system_idx]["content"] = (messages[last_plain_system_idx].get("content") or "") + text
+        return body
+    messages.insert(insert_idx, {"role": "system", "content": text})
+    return body
+
+
 def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
     """
     清洗层：保留原图用于转发，并行把图片用便宜 AI 转描述存 R2。
@@ -591,7 +618,7 @@ def step_inject_du_thought(body: dict, window_id: str) -> dict:
 
 def step_inject_interaction_candidate(body: dict, window_id: str) -> dict:
     """
-    全局注入：在 system 末尾追加「相处模式候选写法说明」。
+    全局注入：在静态 system 段追加「相处模式候选写法说明」。
     渡在回复末尾写 <<<DU_INTERACTION>>>...<<<END_DU_INTERACTION>>>，网关截取后存 R2，老婆侧不可见。
     """
     _ = window_id
@@ -605,7 +632,7 @@ def step_inject_interaction_candidate(body: dict, window_id: str) -> dict:
     if not (block or "").strip():
         return body
     inject = "\n\n" + block.strip()
-    body = _append_to_dynamic_system(body, inject)
+    body = _append_to_static_system(body, inject)
     return body
 
 
@@ -1481,7 +1508,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
 
 def step_inject_du_notebook(body: dict) -> dict:
     """
-    固定注入：渡的记事本（按条目）。
+    固定注入：渡的记事本（按条目，放静态 system 区）。
     仅注入最近若干条，防止请求体过长。
     """
     entries = r2_store.get_du_notebook_entries() or []
@@ -1500,7 +1527,7 @@ def step_inject_du_notebook(body: dict) -> dict:
     if not lines:
         return body
     inject = "\n\n【渡的记事本】\n" + "\n".join(lines) + "\n【以上为固定记事本】"
-    body = _append_to_dynamic_system(body, inject)
+    body = _append_to_static_system(body, inject)
     return body
 
 
@@ -1546,7 +1573,7 @@ def step_inject_notion_tools(body: dict) -> dict:
     if NOTION_CORE_CACHE_DATABASE_ID and mode == "expanded":
         from services.gateway_tools import SYNC_REMINDER_FOR_WIFE
         inject = "\n\n【核心缓存同步】" + SYNC_REMINDER_FOR_WIFE
-        body = _append_to_dynamic_system(body, inject)
+        body = _append_to_static_system(body, inject)
     return body
 
 
@@ -1592,7 +1619,7 @@ def step_inject_forum_tools(body: dict) -> dict:
         "\n\n老婆拖延的时候，你可以直接帮她创建闹钟提醒。"
         "也可以用 schedule_list / schedule_enable / schedule_disable / schedule_delete 来管理提醒。"
     )
-    body = _append_to_dynamic_system(body, schedule_hint)
+    body = _append_to_static_system(body, schedule_hint)
     return body
 
 
