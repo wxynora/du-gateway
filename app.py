@@ -12,7 +12,7 @@ from utils.log import setup_logging
 # 先配置日志，后续模块打 log 才能带 [R2]/[Pipeline] 等来源
 setup_logging()
 
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify
 from flask import send_from_directory
 from routes.chat import bp as chat_bp
 from routes.admin import bp as admin_bp
@@ -91,19 +91,13 @@ def index():
 @app.route("/miniapp/", methods=["GET"])
 def miniapp_index():
     """Telegram Mini App 静态入口页。"""
-    resp = make_response(send_from_directory(MINIAPP_STATIC_DIR, "index.html"))
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-    return resp
+    return send_from_directory(MINIAPP_STATIC_DIR, "index.html")
 
 
 @app.route("/miniapp/assets/<path:filename>", methods=["GET"])
 def miniapp_assets(filename: str):
     """Mini App 静态资源（JS/CSS/图标）。"""
-    resp = make_response(send_from_directory(MINIAPP_STATIC_DIR / "assets", filename))
-    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-    return resp
+    return send_from_directory(MINIAPP_STATIC_DIR / "assets", filename)
 
 
 @app.route("/favicon.ico", methods=["GET"])
