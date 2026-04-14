@@ -5,6 +5,7 @@ import queue
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 import requests
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
@@ -22,6 +23,7 @@ from config import (
     STREAM_SSE_FLUSH_MAX_MS,
     RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED,
     RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS,
+    DATA_DIR,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -65,6 +67,7 @@ logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
 
 WINDOW_ID_DEFAULT = ""
+UPSTREAM_DEBUG_REQUEST_FILE = DATA_DIR / "last_upstream_request.json"
 
 
 def _get_window_id_from_request(body: dict) -> str:
@@ -141,6 +144,36 @@ def _build_upstream_error_hint(last_err: str) -> str:
         f"当前 active：{active_label}\n"
         f"错误详情：{detail}"
     )
+
+
+def _write_upstream_debug_snapshot(url: str, headers: dict, body: dict) -> None:
+    """
+    落一份“最终发给上游”的请求快照，便于排查缓存前缀是否稳定。
+    只保留非敏感头；Authorization 仅记录是否存在，不落明文。
+    """
+    try:
+        safe_headers = {}
+        for k, v in (headers or {}).items():
+            kk = str(k or "").strip()
+            if not kk:
+                continue
+            if kk.lower() == "authorization":
+                safe_headers[kk] = "[present]" if str(v or "").strip() else ""
+            else:
+                safe_headers[kk] = v
+        payload = {
+            "captured_at": now_beijing_iso(),
+            "url": str(url or "").strip(),
+            "headers": safe_headers,
+            "body": body,
+        }
+        UPSTREAM_DEBUG_REQUEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        UPSTREAM_DEBUG_REQUEST_FILE.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("写入上游请求快照失败 error=%s", e)
 
 
 def _claude_prompt_cache_enabled() -> bool:
@@ -348,6 +381,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         try:
+            _write_upstream_debug_snapshot(url, h, body_send)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
@@ -618,6 +652,7 @@ def _forward_to_ai(body: dict, headers: dict):
                 if cur is None or (isinstance(cur, (int, float)) and int(cur) < MAX_COMPLETION_TOKENS):
                     body_send["max_tokens"] = MAX_COMPLETION_TOKENS
                     logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
+            _write_upstream_debug_snapshot(url, req_headers, body_send)
             r = requests.post(url, headers=req_headers, json=body_send, timeout=120)
             # 为排查上游 403：记录鉴权是否携带（不泄露 key），以及响应正文前缀
             try:
