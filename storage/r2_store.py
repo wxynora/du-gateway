@@ -32,6 +32,10 @@ R2_KEY_CORE_CACHE = "core_cache/pending.json"
 R2_KEY_NOTEBOOK = "notebook/entries.json"
 # MiniApp 可编辑核心 Prompt（全局注入）
 R2_KEY_CORE_PROMPT = "global/core_prompt_316.txt"
+R2_KEY_CORE_PROMPT_CONFIG = "global/core_prompt_config.json"
+R2_KEY_XINYUE_PORTRAIT_CANDIDATES = "portrait_memory/xinyue_candidates.json"
+R2_KEY_DU_PORTRAIT_CANDIDATES = "portrait_memory/du_candidates.json"
+R2_KEY_INTERACTION_CANDIDATES = "portrait_memory/interaction_candidates.json"
 # MiniApp 背景配置与图片（跨设备同步）
 R2_KEY_MINIAPP_BG_CONFIG = "global/miniapp_bg_config.json"
 R2_KEY_MINIAPP_BG_IMAGE = "global/miniapp_bg_image"
@@ -679,6 +683,104 @@ def get_du_thought_latest() -> Optional[dict]:
     if not isinstance(data, dict):
         return None
     return data
+
+
+def _get_items_json(key: str) -> list[dict]:
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, key)
+    items = (data or {}).get("items") if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def _save_items_json(key: str, items: list[dict]) -> bool:
+    client = _s3_client()
+    if not client:
+        return False
+    payload = {"items": items if isinstance(items, list) else []}
+    with _global_write_lock:
+        try:
+            _write_json(client, key, payload)
+            return True
+        except Exception as e:
+            logger.error("save items json 失败 key=%s error=%s", key, e, exc_info=True)
+            return False
+
+
+def get_xinyue_portrait_candidates() -> list[dict]:
+    return _get_items_json(R2_KEY_XINYUE_PORTRAIT_CANDIDATES)
+
+
+def save_xinyue_portrait_candidates(items: list[dict]) -> bool:
+    return _save_items_json(R2_KEY_XINYUE_PORTRAIT_CANDIDATES, items)
+
+
+def get_du_portrait_candidates() -> list[dict]:
+    return _get_items_json(R2_KEY_DU_PORTRAIT_CANDIDATES)
+
+
+def save_du_portrait_candidates(items: list[dict]) -> bool:
+    return _save_items_json(R2_KEY_DU_PORTRAIT_CANDIDATES, items)
+
+
+def get_interaction_candidates() -> list[dict]:
+    return _get_items_json(R2_KEY_INTERACTION_CANDIDATES)
+
+
+def save_interaction_candidates(items: list[dict]) -> bool:
+    return _save_items_json(R2_KEY_INTERACTION_CANDIDATES, items)
+
+
+def append_interaction_candidate(summary: str, source_message_id: str = "") -> Optional[dict]:
+    content = str(summary or "").strip()
+    if not content:
+        return None
+    items = get_interaction_candidates()
+    now = now_beijing_iso()
+    entry = {
+        "id": str(uuid4()),
+        "summary": content,
+        "source_message_id": str(source_message_id or "").strip(),
+        "created_at": now,
+        "updated_at": now,
+    }
+    items.append(entry)
+    ok = save_interaction_candidates(items)
+    return entry if ok else None
+
+
+def delete_xinyue_portrait_candidate(entry_id: str) -> bool:
+    eid = str(entry_id or "").strip()
+    if not eid:
+        return False
+    items = get_xinyue_portrait_candidates()
+    new_items = [it for it in items if str((it or {}).get("id") or "").strip() != eid]
+    if len(new_items) == len(items):
+        return False
+    return save_xinyue_portrait_candidates(new_items)
+
+
+def delete_du_portrait_candidate(entry_id: str) -> bool:
+    eid = str(entry_id or "").strip()
+    if not eid:
+        return False
+    items = get_du_portrait_candidates()
+    new_items = [it for it in items if str((it or {}).get("id") or "").strip() != eid]
+    if len(new_items) == len(items):
+        return False
+    return save_du_portrait_candidates(new_items)
+
+
+def delete_interaction_candidate(entry_id: str) -> bool:
+    eid = str(entry_id or "").strip()
+    if not eid:
+        return False
+    items = get_interaction_candidates()
+    new_items = [it for it in items if str((it or {}).get("id") or "").strip() != eid]
+    if len(new_items) == len(items):
+        return False
+    return save_interaction_candidates(new_items)
 
 
 def merge_and_save_sense_bucket(sense_type: str, patch: dict) -> bool:
@@ -1469,6 +1571,14 @@ def save_du_memory_doc(text: str) -> bool:
 
 def get_core_prompt_text() -> Optional[str]:
     """读取全局核心 Prompt（MiniApp 可编辑）；不存在时返回 None。"""
+    cfg = get_core_prompt_config()
+    if isinstance(cfg, dict):
+        prompts = cfg.get("prompts") if isinstance(cfg.get("prompts"), dict) else {}
+        active_key = str(cfg.get("active_key") or "a").strip().lower()
+        active_key = "b" if active_key == "b" else "a"
+        active_text = str((prompts or {}).get(active_key) or "").strip()
+        if active_text:
+            return active_text
     client = _s3_client()
     if not client:
         return None
@@ -1488,6 +1598,17 @@ def get_core_prompt_text() -> Optional[str]:
 
 def save_core_prompt_text(text: str) -> bool:
     """保存/覆盖全局核心 Prompt（MiniApp 编辑后实时生效）。"""
+    cfg = get_core_prompt_config()
+    if isinstance(cfg, dict):
+        prompts = cfg.get("prompts") if isinstance(cfg.get("prompts"), dict) else {}
+        active_key = str(cfg.get("active_key") or "a").strip().lower()
+        active_key = "b" if active_key == "b" else "a"
+        prompts = {
+            "a": str(prompts.get("a") or ""),
+            "b": str(prompts.get("b") or ""),
+        }
+        prompts[active_key] = str(text or "")
+        return save_core_prompt_config({"active_key": active_key, "prompts": prompts})
     client = _s3_client()
     if not client:
         return False
@@ -1501,6 +1622,73 @@ def save_core_prompt_text(text: str) -> bool:
         return True
     except Exception as e:
         logger.error("save_core_prompt_text 失败 error=%s", e, exc_info=True)
+        return False
+
+
+def get_core_prompt_config() -> Optional[dict]:
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_CORE_PROMPT_CONFIG)
+    if isinstance(data, dict):
+        prompts = data.get("prompts") if isinstance(data.get("prompts"), dict) else {}
+        active_key = str(data.get("active_key") or "a").strip().lower()
+        active_key = "b" if active_key == "b" else "a"
+        return {
+            "active_key": active_key,
+            "prompts": {
+                "a": str(prompts.get("a") or ""),
+                "b": str(prompts.get("b") or ""),
+            },
+        }
+    legacy_text = None
+    try:
+        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_KEY_CORE_PROMPT)
+        legacy_text = resp["Body"].read().decode("utf-8")
+    except ClientError as e:
+        code = (e.response or {}).get("Error", {}).get("Code", "")
+        if code != "NoSuchKey":
+            logger.error("get_core_prompt_config fallback 失败 error=%s", e, exc_info=True)
+    except Exception as e:
+        logger.error("get_core_prompt_config fallback 失败 error=%s", e, exc_info=True)
+    if legacy_text is None:
+        return None
+    return {
+        "active_key": "a",
+        "prompts": {
+            "a": str(legacy_text or ""),
+            "b": "",
+        },
+    }
+
+
+def save_core_prompt_config(data: dict) -> bool:
+    client = _s3_client()
+    if not client:
+        return False
+    prompts = data.get("prompts") if isinstance(data, dict) and isinstance(data.get("prompts"), dict) else {}
+    active_key = str((data or {}).get("active_key") or "a").strip().lower()
+    active_key = "b" if active_key == "b" else "a"
+    payload = {
+        "active_key": active_key,
+        "prompts": {
+            "a": str(prompts.get("a") or ""),
+            "b": str(prompts.get("b") or ""),
+        },
+    }
+    try:
+        with _global_write_lock:
+            _write_json(client, R2_KEY_CORE_PROMPT_CONFIG, payload)
+            active_text = payload["prompts"].get(active_key) or ""
+            client.put_object(
+                Bucket=R2_BUCKET_NAME,
+                Key=R2_KEY_CORE_PROMPT,
+                Body=active_text.encode("utf-8"),
+                ContentType="text/plain; charset=utf-8",
+            )
+        return True
+    except Exception as e:
+        logger.error("save_core_prompt_config 失败 error=%s", e, exc_info=True)
         return False
 
 

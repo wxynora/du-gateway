@@ -1441,18 +1441,31 @@ function CyberTreeModal({
 
 function CorePromptEditor({ onClose }: { onClose: () => void }) {
   const toast = useToast();
-  const [text, setText] = useState("");
+  const [activeKey, setActiveKey] = useState<"a" | "b">("a");
+  const [promptA, setPromptA] = useState("");
+  const [promptB, setPromptB] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [source, setSource] = useState<string>("");
+  const [portrait, setPortrait] = useState<{
+    xinyue_candidates?: Array<{ id?: string; summary?: string }>;
+    du_candidates?: Array<{ id?: string; summary?: string }>;
+    interaction_candidates?: Array<{ id?: string; summary?: string }>;
+  } | null>(null);
 
   async function load() {
     setLoading(true);
     try {
-      const j = await apiJson<{ ok?: boolean; content?: string; source?: string; error?: string }>("/miniapp-api/core-prompt");
+      const [j, p] = await Promise.all([
+        apiJson<{ ok?: boolean; content?: string; source?: string; error?: string; active_key?: string; prompts?: { a?: string; b?: string } }>("/miniapp-api/core-prompt"),
+        apiJson<{ ok?: boolean; xinyue_candidates?: Array<{ id?: string; summary?: string }>; du_candidates?: Array<{ id?: string; summary?: string }>; interaction_candidates?: Array<{ id?: string; summary?: string }> }>("/miniapp-api/portrait-memory"),
+      ]);
       if (!j?.ok) throw new Error(j?.error || "加载失败");
-      setText((j.content || "").toString());
+      setActiveKey(((j.active_key || "a").toString() === "b" ? "b" : "a"));
+      setPromptA(((j.prompts?.a ?? j.content) || "").toString());
+      setPromptB((j.prompts?.b || "").toString());
       setSource((j.source || "").toString());
+      if (p?.ok) setPortrait(p);
     } catch (e: any) {
       toast(`加载失败：${e?.message || e}`);
     } finally {
@@ -1466,9 +1479,14 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
   }, []);
 
   async function save() {
-    const content = (text || "").trim();
-    if (!content) {
-      toast("内容不能为空");
+    const pa = (promptA || "").trim();
+    const pb = (promptB || "").trim();
+    if (activeKey === "a" && !pa) {
+      toast("当前选中的 Prompt A 不能为空");
+      return;
+    }
+    if (activeKey === "b" && !pb) {
+      toast("当前选中的 Prompt B 不能为空");
       return;
     }
     const ok = window.confirm("确认保存核心 Prompt 吗？保存后会立即覆盖线上注入内容。");
@@ -1478,7 +1496,7 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
       const j = await apiJson<{ ok?: boolean; error?: string }>("/miniapp-api/core-prompt", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ active_key: activeKey, prompts: { a: promptA, b: promptB } }),
       });
       if (!j?.ok) throw new Error(j?.error || "保存失败");
       toast("已保存，下一条请求生效");
@@ -1490,23 +1508,107 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function copyText(text: string) {
+    const content = (text || "").trim();
+    if (!content) {
+      toast("没有可复制的内容");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(content);
+      toast("已复制");
+    } catch (e: any) {
+      toast(`复制失败：${e?.message || e}`);
+    }
+  }
+
+  async function deletePortrait(bucket: "xinyue" | "du" | "interaction", id: string) {
+    if (!id) return;
+    const ok = window.confirm("确认删除这条候选吗？");
+    if (!ok) return;
+    try {
+      const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/portrait-memory/${encodeURIComponent(bucket)}/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!j?.ok) throw new Error(j?.error || "删除失败");
+      toast("已删除");
+      await load();
+    } catch (e: any) {
+      toast(`删除失败：${e?.message || e}`);
+    }
+  }
+
   return (
     <Modal title="核心 Prompt（3.16）" onClose={onClose}>
       <div className="space-y-3">
         <div className="text-xs text-cream-muted">
-          当前来源：{source || "unknown"}。保存后会固定注入到所有对话请求。
+          当前来源：{source || "unknown"}。保存后会固定注入到所有对话请求。当前启用：Prompt {activeKey.toUpperCase()}。
         </div>
-        <textarea
-          className="w-full min-h-[40vh] rounded-xl2 bg-cream-card shadow-soft2 p-3 text-sm leading-relaxed"
-          value={text}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value)}
-          placeholder={loading ? "加载中..." : "在这里编辑核心 Prompt"}
-        />
+        <div className="flex items-center gap-2">
+          <Btn kind={activeKey === "a" ? "blue" : "dark"} onClick={() => setActiveKey("a")} disabled={loading || saving}>Prompt A</Btn>
+          <Btn kind={activeKey === "b" ? "blue" : "dark"} onClick={() => setActiveKey("b")} disabled={loading || saving}>Prompt B</Btn>
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs text-cream-muted">Prompt A</div>
+          <textarea
+            className="w-full min-h-[24vh] rounded-xl2 bg-cream-card shadow-soft2 p-3 text-sm leading-relaxed"
+            value={promptA}
+            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPromptA(e.target.value)}
+            placeholder={loading ? "加载中..." : "在这里编辑 Prompt A"}
+          />
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs text-cream-muted">Prompt B</div>
+          <textarea
+            className="w-full min-h-[24vh] rounded-xl2 bg-cream-card shadow-soft2 p-3 text-sm leading-relaxed"
+            value={promptB}
+            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPromptB(e.target.value)}
+            placeholder={loading ? "加载中..." : "在这里编辑 Prompt B"}
+          />
+        </div>
+        <details className="neo-panel-soft px-3 py-3 text-sm">
+          <summary className="cursor-pointer select-none">画像层候选</summary>
+          <div className="mt-3 space-y-3">
+            <PortraitBlock title="辛玥画像候选" bucket="xinyue" items={portrait?.xinyue_candidates || []} onCopy={copyText} onDelete={deletePortrait} />
+            <PortraitBlock title="渡画像候选" bucket="du" items={portrait?.du_candidates || []} onCopy={copyText} onDelete={deletePortrait} />
+            <PortraitBlock title="相处模式候选" bucket="interaction" items={portrait?.interaction_candidates || []} onCopy={copyText} onDelete={deletePortrait} />
+          </div>
+        </details>
         <div className="flex items-center gap-2">
           <Btn kind="dark" onClick={load} disabled={loading || saving}>刷新</Btn>
           <Btn kind="dark" onClick={save} disabled={loading || saving}>保存</Btn>
         </div>
       </div>
     </Modal>
+  );
+}
+
+function PortraitBlock({
+  title,
+  bucket,
+  items,
+  onCopy,
+  onDelete,
+}: {
+  title: string;
+  bucket: "xinyue" | "du" | "interaction";
+  items: Array<{ id?: string; summary?: string }>;
+  onCopy: (text: string) => void;
+  onDelete: (bucket: "xinyue" | "du" | "interaction", id: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="text-xs text-cream-muted">{title} · {items.length}</div>
+      {!items.length ? <div className="text-xs text-cream-muted">（暂无）</div> : null}
+      {items.map((item, idx) => (
+        <div key={item.id || `${title}-${idx}`} className="neo-panel px-3 py-2">
+          <div className="whitespace-pre-wrap text-sm leading-relaxed">{String(item.summary || "")}</div>
+          <div className="mt-2 flex items-center gap-2">
+            <Btn kind="blue" onClick={() => onCopy(String(item.summary || ""))}>复制</Btn>
+            {item.id ? <Btn kind="danger" onClick={() => onDelete(bucket, String(item.id || ""))}>删除</Btn> : null}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
