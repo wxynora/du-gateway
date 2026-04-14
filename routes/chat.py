@@ -160,7 +160,7 @@ def _is_claude_model(model_name: str) -> bool:
 def _apply_claude_prompt_caching(body: dict) -> dict:
     """
     仅当手动开关开启且当前模型看起来是 Claude 时，
-    给静态前缀最后一条普通 system 打上 cache_control 断点。
+    给静态前缀最后一条普通 system 的最后一个文本内容块打上 cache_control 断点。
     切到别的模型或关闭开关时，顺手清掉旧字段。
     """
     body = dict(body or {})
@@ -169,6 +169,17 @@ def _apply_claude_prompt_caching(body: dict) -> dict:
         if isinstance(msg, dict):
             mm = dict(msg)
             mm.pop("cache_control", None)
+            content = mm.get("content")
+            if isinstance(content, list):
+                cleaned = []
+                for part in content:
+                    if isinstance(part, dict):
+                        pp = dict(part)
+                        pp.pop("cache_control", None)
+                        cleaned.append(pp)
+                    else:
+                        cleaned.append(part)
+                mm["content"] = cleaned
             messages.append(mm)
         else:
             messages.append(msg)
@@ -186,7 +197,33 @@ def _apply_claude_prompt_caching(body: dict) -> dict:
         if not msg.get("__dynamic__"):
             last_plain_system_idx = i
     if last_plain_system_idx >= 0:
-        messages[last_plain_system_idx]["cache_control"] = {"type": "ephemeral"}
+        target = messages[last_plain_system_idx]
+        content = target.get("content")
+        if isinstance(content, str):
+            target["content"] = [
+                {
+                    "type": "text",
+                    "text": content,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        elif isinstance(content, list):
+            last_text_idx = -1
+            converted = []
+            for idx, part in enumerate(content):
+                if isinstance(part, dict):
+                    pp = dict(part)
+                    if pp.get("type") == "text":
+                        last_text_idx = idx
+                    converted.append(pp)
+                elif isinstance(part, str):
+                    converted.append({"type": "text", "text": part})
+                    last_text_idx = idx
+                else:
+                    converted.append(part)
+            if last_text_idx >= 0 and isinstance(converted[last_text_idx], dict):
+                converted[last_text_idx]["cache_control"] = {"type": "ephemeral"}
+            target["content"] = converted
     return body
 
 
