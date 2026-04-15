@@ -815,11 +815,15 @@ def _append_tool_results_and_continue(body: dict, assistant_message: dict, tool_
     body = _copy.deepcopy(body)
     messages = body.get("messages") or []
     # 保留 assistant 消息（含 tool_calls）
-    messages.append({
+    assistant_trace = {
         "role": "assistant",
         "content": assistant_message.get("content") or None,
         "tool_calls": assistant_message.get("tool_calls"),
-    })
+    }
+    for rk in ("reasoning", "reasoning_content", "thinking"):
+        if assistant_message.get(rk):
+            assistant_trace[rk] = assistant_message.get(rk)
+    messages.append(assistant_trace)
     for tc in tool_calls:
         tid = (tc or {}).get("id") or ""
         fn = (tc or {}).get("function") or {}
