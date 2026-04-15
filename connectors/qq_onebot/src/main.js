@@ -393,25 +393,6 @@ async function sendQqText(userId, text) {
   return onebotApi("send_private_msg", { user_id: Number(userId), message: String(text || "") });
 }
 
-async function sendQqTypingPlaceholder(userId) {
-  if (!envBool("QQ_TYPING_INDICATOR", true)) return null;
-  try {
-    const indicator = envStr("QQ_TYPING_INDICATOR_TEXT", "⌛");
-    const r = await onebotApi("send_private_msg", { user_id: Number(userId), message: indicator });
-    return r?.data?.message_id ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function deleteQqMessage(msgId) {
-  if (!msgId) return;
-  try {
-    await onebotApi("delete_msg", { message_id: Number(msgId) });
-  } catch {
-    // 撤回失败不影响主流程
-  }
-}
 
 async function sendQqImage(userId, imageUrl) {
   return onebotApi("send_private_msg", {
@@ -446,17 +427,14 @@ async function flushUser(userId) {
   }
   const windowId = resolveSharedWindowId();
   console.log(`[qq-onebot] flush user=${userId} window_id=${windowId} preview=${userContentPreview(merged)}`);
-  const typingMsgId = await sendQqTypingPlaceholder(userId);
   let reply = "";
   try {
     reply = await callGatewayChat(windowId, merged);
   } catch (e) {
     console.log(`[qq-onebot] 调网关失败：${String(e?.message || e)}`);
-    await deleteQqMessage(typingMsgId);
     pending.delete(userId);
     return;
   }
-  await deleteQqMessage(typingMsgId);
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
   const maxReplyTotalChars = Math.max(0, envInt("QQ_MAX_REPLY_TOTAL_CHARS", 0));
   const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
