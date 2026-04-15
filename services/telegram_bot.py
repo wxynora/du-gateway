@@ -896,6 +896,9 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         if content is None:
             return None
         reply_text = content.strip() if isinstance(content, str) else str(content).strip()
+        # 兜底：去掉 <think>/<thinking> 块（网关层已处理，此处双重保险）
+        import re as _re
+        reply_text = _re.sub(r"<(think|thinking)>.*?</\1>", "", reply_text, flags=_re.DOTALL | _re.IGNORECASE).strip()
         reply_text = _sanitize_reply_for_telegram(reply_text)
         # 电脑控制标签：入队并从可见正文移除（与手机/Tasker 隔离）
         reply_text, _ = process_pcmd_in_assistant_text(reply_text)

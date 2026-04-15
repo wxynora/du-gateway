@@ -2,6 +2,7 @@
 # 项目约定：主聊天禁止默认兜底模型。没传 model 就直接报错，不要偷偷补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
 import json
 import queue
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -158,9 +159,60 @@ def _chat_url_to_models_url(chat_url: str) -> str:
     return base.rstrip("/") + "/v1/models"
 
 
+_THINK_BLOCK_RE = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_thinking_from_content(content: str) -> tuple[str, str]:
+    """
+    把 content 里的 <think>...</think> / <thinking>...</thinking> 块提取出来。
+    返回 (stripped_content, extracted_thinking)。
+    若无匹配则 extracted_thinking 为空串，content 原样返回。
+    """
+    if not content or not isinstance(content, str):
+        return content or "", ""
+    thinking_parts: list[str] = []
+
+    def _repl(m: re.Match) -> str:
+        thinking_parts.append(m.group(2).strip())
+        return ""
+
+    stripped = _THINK_BLOCK_RE.sub(_repl, content).strip()
+    return stripped, "\n\n".join(thinking_parts)
+
+
+def _strip_thinking_from_response_json(resp_json: dict) -> dict:
+    """
+    从非流式上游响应中剥离 content 里的 <think> 块，
+    同时把提取到的 thinking 合并进 message.reasoning（已有则追加），
+    避免 thinking 泄漏给客户端（RikkaHub / Telegram 等）。
+    就地修改 resp_json 并返回；若无 choices 则原样返回。
+    """
+    if not isinstance(resp_json, dict):
+        return resp_json
+    choices = resp_json.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return resp_json
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(msg, dict):
+        return resp_json
+    content = msg.get("content")
+    if not isinstance(content, str):
+        return resp_json
+    stripped, thinking = _extract_thinking_from_content(content)
+    if not thinking:
+        return resp_json
+    msg["content"] = stripped
+    if thinking:
+        existing = str(msg.get("reasoning") or "").strip()
+        msg["reasoning"] = (existing + "\n\n" + thinking).strip() if existing else thinking
+    return resp_json
+
+
 def _strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
     """
-    从单条 SSE chunk 中去掉 delta 里的 reasoning/reasoning_content/thinking 字段，
+    从单条 SSE chunk 中：
+    1. 删除 delta 里的 reasoning/reasoning_content/thinking 字段
+    2. 剥离 delta.content 里的 <think>/<thinking> 块
     避免客户端（RikkaHub 等）把思维链渲染成对话内容。
     非 data: 行或解析失败时原样返回。
     """
@@ -179,6 +231,11 @@ def _strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
             if rk in delta:
                 del delta[rk]
                 changed = True
+        # 剥离 delta.content 里的 <think> 块
+        if isinstance(delta.get("content"), str) and _THINK_BLOCK_RE.search(delta["content"]):
+            stripped, _ = _extract_thinking_from_content(delta["content"])
+            delta["content"] = stripped
+            changed = True
         if not changed:
             return chunk
         return b"data: " + json.dumps(j, ensure_ascii=False).encode("utf-8") + b"\n"
@@ -327,8 +384,18 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                 if payload != b"[DONE]" and payload:
                     j = json.loads(payload.decode("utf-8", errors="ignore"))
                     delta = (j.get("choices") or [{}])[0].get("delta") or {}
-                    if delta.get("content"):
-                        content_parts.append(delta["content"])
+                    raw_content = delta.get("content") or ""
+                    if raw_content:
+                        # 如果 delta.content 里含有 <think> 块，提取到 reasoning_parts，
+                        # 只把干净的正文放入 content_parts（对应 _strip_reasoning_from_sse_chunk 的客户端过滤）
+                        if _THINK_BLOCK_RE.search(raw_content):
+                            clean, in_content_thinking = _extract_thinking_from_content(raw_content)
+                            if clean:
+                                content_parts.append(clean)
+                            if in_content_thinking:
+                                reasoning_parts.append(in_content_thinking)
+                        else:
+                            content_parts.append(raw_content)
                     for rk in ("reasoning", "reasoning_content", "thinking"):
                         if delta.get(rk):
                             reasoning_parts.append(str(delta.get(rk)))
@@ -980,6 +1047,9 @@ def chat_completions():
     if resp_json:
         resp_json = _apply_du_thought_to_assistant_response(resp_json)
         resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
+        # 剥离 content 里的 <think>/<thinking> 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
+        # thinking 已合并入 message.reasoning，R2 存档的 msg_for_r2 独立 deepcopy，不受此影响。
+        resp_json = _strip_thinking_from_response_json(resp_json)
     if status == 200 and resp_json:
         cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):
