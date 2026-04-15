@@ -68,13 +68,6 @@ logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
 
 WINDOW_ID_DEFAULT = ""
-TEMP_DISABLE_DYNAMIC_INJECTION = True
-INBOUND_DEBUG_REQUEST_FILE = DATA_DIR / "last_inbound_request.json"
-INBOUND_DEBUG_PREV_REQUEST_FILE = DATA_DIR / "last_inbound_request.prev.json"
-INBOUND_DEBUG_DIFF_FILE = DATA_DIR / "last_inbound_request.diff.txt"
-UPSTREAM_DEBUG_REQUEST_FILE = DATA_DIR / "last_upstream_request.json"
-UPSTREAM_DEBUG_PREV_REQUEST_FILE = DATA_DIR / "last_upstream_request.prev.json"
-UPSTREAM_DEBUG_DIFF_FILE = DATA_DIR / "last_upstream_request.diff.txt"
 
 
 def _get_window_id_from_request(body: dict) -> str:
@@ -150,80 +143,6 @@ def _build_upstream_error_hint(last_err: str) -> str:
         "【上游不可用】请先在 MiniApp -> 上游中转站切换后重试。\n"
         f"当前 active：{active_label}\n"
         f"错误详情：{detail}"
-    )
-
-
-def _write_debug_snapshot(
-    *,
-    current_file: Path,
-    prev_file: Path,
-    diff_file: Path,
-    url: str,
-    headers: dict,
-    body: dict,
-) -> None:
-    """
-    落一份请求快照，并自动生成与上一次请求的 diff。
-    只保留非敏感头；Authorization 仅记录是否存在，不落明文。
-    """
-    try:
-        safe_headers = {}
-        for k, v in (headers or {}).items():
-            kk = str(k or "").strip()
-            if not kk:
-                continue
-            if kk.lower() == "authorization":
-                safe_headers[kk] = "[present]" if str(v or "").strip() else ""
-            else:
-                safe_headers[kk] = v
-        payload = {
-            "captured_at": now_beijing_iso(),
-            "url": str(url or "").strip(),
-            "headers": safe_headers,
-            "body": body,
-        }
-        current_text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-        prev_text = ""
-        if current_file.exists():
-            try:
-                prev_text = current_file.read_text(encoding="utf-8")
-                prev_file.write_text(prev_text, encoding="utf-8")
-            except Exception:
-                prev_text = ""
-        diff_text = "".join(
-            unified_diff(
-                prev_text.splitlines(keepends=True),
-                current_text.splitlines(keepends=True),
-                fromfile="previous",
-                tofile="current",
-            )
-        )
-        current_file.parent.mkdir(parents=True, exist_ok=True)
-        current_file.write_text(current_text, encoding="utf-8")
-        diff_file.write_text(diff_text or "NO_DIFF\n", encoding="utf-8")
-    except Exception as e:
-        logger.warning("写入请求快照失败 error=%s", e)
-
-
-def _write_inbound_debug_snapshot(url: str, headers: dict, body: dict) -> None:
-    _write_debug_snapshot(
-        current_file=INBOUND_DEBUG_REQUEST_FILE,
-        prev_file=INBOUND_DEBUG_PREV_REQUEST_FILE,
-        diff_file=INBOUND_DEBUG_DIFF_FILE,
-        url=url,
-        headers=headers,
-        body=body,
-    )
-
-
-def _write_upstream_debug_snapshot(url: str, headers: dict, body: dict) -> None:
-    _write_debug_snapshot(
-        current_file=UPSTREAM_DEBUG_REQUEST_FILE,
-        prev_file=UPSTREAM_DEBUG_PREV_REQUEST_FILE,
-        diff_file=UPSTREAM_DEBUG_DIFF_FILE,
-        url=url,
-        headers=headers,
-        body=body,
     )
 
 
@@ -328,7 +247,6 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         try:
-            _write_upstream_debug_snapshot(url, h, body_send)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
@@ -599,7 +517,6 @@ def _forward_to_ai(body: dict, headers: dict):
                 if cur is None or (isinstance(cur, (int, float)) and int(cur) < MAX_COMPLETION_TOKENS):
                     body_send["max_tokens"] = MAX_COMPLETION_TOKENS
                     logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
-            _write_upstream_debug_snapshot(url, req_headers, body_send)
             r = requests.post(url, headers=req_headers, json=body_send, timeout=120)
             # 为排查上游 403：记录鉴权是否携带（不泄露 key），以及响应正文前缀
             try:
@@ -940,7 +857,6 @@ def chat_completions():
     if not req_model:
         return jsonify({"error": "缺少 model"}), 400
     headers = dict(request.headers) if request.headers else {}
-    _write_inbound_debug_snapshot(request.url, headers, body)
     window_id = _get_window_id_from_request(body)
     # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
     window_id = r2_store.normalize_window_id(window_id)
@@ -976,16 +892,14 @@ def chat_completions():
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
     if not slim_voice_call:
-        if not TEMP_DISABLE_DYNAMIC_INJECTION:
-            body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
-            body = step_inject_sense_snapshot(body, window_id)
-            body = step_inject_du_thought(body, window_id)
-            body = step_inject_interaction_candidate(body, window_id)
-            body = step_inject_wenyou_gm(body, window_id)
-            body = step_inject_rikkahub_reminder(body, window_id)
-            body = step_inject_dynamic_memory(body, window_id)
-            # 口径：窗口总结 + 动态层记忆优先注入，再补 last4
-            body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
+        body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
+        body = step_inject_sense_snapshot(body, window_id)
+        body = step_inject_du_thought(body, window_id)
+        body = step_inject_interaction_candidate(body, window_id)
+        body = step_inject_wenyou_gm(body, window_id)
+        body = step_inject_rikkahub_reminder(body, window_id)
+        body = step_inject_dynamic_memory(body, window_id)
+        body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
         body = step_inject_du_notebook(body)
         body = step_inject_notion_search(body, window_id)
         body = step_inject_notion_tools(body)
