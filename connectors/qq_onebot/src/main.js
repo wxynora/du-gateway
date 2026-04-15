@@ -160,7 +160,7 @@ function splitReplyByNewlineAndLen(text, chunkChars, maxTotalChars) {
   if (!raw) return [];
   const limit = Math.max(20, Number(chunkChars || 100));
   const maxTotal = Math.max(0, Number(maxTotalChars || 0));
-  const minStandaloneChars = 10;
+  const minStandaloneChars = 2;
   const clipped = maxTotal > 0 && raw.length > maxTotal ? raw.slice(0, maxTotal) : raw;
   const lines = clipped.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
   const src = lines.length ? lines : [clipped];
@@ -329,7 +329,17 @@ async function resolveStickerUrl(tag) {
     const text = await r.text();
     if (!r.ok) return "";
     const data = text ? JSON.parse(text) : null;
-    return absolutizeGatewayUrl(data?.url || "");
+    const url = String(data?.url || "").trim();
+    const key = String(data?.key || "").trim();
+    // 若 URL 是 R2 私有存储地址（需要鉴权），NapCatQQ 无法访问，
+    // 改走网关 raw-public 代理（与 connector 同机器，可直连）
+    if (url && !/r2\.cloudflarestorage\.com/.test(url)) {
+      return absolutizeGatewayUrl(url);
+    }
+    if (key) {
+      return `${gatewayBaseUrl()}/miniapp-api/stickers/raw-public?key=${encodeURIComponent(key)}`;
+    }
+    return "";
   } catch {
     return "";
   }
