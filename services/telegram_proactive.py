@@ -24,6 +24,10 @@ from config import (
     TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN,
     TELEGRAM_PROACTIVE_INTERVAL_MINUTES,
     TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES,
+    WECHAT_PROACTIVE_PUSH_URL,
+    WECHAT_PROACTIVE_PUSH_TOKEN,
+    QQ_PROACTIVE_PUSH_URL,
+    QQ_PROACTIVE_PUSH_TOKEN,
 )
 from storage import r2_store
 from utils.log import get_logger
@@ -59,9 +63,10 @@ class ProactiveDecision:
 
     should_send: bool
     text: str = ""
-    reason: str = ""  # 技术向：contact / no_contact / gateway_status / …
-    action: str = ""  # 业务向：send_message / no_contact / diary / other / error / …
-    du_reason: str = ""  # 渡在 JSON 里写的理由
+    reason: str = ""      # 技术向：contact / no_contact / gateway_status / …
+    action: str = ""      # 业务向：send_message / no_contact / diary / other / error / …
+    du_reason: str = ""   # 渡在 JSON 里写的理由
+    channel: str = "tg"   # 发送入口：tg / wechat / qq
 
 
 def _get_chat_model() -> str:
@@ -213,8 +218,11 @@ def _parse_proactive_model_reply(raw: str, no_token: str) -> ProactiveDecision:
     action = str(obj.get("action") or "").strip().lower()
     du_reason = str(obj.get("reason") or "").strip()
     message = str(obj.get("message") or "").strip()
+    channel = str(obj.get("channel") or "tg").strip().lower() or "tg"
     alias = {"send": "send_message", "msg": "send_message", "text": "send_message", "chat": "send_message"}
     action = alias.get(action, action)
+    channel_alias = {"telegram": "tg", "weixin": "wechat", "wx": "wechat"}
+    channel = channel_alias.get(channel, channel)
     none_like = {"no_contact", "none", "silent", "skip"}
 
     if action in none_like:
@@ -224,6 +232,7 @@ def _parse_proactive_model_reply(raw: str, no_token: str) -> ProactiveDecision:
             "no_contact",
             action="no_contact",
             du_reason=du_reason or "（未说明原因）",
+            channel=channel,
         )
     if action == "send_message":
         if not message:
@@ -233,12 +242,13 @@ def _parse_proactive_model_reply(raw: str, no_token: str) -> ProactiveDecision:
                 "empty_message",
                 action="send_message",
                 du_reason=du_reason or "选择发消息但 message 为空",
+                channel=channel,
             )
-        return ProactiveDecision(True, message, "contact", action="send_message", du_reason=du_reason)
+        return ProactiveDecision(True, message, "contact", action="send_message", du_reason=du_reason, channel=channel)
     if action == "diary":
-        return ProactiveDecision(False, message, "diary", action="diary", du_reason=du_reason or "（未说明）")
+        return ProactiveDecision(False, message, "diary", action="diary", du_reason=du_reason or "（未说明）", channel=channel)
     if action == "other":
-        return ProactiveDecision(False, message, "other", action="other", du_reason=du_reason or "（未说明）")
+        return ProactiveDecision(False, message, "other", action="other", du_reason=du_reason or "（未说明）", channel=channel)
 
     if message:
         return ProactiveDecision(
@@ -247,6 +257,7 @@ def _parse_proactive_model_reply(raw: str, no_token: str) -> ProactiveDecision:
             "contact",
             action=action or "unknown",
             du_reason=du_reason or "（action 未识别，按 message 发送）",
+            channel=channel,
         )
     return ProactiveDecision(
         False,
@@ -254,6 +265,7 @@ def _parse_proactive_model_reply(raw: str, no_token: str) -> ProactiveDecision:
         "unknown_action",
         action=action or "unknown",
         du_reason=du_reason or "（未说明）",
+        channel=channel,
     )
 
 
@@ -279,6 +291,16 @@ def _format_proactive_decision_memory_for_system() -> str:
     return "\n".join(lines)
 
 
+def _available_channels() -> list[str]:
+    """返回当前已配置的可用入口列表（至少包含 tg）。"""
+    channels = ["tg"]
+    if WECHAT_PROACTIVE_PUSH_URL:
+        channels.append("wechat")
+    if QQ_PROACTIVE_PUSH_URL:
+        channels.append("qq")
+    return channels
+
+
 def _ask_du_should_contact(window_id: str, hours_since_last: float) -> ProactiveDecision:
     """
     让渡做一轮主动决策。要求渡用 JSON 回复（见 user 说明）；
@@ -286,14 +308,31 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
     """
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     no_token = TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT"
+    channels = _available_channels()
+    channel_desc_map = {
+        "tg": "Telegram（需要挂梯子，但随时能用）",
+        "wechat": "微信（国内直连，更稳定）",
+        "qq": "QQ",
+    }
+    channel_lines = "\n".join(
+        f'  - "{ch}"：{channel_desc_map.get(ch, ch)}' for ch in channels
+    )
+    channel_field_desc = (
+        f'- channel：字符串，从以下可用入口中选一个：{", ".join(repr(c) for c in channels)}。\n'
+        f"{channel_lines}\n"
+        "  根据当前情况（网络、时间、氛围）自行判断用哪个；如不确定就用 \"wechat\" 或 \"tg\"。\n"
+        if len(channels) > 1
+        else f'- channel：固定填 "{channels[0]}"（目前只有 Telegram 可用）。\n'
+    )
     user_prompt = (
         f"你现在在考虑要不要主动找老婆做一件事。距上次你们有消息互动大约 {hours_since_last:.1f} 小时。\n"
-        "可以选：给她发 Telegram 消息、暂时不打扰、去写日记/记事、或其它你认为合适的动作。\n"
+        "可以选：给她发消息、暂时不打扰、去写日记/记事、或其它你认为合适的动作。\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
         '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "other" 之一。\n'
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
         '- message：字符串；当 action 为 send_message 时，填要发给她的正文（可多行、像平时聊天）；其它 action 时可为空或填补充说明。\n'
-        "示例：{\"action\":\"no_contact\",\"reason\":\"她在开会\",\"message\":\"\"}\n"
+        + channel_field_desc
+        + '示例：{"action":"send_message","reason":"好久没联系了","message":"在干嘛","channel":"wechat"}\n'
         f"若你坚持旧习惯，也可以只输出一行 {no_token} 表示不联系（不推荐）。\n"
     )
     sys_content = build_telegram_style_system()
@@ -510,6 +549,56 @@ def schedule_tick(target_user_id: int = 0) -> dict:
     }
 
 
+def _send_via_wechat(text: str) -> bool:
+    """通过微信 connector 的 /push 端点主动发消息。"""
+    url = WECHAT_PROACTIVE_PUSH_URL
+    if not url:
+        logger.warning("WECHAT_PROACTIVE_PUSH_URL 未配置，跳过微信发送")
+        return False
+    headers = {"Content-Type": "application/json"}
+    if WECHAT_PROACTIVE_PUSH_TOKEN:
+        headers["Authorization"] = f"Bearer {WECHAT_PROACTIVE_PUSH_TOKEN}"
+    try:
+        r = requests.post(url, headers=headers, json={"text": text}, timeout=30)
+        if r.status_code == 200 and r.json().get("ok"):
+            return True
+        logger.warning("微信 /push 失败 status=%s body=%s", r.status_code, (r.text or "")[:200])
+        return False
+    except Exception as e:
+        logger.warning("微信 /push 异常: %s", e)
+        return False
+
+
+def _send_via_qq(text: str) -> bool:
+    """通过 QQ connector 的 /push 端点主动发消息。"""
+    url = QQ_PROACTIVE_PUSH_URL
+    if not url:
+        logger.warning("QQ_PROACTIVE_PUSH_URL 未配置，跳过 QQ 发送")
+        return False
+    headers = {"Content-Type": "application/json"}
+    if QQ_PROACTIVE_PUSH_TOKEN:
+        headers["Authorization"] = f"Bearer {QQ_PROACTIVE_PUSH_TOKEN}"
+    try:
+        r = requests.post(url, headers=headers, json={"text": text}, timeout=30)
+        if r.status_code == 200 and r.json().get("ok"):
+            return True
+        logger.warning("QQ /push 失败 status=%s body=%s", r.status_code, (r.text or "")[:200])
+        return False
+    except Exception as e:
+        logger.warning("QQ /push 异常: %s", e)
+        return False
+
+
+def _dispatch_send(channel: str, text: str, tg_uid: int) -> bool:
+    """根据 channel 选择发送入口，返回是否发送成功。"""
+    if channel == "wechat":
+        return _send_via_wechat(text)
+    if channel == "qq":
+        return _send_via_qq(text)
+    # 默认 / tg
+    return bool(send_message_segmented(tg_uid, text))
+
+
 def proactive_tick(target_user_id: int = 0) -> dict:
     """
     执行一次调度 tick。
@@ -586,19 +675,25 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     text_to_send = decision.text.strip()
     # 主动发消息也复用 Telegram 侧的清洗规则：避免出现“（脑内OS：）”等格式
     text_to_send = _sanitize_reply_for_telegram(text_to_send).strip()
-    logger.info("主动消息准备发送 chat_id=%s text_preview=%s", uid, text_to_send[:80] + ("…" if len(text_to_send) > 80 else ""))
+    channel = (decision.channel or "tg").strip().lower() or "tg"
+    out["channel"] = channel
+    logger.info(
+        "主动消息准备发送 channel=%s chat_id=%s text_preview=%s",
+        channel, uid, text_to_send[:80] + ("…" if len(text_to_send) > 80 else ""),
+    )
     if not text_to_send:
         out["skip_reason"] = "empty_after_sanitize"
         return out
-    # 与日常对话一致：按换行/长度分段发送，而不是一整条塞出去。
-    ok = send_message_segmented(uid, text_to_send)
-    logger.info("主动消息发送结果 chat_id=%s sent=%s", uid, ok)
+    ok = _dispatch_send(channel, text_to_send, uid)
+    logger.info("主动消息发送结果 channel=%s chat_id=%s sent=%s", channel, uid, ok)
     out["sent"] = bool(ok)
     out["text_preview"] = (decision.text.strip()[:120] + "…") if len(decision.text.strip()) > 120 else decision.text.strip()
     if ok:
         r2_store.save_last_proactive_contact_at(now_iso)
-        # 醒目一条，便于在日志里搜「已发送一条主动消息」定位
-        logger.warning("TGPro 已发送一条主动消息 chat_id=%s now=%s preview=%s", uid, now_iso, text_to_send[:60] + ("…" if len(text_to_send) > 60 else ""))
+        logger.warning(
+            "Pro 已发送一条主动消息 channel=%s chat_id=%s now=%s preview=%s",
+            channel, uid, now_iso, text_to_send[:60] + ("…" if len(text_to_send) > 60 else ""),
+        )
     return out
 
 

@@ -352,6 +352,14 @@ TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN = os.environ.get("TELEGRAM_PROACTIVE_NO_CONT
 # 若用户在此分钟数内发过消息（正在聊天），则本 tick 不主动发，默认 30 分钟
 TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES = int(float(os.environ.get("TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES", "30") or "30"))
 
+# 多入口主动发消息：微信 / QQ 的推送 URL 和鉴权 token
+# 微信：WECHAT_PROACTIVE_PUSH_URL=http://127.0.0.1:8091/push（connector 内的 push server）
+WECHAT_PROACTIVE_PUSH_URL = os.environ.get("WECHAT_PROACTIVE_PUSH_URL", "").strip()
+WECHAT_PROACTIVE_PUSH_TOKEN = os.environ.get("WECHAT_PROACTIVE_PUSH_TOKEN", "").strip()
+# QQ：QQ_PROACTIVE_PUSH_URL=http://127.0.0.1:8092/push（connector 内的 push server）
+QQ_PROACTIVE_PUSH_URL = os.environ.get("QQ_PROACTIVE_PUSH_URL", "").strip()
+QQ_PROACTIVE_PUSH_TOKEN = os.environ.get("QQ_PROACTIVE_PUSH_TOKEN", "").strip()
+
 # MiniMax TTS（可选，用于 Telegram 语音回复）
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "").strip()
 MINIMAX_T2A_URL = os.environ.get("MINIMAX_T2A_URL", "https://api.minimaxi.com/v1/t2a_v2").strip()

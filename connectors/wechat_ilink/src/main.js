@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import crypto from "node:crypto";
 import process from "node:process";
@@ -695,6 +696,99 @@ async function sendWeixinText(botToken, toUserId, contextToken, text) {
 /** @type {Map<string, {ticket: string, updatedAt: number}>} */
 const _typingTicketCacheByUser = new Map();
 
+// 主动发消息用：缓存最近一次收到消息时的目标 context（fromUserId + contextToken + botToken）
+let _proactiveCtx = null; // { fromUserId, contextToken, botToken }
+
+function _saveProactiveCtx(fromUserId, contextToken, botToken) {
+  _proactiveCtx = {
+    fromUserId: String(fromUserId || "").trim(),
+    contextToken: String(contextToken || "").trim(),
+    botToken: String(botToken || "").trim(),
+  };
+}
+
+function _readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      try {
+        const raw = Buffer.concat(chunks).toString("utf-8");
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch (e) {
+        reject(e);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function _startPushServer(botToken) {
+  const port = Math.max(1, envInt("WECHAT_PROACTIVE_PORT", 8091));
+  const pushToken = envStr("WECHAT_PROACTIVE_PUSH_TOKEN", "");
+  const outChunkChars = Math.max(20, envInt("WECHAT_OUTPUT_CHUNK_CHARS", 200));
+  const sendDelayMs = Math.max(0, envInt("WECHAT_OUTPUT_SEND_DELAY_MS", 600));
+
+  const server = http.createServer(async (req, res) => {
+    const url = String(req.url || "");
+    try {
+      if (req.method === "GET" && url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, has_ctx: !!_proactiveCtx }));
+        return;
+      }
+      if (req.method === "POST" && url === "/push") {
+        // 鉴权
+        if (pushToken) {
+          const auth = String(req.headers.authorization || "").trim();
+          if (auth !== `Bearer ${pushToken}`) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: "unauthorized" }));
+            return;
+          }
+        }
+        const body = await _readJsonBody(req);
+        const text = String(body?.text || "").trim();
+        if (!text) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "empty_text" }));
+          return;
+        }
+        if (!_proactiveCtx) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "no_context_yet: wait for user to send a message first" }));
+          return;
+        }
+        const { fromUserId, contextToken } = _proactiveCtx;
+        // 按 WECHAT_OUTPUT_CHUNK_CHARS 切段发送
+        const chunks = splitReplyByNewlineAndLen(text, outChunkChars, 0);
+        for (const part of chunks) {
+          const r = await sendWeixinText(botToken, fromUserId, contextToken, part);
+          if (!r.ok) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: `sendWeixinText ret=${r.ret} status=${r.status}` }));
+            return;
+          }
+          if (sendDelayMs > 0) await sleep(sendDelayMs);
+        }
+        console.log(`[wechat-ilink] /push 已发送 to=${fromUserId} preview=${text.slice(0, 80)}`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "not_found" }));
+    } catch (e) {
+      console.log(`[wechat-ilink] push server 异常：${String(e?.message || e)}`);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "internal_error" }));
+    }
+  });
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`[wechat-ilink] push server listening on :${port}`);
+  });
+}
+
 async function getTypingTicket(botToken, toUserId, contextToken) {
   const uid = String(toUserId || "").trim();
   if (!uid) return "";
@@ -748,6 +842,10 @@ async function main() {
   }
 
   const botToken = state.bot_token;
+
+  // 启动 push HTTP server（主动发消息用）
+  _startPushServer(botToken);
+
   const idleSeconds = Math.max(1, envInt("WECHAT_INPUT_IDLE_SECONDS", 15));
   const immediateChars = Math.max(20, envInt("WECHAT_INPUT_IMMEDIATE_CHARS", 200));
   const outChunkChars = Math.max(20, envInt("WECHAT_OUTPUT_CHUNK_CHARS", 200));
@@ -939,6 +1037,8 @@ async function main() {
         if (dedupe.size > dedupeMax) dedupe.clear();
 
         console.log(`[wechat-ilink] inbound from=${fromUserId} content=${userContentPreview(content, 60)}`);
+        // 缓存最新 context，供主动发消息的 /push 端点使用
+        _saveProactiveCtx(fromUserId, contextToken, botToken);
 
         const existing = pending.get(fromUserId) || {
           parts: [],
