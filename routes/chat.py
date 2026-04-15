@@ -158,6 +158,34 @@ def _chat_url_to_models_url(chat_url: str) -> str:
     return base.rstrip("/") + "/v1/models"
 
 
+def _strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
+    """
+    从单条 SSE chunk 中去掉 delta 里的 reasoning/reasoning_content/thinking 字段，
+    避免客户端（RikkaHub 等）把思维链渲染成对话内容。
+    非 data: 行或解析失败时原样返回。
+    """
+    if not chunk.startswith(b"data: "):
+        return chunk
+    payload = chunk[6:].strip()
+    if payload == b"[DONE]" or not payload:
+        return chunk
+    try:
+        j = json.loads(payload.decode("utf-8", errors="ignore"))
+        delta = (j.get("choices") or [{}])[0].get("delta") if isinstance(j, dict) else None
+        if not isinstance(delta, dict):
+            return chunk
+        changed = False
+        for rk in ("reasoning", "reasoning_content", "thinking"):
+            if rk in delta:
+                del delta[rk]
+                changed = True
+        if not changed:
+            return chunk
+        return b"data: " + json.dumps(j, ensure_ascii=False).encode("utf-8") + b"\n"
+    except Exception:
+        return chunk
+
+
 def _parse_stream_to_message(chunks: list) -> dict:
     """
     从流式 SSE chunks 解析出完整 assistant message（content + tool_calls）。
@@ -317,7 +345,8 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             try:
                 for chunk in _stream_forward_to_ai(body, headers):
                     _collect_content_from_chunk(chunk)
-                    chunk_queue.put(chunk)
+                    # 先收集 reasoning 用于存档，再过滤掉发给客户端的 chunk 里的 reasoning delta
+                    chunk_queue.put(_strip_reasoning_from_sse_chunk(chunk))
                 chunk_queue.put(None)
             except Exception as e:
                 logger.warning("流式生产异常 %s", e)
@@ -436,7 +465,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                 continue
             du_state = PcmdDuThoughtStreamState()
             for ch in chunks:
-                yield transform_sse_chunk_bytes_pcmd(ch, du_state)
+                yield transform_sse_chunk_bytes_pcmd(_strip_reasoning_from_sse_chunk(ch), du_state)
             content_parts.append(parsed.get("content") or "")
             # 模型常不在正文复述预览链接：从 tool 结果补发 SSE + 存档拼接
             suf = missing_html_preview_url_suffix(
@@ -928,10 +957,18 @@ def chat_completions():
         logger.warning("Chat 上游返回异常 status=%s", status)
         return jsonify(resp_json or {"error": "upstream error"}), status
     # 非流式 + 有 Notion 工具时：若上游返回 tool_calls，执行工具并继续请求，直到无 tool_calls 或达到最大轮数
-    # 工具中间轮次的 reasoning 只留给独立 reasoning 面板，不回填到最终用户可见消息，避免工具 thinking 混入正文轮次。
+    # 收集中间轮次 reasoning 供 MiniApp 思维链面板使用，但不回填到返回给客户端的 resp_json，
+    # 避免客户端（RikkaHub 等）把 reasoning 渲染成对话内容。
+    accumulated_reasoning_parts: list[str] = []
     max_tool_rounds = 5
     for _ in range(max_tool_rounds - 1):
         msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
+        if isinstance(msg, dict):
+            for rk in ("reasoning", "reasoning_content", "thinking"):
+                val = (msg.get(rk) or "").strip()
+                if val:
+                    accumulated_reasoning_parts.append(val)
+                    break
         tool_calls = (msg or {}).get("tool_calls")
         if not tool_calls or not isinstance(tool_calls, list):
             break
@@ -951,27 +988,29 @@ def chat_completions():
         if is_failed_response(content_text):
             logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
         else:
-            # reasoning 兼容字段：尽量保存到 message 里，供手机端折叠查看
-            try:
-                if isinstance(msg, dict) and not msg.get("reasoning"):
-                    for rk in ("reasoning", "reasoning_content", "thinking"):
-                        if msg.get(rk):
-                            msg["reasoning"] = msg.get(rk)
-                            break
-            except Exception:
-                pass
+            # 构造仅用于 R2 存档的 msg 副本，不修改 resp_json（避免 reasoning 回传给客户端）
+            import copy as _copy
+            msg_for_r2 = _copy.deepcopy(msg)
+            # reasoning 兼容字段：优先取最终轮次自带的，再回退到工具中间轮次累计的
+            if not msg_for_r2.get("reasoning"):
+                for rk in ("reasoning_content", "thinking"):
+                    if msg_for_r2.get(rk):
+                        msg_for_r2["reasoning"] = msg_for_r2.get(rk)
+                        break
+            if not msg_for_r2.get("reasoning") and accumulated_reasoning_parts:
+                msg_for_r2["reasoning"] = "".join(accumulated_reasoning_parts).strip()
             tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
-            if tc_trace and isinstance(msg, dict) and not msg.get("tool_calls"):
-                msg["tool_calls"] = tc_trace
+            if tc_trace and not msg_for_r2.get("tool_calls"):
+                msg_for_r2["tool_calls"] = tc_trace
             last_user = _last_user_message(body.get("messages"))
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             if last_user:
-                round_cleaned = build_round_cleaned_for_r2(last_user, msg)
+                round_cleaned = build_round_cleaned_for_r2(last_user, msg_for_r2)
                 step_archive_and_maybe_summary(
-                    window_id, body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned
+                    window_id, body.get("messages") or [], msg_for_r2, round_cleaned_for_r2=round_cleaned
                 )
             else:
-                step_archive_and_maybe_summary(window_id, body.get("messages") or [], msg)
+                step_archive_and_maybe_summary(window_id, body.get("messages") or [], msg_for_r2)
     else:
         logger.info("R2 未存档：上游无 choices 或响应为空")
     return jsonify(resp_json), 200
