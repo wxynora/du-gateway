@@ -68,6 +68,7 @@ logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
 
 WINDOW_ID_DEFAULT = ""
+TEMP_DISABLE_DYNAMIC_INJECTION = True
 INBOUND_DEBUG_REQUEST_FILE = DATA_DIR / "last_inbound_request.json"
 INBOUND_DEBUG_PREV_REQUEST_FILE = DATA_DIR / "last_inbound_request.prev.json"
 INBOUND_DEBUG_DIFF_FILE = DATA_DIR / "last_inbound_request.diff.txt"
@@ -974,16 +975,17 @@ def chat_completions():
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
-    body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
     if not slim_voice_call:
-        body = step_inject_sense_snapshot(body, window_id)
-        body = step_inject_du_thought(body, window_id)
-        body = step_inject_interaction_candidate(body, window_id)
-        body = step_inject_wenyou_gm(body, window_id)
-        body = step_inject_rikkahub_reminder(body, window_id)
-        body = step_inject_dynamic_memory(body, window_id)
-        # 口径：窗口总结 + 动态层记忆优先注入，再补 last4
-        body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
+        if not TEMP_DISABLE_DYNAMIC_INJECTION:
+            body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
+            body = step_inject_sense_snapshot(body, window_id)
+            body = step_inject_du_thought(body, window_id)
+            body = step_inject_interaction_candidate(body, window_id)
+            body = step_inject_wenyou_gm(body, window_id)
+            body = step_inject_rikkahub_reminder(body, window_id)
+            body = step_inject_dynamic_memory(body, window_id)
+            # 口径：窗口总结 + 动态层记忆优先注入，再补 last4
+            body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
         body = step_inject_du_notebook(body)
         body = step_inject_notion_search(body, window_id)
         body = step_inject_notion_tools(body)
