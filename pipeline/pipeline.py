@@ -277,13 +277,19 @@ def _rounds_to_context_text(rounds: list) -> str:
     lines = []
     for r in rounds:
         for m in r.get("messages", []):
-            role = m.get("role", "")
+            role = str(m.get("role", "") or "").strip().lower()
+            if role == "user":
+                role_label = "辛玥"
+            elif role == "assistant":
+                role_label = "我"
+            else:
+                role_label = role or "unknown"
             content = m.get("content", "")
             if isinstance(content, list):
                 content = " ".join(
                     c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
                 )
-            lines.append(f"[{role}]: {content}")
+            lines.append(f"[{role_label}]: {content}")
         action_note = str((r or {}).get("action_note") or "").strip()
         if action_note:
             lines.append(f"[action_note]: {action_note}")
@@ -429,13 +435,19 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
             src = str((r or {}).get("_inject_src") or "").strip()
             src_tag = f"【{src}】" if src else ""
             for m in (r.get("messages") or []):
-                role = m.get("role", "")
+                role = str(m.get("role", "") or "").strip().lower()
+                if role == "user":
+                    role_label = "辛玥"
+                elif role == "assistant":
+                    role_label = "我"
+                else:
+                    role_label = role or "unknown"
                 content = m.get("content", "")
                 if isinstance(content, list):
                     content = " ".join(
                         c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
                     )
-                lines.append(f"{src_tag}[{role}]: {content}")
+                lines.append(f"{src_tag}[{role_label}]: {content}")
             action_note = str((r or {}).get("action_note") or "").strip()
             if action_note:
                 lines.append(f"{src_tag}[action_note]: {action_note}")
