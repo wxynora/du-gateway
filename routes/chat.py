@@ -68,6 +68,9 @@ logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
 
 WINDOW_ID_DEFAULT = ""
+INBOUND_DEBUG_REQUEST_FILE = DATA_DIR / "last_inbound_request.json"
+INBOUND_DEBUG_PREV_REQUEST_FILE = DATA_DIR / "last_inbound_request.prev.json"
+INBOUND_DEBUG_DIFF_FILE = DATA_DIR / "last_inbound_request.diff.txt"
 UPSTREAM_DEBUG_REQUEST_FILE = DATA_DIR / "last_upstream_request.json"
 UPSTREAM_DEBUG_PREV_REQUEST_FILE = DATA_DIR / "last_upstream_request.prev.json"
 UPSTREAM_DEBUG_DIFF_FILE = DATA_DIR / "last_upstream_request.diff.txt"
@@ -149,9 +152,17 @@ def _build_upstream_error_hint(last_err: str) -> str:
     )
 
 
-def _write_upstream_debug_snapshot(url: str, headers: dict, body: dict) -> None:
+def _write_debug_snapshot(
+    *,
+    current_file: Path,
+    prev_file: Path,
+    diff_file: Path,
+    url: str,
+    headers: dict,
+    body: dict,
+) -> None:
     """
-    落一份“最终发给上游”的请求快照，并自动生成与上一次请求的 diff。
+    落一份请求快照，并自动生成与上一次请求的 diff。
     只保留非敏感头；Authorization 仅记录是否存在，不落明文。
     """
     try:
@@ -172,10 +183,10 @@ def _write_upstream_debug_snapshot(url: str, headers: dict, body: dict) -> None:
         }
         current_text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
         prev_text = ""
-        if UPSTREAM_DEBUG_REQUEST_FILE.exists():
+        if current_file.exists():
             try:
-                prev_text = UPSTREAM_DEBUG_REQUEST_FILE.read_text(encoding="utf-8")
-                UPSTREAM_DEBUG_PREV_REQUEST_FILE.write_text(prev_text, encoding="utf-8")
+                prev_text = current_file.read_text(encoding="utf-8")
+                prev_file.write_text(prev_text, encoding="utf-8")
             except Exception:
                 prev_text = ""
         diff_text = "".join(
@@ -186,115 +197,33 @@ def _write_upstream_debug_snapshot(url: str, headers: dict, body: dict) -> None:
                 tofile="current",
             )
         )
-        UPSTREAM_DEBUG_REQUEST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        UPSTREAM_DEBUG_REQUEST_FILE.write_text(current_text, encoding="utf-8")
-        UPSTREAM_DEBUG_DIFF_FILE.write_text(diff_text or "NO_DIFF\n", encoding="utf-8")
+        current_file.parent.mkdir(parents=True, exist_ok=True)
+        current_file.write_text(current_text, encoding="utf-8")
+        diff_file.write_text(diff_text or "NO_DIFF\n", encoding="utf-8")
     except Exception as e:
-        logger.warning("写入上游请求快照失败 error=%s", e)
+        logger.warning("写入请求快照失败 error=%s", e)
 
 
-def _claude_prompt_cache_enabled() -> bool:
-    try:
-        from storage.upstream_store import load_upstreams
-
-        data = load_upstreams() or {}
-        return bool(data.get("anthropic_prompt_caching_enabled", False))
-    except Exception:
-        return False
-
-
-def _is_claude_model(model_name: str) -> bool:
-    return "claude" in str(model_name or "").strip().lower()
+def _write_inbound_debug_snapshot(url: str, headers: dict, body: dict) -> None:
+    _write_debug_snapshot(
+        current_file=INBOUND_DEBUG_REQUEST_FILE,
+        prev_file=INBOUND_DEBUG_PREV_REQUEST_FILE,
+        diff_file=INBOUND_DEBUG_DIFF_FILE,
+        url=url,
+        headers=headers,
+        body=body,
+    )
 
 
-def _apply_claude_prompt_caching(body: dict) -> dict:
-    """
-    仅当手动开关开启且当前模型看起来是 Claude 时，
-    按 Anthropic 官方格式打显式断点：
-    1) tools 最后一个工具定义
-    2) 静态前缀最后一条普通 system 的最后一个文本内容块
-    """
-    body = dict(body or {})
-    body.pop("cache_control", None)
-    if not _claude_prompt_cache_enabled():
-        return body
-    if not _is_claude_model(body.get("model") or ""):
-        return body
-
-    tools = []
-    for tool in body.get("tools") or []:
-        if isinstance(tool, dict):
-            tt = dict(tool)
-            tt.pop("cache_control", None)
-            tools.append(tt)
-        else:
-            tools.append(tool)
-    if tools:
-        last_tool = tools[-1]
-        if isinstance(last_tool, dict):
-            last_tool["cache_control"] = {"type": "ephemeral"}
-    body["tools"] = tools
-
-    messages = []
-    for msg in body.get("messages") or []:
-        if isinstance(msg, dict):
-            mm = dict(msg)
-            mm.pop("cache_control", None)
-            content = mm.get("content")
-            if isinstance(content, list):
-                cleaned = []
-                for part in content:
-                    if isinstance(part, dict):
-                        pp = dict(part)
-                        pp.pop("cache_control", None)
-                        cleaned.append(pp)
-                    elif isinstance(part, str):
-                        cleaned.append({"type": "text", "text": part})
-                    else:
-                        cleaned.append(part)
-                mm["content"] = cleaned
-            messages.append(mm)
-        else:
-            messages.append(msg)
-    body["messages"] = messages
-
-    last_plain_system_idx = -1
-    for i, msg in enumerate(messages):
-        if not isinstance(msg, dict):
-            continue
-        if (msg.get("role") or "").lower() != "system":
-            break
-        if not msg.get("__dynamic__"):
-            last_plain_system_idx = i
-    if last_plain_system_idx >= 0:
-        target = messages[last_plain_system_idx]
-        content = target.get("content")
-        if isinstance(content, str):
-            target["content"] = [
-                {
-                    "type": "text",
-                    "text": content,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ]
-        elif isinstance(content, list):
-            last_text_idx = -1
-            converted = []
-            for idx, part in enumerate(content):
-                if isinstance(part, dict):
-                    pp = dict(part)
-                    if pp.get("type") == "text":
-                        last_text_idx = idx
-                    converted.append(pp)
-                elif isinstance(part, str):
-                    converted.append({"type": "text", "text": part})
-                    last_text_idx = idx
-                else:
-                    converted.append(part)
-            if last_text_idx >= 0 and isinstance(converted[last_text_idx], dict):
-                converted[last_text_idx]["cache_control"] = {"type": "ephemeral"}
-            target["content"] = converted
-    return body
+def _write_upstream_debug_snapshot(url: str, headers: dict, body: dict) -> None:
+    _write_debug_snapshot(
+        current_file=UPSTREAM_DEBUG_REQUEST_FILE,
+        prev_file=UPSTREAM_DEBUG_PREV_REQUEST_FILE,
+        diff_file=UPSTREAM_DEBUG_DIFF_FILE,
+        url=url,
+        headers=headers,
+        body=body,
+    )
 
 
 def _chat_url_to_models_url(chat_url: str) -> str:
@@ -1010,6 +939,7 @@ def chat_completions():
     if not req_model:
         return jsonify({"error": "缺少 model"}), 400
     headers = dict(request.headers) if request.headers else {}
+    _write_inbound_debug_snapshot(request.url, headers, body)
     window_id = _get_window_id_from_request(body)
     # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
     window_id = r2_store.normalize_window_id(window_id)
@@ -1060,7 +990,6 @@ def chat_completions():
         body = step_inject_forum_tools(body)
         body = step_inject_websearch_tools(body)
         body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
-    body = _apply_claude_prompt_caching(body)
     body = step_trim_messages_if_over_limit(body)
     # 清理动态 system 标记，避免上游 API 报未知字段错误
     for msg in body.get("messages") or []:
