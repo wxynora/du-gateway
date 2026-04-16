@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from difflib import unified_diff
+from urllib.parse import urlparse
 import requests
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
@@ -27,6 +28,8 @@ from config import (
     RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED,
     RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS,
     DATA_DIR,
+    SILICONFLOW_BASE_HOST,
+    SILICONFLOW_DEFAULT_MODEL,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -81,10 +84,44 @@ def _get_window_id_from_request(body: dict) -> str:
     return WINDOW_ID_DEFAULT
 
 
-# 注意：主聊天与语音通话都禁止再写“默认兜底模型”逻辑。
-# 没传 model 或拿不到当前可用模型时，直接报错，不要偷偷补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
 def _normalize_request_model(body: dict) -> dict:
-    return dict(body or {})
+    """
+    特例处理：
+    - 若当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST），且请求未显式传 model，
+      则自动补上 SILICONFLOW_DEFAULT_MODEL（仅限硅基流动专用默认）。
+    - 其他上游保持项目约定：未传 model 时直接报错，不做默认兜底。
+    """
+    body = dict(body or {})
+    # 已显式传入 model 时不做任何修改
+    m = body.get("model")
+    if isinstance(m, str) and m.strip():
+        return body
+
+    # 若未配置硅基流动默认模型，保持原行为
+    if not (SILICONFLOW_BASE_HOST and SILICONFLOW_DEFAULT_MODEL):
+        return body
+
+    # 获取当前 active 上游 URL；失败时退回环境变量中的首个 URL
+    url = ""
+    try:
+        from storage.upstream_store import get_active_item
+
+        active = get_active_item() or {}
+        url = (active.get("url") or "").strip()
+    except Exception:
+        url = ""
+    if not url:
+        if TARGET_AI_URL and TARGET_AI_URL.strip():
+            url = TARGET_AI_URL.strip()
+        elif TARGET_AI_URLS:
+            url = (TARGET_AI_URLS[0] or "").strip()
+
+    host = (urlparse(url).hostname or "").lower()
+    # 仅当当前上游指向硅基流动时，才为“未传 model”的请求自动补上默认 GLM
+    if host and host.endswith(SILICONFLOW_BASE_HOST):
+        body["model"] = SILICONFLOW_DEFAULT_MODEL
+
+    return body
 
 
 def _get_forward_targets(request_model: str = None):

@@ -518,3 +518,9 @@ _MCP_FORUM_POST_LIST_PATHS_STR = os.environ.get(
     "/posts,/api/posts,/forum/posts,/api/v1/posts",
 ).strip()
 MCP_FORUM_POST_LIST_PATHS = [x.strip() for x in _MCP_FORUM_POST_LIST_PATHS_STR.split(",") if x.strip()]
+
+# -------------------- 硅基流动（SiliconFlow）专用默认模型 --------------------
+# 仅当当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST）且请求未显式传 model 时，
+# 才会在聊天入口自动补上 SILICONFLOW_DEFAULT_MODEL。
+SILICONFLOW_BASE_HOST = os.environ.get("SILICONFLOW_BASE_HOST", "api.siliconflow.cn").strip().lower()
+SILICONFLOW_DEFAULT_MODEL = os.environ.get("SILICONFLOW_DEFAULT_MODEL", "").strip()
