@@ -1003,6 +1003,26 @@ def chat_completions():
         body = step_inject_websearch_tools(body)
         body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
     body = step_trim_messages_if_over_limit(body)
+    # 注入快照：每次请求后把完整 body 存一份，方便对比 token 变化
+    try:
+        _snap = {
+            "messages": body.get("messages") or [],
+            "tools": body.get("tools") or [],
+            "tool_choice": body.get("tool_choice"),
+        }
+        _snap_chars = sum(len(str(m.get("content") or "")) for m in _snap["messages"])
+        _snap_tool_chars = sum(len(json.dumps(t, ensure_ascii=False)) for t in _snap["tools"])
+        _snap["_meta"] = {
+            "messages_chars": _snap_chars,
+            "tools_chars": _snap_tool_chars,
+            "tools_count": len(_snap["tools"]),
+            "tool_names": [((t.get("function") or {}).get("name") or "") for t in _snap["tools"] if isinstance(t, dict)],
+        }
+        (DATA_DIR / "last_inject_snapshot.json").write_text(
+            json.dumps(_snap, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
     # 清理动态 system 标记，避免上游 API 报未知字段错误
     for msg in body.get("messages") or []:
         msg.pop("__dynamic__", None)
