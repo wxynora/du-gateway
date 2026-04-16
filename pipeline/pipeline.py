@@ -1572,11 +1572,6 @@ def step_inject_notion_tools(body: dict) -> dict:
     body = copy.deepcopy(body)
     body["tools"] = tools
     body["tool_choice"] = "auto"
-    from config import NOTION_CORE_CACHE_DATABASE_ID
-    if NOTION_CORE_CACHE_DATABASE_ID:
-        from services.gateway_tools import SYNC_REMINDER_FOR_WIFE
-        inject = "\n\n【核心缓存同步】" + SYNC_REMINDER_FOR_WIFE
-        body = _append_to_static_system(body, inject)
     return body
 
 
