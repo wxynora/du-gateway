@@ -512,6 +512,8 @@ function isPrivateMessageEvent(j) {
 
 async function handleEvent(j) {
   if (!isPrivateMessageEvent(j)) return;
+  // 过滤 self-message：NapCatQQ reportSelfMessage=true 时 bot 自己发的消息也会推回来
+  if (j?.sub_type === "self" || Number(j?.sender?.user_id || 0) === Number(j?.self_id || 0)) return;
   const userId = Number(j?.user_id || 0);
   if (!userId) return;
   const content = extractUserContentFromMessage(j?.message || j?.raw_message || "");
