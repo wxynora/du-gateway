@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from config import PC_COMMAND_TOKEN
 from storage import r2_store
+from services.pc_command_handler import process_pcmd_in_assistant_text
 
 bp = Blueprint("pc_command", __name__)
 
@@ -64,3 +65,20 @@ def done_pc_commands():
         return jsonify({"ok": False, "error": "doneIds 必须是数组"}), 400
     removed = r2_store.mark_pc_commands_done(done_ids)
     return jsonify({"ok": True, "removedCount": int(removed)})
+
+
+@bp.route("/api/pc_command/assistant", methods=["POST", "OPTIONS"])
+def process_pc_command_from_assistant():
+    if request.method == "OPTIONS":
+        return "", 204
+    token_err = _require_pc_token()
+    if token_err:
+        return token_err
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "需要 application/json"}), 400
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "JSON 无效"}), 400
+    text = str(body.get("text") or "")
+    visible, queued = process_pcmd_in_assistant_text(text)
+    return jsonify({"ok": True, "visible_text": visible, "queued": bool(queued)})

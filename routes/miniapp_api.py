@@ -2135,7 +2135,6 @@ def miniapp_get_upstreams():
         {
             "active": int(data.get("active") or 0),
             "items": items,
-            "anthropic_prompt_caching_enabled": bool(data.get("anthropic_prompt_caching_enabled", False)),
         }
     )
 
@@ -2153,7 +2152,6 @@ def miniapp_put_upstreams():
         {
             "ok": ok,
             "active": int(saved.get("active") or 0),
-            "anthropic_prompt_caching_enabled": bool(saved.get("anthropic_prompt_caching_enabled", False)),
         }
     )
 
@@ -2168,21 +2166,6 @@ def miniapp_set_active_upstream():
         {
             "ok": ok,
             "active": idx,
-            "anthropic_prompt_caching_enabled": bool(saved.get("anthropic_prompt_caching_enabled", False)),
-        }
-    )
-
-
-@bp.route("/upstreams/prompt-caching", methods=["PUT"])
-def miniapp_set_upstream_prompt_caching():
-    data = request.get_json(silent=True) or {}
-    enabled = bool(data.get("enabled", False))
-    ok = upstream_store.set_anthropic_prompt_caching_enabled(enabled)
-    saved = upstream_store.load_upstreams()
-    return jsonify(
-        {
-            "ok": ok,
-            "anthropic_prompt_caching_enabled": bool(saved.get("anthropic_prompt_caching_enabled", False)),
         }
     )
 

@@ -30,7 +30,7 @@ def _default_payload():
                 continue
             items.append({"name": f"upstream{i+1}", "url": u, "api_key": k or ""})
             seen.add(u)
-    return {"active": 0, "items": items, "anthropic_prompt_caching_enabled": False}
+    return {"active": 0, "items": items}
 
 
 def load_upstreams() -> dict:
@@ -41,18 +41,17 @@ def load_upstreams() -> dict:
     payload = _default_payload()
     items = payload.get("items") or []
     if not UPSTREAMS_FILE.exists():
-        return {"active": 0, "items": items, "anthropic_prompt_caching_enabled": False}
+        return {"active": 0, "items": items}
     try:
         with open(UPSTREAMS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f) or {}
     except Exception:
-        return {"active": 0, "items": items, "anthropic_prompt_caching_enabled": False}
+        return {"active": 0, "items": items}
 
     active = int(data.get("active") or 0)
     if active < 0 or active >= len(items):
         active = 0
-    enabled = bool(data.get("anthropic_prompt_caching_enabled", False))
-    return {"active": active, "items": items, "anthropic_prompt_caching_enabled": enabled}
+    return {"active": active, "items": items}
 
 
 def save_upstreams(payload: dict) -> bool:
@@ -63,7 +62,6 @@ def save_upstreams(payload: dict) -> bool:
             json.dump(
                 {
                     "active": int(payload.get("active") or 0),
-                    "anthropic_prompt_caching_enabled": bool(payload.get("anthropic_prompt_caching_enabled", False)),
                 },
                 f,
                 ensure_ascii=False,
@@ -80,13 +78,6 @@ def set_active(index: int) -> bool:
     if index < 0 or index >= len(items):
         return False
     data["active"] = int(index)
-    data["anthropic_prompt_caching_enabled"] = False
-    return save_upstreams(data)
-
-
-def set_anthropic_prompt_caching_enabled(enabled: bool) -> bool:
-    data = load_upstreams()
-    data["anthropic_prompt_caching_enabled"] = bool(enabled)
     return save_upstreams(data)
 
 

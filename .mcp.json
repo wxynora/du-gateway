@@ -4,8 +4,8 @@
       "command": "node",
       "args": ["/Users/doraemon/Downloads/du-gateway/mcp_server/du_memory.js"],
       "env": {
-        "DU_GATEWAY_BASE_URL": "http://localhost:5000",
-        "DU_GATEWAY_TOKEN": ""
+        "DU_GATEWAY_BASE_URL": "https://duxy-home.com",
+        "DU_GATEWAY_TOKEN": "hjadcahnvcpampFUJjNOhcdiaocja09P"
       }
     }
   }

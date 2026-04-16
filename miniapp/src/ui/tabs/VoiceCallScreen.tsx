@@ -75,6 +75,9 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const mimeTypeRef = useRef("");
   const isClosingRef = useRef(false);
   const actionBusyRef = useRef(false);
+  const previewBusyRef = useRef(false);
+  const previewTextRef = useRef("");
+  const previewStampRef = useRef(0);
 
   const avatarSrc = useMemo(() => {
     if (!config.useAvatarImage || config.avatarVersion <= 0) return "";
@@ -141,6 +144,9 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       streamRef.current = null;
     }
     actionBusyRef.current = false;
+    previewBusyRef.current = false;
+    previewTextRef.current = "";
+    previewStampRef.current = 0;
   }
 
   async function ensureStream(): Promise<MediaStream> {
@@ -171,11 +177,16 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       const recorder = mimeTypeRef.current ? new MediaRecorder(stream, { mimeType: mimeTypeRef.current }) : new MediaRecorder(stream);
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) chunksRef.current.push(event.data);
+        if (event.data && event.data.size > 0) {
+          chunksRef.current.push(event.data);
+          void triggerPreview(mimeTypeRef.current || recorder.mimeType || "audio/webm");
+        }
       };
       recorder.onstop = () => {
       };
-      recorder.start();
+      previewTextRef.current = "";
+      previewStampRef.current = 0;
+      recorder.start(1200);
       actionBusyRef.current = false;
       setStatus("recording");
       setStatusText("正在听你说话...");
@@ -194,6 +205,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
     setStatusText("识别中...");
     recorder.stop();
     const mimeType = mimeTypeRef.current || recorder.mimeType || "audio/webm";
+    previewBusyRef.current = false;
     const blob = await new Promise<Blob>((resolve) => {
       const finalize = () => {
         recorder.removeEventListener("stop", finalize);
@@ -220,6 +232,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       form.append("mime_type", mimeType);
       form.append("call_id", callId);
       form.append("call_started_at", callStartedAtIso);
+      if (previewTextRef.current.trim()) form.append("user_text_override", previewTextRef.current.trim());
       const resp = await apiFetch("/miniapp-api/voice-call", { method: "POST", body: form });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
@@ -236,6 +249,33 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       setStatus("error");
       setStatusText(e?.message || "语音请求失败");
       toast(e?.message || "语音请求失败");
+    }
+  }
+
+  async function triggerPreview(mimeType: string) {
+    if (previewBusyRef.current || status !== "recording") return;
+    if (chunksRef.current.length < 2) return;
+    const now = Date.now();
+    if (now - previewStampRef.current < 2200) return;
+    previewBusyRef.current = true;
+    previewStampRef.current = now;
+    try {
+      const blob = new Blob(chunksRef.current, { type: mimeType || "audio/webm" });
+      if (blob.size <= 0) return;
+      const form = new FormData();
+      const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : mimeType.includes("mpeg") ? "mp3" : "webm";
+      form.append("audio", blob, `voice-preview.${ext}`);
+      form.append("mime_type", mimeType);
+      const resp = await apiFetch("/miniapp-api/voice-call-preview", { method: "POST", body: form });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.ok) return;
+      const text = String(data.text || "").trim();
+      if (!text) return;
+      previewTextRef.current = text;
+      setStatusText(`你在说：${text}`);
+    } catch {
+    } finally {
+      previewBusyRef.current = false;
     }
   }
 

@@ -41,8 +41,6 @@ from memory_vector.cosine import cosine
 # ---------------------------------------------------------------------------
 
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
-
-
 def _ensure_dynamic_system(body: dict) -> dict:
     """
     确保 messages 里存在一条专用的「动态 system」消息。
@@ -1545,35 +1543,14 @@ def step_inject_notion_tools(body: dict) -> dict:
         return body
     from services.notion_tools import get_notion_tools_for_inject
 
-    messages = body.get("messages") or []
-    last_user_text = ""
-    for m in reversed(messages):
-        if (m.get("role") or "").lower() != "user":
-            continue
-        content = m.get("content")
-        if isinstance(content, str):
-            last_user_text = content
-        elif isinstance(content, list):
-            last_user_text = " ".join(
-                c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
-            )
-        break
-    q = (last_user_text or "").lower()
-    expanded_keywords = (
-        "notion", "搜索", "检索", "查一下", "页面", "正文", "read_page",
-        "核心缓存", "待审", "同步", "sync", "小本本", "append",
-        "日程", "schedule", "天气", "黄历",
-    )
-    mode = "expanded" if any(k in q for k in expanded_keywords) else "daily"
-
-    tools = get_notion_tools_for_inject(mode=mode)
+    tools = get_notion_tools_for_inject(mode="expanded")
     if not tools:
         return body
     body = copy.deepcopy(body)
     body["tools"] = tools
     body["tool_choice"] = "auto"
     from config import NOTION_CORE_CACHE_DATABASE_ID
-    if NOTION_CORE_CACHE_DATABASE_ID and mode == "expanded":
+    if NOTION_CORE_CACHE_DATABASE_ID:
         from services.gateway_tools import SYNC_REMINDER_FOR_WIFE
         inject = "\n\n【核心缓存同步】" + SYNC_REMINDER_FOR_WIFE
         body = _append_to_static_system(body, inject)
@@ -1668,14 +1645,11 @@ def step_inject_websearch_tools(body: dict) -> dict:
 def step_inject_html_preview_tool(body: dict, user_agent: str = "") -> dict:
     """
     注入 publish_html_preview：渡可把 HTML 发布为临时链接（与 /html-preview/ 共用存储）。
-    user_agent：请求 User-Agent；RikkaHub 默认跳过注入（见 HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA）。
+    user_agent 参数保留仅为兼容旧调用；工具集合不再按入口变化。
     """
-    from config import HTML_PREVIEW_TOOL_ENABLED, HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA
+    from config import HTML_PREVIEW_TOOL_ENABLED
 
     if not HTML_PREVIEW_TOOL_ENABLED:
-        return body
-    if HTML_PREVIEW_TOOL_SKIP_RIKKAHUB_UA and "rikkahub" in (user_agent or "").lower():
-        logger.info("跳过 HTML 预览工具注入（RikkaHub UA）")
         return body
 
     from services.html_preview_tools import get_html_preview_tools_for_inject

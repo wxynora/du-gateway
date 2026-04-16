@@ -4,7 +4,7 @@ import { Btn, Modal } from "../components";
 import { useToast } from "../toast";
 
 type UpstreamItem = { name: string; url: string };
-type UpstreamsResp = { active: number; items: UpstreamItem[]; anthropic_prompt_caching_enabled?: boolean };
+type UpstreamsResp = { active: number; items: UpstreamItem[] };
 type ProbeItem = {
   index: number;
   isActive: boolean;
@@ -26,15 +26,12 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
   const [probingAll, setProbingAll] = useState(false);
   const [probingIndex, setProbingIndex] = useState<number | null>(null);
   const [probes, setProbes] = useState<Record<number, ProbeItem>>({});
-  const [anthropicPromptCachingEnabled, setAnthropicPromptCachingEnabled] = useState(false);
-  const [togglingPromptCaching, setTogglingPromptCaching] = useState(false);
 
   async function load() {
     try {
       const j = await apiJson<UpstreamsResp>("/miniapp-api/upstreams");
       setActive(Number(j.active || 0));
       setItems(j.items || []);
-      setAnthropicPromptCachingEnabled(!!j.anthropic_prompt_caching_enabled);
     } catch (e: any) {
       toast(`加载失败：${e?.message || e}`);
     }
@@ -59,24 +56,6 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
       await probeOne(nextActive);
     } catch (e: any) {
       toast(`保存失败：${e?.message || e}`);
-    }
-  }
-
-  async function togglePromptCaching(nextEnabled: boolean) {
-    try {
-      setTogglingPromptCaching(true);
-      const r = await apiJson<{ ok?: boolean; error?: string; anthropic_prompt_caching_enabled?: boolean }>("/miniapp-api/upstreams/prompt-caching", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: nextEnabled }),
-      });
-      if (!r.ok) throw new Error(r?.error || "保存失败");
-      setAnthropicPromptCachingEnabled(!!r.anthropic_prompt_caching_enabled);
-      toast(nextEnabled ? "Claude 缓存已开启" : "Claude 缓存已关闭");
-    } catch (e: any) {
-      toast(`保存失败：${e?.message || e}`);
-    } finally {
-      setTogglingPromptCaching(false);
     }
   }
 
@@ -133,22 +112,6 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
         <div className="flex justify-end">
           <Btn kind="blue" onClick={probeAll} disabled={probingAll || !items.length}>
             {probingAll ? "探活中..." : "一键探活"}
-          </Btn>
-        </div>
-
-        <div className="neo-panel p-3 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium text-cream-text">Claude 缓存</div>
-            <div className="mt-1 text-xs text-cream-muted">
-              只对 Claude 请求生效。切换上游后会自动关闭，需要你手动再开。
-            </div>
-          </div>
-          <Btn
-            kind={anthropicPromptCachingEnabled ? "blue" : "pink"}
-            onClick={() => void togglePromptCaching(!anthropicPromptCachingEnabled)}
-            disabled={togglingPromptCaching || !items.length}
-          >
-            {togglingPromptCaching ? "保存中..." : anthropicPromptCachingEnabled ? "已开启" : "未开启"}
           </Btn>
         </div>
 
