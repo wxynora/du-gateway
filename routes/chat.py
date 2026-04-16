@@ -827,7 +827,11 @@ def _append_tool_results_and_continue(body: dict, assistant_message: dict, tool_
             args = json.loads(fn.get("arguments") or "{}")
         except Exception:
             args = {}
-        result = execute_tool(name, args)
+        try:
+            result = execute_tool(name, args)
+        except Exception as _tool_exc:
+            logger.warning("execute_tool 异常 name=%s error=%s", name, _tool_exc)
+            result = json.dumps({"ok": False, "error": f"工具执行异常: {_tool_exc}"}, ensure_ascii=False)
         messages.append({"role": "tool", "tool_call_id": tid, "content": result})
     body["messages"] = messages
     return body

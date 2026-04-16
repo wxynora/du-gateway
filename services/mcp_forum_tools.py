@@ -471,7 +471,17 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
     timeout = max(1, min(timeout, MCP_HTTP_MAX_TIMEOUT_SECONDS))
     retries = max(0, int(MCP_HTTP_RETRIES))
     max_chars = max(200, int(MCP_HTTP_MAX_RESPONSE_CHARS))
-    safe_headers = {k: v for k, v in (headers or {}).items() if str(k).lower() not in ("x-mcp-token",)}
+    # 过滤敏感头 + 过滤 key/value 含非 ASCII 字符的头（HTTP 规范要求 header 必须 latin-1 可编码）
+    def _is_ascii_safe(s) -> bool:
+        try:
+            str(s).encode("latin-1")
+            return True
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return False
+    safe_headers = {
+        k: v for k, v in (headers or {}).items()
+        if str(k).lower() not in ("x-mcp-token",) and _is_ascii_safe(k) and _is_ascii_safe(v)
+    }
 
     last_error = ""
     requested_url = url
@@ -539,7 +549,7 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
                     out["status"],
                 )
             return out, 200
-        except requests.RequestException as e:
+        except (requests.RequestException, UnicodeEncodeError, ValueError, Exception) as e:
             last_error = str(e)
             if attempt >= retries:
                 logger.warning("forum_http 调用失败 method=%s url=%s error=%s", method, url[:120], last_error)
