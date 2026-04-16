@@ -266,12 +266,13 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
         return None
     prompt = build_summary_prompt(current_summary, recent_4_rounds)
+    budget = memory_summary_budget()
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         # 保持“有上限”策略，避免单次总结无限放大；只把预算比例从 0.35 提到 0.45。
-        "max_tokens": min(1800, max(1000, int(memory_summary_budget() * 0.45))),
+        "max_tokens": min(4096, max(1500, budget)),
     }
     try:
         r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
@@ -286,7 +287,6 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
         # 强制兜底：若 DS 没写时间段，这里补一行
         summary = _ensure_summary_has_bucket(summary, _latest_bucket_from_rounds(recent_4_rounds))
         # 固定窗口：summary 始终受注入预算约束，按结构从最早内容开始一点点削
-        budget = memory_summary_budget()
         return _trim_summary_to_budget(summary, budget)
     except Exception as e:
         logger.error("DeepSeek 总结失败 error=%s", e, exc_info=True)
