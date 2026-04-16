@@ -17,7 +17,7 @@ NOTION_EXTENDED_GROUPS: Dict[str, Dict] = {
         "names": frozenset({"notion_search", "notion_read_page_body", "notion_append_to_page"}),
     },
     "core_cache": {
-        "keywords": ("核心缓存", "待审", "缓存表", "缓存"),
+        "keywords": ("核心缓存", "缓存层", "整理缓存", "缓存表", "core cache"),
         "names": frozenset({"notion_core_cache_list", "notion_core_cache_update"}),
     },
 }
