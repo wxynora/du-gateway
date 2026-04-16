@@ -428,6 +428,7 @@ async function flushUser(userId) {
     pending.delete(userId);
     return;
   }
+  try {
     const windowId = resolveSharedWindowId();
     console.log(`[qq-onebot] flush user=${userId} window_id=${windowId} preview=${userContentPreview(merged)}`);
     let reply = "";
