@@ -412,27 +412,22 @@ async function sendQqRecord(userId, audioBytes) {
 const pending = new Map();
 const dedupe = new Set();
 const dedupeMax = 2000;
-const inFlightUsers = new Set();
 const recentInboundByUser = new Map();
 const inboundDedupeWindowMs = Math.max(2000, envInt("QQ_INBOUND_DEDUPE_WINDOW_MS", 12000));
 
 async function flushUser(userId) {
-  if (inFlightUsers.has(userId)) {
-    return;
-  }
   const it = pending.get(userId);
   if (!it) return;
-  inFlightUsers.add(userId);
-  try {
-    if (it.timer) {
-      clearTimeout(it.timer);
-      it.timer = null;
-    }
-    const merged = mergeUserContents(it.parts || []);
-    if (!merged) {
-      pending.delete(userId);
-      return;
-    }
+  if (it.timer) {
+    clearTimeout(it.timer);
+    it.timer = null;
+  }
+  const merged = mergeUserContents(it.parts || []);
+  // 无内容可发：直接清理
+  if (!merged) {
+    pending.delete(userId);
+    return;
+  }
     const windowId = resolveSharedWindowId();
     console.log(`[qq-onebot] flush user=${userId} window_id=${windowId} preview=${userContentPreview(merged)}`);
     let reply = "";
@@ -478,25 +473,19 @@ async function flushUser(userId) {
         console.log(`[qq-onebot] 发语音失败：${String(e?.message || e)}`);
       }
     }
-    pending.delete(userId);
   } finally {
-    inFlightUsers.delete(userId);
+    // 本轮 flush 结束后，无论成功与否，都视为这一轮已经消费完成
+    pending.delete(userId);
   }
 }
 
 function scheduleUser(userId, text) {
   const idleSeconds = Math.max(1, envInt("QQ_INPUT_IDLE_SECONDS", 15));
-  const immediateChars = Math.max(20, envInt("QQ_INPUT_IMMEDIATE_CHARS", 200));
   const cur = pending.get(userId) || { parts: [], timer: null };
   cur.parts.push(text);
   if (cur.timer) clearTimeout(cur.timer);
   cur.timer = setTimeout(() => flushUser(userId), idleSeconds * 1000);
   pending.set(userId, cur);
-  const mergedLen = userContentPreview(mergeUserContents(cur.parts || []), 10000).length;
-  const currentLen = userContentPreview(text, 10000).length;
-  if (currentLen >= immediateChars || mergedLen >= immediateChars) {
-    void flushUser(userId);
-  }
 }
 
 function verifyIncoming(req) {
