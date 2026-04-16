@@ -410,19 +410,19 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
 
             merged.sort(key=lambda x: str(x.get("timestamp") or ""))
             rounds = merged[-4:]
-            inject_label = "以下为注入的 Telegram 近期对话（私聊 Last4 轮）"
+            inject_label = "最近的对话"
             if wenyou_active and group_rounds:
-                inject_label = "以下为注入的 Telegram 近期对话（私聊+群聊 Last4 轮，文游进行中）"
+                inject_label = "最近的对话（文游进行中）"
     else:
         if not r2_store.has_window_history(window_id):
             rounds = r2_store.get_latest_4_rounds_global()
-            inject_label = "以下为注入的近期对话上下文（来自其他窗口）"
+            inject_label = "最近的对话"
         else:
             # 已有历史且当前请求消息很少（如 proactive 只发 1 条 user）→ 注入本窗口最近 4 轮
             # force_last4=True 时即使 messages 较多也强制注入。
             if force_last4 or len(messages) <= 2:
                 rounds = r2_store.get_conversation_rounds(window_id, last_n=4)
-                inject_label = "以下为注入的本窗口近期对话（Last4 轮）"
+                inject_label = "最近的对话"
 
     if not rounds:
         return body
@@ -454,7 +454,7 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
         context = _rounds_to_context_text(rounds)
     if not context:
         return body
-    inject = f"\n\n【{inject_label}】\n{context}\n【以上为注入上下文】"
+    inject = f"\n\n【{inject_label}】\n{context}\n【以上为最近的对话】"
     return _append_to_dynamic_system(body, inject)
 
 
@@ -568,7 +568,7 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
             except Exception:
                 summary = truncate_to_tokens(summary, budget)
             logger.debug("summary trimmed to %s tokens", budget)
-        inject = f"{head}\n\n【窗口记忆总结】\n{summary.strip()}\n【以上为窗口记忆】"
+        inject = f"{head}\n\n【近期记忆】\n{summary.strip()}\n【以上为近期记忆】"
     else:
         inject = head
     body = _append_to_dynamic_system(body, inject)
