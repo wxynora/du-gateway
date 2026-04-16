@@ -796,12 +796,15 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
     # 拉取失败时再用本地解析逻辑兜底。
     model = _fetch_gateway_first_model() or _resolve_chat_model()
 
-    with _CTX_LOCK:
-        history = list(_CONTEXT_MESSAGES.get(user_id) or [])
-        if not history:
-            history = _bootstrap_context_from_r2(window_id)
-            if history:
-                _CONTEXT_MESSAGES[user_id] = list(history)
+    # 始终从 R2 取最新历史，确保 QQ / 微信等其他入口的对话也能衔接进来
+    # 若 R2 无数据（首次对话 / R2 故障）则降级使用内存缓存
+    history = _bootstrap_context_from_r2(window_id)
+    if history:
+        with _CTX_LOCK:
+            _CONTEXT_MESSAGES[user_id] = list(history)
+    else:
+        with _CTX_LOCK:
+            history = list(_CONTEXT_MESSAGES.get(user_id) or [])
     history = _trim_context_messages(history)
     # 上游波动时先缓存用户输入；下一次成功时一并带上，避免“我发了但丢轮次/Last4 断片”
     with _PENDING_LOCK:
