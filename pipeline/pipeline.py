@@ -1502,7 +1502,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             "scores": injected_scores,
         }
     )
-    inject = "\n\n【动态记忆】\n" + "\n".join(lines) + "\n【以上为动态记忆】"
+    inject = "\n\n听了老婆的话，我想起来了一些之前的事——\n" + "\n".join(lines) + "\n【以上为动态记忆】"
     body = _append_to_dynamic_system(body, inject)
     return body
 
