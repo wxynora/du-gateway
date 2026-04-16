@@ -412,65 +412,76 @@ async function sendQqRecord(userId, audioBytes) {
 const pending = new Map();
 const dedupe = new Set();
 const dedupeMax = 2000;
+const inFlightUsers = new Set();
+const recentInboundByUser = new Map();
+const inboundDedupeWindowMs = Math.max(2000, envInt("QQ_INBOUND_DEDUPE_WINDOW_MS", 12000));
 
 async function flushUser(userId) {
+  if (inFlightUsers.has(userId)) {
+    return;
+  }
   const it = pending.get(userId);
   if (!it) return;
-  if (it.timer) {
-    clearTimeout(it.timer);
-    it.timer = null;
-  }
-  const merged = mergeUserContents(it.parts || []);
-  if (!merged) {
-    pending.delete(userId);
-    return;
-  }
-  const windowId = resolveSharedWindowId();
-  console.log(`[qq-onebot] flush user=${userId} window_id=${windowId} preview=${userContentPreview(merged)}`);
-  let reply = "";
+  inFlightUsers.add(userId);
   try {
-    reply = await callGatewayChat(windowId, merged);
-  } catch (e) {
-    console.log(`[qq-onebot] 调网关失败：${String(e?.message || e)}`);
-    pending.delete(userId);
-    return;
-  }
-  const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
-  const maxReplyTotalChars = Math.max(0, envInt("QQ_MAX_REPLY_TOTAL_CHARS", 0));
-  const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
-  const { cleanText: noVoiceText, voiceText } = extractVoiceTag(reply);
-  const pcmdHandled = await processPcmdViaGateway(noVoiceText);
-  const { cleanText: replyClean, tag: stickerTag } = await extractStickerTag(pcmdHandled.visibleText);
-  const stickerUrl = await resolveStickerUrl(stickerTag);
-  const chunks = splitReplyByNewlineAndLen(replyClean, outChunkChars, maxReplyTotalChars);
-  for (const part of chunks) {
-    try {
-      await sendQqText(userId, part);
-    } catch (e) {
-      console.log(`[qq-onebot] 发消息失败：${String(e?.message || e)}`);
-      break;
+    if (it.timer) {
+      clearTimeout(it.timer);
+      it.timer = null;
     }
-    if (sendDelayMs > 0) await sleep(sendDelayMs);
-  }
-  if (stickerUrl) {
-    try {
-      await sendQqImage(userId, stickerUrl);
-    } catch (e) {
-      console.log(`[qq-onebot] 发表情包失败：${String(e?.message || e)}`);
+    const merged = mergeUserContents(it.parts || []);
+    if (!merged) {
+      pending.delete(userId);
+      return;
     }
-    if (sendDelayMs > 0) await sleep(sendDelayMs);
-  }
-  if (voiceText) {
+    const windowId = resolveSharedWindowId();
+    console.log(`[qq-onebot] flush user=${userId} window_id=${windowId} preview=${userContentPreview(merged)}`);
+    let reply = "";
     try {
-      const audioBytes = await callGatewayTts(voiceText);
-      if (audioBytes?.length) {
-        await sendQqRecord(userId, audioBytes);
+      reply = await callGatewayChat(windowId, merged);
+    } catch (e) {
+      console.log(`[qq-onebot] 调网关失败：${String(e?.message || e)}`);
+      pending.delete(userId);
+      return;
+    }
+    const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
+    const maxReplyTotalChars = Math.max(0, envInt("QQ_MAX_REPLY_TOTAL_CHARS", 0));
+    const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
+    const { cleanText: noVoiceText, voiceText } = extractVoiceTag(reply);
+    const pcmdHandled = await processPcmdViaGateway(noVoiceText);
+    const { cleanText: replyClean, tag: stickerTag } = await extractStickerTag(pcmdHandled.visibleText);
+    const stickerUrl = await resolveStickerUrl(stickerTag);
+    const chunks = splitReplyByNewlineAndLen(replyClean, outChunkChars, maxReplyTotalChars);
+    for (const part of chunks) {
+      try {
+        await sendQqText(userId, part);
+      } catch (e) {
+        console.log(`[qq-onebot] 发消息失败：${String(e?.message || e)}`);
+        break;
       }
-    } catch (e) {
-      console.log(`[qq-onebot] 发语音失败：${String(e?.message || e)}`);
+      if (sendDelayMs > 0) await sleep(sendDelayMs);
     }
+    if (stickerUrl) {
+      try {
+        await sendQqImage(userId, stickerUrl);
+      } catch (e) {
+        console.log(`[qq-onebot] 发表情包失败：${String(e?.message || e)}`);
+      }
+      if (sendDelayMs > 0) await sleep(sendDelayMs);
+    }
+    if (voiceText) {
+      try {
+        const audioBytes = await callGatewayTts(voiceText);
+        if (audioBytes?.length) {
+          await sendQqRecord(userId, audioBytes);
+        }
+      } catch (e) {
+        console.log(`[qq-onebot] 发语音失败：${String(e?.message || e)}`);
+      }
+    }
+    pending.delete(userId);
+  } finally {
+    inFlightUsers.delete(userId);
   }
-  pending.delete(userId);
 }
 
 function scheduleUser(userId, text) {
@@ -518,6 +529,14 @@ async function handleEvent(j) {
   if (!userId) return;
   const content = extractUserContentFromMessage(j?.message || j?.raw_message || "");
   if (!content) return;
+  const now = Date.now();
+  const fp = `${userContentPreview(content, 200)}|${String(j?.raw_message || "")}`.slice(0, 600);
+  const recent = recentInboundByUser.get(userId);
+  if (recent && recent.fp === fp && now - Number(recent.ts || 0) <= inboundDedupeWindowMs) {
+    return;
+  }
+  recentInboundByUser.set(userId, { fp, ts: now });
+  if (recentInboundByUser.size > dedupeMax) recentInboundByUser.clear();
   const dedupeKey = `${userId}:${String(j?.message_id || "")}:${userContentPreview(content, 200)}`;
   if (dedupe.has(dedupeKey)) return;
   dedupe.add(dedupeKey);
