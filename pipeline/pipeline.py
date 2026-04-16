@@ -1617,7 +1617,13 @@ def step_inject_forum_tools(body: dict) -> dict:
         "\n\n老婆拖延的时候，你可以直接帮她创建闹钟提醒。"
         "也可以用 schedule_list / schedule_enable / schedule_disable / schedule_delete 来管理提醒。"
     )
-    body = _append_to_static_system(body, schedule_hint)
+    forum_hint = (
+        "\n\n【论坛工具省费规则】"
+        "若需要多个论坛信息，请在同一轮并行调用所需工具后再统一总结；"
+        "不要串行试探式一轮只调一个工具。"
+        "若已有同参数工具结果且用户未要求刷新，不要重复调用。"
+    )
+    body = _append_to_static_system(body, schedule_hint + forum_hint)
     return body
 
 

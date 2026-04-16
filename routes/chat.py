@@ -23,6 +23,7 @@ from config import (
     STREAM_TIMEOUT_SECONDS,
     STREAM_SSE_HEARTBEAT_SECONDS,
     STREAM_SSE_FLUSH_MAX_MS,
+    TOOL_MAX_ROUNDS,
     RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED,
     RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS,
     DATA_DIR,
@@ -511,9 +512,9 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
 
     # 有 tools：缓冲 + 工具循环，最后把最后一轮流发给客户端
     current_body = body
-    max_tool_rounds = 5
+    max_tool_rounds = TOOL_MAX_ROUNDS
     try:
-        for _ in range(max_tool_rounds):
+        for round_idx in range(max_tool_rounds):
             chunks = []
             for chunk in _stream_forward_to_ai(current_body, headers):
                 chunks.append(chunk)
@@ -523,6 +524,16 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             parsed = _parse_stream_to_message(chunks)
             tool_calls = parsed.get("tool_calls")
             if tool_calls and isinstance(tool_calls, list):
+                if round_idx + 1 >= max_tool_rounds:
+                    logger.warning(
+                        "工具调用达到轮数上限(%s)，停止继续请求上游以控制费用；当前工具数=%s",
+                        max_tool_rounds,
+                        len(tool_calls),
+                    )
+                    cap_hint = "（已达到工具调用轮数上限，为控制费用已停止继续自动调工具。你可以让我基于现有结果继续回答。）"
+                    yield _sse_delta_chunk_bytes(cap_hint)
+                    content_parts.append(cap_hint)
+                    break
                 from services.notion_tools import execute_tool
                 msg = {"content": parsed.get("content") or None, "tool_calls": tool_calls}
                 if parsed.get("reasoning"):
@@ -1051,7 +1062,7 @@ def chat_completions():
     # 收集中间轮次 reasoning 供 MiniApp 思维链面板使用，但不回填到返回给客户端的 resp_json，
     # 避免客户端（RikkaHub 等）把 reasoning 渲染成对话内容。
     accumulated_reasoning_parts: list[str] = []
-    max_tool_rounds = 5
+    max_tool_rounds = TOOL_MAX_ROUNDS
     for _ in range(max_tool_rounds - 1):
         msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
         if isinstance(msg, dict):
