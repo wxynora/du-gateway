@@ -1534,16 +1534,39 @@ def step_inject_du_notebook(body: dict) -> dict:
 
 def step_inject_notion_tools(body: dict) -> dict:
     """
-    当 NOTION_TOOLS_ENABLED=1 时，向 body 注入 Notion 工具（notion_search、notion_append_to_page 等），
-    渡可主动调用 Notion API 进行检索与写入。
+    当 NOTION_TOOLS_ENABLED=1 时，向 body 注入 Notion 工具。
+    基础工具（日记、小本本、记事本、气泡、搜索记忆、天气黄历等）常驻注入；
+    扩展工具（日程、同步、核心缓存、notion 检索/读页/追加页面）按最近用户消息关键词触发。
     """
     from config import NOTION_TOOLS_ENABLED
 
     if not NOTION_TOOLS_ENABLED:
         return body
-    from services.notion_tools import get_notion_tools_for_inject
+    from services.notion_tools import NOTION_EXTENDED_GROUPS, get_notion_tools_for_inject
 
-    tools = get_notion_tools_for_inject(mode="expanded")
+    # 提取最近一条用户消息文本，用于关键词匹配
+    messages = body.get("messages") or []
+    last_user_text = ""
+    for m in reversed(messages):
+        if (m.get("role") or "").lower() != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            last_user_text = content
+        elif isinstance(content, list):
+            last_user_text = " ".join(
+                c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
+            )
+        break
+    q = (last_user_text or "").lower()
+
+    # 判断哪些扩展组需要激活
+    active_groups: set = set()
+    for g_name, g in NOTION_EXTENDED_GROUPS.items():
+        if any(kw in q for kw in g["keywords"]):
+            active_groups.add(g_name)
+
+    tools = get_notion_tools_for_inject(mode="expanded", active_groups=active_groups)
     if not tools:
         return body
     body = copy.deepcopy(body)

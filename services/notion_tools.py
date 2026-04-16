@@ -1,6 +1,31 @@
 # 渡通过工具调用 Notion API：检索、读正文、待审表编辑、交换日记、日程本（NOTION_TOOLS_ENABLED=1）
 import json
-from typing import Any, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Set
+
+# 关键词触发的扩展工具分组（不常驻，按用户消息关键词决定是否注入）
+NOTION_EXTENDED_GROUPS: Dict[str, Dict] = {
+    "schedule": {
+        "keywords": ("日程", "待办", "约会", "纪念日", "schedule", "安排", "行程"),
+        "names": frozenset({"notion_schedule_list", "notion_schedule_create", "notion_schedule_update"}),
+    },
+    "sync": {
+        "keywords": ("同步", "待审表", "推到notion", "推到 notion", "同步回", "待审"),
+        "names": frozenset({"sync_core_cache_to_notion", "sync_core_cache_from_notion"}),
+    },
+    "notion_read": {
+        "keywords": ("搜索", "检索", "查一下", "找一下", "notion里", "notion 里", "页面", "正文", "read_page", "追加到"),
+        "names": frozenset({"notion_search", "notion_read_page_body", "notion_append_to_page"}),
+    },
+    "core_cache": {
+        "keywords": ("核心缓存", "待审", "缓存表", "缓存"),
+        "names": frozenset({"notion_core_cache_list", "notion_core_cache_update"}),
+    },
+}
+
+# 所有扩展工具名（用于在 expanded 逻辑里快速判断）
+_ALL_EXTENDED_NAMES: FrozenSet[str] = frozenset(
+    name for g in NOTION_EXTENDED_GROUPS.values() for name in g["names"]
+)
 
 from config import (
     NOTION_CORE_CACHE_DATABASE_ID,
@@ -185,7 +210,7 @@ def write_notebook_entry_to_database(content: str, note_time: str | None = None)
     return True, ""
 
 
-def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
+def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[Set[str]] = None) -> List[dict]:
     """返回要注入到 chat 的 tools 列表。mode=daily|expanded。"""
     tools = [
         {
@@ -435,6 +460,19 @@ def get_notion_tools_for_inject(mode: str = "expanded") -> List[dict]:
     tools.extend(get_weather_almanac_tools())
 
     if mode != "daily":
+        # active_groups=None 表示全量（expanded）；否则过滤掉未激活组的扩展工具
+        if active_groups is not None:
+            allowed_extended: Set[str] = frozenset(
+                name
+                for g_name, g in NOTION_EXTENDED_GROUPS.items()
+                if g_name in active_groups
+                for name in g["names"]
+            )
+            tools = [
+                t for t in tools
+                if (((t.get("function") or {}).get("name") or "") not in _ALL_EXTENDED_NAMES)
+                or (((t.get("function") or {}).get("name") or "") in allowed_extended)
+            ]
         return tools
 
     # 日常最小集：只保留高频（日记 + 报时），其余在触发词命中后走 expanded 注入
