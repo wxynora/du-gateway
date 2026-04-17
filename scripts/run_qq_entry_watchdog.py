@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib import parse, request
@@ -37,6 +38,8 @@ from config import (
     QQ_ENTRY_WATCHDOG_STATE_FILE,
     TELEGRAM_BOT_TOKEN,
 )
+
+QRCODE_FRESH_SECONDS = 300
 
 
 def _now_text() -> str:
@@ -75,6 +78,12 @@ def _send_alert(text: str) -> bool:
         return False
 
 
+def _is_fresh_qrcode(mtime: float) -> bool:
+    if mtime <= 0:
+        return False
+    return (time.time() - mtime) <= QRCODE_FRESH_SECONDS
+
+
 def main() -> int:
     if not QQ_ENTRY_WATCHDOG_ENABLED:
         print("[qq-watchdog] disabled")
@@ -93,6 +102,17 @@ def main() -> int:
             mtime = float(stat.st_mtime)
         except Exception:
             mtime = 0.0
+
+        if not _is_fresh_qrcode(mtime):
+            if active:
+                state = {
+                    "qrcode_active": False,
+                    "last_qrcode_mtime": mtime,
+                    "last_stale_seen_at": _now_text(),
+                }
+                _save_state(state_path, state)
+            print("[qq-watchdog] stale qrcode ignored")
+            return 0
 
         if (not active) or (mtime > last_mtime):
             sent = _send_alert(
