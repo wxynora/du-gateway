@@ -233,6 +233,28 @@ def mcp_invoke():
         result, status = invoke_forum_http("GET", url, headers, None, None, args.get("timeout"))
         return jsonify(result), status
 
+    if tool == "forum_read_feed":
+        from services.mcp_forum_tools import execute_forum_tool
+        import json
+
+        out = execute_forum_tool("forum_read_feed", args)
+        try:
+            payload_obj = json.loads(out)
+        except Exception:
+            payload_obj = {"ok": False, "error": out}
+        return jsonify(payload_obj), 200
+
+    if tool == "forum_open_thread":
+        from services.mcp_forum_tools import execute_forum_tool
+        import json
+
+        out = execute_forum_tool("forum_open_thread", args)
+        try:
+            payload_obj = json.loads(out)
+        except Exception:
+            payload_obj = {"ok": False, "error": out}
+        return jsonify(payload_obj), 200
+
     if tool == "schedule_list":
         from services.mcp_forum_tools import execute_forum_tool
         out = execute_forum_tool("schedule_list", args)
@@ -263,17 +285,6 @@ def mcp_invoke():
         import json
 
         out = execute_forum_tool("search_memory", args)
-        try:
-            payload_obj = json.loads(out)
-        except Exception:
-            payload_obj = {"ok": False, "error": out}
-        return jsonify(payload_obj), 200
-
-    if tool == "forum_open_shared_post_from_dm":
-        from services.mcp_forum_tools import execute_forum_tool
-        import json
-
-        out = execute_forum_tool("forum_open_shared_post_from_dm", args)
         try:
             payload_obj = json.loads(out)
         except Exception:

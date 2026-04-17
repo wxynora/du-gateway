@@ -365,26 +365,44 @@ TOOL_FORUM_INBOX = {
     },
 }
 
-TOOL_FORUM_OPEN_SHARED_POST_FROM_DM = {
+TOOL_FORUM_READ_FEED = {
     "type": "function",
     "function": {
-        "name": "forum_open_shared_post_from_dm",
+        "name": "forum_read_feed",
         "description": (
-            "专门处理“你的人类想让你看一个帖子”这种系统私信分享。\n"
-            "会自动读取 inbox、匹配最近一条分享帖私信、从正文里提取帖子链接和 post_id，"
-            "再自动打开帖子并附带评论摘要返回。\n"
-            "这不是通用 inbox 替代品，只用于分享帖子给渡看/去评论的快捷流程。"
+            "高层看帖工具：读取帖子信息流并返回适合直接浏览的帖子卡片摘要。"
+            "适合日常刷帖，不返回一整坨原始 JSON。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "可选：读取 inbox 的条数，默认 10，最大 50"},
-                "unread_only": {"type": "boolean", "description": "可选：true 只匹配未读私信"},
-                "comments_limit": {"type": "integer", "description": "可选：附带返回评论条数，默认 5，最大 20"},
-                "sender_display_name": {"type": "string", "description": "可选：默认 Lutopia System"},
-                "match_text": {"type": "string", "description": "可选：默认“你的人类想让你看一个帖子”"},
+                "limit": {"type": "integer", "description": "可选：返回条数，默认 10，最大 30"},
+                "offset": {"type": "integer", "description": "可选：偏移"},
+                "sort": {"type": "string", "description": "可选：hot/new/top/rising"},
+                "submolt": {"type": "string", "description": "可选：子版块名称或 ID"},
                 "timeout": {"type": "integer"},
             },
+        },
+    },
+}
+
+TOOL_FORUM_OPEN_THREAD = {
+    "type": "function",
+    "function": {
+        "name": "forum_open_thread",
+        "description": (
+            "高层开帖工具：一次返回帖子正文摘要和评论摘要。"
+            "适合日常进帖查看，不需要模型自己再拆成读帖子、读评论两步。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "post_id": {"type": "string", "description": "必填：帖子 ID"},
+                "comments_limit": {"type": "integer", "description": "可选：返回评论条数，默认 5，最大 20"},
+                "include_comments": {"type": "boolean", "description": "可选：是否附带评论摘要，默认 true"},
+                "timeout": {"type": "integer"},
+            },
+            "required": ["post_id"],
         },
     },
 }
@@ -590,7 +608,8 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         t for t in forum_tools
         if ((t.get("function") or {}).get("name") in ("forum_list_posts", "forum_get_post"))
     ] + [
-        TOOL_FORUM_OPEN_SHARED_POST_FROM_DM,
+        TOOL_FORUM_READ_FEED,
+        TOOL_FORUM_OPEN_THREAD,
         TOOL_FORUM_POST,
         TOOL_FORUM_EDIT_POST,
         TOOL_FORUM_COMMENT,
@@ -626,6 +645,124 @@ def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
         return text, False
     remain = len(text) - max_chars
     return text[:max_chars] + f"\n\n[truncated: {remain} chars]", True
+
+
+def _pick_first_str(obj: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = obj.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _pick_nested_str(obj: dict, parent_keys: tuple[str, ...], child_keys: tuple[str, ...]) -> str:
+    for pkey in parent_keys:
+        parent = obj.get(pkey)
+        if isinstance(parent, dict):
+            value = _pick_first_str(parent, child_keys)
+            if value:
+                return value
+    return ""
+
+
+def _pick_int(obj: dict, keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        value = obj.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+    return None
+
+
+def _extract_posts_list(result: dict) -> list[dict]:
+    data = result.get("data")
+    if isinstance(data, dict):
+        nested = data.get("data")
+        if isinstance(nested, list):
+            return [x for x in nested if isinstance(x, dict)]
+        for key in ("posts", "items", "list", "rows"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    for key in ("posts", "items", "list", "rows"):
+        value = result.get(key)
+        if isinstance(value, list):
+            return [x for x in value if isinstance(x, dict)]
+    return []
+
+
+def _extract_post_obj(result: dict) -> dict:
+    data = result.get("data")
+    if isinstance(data, dict):
+        for key in ("post", "item"):
+            value = data.get(key)
+            if isinstance(value, dict):
+                return value
+        return data
+    if isinstance(result.get("post"), dict):
+        return result.get("post")
+    return {}
+
+
+def _extract_comments_list(result: dict) -> list[dict]:
+    data = result.get("data")
+    if isinstance(data, dict):
+        for key in ("comments", "items", "list", "rows"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [x for x in value if isinstance(x, dict)]
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    for key in ("comments", "items", "list", "rows"):
+        value = result.get(key)
+        if isinstance(value, list):
+            return [x for x in value if isinstance(x, dict)]
+    return []
+
+
+def _clean_excerpt(text: str, max_chars: int = 160) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
+
+
+def _summarize_post_card(post: dict) -> dict:
+    content = _pick_first_str(post, ("content_preview", "content", "text", "body"))
+    return {
+        "post_id": _pick_first_str(post, ("id", "post_id", "uuid")),
+        "title": _pick_first_str(post, ("title", "subject", "name")),
+        "author": (
+            _pick_first_str(post, ("author", "author_name", "author_display_name", "username", "creator_name"))
+            or _pick_nested_str(post, ("author", "user", "creator"), ("name", "display_name", "username", "nickname"))
+        ),
+        "submolt": _pick_first_str(post, ("submolt", "category", "board")),
+        "comment_count": _pick_int(post, ("comment_count", "comments_count", "commentsCount")),
+        "score": _pick_int(post, ("score", "vote_score", "upvotes", "like_count", "hot_score")),
+        "excerpt": _clean_excerpt(content, 160),
+    }
+
+
+def _summarize_comment_card(comment: dict) -> dict:
+    content = _pick_first_str(comment, ("content", "text", "body"))
+    return {
+        "comment_id": _pick_first_str(comment, ("id", "comment_id", "uuid")),
+        "author": (
+            _pick_first_str(comment, ("author", "author_name", "author_display_name", "username", "creator_name"))
+            or _pick_nested_str(comment, ("author", "user", "creator"), ("name", "display_name", "username", "nickname"))
+        ),
+        "score": _pick_int(comment, ("score", "vote_score", "upvotes", "like_count", "hot_score")),
+        "excerpt": _clean_excerpt(content, 120),
+    }
 
 
 def _host_allowed(hostname: str) -> bool:
@@ -1183,6 +1320,51 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         last["probe_paths"] = attempted
         return json.dumps(last, ensure_ascii=False)
 
+    if name == "forum_read_feed":
+        primary = (args.get("path") or MCP_FORUM_POST_LIST_PATH).strip()
+        candidates = [primary] + [p for p in (MCP_FORUM_POST_LIST_PATHS or []) if p != primary]
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        params: dict = {"view": "agent"}
+        try:
+            limit = int(args.get("limit") or 10)
+        except (TypeError, ValueError):
+            limit = 10
+        limit = max(1, min(30, limit))
+        params["limit"] = limit
+        if args.get("offset") is not None:
+            params["offset"] = args.get("offset")
+        if args.get("sort"):
+            params["sort"] = str(args.get("sort")).strip()
+        if args.get("submolt"):
+            params["submolt"] = str(args.get("submolt")).strip()
+        attempted = []
+        last = {"ok": False, "status": 404, "error": "未找到帖子列表路径"}
+        for p in candidates:
+            url = _build_url_from_base(p, p)
+            if not url:
+                continue
+            attempted.append({"path": p, "url": url, "method": "GET"})
+            result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
+            last = result
+            if int(result.get("status") or 0) == 404:
+                continue
+            if not bool(result.get("ok")):
+                return json.dumps(result, ensure_ascii=False)
+            posts = _extract_posts_list(result)
+            cards = [_summarize_post_card(post) for post in posts[:limit]]
+            return json.dumps(
+                {
+                    "ok": True,
+                    "count": len(cards),
+                    "items": cards,
+                },
+                ensure_ascii=False,
+            )
+        last["probe_paths"] = attempted
+        return json.dumps(last, ensure_ascii=False)
+
     if name == "forum_get_post":
         post_id = str(args.get("post_id") or "").strip()
         if not post_id:
@@ -1197,6 +1379,56 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
         result, _ = invoke_forum_http("GET", url, headers, {"view": "agent"}, None, args.get("timeout"))
         return json.dumps(result, ensure_ascii=False)
+
+    if name == "forum_open_thread":
+        post_id = str(args.get("post_id") or "").strip()
+        if not post_id:
+            return "post_id 不能为空"
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        if "Authorization" not in headers and "authorization" not in headers:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        template = (args.get("path_template") or MCP_FORUM_POST_DETAIL_PATH_TEMPLATE).strip()
+        template = _normalize_path(template, MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
+        post_url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
+        if not post_url:
+            return "未配置 MCP_FORUM_BASE_URL"
+        post_result, _ = invoke_forum_http("GET", post_url, headers, {"view": "agent"}, None, args.get("timeout"))
+        if not bool(post_result.get("ok")):
+            return json.dumps(post_result, ensure_ascii=False)
+        post = _extract_post_obj(post_result)
+        content = _pick_first_str(post, ("content", "text", "body"))
+        include_comments = bool(args.get("include_comments", True))
+        try:
+            comments_limit = int(args.get("comments_limit") or 5)
+        except (TypeError, ValueError):
+            comments_limit = 5
+        comments_limit = max(1, min(20, comments_limit))
+        comment_cards = []
+        if include_comments:
+            comments_url = _build_url_from_base(f"/posts/{post_id}/comments", f"/posts/{post_id}/comments")
+            if comments_url:
+                comments_result, _ = invoke_forum_http(
+                    "GET",
+                    comments_url,
+                    headers,
+                    {"view": "agent", "content": "preview", "limit": comments_limit},
+                    None,
+                    args.get("timeout"),
+                )
+                if bool(comments_result.get("ok")):
+                    comments = _extract_comments_list(comments_result)
+                    comment_cards = [_summarize_comment_card(comment) for comment in comments[:comments_limit]]
+        return json.dumps(
+            {
+                "ok": True,
+                "post": {
+                    **_summarize_post_card(post),
+                    "content": _clean_excerpt(content, 1200),
+                },
+                "comments": comment_cards,
+            },
+            ensure_ascii=False,
+        )
 
     if name == "forum_get_comments":
         post_id = str(args.get("post_id") or "").strip()
@@ -1373,117 +1605,5 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             params["unread"] = "true"
         result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
         return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_open_shared_post_from_dm":
-        inbox_url = _build_url_from_base("/messages/inbox", "/messages/inbox")
-        if not inbox_url:
-            return json.dumps({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}, ensure_ascii=False)
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        params: dict = {}
-        try:
-            limit = int(args.get("limit") or 10)
-            params["limit"] = max(1, min(50, limit))
-        except (TypeError, ValueError):
-            params["limit"] = 10
-        if args.get("unread_only"):
-            params["unread"] = "true"
-        inbox_result, _ = invoke_forum_http("GET", inbox_url, headers, params, None, args.get("timeout"))
-        if not bool(inbox_result.get("ok")):
-            return json.dumps(
-                {"ok": False, "stage": "inbox", "inbox": inbox_result},
-                ensure_ascii=False,
-            )
-        data = inbox_result.get("data") if isinstance(inbox_result.get("data"), dict) else {}
-        messages = data.get("messages") if isinstance(data.get("messages"), list) else []
-        match_text = str(args.get("match_text") or "你的人类想让你看一个帖子").strip()
-        sender_display_name = str(args.get("sender_display_name") or "Lutopia System").strip()
-        matched = None
-        for item in messages:
-            if not isinstance(item, dict):
-                continue
-            content = str(item.get("content") or "")
-            if match_text not in content:
-                continue
-            sender_name = str(item.get("sender_display_name") or "").strip()
-            if sender_display_name and sender_name and sender_name != sender_display_name:
-                continue
-            matched = item
-            break
-        if not matched:
-            return json.dumps(
-                {
-                    "ok": False,
-                    "matched": False,
-                    "stage": "match",
-                    "error": "未找到符合条件的分享帖私信",
-                    "checked_count": len(messages),
-                },
-                ensure_ascii=False,
-            )
-        share_text = str(matched.get("content") or "")
-        share_link, post_id = _extract_shared_post_link(share_text)
-        if not share_link or not post_id:
-            return json.dumps(
-                {
-                    "ok": False,
-                    "matched": True,
-                    "stage": "extract_link",
-                    "error": "分享帖私信里未提取到帖子链接或 post_id",
-                    "message": matched,
-                },
-                ensure_ascii=False,
-            )
-        post_template = (MCP_FORUM_POST_DETAIL_PATH_TEMPLATE or "").strip()
-        post_template = _normalize_path(post_template, MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
-        post_url = _build_url_from_base(post_template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
-        if not post_url:
-            return json.dumps({"ok": False, "stage": "post", "error": "未配置 MCP_FORUM_BASE_URL"}, ensure_ascii=False)
-        post_result, _ = invoke_forum_http("GET", post_url, headers, {"view": "agent"}, None, args.get("timeout"))
-        if not bool(post_result.get("ok")):
-            return json.dumps(
-                {
-                    "ok": False,
-                    "matched": True,
-                    "stage": "post",
-                    "message": matched,
-                    "share_link": share_link,
-                    "post_id": post_id,
-                    "post": post_result,
-                },
-                ensure_ascii=False,
-            )
-        comments_url = _build_url_from_base(f"/posts/{post_id}/comments", f"/posts/{post_id}/comments")
-        comments_result = {"ok": False, "skipped": True}
-        if comments_url:
-            try:
-                comments_limit = int(args.get("comments_limit") or 5)
-                comments_limit = max(1, min(20, comments_limit))
-            except (TypeError, ValueError):
-                comments_limit = 5
-            comments_result, _ = invoke_forum_http(
-                "GET",
-                comments_url,
-                headers,
-                {"view": "agent", "content": "preview", "limit": comments_limit},
-                None,
-                args.get("timeout"),
-            )
-        return json.dumps(
-            {
-                "ok": True,
-                "matched": True,
-                "message_id": matched.get("id"),
-                "sender_display_name": matched.get("sender_display_name"),
-                "share_text": share_text,
-                "share_link": share_link,
-                "post_id": post_id,
-                "message": matched,
-                "post": post_result,
-                "comments": comments_result,
-            },
-            ensure_ascii=False,
-        )
 
     return json.dumps({"ok": False, "error": f"未知论坛工具: {name}"}, ensure_ascii=False)
