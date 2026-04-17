@@ -57,15 +57,22 @@ FORCE_CHAT_MODEL_ENABLED = os.environ.get("FORCE_CHAT_MODEL_ENABLED", "").strip(
 
 # OpenRouter 特例：若当前 active 上游是 OpenRouter，则固定用该模型，不再拉 /v1/models。
 OPENROUTER_BASE_HOST = os.environ.get("OPENROUTER_BASE_HOST", "openrouter.ai").strip().lower()
-OPENROUTER_FIXED_MODEL = os.environ.get("OPENROUTER_FIXED_MODEL", "anthropic/claude-opus-4.7").strip()
+OPENROUTER_FIXED_MODEL = os.environ.get("OPENROUTER_FIXED_MODEL", "anthropic/claude-4.7-opus-20260416").strip()
 OPENROUTER_REASONING_MAX_TOKENS = int(os.environ.get("OPENROUTER_REASONING_MAX_TOKENS", "32000"))
-OPENROUTER_VERBOSITY = os.environ.get("OPENROUTER_VERBOSITY", "").strip().lower()
+OPENROUTER_VERBOSITY = os.environ.get("OPENROUTER_VERBOSITY", "max").strip().lower()
 OPENROUTER_ULTRA_THINK_ENABLED = os.environ.get("OPENROUTER_ULTRA_THINK_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 OPENROUTER_ULTRA_THINK_PROMPT = os.environ.get(
     "OPENROUTER_ULTRA_THINK_PROMPT",
     "ultra think. This request needs deep, careful adaptive reasoning. "
     "Think fully before answering, and when the provider allows it, return thinking summaries instead of omitting them.",
 ).strip()
+OPENROUTER_PROVIDER_ORDER = [
+    x.strip().lower()
+    for x in os.environ.get("OPENROUTER_PROVIDER_ORDER", "anthropic").split(",")
+    if x.strip()
+]
+OPENROUTER_ALLOW_FALLBACKS = os.environ.get("OPENROUTER_ALLOW_FALLBACKS", "0").strip().lower() in ("1", "true", "yes")
+OPENROUTER_CACHE_CONTROL_TYPE = os.environ.get("OPENROUTER_CACHE_CONTROL_TYPE", "ephemeral").strip().lower()
 
 
 def is_openrouter_url(url: str) -> bool:

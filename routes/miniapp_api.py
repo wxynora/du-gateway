@@ -32,6 +32,9 @@ from config import (
     OPENROUTER_FIXED_MODEL,
     OPENROUTER_REASONING_MAX_TOKENS,
     OPENROUTER_VERBOSITY,
+    OPENROUTER_PROVIDER_ORDER,
+    OPENROUTER_ALLOW_FALLBACKS,
+    OPENROUTER_CACHE_CONTROL_TYPE,
     is_openrouter_url,
 )
 from storage import r2_store, whitelist_store, blacklist_store
@@ -2265,6 +2268,26 @@ def _probe_upstream_item(it: dict) -> dict:
             }
             if OPENROUTER_VERBOSITY:
                 body["verbosity"] = OPENROUTER_VERBOSITY
+            if OPENROUTER_PROVIDER_ORDER:
+                body["provider"] = {
+                    "order": OPENROUTER_PROVIDER_ORDER,
+                    "allow_fallbacks": OPENROUTER_ALLOW_FALLBACKS,
+                }
+            if OPENROUTER_CACHE_CONTROL_TYPE:
+                body["messages"] = [
+                    {
+                        "role": "system",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "ultra think. This request needs deep, careful adaptive reasoning. "
+                                "Think fully before answering, and when the provider allows it, return thinking summaries instead of omitting them.",
+                                "cache_control": {"type": OPENROUTER_CACHE_CONTROL_TYPE},
+                            }
+                        ],
+                    },
+                    *body["messages"],
+                ]
         rc = requests.post(url, headers=headers, json=body, timeout=20)
         out["chat_status"] = int(rc.status_code or 0)
         if rc.status_code >= 400:
