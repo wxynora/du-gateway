@@ -548,6 +548,7 @@ def execute_tool(name: str, arguments: dict) -> str:
         "forum_get_profile",
         "forum_send_dm",
         "forum_inbox",
+        "forum_open_shared_post_from_dm",
         "schedule_list",
         "schedule_create",
         "schedule_enable",

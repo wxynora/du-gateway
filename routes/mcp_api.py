@@ -269,4 +269,15 @@ def mcp_invoke():
             payload_obj = {"ok": False, "error": out}
         return jsonify(payload_obj), 200
 
+    if tool == "forum_open_shared_post_from_dm":
+        from services.mcp_forum_tools import execute_forum_tool
+        import json
+
+        out = execute_forum_tool("forum_open_shared_post_from_dm", args)
+        try:
+            payload_obj = json.loads(out)
+        except Exception:
+            payload_obj = {"ok": False, "error": out}
+        return jsonify(payload_obj), 200
+
     return jsonify({"ok": False, "error": "不支持的 tool，请用 /mcp/tools 查看"}), 400

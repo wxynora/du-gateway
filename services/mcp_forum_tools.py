@@ -1,5 +1,6 @@
 import ipaddress
 import json
+import re
 from urllib.parse import urlparse
 
 import requests
@@ -364,6 +365,30 @@ TOOL_FORUM_INBOX = {
     },
 }
 
+TOOL_FORUM_OPEN_SHARED_POST_FROM_DM = {
+    "type": "function",
+    "function": {
+        "name": "forum_open_shared_post_from_dm",
+        "description": (
+            "专门处理“你的人类想让你看一个帖子”这种系统私信分享。\n"
+            "会自动读取 inbox、匹配最近一条分享帖私信、从正文里提取帖子链接和 post_id，"
+            "再自动打开帖子并附带评论摘要返回。\n"
+            "这不是通用 inbox 替代品，只用于分享帖子给渡看/去评论的快捷流程。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "可选：读取 inbox 的条数，默认 10，最大 50"},
+                "unread_only": {"type": "boolean", "description": "可选：true 只匹配未读私信"},
+                "comments_limit": {"type": "integer", "description": "可选：附带返回评论条数，默认 5，最大 20"},
+                "sender_display_name": {"type": "string", "description": "可选：默认 Lutopia System"},
+                "match_text": {"type": "string", "description": "可选：默认“你的人类想让你看一个帖子”"},
+                "timeout": {"type": "integer"},
+            },
+        },
+    },
+}
+
 TOOL_SCHEDULE_LIST = {
     "type": "function",
     "function": {
@@ -565,6 +590,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         t for t in forum_tools
         if ((t.get("function") or {}).get("name") in ("forum_list_posts", "forum_get_post"))
     ] + [
+        TOOL_FORUM_OPEN_SHARED_POST_FROM_DM,
         TOOL_FORUM_POST,
         TOOL_FORUM_EDIT_POST,
         TOOL_FORUM_COMMENT,
@@ -751,6 +777,14 @@ def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict 
 def execute_forum_tool(name: str, arguments: dict) -> str:
     """在聊天工具链里执行论坛工具，返回字符串。"""
     args = arguments if isinstance(arguments, dict) else {}
+
+    def _extract_shared_post_link(text: str) -> tuple[str, str]:
+        raw = str(text or "")
+        m = re.search(r"(\/帖子详情\.html\?id=([0-9a-fA-F-]{8,}))", raw)
+        if not m:
+            return "", ""
+        return m.group(1), m.group(2)
+
     if name.startswith("schedule_"):
         from storage import r2_store
         from utils.time_aware import now_beijing_iso
@@ -1339,5 +1373,117 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
             params["unread"] = "true"
         result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
         return json.dumps(result, ensure_ascii=False)
+
+    if name == "forum_open_shared_post_from_dm":
+        inbox_url = _build_url_from_base("/messages/inbox", "/messages/inbox")
+        if not inbox_url:
+            return json.dumps({"ok": False, "error": "未配置 MCP_FORUM_BASE_URL"}, ensure_ascii=False)
+        headers = {}
+        if MCP_FORUM_DEFAULT_UID:
+            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
+        params: dict = {}
+        try:
+            limit = int(args.get("limit") or 10)
+            params["limit"] = max(1, min(50, limit))
+        except (TypeError, ValueError):
+            params["limit"] = 10
+        if args.get("unread_only"):
+            params["unread"] = "true"
+        inbox_result, _ = invoke_forum_http("GET", inbox_url, headers, params, None, args.get("timeout"))
+        if not bool(inbox_result.get("ok")):
+            return json.dumps(
+                {"ok": False, "stage": "inbox", "inbox": inbox_result},
+                ensure_ascii=False,
+            )
+        data = inbox_result.get("data") if isinstance(inbox_result.get("data"), dict) else {}
+        messages = data.get("messages") if isinstance(data.get("messages"), list) else []
+        match_text = str(args.get("match_text") or "你的人类想让你看一个帖子").strip()
+        sender_display_name = str(args.get("sender_display_name") or "Lutopia System").strip()
+        matched = None
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "")
+            if match_text not in content:
+                continue
+            sender_name = str(item.get("sender_display_name") or "").strip()
+            if sender_display_name and sender_name and sender_name != sender_display_name:
+                continue
+            matched = item
+            break
+        if not matched:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "matched": False,
+                    "stage": "match",
+                    "error": "未找到符合条件的分享帖私信",
+                    "checked_count": len(messages),
+                },
+                ensure_ascii=False,
+            )
+        share_text = str(matched.get("content") or "")
+        share_link, post_id = _extract_shared_post_link(share_text)
+        if not share_link or not post_id:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "matched": True,
+                    "stage": "extract_link",
+                    "error": "分享帖私信里未提取到帖子链接或 post_id",
+                    "message": matched,
+                },
+                ensure_ascii=False,
+            )
+        post_template = (MCP_FORUM_POST_DETAIL_PATH_TEMPLATE or "").strip()
+        post_template = _normalize_path(post_template, MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
+        post_url = _build_url_from_base(post_template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
+        if not post_url:
+            return json.dumps({"ok": False, "stage": "post", "error": "未配置 MCP_FORUM_BASE_URL"}, ensure_ascii=False)
+        post_result, _ = invoke_forum_http("GET", post_url, headers, {"view": "agent"}, None, args.get("timeout"))
+        if not bool(post_result.get("ok")):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "matched": True,
+                    "stage": "post",
+                    "message": matched,
+                    "share_link": share_link,
+                    "post_id": post_id,
+                    "post": post_result,
+                },
+                ensure_ascii=False,
+            )
+        comments_url = _build_url_from_base(f"/posts/{post_id}/comments", f"/posts/{post_id}/comments")
+        comments_result = {"ok": False, "skipped": True}
+        if comments_url:
+            try:
+                comments_limit = int(args.get("comments_limit") or 5)
+                comments_limit = max(1, min(20, comments_limit))
+            except (TypeError, ValueError):
+                comments_limit = 5
+            comments_result, _ = invoke_forum_http(
+                "GET",
+                comments_url,
+                headers,
+                {"view": "agent", "content": "preview", "limit": comments_limit},
+                None,
+                args.get("timeout"),
+            )
+        return json.dumps(
+            {
+                "ok": True,
+                "matched": True,
+                "message_id": matched.get("id"),
+                "sender_display_name": matched.get("sender_display_name"),
+                "share_text": share_text,
+                "share_link": share_link,
+                "post_id": post_id,
+                "message": matched,
+                "post": post_result,
+                "comments": comments_result,
+            },
+            ensure_ascii=False,
+        )
 
     return json.dumps({"ok": False, "error": f"未知论坛工具: {name}"}, ensure_ascii=False)
