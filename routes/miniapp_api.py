@@ -2274,20 +2274,7 @@ def _probe_upstream_item(it: dict) -> dict:
                     "allow_fallbacks": OPENROUTER_ALLOW_FALLBACKS,
                 }
             if OPENROUTER_CACHE_CONTROL_TYPE:
-                body["messages"] = [
-                    {
-                        "role": "system",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "ultra think. This request needs deep, careful adaptive reasoning. "
-                                "Think fully before answering, and when the provider allows it, return thinking summaries instead of omitting them.",
-                                "cache_control": {"type": OPENROUTER_CACHE_CONTROL_TYPE},
-                            }
-                        ],
-                    },
-                    *body["messages"],
-                ]
+                body["cache_control"] = {"type": OPENROUTER_CACHE_CONTROL_TYPE}
         rc = requests.post(url, headers=headers, json=body, timeout=20)
         out["chat_status"] = int(rc.status_code or 0)
         if rc.status_code >= 400:

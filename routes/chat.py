@@ -233,6 +233,8 @@ def _apply_openrouter_request_policy(body: dict, upstream_url: str) -> dict:
             "order": OPENROUTER_PROVIDER_ORDER,
             "allow_fallbacks": OPENROUTER_ALLOW_FALLBACKS,
         }
+    if OPENROUTER_CACHE_CONTROL_TYPE:
+        body["cache_control"] = {"type": OPENROUTER_CACHE_CONTROL_TYPE}
     if OPENROUTER_ULTRA_THINK_ENABLED and OPENROUTER_ULTRA_THINK_PROMPT:
         body["messages"] = _inject_openrouter_ultra_think_prompt(body.get("messages") or [])
     return body
@@ -246,39 +248,16 @@ def _inject_openrouter_ultra_think_prompt(messages: list) -> list:
     if not OPENROUTER_ULTRA_THINK_PROMPT:
         return items
     hint = OPENROUTER_ULTRA_THINK_PROMPT.strip()
-    cache_control = {"type": OPENROUTER_CACHE_CONTROL_TYPE} if OPENROUTER_CACHE_CONTROL_TYPE else None
-
-    def _mark_breakpoint(blocks: list) -> list:
-        if not cache_control:
-            return blocks
-        out = []
-        last_text_idx = -1
-        for i, block in enumerate(blocks):
-            row = dict(block) if isinstance(block, dict) else block
-            if isinstance(row, dict):
-                row.pop("cache_control", None)
-                if str(row.get("type") or "").strip().lower() == "text":
-                    last_text_idx = i
-            out.append(row)
-        if last_text_idx >= 0 and isinstance(out[last_text_idx], dict):
-            out[last_text_idx]["cache_control"] = dict(cache_control)
-        return out
-
     for idx, msg in enumerate(items):
         if str(msg.get("role") or "").strip().lower() != "system":
             continue
         content = msg.get("content")
         if isinstance(content, str):
             if content.lstrip().startswith(hint):
-                msg["content"] = _mark_breakpoint([{"type": "text", "text": content.lstrip()}])
+                msg["content"] = content.lstrip()
                 items[idx] = msg
                 return items
-            msg["content"] = _mark_breakpoint(
-                [
-                    {"type": "text", "text": hint},
-                    {"type": "text", "text": content.lstrip()},
-                ]
-            )
+            msg["content"] = hint + "\n\n" + content.lstrip()
             items[idx] = msg
             return items
         if isinstance(content, list):
@@ -287,18 +266,18 @@ def _inject_openrouter_ultra_think_prompt(messages: list) -> list:
             if isinstance(first, dict) and str(first.get("type") or "").strip().lower() == "text":
                 text = str(first.get("text") or "")
                 if text.lstrip().startswith(hint):
-                    msg["content"] = _mark_breakpoint(blocks)
+                    msg["content"] = blocks
                     items[idx] = msg
                     return items
-            msg["content"] = _mark_breakpoint([{"type": "text", "text": hint}, *blocks])
+            msg["content"] = [{"type": "text", "text": hint}, *blocks]
             items[idx] = msg
             return items
-        msg["content"] = _mark_breakpoint([{"type": "text", "text": hint}])
+        msg["content"] = hint
         items[idx] = msg
         return items
     if items:
-        return [{"role": "system", "content": _mark_breakpoint([{"type": "text", "text": hint}])}, *items]
-    return [{"role": "system", "content": _mark_breakpoint([{"type": "text", "text": hint}])}]
+        return [{"role": "system", "content": hint}, *items]
+    return [{"role": "system", "content": hint}]
 
 
 def _chat_url_to_models_url(chat_url: str) -> str:
