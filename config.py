@@ -364,6 +364,18 @@ WECHAT_PROACTIVE_PUSH_TOKEN = os.environ.get("WECHAT_PROACTIVE_PUSH_TOKEN", "").
 QQ_PROACTIVE_PUSH_URL = os.environ.get("QQ_PROACTIVE_PUSH_URL", "").strip()
 QQ_PROACTIVE_PUSH_TOKEN = os.environ.get("QQ_PROACTIVE_PUSH_TOKEN", "").strip()
 
+# QQ / NapCat 掉线巡检：检测二维码文件，一旦进入扫码登录态就发 Telegram 告警
+QQ_ENTRY_WATCHDOG_ENABLED = os.environ.get("QQ_ENTRY_WATCHDOG_ENABLED", "").strip().lower() in ("1", "true", "yes")
+_QQ_WATCHDOG_ALERT_UID_STR = os.environ.get("QQ_ENTRY_WATCHDOG_ALERT_TELEGRAM_USER_ID", "").strip()
+QQ_ENTRY_WATCHDOG_ALERT_TELEGRAM_USER_ID = int(_QQ_WATCHDOG_ALERT_UID_STR) if _QQ_WATCHDOG_ALERT_UID_STR else int(
+    TELEGRAM_PROACTIVE_TARGET_USER_ID or 0
+)
+QQ_ENTRY_WATCHDOG_QRCODE_PATH = os.environ.get(
+    "QQ_ENTRY_WATCHDOG_QRCODE_PATH",
+    "/root/Napcat/opt/QQ/resources/app/app_launcher/napcat/cache/qrcode.png",
+).strip()
+QQ_ENTRY_WATCHDOG_STATE_FILE = DATA_DIR / "qq_entry_watchdog_state.json"
+
 # MiniMax TTS（可选，用于 Telegram 语音回复）
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "").strip()
 MINIMAX_T2A_URL = os.environ.get("MINIMAX_T2A_URL", "https://api.minimaxi.com/v1/t2a_v2").strip()
