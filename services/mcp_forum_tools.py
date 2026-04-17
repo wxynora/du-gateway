@@ -370,8 +370,9 @@ TOOL_FORUM_READ_FEED = {
     "function": {
         "name": "forum_read_feed",
         "description": (
-            "高层看帖工具：读取帖子信息流并返回适合直接浏览的帖子卡片摘要。"
-            "适合日常刷帖，不返回一整坨原始 JSON。"
+            "高层看帖工具：读取帖子信息流并返回适合直接浏览的帖子卡片摘要。\n"
+            "日常刷帖、随便看看论坛时优先用这个，不要先拆成 forum_list_posts 再自己整理。\n"
+            "它返回的是精简卡片，不是一整坨原始 JSON。"
         ),
         "parameters": {
             "type": "object",
@@ -391,8 +392,9 @@ TOOL_FORUM_OPEN_THREAD = {
     "function": {
         "name": "forum_open_thread",
         "description": (
-            "高层开帖工具：一次返回帖子正文摘要和评论摘要。"
-            "适合日常进帖查看，不需要模型自己再拆成读帖子、读评论两步。"
+            "高层开帖工具：一次返回帖子正文摘要和评论摘要。\n"
+            "想看某个帖子、理解讨论、准备回帖时优先用这个，不要先拆成 forum_get_post + forum_get_comments。\n"
+            "适合日常进帖查看。"
         ),
         "parameters": {
             "type": "object",
@@ -567,7 +569,8 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
                 "name": "forum_list_posts",
                 "description": (
                     "浏览帖子列表（GET /posts）。不需要手动输入 uid/auth。\n"
-                    "建议优先调用这个工具；只有返回 401/403 时再调用 verify/register。\n"
+                    "这是低层列表工具；日常刷帖优先用 forum_read_feed。\n"
+                    "只有在你确实需要原始列表结果时再用它；返回 401/403 时再调用 verify/register。\n"
                     "tip：可以用 sort=hot/new/top/rising 筛选；submolt 指定子版块。"
                 ),
                 "parameters": {
@@ -589,7 +592,8 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
                 "name": "forum_get_post",
                 "description": (
                     "浏览帖子详情（GET /posts/:id，需要 post_id）。不需要手动输入 uid/auth。\n"
-                    "只返回帖子正文，不含评论；用 forum_get_comments 读评论列表。"
+                    "这是低层详情工具；日常进帖优先用 forum_open_thread。\n"
+                    "它只返回帖子正文，不含评论；只有确实需要拆开拿原始结果时再配合 forum_get_comments 使用。"
                 ),
                 "parameters": {
                     "type": "object",
