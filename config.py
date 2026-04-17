@@ -1,6 +1,7 @@
 # 渡の网关 - 配置（从环境变量读取，不硬编码敏感信息）
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 # 加载 .env（本地开发/单机部署用）；生产可直接用环境变量覆盖
 try:
@@ -39,12 +40,9 @@ _TARGET_AI_KEYS_STR = os.environ.get("TARGET_AI_API_KEYS", "").strip()
 TARGET_AI_API_KEYS = [k.strip() for k in _TARGET_AI_KEYS_STR.split(",") if k.strip()] if _TARGET_AI_KEYS_STR else []
 
 # 模型名匹配（用于多中转站）：请求的 model 含这些关键词时才走多目标 fallback，避免误转发
-# 必含：逗号分隔，全部出现才匹配，默认 claude,opus（thinking 可有可无，不加在默认里）
+# 必含：逗号分隔，全部出现才匹配，默认 claude,opus（不再写死版本号）
 _GATEWAY_MODEL_KEYWORDS_STR = os.environ.get("GATEWAY_MODEL_KEYWORDS", "claude,opus").strip()
 GATEWAY_MODEL_KEYWORDS = [k.strip().lower() for k in _GATEWAY_MODEL_KEYWORDS_STR.split(",") if k.strip()]
-# 版本关键词：逗号分隔，匹配「4 和 5 一起出现」或「4.5/4-5」等，默认 4.5,4-5
-_GATEWAY_MODEL_KEYWORDS_VERSION_STR = os.environ.get("GATEWAY_MODEL_KEYWORDS_VERSION", "4.5,4-5").strip()
-GATEWAY_MODEL_KEYWORDS_VERSION = [k.strip().lower() for k in _GATEWAY_MODEL_KEYWORDS_VERSION_STR.split(",") if k.strip()]
 
 # 模型列表兜底：上游没有 /v1/models 或拉取失败时，返回此列表（逗号分隔），RikkaHub 才能显示模型
 _GATEWAY_MODELS_STR = os.environ.get("GATEWAY_MODELS", "").strip()
@@ -57,21 +55,54 @@ DEFAULT_CHAT_MODEL = os.environ.get("DEFAULT_CHAT_MODEL", "").strip()
 # 网关侧模型强制覆盖：开启后无论请求传什么 model 都改成 DEFAULT_CHAT_MODEL（或回退值）
 FORCE_CHAT_MODEL_ENABLED = os.environ.get("FORCE_CHAT_MODEL_ENABLED", "").strip().lower() in ("1", "true", "yes")
 
+# OpenRouter 特例：若当前 active 上游是 OpenRouter，则固定用该模型，不再拉 /v1/models。
+OPENROUTER_BASE_HOST = os.environ.get("OPENROUTER_BASE_HOST", "openrouter.ai").strip().lower()
+OPENROUTER_FIXED_MODEL = os.environ.get("OPENROUTER_FIXED_MODEL", "anthropic/claude-opus-4.7").strip()
+OPENROUTER_REASONING_MAX_TOKENS = int(os.environ.get("OPENROUTER_REASONING_MAX_TOKENS", "32000"))
+OPENROUTER_VERBOSITY = os.environ.get("OPENROUTER_VERBOSITY", "").strip().lower()
+OPENROUTER_ULTRA_THINK_ENABLED = os.environ.get("OPENROUTER_ULTRA_THINK_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+OPENROUTER_ULTRA_THINK_PROMPT = os.environ.get(
+    "OPENROUTER_ULTRA_THINK_PROMPT",
+    "ultra think. This request needs deep, careful adaptive reasoning. "
+    "Think fully before answering, and when the provider allows it, return thinking summaries instead of omitting them.",
+).strip()
+
+
+def is_openrouter_url(url: str) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        host = (urlparse(url).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return bool(host) and (host == OPENROUTER_BASE_HOST or host.endswith("." + OPENROUTER_BASE_HOST))
+
+
+def openrouter_models_response() -> dict | None:
+    if not OPENROUTER_FIXED_MODEL:
+        return None
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": OPENROUTER_FIXED_MODEL,
+                "object": "model",
+                "created": 0,
+            }
+        ],
+    }
+
 
 def model_matches_gateway_keywords(model_str: str) -> bool:
     """
-    请求的 model 是否匹配「claude opus 4.5/4-5 thinking」等关键词，用于多中转站 fallback。
-    规则：必含 GATEWAY_MODEL_KEYWORDS 全部；版本为「4 和 5 一起出现」或含 4.5/4-5 等；不区分大小写。
+    请求的 model 是否匹配指定关键词，用于多中转站 fallback。
+    规则：必含 GATEWAY_MODEL_KEYWORDS 全部；不再写死版本号；不区分大小写。
     """
     if not model_str or not isinstance(model_str, str):
         return False
     m = model_str.lower()
     if GATEWAY_MODEL_KEYWORDS and not all(k in m for k in GATEWAY_MODEL_KEYWORDS):
         return False
-    if GATEWAY_MODEL_KEYWORDS_VERSION:
-        # 含 4.5 或 4-5 等整段，或同时含 4 和 5
-        if not (any(v in m for v in GATEWAY_MODEL_KEYWORDS_VERSION) or ("4" in m and "5" in m)):
-            return False
     return True
 
 

@@ -29,6 +29,10 @@ from config import (
     TARGET_AI_API_KEYS,
     VOICE_CALL_MAX_BYTES,
     VOICE_CALL_WINDOW_ID,
+    OPENROUTER_FIXED_MODEL,
+    OPENROUTER_REASONING_MAX_TOKENS,
+    OPENROUTER_VERBOSITY,
+    is_openrouter_url,
 )
 from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
@@ -1062,6 +1066,8 @@ def miniapp_reasoning_latest():
                     val = (m.get("reasoning") or m.get("reasoning_content") or m.get("thinking") or "").strip()
                     if val:
                         reasoning_text = val
+                    elif m.get("reasoning_omitted") or m.get("reasoning_details"):
+                        reasoning_text = "（模型已进行 adaptive thinking，但当前上游未返回可展示的思维链正文）"
                 if reasoning_text and tool_calls_out:
                     break
             if reasoning_text or tool_calls_out:
@@ -2204,30 +2210,38 @@ def _probe_upstream_item(it: dict) -> dict:
         headers["Authorization"] = f"Bearer {api_key}"
 
     model_name = ""
+    if is_openrouter_url(url):
+        model_name = OPENROUTER_FIXED_MODEL
+        out["models_ok"] = True
+        out["models_status"] = 200
+        out["model_count"] = 1 if model_name else 0
+        out["note"] = "OpenRouter 已固定模型，跳过 /v1/models 探测"
+
     try:
-        models_url = _chat_url_to_models_url(url)
-        rm = requests.get(models_url, headers=headers, timeout=12)
-        out["models_status"] = int(rm.status_code or 0)
-        if rm.status_code >= 400:
-            logger.warning(
-                "上游探活 models 异常 name=%s status=%s url=%s body=%s",
-                name or "(empty)",
-                rm.status_code,
-                models_url,
-                (rm.text or "")[:300],
-            )
-        if 200 <= rm.status_code < 300:
-            data = rm.json() if rm.content else {}
-            lst = data.get("data") if isinstance(data, dict) else None
-            if isinstance(lst, list):
-                out["model_count"] = len(lst)
-                if lst:
-                    first = lst[0]
-                    if isinstance(first, dict):
-                        model_name = str(first.get("id") or "").strip()
-                    elif isinstance(first, str):
-                        model_name = first.strip()
-            out["models_ok"] = True
+        if not model_name:
+            models_url = _chat_url_to_models_url(url)
+            rm = requests.get(models_url, headers=headers, timeout=12)
+            out["models_status"] = int(rm.status_code or 0)
+            if rm.status_code >= 400:
+                logger.warning(
+                    "上游探活 models 异常 name=%s status=%s url=%s body=%s",
+                    name or "(empty)",
+                    rm.status_code,
+                    models_url,
+                    (rm.text or "")[:300],
+                )
+            if 200 <= rm.status_code < 300:
+                data = rm.json() if rm.content else {}
+                lst = data.get("data") if isinstance(data, dict) else None
+                if isinstance(lst, list):
+                    out["model_count"] = len(lst)
+                    if lst:
+                        first = lst[0]
+                        if isinstance(first, dict):
+                            model_name = str(first.get("id") or "").strip()
+                        elif isinstance(first, str):
+                            model_name = first.strip()
+                out["models_ok"] = True
     except Exception as e:
         out["error"] = str(e)
 
@@ -2244,6 +2258,13 @@ def _probe_upstream_item(it: dict) -> dict:
             "stream": False,
             "max_tokens": 8,
         }
+        if is_openrouter_url(url):
+            body["reasoning"] = {
+                "enabled": True,
+                "max_tokens": OPENROUTER_REASONING_MAX_TOKENS,
+            }
+            if OPENROUTER_VERBOSITY:
+                body["verbosity"] = OPENROUTER_VERBOSITY
         rc = requests.post(url, headers=headers, json=body, timeout=20)
         out["chat_status"] = int(rc.status_code or 0)
         if rc.status_code >= 400:
@@ -2302,6 +2323,8 @@ def _resolve_translation_upstream() -> tuple[str, str]:
 
 def _pick_translation_model(url: str, api_key: str) -> str:
     """尽量从 /v1/models 里拿第一个模型；失败时退回默认模型配置。"""
+    if is_openrouter_url(url) and OPENROUTER_FIXED_MODEL:
+        return OPENROUTER_FIXED_MODEL
     fallback = str(DEFAULT_CHAT_MODEL or "").strip()
     if not fallback:
         gateway_models = [str(x or "").strip() for x in (GATEWAY_MODELS or []) if str(x or "").strip()]

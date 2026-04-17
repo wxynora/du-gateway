@@ -30,6 +30,13 @@ from config import (
     DATA_DIR,
     SILICONFLOW_BASE_HOST,
     SILICONFLOW_DEFAULT_MODEL,
+    OPENROUTER_FIXED_MODEL,
+    OPENROUTER_REASONING_MAX_TOKENS,
+    OPENROUTER_VERBOSITY,
+    OPENROUTER_ULTRA_THINK_ENABLED,
+    OPENROUTER_ULTRA_THINK_PROMPT,
+    is_openrouter_url,
+    openrouter_models_response,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -185,6 +192,71 @@ def _build_upstream_error_hint(last_err: str) -> str:
     )
 
 
+def _get_active_upstream_url() -> str:
+    try:
+        from storage.upstream_store import get_active_item
+
+        active = get_active_item() or {}
+        url = (active.get("url") or "").strip()
+        if url:
+            return url
+    except Exception:
+        pass
+
+    if TARGET_AI_URL and TARGET_AI_URL.strip():
+        return TARGET_AI_URL.strip()
+    if TARGET_AI_URLS:
+        return (TARGET_AI_URLS[0] or "").strip()
+    return ""
+
+
+def _apply_openrouter_request_policy(body: dict, upstream_url: str) -> dict:
+    body = dict(body or {})
+    if not is_openrouter_url(upstream_url):
+        return body
+    if OPENROUTER_FIXED_MODEL:
+        body["model"] = OPENROUTER_FIXED_MODEL
+    reasoning = body.get("reasoning")
+    if not isinstance(reasoning, dict):
+        reasoning = {}
+    reasoning["enabled"] = True
+    if OPENROUTER_REASONING_MAX_TOKENS > 0:
+        reasoning["max_tokens"] = OPENROUTER_REASONING_MAX_TOKENS
+    body["reasoning"] = reasoning
+    if OPENROUTER_VERBOSITY:
+        body["verbosity"] = OPENROUTER_VERBOSITY
+    if OPENROUTER_ULTRA_THINK_ENABLED and OPENROUTER_ULTRA_THINK_PROMPT:
+        body["messages"] = _inject_openrouter_ultra_think_prompt(body.get("messages") or [])
+    return body
+
+
+_OPENROUTER_ULTRA_THINK_MARKER = "[openrouter-opus47-ultra-think]"
+_OPENROUTER_REASONING_OMITTED_HINT = "（模型已进行 adaptive thinking，但当前上游未返回可展示的思维链正文）"
+
+
+def _inject_openrouter_ultra_think_prompt(messages: list) -> list:
+    items = [dict(m) for m in (messages or []) if isinstance(m, dict)]
+    if not OPENROUTER_ULTRA_THINK_PROMPT:
+        return items
+    for msg in items:
+        content = msg.get("content")
+        if isinstance(content, str) and _OPENROUTER_ULTRA_THINK_MARKER in content:
+            return items
+    hint = f"{_OPENROUTER_ULTRA_THINK_MARKER}\n{OPENROUTER_ULTRA_THINK_PROMPT}"
+    for idx, msg in enumerate(items):
+        if str(msg.get("role") or "").strip().lower() == "system":
+            content = msg.get("content")
+            if isinstance(content, str):
+                msg["content"] = hint + "\n\n" + content
+            elif isinstance(content, list):
+                msg["content"] = [{"type": "text", "text": hint}, *content]
+            else:
+                msg["content"] = hint
+            items[idx] = msg
+            return items
+    return [{"role": "system", "content": hint}, *items]
+
+
 def _chat_url_to_models_url(chat_url: str) -> str:
     """从 chat completions URL 推出 /v1/models 的 URL。"""
     if not chat_url:
@@ -218,6 +290,47 @@ def _extract_thinking_from_content(content: str) -> tuple[str, str]:
     return stripped, "\n\n".join(thinking_parts)
 
 
+def _normalize_reasoning_details(value) -> list:
+    if isinstance(value, list):
+        return [x for x in value if isinstance(x, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
+    reasoning_parts: list[str] = []
+    details = _normalize_reasoning_details(obj.get("reasoning_details")) if isinstance(obj, dict) else []
+    omitted = False
+    if isinstance(obj, dict):
+        for rk in ("reasoning", "reasoning_content", "thinking"):
+            val = obj.get(rk)
+            if isinstance(val, str) and val.strip():
+                reasoning_parts.append(val.strip())
+        for item in details:
+            for key in ("type", "display", "format"):
+                val = str(item.get(key) or "").strip().lower()
+                if val == "omitted":
+                    omitted = True
+            if item.get("omitted") is True:
+                omitted = True
+    return "\n\n".join([x for x in reasoning_parts if x]).strip(), details, omitted
+
+
+def _apply_reasoning_metadata(msg: dict) -> dict:
+    if not isinstance(msg, dict):
+        return msg
+    text, details, omitted = _extract_reasoning_text_and_details(msg)
+    if text:
+        existing = str(msg.get("reasoning") or "").strip()
+        msg["reasoning"] = (existing + "\n\n" + text).strip() if existing and text not in existing else (existing or text)
+    if details:
+        msg["reasoning_details"] = details
+    if omitted:
+        msg["reasoning_omitted"] = True
+    return msg
+
+
 def _strip_thinking_from_response_json(resp_json: dict) -> dict:
     """
     从非流式上游响应中剥离 content 里的 <think> 块，
@@ -237,13 +350,11 @@ def _strip_thinking_from_response_json(resp_json: dict) -> dict:
     if not isinstance(content, str):
         return resp_json
     stripped, thinking = _extract_thinking_from_content(content)
-    if not thinking:
-        return resp_json
     msg["content"] = stripped
     if thinking:
         existing = str(msg.get("reasoning") or "").strip()
         msg["reasoning"] = (existing + "\n\n" + thinking).strip() if existing else thinking
-    return resp_json
+    return _apply_reasoning_metadata(msg) and resp_json
 
 
 def _strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
@@ -265,7 +376,7 @@ def _strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
         if not isinstance(delta, dict):
             return chunk
         changed = False
-        for rk in ("reasoning", "reasoning_content", "thinking"):
+        for rk in ("reasoning", "reasoning_content", "thinking", "reasoning_details"):
             if rk in delta:
                 del delta[rk]
                 changed = True
@@ -284,11 +395,12 @@ def _strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
 def _parse_stream_to_message(chunks: list) -> dict:
     """
     从流式 SSE chunks 解析出完整 assistant message（content + tool_calls）。
-    返回 {"content": str, "tool_calls": list or None, "reasoning": str|None}。
-    reasoning 兼容不同上游字段：reasoning / reasoning_content / thinking。
+    返回 {"content": str, "tool_calls": list or None, "reasoning": str|None, ...}。
     """
     content_parts = []
     reasoning_parts = []
+    reasoning_details: list[dict] = []
+    reasoning_omitted = False
     # tool_calls 按 index 聚合，arguments 可能多 delta 拼接
     tool_calls_by_index = {}
     for chunk in chunks:
@@ -304,10 +416,13 @@ def _parse_stream_to_message(chunks: list) -> dict:
             continue
         if delta.get("content"):
             content_parts.append(delta["content"])
-        # 兼容常见字段名（不同中转/供应商可能不同）
-        for rk in ("reasoning", "reasoning_content", "thinking"):
-            if delta.get(rk):
-                reasoning_parts.append(str(delta.get(rk)))
+        text, details, omitted = _extract_reasoning_text_and_details(delta)
+        if text:
+            reasoning_parts.append(text)
+        if details:
+            reasoning_details.extend(details)
+        if omitted:
+            reasoning_omitted = True
         for tc in delta.get("tool_calls") or []:
             idx = tc.get("index")
             if idx is None:
@@ -329,6 +444,8 @@ def _parse_stream_to_message(chunks: list) -> dict:
         "content": "".join(content_parts),
         "tool_calls": sorted_tcs if sorted_tcs else None,
         "reasoning": "".join(reasoning_parts).strip() or None,
+        "reasoning_details": reasoning_details or None,
+        "reasoning_omitted": reasoning_omitted,
     }
 
 
@@ -370,6 +487,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         try:
+            body_send = _apply_openrouter_request_policy(body_send, url)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
@@ -413,6 +531,8 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
     """
     content_parts = []
     reasoning_parts = []
+    reasoning_details_parts: list[dict] = []
+    reasoning_omitted = False
     last_user = _last_user_message(body.get("messages") or [])
 
     def _collect_content_from_chunk(chunk):
@@ -434,9 +554,13 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                                 reasoning_parts.append(in_content_thinking)
                         else:
                             content_parts.append(raw_content)
-                    for rk in ("reasoning", "reasoning_content", "thinking"):
-                        if delta.get(rk):
-                            reasoning_parts.append(str(delta.get(rk)))
+                    text, details, omitted = _extract_reasoning_text_and_details(delta)
+                    if text:
+                        reasoning_parts.append(text)
+                    if details:
+                        reasoning_details_parts.extend(details)
+                    if omitted:
+                        reasoning_omitted = True
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
@@ -530,6 +654,10 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                 msg = {"role": "assistant", "content": visible}
                 if full_reasoning:
                     msg["reasoning"] = full_reasoning
+                if reasoning_details_parts:
+                    msg["reasoning_details"] = reasoning_details_parts
+                if reasoning_omitted:
+                    msg["reasoning_omitted"] = True
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
                 logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
                 step_archive_and_maybe_summary(
@@ -576,6 +704,12 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                 if parsed.get("reasoning"):
                     msg["reasoning"] = parsed.get("reasoning")
                     reasoning_parts.append(parsed.get("reasoning") or "")
+                if parsed.get("reasoning_details"):
+                    msg["reasoning_details"] = parsed.get("reasoning_details")
+                    reasoning_details_parts.extend(parsed.get("reasoning_details") or [])
+                if parsed.get("reasoning_omitted"):
+                    msg["reasoning_omitted"] = True
+                    reasoning_omitted = True
                 current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
                 continue
             du_state = PcmdDuThoughtStreamState()
@@ -593,6 +727,10 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                     content_parts.append(extra_vis)
             if parsed.get("reasoning"):
                 reasoning_parts.append(parsed.get("reasoning") or "")
+            if parsed.get("reasoning_details"):
+                reasoning_details_parts.extend(parsed.get("reasoning_details") or [])
+            if parsed.get("reasoning_omitted"):
+                reasoning_omitted = True
             break
     finally:
         full_content = "".join(content_parts)
@@ -619,6 +757,10 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             msg = {"role": "assistant", "content": visible}
             if full_reasoning:
                 msg["reasoning"] = full_reasoning
+            if reasoning_details_parts:
+                msg["reasoning_details"] = reasoning_details_parts
+            if reasoning_omitted:
+                msg["reasoning_omitted"] = True
             tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
             if tc_trace:
                 msg["tool_calls"] = tc_trace
@@ -661,6 +803,7 @@ def _forward_to_ai(body: dict, headers: dict):
                 if cur is None or (isinstance(cur, (int, float)) and int(cur) < MAX_COMPLETION_TOKENS):
                     body_send["max_tokens"] = MAX_COMPLETION_TOKENS
                     logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
+            body_send = _apply_openrouter_request_policy(body_send, url)
             r = requests.post(url, headers=req_headers, json=body_send, timeout=120)
             # 为排查上游 403：记录鉴权是否携带（不泄露 key），以及响应正文前缀
             try:
@@ -863,7 +1006,7 @@ def _append_tool_results_and_continue(body: dict, assistant_message: dict, tool_
         "content": assistant_message.get("content") or None,
         "tool_calls": assistant_message.get("tool_calls"),
     }
-    for rk in ("reasoning", "reasoning_content", "thinking"):
+    for rk in ("reasoning", "reasoning_content", "thinking", "reasoning_details", "reasoning_omitted"):
         if assistant_message.get(rk):
             assistant_trace[rk] = assistant_message.get(rk)
     messages.append(assistant_trace)
@@ -977,6 +1120,11 @@ def list_models():
     if not targets:
         return jsonify({"error": _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置")}), 502
     url, api_key = targets[0]
+    if is_openrouter_url(url):
+        data = openrouter_models_response()
+        if data:
+            return jsonify(data), 200
+        return jsonify({"error": "OPENROUTER_FIXED_MODEL 未配置"}), 502
     models_url = _chat_url_to_models_url(url)
     if not models_url:
         return jsonify({"error": "无法解析模型列表地址"}), 502
@@ -1001,6 +1149,7 @@ def chat_completions():
     """统一入口：所有请求走完整管道（清洗、注入、转发、存档），无开头过滤。支持 X-Window-Id / body.window_id（如 Telegram 用 tg_{user_id}）。"""
     body = request.get_json(silent=True) or {}
     body = _normalize_request_model(body)
+    body = _apply_openrouter_request_policy(body, _get_active_upstream_url())
     req_model = (body.get("model") or "").strip() if isinstance(body.get("model"), str) else ""
     if not req_model:
         return jsonify({"error": "缺少 model"}), 400
@@ -1098,16 +1247,15 @@ def chat_completions():
     # 非流式 + 有 Notion 工具时：若上游返回 tool_calls，执行工具并继续请求，直到无 tool_calls 或达到最大轮数
     # 收集中间轮次 reasoning 供 MiniApp 思维链面板使用，但不回填到返回给客户端的 resp_json，
     # 避免客户端（RikkaHub 等）把 reasoning 渲染成对话内容。
-    accumulated_reasoning_parts: list[str] = []
+    accumulated_reasoning_details: list[dict] = []
     max_tool_rounds = TOOL_MAX_ROUNDS
     for _ in range(max_tool_rounds - 1):
         msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
         if isinstance(msg, dict):
-            for rk in ("reasoning", "reasoning_content", "thinking"):
-                val = (msg.get(rk) or "").strip()
-                if val:
-                    accumulated_reasoning_parts.append(val)
-                    break
+            _apply_reasoning_metadata(msg)
+            details = _normalize_reasoning_details(msg.get("reasoning_details"))
+            if details:
+                accumulated_reasoning_details.extend(details)
         tool_calls = (msg or {}).get("tool_calls")
         if not tool_calls or not isinstance(tool_calls, list):
             break
@@ -1122,6 +1270,12 @@ def chat_completions():
         # 剥离 content 里的 <think>/<thinking> 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
         # thinking 已合并入 message.reasoning，R2 存档的 msg_for_r2 独立 deepcopy，不受此影响。
         resp_json = _strip_thinking_from_response_json(resp_json)
+        try:
+            final_msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
+            if isinstance(final_msg, dict):
+                _apply_reasoning_metadata(final_msg)
+        except Exception:
+            pass
     if status == 200 and resp_json:
         cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):
@@ -1139,8 +1293,10 @@ def chat_completions():
                     if msg_for_r2.get(rk):
                         msg_for_r2["reasoning"] = msg_for_r2.get(rk)
                         break
-            if not msg_for_r2.get("reasoning") and accumulated_reasoning_parts:
-                msg_for_r2["reasoning"] = "".join(accumulated_reasoning_parts).strip()
+            if not msg_for_r2.get("reasoning_details") and accumulated_reasoning_details:
+                msg_for_r2["reasoning_details"] = accumulated_reasoning_details
+            if msg_for_r2.get("reasoning_details") and not msg_for_r2.get("reasoning_omitted"):
+                msg_for_r2["reasoning_omitted"] = True
             tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
             if tc_trace and not msg_for_r2.get("tool_calls"):
                 msg_for_r2["tool_calls"] = tc_trace
