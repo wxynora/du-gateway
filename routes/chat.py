@@ -398,7 +398,7 @@ def _strip_thinking_from_response_json(resp_json: dict) -> dict:
     if thinking:
         existing = str(msg.get("reasoning") or "").strip()
         msg["reasoning"] = (existing + "\n\n" + thinking).strip() if existing else thinking
-    return _apply_reasoning_metadata(msg) and resp_json
+    return resp_json
 
 
 def _strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
@@ -1296,7 +1296,6 @@ def chat_completions():
     for _ in range(max_tool_rounds - 1):
         msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
         if isinstance(msg, dict):
-            _apply_reasoning_metadata(msg)
             details = _normalize_reasoning_details(msg.get("reasoning_details"))
             if details:
                 accumulated_reasoning_details.extend(details)
@@ -1314,12 +1313,6 @@ def chat_completions():
         # 剥离 content 里的 <think>/<thinking> 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
         # thinking 已合并入 message.reasoning，R2 存档的 msg_for_r2 独立 deepcopy，不受此影响。
         resp_json = _strip_thinking_from_response_json(resp_json)
-        try:
-            final_msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
-            if isinstance(final_msg, dict):
-                _apply_reasoning_metadata(final_msg)
-        except Exception:
-            pass
     if status == 200 and resp_json:
         cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):
