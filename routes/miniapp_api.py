@@ -69,6 +69,20 @@ def _wenyou_session_id() -> int:
     return int(WENYOU_GROUP_CHAT_ID or TELEGRAM_WENYOU_OWNER_USER_ID or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
 
 
+def _resolve_primary_chat_window_id() -> str:
+    recent = whitelist_store.list_recent_windows(limit=200) or []
+    for w in recent:
+        wid = str((w or {}).get("id") or "").strip()
+        if wid.startswith("tg_"):
+            return wid
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if uid > 0:
+        return f"tg_{uid}"
+    if recent:
+        return str((recent[0] or {}).get("id") or "").strip()
+    return ""
+
+
 def _notify_schedule_runtime_changed():
     """日历变更后通知网关内置调度线程立即重算。"""
     try:
@@ -612,6 +626,11 @@ def miniapp_panel_auth_session():
         "exp": payload.get("exp"),
         "device_id": payload.get("device_id") or "",
     })
+
+
+@bp.route("/chat-window", methods=["GET"])
+def miniapp_chat_window():
+    return jsonify({"ok": True, "window_id": _resolve_primary_chat_window_id()})
 
 
 @bp.route("/panel-auth/list", methods=["GET"])

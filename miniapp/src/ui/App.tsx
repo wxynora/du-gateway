@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
-import { applyTelegramThemeToHtmlClass, getTelegramWebApp, tgReady } from "./tg";
+import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
 import { apiFetch, apiJson, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
@@ -103,10 +103,12 @@ function Shell({
     // 不强制全屏，保持 Telegram 默认的半屏/弹层体验。
     tgReady(false);
     applyTelegramThemeToHtmlClass();
-    try {
-      const tgUid = Number(getTelegramWebApp()?.initDataUnsafe?.user?.id || 0);
-      if (tgUid > 0) setSharedChatWindowId(`tg_${tgUid}`);
-    } catch {}
+    apiJson<{ ok?: boolean; window_id?: string }>("/miniapp-api/chat-window")
+      .then((j) => {
+        const wid = String(j?.window_id || "").trim();
+        if (wid) setSharedChatWindowId(wid);
+      })
+      .catch(() => {});
     const timer = window.setTimeout(() => {
       setDeferHomeExtras(true);
     }, 320);
@@ -735,7 +737,7 @@ function MainChatScreen({
     const content = input.trim();
     if (!content || sending) return;
     if (!windowId) {
-      toast("当前拿不到 Telegram 用户 ID，不能接入共享上下文");
+      toast("当前还没拿到聊天窗口 ID，不能接入共享上下文");
       return;
     }
     if (!activeModel) {
