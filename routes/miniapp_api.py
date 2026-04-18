@@ -17,6 +17,8 @@ from urllib.parse import quote
 
 from config import (
     MINIAPP_LOG_FILE,
+    WECHAT_ILINK_SYSTEMD_UNIT,
+    QQ_ONEBOT_SYSTEMD_UNIT,
     R2_PUBLIC_URL,
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
     TELEGRAM_WENYOU_OWNER_USER_ID,
@@ -41,7 +43,7 @@ from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
 from storage.miniapp_panel_store import list_trusted_devices, revoke_trusted_device, upsert_trusted_device
 from utils.ip_allowlist import enforce_ip_allowlist
-from utils.log_reader import stream_logs_sse, tail_logs
+from utils.log_reader import resolve_log_path, stream_logs_sse, stream_service_logs_sse, tail_logs, tail_service_logs
 from utils.miniapp_panel_auth import (
     enforce_panel_token,
     issue_panel_token,
@@ -60,6 +62,7 @@ _MEMORY_MAINTENANCE_RUNNING = False
 _MEMORY_MAINTENANCE_LAST_STARTED = ""
 _MEMORY_MAINTENANCE_LAST_FINISHED = ""
 _MEMORY_MAINTENANCE_LAST_ERROR = ""
+_LOG_CATEGORIES = {"all", "proactive", "wechat", "tgbot", "qq"}
 
 
 def _wenyou_session_id() -> int:
@@ -217,6 +220,42 @@ def _parse_beijing_dt(value: str) -> datetime | None:
 def _mood_day_wave(seed_text: str) -> int:
     seed = sum(ord(ch) for ch in (seed_text or ""))
     return (seed % 5) - 2
+
+
+def _miniapp_log_category() -> str:
+    category = str(request.args.get("category") or "all").strip().lower()
+    if category not in _LOG_CATEGORIES:
+        category = "all"
+    return category
+
+
+def _line_matches_log_category(line: str, category: str) -> bool:
+    raw = str(line or "")
+    if category == "all":
+        return True
+    if category == "proactive":
+        return "[TGPro]" in raw or "主动发消息" in raw
+    if category == "tgbot":
+        return "[TGBot]" in raw
+    if category == "wechat":
+        return "[wechat-ilink]" in raw
+    if category == "qq":
+        return "[qq-onebot]" in raw
+    return True
+
+
+def _miniapp_log_source(category: str) -> tuple[str, str]:
+    if category == "wechat":
+        unit = str(WECHAT_ILINK_SYSTEMD_UNIT or "").strip()
+        if not unit:
+            raise ValueError("未配置 WECHAT_ILINK_SYSTEMD_UNIT")
+        return unit, "wechat_journal"
+    if category == "qq":
+        unit = str(QQ_ONEBOT_SYSTEMD_UNIT or "").strip()
+        if not unit:
+            raise ValueError("未配置 QQ_ONEBOT_SYSTEMD_UNIT")
+        return unit, "qq_journal"
+    return str(MINIAPP_LOG_FILE or "").strip(), "gateway"
 
 
 def _voice_call_default_config() -> dict:
@@ -2079,33 +2118,39 @@ def miniapp_stickers_raw_public():
 
 @bp.route("/logs", methods=["GET"])
 def miniapp_logs_tail():
+    category = _miniapp_log_category()
     lines = request.args.get("lines", type=int, default=200)
     if lines < 1:
         lines = 1
     if lines > 2000:
         lines = 2000
     try:
-        out_lines = tail_logs(MINIAPP_LOG_FILE, lines=lines)
-        file_exists = False
-        try:
-            log_file = (MINIAPP_LOG_FILE or "").strip()
-            if log_file:
-                base_dir = Path(__file__).resolve().parent.parent
-                p = Path(log_file)
-                if not p.is_absolute():
-                    p = base_dir / log_file
-                file_exists = p.exists()
-        except Exception:
+        log_path, source_kind = _miniapp_log_source(category)
+        if source_kind == "wechat_journal" or source_kind == "qq_journal":
+            out_lines = tail_service_logs(log_path, lines=lines, line_filter=lambda line: _line_matches_log_category(line, category))
+            file_exists = True
+        else:
+            out_lines = tail_logs(log_path, lines=lines, line_filter=lambda line: _line_matches_log_category(line, category))
             file_exists = False
+            try:
+                log_file = resolve_log_path(log_path)
+                if log_file:
+                    p = Path(log_file)
+                    file_exists = p.exists()
+            except Exception:
+                file_exists = False
         return jsonify(
             {
                 "ok": True,
-                "file": MINIAPP_LOG_FILE,
+                "category": category,
+                "file": log_path,
                 "lines": out_lines,
                 "count": len(out_lines),
-                "source": "file" if file_exists else "stdout",
+                "source": source_kind if file_exists else "stdout",
             }
         )
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e), "category": category}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -2113,17 +2158,34 @@ def miniapp_logs_tail():
 @bp.route("/logs/stream", methods=["GET"])
 def miniapp_logs_stream():
     # SSE：类 tail -f
+    category = _miniapp_log_category()
     start_lines = request.args.get("start_lines", type=int, default=80)
     if start_lines < 0:
         start_lines = 0
     if start_lines > 500:
         start_lines = 500
 
+    try:
+        log_path, _source_kind = _miniapp_log_source(category)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e), "category": category}), 400
+
     def gen():
         # 给客户端一个 ready 信号，避免某些代理等到首 chunk 才认为连接成功
         yield b": ready\n\n"
         time.sleep(0.01)
-        yield from stream_logs_sse(MINIAPP_LOG_FILE, start_lines=start_lines)
+        if _source_kind == "wechat_journal" or _source_kind == "qq_journal":
+            yield from stream_service_logs_sse(
+                log_path,
+                start_lines=start_lines,
+                line_filter=lambda line: _line_matches_log_category(line, category),
+            )
+        else:
+            yield from stream_logs_sse(
+                log_path,
+                start_lines=start_lines,
+                line_filter=lambda line: _line_matches_log_category(line, category),
+            )
 
     return Response(
         stream_with_context(gen()),

@@ -5,6 +5,16 @@ import { useToast } from "../toast";
 
 type LogsResp = { ok?: boolean; lines?: string[]; error?: string };
 
+type LogCategory = "all" | "proactive" | "wechat" | "tgbot" | "qq";
+
+const LOG_CATEGORY_OPTIONS: Array<{ value: LogCategory; label: string }> = [
+  { value: "all", label: "网关总日志" },
+  { value: "proactive", label: "主动信息日志" },
+  { value: "wechat", label: "微信连接器日志" },
+  { value: "tgbot", label: "TGBot 日志" },
+  { value: "qq", label: "QQ 连接器日志" },
+];
+
 export function LogsTab() {
   const toast = useToast();
   const [paused, setPaused] = useState(false);
@@ -12,26 +22,25 @@ export function LogsTab() {
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const [filterText, setFilterText] = useState("");
-  const [filterKind, setFilterKind] = useState<"all" | "proactive" | "alarm">("all");
+  const [filterKind, setFilterKind] = useState<LogCategory>("all");
   const [loadError, setLoadError] = useState("");
 
-  function lineKind(line: string): "proactive" | "alarm" | "other" {
+  function lineKind(line: string): LogCategory | "other" {
     const raw = String(line || "");
     if (raw.includes("[TGPro]") || raw.includes("主动发消息")) return "proactive";
-    if (raw.includes("[Alarm]") || raw.includes("[schedule_runtime]") || raw.includes("日历闹钟") || raw.includes("闹钟")) return "alarm";
+    if (raw.includes("[wechat-ilink]")) return "wechat";
+    if (raw.includes("[TGBot]")) return "tgbot";
+    if (raw.includes("[qq-onebot]")) return "qq";
     return "other";
   }
 
   const filtered = useMemo(() => {
     const k = (filterText || "").trim().toLowerCase();
     return (lines || []).filter((l) => {
-      const kind = lineKind(l);
-      if (filterKind === "proactive" && kind !== "proactive") return false;
-      if (filterKind === "alarm" && kind !== "alarm") return false;
       if (!k) return true;
       return (l || "").toLowerCase().includes(k);
     });
-  }, [lines, filterText, filterKind]);
+  }, [lines, filterText]);
 
   function highlightLine(line: string, keyword: string) {
     const k = (keyword || "").trim().toLowerCase();
@@ -82,22 +91,23 @@ export function LogsTab() {
     }
   }
 
-  async function loadTail() {
+  async function loadTail(silent = false) {
     try {
-      const j = await apiJson<LogsResp>("/miniapp-api/logs?lines=200");
+      const q = new URLSearchParams({ lines: "200", category: filterKind });
+      const j = await apiJson<LogsResp>(`/miniapp-api/logs?${q.toString()}`);
       // 降序展示：最新在最上
       setLines((j.lines || []).slice().reverse());
       setLoadError("");
-      toast("已加载最新日志");
+      if (!silent) toast("已加载最新日志");
     } catch (e: any) {
       setLoadError(e?.message || String(e));
-      toast(`加载失败：${e?.message || e}`);
+      if (!silent) toast(`加载失败：${e?.message || e}`);
     }
   }
 
   function connect() {
     if (esRef.current) return;
-    const es = new EventSource(buildLogStreamUrl(80));
+    const es = new EventSource(buildLogStreamUrl(80, filterKind));
     esRef.current = es;
     setConnected(true);
     es.onmessage = (ev) => {
@@ -119,20 +129,28 @@ export function LogsTab() {
     };
   }
 
-  function disconnect() {
+  function disconnect(silent = false) {
     if (!esRef.current) return;
     try {
       esRef.current.close();
     } catch {}
     esRef.current = null;
     setConnected(false);
-    toast("已断开实时");
+    if (!silent) toast("已断开实时");
   }
 
   useEffect(() => {
-    return () => disconnect();
+    return () => disconnect(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    void loadTail(true);
+    if (!connected) return;
+    disconnect(true);
+    connect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKind]);
 
   return (
     <div className="space-y-3">
@@ -159,22 +177,34 @@ export function LogsTab() {
       ) : null}
 
       <div className="neo-panel p-3 space-y-2">
-        <div className="flex items-center gap-2">
-          <Btn kind={filterKind === "all" ? "blue" : "default"} onClick={() => setFilterKind("all")}>全部</Btn>
-          <Btn kind={filterKind === "proactive" ? "pink" : "default"} onClick={() => setFilterKind("proactive")}>主动消息</Btn>
-          <Btn kind={filterKind === "alarm" ? "yellow" : "default"} onClick={() => setFilterKind("alarm")}>闹钟</Btn>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <select
+            className="neo-input w-full sm:w-52"
+            value={filterKind}
+            onChange={(e) => setFilterKind(e.target.value as LogCategory)}
+          >
+            {LOG_CATEGORY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
           <input
             className="neo-input flex-1"
             placeholder="过滤关键字（不区分大小写）"
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
           />
+        </div>
+
+        <div className="flex items-center gap-2">
           <Btn kind="yellow"
             onClick={() => {
               setFilterText("");
+              setFilterKind("all");
               toast("已清空过滤");
             }}
-            disabled={!filterText.trim()}
+            disabled={!filterText.trim() && filterKind === "all"}
           >
             清空
           </Btn>
@@ -197,9 +227,7 @@ export function LogsTab() {
             const lineClass =
               kind === "proactive"
                 ? "neo-line-proactive"
-                : kind === "alarm"
-                  ? "neo-line-alarm"
-                  : "";
+                : "";
             return (
             <div key={idx} className={`whitespace-pre-wrap ${lineClass}`}>
               {highlightLine(l, filterText)}

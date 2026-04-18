@@ -478,6 +478,9 @@ MINIAPP_TRUST_PROXY = os.environ.get("MINIAPP_TRUST_PROXY", "").strip().lower() 
 
 # 日志文件路径：用于 Mini App 手机端查看；默认读当前工作目录下 gateway.log
 MINIAPP_LOG_FILE = os.environ.get("MINIAPP_LOG_FILE", "gateway.log").strip()
+# 连接器日志源：Mini App 读取 systemd journal
+WECHAT_ILINK_SYSTEMD_UNIT = os.environ.get("WECHAT_ILINK_SYSTEMD_UNIT", "du-wechat-ilink").strip()
+QQ_ONEBOT_SYSTEMD_UNIT = os.environ.get("QQ_ONEBOT_SYSTEMD_UNIT", "du-qq-onebot").strip()
 
 # MiniApp 日历闹钟：网关内置调度（不依赖单独脚本进程）
 MINIAPP_SCHEDULE_RUNTIME_ENABLED = os.environ.get("MINIAPP_SCHEDULE_RUNTIME_ENABLED", "1").strip().lower() in ("1", "true", "yes")

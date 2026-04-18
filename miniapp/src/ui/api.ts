@@ -130,9 +130,10 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   return j as T;
 }
 
-export function buildLogStreamUrl(startLines: number): string {
+export function buildLogStreamUrl(startLines: number, category: string = "all"): string {
   const url = new URL("/miniapp-api/logs/stream", window.location.origin);
   url.searchParams.set("start_lines", String(startLines));
+  url.searchParams.set("category", category || "all");
   const initData = getInitData();
   const panelToken = getPanelToken();
   // EventSource 不能自定义 Header，所以走 query
