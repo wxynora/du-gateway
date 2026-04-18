@@ -1,5 +1,4 @@
 import os
-import subprocess
 import time
 from collections import deque
 from pathlib import Path
@@ -88,79 +87,6 @@ def stream_file_tail_sse(path: str, start_lines: int = 80, poll_interval_s: floa
             time.sleep(max(0.1, float(poll_interval_s)))
 
 
-def tail_journal_logs(unit: str, lines: int = 200, line_filter: Callable[[str], bool] | None = None) -> list[str]:
-    name = str(unit or "").strip()
-    if not name:
-        raise ValueError("empty systemd unit")
-    cmd = ["journalctl", "-u", name, "-n", str(max(1, int(lines))), "--no-pager", "-o", "cat"]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    except FileNotFoundError as e:
-        raise RuntimeError("journalctl not found") from e
-    if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "").strip() or f"journalctl exit={proc.returncode}"
-        raise RuntimeError(err)
-    out: list[str] = []
-    for line in (proc.stdout or "").splitlines():
-        text = line.rstrip("\n")
-        if line_filter and not line_filter(text):
-            continue
-        out.append(text)
-    return out
-
-
-def stream_journal_logs_sse(
-    unit: str,
-    start_lines: int = 80,
-    line_filter: Callable[[str], bool] | None = None,
-):
-    name = str(unit or "").strip()
-    if not name:
-        yield b"data: [log] empty systemd unit\n\n"
-        return
-    cmd = ["journalctl", "-u", name, "-n", str(max(0, int(start_lines))), "-f", "--no-pager", "-o", "cat"]
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-    except FileNotFoundError:
-        yield b"data: [log] journalctl_not_found\n\n"
-        return
-
-    last_heartbeat = time.time()
-    try:
-        if proc.stdout is None:
-            yield b"data: [log] journalctl_no_stdout\n\n"
-            return
-        while True:
-            line = proc.stdout.readline()
-            if line:
-                text = line.rstrip("\n")
-                if not line_filter or line_filter(text):
-                    yield ("data: " + text + "\n\n").encode("utf-8")
-                last_heartbeat = time.time()
-                continue
-            if proc.poll() is not None:
-                code = proc.returncode or 0
-                if code != 0:
-                    yield f"data: [log] journalctl_exit={code}\n\n".encode("utf-8")
-                return
-            now = time.time()
-            if now - last_heartbeat >= 10:
-                yield b": ping\n\n"
-                last_heartbeat = now
-            time.sleep(0.2)
-    finally:
-        try:
-            proc.terminate()
-        except Exception:
-            pass
-
-
 def tail_logs(path: str, lines: int = 200, line_filter: Callable[[str], bool] | None = None) -> list[str]:
     """
     日志读取：优先读文件；文件不存在则从进程内 stdout 缓冲读取。
@@ -174,10 +100,6 @@ def tail_logs(path: str, lines: int = 200, line_filter: Callable[[str], bool] | 
     if line_filter:
         out = [line for line in out if line_filter(line)]
     return out
-
-
-def tail_service_logs(unit: str, lines: int = 200, line_filter: Callable[[str], bool] | None = None) -> list[str]:
-    return tail_journal_logs(unit, lines=lines, line_filter=line_filter)
 
 
 def stream_logs_sse(
@@ -217,12 +139,4 @@ def stream_logs_sse(
             line = str(payload)
             if not line_filter or line_filter(line):
                 yield ("data: " + line + "\n\n").encode("utf-8")
-
-
-def stream_service_logs_sse(
-    unit: str,
-    start_lines: int = 80,
-    line_filter: Callable[[str], bool] | None = None,
-):
-    yield from stream_journal_logs_sse(unit, start_lines=start_lines, line_filter=line_filter)
 

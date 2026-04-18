@@ -17,8 +17,8 @@ from urllib.parse import quote
 
 from config import (
     MINIAPP_LOG_FILE,
-    WECHAT_ILINK_SYSTEMD_UNIT,
-    QQ_ONEBOT_SYSTEMD_UNIT,
+    WECHAT_ILINK_LOG_FILE,
+    QQ_ONEBOT_LOG_FILE,
     R2_PUBLIC_URL,
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
     TELEGRAM_WENYOU_OWNER_USER_ID,
@@ -43,7 +43,7 @@ from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
 from storage.miniapp_panel_store import list_trusted_devices, revoke_trusted_device, upsert_trusted_device
 from utils.ip_allowlist import enforce_ip_allowlist
-from utils.log_reader import resolve_log_path, stream_logs_sse, stream_service_logs_sse, tail_logs, tail_service_logs
+from utils.log_reader import resolve_log_path, stream_logs_sse, tail_logs
 from utils.miniapp_panel_auth import (
     enforce_panel_token,
     issue_panel_token,
@@ -246,15 +246,15 @@ def _line_matches_log_category(line: str, category: str) -> bool:
 
 def _miniapp_log_source(category: str) -> tuple[str, str]:
     if category == "wechat":
-        unit = str(WECHAT_ILINK_SYSTEMD_UNIT or "").strip()
-        if not unit:
-            raise ValueError("未配置 WECHAT_ILINK_SYSTEMD_UNIT")
-        return unit, "wechat_journal"
+        path = str(WECHAT_ILINK_LOG_FILE or "").strip()
+        if not path:
+            raise ValueError("未配置 WECHAT_ILINK_LOG_FILE")
+        return path, "wechat"
     if category == "qq":
-        unit = str(QQ_ONEBOT_SYSTEMD_UNIT or "").strip()
-        if not unit:
-            raise ValueError("未配置 QQ_ONEBOT_SYSTEMD_UNIT")
-        return unit, "qq_journal"
+        path = str(QQ_ONEBOT_LOG_FILE or "").strip()
+        if not path:
+            raise ValueError("未配置 QQ_ONEBOT_LOG_FILE")
+        return path, "qq"
     return str(MINIAPP_LOG_FILE or "").strip(), "gateway"
 
 
@@ -2126,19 +2126,15 @@ def miniapp_logs_tail():
         lines = 2000
     try:
         log_path, source_kind = _miniapp_log_source(category)
-        if source_kind == "wechat_journal" or source_kind == "qq_journal":
-            out_lines = tail_service_logs(log_path, lines=lines, line_filter=lambda line: _line_matches_log_category(line, category))
-            file_exists = True
-        else:
-            out_lines = tail_logs(log_path, lines=lines, line_filter=lambda line: _line_matches_log_category(line, category))
+        out_lines = tail_logs(log_path, lines=lines, line_filter=lambda line: _line_matches_log_category(line, category))
+        file_exists = False
+        try:
+            log_file = resolve_log_path(log_path)
+            if log_file:
+                p = Path(log_file)
+                file_exists = p.exists()
+        except Exception:
             file_exists = False
-            try:
-                log_file = resolve_log_path(log_path)
-                if log_file:
-                    p = Path(log_file)
-                    file_exists = p.exists()
-            except Exception:
-                file_exists = False
         return jsonify(
             {
                 "ok": True,
@@ -2146,7 +2142,7 @@ def miniapp_logs_tail():
                 "file": log_path,
                 "lines": out_lines,
                 "count": len(out_lines),
-                "source": source_kind if file_exists else "stdout",
+                "source": source_kind if file_exists else ("stdout" if source_kind == "gateway" else source_kind),
             }
         )
     except ValueError as e:
@@ -2174,18 +2170,11 @@ def miniapp_logs_stream():
         # 给客户端一个 ready 信号，避免某些代理等到首 chunk 才认为连接成功
         yield b": ready\n\n"
         time.sleep(0.01)
-        if _source_kind == "wechat_journal" or _source_kind == "qq_journal":
-            yield from stream_service_logs_sse(
-                log_path,
-                start_lines=start_lines,
-                line_filter=lambda line: _line_matches_log_category(line, category),
-            )
-        else:
-            yield from stream_logs_sse(
-                log_path,
-                start_lines=start_lines,
-                line_filter=lambda line: _line_matches_log_category(line, category),
-            )
+        yield from stream_logs_sse(
+            log_path,
+            start_lines=start_lines,
+            line_filter=lambda line: _line_matches_log_category(line, category),
+        )
 
     return Response(
         stream_with_context(gen()),
