@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import { applyTelegramThemeToHtmlClass, getTelegramWebApp, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
-import { apiFetch, apiJson, buildApiAssetUrl, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, setPanelToken } from "./api";
+import { apiFetch, apiJson, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
@@ -17,8 +17,6 @@ const StickersTab = lazy(() => import("./tabs/StickersTab").then((m) => ({ defau
 const CallHubScreen = lazy(() => import("./tabs/CallHubScreen").then((m) => ({ default: m.CallHubScreen })));
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | null;
-type BgPreset = "cream" | "grid" | "soft";
-type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number; imageStamp: number };
 type CyberTreeData = {
   ok: boolean;
   startDate: string;
@@ -59,7 +57,6 @@ type DeviceItem = {
   revoked?: boolean;
   current?: boolean;
 };
-const BG_STORAGE_KEY = "miniapp.bg.config.v1";
 
 function Shell({
   onLogout,
@@ -74,7 +71,6 @@ function Shell({
   const [panel, setPanel] = useState<PanelId>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showCorePrompt, setShowCorePrompt] = useState(false);
-  const [showBgEditor, setShowBgEditor] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showAlarm, setShowAlarm] = useState(false);
   const [showDuDay, setShowDuDay] = useState(false);
@@ -102,14 +98,6 @@ function Shell({
         if (j?.ok && j?.report) setDailyReport(j.report);
       })
       .catch(() => {});
-  const version = new URLSearchParams(window.location.search).get("v") || "";
-  const [bg, setBg] = useState<BgConfig>({
-    preset: "cream",
-    useImage: false,
-    imageVersion: 0,
-    dim: 20,
-    imageStamp: 0,
-  });
 
   useEffect(() => {
     // 不强制全屏，保持 Telegram 默认的半屏/弹层体验。
@@ -122,36 +110,11 @@ function Shell({
     const timer = window.setTimeout(() => {
       setDeferHomeExtras(true);
     }, 320);
-    try {
-      const raw = localStorage.getItem(BG_STORAGE_KEY);
-      if (raw) {
-        const j = JSON.parse(raw);
-        setBg({
-          preset: (j?.preset || "cream") as BgPreset,
-          useImage: !!j?.useImage,
-          imageVersion: Number(j?.imageVersion || 0),
-          dim: Number.isFinite(Number(j?.dim)) ? Math.max(0, Math.min(70, Number(j?.dim))) : 20,
-          imageStamp: 0,
-        });
-      }
-    } catch {}
     return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
     if (!deferHomeExtras) return;
-    apiJson<{ ok?: boolean; config?: Partial<BgConfig> }>("/miniapp-api/background-config")
-      .then((j) => {
-        if (!j?.ok || !j?.config) return;
-        setBg((prev: BgConfig) => ({
-          preset: (j.config?.preset as BgPreset) || prev.preset,
-          useImage: !!j.config?.useImage,
-          imageVersion: Math.max(Number(prev.imageVersion || 0), Number(j.config?.imageVersion || 0)),
-          dim: Number.isFinite(Number(j.config?.dim)) ? Math.max(0, Math.min(70, Number(j.config?.dim))) : prev.dim,
-          imageStamp: prev.imageStamp || 0,
-        }));
-      })
-      .catch(() => {});
     apiJson<{ ok?: boolean; text?: string }>("/miniapp-api/daily-whisper")
       .then((j) => {
         const text = (j?.text || "").toString().trim();
@@ -185,12 +148,6 @@ function Shell({
   }, [showTree]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(BG_STORAGE_KEY, JSON.stringify(bg));
-    } catch {}
-  }, [bg]);
-
-  useEffect(() => {
     if (!tree) return;
     const dayMarks = tree.milestones?.reachedDays || [];
     const roundMarks = tree.milestones?.reachedRounds || [];
@@ -209,50 +166,62 @@ function Shell({
       }
     }
   }, [tree, toast]);
-  const rootStyle = buildBackgroundStyle(bg);
 
   const renderMainTab = () => {
     if (mainTab === "daily") {
       return (
-        <MainSection title="日常">
-          <RowLink
-            label="树"
-            description={tree ? `第 ${tree.daysTogether || 0} 天 · ${Number(tree.growth || 0).toFixed(0)} 成长值` : "成长状态与今天的树况"}
-            onClick={() => setShowTree(true)}
-          />
-          <RowLink label="渡的一天" description="看今天的小日程和片段" onClick={() => setShowDuDay(true)} />
-          <RowLink label="闹钟" description="查看和管理提醒" onClick={() => setShowAlarm(true)} />
-          <RowLink label="日历" description="安排和查看日常计划" onClick={() => setShowSchedule(true)} />
-        </MainSection>
+        <div className="bg-[#FDFDFD] px-6 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)" }}>
+          <h1 className="mb-8 text-[26px] font-medium tracking-tight text-gray-900">日常</h1>
+          <div className="space-y-4">
+            <PageCardRow
+              icon={<FeatherIcon />}
+              label="树"
+              onClick={() => setShowTree(true)}
+            />
+            <PageCardRow
+              icon={<SunIconMini />}
+              label="渡的一天"
+              onClick={() => setShowDuDay(true)}
+            />
+            <PageCardRow
+              icon={<ClockIconMini />}
+              label="闹钟"
+              onClick={() => setShowAlarm(true)}
+            />
+            <PageCardRow
+              icon={<CalendarIconMini />}
+              label="日历"
+              onClick={() => setShowSchedule(true)}
+            />
+          </div>
+        </div>
       );
     }
     if (mainTab === "tools") {
       return (
-        <MainSection title="工具">
-          <RowLink label="日志" description="查看 / 过滤 / 复制" onClick={() => setPanel("logs")} />
-          <RowLink label="思维链" description="最近 10 条推理与工具调用" onClick={() => setPanel("reasoning")} />
-          <RowLink label="记忆调试" description="窗口总结与动态召回" onClick={() => setPanel("memory-debug")} />
-          <RowLink label="渡的记事本" description="固定注入与条目管理" onClick={() => setPanel("du-notebook")} />
-          <RowLink label="核心 Prompt" description="固定注入内容维护" onClick={() => setShowCorePrompt(true)} />
-          <RowLink label="上游切换" description="查看并切换当前全局上游" onClick={() => setShowSettings(true)} />
-        </MainSection>
+        <div className="bg-[#FDFDFD] px-6 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)" }}>
+          <h1 className="mb-8 text-[26px] font-medium tracking-tight text-gray-900">工具</h1>
+          <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
+            <ListRow icon={<FileTextIcon />} label="日志" onClick={() => setPanel("logs")} />
+            <ListRow icon={<GitMergeIcon />} label="思维链" onClick={() => setPanel("reasoning")} />
+            <ListRow icon={<CpuIcon />} label="记忆调试" onClick={() => setPanel("memory-debug")} />
+            <ListRow icon={<BookOpenIcon />} label="渡的记事本" onClick={() => setPanel("du-notebook")} />
+            <ListRow icon={<CodeIcon />} label="核心 Prompt" onClick={() => setShowCorePrompt(true)} />
+            <ListRow icon={<ToggleRightIcon />} label="上游切换" onClick={() => setShowSettings(true)} last />
+          </div>
+        </div>
       );
     }
     if (mainTab === "settings") {
       return (
-        <MainSection title="设置">
-          <RowLink label="安全管理" description="登录安全、退出与设备权限" onClick={() => onOpenSecurity?.()} />
-          <RowLink label="设备管理" description="查看和撤销当前已登录设备" onClick={() => onOpenDevices?.()} />
-          <RowLink label="背景设置" description="背景预设与相册图片同步" onClick={() => setShowBgEditor(true)} />
-          {onLogout ? (
-            <button
-              className="mt-3 flex w-full items-center justify-center rounded-[20px] bg-[#E7D1D0] px-4 py-3 text-sm font-semibold text-[#734b49] shadow-[0_8px_20px_rgba(49,32,28,0.08)] active:scale-[0.99]"
-              onClick={onLogout}
-            >
-              退出登录
-            </button>
-          ) : null}
-        </MainSection>
+        <div className="bg-[#FDFDFD] px-6 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)" }}>
+          <h1 className="mb-8 text-[26px] font-medium tracking-tight text-gray-900">设置</h1>
+          <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
+            <ListRow icon={<ShieldIconMini />} label="安全管理" onClick={() => onOpenSecurity?.()} />
+            <ListRow icon={<SmartphoneIconMini />} label="设备管理" onClick={() => onOpenDevices?.()} />
+            {onLogout ? <ListRow icon={<LogoutIconMini />} label="退出登录" onClick={onLogout} last /> : null}
+          </div>
+        </div>
       );
     }
     return (
@@ -271,7 +240,7 @@ function Shell({
   };
 
   return (
-    <div className="relative min-h-dvh safe-bottom overflow-hidden text-cream-text" style={rootStyle}>
+    <div className="relative min-h-dvh safe-bottom overflow-hidden bg-[#FDFDFD] text-gray-900">
       {activeScreen === "du" ? (
         <MainChatScreen
           title="渡"
@@ -290,7 +259,7 @@ function Shell({
       ) : null}
       {!activeScreen ? (
         <>
-          <div className="relative min-h-dvh overflow-y-auto pb-[98px]">
+          <div className="relative min-h-dvh overflow-y-auto pb-[80px]">
             {renderMainTab()}
           </div>
           <BottomNav current={mainTab} onChange={setMainTab} />
@@ -329,7 +298,6 @@ function Shell({
         </FullScreenPane>
       ) : null}
       {showCorePrompt ? <CorePromptEditor onClose={() => setShowCorePrompt(false)} /> : null}
-      {showBgEditor ? <BackgroundEditor bg={bg} onChange={setBg} onClose={() => setShowBgEditor(false)} /> : null}
       {showSchedule ? (
         <FullScreenPane title="日历" accent="neutral" onBack={() => setShowSchedule(false)}>
           <LazyPane><ScheduleTab /></LazyPane>
@@ -378,186 +346,6 @@ function Shell({
         </FullScreenPane>
       ) : null}
       {showCallHub ? <LazyPane><CallHubScreen onClose={() => setShowCallHub(false)} /></LazyPane> : null}
-    </div>
-  );
-}
-
-function FeatureTile({
-  title,
-  desc,
-  tone,
-  icon,
-  onClick,
-  disabled,
-}: {
-  title: string;
-  desc: string;
-  tone: "blue" | "pink" | "yellow";
-  icon: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  const toneMap = {
-    blue: {
-      shell: "bg-[rgba(240,246,251,0.54)]",
-      badge: "bg-[#D6E4F2]",
-    },
-    pink: {
-      shell: "bg-[rgba(240,246,251,0.54)]",
-      badge: "bg-[#EFD5E1]",
-    },
-    yellow: {
-      shell: "bg-[rgba(240,246,251,0.54)]",
-      badge: "bg-[#F2E7BF]",
-    },
-  }[tone];
-  return (
-    <button
-      className={
-        "group relative min-h-[116px] overflow-hidden rounded-[24px] p-4 text-left shadow-[6px_6px_13px_rgba(170,180,194,0.28),-3px_-3px_7px_rgba(255,255,255,0.52),inset_1px_1px_0_rgba(255,255,255,0.22)] backdrop-blur-xl transition active:scale-[0.99] " +
-        toneMap.shell +
-        (disabled ? " opacity-60 cursor-not-allowed" : "")
-      }
-      onClick={() => {
-        if (disabled) return;
-        onClick();
-      }}
-      disabled={disabled}
-    >
-      <div className="relative flex items-center gap-3">
-        <span className={"inline-flex h-10 w-10 items-center justify-center rounded-[16px] shadow-[4px_4px_9px_rgba(173,182,196,0.18),-1px_-1px_3px_rgba(255,255,255,0.34)] " + toneMap.badge}>
-          {icon}
-        </span>
-        <div className="min-w-0">
-          <div className="text-[16px] font-semibold tracking-tight">{title}</div>
-          <div className="mt-1 text-[11px] leading-[1.45] text-cream-muted">{desc}</div>
-        </div>
-      </div>
-    </button>
-  );
-}
-
-function LineIcon({ name }: { name: "logs" | "reasoning" | "upstream" | "prompt" | "background" | "tree" | "memory" | "notebook" | "wenyou-archives" | "wenyou-hub" | "stickers" | "voice-call" }) {
-  const cls = "h-4 w-4 text-cream-text";
-  if (name === "logs") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 12h16M4 18h10" /></svg>;
-  if (name === "reasoning") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 12h4l2-4 4 8 2-4h4" /></svg>;
-  if (name === "memory") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
-  if (name === "notebook") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" /></svg>;
-  if (name === "wenyou-archives") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 8h8M8 12h8M8 16h6" /></svg>;
-  if (name === "wenyou-hub") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3 4 7v5c0 5 3.4 8.7 8 9 4.6-.3 8-4 8-9V7l-8-4zM9 12h6M12 9v6" /></svg>;
-  if (name === "stickers") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="9" cy="10" r="1.2" fill="currentColor" /><circle cx="15" cy="10" r="1.2" fill="currentColor" /><path d="M8 14c1.6 2 6.4 2 8 0" /></svg>;
-  if (name === "voice-call") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M7 5c4-2 6 0 6 0l2 2c.7.7.9 1.9.4 2.8l-1.3 2.3a1.8 1.8 0 0 0 .2 2l1.5 1.8c.7.8.6 2.1-.2 2.8l-1.3 1.1c-.8.6-1.8.7-2.7.3-3.4-1.7-6.2-4.6-7.9-8-.4-.8-.3-1.9.3-2.6l1.1-1.3c.7-.8 1.9-.9 2.8-.2l1.8 1.5a1.8 1.8 0 0 0 2 .2l2.3-1.3c.9-.5 2.1-.4 2.8.4l2 2s2 2 0 6" /></svg>;
-  if (name === "upstream") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h10M14 7l3-3m-3 3 3 3M20 17H10m0 0-3-3m3 3-3 3" /></svg>;
-  if (name === "prompt") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 5h14v14H5zM8 9h8M8 13h8M8 17h5" /></svg>;
-  if (name === "tree") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 21v-5M12 16c-3.8 0-6-2.2-6-5 0-2.2 1.4-4 3.4-4.7A4.8 4.8 0 0 1 19 8c1.8.8 3 2.5 3 4.5 0 3-2.4 3.5-5 3.5h-5z" /></svg>;
-  return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 20h16M4 8l4 4 4-6 4 5 4-3v12H4z" /></svg>;
-}
-
-function HomeOrbMenu({
-  open,
-  onToggle,
-  onOpenSchedule,
-  onOpenBackground,
-  onOpenAlarm,
-  onOpenUpstream,
-  onOpenDuDay,
-  onOpenTree,
-}: {
-  open: boolean;
-  onToggle: () => void;
-  onOpenSchedule: () => void;
-  onOpenBackground: () => void;
-  onOpenAlarm: () => void;
-  onOpenUpstream: () => void;
-  onOpenDuDay: () => void;
-  onOpenTree: () => void;
-}) {
-  return (
-    <div className="fixed inset-x-0 bottom-14 z-30 flex justify-center pointer-events-none">
-      <div className="relative pointer-events-auto">
-        {open ? (
-          <div className="absolute left-1/2 top-1/2 w-[272px] -translate-x-1/2 -translate-y-[122%] rounded-[32px] bg-[rgba(244,247,251,0.84)] p-4 shadow-[0_8px_18px_rgba(173,182,196,0.22)] backdrop-blur-2xl">
-            <div className="grid grid-cols-3 gap-3">
-              <button
-                className="h-14 rounded-[20px] bg-[#D6E4F2] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
-                onClick={onOpenBackground}
-                title="背景设置"
-              >
-                <LineIcon name="background" />
-              </button>
-              <button
-                className="h-14 rounded-[20px] bg-[#F2E7BF] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
-                onClick={onOpenSchedule}
-                title="日历与提醒"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M7 3v3M17 3v3M4 9h16M5 6h14a1 1 0 0 1 1 1v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a1 1 0 0 1 1-1z" />
-                </svg>
-              </button>
-              <button
-                className="h-14 rounded-[20px] bg-[#EFD5E1] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
-                onClick={onOpenAlarm}
-                title="闹钟"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <circle cx="12" cy="13" r="7" />
-                  <path d="M12 13V9m0 4 3 2M7 4 4 7m13-3 3 3" />
-                </svg>
-              </button>
-              <button
-                className="h-14 rounded-[20px] bg-[#D6E4F2] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
-                onClick={onOpenDuDay}
-                title="渡的一天"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M6 5h12M6 12h12M6 19h8" />
-                </svg>
-              </button>
-              <button
-                className="h-14 rounded-[20px] bg-[#F2E7BF] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
-                onClick={onOpenTree}
-                title="小渡&小玥の树"
-              >
-                <LineIcon name="tree" />
-              </button>
-              <button
-                className="h-14 rounded-[20px] bg-[#EFD5E1] flex items-center justify-center text-cream-text shadow-[4px_4px_10px_rgba(173,182,196,0.22),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
-                onClick={onOpenUpstream}
-                title="上游切换"
-              >
-                <LineIcon name="upstream" />
-              </button>
-              <button
-                className="h-14 rounded-[20px] bg-[rgba(244,247,251,0.92)] flex items-center justify-center text-cream-muted shadow-[4px_4px_10px_rgba(173,182,196,0.2),-2px_-2px_5px_rgba(255,255,255,0.42)] active:scale-[0.99] transition"
-                onClick={onToggle}
-                title="收起"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M6 14l6-6 6 6" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        ) : null}
-        <button
-          className="h-[74px] w-[74px] rounded-full bg-[rgba(244,247,251,0.84)] shadow-[6px_6px_14px_rgba(170,180,194,0.24),-3px_-3px_7px_rgba(255,255,255,0.48)] backdrop-blur-2xl flex items-center justify-center text-cream-text"
-          onClick={onToggle}
-          title="Home"
-        >
-          <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9">
-            <path d="M3 10.5 12 3l9 7.5V21h-6v-6h-6v6H3z" />
-          </svg>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function MainSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="px-5 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 18px)" }}>
-      <h1 className="text-[26px] font-medium tracking-tight text-cream-text">{title}</h1>
-      <div className="mt-7">{children}</div>
     </div>
   );
 }
@@ -620,27 +408,22 @@ function mapRoundsToDraftMessages(rounds: Array<any>): ChatDraftMessage[] {
 function SummaryBlock({
   label,
   text,
-  action,
   onClick,
 }: {
   label: string;
   text: string;
-  action?: React.ReactNode;
   onClick?: () => void;
 }) {
   return (
     <button
-      className="block w-full rounded-[24px] border border-white/60 bg-[rgba(255,255,255,0.7)] px-4 py-4 text-left shadow-[0_10px_28px_rgba(38,32,24,0.04)] active:scale-[0.995]"
+      className="block w-full text-left active:opacity-80"
       onClick={onClick}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className="h-3 w-1 rounded-full bg-[rgba(117,124,142,0.28)]" />
-          <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cream-muted">{label}</span>
-        </div>
-        {action}
+      <div className="mb-2.5 flex items-center">
+        <div className="mr-2 h-3 w-1 rounded-full bg-gray-200" />
+        <h2 className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">{label}</h2>
       </div>
-      <div className="mt-3 whitespace-pre-wrap text-[14px] leading-6 text-cream-text">{text}</div>
+      <p className="whitespace-pre-wrap pl-3 text-[15px] font-light leading-relaxed text-gray-800">{text}</p>
     </button>
   );
 }
@@ -712,39 +495,27 @@ function ChatsHome({
   }, []);
 
   return (
-    <div className="px-5 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 18px)" }}>
-      <h1 className="text-[26px] font-medium tracking-tight text-cream-text">会话</h1>
-      <div className="mt-7 space-y-5 rounded-[30px] border border-white/55 bg-[rgba(255,255,255,0.82)] px-4 py-5 shadow-[0_14px_34px_rgba(44,34,24,0.05)]">
-        <SummaryBlock label="Today note" text={dailyWhisper || "今天还没有新的 note。"} onClick={onOpenTodayNote} />
-        <SummaryBlock
-          label="日报摘要"
-          text={reportSummary}
-          onClick={onOpenDailyReport}
-          action={
-            <button
-              className="rounded-full bg-[rgba(244,247,251,0.92)] px-3 py-1.5 text-[11px] font-semibold text-cream-muted shadow-[0_6px_14px_rgba(44,34,24,0.05)] active:scale-[0.98]"
-              onClick={(e) => {
-                e.stopPropagation();
-                onRefreshDailyReport();
-              }}
-              disabled={dailyRefreshing}
-            >
-              {dailyRefreshing ? "刷新中" : "刷新"}
-            </button>
-          }
-        />
+    <div className="bg-white pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)" }}>
+      <div className="px-6">
+        <h1 className="mb-8 text-[26px] font-medium tracking-tight text-gray-900">会话</h1>
+        <div className="space-y-7">
+          <SummaryBlock label="Today Note" text={dailyWhisper || "今天还没有新的 note。"} onClick={onOpenTodayNote} />
+          <div className="ml-3 h-px w-full bg-gray-50" />
+          <SummaryBlock label="日报摘要" text={reportSummary} onClick={onOpenDailyReport} />
+        </div>
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-[28px] border border-white/60 bg-[rgba(255,255,255,0.86)] shadow-[0_12px_30px_rgba(44,34,24,0.05)]">
+      <div className="mt-8 h-3 bg-[#F8F9FA]" />
+
+      <div className="bg-white">
         <ChatEntryRow
           title="渡"
           preview={duPreview}
           time={duTime}
-          badge="置顶"
           tone="du"
           onClick={onOpenDu}
+          pinned
         />
-        <div className="mx-4 h-px bg-[rgba(117,124,142,0.08)]" />
         <ChatEntryRow
           title="文游"
           preview={wenyouPreview}
@@ -762,58 +533,38 @@ function ChatEntryRow({
   preview,
   time,
   tone,
-  badge,
+  pinned,
   onClick,
 }: {
   title: string;
   preview: string;
   time: string;
   tone: "du" | "wenyou";
-  badge?: string;
+  pinned?: boolean;
   onClick: () => void;
 }) {
   const palette = tone === "wenyou"
-    ? { shell: "bg-[#F3EDEF] text-[#704A5D]" }
-    : { shell: "bg-[#EDF2F7] text-[#4A5568]" };
+    ? { shell: "bg-[#F8F0F4] text-[#704A5D]" }
+    : { shell: "bg-[#F0F4F8] text-[#4A5568]" };
   return (
-    <button className="flex w-full items-center gap-4 px-4 py-4 text-left active:bg-white/55" onClick={onClick}>
-      <div className={`flex h-[52px] w-[52px] items-center justify-center rounded-[20px] text-[19px] font-semibold shadow-sm ${palette.shell}`}>
-        {title.slice(0, 1)}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-[17px] font-medium text-cream-text">{title}</span>
-            {badge ? <span className="rounded-full bg-[rgba(244,247,251,0.95)] px-2 py-0.5 text-[10px] font-semibold text-cream-muted">{badge}</span> : null}
-          </div>
-          <span className="text-[11px] text-cream-muted">{time}</span>
+    <button className="flex w-full items-center px-6 py-4 text-left transition-colors active:bg-gray-50" onClick={onClick}>
+      <div className="relative shrink-0">
+        <div className={`flex h-[52px] w-[52px] items-center justify-center rounded-2xl text-[20px] font-medium shadow-sm ${palette.shell}`}>
+          {title.slice(0, 1)}
         </div>
-        <div className="mt-1 truncate text-[13px] text-cream-muted">{preview}</div>
+        {pinned ? (
+          <div className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-gray-100 bg-white shadow-sm">
+            <CornerDownIcon />
+          </div>
+        ) : null}
       </div>
-    </button>
-  );
-}
-
-function RowLink({
-  label,
-  description,
-  onClick,
-}: {
-  label: string;
-  description: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className="flex w-full items-center gap-3 rounded-[24px] border border-white/60 bg-[rgba(255,255,255,0.86)] px-4 py-4 text-left shadow-[0_10px_28px_rgba(44,34,24,0.05)] active:scale-[0.99]"
-      onClick={onClick}
-    >
-      <div className="h-11 w-11 rounded-full bg-[rgba(244,247,251,0.95)] shadow-[inset_0_1px_2px_rgba(255,255,255,0.8)]" />
-      <div className="min-w-0 flex-1">
-        <div className="text-[16px] font-medium text-cream-text">{label}</div>
-        <div className="mt-1 text-[12px] text-cream-muted">{description}</div>
+      <div className={`ml-4 min-w-0 flex-1 pt-1 ${pinned ? "border-b border-gray-50 pb-4" : ""}`}>
+        <div className="mb-1 flex items-baseline justify-between">
+          <span className="text-[17px] font-medium text-gray-900">{title}</span>
+          <span className="text-[12px] font-light text-gray-400">{time}</span>
+        </div>
+        <p className="truncate text-[14px] font-light text-gray-500">{preview}</p>
       </div>
-      <span className="text-lg text-cream-muted">›</span>
     </button>
   );
 }
@@ -832,18 +583,18 @@ function BottomNav({
     { id: "settings", label: "设置" },
   ];
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/60 bg-[rgba(255,255,255,0.84)] px-5 pb-[calc(env(safe-area-inset-bottom,0px)+10px)] pt-2 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-xl items-center justify-between">
+    <nav className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between border-t border-gray-100 bg-white/90 px-6 pb-[calc(env(safe-area-inset-bottom,24px))] pt-2 backdrop-blur-md">
+      <div className="mx-auto flex w-full max-w-xl items-center justify-between">
         {items.map((item) => {
           const active = current === item.id;
           return (
             <button
               key={item.id}
-              className="flex min-w-[60px] flex-col items-center gap-1.5 px-2 py-2"
+              className={`flex flex-col items-center p-2 transition-colors ${active ? "text-gray-900" : "text-gray-400 hover:text-gray-600"}`}
               onClick={() => onChange(item.id)}
             >
-              <span className={`h-2 w-2 rounded-full ${active ? "bg-cream-text" : "bg-[rgba(117,124,142,0.18)]"}`} />
-              <span className={`text-[11px] font-semibold tracking-[0.12em] ${active ? "text-cream-text" : "text-cream-muted"}`}>{item.label}</span>
+              <BottomNavIcon id={item.id} />
+              <span className="text-[10px] font-medium tracking-wide">{item.label}</span>
             </button>
           );
         })}
@@ -864,20 +615,23 @@ function FullScreenPane({
   children: React.ReactNode;
 }) {
   const chipClass = accent === "wenyou"
-    ? "bg-[#F3EDEF] text-[#704A5D]"
+    ? "bg-[#F8F0F4] text-[#704A5D]"
     : accent === "du"
-      ? "bg-[#EDF2F7] text-[#4A5568]"
-      : "bg-[#F3F5F8] text-[#5C6473]";
+      ? "bg-[#F0F4F8] text-[#4A5568]"
+      : "bg-[#F4F5F7] text-[#5C6473]";
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FB]">
-      <div className="flex items-center justify-between px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+8px)]">
-        <div className="flex items-center gap-2">
-          <button className="rounded-full px-3 py-2 text-sm text-cream-muted active:bg-white/65" onClick={onBack}>返回</button>
-          <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${chipClass}`}>{title.slice(0, 1)}</div>
-          <div className="text-[16px] font-medium text-cream-text">{title}</div>
+    <div className="absolute inset-0 z-30 flex flex-col bg-[#FDFDFD]">
+      <div className="absolute top-0 z-20 flex w-full items-center justify-between border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
+        <div className="flex items-center">
+          <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
+            <ChevronLeftIcon />
+          </button>
+          <div className={`ml-1 mr-3 flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${chipClass}`}>{title.slice(0, 1)}</div>
+          <div className="text-[16px] font-medium text-gray-900">{title}</div>
         </div>
+        <div className="w-10" />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">{children}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-[88px]">{children}</div>
     </div>
   );
 }
@@ -1051,60 +805,70 @@ function MainChatScreen({
   }
 
   const avatarClass = accent === "wenyou"
-    ? "bg-[#F3EDEF] text-[#704A5D]"
-    : "bg-[#EDF2F7] text-[#4A5568]";
+    ? "bg-[#F8F0F4] text-[#704A5D]"
+    : "bg-[#F0F4F8] text-[#4A5568]";
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FB]">
-      <div className="flex items-center justify-between border-b border-white/60 bg-[rgba(255,255,255,0.8)] px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+8px)] backdrop-blur-xl">
-        <div className="flex items-center gap-2">
-          <button className="rounded-full px-3 py-2 text-sm text-cream-muted active:bg-white/65" onClick={onBack}>返回</button>
-          <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${avatarClass}`}>{avatarLabel}</div>
-          <div>
-            <div className="text-[16px] font-medium text-cream-text">{title}</div>
-            <div className="text-[11px] text-cream-muted">{activeModel ? activeModel : "模型加载中..."}</div>
-          </div>
+    <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FA]">
+      <div className="absolute top-0 z-20 flex w-full items-center justify-between border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
+        <div className="flex items-center">
+          <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
+            <ChevronLeftIcon />
+          </button>
+          <div className={`ml-1 mr-3 flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${avatarClass}`}>{avatarLabel}</div>
+          <div className="text-[16px] font-medium text-gray-900">{title}</div>
         </div>
+        <button className="rounded-full p-3 text-gray-500 transition-colors active:bg-gray-100" onClick={onOpenCall}>
+          <PhoneIconMini />
+        </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        <div className="space-y-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-[100px]">
+        <div className="mb-2 flex justify-center">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Today</span>
+        </div>
+        <div className="space-y-7">
           {messages.map((msg) => (
-            <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={
-                  "max-w-[82%] whitespace-pre-wrap rounded-[22px] px-4 py-3 text-[15px] leading-6 shadow-[0_8px_22px_rgba(44,34,24,0.04)] " +
-                  (msg.role === "user"
-                    ? "rounded-tr-[8px] bg-[#2E3440] text-white"
-                    : "rounded-tl-[8px] border border-white/60 bg-[rgba(255,255,255,0.92)] text-cream-text")
-                }
-              >
-                {msg.content || (sending && msg.role === "assistant" ? "…" : "")}
+            msg.role === "user" ? (
+              <div key={msg.id} className="flex items-start justify-end space-x-4">
+                <div className="max-w-[75%] space-y-2">
+                  <div className="rounded-[20px] rounded-tr-sm bg-[#2D3748] px-5 py-4 text-[15px] font-light leading-relaxed text-white shadow-sm">
+                    {msg.content || (sending ? "…" : "")}
+                  </div>
+                </div>
+                <div className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[14px] font-medium text-gray-600 shadow-sm">我</div>
               </div>
-            </div>
+            ) : (
+              <div key={msg.id} className="flex items-start space-x-4">
+                <div className={`flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[14px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
+                <div className="max-w-[75%] space-y-2">
+                  <div className="rounded-[20px] rounded-tl-sm border border-gray-100/50 bg-white px-5 py-4 text-[15px] font-light leading-relaxed text-gray-800 shadow-sm">
+                    {msg.content || (sending ? "…" : "")}
+                  </div>
+                </div>
+              </div>
+            )
           ))}
         </div>
       </div>
 
-      <div className="border-t border-white/60 bg-[rgba(255,255,255,0.88)] pb-[calc(env(safe-area-inset-bottom,0px)+10px)] backdrop-blur-xl">
-        <div className={`grid transition-[grid-template-rows,opacity] duration-300 ${plusOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
-          <div className="overflow-hidden">
-            <div className="flex gap-6 px-6 pb-2 pt-4">
+      <div className="z-20 border-t border-gray-100 bg-white pb-[calc(env(safe-area-inset-bottom,24px))]">
+        <div className={`overflow-hidden bg-white transition-all duration-300 ease-in-out ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
+          <div className="flex space-x-8 px-8 pb-2 pt-6">
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
-            </div>
           </div>
         </div>
-        <div className="flex items-end gap-2 px-3 pt-3">
+        <div className="flex items-end space-x-2 px-3 py-3">
           <button
-            className={`rounded-full px-3 py-3 text-sm text-cream-muted transition ${plusOpen ? "bg-white/85" : "bg-transparent active:bg-white/65"}`}
+            className={`rounded-full p-2.5 text-gray-500 transition-colors ${plusOpen ? "bg-gray-100 text-gray-800" : "active:bg-gray-50"}`}
             onClick={() => setPlusOpen((v) => !v)}
           >
-            ＋
+            <PlusIcon open={plusOpen} />
           </button>
-          <div className="flex-1 rounded-[22px] bg-[#F3F5F8] px-4 py-3 shadow-[inset_0_1px_2px_rgba(255,255,255,0.8)]">
+          <div className="flex min-h-[42px] flex-1 items-center rounded-[20px] bg-[#F4F5F7] px-4 py-2.5">
             <input
-              className="w-full bg-transparent text-[15px] text-cream-text outline-none placeholder:text-cream-muted"
+              className="w-full bg-transparent text-[15px] font-light text-gray-900 outline-none placeholder:text-gray-400"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -1117,11 +881,13 @@ function MainChatScreen({
             />
           </div>
           <button
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-[#2E3440] text-white shadow-[0_10px_22px_rgba(46,52,64,0.22)] disabled:opacity-50"
+            className="p-2.5 text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
             onClick={() => void sendMessage()}
             disabled={sending || !input.trim()}
           >
-            ↑
+            <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gray-900">
+              <ArrowUpIcon />
+            </div>
           </button>
         </div>
       </div>
@@ -1131,13 +897,147 @@ function MainChatScreen({
 
 function ChatActionButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <button className="flex flex-col items-center gap-2" onClick={onClick}>
-      <div className="flex h-[58px] w-[58px] items-center justify-center rounded-[20px] bg-[rgba(244,247,251,0.94)] shadow-[0_8px_20px_rgba(44,34,24,0.04)]">
-        <span className="text-lg text-cream-muted">{label === "表情包" ? "☺" : "✆"}</span>
+    <button className="group flex flex-col items-center" onClick={onClick}>
+      <div className="mb-2.5 flex h-[60px] w-[60px] items-center justify-center rounded-[20px] bg-[#F8F9FA] text-gray-600 transition-transform active:scale-95">
+        {label === "表情包" ? <SmileIconMini /> : <PhoneIconLarge />}
       </div>
-      <span className="text-[11px] font-semibold text-cream-muted">{label}</span>
+      <span className="text-[11px] font-medium tracking-wide text-gray-500">{label}</span>
     </button>
   );
+}
+
+function PageCardRow({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button
+      className="flex w-full items-center rounded-[24px] border border-gray-100/60 bg-white p-5 text-left shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] transition-transform active:scale-[0.98]"
+      onClick={onClick}
+    >
+      <div className="mr-4 flex h-[42px] w-[42px] items-center justify-center rounded-full bg-gray-50 text-gray-600">
+        {icon}
+      </div>
+      <span className="flex-1 text-[16px] font-medium tracking-wide text-gray-800">{label}</span>
+      <ChevronRightIcon />
+    </button>
+  );
+}
+
+function ListRow({
+  icon,
+  label,
+  onClick,
+  last,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick?: () => void;
+  last?: boolean;
+}) {
+  return (
+    <button
+      className={`flex min-h-[64px] w-full items-center px-6 py-[18px] text-left transition-colors active:bg-gray-50 ${last ? "" : "border-b border-gray-50"}`}
+      onClick={onClick}
+    >
+      <span className="mr-4 text-gray-400">{icon}</span>
+      <span className="flex-1 text-[16px] font-medium tracking-wide text-gray-800">{label}</span>
+      <ChevronRightIcon />
+    </button>
+  );
+}
+
+function BottomNavIcon({ id }: { id: MainTab }) {
+  const cls = "mb-1 h-[22px] w-[22px]";
+  if (id === "chats") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8A8.5 8.5 0 0 1 12.5 3h.5a8.48 8.48 0 0 1 8 8z" /></svg>;
+  if (id === "daily") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>;
+  if (id === "tools") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /></svg>;
+  return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c0 .66.39 1.26 1 1.51.17.07.35.1.54.1H21a2 2 0 0 1 0 4h-.09c-.19 0-.37.03-.54.1-.61.25-1 .85-1 1.51z" /></svg>;
+}
+
+function ChevronLeftIcon() {
+  return <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>;
+}
+
+function ChevronRightIcon() {
+  return <svg className="h-[18px] w-[18px] text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6" /></svg>;
+}
+
+function CornerDownIcon() {
+  return <svg className="h-2.5 w-2.5 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="10 15 15 20 20 15" /><path d="M4 4h7a4 4 0 0 1 4 4v12" /></svg>;
+}
+
+function PlusIcon({ open }: { open: boolean }) {
+  return (
+    <svg className={`h-[22px] w-[22px] transition-transform duration-200 ${open ? "rotate-45" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+function ArrowUpIcon() {
+  return <svg className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19 7-7-7-7" transform="rotate(-90 12 12)" /></svg>;
+}
+
+function PhoneIconMini() {
+  return <svg className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.34 1.78.65 2.62a2 2 0 0 1-.45 2.11L8 9.91a16 16 0 0 0 6 6l1.46-1.31a2 2 0 0 1 2.11-.45c.84.31 1.72.53 2.62.65A2 2 0 0 1 22 16.92z" /></svg>;
+}
+
+function PhoneIconLarge() {
+  return <svg className="h-7 w-7 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.34 1.78.65 2.62a2 2 0 0 1-.45 2.11L8 9.91a16 16 0 0 0 6 6l1.46-1.31a2 2 0 0 1 2.11-.45c.84.31 1.72.53 2.62.65A2 2 0 0 1 22 16.92z" /></svg>;
+}
+
+function SmileIconMini() {
+  return <svg className="h-7 w-7 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><line x1="9" y1="9" x2="9.01" y2="9" /><line x1="15" y1="9" x2="15.01" y2="9" /></svg>;
+}
+
+function FeatherIcon() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.24 3.76a6 6 0 0 0-8.48 0L4 11.52V20h8.48l7.76-7.76a6 6 0 0 0 0-8.48z" /><line x1="16" y1="8" x2="2" y2="22" /><line x1="17.5" y1="15" x2="9" y2="15" /><line x1="13.5" y1="19" x2="9" y2="19" /></svg>;
+}
+
+function SunIconMini() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>;
+}
+
+function ClockIconMini() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>;
+}
+
+function CalendarIconMini() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>;
+}
+
+function FileTextIcon() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><polyline points="10 9 9 9 8 9" /></svg>;
+}
+
+function GitMergeIcon() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 9v6a3 3 0 0 0 3 3h6" /><path d="M18 15V9a3 3 0 0 0-3-3H9" /></svg>;
+}
+
+function CpuIcon() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></svg>;
+}
+
+function BookOpenIcon() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" /></svg>;
+}
+
+function CodeIcon() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>;
+}
+
+function ToggleRightIcon() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="10" rx="5" ry="5" /><circle cx="16" cy="12" r="3" /></svg>;
+}
+
+function ShieldIconMini() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>;
+}
+
+function SmartphoneIconMini() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="7" y="2" width="10" height="20" rx="2" ry="2" /><line x1="12" y1="18" x2="12.01" y2="18" /></svg>;
+}
+
+function LogoutIconMini() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>;
 }
 
 function TreeScreen({
@@ -1653,222 +1553,6 @@ function LoadingScreen({ text }: { text: string }) {
         <div className="neo-panel-soft w-full p-5 text-sm text-cream-muted">{text}</div>
       </div>
     </div>
-  );
-}
-
-function buildBackgroundStyle(bg: BgConfig): React.CSSProperties {
-  if (bg.useImage && bg.imageVersion > 0) {
-    const alpha = Math.max(0, Math.min(70, Number(bg.dim || 0))) / 100;
-    return {
-      backgroundColor: "#eaedf1",
-      backgroundImage: `linear-gradient(rgba(238,240,243,${alpha}), rgba(238,240,243,${alpha})), url("${buildApiAssetUrl(`/miniapp-api/background-image/${bg.imageVersion}?s=${bg.imageStamp || 0}`)}")`,
-      backgroundSize: "cover",
-      backgroundPosition: "center",
-      backgroundRepeat: "no-repeat",
-    };
-  }
-  if (bg.preset === "grid") {
-    return {
-      backgroundColor: "#e8ebef",
-      backgroundImage:
-        "linear-gradient(rgba(21,31,43,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(21,31,43,0.06) 1px, transparent 1px), radial-gradient(circle at 50% 40%, rgba(255,255,255,0.8) 0%, rgba(255,255,255,0.45) 45%, rgba(232,235,239,0) 72%)",
-      backgroundSize: "30px 30px, 30px 30px, 100% 100%",
-    };
-  }
-  if (bg.preset === "soft") {
-    return {
-      backgroundColor: "#eef0f3",
-      backgroundImage:
-        "radial-gradient(circle at 20% 20%, rgba(183,199,223,0.28), transparent 36%), radial-gradient(circle at 80% 18%, rgba(213,193,208,0.30), transparent 34%), radial-gradient(circle at 50% 80%, rgba(191,212,204,0.28), transparent 38%)",
-    };
-  }
-  return { backgroundColor: "#EEF0F3" };
-}
-
-function BackgroundEditor({
-  bg,
-  onChange,
-  onClose,
-}: {
-  bg: BgConfig;
-  onChange: (v: BgConfig) => void;
-  onClose: () => void;
-}) {
-  const toast = useToast();
-  const [draft, setDraft] = useState<BgConfig>(bg);
-  const [origin, setOrigin] = useState<BgConfig>(bg);
-  const [uploading, setUploading] = useState(false);
-
-  useEffect(() => {
-    setDraft(bg);
-    setOrigin(bg);
-  }, [bg]);
-
-  function applyDraft(next: BgConfig) {
-    setDraft(next);
-    onChange(next);
-  }
-
-  async function save() {
-    try {
-      const j = await apiJson<{ ok?: boolean; config?: Partial<BgConfig> }>("/miniapp-api/background-config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft),
-      });
-      const next: BgConfig = {
-        preset: ((j?.config?.preset as BgPreset) || draft.preset) as BgPreset,
-        useImage: !!(j?.config?.useImage ?? draft.useImage),
-        imageVersion: Number(j?.config?.imageVersion ?? draft.imageVersion),
-        dim: Number.isFinite(Number(j?.config?.dim)) ? Math.max(0, Math.min(70, Number(j?.config?.dim))) : draft.dim,
-        imageStamp: draft.imageStamp || 0,
-      };
-      onChange(next);
-      toast("背景已保存");
-      onClose();
-    } catch (e: any) {
-      toast(`保存失败：${e?.message || e}`);
-    }
-  }
-
-  async function uploadFromAlbum(file: File | null) {
-    if (!file) return;
-    setUploading(true);
-    try {
-      const toDataUrl = (blob: Blob) =>
-        new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = () => reject(new Error("读取图片失败"));
-          reader.readAsDataURL(blob);
-        });
-      const loadImage = (src: string) =>
-        new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve(img);
-          img.onerror = () => reject(new Error("图片解码失败"));
-          img.src = src;
-        });
-      const canvasToBlob = (canvas: HTMLCanvasElement, quality: number) =>
-        new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob(
-            (blob) => {
-              if (blob) resolve(blob);
-              else reject(new Error("图片编码失败"));
-            },
-            "image/jpeg",
-            quality
-          );
-        });
-
-      // 上传前压缩：避免运营商/反向代理 413（体积过大）并降低上传失败概率
-      const maxUploadBytes = 1500 * 1024; // 约 1.5MB
-      const maxSide = 1920;
-      let uploadBlob: Blob = file;
-      if (file.size > maxUploadBytes || file.type !== "image/jpeg") {
-        const src = await toDataUrl(file);
-        const img = await loadImage(src);
-        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) throw new Error("浏览器不支持图片处理");
-        ctx.drawImage(img, 0, 0, w, h);
-        let q = 0.88;
-        let out = await canvasToBlob(canvas, q);
-        while (out.size > maxUploadBytes && q > 0.5) {
-          q -= 0.08;
-          out = await canvasToBlob(canvas, q);
-        }
-        uploadBlob = out;
-      }
-
-      const fd = new FormData();
-      fd.append("file", uploadBlob, "miniapp-bg.jpg");
-      const r = await apiFetch("/miniapp-api/background-image", {
-        method: "POST",
-        body: fd,
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j?.ok) {
-        if (r.status === 413) throw new Error("图片体积仍然过大（413），请换更小图片");
-        if (r.status === 403) throw new Error("鉴权失效（403），关闭重进 miniapp 后再试");
-        throw new Error(j?.error || `HTTP ${r.status}`);
-      }
-      const version = Number(j?.imageVersion || Date.now());
-      setDraft((v: BgConfig) => {
-        const next = { ...v, useImage: true, imageVersion: version, imageStamp: Date.now() };
-        onChange(next);
-        return next;
-      });
-      toast("已上传背景图");
-    } catch (e: any) {
-      toast(`上传失败：${e?.message || e}`);
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  return (
-    <Modal title="背景设置" onClose={onClose}>
-      <div className="space-y-3 text-sm">
-        <div className="text-xs text-cream-muted">可选预设风格，或从手机相册上传背景图（跨设备同步）。</div>
-        <div className="grid grid-cols-3 gap-2">
-          <Btn kind={draft.preset === "cream" ? "green" : "default"} onClick={() => applyDraft({ ...draft, preset: "cream", useImage: false })}>米白</Btn>
-          <Btn kind={draft.preset === "grid" ? "green" : "default"} onClick={() => applyDraft({ ...draft, preset: "grid", useImage: false })}>网格灰</Btn>
-          <Btn kind={draft.preset === "soft" ? "green" : "default"} onClick={() => applyDraft({ ...draft, preset: "soft", useImage: false })}>柔和彩</Btn>
-        </div>
-        <div className="rounded-xl2 bg-white/42 backdrop-blur-xl border border-white/50 p-3 shadow-soft2 space-y-2">
-          <label className="text-xs text-cream-muted">从相册上传图片（jpg/png/webp/gif，最大 8MB）</label>
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif"
-            className="w-full rounded-xl2 bg-white/68 border border-white/50 px-3 py-2 text-sm shadow-soft2"
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => uploadFromAlbum((e.target.files && e.target.files[0]) || null)}
-            disabled={uploading}
-          />
-          <div className="flex items-center gap-2">
-            <Btn
-              kind={draft.useImage ? "green" : "default"}
-              onClick={() =>
-                applyDraft({
-                  ...draft,
-                  useImage: !draft.useImage,
-                  imageStamp: !draft.useImage ? Date.now() : draft.imageStamp,
-                })
-              }
-            >
-              {draft.useImage ? "已启用图片" : "启用图片"}
-            </Btn>
-            {uploading ? <span className="text-xs text-cream-muted">上传中...</span> : null}
-            <span className="text-xs text-cream-muted">遮罩 {draft.dim}%</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={70}
-            value={draft.dim}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => applyDraft({ ...draft, dim: Number(e.target.value || 20) })}
-            className="w-full"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Btn
-            kind="blue"
-            onClick={() => {
-              onChange(origin);
-              onClose();
-            }}
-          >
-            取消
-          </Btn>
-          <Btn kind="green" onClick={save} disabled={uploading}>保存</Btn>
-        </div>
-      </div>
-    </Modal>
   );
 }
 
