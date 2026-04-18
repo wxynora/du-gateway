@@ -205,11 +205,12 @@ def _register_update_once(update_id, token: str, user_id, chat_id) -> bool:
     return True
 
 
-def build_telegram_style_system() -> str:
+def build_telegram_style_system(include_channel_hint: bool = True) -> str:
     """每次请求网关前调用，使渡掌握最新表情包分类列表。"""
     tags_line = _sticker_tags_line_for_system_prompt()
+    prefix = "你正在通过 Telegram 和辛玥聊天。请遵守以下输出格式要求：\n" if include_channel_hint else "请遵守以下输出格式要求：\n"
     return (
-        "你正在通过 Telegram 和辛玥聊天。请遵守以下输出格式要求：\n"
+        prefix +
         "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。\n"
         f"   {tags_line}\n"
         "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"

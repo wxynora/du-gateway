@@ -76,6 +76,7 @@ from services.pc_command_handler import (
     process_pcmd_in_assistant_text,
     transform_sse_chunk_bytes as transform_sse_chunk_bytes_pcmd,
 )
+from services.telegram_bot import build_telegram_style_system
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 
@@ -92,6 +93,31 @@ def _get_window_id_from_request(body: dict) -> str:
     if isinstance(body, dict) and body.get("window_id") is not None:
         return str(body.get("window_id", "")).strip()
     return WINDOW_ID_DEFAULT
+
+
+def _is_miniapp_request() -> bool:
+    return bool((request.headers.get("X-Telegram-Init-Data") or "").strip())
+
+
+def _inject_miniapp_style_system(body: dict) -> dict:
+    if not _is_miniapp_request():
+        return body
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    style_system = build_telegram_style_system(include_channel_hint=False).strip()
+    if not style_system:
+        return body
+    messages = list(body.get("messages") or [])
+    if messages and isinstance(messages[0], dict) and str(messages[0].get("role") or "").strip() == "system":
+        current = str(messages[0].get("content") or "")
+        if style_system in current:
+            return body
+        messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + style_system).strip()}
+    else:
+        messages.insert(0, {"role": "system", "content": style_system})
+    body = dict(body)
+    body["messages"] = messages
+    return body
 
 
 def _normalize_request_model(body: dict) -> dict:
@@ -1208,6 +1234,7 @@ def chat_completions():
     body = step_clean_images_and_save_desc(body, window_id)
     body = step_clean_for_forward(body)
     body = step_replace_rikka_system(body)
+    body = _inject_miniapp_style_system(body)
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
-import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
+import { applyTelegramThemeToHtmlClass, getTelegramWebApp, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
 import { apiFetch, apiJson, buildApiAssetUrl, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
@@ -16,7 +16,7 @@ const WenyouTab = lazy(() => import("./tabs/WenyouTab").then((m) => ({ default: 
 const StickersTab = lazy(() => import("./tabs/StickersTab").then((m) => ({ default: m.StickersTab })));
 const CallHubScreen = lazy(() => import("./tabs/CallHubScreen").then((m) => ({ default: m.CallHubScreen })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "wenyou" | "stickers" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | null;
 type BgPreset = "cream" | "grid" | "soft";
 type BgConfig = { preset: BgPreset; useImage: boolean; imageVersion: number; dim: number; imageStamp: number };
 type CyberTreeData = {
@@ -43,6 +43,14 @@ type DailyReport = {
   summary_text?: string;
   generated_at?: string;
 };
+type MainTab = "chats" | "daily" | "tools" | "settings";
+type ChatScreenId = "du" | "wenyou" | null;
+type ChatDraftMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+};
 type DeviceItem = {
   id?: string;
   note?: string;
@@ -53,18 +61,30 @@ type DeviceItem = {
 };
 const BG_STORAGE_KEY = "miniapp.bg.config.v1";
 
-function Shell() {
+function Shell({
+  onLogout,
+  onOpenSecurity,
+  onOpenDevices,
+}: {
+  onLogout?: () => void;
+  onOpenSecurity?: () => void;
+  onOpenDevices?: () => void;
+}) {
   const toast = useToast();
   const [panel, setPanel] = useState<PanelId>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showCorePrompt, setShowCorePrompt] = useState(false);
   const [showBgEditor, setShowBgEditor] = useState(false);
-  const [showHomeMenu, setShowHomeMenu] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showAlarm, setShowAlarm] = useState(false);
   const [showDuDay, setShowDuDay] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
+  const [showTodayNoteDetail, setShowTodayNoteDetail] = useState(false);
+  const [showDailyReportDetail, setShowDailyReportDetail] = useState(false);
+  const [mainTab, setMainTab] = useState<MainTab>("chats");
+  const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
+  const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [dailyRefreshing, setDailyRefreshing] = useState(false);
@@ -95,6 +115,10 @@ function Shell() {
     // 不强制全屏，保持 Telegram 默认的半屏/弹层体验。
     tgReady(false);
     applyTelegramThemeToHtmlClass();
+    try {
+      const tgUid = Number(getTelegramWebApp()?.initDataUnsafe?.user?.id || 0);
+      if (tgUid > 0) setSharedChatWindowId(`tg_${tgUid}`);
+    } catch {}
     const timer = window.setTimeout(() => {
       setDeferHomeExtras(true);
     }, 320);
@@ -185,154 +209,175 @@ function Shell() {
       }
     }
   }, [tree, toast]);
-
   const rootStyle = buildBackgroundStyle(bg);
-  const featureTiles = [
-    { title: "日志", desc: "查看/过滤/复制", icon: <LineIcon name="logs" />, tone: "blue" as const, onClick: () => setPanel("logs") },
-    { title: "思维链", desc: "最近10条（降序）", icon: <LineIcon name="reasoning" />, tone: "pink" as const, onClick: () => setPanel("reasoning") },
-    { title: "记忆调试", desc: "窗口总结 + 动态召回", icon: <LineIcon name="memory" />, tone: "yellow" as const, onClick: () => setPanel("memory-debug") },
-    { title: "渡的记事本", desc: "固定注入 · 条目管理", icon: <LineIcon name="notebook" />, tone: "blue" as const, onClick: () => setPanel("du-notebook") },
-    { title: "文游模块", desc: "系统空间 + 已完成副本", icon: <LineIcon name="wenyou-hub" />, tone: "pink" as const, onClick: () => setPanel("wenyou") },
-    { title: "表情包", desc: "情绪分类 · 上传管理", icon: <LineIcon name="stickers" />, tone: "yellow" as const, onClick: () => setPanel("stickers") },
-    { title: "通话", desc: "语音 / 视频占位 / 通话记录", icon: <LineIcon name="voice-call" />, tone: "pink" as const, onClick: () => setShowCallHub(true) },
-    { title: "核心Prompt", desc: "固定注入，可随时更新", icon: <LineIcon name="prompt" />, tone: "blue" as const, onClick: () => setShowCorePrompt(true) },
-  ];
+
+  const renderMainTab = () => {
+    if (mainTab === "daily") {
+      return (
+        <MainSection title="日常">
+          <RowLink
+            label="树"
+            description={tree ? `第 ${tree.daysTogether || 0} 天 · ${Number(tree.growth || 0).toFixed(0)} 成长值` : "成长状态与今天的树况"}
+            onClick={() => setShowTree(true)}
+          />
+          <RowLink label="渡的一天" description="看今天的小日程和片段" onClick={() => setShowDuDay(true)} />
+          <RowLink label="闹钟" description="查看和管理提醒" onClick={() => setShowAlarm(true)} />
+          <RowLink label="日历" description="安排和查看日常计划" onClick={() => setShowSchedule(true)} />
+        </MainSection>
+      );
+    }
+    if (mainTab === "tools") {
+      return (
+        <MainSection title="工具">
+          <RowLink label="日志" description="查看 / 过滤 / 复制" onClick={() => setPanel("logs")} />
+          <RowLink label="思维链" description="最近 10 条推理与工具调用" onClick={() => setPanel("reasoning")} />
+          <RowLink label="记忆调试" description="窗口总结与动态召回" onClick={() => setPanel("memory-debug")} />
+          <RowLink label="渡的记事本" description="固定注入与条目管理" onClick={() => setPanel("du-notebook")} />
+          <RowLink label="核心 Prompt" description="固定注入内容维护" onClick={() => setShowCorePrompt(true)} />
+          <RowLink label="上游切换" description="查看并切换当前全局上游" onClick={() => setShowSettings(true)} />
+        </MainSection>
+      );
+    }
+    if (mainTab === "settings") {
+      return (
+        <MainSection title="设置">
+          <RowLink label="安全管理" description="登录安全、退出与设备权限" onClick={() => onOpenSecurity?.()} />
+          <RowLink label="设备管理" description="查看和撤销当前已登录设备" onClick={() => onOpenDevices?.()} />
+          <RowLink label="背景设置" description="背景预设与相册图片同步" onClick={() => setShowBgEditor(true)} />
+          {onLogout ? (
+            <button
+              className="mt-3 flex w-full items-center justify-center rounded-[20px] bg-[#E7D1D0] px-4 py-3 text-sm font-semibold text-[#734b49] shadow-[0_8px_20px_rgba(49,32,28,0.08)] active:scale-[0.99]"
+              onClick={onLogout}
+            >
+              退出登录
+            </button>
+          ) : null}
+        </MainSection>
+      );
+    }
+    return (
+      <ChatsHome
+        windowId={sharedChatWindowId}
+        dailyWhisper={dailyWhisper}
+        dailyReport={dailyReport}
+        onOpenDu={() => setActiveScreen("du")}
+        onOpenWenyou={() => setActiveScreen("wenyou")}
+        onOpenTodayNote={() => setShowTodayNoteDetail(true)}
+        onOpenDailyReport={() => setShowDailyReportDetail(true)}
+        onRefreshDailyReport={refreshDailyReport}
+        dailyRefreshing={dailyRefreshing}
+      />
+    );
+  };
 
   return (
     <div className="relative min-h-dvh safe-bottom overflow-hidden text-cream-text" style={rootStyle}>
-      <div
-        className="px-4"
-        style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 10px)" }}
-      >
-        <div className="flex items-center justify-between">
-          <div className="inline-flex items-center gap-2 rounded-full bg-[rgba(244,247,251,0.78)] px-3 py-2 shadow-[4px_4px_10px_rgba(173,182,196,0.2),-2px_-2px_5px_rgba(255,255,255,0.42)] backdrop-blur-xl">
-            <span className="text-sm">🏠</span>
-            <span className="text-[17px] font-semibold tracking-tight">d&x home</span>
+      {activeScreen === "du" ? (
+        <MainChatScreen
+          title="渡"
+          windowId={sharedChatWindowId}
+          avatarLabel="渡"
+          accent="du"
+          onBack={() => setActiveScreen(null)}
+          onOpenStickers={() => setPanel("stickers")}
+          onOpenCall={() => setShowCallHub(true)}
+        />
+      ) : null}
+      {activeScreen === "wenyou" ? (
+        <FullScreenPane title="文游" accent="wenyou" onBack={() => setActiveScreen(null)}>
+          <LazyPane><WenyouTab initialView="hub" /></LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {!activeScreen ? (
+        <>
+          <div className="relative min-h-dvh overflow-y-auto pb-[98px]">
+            {renderMainTab()}
           </div>
-          {version ? <div className="text-[11px] text-cream-muted">{`v${version}`}</div> : <div />}
-        </div>
-      </div>
-
-      {deferHomeExtras && dailyWhisper ? (
-        <div className="px-4 pt-3">
-          <details className="neo-panel px-4 py-3 text-[12px] leading-relaxed text-cream-text" open>
-            <summary className="cursor-pointer select-none text-cream-text">
-              <span className="mr-2 rounded-full bg-[#EFD5E1] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cream-text">Today note</span>
-              渡今天想说
-            </summary>
-            <div className="mt-3 text-[13px] leading-6 text-cream-text">{dailyWhisper}</div>
-          </details>
-        </div>
+          <BottomNav current={mainTab} onChange={setMainTab} />
+        </>
       ) : null}
-      {deferHomeExtras && dailyReport ? (
-        <div className="px-4 pt-2">
-          <details className="neo-panel-soft px-4 py-2.5 text-[12px] leading-relaxed text-cream-text">
-            <summary className="cursor-pointer select-none text-cream-text">
-              <span className="mr-2 rounded-full bg-[#F2E7BF] px-2 py-0.5 text-[10px] font-semibold tracking-[0.16em] text-cream-text">REPORT</span>
-              聊了 {String(dailyReport.rounds || 0)} 轮 · {Array.isArray(dailyReport.keywords) ? dailyReport.keywords.join(" / ") : "暂无关键词"}
-            </summary>
-            <div className="mt-3 space-y-1 text-xs">
-              <div>日期：{dailyReport.report_date || "-"}</div>
-              <div>关键词：{Array.isArray(dailyReport.keywords) ? dailyReport.keywords.join(" / ") : "-"}</div>
-              <div className="whitespace-pre-wrap rounded-[22px] bg-[rgba(255,255,255,0.36)] px-3 py-2 text-cream-muted">{dailyReport.summary_text || "（暂无）"}</div>
-              <div className="text-cream-muted">更新时间：{dailyReport.generated_at || "-"}</div>
-              <div className="pt-1">
-                <Btn kind="blue" onClick={refreshDailyReport} disabled={dailyRefreshing}>
-                  {dailyRefreshing ? "刷新中..." : "刷新日报"}
-                </Btn>
-              </div>
-            </div>
-          </details>
-        </div>
-      ) : null}
-
-      <div className="px-4 pt-4 pb-28">
-        <div className="grid grid-cols-2 gap-x-3 gap-y-3">
-          {featureTiles.map((item) => (
-            <FeatureTile key={item.title} title={item.title} desc={item.desc} tone={item.tone} icon={item.icon} onClick={item.onClick} />
-          ))}
-        </div>
-      </div>
 
       {panel === "logs" ? (
-        <Modal title="日志" onClose={() => setPanel(null)}>
+        <FullScreenPane title="日志" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><LogsTab /></LazyPane>
-        </Modal>
+        </FullScreenPane>
       ) : null}
       {panel === "reasoning" ? (
-        <Modal title="思维链" onClose={() => setPanel(null)}>
+        <FullScreenPane title="思维链" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><ReasoningTab /></LazyPane>
-        </Modal>
+        </FullScreenPane>
       ) : null}
       {panel === "memory-debug" ? (
-        <Modal title="记忆调试" onClose={() => setPanel(null)}>
+        <FullScreenPane title="记忆调试" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><MemoryDebugTab /></LazyPane>
-        </Modal>
+        </FullScreenPane>
       ) : null}
       {panel === "du-notebook" ? (
-        <Modal title="渡的记事本" onClose={() => setPanel(null)}>
+        <FullScreenPane title="渡的记事本" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><DuNotebookTab /></LazyPane>
-        </Modal>
-      ) : null}
-      {panel === "wenyou" ? (
-        <Modal title="文游模块" onClose={() => setPanel(null)}>
-          <LazyPane><WenyouTab initialView="hub" /></LazyPane>
-        </Modal>
+        </FullScreenPane>
       ) : null}
       {panel === "stickers" ? (
-        <Modal title="表情包" onClose={() => setPanel(null)}>
+        <FullScreenPane title="表情包" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><StickersTab /></LazyPane>
-        </Modal>
+        </FullScreenPane>
       ) : null}
 
-      {showSettings ? <LazyPane><SettingsUpstream onClose={() => setShowSettings(false)} /></LazyPane> : null}
+      {showSettings ? (
+        <FullScreenPane title="上游切换" accent="neutral" onBack={() => setShowSettings(false)}>
+          <LazyPane><SettingsUpstream /></LazyPane>
+        </FullScreenPane>
+      ) : null}
       {showCorePrompt ? <CorePromptEditor onClose={() => setShowCorePrompt(false)} /> : null}
       {showBgEditor ? <BackgroundEditor bg={bg} onChange={setBg} onClose={() => setShowBgEditor(false)} /> : null}
       {showSchedule ? (
-        <Modal title="日历与提醒" onClose={() => setShowSchedule(false)}>
+        <FullScreenPane title="日历" accent="neutral" onBack={() => setShowSchedule(false)}>
           <LazyPane><ScheduleTab /></LazyPane>
-        </Modal>
+        </FullScreenPane>
       ) : null}
       {showAlarm ? (
-        <Modal title="闹钟" onClose={() => setShowAlarm(false)}>
+        <FullScreenPane title="闹钟" accent="neutral" onBack={() => setShowAlarm(false)}>
           <LazyPane><AlarmTab /></LazyPane>
-        </Modal>
+        </FullScreenPane>
       ) : null}
       {showDuDay ? (
-        <Modal title="渡的一天" onClose={() => setShowDuDay(false)}>
+        <FullScreenPane title="渡的一天" accent="neutral" onBack={() => setShowDuDay(false)}>
           <LazyPane><DuDayTab /></LazyPane>
-        </Modal>
+        </FullScreenPane>
       ) : null}
-      {showTree ? <CyberTreeModal data={tree} onClose={() => setShowTree(false)} onRefresh={loadTree} /> : null}
+      {showTodayNoteDetail ? (
+        <FullScreenPane title="Today note" accent="neutral" onBack={() => setShowTodayNoteDetail(false)}>
+          <div className="rounded-[20px] border border-white/60 bg-[rgba(255,255,255,0.9)] px-4 py-4 text-[14px] leading-7 text-cream-text shadow-[0_8px_20px_rgba(44,34,24,0.05)]">
+            {dailyWhisper || "今天还没有新的 note。"}
+          </div>
+        </FullScreenPane>
+      ) : null}
+      {showDailyReportDetail ? (
+        <FullScreenPane title="日报摘要" accent="neutral" onBack={() => setShowDailyReportDetail(false)}>
+          <div className="rounded-[20px] border border-white/60 bg-[rgba(255,255,255,0.9)] px-4 py-4 shadow-[0_8px_20px_rgba(44,34,24,0.05)]">
+            <div className="space-y-2 text-[13px] leading-6 text-cream-text">
+              <div>日期：{dailyReport?.report_date || "-"}</div>
+              <div>轮次：{String(dailyReport?.rounds || 0)}</div>
+              <div>关键词：{Array.isArray(dailyReport?.keywords) && dailyReport?.keywords?.length ? dailyReport?.keywords?.join(" / ") : "-"}</div>
+              <div className="whitespace-pre-wrap rounded-[18px] bg-[rgba(244,247,251,0.92)] px-3 py-3 text-cream-muted">
+                {dailyReport?.summary_text || "今天的日报还没生成。"}
+              </div>
+              <div>更新时间：{dailyReport?.generated_at || "-"}</div>
+            </div>
+            <div className="mt-3">
+              <Btn kind="blue" onClick={refreshDailyReport} disabled={dailyRefreshing}>
+                {dailyRefreshing ? "刷新中..." : "刷新日报"}
+              </Btn>
+            </div>
+          </div>
+        </FullScreenPane>
+      ) : null}
+      {showTree ? (
+        <FullScreenPane title="树" accent="neutral" onBack={() => setShowTree(false)}>
+          <TreeScreen data={tree} onRefresh={loadTree} onClose={() => setShowTree(false)} />
+        </FullScreenPane>
+      ) : null}
       {showCallHub ? <LazyPane><CallHubScreen onClose={() => setShowCallHub(false)} /></LazyPane> : null}
-      <HomeOrbMenu
-        open={showHomeMenu}
-        onToggle={() => setShowHomeMenu((v: boolean) => !v)}
-        onOpenSchedule={() => {
-          setShowHomeMenu(false);
-          setShowSchedule(true);
-        }}
-        onOpenBackground={() => {
-          setShowHomeMenu(false);
-          setShowBgEditor(true);
-        }}
-        onOpenAlarm={() => {
-          setShowHomeMenu(false);
-          setShowAlarm(true);
-        }}
-        onOpenUpstream={() => {
-          setShowHomeMenu(false);
-          setShowSettings(true);
-        }}
-        onOpenDuDay={() => {
-          setShowHomeMenu(false);
-          setShowDuDay(true);
-        }}
-        onOpenTree={() => {
-          setShowHomeMenu(false);
-          setShowTree(true);
-        }}
-      />
     </div>
   );
 }
@@ -508,6 +553,653 @@ function HomeOrbMenu({
   );
 }
 
+function MainSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="px-5 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 18px)" }}>
+      <h1 className="text-[26px] font-medium tracking-tight text-cream-text">{title}</h1>
+      <div className="mt-7">{children}</div>
+    </div>
+  );
+}
+
+function contentToPlainText(content: any): string {
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (!part || typeof part !== "object") return "";
+        if (part.type === "text") return String(part.text || "").trim();
+        if (part.type === "image_url") return "[图片]";
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
+function pickLatestPreview(rounds: Array<any>): { preview: string; time: string } {
+  const list = Array.isArray(rounds) ? rounds : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const round = list[i];
+    const msgs = Array.isArray(round?.messages) ? round.messages : [];
+    for (let j = msgs.length - 1; j >= 0; j -= 1) {
+      const text = contentToPlainText(msgs[j]?.content);
+      if (text) {
+        return {
+          preview: text,
+          time: String(round?.timestamp || "").trim() || "最近",
+        };
+      }
+    }
+  }
+  return { preview: "", time: "" };
+}
+
+function mapRoundsToDraftMessages(rounds: Array<any>): ChatDraftMessage[] {
+  const out: ChatDraftMessage[] = [];
+  for (const round of Array.isArray(rounds) ? rounds : []) {
+    const createdAt = String(round?.timestamp || "").trim() || new Date().toISOString();
+    for (const msg of Array.isArray(round?.messages) ? round.messages : []) {
+      const role = String(msg?.role || "").trim().toLowerCase();
+      if (role !== "user" && role !== "assistant") continue;
+      const text = contentToPlainText(msg?.content);
+      if (!text) continue;
+      out.push({
+        id: `${role}-${createdAt}-${out.length}`,
+        role: role as "user" | "assistant",
+        content: text,
+        createdAt,
+      });
+    }
+  }
+  return out.slice(-80);
+}
+
+function SummaryBlock({
+  label,
+  text,
+  action,
+  onClick,
+}: {
+  label: string;
+  text: string;
+  action?: React.ReactNode;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      className="block w-full rounded-[24px] border border-white/60 bg-[rgba(255,255,255,0.7)] px-4 py-4 text-left shadow-[0_10px_28px_rgba(38,32,24,0.04)] active:scale-[0.995]"
+      onClick={onClick}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="h-3 w-1 rounded-full bg-[rgba(117,124,142,0.28)]" />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cream-muted">{label}</span>
+        </div>
+        {action}
+      </div>
+      <div className="mt-3 whitespace-pre-wrap text-[14px] leading-6 text-cream-text">{text}</div>
+    </button>
+  );
+}
+
+function ChatsHome({
+  windowId,
+  dailyWhisper,
+  dailyReport,
+  onOpenDu,
+  onOpenWenyou,
+  onOpenTodayNote,
+  onOpenDailyReport,
+  onRefreshDailyReport,
+  dailyRefreshing,
+}: {
+  windowId: string;
+  dailyWhisper: string;
+  dailyReport: DailyReport | null;
+  onOpenDu: () => void;
+  onOpenWenyou: () => void;
+  onOpenTodayNote: () => void;
+  onOpenDailyReport: () => void;
+  onRefreshDailyReport: () => void;
+  dailyRefreshing: boolean;
+}) {
+  const [duPreview, setDuPreview] = useState("正在同步最近聊天…");
+  const [duTime, setDuTime] = useState("主会话");
+  const [wenyouPreview, setWenyouPreview] = useState("独立文游会话");
+  const [wenyouTime, setWenyouTime] = useState("独立会话");
+
+  const reportSummary = dailyReport
+    ? `聊了 ${String(dailyReport.rounds || 0)} 轮 · ${Array.isArray(dailyReport.keywords) && dailyReport.keywords.length ? dailyReport.keywords.join(" / ") : "暂无关键词"}\n${dailyReport.summary_text || ""}`.trim()
+    : "今天的日报还没生成。";
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!windowId) return;
+      try {
+        const j = await apiJson<{ rounds?: Array<any> }>(`/miniapp-api/windows/${encodeURIComponent(windowId)}/conversation?last_n=12`);
+        if (cancelled) return;
+        const picked = pickLatestPreview(j?.rounds || []);
+        if (picked.preview) {
+          setDuPreview(picked.preview);
+          setDuTime(picked.time || "最近");
+        }
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [windowId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const j = await apiJson<{ ok?: boolean; active?: boolean; session?: { instance_name?: string; startedAt?: string } | null }>("/miniapp-api/wenyou/status");
+        if (cancelled) return;
+        if (j?.ok && j?.active && j?.session) {
+          setWenyouPreview(`当前副本：${String(j.session.instance_name || "系统空间进行中")}`);
+          setWenyouTime(String(j.session.startedAt || "").trim() || "进行中");
+        }
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <div className="px-5 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 18px)" }}>
+      <h1 className="text-[26px] font-medium tracking-tight text-cream-text">会话</h1>
+      <div className="mt-7 space-y-5 rounded-[30px] border border-white/55 bg-[rgba(255,255,255,0.82)] px-4 py-5 shadow-[0_14px_34px_rgba(44,34,24,0.05)]">
+        <SummaryBlock label="Today note" text={dailyWhisper || "今天还没有新的 note。"} onClick={onOpenTodayNote} />
+        <SummaryBlock
+          label="日报摘要"
+          text={reportSummary}
+          onClick={onOpenDailyReport}
+          action={
+            <button
+              className="rounded-full bg-[rgba(244,247,251,0.92)] px-3 py-1.5 text-[11px] font-semibold text-cream-muted shadow-[0_6px_14px_rgba(44,34,24,0.05)] active:scale-[0.98]"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRefreshDailyReport();
+              }}
+              disabled={dailyRefreshing}
+            >
+              {dailyRefreshing ? "刷新中" : "刷新"}
+            </button>
+          }
+        />
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-[28px] border border-white/60 bg-[rgba(255,255,255,0.86)] shadow-[0_12px_30px_rgba(44,34,24,0.05)]">
+        <ChatEntryRow
+          title="渡"
+          preview={duPreview}
+          time={duTime}
+          badge="置顶"
+          tone="du"
+          onClick={onOpenDu}
+        />
+        <div className="mx-4 h-px bg-[rgba(117,124,142,0.08)]" />
+        <ChatEntryRow
+          title="文游"
+          preview={wenyouPreview}
+          time={wenyouTime}
+          tone="wenyou"
+          onClick={onOpenWenyou}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ChatEntryRow({
+  title,
+  preview,
+  time,
+  tone,
+  badge,
+  onClick,
+}: {
+  title: string;
+  preview: string;
+  time: string;
+  tone: "du" | "wenyou";
+  badge?: string;
+  onClick: () => void;
+}) {
+  const palette = tone === "wenyou"
+    ? { shell: "bg-[#F3EDEF] text-[#704A5D]" }
+    : { shell: "bg-[#EDF2F7] text-[#4A5568]" };
+  return (
+    <button className="flex w-full items-center gap-4 px-4 py-4 text-left active:bg-white/55" onClick={onClick}>
+      <div className={`flex h-[52px] w-[52px] items-center justify-center rounded-[20px] text-[19px] font-semibold shadow-sm ${palette.shell}`}>
+        {title.slice(0, 1)}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[17px] font-medium text-cream-text">{title}</span>
+            {badge ? <span className="rounded-full bg-[rgba(244,247,251,0.95)] px-2 py-0.5 text-[10px] font-semibold text-cream-muted">{badge}</span> : null}
+          </div>
+          <span className="text-[11px] text-cream-muted">{time}</span>
+        </div>
+        <div className="mt-1 truncate text-[13px] text-cream-muted">{preview}</div>
+      </div>
+    </button>
+  );
+}
+
+function RowLink({
+  label,
+  description,
+  onClick,
+}: {
+  label: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="flex w-full items-center gap-3 rounded-[24px] border border-white/60 bg-[rgba(255,255,255,0.86)] px-4 py-4 text-left shadow-[0_10px_28px_rgba(44,34,24,0.05)] active:scale-[0.99]"
+      onClick={onClick}
+    >
+      <div className="h-11 w-11 rounded-full bg-[rgba(244,247,251,0.95)] shadow-[inset_0_1px_2px_rgba(255,255,255,0.8)]" />
+      <div className="min-w-0 flex-1">
+        <div className="text-[16px] font-medium text-cream-text">{label}</div>
+        <div className="mt-1 text-[12px] text-cream-muted">{description}</div>
+      </div>
+      <span className="text-lg text-cream-muted">›</span>
+    </button>
+  );
+}
+
+function BottomNav({
+  current,
+  onChange,
+}: {
+  current: MainTab;
+  onChange: (tab: MainTab) => void;
+}) {
+  const items: Array<{ id: MainTab; label: string }> = [
+    { id: "chats", label: "会话" },
+    { id: "daily", label: "日常" },
+    { id: "tools", label: "工具" },
+    { id: "settings", label: "设置" },
+  ];
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/60 bg-[rgba(255,255,255,0.84)] px-5 pb-[calc(env(safe-area-inset-bottom,0px)+10px)] pt-2 backdrop-blur-xl">
+      <div className="mx-auto flex max-w-xl items-center justify-between">
+        {items.map((item) => {
+          const active = current === item.id;
+          return (
+            <button
+              key={item.id}
+              className="flex min-w-[60px] flex-col items-center gap-1.5 px-2 py-2"
+              onClick={() => onChange(item.id)}
+            >
+              <span className={`h-2 w-2 rounded-full ${active ? "bg-cream-text" : "bg-[rgba(117,124,142,0.18)]"}`} />
+              <span className={`text-[11px] font-semibold tracking-[0.12em] ${active ? "text-cream-text" : "text-cream-muted"}`}>{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+function FullScreenPane({
+  title,
+  accent,
+  onBack,
+  children,
+}: {
+  title: string;
+  accent: "du" | "wenyou" | "neutral";
+  onBack: () => void;
+  children: React.ReactNode;
+}) {
+  const chipClass = accent === "wenyou"
+    ? "bg-[#F3EDEF] text-[#704A5D]"
+    : accent === "du"
+      ? "bg-[#EDF2F7] text-[#4A5568]"
+      : "bg-[#F3F5F8] text-[#5C6473]";
+  return (
+    <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FB]">
+      <div className="flex items-center justify-between px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+8px)]">
+        <div className="flex items-center gap-2">
+          <button className="rounded-full px-3 py-2 text-sm text-cream-muted active:bg-white/65" onClick={onBack}>返回</button>
+          <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${chipClass}`}>{title.slice(0, 1)}</div>
+          <div className="text-[16px] font-medium text-cream-text">{title}</div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">{children}</div>
+    </div>
+  );
+}
+
+function MainChatScreen({
+  title,
+  avatarLabel,
+  windowId,
+  accent,
+  onBack,
+  onOpenStickers,
+  onOpenCall,
+}: {
+  title: string;
+  avatarLabel: string;
+  windowId: string;
+  accent: "du" | "wenyou";
+  onBack: () => void;
+  onOpenStickers: () => void;
+  onOpenCall: () => void;
+}) {
+  const toast = useToast();
+  const storageKey = `miniapp.chat.${windowId}.messages.v1`;
+  const modelKey = `miniapp.chat.${windowId}.model.v1`;
+  const [messages, setMessages] = useState<ChatDraftMessage[]>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    } catch {}
+    return [
+      {
+        id: "seed-1",
+        role: "assistant",
+        content: "我在。你直接说就好。",
+        createdAt: new Date().toISOString(),
+      },
+    ];
+  });
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [activeModel, setActiveModel] = useState(() => {
+    try {
+      return (localStorage.getItem(modelKey) || "").trim();
+    } catch {
+      return "";
+    }
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!windowId) return;
+      try {
+        const j = await apiJson<{ rounds?: Array<any> }>(`/miniapp-api/windows/${encodeURIComponent(windowId)}/conversation?last_n=20`);
+        if (cancelled) return;
+        const mapped = mapRoundsToDraftMessages(j?.rounds || []);
+        if (mapped.length) setMessages(mapped);
+      } catch (e: any) {
+        if (!cancelled) toast(`聊天历史加载失败：${e?.message || e}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [windowId, toast]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(messages.slice(-80)));
+    } catch {}
+  }, [messages, storageKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const j = await apiJson<{ data?: Array<{ id?: string }> }>("/v1/models");
+        const ids = Array.isArray(j?.data)
+          ? j.data.map((item) => String(item?.id || "").trim()).filter(Boolean)
+          : [];
+        if (cancelled || !ids.length) return;
+        setActiveModel((prev) => {
+          const next = prev && ids.includes(prev) ? prev : ids[0];
+          try {
+            if (next) localStorage.setItem(modelKey, next);
+          } catch {}
+          return next;
+        });
+      } catch (e: any) {
+        if (!cancelled) toast(`模型列表加载失败：${e?.message || e}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [modelKey, toast]);
+
+  async function sendMessage() {
+    const content = input.trim();
+    if (!content || sending) return;
+    if (!windowId) {
+      toast("当前拿不到 Telegram 用户 ID，不能接入共享上下文");
+      return;
+    }
+    if (!activeModel) {
+      toast("当前还没拿到可用模型，稍后再试");
+      return;
+    }
+    const userMsg: ChatDraftMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content,
+      createdAt: new Date().toISOString(),
+    };
+    const assistantId = `assistant-${Date.now()}`;
+    setInput("");
+    setPlusOpen(false);
+    setSending(true);
+    setMessages((prev) => [
+      ...prev,
+      userMsg,
+      { id: assistantId, role: "assistant", content: "", createdAt: new Date().toISOString() },
+    ]);
+    try {
+      const history = [...messages, userMsg].map((msg) => ({ role: msg.role, content: msg.content }));
+      const resp = await apiFetch("/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: activeModel,
+          messages: history,
+          stream: true,
+          window_id: windowId,
+        }),
+      });
+      if (!resp.ok || !resp.body) {
+        const text = await resp.text();
+        throw new Error(text || `HTTP ${resp.status}`);
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+        for (const part of parts) {
+          for (const line of part.split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (!payload || payload === "[DONE]") continue;
+            const chunk = JSON.parse(payload);
+            const delta = String(chunk?.choices?.[0]?.delta?.content || "");
+            if (!delta) continue;
+            setMessages((prev) => prev.map((msg) => (msg.id === assistantId ? { ...msg, content: msg.content + delta } : msg)));
+          }
+        }
+      }
+    } catch (e: any) {
+      setMessages((prev) =>
+        prev.map((msg) => (msg.id === assistantId ? { ...msg, content: `（发送失败：${e?.message || e}）` } : msg))
+      );
+      toast(`发送失败：${e?.message || e}`);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const avatarClass = accent === "wenyou"
+    ? "bg-[#F3EDEF] text-[#704A5D]"
+    : "bg-[#EDF2F7] text-[#4A5568]";
+
+  return (
+    <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FB]">
+      <div className="flex items-center justify-between border-b border-white/60 bg-[rgba(255,255,255,0.8)] px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+8px)] backdrop-blur-xl">
+        <div className="flex items-center gap-2">
+          <button className="rounded-full px-3 py-2 text-sm text-cream-muted active:bg-white/65" onClick={onBack}>返回</button>
+          <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${avatarClass}`}>{avatarLabel}</div>
+          <div>
+            <div className="text-[16px] font-medium text-cream-text">{title}</div>
+            <div className="text-[11px] text-cream-muted">{activeModel ? activeModel : "模型加载中..."}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <div className="space-y-4">
+          {messages.map((msg) => (
+            <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                className={
+                  "max-w-[82%] whitespace-pre-wrap rounded-[22px] px-4 py-3 text-[15px] leading-6 shadow-[0_8px_22px_rgba(44,34,24,0.04)] " +
+                  (msg.role === "user"
+                    ? "rounded-tr-[8px] bg-[#2E3440] text-white"
+                    : "rounded-tl-[8px] border border-white/60 bg-[rgba(255,255,255,0.92)] text-cream-text")
+                }
+              >
+                {msg.content || (sending && msg.role === "assistant" ? "…" : "")}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-white/60 bg-[rgba(255,255,255,0.88)] pb-[calc(env(safe-area-inset-bottom,0px)+10px)] backdrop-blur-xl">
+        <div className={`grid transition-[grid-template-rows,opacity] duration-300 ${plusOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
+          <div className="overflow-hidden">
+            <div className="flex gap-6 px-6 pb-2 pt-4">
+              <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
+              <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
+            </div>
+          </div>
+        </div>
+        <div className="flex items-end gap-2 px-3 pt-3">
+          <button
+            className={`rounded-full px-3 py-3 text-sm text-cream-muted transition ${plusOpen ? "bg-white/85" : "bg-transparent active:bg-white/65"}`}
+            onClick={() => setPlusOpen((v) => !v)}
+          >
+            ＋
+          </button>
+          <div className="flex-1 rounded-[22px] bg-[#F3F5F8] px-4 py-3 shadow-[inset_0_1px_2px_rgba(255,255,255,0.8)]">
+            <input
+              className="w-full bg-transparent text-[15px] text-cream-text outline-none placeholder:text-cream-muted"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void sendMessage();
+                }
+              }}
+              placeholder="输入消息..."
+            />
+          </div>
+          <button
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-[#2E3440] text-white shadow-[0_10px_22px_rgba(46,52,64,0.22)] disabled:opacity-50"
+            onClick={() => void sendMessage()}
+            disabled={sending || !input.trim()}
+          >
+            ↑
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatActionButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button className="flex flex-col items-center gap-2" onClick={onClick}>
+      <div className="flex h-[58px] w-[58px] items-center justify-center rounded-[20px] bg-[rgba(244,247,251,0.94)] shadow-[0_8px_20px_rgba(44,34,24,0.04)]">
+        <span className="text-lg text-cream-muted">{label === "表情包" ? "☺" : "✆"}</span>
+      </div>
+      <span className="text-[11px] font-semibold text-cream-muted">{label}</span>
+    </button>
+  );
+}
+
+function TreeScreen({
+  data,
+  onRefresh,
+}: {
+  data: CyberTreeData | null;
+  onRefresh: () => void;
+}) {
+  const toast = useToast();
+  const d = data;
+  const growth = Number(d?.growth || 0);
+  const seasonLabel =
+    d?.season === "spring" ? "春天" : d?.season === "summer" ? "夏天" : d?.season === "autumn" ? "秋天" : "冬天";
+  const stageLabel =
+    growth < 10 ? "种子/发芽" : growth < 30 ? "小树苗" : growth < 60 ? "小树" : growth < 100 ? "大树" : "满级大树";
+  const [refreshing, setRefreshing] = useState(false);
+
+  async function refreshMood() {
+    setRefreshing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; error?: string }>("/miniapp-api/mood-meter/refresh", { method: "POST" });
+      if (!j?.ok) throw new Error(j?.error || "刷新失败");
+      onRefresh();
+      toast("心情温度已刷新");
+    } catch (e: any) {
+      toast(`刷新失败：${e?.message || e}`);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-[20px] border border-white/60 bg-[rgba(255,255,255,0.9)] px-4 py-4 shadow-[0_8px_20px_rgba(44,34,24,0.05)]">
+        <div className="flex items-center gap-3">
+          <GrowthTreeSVG
+            growthValue={growth}
+            season={(d?.season || "spring") as "spring" | "summer" | "autumn" | "winter"}
+            weatherFx={(d?.weatherFx || undefined) as "rainy" | "sunny" | "snowy" | undefined}
+          />
+          <div className="text-xs text-cream-muted">当前：{seasonLabel} · {stageLabel}</div>
+        </div>
+      </div>
+      <div className="rounded-[20px] border border-white/60 bg-[rgba(255,255,255,0.9)] px-4 py-4 shadow-[0_8px_20px_rgba(44,34,24,0.05)] text-[13px] leading-6 text-cream-text">
+        <div>在一起第 {d?.daysTogether || 0} 天</div>
+        <div>聊了 {d?.totalRounds || 0} 轮</div>
+        <div>成长值：{growth.toFixed(2)}</div>
+        <div>起始日期：{d?.startDate || "-"}</div>
+      </div>
+      <div className="rounded-[20px] border border-white/60 bg-[rgba(255,255,255,0.9)] px-4 py-4 shadow-[0_8px_20px_rgba(44,34,24,0.05)]">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[14px] text-cream-text">今日心情温度：{String(d?.mood?.score ?? "-")}/100</div>
+          <Btn kind="blue" onClick={refreshMood} disabled={refreshing}>
+            {refreshing ? "刷新中..." : "刷新"}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   return (
     <ToastProvider>
@@ -628,7 +1320,7 @@ function AppWithAuth() {
       setSecondAnswer("");
       setLoginStep("password");
       setReady(true);
-      toast("已进入 mini app");
+      toast("已进入 SumiTalk");
     } catch (e: any) {
       setErrorText(e?.message || "登录失败");
     } finally {
@@ -656,6 +1348,7 @@ function AppWithAuth() {
       <ShellWithLogout
         onLogout={authEnabled ? logout : undefined}
         onOpenDevices={authEnabled ? () => setShowSecurityManager(true) : undefined}
+        onOpenDeviceManager={authEnabled ? () => setShowDeviceManager(true) : undefined}
         deviceManagerOpen={showDeviceManager}
         onCloseDevices={() => setShowDeviceManager(false)}
         securityManagerOpen={showSecurityManager}
@@ -676,7 +1369,7 @@ function AppWithAuth() {
             <ClaudePixelCrabIcon />
           </div>
           <div className="text-[26px] font-bold tracking-tight text-cream-text">
-            {secondPrompt && loginStep === "question" ? "Security Check" : "Welcome Back"}
+            {secondPrompt && loginStep === "question" ? "Security Check" : "Welcome to SumiTalk"}
           </div>
           <div className="mt-1 text-[15px] text-cream-muted">
             {secondPrompt && loginStep === "question" ? "Answer the question to continue." : "Enter password to continue."}
@@ -775,6 +1468,7 @@ function ClaudePixelCrabIcon() {
 function ShellWithLogout({
   onLogout,
   onOpenDevices,
+  onOpenDeviceManager,
   deviceManagerOpen,
   onCloseDevices,
   securityManagerOpen,
@@ -783,6 +1477,7 @@ function ShellWithLogout({
 }: {
   onLogout?: () => void;
   onOpenDevices?: () => void;
+  onOpenDeviceManager?: () => void;
   deviceManagerOpen?: boolean;
   onCloseDevices?: () => void;
   securityManagerOpen?: boolean;
@@ -791,18 +1486,7 @@ function ShellWithLogout({
 }) {
   return (
     <>
-      <Shell />
-      {onOpenDevices ? (
-        <div className="fixed right-4 top-4 z-[70]">
-          <button
-            type="button"
-            className="rounded-full bg-[rgba(244,247,251,0.88)] px-3 py-1.5 text-[11px] text-cream-muted shadow-[4px_4px_10px_rgba(173,182,196,0.2),-2px_-2px_5px_rgba(255,255,255,0.42)] backdrop-blur-xl"
-            onClick={onOpenDevices}
-          >
-            安全管理
-          </button>
-        </div>
-      ) : null}
+      <Shell onLogout={onLogout} onOpenSecurity={onOpenDevices} onOpenDevices={onOpenDeviceManager} />
       {securityManagerOpen && onCloseSecurityManager ? (
         <SecurityManagerModal
           onClose={onCloseSecurityManager}

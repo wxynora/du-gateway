@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiJson } from "../api";
-import { Btn, Modal } from "../components";
+import { Btn } from "../components";
 import { useToast } from "../toast";
 
 type UpstreamItem = { name: string; url: string };
@@ -19,7 +19,7 @@ type ProbeItem = {
 };
 type ProbeResp = { ok: boolean; status: "ok" | "degraded" | "fail"; results: ProbeItem[]; count: number };
 
-export function SettingsUpstream({ onClose }: { onClose: () => void }) {
+export function SettingsUpstream() {
   const toast = useToast();
   const [active, setActive] = useState(0);
   const [items, setItems] = useState<UpstreamItem[]>([]);
@@ -104,62 +104,55 @@ export function SettingsUpstream({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Modal title="上游中转站" onClose={onClose}>
-      <div className="space-y-3 text-sm">
-        <div className="text-xs text-cream-muted">
-          说明：这里切换的是网关的“全局默认上游”，会影响 RikkaHub/Telegram 等所有客户端。API Key 暂不在手机端维护（更安全）。
-        </div>
-        <div className="flex justify-end">
-          <Btn kind="blue" onClick={probeAll} disabled={probingAll || !items.length}>
-            {probingAll ? "探活中..." : "一键探活"}
-          </Btn>
-        </div>
-
-        <div className="space-y-2">
-          {items.map((it, idx) => (
-            <div
-              key={idx}
-              className={
-                "neo-panel-soft p-3"
-              }
-            >
-              <div className="flex items-center justify-between">
-                <div className="font-medium text-cream-text">{it.name || `upstream${idx + 1}`}</div>
-                <div className="flex items-center gap-2">
-                  <Btn kind="yellow" onClick={() => probeOne(idx)} disabled={probingIndex === idx || probingAll}>
-                    {probingIndex === idx ? "检测中..." : "探活"}
-                  </Btn>
-                  <Btn
-                    kind={idx === active ? "blue" : "pink"}
-                    onClick={() => {
-                      setActive(idx);
-                      switchActive(idx);
-                    }}
-                    disabled={idx === active}
-                  >
-                    {idx === active ? "当前" : "切换到此"}
-                  </Btn>
-                </div>
-              </div>
-              <div className="mt-2 text-xs text-cream-muted break-all">{it.url}</div>
-              <div className="mt-2 text-xs text-cream-muted">
-                探活：{statusText(probes[idx])}
-                {probes[idx]
-                  ? ` ｜ models=${probes[idx].models_status} (${probes[idx].model_count}) ｜ chat=${probes[idx].chat_status}`
-                  : ""}
-              </div>
-              {probes[idx]?.note ? <div className="mt-1 text-xs text-amber-600 break-all">{probes[idx]?.note}</div> : null}
-              {probes[idx]?.error ? (
-                <div className={"mt-1 text-xs break-all " + (probes[idx]?.status === "degraded" ? "text-amber-600" : "text-red-500")}>
-                  {probes[idx]?.error}
-                </div>
-              ) : null}
-            </div>
-          ))}
-          {!items.length ? <div className="text-xs text-cream-muted">（当前没有配置上游）</div> : null}
-        </div>
+    <div className="space-y-3 text-sm">
+      <div className="text-xs leading-6 text-cream-muted">
+        说明：这里切换的是网关的全局默认上游，会影响 RikkaHub、Telegram 等所有客户端。API Key 暂不在手机端维护。
       </div>
-    </Modal>
+      <div className="flex justify-end">
+        <Btn kind="blue" onClick={probeAll} disabled={probingAll || !items.length}>
+          {probingAll ? "探活中..." : "一键探活"}
+        </Btn>
+      </div>
+
+      <div className="space-y-2">
+        {items.map((it, idx) => (
+          <div key={idx} className="neo-panel-soft p-3">
+            <div className="flex items-center justify-between">
+              <div className="font-medium text-cream-text">{it.name || `upstream${idx + 1}`}</div>
+              <div className="flex items-center gap-2">
+                <Btn kind="yellow" onClick={() => probeOne(idx)} disabled={probingIndex === idx || probingAll}>
+                  {probingIndex === idx ? "检测中..." : "探活"}
+                </Btn>
+                <Btn
+                  kind={idx === active ? "blue" : "pink"}
+                  onClick={() => {
+                    setActive(idx);
+                    switchActive(idx);
+                  }}
+                  disabled={idx === active}
+                >
+                  {idx === active ? "当前" : "切换到此"}
+                </Btn>
+              </div>
+            </div>
+            <div className="mt-2 break-all text-xs text-cream-muted">{it.url}</div>
+            <div className="mt-2 text-xs text-cream-muted">
+              探活：{statusText(probes[idx])}
+              {probes[idx]
+                ? ` ｜ models=${probes[idx].models_status} (${probes[idx].model_count}) ｜ chat=${probes[idx].chat_status}`
+                : ""}
+            </div>
+            {probes[idx]?.note ? <div className="mt-1 break-all text-xs text-amber-600">{probes[idx]?.note}</div> : null}
+            {probes[idx]?.error ? (
+              <div className={"mt-1 break-all text-xs " + (probes[idx]?.status === "degraded" ? "text-amber-600" : "text-red-500")}>
+                {probes[idx]?.error}
+              </div>
+            ) : null}
+          </div>
+        ))}
+        {!items.length ? <div className="text-xs text-cream-muted">（当前没有配置上游）</div> : null}
+      </div>
+    </div>
   );
 }
 
