@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiJson } from "../api";
-import { Btn } from "../components";
 import { useToast } from "../toast";
 
 type ScheduleItem = {
@@ -18,37 +17,18 @@ type ScheduleItem = {
 type ScheduleResp = {
   ok?: boolean;
   items?: ScheduleItem[];
-  count?: number;
-  enabled_count?: number;
+};
+
+type CalendarCell = {
+  key: string;
+  day: number;
+  inMonth: boolean;
+  dayKey: string;
 };
 
 function normalizeItems(input: unknown): ScheduleItem[] {
   if (!Array.isArray(input)) return [];
   return input.filter((x): x is ScheduleItem => !!x && typeof x === "object");
-}
-
-function fmtDate(v: string): string {
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return v || "";
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-function weekdayLabel(v: number): string {
-  return ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][v] || "周一";
-}
-
-function repeatLabel(item: ScheduleItem): string {
-  const v = String(item.repeat || "once");
-  if (v === "daily") {
-    const dt = String(item.daily_time || "").trim();
-    return `每天${dt ? ` ${dt}` : ""}`;
-  }
-  if (v === "weekly") {
-    const wd = Number(item.weekly_weekday ?? 0);
-    const wt = String(item.weekly_time || "").trim();
-    return `每周 ${weekdayLabel(wd)}${wt ? ` ${wt}` : ""}`;
-  }
-  return "仅一次";
 }
 
 function dateKey(v: string): string {
@@ -57,20 +37,33 @@ function dateKey(v: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function dateLabel(v: string): string {
+function dateTimeLabel(v: string): string {
   const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return "未选择日期";
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  if (Number.isNaN(d.getTime())) return v || "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-function monthLabel(y: number, m: number): string {
-  return `${y}年${String(m + 1).padStart(2, "0")}月`;
+function hm(v: string): string {
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "--:--";
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function weekdayLabelMon0(v: number): string {
+  return ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][v] || "周一";
+}
+
+function weekdaySun0Label(v: number): string {
+  return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][v] || "周日";
+}
+
+function monthLabel(year: number, month: number): string {
+  return `${year}年 ${month + 1}月`;
 }
 
 function weekdayMon0FromDateKey(k: string): number {
   const d = new Date(`${k}T00:00:00`);
   if (Number.isNaN(d.getTime())) return 0;
-  // JS: Sun=0..Sat=6 -> Mon=0..Sun=6
   return (d.getDay() + 6) % 7;
 }
 
@@ -81,27 +74,40 @@ function occursOnDate(item: ScheduleItem, dayKey: string): boolean {
   if (dayKey < anchor) return false;
   if (rep === "daily") return true;
   if (rep === "weekly") {
-    const wk = Number.isFinite(Number(item.weekly_weekday))
-      ? Number(item.weekly_weekday)
-      : weekdayMon0FromDateKey(anchor);
+    const wk = Number.isFinite(Number(item.weekly_weekday)) ? Number(item.weekly_weekday) : weekdayMon0FromDateKey(anchor);
     return weekdayMon0FromDateKey(dayKey) === wk;
   }
   return dayKey === anchor;
+}
+
+function repeatBadge(item: ScheduleItem): string {
+  const rep = String(item.repeat || "once");
+  if (rep === "daily") return "每天";
+  if (rep === "weekly") {
+    const wd = Number.isFinite(Number(item.weekly_weekday)) ? Number(item.weekly_weekday) : 0;
+    return `每周 ${weekdayLabelMon0(wd)}`;
+  }
+  return "仅一次";
+}
+
+function repeatSubLabel(item: ScheduleItem): string {
+  const rep = String(item.repeat || "once");
+  if (rep === "daily") return `每天 ${String(item.daily_time || "").trim() || hm(String(item.datetime || ""))}`;
+  if (rep === "weekly") {
+    const wd = Number.isFinite(Number(item.weekly_weekday)) ? Number(item.weekly_weekday) : 0;
+    const wt = String(item.weekly_time || "").trim() || hm(String(item.datetime || ""));
+    return `${wt} · ${weekdayLabelMon0(wd)}`;
+  }
+  return dateTimeLabel(String(item.datetime || ""));
 }
 
 export function ScheduleTab() {
   const toast = useToast();
   const [items, setItems] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [formTitle, setFormTitle] = useState("");
-  const [formDatetime, setFormDatetime] = useState("");
-  const [formRepeat, setFormRepeat] = useState("once");
-  const [formDailyTime, setFormDailyTime] = useState("09:00");
-  const [formWeeklyWeekdays, setFormWeeklyWeekdays] = useState<number[]>([0]);
-  const [formWeeklyTime, setFormWeeklyTime] = useState("09:00");
-  const [formNote, setFormNote] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [togglingId, setTogglingId] = useState("");
+  const [deletingId, setDeletingId] = useState("");
   const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date().toISOString()));
   const [visibleMonth, setVisibleMonth] = useState(() => {
     const now = new Date();
@@ -113,10 +119,10 @@ export function ScheduleTab() {
     try {
       const j = await apiJson<ScheduleResp>("/miniapp-api/schedule/items");
       setItems(normalizeItems(j?.items));
-      setError("");
+      setLoadError("");
     } catch (e: any) {
-      setError(e?.message || String(e));
       setItems([]);
+      setLoadError(e?.message || String(e));
       toast(`加载失败：${e?.message || e}`);
     } finally {
       setLoading(false);
@@ -128,146 +134,81 @@ export function ScheduleTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const enabledItems = useMemo(
-    () => normalizeItems(items).filter((x) => x.enabled !== false).sort((a, b) => String(a.datetime || "").localeCompare(String(b.datetime || ""))),
-    [items]
-  );
-  const disabledItems = useMemo(
-    () => normalizeItems(items).filter((x) => x.enabled === false).sort((a, b) => String(b.datetime || "").localeCompare(String(a.datetime || ""))),
-    [items]
-  );
   const allItems = useMemo(
     () => normalizeItems(items).slice().sort((a, b) => String(a.datetime || "").localeCompare(String(b.datetime || ""))),
     [items]
   );
-  const dayItems = useMemo(
-    () => allItems.filter((it) => occursOnDate(it, selectedDate)),
-    [allItems, selectedDate]
-  );
+  const enabledItems = useMemo(() => allItems.filter((x) => x.enabled !== false), [allItems]);
+  const disabledItems = useMemo(() => allItems.filter((x) => x.enabled === false), [allItems]);
+
   const calendarCells = useMemo(() => {
     const year = visibleMonth.year;
     const month = visibleMonth.month;
-    const firstDay = new Date(year, month, 1);
-    const firstWeekday = firstDay.getDay();
+    const first = new Date(year, month, 1);
+    const firstWeekday = first.getDay(); // Sun=0
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const prefix: Array<{ key: string; day: number; inMonth: boolean }> = [];
-    for (let i = 0; i < firstWeekday; i += 1) {
-      prefix.push({ key: `p-${i}`, day: 0, inMonth: false });
+    const daysInPrevMonth = new Date(year, month, 0).getDate();
+    const cells: CalendarCell[] = [];
+    for (let i = firstWeekday - 1; i >= 0; i -= 1) {
+      const day = daysInPrevMonth - i;
+      const d = new Date(year, month - 1, day);
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      cells.push({ key: `p-${day}`, day, inMonth: false, dayKey: k });
     }
-    const body: Array<{ key: string; day: number; inMonth: boolean }> = [];
     for (let d = 1; d <= daysInMonth; d += 1) {
-      body.push({ key: `d-${d}`, day: d, inMonth: true });
+      const k = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      cells.push({ key: `m-${d}`, day: d, inMonth: true, dayKey: k });
     }
-    return [...prefix, ...body];
+    while (cells.length % 7 !== 0) {
+      const day = cells.length % 7 === 0 ? 1 : cells.length - daysInMonth - firstWeekday + 1;
+      const d = new Date(year, month + 1, day);
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      cells.push({ key: `n-${day}-${cells.length}`, day: d.getDate(), inMonth: false, dayKey: k });
+    }
+    return cells;
   }, [visibleMonth]);
+
   const dateCountMap = useMemo(() => {
     const m: Record<string, number> = {};
     calendarCells.forEach((cell) => {
-      if (!cell.inMonth) return;
-      const dayKey = `${visibleMonth.year}-${String(visibleMonth.month + 1).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}`;
       let count = 0;
       allItems.forEach((it) => {
-        if (occursOnDate(it, dayKey)) count += 1;
+        if (occursOnDate(it, cell.dayKey)) count += 1;
       });
-      m[dayKey] = count;
+      m[cell.dayKey] = count;
     });
     return m;
-  }, [allItems, calendarCells, visibleMonth]);
+  }, [calendarCells, allItems]);
 
-  async function disableItem(id: string) {
+  const dayItems = useMemo(() => {
+    return allItems.filter((it) => occursOnDate(it, selectedDate));
+  }, [allItems, selectedDate]);
+
+  async function setEnabled(id: string, enabled: boolean) {
+    if (!id) return;
+    setTogglingId(id);
     try {
-      const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/schedule/items/${encodeURIComponent(id)}/disable`, {
-        method: "PUT",
-      });
-      if (!j?.ok) throw new Error(j?.error || "禁用失败");
-      toast("已禁用，未来不再触发");
+      const path = enabled
+        ? `/miniapp-api/schedule/items/${encodeURIComponent(id)}/enable`
+        : `/miniapp-api/schedule/items/${encodeURIComponent(id)}/disable`;
+      const j = await apiJson<{ ok?: boolean; error?: string }>(path, { method: "PUT" });
+      if (!j?.ok) throw new Error(j?.error || (enabled ? "启用失败" : "停用失败"));
+      toast(enabled ? "已启用" : "已停用");
       await load();
     } catch (e: any) {
       toast(`操作失败：${e?.message || e}`);
-    }
-  }
-
-  async function enableItem(id: string) {
-    try {
-      const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/schedule/items/${encodeURIComponent(id)}/enable`, {
-        method: "PUT",
-      });
-      if (!j?.ok) throw new Error(j?.error || "启用失败");
-      toast("已启用提醒");
-      await load();
-    } catch (e: any) {
-      toast(`操作失败：${e?.message || e}`);
-    }
-  }
-
-  async function createItem() {
-    const title = (formTitle || "").trim();
-    const datetimeLocal = (formDatetime || "").trim();
-    if (!title) {
-      toast("请填写提醒标题");
-      return;
-    }
-    if (formRepeat === "weekly") {
-      if (!(formWeeklyTime || "").trim()) {
-        toast("请选择每周提醒时间");
-        return;
-      }
-      if (!formWeeklyWeekdays.length) {
-        toast("请至少选择一个周几");
-        return;
-      }
-    } else if (formRepeat === "daily") {
-      if (!(formDailyTime || "").trim()) {
-        toast("请选择每天提醒时间");
-        return;
-      }
-    } else if (!datetimeLocal) {
-      toast("请选择提醒时间");
-      return;
-    }
-    setCreating(true);
-    try {
-      const j = await apiJson<{ ok?: boolean; error?: string; item?: ScheduleItem }>("/miniapp-api/schedule/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title,
-          datetime: formRepeat === "weekly" || formRepeat === "daily" ? "" : datetimeLocal,
-          repeat: formRepeat || "once",
-          daily_time: formRepeat === "daily" ? formDailyTime : undefined,
-          weekly_weekdays: formRepeat === "weekly" ? formWeeklyWeekdays : undefined,
-          weekly_time: formRepeat === "weekly" ? formWeeklyTime : undefined,
-          note: (formNote || "").trim(),
-          enabled: true,
-        }),
-      });
-      if (!j?.ok) throw new Error(j?.error || "创建失败");
-      toast("已创建提醒");
-      setFormTitle("");
-      setFormDatetime("");
-      setFormRepeat("once");
-      setFormDailyTime("09:00");
-      setFormWeeklyWeekdays([0]);
-      setFormWeeklyTime("09:00");
-      setFormNote("");
-      await load();
-    } catch (e: any) {
-      toast(`创建失败：${e?.message || e}`);
     } finally {
-      setCreating(false);
+      setTogglingId("");
     }
   }
 
   async function deleteItem(id: string) {
     if (!id) return;
-    const ok = window.confirm("确认删除这条提醒？删除后不可恢复。");
-    if (!ok) return;
     try {
-      const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/schedule/items/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
+      const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/schedule/items/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!j?.ok) throw new Error(j?.error || "删除失败");
       toast("已删除提醒");
+      setDeletingId("");
       await load();
     } catch (e: any) {
       toast(`删除失败：${e?.message || e}`);
@@ -281,227 +222,256 @@ export function ScheduleTab() {
     });
   }
 
-  function toggleWeeklyWeekday(day: number) {
-    setFormWeeklyWeekdays((prev) => {
-      if (prev.includes(day)) return prev.filter((x) => x !== day);
-      return [...prev, day].sort((a, b) => a - b);
-    });
-  }
-
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between px-1">
-        <div className="text-xs text-cream-muted">日历与闹钟 · 轻量管理</div>
-        <button
-          className="neo-icon-btn h-8 w-8 disabled:opacity-50"
-          onClick={load}
-          disabled={loading}
-          title="刷新"
-        >
-          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-            <path d="M20 6v6h-6" />
-            <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8" />
-          </svg>
-        </button>
+    <div className="relative bg-[#FDFDFD]">
+      <style>{`
+        .shadow-soft { box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.04), 0 8px 10px -6px rgba(0, 0, 0, 0.02); }
+        .switch { position: relative; display: inline-block; width: 42px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #E2E8F0; transition: .4s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        .switch input:checked + .slider { background-color: #4A5568; }
+        .switch input:checked + .slider:before { transform: translateX(18px); }
+        .reminder-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .reminder-card:active { transform: scale(0.98); }
+        .status-badge {
+          padding: 2px 8px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 600;
+          text-transform: uppercase;
+        }
+        .modal-overlay {
+          background-color: rgba(0, 0, 0, 0.4);
+          backdrop-filter: blur(4px);
+        }
+        .calendar-dot {
+          width: 4px;
+          height: 4px;
+          background-color: #3B82F6;
+          border-radius: 50%;
+          margin-top: 2px;
+        }
+        .date-selected {
+          background-color: #1F2937;
+          color: white !important;
+          border-radius: 14px;
+        }
+      `}</style>
+
+      <div className="mb-4 flex items-center justify-between px-1">
+        <div className="text-[17px] font-semibold text-gray-800">日历</div>
+        <div className="flex items-center rounded-full border border-gray-100 bg-gray-50 px-3 py-1">
+          <span className={`mr-2 h-1.5 w-1.5 rounded-full ${loadError ? "bg-red-400" : "bg-green-400"}`} />
+          <span className="text-[11px] font-medium text-gray-500">{loadError ? "同步异常" : "渡 已同步"}</span>
+        </div>
       </div>
 
-      {error ? (
-        <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">
-          读取失败：{error}
-        </div>
-      ) : null}
-
-      <div className="neo-panel p-3 space-y-2">
-        <div className="text-xs text-cream-muted">新增提醒（闹钟）</div>
-        <input
-          className="neo-input"
-          placeholder="提醒标题，例如：吃药"
-          value={formTitle}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormTitle(e.target.value)}
-          disabled={creating}
-        />
-        {formRepeat === "weekly" ? (
-          <div className="space-y-2">
-            <div className="grid grid-cols-4 gap-2">
-              {["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map((w, idx) => {
-                const selected = formWeeklyWeekdays.includes(idx);
-                return (
-                  <button
-                    key={w}
-                    type="button"
-                    className={
-                      "neo-segment " +
-                      (selected ? "neo-segment-active" : "")
-                    }
-                    onClick={() => toggleWeeklyWeekday(idx)}
-                    disabled={creating}
-                  >
-                    {w}
-                  </button>
-                );
-              })}
-            </div>
-            <input
-              type="time"
-              className="neo-input"
-              value={formWeeklyTime}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormWeeklyTime(e.target.value)}
-              disabled={creating}
-            />
-          </div>
-        ) : formRepeat === "daily" ? (
-          <input
-            type="time"
-            className="neo-input"
-            value={formDailyTime}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormDailyTime(e.target.value)}
-            disabled={creating}
-          />
-        ) : (
-          <input
-            type="datetime-local"
-            className="neo-input"
-            value={formDatetime}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormDatetime(e.target.value)}
-            disabled={creating}
-          />
-        )}
-        <div className="grid grid-cols-2 gap-2">
-          <select
-            className="neo-select"
-            value={formRepeat}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormRepeat(e.target.value)}
-            disabled={creating}
-          >
-            <option value="once">仅一次</option>
-            <option value="daily">每天</option>
-            <option value="weekly">每周</option>
-          </select>
-          <Btn kind="green" onClick={createItem} disabled={creating}>
-            {creating ? "创建中..." : "创建提醒"}
-          </Btn>
-        </div>
-        <input
-          className="neo-input"
-          placeholder="备注（可选）"
-          value={formNote}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormNote(e.target.value)}
-          disabled={creating}
-        />
-      </div>
-
-      <div className="neo-panel p-3 space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="text-xs text-cream-muted">月视图日历</div>
-          <div className="flex items-center gap-1">
-            <button
-              className="neo-segment h-7 px-2 text-[11px]"
-              onClick={() => switchMonth(-1)}
-              title="上月"
-            >
-              上月
+      <div className="px-5 pt-2">
+        <div className="mb-6 flex items-center justify-between">
+          <h2 className="text-[18px] font-bold text-gray-800">{monthLabel(visibleMonth.year, visibleMonth.month)}</h2>
+          <div className="flex space-x-2">
+            <button className="rounded-full p-2 text-gray-400 transition-colors hover:bg-gray-100" onClick={() => switchMonth(-1)} title="上月">
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
             </button>
-            <div className="min-w-[84px] text-center text-[11px] text-cream-muted">{monthLabel(visibleMonth.year, visibleMonth.month)}</div>
-            <button
-              className="neo-segment h-7 px-2 text-[11px]"
-              onClick={() => switchMonth(1)}
-              title="下月"
-            >
-              下月
+            <button className="rounded-full p-2 text-gray-400 transition-colors hover:bg-gray-100" onClick={() => switchMonth(1)} title="下月">
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-7 gap-1 text-[11px] text-cream-muted">
+
+        <div className="mb-2 grid grid-cols-7 text-center">
           {["日", "一", "二", "三", "四", "五", "六"].map((w) => (
-            <div key={w} className="text-center">{w}</div>
+            <span key={w} className="text-[11px] font-bold uppercase tracking-wider text-gray-300">
+              {w}
+            </span>
           ))}
         </div>
-        <div className="grid grid-cols-7 gap-1">
+
+        <div className="grid grid-cols-7 gap-y-2">
           {calendarCells.map((cell) => {
-            if (!cell.inMonth) return <div key={cell.key} className="h-10 rounded-xl2 bg-white/10" />;
-            const k = `${visibleMonth.year}-${String(visibleMonth.month + 1).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}`;
-            const selected = k === selectedDate;
-            const count = dateCountMap[k] || 0;
+            const selected = selectedDate === cell.dayKey;
+            const count = dateCountMap[cell.dayKey] || 0;
+            const textCls = cell.inMonth ? "text-gray-800" : "text-gray-200";
             return (
               <button
                 key={cell.key}
-                className={
-                  "h-10 rounded-xl2 border text-xs transition " +
-                  (selected
-                    ? "bg-cream-green/65 border-white/60 text-cream-text shadow-soft2"
-                    : "bg-white/55 border-white/45 text-cream-text")
-                }
-                onClick={() => setSelectedDate(k)}
+                className={`h-10 flex flex-col items-center justify-center text-[14px] ${textCls} ${selected ? "date-selected font-bold" : ""}`}
+                onClick={() => setSelectedDate(cell.dayKey)}
+                title={cell.dayKey}
               >
-                <div className="leading-tight">{cell.day}</div>
-                <div className="text-[10px] text-cream-muted">{count ? `${count}条` : ""}</div>
+                {cell.day}
+                {count ? <div className={selected ? "mt-0.5 h-1 w-1 rounded-full bg-white" : "calendar-dot"} /> : null}
               </button>
             );
           })}
         </div>
       </div>
 
-      <div className="neo-panel p-3">
-        <div className="neo-tag-dark">
-          当日提醒 · {dateLabel(selectedDate)} · {dayItems.length}
-        </div>
-        <div className="mt-3 space-y-2">
-          {dayItems.map((it) => (
-            <div key={`day-${String(it.id || "")}`} className="neo-panel-soft p-3">
-              <div className="text-sm font-medium text-cream-text">{it.title || "未命名提醒"}</div>
-              <div className="mt-1 text-xs text-cream-muted">
-                {fmtDate(String(it.datetime || ""))} · {repeatLabel(it)} · {it.enabled === false ? "已禁用" : "启用中"}
-              </div>
-              {it.note ? <div className="mt-1 text-xs text-cream-muted">{it.note}</div> : null}
+      <div className="mt-4 px-5">
+        <div className="mb-8">
+          <div className="mb-4 flex items-center justify-between px-1">
+            <div className="flex items-baseline space-x-2">
+              <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">启用中</h2>
+              <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-500">{enabledItems.length}</span>
             </div>
-          ))}
-          {!dayItems.length ? <div className="text-xs text-cream-muted">该日期暂无提醒</div> : null}
+          </div>
+          <div className="space-y-4">
+            {enabledItems.map((it) => {
+              const id = String(it.id || "");
+              return (
+                <div key={id} className="reminder-card group relative overflow-hidden rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft">
+                  <div className="mb-1 flex justify-between items-start">
+                    <div>
+                      <span className="status-badge bg-blue-50 text-blue-500">{repeatBadge(it)}</span>
+                      <h3 className="mt-2 text-[18px] font-bold text-gray-800">{it.title || "未命名提醒"}</h3>
+                      <div className="mt-1 flex items-baseline space-x-1">
+                        <span className="text-[24px] font-bold text-gray-800">{hm(String(it.datetime || ""))}</span>
+                        <span className="text-[12px] font-medium text-gray-400">{repeatSubLabel(it)}</span>
+                      </div>
+                    </div>
+                    <label className="switch">
+                      <input
+                        type="checkbox"
+                        checked={it.enabled !== false}
+                        disabled={!id || togglingId === id}
+                        onChange={(e) => setEnabled(id, e.target.checked)}
+                      />
+                      <span className="slider" />
+                    </label>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <p className="text-[13px] font-light text-gray-500">{String(it.note || "").trim() || dateTimeLabel(String(it.datetime || ""))}</p>
+                    <button
+                      className="p-2 text-gray-300 opacity-0 transition-all group-hover:opacity-100 hover:text-red-400"
+                      onClick={() => setDeletingId(id)}
+                      title="删除提醒"
+                    >
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        <line x1="10" y1="11" x2="10" y2="17" />
+                        <line x1="14" y1="11" x2="14" y2="17" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
+
+        <div className="mb-8">
+          <div className="mb-4 flex items-center justify-between px-1">
+            <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">已停用</h2>
+          </div>
+          <div className="space-y-4 opacity-60">
+            {disabledItems.map((it) => {
+              const id = String(it.id || "");
+              return (
+                <div key={id} className="reminder-card group rounded-[28px] border border-gray-100 bg-gray-50/50 p-5">
+                  <div className="mb-1 flex justify-between items-start">
+                    <div>
+                      <span className="status-badge bg-gray-100 text-gray-400">已停用</span>
+                      <h3 className="mt-2 text-[18px] font-bold text-gray-400">{it.title || "未命名提醒"}</h3>
+                      <div className="mt-1 flex items-baseline space-x-1">
+                        <span className="text-[24px] font-bold text-gray-400">{hm(String(it.datetime || ""))}</span>
+                        <span className="text-[12px] font-medium text-gray-400">{repeatSubLabel(it)}</span>
+                      </div>
+                    </div>
+                    <label className="switch">
+                      <input
+                        type="checkbox"
+                        checked={it.enabled !== false}
+                        disabled={!id || togglingId === id}
+                        onChange={(e) => setEnabled(id, e.target.checked)}
+                      />
+                      <span className="slider" />
+                    </label>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <p className="text-[13px] font-light text-gray-400">{String(it.note || "").trim() || dateTimeLabel(String(it.datetime || ""))}</p>
+                    <button
+                      className="p-2 text-gray-300 opacity-0 transition-all group-hover:opacity-100 hover:text-red-400"
+                      onClick={() => setDeletingId(id)}
+                      title="删除提醒"
+                    >
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        <line x1="10" y1="11" x2="10" y2="17" />
+                        <line x1="14" y1="11" x2="14" y2="17" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {!loading && !allItems.length ? (
+          <div className="py-24 text-center flex flex-col items-center justify-center">
+            <div className="mb-6 h-24 w-24 rounded-full bg-orange-50 flex items-center justify-center">
+              <svg className="h-10 w-10 text-orange-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                <path d="M18.63 13A17.89 17.89 0 0 1 18 8" />
+                <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14" />
+                <path d="M18 8a6 6 0 0 0-9.33-5" />
+                <line x1="1" y1="1" x2="23" y2="23" />
+              </svg>
+            </div>
+            <h3 className="mb-2 text-[18px] font-medium text-gray-800">暂无任何提醒</h3>
+            <p className="px-10 text-[14px] leading-relaxed text-gray-400">你可以对渡说：<br />“每天早上八点提醒我喝水”</p>
+          </div>
+        ) : null}
+
+        {!loading && allItems.length > 0 && !dayItems.length ? (
+          <div className="py-20 text-center flex flex-col items-center justify-center">
+            <div className="mb-6 h-24 w-24 rounded-full bg-gray-50 flex items-center justify-center">
+              <svg className="h-10 w-10 text-gray-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                <line x1="16" y1="2" x2="16" y2="6" />
+                <line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+              </svg>
+            </div>
+            <h3 className="mb-2 text-[18px] font-medium text-gray-800">这一天暂无提醒</h3>
+            <p className="px-10 text-[14px] leading-relaxed text-gray-400">休息也是很重要的一部分</p>
+          </div>
+        ) : null}
       </div>
 
-      {!loading && !error && !enabledItems.length && !disabledItems.length ? (
-        <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(255,255,255,0.86),rgba(239,243,248,0.62))] text-cream-muted">
-          还没有提醒，先创建一条试试。
+      {deletingId ? (
+        <div className="modal-overlay fixed inset-0 z-[100] flex items-center justify-center px-8">
+          <div className="w-full max-w-sm rounded-[32px] bg-white p-8 shadow-2xl">
+            <h3 className="mb-3 text-center text-[20px] font-semibold text-gray-900">要删除这个提醒吗？</h3>
+            <p className="mb-8 px-2 text-center text-[15px] font-light text-gray-500">删除后将无法恢复，渡也不会再在指定时间提醒你。</p>
+            <div className="flex flex-col space-y-3">
+              <button
+                className="w-full rounded-[20px] bg-red-500 py-4 font-medium text-white shadow-lg shadow-red-100 transition-all active:scale-95"
+                onClick={() => deleteItem(deletingId)}
+              >
+                确认删除
+              </button>
+              <button
+                className="w-full rounded-[20px] py-4 font-medium text-gray-400 transition-all active:bg-gray-50"
+                onClick={() => setDeletingId("")}
+              >
+                取消
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 
-      <div className="neo-panel p-3">
-        <div className="neo-tag-dark">
-          启用中 · {enabledItems.length}
-        </div>
-        <div className="mt-3 space-y-2">
-          {enabledItems.map((it) => (
-            <div key={String(it.id || "")} className="neo-panel-soft p-3">
-              <div className="text-sm font-medium text-cream-text">{it.title || "未命名提醒"}</div>
-              <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(it)}</div>
-              {it.note ? <div className="mt-1 text-xs text-cream-muted">{it.note}</div> : null}
-              <div className="mt-2 flex items-center gap-2">
-                <Btn kind="danger" onClick={() => disableItem(String(it.id || ""))} disabled={!it.id}>禁用未来触发</Btn>
-                <Btn kind="pink" onClick={() => deleteItem(String(it.id || ""))} disabled={!it.id}>删除</Btn>
-              </div>
-            </div>
-          ))}
-          {!enabledItems.length ? <div className="text-xs text-cream-muted">暂无启用中的提醒</div> : null}
-        </div>
-      </div>
-
-      <div className="neo-panel p-3">
-        <div className="neo-tag-dark">
-          已禁用 · {disabledItems.length}
-        </div>
-        <div className="mt-3 space-y-2">
-          {disabledItems.map((it) => (
-            <div key={String(it.id || "")} className="neo-panel-soft p-3">
-              <div className="text-sm text-cream-text">{it.title || "未命名提醒"}</div>
-              <div className="mt-1 text-xs text-cream-muted">{fmtDate(String(it.datetime || ""))} · {repeatLabel(it)} · 已禁用</div>
-              <div className="mt-2 flex items-center gap-2">
-                <Btn kind="green" onClick={() => enableItem(String(it.id || ""))} disabled={!it.id}>重新启用</Btn>
-                <Btn kind="pink" onClick={() => deleteItem(String(it.id || ""))} disabled={!it.id}>删除</Btn>
-              </div>
-            </div>
-          ))}
-          {!disabledItems.length ? <div className="text-xs text-cream-muted">暂无已禁用提醒</div> : null}
-        </div>
+      <div className="h-8 bg-transparent" />
+      <div className="px-5 pb-1 text-[10px] text-gray-300">
+        选中日期：{selectedDate || "-"} · 星期{weekdaySun0Label(new Date(`${selectedDate}T00:00:00`).getDay() || 0)}
       </div>
     </div>
   );
