@@ -49,6 +49,7 @@ type ChatDraftMessage = {
   content: string;
   createdAt: string;
 };
+type ChatMode = "daily" | "work";
 type DeviceItem = {
   id?: string;
   note?: string;
@@ -416,6 +417,21 @@ function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
   return groups;
 }
 
+function extractAssistantReplyText(message: any): string {
+  const content = message?.content;
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    const parts = content.map((item) => {
+      if (item && typeof item === "object" && item.type === "text") {
+        return String(item.text || "");
+      }
+      return typeof item === "string" ? item : "";
+    }).filter(Boolean);
+    return parts.join(" ").trim();
+  }
+  return "";
+}
+
 function SummaryBlock({
   label,
   text,
@@ -432,9 +448,9 @@ function SummaryBlock({
     >
       <div className="mb-2.5 flex items-center">
         <div className="mr-2 h-3 w-1 rounded-full bg-gray-200" />
-        <h2 className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">{label}</h2>
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</h2>
       </div>
-      <p className="whitespace-pre-wrap pl-3 text-[15px] font-light leading-relaxed text-gray-800">{text}</p>
+      <p className="whitespace-pre-wrap pl-3 text-[13px] font-light leading-relaxed text-gray-800">{text}</p>
     </button>
   );
 }
@@ -501,7 +517,10 @@ function ChatsHome({
   }, []);
 
   return (
-    <div className="bg-white pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)" }}>
+    <div
+      className="bg-white pb-8"
+      style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)", fontFamily: "'Microsoft YaHei', sans-serif" }}
+    >
       <div className="px-6">
         <h1 className="mb-8 text-[26px] font-medium tracking-tight text-gray-900">会话</h1>
         <div className="space-y-7">
@@ -683,6 +702,7 @@ function MainChatScreen({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
+  const [chatMode, setChatMode] = useState<ChatMode>("work");
   const [activeModel, setActiveModel] = useState(() => {
     try {
       return (localStorage.getItem(modelKey) || "").trim();
@@ -784,7 +804,7 @@ function MainChatScreen({
       if (!resp.ok) {
         throw new Error(String(data?.error || data?.message || `HTTP ${resp.status}`));
       }
-      const reply = String(data?.choices?.[0]?.message?.content || "").trim();
+      const reply = extractAssistantReplyText(data?.choices?.[0]?.message);
       if (!reply) throw new Error("上游没有返回内容");
       const finalMessages = [
         ...nextMessages,
@@ -812,7 +832,7 @@ function MainChatScreen({
   const subtitle = sending ? "正在输入中" : "在线";
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FA]">
+    <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FA]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
       <div className="absolute top-0 z-20 flex w-full items-center justify-between border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
         <div className="flex items-center">
           <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
@@ -824,7 +844,21 @@ function MainChatScreen({
             <div className="text-[11px] font-light text-gray-400">{subtitle}</div>
           </div>
         </div>
-        <div className="w-10" />
+        <button
+          type="button"
+          aria-label="切换工作模式"
+          aria-pressed={chatMode === "work"}
+          className="flex items-center"
+          onClick={() => setChatMode((prev) => (prev === "daily" ? "work" : "daily"))}
+        >
+          <span
+            className={`relative block h-6 w-11 rounded-full transition-colors ${chatMode === "work" ? "bg-gray-900" : "bg-gray-300"}`}
+          >
+            <span
+              className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${chatMode === "work" ? "translate-x-5" : "translate-x-0.5"}`}
+            />
+          </span>
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-[100px]">
@@ -840,7 +874,7 @@ function MainChatScreen({
                     <div
                       key={`${group.id}-${index}`}
                       className="inline-block w-fit rounded-[16px] rounded-tr-sm bg-[#2D3748] px-3 py-2 text-[14px] font-light leading-normal text-white shadow-sm"
-                      style={{ fontFamily: "'PingFang SC', 'Microsoft YaHei', sans-serif" }}
+                      style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                     >
                       {part || (sending ? "…" : "")}
                     </div>
@@ -856,7 +890,7 @@ function MainChatScreen({
                     <div
                       key={`${group.id}-${index}`}
                       className="inline-block w-fit rounded-[16px] rounded-tl-sm border border-gray-100/50 bg-white px-3 py-2 text-[14px] font-light leading-normal text-gray-800 shadow-sm"
-                      style={{ fontFamily: "'PingFang SC', 'Microsoft YaHei', sans-serif" }}
+                      style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                     >
                       {part || (sending ? "…" : "")}
                     </div>
