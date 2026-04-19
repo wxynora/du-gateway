@@ -1,4 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
+import DOMPurify from "dompurify";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
 import { apiFetch, apiJson, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, setPanelToken } from "./api";
@@ -49,7 +52,6 @@ type ChatDraftMessage = {
   content: string;
   createdAt: string;
 };
-type ChatMode = "daily" | "work";
 type DeviceItem = {
   id?: string;
   note?: string;
@@ -372,7 +374,7 @@ function contentToPlainText(content: any): string {
 type ChatMessageGroup = {
   id: string;
   role: "user" | "assistant";
-  parts: string[];
+  parts: Array<{ content: string; render: "rich" | "html" }>;
 };
 
 function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string; time: string } {
@@ -389,20 +391,39 @@ function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string
   return { preview: "主会话", time: "主会话" };
 }
 
-function splitMessageParts(content: string): string[] {
+function isHtmlBlock(content: string): boolean {
+  const raw = String(content || "").trim();
+  if (!raw) return false;
+  return /<\/?[a-z][\s\S]*>/i.test(raw);
+}
+
+function isCodeBlock(content: string): boolean {
+  const raw = String(content || "").trim();
+  if (!raw) return false;
+  return /```[\s\S]*```/.test(raw) || /^( {4}|\t).+/m.test(raw);
+}
+
+function splitMessageParts(content: string): Array<{ content: string; render: "rich" | "html" }> {
   const raw = String(content || "").replace(/\r/g, "").trim();
   if (!raw) return [];
+  if (isHtmlBlock(raw)) {
+    return [{ content: raw, render: "html" }];
+  }
+  if (isCodeBlock(raw)) {
+    return [{ content: raw, render: "rich" }];
+  }
   return raw
     .split(/\n{2,}/)
     .map((part) => part.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((part) => ({ content: part, render: "rich" as const }));
 }
 
 function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
   const groups: ChatMessageGroup[] = [];
   for (const msg of messages) {
     const parts = splitMessageParts(msg.content || "");
-    const safeParts = parts.length ? parts : [msg.content || ""];
+    const safeParts = parts.length ? parts : [{ content: msg.content || "", render: "rich" as const }];
     const last = groups[groups.length - 1];
     if (last && last.role === msg.role) {
       last.parts.push(...safeParts);
@@ -430,6 +451,34 @@ function extractAssistantReplyText(message: any): string {
     return parts.join(" ").trim();
   }
   return "";
+}
+
+function RichTextBlock({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="m-0 whitespace-pre-wrap">{children}</p>,
+        ul: ({ children }) => <ul className="my-2 list-disc pl-5">{children}</ul>,
+        ol: ({ children }) => <ol className="my-2 list-decimal pl-5">{children}</ol>,
+        li: ({ children }) => <li className="my-0.5">{children}</li>,
+        pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded-[12px] bg-black/5 p-3 text-[13px]">{children}</pre>,
+        code: ({ children, ...props }) => {
+          const inline = !String(props.className || "").includes("language-");
+          return inline ? <code className="rounded bg-black/5 px-1.5 py-0.5 text-[13px]">{children}</code> : <code>{children}</code>;
+        },
+        blockquote: ({ children }) => <blockquote className="my-2 border-l-2 border-black/10 pl-3 opacity-80">{children}</blockquote>,
+        a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer" className="underline">{children}</a>,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
+function HtmlBlock({ content }: { content: string }) {
+  const sanitized = DOMPurify.sanitize(content);
+  return <div className="w-full" dangerouslySetInnerHTML={{ __html: sanitized }} />;
 }
 
 function SummaryBlock({
@@ -702,7 +751,6 @@ function MainChatScreen({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
-  const [chatMode, setChatMode] = useState<ChatMode>("work");
   const [activeModel, setActiveModel] = useState(() => {
     try {
       return (localStorage.getItem(modelKey) || "").trim();
@@ -844,21 +892,7 @@ function MainChatScreen({
             <div className="text-[11px] font-light text-gray-400">{subtitle}</div>
           </div>
         </div>
-        <button
-          type="button"
-          aria-label="切换工作模式"
-          aria-pressed={chatMode === "work"}
-          className="flex items-center"
-          onClick={() => setChatMode((prev) => (prev === "daily" ? "work" : "daily"))}
-        >
-          <span
-            className={`relative block h-6 w-11 rounded-full transition-colors ${chatMode === "work" ? "bg-gray-900" : "bg-gray-300"}`}
-          >
-            <span
-              className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${chatMode === "work" ? "translate-x-5" : "translate-x-0.5"}`}
-            />
-          </span>
-        </button>
+        <div className="w-10" />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-[100px]">
@@ -876,7 +910,7 @@ function MainChatScreen({
                       className="inline-block w-fit rounded-[16px] rounded-tr-sm bg-[#2D3748] px-3 py-2 text-[14px] font-light leading-normal text-white shadow-sm"
                       style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                     >
-                      {part || (sending ? "…" : "")}
+                      {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
                     </div>
                   ))}
                 </div>
@@ -892,7 +926,7 @@ function MainChatScreen({
                       className="inline-block w-fit rounded-[16px] rounded-tl-sm border border-gray-100/50 bg-white px-3 py-2 text-[14px] font-light leading-normal text-gray-800 shadow-sm"
                       style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                     >
-                      {part || (sending ? "…" : "")}
+                      {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
                     </div>
                   ))}
                 </div>

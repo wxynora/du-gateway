@@ -67,8 +67,6 @@ export function DuDayTab() {
         position: "relative",
       }}
     >
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400;500&family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&family=Zeyada&display=swap');`}</style>
-
       <div
         style={{
           maxWidth: 500,
