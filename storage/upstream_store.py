@@ -1,10 +1,15 @@
 import json
+import time
 from pathlib import Path
 
+import requests
+
 from config import DATA_DIR, TARGET_AI_URL, TARGET_AI_API_KEY, TARGET_AI_URLS, TARGET_AI_API_KEYS
+from config import OPENROUTER_FIXED_MODEL, is_openrouter_url
 
 
 UPSTREAMS_FILE = DATA_DIR / "upstreams.json"
+ACTIVE_MODEL_FILE = DATA_DIR / "active_upstream_model.json"
 
 
 def _default_payload():
@@ -72,13 +77,113 @@ def save_upstreams(payload: dict) -> bool:
         return False
 
 
+def _chat_url_to_models_url(chat_url: str) -> str:
+    base = (chat_url or "").strip().rstrip("/")
+    for suffix in ("/v1/chat/completions", "/chat/completions"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/") + "/v1/models"
+
+
+def _load_active_model_payload() -> dict:
+    if not ACTIVE_MODEL_FILE.exists():
+        return {}
+    try:
+        with open(ACTIVE_MODEL_FILE, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def _save_active_model_payload(payload: dict) -> bool:
+    ACTIVE_MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(ACTIVE_MODEL_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload or {}, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def clear_active_model_cache() -> bool:
+    return _save_active_model_payload({})
+
+
+def _fetch_first_model_for_item(it: dict) -> str:
+    url = str((it or {}).get("url") or "").strip()
+    api_key = str((it or {}).get("api_key") or "").strip()
+    if not url:
+        return ""
+    if is_openrouter_url(url):
+        return str(OPENROUTER_FIXED_MODEL or "").strip()
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        resp = requests.get(_chat_url_to_models_url(url), headers=headers, timeout=20)
+        if resp.status_code != 200:
+            return ""
+        data = resp.json() if resp.content else {}
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return ""
+        for item in items:
+            if isinstance(item, dict) and str(item.get("id") or "").strip():
+                return str(item.get("id") or "").strip()
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def refresh_active_model_cache() -> str:
+    data = load_upstreams()
+    items = data.get("items") or []
+    active = int(data.get("active") or 0)
+    if active < 0 or active >= len(items):
+        _save_active_model_payload({})
+        return ""
+    item = items[active] or {}
+    model = _fetch_first_model_for_item(item)
+    _save_active_model_payload(
+        {
+            "active": active,
+            "url": str(item.get("url") or "").strip(),
+            "model": model,
+            "checked_at": time.time(),
+        }
+    )
+    return model
+
+
+def get_cached_active_model(refresh_if_missing: bool = True) -> str:
+    payload = _load_active_model_payload()
+    data = load_upstreams()
+    items = data.get("items") or []
+    active = int(data.get("active") or 0)
+    if 0 <= active < len(items):
+        url = str((items[active] or {}).get("url") or "").strip()
+        if payload.get("active") == active and str(payload.get("url") or "").strip() == url:
+            model = str(payload.get("model") or "").strip()
+            if model:
+                return model
+    if refresh_if_missing:
+        return refresh_active_model_cache()
+    return ""
+
+
 def set_active(index: int) -> bool:
     data = load_upstreams()
     items = data.get("items") or []
     if index < 0 or index >= len(items):
         return False
     data["active"] = int(index)
-    return save_upstreams(data)
+    ok = save_upstreams(data)
+    if ok:
+        clear_active_model_cache()
+    return ok
 
 
 def get_active_item() -> dict | None:

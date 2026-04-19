@@ -31,8 +31,6 @@ from config import (
     TELEGRAM_WEBAPP_URL,
     TELEGRAM_WEBAPP_VERSION,
     TELEGRAM_CHAT_PATH,
-    TELEGRAM_CHAT_MODEL,
-    GATEWAY_MODELS,
     TELEGRAM_INPUT_IDLE_SECONDS,
     TELEGRAM_OUTPUT_CHUNK_CHARS,
     TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS,
@@ -134,7 +132,6 @@ def _effective_tg_token(bot_token: Optional[str]) -> str:
     if bot_token is not None and str(bot_token).strip():
         return str(bot_token).strip()
     return (TELEGRAM_BOT_TOKEN or "").strip()
-_RESOLVED_CHAT_MODEL: Optional[str] = None
 # 主 Bot 的 Telegram user id（getMe.id），用于识别群内「渡」的发言
 _MAIN_BOT_TELEGRAM_USER_ID: Optional[int] = None
 _BUF_LOCK = threading.Lock()
@@ -251,27 +248,16 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
 
 def _fetch_gateway_first_model() -> Optional[str]:
     """
-    从网关 /v1/models 拉取第一个模型 id，作为 Bot 的默认模型。
-    注意：网关会把该接口代理到上游（或用 GATEWAY_MODELS 兜底）。
+    读取当前 active upstream 的真实可用模型。
+    模型在切换上游时刷新到本地缓存；缓存为空时只补拉一次。
     """
-    url = TELEGRAM_GATEWAY_URL.rstrip("/") + "/v1/models"
     try:
-        r = requests.get(url, timeout=20)
-        if r.status_code != 200:
-            logger.warning("网关 /v1/models 非 200 status=%s body=%s", r.status_code, (r.text or "")[:200])
-            return None
-        data = r.json() if r.content else None
-        lst = (data or {}).get("data") or []
-        if not lst:
-            return None
-        first = lst[0]
-        if isinstance(first, dict) and first.get("id"):
-            return str(first["id"]).strip()
-        if isinstance(first, str) and first.strip():
-            return first.strip()
-        return None
+        from storage.upstream_store import get_cached_active_model
+
+        model = str(get_cached_active_model(refresh_if_missing=True) or "").strip()
+        return model or None
     except Exception as e:
-        logger.warning("拉取网关模型列表失败: %s", e)
+        logger.warning("读取 active 模型缓存失败: %s", e)
         return None
 
 
@@ -279,21 +265,12 @@ def _resolve_chat_model() -> str:
     """
     解析 Bot 请求网关时使用的模型名。
     优先级：
-    1) TELEGRAM_CHAT_MODEL（显式配置）
-    2) 网关 /v1/models 第一个
+    1) 当前 active upstream 的缓存模型
+    2) 缓存为空时补拉一次真实模型
     3) 拉不到就返回空，不做默认兜底
     """
-    global _RESOLVED_CHAT_MODEL
-    if _RESOLVED_CHAT_MODEL:
-        return _RESOLVED_CHAT_MODEL
-    if TELEGRAM_CHAT_MODEL and TELEGRAM_CHAT_MODEL.strip():
-        _RESOLVED_CHAT_MODEL = TELEGRAM_CHAT_MODEL.strip()
-        return _RESOLVED_CHAT_MODEL
     m = _fetch_gateway_first_model()
-    if m:
-        _RESOLVED_CHAT_MODEL = m
-        return _RESOLVED_CHAT_MODEL
-    return ""
+    return str(m or "").strip()
 
 
 def _sleep_between_sends():
@@ -1202,6 +1179,13 @@ def process_message(
     finally:
         stop.set()
     if reply is None:
+        logger.warning(
+            "process_message 网关无回复，发送兜底文案 chat_id=%s user_id=%s window_id=%s force_last4=%s",
+            chat_id,
+            user_id,
+            window_id,
+            force_last4,
+        )
         reply = "暂时没连上渡，稍后再试哦～"
     # 解析语音标签
     reply_clean, voice_text = _extract_voice_tag(reply)
@@ -1211,6 +1195,15 @@ def process_message(
     # 先发文字（短信分段）
     outbound = reply_clean or ""
     ok_text = send_message_segmented(chat_id=chat_id, text=outbound, bot_token=bot_token) if outbound else True
+    logger.info(
+        "process_message 发送完成 chat_id=%s user_id=%s window_id=%s force_last4=%s ok_text=%s outbound_chars=%s",
+        chat_id,
+        user_id,
+        window_id,
+        force_last4,
+        ok_text,
+        len(outbound),
+    )
 
     # 再发表情包图片（随机一张）
     if sticker_tag:

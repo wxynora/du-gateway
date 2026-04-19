@@ -12,8 +12,6 @@ import requests
 from config import (
     TELEGRAM_GATEWAY_URL,
     TELEGRAM_CHAT_PATH,
-    TELEGRAM_CHAT_MODEL,
-    GATEWAY_MODELS,
     TELEGRAM_PROACTIVE_ENABLED,
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
     TELEGRAM_PROACTIVE_QUIET_START_HM,
@@ -70,9 +68,12 @@ class ProactiveDecision:
 
 
 def _get_chat_model() -> str:
-    if TELEGRAM_CHAT_MODEL:
-        return TELEGRAM_CHAT_MODEL
-    return ""
+    try:
+        from storage.upstream_store import get_cached_active_model
+
+        return str(get_cached_active_model(refresh_if_missing=True) or "").strip()
+    except Exception:
+        return ""
 
 
 def _parse_hm(hm: str) -> tuple[int, int]:
@@ -353,8 +354,22 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
     }
     headers = {"Content-Type": "application/json", "X-Window-Id": window_id, "X-Force-Last4": "1"}
     try:
+        logger.info(
+            "主动决策请求 window_id=%s hours=%.2f model=%s user_chars=%s",
+            window_id,
+            hours_since_last,
+            body.get("model") or "",
+            len(user_prompt),
+        )
         r = requests.post(url, headers=headers, json=body, timeout=120)
         if r.status_code != 200:
+            logger.warning(
+                "主动决策网关非200 window_id=%s status=%s model=%s body_preview=%s",
+                window_id,
+                r.status_code,
+                body.get("model") or "",
+                (r.text or "")[:300],
+            )
             return ProactiveDecision(
                 False,
                 "",
@@ -520,7 +535,17 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             f"{('备注：' + note + '。') if note else ''}"
             "请像平时 Telegram 聊天那样自然回复；如果有多句，请用换行分段。"
         )
+        logger.info(
+            "闹钟准备触发 uid=%s item_id=%s title=%s repeat=%s occ_key=%s note_chars=%s",
+            uid,
+            str(it.get("id") or ""),
+            title,
+            rep,
+            occ_key,
+            len(note),
+        )
         ok = process_message(chat_id=uid, user_id=uid, text=reminder_prompt, force_last4=True)
+        logger.info("闹钟触发结果 uid=%s item_id=%s ok=%s", uid, str(it.get("id") or ""), ok)
         if not ok:
             continue
         r2_store.add_schedule_fired_key(occ_key)

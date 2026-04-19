@@ -1057,6 +1057,11 @@ def miniapp_reasoning_latest():
         if wid0:
             targets = [wid0]
 
+    primary_wid = _resolve_primary_chat_window_id()
+    if primary_wid and primary_wid not in targets:
+        if primary_wid.startswith("tg_") or primary_wid.startswith("wechat_") or primary_wid.startswith("wx_"):
+            targets.insert(0, primary_wid)
+
     if not targets:
         return jsonify({"ok": True, "window_id": "", "items": [], "count": 0})
 
@@ -2226,11 +2231,13 @@ def miniapp_put_upstreams():
     data = request.get_json(silent=True) or {}
     active = int(data.get("active") or 0)
     ok = upstream_store.set_active(active)
+    model = upstream_store.refresh_active_model_cache() if ok else ""
     saved = upstream_store.load_upstreams()
     return jsonify(
         {
             "ok": ok,
             "active": int(saved.get("active") or 0),
+            "model": model,
         }
     )
 
@@ -2240,11 +2247,13 @@ def miniapp_set_active_upstream():
     data = request.get_json(silent=True) or {}
     idx = int(data.get("active") or 0)
     ok = upstream_store.set_active(idx)
+    model = upstream_store.refresh_active_model_cache() if ok else ""
     saved = upstream_store.load_upstreams()
     return jsonify(
         {
             "ok": ok,
-            "active": idx,
+            "active": int(saved.get("active") or 0),
+            "model": model,
         }
     )
 
