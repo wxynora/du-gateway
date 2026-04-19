@@ -189,14 +189,9 @@ function Shell({
               onClick={() => setShowDuDay(true)}
             />
             <PageCardRow
-              icon={<ClockIconMini />}
-              label="闹钟"
-              onClick={() => setShowAlarm(true)}
-            />
-            <PageCardRow
-              icon={<CalendarIconMini />}
-              label="日历"
-              onClick={() => setShowSchedule(true)}
+              icon={<BookOpenIcon />}
+              label="渡的记事本"
+              onClick={() => setPanel("du-notebook")}
             />
           </div>
         </div>
@@ -210,7 +205,8 @@ function Shell({
             <ListRow icon={<FileTextIcon />} label="日志" onClick={() => setPanel("logs")} />
             <ListRow icon={<GitMergeIcon />} label="思维链" onClick={() => setPanel("reasoning")} />
             <ListRow icon={<CpuIcon />} label="记忆调试" onClick={() => setPanel("memory-debug")} />
-            <ListRow icon={<BookOpenIcon />} label="渡的记事本" onClick={() => setPanel("du-notebook")} />
+            <ListRow icon={<ClockIconMini />} label="闹钟" onClick={() => setShowAlarm(true)} />
+            <ListRow icon={<CalendarIconMini />} label="日历" onClick={() => setShowSchedule(true)} />
             <ListRow icon={<CodeIcon />} label="核心 Prompt" onClick={() => setShowCorePrompt(true)} />
             <ListRow icon={<ToggleRightIcon />} label="上游切换" onClick={() => setShowSettings(true)} last />
           </div>
@@ -374,8 +370,36 @@ function contentToPlainText(content: any): string {
 type ChatMessageGroup = {
   id: string;
   role: "user" | "assistant";
+  createdAt: string;
   parts: Array<{ content: string; render: "rich" | "html" }>;
 };
+
+function formatClockTime(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "最近";
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) {
+    const m = raw.match(/(\d{2}):(\d{2})/);
+    return m ? `${m[1]}:${m[2]}` : "最近";
+  }
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mm = String(dt.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function shouldShowGroupTime(current: string, previous?: string): boolean {
+  const cur = new Date(String(current || ""));
+  if (Number.isNaN(cur.getTime())) return !previous;
+  if (!previous) return true;
+  const prev = new Date(String(previous || ""));
+  if (Number.isNaN(prev.getTime())) return true;
+  const dayChanged =
+    cur.getFullYear() !== prev.getFullYear() ||
+    cur.getMonth() !== prev.getMonth() ||
+    cur.getDate() !== prev.getDate();
+  if (dayChanged) return true;
+  return cur.getTime() - prev.getTime() >= 5 * 60 * 1000;
+}
 
 function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string; time: string } {
   const list = Array.isArray(messages) ? messages : [];
@@ -385,7 +409,7 @@ function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string
     if (!text) continue;
     return {
       preview: text,
-      time: String(msg?.createdAt || "").trim() || "最近",
+      time: formatClockTime(String(msg?.createdAt || "").trim()),
     };
   }
   return { preview: "主会话", time: "主会话" };
@@ -432,6 +456,7 @@ function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
     groups.push({
       id: msg.id,
       role: msg.role,
+      createdAt: msg.createdAt,
       parts: [...safeParts],
     });
   }
@@ -637,7 +662,7 @@ function ChatEntryRow({
           <span className="text-[17px] font-medium text-gray-900">{title}</span>
           <span className="text-[12px] font-normal text-gray-900">{time}</span>
         </div>
-        <p className="truncate text-[14px] font-normal text-gray-900">{preview}</p>
+        <p className="truncate text-[14px] font-normal text-gray-600">{preview}</p>
       </div>
     </button>
   );
@@ -896,42 +921,48 @@ function MainChatScreen({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-[100px]">
-        <div className="mb-2 flex justify-center">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-900">Today</span>
-        </div>
         <div className="space-y-5">
-          {groupedMessages.map((group) => (
-            group.role === "user" ? (
-              <div key={group.id} className="flex items-start justify-end space-x-3">
-                <div className="mt-[2px] max-w-[72%] space-y-1.5 text-right">
-                  {group.parts.map((part, index) => (
-                    <div
-                      key={`${group.id}-${index}`}
-                      className="inline-block w-fit rounded-[999px] bg-[#2D3748] px-3 py-2 text-[14px] font-medium leading-normal text-white shadow-sm"
-                      style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
-                    >
-                      {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
-                    </div>
-                  ))}
+          {groupedMessages.map((group, index) => (
+            <React.Fragment key={group.id}>
+              {shouldShowGroupTime(group.createdAt, groupedMessages[index - 1]?.createdAt) ? (
+                <div className="mb-2 flex justify-center">
+                  <span className="rounded-full bg-[#EFEFEF] px-3 py-1 text-[11px] font-medium text-gray-900">
+                    {formatClockTime(group.createdAt)}
+                  </span>
                 </div>
-                <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[13px] font-medium text-gray-600 shadow-sm">我</div>
-              </div>
-            ) : (
-              <div key={group.id} className="flex items-start space-x-3">
-                <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
-                <div className="mt-[2px] max-w-[72%] space-y-1.5">
-                  {group.parts.map((part, index) => (
-                    <div
-                      key={`${group.id}-${index}`}
-                      className="inline-block w-fit rounded-[999px] border border-gray-100/50 bg-white px-3 py-2 text-[14px] font-medium leading-normal text-gray-800 shadow-sm"
-                      style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
-                    >
-                      {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
-                    </div>
-                  ))}
+              ) : null}
+              {group.role === "user" ? (
+                <div className="flex items-start justify-end space-x-3">
+                  <div className="mt-[2px] max-w-[72%] space-y-1.5 text-right">
+                    {group.parts.map((part, index) => (
+                      <div
+                        key={`${group.id}-${index}`}
+                        className="inline-block w-fit rounded-[999px] bg-[#2D3748] px-2.5 py-1.5 text-[13px] font-medium leading-normal text-white shadow-sm"
+                        style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
+                      >
+                        {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[13px] font-medium text-gray-600 shadow-sm">我</div>
                 </div>
-              </div>
-            )
+              ) : (
+                <div className="flex items-start space-x-3">
+                  <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
+                  <div className="mt-[2px] max-w-[72%] space-y-1.5">
+                    {group.parts.map((part, index) => (
+                      <div
+                        key={`${group.id}-${index}`}
+                        className="inline-block w-fit rounded-[999px] border border-gray-100/50 bg-white px-2.5 py-1.5 text-[13px] font-medium leading-normal text-gray-800 shadow-sm"
+                        style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
+                      >
+                        {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </React.Fragment>
           ))}
         </div>
       </div>
