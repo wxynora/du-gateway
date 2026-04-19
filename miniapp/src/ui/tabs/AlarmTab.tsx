@@ -116,7 +116,25 @@ export function AlarmTab() {
   }
 
   return (
-    <div className="bg-[#FDFDFD]">
+    <div className="relative bg-[#FDFDFD]">
+      <style>{`
+        .alarm-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .alarm-card:active { transform: scale(0.98); }
+        .status-badge {
+          padding: 2px 8px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 600;
+          text-transform: uppercase;
+        }
+        .switch { position: relative; display: inline-block; width: 42px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #E2E8F0; transition: .4s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        .switch input:checked + .slider { background-color: #4A5568; }
+        .switch input:checked + .slider:before { transform: translateX(18px); }
+        .modal-overlay { background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); }
+      `}</style>
       <div className="mb-4 flex items-center justify-between px-1">
         <div className="text-[17px] font-semibold text-gray-800">闹钟</div>
         <div className="flex items-center rounded-full border border-gray-100 bg-gray-50 px-3 py-1">
@@ -142,24 +160,24 @@ export function AlarmTab() {
               const id = String(it.id || "");
               const p = fmtDateTimeParts(String(it.datetime || ""));
               return (
-                <div key={id} className="group relative overflow-hidden rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.04)]">
+                <div key={id} className="alarm-card group relative overflow-hidden rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.04)]">
                   <div className="mb-1 flex items-start justify-between">
                     <div>
-                      <span className="rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-blue-500">开启中</span>
+                      <span className="status-badge bg-blue-50 text-blue-500">开启中</span>
                       <div className="mt-2 flex items-baseline space-x-2">
                         <span className="text-[32px] font-bold leading-none text-gray-800">{p.hm}</span>
                         <span className="text-[13px] font-medium text-gray-400">{p.rel}</span>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className={`inline-flex h-6 w-11 items-center rounded-full p-0.5 transition disabled:opacity-50 ${it.enabled !== false ? "bg-gray-700" : "bg-gray-300"}`}
-                      disabled={!id || togglingId === id}
-                      onClick={() => setEnabled(id, false)}
-                      title="关闭提醒"
-                    >
-                      <span className={`h-5 w-5 rounded-full bg-white transition ${it.enabled !== false ? "translate-x-5" : ""}`} />
-                    </button>
+                    <label className="switch">
+                      <input
+                        type="checkbox"
+                        checked={it.enabled !== false}
+                        disabled={!id || togglingId === id}
+                        onChange={(e) => setEnabled(id, e.target.checked)}
+                      />
+                      <span className="slider" />
+                    </label>
                   </div>
                   <div className="mt-3 flex items-center justify-between">
                     <div>
@@ -194,24 +212,24 @@ export function AlarmTab() {
               const id = String(it.id || "");
               const p = fmtDateTimeParts(String(it.datetime || ""));
               return (
-                <div key={id} className="group rounded-[28px] border border-gray-100 bg-gray-50/50 p-5">
+                <div key={id} className="alarm-card group rounded-[28px] border border-gray-100 bg-gray-50/50 p-5">
                   <div className="mb-1 flex items-start justify-between">
                     <div>
-                      <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-gray-400">已停止</span>
+                      <span className="status-badge bg-gray-100 text-gray-400">已停止</span>
                       <div className="mt-2 flex items-baseline space-x-2">
                         <span className="text-[32px] font-bold leading-none text-gray-400">{p.hm}</span>
                         <span className="text-[13px] font-medium text-gray-400">{p.rel}</span>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      className={`inline-flex h-6 w-11 items-center rounded-full p-0.5 transition disabled:opacity-50 ${it.enabled !== false ? "bg-gray-700" : "bg-gray-300"}`}
-                      disabled={!id || togglingId === id}
-                      onClick={() => setEnabled(id, true)}
-                      title="重新启用"
-                    >
-                      <span className={`h-5 w-5 rounded-full bg-white transition ${it.enabled !== false ? "translate-x-5" : ""}`} />
-                    </button>
+                    <label className="switch">
+                      <input
+                        type="checkbox"
+                        checked={it.enabled !== false}
+                        disabled={!id || togglingId === id}
+                        onChange={(e) => setEnabled(id, e.target.checked)}
+                      />
+                      <span className="slider" />
+                    </label>
                   </div>
                   <div className="mt-3 flex items-center justify-between">
                     <div>
@@ -259,7 +277,7 @@ export function AlarmTab() {
       ) : null}
 
       {deletingId ? (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-8 backdrop-blur-[4px]">
+        <div className="modal-overlay fixed inset-0 z-[100] flex items-center justify-center px-8">
           <div className="w-full max-w-sm rounded-[32px] bg-white p-8 shadow-2xl">
             <h3 className="mb-3 text-center text-[20px] font-semibold text-gray-900">要删除这个提醒吗？</h3>
             <p className="mb-8 px-2 text-center text-[15px] font-light text-gray-500">删除后将无法恢复，渡也不会再在这个时间点叫醒你。</p>

@@ -951,7 +951,7 @@ function MainChatScreen({
                     {group.parts.map((part, index) => (
                       <div
                         key={`${group.id}-${index}`}
-                        className="inline-block w-fit rounded-[999px] bg-[#2D3748] px-2.5 py-1.5 text-[13px] font-medium leading-normal text-white shadow-sm"
+                        className="inline-block w-fit max-w-full rounded-[999px] bg-[#2D3748] px-2.5 py-1.5 text-[13px] font-medium leading-normal text-white shadow-sm"
                         style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                       >
                         <PlainTextBlock content={part.content || (sending ? "…" : "")} />
@@ -967,7 +967,7 @@ function MainChatScreen({
                     {group.parts.map((part, index) => (
                       <div
                         key={`${group.id}-${index}`}
-                        className="inline-block w-fit rounded-[999px] border border-gray-100/50 bg-white px-2.5 py-1.5 text-[13px] font-medium leading-normal text-gray-800 shadow-sm"
+                        className="inline-block w-fit max-w-full rounded-[999px] border border-gray-100/50 bg-white px-2.5 py-1.5 text-[13px] font-medium leading-normal text-gray-800 shadow-sm"
                         style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                       >
                         {part.render === "html" ? (
