@@ -371,7 +371,7 @@ type ChatMessageGroup = {
   id: string;
   role: "user" | "assistant";
   createdAt: string;
-  parts: Array<{ content: string; render: "rich" | "html" }>;
+  parts: Array<{ content: string; render: "plain" | "rich" | "html" }>;
 };
 
 function formatClockTime(value: string): string {
@@ -427,7 +427,14 @@ function isCodeBlock(content: string): boolean {
   return /```[\s\S]*```/.test(raw) || /^( {4}|\t).+/m.test(raw);
 }
 
-function splitMessageParts(content: string): Array<{ content: string; render: "rich" | "html" }> {
+function hasMarkdownSyntax(content: string): boolean {
+  const raw = String(content || "").trim();
+  if (!raw) return false;
+  // Only treat as markdown when explicit syntax appears.
+  return /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|```|`[^`\n]+`|\[.+?\]\(.+?\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|\|.+\|/.test(raw);
+}
+
+function splitMessageParts(content: string): Array<{ content: string; render: "plain" | "rich" | "html" }> {
   const raw = String(content || "").replace(/\r/g, "").trim();
   if (!raw) return [];
   if (isHtmlBlock(raw)) {
@@ -435,6 +442,9 @@ function splitMessageParts(content: string): Array<{ content: string; render: "r
   }
   if (isCodeBlock(raw)) {
     return [{ content: raw, render: "rich" }];
+  }
+  if (!hasMarkdownSyntax(raw)) {
+    return [{ content: raw, render: "plain" }];
   }
   return raw
     .split(/\n{2,}/)
@@ -504,6 +514,10 @@ function RichTextBlock({ content }: { content: string }) {
 function HtmlBlock({ content }: { content: string }) {
   const sanitized = DOMPurify.sanitize(content);
   return <div className="w-full" dangerouslySetInnerHTML={{ __html: sanitized }} />;
+}
+
+function PlainTextBlock({ content }: { content: string }) {
+  return <span className="whitespace-pre-wrap">{content}</span>;
 }
 
 function SummaryBlock({
@@ -940,7 +954,7 @@ function MainChatScreen({
                         className="inline-block w-fit rounded-[999px] bg-[#2D3748] px-2.5 py-1.5 text-[13px] font-medium leading-normal text-white shadow-sm"
                         style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                       >
-                        {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
+                        <PlainTextBlock content={part.content || (sending ? "…" : "")} />
                       </div>
                     ))}
                   </div>
@@ -956,7 +970,13 @@ function MainChatScreen({
                         className="inline-block w-fit rounded-[999px] border border-gray-100/50 bg-white px-2.5 py-1.5 text-[13px] font-medium leading-normal text-gray-800 shadow-sm"
                         style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                       >
-                        {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
+                        {part.render === "html" ? (
+                          <HtmlBlock content={part.content} />
+                        ) : part.render === "plain" ? (
+                          <PlainTextBlock content={part.content || (sending ? "…" : "")} />
+                        ) : (
+                          <RichTextBlock content={part.content || (sending ? "…" : "")} />
+                        )}
                       </div>
                     ))}
                   </div>
