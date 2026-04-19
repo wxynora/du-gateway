@@ -903,27 +903,27 @@ function MainChatScreen({
           {groupedMessages.map((group) => (
             group.role === "user" ? (
               <div key={group.id} className="flex items-start justify-end space-x-3">
-                <div className="max-w-[72%] space-y-1.5 text-right">
+                <div className="mt-1 max-w-[72%] space-y-1.5 text-right">
                   {group.parts.map((part, index) => (
                     <div
                       key={`${group.id}-${index}`}
-                      className="inline-block w-fit rounded-[16px] rounded-tr-sm bg-[#2D3748] px-3 py-2 text-[14px] font-medium leading-normal text-white shadow-sm"
+                      className="inline-block w-fit rounded-[16px] bg-[#2D3748] px-3 py-2 text-[14px] font-medium leading-normal text-white shadow-sm"
                       style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                     >
                       {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
                     </div>
                   ))}
                 </div>
-                <div className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[14px] font-medium text-gray-600 shadow-sm">我</div>
+                <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[13px] font-medium text-gray-600 shadow-sm">我</div>
               </div>
             ) : (
               <div key={group.id} className="flex items-start space-x-3">
-                <div className={`flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[14px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
-                <div className="max-w-[72%] space-y-1.5">
+                <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
+                <div className="mt-1 max-w-[72%] space-y-1.5">
                   {group.parts.map((part, index) => (
                     <div
                       key={`${group.id}-${index}`}
-                      className="inline-block w-fit rounded-[16px] rounded-tl-sm border border-gray-100/50 bg-white px-3 py-2 text-[14px] font-medium leading-normal text-gray-800 shadow-sm"
+                      className="inline-block w-fit rounded-[16px] border border-gray-100/50 bg-white px-3 py-2 text-[14px] font-medium leading-normal text-gray-800 shadow-sm"
                       style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                     >
                       {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
