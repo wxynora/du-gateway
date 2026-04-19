@@ -226,12 +226,12 @@ export function ScheduleTab() {
     <div className="relative bg-[#FDFDFD]">
       <style>{`
         .shadow-soft { box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.04), 0 8px 10px -6px rgba(0, 0, 0, 0.02); }
-        .switch { position: relative; display: inline-block; width: 42px; height: 24px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #E2E8F0; transition: .4s; border-radius: 24px; }
-        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
-        .switch input:checked + .slider { background-color: #4A5568; }
-        .switch input:checked + .slider:before { transform: translateX(18px); }
+        .sch-switch { position: relative; display: inline-block; width: 42px; height: 24px; flex: 0 0 auto; }
+        .sch-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+        .sch-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #E2E8F0; transition: .25s; border-radius: 24px; overflow: hidden; }
+        .sch-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .25s; border-radius: 50%; }
+        .sch-switch input:checked + .sch-slider { background-color: #4A5568; }
+        .sch-switch input:checked + .sch-slider:before { transform: translateX(18px); }
         .reminder-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         .reminder-card:active { transform: scale(0.98); }
         .status-badge {
@@ -334,14 +334,14 @@ export function ScheduleTab() {
                         <span className="text-[12px] font-medium text-gray-400">{repeatSubLabel(it)}</span>
                       </div>
                     </div>
-                    <label className="switch">
+                    <label className="sch-switch">
                       <input
                         type="checkbox"
                         checked={it.enabled !== false}
                         disabled={!id || togglingId === id}
                         onChange={(e) => setEnabled(id, e.target.checked)}
                       />
-                      <span className="slider" />
+                      <span className="sch-slider" />
                     </label>
                   </div>
                   <div className="mt-3 flex items-center justify-between">
@@ -369,7 +369,7 @@ export function ScheduleTab() {
           <div className="mb-4 flex items-center justify-between px-1">
             <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">已停用</h2>
           </div>
-          <div className="space-y-4 opacity-60">
+          <div className="space-y-4">
             {disabledItems.map((it) => {
               const id = String(it.id || "");
               return (
@@ -383,14 +383,14 @@ export function ScheduleTab() {
                         <span className="text-[12px] font-medium text-gray-400">{repeatSubLabel(it)}</span>
                       </div>
                     </div>
-                    <label className="switch">
+                    <label className="sch-switch">
                       <input
                         type="checkbox"
                         checked={it.enabled !== false}
                         disabled={!id || togglingId === id}
                         onChange={(e) => setEnabled(id, e.target.checked)}
                       />
-                      <span className="slider" />
+                      <span className="sch-slider" />
                     </label>
                   </div>
                   <div className="mt-3 flex items-center justify-between">
