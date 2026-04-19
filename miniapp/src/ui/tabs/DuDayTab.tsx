@@ -67,56 +67,33 @@ export function DuDayTab() {
         position: "relative",
       }}
     >
-      <div
-        style={{
-          position: "sticky",
-          top: 0,
-          padding: "40px 24px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          background: "rgba(249, 247, 242, 0.9)",
-          backdropFilter: "blur(8px)",
-          zIndex: 50,
-        }}
-      >
-        <div style={{ width: 20 }} />
-        <h1
-          style={{
-            fontWeight: 300,
-            letterSpacing: "0.2em",
-            fontSize: "0.9rem",
-            textTransform: "uppercase",
-          }}
-        >
-          渡的一天
-        </h1>
-        <div
-          style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: "0.7rem",
-            color: "#7A726A",
-            minWidth: 40,
-            textAlign: "right",
-          }}
-        >
-          {dateText || "--.--"}
-        </div>
-      </div>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400;500&family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&family=Zeyada&display=swap');`}</style>
 
       <div
         style={{
           maxWidth: 500,
           margin: "0 auto",
-          padding: 20,
+          padding: "20px 20px 20px",
           position: "relative",
         }}
       >
         <div
           style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            marginBottom: 12,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: "0.7rem",
+            color: "#7A726A",
+          }}
+        >
+          {dateText || "--.--"}
+        </div>
+        <div
+          style={{
             position: "absolute",
             left: 30,
-            top: 0,
+            top: 28,
             bottom: 0,
             width: 1,
             background: "linear-gradient(to bottom, transparent, #7A726A 50px, #7A726A calc(100% - 50px), transparent)",
@@ -186,7 +163,7 @@ export function DuDayTab() {
                   color: "#3D3834",
                 }}
               >
-                {String(item.title || "").trim() || (item.kind === "decision" ? "Active Reach" : "提醒")}
+                {String(item.title || "").trim() || (item.kind === "decision" ? "Active Reach" : "Morning Alarm")}
               </h3>
 
               {item.kind === "routine" ? (

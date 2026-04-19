@@ -228,7 +228,6 @@ function Shell({
     }
     return (
       <ChatsHome
-        windowId={sharedChatWindowId}
         dailyWhisper={dailyWhisper}
         dailyReport={dailyReport}
         onOpenDu={() => setActiveScreen("du")}
@@ -306,12 +305,12 @@ function Shell({
         </FullScreenPane>
       ) : null}
       {showAlarm ? (
-        <FullScreenPane title="闹钟" accent="neutral" onBack={() => setShowAlarm(false)}>
+        <FullScreenPane title="闹钟" accent="neutral" headerMode="simple" onBack={() => setShowAlarm(false)}>
           <LazyPane><AlarmTab /></LazyPane>
         </FullScreenPane>
       ) : null}
       {showDuDay ? (
-        <FullScreenPane title="渡的一天" accent="neutral" onBack={() => setShowDuDay(false)}>
+        <FullScreenPane title="渡的一天" accent="neutral" headerMode="simple" onBack={() => setShowDuDay(false)}>
           <LazyPane><DuDayTab /></LazyPane>
         </FullScreenPane>
       ) : null}
@@ -369,42 +368,52 @@ function contentToPlainText(content: any): string {
   return "";
 }
 
-function pickLatestPreview(rounds: Array<any>): { preview: string; time: string } {
-  const list = Array.isArray(rounds) ? rounds : [];
+type ChatMessageGroup = {
+  id: string;
+  role: "user" | "assistant";
+  parts: string[];
+};
+
+function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string; time: string } {
+  const list = Array.isArray(messages) ? messages : [];
   for (let i = list.length - 1; i >= 0; i -= 1) {
-    const round = list[i];
-    const msgs = Array.isArray(round?.messages) ? round.messages : [];
-    for (let j = msgs.length - 1; j >= 0; j -= 1) {
-      const text = contentToPlainText(msgs[j]?.content);
-      if (text) {
-        return {
-          preview: text,
-          time: String(round?.timestamp || "").trim() || "最近",
-        };
-      }
-    }
+    const msg = list[i];
+    const text = String(msg?.content || "").trim();
+    if (!text) continue;
+    return {
+      preview: text,
+      time: String(msg?.createdAt || "").trim() || "最近",
+    };
   }
-  return { preview: "", time: "" };
+  return { preview: "主会话", time: "主会话" };
 }
 
-function mapRoundsToDraftMessages(rounds: Array<any>): ChatDraftMessage[] {
-  const out: ChatDraftMessage[] = [];
-  for (const round of Array.isArray(rounds) ? rounds : []) {
-    const createdAt = String(round?.timestamp || "").trim() || new Date().toISOString();
-    for (const msg of Array.isArray(round?.messages) ? round.messages : []) {
-      const role = String(msg?.role || "").trim().toLowerCase();
-      if (role !== "user" && role !== "assistant") continue;
-      const text = contentToPlainText(msg?.content);
-      if (!text) continue;
-      out.push({
-        id: `${role}-${createdAt}-${out.length}`,
-        role: role as "user" | "assistant",
-        content: text,
-        createdAt,
-      });
+function splitMessageParts(content: string): string[] {
+  const raw = String(content || "").replace(/\r/g, "").trim();
+  if (!raw) return [];
+  return raw
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
+  const groups: ChatMessageGroup[] = [];
+  for (const msg of messages) {
+    const parts = splitMessageParts(msg.content || "");
+    const safeParts = parts.length ? parts : [msg.content || ""];
+    const last = groups[groups.length - 1];
+    if (last && last.role === msg.role) {
+      last.parts.push(...safeParts);
+      continue;
     }
+    groups.push({
+      id: msg.id,
+      role: msg.role,
+      parts: [...safeParts],
+    });
   }
-  return out.slice(-80);
+  return groups;
 }
 
 function SummaryBlock({
@@ -431,7 +440,6 @@ function SummaryBlock({
 }
 
 function ChatsHome({
-  windowId,
   dailyWhisper,
   dailyReport,
   onOpenDu,
@@ -441,7 +449,6 @@ function ChatsHome({
   onRefreshDailyReport,
   dailyRefreshing,
 }: {
-  windowId: string;
   dailyWhisper: string;
   dailyReport: DailyReport | null;
   onOpenDu: () => void;
@@ -451,7 +458,7 @@ function ChatsHome({
   onRefreshDailyReport: () => void;
   dailyRefreshing: boolean;
 }) {
-  const [duPreview, setDuPreview] = useState("正在同步最近聊天…");
+  const [duPreview, setDuPreview] = useState("主会话");
   const [duTime, setDuTime] = useState("主会话");
   const [wenyouPreview, setWenyouPreview] = useState("独立文游会话");
   const [wenyouTime, setWenyouTime] = useState("独立会话");
@@ -463,21 +470,18 @@ function ChatsHome({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!windowId) return;
       try {
-        const j = await apiJson<{ rounds?: Array<any> }>(`/miniapp-api/windows/${encodeURIComponent(windowId)}/conversation?last_n=12`);
+        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
         if (cancelled) return;
-        const picked = pickLatestPreview(j?.rounds || []);
-        if (picked.preview) {
-          setDuPreview(picked.preview);
-          setDuTime(picked.time || "最近");
-        }
+        const picked = pickLatestDraftPreview(j?.messages || []);
+        setDuPreview(picked.preview);
+        setDuTime(picked.time);
       } catch {}
     })();
     return () => {
       cancelled = true;
     };
-  }, [windowId]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -609,11 +613,13 @@ function FullScreenPane({
   title,
   accent,
   onBack,
+  headerMode = "default",
   children,
 }: {
   title: string;
   accent: "du" | "wenyou" | "neutral";
   onBack: () => void;
+  headerMode?: "default" | "simple";
   children: React.ReactNode;
 }) {
   const chipClass = accent === "wenyou"
@@ -623,17 +629,25 @@ function FullScreenPane({
       : "bg-[#F4F5F7] text-[#5C6473]";
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-[#FDFDFD]">
-      <div className="absolute top-0 z-20 flex w-full items-center justify-between border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
-        <div className="flex items-center">
-          <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
-            <ChevronLeftIcon />
+      {headerMode === "simple" ? (
+        <div className="border-b border-gray-100/50 bg-white px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)]">
+          <button className="text-[16px] font-medium text-gray-900" onClick={onBack}>
+            {`< ${title}`}
           </button>
-          <div className={`ml-1 mr-3 flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${chipClass}`}>{title.slice(0, 1)}</div>
-          <div className="text-[16px] font-medium text-gray-900">{title}</div>
         </div>
-        <div className="w-10" />
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-[88px]">{children}</div>
+      ) : (
+        <div className="absolute top-0 z-20 flex w-full items-center justify-between border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
+          <div className="flex items-center">
+            <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
+              <ChevronLeftIcon />
+            </button>
+            <div className={`ml-1 mr-3 flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${chipClass}`}>{title.slice(0, 1)}</div>
+            <div className="text-[16px] font-medium text-gray-900">{title}</div>
+          </div>
+          <div className="w-10" />
+        </div>
+      )}
+      <div className={`min-h-0 flex-1 overflow-y-auto px-4 pb-4 ${headerMode === "simple" ? "pt-0" : "pt-[88px]"}`}>{children}</div>
     </div>
   );
 }
@@ -656,23 +670,16 @@ function MainChatScreen({
   onOpenCall: () => void;
 }) {
   const toast = useToast();
-  const storageKey = `miniapp.chat.${windowId}.messages.v1`;
   const modelKey = `miniapp.chat.${windowId}.model.v1`;
-  const [messages, setMessages] = useState<ChatDraftMessage[]>(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      const parsed = raw ? JSON.parse(raw) : [];
-      if (Array.isArray(parsed) && parsed.length) return parsed;
-    } catch {}
-    return [
-      {
-        id: "seed-1",
-        role: "assistant",
-        content: "我在。你直接说就好。",
-        createdAt: new Date().toISOString(),
-      },
-    ];
-  });
+  const seedMessages: ChatDraftMessage[] = [
+    {
+      id: "seed-1",
+      role: "assistant",
+      content: "我在。你直接说就好。",
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  const [messages, setMessages] = useState<ChatDraftMessage[]>(seedMessages);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -683,30 +690,6 @@ function MainChatScreen({
       return "";
     }
   });
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!windowId) return;
-      try {
-        const j = await apiJson<{ rounds?: Array<any> }>(`/miniapp-api/windows/${encodeURIComponent(windowId)}/conversation?last_n=20`);
-        if (cancelled) return;
-        const mapped = mapRoundsToDraftMessages(j?.rounds || []);
-        if (mapped.length) setMessages(mapped);
-      } catch (e: any) {
-        if (!cancelled) toast(`聊天历史加载失败：${e?.message || e}`);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [windowId, toast]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(messages.slice(-80)));
-    } catch {}
-  }, [messages, storageKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -733,6 +716,31 @@ function MainChatScreen({
     };
   }, [modelKey, toast]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
+        if (cancelled) return;
+        const next = Array.isArray(j?.messages) && j.messages.length ? j.messages : seedMessages;
+        setMessages(next);
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function saveDisplayHistory(nextMessages: ChatDraftMessage[]) {
+    try {
+      await apiJson("/miniapp-api/sumitalk-history", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: nextMessages }),
+      });
+    } catch {}
+  }
+
   async function sendMessage() {
     const content = input.trim();
     if (!content || sending) return;
@@ -751,6 +759,7 @@ function MainChatScreen({
       createdAt: new Date().toISOString(),
     };
     const assistantId = `assistant-${Date.now()}`;
+    const nextMessages = [...messages, userMsg];
     setInput("");
     setPlusOpen(false);
     setSending(true);
@@ -760,46 +769,36 @@ function MainChatScreen({
       { id: assistantId, role: "assistant", content: "", createdAt: new Date().toISOString() },
     ]);
     try {
-      const history = [...messages, userMsg].map((msg) => ({ role: msg.role, content: msg.content }));
+      const history = nextMessages.map((msg) => ({ role: msg.role, content: msg.content }));
       const resp = await apiFetch("/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: activeModel,
           messages: history,
-          stream: true,
+          stream: false,
           window_id: windowId,
         }),
       });
-      if (!resp.ok || !resp.body) {
-        const text = await resp.text();
-        throw new Error(text || `HTTP ${resp.status}`);
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(String(data?.error || data?.message || `HTTP ${resp.status}`));
       }
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() || "";
-        for (const part of parts) {
-          for (const line of part.split("\n")) {
-            if (!line.startsWith("data: ")) continue;
-            const payload = line.slice(6).trim();
-            if (!payload || payload === "[DONE]") continue;
-            const chunk = JSON.parse(payload);
-            const delta = String(chunk?.choices?.[0]?.delta?.content || "");
-            if (!delta) continue;
-            setMessages((prev) => prev.map((msg) => (msg.id === assistantId ? { ...msg, content: msg.content + delta } : msg)));
-          }
-        }
-      }
+      const reply = String(data?.choices?.[0]?.message?.content || "").trim();
+      if (!reply) throw new Error("上游没有返回内容");
+      const finalMessages = [
+        ...nextMessages,
+        { id: assistantId, role: "assistant" as const, content: reply, createdAt: new Date().toISOString() },
+      ];
+      setMessages(finalMessages);
+      await saveDisplayHistory(finalMessages);
     } catch (e: any) {
-      setMessages((prev) =>
-        prev.map((msg) => (msg.id === assistantId ? { ...msg, content: `（发送失败：${e?.message || e}）` } : msg))
-      );
+      const failedMessages = [
+        ...nextMessages,
+        { id: assistantId, role: "assistant" as const, content: `（发送失败：${e?.message || e}）`, createdAt: new Date().toISOString() },
+      ];
+      setMessages(failedMessages);
+      await saveDisplayHistory(failedMessages);
       toast(`发送失败：${e?.message || e}`);
     } finally {
       setSending(false);
@@ -809,6 +808,8 @@ function MainChatScreen({
   const avatarClass = accent === "wenyou"
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
+  const groupedMessages = groupChatMessages(messages);
+  const subtitle = sending ? "正在输入中" : "在线";
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FA]">
@@ -817,36 +818,49 @@ function MainChatScreen({
           <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
             <ChevronLeftIcon />
           </button>
-          <div className={`ml-1 mr-3 flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${avatarClass}`}>{avatarLabel}</div>
-          <div className="text-[16px] font-medium text-gray-900">{title}</div>
+          <div className={`ml-1 mr-3 flex h-[44px] w-[44px] items-center justify-center rounded-full text-[14px] font-medium ${avatarClass}`}>{avatarLabel}</div>
+          <div>
+            <div className="text-[16px] font-medium text-gray-900">{title}</div>
+            <div className="text-[11px] font-light text-gray-400">{subtitle}</div>
+          </div>
         </div>
-        <button className="rounded-full p-3 text-gray-500 transition-colors active:bg-gray-100" onClick={onOpenCall}>
-          <PhoneIconMini />
-        </button>
+        <div className="w-10" />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-[100px]">
         <div className="mb-2 flex justify-center">
           <span className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Today</span>
         </div>
-        <div className="space-y-7">
-          {messages.map((msg) => (
-            msg.role === "user" ? (
-              <div key={msg.id} className="flex items-start justify-end space-x-4">
-                <div className="max-w-[75%] space-y-2">
-                  <div className="rounded-[20px] rounded-tr-sm bg-[#2D3748] px-5 py-4 text-[15px] font-light leading-relaxed text-white shadow-sm">
-                    {msg.content || (sending ? "…" : "")}
-                  </div>
+        <div className="space-y-5">
+          {groupedMessages.map((group) => (
+            group.role === "user" ? (
+              <div key={group.id} className="flex items-start justify-end space-x-3">
+                <div className="max-w-[72%] space-y-1.5 text-right">
+                  {group.parts.map((part, index) => (
+                    <div
+                      key={`${group.id}-${index}`}
+                      className="inline-block w-fit rounded-[16px] rounded-tr-sm bg-[#2D3748] px-3 py-2 text-[14px] font-light leading-normal text-white shadow-sm"
+                      style={{ fontFamily: "'PingFang SC', 'Microsoft YaHei', sans-serif" }}
+                    >
+                      {part || (sending ? "…" : "")}
+                    </div>
+                  ))}
                 </div>
                 <div className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[14px] font-medium text-gray-600 shadow-sm">我</div>
               </div>
             ) : (
-              <div key={msg.id} className="flex items-start space-x-4">
+              <div key={group.id} className="flex items-start space-x-3">
                 <div className={`flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full text-[14px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
-                <div className="max-w-[75%] space-y-2">
-                  <div className="rounded-[20px] rounded-tl-sm border border-gray-100/50 bg-white px-5 py-4 text-[15px] font-light leading-relaxed text-gray-800 shadow-sm">
-                    {msg.content || (sending ? "…" : "")}
-                  </div>
+                <div className="max-w-[72%] space-y-1.5">
+                  {group.parts.map((part, index) => (
+                    <div
+                      key={`${group.id}-${index}`}
+                      className="inline-block w-fit rounded-[16px] rounded-tl-sm border border-gray-100/50 bg-white px-3 py-2 text-[14px] font-light leading-normal text-gray-800 shadow-sm"
+                      style={{ fontFamily: "'PingFang SC', 'Microsoft YaHei', sans-serif" }}
+                    >
+                      {part || (sending ? "…" : "")}
+                    </div>
+                  ))}
                 </div>
               </div>
             )
@@ -976,10 +990,6 @@ function PlusIcon({ open }: { open: boolean }) {
 
 function ArrowUpIcon() {
   return <svg className="h-4 w-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19 7-7-7-7" transform="rotate(-90 12 12)" /></svg>;
-}
-
-function PhoneIconMini() {
-  return <svg className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.34 1.78.65 2.62a2 2 0 0 1-.45 2.11L8 9.91a16 16 0 0 0 6 6l1.46-1.31a2 2 0 0 1 2.11-.45c.84.31 1.72.53 2.62.65A2 2 0 0 1 22 16.92z" /></svg>;
 }
 
 function PhoneIconLarge() {

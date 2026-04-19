@@ -369,7 +369,7 @@ def _build_du_day_events(today: str) -> list[dict]:
                 "kind": "routine",
                 "timestamp": dt.isoformat(),
                 "time": dt.strftime("%H:%M"),
-                "title": _extract_alarm_title_from_prompt(user_text),
+                "title": "Morning Alarm",
                 "subtitle": "醒来第一件事" if "醒来第一件事" in user_text else "",
                 "actions": actions,
             }
@@ -382,6 +382,11 @@ def _build_du_day_events(today: str) -> list[dict]:
             continue
         action = str(item.get("action") or "").strip() or "unknown"
         reason = str(item.get("reason") or "").strip() or "—"
+        if action == "error":
+            continue
+        lowered_reason = reason.lower()
+        if "gateway_status=" in lowered_reason or "http 403" in lowered_reason or "403" in lowered_reason:
+            continue
         out.append(
             {
                 "kind": "decision",
