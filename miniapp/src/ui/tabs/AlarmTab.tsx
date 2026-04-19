@@ -149,11 +149,11 @@ export function AlarmTab() {
         </div>
       ) : null}
 
-      <div className="space-y-7">
+      <div className="space-y-7 px-1">
         <section>
           <div className="mb-4 flex items-center justify-between px-1">
-            <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">待执行</h2>
-            <span className="rounded-md bg-gray-100 px-2 py-0.5 text-[11px] text-gray-400">{enabledItems.length}个提醒</span>
+            <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">启用中</h2>
+            <span className="rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-500">{enabledItems.length}</span>
           </div>
           <div className="space-y-4">
             {enabledItems.map((it) => {
@@ -163,7 +163,7 @@ export function AlarmTab() {
                 <div key={id} className="alarm-card group relative overflow-hidden rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.04)]">
                   <div className="mb-1 flex items-start justify-between">
                     <div>
-                      <span className="status-badge bg-blue-50 text-blue-500">开启中</span>
+                      <span className="status-badge bg-blue-50 text-blue-500">启用中</span>
                       <div className="mt-2 flex items-baseline space-x-2">
                         <span className="text-[32px] font-bold leading-none text-gray-800">{p.hm}</span>
                         <span className="text-[13px] font-medium text-gray-400">{p.rel}</span>
@@ -182,6 +182,7 @@ export function AlarmTab() {
                   <div className="mt-3 flex items-center justify-between">
                     <div>
                       <p className="text-[14px] font-light text-gray-500">{it.title || "未命名闹钟"}</p>
+                      {it.note ? <p className="mt-1 text-[12px] font-light text-gray-400">{it.note}</p> : null}
                       <p className="mt-1 text-[11px] text-gray-400">{p.full}</p>
                     </div>
                     <button
@@ -203,11 +204,11 @@ export function AlarmTab() {
           </div>
         </section>
 
-        <section className={disabledItems.length ? "" : "opacity-60"}>
+        <section>
           <div className="mb-4 flex items-center justify-between px-1">
-            <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">已结束</h2>
+            <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">已停用</h2>
           </div>
-          <div className="space-y-4">
+          <div className="space-y-4 opacity-60">
             {disabledItems.map((it) => {
               const id = String(it.id || "");
               const p = fmtDateTimeParts(String(it.datetime || ""));
@@ -215,7 +216,7 @@ export function AlarmTab() {
                 <div key={id} className="alarm-card group rounded-[28px] border border-gray-100 bg-gray-50/50 p-5">
                   <div className="mb-1 flex items-start justify-between">
                     <div>
-                      <span className="status-badge bg-gray-100 text-gray-400">已停止</span>
+                      <span className="status-badge bg-gray-100 text-gray-400">已停用</span>
                       <div className="mt-2 flex items-baseline space-x-2">
                         <span className="text-[32px] font-bold leading-none text-gray-400">{p.hm}</span>
                         <span className="text-[13px] font-medium text-gray-400">{p.rel}</span>
@@ -234,6 +235,7 @@ export function AlarmTab() {
                   <div className="mt-3 flex items-center justify-between">
                     <div>
                       <p className="text-[14px] font-light text-gray-400">{it.title || "未命名闹钟"}</p>
+                      {it.note ? <p className="mt-1 text-[12px] font-light text-gray-400">{it.note}</p> : null}
                       <p className="mt-1 text-[11px] text-gray-400">{p.full}</p>
                     </div>
                     <button
@@ -280,7 +282,7 @@ export function AlarmTab() {
         <div className="modal-overlay fixed inset-0 z-[100] flex items-center justify-center px-8">
           <div className="w-full max-w-sm rounded-[32px] bg-white p-8 shadow-2xl">
             <h3 className="mb-3 text-center text-[20px] font-semibold text-gray-900">要删除这个提醒吗？</h3>
-            <p className="mb-8 px-2 text-center text-[15px] font-light text-gray-500">删除后将无法恢复，渡也不会再在这个时间点叫醒你。</p>
+            <p className="mb-8 px-2 text-center text-[15px] font-light text-gray-500">删除后将无法恢复，渡也不会再在这个时间点提醒你。</p>
             <div className="flex flex-col space-y-3">
               <button
                 className="w-full rounded-[20px] bg-red-500 py-4 font-medium text-white shadow-lg shadow-red-100 transition-all active:scale-95"
