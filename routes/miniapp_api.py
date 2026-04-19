@@ -16,6 +16,7 @@ from flask import Blueprint, Response, current_app, jsonify, request, stream_wit
 from urllib.parse import quote
 
 from config import (
+    DATA_DIR,
     MINIAPP_LOG_FILE,
     WECHAT_ILINK_LOG_FILE,
     QQ_ONEBOT_LOG_FILE,
@@ -63,6 +64,9 @@ _MEMORY_MAINTENANCE_LAST_STARTED = ""
 _MEMORY_MAINTENANCE_LAST_FINISHED = ""
 _MEMORY_MAINTENANCE_LAST_ERROR = ""
 _LOG_CATEGORIES = {"all", "proactive", "wechat", "tgbot", "qq"}
+_SUMITALK_HISTORY_FILE = DATA_DIR / "sumitalk_display_histories.json"
+_SUMITALK_HISTORY_LOCK = threading.Lock()
+_SUMITALK_HISTORY_MAX_MESSAGES = 80
 
 
 def _wenyou_session_id() -> int:
@@ -81,6 +85,56 @@ def _resolve_primary_chat_window_id() -> str:
     if recent:
         return str((recent[0] or {}).get("id") or "").strip()
     return ""
+
+
+def _load_sumitalk_histories() -> dict:
+    try:
+        if not _SUMITALK_HISTORY_FILE.exists():
+            return {}
+        with _SUMITALK_HISTORY_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_sumitalk_histories(data: dict) -> bool:
+    try:
+        _SUMITALK_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _SUMITALK_HISTORY_FILE.open("w", encoding="utf-8") as f:
+            json.dump(data or {}, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        logger.exception("保存 SumiTalk 展示历史失败")
+        return False
+
+
+def _get_sumitalk_history_device_id() -> str:
+    payload = request.environ.get("miniapp_panel_payload") or {}
+    did = str(payload.get("device_id") or "").strip()
+    return did
+
+
+def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        created_at = str(item.get("createdAt") or item.get("created_at") or "").strip() or now_beijing_iso()
+        msg_id = str(item.get("id") or "").strip() or f"{role}-{created_at}-{len(out)}"
+        out.append({
+            "id": msg_id,
+            "role": role,
+            "content": content,
+            "createdAt": created_at,
+        })
+    return out[-_SUMITALK_HISTORY_MAX_MESSAGES:]
 
 
 def _notify_schedule_runtime_changed():
@@ -234,6 +288,113 @@ def _parse_beijing_dt(value: str) -> datetime | None:
 def _mood_day_wave(seed_text: str) -> int:
     seed = sum(ord(ch) for ch in (seed_text or ""))
     return (seed % 5) - 2
+
+
+def _extract_last_user_message_text(msgs: list[dict]) -> str:
+    for m in reversed(msgs or []):
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "").strip().lower() != "user":
+            continue
+        text = _message_text(m.get("content"))
+        if text:
+            return text
+    return ""
+
+
+def _extract_alarm_title_from_prompt(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return "提醒"
+    m = re.search(r"「([^」]+)」", raw)
+    if m:
+        return str(m.group(1) or "").strip() or "提醒"
+    return "提醒"
+
+
+def _tool_call_name(tc: dict) -> str:
+    if not isinstance(tc, dict):
+        return ""
+    fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+    return str(fn.get("name") or "").strip()
+
+
+def _summarize_alarm_actions(msgs: list[dict]) -> list[str]:
+    labels: list[str] = []
+    for m in msgs or []:
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "").strip().lower() != "assistant":
+            continue
+        tcs = m.get("tool_calls") or []
+        if not isinstance(tcs, list):
+            continue
+        for tc in tcs:
+            name = _tool_call_name(tc)
+            if not name:
+                continue
+            label = ""
+            if name == "notion_diary_create":
+                label = "写了日记"
+            elif name == "daily_whisper_write":
+                label = "写了气泡"
+            elif name in {"forum_read_feed", "forum_open_thread", "forum_get_post", "forum_list_posts", "forum_get_comments", "forum_get_comment"}:
+                label = "看了论坛"
+            elif name == "note_write":
+                label = "写了便签"
+            elif name in {"schedule_list", "get_time_info", "search_memory", "notion_diary_list"}:
+                label = ""
+            if label and label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _build_du_day_events(today: str) -> list[dict]:
+    out: list[dict] = []
+
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    window_id = f"tg_{uid}" if uid > 0 else ""
+    rounds = r2_store.get_conversation_rounds(window_id, last_n=240) if window_id else []
+    for r in rounds or []:
+        dt = _parse_beijing_dt(r.get("timestamp"))
+        if not dt or dt.strftime("%Y-%m-%d") != today:
+            continue
+        msgs = r.get("messages") or []
+        user_text = _extract_last_user_message_text(msgs)
+        if not user_text.startswith("你给自己定的「"):
+            continue
+        actions = _summarize_alarm_actions(msgs)
+        out.append(
+            {
+                "kind": "routine",
+                "timestamp": dt.isoformat(),
+                "time": dt.strftime("%H:%M"),
+                "title": _extract_alarm_title_from_prompt(user_text),
+                "subtitle": "醒来第一件事" if "醒来第一件事" in user_text else "",
+                "actions": actions,
+            }
+        )
+
+    for item in r2_store.get_proactive_decision_memory_items() or []:
+        at = str(item.get("at") or "").strip()
+        dt = _parse_beijing_dt(at)
+        if not dt or dt.strftime("%Y-%m-%d") != today:
+            continue
+        action = str(item.get("action") or "").strip() or "unknown"
+        reason = str(item.get("reason") or "").strip() or "—"
+        out.append(
+            {
+                "kind": "decision",
+                "timestamp": dt.isoformat(),
+                "time": dt.strftime("%H:%M"),
+                "title": "Active Reach",
+                "decision_label": f"渡选择了 {action}",
+                "reason": reason,
+            }
+        )
+
+    out.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+    return out
 
 
 def _miniapp_log_category() -> str:
@@ -633,6 +794,45 @@ def miniapp_chat_window():
     return jsonify({"ok": True, "window_id": _resolve_primary_chat_window_id()})
 
 
+@bp.route("/sumitalk-history", methods=["GET"])
+def miniapp_sumitalk_history():
+    device_id = _get_sumitalk_history_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    with _SUMITALK_HISTORY_LOCK:
+        data = _load_sumitalk_histories()
+        row = data.get(device_id) if isinstance(data, dict) else None
+    messages = _normalize_sumitalk_messages((row or {}).get("messages") or [])
+    return jsonify({
+        "ok": True,
+        "device_id": device_id,
+        "messages": messages,
+        "count": len(messages),
+        "updated_at": str((row or {}).get("updated_at") or "").strip(),
+    })
+
+
+@bp.route("/sumitalk-history", methods=["PUT"])
+def miniapp_sumitalk_history_save():
+    device_id = _get_sumitalk_history_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    body = request.get_json(silent=True) or {}
+    messages = _normalize_sumitalk_messages(body.get("messages") or [])
+    payload = {
+        "device_id": device_id,
+        "updated_at": now_beijing_iso(),
+        "messages": messages,
+    }
+    with _SUMITALK_HISTORY_LOCK:
+        data = _load_sumitalk_histories()
+        data[device_id] = payload
+        ok = _save_sumitalk_histories(data)
+    if not ok:
+        return jsonify({"ok": False, "error": "保存失败"}), 500
+    return jsonify({"ok": True, "device_id": device_id, "count": len(messages), "updated_at": payload["updated_at"]})
+
+
 @bp.route("/panel-auth/list", methods=["GET"])
 def miniapp_panel_auth_list():
     payload = request.environ.get("miniapp_panel_payload") or {}
@@ -931,6 +1131,13 @@ def miniapp_daily_report_refresh():
     data = _generate_daily_report(today)
     ok = r2_store.save_miniapp_daily_report(data)
     return jsonify({"ok": bool(ok), "report": data})
+
+
+@bp.route("/du-day", methods=["GET"])
+def miniapp_du_day():
+    today = today_beijing()
+    items = _build_du_day_events(today)
+    return jsonify({"ok": True, "date": today, "items": items, "count": len(items)})
 
 
 # 兼容旧前端路径：与 daily-report 行为一致
