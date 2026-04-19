@@ -242,7 +242,8 @@ export function DuDayTab() {
                   <p
                     style={{
                       fontFamily: "'Cormorant Garamond', serif",
-                      fontSize: "1rem",
+                      fontSize: "0.75rem",
+                      fontStyle: "italic",
                       lineHeight: 1.5,
                       color: "#5D544F",
                       position: "relative",

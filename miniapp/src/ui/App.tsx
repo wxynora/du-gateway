@@ -497,9 +497,9 @@ function SummaryBlock({
     >
       <div className="mb-2.5 flex items-center">
         <div className="mr-2 h-3 w-1 rounded-full bg-gray-200" />
-        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</h2>
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-gray-900">{label}</h2>
       </div>
-      <p className="whitespace-pre-wrap pl-3 text-[13px] font-light leading-relaxed text-gray-800">{text}</p>
+      <p className="whitespace-pre-wrap pl-3 text-[13px] font-normal leading-relaxed text-gray-800">{text}</p>
     </button>
   );
 }
@@ -529,7 +529,7 @@ function ChatsHome({
   const [wenyouTime, setWenyouTime] = useState("独立会话");
 
   const reportSummary = dailyReport
-    ? `聊了 ${String(dailyReport.rounds || 0)} 轮 · ${Array.isArray(dailyReport.keywords) && dailyReport.keywords.length ? dailyReport.keywords.join(" / ") : "暂无关键词"}\n${dailyReport.summary_text || ""}`.trim()
+    ? `聊了 ${String(dailyReport.rounds || 0)} 轮 · ${Array.isArray(dailyReport.keywords) && dailyReport.keywords.length ? dailyReport.keywords.join(" / ") : "暂无关键词"}`
     : "今天的日报还没生成。";
 
   useEffect(() => {
@@ -635,9 +635,9 @@ function ChatEntryRow({
       <div className={`ml-4 min-w-0 flex-1 pt-1 ${pinned ? "border-b border-gray-50 pb-4" : ""}`}>
         <div className="mb-1 flex items-baseline justify-between">
           <span className="text-[17px] font-medium text-gray-900">{title}</span>
-          <span className="text-[12px] font-light text-gray-400">{time}</span>
+          <span className="text-[12px] font-normal text-gray-900">{time}</span>
         </div>
-        <p className="truncate text-[14px] font-light text-gray-500">{preview}</p>
+        <p className="truncate text-[14px] font-normal text-gray-900">{preview}</p>
       </div>
     </button>
   );
@@ -889,7 +889,7 @@ function MainChatScreen({
           <div className={`ml-1 mr-3 flex h-[44px] w-[44px] items-center justify-center rounded-full text-[14px] font-medium ${avatarClass}`}>{avatarLabel}</div>
           <div>
             <div className="text-[16px] font-medium text-gray-900">{title}</div>
-            <div className="text-[11px] font-light text-gray-400">{subtitle}</div>
+            <div className="text-[11px] font-medium text-gray-900">{subtitle}</div>
           </div>
         </div>
         <div className="w-10" />
@@ -897,7 +897,7 @@ function MainChatScreen({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-[100px]">
         <div className="mb-2 flex justify-center">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Today</span>
+          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-900">Today</span>
         </div>
         <div className="space-y-5">
           {groupedMessages.map((group) => (
@@ -907,7 +907,7 @@ function MainChatScreen({
                   {group.parts.map((part, index) => (
                     <div
                       key={`${group.id}-${index}`}
-                      className="inline-block w-fit rounded-[16px] rounded-tr-sm bg-[#2D3748] px-3 py-2 text-[14px] font-light leading-normal text-white shadow-sm"
+                      className="inline-block w-fit rounded-[16px] rounded-tr-sm bg-[#2D3748] px-3 py-2 text-[14px] font-medium leading-normal text-white shadow-sm"
                       style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                     >
                       {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
@@ -923,7 +923,7 @@ function MainChatScreen({
                   {group.parts.map((part, index) => (
                     <div
                       key={`${group.id}-${index}`}
-                      className="inline-block w-fit rounded-[16px] rounded-tl-sm border border-gray-100/50 bg-white px-3 py-2 text-[14px] font-light leading-normal text-gray-800 shadow-sm"
+                      className="inline-block w-fit rounded-[16px] rounded-tl-sm border border-gray-100/50 bg-white px-3 py-2 text-[14px] font-medium leading-normal text-gray-800 shadow-sm"
                       style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                     >
                       {part.render === "html" ? <HtmlBlock content={part.content} /> : <RichTextBlock content={part.content || (sending ? "…" : "")} />}
@@ -952,7 +952,7 @@ function MainChatScreen({
           </button>
           <div className="flex min-h-[42px] flex-1 items-center rounded-[20px] bg-[#F4F5F7] px-4 py-2.5">
             <input
-              className="w-full bg-transparent text-[15px] font-light text-gray-900 outline-none placeholder:text-gray-400"
+              className="w-full bg-transparent text-[15px] font-medium text-gray-900 outline-none placeholder:text-gray-400"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
