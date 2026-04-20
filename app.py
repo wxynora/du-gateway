@@ -91,13 +91,22 @@ def index():
 @app.route("/miniapp/", methods=["GET"])
 def miniapp_index():
     """Telegram Mini App 静态入口页。"""
-    return send_from_directory(MINIAPP_STATIC_DIR, "index.html")
+    resp = send_from_directory(MINIAPP_STATIC_DIR, "index.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/miniapp/assets/<path:filename>", methods=["GET"])
 def miniapp_assets(filename: str):
     """Mini App 静态资源（JS/CSS/图标）。"""
-    return send_from_directory(MINIAPP_STATIC_DIR / "assets", filename)
+    resp = send_from_directory(MINIAPP_STATIC_DIR / "assets", filename)
+    if re.search(r"-[A-Za-z0-9_-]{6,}\.", filename):
+      resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+      resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 @app.route("/favicon.ico", methods=["GET"])
