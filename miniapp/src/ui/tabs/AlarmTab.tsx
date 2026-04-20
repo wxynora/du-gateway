@@ -135,8 +135,7 @@ export function AlarmTab() {
         .switch input:checked + .slider:before { transform: translateX(18px); }
         .modal-overlay { background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); }
       `}</style>
-      <div className="mb-4 flex items-center justify-between px-1">
-        <div className="text-[17px] font-semibold text-gray-800">闹钟</div>
+      <div className="mb-4 flex items-center justify-end px-1">
         <div className="flex items-center rounded-full border border-gray-100 bg-gray-50 px-3 py-1">
           <span className={`mr-2 h-1.5 w-1.5 rounded-full ${loadError ? "bg-red-400" : "bg-green-400"}`} />
           <span className="text-[11px] font-medium text-gray-500">{loadError ? "同步异常" : "渡 已同步"}</span>

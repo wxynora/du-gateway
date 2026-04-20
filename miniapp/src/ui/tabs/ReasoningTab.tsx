@@ -126,19 +126,18 @@ export function ReasoningTab() {
         }
       `}</style>
 
-      <header className="header-blur sticky top-0 z-50 flex items-center justify-end border-b border-gray-100 px-5 py-3">
-        <button
-          className="flex h-9 w-9 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100"
-          onClick={loadLatest}
-          disabled={loading}
-          title="刷新"
-        >
-          <svg className={`h-5 w-5 ${loading ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M20 6v6h-6" />
-            <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8" />
-          </svg>
-        </button>
-      </header>
+      <button
+        className="fixed right-4 z-[35] flex h-9 w-9 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100"
+        style={{ top: "calc(env(safe-area-inset-top, 0px) + 10px)" }}
+        onClick={loadLatest}
+        disabled={loading}
+        title="刷新"
+      >
+        <svg className={`h-5 w-5 ${loading ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M20 6v6h-6" />
+          <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8" />
+        </svg>
+      </button>
 
       <div className="flex items-center justify-between px-6 py-4">
         <div className="flex items-center gap-2">

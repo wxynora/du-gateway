@@ -66,11 +66,9 @@ type DeviceItem = {
 
 function Shell({
   onLogout,
-  onOpenSecurity,
   onOpenDevices,
 }: {
   onLogout?: () => void;
-  onOpenSecurity?: () => void;
   onOpenDevices?: () => void;
 }) {
   const toast = useToast();
@@ -294,7 +292,6 @@ function Shell({
         <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
           <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">设置</h1>
           <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
-            <ListRow icon={<ShieldIconMini />} label="安全管理" onClick={() => onOpenSecurity?.()} />
             <ListRow icon={<SmartphoneIconMini />} label="设备管理" onClick={() => onOpenDevices?.()} />
             {onLogout ? <ListRow icon={<LogoutIconMini />} label="退出登录" onClick={onLogout} last /> : null}
           </div>
@@ -1285,10 +1282,6 @@ function ToggleRightIcon() {
   return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="10" rx="5" ry="5" /><circle cx="16" cy="12" r="3" /></svg>;
 }
 
-function ShieldIconMini() {
-  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>;
-}
-
 function SmartphoneIconMini() {
   return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="7" y="2" width="10" height="20" rx="2" ry="2" /><line x1="12" y1="18" x2="12.01" y2="18" /></svg>;
 }
@@ -1377,7 +1370,6 @@ function AppWithAuth() {
   const [errorText, setErrorText] = useState("");
   const [secondPrompt, setSecondPrompt] = useState("");
   const [showDeviceManager, setShowDeviceManager] = useState(false);
-  const [showSecurityManager, setShowSecurityManager] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1493,7 +1485,6 @@ function AppWithAuth() {
     setLoginStep("password");
     setErrorText("");
     setShowDeviceManager(false);
-    setShowSecurityManager(false);
     toast("已退出登录");
   }
 
@@ -1504,16 +1495,9 @@ function AppWithAuth() {
     return (
       <ShellWithLogout
         onLogout={authEnabled ? logout : undefined}
-        onOpenDevices={authEnabled ? () => setShowSecurityManager(true) : undefined}
-        onOpenDeviceManager={authEnabled ? () => setShowDeviceManager(true) : undefined}
+        onOpenDevices={authEnabled ? () => setShowDeviceManager(true) : undefined}
         deviceManagerOpen={showDeviceManager}
         onCloseDevices={() => setShowDeviceManager(false)}
-        securityManagerOpen={showSecurityManager}
-        onCloseSecurityManager={() => setShowSecurityManager(false)}
-        onOpenDeviceManagerFromSecurity={() => {
-          setShowSecurityManager(false);
-          setShowDeviceManager(true);
-        }}
       />
     );
   }
@@ -1625,72 +1609,19 @@ function ClaudePixelCrabIcon() {
 function ShellWithLogout({
   onLogout,
   onOpenDevices,
-  onOpenDeviceManager,
   deviceManagerOpen,
   onCloseDevices,
-  securityManagerOpen,
-  onCloseSecurityManager,
-  onOpenDeviceManagerFromSecurity,
 }: {
   onLogout?: () => void;
   onOpenDevices?: () => void;
-  onOpenDeviceManager?: () => void;
   deviceManagerOpen?: boolean;
   onCloseDevices?: () => void;
-  securityManagerOpen?: boolean;
-  onCloseSecurityManager?: () => void;
-  onOpenDeviceManagerFromSecurity?: () => void;
 }) {
   return (
     <>
-      <Shell onLogout={onLogout} onOpenSecurity={onOpenDevices} onOpenDevices={onOpenDeviceManager} />
-      {securityManagerOpen && onCloseSecurityManager ? (
-        <SecurityManagerModal
-          onClose={onCloseSecurityManager}
-          onOpenDevices={onOpenDeviceManagerFromSecurity}
-          onLogout={onLogout}
-        />
-      ) : null}
+      <Shell onLogout={onLogout} onOpenDevices={onOpenDevices} />
       {deviceManagerOpen && onCloseDevices ? <DeviceManagerModal onClose={onCloseDevices} onLogout={onLogout} /> : null}
     </>
-  );
-}
-
-function SecurityManagerModal({
-  onClose,
-  onOpenDevices,
-  onLogout,
-}: {
-  onClose: () => void;
-  onOpenDevices?: () => void;
-  onLogout?: () => void;
-}) {
-  return (
-    <Modal title="安全管理" onClose={onClose}>
-      <div className="space-y-3 pb-4">
-        <div className="neo-panel-soft p-3 text-xs leading-6 text-cream-muted">
-          这里可以管理当前登录安全相关的操作。
-        </div>
-        {onOpenDevices ? (
-          <div className="neo-panel p-3 flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-cream-text">设备管理</div>
-              <div className="mt-1 text-xs text-cream-muted">查看已登录设备，撤销某个浏览器的访问权限。</div>
-            </div>
-            <Btn kind="blue" onClick={onOpenDevices}>进入</Btn>
-          </div>
-        ) : null}
-        {onLogout ? (
-          <div className="neo-panel p-3 flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-cream-text">退出登录</div>
-              <div className="mt-1 text-xs text-cream-muted">清掉当前浏览器的登录态，回到登录页。</div>
-            </div>
-            <Btn kind="danger" onClick={onLogout}>退出</Btn>
-          </div>
-        ) : null}
-      </div>
-    </Modal>
   );
 }
 
@@ -1704,7 +1635,8 @@ function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogo
     setLoading(true);
     try {
       const j = await apiJson<{ ok?: boolean; items?: DeviceItem[] }>("/miniapp-api/panel-auth/list");
-      setItems(Array.isArray(j?.items) ? j.items : []);
+      const next = Array.isArray(j?.items) ? j.items.filter((it) => !it?.revoked) : [];
+      setItems(next);
     } catch (e: any) {
       toast(`加载设备失败：${e?.message || e}`);
     } finally {
@@ -1734,8 +1666,8 @@ function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogo
         onLogout?.();
         return;
       }
-      toast("设备已撤销");
-      await load();
+      toast("设备已删除");
+      setItems((prev) => prev.filter((it) => String(it.id || "") !== deviceId));
     } catch (e: any) {
       toast(`撤销失败：${e?.message || e}`);
     } finally {
@@ -1747,7 +1679,7 @@ function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogo
     <Modal title="设备管理" onClose={onClose}>
       <div className="space-y-3 pb-6">
         <div className="neo-panel-soft p-3 text-xs leading-6 text-cream-muted">
-          每个浏览器都会有一个独立设备身份。撤销后，该浏览器下一次请求会立刻失效。
+          每个浏览器都会有一个独立设备身份。撤销后会直接从列表移除，并在下一次请求时失效。
         </div>
         <div className="flex items-center gap-2">
           <Btn kind="blue" onClick={() => void load()} disabled={loading}>
@@ -1758,7 +1690,6 @@ function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogo
           {items.map((item) => {
             const id = String(item.id || "");
             const current = !!item.current;
-            const revoked = !!item.revoked;
             return (
               <div key={id} className="neo-panel p-3">
                 <div className="flex items-start justify-between gap-3">
@@ -1766,7 +1697,6 @@ function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogo
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-sm font-semibold">{item.note || "Browser"}</span>
                       {current ? <span className="neo-tag-blue px-2.5 py-1 text-[10px]">当前设备</span> : null}
-                      {revoked ? <span className="neo-tag-pink px-2.5 py-1 text-[10px]">已撤销</span> : null}
                     </div>
                     <div className="mt-1 break-all text-[11px] leading-5 text-cream-muted">{id}</div>
                     <div className="mt-2 text-[11px] leading-5 text-cream-muted">
@@ -1775,8 +1705,8 @@ function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogo
                       最近访问：{item.last_seen || "-"}
                     </div>
                   </div>
-                  <Btn kind="danger" onClick={() => void revoke(id, current)} disabled={busyId === id || revoked}>
-                    {revoked ? "已撤销" : busyId === id ? "处理中..." : "撤销"}
+                  <Btn kind="danger" onClick={() => void revoke(id, current)} disabled={busyId === id}>
+                    {busyId === id ? "处理中..." : "撤销"}
                   </Btn>
                 </div>
               </div>
