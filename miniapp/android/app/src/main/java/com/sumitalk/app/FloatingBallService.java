@@ -310,7 +310,7 @@ public class FloatingBallService extends Service {
         overlayParams.y = Math.max(m, Math.min(overlayParams.y, sz.y - ball - m));
     }
 
-    /** After drag: snap to left or right edge (方案：吸边). */
+    /** After drag: snap to left or right edge (吸边), ball stays fully visible. */
     private void snapOverlayToNearestVerticalEdge() {
         if (overlayParams == null) return;
         Point sz = new Point();
