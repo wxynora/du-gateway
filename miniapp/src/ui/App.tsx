@@ -52,6 +52,8 @@ type ChatDraftMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  reasoning?: string;
+  tokenCount?: number;
 };
 type DeviceItem = {
   id?: string;
@@ -458,7 +460,7 @@ type ChatMessageGroup = {
   id: string;
   role: "user" | "assistant";
   createdAt: string;
-  parts: Array<{ content: string; render: "plain" | "rich" | "html" }>;
+  parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: number }>;
 };
 
 function formatClockTime(value: string): string {
@@ -521,30 +523,25 @@ function hasMarkdownSyntax(content: string): boolean {
   return /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|```|`[^`\n]+`|\[.+?\]\(.+?\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|\|.+\|/.test(raw);
 }
 
-function splitMessageParts(content: string): Array<{ content: string; render: "plain" | "rich" | "html" }> {
+function detectMessageRender(role: "user" | "assistant", content: string): "plain" | "rich" | "html" {
   const raw = String(content || "").replace(/\r/g, "").trim();
-  if (!raw) return [];
-  if (isHtmlBlock(raw)) {
-    return [{ content: raw, render: "html" }];
-  }
-  if (isCodeBlock(raw)) {
-    return [{ content: raw, render: "rich" }];
-  }
-  if (!hasMarkdownSyntax(raw)) {
-    return [{ content: raw, render: "plain" }];
-  }
-  return raw
-    .split(/\n{2,}/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => ({ content: part, render: "rich" as const }));
+  if (!raw) return "plain";
+  if (role === "user") return "plain";
+  if (isHtmlBlock(raw)) return "html";
+  if (isCodeBlock(raw)) return "rich";
+  if (hasMarkdownSyntax(raw)) return "rich";
+  return "plain";
 }
 
 function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
   const groups: ChatMessageGroup[] = [];
   for (const msg of messages) {
-    const parts = splitMessageParts(msg.content || "");
-    const safeParts = parts.length ? parts : [{ content: msg.content || "", render: "rich" as const }];
+    const safeParts = [{
+      content: msg.content || "",
+      render: detectMessageRender(msg.role, msg.content || ""),
+      reasoning: msg.reasoning,
+      tokenCount: msg.tokenCount,
+    }];
     const last = groups[groups.length - 1];
     if (last && last.role === msg.role) {
       last.parts.push(...safeParts);
@@ -573,6 +570,20 @@ function extractAssistantReplyText(message: any): string {
     return parts.join(" ").trim();
   }
   return "";
+}
+
+function extractAssistantReasoning(message: any): string {
+  return String(message?.reasoning_content || message?.reasoning || "").trim();
+}
+
+function extractTokenCount(data: any): number {
+  try {
+    const usage = data?.usage || {};
+    const total = Number(usage?.total_tokens || usage?.totalTokens || usage?.output_tokens || 0);
+    return Number.isFinite(total) && total > 0 ? total : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function RichTextBlock({ content }: { content: string }) {
@@ -605,6 +616,15 @@ function HtmlBlock({ content }: { content: string }) {
 
 function PlainTextBlock({ content }: { content: string }) {
   return <span className="whitespace-pre-wrap">{content}</span>;
+}
+
+function copyText(text: string, toast: (msg: string) => void) {
+  const value = String(text || "").trim();
+  if (!value) return;
+  navigator.clipboard.writeText(value).then(
+    () => toast("已复制"),
+    () => toast("复制失败"),
+  );
 }
 
 function SummaryBlock({
@@ -971,10 +991,19 @@ function MainChatScreen({
         throw new Error(String(data?.error || data?.message || `HTTP ${resp.status}`));
       }
       const reply = extractAssistantReplyText(data?.choices?.[0]?.message);
+      const reasoning = extractAssistantReasoning(data?.choices?.[0]?.message);
+      const tokenCount = extractTokenCount(data);
       if (!reply) throw new Error("上游没有返回内容");
       const finalMessages = [
         ...nextMessages,
-        { id: assistantId, role: "assistant" as const, content: reply, createdAt: new Date().toISOString() },
+        {
+          id: assistantId,
+          role: "assistant" as const,
+          content: reply,
+          createdAt: new Date().toISOString(),
+          reasoning: reasoning || undefined,
+          tokenCount: tokenCount || undefined,
+        },
       ];
       setMessages(finalMessages);
       await saveDisplayHistory(finalMessages);
@@ -1026,7 +1055,7 @@ function MainChatScreen({
                     {group.parts.map((part, index) => (
                       <div
                         key={`${group.id}-${index}`}
-                        className="inline-block w-fit max-w-full rounded-[999px] bg-[#2D3748] px-2.5 py-1.5 text-[13px] font-medium leading-normal text-white shadow-sm"
+                        className="inline-block w-fit max-w-full rounded-[18px] bg-[#2D3748] px-3 py-2 text-[13px] font-medium leading-relaxed text-white shadow-sm"
                         style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                       >
                         <PlainTextBlock content={part.content || (sending ? "…" : "")} />
@@ -1040,18 +1069,29 @@ function MainChatScreen({
                   <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
                   <div className="mt-[2px] max-w-[78%] space-y-1.5">
                     {group.parts.map((part, index) => (
-                      <div
-                        key={`${group.id}-${index}`}
-                        className="inline-block w-fit max-w-full rounded-[999px] border border-gray-100/50 bg-white px-2.5 py-1.5 text-[13px] font-medium leading-normal text-gray-800 shadow-sm"
-                        style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
-                      >
-                        {part.render === "html" ? (
-                          <HtmlBlock content={part.content} />
-                        ) : part.render === "plain" ? (
-                          <PlainTextBlock content={part.content || (sending ? "…" : "")} />
-                        ) : (
-                          <RichTextBlock content={part.content || (sending ? "…" : "")} />
-                        )}
+                      <div key={`${group.id}-${index}`} className="space-y-2">
+                        {part.reasoning ? (
+                          <details className="max-w-full rounded-[14px] border border-gray-100 bg-[#F7F7F7] px-3 py-2 text-[12px] text-gray-700">
+                            <summary className="cursor-pointer list-none text-[12px] font-medium text-gray-600">思维链</summary>
+                            <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap leading-6">{part.reasoning}</div>
+                          </details>
+                        ) : null}
+                        <div
+                          className="inline-block w-fit max-w-full rounded-[18px] border border-gray-100/50 bg-white px-3 py-2 text-[13px] font-medium leading-relaxed text-gray-800 shadow-sm"
+                          style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
+                        >
+                          {part.render === "html" ? (
+                            <HtmlBlock content={part.content} />
+                          ) : part.render === "plain" ? (
+                            <PlainTextBlock content={part.content || (sending ? "…" : "")} />
+                          ) : (
+                            <RichTextBlock content={part.content || (sending ? "…" : "")} />
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
+                          <button className="active:opacity-70" onClick={() => copyText(part.content, toast)}>复制</button>
+                          {part.tokenCount ? <span>{part.tokenCount} tokens</span> : null}
+                        </div>
                       </div>
                     ))}
                   </div>

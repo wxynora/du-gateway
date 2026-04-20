@@ -126,14 +126,24 @@ def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
         content = str(item.get("content") or "").strip()
         if not content:
             continue
+        reasoning = str(item.get("reasoning") or "").strip()
+        try:
+            token_count = int(item.get("tokenCount") or 0)
+        except Exception:
+            token_count = 0
         created_at = str(item.get("createdAt") or item.get("created_at") or "").strip() or now_beijing_iso()
         msg_id = str(item.get("id") or "").strip() or f"{role}-{created_at}-{len(out)}"
-        out.append({
+        row = {
             "id": msg_id,
             "role": role,
             "content": content,
             "createdAt": created_at,
-        })
+        }
+        if reasoning:
+            row["reasoning"] = reasoning
+        if token_count > 0:
+            row["tokenCount"] = token_count
+        out.append(row)
     return out[-_SUMITALK_HISTORY_MAX_MESSAGES:]
 
 
