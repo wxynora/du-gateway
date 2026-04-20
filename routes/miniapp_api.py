@@ -115,6 +115,41 @@ def _get_sumitalk_history_device_id() -> str:
     return did
 
 
+def _get_panel_device_id() -> str:
+    payload = request.environ.get("miniapp_panel_payload") or {}
+    return str(payload.get("device_id") or "").strip()
+
+
+def _sanitize_usage_apps(items: list[dict], limit: int = 20) -> list[dict]:
+    out: list[dict] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        pkg = str(item.get("packageName") or item.get("package_name") or "").strip()
+        if not pkg:
+            continue
+        try:
+            foreground_ms = int(item.get("foregroundMs") or item.get("foreground_ms") or 0)
+        except Exception:
+            foreground_ms = 0
+        try:
+            last_time_used = int(item.get("lastTimeUsed") or item.get("last_time_used") or 0)
+        except Exception:
+            last_time_used = 0
+        if foreground_ms <= 0:
+            continue
+        out.append(
+            {
+                "packageName": pkg,
+                "foregroundMs": foreground_ms,
+                "lastTimeUsed": last_time_used,
+            }
+        )
+        if len(out) >= max(1, int(limit or 20)):
+            break
+    return out
+
+
 def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
     out: list[dict] = []
     for item in items or []:
@@ -747,6 +782,8 @@ def _miniapp_auth():
     panel_block = enforce_panel_token()
     if panel_block is not None:
         return panel_block
+    if request.environ.get("miniapp_panel_payload"):
+        return None
     enforce_telegram_initdata()
 
 
@@ -846,6 +883,44 @@ def miniapp_sumitalk_history_save():
     if not ok:
         return jsonify({"ok": False, "error": "保存失败"}), 500
     return jsonify({"ok": True, "device_id": device_id, "count": len(messages), "updated_at": payload["updated_at"]})
+
+
+@bp.route("/device-state/screen", methods=["POST"])
+def miniapp_device_screen_state():
+    device_id = _get_panel_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    body = request.get_json(silent=True) or {}
+    event = str(body.get("event") or "").strip().lower()
+    if event not in {"screen_on", "screen_off", "user_present", "app_active"}:
+        return jsonify({"ok": False, "error": "event 无效"}), 400
+    patch = {
+        "deviceId": device_id,
+        "event": event,
+        "interactive": bool(body.get("interactive")),
+        "occurredAt": str(body.get("occurred_at") or "").strip() or now_beijing_iso(),
+        "updatedAt": now_beijing_iso(),
+    }
+    ok = r2_store.merge_and_save_sense_bucket("screen", patch)
+    return jsonify({"ok": bool(ok), "bucket": "screen", "device_id": device_id, "event": event})
+
+
+@bp.route("/device-state/usage-stats", methods=["POST"])
+def miniapp_device_usage_stats():
+    device_id = _get_panel_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    body = request.get_json(silent=True) or {}
+    apps = _sanitize_usage_apps(body.get("apps") or [], limit=20)
+    patch = {
+        "deviceId": device_id,
+        "range": str(body.get("range") or "24h").strip() or "24h",
+        "capturedAt": str(body.get("captured_at") or "").strip() or now_beijing_iso(),
+        "apps": apps,
+        "updatedAt": now_beijing_iso(),
+    }
+    ok = r2_store.merge_and_save_sense_bucket("usage", patch)
+    return jsonify({"ok": bool(ok), "bucket": "usage", "device_id": device_id, "count": len(apps)})
 
 
 @bp.route("/panel-auth/list", methods=["GET"])
