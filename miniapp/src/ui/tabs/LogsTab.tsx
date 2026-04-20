@@ -38,6 +38,14 @@ function TrashIcon() {
   return <svg className="h-[14px] w-[14px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="m19 6-1 14H6L5 6" /></svg>;
 }
 
+const ERROR_PATTERNS = [
+  /(^|\s)(error|err|exception|fatal|fail(ed|ure)?|traceback|panic)(\s|:|$)/i,
+  /(^|\s)(timeout|timed out|connection (closed|reset|refused))(\s|:|$)/i,
+  /\bhttp\s*5\d{2}\b/i,
+  /\bstatus\s*[:=]?\s*5\d{2}\b/i,
+  /接口加载失败|请求失败|操作失败|转发失败|上游返回异常|未找到|权限不足|鉴权失败/i,
+];
+
 export function LogsTab() {
   const toast = useToast();
   const [paused, setPaused] = useState(false);
@@ -76,6 +84,11 @@ export function LogsTab() {
   function extractClock(line: string) {
     const m = String(line || "").match(/\b(\d{2}:\d{2}:\d{2})\b/);
     return m?.[1] || "--:--:--";
+  }
+
+  function isErrorLine(line: string) {
+    const raw = String(line || "");
+    return ERROR_PATTERNS.some((p) => p.test(raw));
   }
 
   const filtered = useMemo(() => {
@@ -315,18 +328,30 @@ export function LogsTab() {
           <div className="space-y-0.5">
             {filtered.slice(0, 800).map((line, idx) => {
               const kind = lineKind(line);
+              const isError = isErrorLine(line);
               return (
-                <div key={idx} className="border-b border-gray-50 border-l-[3px] bg-white p-4 active:bg-[#F8FAFC]">
+                <div
+                  key={idx}
+                  className={`border-b border-l-[3px] p-4 active:bg-[#F8FAFC] ${
+                    isError ? "border-l-red-400 border-b-red-50 bg-red-50/40" : "border-gray-50 bg-white"
+                  }`}
+                >
                   <div className="mb-1 flex items-center gap-2">
-                    <span className="font-mono text-[10px] text-gray-400">{extractClock(line)}</span>
-                    <span className={`rounded px-1 text-[9px] font-bold uppercase tracking-tighter ${accentForKind(kind)}`}>
-                      {labelForKind(kind)}
-                    </span>
+                    <span className={`font-mono text-[10px] ${isError ? "text-red-400" : "text-gray-400"}`}>{extractClock(line)}</span>
+                    {isError ? (
+                      <span className="rounded px-1 text-[9px] font-bold uppercase tracking-tighter border-l-red-400 bg-red-100 text-red-600">
+                        ERROR
+                      </span>
+                    ) : (
+                      <span className={`rounded px-1 text-[9px] font-bold uppercase tracking-tighter ${accentForKind(kind)}`}>
+                        {labelForKind(kind)}
+                      </span>
+                    )}
                     <button className="ml-auto text-gray-300 transition-colors active:text-gray-500" onClick={() => void copyText(line)}>
                       <CopyIcon />
                     </button>
                   </div>
-                  <p className="break-all font-mono text-[12px] leading-[1.6] text-gray-700">
+                  <p className={`break-all font-mono text-[12px] leading-[1.6] ${isError ? "font-semibold text-red-600" : "text-gray-700"}`}>
                     {highlightLine(line, filterText)}
                   </p>
                 </div>
