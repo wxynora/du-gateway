@@ -175,7 +175,6 @@ export function MemoryDebugTab() {
       `}</style>
 
       <div className="sticky top-0 z-20 flex items-center border-b border-gray-50 bg-white/90 px-4 pb-4 pt-3 backdrop-blur-md">
-        <h1 className="text-[17px] font-semibold text-gray-800">记忆调试</h1>
         <div className="ml-auto flex items-center rounded-full border border-gray-100 bg-gray-50 px-3 py-1">
           <span className="mr-2 h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />
           <span className="text-[11px] font-medium text-gray-500">实时</span>
