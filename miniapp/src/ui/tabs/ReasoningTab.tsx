@@ -28,6 +28,21 @@ export function ReasoningTab() {
     return `${r.window_id || ""}::${r.index || 0}::${i}`;
   }
 
+  function formatTimelineTime(raw: string) {
+    const input = String(raw || "").trim();
+    if (!input) return "";
+    const d = new Date(input);
+    if (Number.isNaN(d.getTime())) return input;
+    return d.toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+  }
+
   async function loadLatest() {
     setLoading(true);
     try {
@@ -111,10 +126,7 @@ export function ReasoningTab() {
         }
       `}</style>
 
-      <header className="header-blur sticky top-0 z-50 flex items-center justify-between border-b border-gray-100 px-5 py-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-[18px] font-bold tracking-tight text-gray-900">思维链日志</h1>
-        </div>
+      <header className="header-blur sticky top-0 z-50 flex items-center justify-end border-b border-gray-100 px-5 py-3">
         <button
           className="flex h-9 w-9 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100"
           onClick={loadLatest}
@@ -145,7 +157,6 @@ export function ReasoningTab() {
 
       <main className="px-6 pb-8">
         <div className="mb-6">
-          <h2 className="mb-6 text-[12px] font-bold uppercase tracking-widest text-gray-400">最近记录</h2>
           <div className="timeline-container">
         {items.map((r, i) => {
           const key = itemKey(r, i);
@@ -160,10 +171,10 @@ export function ReasoningTab() {
             <div className="timeline-dot" />
             <div className="mb-1 flex items-start justify-between">
               <div>
-                <span className="text-[14px] font-bold text-gray-900">窗口 {String(r.window_id || "-")}</span>
+                <span className="text-[14px] font-bold text-gray-900">{String(r.window_id || "-")}</span>
                 <span className="ml-2 font-mono text-[12px] text-gray-400">#{String(r.index ?? "")}</span>
               </div>
-              <span className="text-[12px] font-medium text-gray-400">{String(r.timestamp || "")}</span>
+              <span className="text-[12px] font-medium text-gray-400">{formatTimelineTime(String(r.timestamp || ""))}</span>
             </div>
             <div className="content-box shadow-sm">
               {String(r.reasoning || "").trim() ? (
