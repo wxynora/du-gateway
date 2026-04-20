@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import { apiJson } from "../api";
-import { Btn } from "../components";
 import { useToast } from "../toast";
 
 type ToolCallItem = { id?: string; name?: string; arguments?: string; result?: string };
@@ -79,33 +78,75 @@ export function ReasoningTab() {
   }, []);
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between px-1">
-        <div className="text-xs text-cream-muted">
-          最近 10 条 · 最新在上{windowId ? ` · ${windowId}` : ""}{lastRefreshedAt ? ` · 刷新于 ${lastRefreshedAt}` : ""}
+    <div className="min-h-full bg-[#FDFDFD]">
+      <style>{`
+        .header-blur { background: rgba(255,255,255,.9); backdrop-filter: blur(8px); }
+        .timeline-container { position: relative; }
+        .timeline-container::before {
+          content:"";
+          position:absolute;
+          left:9px;
+          top:20px;
+          bottom:0;
+          width:2px;
+          background: linear-gradient(180deg,#e5e7eb 0%, transparent 100%);
+        }
+        .timeline-item { position: relative; margin-left: 28px; margin-bottom: 20px; }
+        .timeline-dot {
+          position:absolute;
+          left:-28px;
+          top:7px;
+          width:10px;
+          height:10px;
+          border-radius:50%;
+          background:#374151;
+          border:2px solid #fff;
+          box-shadow:0 0 0 2px #e5e7eb;
+        }
+        .content-box {
+          border-radius:18px;
+          background:#fff;
+          border:1px solid #f3f4f6;
+          padding:14px;
+        }
+      `}</style>
+
+      <header className="header-blur sticky top-0 z-50 flex items-center justify-between border-b border-gray-100 px-5 py-3">
+        <div className="flex items-center gap-3">
+          <h1 className="text-[18px] font-bold tracking-tight text-gray-900">思维链日志</h1>
         </div>
         <button
-          className="neo-icon-btn h-8 w-8"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100"
           onClick={loadLatest}
           disabled={loading}
           title="刷新"
         >
-          <svg className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <svg className={`h-5 w-5 ${loading ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M20 6v6h-6" />
             <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8" />
           </svg>
         </button>
+      </header>
+
+      <div className="flex items-center justify-between px-6 py-4">
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-semibold text-gray-900">{items.length} 条记录</span>
+          <span className="text-[13px] text-gray-400">·</span>
+          <span className="text-[13px] text-gray-400">{windowId ? `窗口: ${windowId}` : "窗口: 全部"}</span>
+        </div>
+        <span className="text-[12px] font-medium text-gray-400">{lastRefreshedAt ? `${lastRefreshedAt} 刷新` : ""}</span>
       </div>
 
       {loadError ? (
-        <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(251,230,236,0.95),rgba(236,206,221,0.82))]">
+        <div className="mx-6 mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-[12px] text-red-500">
           思维链加载失败：{loadError}
-          <br />
-          请稍后重试，或从 Telegram 按钮重新打开面板。
         </div>
       ) : null}
 
-      <div className="space-y-2">
+      <main className="px-6 pb-8">
+        <div className="mb-6">
+          <h2 className="mb-6 text-[12px] font-bold uppercase tracking-widest text-gray-400">最近记录</h2>
+          <div className="timeline-container">
         {items.map((r, i) => {
           const key = itemKey(r, i);
           const hasReasoning = Boolean(String(r.reasoning || "").trim());
@@ -114,69 +155,86 @@ export function ReasoningTab() {
           return (
           <div
             key={key}
-            className="neo-panel-soft p-3"
+            className="timeline-item"
           >
-            <div className="flex items-center justify-between gap-2">
-              <div className="neo-tag-dark">
-                #{String(r.index ?? "")} {r.timestamp ? `· ${String(r.timestamp)}` : ""} {r.window_id ? `· ${String(r.window_id)}` : ""}
+            <div className="timeline-dot" />
+            <div className="mb-1 flex items-start justify-between">
+              <div>
+                <span className="text-[14px] font-bold text-gray-900">窗口 {String(r.window_id || "-")}</span>
+                <span className="ml-2 font-mono text-[12px] text-gray-400">#{String(r.index ?? "")}</span>
               </div>
-              {hasReasoning ? (
-                <Btn kind={hasTranslated && open ? "green" : "blue"} onClick={() => translateReasoning(key, String(r.reasoning || ""))} disabled={Boolean(translating[key])}>
-                  {translating[key] ? "翻译中..." : hasTranslated ? (open ? "收起译文" : "查看译文") : "翻译"}
-                </Btn>
-              ) : null}
+              <span className="text-[12px] font-medium text-gray-400">{String(r.timestamp || "")}</span>
             </div>
-            {String(r.reasoning || "").trim() ? (
-              <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-cream-text">
+            <div className="content-box shadow-sm">
+              {String(r.reasoning || "").trim() ? (
+              <p className="mb-4 whitespace-pre-wrap text-[15px] leading-relaxed text-gray-700">
                 {String(r.reasoning || "")}
-              </div>
-            ) : (
-              <div className="mt-2 text-[11px] text-cream-muted">本轮未返回思维链文本</div>
-            )}
-            {hasTranslated && open ? (
-              <div className="mt-3 rounded-[20px] border border-white/75 bg-[linear-gradient(145deg,rgba(247,251,255,0.95),rgba(213,228,246,0.64))] px-3 py-3 shadow-soft2">
-                <div className="text-[11px] font-medium text-[#2f6eb4]">中文翻译</div>
-                <div className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-[#2a4c77]">
-                  {translated[key]}
-                </div>
-              </div>
-            ) : null}
-            {Array.isArray(r.tool_calls) && r.tool_calls.length ? (
-              <div className="mt-3 space-y-2">
-                {r.tool_calls.map((tc, ti) => {
-                  const nm = String(tc?.name || "").trim() || "unknown_tool";
-                  const args = String(tc?.arguments || "").trim();
-                  const result = String(tc?.result || "").trim();
-                  return (
-                    <div key={`${tc?.id || ""}-${ti}`} className="space-y-1.5">
-                      <div className="rounded-[20px] border border-white/75 bg-[linear-gradient(145deg,rgba(255,250,240,0.95),rgba(247,234,193,0.62))] px-3 py-2 shadow-soft2">
-                        <div className="text-[11px] text-[#8a6f35] font-medium">工具调用 · {nm}</div>
-                        {args ? (
-                          <div className="mt-1 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-[#6f5b31]">
-                            {args}
+              </p>
+              ) : (
+                <div className="mb-3 text-[12px] text-gray-400">本轮未返回思维链文本</div>
+              )}
+
+              {Array.isArray(r.tool_calls) && r.tool_calls.length ? (
+                <div className="space-y-3">
+                  {r.tool_calls.map((tc, ti) => {
+                    const nm = String(tc?.name || "").trim() || "unknown_tool";
+                    const args = String(tc?.arguments || "").trim();
+                    const result = String(tc?.result || "").trim();
+                    return (
+                      <div key={`${tc?.id || ""}-${ti}`} className="space-y-3">
+                        <div>
+                          <div className="mb-1 flex items-center gap-2">
+                            <span className="text-[11px] font-bold uppercase text-amber-700">Call: {nm}</span>
                           </div>
-                        ) : null}
-                      </div>
-                      <div className="rounded-[20px] border border-white/75 bg-[linear-gradient(145deg,rgba(247,251,255,0.95),rgba(213,228,246,0.64))] px-3 py-2 shadow-soft2">
-                        <div className="text-[11px] text-[#2f6eb4] font-medium">工具结果 · {nm}</div>
-                        <div className="mt-1 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-[#2a4c77]">
-                          {result || "（无返回内容）"}
+                          <div className="rounded-lg border border-amber-100/50 bg-amber-50/50 p-3">
+                            <code className="font-mono text-[12px] text-amber-900 break-all">{args || "(空参数)"}</code>
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="mb-1 flex items-center gap-2">
+                            <span className="text-[11px] font-bold uppercase text-blue-700">Result</span>
+                          </div>
+                          <div className="rounded-lg border border-blue-100/50 bg-blue-50/50 p-3">
+                            <code className="font-mono text-[12px] text-blue-900 break-all">{result || "（无返回内容）"}</code>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {hasReasoning ? (
+                <div className="mt-4 flex justify-end border-t border-gray-50 pt-3">
+                  <button
+                    className="flex items-center gap-1 text-[12px] font-bold text-blue-600"
+                    onClick={() => translateReasoning(key, String(r.reasoning || ""))}
+                    disabled={Boolean(translating[key])}
+                  >
+                    {translating[key] ? "翻译中..." : hasTranslated ? (open ? "收起译文" : "查看译文") : "翻译原文"}
+                  </button>
+                </div>
+              ) : null}
+
+              {hasTranslated && open ? (
+                <div className="mt-3 rounded-lg border border-blue-100/50 bg-blue-50/50 p-3">
+                  <div className="mb-1 text-[11px] font-bold uppercase text-blue-700">中文翻译</div>
+                  <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-blue-900">{translated[key]}</p>
+                </div>
+              ) : null}
               </div>
-            ) : null}
           </div>
         )})}
         {!items.length && !loadError ? (
-          <div className="neo-muted-box bg-[linear-gradient(145deg,rgba(255,247,250,0.92),rgba(240,229,235,0.72))]">
+          <div className="rounded-2xl border border-gray-100 bg-white px-4 py-6 text-[12px] text-gray-400">
             暂无可展示的思维链（可能上游未返回 reasoning 字段）。
           </div>
         ) : null}
+          </div>
+        </div>
+      </main>
       </div>
-    </div>
   );
 }
 
