@@ -208,7 +208,9 @@ public class MainActivity extends BridgeActivity {
                             long ms = stat.getTotalTimeInForeground();
                             if (ms <= 0) continue;
                             JSONObject item = new JSONObject();
-                            item.put("packageName", String.valueOf(stat.getPackageName()));
+                            String packageName = String.valueOf(stat.getPackageName());
+                            item.put("packageName", packageName);
+                            item.put("appName", resolveAppLabel(packageName));
                             item.put("foregroundMs", ms);
                             item.put("lastTimeUsed", stat.getLastTimeUsed());
                             apps.put(item);
@@ -255,6 +257,17 @@ public class MainActivity extends BridgeActivity {
         SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US);
         fmt.setTimeZone(TimeZone.getDefault());
         return fmt.format(new java.util.Date());
+    }
+
+    private String resolveAppLabel(String packageName) {
+        try {
+            android.content.pm.ApplicationInfo info = getPackageManager().getApplicationInfo(packageName, 0);
+            CharSequence label = getPackageManager().getApplicationLabel(info);
+            String text = String.valueOf(label == null ? "" : label).trim();
+            return text.isEmpty() ? packageName : text;
+        } catch (Exception e) {
+            return packageName;
+        }
     }
 
     private void savePanelState() {

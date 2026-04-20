@@ -1,5 +1,5 @@
 # 设备感知（sense/latest.json）→ 渡的 system 注入。
-# battery + location + health + music（当前播放）。
+# battery + location + health + music + screen + usage。
 # 字段约定见 docs/感知模块方案.md
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 
 _MAX_SNAPSHOT_CHARS = 800
+_MAX_USAGE_APPS = 5
 
 
 def _as_dict(v: Any) -> dict:
@@ -109,9 +110,56 @@ def _format_music_playing_line(music: dict) -> str | None:
     return None
 
 
+def _format_screen_line(screen: dict) -> str | None:
+    event = str(screen.get("event") or "").strip().lower()
+    if not event:
+        return None
+    mapping = {
+        "screen_on": "刚亮屏",
+        "screen_off": "刚熄屏",
+        "user_present": "刚解锁",
+        "app_active": "刚打开 SumiTalk",
+    }
+    label = mapping.get(event)
+    if not label:
+        return None
+    return f"屏幕状态：{label}"
+
+
+def _format_usage_line(usage: dict) -> str | None:
+    apps = usage.get("apps")
+    if not isinstance(apps, list) or not apps:
+        return None
+    parts: list[str] = []
+    for item in apps[:_MAX_USAGE_APPS]:
+        if not isinstance(item, dict):
+            continue
+        pkg = str(item.get("packageName") or "").strip()
+        app_name = str(item.get("appName") or "").strip() or pkg
+        try:
+            ms = int(item.get("foregroundMs") or 0)
+        except Exception:
+            ms = 0
+        if not app_name or ms <= 0:
+            continue
+        total_mins = max(1, round(ms / 60000))
+        hours = total_mins // 60
+        mins = total_mins % 60
+        if hours > 0 and mins > 0:
+            duration = f"{hours}小时{mins}分钟"
+        elif hours > 0:
+            duration = f"{hours}小时"
+        else:
+            duration = f"{mins}分钟"
+        parts.append(f"{app_name} {duration}")
+    if not parts:
+        return None
+    return "最近使用：" + "，".join(parts)
+
+
 def format_sense_snapshot_for_system() -> str:
     """
-    标题「老婆当前状态」+ 电量 / 定位 / 心率步数 / 音乐（有数据就注入）。
+    标题「老婆当前状态」+ 电量 / 定位 / 心率步数 / 音乐 / 屏幕状态 / 应用使用（有数据就注入）。
     """
     try:
         doc = r2_store.get_sense_latest()
@@ -125,12 +173,16 @@ def format_sense_snapshot_for_system() -> str:
     loc = _as_dict(doc.get("location"))
     health = _as_dict(doc.get("health"))
     music = _as_dict(doc.get("music"))
+    screen = _as_dict(doc.get("screen"))
+    usage = _as_dict(doc.get("usage"))
     has_battery = bool(bat) and "level" in bat
     loc_line = _format_location_line(loc)
     health_line = _format_health_line(health)
     music_line = _format_music_line(music)
     music_playing_line = _format_music_playing_line(music)
-    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line:
+    screen_line = _format_screen_line(screen)
+    usage_line = _format_usage_line(usage)
+    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line and not screen_line and not usage_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -150,6 +202,10 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(music_line)
     if music_playing_line:
         lines.append(music_playing_line)
+    if screen_line:
+        lines.append(screen_line)
+    if usage_line:
+        lines.append(usage_line)
 
     body = "\n".join(lines)
     if len(body) > _MAX_SNAPSHOT_CHARS:
