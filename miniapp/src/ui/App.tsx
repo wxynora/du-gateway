@@ -1028,7 +1028,7 @@ function MainChatScreen({
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FA]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
-      <div className="absolute top-0 z-20 flex w-full items-center border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
+      <div className="absolute top-0 z-20 flex w-full items-center border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] backdrop-blur-md">
         <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
           <ChevronLeftIcon />
         </button>
@@ -1038,7 +1038,7 @@ function MainChatScreen({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-5 pt-[92px]">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-5 pt-[104px]">
         <div className="space-y-5">
           {groupedMessages.map((group, index) => (
             <React.Fragment key={group.id}>
@@ -1089,7 +1089,14 @@ function MainChatScreen({
                           )}
                         </div>
                         <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
-                          <button className="active:opacity-70" onClick={() => copyText(part.content, toast)}>复制</button>
+                          <button
+                            className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-100 active:opacity-70"
+                            onClick={() => copyText(part.content, toast)}
+                            aria-label="复制"
+                            title="复制"
+                          >
+                            <CopyIconMini />
+                          </button>
                           {part.tokenCount ? <span>{part.tokenCount} tokens</span> : null}
                         </div>
                       </div>
@@ -1244,6 +1251,10 @@ function SunIconMini() {
 
 function ClockIconMini() {
   return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>;
+}
+
+function CopyIconMini() {
+  return <svg className="h-[15px] w-[15px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>;
 }
 
 function CalendarIconMini() {
