@@ -2,6 +2,7 @@ import { getInitData } from "./tg";
 
 const PANEL_TOKEN_STORAGE_KEY = "miniapp.panel.token.v1";
 const PANEL_DEVICE_ID_STORAGE_KEY = "miniapp.panel.device-id.v1";
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
 
 export class ApiError extends Error {
   status: number;
@@ -78,12 +79,13 @@ export function getPanelDeviceLabel(): string {
 
 function withAuthUrl(path: string): string {
   try {
-    const u = new URL(path, window.location.origin);
+    const base = API_BASE_URL || window.location.origin;
+    const u = new URL(path, base);
     const initData = getInitData();
     const panelToken = getPanelToken();
     if (initData && !u.searchParams.get("initData")) u.searchParams.set("initData", initData);
     if (panelToken && !u.searchParams.get("panel_token")) u.searchParams.set("panel_token", panelToken);
-    return u.pathname + u.search;
+    return API_BASE_URL ? u.toString() : u.pathname + u.search;
   } catch {
     return path;
   }
@@ -98,6 +100,11 @@ function withAuthHeaders(init?: RequestInit): Headers {
   return headers;
 }
 
+export async function publicApiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const finalPath = withAuthUrl(path);
+  return fetch(finalPath, init);
+}
+
 /**
  * 只通过 Header 传 initData，不把 initData 拼进 URL。
  * 用于拉取图片二进制等（避免 query 过长 414；与 <img src> 不同，fetch 仍可能受跨域预检限制，见 app.py CORS）。
@@ -105,7 +112,7 @@ function withAuthHeaders(init?: RequestInit): Headers {
 export async function fetchWithInitDataHeaderOnly(path: string, init?: RequestInit): Promise<Response> {
   const headers = withAuthHeaders(init);
   const p = path.startsWith("/") ? path : `/${path}`;
-  return fetch(p, { ...init, headers });
+  return fetch(withAuthUrl(p), { ...init, headers });
 }
 
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -131,7 +138,7 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function buildLogStreamUrl(startLines: number, category: string = "all"): string {
-  const url = new URL("/miniapp-api/logs/stream", window.location.origin);
+  const url = new URL("/miniapp-api/logs/stream", API_BASE_URL || window.location.origin);
   url.searchParams.set("start_lines", String(startLines));
   url.searchParams.set("category", category || "all");
   const initData = getInitData();

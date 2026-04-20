@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SumiTalk</string>
+    <string name="title_activity_main">SumiTalk</string>
+    <string name="package_name">com.sumitalk.app</string>
+    <string name="custom_url_scheme">com.sumitalk.app</string>
+</resources>

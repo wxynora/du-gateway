@@ -1,10 +1,11 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
+import { App as CapacitorApp } from "@capacitor/app";
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
-import { apiFetch, apiJson, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, setPanelToken } from "./api";
+import { apiFetch, apiJson, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
@@ -153,6 +154,79 @@ function Shell({
   }, [showTree]);
 
   useEffect(() => {
+    let disposed = false;
+    const removePromise = CapacitorApp.addListener("backButton", async () => {
+      if (disposed) return;
+      if (showCallHub) {
+        setShowCallHub(false);
+        return;
+      }
+      if (panel) {
+        setPanel(null);
+        return;
+      }
+      if (showSettings) {
+        setShowSettings(false);
+        return;
+      }
+      if (showCorePrompt) {
+        setShowCorePrompt(false);
+        return;
+      }
+      if (showSchedule) {
+        setShowSchedule(false);
+        return;
+      }
+      if (showAlarm) {
+        setShowAlarm(false);
+        return;
+      }
+      if (showDuDay) {
+        setShowDuDay(false);
+        return;
+      }
+      if (showTodayNoteDetail) {
+        setShowTodayNoteDetail(false);
+        return;
+      }
+      if (showDailyReportDetail) {
+        setShowDailyReportDetail(false);
+        return;
+      }
+      if (showTree) {
+        setShowTree(false);
+        return;
+      }
+      if (activeScreen) {
+        setActiveScreen(null);
+        return;
+      }
+      if (mainTab !== "chats") {
+        setMainTab("chats");
+        return;
+      }
+      await CapacitorApp.exitApp();
+    });
+    return () => {
+      disposed = true;
+      removePromise.then((handle) => handle.remove()).catch(() => {});
+    };
+  }, [
+    activeScreen,
+    mainTab,
+    panel,
+    showAlarm,
+    showCallHub,
+    showCorePrompt,
+    showDailyReportDetail,
+    showDuDay,
+    showSchedule,
+    showSettings,
+    showTodayNoteDetail,
+    showTree,
+  ]);
+
+  useEffect(() => {
     if (!tree) return;
     const dayMarks = tree.milestones?.reachedDays || [];
     const roundMarks = tree.milestones?.reachedRounds || [];
@@ -175,8 +249,8 @@ function Shell({
   const renderMainTab = () => {
     if (mainTab === "daily") {
       return (
-        <div className="bg-[#FDFDFD] px-6 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)" }}>
-          <h1 className="mb-8 text-[26px] font-medium tracking-tight text-gray-900">日常</h1>
+        <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
+          <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">日常</h1>
           <div className="space-y-4">
             <PageCardRow
               icon={<FeatherIcon />}
@@ -199,8 +273,8 @@ function Shell({
     }
     if (mainTab === "tools") {
       return (
-        <div className="bg-[#FDFDFD] px-6 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)" }}>
-          <h1 className="mb-8 text-[26px] font-medium tracking-tight text-gray-900">工具</h1>
+        <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
+          <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">工具</h1>
           <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
             <ListRow icon={<FileTextIcon />} label="日志" onClick={() => setPanel("logs")} />
             <ListRow icon={<GitMergeIcon />} label="思维链" onClick={() => setPanel("reasoning")} />
@@ -215,8 +289,8 @@ function Shell({
     }
     if (mainTab === "settings") {
       return (
-        <div className="bg-[#FDFDFD] px-6 pb-8" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)" }}>
-          <h1 className="mb-8 text-[26px] font-medium tracking-tight text-gray-900">设置</h1>
+        <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
+          <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">设置</h1>
           <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
             <ListRow icon={<ShieldIconMini />} label="安全管理" onClick={() => onOpenSecurity?.()} />
             <ListRow icon={<SmartphoneIconMini />} label="设备管理" onClick={() => onOpenDevices?.()} />
@@ -239,6 +313,19 @@ function Shell({
     );
   };
 
+  const hasSecondaryPageOpen =
+    !!activeScreen ||
+    !!panel ||
+    showSettings ||
+    showCorePrompt ||
+    showSchedule ||
+    showAlarm ||
+    showDuDay ||
+    showTree ||
+    showCallHub ||
+    showTodayNoteDetail ||
+    showDailyReportDetail;
+
   return (
     <div className="relative min-h-dvh safe-bottom overflow-hidden bg-[#FDFDFD] text-gray-900">
       {activeScreen === "du" ? (
@@ -259,10 +346,10 @@ function Shell({
       ) : null}
       {!activeScreen ? (
         <>
-          <div className="relative min-h-dvh overflow-y-auto pb-[80px]">
+          <div className="relative min-h-dvh overflow-y-auto pb-[76px]">
             {renderMainTab()}
           </div>
-          <BottomNav current={mainTab} onChange={setMainTab} />
+          {!hasSecondaryPageOpen ? <BottomNav current={mainTab} onChange={setMainTab} /> : null}
         </>
       ) : null}
 
@@ -607,18 +694,18 @@ function ChatsHome({
   return (
     <div
       className="bg-white pb-8"
-      style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 56px)", fontFamily: "'Microsoft YaHei', sans-serif" }}
+      style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)", fontFamily: "'Microsoft YaHei', sans-serif" }}
     >
-      <div className="px-6">
-        <h1 className="mb-8 text-[26px] font-medium tracking-tight text-gray-900">会话</h1>
-        <div className="space-y-7">
+      <div className="px-4">
+        <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">会话</h1>
+        <div className="space-y-5">
           <SummaryBlock label="Today Note" text={dailyWhisper || "今天还没有新的 note。"} onClick={onOpenTodayNote} />
           <div className="ml-3 h-px w-full bg-gray-50" />
           <SummaryBlock label="日报摘要" text={reportSummary} onClick={onOpenDailyReport} />
         </div>
       </div>
 
-      <div className="mt-8 h-3 bg-[#F8F9FA]" />
+      <div className="mt-6 h-2 bg-[#F8F9FA]" />
 
       <div className="bg-white">
         <ChatEntryRow
@@ -660,9 +747,9 @@ function ChatEntryRow({
     ? { shell: "bg-[#F8F0F4] text-[#704A5D]" }
     : { shell: "bg-[#F0F4F8] text-[#4A5568]" };
   return (
-    <button className="flex w-full items-center px-6 py-4 text-left transition-colors active:bg-gray-50" onClick={onClick}>
+    <button className="flex w-full items-center px-4 py-3.5 text-left transition-colors active:bg-gray-50" onClick={onClick}>
       <div className="relative shrink-0">
-        <div className={`flex h-[52px] w-[52px] items-center justify-center rounded-2xl text-[20px] font-medium shadow-sm ${palette.shell}`}>
+        <div className={`flex h-[48px] w-[48px] items-center justify-center rounded-2xl text-[18px] font-medium shadow-sm ${palette.shell}`}>
           {title.slice(0, 1)}
         </div>
         {pinned ? (
@@ -671,12 +758,12 @@ function ChatEntryRow({
           </div>
         ) : null}
       </div>
-      <div className={`ml-4 min-w-0 flex-1 pt-1 ${pinned ? "border-b border-gray-50 pb-4" : ""}`}>
+      <div className={`ml-3 min-w-0 flex-1 pt-0.5 ${pinned ? "border-b border-gray-50 pb-3.5" : ""}`}>
         <div className="mb-1 flex items-baseline justify-between">
-          <span className="text-[17px] font-medium text-gray-900">{title}</span>
-          <span className="text-[12px] font-normal text-gray-900">{time}</span>
+          <span className="text-[16px] font-medium text-gray-900">{title}</span>
+          <span className="text-[11px] font-normal text-gray-900">{time}</span>
         </div>
-        <p className="truncate text-[14px] font-normal text-gray-600">{preview}</p>
+        <p className="truncate text-[13px] font-normal text-gray-600">{preview}</p>
       </div>
     </button>
   );
@@ -696,7 +783,7 @@ function BottomNav({
     { id: "settings", label: "设置" },
   ];
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between border-t border-gray-100 bg-white/90 px-6 pb-[calc(env(safe-area-inset-bottom,24px))] pt-2 backdrop-blur-md">
+    <nav className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between border-t border-gray-100 bg-white/90 px-4 pb-[calc(env(safe-area-inset-bottom,20px))] pt-2 backdrop-blur-md">
       <div className="mx-auto flex w-full max-w-xl items-center justify-between">
         {items.map((item) => {
           const active = current === item.id;
@@ -729,32 +816,24 @@ function FullScreenPane({
   headerMode?: "default" | "simple";
   children: React.ReactNode;
 }) {
-  const chipClass = accent === "wenyou"
-    ? "bg-[#F8F0F4] text-[#704A5D]"
-    : accent === "du"
-      ? "bg-[#F0F4F8] text-[#4A5568]"
-      : "bg-[#F4F5F7] text-[#5C6473]";
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-[#FDFDFD]">
       {headerMode === "simple" ? (
         <div className="border-b border-gray-100/50 bg-white px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)]">
-          <button className="text-[16px] font-medium text-gray-900" onClick={onBack}>
-            {`< ${title}`}
+          <button className="flex items-center gap-2 text-gray-900" onClick={onBack}>
+            <ChevronLeftIcon />
+            <span className="text-[15px] font-medium">{title}</span>
           </button>
         </div>
       ) : (
-        <div className="absolute top-0 z-20 flex w-full items-center justify-between border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
-          <div className="flex items-center">
-            <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
-              <ChevronLeftIcon />
-            </button>
-            <div className={`ml-1 mr-3 flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${chipClass}`}>{title.slice(0, 1)}</div>
-            <div className="text-[16px] font-medium text-gray-900">{title}</div>
-          </div>
-          <div className="w-10" />
+        <div className="absolute top-0 z-20 flex w-full items-center border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
+          <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
+            <ChevronLeftIcon />
+          </button>
+          <div className="ml-2 text-[15px] font-medium text-gray-900">{title}</div>
         </div>
       )}
-      <div className={`min-h-0 flex-1 overflow-y-auto px-4 pb-4 ${headerMode === "simple" ? "pt-0" : "pt-[88px]"}`}>{children}</div>
+      <div className={`min-h-0 flex-1 overflow-y-auto px-3.5 pb-4 ${headerMode === "simple" ? "pt-0" : "pt-[82px]"}`}>{children}</div>
     </div>
   );
 }
@@ -920,21 +999,17 @@ function MainChatScreen({
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FA]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
-      <div className="absolute top-0 z-20 flex w-full items-center justify-between border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
-        <div className="flex items-center">
-          <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
-            <ChevronLeftIcon />
-          </button>
-          <div className={`ml-1 mr-3 flex h-[44px] w-[44px] items-center justify-center rounded-full text-[14px] font-medium ${avatarClass}`}>{avatarLabel}</div>
-          <div>
-            <div className="text-[16px] font-medium text-gray-900">{title}</div>
-            <div className="text-[11px] font-medium text-gray-900">{subtitle}</div>
-          </div>
+      <div className="absolute top-0 z-20 flex w-full items-center border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
+        <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
+          <ChevronLeftIcon />
+        </button>
+        <div className="ml-2">
+          <div className="text-[15px] font-medium text-gray-900">{title}</div>
+          <div className="text-[11px] font-medium text-gray-900">{subtitle}</div>
         </div>
-        <div className="w-10" />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-[100px]">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-5 pt-[92px]">
         <div className="space-y-5">
           {groupedMessages.map((group, index) => (
             <React.Fragment key={group.id}>
@@ -947,7 +1022,7 @@ function MainChatScreen({
               ) : null}
               {group.role === "user" ? (
                 <div className="flex items-start justify-end space-x-3">
-                  <div className="mt-[2px] max-w-[72%] space-y-1.5 text-right">
+                  <div className="mt-[2px] max-w-[78%] space-y-1.5 text-right">
                     {group.parts.map((part, index) => (
                       <div
                         key={`${group.id}-${index}`}
@@ -963,7 +1038,7 @@ function MainChatScreen({
               ) : (
                 <div className="flex items-start space-x-3">
                   <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
-                  <div className="mt-[2px] max-w-[72%] space-y-1.5">
+                  <div className="mt-[2px] max-w-[78%] space-y-1.5">
                     {group.parts.map((part, index) => (
                       <div
                         key={`${group.id}-${index}`}
@@ -989,12 +1064,12 @@ function MainChatScreen({
 
       <div className="z-20 border-t border-gray-100 bg-white pb-[calc(env(safe-area-inset-bottom,24px))]">
         <div className={`overflow-hidden bg-white transition-all duration-300 ease-in-out ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
-          <div className="flex space-x-8 px-8 pb-2 pt-6">
+          <div className="flex space-x-6 px-6 pb-2 pt-5">
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
           </div>
         </div>
-        <div className="flex items-end space-x-2 px-3 py-3">
+        <div className="flex items-end space-x-2 px-3 py-2.5">
           <button
             className={`rounded-full p-2.5 text-gray-500 transition-colors ${plusOpen ? "bg-gray-100 text-gray-800" : "active:bg-gray-50"}`}
             onClick={() => setPlusOpen((v) => !v)}
@@ -1044,13 +1119,13 @@ function ChatActionButton({ label, onClick }: { label: string; onClick: () => vo
 function PageCardRow({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
     <button
-      className="flex w-full items-center rounded-[24px] border border-gray-100/60 bg-white p-5 text-left shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] transition-transform active:scale-[0.98]"
+      className="flex w-full items-center rounded-[22px] border border-gray-100/60 bg-white p-4 text-left shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] transition-transform active:scale-[0.98]"
       onClick={onClick}
     >
-      <div className="mr-4 flex h-[42px] w-[42px] items-center justify-center rounded-full bg-gray-50 text-gray-600">
+      <div className="mr-3 flex h-[38px] w-[38px] items-center justify-center rounded-full bg-gray-50 text-gray-600">
         {icon}
       </div>
-      <span className="flex-1 text-[16px] font-medium tracking-wide text-gray-800">{label}</span>
+      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
       <ChevronRightIcon />
     </button>
   );
@@ -1069,11 +1144,11 @@ function ListRow({
 }) {
   return (
     <button
-      className={`flex min-h-[64px] w-full items-center px-6 py-[18px] text-left transition-colors active:bg-gray-50 ${last ? "" : "border-b border-gray-50"}`}
+      className={`flex min-h-[60px] w-full items-center px-4 py-4 text-left transition-colors active:bg-gray-50 ${last ? "" : "border-b border-gray-50"}`}
       onClick={onClick}
     >
       <span className="mr-4 text-gray-400">{icon}</span>
-      <span className="flex-1 text-[16px] font-medium tracking-wide text-gray-800">{label}</span>
+      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
       <ChevronRightIcon />
     </button>
   );
@@ -1257,7 +1332,7 @@ function AppWithAuth() {
     let cancelled = false;
     (async () => {
       try {
-        const j = await fetch("/miniapp-api/panel-auth/meta").then((r) => r.json());
+        const j = await publicApiFetch("/miniapp-api/panel-auth/meta").then((r) => r.json());
         if (cancelled) return;
         const enabled = !!j?.enabled;
         setAuthEnabled(enabled);
@@ -1320,7 +1395,7 @@ function AppWithAuth() {
     setErrorText("");
     try {
       if (secondPrompt && loginStep === "password") {
-        const first = await fetch("/miniapp-api/panel-auth/check-password", {
+        const first = await publicApiFetch("/miniapp-api/panel-auth/check-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ password: password.trim() }),
@@ -1333,7 +1408,7 @@ function AppWithAuth() {
         return;
       }
       const deviceId = getOrCreatePanelDeviceId();
-      const j = await fetch("/miniapp-api/panel-auth/verify", {
+      const j = await publicApiFetch("/miniapp-api/panel-auth/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

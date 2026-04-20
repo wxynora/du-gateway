@@ -6,9 +6,17 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0 --port 5173"
+    "build:android": "node ./scripts/build-android.mjs",
+    "preview": "vite preview --host 0.0.0.0 --port 5173",
+    "cap:sync": "npm run build:android && npx cap sync android",
+    "cap:copy": "npm run build:android && npx cap copy android",
+    "android": "npx cap open android"
   },
   "dependencies": {
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/android": "^8.3.1",
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/core": "^8.3.1",
     "dompurify": "^3.4.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
