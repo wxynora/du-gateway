@@ -11,7 +11,10 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.PixelFormat;
+import android.graphics.Point;
+import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
+import android.util.DisplayMetrics;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -20,8 +23,9 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewOutlineProvider;
 import android.view.WindowManager;
-import android.widget.TextView;
+import android.widget.ImageView;
 import androidx.core.app.NotificationCompat;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -41,6 +45,10 @@ public class FloatingBallService extends Service {
     public static final String PREFS_NAME = "sumitalk_native_state";
     public static final String PREF_PANEL_TOKEN = "panel_token";
     public static final String PREF_DEVICE_ID = "device_id";
+    public static final String PREF_OVERLAY_X = "overlay_x";
+    public static final String PREF_OVERLAY_Y = "overlay_y";
+    /** User preference: show floating ball (does not revoke overlay permission). */
+    public static final String PREF_OVERLAY_VISIBLE = "overlay_visible";
 
     private static final String TAG = "SumiTalkOverlay";
     private static final String API_BASE = "https://duxy-home.com";
@@ -49,9 +57,10 @@ public class FloatingBallService extends Service {
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private WindowManager windowManager;
-    private TextView overlayView;
+    private ImageView overlayView;
     private WindowManager.LayoutParams overlayParams;
     private BroadcastReceiver screenStateReceiver;
+    private BroadcastReceiver configChangeReceiver;
     private SharedPreferences prefs;
     private String panelToken = "";
     private String panelDeviceId = "";
@@ -65,7 +74,8 @@ public class FloatingBallService extends Service {
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, buildNotification());
         registerScreenStateReceiver();
-        ensureOverlay();
+        registerConfigChangeReceiver();
+        applyOverlayVisibility();
     }
 
     @Override
@@ -76,7 +86,7 @@ public class FloatingBallService extends Service {
             return START_NOT_STICKY;
         }
         updatePanelState(intent);
-        ensureOverlay();
+        applyOverlayVisibility();
         reportScreenState("app_active");
         return START_STICKY;
     }
@@ -91,6 +101,13 @@ public class FloatingBallService extends Service {
             } catch (Exception ignored) {
             }
             screenStateReceiver = null;
+        }
+        if (configChangeReceiver != null) {
+            try {
+                unregisterReceiver(configChangeReceiver);
+            } catch (Exception ignored) {
+            }
+            configChangeReceiver = null;
         }
         ioExecutor.shutdownNow();
     }
@@ -147,6 +164,15 @@ public class FloatingBallService extends Service {
         }
     }
 
+    /** Respect user toggle: hide overlay but keep foreground service running. */
+    private void applyOverlayVisibility() {
+        if (!prefs.getBoolean(PREF_OVERLAY_VISIBLE, true)) {
+            removeOverlay();
+            return;
+        }
+        ensureOverlay();
+    }
+
     private void ensureOverlay() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
             removeOverlay();
@@ -155,17 +181,20 @@ public class FloatingBallService extends Service {
         if (overlayView != null) return;
         if (windowManager == null) return;
 
-        overlayView = new TextView(this);
-        overlayView.setText("渡");
-        overlayView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        overlayView.setGravity(Gravity.CENTER);
-        overlayView.setTextColor(0xFF222222);
         int size = dp(52);
+        overlayView = new ImageView(this);
+        overlayView.setImageResource(R.drawable.sumi_floating_ball);
+        overlayView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        overlayView.setAdjustViewBounds(false);
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.OVAL);
         bg.setColor(0xF2FFFFFF);
         bg.setStroke(dp(1), 0x22000000);
         overlayView.setBackground(bg);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            overlayView.setClipToOutline(true);
+            overlayView.setOutlineProvider(ViewOutlineProvider.BACKGROUND);
+        }
 
         overlayParams =
                 new WindowManager.LayoutParams(
@@ -178,8 +207,7 @@ public class FloatingBallService extends Service {
                                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                         PixelFormat.TRANSLUCENT);
         overlayParams.gravity = Gravity.TOP | Gravity.START;
-        overlayParams.x = dp(12);
-        overlayParams.y = dp(240);
+        applySavedOrDefaultOverlayPosition();
 
         overlayView.setOnTouchListener(new FloatingTouchListener());
         try {
@@ -222,6 +250,100 @@ public class FloatingBallService extends Service {
                     }
                 };
         registerReceiver(screenStateReceiver, filter);
+    }
+
+    private void registerConfigChangeReceiver() {
+        if (configChangeReceiver != null) return;
+        configChangeReceiver =
+                new BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        if (!prefs.getBoolean(PREF_OVERLAY_VISIBLE, true)) return;
+                        if (overlayView == null || overlayParams == null || windowManager == null) return;
+                        clampOverlayIntoScreen();
+                        try {
+                            windowManager.updateViewLayout(overlayView, overlayParams);
+                        } catch (Exception ignored) {
+                        }
+                        saveOverlayPosition();
+                    }
+                };
+        IntentFilter filter = new IntentFilter(Intent.ACTION_CONFIGURATION_CHANGED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(configChangeReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(configChangeReceiver, filter);
+        }
+    }
+
+    private int overlayBallPx() {
+        return dp(52);
+    }
+
+    private int overlayMarginPx() {
+        return dp(12);
+    }
+
+    private void getScreenPixels(Point out) {
+        if (windowManager == null || out == null) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Rect b = windowManager.getCurrentWindowMetrics().getBounds();
+            out.x = b.width();
+            out.y = b.height();
+        } else {
+            DisplayMetrics dm = new DisplayMetrics();
+            windowManager.getDefaultDisplay().getRealMetrics(dm);
+            out.x = dm.widthPixels;
+            out.y = dm.heightPixels;
+        }
+    }
+
+    /** Keep the ball fully on screen (rotation / inset changes). */
+    private void clampOverlayIntoScreen() {
+        if (overlayParams == null) return;
+        Point sz = new Point();
+        getScreenPixels(sz);
+        if (sz.x <= 0 || sz.y <= 0) return;
+        int ball = overlayBallPx();
+        int m = overlayMarginPx();
+        overlayParams.x = Math.max(m, Math.min(overlayParams.x, sz.x - ball - m));
+        overlayParams.y = Math.max(m, Math.min(overlayParams.y, sz.y - ball - m));
+    }
+
+    /** After drag: snap to left or right edge (方案：吸边). */
+    private void snapOverlayToNearestVerticalEdge() {
+        if (overlayParams == null) return;
+        Point sz = new Point();
+        getScreenPixels(sz);
+        if (sz.x <= 0) return;
+        int ball = overlayBallPx();
+        int m = overlayMarginPx();
+        int centerX = overlayParams.x + ball / 2;
+        if (centerX * 2 <= sz.x) {
+            overlayParams.x = m;
+        } else {
+            overlayParams.x = sz.x - ball - m;
+        }
+        clampOverlayIntoScreen();
+    }
+
+    private void saveOverlayPosition() {
+        if (overlayParams == null) return;
+        prefs.edit().putInt(PREF_OVERLAY_X, overlayParams.x).putInt(PREF_OVERLAY_Y, overlayParams.y).apply();
+    }
+
+    private void applySavedOrDefaultOverlayPosition() {
+        if (overlayParams == null) return;
+        int defX = dp(12);
+        int defY = dp(240);
+        if (prefs.contains(PREF_OVERLAY_X)) {
+            overlayParams.x = prefs.getInt(PREF_OVERLAY_X, defX);
+            overlayParams.y = prefs.getInt(PREF_OVERLAY_Y, defY);
+        } else {
+            overlayParams.x = defX;
+            overlayParams.y = defY;
+        }
+        clampOverlayIntoScreen();
     }
 
     private void reportScreenState(String eventType) {
@@ -307,10 +429,19 @@ public class FloatingBallService extends Service {
                     }
                     overlayParams.x = startX + dx;
                     overlayParams.y = startY + dy;
+                    clampOverlayIntoScreen();
                     windowManager.updateViewLayout(overlayView, overlayParams);
                     return true;
                 case MotionEvent.ACTION_UP:
-                    if (!dragging) {
+                case MotionEvent.ACTION_CANCEL:
+                    if (dragging) {
+                        snapOverlayToNearestVerticalEdge();
+                        try {
+                            windowManager.updateViewLayout(overlayView, overlayParams);
+                        } catch (Exception ignored) {
+                        }
+                        saveOverlayPosition();
+                    } else {
                         openApp();
                     }
                     return true;

@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
@@ -7,6 +8,7 @@ import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
 import { apiFetch, apiJson, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
+import { SumiOverlay } from "../plugins/sumi-overlay";
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
 const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
@@ -90,6 +92,7 @@ function Shell({
   const [dailyRefreshing, setDailyRefreshing] = useState(false);
   const [tree, setTree] = useState<CyberTreeData | null>(null);
   const [deferHomeExtras, setDeferHomeExtras] = useState(false);
+  const [floatingBallEnabled, setFloatingBallEnabled] = useState(true);
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
       .then((j) => {
@@ -131,6 +134,20 @@ function Shell({
     loadTree();
   }, [deferHomeExtras]);
 
+  useEffect(() => {
+    if (mainTab !== "settings") return;
+    if (Capacitor.getPlatform() !== "android") return;
+    let cancelled = false;
+    void SumiOverlay.getFloatingBallEnabled()
+      .then((r) => {
+        if (!cancelled) setFloatingBallEnabled(!!r.enabled);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mainTab]);
+
   async function refreshDailyReport() {
     setDailyRefreshing(true);
     try {
@@ -145,6 +162,16 @@ function Shell({
     }
   }
 
+  async function setFloatingBallNative(next: boolean) {
+    const prev = floatingBallEnabled;
+    setFloatingBallEnabled(next);
+    try {
+      await SumiOverlay.setFloatingBallEnabled({ enabled: next });
+    } catch (e: any) {
+      setFloatingBallEnabled(prev);
+      toast(`悬浮球设置失败：${e?.message || e}`);
+    }
+  }
 
   useEffect(() => {
     if (!showTree) return;
@@ -292,6 +319,9 @@ function Shell({
         <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
           <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">设置</h1>
           <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
+            {Capacitor.getPlatform() === "android" ? (
+              <FloatingBallSettingRow enabled={floatingBallEnabled} onToggle={(v) => void setFloatingBallNative(v)} />
+            ) : null}
             <ListRow icon={<SmartphoneIconMini />} label="设备管理" onClick={() => onOpenDevices?.()} />
             {onLogout ? <ListRow icon={<LogoutIconMini />} label="退出登录" onClick={onLogout} last /> : null}
           </div>
@@ -1172,6 +1202,37 @@ function PageCardRow({ icon, label, onClick }: { icon: React.ReactNode; label: s
       <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
       <ChevronRightIcon />
     </button>
+  );
+}
+
+function FloatingBallSettingRow({
+  enabled,
+  onToggle,
+}: {
+  enabled: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  return (
+    <div className="flex min-h-[60px] w-full items-center border-b border-gray-50 px-4 py-4">
+      <span className="mr-4 text-gray-400">
+        <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <circle cx="12" cy="12" r="8" opacity="0.35" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      </span>
+      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">显示悬浮球</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${enabled ? "bg-gray-800" : "bg-gray-200"}`}
+        onClick={() => onToggle(!enabled)}
+      >
+        <span
+          className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-[22px]" : "translate-x-0"}`}
+        />
+      </button>
+    </div>
   );
 }
 
