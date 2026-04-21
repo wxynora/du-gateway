@@ -554,6 +554,7 @@ function Shell({
     showCorePrompt ||
     showSchedule ||
     showAlarm ||
+    showPersonalization ||
     showDuDay ||
     showTree ||
     showCallHub ||
