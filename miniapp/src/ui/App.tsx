@@ -72,6 +72,46 @@ type DeviceItem = {
   revoked?: boolean;
   current?: boolean;
 };
+type ChatFontKey = "yahei" | "system" | "pingfang";
+type ChatTimeFormat = "hhmm" | "ampm";
+
+function readStoredBoolean(key: string, fallback = false): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallback;
+    return raw === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+function readStoredNumber(key: string, fallback: number): number {
+  try {
+    const raw = Number(localStorage.getItem(key));
+    return Number.isFinite(raw) ? raw : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readStoredString<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
+  try {
+    const raw = String(localStorage.getItem(key) || "").trim() as T;
+    return allowed.includes(raw) ? raw : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function resolveChatFontFamily(fontKey: ChatFontKey): string {
+  if (fontKey === "system") return "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  if (fontKey === "pingfang") return "'PingFang SC', 'Hiragino Sans GB', sans-serif";
+  return "'Microsoft YaHei', sans-serif";
+}
+
+function formatTokenCountValue(value?: number): string {
+  return value ? `${value}tokens` : "";
+}
 
 function Shell({
   onLogout,
@@ -102,13 +142,20 @@ function Shell({
   const [tree, setTree] = useState<CyberTreeData | null>(null);
   const [deferHomeExtras, setDeferHomeExtras] = useState(false);
   const [floatingBallEnabled, setFloatingBallEnabled] = useState(true);
-  const [transparentBubbleEnabled, setTransparentBubbleEnabled] = useState(() => {
-    try {
-      return localStorage.getItem("miniapp.ui.transparentBubble") === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [transparentBubbleEnabled, setTransparentBubbleEnabled] = useState(() => readStoredBoolean("miniapp.ui.transparentBubble"));
+  const [showChatAvatars, setShowChatAvatars] = useState(() => readStoredBoolean("miniapp.ui.showAvatars", true));
+  const [chatContentFontSize, setChatContentFontSize] = useState(() => readStoredNumber("miniapp.ui.chatContentFontSize", 13));
+  const [chatTitleFontSize, setChatTitleFontSize] = useState(() => readStoredNumber("miniapp.ui.chatTitleFontSize", 15));
+  const [chatFontKey, setChatFontKey] = useState<ChatFontKey>(() =>
+    readStoredString("miniapp.ui.chatFont", "yahei", ["yahei", "system", "pingfang"] as const),
+  );
+  const [showChatTimestamps, setShowChatTimestamps] = useState(() => readStoredBoolean("miniapp.ui.showTimestamps", true));
+  const [chatTimeFormat, setChatTimeFormat] = useState<ChatTimeFormat>(() =>
+    readStoredString("miniapp.ui.timeFormat", "hhmm", ["hhmm", "ampm"] as const),
+  );
+  const [showTokenCount, setShowTokenCount] = useState(() => readStoredBoolean("miniapp.ui.showTokens", true));
+  const [expandReasoningByDefault, setExpandReasoningByDefault] = useState(() => readStoredBoolean("miniapp.ui.expandReasoning", false));
+  const [chatBackgroundOpacity, setChatBackgroundOpacity] = useState(() => readStoredNumber("miniapp.ui.chatBackgroundOpacity", 100));
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
       .then((j) => {
@@ -167,8 +214,28 @@ function Shell({
   useEffect(() => {
     try {
       localStorage.setItem("miniapp.ui.transparentBubble", transparentBubbleEnabled ? "1" : "0");
+      localStorage.setItem("miniapp.ui.showAvatars", showChatAvatars ? "1" : "0");
+      localStorage.setItem("miniapp.ui.chatContentFontSize", String(chatContentFontSize));
+      localStorage.setItem("miniapp.ui.chatTitleFontSize", String(chatTitleFontSize));
+      localStorage.setItem("miniapp.ui.chatFont", chatFontKey);
+      localStorage.setItem("miniapp.ui.showTimestamps", showChatTimestamps ? "1" : "0");
+      localStorage.setItem("miniapp.ui.timeFormat", chatTimeFormat);
+      localStorage.setItem("miniapp.ui.showTokens", showTokenCount ? "1" : "0");
+      localStorage.setItem("miniapp.ui.expandReasoning", expandReasoningByDefault ? "1" : "0");
+      localStorage.setItem("miniapp.ui.chatBackgroundOpacity", String(chatBackgroundOpacity));
     } catch {}
-  }, [transparentBubbleEnabled]);
+  }, [
+    transparentBubbleEnabled,
+    showChatAvatars,
+    chatContentFontSize,
+    chatTitleFontSize,
+    chatFontKey,
+    showChatTimestamps,
+    chatTimeFormat,
+    showTokenCount,
+    expandReasoningByDefault,
+    chatBackgroundOpacity,
+  ]);
 
   async function refreshDailyReport() {
     setDailyRefreshing(true);
@@ -398,6 +465,15 @@ function Shell({
           avatarLabel="渡"
           accent="du"
           transparentBubbleEnabled={transparentBubbleEnabled}
+          showChatAvatars={showChatAvatars}
+          chatContentFontSize={chatContentFontSize}
+          chatTitleFontSize={chatTitleFontSize}
+          chatFontFamily={resolveChatFontFamily(chatFontKey)}
+          showChatTimestamps={showChatTimestamps}
+          chatTimeFormat={chatTimeFormat}
+          showTokenCount={showTokenCount}
+          expandReasoningByDefault={expandReasoningByDefault}
+          chatBackgroundOpacity={chatBackgroundOpacity}
           onBack={() => setActiveScreen(null)}
           onOpenHtmlPage={(content) => setHtmlPreview({ title: "页面", content })}
           onOpenStickers={() => setPanel("stickers")}
@@ -472,6 +548,24 @@ function Shell({
           <PersonalizationScreen
             transparentBubbleEnabled={transparentBubbleEnabled}
             onToggleTransparentBubble={setTransparentBubbleEnabled}
+            showChatAvatars={showChatAvatars}
+            onToggleShowChatAvatars={setShowChatAvatars}
+            chatContentFontSize={chatContentFontSize}
+            onChangeChatContentFontSize={setChatContentFontSize}
+            chatTitleFontSize={chatTitleFontSize}
+            onChangeChatTitleFontSize={setChatTitleFontSize}
+            chatFontKey={chatFontKey}
+            onCycleChatFont={() => setChatFontKey((prev) => (prev === "yahei" ? "system" : prev === "system" ? "pingfang" : "yahei"))}
+            showChatTimestamps={showChatTimestamps}
+            onToggleShowChatTimestamps={setShowChatTimestamps}
+            chatTimeFormat={chatTimeFormat}
+            onCycleChatTimeFormat={() => setChatTimeFormat((prev) => (prev === "hhmm" ? "ampm" : "hhmm"))}
+            showTokenCount={showTokenCount}
+            onToggleShowTokenCount={setShowTokenCount}
+            expandReasoningByDefault={expandReasoningByDefault}
+            onToggleExpandReasoningByDefault={setExpandReasoningByDefault}
+            chatBackgroundOpacity={chatBackgroundOpacity}
+            onChangeChatBackgroundOpacity={setChatBackgroundOpacity}
           />
         </FullScreenPane>
       ) : null}
@@ -541,17 +635,35 @@ type ChatMessageGroup = {
   parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number } }>;
 };
 
-function formatClockTime(value: string): string {
+function formatClockTime(value: string, timeFormat: ChatTimeFormat = "hhmm"): string {
   const raw = String(value || "").trim();
   if (!raw) return "最近";
   const dt = new Date(raw);
   if (Number.isNaN(dt.getTime())) {
     const m = raw.match(/(\d{2}):(\d{2})/);
-    return m ? `${m[1]}:${m[2]}` : "最近";
+    if (!m) return "最近";
+    if (timeFormat === "ampm") {
+      const hour = Number(m[1]);
+      const period = hour >= 12 ? "下午" : "上午";
+      const displayHour = String(hour % 12 || 12).padStart(2, "0");
+      return `${period} ${displayHour}:${m[2]}`;
+    }
+    return `${m[1]}:${m[2]}`;
   }
   const hh = String(dt.getHours()).padStart(2, "0");
   const mm = String(dt.getMinutes()).padStart(2, "0");
+  if (timeFormat === "ampm") {
+    const hour = dt.getHours();
+    const period = hour >= 12 ? "下午" : "上午";
+    return `${period} ${String(hour % 12 || 12).padStart(2, "0")}:${mm}`;
+  }
   return `${hh}:${mm}`;
+}
+
+function getChatFontLabel(fontKey: ChatFontKey): string {
+  if (fontKey === "system") return "系统默认";
+  if (fontKey === "pingfang") return "苹方";
+  return "微软雅黑";
 }
 
 function shouldShowGroupTime(current: string, previous?: string): boolean {
@@ -974,6 +1086,15 @@ function MainChatScreen({
   windowId,
   accent,
   transparentBubbleEnabled,
+  showChatAvatars,
+  chatContentFontSize,
+  chatTitleFontSize,
+  chatFontFamily,
+  showChatTimestamps,
+  chatTimeFormat,
+  showTokenCount,
+  expandReasoningByDefault,
+  chatBackgroundOpacity,
   onBack,
   onOpenHtmlPage,
   onOpenStickers,
@@ -984,6 +1105,15 @@ function MainChatScreen({
   windowId: string;
   accent: "du" | "wenyou";
   transparentBubbleEnabled: boolean;
+  showChatAvatars: boolean;
+  chatContentFontSize: number;
+  chatTitleFontSize: number;
+  chatFontFamily: string;
+  showChatTimestamps: boolean;
+  chatTimeFormat: ChatTimeFormat;
+  showTokenCount: boolean;
+  expandReasoningByDefault: boolean;
+  chatBackgroundOpacity: number;
   onBack: () => void;
   onOpenHtmlPage: (content: string) => void;
   onOpenStickers: () => void;
@@ -1198,14 +1328,20 @@ function MainChatScreen({
   }, [activeMatchedGroupId, searchOpen]);
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FA]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
+    <div
+      className="absolute inset-0 z-30 flex flex-col"
+      style={{
+        fontFamily: chatFontFamily,
+        backgroundColor: `rgba(248, 249, 250, ${Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100))})`,
+      }}
+    >
       <div className="absolute top-0 z-20 w-full border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] backdrop-blur-md">
         <div className="flex items-center">
           <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
             <ChevronLeftIcon />
           </button>
           <div className="ml-2 flex-1">
-            <div className="text-[15px] font-medium text-gray-900">{title}</div>
+            <div className="font-medium text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
             <div className="text-[11px] font-medium text-gray-900">{subtitle}</div>
           </div>
           <button
@@ -1266,10 +1402,10 @@ function MainChatScreen({
         <div className="space-y-5">
           {groupedMessages.map((group, index) => (
             <React.Fragment key={group.id}>
-              {shouldShowGroupTime(group.createdAt, groupedMessages[index - 1]?.createdAt) ? (
+              {showChatTimestamps && shouldShowGroupTime(group.createdAt, groupedMessages[index - 1]?.createdAt) ? (
                 <div className="mb-2 flex justify-center">
                   <span className="rounded-full bg-[#EFEFEF] px-3 py-1 text-[11px] font-medium text-gray-900">
-                    {formatClockTime(group.createdAt)}
+                    {formatClockTime(group.createdAt, chatTimeFormat)}
                   </span>
                 </div>
               ) : null}
@@ -1280,20 +1416,22 @@ function MainChatScreen({
                   }}
                   className={`flex items-start justify-end space-x-3 rounded-[22px] ${activeMatchedGroupId === group.id ? "ring-2 ring-gray-300/80 ring-offset-2 ring-offset-transparent" : ""}`}
                 >
-                  <div className="mt-[2px] flex max-w-[78%] flex-col items-end space-y-1.5">
+                  <div className={`mt-[2px] flex ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} flex-col items-end space-y-1.5`}>
                     {group.parts.map((part, index) => (
                       <div
                         key={`${group.id}-${index}`}
-                        className={`block max-w-full rounded-[18px] px-3 py-2 text-left text-[13px] font-medium leading-relaxed shadow-sm ${
+                        className={`block max-w-full rounded-[18px] px-3 py-2 text-left font-medium leading-relaxed shadow-sm ${
                           transparentBubbleEnabled ? transparentBubbleClass : "bg-[#2D3748] text-white"
                         }`}
-                        style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
+                        style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                       >
                         <PlainTextBlock content={part.content || (sending ? "…" : "")} />
                       </div>
                     ))}
                   </div>
-                  <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[13px] font-medium text-gray-600 shadow-sm">我</div>
+                  {showChatAvatars ? (
+                    <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[13px] font-medium text-gray-600 shadow-sm">我</div>
+                  ) : null}
                 </div>
               ) : (
                 <div
@@ -1302,21 +1440,23 @@ function MainChatScreen({
                   }}
                   className={`flex items-start space-x-3 rounded-[22px] ${activeMatchedGroupId === group.id ? "ring-2 ring-gray-300/80 ring-offset-2 ring-offset-transparent" : ""}`}
                 >
-                  <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
-                  <div className="mt-[2px] max-w-[78%] space-y-1.5">
+                  {showChatAvatars ? (
+                    <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
+                  ) : null}
+                  <div className={`mt-[2px] ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} space-y-1.5`}>
                     {group.parts.map((part, index) => (
                       <div key={`${group.id}-${index}`} className="space-y-2">
                         {part.reasoning ? (
-                          <details className="max-w-full rounded-[14px] border border-gray-100 bg-[#F7F7F7] px-3 py-2 text-[12px] text-gray-700">
+                          <details open={expandReasoningByDefault} className="max-w-full rounded-[14px] border border-gray-100 bg-[#F7F7F7] px-3 py-2 text-[12px] text-gray-700">
                             <summary className="cursor-pointer list-none text-[12px] font-medium text-gray-600">思维链</summary>
                             <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap leading-6">{part.reasoning}</div>
                           </details>
                         ) : null}
                         <div
-                          className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 text-[13px] font-medium leading-relaxed shadow-sm ${
+                          className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
                             transparentBubbleEnabled ? transparentBubbleClass : "border border-gray-100/50 bg-white text-gray-800"
                           }`}
-                          style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
+                          style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                         >
                           {part.render === "html" ? (
                             <PlainTextBlock content="已生成页面" />
@@ -1335,11 +1475,11 @@ function MainChatScreen({
                           >
                             <CopyIconMini />
                           </button>
-                          {part.tokenCount?.input || part.tokenCount?.output ? (
+                          {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
                             <span>
-                              {part.tokenCount?.input ? `↑${part.tokenCount.input}tokens` : ""}
+                              {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
                               {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
-                              {part.tokenCount?.output ? `↓${part.tokenCount.output}tokens` : ""}
+                              {part.tokenCount?.output ? `↓${formatTokenCountValue(part.tokenCount.output)}` : ""}
                             </span>
                           ) : null}
                         </div>
@@ -1369,11 +1509,12 @@ function MainChatScreen({
           </button>
           <div className="flex min-h-[42px] flex-1 items-center rounded-[20px] bg-[#F4F5F7] px-4 py-2.5">
             <textarea
-              className="max-h-28 min-h-[22px] w-full resize-none bg-transparent text-[15px] font-medium leading-6 text-gray-900 outline-none placeholder:text-gray-400"
+              className="max-h-28 min-h-[22px] w-full resize-none bg-transparent font-medium leading-6 text-gray-900 outline-none placeholder:text-gray-400"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="输入消息..."
               rows={1}
+              style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
             />
           </div>
           <button
@@ -1420,9 +1561,45 @@ function PageCardRow({ icon, label, onClick }: { icon: React.ReactNode; label: s
 function PersonalizationScreen({
   transparentBubbleEnabled,
   onToggleTransparentBubble,
+  showChatAvatars,
+  onToggleShowChatAvatars,
+  chatContentFontSize,
+  onChangeChatContentFontSize,
+  chatTitleFontSize,
+  onChangeChatTitleFontSize,
+  chatFontKey,
+  onCycleChatFont,
+  showChatTimestamps,
+  onToggleShowChatTimestamps,
+  chatTimeFormat,
+  onCycleChatTimeFormat,
+  showTokenCount,
+  onToggleShowTokenCount,
+  expandReasoningByDefault,
+  onToggleExpandReasoningByDefault,
+  chatBackgroundOpacity,
+  onChangeChatBackgroundOpacity,
 }: {
   transparentBubbleEnabled: boolean;
   onToggleTransparentBubble: (next: boolean) => void;
+  showChatAvatars: boolean;
+  onToggleShowChatAvatars: (next: boolean) => void;
+  chatContentFontSize: number;
+  onChangeChatContentFontSize: (next: number) => void;
+  chatTitleFontSize: number;
+  onChangeChatTitleFontSize: (next: number) => void;
+  chatFontKey: ChatFontKey;
+  onCycleChatFont: () => void;
+  showChatTimestamps: boolean;
+  onToggleShowChatTimestamps: (next: boolean) => void;
+  chatTimeFormat: ChatTimeFormat;
+  onCycleChatTimeFormat: () => void;
+  showTokenCount: boolean;
+  onToggleShowTokenCount: (next: boolean) => void;
+  expandReasoningByDefault: boolean;
+  onToggleExpandReasoningByDefault: (next: boolean) => void;
+  chatBackgroundOpacity: number;
+  onChangeChatBackgroundOpacity: (next: number) => void;
 }) {
   return (
     <div className="bg-[#FDFDFD] px-1 pb-6 pt-4">
@@ -1449,10 +1626,13 @@ function PersonalizationScreen({
           <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
             <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
               <p className="mb-3 text-[12px] font-medium text-gray-400">当前背景预览</p>
-              <div className="h-[92px] rounded-[18px] bg-[linear-gradient(180deg,#F8FAFC_0%,#EEF2F7_100%)]" />
+              <div
+                className="h-[92px] rounded-[18px] bg-[linear-gradient(180deg,#F8FAFC_0%,#EEF2F7_100%)]"
+                style={{ opacity: Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100)) }}
+              />
             </div>
             <PersonalizationRow title="背景图设置" />
-            <PersonalizationSliderRow title="背景透明度" value="78%" />
+            <PersonalizationSliderRow title="背景透明度" value={`${chatBackgroundOpacity}%`} min={20} max={100} step={1} currentValue={chatBackgroundOpacity} onChange={onChangeChatBackgroundOpacity} />
           </div>
         </section>
 
@@ -1462,23 +1642,23 @@ function PersonalizationScreen({
             <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
               <div className="space-y-3">
                 <div className="flex items-start gap-3">
-                  <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#EEF2FF] text-[13px] font-medium text-gray-700">渡</div>
-                  <div className="inline-block w-fit rounded-[16px] border border-white/30 bg-white/20 px-3 py-2 text-[14px] font-medium leading-normal text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl">
+                  {showChatAvatars ? <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#EEF2FF] text-[13px] font-medium text-gray-700">渡</div> : null}
+                  <div className="inline-block w-fit rounded-[16px] border border-white/30 bg-white/20 px-3 py-2 font-medium leading-normal text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl" style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
                     这里是助手气泡预览
                   </div>
                 </div>
                 <div className="flex justify-end gap-3">
-                  <div className="inline-block w-fit rounded-[16px] border border-white/30 bg-white/20 px-3 py-2 text-[14px] font-medium leading-normal text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl">
+                  <div className="inline-block w-fit rounded-[16px] border border-white/30 bg-white/20 px-3 py-2 font-medium leading-normal text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl" style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
                     这里是用户气泡预览
                   </div>
-                  <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#E5E7EB] text-[13px] font-medium text-gray-700">我</div>
+                  {showChatAvatars ? <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#E5E7EB] text-[13px] font-medium text-gray-700">我</div> : null}
                 </div>
               </div>
             </div>
-            <PersonalizationSliderRow title="气泡圆角" value="18px" />
+            <PersonalizationSliderRow title="气泡圆角" value="18px" min={18} max={18} step={1} currentValue={18} disabled />
             <PersonalizationRow title="用户气泡样式" />
             <PersonalizationRow title="助手气泡样式" />
-            <PersonalizationSwitchRow title="显示头像" enabled />
+            <PersonalizationSwitchRow title="显示头像" enabled={showChatAvatars} onToggle={onToggleShowChatAvatars} />
             <PersonalizationSwitchRow
               title="启用（透明模式）"
               enabled={transparentBubbleEnabled}
@@ -1491,21 +1671,21 @@ function PersonalizationScreen({
           <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">字体与字号</h2>
           <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
             <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
-              <p className="text-[16px] font-medium text-gray-800">这里是聊天文字的预览效果</p>
+              <p className="font-medium text-gray-800" style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>这里是聊天文字的预览效果</p>
             </div>
-            <PersonalizationSliderRow title="聊天内容字号" value="15px" />
-            <PersonalizationSliderRow title="界面标题字号" value="17px" />
-            <PersonalizationRow title="聊天字体" value="微软雅黑" last />
+            <PersonalizationSliderRow title="聊天内容字号" value={`${chatContentFontSize}px`} min={12} max={18} step={1} currentValue={chatContentFontSize} onChange={onChangeChatContentFontSize} />
+            <PersonalizationSliderRow title="界面标题字号" value={`${chatTitleFontSize}px`} min={14} max={20} step={1} currentValue={chatTitleFontSize} onChange={onChangeChatTitleFontSize} />
+            <PersonalizationRow title="聊天字体" value={getChatFontLabel(chatFontKey)} onClick={onCycleChatFont} last />
           </div>
         </section>
 
         <section>
           <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">信息显示</h2>
           <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
-            <PersonalizationSwitchRow title="显示时间戳" enabled />
-            <PersonalizationRow title="时间格式" value="HH:MM" />
-            <PersonalizationSwitchRow title="显示 token" enabled />
-            <PersonalizationSwitchRow title="默认展开思维链" />
+            <PersonalizationSwitchRow title="显示时间戳" enabled={showChatTimestamps} onToggle={onToggleShowChatTimestamps} />
+            <PersonalizationRow title="时间格式" value={chatTimeFormat === "hhmm" ? "HH:MM" : "上午/下午 HH:MM"} onClick={onCycleChatTimeFormat} />
+            <PersonalizationSwitchRow title="显示 token" enabled={showTokenCount} onToggle={onToggleShowTokenCount} />
+            <PersonalizationSwitchRow title="默认展开思维链" enabled={expandReasoningByDefault} onToggle={onToggleExpandReasoningByDefault} />
           </div>
         </section>
       </div>
@@ -1518,16 +1698,23 @@ function PersonalizationRow({
   subtitle,
   value,
   leading,
+  onClick,
   last = false,
 }: {
   title: string;
   subtitle?: string;
   value?: string;
   leading?: React.ReactNode;
+  onClick?: () => void;
   last?: boolean;
 }) {
   return (
-    <div className={`flex items-center justify-between py-[14px] ${last ? "" : "border-b border-[#F9FAFB]"}`}>
+    <button
+      type="button"
+      className={`flex w-full items-center justify-between py-[14px] text-left ${last ? "" : "border-b border-[#F9FAFB]"}`}
+      onClick={onClick}
+      disabled={!onClick}
+    >
       <div className="flex items-center gap-3">
         {leading}
         <div>
@@ -1539,7 +1726,7 @@ function PersonalizationRow({
         {value ? <span className="text-[13px] font-medium text-gray-400">{value}</span> : null}
         <ChevronRightIcon />
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -1569,19 +1756,43 @@ function PersonalizationSwitchRow({
 function PersonalizationSliderRow({
   title,
   value,
+  min,
+  max,
+  step,
+  currentValue,
+  onChange,
+  disabled = false,
 }: {
   title: string;
   value: string;
+  min: number;
+  max: number;
+  step: number;
+  currentValue: number;
+  onChange?: (next: number) => void;
+  disabled?: boolean;
 }) {
+  const percent = max === min ? 100 : ((currentValue - min) / (max - min)) * 100;
   return (
     <div className="border-b border-[#F9FAFB] py-[14px] last:border-b-0">
       <div className="mb-3 flex items-center justify-between">
         <span className="text-[15px] font-medium text-gray-800">{title}</span>
         <span className="text-[13px] font-medium text-gray-400">{value}</span>
       </div>
-      <div className="relative h-[4px] rounded-full bg-[#E2E8F0]">
-        <div className="absolute left-0 top-0 h-[4px] w-[78%] rounded-full bg-[#1F2937]" />
-        <div className="absolute left-[calc(78%-9px)] top-1/2 h-[18px] w-[18px] -translate-y-1/2 rounded-full border-2 border-white bg-[#1F2937] shadow-[0_2px_4px_rgba(0,0,0,0.1)]" />
+      <div className={`relative h-[4px] rounded-full bg-[#E2E8F0] ${disabled ? "opacity-50" : ""}`}>
+        <div className="absolute left-0 top-0 h-[4px] rounded-full bg-[#1F2937]" style={{ width: `${percent}%` }} />
+        <div className="absolute top-1/2 h-[18px] w-[18px] -translate-y-1/2 rounded-full border-2 border-white bg-[#1F2937] shadow-[0_2px_4px_rgba(0,0,0,0.1)]" style={{ left: `calc(${percent}% - 9px)` }} />
+        {!disabled ? (
+          <input
+            type="range"
+            className="absolute inset-0 h-[18px] w-full cursor-pointer opacity-0"
+            min={min}
+            max={max}
+            step={step}
+            value={currentValue}
+            onChange={(e) => onChange?.(Number(e.target.value))}
+          />
+        ) : null}
       </div>
     </div>
   );
