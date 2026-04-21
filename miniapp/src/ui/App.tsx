@@ -109,6 +109,56 @@ function resolveChatFontFamily(fontKey: ChatFontKey): string {
   return "'Microsoft YaHei', sans-serif";
 }
 
+async function fileToDataUrl(file: File): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("图片加载失败"));
+    img.src = src;
+  });
+}
+
+async function buildAvatarDataUrl(file: File): Promise<string> {
+  const src = await fileToDataUrl(file);
+  const img = await loadImageElement(src);
+  const size = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("图片处理失败");
+  const minSide = Math.min(img.width, img.height);
+  const sx = (img.width - minSide) / 2;
+  const sy = (img.height - minSide) / 2;
+  ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
+  return canvas.toDataURL("image/jpeg", 0.9);
+}
+
+async function buildBackgroundDataUrl(file: File): Promise<string> {
+  const src = await fileToDataUrl(file);
+  const img = await loadImageElement(src);
+  const maxWidth = 1280;
+  const scale = Math.min(1, maxWidth / img.width);
+  const width = Math.max(1, Math.round(img.width * scale));
+  const height = Math.max(1, Math.round(img.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("图片处理失败");
+  ctx.drawImage(img, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
+
 function formatTokenCountValue(value?: number): string {
   return value ? `${value}tokens` : "";
 }
@@ -156,6 +206,30 @@ function Shell({
   const [showTokenCount, setShowTokenCount] = useState(() => readStoredBoolean("miniapp.ui.showTokens", true));
   const [expandReasoningByDefault, setExpandReasoningByDefault] = useState(() => readStoredBoolean("miniapp.ui.expandReasoning", false));
   const [chatBackgroundOpacity, setChatBackgroundOpacity] = useState(() => readStoredNumber("miniapp.ui.chatBackgroundOpacity", 100));
+  const [myAvatarImage, setMyAvatarImage] = useState(() => {
+    try {
+      return localStorage.getItem("miniapp.ui.myAvatar") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [duAvatarImage, setDuAvatarImage] = useState(() => {
+    try {
+      return localStorage.getItem("miniapp.ui.duAvatar") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [chatBackgroundImage, setChatBackgroundImage] = useState(() => {
+    try {
+      return localStorage.getItem("miniapp.ui.chatBackgroundImage") || "";
+    } catch {
+      return "";
+    }
+  });
+  const myAvatarInputRef = useRef<HTMLInputElement | null>(null);
+  const duAvatarInputRef = useRef<HTMLInputElement | null>(null);
+  const backgroundInputRef = useRef<HTMLInputElement | null>(null);
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
       .then((j) => {
@@ -223,6 +297,9 @@ function Shell({
       localStorage.setItem("miniapp.ui.showTokens", showTokenCount ? "1" : "0");
       localStorage.setItem("miniapp.ui.expandReasoning", expandReasoningByDefault ? "1" : "0");
       localStorage.setItem("miniapp.ui.chatBackgroundOpacity", String(chatBackgroundOpacity));
+      localStorage.setItem("miniapp.ui.myAvatar", myAvatarImage);
+      localStorage.setItem("miniapp.ui.duAvatar", duAvatarImage);
+      localStorage.setItem("miniapp.ui.chatBackgroundImage", chatBackgroundImage);
     } catch {}
   }, [
     transparentBubbleEnabled,
@@ -235,7 +312,34 @@ function Shell({
     showTokenCount,
     expandReasoningByDefault,
     chatBackgroundOpacity,
+    myAvatarImage,
+    duAvatarImage,
+    chatBackgroundImage,
   ]);
+
+  async function handleImageSelection(
+    file: File | undefined,
+    kind: "myAvatar" | "duAvatar" | "background",
+  ) {
+    if (!file) return;
+    try {
+      if (kind === "background") {
+        setChatBackgroundImage(await buildBackgroundDataUrl(file));
+        toast("聊天背景已更新");
+        return;
+      }
+      const next = await buildAvatarDataUrl(file);
+      if (kind === "myAvatar") {
+        setMyAvatarImage(next);
+        toast("我的头像已更新");
+      } else {
+        setDuAvatarImage(next);
+        toast("渡的头像已更新");
+      }
+    } catch (e: any) {
+      toast(`图片设置失败：${e?.message || e}`);
+    }
+  }
 
   async function refreshDailyReport() {
     setDailyRefreshing(true);
@@ -474,6 +578,9 @@ function Shell({
           showTokenCount={showTokenCount}
           expandReasoningByDefault={expandReasoningByDefault}
           chatBackgroundOpacity={chatBackgroundOpacity}
+          myAvatarImage={myAvatarImage}
+          duAvatarImage={duAvatarImage}
+          chatBackgroundImage={chatBackgroundImage}
           onBack={() => setActiveScreen(null)}
           onOpenHtmlPage={(content) => setHtmlPreview({ title: "页面", content })}
           onOpenStickers={() => setPanel("stickers")}
@@ -566,6 +673,12 @@ function Shell({
             onToggleExpandReasoningByDefault={setExpandReasoningByDefault}
             chatBackgroundOpacity={chatBackgroundOpacity}
             onChangeChatBackgroundOpacity={setChatBackgroundOpacity}
+            myAvatarImage={myAvatarImage}
+            duAvatarImage={duAvatarImage}
+            chatBackgroundImage={chatBackgroundImage}
+            onPickMyAvatar={() => myAvatarInputRef.current?.click()}
+            onPickDuAvatar={() => duAvatarInputRef.current?.click()}
+            onPickChatBackground={() => backgroundInputRef.current?.click()}
           />
         </FullScreenPane>
       ) : null}
@@ -607,6 +720,36 @@ function Shell({
         </FullScreenPane>
       ) : null}
       {showCallHub ? <LazyPane><CallHubScreen onClose={() => setShowCallHub(false)} /></LazyPane> : null}
+      <input
+        ref={myAvatarInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void handleImageSelection(e.target.files?.[0], "myAvatar");
+          e.currentTarget.value = "";
+        }}
+      />
+      <input
+        ref={duAvatarInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void handleImageSelection(e.target.files?.[0], "duAvatar");
+          e.currentTarget.value = "";
+        }}
+      />
+      <input
+        ref={backgroundInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void handleImageSelection(e.target.files?.[0], "background");
+          e.currentTarget.value = "";
+        }}
+      />
     </div>
   );
 }
@@ -1095,6 +1238,9 @@ function MainChatScreen({
   showTokenCount,
   expandReasoningByDefault,
   chatBackgroundOpacity,
+  myAvatarImage,
+  duAvatarImage,
+  chatBackgroundImage,
   onBack,
   onOpenHtmlPage,
   onOpenStickers,
@@ -1114,6 +1260,9 @@ function MainChatScreen({
   showTokenCount: boolean;
   expandReasoningByDefault: boolean;
   chatBackgroundOpacity: number;
+  myAvatarImage: string;
+  duAvatarImage: string;
+  chatBackgroundImage: string;
   onBack: () => void;
   onOpenHtmlPage: (content: string) => void;
   onOpenStickers: () => void;
@@ -1333,6 +1482,9 @@ function MainChatScreen({
       style={{
         fontFamily: chatFontFamily,
         backgroundColor: `rgba(248, 249, 250, ${Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100))})`,
+        backgroundImage: chatBackgroundImage ? `linear-gradient(rgba(248,249,250,${1 - Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100))}), rgba(248,249,250,${1 - Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100))})), url(${chatBackgroundImage})` : undefined,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
       }}
     >
       <div className="absolute top-0 z-20 w-full border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] backdrop-blur-md">
@@ -1430,7 +1582,7 @@ function MainChatScreen({
                     ))}
                   </div>
                   {showChatAvatars ? (
-                    <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[13px] font-medium text-gray-600 shadow-sm">我</div>
+                    <AvatarBubble image={myAvatarImage} label="我" className="bg-gray-200 text-gray-600" />
                   ) : null}
                 </div>
               ) : (
@@ -1441,7 +1593,7 @@ function MainChatScreen({
                   className={`flex items-start space-x-3 rounded-[22px] ${activeMatchedGroupId === group.id ? "ring-2 ring-gray-300/80 ring-offset-2 ring-offset-transparent" : ""}`}
                 >
                   {showChatAvatars ? (
-                    <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
+                    <AvatarBubble image={duAvatarImage} label={avatarLabel} className={avatarClass} />
                   ) : null}
                   <div className={`mt-[2px] ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} space-y-1.5`}>
                     {group.parts.map((part, index) => (
@@ -1543,6 +1695,44 @@ function ChatActionButton({ label, onClick }: { label: string; onClick: () => vo
   );
 }
 
+function AvatarBubble({
+  image,
+  label,
+  className,
+}: {
+  image?: string;
+  label: string;
+  className: string;
+}) {
+  if (image) {
+    return (
+      <div className="h-[38px] w-[38px] shrink-0 overflow-hidden rounded-full shadow-sm">
+        <img src={image} alt={label} className="h-full w-full object-cover" />
+      </div>
+    );
+  }
+  return <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${className}`}>{label}</div>;
+}
+
+function PreviewAvatar({
+  image,
+  label,
+  shellClass,
+}: {
+  image?: string;
+  label: string;
+  shellClass: string;
+}) {
+  if (image) {
+    return (
+      <div className="h-[44px] w-[44px] overflow-hidden rounded-full">
+        <img src={image} alt={label} className="h-full w-full object-cover" />
+      </div>
+    );
+  }
+  return <div className={`flex h-[44px] w-[44px] items-center justify-center rounded-full text-[16px] font-semibold ${shellClass}`}>{label}</div>;
+}
+
 function PageCardRow({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
     <button
@@ -1579,6 +1769,12 @@ function PersonalizationScreen({
   onToggleExpandReasoningByDefault,
   chatBackgroundOpacity,
   onChangeChatBackgroundOpacity,
+  myAvatarImage,
+  duAvatarImage,
+  chatBackgroundImage,
+  onPickMyAvatar,
+  onPickDuAvatar,
+  onPickChatBackground,
 }: {
   transparentBubbleEnabled: boolean;
   onToggleTransparentBubble: (next: boolean) => void;
@@ -1600,6 +1796,12 @@ function PersonalizationScreen({
   onToggleExpandReasoningByDefault: (next: boolean) => void;
   chatBackgroundOpacity: number;
   onChangeChatBackgroundOpacity: (next: number) => void;
+  myAvatarImage: string;
+  duAvatarImage: string;
+  chatBackgroundImage: string;
+  onPickMyAvatar: () => void;
+  onPickDuAvatar: () => void;
+  onPickChatBackground: () => void;
 }) {
   return (
     <div className="bg-[#FDFDFD] px-1 pb-6 pt-4">
@@ -1610,12 +1812,14 @@ function PersonalizationScreen({
             <PersonalizationRow
               title="我的头像"
               subtitle="自定义我的头像"
-              leading={<div className="flex h-[44px] w-[44px] items-center justify-center rounded-full bg-[#E5E7EB] text-[16px] font-semibold text-gray-700">我</div>}
+              leading={<PreviewAvatar image={myAvatarImage} label="我" shellClass="bg-[#E5E7EB] text-gray-700" />}
+              onClick={onPickMyAvatar}
             />
             <PersonalizationRow
               title="渡的头像"
               subtitle="自定义助手的头像"
-              leading={<div className="flex h-[44px] w-[44px] items-center justify-center rounded-full bg-[#EEF2FF] text-[16px] font-semibold text-gray-700">渡</div>}
+              leading={<PreviewAvatar image={duAvatarImage} label="渡" shellClass="bg-[#EEF2FF] text-gray-700" />}
+              onClick={onPickDuAvatar}
               last
             />
           </div>
@@ -1628,10 +1832,15 @@ function PersonalizationScreen({
               <p className="mb-3 text-[12px] font-medium text-gray-400">当前背景预览</p>
               <div
                 className="h-[92px] rounded-[18px] bg-[linear-gradient(180deg,#F8FAFC_0%,#EEF2F7_100%)]"
-                style={{ opacity: Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100)) }}
+                style={{
+                  opacity: Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100)),
+                  backgroundImage: chatBackgroundImage ? `url(${chatBackgroundImage})` : "linear-gradient(180deg,#F8FAFC_0%,#EEF2F7_100%)",
+                  backgroundSize: "cover",
+                  backgroundPosition: "center",
+                }}
               />
             </div>
-            <PersonalizationRow title="背景图设置" />
+            <PersonalizationRow title="背景图设置" onClick={onPickChatBackground} />
             <PersonalizationSliderRow title="背景透明度" value={`${chatBackgroundOpacity}%`} min={20} max={100} step={1} currentValue={chatBackgroundOpacity} onChange={onChangeChatBackgroundOpacity} />
           </div>
         </section>
