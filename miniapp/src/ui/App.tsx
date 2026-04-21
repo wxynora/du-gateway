@@ -76,6 +76,9 @@ type ChatFontKey = "yahei" | "system" | "pingfang";
 type ChatTimeFormat = "hhmm" | "ampm";
 type BubbleStyleKey = "default" | "soft" | "outline";
 
+const TRANSPARENT_BUBBLE_CLASS =
+  "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
+
 function readStoredBoolean(key: string, fallback = false): boolean {
   try {
     const raw = localStorage.getItem(key);
@@ -1499,8 +1502,7 @@ function MainChatScreen({
     ? matchedGroupIds[Math.min(activeSearchIndex, matchedGroupIds.length - 1)]
     : null;
   const subtitle = sending ? "正在输入中" : "在线";
-  const transparentBubbleClass =
-    "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
+  const transparentBubbleClass = TRANSPARENT_BUBBLE_CLASS;
 
   useEffect(() => {
     if (searchOpen) return;
@@ -1625,7 +1627,7 @@ function MainChatScreen({
                       <div
                         key={`${group.id}-${index}`}
                         className={`block max-w-full rounded-[18px] px-3 py-2 text-left font-medium leading-relaxed shadow-sm ${
-                          transparentBubbleEnabled ? transparentBubbleClass : resolveBubbleClass("user", userBubbleStyle)
+                          transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
                         }`}
                         style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                       >
@@ -1658,7 +1660,7 @@ function MainChatScreen({
                         ) : null}
                         <div
                           className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
-                            transparentBubbleEnabled ? transparentBubbleClass : resolveBubbleClass("assistant", assistantBubbleStyle)
+                            transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)
                           }`}
                           style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                         >
@@ -1912,12 +1914,12 @@ function PersonalizationScreen({
               <div className="space-y-3">
                 <div className="flex items-start gap-3">
                   {showChatAvatars ? <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#EEF2FF] text-[13px] font-medium text-gray-700">渡</div> : null}
-                  <div className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? transparentBubbleClass : resolveBubbleClass("assistant", assistantBubbleStyle)}`} style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
+                  <div className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)}`} style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
                     这里是助手气泡预览
                   </div>
                 </div>
                 <div className="flex justify-end gap-3">
-                  <div className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? transparentBubbleClass : resolveBubbleClass("user", userBubbleStyle)}`} style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
+                  <div className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)}`} style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
                     这里是用户气泡预览
                   </div>
                   {showChatAvatars ? <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#E5E7EB] text-[13px] font-medium text-gray-700">我</div> : null}
