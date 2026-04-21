@@ -74,6 +74,7 @@ type DeviceItem = {
 };
 type ChatFontKey = "yahei" | "system" | "pingfang";
 type ChatTimeFormat = "hhmm" | "ampm";
+type BubbleStyleKey = "default" | "soft" | "outline";
 
 function readStoredBoolean(key: string, fallback = false): boolean {
   try {
@@ -163,6 +164,23 @@ function formatTokenCountValue(value?: number): string {
   return value ? `${value}tokens` : "";
 }
 
+function getBubbleStyleLabel(style: BubbleStyleKey, role: "user" | "assistant"): string {
+  if (style === "soft") return role === "user" ? "柔和填充" : "浅灰填充";
+  if (style === "outline") return "描边";
+  return "默认";
+}
+
+function resolveBubbleClass(role: "user" | "assistant", style: BubbleStyleKey): string {
+  if (role === "user") {
+    if (style === "soft") return "bg-[#475569] text-white";
+    if (style === "outline") return "border border-[#CBD5E1] bg-white text-gray-900";
+    return "bg-[#2D3748] text-white";
+  }
+  if (style === "soft") return "bg-[#F4F5F7] text-gray-800";
+  if (style === "outline") return "border border-[#CBD5E1] bg-white text-gray-800";
+  return "border border-gray-100/50 bg-white text-gray-800";
+}
+
 function Shell({
   onLogout,
   onOpenDevices,
@@ -206,6 +224,12 @@ function Shell({
   const [showTokenCount, setShowTokenCount] = useState(() => readStoredBoolean("miniapp.ui.showTokens", true));
   const [expandReasoningByDefault, setExpandReasoningByDefault] = useState(() => readStoredBoolean("miniapp.ui.expandReasoning", false));
   const [chatBackgroundOpacity, setChatBackgroundOpacity] = useState(() => readStoredNumber("miniapp.ui.chatBackgroundOpacity", 100));
+  const [userBubbleStyle, setUserBubbleStyle] = useState<BubbleStyleKey>(() =>
+    readStoredString("miniapp.ui.userBubbleStyle", "default", ["default", "soft", "outline"] as const),
+  );
+  const [assistantBubbleStyle, setAssistantBubbleStyle] = useState<BubbleStyleKey>(() =>
+    readStoredString("miniapp.ui.assistantBubbleStyle", "default", ["default", "soft", "outline"] as const),
+  );
   const [myAvatarImage, setMyAvatarImage] = useState(() => {
     try {
       return localStorage.getItem("miniapp.ui.myAvatar") || "";
@@ -297,6 +321,8 @@ function Shell({
       localStorage.setItem("miniapp.ui.showTokens", showTokenCount ? "1" : "0");
       localStorage.setItem("miniapp.ui.expandReasoning", expandReasoningByDefault ? "1" : "0");
       localStorage.setItem("miniapp.ui.chatBackgroundOpacity", String(chatBackgroundOpacity));
+      localStorage.setItem("miniapp.ui.userBubbleStyle", userBubbleStyle);
+      localStorage.setItem("miniapp.ui.assistantBubbleStyle", assistantBubbleStyle);
       localStorage.setItem("miniapp.ui.myAvatar", myAvatarImage);
       localStorage.setItem("miniapp.ui.duAvatar", duAvatarImage);
       localStorage.setItem("miniapp.ui.chatBackgroundImage", chatBackgroundImage);
@@ -312,6 +338,8 @@ function Shell({
     showTokenCount,
     expandReasoningByDefault,
     chatBackgroundOpacity,
+    userBubbleStyle,
+    assistantBubbleStyle,
     myAvatarImage,
     duAvatarImage,
     chatBackgroundImage,
@@ -536,6 +564,7 @@ function Shell({
       <ChatsHome
         dailyWhisper={dailyWhisper}
         dailyReport={dailyReport}
+        duAvatarImage={duAvatarImage}
         onOpenDu={() => setActiveScreen("du")}
         onOpenWenyou={() => setActiveScreen("wenyou")}
         onOpenTodayNote={() => setShowTodayNoteDetail(true)}
@@ -579,6 +608,8 @@ function Shell({
           showTokenCount={showTokenCount}
           expandReasoningByDefault={expandReasoningByDefault}
           chatBackgroundOpacity={chatBackgroundOpacity}
+          userBubbleStyle={userBubbleStyle}
+          assistantBubbleStyle={assistantBubbleStyle}
           myAvatarImage={myAvatarImage}
           duAvatarImage={duAvatarImage}
           chatBackgroundImage={chatBackgroundImage}
@@ -674,6 +705,10 @@ function Shell({
             onToggleExpandReasoningByDefault={setExpandReasoningByDefault}
             chatBackgroundOpacity={chatBackgroundOpacity}
             onChangeChatBackgroundOpacity={setChatBackgroundOpacity}
+            userBubbleStyle={userBubbleStyle}
+            onCycleUserBubbleStyle={() => setUserBubbleStyle((prev) => (prev === "default" ? "soft" : prev === "soft" ? "outline" : "default"))}
+            assistantBubbleStyle={assistantBubbleStyle}
+            onCycleAssistantBubbleStyle={() => setAssistantBubbleStyle((prev) => (prev === "default" ? "soft" : prev === "soft" ? "outline" : "default"))}
             myAvatarImage={myAvatarImage}
             duAvatarImage={duAvatarImage}
             chatBackgroundImage={chatBackgroundImage}
@@ -1019,6 +1054,7 @@ function SummaryBlock({
 function ChatsHome({
   dailyWhisper,
   dailyReport,
+  duAvatarImage,
   onOpenDu,
   onOpenWenyou,
   onOpenTodayNote,
@@ -1028,6 +1064,7 @@ function ChatsHome({
 }: {
   dailyWhisper: string;
   dailyReport: DailyReport | null;
+  duAvatarImage: string;
   onOpenDu: () => void;
   onOpenWenyou: () => void;
   onOpenTodayNote: () => void;
@@ -1099,6 +1136,7 @@ function ChatsHome({
           preview={duPreview}
           time={duTime}
           tone="du"
+          avatarImage={duAvatarImage}
           onClick={onOpenDu}
           pinned
         />
@@ -1119,6 +1157,7 @@ function ChatEntryRow({
   preview,
   time,
   tone,
+  avatarImage,
   pinned,
   onClick,
 }: {
@@ -1126,6 +1165,7 @@ function ChatEntryRow({
   preview: string;
   time: string;
   tone: "du" | "wenyou";
+  avatarImage?: string;
   pinned?: boolean;
   onClick: () => void;
 }) {
@@ -1135,9 +1175,15 @@ function ChatEntryRow({
   return (
     <button className="flex w-full items-center px-4 py-3.5 text-left transition-colors active:bg-gray-50" onClick={onClick}>
       <div className="relative shrink-0">
-        <div className={`flex h-[48px] w-[48px] items-center justify-center rounded-2xl text-[18px] font-medium shadow-sm ${palette.shell}`}>
-          {title.slice(0, 1)}
-        </div>
+        {avatarImage ? (
+          <div className="h-[48px] w-[48px] overflow-hidden rounded-2xl shadow-sm">
+            <img src={avatarImage} alt={title} className="h-full w-full object-cover" />
+          </div>
+        ) : (
+          <div className={`flex h-[48px] w-[48px] items-center justify-center rounded-2xl text-[18px] font-medium shadow-sm ${palette.shell}`}>
+            {title.slice(0, 1)}
+          </div>
+        )}
         {pinned ? (
           <div className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-gray-100 bg-white shadow-sm">
             <CornerDownIcon />
@@ -1239,6 +1285,8 @@ function MainChatScreen({
   showTokenCount,
   expandReasoningByDefault,
   chatBackgroundOpacity,
+  userBubbleStyle,
+  assistantBubbleStyle,
   myAvatarImage,
   duAvatarImage,
   chatBackgroundImage,
@@ -1261,6 +1309,8 @@ function MainChatScreen({
   showTokenCount: boolean;
   expandReasoningByDefault: boolean;
   chatBackgroundOpacity: number;
+  userBubbleStyle: BubbleStyleKey;
+  assistantBubbleStyle: BubbleStyleKey;
   myAvatarImage: string;
   duAvatarImage: string;
   chatBackgroundImage: string;
@@ -1449,7 +1499,8 @@ function MainChatScreen({
     ? matchedGroupIds[Math.min(activeSearchIndex, matchedGroupIds.length - 1)]
     : null;
   const subtitle = sending ? "正在输入中" : "在线";
-  const transparentBubbleClass = "border border-white/30 bg-white/20 text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl";
+  const transparentBubbleClass =
+    "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
 
   useEffect(() => {
     if (searchOpen) return;
@@ -1574,7 +1625,7 @@ function MainChatScreen({
                       <div
                         key={`${group.id}-${index}`}
                         className={`block max-w-full rounded-[18px] px-3 py-2 text-left font-medium leading-relaxed shadow-sm ${
-                          transparentBubbleEnabled ? transparentBubbleClass : "bg-[#2D3748] text-white"
+                          transparentBubbleEnabled ? transparentBubbleClass : resolveBubbleClass("user", userBubbleStyle)
                         }`}
                         style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                       >
@@ -1607,7 +1658,7 @@ function MainChatScreen({
                         ) : null}
                         <div
                           className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
-                            transparentBubbleEnabled ? transparentBubbleClass : "border border-gray-100/50 bg-white text-gray-800"
+                            transparentBubbleEnabled ? transparentBubbleClass : resolveBubbleClass("assistant", assistantBubbleStyle)
                           }`}
                           style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                         >
@@ -1770,6 +1821,10 @@ function PersonalizationScreen({
   onToggleExpandReasoningByDefault,
   chatBackgroundOpacity,
   onChangeChatBackgroundOpacity,
+  userBubbleStyle,
+  onCycleUserBubbleStyle,
+  assistantBubbleStyle,
+  onCycleAssistantBubbleStyle,
   myAvatarImage,
   duAvatarImage,
   chatBackgroundImage,
@@ -1797,6 +1852,10 @@ function PersonalizationScreen({
   onToggleExpandReasoningByDefault: (next: boolean) => void;
   chatBackgroundOpacity: number;
   onChangeChatBackgroundOpacity: (next: number) => void;
+  userBubbleStyle: BubbleStyleKey;
+  onCycleUserBubbleStyle: () => void;
+  assistantBubbleStyle: BubbleStyleKey;
+  onCycleAssistantBubbleStyle: () => void;
   myAvatarImage: string;
   duAvatarImage: string;
   chatBackgroundImage: string;
@@ -1853,12 +1912,12 @@ function PersonalizationScreen({
               <div className="space-y-3">
                 <div className="flex items-start gap-3">
                   {showChatAvatars ? <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#EEF2FF] text-[13px] font-medium text-gray-700">渡</div> : null}
-                  <div className="inline-block w-fit rounded-[16px] border border-white/30 bg-white/20 px-3 py-2 font-medium leading-normal text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl" style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
+                  <div className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? transparentBubbleClass : resolveBubbleClass("assistant", assistantBubbleStyle)}`} style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
                     这里是助手气泡预览
                   </div>
                 </div>
                 <div className="flex justify-end gap-3">
-                  <div className="inline-block w-fit rounded-[16px] border border-white/30 bg-white/20 px-3 py-2 font-medium leading-normal text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl" style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
+                  <div className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? transparentBubbleClass : resolveBubbleClass("user", userBubbleStyle)}`} style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
                     这里是用户气泡预览
                   </div>
                   {showChatAvatars ? <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#E5E7EB] text-[13px] font-medium text-gray-700">我</div> : null}
@@ -1866,8 +1925,8 @@ function PersonalizationScreen({
               </div>
             </div>
             <PersonalizationSliderRow title="气泡圆角" value="18px" min={18} max={18} step={1} currentValue={18} disabled />
-            <PersonalizationRow title="用户气泡样式" />
-            <PersonalizationRow title="助手气泡样式" />
+            <PersonalizationRow title="用户气泡样式" value={getBubbleStyleLabel(userBubbleStyle, "user")} onClick={onCycleUserBubbleStyle} />
+            <PersonalizationRow title="助手气泡样式" value={getBubbleStyleLabel(assistantBubbleStyle, "assistant")} onClick={onCycleAssistantBubbleStyle} />
             <PersonalizationSwitchRow title="显示头像" enabled={showChatAvatars} onToggle={onToggleShowChatAvatars} />
             <PersonalizationSwitchRow
               title="启用（透明模式）"
