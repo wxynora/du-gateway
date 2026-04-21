@@ -1620,17 +1620,17 @@ function MainChatScreen({
       { id: assistantId, role: "assistant", content: "", createdAt: new Date().toISOString() },
     ]);
     try {
-      const history = nextMessages.map((msg) => ({ role: msg.role, content: msg.content }));
       const resp = await apiFetch("/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "X-Force-Last4": "1",
           "X-Reply-Channel": "sumitalk",
           "X-Reply-Target": replyTarget,
         },
         body: JSON.stringify({
           model: activeModel,
-          messages: history,
+          messages: [{ role: "user", content }],
           stream: false,
           window_id: windowId,
         }),
