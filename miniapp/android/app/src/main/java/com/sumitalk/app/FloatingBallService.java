@@ -17,6 +17,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.util.DisplayMetrics;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
 import android.util.TypedValue;
@@ -27,6 +29,12 @@ import android.view.ViewOutlineProvider;
 import android.view.WindowManager;
 import android.widget.ImageView;
 import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
+import androidx.core.content.ContextCompat;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -35,6 +43,7 @@ import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class FloatingBallService extends Service {
@@ -49,13 +58,18 @@ public class FloatingBallService extends Service {
     public static final String PREF_OVERLAY_Y = "overlay_y";
     /** User preference: show floating ball (does not revoke overlay permission). */
     public static final String PREF_OVERLAY_VISIBLE = "overlay_visible";
+    public static final String PREF_APP_VISIBLE = "app_visible";
+    public static final String PREF_LAST_HISTORY_MESSAGE_KEY = "last_history_message_key";
 
     private static final String TAG = "SumiTalkOverlay";
     private static final String API_BASE = "https://duxy-home.com";
     private static final String CHANNEL_ID = "sumitalk_overlay";
+    private static final String MESSAGE_CHANNEL_ID = "sumitalk_message";
     private static final int NOTIFICATION_ID = 2001;
+    private static final long HISTORY_POLL_INTERVAL_MS = 20000L;
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private WindowManager windowManager;
     private ImageView overlayView;
     private WindowManager.LayoutParams overlayParams;
@@ -64,6 +78,14 @@ public class FloatingBallService extends Service {
     private SharedPreferences prefs;
     private String panelToken = "";
     private String panelDeviceId = "";
+    private final Runnable historyPollRunnable =
+            new Runnable() {
+                @Override
+                public void run() {
+                    pollLatestAssistantMessage();
+                    mainHandler.postDelayed(this, HISTORY_POLL_INTERVAL_MS);
+                }
+            };
 
     @Override
     public void onCreate() {
@@ -76,6 +98,7 @@ public class FloatingBallService extends Service {
         registerScreenStateReceiver();
         registerConfigChangeReceiver();
         applyOverlayVisibility();
+        scheduleHistoryPolling();
     }
 
     @Override
@@ -88,6 +111,7 @@ public class FloatingBallService extends Service {
         updatePanelState(intent);
         applyOverlayVisibility();
         reportScreenState("app_active");
+        scheduleHistoryPolling();
         return START_STICKY;
     }
 
@@ -110,6 +134,7 @@ public class FloatingBallService extends Service {
             configChangeReceiver = null;
         }
         ioExecutor.shutdownNow();
+        mainHandler.removeCallbacksAndMessages(null);
     }
 
     @Override
@@ -158,10 +183,21 @@ public class FloatingBallService extends Service {
         NotificationChannel channel =
                 new NotificationChannel(CHANNEL_ID, "SumiTalk 常驻服务", NotificationManager.IMPORTANCE_LOW);
         channel.setDescription("用于悬浮球和后台状态感知");
+        NotificationChannel messageChannel =
+                new NotificationChannel(MESSAGE_CHANNEL_ID, "SumiTalk 消息提醒", NotificationManager.IMPORTANCE_HIGH);
+        messageChannel.setDescription("用于助手新消息弹出提醒");
+        messageChannel.enableVibration(true);
+        messageChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) {
             nm.createNotificationChannel(channel);
+            nm.createNotificationChannel(messageChannel);
         }
+    }
+
+    private void scheduleHistoryPolling() {
+        mainHandler.removeCallbacks(historyPollRunnable);
+        mainHandler.post(historyPollRunnable);
     }
 
     /** Respect user toggle: hide overlay but keep foreground service running. */
@@ -382,6 +418,133 @@ public class FloatingBallService extends Service {
                         if (conn != null) conn.disconnect();
                     }
                 });
+    }
+
+    private void pollLatestAssistantMessage() {
+        if (panelToken.isEmpty()) return;
+        ioExecutor.execute(
+                () -> {
+                    HttpURLConnection conn = null;
+                    try {
+                        URL url = new URL(API_BASE + "/miniapp-api/sumitalk-history");
+                        conn = (HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("GET");
+                        conn.setConnectTimeout(10000);
+                        conn.setReadTimeout(10000);
+                        conn.setRequestProperty("Authorization", "Bearer " + panelToken);
+                        int code = conn.getResponseCode();
+                        if (code < 200 || code >= 300) {
+                            Log.w(TAG, "pollLatestAssistantMessage non-2xx code=" + code);
+                            return;
+                        }
+                        String body = readAllText(conn.getInputStream());
+                        JSONObject root = new JSONObject(body);
+                        JSONArray messages = root.optJSONArray("messages");
+                        if (messages == null || messages.length() <= 0) return;
+                        String latestKey = "";
+                        String latestPreview = "";
+                        for (int i = messages.length() - 1; i >= 0; i -= 1) {
+                            JSONObject item = messages.optJSONObject(i);
+                            if (item == null) continue;
+                            if (!"assistant".equals(String.valueOf(item.optString("role", "")).trim())) continue;
+                            String content = messageContentToText(item.opt("content"));
+                            if (content.isEmpty()) continue;
+                            String id = String.valueOf(item.optString("id", "")).trim();
+                            String createdAt = String.valueOf(item.optString("createdAt", "")).trim();
+                            latestKey = !id.isEmpty() ? id : createdAt + "|" + content.hashCode();
+                            latestPreview = content;
+                            break;
+                        }
+                        if (latestKey.isEmpty() || latestPreview.isEmpty()) return;
+                        String previousKey = String.valueOf(prefs.getString(PREF_LAST_HISTORY_MESSAGE_KEY, "")).trim();
+                        if (previousKey.isEmpty()) {
+                            prefs.edit().putString(PREF_LAST_HISTORY_MESSAGE_KEY, latestKey).apply();
+                            return;
+                        }
+                        if (latestKey.equals(previousKey)) return;
+                        prefs.edit().putString(PREF_LAST_HISTORY_MESSAGE_KEY, latestKey).apply();
+                        if (!prefs.getBoolean(PREF_APP_VISIBLE, false)) {
+                            showMessagePopup(latestPreview);
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "pollLatestAssistantMessage failed", e);
+                    } finally {
+                        if (conn != null) conn.disconnect();
+                    }
+                });
+    }
+
+    private void showMessagePopup(String preview) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        Intent openIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (openIntent == null) {
+            openIntent = new Intent(this, MainActivity.class);
+        }
+        openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pi =
+                PendingIntent.getActivity(
+                        this,
+                        (int) (System.currentTimeMillis() & 0x7fffffff),
+                        openIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        String text = preview.length() > 120 ? preview.substring(0, 120) + "…" : preview;
+        Notification notification =
+                new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+                        .setSmallIcon(R.mipmap.ic_launcher_round)
+                        .setContentTitle("渡")
+                        .setContentText(text)
+                        .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                        .setContentIntent(pi)
+                        .setAutoCancel(true)
+                        .setPriority(NotificationCompat.PRIORITY_HIGH)
+                        .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                        .build();
+        NotificationManagerCompat.from(this)
+                .notify((int) (System.currentTimeMillis() & 0x7fffffff), notification);
+    }
+
+    private String readAllText(InputStream is) throws Exception {
+        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        byte[] buf = new byte[2048];
+        int n;
+        while ((n = is.read(buf)) > 0) {
+            os.write(buf, 0, n);
+        }
+        return new String(os.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private String messageContentToText(Object content) {
+        if (content == null) return "";
+        if (content instanceof String) return String.valueOf(content).trim();
+        if (content instanceof JSONObject) {
+            JSONObject obj = (JSONObject) content;
+            String text = String.valueOf(obj.optString("text", "")).trim();
+            if (!text.isEmpty()) return text;
+            String inner = String.valueOf(obj.optString("content", "")).trim();
+            if (!inner.isEmpty()) return inner;
+            Object innerContent = obj.opt("content");
+            if (innerContent != null && innerContent != obj) {
+                return messageContentToText(innerContent);
+            }
+            return "";
+        }
+        if (content instanceof JSONArray) {
+            JSONArray arr = (JSONArray) content;
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < arr.length(); i += 1) {
+                String part = messageContentToText(arr.opt(i));
+                if (part.isEmpty()) continue;
+                if (sb.length() > 0) sb.append('\n');
+                sb.append(part);
+            }
+            return sb.toString().trim();
+        }
+        return String.valueOf(content).trim();
     }
 
     private String nowIso() {

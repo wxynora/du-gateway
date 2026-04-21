@@ -880,6 +880,7 @@ type ChatMessageGroup = {
   id: string;
   role: "user" | "assistant";
   createdAt: string;
+  lastCreatedAt: string;
   parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number } }>;
 };
 
@@ -988,6 +989,28 @@ function historyRenderableScore(messages: ChatDraftMessage[]): number {
   }, 0);
 }
 
+function parseChatMessageTime(value: string): number {
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+  const ts = Date.parse(raw);
+  if (Number.isFinite(ts)) return ts;
+  const m = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?([+-]\d{2}:?\d{2})?$/);
+  if (!m) return 0;
+  const normalized = `${m[1]}T${m[2]}${m[3] || "+08:00"}`;
+  const next = Date.parse(normalized);
+  return Number.isFinite(next) ? next : 0;
+}
+
+function sortHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  list.sort((a, b) => {
+    const diff = parseChatMessageTime(String(a?.createdAt || "")) - parseChatMessageTime(String(b?.createdAt || ""));
+    if (diff !== 0) return diff;
+    return String(a?.id || "").localeCompare(String(b?.id || ""));
+  });
+  return list;
+}
+
 function pickBetterHistory(primary: ChatDraftMessage[], fallback: ChatDraftMessage[], seed: ChatDraftMessage[]): ChatDraftMessage[] {
   const primaryScore = historyRenderableScore(primary);
   const fallbackScore = historyRenderableScore(fallback);
@@ -998,7 +1021,7 @@ function pickBetterHistory(primary: ChatDraftMessage[], fallback: ChatDraftMessa
 
 function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
   const list = Array.isArray(messages) ? messages : [];
-  return list.map((msg) => {
+  return sortHistoryMessages(list.map((msg) => {
       const rawContent = extractMessageContentSource(msg);
       const rawReasoning = extractMessageReasoningSource(msg);
       const content = stripInlineBase64Images(contentToPlainText(rawContent) || fallbackRawContentText(rawContent));
@@ -1023,7 +1046,7 @@ function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage
         reasoning: reasoning || undefined,
         tokenCount,
       };
-    });
+    }));
 }
 
 function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
@@ -1039,14 +1062,16 @@ function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
       tokenCount: msg.tokenCount,
     }];
     const last = groups[groups.length - 1];
-    if (last && last.role === msg.role) {
+    if (last && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
       last.parts.push(...safeParts);
+      last.lastCreatedAt = msg.createdAt;
       continue;
     }
     groups.push({
       id: msg.id,
       role: msg.role,
       createdAt: msg.createdAt,
+      lastCreatedAt: msg.createdAt,
       parts: [...safeParts],
     });
   }
@@ -1795,7 +1820,7 @@ function MainChatScreen({
         <div className="space-y-5">
           {groupedMessages.map((group, index) => (
             <React.Fragment key={group.id}>
-              {showChatTimestamps && shouldShowGroupTime(group.createdAt, groupedMessages[index - 1]?.createdAt) ? (
+              {showChatTimestamps && shouldShowGroupTime(group.createdAt, groupedMessages[index - 1]?.lastCreatedAt) ? (
                 <div className="mb-2 flex justify-center">
                   <span className="rounded-full bg-[#EFEFEF] px-3 py-1 text-[11px] font-medium text-gray-900">
                     {formatClockTime(group.createdAt, chatTimeFormat)}

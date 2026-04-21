@@ -145,6 +145,10 @@ def _inject_followup_instruction(body: dict) -> dict:
     return body
 
 
+def _is_followup_generation_request() -> bool:
+    return (request.headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes")
+
+
 def _normalize_request_model(body: dict) -> dict:
     """
     特例处理：
@@ -1382,6 +1386,8 @@ def chat_completions():
         content_text = get_assistant_content_text(msg)
         if is_failed_response(content_text):
             logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
+        elif _is_followup_generation_request():
+            logger.info("R2 未存档：延迟续话内部生成请求跳过存档")
         else:
             # 构造仅用于 R2 存档的 msg 副本，不修改 resp_json（避免 reasoning 回传给客户端）
             import copy as _copy

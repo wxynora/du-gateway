@@ -75,11 +75,18 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        setAppVisibleFlag(true);
         if (specialPermissionFlowStarted) {
             ensureSpecialPermissions();
         }
         syncPanelStateFromWebView();
         reportUsageStatsSnapshot();
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        setAppVisibleFlag(false);
     }
 
     @Override
@@ -421,6 +428,17 @@ public class MainActivity extends BridgeActivity {
                     .apply();
         } catch (Exception e) {
             Log.w(TAG, "savePanelState failed", e);
+        }
+    }
+
+    private void setAppVisibleFlag(boolean visible) {
+        try {
+            getSharedPreferences(FloatingBallService.PREFS_NAME, MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(FloatingBallService.PREF_APP_VISIBLE, visible)
+                    .apply();
+        } catch (Exception e) {
+            Log.w(TAG, "setAppVisibleFlag failed", e);
         }
     }
 

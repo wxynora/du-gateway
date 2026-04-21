@@ -197,7 +197,12 @@ def _merge_sumitalk_messages(*groups: list[dict]) -> list[dict]:
                 continue
             seen.add(key)
             merged.append(item)
-    merged.sort(key=lambda x: str(x.get("createdAt") or ""))
+    def _sort_key(row: dict) -> tuple[datetime, str]:
+        created_at = str((row or {}).get("createdAt") or "").strip()
+        dt = _parse_beijing_dt(created_at) or datetime.min
+        return dt, str((row or {}).get("id") or "").strip()
+
+    merged.sort(key=_sort_key)
     return merged[-_SUMITALK_HISTORY_MAX_MESSAGES:]
 
 
