@@ -102,6 +102,13 @@ function Shell({
   const [tree, setTree] = useState<CyberTreeData | null>(null);
   const [deferHomeExtras, setDeferHomeExtras] = useState(false);
   const [floatingBallEnabled, setFloatingBallEnabled] = useState(true);
+  const [transparentBubbleEnabled, setTransparentBubbleEnabled] = useState(() => {
+    try {
+      return localStorage.getItem("miniapp.ui.transparentBubble") === "1";
+    } catch {
+      return false;
+    }
+  });
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
       .then((j) => {
@@ -156,6 +163,12 @@ function Shell({
       cancelled = true;
     };
   }, [mainTab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("miniapp.ui.transparentBubble", transparentBubbleEnabled ? "1" : "0");
+    } catch {}
+  }, [transparentBubbleEnabled]);
 
   async function refreshDailyReport() {
     setDailyRefreshing(true);
@@ -384,6 +397,7 @@ function Shell({
           windowId={sharedChatWindowId}
           avatarLabel="渡"
           accent="du"
+          transparentBubbleEnabled={transparentBubbleEnabled}
           onBack={() => setActiveScreen(null)}
           onOpenHtmlPage={(content) => setHtmlPreview({ title: "页面", content })}
           onOpenStickers={() => setPanel("stickers")}
@@ -455,7 +469,10 @@ function Shell({
       ) : null}
       {showPersonalization ? (
         <FullScreenPane title="个性化" accent="neutral" headerMode="simple" onBack={() => setShowPersonalization(false)}>
-          <PersonalizationScreen />
+          <PersonalizationScreen
+            transparentBubbleEnabled={transparentBubbleEnabled}
+            onToggleTransparentBubble={setTransparentBubbleEnabled}
+          />
         </FullScreenPane>
       ) : null}
       {showDuDay ? (
@@ -956,6 +973,7 @@ function MainChatScreen({
   avatarLabel,
   windowId,
   accent,
+  transparentBubbleEnabled,
   onBack,
   onOpenHtmlPage,
   onOpenStickers,
@@ -965,6 +983,7 @@ function MainChatScreen({
   avatarLabel: string;
   windowId: string;
   accent: "du" | "wenyou";
+  transparentBubbleEnabled: boolean;
   onBack: () => void;
   onOpenHtmlPage: (content: string) => void;
   onOpenStickers: () => void;
@@ -972,6 +991,7 @@ function MainChatScreen({
 }) {
   const toast = useToast();
   const modelKey = `miniapp.chat.${windowId}.model.v1`;
+  const lastAutoOpenedHtmlIdRef = useRef<string>("");
   const seedMessages: ChatDraftMessage[] = [
     {
       id: "seed-1",
@@ -1036,6 +1056,15 @@ function MainChatScreen({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    if (!isHtmlBlock(last.content || "")) return;
+    if (lastAutoOpenedHtmlIdRef.current === last.id) return;
+    lastAutoOpenedHtmlIdRef.current = last.id;
+    onOpenHtmlPage(last.content || "");
+  }, [messages, onOpenHtmlPage]);
 
   async function saveDisplayHistory(nextMessages: ChatDraftMessage[]) {
     try {
@@ -1140,6 +1169,7 @@ function MainChatScreen({
     ? matchedGroupIds[Math.min(activeSearchIndex, matchedGroupIds.length - 1)]
     : null;
   const subtitle = sending ? "正在输入中" : "在线";
+  const transparentBubbleClass = "border border-white/30 bg-white/20 text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl";
 
   useEffect(() => {
     if (searchOpen) return;
@@ -1254,7 +1284,9 @@ function MainChatScreen({
                     {group.parts.map((part, index) => (
                       <div
                         key={`${group.id}-${index}`}
-                        className="block max-w-full rounded-[18px] bg-[#2D3748] px-3 py-2 text-left text-[13px] font-medium leading-relaxed text-white shadow-sm"
+                        className={`block max-w-full rounded-[18px] px-3 py-2 text-left text-[13px] font-medium leading-relaxed shadow-sm ${
+                          transparentBubbleEnabled ? transparentBubbleClass : "bg-[#2D3748] text-white"
+                        }`}
                         style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                       >
                         <PlainTextBlock content={part.content || (sending ? "…" : "")} />
@@ -1281,17 +1313,13 @@ function MainChatScreen({
                           </details>
                         ) : null}
                         <div
-                          className="inline-block w-fit max-w-full rounded-[18px] border border-gray-100/50 bg-white px-3 py-2 text-[13px] font-medium leading-relaxed text-gray-800 shadow-sm"
+                          className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 text-[13px] font-medium leading-relaxed shadow-sm ${
+                            transparentBubbleEnabled ? transparentBubbleClass : "border border-gray-100/50 bg-white text-gray-800"
+                          }`}
                           style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                         >
                           {part.render === "html" ? (
-                            <button
-                              className="flex items-center gap-2 text-left text-gray-800"
-                              onClick={() => onOpenHtmlPage(part.content)}
-                            >
-                              <FileTextIcon />
-                              <span>打开页面</span>
-                            </button>
+                            <PlainTextBlock content="已生成页面" />
                           ) : part.render === "plain" ? (
                             <PlainTextBlock content={part.content || (sending ? "…" : "")} />
                           ) : (
@@ -1389,7 +1417,13 @@ function PageCardRow({ icon, label, onClick }: { icon: React.ReactNode; label: s
   );
 }
 
-function PersonalizationScreen() {
+function PersonalizationScreen({
+  transparentBubbleEnabled,
+  onToggleTransparentBubble,
+}: {
+  transparentBubbleEnabled: boolean;
+  onToggleTransparentBubble: (next: boolean) => void;
+}) {
   return (
     <div className="bg-[#FDFDFD] px-1 pb-6 pt-4">
       <div className="space-y-6">
@@ -1429,10 +1463,14 @@ function PersonalizationScreen() {
               <div className="space-y-3">
                 <div className="flex items-start gap-3">
                   <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#EEF2FF] text-[13px] font-medium text-gray-700">渡</div>
-                  <div className="rounded-[18px] bg-white px-4 py-2 text-[14px] font-medium text-gray-800 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">这里是助手气泡预览</div>
+                  <div className="inline-block w-fit rounded-[16px] border border-white/30 bg-white/20 px-3 py-2 text-[14px] font-medium leading-normal text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl">
+                    这里是助手气泡预览
+                  </div>
                 </div>
                 <div className="flex justify-end gap-3">
-                  <div className="rounded-[18px] bg-[#2D3748] px-4 py-2 text-[14px] font-medium text-white shadow-[0_2px_8px_rgba(0,0,0,0.04)]">这里是用户气泡预览</div>
+                  <div className="inline-block w-fit rounded-[16px] border border-white/30 bg-white/20 px-3 py-2 text-[14px] font-medium leading-normal text-gray-800 shadow-[0_10px_24px_rgba(255,255,255,0.10)] backdrop-blur-xl">
+                    这里是用户气泡预览
+                  </div>
                   <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#E5E7EB] text-[13px] font-medium text-gray-700">我</div>
                 </div>
               </div>
@@ -1441,7 +1479,11 @@ function PersonalizationScreen() {
             <PersonalizationRow title="用户气泡样式" />
             <PersonalizationRow title="助手气泡样式" />
             <PersonalizationSwitchRow title="显示头像" enabled />
-            <PersonalizationSwitchRow title="启用（透明模式）" />
+            <PersonalizationSwitchRow
+              title="启用（透明模式）"
+              enabled={transparentBubbleEnabled}
+              onToggle={onToggleTransparentBubble}
+            />
           </div>
         </section>
 
@@ -1504,16 +1546,22 @@ function PersonalizationRow({
 function PersonalizationSwitchRow({
   title,
   enabled = false,
+  onToggle,
 }: {
   title: string;
   enabled?: boolean;
+  onToggle?: (next: boolean) => void;
 }) {
   return (
     <div className="flex items-center justify-between border-b border-[#F9FAFB] py-[14px] last:border-b-0">
       <span className="text-[15px] font-medium text-gray-800">{title}</span>
-      <div className={`relative h-[24px] w-[42px] rounded-full transition-colors ${enabled ? "bg-[#1F2937]" : "bg-[#E2E8F0]"}`}>
+      <button
+        className={`relative h-[24px] w-[42px] rounded-full transition-colors ${enabled ? "bg-[#1F2937]" : "bg-[#E2E8F0]"}`}
+        onClick={() => onToggle?.(!enabled)}
+        type="button"
+      >
         <div className={`absolute bottom-[3px] h-[18px] w-[18px] rounded-full bg-white transition-transform ${enabled ? "left-[21px]" : "left-[3px]"}`} />
-      </div>
+      </button>
     </div>
   );
 }
