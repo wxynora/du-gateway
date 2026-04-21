@@ -3,6 +3,7 @@ import { SumiOverlay } from "../plugins/sumi-overlay";
 
 const PANEL_TOKEN_STORAGE_KEY = "miniapp.panel.token.v1";
 const PANEL_DEVICE_ID_STORAGE_KEY = "miniapp.panel.device-id.v1";
+const PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY = "miniapp.panel.device-id.previous.v1";
 const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
 let pendingDeviceIdMigration: { from: string; to: string } | null = null;
 
@@ -53,6 +54,11 @@ function randomId(): string {
 export async function getOrCreatePanelDeviceId(): Promise<string> {
   try {
     const existing = (window.localStorage.getItem(PANEL_DEVICE_ID_STORAGE_KEY) || "").trim();
+    const previous = (window.localStorage.getItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY) || "").trim();
+    if (existing && previous && previous !== existing) {
+      pendingDeviceIdMigration = { from: previous, to: existing };
+      window.localStorage.removeItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY);
+    }
     const native = String((await SumiOverlay.getStableDeviceId().catch(() => ({ deviceId: "" })))?.deviceId || "").trim();
     if (native) {
       if (existing && existing !== native) {

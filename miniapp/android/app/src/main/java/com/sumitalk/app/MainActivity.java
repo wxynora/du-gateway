@@ -44,6 +44,9 @@ public class MainActivity extends BridgeActivity {
     private static final String API_BASE = "https://duxy-home.com";
     private static final String PREF_BOOT = "miniapp_bootstrap";
     private static final String PREF_MINIAPP_VERSION = "miniapp_version";
+    private static final String PREF_NATIVE_DEVICE = "native_device_id";
+    private static final String PANEL_DEVICE_ID_STORAGE_KEY = "miniapp.panel.device-id.v1";
+    private static final String PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY = "miniapp.panel.device-id.previous.v1";
     private static final long MINIAPP_LOAD_WATCHDOG_MS = 8000L;
     private boolean specialPermissionFlowStarted = false;
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
@@ -170,6 +173,8 @@ public class MainActivity extends BridgeActivity {
         if (getBridge() == null || getBridge().getWebView() == null) {
             return;
         }
+        final String stableDeviceId = resolveStableDeviceId();
+        final String stableDeviceIdJs = JSONObject.quote(stableDeviceId);
         getBridge()
                 .getWebView()
                 .post(
@@ -177,7 +182,15 @@ public class MainActivity extends BridgeActivity {
                                 getBridge()
                                         .getWebView()
                                         .evaluateJavascript(
-                                                "(function(){try{return JSON.stringify({panelToken:localStorage.getItem('miniapp.panel.token.v1')||'',deviceId:localStorage.getItem('miniapp.panel.device-id.v1')||''});}catch(e){return JSON.stringify({panelToken:'',deviceId:''});}})();",
+                                                "(function(){try{var tokenKey='miniapp.panel.token.v1';var deviceKey='"
+                                                        + PANEL_DEVICE_ID_STORAGE_KEY
+                                                        + "';var prevKey='"
+                                                        + PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY
+                                                        + "';var next="
+                                                        + stableDeviceIdJs
+                                                        + ";var old=(localStorage.getItem(deviceKey)||'').trim();if(next){if(old&&old!==next){var prev=(localStorage.getItem(prevKey)||'').trim();if(!prev||prev===old){localStorage.setItem(prevKey, old);}}localStorage.setItem(deviceKey, next);}return JSON.stringify({panelToken:localStorage.getItem(tokenKey)||'',deviceId:localStorage.getItem(deviceKey)||''});}catch(e){return JSON.stringify({panelToken:'',deviceId:'"
+                                                        + stableDeviceId
+                                                        + "'});}})();",
                                                 value -> {
                                                     try {
                                                         String raw = String.valueOf(value == null ? "" : value).trim();
@@ -187,6 +200,9 @@ public class MainActivity extends BridgeActivity {
                                                         JSONObject obj = new JSONObject(raw);
                                                         panelToken = String.valueOf(obj.optString("panelToken", "")).trim();
                                                         panelDeviceId = String.valueOf(obj.optString("deviceId", "")).trim();
+                                                        if (panelDeviceId.isEmpty()) {
+                                                            panelDeviceId = stableDeviceId;
+                                                        }
                                                         savePanelState();
                                                         startOrUpdateForegroundOverlayService();
                                                         if (!panelStateSynced && !panelToken.isEmpty()) {
@@ -299,6 +315,14 @@ public class MainActivity extends BridgeActivity {
             url = url + "?v=" + v + "&ts=" + System.currentTimeMillis();
         }
         getBridge().getWebView().loadUrl(url);
+        schedulePanelStateSyncRetries();
+    }
+
+    private void schedulePanelStateSyncRetries() {
+        long[] delays = new long[] {400L, 1200L, 2800L};
+        for (long delay : delays) {
+            mainHandler.postDelayed(this::syncPanelStateFromWebView, delay);
+        }
     }
 
     private void scheduleMiniappLoadWatchdog() {
@@ -366,6 +390,26 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception e) {
             return packageName;
         }
+    }
+
+    private String resolveStableDeviceId() {
+        try {
+            String androidId =
+                    String.valueOf(Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID)).trim();
+            if (!androidId.isEmpty() && !"9774d56d682e549c".equals(androidId)) {
+                return "android_" + androidId.toLowerCase();
+            }
+        } catch (Exception ignored) {
+        }
+
+        SharedPreferences sp = getSharedPreferences(FloatingBallService.PREFS_NAME, MODE_PRIVATE);
+        String existing = String.valueOf(sp.getString(PREF_NATIVE_DEVICE, "")).trim();
+        if (!existing.isEmpty()) {
+            return existing;
+        }
+        String next = "native_" + java.util.UUID.randomUUID().toString().replace("-", "");
+        sp.edit().putString(PREF_NATIVE_DEVICE, next).apply();
+        return next;
     }
 
     private void savePanelState() {

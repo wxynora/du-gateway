@@ -780,8 +780,15 @@ function contentToPlainText(content: any): string {
   if (Array.isArray(content)) {
     return content
       .map((part) => {
+        if (typeof part === "string") return part.trim();
         if (!part || typeof part !== "object") return "";
-        if (part.type === "text") return String(part.text || "").trim();
+        if (part.type === "text" || part.type === "output_text" || part.type === "input_text") {
+          if (typeof part.text === "string") return String(part.text || "").trim();
+          if (part.text && typeof part.text === "object" && typeof part.text.value === "string") {
+            return String(part.text.value || "").trim();
+          }
+        }
+        if (typeof part.content === "string") return String(part.content || "").trim();
         if (part.type === "image_url") return "[图片]";
         return "";
       })
@@ -789,7 +796,27 @@ function contentToPlainText(content: any): string {
       .join("\n")
       .trim();
   }
+  if (content && typeof content === "object") {
+    if (typeof content.text === "string") return String(content.text || "").trim();
+    if (content.text && typeof content.text === "object" && typeof content.text.value === "string") {
+      return String(content.text.value || "").trim();
+    }
+    if (typeof content.content === "string") return String(content.content || "").trim();
+    if (Array.isArray(content.content)) return contentToPlainText(content.content);
+  }
   return "";
+}
+
+function fallbackRawContentText(content: any): string {
+  if (content == null) return "";
+  if (typeof content === "string") return content.trim();
+  if (typeof content === "number" || typeof content === "boolean") return String(content).trim();
+  try {
+    const raw = JSON.stringify(content);
+    return typeof raw === "string" ? raw.trim() : "";
+  } catch {
+    return "";
+  }
 }
 
 type ChatMessageGroup = {
@@ -895,19 +922,42 @@ function stripInlineBase64Images(content: string): string {
 
 function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
   const list = Array.isArray(messages) ? messages : [];
-  return list.map((msg) => ({
-    ...msg,
-    content: stripInlineBase64Images(String(msg?.content || "")),
-  }));
+  return list.map((msg) => {
+      const content = stripInlineBase64Images(contentToPlainText(msg?.content) || fallbackRawContentText(msg?.content));
+      const reasoning = contentToPlainText(msg?.reasoning) || fallbackRawContentText(msg?.reasoning);
+      let tokenCount: { input?: number; output?: number } | undefined;
+      if (msg?.tokenCount && typeof msg.tokenCount === "object") {
+        const input = Number(msg.tokenCount.input || 0);
+        const output = Number(msg.tokenCount.output || 0);
+        tokenCount = {
+          input: Number.isFinite(input) && input > 0 ? input : undefined,
+          output: Number.isFinite(output) && output > 0 ? output : undefined,
+        };
+      } else {
+        const legacyCount = Number((msg as any)?.tokenCount || 0);
+        if (Number.isFinite(legacyCount) && legacyCount > 0) {
+          tokenCount = { output: legacyCount };
+        }
+      }
+      return {
+        ...msg,
+        content,
+        reasoning: reasoning || undefined,
+        tokenCount,
+      };
+    });
 }
 
 function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
   const groups: ChatMessageGroup[] = [];
   for (const msg of messages) {
+    const normalizedContent = String(msg?.content || "").trim();
+    const normalizedReasoning = String(msg?.reasoning || "").trim();
+    if (!normalizedContent && !normalizedReasoning) continue;
     const safeParts = [{
-      content: msg.content || "",
-      render: detectMessageRender(msg.role, msg.content || ""),
-      reasoning: msg.reasoning,
+      content: normalizedContent,
+      render: detectMessageRender(msg.role, normalizedContent),
+      reasoning: normalizedReasoning || undefined,
       tokenCount: msg.tokenCount,
     }];
     const last = groups[groups.length - 1];
@@ -926,18 +976,7 @@ function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
 }
 
 function extractAssistantReplyText(message: any): string {
-  const content = message?.content;
-  if (typeof content === "string") return content.trim();
-  if (Array.isArray(content)) {
-    const parts = content.map((item) => {
-      if (item && typeof item === "object" && item.type === "text") {
-        return String(item.text || "");
-      }
-      return typeof item === "string" ? item : "";
-    }).filter(Boolean);
-    return parts.join(" ").trim();
-  }
-  return "";
+  return contentToPlainText(message?.content);
 }
 
 function extractAssistantReasoning(message: any): string {
@@ -1384,25 +1423,35 @@ function MainChatScreen({
 
   useEffect(() => {
     let cancelled = false;
+    const retryTimers: number[] = [];
     (async () => {
-      try {
-        const did = await getOrCreatePanelDeviceId();
-        const migration = consumePendingPanelDeviceIdMigration();
-        if (migration?.from && migration.to === did) {
-          await migrateLocalChatHistoryDevice(migration.from, migration.to);
-          try {
-            await apiJson("/miniapp-api/sumitalk-history/migrate", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ new_device_id: migration.to }),
-            });
-          } catch {}
-        }
-        if (!cancelled) setDeviceId(did);
-      } catch {}
+      const syncDeviceId = async () => {
+        try {
+          const did = await getOrCreatePanelDeviceId();
+          const migration = consumePendingPanelDeviceIdMigration();
+          if (migration?.from && migration.to === did) {
+            await migrateLocalChatHistoryDevice(migration.from, migration.to);
+            try {
+              await apiJson("/miniapp-api/sumitalk-history/migrate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ new_device_id: migration.to }),
+              });
+            } catch {}
+          }
+          if (!cancelled) {
+            setDeviceId((prev) => (prev === did ? prev : did));
+          }
+        } catch {}
+      };
+      void syncDeviceId();
+      [800, 2200, 4500].forEach((delay) => {
+        retryTimers.push(window.setTimeout(() => void syncDeviceId(), delay));
+      });
     })();
     return () => {
       cancelled = true;
+      retryTimers.forEach((id) => window.clearTimeout(id));
     };
   }, []);
 
