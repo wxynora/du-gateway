@@ -1610,6 +1610,7 @@ function MainChatScreen({
     };
     const assistantId = `assistant-${Date.now()}`;
     const nextMessages = [...messages, userMsg];
+    const replyTarget = await getOrCreatePanelDeviceId();
     setInput("");
     setPlusOpen(false);
     setSending(true);
@@ -1622,7 +1623,11 @@ function MainChatScreen({
       const history = nextMessages.map((msg) => ({ role: msg.role, content: msg.content }));
       const resp = await apiFetch("/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Reply-Channel": "sumitalk",
+          "X-Reply-Target": replyTarget,
+        },
         body: JSON.stringify({
           model: activeModel,
           messages: history,

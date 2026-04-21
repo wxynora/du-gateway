@@ -37,6 +37,7 @@ from services.telegram_bot import (
     build_telegram_style_system,
     process_message,
 )
+from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversation_followups
 
 logger = get_logger(__name__)
 _SUMITALK_HISTORY_FILE = DATA_DIR / "sumitalk_display_histories.json"
@@ -149,6 +150,38 @@ def _get_last_message_activity_iso(uid: int) -> Optional[str]:
     last_user_iso = r2_store.get_last_telegram_user_activity_at()
     last_proactive_iso = r2_store.get_last_proactive_contact_at()
     return _pick_latest_iso([last_round_iso, last_user_iso, last_proactive_iso])
+
+
+def _describe_recent_exchange(now_dt: datetime) -> str:
+    """
+    给主动决策提示词用：
+    - 区分“她回过你”还是“只是你主动发过”
+    - 避免把单边主动消息说成双向对话
+    """
+    last_user_iso = r2_store.get_last_telegram_user_activity_at()
+    last_proactive_iso = r2_store.get_last_proactive_contact_at()
+    last_user_dt = parse_iso_to_beijing(last_user_iso)
+    last_proactive_dt = parse_iso_to_beijing(last_proactive_iso)
+
+    if last_proactive_dt and (not last_user_dt or last_proactive_dt > last_user_dt):
+        hours_since_proactive = _hours_since_last(last_proactive_iso, now_dt)
+        if last_user_dt:
+            hours_since_user = _hours_since_last(last_user_iso, now_dt)
+            return (
+                f"你上次主动找她大约是 {hours_since_proactive:.1f} 小时前。"
+                f"她上次明确回你大约是 {hours_since_user:.1f} 小时前；自从你那次主动后，她还没有回复。"
+            )
+        return f"你上次主动找她大约是 {hours_since_proactive:.1f} 小时前；自从那次后，她还没有回复。"
+
+    if last_user_dt:
+        hours_since_user = _hours_since_last(last_user_iso, now_dt)
+        return f"她上次明确回你大约是 {hours_since_user:.1f} 小时前。"
+
+    if last_proactive_dt:
+        hours_since_proactive = _hours_since_last(last_proactive_iso, now_dt)
+        return f"你上次主动找她大约是 {hours_since_proactive:.1f} 小时前；自从那次后，她还没有回复。"
+
+    return "最近没有可参考的明确往来记录。"
 
 
 def _probability(hours_since_last: float) -> float:
@@ -393,7 +426,7 @@ def _available_channels() -> list[str]:
     return channels
 
 
-def _ask_du_should_contact(window_id: str, hours_since_last: float) -> ProactiveDecision:
+def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Optional[datetime] = None) -> ProactiveDecision:
     """
     让渡做一轮主动决策。要求渡用 JSON 回复（见 user 说明）；
     兼容旧版 NO_CONTACT 或纯文本即正文。
@@ -416,8 +449,12 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float) -> Proactive
         if len(channels) > 1
         else f'- channel：固定填 "{channels[0]}"。\n'
     )
+    now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso())
+    if not now_ref:
+        now_ref = datetime.now()
     user_prompt = (
-        f"你现在在考虑要不要主动找老婆做一件事。距上次你们有消息互动大约 {hours_since_last:.1f} 小时。\n"
+        f"你现在在考虑要不要主动找老婆做一件事。{_describe_recent_exchange(now_ref)}\n"
+        f"从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
         "可以选：给她发消息、暂时不打扰、去写日记/记事、或其它你认为合适的动作。\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
         '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "other" 之一。\n'
@@ -760,7 +797,7 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         return out
 
     window_id = f"tg_{uid}"
-    decision = _ask_du_should_contact(window_id=window_id, hours_since_last=hours)
+    decision = _ask_du_should_contact(window_id=window_id, hours_since_last=hours, now_dt=now_dt)
     out["du_reason"] = decision.reason
     out["du_action"] = decision.action
     out["du_intent_reason"] = decision.du_reason
@@ -820,12 +857,21 @@ def run_scheduler_loop():
     interval_min = max(1, int(TELEGRAM_PROACTIVE_INTERVAL_MINUTES or 30))
     uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
     logger.info("主动发消息调度启动 interval_min=%s target_user_id=%s quiet=%s-%s", interval_min, uid, TELEGRAM_PROACTIVE_QUIET_START_HM, TELEGRAM_PROACTIVE_QUIET_END_HM)
+    next_main_at = 0.0
+    next_followup_at = 0.0
     while True:
+        now_ts = time.time()
         try:
-            sched = schedule_tick(uid)
-            logger.info("日历闹钟 tick result=%s", sched)
-            result = proactive_tick(uid)
-            logger.info("主动发消息 tick result=%s", result)
+            if now_ts >= next_followup_at:
+                followup = tick_conversation_followups()
+                logger.info("延迟续话 tick result=%s", followup)
+                next_followup_at = now_ts + max(15, int(FOLLOWUP_TICK_SECONDS or 60))
+            if now_ts >= next_main_at:
+                sched = schedule_tick(uid)
+                logger.info("日历闹钟 tick result=%s", sched)
+                result = proactive_tick(uid)
+                logger.info("主动发消息 tick result=%s", result)
+                next_main_at = now_ts + interval_min * 60
         except Exception as e:
             logger.exception("主动发消息 tick 异常: %s", e)
-        time.sleep(interval_min * 60)
+        time.sleep(15)

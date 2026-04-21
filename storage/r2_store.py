@@ -64,6 +64,7 @@ R2_KEY_LAST_PROACTIVE_CONTACT_AT = "global/last_proactive_contact_at.txt"
 R2_KEY_LAST_TELEGRAM_USER_ACTIVITY_AT = "global/last_telegram_user_activity_at.txt"
 # 主动联络「抽中后问渡」的决策记忆，新在前，最多 5 条（闹钟不参与）
 R2_KEY_PROACTIVE_DECISION_MEMORY = "global/proactive_decision_memory.json"
+R2_KEY_CONVERSATION_FOLLOWUPS = "global/conversation_followups.json"
 # Telegram：TodoList（每个 tg 窗口一份 JSON）
 R2_KEY_TG_TODOS = "tg/todos.json"
 # 日历/提醒（V2 第一批：只读 + 禁用）
@@ -944,6 +945,61 @@ def append_proactive_decision_memory(entry: dict) -> bool:
             return True
         except Exception as e:
             logger.error("append_proactive_decision_memory 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_conversation_followups() -> list[dict]:
+    """读取会话级延迟续话任务。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_CONVERSATION_FOLLOWUPS)
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    return [dict(x) for x in items if isinstance(x, dict)]
+
+
+def save_conversation_followups(items: list[dict]) -> bool:
+    """保存会话级延迟续话任务（覆盖）。"""
+    client = _s3_client()
+    if not client:
+        return False
+    payload = {"items": [dict(x) for x in (items or []) if isinstance(x, dict)]}
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_CONVERSATION_FOLLOWUPS, payload)
+            return True
+        except Exception as e:
+            logger.error("save_conversation_followups 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def append_conversation_followup(item: dict) -> bool:
+    """追加一条会话级延迟续话任务。"""
+    if not isinstance(item, dict):
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    with _global_write_lock:
+        try:
+            data = _read_json(client, R2_KEY_CONVERSATION_FOLLOWUPS)
+            if not isinstance(data, dict):
+                data = {}
+            items = data.get("items")
+            if not isinstance(items, list):
+                items = []
+            items.insert(0, dict(item))
+            if len(items) > 200:
+                items = items[:200]
+            data["items"] = items
+            _write_json(client, R2_KEY_CONVERSATION_FOLLOWUPS, data)
+            return True
+        except Exception as e:
+            logger.error("append_conversation_followup 失败 error=%s", e, exc_info=True)
             return False
 
 

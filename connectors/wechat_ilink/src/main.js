@@ -411,6 +411,7 @@ async function callGatewayChat(windowId, userContent) {
   const headers = {
     "Content-Type": "application/json",
     "X-Window-Id": String(windowId || "").trim(),
+    "X-Reply-Channel": "wechat",
   };
   if (envBool("GATEWAY_TG_USER_INPUT", true)) {
     headers["X-TG-User-Input"] = "1";

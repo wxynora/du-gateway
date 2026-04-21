@@ -218,6 +218,7 @@ async function callGatewayChat(windowId, userContent) {
   const headers = {
     "Content-Type": "application/json",
     "X-Window-Id": String(windowId || "").trim(),
+    "X-Reply-Channel": "qq",
   };
   if (envBool("GATEWAY_TG_USER_INPUT", true)) headers["X-TG-User-Input"] = "1";
   const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });

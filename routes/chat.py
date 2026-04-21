@@ -71,6 +71,10 @@ from services.html_preview_tools import (
     merge_html_preview_urls_into_assistant_text,
     missing_html_preview_url_suffix,
 )
+from services.conversation_followup import (
+    build_followup_system_instruction,
+    queue_followup,
+)
 from services.pc_command_handler import (
     PcmdDuThoughtStreamState,
     process_pcmd_in_assistant_text,
@@ -115,6 +119,27 @@ def _inject_miniapp_style_system(body: dict) -> dict:
         messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + style_system).strip()}
     else:
         messages.insert(0, {"role": "system", "content": style_system})
+    body = dict(body)
+    body["messages"] = messages
+    return body
+
+
+def _inject_followup_instruction(body: dict) -> dict:
+    if (request.headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes"):
+        return body
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    instruction = build_followup_system_instruction().strip()
+    if not instruction:
+        return body
+    messages = list(body.get("messages") or [])
+    if messages and isinstance(messages[0], dict) and str(messages[0].get("role") or "").strip() == "system":
+        current = str(messages[0].get("content") or "")
+        if instruction in current:
+            return body
+        messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + instruction).strip()}
+    else:
+        messages.insert(0, {"role": "system", "content": instruction})
     body = dict(body)
     body["messages"] = messages
     return body
@@ -1235,6 +1260,7 @@ def chat_completions():
     body = step_clean_for_forward(body)
     body = step_replace_rikka_system(body)
     body = _inject_miniapp_style_system(body)
+    body = _inject_followup_instruction(body)
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
@@ -1319,6 +1345,36 @@ def chat_completions():
         # 剥离 content 里的 <think>/<thinking> 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
         # thinking 已合并入 message.reasoning，R2 存档的 msg_for_r2 独立 deepcopy，不受此影响。
         resp_json = _strip_thinking_from_response_json(resp_json)
+        try:
+            msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+            content = msg.get("content")
+            if isinstance(content, str):
+                cleaned_content, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=content)
+                if queued or cleaned_content != content:
+                    msg["content"] = cleaned_content
+                    (resp_json.get("choices") or [{}])[0]["message"] = msg
+            elif isinstance(content, list):
+                merged_text = []
+                changed = False
+                for part in content:
+                    if not isinstance(part, dict):
+                        merged_text.append(part)
+                        continue
+                    if str(part.get("type") or "").strip() != "text":
+                        merged_text.append(part)
+                        continue
+                    text = str(part.get("text") or "")
+                    cleaned_text, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=text)
+                    if queued or cleaned_text != text:
+                        changed = True
+                        merged_text.append({**part, "text": cleaned_text})
+                    else:
+                        merged_text.append(part)
+                if changed:
+                    msg["content"] = merged_text
+                    (resp_json.get("choices") or [{}])[0]["message"] = msg
+        except Exception:
+            logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
     if status == 200 and resp_json:
         cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):

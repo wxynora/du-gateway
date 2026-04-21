@@ -805,6 +805,8 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         "Content-Type": "application/json",
         "X-Window-Id": window_id,
         "X-TG-User-Input": "1",
+        "X-Reply-Channel": "tg",
+        "X-Reply-Target": str(user_id),
     }
     if force_last4:
         headers["X-Force-Last4"] = "1"
