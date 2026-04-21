@@ -1542,19 +1542,6 @@ def miniapp_create_schedule_item():
     target_role = (data.get("target_role") or "wife").strip().lower()
     if target_role not in ("wife", "du"):
         target_role = "wife"
-    channel = (data.get("channel") or "sumitalk").strip().lower()
-    channel_alias = {
-        "wx": "wechat",
-        "weixin": "wechat",
-        "sumi": "sumitalk",
-        "sumi-talk": "sumitalk",
-        "sumi_talk": "sumitalk",
-        "tg": "sumitalk",
-        "telegram": "sumitalk",
-    }
-    channel = channel_alias.get(channel, channel)
-    if channel not in ("sumitalk", "wechat", "qq"):
-        channel = "sumitalk"
 
     if not title:
         return jsonify({"ok": False, "error": "title 不能为空"}), 400
@@ -1601,7 +1588,6 @@ def miniapp_create_schedule_item():
                 daily_time=daily_time,
                 created_by=created_by,
                 target_role=target_role,
-                channel=channel,
             )
             if item:
                 created_items.append(item)
@@ -1638,7 +1624,6 @@ def miniapp_create_schedule_item():
         daily_time=daily_time,
         created_by=created_by,
         target_role=target_role,
-        channel=channel,
     )
     if not item:
         return jsonify({"ok": False, "error": "创建失败"}), 500

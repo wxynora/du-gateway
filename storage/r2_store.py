@@ -1017,22 +1017,6 @@ def save_tg_todos(window_id: str, items: list[dict]) -> bool:
 
 def get_schedule_items() -> list[dict]:
     """读取日历/提醒条目列表。"""
-    def _normalize_schedule_channel(value: Any) -> str:
-        s = str(value or "").strip().lower()
-        alias = {
-            "wx": "wechat",
-            "weixin": "wechat",
-            "sumi": "sumitalk",
-            "sumi-talk": "sumitalk",
-            "sumi_talk": "sumitalk",
-            "tg": "sumitalk",
-            "telegram": "sumitalk",
-        }
-        s = alias.get(s, s)
-        if s not in {"sumitalk", "wechat", "qq"}:
-            return "sumitalk"
-        return s
-
     client = _s3_client()
     if not client:
         return []
@@ -1046,9 +1030,7 @@ def get_schedule_items() -> list[dict]:
     for x in items:
         if not isinstance(x, dict):
             continue
-        row = dict(x)
-        row["channel"] = _normalize_schedule_channel(row.get("channel"))
-        out.append(row)
+        out.append(dict(x))
     out.sort(key=lambda x: (str(x.get("datetime") or ""), str(x.get("id") or "")))
     return out
 
@@ -1125,7 +1107,6 @@ def create_schedule_item(
     daily_time: str = "",
     created_by: str = "wife",
     target_role: str = "wife",
-    channel: str = "sumitalk",
 ) -> Optional[dict]:
     """创建一条提醒并写入 schedule/items.json。"""
     def _parse_hhmm(raw: str) -> tuple[int, int] | None:
@@ -1164,19 +1145,6 @@ def create_schedule_item(
     target = (target_role or "wife").strip().lower() or "wife"
     if target not in ("wife", "du"):
         target = "wife"
-    chan = str(channel or "").strip().lower()
-    chan_alias = {
-        "wx": "wechat",
-        "weixin": "wechat",
-        "sumi": "sumitalk",
-        "sumi-talk": "sumitalk",
-        "sumi_talk": "sumitalk",
-        "tg": "sumitalk",
-        "telegram": "sumitalk",
-    }
-    chan = chan_alias.get(chan, chan)
-    if chan not in ("sumitalk", "wechat", "qq"):
-        chan = "sumitalk"
     if not t:
         return None
     if rep not in ("once", "daily", "weekly"):
@@ -1223,7 +1191,6 @@ def create_schedule_item(
         "note": n,
         "created_by": creator,
         "target_role": target,
-        "channel": chan,
         "created_at": now_beijing_iso(),
     }
     if rep == "weekly" and wday is not None:

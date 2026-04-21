@@ -6,7 +6,6 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import requests
@@ -35,11 +34,8 @@ from storage.miniapp_panel_store import list_trusted_devices
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 from services.telegram_bot import (
-    _call_gateway_chat,
-    _extract_sticker_tag,
-    _extract_voice_tag,
-    _sanitize_reply_for_telegram,
     build_telegram_style_system,
+    process_message,
 )
 
 logger = get_logger(__name__)
@@ -639,17 +635,8 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             occ_key,
             len(note),
         )
-        channel = _normalize_reply_channel(str(it.get("channel") or "sumitalk"), default="sumitalk")
-        reply = _call_gateway_chat(window_id=f"tg_{uid}", user_id=uid, user_content=reminder_prompt, force_last4=True)
-        if reply is None:
-            logger.warning("闹钟触发网关无回复 uid=%s item_id=%s channel=%s", uid, str(it.get("id") or ""), channel)
-            reply = "暂时没连上渡，稍后再试哦～"
-        reply_clean, _voice_text = _extract_voice_tag(reply)
-        reply_clean = _sanitize_reply_for_telegram(reply_clean)
-        reply_clean, _sticker_tag = _extract_sticker_tag(reply_clean)
-        reply_clean = (reply_clean or "").strip()
-        ok = _dispatch_send(channel, reply_clean) if reply_clean else False
-        logger.info("闹钟触发结果 uid=%s item_id=%s channel=%s ok=%s", uid, str(it.get("id") or ""), channel, ok)
+        ok = process_message(chat_id=uid, user_id=uid, text=reminder_prompt, force_last4=True)
+        logger.info("闹钟触发结果 uid=%s item_id=%s ok=%s", uid, str(it.get("id") or ""), ok)
         if not ok:
             continue
         r2_store.add_schedule_fired_key(occ_key)
