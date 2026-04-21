@@ -78,3 +78,26 @@ export async function writeLocalChatHistory(deviceId: string, windowId: string, 
     // Ignore storage errors to avoid blocking chat flow.
   }
 }
+
+export async function migrateLocalChatHistoryDevice(oldDeviceId: string, newDeviceId: string): Promise<void> {
+  const oldId = String(oldDeviceId || "").trim();
+  const newId = String(newDeviceId || "").trim();
+  if (!oldId || !newId || oldId === newId) return;
+  try {
+    const rows = await db.histories.where("deviceId").equals(oldId).toArray();
+    if (!rows.length) return;
+    await db.transaction("rw", db.histories, async () => {
+      for (const row of rows) {
+        await db.histories.put({
+          ...row,
+          key: historyKey(newId, row.windowId),
+          deviceId: newId,
+          updatedAt: new Date().toISOString(),
+        });
+        await db.histories.delete(row.key);
+      }
+    });
+  } catch {
+    // Ignore migration errors to avoid blocking chat flow.
+  }
+}

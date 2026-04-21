@@ -6,10 +6,10 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
-import { apiFetch, apiJson, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
+import { apiFetch, apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
 import { SumiOverlay } from "../plugins/sumi-overlay";
-import { readLatestLocalChatHistory, readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
+import { migrateLocalChatHistoryDevice, readLatestLocalChatHistory, readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
 const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
@@ -1330,6 +1330,8 @@ function MainChatScreen({
   const toast = useToast();
   const modelKey = `miniapp.chat.${windowId}.model.v1`;
   const [deviceId, setDeviceId] = useState("");
+  const remoteHistoryReadyRef = useRef(false);
+  const remoteHistoryWarningShownRef = useRef(false);
   const seedMessages: ChatDraftMessage[] = [
     {
       id: "seed-1",
@@ -1385,6 +1387,17 @@ function MainChatScreen({
     (async () => {
       try {
         const did = await getOrCreatePanelDeviceId();
+        const migration = consumePendingPanelDeviceIdMigration();
+        if (migration?.from && migration.to === did) {
+          await migrateLocalChatHistoryDevice(migration.from, migration.to);
+          try {
+            await apiJson("/miniapp-api/sumitalk-history/migrate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ new_device_id: migration.to }),
+            });
+          } catch {}
+        }
         if (!cancelled) setDeviceId(did);
       } catch {}
     })();
@@ -1398,6 +1411,8 @@ function MainChatScreen({
     (async () => {
       try {
         if (!deviceId || !windowId) return;
+        remoteHistoryReadyRef.current = false;
+        remoteHistoryWarningShownRef.current = false;
         const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(deviceId, windowId));
         const fallbackLocalMessages = localMessages.length
           ? localMessages
@@ -1407,13 +1422,20 @@ function MainChatScreen({
         }
         const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
         if (cancelled) return;
+        if (j?.ok) {
+          remoteHistoryReadyRef.current = true;
+        }
         const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
         const next = remoteMessages.length ? remoteMessages : (fallbackLocalMessages.length ? fallbackLocalMessages : seedMessages);
         setMessages(next);
         if (remoteMessages.length) {
           await writeLocalChatHistory(deviceId, windowId, remoteMessages);
         }
-      } catch {}
+      } catch (e: any) {
+        if (!cancelled) {
+          toast(`聊天记录拉取失败：${e?.message || e}`);
+        }
+      }
     })();
     return () => {
       cancelled = true;
@@ -1424,6 +1446,13 @@ function MainChatScreen({
     const sanitizedMessages = sanitizeHistoryMessages(nextMessages);
     if (deviceId && windowId) {
       await writeLocalChatHistory(deviceId, windowId, sanitizedMessages);
+    }
+    if (!remoteHistoryReadyRef.current) {
+      if (!remoteHistoryWarningShownRef.current) {
+        remoteHistoryWarningShownRef.current = true;
+        toast("当前未拉到服务器历史，已仅保存到本地，避免覆盖云端记录");
+      }
+      return;
     }
     try {
       await apiJson("/miniapp-api/sumitalk-history", {
@@ -2412,7 +2441,7 @@ function AppWithAuth() {
         setErrorText("");
         return;
       }
-      const deviceId = getOrCreatePanelDeviceId();
+      const deviceId = await getOrCreatePanelDeviceId();
       const j = await publicApiFetch("/miniapp-api/panel-auth/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -182,6 +182,25 @@ def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
     return out[-_SUMITALK_HISTORY_MAX_MESSAGES:]
 
 
+def _merge_sumitalk_messages(*groups: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for items in groups:
+        for item in _normalize_sumitalk_messages(items or []):
+            key = (
+                str(item.get("id") or "").strip(),
+                str(item.get("role") or "").strip(),
+                str(item.get("createdAt") or "").strip(),
+                str(item.get("content") or "").strip(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    merged.sort(key=lambda x: str(x.get("createdAt") or ""))
+    return merged[-_SUMITALK_HISTORY_MAX_MESSAGES:]
+
+
 def _notify_schedule_runtime_changed():
     """日历变更后通知网关内置调度线程立即重算。"""
     try:
@@ -883,6 +902,46 @@ def miniapp_sumitalk_history_save():
     if not ok:
         return jsonify({"ok": False, "error": "保存失败"}), 500
     return jsonify({"ok": True, "device_id": device_id, "count": len(messages), "updated_at": payload["updated_at"]})
+
+
+@bp.route("/sumitalk-history/migrate", methods=["POST"])
+def miniapp_sumitalk_history_migrate():
+    old_device_id = _get_sumitalk_history_device_id()
+    if not old_device_id:
+        return jsonify({"ok": False, "error": "缺少旧设备标识"}), 400
+    body = request.get_json(silent=True) or {}
+    new_device_id = str(body.get("new_device_id") or "").strip()
+    if not new_device_id:
+        return jsonify({"ok": False, "error": "缺少新设备标识"}), 400
+    if new_device_id == old_device_id:
+        return jsonify({"ok": True, "device_id": new_device_id, "count": 0, "copied": False})
+    with _SUMITALK_HISTORY_LOCK:
+        data = _load_sumitalk_histories()
+        old_row = data.get(old_device_id) if isinstance(data, dict) else None
+        new_row = data.get(new_device_id) if isinstance(data, dict) else None
+        merged_messages = _merge_sumitalk_messages(
+            (old_row or {}).get("messages") or [],
+            (new_row or {}).get("messages") or [],
+        )
+        payload = {
+            "device_id": new_device_id,
+            "updated_at": now_beijing_iso(),
+            "messages": merged_messages,
+        }
+        data[new_device_id] = payload
+        ok = _save_sumitalk_histories(data)
+    if not ok:
+        return jsonify({"ok": False, "error": "迁移失败"}), 500
+    return jsonify(
+        {
+            "ok": True,
+            "old_device_id": old_device_id,
+            "device_id": new_device_id,
+            "count": len(merged_messages),
+            "copied": bool((old_row or {}).get("messages")),
+            "updated_at": payload["updated_at"],
+        }
+    )
 
 
 @bp.route("/device-state/screen", methods=["POST"])

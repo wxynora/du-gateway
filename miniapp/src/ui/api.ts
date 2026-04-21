@@ -1,8 +1,10 @@
 import { getInitData } from "./tg";
+import { SumiOverlay } from "../plugins/sumi-overlay";
 
 const PANEL_TOKEN_STORAGE_KEY = "miniapp.panel.token.v1";
 const PANEL_DEVICE_ID_STORAGE_KEY = "miniapp.panel.device-id.v1";
 const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
+let pendingDeviceIdMigration: { from: string; to: string } | null = null;
 
 export class ApiError extends Error {
   status: number;
@@ -48,9 +50,17 @@ function randomId(): string {
   return out;
 }
 
-export function getOrCreatePanelDeviceId(): string {
+export async function getOrCreatePanelDeviceId(): Promise<string> {
   try {
     const existing = (window.localStorage.getItem(PANEL_DEVICE_ID_STORAGE_KEY) || "").trim();
+    const native = String((await SumiOverlay.getStableDeviceId().catch(() => ({ deviceId: "" })))?.deviceId || "").trim();
+    if (native) {
+      if (existing && existing !== native) {
+        pendingDeviceIdMigration = { from: existing, to: native };
+      }
+      window.localStorage.setItem(PANEL_DEVICE_ID_STORAGE_KEY, native);
+      return native;
+    }
     if (existing) return existing;
     const next = `device_${randomId()}`;
     window.localStorage.setItem(PANEL_DEVICE_ID_STORAGE_KEY, next);
@@ -58,6 +68,12 @@ export function getOrCreatePanelDeviceId(): string {
   } catch {
     return `device_${randomId()}`;
   }
+}
+
+export function consumePendingPanelDeviceIdMigration(): { from: string; to: string } | null {
+  const next = pendingDeviceIdMigration;
+  pendingDeviceIdMigration = null;
+  return next;
 }
 
 export function getPanelDeviceLabel(): string {

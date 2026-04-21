@@ -12,6 +12,8 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.Log;
@@ -42,11 +44,14 @@ public class MainActivity extends BridgeActivity {
     private static final String API_BASE = "https://duxy-home.com";
     private static final String PREF_BOOT = "miniapp_bootstrap";
     private static final String PREF_MINIAPP_VERSION = "miniapp_version";
+    private static final long MINIAPP_LOAD_WATCHDOG_MS = 8000L;
     private boolean specialPermissionFlowStarted = false;
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private String panelToken = "";
     private String panelDeviceId = "";
     private boolean panelStateSynced = false;
+    private boolean miniappWatchdogReloaded = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -77,6 +82,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        mainHandler.removeCallbacksAndMessages(null);
         ioExecutor.shutdownNow();
     }
 
@@ -259,6 +265,7 @@ public class MainActivity extends BridgeActivity {
 
     private void loadMiniappWithVersionCheck() {
         loadMiniappUrl(false, "");
+        scheduleMiniappLoadWatchdog();
         ioExecutor.execute(
                 () -> {
                     try {
@@ -292,6 +299,24 @@ public class MainActivity extends BridgeActivity {
             url = url + "?v=" + v + "&ts=" + System.currentTimeMillis();
         }
         getBridge().getWebView().loadUrl(url);
+    }
+
+    private void scheduleMiniappLoadWatchdog() {
+        mainHandler.postDelayed(
+                () -> {
+                    try {
+                        if (miniappWatchdogReloaded) return;
+                        if (getBridge() == null || getBridge().getWebView() == null) return;
+                        int progress = getBridge().getWebView().getProgress();
+                        if (progress >= 85) return;
+                        miniappWatchdogReloaded = true;
+                        getBridge().getWebView().clearCache(true);
+                        loadMiniappUrl(true, "watchdog");
+                    } catch (Exception e) {
+                        Log.w(TAG, "scheduleMiniappLoadWatchdog failed", e);
+                    }
+                },
+                MINIAPP_LOAD_WATCHDOG_MS);
     }
 
     private String fetchRemoteMiniappVersion() {
