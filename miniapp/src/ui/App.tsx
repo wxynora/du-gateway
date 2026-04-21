@@ -88,11 +88,21 @@ function readStoredBoolean(key: string, fallback = false): boolean {
 
 function readStoredNumber(key: string, fallback: number): number {
   try {
-    const raw = Number(localStorage.getItem(key));
-    return Number.isFinite(raw) ? raw : fallback;
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallback;
+    const text = String(raw).trim();
+    if (!text) return fallback;
+    const num = Number(text);
+    return Number.isFinite(num) && num > 0 ? num : fallback;
   } catch {
     return fallback;
   }
+}
+
+function clampStoredNumber(value: number, min: number, max: number, fallback: number): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, num));
 }
 
 function readStoredString<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
@@ -211,8 +221,12 @@ function Shell({
   const [floatingBallEnabled, setFloatingBallEnabled] = useState(true);
   const [transparentBubbleEnabled, setTransparentBubbleEnabled] = useState(() => readStoredBoolean("miniapp.ui.transparentBubble"));
   const [showChatAvatars, setShowChatAvatars] = useState(() => readStoredBoolean("miniapp.ui.showAvatars", true));
-  const [chatContentFontSize, setChatContentFontSize] = useState(() => readStoredNumber("miniapp.ui.chatContentFontSize", 13));
-  const [chatTitleFontSize, setChatTitleFontSize] = useState(() => readStoredNumber("miniapp.ui.chatTitleFontSize", 15));
+  const [chatContentFontSize, setChatContentFontSize] = useState(() =>
+    clampStoredNumber(readStoredNumber("miniapp.ui.chatContentFontSize", 13), 12, 18, 13),
+  );
+  const [chatTitleFontSize, setChatTitleFontSize] = useState(() =>
+    clampStoredNumber(readStoredNumber("miniapp.ui.chatTitleFontSize", 15), 14, 20, 15),
+  );
   const [chatFontKey, setChatFontKey] = useState<ChatFontKey>(() =>
     readStoredString("miniapp.ui.chatFont", "yahei", ["yahei", "system", "pingfang"] as const),
   );
@@ -222,7 +236,9 @@ function Shell({
   );
   const [showTokenCount, setShowTokenCount] = useState(() => readStoredBoolean("miniapp.ui.showTokens", true));
   const [expandReasoningByDefault, setExpandReasoningByDefault] = useState(() => readStoredBoolean("miniapp.ui.expandReasoning", false));
-  const [chatBackgroundOpacity, setChatBackgroundOpacity] = useState(() => readStoredNumber("miniapp.ui.chatBackgroundOpacity", 100));
+  const [chatBackgroundOpacity, setChatBackgroundOpacity] = useState(() =>
+    clampStoredNumber(readStoredNumber("miniapp.ui.chatBackgroundOpacity", 100), 20, 100, 100),
+  );
   const [userBubbleStyle, setUserBubbleStyle] = useState<BubbleStyleKey>(() =>
     readStoredString("miniapp.ui.userBubbleStyle", "default", ["default", "soft", "outline"] as const),
   );
@@ -807,6 +823,47 @@ function contentToPlainText(content: any): string {
   return "";
 }
 
+function extractLegacyMessageField(msg: any, keys: string[]): any {
+  if (!msg || typeof msg !== "object") return "";
+  for (const key of keys) {
+    const value = (msg as any)?.[key];
+    if (value == null) continue;
+    if (typeof value === "string" && value.trim()) return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value) && value.length) return value;
+    if (value && typeof value === "object") return value;
+  }
+  return "";
+}
+
+function extractMessageContentSource(msg: any): any {
+  if (msg == null) return "";
+  if (typeof msg === "string") return msg;
+  return extractLegacyMessageField(msg, [
+    "content",
+    "text",
+    "message",
+    "body",
+    "value",
+    "reply",
+    "response",
+    "markdown",
+    "html",
+    "parts",
+  ]);
+}
+
+function extractMessageReasoningSource(msg: any): any {
+  if (!msg || typeof msg !== "object") return "";
+  return extractLegacyMessageField(msg, [
+    "reasoning",
+    "reasoningContent",
+    "reasoning_content",
+    "thinking",
+    "thoughts",
+  ]);
+}
+
 function fallbackRawContentText(content: any): string {
   if (content == null) return "";
   if (typeof content === "string") return content.trim();
@@ -920,11 +977,32 @@ function stripInlineBase64Images(content: string): string {
   return raw.replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=\s]+/g, "[图片base64已省略，请改用图片URL]");
 }
 
+function historyRenderableScore(messages: ChatDraftMessage[]): number {
+  const list = Array.isArray(messages) ? messages : [];
+  return list.reduce((score, msg) => {
+    const content = String(msg?.content || "").trim();
+    const reasoning = String(msg?.reasoning || "").trim();
+    if (content) return score + 2;
+    if (reasoning) return score + 1;
+    return score;
+  }, 0);
+}
+
+function pickBetterHistory(primary: ChatDraftMessage[], fallback: ChatDraftMessage[], seed: ChatDraftMessage[]): ChatDraftMessage[] {
+  const primaryScore = historyRenderableScore(primary);
+  const fallbackScore = historyRenderableScore(fallback);
+  if (primaryScore <= 0 && fallbackScore <= 0) return seed;
+  if (fallbackScore > primaryScore) return fallback.length ? fallback : (primary.length ? primary : seed);
+  return primary.length ? primary : (fallback.length ? fallback : seed);
+}
+
 function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
   const list = Array.isArray(messages) ? messages : [];
   return list.map((msg) => {
-      const content = stripInlineBase64Images(contentToPlainText(msg?.content) || fallbackRawContentText(msg?.content));
-      const reasoning = contentToPlainText(msg?.reasoning) || fallbackRawContentText(msg?.reasoning);
+      const rawContent = extractMessageContentSource(msg);
+      const rawReasoning = extractMessageReasoningSource(msg);
+      const content = stripInlineBase64Images(contentToPlainText(rawContent) || fallbackRawContentText(rawContent));
+      const reasoning = contentToPlainText(rawReasoning) || fallbackRawContentText(rawReasoning);
       let tokenCount: { input?: number; output?: number } | undefined;
       if (msg?.tokenCount && typeof msg.tokenCount === "object") {
         const input = Number(msg.tokenCount.input || 0);
@@ -1133,10 +1211,11 @@ function ChatsHome({
         const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
         if (cancelled) return;
         const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
-        const picked = pickLatestDraftPreview(remoteMessages);
+        const nextMessages = pickBetterHistory(remoteMessages, localMessages, []);
+        const picked = pickLatestDraftPreview(nextMessages);
         setDuPreview(picked.preview);
         setDuTime(picked.time);
-        if (remoteMessages.length) {
+        if (historyRenderableScore(remoteMessages) >= historyRenderableScore(localMessages) && remoteMessages.length) {
           await writeLocalChatHistory(did, "sumitalk-main", remoteMessages);
         }
       } catch {}
@@ -1475,9 +1554,9 @@ function MainChatScreen({
           remoteHistoryReadyRef.current = true;
         }
         const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
-        const next = remoteMessages.length ? remoteMessages : (fallbackLocalMessages.length ? fallbackLocalMessages : seedMessages);
+        const next = pickBetterHistory(remoteMessages, fallbackLocalMessages, seedMessages);
         setMessages(next);
-        if (remoteMessages.length) {
+        if (historyRenderableScore(remoteMessages) >= historyRenderableScore(fallbackLocalMessages) && remoteMessages.length) {
           await writeLocalChatHistory(deviceId, windowId, remoteMessages);
         }
       } catch (e: any) {
