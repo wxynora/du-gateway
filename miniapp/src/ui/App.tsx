@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import DOMPurify from "dompurify";
@@ -55,7 +55,14 @@ type ChatDraftMessage = {
   content: string;
   createdAt: string;
   reasoning?: string;
-  tokenCount?: number;
+  tokenCount?: {
+    input?: number;
+    output?: number;
+  };
+};
+type HtmlPreviewState = {
+  title: string;
+  content: string;
 };
 type DeviceItem = {
   id?: string;
@@ -79,6 +86,7 @@ function Shell({
   const [showCorePrompt, setShowCorePrompt] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showAlarm, setShowAlarm] = useState(false);
+  const [showPersonalization, setShowPersonalization] = useState(false);
   const [showDuDay, setShowDuDay] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
@@ -86,6 +94,7 @@ function Shell({
   const [showDailyReportDetail, setShowDailyReportDetail] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
   const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
+  const [htmlPreview, setHtmlPreview] = useState<HtmlPreviewState | null>(null);
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
@@ -184,6 +193,10 @@ function Shell({
     let disposed = false;
     const removePromise = CapacitorApp.addListener("backButton", async () => {
       if (disposed) return;
+      if (htmlPreview) {
+        setHtmlPreview(null);
+        return;
+      }
       if (showCallHub) {
         setShowCallHub(false);
         return;
@@ -206,6 +219,10 @@ function Shell({
       }
       if (showAlarm) {
         setShowAlarm(false);
+        return;
+      }
+      if (showPersonalization) {
+        setShowPersonalization(false);
         return;
       }
       if (showDuDay) {
@@ -240,6 +257,7 @@ function Shell({
     };
   }, [
     activeScreen,
+    htmlPreview,
     mainTab,
     panel,
     showAlarm,
@@ -247,6 +265,7 @@ function Shell({
     showCorePrompt,
     showDailyReportDetail,
     showDuDay,
+    showPersonalization,
     showSchedule,
     showSettings,
     showTodayNoteDetail,
@@ -322,6 +341,7 @@ function Shell({
             {Capacitor.getPlatform() === "android" ? (
               <FloatingBallSettingRow enabled={floatingBallEnabled} onToggle={(v) => void setFloatingBallNative(v)} />
             ) : null}
+            <ListRow icon={<FeatherIcon />} label="个性化" onClick={() => setShowPersonalization(true)} />
             <ListRow icon={<SmartphoneIconMini />} label="设备管理" onClick={() => onOpenDevices?.()} />
             {onLogout ? <ListRow icon={<LogoutIconMini />} label="退出登录" onClick={onLogout} last /> : null}
           </div>
@@ -344,6 +364,7 @@ function Shell({
 
   const hasSecondaryPageOpen =
     !!activeScreen ||
+    !!htmlPreview ||
     !!panel ||
     showSettings ||
     showCorePrompt ||
@@ -364,6 +385,7 @@ function Shell({
           avatarLabel="渡"
           accent="du"
           onBack={() => setActiveScreen(null)}
+          onOpenHtmlPage={(content) => setHtmlPreview({ title: "页面", content })}
           onOpenStickers={() => setPanel("stickers")}
           onOpenCall={() => setShowCallHub(true)}
         />
@@ -385,6 +407,13 @@ function Shell({
       {panel === "logs" ? (
         <FullScreenPane title="日志" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><LogsTab /></LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {htmlPreview ? (
+        <FullScreenPane title={htmlPreview.title} accent="neutral" headerMode="simple" onBack={() => setHtmlPreview(null)}>
+          <div className="min-h-full bg-white">
+            <HtmlBlock content={htmlPreview.content} />
+          </div>
         </FullScreenPane>
       ) : null}
       {panel === "reasoning" ? (
@@ -422,6 +451,11 @@ function Shell({
       {showAlarm ? (
         <FullScreenPane title="闹钟" accent="neutral" headerMode="simple" onBack={() => setShowAlarm(false)}>
           <LazyPane><AlarmTab /></LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {showPersonalization ? (
+        <FullScreenPane title="个性化" accent="neutral" headerMode="simple" onBack={() => setShowPersonalization(false)}>
+          <PersonalizationScreen />
         </FullScreenPane>
       ) : null}
       {showDuDay ? (
@@ -487,7 +521,7 @@ type ChatMessageGroup = {
   id: string;
   role: "user" | "assistant";
   createdAt: string;
-  parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: number }>;
+  parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number } }>;
 };
 
 function formatClockTime(value: string): string {
@@ -603,13 +637,32 @@ function extractAssistantReasoning(message: any): string {
   return String(message?.reasoning_content || message?.reasoning || "").trim();
 }
 
-function extractTokenCount(data: any): number {
+function extractTokenCount(data: any): { input?: number; output?: number } | undefined {
   try {
     const usage = data?.usage || {};
-    const total = Number(usage?.total_tokens || usage?.totalTokens || usage?.output_tokens || 0);
-    return Number.isFinite(total) && total > 0 ? total : 0;
+    const input = Number(
+      usage?.prompt_tokens ||
+      usage?.input_tokens ||
+      usage?.promptTokens ||
+      usage?.inputTokens ||
+      0,
+    );
+    const output = Number(
+      usage?.completion_tokens ||
+      usage?.output_tokens ||
+      usage?.completionTokens ||
+      usage?.outputTokens ||
+      0,
+    );
+    const safeInput = Number.isFinite(input) && input > 0 ? input : 0;
+    const safeOutput = Number.isFinite(output) && output > 0 ? output : 0;
+    if (!safeInput && !safeOutput) return undefined;
+    return {
+      input: safeInput || undefined,
+      output: safeOutput || undefined,
+    };
   } catch {
-    return 0;
+    return undefined;
   }
 }
 
@@ -619,9 +672,22 @@ function RichTextBlock({ content }: { content: string }) {
       remarkPlugins={[remarkGfm]}
       components={{
         p: ({ children }) => <p className="m-0 whitespace-pre-wrap">{children}</p>,
+        h1: ({ children }) => <h1 className="mb-2 text-[20px] font-semibold leading-tight text-gray-900">{children}</h1>,
+        h2: ({ children }) => <h2 className="mb-2 text-[18px] font-semibold leading-tight text-gray-900">{children}</h2>,
+        h3: ({ children }) => <h3 className="mb-1.5 text-[16px] font-semibold leading-tight text-gray-900">{children}</h3>,
         ul: ({ children }) => <ul className="my-2 list-disc pl-5">{children}</ul>,
         ol: ({ children }) => <ol className="my-2 list-decimal pl-5">{children}</ol>,
         li: ({ children }) => <li className="my-0.5">{children}</li>,
+        table: ({ children }) => (
+          <div className="my-2 overflow-x-auto">
+            <table className="min-w-full border-collapse text-left text-[12px] leading-6 text-gray-800">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => <thead className="bg-black/5">{children}</thead>,
+        tbody: ({ children }) => <tbody>{children}</tbody>,
+        tr: ({ children }) => <tr className="border-b border-black/10 last:border-b-0">{children}</tr>,
+        th: ({ children }) => <th className="px-2.5 py-2 font-semibold text-gray-900">{children}</th>,
+        td: ({ children }) => <td className="px-2.5 py-2 align-top">{children}</td>,
         pre: ({ children }) => <pre className="my-2 overflow-x-auto rounded-[12px] bg-black/5 p-3 text-[13px]">{children}</pre>,
         code: ({ children, ...props }) => {
           const inline = !String(props.className || "").includes("language-");
@@ -891,6 +957,7 @@ function MainChatScreen({
   windowId,
   accent,
   onBack,
+  onOpenHtmlPage,
   onOpenStickers,
   onOpenCall,
 }: {
@@ -899,6 +966,7 @@ function MainChatScreen({
   windowId: string;
   accent: "du" | "wenyou";
   onBack: () => void;
+  onOpenHtmlPage: (content: string) => void;
   onOpenStickers: () => void;
   onOpenCall: () => void;
 }) {
@@ -916,6 +984,11 @@ function MainChatScreen({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [activeModel, setActiveModel] = useState(() => {
     try {
       return (localStorage.getItem(modelKey) || "").trim();
@@ -1029,7 +1102,7 @@ function MainChatScreen({
           content: reply,
           createdAt: new Date().toISOString(),
           reasoning: reasoning || undefined,
-          tokenCount: tokenCount || undefined,
+          tokenCount,
         },
       ];
       setMessages(finalMessages);
@@ -1051,21 +1124,115 @@ function MainChatScreen({
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
   const groupedMessages = groupChatMessages(messages);
+  const matchedGroupIds = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return [];
+    return groupedMessages
+      .filter((group) =>
+        group.parts.some((part) =>
+          String(part.content || "").toLowerCase().includes(query) ||
+          String(part.reasoning || "").toLowerCase().includes(query),
+        ),
+      )
+      .map((group) => group.id);
+  }, [groupedMessages, searchQuery]);
+  const activeMatchedGroupId = matchedGroupIds.length
+    ? matchedGroupIds[Math.min(activeSearchIndex, matchedGroupIds.length - 1)]
+    : null;
   const subtitle = sending ? "正在输入中" : "在线";
+
+  useEffect(() => {
+    if (searchOpen) return;
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+    });
+  }, [messages, searchOpen]);
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setActiveSearchIndex(0);
+      return;
+    }
+    setActiveSearchIndex(matchedGroupIds.length > 0 ? matchedGroupIds.length - 1 : 0);
+  }, [searchQuery, matchedGroupIds.length]);
+
+  useEffect(() => {
+    if (!searchOpen || !activeMatchedGroupId) return;
+    const target = groupRefs.current[activeMatchedGroupId];
+    if (!target) return;
+    requestAnimationFrame(() => {
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [activeMatchedGroupId, searchOpen]);
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-[#F8F9FA]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
-      <div className="absolute top-0 z-20 flex w-full items-center border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] backdrop-blur-md">
-        <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
-          <ChevronLeftIcon />
-        </button>
-        <div className="ml-2">
-          <div className="text-[15px] font-medium text-gray-900">{title}</div>
-          <div className="text-[11px] font-medium text-gray-900">{subtitle}</div>
+      <div className="absolute top-0 z-20 w-full border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] backdrop-blur-md">
+        <div className="flex items-center">
+          <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
+            <ChevronLeftIcon />
+          </button>
+          <div className="ml-2 flex-1">
+            <div className="text-[15px] font-medium text-gray-900">{title}</div>
+            <div className="text-[11px] font-medium text-gray-900">{subtitle}</div>
+          </div>
+          <button
+            className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100"
+            onClick={() => {
+              setSearchOpen((prev) => {
+                const next = !prev;
+                if (!next) setSearchQuery("");
+                return next;
+              });
+            }}
+            aria-label="搜索"
+            title="搜索"
+          >
+            <SearchIconMini />
+          </button>
         </div>
+        {searchOpen ? (
+          <div className="mt-3 flex items-center gap-2 rounded-[18px] bg-[#F4F5F7] px-3 py-2">
+            <SearchIconMini />
+            <input
+              className="flex-1 bg-transparent text-[14px] font-medium text-gray-900 outline-none placeholder:text-gray-400"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="搜索记录"
+            />
+            {matchedGroupIds.length ? (
+              <>
+                <button
+                  className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-200"
+                  onClick={() => setActiveSearchIndex((prev) => (prev - 1 + matchedGroupIds.length) % matchedGroupIds.length)}
+                  aria-label="上一个结果"
+                >
+                  <ChevronUpMini />
+                </button>
+                <button
+                  className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-200"
+                  onClick={() => setActiveSearchIndex((prev) => (prev + 1) % matchedGroupIds.length)}
+                  aria-label="下一个结果"
+                >
+                  <ChevronDownMini />
+                </button>
+                <span className="text-[11px] font-medium text-gray-500">
+                  {activeSearchIndex + 1}/{matchedGroupIds.length}
+                </span>
+              </>
+            ) : searchQuery.trim() ? (
+              <span className="text-[11px] font-medium text-gray-500">无结果</span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-5 pt-[104px]">
+      <div
+        ref={messagesScrollRef}
+        className={`min-h-0 flex-1 overflow-y-auto px-3.5 pb-5 ${searchOpen ? "pt-[156px]" : "pt-[104px]"}`}
+      >
         <div className="space-y-5">
           {groupedMessages.map((group, index) => (
             <React.Fragment key={group.id}>
@@ -1077,12 +1244,17 @@ function MainChatScreen({
                 </div>
               ) : null}
               {group.role === "user" ? (
-                <div className="flex items-start justify-end space-x-3">
-                  <div className="mt-[2px] max-w-[78%] space-y-1.5 text-right">
+                <div
+                  ref={(el) => {
+                    groupRefs.current[group.id] = el;
+                  }}
+                  className={`flex items-start justify-end space-x-3 rounded-[22px] ${activeMatchedGroupId === group.id ? "ring-2 ring-gray-300/80 ring-offset-2 ring-offset-transparent" : ""}`}
+                >
+                  <div className="mt-[2px] flex max-w-[78%] flex-col items-end space-y-1.5">
                     {group.parts.map((part, index) => (
                       <div
                         key={`${group.id}-${index}`}
-                        className="inline-block w-fit max-w-full rounded-[18px] bg-[#2D3748] px-3 py-2 text-[13px] font-medium leading-relaxed text-white shadow-sm"
+                        className="block max-w-full rounded-[18px] bg-[#2D3748] px-3 py-2 text-left text-[13px] font-medium leading-relaxed text-white shadow-sm"
                         style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                       >
                         <PlainTextBlock content={part.content || (sending ? "…" : "")} />
@@ -1092,7 +1264,12 @@ function MainChatScreen({
                   <div className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-gray-200 text-[13px] font-medium text-gray-600 shadow-sm">我</div>
                 </div>
               ) : (
-                <div className="flex items-start space-x-3">
+                <div
+                  ref={(el) => {
+                    groupRefs.current[group.id] = el;
+                  }}
+                  className={`flex items-start space-x-3 rounded-[22px] ${activeMatchedGroupId === group.id ? "ring-2 ring-gray-300/80 ring-offset-2 ring-offset-transparent" : ""}`}
+                >
                   <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${avatarClass}`}>{avatarLabel}</div>
                   <div className="mt-[2px] max-w-[78%] space-y-1.5">
                     {group.parts.map((part, index) => (
@@ -1108,7 +1285,13 @@ function MainChatScreen({
                           style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
                         >
                           {part.render === "html" ? (
-                            <HtmlBlock content={part.content} />
+                            <button
+                              className="flex items-center gap-2 text-left text-gray-800"
+                              onClick={() => onOpenHtmlPage(part.content)}
+                            >
+                              <FileTextIcon />
+                              <span>打开页面</span>
+                            </button>
                           ) : part.render === "plain" ? (
                             <PlainTextBlock content={part.content || (sending ? "…" : "")} />
                           ) : (
@@ -1124,7 +1307,13 @@ function MainChatScreen({
                           >
                             <CopyIconMini />
                           </button>
-                          {part.tokenCount ? <span>{part.tokenCount} tokens</span> : null}
+                          {part.tokenCount?.input || part.tokenCount?.output ? (
+                            <span>
+                              {part.tokenCount?.input ? `↑${part.tokenCount.input}tokens` : ""}
+                              {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
+                              {part.tokenCount?.output ? `↓${part.tokenCount.output}tokens` : ""}
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                     ))}
@@ -1151,17 +1340,12 @@ function MainChatScreen({
             <PlusIcon open={plusOpen} />
           </button>
           <div className="flex min-h-[42px] flex-1 items-center rounded-[20px] bg-[#F4F5F7] px-4 py-2.5">
-            <input
-              className="w-full bg-transparent text-[15px] font-medium text-gray-900 outline-none placeholder:text-gray-400"
+            <textarea
+              className="max-h-28 min-h-[22px] w-full resize-none bg-transparent text-[15px] font-medium leading-6 text-gray-900 outline-none placeholder:text-gray-400"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void sendMessage();
-                }
-              }}
               placeholder="输入消息..."
+              rows={1}
             />
           </div>
           <button
@@ -1202,6 +1386,156 @@ function PageCardRow({ icon, label, onClick }: { icon: React.ReactNode; label: s
       <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
       <ChevronRightIcon />
     </button>
+  );
+}
+
+function PersonalizationScreen() {
+  return (
+    <div className="bg-[#FDFDFD] px-1 pb-6 pt-4">
+      <div className="space-y-6">
+        <section>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">头像设置</h2>
+          <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
+            <PersonalizationRow
+              title="我的头像"
+              subtitle="自定义我的头像"
+              leading={<div className="flex h-[44px] w-[44px] items-center justify-center rounded-full bg-[#E5E7EB] text-[16px] font-semibold text-gray-700">我</div>}
+            />
+            <PersonalizationRow
+              title="渡的头像"
+              subtitle="自定义助手的头像"
+              leading={<div className="flex h-[44px] w-[44px] items-center justify-center rounded-full bg-[#EEF2FF] text-[16px] font-semibold text-gray-700">渡</div>}
+              last
+            />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">聊天背景</h2>
+          <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
+            <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
+              <p className="mb-3 text-[12px] font-medium text-gray-400">当前背景预览</p>
+              <div className="h-[92px] rounded-[18px] bg-[linear-gradient(180deg,#F8FAFC_0%,#EEF2F7_100%)]" />
+            </div>
+            <PersonalizationRow title="背景图设置" />
+            <PersonalizationSliderRow title="背景透明度" value="78%" />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">气泡样式</h2>
+          <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
+            <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
+              <div className="space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#EEF2FF] text-[13px] font-medium text-gray-700">渡</div>
+                  <div className="rounded-[18px] bg-white px-4 py-2 text-[14px] font-medium text-gray-800 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">这里是助手气泡预览</div>
+                </div>
+                <div className="flex justify-end gap-3">
+                  <div className="rounded-[18px] bg-[#2D3748] px-4 py-2 text-[14px] font-medium text-white shadow-[0_2px_8px_rgba(0,0,0,0.04)]">这里是用户气泡预览</div>
+                  <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#E5E7EB] text-[13px] font-medium text-gray-700">我</div>
+                </div>
+              </div>
+            </div>
+            <PersonalizationSliderRow title="气泡圆角" value="18px" />
+            <PersonalizationRow title="用户气泡样式" />
+            <PersonalizationRow title="助手气泡样式" />
+            <PersonalizationSwitchRow title="显示头像" enabled />
+            <PersonalizationSwitchRow title="启用（透明模式）" />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">字体与字号</h2>
+          <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
+            <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
+              <p className="text-[16px] font-medium text-gray-800">这里是聊天文字的预览效果</p>
+            </div>
+            <PersonalizationSliderRow title="聊天内容字号" value="15px" />
+            <PersonalizationSliderRow title="界面标题字号" value="17px" />
+            <PersonalizationRow title="聊天字体" value="微软雅黑" last />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">信息显示</h2>
+          <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
+            <PersonalizationSwitchRow title="显示时间戳" enabled />
+            <PersonalizationRow title="时间格式" value="HH:MM" />
+            <PersonalizationSwitchRow title="显示 token" enabled />
+            <PersonalizationSwitchRow title="默认展开思维链" />
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function PersonalizationRow({
+  title,
+  subtitle,
+  value,
+  leading,
+  last = false,
+}: {
+  title: string;
+  subtitle?: string;
+  value?: string;
+  leading?: React.ReactNode;
+  last?: boolean;
+}) {
+  return (
+    <div className={`flex items-center justify-between py-[14px] ${last ? "" : "border-b border-[#F9FAFB]"}`}>
+      <div className="flex items-center gap-3">
+        {leading}
+        <div>
+          <p className="text-[15px] font-semibold text-gray-800">{title}</p>
+          {subtitle ? <p className="mt-0.5 text-[12px] text-gray-400">{subtitle}</p> : null}
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {value ? <span className="text-[13px] font-medium text-gray-400">{value}</span> : null}
+        <ChevronRightIcon />
+      </div>
+    </div>
+  );
+}
+
+function PersonalizationSwitchRow({
+  title,
+  enabled = false,
+}: {
+  title: string;
+  enabled?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between border-b border-[#F9FAFB] py-[14px] last:border-b-0">
+      <span className="text-[15px] font-medium text-gray-800">{title}</span>
+      <div className={`relative h-[24px] w-[42px] rounded-full transition-colors ${enabled ? "bg-[#1F2937]" : "bg-[#E2E8F0]"}`}>
+        <div className={`absolute bottom-[3px] h-[18px] w-[18px] rounded-full bg-white transition-transform ${enabled ? "left-[21px]" : "left-[3px]"}`} />
+      </div>
+    </div>
+  );
+}
+
+function PersonalizationSliderRow({
+  title,
+  value,
+}: {
+  title: string;
+  value: string;
+}) {
+  return (
+    <div className="border-b border-[#F9FAFB] py-[14px] last:border-b-0">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-[15px] font-medium text-gray-800">{title}</span>
+        <span className="text-[13px] font-medium text-gray-400">{value}</span>
+      </div>
+      <div className="relative h-[4px] rounded-full bg-[#E2E8F0]">
+        <div className="absolute left-0 top-0 h-[4px] w-[78%] rounded-full bg-[#1F2937]" />
+        <div className="absolute left-[calc(78%-9px)] top-1/2 h-[18px] w-[18px] -translate-y-1/2 rounded-full border-2 border-white bg-[#1F2937] shadow-[0_2px_4px_rgba(0,0,0,0.1)]" />
+      </div>
+    </div>
   );
 }
 
@@ -1309,6 +1643,18 @@ function SunIconMini() {
 
 function ClockIconMini() {
   return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>;
+}
+
+function SearchIconMini() {
+  return <svg className="h-[16px] w-[16px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>;
+}
+
+function ChevronUpMini() {
+  return <svg className="h-[14px] w-[14px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6" /></svg>;
+}
+
+function ChevronDownMini() {
+  return <svg className="h-[14px] w-[14px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>;
 }
 
 function CopyIconMini() {
