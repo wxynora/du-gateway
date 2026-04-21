@@ -7,6 +7,7 @@ import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
@@ -21,6 +22,8 @@ import com.getcapacitor.BridgeActivity;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -37,6 +40,8 @@ public class MainActivity extends BridgeActivity {
     private static final int REQ_RUNTIME_PERMS = 1201;
     private static final String TAG = "SumiTalkMain";
     private static final String API_BASE = "https://duxy-home.com";
+    private static final String PREF_BOOT = "miniapp_bootstrap";
+    private static final String PREF_MINIAPP_VERSION = "miniapp_version";
     private boolean specialPermissionFlowStarted = false;
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private String panelToken = "";
@@ -53,10 +58,9 @@ public class MainActivity extends BridgeActivity {
         }
         WebSettings settings = getBridge().getWebView().getSettings();
         if (settings != null) {
-            settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+            settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         }
-        getBridge().getWebView().clearCache(true);
-        getBridge().getWebView().loadUrl("https://duxy-home.com/miniapp?ts=" + System.currentTimeMillis());
+        loadMiniappWithVersionCheck();
         syncPanelStateFromWebView();
     }
 
@@ -251,6 +255,75 @@ public class MainActivity extends BridgeActivity {
         } finally {
             if (conn != null) conn.disconnect();
         }
+    }
+
+    private void loadMiniappWithVersionCheck() {
+        loadMiniappUrl(false, "");
+        ioExecutor.execute(
+                () -> {
+                    try {
+                        String remoteVersion = fetchRemoteMiniappVersion();
+                        if (remoteVersion.isEmpty()) return;
+                        SharedPreferences sp = getSharedPreferences(PREF_BOOT, MODE_PRIVATE);
+                        String localVersion = String.valueOf(sp.getString(PREF_MINIAPP_VERSION, "")).trim();
+                        if (remoteVersion.equals(localVersion)) return;
+                        sp.edit().putString(PREF_MINIAPP_VERSION, remoteVersion).apply();
+                        runOnUiThread(
+                                () -> {
+                                    try {
+                                        if (getBridge() == null || getBridge().getWebView() == null) return;
+                                        getBridge().getWebView().clearCache(true);
+                                        loadMiniappUrl(true, remoteVersion);
+                                    } catch (Exception e) {
+                                        Log.w(TAG, "loadMiniappWithVersionCheck reload failed", e);
+                                    }
+                                });
+                    } catch (Exception e) {
+                        Log.w(TAG, "loadMiniappWithVersionCheck failed", e);
+                    }
+                });
+    }
+
+    private void loadMiniappUrl(boolean forceRefresh, String version) {
+        if (getBridge() == null || getBridge().getWebView() == null) return;
+        String url = API_BASE + "/miniapp";
+        if (forceRefresh) {
+            String v = Uri.encode(String.valueOf(version == null ? "" : version));
+            url = url + "?v=" + v + "&ts=" + System.currentTimeMillis();
+        }
+        getBridge().getWebView().loadUrl(url);
+    }
+
+    private String fetchRemoteMiniappVersion() {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(API_BASE + "/miniapp-api/app-version");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(3500);
+            conn.setReadTimeout(3500);
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) return "";
+            String body = readAllText(conn.getInputStream());
+            JSONObject obj = new JSONObject(body);
+            if (!obj.optBoolean("ok", false)) return "";
+            return String.valueOf(obj.optString("version", "")).trim();
+        } catch (Exception e) {
+            Log.w(TAG, "fetchRemoteMiniappVersion failed", e);
+            return "";
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private String readAllText(InputStream is) throws Exception {
+        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        byte[] buf = new byte[2048];
+        int n;
+        while ((n = is.read(buf)) > 0) {
+            os.write(buf, 0, n);
+        }
+        return new String(os.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private String nowIso() {

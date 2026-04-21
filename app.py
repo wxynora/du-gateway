@@ -1,6 +1,8 @@
 # 渡の网关 - 入口
 import os
 import re
+import hashlib
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -107,6 +109,27 @@ def miniapp_assets(filename: str):
     else:
       resp.headers["Cache-Control"] = "no-cache"
     return resp
+
+
+@app.route("/miniapp-api/app-version", methods=["GET"])
+def miniapp_app_version():
+    """
+    提供 MiniApp 前端版本摘要：用于 APK 判断是否需要强制刷新缓存。
+    """
+    try:
+        index_file: Path = MINIAPP_STATIC_DIR / "index.html"
+        if not index_file.exists():
+            return jsonify({"ok": False, "error": "miniapp index 不存在"}), 404
+        raw = index_file.read_bytes()
+        digest = hashlib.sha1(raw).hexdigest()[:12]
+        updated_at = int(index_file.stat().st_mtime)
+        return jsonify({
+            "ok": True,
+            "version": f"{updated_at}-{digest}",
+            "updated_at": updated_at,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/favicon.ico", methods=["GET"])

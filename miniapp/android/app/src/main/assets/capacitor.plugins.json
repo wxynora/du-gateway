@@ -2,9 +2,5 @@
 	{
 		"pkg": "@capacitor/app",
 		"classpath": "com.capacitorjs.plugins.app.AppPlugin"
-	},
-	{
-		"pkg": "sumi-overlay",
-		"classpath": "com.sumitalk.app.OverlayControlPlugin"
 	}
 ]

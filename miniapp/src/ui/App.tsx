@@ -61,10 +61,6 @@ type ChatDraftMessage = {
     output?: number;
   };
 };
-type HtmlPreviewState = {
-  title: string;
-  content: string;
-};
 type DeviceItem = {
   id?: string;
   note?: string;
@@ -206,7 +202,6 @@ function Shell({
   const [showDailyReportDetail, setShowDailyReportDetail] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
   const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
-  const [htmlPreview, setHtmlPreview] = useState<HtmlPreviewState | null>(null);
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
@@ -409,10 +404,6 @@ function Shell({
     let disposed = false;
     const removePromise = CapacitorApp.addListener("backButton", async () => {
       if (disposed) return;
-      if (htmlPreview) {
-        setHtmlPreview(null);
-        return;
-      }
       if (showCallHub) {
         setShowCallHub(false);
         return;
@@ -473,7 +464,6 @@ function Shell({
     };
   }, [
     activeScreen,
-    htmlPreview,
     mainTab,
     panel,
     showAlarm,
@@ -581,7 +571,6 @@ function Shell({
 
   const hasSecondaryPageOpen =
     !!activeScreen ||
-    !!htmlPreview ||
     !!panel ||
     showSettings ||
     showCorePrompt ||
@@ -618,7 +607,6 @@ function Shell({
           duAvatarImage={duAvatarImage}
           chatBackgroundImage={chatBackgroundImage}
           onBack={() => setActiveScreen(null)}
-          onOpenHtmlPage={(content) => setHtmlPreview({ title: "页面", content })}
           onOpenStickers={() => setPanel("stickers")}
           onOpenCall={() => setShowCallHub(true)}
         />
@@ -640,13 +628,6 @@ function Shell({
       {panel === "logs" ? (
         <FullScreenPane title="日志" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><LogsTab /></LazyPane>
-        </FullScreenPane>
-      ) : null}
-      {htmlPreview ? (
-        <FullScreenPane title={htmlPreview.title} accent="neutral" headerMode="simple" onBack={() => setHtmlPreview(null)}>
-          <div className="min-h-full bg-white">
-            <HtmlBlock content={htmlPreview.content} />
-          </div>
         </FullScreenPane>
       ) : null}
       {panel === "reasoning" ? (
@@ -1320,7 +1301,6 @@ function MainChatScreen({
   duAvatarImage,
   chatBackgroundImage,
   onBack,
-  onOpenHtmlPage,
   onOpenStickers,
   onOpenCall,
 }: {
@@ -1344,13 +1324,11 @@ function MainChatScreen({
   duAvatarImage: string;
   chatBackgroundImage: string;
   onBack: () => void;
-  onOpenHtmlPage: (content: string) => void;
   onOpenStickers: () => void;
   onOpenCall: () => void;
 }) {
   const toast = useToast();
   const modelKey = `miniapp.chat.${windowId}.model.v1`;
-  const lastAutoOpenedHtmlIdRef = useRef<string>("");
   const [deviceId, setDeviceId] = useState("");
   const seedMessages: ChatDraftMessage[] = [
     {
@@ -1441,15 +1419,6 @@ function MainChatScreen({
       cancelled = true;
     };
   }, [deviceId, windowId]);
-
-  useEffect(() => {
-    const last = messages[messages.length - 1];
-    if (!last || last.role !== "assistant") return;
-    if (!isHtmlBlock(last.content || "")) return;
-    if (lastAutoOpenedHtmlIdRef.current === last.id) return;
-    lastAutoOpenedHtmlIdRef.current = last.id;
-    onOpenHtmlPage(last.content || "");
-  }, [messages, onOpenHtmlPage]);
 
   async function saveDisplayHistory(nextMessages: ChatDraftMessage[]) {
     const sanitizedMessages = sanitizeHistoryMessages(nextMessages);
@@ -1721,7 +1690,7 @@ function MainChatScreen({
                           style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                         >
                           {part.render === "html" ? (
-                            <PlainTextBlock content="已生成页面" />
+                            <HtmlBlock content={part.content || (sending ? "…" : "")} />
                           ) : part.render === "plain" ? (
                             <PlainTextBlock content={part.content || (sending ? "…" : "")} />
                           ) : (
