@@ -2799,47 +2799,147 @@ function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogo
     }
   }
 
+  const currentItem = items.find((it) => !!it.current) || null;
+  const otherItems = items.filter((it) => !it.current);
+
+  function getDeviceIcon(item: DeviceItem): "phone" | "tablet" | "desktop" {
+    const note = String(item.note || "").toLowerCase();
+    if (note.includes("ipad") || note.includes("tablet")) return "tablet";
+    if (note.includes("iphone") || note.includes("android") || note.includes("mobile")) return "phone";
+    return "desktop";
+  }
+
+  function getDeviceTitle(item: DeviceItem): string {
+    return String(item.note || "设备").replace(/\s*@\s*.+$/, "").trim() || "设备";
+  }
+
+  function getDeviceSubtitle(item: DeviceItem): string {
+    const note = String(item.note || "").trim();
+    const m = note.match(/@\s*(.+)$/);
+    return m?.[1]?.trim() || "SumiTalk";
+  }
+
+  function renderDeviceIcon(kind: "phone" | "tablet" | "desktop", active = false) {
+    const cls = active ? "text-blue-500" : "text-gray-400";
+    if (kind === "phone") {
+      return (
+        <svg className={`h-6 w-6 ${cls}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+          <line x1="12" y1="18" x2="12.01" y2="18" />
+        </svg>
+      );
+    }
+    if (kind === "tablet") {
+      return (
+        <svg className={`h-6 w-6 ${cls}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4" y="2" width="16" height="20" rx="2" ry="2" />
+          <line x1="12" y1="18" x2="12.01" y2="18" />
+        </svg>
+      );
+    }
+    return (
+      <svg className={`h-6 w-6 ${cls}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+        <line x1="8" y1="21" x2="16" y2="21" />
+        <line x1="12" y1="17" x2="12" y2="21" />
+      </svg>
+    );
+  }
+
   return (
-    <Modal title="设备管理" onClose={onClose}>
-      <div className="space-y-3 pb-6">
-        <div className="neo-panel-soft p-3 text-xs leading-6 text-cream-muted">
-          每个浏览器都会有一个独立设备身份。撤销后会直接从列表移除，并在下一次请求时失效。
-        </div>
-        <div className="flex items-center gap-2">
-          <Btn kind="blue" onClick={() => void load()} disabled={loading}>
-            {loading ? "刷新中..." : "刷新列表"}
-          </Btn>
-        </div>
-        <div className="space-y-2">
-          {items.map((item) => {
-            const id = String(item.id || "");
-            const current = !!item.current;
-            return (
-              <div key={id} className="neo-panel p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-sm font-semibold">{item.note || "Browser"}</span>
-                      {current ? <span className="neo-tag-blue px-2.5 py-1 text-[10px]">当前设备</span> : null}
-                    </div>
-                    <div className="mt-1 break-all text-[11px] leading-5 text-cream-muted">{id}</div>
-                    <div className="mt-2 text-[11px] leading-5 text-cream-muted">
-                      首次加入：{item.added_at || "-"}
-                      <br />
-                      最近访问：{item.last_seen || "-"}
-                    </div>
+    <FullScreenPane title="设备管理" accent="neutral" onBack={onClose}>
+      <div className="px-2 pb-8 pt-2">
+        <div className="px-1 pt-4">
+          <div className="mb-4 flex items-center justify-between px-1">
+            <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">当前使用的设备</h2>
+          </div>
+
+          {currentItem ? (
+            <div className="relative overflow-hidden rounded-[28px] border border-gray-100/80 border-l-4 border-l-blue-500 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+              <div className="flex items-start">
+                <div className="mr-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50">
+                  {renderDeviceIcon(getDeviceIcon(currentItem), true)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-bold text-blue-500">正在使用</span>
+                    <span className="text-[12px] font-medium text-gray-400">{currentItem.last_seen || "刚刚"}</span>
                   </div>
-                  <Btn kind="danger" onClick={() => void revoke(id, current)} disabled={busyId === id}>
-                    {busyId === id ? "处理中..." : "撤销"}
-                  </Btn>
+                  <h3 className="mt-1 text-[18px] font-bold text-gray-800">{getDeviceTitle(currentItem)}</h3>
+                  <p className="mt-1 text-[13px] font-light text-gray-500">{getDeviceSubtitle(currentItem)}</p>
                 </div>
               </div>
-            );
-          })}
-          {!items.length && !loading ? <div className="text-xs text-cream-muted">暂无设备记录。</div> : null}
+            </div>
+          ) : !loading ? (
+            <div className="rounded-[24px] border border-gray-100 bg-white px-5 py-4 text-[13px] text-gray-400 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+              当前没有可识别设备。
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-8 px-1">
+          <div className="mb-4 flex items-center justify-between px-1">
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">其他授信设备</h2>
+              <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-500">{otherItems.length}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              className="rounded-full px-3 py-1.5 text-[12px] font-semibold text-gray-400 transition active:bg-gray-50"
+            >
+              {loading ? "刷新中..." : "刷新"}
+            </button>
+          </div>
+
+          {otherItems.length ? (
+            <div className="space-y-4">
+              {otherItems.map((item) => {
+                const id = String(item.id || "");
+                return (
+                  <div key={id} className="group rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                    <div className="flex items-start">
+                      <div className="mr-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-50">
+                        {renderDeviceIcon(getDeviceIcon(item))}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="rounded-full bg-green-50 px-2.5 py-1 text-[10px] font-bold text-green-500">正常</span>
+                          <span className="text-[12px] font-medium text-gray-400">{item.last_seen || "-"}</span>
+                        </div>
+                        <h3 className="mt-1 text-[17px] font-bold text-gray-800">{getDeviceTitle(item)}</h3>
+                        <div className="mt-3 flex items-center justify-between gap-3">
+                          <p className="text-[13px] font-light text-gray-500">{getDeviceSubtitle(item)}</p>
+                          <button
+                            type="button"
+                            onClick={() => void revoke(id, false)}
+                            disabled={busyId === id}
+                            className="rounded-full bg-red-50 px-3 py-1 text-[13px] font-semibold text-red-400 transition active:scale-95 disabled:opacity-60"
+                          >
+                            {busyId === id ? "处理中..." : "撤销"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : !loading ? (
+            <div className="flex flex-col items-center justify-center py-24 text-center">
+              <div className="mb-6 flex h-24 w-24 items-center justify-center rounded-full bg-blue-50">
+                <svg className="h-10 w-10 text-blue-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+              </div>
+              <h3 className="mb-2 text-[18px] font-medium text-gray-800">暂无其他设备</h3>
+              <p className="px-10 text-[14px] leading-relaxed text-gray-400">当前仅有这一台设备连接到你的 SumiTalk 账号</p>
+            </div>
+          ) : null}
         </div>
       </div>
-    </Modal>
+    </FullScreenPane>
   );
 }
 
@@ -3123,14 +3223,16 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
   const [activeKey, setActiveKey] = useState<"a" | "b">("a");
   const [promptA, setPromptA] = useState("");
   const [promptB, setPromptB] = useState("");
+  const [loadedPromptA, setLoadedPromptA] = useState("");
+  const [loadedPromptB, setLoadedPromptB] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [source, setSource] = useState<string>("");
   const [portrait, setPortrait] = useState<{
     xinyue_candidates?: Array<{ id?: string; summary?: string }>;
     du_candidates?: Array<{ id?: string; summary?: string }>;
     interaction_candidates?: Array<{ id?: string; summary?: string }>;
   } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ bucket: "xinyue" | "du" | "interaction"; id: string } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -3141,9 +3243,12 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
       ]);
       if (!j?.ok) throw new Error(j?.error || "加载失败");
       setActiveKey(((j.active_key || "a").toString() === "b" ? "b" : "a"));
-      setPromptA(((j.prompts?.a ?? j.content) || "").toString());
-      setPromptB((j.prompts?.b || "").toString());
-      setSource((j.source || "").toString());
+      const nextA = ((j.prompts?.a ?? j.content) || "").toString();
+      const nextB = (j.prompts?.b || "").toString();
+      setPromptA(nextA);
+      setPromptB(nextB);
+      setLoadedPromptA(nextA);
+      setLoadedPromptB(nextB);
       if (p?.ok) setPortrait(p);
     } catch (e: any) {
       toast(`加载失败：${e?.message || e}`);
@@ -3179,12 +3284,19 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
       });
       if (!j?.ok) throw new Error(j?.error || "保存失败");
       toast("已保存，下一条请求生效");
-      setSource("r2");
+      setLoadedPromptA(promptA);
+      setLoadedPromptB(promptB);
     } catch (e: any) {
       toast(`保存失败：${e?.message || e}`);
     } finally {
       setSaving(false);
     }
+  }
+
+  function handleCancelEdit() {
+    setPromptA(loadedPromptA);
+    setPromptB(loadedPromptB);
+    onClose();
   }
 
   async function copyText(text: string) {
@@ -3203,62 +3315,170 @@ function CorePromptEditor({ onClose }: { onClose: () => void }) {
 
   async function deletePortrait(bucket: "xinyue" | "du" | "interaction", id: string) {
     if (!id) return;
-    const ok = window.confirm("确认删除这条候选吗？");
-    if (!ok) return;
     try {
       const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/portrait-memory/${encodeURIComponent(bucket)}/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       if (!j?.ok) throw new Error(j?.error || "删除失败");
       toast("已删除");
+      setPendingDelete(null);
       await load();
     } catch (e: any) {
       toast(`删除失败：${e?.message || e}`);
     }
   }
 
+  const isDirty = promptA !== loadedPromptA || promptB !== loadedPromptB;
+  const activePrompt = activeKey === "a" ? promptA : promptB;
+  const setActivePrompt = (value: string) => {
+    if (activeKey === "a") {
+      setPromptA(value);
+      return;
+    }
+    setPromptB(value);
+  };
+
   return (
-    <Modal title="核心 Prompt（3.16）" onClose={onClose}>
-      <div className="space-y-3">
-        <div className="text-xs text-cream-muted">
-          当前来源：{source || "unknown"}。保存后会固定注入到所有对话请求。当前启用：Prompt {activeKey.toUpperCase()}。
-        </div>
-        <div className="flex items-center gap-2">
-          <Btn kind={activeKey === "a" ? "blue" : "dark"} onClick={() => setActiveKey("a")} disabled={loading || saving}>Prompt A</Btn>
-          <Btn kind={activeKey === "b" ? "blue" : "dark"} onClick={() => setActiveKey("b")} disabled={loading || saving}>Prompt B</Btn>
-        </div>
-        <div className="space-y-2">
-          <div className="text-xs text-cream-muted">Prompt A</div>
-          <textarea
-            className="w-full min-h-[24vh] rounded-xl2 bg-cream-card shadow-soft2 p-3 text-sm leading-relaxed"
-            value={promptA}
-            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPromptA(e.target.value)}
-            placeholder={loading ? "加载中..." : "在这里编辑 Prompt A"}
-          />
-        </div>
-        <div className="space-y-2">
-          <div className="text-xs text-cream-muted">Prompt B</div>
-          <textarea
-            className="w-full min-h-[24vh] rounded-xl2 bg-cream-card shadow-soft2 p-3 text-sm leading-relaxed"
-            value={promptB}
-            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPromptB(e.target.value)}
-            placeholder={loading ? "加载中..." : "在这里编辑 Prompt B"}
-          />
-        </div>
-        <details className="neo-panel-soft px-3 py-3 text-sm">
-          <summary className="cursor-pointer select-none">画像层候选</summary>
-          <div className="mt-3 space-y-3">
-            <PortraitBlock title="辛玥画像候选" bucket="xinyue" items={portrait?.xinyue_candidates || []} onCopy={copyText} onDelete={deletePortrait} />
-            <PortraitBlock title="渡画像候选" bucket="du" items={portrait?.du_candidates || []} onCopy={copyText} onDelete={deletePortrait} />
-            <PortraitBlock title="相处模式候选" bucket="interaction" items={portrait?.interaction_candidates || []} onCopy={copyText} onDelete={deletePortrait} />
+    <FullScreenPane title="核心 Prompt" accent="neutral" onBack={onClose}>
+      <div className="px-2 pb-32 pt-2 text-gray-900">
+          <div className="mb-6 flex rounded-2xl bg-gray-100/50 p-1">
+            <button
+              type="button"
+              onClick={() => setActiveKey("a")}
+              disabled={loading || saving}
+              className={`flex-1 rounded-xl py-2.5 text-[14px] ${
+                activeKey === "a"
+                  ? "border border-gray-100 bg-white font-bold text-gray-800 shadow-sm"
+                  : "font-medium text-gray-400"
+              }`}
+            >
+              Prompt A
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveKey("b")}
+              disabled={loading || saving}
+              className={`flex-1 rounded-xl py-2.5 text-[14px] ${
+                activeKey === "b"
+                  ? "border border-gray-100 bg-white font-bold text-gray-800 shadow-sm"
+                  : "font-medium text-gray-400"
+              }`}
+            >
+              Prompt B
+            </button>
           </div>
-        </details>
-        <div className="flex items-center gap-2">
-          <Btn kind="dark" onClick={load} disabled={loading || saving}>刷新</Btn>
-          <Btn kind="dark" onClick={save} disabled={loading || saving}>保存</Btn>
-        </div>
+
+          <div className="mb-4 rounded-[28px] border border-gray-100/80 bg-white p-6 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-[18px] font-bold text-gray-800">Prompt {activeKey.toUpperCase()}</h2>
+              {isDirty ? (
+                <div className="flex items-center rounded-md border border-amber-100 bg-amber-50 px-2 py-1">
+                  <span className="mr-2 h-1.5 w-1.5 rounded-full bg-amber-400" />
+                  <span className="text-[10px] font-bold uppercase text-amber-600">未保存修改</span>
+                </div>
+              ) : (
+                <div className="flex items-center rounded-md border border-green-100 bg-green-50 px-2 py-1">
+                  <span className="mr-2 h-1.5 w-1.5 rounded-full bg-green-400" />
+                  <span className="text-[10px] font-bold uppercase text-green-600">已同步</span>
+                </div>
+              )}
+            </div>
+            <p className="text-[13px] leading-relaxed text-gray-400">当前正在编辑的是主交互指令，该指令决定了 AI 的基础人格特质和长期记忆提取逻辑。</p>
+          </div>
+
+          <div className="mb-8 rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+            <div className="mb-4 px-1">
+              <h3 className="mb-1 text-[13px] font-bold uppercase tracking-widest text-gray-400">系统核心指令</h3>
+              <p className="text-[11px] text-gray-300">定义角色的回复风格与行为准则</p>
+            </div>
+            <div className="rounded-[22px] bg-gray-50 p-5">
+              <textarea
+                className="h-[400px] w-full resize-none border-none bg-transparent text-[15px] leading-relaxed text-gray-700 outline-none"
+                value={activePrompt}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setActivePrompt(e.target.value)}
+                placeholder={loading ? "加载中..." : "输入核心 Prompt内容..."}
+              />
+              <div className="mt-4 flex justify-end">
+                <span className="text-[11px] font-medium text-gray-300">{activePrompt.length.toLocaleString()} 字符</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <PortraitBlock title="辛玥画像候选" bucket="xinyue" items={portrait?.xinyue_candidates || []} onCopy={copyText} onDelete={(bucket, id) => setPendingDelete({ bucket, id })} />
+          </div>
+          <div className="mb-6">
+            <PortraitBlock title="渡画像候选" bucket="du" items={portrait?.du_candidates || []} onCopy={copyText} onDelete={(bucket, id) => setPendingDelete({ bucket, id })} />
+          </div>
+          <div className="mb-6">
+            <PortraitBlock title="相处模式候选" bucket="interaction" items={portrait?.interaction_candidates || []} onCopy={copyText} onDelete={(bucket, id) => setPendingDelete({ bucket, id })} />
+          </div>
       </div>
-    </Modal>
+
+      {isDirty ? (
+        <div className="pointer-events-none fixed bottom-[96px] left-5 right-5 z-[60]">
+          <div className="flex items-center justify-center rounded-full bg-amber-500 px-4 py-2 text-[12px] font-bold text-white shadow-lg">
+            <svg className="mr-2 h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            您有未保存的修改，请确认保存或取消
+          </div>
+        </div>
+      ) : null}
+
+      <div className="safe-bottom fixed bottom-0 left-0 right-0 z-[55] flex gap-4 border-t border-gray-50 bg-white/80 p-5 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] backdrop-blur-lg">
+        <button
+          type="button"
+          onClick={handleCancelEdit}
+          disabled={loading || saving}
+          className="flex-1 rounded-[20px] py-4 text-[15px] font-bold text-gray-400 transition-all active:bg-gray-50"
+        >
+          取消编辑
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={loading || saving}
+          className="flex-1 rounded-[20px] bg-gray-800 py-4 text-[15px] font-bold text-white shadow-[0_10px_24px_rgba(15,23,42,0.18)] transition-all active:scale-95"
+        >
+          保存修改
+        </button>
+      </div>
+
+      {pendingDelete ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/10 px-8 backdrop-blur-[2px]">
+          <div className="w-full max-w-sm rounded-[32px] bg-white p-8 shadow-2xl">
+            <div className="mx-auto mb-6 flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
+              <svg className="h-6 w-6 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            </div>
+            <h3 className="mb-3 text-center text-[20px] font-semibold text-gray-900">要删除这个画像候选吗？</h3>
+            <p className="mb-8 px-2 text-center text-[15px] font-light leading-relaxed text-gray-500">此操作将永久移除该条目，您将无法再在 Prompt 编辑中快速引用它。</p>
+            <div className="flex flex-col space-y-3">
+              <button
+                type="button"
+                onClick={() => void deletePortrait(pendingDelete.bucket, pendingDelete.id)}
+                className="w-full rounded-[20px] bg-red-500 py-4 font-bold text-white shadow-lg shadow-red-100 transition-all active:scale-95"
+              >
+                确认删除
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingDelete(null)}
+                className="w-full rounded-[20px] py-4 font-bold text-gray-400 transition-all active:bg-gray-50"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </FullScreenPane>
   );
 }
 
@@ -3276,18 +3496,47 @@ function PortraitBlock({
   onDelete: (bucket: "xinyue" | "du" | "interaction", id: string) => void;
 }) {
   return (
-    <div className="space-y-2">
-      <div className="text-xs text-cream-muted">{title} · {items.length}</div>
-      {!items.length ? <div className="text-xs text-cream-muted">（暂无）</div> : null}
-      {items.map((item, idx) => (
-        <div key={item.id || `${title}-${idx}`} className="neo-panel px-3 py-2">
-          <div className="whitespace-pre-wrap text-sm leading-relaxed">{String(item.summary || "")}</div>
-          <div className="mt-2 flex items-center gap-2">
-            <Btn kind="blue" onClick={() => onCopy(String(item.summary || ""))}>复制</Btn>
-            {item.id ? <Btn kind="danger" onClick={() => onDelete(bucket, String(item.id || ""))}>删除</Btn> : null}
+    <>
+      <div className="mb-3 flex items-center justify-between px-2">
+        <h2 className="text-[12px] font-bold uppercase tracking-widest text-gray-400">{title}</h2>
+        <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-500">{items.length}</span>
+      </div>
+      {!items.length ? <div className="rounded-[24px] border border-gray-50 bg-white px-4 py-4 text-[13px] text-gray-400 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">暂无候选</div> : null}
+      <div className="space-y-3">
+        {items.map((item, idx) => (
+          <div key={item.id || `${title}-${idx}`} className="flex items-center gap-4 rounded-[24px] border border-gray-50 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+            <div className="flex-1">
+              <p className="line-clamp-2 text-[13px] leading-snug text-gray-600">{String(item.summary || "")}</p>
+            </div>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => onCopy(String(item.summary || ""))}
+                className="p-2 text-gray-300 transition-colors active:text-blue-500"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              </button>
+              {item.id ? (
+                <button
+                  type="button"
+                  onClick={() => onDelete(bucket, String(item.id || ""))}
+                  className="p-2 text-gray-300 transition-colors active:text-red-400"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                </button>
+              ) : null}
+            </div>
           </div>
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+    </>
   );
 }
