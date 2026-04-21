@@ -13,10 +13,11 @@
     "android": "npx cap open android"
   },
   "dependencies": {
-    "@capacitor/app": "^8.1.0",
     "@capacitor/android": "^8.3.1",
+    "@capacitor/app": "^8.1.0",
     "@capacitor/cli": "^8.3.1",
     "@capacitor/core": "^8.3.1",
+    "dexie": "^4.4.2",
     "dompurify": "^3.4.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

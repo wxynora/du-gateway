@@ -9,6 +9,7 @@ import { ToastProvider, useToast } from "./toast";
 import { apiFetch, apiJson, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
 import { SumiOverlay } from "../plugins/sumi-overlay";
+import { readLatestLocalChatHistory, readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
 const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
@@ -905,6 +906,20 @@ function detectMessageRender(role: "user" | "assistant", content: string): "plai
   return "plain";
 }
 
+function stripInlineBase64Images(content: string): string {
+  const raw = String(content || "");
+  if (!raw) return "";
+  return raw.replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=\s]+/g, "[图片base64已省略，请改用图片URL]");
+}
+
+function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
+  const list = Array.isArray(messages) ? messages : [];
+  return list.map((msg) => ({
+    ...msg,
+    content: stripInlineBase64Images(String(msg?.content || "")),
+  }));
+}
+
 function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
   const groups: ChatMessageGroup[] = [];
   for (const msg of messages) {
@@ -1088,11 +1103,22 @@ function ChatsHome({
     let cancelled = false;
     (async () => {
       try {
+        const did = await getOrCreatePanelDeviceId();
+        const localMessages = sanitizeHistoryMessages(await readLatestLocalChatHistory(did));
+        if (!cancelled && localMessages.length) {
+          const pickedLocal = pickLatestDraftPreview(localMessages);
+          setDuPreview(pickedLocal.preview);
+          setDuTime(pickedLocal.time);
+        }
         const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
         if (cancelled) return;
-        const picked = pickLatestDraftPreview(j?.messages || []);
+        const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
+        const picked = pickLatestDraftPreview(remoteMessages);
         setDuPreview(picked.preview);
         setDuTime(picked.time);
+        if (remoteMessages.length) {
+          await writeLocalChatHistory(did, "sumitalk-main", remoteMessages);
+        }
       } catch {}
     })();
     return () => {
@@ -1325,6 +1351,7 @@ function MainChatScreen({
   const toast = useToast();
   const modelKey = `miniapp.chat.${windowId}.model.v1`;
   const lastAutoOpenedHtmlIdRef = useRef<string>("");
+  const [deviceId, setDeviceId] = useState("");
   const seedMessages: ChatDraftMessage[] = [
     {
       id: "seed-1",
@@ -1379,16 +1406,41 @@ function MainChatScreen({
     let cancelled = false;
     (async () => {
       try {
-        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
-        if (cancelled) return;
-        const next = Array.isArray(j?.messages) && j.messages.length ? j.messages : seedMessages;
-        setMessages(next);
+        const did = await getOrCreatePanelDeviceId();
+        if (!cancelled) setDeviceId(did);
       } catch {}
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!deviceId || !windowId) return;
+        const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(deviceId, windowId));
+        const fallbackLocalMessages = localMessages.length
+          ? localMessages
+          : sanitizeHistoryMessages(await readLatestLocalChatHistory(deviceId));
+        if (!cancelled && fallbackLocalMessages.length) {
+          setMessages(fallbackLocalMessages);
+        }
+        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
+        if (cancelled) return;
+        const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
+        const next = remoteMessages.length ? remoteMessages : (fallbackLocalMessages.length ? fallbackLocalMessages : seedMessages);
+        setMessages(next);
+        if (remoteMessages.length) {
+          await writeLocalChatHistory(deviceId, windowId, remoteMessages);
+        }
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceId, windowId]);
 
   useEffect(() => {
     const last = messages[messages.length - 1];
@@ -1400,11 +1452,15 @@ function MainChatScreen({
   }, [messages, onOpenHtmlPage]);
 
   async function saveDisplayHistory(nextMessages: ChatDraftMessage[]) {
+    const sanitizedMessages = sanitizeHistoryMessages(nextMessages);
+    if (deviceId && windowId) {
+      await writeLocalChatHistory(deviceId, windowId, sanitizedMessages);
+    }
     try {
       await apiJson("/miniapp-api/sumitalk-history", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages }),
+        body: JSON.stringify({ messages: sanitizedMessages }),
       });
     } catch {}
   }
