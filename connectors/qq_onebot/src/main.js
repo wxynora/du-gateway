@@ -385,7 +385,12 @@ async function onebotApi(action, params) {
   }
   if (!r.ok) throw new Error(`OneBot ${action} ${r.status}: ${(text || "").slice(0, 200)}`);
   if (data && Number(data.retcode || 0) !== 0) {
-    throw new Error(`OneBot ${action} retcode=${data.retcode} msg=${data.msg || ""}`.trim());
+    const status = String(data.status || "").trim();
+    const message = String(data.message || data.wording || data.msg || "").trim();
+    const parts = [`OneBot ${action}`, `retcode=${data.retcode}`];
+    if (status) parts.push(`status=${status}`);
+    if (message) parts.push(`message=${message}`);
+    throw new Error(parts.join(" "));
   }
   return data || {};
 }
