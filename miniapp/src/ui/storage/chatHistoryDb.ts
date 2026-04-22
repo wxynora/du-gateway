@@ -5,6 +5,7 @@ export type ChatHistoryMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  status?: "pending" | "sent" | "failed";
   reasoning?: string;
   tokenCount?: {
     input?: number;

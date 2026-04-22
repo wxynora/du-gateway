@@ -55,6 +55,7 @@ type ChatDraftMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  status?: "pending" | "sent" | "failed";
   reasoning?: string;
   tokenCount?: {
     input?: number;
@@ -933,6 +934,7 @@ function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string
   const list = Array.isArray(messages) ? messages : [];
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const msg = list[i];
+    if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") continue;
     const text = String(msg?.content || "").trim();
     if (!text) continue;
     return {
@@ -1001,6 +1003,19 @@ function parseChatMessageTime(value: string): number {
   return Number.isFinite(next) ? next : 0;
 }
 
+function latestHistoryTimestamp(messages: ChatDraftMessage[]): number {
+  const list = Array.isArray(messages) ? messages : [];
+  return list.reduce((latest, msg) => {
+    const ts = parseChatMessageTime(String(msg?.createdAt || ""));
+    return ts > latest ? ts : latest;
+  }, 0);
+}
+
+function historyHasPending(messages: ChatDraftMessage[]): boolean {
+  const list = Array.isArray(messages) ? messages : [];
+  return list.some((msg) => String(msg?.status || "").trim().toLowerCase() === "pending");
+}
+
 function sortHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
   const list = Array.isArray(messages) ? [...messages] : [];
   list.sort((a, b) => {
@@ -1014,7 +1029,15 @@ function sortHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
 function pickBetterHistory(primary: ChatDraftMessage[], fallback: ChatDraftMessage[], seed: ChatDraftMessage[]): ChatDraftMessage[] {
   const primaryScore = historyRenderableScore(primary);
   const fallbackScore = historyRenderableScore(fallback);
+  const primaryLatest = latestHistoryTimestamp(primary);
+  const fallbackLatest = latestHistoryTimestamp(fallback);
+  const primaryPending = historyHasPending(primary);
+  const fallbackPending = historyHasPending(fallback);
   if (primaryScore <= 0 && fallbackScore <= 0) return seed;
+  if (fallbackPending && !primaryPending) return fallback.length ? fallback : (primary.length ? primary : seed);
+  if (primaryPending && !fallbackPending) return primary.length ? primary : (fallback.length ? fallback : seed);
+  if (fallbackLatest > primaryLatest) return fallback.length ? fallback : (primary.length ? primary : seed);
+  if (primaryLatest > fallbackLatest) return primary.length ? primary : (fallback.length ? fallback : seed);
   if (fallbackScore > primaryScore) return fallback.length ? fallback : (primary.length ? primary : seed);
   return primary.length ? primary : (fallback.length ? fallback : seed);
 }
@@ -1026,6 +1049,10 @@ function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage
       const rawReasoning = extractMessageReasoningSource(msg);
       const content = stripInlineBase64Images(contentToPlainText(rawContent) || fallbackRawContentText(rawContent));
       const reasoning = contentToPlainText(rawReasoning) || fallbackRawContentText(rawReasoning);
+      const rawStatus = String((msg as any)?.status || "").trim().toLowerCase();
+      const status = rawStatus === "pending" || rawStatus === "sent" || rawStatus === "failed"
+        ? rawStatus as ChatDraftMessage["status"]
+        : undefined;
       let tokenCount: { input?: number; output?: number } | undefined;
       if (msg?.tokenCount && typeof msg.tokenCount === "object") {
         const input = Number(msg.tokenCount.input || 0);
@@ -1043,6 +1070,7 @@ function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage
       return {
         ...msg,
         content,
+        status,
         reasoning: reasoning || undefined,
         tokenCount,
       };
@@ -1240,7 +1268,7 @@ function ChatsHome({
         const picked = pickLatestDraftPreview(nextMessages);
         setDuPreview(picked.preview);
         setDuTime(picked.time);
-        if (historyRenderableScore(remoteMessages) >= historyRenderableScore(localMessages) && remoteMessages.length) {
+        if (nextMessages === remoteMessages && remoteMessages.length) {
           await writeLocalChatHistory(did, "sumitalk-main", remoteMessages);
         }
       } catch {}
@@ -1581,7 +1609,7 @@ function MainChatScreen({
         const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
         const next = pickBetterHistory(remoteMessages, fallbackLocalMessages, seedMessages);
         setMessages(next);
-        if (historyRenderableScore(remoteMessages) >= historyRenderableScore(fallbackLocalMessages) && remoteMessages.length) {
+        if (next === remoteMessages && remoteMessages.length) {
           await writeLocalChatHistory(deviceId, windowId, remoteMessages);
         }
       } catch (e: any) {
@@ -1595,11 +1623,17 @@ function MainChatScreen({
     };
   }, [deviceId, windowId]);
 
-  async function saveDisplayHistory(nextMessages: ChatDraftMessage[]) {
+  async function saveDisplayHistory(
+    nextMessages: ChatDraftMessage[],
+    options: { syncRemote?: boolean; localDeviceId?: string } = {},
+  ) {
     const sanitizedMessages = sanitizeHistoryMessages(nextMessages);
-    if (deviceId && windowId) {
-      await writeLocalChatHistory(deviceId, windowId, sanitizedMessages);
+    const resolvedDeviceId = String(options.localDeviceId || deviceId || "").trim();
+    const syncRemote = options.syncRemote !== false;
+    if (resolvedDeviceId && windowId) {
+      await writeLocalChatHistory(resolvedDeviceId, windowId, sanitizedMessages);
     }
+    if (!syncRemote) return;
     if (!remoteHistoryReadyRef.current) {
       if (!remoteHistoryWarningShownRef.current) {
         remoteHistoryWarningShownRef.current = true;
@@ -1627,23 +1661,30 @@ function MainChatScreen({
       toast("当前还没拿到可用模型，稍后再试");
       return;
     }
+    const resolvedDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
+    if (resolvedDeviceId && resolvedDeviceId !== deviceId) {
+      setDeviceId((prev) => (prev === resolvedDeviceId ? prev : resolvedDeviceId));
+    }
     const userMsg: ChatDraftMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content,
       createdAt: new Date().toISOString(),
+      status: "sent",
     };
     const assistantId = `assistant-${Date.now()}`;
+    const assistantCreatedAt = new Date().toISOString();
     const nextMessages = [...messages, userMsg];
-    const replyTarget = await getOrCreatePanelDeviceId();
+    const draftMessages = [
+      ...nextMessages,
+      { id: assistantId, role: "assistant" as const, content: "…", createdAt: assistantCreatedAt, status: "pending" as const },
+    ];
+    const replyTarget = resolvedDeviceId;
     setInput("");
     setPlusOpen(false);
     setSending(true);
-    setMessages((prev) => [
-      ...prev,
-      userMsg,
-      { id: assistantId, role: "assistant", content: "", createdAt: new Date().toISOString() },
-    ]);
+    setMessages(draftMessages);
+    await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
     try {
       const resp = await apiFetch("/v1/chat/completions", {
         method: "POST",
@@ -1674,7 +1715,8 @@ function MainChatScreen({
           id: assistantId,
           role: "assistant" as const,
           content: reply,
-          createdAt: new Date().toISOString(),
+          createdAt: assistantCreatedAt,
+          status: "sent",
           reasoning: reasoning || undefined,
           tokenCount,
         },
@@ -1684,7 +1726,13 @@ function MainChatScreen({
     } catch (e: any) {
       const failedMessages = [
         ...nextMessages,
-        { id: assistantId, role: "assistant" as const, content: `（发送失败：${e?.message || e}）`, createdAt: new Date().toISOString() },
+        {
+          id: assistantId,
+          role: "assistant" as const,
+          content: `（发送失败：${e?.message || e}）`,
+          createdAt: assistantCreatedAt,
+          status: "failed",
+        },
       ];
       setMessages(failedMessages);
       await saveDisplayHistory(failedMessages);
