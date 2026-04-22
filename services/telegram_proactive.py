@@ -34,6 +34,7 @@ from storage.miniapp_panel_store import list_trusted_devices
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 from services.telegram_bot import (
+    _sanitize_reply_for_telegram,
     build_telegram_style_system,
     process_message,
 )
