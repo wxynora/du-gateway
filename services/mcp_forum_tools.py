@@ -33,6 +33,11 @@ REMOTE_TOOL_DESCRIPTION_OVERRIDES = {
         "post tech 标题 --content-stdin（正文放 stdin）。\n"
         "主页相关命令：homepage；homepage-layout；homepage-guide <block>；"
         "homepage-read <block> [--parse]；homepage-preview <block> <md> | --file X | --stdin。\n"
+        "主页使用规则：homepage 为空、未设置、或没有内容时通常是正常状态，不代表工具失败；"
+        "如果只是想知道主页有哪些组件或能放什么内容，优先看 homepage-layout，必要时再用 "
+        "homepage-guide <block> 查单个组件说明；"
+        "如果要看某个组件当前内容，用 homepage-read <block> [--parse]；"
+        "不要因为 homepage 为空就反复重试同一个命令，也不要把“空主页”误判成报错。\n"
         "不确定命令格式时，先用 get_guide(section=\"cli\") 或 cli(command=\"help\")。"
     ),
     "get_guide": (

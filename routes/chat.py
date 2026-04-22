@@ -348,6 +348,22 @@ def _chat_url_to_models_url(chat_url: str) -> str:
 
 
 _THINK_BLOCK_RE = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
+_TOOL_MIDSTREAM_TEXT_RE = re.compile(
+    r"(let me (check|look|see|read|inspect)"
+    r"|i(?:'|’)ll (check|look|see|read|inspect)"
+    r"|guide doesn.?t mention"
+    r"|tool description"
+    r"|我(?:先|再)?(?:去)?(?:看一下|看看|看一眼|查一下|查查|再看|再查|看下)"
+    r"|先看一下"
+    r"|先查一下"
+    r"|工具说明"
+    r"|命令说明)",
+    re.IGNORECASE,
+)
+_TOOL_MIDSTREAM_RETRY_INSTRUCTION = (
+    "如果还需要信息，直接继续调用工具；不知道该调用什么工具就直接进行最终回复。\n"
+    "如果已经够了，直接给最终答复。"
+)
 
 
 def _extract_thinking_from_content(content: str) -> tuple[str, str]:
@@ -366,6 +382,45 @@ def _extract_thinking_from_content(content: str) -> tuple[str, str]:
 
     stripped = _THINK_BLOCK_RE.sub(_repl, content).strip()
     return stripped, "\n\n".join(thinking_parts)
+
+
+def _looks_like_tool_midstream_text(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    visible, thinking = _extract_thinking_from_content(raw)
+    merged = "\n".join(x for x in (visible.strip(), thinking.strip()) if x).strip() or raw
+    merged = " ".join(merged.split()).strip()
+    if not merged or len(merged) > 400:
+        return False
+    if _TOOL_MIDSTREAM_TEXT_RE.search(merged):
+        return True
+    lower = merged.lower()
+    if merged.endswith(("...", "…", "-")) and any(k in lower for k in ("check", "look", "guide", "看看", "查", "说明")):
+        return True
+    return False
+
+
+def _should_retry_tool_followup(content_text: str, reasoning_text: str = "") -> bool:
+    if _looks_like_tool_midstream_text(content_text):
+        return True
+    if not str(content_text or "").strip() and _looks_like_tool_midstream_text(reasoning_text):
+        return True
+    return False
+
+
+def _inject_tool_midstream_retry_instruction(body: dict) -> dict:
+    body = copy.deepcopy(body)
+    messages = list(body.get("messages") or [])
+    insert_idx = 0
+    while insert_idx < len(messages) and str((messages[insert_idx] or {}).get("role") or "").strip().lower() == "system":
+        if str((messages[insert_idx] or {}).get("content") or "").strip() == _TOOL_MIDSTREAM_RETRY_INSTRUCTION:
+            body["messages"] = messages
+            return body
+        insert_idx += 1
+    messages.insert(insert_idx, {"role": "system", "content": _TOOL_MIDSTREAM_RETRY_INSTRUCTION})
+    body["messages"] = messages
+    return body
 
 
 def _normalize_reasoning_details(value) -> list:
@@ -756,8 +811,11 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
     # 有 tools：缓冲 + 工具循环，最后把最后一轮流发给客户端
     current_body = body
     max_tool_rounds = TOOL_MAX_ROUNDS
+    max_processed_tool_rounds = max(0, int(max_tool_rounds) - 1)
+    tool_rounds_used = 0
+    tool_midstream_retry_used = False
     try:
-        for round_idx in range(max_tool_rounds):
+        while True:
             chunks = []
             for chunk in _stream_forward_to_ai(current_body, headers):
                 chunks.append(chunk)
@@ -767,7 +825,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             parsed = _parse_stream_to_message(chunks)
             tool_calls = parsed.get("tool_calls")
             if tool_calls and isinstance(tool_calls, list):
-                if round_idx + 1 >= max_tool_rounds:
+                if tool_rounds_used >= max_processed_tool_rounds:
                     logger.warning(
                         "工具调用达到轮数上限(%s)，停止继续请求上游以控制费用；当前工具数=%s",
                         max_tool_rounds,
@@ -789,6 +847,19 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                     msg["reasoning_omitted"] = True
                     reasoning_omitted = True
                 current_body = _append_tool_results_and_continue(current_body, msg, tool_calls, execute_tool)
+                tool_rounds_used += 1
+                continue
+            if (
+                tool_rounds_used > 0
+                and (not tool_midstream_retry_used)
+                and _should_retry_tool_followup(
+                    parsed.get("content") or "",
+                    parsed.get("reasoning") or "",
+                )
+            ):
+                logger.info("工具续轮命中中间态文本，流式路径触发一次内部补问重试")
+                current_body = _inject_tool_midstream_retry_instruction(current_body)
+                tool_midstream_retry_used = True
                 continue
             du_state = PcmdDuThoughtStreamState()
             for ch in chunks:
@@ -1329,19 +1400,45 @@ def chat_completions():
     # 避免客户端（RikkaHub 等）把 reasoning 渲染成对话内容。
     accumulated_reasoning_details: list[dict] = []
     max_tool_rounds = TOOL_MAX_ROUNDS
-    for _ in range(max_tool_rounds - 1):
+    max_processed_tool_rounds = max(0, int(max_tool_rounds) - 1)
+    tool_rounds_used = 0
+    tool_midstream_retry_used = False
+    while True:
         msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
+        tool_calls = (msg or {}).get("tool_calls")
+        if tool_calls and isinstance(tool_calls, list):
+            if tool_rounds_used >= max_processed_tool_rounds:
+                break
+            if isinstance(msg, dict):
+                details = _normalize_reasoning_details(msg.get("reasoning_details"))
+                if details:
+                    accumulated_reasoning_details.extend(details)
+            from services.notion_tools import execute_tool
+            body = _append_tool_results_and_continue(body, msg, tool_calls, execute_tool)
+            tool_rounds_used += 1
+            resp_json, status, err = _forward_to_ai(body, headers)
+            if err or status >= 400:
+                break
+            continue
+        if (
+            tool_rounds_used > 0
+            and (not tool_midstream_retry_used)
+            and _should_retry_tool_followup(
+                get_assistant_content_text(msg or {}) if isinstance(msg, dict) else "",
+                str((msg or {}).get("reasoning") or (msg or {}).get("reasoning_content") or (msg or {}).get("thinking") or ""),
+            )
+        ):
+            logger.info("工具续轮命中中间态文本，非流式路径触发一次内部补问重试")
+            body = _inject_tool_midstream_retry_instruction(body)
+            tool_midstream_retry_used = True
+            resp_json, status, err = _forward_to_ai(body, headers)
+            if err or status >= 400:
+                break
+            continue
         if isinstance(msg, dict):
             details = _normalize_reasoning_details(msg.get("reasoning_details"))
             if details:
                 accumulated_reasoning_details.extend(details)
-        tool_calls = (msg or {}).get("tool_calls")
-        if not tool_calls or not isinstance(tool_calls, list):
-            break
-        from services.notion_tools import execute_tool
-        body = _append_tool_results_and_continue(body, msg, tool_calls, execute_tool)
-        resp_json, status, err = _forward_to_ai(body, headers)
-        if err or status >= 400:
             break
     if resp_json:
         resp_json = _apply_du_thought_to_assistant_response(resp_json)
