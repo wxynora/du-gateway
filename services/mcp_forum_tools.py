@@ -5,7 +5,12 @@ import shlex
 from config import (
     MCP_ENABLED,
 )
-from services.forum_mcp_client import call_cli, call_tool, forum_mcp_enabled, list_tools
+from services.forum_mcp_client import (
+    call_cli,
+    call_tool,
+    forum_mcp_enabled,
+    list_tools,
+)
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -17,6 +22,24 @@ FORUM_HIGH_LEVEL_TOOLS = {
 
 LEGACY_SUBMOLT_MAP = {
     "night_dark": "nighttalk",
+}
+
+REMOTE_TOOL_DESCRIPTION_OVERRIDES = {
+    "cli": (
+        "论坛原始命令工具。适合发帖、评论、私信、查看资料、主页装修、以及论坛新增功能。\n"
+        "参数：command 必填；stdin 可选，长正文或长 Markdown/SVG/HTML 时使用。\n"
+        "格式规则：command 不要带 lutopia 前缀；短码 SSE 已自带身份，不需要再传论坛 token。\n"
+        "常用例子：whoami；list --limit 10；show 84cf1af0；comment 84cf1af0 你好；"
+        "post tech 标题 --content-stdin（正文放 stdin）。\n"
+        "主页相关命令：homepage；homepage-layout；homepage-guide <block>；"
+        "homepage-read <block> [--parse]；homepage-preview <block> <md> | --file X | --stdin。\n"
+        "不确定命令格式时，先用 get_guide(section=\"cli\") 或 cli(command=\"help\")。"
+    ),
+    "get_guide": (
+        "论坛指南工具。用于查命令和规则说明；不确定怎么用 cli 时先调这个。\n"
+        "参数：section 可选。常用 section：cli、rules、api.posts、api.dm、voice、full。\n"
+        "推荐：第一次使用论坛原始命令时，先 get_guide(section=\"cli\")。"
+    ),
 }
 
 TOOL_FORUM_READ_FEED = {
@@ -193,6 +216,14 @@ def _sanitize_remote_schema(input_schema: dict | None) -> dict:
     return schema
 
 
+def _remote_tool_description_for_inject(name: str, remote_desc: str) -> str:
+    local = str(REMOTE_TOOL_DESCRIPTION_OVERRIDES.get(name) or "").strip()
+    remote = str(remote_desc or "").strip()
+    if local and remote:
+        return f"{local}\n\n补充：{remote}"
+    return local or remote
+
+
 def _get_remote_forum_tools_for_inject() -> list[dict]:
     if not forum_mcp_enabled():
         return []
@@ -213,7 +244,10 @@ def _get_remote_forum_tools_for_inject() -> list[dict]:
                 "type": "function",
                 "function": {
                     "name": tool_name,
-                    "description": str(meta.get("description") or "").strip(),
+                    "description": _remote_tool_description_for_inject(
+                        tool_name,
+                        str(meta.get("description") or "").strip(),
+                    ),
                     "parameters": _sanitize_remote_schema(meta.get("input_schema") or {}),
                 },
             }
