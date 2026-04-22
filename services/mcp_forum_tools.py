@@ -1,368 +1,22 @@
-import ipaddress
+import copy
 import json
-import re
-from urllib.parse import urlparse
-
-import requests
+import shlex
 
 from config import (
     MCP_ENABLED,
-    MCP_FORUM_ALLOWED_HOSTS,
-    MCP_FORUM_BASE_URL,
-    MCP_FORUM_DEFAULT_UID,
-    MCP_FORUM_VERIFY_UID_PATH,
-    MCP_FORUM_REGISTER_PATH,
-    MCP_FORUM_VERIFY_UID_METHOD,
-    MCP_FORUM_REGISTER_METHOD,
-    MCP_FORUM_VERIFY_UID_PATHS,
-    MCP_FORUM_POST_CREATE_PATH,
-    MCP_FORUM_POST_LIST_PATH,
-    MCP_FORUM_POST_LIST_PATHS,
-    MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
-    MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE,
-    MCP_HTTP_MAX_RESPONSE_CHARS,
-    MCP_HTTP_MAX_TIMEOUT_SECONDS,
-    MCP_HTTP_RETRIES,
-    MCP_HTTP_TIMEOUT_SECONDS,
 )
+from services.forum_mcp_client import call_cli, call_tool, forum_mcp_enabled, list_tools
 from utils.log import get_logger
 
 logger = get_logger(__name__)
 
-TOOL_FORUM_HTTP = {
-    "type": "function",
-    "function": {
-        "name": "forum_http",
-        "description": (
-            "论坛 HTTP 工具：可调用论坛 API 完成 verify-uid、register、发帖、评论等。"
-            "建议只填 path（不要填域名）或保证 url 域名在白名单；若域名不在白名单，会自动尝试用 MCP_FORUM_BASE_URL 替换。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "method": {"type": "string", "description": "GET/POST/PUT/DELETE"},
-                "url": {"type": "string", "description": "完整 URL，必须是白名单域名"},
-                "headers": {"type": "object", "description": "可选请求头"},
-                "params": {"type": "object", "description": "可选 query 参数"},
-                "body": {"description": "可选请求体（JSON 对象或字符串）"},
-                "timeout": {"type": "integer", "description": "超时秒数，默认 20"},
-            },
-            "required": ["method", "url"],
-        },
-    },
+FORUM_HIGH_LEVEL_TOOLS = {
+    "forum_read_feed",
+    "forum_open_thread",
 }
 
-TOOL_FORUM_LOGIN = {
-    "type": "function",
-    "function": {
-        "name": "forum_login",
-        "description": (
-            "论坛认证（forum_login）：默认调用 verify-uid 接口。\n"
-            "你不需要手动输入 uid/auth；会自动使用 MCP_FORUM_DEFAULT_UID 并注入 Bearer。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "可选：默认 MCP_FORUM_VERIFY_UID_PATH"},
-                "payload": {"description": "可选请求体（JSON）"},
-                "timeout": {"type": "integer"},
-                "headers": {"type": "object"},
-            },
-            "required": [],
-        },
-    },
-}
-
-TOOL_FORUM_POST = {
-    "type": "function",
-    "function": {
-        "name": "forum_post",
-        "description": (
-            "论坛发帖：默认调用 MCP_FORUM_POST_CREATE_PATH。\n"
-            "提醒：你不需要手动输入 auth_token，只要服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动使用默认 Bearer。\n"
-            "发帖时请填写 submolt（板块分类），必须从以下值中选择一个：general/tech/diary/relationship/night_dark。\n"
-            "如果你没填，系统会默认使用 general。\n"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "content": {"type": "string"},
-                "title": {"type": "string", "description": "可选：发帖标题，不传则用默认值"},
-                "category_id": {},
-                "submolt": {
-                    "type": "string",
-                    "description": "板块分类（建议必填）：general/tech/diary/relationship/night_dark",
-                },
-                "path": {"type": "string", "description": "可选：默认 MCP_FORUM_POST_CREATE_PATH"},
-                "auth_token": {
-                    "type": "string",
-                    "description": "Bearer token（不传则使用 MCP_FORUM_DEFAULT_UID）",
-                },
-                "timeout": {"type": "integer"},
-            },
-            "required": ["content"],
-        },
-    },
-}
-
-TOOL_FORUM_COMMENT = {
-    "type": "function",
-    "function": {
-        "name": "forum_comment",
-        "description": (
-            "论坛评论：默认调用 MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE。\n"
-            "提醒：你不需要手动输入 auth_token，只要服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动使用默认 Bearer。\n"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "post_id": {"type": "string"},
-                "content": {"type": "string"},
-                "path_template": {"type": "string", "description": "可选：默认 MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE"},
-                "auth_token": {
-                    "type": "string",
-                    "description": "Bearer token（不传则使用 MCP_FORUM_DEFAULT_UID）",
-                },
-                "timeout": {"type": "integer"},
-            },
-            "required": ["post_id", "content"],
-        },
-    },
-}
-
-TOOL_FORUM_DELETE_POST = {
-    "type": "function",
-    "function": {
-        "name": "forum_delete_post",
-        "description": (
-            "论坛删帖：默认对 MCP_FORUM_POST_DETAIL_PATH_TEMPLATE 对应的帖子详情地址发 DELETE。\n"
-            "你只需要传 post_id；如果服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动带默认 Bearer。\n"
-            "如论坛删帖接口不是帖子详情地址，可用 path_template 覆盖，例如 /posts/{post_id} 或 /api/posts/{post_id}。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "post_id": {"type": "string", "description": "必填：要删除的帖子 ID"},
-                "path_template": {"type": "string", "description": "可选：默认 MCP_FORUM_POST_DETAIL_PATH_TEMPLATE"},
-                "auth_token": {
-                    "type": "string",
-                    "description": "Bearer token（不传则使用 MCP_FORUM_DEFAULT_UID）",
-                },
-                "timeout": {"type": "integer"},
-            },
-            "required": ["post_id"],
-        },
-    },
-}
-
-
-TOOL_FORUM_UID_HTTP = {
-    "type": "function",
-    "function": {
-        "name": "forum_uid_http",
-        "description": (
-            "论坛 UID 鉴权 HTTP 工具（forum_uid_http）：会自动在请求头注入 Authorization: Bearer <uid>。\n"
-            "适合用于 verify-uid、register、浏览帖子列表/详情、发帖、评论等需要同一 Bearer 的场景。\n"
-            "提醒：你不需要手动输入 uid（以及不需要手动带 Authorization）。只要服务器已配置 `MCP_FORUM_DEFAULT_UID`，会自动使用默认 Bearer。\n"
-            "建议只填 path 或正确 url；若 url 域名不在白名单，会自动尝试替换为 MCP_FORUM_BASE_URL 的域名。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "uid": {
-                    "type": "string",
-                    "description": "小红书 UID（作为 Bearer token 注入 Authorization；不传则使用 MCP_FORUM_DEFAULT_UID）",
-                },
-                "method": {"type": "string", "description": "GET/POST/PUT/DELETE"},
-                "url": {"type": "string", "description": "完整 URL（可选：与 path 二选一）"},
-                "path": {"type": "string", "description": "相对 MCP_FORUM_BASE_URL 的接口路径（可选：与 url 二选一）"},
-                "headers": {"type": "object", "description": "可选额外请求头（会保留你传入的 Authorization，但默认会注入）"},
-                "params": {"type": "object", "description": "可选 query 参数"},
-                "body": {"description": "可选请求体（JSON 对象或字符串）"},
-                "timeout": {"type": "integer", "description": "超时秒数"},
-            },
-            "required": ["method"],
-        },
-    },
-}
-
-TOOL_FORUM_GET_COMMENTS = {
-    "type": "function",
-    "function": {
-        "name": "forum_get_comments",
-        "description": (
-            "获取帖子的评论列表（GET /posts/:id/comments）。\n"
-            "长评论会被自动截断并标注 content_truncated:true，用 forum_get_comment 获取截断评论的全文。\n"
-            "建议先用 forum_get_post 读帖子正文，再用本工具读评论。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "post_id": {"type": "string", "description": "必填：帖子 ID"},
-                "sort": {"type": "string", "description": "可选：top（按热度）"},
-                "limit": {"type": "integer", "description": "可选：返回条数"},
-                "content": {"type": "string", "description": "可选：full/preview/none，默认 preview"},
-                "timeout": {"type": "integer"},
-            },
-            "required": ["post_id"],
-        },
-    },
-}
-
-TOOL_FORUM_GET_COMMENT = {
-    "type": "function",
-    "function": {
-        "name": "forum_get_comment",
-        "description": "获取单条评论的完整正文（GET /comments/:id）。当评论在列表里被截断时使用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "comment_id": {"type": "string", "description": "必填：评论 ID"},
-                "timeout": {"type": "integer"},
-            },
-            "required": ["comment_id"],
-        },
-    },
-}
-
-TOOL_FORUM_EDIT_POST = {
-    "type": "function",
-    "function": {
-        "name": "forum_edit_post",
-        "description": "编辑自己发的帖子（PUT /posts/:id）。title 和 content 至少传一个。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "post_id": {"type": "string", "description": "必填：帖子 ID"},
-                "title": {"type": "string", "description": "可选：新标题"},
-                "content": {"type": "string", "description": "可选：新正文"},
-                "timeout": {"type": "integer"},
-            },
-            "required": ["post_id"],
-        },
-    },
-}
-
-TOOL_FORUM_EDIT_COMMENT = {
-    "type": "function",
-    "function": {
-        "name": "forum_edit_comment",
-        "description": "编辑自己发的评论（PUT /comments/:id）。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "comment_id": {"type": "string", "description": "必填：评论 ID"},
-                "content": {"type": "string", "description": "必填：新内容"},
-                "timeout": {"type": "integer"},
-            },
-            "required": ["comment_id", "content"],
-        },
-    },
-}
-
-TOOL_FORUM_DELETE_COMMENT = {
-    "type": "function",
-    "function": {
-        "name": "forum_delete_comment",
-        "description": "删除自己发的评论（DELETE /comments/:id）。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "comment_id": {"type": "string", "description": "必填：评论 ID"},
-                "reason": {"type": "string", "description": "可选：删除原因"},
-                "timeout": {"type": "integer"},
-            },
-            "required": ["comment_id"],
-        },
-    },
-}
-
-TOOL_FORUM_VOTE_POST = {
-    "type": "function",
-    "function": {
-        "name": "forum_vote_post",
-        "description": "给帖子点赞或踩（POST /posts/:id/vote）。value=1 点赞，value=-1 踩。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "post_id": {"type": "string", "description": "必填：帖子 ID"},
-                "value": {"type": "integer", "description": "必填：1（点赞）或 -1（踩）"},
-                "timeout": {"type": "integer"},
-            },
-            "required": ["post_id", "value"],
-        },
-    },
-}
-
-TOOL_FORUM_VOTE_COMMENT = {
-    "type": "function",
-    "function": {
-        "name": "forum_vote_comment",
-        "description": "给评论点赞或踩（POST /comments/:id/vote）。value=1 点赞，value=-1 踩。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "comment_id": {"type": "string", "description": "必填：评论 ID"},
-                "value": {"type": "integer", "description": "必填：1（点赞）或 -1（踩）"},
-                "timeout": {"type": "integer"},
-            },
-            "required": ["comment_id", "value"],
-        },
-    },
-}
-
-TOOL_FORUM_GET_PROFILE = {
-    "type": "function",
-    "function": {
-        "name": "forum_get_profile",
-        "description": (
-            "查看自己的论坛资料和近期活动（GET /agents/me/activity）。\n"
-            "返回发帖数、评论数、最近 30 天活动统计、近 20 条帖子/评论。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "timeout": {"type": "integer"},
-            },
-        },
-    },
-}
-
-TOOL_FORUM_SEND_DM = {
-    "type": "function",
-    "function": {
-        "name": "forum_send_dm",
-        "description": (
-            "给其他 agent 发私信（POST /messages）。\n"
-            "需要自己和对方都开启了 DM 权限才能发送（默认关闭，需要老婆在设置里开启）。\n"
-            "recipient_name 填对方的用户名，从帖子的 author_name 字段获取。最多 2000 字。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "recipient_name": {"type": "string", "description": "必填：收件人用户名（author_name）"},
-                "content": {"type": "string", "description": "必填：消息内容，最多 2000 字"},
-                "timeout": {"type": "integer"},
-            },
-            "required": ["recipient_name", "content"],
-        },
-    },
-}
-
-TOOL_FORUM_INBOX = {
-    "type": "function",
-    "function": {
-        "name": "forum_inbox",
-        "description": "查看收到的私信（GET /messages/inbox）。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "limit": {"type": "integer", "description": "可选：返回条数，默认 20"},
-                "unread_only": {"type": "boolean", "description": "可选：只看未读消息"},
-                "timeout": {"type": "integer"},
-            },
-        },
-    },
+LEGACY_SUBMOLT_MAP = {
+    "night_dark": "nighttalk",
 }
 
 TOOL_FORUM_READ_FEED = {
@@ -371,17 +25,14 @@ TOOL_FORUM_READ_FEED = {
         "name": "forum_read_feed",
         "description": (
             "高层看帖工具：读取帖子信息流并返回适合直接浏览的帖子卡片摘要。\n"
-            "日常刷帖、随便看看论坛时优先用这个，不要先拆成 forum_list_posts 再自己整理。\n"
+            "日常刷帖、随便看看论坛时优先用这个，不要自己拆底层列表接口。\n"
             "它返回的是精简卡片，不是一整坨原始 JSON。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "limit": {"type": "integer", "description": "可选：返回条数，默认 10，最大 30"},
-                "offset": {"type": "integer", "description": "可选：偏移"},
-                "sort": {"type": "string", "description": "可选：hot/new/top/rising"},
                 "submolt": {"type": "string", "description": "可选：子版块名称或 ID"},
-                "timeout": {"type": "integer"},
             },
         },
     },
@@ -393,16 +44,13 @@ TOOL_FORUM_OPEN_THREAD = {
         "name": "forum_open_thread",
         "description": (
             "高层开帖工具：一次返回帖子正文摘要和评论摘要。\n"
-            "想看某个帖子、理解讨论、准备回帖时优先用这个，不要先拆成 forum_get_post + forum_get_comments。\n"
+            "想看某个帖子、理解讨论、准备回帖时优先用这个，不要自己拆底层详情和评论接口。\n"
             "适合日常进帖查看。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "post_id": {"type": "string", "description": "必填：帖子 ID"},
-                "comments_limit": {"type": "integer", "description": "可选：返回评论条数，默认 5，最大 20"},
-                "include_comments": {"type": "boolean", "description": "可选：是否附带评论摘要，默认 true"},
-                "timeout": {"type": "integer"},
             },
             "required": ["post_id"],
         },
@@ -509,7 +157,6 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
     mode:
     - daily: 仅日常高频（闹钟相关）
     - forum: 日常 + 论坛高频（发帖/评论/看帖）
-    - debug: 全量（含底层 HTTP/鉴权工具）
     """
     if not MCP_ENABLED:
         return []
@@ -522,409 +169,128 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
     ]
     if mode == "daily":
         return schedule_tools
-    forum_tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "forum_verify_uid",
-                "description": (
-                    "verify-uid：确认 UID 对应的成员身份（默认 MCP_FORUM_VERIFY_UID_PATH）。\n"
-                    "建议仅在首次接入或出现 401/403 鉴权失败时调用，平时不要每次都调用。"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "method": {"type": "string", "description": "可选：默认 MCP_FORUM_VERIFY_UID_METHOD"},
-                        "path": {"type": "string", "description": "可选：默认 MCP_FORUM_VERIFY_UID_PATH"},
-                        "payload": {"description": "可选请求体（JSON）"},
-                        "headers": {"type": "object"},
-                        "timeout": {"type": "integer"},
-                    },
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "forum_register",
-                "description": (
-                    "register：注册你的账号（默认 MCP_FORUM_REGISTER_PATH）。\n"
-                    "建议仅在首次接入或出现 401/403 鉴权失败时调用。"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "method": {"type": "string", "description": "可选：默认 MCP_FORUM_REGISTER_METHOD"},
-                        "path": {"type": "string", "description": "可选：默认 MCP_FORUM_REGISTER_PATH"},
-                        "payload": {"description": "可选请求体（JSON）"},
-                        "headers": {"type": "object"},
-                        "timeout": {"type": "integer"},
-                    },
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "forum_list_posts",
-                "description": (
-                    "浏览帖子列表（GET /posts）。不需要手动输入 uid/auth。\n"
-                    "这是低层列表工具；日常刷帖优先用 forum_read_feed。\n"
-                    "只有在你确实需要原始列表结果时再用它；返回 401/403 时再调用 verify/register。\n"
-                    "tip：可以用 sort=hot/new/top/rising 筛选；submolt 指定子版块。"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "limit": {"type": "integer"},
-                        "offset": {"type": "integer"},
-                        "sort": {"type": "string", "description": "可选：hot/new/top/rising"},
-                        "submolt": {"type": "string", "description": "可选：子版块名称或 ID"},
-                        "path": {"type": "string", "description": "可选：默认 MCP_FORUM_POST_LIST_PATH"},
-                        "timeout": {"type": "integer"},
-                    },
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "forum_get_post",
-                "description": (
-                    "浏览帖子详情（GET /posts/:id，需要 post_id）。不需要手动输入 uid/auth。\n"
-                    "这是低层详情工具；日常进帖优先用 forum_open_thread。\n"
-                    "它只返回帖子正文，不含评论；只有确实需要拆开拿原始结果时再配合 forum_get_comments 使用。"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "post_id": {"type": "string"},
-                        "path_template": {"type": "string", "description": "可选：默认 MCP_FORUM_POST_DETAIL_PATH_TEMPLATE"},
-                        "timeout": {"type": "integer"},
-                    },
-                    "required": ["post_id"],
-                },
-            },
-        },
-    ]
-    # forum 场景：只给高频论坛工具，不给底层易混淆工具
     high_level = [
-        t for t in forum_tools
-        if ((t.get("function") or {}).get("name") in ("forum_list_posts", "forum_get_post"))
-    ] + [
         TOOL_FORUM_READ_FEED,
         TOOL_FORUM_OPEN_THREAD,
-        TOOL_FORUM_POST,
-        TOOL_FORUM_EDIT_POST,
-        TOOL_FORUM_COMMENT,
-        TOOL_FORUM_EDIT_COMMENT,
-        TOOL_FORUM_DELETE_POST,
-        TOOL_FORUM_DELETE_COMMENT,
-        TOOL_FORUM_GET_COMMENTS,
-        TOOL_FORUM_GET_COMMENT,
-        TOOL_FORUM_VOTE_POST,
-        TOOL_FORUM_VOTE_COMMENT,
-        TOOL_FORUM_GET_PROFILE,
-        TOOL_FORUM_SEND_DM,
-        TOOL_FORUM_INBOX,
     ]
-    if mode == "forum":
-        return schedule_tools + high_level + [TOOL_SEARCH_MEMORY]
-    # debug 场景：全量工具
-    return [
-        TOOL_FORUM_HTTP,
-        TOOL_FORUM_UID_HTTP,
-        TOOL_FORUM_LOGIN,
-        *forum_tools,
-        TOOL_FORUM_POST,
-        TOOL_FORUM_COMMENT,
-        TOOL_FORUM_DELETE_POST,
-        *schedule_tools,
-        TOOL_SEARCH_MEMORY,
-    ]
+    return schedule_tools + high_level + _get_remote_forum_tools_for_inject() + [TOOL_SEARCH_MEMORY]
+
+def _sanitize_remote_schema(input_schema: dict | None) -> dict:
+    schema = copy.deepcopy(input_schema if isinstance(input_schema, dict) else {})
+    if not isinstance(schema, dict):
+        schema = {}
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        props = {}
+    else:
+        props = dict(props)
+    props.pop("token", None)
+    schema["type"] = "object"
+    schema["properties"] = props
+    required = schema.get("required")
+    if isinstance(required, list):
+        schema["required"] = [x for x in required if str(x).strip() != "token"]
+    return schema
 
 
-def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
-    if len(text) <= max_chars:
-        return text, False
-    remain = len(text) - max_chars
-    return text[:max_chars] + f"\n\n[truncated: {remain} chars]", True
-
-
-def _pick_first_str(obj: dict, keys: tuple[str, ...]) -> str:
-    for key in keys:
-        value = obj.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
-def _pick_nested_str(obj: dict, parent_keys: tuple[str, ...], child_keys: tuple[str, ...]) -> str:
-    for pkey in parent_keys:
-        parent = obj.get(pkey)
-        if isinstance(parent, dict):
-            value = _pick_first_str(parent, child_keys)
-            if value:
-                return value
-    return ""
-
-
-def _pick_int(obj: dict, keys: tuple[str, ...]) -> int | None:
-    for key in keys:
-        value = obj.get(key)
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-        if isinstance(value, str) and value.strip().isdigit():
-            return int(value.strip())
-    return None
-
-
-def _extract_posts_list(result: dict) -> list[dict]:
-    data = result.get("data")
-    if isinstance(data, dict):
-        nested = data.get("data")
-        if isinstance(nested, list):
-            return [x for x in nested if isinstance(x, dict)]
-        for key in ("posts", "items", "list", "rows"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return [x for x in value if isinstance(x, dict)]
-    if isinstance(data, list):
-        return [x for x in data if isinstance(x, dict)]
-    for key in ("posts", "items", "list", "rows"):
-        value = result.get(key)
-        if isinstance(value, list):
-            return [x for x in value if isinstance(x, dict)]
-    return []
-
-
-def _extract_post_obj(result: dict) -> dict:
-    data = result.get("data")
-    if isinstance(data, dict):
-        for key in ("post", "item"):
-            value = data.get(key)
-            if isinstance(value, dict):
-                return value
-        return data
-    if isinstance(result.get("post"), dict):
-        return result.get("post")
-    return {}
-
-
-def _extract_comments_list(result: dict) -> list[dict]:
-    data = result.get("data")
-    if isinstance(data, dict):
-        for key in ("comments", "items", "list", "rows"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return [x for x in value if isinstance(x, dict)]
-    if isinstance(data, list):
-        return [x for x in data if isinstance(x, dict)]
-    for key in ("comments", "items", "list", "rows"):
-        value = result.get(key)
-        if isinstance(value, list):
-            return [x for x in value if isinstance(x, dict)]
-    return []
-
-
-def _clean_excerpt(text: str, max_chars: int = 160) -> str:
-    text = re.sub(r"\s+", " ", str(text or "")).strip()
-    if not text:
-        return ""
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip() + "..."
-
-
-def _summarize_post_card(post: dict) -> dict:
-    content = _pick_first_str(post, ("content_preview", "content", "text", "body"))
-    return {
-        "post_id": _pick_first_str(post, ("id", "post_id", "uuid")),
-        "title": _pick_first_str(post, ("title", "subject", "name")),
-        "author": (
-            _pick_first_str(post, ("author", "author_name", "author_display_name", "username", "creator_name"))
-            or _pick_nested_str(post, ("author", "user", "creator"), ("name", "display_name", "username", "nickname"))
-        ),
-        "submolt": _pick_first_str(post, ("submolt", "category", "board")),
-        "comment_count": _pick_int(post, ("comment_count", "comments_count", "commentsCount")),
-        "score": _pick_int(post, ("score", "vote_score", "upvotes", "like_count", "hot_score")),
-        "excerpt": _clean_excerpt(content, 160),
-    }
-
-
-def _summarize_comment_card(comment: dict) -> dict:
-    content = _pick_first_str(comment, ("content", "text", "body"))
-    return {
-        "comment_id": _pick_first_str(comment, ("id", "comment_id", "uuid")),
-        "author": (
-            _pick_first_str(comment, ("author", "author_name", "author_display_name", "username", "creator_name"))
-            or _pick_nested_str(comment, ("author", "user", "creator"), ("name", "display_name", "username", "nickname"))
-        ),
-        "score": _pick_int(comment, ("score", "vote_score", "upvotes", "like_count", "hot_score")),
-        "excerpt": _clean_excerpt(content, 120),
-    }
-
-
-def _host_allowed(hostname: str) -> bool:
-    host = (hostname or "").strip().lower()
-    if not host or host == "localhost":
-        return False
+def _get_remote_forum_tools_for_inject() -> list[dict]:
+    if not forum_mcp_enabled():
+        return []
     try:
-        ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return False
-    except ValueError:
-        pass
-    # 如果 MCP_FORUM_ALLOWED_HOSTS 没配全，则至少允许 MCP_FORUM_BASE_URL 对应的 hostname
-    if not MCP_FORUM_ALLOWED_HOSTS:
-        base = (MCP_FORUM_BASE_URL or "").strip()
-        if base:
-            bh = (urlparse(base).hostname or "").strip().lower()
-            if bh:
-                return host == bh
-        return False
-    return host in set(MCP_FORUM_ALLOWED_HOSTS)
+        remote_tools = list_tools()
+    except Exception as e:
+        logger.warning("forum_mcp list_tools failed while building inject tools: %s", e)
+        return []
 
-
-def _normalize_path(path: str, default_path: str) -> str:
-    p = (path or "").strip() or default_path
-    if not p.startswith("/"):
-        p = "/" + p
-    return p
-
-
-def _build_url_from_base(path: str, default_path: str) -> str:
-    base = (MCP_FORUM_BASE_URL or "").strip().rstrip("/")
-    if not base:
-        return ""
-    return base + _normalize_path(path, default_path)
-
-
-def invoke_forum_http(method: str, url: str, headers: dict | None, params: dict | None, body, timeout_override=None) -> tuple[dict, int]:
-    method = (method or "GET").strip().upper()
-    if method not in ("GET", "POST", "PUT", "DELETE"):
-        return {"ok": False, "error": "method 仅支持 GET/POST/PUT/DELETE"}, 400
-    if not url:
-        return {"ok": False, "error": "缺少 url"}, 400
-    u = urlparse(url)
-    if u.scheme not in ("http", "https"):
-        return {"ok": False, "error": "url 仅支持 http/https"}, 400
-    # 若 AI 提供了错误域名（但 path/query 正确），可自动替换成 MCP_FORUM_BASE_URL 的域名
-    if not _host_allowed(u.hostname or ""):
-        base = (MCP_FORUM_BASE_URL or "").strip()
-        if base:
-            bu = urlparse(base)
-            if bu.scheme in ("http", "https") and _host_allowed(bu.hostname or ""):
-                normalized_url = f"{bu.scheme}://{bu.netloc}{u.path or ''}"
-                if u.query:
-                    normalized_url += f"?{u.query}"
-                url = normalized_url
-                u = urlparse(url)
-
-    timeout = int(timeout_override or MCP_HTTP_TIMEOUT_SECONDS)
-    timeout = max(1, min(timeout, MCP_HTTP_MAX_TIMEOUT_SECONDS))
-    retries = max(0, int(MCP_HTTP_RETRIES))
-    max_chars = max(200, int(MCP_HTTP_MAX_RESPONSE_CHARS))
-    # 过滤敏感头 + 过滤 key/value 含非 ASCII 字符的头（HTTP 规范要求 header 必须 latin-1 可编码）
-    def _is_ascii_safe(s) -> bool:
-        try:
-            str(s).encode("latin-1")
-            return True
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            return False
-    safe_headers = {
-        k: v for k, v in (headers or {}).items()
-        if str(k).lower() not in ("x-mcp-token",) and _is_ascii_safe(k) and _is_ascii_safe(v)
-    }
-
-    last_error = ""
-    requested_url = url
-    method_used = method
-    for attempt in range(retries + 1):
-        try:
-            kwargs = {
-                "method": method,
-                "url": url,
-                "headers": safe_headers,
-                "params": params,
-                "timeout": timeout,
-            }
-            if method in ("POST", "PUT", "DELETE"):
-                if isinstance(body, dict):
-                    kwargs["json"] = body
-                elif body is not None:
-                    kwargs["data"] = str(body)
-            resp = requests.request(**kwargs)
-            # 常见接口方法不匹配：自动在 GET/POST 间切换一次（405 -> retry）
-            if resp.status_code == 405 and method in ("GET", "POST"):
-                alt_method = "POST" if method == "GET" else "GET"
-                kwargs["method"] = alt_method
-                method_used = alt_method
-                if alt_method == "GET":
-                    # GET 时避免带 json/data
-                    kwargs.pop("json", None)
-                    kwargs.pop("data", None)
-                resp = requests.request(**kwargs)
-            try:
-                data = resp.json()
-                is_json = True
-            except Exception:
-                data = None
-                is_json = False
-
-            out = {
-                "ok": 200 <= resp.status_code < 300,
-                "status": resp.status_code,
-                "headers": {"content_type": resp.headers.get("Content-Type", "")},
-                "truncated": False,
-                "request": {
-                    "method": method_used,
-                    "url": kwargs.get("url") or requested_url,
+    out: list[dict] = []
+    for name in ("cli", "get_guide"):
+        meta = remote_tools.get(name) or {}
+        tool_name = str(meta.get("name") or "").strip()
+        if not tool_name:
+            continue
+        out.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": str(meta.get("description") or "").strip(),
+                    "parameters": _sanitize_remote_schema(meta.get("input_schema") or {}),
                 },
             }
-            if is_json:
-                out["data"] = data
-            else:
-                text, truncated = _truncate_text(resp.text or "", max_chars)
-                out["text"] = text
-                out["truncated"] = truncated
-            if not out["ok"]:
-                logger.warning(
-                    "forum_http 返回非2xx method=%s url=%s status=%s",
-                    out["request"]["method"],
-                    out["request"]["url"],
-                    out["status"],
-                )
-            else:
-                logger.info(
-                    "forum_http 请求成功 method=%s url=%s status=%s",
-                    out["request"]["method"],
-                    out["request"]["url"],
-                    out["status"],
-                )
-            return out, 200
-        except (requests.RequestException, UnicodeEncodeError, ValueError, Exception) as e:
-            last_error = str(e)
-            if attempt >= retries:
-                logger.warning("forum_http 调用失败 method=%s url=%s error=%s", method, url[:120], last_error)
-                return {"ok": False, "error": f"请求失败: {last_error}"}, 502
-    return {"ok": False, "error": last_error or "未知错误"}, 502
+        )
+    return out
+
+
+def _quote_cli_arg(value) -> str:
+    return shlex.quote(str(value or "").strip())
+
+
+def _normalize_submolt(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return "general"
+    return LEGACY_SUBMOLT_MAP.get(raw, raw)
+
+
+def _build_forum_cli_command(name: str, args: dict) -> tuple[str, str | None]:
+    if name == "forum_read_feed":
+        parts = ["list"]
+        limit = args.get("limit")
+        submolt = str(args.get("submolt") or "").strip()
+        if limit is not None:
+            parts.extend(["--limit", str(limit)])
+        if submolt:
+            parts.extend(["--submolt", _normalize_submolt(submolt)])
+        return " ".join(parts), None
+
+    if name == "forum_open_thread":
+        post_id = str(args.get("post_id") or "").strip()
+        if not post_id:
+            raise ValueError("post_id 不能为空")
+        return f"show {_quote_cli_arg(post_id)}", None
+
+    raise ValueError(f"未支持的论坛 MCP 工具: {name}")
+
+
+def _execute_forum_mcp_tool(name: str, args: dict) -> dict:
+    if not forum_mcp_enabled():
+        return {"ok": False, "error": "未配置 FORUM_MCP_SSE_URL"}
+    try:
+        command, stdin = _build_forum_cli_command(name, args)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    result = call_cli(command, stdin=stdin)
+    result["local_tool"] = name
+    result["command"] = command
+    result["stdin_used"] = stdin is not None
+    result["source"] = "forum_mcp"
+    return result
+
+
+def _execute_remote_forum_tool(name: str, args: dict) -> dict:
+    if not forum_mcp_enabled():
+        return {"ok": False, "error": "未配置 FORUM_MCP_SSE_URL"}
+
+    if name == "cli":
+        command = str(args.get("command") or "").strip()
+        if not command:
+            return {"ok": False, "error": "command 不能为空"}
+        stdin = args.get("stdin")
+        result = call_cli(command, stdin=None if stdin is None else str(stdin))
+    elif name == "get_guide":
+        section = str(args.get("section") or "").strip()
+        payload = {"section": section} if section else {}
+        result = call_tool("get_guide", payload)
+    else:
+        return {"ok": False, "error": f"未支持的远端论坛工具: {name}"}
+
+    result["source"] = "forum_mcp"
+    return result
 
 
 def execute_forum_tool(name: str, arguments: dict) -> str:
     """在聊天工具链里执行论坛工具，返回字符串。"""
     args = arguments if isinstance(arguments, dict) else {}
-
-    def _extract_shared_post_link(text: str) -> tuple[str, str]:
-        raw = str(text or "")
-        m = re.search(r"(\/帖子详情\.html\?id=([0-9a-fA-F-]{8,}))", raw)
-        if not m:
-            return "", ""
-        return m.group(1), m.group(2)
 
     if name.startswith("schedule_"):
         from storage import r2_store
@@ -1068,546 +434,21 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
 
         return json.dumps({"ok": False, "error": f"未知 schedule 工具: {name}"}, ensure_ascii=False)
 
-    if name == "forum_http":
-        result, _ = invoke_forum_http(
-            method=(args.get("method") or "GET"),
-            url=(args.get("url") or "").strip(),
-            headers=args.get("headers") if isinstance(args.get("headers"), dict) else {},
-            params=args.get("params") if isinstance(args.get("params"), dict) else None,
-            body=args.get("body"),
-            timeout_override=args.get("timeout"),
-        )
-        return json.dumps(result, ensure_ascii=False)
-
     if name == "search_memory":
         from services.dynamic_memory_search import execute_search_memory_tool
 
         return execute_search_memory_tool(args if isinstance(args, dict) else {})
 
-    if name == "forum_login":
-        url = _build_url_from_base(args.get("path") or MCP_FORUM_VERIFY_UID_PATH, MCP_FORUM_VERIFY_UID_PATH)
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        if "Authorization" not in headers and "authorization" not in headers:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
-        method = (args.get("method") or MCP_FORUM_VERIFY_UID_METHOD).strip().upper()
-        result, _ = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
+    if name in FORUM_HIGH_LEVEL_TOOLS:
+        return json.dumps(_execute_forum_mcp_tool(name, args), ensure_ascii=False)
 
-    if name == "forum_post":
-        url = _build_url_from_base(args.get("path") or MCP_FORUM_POST_CREATE_PATH, MCP_FORUM_POST_CREATE_PATH)
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        title = (args.get("title") or "报到帖").strip()
-        content = (args.get("content") or "").strip()
-        submolt = (args.get("submolt") or "").strip().lower()
-        allowed_submolt = {"general", "tech", "diary", "relationship", "night_dark"}
-        if not content:
-            return "content 不能为空"
-        if not submolt:
-            submolt = "general"
-        if submolt not in allowed_submolt:
-            return "submolt 无效，请填写：general/tech/diary/relationship/night_dark"
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        auth_token = (args.get("auth_token") or "").strip()
-        if not auth_token:
-            auth_token = MCP_FORUM_DEFAULT_UID
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
-        else:
-            return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
-        if "Content-Type" not in headers and "content-type" not in headers:
-            headers["Content-Type"] = "application/json"
-        core_payload = {
-            "title": title or "报到帖",
-            "content": content,
-            "submolt": submolt,
-            "text": content,
-            "body": content,
-            "type": "text",
-            "post_type": "text",
-            "postType": "text",
-            "content_type": "text",
-            "contentType": "text",
-            "format": "markdown",
-            "visibility": "public",
-        }
-        if args.get("category_id") is not None:
-            cid = args.get("category_id")
-            core_payload["category_id"] = cid
-            core_payload["categoryId"] = cid
-            core_payload["category"] = cid
+    if name in {"cli", "get_guide"}:
+        return json.dumps(_execute_remote_forum_tool(name, args), ensure_ascii=False)
 
-        def _is_js_undefined_error(res: dict) -> bool:
-            text = str((res or {}).get("text") or "").lower()
-            try:
-                data_text = json.dumps((res or {}).get("data") or {}, ensure_ascii=False).lower()
-            except Exception:
-                data_text = ""
-            return (
-                ("tolowercase" in text)
-                or ("cannot read properties of undefined" in text)
-                or ("tolowercase" in data_text)
-                or ("cannot read properties of undefined" in data_text)
-            )
-
-        # 多种常见后端入参结构自动兜底，避免上游按固定结构取值时报 undefined.toLowerCase
-        attempt_bodies = [
-            core_payload,
-            {"data": core_payload},
-            {"post": core_payload},
-            {"input": core_payload},
-            {
-                "title": core_payload["title"],
-                "content": core_payload["content"],
-                "submolt": submolt,
-                "type": "text",
-            },
-        ]
-        attempts_meta = []
-        final_result = {"ok": False, "error": "forum_post 未执行"}
-        for idx, one_body in enumerate(attempt_bodies):
-            result, _ = invoke_forum_http("POST", url, headers, None, one_body, args.get("timeout"))
-            final_result = result
-            attempts_meta.append({"attempt": idx + 1, "keys": list(one_body.keys())})
-            if bool(result.get("ok")):
-                final_result["fallback_used"] = idx > 0
-                if idx > 0:
-                    final_result["attempts_tried"] = attempts_meta
-                return json.dumps(final_result, ensure_ascii=False)
-            if not _is_js_undefined_error(result):
-                # 不是 undefined.toLowerCase 类错误，直接返回首个真实错误，避免无意义重试
-                if idx == 0:
-                    return json.dumps(result, ensure_ascii=False)
-                break
-
-        if isinstance(final_result, dict):
-            final_result["fallback_used"] = True
-            final_result["attempts_tried"] = attempts_meta
-        return json.dumps(final_result, ensure_ascii=False)
-
-    if name == "forum_comment":
-        post_id = str(args.get("post_id") or "").strip()
-        content = (args.get("content") or "").strip()
-        if not post_id or not content:
-            return "缺少 post_id 或 content"
-        template = _normalize_path(
-            args.get("path_template") or MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE,
-            MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE,
-        )
-        url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE)
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        auth_token = (args.get("auth_token") or "").strip()
-        if not auth_token:
-            auth_token = MCP_FORUM_DEFAULT_UID
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
-        else:
-            return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
-        result, _ = invoke_forum_http("POST", url, headers, None, {"content": content}, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_delete_post":
-        post_id = str(args.get("post_id") or "").strip()
-        if not post_id:
-            return "post_id 不能为空"
-        template = _normalize_path(
-            args.get("path_template") or MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
-            MCP_FORUM_POST_DETAIL_PATH_TEMPLATE,
-        )
-        url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        auth_token = (args.get("auth_token") or "").strip()
-        if not auth_token:
-            auth_token = MCP_FORUM_DEFAULT_UID
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
-        else:
-            return "缺少 auth_token：请在工具参数传 auth_token，或在 env 配置 MCP_FORUM_DEFAULT_UID"
-        result, _ = invoke_forum_http("DELETE", url, headers, None, None, args.get("timeout"))
-        if isinstance(result, dict):
-            result.setdefault("post_id", post_id)
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_uid_http":
-        uid = (args.get("uid") or "").strip() or MCP_FORUM_DEFAULT_UID
-        if not uid:
-            return "缺少 uid：请在工具参数传 uid，或在 env 配置 MCP_FORUM_DEFAULT_UID"
-        method = (args.get("method") or "GET").strip().upper()
-        url = (args.get("url") or "").strip()
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        # 若你没传 Authorization，就用 uid 作为 Bearer
-        if "Authorization" not in headers and "authorization" not in headers:
-            headers["Authorization"] = f"Bearer {uid}"
-        if not url:
-            path = (args.get("path") or "").strip()
-            if not path:
-                return "缺少 url 或 path"
-            url = _build_url_from_base(path, path)
-        result, _ = invoke_forum_http(
-            method=method,
-            url=url,
-            headers=headers,
-            params=args.get("params") if isinstance(args.get("params"), dict) else None,
-            body=args.get("body"),
-            timeout_override=args.get("timeout"),
-        )
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_verify_uid":
-        # 先用主路径，再按候选路径自动探测，减少 404
-        primary = (args.get("path") or MCP_FORUM_VERIFY_UID_PATH).strip()
-        candidates = [primary] + [p for p in (MCP_FORUM_VERIFY_UID_PATHS or []) if p != primary]
-        method = (args.get("method") or MCP_FORUM_VERIFY_UID_METHOD).strip().upper()
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        if "Authorization" not in headers and "authorization" not in headers:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
-        attempted = []
-        last = {"ok": False, "status": 404, "error": "未找到 verify-uid 路径"}
-        for p in candidates:
-            url = _build_url_from_base(p, p)
-            if not url:
-                continue
-            attempted.append({"path": p, "url": url, "method": method})
-            result, _ = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
-            last = result
-            if int(result.get("status") or 0) != 404:
-                return json.dumps(result, ensure_ascii=False)
-        last["probe_paths"] = attempted
-        return json.dumps(last, ensure_ascii=False)
-
-    if name == "forum_register":
-        url = _build_url_from_base(args.get("path") or MCP_FORUM_REGISTER_PATH, MCP_FORUM_REGISTER_PATH)
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        method = (args.get("method") or MCP_FORUM_REGISTER_METHOD).strip().upper()
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        if "Authorization" not in headers and "authorization" not in headers:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
-        result, _ = invoke_forum_http(method, url, headers, None, payload, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_list_posts":
-        primary = (args.get("path") or MCP_FORUM_POST_LIST_PATH).strip()
-        candidates = [primary] + [p for p in (MCP_FORUM_POST_LIST_PATHS or []) if p != primary]
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        if "Authorization" not in headers and "authorization" not in headers:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        params: dict = {"view": "agent"}
-        if args.get("limit") is not None:
-            params["limit"] = args.get("limit")
-        if args.get("offset") is not None:
-            params["offset"] = args.get("offset")
-        if args.get("sort"):
-            params["sort"] = str(args.get("sort")).strip()
-        if args.get("submolt"):
-            params["submolt"] = str(args.get("submolt")).strip()
-        attempted = []
-        last = {"ok": False, "status": 404, "error": "未找到帖子列表路径"}
-        for p in candidates:
-            url = _build_url_from_base(p, p)
-            if not url:
-                continue
-            attempted.append({"path": p, "url": url, "method": "GET"})
-            result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
-            last = result
-            if int(result.get("status") or 0) != 404:
-                return json.dumps(result, ensure_ascii=False)
-        last["probe_paths"] = attempted
-        return json.dumps(last, ensure_ascii=False)
-
-    if name == "forum_read_feed":
-        primary = (args.get("path") or MCP_FORUM_POST_LIST_PATH).strip()
-        candidates = [primary] + [p for p in (MCP_FORUM_POST_LIST_PATHS or []) if p != primary]
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        if "Authorization" not in headers and "authorization" not in headers:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        params: dict = {"view": "agent"}
-        try:
-            limit = int(args.get("limit") or 10)
-        except (TypeError, ValueError):
-            limit = 10
-        limit = max(1, min(30, limit))
-        params["limit"] = limit
-        if args.get("offset") is not None:
-            params["offset"] = args.get("offset")
-        if args.get("sort"):
-            params["sort"] = str(args.get("sort")).strip()
-        if args.get("submolt"):
-            params["submolt"] = str(args.get("submolt")).strip()
-        attempted = []
-        last = {"ok": False, "status": 404, "error": "未找到帖子列表路径"}
-        for p in candidates:
-            url = _build_url_from_base(p, p)
-            if not url:
-                continue
-            attempted.append({"path": p, "url": url, "method": "GET"})
-            result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
-            last = result
-            if int(result.get("status") or 0) == 404:
-                continue
-            if not bool(result.get("ok")):
-                return json.dumps(result, ensure_ascii=False)
-            posts = _extract_posts_list(result)
-            cards = [_summarize_post_card(post) for post in posts[:limit]]
-            return json.dumps(
-                {
-                    "ok": True,
-                    "count": len(cards),
-                    "items": cards,
-                },
-                ensure_ascii=False,
-            )
-        last["probe_paths"] = attempted
-        return json.dumps(last, ensure_ascii=False)
-
-    if name == "forum_get_post":
-        post_id = str(args.get("post_id") or "").strip()
-        if not post_id:
-            return "post_id 不能为空"
-        template = (args.get("path_template") or MCP_FORUM_POST_DETAIL_PATH_TEMPLATE).strip()
-        template = _normalize_path(template, MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
-        url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        if "Authorization" not in headers and "authorization" not in headers:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        result, _ = invoke_forum_http("GET", url, headers, {"view": "agent"}, None, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_open_thread":
-        post_id = str(args.get("post_id") or "").strip()
-        if not post_id:
-            return "post_id 不能为空"
-        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
-        if "Authorization" not in headers and "authorization" not in headers:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        template = (args.get("path_template") or MCP_FORUM_POST_DETAIL_PATH_TEMPLATE).strip()
-        template = _normalize_path(template, MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
-        post_url = _build_url_from_base(template.replace("{post_id}", post_id), MCP_FORUM_POST_DETAIL_PATH_TEMPLATE)
-        if not post_url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        post_result, _ = invoke_forum_http("GET", post_url, headers, {"view": "agent"}, None, args.get("timeout"))
-        if not bool(post_result.get("ok")):
-            return json.dumps(post_result, ensure_ascii=False)
-        post = _extract_post_obj(post_result)
-        content = _pick_first_str(post, ("content", "text", "body"))
-        include_comments = bool(args.get("include_comments", True))
-        try:
-            comments_limit = int(args.get("comments_limit") or 5)
-        except (TypeError, ValueError):
-            comments_limit = 5
-        comments_limit = max(1, min(20, comments_limit))
-        comment_cards = []
-        if include_comments:
-            comments_url = _build_url_from_base(f"/posts/{post_id}/comments", f"/posts/{post_id}/comments")
-            if comments_url:
-                comments_result, _ = invoke_forum_http(
-                    "GET",
-                    comments_url,
-                    headers,
-                    {"view": "agent", "content": "preview", "limit": comments_limit},
-                    None,
-                    args.get("timeout"),
-                )
-                if bool(comments_result.get("ok")):
-                    comments = _extract_comments_list(comments_result)
-                    comment_cards = [_summarize_comment_card(comment) for comment in comments[:comments_limit]]
+    if name.startswith("forum_"):
         return json.dumps(
-            {
-                "ok": True,
-                "post": {
-                    **_summarize_post_card(post),
-                    "content": _clean_excerpt(content, 1200),
-                },
-                "comments": comment_cards,
-            },
+            {"ok": False, "error": f"论坛作者公开 MCP 暂未接这个动作：{name}"},
             ensure_ascii=False,
         )
 
-    if name == "forum_get_comments":
-        post_id = str(args.get("post_id") or "").strip()
-        if not post_id:
-            return "post_id 不能为空"
-        url = _build_url_from_base(f"/posts/{post_id}/comments", f"/posts/{post_id}/comments")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        params: dict = {"view": "agent"}
-        if args.get("sort"):
-            params["sort"] = str(args.get("sort")).strip()
-        if args.get("limit") is not None:
-            params["limit"] = args.get("limit")
-        content_mode = (args.get("content") or "preview").strip()
-        params["content"] = content_mode if content_mode in ("full", "preview", "none") else "preview"
-        result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_get_comment":
-        comment_id = str(args.get("comment_id") or "").strip()
-        if not comment_id:
-            return "comment_id 不能为空"
-        url = _build_url_from_base(f"/comments/{comment_id}", f"/comments/{comment_id}")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        result, _ = invoke_forum_http("GET", url, headers, None, None, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_edit_post":
-        post_id = str(args.get("post_id") or "").strip()
-        if not post_id:
-            return "post_id 不能为空"
-        title = (args.get("title") or "").strip()
-        content = (args.get("content") or "").strip()
-        if not title and not content:
-            return "title 和 content 至少填一个"
-        url = _build_url_from_base(f"/posts/{post_id}", f"/posts/{post_id}")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        body: dict = {}
-        if title:
-            body["title"] = title
-        if content:
-            body["content"] = content
-        result, _ = invoke_forum_http("PUT", url, headers, None, body, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_edit_comment":
-        comment_id = str(args.get("comment_id") or "").strip()
-        content = (args.get("content") or "").strip()
-        if not comment_id:
-            return "comment_id 不能为空"
-        if not content:
-            return "content 不能为空"
-        url = _build_url_from_base(f"/comments/{comment_id}", f"/comments/{comment_id}")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        result, _ = invoke_forum_http("PUT", url, headers, None, {"content": content}, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_delete_comment":
-        comment_id = str(args.get("comment_id") or "").strip()
-        if not comment_id:
-            return "comment_id 不能为空"
-        url = _build_url_from_base(f"/comments/{comment_id}", f"/comments/{comment_id}")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        reason = (args.get("reason") or "").strip()
-        body = {"reason": reason} if reason else None
-        result, _ = invoke_forum_http("DELETE", url, headers, None, body, args.get("timeout"))
-        if isinstance(result, dict):
-            result.setdefault("comment_id", comment_id)
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_vote_post":
-        post_id = str(args.get("post_id") or "").strip()
-        if not post_id:
-            return "post_id 不能为空"
-        try:
-            value = int(args.get("value"))
-        except (TypeError, ValueError):
-            return "value 必须是 1（点赞）或 -1（踩）"
-        if value not in (1, -1):
-            return "value 必须是 1（点赞）或 -1（踩）"
-        url = _build_url_from_base(f"/posts/{post_id}/vote", f"/posts/{post_id}/vote")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        result, _ = invoke_forum_http("POST", url, headers, None, {"value": value}, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_vote_comment":
-        comment_id = str(args.get("comment_id") or "").strip()
-        if not comment_id:
-            return "comment_id 不能为空"
-        try:
-            value = int(args.get("value"))
-        except (TypeError, ValueError):
-            return "value 必须是 1（点赞）或 -1（踩）"
-        if value not in (1, -1):
-            return "value 必须是 1（点赞）或 -1（踩）"
-        url = _build_url_from_base(f"/comments/{comment_id}/vote", f"/comments/{comment_id}/vote")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        result, _ = invoke_forum_http("POST", url, headers, None, {"value": value}, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_get_profile":
-        url = _build_url_from_base("/agents/me/activity", "/agents/me/activity")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        result, _ = invoke_forum_http("GET", url, headers, None, None, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_send_dm":
-        recipient_name = (args.get("recipient_name") or "").strip()
-        content = (args.get("content") or "").strip()
-        if not recipient_name:
-            return "recipient_name 不能为空"
-        if not content:
-            return "content 不能为空"
-        if len(content) > 2000:
-            return "content 最多 2000 字"
-        url = _build_url_from_base("/messages", "/messages")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        result, _ = invoke_forum_http(
-            "POST", url, headers, None,
-            {"recipient_name": recipient_name, "content": content},
-            args.get("timeout"),
-        )
-        return json.dumps(result, ensure_ascii=False)
-
-    if name == "forum_inbox":
-        url = _build_url_from_base("/messages/inbox", "/messages/inbox")
-        if not url:
-            return "未配置 MCP_FORUM_BASE_URL"
-        headers = {}
-        if MCP_FORUM_DEFAULT_UID:
-            headers["Authorization"] = f"Bearer {MCP_FORUM_DEFAULT_UID}"
-        params: dict = {}
-        try:
-            limit = int(args.get("limit") or 20)
-            params["limit"] = max(1, min(200, limit))
-        except (TypeError, ValueError):
-            params["limit"] = 20
-        if args.get("unread_only"):
-            params["unread"] = "true"
-        result, _ = invoke_forum_http("GET", url, headers, params, None, args.get("timeout"))
-        return json.dumps(result, ensure_ascii=False)
-
-    return json.dumps({"ok": False, "error": f"未知论坛工具: {name}"}, ensure_ascii=False)
+    return json.dumps({"ok": False, "error": f"未知工具: {name}"}, ensure_ascii=False)

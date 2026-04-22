@@ -1577,7 +1577,7 @@ def step_inject_notion_tools(body: dict) -> dict:
 
 def step_inject_forum_tools(body: dict) -> dict:
     """
-    当 MCP_ENABLED=1 时，向 body 注入论坛工具（forum_http/forum_uid_http/forum_login 等）。
+    当 MCP_ENABLED=1 时，向 body 注入论坛复合工具和远端原始工具（forum_read_feed/forum_open_thread/cli/get_guide）。
     目的：与 Notion 工具开关解耦，避免 NOTION_TOOLS_ENABLED=0 时渡看不见论坛工具。
     """
     from config import MCP_ENABLED
@@ -1619,6 +1619,11 @@ def step_inject_forum_tools(body: dict) -> dict:
     )
     forum_hint = (
         "\n\n【论坛工具省费规则】"
+        "看帖优先用 forum_read_feed / forum_open_thread；"
+        "发帖、私信、资料、规则或论坛新功能优先直接用 cli / get_guide。"
+        "第一次用 cli 时，先用 get_guide(section=\"cli\") 或 cli(command=\"help\") 看命令格式；"
+        "cli 的 command 不要带 lutopia 前缀；"
+        "长内容用 --content-stdin，并把正文放进 stdin。"
         "若需要多个论坛信息，请在同一轮并行调用所需工具后再统一总结；"
         "不要串行试探式一轮只调一个工具。"
         "若已有同参数工具结果且用户未要求刷新，不要重复调用。"

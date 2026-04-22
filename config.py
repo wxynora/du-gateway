@@ -486,7 +486,7 @@ QQ_ONEBOT_LOG_FILE = os.environ.get("QQ_ONEBOT_LOG_FILE", "").strip()
 MINIAPP_SCHEDULE_RUNTIME_ENABLED = os.environ.get("MINIAPP_SCHEDULE_RUNTIME_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 MINIAPP_SCHEDULE_RUNTIME_INTERVAL_SECONDS = int(os.environ.get("MINIAPP_SCHEDULE_RUNTIME_INTERVAL_SECONDS", "60"))
 
-# -------------------- MCP 工具网关（论坛 HTTP 工具） --------------------
+# -------------------- MCP 工具网关 --------------------
 # MCP 总开关：0=关闭，1=开启
 MCP_ENABLED = os.environ.get("MCP_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 # 鉴权模式：
@@ -499,78 +499,19 @@ if MCP_AUTH_MODE not in ("token", "token_ip", "off"):
 # Token（支持多个，逗号分隔；请求头支持 Authorization: Bearer xxx / X-MCP-Token: xxx）
 _MCP_TOKENS_STR = os.environ.get("CC_MCP_TOKENS", "").strip()
 MCP_TOKENS = [x.strip() for x in _MCP_TOKENS_STR.split(",") if x.strip()]
-# 论坛 API 基础地址（给 forum_login/forum_post/forum_comment 这类预设工具拼 URL）
-# 示例：https://forum.example.com
-MCP_FORUM_BASE_URL = os.environ.get("MCP_FORUM_BASE_URL", "").strip().rstrip("/")
-# 白名单域名（forum_http 只允许访问这些域名；逗号分隔）
-# 可写纯域名，也可写完整 URL（会自动提取 hostname），例如：
-# MCP_FORUM_ALLOWED_HOSTS=forum.example.com,https://api.forum.example.com/v1
-def _parse_forum_allowed_hosts(raw: str) -> list[str]:
-    """从逗号分隔的配置项解析出小写 hostname 列表（支持误写 https:// 或带路径）。"""
-    from urllib.parse import urlparse
-
-    out: list[str] = []
-    for part in (raw or "").split(","):
-        s = (part or "").strip().lower()
-        if not s:
-            continue
-        if "://" in s:
-            host = (urlparse(s).hostname or "").strip().lower()
-            if host:
-                out.append(host)
-            continue
-        # 无 scheme 但写了 path：example.com/foo → example.com
-        if "/" in s:
-            s = s.split("/", 1)[0].strip()
-        if s:
-            out.append(s)
-    return out
-
-
-_MCP_FORUM_ALLOWED_HOSTS_STR = os.environ.get("MCP_FORUM_ALLOWED_HOSTS", "").strip()
-MCP_FORUM_ALLOWED_HOSTS = _parse_forum_allowed_hosts(_MCP_FORUM_ALLOWED_HOSTS_STR)
+# 外部论坛 MCP（SSE）地址。推荐填个人短码地址，例如：
+# https://daskio.de5.net/mcp/abc12345/sse
+FORUM_MCP_SSE_URL = os.environ.get("FORUM_MCP_SSE_URL", "").strip()
+# 兼容旧版公共地址时才需要 token；若使用个人短码地址，通常留空。
+FORUM_MCP_TOKEN = os.environ.get("FORUM_MCP_TOKEN", "").strip()
+# 外部论坛 MCP 请求超时（秒）
+FORUM_MCP_TIMEOUT_SECONDS = int(os.environ.get("FORUM_MCP_TIMEOUT_SECONDS", "30"))
+# tools 列表缓存秒数，避免每次调用都重新 list_tools
+FORUM_MCP_TOOLS_CACHE_SECONDS = int(os.environ.get("FORUM_MCP_TOOLS_CACHE_SECONDS", "300"))
 # 可选 IP 白名单（仅 MCP_AUTH_MODE=token_ip 时生效）
 MCP_IP_ALLOWLIST = [x.strip() for x in os.environ.get("MCP_IP_ALLOWLIST", "").split(",") if x.strip()]
 # 反代场景下是否信任 X-Forwarded-For（仅 MCP IP 白名单用）
 MCP_TRUST_PROXY = os.environ.get("MCP_TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
-# forum_http 请求超时与重试
-MCP_HTTP_TIMEOUT_SECONDS = int(os.environ.get("MCP_HTTP_TIMEOUT_SECONDS", "20"))
-MCP_HTTP_MAX_TIMEOUT_SECONDS = int(os.environ.get("MCP_HTTP_MAX_TIMEOUT_SECONDS", "60"))
-MCP_HTTP_RETRIES = int(os.environ.get("MCP_HTTP_RETRIES", "2"))
-MCP_HTTP_MAX_RESPONSE_CHARS = int(os.environ.get("MCP_HTTP_MAX_RESPONSE_CHARS", "12000"))
-
-# 论坛默认 UID（Bearer token）
-# 若为空，则 forum_uid_http/forum_post/forum_comment 在缺省 uid/auth_token 时会报错
-MCP_FORUM_DEFAULT_UID = os.environ.get("MCP_FORUM_DEFAULT_UID", "").strip()
-
-# -------------------- 论坛接口预设路径（给论坛MCP工具默认使用） --------------------
-# 你给的流程：verify-uid -> register -> 发报到帖 -> 浏览帖子
-# 以下都是“相对 MCP_FORUM_BASE_URL 的 path”，可直接在 .env 覆盖。
-MCP_FORUM_VERIFY_UID_PATH = os.environ.get("MCP_FORUM_VERIFY_UID_PATH", "/verify-uid").strip()
-MCP_FORUM_REGISTER_PATH = os.environ.get("MCP_FORUM_REGISTER_PATH", "/register").strip()
-MCP_FORUM_VERIFY_UID_METHOD = os.environ.get("MCP_FORUM_VERIFY_UID_METHOD", "GET").strip().upper() or "GET"
-MCP_FORUM_REGISTER_METHOD = os.environ.get("MCP_FORUM_REGISTER_METHOD", "POST").strip().upper() or "POST"
-
-# 发帖/列表/详情
-MCP_FORUM_POST_CREATE_PATH = os.environ.get("MCP_FORUM_POST_CREATE_PATH", "/posts").strip()
-MCP_FORUM_POST_LIST_PATH = os.environ.get("MCP_FORUM_POST_LIST_PATH", "/posts").strip()
-MCP_FORUM_POST_DETAIL_PATH_TEMPLATE = os.environ.get("MCP_FORUM_POST_DETAIL_PATH_TEMPLATE", "/posts/{post_id}").strip()
-
-# 评论
-MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE = os.environ.get("MCP_FORUM_COMMENT_CREATE_PATH_TEMPLATE", "/posts/{post_id}/comments").strip()
-
-# 兼容不同论坛实现的候选路径（逗号分隔），用于自动回退探测（主要解决 404）
-_MCP_FORUM_VERIFY_UID_PATHS_STR = os.environ.get(
-    "MCP_FORUM_VERIFY_UID_PATHS",
-    "/verify-uid,/api/verify-uid,/verify_uid,/api/verify_uid",
-).strip()
-MCP_FORUM_VERIFY_UID_PATHS = [x.strip() for x in _MCP_FORUM_VERIFY_UID_PATHS_STR.split(",") if x.strip()]
-
-_MCP_FORUM_POST_LIST_PATHS_STR = os.environ.get(
-    "MCP_FORUM_POST_LIST_PATHS",
-    "/posts,/api/posts,/forum/posts,/api/v1/posts",
-).strip()
-MCP_FORUM_POST_LIST_PATHS = [x.strip() for x in _MCP_FORUM_POST_LIST_PATHS_STR.split(",") if x.strip()]
 
 # -------------------- 硅基流动（SiliconFlow）专用默认模型 --------------------
 # 仅当当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST）且请求未显式传 model 时，

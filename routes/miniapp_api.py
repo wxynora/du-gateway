@@ -407,7 +407,7 @@ def _summarize_alarm_actions(msgs: list[dict]) -> list[str]:
                 label = "写了日记"
             elif name == "daily_whisper_write":
                 label = "写了气泡"
-            elif name in {"forum_read_feed", "forum_open_thread", "forum_get_post", "forum_list_posts", "forum_get_comments", "forum_get_comment"}:
+            elif name in {"forum_read_feed", "forum_open_thread"}:
                 label = "看了论坛"
             elif name == "note_write":
                 label = "写了便签"
