@@ -192,6 +192,29 @@ function resolveBubbleClass(role: "user" | "assistant", style: BubbleStyleKey): 
   return "border border-gray-100/50 bg-white text-gray-800";
 }
 
+function ChatHeaderStatus({ sending }: { sending: boolean }) {
+  if (!sending) {
+    return <div className="text-[11px] font-medium text-gray-900">在线</div>;
+  }
+  return (
+    <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#5F6C7B]" aria-label="正在输入中">
+      <span>正在输入中</span>
+      <span className="inline-flex items-end gap-1">
+        {[0, 1, 2].map((index) => (
+          <span
+            key={index}
+            className="inline-block h-[4px] w-[4px] rounded-full bg-[#5F6C7B] animate-pulse"
+            style={{
+              animationDelay: `${index * 0.18}s`,
+              animationDuration: "1s",
+            }}
+          />
+        ))}
+      </span>
+    </div>
+  );
+}
+
 function Shell({
   onLogout,
   onOpenDevices,
@@ -1021,6 +1044,12 @@ function sortHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
   list.sort((a, b) => {
     const diff = parseChatMessageTime(String(a?.createdAt || "")) - parseChatMessageTime(String(b?.createdAt || ""));
     if (diff !== 0) return diff;
+    const roleA = String(a?.role || "").trim().toLowerCase();
+    const roleB = String(b?.role || "").trim().toLowerCase();
+    if (roleA !== roleB) {
+      if (roleA === "user") return -1;
+      if (roleB === "user") return 1;
+    }
     return String(a?.id || "").localeCompare(String(b?.id || ""));
   });
   return list;
@@ -1047,12 +1076,15 @@ function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage
   return sortHistoryMessages(list.map((msg) => {
       const rawContent = extractMessageContentSource(msg);
       const rawReasoning = extractMessageReasoningSource(msg);
-      const content = stripInlineBase64Images(contentToPlainText(rawContent) || fallbackRawContentText(rawContent));
+      const normalizedRole = String(msg?.role || "").trim().toLowerCase();
       const reasoning = contentToPlainText(rawReasoning) || fallbackRawContentText(rawReasoning);
       const rawStatus = String((msg as any)?.status || "").trim().toLowerCase();
       const status = rawStatus === "pending" || rawStatus === "sent" || rawStatus === "failed"
         ? rawStatus as ChatDraftMessage["status"]
         : undefined;
+      const content = status === "pending" && normalizedRole === "assistant"
+        ? ""
+        : stripInlineBase64Images(contentToPlainText(rawContent) || fallbackRawContentText(rawContent));
       let tokenCount: { input?: number; output?: number } | undefined;
       if (msg?.tokenCount && typeof msg.tokenCount === "object") {
         const input = Number(msg.tokenCount.input || 0);
@@ -1080,6 +1112,7 @@ function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage
 function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
   const groups: ChatMessageGroup[] = [];
   for (const msg of messages) {
+    if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") continue;
     const normalizedContent = String(msg?.content || "").trim();
     const normalizedReasoning = String(msg?.reasoning || "").trim();
     if (!normalizedContent && !normalizedReasoning) continue;
@@ -1665,19 +1698,20 @@ function MainChatScreen({
     if (resolvedDeviceId && resolvedDeviceId !== deviceId) {
       setDeviceId((prev) => (prev === resolvedDeviceId ? prev : resolvedDeviceId));
     }
+    const baseTimestamp = Date.now();
     const userMsg: ChatDraftMessage = {
-      id: `user-${Date.now()}`,
+      id: `user-${baseTimestamp}`,
       role: "user",
       content,
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(baseTimestamp).toISOString(),
       status: "sent",
     };
-    const assistantId = `assistant-${Date.now()}`;
-    const assistantCreatedAt = new Date().toISOString();
+    const assistantId = `assistant-${baseTimestamp + 1}`;
+    const assistantCreatedAt = new Date(baseTimestamp + 1).toISOString();
     const nextMessages = [...messages, userMsg];
     const draftMessages = [
       ...nextMessages,
-      { id: assistantId, role: "assistant" as const, content: "…", createdAt: assistantCreatedAt, status: "pending" as const },
+      { id: assistantId, role: "assistant" as const, content: "", createdAt: assistantCreatedAt, status: "pending" as const },
     ];
     const replyTarget = resolvedDeviceId;
     setInput("");
@@ -1761,7 +1795,6 @@ function MainChatScreen({
   const activeMatchedGroupId = matchedGroupIds.length
     ? matchedGroupIds[Math.min(activeSearchIndex, matchedGroupIds.length - 1)]
     : null;
-  const subtitle = sending ? "正在输入中" : "在线";
   const transparentBubbleClass = TRANSPARENT_BUBBLE_CLASS;
 
   useEffect(() => {
@@ -1808,7 +1841,7 @@ function MainChatScreen({
           </button>
           <div className="ml-2 flex-1">
             <div className="font-medium text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
-            <div className="text-[11px] font-medium text-gray-900">{subtitle}</div>
+            <ChatHeaderStatus sending={sending} />
           </div>
           <button
             className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100"
