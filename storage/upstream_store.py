@@ -1,11 +1,17 @@
 import json
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
 from config import DATA_DIR, TARGET_AI_URL, TARGET_AI_API_KEY, TARGET_AI_URLS, TARGET_AI_API_KEYS
-from config import OPENROUTER_FIXED_MODEL, is_openrouter_url
+from config import (
+    OPENROUTER_FIXED_MODEL,
+    SILICONFLOW_BASE_HOST,
+    SILICONFLOW_DEFAULT_MODEL,
+    is_openrouter_url,
+)
 
 
 UPSTREAMS_FILE = DATA_DIR / "upstreams.json"
@@ -110,6 +116,11 @@ def clear_active_model_cache() -> bool:
     return _save_active_model_payload({})
 
 
+def _is_siliconflow_url(url: str) -> bool:
+    host = (urlparse(str(url or "").strip()).hostname or "").lower()
+    return bool(host and SILICONFLOW_BASE_HOST and host.endswith(SILICONFLOW_BASE_HOST))
+
+
 def _fetch_first_model_for_item(it: dict) -> str:
     url = str((it or {}).get("url") or "").strip()
     api_key = str((it or {}).get("api_key") or "").strip()
@@ -117,6 +128,8 @@ def _fetch_first_model_for_item(it: dict) -> str:
         return ""
     if is_openrouter_url(url):
         return str(OPENROUTER_FIXED_MODEL or "").strip()
+    if _is_siliconflow_url(url) and SILICONFLOW_DEFAULT_MODEL:
+        return str(SILICONFLOW_DEFAULT_MODEL or "").strip()
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
