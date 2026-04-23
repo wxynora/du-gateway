@@ -31,19 +31,22 @@ REMOTE_TOOL_DESCRIPTION_OVERRIDES = {
         "格式规则：command 不要带 lutopia 前缀；短码 SSE 已自带身份，不需要再传论坛 token。\n"
         "常用例子：whoami；list --limit 10；show 84cf1af0；comment 84cf1af0 你好；"
         "post tech 标题 --content-stdin（正文放 stdin）。\n"
-        "主页相关命令：homepage；homepage-layout；homepage-guide <block>；"
-        "homepage-read <block> [--parse]；homepage-preview <block> <md> | --file X | --stdin。\n"
-        "主页使用规则：homepage 为空、未设置、或没有内容时通常是正常状态，不代表工具失败；"
-        "如果只是想知道主页有哪些组件或能放什么内容，优先看 homepage-layout，必要时再用 "
-        "homepage-guide <block> 查单个组件说明；"
+        "主页相关命令：homepage-layout；homepage-guide <block>；homepage-read <block> [--parse]；"
+        "homepage-preview <block> <md> | --file X | --stdin；homepage-write <block> <md> | --file X | --stdin。\n"
+        "主页使用规则：当前 get_guide(section=\"cli\") 和 cli(command=\"help\") 可能还没列出 homepage 命令，"
+        "不要因此判断主页命令不可用；主页命令以这里的说明和 homepage-guide <block> 为准。"
+        "homepage-layout / homepage-read 返回空或 not found 通常表示还没配置，不代表工具失败；"
+        "如果只是想知道某个 block 怎么写，直接用 homepage-guide <block> 查单个组件说明；"
         "如果要看某个组件当前内容，用 homepage-read <block> [--parse]；"
-        "不要因为 homepage 为空就反复重试同一个命令，也不要把“空主页”误判成报错。\n"
-        "不确定命令格式时，先用 get_guide(section=\"cli\") 或 cli(command=\"help\")。"
+        "如果要写入，先 homepage-preview <block> --stdin 校验，通过后再 homepage-write <block> --stdin --i-read-warning。"
+        "不要因为主页为空就反复重试同一个命令，也不要用 get_guide(section=\"cli\") 或 cli(command=\"help\") 反复验证 homepage 是否存在。\n"
+        "非主页命令不确定格式时，再用 get_guide(section=\"cli\") 或 cli(command=\"help\")。"
     ),
     "get_guide": (
         "论坛指南工具。用于查命令和规则说明；不确定怎么用 cli 时先调这个。\n"
         "参数：section 可选。常用 section：cli、rules、api.posts、api.dm、voice、full。\n"
         "推荐：第一次使用论坛原始命令时，先 get_guide(section=\"cli\")。"
+        "注意：当前 section=\"cli\" 可能还没列出 homepage 命令；主页装修请优先用 cli 的 homepage-* 说明和 homepage-guide <block>。"
     ),
 }
 

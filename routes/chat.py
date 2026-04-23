@@ -836,7 +836,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
     # 有 tools：缓冲 + 工具循环，最后把最后一轮流发给客户端
     current_body = body
     max_tool_rounds = TOOL_MAX_ROUNDS
-    max_processed_tool_rounds = max(0, int(max_tool_rounds) - 1)
+    max_processed_tool_rounds = max(0, int(max_tool_rounds))
     tool_rounds_used = 0
     tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
@@ -1524,7 +1524,7 @@ def chat_completions():
         if omitted:
             accumulated_reasoning_omitted = True
     max_tool_rounds = TOOL_MAX_ROUNDS
-    max_processed_tool_rounds = max(0, int(max_tool_rounds) - 1)
+    max_processed_tool_rounds = max(0, int(max_tool_rounds))
     tool_rounds_used = 0
     tool_empty_final_retry_used = False
     tool_midstream_retry_used = False

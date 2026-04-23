@@ -258,8 +258,8 @@ STREAM_TIMEOUT_SECONDS = int(os.environ.get("STREAM_TIMEOUT_SECONDS", "300"))
 STREAM_SSE_HEARTBEAT_SECONDS = int(os.environ.get("STREAM_SSE_HEARTBEAT_SECONDS", "15"))
 # 流式下游稳态：合并 flush 窗口（毫秒）。把短时间内多个小 chunk 合并后再 yield，减少小包抖动
 STREAM_SSE_FLUSH_MAX_MS = int(os.environ.get("STREAM_SSE_FLUSH_MAX_MS", "60"))
-# 工具调用最多允许继续几轮（每继续一轮都要额外调用一次上游模型）。默认 3 以控制费用。
-TOOL_MAX_ROUNDS = int(os.environ.get("TOOL_MAX_ROUNDS", "3"))
+# 工具调用最多允许继续几轮（每继续一轮都要额外调用一次上游模型）。默认 5 以便复杂工具链收口。
+TOOL_MAX_ROUNDS = int(os.environ.get("TOOL_MAX_ROUNDS", "5"))
 if TOOL_MAX_ROUNDS < 1:
     TOOL_MAX_ROUNDS = 1
 
