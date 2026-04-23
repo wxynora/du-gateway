@@ -110,12 +110,35 @@ SumiTalk 适合走 `Capacitor + Android 原生模块` 方案，不走纯 PWA。
 - `SCHEDULE_EXACT_ALARM`
 - 忽略电池优化引导
 - 开机自启引导
+- `PACKAGE_USAGE_STATS`
+- `AccessibilityService`（自用版，可选）
 
 说明：
 
 - 有些权限可以正常申请
 - 有些权限必须跳系统设置页手动开
 - 悬浮球、精确闹钟、电池优化白名单都属于后者
+- `Usage Access` 适合拿“最近 24 小时用了哪些 app、用了多久”
+- `AccessibilityService` 更适合拿“刚刚前台是什么 app / 现在大概在干嘛”
+
+### 关于前台 app 快照
+
+这里把两个能力分开，不要混：
+
+- `usage`：最近 24 小时应用使用快照
+- `foreground_app`：最近一次观测到的前台 app 快照
+
+结论：
+
+- `usage` 继续走现在这条 `UsageStats` 链路
+- `foreground_app` 不和 `usage` 混成一个桶
+- `foreground_app` 更适合跟 `AccessibilityService` 一起落
+
+原因：
+
+- `Usage Access` 更像“最近用过什么、用了多久”
+- `AccessibilityService` 更像“窗口刚切到什么 app”
+- 两者都保留，分别服务不同判断
 
 ## 典型使用场景
 
@@ -259,6 +282,10 @@ SumiTalk 适合走 `Capacitor + Android 原生模块` 方案，不走纯 PWA。
 - app 激活
 - 最近 24 小时应用使用时长快照
 
+还没接上、但建议新增的一条：
+
+- 当前前台 app 快照（建议跟 `AccessibilityService` 一起做）
+
 当前链路是：
 
 - Android 原生层监听/读取
@@ -269,6 +296,7 @@ SumiTalk 适合走 `Capacitor + Android 原生模块` 方案，不走纯 PWA。
 
 - 屏幕状态写到 `screen`
 - 使用时长写到 `usage`
+- 当前前台 app 单独写到 `foreground_app`
 - 这套是和健康、电量、位置同一类“设备感知数据”
 
 ## 设备状态数据流
@@ -311,6 +339,8 @@ SumiTalk 适合走 `Capacitor + Android 原生模块` 方案，不走纯 PWA。
 
 ### 还没做的
 
+- `foreground_app` 前台 app 快照
+- `AccessibilityService` 接入与设置引导
 - 悬浮球长按菜单
 - 悬浮球展开小面板
 - 通知点击打开指定页面
@@ -376,6 +406,7 @@ SumiTalk 适合走 `Capacitor + Android 原生模块` 方案，不走纯 PWA。
 后面建议补：
 
 - 在网关里把 `screen/usage` 纳入设备感知上下文
+- 新增 `foreground_app`
 - 和健康、电量、位置一起统一组织
 - 按规则注入给渡
 - 给 app 内页面提供“最近设备状态”的展示
@@ -385,7 +416,35 @@ SumiTalk 适合走 `Capacitor + Android 原生模块` 方案，不走纯 PWA。
 - 深夜亮屏感知
 - 刚解锁后的主动关心
 - 长时间使用某 app 后的判断
+- 刚刚切到某个 app 的即时感知
 - 锁屏/亮屏节律感知
+
+### `foreground_app` 的建议实现
+
+这条能力单独写清楚：
+
+- `usage` 和 `foreground_app` 共存，不互相替代
+- `usage` 继续保留“24 小时使用快照”
+- `foreground_app` 表示“最近一次窗口切换后，前台是什么 app”
+
+推荐来源：
+
+- 第一选择：`AccessibilityService`
+- 不建议把它硬塞进 `usage` 快照里
+
+推荐上报字段：
+
+- `packageName`
+- `appName`
+- `className`（可选）
+- `observedAt`
+- `source=accessibility`
+
+推荐消费口径：
+
+- 写成“刚刚前台是 QQ / 微信”
+- 或“当前可能在用 QQ”
+- 不写死成“她现在一定正在用某 app”
 
 ### 第四优先级：本地原生精确闹钟
 

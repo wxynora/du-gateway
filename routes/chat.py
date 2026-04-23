@@ -364,6 +364,11 @@ _TOOL_MIDSTREAM_RETRY_INSTRUCTION = (
     "如果还需要信息，直接继续调用工具；不知道该调用什么工具就直接进行最终回复。\n"
     "如果已经够了，直接给最终答复。"
 )
+_TOOL_EMPTY_FINAL_RETRY_INSTRUCTION = (
+    "前面的工具已经执行过了。\n"
+    "如果还需要信息，直接继续调用工具；如果已经够了，必须直接给用户一条可见的最终回复。\n"
+    "不要返回空 content，不要只给 reasoning / thinking。"
+)
 
 
 def _extract_thinking_from_content(content: str) -> tuple[str, str]:
@@ -409,18 +414,38 @@ def _should_retry_tool_followup(content_text: str, reasoning_text: str = "") -> 
     return False
 
 
-def _inject_tool_midstream_retry_instruction(body: dict) -> dict:
+def _normalize_visible_reply_text(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    visible, _thinking = _extract_thinking_from_content(raw)
+    return visible.strip()
+
+
+def _should_retry_tool_empty_final(content_text: str) -> bool:
+    return not _normalize_visible_reply_text(content_text)
+
+
+def _inject_tool_retry_instruction(body: dict, instruction: str) -> dict:
     body = copy.deepcopy(body)
     messages = list(body.get("messages") or [])
     insert_idx = 0
     while insert_idx < len(messages) and str((messages[insert_idx] or {}).get("role") or "").strip().lower() == "system":
-        if str((messages[insert_idx] or {}).get("content") or "").strip() == _TOOL_MIDSTREAM_RETRY_INSTRUCTION:
+        if str((messages[insert_idx] or {}).get("content") or "").strip() == instruction:
             body["messages"] = messages
             return body
         insert_idx += 1
-    messages.insert(insert_idx, {"role": "system", "content": _TOOL_MIDSTREAM_RETRY_INSTRUCTION})
+    messages.insert(insert_idx, {"role": "system", "content": instruction})
     body["messages"] = messages
     return body
+
+
+def _inject_tool_midstream_retry_instruction(body: dict) -> dict:
+    return _inject_tool_retry_instruction(body, _TOOL_MIDSTREAM_RETRY_INSTRUCTION)
+
+
+def _inject_tool_empty_final_retry_instruction(body: dict) -> dict:
+    return _inject_tool_retry_instruction(body, _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION)
 
 
 def _normalize_reasoning_details(value) -> list:
@@ -813,6 +838,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
     max_tool_rounds = TOOL_MAX_ROUNDS
     max_processed_tool_rounds = max(0, int(max_tool_rounds) - 1)
     tool_rounds_used = 0
+    tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
     try:
         while True:
@@ -851,6 +877,15 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                 continue
             if (
                 tool_rounds_used > 0
+                and (not tool_empty_final_retry_used)
+                and _should_retry_tool_empty_final(parsed.get("content") or "")
+            ):
+                logger.warning("工具续轮最终正文为空，流式路径触发一次强制收口补问")
+                current_body = _inject_tool_empty_final_retry_instruction(current_body)
+                tool_empty_final_retry_used = True
+                continue
+            if (
+                tool_rounds_used > 0
                 and (not tool_midstream_retry_used)
                 and _should_retry_tool_followup(
                     parsed.get("content") or "",
@@ -886,6 +921,8 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
         visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_content)
         visible, thought = split_assistant_for_thought(visible_after_pcmd)
         visible, interaction = split_assistant_for_interaction(visible)
+        if tool_rounds_used > 0 and not visible.strip():
+            logger.error("工具续轮结束但最终正文仍为空（流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
         if thought:
             try:
                 r2_store.save_du_thought_latest(now_beijing_iso(), thought)
@@ -1028,6 +1065,43 @@ def _last_user_message(messages):
         if (m.get("role") or "").lower() == "user":
             return m
     return None
+
+
+def _is_cross_platform_tg_window_user_input(window_id: str, body: dict) -> bool:
+    wid = str(window_id or "").strip()
+    if not wid.startswith("tg_"):
+        return False
+    if _is_followup_generation_request():
+        return False
+    reply_channel = str(request.headers.get("X-Reply-Channel") or "").strip().lower()
+    if reply_channel not in {"sumitalk", "wechat", "qq"}:
+        return False
+    last_user = _last_user_message((body or {}).get("messages") or [])
+    if not isinstance(last_user, dict):
+        return False
+    content = last_user.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        return any(
+            isinstance(part, dict) and str(part.get("type") or "").strip().lower() in {"text", "image_url", "input_audio"}
+            for part in content
+        )
+    return bool(str(content or "").strip())
+
+
+def _maybe_mark_tg_window_user_activity(window_id: str, body: dict) -> None:
+    if not _is_cross_platform_tg_window_user_input(window_id, body):
+        return
+    try:
+        r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+        logger.info(
+            "按 tg 窗口更新最近用户回复时间 window_id=%s reply_channel=%s",
+            window_id,
+            str(request.headers.get("X-Reply-Channel") or "").strip().lower(),
+        )
+    except Exception as e:
+        logger.warning("按 tg 窗口更新最近用户回复时间失败 window_id=%s error=%s", window_id, e)
 
 
 def _extract_last_user_text(messages) -> str:
@@ -1330,6 +1404,8 @@ def chat_completions():
             return _stream_response(_ghost_noop_stream())
         return jsonify(_build_noop_chat_response(body)), 200
 
+    _maybe_mark_tg_window_user_activity(window_id, body)
+
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, window_id)
     body = step_clean_for_forward(body)
@@ -1402,6 +1478,7 @@ def chat_completions():
     max_tool_rounds = TOOL_MAX_ROUNDS
     max_processed_tool_rounds = max(0, int(max_tool_rounds) - 1)
     tool_rounds_used = 0
+    tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
     while True:
         msg = (resp_json or {}).get("choices") and (resp_json.get("choices") or [{}])[0].get("message")
@@ -1420,11 +1497,26 @@ def chat_completions():
             if err or status >= 400:
                 break
             continue
+        visible_content_text = _normalize_visible_reply_text(
+            get_assistant_content_text(msg or {}) if isinstance(msg, dict) else ""
+        )
+        if (
+            tool_rounds_used > 0
+            and (not tool_empty_final_retry_used)
+            and _should_retry_tool_empty_final(visible_content_text)
+        ):
+            logger.warning("工具续轮最终正文为空，非流式路径触发一次强制收口补问")
+            body = _inject_tool_empty_final_retry_instruction(body)
+            tool_empty_final_retry_used = True
+            resp_json, status, err = _forward_to_ai(body, headers)
+            if err or status >= 400:
+                break
+            continue
         if (
             tool_rounds_used > 0
             and (not tool_midstream_retry_used)
             and _should_retry_tool_followup(
-                get_assistant_content_text(msg or {}) if isinstance(msg, dict) else "",
+                visible_content_text,
                 str((msg or {}).get("reasoning") or (msg or {}).get("reasoning_content") or (msg or {}).get("thinking") or ""),
             )
         ):
@@ -1440,6 +1532,13 @@ def chat_completions():
             if details:
                 accumulated_reasoning_details.extend(details)
             break
+    if resp_json and tool_rounds_used > 0:
+        final_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+        final_visible = _normalize_visible_reply_text(
+            get_assistant_content_text(final_msg) if isinstance(final_msg, dict) else ""
+        )
+        if not final_visible:
+            logger.error("工具续轮结束但最终正文仍为空（非流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
     if resp_json:
         resp_json = _apply_du_thought_to_assistant_response(resp_json)
         resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])

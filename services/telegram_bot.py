@@ -1194,6 +1194,15 @@ def process_message(
     reply_clean = _sanitize_reply_for_telegram(reply_clean)
     # 表情包：[tag] 拆出后先发正文再发图
     reply_clean, sticker_tag = _extract_sticker_tag(reply_clean)
+    if not reply_clean and not voice_text and not sticker_tag:
+        logger.warning(
+            "process_message 命中空正文回复，改发兜底文案 chat_id=%s user_id=%s window_id=%s force_last4=%s",
+            chat_id,
+            user_id,
+            window_id,
+            force_last4,
+        )
+        reply_clean = "我刚刚处理完了，这轮先记上了。你戳我一下，我接着说。"
     # 先发文字（短信分段）
     outbound = reply_clean or ""
     ok_text = send_message_segmented(chat_id=chat_id, text=outbound, bot_token=bot_token) if outbound else True
