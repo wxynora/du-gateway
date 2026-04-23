@@ -1,8 +1,6 @@
-import json
 import os
 import random
 import re
-import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,7 +9,6 @@ from typing import Optional
 import requests
 
 from config import (
-    DATA_DIR,
     TELEGRAM_GATEWAY_URL,
     TELEGRAM_CHAT_PATH,
     TELEGRAM_PROACTIVE_ENABLED,
@@ -41,9 +38,6 @@ from services.telegram_bot import (
 from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversation_followups
 
 logger = get_logger(__name__)
-_SUMITALK_HISTORY_FILE = DATA_DIR / "sumitalk_display_histories.json"
-_SUMITALK_HISTORY_LOCK = threading.Lock()
-_SUMITALK_HISTORY_MAX_MESSAGES = 80
 
 
 def _schedule_due_grace_seconds() -> int:
@@ -254,29 +248,14 @@ def _resolve_sumitalk_target_device_id() -> str:
     return ""
 
 
-def _load_sumitalk_histories() -> dict:
-    try:
-        if not _SUMITALK_HISTORY_FILE.exists():
-            return {}
-        with _SUMITALK_HISTORY_FILE.open("r", encoding="utf-8") as f:
-            data = json.load(f) or {}
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _save_sumitalk_histories(data: dict) -> bool:
-    try:
-        _SUMITALK_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with _SUMITALK_HISTORY_FILE.open("w", encoding="utf-8") as f:
-            json.dump(data or {}, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception:
-        logger.exception("保存 SumiTalk 展示历史失败")
-        return False
-
-
 def _append_sumitalk_assistant_message(text: str, created_at: str | None = None) -> bool:
+    from routes.miniapp_api import (
+        _SUMITALK_HISTORY_LOCK,
+        _load_sumitalk_histories,
+        _merge_sumitalk_messages,
+        _save_sumitalk_histories,
+    )
+
     content = str(text or "").strip()
     if not content:
         return False
@@ -294,15 +273,10 @@ def _append_sumitalk_assistant_message(text: str, created_at: str | None = None)
     with _SUMITALK_HISTORY_LOCK:
         data = _load_sumitalk_histories()
         row = data.get(device_id) if isinstance(data, dict) else None
-        messages = []
-        if isinstance(row, dict):
-            messages = [x for x in (row.get("messages") or []) if isinstance(x, dict)]
-        messages.append(message)
-        messages = messages[-_SUMITALK_HISTORY_MAX_MESSAGES:]
         data[device_id] = {
             "device_id": device_id,
             "updated_at": now_iso,
-            "messages": messages,
+            "messages": _merge_sumitalk_messages((row or {}).get("messages") or [], [message]),
         }
         ok = _save_sumitalk_histories(data)
     if ok:

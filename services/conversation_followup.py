@@ -91,7 +91,12 @@ def _resolve_sumitalk_target_device_id(preferred: str = "") -> str:
 
 
 def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, created_at: str | None = None) -> bool:
-    from routes.miniapp_api import _load_sumitalk_histories, _merge_sumitalk_messages, _save_sumitalk_histories
+    from routes.miniapp_api import (
+        _SUMITALK_HISTORY_LOCK,
+        _load_sumitalk_histories,
+        _merge_sumitalk_messages,
+        _save_sumitalk_histories,
+    )
 
     did = _resolve_sumitalk_target_device_id(device_id)
     if not did:
@@ -107,15 +112,16 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
         "content": content,
         "createdAt": now_iso,
     }
-    data = _load_sumitalk_histories()
-    current = data.get(did) if isinstance(data, dict) else None
-    payload = {
-        "device_id": did,
-        "updated_at": now_iso,
-        "messages": _merge_sumitalk_messages((current or {}).get("messages") or [], [message]),
-    }
-    data[did] = payload
-    return bool(_save_sumitalk_histories(data))
+    with _SUMITALK_HISTORY_LOCK:
+        data = _load_sumitalk_histories()
+        current = data.get(did) if isinstance(data, dict) else None
+        payload = {
+            "device_id": did,
+            "updated_at": now_iso,
+            "messages": _merge_sumitalk_messages((current or {}).get("messages") or [], [message]),
+        }
+        data[did] = payload
+        return bool(_save_sumitalk_histories(data))
 
 
 def _send_via_wechat(text: str) -> bool:

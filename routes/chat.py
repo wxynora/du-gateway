@@ -1474,7 +1474,55 @@ def chat_completions():
     # 非流式 + 有 Notion 工具时：若上游返回 tool_calls，执行工具并继续请求，直到无 tool_calls 或达到最大轮数
     # 收集中间轮次 reasoning 供 MiniApp 思维链面板使用，但不回填到返回给客户端的 resp_json，
     # 避免客户端（RikkaHub 等）把 reasoning 渲染成对话内容。
+    accumulated_reasoning_parts: list[str] = []
     accumulated_reasoning_details: list[dict] = []
+    accumulated_reasoning_details_seen: set[str] = set()
+    accumulated_reasoning_omitted = False
+
+    def _reasoning_text_fingerprint(text: str) -> str:
+        return " ".join(str(text or "").split()).strip()
+
+    def _append_unique_reasoning_text(parts: list[str], text: str) -> None:
+        text = str(text or "").strip()
+        key = _reasoning_text_fingerprint(text)
+        if not key:
+            return
+        for idx, existing in enumerate(parts):
+            existing_key = _reasoning_text_fingerprint(existing)
+            if key == existing_key or key in existing_key:
+                return
+            if existing_key and existing_key in key:
+                parts[idx] = text
+                return
+        parts.append(text)
+
+    def _reasoning_detail_fingerprint(item: dict) -> str:
+        try:
+            return json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+        except Exception:
+            return str(item)
+
+    def _extend_unique_reasoning_details(target: list[dict], details: list[dict]) -> None:
+        for detail in details or []:
+            if not isinstance(detail, dict):
+                continue
+            key = _reasoning_detail_fingerprint(detail)
+            if key in accumulated_reasoning_details_seen:
+                continue
+            accumulated_reasoning_details_seen.add(key)
+            target.append(detail)
+
+    def _accumulate_nonstream_reasoning(msg_obj: dict) -> None:
+        nonlocal accumulated_reasoning_omitted
+        if not isinstance(msg_obj, dict):
+            return
+        text, details, omitted = _extract_reasoning_text_and_details(msg_obj)
+        if text:
+            _append_unique_reasoning_text(accumulated_reasoning_parts, text)
+        if details:
+            _extend_unique_reasoning_details(accumulated_reasoning_details, details)
+        if omitted:
+            accumulated_reasoning_omitted = True
     max_tool_rounds = TOOL_MAX_ROUNDS
     max_processed_tool_rounds = max(0, int(max_tool_rounds) - 1)
     tool_rounds_used = 0
@@ -1487,9 +1535,7 @@ def chat_completions():
             if tool_rounds_used >= max_processed_tool_rounds:
                 break
             if isinstance(msg, dict):
-                details = _normalize_reasoning_details(msg.get("reasoning_details"))
-                if details:
-                    accumulated_reasoning_details.extend(details)
+                _accumulate_nonstream_reasoning(msg)
             from services.notion_tools import execute_tool
             body = _append_tool_results_and_continue(body, msg, tool_calls, execute_tool)
             tool_rounds_used += 1
@@ -1528,9 +1574,7 @@ def chat_completions():
                 break
             continue
         if isinstance(msg, dict):
-            details = _normalize_reasoning_details(msg.get("reasoning_details"))
-            if details:
-                accumulated_reasoning_details.extend(details)
+            _accumulate_nonstream_reasoning(msg)
             break
     if resp_json and tool_rounds_used > 0:
         final_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
@@ -1588,14 +1632,26 @@ def chat_completions():
             # 构造仅用于 R2 存档的 msg 副本，不修改 resp_json（避免 reasoning 回传给客户端）
             import copy as _copy
             msg_for_r2 = _copy.deepcopy(msg)
-            # reasoning 兼容字段：优先取最终轮次自带的，再回退到工具中间轮次累计的
+            # reasoning 兼容字段：优先取最终轮次自带的，再合并工具中间轮次累计的
             if not msg_for_r2.get("reasoning"):
                 for rk in ("reasoning_content", "thinking"):
                     if msg_for_r2.get(rk):
                         msg_for_r2["reasoning"] = msg_for_r2.get(rk)
                         break
-            if not msg_for_r2.get("reasoning_details") and accumulated_reasoning_details:
-                msg_for_r2["reasoning_details"] = accumulated_reasoning_details
+            merged_reasoning_parts = list(accumulated_reasoning_parts)
+            existing_reasoning_text = str(msg_for_r2.get("reasoning") or "").strip()
+            _append_unique_reasoning_text(merged_reasoning_parts, existing_reasoning_text)
+            merged_reasoning_text = "\n\n".join(merged_reasoning_parts).strip()
+            if merged_reasoning_text:
+                msg_for_r2["reasoning"] = merged_reasoning_text
+
+            existing_reasoning_details = _normalize_reasoning_details(msg_for_r2.get("reasoning_details"))
+            merged_reasoning_details = list(accumulated_reasoning_details)
+            _extend_unique_reasoning_details(merged_reasoning_details, existing_reasoning_details)
+            if merged_reasoning_details:
+                msg_for_r2["reasoning_details"] = merged_reasoning_details
+            if accumulated_reasoning_omitted or (tool_rounds_used > 0 and not msg_for_r2.get("reasoning")):
+                msg_for_r2["reasoning_omitted"] = True
             if msg_for_r2.get("reasoning_details") and not msg_for_r2.get("reasoning_omitted"):
                 msg_for_r2["reasoning_omitted"] = True
             tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
