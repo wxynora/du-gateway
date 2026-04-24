@@ -6,6 +6,7 @@
 """
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -124,77 +125,124 @@ _DYNAMIC_LAYER_BATCH_PROMPT = _DYNAMIC_LAYER_PROMPT.replace(
 )
 
 
+def _one_line_preview(text: str, limit: int = 300) -> str:
+    return " ".join(str(text or "").split())[:limit]
+
+
+def _strip_json_fence(text: str) -> str:
+    if not text or not isinstance(text, str):
+        return ""
+    text = text.strip()
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return text
+
+
+def _find_balanced_json_text(text: str, opener: str) -> str:
+    """找第一个完整 JSON 对象/数组；忽略字符串里的括号。"""
+    pairs = {"{": "}", "[": "]"}
+    if opener not in pairs:
+        return ""
+    start = text.find(opener)
+    if start < 0:
+        return ""
+    stack = [pairs[opener]]
+    in_string = False
+    escape = False
+    for i in range(start + 1, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in pairs:
+            stack.append(pairs[ch])
+        elif stack and ch == stack[-1]:
+            stack.pop()
+            if not stack:
+                return text[start : i + 1]
+    return ""
+
+
+def _json_loads_loose(raw: str) -> Any:
+    if not raw:
+        return None
+    candidates = [
+        raw.strip(),
+        re.sub(r",\s*([}\]])", r"\1", raw.strip()),
+    ]
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+    return None
+
+
+def _extract_decision_fields_from_text(text: str) -> Optional[dict]:
+    """兜底解析一行一个字段的 JSON-like 输出，避免格式小错导致整轮记忆丢失。"""
+    allowed = {
+        "action",
+        "importance",
+        "tag",
+        "emotion_label",
+        "scene_type",
+        "target_type",
+        "content",
+        "fused_with_id",
+    }
+    out: dict[str, Any] = {}
+    for line in (text or "").splitlines():
+        m = re.match(r'^\s*"?([A-Za-z_]+)"?\s*:\s*(.+?)\s*,?\s*$', line.strip())
+        if not m:
+            continue
+        key = m.group(1)
+        if key not in allowed:
+            continue
+        val = m.group(2).strip().rstrip(",").strip()
+        if val in ("null", "None", "none"):
+            out[key] = None
+        elif len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+            out[key] = val[1:-1]
+        else:
+            out[key] = val
+    return out if "action" in out else None
+
+
 def _extract_json_from_ds_response(text: str) -> Optional[dict]:
     """
     从 DS 返回中剥离 markdown、前后缀，只解析第一个完整 JSON 对象。
-    防止 DS 输出 ```json ... ``` 或「结果是：{...}」导致解析失败。
+    解析器会忽略字符串里的括号；JSON-like 输出也会尽量兜底解析。
     """
-    if not text or not isinstance(text, str):
+    text = _strip_json_fence(text)
+    if not text:
         return None
-    text = text.strip()
-    # 去掉 markdown 代码块
-    if "```" in text:
-        for start in ("```json", "```"):
-            if start in text:
-                idx = text.find(start) + len(start)
-                text = text[idx:].lstrip()
-            if "```" in text:
-                text = text[: text.find("```")].strip()
-            break
-    # 找第一个 { 和最后一个 }
-    start = text.find("{")
-    if start < 0:
-        return None
-    depth = 0
-    end = -1
-    for i in range(start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-    if end < 0:
-        return None
-    try:
-        return json.loads(text[start : end + 1])
-    except Exception:
-        return None
+    balanced = _find_balanced_json_text(text, "{")
+    for raw in (balanced, text):
+        obj = _json_loads_loose(raw)
+        if isinstance(obj, dict):
+            return obj
+    return _extract_decision_fields_from_text(text)
 
 
 def _extract_json_array_from_ds_response(text: str) -> Optional[list]:
     """从 DS 返回中解析 JSON 数组 [...]。"""
-    if not text or not isinstance(text, str):
+    text = _strip_json_fence(text)
+    if not text:
         return None
-    text = text.strip()
-    if "```" in text:
-        for start in ("```json", "```"):
-            if start in text:
-                idx = text.find(start) + len(start)
-                text = text[idx:].lstrip()
-            if "```" in text:
-                text = text[: text.find("```")].strip()
-            break
-    start = text.find("[")
-    if start < 0:
-        return None
-    depth = 0
-    end = -1
-    for i in range(start, len(text)):
-        if text[i] in ("[", "{"):
-            depth += 1
-        elif text[i] in ("]", "}"):
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-    if end < 0:
-        return None
-    try:
-        return json.loads(text[start : end + 1])
-    except Exception:
-        return None
+    balanced = _find_balanced_json_text(text, "[")
+    for raw in (balanced, text):
+        arr = _json_loads_loose(raw)
+        if isinstance(arr, list):
+            return arr
+    return None
 
 
 def _build_query_from_round(round_messages: list) -> str:
@@ -274,11 +322,28 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
         "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 600,
+        "temperature": 0,
     }
     try:
         content = None
         for attempt in range(2):  # 最多试 2 次
-            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
+            request_payload = payload
+            if attempt > 0:
+                logger.info("动态层 DS JSON 解析失败后重试 attempt=%s", attempt + 1)
+                request_payload = {
+                    **payload,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                prompt
+                                + "\n\n上一次输出没有通过 JSON 解析。"
+                                "这次只输出严格合法 JSON 对象：双引号字段名、字符串内引号必须转义、不要 markdown、不要前后解释。"
+                            ),
+                        }
+                    ],
+                }
+            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=request_payload, timeout=60)
             if r.status_code >= 400:
                 logger.error(
                     "动态层 DS API 错误 status=%s body=%s",
@@ -291,8 +356,10 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
             content = (content or "").strip()
             obj = _extract_json_from_ds_response(content)
             if isinstance(obj, dict):
+                if attempt > 0:
+                    logger.info("动态层 DS JSON 解析重试成功 attempt=%s", attempt + 1)
                 break
-            logger.warning("动态层 DS 返回非 JSON attempt=%s content=%s", attempt + 1, content[:500])
+            logger.warning("动态层 DS 返回非 JSON attempt=%s preview=%s", attempt + 1, _one_line_preview(content))
             if attempt == 0:
                 continue  # 重试一次
             return default
