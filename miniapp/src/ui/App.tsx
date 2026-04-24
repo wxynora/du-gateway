@@ -908,6 +908,16 @@ type ChatMessageGroup = {
   parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number } }>;
 };
 
+type ChatSearchMatch = {
+  id: string;
+  groupId: string;
+  partIndex: number;
+};
+
+function getChatSearchMatchId(groupId: string, partIndex: number): string {
+  return `${groupId}::${partIndex}`;
+}
+
 function formatClockTime(value: string, timeFormat: ChatTimeFormat = "hhmm"): string {
   const raw = String(value || "").trim();
   if (!raw) return "最近";
@@ -1552,7 +1562,7 @@ function MainChatScreen({
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
-  const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [activeModel, setActiveModel] = useState(() => {
     try {
       return (localStorage.getItem(modelKey) || "").trim();
@@ -1780,21 +1790,26 @@ function MainChatScreen({
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
   const groupedMessages = groupChatMessages(messages);
-  const matchedGroupIds = useMemo(() => {
+  const searchMatches = useMemo<ChatSearchMatch[]>(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return [];
-    return groupedMessages
-      .filter((group) =>
-        group.parts.some((part) =>
-          String(part.content || "").toLowerCase().includes(query) ||
-          String(part.reasoning || "").toLowerCase().includes(query),
-        ),
-      )
-      .map((group) => group.id);
+    const matches: ChatSearchMatch[] = [];
+    groupedMessages.forEach((group) => {
+      group.parts.forEach((part, partIndex) => {
+        if (!String(part.content || "").toLowerCase().includes(query)) return;
+        matches.push({
+          id: getChatSearchMatchId(group.id, partIndex),
+          groupId: group.id,
+          partIndex,
+        });
+      });
+    });
+    return matches;
   }, [groupedMessages, searchQuery]);
-  const activeMatchedGroupId = matchedGroupIds.length
-    ? matchedGroupIds[Math.min(activeSearchIndex, matchedGroupIds.length - 1)]
+  const activeSearchMatch = searchMatches.length
+    ? searchMatches[Math.min(activeSearchIndex, searchMatches.length - 1)]
     : null;
+  const activeSearchMatchId = activeSearchMatch?.id || "";
   const transparentBubbleClass = TRANSPARENT_BUBBLE_CLASS;
 
   useEffect(() => {
@@ -1811,17 +1826,17 @@ function MainChatScreen({
       setActiveSearchIndex(0);
       return;
     }
-    setActiveSearchIndex(matchedGroupIds.length > 0 ? matchedGroupIds.length - 1 : 0);
-  }, [searchQuery, matchedGroupIds.length]);
+    setActiveSearchIndex(searchMatches.length > 0 ? searchMatches.length - 1 : 0);
+  }, [searchQuery, searchMatches.length]);
 
   useEffect(() => {
-    if (!searchOpen || !activeMatchedGroupId) return;
-    const target = groupRefs.current[activeMatchedGroupId];
+    if (!searchOpen || !activeSearchMatchId) return;
+    const target = searchResultRefs.current[activeSearchMatchId];
     if (!target) return;
     requestAnimationFrame(() => {
       target.scrollIntoView({ block: "center", behavior: "smooth" });
     });
-  }, [activeMatchedGroupId, searchOpen]);
+  }, [activeSearchMatchId, searchOpen]);
 
   return (
     <div
@@ -1867,24 +1882,24 @@ function MainChatScreen({
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="搜索记录"
             />
-            {matchedGroupIds.length ? (
+            {searchMatches.length ? (
               <>
                 <button
                   className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-200"
-                  onClick={() => setActiveSearchIndex((prev) => (prev - 1 + matchedGroupIds.length) % matchedGroupIds.length)}
+                  onClick={() => setActiveSearchIndex((prev) => (prev - 1 + searchMatches.length) % searchMatches.length)}
                   aria-label="上一个结果"
                 >
                   <ChevronUpMini />
                 </button>
                 <button
                   className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-200"
-                  onClick={() => setActiveSearchIndex((prev) => (prev + 1) % matchedGroupIds.length)}
+                  onClick={() => setActiveSearchIndex((prev) => (prev + 1) % searchMatches.length)}
                   aria-label="下一个结果"
                 >
                   <ChevronDownMini />
                 </button>
                 <span className="text-[11px] font-medium text-gray-500">
-                  {activeSearchIndex + 1}/{matchedGroupIds.length}
+                  {activeSearchIndex + 1}/{searchMatches.length}
                 </span>
               </>
             ) : searchQuery.trim() ? (
@@ -1909,81 +1924,88 @@ function MainChatScreen({
                 </div>
               ) : null}
               {group.role === "user" ? (
-                <div
-                  ref={(el) => {
-                    groupRefs.current[group.id] = el;
-                  }}
-                  className={`flex items-start justify-end space-x-3 rounded-[22px] ${activeMatchedGroupId === group.id ? "ring-2 ring-gray-300/80 ring-offset-2 ring-offset-transparent" : ""}`}
-                >
+                <div className="flex items-start justify-end space-x-3 rounded-[22px]">
                   <div className={`mt-[2px] flex ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} flex-col items-end space-y-1.5`}>
-                    {group.parts.map((part, index) => (
-                      <div
-                        key={`${group.id}-${index}`}
-                        className={`block max-w-full rounded-[18px] px-3 py-2 text-left font-medium leading-relaxed shadow-sm ${
-                          transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
-                        }`}
-                        style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
-                      >
-                        <PlainTextBlock content={part.content || (sending ? "…" : "")} />
-                      </div>
-                    ))}
+                    {group.parts.map((part, index) => {
+                      const matchId = getChatSearchMatchId(group.id, index);
+                      const isActiveSearchPart = activeSearchMatchId === matchId;
+                      return (
+                        <div
+                          key={`${group.id}-${index}`}
+                          ref={(el) => {
+                            searchResultRefs.current[matchId] = el;
+                          }}
+                          className={`block max-w-full rounded-[18px] px-3 py-2 text-left font-medium leading-relaxed shadow-sm ${
+                            transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
+                          } ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+                          style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
+                        >
+                          <PlainTextBlock content={part.content || (sending ? "…" : "")} />
+                        </div>
+                      );
+                    })}
                   </div>
                   {showChatAvatars ? (
                     <AvatarBubble image={myAvatarImage} label="我" className="bg-gray-200 text-gray-600" />
                   ) : null}
                 </div>
               ) : (
-                <div
-                  ref={(el) => {
-                    groupRefs.current[group.id] = el;
-                  }}
-                  className={`flex items-start space-x-3 rounded-[22px] ${activeMatchedGroupId === group.id ? "ring-2 ring-gray-300/80 ring-offset-2 ring-offset-transparent" : ""}`}
-                >
+                <div className="flex items-start space-x-3 rounded-[22px]">
                   {showChatAvatars ? (
                     <AvatarBubble image={duAvatarImage} label={avatarLabel} className={avatarClass} />
                   ) : null}
                   <div className={`mt-[2px] ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} space-y-1.5`}>
-                    {group.parts.map((part, index) => (
-                      <div key={`${group.id}-${index}`} className="space-y-2">
-                        {part.reasoning ? (
-                          <details open={expandReasoningByDefault} className="max-w-full rounded-[14px] border border-gray-100 bg-[#F7F7F7] px-3 py-2 text-[12px] text-gray-700">
-                            <summary className="cursor-pointer list-none text-[12px] font-medium text-gray-600">思维链</summary>
-                            <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap leading-6">{part.reasoning}</div>
-                          </details>
-                        ) : null}
+                    {group.parts.map((part, index) => {
+                      const matchId = getChatSearchMatchId(group.id, index);
+                      const isActiveSearchPart = activeSearchMatchId === matchId;
+                      return (
                         <div
-                          className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
-                            transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)
-                          }`}
-                          style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
+                          key={`${group.id}-${index}`}
+                          ref={(el) => {
+                            searchResultRefs.current[matchId] = el;
+                          }}
+                          className={`space-y-2 rounded-[20px] ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
                         >
-                          {part.render === "html" ? (
-                            <HtmlBlock content={part.content || (sending ? "…" : "")} />
-                          ) : part.render === "plain" ? (
-                            <PlainTextBlock content={part.content || (sending ? "…" : "")} />
-                          ) : (
-                            <RichTextBlock content={part.content || (sending ? "…" : "")} />
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
-                          <button
-                            className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-100 active:opacity-70"
-                            onClick={() => copyText(part.content, toast)}
-                            aria-label="复制"
-                            title="复制"
-                          >
-                            <CopyIconMini />
-                          </button>
-                          {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
-                            <span>
-                              {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
-                              {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
-                              {part.tokenCount?.output ? `↓${formatTokenCountValue(part.tokenCount.output)}` : ""}
-                            </span>
+                          {part.reasoning ? (
+                            <details open={expandReasoningByDefault} className="max-w-full rounded-[14px] border border-gray-100 bg-[#F7F7F7] px-3 py-2 text-[12px] text-gray-700">
+                              <summary className="cursor-pointer list-none text-[12px] font-medium text-gray-600">思维链</summary>
+                              <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap leading-6">{part.reasoning}</div>
+                            </details>
                           ) : null}
+                          <div
+                            className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
+                              transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)
+                            }`}
+                            style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
+                          >
+                            {part.render === "html" ? (
+                              <HtmlBlock content={part.content || (sending ? "…" : "")} />
+                            ) : part.render === "plain" ? (
+                              <PlainTextBlock content={part.content || (sending ? "…" : "")} />
+                            ) : (
+                              <RichTextBlock content={part.content || (sending ? "…" : "")} />
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
+                            <button
+                              className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-100 active:opacity-70"
+                              onClick={() => copyText(part.content, toast)}
+                              aria-label="复制"
+                              title="复制"
+                            >
+                              <CopyIconMini />
+                            </button>
+                            {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
+                              <span>
+                                {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
+                                {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
+                                {part.tokenCount?.output ? `↓${formatTokenCountValue(part.tokenCount.output)}` : ""}
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
