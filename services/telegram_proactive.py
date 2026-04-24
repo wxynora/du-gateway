@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import random
 import re
@@ -36,8 +38,60 @@ from services.telegram_bot import (
     process_message,
 )
 from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversation_followups
+from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
 
 logger = get_logger(__name__)
+
+
+def _build_du_daily_trigger_from_proactive(decision: ProactiveDecision, hours_since_last: float, sent: bool) -> Optional[dict]:
+    action = str(decision.action or "").strip().lower()
+    reason = str(decision.du_reason or decision.reason or "").strip()
+    facts: list[str] = []
+    if hours_since_last >= 0:
+        facts.append(f"距离最近一次明确往来大约 {hours_since_last:.1f} 小时。")
+    if reason:
+        facts.append(f"我刚才的决定理由：{reason}")
+    if action == "no_contact":
+        facts.insert(0, "刚才我做了一次主动联系决策，最后决定先不打扰她。")
+        return {
+            "kind": "proactive_no_contact",
+            "hard": True,
+            "reason": "主动消息决策：先不联系",
+            "facts": facts,
+            "topic_key": "proactive_no_contact",
+            "hidden_only": True,
+        }
+    if sent and action == "send_message":
+        preview = str(decision.text or "").strip()
+        facts.insert(0, "刚才我主动去找她了。")
+        if preview:
+            facts.append(f"我发出去的话大意是：{preview[:120]}")
+        return {
+            "kind": "proactive_send",
+            "hard": True,
+            "reason": "主动消息决策：已主动联系",
+            "facts": facts,
+            "topic_key": "proactive_send",
+            "hidden_only": True,
+        }
+    return None
+
+
+def du_daily_sleep_tick(target_user_id: int = 0) -> dict:
+    uid = int(target_user_id or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if uid <= 0:
+        return {"ok": False, "error": "missing_target_user_id"}
+    trigger = infer_sleep_rollover_trigger()
+    if not trigger:
+        return {"ok": True, "triggered": False}
+    window_id = f"tg_{uid}"
+    ok = request_gateway_maintenance(window_id, trigger)
+    return {
+        "ok": bool(ok),
+        "triggered": True,
+        "window_id": window_id,
+        "kind": str(trigger.get("kind") or ""),
+    }
 
 
 def _schedule_due_grace_seconds() -> int:
@@ -797,7 +851,14 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     except Exception as e:
         logger.warning("写入主动决策记忆失败: %s", e)
 
+    window_id = f"tg_{uid}"
     if not decision.should_send or not decision.text.strip():
+        trigger = _build_du_daily_trigger_from_proactive(decision, hours, sent=False)
+        if trigger:
+            try:
+                out["du_daily_updated"] = bool(request_gateway_maintenance(window_id, trigger))
+            except Exception as e:
+                logger.warning("主动决策写入渡的日常失败: %s", e)
         return out
     text_to_send = decision.text.strip()
     # 主动发消息也复用 Telegram 侧的清洗规则：避免出现“（脑内OS：）”等格式
@@ -817,6 +878,12 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     out["text_preview"] = (decision.text.strip()[:120] + "…") if len(decision.text.strip()) > 120 else decision.text.strip()
     if ok:
         r2_store.save_last_proactive_contact_at(now_iso)
+        trigger = _build_du_daily_trigger_from_proactive(decision, hours, sent=True)
+        if trigger:
+            try:
+                out["du_daily_updated"] = bool(request_gateway_maintenance(window_id, trigger))
+            except Exception as e:
+                logger.warning("主动消息结果写入渡的日常失败: %s", e)
         logger.warning(
             "Pro 已发送一条主动消息 channel=%s chat_id=%s now=%s preview=%s",
             channel, uid, now_iso, text_to_send[:60] + ("…" if len(text_to_send) > 60 else ""),
@@ -834,6 +901,7 @@ def run_scheduler_loop():
     logger.info("主动发消息调度启动 interval_min=%s target_user_id=%s quiet=%s-%s", interval_min, uid, TELEGRAM_PROACTIVE_QUIET_START_HM, TELEGRAM_PROACTIVE_QUIET_END_HM)
     next_main_at = 0.0
     next_followup_at = 0.0
+    next_du_daily_at = 0.0
     while True:
         now_ts = time.time()
         try:
@@ -841,6 +909,10 @@ def run_scheduler_loop():
                 followup = tick_conversation_followups()
                 logger.info("延迟续话 tick result=%s", followup)
                 next_followup_at = now_ts + max(15, int(FOLLOWUP_TICK_SECONDS or 60))
+            if now_ts >= next_du_daily_at:
+                daily = du_daily_sleep_tick(uid)
+                logger.info("渡的日常入睡收口 tick result=%s", daily)
+                next_du_daily_at = now_ts + 300
             if now_ts >= next_main_at:
                 sched = schedule_tick(uid)
                 logger.info("日历闹钟 tick result=%s", sched)

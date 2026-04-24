@@ -49,6 +49,7 @@ from pipeline.pipeline import (
     step_inject_summary,
     step_inject_sense_snapshot,
     step_inject_du_thought,
+    step_inject_du_daily,
     step_inject_interaction_candidate,
     step_inject_rikkahub_reminder,
     step_inject_dynamic_memory,
@@ -66,6 +67,12 @@ from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import r2_store, whitelist_store
 from services.du_thought import split_assistant_for_thought
+from services.du_daily import (
+    build_chat_trigger as build_du_daily_trigger,
+    looks_like_plain_maintenance_daily,
+    save_hidden_block as save_du_daily_hidden_block,
+    split_assistant_for_daily,
+)
 from services.interaction_memory import split_assistant_for_interaction
 from services.html_preview_tools import (
     merge_html_preview_urls_into_assistant_text,
@@ -680,7 +687,12 @@ def _stream_forward_to_ai(body: dict, headers: dict):
     yield ("data: " + json.dumps({"error": _build_upstream_error_hint(last_err or "")}) + "\n\n").encode("utf-8")
 
 
-def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
+def _stream_with_r2_archive(
+    body: dict,
+    headers: dict,
+    window_id: str = "",
+    du_daily_trigger: Optional[dict] = None,
+):
     """
     包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
     当请求带 tools 时：先缓冲整段流，解析 message；若有 tool_calls 则执行工具并继续请求（循环），
@@ -692,6 +704,7 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
     reasoning_details_parts: list[dict] = []
     reasoning_omitted = False
     last_user = _last_user_message(body.get("messages") or [])
+    du_daily_maintenance = _is_du_daily_maintenance_request()
 
     def _collect_content_from_chunk(chunk):
         try:
@@ -791,24 +804,14 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
                 last_send_ts = time.time()
         finally:
             full_content = "".join(content_parts)
-            visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_content)
-            visible, thought = split_assistant_for_thought(visible_after_pcmd)
-            visible, interaction = split_assistant_for_interaction(visible)
-            if thought:
-                try:
-                    r2_store.save_du_thought_latest(now_beijing_iso(), thought)
-                except Exception as e:
-                    logger.warning("save_du_thought_latest 失败 error=%s", e)
-            if interaction:
-                try:
-                    r2_store.append_interaction_candidate(interaction)
-                except Exception as e:
-                    logger.warning("append_interaction_candidate 失败 error=%s", e)
+            visible = _extract_and_store_hidden_sidecars(full_content, du_daily_trigger=du_daily_trigger)
             full_reasoning = "".join(reasoning_parts).strip()
             stream_sec = time.time() - stream_start
             # 若「流式持续时长」总是差不多（如 10–20s）而字数越来越短，可能是上游按时长限流
             logger.debug("本轮流式回复收集长度约 %s 字符，共转发 %s 个 data 块，流式持续约 %.1f 秒", len(full_content), data_chunk_count, stream_sec)
-            if not is_failed_response(visible) and visible.strip():
+            if du_daily_maintenance:
+                logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
+            elif not is_failed_response(visible) and visible.strip():
                 msg = {"role": "assistant", "content": visible}
                 if full_reasoning:
                     msg["reasoning"] = full_reasoning
@@ -918,24 +921,14 @@ def _stream_with_r2_archive(body: dict, headers: dict, window_id: str = ""):
             break
     finally:
         full_content = "".join(content_parts)
-        visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_content)
-        visible, thought = split_assistant_for_thought(visible_after_pcmd)
-        visible, interaction = split_assistant_for_interaction(visible)
+        visible = _extract_and_store_hidden_sidecars(full_content, du_daily_trigger=du_daily_trigger)
         if tool_rounds_used > 0 and not visible.strip():
             logger.error("工具续轮结束但最终正文仍为空（流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
-        if thought:
-            try:
-                r2_store.save_du_thought_latest(now_beijing_iso(), thought)
-            except Exception as e:
-                logger.warning("save_du_thought_latest 失败 error=%s", e)
-        if interaction:
-            try:
-                r2_store.append_interaction_candidate(interaction)
-            except Exception as e:
-                logger.warning("append_interaction_candidate 失败 error=%s", e)
         full_reasoning = "".join(reasoning_parts).strip()
         logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
-        if is_failed_response(visible):
+        if du_daily_maintenance:
+            logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
+        elif is_failed_response(visible):
             logger.info("R2 未存档：流式回复被判为失败，跳过")
         elif not visible.strip():
             logger.info("R2 未存档：流式回复为空，跳过")
@@ -1184,9 +1177,42 @@ def _build_noop_chat_response(body: dict) -> dict:
     }
 
 
-def _apply_du_thought_to_assistant_response(resp_json: dict) -> dict:
+def _is_du_daily_maintenance_request() -> bool:
+    return str(request.headers.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _extract_and_store_hidden_sidecars(full_text: str, du_daily_trigger: Optional[dict] = None) -> str:
+    visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_text or "")
+    visible, thought = split_assistant_for_thought(visible_after_pcmd)
+    visible, interaction = split_assistant_for_interaction(visible)
+    visible, du_daily = split_assistant_for_daily(visible)
+    if thought:
+        try:
+            r2_store.save_du_thought_latest(now_beijing_iso(), thought)
+        except Exception as e:
+            logger.warning("save_du_thought_latest 失败 error=%s", e)
+    if interaction:
+        try:
+            r2_store.append_interaction_candidate(interaction)
+        except Exception as e:
+            logger.warning("append_interaction_candidate 失败 error=%s", e)
+    if du_daily:
+        try:
+            save_du_daily_hidden_block(du_daily, trigger=du_daily_trigger)
+        except Exception as e:
+            logger.warning("save_du_daily_hidden_block 失败 error=%s", e)
+    elif looks_like_plain_maintenance_daily(visible, du_daily_trigger):
+        try:
+            save_du_daily_hidden_block(visible, trigger=du_daily_trigger)
+            visible = ""
+        except Exception as e:
+            logger.warning("save_du_daily_hidden_block plain 失败 error=%s", e)
+    return visible
+
+
+def _apply_hidden_sidecars_to_assistant_response(resp_json: dict, du_daily_trigger: Optional[dict] = None) -> dict:
     """
-    剥离助手回复中的心事块（老婆侧不可见）；若存在闭合块则写入 R2。
+    剥离助手回复中的隐藏块（老婆侧不可见）；若存在闭合块则写入 R2。
     就地修改 choices[0].message.content。
     """
     if not resp_json or not isinstance(resp_json, dict):
@@ -1200,21 +1226,9 @@ def _apply_du_thought_to_assistant_response(resp_json: dict) -> dict:
     content_text = get_assistant_content_text(msg)
     if not content_text:
         return resp_json
-    visible_after_pcmd, _ = process_pcmd_in_assistant_text(content_text)
-    visible, thought = split_assistant_for_thought(visible_after_pcmd)
-    visible, interaction = split_assistant_for_interaction(visible)
-    if thought or interaction or visible != content_text:
+    visible = _extract_and_store_hidden_sidecars(content_text, du_daily_trigger=du_daily_trigger)
+    if visible != content_text:
         msg["content"] = visible
-    if thought:
-        try:
-            r2_store.save_du_thought_latest(now_beijing_iso(), thought)
-        except Exception as e:
-            logger.warning("save_du_thought_latest 失败 error=%s", e)
-    if interaction:
-        try:
-            r2_store.append_interaction_candidate(interaction)
-        except Exception as e:
-            logger.warning("append_interaction_candidate 失败 error=%s", e)
     return resp_json
 
 
@@ -1404,7 +1418,8 @@ def chat_completions():
             return _stream_response(_ghost_noop_stream())
         return jsonify(_build_noop_chat_response(body)), 200
 
-    _maybe_mark_tg_window_user_activity(window_id, body)
+    if not _is_du_daily_maintenance_request():
+        _maybe_mark_tg_window_user_activity(window_id, body)
 
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, window_id)
@@ -1415,21 +1430,26 @@ def chat_completions():
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
+    du_daily_maintenance = _is_du_daily_maintenance_request()
+    du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
     if not slim_voice_call:
         body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
         body = step_inject_sense_snapshot(body, window_id)
         body = step_inject_du_thought(body, window_id)
+        body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
         body = step_inject_interaction_candidate(body, window_id)
         body = step_inject_wenyou_gm(body, window_id)
-        body = step_inject_rikkahub_reminder(body, window_id)
+        if not du_daily_maintenance:
+            body = step_inject_rikkahub_reminder(body, window_id)
         body = step_inject_dynamic_memory(body, window_id)
         body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
         body = step_inject_du_notebook(body)
-        body = step_inject_notion_search(body, window_id)
-        body = step_inject_notion_tools(body)
-        body = step_inject_forum_tools(body)
-        body = step_inject_websearch_tools(body)
-        body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
+        if not du_daily_maintenance:
+            body = step_inject_notion_search(body, window_id)
+            body = step_inject_notion_tools(body)
+            body = step_inject_forum_tools(body)
+            body = step_inject_websearch_tools(body)
+            body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
     body = step_trim_messages_if_over_limit(body)
     # 注入快照：每次请求后把完整 body 存一份，方便对比 token 变化
     try:
@@ -1455,11 +1475,11 @@ def chat_completions():
     for msg in body.get("messages") or []:
         msg.pop("__dynamic__", None)
     if body.get("stream"):
-        return _stream_response(_stream_with_r2_archive(body, headers, window_id))
+        return _stream_response(_stream_with_r2_archive(body, headers, window_id, du_daily_trigger=du_daily_trigger))
     # 非流式：命中响应缓存则直接返回，不调上游
     from services.chat_response_cache import get_cache_key, get as cache_get, set as cache_set
     cache_key = get_cache_key(body)
-    cached = cache_get(cache_key)
+    cached = None if du_daily_maintenance else cache_get(cache_key)
     if cached:
         resp_json, status = cached
         logger.info("Chat 命中响应缓存，未调上游")
@@ -1584,7 +1604,7 @@ def chat_completions():
         if not final_visible:
             logger.error("工具续轮结束但最终正文仍为空（非流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
     if resp_json:
-        resp_json = _apply_du_thought_to_assistant_response(resp_json)
+        resp_json = _apply_hidden_sidecars_to_assistant_response(resp_json, du_daily_trigger=du_daily_trigger)
         resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
         # 剥离 content 里的 <think>/<thinking> 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
         # thinking 已合并入 message.reasoning，R2 存档的 msg_for_r2 独立 deepcopy，不受此影响。
@@ -1619,7 +1639,7 @@ def chat_completions():
                     (resp_json.get("choices") or [{}])[0]["message"] = msg
         except Exception:
             logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
-    if status == 200 and resp_json:
+    if status == 200 and resp_json and not du_daily_maintenance:
         cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
@@ -1628,6 +1648,8 @@ def chat_completions():
             logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
         elif _is_followup_generation_request():
             logger.info("R2 未存档：延迟续话内部生成请求跳过存档")
+        elif du_daily_maintenance:
+            logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
         else:
             # 构造仅用于 R2 存档的 msg 副本，不修改 resp_json（避免 reasoning 回传给客户端）
             import copy as _copy

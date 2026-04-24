@@ -78,6 +78,8 @@ R2_KEY_DYNAMIC_MAINTENANCE_REPORT = "dynamic_memory/maintenance_report.json"
 R2_KEY_SENSE_LATEST = "sense/latest.json"
 # 渡的心事：网关从助手回复截取后写入，仅注入渡侧 system
 R2_KEY_DU_THOUGHT_LATEST = "global/du_thought_latest.json"
+# 渡的日常：隐藏滚动记忆（昨天缩略 + 今天时间线）
+R2_KEY_DU_DAILY_STATE = "global/du_daily_state.json"
 # Telegram 表情包：映射表（各 tag 下对象 key 列表）+ 分类元数据（中文名等）
 R2_KEY_STICKERS_MAPPING = "stickers/mapping.json"
 R2_KEY_STICKERS_META = "stickers/meta.json"
@@ -686,6 +688,33 @@ def get_du_thought_latest() -> Optional[dict]:
     return data
 
 
+def save_du_daily_state(data: dict) -> bool:
+    """写入 global/du_daily_state.json。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(data, dict):
+        return False
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_DU_DAILY_STATE, data)
+            return True
+        except Exception as e:
+            logger.error("save_du_daily_state 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_du_daily_state() -> Optional[dict]:
+    """读取 global/du_daily_state.json。"""
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_DU_DAILY_STATE)
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
 def _get_items_json(key: str) -> list[dict]:
     client = _s3_client()
     if not client:
@@ -833,6 +862,21 @@ def _append_sense_history_event(client, sense_type: str, bucket_snapshot: dict) 
         _write_json(client, hk, existing)
     except Exception as e:
         logger.warning("sense 历史归档失败 type=%s error=%s", sense_type, e)
+
+
+def get_sense_history_for_date(date_str: str) -> list[dict]:
+    """读取某日 sense/history/YYYY-MM-DD.json；失败返回 []。"""
+    client = _s3_client()
+    if not client:
+        return []
+    day = str(date_str or "").strip()
+    if not day:
+        return []
+    key = f"sense/history/{day}.json"
+    data = _read_json(client, key)
+    if not isinstance(data, list):
+        return []
+    return [dict(x) for x in data if isinstance(x, dict)]
 
 
 # ---------- 全局「最新四轮」供新窗口注入 ----------

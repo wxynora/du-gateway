@@ -617,6 +617,32 @@ def step_inject_du_thought(body: dict, window_id: str) -> dict:
     return body
 
 
+def step_inject_du_daily(
+    body: dict,
+    window_id: str,
+    trigger: Optional[dict] = None,
+    maintenance_mode: bool = False,
+) -> dict:
+    """
+    全局注入：在 system 末尾追加「渡的日常」隐藏滚动记忆说明 + 当前版本。
+    网关判定命中更新时，渡只写本次新增隐藏块，网关截取后追加进 R2，老婆侧不可见。
+    """
+    _ = window_id
+    try:
+        from services.du_daily import format_inject_block, get_prepared_state
+
+        state, _changed = get_prepared_state()
+        block = format_inject_block(state, trigger=trigger, maintenance_mode=maintenance_mode)
+    except Exception as e:
+        logger.debug("du_daily 注入跳过 error=%s", e)
+        return body
+    if not (block or "").strip():
+        return body
+    inject = "\n\n" + block.strip()
+    body = _append_to_dynamic_system(body, inject)
+    return body
+
+
 def step_inject_interaction_candidate(body: dict, window_id: str) -> dict:
     """
     全局注入：在静态 system 段追加「相处模式候选写法说明」。
