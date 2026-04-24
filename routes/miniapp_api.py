@@ -24,12 +24,6 @@ from config import (
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
     TELEGRAM_WENYOU_OWNER_USER_ID,
     WENYOU_GROUP_CHAT_ID,
-    DEFAULT_CHAT_MODEL,
-    GATEWAY_MODELS,
-    TARGET_AI_URL,
-    TARGET_AI_API_KEY,
-    TARGET_AI_URLS,
-    TARGET_AI_API_KEYS,
     VOICE_CALL_MAX_BYTES,
     VOICE_CALL_WINDOW_ID,
     OPENROUTER_FIXED_MODEL,
@@ -38,6 +32,9 @@ from config import (
     OPENROUTER_PROVIDER_ORDER,
     OPENROUTER_ALLOW_FALLBACKS,
     OPENROUTER_CACHE_CONTROL_TYPE,
+    DEEPSEEK_API_URL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_CHAT_MODEL,
     is_openrouter_url,
 )
 from storage import r2_store, whitelist_store, blacklist_store
@@ -2753,67 +2750,16 @@ def _probe_upstream_item(it: dict) -> dict:
     return out
 
 
-def _resolve_translation_upstream() -> tuple[str, str]:
-    """优先使用当前 active 上游；若不存在则退回环境变量首项。"""
-    try:
-        active = upstream_store.get_active_item() or {}
-    except Exception:
-        active = {}
-    url = str(active.get("url") or "").strip()
-    api_key = str(active.get("api_key") or "").strip()
-    if url:
-        return url, api_key
-
-    if TARGET_AI_URL and str(TARGET_AI_URL).strip():
-        return str(TARGET_AI_URL).strip(), str(TARGET_AI_API_KEY or "").strip()
-
-    urls = list(TARGET_AI_URLS or [])
-    keys = list(TARGET_AI_API_KEYS or [])
-    if urls:
-        fallback_key = keys[0] if keys else TARGET_AI_API_KEY
-        return str(urls[0] or "").strip(), str(fallback_key or "").strip()
-    return "", ""
-
-
-def _pick_translation_model(url: str, api_key: str) -> str:
-    """尽量从 /v1/models 里拿第一个模型；失败时退回默认模型配置。"""
-    if is_openrouter_url(url) and OPENROUTER_FIXED_MODEL:
-        return OPENROUTER_FIXED_MODEL
-    fallback = str(DEFAULT_CHAT_MODEL or "").strip()
-    if not fallback:
-        gateway_models = [str(x or "").strip() for x in (GATEWAY_MODELS or []) if str(x or "").strip()]
-        fallback = gateway_models[0] if gateway_models else "gpt-4"
-    if not url:
-        return fallback
-
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    try:
-        rm = requests.get(_chat_url_to_models_url(url), headers=headers, timeout=12)
-        if 200 <= rm.status_code < 300:
-            data = rm.json() if rm.content else {}
-            items = data.get("data") if isinstance(data, dict) else None
-            if isinstance(items, list):
-                for item in items:
-                    if isinstance(item, dict) and str(item.get("id") or "").strip():
-                        return str(item.get("id") or "").strip()
-                    if isinstance(item, str) and item.strip():
-                        return item.strip()
-    except Exception:
-        pass
-    return fallback
-
-
 def _translate_reasoning_text(text: str) -> str:
     src = str(text or "").strip()
     if not src:
         return ""
 
-    url, api_key = _resolve_translation_upstream()
-    if not url:
-        raise RuntimeError("当前没有可用上游，无法翻译")
-    model = _pick_translation_model(url, api_key)
+    url = str(DEEPSEEK_API_URL or "").strip()
+    api_key = str(DEEPSEEK_API_KEY or "").strip()
+    model = str(DEEPSEEK_CHAT_MODEL or "").strip()
+    if not url or not api_key or not model:
+        raise RuntimeError("DeepSeek 翻译未配置完整，无法翻译")
 
     system_prompt = (
         "你是一个高保真翻译器。请把用户提供的 reasoning 或 thinking 全文翻译成简体中文。"
