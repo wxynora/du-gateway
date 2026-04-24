@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL
+from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
 from storage import r2_store
 from utils.log import get_logger
 
@@ -190,7 +190,7 @@ def _call_ds_labels(batch: list[dict]) -> dict[str, dict]:
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": min(1200, max(300, 110 * len(items))),
     }

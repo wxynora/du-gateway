@@ -121,6 +121,7 @@ CHAT_CACHE_MAX_SIZE = int(os.environ.get("CHAT_CACHE_MAX_SIZE", "500"))
 # DeepSeek：窗口总结
 DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_CHAT_MODEL = os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
 
 # 图像描述 AI（便宜模型）：图片转文字存 R2，填 .env 里 IMAGE_DESC_API_*
 IMAGE_DESC_API_URL = os.environ.get("IMAGE_DESC_API_URL", "")
@@ -451,7 +452,7 @@ WENYOU_GROUP_CHAT_ID = int(os.environ.get("WENYOU_GROUP_CHAT_ID", "0") or "0")
 _WENYOU_OWNER_STR = os.environ.get("TELEGRAM_WENYOU_OWNER_USER_ID", "").strip()
 TELEGRAM_WENYOU_OWNER_USER_ID = int(_WENYOU_OWNER_STR) if _WENYOU_OWNER_STR else int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
 # 文游 GM 使用的 DeepSeek 模型名
-WENYOU_DS_MODEL = os.environ.get("WENYOU_DS_MODEL", "deepseek-chat").strip()
+WENYOU_DS_MODEL = os.environ.get("WENYOU_DS_MODEL", DEEPSEEK_CHAT_MODEL).strip()
 
 # -------------------- Telegram Mini App（手机端运维面板） --------------------
 # 静态站点目录：由 Flask 直接托管 /miniapp

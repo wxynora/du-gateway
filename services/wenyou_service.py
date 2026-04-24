@@ -164,7 +164,7 @@ def call_wenyou_deepseek(messages: list[dict], system: str, temperature: float =
         return None
     url = (DEEPSEEK_API_URL or "").strip() or "https://api.deepseek.com/v1/chat/completions"
     body = {
-        "model": WENYOU_DS_MODEL or "deepseek-chat",
+        "model": WENYOU_DS_MODEL,
         "messages": ([{"role": "system", "content": system}] if system else []) + messages,
         "stream": False,
         "temperature": temperature,

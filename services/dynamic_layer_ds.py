@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 import requests
 
-from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL
+from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -271,7 +271,7 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload: dict[str, Any] = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 600,
     }
@@ -391,7 +391,7 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
     # 多轮需要更大输出
     max_tokens = min(8000, 500 * max(len(batch_rounds), 1))
     payload: dict[str, Any] = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
     }
@@ -477,7 +477,7 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     max_tokens = min(2000, 400 * max(len(batch_rounds), 1))
     payload: dict[str, Any] = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
     }

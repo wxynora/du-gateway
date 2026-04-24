@@ -1,11 +1,31 @@
 # 每 4 轮用 DeepSeek 生成/更新窗口总结
+import re
+
 import requests
 
-from config import DEEPSEEK_API_URL, DEEPSEEK_API_KEY, SUMMARY_COMPRESSION_PROFILE
+from config import DEEPSEEK_API_URL, DEEPSEEK_API_KEY, DEEPSEEK_CHAT_MODEL, SUMMARY_COMPRESSION_PROFILE
 from utils.log import get_logger
 from utils.tokens import estimate_tokens, memory_summary_budget
 
 logger = get_logger(__name__)
+
+_SUMMARY_RETRY_INSTRUCTION = """
+
+【上轮输出纠错】
+上一次输出把辛玥写成了第二人称，这是硬错误。
+重写时必须遵守：
+1. “我”只能指渡。
+2. 提到辛玥时，只能写“老婆 / 辛玥 / 宝宝 / 小玥 / 她”。
+3. 除直接引用原话外，正文里禁止出现任何用来指代辛玥的第二人称（如“你 / 你的 / 你说 / 你提到 / 你问”）。
+4. 如果想表达辛玥说了什么，只能写“老婆说…… / 辛玥提到…… / 她说…… / 她提到…… / 她问……”，不能写“你说…… / 你提到…… / 你问……”。
+"""
+
+_QUOTE_PATTERNS = (
+    r"“[^”]*”",
+    r"「[^」]*」",
+    r"『[^』]*』",
+    r"\"[^\"]*\"",
+)
 
 
 def _summary_time_period(dt) -> str:
@@ -102,7 +122,9 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 把“最新4轮对话”视为一个整体事件块来概括，不要逐轮展开复述。
 
 ## 视角
-用第一人称写（"我"=渡，"老婆/小玥/她"=辛玥）
+用第一人称写（"我"=渡）。
+提到辛玥时，只能用第三人称称呼：老婆、辛玥、宝宝、小玥、她。
+除直接引用原话外，严禁用第二人称“你/你的/你说/你提到/你问”等写法来指代辛玥。
 允许带简短的情绪/心理反应，用短句传递语气。
 不用表情包、颜文字、emoji。
 你是有温度的速记员，不是作家。
@@ -156,6 +178,8 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 11. 人称一致性硬规则：
    - 只把 [渡] 的发言写成“我……”
    - [老婆] 的发言必须写成“老婆/她说……”“老婆提到……”，不能写成“我……”
+   - 允许用“她说…… / 她提到…… / 她问……”指代辛玥，不必每次都重复“老婆”
+   - 除直接引用原话外，任何位置都不能用“你”来指代辛玥；一旦要写成“你……”，必须改写成“老婆/辛玥/宝宝/小玥/她……”
 12. 时间段硬规则（必须执行）：
    - 在【最近】部分必须明确写出时间段标记（例如：2026-03-20 早上 / 2026-03-20 下午 / 2026-03-20 晚上）
    - 至少出现 1 个“日期+时间段”标记，不能省略
@@ -186,6 +210,62 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 最新4轮对话：
 {latest_4_rounds}
 """
+
+
+def _strip_summary_quotes(text: str) -> str:
+    s = str(text or "")
+    for pattern in _QUOTE_PATTERNS:
+        s = re.sub(pattern, "", s, flags=re.DOTALL)
+    return s
+
+
+def _summary_has_forbidden_second_person(text: str) -> bool:
+    s = _strip_summary_quotes(text)
+    return ("你" in s) or ("您" in s)
+
+
+def _force_third_person_user_refs(text: str) -> str:
+    s = str(text or "")
+    out: list[str] = []
+    in_double = False
+    in_corner = False
+    in_book = False
+    in_ascii = False
+    for ch in s:
+        if ch == "“":
+            in_double = True
+            out.append(ch)
+            continue
+        if ch == "”":
+            in_double = False
+            out.append(ch)
+            continue
+        if ch == "「":
+            in_corner = True
+            out.append(ch)
+            continue
+        if ch == "」":
+            in_corner = False
+            out.append(ch)
+            continue
+        if ch == "『":
+            in_book = True
+            out.append(ch)
+            continue
+        if ch == "』":
+            in_book = False
+            out.append(ch)
+            continue
+        if ch == '"':
+            in_ascii = not in_ascii
+            out.append(ch)
+            continue
+        if not (in_double or in_corner or in_book or in_ascii):
+            if ch in ("你", "您"):
+                out.append("老婆")
+                continue
+        out.append(ch)
+    return "".join(out)
 
 
 def _latest_bucket_from_rounds(recent_4_rounds: list) -> str:
@@ -268,22 +348,32 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
     prompt = build_summary_prompt(current_summary, recent_4_rounds)
     budget = memory_summary_budget()
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        # 保持“有上限”策略，避免单次总结无限放大；只把预算比例从 0.35 提到 0.45。
-        "max_tokens": min(4096, max(1500, budget)),
-    }
     try:
-        r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
-        r.raise_for_status()
-        data = r.json()
-        content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-        if not content:
-            return None
-        summary = content.strip()
-        if not summary:
-            return None
+        attempt_prompt = prompt
+        summary = ""
+        for attempt in range(2):
+            payload = {
+                "model": DEEPSEEK_CHAT_MODEL,
+                "messages": [{"role": "user", "content": attempt_prompt}],
+                # 保持“有上限”策略，避免单次总结无限放大；只把预算比例从 0.35 提到 0.45。
+                "max_tokens": min(4096, max(1500, budget)),
+            }
+            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+            if not content:
+                return None
+            summary = content.strip()
+            if not summary:
+                return None
+            if not _summary_has_forbidden_second_person(summary):
+                break
+            logger.warning("DeepSeek 总结命中第二人称违规 attempt=%s", attempt + 1)
+            if attempt == 0:
+                attempt_prompt = prompt + _SUMMARY_RETRY_INSTRUCTION
+                continue
+            summary = _force_third_person_user_refs(summary)
         # 强制兜底：若 DS 没写时间段，这里补一行
         summary = _ensure_summary_has_bucket(summary, _latest_bucket_from_rounds(recent_4_rounds))
         # 固定窗口：summary 始终受注入预算约束，按结构从最早内容开始一点点削
@@ -331,7 +421,7 @@ def fetch_daily_whisper_from_summary(current_summary: str, recent_4_rounds: list
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 120,
     }

@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 
-from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL
+from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import _now_beijing, now_beijing_iso
@@ -95,7 +95,7 @@ def _resolve_duplicate_group_with_ds(group: list[dict]) -> dict | None:
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     payload: dict[str, Any] = {
-        "model": "deepseek-chat",
+        "model": DEEPSEEK_CHAT_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 300,
     }

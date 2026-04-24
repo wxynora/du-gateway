@@ -22,6 +22,7 @@ from config import (
     MAX_REQUEST_CHARS,
     DEEPSEEK_API_URL,
     DEEPSEEK_API_KEY,
+    DEEPSEEK_CHAT_MODEL,
     WENYOU_GROUP_CHAT_ID,
 )
 from pathlib import Path
@@ -1056,7 +1057,7 @@ def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> lis
         "- 不要直接复述前几轮内容，不要让前几轮上下文喧宾夺主\n"
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
-    payload = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "max_tokens": 160}
+    payload = {"model": DEEPSEEK_CHAT_MODEL, "messages": [{"role": "user", "content": prompt}], "max_tokens": 160}
     try:
         r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=8)
         r.raise_for_status()
