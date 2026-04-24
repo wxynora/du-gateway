@@ -121,6 +121,12 @@ def _is_siliconflow_url(url: str) -> bool:
     return bool(host and SILICONFLOW_BASE_HOST and host.endswith(SILICONFLOW_BASE_HOST))
 
 
+def _is_local_cliproxyapi_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.hostname or "").lower()
+    return host in ("127.0.0.1", "localhost") and parsed.port == 8317
+
+
 def _fetch_first_model_for_item(it: dict) -> str:
     url = str((it or {}).get("url") or "").strip()
     api_key = str((it or {}).get("api_key") or "").strip()
@@ -128,6 +134,8 @@ def _fetch_first_model_for_item(it: dict) -> str:
         return ""
     if is_openrouter_url(url):
         return str(OPENROUTER_FIXED_MODEL or "").strip()
+    if _is_local_cliproxyapi_url(url):
+        return "gpt-5.5"
     if _is_siliconflow_url(url) and SILICONFLOW_DEFAULT_MODEL:
         return str(SILICONFLOW_DEFAULT_MODEL or "").strip()
     headers = {"Content-Type": "application/json"}
