@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from datetime import timedelta
 from typing import Any, Optional
@@ -17,10 +16,6 @@ logger = get_logger(__name__)
 MARKER_START = "<<<DU_DAILY>>>"
 MARKER_END = "<<<END_DU_DAILY>>>"
 
-_SOFT_TRIGGER_COOLDOWN_MINUTES = 45
-_SOFT_TRIGGER_MIN_GAP_MINUTES = 20
-_HARD_RECONNECT_GAP_MINUTES = 90
-_TOPIC_DEDUPE_MINUTES = 180
 _SLEEP_INACTIVITY_MINUTES = 60
 _SLEEP_SIGNAL_LOOKBACK_MINUTES = 120
 _SLEEP_STEP_DELTA_MAX = 20
@@ -33,28 +28,6 @@ _SLEEP_RE = re.compile(
 _SLEEP_NEGATION_OR_QUESTION_RE = re.compile(
     r"(不是|没有|没睡|还没睡|不睡|不想睡|别睡|不要睡|是不是|是否|吗|么|嘛|？|\?)",
     re.IGNORECASE,
-)
-_WAKE_RE = re.compile(r"(醒了|刚醒|起床了|睡醒了)", re.IGNORECASE)
-_ALARM_RE = re.compile(r"(闹钟|到点了|醒来第一件事|提醒)", re.IGNORECASE)
-_CONFLICT_RE = re.compile(r"(吵架|生气|别扭|闹掰|委屈|不开心)", re.IGNORECASE)
-_RECONCILE_RE = re.compile(r"(和好|讲开了|哄好了|不生气了|没事了|不吵了)", re.IGNORECASE)
-_BUG_SOLVED_RE = re.compile(r"(修好了|修好|解决了|通了|好了你试试|再试试|fix了)", re.IGNORECASE)
-_BUG_PENDING_RE = re.compile(r"(待验证|待测|帮我测|你试试|再试下|测试一下)", re.IGNORECASE)
-_BUG_FOUND_RE = re.compile(r"(bug|报错|有问题|坏了|崩了|不对劲|出错)", re.IGNORECASE)
-_DEEP_TALK_RE = re.compile(r"(我想说|我在想|其实|认真|关系|害怕|难过|委屈|喜欢|爱你|重要)", re.IGNORECASE)
-_DAILY_SOFT_RE = re.compile(r"(论坛|日记|气泡|拉肚子|生理期|温水|通宵|上班|下班|功能|测试|吃饭|睡|醒)", re.IGNORECASE)
-
-_TOPIC_KEYWORDS = (
-    ("sleep", _SLEEP_RE),
-    ("wake", _WAKE_RE),
-    ("alarm", _ALARM_RE),
-    ("conflict", _CONFLICT_RE),
-    ("reconcile", _RECONCILE_RE),
-    ("bug_solved", _BUG_SOLVED_RE),
-    ("bug_pending", _BUG_PENDING_RE),
-    ("bug", _BUG_FOUND_RE),
-    ("deep_talk", _DEEP_TALK_RE),
-    ("daily", _DAILY_SOFT_RE),
 )
 
 
@@ -315,19 +288,6 @@ def get_prepared_state(today: str = "") -> tuple[dict, bool]:
     return state, changed
 
 
-def _extract_topic_key(text: str) -> str:
-    raw = str(text or "").strip()
-    if not raw:
-        return ""
-    for key, pattern in _TOPIC_KEYWORDS:
-        if pattern.search(raw):
-            return key
-    short = re.sub(r"\s+", " ", raw).strip()
-    if len(short) > 24:
-        short = short[:24]
-    return short
-
-
 def _minutes_since(iso_str: str) -> Optional[float]:
     dt = parse_iso_to_beijing(iso_str)
     now_dt = parse_iso_to_beijing(now_beijing_iso())
@@ -337,19 +297,6 @@ def _minutes_since(iso_str: str) -> Optional[float]:
     if delta < 0:
         return None
     return delta
-
-
-def _last_round_gap_minutes(window_id: str) -> Optional[float]:
-    rounds = r2_store.get_conversation_rounds(window_id, last_n=1) or []
-    if not rounds or not isinstance(rounds[0], dict):
-        return None
-    return _minutes_since(str(rounds[0].get("timestamp") or "").strip())
-
-
-def _in_soft_cooldown(state: dict) -> bool:
-    last_iso = str(state.get("last_soft_trigger_at") or state.get("updated_at") or "").strip()
-    gap = _minutes_since(last_iso)
-    return gap is not None and gap < _SOFT_TRIGGER_COOLDOWN_MINUTES
 
 
 def _save_sleep_candidate(state: dict, text: str) -> None:
@@ -380,6 +327,7 @@ def _is_sleep_rollover_kind(kind: str) -> bool:
 
 
 def build_chat_trigger(window_id: str, body: dict, headers: Optional[dict] = None) -> Optional[dict]:
+    _ = window_id
     hdrs = headers or {}
     if str(hdrs.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes"):
         return build_maintenance_trigger(body, headers=hdrs)
@@ -390,134 +338,11 @@ def build_chat_trigger(window_id: str, body: dict, headers: Optional[dict] = Non
     text = _extract_last_user_text((body or {}).get("messages") or [])
     if not text:
         return None
-    gap_minutes = _last_round_gap_minutes(window_id)
-    topic_key = _extract_topic_key(text)
-    facts: list[str] = []
-    if gap_minutes is not None:
-        facts.append(f"距离上一轮大约 {int(gap_minutes)} 分钟。")
-
     if is_explicit_user_sleep_intent(text):
         _save_sleep_candidate(state, text)
-        return {
-            "kind": "sleep_candidate",
-            "hard": True,
-            "reason": "用户明确说准备睡觉，先记为睡眠候选，不做一天收口",
-            "facts": facts + [f"用户原话：{text[:120]}"],
-            "topic_key": "sleep_candidate",
-            "hidden_only": False,
-        }
-    _clear_sleep_candidate_if_needed(state)
-    if _ALARM_RE.search(text) and ("到点" in text or "闹钟" in text):
-        return {
-            "kind": "alarm",
-            "hard": True,
-            "reason": "闹钟/提醒触发",
-            "facts": facts + [f"当前提醒内容：{text[:120]}"],
-            "topic_key": "alarm",
-            "hidden_only": False,
-        }
-    if _WAKE_RE.search(text):
-        return {
-            "kind": "wake",
-            "hard": True,
-            "reason": "用户明确说醒了",
-            "facts": facts + [f"用户原话：{text[:120]}"],
-            "topic_key": "wake",
-            "hidden_only": False,
-        }
-    if gap_minutes is not None and gap_minutes >= _HARD_RECONNECT_GAP_MINUTES:
-        return {
-            "kind": "reconnect",
-            "hard": True,
-            "reason": "隔很久后重新联系",
-            "facts": facts + [f"当前这句：{text[:120]}"],
-            "topic_key": topic_key or "reconnect",
-            "hidden_only": False,
-        }
-    if _RECONCILE_RE.search(text):
-        return {
-            "kind": "reconcile",
-            "hard": True,
-            "reason": "关系状态切换到和好/讲开",
-            "facts": facts + [f"用户原话：{text[:120]}"],
-            "topic_key": "reconcile",
-            "hidden_only": False,
-        }
-    if _CONFLICT_RE.search(text):
-        return {
-            "kind": "conflict",
-            "hard": True,
-            "reason": "关系状态切换到争执/委屈",
-            "facts": facts + [f"用户原话：{text[:120]}"],
-            "topic_key": "conflict",
-            "hidden_only": False,
-        }
-    if _BUG_SOLVED_RE.search(text):
-        return {
-            "kind": "bug_solved",
-            "hard": True,
-            "reason": "问题解决或让她复测",
-            "facts": facts + [f"用户原话：{text[:120]}"],
-            "topic_key": "bug_solved",
-            "hidden_only": False,
-        }
-    if _BUG_PENDING_RE.search(text):
-        return {
-            "kind": "bug_pending",
-            "hard": True,
-            "reason": "问题进入待验证/待测试",
-            "facts": facts + [f"用户原话：{text[:120]}"],
-            "topic_key": "bug_pending",
-            "hidden_only": False,
-        }
-    if _BUG_FOUND_RE.search(text):
-        return {
-            "kind": "bug_found",
-            "hard": True,
-            "reason": "发现 bug / 报错 / 问题",
-            "facts": facts + [f"用户原话：{text[:120]}"],
-            "topic_key": "bug",
-            "hidden_only": False,
-        }
-    if len(text) >= 120 and _DEEP_TALK_RE.search(text):
-        return {
-            "kind": "deep_talk",
-            "hard": True,
-            "reason": "聊了比较深的话",
-            "facts": facts + [f"用户原话：{text[:180]}"],
-            "topic_key": "deep_talk",
-            "hidden_only": False,
-        }
-
-    if _in_soft_cooldown(state):
-        return None
-    if topic_key and topic_key == str(state.get("last_topic_key") or "").strip():
-        last_gap = _minutes_since(str(state.get("last_trigger_at") or "").strip())
-        if last_gap is not None and last_gap < _TOPIC_DEDUPE_MINUTES:
-            return None
-
-    soft_ready = False
-    soft_reason = ""
-    if gap_minutes is not None and gap_minutes >= _SOFT_TRIGGER_MIN_GAP_MINUTES and len(text) >= 10:
-        soft_ready = True
-        soft_reason = "隔了一阵又往前聊了一段"
-    elif len(text) >= 45 or "\n" in text:
-        soft_ready = True
-        soft_reason = "这一段对话足够形成一句生活推进"
-    elif len(text) >= 12 and _DAILY_SOFT_RE.search(text):
-        soft_ready = True
-        soft_reason = "出现了适合补进日常的一小段生活推进"
-
-    if not soft_ready:
-        return None
-    return {
-        "kind": "soft_progress",
-        "hard": False,
-        "reason": soft_reason,
-        "facts": facts + [f"用户原话：{text[:120]}"],
-        "topic_key": topic_key or "soft_progress",
-        "hidden_only": False,
-    }
+    else:
+        _clear_sleep_candidate_if_needed(state)
+    return None
 
 
 def build_maintenance_trigger(body: dict, headers: Optional[dict] = None) -> dict:
@@ -556,7 +381,7 @@ def build_maintenance_trigger(body: dict, headers: Optional[dict] = None) -> dic
         "hard": True,
         "reason": "内部维护触发",
         "facts": facts[:8],
-        "topic_key": str(hdrs.get("X-DU-DAILY-TOPIC") or "").strip() or _extract_topic_key(text),
+        "topic_key": str(hdrs.get("X-DU-DAILY-TOPIC") or "").strip() or "maintenance",
         "hidden_only": True,
     }
 
@@ -570,7 +395,12 @@ def format_inject_block(state: dict, trigger: Optional[dict] = None, maintenance
         "【渡的日常（仅你与网关可见，勿在回复正文复述给老婆）】",
         "你有一块隐藏滚动记忆，始终只保留“昨天缩略 + 今天的时间线”。",
         "写法边界：可以写我的观察、判断、挂念、打算；不替她写内心独白、动机或未发生事实。",
-        "网关会负责保存和追加；普通更新时你只写本次新增的一条，不要从头重写旧时间线。",
+        "这不是网关替你判断的任务；是否记录由你自己判断，网关只负责截取和追加保存。",
+        "下面的软/硬触发不是网关判定规则，只是给你参考的记录时机。",
+        "硬参考：闹钟/主动信息决策、她醒来或准备睡、隔很久又来找你、吵架或和好、聊了比较深的话、测试功能发现或修好 bug。",
+        "软参考：一串日常聊完了某个小事、状态有一点变化、你做了一个关心她或不打扰她的决定、今天的生活感往前推进了一小步。",
+        "普通聊天里如果你觉得今天往前走了一点，就在回复正文末尾追加完整 marker 隐藏块；如果不值得记录，就不要输出隐藏块。",
+        "普通更新时只写本次新增的一条，不要从头重写旧时间线。",
         "普通更新格式：",
         MARKER_START,
         "新增：07:30 ……",
@@ -585,7 +415,7 @@ def format_inject_block(state: dict, trigger: Optional[dict] = None, maintenance
     elif trigger:
         lines.append("本轮已经命中更新：请正常回复正文后，再在末尾追加完整 marker 隐藏块。")
     else:
-        lines.append("本轮未命中更新：不要输出这个隐藏块。")
+        lines.append("本轮没有网关强制写入；按上面的参考时机，由你自己判断是否需要记录。")
     if trigger:
         lines.append(f"触发原因：{str(trigger.get('reason') or '').strip() or '—'}")
         hm = _current_hm()
