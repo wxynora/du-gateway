@@ -1461,16 +1461,16 @@ def chat_completions():
     du_daily_maintenance = _is_du_daily_maintenance_request()
     du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
     if not slim_voice_call:
-        body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
-        body = step_inject_sense_snapshot(body, window_id)
         body = step_inject_du_thought(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
+        body = step_inject_dynamic_memory(body, window_id)
+        body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
+        body = step_inject_sense_snapshot(body, window_id)
+        body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
         body = step_inject_interaction_candidate(body, window_id)
         body = step_inject_wenyou_gm(body, window_id)
         if not du_daily_maintenance:
             body = step_inject_rikkahub_reminder(body, window_id)
-        body = step_inject_dynamic_memory(body, window_id)
-        body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
         body = step_inject_du_notebook(body)
         if not du_daily_maintenance:
             body = step_inject_notion_search(body, window_id)
