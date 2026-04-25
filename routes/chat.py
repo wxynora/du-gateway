@@ -207,18 +207,18 @@ def _is_followup_generation_request() -> bool:
 def _normalize_request_model(body: dict) -> dict:
     """
     特例处理：
-    - 若当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST），且请求未显式传 model，
-      则自动补上 SILICONFLOW_DEFAULT_MODEL（仅限硅基流动专用默认）。
+    - 若当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST），
+      则无条件固定为 SILICONFLOW_DEFAULT_MODEL（忽略客户端传入 model）。
     - 其他上游保持项目约定：未传 model 时直接报错，不做默认兜底。
     """
     body = dict(body or {})
-    # 已显式传入 model 时不做任何修改
-    m = body.get("model")
-    if isinstance(m, str) and m.strip():
-        return body
 
     # 若未配置硅基流动默认模型，保持原行为
     if not (SILICONFLOW_BASE_HOST and SILICONFLOW_DEFAULT_MODEL):
+        # 非硅基路径：已显式传 model 则不改
+        m = body.get("model")
+        if isinstance(m, str) and m.strip():
+            return body
         return body
 
     # 获取当前 active 上游 URL；失败时退回环境变量中的首个 URL
@@ -237,7 +237,7 @@ def _normalize_request_model(body: dict) -> dict:
             url = (TARGET_AI_URLS[0] or "").strip()
 
     host = (urlparse(url).hostname or "").lower()
-    # 仅当当前上游指向硅基流动时，才为“未传 model”的请求自动补上默认 GLM
+    # 仅当当前上游指向硅基流动时，无条件固定 model 为默认 GLM
     if host and host.endswith(SILICONFLOW_BASE_HOST):
         body["model"] = SILICONFLOW_DEFAULT_MODEL
 
