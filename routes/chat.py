@@ -96,6 +96,8 @@ logger = get_logger(__name__)
 bp = Blueprint("chat", __name__)
 
 WINDOW_ID_DEFAULT = ""
+_NSFW_PROMPT_CACHE = {"text": None, "ts": 0.0}
+_NSFW_REPLY_CHANNELS = {"tg", "qq", "wechat", "sumitalk"}
 
 
 def _get_window_id_from_request(body: dict) -> str:
@@ -109,6 +111,10 @@ def _get_window_id_from_request(body: dict) -> str:
 
 def _is_miniapp_request() -> bool:
     return bool((request.headers.get("X-Telegram-Init-Data") or "").strip())
+
+
+def _reply_channel() -> str:
+    return str(request.headers.get("X-Reply-Channel") or "").strip().lower()
 
 
 def _inject_miniapp_style_system(body: dict) -> dict:
@@ -148,6 +154,47 @@ def _inject_followup_instruction(body: dict) -> dict:
         messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + instruction).strip()}
     else:
         messages.insert(0, {"role": "system", "content": instruction})
+    body = dict(body)
+    body["messages"] = messages
+    return body
+
+
+def _load_nsfw_prompt() -> str:
+    """读取 NSFW 规则文件（短缓存，便于热更新）。"""
+    now = time.time()
+    cache_ttl_s = 5.0
+    if _NSFW_PROMPT_CACHE["text"] is not None and (now - float(_NSFW_PROMPT_CACHE.get("ts") or 0.0) <= cache_ttl_s):
+        return _NSFW_PROMPT_CACHE["text"] or ""
+    text = ""
+    try:
+        path = Path(__file__).resolve().parent.parent / "prompts" / "du_nsfw_prompt.txt"
+        if path.exists():
+            text = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        logger.exception("读取 NSFW prompt 文件失败")
+        text = ""
+    _NSFW_PROMPT_CACHE["text"] = text or ""
+    _NSFW_PROMPT_CACHE["ts"] = now
+    return _NSFW_PROMPT_CACHE["text"] or ""
+
+
+def _inject_channel_nsfw_system(body: dict) -> dict:
+    """在指定渠道请求中，把 NSFW 规则固定追加到入口 system 后面。"""
+    if _reply_channel() not in _NSFW_REPLY_CHANNELS:
+        return body
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    nsfw_system = _load_nsfw_prompt().strip()
+    if not nsfw_system:
+        return body
+    messages = list(body.get("messages") or [])
+    if messages and isinstance(messages[0], dict) and str(messages[0].get("role") or "").strip().lower() == "system":
+        current = str(messages[0].get("content") or "")
+        if nsfw_system in current:
+            return body
+        messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + nsfw_system).strip()}
+    else:
+        messages.insert(0, {"role": "system", "content": nsfw_system})
     body = dict(body)
     body["messages"] = messages
     return body
@@ -1092,7 +1139,7 @@ def _is_cross_platform_tg_window_user_input(window_id: str, body: dict) -> bool:
         return False
     if _is_followup_generation_request():
         return False
-    reply_channel = str(request.headers.get("X-Reply-Channel") or "").strip().lower()
+    reply_channel = _reply_channel()
     if reply_channel not in {"sumitalk", "wechat", "qq"}:
         return False
     last_user = _last_user_message((body or {}).get("messages") or [])
@@ -1454,6 +1501,7 @@ def chat_completions():
     body = step_clean_for_forward(body)
     body = step_replace_rikka_system(body)
     body = _inject_miniapp_style_system(body)
+    body = _inject_channel_nsfw_system(body)
     body = _inject_followup_instruction(body)
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
