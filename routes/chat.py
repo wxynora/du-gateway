@@ -276,6 +276,29 @@ def _get_active_upstream_url() -> str:
     return ""
 
 
+LOCAL_CLIPROXYAPI_CHAT_MODEL = "gpt-5.5(high)"
+
+
+def _is_local_cliproxyapi_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.hostname or "").lower()
+    return host in ("127.0.0.1", "localhost") and parsed.port == 8317
+
+
+def _cliproxyapi_models_response() -> dict:
+    return {
+        "object": "list",
+        "data": [{"id": LOCAL_CLIPROXYAPI_CHAT_MODEL, "object": "model", "created": 0}],
+    }
+
+
+def _apply_cliproxyapi_request_policy(body: dict, upstream_url: str) -> dict:
+    body = dict(body or {})
+    if _is_local_cliproxyapi_url(upstream_url):
+        body["model"] = LOCAL_CLIPROXYAPI_CHAT_MODEL
+    return body
+
+
 def _apply_openrouter_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     if not is_openrouter_url(upstream_url):
@@ -653,6 +676,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         try:
+            body_send = _apply_cliproxyapi_request_policy(body_send, url)
             body_send = _apply_openrouter_request_policy(body_send, url)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
@@ -983,6 +1007,7 @@ def _forward_to_ai(body: dict, headers: dict):
                 if cur is None or (isinstance(cur, (int, float)) and int(cur) < MAX_COMPLETION_TOKENS):
                     body_send["max_tokens"] = MAX_COMPLETION_TOKENS
                     logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
+            body_send = _apply_cliproxyapi_request_policy(body_send, url)
             body_send = _apply_openrouter_request_policy(body_send, url)
             r = requests.post(url, headers=req_headers, json=body_send, timeout=120)
             # 为排查上游 403：记录鉴权是否携带（不泄露 key），以及响应正文前缀
@@ -1363,6 +1388,8 @@ def list_models():
         if data:
             return jsonify(data), 200
         return jsonify({"error": "OPENROUTER_FIXED_MODEL 未配置"}), 502
+    if _is_local_cliproxyapi_url(url):
+        return jsonify(_cliproxyapi_models_response()), 200
     models_url = _chat_url_to_models_url(url)
     if not models_url:
         return jsonify({"error": "无法解析模型列表地址"}), 502
