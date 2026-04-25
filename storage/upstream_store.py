@@ -135,7 +135,7 @@ def _fetch_first_model_for_item(it: dict) -> str:
     if is_openrouter_url(url):
         return str(OPENROUTER_FIXED_MODEL or "").strip()
     if _is_local_cliproxyapi_url(url):
-        return "gpt-5.5"
+        return "gpt-5.5(high)"
     if _is_siliconflow_url(url) and SILICONFLOW_DEFAULT_MODEL:
         return str(SILICONFLOW_DEFAULT_MODEL or "").strip()
     headers = {"Content-Type": "application/json"}
