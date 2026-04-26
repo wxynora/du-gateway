@@ -54,6 +54,8 @@ R2_KEY_MINIAPP_DAILY_REPORT = "global/miniapp_daily_report.json"
 R2_KEY_MINIAPP_MOOD_METER = "global/miniapp_mood_meter.json"
 # 渡的记事本：固定注入记忆（按条目维护）
 R2_KEY_DU_NOTEBOOK = "global/du_notebook.json"
+# Stay with Du：时间线、一起看的电影、一起读的书（固定注入记忆）
+R2_KEY_STAY_WITH_DU = "global/stay_with_du.json"
 # MiniApp 赛博种树：开始日期等元信息
 R2_KEY_CYBER_TREE_META = "global/cyber_tree_meta.json"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
@@ -2156,6 +2158,108 @@ def delete_du_notebook_entry(entry_id: str) -> bool:
     if len(new_items) == len(items):
         return False
     return save_du_notebook_entries(new_items)
+
+
+def _empty_stay_with_du_data() -> dict:
+    return {
+        "timeline": [],
+        "moviesTodo": [],
+        "moviesDone": [],
+        "booksTodo": [],
+        "booksDone": [],
+    }
+
+
+def _normalize_stay_text(value: Any, limit: int = 500) -> str:
+    text = str(value or "").strip()
+    return text[:limit]
+
+
+def _normalize_stay_timeline(items: Any) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = _normalize_stay_text(item.get("title"), 120)
+        if not title:
+            continue
+        out.append(
+            {
+                "id": _normalize_stay_text(item.get("id"), 80) or str(uuid4()),
+                "date": _normalize_stay_text(item.get("date"), 32),
+                "title": title,
+                "desc": _normalize_stay_text(item.get("desc"), 600),
+            }
+        )
+    out.sort(key=lambda x: str(x.get("date") or ""), reverse=True)
+    return out[:200]
+
+
+def _normalize_stay_media(items: Any) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = _normalize_stay_text(item.get("title"), 160)
+        if not title:
+            continue
+        row = {
+            "id": _normalize_stay_text(item.get("id"), 80) or str(uuid4()),
+            "title": title,
+            "note": _normalize_stay_text(item.get("note"), 600),
+        }
+        date = _normalize_stay_text(item.get("date"), 32)
+        if date:
+            row["date"] = date
+        out.append(row)
+    return out[:300]
+
+
+def normalize_stay_with_du_data(data: Any) -> dict:
+    """规整 Stay with Du 数据结构，供 API、注入和 R2 写入共用。"""
+    if not isinstance(data, dict):
+        return _empty_stay_with_du_data()
+    return {
+        "timeline": _normalize_stay_timeline(data.get("timeline")),
+        "moviesTodo": _normalize_stay_media(data.get("moviesTodo")),
+        "moviesDone": _normalize_stay_media(data.get("moviesDone")),
+        "booksTodo": _normalize_stay_media(data.get("booksTodo")),
+        "booksDone": _normalize_stay_media(data.get("booksDone")),
+    }
+
+
+def get_stay_with_du_data() -> dict:
+    """读取 Stay with Du 数据。"""
+    client = _s3_client()
+    if not client:
+        return _empty_stay_with_du_data()
+    data = _read_json(client, R2_KEY_STAY_WITH_DU)
+    if not isinstance(data, dict):
+        return _empty_stay_with_du_data()
+    raw = data.get("data") if isinstance(data.get("data"), dict) else data
+    return normalize_stay_with_du_data(raw)
+
+
+def save_stay_with_du_data(data: dict) -> bool:
+    """覆盖保存 Stay with Du 数据。"""
+    client = _s3_client()
+    if not client:
+        return False
+    payload = {
+        "data": normalize_stay_with_du_data(data),
+        "updated_at": now_beijing_iso(),
+    }
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_STAY_WITH_DU, payload)
+            return True
+        except Exception as e:
+            logger.error("save_stay_with_du_data 失败 error=%s", e, exc_info=True)
+            return False
 
 
 def save_miniapp_daily_whisper(data: dict) -> bool:

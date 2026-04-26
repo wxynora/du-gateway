@@ -678,6 +678,69 @@ def step_inject_rikkahub_reminder(body: dict, window_id: str) -> dict:
     return body
 
 
+def step_inject_stay_with_du(body: dict) -> dict:
+    """
+    固定注入：Stay with Du，位置在「渡的记事本」上方。
+    """
+    data = r2_store.get_stay_with_du_data() or {}
+    if not any(data.get(k) for k in ("timeline", "moviesDone", "moviesTodo", "booksDone", "booksTodo")):
+        return body
+
+    def _media_line(item: dict) -> str:
+        title = str((item or {}).get("title") or "").strip()
+        if not title:
+            return ""
+        date = str((item or {}).get("date") or "").strip()
+        note = str((item or {}).get("note") or "").strip()
+        suffix = ""
+        if date:
+            suffix += f"（{date}）"
+        if note:
+            suffix += f"：{note}"
+        return f"- {title}{suffix}"
+
+    sections: list[str] = []
+    timeline_lines = []
+    for item in (data.get("timeline") or [])[:20]:
+        title = str((item or {}).get("title") or "").strip()
+        if not title:
+            continue
+        date = str((item or {}).get("date") or "").strip()
+        desc = str((item or {}).get("desc") or "").strip()
+        prefix = f"{date} " if date else ""
+        timeline_lines.append(f"- {prefix}{title}" + (f"：{desc}" if desc else ""))
+    if timeline_lines:
+        sections.append("重要时间线：\n" + "\n".join(timeline_lines))
+
+    media_specs = [
+        ("一起看过的电影", data.get("moviesDone") or []),
+        ("想一起看的电影", data.get("moviesTodo") or []),
+        ("一起读过的书", data.get("booksDone") or []),
+        ("想一起读的书", data.get("booksTodo") or []),
+    ]
+    for title, items in media_specs:
+        lines = [_media_line(it) for it in items[:30]]
+        lines = [line for line in lines if line]
+        if lines:
+            sections.append(f"{title}：\n" + "\n".join(lines))
+
+    if not sections:
+        return body
+
+    budget = 700
+    kept: list[str] = []
+    for section in sections:
+        nxt = ("\n\n".join(kept + [section])).strip()
+        if estimate_tokens(nxt) > budget:
+            break
+        kept.append(section)
+    if not kept:
+        return body
+    inject = "\n\n【Stay with Du】\n" + "\n\n".join(kept) + "\n【以上为 Stay with Du】"
+    body = _append_to_static_system(body, inject)
+    return body
+
+
 def _extract_keyword_candidates(text: str) -> list[dict]:
     """提取用于匹配动态层的关键词候选，并标注是否来自短语收敛层。"""
     if not text or not isinstance(text, str):

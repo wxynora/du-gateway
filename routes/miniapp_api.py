@@ -1949,6 +1949,23 @@ def miniapp_du_notebook_delete(entry_id: str):
     return jsonify({"ok": True, "id": eid})
 
 
+@bp.route("/stay-with-du", methods=["GET"])
+def miniapp_stay_with_du_get():
+    data = r2_store.get_stay_with_du_data()
+    return jsonify({"ok": True, "data": data})
+
+
+@bp.route("/stay-with-du", methods=["PUT", "POST"])
+def miniapp_stay_with_du_save():
+    body = request.get_json(silent=True) or {}
+    raw = body.get("data") if isinstance(body.get("data"), dict) else body
+    data = r2_store.normalize_stay_with_du_data(raw)
+    ok = r2_store.save_stay_with_du_data(data)
+    if not ok:
+        return jsonify({"ok": False, "error": "保存失败"}), 500
+    return jsonify({"ok": True, "data": r2_store.get_stay_with_du_data()})
+
+
 @bp.route("/core-prompt", methods=["GET"])
 def miniapp_get_core_prompt():
     """
