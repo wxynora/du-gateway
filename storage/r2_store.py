@@ -2262,6 +2262,60 @@ def save_stay_with_du_data(data: dict) -> bool:
             return False
 
 
+def add_stay_with_du_entry(kind: str, title: str, note: str = "", date: str = "") -> Optional[dict]:
+    """向 Stay with Du 追加一条记录。kind: timeline/movie_want/movie_done/book_want/book_done。"""
+    raw_kind = (kind or "").strip().lower().replace("-", "_")
+    target_map = {
+        "timeline": "timeline",
+        "node": "timeline",
+        "important_node": "timeline",
+        "movie_want": "moviesTodo",
+        "movie_todo": "moviesTodo",
+        "want_movie": "moviesTodo",
+        "movie_done": "moviesDone",
+        "watched_movie": "moviesDone",
+        "book_want": "booksTodo",
+        "book_todo": "booksTodo",
+        "want_book": "booksTodo",
+        "book_done": "booksDone",
+        "read_book": "booksDone",
+    }
+    target = target_map.get(raw_kind)
+    clean_title = _normalize_stay_text(title, 160)
+    if not target or not clean_title:
+        return None
+    clean_note = _normalize_stay_text(note, 600)
+    clean_date = _normalize_stay_text(date, 32)
+    if target == "timeline" and not clean_date:
+        clean_date = today_beijing()
+    if target in {"moviesDone", "booksDone"} and not clean_date:
+        clean_date = today_beijing()
+
+    data = get_stay_with_du_data()
+    item_id = str(uuid4())
+    if target == "timeline":
+        entry = {
+            "id": item_id,
+            "date": clean_date,
+            "title": clean_title,
+            "desc": clean_note,
+        }
+    else:
+        entry = {
+            "id": item_id,
+            "title": clean_title,
+            "note": clean_note,
+        }
+        if clean_date:
+            entry["date"] = clean_date
+    items = data.get(target)
+    if not isinstance(items, list):
+        items = []
+    data[target] = [entry] + items
+    ok = save_stay_with_du_data(data)
+    return entry if ok else None
+
+
 def save_miniapp_daily_whisper(data: dict) -> bool:
     """保存 MiniApp 每日小气泡文案（JSON）。"""
     client = _s3_client()

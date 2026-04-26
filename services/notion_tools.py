@@ -417,6 +417,26 @@ def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[
     tools.append({
         "type": "function",
         "function": {
+            "name": "stay_with_du_write",
+            "description": "写入 MiniApp 日常里的 Stay with Du。kind 必填：timeline=重要时间线；movie_want=想一起看的电影；movie_done=一起看过的电影；book_want=想一起读的书；book_done=一起读过的书。title 必填，note/date 可选。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "timeline / movie_want / movie_done / book_want / book_done",
+                    },
+                    "title": {"type": "string", "description": "标题、电影名或书名"},
+                    "note": {"type": "string", "description": "可选备注；timeline 时作为节点描述"},
+                    "date": {"type": "string", "description": "可选日期，建议 YYYY-MM-DD；timeline 和 done 类不传则默认今天"},
+                },
+                "required": ["kind", "title"],
+            },
+        },
+    })
+    tools.append({
+        "type": "function",
+        "function": {
             "name": "daily_whisper_write",
             "description": "写入 MiniApp 首页“渡今天想说”的气泡文案。可选 date（YYYY-MM-DD），不传默认今天。",
             "parameters": {
@@ -476,7 +496,7 @@ def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[
         return tools
 
     # 日常最小集：只保留高频（日记 + 报时），其余在触发词命中后走 expanded 注入
-    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info", "note_write", "daily_whisper_write"}
+    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info", "note_write", "stay_with_du_write", "daily_whisper_write"}
     daily_tools = []
     for t in tools:
         fn = (t.get("function") or {}) if isinstance(t, dict) else {}
@@ -884,6 +904,21 @@ def execute_tool(name: str, arguments: dict) -> str:
             if not entry:
                 return "写入失败"
             return f"写入成功 id={entry.get('id')} updated_at={entry.get('updated_at')}"
+
+        if name == "stay_with_du_write":
+            from storage import r2_store
+            kind = (arguments.get("kind") or "").strip()
+            title = (arguments.get("title") or "").strip()
+            note = (arguments.get("note") or "").strip()
+            date = (arguments.get("date") or "").strip()
+            if not kind:
+                return "kind 为空"
+            if not title:
+                return "title 为空"
+            entry = r2_store.add_stay_with_du_entry(kind=kind, title=title, note=note, date=date)
+            if not entry:
+                return "写入失败：kind 只能是 timeline/movie_want/movie_done/book_want/book_done"
+            return f"写入成功 id={entry.get('id')} kind={kind}"
 
         if name == "daily_whisper_write":
             from storage import r2_store

@@ -42,6 +42,11 @@ from memory_vector.cosine import cosine
 # ---------------------------------------------------------------------------
 
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
+_LAST4_REFERENCE_NOTE = (
+    "【指代提醒】上述记忆和摘要中的“她”均指辛玥。回复辛玥时不要用“她”代称她；"
+    "需要指代时用“你”或“辛玥”，按语境自然表达。"
+)
+
 def _ensure_dynamic_system(body: dict) -> dict:
     """
     确保 messages 里存在一条专用的「动态 system」消息。
@@ -455,7 +460,7 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
         context = _rounds_to_context_text(rounds)
     if not context:
         return body
-    inject = f"\n\n【{inject_label}】\n{context}\n【以上为最近的对话】"
+    inject = f"\n\n{_LAST4_REFERENCE_NOTE}\n【{inject_label}】\n{context}\n【以上为最近的对话】"
     return _append_to_dynamic_system(body, inject)
 
 
