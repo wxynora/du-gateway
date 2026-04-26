@@ -94,9 +94,12 @@ type StayWithDuData = {
   booksTodo: StayMediaItem[];
   booksDone: StayMediaItem[];
 };
+type StayWithDuCollection = keyof StayWithDuData;
 
 const TRANSPARENT_BUBBLE_CLASS =
   "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
+const STAY_SERIF_FONT = "'Playfair Display', 'Noto Serif SC', 'Songti SC', Georgia, serif";
+const STAY_SANS_FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 
 function readStoredBoolean(key: string, fallback = false): boolean {
   try {
@@ -1058,13 +1061,24 @@ function StayWithDuScreen() {
     );
   }
 
+  async function deleteStayItem(section: StayWithDuCollection, id: string) {
+    if (saving || !id) return;
+    await saveData(
+      {
+        ...data,
+        [section]: data[section].filter((item) => item.id !== id),
+      } as StayWithDuData,
+      "已删除",
+    );
+  }
+
   return (
-    <div className="-mx-3.5 min-h-full bg-[#FBF8F6] px-5 pb-[126px] pt-5 text-[#3D2B29]">
+    <div className="-mx-3.5 min-h-full bg-[#FBF8F6] px-5 pb-[126px] pt-5 text-[#3D2B29]" style={{ fontFamily: STAY_SANS_FONT }}>
       <div className="mx-auto max-w-xl">
         <div className="mb-7 flex items-end justify-between gap-4">
           <div>
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-[#C87D60]">stay with du</div>
-            <h2 className="text-[30px] font-medium leading-none" style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}>
+            <h2 className="text-[30px] font-normal leading-none" style={{ fontFamily: STAY_SERIF_FONT }}>
               our little archive
             </h2>
           </div>
@@ -1081,11 +1095,21 @@ function StayWithDuScreen() {
             {timeline.length ? (
               <div className="space-y-7">
                 {timeline.map((item) => (
-                  <div key={item.id} className="relative">
+                  <div key={item.id} className="relative pr-10">
                     <div className="absolute -left-[31px] top-1.5 h-[16px] w-[16px] rounded-full border-[3px] border-[#FBF8F6] bg-[#C87D60] shadow-[0_0_0_1px_rgba(200,125,96,0.22)]" />
                     <div className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#C87D60]">{item.date || "Today"}</div>
-                    <div className="mt-1 text-[18px] font-semibold leading-6 text-[#3D2B29]">{item.title}</div>
+                    <div className="mt-1 text-[22px] font-normal leading-7 text-[#3D2B29]" style={{ fontFamily: STAY_SERIF_FONT }}>{item.title}</div>
                     {item.desc ? <div className="mt-2 text-[14px] leading-6 text-[#7A625D]">{item.desc}</div> : null}
+                    <button
+                      type="button"
+                      className="absolute right-0 top-0 flex h-8 w-8 items-center justify-center rounded-full text-[#A68B84] transition-colors active:bg-[#EDE1DC] disabled:opacity-40"
+                      onClick={() => void deleteStayItem("timeline", item.id)}
+                      disabled={saving}
+                      aria-label="删除时间线节点"
+                      title="删除"
+                    >
+                      <TrashIconMini />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1102,12 +1126,15 @@ function StayWithDuScreen() {
               items={data.moviesTodo}
               emptyText="想看的电影先空着。"
               onComplete={completeMovie}
+              onDelete={(id) => void deleteStayItem("moviesTodo", id)}
               disabled={saving}
             />
             <StayMediaSection
               title="Watched together"
               items={data.moviesDone}
               emptyText="一起看过的电影会出现在这里。"
+              onDelete={(id) => void deleteStayItem("moviesDone", id)}
+              disabled={saving}
               done
             />
           </div>
@@ -1120,12 +1147,15 @@ function StayWithDuScreen() {
               items={data.booksTodo}
               emptyText="想一起读的书先空着。"
               onComplete={completeBook}
+              onDelete={(id) => void deleteStayItem("booksTodo", id)}
               disabled={saving}
             />
             <StayMediaSection
               title="Read together"
               items={data.booksDone}
               emptyText="一起读完的书会出现在这里。"
+              onDelete={(id) => void deleteStayItem("booksDone", id)}
+              disabled={saving}
               done
             />
           </div>
@@ -1214,6 +1244,7 @@ function StayWithDuScreen() {
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder={entryType === "node" ? "重要节点" : entryType === "movie" ? "片名" : "书名"}
                 disabled={saving}
+                style={{ fontFamily: STAY_SERIF_FONT }}
               />
               {entryType === "node" ? (
                 <input
@@ -1222,6 +1253,7 @@ function StayWithDuScreen() {
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
                   disabled={saving}
+                  style={{ fontFamily: STAY_SANS_FONT }}
                 />
               ) : null}
               <textarea
@@ -1230,6 +1262,7 @@ function StayWithDuScreen() {
                 onChange={(e) => setDesc(e.target.value)}
                 placeholder="备注"
                 disabled={saving}
+                style={{ fontFamily: STAY_SERIF_FONT }}
               />
             </div>
             <button
@@ -1252,6 +1285,7 @@ function StayMediaSection({
   emptyText,
   done = false,
   onComplete,
+  onDelete,
   disabled = false,
 }: {
   title: string;
@@ -1259,6 +1293,7 @@ function StayMediaSection({
   emptyText: string;
   done?: boolean;
   onComplete?: (id: string) => void;
+  onDelete?: (id: string) => void;
   disabled?: boolean;
 }) {
   return (
@@ -1270,7 +1305,7 @@ function StayMediaSection({
       {items.length ? (
         <div className="space-y-3">
           {items.map((item) => (
-            <label
+            <div
               key={item.id}
               className="flex min-h-[74px] items-start gap-3 rounded-[18px] border border-[#E8D8D0] bg-white/[0.62] px-4 py-3 shadow-[0_8px_22px_rgba(61,43,41,0.04)]"
             >
@@ -1285,13 +1320,26 @@ function StayMediaSection({
                 }}
               />
               <span className="min-w-0 flex-1">
-                <span className={`block text-[15px] font-semibold leading-5 ${done ? "text-[#7A625D]" : "text-[#3D2B29]"}`}>
+                <span
+                  className={`block text-[18px] font-normal leading-6 ${done ? "text-[#7A625D] line-through decoration-[#A68B84] decoration-1" : "text-[#3D2B29]"}`}
+                  style={{ fontFamily: STAY_SERIF_FONT }}
+                >
                   {item.title}
                 </span>
                 {item.note ? <span className="mt-1 block text-[13px] leading-5 text-[#8B6F68]">{item.note}</span> : null}
                 {item.date ? <span className="mt-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-[#C87D60]">{item.date}</span> : null}
               </span>
-            </label>
+              <button
+                type="button"
+                className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#A68B84] transition-colors active:bg-[#EDE1DC] disabled:opacity-40"
+                onClick={() => onDelete?.(item.id)}
+                disabled={disabled}
+                aria-label={`删除 ${item.title}`}
+                title="删除"
+              >
+                <TrashIconMini />
+              </button>
+            </div>
           ))}
         </div>
       ) : (
@@ -3002,6 +3050,10 @@ function ChevronDownMini() {
 
 function CopyIconMini() {
   return <svg className="h-[15px] w-[15px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="11" height="11" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>;
+}
+
+function TrashIconMini() {
+  return <svg className="h-[15px] w-[15px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v5M14 11v5" /></svg>;
 }
 
 function CalendarIconMini() {
