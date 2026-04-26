@@ -51,6 +51,7 @@ from storage import r2_store
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
+TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS = 180
 
 
 def _telegram_webapp_url() -> str:
@@ -823,7 +824,7 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
             messages_chars,
             merged_preview,
         )
-        r = requests.post(url, headers=headers, json=body, timeout=120)
+        r = requests.post(url, headers=headers, json=body, timeout=TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS)
         if r.status_code != 200:
             preview = (r.text or "")[:500]
             lower = preview.lower()
@@ -847,7 +848,7 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
                         preview[:220],
                     )
                     body["model"] = new_model
-                    r = requests.post(url, headers=headers, json=body, timeout=120)
+                    r = requests.post(url, headers=headers, json=body, timeout=TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS)
             if r.status_code != 200:
                 logger.warning(
                     "网关返回非 200 status=%s model=%s user_chars=%s messages_chars=%s preview=%s body=%s",
