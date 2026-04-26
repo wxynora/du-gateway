@@ -33,6 +33,7 @@ from utils.tokens import estimate_tokens, memory_summary_budget, memory_dynamic_
 logger = get_logger(__name__)
 from services import image_desc, deepseek_summary
 from services.deepseek_summary import fetch_new_summary
+from services.dynamic_memory_citation import DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY
 from memory_vector.embedding_client import embed_text
 from memory_vector.cosine import cosine
 
@@ -1542,13 +1543,21 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         return "好些天前"
 
     lines = []
+    citation_map: dict[str, str] = {}
     for t in scored[: max(1, DYNAMIC_MEMORY_TOP_N)]:
         mem = t[2]
-        line = f"- [{_fuzzy_time_label(mem)}] {mem.get('content', '').strip()}"
+        mid = str(mem.get("id") or "").strip()
+        citation_label = ""
+        if mid and not mid.startswith("core::"):
+            citation_label = str(len(citation_map) + 1)
+        citation_prefix = f"[memory {citation_label}] " if citation_label else ""
+        line = f"- {citation_prefix}[{_fuzzy_time_label(mem)}] {mem.get('content', '').strip()}"
         new_text = "\n".join(lines) + ("\n" + line if lines else line)
         if estimate_tokens(new_text) > budget:
             break
         lines.append(line)
+        if citation_label:
+            citation_map[citation_label] = mid
     if not lines:
         # 召回有候选但受预算/过滤后未注入：记录原因
         _append_dynamic_recall_debug_event_safe(
@@ -1597,8 +1606,16 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             "scores": injected_scores,
         }
     )
-    inject = "\n\n听了老婆的话，我想起来了一些之前的事——\n" + "\n".join(lines) + "\n【以上为动态记忆】"
+    citation_hint = ""
+    if citation_map:
+        citation_hint = (
+            "\n如果回复实际参考了某条动态记忆，请在相关句尾写对应标记（如 [memory 1]）；"
+            "没有参考就不要写。引用标记只供网关回写，会被剥离。"
+        )
+    inject = "\n\n听了老婆的话，我想起来了一些之前的事——" + citation_hint + "\n" + "\n".join(lines) + "\n【以上为动态记忆】"
     body = _append_to_dynamic_system(body, inject)
+    if citation_map:
+        body[DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY] = citation_map
     return body
 
 

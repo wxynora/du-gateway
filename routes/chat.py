@@ -76,6 +76,11 @@ from services.du_daily import (
     split_assistant_for_daily,
 )
 from services.interaction_memory import split_assistant_for_interaction
+from services.dynamic_memory_citation import (
+    DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY,
+    normalize_citation_map,
+    strip_assistant_memory_citations,
+)
 from services.html_preview_tools import (
     merge_html_preview_urls_into_assistant_text,
     missing_html_preview_url_suffix,
@@ -765,6 +770,7 @@ def _stream_with_r2_archive(
     headers: dict,
     window_id: str = "",
     du_daily_trigger: Optional[dict] = None,
+    dynamic_memory_citation_map: Optional[dict] = None,
 ):
     """
     包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
@@ -831,7 +837,7 @@ def _stream_with_r2_archive(
         flush_ms = max(0, int(STREAM_SSE_FLUSH_MAX_MS or 0))
         flush_window_s = flush_ms / 1000.0
         last_send_ts = time.time()
-        du_state = PcmdDuThoughtStreamState()
+        du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
         try:
             while True:
                 buf = []
@@ -877,7 +883,11 @@ def _stream_with_r2_archive(
                 last_send_ts = time.time()
         finally:
             full_content = "".join(content_parts)
-            visible = _extract_and_store_hidden_sidecars(full_content, du_daily_trigger=du_daily_trigger)
+            visible = _extract_and_store_hidden_sidecars(
+                full_content,
+                du_daily_trigger=du_daily_trigger,
+                dynamic_memory_citation_map=dynamic_memory_citation_map,
+            )
             full_reasoning = "".join(reasoning_parts).strip()
             stream_sec = time.time() - stream_start
             # 若「流式持续时长」总是差不多（如 10–20s）而字数越来越短，可能是上游按时长限流
@@ -972,7 +982,7 @@ def _stream_with_r2_archive(
                 current_body = _inject_tool_midstream_retry_instruction(current_body)
                 tool_midstream_retry_used = True
                 continue
-            du_state = PcmdDuThoughtStreamState()
+            du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
             for ch in chunks:
                 yield transform_sse_chunk_bytes_pcmd(_strip_reasoning_from_sse_chunk(ch), du_state)
             content_parts.append(parsed.get("content") or "")
@@ -994,7 +1004,11 @@ def _stream_with_r2_archive(
             break
     finally:
         full_content = "".join(content_parts)
-        visible = _extract_and_store_hidden_sidecars(full_content, du_daily_trigger=du_daily_trigger)
+        visible = _extract_and_store_hidden_sidecars(
+            full_content,
+            du_daily_trigger=du_daily_trigger,
+            dynamic_memory_citation_map=dynamic_memory_citation_map,
+        )
         if tool_rounds_used > 0 and not visible.strip():
             logger.error("工具续轮结束但最终正文仍为空（流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
         full_reasoning = "".join(reasoning_parts).strip()
@@ -1255,11 +1269,16 @@ def _is_du_daily_maintenance_request() -> bool:
     return str(request.headers.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes")
 
 
-def _extract_and_store_hidden_sidecars(full_text: str, du_daily_trigger: Optional[dict] = None) -> str:
+def _extract_and_store_hidden_sidecars(
+    full_text: str,
+    du_daily_trigger: Optional[dict] = None,
+    dynamic_memory_citation_map: Optional[dict] = None,
+) -> str:
     visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_text or "")
     visible, thought = split_assistant_for_thought(visible_after_pcmd)
     visible, interaction = split_assistant_for_interaction(visible)
     visible, du_daily = split_assistant_for_daily(visible)
+    visible, referenced_memory_ids = strip_assistant_memory_citations(visible, dynamic_memory_citation_map)
     if thought:
         try:
             r2_store.save_du_thought_latest(now_beijing_iso(), thought)
@@ -1281,10 +1300,20 @@ def _extract_and_store_hidden_sidecars(full_text: str, du_daily_trigger: Optiona
             visible = ""
         except Exception as e:
             logger.warning("save_du_daily_hidden_block plain 失败 error=%s", e)
+    if referenced_memory_ids:
+        try:
+            touched = r2_store.touch_dynamic_memory_mentions(referenced_memory_ids)
+            logger.info("动态记忆引用命中 ids=%s touched=%s", referenced_memory_ids[:10], touched)
+        except Exception as e:
+            logger.warning("动态记忆引用回写失败 ids=%s error=%s", referenced_memory_ids[:10], e)
     return visible
 
 
-def _apply_hidden_sidecars_to_assistant_response(resp_json: dict, du_daily_trigger: Optional[dict] = None) -> dict:
+def _apply_hidden_sidecars_to_assistant_response(
+    resp_json: dict,
+    du_daily_trigger: Optional[dict] = None,
+    dynamic_memory_citation_map: Optional[dict] = None,
+) -> dict:
     """
     剥离助手回复中的隐藏块（老婆侧不可见）；若存在闭合块则写入 R2。
     就地修改 choices[0].message.content。
@@ -1300,7 +1329,11 @@ def _apply_hidden_sidecars_to_assistant_response(resp_json: dict, du_daily_trigg
     content_text = get_assistant_content_text(msg)
     if not content_text:
         return resp_json
-    visible = _extract_and_store_hidden_sidecars(content_text, du_daily_trigger=du_daily_trigger)
+    visible = _extract_and_store_hidden_sidecars(
+        content_text,
+        du_daily_trigger=du_daily_trigger,
+        dynamic_memory_citation_map=dynamic_memory_citation_map,
+    )
     if visible != content_text:
         msg["content"] = visible
     return resp_json
@@ -1461,6 +1494,7 @@ def list_models():
 def chat_completions():
     """统一入口：所有请求走完整管道（清洗、注入、转发、存档），无开头过滤。支持 X-Window-Id / body.window_id（如 Telegram 用 tg_{user_id}）。"""
     body = request.get_json(silent=True) or {}
+    body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None)
     body = _normalize_request_model(body)
     body = _apply_openrouter_request_policy(body, _get_active_upstream_url())
     req_model = (body.get("model") or "").strip() if isinstance(body.get("model"), str) else ""
@@ -1529,6 +1563,7 @@ def chat_completions():
             body = step_inject_websearch_tools(body)
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
     body = step_trim_messages_if_over_limit(body)
+    dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
     # 注入快照：每次请求后把完整 body 存一份，方便对比 token 变化
     try:
         _snap = {
@@ -1553,11 +1588,19 @@ def chat_completions():
     for msg in body.get("messages") or []:
         msg.pop("__dynamic__", None)
     if body.get("stream"):
-        return _stream_response(_stream_with_r2_archive(body, headers, window_id, du_daily_trigger=du_daily_trigger))
+        return _stream_response(
+            _stream_with_r2_archive(
+                body,
+                headers,
+                window_id,
+                du_daily_trigger=du_daily_trigger,
+                dynamic_memory_citation_map=dynamic_memory_citation_map,
+            )
+        )
     # 非流式：命中响应缓存则直接返回，不调上游
     from services.chat_response_cache import get_cache_key, get as cache_get, set as cache_set
     cache_key = get_cache_key(body)
-    cached = None if du_daily_maintenance else cache_get(cache_key)
+    cached = None if (du_daily_maintenance or dynamic_memory_citation_map) else cache_get(cache_key)
     if cached:
         resp_json, status = cached
         logger.info("Chat 命中响应缓存，未调上游")
@@ -1682,7 +1725,11 @@ def chat_completions():
         if not final_visible:
             logger.error("工具续轮结束但最终正文仍为空（非流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
     if resp_json:
-        resp_json = _apply_hidden_sidecars_to_assistant_response(resp_json, du_daily_trigger=du_daily_trigger)
+        resp_json = _apply_hidden_sidecars_to_assistant_response(
+            resp_json,
+            du_daily_trigger=du_daily_trigger,
+            dynamic_memory_citation_map=dynamic_memory_citation_map,
+        )
         resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
         # 剥离 content 里的 <think>/<thinking> 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
         # thinking 已合并入 message.reasoning，R2 存档的 msg_for_r2 独立 deepcopy，不受此影响。
@@ -1717,7 +1764,7 @@ def chat_completions():
                     (resp_json.get("choices") or [{}])[0]["message"] = msg
         except Exception:
             logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
-    if status == 200 and resp_json and not du_daily_maintenance:
+    if status == 200 and resp_json and (not du_daily_maintenance) and (not dynamic_memory_citation_map):
         cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}

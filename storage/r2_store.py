@@ -1419,6 +1419,48 @@ def save_dynamic_memory_list(memories: list) -> bool:
             return False
 
 
+def touch_dynamic_memory_mentions(memory_ids: list[str]) -> int:
+    """按 memory_id 给动态记忆 mention_count +1，并刷新 last_mentioned。"""
+    ids: list[str] = []
+    seen = set()
+    for raw in memory_ids or []:
+        mid = str(raw or "").strip()
+        if not mid or mid.startswith("core::") or mid in seen:
+            continue
+        seen.add(mid)
+        ids.append(mid)
+    if not ids:
+        return 0
+
+    memories = get_dynamic_memory_list()
+    memories, id_changed = ensure_dynamic_memory_ids(memories)
+    if not memories:
+        return 0
+
+    id_set = set(ids)
+    now = now_beijing_iso()
+    touched = 0
+    for mem in memories:
+        if str((mem or {}).get("id") or "").strip() not in id_set:
+            continue
+        try:
+            mention_count = int((mem or {}).get("mention_count") or 0)
+        except Exception:
+            mention_count = 0
+        mem["mention_count"] = mention_count + 1
+        mem["last_mentioned"] = now
+        touched += 1
+
+    if not touched:
+        if id_changed:
+            save_dynamic_memory_list(memories)
+        return 0
+    if not save_dynamic_memory_list(memories):
+        return 0
+    logger.info("动态记忆引用回写完成 touched=%s ids=%s", touched, ids[:10])
+    return touched
+
+
 def get_dynamic_recall_debug_events(limit: int = 30) -> list[dict]:
     """读取动态记忆召回调试事件（按时间倒序取最近 N 条）。"""
     client = _s3_client()
