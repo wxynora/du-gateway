@@ -4,10 +4,11 @@ import { useToast } from "../toast";
 
 type LogsResp = { ok?: boolean; lines?: string[]; error?: string };
 
-type LogCategory = "all" | "proactive" | "wechat" | "tgbot" | "qq";
+type LogCategory = "all" | "proactive" | "sumitalk" | "wechat" | "tgbot" | "qq";
 
 const LOG_CATEGORY_OPTIONS: Array<{ value: LogCategory; label: string }> = [
   { value: "all", label: "全部" },
+  { value: "sumitalk", label: "SumiTalk" },
   { value: "proactive", label: "主动信息" },
   { value: "wechat", label: "微信通道" },
   { value: "tgbot", label: "TGBot" },
@@ -58,6 +59,7 @@ export function LogsTab() {
 
   function lineKind(line: string): LogCategory | "other" {
     const raw = String(line || "");
+    if (raw.includes("[SumiTalk]")) return "sumitalk";
     if (raw.includes("[TGPro]") || raw.includes("主动发消息")) return "proactive";
     if (raw.includes("[wechat-ilink]")) return "wechat";
     if (raw.includes("[TGBot]")) return "tgbot";
@@ -67,6 +69,7 @@ export function LogsTab() {
 
   function labelForKind(kind: LogCategory | "other") {
     if (kind === "proactive") return "主动信息";
+    if (kind === "sumitalk") return "SumiTalk";
     if (kind === "wechat") return "微信通道";
     if (kind === "tgbot") return "TGBot";
     if (kind === "qq") return "QQ 通道";
@@ -75,6 +78,7 @@ export function LogsTab() {
 
   function accentForKind(kind: LogCategory | "other") {
     if (kind === "proactive") return "border-l-[#4A5568] bg-[#F7F8FA] text-[#4A5568]";
+    if (kind === "sumitalk") return "border-l-cyan-400 bg-cyan-50 text-cyan-700";
     if (kind === "wechat") return "border-l-green-400 bg-green-50 text-green-600";
     if (kind === "tgbot") return "border-l-blue-400 bg-blue-50 text-blue-600";
     if (kind === "qq") return "border-l-purple-400 bg-purple-50 text-purple-600";

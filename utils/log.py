@@ -23,6 +23,7 @@ LOG_NAMES = {
     "services.telegram_bot": "TGBot",
     "services.telegram_proactive": "TGPro",
     "services.schedule_runtime": "Alarm",
+    "sumitalk": "SumiTalk",
 }
 
 

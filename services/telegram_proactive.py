@@ -41,6 +41,7 @@ from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversat
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
 
 logger = get_logger(__name__)
+sumitalk_logger = get_logger("sumitalk")
 
 
 def _build_du_daily_trigger_from_proactive(decision: ProactiveDecision, hours_since_last: float, sent: bool) -> Optional[dict]:
@@ -289,16 +290,20 @@ def _normalize_reply_channel(value: str, default: str = "sumitalk") -> str:
 def _resolve_sumitalk_target_device_id() -> str:
     try:
         items = [x for x in (list_trusted_devices() or []) if isinstance(x, dict) and not bool(x.get("revoked"))]
-    except Exception:
+    except Exception as e:
+        sumitalk_logger.warning("target_resolve_failed source=proactive error=%s", e)
         items = []
     for item in items:
         did = str(item.get("id") or "").strip()
         if did.startswith("android_"):
+            sumitalk_logger.info("target_resolved source=proactive device_id=%s trusted_devices=%s preferred=android", did, len(items))
             return did
     for item in items:
         did = str(item.get("id") or "").strip()
         if did:
+            sumitalk_logger.info("target_resolved source=proactive device_id=%s trusted_devices=%s preferred=first", did, len(items))
             return did
+    sumitalk_logger.warning("target_resolve_empty source=proactive trusted_devices=%s", len(items))
     return ""
 
 
@@ -312,10 +317,11 @@ def _append_sumitalk_assistant_message(text: str, created_at: str | None = None)
 
     content = str(text or "").strip()
     if not content:
+        sumitalk_logger.warning("proactive_append_skip reason=empty_content")
         return False
     device_id = _resolve_sumitalk_target_device_id()
     if not device_id:
-        logger.warning("SumiTalk 发送失败：没有可用的目标设备")
+        sumitalk_logger.warning("proactive_append_failed reason=no_target_device chars=%s", len(content))
         return False
     now_iso = str(created_at or now_beijing_iso()).strip() or now_beijing_iso()
     message = {
@@ -327,14 +333,27 @@ def _append_sumitalk_assistant_message(text: str, created_at: str | None = None)
     with _SUMITALK_HISTORY_LOCK:
         data = _load_sumitalk_histories()
         row = data.get(device_id) if isinstance(data, dict) else None
+        before_count = len((row or {}).get("messages") or [])
+        merged_messages = _merge_sumitalk_messages((row or {}).get("messages") or [], [message])
         data[device_id] = {
             "device_id": device_id,
             "updated_at": now_iso,
-            "messages": _merge_sumitalk_messages((row or {}).get("messages") or [], [message]),
+            "messages": merged_messages,
         }
+        sumitalk_logger.info(
+            "proactive_append_write device_id=%s chars=%s before=%s after=%s created_at=%s known_devices=%s",
+            device_id,
+            len(content),
+            before_count,
+            len(merged_messages),
+            now_iso,
+            len(data or {}) if isinstance(data, dict) else 0,
+        )
         ok = _save_sumitalk_histories(data)
     if ok:
-        logger.info("SumiTalk 主动写入成功 device_id=%s chars=%s", device_id, len(content))
+        sumitalk_logger.info("proactive_append_ok device_id=%s chars=%s after=%s", device_id, len(content), len(merged_messages))
+    else:
+        sumitalk_logger.error("proactive_append_failed reason=save_failed device_id=%s chars=%s", device_id, len(content))
     return bool(ok)
 
 
@@ -773,6 +792,8 @@ def _send_via_qq(text: str) -> bool:
 
 def _dispatch_send(channel: str, text: str) -> bool:
     """根据 channel 选择发送入口，返回是否发送成功。"""
+    if channel == "sumitalk":
+        sumitalk_logger.info("dispatch_send_start channel=%s chars=%s", channel, len(str(text or "").strip()))
     if channel == "wechat":
         return _send_via_wechat(text)
     if channel == "qq":

@@ -26,6 +26,7 @@ from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
 logger = get_logger(__name__)
+sumitalk_logger = get_logger("sumitalk")
 
 FOLLOWUP_AFTER_MINUTES = 5
 FOLLOWUP_TICK_SECONDS = 60
@@ -73,20 +74,28 @@ def _resolve_sumitalk_target_device_id(preferred: str = "") -> str:
     pref = str(preferred or "").strip()
     try:
         items = [x for x in (list_trusted_devices() or []) if isinstance(x, dict) and not bool(x.get("revoked"))]
-    except Exception:
+    except Exception as e:
+        sumitalk_logger.warning("target_resolve_failed source=followup preferred=%s error=%s", pref, e)
         items = []
     if pref:
         for item in items:
             if str(item.get("id") or "").strip() == pref:
+                sumitalk_logger.info("target_resolved source=followup preferred=%s device_id=%s trusted_devices=%s matched=true", pref, pref, len(items))
                 return pref
     for item in items:
         did = str(item.get("id") or "").strip()
         if did.startswith("android_"):
+            sumitalk_logger.info("target_resolved source=followup preferred=%s device_id=%s trusted_devices=%s matched=false preferred=android", pref, did, len(items))
             return did
     for item in items:
         did = str(item.get("id") or "").strip()
         if did:
+            sumitalk_logger.info("target_resolved source=followup preferred=%s device_id=%s trusted_devices=%s matched=false preferred=first", pref, did, len(items))
             return did
+    if pref:
+        sumitalk_logger.warning("target_resolved source=followup preferred=%s device_id=%s trusted_devices=%s matched=false fallback=preferred", pref, pref, len(items))
+    else:
+        sumitalk_logger.warning("target_resolve_empty source=followup trusted_devices=%s", len(items))
     return pref
 
 
@@ -100,10 +109,11 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
 
     did = _resolve_sumitalk_target_device_id(device_id)
     if not did:
-        logger.warning("延迟续话写入 SumiTalk 失败：没有可用 device_id")
+        sumitalk_logger.warning("followup_append_failed reason=no_target_device preferred=%s chars=%s", device_id, len(str(text or "").strip()))
         return False
     content = str(text or "").strip()
     if not content:
+        sumitalk_logger.warning("followup_append_skip reason=empty_content device_id=%s", did)
         return False
     now_iso = str(created_at or now_beijing_iso()).strip() or now_beijing_iso()
     message = {
@@ -115,13 +125,30 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
     with _SUMITALK_HISTORY_LOCK:
         data = _load_sumitalk_histories()
         current = data.get(did) if isinstance(data, dict) else None
+        before_count = len((current or {}).get("messages") or [])
+        merged_messages = _merge_sumitalk_messages((current or {}).get("messages") or [], [message])
         payload = {
             "device_id": did,
             "updated_at": now_iso,
-            "messages": _merge_sumitalk_messages((current or {}).get("messages") or [], [message]),
+            "messages": merged_messages,
         }
         data[did] = payload
-        return bool(_save_sumitalk_histories(data))
+        sumitalk_logger.info(
+            "followup_append_write preferred=%s device_id=%s chars=%s before=%s after=%s created_at=%s known_devices=%s",
+            device_id,
+            did,
+            len(content),
+            before_count,
+            len(merged_messages),
+            now_iso,
+            len(data or {}) if isinstance(data, dict) else 0,
+        )
+        ok = bool(_save_sumitalk_histories(data))
+    if ok:
+        sumitalk_logger.info("followup_append_ok preferred=%s device_id=%s chars=%s after=%s", device_id, did, len(content), len(merged_messages))
+    else:
+        sumitalk_logger.error("followup_append_failed reason=save_failed preferred=%s device_id=%s chars=%s", device_id, did, len(content))
+    return ok
 
 
 def _send_via_wechat(text: str) -> bool:
@@ -156,6 +183,8 @@ def _send_via_qq(text: str) -> bool:
 
 def _dispatch_followup(channel: str, target: str, text: str, created_at: str) -> bool:
     ch = _normalize_reply_channel(channel, default="sumitalk", allow_tg=True)
+    if ch == "sumitalk":
+        sumitalk_logger.info("followup_dispatch_start channel=%s target=%s chars=%s created_at=%s", ch, target, len(str(text or "").strip()), created_at)
     if ch == "wechat":
         return _send_via_wechat(text)
     if ch == "qq":

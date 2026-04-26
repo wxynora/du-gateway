@@ -99,6 +99,7 @@ from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 
 logger = get_logger(__name__)
+sumitalk_logger = get_logger("sumitalk")
 bp = Blueprint("chat", __name__)
 
 WINDOW_ID_DEFAULT = ""
@@ -1148,6 +1149,23 @@ def _last_user_message(messages):
     return None
 
 
+def _message_content_chars(content) -> int:
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        total = 0
+        for part in content:
+            if not isinstance(part, dict):
+                total += len(str(part or ""))
+                continue
+            if str(part.get("type") or "").strip().lower() == "text":
+                total += len(str(part.get("text") or ""))
+            elif part.get("image_url") is not None:
+                total += 1
+        return total
+    return len(str(content or ""))
+
+
 def _is_cross_platform_tg_window_user_input(window_id: str, body: dict) -> bool:
     wid = str(window_id or "").strip()
     if not wid.startswith("tg_"):
@@ -1497,8 +1515,20 @@ def chat_completions():
     body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None)
     body = _normalize_request_model(body)
     body = _apply_openrouter_request_policy(body, _get_active_upstream_url())
+    reply_channel = _reply_channel()
+    reply_target = str(request.headers.get("X-Reply-Target") or "").strip()
+    is_sumitalk_request = reply_channel == "sumitalk"
     req_model = (body.get("model") or "").strip() if isinstance(body.get("model"), str) else ""
     if not req_model:
+        if is_sumitalk_request:
+            raw_messages = body.get("messages") if isinstance(body, dict) else []
+            sumitalk_logger.warning(
+                "chat_request_reject reason=missing_model target=%s messages=%s remote=%s ua=%s",
+                reply_target,
+                len(raw_messages or []) if isinstance(raw_messages, list) else 0,
+                request.remote_addr,
+                (request.headers.get("User-Agent") or "")[:120],
+            )
         return jsonify({"error": "缺少 model"}), 400
     headers = dict(request.headers) if request.headers else {}
     window_id = _get_window_id_from_request(body)
@@ -1510,6 +1540,22 @@ def chat_completions():
         whitelist_store.record_recent_window(wid_for_recent)
     except Exception:
         pass
+
+    if is_sumitalk_request:
+        raw_messages = body.get("messages") if isinstance(body, dict) else []
+        last_user = _last_user_message(raw_messages if isinstance(raw_messages, list) else [])
+        sumitalk_logger.info(
+            "chat_request_received window_id=%s target=%s model=%s stream=%s messages=%s last_user_chars=%s force_last4=%s remote=%s ua=%s",
+            window_id,
+            reply_target,
+            req_model,
+            bool(body.get("stream")),
+            len(raw_messages or []) if isinstance(raw_messages, list) else 0,
+            _message_content_chars((last_user or {}).get("content")),
+            (request.headers.get("X-Force-Last4") or "").strip(),
+            request.remote_addr,
+            (request.headers.get("User-Agent") or "")[:120],
+        )
 
     def _stream_response(gen):
         return Response(
@@ -1588,6 +1634,14 @@ def chat_completions():
     for msg in body.get("messages") or []:
         msg.pop("__dynamic__", None)
     if body.get("stream"):
+        if is_sumitalk_request:
+            sumitalk_logger.info(
+                "chat_stream_start window_id=%s target=%s model=%s messages=%s",
+                window_id,
+                reply_target,
+                req_model,
+                len(body.get("messages") or []) if isinstance(body.get("messages"), list) else 0,
+            )
         return _stream_response(
             _stream_with_r2_archive(
                 body,
@@ -1604,12 +1658,38 @@ def chat_completions():
     if cached:
         resp_json, status = cached
         logger.info("Chat 命中响应缓存，未调上游")
+        if is_sumitalk_request:
+            msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+            sumitalk_logger.info(
+                "chat_cache_hit window_id=%s target=%s status=%s reply_chars=%s choices=%s",
+                window_id,
+                reply_target,
+                status,
+                _message_content_chars(get_assistant_content_text(msg)),
+                len((resp_json or {}).get("choices") or []),
+            )
         return jsonify(resp_json), status
     resp_json, status, err = _forward_to_ai(body, headers)
     if err:
+        if is_sumitalk_request:
+            sumitalk_logger.error(
+                "chat_forward_failed window_id=%s target=%s status=%s error=%s",
+                window_id,
+                reply_target,
+                status,
+                err,
+            )
         logger.error("Chat 转发失败 error=%s", err, exc_info=True)
         return jsonify({"error": err}), status
     if status >= 400:
+        if is_sumitalk_request:
+            sumitalk_logger.warning(
+                "chat_upstream_status_error window_id=%s target=%s status=%s body_keys=%s",
+                window_id,
+                reply_target,
+                status,
+                list(resp_json.keys()) if isinstance(resp_json, dict) else [],
+            )
         logger.warning("Chat 上游返回异常 status=%s", status)
         return jsonify(resp_json or {"error": "upstream error"}), status
     # 非流式 + 有 Notion 工具时：若上游返回 tool_calls，执行工具并继续请求，直到无 tool_calls 或达到最大轮数
@@ -1815,4 +1895,25 @@ def chat_completions():
                 step_archive_and_maybe_summary(window_id, body.get("messages") or [], msg_for_r2)
     else:
         logger.info("R2 未存档：上游无 choices 或响应为空")
+    if is_sumitalk_request:
+        msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+        reasoning_text = ""
+        if isinstance(msg, dict):
+            reasoning_text = str(msg.get("reasoning") or msg.get("reasoning_content") or msg.get("thinking") or "")
+        finish_reason = ""
+        try:
+            finish_reason = str((((resp_json or {}).get("choices") or [{}])[0] or {}).get("finish_reason") or "")
+        except Exception:
+            finish_reason = ""
+        sumitalk_logger.info(
+            "chat_response_ok window_id=%s target=%s status=%s reply_chars=%s reasoning_chars=%s choices=%s finish_reason=%s tool_rounds=%s",
+            window_id,
+            reply_target,
+            200,
+            _message_content_chars(get_assistant_content_text(msg)),
+            len(reasoning_text),
+            len((resp_json or {}).get("choices") or []),
+            finish_reason,
+            tool_rounds_used,
+        )
     return jsonify(resp_json), 200
