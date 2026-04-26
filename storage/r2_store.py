@@ -2304,8 +2304,7 @@ def save_stay_with_du_data(data: dict) -> bool:
             return False
 
 
-def add_stay_with_du_entry(kind: str, title: str, note: str = "", date: str = "") -> Optional[dict]:
-    """向 Stay with Du 追加一条记录。kind: timeline/movie_want/movie_done/book_want/book_done。"""
+def _stay_with_du_target_for_kind(kind: str) -> Optional[str]:
     raw_kind = (kind or "").strip().lower().replace("-", "_")
     target_map = {
         "timeline": "timeline",
@@ -2322,7 +2321,12 @@ def add_stay_with_du_entry(kind: str, title: str, note: str = "", date: str = ""
         "book_done": "booksDone",
         "read_book": "booksDone",
     }
-    target = target_map.get(raw_kind)
+    return target_map.get(raw_kind)
+
+
+def add_stay_with_du_entry(kind: str, title: str, note: str = "", date: str = "") -> Optional[dict]:
+    """向 Stay with Du 追加一条记录。kind: timeline/movie_want/movie_done/book_want/book_done。"""
+    target = _stay_with_du_target_for_kind(kind)
     clean_title = _normalize_stay_text(title, 160)
     if not target or not clean_title:
         return None
@@ -2356,6 +2360,45 @@ def add_stay_with_du_entry(kind: str, title: str, note: str = "", date: str = ""
     data[target] = [entry] + items
     ok = save_stay_with_du_data(data)
     return entry if ok else None
+
+
+def delete_stay_with_du_entry(kind: str, entry_id: str = "", title: str = "", date: str = "") -> Optional[dict]:
+    """删除 Stay with Du 一条记录。优先按 id；没有 id 时按 title 精确匹配，可用 date 缩小范围。"""
+    target = _stay_with_du_target_for_kind(kind)
+    if not target:
+        return None
+    clean_id = _normalize_stay_text(entry_id, 80)
+    clean_title = _normalize_stay_text(title, 160)
+    clean_date = _normalize_stay_text(date, 32)
+    if not clean_id and not clean_title:
+        return None
+
+    data = get_stay_with_du_data()
+    items = data.get(target)
+    if not isinstance(items, list) or not items:
+        return None
+
+    delete_index = -1
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        if clean_id:
+            if str(item.get("id") or "").strip() == clean_id:
+                delete_index = idx
+                break
+            continue
+        item_title = str(item.get("title") or "").strip()
+        item_date = str(item.get("date") or "").strip()
+        if item_title == clean_title and (not clean_date or item_date == clean_date):
+            delete_index = idx
+            break
+    if delete_index < 0:
+        return None
+
+    deleted = dict(items[delete_index])
+    data[target] = items[:delete_index] + items[delete_index + 1:]
+    ok = save_stay_with_du_data(data)
+    return deleted if ok else None
 
 
 def save_miniapp_daily_whisper(data: dict) -> bool:

@@ -437,6 +437,26 @@ def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[
     tools.append({
         "type": "function",
         "function": {
+            "name": "stay_with_du_delete",
+            "description": "删除 MiniApp 日常里的 Stay with Du 一条记录。kind 必填；优先传 id。没有 id 时可传 title 精确匹配，date 可选用于缩小范围。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "timeline / movie_want / movie_done / book_want / book_done",
+                    },
+                    "id": {"type": "string", "description": "记录 id，优先使用"},
+                    "title": {"type": "string", "description": "没有 id 时用标题、电影名或书名精确匹配"},
+                    "date": {"type": "string", "description": "可选日期，用于区分同名条目"},
+                },
+                "required": ["kind"],
+            },
+        },
+    })
+    tools.append({
+        "type": "function",
+        "function": {
             "name": "daily_whisper_write",
             "description": "写入 MiniApp 首页“渡今天想说”的气泡文案。可选 date（YYYY-MM-DD），不传默认今天。",
             "parameters": {
@@ -496,7 +516,7 @@ def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[
         return tools
 
     # 日常最小集：只保留高频（日记 + 报时），其余在触发词命中后走 expanded 注入
-    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info", "note_write", "stay_with_du_write", "daily_whisper_write"}
+    keep_names = {"notion_diary_list", "notion_diary_create", "get_time_info", "note_write", "stay_with_du_write", "stay_with_du_delete", "daily_whisper_write"}
     daily_tools = []
     for t in tools:
         fn = (t.get("function") or {}) if isinstance(t, dict) else {}
@@ -919,6 +939,21 @@ def execute_tool(name: str, arguments: dict) -> str:
             if not entry:
                 return "写入失败：kind 只能是 timeline/movie_want/movie_done/book_want/book_done"
             return f"写入成功 id={entry.get('id')} kind={kind}"
+
+        if name == "stay_with_du_delete":
+            from storage import r2_store
+            kind = (arguments.get("kind") or "").strip()
+            entry_id = (arguments.get("id") or "").strip()
+            title = (arguments.get("title") or "").strip()
+            date = (arguments.get("date") or "").strip()
+            if not kind:
+                return "kind 为空"
+            if not entry_id and not title:
+                return "id 和 title 至少传一个"
+            deleted = r2_store.delete_stay_with_du_entry(kind=kind, entry_id=entry_id, title=title, date=date)
+            if not deleted:
+                return "删除失败：kind 不合法，或没有找到匹配记录"
+            return f"删除成功 id={deleted.get('id')} title={deleted.get('title')}"
 
         if name == "daily_whisper_write":
             from storage import r2_store
