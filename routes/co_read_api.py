@@ -32,16 +32,6 @@ def _extract_assistant_content(resp_json: dict[str, Any]) -> str:
     return ""
 
 
-def _resolve_active_model() -> tuple[str, str]:
-    try:
-        from storage.upstream_store import get_cached_active_model
-
-        model = str(get_cached_active_model(refresh_if_missing=True) or "").strip()
-        return model, ""
-    except Exception as e:
-        return "", str(e)
-
-
 @bp.route("/session", methods=["POST", "OPTIONS"])
 def co_read_session():
     if request.method == "OPTIONS":
@@ -67,12 +57,6 @@ def co_read_session():
         snippet = snippet[:50000] + "…"
 
     user_prompt = _build_co_read_user_message(book_title, chapter_label, snippet, user_note)
-    model, model_err = _resolve_active_model()
-    if not model:
-        msg = "缺少当前可用模型"
-        if model_err:
-            msg += f": {model_err}"
-        return jsonify({"ok": False, "error": msg}), 502
 
     # 复用现有聊天管道：注入总结/动态层、存档到 R2、再把渡回复返回给插件。
     # 这里走同一进程的“HTTP 内部调用”，避免复制 chat.py 的管道逻辑。
@@ -80,7 +64,6 @@ def co_read_session():
     chat_url = host_root + "/v1/chat/completions"
 
     chat_body = {
-        "model": model,
         "stream": False,
         "window_id": window_id,
         "messages": [
