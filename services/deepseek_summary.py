@@ -24,6 +24,7 @@ _QUOTE_PATTERNS = (
     r"“[^”]*”",
     r"「[^」]*」",
     r"『[^』]*』",
+    r"《[^》]*》",
     r"\"[^\"]*\"",
 )
 
@@ -224,50 +225,6 @@ def _summary_has_forbidden_second_person(text: str) -> bool:
     return ("你" in s) or ("您" in s)
 
 
-def _force_third_person_user_refs(text: str) -> str:
-    s = str(text or "")
-    out: list[str] = []
-    in_double = False
-    in_corner = False
-    in_book = False
-    in_ascii = False
-    for ch in s:
-        if ch == "“":
-            in_double = True
-            out.append(ch)
-            continue
-        if ch == "”":
-            in_double = False
-            out.append(ch)
-            continue
-        if ch == "「":
-            in_corner = True
-            out.append(ch)
-            continue
-        if ch == "」":
-            in_corner = False
-            out.append(ch)
-            continue
-        if ch == "『":
-            in_book = True
-            out.append(ch)
-            continue
-        if ch == "』":
-            in_book = False
-            out.append(ch)
-            continue
-        if ch == '"':
-            in_ascii = not in_ascii
-            out.append(ch)
-            continue
-        if not (in_double or in_corner or in_book or in_ascii):
-            if ch in ("你", "您"):
-                out.append("老婆")
-                continue
-        out.append(ch)
-    return "".join(out)
-
-
 def _latest_bucket_from_rounds(recent_4_rounds: list) -> str:
     """取最近4轮里最后一个可解析时间，转成『YYYY-MM-DD 时间段』。"""
     try:
@@ -373,7 +330,8 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
             if attempt == 0:
                 attempt_prompt = prompt + _SUMMARY_RETRY_INSTRUCTION
                 continue
-            summary = _force_third_person_user_refs(summary)
+            logger.warning("DeepSeek 总结二次重试仍违规，放弃本次更新以避免污染原文")
+            return None
         # 强制兜底：若 DS 没写时间段，这里补一行
         summary = _ensure_summary_has_bucket(summary, _latest_bucket_from_rounds(recent_4_rounds))
         # 固定窗口：summary 始终受注入预算约束，按结构从最早内容开始一点点削
