@@ -34,8 +34,6 @@ logger = get_logger(__name__)
 from services import image_desc, deepseek_summary
 from services.deepseek_summary import fetch_new_summary
 from services.dynamic_memory_citation import DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY
-from memory_vector.embedding_client import embed_text
-from memory_vector.cosine import cosine
 
 # ---------------------------------------------------------------------------
 # Prompt-cache 友好：静态 system 在前（可被缓存），动态 system 在后（每轮变化）。
@@ -1150,12 +1148,12 @@ def _rewrite_memory_queries_with_ds(last_4_turns: str, user_message: str) -> lis
         return []
 
 
-def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str], context_query: str = "") -> list[dict]:
+def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str]) -> list[dict]:
     """
     原始 query 保底 + 扩展 query 增广：
     - 召回：每个 query 各取 top10
     - 合并：按 memory_id 去重
-    - 重排：语义相关度(原始 query) + 记忆权重 + 命中源数
+    - 重排：召回返回的语义分 + 记忆权重 + 命中源数
     - 保护：至少保留 2 条原始 query 命中（如果有）
     """
     from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
@@ -1167,7 +1165,7 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str],
     query_hits: list[tuple[str, list[dict]]] = []
     for q in queries:
         try:
-            hit = dynamic_vector_retrieve(q, vector_topk=10, final_topn=10)
+            hit = dynamic_vector_retrieve(q, vector_topk=10, final_topn=10, return_scores=True)
             query_hits.append((q, hit or []))
         except Exception as e:
             logger.debug("dynamic_vector_retrieve failed query=%s err=%s", q[:40], e)
@@ -1175,6 +1173,8 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str],
 
     by_id: dict[str, dict] = {}
     source_count: dict[str, int] = {}
+    best_semantic: dict[str, float] = {}
+    base_semantic: dict[str, float] = {}
     base_hit_ids: list[str] = []
     for idx, (_q, items) in enumerate(query_hits):
         seen_local: set[str] = set()
@@ -1182,43 +1182,28 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str],
             mid = str(mem.get("id") or "").strip()
             if not mid:
                 continue
+            sem = float(mem.get("_semantic_score") or 0.0)
             if mid not in by_id:
                 by_id[mid] = mem
+            if sem > best_semantic.get(mid, 0.0):
+                best_semantic[mid] = sem
             if mid not in seen_local:
                 source_count[mid] = int(source_count.get(mid) or 0) + 1
                 seen_local.add(mid)
             if idx == 0 and mid not in base_hit_ids:
+                base_semantic[mid] = max(base_semantic.get(mid, 0.0), sem)
                 base_hit_ids.append(mid)
     if not by_id:
         return []
 
-    q_emb_user = embed_text(base)
-    q_emb_ctx = embed_text((context_query or "").strip()) if (context_query or "").strip() else None
-    if not q_emb_user and not q_emb_ctx:
-        # 没有 embedding 时按“来源数 + 记忆权重”兜底
-        ranked = sorted(
-            by_id.values(),
-            key=lambda m: (-(source_count.get(str(m.get("id") or ""), 0)), -_memory_weight(m)),
-        )
-        return ranked[:5]
-
-    def _semantic_pair(mem: dict) -> tuple[float, float]:
-        text = str(mem.get("content") or "").strip()
-        if not text:
-            return 0.0, 0.0
-        emb = embed_text(text[:1000])
-        if not emb:
-            return 0.0, 0.0
-        sim_user = float(cosine(q_emb_user, emb)) if q_emb_user else 0.0
-        sim_ctx = float(cosine(q_emb_ctx, emb)) if q_emb_ctx else 0.0
-        return sim_user, sim_ctx
-
     scored: list[tuple[float, float, float, dict]] = []
     for mid, mem in by_id.items():
-        sem_user, sem_ctx = _semantic_pair(mem)
+        sem_ctx = best_semantic.get(mid, 0.0)
+        sem_user = base_semantic.get(mid, sem_ctx)
         weight = _memory_weight(mem)
         src = int(source_count.get(mid) or 0)
-        # 双语义相关：原始用户句优先 + 上下文语义兜底，再融合历史权重与多源命中
+        # 语义分直接复用向量召回结果，避免候选记忆二次 embedding。
+        # sem_ctx 字段名保留给调试面板兼容；这里表示多 query 的最佳语义支撑分。
         score = sem_user * 0.50 + sem_ctx * 0.20 + weight * 0.22 + src * 0.08
         scored.append((score, sem_user, sem_ctx, mem))
     scored.sort(key=lambda x: -x[0])
@@ -1461,8 +1446,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         try:
             turns_text = _last_4_turns_text_for_rewrite(messages)
             expanded_queries = _rewrite_memory_queries_with_ds(turns_text, last_user_text)
-            context_query = f"{turns_text}\n{last_user_text}".strip()
-            recalled = _multi_query_recall_and_rerank(last_user_text, expanded_queries, context_query=context_query)
+            recalled = _multi_query_recall_and_rerank(last_user_text, expanded_queries)
             if recalled:
                 valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
                 recalled = [
