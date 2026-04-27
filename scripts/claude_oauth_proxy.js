@@ -3,6 +3,7 @@
 const http = require("http");
 const https = require("https");
 const fs = require("fs");
+const { StringDecoder } = require("string_decoder");
 const { execSync } = require("child_process");
 
 const PORT = parseInt(process.env.PORT || "8082");
@@ -185,6 +186,12 @@ function readBody(req) {
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => resolve(Buffer.concat(chunks)));
   });
+}
+
+async function readStreamText(stream) {
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function stripTtlFromCacheControl(obj) {
@@ -675,8 +682,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (proxyRes.statusCode !== 200) {
-        let errData = "";
-        for await (const chunk of proxyRes) errData += chunk;
+        const errData = await readStreamText(proxyRes);
         return sendOpenaiError(res, proxyRes.statusCode, errData);
       }
 
@@ -688,9 +694,10 @@ const server = http.createServer(async (req, res) => {
         });
 
         let buffer = "";
+        const decoder = new StringDecoder("utf8");
         const streamConverter = createOpenaiStreamConverter(requestModel);
         proxyRes.on("data", (chunk) => {
-          buffer += chunk.toString();
+          buffer += decoder.write(chunk);
           const lines = buffer.split("\n");
           buffer = lines.pop();
           for (const line of lines) {
@@ -707,13 +714,27 @@ const server = http.createServer(async (req, res) => {
           }
         });
         proxyRes.on("end", () => {
+          buffer += decoder.end();
+          if (buffer.trim()) {
+            for (const line of buffer.split("\n")) {
+              if (!line.startsWith("data: ")) continue;
+              const raw = line.slice(6).trim();
+              if (!raw || raw === "[DONE]") continue;
+              try {
+                const event = JSON.parse(raw);
+                const converted = streamConverter(event);
+                if (converted) {
+                  res.write(`data: ${JSON.stringify(converted)}\n\n`);
+                }
+              } catch {}
+            }
+          }
           res.write("data: [DONE]\n\n");
           res.end();
         });
         proxyRes.on("error", () => res.end());
       } else {
-        let data = "";
-        for await (const chunk of proxyRes) data += chunk;
+        const data = await readStreamText(proxyRes);
         const anthropicResp = JSON.parse(data);
         const openaiResp = anthropicToOpenai(anthropicResp, requestModel, false);
         res.writeHead(200, { "Content-Type": "application/json" });
