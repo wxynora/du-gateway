@@ -336,6 +336,12 @@ def _is_local_cliproxyapi_url(url: str) -> bool:
     return host in ("127.0.0.1", "localhost") and parsed.port == 8317
 
 
+def _is_local_claude_oauth_proxy_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.hostname or "").lower()
+    return host in ("127.0.0.1", "localhost") and parsed.port == 8082
+
+
 def _apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     try:
@@ -1630,9 +1636,11 @@ def chat_completions():
         )
     except Exception:
         pass
-    # 清理动态 system 标记，避免上游 API 报未知字段错误
+    # 本机 Claude OAuth 代理需要这个标记把缓存断点打在静态 system 末尾；其他上游继续清掉。
+    preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(_get_active_upstream_url())
     for msg in body.get("messages") or []:
-        msg.pop("__dynamic__", None)
+        if not preserve_dynamic_marker:
+            msg.pop("__dynamic__", None)
     if body.get("stream"):
         if is_sumitalk_request:
             sumitalk_logger.info(

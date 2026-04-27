@@ -30,6 +30,7 @@ const BETA_HEADER = [
   "context-management-2025-06-27",
   "effort-2025-11-24",
 ].join(",");
+const DYNAMIC_SYSTEM_MARKER = "__dynamic__";
 
 const SYSTEM_PROMPT_PREFIX = {
   type: "text",
@@ -311,7 +312,7 @@ function addToolResult(pending, msg) {
 function openaiToAnthropic(oai) {
   const model = MODEL_MAP[oai.model] || oai.model;
   const messages = [];
-  let systemText = "";
+  const systemBlocks = [];
   let pendingToolResults = [];
 
   const flushToolResults = () => {
@@ -324,7 +325,11 @@ function openaiToAnthropic(oai) {
   for (const msg of oai.messages || []) {
     if (msg.role === "system") {
       const text = contentToText(msg.content);
-      if (text) systemText += (systemText ? "\n" : "") + text;
+      if (text) {
+        const block = { type: "text", text };
+        if (msg[DYNAMIC_SYSTEM_MARKER]) block[DYNAMIC_SYSTEM_MARKER] = true;
+        systemBlocks.push(block);
+      }
     } else if (msg.role === "tool" || msg.role === "function") {
       addToolResult(pendingToolResults, msg);
     } else if (msg.role === "user") {
@@ -359,7 +364,7 @@ function openaiToAnthropic(oai) {
     messages,
   };
 
-  if (systemText) body.system = systemText;
+  if (systemBlocks.length) body.system = systemBlocks;
   if (oai.temperature !== undefined) body.temperature = oai.temperature;
   if (oai.top_p !== undefined) body.top_p = oai.top_p;
   if (oai.stream) body.stream = true;
@@ -595,9 +600,15 @@ function applyPromptCache(body) {
   }
 
   if (Array.isArray(body.system) && body.system.length > 0) {
-    const staticSystem = body.system[0];
-    if (staticSystem && typeof staticSystem === "object") {
-      staticSystem.cache_control = { type: "ephemeral" };
+    let staticSystem = null;
+    for (let i = 1; i < body.system.length; i += 1) {
+      const item = body.system[i];
+      if (item?.[DYNAMIC_SYSTEM_MARKER]) break;
+      if (item && typeof item === "object") staticSystem = item;
+    }
+    if (staticSystem) staticSystem.cache_control = { type: "ephemeral" };
+    for (const item of body.system) {
+      if (item && typeof item === "object") delete item[DYNAMIC_SYSTEM_MARKER];
     }
   }
 }
