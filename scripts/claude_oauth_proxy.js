@@ -44,6 +44,7 @@ const MODEL_MAP = {
 };
 
 let cachedOAuth = null;
+let cachedOAuthRaw = null;
 
 function log(msg) {
   console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
@@ -85,14 +86,40 @@ function normalizeOAuth(raw) {
   return {
     accessToken,
     refreshToken,
-    expiresAt: parseExpiresAt(src.expiresAt || src.expires_at || src.expiry || src.expires),
+    expiresAt: parseExpiresAt(src.expiresAt || src.expires_at || src.expiry || src.expires || src.expired),
   };
 }
 
 function readOAuthCredentials() {
-  if (CLAUDE_OAUTH_JSON) return normalizeOAuth(CLAUDE_OAUTH_JSON);
-  if (CLAUDE_OAUTH_FILE) return normalizeOAuth(fs.readFileSync(CLAUDE_OAUTH_FILE, "utf8"));
-  return normalizeOAuth({ claudeAiOauth: readKeychainOAuth() });
+  if (CLAUDE_OAUTH_JSON) {
+    cachedOAuthRaw = JSON.parse(CLAUDE_OAUTH_JSON);
+    return normalizeOAuth(cachedOAuthRaw);
+  }
+  if (CLAUDE_OAUTH_FILE) {
+    cachedOAuthRaw = JSON.parse(fs.readFileSync(CLAUDE_OAUTH_FILE, "utf8"));
+    return normalizeOAuth(cachedOAuthRaw);
+  }
+  cachedOAuthRaw = { claudeAiOauth: readKeychainOAuth() };
+  return normalizeOAuth(cachedOAuthRaw);
+}
+
+function writeOAuthCredentials(next) {
+  if (!CLAUDE_OAUTH_FILE || !cachedOAuthRaw || cachedOAuthRaw.claudeAiOauth) return;
+  const updated = { ...cachedOAuthRaw };
+  if ("access_token" in updated || "refresh_token" in updated) {
+    updated.access_token = next.accessToken;
+    updated.refresh_token = next.refreshToken;
+    updated.expired = new Date(next.expiresAt).toISOString();
+    updated.last_refresh = new Date().toISOString();
+  } else {
+    updated.accessToken = next.accessToken;
+    updated.refreshToken = next.refreshToken;
+    updated.expiresAt = next.expiresAt;
+  }
+  const tmp = `${CLAUDE_OAUTH_FILE}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(updated, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, CLAUDE_OAUTH_FILE);
+  cachedOAuthRaw = updated;
 }
 
 function httpsRequest(url, method, headers, body) {
@@ -142,6 +169,7 @@ async function getAccessToken() {
     try {
       const r = await refreshToken(cachedOAuth.refreshToken);
       Object.assign(cachedOAuth, r);
+      writeOAuthCredentials(cachedOAuth);
       log(`Token refreshed (expires ${new Date(r.expiresAt).toLocaleString()})`);
     } catch (e) {
       log(`Refresh failed: ${e.message}, re-reading credentials...`);
@@ -335,6 +363,7 @@ function openaiToAnthropic(oai) {
   if (toolChoice) body.tool_choice = toolChoice;
   if (oai.parallel_tool_calls === false) body.disable_parallel_tool_use = true;
 
+  applyDefaultThinking(body);
   return body;
 }
 
@@ -427,6 +456,7 @@ function createOpenaiStreamConverter(model) {
   let inputTokens = 0;
   let outputTokens = 0;
   const blocks = new Map();
+  const thinkingBlocks = [];
 
   const chunk = (delta, finish_reason = null, extra = {}) => ({
     id: "chatcmpl-" + messageId,
@@ -448,7 +478,7 @@ function createOpenaiStreamConverter(model) {
     if (event.type === "content_block_start") {
       const index = event.index ?? 0;
       const block = event.content_block || {};
-      const state = { type: block.type };
+      const state = { type: block.type, block: { ...block } };
       if (block.type === "tool_use") {
         state.toolIndex = nextToolIndex++;
         blocks.set(index, state);
@@ -464,7 +494,13 @@ function createOpenaiStreamConverter(model) {
         });
       }
       blocks.set(index, state);
-      if (block.type === "thinking") return chunk({ reasoning_content: "" });
+      if (block.type === "thinking") {
+        state.block.thinking = state.block.thinking || "";
+        return chunk({ reasoning_content: "" });
+      }
+      if (block.type === "redacted_thinking") {
+        thinkingBlocks.push(state.block);
+      }
       return null;
     }
 
@@ -474,7 +510,13 @@ function createOpenaiStreamConverter(model) {
         return chunk({ content: event.delta.text || "" });
       }
       if (event.delta?.type === "thinking_delta") {
-        return chunk({ reasoning_content: event.delta.thinking || event.delta.text || "" });
+        const text = event.delta.thinking || event.delta.text || "";
+        if (state.block) state.block.thinking = (state.block.thinking || "") + text;
+        return chunk({ reasoning_content: text });
+      }
+      if (event.delta?.type === "signature_delta") {
+        if (state.block) state.block.signature = (state.block.signature || "") + (event.delta.signature || "");
+        return null;
       }
       if (event.delta?.type === "input_json_delta" && state.toolIndex !== undefined) {
         return chunk({
@@ -491,8 +533,14 @@ function createOpenaiStreamConverter(model) {
     if (event.type === "message_delta") {
       const stopReason = event.delta?.stop_reason;
       outputTokens = event.usage?.output_tokens || outputTokens;
+      const fullThinkingBlocks = [
+        ...thinkingBlocks,
+        ...Array.from(blocks.values())
+          .filter((state) => state.type === "thinking" && state.block?.thinking)
+          .map((state) => state.block),
+      ];
       return chunk(
-        {},
+        fullThinkingBlocks.length ? { thinking_blocks: fullThinkingBlocks } : {},
         stopReason === "tool_use" ? "tool_calls" : stopReason === "max_tokens" ? "length" : "stop",
         {
           usage: {
@@ -616,7 +664,6 @@ const server = http.createServer(async (req, res) => {
       // ─── OpenAI 兼容路径 ───
       const anthropicBody = openaiToAnthropic(body);
       const requestModel = anthropicBody.model;
-      applyDefaultThinking(anthropicBody);
       processAnthropicBody(anthropicBody);
 
       const proxyRes = await proxyToAnthropic(token, "/v1/messages", anthropicBody);
