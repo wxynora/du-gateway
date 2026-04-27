@@ -330,6 +330,12 @@ def _get_active_upstream_url() -> str:
     return ""
 
 
+def _is_local_cliproxyapi_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.hostname or "").lower()
+    return host in ("127.0.0.1", "localhost") and parsed.port == 8317
+
+
 def _apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     try:
@@ -341,6 +347,12 @@ def _apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
             model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
             if model:
                 body["model"] = model
+            if _is_local_cliproxyapi_url(upstream_url):
+                reasoning = body.get("reasoning")
+                if not isinstance(reasoning, dict):
+                    reasoning = {}
+                reasoning["effort"] = "xhigh"
+                body["reasoning"] = reasoning
     except Exception:
         pass
     return body

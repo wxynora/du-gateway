@@ -156,7 +156,6 @@ def list_models_for_item(it: dict) -> list[str]:
 def _fetch_first_model_for_item(it: dict) -> str:
     models = list_models_for_item(it)
     return models[0] if models else ""
-    return ""
 
 
 def refresh_active_model_cache() -> str:

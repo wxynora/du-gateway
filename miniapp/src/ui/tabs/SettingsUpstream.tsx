@@ -298,14 +298,26 @@ export function SettingsUpstream() {
                   </div>
                 </div>
                 <div className="mt-5 border-t border-gray-50 pt-5">
-                  <p className="text-[11px] font-medium text-gray-400">运行模型</p>
-                  <p className="mt-1 text-[15px] font-bold text-gray-800">{currentModel || "—"}</p>
-                  <div className="mt-3 flex gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">运行模型</p>
+                      <p className="mt-1 truncate text-[13px] font-semibold text-gray-700">{currentModel || "—"}</p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!canSaveModel}
+                      onClick={() => void saveModel()}
+                      className="h-8 shrink-0 rounded-full bg-blue-600 px-3 text-[12px] font-bold text-white shadow-sm shadow-blue-100 active:scale-[0.98] disabled:bg-gray-100 disabled:text-gray-400 disabled:shadow-none"
+                    >
+                      {modelSaving ? "保存中" : "保存"}
+                    </button>
+                  </div>
+                  <div className="relative mt-3">
                     <select
                       value={pendingModel}
                       disabled={modelsLoading || modelSaving || !models.length}
                       onChange={(e) => setPendingModel(e.target.value)}
-                      className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[13px] font-semibold text-gray-800 outline-none disabled:bg-gray-50 disabled:text-gray-400"
+                      className="h-11 w-full appearance-none rounded-2xl border border-gray-100 bg-gray-50 px-3 pr-9 text-[13px] font-semibold text-gray-800 outline-none disabled:text-gray-400"
                     >
                       {!modelOptions.length ? <option value="">{modelsLoading ? "加载中…" : "未拉到模型"}</option> : null}
                       {modelOptions.map((m) => (
@@ -314,16 +326,11 @@ export function SettingsUpstream() {
                         </option>
                       ))}
                     </select>
-                    <button
-                      type="button"
-                      disabled={!canSaveModel}
-                      onClick={() => void saveModel()}
-                      className="rounded-xl bg-gray-900 px-4 py-2 text-[13px] font-bold text-white active:scale-[0.98] disabled:bg-gray-200 disabled:text-gray-400"
-                    >
-                      {modelSaving ? "保存中" : "保存"}
-                    </button>
+                    <svg className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
                   </div>
-                  <p className="mt-3 text-[11px] font-medium text-gray-400">探活（HTTP）</p>
+                  <p className="mt-5 text-[11px] font-medium text-gray-400">探活（HTTP）</p>
                   <div className="mt-1">{renderProbeCodes(activeProbe)}</div>
                   {activeProbe?.note ? <p className="mt-2 break-words text-[12px] text-amber-700">{activeProbe.note}</p> : null}
                   {activeProbe?.error ? (
