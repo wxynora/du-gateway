@@ -688,6 +688,7 @@ const server = http.createServer(async (req, res) => {
         });
 
         let buffer = "";
+        const streamConverter = createOpenaiStreamConverter(requestModel);
         proxyRes.on("data", (chunk) => {
           buffer += chunk.toString();
           const lines = buffer.split("\n");
@@ -698,7 +699,7 @@ const server = http.createServer(async (req, res) => {
             if (raw === "[DONE]") continue;
             try {
               const event = JSON.parse(raw);
-              const converted = anthropicStreamEventToOpenai(event, requestModel);
+              const converted = streamConverter(event);
               if (converted) {
                 res.write(`data: ${JSON.stringify(converted)}\n\n`);
               }
