@@ -424,6 +424,8 @@ function createOpenaiStreamConverter(model) {
   let messageId = "stream";
   let created = Math.floor(Date.now() / 1000);
   let nextToolIndex = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
   const blocks = new Map();
 
   const chunk = (delta, finish_reason = null, extra = {}) => ({
@@ -438,6 +440,8 @@ function createOpenaiStreamConverter(model) {
   return (event) => {
     if (event.type === "message_start") {
       messageId = event.message?.id || messageId;
+      inputTokens = event.message?.usage?.input_tokens || 0;
+      outputTokens = event.message?.usage?.output_tokens || 0;
       return chunk({ role: "assistant", content: "" });
     }
 
@@ -486,14 +490,15 @@ function createOpenaiStreamConverter(model) {
 
     if (event.type === "message_delta") {
       const stopReason = event.delta?.stop_reason;
+      outputTokens = event.usage?.output_tokens || outputTokens;
       return chunk(
         {},
         stopReason === "tool_use" ? "tool_calls" : stopReason === "max_tokens" ? "length" : "stop",
         {
           usage: {
-            prompt_tokens: 0,
-            completion_tokens: event.usage?.output_tokens || 0,
-            total_tokens: event.usage?.output_tokens || 0,
+            prompt_tokens: inputTokens,
+            completion_tokens: outputTokens,
+            total_tokens: inputTokens + outputTokens,
           },
         }
       );
