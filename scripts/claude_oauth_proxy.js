@@ -578,7 +578,24 @@ function processAnthropicBody(body) {
     body.system = [SYSTEM_PROMPT_PREFIX];
   }
   stripTtlFromCacheControl(body);
+  applyPromptCache(body);
   return body;
+}
+
+function applyPromptCache(body) {
+  if (Array.isArray(body.tools) && body.tools.length > 0) {
+    const lastTool = body.tools[body.tools.length - 1];
+    if (lastTool && typeof lastTool === "object") {
+      lastTool.cache_control = { type: "ephemeral" };
+    }
+  }
+
+  if (Array.isArray(body.system) && body.system.length > 0) {
+    const lastSystem = body.system[body.system.length - 1];
+    if (lastSystem && typeof lastSystem === "object") {
+      lastSystem.cache_control = { type: "ephemeral" };
+    }
+  }
 }
 
 function sendError(res, status, msg) {
