@@ -336,6 +336,16 @@ def _is_local_cliproxyapi_url(url: str) -> bool:
     return host in ("127.0.0.1", "localhost") and parsed.port == 8317
 
 
+_CLAUDE_CODE_USER_AGENT = "claude-cli/2.1.44 (external, sdk-cli)"
+
+
+def _should_send_claude_code_user_agent(body: dict, upstream_url: str) -> bool:
+    if not _is_local_cliproxyapi_url(upstream_url):
+        return False
+    model = str((body or {}).get("model") or "").strip().lower()
+    return model.startswith("claude")
+
+
 def _apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     try:
@@ -348,11 +358,8 @@ def _apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
             if model:
                 body["model"] = model
             if _is_local_cliproxyapi_url(upstream_url):
-                reasoning = body.get("reasoning")
-                if not isinstance(reasoning, dict):
-                    reasoning = {}
-                reasoning["effort"] = "xhigh"
-                body["reasoning"] = reasoning
+                body.pop("reasoning", None)
+                body["reasoning_effort"] = "high"
     except Exception:
         pass
     return body
@@ -737,6 +744,8 @@ def _stream_forward_to_ai(body: dict, headers: dict):
         try:
             body_send = _apply_active_model_request_policy(body_send, url)
             body_send = _apply_openrouter_request_policy(body_send, url)
+            if _should_send_claude_code_user_agent(body_send, url):
+                h["User-Agent"] = _CLAUDE_CODE_USER_AGENT
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
@@ -1077,6 +1086,8 @@ def _forward_to_ai(body: dict, headers: dict):
                     logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
             body_send = _apply_active_model_request_policy(body_send, url)
             body_send = _apply_openrouter_request_policy(body_send, url)
+            if _should_send_claude_code_user_agent(body_send, url):
+                req_headers["User-Agent"] = _CLAUDE_CODE_USER_AGENT
             r = requests.post(url, headers=req_headers, json=body_send, timeout=120)
             # 为排查上游 403：记录鉴权是否携带（不泄露 key），以及响应正文前缀
             try:
