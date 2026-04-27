@@ -2694,6 +2694,7 @@ def miniapp_logs_stream():
 @bp.route("/upstreams", methods=["GET"])
 def miniapp_get_upstreams():
     data = upstream_store.load_upstreams()
+    model = upstream_store.get_cached_active_model(refresh_if_missing=False)
     # 不把 api_key 明文回传到前端；仅用于显示与切换
     items = [
         {"name": it.get("name") or "", "url": it.get("url") or ""}
@@ -2702,6 +2703,7 @@ def miniapp_get_upstreams():
     return jsonify(
         {
             "active": int(data.get("active") or 0),
+            "model": model,
             "items": items,
         }
     )
@@ -2738,6 +2740,47 @@ def miniapp_set_active_upstream():
             "ok": ok,
             "active": int(saved.get("active") or 0),
             "model": model,
+        }
+    )
+
+
+@bp.route("/upstreams/models", methods=["GET"])
+def miniapp_get_upstream_models():
+    upstreams = upstream_store.load_upstreams()
+    items = upstreams.get("items") or []
+    active = int(upstreams.get("active") or 0)
+    try:
+        idx = int(request.args.get("index", active))
+    except Exception:
+        idx = active
+    if idx < 0 or idx >= len(items):
+        return jsonify({"ok": False, "error": "index 无效"}), 400
+    models = upstream_store.list_models_for_item(items[idx])
+    model = upstream_store.get_cached_active_model(refresh_if_missing=False) if idx == active else ""
+    return jsonify(
+        {
+            "ok": True,
+            "active": active,
+            "index": idx,
+            "model": model,
+            "models": models,
+        }
+    )
+
+
+@bp.route("/upstreams/model", methods=["PUT"])
+def miniapp_set_active_upstream_model():
+    data = request.get_json(silent=True) or {}
+    model = str(data.get("model") or "").strip()
+    ok = upstream_store.set_active_model(model)
+    saved_model = upstream_store.get_cached_active_model(refresh_if_missing=False) if ok else ""
+    saved = upstream_store.load_upstreams()
+    return jsonify(
+        {
+            "ok": ok,
+            "active": int(saved.get("active") or 0),
+            "model": saved_model,
+            "error": "" if ok else "model 无效",
         }
     )
 

@@ -3,7 +3,7 @@ import { apiJson } from "../api";
 import { useToast } from "../toast";
 
 type UpstreamItem = { name: string; url: string };
-type UpstreamsResp = { active: number; items: UpstreamItem[] };
+type UpstreamsResp = { active: number; model?: string; items: UpstreamItem[] };
 type ProbeItem = {
   index: number;
   isActive: boolean;
@@ -18,6 +18,8 @@ type ProbeItem = {
 };
 type ProbeResp = { ok: boolean; status: "ok" | "degraded" | "fail"; results: ProbeItem[]; count: number };
 type ActivePutResp = { ok?: boolean; error?: string; active?: number; model?: string };
+type ModelsResp = { ok?: boolean; error?: string; active?: number; index?: number; model?: string; models?: string[] };
+type ModelPutResp = { ok?: boolean; error?: string; active?: number; model?: string };
 
 function hostFromUrl(url: string): string {
   const raw = String(url || "").trim();
@@ -67,21 +69,54 @@ export function SettingsUpstream() {
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [currentModel, setCurrentModel] = useState("");
+  const [pendingModel, setPendingModel] = useState("");
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelSaving, setModelSaving] = useState(false);
+
+  const loadModels = useCallback(async (index?: number) => {
+    setModelsLoading(true);
+    try {
+      const q = typeof index === "number" ? `?index=${index}` : "";
+      const j = await apiJson<ModelsResp>(`/miniapp-api/upstreams/models${q}`);
+      if (!j?.ok) throw new Error(j?.error || "加载模型失败");
+      const nextModels = Array.isArray(j.models) ? j.models.filter(Boolean) : [];
+      const selected = String(j.model || "").trim();
+      setModels(nextModels);
+      setCurrentModel(selected);
+      setPendingModel(selected || nextModels[0] || "");
+    } catch (e: any) {
+      setModels([]);
+      toast(`模型列表加载失败：${e?.message || e}`);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [toast]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError("");
     try {
       const j = await apiJson<UpstreamsResp>("/miniapp-api/upstreams");
-      setActive(Number(j.active || 0));
-      setItems(Array.isArray(j.items) ? j.items : []);
+      const nextActive = Number(j.active || 0);
+      const nextModel = String(j.model || "").trim();
+      const nextItems = Array.isArray(j.items) ? j.items : [];
+      setActive(nextActive);
+      setItems(nextItems);
+      setCurrentModel(nextModel);
+      setPendingModel(nextModel);
+      if (nextItems.length) {
+        await loadModels(nextActive);
+      } else {
+        setModels([]);
+      }
     } catch (e: any) {
       setLoadError(e?.message || String(e));
       toast(`加载失败：${e?.message || e}`);
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [loadModels, toast]);
 
   useEffect(() => {
     void load();
@@ -136,7 +171,9 @@ export function SettingsUpstream() {
       if (!r?.ok) throw new Error(r?.error || "切换失败");
       const name = hostFromUrl(items[pendingIndex]?.url || "");
       toast(`已切换到 ${name}`);
-      setCurrentModel(String(r.model || "").trim());
+      const nextModel = String(r.model || "").trim();
+      setCurrentModel(nextModel);
+      setPendingModel(nextModel);
       setPendingIndex(null);
       await load();
       await probeOne(Number(r.active ?? pendingIndex));
@@ -147,11 +184,35 @@ export function SettingsUpstream() {
     }
   }
 
+  async function saveModel() {
+    const model = String(pendingModel || "").trim();
+    if (!model || model === currentModel) return;
+    setModelSaving(true);
+    try {
+      const r = await apiJson<ModelPutResp>("/miniapp-api/upstreams/model", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      if (!r?.ok) throw new Error(r?.error || "保存失败");
+      const nextModel = String(r.model || model).trim();
+      setCurrentModel(nextModel);
+      setPendingModel(nextModel);
+      toast(`已切换模型：${nextModel}`);
+    } catch (e: any) {
+      toast(`模型保存失败：${e?.message || e}`);
+    } finally {
+      setModelSaving(false);
+    }
+  }
+
   const activeItem = items[active];
   const activeHost = activeItem ? hostFromUrl(activeItem.url) : "—";
   const activeProbe = probes[active];
   const pendingHost = pendingIndex !== null && items[pendingIndex] ? hostFromUrl(items[pendingIndex].url) : "";
   const canConfirm = pendingIndex !== null && pendingIndex !== active && !submitting && !loading && items.length > 0;
+  const canSaveModel = !!pendingModel && pendingModel !== currentModel && !modelSaving && !modelsLoading;
+  const modelOptions = pendingModel && !models.includes(pendingModel) ? [pendingModel, ...models] : models;
 
   function renderProbeCodes(p?: ProbeItem) {
     if (!p) {
@@ -239,6 +300,29 @@ export function SettingsUpstream() {
                 <div className="mt-5 border-t border-gray-50 pt-5">
                   <p className="text-[11px] font-medium text-gray-400">运行模型</p>
                   <p className="mt-1 text-[15px] font-bold text-gray-800">{currentModel || "—"}</p>
+                  <div className="mt-3 flex gap-2">
+                    <select
+                      value={pendingModel}
+                      disabled={modelsLoading || modelSaving || !models.length}
+                      onChange={(e) => setPendingModel(e.target.value)}
+                      className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-[13px] font-semibold text-gray-800 outline-none disabled:bg-gray-50 disabled:text-gray-400"
+                    >
+                      {!modelOptions.length ? <option value="">{modelsLoading ? "加载中…" : "未拉到模型"}</option> : null}
+                      {modelOptions.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!canSaveModel}
+                      onClick={() => void saveModel()}
+                      className="rounded-xl bg-gray-900 px-4 py-2 text-[13px] font-bold text-white active:scale-[0.98] disabled:bg-gray-200 disabled:text-gray-400"
+                    >
+                      {modelSaving ? "保存中" : "保存"}
+                    </button>
+                  </div>
                   <p className="mt-3 text-[11px] font-medium text-gray-400">探活（HTTP）</p>
                   <div className="mt-1">{renderProbeCodes(activeProbe)}</div>
                   {activeProbe?.note ? <p className="mt-2 break-words text-[12px] text-amber-700">{activeProbe.note}</p> : null}

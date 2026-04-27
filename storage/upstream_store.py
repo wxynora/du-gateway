@@ -121,41 +121,41 @@ def _is_siliconflow_url(url: str) -> bool:
     return bool(host and SILICONFLOW_BASE_HOST and host.endswith(SILICONFLOW_BASE_HOST))
 
 
-def _is_local_cliproxyapi_url(url: str) -> bool:
-    parsed = urlparse(str(url or "").strip())
-    host = (parsed.hostname or "").lower()
-    return host in ("127.0.0.1", "localhost") and parsed.port == 8317
-
-
-def _fetch_first_model_for_item(it: dict) -> str:
+def list_models_for_item(it: dict) -> list[str]:
     url = str((it or {}).get("url") or "").strip()
     api_key = str((it or {}).get("api_key") or "").strip()
     if not url:
-        return ""
+        return []
     if is_openrouter_url(url):
-        return str(OPENROUTER_FIXED_MODEL or "").strip()
-    if _is_local_cliproxyapi_url(url):
-        return "gpt-5.5(high)"
+        model = str(OPENROUTER_FIXED_MODEL or "").strip()
+        return [model] if model else []
     if _is_siliconflow_url(url) and SILICONFLOW_DEFAULT_MODEL:
-        return str(SILICONFLOW_DEFAULT_MODEL or "").strip()
+        return [str(SILICONFLOW_DEFAULT_MODEL or "").strip()]
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
         resp = requests.get(_chat_url_to_models_url(url), headers=headers, timeout=20)
         if resp.status_code != 200:
-            return ""
+            return []
         data = resp.json() if resp.content else {}
         items = data.get("data") if isinstance(data, dict) else None
         if not isinstance(items, list):
-            return ""
+            return []
+        out = []
         for item in items:
             if isinstance(item, dict) and str(item.get("id") or "").strip():
-                return str(item.get("id") or "").strip()
-            if isinstance(item, str) and item.strip():
-                return item.strip()
+                out.append(str(item.get("id") or "").strip())
+            elif isinstance(item, str) and item.strip():
+                out.append(item.strip())
+        return out
     except Exception:
-        return ""
+        return []
+
+
+def _fetch_first_model_for_item(it: dict) -> str:
+    models = list_models_for_item(it)
+    return models[0] if models else ""
     return ""
 
 
@@ -193,6 +193,26 @@ def get_cached_active_model(refresh_if_missing: bool = True) -> str:
     if refresh_if_missing:
         return refresh_active_model_cache()
     return ""
+
+
+def set_active_model(model: str) -> bool:
+    model = str(model or "").strip()
+    if not model:
+        return False
+    data = load_upstreams()
+    items = data.get("items") or []
+    active = int(data.get("active") or 0)
+    if active < 0 or active >= len(items):
+        return False
+    item = items[active] or {}
+    return _save_active_model_payload(
+        {
+            "active": active,
+            "url": str(item.get("url") or "").strip(),
+            "model": model,
+            "checked_at": time.time(),
+        }
+    )
 
 
 def set_active(index: int) -> bool:
