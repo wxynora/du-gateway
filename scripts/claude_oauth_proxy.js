@@ -31,6 +31,16 @@ const BETA_HEADER = [
   "effort-2025-11-24",
 ].join(",");
 const DYNAMIC_SYSTEM_MARKER = "__dynamic__";
+const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
+  "【渡的心事",
+  "【渡的日常",
+  "今日：",
+  "听了老婆的话，我想起来",
+  "【指代提醒】",
+  "老婆当前状态",
+  "【当前是在 RikkaHub 和渡聊天】",
+  "【Notion 相关】",
+];
 
 const SYSTEM_PROMPT_PREFIX = {
   type: "text",
@@ -603,7 +613,7 @@ function applyPromptCache(body) {
     let staticSystem = null;
     for (let i = 1; i < body.system.length; i += 1) {
       const item = body.system[i];
-      if (item?.[DYNAMIC_SYSTEM_MARKER]) break;
+      if (item?.[DYNAMIC_SYSTEM_MARKER] || looksLikeGatewayDynamicSystemBlock(item)) break;
       if (item && typeof item === "object") staticSystem = item;
     }
     if (staticSystem) staticSystem.cache_control = { type: "ephemeral" };
@@ -611,6 +621,12 @@ function applyPromptCache(body) {
       if (item && typeof item === "object") delete item[DYNAMIC_SYSTEM_MARKER];
     }
   }
+}
+
+function looksLikeGatewayDynamicSystemBlock(item) {
+  const text = String(item?.text || "").trimStart();
+  if (!text) return false;
+  return GATEWAY_DYNAMIC_SYSTEM_HINTS.some((hint) => text.startsWith(hint));
 }
 
 function sendError(res, status, msg) {
