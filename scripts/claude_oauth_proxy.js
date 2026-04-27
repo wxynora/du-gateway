@@ -570,16 +570,20 @@ function createOpenaiStreamConverter(model) {
 function processAnthropicBody(body) {
   if (body.system) {
     if (Array.isArray(body.system)) {
-      body.system.unshift(SYSTEM_PROMPT_PREFIX);
+      body.system.unshift(staticSystemPromptBlock());
     } else {
-      body.system = [SYSTEM_PROMPT_PREFIX, { type: "text", text: body.system }];
+      body.system = [staticSystemPromptBlock(), { type: "text", text: body.system }];
     }
   } else {
-    body.system = [SYSTEM_PROMPT_PREFIX];
+    body.system = [staticSystemPromptBlock()];
   }
   stripTtlFromCacheControl(body);
   applyPromptCache(body);
   return body;
+}
+
+function staticSystemPromptBlock() {
+  return { ...SYSTEM_PROMPT_PREFIX };
 }
 
 function applyPromptCache(body) {
@@ -591,9 +595,9 @@ function applyPromptCache(body) {
   }
 
   if (Array.isArray(body.system) && body.system.length > 0) {
-    const lastSystem = body.system[body.system.length - 1];
-    if (lastSystem && typeof lastSystem === "object") {
-      lastSystem.cache_control = { type: "ephemeral" };
+    const staticSystem = body.system[0];
+    if (staticSystem && typeof staticSystem === "object") {
+      staticSystem.cache_control = { type: "ephemeral" };
     }
   }
 }
