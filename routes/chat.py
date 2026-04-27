@@ -347,9 +347,6 @@ def _apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
             model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
             if model:
                 body["model"] = model
-            if _is_local_cliproxyapi_url(upstream_url):
-                body.pop("reasoning", None)
-                body["reasoning_effort"] = "high"
     except Exception:
         pass
     return body
