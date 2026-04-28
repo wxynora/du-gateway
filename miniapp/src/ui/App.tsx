@@ -6,7 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
-import { apiFetch, apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
+import { apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
 import { Btn, Modal } from "./components";
 import { SumiOverlay } from "../plugins/sumi-overlay";
 import { migrateLocalChatHistoryDevice, readLatestLocalChatHistory, readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
@@ -159,6 +159,21 @@ type StayWithDuData = {
   booksDone: StayMediaItem[];
 };
 type StayWithDuCollection = keyof StayWithDuData;
+type SumiTalkChatJobCreateResponse = {
+  ok?: boolean;
+  job_id?: string;
+  status?: string;
+  response?: any;
+  status_code?: number;
+  error?: string;
+};
+type SumiTalkChatJobStatusResponse = {
+  ok?: boolean;
+  status?: "running" | "done" | "error";
+  status_code?: number;
+  response?: any;
+  error?: string;
+};
 
 const TRANSPARENT_BUBBLE_CLASS =
   "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
@@ -166,6 +181,29 @@ const STAY_SERIF_FONT = "'Playfair Display', 'Noto Serif SC', 'Songti SC', Georg
 const STAY_SANS_FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const SYSTEM_CARD_PREFIX = "<<<SUMITALK_CARD ";
 const SYSTEM_CARD_SUFFIX = ">>>";
+const SUMITALK_CHAT_JOB_POLL_MS = 1800;
+const SUMITALK_CHAT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForSumiTalkChatJob(jobId: string): Promise<any> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < SUMITALK_CHAT_JOB_TIMEOUT_MS) {
+    await waitMs(SUMITALK_CHAT_JOB_POLL_MS);
+    const job = await apiJson<SumiTalkChatJobStatusResponse>(`/miniapp-api/sumitalk-chat-jobs/${encodeURIComponent(jobId)}`);
+    if (job.status === "done") return job.response || {};
+    if (job.status === "error") {
+      const upstreamError = job.response?.error || job.response?.message || "";
+      throw new Error(String(job.error || upstreamError || "渡回复失败"));
+    }
+    if (job.status !== "running") {
+      throw new Error("任务状态异常");
+    }
+  }
+  throw new Error("等待渡回复超时");
+}
 
 function readStoredBoolean(key: string, fallback = false): boolean {
   try {
@@ -1483,6 +1521,36 @@ function fallbackRawContentText(content: any): string {
   }
 }
 
+function extractAssistantMessage(data: any): any {
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+  if (choice?.message) return choice.message;
+  if (data?.message && typeof data.message === "object") return data.message;
+  return {};
+}
+
+function extractAssistantReplyText(data: any): string {
+  const msg = extractAssistantMessage(data);
+  return contentToPlainText(msg?.content) || contentToPlainText(data?.content) || "";
+}
+
+function extractAssistantReasoning(data: any): string {
+  const msg = extractAssistantMessage(data);
+  return contentToPlainText(extractMessageReasoningSource(msg));
+}
+
+function extractTokenCount(data: any): { input?: number; output?: number } | undefined {
+  const usage = data?.usage || {};
+  const input = Number(usage?.prompt_tokens || usage?.input_tokens || usage?.promptTokens || usage?.inputTokens || 0);
+  const output = Number(usage?.completion_tokens || usage?.output_tokens || usage?.completionTokens || usage?.outputTokens || 0);
+  const safeInput = Number.isFinite(input) && input > 0 ? input : 0;
+  const safeOutput = Number.isFinite(output) && output > 0 ? output : 0;
+  if (!safeInput && !safeOutput) return undefined;
+  return {
+    input: safeInput || undefined,
+    output: safeOutput || undefined,
+  };
+}
+
 type ChatMessageGroup = {
   id: string;
   role: "user" | "assistant";
@@ -1761,65 +1829,6 @@ function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
     });
   }
   return groups;
-}
-
-async function readChatCompletionStream(resp: Response, onContent: (content: string) => void): Promise<string> {
-  if (!resp.body) {
-    const text = await resp.text();
-    throw new Error(text || "当前环境不支持流式读取");
-  }
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let content = "";
-  let done = false;
-
-  const handleEvent = (eventText: string) => {
-    const dataLines = eventText
-      .split(/\r?\n/)
-      .map((line) => line.trimEnd())
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart());
-    if (!dataLines.length) return;
-    const dataText = dataLines.join("\n").trim();
-    if (!dataText) return;
-    if (dataText === "[DONE]") {
-      done = true;
-      return;
-    }
-    let payload: any = null;
-    try {
-      payload = JSON.parse(dataText);
-    } catch {
-      return;
-    }
-    if (payload?.error) {
-      const err = typeof payload.error === "string" ? payload.error : payload.error?.message || JSON.stringify(payload.error);
-      throw new Error(err || "流式返回错误");
-    }
-    const choice = payload?.choices?.[0] || {};
-    const piece = contentToPlainText(choice?.delta?.content ?? "");
-    if (!piece) return;
-    content += piece;
-    onContent(content);
-  };
-
-  while (!done) {
-    const { value, done: readerDone } = await reader.read();
-    if (readerDone) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split(/\r?\n\r?\n/);
-    buffer = events.pop() || "";
-    for (const eventText of events) {
-      handleEvent(eventText);
-      if (done) break;
-    }
-  }
-  const tail = buffer + decoder.decode();
-  if (!done && tail.trim()) {
-    handleEvent(tail);
-  }
-  return content.trim();
 }
 
 function RichTextBlock({ content }: { content: string }) {
@@ -2275,7 +2284,7 @@ function TravelPlanFormModal({
       avoidItems.length ? `不想要/避雷：${avoidItems.join("、")}` : "",
       otherPrefs.length ? `其他偏好：${otherPrefs.join("、")}` : "",
       note.trim() ? `备注：${note.trim()}` : "",
-      "请综合这些地点的位置距离安排游玩顺序，写清楚每段地铁/公交/打车建议，并把吃饭安排穿插进去。",
+      "请先做快速规划：综合位置距离安排游玩顺序，每段只给推荐交通方式、大致耗时/步行/打车参考即可，不用逐站逐步写得很细；把吃饭安排穿插进去。",
     ].filter(Boolean);
     onSubmit(lines.join("\n"));
   };
@@ -3252,40 +3261,38 @@ function MainChatScreen({
     setMessages(draftMessages);
     await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
     try {
-      const resp = await apiFetch("/v1/chat/completions", {
+      const requestBody = {
+        model: activeModel,
+        messages: [{ role: "user", content }],
+        stream: false,
+        window_id: windowId,
+      };
+      const started = await apiJson<SumiTalkChatJobCreateResponse>("/miniapp-api/sumitalk-chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Force-Last4": "1",
-          "X-Reply-Channel": "sumitalk",
-          "X-Reply-Target": replyTarget,
         },
         body: JSON.stringify({
-          model: activeModel,
-          messages: [{ role: "user", content }],
-          stream: true,
-          window_id: windowId,
+          ...requestBody,
+          reply_target: replyTarget,
         }),
       });
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        throw new Error(String(data?.error || data?.message || `HTTP ${resp.status}`));
+      if (started?.status === "error") {
+        const upstreamError = started.response?.error || started.response?.message || "";
+        throw new Error(String(started.error || upstreamError || "渡回复失败"));
       }
-      const reply = await readChatCompletionStream(resp, (nextContent) => {
-        const liveMessages = [
-          ...nextMessages,
-          {
-            id: assistantId,
-            role: "assistant" as const,
-            content: nextContent,
-            createdAt: assistantCreatedAt,
-            status: "sent" as const,
-          },
-        ];
-        messagesRef.current = liveMessages;
-        setMessages(liveMessages);
-      });
+      const data = started?.status === "running" && started?.job_id
+        ? await waitForSumiTalkChatJob(String(started.job_id))
+        : started?.response || started;
+      if (data?.error) {
+        const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
+        throw new Error(err || "上游返回错误");
+      }
+      const reply = extractAssistantReplyText(data);
       if (!reply) throw new Error("上游没有返回内容");
+      const reasoning = extractAssistantReasoning(data);
+      const tokenCount = extractTokenCount(data);
       const finalMessages = [
         ...nextMessages,
         {
@@ -3294,6 +3301,8 @@ function MainChatScreen({
           content: reply,
           createdAt: assistantCreatedAt,
           status: "sent" as const,
+          reasoning: reasoning || undefined,
+          tokenCount,
         },
       ];
       messagesRef.current = finalMessages;

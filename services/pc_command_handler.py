@@ -224,6 +224,11 @@ class PcmdDuThoughtStreamState:
         visible = compute_visible_streaming(after_pcmd)
         visible = compute_interaction_visible_streaming(visible)
         visible = compute_daily_visible_streaming(visible)
+        try:
+            from services.conversation_followup import compute_visible_streaming as compute_followup_visible_streaming
+            visible = compute_followup_visible_streaming(visible)
+        except Exception:
+            pass
         visible = compute_memory_citation_visible_streaming(visible, self.dynamic_memory_citation_map)
         out = visible[self._last_visible_len :]
         self._last_visible_len = len(visible)

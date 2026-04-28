@@ -36,6 +36,7 @@ FOLLOWUP_STATUS_SENT = "sent"
 FOLLOWUP_STATUS_CANCELLED = "cancelled"
 FOLLOWUP_STATUS_EXPIRED = "expired"
 FOLLOWUP_STATUS_ERROR = "error"
+FOLLOWUP_MARKER_START = "[[DU_FOLLOWUP"
 FOLLOWUP_MARKER_RE = re.compile(r"\[\[DU_FOLLOWUP\s*(\{[\s\S]*?\})\s*\]\]\s*$", re.IGNORECASE)
 
 
@@ -253,6 +254,29 @@ def extract_followup_marker(text: str) -> tuple[str, Optional[dict]]:
     if not reason:
         reason = "她可能暂时没回，我想稍后自然续一句。"
     return clean, {"after_minutes": after_minutes, "reason": reason[:200]}
+
+
+def compute_visible_streaming(acc: str) -> str:
+    raw = str(acc or "")
+    if not raw:
+        return ""
+    clean, followup = extract_followup_marker(raw)
+    if followup:
+        return clean
+
+    lower = raw.lower()
+    marker_start = FOLLOWUP_MARKER_START.lower()
+    start = lower.rfind(marker_start)
+    if start >= 0:
+        tail = raw[start:]
+        if "]]" not in tail:
+            return raw[:start].rstrip()
+
+    max_len = min(len(raw), len(marker_start) - 1)
+    for size in range(max_len, 0, -1):
+        if marker_start.startswith(lower[-size:]):
+            return raw[:-size].rstrip()
+    return raw
 
 
 def queue_followup(window_id: str, headers: dict, assistant_text: str, created_at: str | None = None) -> tuple[str, bool]:

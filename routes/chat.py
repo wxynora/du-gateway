@@ -86,7 +86,10 @@ from services.html_preview_tools import (
     merge_html_preview_urls_into_assistant_text,
     missing_html_preview_url_suffix,
 )
-from services.device_action_tools import merge_sumitalk_cards_into_assistant_text
+from services.device_action_tools import (
+    dedupe_sumitalk_cards_in_text,
+    merge_sumitalk_cards_into_assistant_text,
+)
 from services.conversation_followup import (
     build_followup_system_instruction,
     queue_followup,
@@ -1016,12 +1019,18 @@ def _stream_with_r2_archive(
                 continue
             du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
             done_chunks = []
-            for ch in chunks:
-                if _is_sse_done_chunk(ch):
-                    done_chunks.append(ch)
-                    continue
-                yield transform_sse_chunk_bytes_pcmd(_strip_reasoning_from_sse_chunk(ch), du_state)
-            parsed_content = parsed.get("content") or ""
+            raw_parsed_content = parsed.get("content") or ""
+            parsed_content = dedupe_sumitalk_cards_in_text(raw_parsed_content)
+            if parsed_content != raw_parsed_content:
+                visible_content = du_state.feed_delta(parsed_content)
+                if visible_content:
+                    yield _sse_delta_chunk_bytes(visible_content)
+            else:
+                for ch in chunks:
+                    if _is_sse_done_chunk(ch):
+                        done_chunks.append(ch)
+                        continue
+                    yield transform_sse_chunk_bytes_pcmd(_strip_reasoning_from_sse_chunk(ch), du_state)
             content_parts.append(parsed_content)
             # 模型常不在正文复述预览链接：从 tool 结果补发 SSE + 存档拼接
             suf = missing_html_preview_url_suffix(
@@ -1057,6 +1066,12 @@ def _stream_with_r2_archive(
             du_daily_trigger=du_daily_trigger,
             dynamic_memory_citation_map=dynamic_memory_citation_map,
         )
+        try:
+            cleaned_visible, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=visible)
+            if queued or cleaned_visible != visible:
+                visible = cleaned_visible
+        except Exception:
+            logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
         if tool_rounds_used > 0 and not visible.strip():
             logger.error("工具续轮结束但最终正文仍为空（流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
         full_reasoning = "".join(reasoning_parts).strip()

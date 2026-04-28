@@ -10,6 +10,7 @@ from storage import r2_store
 SUMITALK_CARD_PREFIX = "<<<SUMITALK_CARD "
 SUMITALK_CARD_SUFFIX = ">>>"
 SUMITALK_CARD_RE = re.compile(r"<<<SUMITALK_CARD\s+(\{.*?\})>>>", re.S)
+_SINGLETON_SUMITALK_CARD_TYPES = {"travel_plan_form", "travel_plan_result"}
 
 
 TOOL_CREATE_SYSTEM_ALARM = {
@@ -288,20 +289,20 @@ def execute_create_calendar_event(arguments: dict) -> str:
 
 def extract_sumitalk_cards_from_messages(messages: list) -> list[str]:
     seen: set[str] = set()
+    semantic_index: dict[str, int] = {}
     cards: list[str] = []
 
     def add_card(card: str) -> None:
         card = str(card or "").strip()
         if not card.startswith(SUMITALK_CARD_PREFIX) or not card.endswith(SUMITALK_CARD_SUFFIX):
             return
-        if card in seen:
-            return
         try:
             raw = card[len(SUMITALK_CARD_PREFIX):-len(SUMITALK_CARD_SUFFIX)].strip()
             parsed = json.loads(raw)
             if not isinstance(parsed, dict):
                 return
-            if str(parsed.get("type") or "").strip() not in {
+            card_type = str(parsed.get("type") or "").strip()
+            if card_type not in {
                 "system_alarm_created",
                 "calendar_event_created",
                 "travel_plan_form",
@@ -310,7 +311,16 @@ def extract_sumitalk_cards_from_messages(messages: list) -> list[str]:
                 return
         except Exception:
             return
+        semantic_key = card_type if card_type in _SINGLETON_SUMITALK_CARD_TYPES else ""
+        if not semantic_key and card in seen:
+            return
+        if semantic_key and semantic_key in semantic_index:
+            cards[semantic_index[semantic_key]] = card
+            seen.add(card)
+            return
         seen.add(card)
+        if semantic_key:
+            semantic_index[semantic_key] = len(cards)
         cards.append(card)
 
     for msg in messages or []:
@@ -330,9 +340,100 @@ def extract_sumitalk_cards_from_messages(messages: list) -> list[str]:
     return cards
 
 
+def _sumitalk_card_type(card: str) -> str:
+    raw = str(card or "").strip()
+    if not raw.startswith(SUMITALK_CARD_PREFIX) or not raw.endswith(SUMITALK_CARD_SUFFIX):
+        return ""
+    try:
+        json_text = raw[len(SUMITALK_CARD_PREFIX):-len(SUMITALK_CARD_SUFFIX)].strip()
+        parsed = json.loads(json_text)
+        return str((parsed if isinstance(parsed, dict) else {}).get("type") or "").strip()
+    except Exception:
+        return ""
+
+
+def _sumitalk_card_key(card: str) -> str:
+    card_type = _sumitalk_card_type(card)
+    if card_type in _SINGLETON_SUMITALK_CARD_TYPES:
+        return card_type
+    return str(card or "").strip()
+
+
+def dedupe_sumitalk_cards_in_text(assistant_text: str) -> str:
+    text = str(assistant_text or "")
+    if "SUMITALK_CARD" not in text:
+        return text
+    matches = list(SUMITALK_CARD_RE.finditer(text))
+    keep_indexes: set[int] = set()
+    seen: set[str] = set()
+    singleton_latest_index: dict[str, int] = {}
+    for idx, match in enumerate(matches):
+        marker = f"{SUMITALK_CARD_PREFIX}{match.group(1)}{SUMITALK_CARD_SUFFIX}"
+        key = _sumitalk_card_key(marker)
+        if not key:
+            continue
+        if key in _SINGLETON_SUMITALK_CARD_TYPES:
+            singleton_latest_index[key] = idx
+        elif key not in seen:
+            seen.add(key)
+            keep_indexes.add(idx)
+    keep_indexes.update(singleton_latest_index.values())
+    if len(keep_indexes) == len(matches):
+        return text
+    out: list[str] = []
+    cursor = 0
+    for idx, match in enumerate(matches):
+        out.append(text[cursor:match.start()])
+        if idx in keep_indexes:
+            out.append(text[match.start():match.end()])
+        cursor = match.end()
+    out.append(text[cursor:])
+    return "".join(out)
+
+
+def _remove_sumitalk_card_types_from_text(assistant_text: str, card_types: set[str]) -> str:
+    text = str(assistant_text or "")
+    if not card_types or "SUMITALK_CARD" not in text:
+        return text
+    out: list[str] = []
+    cursor = 0
+    for match in SUMITALK_CARD_RE.finditer(text):
+        marker = f"{SUMITALK_CARD_PREFIX}{match.group(1)}{SUMITALK_CARD_SUFFIX}"
+        card_type = _sumitalk_card_type(marker)
+        if card_type not in card_types:
+            continue
+        out.append(text[cursor:match.start()])
+        cursor = match.end()
+    out.append(text[cursor:])
+    return "".join(out)
+
+
 def merge_sumitalk_cards_into_assistant_text(assistant_text: str, messages: list) -> str:
-    text = assistant_text or ""
-    missing = [card for card in extract_sumitalk_cards_from_messages(messages) if card not in text]
+    text = dedupe_sumitalk_cards_in_text(assistant_text or "")
+    tool_cards = extract_sumitalk_cards_from_messages(messages)
+    singleton_tool_cards = {
+        _sumitalk_card_type(card): card
+        for card in tool_cards
+        if _sumitalk_card_type(card) in _SINGLETON_SUMITALK_CARD_TYPES
+    }
+    replace_types = {
+        card_type
+        for card_type, card in singleton_tool_cards.items()
+        if card_type and card not in text
+    }
+    if replace_types:
+        text = _remove_sumitalk_card_types_from_text(text, replace_types)
+    existing_keys = {
+        _sumitalk_card_key(f"{SUMITALK_CARD_PREFIX}{match.group(1)}{SUMITALK_CARD_SUFFIX}")
+        for match in SUMITALK_CARD_RE.finditer(text)
+    }
+    missing = []
+    for card in tool_cards:
+        key = _sumitalk_card_key(card)
+        if not key or key in existing_keys or card in text:
+            continue
+        existing_keys.add(key)
+        missing.append(card)
     if not missing:
         return text
     prefix = "\n" if text.strip() else ""

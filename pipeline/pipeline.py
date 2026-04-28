@@ -1777,9 +1777,11 @@ def step_inject_amap_mcp_tools(body: dict) -> dict:
     hint = (
         "\n\n【高德官方 MCP 出行工具规则】"
         "如果老婆只是想让渡规划旅游/路线，但地点、吃饭、步行接受度等信息还不完整，先调用 open_travel_plan_form 弹出 SumiTalk 固定表单；"
-        "老婆问想去哪里、怎么坐地铁公交、怎么打车、怎么规划路线时，优先调用 amap_trip_plan 一次拿完整结果；"
+        "老婆问想去哪里、怎么坐地铁公交、怎么打车、怎么规划路线时，优先调用 amap_trip_plan；默认用快速规划 detail_level=fast，不要追求很细的逐站路线；"
+        "只有老婆明确要求详细路线、导航链接、专属地图时，才传 detail_level=full 或 include_links=true；"
         "只有需要补查单个地点/天气/链接时，再调用 maps_* 高德工具。"
         "交通路线、换乘站、耗时和打车费用必须基于工具结果，不要凭空编。"
+        "最终回复不要写长篇分析、推理过程或一堆解释，直接给结论、顺序、主要交通建议和必要提醒；"
         "如果用户没说起点，优先结合已注入的最近定位；没有定位再追问起点。"
     )
     return _append_to_static_system(body, hint)
