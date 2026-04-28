@@ -429,9 +429,13 @@ function ChatHeaderStatus({ sending }: { sending: boolean }) {
 function Shell({
   onLogout,
   onOpenDevices,
+  deviceManagerOpen,
+  onCloseDevices,
 }: {
   onLogout?: () => void;
   onOpenDevices?: () => void;
+  deviceManagerOpen?: boolean;
+  onCloseDevices?: () => void;
 }) {
   const toast = useToast();
   const [panel, setPanel] = useState<PanelId>(null);
@@ -672,6 +676,10 @@ function Shell({
         setShowCallHub(false);
         return;
       }
+      if (deviceManagerOpen && onCloseDevices) {
+        onCloseDevices();
+        return;
+      }
       if (panel) {
         setPanel(null);
         return;
@@ -724,7 +732,9 @@ function Shell({
     };
   }, [
     activeScreen,
+    deviceManagerOpen,
     mainTab,
+    onCloseDevices,
     panel,
     showAlarm,
     showCallHub,
@@ -837,6 +847,7 @@ function Shell({
 
   const hasSecondaryPageOpen =
     !!activeScreen ||
+    !!deviceManagerOpen ||
     !!panel ||
     showSettings ||
     showCorePrompt ||
@@ -4398,7 +4409,12 @@ function ShellWithLogout({
 }) {
   return (
     <>
-      <Shell onLogout={onLogout} onOpenDevices={onOpenDevices} />
+      <Shell
+        onLogout={onLogout}
+        onOpenDevices={onOpenDevices}
+        deviceManagerOpen={deviceManagerOpen}
+        onCloseDevices={onCloseDevices}
+      />
       {deviceManagerOpen && onCloseDevices ? <DeviceManagerModal onClose={onCloseDevices} onLogout={onLogout} /> : null}
     </>
   );
