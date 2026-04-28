@@ -914,7 +914,7 @@ function Shell({
       ) : null}
       {showTree ? (
         <FullScreenPane title="树" accent="neutral" onBack={() => setShowTree(false)}>
-          <TreeScreen data={tree} onRefresh={loadTree} onClose={() => setShowTree(false)} />
+          <TreeScreen data={tree} onRefresh={loadTree} />
         </FullScreenPane>
       ) : null}
       {showCallHub ? <LazyPane><CallHubScreen onClose={() => setShowCallHub(false)} /></LazyPane> : null}
@@ -1763,41 +1763,63 @@ function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
   return groups;
 }
 
-function extractAssistantReplyText(message: any): string {
-  return contentToPlainText(message?.content);
-}
-
-function extractAssistantReasoning(message: any): string {
-  return String(message?.reasoning_content || message?.reasoning || "").trim();
-}
-
-function extractTokenCount(data: any): { input?: number; output?: number } | undefined {
-  try {
-    const usage = data?.usage || {};
-    const input = Number(
-      usage?.prompt_tokens ||
-      usage?.input_tokens ||
-      usage?.promptTokens ||
-      usage?.inputTokens ||
-      0,
-    );
-    const output = Number(
-      usage?.completion_tokens ||
-      usage?.output_tokens ||
-      usage?.completionTokens ||
-      usage?.outputTokens ||
-      0,
-    );
-    const safeInput = Number.isFinite(input) && input > 0 ? input : 0;
-    const safeOutput = Number.isFinite(output) && output > 0 ? output : 0;
-    if (!safeInput && !safeOutput) return undefined;
-    return {
-      input: safeInput || undefined,
-      output: safeOutput || undefined,
-    };
-  } catch {
-    return undefined;
+async function readChatCompletionStream(resp: Response, onContent: (content: string) => void): Promise<string> {
+  if (!resp.body) {
+    const text = await resp.text();
+    throw new Error(text || "当前环境不支持流式读取");
   }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let done = false;
+
+  const handleEvent = (eventText: string) => {
+    const dataLines = eventText
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart());
+    if (!dataLines.length) return;
+    const dataText = dataLines.join("\n").trim();
+    if (!dataText) return;
+    if (dataText === "[DONE]") {
+      done = true;
+      return;
+    }
+    let payload: any = null;
+    try {
+      payload = JSON.parse(dataText);
+    } catch {
+      return;
+    }
+    if (payload?.error) {
+      const err = typeof payload.error === "string" ? payload.error : payload.error?.message || JSON.stringify(payload.error);
+      throw new Error(err || "流式返回错误");
+    }
+    const choice = payload?.choices?.[0] || {};
+    const piece = contentToPlainText(choice?.delta?.content ?? "");
+    if (!piece) return;
+    content += piece;
+    onContent(content);
+  };
+
+  while (!done) {
+    const { value, done: readerDone } = await reader.read();
+    if (readerDone) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split(/\r?\n\r?\n/);
+    buffer = events.pop() || "";
+    for (const eventText of events) {
+      handleEvent(eventText);
+      if (done) break;
+    }
+  }
+  const tail = buffer + decoder.decode();
+  if (!done && tail.trim()) {
+    handleEvent(tail);
+  }
+  return content.trim();
 }
 
 function RichTextBlock({ content }: { content: string }) {
@@ -2154,6 +2176,10 @@ function travelWalkLabel(value: TravelPlanWalkPreference): string {
   return "可以走一点";
 }
 
+function toggleTravelOption(list: string[], item: string): string[] {
+  return list.includes(item) ? list.filter((value) => value !== item) : [...list, item];
+}
+
 function TravelPlanFormModal({
   card,
   sending,
@@ -2170,20 +2196,53 @@ function TravelPlanFormModal({
   const [origin, setOrigin] = useState("");
   const [city, setCity] = useState(card.city || "");
   const [destinations, setDestinations] = useState((card.destinations || []).join("\n"));
-  const [food, setFood] = useState(card.food || "");
-  const [avoidFood, setAvoidFood] = useState("");
   const [walk, setWalk] = useState<TravelPlanWalkPreference>(card.walk || "medium");
   const [prefer, setPrefer] = useState<TravelPlanPreference>(card.prefer || "auto");
   const [pace, setPace] = useState<"relaxed" | "normal" | "packed">("normal");
+  const [timeMode, setTimeMode] = useState<"today" | "tomorrow" | "weekend" | "manual">("today");
   const [timeText, setTimeText] = useState("");
+  const [foodChips, setFoodChips] = useState<string[]>(card.food ? [card.food] : []);
+  const [extraFood, setExtraFood] = useState("");
+  const [avoidChips, setAvoidChips] = useState<string[]>([]);
+  const [extraAvoid, setExtraAvoid] = useState("");
+  const [routePreference, setRoutePreference] = useState("顺路优先");
+  const [otherPrefs, setOtherPrefs] = useState<string[]>([]);
   const [note, setNote] = useState("");
 
-  const inputClass = "w-full rounded-[16px] border border-gray-200 bg-white px-3 py-2.5 text-[14px] font-medium leading-5 text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-400";
-  const labelClass = "mb-1.5 text-[12px] font-semibold text-gray-700";
-  const segmentClass = (active: boolean) =>
-    `flex-1 rounded-[14px] border px-2.5 py-2 text-[12px] font-semibold transition-colors ${
-      active ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-600"
+  const inputClass = "w-full rounded-xl border border-[#FFECDA] bg-white px-4 py-3 text-[14px] font-medium leading-5 text-[#5C4D3E] outline-none placeholder:text-[#B8A998] focus:border-[#FF8C42] focus:shadow-[0_0_0_2px_rgba(255,140,66,0.10)]";
+  const pillClass = (active: boolean, extra = "") =>
+    `${extra} rounded-full border px-4 py-2 text-[14px] font-medium leading-5 transition-colors active:scale-[0.98] ${
+      active ? "border-[#FF8C42] bg-[#FF8C42] text-white" : "border-[#FFECDA] bg-white text-[#8D7B68]"
     }`;
+  const sectionTitleClass = "mb-3 flex items-center gap-1.5 text-[15px] font-bold text-[#5C4D3E]";
+  const foodOptions = ["甜品", "咖啡", "小吃", "正餐", "火锅", "日料", "本帮菜", "不安排吃饭"];
+  const avoidOptions = ["太辣", "排队久", "太贵", "人太多", "网红店"];
+  const otherOptions = ["怕晒", "怕冷", "想多坐会", "适合拍照", "室内优先"];
+  const timeLabelMap = {
+    today: "今天",
+    tomorrow: "明天",
+    weekend: "周末",
+    manual: "手动填写",
+  } as const;
+
+  const toggleFoodChip = (item: string) => {
+    setFoodChips((current) => {
+      if (item === "不安排吃饭") return current.includes(item) ? [] : [item];
+      return toggleTravelOption(current.filter((value) => value !== "不安排吃饭"), item);
+    });
+  };
+
+  const renderSection = (icon: string, title: string, children: React.ReactNode) => (
+    <div className="mb-8">
+      <div className={sectionTitleClass}>
+        <span className="text-[16px] leading-none" aria-hidden="true">
+          {icon}
+        </span>
+        {title}
+      </div>
+      {children}
+    </div>
+  );
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -2196,18 +2255,25 @@ function TravelPlanFormModal({
       toast("填一下出发地，或者选用最近定位");
       return;
     }
-    const paceLabel = pace === "relaxed" ? "轻松一点" : pace === "packed" ? "多塞点" : "正常";
+    const paceLabel = pace === "relaxed" ? "轻松" : pace === "packed" ? "多安排点" : "正常";
+    const timeLabel = timeMode === "manual" ? timeText.trim() : timeLabelMap[timeMode];
+    const foodItems = foodChips.includes("不安排吃饭")
+      ? ["不安排吃饭"]
+      : [...foodChips, extraFood.trim()].map((item) => item.trim()).filter(Boolean);
+    const avoidItems = [...avoidChips, extraAvoid.trim()].map((item) => item.trim()).filter(Boolean);
     const lines = [
       "帮我做一个出行规划，信息如下：",
       `出发地：${useCurrentLocation ? "用我最近定位/当前位置" : origin.trim()}`,
       city.trim() ? `城市：${city.trim()}` : "",
       `想去的地方：${places.join("、")}`,
-      food.trim() ? `想吃的东西：${food.trim()}` : "想吃的东西：没特别要求",
-      avoidFood.trim() ? `不想吃/忌口：${avoidFood.trim()}` : "",
-      timeText.trim() ? `时间：${timeText.trim()}` : "",
+      `时间：${timeLabel || "没特别要求"}`,
       `步行接受度：${travelWalkLabel(walk)}`,
       `交通偏好：${travelPreferLabel(prefer)}`,
       `节奏：${paceLabel}`,
+      `路线倾向：${routePreference}`,
+      foodItems.length ? `想吃的东西：${foodItems.join("、")}` : "想吃的东西：没特别要求",
+      avoidItems.length ? `不想要/避雷：${avoidItems.join("、")}` : "",
+      otherPrefs.length ? `其他偏好：${otherPrefs.join("、")}` : "",
       note.trim() ? `备注：${note.trim()}` : "",
       "请综合这些地点的位置距离安排游玩顺序，写清楚每段地铁/公交/打车建议，并把吃饭安排穿插进去。",
     ].filter(Boolean);
@@ -2215,92 +2281,204 @@ function TravelPlanFormModal({
   };
 
   return (
-    <Modal title={card.title || "出行规划"} onClose={onClose}>
-      <form className="space-y-3" onSubmit={handleSubmit}>
-        {card.prompt ? <div className="rounded-[16px] bg-white px-3 py-2 text-[12px] leading-5 text-gray-600">{card.prompt}</div> : null}
-        <div>
-          <div className={labelClass}>出发地</div>
-          <div className="mb-2 flex gap-2">
-            <button type="button" className={segmentClass(useCurrentLocation)} onClick={() => setUseCurrentLocation(true)}>
-              用最近定位
-            </button>
-            <button type="button" className={segmentClass(!useCurrentLocation)} onClick={() => setUseCurrentLocation(false)}>
-              手填
-            </button>
-          </div>
-          {!useCurrentLocation ? (
-            <input className={inputClass} value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="比如 上海虹桥站 / 酒店名" />
-          ) : null}
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/20" role="dialog" aria-modal="true">
+      <button type="button" className="absolute inset-0 h-full w-full cursor-default" aria-label="关闭出行规划表单" onClick={onClose} />
+      <form
+        className="relative z-10 flex h-[92vh] max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-t-[32px] bg-[#FFF9F2] shadow-[0_-10px_25px_rgba(0,0,0,0.10)]"
+        onSubmit={handleSubmit}
+      >
+        <div className="flex justify-center py-3">
+          <div className="h-1.5 w-10 rounded-full bg-[#E5D5C5]" />
         </div>
-        <div>
-          <div className={labelClass}>城市</div>
-          <input className={inputClass} value={city} onChange={(e) => setCity(e.target.value)} placeholder="比如 上海，可不填" />
-        </div>
-        <div>
-          <div className={labelClass}>想去的地方</div>
-          <textarea className={`${inputClass} min-h-[78px] resize-none`} value={destinations} onChange={(e) => setDestinations(e.target.value)} placeholder={"一行一个，比如\n上海迪士尼\n武康路"} />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
+
+        <div className="flex items-start justify-between px-6 pb-4">
           <div>
-            <div className={labelClass}>想吃</div>
-            <input className={inputClass} value={food} onChange={(e) => setFood(e.target.value)} placeholder="甜品 / 火锅 / 咖啡" />
+            <h1 className="text-2xl font-bold text-[#5C4D3E]">想去哪玩？</h1>
+            <p className="mt-1 text-sm text-[#A89A8B]">填几个偏好，渡来排顺序和路线</p>
           </div>
-          <div>
-            <div className={labelClass}>不想吃</div>
-            <input className={inputClass} value={avoidFood} onChange={(e) => setAvoidFood(e.target.value)} placeholder="可不填" />
-          </div>
+          <button
+            type="button"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#F3E9DD] text-lg font-semibold leading-none text-[#8D7B68] active:scale-[0.96]"
+            onClick={onClose}
+            aria-label="关闭"
+          >
+            ×
+          </button>
         </div>
-        <div>
-          <div className={labelClass}>时间</div>
-          <input className={inputClass} value={timeText} onChange={(e) => setTimeText(e.target.value)} placeholder="比如 明天 10:00 出发，晚上 8 点前回" />
+
+        <div className="flex-1 overflow-y-auto px-5 pb-36 [scrollbar-color:#E5D5C5_transparent]">
+          {renderSection(
+            "📍",
+            "出发地",
+            <>
+              <div className="mb-3 flex gap-3">
+                <button type="button" className={pillClass(useCurrentLocation)} onClick={() => setUseCurrentLocation(true)}>
+                  用当前位置
+                </button>
+                <button type="button" className={pillClass(!useCurrentLocation)} onClick={() => setUseCurrentLocation(false)}>
+                  手动填写
+                </button>
+              </div>
+              {!useCurrentLocation ? (
+                <input className={inputClass} value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="酒店 / 车站 / 地址" />
+              ) : null}
+            </>,
+          )}
+
+          {renderSection(
+            "🏙️",
+            "城市",
+            <input className={inputClass} value={city} onChange={(e) => setCity(e.target.value)} placeholder="比如 上海" />,
+          )}
+
+          {renderSection(
+            "⭐",
+            "想去的地方",
+            <textarea
+              className={`${inputClass} h-24 resize-none`}
+              value={destinations}
+              onChange={(e) => setDestinations(e.target.value)}
+              placeholder="一行一个地点，比如：上海迪士尼、武康路、咖啡店"
+            />,
+          )}
+
+          {renderSection(
+            "📅",
+            "出行时间",
+            <>
+              <div className="mb-3 flex flex-wrap gap-2">
+                {(["today", "tomorrow", "weekend", "manual"] as const).map((item) => (
+                  <button key={item} type="button" className={pillClass(timeMode === item)} onClick={() => setTimeMode(item)}>
+                    {timeLabelMap[item]}
+                  </button>
+                ))}
+              </div>
+              {timeMode === "manual" ? (
+                <input className={inputClass} value={timeText} onChange={(e) => setTimeText(e.target.value)} placeholder="比如 明天 10:00 出发，晚上 8 点前回" />
+              ) : null}
+            </>,
+          )}
+
+          {renderSection(
+            "👟",
+            "步行接受度",
+            <div className="flex gap-2">
+              {(["low", "medium", "high"] as TravelPlanWalkPreference[]).map((item) => (
+                <button key={item} type="button" className={pillClass(walk === item, "flex-1 px-2")} onClick={() => setWalk(item)}>
+                  {travelWalkLabel(item)}
+                </button>
+              ))}
+            </div>,
+          )}
+
+          {renderSection(
+            "🚇",
+            "交通偏好",
+            <div className="flex gap-2">
+              {(["auto", "transit", "taxi"] as TravelPlanPreference[]).map((item) => (
+                <button key={item} type="button" className={pillClass(prefer === item, "flex-1 px-2")} onClick={() => setPrefer(item)}>
+                  {travelPreferLabel(item)}
+                </button>
+              ))}
+            </div>,
+          )}
+
+          {renderSection(
+            "⏱",
+            "游玩节奏",
+            <div className="flex gap-2">
+              {[
+                ["relaxed", "轻松"] as const,
+                ["normal", "正常"] as const,
+                ["packed", "多安排点"] as const,
+              ].map(([value, label]) => (
+                <button key={value} type="button" className={pillClass(pace === value, "flex-1 px-2")} onClick={() => setPace(value)}>
+                  {label}
+                </button>
+              ))}
+            </div>,
+          )}
+
+          {renderSection(
+            "🍴",
+            "想吃什么",
+            <>
+              <div className="mb-3 flex flex-wrap gap-2">
+                {foodOptions.map((item) => (
+                  <button key={item} type="button" className={pillClass(foodChips.includes(item))} onClick={() => toggleFoodChip(item)}>
+                    {item}
+                  </button>
+                ))}
+              </div>
+              {!foodChips.includes("不安排吃饭") ? (
+                <input className={inputClass} value={extraFood} onChange={(e) => setExtraFood(e.target.value)} placeholder="还有想吃的" />
+              ) : null}
+            </>,
+          )}
+
+          {renderSection(
+            "⚠️",
+            "不想要什么",
+            <>
+              <div className="mb-3 flex flex-wrap gap-2">
+                {avoidOptions.map((item) => (
+                  <button key={item} type="button" className={pillClass(avoidChips.includes(item))} onClick={() => setAvoidChips((current) => toggleTravelOption(current, item))}>
+                    {item}
+                  </button>
+                ))}
+              </div>
+              <input className={inputClass} value={extraAvoid} onChange={(e) => setExtraAvoid(e.target.value)} placeholder="其他避雷" />
+            </>,
+          )}
+
+          {renderSection(
+            "🧭",
+            "路线倾向",
+            <div className="grid grid-cols-2 gap-2">
+              {["省时间", "少换乘", "少走路", "顺路优先"].map((item) => (
+                <button key={item} type="button" className={pillClass(routePreference === item, "px-2")} onClick={() => setRoutePreference(item)}>
+                  {item}
+                </button>
+              ))}
+            </div>,
+          )}
+
+          {renderSection(
+            "♥",
+            "其他偏好",
+            <div className="flex flex-wrap gap-2">
+              {otherOptions.map((item) => (
+                <button key={item} type="button" className={pillClass(otherPrefs.includes(item))} onClick={() => setOtherPrefs((current) => toggleTravelOption(current, item))}>
+                  {item}
+                </button>
+              ))}
+            </div>,
+          )}
+
+          {renderSection(
+            "📝",
+            "备注",
+            <textarea
+              className={`${inputClass} h-24 resize-none`}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="比如 不想太赶 / 想拍照 / 预算控制一下"
+            />,
+          )}
         </div>
-        <div>
-          <div className={labelClass}>步行接受度</div>
-          <div className="flex gap-2">
-            {(["low", "medium", "high"] as TravelPlanWalkPreference[]).map((item) => (
-              <button key={item} type="button" className={segmentClass(walk === item)} onClick={() => setWalk(item)}>
-                {travelWalkLabel(item)}
-              </button>
-            ))}
-          </div>
+
+        <div className="absolute bottom-0 left-0 right-0 flex flex-col gap-3 border-t border-[#FFECDA] bg-[#FFF9F2] p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
+          <p className="text-center text-xs text-[#A89A8B]">提交后只显示：已提交，渡在安排</p>
+          <button
+            type="submit"
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#FF8C42] py-4 text-lg font-bold text-white shadow-lg shadow-orange-200 transition-all active:scale-[0.98] disabled:opacity-50"
+            disabled={sending}
+          >
+            ✨ 让渡安排
+          </button>
         </div>
-        <div>
-          <div className={labelClass}>交通偏好</div>
-          <div className="flex gap-2">
-            {(["auto", "transit", "taxi"] as TravelPlanPreference[]).map((item) => (
-              <button key={item} type="button" className={segmentClass(prefer === item)} onClick={() => setPrefer(item)}>
-                {travelPreferLabel(item)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className={labelClass}>节奏</div>
-          <div className="flex gap-2">
-            {[
-              ["relaxed", "轻松"] as const,
-              ["normal", "正常"] as const,
-              ["packed", "多塞点"] as const,
-            ].map(([value, label]) => (
-              <button key={value} type="button" className={segmentClass(pace === value)} onClick={() => setPace(value)}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className={labelClass}>备注</div>
-          <textarea className={`${inputClass} min-h-[64px] resize-none`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="比如 不想太赶 / 想拍照 / 预算控制一下" />
-        </div>
-        <button
-          type="submit"
-          className="w-full rounded-[18px] bg-gray-900 px-4 py-3 text-[14px] font-semibold text-white transition-opacity active:opacity-80 disabled:opacity-50"
-          disabled={sending}
-        >
-          让渡规划
-        </button>
       </form>
-    </Modal>
+    </div>
   );
 }
 
@@ -3036,9 +3214,10 @@ function MainChatScreen({
     };
   }, [deviceId, windowId]);
 
-  async function sendChatContent(rawContent: string) {
+  async function sendChatContent(rawContent: string, options: { displayContent?: string } = {}) {
     const content = String(rawContent || "").trim();
     if (!content || sending) return;
+    const displayContent = String(options.displayContent || content).trim() || content;
     if (!windowId) {
       toast("当前还没拿到聊天窗口 ID，不能接入共享上下文");
       return;
@@ -3055,7 +3234,7 @@ function MainChatScreen({
     const userMsg: ChatDraftMessage = {
       id: `user-${baseTimestamp}`,
       role: "user",
-      content,
+      content: displayContent,
       createdAt: new Date(baseTimestamp).toISOString(),
       status: "sent",
     };
@@ -3084,17 +3263,28 @@ function MainChatScreen({
         body: JSON.stringify({
           model: activeModel,
           messages: [{ role: "user", content }],
-          stream: false,
+          stream: true,
           window_id: windowId,
         }),
       });
-      const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
         throw new Error(String(data?.error || data?.message || `HTTP ${resp.status}`));
       }
-      const reply = extractAssistantReplyText(data?.choices?.[0]?.message);
-      const reasoning = extractAssistantReasoning(data?.choices?.[0]?.message);
-      const tokenCount = extractTokenCount(data);
+      const reply = await readChatCompletionStream(resp, (nextContent) => {
+        const liveMessages = [
+          ...nextMessages,
+          {
+            id: assistantId,
+            role: "assistant" as const,
+            content: nextContent,
+            createdAt: assistantCreatedAt,
+            status: "sent" as const,
+          },
+        ];
+        messagesRef.current = liveMessages;
+        setMessages(liveMessages);
+      });
       if (!reply) throw new Error("上游没有返回内容");
       const finalMessages = [
         ...nextMessages,
@@ -3103,11 +3293,10 @@ function MainChatScreen({
           role: "assistant" as const,
           content: reply,
           createdAt: assistantCreatedAt,
-          status: "sent",
-          reasoning: reasoning || undefined,
-          tokenCount,
+          status: "sent" as const,
         },
       ];
+      messagesRef.current = finalMessages;
       setMessages(finalMessages);
       await saveDisplayHistory(finalMessages);
     } catch (e: any) {
@@ -3118,7 +3307,7 @@ function MainChatScreen({
           role: "assistant" as const,
           content: `（发送失败：${e?.message || e}）`,
           createdAt: assistantCreatedAt,
-          status: "failed",
+          status: "failed" as const,
         },
       ];
       setMessages(failedMessages);
@@ -3339,9 +3528,10 @@ function MainChatScreen({
                             <CalendarEventCreatedBubble
                               card={part.systemCard}
                               onOpen={() => {
+                                const card = part.systemCard as CalendarEventCreatedCard;
                                 void SumiOverlay.openCalendarEvent({
-                                  eventId: part.systemCard?.eventId,
-                                  startMillis: part.systemCard?.startMillis,
+                                  eventId: card.eventId,
+                                  startMillis: card.startMillis,
                                 }).catch((e) => toast(`打开系统日历失败：${e?.message || e}`));
                               }}
                             />
@@ -3457,7 +3647,7 @@ function MainChatScreen({
           onClose={() => setTravelFormCard(null)}
           onSubmit={(content) => {
             setTravelFormCard(null);
-            void sendChatContent(content);
+            void sendChatContent(content, { displayContent: "已提交，渡在安排" });
           }}
         />
       ) : null}

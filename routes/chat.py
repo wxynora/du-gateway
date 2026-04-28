@@ -940,7 +940,27 @@ def _stream_with_r2_archive(
     try:
         while True:
             chunks = []
-            for chunk in _stream_forward_to_ai(current_body, headers):
+            chunk_queue = queue.Queue()
+
+            def _producer():
+                try:
+                    for chunk in _stream_forward_to_ai(current_body, headers):
+                        chunk_queue.put(chunk)
+                except Exception as e:
+                    logger.warning("工具流式生产异常 %s", e)
+                finally:
+                    chunk_queue.put(None)
+
+            threading.Thread(target=_producer, daemon=True).start()
+            heartbeat_s = max(0, int(STREAM_SSE_HEARTBEAT_SECONDS or 0))
+            while True:
+                try:
+                    chunk = chunk_queue.get(timeout=heartbeat_s if heartbeat_s > 0 else None)
+                except queue.Empty:
+                    yield b": ping\n\n"
+                    continue
+                if chunk is None:
+                    break
                 chunks.append(chunk)
             if len(chunks) == 1 and chunks[0].startswith(b"data: ") and b"error" in chunks[0]:
                 yield chunks[0]
@@ -994,18 +1014,34 @@ def _stream_with_r2_archive(
                 tool_midstream_retry_used = True
                 continue
             du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
+            done_chunks = []
             for ch in chunks:
+                if _is_sse_done_chunk(ch):
+                    done_chunks.append(ch)
+                    continue
                 yield transform_sse_chunk_bytes_pcmd(_strip_reasoning_from_sse_chunk(ch), du_state)
-            content_parts.append(parsed.get("content") or "")
+            parsed_content = parsed.get("content") or ""
+            content_parts.append(parsed_content)
             # 模型常不在正文复述预览链接：从 tool 结果补发 SSE + 存档拼接
             suf = missing_html_preview_url_suffix(
-                parsed.get("content") or "", current_body.get("messages") or []
+                parsed_content, current_body.get("messages") or []
             )
             if suf:
                 extra_vis = du_state.feed_delta(suf)
                 if extra_vis:
                     yield _sse_delta_chunk_bytes(extra_vis)
                     content_parts.append(extra_vis)
+            if _reply_channel() == "sumitalk":
+                merged = merge_sumitalk_cards_into_assistant_text(parsed_content, current_body.get("messages") or [])
+                if merged != parsed_content:
+                    extra_card = merged[len(parsed_content):] if merged.startswith(parsed_content) else ("\n" + merged)
+                    if extra_card:
+                        yield _sse_delta_chunk_bytes(extra_card)
+                        content_parts.append(extra_card)
+            if done_chunks:
+                yield b"data: [DONE]\n\n"
+            else:
+                yield b"data: [DONE]\n\n"
             if parsed.get("reasoning"):
                 reasoning_parts.append(parsed.get("reasoning") or "")
             if parsed.get("reasoning_details"):
@@ -1449,6 +1485,12 @@ def _sse_delta_chunk_bytes(delta_text: str) -> bytes:
         ]
     }
     return ("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode("utf-8")
+
+
+def _is_sse_done_chunk(chunk: bytes) -> bool:
+    if not isinstance(chunk, (bytes, bytearray)) or not bytes(chunk).startswith(b"data: "):
+        return False
+    return bytes(chunk)[6:].strip() == b"[DONE]"
 
 
 def _merge_html_preview_into_nonstream_response(resp_json: dict, messages: list) -> dict:
