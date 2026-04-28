@@ -20,6 +20,17 @@ _SUMMARY_RETRY_INSTRUCTION = """
 4. 如果想表达辛玥说了什么，优先写“老婆说…… / 辛玥提到…… / 小玥问……”；“她说/她提到/她问”只能承接上一句已经明确写出的称呼，不能连续多句都用“她”。
 """
 
+_SUMMARY_TIME_RETRY_INSTRUCTION = """
+
+【上轮输出纠错】
+上一次输出的时间桶不合规。
+重写时必须遵守：
+1. 每个时间桶必须单独成行，格式固定为：（YYYY-MM-DD 时间段）。
+2. 禁止写“晚上至傍晚及之前 / 凌晨及之前 / 深夜至凌晨 / 某时段及之前”这类合并标题。
+3. 一个时间桶下面只写这个时间桶发生的事；如果内容跨多个时段，就拆成多个时间桶。
+4. 如果上一版总结里已有合并标题，必须拆开重写；无法确定细分时，归入最晚的明确时间桶，但不能保留合并标题。
+"""
+
 _QUOTE_PATTERNS = (
     r"“[^”]*”",
     r"「[^」]*」",
@@ -186,21 +197,28 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
    - 在【最近】部分必须明确写出时间段标记（例如：2026-03-20 早上 / 2026-03-20 下午 / 2026-03-20 晚上）
    - 至少出现 1 个“日期+时间段”标记，不能省略
    - 三个分段内部都按时间倒序排列：最新的放最上面，最早的放最下面
+   - 每个时间桶必须单独成行，格式固定为：（YYYY-MM-DD 时间段）
+   - 禁止合并时间桶：不要写“晚上至傍晚及之前”“凌晨及之前”“深夜至凌晨”“某时段及之前”
+   - 一个时间桶下面只写这个时间桶发生的事；同一分段可以有多个时间桶，每个桶下面各写自己的内容
+   - 如果上一版总结已有合并标题，必须拆成独立时间桶；无法精确拆分时，归入最晚的明确时间桶，但不能保留合并标题
    - 时间段定义固定为：凌晨 00:00-05:59；早上 06:00-07:59；上午 08:00-10:59；中午 11:00-13:59；下午 14:00-16:59；傍晚 17:00-18:59；晚上 19:00-21:59；深夜 22:00-23:59
    - 00:00 以后必须算次日“凌晨”，不能继续算前一日“深夜”
-   - 如果叙述跨日期，必须把两边日期都写全，例如：2026-04-12 深夜至 2026-04-13 凌晨；禁止只写“深夜至凌晨”
-   - 不跨日期时，只写单个“日期+时间段”，不要写“昨晚 / 今早 / 深夜至凌晨”这种模糊说法
+   - 如果叙述跨日期或跨时段，拆成两个时间桶分别写，禁止写“2026-04-12 深夜至 2026-04-13 凌晨”
+   - 只写单个“日期+时间段”，不要写“昨晚 / 今早 / 深夜至凌晨”这种模糊说法
    - 输出前自检：若同一分段内时间先后顺序混乱，或出现跨日期却只写了一个日期，重排并补全后再输出
 
 ## 输出格式
 
 【最近】
+（YYYY-MM-DD 时间段）
 （最新4轮，详细）
 
 【稍早】
+（YYYY-MM-DD 时间段）
 （上一版【最近】压缩后移入）
 
 【更早】
+（YYYY-MM-DD 时间段）
 （上一版【稍早】压缩后移入）
 （超出40轮上限的部分滚动删除，不保留）
 
@@ -238,6 +256,47 @@ def _latest_bucket_from_rounds(recent_4_rounds: list) -> str:
     except Exception:
         pass
     return ""
+
+
+_TIME_PERIOD_PATTERN = r"(凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)"
+_TIME_BUCKET_LINE_RE = re.compile(
+    rf"^(\s*)（(\d{{4}}-\d{{2}}-\d{{2}})\s*{_TIME_PERIOD_PATTERN}([^）]*)）\s*$"
+)
+
+
+def _summary_has_merged_time_bucket(text: str) -> bool:
+    """检测 DS 是否又写了“晚上至傍晚及之前”这类合并时间桶。"""
+    if not text:
+        return False
+    for line in str(text).splitlines():
+        m = _TIME_BUCKET_LINE_RE.match(line.strip())
+        if not m:
+            continue
+        tail = (m.group(4) or "").strip()
+        if tail and any(x in tail for x in ("至", "到", "及之前", "之前", "以后")):
+            return True
+    return False
+
+
+def _normalize_summary_time_buckets(text: str) -> str:
+    """
+    兜底清理时间桶标题：只修标题，不碰正文。
+    目的不是猜内容归属，而是避免坏标题继续传给下一轮总结。
+    """
+    if not text:
+        return text
+    out: list[str] = []
+    for line in str(text).splitlines():
+        m = _TIME_BUCKET_LINE_RE.match(line.strip())
+        if not m:
+            out.append(line)
+            continue
+        indent, date, period, tail = m.group(1), m.group(2), m.group(3), (m.group(4) or "").strip()
+        if tail and any(x in tail for x in ("至", "到", "及之前", "之前", "以后")):
+            out.append(f"{indent}（{date} {period}）")
+        else:
+            out.append(line)
+    return "\n".join(out).strip()
 
 
 def _ensure_summary_has_bucket(summary: str, bucket: str) -> str:
@@ -326,6 +385,12 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
             if not summary:
                 return None
             if not _summary_has_forbidden_second_person(summary):
+                if _summary_has_merged_time_bucket(summary):
+                    logger.warning("DeepSeek 总结命中合并时间桶 attempt=%s", attempt + 1)
+                    if attempt == 0:
+                        attempt_prompt = prompt + _SUMMARY_TIME_RETRY_INSTRUCTION
+                        continue
+                    summary = _normalize_summary_time_buckets(summary)
                 break
             logger.warning("DeepSeek 总结命中第二人称违规 attempt=%s", attempt + 1)
             if attempt == 0:
@@ -335,6 +400,7 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
             return None
         # 强制兜底：若 DS 没写时间段，这里补一行
         summary = _ensure_summary_has_bucket(summary, _latest_bucket_from_rounds(recent_4_rounds))
+        summary = _normalize_summary_time_buckets(summary)
         # 固定窗口：summary 始终受注入预算约束，按结构从最早内容开始一点点削
         return _trim_summary_to_budget(summary, budget)
     except Exception as e:
