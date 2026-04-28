@@ -3,15 +3,70 @@ import { apiJson } from "../api";
 import { useToast } from "../toast";
 
 type ToolCallItem = { id?: string; name?: string; arguments?: string; result?: string };
+type PromptCacheDebugEntry = {
+  request?: Record<string, unknown>;
+  usage?: Record<string, unknown>;
+};
 type ReasoningItem = {
   window_id?: string;
   index?: number;
   timestamp?: string;
   reasoning?: string;
+  cache_debug?: PromptCacheDebugEntry[];
   tool_calls?: ToolCallItem[];
 };
 type ReasoningResp = { ok?: boolean; window_id?: string; window_ids?: string[]; items?: ReasoningItem[]; count?: number };
 type TranslateResp = { ok?: boolean; translated?: string; error?: string };
+
+function debugValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "未返回";
+  return String(value);
+}
+
+function tokenValue(value: unknown) {
+  const raw = debugValue(value);
+  return raw === "未返回" ? raw : `≈${raw}`;
+}
+
+function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }) {
+  const items = Array.isArray(entries) ? entries.filter(Boolean).slice(-4) : [];
+  if (!items.length) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-[#f4c7d2] bg-[#fff4f7] px-3 py-2.5 text-[#7a2d45]">
+      <div className="mb-1.5 flex items-center justify-between gap-3">
+        <span className="text-[11px] font-bold">Prompt Cache</span>
+        <span className="shrink-0 text-[10px] text-[#a05a70]">调试</span>
+      </div>
+      <div className="space-y-2.5">
+        {items.map((entry, idx) => {
+          const req = entry?.request || {};
+          const usage = entry?.usage || {};
+          const cacheKey = req.prompt_cache_key ? "已设置" : "未设置";
+          return (
+            <div key={idx} className="space-y-1.5 text-[11px] leading-4">
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                <span className="font-semibold">第{idx + 1}次</span>
+                <span>cached_tokens={debugValue(usage.cached_tokens)}</span>
+                <span>prompt_tokens={debugValue(usage.prompt_tokens)}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-2.5 gap-y-1 text-[#8a4055]">
+                <span>static {tokenValue(req.static_prefix_est_tokens)}</span>
+                <span>dynamic {tokenValue(req.dynamic_system_est_tokens)}</span>
+                <span className="col-span-2">leading_system {tokenValue(req.leading_system_est_tokens)}</span>
+              </div>
+              <div className="break-words text-[#9b5368]">
+                model={debugValue(req.model)} · host={debugValue(req.upstream_host)} · prompt_cache_key={cacheKey}
+              </div>
+              {usage.usage_returned === false ? (
+                <div className="text-[#9b5368]">usage 未返回，需要看本地代理/上游是否透传。</div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export function ReasoningTab() {
   const toast = useToast();
@@ -160,6 +215,7 @@ export function ReasoningTab() {
         {items.map((r, i) => {
           const key = itemKey(r, i);
           const hasReasoning = Boolean(String(r.reasoning || "").trim());
+          const hasCacheDebug = Array.isArray(r.cache_debug) && r.cache_debug.length > 0;
           const hasTranslated = Boolean(String(translated[key] || "").trim());
           const open = Boolean(translationOpen[key]);
           return (
@@ -176,13 +232,15 @@ export function ReasoningTab() {
               <span className="text-[12px] font-medium text-gray-400">{formatTimelineTime(String(r.timestamp || ""))}</span>
             </div>
             <div className="content-box shadow-sm">
-              {String(r.reasoning || "").trim() ? (
+              {hasReasoning ? (
               <p className="mb-4 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-gray-700">
                 {String(r.reasoning || "")}
               </p>
               ) : (
                 <div className="mb-3 text-[12px] text-gray-400">本轮未返回思维链文本</div>
               )}
+
+              {hasCacheDebug ? <PromptCacheDebugCard entries={r.cache_debug} /> : null}
 
               {Array.isArray(r.tool_calls) && r.tool_calls.length ? (
                 <div className="space-y-3">

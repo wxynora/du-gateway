@@ -2014,42 +2014,12 @@ def miniapp_delete_round(window_id: str, round_index: int):
     return jsonify({"ok": ok, "window_id": window_id or "", "round_index": round_index})
 
 
-def _cache_debug_value(value) -> str:
-    return "未返回" if value is None or value == "" else str(value)
-
-
-def _format_cache_debug_for_reasoning(value) -> str:
+def _normalize_cache_debug_items(value) -> list[dict]:
     if isinstance(value, list):
-        items = [x for x in value if isinstance(x, dict)]
+        return [x for x in value if isinstance(x, dict)]
     elif isinstance(value, dict):
-        items = [value]
-    else:
-        items = []
-    if not items:
-        return ""
-    lines = ["【Prompt Cache 调试】"]
-    for idx, item in enumerate(items[-4:], 1):
-        req = item.get("request") if isinstance(item.get("request"), dict) else {}
-        usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
-        lines.append(
-            "第{idx}次：cached_tokens={cached}，prompt_tokens={prompt}，input_tokens={input_tokens}，"
-            "static≈{static_tokens} tokens，dynamic≈{dynamic_tokens} tokens，leading_system≈{leading_tokens} tokens，"
-            "model={model}，host={host}，prompt_cache_key={cache_key}".format(
-                idx=idx,
-                cached=_cache_debug_value(usage.get("cached_tokens")),
-                prompt=_cache_debug_value(usage.get("prompt_tokens")),
-                input_tokens=_cache_debug_value(usage.get("input_tokens")),
-                static_tokens=_cache_debug_value(req.get("static_prefix_est_tokens")),
-                dynamic_tokens=_cache_debug_value(req.get("dynamic_system_est_tokens")),
-                leading_tokens=_cache_debug_value(req.get("leading_system_est_tokens")),
-                model=_cache_debug_value(req.get("model")),
-                host=_cache_debug_value(req.get("upstream_host")),
-                cache_key="已设置" if req.get("prompt_cache_key") else "未设置",
-            )
-        )
-        if usage.get("usage_returned") is False:
-            lines.append("  usage 未返回：需要看本地代理/上游是否透传 usage。")
-    return "\n".join(lines).strip()
+        return [value]
+    return []
 
 
 @bp.route("/reasoning/latest", methods=["GET"])
@@ -2096,7 +2066,7 @@ def miniapp_reasoning_latest():
             ts = (r.get("timestamp") or "").strip()
             msgs = r.get("messages") or []
             reasoning_text = ""
-            cache_debug_text = ""
+            cache_debug_items: list[dict] = []
             tool_calls_out = []
             tool_results_map: dict[str, str] = {}
             for m in msgs:
@@ -2158,18 +2128,18 @@ def miniapp_reasoning_latest():
                         reasoning_text = val
                     elif m.get("reasoning_omitted") or m.get("reasoning_details"):
                         reasoning_text = "（模型已进行 adaptive thinking，但当前上游未返回可展示的思维链正文）"
-                if not cache_debug_text:
-                    cache_debug_text = _format_cache_debug_for_reasoning(m.get("cache_debug"))
-                if (reasoning_text or cache_debug_text) and tool_calls_out:
+                if not cache_debug_items:
+                    cache_debug_items = _normalize_cache_debug_items(m.get("cache_debug"))
+                if (reasoning_text or cache_debug_items) and tool_calls_out:
                     break
-            display_reasoning = "\n\n".join(x for x in (reasoning_text, cache_debug_text) if str(x or "").strip()).strip()
-            if display_reasoning or tool_calls_out:
+            if reasoning_text or cache_debug_items or tool_calls_out:
                 out.append(
                     {
                         "window_id": target,
                         "index": idx,
                         "timestamp": ts,
-                        "reasoning": display_reasoning,
+                        "reasoning": reasoning_text,
+                        "cache_debug": cache_debug_items,
                         "tool_calls": tool_calls_out,
                     }
                 )
