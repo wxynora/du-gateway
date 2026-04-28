@@ -1743,14 +1743,12 @@ function parseChatMessageTime(value: string): number {
 function latestHistoryTimestamp(messages: ChatDraftMessage[]): number {
   const list = Array.isArray(messages) ? messages : [];
   return list.reduce((latest, msg) => {
+    if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") {
+      return latest;
+    }
     const ts = parseChatMessageTime(String(msg?.createdAt || ""));
     return ts > latest ? ts : latest;
   }, 0);
-}
-
-function historyHasPending(messages: ChatDraftMessage[]): boolean {
-  const list = Array.isArray(messages) ? messages : [];
-  return list.some((msg) => String(msg?.status || "").trim().toLowerCase() === "pending");
 }
 
 function sortHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
@@ -1774,11 +1772,7 @@ function pickBetterHistory(primary: ChatDraftMessage[], fallback: ChatDraftMessa
   const fallbackScore = historyRenderableScore(fallback);
   const primaryLatest = latestHistoryTimestamp(primary);
   const fallbackLatest = latestHistoryTimestamp(fallback);
-  const primaryPending = historyHasPending(primary);
-  const fallbackPending = historyHasPending(fallback);
   if (primaryScore <= 0 && fallbackScore <= 0) return seed;
-  if (fallbackPending && !primaryPending) return fallback.length ? fallback : (primary.length ? primary : seed);
-  if (primaryPending && !fallbackPending) return primary.length ? primary : (fallback.length ? fallback : seed);
   if (fallbackLatest > primaryLatest) return fallback.length ? fallback : (primary.length ? primary : seed);
   if (primaryLatest > fallbackLatest) return primary.length ? primary : (fallback.length ? fallback : seed);
   if (fallbackScore > primaryScore) return fallback.length ? fallback : (primary.length ? primary : seed);
@@ -3367,7 +3361,7 @@ function MainChatScreen({
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
   const groupedMessages = groupChatMessages(messages);
-  const assistantTyping = messages.some(
+  const assistantTyping = sending && messages.some(
     (msg) => msg.role === "assistant" && String(msg.status || "").trim().toLowerCase() === "pending",
   );
   const searchMatches = useMemo<ChatSearchMatch[]>(() => {
