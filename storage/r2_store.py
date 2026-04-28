@@ -662,7 +662,7 @@ def mark_pc_commands_done(done_ids: list[str]) -> int:
             return 0
 
 
-_APP_ACTION_ALLOWLIST = {"create_system_alarm"}
+_APP_ACTION_ALLOWLIST = {"create_system_alarm", "create_calendar_event"}
 _APP_ACTION_HISTORY_MAX = 100
 _APP_ACTION_EXPIRES_DEFAULT = 900
 _APP_ACTION_EXPIRES_MIN = 30
@@ -704,7 +704,73 @@ def _trim_app_action_history(history: list) -> list:
     return rows[:_APP_ACTION_HISTORY_MAX]
 
 
+def _parse_app_action_datetime(value) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=BEIJING_TZ)
+    return dt
+
+
+def _normalize_calendar_event_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    title = str(src.get("title") or src.get("summary") or "渡的行程").strip() or "渡的行程"
+    if len(title) > 120:
+        title = title[:120]
+    all_day = bool(src.get("allDay") if "allDay" in src else src.get("all_day", False))
+    start = _parse_app_action_datetime(src.get("startAt") or src.get("start_at") or src.get("start_datetime") or src.get("datetime"))
+    if not start:
+        return None, "start_datetime/startAt 必须是 ISO 时间"
+
+    end = _parse_app_action_datetime(src.get("endAt") or src.get("end_at") or src.get("end_datetime"))
+    if not end:
+        try:
+            duration_minutes = int(src.get("durationMinutes") if "durationMinutes" in src else src.get("duration_minutes", 1440 if all_day else 60))
+        except Exception:
+            duration_minutes = 1440 if all_day else 60
+        if duration_minutes <= 0:
+            return None, "duration_minutes 必须大于 0"
+        end = start + timedelta(minutes=duration_minutes)
+    if end <= start:
+        return None, "end_datetime 必须晚于 start_datetime"
+
+    description = str(src.get("description") or src.get("note") or "").strip()
+    if len(description) > 1000:
+        description = description[:1000]
+    location = str(src.get("location") or "").strip()
+    if len(location) > 200:
+        location = location[:200]
+    try:
+        reminder_minutes = int(src.get("reminderMinutes") if "reminderMinutes" in src else src.get("reminder_minutes", 10))
+    except Exception:
+        reminder_minutes = 10
+    reminder_minutes = max(-1, min(10080, reminder_minutes))
+    notify = bool(src.get("notify", True))
+
+    start_bj = start.astimezone(BEIJING_TZ)
+    end_bj = end.astimezone(BEIJING_TZ)
+    return {
+        "title": title,
+        "startAt": start_bj.isoformat(),
+        "endAt": end_bj.isoformat(),
+        "startMillis": int(start.timestamp() * 1000),
+        "endMillis": int(end.timestamp() * 1000),
+        "allDay": all_day,
+        "description": description,
+        "location": location,
+        "reminderMinutes": reminder_minutes,
+        "notify": notify,
+    }, None
+
+
 def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    if action_type == "create_calendar_event":
+        return _normalize_calendar_event_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}

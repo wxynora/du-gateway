@@ -68,6 +68,19 @@ type SystemAlarmCreatedCard = {
   minute: number;
   title: string;
 };
+type CalendarEventCreatedCard = {
+  type: "calendar_event_created";
+  title: string;
+  startAt: string;
+  endAt?: string;
+  startMillis?: number;
+  endMillis?: number;
+  allDay?: boolean;
+  location?: string;
+  reminderMinutes?: number;
+  eventId?: number | string;
+};
+type SumiTalkSystemCard = SystemAlarmCreatedCard | CalendarEventCreatedCard;
 type DeviceItem = {
   id?: string;
   note?: string;
@@ -1430,7 +1443,7 @@ type ChatMessageGroup = {
   role: "user" | "assistant";
   createdAt: string;
   lastCreatedAt: string;
-  parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number }; alarmCard?: SystemAlarmCreatedCard | null }>;
+  parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number }; systemCard?: SumiTalkSystemCard | null }>;
 };
 
 type ChatSearchMatch = {
@@ -1495,10 +1508,16 @@ function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string
     if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") continue;
     const text = String(msg?.content || "").trim();
     if (!text) continue;
-    const alarmCard = firstSystemAlarmCard(text);
-    if (alarmCard) {
+    const systemCard = firstSystemCard(text);
+    if (systemCard?.type === "system_alarm_created") {
       return {
-        preview: `已创建 ${formatAlarmTime(alarmCard.hour, alarmCard.minute)} 系统闹钟`,
+        preview: `已创建 ${formatAlarmTime(systemCard.hour, systemCard.minute)} 系统闹钟`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
+    if (systemCard?.type === "calendar_event_created") {
+      return {
+        preview: `已创建系统行程：${systemCard.title}`,
         time: formatClockTime(String(msg?.createdAt || "").trim()),
       };
     }
@@ -1659,16 +1678,16 @@ function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
     const normalizedReasoning = String(msg?.reasoning || "").trim();
     if (!normalizedContent && !normalizedReasoning) continue;
     const segments = msg.role === "assistant"
-      ? splitSystemAlarmCardSegments(normalizedContent)
-      : [{ content: normalizedContent, alarmCard: null }];
-    const safeParts = (segments.length ? segments : [{ content: normalizedContent, alarmCard: null }])
-      .filter((segment) => String(segment.content || "").trim() || segment.alarmCard || normalizedReasoning)
+      ? splitSystemCardSegments(normalizedContent)
+      : [{ content: normalizedContent, systemCard: null }];
+    const safeParts = (segments.length ? segments : [{ content: normalizedContent, systemCard: null }])
+      .filter((segment) => String(segment.content || "").trim() || segment.systemCard || normalizedReasoning)
       .map((segment, index) => ({
         content: String(segment.content || "").trim(),
-        render: segment.alarmCard ? "plain" as const : detectMessageRender(msg.role, String(segment.content || "").trim()),
+        render: segment.systemCard ? "plain" as const : detectMessageRender(msg.role, String(segment.content || "").trim()),
         reasoning: index === 0 ? normalizedReasoning || undefined : undefined,
         tokenCount: index === 0 ? msg.tokenCount : undefined,
-        alarmCard: segment.alarmCard,
+        systemCard: segment.systemCard,
       }));
     const last = groups[groups.length - 1];
     if (last && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
@@ -1807,40 +1826,77 @@ function parseSystemAlarmCreatedCard(content: string): SystemAlarmCreatedCard | 
   }
 }
 
-function splitSystemAlarmCardSegments(content: string): Array<{ content: string; alarmCard: SystemAlarmCreatedCard | null }> {
+function parseCalendarEventCreatedCard(content: string): CalendarEventCreatedCard | null {
+  const raw = String(content || "").trim();
+  if (!raw.startsWith(SYSTEM_CARD_PREFIX) || !raw.endsWith(SYSTEM_CARD_SUFFIX)) return null;
+  const jsonText = raw.slice(SYSTEM_CARD_PREFIX.length, raw.length - SYSTEM_CARD_SUFFIX.length).trim();
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || parsed.type !== "calendar_event_created") return null;
+    const title = String(parsed.title || "渡的行程").trim() || "渡的行程";
+    const startAt = String(parsed.startAt || parsed.start_at || "").trim();
+    const startMillis = Number(parsed.startMillis || 0);
+    if (!startAt && (!Number.isFinite(startMillis) || startMillis <= 0)) return null;
+    const card: CalendarEventCreatedCard = {
+      type: "calendar_event_created",
+      title,
+      startAt,
+      endAt: String(parsed.endAt || parsed.end_at || "").trim() || undefined,
+      startMillis: Number.isFinite(startMillis) && startMillis > 0 ? Math.floor(startMillis) : undefined,
+      allDay: Boolean(parsed.allDay || parsed.all_day),
+    };
+    const endMillis = Number(parsed.endMillis || 0);
+    if (Number.isFinite(endMillis) && endMillis > 0) card.endMillis = Math.floor(endMillis);
+    const location = String(parsed.location || "").trim();
+    if (location) card.location = location;
+    const reminder = Number(parsed.reminderMinutes ?? parsed.reminder_minutes);
+    if (Number.isFinite(reminder)) card.reminderMinutes = Math.floor(reminder);
+    const eventId = String(parsed.eventId || "").trim();
+    if (eventId) card.eventId = eventId;
+    return card;
+  } catch {
+    return null;
+  }
+}
+
+function parseSumiTalkSystemCard(content: string): SumiTalkSystemCard | null {
+  return parseSystemAlarmCreatedCard(content) || parseCalendarEventCreatedCard(content);
+}
+
+function splitSystemCardSegments(content: string): Array<{ content: string; systemCard: SumiTalkSystemCard | null }> {
   const raw = String(content || "");
-  const out: Array<{ content: string; alarmCard: SystemAlarmCreatedCard | null }> = [];
+  const out: Array<{ content: string; systemCard: SumiTalkSystemCard | null }> = [];
   let cursor = 0;
   while (cursor < raw.length) {
     const start = raw.indexOf(SYSTEM_CARD_PREFIX, cursor);
     if (start < 0) {
       const rest = raw.slice(cursor).trim();
-      if (rest) out.push({ content: rest, alarmCard: null });
+      if (rest) out.push({ content: rest, systemCard: null });
       break;
     }
     const before = raw.slice(cursor, start).trim();
-    if (before) out.push({ content: before, alarmCard: null });
+    if (before) out.push({ content: before, systemCard: null });
     const end = raw.indexOf(SYSTEM_CARD_SUFFIX, start + SYSTEM_CARD_PREFIX.length);
     if (end < 0) {
       const rest = raw.slice(start).trim();
-      if (rest) out.push({ content: rest, alarmCard: null });
+      if (rest) out.push({ content: rest, systemCard: null });
       break;
     }
     const marker = raw.slice(start, end + SYSTEM_CARD_SUFFIX.length).trim();
-    const alarmCard = parseSystemAlarmCreatedCard(marker);
-    if (alarmCard) {
-      out.push({ content: marker, alarmCard });
+    const systemCard = parseSumiTalkSystemCard(marker);
+    if (systemCard) {
+      out.push({ content: marker, systemCard });
     } else {
-      out.push({ content: marker, alarmCard: null });
+      out.push({ content: marker, systemCard: null });
     }
     cursor = end + SYSTEM_CARD_SUFFIX.length;
   }
   return out;
 }
 
-function firstSystemAlarmCard(content: string): SystemAlarmCreatedCard | null {
-  for (const segment of splitSystemAlarmCardSegments(content)) {
-    if (segment.alarmCard) return segment.alarmCard;
+function firstSystemCard(content: string): SumiTalkSystemCard | null {
+  for (const segment of splitSystemCardSegments(content)) {
+    if (segment.systemCard) return segment.systemCard;
   }
   return null;
 }
@@ -1857,6 +1913,46 @@ function SystemAlarmCreatedBubble({ card, onOpen }: { card: SystemAlarmCreatedCa
       </div>
       <div className="text-[30px] font-bold leading-none text-gray-900">{formatAlarmTime(card.hour, card.minute)}</div>
       <div className="mt-2 text-[13px] font-medium leading-5 text-gray-700">{card.title}</div>
+    </button>
+  );
+}
+
+function formatCalendarCardTime(value?: string, millis?: number, allDay?: boolean): string {
+  const ts = Number.isFinite(Number(millis || 0)) && Number(millis || 0) > 0
+    ? Number(millis)
+    : Date.parse(String(value || ""));
+  if (!Number.isFinite(ts)) return allDay ? "全天" : "时间待确认";
+  const date = new Date(ts);
+  if (allDay) {
+    return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", weekday: "short" }).format(date);
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function CalendarEventCreatedBubble({ card, onOpen }: { card: CalendarEventCreatedCard; onOpen: () => void }) {
+  const start = formatCalendarCardTime(card.startAt, card.startMillis, card.allDay);
+  const end = card.endAt || card.endMillis ? formatCalendarCardTime(card.endAt, card.endMillis, card.allDay) : "";
+  return (
+    <button
+      className="block w-full max-w-[290px] rounded-[22px] border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-4 py-3 text-left shadow-[0_10px_30px_rgba(16,185,129,0.10)] transition-transform active:scale-[0.98]"
+      onClick={onOpen}
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-800">系统行程</span>
+        <span className="text-[11px] font-medium text-emerald-700">点击查看</span>
+      </div>
+      <div className="text-[15px] font-bold leading-5 text-gray-900">{card.title}</div>
+      <div className="mt-2 text-[13px] font-medium leading-5 text-gray-700">{end ? `${start} - ${end}` : start}</div>
+      {card.location ? <div className="mt-1 text-[12px] leading-5 text-gray-500">{card.location}</div> : null}
+      {typeof card.reminderMinutes === "number" && card.reminderMinutes >= 0 ? (
+        <div className="mt-2 text-[11px] font-medium text-emerald-700">提前 {card.reminderMinutes} 分钟提醒</div>
+      ) : null}
     </button>
   );
 }
@@ -2469,9 +2565,11 @@ function MainChatScreen({
     const matches: ChatSearchMatch[] = [];
     groupedMessages.forEach((group) => {
       group.parts.forEach((part, partIndex) => {
-        const searchable = part.alarmCard
-          ? `系统闹钟 ${formatAlarmTime(part.alarmCard.hour, part.alarmCard.minute)} ${part.alarmCard.title}`
-          : String(part.content || "");
+        const searchable = part.systemCard?.type === "system_alarm_created"
+          ? `系统闹钟 ${formatAlarmTime(part.systemCard.hour, part.systemCard.minute)} ${part.systemCard.title}`
+          : part.systemCard?.type === "calendar_event_created"
+            ? `系统行程 ${part.systemCard.title} ${part.systemCard.startAt || ""} ${part.systemCard.location || ""}`
+            : String(part.content || "");
         if (!searchable.toLowerCase().includes(query)) return;
         matches.push({
           id: getChatSearchMatchId(group.id, partIndex),
@@ -2648,11 +2746,21 @@ function MainChatScreen({
                               <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap leading-6">{part.reasoning}</div>
                             </details>
                           ) : null}
-                          {part.alarmCard ? (
+                          {part.systemCard?.type === "system_alarm_created" ? (
                             <SystemAlarmCreatedBubble
-                              card={part.alarmCard}
+                              card={part.systemCard}
                               onOpen={() => {
                                 void SumiOverlay.openSystemAlarms().catch((e) => toast(`打开系统闹钟失败：${e?.message || e}`));
+                              }}
+                            />
+                          ) : part.systemCard?.type === "calendar_event_created" ? (
+                            <CalendarEventCreatedBubble
+                              card={part.systemCard}
+                              onOpen={() => {
+                                void SumiOverlay.openCalendarEvent({
+                                  eventId: part.systemCard?.eventId,
+                                  startMillis: part.systemCard?.startMillis,
+                                }).catch((e) => toast(`打开系统日历失败：${e?.message || e}`));
                               }}
                             />
                           ) : (

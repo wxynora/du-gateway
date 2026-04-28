@@ -12,6 +12,7 @@ export interface SumiOverlayPlugin {
     notified?: boolean;
   }>;
   openSystemAlarms(): Promise<void>;
+  openCalendarEvent(options: { eventId?: number | string; startMillis?: number }): Promise<void>;
 }
 
 const native = registerPlugin<SumiOverlayPlugin>("SumiOverlay");
@@ -50,5 +51,10 @@ export const SumiOverlay = {
   async openSystemAlarms(): Promise<void> {
     if (Capacitor.getPlatform() !== "android") return;
     return native.openSystemAlarms();
+  },
+
+  async openCalendarEvent(options: { eventId?: number | string; startMillis?: number }): Promise<void> {
+    if (Capacitor.getPlatform() !== "android") return;
+    return native.openCalendarEvent(options);
   },
 };

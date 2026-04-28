@@ -5,12 +5,15 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.provider.Settings;
 import android.provider.AlarmClock;
+import android.provider.CalendarContract;
 import android.os.Build;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
@@ -136,6 +139,30 @@ public class OverlayControlPlugin extends Plugin {
         }
     }
 
+    @PluginMethod
+    public void openCalendarEvent(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        long eventId = 0L;
+        long startMillis = 0L;
+        try {
+            if (call.getData() != null) {
+                eventId = call.getData().optLong("eventId", 0L);
+                startMillis = call.getData().optLong("startMillis", 0L);
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            ctx.startActivity(buildOpenCalendarEventIntent(eventId, startMillis));
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("open_calendar_event_failed", e);
+        }
+    }
+
     private boolean isAppVisible(Context ctx) {
         try {
             return ctx.getSharedPreferences(FloatingBallService.PREFS_NAME, Context.MODE_PRIVATE)
@@ -147,6 +174,13 @@ public class OverlayControlPlugin extends Plugin {
 
     private Intent buildOpenSystemAlarmsIntent() {
         return new Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    }
+
+    private Intent buildOpenCalendarEventIntent(long eventId, long startMillis) {
+        Uri uri = eventId > 0L
+                ? ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId)
+                : Uri.parse("content://com.android.calendar/time/" + Math.max(1L, startMillis));
+        return new Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
     }
 
     private void showSystemAlarmCreatedNotification(Context ctx, int hour, int minute, String title) {

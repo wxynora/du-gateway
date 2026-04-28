@@ -6,10 +6,13 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.BroadcastReceiver;
+import android.content.ContentUris;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.database.Cursor;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.graphics.Rect;
@@ -18,6 +21,7 @@ import android.location.Criteria;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.net.Uri;
 import android.content.pm.ServiceInfo;
 import android.util.DisplayMetrics;
 import android.os.Build;
@@ -27,6 +31,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.AlarmClock;
+import android.provider.CalendarContract;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -732,6 +737,12 @@ public class FloatingBallService extends Service {
                 result.put("detail", detail);
                 return result;
             }
+            if ("create_calendar_event".equals(type)) {
+                JSONObject detail = createCalendarEventFromAction(payload == null ? new JSONObject() : payload);
+                result.put("status", "done");
+                result.put("detail", detail);
+                return result;
+            }
             result.put("status", "failed");
             result.put("error", "unknown_action");
             return result;
@@ -773,6 +784,119 @@ public class FloatingBallService extends Service {
         detail.put("title", title);
         detail.put("notified", notify);
         return detail;
+    }
+
+    private boolean hasCalendarPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private long resolveWritableCalendarId() throws Exception {
+        if (!hasCalendarPermission()) throw new IllegalStateException("calendar_permission_denied");
+        String[] projection = new String[] {
+                CalendarContract.Calendars._ID,
+                CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
+                CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
+        };
+        String selection = CalendarContract.Calendars.VISIBLE + "!=0 AND "
+                + CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL + ">="
+                + CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR;
+        try (Cursor cursor = getContentResolver().query(
+                CalendarContract.Calendars.CONTENT_URI,
+                projection,
+                selection,
+                null,
+                CalendarContract.Calendars._ID + " ASC")) {
+            if (cursor != null && cursor.moveToFirst()) {
+                return cursor.getLong(0);
+            }
+        }
+        throw new IllegalStateException("no_writable_calendar");
+    }
+
+    private JSONObject createCalendarEventFromAction(JSONObject payload) throws Exception {
+        long startMillis = payload.optLong("startMillis", 0L);
+        long endMillis = payload.optLong("endMillis", 0L);
+        if (startMillis <= 0L) throw new IllegalArgumentException("invalid_start_time");
+        if (endMillis <= startMillis) throw new IllegalArgumentException("invalid_end_time");
+        String title = String.valueOf(payload.optString("title", "渡的行程")).trim();
+        if (title.isEmpty()) title = "渡的行程";
+        String description = String.valueOf(payload.optString("description", "")).trim();
+        String location = String.valueOf(payload.optString("location", "")).trim();
+        boolean allDay = payload.optBoolean("allDay", false);
+        int reminderMinutes = payload.optInt("reminderMinutes", 10);
+        boolean notify = payload.optBoolean("notify", true) && !prefs.getBoolean(PREF_APP_VISIBLE, false);
+
+        long calendarId = resolveWritableCalendarId();
+        ContentValues values = new ContentValues();
+        values.put(CalendarContract.Events.CALENDAR_ID, calendarId);
+        values.put(CalendarContract.Events.TITLE, title);
+        values.put(CalendarContract.Events.DTSTART, startMillis);
+        values.put(CalendarContract.Events.DTEND, endMillis);
+        values.put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().getID());
+        values.put(CalendarContract.Events.ALL_DAY, allDay ? 1 : 0);
+        values.put(CalendarContract.Events.HAS_ALARM, reminderMinutes >= 0 ? 1 : 0);
+        if (!description.isEmpty()) values.put(CalendarContract.Events.DESCRIPTION, description);
+        if (!location.isEmpty()) values.put(CalendarContract.Events.EVENT_LOCATION, location);
+
+        Uri eventUri = getContentResolver().insert(CalendarContract.Events.CONTENT_URI, values);
+        if (eventUri == null) throw new IllegalStateException("calendar_insert_failed");
+        long eventId = ContentUris.parseId(eventUri);
+
+        if (reminderMinutes >= 0) {
+            ContentValues reminder = new ContentValues();
+            reminder.put(CalendarContract.Reminders.EVENT_ID, eventId);
+            reminder.put(CalendarContract.Reminders.MINUTES, reminderMinutes);
+            reminder.put(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT);
+            getContentResolver().insert(CalendarContract.Reminders.CONTENT_URI, reminder);
+        }
+        if (notify) {
+            showCalendarEventCreatedNotification(eventId, startMillis, title);
+        }
+
+        JSONObject detail = new JSONObject();
+        detail.put("eventId", eventId);
+        detail.put("calendarId", calendarId);
+        detail.put("title", title);
+        detail.put("startMillis", startMillis);
+        detail.put("endMillis", endMillis);
+        detail.put("notified", notify);
+        return detail;
+    }
+
+    private Intent buildOpenCalendarEventIntent(long eventId, long startMillis) {
+        Uri uri = eventId > 0L
+                ? ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId)
+                : Uri.parse("content://com.android.calendar/time/" + Math.max(1L, startMillis));
+        return new Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    }
+
+    private void showCalendarEventCreatedNotification(long eventId, long startMillis, String title) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        PendingIntent pi =
+                PendingIntent.getActivity(
+                        this,
+                        (int) (System.currentTimeMillis() & 0x7fffffff),
+                        buildOpenCalendarEventIntent(eventId, startMillis),
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification notification =
+                new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+                        .setSmallIcon(R.mipmap.ic_launcher_round)
+                        .setContentTitle("已创建系统行程")
+                        .setContentText(title)
+                        .setStyle(new NotificationCompat.BigTextStyle().bigText(title))
+                        .setContentIntent(pi)
+                        .setAutoCancel(true)
+                        .setPriority(NotificationCompat.PRIORITY_HIGH)
+                        .setCategory(NotificationCompat.CATEGORY_EVENT)
+                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                        .build();
+        NotificationManagerCompat.from(this)
+                .notify((int) (System.currentTimeMillis() & 0x7fffffff), notification);
     }
 
     private void showSystemAlarmCreatedNotification(int hour, int minute, String title) {

@@ -104,6 +104,8 @@ public class MainActivity extends BridgeActivity {
         addIfMissing(needs, Manifest.permission.CAMERA);
         addIfMissing(needs, Manifest.permission.ACCESS_FINE_LOCATION);
         addIfMissing(needs, Manifest.permission.ACCESS_COARSE_LOCATION);
+        addIfMissing(needs, Manifest.permission.READ_CALENDAR);
+        addIfMissing(needs, Manifest.permission.WRITE_CALENDAR);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             addIfMissing(needs, Manifest.permission.POST_NOTIFICATIONS);

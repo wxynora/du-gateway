@@ -85,7 +85,7 @@ from services.html_preview_tools import (
     merge_html_preview_urls_into_assistant_text,
     missing_html_preview_url_suffix,
 )
-from services.device_action_tools import merge_system_alarm_cards_into_assistant_text
+from services.device_action_tools import merge_sumitalk_cards_into_assistant_text
 from services.conversation_followup import (
     build_followup_system_instruction,
     queue_followup,
@@ -1469,8 +1469,8 @@ def _merge_html_preview_into_nonstream_response(resp_json: dict, messages: list)
     return resp_json
 
 
-def _merge_system_alarm_card_into_nonstream_response(resp_json: dict, messages: list) -> dict:
-    """非流式 Sumitalk：若调用了 create_system_alarm，补入可渲染的闹钟卡片 marker。"""
+def _merge_sumitalk_card_into_nonstream_response(resp_json: dict, messages: list) -> dict:
+    """非流式 Sumitalk：若调用了 app 原生动作工具，补入可渲染的卡片 marker。"""
     if not resp_json or not isinstance(resp_json, dict):
         return resp_json
     choices = resp_json.get("choices") or []
@@ -1482,7 +1482,7 @@ def _merge_system_alarm_card_into_nonstream_response(resp_json: dict, messages: 
     ct = msg.get("content")
     if not isinstance(ct, str):
         return resp_json
-    merged = merge_system_alarm_cards_into_assistant_text(ct, messages)
+    merged = merge_sumitalk_cards_into_assistant_text(ct, messages)
     if merged != ct:
         msg["content"] = merged
     return resp_json
@@ -1840,7 +1840,7 @@ def chat_completions():
         )
         resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
         if is_sumitalk_request:
-            resp_json = _merge_system_alarm_card_into_nonstream_response(resp_json, body.get("messages") or [])
+            resp_json = _merge_sumitalk_card_into_nonstream_response(resp_json, body.get("messages") or [])
         # 剥离 content 里的 <think>/<thinking> 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
         # thinking 已合并入 message.reasoning，R2 存档的 msg_for_r2 独立 deepcopy，不受此影响。
         resp_json = _strip_thinking_from_response_json(resp_json)
