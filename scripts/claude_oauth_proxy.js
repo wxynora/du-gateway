@@ -54,6 +54,8 @@ const MODEL_MAP = {
   "gpt-4": "claude-sonnet-4-6",
   "gpt-3.5-turbo": "claude-haiku-4-5-20251001",
 };
+const IMAGE_DOWNLOAD_MAX_BYTES = parseInt(process.env.CLAUDE_IMAGE_MAX_BYTES || "10485760", 10);
+const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 let cachedOAuth = null;
 let cachedOAuthRaw = null;
@@ -247,7 +249,100 @@ function contentToText(content) {
   return String(content);
 }
 
-function openaiContentToAnthropic(content) {
+function inferImageMimeType(url, contentType) {
+  const cleanType = String(contentType || "").split(";")[0].trim().toLowerCase();
+  if (SUPPORTED_IMAGE_MIME_TYPES.has(cleanType)) return cleanType;
+  const path = (() => {
+    try {
+      return new URL(url).pathname.toLowerCase();
+    } catch {
+      return String(url || "").toLowerCase();
+    }
+  })();
+  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+  if (path.endsWith(".png")) return "image/png";
+  if (path.endsWith(".gif")) return "image/gif";
+  if (path.endsWith(".webp")) return "image/webp";
+  return "";
+}
+
+function downloadImageUrl(rawUrl, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirectCount > 5) {
+      reject(new Error("too many redirects"));
+      return;
+    }
+
+    let url;
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      reject(new Error("invalid image URL"));
+      return;
+    }
+    if (!["http:", "https:"].includes(url.protocol)) {
+      reject(new Error(`unsupported image URL protocol: ${url.protocol}`));
+      return;
+    }
+
+    const client = url.protocol === "http:" ? http : https;
+    const req = client.request(
+      {
+        hostname: url.hostname,
+        port: url.port || (url.protocol === "http:" ? 80 : 443),
+        path: `${url.pathname}${url.search}`,
+        method: "GET",
+        headers: {
+          Accept: "image/*,*/*;q=0.8",
+          "User-Agent": "claude-oauth-proxy/1.0",
+        },
+      },
+      (res) => {
+        const status = res.statusCode || 0;
+        if (status >= 300 && status < 400 && res.headers.location) {
+          res.resume();
+          const nextUrl = new URL(res.headers.location, url).toString();
+          downloadImageUrl(nextUrl, redirectCount + 1).then(resolve, reject);
+          return;
+        }
+        if (status < 200 || status >= 300) {
+          res.resume();
+          reject(new Error(`image download HTTP ${status}`));
+          return;
+        }
+
+        const mediaType = inferImageMimeType(url.toString(), res.headers["content-type"]);
+        if (!mediaType) {
+          res.resume();
+          reject(new Error(`unsupported image content-type: ${res.headers["content-type"] || "unknown"}`));
+          return;
+        }
+
+        const chunks = [];
+        let size = 0;
+        res.on("data", (chunk) => {
+          size += chunk.length;
+          if (size > IMAGE_DOWNLOAD_MAX_BYTES) {
+            req.destroy(new Error(`image too large: ${size} bytes`));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on("end", () => {
+          resolve({
+            media_type: mediaType,
+            data: Buffer.concat(chunks).toString("base64"),
+          });
+        });
+      }
+    );
+    req.setTimeout(30000, () => req.destroy(new Error("image download timeout")));
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function openaiContentToAnthropic(content) {
   if (content === null || content === undefined) return [];
   if (typeof content === "string") {
     return content ? [{ type: "text", text: content }] : [];
@@ -275,7 +370,11 @@ function openaiContentToAnthropic(content) {
           source: { type: "base64", media_type: match[1], data: match[2] },
         });
       } else if (url) {
-        out.push({ type: "text", text: `[image: ${url}]` });
+        const image = await downloadImageUrl(url);
+        out.push({
+          type: "image",
+          source: { type: "base64", media_type: image.media_type, data: image.data },
+        });
       }
     }
   }
@@ -319,7 +418,7 @@ function addToolResult(pending, msg) {
 // OpenAI -> Anthropic 格式转换
 // ──────────────────────────────────────
 
-function openaiToAnthropic(oai) {
+async function openaiToAnthropic(oai) {
   const model = MODEL_MAP[oai.model] || oai.model;
   const messages = [];
   const systemBlocks = [];
@@ -344,11 +443,11 @@ function openaiToAnthropic(oai) {
       addToolResult(pendingToolResults, msg);
     } else if (msg.role === "user") {
       flushToolResults();
-      const content = openaiContentToAnthropic(msg.content);
+      const content = await openaiContentToAnthropic(msg.content);
       messages.push({ role: "user", content: content.length ? content : [{ type: "text", text: "" }] });
     } else if (msg.role === "assistant") {
       flushToolResults();
-      const content = openaiContentToAnthropic(msg.content);
+      const content = await openaiContentToAnthropic(msg.content);
       if (Array.isArray(msg.thinking_blocks)) {
         content.unshift(...msg.thinking_blocks);
       }
@@ -410,6 +509,25 @@ function modelSupportsThinking(model) {
   return /claude-(opus|sonnet)-4|claude-3-7-sonnet/.test(String(model || ""));
 }
 
+function convertUsage(usage = {}) {
+  const inputTokens = usage.input_tokens || 0;
+  const outputTokens = usage.output_tokens || 0;
+  const cacheCreationInputTokens = usage.cache_creation_input_tokens || 0;
+  const cacheReadInputTokens = usage.cache_read_input_tokens || 0;
+  return {
+    prompt_tokens: inputTokens,
+    completion_tokens: outputTokens,
+    total_tokens: inputTokens + outputTokens,
+    cache_creation_input_tokens: cacheCreationInputTokens,
+    cache_read_input_tokens: cacheReadInputTokens,
+    anthropic_created: cacheCreationInputTokens,
+    anthropic_read: cacheReadInputTokens,
+    prompt_tokens_details: {
+      cached_tokens: cacheReadInputTokens,
+    },
+  };
+}
+
 function anthropicToOpenai(ant, model, isStream) {
   if (isStream) return createOpenaiStreamConverter(model)(ant);
 
@@ -463,11 +581,7 @@ function anthropicToOpenai(ant, model, isStream) {
               : "stop",
       },
     ],
-    usage: {
-      prompt_tokens: ant.usage?.input_tokens || 0,
-      completion_tokens: ant.usage?.output_tokens || 0,
-      total_tokens: (ant.usage?.input_tokens || 0) + (ant.usage?.output_tokens || 0),
-    },
+    usage: convertUsage(ant.usage),
   };
 }
 
@@ -477,6 +591,8 @@ function createOpenaiStreamConverter(model) {
   let nextToolIndex = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheCreationInputTokens = 0;
+  let cacheReadInputTokens = 0;
   const blocks = new Map();
   const thinkingBlocks = [];
 
@@ -494,6 +610,8 @@ function createOpenaiStreamConverter(model) {
       messageId = event.message?.id || messageId;
       inputTokens = event.message?.usage?.input_tokens || 0;
       outputTokens = event.message?.usage?.output_tokens || 0;
+      cacheCreationInputTokens = event.message?.usage?.cache_creation_input_tokens || 0;
+      cacheReadInputTokens = event.message?.usage?.cache_read_input_tokens || 0;
       return chunk({ role: "assistant", content: "" });
     }
 
@@ -555,6 +673,8 @@ function createOpenaiStreamConverter(model) {
     if (event.type === "message_delta") {
       const stopReason = event.delta?.stop_reason;
       outputTokens = event.usage?.output_tokens || outputTokens;
+      cacheCreationInputTokens = event.usage?.cache_creation_input_tokens || cacheCreationInputTokens;
+      cacheReadInputTokens = event.usage?.cache_read_input_tokens || cacheReadInputTokens;
       const fullThinkingBlocks = [
         ...thinkingBlocks,
         ...Array.from(blocks.values())
@@ -565,11 +685,12 @@ function createOpenaiStreamConverter(model) {
         fullThinkingBlocks.length ? { thinking_blocks: fullThinkingBlocks } : {},
         stopReason === "tool_use" ? "tool_calls" : stopReason === "max_tokens" ? "length" : "stop",
         {
-          usage: {
-            prompt_tokens: inputTokens,
-            completion_tokens: outputTokens,
-            total_tokens: inputTokens + outputTokens,
-          },
+          usage: convertUsage({
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            cache_creation_input_tokens: cacheCreationInputTokens,
+            cache_read_input_tokens: cacheReadInputTokens,
+          }),
         }
       );
     }
@@ -717,7 +838,7 @@ const server = http.createServer(async (req, res) => {
 
     if (isOpenAI) {
       // ─── OpenAI 兼容路径 ───
-      const anthropicBody = openaiToAnthropic(body);
+      const anthropicBody = await openaiToAnthropic(body);
       const requestModel = anthropicBody.model;
       processAnthropicBody(anthropicBody);
 
