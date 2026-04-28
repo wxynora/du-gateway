@@ -62,7 +62,7 @@ except Exception:
 CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
 CORS_ALLOW_HEADERS = os.environ.get(
     "CORS_ALLOW_HEADERS",
-    "Content-Type, Authorization, X-Telegram-Init-Data",
+    "Content-Type, Authorization, X-Telegram-Init-Data, X-Panel-Token, X-Force-Last4, X-Reply-Channel, X-Reply-Target, X-Window-Id",
 ).strip()
 
 

@@ -3271,7 +3271,6 @@ function MainChatScreen({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Force-Last4": "1",
         },
         body: JSON.stringify({
           ...requestBody,
