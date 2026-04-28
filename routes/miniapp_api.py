@@ -1482,13 +1482,32 @@ def miniapp_device_screen_state():
     event = str(body.get("event") or "").strip().lower()
     if event not in {"screen_on", "screen_off", "user_present", "app_active"}:
         return jsonify({"ok": False, "error": "event 无效"}), 400
+    interactive_raw = body.get("interactive")
+    snapshot_raw = body.get("snapshot")
+    interactive = interactive_raw is True or str(interactive_raw).strip().lower() in {"1", "true", "yes", "on"}
+    snapshot = snapshot_raw is True or str(snapshot_raw).strip().lower() in {"1", "true", "yes", "on"}
     patch = {
         "deviceId": device_id,
         "event": event,
-        "interactive": bool(body.get("interactive")),
+        "interactive": interactive,
         "occurredAt": str(body.get("occurred_at") or "").strip() or now_beijing_iso(),
+        "observedAt": str(body.get("observed_at") or "").strip() or now_beijing_iso(),
+        "snapshot": snapshot,
         "updatedAt": now_beijing_iso(),
     }
+    if event == "screen_off":
+        screen_off_since = str(body.get("screen_off_since") or body.get("screenOffSince") or "").strip()
+        if screen_off_since:
+            patch["screenOffSince"] = screen_off_since
+        try:
+            duration_ms = int(body.get("screen_off_duration_ms") or body.get("screenOffDurationMs") or 0)
+        except Exception:
+            duration_ms = 0
+        if duration_ms >= 0:
+            patch["screenOffDurationMs"] = duration_ms
+    elif event in {"screen_on", "user_present"} or (event == "app_active" and interactive):
+        patch["screenOffSince"] = ""
+        patch["screenOffDurationMs"] = 0
     ok = r2_store.merge_and_save_sense_bucket("screen", patch)
     return jsonify({"ok": bool(ok), "bucket": "screen", "device_id": device_id, "event": event})
 

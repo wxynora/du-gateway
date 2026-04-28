@@ -13,6 +13,7 @@ logger = get_logger(__name__)
 
 _MAX_SNAPSHOT_CHARS = 800
 _MAX_USAGE_APPS = 5
+_SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES = 60
 
 
 def _as_dict(v: Any) -> dict:
@@ -135,6 +136,45 @@ def _format_elapsed_from_iso(iso_str: str) -> str:
     return f"{days}天前"
 
 
+def _format_duration_minutes(minutes: int) -> str:
+    minutes = max(1, int(minutes))
+    if minutes < 60:
+        return f"{minutes}分钟"
+    hours = minutes // 60
+    rest_minutes = minutes % 60
+    if rest_minutes:
+        return f"{hours}小时{rest_minutes}分钟"
+    return f"{hours}小时"
+
+
+def _screen_off_duration_minutes(screen: dict) -> tuple[int | None, Any]:
+    if str(screen.get("event") or "").strip().lower() != "screen_off":
+        return None, None
+    since_raw = str(screen.get("screenOffSince") or screen.get("occurredAt") or "").strip()
+    since_dt = parse_iso_to_beijing(since_raw)
+    now_dt = parse_iso_to_beijing(now_beijing_iso())
+    if since_dt and now_dt:
+        minutes = int((now_dt - since_dt).total_seconds() // 60)
+        return max(0, minutes), since_dt
+    try:
+        duration_ms = int(screen.get("screenOffDurationMs") or 0)
+    except Exception:
+        duration_ms = 0
+    if duration_ms > 0:
+        return max(1, int(duration_ms // 60000)), None
+    return None, None
+
+
+def _format_sleep_guess_line(screen: dict) -> str | None:
+    minutes, since_dt = _screen_off_duration_minutes(screen)
+    if minutes is None or minutes < _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES:
+        return None
+    duration = _format_duration_minutes(minutes)
+    if since_dt:
+        return f"她可能睡着了：手机从 {since_dt.strftime('%H:%M')} 起连续熄屏 {duration}，期间没有明显手机操作。"
+    return f"她可能睡着了：手机已连续熄屏 {duration}，期间没有明显手机操作。"
+
+
 def _format_screen_line(screen: dict) -> str | None:
     event = str(screen.get("event") or "").strip().lower()
     if not event:
@@ -218,9 +258,10 @@ def format_sense_snapshot_for_system() -> str:
     music_line = _format_music_line(music)
     music_playing_line = _format_music_playing_line(music)
     screen_line = _format_screen_line(screen)
+    sleep_guess_line = _format_sleep_guess_line(screen)
     foreground_line = _format_foreground_line(foreground)
     usage_line = _format_usage_line(usage)
-    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line and not screen_line and not foreground_line and not usage_line:
+    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line and not screen_line and not sleep_guess_line and not foreground_line and not usage_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -240,7 +281,9 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(music_line)
     if music_playing_line:
         lines.append(music_playing_line)
-    if screen_line:
+    if sleep_guess_line:
+        lines.append(sleep_guess_line)
+    elif screen_line:
         lines.append(screen_line)
     if foreground_line:
         lines.append(foreground_line)

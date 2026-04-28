@@ -75,6 +75,7 @@ public class FloatingBallService extends Service {
     public static final String PREF_LAST_HISTORY_MESSAGE_KEY = "last_history_message_key";
     private static final String PREF_LAST_REPORTED_LOCATION_LAT = "last_reported_location_lat";
     private static final String PREF_LAST_REPORTED_LOCATION_LNG = "last_reported_location_lng";
+    private static final String PREF_SCREEN_OFF_SINCE_MS = "screen_off_since_ms";
 
     private static final String TAG = "SumiTalkOverlay";
     private static final String API_BASE = "https://duxy-home.com";
@@ -83,6 +84,7 @@ public class FloatingBallService extends Service {
     private static final int NOTIFICATION_ID = 2001;
     private static final long HISTORY_POLL_INTERVAL_MS = 20000L;
     private static final long LOCATION_REPORT_INTERVAL_MS = 15L * 60L * 1000L;
+    private static final long SCREEN_STATE_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long LOCATION_MAX_STALE_MS = 6L * 60L * 60L * 1000L;
     private static final float LOCATION_REPORT_MIN_DISTANCE_M = 5000f;
 
@@ -114,6 +116,14 @@ public class FloatingBallService extends Service {
                     mainHandler.postDelayed(this, LOCATION_REPORT_INTERVAL_MS);
                 }
             };
+    private final Runnable screenStateReportRunnable =
+            new Runnable() {
+                @Override
+                public void run() {
+                    reportScreenOffSnapshotIfNeeded();
+                    mainHandler.postDelayed(this, SCREEN_STATE_REPORT_INTERVAL_MS);
+                }
+            };
 
     @Override
     public void onCreate() {
@@ -128,6 +138,7 @@ public class FloatingBallService extends Service {
         applyOverlayVisibility();
         scheduleHistoryPolling();
         scheduleLocationReporting();
+        scheduleScreenStateReporting();
         reportBatterySnapshot();
     }
 
@@ -143,6 +154,7 @@ public class FloatingBallService extends Service {
         reportScreenState("app_active");
         scheduleHistoryPolling();
         scheduleLocationReporting();
+        scheduleScreenStateReporting();
         reportBatterySnapshot();
         return START_STICKY;
     }
@@ -256,6 +268,11 @@ public class FloatingBallService extends Service {
     private void scheduleLocationReporting() {
         mainHandler.removeCallbacks(locationReportRunnable);
         mainHandler.post(locationReportRunnable);
+    }
+
+    private void scheduleScreenStateReporting() {
+        mainHandler.removeCallbacks(screenStateReportRunnable);
+        mainHandler.post(screenStateReportRunnable);
     }
 
     /** Respect user toggle: hide overlay but keep foreground service running. */
@@ -570,38 +587,71 @@ public class FloatingBallService extends Service {
 
     private void reportScreenState(String eventType) {
         if (panelToken.isEmpty()) return;
+        long observedAtMs = System.currentTimeMillis();
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        boolean interactive = pm != null && pm.isInteractive();
+        long occurredAtMs = observedAtMs;
+        long screenOffSinceMs = 0L;
+        if ("screen_off".equals(eventType)) {
+            screenOffSinceMs = rememberScreenOffSince(observedAtMs);
+            occurredAtMs = screenOffSinceMs;
+        } else if ("screen_on".equals(eventType) || "user_present".equals(eventType) || ("app_active".equals(eventType) && interactive)) {
+            clearScreenOffSince();
+        }
+        postScreenState(eventType, interactive, occurredAtMs, observedAtMs, false);
+    }
+
+    private void reportScreenOffSnapshotIfNeeded() {
+        if (panelToken.isEmpty()) return;
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        boolean interactive = pm != null && pm.isInteractive();
+        if (interactive) return;
+        long observedAtMs = System.currentTimeMillis();
+        long screenOffSinceMs = rememberScreenOffSince(observedAtMs);
+        postScreenState("screen_off", false, screenOffSinceMs, observedAtMs, true);
+    }
+
+    private long rememberScreenOffSince(long fallbackMs) {
+        long existing = 0L;
+        try {
+            existing = prefs.getLong(PREF_SCREEN_OFF_SINCE_MS, 0L);
+        } catch (Exception ignored) {
+        }
+        if (existing <= 0L || existing > fallbackMs) {
+            existing = fallbackMs;
+            try {
+                prefs.edit().putLong(PREF_SCREEN_OFF_SINCE_MS, existing).apply();
+            } catch (Exception ignored) {
+            }
+        }
+        return existing;
+    }
+
+    private void clearScreenOffSince() {
+        try {
+            prefs.edit().remove(PREF_SCREEN_OFF_SINCE_MS).apply();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void postScreenState(String eventType, boolean interactive, long occurredAtMs, long observedAtMs, boolean snapshot) {
         ioExecutor.execute(
                 () -> {
-                    HttpURLConnection conn = null;
                     try {
-                        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-                        boolean interactive = pm != null && pm.isInteractive();
                         JSONObject payload = new JSONObject();
                         payload.put("event", eventType);
                         payload.put("device_id", panelDeviceId);
                         payload.put("interactive", interactive);
-                        payload.put("occurred_at", nowIso());
-
-                        URL url = new URL(API_BASE + "/miniapp-api/device-state/screen");
-                        conn = (HttpURLConnection) url.openConnection();
-                        conn.setRequestMethod("POST");
-                        conn.setConnectTimeout(10000);
-                        conn.setReadTimeout(10000);
-                        conn.setDoOutput(true);
-                        conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-                        conn.setRequestProperty("Authorization", "Bearer " + panelToken);
-                        byte[] body = payload.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                        try (OutputStream os = conn.getOutputStream()) {
-                            os.write(body);
+                        payload.put("occurred_at", isoFromMillis(occurredAtMs));
+                        payload.put("observed_at", isoFromMillis(observedAtMs));
+                        payload.put("snapshot", snapshot);
+                        if ("screen_off".equals(eventType) && occurredAtMs > 0L) {
+                            payload.put("screen_off_since", isoFromMillis(occurredAtMs));
+                            payload.put("screen_off_duration_ms", Math.max(0L, observedAtMs - occurredAtMs));
                         }
-                        int code = conn.getResponseCode();
-                        if (code < 200 || code >= 300) {
-                            Log.w(TAG, "screen state non-2xx code=" + code);
-                        }
+                        postJson("/miniapp-api/device-state/screen", payload);
                     } catch (Exception e) {
                         Log.w(TAG, "reportScreenState failed", e);
-                    } finally {
-                        if (conn != null) conn.disconnect();
                     }
                 });
     }
@@ -1027,9 +1077,13 @@ public class FloatingBallService extends Service {
     }
 
     private String nowIso() {
+        return isoFromMillis(System.currentTimeMillis());
+    }
+
+    private String isoFromMillis(long millis) {
         SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US);
         fmt.setTimeZone(TimeZone.getDefault());
-        return fmt.format(new java.util.Date());
+        return fmt.format(new java.util.Date(millis));
     }
 
     private int dp(int value) {
