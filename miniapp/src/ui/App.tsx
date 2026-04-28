@@ -2989,7 +2989,7 @@ function FullScreenPane({
 
   return (
     <div
-      className="absolute inset-0 z-30 flex flex-col bg-[#FDFDFD]"
+      className="absolute inset-0 z-30 flex w-full max-w-full flex-col overflow-x-hidden bg-[#FDFDFD]"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -3012,7 +3012,7 @@ function FullScreenPane({
           <div className="ml-2 text-[15px] font-medium text-gray-900">{title}</div>
         </div>
       )}
-      <div className={`min-h-0 flex-1 overflow-y-auto px-3.5 pb-4 ${headerMode === "simple" ? "pt-0" : "pt-[82px]"}`}>{children}</div>
+      <div className={`min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto px-3.5 pb-4 ${headerMode === "simple" ? "pt-0" : "pt-[82px]"}`}>{children}</div>
     </div>
   );
 }
@@ -3367,6 +3367,9 @@ function MainChatScreen({
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
   const groupedMessages = groupChatMessages(messages);
+  const assistantTyping = messages.some(
+    (msg) => msg.role === "assistant" && String(msg.status || "").trim().toLowerCase() === "pending",
+  );
   const searchMatches = useMemo<ChatSearchMatch[]>(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return [];
@@ -3426,7 +3429,7 @@ function MainChatScreen({
 
   return (
     <div
-      className="absolute inset-0 z-30 flex flex-col"
+      className="absolute inset-0 z-30 flex w-full max-w-full flex-col overflow-x-hidden"
       style={{
         fontFamily: chatFontFamily,
         backgroundColor: `rgba(248, 249, 250, ${Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100))})`,
@@ -3442,7 +3445,7 @@ function MainChatScreen({
           </button>
           <div className="ml-2 flex-1">
             <div className="font-medium text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
-            <ChatHeaderStatus sending={sending} />
+            <ChatHeaderStatus sending={assistantTyping} />
           </div>
           <button
             className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100"
@@ -3497,7 +3500,7 @@ function MainChatScreen({
 
       <div
         ref={messagesScrollRef}
-        className={`min-h-0 flex-1 overflow-y-auto px-3.5 pb-5 ${searchOpen ? "pt-[156px]" : "pt-[104px]"}`}
+        className={`min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto px-3.5 pb-5 ${searchOpen ? "pt-[156px]" : "pt-[104px]"}`}
       >
         <div className="space-y-5">
           {groupedMessages.map((group, index) => (
@@ -3555,7 +3558,7 @@ function MainChatScreen({
                           {part.reasoning ? (
                             <details open={expandReasoningByDefault} className="max-w-full rounded-[14px] border border-gray-100 bg-[#F7F7F7] px-3 py-2 text-[12px] text-gray-700">
                               <summary className="cursor-pointer list-none text-[12px] font-medium text-gray-600">思维链</summary>
-                              <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap leading-6">{part.reasoning}</div>
+                              <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words leading-6">{part.reasoning}</div>
                             </details>
                           ) : null}
                           {part.systemCard?.type === "system_alarm_created" ? (

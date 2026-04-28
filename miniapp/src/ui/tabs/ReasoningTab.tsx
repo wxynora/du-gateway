@@ -93,7 +93,7 @@ export function ReasoningTab() {
   }, []);
 
   return (
-    <div className="min-h-full bg-[#FDFDFD]">
+    <div className="min-h-full w-full max-w-full overflow-x-hidden bg-[#FDFDFD]">
       <style>{`
         .header-blur { background: rgba(255,255,255,.9); backdrop-filter: blur(8px); }
         .timeline-container { position: relative; }
@@ -154,8 +154,8 @@ export function ReasoningTab() {
         </div>
       ) : null}
 
-      <main className="px-6 pb-8">
-        <div className="mb-6">
+      <main className="w-full max-w-full overflow-x-hidden px-6 pb-8">
+        <div className="mb-6 w-full max-w-full overflow-x-hidden">
           <div className="timeline-container">
         {items.map((r, i) => {
           const key = itemKey(r, i);
@@ -177,7 +177,7 @@ export function ReasoningTab() {
             </div>
             <div className="content-box shadow-sm">
               {String(r.reasoning || "").trim() ? (
-              <p className="mb-4 whitespace-pre-wrap text-[15px] leading-relaxed text-gray-700">
+              <p className="mb-4 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-gray-700">
                 {String(r.reasoning || "")}
               </p>
               ) : (
@@ -230,7 +230,7 @@ export function ReasoningTab() {
               {hasTranslated && open ? (
                 <div className="mt-3 rounded-lg border border-blue-100/50 bg-blue-50/50 p-3">
                   <div className="mb-1 text-[11px] font-bold uppercase text-blue-700">中文翻译</div>
-                  <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-blue-900">{translated[key]}</p>
+                  <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-blue-900">{translated[key]}</p>
                 </div>
               ) : null}
               </div>
