@@ -11,12 +11,15 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.json.JSONObject;
 
 public class SumiAccessibilityService extends AccessibilityService {
     private static final String TAG = "SumiA11yService";
     private static final String API_BASE = "https://duxy-home.com";
     private static final long REPORT_MIN_INTERVAL_MS = 1500L;
+    private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private String lastPackageName = "";
     private long lastReportedAt = 0L;
 
@@ -45,7 +48,17 @@ public class SumiAccessibilityService extends AccessibilityService {
         // no-op
     }
 
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        ioExecutor.shutdownNow();
+    }
+
     private void reportForegroundApp(String packageName, String className) {
+        ioExecutor.execute(() -> doReportForegroundApp(packageName, className));
+    }
+
+    private void doReportForegroundApp(String packageName, String className) {
         SharedPreferences sp = getSharedPreferences(FloatingBallService.PREFS_NAME, MODE_PRIVATE);
         String panelToken = String.valueOf(sp.getString(FloatingBallService.PREF_PANEL_TOKEN, "")).trim();
         String deviceId = String.valueOf(sp.getString(FloatingBallService.PREF_DEVICE_ID, "")).trim();
