@@ -320,13 +320,12 @@ function Shell({
   const [showStayWithDu, setShowStayWithDu] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
-  const [showTodayNoteDetail, setShowTodayNoteDetail] = useState(false);
-  const [showDailyReportDetail, setShowDailyReportDetail] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
   const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
+  const [todayNoteRefreshing, setTodayNoteRefreshing] = useState(false);
   const [dailyRefreshing, setDailyRefreshing] = useState(false);
   const [tree, setTree] = useState<CyberTreeData | null>(null);
   const [deferHomeExtras, setDeferHomeExtras] = useState(false);
@@ -393,6 +392,24 @@ function Shell({
         if (j?.ok && j?.report) setDailyReport(j.report);
       })
       .catch(() => {});
+  const loadDailyWhisper = useCallback(
+    async (forceRefresh = false) => {
+      if (forceRefresh) setTodayNoteRefreshing(true);
+      try {
+        const path = forceRefresh ? "/miniapp-api/daily-whisper?refresh=1" : "/miniapp-api/daily-whisper";
+        const j = await apiJson<{ ok?: boolean; text?: string; error?: string }>(path);
+        if (!j?.ok) throw new Error(j?.error || "刷新失败");
+        const text = (j?.text || "").toString().trim();
+        if (text) setDailyWhisper(text);
+        if (forceRefresh) toast("Today note 已刷新");
+      } catch (e: any) {
+        if (forceRefresh) toast(`Today note 刷新失败：${e?.message || e}`);
+      } finally {
+        if (forceRefresh) setTodayNoteRefreshing(false);
+      }
+    },
+    [toast],
+  );
 
   useEffect(() => {
     // 不强制全屏，保持 Telegram 默认的半屏/弹层体验。
@@ -412,15 +429,10 @@ function Shell({
 
   useEffect(() => {
     if (!deferHomeExtras) return;
-    apiJson<{ ok?: boolean; text?: string }>("/miniapp-api/daily-whisper")
-      .then((j) => {
-        const text = (j?.text || "").toString().trim();
-        if (text) setDailyWhisper(text);
-      })
-      .catch(() => {});
+    void loadDailyWhisper(false);
     loadDailyReport();
     loadTree();
-  }, [deferHomeExtras]);
+  }, [deferHomeExtras, loadDailyWhisper]);
 
   useEffect(() => {
     if (mainTab !== "settings") return;
@@ -568,14 +580,6 @@ function Shell({
         setShowStayWithDu(false);
         return;
       }
-      if (showTodayNoteDetail) {
-        setShowTodayNoteDetail(false);
-        return;
-      }
-      if (showDailyReportDetail) {
-        setShowDailyReportDetail(false);
-        return;
-      }
       if (showTree) {
         setShowTree(false);
         return;
@@ -601,13 +605,11 @@ function Shell({
     showAlarm,
     showCallHub,
     showCorePrompt,
-    showDailyReportDetail,
     showDuDay,
     showPersonalization,
     showSchedule,
     showSettings,
     showStayWithDu,
-    showTodayNoteDetail,
     showTree,
   ]);
 
@@ -699,9 +701,11 @@ function Shell({
         duAvatarImage={duAvatarImage}
         onOpenDu={() => setActiveScreen("du")}
         onOpenWenyou={() => setActiveScreen("wenyou")}
-        onOpenTodayNote={() => setShowTodayNoteDetail(true)}
-        onOpenDailyReport={() => setShowDailyReportDetail(true)}
+        onRefreshTodayNote={() => {
+          if (!todayNoteRefreshing) void loadDailyWhisper(true);
+        }}
         onRefreshDailyReport={refreshDailyReport}
+        todayNoteRefreshing={todayNoteRefreshing}
         dailyRefreshing={dailyRefreshing}
       />
     );
@@ -718,9 +722,7 @@ function Shell({
     showDuDay ||
     showStayWithDu ||
     showTree ||
-    showCallHub ||
-    showTodayNoteDetail ||
-    showDailyReportDetail;
+    showCallHub;
 
   return (
     <div className="relative min-h-dvh safe-bottom overflow-hidden bg-[#FDFDFD] text-gray-900">
@@ -850,33 +852,6 @@ function Shell({
       {showStayWithDu ? (
         <FullScreenPane title="Stay with Du" accent="neutral" headerMode="simple" onBack={() => setShowStayWithDu(false)}>
           <StayWithDuScreen />
-        </FullScreenPane>
-      ) : null}
-      {showTodayNoteDetail ? (
-        <FullScreenPane title="Today note" accent="neutral" onBack={() => setShowTodayNoteDetail(false)}>
-          <div className="rounded-[20px] border border-white/60 bg-[rgba(255,255,255,0.9)] px-4 py-4 text-[14px] leading-7 text-cream-text shadow-[0_8px_20px_rgba(44,34,24,0.05)]">
-            {dailyWhisper || "今天还没有新的 note。"}
-          </div>
-        </FullScreenPane>
-      ) : null}
-      {showDailyReportDetail ? (
-        <FullScreenPane title="日报摘要" accent="neutral" onBack={() => setShowDailyReportDetail(false)}>
-          <div className="rounded-[20px] border border-white/60 bg-[rgba(255,255,255,0.9)] px-4 py-4 shadow-[0_8px_20px_rgba(44,34,24,0.05)]">
-            <div className="space-y-2 text-[13px] leading-6 text-cream-text">
-              <div>日期：{dailyReport?.report_date || "-"}</div>
-              <div>轮次：{String(dailyReport?.rounds || 0)}</div>
-              <div>关键词：{Array.isArray(dailyReport?.keywords) && dailyReport?.keywords?.length ? dailyReport?.keywords?.join(" / ") : "-"}</div>
-              <div className="whitespace-pre-wrap rounded-[18px] bg-[rgba(244,247,251,0.92)] px-3 py-3 text-cream-muted">
-                {dailyReport?.summary_text || "今天的日报还没生成。"}
-              </div>
-              <div>更新时间：{dailyReport?.generated_at || "-"}</div>
-            </div>
-            <div className="mt-3">
-              <Btn kind="blue" onClick={refreshDailyReport} disabled={dailyRefreshing}>
-                {dailyRefreshing ? "刷新中..." : "刷新日报"}
-              </Btn>
-            </div>
-          </div>
         </FullScreenPane>
       ) : null}
       {showTree ? (
@@ -1924,9 +1899,9 @@ function ChatsHome({
   duAvatarImage,
   onOpenDu,
   onOpenWenyou,
-  onOpenTodayNote,
-  onOpenDailyReport,
+  onRefreshTodayNote,
   onRefreshDailyReport,
+  todayNoteRefreshing,
   dailyRefreshing,
 }: {
   dailyWhisper: string;
@@ -1934,9 +1909,9 @@ function ChatsHome({
   duAvatarImage: string;
   onOpenDu: () => void;
   onOpenWenyou: () => void;
-  onOpenTodayNote: () => void;
-  onOpenDailyReport: () => void;
+  onRefreshTodayNote: () => void;
   onRefreshDailyReport: () => void;
+  todayNoteRefreshing: boolean;
   dailyRefreshing: boolean;
 }) {
   const [duPreview, setDuPreview] = useState("主会话");
@@ -2001,9 +1976,17 @@ function ChatsHome({
       <div className="px-4">
         <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">会话</h1>
         <div className="space-y-5">
-          <SummaryBlock label="Today Note" text={dailyWhisper || "今天还没有新的 note。"} onClick={onOpenTodayNote} />
+          <SummaryBlock
+            label="Today Note"
+            text={todayNoteRefreshing ? "正在刷新..." : dailyWhisper || "今天还没有新的 note。"}
+            onClick={onRefreshTodayNote}
+          />
           <div className="ml-3 h-px w-full bg-gray-50" />
-          <SummaryBlock label="日报摘要" text={reportSummary} onClick={onOpenDailyReport} />
+          <SummaryBlock
+            label="日报摘要"
+            text={dailyRefreshing ? "正在刷新..." : reportSummary}
+            onClick={onRefreshDailyReport}
+          />
         </div>
       </div>
 
