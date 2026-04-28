@@ -716,8 +716,9 @@ def _stream_forward_to_ai(body: dict, headers: dict):
     req_headers = {"Content-Type": "application/json"}
     # 上游尽量禁用压缩：避免 gzip/deflate 造成上游缓冲、攒包后才吐，降低流式不确定性
     req_headers["Accept-Encoding"] = "identity"
-    if request.headers.get("Accept"):
-        req_headers["Accept"] = request.headers.get("Accept")
+    accept = str((headers or {}).get("Accept") or "").strip()
+    if accept:
+        req_headers["Accept"] = accept
     body_send = dict(body)
     body_send["stream"] = True
     # 若未带 max_tokens 或过小，则设下限，避免中转站默认截断
