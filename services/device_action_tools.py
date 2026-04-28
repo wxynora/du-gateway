@@ -2,6 +2,7 @@ import json
 import re
 import time
 import zlib
+from datetime import datetime, timedelta
 
 from storage import r2_store
 
@@ -16,9 +17,10 @@ TOOL_CREATE_SYSTEM_ALARM = {
     "function": {
         "name": "create_system_alarm",
         "description": (
-            "在老婆手机上创建 Android 系统闹钟，不是网关日历提醒。"
+            "在老婆手机上创建 Android 系统闹钟，并同步创建一条 SumiTalk 内部闹钟。"
             "只有老婆明确要求设置手机系统闹钟/叫醒闹钟时调用；普通提醒仍用 schedule_create。"
             "系统闹钟只支持 hour/minute，手机会设置为下一次到达该时间的闹钟。"
+            "同步是单向的：直接创建 SumiTalk 内部闹钟不会反向创建系统闹钟。"
         ),
         "parameters": {
             "type": "object",
@@ -43,9 +45,10 @@ TOOL_CREATE_CALENDAR_EVENT = {
     "function": {
         "name": "create_calendar_event",
         "description": (
-            "在老婆手机系统日历里直接创建行程，不是网关提醒。"
+            "在老婆手机系统日历里直接创建行程，并同步创建一条 SumiTalk 内部行程。"
             "只有老婆明确要求把某件事加入手机日历/系统行程时调用；普通到点提醒仍用 schedule_create。"
             "必须给出开始时间；结束时间可给 end_datetime，或给 duration_minutes。"
+            "同步是单向的：直接创建 SumiTalk 内部行程不会反向创建系统日历。"
         ),
         "parameters": {
             "type": "object",
@@ -99,6 +102,87 @@ def build_calendar_event_card(payload: dict) -> str:
     return f"{SUMITALK_CARD_PREFIX}{json.dumps(card, ensure_ascii=False, separators=(',', ':'))}{SUMITALK_CARD_SUFFIX}"
 
 
+def _notify_schedule_runtime_changed() -> None:
+    try:
+        from services.schedule_runtime import notify_schedule_changed
+        notify_schedule_changed()
+    except Exception:
+        pass
+
+
+def _next_beijing_alarm_datetime(hour: int, minute: int) -> str:
+    now = datetime.now(r2_store.BEIJING_TZ)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target = target + timedelta(days=1)
+    return target.isoformat()
+
+
+def _sync_system_alarm_to_sumitalk(item: dict, hour: int, minute: int, title: str) -> tuple[dict | None, str]:
+    if isinstance(item, dict) and item.get("duplicate"):
+        return None, "duplicate_action"
+    try:
+        schedule_item = r2_store.create_schedule_item(
+            title=title,
+            datetime_str=_next_beijing_alarm_datetime(hour, minute),
+            repeat="once",
+            note="由渡创建系统闹钟时同步创建",
+            enabled=True,
+            created_by="du",
+            target_role="wife",
+        )
+        if not schedule_item:
+            return None, "SumiTalk 闹钟同步创建失败"
+        _notify_schedule_runtime_changed()
+        return schedule_item, ""
+    except Exception as e:
+        return None, str(e)
+
+
+def _calendar_sync_note(payload: dict) -> str:
+    parts = ["由渡创建系统行程时同步创建"]
+    location = str(payload.get("location") or "").strip()
+    description = str(payload.get("description") or "").strip()
+    if location:
+        parts.append(f"地点：{location}")
+    if description:
+        parts.append(description)
+    reminder = payload.get("reminderMinutes")
+    try:
+        reminder_int = int(reminder)
+    except Exception:
+        reminder_int = None
+    if reminder_int is not None and reminder_int >= 0:
+        parts.append(f"系统日历提前 {reminder_int} 分钟提醒")
+    return "；".join(parts)
+
+
+def _sync_calendar_event_to_sumitalk(item: dict, payload: dict) -> tuple[dict | None, str]:
+    if isinstance(item, dict) and item.get("duplicate"):
+        return None, "duplicate_action"
+    src = payload if isinstance(payload, dict) else {}
+    title = str(src.get("title") or "渡的行程").strip() or "渡的行程"
+    start_at = str(src.get("startAt") or "").strip()
+    if not start_at:
+        return None, "系统行程缺少 startAt，未同步 SumiTalk 行程"
+    try:
+        schedule_item = r2_store.create_schedule_item(
+            title=title,
+            datetime_str=start_at,
+            repeat="once",
+            note=_calendar_sync_note(src),
+            enabled=True,
+            created_by="du",
+            target_role="wife",
+        )
+        if not schedule_item:
+            return None, "SumiTalk 行程同步创建失败"
+        _notify_schedule_runtime_changed()
+        return schedule_item, ""
+    except Exception as e:
+        return None, str(e)
+
+
 def execute_create_system_alarm(arguments: dict) -> str:
     args = arguments if isinstance(arguments, dict) else {}
     try:
@@ -124,7 +208,13 @@ def execute_create_system_alarm(arguments: dict) -> str:
     )
     if err or not item:
         return json.dumps({"ok": False, "error": err or "入队失败"}, ensure_ascii=False)
+    schedule_item, schedule_err = _sync_system_alarm_to_sumitalk(item, hour, minute, title)
     card = build_system_alarm_card(hour, minute, title)
+    note = "已交给 SumiTalk 安卓壳创建系统闹钟；手机在线时通常会在几十秒内执行。"
+    if schedule_item:
+        note += "已同步写入 SumiTalk 闹钟。"
+    elif schedule_err and schedule_err != "duplicate_action":
+        note += f"SumiTalk 闹钟同步失败：{schedule_err}"
     return json.dumps(
         {
             "ok": True,
@@ -134,8 +224,11 @@ def execute_create_system_alarm(arguments: dict) -> str:
             "hour": hour,
             "minute": minute,
             "title": title,
+            "sumitalk_schedule_synced": bool(schedule_item),
+            "sumitalk_schedule_item_id": (schedule_item or {}).get("id") if isinstance(schedule_item, dict) else "",
+            "sumitalk_schedule_error": "" if schedule_err == "duplicate_action" else schedule_err,
             "sumitalk_card": card,
-            "note": "已交给 SumiTalk 安卓壳创建系统闹钟；手机在线时通常会在几十秒内执行。",
+            "note": note,
         },
         ensure_ascii=False,
     )
@@ -166,7 +259,13 @@ def execute_create_calendar_event(arguments: dict) -> str:
     if err or not item:
         return json.dumps({"ok": False, "error": err or "入队失败"}, ensure_ascii=False)
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    schedule_item, schedule_err = _sync_calendar_event_to_sumitalk(item, payload)
     card = build_calendar_event_card(payload)
+    note = "已交给 SumiTalk 安卓壳写入手机系统日历；手机在线时通常会在几十秒内执行。"
+    if schedule_item:
+        note += "已同步写入 SumiTalk 行程。"
+    elif schedule_err and schedule_err != "duplicate_action":
+        note += f"SumiTalk 行程同步失败：{schedule_err}"
     return json.dumps(
         {
             "ok": True,
@@ -177,8 +276,11 @@ def execute_create_calendar_event(arguments: dict) -> str:
             "startAt": payload.get("startAt"),
             "endAt": payload.get("endAt"),
             "location": payload.get("location") or "",
+            "sumitalk_schedule_synced": bool(schedule_item),
+            "sumitalk_schedule_item_id": (schedule_item or {}).get("id") if isinstance(schedule_item, dict) else "",
+            "sumitalk_schedule_error": "" if schedule_err == "duplicate_action" else schedule_err,
             "sumitalk_card": card,
-            "note": "已交给 SumiTalk 安卓壳写入手机系统日历；手机在线时通常会在几十秒内执行。",
+            "note": note,
         },
         ensure_ascii=False,
     )
@@ -199,7 +301,12 @@ def extract_sumitalk_cards_from_messages(messages: list) -> list[str]:
             parsed = json.loads(raw)
             if not isinstance(parsed, dict):
                 return
-            if str(parsed.get("type") or "").strip() not in {"system_alarm_created", "calendar_event_created"}:
+            if str(parsed.get("type") or "").strip() not in {
+                "system_alarm_created",
+                "calendar_event_created",
+                "travel_plan_form",
+                "travel_plan_result",
+            }:
                 return
         except Exception:
             return

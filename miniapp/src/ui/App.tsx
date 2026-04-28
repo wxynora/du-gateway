@@ -80,7 +80,52 @@ type CalendarEventCreatedCard = {
   reminderMinutes?: number;
   eventId?: number | string;
 };
-type SumiTalkSystemCard = SystemAlarmCreatedCard | CalendarEventCreatedCard;
+type TravelPlanPreference = "auto" | "transit" | "taxi";
+type TravelPlanWalkPreference = "low" | "medium" | "high";
+type TravelPlanFormCard = {
+  type: "travel_plan_form";
+  title: string;
+  prompt?: string;
+  city?: string;
+  destinations?: string[];
+  food?: string;
+  prefer?: TravelPlanPreference;
+  walk?: TravelPlanWalkPreference;
+};
+type TravelPlanRouteSummary = {
+  ok?: boolean;
+  duration?: string;
+  distance?: string;
+  walking?: string;
+  costYuan?: number;
+  taxiCostYuan?: number;
+  steps?: string[];
+  error?: string;
+};
+type TravelPlanResultLeg = {
+  from: string;
+  to: string;
+  mode?: string;
+  reason?: string;
+  transit?: TravelPlanRouteSummary;
+  driving?: TravelPlanRouteSummary;
+  links?: {
+    navi?: string;
+    taxi?: string;
+  };
+  summary?: string[];
+};
+type TravelPlanResultCard = {
+  type: "travel_plan_result";
+  title: string;
+  origin?: string;
+  destinations?: string[];
+  optimized?: boolean;
+  legs?: TravelPlanResultLeg[];
+  personalMapUrl?: string;
+  note?: string;
+};
+type SumiTalkSystemCard = SystemAlarmCreatedCard | CalendarEventCreatedCard | TravelPlanFormCard | TravelPlanResultCard;
 type DeviceItem = {
   id?: string;
   note?: string;
@@ -1521,6 +1566,18 @@ function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string
         time: formatClockTime(String(msg?.createdAt || "").trim()),
       };
     }
+    if (systemCard?.type === "travel_plan_form") {
+      return {
+        preview: `填写${systemCard.title || "出行规划"}表单`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
+    if (systemCard?.type === "travel_plan_result") {
+      return {
+        preview: `${systemCard.title || "渡安排好了"}：${(systemCard.destinations || []).join("、") || "路线"}`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
     return {
       preview: text,
       time: formatClockTime(String(msg?.createdAt || "").trim()),
@@ -1859,8 +1916,109 @@ function parseCalendarEventCreatedCard(content: string): CalendarEventCreatedCar
   }
 }
 
+function normalizeTravelPrefer(value: unknown): TravelPlanPreference {
+  const raw = String(value || "").trim();
+  if (raw === "transit" || raw === "taxi") return raw;
+  return "auto";
+}
+
+function normalizeTravelWalk(value: unknown): TravelPlanWalkPreference {
+  const raw = String(value || "").trim();
+  if (raw === "low" || raw === "high") return raw;
+  return "medium";
+}
+
+function parseTravelPlanFormCard(content: string): TravelPlanFormCard | null {
+  const raw = String(content || "").trim();
+  if (!raw.startsWith(SYSTEM_CARD_PREFIX) || !raw.endsWith(SYSTEM_CARD_SUFFIX)) return null;
+  const jsonText = raw.slice(SYSTEM_CARD_PREFIX.length, raw.length - SYSTEM_CARD_SUFFIX.length).trim();
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || parsed.type !== "travel_plan_form") return null;
+    const destinations = Array.isArray(parsed.destinations)
+      ? parsed.destinations.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 6)
+      : [];
+    return {
+      type: "travel_plan_form",
+      title: String(parsed.title || "出行规划").trim() || "出行规划",
+      prompt: String(parsed.prompt || "").trim() || undefined,
+      city: String(parsed.city || "").trim() || undefined,
+      destinations,
+      food: String(parsed.food || "").trim() || undefined,
+      prefer: normalizeTravelPrefer(parsed.prefer),
+      walk: normalizeTravelWalk(parsed.walk),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseStringList(value: unknown, limit = 8): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, limit);
+}
+
+function parseTravelRouteSummary(value: unknown): TravelPlanRouteSummary {
+  if (!value || typeof value !== "object") return {};
+  const raw = value as Record<string, unknown>;
+  const costYuan = Number(raw.costYuan ?? raw.cost_yuan);
+  const taxiCostYuan = Number(raw.taxiCostYuan ?? raw.taxi_cost_yuan);
+  const out: TravelPlanRouteSummary = {
+    ok: Boolean(raw.ok),
+    duration: String(raw.duration || "").trim() || undefined,
+    distance: String(raw.distance || "").trim() || undefined,
+    walking: String(raw.walking || raw.walking_distance || "").trim() || undefined,
+    steps: parseStringList(raw.steps, 6),
+    error: String(raw.error || "").trim() || undefined,
+  };
+  if (Number.isFinite(costYuan) && costYuan > 0) out.costYuan = costYuan;
+  if (Number.isFinite(taxiCostYuan) && taxiCostYuan > 0) out.taxiCostYuan = taxiCostYuan;
+  return out;
+}
+
+function parseTravelPlanResultCard(content: string): TravelPlanResultCard | null {
+  const raw = String(content || "").trim();
+  if (!raw.startsWith(SYSTEM_CARD_PREFIX) || !raw.endsWith(SYSTEM_CARD_SUFFIX)) return null;
+  const jsonText = raw.slice(SYSTEM_CARD_PREFIX.length, raw.length - SYSTEM_CARD_SUFFIX.length).trim();
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || parsed.type !== "travel_plan_result") return null;
+    const legs = Array.isArray(parsed.legs)
+      ? parsed.legs.map((item: unknown) => {
+        const leg = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+        const links = (leg.links && typeof leg.links === "object" ? leg.links : {}) as Record<string, unknown>;
+        return {
+          from: String(leg.from || "起点").trim() || "起点",
+          to: String(leg.to || "终点").trim() || "终点",
+          mode: String(leg.mode || "").trim() || undefined,
+          reason: String(leg.reason || "").trim() || undefined,
+          transit: parseTravelRouteSummary(leg.transit),
+          driving: parseTravelRouteSummary(leg.driving),
+          links: {
+            navi: String(links.navi || "").trim() || undefined,
+            taxi: String(links.taxi || "").trim() || undefined,
+          },
+          summary: parseStringList(leg.summary, 5),
+        };
+      }).slice(0, 6)
+      : [];
+    return {
+      type: "travel_plan_result",
+      title: String(parsed.title || "渡安排好了").trim() || "渡安排好了",
+      origin: String(parsed.origin || "").trim() || undefined,
+      destinations: parseStringList(parsed.destinations, 8),
+      optimized: Boolean(parsed.optimized),
+      legs,
+      personalMapUrl: String(parsed.personalMapUrl || parsed.personal_map_url || "").trim() || undefined,
+      note: String(parsed.note || "").trim() || undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function parseSumiTalkSystemCard(content: string): SumiTalkSystemCard | null {
-  return parseSystemAlarmCreatedCard(content) || parseCalendarEventCreatedCard(content);
+  return parseSystemAlarmCreatedCard(content) || parseCalendarEventCreatedCard(content) || parseTravelPlanFormCard(content) || parseTravelPlanResultCard(content);
 }
 
 function splitSystemCardSegments(content: string): Array<{ content: string; systemCard: SumiTalkSystemCard | null }> {
@@ -1904,7 +2062,7 @@ function firstSystemCard(content: string): SumiTalkSystemCard | null {
 function SystemAlarmCreatedBubble({ card, onOpen }: { card: SystemAlarmCreatedCard; onOpen: () => void }) {
   return (
     <button
-      className="block w-full max-w-[260px] rounded-[20px] border border-amber-100 bg-gradient-to-br from-amber-50 via-white to-orange-50 px-4 py-3 text-left shadow-[0_10px_30px_rgba(180,83,9,0.10)] transition-transform active:scale-[0.98]"
+      className="block w-full max-w-[260px] rounded-[20px] border border-gray-200 bg-white px-4 py-3 text-left shadow-[0_6px_18px_rgba(15,23,42,0.06)] transition-transform active:scale-[0.98]"
       onClick={onOpen}
     >
       <div className="mb-2 flex items-center justify-between gap-3">
@@ -1940,7 +2098,7 @@ function CalendarEventCreatedBubble({ card, onOpen }: { card: CalendarEventCreat
   const end = card.endAt || card.endMillis ? formatCalendarCardTime(card.endAt, card.endMillis, card.allDay) : "";
   return (
     <button
-      className="block w-full max-w-[290px] rounded-[22px] border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-sky-50 px-4 py-3 text-left shadow-[0_10px_30px_rgba(16,185,129,0.10)] transition-transform active:scale-[0.98]"
+      className="block w-full max-w-[290px] rounded-[22px] border border-gray-200 bg-white px-4 py-3 text-left shadow-[0_6px_18px_rgba(15,23,42,0.06)] transition-transform active:scale-[0.98]"
       onClick={onOpen}
     >
       <div className="mb-2 flex items-center justify-between gap-3">
@@ -1954,6 +2112,373 @@ function CalendarEventCreatedBubble({ card, onOpen }: { card: CalendarEventCreat
         <div className="mt-2 text-[11px] font-medium text-emerald-700">提前 {card.reminderMinutes} 分钟提醒</div>
       ) : null}
     </button>
+  );
+}
+
+function TravelPlanFormBubble({ card, onOpen }: { card: TravelPlanFormCard; onOpen: () => void }) {
+  const placeText = card.destinations?.length ? card.destinations.join("、") : "填写想去的地方";
+  return (
+    <button
+      className="block w-full max-w-[300px] rounded-[22px] border border-gray-200 bg-white px-4 py-3 text-left shadow-[0_6px_18px_rgba(15,23,42,0.06)] transition-transform active:scale-[0.98]"
+      onClick={onOpen}
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-800">{card.title || "出行规划"}</span>
+        <span className="text-[11px] font-medium text-sky-700">点击填写</span>
+      </div>
+      <div className="text-[15px] font-bold leading-5 text-gray-900">{placeText}</div>
+      <div className="mt-2 text-[12px] leading-5 text-gray-500">
+        {card.prompt || "填完后渡会综合位置、交通、吃饭和步行接受度来规划。"}
+      </div>
+    </button>
+  );
+}
+
+function splitTravelFormText(value: string): string[] {
+  return String(value || "")
+    .split(/[\n,，、;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function travelPreferLabel(value: TravelPlanPreference): string {
+  if (value === "transit") return "地铁公交优先";
+  if (value === "taxi") return "打车优先";
+  return "自动比较";
+}
+
+function travelWalkLabel(value: TravelPlanWalkPreference): string {
+  if (value === "low") return "少走路";
+  if (value === "high") return "可以多走";
+  return "可以走一点";
+}
+
+function TravelPlanFormModal({
+  card,
+  sending,
+  onClose,
+  onSubmit,
+}: {
+  card: TravelPlanFormCard;
+  sending: boolean;
+  onClose: () => void;
+  onSubmit: (content: string) => void;
+}) {
+  const toast = useToast();
+  const [useCurrentLocation, setUseCurrentLocation] = useState(true);
+  const [origin, setOrigin] = useState("");
+  const [city, setCity] = useState(card.city || "");
+  const [destinations, setDestinations] = useState((card.destinations || []).join("\n"));
+  const [food, setFood] = useState(card.food || "");
+  const [avoidFood, setAvoidFood] = useState("");
+  const [walk, setWalk] = useState<TravelPlanWalkPreference>(card.walk || "medium");
+  const [prefer, setPrefer] = useState<TravelPlanPreference>(card.prefer || "auto");
+  const [pace, setPace] = useState<"relaxed" | "normal" | "packed">("normal");
+  const [timeText, setTimeText] = useState("");
+  const [note, setNote] = useState("");
+
+  const inputClass = "w-full rounded-[16px] border border-gray-200 bg-white px-3 py-2.5 text-[14px] font-medium leading-5 text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-400";
+  const labelClass = "mb-1.5 text-[12px] font-semibold text-gray-700";
+  const segmentClass = (active: boolean) =>
+    `flex-1 rounded-[14px] border px-2.5 py-2 text-[12px] font-semibold transition-colors ${
+      active ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-600"
+    }`;
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const places = splitTravelFormText(destinations);
+    if (!places.length) {
+      toast("先填想去的地方");
+      return;
+    }
+    if (!useCurrentLocation && !origin.trim()) {
+      toast("填一下出发地，或者选用最近定位");
+      return;
+    }
+    const paceLabel = pace === "relaxed" ? "轻松一点" : pace === "packed" ? "多塞点" : "正常";
+    const lines = [
+      "帮我做一个出行规划，信息如下：",
+      `出发地：${useCurrentLocation ? "用我最近定位/当前位置" : origin.trim()}`,
+      city.trim() ? `城市：${city.trim()}` : "",
+      `想去的地方：${places.join("、")}`,
+      food.trim() ? `想吃的东西：${food.trim()}` : "想吃的东西：没特别要求",
+      avoidFood.trim() ? `不想吃/忌口：${avoidFood.trim()}` : "",
+      timeText.trim() ? `时间：${timeText.trim()}` : "",
+      `步行接受度：${travelWalkLabel(walk)}`,
+      `交通偏好：${travelPreferLabel(prefer)}`,
+      `节奏：${paceLabel}`,
+      note.trim() ? `备注：${note.trim()}` : "",
+      "请综合这些地点的位置距离安排游玩顺序，写清楚每段地铁/公交/打车建议，并把吃饭安排穿插进去。",
+    ].filter(Boolean);
+    onSubmit(lines.join("\n"));
+  };
+
+  return (
+    <Modal title={card.title || "出行规划"} onClose={onClose}>
+      <form className="space-y-3" onSubmit={handleSubmit}>
+        {card.prompt ? <div className="rounded-[16px] bg-white px-3 py-2 text-[12px] leading-5 text-gray-600">{card.prompt}</div> : null}
+        <div>
+          <div className={labelClass}>出发地</div>
+          <div className="mb-2 flex gap-2">
+            <button type="button" className={segmentClass(useCurrentLocation)} onClick={() => setUseCurrentLocation(true)}>
+              用最近定位
+            </button>
+            <button type="button" className={segmentClass(!useCurrentLocation)} onClick={() => setUseCurrentLocation(false)}>
+              手填
+            </button>
+          </div>
+          {!useCurrentLocation ? (
+            <input className={inputClass} value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="比如 上海虹桥站 / 酒店名" />
+          ) : null}
+        </div>
+        <div>
+          <div className={labelClass}>城市</div>
+          <input className={inputClass} value={city} onChange={(e) => setCity(e.target.value)} placeholder="比如 上海，可不填" />
+        </div>
+        <div>
+          <div className={labelClass}>想去的地方</div>
+          <textarea className={`${inputClass} min-h-[78px] resize-none`} value={destinations} onChange={(e) => setDestinations(e.target.value)} placeholder={"一行一个，比如\n上海迪士尼\n武康路"} />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <div className={labelClass}>想吃</div>
+            <input className={inputClass} value={food} onChange={(e) => setFood(e.target.value)} placeholder="甜品 / 火锅 / 咖啡" />
+          </div>
+          <div>
+            <div className={labelClass}>不想吃</div>
+            <input className={inputClass} value={avoidFood} onChange={(e) => setAvoidFood(e.target.value)} placeholder="可不填" />
+          </div>
+        </div>
+        <div>
+          <div className={labelClass}>时间</div>
+          <input className={inputClass} value={timeText} onChange={(e) => setTimeText(e.target.value)} placeholder="比如 明天 10:00 出发，晚上 8 点前回" />
+        </div>
+        <div>
+          <div className={labelClass}>步行接受度</div>
+          <div className="flex gap-2">
+            {(["low", "medium", "high"] as TravelPlanWalkPreference[]).map((item) => (
+              <button key={item} type="button" className={segmentClass(walk === item)} onClick={() => setWalk(item)}>
+                {travelWalkLabel(item)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className={labelClass}>交通偏好</div>
+          <div className="flex gap-2">
+            {(["auto", "transit", "taxi"] as TravelPlanPreference[]).map((item) => (
+              <button key={item} type="button" className={segmentClass(prefer === item)} onClick={() => setPrefer(item)}>
+                {travelPreferLabel(item)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className={labelClass}>节奏</div>
+          <div className="flex gap-2">
+            {[
+              ["relaxed", "轻松"] as const,
+              ["normal", "正常"] as const,
+              ["packed", "多塞点"] as const,
+            ].map(([value, label]) => (
+              <button key={value} type="button" className={segmentClass(pace === value)} onClick={() => setPace(value)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className={labelClass}>备注</div>
+          <textarea className={`${inputClass} min-h-[64px] resize-none`} value={note} onChange={(e) => setNote(e.target.value)} placeholder="比如 不想太赶 / 想拍照 / 预算控制一下" />
+        </div>
+        <button
+          type="submit"
+          className="w-full rounded-[18px] bg-gray-900 px-4 py-3 text-[14px] font-semibold text-white transition-opacity active:opacity-80 disabled:opacity-50"
+          disabled={sending}
+        >
+          让渡规划
+        </button>
+      </form>
+    </Modal>
+  );
+}
+
+function travelModeLabel(value?: string): string {
+  const raw = String(value || "").trim();
+  if (raw === "taxi") return "打车";
+  if (raw === "transit") return "地铁公交";
+  if (raw === "walking") return "步行";
+  return raw || "建议";
+}
+
+function formatYuan(value?: number): string {
+  if (!Number.isFinite(Number(value || 0)) || Number(value || 0) <= 0) return "";
+  return `${Number(value).toFixed(Number(value) % 1 === 0 ? 0 : 1)}元`;
+}
+
+function TravelPlanResultBubble({ card, onOpen }: { card: TravelPlanResultCard; onOpen: () => void }) {
+  const legs = card.legs || [];
+  const order = card.destinations?.length ? card.destinations : legs.map((leg) => leg.to).filter(Boolean);
+  return (
+    <button
+      className="relative block w-full max-w-[345px] text-left transition-transform active:scale-[0.98]"
+      onClick={onOpen}
+    >
+      <div className="absolute -left-[8px] top-5 h-0 w-0 border-y-[8px] border-r-[12px] border-y-transparent border-r-[#FFF9F2]" />
+      <div className="flex flex-col gap-4 overflow-hidden rounded-[28px] border border-[#FFEEDB] bg-[#FFF9F2] p-5 shadow-[0_10px_25px_-5px_rgba(255,180,100,0.10),0_8px_10px_-6px_rgba(255,180,100,0.10)]">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-100 text-[16px]">✨</div>
+            <span className="truncate text-[18px] font-bold text-[#5C4D3E]">{card.title || "渡安排好了"}</span>
+          </div>
+          <span className="shrink-0 text-[18px] leading-none text-[#A89A8B]">•••</span>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-1.5 text-[#8D7B68]">
+            <span className="shrink-0 text-[15px] text-orange-400">📍</span>
+            <span className="truncate text-[14px]">
+              {card.origin ? (
+                <>
+                  从 <span className="font-medium text-[#5C4D3E]">{card.origin}</span> 出发
+                </>
+              ) : (
+                "路线已规划"
+              )}
+            </span>
+          </div>
+          {card.optimized ? (
+            <div className="flex shrink-0 items-center gap-1 rounded-full border border-[#D0E7D2] bg-[#E8F5E9] px-2 py-0.5">
+              <span className="text-[10px] text-[#4CAF50]">✨</span>
+              <span className="text-[11px] font-bold text-[#4CAF50]">已顺路排序</span>
+            </div>
+          ) : null}
+        </div>
+
+        {order.length ? (
+          <div className="flex flex-wrap gap-2">
+            {order.slice(0, 4).map((name, index) => (
+              <div key={`${name}-${index}`} className="flex max-w-full items-center gap-2 rounded-xl border border-[#FFECDA] bg-white px-3 py-1.5 shadow-sm">
+                <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white ${index % 2 === 0 ? "bg-orange-400" : "bg-blue-300"}`}>
+                  {index + 1}
+                </span>
+                <span className="truncate text-[14px] font-medium text-[#5C4D3E]">{name}</span>
+              </div>
+            ))}
+            {order.length > 4 ? (
+              <div className="flex items-center rounded-xl border border-[#FFECDA] bg-white px-3 py-1.5 text-[12px] font-bold text-[#A89A8B] shadow-sm">
+                +{order.length - 4}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {legs.length ? (
+          <div className="relative py-1 pl-6">
+            <div className="absolute bottom-0 left-1.5 top-0 border-l-2 border-dashed border-orange-200" />
+            <div className="space-y-4">
+              {legs.slice(0, 3).map((leg, index) => {
+                const preferred = leg.mode === "taxi" ? leg.driving : leg.transit;
+                const brief = [
+                  travelModeLabel(leg.mode),
+                  preferred?.duration,
+                  leg.mode === "taxi" ? preferred?.distance : preferred?.walking ? `步行${preferred.walking}` : "",
+                ].filter(Boolean);
+                return (
+                  <div key={`${leg.from}-${leg.to}-${index}`} className="relative">
+                    <div className="absolute -left-[22px] top-1.5 h-2 w-2 rounded-full border-2 border-white bg-orange-400" />
+                    <div className="flex min-w-0 flex-col">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-[14px] font-bold text-[#5C4D3E]">{leg.from}</span>
+                        <span className="shrink-0 text-[12px] text-[#A89A8B]">→</span>
+                        <span className="truncate text-[14px] font-bold text-[#5C4D3E]">{leg.to}</span>
+                      </div>
+                      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[12px] text-[#A89A8B]">
+                        <span>{leg.mode === "taxi" ? "🚗" : "🚇"}</span>
+                        <span>{brief.join(" · ") || leg.reason || "路线详情见卡片"}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex items-center justify-center gap-1 border-t border-[#FFF1E0] pt-2">
+          <span className="text-[12px] text-[#A89A8B]">点击查看详情</span>
+          <span className="text-[12px] text-[#A89A8B]">›</span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function TravelPlanResultModal({ card, onClose }: { card: TravelPlanResultCard; onClose: () => void }) {
+  const legs = card.legs || [];
+  const order = card.destinations?.length ? card.destinations : legs.map((leg) => leg.to).filter(Boolean);
+  return (
+    <Modal title={card.title || "渡安排好了"} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="rounded-[18px] bg-white px-3 py-3">
+          <div className="text-[12px] font-semibold text-gray-500">顺序</div>
+          <div className="mt-2 space-y-1.5">
+            {card.origin ? <div className="text-[13px] font-semibold text-gray-900">0. {card.origin}</div> : null}
+            {order.map((name, index) => (
+              <div key={`${name}-${index}`} className="text-[13px] font-semibold text-gray-900">{index + 1}. {name}</div>
+            ))}
+          </div>
+          {card.optimized ? <div className="mt-2 text-[11px] text-indigo-700">已按位置做顺路排序</div> : null}
+        </div>
+        {legs.map((leg, index) => {
+          const transitCost = formatYuan(leg.transit?.costYuan);
+          const taxiCost = formatYuan(leg.transit?.taxiCostYuan);
+          return (
+            <div key={`${leg.from}-${leg.to}-${index}`} className="rounded-[18px] bg-white px-3 py-3">
+              <div className="text-[12px] font-semibold text-gray-500">第 {index + 1} 段</div>
+              <div className="mt-1 text-[15px] font-bold leading-5 text-gray-900">{leg.from}{" -> "}{leg.to}</div>
+              <div className="mt-2 rounded-[14px] bg-indigo-50 px-3 py-2 text-[12px] font-semibold leading-5 text-indigo-800">
+                推荐：{travelModeLabel(leg.mode)}{leg.reason ? `，${leg.reason}` : ""}
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <div className="rounded-[14px] bg-gray-50 px-3 py-2">
+                  <div className="text-[11px] font-semibold text-gray-500">地铁公交</div>
+                  <div className="mt-1 text-[12px] font-semibold leading-5 text-gray-800">
+                    {leg.transit?.ok ? [leg.transit.duration, leg.transit.walking ? `步行${leg.transit.walking}` : "", transitCost].filter(Boolean).join(" · ") : (leg.transit?.error || "无结果")}
+                  </div>
+                </div>
+                <div className="rounded-[14px] bg-gray-50 px-3 py-2">
+                  <div className="text-[11px] font-semibold text-gray-500">打车/驾车</div>
+                  <div className="mt-1 text-[12px] font-semibold leading-5 text-gray-800">
+                    {leg.driving?.ok ? [leg.driving.duration, leg.driving.distance, taxiCost ? `预估${taxiCost}` : ""].filter(Boolean).join(" · ") : (leg.driving?.error || "无结果")}
+                  </div>
+                </div>
+              </div>
+              {leg.transit?.steps?.length ? (
+                <div className="mt-2 space-y-1">
+                  {leg.transit.steps.map((step, stepIndex) => (
+                    <div key={`${step}-${stepIndex}`} className="text-[12px] leading-5 text-gray-600">{stepIndex + 1}. {step}</div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                {leg.links?.navi ? (
+                  <a className="rounded-full bg-gray-900 px-3 py-2 text-[12px] font-semibold text-white" href={leg.links.navi} target="_blank" rel="noreferrer">打开导航</a>
+                ) : null}
+                {leg.links?.taxi ? (
+                  <a className="rounded-full bg-gray-100 px-3 py-2 text-[12px] font-semibold text-gray-800" href={leg.links.taxi} target="_blank" rel="noreferrer">打开打车</a>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+        {card.personalMapUrl ? (
+          <a className="block rounded-[18px] bg-gray-900 px-4 py-3 text-center text-[13px] font-semibold text-white" href={card.personalMapUrl} target="_blank" rel="noreferrer">打开高德专属地图</a>
+        ) : null}
+        {card.note ? <div className="px-1 text-[11px] leading-5 text-gray-500">{card.note}</div> : null}
+      </div>
+    </Modal>
   );
 }
 
@@ -2198,16 +2723,63 @@ function FullScreenPane({
   accent,
   onBack,
   headerMode = "default",
+  edgeSwipeBack = false,
   children,
 }: {
   title: string;
   accent: "du" | "wenyou" | "neutral";
   onBack: () => void;
   headerMode?: "default" | "simple";
+  edgeSwipeBack?: boolean;
   children: React.ReactNode;
 }) {
+  const swipeRef = useRef({ tracking: false, startX: 0, startY: 0, latestX: 0, latestY: 0 });
+
+  function handleTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    if (!edgeSwipeBack) return;
+    const touch = e.touches[0];
+    if (!touch || touch.clientX > 36) {
+      swipeRef.current.tracking = false;
+      return;
+    }
+    swipeRef.current = {
+      tracking: true,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      latestX: touch.clientX,
+      latestY: touch.clientY,
+    };
+  }
+
+  function handleTouchMove(e: React.TouchEvent<HTMLDivElement>) {
+    if (!swipeRef.current.tracking) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    swipeRef.current.latestX = touch.clientX;
+    swipeRef.current.latestY = touch.clientY;
+  }
+
+  function handleTouchEnd() {
+    const swipe = swipeRef.current;
+    swipeRef.current.tracking = false;
+    if (!edgeSwipeBack || !swipe.tracking) return;
+    const dx = swipe.latestX - swipe.startX;
+    const dy = Math.abs(swipe.latestY - swipe.startY);
+    if (dx >= 72 && dx > dy * 1.5) {
+      onBack();
+    }
+  }
+
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-[#FDFDFD]">
+    <div
+      className="absolute inset-0 z-30 flex flex-col bg-[#FDFDFD]"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={() => {
+        swipeRef.current.tracking = false;
+      }}
+    >
       {headerMode === "simple" ? (
         <div className="border-b border-gray-100/50 bg-white px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)]">
           <button className="flex items-center gap-2 text-gray-900" onClick={onBack}>
@@ -2293,6 +2865,8 @@ function MainChatScreen({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
+  const [travelFormCard, setTravelFormCard] = useState<TravelPlanFormCard | null>(null);
+  const [travelResultCard, setTravelResultCard] = useState<TravelPlanResultCard | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
@@ -2462,8 +3036,8 @@ function MainChatScreen({
     };
   }, [deviceId, windowId]);
 
-  async function sendMessage() {
-    const content = input.trim();
+  async function sendChatContent(rawContent: string) {
+    const content = String(rawContent || "").trim();
     if (!content || sending) return;
     if (!windowId) {
       toast("当前还没拿到聊天窗口 ID，不能接入共享上下文");
@@ -2487,7 +3061,7 @@ function MainChatScreen({
     };
     const assistantId = `assistant-${baseTimestamp + 1}`;
     const assistantCreatedAt = new Date(baseTimestamp + 1).toISOString();
-    const nextMessages = [...messages, userMsg];
+    const nextMessages = [...messagesRef.current, userMsg];
     const draftMessages = [
       ...nextMessages,
       { id: assistantId, role: "assistant" as const, content: "", createdAt: assistantCreatedAt, status: "pending" as const },
@@ -2555,6 +3129,10 @@ function MainChatScreen({
     }
   }
 
+  async function sendMessage() {
+    await sendChatContent(input);
+  }
+
   const avatarClass = accent === "wenyou"
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
@@ -2569,7 +3147,11 @@ function MainChatScreen({
           ? `系统闹钟 ${formatAlarmTime(part.systemCard.hour, part.systemCard.minute)} ${part.systemCard.title}`
           : part.systemCard?.type === "calendar_event_created"
             ? `系统行程 ${part.systemCard.title} ${part.systemCard.startAt || ""} ${part.systemCard.location || ""}`
-            : String(part.content || "");
+            : part.systemCard?.type === "travel_plan_form"
+              ? `出行规划 ${part.systemCard.title} ${(part.systemCard.destinations || []).join(" ")}`
+              : part.systemCard?.type === "travel_plan_result"
+                ? `路线安排 ${part.systemCard.title} ${part.systemCard.origin || ""} ${(part.systemCard.destinations || []).join(" ")}`
+                : String(part.content || "");
         if (!searchable.toLowerCase().includes(query)) return;
         matches.push({
           id: getChatSearchMatchId(group.id, partIndex),
@@ -2763,6 +3345,16 @@ function MainChatScreen({
                                 }).catch((e) => toast(`打开系统日历失败：${e?.message || e}`));
                               }}
                             />
+                          ) : part.systemCard?.type === "travel_plan_form" ? (
+                            <TravelPlanFormBubble
+                              card={part.systemCard}
+                              onOpen={() => setTravelFormCard(part.systemCard as TravelPlanFormCard)}
+                            />
+                          ) : part.systemCard?.type === "travel_plan_result" ? (
+                            <TravelPlanResultBubble
+                              card={part.systemCard}
+                              onOpen={() => setTravelResultCard(part.systemCard as TravelPlanResultCard)}
+                            />
                           ) : (
                             <>
                               <div
@@ -2811,9 +3403,23 @@ function MainChatScreen({
 
       <div className="z-20 border-t border-gray-100 bg-white pb-[calc(env(safe-area-inset-bottom,24px))]">
         <div className={`overflow-hidden bg-white transition-all duration-300 ease-in-out ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
-          <div className="flex space-x-6 px-6 pb-2 pt-5">
+          <div className="flex space-x-5 px-6 pb-2 pt-5">
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
+              <ChatActionButton
+                label="出行规划"
+                onClick={() => {
+                  setPlusOpen(false);
+                  setTravelFormCard({
+                    type: "travel_plan_form",
+                    title: "出行规划",
+                    prompt: "把想去哪里、想吃什么、能不能走路填一下，渡再帮你排顺序和路线。",
+                    destinations: [],
+                    prefer: "auto",
+                    walk: "medium",
+                  });
+                }}
+              />
           </div>
         </div>
         <div className="flex items-end space-x-2 px-3 py-2.5">
@@ -2844,6 +3450,23 @@ function MainChatScreen({
           </button>
         </div>
       </div>
+      {travelFormCard ? (
+        <TravelPlanFormModal
+          card={travelFormCard}
+          sending={sending}
+          onClose={() => setTravelFormCard(null)}
+          onSubmit={(content) => {
+            setTravelFormCard(null);
+            void sendChatContent(content);
+          }}
+        />
+      ) : null}
+      {travelResultCard ? (
+        <TravelPlanResultModal
+          card={travelResultCard}
+          onClose={() => setTravelResultCard(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2852,7 +3475,7 @@ function ChatActionButton({ label, onClick }: { label: string; onClick: () => vo
   return (
     <button className="group flex flex-col items-center" onClick={onClick}>
       <div className="mb-2.5 flex h-[60px] w-[60px] items-center justify-center rounded-[20px] bg-[#F8F9FA] text-gray-600 transition-transform active:scale-95">
-        {label === "表情包" ? <SmileIconMini /> : <PhoneIconLarge />}
+        {label === "表情包" ? <SmileIconMini /> : label === "出行规划" ? <RouteIconMini /> : <PhoneIconLarge />}
       </div>
       <span className="text-[11px] font-medium tracking-wide text-gray-500">{label}</span>
     </button>
@@ -3271,6 +3894,10 @@ function PhoneIconLarge() {
 
 function SmileIconMini() {
   return <svg className="h-7 w-7 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><line x1="9" y1="9" x2="9.01" y2="9" /><line x1="15" y1="9" x2="15.01" y2="9" /></svg>;
+}
+
+function RouteIconMini() {
+  return <svg className="h-7 w-7 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="19" r="2" /><circle cx="18" cy="5" r="2" /><path d="M8 19h3a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7" /></svg>;
 }
 
 function FeatherIcon() {
@@ -3778,7 +4405,7 @@ function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogo
   }
 
   return (
-    <FullScreenPane title="设备管理" accent="neutral" onBack={onClose}>
+    <FullScreenPane title="设备管理" accent="neutral" onBack={onClose} edgeSwipeBack>
       <div className="px-2 pb-8 pt-2">
         <div className="px-1 pt-4">
           <div className="mb-4 flex items-center justify-between px-1">

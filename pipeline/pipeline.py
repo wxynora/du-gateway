@@ -1727,6 +1727,64 @@ def step_inject_forum_tools(body: dict) -> dict:
     return body
 
 
+def step_inject_amap_mcp_tools(body: dict) -> dict:
+    """
+    按最近用户消息关键词注入高德官方 MCP 出行工具。
+    """
+    from services.amap_mcp_tools import get_amap_mcp_tools_for_inject, should_inject_amap_mcp_tools
+
+    messages = body.get("messages") or []
+    last_user_text = ""
+    for m in reversed(messages):
+        if (m.get("role") or "").lower() != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            last_user_text = content
+        elif isinstance(content, list):
+            last_user_text = " ".join(
+                c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
+            )
+        break
+    if not should_inject_amap_mcp_tools(last_user_text):
+        return body
+
+    tools = get_amap_mcp_tools_for_inject()
+    if not tools:
+        return body
+
+    body = copy.deepcopy(body)
+    existing = body.get("tools")
+    if isinstance(existing, list):
+        existing_names = set()
+        for t in existing:
+            if isinstance(t, dict):
+                fn = t.get("function") or {}
+                if isinstance(fn, dict):
+                    name = fn.get("name")
+                    if name:
+                        existing_names.add(name)
+        for t in tools:
+            fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+            if isinstance(fn, dict):
+                name = fn.get("name")
+                if name and name not in existing_names:
+                    existing.append(t)
+    else:
+        body["tools"] = tools
+
+    body["tool_choice"] = body.get("tool_choice") or "auto"
+    hint = (
+        "\n\n【高德官方 MCP 出行工具规则】"
+        "如果老婆只是想让渡规划旅游/路线，但地点、吃饭、步行接受度等信息还不完整，先调用 open_travel_plan_form 弹出 SumiTalk 固定表单；"
+        "老婆问想去哪里、怎么坐地铁公交、怎么打车、怎么规划路线时，优先调用 amap_trip_plan 一次拿完整结果；"
+        "只有需要补查单个地点/天气/链接时，再调用 maps_* 高德工具。"
+        "交通路线、换乘站、耗时和打车费用必须基于工具结果，不要凭空编。"
+        "如果用户没说起点，优先结合已注入的最近定位；没有定位再追问起点。"
+    )
+    return _append_to_static_system(body, hint)
+
+
 def step_inject_websearch_tools(body: dict) -> dict:
     """
     当 WEBSEARCH_ENABLED=1 时，向 body 注入 web_search 工具。

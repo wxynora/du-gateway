@@ -59,6 +59,7 @@ from pipeline.pipeline import (
     step_inject_notion_search,
     step_inject_notion_tools,
     step_inject_forum_tools,
+    step_inject_amap_mcp_tools,
     step_inject_websearch_tools,
     step_inject_html_preview_tool,
     step_trim_messages_if_over_limit,
@@ -1632,6 +1633,7 @@ def chat_completions():
             body = step_inject_notion_search(body, window_id)
             body = step_inject_notion_tools(body)
             body = step_inject_forum_tools(body)
+            body = step_inject_amap_mcp_tools(body)
             body = step_inject_websearch_tools(body)
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
     body = step_trim_messages_if_over_limit(body)

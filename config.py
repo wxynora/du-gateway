@@ -152,6 +152,10 @@ WEBSEARCH_MAX_PAGE_CHARS = int(os.environ.get("WEBSEARCH_MAX_PAGE_CHARS", "12000
 
 # 高德 Web 服务 Key（逆地理：经纬度→地址）；不配则只存经纬度、注入时只显示坐标
 AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "").strip()
+# 高德官方 MCP Server；留空时用 AMAP_API_KEY 自动拼官方 Streamable HTTP 地址。
+AMAP_MCP_URL = os.environ.get("AMAP_MCP_URL", "").strip()
+AMAP_MCP_TIMEOUT_SECONDS = int(os.environ.get("AMAP_MCP_TIMEOUT_SECONDS", "30"))
+AMAP_MCP_TOOLS_CACHE_SECONDS = int(os.environ.get("AMAP_MCP_TOOLS_CACHE_SECONDS", "300"))
 
 # R2（S3 兼容）
 R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID", "")
