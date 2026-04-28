@@ -101,6 +101,8 @@ public class MainActivity extends BridgeActivity {
 
         addIfMissing(needs, Manifest.permission.RECORD_AUDIO);
         addIfMissing(needs, Manifest.permission.CAMERA);
+        addIfMissing(needs, Manifest.permission.ACCESS_FINE_LOCATION);
+        addIfMissing(needs, Manifest.permission.ACCESS_COARSE_LOCATION);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             addIfMissing(needs, Manifest.permission.POST_NOTIFICATIONS);
@@ -161,6 +163,13 @@ public class MainActivity extends BridgeActivity {
             return;
         }
 
+        if (!isAccessibilityServiceEnabled()) {
+            specialPermissionFlowStarted = true;
+            Intent i = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            startActivity(i);
+            return;
+        }
+
         specialPermissionFlowStarted = false;
     }
 
@@ -174,6 +183,16 @@ public class MainActivity extends BridgeActivity {
             mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), getPackageName());
         }
         return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private boolean isAccessibilityServiceEnabled() {
+        try {
+            String enabled = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            String needle = (getPackageName() + "/").toLowerCase(Locale.US);
+            return enabled != null && enabled.toLowerCase(Locale.US).contains(needle);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private void syncPanelStateFromWebView() {

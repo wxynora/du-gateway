@@ -14,12 +14,19 @@ import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
+import android.location.Criteria;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.content.pm.ServiceInfo;
 import android.util.DisplayMetrics;
 import android.os.Build;
+import android.os.BatteryManager;
 import android.os.IBinder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.provider.AlarmClock;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -39,6 +46,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
@@ -60,6 +68,8 @@ public class FloatingBallService extends Service {
     public static final String PREF_OVERLAY_VISIBLE = "overlay_visible";
     public static final String PREF_APP_VISIBLE = "app_visible";
     public static final String PREF_LAST_HISTORY_MESSAGE_KEY = "last_history_message_key";
+    private static final String PREF_LAST_REPORTED_LOCATION_LAT = "last_reported_location_lat";
+    private static final String PREF_LAST_REPORTED_LOCATION_LNG = "last_reported_location_lng";
 
     private static final String TAG = "SumiTalkOverlay";
     private static final String API_BASE = "https://duxy-home.com";
@@ -67,6 +77,9 @@ public class FloatingBallService extends Service {
     private static final String MESSAGE_CHANNEL_ID = "sumitalk_message";
     private static final int NOTIFICATION_ID = 2001;
     private static final long HISTORY_POLL_INTERVAL_MS = 20000L;
+    private static final long LOCATION_REPORT_INTERVAL_MS = 15L * 60L * 1000L;
+    private static final long LOCATION_MAX_STALE_MS = 6L * 60L * 60L * 1000L;
+    private static final float LOCATION_REPORT_MIN_DISTANCE_M = 5000f;
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -83,7 +96,17 @@ public class FloatingBallService extends Service {
                 @Override
                 public void run() {
                     pollLatestAssistantMessage();
+                    pollPendingDeviceActions();
+                    reportBatterySnapshot();
                     mainHandler.postDelayed(this, HISTORY_POLL_INTERVAL_MS);
+                }
+            };
+    private final Runnable locationReportRunnable =
+            new Runnable() {
+                @Override
+                public void run() {
+                    reportLocationSnapshot();
+                    mainHandler.postDelayed(this, LOCATION_REPORT_INTERVAL_MS);
                 }
             };
 
@@ -94,11 +117,13 @@ public class FloatingBallService extends Service {
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         restorePanelState();
         createNotificationChannel();
-        startForeground(NOTIFICATION_ID, buildNotification());
+        startForegroundNotification(false);
         registerScreenStateReceiver();
         registerConfigChangeReceiver();
         applyOverlayVisibility();
         scheduleHistoryPolling();
+        scheduleLocationReporting();
+        reportBatterySnapshot();
     }
 
     @Override
@@ -112,6 +137,8 @@ public class FloatingBallService extends Service {
         applyOverlayVisibility();
         reportScreenState("app_active");
         scheduleHistoryPolling();
+        scheduleLocationReporting();
+        reportBatterySnapshot();
         return START_STICKY;
     }
 
@@ -178,6 +205,27 @@ public class FloatingBallService extends Service {
                 .build();
     }
 
+    private void startForegroundNotification(boolean includeLocationType) {
+        Notification notification = buildNotification();
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+                if (includeLocationType && hasLocationPermission()) {
+                    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+                }
+                startForeground(NOTIFICATION_ID, notification, type);
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && includeLocationType && hasLocationPermission()) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+                return;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "startForeground with location type failed", e);
+        }
+        startForeground(NOTIFICATION_ID, notification);
+    }
+
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationChannel channel =
@@ -198,6 +246,11 @@ public class FloatingBallService extends Service {
     private void scheduleHistoryPolling() {
         mainHandler.removeCallbacks(historyPollRunnable);
         mainHandler.post(historyPollRunnable);
+    }
+
+    private void scheduleLocationReporting() {
+        mainHandler.removeCallbacks(locationReportRunnable);
+        mainHandler.post(locationReportRunnable);
     }
 
     /** Respect user toggle: hide overlay but keep foreground service running. */
@@ -382,6 +435,134 @@ public class FloatingBallService extends Service {
         clampOverlayIntoScreen();
     }
 
+    private boolean hasLocationPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private String chooseLocationProvider(LocationManager lm) {
+        if (lm == null) return "";
+        Criteria criteria = new Criteria();
+        criteria.setAccuracy(Criteria.ACCURACY_COARSE);
+        String provider = lm.getBestProvider(criteria, true);
+        if (provider != null && !provider.trim().isEmpty()) return provider;
+        if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) return LocationManager.NETWORK_PROVIDER;
+        if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) return LocationManager.GPS_PROVIDER;
+        if (lm.isProviderEnabled(LocationManager.PASSIVE_PROVIDER)) return LocationManager.PASSIVE_PROVIDER;
+        return "";
+    }
+
+    private Location getBestLastKnownLocation(LocationManager lm) {
+        Location best = null;
+        try {
+            List<String> providers = lm.getProviders(true);
+            if (providers == null) return null;
+            long now = System.currentTimeMillis();
+            for (String provider : providers) {
+                Location loc = lm.getLastKnownLocation(provider);
+                if (loc == null) continue;
+                long age = Math.max(0L, now - loc.getTime());
+                if (age > LOCATION_MAX_STALE_MS) continue;
+                if (best == null || loc.getAccuracy() < best.getAccuracy() || loc.getTime() > best.getTime()) {
+                    best = loc;
+                }
+            }
+        } catch (SecurityException ignored) {
+        } catch (Exception e) {
+            Log.w(TAG, "getBestLastKnownLocation failed", e);
+        }
+        return best;
+    }
+
+    private void reportLocationSnapshot() {
+        if (panelToken.isEmpty() || !hasLocationPermission()) return;
+        startForegroundNotification(true);
+        LocationManager lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        if (lm == null) return;
+
+        Location cached = getBestLastKnownLocation(lm);
+        if (cached != null) {
+            postLocation(cached, "last_known");
+        }
+
+        String provider = chooseLocationProvider(lm);
+        if (provider.isEmpty()) return;
+        try {
+            lm.requestSingleUpdate(
+                    provider,
+                    new LocationListener() {
+                        @Override
+                        public void onLocationChanged(Location location) {
+                            postLocation(location, "single_update");
+                        }
+
+                        @Override
+                        public void onStatusChanged(String provider, int status, android.os.Bundle extras) {
+                        }
+
+                        @Override
+                        public void onProviderEnabled(String provider) {
+                        }
+
+                        @Override
+                        public void onProviderDisabled(String provider) {
+                        }
+                    },
+                    Looper.getMainLooper());
+        } catch (SecurityException ignored) {
+        } catch (Exception e) {
+            Log.w(TAG, "request location update failed", e);
+        }
+    }
+
+    private void postLocation(Location location, String source) {
+        if (location == null || panelToken.isEmpty()) return;
+        if (!shouldReportLocation(location)) return;
+        ioExecutor.execute(
+                () -> {
+                    try {
+                        JSONObject payload = new JSONObject();
+                        payload.put("device_id", panelDeviceId);
+                        payload.put("lat", location.getLatitude());
+                        payload.put("lng", location.getLongitude());
+                        payload.put("accuracy", location.getAccuracy());
+                        payload.put("provider", String.valueOf(location.getProvider()));
+                        payload.put("source", source);
+                        payload.put("captured_at", nowIso());
+                        if (location.hasAltitude()) payload.put("altitude", location.getAltitude());
+                        if (location.hasSpeed()) payload.put("speed", location.getSpeed());
+                        if (location.hasBearing()) payload.put("bearing", location.getBearing());
+                        postJson("/miniapp-api/device-state/location", payload);
+                        saveLastReportedLocation(location);
+                    } catch (Exception e) {
+                        Log.w(TAG, "postLocation failed", e);
+                    }
+                });
+    }
+
+    private boolean shouldReportLocation(Location location) {
+        if (location == null || prefs == null) return false;
+        String latRaw = String.valueOf(prefs.getString(PREF_LAST_REPORTED_LOCATION_LAT, "")).trim();
+        String lngRaw = String.valueOf(prefs.getString(PREF_LAST_REPORTED_LOCATION_LNG, "")).trim();
+        if (latRaw.isEmpty() || lngRaw.isEmpty()) return true;
+        try {
+            Location last = new Location("last_reported");
+            last.setLatitude(Double.parseDouble(latRaw));
+            last.setLongitude(Double.parseDouble(lngRaw));
+            return last.distanceTo(location) >= LOCATION_REPORT_MIN_DISTANCE_M;
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    private void saveLastReportedLocation(Location location) {
+        if (location == null || prefs == null) return;
+        prefs.edit()
+                .putString(PREF_LAST_REPORTED_LOCATION_LAT, String.valueOf(location.getLatitude()))
+                .putString(PREF_LAST_REPORTED_LOCATION_LNG, String.valueOf(location.getLongitude()))
+                .apply();
+    }
+
     private void reportScreenState(String eventType) {
         if (panelToken.isEmpty()) return;
         ioExecutor.execute(
@@ -416,6 +597,32 @@ public class FloatingBallService extends Service {
                         Log.w(TAG, "reportScreenState failed", e);
                     } finally {
                         if (conn != null) conn.disconnect();
+                    }
+                });
+    }
+
+    private void reportBatterySnapshot() {
+        if (panelToken.isEmpty()) return;
+        ioExecutor.execute(
+                () -> {
+                    try {
+                        Intent battery = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+                        if (battery == null) return;
+                        int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                        int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+                        if (level < 0 || scale <= 0) return;
+                        int percent = Math.max(0, Math.min(100, Math.round(level * 100f / scale)));
+                        int status = battery.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+                        boolean charging = status == BatteryManager.BATTERY_STATUS_CHARGING
+                                || status == BatteryManager.BATTERY_STATUS_FULL;
+                        JSONObject payload = new JSONObject();
+                        payload.put("device_id", panelDeviceId);
+                        payload.put("level", percent);
+                        payload.put("charging", charging);
+                        payload.put("captured_at", nowIso());
+                        postJson("/miniapp-api/device-state/battery", payload);
+                    } catch (Exception e) {
+                        Log.w(TAG, "reportBatterySnapshot failed", e);
                     }
                 });
     }
@@ -474,6 +681,130 @@ public class FloatingBallService extends Service {
                 });
     }
 
+    private void pollPendingDeviceActions() {
+        if (panelToken.isEmpty()) return;
+        ioExecutor.execute(
+                () -> {
+                    HttpURLConnection conn = null;
+                    try {
+                        URL url = new URL(API_BASE + "/miniapp-api/device-actions?limit=5");
+                        conn = (HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("GET");
+                        conn.setConnectTimeout(10000);
+                        conn.setReadTimeout(10000);
+                        conn.setRequestProperty("Authorization", "Bearer " + panelToken);
+                        int code = conn.getResponseCode();
+                        if (code < 200 || code >= 300) {
+                            Log.w(TAG, "pollPendingDeviceActions non-2xx code=" + code);
+                            return;
+                        }
+                        JSONObject root = new JSONObject(readAllText(conn.getInputStream()));
+                        JSONArray actions = root.optJSONArray("actions");
+                        if (actions == null || actions.length() <= 0) return;
+                        JSONArray results = new JSONArray();
+                        for (int i = 0; i < actions.length(); i += 1) {
+                            JSONObject action = actions.optJSONObject(i);
+                            if (action == null) continue;
+                            results.put(executeDeviceAction(action));
+                        }
+                        if (results.length() <= 0) return;
+                        JSONObject payload = new JSONObject();
+                        payload.put("results", results);
+                        postJson("/miniapp-api/device-actions/done", payload);
+                    } catch (Exception e) {
+                        Log.w(TAG, "pollPendingDeviceActions failed", e);
+                    } finally {
+                        if (conn != null) conn.disconnect();
+                    }
+                });
+    }
+
+    private JSONObject executeDeviceAction(JSONObject action) {
+        JSONObject result = new JSONObject();
+        String id = String.valueOf(action.optString("id", "")).trim();
+        try {
+            result.put("id", id);
+            String type = String.valueOf(action.optString("type", "")).trim();
+            JSONObject payload = action.optJSONObject("payload");
+            if ("create_system_alarm".equals(type)) {
+                JSONObject detail = createSystemAlarmFromAction(payload == null ? new JSONObject() : payload);
+                result.put("status", "done");
+                result.put("detail", detail);
+                return result;
+            }
+            result.put("status", "failed");
+            result.put("error", "unknown_action");
+            return result;
+        } catch (Exception e) {
+            try {
+                result.put("status", "failed");
+                result.put("error", e.getMessage() == null ? String.valueOf(e) : e.getMessage());
+            } catch (Exception ignored) {
+            }
+            return result;
+        }
+    }
+
+    private JSONObject createSystemAlarmFromAction(JSONObject payload) throws Exception {
+        int hour = payload.optInt("hour", -1);
+        int minute = payload.optInt("minute", -1);
+        if (hour < 0 || hour > 23) throw new IllegalArgumentException("invalid_hour");
+        if (minute < 0 || minute > 59) throw new IllegalArgumentException("invalid_minute");
+        String title = String.valueOf(payload.optString("title", "渡的提醒")).trim();
+        if (title.isEmpty()) title = "渡的提醒";
+        boolean appVisible = prefs.getBoolean(PREF_APP_VISIBLE, false);
+        boolean skipUi = appVisible || payload.optBoolean("skipUi", false);
+        boolean notify = payload.optBoolean("notify", true) && !appVisible;
+
+        Intent intent =
+                new Intent(AlarmClock.ACTION_SET_ALARM)
+                        .putExtra(AlarmClock.EXTRA_HOUR, hour)
+                        .putExtra(AlarmClock.EXTRA_MINUTES, minute)
+                        .putExtra(AlarmClock.EXTRA_MESSAGE, title)
+                        .putExtra(AlarmClock.EXTRA_SKIP_UI, skipUi)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(intent);
+        if (notify) {
+            showSystemAlarmCreatedNotification(hour, minute, title);
+        }
+        JSONObject detail = new JSONObject();
+        detail.put("hour", hour);
+        detail.put("minute", minute);
+        detail.put("title", title);
+        detail.put("notified", notify);
+        return detail;
+    }
+
+    private void showSystemAlarmCreatedNotification(int hour, int minute, String title) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        Intent openIntent = new Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent pi =
+                PendingIntent.getActivity(
+                        this,
+                        (int) (System.currentTimeMillis() & 0x7fffffff),
+                        openIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        String time = String.format(Locale.US, "%02d:%02d", hour, minute);
+        Notification notification =
+                new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+                        .setSmallIcon(R.mipmap.ic_launcher_round)
+                        .setContentTitle("已创建系统闹钟")
+                        .setContentText(time + " " + title)
+                        .setStyle(new NotificationCompat.BigTextStyle().bigText(time + " " + title))
+                        .setContentIntent(pi)
+                        .setAutoCancel(true)
+                        .setPriority(NotificationCompat.PRIORITY_HIGH)
+                        .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                        .build();
+        NotificationManagerCompat.from(this)
+                .notify((int) (System.currentTimeMillis() & 0x7fffffff), notification);
+    }
+
     private void showMessagePopup(String preview) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
@@ -516,6 +847,30 @@ public class FloatingBallService extends Service {
             os.write(buf, 0, n);
         }
         return new String(os.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private void postJson(String path, JSONObject payload) throws Exception {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(API_BASE + path);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setRequestProperty("Authorization", "Bearer " + panelToken);
+            byte[] body = payload.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body);
+            }
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) {
+                Log.w(TAG, "postJson non-2xx " + path + " code=" + code);
+            }
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
     }
 
     private String messageContentToText(Object content) {

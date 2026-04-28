@@ -162,6 +162,70 @@ def _sanitize_usage_apps(items: list[dict], limit: int = 20) -> list[dict]:
     return out
 
 
+def _sanitize_foreground_app_patch(body: dict, device_id: str) -> tuple[dict | None, str | None]:
+    src = body.get("app") if isinstance(body.get("app"), dict) else body
+    pkg = str(src.get("packageName") or src.get("package_name") or "").strip()
+    if not pkg:
+        return None, "packageName 必填"
+    app_name = str(src.get("appName") or src.get("app_name") or pkg).strip() or pkg
+    patch = {
+        "deviceId": device_id,
+        "packageName": pkg[:160],
+        "appName": app_name[:80],
+        "observedAt": str(src.get("observedAt") or src.get("observed_at") or body.get("observed_at") or "").strip() or now_beijing_iso(),
+        "source": str(src.get("source") or body.get("source") or "accessibility").strip()[:40] or "accessibility",
+        "updatedAt": now_beijing_iso(),
+    }
+    class_name = str(src.get("className") or src.get("class_name") or "").strip()
+    if class_name:
+        patch["className"] = class_name[:240]
+    return patch, None
+
+
+def _float_from_body(body: dict, *names: str) -> float | None:
+    for name in names:
+        value = body.get(name)
+        if value in (None, ""):
+            continue
+        try:
+            num = float(value)
+        except Exception:
+            continue
+        if math.isfinite(num):
+            return num
+    return None
+
+
+def _sanitize_location_patch(body: dict, device_id: str) -> tuple[dict | None, str | None]:
+    lat = _float_from_body(body, "lat", "latitude")
+    lng = _float_from_body(body, "lng", "lon", "longitude")
+    if lat is None or lng is None:
+        return None, "lat/lng 必填"
+    if lat < -90 or lat > 90 or lng < -180 or lng > 180:
+        return None, "lat/lng 范围无效"
+
+    patch: dict = {
+        "deviceId": device_id,
+        "lat": lat,
+        "lng": lng,
+        "capturedAt": str(body.get("captured_at") or body.get("capturedAt") or "").strip() or now_beijing_iso(),
+        "source": str(body.get("source") or "sumitalk_native").strip()[:40] or "sumitalk_native",
+    }
+    for src, dst in (
+        ("accuracy", "accuracy"),
+        ("altitude", "altitude"),
+        ("speed", "speed"),
+        ("bearing", "bearing"),
+    ):
+        val = _float_from_body(body, src)
+        if val is not None:
+            patch[dst] = val
+    provider = str(body.get("provider") or "").strip()
+    if provider:
+        patch["provider"] = provider[:40]
+    return patch, None
+
+
 def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
     out: list[dict] = []
     for item in items or []:
@@ -1075,6 +1139,29 @@ def miniapp_device_screen_state():
     return jsonify({"ok": bool(ok), "bucket": "screen", "device_id": device_id, "event": event})
 
 
+@bp.route("/device-state/battery", methods=["POST"])
+def miniapp_device_battery_state():
+    device_id = _get_panel_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    body = request.get_json(silent=True) or {}
+    try:
+        level = int(body.get("level"))
+    except Exception:
+        return jsonify({"ok": False, "error": "level 必须是 0-100"}), 400
+    if level < 0 or level > 100:
+        return jsonify({"ok": False, "error": "level 必须是 0-100"}), 400
+    patch = {
+        "deviceId": device_id,
+        "level": level,
+        "charging": bool(body.get("charging")),
+        "capturedAt": str(body.get("captured_at") or body.get("capturedAt") or "").strip() or now_beijing_iso(),
+        "updatedAt": now_beijing_iso(),
+    }
+    ok = r2_store.merge_and_save_sense_bucket("battery", patch)
+    return jsonify({"ok": bool(ok), "bucket": "battery", "device_id": device_id})
+
+
 @bp.route("/device-state/usage-stats", methods=["POST"])
 def miniapp_device_usage_stats():
     device_id = _get_panel_device_id()
@@ -1091,6 +1178,64 @@ def miniapp_device_usage_stats():
     }
     ok = r2_store.merge_and_save_sense_bucket("usage", patch)
     return jsonify({"ok": bool(ok), "bucket": "usage", "device_id": device_id, "count": len(apps)})
+
+
+@bp.route("/device-state/foreground-app", methods=["POST"])
+def miniapp_device_foreground_app():
+    device_id = _get_panel_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    body = request.get_json(silent=True) or {}
+    patch, err = _sanitize_foreground_app_patch(body, device_id)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    ok = r2_store.merge_and_save_sense_bucket("foreground", patch or {})
+    return jsonify({"ok": bool(ok), "bucket": "foreground", "device_id": device_id})
+
+
+@bp.route("/device-state/location", methods=["POST"])
+def miniapp_device_location_state():
+    device_id = _get_panel_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    body = request.get_json(silent=True) or {}
+    patch, err = _sanitize_location_patch(body, device_id)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    try:
+        from services.amap_geocode import enrich_location_patch_with_amap_address
+
+        patch = enrich_location_patch_with_amap_address(patch or {})
+    except Exception:
+        logger.exception("miniapp location reverse geocode failed")
+    ok = r2_store.merge_and_save_sense_bucket("location", patch or {})
+    return jsonify({"ok": bool(ok), "bucket": "location", "device_id": device_id})
+
+
+@bp.route("/device-actions", methods=["GET"])
+def miniapp_device_actions():
+    device_id = _get_panel_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识", "actions": []}), 400
+    try:
+        limit = int(request.args.get("limit") or 10)
+    except Exception:
+        limit = 10
+    result = r2_store.poll_app_actions(device_id=device_id, limit=limit)
+    return jsonify(result)
+
+
+@bp.route("/device-actions/done", methods=["POST"])
+def miniapp_device_actions_done():
+    device_id = _get_panel_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    body = request.get_json(silent=True) or {}
+    results = body.get("results")
+    if not isinstance(results, list):
+        return jsonify({"ok": False, "error": "results 必须是数组"}), 400
+    result = r2_store.report_app_actions(results, device_id=device_id)
+    return jsonify(result)
 
 
 @bp.route("/panel-auth/list", methods=["GET"])

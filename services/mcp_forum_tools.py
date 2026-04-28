@@ -11,6 +11,7 @@ from services.forum_mcp_client import (
     forum_mcp_enabled,
     list_tools,
 )
+from services.device_action_tools import TOOL_CREATE_SYSTEM_ALARM, execute_create_system_alarm
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -197,6 +198,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         TOOL_SCHEDULE_ENABLE,
         TOOL_SCHEDULE_DISABLE,
         TOOL_SCHEDULE_DELETE,
+        TOOL_CREATE_SYSTEM_ALARM,
     ]
     if mode == "daily":
         return schedule_tools
@@ -480,6 +482,9 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         from services.dynamic_memory_search import execute_search_memory_tool
 
         return execute_search_memory_tool(args if isinstance(args, dict) else {})
+
+    if name == "create_system_alarm":
+        return execute_create_system_alarm(args)
 
     if name in FORUM_HIGH_LEVEL_TOOLS:
         return json.dumps(_execute_forum_mcp_tool(name, args), ensure_ascii=False)

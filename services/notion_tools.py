@@ -578,6 +578,7 @@ def execute_tool(name: str, arguments: dict) -> str:
         "schedule_disable",
         "schedule_delete",
         "search_memory",
+        "create_system_alarm",
     ):
         return execute_forum_tool(name, arguments)
     try:

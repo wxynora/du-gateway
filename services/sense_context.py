@@ -1,5 +1,5 @@
 # 设备感知（sense/latest.json）→ 渡的 system 注入。
-# battery + location + health + music + screen + usage。
+# battery + location + health + music + screen + foreground + usage。
 # 字段约定见 docs/感知模块方案.md
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Any
 
 from storage import r2_store
 from utils.log import get_logger
+from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
 logger = get_logger(__name__)
 
@@ -110,20 +111,46 @@ def _format_music_playing_line(music: dict) -> str | None:
     return None
 
 
+def _format_elapsed_from_iso(iso_str: str) -> str:
+    dt = parse_iso_to_beijing(str(iso_str or "").strip())
+    now_dt = parse_iso_to_beijing(now_beijing_iso())
+    if not dt or not now_dt:
+        return "刚"
+    seconds = int((now_dt - dt).total_seconds())
+    if seconds <= 90:
+        return "刚"
+    minutes = max(1, round(seconds / 60))
+    if minutes < 60:
+        return f"{minutes}分钟前"
+    hours = minutes // 60
+    rest_minutes = minutes % 60
+    if hours < 24:
+        if rest_minutes:
+            return f"{hours}小时{rest_minutes}分钟前"
+        return f"{hours}小时前"
+    days = hours // 24
+    rest_hours = hours % 24
+    if rest_hours:
+        return f"{days}天{rest_hours}小时前"
+    return f"{days}天前"
+
+
 def _format_screen_line(screen: dict) -> str | None:
     event = str(screen.get("event") or "").strip().lower()
     if not event:
         return None
     mapping = {
-        "screen_on": "刚亮屏",
-        "screen_off": "刚熄屏",
-        "user_present": "刚解锁",
-        "app_active": "刚打开 SumiTalk",
+        "screen_on": "亮屏",
+        "screen_off": "熄屏",
+        "user_present": "解锁",
+        "app_active": "打开 SumiTalk",
     }
-    label = mapping.get(event)
-    if not label:
+    action = mapping.get(event)
+    if not action:
         return None
-    return f"屏幕状态：{label}"
+    event_at = str(screen.get("occurredAt") or screen.get("observedAt") or screen.get("capturedAt") or screen.get("updatedAt") or "").strip()
+    elapsed = _format_elapsed_from_iso(event_at)
+    return f"屏幕状态：{elapsed}{action}"
 
 
 def _format_usage_line(usage: dict) -> str | None:
@@ -157,9 +184,18 @@ def _format_usage_line(usage: dict) -> str | None:
     return "最近使用：" + "，".join(parts)
 
 
+def _format_foreground_line(foreground: dict) -> str | None:
+    app_name = str(foreground.get("appName") or foreground.get("packageName") or "").strip()
+    if not app_name:
+        return None
+    observed_at = str(foreground.get("observedAt") or foreground.get("updatedAt") or "").strip()
+    elapsed = _format_elapsed_from_iso(observed_at)
+    return f"当前前台应用：{elapsed}{app_name}"
+
+
 def format_sense_snapshot_for_system() -> str:
     """
-    标题「老婆当前状态」+ 电量 / 定位 / 心率步数 / 音乐 / 屏幕状态 / 应用使用（有数据就注入）。
+    标题「老婆当前状态」+ 电量 / 定位 / 心率步数 / 音乐 / 屏幕状态 / 前台应用 / 应用使用（有数据就注入）。
     """
     try:
         doc = r2_store.get_sense_latest()
@@ -174,6 +210,7 @@ def format_sense_snapshot_for_system() -> str:
     health = _as_dict(doc.get("health"))
     music = _as_dict(doc.get("music"))
     screen = _as_dict(doc.get("screen"))
+    foreground = _as_dict(doc.get("foreground"))
     usage = _as_dict(doc.get("usage"))
     has_battery = bool(bat) and "level" in bat
     loc_line = _format_location_line(loc)
@@ -181,8 +218,9 @@ def format_sense_snapshot_for_system() -> str:
     music_line = _format_music_line(music)
     music_playing_line = _format_music_playing_line(music)
     screen_line = _format_screen_line(screen)
+    foreground_line = _format_foreground_line(foreground)
     usage_line = _format_usage_line(usage)
-    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line and not screen_line and not usage_line:
+    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line and not screen_line and not foreground_line and not usage_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -204,6 +242,8 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(music_playing_line)
     if screen_line:
         lines.append(screen_line)
+    if foreground_line:
+        lines.append(foreground_line)
     if usage_line:
         lines.append(usage_line)
 

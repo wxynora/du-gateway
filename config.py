@@ -281,9 +281,6 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 # 电脑指令队列鉴权：电脑端轮询/回执必须携带该 token
 PC_COMMAND_TOKEN = os.environ.get("PC_COMMAND_TOKEN", "").strip()
 
-# 手机指令队列鉴权：手机端 Tasker 轮询/回执必须携带该 token
-MOBILE_COMMAND_TOKEN = os.environ.get("MOBILE_COMMAND_TOKEN", "").strip()
-
 # HTML 临时预览：POST 存稿、GET token 拉取整页（与聊天主链路无关）
 HTML_PREVIEW_SECRET = os.environ.get("HTML_PREVIEW_SECRET", "").strip()
 HTML_PREVIEW_TTL_SECONDS = int(os.environ.get("HTML_PREVIEW_TTL_SECONDS", "7200"))  # 默认 2 小时

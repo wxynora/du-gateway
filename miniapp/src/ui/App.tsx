@@ -62,6 +62,12 @@ type ChatDraftMessage = {
     output?: number;
   };
 };
+type SystemAlarmCreatedCard = {
+  type: "system_alarm_created";
+  hour: number;
+  minute: number;
+  title: string;
+};
 type DeviceItem = {
   id?: string;
   note?: string;
@@ -100,6 +106,8 @@ const TRANSPARENT_BUBBLE_CLASS =
   "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
 const STAY_SERIF_FONT = "'Playfair Display', 'Noto Serif SC', 'Songti SC', Georgia, serif";
 const STAY_SANS_FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const SYSTEM_CARD_PREFIX = "<<<SUMITALK_CARD ";
+const SYSTEM_CARD_SUFFIX = ">>>";
 
 function readStoredBoolean(key: string, fallback = false): boolean {
   try {
@@ -1447,7 +1455,7 @@ type ChatMessageGroup = {
   role: "user" | "assistant";
   createdAt: string;
   lastCreatedAt: string;
-  parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number } }>;
+  parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number }; alarmCard?: SystemAlarmCreatedCard | null }>;
 };
 
 type ChatSearchMatch = {
@@ -1512,6 +1520,13 @@ function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string
     if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") continue;
     const text = String(msg?.content || "").trim();
     if (!text) continue;
+    const alarmCard = firstSystemAlarmCard(text);
+    if (alarmCard) {
+      return {
+        preview: `已创建 ${formatAlarmTime(alarmCard.hour, alarmCard.minute)} 系统闹钟`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
     return {
       preview: text,
       time: formatClockTime(String(msg?.createdAt || "").trim()),
@@ -1668,12 +1683,18 @@ function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
     const normalizedContent = String(msg?.content || "").trim();
     const normalizedReasoning = String(msg?.reasoning || "").trim();
     if (!normalizedContent && !normalizedReasoning) continue;
-    const safeParts = [{
-      content: normalizedContent,
-      render: detectMessageRender(msg.role, normalizedContent),
-      reasoning: normalizedReasoning || undefined,
-      tokenCount: msg.tokenCount,
-    }];
+    const segments = msg.role === "assistant"
+      ? splitSystemAlarmCardSegments(normalizedContent)
+      : [{ content: normalizedContent, alarmCard: null }];
+    const safeParts = (segments.length ? segments : [{ content: normalizedContent, alarmCard: null }])
+      .filter((segment) => String(segment.content || "").trim() || segment.alarmCard || normalizedReasoning)
+      .map((segment, index) => ({
+        content: String(segment.content || "").trim(),
+        render: segment.alarmCard ? "plain" as const : detectMessageRender(msg.role, String(segment.content || "").trim()),
+        reasoning: index === 0 ? normalizedReasoning || undefined : undefined,
+        tokenCount: index === 0 ? msg.tokenCount : undefined,
+        alarmCard: segment.alarmCard,
+      }));
     const last = groups[groups.length - 1];
     if (last && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
       last.parts.push(...safeParts);
@@ -1771,6 +1792,98 @@ function HtmlBlock({ content }: { content: string }) {
 
 function PlainTextBlock({ content }: { content: string }) {
   return <span className="whitespace-pre-wrap">{content}</span>;
+}
+
+function formatAlarmTime(hour: number, minute: number): string {
+  const h = Number.isFinite(hour) ? Math.max(0, Math.min(23, Math.floor(hour))) : 0;
+  const m = Number.isFinite(minute) ? Math.max(0, Math.min(59, Math.floor(minute))) : 0;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function buildSystemAlarmCreatedCardContent(input: { hour?: number; minute?: number; title?: string }): string {
+  const payload: SystemAlarmCreatedCard = {
+    type: "system_alarm_created",
+    hour: Math.max(0, Math.min(23, Math.floor(Number(input.hour ?? 0) || 0))),
+    minute: Math.max(0, Math.min(59, Math.floor(Number(input.minute ?? 0) || 0))),
+    title: String(input.title || "渡的提醒").trim() || "渡的提醒",
+  };
+  return `${SYSTEM_CARD_PREFIX}${JSON.stringify(payload)}${SYSTEM_CARD_SUFFIX}`;
+}
+
+function parseSystemAlarmCreatedCard(content: string): SystemAlarmCreatedCard | null {
+  const raw = String(content || "").trim();
+  if (!raw.startsWith(SYSTEM_CARD_PREFIX) || !raw.endsWith(SYSTEM_CARD_SUFFIX)) return null;
+  const jsonText = raw.slice(SYSTEM_CARD_PREFIX.length, raw.length - SYSTEM_CARD_SUFFIX.length).trim();
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || parsed.type !== "system_alarm_created") return null;
+    const hour = Number(parsed.hour);
+    const minute = Number(parsed.minute);
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) return null;
+    if (!Number.isFinite(minute) || minute < 0 || minute > 59) return null;
+    return {
+      type: "system_alarm_created",
+      hour: Math.floor(hour),
+      minute: Math.floor(minute),
+      title: String(parsed.title || "渡的提醒").trim() || "渡的提醒",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function splitSystemAlarmCardSegments(content: string): Array<{ content: string; alarmCard: SystemAlarmCreatedCard | null }> {
+  const raw = String(content || "");
+  const out: Array<{ content: string; alarmCard: SystemAlarmCreatedCard | null }> = [];
+  let cursor = 0;
+  while (cursor < raw.length) {
+    const start = raw.indexOf(SYSTEM_CARD_PREFIX, cursor);
+    if (start < 0) {
+      const rest = raw.slice(cursor).trim();
+      if (rest) out.push({ content: rest, alarmCard: null });
+      break;
+    }
+    const before = raw.slice(cursor, start).trim();
+    if (before) out.push({ content: before, alarmCard: null });
+    const end = raw.indexOf(SYSTEM_CARD_SUFFIX, start + SYSTEM_CARD_PREFIX.length);
+    if (end < 0) {
+      const rest = raw.slice(start).trim();
+      if (rest) out.push({ content: rest, alarmCard: null });
+      break;
+    }
+    const marker = raw.slice(start, end + SYSTEM_CARD_SUFFIX.length).trim();
+    const alarmCard = parseSystemAlarmCreatedCard(marker);
+    if (alarmCard) {
+      out.push({ content: marker, alarmCard });
+    } else {
+      out.push({ content: marker, alarmCard: null });
+    }
+    cursor = end + SYSTEM_CARD_SUFFIX.length;
+  }
+  return out;
+}
+
+function firstSystemAlarmCard(content: string): SystemAlarmCreatedCard | null {
+  for (const segment of splitSystemAlarmCardSegments(content)) {
+    if (segment.alarmCard) return segment.alarmCard;
+  }
+  return null;
+}
+
+function SystemAlarmCreatedBubble({ card, onOpen }: { card: SystemAlarmCreatedCard; onOpen: () => void }) {
+  return (
+    <button
+      className="block w-full max-w-[260px] rounded-[20px] border border-amber-100 bg-gradient-to-br from-amber-50 via-white to-orange-50 px-4 py-3 text-left shadow-[0_10px_30px_rgba(180,83,9,0.10)] transition-transform active:scale-[0.98]"
+      onClick={onOpen}
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">系统闹钟</span>
+        <span className="text-[11px] font-medium text-amber-700">点击查看</span>
+      </div>
+      <div className="text-[30px] font-bold leading-none text-gray-900">{formatAlarmTime(card.hour, card.minute)}</div>
+      <div className="mt-2 text-[13px] font-medium leading-5 text-gray-700">{card.title}</div>
+    </button>
+  );
 }
 
 function copyText(text: string, toast: (msg: string) => void) {
@@ -2097,6 +2210,7 @@ function MainChatScreen({
     },
   ];
   const [messages, setMessages] = useState<ChatDraftMessage[]>(seedMessages);
+  const messagesRef = useRef<ChatDraftMessage[]>(seedMessages);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -2112,6 +2226,10 @@ function MainChatScreen({
       return "";
     }
   });
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2235,6 +2353,36 @@ function MainChatScreen({
     } catch {}
   }
 
+  async function appendSystemAlarmCreatedCard(detail: { hour?: number; minute?: number; title?: string }) {
+    const cardContent = buildSystemAlarmCreatedCardContent(detail);
+    const now = Date.now();
+    const nextMessages = [
+      ...messagesRef.current,
+      {
+        id: `system-alarm-${now}`,
+        role: "assistant" as const,
+        content: cardContent,
+        createdAt: new Date(now).toISOString(),
+        status: "sent" as const,
+      },
+    ];
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    await saveDisplayHistory(nextMessages);
+  }
+
+  useEffect(() => {
+    const onAlarmCreated = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail || {};
+      if (!detail?.ok) return;
+      void appendSystemAlarmCreatedCard(detail);
+    };
+    window.addEventListener("sumitalk-system-alarm-created", onAlarmCreated as EventListener);
+    return () => {
+      window.removeEventListener("sumitalk-system-alarm-created", onAlarmCreated as EventListener);
+    };
+  }, [deviceId, windowId]);
+
   async function sendMessage() {
     const content = input.trim();
     if (!content || sending) return;
@@ -2338,7 +2486,10 @@ function MainChatScreen({
     const matches: ChatSearchMatch[] = [];
     groupedMessages.forEach((group) => {
       group.parts.forEach((part, partIndex) => {
-        if (!String(part.content || "").toLowerCase().includes(query)) return;
+        const searchable = part.alarmCard
+          ? `系统闹钟 ${formatAlarmTime(part.alarmCard.hour, part.alarmCard.minute)} ${part.alarmCard.title}`
+          : String(part.content || "");
+        if (!searchable.toLowerCase().includes(query)) return;
         matches.push({
           id: getChatSearchMatchId(group.id, partIndex),
           groupId: group.id,
@@ -2514,37 +2665,48 @@ function MainChatScreen({
                               <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap leading-6">{part.reasoning}</div>
                             </details>
                           ) : null}
-                          <div
-                            className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
-                              transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)
-                            }`}
-                            style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
-                          >
-                            {part.render === "html" ? (
-                              <HtmlBlock content={part.content || (sending ? "…" : "")} />
-                            ) : part.render === "plain" ? (
-                              <PlainTextBlock content={part.content || (sending ? "…" : "")} />
-                            ) : (
-                              <RichTextBlock content={part.content || (sending ? "…" : "")} />
-                            )}
-                          </div>
-                          <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
-                            <button
-                              className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-100 active:opacity-70"
-                              onClick={() => copyText(part.content, toast)}
-                              aria-label="复制"
-                              title="复制"
-                            >
-                              <CopyIconMini />
-                            </button>
-                            {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
-                              <span>
-                                {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
-                                {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
-                                {part.tokenCount?.output ? `↓${formatTokenCountValue(part.tokenCount.output)}` : ""}
-                              </span>
-                            ) : null}
-                          </div>
+                          {part.alarmCard ? (
+                            <SystemAlarmCreatedBubble
+                              card={part.alarmCard}
+                              onOpen={() => {
+                                void SumiOverlay.openSystemAlarms().catch((e) => toast(`打开系统闹钟失败：${e?.message || e}`));
+                              }}
+                            />
+                          ) : (
+                            <>
+                              <div
+                                className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
+                                  transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)
+                                }`}
+                                style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
+                              >
+                                {part.render === "html" ? (
+                                  <HtmlBlock content={part.content || (sending ? "…" : "")} />
+                                ) : part.render === "plain" ? (
+                                  <PlainTextBlock content={part.content || (sending ? "…" : "")} />
+                                ) : (
+                                  <RichTextBlock content={part.content || (sending ? "…" : "")} />
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
+                                <button
+                                  className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-100 active:opacity-70"
+                                  onClick={() => copyText(part.content, toast)}
+                                  aria-label="复制"
+                                  title="复制"
+                                >
+                                  <CopyIconMini />
+                                </button>
+                                {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
+                                  <span>
+                                    {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
+                                    {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
+                                    {part.tokenCount?.output ? `↓${formatTokenCountValue(part.tokenCount.output)}` : ""}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </>
+                          )}
                         </div>
                       );
                     })}
