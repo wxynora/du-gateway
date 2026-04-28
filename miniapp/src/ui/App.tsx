@@ -2209,10 +2209,6 @@ function travelWalkLabel(value: TravelPlanWalkPreference): string {
   return "可以走一点";
 }
 
-function toggleTravelOption(list: string[], item: string): string[] {
-  return list.includes(item) ? list.filter((value) => value !== item) : [...list, item];
-}
-
 function TravelPlanFormModal({
   card,
   sending,
@@ -2231,16 +2227,7 @@ function TravelPlanFormModal({
   const [destinations, setDestinations] = useState((card.destinations || []).join("\n"));
   const [walk, setWalk] = useState<TravelPlanWalkPreference>(card.walk || "medium");
   const [prefer, setPrefer] = useState<TravelPlanPreference>(card.prefer || "auto");
-  const [pace, setPace] = useState<"relaxed" | "normal" | "packed">("normal");
-  const [timeMode, setTimeMode] = useState<"today" | "tomorrow" | "weekend" | "manual">("today");
-  const [timeText, setTimeText] = useState("");
-  const [foodChips, setFoodChips] = useState<string[]>(card.food ? [card.food] : []);
-  const [extraFood, setExtraFood] = useState("");
-  const [avoidChips, setAvoidChips] = useState<string[]>([]);
-  const [extraAvoid, setExtraAvoid] = useState("");
-  const [routePreference, setRoutePreference] = useState("顺路优先");
-  const [otherPrefs, setOtherPrefs] = useState<string[]>([]);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(card.food ? `想吃：${card.food}` : "");
 
   const inputClass = "w-full rounded-xl border border-[#FFECDA] bg-white px-4 py-3 text-[14px] font-medium leading-5 text-[#5C4D3E] outline-none placeholder:text-[#B8A998] focus:border-[#FF8C42] focus:shadow-[0_0_0_2px_rgba(255,140,66,0.10)]";
   const pillClass = (active: boolean, extra = "") =>
@@ -2248,23 +2235,6 @@ function TravelPlanFormModal({
       active ? "border-[#FF8C42] bg-[#FF8C42] text-white" : "border-[#FFECDA] bg-white text-[#8D7B68]"
     }`;
   const sectionTitleClass = "mb-3 flex items-center gap-1.5 text-[15px] font-bold text-[#5C4D3E]";
-  const foodOptions = ["甜品", "咖啡", "小吃", "正餐", "火锅", "日料", "本帮菜", "不安排吃饭"];
-  const avoidOptions = ["太辣", "排队久", "太贵", "人太多", "网红店"];
-  const otherOptions = ["怕晒", "怕冷", "想多坐会", "适合拍照", "室内优先"];
-  const timeLabelMap = {
-    today: "今天",
-    tomorrow: "明天",
-    weekend: "周末",
-    manual: "手动填写",
-  } as const;
-
-  const toggleFoodChip = (item: string) => {
-    setFoodChips((current) => {
-      if (item === "不安排吃饭") return current.includes(item) ? [] : [item];
-      return toggleTravelOption(current.filter((value) => value !== "不安排吃饭"), item);
-    });
-  };
-
   const renderSection = (icon: string, title: string, children: React.ReactNode) => (
     <div className="mb-8">
       <div className={sectionTitleClass}>
@@ -2288,27 +2258,15 @@ function TravelPlanFormModal({
       toast("填一下出发地，或者选用最近定位");
       return;
     }
-    const paceLabel = pace === "relaxed" ? "轻松" : pace === "packed" ? "多安排点" : "正常";
-    const timeLabel = timeMode === "manual" ? timeText.trim() : timeLabelMap[timeMode];
-    const foodItems = foodChips.includes("不安排吃饭")
-      ? ["不安排吃饭"]
-      : [...foodChips, extraFood.trim()].map((item) => item.trim()).filter(Boolean);
-    const avoidItems = [...avoidChips, extraAvoid.trim()].map((item) => item.trim()).filter(Boolean);
     const lines = [
-      "帮我做一个出行规划，信息如下：",
+      "帮我做一个轻量出行规划，信息如下：",
       `出发地：${useCurrentLocation ? "用我最近定位/当前位置" : origin.trim()}`,
       city.trim() ? `城市：${city.trim()}` : "",
       `想去的地方：${places.join("、")}`,
-      `时间：${timeLabel || "没特别要求"}`,
       `步行接受度：${travelWalkLabel(walk)}`,
       `交通偏好：${travelPreferLabel(prefer)}`,
-      `节奏：${paceLabel}`,
-      `路线倾向：${routePreference}`,
-      foodItems.length ? `想吃的东西：${foodItems.join("、")}` : "想吃的东西：没特别要求",
-      avoidItems.length ? `不想要/避雷：${avoidItems.join("、")}` : "",
-      otherPrefs.length ? `其他偏好：${otherPrefs.join("、")}` : "",
-      note.trim() ? `备注：${note.trim()}` : "",
-      "请先做轻量总规划：综合位置距离安排游玩顺序，每段只给推荐交通方式、大致耗时/步行/打车参考即可，不用逐站逐步写得很细；吃饭只按偏好留位置或简单提醒，不要展开查店，后续我问吃什么再补。",
+      note.trim() ? `补充：${note.trim()}` : "",
+      "请只做第一轮轻量总规划：综合位置距离安排游玩顺序，每段只给推荐交通方式、大致耗时/步行/打车参考即可，不用逐站逐步写得很细；吃饭只简单提醒，不要展开查店。",
     ].filter(Boolean);
     onSubmit(lines.join("\n"));
   };
@@ -2327,7 +2285,7 @@ function TravelPlanFormModal({
         <div className="flex items-start justify-between px-6 pb-4">
           <div>
             <h1 className="text-2xl font-bold text-[#5C4D3E]">想去哪玩？</h1>
-            <p className="mt-1 text-sm text-[#A89A8B]">填几个偏好，渡来排顺序和路线</p>
+            <p className="mt-1 text-sm text-[#A89A8B]">先填最关键的，细节后面再聊</p>
           </div>
           <button
             type="button"
@@ -2376,23 +2334,6 @@ function TravelPlanFormModal({
           )}
 
           {renderSection(
-            "📅",
-            "出行时间",
-            <>
-              <div className="mb-3 flex flex-wrap gap-2">
-                {(["today", "tomorrow", "weekend", "manual"] as const).map((item) => (
-                  <button key={item} type="button" className={pillClass(timeMode === item)} onClick={() => setTimeMode(item)}>
-                    {timeLabelMap[item]}
-                  </button>
-                ))}
-              </div>
-              {timeMode === "manual" ? (
-                <input className={inputClass} value={timeText} onChange={(e) => setTimeText(e.target.value)} placeholder="比如 明天 10:00 出发，晚上 8 点前回" />
-              ) : null}
-            </>,
-          )}
-
-          {renderSection(
             "👟",
             "步行接受度",
             <div className="flex gap-2">
@@ -2417,85 +2358,13 @@ function TravelPlanFormModal({
           )}
 
           {renderSection(
-            "⏱",
-            "游玩节奏",
-            <div className="flex gap-2">
-              {[
-                ["relaxed", "轻松"] as const,
-                ["normal", "正常"] as const,
-                ["packed", "多安排点"] as const,
-              ].map(([value, label]) => (
-                <button key={value} type="button" className={pillClass(pace === value, "flex-1 px-2")} onClick={() => setPace(value)}>
-                  {label}
-                </button>
-              ))}
-            </div>,
-          )}
-
-          {renderSection(
-            "🍴",
-            "想吃什么",
-            <>
-              <div className="mb-3 flex flex-wrap gap-2">
-                {foodOptions.map((item) => (
-                  <button key={item} type="button" className={pillClass(foodChips.includes(item))} onClick={() => toggleFoodChip(item)}>
-                    {item}
-                  </button>
-                ))}
-              </div>
-              {!foodChips.includes("不安排吃饭") ? (
-                <input className={inputClass} value={extraFood} onChange={(e) => setExtraFood(e.target.value)} placeholder="还有想吃的" />
-              ) : null}
-            </>,
-          )}
-
-          {renderSection(
-            "⚠️",
-            "不想要什么",
-            <>
-              <div className="mb-3 flex flex-wrap gap-2">
-                {avoidOptions.map((item) => (
-                  <button key={item} type="button" className={pillClass(avoidChips.includes(item))} onClick={() => setAvoidChips((current) => toggleTravelOption(current, item))}>
-                    {item}
-                  </button>
-                ))}
-              </div>
-              <input className={inputClass} value={extraAvoid} onChange={(e) => setExtraAvoid(e.target.value)} placeholder="其他避雷" />
-            </>,
-          )}
-
-          {renderSection(
-            "🧭",
-            "路线倾向",
-            <div className="grid grid-cols-2 gap-2">
-              {["省时间", "少换乘", "少走路", "顺路优先"].map((item) => (
-                <button key={item} type="button" className={pillClass(routePreference === item, "px-2")} onClick={() => setRoutePreference(item)}>
-                  {item}
-                </button>
-              ))}
-            </div>,
-          )}
-
-          {renderSection(
-            "♥",
-            "其他偏好",
-            <div className="flex flex-wrap gap-2">
-              {otherOptions.map((item) => (
-                <button key={item} type="button" className={pillClass(otherPrefs.includes(item))} onClick={() => setOtherPrefs((current) => toggleTravelOption(current, item))}>
-                  {item}
-                </button>
-              ))}
-            </div>,
-          )}
-
-          {renderSection(
             "📝",
-            "备注",
+            "补充",
             <textarea
               className={`${inputClass} h-24 resize-none`}
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="比如 不想太赶 / 想拍照 / 预算控制一下"
+              placeholder="比如 想吃甜品 / 不想太赶 / 预算控制一下"
             />,
           )}
         </div>
