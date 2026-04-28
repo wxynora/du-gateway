@@ -28,6 +28,14 @@ function tokenValue(value: unknown) {
   return raw === "未返回" ? raw : `≈${raw}`;
 }
 
+function firstUsageValue(usage: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = usage[key];
+    if (value !== null && value !== undefined && value !== "") return value;
+  }
+  return undefined;
+}
+
 function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }) {
   const items = Array.isArray(entries) ? entries.filter(Boolean).slice(-4) : [];
   if (!items.length) return null;
@@ -41,18 +49,23 @@ function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }
         {items.map((entry, idx) => {
           const req = entry?.request || {};
           const usage = entry?.usage || {};
+          const openaiCached = firstUsageValue(usage, ["cached_tokens", "prompt_cached_tokens", "input_cached_tokens"]);
+          const anthropicRead = usage.cache_read_input_tokens;
+          const anthropicCreated = usage.cache_creation_input_tokens;
+          const inputTokens = firstUsageValue(usage, ["input_tokens", "prompt_tokens"]);
           const cacheKey = req.prompt_cache_key ? "已设置" : "未设置";
           return (
             <div key={idx} className="space-y-1.5 text-[11px] leading-4">
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                 <span className="font-semibold">第{idx + 1}次</span>
-                <span>cached_tokens={debugValue(usage.cached_tokens)}</span>
-                <span>prompt_tokens={debugValue(usage.prompt_tokens)}</span>
+                <span>openai_cached={debugValue(openaiCached)}</span>
+                <span>anthropic_read={debugValue(anthropicRead)}</span>
+                <span>anthropic_created={debugValue(anthropicCreated)}</span>
+                <span>input={debugValue(inputTokens)}</span>
               </div>
               <div className="grid grid-cols-2 gap-x-2.5 gap-y-1 text-[#8a4055]">
                 <span>static {tokenValue(req.static_prefix_est_tokens)}</span>
                 <span>dynamic {tokenValue(req.dynamic_system_est_tokens)}</span>
-                <span className="col-span-2">leading_system {tokenValue(req.leading_system_est_tokens)}</span>
               </div>
               <div className="break-words text-[#9b5368]">
                 model={debugValue(req.model)} · host={debugValue(req.upstream_host)} · prompt_cache_key={cacheKey}
