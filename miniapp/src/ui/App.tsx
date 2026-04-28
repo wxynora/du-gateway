@@ -56,12 +56,40 @@ type ChatDraftMessage = {
   content: string;
   createdAt: string;
   status?: "pending" | "sent" | "failed";
+  clientRequestId?: string;
+  jobId?: string;
   reasoning?: string;
   tokenCount?: {
     input?: number;
     output?: number;
   };
 };
+
+function applyAssistantTerminalMessage(
+  currentMessages: ChatDraftMessage[],
+  clientRequestId: string,
+  assistantMessage: ChatDraftMessage,
+): ChatDraftMessage[] {
+  const cid = String(clientRequestId || "").trim();
+  const list = Array.isArray(currentMessages) ? currentMessages : [];
+  if (cid && list.some((msg) => msg.role === "assistant" && msg.clientRequestId === cid && msg.status === "sent")) {
+    return list;
+  }
+  let replaced = false;
+  const next = list.map((msg) => {
+    if (!cid || msg.role !== "assistant" || msg.clientRequestId !== cid || msg.status === "sent") return msg;
+    replaced = true;
+    return {
+      ...assistantMessage,
+      id: msg.id,
+      createdAt: msg.createdAt,
+      clientRequestId: cid,
+      jobId: assistantMessage.jobId || msg.jobId,
+    };
+  });
+  if (!replaced) next.push(assistantMessage);
+  return next;
+}
 type SystemAlarmCreatedCard = {
   type: "system_alarm_created";
   hour: number;
@@ -1789,6 +1817,8 @@ function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage
         ...msg,
         content,
         status,
+        clientRequestId: String((msg as any)?.clientRequestId || "").trim() || undefined,
+        jobId: String((msg as any)?.jobId || "").trim() || undefined,
         reasoning: reasoning || undefined,
         tokenCount,
       };
@@ -2284,7 +2314,7 @@ function TravelPlanFormModal({
       avoidItems.length ? `不想要/避雷：${avoidItems.join("、")}` : "",
       otherPrefs.length ? `其他偏好：${otherPrefs.join("、")}` : "",
       note.trim() ? `备注：${note.trim()}` : "",
-      "请先做快速规划：综合位置距离安排游玩顺序，每段只给推荐交通方式、大致耗时/步行/打车参考即可，不用逐站逐步写得很细；把吃饭安排穿插进去。",
+      "请先做轻量总规划：综合位置距离安排游玩顺序，每段只给推荐交通方式、大致耗时/步行/打车参考即可，不用逐站逐步写得很细；吃饭只按偏好留位置或简单提醒，不要展开查店，后续我问吃什么再补。",
     ].filter(Boolean);
     onSubmit(lines.join("\n"));
   };
@@ -3240,25 +3270,28 @@ function MainChatScreen({
       setDeviceId((prev) => (prev === resolvedDeviceId ? prev : resolvedDeviceId));
     }
     const baseTimestamp = Date.now();
+    const clientRequestId = `sumitalk-${baseTimestamp}-${Math.random().toString(36).slice(2, 10)}`;
     const userMsg: ChatDraftMessage = {
       id: `user-${baseTimestamp}`,
       role: "user",
       content: displayContent,
       createdAt: new Date(baseTimestamp).toISOString(),
       status: "sent",
+      clientRequestId,
     };
     const assistantId = `assistant-${baseTimestamp + 1}`;
     const assistantCreatedAt = new Date(baseTimestamp + 1).toISOString();
     const nextMessages = [...messagesRef.current, userMsg];
     const draftMessages = [
       ...nextMessages,
-      { id: assistantId, role: "assistant" as const, content: "", createdAt: assistantCreatedAt, status: "pending" as const },
+      { id: assistantId, role: "assistant" as const, content: "", createdAt: assistantCreatedAt, status: "pending" as const, clientRequestId },
     ];
     const replyTarget = resolvedDeviceId;
     setInput("");
     setPlusOpen(false);
     setSending(true);
     setMessages(draftMessages);
+    messagesRef.current = draftMessages;
     await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
     try {
       const requestBody = {
@@ -3275,14 +3308,16 @@ function MainChatScreen({
         body: JSON.stringify({
           ...requestBody,
           reply_target: replyTarget,
+          client_request_id: clientRequestId,
         }),
       });
       if (started?.status === "error") {
         const upstreamError = started.response?.error || started.response?.message || "";
         throw new Error(String(started.error || upstreamError || "渡回复失败"));
       }
-      const data = started?.status === "running" && started?.job_id
-        ? await waitForSumiTalkChatJob(String(started.job_id))
+      const jobId = String(started?.job_id || "").trim();
+      const data = started?.status === "running" && jobId
+        ? await waitForSumiTalkChatJob(jobId)
         : started?.response || started;
       if (data?.error) {
         const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
@@ -3292,32 +3327,30 @@ function MainChatScreen({
       if (!reply) throw new Error("上游没有返回内容");
       const reasoning = extractAssistantReasoning(data);
       const tokenCount = extractTokenCount(data);
-      const finalMessages = [
-        ...nextMessages,
-        {
-          id: assistantId,
-          role: "assistant" as const,
-          content: reply,
-          createdAt: assistantCreatedAt,
-          status: "sent" as const,
-          reasoning: reasoning || undefined,
-          tokenCount,
-        },
-      ];
+      const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
+        id: assistantId,
+        role: "assistant" as const,
+        content: reply,
+        createdAt: assistantCreatedAt,
+        status: "sent" as const,
+        clientRequestId,
+        jobId: jobId || undefined,
+        reasoning: reasoning || undefined,
+        tokenCount,
+      });
       messagesRef.current = finalMessages;
       setMessages(finalMessages);
       await saveDisplayHistory(finalMessages);
     } catch (e: any) {
-      const failedMessages = [
-        ...nextMessages,
-        {
-          id: assistantId,
-          role: "assistant" as const,
-          content: `（发送失败：${e?.message || e}）`,
-          createdAt: assistantCreatedAt,
-          status: "failed" as const,
-        },
-      ];
+      const failedMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
+        id: assistantId,
+        role: "assistant" as const,
+        content: `（发送失败：${e?.message || e}）`,
+        createdAt: assistantCreatedAt,
+        status: "failed" as const,
+        clientRequestId,
+      });
+      messagesRef.current = failedMessages;
       setMessages(failedMessages);
       await saveDisplayHistory(failedMessages);
       toast(`发送失败：${e?.message || e}`);

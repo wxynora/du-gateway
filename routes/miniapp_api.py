@@ -125,6 +125,42 @@ def _valid_sumitalk_chat_job_id(job_id: str) -> bool:
     return bool(re.fullmatch(r"[a-f0-9]{32}", str(job_id or "").strip()))
 
 
+def _safe_sumitalk_client_request_id(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return re.sub(r"[^a-zA-Z0-9_.:-]", "", text)[:120]
+
+
+def _find_sumitalk_chat_job_by_client_request_id(client_request_id: str, window_id: str, reply_target: str) -> dict | None:
+    cid = _safe_sumitalk_client_request_id(client_request_id)
+    if not cid or not _SUMITALK_CHAT_JOB_DIR.exists():
+        return None
+    best: dict | None = None
+    best_ts = 0.0
+    for path in _SUMITALK_CHAT_JOB_DIR.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8") or "{}")
+            if not isinstance(data, dict):
+                continue
+            if _safe_sumitalk_client_request_id(data.get("client_request_id")) != cid:
+                continue
+            if str(data.get("window_id") or "").strip() != str(window_id or "").strip():
+                continue
+            if str(data.get("reply_target") or "").strip() != str(reply_target or "").strip():
+                continue
+            job_id = str(data.get("id") or "").strip()
+            if not _valid_sumitalk_chat_job_id(job_id):
+                continue
+            ts = float(data.get("created_ts") or 0)
+            if best is None or ts >= best_ts:
+                best = data
+                best_ts = ts
+        except Exception:
+            continue
+    return best
+
+
 def _write_sumitalk_chat_job_state(state: dict) -> None:
     job_id = str((state or {}).get("id") or "").strip()
     if not _valid_sumitalk_chat_job_id(job_id):
@@ -276,14 +312,29 @@ def _start_sumitalk_chat_job_from_request(body: dict, waitable: bool = False):
     messages = body.get("messages") or []
     window_id = str(body.get("window_id") or "").strip()
     reply_target = str(body.get("reply_target") or request.headers.get("X-Reply-Target") or _get_panel_device_id()).strip()
+    client_request_id = _safe_sumitalk_client_request_id(body.get("client_request_id"))
     if not model:
         return "", None, (jsonify({"ok": False, "error": "缺少 model"}), 400)
     if not isinstance(messages, list) or not messages:
         return "", None, (jsonify({"ok": False, "error": "缺少 messages"}), 400)
     if not window_id:
         return "", None, (jsonify({"ok": False, "error": "缺少 window_id"}), 400)
-    job_id = uuid4().hex
     _cleanup_sumitalk_chat_jobs()
+    with _SUMITALK_CHAT_JOB_LOCK:
+        existing = _find_sumitalk_chat_job_by_client_request_id(client_request_id, window_id, reply_target)
+        if existing:
+            existing_job_id = str(existing.get("id") or "").strip()
+            event = _SUMITALK_CHAT_JOB_EVENTS.get(existing_job_id) if waitable else None
+            sumitalk_logger.info(
+                "chat_job_reused job_id=%s client_request_id=%s window_id=%s target=%s status=%s",
+                existing_job_id,
+                client_request_id,
+                window_id,
+                reply_target,
+                str(existing.get("status") or ""),
+            )
+            return existing_job_id, event, None
+        job_id = uuid4().hex
     chat_body = dict(body)
     chat_body["model"] = model
     chat_body["messages"] = messages
@@ -306,9 +357,25 @@ def _start_sumitalk_chat_job_from_request(body: dict, waitable: bool = False):
         "updated_ts": time.time(),
         "created_at": now_beijing_iso(),
         "updated_at": now_beijing_iso(),
+        "client_request_id": client_request_id,
+        "window_id": window_id,
+        "reply_target": reply_target,
     }
     event = threading.Event() if waitable else None
     with _SUMITALK_CHAT_JOB_LOCK:
+        existing = _find_sumitalk_chat_job_by_client_request_id(client_request_id, window_id, reply_target)
+        if existing:
+            existing_job_id = str(existing.get("id") or "").strip()
+            existing_event = _SUMITALK_CHAT_JOB_EVENTS.get(existing_job_id) if waitable else None
+            sumitalk_logger.info(
+                "chat_job_reused_after_race job_id=%s client_request_id=%s window_id=%s target=%s status=%s",
+                existing_job_id,
+                client_request_id,
+                window_id,
+                reply_target,
+                str(existing.get("status") or ""),
+            )
+            return existing_job_id, existing_event, None
         if event is not None:
             _SUMITALK_CHAT_JOB_EVENTS[job_id] = event
         _write_sumitalk_chat_job_state(state)
@@ -1170,6 +1237,27 @@ def miniapp_sumitalk_chat_adaptive():
     except Exception:
         wait_ms = _SUMITALK_CHAT_DIRECT_WAIT_MS
     wait_s = max(0.0, min(8.0, wait_ms / 1000.0))
+    job = _read_sumitalk_chat_job_state(job_id) or {}
+    status = str(job.get("status") or "").strip()
+    if status == "done":
+        return jsonify({
+            "ok": True,
+            "status": "done",
+            "mode": "direct",
+            "job_id": job_id,
+            "status_code": int(job.get("status_code") or 200),
+            "response": job.get("response") or {},
+        })
+    if status == "error":
+        return jsonify({
+            "ok": False,
+            "status": "error",
+            "mode": "direct",
+            "job_id": job_id,
+            "status_code": int(job.get("status_code") or 500),
+            "error": str(job.get("error") or "渡回复失败"),
+            "response": job.get("response") or {},
+        })
     if event is not None and event.wait(wait_s):
         job = _read_sumitalk_chat_job_state(job_id) or {}
         status = str(job.get("status") or "").strip()
@@ -1178,6 +1266,7 @@ def miniapp_sumitalk_chat_adaptive():
                 "ok": True,
                 "status": "done",
                 "mode": "direct",
+                "job_id": job_id,
                 "status_code": int(job.get("status_code") or 200),
                 "response": job.get("response") or {},
             })
@@ -1186,6 +1275,7 @@ def miniapp_sumitalk_chat_adaptive():
                 "ok": False,
                 "status": "error",
                 "mode": "direct",
+                "job_id": job_id,
                 "status_code": int(job.get("status_code") or 500),
                 "error": str(job.get("error") or "渡回复失败"),
                 "response": job.get("response") or {},
