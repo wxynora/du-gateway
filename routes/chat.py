@@ -102,6 +102,7 @@ from services.pc_command_handler import (
 from services.telegram_bot import build_telegram_style_system
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
+from utils.tokens import estimate_tokens
 
 logger = get_logger(__name__)
 sumitalk_logger = get_logger("sumitalk")
@@ -467,6 +468,98 @@ _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION = (
     "如果还需要信息，直接继续调用工具；如果已经够了，必须直接给用户一条可见的最终回复。\n"
     "不要返回空 content，不要只给 reasoning / thinking。"
 )
+
+
+def _build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
+    messages = (body or {}).get("messages") or []
+    tools = (body or {}).get("tools") or []
+    static_chars = 0
+    dynamic_chars = 0
+    leading_system_chars = 0
+    total_message_chars = 0
+    dynamic_marker_seen = False
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        chars = _message_content_chars(m.get("content"))
+        total_message_chars += chars
+    for m in messages:
+        if not isinstance(m, dict):
+            break
+        if str(m.get("role") or "").strip().lower() != "system":
+            break
+        chars = _message_content_chars(m.get("content"))
+        leading_system_chars += chars
+        if m.get("__dynamic__"):
+            dynamic_marker_seen = True
+            dynamic_chars += chars
+        elif dynamic_marker_seen:
+            dynamic_chars += chars
+        else:
+            static_chars += chars
+    try:
+        tools_chars = sum(len(json.dumps(t, ensure_ascii=False, default=str)) for t in tools if isinstance(t, dict))
+    except Exception:
+        tools_chars = 0
+    parsed = urlparse(str(upstream_url or "").strip())
+    return {
+        "upstream_host": parsed.hostname or "",
+        "upstream_path": parsed.path or "",
+        "model": str((body or {}).get("model") or ""),
+        "messages_count": len(messages) if isinstance(messages, list) else 0,
+        "tools_count": len(tools) if isinstance(tools, list) else 0,
+        "static_prefix_chars": static_chars,
+        "static_prefix_est_tokens": estimate_tokens("x" * static_chars),
+        "dynamic_system_chars": dynamic_chars,
+        "dynamic_system_est_tokens": estimate_tokens("x" * dynamic_chars),
+        "leading_system_chars": leading_system_chars,
+        "leading_system_est_tokens": estimate_tokens("x" * leading_system_chars),
+        "message_chars": total_message_chars,
+        "message_est_tokens": estimate_tokens("x" * total_message_chars),
+        "tools_chars": tools_chars,
+        "tools_est_tokens": estimate_tokens("x" * tools_chars),
+        "dynamic_marker_seen": dynamic_marker_seen,
+        "prompt_cache_key": str((body or {}).get("prompt_cache_key") or ""),
+        "prompt_cache_retention": str((body or {}).get("prompt_cache_retention") or ""),
+    }
+
+
+def _extract_prompt_cache_usage(data: dict) -> dict:
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
+        return {"usage_returned": False}
+    prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
+    cached_tokens = prompt_details.get("cached_tokens")
+    if cached_tokens is None:
+        cached_tokens = input_details.get("cached_tokens")
+    return {
+        "usage_returned": True,
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "completion_tokens": usage.get("completion_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cached_tokens": cached_tokens,
+        "prompt_cached_tokens": prompt_details.get("cached_tokens"),
+        "input_cached_tokens": input_details.get("cached_tokens"),
+        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+        "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+    }
+
+
+def _build_cache_debug_entry(body_send: dict, upstream_url: str, prompt_cache_profile: Optional[dict], data: dict) -> dict:
+    profile = dict(prompt_cache_profile or _build_prompt_cache_profile(body_send, upstream_url))
+    parsed = urlparse(str(upstream_url or "").strip())
+    profile["upstream_host"] = parsed.hostname or profile.get("upstream_host") or ""
+    profile["upstream_path"] = parsed.path or profile.get("upstream_path") or ""
+    profile["model"] = str((body_send or {}).get("model") or profile.get("model") or "")
+    profile["prompt_cache_key"] = str((body_send or {}).get("prompt_cache_key") or profile.get("prompt_cache_key") or "")
+    profile["prompt_cache_retention"] = str((body_send or {}).get("prompt_cache_retention") or profile.get("prompt_cache_retention") or "")
+    return {
+        "request": profile,
+        "usage": _extract_prompt_cache_usage(data),
+    }
 
 
 def _extract_thinking_from_content(content: str) -> tuple[str, str]:
@@ -1106,14 +1199,14 @@ def _stream_with_r2_archive(
             logger.info("R2 流式请求已存档")
 
 
-def _forward_to_ai(body: dict, headers: dict):
+def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dict] = None):
     """将请求体转发到配置的 AI 接口：仅一个 active 上游（不再自动 fallback）。
-    返回 (response_json, status_code, error)。非流式。
+    返回 (response_json, status_code, error, cache_debug)。非流式。
     """
     request_model = (body or {}).get("model") or ""
     targets = _get_forward_targets(request_model)
     if not targets:
-        return None, 502, _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置")
+        return None, 502, _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置"), None
     last_err = None
     last_status = 502
     for i, (url, api_key) in enumerate(targets):
@@ -1169,6 +1262,20 @@ def _forward_to_ai(body: dict, headers: dict):
                 continue
             # 只有 2xx 算成功，其余（4xx/5xx/429 等）直接失败（不再自动 fallback）
             if 200 <= r.status_code < 300:
+                cache_debug = _build_cache_debug_entry(body_send, url, prompt_cache_profile, data or {})
+                usage_debug = cache_debug.get("usage") or {}
+                profile_debug = cache_debug.get("request") or {}
+                logger.info(
+                    "prompt_cache_debug host=%s model=%s static_est_tokens=%s dynamic_est_tokens=%s leading_est_tokens=%s cached_tokens=%s usage_returned=%s prompt_cache_key=%s",
+                    profile_debug.get("upstream_host") or "",
+                    profile_debug.get("model") or "",
+                    profile_debug.get("static_prefix_est_tokens"),
+                    profile_debug.get("dynamic_system_est_tokens"),
+                    profile_debug.get("leading_system_est_tokens"),
+                    usage_debug.get("cached_tokens"),
+                    usage_debug.get("usage_returned"),
+                    bool(profile_debug.get("prompt_cache_key")),
+                )
                 # DEBUG 时打出上游原始响应的结构与内容摘要，便于核对格式
                 if data is not None and logger.isEnabledFor(10):  # DEBUG=10
                     try:
@@ -1187,7 +1294,7 @@ def _forward_to_ai(body: dict, headers: dict):
                         )
                     except Exception:
                         pass
-                return data, r.status_code, None
+                return data, r.status_code, None, cache_debug
             last_status = r.status_code
             try:
                 if isinstance(data, dict):
@@ -1201,7 +1308,7 @@ def _forward_to_ai(body: dict, headers: dict):
         except Exception as e:
             last_err = str(e)
             logger.warning("转发目标 %s 异常 %s（不再自动 fallback）", url[:50], e)
-    return None, last_status, _build_upstream_error_hint(last_err or "")
+    return None, last_status, _build_upstream_error_hint(last_err or ""), None
 
 
 def _last_user_message(messages):
@@ -1716,8 +1823,10 @@ def chat_completions():
         )
     except Exception:
         pass
+    active_upstream_url = _get_active_upstream_url()
+    prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
     # 本机 Claude OAuth 代理需要这个标记把缓存断点打在静态 system 末尾；其他上游继续清掉。
-    preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(_get_active_upstream_url())
+    preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(active_upstream_url)
     for msg in body.get("messages") or []:
         if not preserve_dynamic_marker:
             msg.pop("__dynamic__", None)
@@ -1739,25 +1848,8 @@ def chat_completions():
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
             )
         )
-    # 非流式：命中响应缓存则直接返回，不调上游
-    from services.chat_response_cache import get_cache_key, get as cache_get, set as cache_set
-    cache_key = get_cache_key(body)
-    cached = None if (du_daily_maintenance or dynamic_memory_citation_map) else cache_get(cache_key)
-    if cached:
-        resp_json, status = cached
-        logger.info("Chat 命中响应缓存，未调上游")
-        if is_sumitalk_request:
-            msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
-            sumitalk_logger.info(
-                "chat_cache_hit window_id=%s target=%s status=%s reply_chars=%s choices=%s",
-                window_id,
-                reply_target,
-                status,
-                _message_content_chars(get_assistant_content_text(msg)),
-                len((resp_json or {}).get("choices") or []),
-            )
-        return jsonify(resp_json), status
-    resp_json, status, err = _forward_to_ai(body, headers)
+    resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
+    cache_debug_entries = [cache_debug] if cache_debug else []
     if err:
         if is_sumitalk_request:
             sumitalk_logger.error(
@@ -1848,7 +1940,9 @@ def chat_completions():
             from services.notion_tools import execute_tool
             body = _append_tool_results_and_continue(body, msg, tool_calls, execute_tool)
             tool_rounds_used += 1
-            resp_json, status, err = _forward_to_ai(body, headers)
+            resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
+            if cache_debug:
+                cache_debug_entries.append(cache_debug)
             if err or status >= 400:
                 break
             continue
@@ -1863,7 +1957,9 @@ def chat_completions():
             logger.warning("工具续轮最终正文为空，非流式路径触发一次强制收口补问")
             body = _inject_tool_empty_final_retry_instruction(body)
             tool_empty_final_retry_used = True
-            resp_json, status, err = _forward_to_ai(body, headers)
+            resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
+            if cache_debug:
+                cache_debug_entries.append(cache_debug)
             if err or status >= 400:
                 break
             continue
@@ -1878,7 +1974,9 @@ def chat_completions():
             logger.info("工具续轮命中中间态文本，非流式路径触发一次内部补问重试")
             body = _inject_tool_midstream_retry_instruction(body)
             tool_midstream_retry_used = True
-            resp_json, status, err = _forward_to_ai(body, headers)
+            resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
+            if cache_debug:
+                cache_debug_entries.append(cache_debug)
             if err or status >= 400:
                 break
             continue
@@ -1934,8 +2032,6 @@ def chat_completions():
                     (resp_json.get("choices") or [{}])[0]["message"] = msg
         except Exception:
             logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
-    if status == 200 and resp_json and (not du_daily_maintenance) and (not dynamic_memory_citation_map):
-        cache_set(cache_key, resp_json, status)
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
         content_text = get_assistant_content_text(msg)
@@ -1971,6 +2067,8 @@ def chat_completions():
                 msg_for_r2["reasoning_omitted"] = True
             if msg_for_r2.get("reasoning_details") and not msg_for_r2.get("reasoning_omitted"):
                 msg_for_r2["reasoning_omitted"] = True
+            if cache_debug_entries:
+                msg_for_r2["cache_debug"] = cache_debug_entries
             tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
             if tc_trace and not msg_for_r2.get("tool_calls"):
                 msg_for_r2["tool_calls"] = tc_trace

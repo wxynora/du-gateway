@@ -113,11 +113,6 @@ def model_matches_gateway_keywords(model_str: str) -> bool:
     return True
 
 
-# 聊天响应缓存：几分钟内相同请求直接返缓存，不调上游省费用（仅非流式）
-CHAT_CACHE_ENABLED = os.environ.get("CHAT_CACHE_ENABLED", "1").strip().lower() in ("1", "true", "yes")
-CHAT_CACHE_TTL_SECONDS = int(os.environ.get("CHAT_CACHE_TTL_SECONDS", "300"))  # 默认 5 分钟
-CHAT_CACHE_MAX_SIZE = int(os.environ.get("CHAT_CACHE_MAX_SIZE", "500"))
-
 # DeepSeek：窗口总结
 DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
