@@ -174,6 +174,13 @@ def _extract_sleep_summary(raw_text: str, fallback_lines: list[str], fallback_su
     return _fallback_compress_today_lines(fallback_lines, fallback=fallback_summary)
 
 
+def _looks_like_sleep_rollover_block(raw_text: str) -> bool:
+    text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return False
+    return bool(re.search(r"^\s*(昨天|昨日缩略|总结)\s*[：:]", text))
+
+
 def _fallback_compress_today_lines(lines: list[str], fallback: str = "") -> str:
     cleaned = [_strip_time_prefix(x) for x in (lines or []) if _strip_time_prefix(x)]
     if not cleaned:
@@ -405,10 +412,6 @@ def format_inject_block(state: dict, trigger: Optional[dict] = None, maintenance
         MARKER_START,
         "新增：07:30 ……",
         MARKER_END,
-        "睡眠收口格式：",
-        MARKER_START,
-        "昨天：一小段昨天缩略",
-        MARKER_END,
     ]
     if maintenance_mode:
         lines.append("本轮是内部维护任务：不要写任何给老婆看的正文，只输出完整 marker 隐藏块。")
@@ -430,6 +433,10 @@ def format_inject_block(state: dict, trigger: Optional[dict] = None, maintenance
                     lines.append(f"- {s}")
         kind = str(trigger.get("kind") or "").strip()
         if _is_sleep_rollover_kind(kind):
+            lines.append("睡眠收口格式：")
+            lines.append(MARKER_START)
+            lines.append("昨天：一小段昨天缩略")
+            lines.append(MARKER_END)
             lines.append("这次是一天收口：只在 marker 里写“昨天：一句缩略总结”，网关会清空今天。")
         elif kind.startswith("proactive_"):
             lines.append("这次是你自己的主动决策结果：只写本次新增的一条，网关会追加到今天。")
@@ -472,6 +479,9 @@ def save_hidden_block(raw_block: str, trigger: Optional[dict] = None) -> bool:
         state["sleep_candidate_day"] = ""
         state["sleep_candidate_text"] = ""
     else:
+        if _looks_like_sleep_rollover_block(raw_block):
+            logger.warning("du_daily 拒绝非睡眠触发的昨天收口块，避免污染今天 timeline")
+            return False
         new_lines = _extract_append_lines(raw_block)
         if not new_lines:
             return False
