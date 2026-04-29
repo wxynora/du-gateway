@@ -802,12 +802,13 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     if _is_in_quiet_hours(now_dt):
         return {"ok": True, "quiet": True, "sent": False, "now": now_iso}
 
-    # 若用户在此分钟数内发过消息（正在聊天），本 tick 不主动发
+    # 若最近任一入口有消息活动（正在聊天），本 tick 不主动发。
+    # 这里必须与主动概率计算使用同一个口径，避免 SumiTalk/QQ/微信等入口正在聊时误触发主动消息。
     skip_min = int(TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES or 0)
+    last_iso = _get_last_message_activity_iso(uid)
     if skip_min > 0:
-        last_activity_iso = r2_store.get_last_telegram_user_activity_at()
-        if last_activity_iso:
-            last_activity_dt = parse_iso_to_beijing(last_activity_iso)
+        if last_iso:
+            last_activity_dt = parse_iso_to_beijing(last_iso)
             if last_activity_dt:
                 delta_minutes = (now_dt - last_activity_dt).total_seconds() / 60.0
                 if delta_minutes < skip_min:
@@ -817,11 +818,10 @@ def proactive_tick(target_user_id: int = 0) -> dict:
                         "sent": False,
                         "skip_reason": "recent_activity",
                         "now": now_iso,
-                        "last_activity": last_activity_iso,
+                        "last_activity": last_iso,
                         "minutes_ago": round(delta_minutes, 1),
                     }
 
-    last_iso = _get_last_message_activity_iso(uid)
     hours = _hours_since_last(last_iso, now_dt)
     p = _probability(hours)
     hit = random.random() < p
