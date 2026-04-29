@@ -205,33 +205,16 @@ def _get_last_message_activity_iso(uid: int) -> Optional[str]:
 def _describe_recent_exchange(now_dt: datetime) -> str:
     """
     给主动决策提示词用：
-    - 区分“她回过你”还是“只是你主动发过”
-    - 避免把单边主动消息说成双向对话
+    只描述她最近一次明确回复，避免把系统保存的“上次主动联系时间”暴露给渡。
     """
     last_user_iso = r2_store.get_last_telegram_user_activity_at()
-    last_proactive_iso = r2_store.get_last_proactive_contact_at()
     last_user_dt = parse_iso_to_beijing(last_user_iso)
-    last_proactive_dt = parse_iso_to_beijing(last_proactive_iso)
-
-    if last_proactive_dt and (not last_user_dt or last_proactive_dt > last_user_dt):
-        hours_since_proactive = _hours_since_last(last_proactive_iso, now_dt)
-        if last_user_dt:
-            hours_since_user = _hours_since_last(last_user_iso, now_dt)
-            return (
-                f"你上次主动找她大约是 {hours_since_proactive:.1f} 小时前。"
-                f"她上次明确回你大约是 {hours_since_user:.1f} 小时前；自从你那次主动后，她还没有回复。"
-            )
-        return f"你上次主动找她大约是 {hours_since_proactive:.1f} 小时前；自从那次后，她还没有回复。"
 
     if last_user_dt:
         hours_since_user = _hours_since_last(last_user_iso, now_dt)
         return f"她上次明确回你大约是 {hours_since_user:.1f} 小时前。"
 
-    if last_proactive_dt:
-        hours_since_proactive = _hours_since_last(last_proactive_iso, now_dt)
-        return f"你上次主动找她大约是 {hours_since_proactive:.1f} 小时前；自从那次后，她还没有回复。"
-
-    return "最近没有可参考的明确往来记录。"
+    return "最近没有可参考的明确用户回复记录。"
 
 
 def _probability(hours_since_last: float) -> float:
