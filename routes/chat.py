@@ -46,6 +46,7 @@ from pipeline.pipeline import (
     step_clean_images_and_save_desc,
     step_clean_for_forward,
     step_replace_rikka_system,
+    step_inject_core_behavior_rules,
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
     step_inject_sense_snapshot,
@@ -1773,6 +1774,7 @@ def chat_completions():
     body = step_clean_images_and_save_desc(body, window_id)
     body = step_clean_for_forward(body)
     body = step_replace_rikka_system(body)
+    body = step_inject_core_behavior_rules(body)
     body = _inject_miniapp_style_system(body)
     body = _inject_channel_nsfw_system(body)
     body = _inject_followup_instruction(body)

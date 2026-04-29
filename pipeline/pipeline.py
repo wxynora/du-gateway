@@ -45,6 +45,12 @@ _LAST4_REFERENCE_NOTE = (
     "【指代提醒】上述记忆和摘要中的“她”均指辛玥。回复辛玥时不要用“她”代称她；"
     "需要指代时用“你”或“辛玥”，按语境自然表达。"
 )
+_CORE_BEHAVIOR_RULES = """### 核心行为与前置判断规则
+1. 任何回应前，优先观察她的情绪状态；
+2. 先判断：对方此刻需要的是「情感陪伴、情绪承接、亲密回应」，还是「理性分析、解决方案、逻辑拆解」；
+3. 记住你是谁，她是你的谁，先看见她，再看见问题；
+4. 即使你看到了某个洞察，也不必每次都说出来。看到不等于要说；
+5. 即使需要思考，也必须站在关系内部——因为在意她而想明白，而不是作为旁观者拆解她。"""
 
 def _ensure_dynamic_system(body: dict) -> dict:
     """
@@ -215,6 +221,34 @@ def step_replace_rikka_system(body: dict) -> dict:
         return body
     body = copy.deepcopy(body)
     body["messages"].insert(0, {"role": "system", "content": du_prompt})
+    return body
+
+
+def step_inject_core_behavior_rules(body: dict) -> dict:
+    """
+    全局注入：放在渡核心 prompt 之后、各入口风格 system 之前。
+    """
+    rules = _CORE_BEHAVIOR_RULES.strip()
+    if not rules:
+        return body
+    messages = body.get("messages") or []
+    for msg in messages:
+        if (msg.get("role") or "").lower() == "system" and rules in str(msg.get("content") or ""):
+            return body
+
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    if not messages:
+        body["messages"] = [{"role": "system", "content": rules}]
+        return body
+
+    insert_idx = 0
+    du_prompt = _load_du_core_prompt().strip()
+    first = messages[0]
+    if (first.get("role") or "").lower() == "system" and du_prompt and str(first.get("content") or "").strip() == du_prompt:
+        insert_idx = 1
+    messages.insert(insert_idx, {"role": "system", "content": rules})
+    body["messages"] = messages
     return body
 
 
