@@ -340,6 +340,7 @@ function isDirectChatMsg(msg) {
 function buildWechatStyleSystem() {
   return [
     "请遵守以下输出格式要求：",
+    "进行 extended thinking 时尽量使用中文。",
     "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",
     "2) 不要输出分割线（例如 ---、———、***）。",
     "3) 不要使用 Markdown 强调符号 * 或 **。",

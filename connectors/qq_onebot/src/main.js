@@ -55,6 +55,7 @@ function buildQqStyleSystem() {
   const tagsLine = getStickerTagsLineForSystemPrompt();
   return [
     "请遵守以下输出格式要求：",
+    "进行 extended thinking 时尽量使用中文。",
     "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。",
     `   ${tagsLine}`,
     "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",

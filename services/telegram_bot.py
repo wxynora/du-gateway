@@ -209,6 +209,7 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
     prefix = "你正在通过 Telegram 和辛玥聊天。请遵守以下输出格式要求：\n" if include_channel_hint else "请遵守以下输出格式要求：\n"
     return (
         prefix +
+        "进行 extended thinking 时尽量使用中文。\n"
         "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。\n"
         f"   {tags_line}\n"
         "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"
