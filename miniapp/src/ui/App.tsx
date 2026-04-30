@@ -1987,14 +1987,13 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
         {chatExpanded ? (
           <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setChatExpanded(false)}>
             <aside
-              className={`absolute bottom-0 right-0 top-0 flex w-[82vw] max-w-[340px] min-w-0 flex-col overflow-hidden border-l px-4 shadow-[-16px_0_36px_rgba(0,0,0,0.14)] backdrop-blur-md ${theme.dock}`}
-              style={{
-                paddingTop: "calc(env(safe-area-inset-top,0px)+14px)",
-                paddingBottom: "calc(env(safe-area-inset-bottom,0px)+14px)",
-              }}
+              className={`absolute bottom-0 right-0 top-0 flex w-[82vw] max-w-[340px] min-w-0 flex-col overflow-hidden border-l shadow-[-16px_0_36px_rgba(0,0,0,0.14)] backdrop-blur-md ${theme.dock}`}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="mb-3 flex items-center justify-between gap-3">
+              <div
+                className="flex items-center justify-between gap-3 px-4 pb-3"
+                style={{ paddingTop: "calc(env(safe-area-inset-top,0px)+22px)" }}
+              >
                 <div className="min-w-0">
                   <div className="text-[15px] font-semibold">和渡聊这本书</div>
                   <div className={`mt-0.5 truncate font-mono text-[11px] ${theme.muted}`}>{activeBook.title}</div>
@@ -2010,13 +2009,13 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
               </div>
 
               {selectedText ? (
-                <div className={`mb-3 flex items-center gap-2 rounded-[16px] px-3 py-2 text-[11px] font-medium ${theme.soft}`}>
+                <div className={`mx-4 mb-3 flex items-center gap-2 rounded-[16px] px-3 py-2 text-[11px] font-medium ${theme.soft}`}>
                   <span className="min-w-0 flex-1 leading-5">已选中：{compactCoReadText(selectedText, 58)}</span>
                   <button type="button" className="shrink-0" onClick={clearCoReadSelection}>清除</button>
                 </div>
               ) : null}
 
-              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              <div className="min-h-0 flex-1 overflow-y-auto px-4">
                 {recentMessages.length ? (
                   <div className="flex flex-col gap-2">
                     {recentMessages.map((msg) => (
@@ -2043,7 +2042,10 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
                 )}
               </div>
 
-              <div className="mt-3 flex items-center gap-2">
+              <div
+                className="flex items-center gap-2 px-4 pt-3"
+                style={{ paddingBottom: "calc(env(safe-area-inset-bottom,0px)+22px)" }}
+              >
                 <input
                   ref={inputRef}
                   className={`h-11 min-w-0 flex-1 rounded-full border px-4 text-[14px] font-medium outline-none ${theme.input}`}
