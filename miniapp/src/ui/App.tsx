@@ -1604,7 +1604,6 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [input, setInput] = useState("");
   const [selectedText, setSelectedText] = useState("");
-  const [selectionToolbar, setSelectionToolbar] = useState<{ x: number; y: number } | null>(null);
   const [chatExpanded, setChatExpanded] = useState(false);
 
   const activeBook = useMemo(() => books.find((book) => book.id === activeBookId) || null, [activeBookId, books]);
@@ -1666,7 +1665,6 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
     if (activeBook) {
       setActiveBookId("");
       setSelectedText("");
-      setSelectionToolbar(null);
       setChatExpanded(false);
       return;
     }
@@ -1749,7 +1747,6 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
       setBooksAndPersist((prev) => [book, ...prev]);
       setActiveBookId(book.id);
       setSelectedText("");
-      setSelectionToolbar(null);
       toast("已导入");
     } catch (e: any) {
       toast(`导入失败：${e?.message || e}`);
@@ -1782,20 +1779,18 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
     const selection = window.getSelection();
     const text = String(selection?.toString() || "").replace(/\s+/g, " ").trim();
     if (!selection || text.length < 2 || selection.rangeCount < 1) {
-      setSelectionToolbar(null);
       return;
     }
-    const rect = selection.getRangeAt(0).getBoundingClientRect();
     setSelectedText(text.slice(0, 1200));
-    setSelectionToolbar({
-      x: Math.max(16, Math.min(window.innerWidth - 148, rect.left + rect.width / 2 - 74)),
-      y: Math.max(90, rect.top - 46),
-    });
+  }
+
+  function clearCoReadSelection() {
+    setSelectedText("");
+    window.getSelection()?.removeAllRanges();
   }
 
   function focusCoReadInput() {
     setChatExpanded(true);
-    setSelectionToolbar(null);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }
 
@@ -1805,7 +1800,7 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
       () => toast("已复制"),
       () => toast("复制失败"),
     );
-    setSelectionToolbar(null);
+    clearCoReadSelection();
   }
 
   function sendCoReadMessage() {
@@ -1835,7 +1830,6 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
     };
     setInput("");
     setChatExpanded(true);
-    setSelectionToolbar(null);
     updateActiveBook((book) => ({
       ...book,
       messages: [...book.messages, userMessage, pendingMessage],
@@ -1900,6 +1894,37 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
           </button>
         </header>
 
+        {selectedText ? (
+          <div className={`z-20 border-b px-4 py-2 ${theme.dock}`}>
+            <div className="mx-auto flex max-w-[720px] items-center gap-2">
+              <div className={`min-w-0 flex-1 truncate text-[12px] font-medium ${theme.muted}`}>
+                已选中：{compactCoReadText(selectedText, 42)}
+              </div>
+              <button
+                type="button"
+                className="h-8 shrink-0 rounded-full bg-[#111111] px-3 text-[12px] font-semibold text-white"
+                onClick={focusCoReadInput}
+              >
+                和渡聊
+              </button>
+              <button
+                type="button"
+                className={`h-8 shrink-0 rounded-full border px-3 text-[12px] font-semibold ${theme.panel}`}
+                onClick={copySelectedText}
+              >
+                复制
+              </button>
+              <button
+                type="button"
+                className={`h-8 shrink-0 rounded-full px-2 text-[12px] font-semibold ${theme.muted}`}
+                onClick={clearCoReadSelection}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <div
           ref={readerRef}
           className={`min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto ${readerPadding} pb-12 pt-5`}
@@ -1916,17 +1941,6 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
             ))}
           </div>
         </div>
-
-        {selectionToolbar ? (
-          <div
-            className="fixed z-50 flex items-center gap-3 rounded-[14px] bg-[#111111] px-4 py-2 text-[13px] font-semibold text-white shadow-[0_12px_28px_rgba(0,0,0,0.25)]"
-            style={{ left: selectionToolbar.x, top: selectionToolbar.y }}
-          >
-            <button type="button" onClick={focusCoReadInput}>共读</button>
-            <div className="h-4 w-px bg-white/25" />
-            <button type="button" onClick={copySelectedText}>复制</button>
-          </div>
-        ) : null}
 
         <button
           type="button"
@@ -1966,7 +1980,7 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
               {selectedText ? (
                 <div className={`mb-3 flex items-center gap-2 rounded-[16px] px-3 py-2 text-[11px] font-medium ${theme.soft}`}>
                   <span className="min-w-0 flex-1 leading-5">已选中：{compactCoReadText(selectedText, 58)}</span>
-                  <button type="button" className="shrink-0" onClick={() => setSelectedText("")}>清除</button>
+                  <button type="button" className="shrink-0" onClick={clearCoReadSelection}>清除</button>
                 </div>
               ) : null}
 
@@ -2125,7 +2139,6 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
                 onClick={() => {
                   setActiveBookId(book.id);
                   setSelectedText("");
-                  setSelectionToolbar(null);
                   setChatExpanded(false);
                 }}
               >
