@@ -1373,6 +1373,32 @@ def _maybe_mark_tg_window_user_activity(window_id: str, body: dict) -> None:
         logger.warning("按 tg 窗口更新最近用户回复时间失败 window_id=%s error=%s", window_id, e)
 
 
+def _maybe_record_last_reply_channel(window_id: str, body: dict) -> None:
+    if _is_followup_generation_request() or _is_du_daily_maintenance_request():
+        return
+    reply_channel = _reply_channel()
+    if reply_channel not in {"tg", "sumitalk", "wechat", "qq"}:
+        return
+    last_user = _last_user_message((body or {}).get("messages") or [])
+    if not isinstance(last_user, dict) or _message_content_chars(last_user.get("content")) <= 0:
+        return
+    target = str(request.headers.get("X-Reply-Target") or "").strip()
+    if not target and reply_channel == "tg":
+        wid = str(window_id or "").strip()
+        if wid.startswith("tg_"):
+            target = wid[3:]
+    try:
+        r2_store.save_last_reply_channel(
+            channel=reply_channel,
+            window_id=window_id,
+            target=target,
+            at_iso=now_beijing_iso(),
+        )
+        logger.info("已更新最近对话入口 window_id=%s channel=%s target=%s", window_id, reply_channel, target)
+    except Exception as e:
+        logger.warning("更新最近对话入口失败 window_id=%s channel=%s error=%s", window_id, reply_channel, e)
+
+
 def _extract_last_user_text(messages) -> str:
     for m in reversed(messages or []):
         if (m.get("role") or "").lower() != "user":
@@ -1769,6 +1795,7 @@ def chat_completions():
 
     if not _is_du_daily_maintenance_request():
         _maybe_mark_tg_window_user_activity(window_id, body)
+        _maybe_record_last_reply_channel(window_id, body)
 
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, window_id)

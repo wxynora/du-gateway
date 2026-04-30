@@ -445,6 +445,51 @@ def _call_gateway_followup(window_id: str, channel: str, reason: str, chain_id: 
         return None
 
 
+def _choice_dialog_delivery_preference(default_target: str) -> tuple[str, str, dict]:
+    try:
+        meta = r2_store.get_last_reply_channel() or {}
+    except Exception:
+        meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    channel = _normalize_reply_channel(str(meta.get("channel") or ""), default="", allow_tg=True)
+    target = str(meta.get("target") or "").strip()
+    window_id = str(meta.get("window_id") or "").strip()
+    if channel == "tg" and not target and window_id.startswith("tg_"):
+        target = window_id[3:]
+    if channel == "sumitalk" and not target:
+        target = str(default_target or "").strip()
+    return channel, target, meta
+
+
+def _choice_dialog_delivery_channels(preferred_channel: str, available_channels: list[str], preferred_target: str) -> list[str]:
+    ordered: list[str] = []
+
+    def add(channel: str) -> None:
+        ch = _normalize_reply_channel(channel, default="", allow_tg=True)
+        if ch and ch not in ordered:
+            ordered.append(ch)
+
+    if preferred_channel in {"wechat", "qq", "sumitalk"}:
+        add(preferred_channel)
+    elif preferred_channel == "tg" and str(preferred_target or "").strip():
+        add("tg")
+    for channel in available_channels or []:
+        add(channel)
+    return ordered
+
+
+def _dispatch_choice_dialog_reply(channel: str, target: str, text: str, created_at: str | None = None) -> bool:
+    ch = _normalize_reply_channel(channel, default="", allow_tg=True)
+    if ch in {"wechat", "qq"}:
+        from services.telegram_proactive import _dispatch_send
+
+        return _dispatch_send(ch, text)
+    if ch in {"tg", "sumitalk"}:
+        return _dispatch_followup(ch, target, text, created_at or now_beijing_iso())
+    return False
+
+
 def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过主动消息入口发出。"""
     try:
@@ -461,6 +506,8 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
     prompt = str(event_text or "").strip()
     if not prompt:
         return {"ok": False, "error": "empty_event"}
+    preferred_channel, preferred_target, preferred_meta = _choice_dialog_delivery_preference(target)
+    generation_channel = preferred_channel or "sumitalk"
 
     body = {
         "model": model,
@@ -476,11 +523,13 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
             }
         ],
     }
+    if generation_channel == "tg":
+        body["messages"].insert(0, {"role": "system", "content": build_telegram_style_system(include_channel_hint=False)})
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": context_window_id,
-        "X-Reply-Channel": "sumitalk",
-        "X-Reply-Target": str(target or "").strip(),
+        "X-Reply-Channel": generation_channel,
+        "X-Reply-Target": str(preferred_target or target or "").strip(),
         "X-DU-FOLLOWUP-GEN": "1",
         "X-Force-Last4": "1",
     }
@@ -507,21 +556,36 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
         text, _followup = extract_followup_marker(text)
         if not text:
             return {"ok": False, "error": "empty_gateway_reply"}
-        from services.telegram_proactive import _available_channels, _dispatch_send
+        from services.telegram_proactive import _available_channels
 
-        channels = _available_channels()
-        channel = channels[0] if channels else ""
-        if not channel:
+        channels = _choice_dialog_delivery_channels(preferred_channel, _available_channels(), preferred_target)
+        if not channels:
             return {"ok": False, "error": "no_proactive_channel", "reply_preview": text[:120]}
         outbound = _sanitize_reply_for_telegram(text).strip()
         if not outbound:
             return {"ok": False, "error": "empty_after_sanitize"}
-        ok = _dispatch_send(channel, outbound)
+        attempted_channels = []
+        for channel in channels:
+            attempted_channels.append(channel)
+            send_target = preferred_target if channel == preferred_channel else str(target or "").strip()
+            if _dispatch_choice_dialog_reply(channel, send_target, outbound, created_at=created_at):
+                return {
+                    "ok": True,
+                    "channel": channel,
+                    "attempted_channels": attempted_channels,
+                    "preferred_channel": preferred_channel,
+                    "preferred_channel_at": str(preferred_meta.get("at") or ""),
+                    "reply_preview": outbound[:120],
+                    "error": "",
+                }
         return {
-            "ok": bool(ok),
-            "channel": channel,
+            "ok": False,
+            "channel": attempted_channels[-1] if attempted_channels else "",
+            "attempted_channels": attempted_channels,
+            "preferred_channel": preferred_channel,
+            "preferred_channel_at": str(preferred_meta.get("at") or ""),
             "reply_preview": outbound[:120],
-            "error": "" if ok else "dispatch_failed",
+            "error": "dispatch_failed",
         }
     except Exception as e:
         logger.warning("SumiTalk 事件唤醒异常", exc_info=True)

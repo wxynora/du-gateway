@@ -67,6 +67,8 @@ R2_KEY_DU_MEMORY_DOC = "docs/du_memory_doc_v1.txt"
 R2_KEY_LAST_PROACTIVE_CONTACT_AT = "global/last_proactive_contact_at.txt"
 # 主动发消息：目标用户最近一次在 TG 发消息的时间（北京时间 ISO），用于「正在聊天时不主动发」
 R2_KEY_LAST_TELEGRAM_USER_ACTIVITY_AT = "global/last_telegram_user_activity_at.txt"
+# 最近一次真实对话入口：给手机弹窗回执这类后端事件决定回发通道
+R2_KEY_LAST_REPLY_CHANNEL = "global/last_reply_channel.json"
 # 主动联络「抽中后问渡」的决策记忆，新在前，最多 5 条（闹钟不参与）
 R2_KEY_PROACTIVE_DECISION_MEMORY = "global/proactive_decision_memory.json"
 R2_KEY_CONVERSATION_FOLLOWUPS = "global/conversation_followups.json"
@@ -1777,6 +1779,38 @@ def save_last_telegram_user_activity_at(iso_str: str) -> bool:
             )
             return True
         except Exception:
+            return False
+
+
+def get_last_reply_channel() -> Optional[dict]:
+    """读取最近一次真实对话入口。"""
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_LAST_REPLY_CHANNEL)
+    return data if isinstance(data, dict) else None
+
+
+def save_last_reply_channel(channel: str, window_id: str = "", target: str = "", at_iso: str = "") -> bool:
+    """保存最近一次真实对话入口，供后端事件按同入口回发。"""
+    ch = str(channel or "").strip().lower()
+    if ch not in {"tg", "wechat", "qq", "sumitalk"}:
+        return False
+    payload = {
+        "channel": ch,
+        "window_id": str(window_id or "").strip(),
+        "target": str(target or "").strip(),
+        "at": str(at_iso or "").strip() or now_beijing_iso(),
+    }
+    client = _s3_client()
+    if not client:
+        return False
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_LAST_REPLY_CHANNEL, payload)
+            return True
+        except Exception as e:
+            logger.error("save_last_reply_channel 失败 channel=%s error=%s", ch, e, exc_info=True)
             return False
 
 
