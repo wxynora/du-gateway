@@ -445,6 +445,89 @@ def _call_gateway_followup(window_id: str, channel: str, reason: str, chain_id: 
         return None
 
 
+def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
+    """立即让渡基于一个后端事件生成回应，并通过主动消息入口发出。"""
+    try:
+        from storage.upstream_store import get_cached_active_model
+
+        model = str(get_cached_active_model(refresh_if_missing=True) or "").strip()
+    except Exception:
+        model = ""
+    if not model:
+        return {"ok": False, "error": "missing_model"}
+    context_window_id = str(window_id or "").strip()
+    if not context_window_id:
+        return {"ok": False, "error": "missing_window_id"}
+    prompt = str(event_text or "").strip()
+    if not prompt:
+        return {"ok": False, "error": "empty_event"}
+
+    body = {
+        "model": model,
+        "stream": False,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    f"{prompt}\n\n"
+                    "请你现在直接对她回应一两句。不要解释工具、回执或系统流程；"
+                    "不要把这当成普通任务总结，要像刚收到她这个动作一样自然接住。"
+                ),
+            }
+        ],
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Window-Id": context_window_id,
+        "X-Reply-Channel": "sumitalk",
+        "X-Reply-Target": str(target or "").strip(),
+        "X-DU-FOLLOWUP-GEN": "1",
+        "X-Force-Last4": "1",
+    }
+    url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
+    try:
+        r = requests.post(url, headers=headers, json=body, timeout=120)
+        if r.status_code != 200:
+            logger.warning("SumiTalk 事件唤醒调用网关失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
+            return {"ok": False, "error": f"gateway_http_{r.status_code}"}
+        data = r.json() if r.content else {}
+        msg = (((data or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    if str(part.get("type") or "") == "text":
+                        parts.append(str(part.get("text") or ""))
+                    elif isinstance(part.get("text"), str):
+                        parts.append(str(part.get("text") or ""))
+            text = "\n".join(x.strip() for x in parts if str(x).strip()).strip()
+        else:
+            text = str(content or "").strip()
+        text, _followup = extract_followup_marker(text)
+        if not text:
+            return {"ok": False, "error": "empty_gateway_reply"}
+        from services.telegram_proactive import _available_channels, _dispatch_send
+
+        channels = _available_channels()
+        channel = channels[0] if channels else ""
+        if not channel:
+            return {"ok": False, "error": "no_proactive_channel", "reply_preview": text[:120]}
+        outbound = _sanitize_reply_for_telegram(text).strip()
+        if not outbound:
+            return {"ok": False, "error": "empty_after_sanitize"}
+        ok = _dispatch_send(channel, outbound)
+        return {
+            "ok": bool(ok),
+            "channel": channel,
+            "reply_preview": outbound[:120],
+            "error": "" if ok else "dispatch_failed",
+        }
+    except Exception as e:
+        logger.warning("SumiTalk 事件唤醒异常", exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+
 def tick_conversation_followups() -> dict:
     now_iso = now_beijing_iso()
     now_dt = parse_iso_to_beijing(now_iso)

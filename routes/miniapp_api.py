@@ -560,6 +560,64 @@ def _merge_sumitalk_messages(*groups: list[dict]) -> list[dict]:
     return merged[-_SUMITALK_HISTORY_MAX_MESSAGES:]
 
 
+def _choice_dialog_wakeup_event_text(item: dict) -> str:
+    if not isinstance(item, dict) or str(item.get("type") or "").strip() != "show_choice_dialog":
+        return ""
+    if str(item.get("status") or "").strip().lower() != "done":
+        return ""
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    title = str(payload.get("title") or "弹窗").strip() or "弹窗"
+    message = str(payload.get("message") or "").strip()
+    label = str(result.get("label") or "").strip()
+    choice_id = str(result.get("choice_id") or "").strip()
+    if result.get("timeout"):
+        outcome = "她没有选择，弹窗已超时关闭。"
+    elif result.get("dismissed") or choice_id == "dismissed":
+        outcome = "她关闭了弹窗，没有选择选项。"
+    elif label:
+        outcome = f"她选择了「{label}」。"
+    else:
+        return ""
+    context = f"弹窗标题：{title}"
+    if message:
+        context += f"\n弹窗正文：{message}"
+    return f"你刚刚发到她手机上的 SumiTalk 双选项弹窗收到了回应。\n{context}\n弹窗结果：{outcome}"
+
+
+def _wake_du_for_choice_dialog_results(device_id: str, items: list[dict]) -> int:
+    events = [
+        text for text in (_choice_dialog_wakeup_event_text(item) for item in items or [])
+        if text
+    ]
+    if not events:
+        return 0
+    window_id = _resolve_primary_chat_window_id()
+    if not window_id:
+        sumitalk_logger.warning("choice_dialog_wakeup_skip reason=no_window device_id=%s events=%s", device_id, len(events))
+        return 0
+
+    def _run() -> None:
+        try:
+            from services.conversation_followup import send_choice_dialog_wakeup
+
+            for text in events:
+                result = send_choice_dialog_wakeup(window_id=window_id, target=device_id, event_text=text)
+                sumitalk_logger.info(
+                    "choice_dialog_wakeup_done ok=%s device_id=%s window_id=%s error=%s preview=%s",
+                    bool(result.get("ok")),
+                    device_id,
+                    window_id,
+                    str(result.get("error") or ""),
+                    str(result.get("reply_preview") or "")[:80],
+                )
+        except Exception:
+            sumitalk_logger.exception("choice_dialog_wakeup_failed device_id=%s window_id=%s", device_id, window_id)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return len(events)
+
+
 def _notify_schedule_runtime_changed():
     """日历变更后通知网关内置调度线程立即重算。"""
     try:
@@ -1612,6 +1670,10 @@ def miniapp_device_actions_done():
     if not isinstance(results, list):
         return jsonify({"ok": False, "error": "results 必须是数组"}), 400
     result = r2_store.report_app_actions(results, device_id=device_id)
+    if result.get("ok"):
+        queued = _wake_du_for_choice_dialog_results(device_id, result.get("items") or [])
+        if queued:
+            result["proactive_wakeup_queued"] = queued
     return jsonify(result)
 
 

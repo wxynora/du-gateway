@@ -855,7 +855,7 @@ def mark_pc_commands_done(done_ids: list[str]) -> int:
             return 0
 
 
-_APP_ACTION_ALLOWLIST = {"create_system_alarm", "create_calendar_event"}
+_APP_ACTION_ALLOWLIST = {"create_system_alarm", "create_calendar_event", "show_choice_dialog"}
 _APP_ACTION_HISTORY_MAX = 100
 _APP_ACTION_EXPIRES_DEFAULT = 900
 _APP_ACTION_EXPIRES_MIN = 30
@@ -964,6 +964,8 @@ def _normalize_calendar_event_payload(payload: dict) -> tuple[Optional[dict], Op
 def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Optional[dict], Optional[str]]:
     if action_type == "create_calendar_event":
         return _normalize_calendar_event_payload(payload)
+    if action_type == "show_choice_dialog":
+        return _normalize_choice_dialog_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}
@@ -990,6 +992,59 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         "title": title,
         "skipUi": skip_ui,
         "notify": notify,
+    }, None
+
+
+def _normalize_choice_label(value, fallback: str) -> str:
+    label = str(value or "").strip() or fallback
+    if len(label) > 8:
+        label = label[:8]
+    return label
+
+
+def _normalize_choice_dialog_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    title = str(src.get("title") or "渡").strip() or "渡"
+    if len(title) > 60:
+        title = title[:60]
+    message = str(src.get("message") or src.get("content") or "").strip()
+    if not message:
+        return None, "message 不能为空"
+    if len(message) > 500:
+        message = message[:500]
+
+    choice_a = src.get("choice_a") or src.get("choiceA") or src.get("positive")
+    choice_b = src.get("choice_b") or src.get("choiceB") or src.get("negative")
+    raw_choices = src.get("choices")
+    if isinstance(raw_choices, list):
+        if len(raw_choices) > 0:
+            first = raw_choices[0]
+            choice_a = first.get("label") if isinstance(first, dict) else first
+        if len(raw_choices) > 1:
+            second = raw_choices[1]
+            choice_b = second.get("label") if isinstance(second, dict) else second
+    label_a = _normalize_choice_label(choice_a, "好的")
+    label_b = _normalize_choice_label(choice_b, "知道了")
+
+    level = str(src.get("level") or "info").strip().lower()
+    if level not in {"info", "warning", "strict"}:
+        level = "info"
+    dismissible = bool(src.get("dismissible", level != "strict"))
+    try:
+        timeout_seconds = int(src.get("timeout_seconds") if "timeout_seconds" in src else src.get("timeoutSeconds", 600))
+    except Exception:
+        timeout_seconds = 600
+    timeout_seconds = max(30, min(1800, timeout_seconds))
+    return {
+        "title": title,
+        "message": message,
+        "level": level,
+        "dismissible": dismissible,
+        "timeoutSeconds": timeout_seconds,
+        "choices": [
+            {"id": "choice_a", "label": label_a},
+            {"id": "choice_b", "label": label_b},
+        ],
     }, None
 
 

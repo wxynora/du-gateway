@@ -1,5 +1,6 @@
 package com.sumitalk.app;
 
+import android.app.AlertDialog;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -54,8 +55,11 @@ import java.text.SimpleDateFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -793,6 +797,12 @@ public class FloatingBallService extends Service {
                 result.put("detail", detail);
                 return result;
             }
+            if ("show_choice_dialog".equals(type)) {
+                JSONObject detail = showChoiceDialogFromAction(payload == null ? new JSONObject() : payload);
+                result.put("status", "done");
+                result.put("detail", detail);
+                return result;
+            }
             result.put("status", "failed");
             result.put("error", "unknown_action");
             return result;
@@ -833,6 +843,136 @@ public class FloatingBallService extends Service {
         detail.put("minute", minute);
         detail.put("title", title);
         detail.put("notified", notify);
+        return detail;
+    }
+
+    private JSONObject showChoiceDialogFromAction(JSONObject payload) throws Exception {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
+            throw new IllegalStateException("overlay_permission_denied");
+        }
+        final String title = String.valueOf(payload.optString("title", "渡")).trim();
+        final String message = String.valueOf(payload.optString("message", "")).trim();
+        if (message.isEmpty()) throw new IllegalArgumentException("message_empty");
+        final String level = String.valueOf(payload.optString("level", "info")).trim();
+        final boolean dismissible = payload.optBoolean("dismissible", true);
+        final int timeoutSeconds = Math.max(30, Math.min(1800, payload.optInt("timeoutSeconds", 600)));
+
+        JSONArray choices = payload.optJSONArray("choices");
+        String choiceAId = "choice_a";
+        String choiceALabel = "好的";
+        String choiceBId = "choice_b";
+        String choiceBLabel = "知道了";
+        if (choices != null && choices.length() >= 2) {
+            JSONObject a = choices.optJSONObject(0);
+            JSONObject b = choices.optJSONObject(1);
+            if (a != null) {
+                choiceAId = String.valueOf(a.optString("id", "choice_a")).trim();
+                choiceALabel = String.valueOf(a.optString("label", choiceALabel)).trim();
+            }
+            if (b != null) {
+                choiceBId = String.valueOf(b.optString("id", "choice_b")).trim();
+                choiceBLabel = String.valueOf(b.optString("label", choiceBLabel)).trim();
+            }
+        }
+        if (choiceAId.isEmpty()) choiceAId = "choice_a";
+        if (choiceBId.isEmpty()) choiceBId = "choice_b";
+        if (choiceALabel.isEmpty()) choiceALabel = "好的";
+        if (choiceBLabel.isEmpty()) choiceBLabel = "知道了";
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<JSONObject> resultRef = new AtomicReference<>();
+        AtomicReference<AlertDialog> dialogRef = new AtomicReference<>();
+        final String finalChoiceAId = choiceAId;
+        final String finalChoiceALabel = choiceALabel;
+        final String finalChoiceBId = choiceBId;
+        final String finalChoiceBLabel = choiceBLabel;
+        mainHandler.post(
+                () -> {
+                    try {
+                        AlertDialog dialog =
+                                new AlertDialog.Builder(this)
+                                        .setTitle(title.isEmpty() ? "渡" : title)
+                                        .setMessage(message)
+                                        .setPositiveButton(
+                                                finalChoiceALabel,
+                                                (d, which) ->
+                                                        completeChoiceDialog(
+                                                                resultRef,
+                                                                latch,
+                                                                buildChoiceDialogResult(finalChoiceAId, finalChoiceALabel, level, false, false)))
+                                        .setNegativeButton(
+                                                finalChoiceBLabel,
+                                                (d, which) ->
+                                                        completeChoiceDialog(
+                                                                resultRef,
+                                                                latch,
+                                                                buildChoiceDialogResult(finalChoiceBId, finalChoiceBLabel, level, false, false)))
+                                        .create();
+                        dialog.setCancelable(dismissible);
+                        dialog.setCanceledOnTouchOutside(dismissible);
+                        dialog.setOnCancelListener(
+                                d ->
+                                        completeChoiceDialog(
+                                                resultRef,
+                                                latch,
+                                                buildChoiceDialogResult("dismissed", "", level, true, false)));
+                        android.view.Window window = dialog.getWindow();
+                        if (window == null) throw new IllegalStateException("dialog_window_unavailable");
+                        window.setType(
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                                        : WindowManager.LayoutParams.TYPE_PHONE);
+                        dialogRef.set(dialog);
+                        dialog.show();
+                    } catch (Exception e) {
+                        completeChoiceDialog(resultRef, latch, buildChoiceDialogError(e));
+                    }
+                });
+        if (!latch.await(timeoutSeconds, TimeUnit.SECONDS)) {
+            resultRef.compareAndSet(null, buildChoiceDialogResult("timeout", "", level, true, true));
+            AlertDialog dialog = dialogRef.get();
+            if (dialog != null) {
+                mainHandler.post(
+                        () -> {
+                            try {
+                                dialog.dismiss();
+                            } catch (Exception ignored) {
+                            }
+                        });
+            }
+        }
+        JSONObject detail = resultRef.get();
+        if (detail == null) throw new IllegalStateException("dialog_no_result");
+        String error = String.valueOf(detail.optString("error", "")).trim();
+        if (!error.isEmpty()) throw new IllegalStateException(error);
+        return detail;
+    }
+
+    private void completeChoiceDialog(AtomicReference<JSONObject> resultRef, CountDownLatch latch, JSONObject detail) {
+        if (resultRef.compareAndSet(null, detail)) {
+            latch.countDown();
+        }
+    }
+
+    private JSONObject buildChoiceDialogResult(String choiceId, String label, String level, boolean dismissed, boolean timeout) {
+        JSONObject detail = new JSONObject();
+        try {
+            detail.put("choice_id", choiceId);
+            detail.put("label", label);
+            detail.put("level", level);
+            detail.put("dismissed", dismissed);
+            detail.put("timeout", timeout);
+        } catch (Exception ignored) {
+        }
+        return detail;
+    }
+
+    private JSONObject buildChoiceDialogError(Exception e) {
+        JSONObject detail = new JSONObject();
+        try {
+            detail.put("error", e.getMessage() == null ? String.valueOf(e) : e.getMessage());
+        } catch (Exception ignored) {
+        }
         return detail;
     }
 

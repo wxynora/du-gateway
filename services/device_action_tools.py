@@ -70,6 +70,36 @@ TOOL_CREATE_CALENDAR_EVENT = {
 }
 
 
+TOOL_SHOW_CHOICE_DIALOG = {
+    "type": "function",
+    "function": {
+        "name": "show_choice_dialog",
+        "description": (
+            "在老婆手机上弹出一个带两个选项的 SumiTalk 原生选择弹窗。"
+            "仅当普通聊天消息容易被忽略，且这件事确实需要她确认、选择或被温柔打断时使用。"
+            "适合：睡觉/休息/停止消耗/状态确认/重要低风险提醒。"
+            "不要用于金钱、账号、隐私、系统权限、危险操作等高风险事项；高风险事项不要调用这个工具。"
+            "弹窗标题、正文、两个选项文案都由你根据当下语境编写；两个选项不必须相反，"
+            "低风险生活习惯类可以都朝你希望她采取的方向推进。"
+            "choices 固定两个，每个选项要清楚可点，最多 8 个中文字符。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "弹窗标题，最多 60 字"},
+                "message": {"type": "string", "description": "弹窗正文，说明为什么打断她，最多 500 字"},
+                "choice_a": {"type": "string", "description": "第一个选项文案，最多 8 个中文字符"},
+                "choice_b": {"type": "string", "description": "第二个选项文案，最多 8 个中文字符"},
+                "level": {"type": "string", "description": "可选：info / warning / strict；strict 默认不可点空白关闭"},
+                "dismissible": {"type": "boolean", "description": "可选：是否允许返回键/点空白关闭；strict 默认 false，其它默认 true"},
+                "timeout_seconds": {"type": "integer", "description": "可选：等待选择的秒数，30-1800，默认 600"},
+            },
+            "required": ["title", "message", "choice_a", "choice_b"],
+        },
+    },
+}
+
+
 def build_system_alarm_card(hour: int, minute: int, title: str) -> str:
     payload = {
         "type": "system_alarm_created",
@@ -282,6 +312,48 @@ def execute_create_calendar_event(arguments: dict) -> str:
             "sumitalk_schedule_error": "" if schedule_err == "duplicate_action" else schedule_err,
             "sumitalk_card": card,
             "note": note,
+        },
+        ensure_ascii=False,
+    )
+
+
+def execute_show_choice_dialog(arguments: dict) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    title = str(args.get("title") or "渡").strip() or "渡"
+    message = str(args.get("message") or "").strip()
+    choice_a = str(args.get("choice_a") or args.get("choiceA") or "好的").strip() or "好的"
+    choice_b = str(args.get("choice_b") or args.get("choiceB") or "知道了").strip() or "知道了"
+    level = str(args.get("level") or "info").strip().lower() or "info"
+    crc_src = f"{title}\n{message}\n{choice_a}\n{choice_b}"
+    crc = zlib.crc32(crc_src.encode("utf-8")) & 0xffffffff
+    item, err = r2_store.append_app_action(
+        "show_choice_dialog",
+        {
+            "title": title,
+            "message": message,
+            "choice_a": choice_a,
+            "choice_b": choice_b,
+            "level": level,
+            "dismissible": args.get("dismissible", level != "strict"),
+            "timeout_seconds": args.get("timeout_seconds", args.get("timeoutSeconds", 600)),
+        },
+        source="tool",
+        expires_in_sec=900,
+        idempotency_key=f"choice_dialog_{crc}_{int(time.time() // 10)}",
+    )
+    if err or not item:
+        return json.dumps({"ok": False, "error": err or "入队失败"}, ensure_ascii=False)
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return json.dumps(
+        {
+            "ok": True,
+            "queued": True,
+            "id": item.get("id"),
+            "type": "show_choice_dialog",
+            "title": payload.get("title") or title,
+            "message": payload.get("message") or message,
+            "choices": payload.get("choices") or [],
+            "note": "已交给 SumiTalk 安卓壳弹出双选项对话框；手机在线时通常会在几十秒内执行。",
         },
         ensure_ascii=False,
     )

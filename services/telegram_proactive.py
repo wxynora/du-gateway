@@ -29,7 +29,6 @@ from config import (
     QQ_PROACTIVE_PUSH_TOKEN,
 )
 from storage import r2_store
-from storage.miniapp_panel_store import list_trusted_devices
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 from services.telegram_bot import (
@@ -41,7 +40,6 @@ from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversat
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
 
 logger = get_logger(__name__)
-sumitalk_logger = get_logger("sumitalk")
 
 
 def _build_du_daily_trigger_from_proactive(decision: ProactiveDecision, hours_since_last: float, sent: bool) -> Optional[dict]:
@@ -119,7 +117,7 @@ class ProactiveDecision:
     reason: str = ""      # 技术向：contact / no_contact / gateway_status / …
     action: str = ""      # 业务向：send_message / no_contact / diary / other / error / …
     du_reason: str = ""   # 渡在 JSON 里写的理由
-    channel: str = "sumitalk"   # 发送入口：sumitalk / wechat / qq
+    channel: str = ""           # 发送入口：wechat / qq；SumiTalk 暂不参与主动消息
 
 
 def _get_chat_model() -> str:
@@ -253,103 +251,29 @@ def _strip_json_fence(text: str) -> str:
     return t
 
 
-def _normalize_reply_channel(value: str, default: str = "sumitalk") -> str:
+def _normalize_reply_channel(value: str, default: str = "", allowed: list[str] | None = None) -> str:
     s = str(value or "").strip().lower()
     alias = {
         "wx": "wechat",
         "weixin": "wechat",
-        "sumi": "sumitalk",
-        "sumi-talk": "sumitalk",
-        "sumi_talk": "sumitalk",
-        "tg": "sumitalk",
-        "telegram": "sumitalk",
     }
     s = alias.get(s, s)
-    if s not in {"sumitalk", "wechat", "qq"}:
+    allowed_set = set(allowed or ["wechat", "qq"])
+    if s not in allowed_set:
         return default
     return s
 
 
-def _resolve_sumitalk_target_device_id() -> str:
-    try:
-        items = [x for x in (list_trusted_devices() or []) if isinstance(x, dict) and not bool(x.get("revoked"))]
-    except Exception as e:
-        sumitalk_logger.warning("target_resolve_failed source=proactive error=%s", e)
-        items = []
-    for item in items:
-        did = str(item.get("id") or "").strip()
-        if did.startswith("android_"):
-            sumitalk_logger.info("target_resolved source=proactive device_id=%s trusted_devices=%s preferred=android", did, len(items))
-            return did
-    for item in items:
-        did = str(item.get("id") or "").strip()
-        if did:
-            sumitalk_logger.info("target_resolved source=proactive device_id=%s trusted_devices=%s preferred=first", did, len(items))
-            return did
-    sumitalk_logger.warning("target_resolve_empty source=proactive trusted_devices=%s", len(items))
-    return ""
-
-
-def _append_sumitalk_assistant_message(text: str, created_at: str | None = None) -> bool:
-    from routes.miniapp_api import (
-        _SUMITALK_HISTORY_LOCK,
-        _load_sumitalk_histories,
-        _merge_sumitalk_messages,
-        _save_sumitalk_histories,
-    )
-
-    content = str(text or "").strip()
-    if not content:
-        sumitalk_logger.warning("proactive_append_skip reason=empty_content")
-        return False
-    device_id = _resolve_sumitalk_target_device_id()
-    if not device_id:
-        sumitalk_logger.warning("proactive_append_failed reason=no_target_device chars=%s", len(content))
-        return False
-    now_iso = str(created_at or now_beijing_iso()).strip() or now_beijing_iso()
-    message = {
-        "id": f"assistant-{int(time.time() * 1000)}",
-        "role": "assistant",
-        "content": content,
-        "createdAt": now_iso,
-    }
-    with _SUMITALK_HISTORY_LOCK:
-        data = _load_sumitalk_histories()
-        row = data.get(device_id) if isinstance(data, dict) else None
-        before_count = len((row or {}).get("messages") or [])
-        merged_messages = _merge_sumitalk_messages((row or {}).get("messages") or [], [message])
-        data[device_id] = {
-            "device_id": device_id,
-            "updated_at": now_iso,
-            "messages": merged_messages,
-        }
-        sumitalk_logger.info(
-            "proactive_append_write device_id=%s chars=%s before=%s after=%s created_at=%s known_devices=%s",
-            device_id,
-            len(content),
-            before_count,
-            len(merged_messages),
-            now_iso,
-            len(data or {}) if isinstance(data, dict) else 0,
-        )
-        ok = _save_sumitalk_histories(data)
-    if ok:
-        sumitalk_logger.info("proactive_append_ok device_id=%s chars=%s after=%s", device_id, len(content), len(merged_messages))
-    else:
-        sumitalk_logger.error("proactive_append_failed reason=save_failed device_id=%s chars=%s", device_id, len(content))
-    return bool(ok)
-
-
-def _parse_proactive_model_reply(raw: str, no_token: str) -> ProactiveDecision:
+def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str = "", channels: list[str] | None = None) -> ProactiveDecision:
     """
     解析渡的回复：优先 JSON；兼容仅输出 NO_CONTACT；再兼容旧版「整段即正文」。
     """
     t = (raw or "").strip()
     if not t:
-        return ProactiveDecision(False, "", "empty_reply", action="empty", du_reason="")
+        return ProactiveDecision(False, "", "empty_reply", action="empty", du_reason="", channel=default_channel)
     if t == (no_token or "").strip():
         return ProactiveDecision(
-            False, "", "no_contact", action="no_contact", du_reason="（使用 NO_CONTACT 标记，未给理由）"
+            False, "", "no_contact", action="no_contact", du_reason="（使用 NO_CONTACT 标记，未给理由）", channel=default_channel
         )
 
     cleaned = _strip_json_fence(t)
@@ -371,12 +295,13 @@ def _parse_proactive_model_reply(raw: str, no_token: str) -> ProactiveDecision:
             "contact",
             action="send_message",
             du_reason="（未输出 JSON，整段视为要发的正文）",
+            channel=default_channel,
         )
 
     action = str(obj.get("action") or "").strip().lower()
     du_reason = str(obj.get("reason") or "").strip()
     message = str(obj.get("message") or "").strip()
-    channel = _normalize_reply_channel(str(obj.get("channel") or "sumitalk"), default="sumitalk")
+    channel = _normalize_reply_channel(str(obj.get("channel") or default_channel), default=default_channel, allowed=channels)
     alias = {"send": "send_message", "msg": "send_message", "text": "send_message", "chat": "send_message"}
     action = alias.get(action, action)
     none_like = {"no_contact", "none", "silent", "skip"}
@@ -448,11 +373,13 @@ def _format_proactive_decision_memory_for_system() -> str:
 
 
 def _available_channels() -> list[str]:
-    """返回当前已配置的可用入口列表（至少包含 sumitalk）。"""
-    channels = ["sumitalk"]
+    """返回当前已配置的主动消息入口；SumiTalk 暂时不参与主动投递。"""
+    channels = []
     if WECHAT_PROACTIVE_PUSH_URL:
         channels.append("wechat")
     if QQ_PROACTIVE_PUSH_URL:
+        channels.append("qq")
+    if not channels:
         channels.append("qq")
     return channels
 
@@ -465,21 +392,24 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     no_token = TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT"
     channels = _available_channels()
+    default_channel = channels[0] if channels else ""
     channel_desc_map = {
-        "sumitalk": "SumiTalk（默认，直接进入 app 会话）",
         "wechat": "微信（国内直连，更稳定）",
         "qq": "QQ",
     }
     channel_lines = "\n".join(
         f'  - "{ch}"：{channel_desc_map.get(ch, ch)}' for ch in channels
     )
-    channel_field_desc = (
-        f'- channel：字符串，从以下可用入口中选一个：{", ".join(repr(c) for c in channels)}。\n'
-        f"{channel_lines}\n"
-        "  根据当前情况（网络、时间、氛围）自行判断用哪个；如不确定就用 \"sumitalk\"。\n"
-        if len(channels) > 1
-        else f'- channel：固定填 "{channels[0]}"。\n'
-    )
+    if len(channels) > 1:
+        channel_field_desc = (
+            f'- channel：字符串，从以下可用入口中选一个：{", ".join(repr(c) for c in channels)}。\n'
+            f"{channel_lines}\n"
+            f'  根据当前情况自行判断用哪个；如不确定就用 "{default_channel}"。\n'
+        )
+    elif channels:
+        channel_field_desc = f'- channel：固定填 "{default_channel}"。\n'
+    else:
+        channel_field_desc = '- channel：当前没有可用发送入口；不要选择 "send_message"。\n'
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso())
     if not now_ref:
         now_ref = datetime.now()
@@ -492,8 +422,12 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
         '- message：字符串；当 action 为 send_message 时，填要发给她的正文（可多行、像平时聊天）；其它 action 时可为空或填补充说明。\n'
         + channel_field_desc
-        + '示例：{"action":"send_message","reason":"好久没联系了","message":"在干嘛","channel":"sumitalk"}\n'
-        f"若你坚持旧习惯，也可以只输出一行 {no_token} 表示不联系（不推荐）。\n"
+        + (
+            f'示例：{{"action":"send_message","reason":"好久没联系了","message":"在干嘛","channel":"{default_channel}"}}\n'
+            if default_channel
+            else f'示例：{{"action":"no_contact","reason":"当前没有可用发送入口","message":"","channel":""}}\n'
+        )
+        + f"若你坚持旧习惯，也可以只输出一行 {no_token} 表示不联系（不推荐）。\n"
     )
     sys_content = build_telegram_style_system()
     try:
@@ -542,7 +476,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
         if not text:
             return ProactiveDecision(False, "", "empty_reply", action="empty", du_reason="模型空回复")
-        return _parse_proactive_model_reply(text, no_token)
+        return _parse_proactive_model_reply(text, no_token, default_channel=default_channel, channels=channels)
     except Exception as e:
         return ProactiveDecision(False, "", f"exception={e}", action="error", du_reason=str(e)[:200])
 
@@ -755,10 +689,7 @@ def _send_via_wechat(text: str) -> bool:
 
 def _send_via_qq(text: str) -> bool:
     """通过 QQ connector 的 /push 端点主动发消息。"""
-    url = QQ_PROACTIVE_PUSH_URL
-    if not url:
-        logger.warning("QQ_PROACTIVE_PUSH_URL 未配置，跳过 QQ 发送")
-        return False
+    url = QQ_PROACTIVE_PUSH_URL or "http://127.0.0.1:8092/push"
     headers = {"Content-Type": "application/json"}
     if QQ_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {QQ_PROACTIVE_PUSH_TOKEN}"
@@ -775,13 +706,12 @@ def _send_via_qq(text: str) -> bool:
 
 def _dispatch_send(channel: str, text: str) -> bool:
     """根据 channel 选择发送入口，返回是否发送成功。"""
-    if channel == "sumitalk":
-        sumitalk_logger.info("dispatch_send_start channel=%s chars=%s", channel, len(str(text or "").strip()))
     if channel == "wechat":
         return _send_via_wechat(text)
     if channel == "qq":
         return _send_via_qq(text)
-    return _append_sumitalk_assistant_message(text)
+    logger.warning("主动消息发送入口不可用 channel=%s", channel)
+    return False
 
 
 def proactive_tick(target_user_id: int = 0) -> dict:
@@ -828,6 +758,12 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     out = {"ok": True, "quiet": False, "sent": False, "now": now_iso, "last": last_iso, "hours": hours, "p": p, "hit": hit}
     if not hit:
         return out
+    channels = _available_channels()
+    out["channels"] = channels
+    if not channels:
+        out["skip_reason"] = "no_delivery_channel"
+        logger.warning("主动消息命中但没有可用发送入口，已跳过")
+        return out
 
     window_id = f"tg_{uid}"
     decision = _ask_du_should_contact(window_id=window_id, hours_since_last=hours, now_dt=now_dt)
@@ -867,7 +803,8 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     text_to_send = decision.text.strip()
     # 主动发消息也复用 Telegram 侧的清洗规则：避免出现“（脑内OS：）”等格式
     text_to_send = _sanitize_reply_for_telegram(text_to_send).strip()
-    channel = _normalize_reply_channel(decision.channel or "sumitalk", default="sumitalk")
+    default_channel = channels[0] if channels else ""
+    channel = _normalize_reply_channel(decision.channel or default_channel, default=default_channel, allowed=channels)
     out["channel"] = channel
     logger.info(
         "主动消息准备发送 channel=%s chat_id=%s text_preview=%s",
@@ -875,6 +812,9 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     )
     if not text_to_send:
         out["skip_reason"] = "empty_after_sanitize"
+        return out
+    if not channel:
+        out["skip_reason"] = "no_delivery_channel"
         return out
     ok = _dispatch_send(channel, text_to_send)
     logger.info("主动消息发送结果 channel=%s chat_id=%s sent=%s", channel, uid, ok)

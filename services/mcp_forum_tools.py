@@ -14,8 +14,10 @@ from services.forum_mcp_client import (
 from services.device_action_tools import (
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CREATE_SYSTEM_ALARM,
+    TOOL_SHOW_CHOICE_DIALOG,
     execute_create_calendar_event,
     execute_create_system_alarm,
+    execute_show_choice_dialog,
 )
 from utils.log import get_logger
 
@@ -205,6 +207,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         TOOL_SCHEDULE_DELETE,
         TOOL_CREATE_SYSTEM_ALARM,
         TOOL_CREATE_CALENDAR_EVENT,
+        TOOL_SHOW_CHOICE_DIALOG,
     ]
     if mode == "daily":
         return schedule_tools
@@ -493,6 +496,8 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         return execute_create_system_alarm(args)
     if name == "create_calendar_event":
         return execute_create_calendar_event(args)
+    if name == "show_choice_dialog":
+        return execute_show_choice_dialog(args)
 
     if name in FORUM_HIGH_LEVEL_TOOLS:
         return json.dumps(_execute_forum_mcp_tool(name, args), ensure_ascii=False)

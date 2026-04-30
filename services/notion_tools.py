@@ -583,6 +583,7 @@ def execute_tool(name: str, arguments: dict) -> str:
         "search_memory",
         "create_system_alarm",
         "create_calendar_event",
+        "show_choice_dialog",
     ):
         return execute_forum_tool(name, arguments)
     try:
