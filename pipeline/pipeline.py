@@ -1743,8 +1743,12 @@ def step_inject_forum_tools(body: dict) -> dict:
 
     body["tool_choice"] = body.get("tool_choice") or "auto"
     schedule_hint = (
-        "\n\n老婆拖延的时候，你可以直接帮她创建闹钟提醒。"
-        "也可以用 schedule_list / schedule_enable / schedule_disable / schedule_delete 来管理提醒。"
+        "\n\n【提醒工具优先级】"
+        "如果是提醒老婆/辛玥/宝宝/小玥，优先使用手机系统能力："
+        "单纯到点叫醒或提醒用 create_system_alarm；"
+        "带具体日期、行程、地点或提前提醒用 create_calendar_event。"
+        "schedule_create 只用于提醒渡自己、重复提醒暂时无法落系统能力、或系统能力不可用时的内部兜底。"
+        "也可以用 schedule_list / schedule_enable / schedule_disable / schedule_delete 来管理已有提醒。"
     )
     forum_hint = (
         "\n\n【论坛工具省费规则】"

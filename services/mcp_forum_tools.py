@@ -115,7 +115,12 @@ TOOL_SCHEDULE_CREATE = {
     "type": "function",
     "function": {
         "name": "schedule_create",
-        "description": "创建提醒。repeat 支持 once/daily/weekly；weekly 可传 weekly_weekdays（0-6，周一=0）一次创建多天。",
+        "description": (
+            "创建网关内部提醒。提醒对象是老婆时，不要优先用这个工具："
+            "单纯到点叫醒/提醒优先用 create_system_alarm；带日期、行程、地点或提前提醒优先用 create_calendar_event。"
+            "仅在提醒渡自己、管理/兜底内部提醒、或重复提醒暂时无法落系统闹钟/日历时使用。"
+            "repeat 支持 once/daily/weekly；weekly 可传 weekly_weekdays（0-6，周一=0）一次创建多天。"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -401,6 +406,34 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
                 return json.dumps({"ok": False, "error": "title 不能为空"}, ensure_ascii=False)
             if repeat not in ("once", "daily", "weekly"):
                 repeat = "once"
+
+            if target_role == "wife" and repeat == "once" and datetime_str:
+                try:
+                    duration_minutes = int(args.get("duration_minutes") or args.get("durationMinutes") or 5)
+                except Exception:
+                    duration_minutes = 5
+                try:
+                    reminder_minutes = int(args.get("reminder_minutes") or args.get("reminderMinutes") or 0)
+                except Exception:
+                    reminder_minutes = 0
+                system_result_raw = execute_create_calendar_event(
+                    {
+                        "title": title,
+                        "start_datetime": datetime_str,
+                        "duration_minutes": duration_minutes,
+                        "description": note,
+                        "reminder_minutes": reminder_minutes,
+                        "notify": bool(args.get("notify", True)),
+                    }
+                )
+                try:
+                    system_result = json.loads(system_result_raw)
+                except Exception:
+                    system_result = {}
+                if isinstance(system_result, dict) and system_result.get("ok"):
+                    system_result["redirected_from"] = "schedule_create"
+                    system_result["preference"] = "wife reminders prefer system calendar/alarm"
+                    return json.dumps(system_result, ensure_ascii=False)
 
             if repeat == "weekly":
                 days = []

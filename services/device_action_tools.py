@@ -19,8 +19,10 @@ TOOL_CREATE_SYSTEM_ALARM = {
         "name": "create_system_alarm",
         "description": (
             "在老婆手机上创建 Android 系统闹钟，并同步创建一条 SumiTalk 内部闹钟。"
-            "只有老婆明确要求设置手机系统闹钟/叫醒闹钟时调用；普通提醒仍用 schedule_create。"
+            "当提醒对象是老婆，且需求是某个 HH:mm 到点叫醒/提醒/打断她时，优先调用这个工具；"
+            "不要求老婆明确说出“系统闹钟”。"
             "系统闹钟只支持 hour/minute，手机会设置为下一次到达该时间的闹钟。"
+            "如果提醒绑定具体日期、地点、行程或需要提前提醒，优先用 create_calendar_event。"
             "同步是单向的：直接创建 SumiTalk 内部闹钟不会反向创建系统闹钟。"
         ),
         "parameters": {
@@ -47,7 +49,8 @@ TOOL_CREATE_CALENDAR_EVENT = {
         "name": "create_calendar_event",
         "description": (
             "在老婆手机系统日历里直接创建行程，并同步创建一条 SumiTalk 内部行程。"
-            "只有老婆明确要求把某件事加入手机日历/系统行程时调用；普通到点提醒仍用 schedule_create。"
+            "当提醒对象是老婆，且提醒带具体日期、行程、地点、提前提醒，或不是单纯下一次 HH:mm 闹钟时，优先调用这个工具；"
+            "不要求老婆明确说出“系统日历”。"
             "必须给出开始时间；结束时间可给 end_datetime，或给 duration_minutes。"
             "同步是单向的：直接创建 SumiTalk 内部行程不会反向创建系统日历。"
         ),
