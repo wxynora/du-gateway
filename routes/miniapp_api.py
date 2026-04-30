@@ -1284,6 +1284,13 @@ def miniapp_chat_window():
     return jsonify({"ok": True, "window_id": _resolve_primary_chat_window_id()})
 
 
+@bp.route("/co-read/session", methods=["POST"])
+def miniapp_co_read_session():
+    from routes.co_read_api import handle_co_read_session
+
+    return handle_co_read_session()
+
+
 @bp.route("/sumitalk-chat", methods=["POST"])
 def miniapp_sumitalk_chat_adaptive():
     body = request.get_json(silent=True) or {}

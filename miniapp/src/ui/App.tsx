@@ -249,6 +249,13 @@ type CoReadSettings = {
   marginLevel: number;
   theme: CoReadTheme;
 };
+type CoReadSessionResponse = {
+  ok?: boolean;
+  session_id?: string;
+  window_id?: string;
+  du_reply?: string;
+  error?: string;
+};
 type SumiTalkChatJobCreateResponse = {
   ok?: boolean;
   job_id?: string;
@@ -1182,7 +1189,7 @@ function Shell({
           <StayWithDuScreen />
         </FullScreenPane>
       ) : null}
-      {showCoRead ? <CoReadScreen onBack={() => setShowCoRead(false)} /> : null}
+      {showCoRead ? <CoReadScreen onBack={() => setShowCoRead(false)} windowId={sharedChatWindowId} /> : null}
       {showTree ? (
         <FullScreenPane title="树" accent="neutral" onBack={() => setShowTree(false)}>
           <TreeScreen data={tree} onRefresh={loadTree} />
@@ -1591,12 +1598,11 @@ function StayWithDuScreen() {
   );
 }
 
-function CoReadScreen({ onBack }: { onBack: () => void }) {
+function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: string }) {
   const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const readerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const pendingTimerRef = useRef<number | null>(null);
   const swipeRef = useRef({ tracking: false, startX: 0, startY: 0, latestX: 0, latestY: 0 });
   const [books, setBooks] = useState<CoReadBook[]>(() => readCoReadBooks());
   const [activeBookId, setActiveBookId] = useState("");
@@ -1605,6 +1611,7 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
   const [input, setInput] = useState("");
   const [selectedText, setSelectedText] = useState("");
   const [chatExpanded, setChatExpanded] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const activeBook = useMemo(() => books.find((book) => book.id === activeBookId) || null, [activeBookId, books]);
   const paragraphs = useMemo(() => splitCoReadParagraphs(activeBook?.content || ""), [activeBook?.content]);
@@ -1636,12 +1643,6 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
           dock: "border-[#EAEAEA] bg-white/95",
         };
   const readerPadding = settings.marginLevel === 1 ? "px-5" : settings.marginLevel === 3 ? "px-8" : "px-6";
-
-  useEffect(() => {
-    return () => {
-      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     if (!activeBookId || !activeBook) return;
@@ -1803,14 +1804,20 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
     clearCoReadSelection();
   }
 
-  function sendCoReadMessage() {
-    if (!activeBook) return;
+  async function sendCoReadMessage() {
+    if (!activeBook || sending) return;
+    const cleanWindowId = String(windowId || "").trim();
+    if (!cleanWindowId) {
+      toast("当前还没拿到聊天窗口 ID");
+      return;
+    }
     const cleanInput = input.trim();
     const context = selectedText || pickCoReadVisibleText(activeBook);
     if (!cleanInput && !context) {
       toast("先选一段或写一句");
       return;
     }
+    const bookId = activeBook.id;
     const now = Date.now();
     const userText = cleanInput || "想和渡聊这一段";
     const pendingId = makeCoReadId("du");
@@ -1830,34 +1837,59 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
     };
     setInput("");
     setChatExpanded(true);
+    setSending(true);
     updateActiveBook((book) => ({
       ...book,
       messages: [...book.messages, userMessage, pendingMessage],
       lastReadAt: new Date(now).toISOString(),
     }));
-    if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current);
-    pendingTimerRef.current = window.setTimeout(() => {
-      const snippet = compactCoReadText(context, 46);
-      const reply = snippet
-        ? `我看到这一段了。这里可以先抓住「${snippet}」这个点，后面我们就沿着它往下聊。`
-        : "我在这本书里跟上你了，继续问我就行。";
-      setBooks((prev) => {
-        const next = prev.map((book) => {
-          if (book.id !== activeBook.id) return book;
-          return {
-            ...book,
-            lastSummary: `渡：${compactCoReadText(reply, 64)}`,
-            messages: book.messages.map((msg) => (
-              msg.id === pendingId
-                ? { ...msg, text: reply, status: "sent" as const }
-                : msg
-            )),
-          };
-        });
-        writeCoReadBooks(next);
-        return next;
+
+    try {
+      const data = await apiJson<CoReadSessionResponse>("/miniapp-api/co-read/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          window_id: cleanWindowId,
+          book_title: activeBook.title,
+          chapter_label: `进度 ${formatCoReadProgress(activeBook.progress)}`,
+          snippet: context,
+          user_note: cleanInput,
+        }),
       });
-    }, 700);
+      if (!data?.ok) throw new Error(data?.error || "共读后端返回失败");
+      const reply = String(data.du_reply || "").trim();
+      if (!reply) throw new Error("渡没有返回内容");
+      setBooksAndPersist((prev) => prev.map((book) => (
+        book.id === bookId
+          ? {
+              ...book,
+              lastSummary: `渡：${compactCoReadText(reply, 64)}`,
+              messages: book.messages.map((msg) => (
+                msg.id === pendingId
+                  ? { ...msg, text: reply, status: "sent" as const }
+                  : msg
+              )),
+            }
+          : book
+      )));
+    } catch (e: any) {
+      const message = String(e?.message || e || "发送失败");
+      setBooksAndPersist((prev) => prev.map((book) => (
+        book.id === bookId
+          ? {
+              ...book,
+              messages: book.messages.map((msg) => (
+                msg.id === pendingId
+                  ? { ...msg, text: `这次没接上后端：${message}`, status: "failed" as const }
+                  : msg
+              )),
+            }
+          : book
+      )));
+      toast(`共读失败：${message}`);
+    } finally {
+      setSending(false);
+    }
   }
 
   if (activeBook) {
@@ -1995,6 +2027,8 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
                             ? "self-end rounded-br-[5px] bg-[#111111] text-white"
                             : msg.status === "pending"
                               ? `self-start bg-transparent px-0 font-mono ${theme.muted}`
+                              : msg.status === "failed"
+                                ? "self-start rounded-bl-[5px] bg-[#FFF1F1] text-[#B42318]"
                               : `self-start rounded-bl-[5px] ${theme.soft}`
                         }`}
                       >
@@ -2019,12 +2053,13 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
                   onKeyDown={(e) => {
                     if (e.key === "Enter") sendCoReadMessage();
                   }}
+                  disabled={sending}
                 />
                 <button
                   type="button"
                   className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#111111] text-white transition-transform active:scale-95 disabled:opacity-40"
                   onClick={sendCoReadMessage}
-                  disabled={!input.trim() && !selectedText}
+                  disabled={sending || (!input.trim() && !selectedText)}
                   aria-label="发送"
                 >
                   <SendIconMini />

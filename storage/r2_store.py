@@ -59,6 +59,8 @@ R2_KEY_MINIAPP_MOOD_METER = "global/miniapp_mood_meter.json"
 R2_KEY_DU_NOTEBOOK = "global/du_notebook.json"
 # Stay with Du：时间线、一起看的电影、一起读的书（固定注入记忆）
 R2_KEY_STAY_WITH_DU = "global/stay_with_du.json"
+# 共读阅读卡片：一本书一张轻量卡，只在共读请求里注入
+R2_KEY_CO_READ_CARDS = "co_read/cards.json"
 # MiniApp 赛博种树：开始日期等元信息
 R2_KEY_CYBER_TREE_META = "global/cyber_tree_meta.json"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
@@ -3095,6 +3097,175 @@ def save_stay_with_du_data(data: dict) -> bool:
         except Exception as e:
             logger.error("save_stay_with_du_data 失败 error=%s", e, exc_info=True)
             return False
+
+
+def _normalize_co_read_text(value: Any, limit: int = 600) -> str:
+    text = str(value or "").strip()
+    text = " ".join(text.split())
+    return text[:limit]
+
+
+def _normalize_co_read_recent(items: Any) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        snippet = _normalize_co_read_text(item.get("snippet"), 420)
+        du_reply = _normalize_co_read_text(item.get("du_reply"), 420)
+        user_note = _normalize_co_read_text(item.get("user_note"), 180)
+        if not (snippet or du_reply or user_note):
+            continue
+        out.append(
+            {
+                "at": _normalize_co_read_text(item.get("at"), 40),
+                "progress": _normalize_co_read_text(item.get("progress"), 80),
+                "snippet": snippet,
+                "user_note": user_note,
+                "du_reply": du_reply,
+            }
+        )
+    return out[:8]
+
+
+def normalize_co_read_book_card(card: Any, book_key: str = "", book_title: str = "") -> dict:
+    """规整一本书的共读卡片。"""
+    now = now_beijing_iso()
+    raw = card if isinstance(card, dict) else {}
+    key = _normalize_co_read_text(raw.get("book_key") or book_key, 120)
+    title = _normalize_co_read_text(raw.get("book_title") or book_title, 200)
+    focus_raw = raw.get("xinyue_focus")
+    questions_raw = raw.get("open_questions")
+    focus = [
+        _normalize_co_read_text(x, 160)
+        for x in (focus_raw if isinstance(focus_raw, list) else [])
+    ]
+    questions = [
+        _normalize_co_read_text(x, 160)
+        for x in (questions_raw if isinstance(questions_raw, list) else [])
+    ]
+    focus = [x for x in focus if x][:8]
+    questions = [x for x in questions if x][:8]
+    return {
+        "book_key": key,
+        "book_title": title,
+        "current_progress": _normalize_co_read_text(raw.get("current_progress"), 80),
+        "recent_co_read": _normalize_co_read_recent(raw.get("recent_co_read")),
+        "xinyue_focus": focus,
+        "du_understanding": _normalize_co_read_text(raw.get("du_understanding"), 600),
+        "open_questions": questions,
+        "created_at": _normalize_co_read_text(raw.get("created_at"), 40) or now,
+        "updated_at": _normalize_co_read_text(raw.get("updated_at"), 40) or now,
+    }
+
+
+def get_co_read_cards_payload() -> dict:
+    client = _s3_client()
+    if not client:
+        return {"cards": {}, "updated_at": ""}
+    data = _read_json(client, R2_KEY_CO_READ_CARDS)
+    if not isinstance(data, dict):
+        return {"cards": {}, "updated_at": ""}
+    cards = data.get("cards")
+    if not isinstance(cards, dict):
+        cards = {}
+    out = {}
+    for key, value in cards.items():
+        clean_key = _normalize_co_read_text(key, 120)
+        if not clean_key:
+            continue
+        out[clean_key] = normalize_co_read_book_card(value, book_key=clean_key)
+    return {"cards": out, "updated_at": _normalize_co_read_text(data.get("updated_at"), 40)}
+
+
+def get_co_read_book_card(book_key: str) -> Optional[dict]:
+    key = _normalize_co_read_text(book_key, 120)
+    if not key:
+        return None
+    cards = get_co_read_cards_payload().get("cards") or {}
+    card = cards.get(key)
+    return normalize_co_read_book_card(card, book_key=key) if isinstance(card, dict) else None
+
+
+def list_co_read_book_cards() -> list[dict]:
+    cards = get_co_read_cards_payload().get("cards") or {}
+    out = [normalize_co_read_book_card(card, book_key=key) for key, card in cards.items() if isinstance(card, dict)]
+    out.sort(key=lambda x: str(x.get("updated_at") or ""), reverse=True)
+    return out
+
+
+def save_co_read_book_card(card: dict) -> bool:
+    clean = normalize_co_read_book_card(card)
+    key = str(clean.get("book_key") or "").strip()
+    if not key:
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    with _global_write_lock:
+        try:
+            payload = get_co_read_cards_payload()
+            cards = payload.get("cards") if isinstance(payload.get("cards"), dict) else {}
+            cards[key] = clean
+            _write_json(client, R2_KEY_CO_READ_CARDS, {"cards": cards, "updated_at": now_beijing_iso()})
+            return True
+        except Exception as e:
+            logger.error("save_co_read_book_card 失败 key=%s error=%s", key, e, exc_info=True)
+            return False
+
+
+def _prepend_unique_text(items: list[str], text: str, limit: int = 8) -> list[str]:
+    clean = _normalize_co_read_text(text, 160)
+    if not clean:
+        return items[:limit]
+    out = [clean]
+    for item in items or []:
+        old = _normalize_co_read_text(item, 160)
+        if old and old != clean:
+            out.append(old)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def update_co_read_book_card(
+    book_key: str,
+    book_title: str,
+    current_progress: str,
+    snippet: str,
+    user_note: str,
+    du_reply: str,
+) -> Optional[dict]:
+    """用一轮共读更新一本书的轻量卡片。"""
+    key = _normalize_co_read_text(book_key, 120)
+    if not key:
+        return None
+    now = now_beijing_iso()
+    card = get_co_read_book_card(key) or normalize_co_read_book_card({}, book_key=key, book_title=book_title)
+    card["book_key"] = key
+    card["book_title"] = _normalize_co_read_text(book_title, 200) or card.get("book_title") or key
+    card["current_progress"] = _normalize_co_read_text(current_progress, 80) or card.get("current_progress") or ""
+    recent = _normalize_co_read_recent(card.get("recent_co_read"))
+    recent.insert(
+        0,
+        {
+            "at": now,
+            "progress": card.get("current_progress") or "",
+            "snippet": _normalize_co_read_text(snippet, 420),
+            "user_note": _normalize_co_read_text(user_note, 180),
+            "du_reply": _normalize_co_read_text(du_reply, 420),
+        },
+    )
+    card["recent_co_read"] = _normalize_co_read_recent(recent)
+    card["du_understanding"] = _normalize_co_read_text(du_reply, 600) or card.get("du_understanding") or ""
+    if user_note:
+        card["xinyue_focus"] = _prepend_unique_text(card.get("xinyue_focus") or [], user_note, 8)
+        if "?" in user_note or "？" in user_note:
+            card["open_questions"] = _prepend_unique_text(card.get("open_questions") or [], user_note, 8)
+    card["updated_at"] = now
+    clean = normalize_co_read_book_card(card, book_key=key, book_title=book_title)
+    return clean if save_co_read_book_card(clean) else None
 
 
 def _stay_with_du_target_for_kind(kind: str) -> Optional[str]:
