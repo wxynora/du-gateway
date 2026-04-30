@@ -567,7 +567,14 @@ def execute_tool(name: str, arguments: dict) -> str:
     if name == "read_url":
         from services.web_search_tools import execute_read_url
         return execute_read_url(arguments if isinstance(arguments, dict) else {})
-    if str(name or "").strip() in ("open_travel_plan_form", "amap_trip_plan") or str(name or "").startswith("maps_"):
+    if str(name or "").strip().startswith("maps_"):
+        from services.amap_mcp_tools import execute_amap_mcp_tool
+        return execute_amap_mcp_tool(name, arguments if isinstance(arguments, dict) else {})
+    try:
+        from services.amap_mcp_tools import is_amap_mcp_tool
+    except Exception:
+        is_amap_mcp_tool = None
+    if is_amap_mcp_tool and is_amap_mcp_tool(str(name or "").strip()):
         from services.amap_mcp_tools import execute_amap_mcp_tool
         return execute_amap_mcp_tool(name, arguments if isinstance(arguments, dict) else {})
     if name in (

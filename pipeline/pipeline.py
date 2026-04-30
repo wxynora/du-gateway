@@ -1844,13 +1844,16 @@ def step_inject_amap_mcp_tools(body: dict) -> dict:
     hint = (
         "\n\n【高德官方 MCP 出行工具规则】"
         "如果老婆只是想让渡规划旅游/路线，但地点、吃饭、步行接受度等信息还不完整，先调用 open_travel_plan_form 弹出 SumiTalk 固定表单；"
-        "老婆问想去哪里、怎么坐地铁公交、怎么打车、怎么规划路线时，优先调用 amap_trip_plan；第一次规划默认只做轻量总览：地点顺序、每段推荐交通方式、大致耗时/步行/打车参考；"
-        "默认传 detail_level=fast、compare_modes=false、include_links=false，不要一上来逐站展开、深度比较多方案或查餐厅细节；"
-        "如果老婆后续追问吃什么、某一段具体怎么坐、能不能少走路、换成打车，再按那个补充问题调用对应工具细化；"
-        "只有老婆明确要求详细路线、导航链接、专属地图时，才传 detail_level=full 或 include_links=true；"
-        "只有需要补查单个地点/天气/链接时，再调用 maps_* 高德工具。"
-        "交通路线、换乘站、耗时和打车费用必须基于工具结果，不要凭空编。"
-        "第一次规划的最终回复不要写长篇分析、推理过程或一堆解释，最多三段：先给结论，再给顺序和主要交通建议，最后给必要提醒；"
+        "老婆提交表单或问想去哪里、怎么规划路线时，优先调用 trip_prepare_facts；这个工具只查硬事实、创建 plan_id、启动后台预取，不代表最终顺序。"
+        "你负责判断怎么排：user_overrides 永远优先；confirmed_state 其次；assistant_assumptions 只能影响建议和措辞，不能覆盖用户明确选择。"
+        "confidence >= 0.85 的推断可直接用；0.5 到 0.85 需要轻确认；低于 0.5 当 unknown 或问用户。"
+        "第一次回复只给短安排：先结论，再顺序/主要交通建议，最后必要提醒；不要写长篇分析，不要逐站展开，不要一次查一堆餐厅。"
+        "用户后续追问某段怎么坐、能不能少走路、打车怎样，用 trip_get_transport_detail(plan_id, ...)；"
+        "追问吃什么、附近有什么，用 trip_get_food_detail(plan_id, ...)；"
+        "用户确认偏好、状态，或你做了后续要继续用的推断，用 trip_update_plan_state 写回；"
+        "旅行结束、取消或过期时，用 trip_finalize_plan 收尾。"
+        "只有需要补查单个地点/天气/链接，或分层工具缺的高德能力时，再调用 maps_*。"
+        "交通路线、换乘站、耗时、营业和费用必须基于工具结果，不要凭空编。"
         "如果用户没说起点，优先结合已注入的最近定位；没有定位再追问起点。"
     )
     return _append_to_static_system(body, hint)

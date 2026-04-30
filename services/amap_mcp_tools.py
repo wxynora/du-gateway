@@ -5,7 +5,22 @@ import json
 from typing import Any
 
 from services.amap_mcp_client import amap_mcp_enabled, call_tool, list_tools
-from services.amap_trip_planner import TOOL_AMAP_TRIP_PLAN, TOOL_AMAP_TRIP_PLAN_NAME, execute_amap_trip_plan
+from services.amap_trip_planner import (
+    TOOL_AMAP_TRIP_PLAN_NAME,
+    TOOL_TRIP_FINALIZE_PLAN_NAME,
+    TOOL_TRIP_GET_FOOD_DETAIL_NAME,
+    TOOL_TRIP_GET_TRANSPORT_DETAIL_NAME,
+    TOOL_TRIP_PREPARE_FACTS_NAME,
+    TOOL_TRIP_UPDATE_PLAN_STATE_NAME,
+    TRIP_LAYERED_TOOL_NAMES,
+    TRIP_LAYERED_TOOLS,
+    execute_amap_trip_plan,
+    execute_trip_finalize_plan,
+    execute_trip_get_food_detail,
+    execute_trip_get_transport_detail,
+    execute_trip_prepare_facts,
+    execute_trip_update_plan_state,
+)
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -128,7 +143,7 @@ def _tool_description(name: str, remote_desc: str) -> str:
 def get_amap_mcp_tools_for_inject() -> list[dict]:
     if not amap_mcp_enabled():
         return []
-    out: list[dict] = [TOOL_OPEN_TRAVEL_PLAN_FORM, TOOL_AMAP_TRIP_PLAN]
+    out: list[dict] = [TOOL_OPEN_TRAVEL_PLAN_FORM, *TRIP_LAYERED_TOOLS]
     try:
         remote_tools = list_tools()
     except Exception as e:
@@ -155,7 +170,7 @@ def get_amap_mcp_tools_for_inject() -> list[dict]:
 
 def is_amap_mcp_tool(name: str) -> bool:
     tool_name = str(name or "").strip()
-    return tool_name in (TOOL_OPEN_TRAVEL_PLAN_FORM_NAME, TOOL_AMAP_TRIP_PLAN_NAME) or (
+    return tool_name in (TOOL_OPEN_TRAVEL_PLAN_FORM_NAME, TOOL_AMAP_TRIP_PLAN_NAME) or tool_name in TRIP_LAYERED_TOOL_NAMES or (
         bool(tool_name) and tool_name.startswith(AMAP_MCP_TOOL_PREFIX)
     )
 
@@ -207,6 +222,16 @@ def execute_amap_mcp_tool(name: str, arguments: dict) -> str:
         return json.dumps({"ok": False, "error": f"未知高德 MCP 工具: {tool_name}"}, ensure_ascii=False)
     if tool_name == TOOL_OPEN_TRAVEL_PLAN_FORM_NAME:
         return execute_open_travel_plan_form(arguments if isinstance(arguments, dict) else {})
+    if tool_name == TOOL_TRIP_PREPARE_FACTS_NAME:
+        return execute_trip_prepare_facts(arguments if isinstance(arguments, dict) else {})
+    if tool_name == TOOL_TRIP_GET_TRANSPORT_DETAIL_NAME:
+        return execute_trip_get_transport_detail(arguments if isinstance(arguments, dict) else {})
+    if tool_name == TOOL_TRIP_GET_FOOD_DETAIL_NAME:
+        return execute_trip_get_food_detail(arguments if isinstance(arguments, dict) else {})
+    if tool_name == TOOL_TRIP_UPDATE_PLAN_STATE_NAME:
+        return execute_trip_update_plan_state(arguments if isinstance(arguments, dict) else {})
+    if tool_name == TOOL_TRIP_FINALIZE_PLAN_NAME:
+        return execute_trip_finalize_plan(arguments if isinstance(arguments, dict) else {})
     if tool_name == TOOL_AMAP_TRIP_PLAN_NAME:
         return execute_amap_trip_plan(arguments if isinstance(arguments, dict) else {})
     try:

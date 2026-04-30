@@ -11,6 +11,14 @@ SUMITALK_CARD_PREFIX = "<<<SUMITALK_CARD "
 SUMITALK_CARD_SUFFIX = ">>>"
 SUMITALK_CARD_RE = re.compile(r"<<<SUMITALK_CARD\s+(\{.*?\})>>>", re.S)
 _SINGLETON_SUMITALK_CARD_TYPES = {"travel_plan_form", "travel_plan_result"}
+_ALLOWED_SUMITALK_CARD_TYPES = {
+    "system_alarm_created",
+    "calendar_event_created",
+    "travel_plan_form",
+    "travel_plan_result",
+    "travel_transport_detail",
+    "travel_food_detail",
+}
 
 
 TOOL_CREATE_SYSTEM_ALARM = {
@@ -377,12 +385,7 @@ def extract_sumitalk_cards_from_messages(messages: list) -> list[str]:
             if not isinstance(parsed, dict):
                 return
             card_type = str(parsed.get("type") or "").strip()
-            if card_type not in {
-                "system_alarm_created",
-                "calendar_event_created",
-                "travel_plan_form",
-                "travel_plan_result",
-            }:
+            if card_type not in _ALLOWED_SUMITALK_CARD_TYPES:
                 return
         except Exception:
             return

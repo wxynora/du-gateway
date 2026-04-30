@@ -94,12 +94,14 @@ R2_KEY_STICKERS_META = "stickers/meta.json"
 R2_KEY_PC_COMMAND_QUEUE = "pc_commands/queue.json"
 # SumiTalk app 原生命令：由安卓壳轮询执行，不经过旧 Tasker 队列。
 R2_KEY_APP_ACTION_QUEUE = "sumitalk/app_actions.json"
+R2_KEY_TRIP_PLANS_PREFIX = "travel_plans"
 
 # 多窗口同时写全局 key 时用进程内锁，避免 last-write-wins 覆盖（多进程部署需外部锁）
 _global_write_lock = threading.Lock()
 _notebook_write_lock = threading.Lock()
 _pc_command_write_lock = threading.Lock()
 _app_action_write_lock = threading.Lock()
+_trip_plan_write_lock = threading.Lock()
 
 # 日志
 from utils.log import get_logger
@@ -1546,6 +1548,66 @@ def merge_and_save_sense_bucket(sense_type: str, patch: dict) -> bool:
         except Exception as e:
             logger.error("merge_and_save_sense_bucket 失败 type=%s error=%s", key, e, exc_info=True)
             return False
+
+
+def _trip_plan_key(plan_id: str) -> str:
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(plan_id or "").strip())
+    return f"{R2_KEY_TRIP_PLANS_PREFIX}/{safe}.json" if safe else ""
+
+
+def get_trip_plan(plan_id: str) -> dict:
+    """读取一次出行计划。不存在、未配置 R2 或格式异常时返回 {}。"""
+    key = _trip_plan_key(plan_id)
+    if not key:
+        return {}
+    client = _s3_client()
+    if not client:
+        return {}
+    data = _read_json(client, key)
+    return data if isinstance(data, dict) else {}
+
+
+def save_trip_plan(plan: dict) -> bool:
+    """保存一次出行计划，key 取 plan_meta.plan_id。"""
+    if not isinstance(plan, dict):
+        return False
+    meta = plan.get("plan_meta") if isinstance(plan.get("plan_meta"), dict) else {}
+    plan_id = str(meta.get("plan_id") or plan.get("plan_id") or "").strip()
+    key = _trip_plan_key(plan_id)
+    if not key:
+        return False
+    client = _s3_client()
+    if not client:
+        logger.warning("R2 client 未配置，跳过 save_trip_plan plan_id=%s", plan_id)
+        return False
+    with _trip_plan_write_lock:
+        try:
+            _write_json(client, key, plan)
+            return True
+        except Exception as e:
+            logger.error("save_trip_plan 失败 plan_id=%s error=%s", plan_id, e, exc_info=True)
+            return False
+
+
+def update_trip_plan(plan_id: str, patch: dict) -> dict:
+    """
+    浅合并更新一次出行计划，返回更新后的计划。
+    仅用于小范围状态/事实写回；复杂合并在调用方完成后用 save_trip_plan。
+    """
+    if not isinstance(patch, dict):
+        return {}
+    existing = get_trip_plan(plan_id)
+    if not existing:
+        existing = {}
+    for key, value in patch.items():
+        if isinstance(existing.get(key), dict) and isinstance(value, dict):
+            merged = dict(existing.get(key) or {})
+            merged.update(value)
+            existing[key] = merged
+        else:
+            existing[key] = value
+    save_trip_plan(existing)
+    return existing
 
 
 def _append_sense_history_event(client, sense_type: str, bucket_snapshot: dict) -> None:

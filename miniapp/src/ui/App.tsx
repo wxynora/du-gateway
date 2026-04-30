@@ -153,7 +153,46 @@ type TravelPlanResultCard = {
   personalMapUrl?: string;
   note?: string;
 };
-type SumiTalkSystemCard = SystemAlarmCreatedCard | CalendarEventCreatedCard | TravelPlanFormCard | TravelPlanResultCard;
+type TravelTransportDetailCard = {
+  type: "travel_transport_detail";
+  title: string;
+  planId?: string;
+  legId?: string;
+  from: string;
+  to: string;
+  mode?: string;
+  reason?: string;
+  transit?: TravelPlanRouteSummary;
+  driving?: TravelPlanRouteSummary;
+  cacheHit?: boolean;
+  note?: string;
+};
+type TravelFoodItem = {
+  name: string;
+  type?: string;
+  address?: string;
+  distanceMeters?: number;
+  rating?: string;
+  cost?: string;
+};
+type TravelFoodDetailCard = {
+  type: "travel_food_detail";
+  title: string;
+  planId?: string;
+  placeId?: string;
+  placeName?: string;
+  keywords?: string;
+  items?: TravelFoodItem[];
+  cacheHit?: boolean;
+  note?: string;
+};
+type SumiTalkSystemCard =
+  | SystemAlarmCreatedCard
+  | CalendarEventCreatedCard
+  | TravelPlanFormCard
+  | TravelPlanResultCard
+  | TravelTransportDetailCard
+  | TravelFoodDetailCard;
 type DeviceItem = {
   id?: string;
   note?: string;
@@ -1685,6 +1724,18 @@ function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string
         time: formatClockTime(String(msg?.createdAt || "").trim()),
       };
     }
+    if (systemCard?.type === "travel_transport_detail") {
+      return {
+        preview: `${systemCard.title || "这段怎么走"}：${systemCard.from} 到 ${systemCard.to}`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
+    if (systemCard?.type === "travel_food_detail") {
+      return {
+        preview: `${systemCard.title || "附近吃这些"}：${systemCard.placeName || systemCard.keywords || "吃喝"}`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
     return {
       preview: text,
       time: formatClockTime(String(msg?.createdAt || "").trim()),
@@ -2083,8 +2134,79 @@ function parseTravelPlanResultCard(content: string): TravelPlanResultCard | null
   }
 }
 
+function parseTravelTransportDetailCard(content: string): TravelTransportDetailCard | null {
+  const raw = String(content || "").trim();
+  if (!raw.startsWith(SYSTEM_CARD_PREFIX) || !raw.endsWith(SYSTEM_CARD_SUFFIX)) return null;
+  const jsonText = raw.slice(SYSTEM_CARD_PREFIX.length, raw.length - SYSTEM_CARD_SUFFIX.length).trim();
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || parsed.type !== "travel_transport_detail") return null;
+    return {
+      type: "travel_transport_detail",
+      title: String(parsed.title || "这段怎么走").trim() || "这段怎么走",
+      planId: String(parsed.planId || parsed.plan_id || "").trim() || undefined,
+      legId: String(parsed.legId || parsed.leg_id || "").trim() || undefined,
+      from: String(parsed.from || "起点").trim() || "起点",
+      to: String(parsed.to || "终点").trim() || "终点",
+      mode: String(parsed.mode || "").trim() || undefined,
+      reason: String(parsed.reason || "").trim() || undefined,
+      transit: parseTravelRouteSummary(parsed.transit),
+      driving: parseTravelRouteSummary(parsed.driving),
+      cacheHit: Boolean(parsed.cacheHit ?? parsed.cache_hit),
+      note: String(parsed.note || "").trim() || undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseTravelFoodDetailCard(content: string): TravelFoodDetailCard | null {
+  const raw = String(content || "").trim();
+  if (!raw.startsWith(SYSTEM_CARD_PREFIX) || !raw.endsWith(SYSTEM_CARD_SUFFIX)) return null;
+  const jsonText = raw.slice(SYSTEM_CARD_PREFIX.length, raw.length - SYSTEM_CARD_SUFFIX.length).trim();
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || parsed.type !== "travel_food_detail") return null;
+    const items = Array.isArray(parsed.items)
+      ? parsed.items.map((item: unknown) => {
+        const rawItem = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+        const distanceMeters = Number(rawItem.distanceMeters ?? rawItem.distance_meters);
+        const out: TravelFoodItem = {
+          name: String(rawItem.name || "").trim(),
+          type: String(rawItem.type || "").trim() || undefined,
+          address: String(rawItem.address || "").trim() || undefined,
+          rating: String(rawItem.rating || "").trim() || undefined,
+          cost: String(rawItem.cost || "").trim() || undefined,
+        };
+        if (Number.isFinite(distanceMeters) && distanceMeters > 0) out.distanceMeters = distanceMeters;
+        return out;
+      }).filter((item: TravelFoodItem) => item.name).slice(0, 8)
+      : [];
+    return {
+      type: "travel_food_detail",
+      title: String(parsed.title || "附近吃这些").trim() || "附近吃这些",
+      planId: String(parsed.planId || parsed.plan_id || "").trim() || undefined,
+      placeId: String(parsed.placeId || parsed.place_id || "").trim() || undefined,
+      placeName: String(parsed.placeName || parsed.place_name || "").trim() || undefined,
+      keywords: String(parsed.keywords || "").trim() || undefined,
+      items,
+      cacheHit: Boolean(parsed.cacheHit ?? parsed.cache_hit),
+      note: String(parsed.note || "").trim() || undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function parseSumiTalkSystemCard(content: string): SumiTalkSystemCard | null {
-  return parseSystemAlarmCreatedCard(content) || parseCalendarEventCreatedCard(content) || parseTravelPlanFormCard(content) || parseTravelPlanResultCard(content);
+  return (
+    parseSystemAlarmCreatedCard(content)
+    || parseCalendarEventCreatedCard(content)
+    || parseTravelPlanFormCard(content)
+    || parseTravelPlanResultCard(content)
+    || parseTravelTransportDetailCard(content)
+    || parseTravelFoodDetailCard(content)
+  );
 }
 
 function splitSystemCardSegments(content: string): Array<{ content: string; systemCard: SumiTalkSystemCard | null }> {
@@ -2573,6 +2695,122 @@ function TravelPlanResultModal({ card, onClose }: { card: TravelPlanResultCard; 
   );
 }
 
+function formatMeters(value?: number): string {
+  const meters = Number(value || 0);
+  if (!Number.isFinite(meters) || meters <= 0) return "";
+  if (meters < 1000) return `${Math.round(meters)}米`;
+  return `${(meters / 1000).toFixed(1)}公里`;
+}
+
+function TravelTransportDetailBubble({ card, onOpen }: { card: TravelTransportDetailCard; onOpen: () => void }) {
+  const preferred = card.mode === "taxi" ? card.driving : card.transit;
+  const brief = [
+    travelModeLabel(card.mode),
+    preferred?.duration,
+    card.mode === "taxi" ? preferred?.distance : preferred?.walking ? `步行${preferred.walking}` : "",
+  ].filter(Boolean).join(" · ");
+  return (
+    <button
+      className="block w-full max-w-[320px] rounded-[22px] border border-gray-200 bg-white px-4 py-3 text-left shadow-[0_6px_18px_rgba(15,23,42,0.06)] transition-transform active:scale-[0.98]"
+      onClick={onOpen}
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-[12px] font-semibold text-gray-500">{card.title || "这段怎么走"}</span>
+        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600">{card.cacheHit ? "已缓存" : "刚查到"}</span>
+      </div>
+      <div className="text-[15px] font-bold leading-5 text-gray-900">{card.from} → {card.to}</div>
+      <div className="mt-2 text-[12px] leading-5 text-gray-600">{brief || card.reason || "点击查看这一段路线"}</div>
+    </button>
+  );
+}
+
+function TravelTransportDetailModal({ card, onClose }: { card: TravelTransportDetailCard; onClose: () => void }) {
+  const transitCost = formatYuan(card.transit?.costYuan);
+  const taxiCost = formatYuan(card.transit?.taxiCostYuan);
+  return (
+    <Modal title={card.title || "这段怎么走"} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="rounded-[18px] bg-white px-3 py-3">
+          <div className="text-[12px] font-semibold text-gray-500">路线</div>
+          <div className="mt-1 text-[15px] font-bold leading-5 text-gray-900">{card.from}{" -> "}{card.to}</div>
+          <div className="mt-2 rounded-[14px] bg-gray-50 px-3 py-2 text-[12px] font-semibold leading-5 text-gray-800">
+            推荐：{travelModeLabel(card.mode)}{card.reason ? `，${card.reason}` : ""}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-[18px] bg-white px-3 py-3">
+            <div className="text-[11px] font-semibold text-gray-500">地铁公交</div>
+            <div className="mt-1 text-[12px] font-semibold leading-5 text-gray-800">
+              {card.transit?.ok ? [card.transit.duration, card.transit.walking ? `步行${card.transit.walking}` : "", transitCost].filter(Boolean).join(" · ") : (card.transit?.error || "无结果")}
+            </div>
+          </div>
+          <div className="rounded-[18px] bg-white px-3 py-3">
+            <div className="text-[11px] font-semibold text-gray-500">打车/驾车</div>
+            <div className="mt-1 text-[12px] font-semibold leading-5 text-gray-800">
+              {card.driving?.ok ? [card.driving.duration, card.driving.distance, taxiCost ? `预估${taxiCost}` : ""].filter(Boolean).join(" · ") : (card.driving?.error || "无结果")}
+            </div>
+          </div>
+        </div>
+        {card.transit?.steps?.length ? (
+          <div className="rounded-[18px] bg-white px-3 py-3">
+            <div className="text-[12px] font-semibold text-gray-500">换乘步骤</div>
+            <div className="mt-2 space-y-1">
+              {card.transit.steps.map((step, index) => (
+                <div key={`${step}-${index}`} className="text-[12px] leading-5 text-gray-600">{index + 1}. {step}</div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {card.note ? <div className="px-1 text-[11px] leading-5 text-gray-500">{card.note}</div> : null}
+      </div>
+    </Modal>
+  );
+}
+
+function TravelFoodDetailBubble({ card, onOpen }: { card: TravelFoodDetailCard; onOpen: () => void }) {
+  const first = card.items?.[0]?.name;
+  return (
+    <button
+      className="block w-full max-w-[320px] rounded-[22px] border border-gray-200 bg-white px-4 py-3 text-left shadow-[0_6px_18px_rgba(15,23,42,0.06)] transition-transform active:scale-[0.98]"
+      onClick={onOpen}
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-[12px] font-semibold text-gray-500">{card.title || "附近吃这些"}</span>
+        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600">{card.cacheHit ? "已缓存" : "刚查到"}</span>
+      </div>
+      <div className="text-[15px] font-bold leading-5 text-gray-900">{card.placeName || card.keywords || "附近"}</div>
+      <div className="mt-2 text-[12px] leading-5 text-gray-600">{first ? `比如 ${first}` : "点击查看候选"}</div>
+    </button>
+  );
+}
+
+function TravelFoodDetailModal({ card, onClose }: { card: TravelFoodDetailCard; onClose: () => void }) {
+  return (
+    <Modal title={card.title || "附近吃这些"} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="rounded-[18px] bg-white px-3 py-3">
+          <div className="text-[12px] font-semibold text-gray-500">位置</div>
+          <div className="mt-1 text-[15px] font-bold leading-5 text-gray-900">{card.placeName || "附近"}</div>
+          {card.keywords ? <div className="mt-1 text-[12px] leading-5 text-gray-500">关键词：{card.keywords}</div> : null}
+        </div>
+        {(card.items || []).map((item, index) => {
+          const distance = formatMeters(item.distanceMeters);
+          const meta = [distance, item.rating ? `评分${item.rating}` : "", item.cost ? `人均${item.cost}` : ""].filter(Boolean).join(" · ");
+          return (
+            <div key={`${item.name}-${index}`} className="rounded-[18px] bg-white px-3 py-3">
+              <div className="text-[14px] font-bold leading-5 text-gray-900">{item.name}</div>
+              {meta ? <div className="mt-1 text-[12px] font-semibold leading-5 text-gray-700">{meta}</div> : null}
+              {item.address ? <div className="mt-1 text-[12px] leading-5 text-gray-500">{item.address}</div> : null}
+            </div>
+          );
+        })}
+        {!(card.items || []).length ? <div className="rounded-[18px] bg-white px-3 py-3 text-[13px] text-gray-500">这次没查到稳定候选。</div> : null}
+        {card.note ? <div className="px-1 text-[11px] leading-5 text-gray-500">{card.note}</div> : null}
+      </div>
+    </Modal>
+  );
+}
+
 function copyText(text: string, toast: (msg: string) => void) {
   const value = String(text || "").trim();
   if (!value) return;
@@ -2958,6 +3196,8 @@ function MainChatScreen({
   const [plusOpen, setPlusOpen] = useState(false);
   const [travelFormCard, setTravelFormCard] = useState<TravelPlanFormCard | null>(null);
   const [travelResultCard, setTravelResultCard] = useState<TravelPlanResultCard | null>(null);
+  const [travelTransportCard, setTravelTransportCard] = useState<TravelTransportDetailCard | null>(null);
+  const [travelFoodCard, setTravelFoodCard] = useState<TravelFoodDetailCard | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
@@ -3258,7 +3498,11 @@ function MainChatScreen({
               ? `出行规划 ${part.systemCard.title} ${(part.systemCard.destinations || []).join(" ")}`
               : part.systemCard?.type === "travel_plan_result"
                 ? `路线安排 ${part.systemCard.title} ${part.systemCard.origin || ""} ${(part.systemCard.destinations || []).join(" ")}`
-                : String(part.content || "");
+                : part.systemCard?.type === "travel_transport_detail"
+                  ? `交通路线 ${part.systemCard.title} ${part.systemCard.from} ${part.systemCard.to}`
+                  : part.systemCard?.type === "travel_food_detail"
+                    ? `吃喝推荐 ${part.systemCard.title} ${part.systemCard.placeName || ""} ${part.systemCard.keywords || ""} ${(part.systemCard.items || []).map((item) => item.name).join(" ")}`
+                    : String(part.content || "");
         if (!searchable.toLowerCase().includes(query)) return;
         matches.push({
           id: getChatSearchMatchId(group.id, partIndex),
@@ -3463,6 +3707,16 @@ function MainChatScreen({
                               card={part.systemCard}
                               onOpen={() => setTravelResultCard(part.systemCard as TravelPlanResultCard)}
                             />
+                          ) : part.systemCard?.type === "travel_transport_detail" ? (
+                            <TravelTransportDetailBubble
+                              card={part.systemCard}
+                              onOpen={() => setTravelTransportCard(part.systemCard as TravelTransportDetailCard)}
+                            />
+                          ) : part.systemCard?.type === "travel_food_detail" ? (
+                            <TravelFoodDetailBubble
+                              card={part.systemCard}
+                              onOpen={() => setTravelFoodCard(part.systemCard as TravelFoodDetailCard)}
+                            />
                           ) : (
                             <>
                               <div
@@ -3573,6 +3827,18 @@ function MainChatScreen({
         <TravelPlanResultModal
           card={travelResultCard}
           onClose={() => setTravelResultCard(null)}
+        />
+      ) : null}
+      {travelTransportCard ? (
+        <TravelTransportDetailModal
+          card={travelTransportCard}
+          onClose={() => setTravelTransportCard(null)}
+        />
+      ) : null}
+      {travelFoodCard ? (
+        <TravelFoodDetailModal
+          card={travelFoodCard}
+          onClose={() => setTravelFoodCard(null)}
         />
       ) : null}
     </div>
