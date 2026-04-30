@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 from uuid import uuid4
 
-from utils.time_aware import today_beijing, now_beijing_iso, BEIJING_TZ
+from utils.time_aware import today_beijing, now_beijing_iso, parse_iso_to_beijing, BEIJING_TZ
 
 import boto3
 from botocore.config import Config
@@ -569,6 +569,199 @@ def get_sense_latest() -> dict:
     if not isinstance(data, dict):
         return {}
     return data
+
+
+def _duration_ms_between(started_at: str, ended_at: str) -> int:
+    start = parse_iso_to_beijing(str(started_at or "").strip())
+    end = parse_iso_to_beijing(str(ended_at or "").strip())
+    if not start or not end:
+        return 0
+    return max(0, int((end - start).total_seconds() * 1000))
+
+
+def _closed_app_session(active: dict, ended_at: str, reason: str) -> dict | None:
+    if not isinstance(active, dict):
+        return None
+    pkg = str(active.get("packageName") or "").strip()
+    started_at = str(active.get("startedAt") or "").strip()
+    if not pkg or not started_at:
+        return None
+    duration_ms = _duration_ms_between(started_at, ended_at)
+    if duration_ms < 1000:
+        return None
+    item = {
+        "deviceId": str(active.get("deviceId") or "").strip(),
+        "packageName": pkg,
+        "appName": str(active.get("appName") or pkg).strip() or pkg,
+        "startedAt": started_at,
+        "endedAt": str(ended_at or "").strip(),
+        "durationMs": duration_ms,
+        "endReason": str(reason or "").strip()[:40] or "unknown",
+    }
+    class_name = str(active.get("className") or "").strip()
+    if class_name:
+        item["className"] = class_name
+    source = str(active.get("source") or "").strip()
+    if source:
+        item["source"] = source
+    return item
+
+
+def _compact_app_sessions(items: list, device_id: str, limit: int = 5) -> list[dict]:
+    out: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        item_device = str(item.get("deviceId") or device_id or "").strip()
+        if device_id and item_device and item_device != device_id:
+            continue
+        pkg = str(item.get("packageName") or "").strip()
+        started_at = str(item.get("startedAt") or "").strip()
+        ended_at = str(item.get("endedAt") or "").strip()
+        if not pkg or not started_at or not ended_at:
+            continue
+        try:
+            duration_ms = int(item.get("durationMs") or 0)
+        except Exception:
+            duration_ms = 0
+        if duration_ms <= 0:
+            duration_ms = _duration_ms_between(started_at, ended_at)
+        if duration_ms <= 0:
+            continue
+        dedupe_key = (pkg, started_at, ended_at)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        cleaned = {
+            "deviceId": item_device,
+            "packageName": pkg,
+            "appName": str(item.get("appName") or pkg).strip() or pkg,
+            "startedAt": started_at,
+            "endedAt": ended_at,
+            "durationMs": duration_ms,
+        }
+        class_name = str(item.get("className") or "").strip()
+        if class_name:
+            cleaned["className"] = class_name
+        source = str(item.get("source") or "").strip()
+        if source:
+            cleaned["source"] = source
+        end_reason = str(item.get("endReason") or "").strip()
+        if end_reason:
+            cleaned["endReason"] = end_reason[:40]
+        out.append(cleaned)
+        if len(out) >= max(1, int(limit or 5)):
+            break
+    return out
+
+
+def update_app_sessions_from_foreground(foreground_patch: dict) -> bool:
+    """
+    用前台 app 切换事件维护最近应用会话。
+    不替代 usage 24h 快照：这里只记录“几点打开了什么 app、这次看了多久”。
+    """
+    if not isinstance(foreground_patch, dict):
+        return False
+    device_id = str(foreground_patch.get("deviceId") or "").strip()
+    pkg = str(foreground_patch.get("packageName") or "").strip()
+    if not device_id or not pkg:
+        return False
+    observed_at = str(foreground_patch.get("observedAt") or "").strip() or now_beijing_iso()
+    app_name = str(foreground_patch.get("appName") or pkg).strip() or pkg
+    client = _s3_client()
+    if not client:
+        return False
+    with _global_write_lock:
+        try:
+            doc = _read_json(client, R2_KEY_SENSE_LATEST)
+            if doc is None or not isinstance(doc, dict):
+                doc = {}
+            bucket = doc.get("app_sessions")
+            if not isinstance(bucket, dict):
+                bucket = {}
+            active = bucket.get("active")
+            if not isinstance(active, dict):
+                active = {}
+            active_device = str(active.get("deviceId") or device_id).strip()
+            active_pkg = str(active.get("packageName") or "").strip()
+            if active_device == device_id and active_pkg == pkg:
+                return True
+
+            old_recent = bucket.get("recent")
+            recent = old_recent if isinstance(old_recent, list) else []
+            closed = _closed_app_session(active, observed_at, "app_switch") if active_device == device_id else None
+            if closed:
+                recent = [closed, *recent]
+
+            next_active = {
+                "deviceId": device_id,
+                "packageName": pkg,
+                "appName": app_name[:80],
+                "startedAt": observed_at,
+                "source": str(foreground_patch.get("source") or "accessibility").strip()[:40] or "accessibility",
+            }
+            class_name = str(foreground_patch.get("className") or "").strip()
+            if class_name:
+                next_active["className"] = class_name[:240]
+
+            next_bucket = {
+                "deviceId": device_id,
+                "active": next_active,
+                "recent": _compact_app_sessions(recent, device_id, limit=5),
+                "updatedAt": now_beijing_iso(),
+            }
+            doc["app_sessions"] = next_bucket
+            _write_json(client, R2_KEY_SENSE_LATEST, doc)
+            if closed:
+                _append_sense_history_event(client, "app_sessions", dict(next_bucket))
+            return True
+        except Exception as e:
+            logger.error("update_app_sessions_from_foreground 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def close_app_session_for_device(device_id: str, ended_at: str = "", reason: str = "screen_off") -> bool:
+    did = str(device_id or "").strip()
+    if not did:
+        return False
+    ended = str(ended_at or "").strip() or now_beijing_iso()
+    client = _s3_client()
+    if not client:
+        return False
+    with _global_write_lock:
+        try:
+            doc = _read_json(client, R2_KEY_SENSE_LATEST)
+            if doc is None or not isinstance(doc, dict):
+                doc = {}
+            bucket = doc.get("app_sessions")
+            if not isinstance(bucket, dict):
+                return True
+            active = bucket.get("active")
+            if not isinstance(active, dict) or not active:
+                return True
+            active_device = str(active.get("deviceId") or did).strip()
+            if active_device != did:
+                return True
+            recent_raw = bucket.get("recent")
+            recent = recent_raw if isinstance(recent_raw, list) else []
+            closed = _closed_app_session(active, ended, reason)
+            if closed:
+                recent = [closed, *recent]
+            next_bucket = {
+                "deviceId": did,
+                "active": None,
+                "recent": _compact_app_sessions(recent, did, limit=5),
+                "updatedAt": now_beijing_iso(),
+            }
+            doc["app_sessions"] = next_bucket
+            _write_json(client, R2_KEY_SENSE_LATEST, doc)
+            if closed:
+                _append_sense_history_event(client, "app_sessions", dict(next_bucket))
+            return True
+        except Exception as e:
+            logger.error("close_app_session_for_device 失败 device_id=%s error=%s", did, e, exc_info=True)
+            return False
 
 
 def get_pc_command_queue() -> dict:

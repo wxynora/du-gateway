@@ -1,5 +1,5 @@
 # 设备感知（sense/latest.json）→ 渡的 system 注入。
-# battery + location + health + music + screen + foreground + usage。
+# battery + location + health + music + screen + foreground + app_sessions + usage。
 # 字段约定见 docs/感知模块方案.md
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ logger = get_logger(__name__)
 
 _MAX_SNAPSHOT_CHARS = 800
 _MAX_USAGE_APPS = 5
+_MAX_APP_SESSION_ITEMS = 5
 _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES = 60
 
 
@@ -224,6 +225,72 @@ def _format_usage_line(usage: dict) -> str | None:
     return "最近使用：" + "，".join(parts)
 
 
+def _format_session_duration_ms(ms: int) -> str:
+    try:
+        n = int(ms or 0)
+    except Exception:
+        n = 0
+    if n <= 0:
+        return ""
+    if n < 60000:
+        return "不到1分钟"
+    return _format_duration_minutes(max(1, round(n / 60000)))
+
+
+def _duration_ms_from_range(started_at: str, ended_at: str) -> int:
+    start = parse_iso_to_beijing(str(started_at or "").strip())
+    end = parse_iso_to_beijing(str(ended_at or "").strip())
+    if not start or not end:
+        return 0
+    return max(0, int((end - start).total_seconds() * 1000))
+
+
+def _format_app_session_item(item: dict, active: bool = False) -> str | None:
+    if not isinstance(item, dict):
+        return None
+    app_name = str(item.get("appName") or item.get("packageName") or "").strip()
+    started_at = str(item.get("startedAt") or "").strip()
+    started_dt = parse_iso_to_beijing(started_at)
+    if not app_name or not started_dt:
+        return None
+    clock = started_dt.strftime("%H:%M")
+    if active:
+        now_dt = parse_iso_to_beijing(now_beijing_iso())
+        duration_ms = max(0, int((now_dt - started_dt).total_seconds() * 1000)) if now_dt else 0
+        duration = _format_session_duration_ms(duration_ms) or "刚打开"
+        return f"{clock} 打开{app_name}，正在使用{duration}"
+    try:
+        duration_ms = int(item.get("durationMs") or 0)
+    except Exception:
+        duration_ms = 0
+    if duration_ms <= 0:
+        duration_ms = _duration_ms_from_range(started_at, str(item.get("endedAt") or "").strip())
+    duration = _format_session_duration_ms(duration_ms)
+    if not duration:
+        return None
+    return f"{clock} 打开{app_name}，看了{duration}"
+
+
+def _format_app_sessions_line(app_sessions: dict) -> str | None:
+    pieces: list[str] = []
+    active = app_sessions.get("active")
+    if isinstance(active, dict) and active:
+        piece = _format_app_session_item(active, active=True)
+        if piece:
+            pieces.append(piece)
+    recent = app_sessions.get("recent")
+    if isinstance(recent, list):
+        for item in recent:
+            piece = _format_app_session_item(item if isinstance(item, dict) else {}, active=False)
+            if piece:
+                pieces.append(piece)
+            if len(pieces) >= _MAX_APP_SESSION_ITEMS:
+                break
+    if not pieces:
+        return None
+    return "最近五次应用：" + "；".join(pieces[:_MAX_APP_SESSION_ITEMS])
+
+
 def _format_foreground_line(foreground: dict) -> str | None:
     app_name = str(foreground.get("appName") or foreground.get("packageName") or "").strip()
     if not app_name:
@@ -252,6 +319,7 @@ def format_sense_snapshot_for_system() -> str:
     screen = _as_dict(doc.get("screen"))
     foreground = _as_dict(doc.get("foreground"))
     usage = _as_dict(doc.get("usage"))
+    app_sessions = _as_dict(doc.get("app_sessions"))
     has_battery = bool(bat) and "level" in bat
     loc_line = _format_location_line(loc)
     health_line = _format_health_line(health)
@@ -260,8 +328,9 @@ def format_sense_snapshot_for_system() -> str:
     screen_line = _format_screen_line(screen)
     sleep_guess_line = _format_sleep_guess_line(screen)
     foreground_line = _format_foreground_line(foreground)
+    app_sessions_line = _format_app_sessions_line(app_sessions)
     usage_line = _format_usage_line(usage)
-    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line and not screen_line and not sleep_guess_line and not foreground_line and not usage_line:
+    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line and not screen_line and not sleep_guess_line and not foreground_line and not app_sessions_line and not usage_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -287,6 +356,8 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(screen_line)
     if foreground_line:
         lines.append(foreground_line)
+    if app_sessions_line:
+        lines.append(app_sessions_line)
     if usage_line:
         lines.append(usage_line)
 

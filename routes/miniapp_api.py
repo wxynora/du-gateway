@@ -1509,7 +1509,10 @@ def miniapp_device_screen_state():
         patch["screenOffSince"] = ""
         patch["screenOffDurationMs"] = 0
     ok = r2_store.merge_and_save_sense_bucket("screen", patch)
-    return jsonify({"ok": bool(ok), "bucket": "screen", "device_id": device_id, "event": event})
+    sessions_ok = True
+    if event == "screen_off":
+        sessions_ok = r2_store.close_app_session_for_device(device_id, patch.get("occurredAt") or patch.get("observedAt") or "", reason="screen_off")
+    return jsonify({"ok": bool(ok and sessions_ok), "bucket": "screen", "device_id": device_id, "event": event})
 
 
 @bp.route("/device-state/battery", methods=["POST"])
@@ -1563,7 +1566,8 @@ def miniapp_device_foreground_app():
     if err:
         return jsonify({"ok": False, "error": err}), 400
     ok = r2_store.merge_and_save_sense_bucket("foreground", patch or {})
-    return jsonify({"ok": bool(ok), "bucket": "foreground", "device_id": device_id})
+    sessions_ok = r2_store.update_app_sessions_from_foreground(patch or {})
+    return jsonify({"ok": bool(ok and sessions_ok), "bucket": "foreground", "device_id": device_id})
 
 
 @bp.route("/device-state/location", methods=["POST"])
