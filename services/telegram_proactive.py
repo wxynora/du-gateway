@@ -846,6 +846,7 @@ def run_scheduler_loop():
     next_main_at = 0.0
     next_followup_at = 0.0
     next_du_daily_at = 0.0
+    next_hard_trigger_at = 0.0
     while True:
         now_ts = time.time()
         try:
@@ -853,6 +854,12 @@ def run_scheduler_loop():
                 followup = tick_conversation_followups()
                 logger.info("延迟续话 tick result=%s", followup)
                 next_followup_at = now_ts + max(15, int(FOLLOWUP_TICK_SECONDS or 60))
+            if now_ts >= next_hard_trigger_at:
+                from services.proactive_trigger_engine import tick_proactive_triggers
+
+                hard_trigger = tick_proactive_triggers(uid)
+                logger.info("主动硬触发 tick result=%s", hard_trigger)
+                next_hard_trigger_at = now_ts + 60
             if now_ts >= next_du_daily_at:
                 daily = du_daily_sleep_tick(uid)
                 logger.info("渡的日常入睡收口 tick result=%s", daily)

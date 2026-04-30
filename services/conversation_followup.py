@@ -490,8 +490,8 @@ def _dispatch_choice_dialog_reply(channel: str, target: str, text: str, created_
     return False
 
 
-def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
-    """立即让渡基于一个后端事件生成回应，并通过主动消息入口发出。"""
+def _send_wakeup_event(window_id: str, target: str, event_text: str, created_at: str | None = None, extra_instruction: str = "") -> dict:
+    """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。"""
     try:
         from storage.upstream_store import get_cached_active_model
 
@@ -508,6 +508,10 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
         return {"ok": False, "error": "empty_event"}
     preferred_channel, preferred_target, preferred_meta = _choice_dialog_delivery_preference(target)
     generation_channel = preferred_channel or "sumitalk"
+    content = prompt
+    extra = str(extra_instruction or "").strip()
+    if extra:
+        content = f"{content}\n\n{extra}"
 
     body = {
         "model": model,
@@ -515,11 +519,7 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
         "messages": [
             {
                 "role": "user",
-                "content": (
-                    f"{prompt}\n\n"
-                    "请你现在直接对她回应一两句。不要解释工具、回执或系统流程；"
-                    "不要把这当成普通任务总结，要像刚收到她这个动作一样自然接住。"
-                ),
+                "content": content,
             }
         ],
     }
@@ -537,7 +537,7 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
     try:
         r = requests.post(url, headers=headers, json=body, timeout=120)
         if r.status_code != 200:
-            logger.warning("SumiTalk 事件唤醒调用网关失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
+            logger.warning("后端事件唤醒调用网关失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
             return {"ok": False, "error": f"gateway_http_{r.status_code}"}
         data = r.json() if r.content else {}
         msg = (((data or {}).get("choices") or [{}])[0] or {}).get("message") or {}
@@ -588,8 +588,27 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
             "error": "dispatch_failed",
         }
     except Exception as e:
-        logger.warning("SumiTalk 事件唤醒异常", exc_info=True)
+        logger.warning("后端事件唤醒异常", exc_info=True)
         return {"ok": False, "error": str(e)}
+
+
+def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
+    """立即让渡基于 SumiTalk 弹窗回执生成回应，并通过主动消息入口发出。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        extra_instruction=(
+            "请你现在直接对她回应一两句。不要解释工具、回执或系统流程；"
+            "不要把这当成普通任务总结，要像刚收到她这个动作一样自然接住。"
+        ),
+    )
+
+
+def send_proactive_trigger_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
+    """立即让渡基于后端主动触发事实生成回应。event_text 只放事实，不追加回应指令。"""
+    return _send_wakeup_event(window_id=window_id, target=target, event_text=event_text, created_at=created_at)
 
 
 def tick_conversation_followups() -> dict:
