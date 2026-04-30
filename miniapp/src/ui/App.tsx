@@ -226,6 +226,29 @@ type StayWithDuData = {
   booksDone: StayMediaItem[];
 };
 type StayWithDuCollection = keyof StayWithDuData;
+type CoReadTheme = "light" | "dark" | "paper";
+type CoReadMessage = {
+  id: string;
+  role: "user" | "du";
+  text: string;
+  createdAt: string;
+  status?: "sent" | "pending" | "failed";
+};
+type CoReadBook = {
+  id: string;
+  title: string;
+  content: string;
+  progress: number;
+  lastReadAt: string;
+  lastSummary: string;
+  messages: CoReadMessage[];
+};
+type CoReadSettings = {
+  fontSize: number;
+  lineHeight: number;
+  marginLevel: number;
+  theme: CoReadTheme;
+};
 type SumiTalkChatJobCreateResponse = {
   ok?: boolean;
   job_id?: string;
@@ -246,6 +269,8 @@ const TRANSPARENT_BUBBLE_CLASS =
   "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
 const STAY_SERIF_FONT = "'Playfair Display', 'Noto Serif SC', 'Songti SC', Georgia, serif";
 const STAY_SANS_FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const CO_READ_BOOKS_KEY = "miniapp.coRead.books.v1";
+const CO_READ_SETTINGS_KEY = "miniapp.coRead.settings.v1";
 const SYSTEM_CARD_PREFIX = "<<<SUMITALK_CARD ";
 const SYSTEM_CARD_SUFFIX = ">>>";
 const SUMITALK_CHAT_JOB_POLL_MS = 1800;
@@ -363,6 +388,123 @@ function formatStayDate(date = new Date()): string {
 
 function makeStayItemId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function makeCoReadId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function emptyCoReadSettings(): CoReadSettings {
+  return {
+    fontSize: 18,
+    lineHeight: 1.8,
+    marginLevel: 2,
+    theme: "light",
+  };
+}
+
+function normalizeCoReadTheme(value: any): CoReadTheme {
+  return value === "dark" || value === "paper" || value === "light" ? value : "light";
+}
+
+function normalizeCoReadMessages(raw: any): CoReadMessage[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => ({
+      id: String(item?.id || makeCoReadId("msg")),
+      role: item?.role === "user" ? "user" as const : "du" as const,
+      text: String(item?.text || "").trim(),
+      createdAt: String(item?.createdAt || new Date().toISOString()),
+      status: item?.status === "pending" || item?.status === "failed" ? item.status : "sent" as const,
+    }))
+    .filter((item) => item.text);
+}
+
+function normalizeCoReadBooks(raw: any): CoReadBook[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => ({
+      id: String(item?.id || makeCoReadId("book")),
+      title: String(item?.title || "").trim(),
+      content: String(item?.content || ""),
+      progress: Math.max(0, Math.min(1, Number(item?.progress || 0))),
+      lastReadAt: String(item?.lastReadAt || new Date().toISOString()),
+      lastSummary: String(item?.lastSummary || "").trim(),
+      messages: normalizeCoReadMessages(item?.messages),
+    }))
+    .filter((item) => item.title && item.content);
+}
+
+function readCoReadBooks(): CoReadBook[] {
+  try {
+    return normalizeCoReadBooks(JSON.parse(localStorage.getItem(CO_READ_BOOKS_KEY) || "[]"));
+  } catch {
+    return [];
+  }
+}
+
+function writeCoReadBooks(books: CoReadBook[]) {
+  try {
+    localStorage.setItem(CO_READ_BOOKS_KEY, JSON.stringify(books));
+  } catch {}
+}
+
+function readCoReadSettings(): CoReadSettings {
+  const fallback = emptyCoReadSettings();
+  try {
+    const raw = JSON.parse(localStorage.getItem(CO_READ_SETTINGS_KEY) || "{}");
+    return {
+      fontSize: clampStoredNumber(Number(raw?.fontSize || fallback.fontSize), 15, 24, fallback.fontSize),
+      lineHeight: clampStoredNumber(Number(raw?.lineHeight || fallback.lineHeight), 1.4, 2.2, fallback.lineHeight),
+      marginLevel: Math.max(1, Math.min(3, Number(raw?.marginLevel || fallback.marginLevel))),
+      theme: normalizeCoReadTheme(raw?.theme),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeCoReadSettings(settings: CoReadSettings) {
+  try {
+    localStorage.setItem(CO_READ_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {}
+}
+
+function stripTxtExtension(filename: string): string {
+  return String(filename || "未命名").replace(/\.[^.]+$/, "").trim() || "未命名";
+}
+
+function splitCoReadParagraphs(content: string): string[] {
+  return String(content || "")
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}|\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatCoReadDate(value: string): string {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return "刚刚";
+  const month = date.toLocaleString("en-US", { month: "short" }).toUpperCase();
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${month} ${day}`;
+}
+
+function formatCoReadProgress(progress: number): string {
+  return `${Math.round(Math.max(0, Math.min(1, progress)) * 1000) / 10}%`;
+}
+
+function compactCoReadText(text: string, max = 52): string {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}...`;
+}
+
+function pickCoReadVisibleText(book: CoReadBook): string {
+  const content = String(book.content || "").replace(/\s+/g, " ").trim();
+  if (!content) return "";
+  const start = Math.max(0, Math.floor(content.length * Math.max(0, Math.min(1, book.progress))) - 160);
+  return content.slice(start, start + 420);
 }
 
 function resolveChatFontFamily(fontKey: ChatFontKey): string {
@@ -485,6 +627,7 @@ function Shell({
   const [showPersonalization, setShowPersonalization] = useState(false);
   const [showDuDay, setShowDuDay] = useState(false);
   const [showStayWithDu, setShowStayWithDu] = useState(false);
+  const [showCoRead, setShowCoRead] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
@@ -829,6 +972,11 @@ function Shell({
             />
             <PageCardRow
               icon={<BookOpenIcon />}
+              label="和渡一起读"
+              onClick={() => setShowCoRead(true)}
+            />
+            <PageCardRow
+              icon={<BookOpenIcon />}
               label="渡的记事本"
               onClick={() => setPanel("du-notebook")}
             />
@@ -895,6 +1043,7 @@ function Shell({
     showPersonalization ||
     showDuDay ||
     showStayWithDu ||
+    showCoRead ||
     showTree ||
     showCallHub;
 
@@ -1028,6 +1177,7 @@ function Shell({
           <StayWithDuScreen />
         </FullScreenPane>
       ) : null}
+      {showCoRead ? <CoReadScreen onBack={() => setShowCoRead(false)} /> : null}
       {showTree ? (
         <FullScreenPane title="树" accent="neutral" onBack={() => setShowTree(false)}>
           <TreeScreen data={tree} onRefresh={loadTree} />
@@ -1432,6 +1582,503 @@ function StayWithDuScreen() {
           </form>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function CoReadScreen({ onBack }: { onBack: () => void }) {
+  const toast = useToast();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const readerRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const pendingTimerRef = useRef<number | null>(null);
+  const [books, setBooks] = useState<CoReadBook[]>(() => readCoReadBooks());
+  const [activeBookId, setActiveBookId] = useState("");
+  const [settings, setSettings] = useState<CoReadSettings>(() => readCoReadSettings());
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [input, setInput] = useState("");
+  const [selectedText, setSelectedText] = useState("");
+  const [selectionToolbar, setSelectionToolbar] = useState<{ x: number; y: number } | null>(null);
+  const [chatExpanded, setChatExpanded] = useState(false);
+
+  const activeBook = useMemo(() => books.find((book) => book.id === activeBookId) || null, [activeBookId, books]);
+  const paragraphs = useMemo(() => splitCoReadParagraphs(activeBook?.content || ""), [activeBook?.content]);
+  const recentMessages = activeBook ? activeBook.messages.slice(-6) : [];
+  const visibleMessages = chatExpanded ? recentMessages : recentMessages.slice(-3);
+  const theme = settings.theme === "dark"
+    ? {
+        shell: "bg-[#111111] text-[#F8F8F8]",
+        panel: "border-[#2A2A2A] bg-[#171717]",
+        soft: "bg-[#1F1F1F] text-[#D8D8D8]",
+        muted: "text-[#8C8C8C]",
+        input: "border-[#333333] bg-[#181818] text-[#F8F8F8] placeholder:text-[#777777]",
+        dock: "border-[#2A2A2A] bg-[#111111]/95",
+      }
+    : settings.theme === "paper"
+      ? {
+          shell: "bg-[#F4F1EA] text-[#352D28]",
+          panel: "border-[#E1D8CC] bg-[#FBF8F1]",
+          soft: "bg-[#ECE4D8] text-[#6E5B4E]",
+          muted: "text-[#8A786B]",
+          input: "border-[#DED2C2] bg-[#FFFDF8] text-[#352D28] placeholder:text-[#A9998B]",
+          dock: "border-[#DED2C2] bg-[#F4F1EA]/95",
+        }
+      : {
+          shell: "bg-white text-[#111111]",
+          panel: "border-[#EAEAEA] bg-white",
+          soft: "bg-[#F7F7F7] text-[#555555]",
+          muted: "text-[#888888]",
+          input: "border-[#EAEAEA] bg-white text-[#111111] placeholder:text-[#A0A0A0]",
+          dock: "border-[#EAEAEA] bg-white/95",
+        };
+  const readerPadding = settings.marginLevel === 1 ? "px-5" : settings.marginLevel === 3 ? "px-8" : "px-6";
+
+  useEffect(() => {
+    return () => {
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeBookId || !activeBook) return;
+    requestAnimationFrame(() => {
+      const el = readerRef.current;
+      if (!el) return;
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      el.scrollTo({ top: maxScroll * Math.max(0, Math.min(1, activeBook.progress)), behavior: "auto" });
+    });
+  }, [activeBookId]);
+
+  function setBooksAndPersist(nextBooks: CoReadBook[] | ((prev: CoReadBook[]) => CoReadBook[])) {
+    setBooks((prev) => {
+      const next = typeof nextBooks === "function" ? nextBooks(prev) : nextBooks;
+      writeCoReadBooks(next);
+      return next;
+    });
+  }
+
+  function updateSettings(nextSettings: CoReadSettings | ((prev: CoReadSettings) => CoReadSettings)) {
+    setSettings((prev) => {
+      const next = typeof nextSettings === "function" ? nextSettings(prev) : nextSettings;
+      writeCoReadSettings(next);
+      return next;
+    });
+  }
+
+  function updateActiveBook(updater: (book: CoReadBook) => CoReadBook) {
+    if (!activeBook) return;
+    setBooksAndPersist((prev) => prev.map((book) => (book.id === activeBook.id ? updater(book) : book)));
+  }
+
+  async function importTxtFile(file?: File | null) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".txt") && file.type && file.type !== "text/plain") {
+      toast("只能导入 TXT");
+      return;
+    }
+    try {
+      const content = await file.text();
+      const clean = content.replace(/\u0000/g, "").trim();
+      if (!clean) throw new Error("文件里没有可读内容");
+      const now = new Date().toISOString();
+      const book: CoReadBook = {
+        id: makeCoReadId("book"),
+        title: stripTxtExtension(file.name),
+        content: clean,
+        progress: 0,
+        lastReadAt: now,
+        lastSummary: "还没有共读记录。",
+        messages: [],
+      };
+      setBooksAndPersist((prev) => [book, ...prev]);
+      setActiveBookId(book.id);
+      setSelectedText("");
+      setSelectionToolbar(null);
+      toast("已导入");
+    } catch (e: any) {
+      toast(`导入失败：${e?.message || e}`);
+    }
+  }
+
+  function deleteBook(bookId: string) {
+    const target = books.find((book) => book.id === bookId);
+    if (!target) return;
+    if (!window.confirm(`删除《${target.title}》？`)) return;
+    setBooksAndPersist((prev) => prev.filter((book) => book.id !== bookId));
+    if (activeBookId === bookId) setActiveBookId("");
+    toast("已删除");
+  }
+
+  function handleReaderScroll() {
+    const el = readerRef.current;
+    if (!el || !activeBook) return;
+    const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
+    const nextProgress = Math.max(0, Math.min(1, el.scrollTop / maxScroll));
+    if (Math.abs(nextProgress - activeBook.progress) < 0.015) return;
+    updateActiveBook((book) => ({
+      ...book,
+      progress: nextProgress,
+      lastReadAt: new Date().toISOString(),
+    }));
+  }
+
+  function captureSelection() {
+    const selection = window.getSelection();
+    const text = String(selection?.toString() || "").replace(/\s+/g, " ").trim();
+    if (!selection || text.length < 2 || selection.rangeCount < 1) {
+      setSelectionToolbar(null);
+      return;
+    }
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    setSelectedText(text.slice(0, 1200));
+    setSelectionToolbar({
+      x: Math.max(16, Math.min(window.innerWidth - 148, rect.left + rect.width / 2 - 74)),
+      y: Math.max(90, rect.top - 46),
+    });
+  }
+
+  function focusCoReadInput() {
+    setChatExpanded(true);
+    setSelectionToolbar(null);
+    inputRef.current?.focus();
+  }
+
+  function copySelectedText() {
+    if (!selectedText) return;
+    navigator.clipboard.writeText(selectedText).then(
+      () => toast("已复制"),
+      () => toast("复制失败"),
+    );
+    setSelectionToolbar(null);
+  }
+
+  function sendCoReadMessage() {
+    if (!activeBook) return;
+    const cleanInput = input.trim();
+    const context = selectedText || pickCoReadVisibleText(activeBook);
+    if (!cleanInput && !context) {
+      toast("先选一段或写一句");
+      return;
+    }
+    const now = Date.now();
+    const userText = cleanInput || "想和渡聊这一段";
+    const pendingId = makeCoReadId("du");
+    const userMessage: CoReadMessage = {
+      id: makeCoReadId("user"),
+      role: "user",
+      text: userText,
+      createdAt: new Date(now).toISOString(),
+      status: "sent",
+    };
+    const pendingMessage: CoReadMessage = {
+      id: pendingId,
+      role: "du",
+      text: "渡在看这一段...",
+      createdAt: new Date(now + 1).toISOString(),
+      status: "pending",
+    };
+    setInput("");
+    setChatExpanded(true);
+    setSelectionToolbar(null);
+    updateActiveBook((book) => ({
+      ...book,
+      messages: [...book.messages, userMessage, pendingMessage],
+      lastReadAt: new Date(now).toISOString(),
+    }));
+    if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current);
+    pendingTimerRef.current = window.setTimeout(() => {
+      const snippet = compactCoReadText(context, 46);
+      const reply = snippet
+        ? `我看到这一段了。这里可以先抓住「${snippet}」这个点，后面我们就沿着它往下聊。`
+        : "我在这本书里跟上你了，继续问我就行。";
+      setBooks((prev) => {
+        const next = prev.map((book) => {
+          if (book.id !== activeBook.id) return book;
+          return {
+            ...book,
+            lastSummary: `渡：${compactCoReadText(reply, 64)}`,
+            messages: book.messages.map((msg) => (
+              msg.id === pendingId
+                ? { ...msg, text: reply, status: "sent" as const }
+                : msg
+            )),
+          };
+        });
+        writeCoReadBooks(next);
+        return next;
+      });
+    }, 700);
+  }
+
+  if (activeBook) {
+    return (
+      <div className={`absolute inset-0 z-30 flex flex-col overflow-hidden ${theme.shell}`}>
+        <header className={`z-20 flex items-center border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] ${theme.dock}`}>
+          <button
+            type="button"
+            className="flex h-11 w-11 items-center justify-center rounded-full transition-colors active:bg-black/5"
+            onClick={() => {
+              setActiveBookId("");
+              setSelectedText("");
+              setSelectionToolbar(null);
+            }}
+            aria-label="返回书架"
+          >
+            <ChevronLeftIcon />
+          </button>
+          <div className="min-w-0 flex-1 text-center">
+            <div className="truncate text-[13px] font-semibold">{activeBook.title}</div>
+            <div className={`mt-0.5 text-[11px] font-mono ${theme.muted}`}>{formatCoReadProgress(activeBook.progress)}</div>
+          </div>
+          <button
+            type="button"
+            className="flex h-11 w-11 items-center justify-center rounded-full transition-colors active:bg-black/5"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="阅读设置"
+          >
+            <SettingsIconMini />
+          </button>
+        </header>
+
+        <div
+          ref={readerRef}
+          className={`min-h-0 flex-1 overflow-y-auto ${readerPadding} pb-[224px] pt-5`}
+          onScroll={handleReaderScroll}
+          onMouseUp={captureSelection}
+          onTouchEnd={() => window.setTimeout(captureSelection, 80)}
+          style={{ fontSize: `${settings.fontSize}px`, lineHeight: settings.lineHeight }}
+        >
+          <div className="mx-auto max-w-[720px] text-justify">
+            {paragraphs.map((paragraph, index) => (
+              <p key={`${index}-${paragraph.slice(0, 12)}`} className="mb-5">
+                {paragraph}
+              </p>
+            ))}
+          </div>
+        </div>
+
+        {selectionToolbar ? (
+          <div
+            className="fixed z-50 flex items-center gap-3 rounded-[14px] bg-[#111111] px-4 py-2 text-[13px] font-semibold text-white shadow-[0_12px_28px_rgba(0,0,0,0.25)]"
+            style={{ left: selectionToolbar.x, top: selectionToolbar.y }}
+          >
+            <button type="button" onClick={focusCoReadInput}>共读</button>
+            <div className="h-4 w-px bg-white/25" />
+            <button type="button" onClick={copySelectedText}>复制</button>
+          </div>
+        ) : null}
+
+        <div className={`fixed inset-x-0 bottom-0 z-40 border-t px-5 pt-3 backdrop-blur-md ${theme.dock}`} style={{ paddingBottom: "calc(env(safe-area-inset-bottom,0px)+14px)" }}>
+          {selectedText ? (
+            <div className={`mb-2 flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${theme.soft}`}>
+              <span className="min-w-0 flex-1 truncate">已选中：{compactCoReadText(selectedText, 42)}</span>
+              <button type="button" className="shrink-0" onClick={() => setSelectedText("")}>清除</button>
+            </div>
+          ) : null}
+          {visibleMessages.length ? (
+            <button
+              type="button"
+              className="mb-3 flex max-h-[128px] w-full flex-col gap-2 overflow-hidden text-left"
+              onClick={() => setChatExpanded((prev) => !prev)}
+            >
+              {visibleMessages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`max-w-[86%] rounded-[14px] px-3 py-2 text-[13px] leading-5 ${
+                    msg.role === "user"
+                      ? "self-end rounded-br-[5px] bg-[#111111] text-white"
+                      : msg.status === "pending"
+                        ? `self-start bg-transparent px-0 font-mono ${theme.muted}`
+                        : `self-start rounded-bl-[5px] ${theme.soft}`
+                  }`}
+                >
+                  {msg.text}
+                </div>
+              ))}
+            </button>
+          ) : null}
+          <div className="flex items-center gap-2">
+            <input
+              ref={inputRef}
+              className={`h-11 min-w-0 flex-1 rounded-full border px-4 text-[14px] font-medium outline-none ${theme.input}`}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="和渡聊这段"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") sendCoReadMessage();
+              }}
+            />
+            <button
+              type="button"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#111111] text-white transition-transform active:scale-95 disabled:opacity-40"
+              onClick={sendCoReadMessage}
+              disabled={!input.trim() && !selectedText}
+              aria-label="发送"
+            >
+              <SendIconMini />
+            </button>
+          </div>
+        </div>
+
+        {settingsOpen ? (
+          <div className="fixed inset-0 z-50 flex items-end bg-black/10" onClick={() => setSettingsOpen(false)}>
+            <div
+              className={`w-full rounded-t-[28px] border px-6 pb-[calc(env(safe-area-inset-bottom,0px)+26px)] pt-6 shadow-[0_-16px_42px_rgba(0,0,0,0.12)] ${theme.panel}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-5 flex items-center justify-between">
+                <div className="text-[15px] font-semibold">阅读设置</div>
+                <button type="button" className={`rounded-full px-3 py-1.5 text-[13px] ${theme.muted}`} onClick={() => setSettingsOpen(false)}>完成</button>
+              </div>
+              <div className="space-y-6">
+                <section>
+                  <div className={`mb-3 font-mono text-[11px] uppercase tracking-[0.12em] ${theme.muted}`}>typography</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button type="button" className={`h-11 rounded-full border text-[13px] font-semibold ${theme.panel}`} onClick={() => updateSettings((prev) => ({ ...prev, fontSize: Math.max(15, prev.fontSize - 1) }))}>- A</button>
+                    <button type="button" className={`h-11 rounded-full border text-[13px] font-semibold ${theme.panel}`} onClick={() => updateSettings((prev) => ({ ...prev, fontSize: Math.min(24, prev.fontSize + 1) }))}>A +</button>
+                  </div>
+                </section>
+                <section>
+                  <div className={`mb-3 font-mono text-[11px] uppercase tracking-[0.12em] ${theme.muted}`}>theme</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { id: "light" as const, label: "LIGHT", cls: "bg-white text-black" },
+                      { id: "dark" as const, label: "DARK", cls: "bg-[#111] text-white" },
+                      { id: "paper" as const, label: "PAPER", cls: "bg-[#F4F1EA] text-[#433]" },
+                    ].map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`h-12 rounded-[14px] border font-mono text-[11px] ${item.cls} ${settings.theme === item.id ? "ring-2 ring-[#111111]" : ""}`}
+                        onClick={() => updateSettings((prev) => ({ ...prev, theme: item.id }))}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+                <section>
+                  <div className={`mb-3 font-mono text-[11px] uppercase tracking-[0.12em] ${theme.muted}`}>spacing</div>
+                  <PersonalizationSliderRow
+                    title="行距"
+                    value={String(settings.lineHeight.toFixed(1))}
+                    min={1.4}
+                    max={2.2}
+                    step={0.1}
+                    currentValue={settings.lineHeight}
+                    onChange={(next) => updateSettings((prev) => ({ ...prev, lineHeight: next }))}
+                  />
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    {[1, 2, 3].map((level) => (
+                      <button
+                        key={level}
+                        type="button"
+                        className={`h-9 rounded-full border text-[12px] font-semibold ${settings.marginLevel === level ? "bg-[#111111] text-white" : theme.panel}`}
+                        onClick={() => updateSettings((prev) => ({ ...prev, marginLevel: level }))}
+                      >
+                        边距 {level}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-white text-[#111111]">
+      <header className="z-20 flex items-center gap-2 border-b border-[#F1F1F1] bg-white px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)]">
+        <button type="button" className="flex h-11 w-11 items-center justify-center rounded-full transition-colors active:bg-gray-50" onClick={onBack} aria-label="返回">
+          <ChevronLeftIcon />
+        </button>
+        <div className="flex-1 text-[22px] font-bold">和渡一起读</div>
+        <button
+          type="button"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-[#111111] text-white transition-transform active:scale-95"
+          onClick={() => fileInputRef.current?.click()}
+          aria-label="导入 TXT"
+        >
+          <PlusIcon open={false} />
+        </button>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-[112px] pt-5">
+        {books.length ? (
+          <div className="mx-auto max-w-xl space-y-4">
+            {books.map((book) => (
+              <button
+                key={book.id}
+                type="button"
+                className="w-full rounded-[24px] border border-[#EAEAEA] bg-white p-5 text-left shadow-[0_8px_24px_rgba(0,0,0,0.025)] transition-transform active:scale-[0.99]"
+                onClick={() => {
+                  setActiveBookId(book.id);
+                  setSelectedText("");
+                  setSelectionToolbar(null);
+                  setChatExpanded(false);
+                }}
+              >
+                <div className="mb-5 flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 text-[18px] font-semibold uppercase leading-6">{book.title}</div>
+                  <div className="font-mono text-[11px] lowercase text-[#AAAAAA]">txt</div>
+                </div>
+                <div className="mb-5 flex items-center gap-6">
+                  <div>
+                    <div className="mb-1 font-mono text-[11px] lowercase tracking-[0.05em] text-[#AAAAAA]">progress</div>
+                    <div className="font-mono text-[16px] font-medium">{formatCoReadProgress(book.progress)}</div>
+                  </div>
+                  <div className="h-8 w-px bg-black/10" />
+                  <div>
+                    <div className="mb-1 font-mono text-[11px] lowercase tracking-[0.05em] text-[#AAAAAA]">last read</div>
+                    <div className="font-mono text-[16px] font-medium">{formatCoReadDate(book.lastReadAt)}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="ml-auto flex h-9 w-9 items-center justify-center rounded-full text-[#9A9A9A] transition-colors active:bg-gray-50"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteBook(book.id);
+                    }}
+                    aria-label="删除"
+                  >
+                    <TrashIconMini />
+                  </button>
+                </div>
+                <div className="line-clamp-2 text-[13px] leading-5 text-[#777777]">{book.lastSummary || "还没有共读记录。"}</div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="flex min-h-[58vh] flex-col items-center justify-center text-center">
+            <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-[#F7F7F7] text-[#777777]">
+              <BookOpenIcon />
+            </div>
+            <div className="text-[16px] font-semibold text-[#111111]">还没有导入的书</div>
+            <div className="mt-2 max-w-[240px] text-[13px] leading-5 text-[#888888]">先放一本 TXT 进来，再和渡一起读。</div>
+          </div>
+        )}
+      </div>
+
+      <button
+        type="button"
+        className="fixed inset-x-5 bottom-[calc(env(safe-area-inset-bottom,0px)+20px)] z-40 h-14 rounded-full bg-[#111111] font-mono text-[12px] font-semibold uppercase tracking-[0.08em] text-white shadow-[0_12px_26px_rgba(0,0,0,0.18)] active:scale-[0.99]"
+        onClick={() => fileInputRef.current?.click()}
+      >
+        导入 TXT 资料
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".txt,text/plain"
+        className="hidden"
+        onChange={(e) => {
+          void importTxtFile(e.target.files?.[0]);
+          e.currentTarget.value = "";
+        }}
+      />
     </div>
   );
 }
@@ -4292,6 +4939,14 @@ function ClockIconMini() {
 
 function SearchIconMini() {
   return <svg className="h-[16px] w-[16px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>;
+}
+
+function SettingsIconMini() {
+  return <svg className="h-[18px] w-[18px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51c.6.25 1.29.11 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82c.25.6.85 1 1.51 1H21a2 2 0 0 1 0 4h-.09c-.66 0-1.26.4-1.51 1z" /></svg>;
+}
+
+function SendIconMini() {
+  return <svg className="h-[17px] w-[17px] stroke-[1.8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4 20-7Z" /></svg>;
 }
 
 function ChevronUpMini() {
