@@ -38,6 +38,8 @@ _QUOTE_PATTERNS = (
     r"《[^》]*》",
     r"\"[^\"]*\"",
 )
+_SUMMARY_ANCHOR_MAX_PROMPT_ITEMS = 20
+_SUMMARY_ANCHOR_MAX_RANGE_HOURS = 2
 
 
 def _summary_time_period(dt) -> str:
@@ -60,7 +62,101 @@ def _summary_time_period(dt) -> str:
     return "深夜"
 
 
-def build_summary_prompt(current_summary: str, recent_4_rounds: list) -> str:
+def _summary_anchor_sort_key(item: dict) -> tuple[int, str]:
+    try:
+        end_idx = int(item.get("round_end") or item.get("roundEnd") or 0)
+    except Exception:
+        end_idx = 0
+    return end_idx, str(item.get("anchor_at") or item.get("anchorAt") or "")
+
+
+def _summary_anchor_bucket(ts: str) -> str:
+    ts = str(ts or "").strip()
+    if not ts:
+        return ""
+    try:
+        from utils.time_aware import parse_iso_to_beijing, get_date_only
+
+        dt = parse_iso_to_beijing(ts)
+        if dt is None:
+            return ""
+        return f"{get_date_only(dt)} {_summary_time_period(dt)}"
+    except Exception:
+        return ""
+
+
+def _summary_anchor_from_rounds(recent_4_rounds: list) -> dict | None:
+    rounds = [r for r in (recent_4_rounds or []) if isinstance(r, dict)]
+    indices: list[int] = []
+    for r in rounds:
+        idx = r.get("index")
+        if isinstance(idx, int):
+            indices.append(idx)
+            continue
+        try:
+            indices.append(int(idx))
+        except Exception:
+            pass
+    if not rounds or not indices:
+        return None
+
+    def _idx(r: dict) -> int:
+        try:
+            return int(r.get("index") or 0)
+        except Exception:
+            return 0
+
+    rounds_sorted = sorted(rounds, key=_idx)
+    start_at = str((rounds_sorted[0].get("timestamp") or "")).strip()
+    end_at = str((rounds_sorted[-1].get("timestamp") or "")).strip()
+    return {
+        "id": f"current:{min(indices)}-{max(indices)}",
+        "round_start": min(indices),
+        "round_end": max(indices),
+        "start_at": start_at,
+        "end_at": end_at,
+        "anchor_at": end_at or start_at,
+        "source": "最新4轮",
+    }
+
+
+def _render_summary_time_anchors(summary_meta: dict | None, recent_4_rounds: list) -> str:
+    items: list[dict] = []
+    if isinstance(summary_meta, dict):
+        raw_items = summary_meta.get("items")
+        if isinstance(raw_items, list):
+            items.extend([x for x in raw_items if isinstance(x, dict)])
+
+    current_item = _summary_anchor_from_rounds(recent_4_rounds)
+    if current_item:
+        current_id = str(current_item.get("id") or "")
+        items = [x for x in items if str(x.get("id") or "") != current_id]
+        items.append(current_item)
+
+    if not items:
+        return "（暂无历史锚点；只按最新4轮原始时间处理）"
+
+    items.sort(key=_summary_anchor_sort_key)
+    items = items[-_SUMMARY_ANCHOR_MAX_PROMPT_ITEMS:]
+    lines: list[str] = []
+    for item in items:
+        start = item.get("round_start") or item.get("roundStart") or "?"
+        end = item.get("round_end") or item.get("roundEnd") or "?"
+        start_at = str(item.get("start_at") or item.get("startAt") or "").strip()
+        end_at = str(item.get("end_at") or item.get("endAt") or "").strip()
+        anchor_at = str(item.get("anchor_at") or item.get("anchorAt") or end_at or start_at).strip()
+        bucket_start = _summary_anchor_bucket(start_at)
+        bucket_end = _summary_anchor_bucket(end_at)
+        bucket = bucket_start if bucket_start == bucket_end else f"{bucket_start} ~ {bucket_end}".strip(" ~")
+        source = str(item.get("source") or "历史4轮块").strip()
+        lines.append(
+            f"- {source} rounds {start}-{end}: {start_at or '未知'} ~ {end_at or '未知'}; "
+            f"固定锚点={anchor_at or '未知'}; 时间桶={bucket or '未知'}"
+        )
+    return "\n".join(lines)
+
+
+def build_summary_prompt(current_summary: str, recent_4_rounds: list, summary_meta: dict | None = None) -> str:
     """拼出实时层总结任务的 prompt（渡的回忆：分区 + 规则 + 小本本）。"""
     from services.notebook_gateway import NOTEBOOK_EMOJI, NOTEBOOK_PHRASE
 
@@ -121,6 +217,8 @@ def build_summary_prompt(current_summary: str, recent_4_rounds: list) -> str:
     previous_summary = current_summary or "（无上一版，这是首次总结）"
     return _REALTIME_LAYER_PROMPT.format(
         previous_summary=previous_summary,
+        summary_time_anchors=_render_summary_time_anchors(summary_meta, recent_4_rounds),
+        max_anchor_range_hours=_SUMMARY_ANCHOR_MAX_RANGE_HOURS,
         latest_4_rounds=rounds_text,
     )
 
@@ -206,6 +304,11 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
    - 如果叙述跨日期或跨时段，拆成两个时间桶分别写，禁止写“2026-04-12 深夜至 2026-04-13 凌晨”
    - 只写单个“日期+时间段”，不要写“昨晚 / 今早 / 深夜至凌晨”这种模糊说法
    - 输出前自检：若同一分段内时间先后顺序混乱，或出现跨日期却只写了一个日期，重排并补全后再输出
+13. 隐藏时间锚点规则（必须执行，但不要输出锚点原文）：
+   - “内部时间锚点索引”只供你判断先后、合并边界和时间桶，禁止把 rounds、固定锚点、ISO 时间戳写进输出正文
+   - 已有总结只能继承来源锚点的时间范围，不得因为本轮总结时间更晚就把旧事后移
+   - 合并摘要时只能合并时间相近、主题相近的内容；如果来源时间跨度超过 {max_anchor_range_hours} 小时，必须按原时间桶或主题拆成多条
+   - 当旧摘要已经被压缩成两三句时，也不要用一个很大的时间范围概括全部；优先保留多个时间桶，每个时间桶只写对应锚点附近发生的事
 
 ## 输出格式
 
@@ -227,6 +330,9 @@ _REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
 上一版总结：
 {previous_summary}
 
+内部时间锚点索引（只供判断时间，严禁输出）：
+{summary_time_anchors}
+
 最新4轮对话：
 {latest_4_rounds}
 """
@@ -237,6 +343,24 @@ def _strip_summary_quotes(text: str) -> str:
     for pattern in _QUOTE_PATTERNS:
         s = re.sub(pattern, "", s, flags=re.DOTALL)
     return s
+
+
+def _strip_summary_anchor_leaks(text: str) -> str:
+    """移除模型误输出的内部时间锚点行，避免注入给渡。"""
+    if not text:
+        return text
+    out: list[str] = []
+    for line in str(text).splitlines():
+        s = line.strip()
+        if not s:
+            out.append(line)
+            continue
+        if "内部时间锚点" in s or "隐藏时间锚点" in s or "固定锚点=" in s:
+            continue
+        if re.match(r"^-\s*(历史4轮块|最新4轮)\s+rounds\s+\d+-\d+:", s):
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
 
 
 def _summary_has_forbidden_second_person(text: str) -> bool:
@@ -355,14 +479,14 @@ def _ensure_summary_has_bucket(summary: str, bucket: str) -> str:
     return f"{marker}\n{s}".strip()
 
 
-def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None:
+def fetch_new_summary(current_summary: str, recent_4_rounds: list, summary_meta: dict | None = None) -> str | None:
     """
     调用 DeepSeek 得到更新后的总结。
     失败返回 None，调用方需保留原总结。
     """
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
         return None
-    prompt = build_summary_prompt(current_summary, recent_4_rounds)
+    prompt = build_summary_prompt(current_summary, recent_4_rounds, summary_meta)
     budget = memory_summary_budget()
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     try:
@@ -381,7 +505,7 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list) -> str | None
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
             if not content:
                 return None
-            summary = content.strip()
+            summary = _strip_summary_anchor_leaks(content.strip())
             if not summary:
                 return None
             if not _summary_has_forbidden_second_person(summary):

@@ -2263,11 +2263,13 @@ def step_archive_and_maybe_summary(
         recent = r2_store.get_conversation_rounds(window_id, last_n=4)
         if recent:
             current = r2_store.get_summary(window_id) or ""
+            summary_meta = r2_store.get_summary_meta(window_id)
 
             def _summarize():
-                new_summary = fetch_new_summary(current, recent)
+                new_summary = fetch_new_summary(current, recent, summary_meta)
                 if new_summary:
-                    r2_store.save_summary(window_id, new_summary)
+                    if r2_store.save_summary(window_id, new_summary):
+                        r2_store.append_summary_anchor(window_id, recent)
                 else:
                     logger.warning("Pipeline 本窗口触发总结但 DeepSeek 未返回新总结 window_id=%s", window_id)
 
