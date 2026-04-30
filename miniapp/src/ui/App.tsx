@@ -1610,7 +1610,6 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
   const activeBook = useMemo(() => books.find((book) => book.id === activeBookId) || null, [activeBookId, books]);
   const paragraphs = useMemo(() => splitCoReadParagraphs(activeBook?.content || ""), [activeBook?.content]);
   const recentMessages = activeBook ? activeBook.messages.slice(-6) : [];
-  const lastMessage = recentMessages[recentMessages.length - 1] || null;
   const theme = settings.theme === "dark"
     ? {
         shell: "bg-[#111111] text-[#F8F8F8]",
@@ -1903,15 +1902,15 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
 
         <div
           ref={readerRef}
-          className={`min-h-0 flex-1 overflow-y-auto ${readerPadding} pb-12 pt-5`}
+          className={`min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto ${readerPadding} pb-12 pt-5`}
           onScroll={handleReaderScroll}
           onMouseUp={captureSelection}
           onTouchEnd={() => window.setTimeout(captureSelection, 80)}
           style={{ fontSize: `${settings.fontSize}px`, lineHeight: settings.lineHeight }}
         >
-          <div className="mx-auto max-w-[720px] text-justify">
+          <div className="mx-auto max-w-full break-words text-left sm:max-w-[720px] sm:text-justify">
             {paragraphs.map((paragraph, index) => (
-              <p key={`${index}-${paragraph.slice(0, 12)}`} className="mb-5">
+              <p key={`${index}-${paragraph.slice(0, 12)}`} className="mb-5 break-words [overflow-wrap:anywhere]">
                 {paragraph}
               </p>
             ))}
@@ -1939,20 +1938,10 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
           {selectedText ? <span className="h-2 w-2 rounded-full bg-[#111111]" /> : null}
         </button>
 
-        {lastMessage && !chatExpanded ? (
-          <button
-            type="button"
-            className={`fixed right-12 top-1/2 z-30 max-w-[46vw] -translate-y-1/2 rounded-[16px] px-3 py-2 text-left text-[12px] leading-5 shadow-[0_10px_24px_rgba(0,0,0,0.08)] ${theme.soft}`}
-            onClick={() => setChatExpanded(true)}
-          >
-            {compactCoReadText(lastMessage.text, 36)}
-          </button>
-        ) : null}
-
         {chatExpanded ? (
           <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setChatExpanded(false)}>
             <aside
-              className={`absolute bottom-0 right-0 top-0 flex w-[min(360px,86vw)] flex-col border-l px-4 shadow-[-16px_0_36px_rgba(0,0,0,0.14)] backdrop-blur-md ${theme.dock}`}
+              className={`absolute bottom-0 right-0 top-0 flex w-[82vw] max-w-[340px] min-w-0 flex-col overflow-hidden border-l px-4 shadow-[-16px_0_36px_rgba(0,0,0,0.14)] backdrop-blur-md ${theme.dock}`}
               style={{
                 paddingTop: "calc(env(safe-area-inset-top,0px)+14px)",
                 paddingBottom: "calc(env(safe-area-inset-bottom,0px)+14px)",
