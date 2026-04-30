@@ -894,6 +894,10 @@ function Shell({
         setShowStayWithDu(false);
         return;
       }
+      if (showCoRead) {
+        setShowCoRead(false);
+        return;
+      }
       if (showTree) {
         setShowTree(false);
         return;
@@ -921,6 +925,7 @@ function Shell({
     showAlarm,
     showCallHub,
     showCorePrompt,
+    showCoRead,
     showDuDay,
     showPersonalization,
     showSchedule,
@@ -1592,6 +1597,7 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
   const readerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const pendingTimerRef = useRef<number | null>(null);
+  const swipeRef = useRef({ tracking: false, startX: 0, startY: 0, latestX: 0, latestY: 0 });
   const [books, setBooks] = useState<CoReadBook[]>(() => readCoReadBooks());
   const [activeBookId, setActiveBookId] = useState("");
   const [settings, setSettings] = useState<CoReadSettings>(() => readCoReadSettings());
@@ -1604,7 +1610,7 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
   const activeBook = useMemo(() => books.find((book) => book.id === activeBookId) || null, [activeBookId, books]);
   const paragraphs = useMemo(() => splitCoReadParagraphs(activeBook?.content || ""), [activeBook?.content]);
   const recentMessages = activeBook ? activeBook.messages.slice(-6) : [];
-  const visibleMessages = chatExpanded ? recentMessages : recentMessages.slice(-3);
+  const lastMessage = recentMessages[recentMessages.length - 1] || null;
   const theme = settings.theme === "dark"
     ? {
         shell: "bg-[#111111] text-[#F8F8F8]",
@@ -1648,6 +1654,57 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
       el.scrollTo({ top: maxScroll * Math.max(0, Math.min(1, activeBook.progress)), behavior: "auto" });
     });
   }, [activeBookId]);
+
+  function closeCurrentLevel() {
+    if (settingsOpen) {
+      setSettingsOpen(false);
+      return;
+    }
+    if (chatExpanded) {
+      setChatExpanded(false);
+      return;
+    }
+    if (activeBook) {
+      setActiveBookId("");
+      setSelectedText("");
+      setSelectionToolbar(null);
+      setChatExpanded(false);
+      return;
+    }
+    onBack();
+  }
+
+  function handleCoReadTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    const touch = e.touches[0];
+    if (!touch || touch.clientX > 36) {
+      swipeRef.current.tracking = false;
+      return;
+    }
+    swipeRef.current = {
+      tracking: true,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      latestX: touch.clientX,
+      latestY: touch.clientY,
+    };
+  }
+
+  function handleCoReadTouchMove(e: React.TouchEvent<HTMLDivElement>) {
+    if (!swipeRef.current.tracking) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    swipeRef.current.latestX = touch.clientX;
+    swipeRef.current.latestY = touch.clientY;
+  }
+
+  function handleCoReadTouchEnd() {
+    const swipe = swipeRef.current;
+    swipeRef.current.tracking = false;
+    if (!swipe.tracking) return;
+    const dx = swipe.latestX - swipe.startX;
+    const dy = Math.abs(swipe.latestY - swipe.startY);
+    if (dx >= 72 && dx > dy * 1.5) closeCurrentLevel();
+  }
 
   function setBooksAndPersist(nextBooks: CoReadBook[] | ((prev: CoReadBook[]) => CoReadBook[])) {
     setBooks((prev) => {
@@ -1740,7 +1797,7 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
   function focusCoReadInput() {
     setChatExpanded(true);
     setSelectionToolbar(null);
-    inputRef.current?.focus();
+    window.setTimeout(() => inputRef.current?.focus(), 0);
   }
 
   function copySelectedText() {
@@ -1812,16 +1869,20 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
 
   if (activeBook) {
     return (
-      <div className={`absolute inset-0 z-30 flex flex-col overflow-hidden ${theme.shell}`}>
+      <div
+        className={`absolute inset-0 z-30 flex flex-col overflow-hidden ${theme.shell}`}
+        onTouchStart={handleCoReadTouchStart}
+        onTouchMove={handleCoReadTouchMove}
+        onTouchEnd={handleCoReadTouchEnd}
+        onTouchCancel={() => {
+          swipeRef.current.tracking = false;
+        }}
+      >
         <header className={`z-20 flex items-center border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] ${theme.dock}`}>
           <button
             type="button"
             className="flex h-11 w-11 items-center justify-center rounded-full transition-colors active:bg-black/5"
-            onClick={() => {
-              setActiveBookId("");
-              setSelectedText("");
-              setSelectionToolbar(null);
-            }}
+            onClick={closeCurrentLevel}
             aria-label="返回书架"
           >
             <ChevronLeftIcon />
@@ -1842,7 +1903,7 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
 
         <div
           ref={readerRef}
-          className={`min-h-0 flex-1 overflow-y-auto ${readerPadding} pb-[224px] pt-5`}
+          className={`min-h-0 flex-1 overflow-y-auto ${readerPadding} pb-12 pt-5`}
           onScroll={handleReaderScroll}
           onMouseUp={captureSelection}
           onTouchEnd={() => window.setTimeout(captureSelection, 80)}
@@ -1868,57 +1929,107 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
           </div>
         ) : null}
 
-        <div className={`fixed inset-x-0 bottom-0 z-40 border-t px-5 pt-3 backdrop-blur-md ${theme.dock}`} style={{ paddingBottom: "calc(env(safe-area-inset-bottom,0px)+14px)" }}>
-          {selectedText ? (
-            <div className={`mb-2 flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium ${theme.soft}`}>
-              <span className="min-w-0 flex-1 truncate">已选中：{compactCoReadText(selectedText, 42)}</span>
-              <button type="button" className="shrink-0" onClick={() => setSelectedText("")}>清除</button>
-            </div>
-          ) : null}
-          {visibleMessages.length ? (
-            <button
-              type="button"
-              className="mb-3 flex max-h-[128px] w-full flex-col gap-2 overflow-hidden text-left"
-              onClick={() => setChatExpanded((prev) => !prev)}
-            >
-              {visibleMessages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`max-w-[86%] rounded-[14px] px-3 py-2 text-[13px] leading-5 ${
-                    msg.role === "user"
-                      ? "self-end rounded-br-[5px] bg-[#111111] text-white"
-                      : msg.status === "pending"
-                        ? `self-start bg-transparent px-0 font-mono ${theme.muted}`
-                        : `self-start rounded-bl-[5px] ${theme.soft}`
-                  }`}
-                >
-                  {msg.text}
-                </div>
-              ))}
-            </button>
-          ) : null}
-          <div className="flex items-center gap-2">
-            <input
-              ref={inputRef}
-              className={`h-11 min-w-0 flex-1 rounded-full border px-4 text-[14px] font-medium outline-none ${theme.input}`}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="和渡聊这段"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") sendCoReadMessage();
+        <button
+          type="button"
+          className={`fixed right-0 top-1/2 z-40 flex min-h-[112px] w-[42px] -translate-y-1/2 flex-col items-center justify-center gap-2 rounded-l-[18px] border-y border-l px-2 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.12)] backdrop-blur-md ${theme.dock}`}
+          onClick={focusCoReadInput}
+          aria-label="打开共读聊天"
+        >
+          <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] [writing-mode:vertical-rl]">共读</span>
+          {selectedText ? <span className="h-2 w-2 rounded-full bg-[#111111]" /> : null}
+        </button>
+
+        {lastMessage && !chatExpanded ? (
+          <button
+            type="button"
+            className={`fixed right-12 top-1/2 z-30 max-w-[46vw] -translate-y-1/2 rounded-[16px] px-3 py-2 text-left text-[12px] leading-5 shadow-[0_10px_24px_rgba(0,0,0,0.08)] ${theme.soft}`}
+            onClick={() => setChatExpanded(true)}
+          >
+            {compactCoReadText(lastMessage.text, 36)}
+          </button>
+        ) : null}
+
+        {chatExpanded ? (
+          <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setChatExpanded(false)}>
+            <aside
+              className={`absolute bottom-0 right-0 top-0 flex w-[min(360px,86vw)] flex-col border-l px-4 shadow-[-16px_0_36px_rgba(0,0,0,0.14)] backdrop-blur-md ${theme.dock}`}
+              style={{
+                paddingTop: "calc(env(safe-area-inset-top,0px)+14px)",
+                paddingBottom: "calc(env(safe-area-inset-bottom,0px)+14px)",
               }}
-            />
-            <button
-              type="button"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#111111] text-white transition-transform active:scale-95 disabled:opacity-40"
-              onClick={sendCoReadMessage}
-              disabled={!input.trim() && !selectedText}
-              aria-label="发送"
+              onClick={(e) => e.stopPropagation()}
             >
-              <SendIconMini />
-            </button>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[15px] font-semibold">和渡聊这本书</div>
+                  <div className={`mt-0.5 truncate font-mono text-[11px] ${theme.muted}`}>{activeBook.title}</div>
+                </div>
+                <button
+                  type="button"
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-black/5 ${theme.muted}`}
+                  onClick={() => setChatExpanded(false)}
+                  aria-label="收起共读聊天"
+                >
+                  <ChevronRightIcon />
+                </button>
+              </div>
+
+              {selectedText ? (
+                <div className={`mb-3 flex items-center gap-2 rounded-[16px] px-3 py-2 text-[11px] font-medium ${theme.soft}`}>
+                  <span className="min-w-0 flex-1 leading-5">已选中：{compactCoReadText(selectedText, 58)}</span>
+                  <button type="button" className="shrink-0" onClick={() => setSelectedText("")}>清除</button>
+                </div>
+              ) : null}
+
+              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                {recentMessages.length ? (
+                  <div className="flex flex-col gap-2">
+                    {recentMessages.map((msg) => (
+                      <div
+                        key={msg.id}
+                        className={`max-w-[88%] rounded-[14px] px-3 py-2 text-[13px] leading-5 ${
+                          msg.role === "user"
+                            ? "self-end rounded-br-[5px] bg-[#111111] text-white"
+                            : msg.status === "pending"
+                              ? `self-start bg-transparent px-0 font-mono ${theme.muted}`
+                              : `self-start rounded-bl-[5px] ${theme.soft}`
+                        }`}
+                      >
+                        {msg.text}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className={`flex h-full items-center justify-center text-center text-[13px] leading-5 ${theme.muted}`}>
+                    选一段，或者直接问当前看到的内容。
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  ref={inputRef}
+                  className={`h-11 min-w-0 flex-1 rounded-full border px-4 text-[14px] font-medium outline-none ${theme.input}`}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="和渡聊这段"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") sendCoReadMessage();
+                  }}
+                />
+                <button
+                  type="button"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#111111] text-white transition-transform active:scale-95 disabled:opacity-40"
+                  onClick={sendCoReadMessage}
+                  disabled={!input.trim() && !selectedText}
+                  aria-label="发送"
+                >
+                  <SendIconMini />
+                </button>
+              </div>
+            </aside>
           </div>
-        </div>
+        ) : null}
 
         {settingsOpen ? (
           <div className="fixed inset-0 z-50 flex items-end bg-black/10" onClick={() => setSettingsOpen(false)}>
@@ -1990,9 +2101,17 @@ function CoReadScreen({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-white text-[#111111]">
+    <div
+      className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-white text-[#111111]"
+      onTouchStart={handleCoReadTouchStart}
+      onTouchMove={handleCoReadTouchMove}
+      onTouchEnd={handleCoReadTouchEnd}
+      onTouchCancel={() => {
+        swipeRef.current.tracking = false;
+      }}
+    >
       <header className="z-20 flex items-center gap-2 border-b border-[#F1F1F1] bg-white px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)]">
-        <button type="button" className="flex h-11 w-11 items-center justify-center rounded-full transition-colors active:bg-gray-50" onClick={onBack} aria-label="返回">
+        <button type="button" className="flex h-11 w-11 items-center justify-center rounded-full transition-colors active:bg-gray-50" onClick={closeCurrentLevel} aria-label="返回">
           <ChevronLeftIcon />
         </button>
         <div className="flex-1 text-[22px] font-bold">和渡一起读</div>
