@@ -7,7 +7,12 @@ import uuid
 from typing import Optional
 
 import requests
-from PIL import Image, ImageOps
+
+try:
+    from PIL import Image, ImageOps
+except Exception:
+    Image = None
+    ImageOps = None
 
 from config import IMAGE_DESC_API_URL, IMAGE_DESC_API_KEY, IMAGE_DESC_MODEL
 
@@ -112,7 +117,7 @@ def _split_data_url(url: str) -> tuple[str, str] | None:
     return mime_type, payload
 
 
-def _encode_resized_image(img: Image.Image) -> tuple[str, str]:
+def _encode_resized_image(img) -> tuple[str, str]:
     out = io.BytesIO()
     if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
         bg = Image.new("RGB", img.size, (255, 255, 255))
@@ -135,6 +140,8 @@ def compress_base64_image_for_anthropic(image_base64: str, mime_type: str) -> tu
         mt = "image/jpeg"
     if mt not in _RESIZABLE_MIME_TYPES:
         return image_base64, mime_type, {"changed": False, "reason": "unsupported_mime", "mime_type": mt}
+    if Image is None or ImageOps is None:
+        return image_base64, mime_type, {"changed": False, "reason": "pillow_missing", "mime_type": mt}
     try:
         raw = base64.b64decode(str(image_base64 or ""), validate=False)
         img = Image.open(io.BytesIO(raw))
