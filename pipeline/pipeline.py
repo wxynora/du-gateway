@@ -191,10 +191,25 @@ def _append_to_static_system(body: dict, text: str) -> dict:
 
 def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
     """
-    清洗层：保留原图用于转发，并行把图片用便宜 AI 转描述存 R2。
-    返回新的 body（原图保留，供「发给渡」用；存 R2 时用完整清洗版，图片→占位符）。
+    清洗层：图片进入模型前先按 Anthropic 建议压缩，并行把图片用便宜 AI 转描述存 R2。
+    返回新的 body（保留可读压缩图供「发给渡」用；存 R2 时用完整清洗版，图片→占位符）。
     """
     body = copy.deepcopy(body)
+    body, compress_stats = image_desc.compress_images_for_anthropic(body)
+    for st in compress_stats:
+        if not st.get("changed"):
+            continue
+        logger.info(
+            "图片已按 Anthropic 建议压缩 message=%s part=%s %sx%s -> %sx%s bytes=%s -> %s",
+            st.get("message_index"),
+            st.get("content_index"),
+            st.get("width"),
+            st.get("height"),
+            st.get("new_width"),
+            st.get("new_height"),
+            st.get("bytes"),
+            st.get("new_bytes"),
+        )
     messages = body.get("messages") or []
     images = image_desc.extract_images_from_messages(messages)
     for mi, ci, b64, mime in images:

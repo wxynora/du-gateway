@@ -1,11 +1,20 @@
 # 便宜图像 AI：将图片转为文字描述，用于存 R2（与转发给 Claude 的原图并行）
 import base64
+import copy
+import io
+import math
 import uuid
 from typing import Optional
 
 import requests
+from PIL import Image, ImageOps
 
 from config import IMAGE_DESC_API_URL, IMAGE_DESC_API_KEY, IMAGE_DESC_MODEL
+
+
+ANTHROPIC_IMAGE_MAX_LONG_EDGE = 1568
+ANTHROPIC_IMAGE_MAX_PIXELS = 1_150_000
+_RESIZABLE_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
 
 
 def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Optional[str]:
@@ -88,3 +97,116 @@ def extract_images_from_messages(messages: list) -> list:
                             mt = parts[0].split(";")[0].replace("data:", "")
                         out.append((mi, ci, parts[1], mt))
     return out
+
+
+def _split_data_url(url: str) -> tuple[str, str] | None:
+    raw = str(url or "").strip()
+    if not raw.startswith("data:") or "," not in raw:
+        return None
+    head, payload = raw.split(",", 1)
+    if ";base64" not in head:
+        return None
+    mime_type = "image/png"
+    if ";" in head:
+        mime_type = head.split(";", 1)[0].replace("data:", "").strip().lower() or mime_type
+    return mime_type, payload
+
+
+def _encode_resized_image(img: Image.Image) -> tuple[str, str]:
+    out = io.BytesIO()
+    if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").getchannel("A"))
+        img = bg
+    else:
+        img = img.convert("RGB")
+    img.save(out, format="JPEG", quality=86, optimize=True)
+    return base64.b64encode(out.getvalue()).decode("ascii"), "image/jpeg"
+
+
+def compress_base64_image_for_anthropic(image_base64: str, mime_type: str) -> tuple[str, str, dict]:
+    """
+    按 Anthropic vision 建议压缩：长边 <= 1568px，且总像素 <= 1.15MP。
+    只处理 JPEG/PNG/WebP；GIF 等动图保持原样，避免破坏语义。
+    返回 (base64, mime_type, meta)。
+    """
+    mt = str(mime_type or "image/png").strip().lower()
+    if mt == "image/jpg":
+        mt = "image/jpeg"
+    if mt not in _RESIZABLE_MIME_TYPES:
+        return image_base64, mime_type, {"changed": False, "reason": "unsupported_mime", "mime_type": mt}
+    try:
+        raw = base64.b64decode(str(image_base64 or ""), validate=False)
+        img = Image.open(io.BytesIO(raw))
+        img = ImageOps.exif_transpose(img)
+        width, height = img.size
+        if width <= 0 or height <= 0:
+            return image_base64, mime_type, {"changed": False, "reason": "invalid_size", "mime_type": mt}
+        long_edge = max(width, height)
+        pixels = width * height
+        scale = min(
+            1.0,
+            ANTHROPIC_IMAGE_MAX_LONG_EDGE / float(long_edge),
+            math.sqrt(ANTHROPIC_IMAGE_MAX_PIXELS / float(pixels)),
+        )
+        if scale >= 0.999:
+            return image_base64, mime_type, {
+                "changed": False,
+                "reason": "already_within_limit",
+                "mime_type": mt,
+                "width": width,
+                "height": height,
+            }
+        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        img = img.resize(new_size, resample)
+        out_b64, out_mime = _encode_resized_image(img)
+        return out_b64, out_mime, {
+            "changed": True,
+            "mime_type": mt,
+            "output_mime_type": out_mime,
+            "width": width,
+            "height": height,
+            "new_width": new_size[0],
+            "new_height": new_size[1],
+            "bytes": len(raw),
+            "new_bytes": len(base64.b64decode(out_b64, validate=False)),
+        }
+    except Exception as e:
+        return image_base64, mime_type, {"changed": False, "reason": "resize_failed", "error": str(e)[:160], "mime_type": mt}
+
+
+def compress_images_for_anthropic(body: dict) -> tuple[dict, list[dict]]:
+    """
+    压缩 OpenAI 兼容 messages 里的 base64 图片，降低 Claude vision token。
+    远程 image_url 不动。
+    """
+    messages = (body or {}).get("messages") or []
+    if not isinstance(messages, list):
+        return body, []
+    out_body = None
+    stats: list[dict] = []
+    for mi, msg in enumerate(messages):
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for ci, item in enumerate(content):
+            if not isinstance(item, dict):
+                continue
+            image_url = item.get("image_url") if isinstance(item.get("image_url"), dict) else None
+            if not image_url:
+                continue
+            parsed = _split_data_url(image_url.get("url") or "")
+            if not parsed:
+                continue
+            mime_type, payload = parsed
+            new_b64, new_mime, meta = compress_base64_image_for_anthropic(payload, mime_type)
+            meta.update({"message_index": mi, "content_index": ci})
+            stats.append(meta)
+            if not meta.get("changed"):
+                continue
+            if out_body is None:
+                out_body = copy.deepcopy(body)
+            out_item = out_body["messages"][mi]["content"][ci]
+            out_item["image_url"]["url"] = f"data:{new_mime};base64,{new_b64}"
+    return (out_body or body), stats
