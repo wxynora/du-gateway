@@ -118,9 +118,13 @@ function readOAuthCredentials() {
 }
 
 function writeOAuthCredentials(next) {
-  if (!CLAUDE_OAUTH_FILE || !cachedOAuthRaw || cachedOAuthRaw.claudeAiOauth) return;
-  const updated = { ...cachedOAuthRaw };
-  if ("access_token" in updated || "refresh_token" in updated) {
+  if (!CLAUDE_OAUTH_FILE || !cachedOAuthRaw) return;
+  const updated = JSON.parse(JSON.stringify(cachedOAuthRaw));
+  if (updated.claudeAiOauth) {
+    updated.claudeAiOauth.accessToken = next.accessToken;
+    updated.claudeAiOauth.refreshToken = next.refreshToken;
+    updated.claudeAiOauth.expiresAt = next.expiresAt;
+  } else if ("access_token" in updated || "refresh_token" in updated) {
     updated.access_token = next.accessToken;
     updated.refresh_token = next.refreshToken;
     updated.expired = new Date(next.expiresAt).toISOString();
