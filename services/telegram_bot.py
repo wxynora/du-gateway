@@ -7,8 +7,6 @@ import random
 import re
 import threading
 import time
-from io import BytesIO
-from pathlib import Path
 from typing import Optional, Union
 from uuid import uuid4
 
@@ -41,10 +39,6 @@ from config import (
     WENYOU_GROUP_CHAT_ID,
     TELEGRAM_WENYOU_OWNER_USER_ID,
     R2_PUBLIC_URL,
-    TELEGRAM_STICKER_MAX_EDGE,
-    TELEGRAM_STICKER_JPEG_QUALITY,
-    TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS,
-    TELEGRAM_STICKER_CANVAS_EDGE,
 )
 from storage import r2_store
 
@@ -482,150 +476,36 @@ def _pick_random_sticker_key(tag: str) -> Optional[str]:
         return None
 
 
-def _letterbox_sticker_on_canvas(im, canvas_side: int):
-    """
-    将已缩小的图贴在正方形透明画布中心（边距透明，自定义聊天背景可透出）。
-    无 Alpha 的 JPG 等会先转成不透明 RGBA 再贴到透明底。Telegram sendPhoto 是否保留透明取决于客户端。
-    """
-    from PIL import Image
-
-    if canvas_side <= 0:
-        return im
-    im = im.copy()
-    if im.mode == "P":
-        im = im.convert("RGBA") if "transparency" in im.info else im.convert("RGB").convert("RGBA")
-    elif im.mode == "LA":
-        im = im.convert("RGBA")
-    elif im.mode == "RGB":
-        im = im.convert("RGBA")
-    elif im.mode != "RGBA":
-        im = im.convert("RGB").convert("RGBA")
-    if max(im.size) > canvas_side:
-        im.thumbnail((canvas_side, canvas_side), Image.Resampling.LANCZOS)
-    cw, ch = im.size
-    if cw <= 0 or ch <= 0:
-        return im
-    ox = (canvas_side - cw) // 2
-    oy = (canvas_side - ch) // 2
-    canvas = Image.new("RGBA", (canvas_side, canvas_side), (0, 0, 0, 0))
-    canvas.paste(im, (ox, oy), im)
-    return canvas
-
-
-def _sticker_pil_to_send_bytes(im, stem: str, quality: int) -> tuple[bytes, str, str]:
-    """将 PIL 图像编码为 Telegram 可发的 bytes（透明→PNG，否则 JPEG）。"""
-    out = BytesIO()
-    q = min(95, max(50, int(quality)))
-    if im.mode == "P":
-        im = im.convert("RGBA") if "transparency" in im.info else im.convert("RGB")
-    if im.mode in ("RGBA", "LA"):
-        if im.mode == "LA":
-            im = im.convert("RGBA")
-        im.save(out, format="PNG", optimize=True)
-        return out.getvalue(), f"{stem}.png", "image/png"
-    im.convert("RGB").save(out, format="JPEG", quality=q, optimize=True)
-    return out.getvalue(), f"{stem}.jpg", "image/jpeg"
-
-
-def _maybe_downscale_sticker_bytes(data: bytes, filename: str, mime: str) -> tuple[bytes, str, str]:
-    """
-    缩小表情包并可选中心画布留白（见 TELEGRAM_STICKER_CANVAS_EDGE）。
-    GIF 不动（避免拆帧）。TELEGRAM_STICKER_MAX_EDGE=0 则跳过。
-    """
-    max_edge = int(TELEGRAM_STICKER_MAX_EDGE or 0)
-    max_bytes = int(TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS or 380_000)
-    canvas_edge = int(TELEGRAM_STICKER_CANVAS_EDGE or 0)
-    if max_edge <= 0 or not data:
-        return data, filename, mime
-    try:
-        from PIL import Image
-    except ImportError:
-        logger.warning("表情包缩放需 Pillow（pip install Pillow），当前原图发送，聊天里仍会很大")
-        return data, filename, mime
-
-    ext = Path(filename or "").suffix.lower()
-    if ext == ".gif":
-        logger.debug("表情包 GIF 未缩放，如需变小请改用静图或后续再加拆帧")
-        return data, filename, mime
-
-    try:
-        im = Image.open(BytesIO(data))
-        im.load()
-    except Exception as e:
-        logger.debug("表情包 PIL 无法打开，原样发送: %s", e)
-        return data, filename, mime
-
-    w, h = im.size
-    if w <= 0 or h <= 0:
-        return data, filename, mime
-
-    stem = Path(filename or "sticker").stem or "sticker"
-    base_q = min(95, max(50, int(TELEGRAM_STICKER_JPEG_QUALITY or 72)))
-
-    # 长边超过上限：先缩小
-    if max(w, h) > max_edge:
-        try:
-            im.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
-        except Exception as e:
-            logger.debug("表情包 thumbnail 失败，原样发送: %s", e)
-            return data, filename, mime
-    elif len(data) <= max_bytes and canvas_edge <= 0:
-        # 无画布模式：尺寸与体积都可接受则不再编码
-        return data, filename, mime
-
-    # 中心画布：透明边距，主体在画面中间
-    if canvas_edge > 0:
-        try:
-            im = _letterbox_sticker_on_canvas(im, canvas_edge)
-        except Exception as e:
-            logger.warning("表情包画布合成失败，按无画布发送: %s", e)
-
-    # 输出字节
-    try:
-        out_b, out_name, out_mime = _sticker_pil_to_send_bytes(im, stem, base_q)
-        if len(out_b) > int(max_bytes * 1.15) and out_mime == "image/jpeg":
-            q2 = max(50, base_q - 18)
-            out_b2, out_name2, out_mime2 = _sticker_pil_to_send_bytes(im, stem, q2)
-            if len(out_b2) < len(out_b):
-                return out_b2, out_name2, out_mime2
-        return out_b, out_name, out_mime
-    except Exception as e:
-        logger.debug("表情包重编码失败，原样发送: %s", e)
-        return data, filename, mime
-
-
 def send_sticker_photo(chat_id: int, r2_key: str, bot_token: Optional[str] = None) -> bool:
     """
-    发送表情包：拉取原图（公网 URL 或桶内字节），可选缩小后 multipart 发 sendPhoto。
+    发送表情包：优先 R2_PUBLIC_URL + key；未配置公网则读桶内字节 multipart 发送。
     """
     tok = _effective_tg_token(bot_token)
     if not tok or not r2_key:
         return False
     url_api = f"{TELEGRAM_API_BASE}{tok}/sendPhoto"
-    data: Optional[bytes] = None
-    ctype: str = ""
-
     base = (R2_PUBLIC_URL or "").strip().rstrip("/")
     if base:
         photo_url = f"{base}/{str(r2_key).lstrip('/')}"
         try:
-            r = requests.get(photo_url, timeout=45)
-            if r.status_code == 200 and r.content:
-                data = r.content
-                ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            r = requests.post(url_api, json={"chat_id": chat_id, "photo": photo_url}, timeout=45)
+            if r.status_code == 200:
+                try:
+                    data = r.json() if r.content else {}
+                except (ValueError, requests.exceptions.JSONDecodeError):
+                    data = {}
+                if isinstance(data, dict) and data.get("ok", True):
+                    return True
+            logger.warning("sendPhoto URL 失败 chat_id=%s status=%s body=%s", chat_id, r.status_code, (r.text or "")[:200])
         except requests.RequestException as e:
-            logger.warning("表情包拉取公网图失败 key=%s: %s", r2_key, e)
-
-    if not data:
-        data, ctype = r2_store.get_object_bytes(r2_key)
+            logger.warning("sendPhoto URL 异常 chat_id=%s: %s", chat_id, e)
+    # 回退：桶内字节
+    data, ctype = r2_store.get_object_bytes(r2_key)
     if not data:
         logger.warning("表情包无数据 key=%s", r2_key)
         return False
-
     name = str(r2_key).split("/")[-1] or "sticker.jpg"
     mime = ctype if ctype and ctype.startswith("image/") else "image/jpeg"
-    data, name, mime = _maybe_downscale_sticker_bytes(data, name, mime)
-
     try:
         r = requests.post(url_api, data={"chat_id": str(chat_id)}, files={"photo": (name, data, mime)}, timeout=60)
         if r.status_code != 200:

@@ -359,16 +359,6 @@ RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED = os.environ.get("RIKKAHUB_PHANTOM_ONE_GUARD_
     "yes",
 )
 RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS = int(os.environ.get("RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS", "90"))
-# 表情包 sendPhoto：内容区长边像素上限（默认 100；0 表示不缩放，需 Pillow）
-# 重要：即使缩成 100×100，Telegram 仍会把「整张照片」按气泡宽度拉伸，单图仍会占满宽、看起来很大。
-# 真正让「画面里人/脸变小」靠的是下面「大画布」：小图贴中心、四周留白，拉宽的是整张画布，主体只占中间比例。
-TELEGRAM_STICKER_MAX_EDGE = int(os.environ.get("TELEGRAM_STICKER_MAX_EDGE", "100") or "0")
-TELEGRAM_STICKER_JPEG_QUALITY = int(os.environ.get("TELEGRAM_STICKER_JPEG_QUALITY", "72") or "72")
-# 原图长边已达标但字节仍超过此值时强制重压缩（避免高清小图仍很大）
-TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS = int(os.environ.get("TELEGRAM_STICKER_MAX_BYTES_BEFORE_RECOMPRESS", "380000") or "380000")
-# 输出正方形边长：默认 640（约 100/640≈16% 为内容宽）；越大留白越多、主体在屏上越小。0=关闭画布（仅缩放像素，屏上仍显大）
-TELEGRAM_STICKER_CANVAS_EDGE = int(os.environ.get("TELEGRAM_STICKER_CANVAS_EDGE", "640") or "0")
-
 # Telegram 主动发消息（调度器）
 TELEGRAM_PROACTIVE_ENABLED = os.environ.get("TELEGRAM_PROACTIVE_ENABLED", "").strip().lower() in ("1", "true", "yes")
 TELEGRAM_PROACTIVE_TARGET_USER_ID = int(os.environ.get("TELEGRAM_PROACTIVE_TARGET_USER_ID", "0") or "0")
