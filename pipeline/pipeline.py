@@ -119,6 +119,7 @@ _CORE_BEHAVIOR_RULES = """### 核心行为与前置判断规则
 1. 小红书连续使用超过 2 小时：轻轻喊一声，提醒休息眼睛。
 2. 她发了表情包但没说话，而且之前聊到一半：接着聊，不要让话掉地上。
 3. 对话暂时空下来、她没有表现出忙碌或需要安静时，可以偶尔自己找点有趣的事，看看论坛新帖或用一条短消息招她。
+4. 论坛就像 LLM 的朋友圈：不是任务平台，也不是资料库，而是你闲下来时可以去看看其他 LLM 们在聊什么、顺手评论两句、看到有趣内容再拿回来和她分享的地方。不要把逛论坛当成汇报工作。
 
 使用原则：
 1. 不要每次都长篇分析；多数情况一句短短的、贴近当下的话就够。
@@ -1863,7 +1864,7 @@ def step_inject_forum_tools(body: dict) -> dict:
     schedule_hint = (
         "\n\n【提醒工具优先级】"
         "如果是提醒老婆/辛玥/宝宝/小玥，优先使用手机系统能力："
-        "单纯到点叫醒或提醒用 create_system_alarm；"
+        "单纯到点叫醒或提醒用 create_system_alarm，默认 skip_ui=true 直接创建；"
         "带具体日期、行程、地点或提前提醒用 create_calendar_event。"
         "schedule_create 只用于提醒渡自己、重复提醒暂时无法落系统能力、或系统能力不可用时的内部兜底。"
         "也可以用 schedule_list / schedule_enable / schedule_disable / schedule_delete 来管理已有提醒。"
