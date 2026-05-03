@@ -40,6 +40,10 @@ _QUOTE_PATTERNS = (
 )
 _SUMMARY_ANCHOR_MAX_PROMPT_ITEMS = 20
 _SUMMARY_ANCHOR_MAX_RANGE_HOURS = 2
+_SUMMARY_DIFF_CHECK_MIN_CHARS = 500
+_SUMMARY_DIFF_MIN_OVERLAP = 0.12
+_SUMMARY_DIFF_HARD_MIN_OVERLAP = 0.08
+_SUMMARY_DIFF_MAX_GROWTH = 3.0
 
 
 def _summary_time_period(dt) -> str:
@@ -156,6 +160,114 @@ def _render_summary_time_anchors(summary_meta: dict | None, recent_4_rounds: lis
     return "\n".join(lines)
 
 
+def _extract_between(text: str, start_marker: str, end_marker: str) -> str:
+    raw = str(text or "")
+    start = raw.find(start_marker)
+    if start < 0:
+        return ""
+    start += len(start_marker)
+    end = raw.find(end_marker, start)
+    if end < 0:
+        end = len(raw)
+    return raw[start:end].strip()
+
+
+def _extract_json_string_value(text: str, key: str) -> str:
+    raw = str(text or "")
+    marker = f'"{key}"'
+    start = raw.find(marker)
+    if start < 0:
+        return ""
+    colon = raw.find(":", start + len(marker))
+    if colon < 0:
+        return ""
+    quote = raw.find('"', colon + 1)
+    if quote < 0:
+        return ""
+    chars: list[str] = []
+    escaped = False
+    for ch in raw[quote + 1 :]:
+        if escaped:
+            if ch == "n":
+                chars.append("\n")
+            elif ch == "t":
+                chars.append("\t")
+            else:
+                chars.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            return "".join(chars).strip()
+        chars.append(ch)
+    return ""
+
+
+def _sanitize_co_read_section_for_summary(text: str) -> str:
+    """
+    窗口总结只需要共读元信息与双方笔记，不能把整段书籍正文喂给总结模型。
+    这样避免模型把小说正文、共读上下文和真实聊天记忆搅在一起。
+    """
+    raw = str(text or "").strip()
+    if "[CO-READ SECTION]" not in raw:
+        return raw
+
+    block = _extract_between(raw, "[CO-READ SECTION]", "[/CO-READ SECTION]")
+    if not block:
+        return "[CO-READ SECTION 摘要]\n（共读内容已省略；原始块格式异常）\n[/CO-READ SECTION 摘要]"
+
+    title = ""
+    position = ""
+    for line in block.splitlines():
+        s = line.strip()
+        if s.startswith("书名：") and not title:
+            title = s
+        elif s.startswith("位置：") and not position:
+            position = s
+
+    user_note = _extract_between(block, "辛玥的小节感想：", "") or "无"
+    # 如果 _extract_between 因空 end_marker 取不到，退回手动切尾部。
+    if user_note == "无":
+        marker = "辛玥的小节感想："
+        idx = block.find(marker)
+        if idx >= 0:
+            user_note = block[idx + len(marker):].strip() or "无"
+
+    lines = ["[CO-READ SECTION 摘要]"]
+    if title:
+        lines.append(title)
+    if position:
+        lines.append(position)
+    lines.extend(
+        [
+            "本小节原文：（已省略，窗口总结不读取书籍正文）",
+            "辛玥的粉色标记：（已省略原文摘录，窗口总结不读取书籍正文）",
+            "辛玥的小节感想：",
+            user_note.strip() or "无",
+            "[/CO-READ SECTION 摘要]",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _sanitize_co_read_du_result_for_summary(text: str) -> str:
+    raw = str(text or "").strip()
+    if '"du_marks"' not in raw and '"du_section_note"' not in raw:
+        return raw
+    section_note = _extract_json_string_value(raw, "du_section_note") or "（已完成本小节共读，具体感想见原始记录）"
+    return "\n".join(
+        [
+            "[CO-READ DU NOTE 摘要]",
+            "渡的标记原文摘录：（已省略，窗口总结不读取书籍正文）",
+            "渡的小节感想：",
+            section_note,
+            "[/CO-READ DU NOTE 摘要]",
+        ]
+    )
+
+
 def build_summary_prompt(current_summary: str, recent_4_rounds: list, summary_meta: dict | None = None) -> str:
     """拼出实时层总结任务的 prompt（渡的回忆：分区 + 规则 + 小本本）。"""
     from services.notebook_gateway import NOTEBOOK_EMOJI, NOTEBOOK_PHRASE
@@ -205,6 +317,8 @@ def build_summary_prompt(current_summary: str, recent_4_rounds: list, summary_me
             if _is_notebook_line(content):
                 # 小本本走独立存储，不参与窗口总结输入
                 continue
+            content = _sanitize_co_read_section_for_summary(content)
+            content = _sanitize_co_read_du_result_for_summary(content)
             # 明确角色映射，避免 DS 把 user 当成“我（渡）”来总结
             if role == "assistant":
                 who = "渡"
@@ -402,6 +516,45 @@ def _summary_has_merged_time_bucket(text: str) -> bool:
     return False
 
 
+def _summary_similarity_terms(text: str) -> set[str]:
+    """用本地字符 bigram 做轻量相似度，不依赖模型。"""
+    s = _strip_summary_anchor_leaks(str(text or ""))
+    s = re.sub(r"【[^】]+】", "", s)
+    s = re.sub(r"（\d{4}-\d{2}-\d{2}\s*(?:凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)）", "", s)
+    chars = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", s)
+    if len(chars) < 2:
+        return set(chars)
+    return {"".join(chars[i : i + 2]) for i in range(len(chars) - 1)}
+
+
+def _summary_change_too_large(old_summary: str, new_summary: str) -> tuple[bool, str]:
+    """
+    本地保险丝：上一版总结足够长时，新总结如果和旧总结几乎没重叠，认为异常。
+    空总结/手动重建/短总结跳过，避免误伤清污和早期初始化。
+    """
+    old = str(old_summary or "").strip()
+    new = str(new_summary or "").strip()
+    old_len = len(old)
+    new_len = len(new)
+    if old_len < _SUMMARY_DIFF_CHECK_MIN_CHARS or new_len < 80:
+        return False, f"skip old_len={old_len} new_len={new_len}"
+
+    old_terms = _summary_similarity_terms(old)
+    new_terms = _summary_similarity_terms(new)
+    if len(old_terms) < 80 or len(new_terms) < 30:
+        return False, f"skip old_terms={len(old_terms)} new_terms={len(new_terms)}"
+
+    overlap = len(old_terms & new_terms) / max(1, min(len(old_terms), len(new_terms)))
+    length_ratio = new_len / max(1, old_len)
+    too_large = (
+        overlap < _SUMMARY_DIFF_HARD_MIN_OVERLAP
+        or length_ratio > _SUMMARY_DIFF_MAX_GROWTH
+        or (overlap < _SUMMARY_DIFF_MIN_OVERLAP and (length_ratio > 1.8 or length_ratio < 0.55))
+    )
+    detail = f"overlap={overlap:.3f} length_ratio={length_ratio:.2f} old_len={old_len} new_len={new_len}"
+    return too_large, detail
+
+
 def _normalize_summary_time_buckets(text: str) -> str:
     """
     兜底清理时间桶标题：只修标题，不碰正文。
@@ -508,25 +661,37 @@ def fetch_new_summary(current_summary: str, recent_4_rounds: list, summary_meta:
             summary = _strip_summary_anchor_leaks(content.strip())
             if not summary:
                 return None
-            if not _summary_has_forbidden_second_person(summary):
-                if _summary_has_merged_time_bucket(summary):
-                    logger.warning("DeepSeek 总结命中合并时间桶 attempt=%s", attempt + 1)
-                    if attempt == 0:
-                        attempt_prompt = prompt + _SUMMARY_TIME_RETRY_INSTRUCTION
-                        continue
-                    summary = _normalize_summary_time_buckets(summary)
-                break
-            logger.warning("DeepSeek 总结命中第二人称违规 attempt=%s", attempt + 1)
-            if attempt == 0:
-                attempt_prompt = prompt + _SUMMARY_RETRY_INSTRUCTION
-                continue
-            logger.warning("DeepSeek 总结二次重试仍违规，放弃本次更新以避免污染原文")
-            return None
+            if _summary_has_forbidden_second_person(summary):
+                logger.warning("DeepSeek 总结命中第二人称违规 attempt=%s", attempt + 1)
+                if attempt == 0:
+                    attempt_prompt = prompt + _SUMMARY_RETRY_INSTRUCTION
+                    continue
+                logger.warning("DeepSeek 总结二次重试仍违规，放弃本次更新以避免污染原文")
+                return None
+            if _summary_has_merged_time_bucket(summary):
+                logger.warning("DeepSeek 总结命中合并时间桶 attempt=%s", attempt + 1)
+                if attempt == 0:
+                    attempt_prompt = prompt + _SUMMARY_TIME_RETRY_INSTRUCTION
+                    continue
+                summary = _normalize_summary_time_buckets(summary)
+            too_large, detail = _summary_change_too_large(current_summary, summary)
+            if too_large:
+                logger.warning("DeepSeek 总结差异过大 attempt=%s %s", attempt + 1, detail)
+                if attempt == 0:
+                    continue
+                logger.warning("DeepSeek 总结重试后仍差异过大，放弃本次更新以保留旧总结")
+                return None
+            break
         # 强制兜底：若 DS 没写时间段，这里补一行
         summary = _ensure_summary_has_bucket(summary, _latest_bucket_from_rounds(recent_4_rounds))
         summary = _normalize_summary_time_buckets(summary)
         # 固定窗口：summary 始终受注入预算约束，按结构从最早内容开始一点点削
-        return _trim_summary_to_budget(summary, budget)
+        summary = _trim_summary_to_budget(summary, budget)
+        too_large, detail = _summary_change_too_large(current_summary, summary)
+        if too_large:
+            logger.warning("DeepSeek 总结裁剪后差异过大，放弃本次更新以保留旧总结 %s", detail)
+            return None
+        return summary
     except Exception as e:
         logger.error("DeepSeek 总结失败 error=%s", e, exc_info=True)
         return None
