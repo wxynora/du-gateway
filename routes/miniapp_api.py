@@ -1298,6 +1298,27 @@ def miniapp_co_read_books():
     return handle_co_read_books()
 
 
+@bp.route("/co-read/uploads", methods=["POST"])
+def miniapp_co_read_upload_start():
+    from routes.co_read_api import handle_co_read_upload_start
+
+    return handle_co_read_upload_start()
+
+
+@bp.route("/co-read/uploads/<upload_id>/chunks", methods=["POST"])
+def miniapp_co_read_upload_chunk(upload_id: str):
+    from routes.co_read_api import handle_co_read_upload_chunk
+
+    return handle_co_read_upload_chunk(upload_id)
+
+
+@bp.route("/co-read/uploads/<upload_id>/finish", methods=["POST"])
+def miniapp_co_read_upload_finish(upload_id: str):
+    from routes.co_read_api import handle_co_read_upload_finish
+
+    return handle_co_read_upload_finish(upload_id)
+
+
 @bp.route("/co-read/books/<book_key>", methods=["GET", "DELETE"])
 def miniapp_co_read_book_detail(book_key: str):
     from routes.co_read_api import handle_co_read_book_delete, handle_co_read_book_detail

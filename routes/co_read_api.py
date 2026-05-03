@@ -362,6 +362,32 @@ def _replace_book_section(book: dict, index: int, section: dict) -> dict:
     return book
 
 
+def _save_co_read_book_from_content(title: str, content: str, book_key: str = "") -> tuple[dict | None, str]:
+    clean_title = str(title or "").strip()
+    clean_content = str(content or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not clean_title:
+        return None, "缺少 book_title"
+    if not clean_content.strip():
+        return None, "缺少 content"
+    clean_key = str(book_key or "").strip() or _book_key_from_title(clean_title)
+    sections = _build_co_read_sections(clean_content)
+    if not sections:
+        return None, "无法切分文本"
+    existing = r2_store.get_co_read_book(clean_key) or {}
+    book = {
+        "book_key": clean_key,
+        "book_title": clean_title,
+        "content": clean_content,
+        "sections": sections,
+        "current_section_index": int(existing.get("current_section_index") or 0) if existing else 0,
+        "created_at": existing.get("created_at") or "",
+    }
+    saved = r2_store.save_co_read_book(book)
+    if not saved:
+        return None, "保存共读书籍失败"
+    return saved, ""
+
+
 def handle_co_read_books():
     if request.method == "GET":
         return jsonify({"ok": True, "books": r2_store.list_co_read_books()})
@@ -371,26 +397,65 @@ def handle_co_read_books():
         return error
     title = str(body.get("book_title") or body.get("title") or "").strip()
     content = str(body.get("content") or "").replace("\r\n", "\n").replace("\r", "\n")
+    book_key = str(body.get("book_key") or "").strip() or _book_key_from_title(title)
+    saved, err = _save_co_read_book_from_content(title, content, book_key=book_key)
+    if not saved:
+        return jsonify({"ok": False, "error": err or "保存共读书籍失败"}), 400
+    return jsonify({"ok": True, "book": saved}), 200
+
+
+def handle_co_read_upload_start():
+    body, error = _request_json_body()
+    if error:
+        return error
+    title = str(body.get("book_title") or body.get("title") or "").strip()
+    total_chunks = int(body.get("total_chunks") or 0)
+    book_key = str(body.get("book_key") or "").strip()
     if not title:
         return jsonify({"ok": False, "error": "缺少 book_title"}), 400
-    if not content.strip():
-        return jsonify({"ok": False, "error": "缺少 content"}), 400
-    book_key = str(body.get("book_key") or "").strip() or _book_key_from_title(title)
-    sections = _build_co_read_sections(content)
-    if not sections:
-        return jsonify({"ok": False, "error": "无法切分文本"}), 400
-    existing = r2_store.get_co_read_book(book_key) or {}
-    book = {
-        "book_key": book_key,
-        "book_title": title,
-        "content": content,
-        "sections": sections,
-        "current_section_index": int(existing.get("current_section_index") or 0) if existing else 0,
-        "created_at": existing.get("created_at") or "",
-    }
-    saved = r2_store.save_co_read_book(book)
+    if total_chunks <= 0:
+        return jsonify({"ok": False, "error": "缺少 total_chunks"}), 400
+    upload = r2_store.create_co_read_upload(title, total_chunks, book_key=book_key)
+    if not upload:
+        return jsonify({"ok": False, "error": "创建上传任务失败"}), 500
+    return jsonify({"ok": True, "upload": upload, "upload_id": upload.get("upload_id")}), 200
+
+
+def handle_co_read_upload_chunk(upload_id: str):
+    body, error = _request_json_body()
+    if error:
+        return error
+    try:
+        index = int(body.get("index"))
+    except Exception:
+        return jsonify({"ok": False, "error": "缺少 index"}), 400
+    chunk = str(body.get("chunk") or "")
+    if not chunk:
+        return jsonify({"ok": False, "error": "缺少 chunk"}), 400
+    if len(chunk) > 260000:
+        return jsonify({"ok": False, "error": "chunk 过大"}), 413
+    upload = r2_store.save_co_read_upload_chunk(upload_id, index, chunk)
+    if not upload:
+        return jsonify({"ok": False, "error": "保存分片失败"}), 500
+    return jsonify({"ok": True, "upload": upload}), 200
+
+
+def handle_co_read_upload_finish(upload_id: str):
+    meta, content = r2_store.assemble_co_read_upload(upload_id)
+    if not meta:
+        return jsonify({"ok": False, "error": "上传任务不存在"}), 404
+    if not content:
+        total = int(meta.get("total_chunks") or 0)
+        received = len(meta.get("received_chunks") or [])
+        return jsonify({"ok": False, "error": f"分片还没传完：{received}/{total}"}), 400
+    saved, err = _save_co_read_book_from_content(
+        str(meta.get("book_title") or ""),
+        content,
+        book_key=str(meta.get("book_key") or ""),
+    )
     if not saved:
-        return jsonify({"ok": False, "error": "保存共读书籍失败"}), 500
+        return jsonify({"ok": False, "error": err or "保存共读书籍失败"}), 500
+    r2_store.delete_co_read_upload(upload_id)
     return jsonify({"ok": True, "book": saved}), 200
 
 

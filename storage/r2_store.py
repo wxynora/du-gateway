@@ -63,6 +63,7 @@ R2_KEY_STAY_WITH_DU = "global/stay_with_du.json"
 R2_KEY_CO_READ_CARDS = "co_read/cards.json"
 R2_KEY_CO_READ_BOOK_INDEX = "co_read/books/index.json"
 R2_KEY_CO_READ_BOOK_PREFIX = "co_read/books"
+R2_KEY_CO_READ_UPLOAD_PREFIX = "co_read/uploads"
 # MiniApp 赛博种树：开始日期等元信息
 R2_KEY_CYBER_TREE_META = "global/cyber_tree_meta.json"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
@@ -107,6 +108,7 @@ _pc_command_write_lock = threading.Lock()
 _app_action_write_lock = threading.Lock()
 _trip_plan_write_lock = threading.Lock()
 _co_read_book_write_lock = threading.Lock()
+_co_read_upload_write_lock = threading.Lock()
 
 # 日志
 from utils.log import get_logger
@@ -3311,6 +3313,16 @@ def _co_read_book_object_key(book_key: str) -> str:
     return f"{R2_KEY_CO_READ_BOOK_PREFIX}/{safe}.json" if safe else ""
 
 
+def _co_read_upload_meta_key(upload_id: str) -> str:
+    safe = _normalize_co_read_key(upload_id)
+    return f"{R2_KEY_CO_READ_UPLOAD_PREFIX}/{safe}/meta.json" if safe else ""
+
+
+def _co_read_upload_chunk_key(upload_id: str, index: int) -> str:
+    safe = _normalize_co_read_key(upload_id)
+    return f"{R2_KEY_CO_READ_UPLOAD_PREFIX}/{safe}/chunks/{max(0, int(index)):05d}.txt" if safe else ""
+
+
 def _co_read_int(value: Any, fallback: int = 0) -> int:
     try:
         return int(value)
@@ -3527,6 +3539,143 @@ def delete_co_read_book(book_key: str) -> bool:
         except Exception as e:
             logger.error("delete_co_read_book 失败 key=%s error=%s", key, e, exc_info=True)
             return False
+
+
+def create_co_read_upload(book_title: str, total_chunks: int, book_key: str = "") -> Optional[dict]:
+    title = str(book_title or "").strip()[:240]
+    total = max(1, _co_read_int(total_chunks, 1))
+    if not title or total > 20000:
+        return None
+    upload_id = str(uuid4())
+    now = now_beijing_iso()
+    payload = {
+        "upload_id": upload_id,
+        "book_key": _normalize_co_read_key(book_key),
+        "book_title": title,
+        "total_chunks": total,
+        "received_chunks": [],
+        "content_chars": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    key = _co_read_upload_meta_key(upload_id)
+    client = _s3_client()
+    if not client or not key:
+        return None
+    try:
+        _write_json(client, key, payload)
+        return payload
+    except Exception as e:
+        logger.error("create_co_read_upload 失败 upload_id=%s error=%s", upload_id, e, exc_info=True)
+        return None
+
+
+def get_co_read_upload(upload_id: str) -> Optional[dict]:
+    key = _co_read_upload_meta_key(upload_id)
+    client = _s3_client()
+    if not client or not key:
+        return None
+    data = _read_json(client, key)
+    if not isinstance(data, dict):
+        return None
+    uid = _normalize_co_read_key(data.get("upload_id"))
+    if not uid:
+        return None
+    received = data.get("received_chunks") if isinstance(data.get("received_chunks"), list) else []
+    return {
+        "upload_id": uid,
+        "book_key": _normalize_co_read_key(data.get("book_key")),
+        "book_title": str(data.get("book_title") or "").strip()[:240],
+        "total_chunks": max(1, _co_read_int(data.get("total_chunks"), 1)),
+        "received_chunks": sorted({max(0, _co_read_int(x, 0)) for x in received}),
+        "content_chars": max(0, _co_read_int(data.get("content_chars"), 0)),
+        "created_at": _normalize_co_read_text(data.get("created_at"), 40),
+        "updated_at": _normalize_co_read_text(data.get("updated_at"), 40),
+    }
+
+
+def save_co_read_upload_chunk(upload_id: str, index: int, chunk: str) -> Optional[dict]:
+    meta = get_co_read_upload(upload_id)
+    if not meta:
+        return None
+    idx = _co_read_int(index, -1)
+    total = int(meta.get("total_chunks") or 0)
+    if idx < 0 or idx >= total:
+        return None
+    text = str(chunk or "")
+    client = _s3_client()
+    chunk_key = _co_read_upload_chunk_key(upload_id, idx)
+    meta_key = _co_read_upload_meta_key(upload_id)
+    if not client or not chunk_key or not meta_key:
+        return None
+    with _co_read_upload_write_lock:
+        try:
+            client.put_object(
+                Bucket=R2_BUCKET_NAME,
+                Key=chunk_key,
+                Body=text.encode("utf-8"),
+                ContentType="text/plain; charset=utf-8",
+            )
+            received = set(meta.get("received_chunks") or [])
+            received.add(idx)
+            meta["received_chunks"] = sorted(received)
+            meta["content_chars"] = int(meta.get("content_chars") or 0) + len(text)
+            meta["updated_at"] = now_beijing_iso()
+            _write_json(client, meta_key, meta)
+            return meta
+        except Exception as e:
+            logger.error("save_co_read_upload_chunk 失败 upload_id=%s index=%s error=%s", upload_id, idx, e, exc_info=True)
+            return None
+
+
+def assemble_co_read_upload(upload_id: str) -> tuple[Optional[dict], str]:
+    meta = get_co_read_upload(upload_id)
+    if not meta:
+        return None, ""
+    total = int(meta.get("total_chunks") or 0)
+    received = set(meta.get("received_chunks") or [])
+    if total <= 0 or any(idx not in received for idx in range(total)):
+        return meta, ""
+    client = _s3_client()
+    if not client:
+        return meta, ""
+    chunks: list[str] = []
+    try:
+        for idx in range(total):
+            key = _co_read_upload_chunk_key(upload_id, idx)
+            resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=key)
+            chunks.append(resp["Body"].read().decode("utf-8"))
+        return meta, "".join(chunks)
+    except Exception as e:
+        logger.error("assemble_co_read_upload 失败 upload_id=%s error=%s", upload_id, e, exc_info=True)
+        return meta, ""
+
+
+def delete_co_read_upload(upload_id: str) -> bool:
+    safe = _normalize_co_read_key(upload_id)
+    if not safe:
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    prefix = f"{R2_KEY_CO_READ_UPLOAD_PREFIX}/{safe}/"
+    try:
+        continuation = None
+        while True:
+            kwargs = {"Bucket": R2_BUCKET_NAME, "Prefix": prefix}
+            if continuation:
+                kwargs["ContinuationToken"] = continuation
+            resp = client.list_objects_v2(**kwargs)
+            objects = [{"Key": item["Key"]} for item in resp.get("Contents", []) if item.get("Key")]
+            if objects:
+                client.delete_objects(Bucket=R2_BUCKET_NAME, Delete={"Objects": objects, "Quiet": True})
+            if not resp.get("IsTruncated"):
+                break
+            continuation = resp.get("NextContinuationToken")
+        return True
+    except Exception as e:
+        logger.error("delete_co_read_upload 失败 upload_id=%s error=%s", upload_id, e, exc_info=True)
+        return False
 
 
 def _stay_with_du_target_for_kind(kind: str) -> Optional[str]:

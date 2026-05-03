@@ -288,6 +288,16 @@ type CoReadBookResponse = {
   section?: CoReadSection;
   error?: string;
 };
+type CoReadUploadResponse = {
+  ok?: boolean;
+  upload_id?: string;
+  upload?: {
+    upload_id?: string;
+    total_chunks?: number;
+    received_chunks?: number[];
+  };
+  error?: string;
+};
 type CoReadSectionCompleteResponse = {
   ok?: boolean;
   book?: CoReadBook;
@@ -317,6 +327,8 @@ const TRANSPARENT_BUBBLE_CLASS =
 const STAY_SERIF_FONT = "'Playfair Display', 'Noto Serif SC', 'Songti SC', Georgia, serif";
 const STAY_SANS_FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const CO_READ_SETTINGS_KEY = "miniapp.coRead.settings.v1";
+const CO_READ_DIRECT_UPLOAD_MAX_BYTES = 650_000;
+const CO_READ_UPLOAD_CHUNK_CHARS = 180_000;
 const SYSTEM_CARD_PREFIX = "<<<SUMITALK_CARD ";
 const SYSTEM_CARD_SUFFIX = ">>>";
 const SUMITALK_CHAT_JOB_POLL_MS = 1800;
@@ -1751,6 +1763,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
   const [loadingBooks, setLoadingBooks] = useState(true);
   const [loadingBookKey, setLoadingBookKey] = useState("");
   const [importing, setImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState("");
   const [savingMark, setSavingMark] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -1891,6 +1904,35 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     }
   }
 
+  async function uploadTxtBookInChunks(bookTitle: string, content: string): Promise<CoReadBook> {
+    const totalChunks = Math.max(1, Math.ceil(content.length / CO_READ_UPLOAD_CHUNK_CHARS));
+    setImportStatus(`准备上传 0/${totalChunks}`);
+    const start = await apiJson<CoReadUploadResponse>("/miniapp-api/co-read/uploads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ book_title: bookTitle, total_chunks: totalChunks }),
+    });
+    const uploadId = String(start.upload_id || start.upload?.upload_id || "");
+    if (!start?.ok || !uploadId) throw new Error(start?.error || "创建分片上传失败");
+    for (let index = 0; index < totalChunks; index += 1) {
+      const chunk = content.slice(index * CO_READ_UPLOAD_CHUNK_CHARS, (index + 1) * CO_READ_UPLOAD_CHUNK_CHARS);
+      setImportStatus(`上传 ${index + 1}/${totalChunks}`);
+      const part = await apiJson<CoReadUploadResponse>(`/miniapp-api/co-read/uploads/${encodeURIComponent(uploadId)}/chunks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index, chunk }),
+      });
+      if (!part?.ok) throw new Error(part?.error || `第 ${index + 1} 片上传失败`);
+    }
+    setImportStatus("正在切分");
+    const finished = await apiJson<CoReadBookResponse>(`/miniapp-api/co-read/uploads/${encodeURIComponent(uploadId)}/finish`, {
+      method: "POST",
+    });
+    const book = normalizeCoReadBook(finished.book);
+    if (!finished?.ok || !book) throw new Error(finished?.error || "导入失败");
+    return book;
+  }
+
   async function importTxtFile(file?: File | null) {
     if (!file || importing) return;
     if (!file.name.toLowerCase().endsWith(".txt") && file.type && file.type !== "text/plain") {
@@ -1898,16 +1940,24 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
       return;
     }
     setImporting(true);
+    setImportStatus("");
     try {
       const content = (await file.text()).replace(/\u0000/g, "").trim();
       if (!content) throw new Error("文件里没有可读内容");
-      const data = await apiJson<CoReadBookResponse>("/miniapp-api/co-read/books", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ book_title: stripTxtExtension(file.name), content }),
-      });
-      const book = normalizeCoReadBook(data.book);
-      if (!data?.ok || !book) throw new Error(data?.error || "导入失败");
+      const bookTitle = stripTxtExtension(file.name);
+      const useChunkUpload = new Blob([content]).size > CO_READ_DIRECT_UPLOAD_MAX_BYTES;
+      let book: CoReadBook | null = null;
+      if (useChunkUpload) {
+        book = await uploadTxtBookInChunks(bookTitle, content);
+      } else {
+        const data = await apiJson<CoReadBookResponse>("/miniapp-api/co-read/books", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ book_title: bookTitle, content }),
+        });
+        book = normalizeCoReadBook(data.book);
+        if (!data?.ok || !book) throw new Error(data?.error || "导入失败");
+      }
       setActiveBook(book);
       upsertBookSummary(book);
       toast(`已切成 ${book.sections.length} 个共读小节`);
@@ -1915,6 +1965,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
       toast(`导入失败：${e?.message || e}`);
     } finally {
       setImporting(false);
+      setImportStatus("");
     }
   }
 
@@ -2407,7 +2458,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
         onClick={() => fileInputRef.current?.click()}
         disabled={importing}
       >
-        {importing ? "正在切分..." : "导入 TXT 资料"}
+        {importing ? (importStatus || "正在导入...") : "导入 TXT 资料"}
       </button>
       <input
         ref={fileInputRef}
