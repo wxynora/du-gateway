@@ -2483,7 +2483,6 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
                     <div className={`mb-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${mark.source === "du" ? "bg-[#E6F0FF]" : "bg-[#FFEAF1]"}`}>
                       {mark.source === "du" ? "渡的蓝色标记" : "我的粉色标记"}
                     </div>
-                    <div className="text-[12px] leading-5 opacity-80">「{compactCoReadText(mark.quote, 96)}」</div>
                     {mark.note ? <div className="mt-1 text-[14px] leading-6">{mark.note}</div> : null}
                   </div>
                 ))}
