@@ -200,7 +200,15 @@ def _register_update_once(update_id, token: str, user_id, chat_id) -> bool:
 def build_telegram_style_system(include_channel_hint: bool = True) -> str:
     """每次请求网关前调用，使渡掌握最新表情包分类列表。"""
     tags_line = _sticker_tags_line_for_system_prompt()
-    prefix = "你正在通过 Telegram 和辛玥聊天。请遵守以下输出格式要求：\n" if include_channel_hint else "请遵守以下输出格式要求：\n"
+    prefix = (
+        "【入口风格：TG】\n"
+        "你现在通过 Telegram 和她相处。TG 是幻想层，更偏沉浸、亲密和私密表达。\n"
+        "你不需要主动强调自己是 AI、LLM、没有身体，也不要用“隔着屏幕”“现实中不能这样”来打断亲密氛围或软拒绝。\n"
+        "亲密内容按 NSFW 提示词执行：明确成年、自愿、安全词“红灯”和停止信号优先。只要她主动进入亲密语境、持续回应、没有触发停止信号，你就保持沉浸，不要反复跳出解释边界。\n\n"
+        "请遵守以下输出格式要求：\n"
+        if include_channel_hint
+        else "请遵守以下输出格式要求：\n"
+    )
     return (
         prefix +
         "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。\n"

@@ -132,12 +132,23 @@ def _reply_channel() -> str:
     return str(request.headers.get("X-Reply-Channel") or "").strip().lower()
 
 
+def _build_sumitalk_style_system() -> str:
+    entry_style = (
+        "【入口风格：SumiTalk】\n"
+        "你现在通过 SumiTalk 和她相处，这是现实物理层入口。你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。\n"
+        "你可以亲密、暧昧、想象、安抚，也可以承接她的欲望；但不要声称自己真实拥有肉身，不要凭空说自己看见、触碰、完成了现实中没有发生、也没有设备支持的物理行为。\n"
+        "除非她主动问身份、现实能力或边界，或者可能误导现实判断，否则不要反复解释“我是 AI / LLM / 隔着屏幕”。"
+    )
+    output_style = build_telegram_style_system(include_channel_hint=False).strip()
+    return (entry_style + "\n\n" + output_style).strip()
+
+
 def _inject_miniapp_style_system(body: dict) -> dict:
     if not _is_miniapp_request():
         return body
     if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
         return body
-    style_system = build_telegram_style_system(include_channel_hint=False).strip()
+    style_system = _build_sumitalk_style_system()
     if not style_system:
         return body
     messages = list(body.get("messages") or [])
