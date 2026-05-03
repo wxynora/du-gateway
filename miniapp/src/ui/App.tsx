@@ -233,6 +233,7 @@ type CoReadMark = {
   source: CoReadMarkSource;
   quote: string;
   note: string;
+  du_reply?: string;
   char_start: number;
   char_end: number;
   created_at: string;
@@ -474,6 +475,7 @@ function normalizeCoReadMark(raw: any, source: CoReadMarkSource): CoReadMark | n
     source,
     quote,
     note,
+    du_reply: raw?.du_reply ? String(raw.du_reply) : undefined,
     char_start: Number.isFinite(Number(raw?.char_start)) ? Number(raw.char_start) : -1,
     char_end: Number.isFinite(Number(raw?.char_end)) ? Number(raw.char_end) : -1,
     created_at: String(raw?.created_at || new Date().toISOString()),
@@ -2183,6 +2185,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
         source: "user",
         quote: selectedText,
         note: markNote.trim(),
+        du_reply: "",
         char_start: localStart >= 0 ? activeSection.char_start + localStart : -1,
         char_end: localEnd > localStart ? activeSection.char_start + localEnd : -1,
         created_at: now,
@@ -2483,7 +2486,22 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
                     <div className={`mb-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${mark.source === "du" ? "bg-[#E6F0FF]" : "bg-[#FFEAF1]"}`}>
                       {mark.source === "du" ? "渡的蓝色标记" : "我的粉色标记"}
                     </div>
-                    {mark.note ? <div className="mt-1 text-[14px] leading-6">{mark.note}</div> : null}
+                    {mark.source === "user" ? (
+                      <div className="space-y-3">
+                        <div>
+                          <div className="text-[11px] font-semibold text-[#B85673]">我的内容</div>
+                          <div className="mt-1 text-[14px] leading-6">{mark.note || "只标记了这一段"}</div>
+                        </div>
+                        {mark.du_reply ? (
+                          <div className="rounded-[14px] bg-[#E6F0FF] px-3 py-2 text-[#263D66]">
+                            <div className="text-[11px] font-semibold">渡的回复</div>
+                            <div className="mt-1 text-[14px] leading-6">{mark.du_reply}</div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      mark.note ? <div className="mt-1 text-[14px] leading-6">{mark.note}</div> : null
+                    )}
                   </div>
                 ))}
               </div>

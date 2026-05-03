@@ -237,14 +237,16 @@ def _section_label(book: dict, section: dict) -> str:
 def _compact_mark_lines(marks: list[dict], empty_text: str = "无") -> str:
     lines = []
     for idx, item in enumerate(marks[:12], start=1):
+        mark_id = _compact_text(item.get("id"), 80)
         quote = _compact_text(item.get("quote"), 120)
         note = _compact_text(item.get("note"), 160)
+        prefix = f"{idx}. [mark_id={mark_id}] " if mark_id else f"{idx}. "
         if quote and note:
-            lines.append(f"{idx}. 「{quote}」：{note}")
+            lines.append(f"{prefix}「{quote}」：{note}")
         elif quote:
-            lines.append(f"{idx}. 「{quote}」")
+            lines.append(f"{prefix}「{quote}」")
         elif note:
-            lines.append(f"{idx}. {note}")
+            lines.append(f"{prefix}{note}")
     return "\n".join(lines) if lines else empty_text
 
 
@@ -275,11 +277,13 @@ def _build_section_complete_user_message(book: dict, section: dict) -> str:
             "[/CO-READ SECTION]",
             "",
             "你正在和辛玥一起读这本书。这次读完一个共读小节，等同一次日常对话。",
-            "请用渡的第一人称完成两件事：",
+            "请用渡的第一人称完成三件事：",
+            "0. 对辛玥的每一条粉色标记逐条回应；必须保留对应 mark_id。",
             "1. 给出 1-5 条你的蓝色标记，每条 quote 必须是本小节原文里连续出现的原句或短语，note 写你自己的感受；quote 可以包含引号，不需要转义。",
             "2. 写一段你的本小节感想，回应辛玥的粉色标记和小节感想。",
             "只返回下面的 XML 片段，不要 Markdown，不要解释，不要代码块：",
             "<co_read_result>",
+            '<user_mark_reply mark_id="mark_xxx">我对这条粉色标记的回复</user_mark_reply>',
             "<du_mark><quote>原文中连续出现的短句</quote><note>我的标记感想</note></du_mark>",
             "<du_section_note>我的小节感想</du_section_note>",
             "</co_read_result>",
@@ -308,6 +312,11 @@ def _extract_tag_text(text: str, tag: str) -> str:
     return _unescape_model_text(match.group(1)) if match else ""
 
 
+def _extract_xml_attr(attrs: str, name: str) -> str:
+    match = re.search(rf"{name}\s*=\s*(['\"])(.*?)\1", str(attrs or ""), flags=re.I | re.S)
+    return _unescape_model_text(match.group(2)) if match else ""
+
+
 def _extract_loose_json_result(text: str) -> dict:
     raw = _strip_model_fences(text)
     marks = []
@@ -322,11 +331,27 @@ def _extract_loose_json_result(text: str) -> dict:
             marks.append({"quote": quote, "note": note})
     note_match = re.search(r'"du_section_note"\s*:\s*"(?P<note>.*?)"\s*(?:\}|\n|$)', raw, flags=re.S)
     note = _unescape_model_text(note_match.group("note")) if note_match else ""
-    return {"du_marks": marks, "du_section_note": note} if (marks or note) else {}
+    replies = []
+    for match in re.finditer(
+        r'"mark_id"\s*:\s*"(?P<mark_id>.*?)"\s*,\s*"(?:reply|du_reply)"\s*:\s*"(?P<reply>.*?)"',
+        raw,
+        flags=re.S,
+    ):
+        mark_id = _unescape_model_text(match.group("mark_id"))
+        reply = _unescape_model_text(match.group("reply"))
+        if mark_id and reply:
+            replies.append({"mark_id": mark_id, "reply": reply})
+    return {"du_marks": marks, "du_section_note": note, "user_mark_replies": replies} if (marks or note or replies) else {}
 
 
 def _extract_co_read_result(text: str) -> dict:
     raw = _strip_model_fences(text)
+    user_replies = []
+    for attrs, reply_text in re.findall(r"<user_mark_reply\b([^>]*)>(.*?)</user_mark_reply>", raw, flags=re.I | re.S):
+        mark_id = _extract_xml_attr(attrs, "mark_id")
+        reply = _unescape_model_text(reply_text)
+        if mark_id and reply:
+            user_replies.append({"mark_id": mark_id, "reply": reply})
     xml_marks = []
     for block in re.findall(r"<du_mark\b[^>]*>(.*?)</du_mark>", raw, flags=re.I | re.S):
         quote = _extract_tag_text(block, "quote")
@@ -334,8 +359,8 @@ def _extract_co_read_result(text: str) -> dict:
         if quote or note:
             xml_marks.append({"quote": quote, "note": note})
     xml_note = _extract_tag_text(raw, "du_section_note")
-    if xml_marks or xml_note:
-        return {"du_marks": xml_marks, "du_section_note": xml_note}
+    if xml_marks or xml_note or user_replies:
+        return {"du_marks": xml_marks, "du_section_note": xml_note, "user_mark_replies": user_replies}
     parsed = _extract_json_object(raw)
     if parsed:
         return parsed
@@ -617,8 +642,29 @@ def handle_co_read_section_complete(book_key: str, section_id: str):
     parsed = _extract_co_read_result(raw_reply)
     du_note = str(parsed.get("du_section_note") or "").strip() if parsed else ""
     du_marks_raw = parsed.get("du_marks") if isinstance(parsed.get("du_marks"), list) else []
+    user_mark_replies = parsed.get("user_mark_replies") if isinstance(parsed.get("user_mark_replies"), list) else []
     if not du_note:
         du_note = raw_reply[:2000]
+    if user_mark_replies:
+        reply_map = {}
+        for item in user_mark_replies:
+            if not isinstance(item, dict):
+                continue
+            mark_id = str(item.get("mark_id") or "").strip()
+            reply = str(item.get("reply") or item.get("du_reply") or "").strip()
+            if mark_id and reply:
+                reply_map[mark_id] = reply[:1200]
+        if reply_map:
+            next_user_marks = []
+            section_user_marks = section.get("user_marks") if isinstance(section.get("user_marks"), list) else []
+            for mark in section_user_marks:
+                if not isinstance(mark, dict):
+                    continue
+                mark_id = str(mark.get("id") or "").strip()
+                if mark_id in reply_map:
+                    mark = {**mark, "du_reply": reply_map[mark_id]}
+                next_user_marks.append(mark)
+            section["user_marks"] = next_user_marks
     section["du_marks"] = _normalize_marks_for_section(du_marks_raw, "du", section, text)
     section["du_section_note"] = du_note[:2000]
     section["status"] = "done"

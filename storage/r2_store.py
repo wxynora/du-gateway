@@ -559,6 +559,21 @@ def save_summary(window_id: str, summary: str) -> bool:
         return False
     with _global_write_lock:
         try:
+            try:
+                old = client.get_object(Bucket=R2_BUCKET_NAME, Key=R2_KEY_GLOBAL_SUMMARY)
+                old_body = old["Body"].read()
+                if old_body:
+                    ts = datetime.now(BEIJING_TZ).strftime("%Y%m%d_%H%M%S")
+                    backup_key = f"global/summary_backups/summary_{ts}.txt"
+                    client.put_object(
+                        Bucket=R2_BUCKET_NAME,
+                        Key=backup_key,
+                        Body=old_body,
+                        ContentType="text/plain; charset=utf-8",
+                    )
+                    logger.info("save_summary 已备份旧总结 key=%s", backup_key)
+            except Exception as e:
+                logger.warning("save_summary 备份旧总结失败，继续覆盖 error=%s", e)
             client.put_object(
                 Bucket=R2_BUCKET_NAME,
                 Key=R2_KEY_GLOBAL_SUMMARY,
@@ -3335,6 +3350,7 @@ def normalize_co_read_book_mark(mark: Any, source: str = "user") -> Optional[dic
         return None
     quote = str(mark.get("quote") or "").strip()[:800]
     note = str(mark.get("note") or "").strip()[:1000]
+    du_reply = str(mark.get("du_reply") or "").strip()[:1200]
     if not (quote or note):
         return None
     now = now_beijing_iso()
@@ -3349,6 +3365,7 @@ def normalize_co_read_book_mark(mark: Any, source: str = "user") -> Optional[dic
         "source": clean_source,
         "quote": quote,
         "note": note,
+        "du_reply": du_reply,
         "char_start": char_start,
         "char_end": char_end,
         "created_at": _normalize_co_read_text(mark.get("created_at"), 40) or now,
