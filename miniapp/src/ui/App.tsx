@@ -488,6 +488,61 @@ function normalizeCoReadMarks(raw: any, source: CoReadMarkSource): CoReadMark[] 
     .filter((item): item is CoReadMark => Boolean(item));
 }
 
+function unescapeCoReadModelText(text: string): string {
+  return String(text || "")
+    .replace(/<!\[CDATA\[/g, "")
+    .replace(/\]\]>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;|&#34;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/\\"/g, "\"")
+    .replace(/\\n/g, "\n")
+    .trim();
+}
+
+function extractTagText(text: string, tag: string): string {
+  const match = String(text || "").match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+  return match ? unescapeCoReadModelText(match[1]) : "";
+}
+
+function extractCoReadResultArtifact(text: string): { marks: Array<{ quote: string; note: string }>; note: string } | null {
+  const raw = String(text || "")
+    .trim()
+    .replace(/^```(?:json|xml)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  if (!raw.includes("du_marks") && !raw.includes("du_mark") && !raw.includes("du_section_note")) return null;
+
+  const xmlMarks = Array.from(raw.matchAll(/<du_mark\b[^>]*>([\s\S]*?)<\/du_mark>/gi))
+    .map((match) => ({
+      quote: extractTagText(match[1], "quote"),
+      note: extractTagText(match[1], "note"),
+    }))
+    .filter((item) => item.quote || item.note);
+  const xmlNote = extractTagText(raw, "du_section_note");
+  if (xmlMarks.length || xmlNote) return { marks: xmlMarks, note: xmlNote };
+
+  try {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    const parsed = JSON.parse(start >= 0 && end > start ? raw.slice(start, end + 1) : raw);
+    const marks = Array.isArray(parsed?.du_marks)
+      ? parsed.du_marks.map((item: any) => ({ quote: String(item?.quote || ""), note: String(item?.note || "") })).filter((item: any) => item.quote || item.note)
+      : [];
+    const note = String(parsed?.du_section_note || "");
+    if (marks.length || note) return { marks, note };
+  } catch {}
+
+  const marks = Array.from(raw.matchAll(/"quote"\s*:\s*"([\s\S]*?)"\s*,\s*"note"\s*:\s*"([\s\S]*?)"\s*(?:\}|,\s*")/g))
+    .map((match) => ({ quote: unescapeCoReadModelText(match[1]), note: unescapeCoReadModelText(match[2]) }))
+    .filter((item) => item.quote || item.note);
+  const noteMatch = raw.match(/"du_section_note"\s*:\s*"([\s\S]*?)"\s*(?:\}|\n|$)/);
+  const note = noteMatch ? unescapeCoReadModelText(noteMatch[1]) : "";
+  return marks.length || note ? { marks, note } : null;
+}
+
 function normalizeCoReadSection(raw: any, fallbackIndex = 1): CoReadSection | null {
   const charStart = Math.max(0, Number(raw?.char_start || 0));
   const charEnd = Math.max(charStart, Number(raw?.char_end || charStart));
@@ -509,16 +564,44 @@ function normalizeCoReadSection(raw: any, fallbackIndex = 1): CoReadSection | nu
   };
 }
 
+function repairCoReadSectionArtifact(section: CoReadSection, content: string): CoReadSection {
+  if (section.du_marks.length || !section.du_section_note) return section;
+  const artifact = extractCoReadResultArtifact(section.du_section_note);
+  if (!artifact?.marks.length && !artifact?.note) return section;
+  const sectionText = content.slice(section.char_start, section.char_end);
+  const now = new Date().toISOString();
+  const duMarks = artifact.marks.map((item, index) => {
+    const [localStart, localEnd] = locateCoReadQuote(sectionText, item.quote);
+    return {
+      id: makeCoReadId(`du_recovered_${index}`),
+      source: "du" as const,
+      quote: item.quote,
+      note: item.note,
+      char_start: localStart >= 0 ? section.char_start + localStart : -1,
+      char_end: localEnd > localStart ? section.char_start + localEnd : -1,
+      created_at: section.completed_at || now,
+      updated_at: now,
+    };
+  });
+  return {
+    ...section,
+    du_marks: duMarks,
+    du_section_note: artifact.note || "",
+  };
+}
+
 function normalizeCoReadBook(raw: any): CoReadBook | null {
+  const content = String(raw?.content || "");
   const sections = Array.isArray(raw?.sections)
     ? raw.sections
         .map((item: any, index: number) => normalizeCoReadSection(item, index + 1))
         .filter((item: CoReadSection | null): item is CoReadSection => Boolean(item))
+        .map((section: CoReadSection) => repairCoReadSectionArtifact(section, content))
     : [];
   const book = {
     book_key: String(raw?.book_key || "").trim(),
     book_title: String(raw?.book_title || raw?.title || "").trim(),
-    content: String(raw?.content || ""),
+    content,
     sections,
     current_section_index: Math.max(0, Math.min(Math.max(0, sections.length - 1), Number(raw?.current_section_index || 0))),
     created_at: raw?.created_at ? String(raw.created_at) : undefined,
@@ -677,7 +760,13 @@ function locateCoReadQuote(sectionText: string, quote: string): [number, number]
   return [mapping[compactIndex], mapping[compactIndex + compactQuote.length - 1] + 1];
 }
 
-function renderCoReadMarkedText(text: string, sectionStart: number, userMarks: CoReadMark[], duMarks: CoReadMark[]) {
+function renderCoReadMarkedText(
+  text: string,
+  sectionStart: number,
+  userMarks: CoReadMark[],
+  duMarks: CoReadMark[],
+  onOpenMarks?: (marks: CoReadMark[]) => void,
+) {
   const marks = [...userMarks, ...duMarks].filter((mark) => (
     mark.char_start >= sectionStart &&
     mark.char_end > mark.char_start &&
@@ -698,14 +787,34 @@ function renderCoReadMarkedText(text: string, sectionStart: number, userMarks: C
     const hasDu = active.some((mark) => mark.source === "du");
     const title = active.map((mark) => mark.note || mark.quote).filter(Boolean).join("\n");
     const className = hasUser && hasDu
-      ? "rounded-[4px] bg-gradient-to-r from-[#FFE1EC] to-[#DDEBFF] decoration-[#8BA9E8] underline decoration-2 underline-offset-4"
+      ? "cursor-pointer rounded-[4px] bg-gradient-to-r from-[#FFE1EC] to-[#DDEBFF] decoration-[#8BA9E8] underline decoration-2 underline-offset-4"
       : hasUser
-        ? "rounded-[4px] bg-[#FFE1EC] decoration-[#F09AB9] underline decoration-2 underline-offset-4"
+        ? "cursor-pointer rounded-[4px] bg-[#FFE1EC] decoration-[#F09AB9] underline decoration-2 underline-offset-4"
         : hasDu
-          ? "rounded-[4px] bg-[#DDEBFF] decoration-[#8BA9E8] underline decoration-2 underline-offset-4"
+          ? "cursor-pointer rounded-[4px] bg-[#DDEBFF] decoration-[#8BA9E8] underline decoration-2 underline-offset-4"
           : "";
     return className
-      ? <span key={`${start}-${end}`} className={className} title={title}>{value}</span>
+      ? (
+          <span
+            key={`${start}-${end}`}
+            className={className}
+            title={title}
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenMarks?.(active);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpenMarks?.(active);
+              }
+            }}
+          >
+            {value}
+          </span>
+        )
       : <span key={`${start}-${end}`}>{value}</span>;
   });
 }
@@ -1813,6 +1922,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
   const [selectedText, setSelectedText] = useState("");
   const [markNote, setMarkNote] = useState("");
   const [sectionNote, setSectionNote] = useState("");
+  const [activeMarkPopup, setActiveMarkPopup] = useState<CoReadMark[]>([]);
 
   const activeSection = useMemo(() => {
     if (!activeBook?.sections.length) return null;
@@ -1858,6 +1968,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     setSectionNote(activeSection?.user_section_note || "");
     setSelectedText("");
     setMarkNote("");
+    setActiveMarkPopup([]);
     requestAnimationFrame(() => readerRef.current?.scrollTo({ top: 0, behavior: "auto" }));
   }, [activeBook?.book_key, activeSection?.section_id]);
 
@@ -1869,6 +1980,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     if (activeBook) {
       setActiveBook(null);
       setSelectedText("");
+      setActiveMarkPopup([]);
       return;
     }
     onBack();
@@ -2036,6 +2148,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     if (text.length < 2) return;
     setSelectedText(text.slice(0, 800));
     setMarkNote("");
+    setActiveMarkPopup([]);
   }
 
   function clearCoReadSelection() {
@@ -2144,6 +2257,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     setActiveBook({ ...activeBook, current_section_index: nextIndex });
     setSelectedText("");
     setMarkNote("");
+    setActiveMarkPopup([]);
     requestAnimationFrame(() => readerRef.current?.scrollTo({ top: 0, behavior: "auto" }));
     void apiJson<CoReadBookResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(activeBook.book_key)}/sections/${encodeURIComponent(nextSection.section_id)}`, {
       method: "PUT",
@@ -2250,7 +2364,13 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
         >
           <article className="mx-auto max-w-[760px]">
             <div className="select-text whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-              {renderCoReadMarkedText(activeSectionText, activeSection.char_start, activeSection.user_marks, activeSection.du_marks)}
+              {renderCoReadMarkedText(
+                activeSectionText,
+                activeSection.char_start,
+                activeSection.user_marks,
+                activeSection.du_marks,
+                (marks) => setActiveMarkPopup(marks),
+              )}
             </div>
 
             <section className={`mt-10 rounded-[18px] border p-4 ${theme.panel}`}>
@@ -2343,6 +2463,34 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
             </div>
           </article>
         </div>
+
+        {activeMarkPopup.length ? (
+          <div className="pointer-events-none fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom,0px)+18px)] z-50 flex justify-center">
+            <div className={`pointer-events-auto max-h-[46vh] w-full max-w-[520px] overflow-y-auto rounded-[18px] border p-4 shadow-[0_18px_46px_rgba(0,0,0,0.18)] ${theme.panel}`}>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className={`font-mono text-[11px] font-semibold uppercase tracking-[0.12em] ${theme.muted}`}>mark</div>
+                <button
+                  type="button"
+                  className={`rounded-full px-3 py-1 text-[12px] font-semibold ${theme.muted}`}
+                  onClick={() => setActiveMarkPopup([])}
+                >
+                  关闭
+                </button>
+              </div>
+              <div className="space-y-3">
+                {activeMarkPopup.map((mark) => (
+                  <div key={mark.id} className={mark.source === "du" ? "text-[#263D66]" : "text-[#5D2A3A]"}>
+                    <div className={`mb-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${mark.source === "du" ? "bg-[#E6F0FF]" : "bg-[#FFEAF1]"}`}>
+                      {mark.source === "du" ? "渡的蓝色标记" : "我的粉色标记"}
+                    </div>
+                    <div className="text-[12px] leading-5 opacity-80">「{compactCoReadText(mark.quote, 96)}」</div>
+                    {mark.note ? <div className="mt-1 text-[14px] leading-6">{mark.note}</div> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {settingsOpen ? (
           <div className="fixed inset-0 z-50 flex items-end bg-black/10" onClick={() => setSettingsOpen(false)}>

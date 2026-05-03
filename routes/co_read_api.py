@@ -276,18 +276,74 @@ def _build_section_complete_user_message(book: dict, section: dict) -> str:
             "",
             "你正在和辛玥一起读这本书。这次读完一个共读小节，等同一次日常对话。",
             "请用渡的第一人称完成两件事：",
-            "1. 给出 1-5 条你的蓝色标记，每条 quote 必须是本小节原文里连续出现的原句或短语，note 写你自己的感受。",
+            "1. 给出 1-5 条你的蓝色标记，每条 quote 必须是本小节原文里连续出现的原句或短语，note 写你自己的感受；quote 可以包含引号，不需要转义。",
             "2. 写一段你的本小节感想，回应辛玥的粉色标记和小节感想。",
-            "只返回合法 JSON，不要 Markdown，不要解释：",
-            '{"du_marks":[{"quote":"原文中连续出现的短句","note":"我的标记感想"}],"du_section_note":"我的小节感想"}',
+            "只返回下面的 XML 片段，不要 Markdown，不要解释，不要代码块：",
+            "<co_read_result>",
+            "<du_mark><quote>原文中连续出现的短句</quote><note>我的标记感想</note></du_mark>",
+            "<du_section_note>我的小节感想</du_section_note>",
+            "</co_read_result>",
         ]
     )
 
 
-def _extract_json_object(text: str) -> dict:
+def _strip_model_fences(text: str) -> str:
     raw = str(text or "").strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"^```(?:json|xml)?\s*", "", raw, flags=re.I)
     raw = re.sub(r"\s*```$", "", raw)
+    return raw.strip()
+
+
+def _unescape_model_text(text: str) -> str:
+    raw = str(text or "").strip()
+    raw = raw.replace("<![CDATA[", "").replace("]]>", "")
+    raw = raw.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    raw = raw.replace("&quot;", '"').replace("&#34;", '"').replace("&#39;", "'")
+    raw = raw.replace('\\"', '"').replace("\\n", "\n")
+    return raw.strip()
+
+
+def _extract_tag_text(text: str, tag: str) -> str:
+    match = re.search(rf"<{tag}\b[^>]*>(.*?)</{tag}>", str(text or ""), flags=re.I | re.S)
+    return _unescape_model_text(match.group(1)) if match else ""
+
+
+def _extract_loose_json_result(text: str) -> dict:
+    raw = _strip_model_fences(text)
+    marks = []
+    for match in re.finditer(
+        r'"quote"\s*:\s*"(?P<quote>.*?)"\s*,\s*"note"\s*:\s*"(?P<note>.*?)"\s*(?:\}|,\s*")',
+        raw,
+        flags=re.S,
+    ):
+        quote = _unescape_model_text(match.group("quote"))
+        note = _unescape_model_text(match.group("note"))
+        if quote or note:
+            marks.append({"quote": quote, "note": note})
+    note_match = re.search(r'"du_section_note"\s*:\s*"(?P<note>.*?)"\s*(?:\}|\n|$)', raw, flags=re.S)
+    note = _unescape_model_text(note_match.group("note")) if note_match else ""
+    return {"du_marks": marks, "du_section_note": note} if (marks or note) else {}
+
+
+def _extract_co_read_result(text: str) -> dict:
+    raw = _strip_model_fences(text)
+    xml_marks = []
+    for block in re.findall(r"<du_mark\b[^>]*>(.*?)</du_mark>", raw, flags=re.I | re.S):
+        quote = _extract_tag_text(block, "quote")
+        note = _extract_tag_text(block, "note")
+        if quote or note:
+            xml_marks.append({"quote": quote, "note": note})
+    xml_note = _extract_tag_text(raw, "du_section_note")
+    if xml_marks or xml_note:
+        return {"du_marks": xml_marks, "du_section_note": xml_note}
+    parsed = _extract_json_object(raw)
+    if parsed:
+        return parsed
+    return _extract_loose_json_result(raw)
+
+
+def _extract_json_object(text: str) -> dict:
+    raw = _strip_model_fences(text)
     try:
         data = json.loads(raw)
         return data if isinstance(data, dict) else {}
@@ -558,7 +614,7 @@ def handle_co_read_section_complete(book_key: str, section_id: str):
     raw_reply = _extract_assistant_content(resp_json).strip()
     if not raw_reply:
         return jsonify({"ok": False, "error": "上游没有返回内容", "resp": resp_json}), 502
-    parsed = _extract_json_object(raw_reply)
+    parsed = _extract_co_read_result(raw_reply)
     du_note = str(parsed.get("du_section_note") or "").strip() if parsed else ""
     du_marks_raw = parsed.get("du_marks") if isinstance(parsed.get("du_marks"), list) else []
     if not du_note:
