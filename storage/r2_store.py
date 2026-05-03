@@ -2368,6 +2368,24 @@ def save_core_cache_pending(pending: list) -> bool:
             return False
 
 
+def _upsert_core_cache_pending_index_safe(items: list) -> None:
+    try:
+        from memory_vector.core_pending_index import upsert_core_pending_items
+
+        upsert_core_pending_items(items)
+    except Exception as e:
+        logger.warning("core_cache pending 索引 upsert 失败 error=%s", e, exc_info=True)
+
+
+def _remove_core_cache_pending_index_safe(entry_ids: set[str]) -> None:
+    try:
+        from memory_vector.core_pending_index import remove_core_pending_ids
+
+        remove_core_pending_ids(entry_ids)
+    except Exception as e:
+        logger.warning("core_cache pending 索引删除失败 error=%s", e, exc_info=True)
+
+
 def promote_to_core_cache(
     window_id: str,
     round_index: int,
@@ -2388,6 +2406,7 @@ def promote_to_core_cache(
     existing_ids = {p.get("id") for p in pending if p.get("id")}
     promoted_at = now_beijing_iso()
     added = False
+    added_items = []
 
     # 条件A：本轮触及记忆 importance>=4，存动态层 summary（不是原始对话）
     if touched_mem_id:
@@ -2398,7 +2417,7 @@ def promote_to_core_cache(
                 imp_id = f"imp_{window_id}_{round_index}"
                 summary_content = str(m.get("content") or "").strip()
                 if imp_id not in existing_ids and summary_content:
-                    pending.append({
+                    item = {
                         "id": imp_id,
                         "promoted_by": "importance",
                         "content": summary_content,
@@ -2409,7 +2428,9 @@ def promote_to_core_cache(
                         "emotion_label": (m.get("emotion_label") or "").strip(),
                         "scene_type": (m.get("scene_type") or "").strip(),
                         "target_type": (m.get("target_type") or "").strip(),
-                    })
+                    }
+                    pending.append(item)
+                    added_items.append(item)
                     existing_ids.add(imp_id)
                     added = True
             break
@@ -2421,7 +2442,7 @@ def promote_to_core_cache(
             continue
         if mid in existing_ids:
             continue
-        pending.append({
+        item = {
             "id": mid,
             "promoted_by": "mention_count",
             "content": (m.get("content") or "").strip(),
@@ -2432,12 +2453,15 @@ def promote_to_core_cache(
             "emotion_label": (m.get("emotion_label") or "").strip(),
             "scene_type": (m.get("scene_type") or "").strip(),
             "target_type": (m.get("target_type") or "").strip(),
-        })
+        }
+        pending.append(item)
+        added_items.append(item)
         existing_ids.add(mid)
         added = True
 
     if added:
-        save_core_cache_pending(pending)
+        if save_core_cache_pending(pending):
+            _upsert_core_cache_pending_index_safe(added_items)
         logger.info("core_cache 提拔 条数=%s", len(pending))
 
 
@@ -2447,7 +2471,10 @@ def delete_core_cache_by_id(entry_id: str) -> bool:
     new_pending = [p for p in pending if p.get("id") != entry_id]
     if len(new_pending) == len(pending):
         return False
-    return save_core_cache_pending(new_pending)
+    ok = save_core_cache_pending(new_pending)
+    if ok:
+        _remove_core_cache_pending_index_safe({entry_id})
+    return ok
 
 
 # ---------- 图片描述存档 ----------

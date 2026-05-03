@@ -27,6 +27,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=100, help="每批最多处理多少条")
     p.add_argument("--sleep-seconds", type=float, default=0.2, help="每批之间休眠秒数")
     p.add_argument("--failed-only", action="store_true", help="只重试上次失败的 memory_id")
+    p.add_argument("--core-pending", action="store_true", help="只重建核心缓存 pending 向量索引")
     return p.parse_args()
 
 
@@ -145,6 +146,13 @@ def rebuild(
 
 if __name__ == "__main__":
     args = _parse_args()
+    if args.core_pending:
+        from memory_vector.core_pending_index import sync_core_pending_index
+
+        pending = r2_store.get_core_cache_pending() or []
+        ok = sync_core_pending_index(pending)
+        logger.info("rebuild_index: core_pending done total=%s ok=%s", len(pending), ok)
+        raise SystemExit(0 if ok else 1)
     rebuild(
         start=args.start,
         max_items=args.max_items,

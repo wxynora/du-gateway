@@ -122,6 +122,12 @@ def sync_to_notion() -> tuple[bool, str]:
     pending = r2_store.get_core_cache_pending()
     if not pending:
         r2_store.save_core_cache_pending([])  # 确保清空
+        try:
+            from memory_vector.core_pending_index import clear_core_pending_index
+
+            clear_core_pending_index()
+        except Exception as e:
+            logger.warning("sync_to_notion 清空核心缓存索引失败 err=%s", e)
         logger.info("sync_to_notion: pending 已空，仅清空 R2")
         return True, ""
 
@@ -161,6 +167,12 @@ def sync_to_notion() -> tuple[bool, str]:
                 existing[entry_id] = None
 
     r2_store.save_core_cache_pending([])  # 剪切：推完即清空 R2
+    try:
+        from memory_vector.core_pending_index import clear_core_pending_index
+
+        clear_core_pending_index()
+    except Exception as e:
+        logger.warning("sync_to_notion 清空核心缓存索引失败 err=%s", e)
     logger.info("sync_to_notion 完成 已推条数=%s，R2 pending 已清空", len(pending))
     return True, ""
 
@@ -219,6 +231,12 @@ def sync_from_notion() -> tuple[bool, str]:
     new_pending = current + pending
     if not r2_store.save_core_cache_pending(new_pending):
         return False, "写回 R2 pending 失败"
+    try:
+        from memory_vector.core_pending_index import upsert_core_pending_items
+
+        upsert_core_pending_items(pending)
+    except Exception as e:
+        logger.warning("sync_from_notion 同步核心缓存索引失败 err=%s", e)
     logger.info("sync_from_notion 完成 从 Notion 读回条数=%s，追加后 R2 总条数=%s", len(pending), len(new_pending))
     return True, ""
 

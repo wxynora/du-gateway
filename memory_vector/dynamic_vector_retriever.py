@@ -10,6 +10,7 @@ from memory_vector.config import (
     INCLUDE_DU_MEMORY_DOC_IN_VECTOR,
     INCLUDE_CORE_PENDING_IN_VECTOR,
 )
+from memory_vector.core_pending_index import CORE_PENDING_INDEX_TAG
 from memory_vector.cosine import cosine
 from memory_vector.embedding_client import embed_text
 from memory_vector.vector_index_store import load_index
@@ -212,17 +213,17 @@ def dynamic_vector_retrieve(
                 if sim >= sim_threshold:
                     cands.append((sim, {"memory_id": du_doc_id, "cosine_sim": float(sim)}))
 
-        # 核心缓存 pending：逐条 embedding 参与召回（体量不大，可接受）
-        for mem in core_mems:
-            text = (mem.get("content") or "")[:1000]
-            if not text:
-                continue
-            emb = embed_text(text)
-            if not emb:
-                continue
-            sim = cosine(q_emb, emb)
-            if sim >= sim_threshold:
-                cands.append((sim, {"memory_id": mem["id"], "cosine_sim": float(sim)}))
+        # 核心缓存 pending：读取预建索引，避免每轮聊天逐条现场 embedding。
+        if core_mems:
+            idx = load_index(CORE_PENDING_INDEX_TAG)
+            for r in (idx.get("records") or []):
+                mid = str((r or {}).get("memory_id") or "").strip()
+                emb = (r or {}).get("embedding")
+                if not mid or mid not in mem_by_id or not isinstance(emb, list):
+                    continue
+                sim = cosine(q_emb, emb)
+                if sim >= sim_threshold:
+                    cands.append((sim, {"memory_id": mid, "cosine_sim": float(sim)}))
         return cands
 
     candidates = _collect_candidates(min_sim)

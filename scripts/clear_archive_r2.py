@@ -11,5 +11,11 @@ from storage import r2_store
 if __name__ == "__main__":
     r2_store.save_dynamic_memory_list([])
     r2_store.save_core_cache_pending([])
+    try:
+        from memory_vector.core_pending_index import clear_core_pending_index
+
+        clear_core_pending_index()
+    except Exception as e:
+        print(f"核心缓存 pending 索引清空失败：{e}")
     print("已清空：dynamic_memory/current.json、core_cache/pending.json")
     print("其它 R2 数据（对话、总结、小本本等）未动。")

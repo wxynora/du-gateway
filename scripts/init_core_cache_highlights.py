@@ -82,6 +82,12 @@ def main() -> None:
     if added:
         ok = r2_store.save_core_cache_pending(pending)
         if ok:
+            try:
+                from memory_vector.core_pending_index import sync_core_pending_index
+
+                sync_core_pending_index(pending)
+            except Exception as e:
+                print(f"核心缓存 pending 索引同步失败：{e}")
             print(f"已追加核心缓存高光条目 {added} 条，当前总数={len(pending)}")
         else:
             print("写回核心缓存 pending 失败，请检查 R2 配置。")
@@ -91,4 +97,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
