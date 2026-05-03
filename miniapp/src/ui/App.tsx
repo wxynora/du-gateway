@@ -227,21 +227,49 @@ type StayWithDuData = {
 };
 type StayWithDuCollection = keyof StayWithDuData;
 type CoReadTheme = "light" | "dark" | "paper";
-type CoReadMessage = {
+type CoReadMarkSource = "user" | "du";
+type CoReadMark = {
   id: string;
-  role: "user" | "du";
-  text: string;
-  createdAt: string;
-  status?: "sent" | "pending" | "failed";
+  source: CoReadMarkSource;
+  quote: string;
+  note: string;
+  char_start: number;
+  char_end: number;
+  created_at: string;
+  updated_at?: string;
+};
+type CoReadSection = {
+  section_id: string;
+  index: number;
+  char_start: number;
+  char_end: number;
+  status: "reading" | "done";
+  user_marks: CoReadMark[];
+  du_marks: CoReadMark[];
+  user_section_note: string;
+  du_section_note: string;
+  created_at?: string;
+  updated_at?: string;
+  completed_at?: string;
 };
 type CoReadBook = {
-  id: string;
-  title: string;
+  book_key: string;
+  book_title: string;
   content: string;
-  progress: number;
-  lastReadAt: string;
-  lastSummary: string;
-  messages: CoReadMessage[];
+  sections: CoReadSection[];
+  current_section_index: number;
+  created_at?: string;
+  updated_at?: string;
+};
+type CoReadBookSummary = {
+  book_key: string;
+  book_title: string;
+  content_chars: number;
+  section_count: number;
+  done_count: number;
+  current_section_index: number;
+  created_at?: string;
+  updated_at?: string;
 };
 type CoReadSettings = {
   fontSize: number;
@@ -249,11 +277,23 @@ type CoReadSettings = {
   marginLevel: number;
   theme: CoReadTheme;
 };
-type CoReadSessionResponse = {
+type CoReadBooksResponse = {
   ok?: boolean;
-  session_id?: string;
-  window_id?: string;
-  du_reply?: string;
+  books?: CoReadBookSummary[];
+  error?: string;
+};
+type CoReadBookResponse = {
+  ok?: boolean;
+  book?: CoReadBook;
+  section?: CoReadSection;
+  error?: string;
+};
+type CoReadSectionCompleteResponse = {
+  ok?: boolean;
+  book?: CoReadBook;
+  section?: CoReadSection;
+  du_marks?: CoReadMark[];
+  du_section_note?: string;
   error?: string;
 };
 type SumiTalkChatJobCreateResponse = {
@@ -276,7 +316,6 @@ const TRANSPARENT_BUBBLE_CLASS =
   "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
 const STAY_SERIF_FONT = "'Playfair Display', 'Noto Serif SC', 'Songti SC', Georgia, serif";
 const STAY_SANS_FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-const CO_READ_BOOKS_KEY = "miniapp.coRead.books.v1";
 const CO_READ_SETTINGS_KEY = "miniapp.coRead.settings.v1";
 const SYSTEM_CARD_PREFIX = "<<<SUMITALK_CARD ";
 const SYSTEM_CARD_SUFFIX = ">>>";
@@ -414,46 +453,96 @@ function normalizeCoReadTheme(value: any): CoReadTheme {
   return value === "dark" || value === "paper" || value === "light" ? value : "light";
 }
 
-function normalizeCoReadMessages(raw: any): CoReadMessage[] {
+function normalizeCoReadMark(raw: any, source: CoReadMarkSource): CoReadMark | null {
+  const quote = String(raw?.quote || "").trim();
+  const note = String(raw?.note || "").trim();
+  if (!quote && !note) return null;
+  return {
+    id: String(raw?.id || makeCoReadId(source === "du" ? "du_mark" : "mark")),
+    source,
+    quote,
+    note,
+    char_start: Number.isFinite(Number(raw?.char_start)) ? Number(raw.char_start) : -1,
+    char_end: Number.isFinite(Number(raw?.char_end)) ? Number(raw.char_end) : -1,
+    created_at: String(raw?.created_at || new Date().toISOString()),
+    updated_at: raw?.updated_at ? String(raw.updated_at) : undefined,
+  };
+}
+
+function normalizeCoReadMarks(raw: any, source: CoReadMarkSource): CoReadMark[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .map((item) => ({
-      id: String(item?.id || makeCoReadId("msg")),
-      role: item?.role === "user" ? "user" as const : "du" as const,
-      text: String(item?.text || "").trim(),
-      createdAt: String(item?.createdAt || new Date().toISOString()),
-      status: item?.status === "pending" || item?.status === "failed" ? item.status : "sent" as const,
-    }))
-    .filter((item) => item.text);
+    .map((item) => normalizeCoReadMark(item, source))
+    .filter((item): item is CoReadMark => Boolean(item));
 }
 
-function normalizeCoReadBooks(raw: any): CoReadBook[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((item) => ({
-      id: String(item?.id || makeCoReadId("book")),
-      title: String(item?.title || "").trim(),
-      content: String(item?.content || ""),
-      progress: Math.max(0, Math.min(1, Number(item?.progress || 0))),
-      lastReadAt: String(item?.lastReadAt || new Date().toISOString()),
-      lastSummary: String(item?.lastSummary || "").trim(),
-      messages: normalizeCoReadMessages(item?.messages),
-    }))
-    .filter((item) => item.title && item.content);
+function normalizeCoReadSection(raw: any, fallbackIndex = 1): CoReadSection | null {
+  const charStart = Math.max(0, Number(raw?.char_start || 0));
+  const charEnd = Math.max(charStart, Number(raw?.char_end || charStart));
+  if (charEnd <= charStart) return null;
+  const index = Math.max(1, Number(raw?.index || fallbackIndex));
+  return {
+    section_id: String(raw?.section_id || `sec_${String(index).padStart(4, "0")}`),
+    index,
+    char_start: charStart,
+    char_end: charEnd,
+    status: raw?.status === "done" ? "done" : "reading",
+    user_marks: normalizeCoReadMarks(raw?.user_marks, "user"),
+    du_marks: normalizeCoReadMarks(raw?.du_marks, "du"),
+    user_section_note: String(raw?.user_section_note || ""),
+    du_section_note: String(raw?.du_section_note || ""),
+    created_at: raw?.created_at ? String(raw.created_at) : undefined,
+    updated_at: raw?.updated_at ? String(raw.updated_at) : undefined,
+    completed_at: raw?.completed_at ? String(raw.completed_at) : undefined,
+  };
 }
 
-function readCoReadBooks(): CoReadBook[] {
-  try {
-    return normalizeCoReadBooks(JSON.parse(localStorage.getItem(CO_READ_BOOKS_KEY) || "[]"));
-  } catch {
-    return [];
-  }
+function normalizeCoReadBook(raw: any): CoReadBook | null {
+  const sections = Array.isArray(raw?.sections)
+    ? raw.sections
+        .map((item: any, index: number) => normalizeCoReadSection(item, index + 1))
+        .filter((item: CoReadSection | null): item is CoReadSection => Boolean(item))
+    : [];
+  const book = {
+    book_key: String(raw?.book_key || "").trim(),
+    book_title: String(raw?.book_title || raw?.title || "").trim(),
+    content: String(raw?.content || ""),
+    sections,
+    current_section_index: Math.max(0, Math.min(Math.max(0, sections.length - 1), Number(raw?.current_section_index || 0))),
+    created_at: raw?.created_at ? String(raw.created_at) : undefined,
+    updated_at: raw?.updated_at ? String(raw.updated_at) : undefined,
+  };
+  return book.book_key && book.book_title ? book : null;
 }
 
-function writeCoReadBooks(books: CoReadBook[]) {
-  try {
-    localStorage.setItem(CO_READ_BOOKS_KEY, JSON.stringify(books));
-  } catch {}
+function normalizeCoReadBookSummary(raw: any): CoReadBookSummary | null {
+  const bookKey = String(raw?.book_key || "").trim();
+  const bookTitle = String(raw?.book_title || "").trim();
+  if (!bookKey || !bookTitle) return null;
+  return {
+    book_key: bookKey,
+    book_title: bookTitle,
+    content_chars: Math.max(0, Number(raw?.content_chars || 0)),
+    section_count: Math.max(0, Number(raw?.section_count || 0)),
+    done_count: Math.max(0, Number(raw?.done_count || 0)),
+    current_section_index: Math.max(0, Number(raw?.current_section_index || 0)),
+    created_at: raw?.created_at ? String(raw.created_at) : undefined,
+    updated_at: raw?.updated_at ? String(raw.updated_at) : undefined,
+  };
+}
+
+function coReadSummaryFromBook(book: CoReadBook): CoReadBookSummary {
+  const doneCount = book.sections.filter((section) => section.status === "done").length;
+  return {
+    book_key: book.book_key,
+    book_title: book.book_title,
+    content_chars: book.content.length,
+    section_count: book.sections.length,
+    done_count: doneCount,
+    current_section_index: book.current_section_index,
+    created_at: book.created_at,
+    updated_at: book.updated_at,
+  };
 }
 
 function readCoReadSettings(): CoReadSettings {
@@ -481,14 +570,6 @@ function stripTxtExtension(filename: string): string {
   return String(filename || "未命名").replace(/\.[^.]+$/, "").trim() || "未命名";
 }
 
-function splitCoReadParagraphs(content: string): string[] {
-  return String(content || "")
-    .replace(/\r\n/g, "\n")
-    .split(/\n{2,}|\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function formatCoReadDate(value: string): string {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return "刚刚";
@@ -501,17 +582,77 @@ function formatCoReadProgress(progress: number): string {
   return `${Math.round(Math.max(0, Math.min(1, progress)) * 1000) / 10}%`;
 }
 
+function formatCoReadSectionRange(book: CoReadBook, section: CoReadSection): string {
+  const total = Math.max(1, book.content.length);
+  const start = section.char_start / total;
+  const end = section.char_end / total;
+  return `${formatCoReadProgress(start)} - ${formatCoReadProgress(end)}`;
+}
+
+function coReadSectionText(book: CoReadBook, section: CoReadSection): string {
+  return book.content.slice(section.char_start, section.char_end);
+}
+
+function coReadBookProgress(summary: Pick<CoReadBookSummary, "section_count" | "done_count">): number {
+  const total = Math.max(1, Number(summary.section_count || 0));
+  return Math.max(0, Math.min(1, Number(summary.done_count || 0) / total));
+}
+
 function compactCoReadText(text: string, max = 52): string {
   const value = String(text || "").replace(/\s+/g, " ").trim();
   if (value.length <= max) return value;
   return `${value.slice(0, max)}...`;
 }
 
-function pickCoReadVisibleText(book: CoReadBook): string {
-  const content = String(book.content || "").replace(/\s+/g, " ").trim();
-  if (!content) return "";
-  const start = Math.max(0, Math.floor(content.length * Math.max(0, Math.min(1, book.progress))) - 160);
-  return content.slice(start, start + 420);
+function locateCoReadQuote(sectionText: string, quote: string): [number, number] {
+  const rawQuote = String(quote || "").trim();
+  if (!rawQuote) return [-1, -1];
+  const exact = sectionText.indexOf(rawQuote);
+  if (exact >= 0) return [exact, exact + rawQuote.length];
+  const compactChars: string[] = [];
+  const mapping: number[] = [];
+  Array.from(sectionText).forEach((ch, index) => {
+    if (/\s/.test(ch)) return;
+    compactChars.push(ch);
+    mapping.push(index);
+  });
+  const compactQuote = Array.from(rawQuote).filter((ch) => !/\s/.test(ch)).join("");
+  const compactIndex = compactChars.join("").indexOf(compactQuote);
+  if (compactIndex < 0 || compactIndex + compactQuote.length > mapping.length) return [-1, -1];
+  return [mapping[compactIndex], mapping[compactIndex + compactQuote.length - 1] + 1];
+}
+
+function renderCoReadMarkedText(text: string, sectionStart: number, userMarks: CoReadMark[], duMarks: CoReadMark[]) {
+  const marks = [...userMarks, ...duMarks].filter((mark) => (
+    mark.char_start >= sectionStart &&
+    mark.char_end > mark.char_start &&
+    mark.char_start < sectionStart + text.length
+  ));
+  if (!marks.length) return text;
+  const boundaries = new Set<number>([0, text.length]);
+  marks.forEach((mark) => {
+    boundaries.add(Math.max(0, Math.min(text.length, mark.char_start - sectionStart)));
+    boundaries.add(Math.max(0, Math.min(text.length, mark.char_end - sectionStart)));
+  });
+  const sorted = Array.from(boundaries).sort((a, b) => a - b);
+  return sorted.slice(0, -1).map((start, index) => {
+    const end = sorted[index + 1];
+    const value = text.slice(start, end);
+    const active = marks.filter((mark) => mark.char_start - sectionStart < end && mark.char_end - sectionStart > start);
+    const hasUser = active.some((mark) => mark.source === "user");
+    const hasDu = active.some((mark) => mark.source === "du");
+    const title = active.map((mark) => mark.note || mark.quote).filter(Boolean).join("\n");
+    const className = hasUser && hasDu
+      ? "rounded-[4px] bg-gradient-to-r from-[#FFE1EC] to-[#DDEBFF] decoration-[#8BA9E8] underline decoration-2 underline-offset-4"
+      : hasUser
+        ? "rounded-[4px] bg-[#FFE1EC] decoration-[#F09AB9] underline decoration-2 underline-offset-4"
+        : hasDu
+          ? "rounded-[4px] bg-[#DDEBFF] decoration-[#8BA9E8] underline decoration-2 underline-offset-4"
+          : "";
+    return className
+      ? <span key={`${start}-${end}`} className={className} title={title}>{value}</span>
+      : <span key={`${start}-${end}`}>{value}</span>;
+  });
 }
 
 function resolveChatFontFamily(fontKey: ChatFontKey): string {
@@ -1602,20 +1743,29 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
   const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const readerRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
   const swipeRef = useRef({ tracking: false, startX: 0, startY: 0, latestX: 0, latestY: 0 });
-  const [books, setBooks] = useState<CoReadBook[]>(() => readCoReadBooks());
-  const [activeBookId, setActiveBookId] = useState("");
+  const [books, setBooks] = useState<CoReadBookSummary[]>([]);
+  const [activeBook, setActiveBook] = useState<CoReadBook | null>(null);
   const [settings, setSettings] = useState<CoReadSettings>(() => readCoReadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [input, setInput] = useState("");
+  const [loadingBooks, setLoadingBooks] = useState(true);
+  const [loadingBookKey, setLoadingBookKey] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [savingMark, setSavingMark] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [selectedText, setSelectedText] = useState("");
-  const [chatExpanded, setChatExpanded] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [markNote, setMarkNote] = useState("");
+  const [sectionNote, setSectionNote] = useState("");
 
-  const activeBook = useMemo(() => books.find((book) => book.id === activeBookId) || null, [activeBookId, books]);
-  const paragraphs = useMemo(() => splitCoReadParagraphs(activeBook?.content || ""), [activeBook?.content]);
-  const recentMessages = activeBook ? activeBook.messages.slice(-6) : [];
+  const activeSection = useMemo(() => {
+    if (!activeBook?.sections.length) return null;
+    return activeBook.sections[Math.max(0, Math.min(activeBook.sections.length - 1, activeBook.current_section_index))] || activeBook.sections[0];
+  }, [activeBook]);
+  const activeSectionText = useMemo(() => (
+    activeBook && activeSection ? coReadSectionText(activeBook, activeSection) : ""
+  ), [activeBook, activeSection]);
+
   const theme = settings.theme === "dark"
     ? {
         shell: "bg-[#111111] text-[#F8F8F8]",
@@ -1645,28 +1795,24 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
   const readerPadding = settings.marginLevel === 1 ? "px-5" : settings.marginLevel === 3 ? "px-8" : "px-6";
 
   useEffect(() => {
-    if (!activeBookId || !activeBook) return;
-    requestAnimationFrame(() => {
-      const el = readerRef.current;
-      if (!el) return;
-      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
-      el.scrollTo({ top: maxScroll * Math.max(0, Math.min(1, activeBook.progress)), behavior: "auto" });
-    });
-  }, [activeBookId]);
+    void loadBooks();
+  }, []);
+
+  useEffect(() => {
+    setSectionNote(activeSection?.user_section_note || "");
+    setSelectedText("");
+    setMarkNote("");
+    requestAnimationFrame(() => readerRef.current?.scrollTo({ top: 0, behavior: "auto" }));
+  }, [activeBook?.book_key, activeSection?.section_id]);
 
   function closeCurrentLevel() {
     if (settingsOpen) {
       setSettingsOpen(false);
       return;
     }
-    if (chatExpanded) {
-      setChatExpanded(false);
-      return;
-    }
     if (activeBook) {
-      setActiveBookId("");
+      setActiveBook(null);
       setSelectedText("");
-      setChatExpanded(false);
       return;
     }
     onBack();
@@ -1704,14 +1850,6 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     if (dx >= 72 && dx > dy * 1.5) closeCurrentLevel();
   }
 
-  function setBooksAndPersist(nextBooks: CoReadBook[] | ((prev: CoReadBook[]) => CoReadBook[])) {
-    setBooks((prev) => {
-      const next = typeof nextBooks === "function" ? nextBooks(prev) : nextBooks;
-      writeCoReadBooks(next);
-      return next;
-    });
-  }
-
   function updateSettings(nextSettings: CoReadSettings | ((prev: CoReadSettings) => CoReadSettings)) {
     setSettings((prev) => {
       const next = typeof nextSettings === "function" ? nextSettings(prev) : nextSettings;
@@ -1720,179 +1858,216 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     });
   }
 
-  function updateActiveBook(updater: (book: CoReadBook) => CoReadBook) {
-    if (!activeBook) return;
-    setBooksAndPersist((prev) => prev.map((book) => (book.id === activeBook.id ? updater(book) : book)));
+  function upsertBookSummary(book: CoReadBook) {
+    const summary = coReadSummaryFromBook(book);
+    setBooks((prev) => [summary, ...prev.filter((item) => item.book_key !== summary.book_key)]);
+  }
+
+  async function loadBooks() {
+    setLoadingBooks(true);
+    try {
+      const data = await apiJson<CoReadBooksResponse>("/miniapp-api/co-read/books");
+      if (!data?.ok) throw new Error(data?.error || "读取失败");
+      setBooks((data.books || []).map(normalizeCoReadBookSummary).filter((item): item is CoReadBookSummary => Boolean(item)));
+    } catch (e: any) {
+      toast(`共读书架读取失败：${e?.message || e}`);
+    } finally {
+      setLoadingBooks(false);
+    }
+  }
+
+  async function openBook(bookKey: string) {
+    setLoadingBookKey(bookKey);
+    try {
+      const data = await apiJson<CoReadBookResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(bookKey)}`);
+      const book = normalizeCoReadBook(data.book);
+      if (!data?.ok || !book) throw new Error(data?.error || "书籍读取失败");
+      setActiveBook(book);
+      upsertBookSummary(book);
+    } catch (e: any) {
+      toast(`打开失败：${e?.message || e}`);
+    } finally {
+      setLoadingBookKey("");
+    }
   }
 
   async function importTxtFile(file?: File | null) {
-    if (!file) return;
+    if (!file || importing) return;
     if (!file.name.toLowerCase().endsWith(".txt") && file.type && file.type !== "text/plain") {
       toast("只能导入 TXT");
       return;
     }
+    setImporting(true);
     try {
-      const content = await file.text();
-      const clean = content.replace(/\u0000/g, "").trim();
-      if (!clean) throw new Error("文件里没有可读内容");
-      const now = new Date().toISOString();
-      const book: CoReadBook = {
-        id: makeCoReadId("book"),
-        title: stripTxtExtension(file.name),
-        content: clean,
-        progress: 0,
-        lastReadAt: now,
-        lastSummary: "还没有共读记录。",
-        messages: [],
-      };
-      setBooksAndPersist((prev) => [book, ...prev]);
-      setActiveBookId(book.id);
-      setSelectedText("");
-      toast("已导入");
+      const content = (await file.text()).replace(/\u0000/g, "").trim();
+      if (!content) throw new Error("文件里没有可读内容");
+      const data = await apiJson<CoReadBookResponse>("/miniapp-api/co-read/books", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ book_title: stripTxtExtension(file.name), content }),
+      });
+      const book = normalizeCoReadBook(data.book);
+      if (!data?.ok || !book) throw new Error(data?.error || "导入失败");
+      setActiveBook(book);
+      upsertBookSummary(book);
+      toast(`已切成 ${book.sections.length} 个共读小节`);
     } catch (e: any) {
       toast(`导入失败：${e?.message || e}`);
+    } finally {
+      setImporting(false);
     }
   }
 
-  function deleteBook(bookId: string) {
-    const target = books.find((book) => book.id === bookId);
+  async function deleteBook(bookKey: string) {
+    const target = books.find((book) => book.book_key === bookKey);
     if (!target) return;
-    if (!window.confirm(`删除《${target.title}》？`)) return;
-    setBooksAndPersist((prev) => prev.filter((book) => book.id !== bookId));
-    if (activeBookId === bookId) setActiveBookId("");
-    toast("已删除");
-  }
-
-  function handleReaderScroll() {
-    const el = readerRef.current;
-    if (!el || !activeBook) return;
-    const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
-    const nextProgress = Math.max(0, Math.min(1, el.scrollTop / maxScroll));
-    if (Math.abs(nextProgress - activeBook.progress) < 0.015) return;
-    updateActiveBook((book) => ({
-      ...book,
-      progress: nextProgress,
-      lastReadAt: new Date().toISOString(),
-    }));
+    if (!window.confirm(`删除《${target.book_title}》？`)) return;
+    try {
+      const data = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/co-read/books/${encodeURIComponent(bookKey)}`, { method: "DELETE" });
+      if (!data?.ok) throw new Error(data?.error || "删除失败");
+      setBooks((prev) => prev.filter((book) => book.book_key !== bookKey));
+      if (activeBook?.book_key === bookKey) setActiveBook(null);
+      toast("已删除");
+    } catch (e: any) {
+      toast(`删除失败：${e?.message || e}`);
+    }
   }
 
   function captureSelection() {
     const selection = window.getSelection();
-    const text = String(selection?.toString() || "").replace(/\s+/g, " ").trim();
-    if (!selection || text.length < 2 || selection.rangeCount < 1) {
-      return;
-    }
-    setSelectedText(text.slice(0, 1200));
+    if (!selection || selection.rangeCount < 1) return;
+    const anchor = selection.anchorNode;
+    if (anchor && readerRef.current && !readerRef.current.contains(anchor)) return;
+    const text = String(selection.toString() || "").trim();
+    if (text.length < 2) return;
+    setSelectedText(text.slice(0, 800));
+    setMarkNote("");
   }
 
   function clearCoReadSelection() {
     setSelectedText("");
+    setMarkNote("");
     window.getSelection()?.removeAllRanges();
   }
 
-  function focusCoReadInput() {
-    setChatExpanded(true);
-    window.setTimeout(() => inputRef.current?.focus(), 0);
+  async function persistSection(nextMarks: CoReadMark[], nextNote: string, silent = false) {
+    if (!activeBook || !activeSection) return null;
+    const data = await apiJson<CoReadBookResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(activeBook.book_key)}/sections/${encodeURIComponent(activeSection.section_id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_marks: nextMarks, user_section_note: nextNote }),
+    });
+    const book = normalizeCoReadBook(data.book);
+    if (!data?.ok || !book) throw new Error(data?.error || "保存失败");
+    setActiveBook(book);
+    upsertBookSummary(book);
+    if (!silent) toast("已保存");
+    return book;
   }
 
-  function copySelectedText() {
-    if (!selectedText) return;
-    navigator.clipboard.writeText(selectedText).then(
-      () => toast("已复制"),
-      () => toast("复制失败"),
-    );
-    clearCoReadSelection();
+  async function saveUserMark() {
+    if (!activeBook || !activeSection || !selectedText || savingMark) return;
+    setSavingMark(true);
+    try {
+      const [localStart, localEnd] = locateCoReadQuote(activeSectionText, selectedText);
+      const now = new Date().toISOString();
+      const mark: CoReadMark = {
+        id: makeCoReadId("mark"),
+        source: "user",
+        quote: selectedText,
+        note: markNote.trim(),
+        char_start: localStart >= 0 ? activeSection.char_start + localStart : -1,
+        char_end: localEnd > localStart ? activeSection.char_start + localEnd : -1,
+        created_at: now,
+        updated_at: now,
+      };
+      await persistSection([...activeSection.user_marks, mark], sectionNote, true);
+      clearCoReadSelection();
+      toast("粉色标记已保存");
+    } catch (e: any) {
+      toast(`保存标记失败：${e?.message || e}`);
+    } finally {
+      setSavingMark(false);
+    }
   }
 
-  async function sendCoReadMessage() {
-    if (!activeBook || sending) return;
+  async function deleteUserMark(markId: string) {
+    if (!activeSection) return;
+    try {
+      await persistSection(activeSection.user_marks.filter((mark) => mark.id !== markId), sectionNote, true);
+      toast("标记已删除");
+    } catch (e: any) {
+      toast(`删除失败：${e?.message || e}`);
+    }
+  }
+
+  async function saveSectionNote(silent = false) {
+    if (!activeSection || savingNote) return;
+    setSavingNote(true);
+    try {
+      await persistSection(activeSection.user_marks, sectionNote, silent);
+    } catch (e: any) {
+      toast(`保存感想失败：${e?.message || e}`);
+    } finally {
+      setSavingNote(false);
+    }
+  }
+
+  async function completeSection() {
+    if (!activeBook || !activeSection || completing) return;
     const cleanWindowId = String(windowId || "").trim();
     if (!cleanWindowId) {
       toast("当前还没拿到聊天窗口 ID");
       return;
     }
-    const cleanInput = input.trim();
-    const context = selectedText || pickCoReadVisibleText(activeBook);
-    if (!cleanInput && !context) {
-      toast("先选一段或写一句");
-      return;
-    }
-    const bookId = activeBook.id;
-    const now = Date.now();
-    const userText = cleanInput || "想和渡聊这一段";
-    const pendingId = makeCoReadId("du");
-    const userMessage: CoReadMessage = {
-      id: makeCoReadId("user"),
-      role: "user",
-      text: userText,
-      createdAt: new Date(now).toISOString(),
-      status: "sent",
-    };
-    const pendingMessage: CoReadMessage = {
-      id: pendingId,
-      role: "du",
-      text: "渡在看这一段...",
-      createdAt: new Date(now + 1).toISOString(),
-      status: "pending",
-    };
-    setInput("");
-    setChatExpanded(true);
-    setSending(true);
-    updateActiveBook((book) => ({
-      ...book,
-      messages: [...book.messages, userMessage, pendingMessage],
-      lastReadAt: new Date(now).toISOString(),
-    }));
-
+    setCompleting(true);
     try {
-      const data = await apiJson<CoReadSessionResponse>("/miniapp-api/co-read/session", {
+      const data = await apiJson<CoReadSectionCompleteResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(activeBook.book_key)}/sections/${encodeURIComponent(activeSection.section_id)}/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           window_id: cleanWindowId,
-          book_title: activeBook.title,
-          chapter_label: `进度 ${formatCoReadProgress(activeBook.progress)}`,
-          snippet: context,
-          user_note: cleanInput,
+          user_marks: activeSection.user_marks,
+          user_section_note: sectionNote,
         }),
       });
-      if (!data?.ok) throw new Error(data?.error || "共读后端返回失败");
-      const reply = String(data.du_reply || "").trim();
-      if (!reply) throw new Error("渡没有返回内容");
-      setBooksAndPersist((prev) => prev.map((book) => (
-        book.id === bookId
-          ? {
-              ...book,
-              lastSummary: `渡：${compactCoReadText(reply, 64)}`,
-              messages: book.messages.map((msg) => (
-                msg.id === pendingId
-                  ? { ...msg, text: reply, status: "sent" as const }
-                  : msg
-              )),
-            }
-          : book
-      )));
+      const book = normalizeCoReadBook(data.book);
+      if (!data?.ok || !book) throw new Error(data?.error || "读完提交失败");
+      setActiveBook(book);
+      upsertBookSummary(book);
+      toast("这一节已和渡读完");
     } catch (e: any) {
-      const message = String(e?.message || e || "发送失败");
-      setBooksAndPersist((prev) => prev.map((book) => (
-        book.id === bookId
-          ? {
-              ...book,
-              messages: book.messages.map((msg) => (
-                msg.id === pendingId
-                  ? { ...msg, text: `这次没接上后端：${message}`, status: "failed" as const }
-                  : msg
-              )),
-            }
-          : book
-      )));
-      toast(`共读失败：${message}`);
+      toast(`提交失败：${e?.message || e}`);
     } finally {
-      setSending(false);
+      setCompleting(false);
     }
   }
 
-  if (activeBook) {
+  function goToSection(index: number) {
+    if (!activeBook) return;
+    const nextIndex = Math.max(0, Math.min(activeBook.sections.length - 1, index));
+    const nextSection = activeBook.sections[nextIndex];
+    setActiveBook({ ...activeBook, current_section_index: nextIndex });
+    setSelectedText("");
+    setMarkNote("");
+    requestAnimationFrame(() => readerRef.current?.scrollTo({ top: 0, behavior: "auto" }));
+    void apiJson<CoReadBookResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(activeBook.book_key)}/sections/${encodeURIComponent(nextSection.section_id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).then((data) => {
+      const book = normalizeCoReadBook(data.book);
+      if (data?.ok && book) {
+        setActiveBook(book);
+        upsertBookSummary(book);
+      }
+    }).catch(() => {});
+  }
+
+  if (activeBook && activeSection) {
+    const sectionIndex = Math.max(0, activeBook.current_section_index);
+    const canGoPrev = sectionIndex > 0;
+    const canGoNext = sectionIndex < activeBook.sections.length - 1;
     return (
       <div
         className={`absolute inset-0 z-30 flex flex-col overflow-hidden ${theme.shell}`}
@@ -1913,8 +2088,8 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
             <ChevronLeftIcon />
           </button>
           <div className="min-w-0 flex-1 text-center">
-            <div className="truncate text-[13px] font-semibold">{activeBook.title}</div>
-            <div className={`mt-0.5 text-[11px] font-mono ${theme.muted}`}>{formatCoReadProgress(activeBook.progress)}</div>
+            <div className="truncate text-[13px] font-semibold">{activeBook.book_title}</div>
+            <div className={`mt-0.5 text-[11px] font-mono ${theme.muted}`}>第 {activeSection.index}/{activeBook.sections.length} 小节 · {formatCoReadSectionRange(activeBook, activeSection)}</div>
           </div>
           <button
             type="button"
@@ -1926,150 +2101,154 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
           </button>
         </header>
 
+        <div className={`z-20 border-b px-4 py-2 ${theme.dock}`}>
+          <div className="mx-auto flex max-w-[760px] items-center gap-2 overflow-x-auto pb-1">
+            {activeBook.sections.map((section, index) => (
+              <button
+                key={section.section_id}
+                type="button"
+                className={`h-8 shrink-0 rounded-full border px-3 font-mono text-[11px] font-semibold ${index === sectionIndex ? "border-[#111111] bg-[#111111] text-white" : `${theme.panel} ${theme.muted}`}`}
+                onClick={() => goToSection(index)}
+              >
+                {section.index}{section.status === "done" ? " ✓" : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {selectedText ? (
-          <div className={`z-20 border-b px-4 py-2 ${theme.dock}`}>
-            <div className="mx-auto flex max-w-[720px] items-center gap-2">
-              <div className={`min-w-0 flex-1 truncate text-[12px] font-medium ${theme.muted}`}>
-                已选中：{compactCoReadText(selectedText, 42)}
+          <div className={`z-20 border-b px-4 py-3 ${theme.dock}`}>
+            <div className="mx-auto max-w-[760px] space-y-2">
+              <div className={`truncate text-[12px] font-medium ${theme.muted}`}>粉色标记：{compactCoReadText(selectedText, 58)}</div>
+              <div className="flex items-center gap-2">
+                <input
+                  className={`h-10 min-w-0 flex-1 rounded-full border px-4 text-[13px] outline-none ${theme.input}`}
+                  value={markNote}
+                  onChange={(e) => setMarkNote(e.target.value)}
+                  placeholder="写一点感想"
+                />
+                <button
+                  type="button"
+                  className="h-10 shrink-0 rounded-full bg-[#111111] px-4 text-[13px] font-semibold text-white disabled:opacity-40"
+                  onClick={saveUserMark}
+                  disabled={savingMark}
+                >
+                  保存
+                </button>
+                <button
+                  type="button"
+                  className={`h-10 shrink-0 rounded-full px-3 text-[13px] font-semibold ${theme.muted}`}
+                  onClick={clearCoReadSelection}
+                >
+                  取消
+                </button>
               </div>
-              <button
-                type="button"
-                className="h-8 shrink-0 rounded-full bg-[#111111] px-3 text-[12px] font-semibold text-white"
-                onClick={focusCoReadInput}
-              >
-                和渡聊
-              </button>
-              <button
-                type="button"
-                className={`h-8 shrink-0 rounded-full border px-3 text-[12px] font-semibold ${theme.panel}`}
-                onClick={copySelectedText}
-              >
-                复制
-              </button>
-              <button
-                type="button"
-                className={`h-8 shrink-0 rounded-full px-2 text-[12px] font-semibold ${theme.muted}`}
-                onClick={clearCoReadSelection}
-              >
-                取消
-              </button>
             </div>
           </div>
         ) : null}
 
         <div
           ref={readerRef}
-          className={`min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto ${readerPadding} pb-12 pt-5`}
-          onScroll={handleReaderScroll}
+          className={`min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto ${readerPadding} pb-[calc(env(safe-area-inset-bottom,0px)+34px)] pt-5`}
           onMouseUp={captureSelection}
           onTouchEnd={() => window.setTimeout(captureSelection, 80)}
           style={{ fontSize: `${settings.fontSize}px`, lineHeight: settings.lineHeight }}
         >
-          <div className="mx-auto max-w-full break-words text-left sm:max-w-[720px] sm:text-justify">
-            {paragraphs.map((paragraph, index) => (
-              <p key={`${index}-${paragraph.slice(0, 12)}`} className="mb-5 break-words [overflow-wrap:anywhere]">
-                {paragraph}
-              </p>
-            ))}
-          </div>
-        </div>
+          <article className="mx-auto max-w-[760px]">
+            <div className="select-text whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+              {renderCoReadMarkedText(activeSectionText, activeSection.char_start, activeSection.user_marks, activeSection.du_marks)}
+            </div>
 
-        <button
-          type="button"
-          className={`fixed right-0 top-1/2 z-40 flex min-h-[112px] w-[42px] -translate-y-1/2 flex-col items-center justify-center gap-2 rounded-l-[18px] border-y border-l px-2 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.12)] backdrop-blur-md ${theme.dock}`}
-          onClick={focusCoReadInput}
-          aria-label="打开共读聊天"
-        >
-          <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] [writing-mode:vertical-rl]">共读</span>
-          {selectedText ? <span className="h-2 w-2 rounded-full bg-[#111111]" /> : null}
-        </button>
-
-        {chatExpanded ? (
-          <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setChatExpanded(false)}>
-            <aside
-              className={`absolute bottom-0 right-0 top-0 flex w-[82vw] max-w-[340px] min-w-0 flex-col overflow-hidden border-l shadow-[-16px_0_36px_rgba(0,0,0,0.14)] backdrop-blur-md ${theme.dock}`}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div
-                className="flex items-center justify-between gap-3 px-4 pb-3"
-                style={{ paddingTop: "calc(env(safe-area-inset-top,0px)+22px)" }}
-              >
-                <div className="min-w-0">
-                  <div className="text-[15px] font-semibold">和渡聊这本书</div>
-                  <div className={`mt-0.5 truncate font-mono text-[11px] ${theme.muted}`}>{activeBook.title}</div>
+            <section className={`mt-10 rounded-[18px] border p-4 ${theme.panel}`}>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="text-[14px] font-semibold">我的粉色标记</div>
+                <div className={`font-mono text-[11px] ${theme.muted}`}>{activeSection.user_marks.length}</div>
+              </div>
+              {activeSection.user_marks.length ? (
+                <div className="space-y-2">
+                  {activeSection.user_marks.map((mark) => (
+                    <div key={mark.id} className="rounded-[14px] bg-[#FFEAF1] px-3 py-2 text-[#5D2A3A]">
+                      <div className="text-[12px] leading-5">「{compactCoReadText(mark.quote, 80)}」</div>
+                      {mark.note ? <div className="mt-1 text-[13px] leading-5 text-[#7A3A4D]">{mark.note}</div> : null}
+                      <button type="button" className="mt-1 text-[12px] font-semibold text-[#B85673]" onClick={() => void deleteUserMark(mark.id)}>删除</button>
+                    </div>
+                  ))}
                 </div>
+              ) : (
+                <div className={`text-[13px] ${theme.muted}`}>选中原文后可以留下粉色标记。</div>
+              )}
+            </section>
+
+            <section className={`mt-4 rounded-[18px] border p-4 ${theme.panel}`}>
+              <div className="mb-3 text-[14px] font-semibold">我的小节感想</div>
+              <textarea
+                className={`min-h-[96px] w-full resize-none rounded-[16px] border px-3 py-3 text-[14px] leading-6 outline-none ${theme.input}`}
+                value={sectionNote}
+                onChange={(e) => setSectionNote(e.target.value)}
+                placeholder="读完这一节时想留下的话"
+              />
+              <div className="mt-3 flex items-center gap-2">
                 <button
                   type="button"
-                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-black/5 ${theme.muted}`}
-                  onClick={() => setChatExpanded(false)}
-                  aria-label="收起共读聊天"
+                  className={`h-10 rounded-full border px-4 text-[13px] font-semibold disabled:opacity-40 ${theme.panel}`}
+                  onClick={() => void saveSectionNote(false)}
+                  disabled={savingNote}
                 >
-                  <ChevronRightIcon />
+                  保存感想
+                </button>
+                <button
+                  type="button"
+                  className="h-10 flex-1 rounded-full bg-[#111111] px-4 text-[13px] font-semibold text-white disabled:opacity-40"
+                  onClick={completeSection}
+                  disabled={completing}
+                >
+                  {completing ? "渡在读这一节..." : activeSection.status === "done" ? "重新读完这一节" : "读完这一节"}
                 </button>
               </div>
+            </section>
 
-              {selectedText ? (
-                <div className={`mx-4 mb-3 flex items-center gap-2 rounded-[16px] px-3 py-2 text-[11px] font-medium ${theme.soft}`}>
-                  <span className="min-w-0 flex-1 leading-5">已选中：{compactCoReadText(selectedText, 58)}</span>
-                  <button type="button" className="shrink-0" onClick={clearCoReadSelection}>清除</button>
+            {activeSection.du_marks.length || activeSection.du_section_note ? (
+              <section className={`mt-4 rounded-[18px] border p-4 ${theme.panel}`}>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="text-[14px] font-semibold">渡的蓝色标记</div>
+                  <div className={`font-mono text-[11px] ${theme.muted}`}>{activeSection.du_marks.length}</div>
                 </div>
-              ) : null}
-
-              <div className="min-h-0 flex-1 overflow-y-auto px-4">
-                {recentMessages.length ? (
-                  <div className="flex flex-col gap-2">
-                    {recentMessages.map((msg) => (
-                      <div
-                        key={msg.id}
-                        className={`max-w-[88%] rounded-[14px] px-3 py-2 text-[13px] leading-5 ${
-                          msg.role === "user"
-                            ? "self-end rounded-br-[5px] bg-[#111111] text-white"
-                            : msg.status === "pending"
-                              ? `self-start bg-transparent px-0 font-mono ${theme.muted}`
-                              : msg.status === "failed"
-                                ? "self-start rounded-bl-[5px] bg-[#FFF1F1] text-[#B42318]"
-                              : `self-start rounded-bl-[5px] ${theme.soft}`
-                        }`}
-                      >
-                        {msg.text}
+                {activeSection.du_marks.length ? (
+                  <div className="mb-4 space-y-2">
+                    {activeSection.du_marks.map((mark) => (
+                      <div key={mark.id} className="rounded-[14px] bg-[#E6F0FF] px-3 py-2 text-[#263D66]">
+                        <div className="text-[12px] leading-5">「{compactCoReadText(mark.quote, 80)}」</div>
+                        {mark.note ? <div className="mt-1 text-[13px] leading-5 text-[#36598F]">{mark.note}</div> : null}
                       </div>
                     ))}
                   </div>
-                ) : (
-                  <div className={`flex h-full items-center justify-center text-center text-[13px] leading-5 ${theme.muted}`}>
-                    选一段，或者直接问当前看到的内容。
-                  </div>
-                )}
-              </div>
+                ) : null}
+                {activeSection.du_section_note ? (
+                  <div className={`rounded-[14px] px-3 py-3 text-[14px] leading-7 ${theme.soft}`}>{activeSection.du_section_note}</div>
+                ) : null}
+              </section>
+            ) : null}
 
-              <div
-                className="flex items-center gap-2 px-4 pt-3"
-                style={{ paddingBottom: "calc(env(safe-area-inset-bottom,0px)+22px)" }}
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                className={`h-11 rounded-full border px-5 text-[13px] font-semibold disabled:opacity-30 ${theme.panel}`}
+                onClick={() => goToSection(sectionIndex - 1)}
+                disabled={!canGoPrev}
               >
-                <input
-                  ref={inputRef}
-                  className={`h-11 min-w-0 flex-1 rounded-full border px-4 text-[14px] font-medium outline-none ${theme.input}`}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="和渡聊这段"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") sendCoReadMessage();
-                  }}
-                  disabled={sending}
-                />
-                <button
-                  type="button"
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#111111] text-white transition-transform active:scale-95 disabled:opacity-40"
-                  onClick={sendCoReadMessage}
-                  disabled={sending || (!input.trim() && !selectedText)}
-                  aria-label="发送"
-                >
-                  <SendIconMini />
-                </button>
-              </div>
-            </aside>
-          </div>
-        ) : null}
+                上一节
+              </button>
+              <button
+                type="button"
+                className={`h-11 rounded-full border px-5 text-[13px] font-semibold disabled:opacity-30 ${theme.panel}`}
+                onClick={() => goToSection(sectionIndex + 1)}
+                disabled={!canGoNext}
+              >
+                下一节
+              </button>
+            </div>
+          </article>
+        </div>
 
         {settingsOpen ? (
           <div className="fixed inset-0 z-50 flex items-end bg-black/10" onClick={() => setSettingsOpen(false)}>
@@ -2157,55 +2336,57 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
         <div className="flex-1 text-[22px] font-bold">和渡一起读</div>
         <button
           type="button"
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-[#111111] text-white transition-transform active:scale-95"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-[#111111] text-white transition-transform active:scale-95 disabled:opacity-40"
           onClick={() => fileInputRef.current?.click()}
           aria-label="导入 TXT"
+          disabled={importing}
         >
-          <PlusIcon open={false} />
+          <PlusIcon open={importing} />
         </button>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-[112px] pt-5">
-        {books.length ? (
+        {loadingBooks ? (
+          <div className="flex min-h-[58vh] items-center justify-center font-mono text-[12px] text-[#999999]">loading...</div>
+        ) : books.length ? (
           <div className="mx-auto max-w-xl space-y-4">
             {books.map((book) => (
               <button
-                key={book.id}
+                key={book.book_key}
                 type="button"
-                className="w-full rounded-[24px] border border-[#EAEAEA] bg-white p-5 text-left shadow-[0_8px_24px_rgba(0,0,0,0.025)] transition-transform active:scale-[0.99]"
-                onClick={() => {
-                  setActiveBookId(book.id);
-                  setSelectedText("");
-                  setChatExpanded(false);
-                }}
+                className="w-full rounded-[22px] border border-[#EAEAEA] bg-white p-5 text-left shadow-[0_8px_24px_rgba(0,0,0,0.025)] transition-transform active:scale-[0.99]"
+                onClick={() => void openBook(book.book_key)}
               >
                 <div className="mb-5 flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1 text-[18px] font-semibold uppercase leading-6">{book.title}</div>
+                  <div className="min-w-0 flex-1 text-[18px] font-semibold leading-6">{book.book_title}</div>
                   <div className="font-mono text-[11px] lowercase text-[#AAAAAA]">txt</div>
                 </div>
                 <div className="mb-5 flex items-center gap-6">
                   <div>
-                    <div className="mb-1 font-mono text-[11px] lowercase tracking-[0.05em] text-[#AAAAAA]">progress</div>
-                    <div className="font-mono text-[16px] font-medium">{formatCoReadProgress(book.progress)}</div>
+                    <div className="mb-1 font-mono text-[11px] lowercase tracking-[0.05em] text-[#AAAAAA]">sections</div>
+                    <div className="font-mono text-[16px] font-medium">{book.done_count}/{book.section_count}</div>
                   </div>
                   <div className="h-8 w-px bg-black/10" />
                   <div>
-                    <div className="mb-1 font-mono text-[11px] lowercase tracking-[0.05em] text-[#AAAAAA]">last read</div>
-                    <div className="font-mono text-[16px] font-medium">{formatCoReadDate(book.lastReadAt)}</div>
+                    <div className="mb-1 font-mono text-[11px] lowercase tracking-[0.05em] text-[#AAAAAA]">progress</div>
+                    <div className="font-mono text-[16px] font-medium">{formatCoReadProgress(coReadBookProgress(book))}</div>
                   </div>
                   <button
                     type="button"
                     className="ml-auto flex h-9 w-9 items-center justify-center rounded-full text-[#9A9A9A] transition-colors active:bg-gray-50"
                     onClick={(e) => {
                       e.stopPropagation();
-                      deleteBook(book.id);
+                      void deleteBook(book.book_key);
                     }}
                     aria-label="删除"
                   >
                     <TrashIconMini />
                   </button>
                 </div>
-                <div className="line-clamp-2 text-[13px] leading-5 text-[#777777]">{book.lastSummary || "还没有共读记录。"}</div>
+                <div className="flex items-center justify-between gap-3 text-[12px] leading-5 text-[#777777]">
+                  <span>当前第 {Math.min(book.section_count, book.current_section_index + 1)} 小节</span>
+                  <span>{loadingBookKey === book.book_key ? "打开中..." : formatCoReadDate(book.updated_at || book.created_at || "")}</span>
+                </div>
               </button>
             ))}
           </div>
@@ -2215,17 +2396,18 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
               <BookOpenIcon />
             </div>
             <div className="text-[16px] font-semibold text-[#111111]">还没有导入的书</div>
-            <div className="mt-2 max-w-[240px] text-[13px] leading-5 text-[#888888]">先放一本 TXT 进来，再和渡一起读。</div>
+            <div className="mt-2 max-w-[240px] text-[13px] leading-5 text-[#888888]">先放一本 TXT 进来，再和渡按小节一起读。</div>
           </div>
         )}
       </div>
 
       <button
         type="button"
-        className="fixed inset-x-5 bottom-[calc(env(safe-area-inset-bottom,0px)+20px)] z-40 h-14 rounded-full bg-[#111111] font-mono text-[12px] font-semibold uppercase tracking-[0.08em] text-white shadow-[0_12px_26px_rgba(0,0,0,0.18)] active:scale-[0.99]"
+        className="fixed inset-x-5 bottom-[calc(env(safe-area-inset-bottom,0px)+20px)] z-40 h-14 rounded-full bg-[#111111] font-mono text-[12px] font-semibold uppercase tracking-[0.08em] text-white shadow-[0_12px_26px_rgba(0,0,0,0.18)] active:scale-[0.99] disabled:opacity-40"
         onClick={() => fileInputRef.current?.click()}
+        disabled={importing}
       >
-        导入 TXT 资料
+        {importing ? "正在切分..." : "导入 TXT 资料"}
       </button>
       <input
         ref={fileInputRef}

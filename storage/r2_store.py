@@ -61,6 +61,8 @@ R2_KEY_DU_NOTEBOOK = "global/du_notebook.json"
 R2_KEY_STAY_WITH_DU = "global/stay_with_du.json"
 # 共读阅读卡片：一本书一张轻量卡，只在共读请求里注入
 R2_KEY_CO_READ_CARDS = "co_read/cards.json"
+R2_KEY_CO_READ_BOOK_INDEX = "co_read/books/index.json"
+R2_KEY_CO_READ_BOOK_PREFIX = "co_read/books"
 # MiniApp 赛博种树：开始日期等元信息
 R2_KEY_CYBER_TREE_META = "global/cyber_tree_meta.json"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
@@ -104,6 +106,7 @@ _notebook_write_lock = threading.Lock()
 _pc_command_write_lock = threading.Lock()
 _app_action_write_lock = threading.Lock()
 _trip_plan_write_lock = threading.Lock()
+_co_read_book_write_lock = threading.Lock()
 
 # 日志
 from utils.log import get_logger
@@ -3293,6 +3296,237 @@ def update_co_read_book_card(
     card["updated_at"] = now
     clean = normalize_co_read_book_card(card, book_key=key, book_title=book_title)
     return clean if save_co_read_book_card(clean) else None
+
+
+def _normalize_co_read_key(value: Any) -> str:
+    text = str(value or "").strip()
+    out = []
+    for ch in text:
+        out.append(ch if ch.isalnum() or ch in "-_" else "-")
+    return "".join(out).strip("-")[:160]
+
+
+def _co_read_book_object_key(book_key: str) -> str:
+    safe = _normalize_co_read_key(book_key)
+    return f"{R2_KEY_CO_READ_BOOK_PREFIX}/{safe}.json" if safe else ""
+
+
+def _co_read_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return fallback
+
+
+def normalize_co_read_book_mark(mark: Any, source: str = "user") -> Optional[dict]:
+    if not isinstance(mark, dict):
+        return None
+    quote = str(mark.get("quote") or "").strip()[:800]
+    note = str(mark.get("note") or "").strip()[:1000]
+    if not (quote or note):
+        return None
+    now = now_beijing_iso()
+    char_start = _co_read_int(mark.get("char_start"), -1)
+    char_end = _co_read_int(mark.get("char_end"), -1)
+    if char_start < 0 or char_end <= char_start:
+        char_start = -1
+        char_end = -1
+    clean_source = "du" if source == "du" or mark.get("source") == "du" else "user"
+    return {
+        "id": _normalize_co_read_text(mark.get("id"), 80) or str(uuid4()),
+        "source": clean_source,
+        "quote": quote,
+        "note": note,
+        "char_start": char_start,
+        "char_end": char_end,
+        "created_at": _normalize_co_read_text(mark.get("created_at"), 40) or now,
+        "updated_at": _normalize_co_read_text(mark.get("updated_at"), 40) or now,
+    }
+
+
+def _normalize_co_read_marks(items: Any, source: str) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in items:
+        mark = normalize_co_read_book_mark(item, source=source)
+        if not mark:
+            continue
+        key = str(mark.get("id") or "")
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        out.append(mark)
+    return out[:200]
+
+
+def normalize_co_read_section(section: Any) -> Optional[dict]:
+    if not isinstance(section, dict):
+        return None
+    index = max(1, _co_read_int(section.get("index"), 1))
+    char_start = max(0, _co_read_int(section.get("char_start"), 0))
+    char_end = max(char_start, _co_read_int(section.get("char_end"), char_start))
+    if char_end <= char_start:
+        return None
+    now = now_beijing_iso()
+    status = "done" if str(section.get("status") or "").strip() == "done" else "reading"
+    return {
+        "section_id": _normalize_co_read_text(section.get("section_id"), 80) or f"sec_{index:04d}",
+        "index": index,
+        "char_start": char_start,
+        "char_end": char_end,
+        "status": status,
+        "user_marks": _normalize_co_read_marks(section.get("user_marks"), "user"),
+        "du_marks": _normalize_co_read_marks(section.get("du_marks"), "du"),
+        "user_section_note": str(section.get("user_section_note") or "").strip()[:2000],
+        "du_section_note": str(section.get("du_section_note") or "").strip()[:2000],
+        "created_at": _normalize_co_read_text(section.get("created_at"), 40) or now,
+        "updated_at": _normalize_co_read_text(section.get("updated_at"), 40) or now,
+        "completed_at": _normalize_co_read_text(section.get("completed_at"), 40),
+    }
+
+
+def normalize_co_read_book_payload(book: Any) -> dict:
+    raw = book if isinstance(book, dict) else {}
+    now = now_beijing_iso()
+    key = _normalize_co_read_key(raw.get("book_key"))
+    title = str(raw.get("book_title") or raw.get("title") or "").strip()[:240]
+    content = str(raw.get("content") or "").replace("\r\n", "\n").replace("\r", "\n")
+    sections: list[dict] = []
+    sections_raw = raw.get("sections") if isinstance(raw.get("sections"), list) else []
+    for item in sections_raw:
+        section = normalize_co_read_section(item)
+        if section:
+            sections.append(section)
+    sections.sort(key=lambda x: int(x.get("index") or 0))
+    current_index = _co_read_int(raw.get("current_section_index"), 0)
+    if sections:
+        current_index = max(0, min(len(sections) - 1, current_index))
+    else:
+        current_index = 0
+    return {
+        "book_key": key,
+        "book_title": title,
+        "content": content,
+        "sections": sections,
+        "current_section_index": current_index,
+        "created_at": _normalize_co_read_text(raw.get("created_at"), 40) or now,
+        "updated_at": _normalize_co_read_text(raw.get("updated_at"), 40) or now,
+    }
+
+
+def _co_read_book_summary(book: dict) -> dict:
+    clean = normalize_co_read_book_payload(book)
+    sections = clean.get("sections") if isinstance(clean.get("sections"), list) else []
+    done_count = sum(1 for item in sections if str(item.get("status") or "") == "done")
+    return {
+        "book_key": clean.get("book_key") or "",
+        "book_title": clean.get("book_title") or "",
+        "content_chars": len(clean.get("content") or ""),
+        "section_count": len(sections),
+        "done_count": done_count,
+        "current_section_index": clean.get("current_section_index") or 0,
+        "created_at": clean.get("created_at") or "",
+        "updated_at": clean.get("updated_at") or "",
+    }
+
+
+def get_co_read_book_index_payload() -> dict:
+    client = _s3_client()
+    if not client:
+        return {"books": [], "updated_at": ""}
+    data = _read_json(client, R2_KEY_CO_READ_BOOK_INDEX)
+    if not isinstance(data, dict):
+        return {"books": [], "updated_at": ""}
+    books_raw = data.get("books") if isinstance(data.get("books"), list) else []
+    books = []
+    seen: set[str] = set()
+    for item in books_raw:
+        if not isinstance(item, dict):
+            continue
+        key = _normalize_co_read_key(item.get("book_key"))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        books.append(
+            {
+                "book_key": key,
+                "book_title": str(item.get("book_title") or "").strip()[:240],
+                "content_chars": max(0, _co_read_int(item.get("content_chars"), 0)),
+                "section_count": max(0, _co_read_int(item.get("section_count"), 0)),
+                "done_count": max(0, _co_read_int(item.get("done_count"), 0)),
+                "current_section_index": max(0, _co_read_int(item.get("current_section_index"), 0)),
+                "created_at": _normalize_co_read_text(item.get("created_at"), 40),
+                "updated_at": _normalize_co_read_text(item.get("updated_at"), 40),
+            }
+        )
+    books.sort(key=lambda x: str(x.get("updated_at") or ""), reverse=True)
+    return {"books": books, "updated_at": _normalize_co_read_text(data.get("updated_at"), 40)}
+
+
+def list_co_read_books() -> list[dict]:
+    return get_co_read_book_index_payload().get("books") or []
+
+
+def get_co_read_book(book_key: str) -> Optional[dict]:
+    key = _normalize_co_read_key(book_key)
+    object_key = _co_read_book_object_key(key)
+    if not object_key:
+        return None
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, object_key)
+    if not isinstance(data, dict):
+        return None
+    clean = normalize_co_read_book_payload(data)
+    return clean if clean.get("book_key") else None
+
+
+def save_co_read_book(book: dict) -> Optional[dict]:
+    clean = normalize_co_read_book_payload(book)
+    key = _normalize_co_read_key(clean.get("book_key"))
+    if not key:
+        return None
+    clean["book_key"] = key
+    clean["updated_at"] = now_beijing_iso()
+    object_key = _co_read_book_object_key(key)
+    client = _s3_client()
+    if not client or not object_key:
+        return None
+    with _co_read_book_write_lock:
+        try:
+            _write_json(client, object_key, clean)
+            index_payload = get_co_read_book_index_payload()
+            books = [item for item in (index_payload.get("books") or []) if item.get("book_key") != key]
+            books.insert(0, _co_read_book_summary(clean))
+            _write_json(client, R2_KEY_CO_READ_BOOK_INDEX, {"books": books[:500], "updated_at": now_beijing_iso()})
+            return clean
+        except Exception as e:
+            logger.error("save_co_read_book 失败 key=%s error=%s", key, e, exc_info=True)
+            return None
+
+
+def delete_co_read_book(book_key: str) -> bool:
+    key = _normalize_co_read_key(book_key)
+    object_key = _co_read_book_object_key(key)
+    if not key or not object_key:
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    with _co_read_book_write_lock:
+        try:
+            client.delete_object(Bucket=R2_BUCKET_NAME, Key=object_key)
+            index_payload = get_co_read_book_index_payload()
+            books = [item for item in (index_payload.get("books") or []) if item.get("book_key") != key]
+            _write_json(client, R2_KEY_CO_READ_BOOK_INDEX, {"books": books, "updated_at": now_beijing_iso()})
+            return True
+        except Exception as e:
+            logger.error("delete_co_read_book 失败 key=%s error=%s", key, e, exc_info=True)
+            return False
 
 
 def _stay_with_du_target_for_kind(kind: str) -> Optional[str]:

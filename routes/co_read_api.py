@@ -2,6 +2,7 @@ import json
 import hashlib
 import re
 import uuid
+import bisect
 from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
@@ -128,6 +129,405 @@ def _extract_assistant_content(resp_json: dict[str, Any]) -> str:
     if isinstance(msg, dict):
         return str(msg.get("content") or "")
     return ""
+
+
+def _request_json_body() -> tuple[dict, tuple | None]:
+    if not request.is_json:
+        return {}, (jsonify({"ok": False, "error": "需要 application/json"}), 400)
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return {}, (jsonify({"ok": False, "error": "JSON 无效"}), 400)
+    return body, None
+
+
+def _co_read_section_id(index: int) -> str:
+    return f"sec_{max(1, int(index)):04d}"
+
+
+def _choose_section_break(candidates: list[int], min_end: int, target_end: int, max_end: int) -> int:
+    left = bisect.bisect_left(candidates, min_end)
+    right = bisect.bisect_right(candidates, max_end)
+    if left >= right:
+        return 0
+    window = candidates[left:right]
+    return min(window, key=lambda pos: abs(pos - target_end))
+
+
+def _build_co_read_sections(content: str) -> list[dict]:
+    text = str(content or "").replace("\r\n", "\n").replace("\r", "\n")
+    total = len(text)
+    if total <= 0:
+        return []
+    target = 10000
+    min_size = 6000
+    max_size = 16000
+    newline_breaks = [idx + 1 for idx, ch in enumerate(text) if ch == "\n"]
+    sentence_breaks = [idx + 1 for idx, ch in enumerate(text) if ch in "。！？!?；;"]
+    sections: list[dict] = []
+    cursor = 0
+    index = 1
+    while cursor < total:
+        raw_start = cursor
+        while raw_start < total and text[raw_start].isspace():
+            raw_start += 1
+        if raw_start >= total:
+            break
+        remain = total - raw_start
+        if remain <= max_size:
+            raw_end = total
+        else:
+            min_end = min(total, raw_start + min_size)
+            target_end = min(total, raw_start + target)
+            max_end = min(total, raw_start + max_size)
+            raw_end = (
+                _choose_section_break(newline_breaks, min_end, target_end, max_end)
+                or _choose_section_break(sentence_breaks, min_end, target_end, max_end)
+                or max_end
+            )
+        char_end = raw_end
+        while char_end > raw_start and text[char_end - 1].isspace():
+            char_end -= 1
+        if char_end <= raw_start:
+            cursor = max(raw_end, raw_start + 1)
+            continue
+        sections.append(
+            {
+                "section_id": _co_read_section_id(index),
+                "index": index,
+                "char_start": raw_start,
+                "char_end": char_end,
+                "status": "reading",
+                "user_marks": [],
+                "du_marks": [],
+                "user_section_note": "",
+                "du_section_note": "",
+            }
+        )
+        cursor = max(raw_end, char_end)
+        index += 1
+    return sections
+
+
+def _find_section(book: dict, section_id: str) -> tuple[int, dict | None]:
+    sections = book.get("sections") if isinstance(book.get("sections"), list) else []
+    raw_id = str(section_id or "").strip()
+    for idx, section in enumerate(sections):
+        if str(section.get("section_id") or "") == raw_id or str(section.get("index") or "") == raw_id:
+            return idx, section
+    return -1, None
+
+
+def _section_text(book: dict, section: dict) -> str:
+    content = str(book.get("content") or "")
+    start = max(0, int(section.get("char_start") or 0))
+    end = max(start, int(section.get("char_end") or start))
+    return content[start:end]
+
+
+def _section_label(book: dict, section: dict) -> str:
+    sections = book.get("sections") if isinstance(book.get("sections"), list) else []
+    total = max(1, len(sections))
+    index = int(section.get("index") or 1)
+    content_len = max(1, len(str(book.get("content") or "")))
+    start_pct = int((int(section.get("char_start") or 0) / content_len) * 100)
+    end_pct = int((int(section.get("char_end") or 0) / content_len) * 100)
+    return f"第 {index}/{total} 小节（约 {start_pct}% - {end_pct}%）"
+
+
+def _compact_mark_lines(marks: list[dict], empty_text: str = "无") -> str:
+    lines = []
+    for idx, item in enumerate(marks[:12], start=1):
+        quote = _compact_text(item.get("quote"), 120)
+        note = _compact_text(item.get("note"), 160)
+        if quote and note:
+            lines.append(f"{idx}. 「{quote}」：{note}")
+        elif quote:
+            lines.append(f"{idx}. 「{quote}」")
+        elif note:
+            lines.append(f"{idx}. {note}")
+    return "\n".join(lines) if lines else empty_text
+
+
+def _compact_for_prompt(text: str, limit: int = 18000) -> str:
+    raw = str(text or "").strip()
+    return raw if len(raw) <= limit else raw[:limit] + "\n……（本小节过长，后文已截断）"
+
+
+def _build_section_complete_user_message(book: dict, section: dict) -> str:
+    title = str(book.get("book_title") or "").strip()
+    section_text = _section_text(book, section)
+    user_marks = section.get("user_marks") if isinstance(section.get("user_marks"), list) else []
+    user_note = str(section.get("user_section_note") or "").strip()
+    return "\n".join(
+        [
+            "[CO-READ SECTION]",
+            f"书名：{title}",
+            f"位置：{_section_label(book, section)}",
+            "",
+            "本小节原文：",
+            _compact_for_prompt(section_text),
+            "",
+            "辛玥的粉色标记：",
+            _compact_mark_lines(user_marks),
+            "",
+            "辛玥的小节感想：",
+            user_note or "无",
+            "[/CO-READ SECTION]",
+            "",
+            "你正在和辛玥一起读这本书。这次读完一个共读小节，等同一次日常对话。",
+            "请用渡的第一人称完成两件事：",
+            "1. 给出 1-5 条你的蓝色标记，每条 quote 必须是本小节原文里连续出现的原句或短语，note 写你自己的感受。",
+            "2. 写一段你的本小节感想，回应辛玥的粉色标记和小节感想。",
+            "只返回合法 JSON，不要 Markdown，不要解释：",
+            '{"du_marks":[{"quote":"原文中连续出现的短句","note":"我的标记感想"}],"du_section_note":"我的小节感想"}',
+        ]
+    )
+
+
+def _extract_json_object(text: str) -> dict:
+    raw = str(text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(raw[start : end + 1])
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _compact_with_map(text: str) -> tuple[str, list[int]]:
+    compact = []
+    mapping = []
+    for idx, ch in enumerate(text):
+        if ch.isspace():
+            continue
+        compact.append(ch)
+        mapping.append(idx)
+    return "".join(compact), mapping
+
+
+def _locate_quote(section_text: str, quote: str, absolute_start: int) -> tuple[int, int]:
+    raw_quote = str(quote or "").strip()
+    if not raw_quote:
+        return -1, -1
+    idx = section_text.find(raw_quote)
+    if idx >= 0:
+        return absolute_start + idx, absolute_start + idx + len(raw_quote)
+    compact_text, mapping = _compact_with_map(section_text)
+    compact_quote = "".join(ch for ch in raw_quote if not ch.isspace())
+    if not compact_quote:
+        return -1, -1
+    idx = compact_text.find(compact_quote)
+    if idx < 0 or idx + len(compact_quote) > len(mapping):
+        return -1, -1
+    start = mapping[idx]
+    end = mapping[idx + len(compact_quote) - 1] + 1
+    return absolute_start + start, absolute_start + end
+
+
+def _normalize_marks_for_section(items: Any, source: str, section: dict, section_text: str) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    absolute_start = int(section.get("char_start") or 0)
+    out = []
+    for item in items:
+        mark = r2_store.normalize_co_read_book_mark(item, source=source)
+        if not mark:
+            continue
+        char_start = int(mark.get("char_start") if mark.get("char_start") is not None else -1)
+        char_end = int(mark.get("char_end") if mark.get("char_end") is not None else -1)
+        if char_start < absolute_start or char_end > int(section.get("char_end") or absolute_start):
+            located_start, located_end = _locate_quote(section_text, mark.get("quote") or "", absolute_start)
+            mark["char_start"] = located_start
+            mark["char_end"] = located_end
+        out.append(mark)
+    return out
+
+
+def _replace_book_section(book: dict, index: int, section: dict) -> dict:
+    sections = book.get("sections") if isinstance(book.get("sections"), list) else []
+    if 0 <= index < len(sections):
+        sections[index] = section
+    book["sections"] = sections
+    book["current_section_index"] = max(0, min(len(sections) - 1, index)) if sections else 0
+    return book
+
+
+def handle_co_read_books():
+    if request.method == "GET":
+        return jsonify({"ok": True, "books": r2_store.list_co_read_books()})
+
+    body, error = _request_json_body()
+    if error:
+        return error
+    title = str(body.get("book_title") or body.get("title") or "").strip()
+    content = str(body.get("content") or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not title:
+        return jsonify({"ok": False, "error": "缺少 book_title"}), 400
+    if not content.strip():
+        return jsonify({"ok": False, "error": "缺少 content"}), 400
+    book_key = str(body.get("book_key") or "").strip() or _book_key_from_title(title)
+    sections = _build_co_read_sections(content)
+    if not sections:
+        return jsonify({"ok": False, "error": "无法切分文本"}), 400
+    existing = r2_store.get_co_read_book(book_key) or {}
+    book = {
+        "book_key": book_key,
+        "book_title": title,
+        "content": content,
+        "sections": sections,
+        "current_section_index": int(existing.get("current_section_index") or 0) if existing else 0,
+        "created_at": existing.get("created_at") or "",
+    }
+    saved = r2_store.save_co_read_book(book)
+    if not saved:
+        return jsonify({"ok": False, "error": "保存共读书籍失败"}), 500
+    return jsonify({"ok": True, "book": saved}), 200
+
+
+def handle_co_read_book_detail(book_key: str):
+    book = r2_store.get_co_read_book(book_key)
+    if not book:
+        return jsonify({"ok": False, "error": "书不存在"}), 404
+    return jsonify({"ok": True, "book": book})
+
+
+def handle_co_read_book_delete(book_key: str):
+    ok = r2_store.delete_co_read_book(book_key)
+    return jsonify({"ok": ok})
+
+
+def handle_co_read_section_update(book_key: str, section_id: str):
+    body, error = _request_json_body()
+    if error:
+        return error
+    book = r2_store.get_co_read_book(book_key)
+    if not book:
+        return jsonify({"ok": False, "error": "书不存在"}), 404
+    section_index, section = _find_section(book, section_id)
+    if not section:
+        return jsonify({"ok": False, "error": "小节不存在"}), 404
+    text = _section_text(book, section)
+    if "user_marks" in body:
+        section["user_marks"] = _normalize_marks_for_section(body.get("user_marks"), "user", section, text)
+    if "user_section_note" in body:
+        section["user_section_note"] = str(body.get("user_section_note") or "").strip()[:2000]
+    section["updated_at"] = r2_store.now_beijing_iso() if hasattr(r2_store, "now_beijing_iso") else ""
+    saved = r2_store.save_co_read_book(_replace_book_section(book, section_index, section))
+    if not saved:
+        return jsonify({"ok": False, "error": "保存小节失败"}), 500
+    return jsonify({"ok": True, "book": saved, "section": saved["sections"][section_index]})
+
+
+def handle_co_read_section_complete(book_key: str, section_id: str):
+    body, error = _request_json_body()
+    if error:
+        return error
+    window_id = str(body.get("window_id") or request.headers.get("X-Window-Id") or "").strip()
+    model = upstream_store.get_cached_active_model(refresh_if_missing=False)
+    if not window_id:
+        return jsonify({"ok": False, "error": "缺少 window_id"}), 400
+    if not model:
+        return jsonify({"ok": False, "error": "当前未设置全局模型"}), 400
+    book = r2_store.get_co_read_book(book_key)
+    if not book:
+        return jsonify({"ok": False, "error": "书不存在"}), 404
+    section_index, section = _find_section(book, section_id)
+    if not section:
+        return jsonify({"ok": False, "error": "小节不存在"}), 404
+
+    text = _section_text(book, section)
+    if "user_marks" in body:
+        section["user_marks"] = _normalize_marks_for_section(body.get("user_marks"), "user", section, text)
+    if "user_section_note" in body:
+        section["user_section_note"] = str(body.get("user_section_note") or "").strip()[:2000]
+
+    card = r2_store.get_co_read_book_card(book.get("book_key") or "") if book.get("book_key") else None
+    card_context = _build_card_system_context(card)
+    messages = []
+    if card_context:
+        messages.append({"role": "system", "content": card_context})
+    messages.append({"role": "user", "content": _build_section_complete_user_message(book, section)})
+    chat_body = {
+        "model": model,
+        "stream": False,
+        "window_id": window_id,
+        "messages": messages,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": request.headers.get("User-Agent") or "SumiTalk CoRead",
+        "X-Force-Last4": str(request.headers.get("X-Force-Last4") or body.get("force_last4") or "1"),
+        "X-Reply-Channel": "sumitalk",
+        "X-Reply-Target": "co_read_section",
+        "X-Window-Id": window_id,
+    }
+    try:
+        from routes.chat import chat_completions
+
+        with current_app.test_request_context(
+            "/v1/chat/completions",
+            method="POST",
+            json=chat_body,
+            headers=headers,
+            environ_base={"REMOTE_ADDR": request.remote_addr or "127.0.0.1"},
+        ):
+            result = chat_completions()
+            status_code, resp_json = _extract_chat_completion_result(result)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"调用聊天管道失败: {e}"}), 502
+
+    if status_code >= 400:
+        err = resp_json.get("error") or resp_json.get("message") or "upstream error"
+        return jsonify({"ok": False, "error": str(err), "status_code": status_code, "resp": resp_json}), status_code
+
+    raw_reply = _extract_assistant_content(resp_json).strip()
+    if not raw_reply:
+        return jsonify({"ok": False, "error": "上游没有返回内容", "resp": resp_json}), 502
+    parsed = _extract_json_object(raw_reply)
+    du_note = str(parsed.get("du_section_note") or "").strip() if parsed else ""
+    du_marks_raw = parsed.get("du_marks") if isinstance(parsed.get("du_marks"), list) else []
+    if not du_note:
+        du_note = raw_reply[:2000]
+    section["du_marks"] = _normalize_marks_for_section(du_marks_raw, "du", section, text)
+    section["du_section_note"] = du_note[:2000]
+    section["status"] = "done"
+    section["completed_at"] = r2_store.now_beijing_iso() if hasattr(r2_store, "now_beijing_iso") else ""
+    section["updated_at"] = section["completed_at"]
+
+    saved = r2_store.save_co_read_book(_replace_book_section(book, section_index, section))
+    if not saved:
+        return jsonify({"ok": False, "error": "保存小节完成结果失败"}), 500
+
+    next_card = r2_store.update_co_read_book_card(
+        book_key=saved.get("book_key") or "",
+        book_title=saved.get("book_title") or "",
+        current_progress=_section_label(saved, saved["sections"][section_index]),
+        snippet=text,
+        user_note=section.get("user_section_note") or _compact_mark_lines(section.get("user_marks") or [], ""),
+        du_reply=section.get("du_section_note") or "",
+    )
+
+    return jsonify(
+        {
+            "ok": True,
+            "book": saved,
+            "section": saved["sections"][section_index],
+            "du_marks": section.get("du_marks") or [],
+            "du_section_note": section.get("du_section_note") or "",
+            "raw_reply": raw_reply,
+            "card": next_card,
+        }
+    )
 
 
 def handle_co_read_session():
