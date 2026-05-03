@@ -582,6 +582,49 @@ function stripTxtExtension(filename: string): string {
   return String(filename || "未命名").replace(/\.[^.]+$/, "").trim() || "未命名";
 }
 
+function sanitizeDecodedTxt(text: string): string {
+  return String(text || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/\u0000/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
+function scoreDecodedTxt(text: string): number {
+  const value = String(text || "");
+  const replacement = (value.match(/\uFFFD/g) || []).length;
+  const nul = (value.match(/\u0000/g) || []).length;
+  const controls = Array.from(value).filter((ch) => {
+    const code = ch.charCodeAt(0);
+    return code < 32 && ch !== "\n" && ch !== "\r" && ch !== "\t";
+  }).length;
+  const mojibake = (value.match(/锟斤拷|ï¿½|Ã.|Â./g) || []).length;
+  return replacement * 1000 + nul * 200 + controls * 30 + mojibake * 80;
+}
+
+function decodeCoReadTxtBytes(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const startsWith = (...values: number[]) => values.every((value, index) => bytes[index] === value);
+  const decode = (label: string, fatal = false) => new TextDecoder(label, { fatal }).decode(bytes);
+  if (startsWith(0xef, 0xbb, 0xbf)) return sanitizeDecodedTxt(decode("utf-8"));
+  if (startsWith(0xff, 0xfe)) return sanitizeDecodedTxt(decode("utf-16le"));
+  if (startsWith(0xfe, 0xff)) return sanitizeDecodedTxt(decode("utf-16be"));
+  try {
+    const strictUtf8 = decode("utf-8", true);
+    if (scoreDecodedTxt(strictUtf8) === 0) return sanitizeDecodedTxt(strictUtf8);
+  } catch {}
+
+  const candidates: Array<{ label: string; text: string; score: number }> = [];
+  for (const label of ["utf-8", "gb18030", "gbk", "utf-16le", "utf-16be"]) {
+    try {
+      const text = decode(label);
+      candidates.push({ label, text, score: scoreDecodedTxt(text) });
+    } catch {}
+  }
+  candidates.sort((a, b) => a.score - b.score);
+  return sanitizeDecodedTxt((candidates[0]?.text || ""));
+}
+
 function formatCoReadDate(value: string): string {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return "刚刚";
@@ -1942,7 +1985,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     setImporting(true);
     setImportStatus("");
     try {
-      const content = (await file.text()).replace(/\u0000/g, "").trim();
+      const content = decodeCoReadTxtBytes(await file.arrayBuffer()).trim();
       if (!content) throw new Error("文件里没有可读内容");
       const bookTitle = stripTxtExtension(file.name);
       const useChunkUpload = new Blob([content]).size > CO_READ_DIRECT_UPLOAD_MAX_BYTES;
