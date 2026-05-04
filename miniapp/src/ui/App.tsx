@@ -2022,6 +2022,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [loadingBooks, setLoadingBooks] = useState(true);
   const [loadingBookKey, setLoadingBookKey] = useState("");
+  const [refreshingBook, setRefreshingBook] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState("");
   const [savingMark, setSavingMark] = useState(false);
@@ -2173,6 +2174,35 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
       toast(openedFromCache ? `已用本地缓存打开，最新状态同步失败：${e?.message || e}` : `打开失败：${e?.message || e}`);
     } finally {
       setLoadingBookKey("");
+    }
+  }
+
+  async function refreshActiveBook() {
+    if (!activeBook || refreshingBook) return;
+    const currentSectionId = activeSection?.section_id || "";
+    const currentSectionIndex = activeSection?.index || 0;
+    setRefreshingBook(true);
+    try {
+      const data = await apiJson<CoReadBookResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(activeBook.book_key)}`);
+      const book = normalizeCoReadBook(data.book);
+      if (!data?.ok || !book) throw new Error(data?.error || "刷新失败");
+      let nextBook = book;
+      const keepIndex = book.sections.findIndex((section) => (
+        (currentSectionId && section.section_id === currentSectionId)
+        || (currentSectionIndex > 0 && section.index === currentSectionIndex)
+      ));
+      if (keepIndex >= 0) {
+        nextBook = { ...book, current_section_index: keepIndex };
+      }
+      setActiveBook(nextBook);
+      upsertBookSummary(nextBook);
+      writeCachedCoReadBook(nextBook);
+      setActiveMarkPopup([]);
+      toast("已刷新");
+    } catch (e: any) {
+      toast(`刷新失败：${e?.message || e}`);
+    } finally {
+      setRefreshingBook(false);
     }
   }
 
@@ -2686,6 +2716,16 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
                 <button type="button" className={`rounded-full px-3 py-1.5 text-[13px] ${theme.muted}`} onClick={() => setSettingsOpen(false)}>完成</button>
               </div>
               <div className="space-y-6">
+                <section>
+                  <button
+                    type="button"
+                    className={`h-11 w-full rounded-full border text-[13px] font-semibold disabled:opacity-40 ${theme.panel}`}
+                    onClick={() => void refreshActiveBook()}
+                    disabled={refreshingBook}
+                  >
+                    {refreshingBook ? "刷新中..." : "刷新当前书"}
+                  </button>
+                </section>
                 <section>
                   <div className={`mb-3 font-mono text-[11px] uppercase tracking-[0.12em] ${theme.muted}`}>typography</div>
                   <div className="grid grid-cols-2 gap-3">
