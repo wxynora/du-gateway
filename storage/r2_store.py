@@ -24,9 +24,8 @@ from config import (
 
 # 实时层：渡的回忆，每 4 轮更新
 R2_KEY_GLOBAL_SUMMARY = "global/summary.txt"
-# 实时层总结的隐藏时间锚点：只给总结模型防止时间错乱，不注入给渡
-R2_KEY_GLOBAL_SUMMARY_META = "global/summary_meta.json"
-SUMMARY_META_MAX_ITEMS = 40
+# 实时层：固定 4 轮小段队列，网关负责滚动/分区/淘汰
+R2_KEY_GLOBAL_SUMMARY_CHUNKS = "global/summary_chunks.json"
 # 动态层：重要记忆，7 天有效，权重机制，融合/褪色/保鲜
 R2_KEY_DYNAMIC_MEMORY = "dynamic_memory/current.json"
 # 核心缓存层：动态层里「更重要」的，待每周筛选进长期层
@@ -586,116 +585,38 @@ def save_summary(window_id: str, summary: str) -> bool:
             return False
 
 
-def get_summary_meta(window_id: str = "") -> dict:
-    """读取实时层总结的隐藏时间锚点。window_id 保留参数兼容，未使用。"""
+def get_summary_chunks(window_id: str = "") -> dict:
+    """读取全局实时层小段队列。window_id 保留参数兼容，未使用。"""
     client = _s3_client()
     if not client:
         return {}
-    data = _read_json(client, R2_KEY_GLOBAL_SUMMARY_META)
+    data = _read_json(client, R2_KEY_GLOBAL_SUMMARY_CHUNKS)
     if not isinstance(data, dict):
         return {}
-    items = data.get("items")
-    if not isinstance(items, list):
-        data["items"] = []
+    chunks = data.get("chunks")
+    if not isinstance(chunks, list):
+        data["chunks"] = []
     return data
 
 
-def _summary_anchor_sort_key(item: dict) -> tuple[int, str]:
-    try:
-        end_idx = int(item.get("round_end") or item.get("roundEnd") or 0)
-    except Exception:
-        end_idx = 0
-    return end_idx, str(item.get("anchor_at") or item.get("anchorAt") or "")
-
-
-def append_summary_anchor(window_id: str, recent_rounds: list) -> Optional[dict]:
-    """
-    为一次 4 轮总结记录不可变时间锚点。
-    这份元数据只供后续 DS 总结判断时间先后，不参与近期记忆注入。
-    """
-    rounds = [r for r in (recent_rounds or []) if isinstance(r, dict)]
-    indices: list[int] = []
-    for r in rounds:
-        idx = r.get("index")
-        if isinstance(idx, int):
-            indices.append(idx)
-            continue
-        try:
-            indices.append(int(idx))
-        except Exception:
-            pass
-    if not rounds or not indices:
-        return None
-
-    def _round_idx(r: dict) -> int:
-        try:
-            return int(r.get("index") or 0)
-        except Exception:
-            return 0
-
-    rounds_sorted = sorted(rounds, key=_round_idx)
-    start_at = str((rounds_sorted[0].get("timestamp") or "")).strip()
-    end_at = str((rounds_sorted[-1].get("timestamp") or "")).strip()
-    anchor_at = end_at or start_at or now_beijing_iso()
-    round_start = min(indices)
-    round_end = max(indices)
-    wid = normalize_window_id(window_id)
-    anchor_id = f"{wid}:{round_start}-{round_end}"
-    now_ts = now_beijing_iso()
-    new_item = {
-        "id": anchor_id,
-        "window_id": wid,
-        "round_start": round_start,
-        "round_end": round_end,
-        "start_at": start_at,
-        "end_at": end_at,
-        "anchor_at": anchor_at,
-        "created_at": now_ts,
-    }
-
+def save_summary_chunks(window_id: str, chunks_state: dict) -> bool:
+    """保存全局实时层小段队列。window_id 保留参数兼容，未使用。"""
     client = _s3_client()
     if not client:
-        return None
+        return False
+    payload = dict(chunks_state or {})
+    chunks = payload.get("chunks")
+    if not isinstance(chunks, list):
+        payload["chunks"] = []
+    payload["version"] = 1
+    payload["updated_at"] = now_beijing_iso()
     with _global_write_lock:
         try:
-            meta = _read_json(client, R2_KEY_GLOBAL_SUMMARY_META)
-            if not isinstance(meta, dict):
-                meta = {}
-            items = meta.get("items")
-            if not isinstance(items, list):
-                items = []
-
-            existing_item = None
-            deduped: list[dict] = []
-            seen: set[str] = set()
-            for raw in items:
-                if not isinstance(raw, dict):
-                    continue
-                item_id = str(raw.get("id") or "").strip()
-                if item_id == anchor_id:
-                    existing_item = raw
-                if item_id and item_id in seen:
-                    continue
-                if item_id:
-                    seen.add(item_id)
-                deduped.append(raw)
-
-            if existing_item is None:
-                deduped.append(new_item)
-                saved_item = new_item
-            else:
-                saved_item = existing_item
-
-            deduped.sort(key=_summary_anchor_sort_key)
-            deduped = deduped[-SUMMARY_META_MAX_ITEMS:]
-            meta["version"] = 1
-            meta["updated_at"] = now_ts
-            meta["items"] = deduped
-            _write_json(client, R2_KEY_GLOBAL_SUMMARY_META, meta)
-            return saved_item
+            _write_json(client, R2_KEY_GLOBAL_SUMMARY_CHUNKS, payload)
+            return True
         except Exception as e:
-            logger.error("append_summary_anchor 失败 window_id=%s error=%s", window_id, e, exc_info=True)
-            return None
+            logger.error("save_summary_chunks 失败 error=%s", e, exc_info=True)
+            return False
 
 
 # ---------- sense/latest.json（设备感知：电量/位置等） ----------

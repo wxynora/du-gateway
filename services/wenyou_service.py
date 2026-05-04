@@ -1057,14 +1057,16 @@ def _append_go_round_to_tg_window(user_id: int, user_blob: str, gm_text: str) ->
         logger.info("文游实时层总结已调度 window_id=%s round_index=%s", window_id, round_index)
         recent = r2_store.get_conversation_rounds(window_id, last_n=4)
         if recent:
-            current = r2_store.get_summary(window_id) or ""
-
             def _summarize():
-                from services.deepseek_summary import fetch_new_summary
+                from services.deepseek_summary import fetch_new_summary_update
 
-                new_summary = fetch_new_summary(current, recent)
-                if new_summary:
-                    r2_store.save_summary(window_id, new_summary)
+                current = r2_store.get_summary(window_id) or ""
+                chunks_state = r2_store.get_summary_chunks(window_id)
+                new_summary, new_chunks = fetch_new_summary_update(current, recent, chunks_state)
+                if new_summary and new_chunks:
+                    if r2_store.save_summary(window_id, new_summary):
+                        if not r2_store.save_summary_chunks(window_id, new_chunks):
+                            logger.warning("文游保存实时层小段队列失败 window_id=%s", window_id)
                 else:
                     logger.warning("文游触发总结但 DeepSeek 未返回 window_id=%s", window_id)
 

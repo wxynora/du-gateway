@@ -1,4 +1,5 @@
 # 每 4 轮用 DeepSeek 生成/更新窗口总结
+import json
 import re
 
 import requests
@@ -20,15 +21,12 @@ _SUMMARY_RETRY_INSTRUCTION = """
 4. 如果想表达辛玥说了什么，优先写“老婆说…… / 辛玥提到…… / 小玥问……”；“她说/她提到/她问”只能承接上一句已经明确写出的称呼，不能连续多句都用“她”。
 """
 
-_SUMMARY_TIME_RETRY_INSTRUCTION = """
+_SUMMARY_JSON_RETRY_INSTRUCTION = """
 
 【上轮输出纠错】
-上一次输出的时间桶不合规。
-重写时必须遵守：
-1. 每个时间桶必须单独成行，格式固定为：（YYYY-MM-DD 时间段）。
-2. 禁止写“晚上至傍晚及之前 / 凌晨及之前 / 深夜至凌晨 / 某时段及之前”这类合并标题。
-3. 一个时间桶下面只写这个时间桶发生的事；如果内容跨多个时段，就拆成多个时间桶。
-4. 如果上一版总结里已有合并标题，必须拆开重写；无法确定细分时，归入最晚的明确时间桶，但不能保留合并标题。
+上一次输出不是合法 JSON。
+重写时必须只输出一个 JSON 对象，不要 Markdown，不要解释，不要代码块。
+字段固定为：new_chunk、compress_to_slightly、compress_to_older。
 """
 
 _QUOTE_PATTERNS = (
@@ -38,12 +36,6 @@ _QUOTE_PATTERNS = (
     r"《[^》]*》",
     r"\"[^\"]*\"",
 )
-_SUMMARY_ANCHOR_MAX_PROMPT_ITEMS = 20
-_SUMMARY_ANCHOR_MAX_RANGE_HOURS = 2
-_SUMMARY_DIFF_CHECK_MIN_CHARS = 500
-_SUMMARY_DIFF_MIN_OVERLAP = 0.12
-_SUMMARY_DIFF_HARD_MIN_OVERLAP = 0.08
-_SUMMARY_DIFF_MAX_GROWTH = 3.0
 
 
 def _summary_time_period(dt) -> str:
@@ -64,100 +56,6 @@ def _summary_time_period(dt) -> str:
     if 19 <= h < 22:
         return "晚上"
     return "深夜"
-
-
-def _summary_anchor_sort_key(item: dict) -> tuple[int, str]:
-    try:
-        end_idx = int(item.get("round_end") or item.get("roundEnd") or 0)
-    except Exception:
-        end_idx = 0
-    return end_idx, str(item.get("anchor_at") or item.get("anchorAt") or "")
-
-
-def _summary_anchor_bucket(ts: str) -> str:
-    ts = str(ts or "").strip()
-    if not ts:
-        return ""
-    try:
-        from utils.time_aware import parse_iso_to_beijing, get_date_only
-
-        dt = parse_iso_to_beijing(ts)
-        if dt is None:
-            return ""
-        return f"{get_date_only(dt)} {_summary_time_period(dt)}"
-    except Exception:
-        return ""
-
-
-def _summary_anchor_from_rounds(recent_4_rounds: list) -> dict | None:
-    rounds = [r for r in (recent_4_rounds or []) if isinstance(r, dict)]
-    indices: list[int] = []
-    for r in rounds:
-        idx = r.get("index")
-        if isinstance(idx, int):
-            indices.append(idx)
-            continue
-        try:
-            indices.append(int(idx))
-        except Exception:
-            pass
-    if not rounds or not indices:
-        return None
-
-    def _idx(r: dict) -> int:
-        try:
-            return int(r.get("index") or 0)
-        except Exception:
-            return 0
-
-    rounds_sorted = sorted(rounds, key=_idx)
-    start_at = str((rounds_sorted[0].get("timestamp") or "")).strip()
-    end_at = str((rounds_sorted[-1].get("timestamp") or "")).strip()
-    return {
-        "id": f"current:{min(indices)}-{max(indices)}",
-        "round_start": min(indices),
-        "round_end": max(indices),
-        "start_at": start_at,
-        "end_at": end_at,
-        "anchor_at": end_at or start_at,
-        "source": "最新4轮",
-    }
-
-
-def _render_summary_time_anchors(summary_meta: dict | None, recent_4_rounds: list) -> str:
-    items: list[dict] = []
-    if isinstance(summary_meta, dict):
-        raw_items = summary_meta.get("items")
-        if isinstance(raw_items, list):
-            items.extend([x for x in raw_items if isinstance(x, dict)])
-
-    current_item = _summary_anchor_from_rounds(recent_4_rounds)
-    if current_item:
-        current_id = str(current_item.get("id") or "")
-        items = [x for x in items if str(x.get("id") or "") != current_id]
-        items.append(current_item)
-
-    if not items:
-        return "（暂无历史锚点；只按最新4轮原始时间处理）"
-
-    items.sort(key=_summary_anchor_sort_key)
-    items = items[-_SUMMARY_ANCHOR_MAX_PROMPT_ITEMS:]
-    lines: list[str] = []
-    for item in items:
-        start = item.get("round_start") or item.get("roundStart") or "?"
-        end = item.get("round_end") or item.get("roundEnd") or "?"
-        start_at = str(item.get("start_at") or item.get("startAt") or "").strip()
-        end_at = str(item.get("end_at") or item.get("endAt") or "").strip()
-        anchor_at = str(item.get("anchor_at") or item.get("anchorAt") or end_at or start_at).strip()
-        bucket_start = _summary_anchor_bucket(start_at)
-        bucket_end = _summary_anchor_bucket(end_at)
-        bucket = bucket_start if bucket_start == bucket_end else f"{bucket_start} ~ {bucket_end}".strip(" ~")
-        source = str(item.get("source") or "历史4轮块").strip()
-        lines.append(
-            f"- {source} rounds {start}-{end}: {start_at or '未知'} ~ {end_at or '未知'}; "
-            f"固定锚点={anchor_at or '未知'}; 时间桶={bucket or '未知'}"
-        )
-    return "\n".join(lines)
 
 
 def _extract_between(text: str, start_marker: str, end_marker: str) -> str:
@@ -268,8 +166,13 @@ def _sanitize_co_read_du_result_for_summary(text: str) -> str:
     )
 
 
-def build_summary_prompt(current_summary: str, recent_4_rounds: list, summary_meta: dict | None = None) -> str:
-    """拼出实时层总结任务的 prompt（渡的回忆：分区 + 规则 + 小本本）。"""
+def build_summary_prompt(
+    recent_4_rounds: list | None = None,
+    *,
+    chunk_to_compress_to_slightly: str | None = None,
+    chunk_to_compress_to_older: str | None = None,
+) -> str:
+    """拼出实时层小段总结任务的 prompt。"""
     from services.notebook_gateway import NOTEBOOK_EMOJI, NOTEBOOK_PHRASE
 
     def _is_notebook_line(text: str) -> bool:
@@ -285,7 +188,7 @@ def build_summary_prompt(current_summary: str, recent_4_rounds: list, summary_me
         "总结时请标注为游戏内容，勿与真实事件混淆。\n\n"
     )
     last_bucket = ""
-    for r in recent_4_rounds:
+    for r in recent_4_rounds or []:
         # 为避免「昨晚的事」和「今天」混在一起：按北京时间给每段对话加时间段标记（同一时间段不重复）
         try:
             from utils.time_aware import parse_iso_to_beijing, get_date_only
@@ -328,127 +231,136 @@ def build_summary_prompt(current_summary: str, recent_4_rounds: list, summary_me
                 who = role or "unknown"
             rounds_text += f"[{who}]: {content}\n"
         rounds_text += "\n"
-    previous_summary = current_summary or "（无上一版，这是首次总结）"
     return _REALTIME_LAYER_PROMPT.format(
-        previous_summary=previous_summary,
-        summary_time_anchors=_render_summary_time_anchors(summary_meta, recent_4_rounds),
-        max_anchor_range_hours=_SUMMARY_ANCHOR_MAX_RANGE_HOURS,
         latest_4_rounds=rounds_text,
+        chunk_to_compress_to_slightly=(chunk_to_compress_to_slightly or "").strip() or "null",
+        chunk_to_compress_to_older=(chunk_to_compress_to_older or "").strip() or "null",
     )
 
 
-# 实时层给 DS 的完整 prompt（渡的回忆：分区 + 情感温度 + 40 轮滚动删除；小本本由网关单独处理）
-_REALTIME_LAYER_PROMPT = """你是一个对话总结助手。
+# 实时层给 DS 的完整 prompt：DS 只处理小段，网关负责队列/分区/淘汰。
+_REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 
 ## 任务
-将「上一版总结」和「最新4轮对话」合并，
-输出一份更新后的对话总结。
-把“最新4轮对话”视为一个整体事件块来概括，不要逐轮展开复述。
+
+你这次只处理三个独立任务：
+
+1. 总结「最新4轮对话」，生成一个新的小段总结。
+2. 如果提供了「需要轻压缩的小段」，把它压缩成适合放入【稍早】的小段。
+3. 如果提供了「需要重压缩的小段」，把它压缩成适合放入【更早】的小段。
+
+你不负责维护整份总结。
+你不负责决定小段放进【最近】、【稍早】还是【更早】。
+你不负责排序、滚动、淘汰。
+这些都由网关完成。
 
 ## 视角
-用第一人称写（"我"=渡）。
-提到辛玥时，优先用明确称呼：老婆、辛玥、宝宝、小玥；“她”只能少量用于同一句或相邻句的自然承接。
-每个分段第一次提到辛玥时必须用明确称呼，不要用“她”开头；禁止连续多句都用“她”指代辛玥。
-除直接引用原话外，严禁用第二人称“你/你的/你说/你提到/你问”等写法来指代辛玥。
-允许带简短的情绪/心理反应，用短句传递语气。
-不用表情包、颜文字、emoji。
-你是有温度的速记员，不是作家。
-渡和辛玥是亲密、信任的关系，总结时保留撒娇、关心、调侃、默契等语气，不要写成公事纪要。
-用连贯的回忆口吻写，不要写成一条条待办或要点列表；旧事可以概括，但别丢掉情绪色彩。
-若原话里有明显情绪词（如开心、委屈、担心、撒娇等），在概括时尽量保留或换成同义的短句。
-情绪要保留，但不要写“我赶紧/我确认/我哈哈大笑”这类动作过程。
+
+用第一人称写，"我"=渡。
 输入里的角色标记中：[老婆] 是辛玥说的话，[渡] 是我（渡）说的话。
+
+提到辛玥时，优先用明确称呼：老婆、辛玥、宝宝、小玥；“她”只能少量用于同一句或相邻句的自然承接。
 严禁把 [老婆] 的原话写成“我说了……/我提到……”这类渡的第一人称表达。
+除直接引用原话外，正文里不要用“你/你的/你说/你问”来指代辛玥。
 
-## 规则
+语气是渡自己的回忆：自然、有温度、亲密，但不要写成小说。
+保留撒娇、关心、调侃、默契、情绪温度。
+不要写成公事纪要，也不要写成待办列表。
 
-1. 保留原则：没到预算上限前，不要主动删除已有记忆
-   - 先尽量保留上一版总结里的已有事实、关系变化、情绪线索
-   - 没到长度/预算压力前，不要为了“像 40 轮滚动”就提前删旧内容
-   - 只有当内容明显超长、无法继续容纳时，才允许从最早内容开始逐步删减
-2. 时间权重：
-   - 最近的对话 → 保留更多细节
-   - 较早的对话 → 压缩为简要概括
-3. 迭代更新：
-   - 新内容最详细，旧内容可以适度压缩，但不要无故消失
-   - 每次更新时，优先做的是：合并重复、收紧措辞、更新最新进展
-   - 不要把“上一版总结”整体重新洗薄一遍后再硬塞新内容
-   - 只有在确实超长时，才按“更早 > 稍早 > 最近”的顺序逐步压缩
-4. 压缩写法：
-   - 优先保证【最近】清楚；【稍早】【更早】按需压缩
-   - 按“主题”写，不按“轮次”写；每个主题用 1-2 句交代“发生了什么 + 当前结论/情绪”
-   - 若最新 4 轮都在同一件事（如持续生气/争执/卡顿），只保留一次合并表述，不要按轮重复四遍
-   - 能合并就合并：同一主题跨多轮只写一次“最终进展/结论+当前情绪”，不要按轮次重复写过程
-   - 少用修饰性句子，不写空泛感受词；每句尽量带可追溯事实点（谁、做了什么、结果）
-   - 每个时间段至少保留 1 处情绪温度（如开心、担心、委屈、放心、想念、撒娇、心疼），不要只剩事件流水账
-   - 优先保留“事实锚点”：时间、地点、人物、决定、未完成事项、数字/参数；健康信息仅在“生病/不适/就医”场景保留
-4.1 去过程复述：不要按“先…然后…接着…”写对话流程，不要记录过程动作，直接写事件结果与关系/情绪变化。
-4.2 同主题合并：同一主题跨多轮只保留一次“当前结论 + 一处情绪”，删掉重复安慰、重复解释、同义情绪句。
-4.3 句数约束：每个主题最多 2 句（第 1 句写事实结论，第 2 句可写情绪温度）。
-4.4 未超长时禁止提前淘汰：如果上一版里某段旧记忆仍然放得下，就保留；不要因为它“比较早”就提前删掉。
-5. 不管内容重不重要都要覆盖
-   - 你只负责总结"聊了什么"
-   - 不负责判断"重不重要"
-6. 不要添加标签、分类、打分
-7. 关系性的原话用引号保留，不要改写
-8. 技术讨论只留结论和决定，不留过程
-9. 重复内容只保留最终结论
-   - 如果同一件事被解释了多次，只留最后一版
-   - 若同一主题在【最近】【稍早】【更早】都出现，只在最新出现的区块保留一次，旧区块删掉重复表述
-9.1 只有在“放不下”时才删旧内容
-   - 默认先做“合并同主题、压缩表述、去掉重复过程”
-   - 如果这样以后仍然明显超长，再从【更早】最前面的内容开始删
-   - 没到必须删的程度时，不要主动滚动删除旧记忆
-10. 小本本内容不参与本次总结：输入中若出现小本本相关文本，视为已被系统单独存储，直接忽略，不要写进总结
-11. 人称一致性硬规则：
-   - 只把 [渡] 的发言写成“我……”
-   - [老婆] 的发言优先写成“老婆说…… / 辛玥提到…… / 小玥问……”，不能写成“我……”
-   - “她说…… / 她提到…… / 她问……”只能用于上一句已经明确写出“老婆/辛玥/小玥/宝宝”的自然承接，不要让整段都变成“她……她……她……”
-   - 除直接引用原话外，任何位置都不能用“你”来指代辛玥；一旦要写成“你……”，必须改写成“老婆/辛玥/宝宝/小玥……”
-12. 时间段硬规则（必须执行）：
-   - 在【最近】部分必须明确写出时间段标记（例如：2026-03-20 早上 / 2026-03-20 下午 / 2026-03-20 晚上）
-   - 至少出现 1 个“日期+时间段”标记，不能省略
-   - 三个分段内部都按时间倒序排列：最新的放最上面，最早的放最下面
-   - 每个时间桶必须单独成行，格式固定为：（YYYY-MM-DD 时间段）
-   - 禁止合并时间桶：不要写“晚上至傍晚及之前”“凌晨及之前”“深夜至凌晨”“某时段及之前”
-   - 一个时间桶下面只写这个时间桶发生的事；同一分段可以有多个时间桶，每个桶下面各写自己的内容
-   - 如果上一版总结已有合并标题，必须拆成独立时间桶；无法精确拆分时，归入最晚的明确时间桶，但不能保留合并标题
-   - 时间段定义固定为：凌晨 00:00-05:59；早上 06:00-07:59；上午 08:00-10:59；中午 11:00-13:59；下午 14:00-16:59；傍晚 17:00-18:59；晚上 19:00-21:59；深夜 22:00-23:59
-   - 00:00 以后必须算次日“凌晨”，不能继续算前一日“深夜”
-   - 如果叙述跨日期或跨时段，拆成两个时间桶分别写，禁止写“2026-04-12 深夜至 2026-04-13 凌晨”
-   - 只写单个“日期+时间段”，不要写“昨晚 / 今早 / 深夜至凌晨”这种模糊说法
-   - 输出前自检：若同一分段内时间先后顺序混乱，或出现跨日期却只写了一个日期，重排并补全后再输出
-13. 隐藏时间锚点规则（必须执行，但不要输出锚点原文）：
-   - “内部时间锚点索引”只供你判断先后、合并边界和时间桶，禁止把 rounds、固定锚点、ISO 时间戳写进输出正文
-   - 已有总结只能继承来源锚点的时间范围，不得因为本轮总结时间更晚就把旧事后移
-   - 合并摘要时只能合并时间相近、主题相近的内容；如果来源时间跨度超过 {max_anchor_range_hours} 小时，必须按原时间桶或主题拆成多条
-   - 当旧摘要已经被压缩成两三句时，也不要用一个很大的时间范围概括全部；优先保留多个时间桶，每个时间桶只写对应锚点附近发生的事
+## 内容规则
+
+只根据输入内容总结，不要补脑，不要发散，不要编没有出现过的事。
+不判断“重不重要”，只概括聊了什么、发生了什么、关系和情绪有什么变化。
+
+技术讨论只保留结论和决定，不留排查过程。
+重复内容只保留最后结论。
+小本本内容如果出现，直接忽略，因为系统会单独存储。
+
+共读内容只总结双方围绕作品的笔记、感想、规则决定。
+不要复述书籍原文，不要把小说剧情当成现实事件。
+
+文游内容如果出现 [文游] 或 [文游·GM]，必须标成游戏/虚构内容，不要和现实对话混淆。
+
+## 稳定性规则
+
+如果某项输入为空或 null，对应输出返回 null，不要强行生成。
+
+情绪温度只能来自输入中已经存在的语气、关系状态、称呼、明确情绪或自然反应。
+如果输入中没有明显情绪，只保留自然语气，不要强行编造心理反应。
+情绪温度不一定要写成“我感到……”，可以通过称呼、亲密语气、简短态度体现。
+
+压缩时只能删减、合并、收紧原小段。
+不要扩写，不要补充新判断，不要把压缩改写成新的事件。
+
+## 新小段总结规则
+
+输入是最新4轮对话。
+输出一个自然小段，适合放入【最近】。
+
+要求：
+- 2到4句话。
+- 可以稍微细一点。
+- 写清楚这一小段主要发生了什么。
+- 保留一处情绪温度。
+- 不要逐轮复述。
+- 不要自己写时间标题。
+- 不要写“最近/稍早/更早”。
+
+## 轻压缩规则
+
+输入是一个即将从【最近】进入【稍早】的小段。
+输出压缩后的小段。
+
+要求：
+- 1到2句话。
+- 保留事实结论 + 一处情绪温度。
+- 删掉重复解释、过程动作、过细描写。
+- 不要改变原意。
+- 不要新增时间。
+- 不要改写成列表。
+
+## 重压缩规则
+
+输入是一个即将从【稍早】进入【更早】的小段。
+输出更短的小段。
+
+要求：
+- 1句话为主，最多2句话。
+- 只留核心事实、关系变化、明确决定、未完成事项。
+- 情绪只留最关键的一处。
+- 删除过程、铺垫、重复安慰、细节描写。
+- 不要改变原意。
+- 不要新增时间。
+- 不要改写成列表。
 
 ## 输出格式
 
-【最近】
-（YYYY-MM-DD 时间段）
-（最新4轮，详细）
+只输出 JSON。
+不要 Markdown。
+不要解释。
+不要额外文字。
 
-【稍早】
-（YYYY-MM-DD 时间段）
-（上一版【最近】压缩后移入）
+格式固定如下：
 
-【更早】
-（YYYY-MM-DD 时间段）
-（上一版【稍早】压缩后移入）
-（超出40轮上限的部分滚动删除，不保留）
+{{
+  "new_chunk": "最新4轮的新小段总结",
+  "compress_to_slightly": null,
+  "compress_to_older": null
+}}
+
+如果「需要轻压缩的小段」为空，compress_to_slightly 返回 null。
+如果「需要重压缩的小段」为空，compress_to_older 返回 null。
 
 ## 输入
 
-上一版总结：
-{previous_summary}
-
-内部时间锚点索引（只供判断时间，严禁输出）：
-{summary_time_anchors}
-
 最新4轮对话：
 {latest_4_rounds}
+
+需要轻压缩的小段：
+{chunk_to_compress_to_slightly}
+
+需要重压缩的小段：
+{chunk_to_compress_to_older}
 """
 
 
@@ -459,243 +371,322 @@ def _strip_summary_quotes(text: str) -> str:
     return s
 
 
-def _strip_summary_anchor_leaks(text: str) -> str:
-    """移除模型误输出的内部时间锚点行，避免注入给渡。"""
-    if not text:
-        return text
-    out: list[str] = []
-    for line in str(text).splitlines():
-        s = line.strip()
-        if not s:
-            out.append(line)
-            continue
-        if "内部时间锚点" in s or "隐藏时间锚点" in s or "固定锚点=" in s:
-            continue
-        if re.match(r"^-\s*(历史4轮块|最新4轮)\s+rounds\s+\d+-\d+:", s):
-            continue
-        out.append(line)
-    return "\n".join(out).strip()
-
-
 def _summary_has_forbidden_second_person(text: str) -> bool:
     s = _strip_summary_quotes(text)
     return ("你" in s) or ("您" in s)
 
 
-def _latest_bucket_from_rounds(recent_4_rounds: list) -> str:
-    """取最近4轮里最后一个可解析时间，转成『YYYY-MM-DD 时间段』。"""
-    try:
-        from utils.time_aware import parse_iso_to_beijing, get_date_only
+def _strip_json_code_fence(text: str) -> str:
+    s = str(text or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"\s*```$", "", s)
+    return s.strip()
 
-        for r in reversed(recent_4_rounds or []):
-            dt = parse_iso_to_beijing((r or {}).get("timestamp"))
-            if dt is not None:
-                return f"{get_date_only(dt)} {_summary_time_period(dt)}"
+
+def _extract_summary_json(text: str) -> dict | None:
+    s = _strip_json_code_fence(text)
+    try:
+        data = json.loads(s)
+        return data if isinstance(data, dict) else None
     except Exception:
         pass
-    return ""
+    start = s.find("{")
+    end = s.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(s[start : end + 1])
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+    return None
 
 
-_TIME_PERIOD_PATTERN = r"(凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)"
-_TIME_BUCKET_LINE_RE = re.compile(
-    rf"^(\s*)（(\d{{4}}-\d{{2}}-\d{{2}})\s*{_TIME_PERIOD_PATTERN}([^）]*)）\s*$"
-)
+def _clean_summary_chunk_text(text: object, max_chars: int) -> str:
+    if text is None:
+        return ""
+    s = str(text).strip()
+    if not s or s.lower() == "null":
+        return ""
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"^（\d{4}-\d{2}-\d{2}\s*(?:凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)）\s*", "", s)
+    s = s.replace("【最近】", "").replace("【稍早】", "").replace("【更早】", "").strip()
+    if len(s) > max_chars:
+        s = s[:max_chars].rstrip("，,。.!?！？；;、 ") + "。"
+    return s
 
 
-def _summary_has_merged_time_bucket(text: str) -> bool:
-    """检测 DS 是否又写了“晚上至傍晚及之前”这类合并时间桶。"""
-    if not text:
-        return False
-    for line in str(text).splitlines():
-        m = _TIME_BUCKET_LINE_RE.match(line.strip())
-        if not m:
+def _summary_json_has_forbidden_second_person(data: dict) -> bool:
+    for key in ("new_chunk", "compress_to_slightly", "compress_to_older"):
+        value = data.get(key)
+        if value is None:
             continue
-        tail = (m.group(4) or "").strip()
-        if tail and any(x in tail for x in ("至", "到", "及之前", "之前", "以后")):
+        if _summary_has_forbidden_second_person(str(value)):
             return True
     return False
 
 
-def _summary_similarity_terms(text: str) -> set[str]:
-    """用本地字符 bigram 做轻量相似度，不依赖模型。"""
-    s = _strip_summary_anchor_leaks(str(text or ""))
-    s = re.sub(r"【[^】]+】", "", s)
-    s = re.sub(r"（\d{4}-\d{2}-\d{2}\s*(?:凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)）", "", s)
-    chars = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", s)
-    if len(chars) < 2:
-        return set(chars)
-    return {"".join(chars[i : i + 2]) for i in range(len(chars) - 1)}
+def _summary_rounds_meta(recent_4_rounds: list) -> dict:
+    rounds = [r for r in (recent_4_rounds or []) if isinstance(r, dict)]
+    indices: list[int] = []
+    for r in rounds:
+        try:
+            indices.append(int(r.get("index")))
+        except Exception:
+            pass
+
+    def _idx(r: dict) -> int:
+        try:
+            return int(r.get("index") or 0)
+        except Exception:
+            return 0
+
+    rounds_sorted = sorted(rounds, key=_idx)
+    start_at = str((rounds_sorted[0].get("timestamp") if rounds_sorted else "") or "").strip()
+    end_at = str((rounds_sorted[-1].get("timestamp") if rounds_sorted else "") or "").strip()
+    bucket = ""
+    try:
+        from utils.time_aware import parse_iso_to_beijing, get_date_only
+
+        dt = parse_iso_to_beijing(end_at or start_at)
+        if dt is not None:
+            bucket = f"{get_date_only(dt)} {_summary_time_period(dt)}"
+    except Exception:
+        bucket = ""
+    round_start = min(indices) if indices else None
+    round_end = max(indices) if indices else None
+    return {
+        "id": f"current:{round_start}-{round_end}" if round_start is not None and round_end is not None else "current:unknown",
+        "round_start": round_start,
+        "round_end": round_end,
+        "start_at": start_at,
+        "end_at": end_at,
+        "bucket": bucket,
+    }
 
 
-def _summary_change_too_large(old_summary: str, new_summary: str) -> tuple[bool, str]:
-    """
-    本地保险丝：上一版总结足够长时，新总结如果和旧总结几乎没重叠，认为异常。
-    空总结/手动重建/短总结跳过，避免误伤清污和早期初始化。
-    """
-    old = str(old_summary or "").strip()
-    new = str(new_summary or "").strip()
-    old_len = len(old)
-    new_len = len(new)
-    if old_len < _SUMMARY_DIFF_CHECK_MIN_CHARS or new_len < 80:
-        return False, f"skip old_len={old_len} new_len={new_len}"
-
-    old_terms = _summary_similarity_terms(old)
-    new_terms = _summary_similarity_terms(new)
-    if len(old_terms) < 80 or len(new_terms) < 30:
-        return False, f"skip old_terms={len(old_terms)} new_terms={len(new_terms)}"
-
-    overlap = len(old_terms & new_terms) / max(1, min(len(old_terms), len(new_terms)))
-    length_ratio = new_len / max(1, old_len)
-    too_large = (
-        overlap < _SUMMARY_DIFF_HARD_MIN_OVERLAP
-        or length_ratio > _SUMMARY_DIFF_MAX_GROWTH
-        or (overlap < _SUMMARY_DIFF_MIN_OVERLAP and (length_ratio > 1.8 or length_ratio < 0.55))
-    )
-    detail = f"overlap={overlap:.3f} length_ratio={length_ratio:.2f} old_len={old_len} new_len={new_len}"
-    return too_large, detail
-
-
-def _normalize_summary_time_buckets(text: str) -> str:
-    """
-    兜底清理时间桶标题：只修标题，不碰正文。
-    目的不是猜内容归属，而是避免坏标题继续传给下一轮总结。
-    """
-    if not text:
-        return text
-    out: list[str] = []
-    for line in str(text).splitlines():
-        m = _TIME_BUCKET_LINE_RE.match(line.strip())
-        if not m:
-            out.append(line)
+def _normalize_summary_chunks_state(chunks_state: dict | None) -> dict:
+    data = dict(chunks_state or {})
+    raw_chunks = data.get("chunks")
+    if not isinstance(raw_chunks, list):
+        raw_chunks = []
+    chunks: list[dict] = []
+    for idx, raw in enumerate(raw_chunks):
+        if not isinstance(raw, dict):
             continue
-        indent, date, period, tail = m.group(1), m.group(2), m.group(3), (m.group(4) or "").strip()
-        if tail and any(x in tail for x in ("至", "到", "及之前", "之前", "以后")):
-            out.append(f"{indent}（{date} {period}）")
-        else:
-            out.append(line)
-    return "\n".join(out).strip()
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            continue
+        item = dict(raw)
+        item["text"] = text
+        try:
+            item["sequence"] = int(item.get("sequence"))
+        except Exception:
+            item["sequence"] = idx
+        item["id"] = str(item.get("id") or f"legacy:{item['sequence']}")
+        chunks.append(item)
+    chunks.sort(key=lambda x: int(x.get("sequence") or 0))
+    data["version"] = 1
+    data["chunks"] = chunks[-10:]
+    return data
 
 
-def _ensure_summary_has_bucket(summary: str, bucket: str) -> str:
+def _legacy_summary_to_chunks(current_summary: str) -> list[dict]:
+    """把旧版 summary.txt 粗迁移成小段队列，避免上线第一轮丢掉旧记忆。"""
+    text = str(current_summary or "").strip()
+    if not text:
+        return []
+    bucket_re = re.compile(r"^（(\d{4}-\d{2}-\d{2}\s*(?:凌晨|早上|上午|中午|下午|傍晚|晚上|深夜))）\s*$", re.M)
+    matches = list(bucket_re.finditer(text))
+    if not matches:
+        return [{"id": "legacy:0", "sequence": 0, "bucket": "", "text": text}]
+
+    blocks: list[dict] = []
+    for idx, match in enumerate(matches):
+        body_start = match.end()
+        body_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = text[body_start:body_end].strip()
+        body = re.sub(r"^【(?:最近|稍早|更早)】\s*", "", body).strip()
+        if not body:
+            continue
+        blocks.append({"bucket": match.group(1), "text": body})
+
+    # 旧 summary 是新到旧展示；队列内部用旧到新。
+    blocks = list(reversed(blocks))[-10:]
+    out: list[dict] = []
+    for seq, block in enumerate(blocks):
+        out.append(
+            {
+                "id": f"legacy:{seq}",
+                "sequence": seq,
+                "bucket": block["bucket"],
+                "text": _clean_summary_chunk_text(block["text"], 700),
+                "source": "legacy_summary",
+            }
+        )
+    return out
+
+
+def _split_summary_chunks(chunks: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    ordered = sorted(chunks, key=lambda x: int(x.get("sequence") or 0))[-10:]
+    recent = ordered[-2:]
+    slightly = ordered[-7:-2] if len(ordered) > 2 else []
+    older = ordered[-10:-7] if len(ordered) > 7 else []
+    return recent, slightly, older
+
+
+def render_summary_from_chunks(chunks_state: dict | None) -> str:
+    state = _normalize_summary_chunks_state(chunks_state)
+    recent, slightly, older = _split_summary_chunks(state.get("chunks") or [])
+
+    def _render_section(title: str, items: list[dict]) -> str:
+        if not items:
+            return ""
+        lines = [title]
+        for item in reversed(items):
+            bucket = str(item.get("bucket") or "").strip()
+            if bucket:
+                lines.append(f"（{bucket}）")
+            text = str(item.get("text") or "").strip()
+            if text:
+                lines.append(text)
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+    parts = [
+        _render_section("【最近】", recent),
+        _render_section("【稍早】", slightly),
+        _render_section("【更早】", older),
+    ]
+    return "\n\n".join([p for p in parts if p]).strip()
+
+
+def _build_updated_summary_chunks(
+    current_summary: str,
+    recent_4_rounds: list,
+    chunks_state: dict | None,
+    ds_result: dict,
+    light_chunk_id: str | None,
+    heavy_chunk_id: str | None,
+) -> dict | None:
+    state = _normalize_summary_chunks_state(chunks_state)
+    chunks = state.get("chunks") or []
+    if not chunks:
+        chunks = _legacy_summary_to_chunks(current_summary)
+
+    meta = _summary_rounds_meta(recent_4_rounds)
+    new_text = _clean_summary_chunk_text(ds_result.get("new_chunk"), 700)
+    if not new_text:
+        return None
+
+    light_text = _clean_summary_chunk_text(ds_result.get("compress_to_slightly"), 420)
+    heavy_text = _clean_summary_chunk_text(ds_result.get("compress_to_older"), 260)
+
+    current_id = meta["id"]
+    chunks = [c for c in chunks if str(c.get("id") or "") != current_id]
+    max_sequence = max([int(c.get("sequence") or 0) for c in chunks], default=-1)
+
+    for item in chunks:
+        item_id = str(item.get("id") or "")
+        if light_chunk_id and item_id == light_chunk_id and light_text:
+            item["text"] = light_text
+            item["compressed_to_slightly"] = True
+        if heavy_chunk_id and item_id == heavy_chunk_id and heavy_text:
+            item["text"] = heavy_text
+            item["compressed_to_older"] = True
+
+    new_chunk = {
+        **meta,
+        "text": new_text,
+        "sequence": max_sequence + 1,
+    }
+    chunks.append(new_chunk)
+    chunks.sort(key=lambda x: int(x.get("sequence") or 0))
+    chunks = chunks[-10:]
+
+    recent, slightly, older = _split_summary_chunks(chunks)
+    for item in chunks:
+        item_id = str(item.get("id") or "")
+        if any(str(x.get("id") or "") == item_id for x in recent):
+            item["level"] = "recent"
+        elif any(str(x.get("id") or "") == item_id for x in slightly):
+            item["level"] = "slightly"
+        elif any(str(x.get("id") or "") == item_id for x in older):
+            item["level"] = "older"
+
+    return {"version": 1, "chunks": chunks}
+
+
+def fetch_new_summary_update(
+    current_summary: str,
+    recent_4_rounds: list,
+    chunks_state: dict | None = None,
+) -> tuple[str | None, dict | None]:
     """
-    兜底：若 DS 输出未包含明显时间段标记，则在【最近】后补一行（YYYY-MM-DD 时间段）。
-    避免“又开始不带时间段”。
-    """
-    if not summary or not bucket:
-        return summary
-    s = summary.strip()
-    # 已含“日期+时间段”或常见时段词则认为满足
-    has_bucket = False
-    try:
-        import re
-
-        if re.search(r"\d{4}-\d{2}-\d{2}\s*(凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)", s):
-            has_bucket = True
-        elif any(x in s for x in ("凌晨", "早上", "上午", "中午", "下午", "傍晚", "晚上", "深夜")):
-            has_bucket = True
-    except Exception:
-        has_bucket = False
-    marker = f"（{bucket}）"
-    lines = s.splitlines()
-
-    # 去重：同一时间段标记不重复出现（尤其是兜底多次触发时）
-    # 仅去重完全相同的“（YYYY-MM-DD 时间段）”标记行，不动正文内容。
-    deduped: list[str] = []
-    seen_markers: set[str] = set()
-    try:
-        import re
-
-        for line in lines:
-            stripped = line.strip()
-            if re.fullmatch(r"（\d{4}-\d{2}-\d{2}\s*(凌晨|早上|上午|中午|下午|傍晚|晚上|深夜)）", stripped):
-                if stripped in seen_markers:
-                    continue
-                seen_markers.add(stripped)
-            deduped.append(line)
-    except Exception:
-        deduped = lines
-
-    lines = deduped
-    s = "\n".join(lines).strip()
-
-    # 若已有 bucket 且同一时间段已存在，不再重复补
-    if marker in s:
-        return s
-
-    # 已有其他时间段但没有当前 bucket：补上当前 bucket
-    # 没有任何时间段：也补当前 bucket
-    for i, line in enumerate(lines):
-        if line.strip().startswith("【最近】"):
-            lines.insert(i + 1, marker)
-            return "\n".join(lines).strip()
-    # 没有【最近】标题时，直接前置
-    return f"{marker}\n{s}".strip()
-
-
-def fetch_new_summary(current_summary: str, recent_4_rounds: list, summary_meta: dict | None = None) -> str | None:
-    """
-    调用 DeepSeek 得到更新后的总结。
-    失败返回 None，调用方需保留原总结。
+    调用 DeepSeek 完成一次小段更新：
+    1) 总结最新 4 轮；2) 轻压缩刚进入【稍早】的小段；3) 重压缩刚进入【更早】的小段。
     """
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
-        return None
-    prompt = build_summary_prompt(current_summary, recent_4_rounds, summary_meta)
-    budget = memory_summary_budget()
+        return None, None
+
+    state = _normalize_summary_chunks_state(chunks_state)
+    chunks = state.get("chunks") or _legacy_summary_to_chunks(current_summary)
+    light_chunk = chunks[-2] if len(chunks) >= 2 else None
+    heavy_chunk = chunks[-7] if len(chunks) >= 7 else None
+    light_text = str((light_chunk or {}).get("text") or "").strip()
+    heavy_text = str((heavy_chunk or {}).get("text") or "").strip()
+    prompt = build_summary_prompt(
+        recent_4_rounds=recent_4_rounds,
+        chunk_to_compress_to_slightly=light_text,
+        chunk_to_compress_to_older=heavy_text,
+    )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     try:
         attempt_prompt = prompt
-        summary = ""
+        result: dict | None = None
         for attempt in range(2):
             payload = {
                 "model": DEEPSEEK_CHAT_MODEL,
                 "messages": [{"role": "user", "content": attempt_prompt}],
-                # 保持“有上限”策略，避免单次总结无限放大；只把预算比例从 0.35 提到 0.45。
-                "max_tokens": min(4096, max(1500, budget)),
+                "max_tokens": 1800,
             }
             r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
             r.raise_for_status()
             data = r.json()
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-            if not content:
-                return None
-            summary = _strip_summary_anchor_leaks(content.strip())
-            if not summary:
-                return None
-            if _summary_has_forbidden_second_person(summary):
-                logger.warning("DeepSeek 总结命中第二人称违规 attempt=%s", attempt + 1)
+            result = _extract_summary_json(content or "")
+            if not result:
+                logger.warning("DeepSeek 小段总结返回非 JSON attempt=%s", attempt + 1)
+                if attempt == 0:
+                    attempt_prompt = prompt + _SUMMARY_JSON_RETRY_INSTRUCTION
+                    continue
+                return None, None
+            if _summary_json_has_forbidden_second_person(result):
+                logger.warning("DeepSeek 小段总结命中第二人称违规 attempt=%s", attempt + 1)
                 if attempt == 0:
                     attempt_prompt = prompt + _SUMMARY_RETRY_INSTRUCTION
                     continue
-                logger.warning("DeepSeek 总结二次重试仍违规，放弃本次更新以避免污染原文")
-                return None
-            if _summary_has_merged_time_bucket(summary):
-                logger.warning("DeepSeek 总结命中合并时间桶 attempt=%s", attempt + 1)
-                if attempt == 0:
-                    attempt_prompt = prompt + _SUMMARY_TIME_RETRY_INSTRUCTION
-                    continue
-                summary = _normalize_summary_time_buckets(summary)
-            too_large, detail = _summary_change_too_large(current_summary, summary)
-            if too_large:
-                logger.warning("DeepSeek 总结差异过大 attempt=%s %s", attempt + 1, detail)
-                if attempt == 0:
-                    continue
-                logger.warning("DeepSeek 总结重试后仍差异过大，放弃本次更新以保留旧总结")
-                return None
+                return None, None
             break
-        # 强制兜底：若 DS 没写时间段，这里补一行
-        summary = _ensure_summary_has_bucket(summary, _latest_bucket_from_rounds(recent_4_rounds))
-        summary = _normalize_summary_time_buckets(summary)
-        # 固定窗口：summary 始终受注入预算约束，按结构从最早内容开始一点点削
-        summary = _trim_summary_to_budget(summary, budget)
-        too_large, detail = _summary_change_too_large(current_summary, summary)
-        if too_large:
-            logger.warning("DeepSeek 总结裁剪后差异过大，放弃本次更新以保留旧总结 %s", detail)
-            return None
-        return summary
-    except Exception as e:
-        logger.error("DeepSeek 总结失败 error=%s", e, exc_info=True)
-        return None
 
+        if not result:
+            return None, None
+        updated_state = _build_updated_summary_chunks(
+            current_summary=current_summary,
+            recent_4_rounds=recent_4_rounds,
+            chunks_state={"version": 1, "chunks": chunks},
+            ds_result=result,
+            light_chunk_id=str((light_chunk or {}).get("id") or "") or None,
+            heavy_chunk_id=str((heavy_chunk or {}).get("id") or "") or None,
+        )
+        if not updated_state:
+            return None, None
+        summary = render_summary_from_chunks(updated_state)
+        summary = _trim_summary_to_budget(summary, memory_summary_budget())
+        return summary, updated_state
+    except Exception as e:
+        logger.error("DeepSeek 小段总结失败 error=%s", e, exc_info=True)
+        return None, None
 
 
 def fetch_daily_whisper_from_summary(current_summary: str, recent_4_rounds: list) -> str | None:

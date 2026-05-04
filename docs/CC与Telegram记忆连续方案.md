@@ -80,13 +80,13 @@ MCP 工具 **`save_memory`** 调用该 POST；body 至少 `content`，可选 `im
 
 ### 5.2 与 TG 总结如何衔接
 
-TG 侧下次触发总结时，会把 **`get_summary(window_id)` 的当前全文** 作为 `current` 传入 `fetch_new_summary`，再与近期对话轮次融合后写回。因此 CC 写入或 **在文末追加一段「CC 备忘」** 会进入下一轮总结的上下文，**有利于**跨端连续。
+TG 侧下次触发总结时，会读取 **`get_summary_chunks(window_id)` 的小段队列**，调用 `fetch_new_summary_update` 追加新 4 轮小段，并重新渲染 `global/summary.txt`。因此 CC 若要直接参与窗口总结，应该写入结构化小段队列，而不是只在 `summary.txt` 文末追加文本。
 
 ### 5.3 建议策略
 
 - **动态层**：适合离散事实（「完成了某重构」）。  
-- **总结**：长文叙事；CC 侧优先 **短增量 append**，避免整篇覆盖冲掉长期风格。  
-- **网关缺口**：HTTP 上目前主要是 **GET** 总结，需另增 **鉴权写接口**（内部调 `save_summary`）若要让 MCP 直接更新总结。
+- **总结**：实时层小段队列；CC 侧优先写入独立小段，避免整篇覆盖冲掉滚动结构。
+- **网关缺口**：HTTP 上目前主要是 **GET** 总结，需另增 **鉴权写接口**（内部调 `save_summary_chunks` + `save_summary`）若要让 MCP 直接更新总结。
 
 ---
 

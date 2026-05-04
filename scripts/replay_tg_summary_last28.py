@@ -1,13 +1,13 @@
 """
 一次性脚本：从 R2 读取指定 Telegram 窗口（tg_*）最近 28 轮原文，
-按 4 轮一组共 7 组，链式调用 DeepSeek 实时层总结，最后覆盖写入全局窗口总结（global/summary.txt）。
+按 4 轮一组共 7 组，重建实时层小段队列，最后覆盖写入 global/summary.txt 和 global/summary_chunks.json。
 
 用法（项目根目录）：
   python -m scripts.replay_tg_summary_last28 --window-id tg_你的数字ID
 
 说明：
 - 不修改 conversation.json，只读 R2；
-- 第一轮的上文总结为空串，与「首次总结」行为一致；
+- 第一轮的小段队列为空，与「首次总结」行为一致；
 - 需配置 DEEPSEEK_API_KEY / R2 凭证，与线上一致。
 """
 
@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env", override=False)
 
-from services.deepseek_summary import fetch_new_summary
+from services.deepseek_summary import fetch_new_summary_update
 from storage import r2_store
 
 
@@ -59,6 +59,7 @@ def main() -> int:
     print(f"当前全局总结长度: {len(old_summary)} 字符（将被覆盖）", flush=True)
 
     current = ""
+    chunks_state = {"version": 1, "chunks": []}
     for gi, g in enumerate(groups, 1):
         # 下标为在最近 28 轮切片内的序号（1..28），避免 R2 里 index 字段重复时误导
         start_i = (gi - 1) * 4 + 1
@@ -70,18 +71,22 @@ def main() -> int:
             f"(index 字段 {g[0].get('index')!r}~{g[-1].get('index')!r}，若重复属历史 bug，不影响本脚本正文)",
             flush=True,
         )
-        new_summary = fetch_new_summary(current, g)
-        if not new_summary:
+        new_summary, new_chunks = fetch_new_summary_update(current, g, chunks_state)
+        if not new_summary or not new_chunks:
             print(f"错误：第 {gi} 组 DeepSeek 未返回总结（检查密钥与网络）。", file=sys.stderr)
             return 2
         current = new_summary
+        chunks_state = new_chunks
         print(f"  → 本组后总结长度: {len(current)} 字符", flush=True)
 
     ok = r2_store.save_summary("", current)
     if not ok:
         print("错误：save_summary 写入 R2 失败。", file=sys.stderr)
         return 3
-    print(f"已写入 global/summary.txt，完成。最终长度 {len(current)} 字符。", flush=True)
+    if not r2_store.save_summary_chunks("", chunks_state):
+        print("错误：save_summary_chunks 写入 R2 失败。", file=sys.stderr)
+        return 3
+    print(f"已写入 global/summary.txt 和 global/summary_chunks.json，完成。最终长度 {len(current)} 字符。", flush=True)
     return 0
 
 

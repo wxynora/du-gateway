@@ -8,6 +8,8 @@ from .r2_store import (
     save_core_cache_pending,
     get_summary,
     save_summary,
+    get_summary_chunks,
+    save_summary_chunks,
     normalize_window_id,
 )
 
@@ -19,6 +21,7 @@ __all__ = [
     "save_core_cache_pending",
     "get_summary",
     "save_summary",
+    "get_summary_chunks",
+    "save_summary_chunks",
     "normalize_window_id",
 ]
-

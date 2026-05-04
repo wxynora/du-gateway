@@ -32,7 +32,6 @@ from utils.tokens import estimate_tokens, memory_summary_budget, memory_dynamic_
 
 logger = get_logger(__name__)
 from services import image_desc, deepseek_summary
-from services.deepseek_summary import fetch_new_summary
 from services.dynamic_memory_citation import DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY
 
 # ---------------------------------------------------------------------------
@@ -2388,14 +2387,16 @@ def step_archive_and_maybe_summary(
         logger.info("实时层总结已调度 window_id=%s round_index=%s", window_id, round_index)
         recent = r2_store.get_conversation_rounds(window_id, last_n=4)
         if recent:
-            current = r2_store.get_summary(window_id) or ""
-            summary_meta = r2_store.get_summary_meta(window_id)
-
             def _summarize():
-                new_summary = fetch_new_summary(current, recent, summary_meta)
-                if new_summary:
+                from services.deepseek_summary import fetch_new_summary_update
+
+                current = r2_store.get_summary(window_id) or ""
+                chunks_state = r2_store.get_summary_chunks(window_id)
+                new_summary, new_chunks = fetch_new_summary_update(current, recent, chunks_state)
+                if new_summary and new_chunks:
                     if r2_store.save_summary(window_id, new_summary):
-                        r2_store.append_summary_anchor(window_id, recent)
+                        if not r2_store.save_summary_chunks(window_id, new_chunks):
+                            logger.warning("Pipeline 保存实时层小段队列失败 window_id=%s", window_id)
                 else:
                     logger.warning("Pipeline 本窗口触发总结但 DeepSeek 未返回新总结 window_id=%s", window_id)
 
