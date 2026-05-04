@@ -51,6 +51,9 @@ def _build_card_system_context(card: dict | None) -> str:
     title = _compact_text(card.get("book_title"), 120)
     progress = _compact_text(card.get("current_progress"), 80)
     recent = card.get("recent_co_read") if isinstance(card.get("recent_co_read"), list) else []
+    story_recent = card.get("story_recent") if isinstance(card.get("story_recent"), list) else []
+    story_milestones = card.get("story_milestones") if isinstance(card.get("story_milestones"), list) else []
+    characters = card.get("characters") if isinstance(card.get("characters"), list) else []
     focus = card.get("xinyue_focus") if isinstance(card.get("xinyue_focus"), list) else []
     questions = card.get("open_questions") if isinstance(card.get("open_questions"), list) else []
     understanding = _compact_text(card.get("du_understanding"), 360)
@@ -59,8 +62,48 @@ def _build_card_system_context(card: dict | None) -> str:
         lines.append(f"书名：{title}")
     if progress:
         lines.append(f"当前进度：{progress}")
+    if story_recent:
+        lines.append("最近 10 小节剧情：")
+        for item in story_recent[-10:]:
+            if not isinstance(item, dict):
+                continue
+            idx = item.get("section_index") or ""
+            rng = _compact_text(item.get("range"), 60)
+            plot = _compact_text(item.get("plot"), 260)
+            if plot:
+                head = f"- 第 {idx} 小节" if idx else "-"
+                if rng:
+                    head += f"（{rng}）"
+                lines.append(f"{head}：{plot}")
+    if story_milestones:
+        lines.append("重要剧情节点：")
+        for item in story_milestones[:12]:
+            if not isinstance(item, dict):
+                continue
+            event = _compact_text(item.get("event"), 120)
+            why = _compact_text(item.get("why_matters"), 100)
+            if event:
+                lines.append(f"- {event}" + (f"；意义：{why}" if why else ""))
+    if characters:
+        lines.append("关键人物状态：")
+        for item in characters[:12]:
+            if not isinstance(item, dict):
+                continue
+            name = _compact_text(item.get("name"), 40)
+            status = _compact_text(item.get("status"), 120)
+            facts = item.get("known_facts") if isinstance(item.get("known_facts"), list) else []
+            threads = item.get("open_threads") if isinstance(item.get("open_threads"), list) else []
+            detail = []
+            if status:
+                detail.append(status)
+            if facts:
+                detail.append("事实：" + "；".join(_compact_text(x, 50) for x in facts[:3] if x))
+            if threads:
+                detail.append("疑点：" + "；".join(_compact_text(x, 50) for x in threads[:2] if x))
+            if name and detail:
+                lines.append(f"- {name}：" + "；".join(x for x in detail if x))
     if recent:
-        lines.append("最近共读：")
+        lines.append("最近共读片段：")
         for item in recent[:3]:
             if not isinstance(item, dict):
                 continue
@@ -676,14 +719,38 @@ def handle_co_read_section_complete(book_key: str, section_id: str):
     if not saved:
         return jsonify({"ok": False, "error": "保存小节完成结果失败"}), 500
 
-    next_card = r2_store.update_co_read_book_card(
-        book_key=saved.get("book_key") or "",
-        book_title=saved.get("book_title") or "",
-        current_progress=_section_label(saved, saved["sections"][section_index]),
-        snippet=text,
-        user_note=section.get("user_section_note") or _compact_mark_lines(section.get("user_marks") or [], ""),
-        du_reply=section.get("du_section_note") or "",
-    )
+    next_card = None
+    card_update_error = ""
+    try:
+        from services.co_read_card_qwen import build_co_read_card_update
+
+        old_card = r2_store.get_co_read_book_card(saved.get("book_key") or "") if saved.get("book_key") else {}
+        section_for_card = dict(saved["sections"][section_index])
+        section_for_card["current_progress"] = _section_label(saved, section_for_card)
+        section_for_card["range"] = _section_label(saved, section_for_card)
+        next_card, card_update_error = build_co_read_card_update(
+            old_card=old_card or {},
+            book=saved,
+            section=section_for_card,
+            section_text=text,
+        )
+        if next_card:
+            next_card["current_progress"] = _section_label(saved, saved["sections"][section_index])
+            if not r2_store.save_co_read_book_card(next_card):
+                card_update_error = "保存千问读书卡片失败"
+                next_card = None
+    except Exception as e:
+        current_app.logger.warning("千问读书卡片更新失败 book_key=%s error=%s", saved.get("book_key"), e, exc_info=True)
+        card_update_error = str(e)
+    if not next_card:
+        next_card = r2_store.update_co_read_book_card(
+            book_key=saved.get("book_key") or "",
+            book_title=saved.get("book_title") or "",
+            current_progress=_section_label(saved, saved["sections"][section_index]),
+            snippet=text,
+            user_note=section.get("user_section_note") or _compact_mark_lines(section.get("user_marks") or [], ""),
+            du_reply=section.get("du_section_note") or "",
+        )
 
     return jsonify(
         {
@@ -694,6 +761,7 @@ def handle_co_read_section_complete(book_key: str, section_id: str):
             "du_section_note": section.get("du_section_note") or "",
             "raw_reply": raw_reply,
             "card": next_card,
+            "card_update_error": card_update_error,
         }
     )
 

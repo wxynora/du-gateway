@@ -1495,6 +1495,58 @@ def _is_du_daily_maintenance_request() -> bool:
     return str(request.headers.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _strip_co_read_section_raw_text_for_archive(msg: dict) -> dict:
+    import copy as _copy
+
+    def _strip_text(text: str) -> str:
+        raw = str(text or "")
+        start_marker = "[CO-READ SECTION]"
+        end_marker = "[/CO-READ SECTION]"
+        raw_marker = "本小节原文："
+        next_marker = "辛玥的粉色标记："
+        if start_marker not in raw or raw_marker not in raw:
+            return raw
+        out = []
+        pos = 0
+        while True:
+            start = raw.find(start_marker, pos)
+            if start < 0:
+                out.append(raw[pos:])
+                break
+            end = raw.find(end_marker, start)
+            if end < 0:
+                out.append(raw[pos:])
+                break
+            block_end = end + len(end_marker)
+            block = raw[start:block_end]
+            raw_idx = block.find(raw_marker)
+            next_idx = block.find(next_marker, raw_idx + len(raw_marker)) if raw_idx >= 0 else -1
+            if raw_idx >= 0 and next_idx >= 0:
+                block = (
+                    block[:raw_idx]
+                    + "本小节原文：\n（已从会话存档删除；原书正文仅保留在 co_read/books）\n\n"
+                    + block[next_idx:]
+                )
+            out.append(raw[pos:start])
+            out.append(block)
+            pos = block_end
+        return "".join(out)
+
+    clean = _copy.deepcopy(msg or {})
+    content = clean.get("content")
+    if isinstance(content, str):
+        clean["content"] = _strip_text(content)
+    elif isinstance(content, list):
+        next_content = []
+        for part in content:
+            if isinstance(part, dict) and str(part.get("type") or "") == "text":
+                next_content.append({**part, "text": _strip_text(str(part.get("text") or ""))})
+            else:
+                next_content.append(part)
+        clean["content"] = next_content
+    return clean
+
+
 def _extract_and_store_hidden_sidecars(
     full_text: str,
     du_daily_trigger: Optional[dict] = None,
@@ -2119,6 +2171,8 @@ def chat_completions():
             last_user = _last_user_message(body.get("messages"))
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             if last_user:
+                if reply_target == "co_read_section":
+                    last_user = _strip_co_read_section_raw_text_for_archive(last_user)
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg_for_r2)
                 step_archive_and_maybe_summary(
                     window_id, body.get("messages") or [], msg_for_r2, round_cleaned_for_r2=round_cleaned

@@ -118,6 +118,15 @@ DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_CHAT_MODEL = os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
 
+# 共读读书卡片维护：幕后结构化整理，不参与渡的回复语气。
+CO_READ_CARD_API_URL = os.environ.get(
+    "CO_READ_CARD_API_URL",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+).strip()
+CO_READ_CARD_API_KEY = os.environ.get("CO_READ_CARD_API_KEY", "").strip()
+CO_READ_CARD_MODEL = os.environ.get("CO_READ_CARD_MODEL", "qwen-long-latest").strip()
+CO_READ_CARD_TIMEOUT_SECONDS = int(os.environ.get("CO_READ_CARD_TIMEOUT_SECONDS", "120"))
+
 # 图像描述 AI（便宜模型）：图片转文字存 R2，填 .env 里 IMAGE_DESC_API_*
 IMAGE_DESC_API_URL = os.environ.get("IMAGE_DESC_API_URL", "")
 IMAGE_DESC_API_KEY = os.environ.get("IMAGE_DESC_API_KEY", "")

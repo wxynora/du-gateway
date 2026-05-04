@@ -3176,6 +3176,86 @@ def _normalize_co_read_recent(items: Any) -> list[dict]:
     return out[:8]
 
 
+def _normalize_co_read_story_recent(items: Any) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        plot = _normalize_co_read_text(item.get("plot"), 1200)
+        if not plot:
+            continue
+        out.append(
+            {
+                "section_index": _co_read_int(item.get("section_index"), 0),
+                "range": _normalize_co_read_text(item.get("range"), 80),
+                "plot": plot,
+            }
+        )
+    out.sort(key=lambda x: int(x.get("section_index") or 0))
+    return out[-10:]
+
+
+def _normalize_co_read_story_milestones(items: Any) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        event = _normalize_co_read_text(item.get("event"), 260)
+        why = _normalize_co_read_text(item.get("why_matters"), 220)
+        if not event:
+            continue
+        out.append(
+            {
+                "section_index": _co_read_int(item.get("section_index"), 0),
+                "event": event,
+                "why_matters": why,
+            }
+        )
+    return out[:40]
+
+
+def _normalize_co_read_string_list(items: Any, item_limit: int = 160, count_limit: int = 8) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    out: list[str] = []
+    for item in items:
+        text = _normalize_co_read_text(item, item_limit)
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= count_limit:
+            break
+    return out
+
+
+def _normalize_co_read_characters(items: Any) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = _normalize_co_read_text(item.get("name"), 80)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(
+            {
+                "name": name,
+                "status": _normalize_co_read_text(item.get("status"), 260),
+                "known_facts": _normalize_co_read_string_list(item.get("known_facts"), 160, 10),
+                "open_threads": _normalize_co_read_string_list(item.get("open_threads"), 160, 8),
+            }
+        )
+        if len(out) >= 50:
+            break
+    return out
+
+
 def normalize_co_read_book_card(card: Any, book_key: str = "", book_title: str = "") -> dict:
     """规整一本书的共读卡片。"""
     now = now_beijing_iso()
@@ -3199,6 +3279,9 @@ def normalize_co_read_book_card(card: Any, book_key: str = "", book_title: str =
         "book_title": title,
         "current_progress": _normalize_co_read_text(raw.get("current_progress"), 80),
         "recent_co_read": _normalize_co_read_recent(raw.get("recent_co_read")),
+        "story_recent": _normalize_co_read_story_recent(raw.get("story_recent")),
+        "story_milestones": _normalize_co_read_story_milestones(raw.get("story_milestones")),
+        "characters": _normalize_co_read_characters(raw.get("characters")),
         "xinyue_focus": focus,
         "du_understanding": _normalize_co_read_text(raw.get("du_understanding"), 600),
         "open_questions": questions,
