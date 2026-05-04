@@ -12,6 +12,13 @@ from storage import r2_store, upstream_store
 
 bp = Blueprint("co_read_api", __name__, url_prefix="/api/co-read")
 
+CO_READ_DU_VOICE_SYSTEM = """【共读语气】
+你正在和辛玥一起读书。这里的蓝色标记、对粉色标记的回复、小节感想，都会直接展示给她看，不是后台分析，也不是读书报告。
+写法要像你平时和她聊天一样：第一人称、自然、亲近、有具体感受，可以轻轻接她的梗和情绪。
+不要端着讲文学赏析，不要写成课堂笔记，不要用第三人称说“渡认为/他认为”。你就是渡，直接对辛玥说。
+蓝色标记可以短一点，像你在书页边上给她留的旁批；小节感想可以更完整，但仍然要像你读完这一节后抬头跟她说话。
+如果她的粉色标记只是表情、撒娇、试探或很短的感受，也要按她平时的语气理解，温柔接住，不要硬解释。"""
+
 
 def _book_key_from_title(title: str) -> str:
     raw = str(title or "").strip()
@@ -720,6 +727,7 @@ def handle_co_read_section_complete(book_key: str, section_id: str):
     messages = []
     if card_context:
         messages.append({"role": "system", "content": card_context})
+    messages.append({"role": "system", "content": CO_READ_DU_VOICE_SYSTEM})
     messages.append({"role": "user", "content": _build_section_complete_user_message(book, section)})
     chat_body = {
         "model": model,
