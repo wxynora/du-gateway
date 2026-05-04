@@ -3215,7 +3215,7 @@ def _normalize_co_read_story_milestones(items: Any) -> list[dict]:
                 "why_matters": why,
             }
         )
-    return out[:40]
+    return out[:12]
 
 
 def _normalize_co_read_string_list(items: Any, item_limit: int = 160, count_limit: int = 8) -> list[str]:
@@ -3274,7 +3274,7 @@ def normalize_co_read_book_card(card: Any, book_key: str = "", book_title: str =
         for x in (questions_raw if isinstance(questions_raw, list) else [])
     ]
     focus = [x for x in focus if x][:8]
-    questions = [x for x in questions if x][:8]
+    questions = [x for x in questions if x][:6]
     return {
         "book_key": key,
         "book_title": title,
@@ -3393,7 +3393,7 @@ def update_co_read_book_card(
     if user_note:
         card["xinyue_focus"] = _prepend_unique_text(card.get("xinyue_focus") or [], user_note, 8)
         if "?" in user_note or "？" in user_note:
-            card["open_questions"] = _prepend_unique_text(card.get("open_questions") or [], user_note, 8)
+            card["open_questions"] = _prepend_unique_text(card.get("open_questions") or [], user_note, 6)
     card["updated_at"] = now
     clean = normalize_co_read_book_card(card, book_key=key, book_title=book_title)
     return clean if save_co_read_book_card(clean) else None

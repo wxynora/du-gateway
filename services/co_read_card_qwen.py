@@ -26,11 +26,11 @@ CO_READ_CARD_SYSTEM_PROMPT = """你是“共读读书卡片”的维护器，只
 4. 不要编造旧卡片和本小节没有提供的信息；不确定就写成疑问或留空。
 5. 辛玥/渡的标记和小节感想只作为判断重点的输入。只有它们影响剧情理解、人物关系、伏笔时，才写入 story_milestones / characters / open_questions。
 6. story_recent 按 section_index 升序，只保留最近 10 个小节。每节 plot 约 200-400 字，保留事件、冲突、转折、人物关系变化。
-7. story_milestones 保留长期重要节点，避免和 story_recent 重复；每条 40-120 字。
+7. story_milestones 是精选长期节点，不是追加日志。每次更新都要删除重复、已被 story_recent 覆盖、低价值、后续不再重要的条目；最多 12 条，每条 40-120 字。
 8. characters 只保留仍会影响后续理解的关键人物。每个角色必须有 summary：一句话介绍这个人是谁/当前叙事作用，20-60 字。
 9. 死亡、退场、功能已完成、明显只是一节内炮灰/路人的角色，后续不要继续保留在 characters；除非他的死亡/身份/线索会长期影响主线，此时写入 story_milestones，而不是留在 characters。
 10. characters 建议 3-12 个，宁可少而准，不要把乘客、店员、临时敌人等无持续作用的人堆进去。
-11. open_questions 只保留未解开的伏笔或问题；如果本节已经解开，应删除或改写。
+11. open_questions 只保留未解开的关键伏笔或问题；每次更新都要删除已解答、重复、太细碎、后续价值低的问题；最多 6 条。
 12. 输出必须是严格 JSON 对象，不要 Markdown，不要代码块，不要解释。
 
 JSON schema：
