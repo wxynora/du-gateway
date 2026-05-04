@@ -293,6 +293,7 @@ type CoReadBooksResponse = {
 type CoReadBookResponse = {
   ok?: boolean;
   book?: CoReadBook;
+  book_summary?: CoReadBookSummary;
   section?: CoReadSection;
   error?: string;
 };
@@ -309,6 +310,7 @@ type CoReadUploadResponse = {
 type CoReadSectionCompleteResponse = {
   ok?: boolean;
   book?: CoReadBook;
+  book_summary?: CoReadBookSummary;
   section?: CoReadSection;
   du_marks?: CoReadMark[];
   du_section_note?: string;
@@ -712,6 +714,37 @@ function clearCachedCoReadBook(bookKey?: string) {
     const payload = JSON.parse(raw) as Partial<CoReadBookCachePayload>;
     if (payload?.book_key === bookKey) localStorage.removeItem(CO_READ_BOOK_CACHE_KEY);
   } catch {}
+}
+
+function patchCoReadBookSection(book: CoReadBook, rawSection: any, rawSummary?: any, fallbackIndex?: number): CoReadBook | null {
+  const normalized = normalizeCoReadSection(rawSection, fallbackIndex ?? book.current_section_index + 1);
+  if (!normalized) return null;
+  const section = repairCoReadSectionArtifact(normalized, book.content);
+  const sections = [...book.sections];
+  let sectionIndex = sections.findIndex((item) => item.section_id === section.section_id);
+  if (sectionIndex < 0) {
+    sectionIndex = sections.findIndex((item) => item.index === section.index);
+  }
+  if (sectionIndex < 0) return null;
+  sections[sectionIndex] = section;
+  const summary = normalizeCoReadBookSummary(rawSummary);
+  const currentIndex = summary
+    ? Math.max(0, Math.min(Math.max(0, sections.length - 1), summary.current_section_index))
+    : Math.max(0, Math.min(Math.max(0, sections.length - 1), book.current_section_index));
+  return {
+    ...book,
+    book_title: summary?.book_title || book.book_title,
+    sections,
+    current_section_index: currentIndex,
+    created_at: summary?.created_at || book.created_at,
+    updated_at: summary?.updated_at || section.updated_at || book.updated_at,
+  };
+}
+
+function coReadBookFromUpdatePayload(currentBook: CoReadBook, payload: CoReadBookResponse, fallbackIndex?: number): CoReadBook | null {
+  const fullBook = normalizeCoReadBook(payload?.book);
+  if (fullBook) return fullBook;
+  return patchCoReadBookSection(currentBook, payload?.section, payload?.book_summary, fallbackIndex);
 }
 
 function readCoReadSettings(): CoReadSettings {
@@ -2248,9 +2281,9 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     const data = await apiJson<CoReadBookResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(activeBook.book_key)}/sections/${encodeURIComponent(activeSection.section_id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_marks: nextMarks, user_section_note: nextNote }),
+      body: JSON.stringify({ user_marks: nextMarks, user_section_note: nextNote, include_book: false }),
     });
-    const book = normalizeCoReadBook(data.book);
+    const book = coReadBookFromUpdatePayload(activeBook, data, activeSection.index);
     if (!data?.ok || !book) throw new Error(data?.error || "保存失败");
     setActiveBook(book);
     upsertBookSummary(book);
@@ -2324,9 +2357,11 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
           window_id: cleanWindowId,
           user_marks: activeSection.user_marks,
           user_section_note: sectionNote,
+          include_book: false,
+          defer_card_update: true,
         }),
       });
-      const book = normalizeCoReadBook(data.book);
+      const book = coReadBookFromUpdatePayload(activeBook, data, activeSection.index);
       if (!data?.ok || !book) throw new Error(data?.error || "读完提交失败");
       setActiveBook(book);
       upsertBookSummary(book);
@@ -2353,9 +2388,9 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     void apiJson<CoReadBookResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(activeBook.book_key)}/sections/${encodeURIComponent(nextSection.section_id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ include_book: false }),
     }).then((data) => {
-      const book = normalizeCoReadBook(data.book);
+      const book = coReadBookFromUpdatePayload(nextBook, data, nextSection.index);
       if (data?.ok && book) {
         setActiveBook(book);
         upsertBookSummary(book);

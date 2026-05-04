@@ -3,6 +3,7 @@ import hashlib
 import re
 import uuid
 import bisect
+import threading
 from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
@@ -90,10 +91,13 @@ def _build_card_system_context(card: dict | None) -> str:
             if not isinstance(item, dict):
                 continue
             name = _compact_text(item.get("name"), 40)
+            summary = _compact_text(item.get("summary"), 80)
             status = _compact_text(item.get("status"), 120)
             facts = item.get("known_facts") if isinstance(item.get("known_facts"), list) else []
             threads = item.get("open_threads") if isinstance(item.get("open_threads"), list) else []
             detail = []
+            if summary:
+                detail.append(summary)
             if status:
                 detail.append(status)
             if facts:
@@ -275,6 +279,34 @@ def _section_label(book: dict, section: dict) -> str:
     start_pct = int((int(section.get("char_start") or 0) / content_len) * 100)
     end_pct = int((int(section.get("char_end") or 0) / content_len) * 100)
     return f"第 {index}/{total} 小节（约 {start_pct}% - {end_pct}%）"
+
+
+def _co_read_book_summary_response(book: dict) -> dict:
+    sections = book.get("sections") if isinstance(book.get("sections"), list) else []
+    done_count = sum(1 for item in sections if isinstance(item, dict) and str(item.get("status") or "") == "done")
+    try:
+        current_index = int(book.get("current_section_index") or 0)
+    except Exception:
+        current_index = 0
+    return {
+        "book_key": str(book.get("book_key") or ""),
+        "book_title": str(book.get("book_title") or ""),
+        "content_chars": len(str(book.get("content") or "")),
+        "section_count": len(sections),
+        "done_count": done_count,
+        "current_section_index": max(0, current_index),
+        "created_at": str(book.get("created_at") or ""),
+        "updated_at": str(book.get("updated_at") or ""),
+    }
+
+
+def _body_flag(body: dict, key: str, default: bool) -> bool:
+    raw = body.get(key, request.args.get(key))
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _compact_mark_lines(marks: list[dict], empty_text: str = "无") -> str:
@@ -512,6 +544,42 @@ def _save_co_read_book_from_content(title: str, content: str, book_key: str = ""
     return saved, ""
 
 
+def _update_co_read_card_for_section(saved: dict, section_index: int, text: str) -> tuple[dict | None, str]:
+    next_card = None
+    card_update_error = ""
+    try:
+        from services.co_read_card_qwen import build_co_read_card_update
+
+        old_card = r2_store.get_co_read_book_card(saved.get("book_key") or "") if saved.get("book_key") else {}
+        section_for_card = dict(saved["sections"][section_index])
+        section_for_card["current_progress"] = _section_label(saved, section_for_card)
+        section_for_card["range"] = _section_label(saved, section_for_card)
+        next_card, card_update_error = build_co_read_card_update(
+            old_card=old_card or {},
+            book=saved,
+            section=section_for_card,
+            section_text=text,
+        )
+        if next_card:
+            next_card["current_progress"] = _section_label(saved, saved["sections"][section_index])
+            if not r2_store.save_co_read_book_card(next_card):
+                card_update_error = "保存千问读书卡片失败"
+                next_card = None
+    except Exception as e:
+        current_app.logger.warning("千问读书卡片更新失败 book_key=%s error=%s", saved.get("book_key"), e, exc_info=True)
+        card_update_error = str(e)
+    if not next_card:
+        next_card = r2_store.update_co_read_book_card(
+            book_key=saved.get("book_key") or "",
+            book_title=saved.get("book_title") or "",
+            current_progress=_section_label(saved, saved["sections"][section_index]),
+            snippet=text,
+            user_note=saved["sections"][section_index].get("user_section_note") or _compact_mark_lines(saved["sections"][section_index].get("user_marks") or [], ""),
+            du_reply=saved["sections"][section_index].get("du_section_note") or "",
+        )
+    return next_card, card_update_error
+
+
 def handle_co_read_books():
     if request.method == "GET":
         return jsonify({"ok": True, "books": r2_store.list_co_read_books()})
@@ -614,7 +682,14 @@ def handle_co_read_section_update(book_key: str, section_id: str):
     saved = r2_store.save_co_read_book(_replace_book_section(book, section_index, section))
     if not saved:
         return jsonify({"ok": False, "error": "保存小节失败"}), 500
-    return jsonify({"ok": True, "book": saved, "section": saved["sections"][section_index]})
+    payload = {
+        "ok": True,
+        "section": saved["sections"][section_index],
+        "book_summary": _co_read_book_summary_response(saved),
+    }
+    if _body_flag(body, "include_book", True):
+        payload["book"] = saved
+    return jsonify(payload)
 
 
 def handle_co_read_section_complete(book_key: str, section_id: str):
@@ -721,49 +796,33 @@ def handle_co_read_section_complete(book_key: str, section_id: str):
 
     next_card = None
     card_update_error = ""
-    try:
-        from services.co_read_card_qwen import build_co_read_card_update
+    defer_card_update = _body_flag(body, "defer_card_update", False)
+    if defer_card_update:
+        app = current_app._get_current_object()
 
-        old_card = r2_store.get_co_read_book_card(saved.get("book_key") or "") if saved.get("book_key") else {}
-        section_for_card = dict(saved["sections"][section_index])
-        section_for_card["current_progress"] = _section_label(saved, section_for_card)
-        section_for_card["range"] = _section_label(saved, section_for_card)
-        next_card, card_update_error = build_co_read_card_update(
-            old_card=old_card or {},
-            book=saved,
-            section=section_for_card,
-            section_text=text,
-        )
-        if next_card:
-            next_card["current_progress"] = _section_label(saved, saved["sections"][section_index])
-            if not r2_store.save_co_read_book_card(next_card):
-                card_update_error = "保存千问读书卡片失败"
-                next_card = None
-    except Exception as e:
-        current_app.logger.warning("千问读书卡片更新失败 book_key=%s error=%s", saved.get("book_key"), e, exc_info=True)
-        card_update_error = str(e)
-    if not next_card:
-        next_card = r2_store.update_co_read_book_card(
-            book_key=saved.get("book_key") or "",
-            book_title=saved.get("book_title") or "",
-            current_progress=_section_label(saved, saved["sections"][section_index]),
-            snippet=text,
-            user_note=section.get("user_section_note") or _compact_mark_lines(section.get("user_marks") or [], ""),
-            du_reply=section.get("du_section_note") or "",
-        )
+        def _run_card_update():
+            with app.app_context():
+                _update_co_read_card_for_section(saved, section_index, text)
 
-    return jsonify(
-        {
-            "ok": True,
-            "book": saved,
-            "section": saved["sections"][section_index],
-            "du_marks": section.get("du_marks") or [],
-            "du_section_note": section.get("du_section_note") or "",
-            "raw_reply": raw_reply,
-            "card": next_card,
-            "card_update_error": card_update_error,
-        }
-    )
+        threading.Thread(target=_run_card_update, name="co-read-card-update", daemon=True).start()
+    else:
+        next_card, card_update_error = _update_co_read_card_for_section(saved, section_index, text)
+
+    payload = {
+        "ok": True,
+        "section": saved["sections"][section_index],
+        "book_summary": _co_read_book_summary_response(saved),
+        "du_marks": section.get("du_marks") or [],
+        "du_section_note": section.get("du_section_note") or "",
+        "raw_reply": raw_reply,
+        "card_update_pending": defer_card_update,
+        "card_update_error": card_update_error,
+    }
+    if next_card is not None:
+        payload["card"] = next_card
+    if _body_flag(body, "include_book", True):
+        payload["book"] = saved
+    return jsonify(payload)
 
 
 def handle_co_read_session():

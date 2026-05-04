@@ -3246,12 +3246,13 @@ def _normalize_co_read_characters(items: Any) -> list[dict]:
         out.append(
             {
                 "name": name,
+                "summary": _normalize_co_read_text(item.get("summary"), 120),
                 "status": _normalize_co_read_text(item.get("status"), 260),
                 "known_facts": _normalize_co_read_string_list(item.get("known_facts"), 160, 10),
                 "open_threads": _normalize_co_read_string_list(item.get("open_threads"), 160, 8),
             }
         )
-        if len(out) >= 50:
+        if len(out) >= 20:
             break
     return out
 
