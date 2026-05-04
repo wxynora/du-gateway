@@ -1821,12 +1821,14 @@ def chat_completions():
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
+    skip_dynamic_memory = (request.headers.get("X-Skip-Dynamic-Memory") or "").strip().lower() in ("1", "true", "yes")
     du_daily_maintenance = _is_du_daily_maintenance_request()
     du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
     if not slim_voice_call:
         body = step_inject_du_thought(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
-        body = step_inject_dynamic_memory(body, window_id)
+        if not skip_dynamic_memory:
+            body = step_inject_dynamic_memory(body, window_id)
         body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
         body = step_inject_sense_snapshot(body, window_id)
         body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)

@@ -801,6 +801,7 @@ function renderCoReadMarkedText(
             key={`${start}-${end}`}
             className={className}
             title={title}
+            data-co-read-mark-ids={active.map((mark) => mark.id).join(" ")}
             role="button"
             tabIndex={0}
             onClick={(event) => {
@@ -2275,6 +2276,21 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     }).catch(() => {});
   }
 
+  function scrollToCoReadMark(mark: CoReadMark) {
+    const root = readerRef.current;
+    if (!root || !mark.id) return;
+    const escapedId = typeof CSS !== "undefined" && CSS.escape
+      ? CSS.escape(mark.id)
+      : mark.id.replace(/["\\]/g, "\\$&");
+    const target = root.querySelector<HTMLElement>(`[data-co-read-mark-ids~="${escapedId}"]`);
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  function openUserMarkCard(mark: CoReadMark) {
+    setActiveMarkPopup([mark]);
+    requestAnimationFrame(() => scrollToCoReadMark(mark));
+  }
+
   if (activeBook && activeSection) {
     const sectionIndex = Math.max(0, activeBook.current_section_index);
     const canGoPrev = sectionIndex > 0;
@@ -2384,10 +2400,37 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
               {activeSection.user_marks.length ? (
                 <div className="space-y-2">
                   {activeSection.user_marks.map((mark) => (
-                    <div key={mark.id} className="rounded-[14px] bg-[#FFEAF1] px-3 py-2 text-[#5D2A3A]">
+                    <div
+                      key={mark.id}
+                      className="cursor-pointer rounded-[14px] bg-[#FFEAF1] px-3 py-2 text-[#5D2A3A]"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openUserMarkCard(mark)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openUserMarkCard(mark);
+                        }
+                      }}
+                    >
                       <div className="text-[12px] leading-5">「{compactCoReadText(mark.quote, 80)}」</div>
                       {mark.note ? <div className="mt-1 text-[13px] leading-5 text-[#7A3A4D]">{mark.note}</div> : null}
-                      <button type="button" className="mt-1 text-[12px] font-semibold text-[#B85673]" onClick={() => void deleteUserMark(mark.id)}>删除</button>
+                      {mark.du_reply ? (
+                        <div className="mt-2 rounded-[12px] bg-[#E6F0FF] px-3 py-2 text-[#263D66]">
+                          <div className="text-[11px] font-semibold">渡的回复</div>
+                          <div className="mt-1 text-[13px] leading-5">{mark.du_reply}</div>
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="mt-1 text-[12px] font-semibold text-[#B85673]"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void deleteUserMark(mark.id);
+                        }}
+                      >
+                        删除
+                      </button>
                     </div>
                   ))}
                 </div>

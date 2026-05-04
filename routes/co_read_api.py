@@ -615,6 +615,7 @@ def handle_co_read_section_complete(book_key: str, section_id: str):
         "X-Force-Last4": str(request.headers.get("X-Force-Last4") or body.get("force_last4") or "1"),
         "X-Reply-Channel": "sumitalk",
         "X-Reply-Target": "co_read_section",
+        "X-Skip-Dynamic-Memory": "1",
         "X-Window-Id": window_id,
     }
     try:
