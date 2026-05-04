@@ -2015,6 +2015,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
   const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const readerRef = useRef<HTMLDivElement | null>(null);
+  const completeInFlightRef = useRef(false);
   const swipeRef = useRef({ tracking: false, startX: 0, startY: 0, latestX: 0, latestY: 0 });
   const [books, setBooks] = useState<CoReadBookSummary[]>([]);
   const [activeBook, setActiveBook] = useState<CoReadBook | null>(null);
@@ -2372,12 +2373,13 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
   }
 
   async function completeSection() {
-    if (!activeBook || !activeSection || completing) return;
+    if (!activeBook || !activeSection || completing || completeInFlightRef.current) return;
     const cleanWindowId = String(windowId || "").trim();
     if (!cleanWindowId) {
       toast("当前还没拿到聊天窗口 ID");
       return;
     }
+    completeInFlightRef.current = true;
     setCompleting(true);
     try {
       const data = await apiJson<CoReadSectionCompleteResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(activeBook.book_key)}/sections/${encodeURIComponent(activeSection.section_id)}/complete`, {
@@ -2400,6 +2402,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     } catch (e: any) {
       toast(`提交失败：${e?.message || e}`);
     } finally {
+      completeInFlightRef.current = false;
       setCompleting(false);
     }
   }
