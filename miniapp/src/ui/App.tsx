@@ -272,6 +272,13 @@ type CoReadBookSummary = {
   created_at?: string;
   updated_at?: string;
 };
+type CoReadBookCachePayload = {
+  book_key: string;
+  content_chars: number;
+  section_count: number;
+  cached_at: string;
+  book: CoReadBook;
+};
 type CoReadSettings = {
   fontSize: number;
   lineHeight: number;
@@ -328,6 +335,7 @@ const TRANSPARENT_BUBBLE_CLASS =
 const STAY_SERIF_FONT = "'Playfair Display', 'Noto Serif SC', 'Songti SC', Georgia, serif";
 const STAY_SANS_FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const CO_READ_SETTINGS_KEY = "miniapp.coRead.settings.v1";
+const CO_READ_BOOK_CACHE_KEY = "miniapp.coRead.activeBookCache.v1";
 const CO_READ_DIRECT_UPLOAD_MAX_BYTES = 650_000;
 const CO_READ_UPLOAD_CHUNK_CHARS = 180_000;
 const SYSTEM_CARD_PREFIX = "<<<SUMITALK_CARD ";
@@ -640,6 +648,70 @@ function coReadSummaryFromBook(book: CoReadBook): CoReadBookSummary {
     created_at: book.created_at,
     updated_at: book.updated_at,
   };
+}
+
+function mergeCachedCoReadBookWithSummary(book: CoReadBook, summary?: CoReadBookSummary | null): CoReadBook {
+  if (!summary) return book;
+  const maxIndex = Math.max(0, book.sections.length - 1);
+  return {
+    ...book,
+    book_title: summary.book_title || book.book_title,
+    current_section_index: Math.max(0, Math.min(maxIndex, summary.current_section_index)),
+    created_at: summary.created_at || book.created_at,
+    updated_at: summary.updated_at || book.updated_at,
+  };
+}
+
+function readCachedCoReadBook(bookKey: string, summary?: CoReadBookSummary | null): CoReadBook | null {
+  try {
+    const raw = localStorage.getItem(CO_READ_BOOK_CACHE_KEY);
+    if (!raw) return null;
+    const payload = JSON.parse(raw) as Partial<CoReadBookCachePayload>;
+    const book = normalizeCoReadBook(payload?.book);
+    if (!book || book.book_key !== bookKey) return null;
+    const cachedChars = Math.max(0, Number(payload?.content_chars ?? book.content.length));
+    const cachedSections = Math.max(0, Number(payload?.section_count ?? book.sections.length));
+    if (cachedChars !== book.content.length || cachedSections !== book.sections.length) return null;
+    if (summary) {
+      if (summary.book_key !== bookKey) return null;
+      if (summary.content_chars > 0 && summary.content_chars !== book.content.length) return null;
+      if (summary.section_count > 0 && summary.section_count !== book.sections.length) return null;
+    }
+    return mergeCachedCoReadBookWithSummary(book, summary);
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedCoReadBook(book: CoReadBook | null) {
+  if (!book) return;
+  try {
+    const payload: CoReadBookCachePayload = {
+      book_key: book.book_key,
+      content_chars: book.content.length,
+      section_count: book.sections.length,
+      cached_at: new Date().toISOString(),
+      book,
+    };
+    localStorage.setItem(CO_READ_BOOK_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    try {
+      localStorage.removeItem(CO_READ_BOOK_CACHE_KEY);
+    } catch {}
+  }
+}
+
+function clearCachedCoReadBook(bookKey?: string) {
+  try {
+    if (!bookKey) {
+      localStorage.removeItem(CO_READ_BOOK_CACHE_KEY);
+      return;
+    }
+    const raw = localStorage.getItem(CO_READ_BOOK_CACHE_KEY);
+    if (!raw) return;
+    const payload = JSON.parse(raw) as Partial<CoReadBookCachePayload>;
+    if (payload?.book_key === bookKey) localStorage.removeItem(CO_READ_BOOK_CACHE_KEY);
+  } catch {}
 }
 
 function readCoReadSettings(): CoReadSettings {
@@ -2049,14 +2121,23 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
 
   async function openBook(bookKey: string) {
     setLoadingBookKey(bookKey);
+    const summary = books.find((book) => book.book_key === bookKey) || null;
+    const cachedBook = readCachedCoReadBook(bookKey, summary);
+    let openedFromCache = false;
+    if (cachedBook) {
+      openedFromCache = true;
+      setActiveBook(cachedBook);
+      setLoadingBookKey("");
+    }
     try {
       const data = await apiJson<CoReadBookResponse>(`/miniapp-api/co-read/books/${encodeURIComponent(bookKey)}`);
       const book = normalizeCoReadBook(data.book);
       if (!data?.ok || !book) throw new Error(data?.error || "书籍读取失败");
       setActiveBook(book);
       upsertBookSummary(book);
+      writeCachedCoReadBook(book);
     } catch (e: any) {
-      toast(`打开失败：${e?.message || e}`);
+      toast(openedFromCache ? `已用本地缓存打开，最新状态同步失败：${e?.message || e}` : `打开失败：${e?.message || e}`);
     } finally {
       setLoadingBookKey("");
     }
@@ -2118,6 +2199,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
       }
       setActiveBook(book);
       upsertBookSummary(book);
+      writeCachedCoReadBook(book);
       toast(`已切成 ${book.sections.length} 个共读小节`);
     } catch (e: any) {
       toast(`导入失败：${e?.message || e}`);
@@ -2136,6 +2218,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
       if (!data?.ok) throw new Error(data?.error || "删除失败");
       setBooks((prev) => prev.filter((book) => book.book_key !== bookKey));
       if (activeBook?.book_key === bookKey) setActiveBook(null);
+      clearCachedCoReadBook(bookKey);
       toast("已删除");
     } catch (e: any) {
       toast(`删除失败：${e?.message || e}`);
@@ -2171,6 +2254,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     if (!data?.ok || !book) throw new Error(data?.error || "保存失败");
     setActiveBook(book);
     upsertBookSummary(book);
+    writeCachedCoReadBook(book);
     if (!silent) toast("已保存");
     return book;
   }
@@ -2246,6 +2330,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
       if (!data?.ok || !book) throw new Error(data?.error || "读完提交失败");
       setActiveBook(book);
       upsertBookSummary(book);
+      writeCachedCoReadBook(book);
       toast("这一节已和渡读完");
     } catch (e: any) {
       toast(`提交失败：${e?.message || e}`);
@@ -2258,7 +2343,9 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
     if (!activeBook) return;
     const nextIndex = Math.max(0, Math.min(activeBook.sections.length - 1, index));
     const nextSection = activeBook.sections[nextIndex];
-    setActiveBook({ ...activeBook, current_section_index: nextIndex });
+    const nextBook = { ...activeBook, current_section_index: nextIndex };
+    setActiveBook(nextBook);
+    writeCachedCoReadBook(nextBook);
     setSelectedText("");
     setMarkNote("");
     setActiveMarkPopup([]);
@@ -2272,6 +2359,7 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
       if (data?.ok && book) {
         setActiveBook(book);
         upsertBookSummary(book);
+        writeCachedCoReadBook(book);
       }
     }).catch(() => {});
   }
