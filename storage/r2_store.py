@@ -917,7 +917,7 @@ def mark_pc_commands_done(done_ids: list[str]) -> int:
             return 0
 
 
-_APP_ACTION_ALLOWLIST = {"create_system_alarm", "create_calendar_event", "show_choice_dialog"}
+_APP_ACTION_ALLOWLIST = {"create_system_alarm", "create_calendar_event", "show_choice_dialog", "request_screen_check"}
 _APP_ACTION_HISTORY_MAX = 100
 _APP_ACTION_EXPIRES_DEFAULT = 900
 _APP_ACTION_EXPIRES_MIN = 30
@@ -1028,6 +1028,8 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_calendar_event_payload(payload)
     if action_type == "show_choice_dialog":
         return _normalize_choice_dialog_payload(payload)
+    if action_type == "request_screen_check":
+        return _normalize_screen_check_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}
@@ -1107,6 +1109,28 @@ def _normalize_choice_dialog_payload(payload: dict) -> tuple[Optional[dict], Opt
             {"id": "choice_a", "label": label_a},
             {"id": "choice_b", "label": label_b},
         ],
+    }, None
+
+
+def _normalize_screen_check_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    title = str(src.get("title") or "渡想查岗").strip() or "渡想查岗"
+    if len(title) > 60:
+        title = title[:60]
+    message = str(src.get("message") or src.get("reason") or "渡想看一眼你现在屏幕上在做什么。只有你同意后才会截图。").strip()
+    if not message:
+        message = "渡想看一眼你现在屏幕上在做什么。只有你同意后才会截图。"
+    if len(message) > 500:
+        message = message[:500]
+    try:
+        timeout_seconds = int(src.get("timeout_seconds") if "timeout_seconds" in src else src.get("timeoutSeconds", 120))
+    except Exception:
+        timeout_seconds = 120
+    timeout_seconds = max(30, min(300, timeout_seconds))
+    return {
+        "title": title,
+        "message": message,
+        "timeoutSeconds": timeout_seconds,
     }, None
 
 
@@ -4309,6 +4333,77 @@ def upload_sticker_file(tag: str, filename: str, content: bytes, content_type: s
         return None
 
 
+def save_device_screenshot(content: bytes, content_type: str, meta: dict | None = None) -> Optional[dict]:
+    """保存一次经用户同意的手机截图，并为临时读取生成 token。"""
+    if not content:
+        return None
+    src = meta if isinstance(meta, dict) else {}
+    ctype = (content_type or "").strip().lower() or "image/jpeg"
+    if "png" in ctype:
+        ctype = "image/png"
+        ext = ".png"
+    else:
+        ctype = "image/jpeg"
+        ext = ".jpg"
+    token = uuid4().hex
+    device_id = str(src.get("deviceId") or "").strip()
+    safe_device = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in device_id)[:80] or "default"
+    key = f"device_screenshots/latest/{safe_device}{ext}"
+    meta_key = f"{key}.json"
+    meta_payload = {
+        "key": key,
+        "contentType": ctype,
+        "accessToken": token,
+        "createdAt": now_beijing_iso(),
+        "deviceId": device_id,
+        "requestId": str(src.get("requestId") or "").strip(),
+        "capturedAt": str(src.get("capturedAt") or "").strip(),
+        "width": int(src.get("width") or 0),
+        "height": int(src.get("height") or 0),
+    }
+    client = _s3_client()
+    if not client:
+        return None
+    try:
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=key,
+            Body=content,
+            ContentType=ctype,
+        )
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=meta_key,
+            Body=json.dumps(meta_payload, ensure_ascii=False).encode("utf-8"),
+            ContentType="application/json; charset=utf-8",
+        )
+        return {**meta_payload, "metaKey": meta_key}
+    except Exception as e:
+        logger.error("save_device_screenshot 失败 error=%s", e, exc_info=True)
+        return None
+
+
+def get_device_screenshot(key: str, token: str) -> tuple[Optional[bytes], str]:
+    k = str(key or "").strip()
+    tok = str(token or "").strip()
+    if not k.startswith("device_screenshots/") or ".." in k or not tok:
+        return None, ""
+    client = _s3_client()
+    if not client:
+        return None, ""
+    try:
+        meta = _read_json(client, f"{k}.json")
+        if not isinstance(meta, dict) or str(meta.get("accessToken") or "") != tok:
+            return None, ""
+        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=k)
+        data = resp["Body"].read()
+        ctype = (resp.get("ContentType") or meta.get("contentType") or "image/jpeg").strip()
+        return data, ctype
+    except Exception as e:
+        logger.error("get_device_screenshot 失败 key=%s error=%s", k, e, exc_info=True)
+        return None, ""
+
+
 def delete_sticker_object(key: str) -> bool:
     """删除指定 sticker 对象并重建映射。"""
     k = (key or "").strip()
@@ -4340,6 +4435,7 @@ _R2_WIPE_PREFIXES = (
     "wenyou/",
     "sense/",
     "stickers/",
+    "device_screenshots/",
 )
 
 

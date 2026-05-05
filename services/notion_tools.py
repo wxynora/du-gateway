@@ -591,6 +591,7 @@ def execute_tool(name: str, arguments: dict) -> str:
         "create_system_alarm",
         "create_calendar_event",
         "show_choice_dialog",
+        "request_screen_check",
     ):
         return execute_forum_tool(name, arguments)
     try:

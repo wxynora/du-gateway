@@ -89,7 +89,7 @@ public class FloatingBallService extends Service {
     private static final long HISTORY_POLL_INTERVAL_MS = 20000L;
     private static final long LOCATION_REPORT_INTERVAL_MS = 15L * 60L * 1000L;
     private static final long SCREEN_STATE_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
-    private static final long LOCATION_MAX_STALE_MS = 6L * 60L * 60L * 1000L;
+    private static final long LOCATION_MAX_STALE_MS = 2L * 60L * 1000L;
     private static final float LOCATION_REPORT_MIN_DISTANCE_M = 5000f;
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
@@ -543,6 +543,8 @@ public class FloatingBallService extends Service {
 
     private void postLocation(Location location, String source) {
         if (location == null || panelToken.isEmpty()) return;
+        long locationAgeMs = location.getTime() > 0L ? Math.max(0L, System.currentTimeMillis() - location.getTime()) : 0L;
+        if (location.getTime() > 0L && locationAgeMs > LOCATION_MAX_STALE_MS) return;
         if (!shouldReportLocation(location)) return;
         ioExecutor.execute(
                 () -> {
@@ -554,7 +556,9 @@ public class FloatingBallService extends Service {
                         payload.put("accuracy", location.getAccuracy());
                         payload.put("provider", String.valueOf(location.getProvider()));
                         payload.put("source", source);
-                        payload.put("captured_at", nowIso());
+                        payload.put("captured_at", location.getTime() > 0L ? isoFromMillis(location.getTime()) : nowIso());
+                        payload.put("reported_at", nowIso());
+                        payload.put("location_age_ms", locationAgeMs);
                         if (location.hasAltitude()) payload.put("altitude", location.getAltitude());
                         if (location.hasSpeed()) payload.put("speed", location.getSpeed());
                         if (location.hasBearing()) payload.put("bearing", location.getBearing());
@@ -803,6 +807,12 @@ public class FloatingBallService extends Service {
                 result.put("detail", detail);
                 return result;
             }
+            if ("request_screen_check".equals(type)) {
+                JSONObject detail = requestScreenCheckFromAction(payload == null ? new JSONObject() : payload);
+                result.put("status", "done");
+                result.put("detail", detail);
+                return result;
+            }
             result.put("status", "failed");
             result.put("error", "unknown_action");
             return result;
@@ -945,6 +955,65 @@ public class FloatingBallService extends Service {
         if (detail == null) throw new IllegalStateException("dialog_no_result");
         String error = String.valueOf(detail.optString("error", "")).trim();
         if (!error.isEmpty()) throw new IllegalStateException(error);
+        return detail;
+    }
+
+    private JSONObject requestScreenCheckFromAction(JSONObject payload) throws Exception {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
+            throw new IllegalStateException("overlay_permission_denied");
+        }
+        String title = String.valueOf(payload.optString("title", "渡想查岗")).trim();
+        if (title.isEmpty()) title = "渡想查岗";
+        String message = String.valueOf(payload.optString("message", "渡想看一眼你现在屏幕上在做什么。只有你同意后才会截图。")).trim();
+        if (message.isEmpty()) message = "渡想看一眼你现在屏幕上在做什么。只有你同意后才会截图。";
+        int timeoutSeconds = Math.max(30, Math.min(300, payload.optInt("timeoutSeconds", 120)));
+
+        JSONObject dialogPayload = new JSONObject();
+        dialogPayload.put("title", title);
+        dialogPayload.put("message", message);
+        dialogPayload.put("level", "warning");
+        dialogPayload.put("dismissible", true);
+        dialogPayload.put("timeoutSeconds", timeoutSeconds);
+        JSONArray choices = new JSONArray();
+        JSONObject approve = new JSONObject();
+        approve.put("id", "approve");
+        approve.put("label", "同意");
+        JSONObject decline = new JSONObject();
+        decline.put("id", "decline");
+        decline.put("label", "拒绝");
+        choices.put(approve);
+        choices.put(decline);
+        dialogPayload.put("choices", choices);
+
+        JSONObject choice = showChoiceDialogFromAction(dialogPayload);
+        String choiceId = String.valueOf(choice.optString("choice_id", "")).trim();
+        if (!"approve".equals(choiceId)) {
+            JSONObject detail = new JSONObject();
+            detail.put("approved", false);
+            detail.put("choice_id", choiceId.isEmpty() ? "decline" : choiceId);
+            detail.put("label", choice.optString("label", ""));
+            detail.put("dismissed", choice.optBoolean("dismissed", false));
+            detail.put("timeout", choice.optBoolean("timeout", false));
+            return detail;
+        }
+
+        String requestId = "screen_check_" + System.currentTimeMillis();
+        ScreenCaptureBridge.create(requestId);
+        Intent captureIntent = new Intent(this, SumiScreenCaptureActivity.class);
+        captureIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        captureIntent.putExtra("request_id", requestId);
+        captureIntent.putExtra("panel_token", panelToken);
+        captureIntent.putExtra("device_id", panelDeviceId);
+        captureIntent.putExtra("api_base", API_BASE);
+        startActivity(captureIntent);
+
+        JSONObject detail = ScreenCaptureBridge.await(requestId, Math.max(45L, timeoutSeconds) * 1000L);
+        if (detail == null) {
+            detail = new JSONObject();
+            detail.put("approved", false);
+            detail.put("reason", "capture_timeout");
+            detail.put("timeout", true);
+        }
         return detail;
     }
 

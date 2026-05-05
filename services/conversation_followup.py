@@ -490,7 +490,14 @@ def _dispatch_choice_dialog_reply(channel: str, target: str, text: str, created_
     return False
 
 
-def _send_wakeup_event(window_id: str, target: str, event_text: str, created_at: str | None = None, extra_instruction: str = "") -> dict:
+def _send_wakeup_event(
+    window_id: str,
+    target: str,
+    event_text: str,
+    created_at: str | None = None,
+    extra_instruction: str = "",
+    image_url: str = "",
+) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。"""
     try:
         from storage.upstream_store import get_cached_active_model
@@ -512,6 +519,13 @@ def _send_wakeup_event(window_id: str, target: str, event_text: str, created_at:
     extra = str(extra_instruction or "").strip()
     if extra:
         content = f"{content}\n\n{extra}"
+    image = str(image_url or "").strip()
+    message_content = content
+    if image:
+        message_content = [
+            {"type": "text", "text": content},
+            {"type": "image_url", "image_url": {"url": image}},
+        ]
 
     body = {
         "model": model,
@@ -519,7 +533,7 @@ def _send_wakeup_event(window_id: str, target: str, event_text: str, created_at:
         "messages": [
             {
                 "role": "user",
-                "content": content,
+                "content": message_content,
             }
         ],
     }
@@ -602,6 +616,21 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
         extra_instruction=(
             "请你现在直接对她回应一两句。不要解释工具、回执或系统流程；"
             "不要把这当成普通任务总结，要像刚收到她这个动作一样自然接住。"
+        ),
+    )
+
+
+def send_screen_check_wakeup(window_id: str, target: str, event_text: str, image_url: str, created_at: str | None = None) -> dict:
+    """立即让渡看一张经老婆同意的手机截图，再自然回应。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        image_url=image_url,
+        extra_instruction=(
+            "请你看图后自然回应一两句。不要解释工具、回执或系统流程；"
+            "如果截图里有隐私内容，不要复述敏感细节，只围绕她现在在做什么给出温和回应。"
         ),
     )
 

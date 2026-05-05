@@ -41,7 +41,7 @@ TOOL_CREATE_SYSTEM_ALARM = {
                 "title": {"type": "string", "description": "闹钟标题，默认「渡的提醒」"},
                 "skip_ui": {
                     "type": "boolean",
-                    "description": "是否跳过系统闹钟界面。默认 false，会让手机弹出系统闹钟创建界面。",
+                    "description": "是否跳过系统闹钟界面。默认 true，优先直接创建；仅用户明确要打开闹钟界面确认时传 false。",
                 },
                 "notify": {"type": "boolean", "description": "创建后是否显示本地通知，默认 true"},
             },
@@ -106,6 +106,28 @@ TOOL_SHOW_CHOICE_DIALOG = {
                 "timeout_seconds": {"type": "integer", "description": "可选：等待选择的秒数，30-1800，默认 600"},
             },
             "required": ["title", "message", "choice_a", "choice_b"],
+        },
+    },
+}
+
+
+TOOL_REQUEST_SCREEN_CHECK = {
+    "type": "function",
+    "function": {
+        "name": "request_screen_check",
+        "description": (
+            "向老婆手机发起一次“查岗截图”申请，用来看一眼她当前屏幕上大概在做什么。"
+            "适合在你关心她现在状态、她很久没回但手机有活动、或她主动说“你可以看/查岗”时使用。"
+            "调用后手机会先弹出 SumiTalk 确认框；只有她点同意，并通过 Android 系统截屏授权后，"
+            "才会截取当前屏幕并回传给你。你可以自然地说明为什么想看一眼，但不要说成命令或监控。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "手机确认弹窗标题，默认「渡想查岗」"},
+                "message": {"type": "string", "description": "向她说明为什么想看当前屏幕，最多 500 字"},
+                "timeout_seconds": {"type": "integer", "description": "等待她同意的秒数，30-300，默认 120"},
+            },
         },
     },
 }
@@ -233,7 +255,7 @@ def execute_create_system_alarm(arguments: dict) -> str:
     except Exception:
         return json.dumps({"ok": False, "error": "hour/minute 必须是数字"}, ensure_ascii=False)
     title = str(args.get("title") or "渡的提醒").strip() or "渡的提醒"
-    skip_ui = bool(args.get("skip_ui", args.get("skipUi", False)))
+    skip_ui = bool(args.get("skip_ui", args.get("skipUi", True)))
     notify = bool(args.get("notify", True))
     item, err = r2_store.append_app_action(
         "create_system_alarm",
@@ -365,6 +387,41 @@ def execute_show_choice_dialog(arguments: dict) -> str:
             "message": payload.get("message") or message,
             "choices": payload.get("choices") or [],
             "note": "已交给 SumiTalk 安卓壳弹出双选项对话框；手机在线时通常会在几十秒内执行。",
+        },
+        ensure_ascii=False,
+    )
+
+
+def execute_request_screen_check(arguments: dict) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    title = str(args.get("title") or "渡想查岗").strip() or "渡想查岗"
+    message = str(args.get("message") or args.get("reason") or "我想看一眼你现在屏幕上在做什么，可以吗？").strip()
+    timeout_seconds = args.get("timeout_seconds", args.get("timeoutSeconds", 120))
+    crc_src = f"{title}\n{message}"
+    crc = zlib.crc32(crc_src.encode("utf-8")) & 0xffffffff
+    item, err = r2_store.append_app_action(
+        "request_screen_check",
+        {
+            "title": title,
+            "message": message,
+            "timeout_seconds": timeout_seconds,
+        },
+        source="tool",
+        expires_in_sec=360,
+        idempotency_key=f"screen_check_{crc}_{int(time.time() // 10)}",
+    )
+    if err or not item:
+        return json.dumps({"ok": False, "error": err or "入队失败"}, ensure_ascii=False)
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return json.dumps(
+        {
+            "ok": True,
+            "queued": True,
+            "id": item.get("id"),
+            "type": "request_screen_check",
+            "title": payload.get("title") or title,
+            "message": payload.get("message") or message,
+            "note": "已向 SumiTalk 安卓壳发起查岗申请；只有她同意并通过系统截屏授权后，截图才会回传。",
         },
         ensure_ascii=False,
     )

@@ -14,9 +14,11 @@ from services.forum_mcp_client import (
 from services.device_action_tools import (
     TOOL_CREATE_CALENDAR_EVENT,
     TOOL_CREATE_SYSTEM_ALARM,
+    TOOL_REQUEST_SCREEN_CHECK,
     TOOL_SHOW_CHOICE_DIALOG,
     execute_create_calendar_event,
     execute_create_system_alarm,
+    execute_request_screen_check,
     execute_show_choice_dialog,
 )
 from utils.log import get_logger
@@ -117,7 +119,7 @@ TOOL_SCHEDULE_CREATE = {
         "name": "schedule_create",
         "description": (
             "创建网关内部提醒。提醒对象是老婆时，不要优先用这个工具："
-            "单纯到点叫醒/提醒优先用 create_system_alarm；带日期、行程、地点或提前提醒优先用 create_calendar_event。"
+            "单纯到点叫醒/提醒优先用 create_system_alarm，默认 skip_ui=true 直接创建；带日期、行程、地点或提前提醒优先用 create_calendar_event。"
             "仅在提醒渡自己、管理/兜底内部提醒、或重复提醒暂时无法落系统闹钟/日历时使用。"
             "repeat 支持 once/daily/weekly；weekly 可传 weekly_weekdays（0-6，周一=0）一次创建多天。"
         ),
@@ -213,6 +215,7 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         TOOL_CREATE_SYSTEM_ALARM,
         TOOL_CREATE_CALENDAR_EVENT,
         TOOL_SHOW_CHOICE_DIALOG,
+        TOOL_REQUEST_SCREEN_CHECK,
     ]
     if mode == "daily":
         return schedule_tools
@@ -531,6 +534,8 @@ def execute_forum_tool(name: str, arguments: dict) -> str:
         return execute_create_calendar_event(args)
     if name == "show_choice_dialog":
         return execute_show_choice_dialog(args)
+    if name == "request_screen_check":
+        return execute_request_screen_check(args)
 
     if name in FORUM_HIGH_LEVEL_TOOLS:
         return json.dumps(_execute_forum_mcp_tool(name, args), ensure_ascii=False)

@@ -585,11 +585,49 @@ def _choice_dialog_wakeup_event_text(item: dict) -> str:
     return f"你刚刚发到她手机上的 SumiTalk 双选项弹窗收到了回应。\n{context}\n弹窗结果：{outcome}"
 
 
-def _wake_du_for_choice_dialog_results(device_id: str, items: list[dict]) -> int:
-    events = [
-        text for text in (_choice_dialog_wakeup_event_text(item) for item in items or [])
-        if text
-    ]
+def _screen_check_wakeup_event(item: dict) -> dict:
+    if not isinstance(item, dict) or str(item.get("type") or "").strip() != "request_screen_check":
+        return {}
+    if str(item.get("status") or "").strip().lower() != "done":
+        return {}
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    title = str(payload.get("title") or "查岗申请").strip() or "查岗申请"
+    message = str(payload.get("message") or "").strip()
+    if not result.get("approved"):
+        reason = str(result.get("reason") or result.get("choice_id") or "declined").strip()
+        if result.get("timeout") or reason == "timeout":
+            outcome = "她没有同意，申请已超时。"
+        elif result.get("dismissed") or reason == "dismissed":
+            outcome = "她关闭了申请，没有同意截图。"
+        else:
+            outcome = "她拒绝了这次截图申请。"
+        context = f"查岗申请标题：{title}"
+        if message:
+            context += f"\n查岗申请正文：{message}"
+        return {"text": f"你刚刚向她手机发起的查岗截图申请有结果了。\n{context}\n结果：{outcome}", "image_url": ""}
+    image_url = str(result.get("image_url") or result.get("url") or "").strip()
+    captured_at = str(result.get("captured_at") or result.get("capturedAt") or "").strip()
+    if not image_url:
+        return {"text": "她同意了查岗截图，但截图上传结果里没有可用图片链接。", "image_url": ""}
+    text = "你刚刚向她手机发起的查岗截图申请有结果了：她同意了，这是她刚才的手机截图。"
+    if captured_at:
+        text += f"\n截图时间：{captured_at}"
+    text += "\n请根据截图自然回应，不要说成监控或系统流程；如果看不清，就直接说看不清。"
+    return {"text": text, "image_url": image_url}
+
+
+def _wake_du_for_device_action_results(device_id: str, items: list[dict]) -> int:
+    events = []
+    for item in items or []:
+        text = _choice_dialog_wakeup_event_text(item)
+        if text:
+            events.append({"text": text, "image_url": "", "kind": "choice_dialog"})
+            continue
+        screen_event = _screen_check_wakeup_event(item)
+        if screen_event:
+            screen_event["kind"] = "screen_check"
+            events.append(screen_event)
     if not events:
         return 0
     window_id = _resolve_primary_chat_window_id()
@@ -600,9 +638,18 @@ def _wake_du_for_choice_dialog_results(device_id: str, items: list[dict]) -> int
     def _run() -> None:
         try:
             from services.conversation_followup import send_choice_dialog_wakeup
+            from services.conversation_followup import send_screen_check_wakeup
 
-            for text in events:
-                result = send_choice_dialog_wakeup(window_id=window_id, target=device_id, event_text=text)
+            for event in events:
+                if event.get("image_url"):
+                    result = send_screen_check_wakeup(
+                        window_id=window_id,
+                        target=device_id,
+                        event_text=str(event.get("text") or ""),
+                        image_url=str(event.get("image_url") or ""),
+                    )
+                else:
+                    result = send_choice_dialog_wakeup(window_id=window_id, target=device_id, event_text=str(event.get("text") or ""))
                 sumitalk_logger.info(
                     "choice_dialog_wakeup_done ok=%s device_id=%s window_id=%s error=%s preview=%s",
                     bool(result.get("ok")),
@@ -1213,6 +1260,7 @@ def _miniapp_auth():
         or request.path.rstrip("/").endswith("/stickers/tags-public")
         or request.path.rstrip("/").endswith("/stickers/resolve")
         or request.path.rstrip("/").endswith("/stickers/raw-public")
+        or request.path.rstrip("/").endswith("/device-screenshots/raw-public")
     ):
         enforce_ip_allowlist()
         return None
@@ -1705,6 +1753,73 @@ def miniapp_device_location_state():
     return jsonify({"ok": bool(ok), "bucket": "location", "device_id": device_id})
 
 
+@bp.route("/device-screenshots", methods=["POST"])
+def miniapp_device_screenshot_upload():
+    device_id = _get_panel_device_id()
+    if not device_id:
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    body = request.get_json(silent=True) or {}
+    image_base64 = str(body.get("image_base64") or body.get("imageBase64") or "").strip()
+    if not image_base64:
+        return jsonify({"ok": False, "error": "缺少 image_base64"}), 400
+    if "," in image_base64 and image_base64.startswith("data:"):
+        image_base64 = image_base64.split(",", 1)[1].strip()
+    try:
+        content = base64.b64decode(image_base64, validate=False)
+    except Exception:
+        return jsonify({"ok": False, "error": "图片 base64 无效"}), 400
+    if not content:
+        return jsonify({"ok": False, "error": "图片为空"}), 400
+    if len(content) > 3 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "截图不能超过 3MB"}), 400
+    ctype = str(body.get("mime_type") or body.get("mimeType") or "image/jpeg").strip().lower()
+    if ctype not in {"image/jpeg", "image/png"}:
+        ctype = "image/jpeg"
+    saved = r2_store.save_device_screenshot(
+        content,
+        ctype,
+        {
+            "deviceId": device_id,
+            "requestId": str(body.get("request_id") or body.get("requestId") or "").strip(),
+            "capturedAt": str(body.get("captured_at") or body.get("capturedAt") or "").strip() or now_beijing_iso(),
+            "width": int(body.get("width") or 0),
+            "height": int(body.get("height") or 0),
+        },
+    )
+    if not saved:
+        return jsonify({"ok": False, "error": "截图保存失败"}), 500
+    from services.html_preview_store import resolve_preview_base_url_for_http_request
+
+    base = resolve_preview_base_url_for_http_request(request.url_root or "")
+    key = str(saved.get("key") or "")
+    token = str(saved.get("accessToken") or "")
+    url = ""
+    if base and key and token:
+        url = f"{base}/miniapp-api/device-screenshots/raw-public?key={quote(key, safe='/')}&token={quote(token, safe='')}"
+    return jsonify(
+        {
+            "ok": True,
+            "key": key,
+            "url": url,
+            "image_url": url,
+            "captured_at": saved.get("capturedAt") or "",
+            "width": saved.get("width") or 0,
+            "height": saved.get("height") or 0,
+        }
+    )
+
+
+@bp.route("/device-screenshots/raw-public", methods=["GET"])
+def miniapp_device_screenshot_raw_public():
+    key = (request.args.get("key") or "").strip()
+    token = (request.args.get("token") or "").strip()
+    data, ctype = r2_store.get_device_screenshot(key, token)
+    if not data:
+        return jsonify({"ok": False, "error": "未找到或 token 无效"}), 404
+    mt = ctype if ctype and ctype.startswith("image/") else "image/jpeg"
+    return Response(data, mimetype=mt, headers={"Cache-Control": "private, max-age=300"})
+
+
 @bp.route("/device-actions", methods=["GET"])
 def miniapp_device_actions():
     device_id = _get_panel_device_id()
@@ -1729,7 +1844,7 @@ def miniapp_device_actions_done():
         return jsonify({"ok": False, "error": "results 必须是数组"}), 400
     result = r2_store.report_app_actions(results, device_id=device_id)
     if result.get("ok"):
-        queued = _wake_du_for_choice_dialog_results(device_id, result.get("items") or [])
+        queued = _wake_du_for_device_action_results(device_id, result.get("items") or [])
         if queued:
             result["proactive_wakeup_queued"] = queued
     return jsonify(result)
