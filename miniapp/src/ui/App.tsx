@@ -22,6 +22,7 @@ const DuNotebookTab = lazy(() => import("./tabs/DuNotebookTab").then((m) => ({ d
 const WenyouTab = lazy(() => import("./tabs/WenyouTab").then((m) => ({ default: m.WenyouTab })));
 const StickersTab = lazy(() => import("./tabs/StickersTab").then((m) => ({ default: m.StickersTab })));
 const CallHubScreen = lazy(() => import("./tabs/CallHubScreen").then((m) => ({ default: m.CallHubScreen })));
+const PixelHomeTab = lazy(() => import("./tabs/PixelHomeTab").then((m) => ({ default: m.PixelHomeTab })));
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | null;
 type CyberTreeData = {
@@ -1047,6 +1048,7 @@ function Shell({
   const [showPersonalization, setShowPersonalization] = useState(false);
   const [showDuDay, setShowDuDay] = useState(false);
   const [showStayWithDu, setShowStayWithDu] = useState(false);
+  const [showPixelHome, setShowPixelHome] = useState(false);
   const [showCoRead, setShowCoRead] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
@@ -1314,6 +1316,10 @@ function Shell({
         setShowStayWithDu(false);
         return;
       }
+      if (showPixelHome) {
+        setShowPixelHome(false);
+        return;
+      }
       if (showCoRead) {
         setShowCoRead(false);
         return;
@@ -1347,6 +1353,7 @@ function Shell({
     showCorePrompt,
     showCoRead,
     showDuDay,
+    showPixelHome,
     showPersonalization,
     showSchedule,
     showSettings,
@@ -1394,6 +1401,11 @@ function Shell({
               icon={<HeartIconMini />}
               label="Stay with Du"
               onClick={() => setShowStayWithDu(true)}
+            />
+            <PageCardRow
+              icon={<HomeIconMini />}
+              label="像素小家"
+              onClick={() => setShowPixelHome(true)}
             />
             <PageCardRow
               icon={<BookOpenIcon />}
@@ -1468,6 +1480,7 @@ function Shell({
     showPersonalization ||
     showDuDay ||
     showStayWithDu ||
+    showPixelHome ||
     showCoRead ||
     showTree ||
     showCallHub;
@@ -1600,6 +1613,11 @@ function Shell({
       {showStayWithDu ? (
         <FullScreenPane title="Stay with Du" accent="neutral" headerMode="simple" onBack={() => setShowStayWithDu(false)}>
           <StayWithDuScreen />
+        </FullScreenPane>
+      ) : null}
+      {showPixelHome ? (
+        <FullScreenPane title="像素小家" accent="neutral" headerMode="simple" edgeSwipeBack onBack={() => setShowPixelHome(false)}>
+          <LazyPane><PixelHomeTab /></LazyPane>
         </FullScreenPane>
       ) : null}
       {showCoRead ? <CoReadScreen onBack={() => setShowCoRead(false)} windowId={sharedChatWindowId} /> : null}
@@ -5739,6 +5757,10 @@ function SunIconMini() {
 
 function HeartIconMini() {
   return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z" /></svg>;
+}
+
+function HomeIconMini() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" /><path d="M9 21v-7h6v7" /><path d="M8 6.5V4h3" /></svg>;
 }
 
 function ClockIconMini() {
