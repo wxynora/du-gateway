@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import roomImage from "../../assets/pixel-home-room.png";
+import roomImage from "../../assets/pixel-home-room.jpg";
 
 type Pos = { x: number; y: number };
 type DuMode = "follow" | "wander" | "sit" | "garden";
@@ -380,7 +380,8 @@ export function PixelHomeTab() {
           <img
             src={roomImage}
             alt="像素小家"
-            className="absolute inset-0 h-full w-full select-none object-cover"
+            className="absolute inset-0 h-full w-full select-none bg-[#CDBA91] object-cover"
+            decoding="async"
             draggable={false}
             style={{ imageRendering: "pixelated" }}
           />
