@@ -11,6 +11,7 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -80,6 +81,7 @@ public class SumiScreenCaptureActivity extends Activity {
             finish();
             return;
         }
+        setMediaProjectionForeground(true);
         new Thread(() -> captureAndUpload(resultCode, data), "SumiScreenCaptureUpload").start();
     }
 
@@ -88,6 +90,11 @@ public class SumiScreenCaptureActivity extends Activity {
         ImageReader reader = null;
         VirtualDisplay display = null;
         try {
+            try {
+                Thread.sleep(350L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             projection = projectionManager.getMediaProjection(resultCode, data);
             if (projection == null) throw new IllegalStateException("media_projection_unavailable");
             projection.registerCallback(
@@ -157,7 +164,25 @@ public class SumiScreenCaptureActivity extends Activity {
             if (display != null) display.release();
             if (reader != null) reader.close();
             if (projection != null) projection.stop();
+            setMediaProjectionForeground(false);
             runOnUiThread(this::finish);
+        }
+    }
+
+    private void setMediaProjectionForeground(boolean enabled) {
+        try {
+            Intent intent = new Intent(this, FloatingBallService.class);
+            intent.setAction(
+                    enabled
+                            ? FloatingBallService.ACTION_ENABLE_MEDIA_PROJECTION_FG
+                            : FloatingBallService.ACTION_DISABLE_MEDIA_PROJECTION_FG);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "setMediaProjectionForeground failed enabled=" + enabled, e);
         }
     }
 
@@ -224,6 +249,7 @@ public class SumiScreenCaptureActivity extends Activity {
         try {
             JSONObject result = new JSONObject();
             result.put("approved", false);
+            result.put("stage", "system_capture_permission");
             result.put("reason", "system_permission_denied");
             ScreenCaptureBridge.complete(requestId, result);
         } catch (Exception ignored) {
@@ -234,6 +260,7 @@ public class SumiScreenCaptureActivity extends Activity {
         try {
             JSONObject result = new JSONObject();
             result.put("approved", false);
+            result.put("stage", "screen_capture");
             result.put("error", error == null ? "screen_capture_failed" : error);
             ScreenCaptureBridge.complete(requestId, result);
         } catch (Exception ignored) {

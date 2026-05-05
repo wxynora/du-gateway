@@ -596,10 +596,20 @@ def _screen_check_wakeup_event(item: dict) -> dict:
     message = str(payload.get("message") or "").strip()
     if not result.get("approved"):
         reason = str(result.get("reason") or result.get("choice_id") or "declined").strip()
-        if result.get("timeout") or reason == "timeout":
+        stage = str(result.get("stage") or "").strip()
+        error = str(result.get("error") or "").strip()
+        if stage == "capture_wait" or reason == "capture_timeout":
+            outcome = "她点了 SumiTalk 的同意，但截图流程超时了，所以这次没有截图。"
+        elif result.get("timeout") or reason == "timeout":
             outcome = "她没有同意，申请已超时。"
         elif result.get("dismissed") or reason == "dismissed":
             outcome = "她关闭了申请，没有同意截图。"
+        elif stage == "system_capture_permission" or reason == "system_permission_denied":
+            outcome = "她点了 SumiTalk 的同意，但 Android 系统截屏授权没有完成，所以这次没有截图。"
+        elif stage in {"screen_capture", "capture_upload"} or error:
+            outcome = "她点了同意，但截图流程失败了，所以这次没有截图。"
+            if error:
+                outcome += f"\n错误：{error[:120]}"
         else:
             outcome = "她拒绝了这次截图申请。"
         context = f"查岗申请标题：{title}"
@@ -641,7 +651,7 @@ def _wake_du_for_device_action_results(device_id: str, items: list[dict]) -> int
             from services.conversation_followup import send_screen_check_wakeup
 
             for event in events:
-                if event.get("image_url"):
+                if event.get("kind") == "screen_check":
                     result = send_screen_check_wakeup(
                         window_id=window_id,
                         target=device_id,

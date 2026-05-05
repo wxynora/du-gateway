@@ -230,6 +230,10 @@ def _is_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _should_archive_followup_generation_request() -> bool:
+    return (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
+
+
 def _normalize_request_model(body: dict) -> dict:
     """
     特例处理：
@@ -2185,7 +2189,7 @@ def chat_completions():
         content_text = get_assistant_content_text(msg)
         if is_failed_response(content_text):
             logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
-        elif _is_followup_generation_request():
+        elif _is_followup_generation_request() and not _should_archive_followup_generation_request():
             logger.info("R2 未存档：延迟续话内部生成请求跳过存档")
         elif du_daily_maintenance:
             logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")

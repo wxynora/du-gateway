@@ -497,6 +497,7 @@ def _send_wakeup_event(
     created_at: str | None = None,
     extra_instruction: str = "",
     image_url: str = "",
+    archive: bool = False,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。"""
     try:
@@ -547,6 +548,8 @@ def _send_wakeup_event(
         "X-DU-FOLLOWUP-GEN": "1",
         "X-Force-Last4": "1",
     }
+    if archive:
+        headers["X-DU-FOLLOWUP-ARCHIVE"] = "1"
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     try:
         r = requests.post(url, headers=headers, json=body, timeout=120)
@@ -622,16 +625,22 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
 
 def send_screen_check_wakeup(window_id: str, target: str, event_text: str, image_url: str, created_at: str | None = None) -> dict:
     """立即让渡看一张经老婆同意的手机截图，再自然回应。"""
+    has_image = bool(str(image_url or "").strip())
+    instruction = (
+        "请你看图后自然回应一两句。不要解释工具、回执或系统流程；"
+        "如果截图里有隐私内容，不要复述敏感细节，只围绕她现在在做什么给出温和回应。"
+        if has_image
+        else "请你根据这个查岗截图结果自然回应一两句。不要解释工具、回执或系统流程；"
+    )
+    instruction += "不要把系统截屏授权没完成说成她本人拒绝。"
     return _send_wakeup_event(
         window_id=window_id,
         target=target,
         event_text=event_text,
         created_at=created_at,
         image_url=image_url,
-        extra_instruction=(
-            "请你看图后自然回应一两句。不要解释工具、回执或系统流程；"
-            "如果截图里有隐私内容，不要复述敏感细节，只围绕她现在在做什么给出温和回应。"
-        ),
+        archive=True,
+        extra_instruction=instruction,
     )
 
 

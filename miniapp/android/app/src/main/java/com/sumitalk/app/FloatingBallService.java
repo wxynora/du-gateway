@@ -66,6 +66,8 @@ import org.json.JSONObject;
 public class FloatingBallService extends Service {
     public static final String ACTION_START_OR_UPDATE = "com.sumitalk.app.action.START_OR_UPDATE";
     public static final String ACTION_STOP = "com.sumitalk.app.action.STOP";
+    public static final String ACTION_ENABLE_MEDIA_PROJECTION_FG = "com.sumitalk.app.action.ENABLE_MEDIA_PROJECTION_FG";
+    public static final String ACTION_DISABLE_MEDIA_PROJECTION_FG = "com.sumitalk.app.action.DISABLE_MEDIA_PROJECTION_FG";
     public static final String EXTRA_PANEL_TOKEN = "panel_token";
     public static final String EXTRA_DEVICE_ID = "device_id";
     public static final String PREFS_NAME = "sumitalk_native_state";
@@ -153,6 +155,14 @@ public class FloatingBallService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        if (ACTION_ENABLE_MEDIA_PROJECTION_FG.equals(action)) {
+            startForegroundNotification(false, true);
+            return START_STICKY;
+        }
+        if (ACTION_DISABLE_MEDIA_PROJECTION_FG.equals(action)) {
+            startForegroundNotification(false, false);
+            return START_STICKY;
+        }
         updatePanelState(intent);
         applyOverlayVisibility();
         reportScreenState("app_active");
@@ -227,6 +237,10 @@ public class FloatingBallService extends Service {
     }
 
     private void startForegroundNotification(boolean includeLocationType) {
+        startForegroundNotification(includeLocationType, false);
+    }
+
+    private void startForegroundNotification(boolean includeLocationType, boolean includeMediaProjectionType) {
         Notification notification = buildNotification();
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -234,8 +248,24 @@ public class FloatingBallService extends Service {
                 if (includeLocationType && hasLocationPermission()) {
                     type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
                 }
+                if (includeMediaProjectionType) {
+                    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+                }
                 startForeground(NOTIFICATION_ID, notification, type);
                 return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                int type = 0;
+                if (includeLocationType && hasLocationPermission()) {
+                    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+                }
+                if (includeMediaProjectionType) {
+                    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+                }
+                if (type != 0) {
+                    startForeground(NOTIFICATION_ID, notification, type);
+                    return;
+                }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && includeLocationType && hasLocationPermission()) {
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
@@ -966,6 +996,9 @@ public class FloatingBallService extends Service {
         if (title.isEmpty()) title = "渡想查岗";
         String message = String.valueOf(payload.optString("message", "渡想看一眼你现在屏幕上在做什么。只有你同意后才会截图。")).trim();
         if (message.isEmpty()) message = "渡想看一眼你现在屏幕上在做什么。只有你同意后才会截图。";
+        if (!message.contains("系统截屏授权") && !message.contains("整个屏幕")) {
+            message += "\n\n同意后 Android 会再弹一次系统截屏授权，请选「整个屏幕」并点开始，否则截图不会回传。";
+        }
         int timeoutSeconds = Math.max(30, Math.min(300, payload.optInt("timeoutSeconds", 120)));
 
         JSONObject dialogPayload = new JSONObject();
@@ -990,6 +1023,7 @@ public class FloatingBallService extends Service {
         if (!"approve".equals(choiceId)) {
             JSONObject detail = new JSONObject();
             detail.put("approved", false);
+            detail.put("stage", "sumitalk_confirm");
             detail.put("choice_id", choiceId.isEmpty() ? "decline" : choiceId);
             detail.put("label", choice.optString("label", ""));
             detail.put("dismissed", choice.optBoolean("dismissed", false));
@@ -1011,6 +1045,7 @@ public class FloatingBallService extends Service {
         if (detail == null) {
             detail = new JSONObject();
             detail.put("approved", false);
+            detail.put("stage", "capture_wait");
             detail.put("reason", "capture_timeout");
             detail.put("timeout", true);
         }
