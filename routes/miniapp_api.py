@@ -2063,25 +2063,48 @@ def miniapp_daily_whisper():
     today = today_beijing()
     force_refresh = request.args.get("refresh", type=int, default=0) == 1
     data = r2_store.get_miniapp_daily_whisper() or {}
-    if (not force_refresh) and str(data.get("date") or "") == today and (data.get("text") or "").strip():
-        return jsonify({"ok": True, "date": today, "text": str(data.get("text") or "").strip(), "cached": True})
+    cached_text = str(data.get("text") or "").strip()
+    cached_date = str(data.get("date") or "").strip()
+    if (not force_refresh) and cached_date == today and cached_text:
+        return jsonify({"ok": True, "date": today, "text": cached_text, "cached": True})
 
     default_text = "今天也想抱抱你，慢慢来，我们一起把今天过好。"
+    generated_text = ""
     try:
         from services.deepseek_summary import fetch_daily_whisper_from_summary
 
-        text = (
+        generated_text = (
             fetch_daily_whisper_from_summary(
                 r2_store.get_summary("") or "",
                 r2_store.get_latest_4_rounds_global() or [],
             )
-            or default_text
         ).strip()
     except Exception:
-        text = default_text
+        generated_text = ""
+    if generated_text:
+        payload = {"date": today, "text": generated_text, "updatedAt": now_beijing_iso()}
+        r2_store.save_miniapp_daily_whisper(payload)
+        return jsonify({"ok": True, "date": today, "text": generated_text, "cached": False})
+    if cached_text and not force_refresh:
+        return jsonify({
+            "ok": True,
+            "date": cached_date or today,
+            "text": cached_text,
+            "cached": True,
+            "stale": cached_date != today,
+        })
+    if cached_text:
+        return jsonify({
+            "ok": False,
+            "date": cached_date or today,
+            "text": cached_text,
+            "cached": True,
+            "error": "Today note 刷新失败，已保留原文",
+        })
+    text = default_text
     payload = {"date": today, "text": text, "updatedAt": now_beijing_iso()}
     r2_store.save_miniapp_daily_whisper(payload)
-    return jsonify({"ok": True, "date": today, "text": text, "cached": False})
+    return jsonify({"ok": True, "date": today, "text": text, "cached": False, "fallback": True})
 
 
 @bp.route("/cyber-tree", methods=["GET"])
