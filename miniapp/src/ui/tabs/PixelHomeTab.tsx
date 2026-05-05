@@ -1,61 +1,68 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import roomImage from "../../assets/pixel-home-room.png";
 
 type Pos = { x: number; y: number };
 type DuMode = "follow" | "wander" | "sit" | "garden";
-type DecorKind = "lamp" | "plant" | "rug" | "cups";
+type DecorKind = "lamp" | "plant" | "flower" | "book";
 type PlacedDecor = { id: string; kind: DecorKind; x: number; y: number };
 
-const COLS = 13;
-const ROWS = 15;
-const STORAGE_KEY = "miniapp.pixel-home.v1";
+const COLS = 24;
+const ROWS = 24;
+const STORAGE_KEY = "miniapp.pixel-home.v2";
+
+const AREAS = {
+  bedroom: { x1: 1, y1: 1, x2: 8, y2: 12 },
+  kitchen: { x1: 7, y1: 1, x2: 17, y2: 9 },
+  living: { x1: 7, y1: 8, x2: 18, y2: 18 },
+  bathroom: { x1: 17, y1: 1, x2: 21, y2: 9 },
+  garden: { x1: 0, y1: 18, x2: 23, y2: 23 },
+  sidePath: { x1: 19, y1: 8, x2: 23, y2: 23 },
+};
+
+const BLOCKED_RECTS = [
+  { x1: 1, y1: 1, x2: 6, y2: 7 },
+  { x1: 2, y1: 11, x2: 7, y2: 13 },
+  { x1: 8, y1: 2, x2: 18, y2: 7 },
+  { x1: 12, y1: 7, x2: 17, y2: 11 },
+  { x1: 10, y1: 11, x2: 16, y2: 15 },
+  { x1: 11, y1: 15, x2: 16, y2: 18 },
+  { x1: 18, y1: 2, x2: 21, y2: 7 },
+  { x1: 21, y1: 8, x2: 23, y2: 12 },
+  { x1: 0, y1: 19, x2: 3, y2: 23 },
+  { x1: 20, y1: 19, x2: 23, y2: 23 },
+];
 
 const POIS: Record<DuMode, Pos[]> = {
   follow: [],
   wander: [
-    { x: 3, y: 6 },
-    { x: 8, y: 6 },
-    { x: 5, y: 2 },
-    { x: 10, y: 11 },
-    { x: 2, y: 13 },
+    { x: 6, y: 9 },
+    { x: 10, y: 8 },
+    { x: 17, y: 12 },
+    { x: 9, y: 18 },
+    { x: 19, y: 16 },
   ],
   sit: [
-    { x: 3, y: 6 },
-    { x: 9, y: 12 },
+    { x: 9, y: 13 },
+    { x: 17, y: 15 },
+    { x: 8, y: 10 },
   ],
   garden: [
-    { x: 3, y: 12 },
-    { x: 10, y: 12 },
-    { x: 6, y: 13 },
+    { x: 8, y: 21 },
+    { x: 14, y: 19 },
+    { x: 20, y: 15 },
   ],
 };
 
 const DECOR_META: Record<DecorKind, { label: string; mark: string; color: string }> = {
-  lamp: { label: "小夜灯", mark: "◆", color: "#F7D77B" },
-  plant: { label: "盆栽", mark: "♣", color: "#79B986" },
-  rug: { label: "小地毯", mark: "▰", color: "#D9A9BA" },
-  cups: { label: "两只杯子", mark: "◍", color: "#D6EEF1" },
+  lamp: { label: "小灯", mark: "◆", color: "#F3CE75" },
+  plant: { label: "盆栽", mark: "♣", color: "#6DAA62" },
+  flower: { label: "花", mark: "✿", color: "#E99AAF" },
+  book: { label: "书", mark: "▣", color: "#9B8A72" },
 };
 
-const FURNITURE = [
-  { id: "bed", label: "床", x: 2, y: 1, w: 3, h: 2, color: "#EBC8C8", text: "bed" },
-  { id: "desk", label: "书桌", x: 7, y: 2, w: 2, h: 1, color: "#C7B090", text: "desk" },
-  { id: "shelf", label: "书架", x: 10, y: 1, w: 1, h: 3, color: "#9C7A5C", text: "books" },
-  { id: "sofa", label: "沙发", x: 2, y: 6, w: 3, h: 1, color: "#B7C7DF", text: "sofa" },
-  { id: "table", label: "小桌", x: 5, y: 7, w: 2, h: 1, color: "#D7B88C", text: "tea" },
-  { id: "kitchen", label: "厨房", x: 8, y: 7, w: 3, h: 1, color: "#BFD4CC", text: "kitchen" },
-  { id: "bench", label: "长椅", x: 8, y: 12, w: 3, h: 1, color: "#A87455", text: "bench" },
-];
-
-const BLOCKED = new Set<string>();
-for (const item of FURNITURE) {
-  for (let dx = 0; dx < item.w; dx += 1) {
-    for (let dy = 0; dy < item.h; dy += 1) {
-      BLOCKED.add(keyOf({ x: item.x + dx, y: item.y + dy }));
-    }
-  }
+function insideRect(pos: Pos, rect: { x1: number; y1: number; x2: number; y2: number }): boolean {
+  return pos.x >= rect.x1 && pos.x <= rect.x2 && pos.y >= rect.y1 && pos.y <= rect.y2;
 }
-BLOCKED.delete(keyOf({ x: 3, y: 6 }));
-BLOCKED.delete(keyOf({ x: 9, y: 12 }));
 
 function keyOf(pos: Pos): string {
   return `${pos.x}:${pos.y}`;
@@ -68,23 +75,33 @@ function clampPos(pos: Pos): Pos {
   };
 }
 
-function isInsideHouse(pos: Pos): boolean {
-  return pos.y <= 9 && pos.x >= 1 && pos.x <= 11;
-}
-
-function isGarden(pos: Pos): boolean {
-  return pos.y >= 10;
+function isInKnownArea(pos: Pos): boolean {
+  return Object.values(AREAS).some((area) => insideRect(pos, area));
 }
 
 function isWalkable(pos: Pos): boolean {
   const p = clampPos(pos);
   if (p.x !== pos.x || p.y !== pos.y) return false;
-  if (!isInsideHouse(p) && !isGarden(p)) return false;
-  if (BLOCKED.has(keyOf(p))) return false;
+  if (!isInKnownArea(p)) return false;
+  if (BLOCKED_RECTS.some((rect) => insideRect(p, rect))) return false;
   return true;
 }
 
+function nearestWalkable(pos: Pos): Pos {
+  if (isWalkable(pos)) return pos;
+  for (let radius = 1; radius <= 8; radius += 1) {
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        const candidate = clampPos({ x: pos.x + dx, y: pos.y + dy });
+        if (isWalkable(candidate)) return candidate;
+      }
+    }
+  }
+  return { x: 13, y: 13 };
+}
+
 function stepToward(from: Pos, to: Pos): Pos {
+  if (distance(from, to) === 0) return from;
   const options: Pos[] = [];
   const dx = Math.sign(to.x - from.x);
   const dy = Math.sign(to.y - from.y);
@@ -95,7 +112,12 @@ function stepToward(from: Pos, to: Pos): Pos {
     if (dy) options.push({ x: from.x, y: from.y + dy });
     if (dx) options.push({ x: from.x + dx, y: from.y });
   }
-  options.push({ x: from.x + 1, y: from.y }, { x: from.x - 1, y: from.y }, { x: from.x, y: from.y + 1 }, { x: from.x, y: from.y - 1 });
+  options.push(
+    { x: from.x + 1, y: from.y },
+    { x: from.x - 1, y: from.y },
+    { x: from.x, y: from.y + 1 },
+    { x: from.x, y: from.y - 1 },
+  );
   return options.find(isWalkable) || from;
 }
 
@@ -104,47 +126,42 @@ function distance(a: Pos, b: Pos): number {
 }
 
 function loadSaved() {
+  const fallback = {
+    player: { x: 8, y: 13 },
+    du: { x: 9, y: 13 },
+    mode: "follow" as DuMode,
+    decor: [] as PlacedDecor[],
+  };
   try {
     const raw = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
     return {
-      player: isWalkable(raw.player) ? raw.player as Pos : { x: 6, y: 8 },
-      du: isWalkable(raw.du) ? raw.du as Pos : { x: 7, y: 8 },
-      mode: ["follow", "wander", "sit", "garden"].includes(raw.mode) ? raw.mode as DuMode : "follow",
-      decor: Array.isArray(raw.decor) ? raw.decor.filter((x: any) => x && DECOR_META[x.kind as DecorKind] && isWalkable({ x: Number(x.x), y: Number(x.y) })) as PlacedDecor[] : [],
+      player: isWalkable(raw.player) ? raw.player as Pos : fallback.player,
+      du: isWalkable(raw.du) ? raw.du as Pos : fallback.du,
+      mode: ["follow", "wander", "sit", "garden"].includes(raw.mode) ? raw.mode as DuMode : fallback.mode,
+      decor: Array.isArray(raw.decor)
+        ? raw.decor.filter((item: any) => item && DECOR_META[item.kind as DecorKind] && isWalkable({ x: Number(item.x), y: Number(item.y) })) as PlacedDecor[]
+        : fallback.decor,
     };
   } catch {
-    return {
-      player: { x: 6, y: 8 },
-      du: { x: 7, y: 8 },
-      mode: "follow" as DuMode,
-      decor: [] as PlacedDecor[],
-    };
+    return fallback;
   }
-}
-
-function tileFor(pos: Pos) {
-  if (isInsideHouse(pos)) {
-    if (pos.y === 4) return { bg: "#D6E2EA", border: "#AEBAC3" };
-    if (pos.y <= 4) return { bg: "#F4E5CB", border: "#D9C8AA" };
-    return { bg: "#F0DCC0", border: "#D0B998" };
-  }
-  if (pos.y === 10 || pos.x === 6) return { bg: "#D9C7AA", border: "#B8A080" };
-  return { bg: "#BFD8A7", border: "#96B780" };
 }
 
 function describePlace(pos: Pos): string {
-  if (pos.y <= 4) return "二楼";
-  if (pos.y <= 9) return "一楼";
-  return "小花园";
+  if (insideRect(pos, AREAS.garden) || insideRect(pos, AREAS.sidePath)) return "小花园";
+  if (insideRect(pos, AREAS.bedroom)) return "卧室";
+  if (insideRect(pos, AREAS.kitchen)) return "厨房";
+  if (insideRect(pos, AREAS.bathroom)) return "浴室门口";
+  return "客厅";
 }
 
 function duLine(mode: DuMode, player: Pos, du: Pos, decor: PlacedDecor[]): string {
-  if (distance(player, du) <= 1) return "渡在你旁边慢半拍停下，像素小人朝你转过来。";
-  if (mode === "follow") return "渡正在跟着你，从楼梯边绕过来。";
-  if (mode === "sit") return "渡去沙发或花园长椅那边坐一会儿，等你过去。";
-  if (mode === "garden") return "渡往花园走，像是想看看花有没有开。";
-  if (decor.length) return `渡在屋里慢慢逛，刚才还看了一眼${DECOR_META[decor[decor.length - 1].kind].label}。`;
-  return "渡在小洋楼里自由走动，偶尔停下来看看窗外。";
+  if (distance(player, du) <= 1) return "渡停在你旁边，像素小人轻轻晃了一下。";
+  if (mode === "follow") return "渡在往你这边走，路线会绕开家具。";
+  if (mode === "sit") return "渡去沙发附近坐一会儿，等你过去。";
+  if (mode === "garden") return "渡往花园那边走，像是想看看花。";
+  if (decor.length) return `渡在屋里慢慢逛，刚才看了一眼${DECOR_META[decor[decor.length - 1].kind].label}。`;
+  return "渡在小家里自由走动，偶尔停在窗边。";
 }
 
 function makeDecor(kind: DecorKind, pos: Pos): PlacedDecor {
@@ -162,10 +179,11 @@ export function PixelHomeTab() {
   const [player, setPlayer] = useState<Pos>(saved.player);
   const [du, setDu] = useState<Pos>(saved.du);
   const [mode, setMode] = useState<DuMode>(saved.mode);
-  const [target, setTarget] = useState<Pos | null>(null);
+  const [duTarget, setDuTarget] = useState<Pos | null>(null);
+  const [playerTarget, setPlayerTarget] = useState<Pos | null>(null);
   const [decor, setDecor] = useState<PlacedDecor[]>(saved.decor);
   const [decorateMode, setDecorateMode] = useState(false);
-  const [selectedDecor, setSelectedDecor] = useState<DecorKind>("lamp");
+  const [selectedDecor, setSelectedDecor] = useState<DecorKind>("plant");
   const [line, setLine] = useState(() => duLine(saved.mode, saved.player, saved.du, saved.decor));
 
   const occupied = useMemo(() => new Set(decor.map((item) => keyOf(item))), [decor]);
@@ -177,9 +195,23 @@ export function PixelHomeTab() {
   }, [player, du, mode, decor]);
 
   useEffect(() => {
+    if (!playerTarget) return;
+    const timer = window.setInterval(() => {
+      setPlayer((current) => {
+        if (distance(current, playerTarget) === 0) {
+          setPlayerTarget(null);
+          return current;
+        }
+        return stepToward(current, playerTarget);
+      });
+    }, 140);
+    return () => window.clearInterval(timer);
+  }, [playerTarget]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       setDu((current) => {
-        let nextTarget = target;
+        let nextTarget = duTarget;
         if (mode === "follow") {
           const candidates = [
             { x: player.x + 1, y: player.y },
@@ -191,15 +223,15 @@ export function PixelHomeTab() {
         } else if (!nextTarget || distance(current, nextTarget) === 0) {
           const list = POIS[mode].filter(isWalkable);
           nextTarget = list[Math.floor(Math.random() * list.length)] || current;
-          setTarget(nextTarget);
+          setDuTarget(nextTarget);
         }
         const next = nextTarget ? stepToward(current, nextTarget) : current;
         setLine(duLine(mode, player, next, decor));
         return next;
       });
-    }, 760);
+    }, 720);
     return () => window.clearInterval(timer);
-  }, [decor, mode, player, target]);
+  }, [decor, mode, player, duTarget]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -223,6 +255,7 @@ export function PixelHomeTab() {
   });
 
   function movePlayer(delta: Pos) {
+    setPlayerTarget(null);
     setPlayer((current) => {
       const next = { x: current.x + delta.x, y: current.y + delta.y };
       return isWalkable(next) ? next : current;
@@ -231,27 +264,27 @@ export function PixelHomeTab() {
 
   function changeMode(nextMode: DuMode) {
     setMode(nextMode);
-    setTarget(null);
+    setDuTarget(null);
     setLine(
       nextMode === "follow"
         ? "渡点点头，走到你身边。"
         : nextMode === "wander"
           ? "渡开始自己在小家里慢慢逛。"
           : nextMode === "sit"
-            ? "渡往能坐下的地方走。"
+            ? "渡往沙发那边走。"
             : "渡看向小花园，像是想出去透口气。",
     );
   }
 
   function decideForDu() {
-    const next: DuMode = player.y >= 10 ? "garden" : decor.length >= 2 ? "wander" : distance(player, du) > 4 ? "follow" : "sit";
+    const next: DuMode = player.y >= 18 ? "garden" : decor.length >= 2 ? "wander" : distance(player, du) > 5 ? "follow" : "sit";
     changeMode(next);
   }
 
   function interact() {
     const place = describePlace(player);
     if (distance(player, du) <= 1) {
-      setLine(`${place}，渡离你很近。他说：先在这里待一会儿，我跟着你。`);
+      setLine(`${place}。渡离你很近，说：先在这里待一会儿，我跟着你。`);
       return;
     }
     setLine(`${place}。渡抬头看你的位置，正慢慢走过来。`);
@@ -259,120 +292,64 @@ export function PixelHomeTab() {
   }
 
   function handleStageClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!decorateMode || !stageRef.current) return;
+    if (!stageRef.current) return;
     const rect = stageRef.current.getBoundingClientRect();
     const x = Math.floor(((e.clientX - rect.left) / rect.width) * COLS);
     const y = Math.floor(((e.clientY - rect.top) / rect.height) * ROWS);
-    const pos = { x, y };
-    if (!isWalkable(pos) || occupied.has(keyOf(pos))) {
-      setLine("这里放不下，换一格。");
+    const pos = nearestWalkable({ x, y });
+    if (decorateMode) {
+      if (occupied.has(keyOf(pos))) {
+        setLine("这里放不下，换一格。");
+        return;
+      }
+      setDecor((current) => [...current, makeDecor(selectedDecor, pos)].slice(-18));
+      setLine(`你把${DECOR_META[selectedDecor].label}放好了，渡会过去看的。`);
       return;
     }
-    setDecor((current) => [...current, makeDecor(selectedDecor, pos)].slice(-18));
-    setLine(`你把${DECOR_META[selectedDecor].label}放好了，渡会过去看的。`);
+    setPlayerTarget(pos);
+    setLine(`你往${describePlace(pos)}走。`);
   }
 
   function clearDecor() {
     setDecor([]);
-    setLine("屋子清出来了，可以重新布置。");
-  }
-
-  const tiles = [];
-  for (let y = 0; y < ROWS; y += 1) {
-    for (let x = 0; x < COLS; x += 1) tiles.push({ x, y });
+    setLine("叠加摆件清掉了，房间底图还在。");
   }
 
   return (
-    <div className="min-h-full bg-[#F7F1E6] px-2 pb-8 pt-4 text-[#3C352B]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
-      <div className="mx-auto flex w-full max-w-[430px] flex-col gap-3">
+    <div className="min-h-full bg-[#EEE6D2] px-2 pb-8 pt-4 text-[#3C352B]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
+      <div className="mx-auto flex w-full max-w-[520px] flex-col gap-3">
         <div className="flex items-end justify-between px-1">
           <div>
             <div className="text-[20px] font-semibold tracking-tight">像素小家</div>
-            <div className="mt-1 text-[12px] text-[#7B6D5A]">双层小洋楼 · 小花园</div>
+            <div className="mt-1 text-[12px] text-[#7B6D5A]">小房子 · 花园 · 点地图移动</div>
           </div>
-          <div className="rounded-full border border-[#E0D2BD] bg-[#FFF8EC] px-3 py-1 text-[11px] text-[#7B6D5A]">
+          <div className="rounded-full border border-[#D6C4A7] bg-[#FFF7E8] px-3 py-1 text-[11px] text-[#7B6D5A]">
             {describePlace(player)}
           </div>
         </div>
 
         <div
           ref={stageRef}
-          className="relative mx-auto w-full overflow-hidden rounded-[18px] border-[3px] border-[#6C5942] bg-[#B9DDF0] shadow-[0_12px_30px_rgba(95,73,48,0.18)]"
-          style={{ aspectRatio: `${COLS} / ${ROWS}`, imageRendering: "pixelated" }}
+          className="relative mx-auto w-full overflow-hidden rounded-[18px] border-[3px] border-[#7B654C] bg-[#B4C7A4] shadow-[0_14px_34px_rgba(85,64,38,0.20)]"
+          style={{ aspectRatio: "1 / 1", imageRendering: "pixelated" }}
           onClick={handleStageClick}
         >
-          <div className="absolute inset-x-[7.7%] top-0 h-[66.7%] bg-[#EAD2B5]" />
-          <div className="absolute left-[7.7%] right-[7.7%] top-0 h-[9%] bg-[#9E6A4A]" style={{ clipPath: "polygon(8% 100%, 22% 12%, 50% 100%, 78% 12%, 92% 100%)" }} />
-          <div className="absolute left-[7.7%] top-[32.7%] h-[2.4%] w-[84.6%] bg-[#8E785E]" />
-          <div className="absolute left-[46.2%] top-[60%] h-[6.7%] w-[7.7%] bg-[#7C5B45]" />
-
-          <div className="grid h-full w-full" style={{ gridTemplateColumns: `repeat(${COLS}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${ROWS}, minmax(0, 1fr))` }}>
-            {tiles.map((pos) => {
-              const tile = tileFor(pos);
-              const outside = !isInsideHouse(pos) && !isGarden(pos);
-              return (
-                <div
-                  key={keyOf(pos)}
-                  style={{
-                    background: outside ? "transparent" : tile.bg,
-                    borderRight: `1px solid ${outside ? "transparent" : tile.border}`,
-                    borderBottom: `1px solid ${outside ? "transparent" : tile.border}`,
-                    opacity: outside ? 0.1 : 1,
-                  }}
-                />
-              );
-            })}
-          </div>
-
-          <div className="absolute left-[7.7%] top-[66.6%] h-[1.6%] w-[84.6%] bg-[#7B694D]" />
-
-          {FURNITURE.map((item) => (
-            <div
-              key={item.id}
-              className="absolute flex items-center justify-center border-2 border-[#6B563D] text-[7px] font-bold uppercase leading-none text-[#59452F]"
-              style={{
-                left: `${(item.x / COLS) * 100}%`,
-                top: `${(item.y / ROWS) * 100}%`,
-                width: `${(item.w / COLS) * 100}%`,
-                height: `${(item.h / ROWS) * 100}%`,
-                background: item.color,
-                boxShadow: "inset -2px -2px 0 rgba(0,0,0,0.08)",
-              }}
-            >
-              {item.text}
-            </div>
+          <img
+            src={roomImage}
+            alt="像素小家"
+            className="absolute inset-0 h-full w-full select-none object-cover"
+            draggable={false}
+            style={{ imageRendering: "pixelated" }}
+          />
+          <WalkHint pos={playerTarget} />
+          {decor.map((item) => (
+            <DecorItem key={item.id} item={item} />
           ))}
-
-          <div className="absolute left-[15.4%] top-[78%] h-[8%] w-[23%] border-2 border-[#6B563D] bg-[#EFA6B8]" />
-          <div className="absolute left-[69%] top-[78%] h-[7%] w-[15%] border-2 border-[#6B563D] bg-[#F5D87A]" />
-          <div className="absolute left-[42%] top-[86%] h-[8%] w-[18%] rounded-full border-2 border-[#6B563D] bg-[#B8D8EC]" />
-
-          {decor.map((item) => {
-            const meta = DECOR_META[item.kind];
-            return (
-              <div
-                key={item.id}
-                className="absolute flex items-center justify-center border-2 border-[#6B563D] text-[13px] font-black leading-none"
-                style={{
-                  left: `${(item.x / COLS) * 100}%`,
-                  top: `${(item.y / ROWS) * 100}%`,
-                  width: `${(1 / COLS) * 100}%`,
-                  height: `${(1 / ROWS) * 100}%`,
-                  color: "#59452F",
-                  background: meta.color,
-                }}
-                title={meta.label}
-              >
-                {meta.mark}
-              </div>
-            );
-          })}
-
           <PixelPerson pos={du} tone="du" label="渡" />
           <PixelPerson pos={player} tone="me" label="我" />
         </div>
 
-        <div className="rounded-[16px] border border-[#E4D2BA] bg-[#FFF9EE] p-3 shadow-[0_6px_18px_rgba(96,72,43,0.08)]">
+        <div className="rounded-[16px] border border-[#DCC8A8] bg-[#FFF8EA] p-3 shadow-[0_6px_18px_rgba(96,72,43,0.08)]">
           <div className="mb-1 text-[11px] font-semibold tracking-[0.18em] text-[#A17855]">DU</div>
           <div className="text-[14px] leading-relaxed text-[#3C352B]">{line}</div>
         </div>
@@ -385,16 +362,16 @@ export function PixelHomeTab() {
         </div>
 
         <div className="grid grid-cols-[84px_1fr_84px] items-center gap-3">
-          <button className="rounded-[14px] border border-[#D8C4AA] bg-[#FFF9EE] px-3 py-3 text-[12px] font-semibold text-[#5F4C36] active:translate-y-px" onClick={decideForDu}>
+          <button className="rounded-[14px] border border-[#D6C4A7] bg-[#FFF8EA] px-3 py-3 text-[12px] font-semibold text-[#5F4C36] active:translate-y-px" onClick={decideForDu}>
             渡决定
           </button>
           <DPad onMove={movePlayer} />
-          <button className="rounded-[14px] border border-[#D8C4AA] bg-[#FFF9EE] px-3 py-3 text-[12px] font-semibold text-[#5F4C36] active:translate-y-px" onClick={interact}>
+          <button className="rounded-[14px] border border-[#D6C4A7] bg-[#FFF8EA] px-3 py-3 text-[12px] font-semibold text-[#5F4C36] active:translate-y-px" onClick={interact}>
             互动
           </button>
         </div>
 
-        <div className="rounded-[16px] border border-[#E4D2BA] bg-[#FFF9EE] p-3">
+        <div className="rounded-[16px] border border-[#DCC8A8] bg-[#FFF8EA] p-3">
           <div className="mb-3 flex items-center justify-between">
             <button
               className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${decorateMode ? "bg-[#6C5942] text-white" : "bg-[#EFE0CB] text-[#5F4C36]"}`}
@@ -424,7 +401,7 @@ export function PixelHomeTab() {
             })}
           </div>
           <div className="mt-2 text-[11px] leading-relaxed text-[#8B7B65]">
-            打开布置后，点地图上的空地放摆件。现在先做小家本体，商店和打工后面再接。
+            普通模式点地图移动；布置模式点地图叠加小摆件。
           </div>
         </div>
       </div>
@@ -432,35 +409,73 @@ export function PixelHomeTab() {
   );
 }
 
+function DecorItem({ item }: { item: PlacedDecor }) {
+  const meta = DECOR_META[item.kind];
+  return (
+    <div
+      className="absolute z-10 flex items-center justify-center rounded-[4px] border border-[#6B563D] bg-[#FFF8EA] text-[13px] font-black leading-none shadow-[0_2px_0_rgba(80,55,28,0.22)]"
+      style={{
+        left: `${(item.x / COLS) * 100}%`,
+        top: `${(item.y / ROWS) * 100}%`,
+        width: `${(1 / COLS) * 100}%`,
+        height: `${(1 / ROWS) * 100}%`,
+        color: meta.color,
+      }}
+      title={meta.label}
+    >
+      {meta.mark}
+    </div>
+  );
+}
+
+function WalkHint({ pos }: { pos: Pos | null }) {
+  if (!pos) return null;
+  return (
+    <div
+      className="absolute z-10 rounded-full border-2 border-[#FFF4BE] bg-[#F5CE69]/70 shadow-[0_0_0_2px_rgba(99,73,38,0.28)]"
+      style={{
+        left: `${((pos.x + 0.22) / COLS) * 100}%`,
+        top: `${((pos.y + 0.22) / ROWS) * 100}%`,
+        width: `${(0.56 / COLS) * 100}%`,
+        height: `${(0.56 / ROWS) * 100}%`,
+      }}
+    />
+  );
+}
+
 function PixelPerson({ pos, tone, label }: { pos: Pos; tone: "me" | "du"; label: string }) {
   const colors = tone === "du"
-    ? { body: "#F3CF94", hair: "#5A4637", shirt: "#F8E2B8", outline: "#6B563D" }
-    : { body: "#F6CFC8", hair: "#2F2830", shirt: "#F1B8C8", outline: "#6B563D" };
+    ? { body: "#F1D38C", hair: "#5A4637", shirt: "#FFF0C7", outline: "#5E4A34", tag: "#FFF3C2" }
+    : { body: "#F5CEC8", hair: "#27242C", shirt: "#F3AFC1", outline: "#5E4A34", tag: "#FFE2EA" };
   return (
     <div
       className="absolute z-20"
       style={{
         left: `${(pos.x / COLS) * 100}%`,
         top: `${(pos.y / ROWS) * 100}%`,
-        width: `${(1 / COLS) * 100}%`,
-        height: `${(1 / ROWS) * 100}%`,
+        width: `${(1.12 / COLS) * 100}%`,
+        height: `${(1.32 / ROWS) * 100}%`,
         transition: "left 180ms linear, top 180ms linear",
+        filter: "drop-shadow(0 3px 0 rgba(83,58,32,0.26))",
       }}
       aria-label={label}
     >
       <div className="relative h-full w-full">
-        <div className="absolute left-[18%] top-[8%] h-[78%] w-[64%] border-2" style={{ background: colors.body, borderColor: colors.outline }} />
-        <div className="absolute left-[18%] top-[8%] h-[22%] w-[64%] border-x-2 border-t-2" style={{ background: colors.hair, borderColor: colors.outline }} />
-        <div className="absolute left-[30%] top-[38%] h-[9%] w-[9%] bg-[#2F2A26]" />
-        <div className="absolute right-[30%] top-[38%] h-[9%] w-[9%] bg-[#2F2A26]" />
-        <div className="absolute left-[26%] bottom-[8%] h-[26%] w-[48%] border-x-2 border-b-2" style={{ background: colors.shirt, borderColor: colors.outline }} />
+        <div className="absolute left-[16%] top-[18%] h-[62%] w-[68%] rounded-[5px] border-2" style={{ background: colors.body, borderColor: colors.outline }} />
+        <div className="absolute left-[18%] top-[18%] h-[18%] w-[64%] rounded-t-[4px] border-x-2 border-t-2" style={{ background: colors.hair, borderColor: colors.outline }} />
+        <div className="absolute left-[32%] top-[43%] h-[7%] w-[7%] bg-[#2F2A26]" />
+        <div className="absolute right-[32%] top-[43%] h-[7%] w-[7%] bg-[#2F2A26]" />
+        <div className="absolute left-[28%] bottom-[10%] h-[24%] w-[44%] border-x-2 border-b-2" style={{ background: colors.shirt, borderColor: colors.outline }} />
+        <div className="absolute -top-[4px] left-1/2 -translate-x-1/2 rounded-[5px] border border-[#70583A] px-1 text-[9px] font-bold leading-[14px] text-[#5B442C]" style={{ background: colors.tag }}>
+          {label}
+        </div>
       </div>
     </div>
   );
 }
 
 function DPad({ onMove }: { onMove: (delta: Pos) => void }) {
-  const btn = "flex h-10 w-10 items-center justify-center rounded-[12px] border border-[#D8C4AA] bg-[#FFF9EE] text-[16px] font-black text-[#5F4C36] active:translate-y-px";
+  const btn = "flex h-10 w-10 items-center justify-center rounded-[12px] border border-[#D6C4A7] bg-[#FFF8EA] text-[16px] font-black text-[#5F4C36] active:translate-y-px";
   return (
     <div className="mx-auto grid w-[124px] grid-cols-3 gap-1">
       <div />
@@ -480,7 +495,7 @@ function ModeButton({ active, label, onClick }: { active: boolean; label: string
   return (
     <button
       className={`rounded-[14px] border px-2 py-2 text-[12px] font-semibold active:translate-y-px ${
-        active ? "border-[#6C5942] bg-[#6C5942] text-white" : "border-[#D8C4AA] bg-[#FFF9EE] text-[#5F4C36]"
+        active ? "border-[#6C5942] bg-[#6C5942] text-white" : "border-[#D6C4A7] bg-[#FFF8EA] text-[#5F4C36]"
       }`}
       onClick={onClick}
     >
