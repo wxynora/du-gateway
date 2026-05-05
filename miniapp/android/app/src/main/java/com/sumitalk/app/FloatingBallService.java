@@ -996,8 +996,8 @@ public class FloatingBallService extends Service {
         if (title.isEmpty()) title = "渡想查岗";
         String message = String.valueOf(payload.optString("message", "渡想看一眼你现在屏幕上在做什么。只有你同意后才会截图。")).trim();
         if (message.isEmpty()) message = "渡想看一眼你现在屏幕上在做什么。只有你同意后才会截图。";
-        if (!message.contains("系统截屏授权") && !message.contains("整个屏幕")) {
-            message += "\n\n同意后 Android 会再弹一次系统截屏授权，请选「整个屏幕」并点开始，否则截图不会回传。";
+        if (!message.contains("辅助功能") && !message.contains("不会跳转")) {
+            message += "\n\n同意后会通过 SumiTalk 辅助功能截取当前屏幕，不会主动跳转应用；如果辅助功能没开，则不会截图。";
         }
         int timeoutSeconds = Math.max(30, Math.min(300, payload.optInt("timeoutSeconds", 120)));
 
@@ -1033,13 +1033,18 @@ public class FloatingBallService extends Service {
 
         String requestId = "screen_check_" + System.currentTimeMillis();
         ScreenCaptureBridge.create(requestId);
-        Intent captureIntent = new Intent(this, SumiScreenCaptureActivity.class);
-        captureIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        captureIntent.putExtra("request_id", requestId);
-        captureIntent.putExtra("panel_token", panelToken);
-        captureIntent.putExtra("device_id", panelDeviceId);
-        captureIntent.putExtra("api_base", API_BASE);
-        startActivity(captureIntent);
+        try {
+            Thread.sleep(350L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (!SumiAccessibilityService.requestScreenshot(requestId)) {
+            JSONObject detail = new JSONObject();
+            detail.put("approved", false);
+            detail.put("stage", "accessibility_screenshot");
+            detail.put("error", "accessibility_service_unavailable");
+            ScreenCaptureBridge.complete(requestId, detail);
+        }
 
         JSONObject detail = ScreenCaptureBridge.await(requestId, Math.max(45L, timeoutSeconds) * 1000L);
         if (detail == null) {

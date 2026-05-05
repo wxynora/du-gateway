@@ -606,6 +606,10 @@ def _screen_check_wakeup_event(item: dict) -> dict:
             outcome = "她关闭了申请，没有同意截图。"
         elif stage == "system_capture_permission" or reason == "system_permission_denied":
             outcome = "她点了 SumiTalk 的同意，但 Android 系统截屏授权没有完成，所以这次没有截图。"
+        elif stage == "accessibility_screenshot":
+            outcome = "她点了同意，但 SumiTalk 辅助功能截图失败了，所以这次没有截图。"
+            if error:
+                outcome += f"\n错误：{error[:120]}"
         elif stage in {"screen_capture", "capture_upload"} or error:
             outcome = "她点了同意，但截图流程失败了，所以这次没有截图。"
             if error:

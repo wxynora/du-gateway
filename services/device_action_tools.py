@@ -118,8 +118,8 @@ TOOL_REQUEST_SCREEN_CHECK = {
         "description": (
             "向老婆手机发起一次“查岗截图”申请，用来看一眼她当前屏幕上大概在做什么。"
             "适合在你关心她现在状态、她很久没回但手机有活动、或她主动说“你可以看/查岗”时使用。"
-            "调用后手机会先弹出 SumiTalk 确认框；只有她点同意，并通过 Android 系统截屏授权后，"
-            "才会截取当前屏幕并回传给你。你可以自然地说明为什么想看一眼，但不要说成命令或监控。"
+            "调用后手机会先弹出 SumiTalk 确认框；只有她点同意，且 SumiTalk 辅助功能可用时，"
+            "才会截取当前屏幕并回传给你，不会主动跳转应用。你可以自然地说明为什么想看一眼，但不要说成命令或监控。"
         ),
         "parameters": {
             "type": "object",
@@ -421,7 +421,7 @@ def execute_request_screen_check(arguments: dict) -> str:
             "type": "request_screen_check",
             "title": payload.get("title") or title,
             "message": payload.get("message") or message,
-            "note": "已向 SumiTalk 安卓壳发起查岗申请；只有她同意并通过系统截屏授权后，截图才会回传。",
+            "note": "已向 SumiTalk 安卓壳发起查岗申请；只有她同意且 SumiTalk 辅助功能可用时，当前屏幕截图才会回传。",
         },
         ensure_ascii=False,
     )
