@@ -1,8 +1,10 @@
 # 便宜图像 AI：将图片转为文字描述，用于存 R2（与转发给 Claude 的原图并行）
 import base64
 import copy
+import hashlib
 import io
 import math
+import threading
 import uuid
 from typing import Optional
 
@@ -20,6 +22,9 @@ from config import IMAGE_DESC_API_URL, IMAGE_DESC_API_KEY, IMAGE_DESC_MODEL
 ANTHROPIC_IMAGE_MAX_LONG_EDGE = 1568
 ANTHROPIC_IMAGE_MAX_PIXELS = 1_150_000
 _RESIZABLE_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
+_DESC_CACHE: dict[str, str] = {}
+_DESC_PENDING: dict[str, threading.Event] = {}
+_DESC_LOCK = threading.Lock()
 
 
 def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Optional[str]:
@@ -115,6 +120,88 @@ def _split_data_url(url: str) -> tuple[str, str] | None:
     if ";" in head:
         mime_type = head.split(";", 1)[0].replace("data:", "").strip().lower() or mime_type
     return mime_type, payload
+
+
+def image_description_key(image_base64: str, mime_type: str = "image/jpeg") -> str:
+    payload = str(image_base64 or "")
+    if payload.startswith("data:"):
+        parsed = _split_data_url(payload)
+        if parsed:
+            mime_type, payload = parsed
+    mt = str(mime_type or "image/jpeg").strip().lower()
+    return f"{mt}:{hashlib.sha256(payload.encode('utf-8', errors='ignore')).hexdigest()}"
+
+
+def mark_image_description_pending(image_base64: str, mime_type: str = "image/jpeg") -> str:
+    key = image_description_key(image_base64, mime_type)
+    with _DESC_LOCK:
+        if key not in _DESC_CACHE and key not in _DESC_PENDING:
+            _DESC_PENDING[key] = threading.Event()
+    return key
+
+
+def finish_image_description(image_base64: str, mime_type: str, description: Optional[str]) -> None:
+    key = image_description_key(image_base64, mime_type)
+    desc = str(description or "").strip()
+    with _DESC_LOCK:
+        if desc:
+            _DESC_CACHE[key] = desc
+        event = _DESC_PENDING.pop(key, None)
+    if event:
+        event.set()
+
+
+def get_cached_image_description(image_base64: str, mime_type: str, wait_seconds: float = 0.0) -> Optional[str]:
+    key = image_description_key(image_base64, mime_type)
+    with _DESC_LOCK:
+        desc = _DESC_CACHE.get(key)
+        event = _DESC_PENDING.get(key)
+    if desc:
+        return desc
+    if event and wait_seconds > 0:
+        event.wait(wait_seconds)
+        with _DESC_LOCK:
+            return _DESC_CACHE.get(key)
+    return None
+
+
+def has_pending_image_description(image_base64: str, mime_type: str = "image/jpeg") -> bool:
+    key = image_description_key(image_base64, mime_type)
+    with _DESC_LOCK:
+        return key in _DESC_PENDING
+
+
+def extract_image_payload_from_part(part: dict) -> tuple[str, str] | None:
+    if not isinstance(part, dict):
+        return None
+    image_url = None
+    if part.get("type") == "image_url":
+        image_url = part.get("image_url") if isinstance(part.get("image_url"), dict) else None
+    elif part.get("type") == "image" and isinstance(part.get("image_url"), dict):
+        image_url = part.get("image_url")
+    if not image_url:
+        return None
+    parsed = _split_data_url(image_url.get("url") or "")
+    if not parsed:
+        return None
+    mime_type, payload = parsed
+    return payload, mime_type
+
+
+def image_part_archive_description(part: dict, wait_seconds: float = 3.0) -> Optional[str]:
+    parsed = extract_image_payload_from_part(part)
+    if not parsed:
+        return None
+    payload, mime_type = parsed
+    was_pending = has_pending_image_description(payload, mime_type)
+    desc = get_cached_image_description(payload, mime_type, wait_seconds=wait_seconds)
+    if desc:
+        return desc
+    if was_pending:
+        return None
+    desc = image_to_description(payload, mime_type)
+    finish_image_description(payload, mime_type, desc)
+    return desc
 
 
 def _encode_resized_image(img) -> tuple[str, str]:

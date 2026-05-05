@@ -192,7 +192,7 @@ def _append_to_static_system(body: dict, text: str) -> dict:
 def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
     """
     清洗层：图片进入模型前先按 Anthropic 建议压缩，并行把图片用便宜 AI 转描述存 R2。
-    返回新的 body（保留可读压缩图供「发给渡」用；存 R2 时用完整清洗版，图片→占位符）。
+    返回新的 body（保留可读压缩图供「发给渡」用；存 R2 时用完整清洗版，图片→描述/占位符）。
     """
     body = copy.deepcopy(body)
     body, compress_stats = image_desc.compress_images_for_anthropic(body)
@@ -214,13 +214,15 @@ def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
     images = image_desc.extract_images_from_messages(messages)
     for mi, ci, b64, mime in images:
         msg_id = f"{window_id}_{mi}_{ci}_{hash(b64) % 10**8}"
+        image_desc.mark_image_description_pending(b64, mime)
         # 异步：转描述并存 R2，不阻塞
-        def _do(img_b64, mid, wid):
-            desc = image_desc.image_to_description(img_b64, mime)
+        def _do(img_b64, mid, wid, img_mime):
+            desc = image_desc.image_to_description(img_b64, img_mime)
+            image_desc.finish_image_description(img_b64, img_mime, desc)
             if desc:
                 r2_store.save_image_description(wid, mid, desc)
 
-        t = threading.Thread(target=_do, args=(b64, msg_id, window_id))
+        t = threading.Thread(target=_do, args=(b64, msg_id, window_id, mime))
         t.daemon = True
         t.start()
     return body

@@ -1,12 +1,13 @@
 # 两条数据流用的清洗逻辑
 # 发给渡：只清 Rikka 预设，不替换表情包（让渡看到 (表情包:名字) 格式并按此输出）
-# 存 R2：完整清洗 = 清 Rikka + 表情包→文字 + 图片→占位符（描述在 images/）
+# 存 R2：完整清洗 = 清 Rikka + 表情包→文字 + 图片→描述/占位符（描述另存 images/）
 import copy
 import json
 import re
 from pathlib import Path
 
 from config import RIKKA_PRESET_PATTERNS, EMOJI_MAPPING_FILE
+from services import image_desc
 
 # 表情包格式：(表情包:xxx) → [表情:描述]（对照表在 data/emoji_mapping.json）
 EMOJI_PACK_PATTERN = re.compile(r"\(表情包:([^)]*)\)", re.IGNORECASE)
@@ -173,7 +174,7 @@ def clean_message_content_for_forward(content, msg: dict | None = None) -> str |
 
 def clean_message_for_r2(msg: dict) -> dict:
     """
-    对单条 message 做「存 R2」完整清洗：Rikka + 表情包→文字 + 图片→占位符。
+    对单条 message 做「存 R2」完整清洗：Rikka + 表情包→文字 + 图片→描述/占位符。
     若 role 为 tool（渡自己调时间工具的结果），只保留时间 HH:mm 再存。
     返回新 message，不修改原对象。
     """
@@ -202,7 +203,8 @@ def clean_message_for_r2(msg: dict) -> dict:
                     raw = _normalize_rikkahub_time_tool_result(raw)
                 out.append({"type": "text", "text": apply_text_cleaning_for_r2(raw, strip_rikkahub_time=strip_time)})
             elif part.get("type") in ("image_url", "image"):
-                out.append({"type": "text", "text": "[图片]"})
+                desc = image_desc.image_part_archive_description(part)
+                out.append({"type": "text", "text": f"[图片：{desc}]" if desc else "[图片]"})
             else:
                 out.append(part)
         msg["content"] = out
@@ -214,7 +216,7 @@ def clean_message_for_r2(msg: dict) -> dict:
 
 def build_round_cleaned_for_r2(user_msg: dict, assistant_msg: dict) -> list:
     """
-    构建「存 R2」用的一轮：老婆问 + 渡的回复，完整清洗（Rikka、表情包→文字、图片→[图片]）。
+    构建「存 R2」用的一轮：老婆问 + 渡的回复，完整清洗（Rikka、表情包→文字、图片→描述/占位符）。
     整轮作废时不调用，故这里只处理通过初筛的轮。
     """
     return [
