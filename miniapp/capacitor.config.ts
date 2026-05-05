@@ -5,10 +5,6 @@ const config: CapacitorConfig = {
   appName: "SumiTalk",
   webDir: "../miniapp_static",
   bundledWebRuntime: false,
-  server: {
-    url: "https://duxy-home.com/miniapp",
-    cleartext: false,
-  },
   android: {
     allowMixedContent: true,
   },
