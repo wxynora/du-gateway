@@ -2553,10 +2553,15 @@ function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowId: stri
           className={`min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto ${readerPadding} pb-[calc(env(safe-area-inset-bottom,0px)+34px)] pt-5`}
           onMouseUp={captureSelection}
           onTouchEnd={() => window.setTimeout(captureSelection, 80)}
-          style={{ fontSize: `${settings.fontSize}px`, lineHeight: settings.lineHeight }}
+          onContextMenu={(event) => event.preventDefault()}
+          style={{ fontSize: `${settings.fontSize}px`, lineHeight: settings.lineHeight, WebkitTouchCallout: "none" } as React.CSSProperties}
         >
           <article className="mx-auto max-w-[760px]">
-            <div className="select-text whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+            <div
+              className="select-text whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+              onContextMenu={(event) => event.preventDefault()}
+              style={{ WebkitTouchCallout: "none" } as React.CSSProperties}
+            >
               {renderCoReadMarkedText(
                 activeSectionText,
                 activeSection.char_start,
