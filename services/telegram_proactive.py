@@ -15,8 +15,6 @@ from config import (
     TELEGRAM_CHAT_PATH,
     TELEGRAM_PROACTIVE_ENABLED,
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
-    TELEGRAM_PROACTIVE_QUIET_START_HM,
-    TELEGRAM_PROACTIVE_QUIET_END_HM,
     TELEGRAM_PROACTIVE_BASE_P,
     TELEGRAM_PROACTIVE_K_PER_HOUR,
     TELEGRAM_PROACTIVE_PROB_MULTIPLIER,
@@ -127,31 +125,6 @@ def _get_chat_model() -> str:
         return str(get_cached_active_model(refresh_if_missing=True) or "").strip()
     except Exception:
         return ""
-
-
-def _parse_hm(hm: str) -> tuple[int, int]:
-    s = (hm or "").strip()
-    if not s:
-        return 0, 0
-    parts = s.split(":")
-    if len(parts) != 2:
-        return 0, 0
-    try:
-        return max(0, min(23, int(parts[0]))), max(0, min(59, int(parts[1])))
-    except Exception:
-        return 0, 0
-
-
-def _is_in_quiet_hours(now_bj: datetime) -> bool:
-    sh, sm = _parse_hm(TELEGRAM_PROACTIVE_QUIET_START_HM)
-    eh, em = _parse_hm(TELEGRAM_PROACTIVE_QUIET_END_HM)
-    cur = now_bj.hour * 60 + now_bj.minute
-    start = sh * 60 + sm
-    end = eh * 60 + em
-    # 只支持常见的「跨午夜」或「同日」区间
-    if start <= end:
-        return start <= cur < end
-    return cur >= start or cur < end
 
 
 def _hours_since_last(last_iso: Optional[str], now_bj: datetime) -> float:
@@ -729,9 +702,6 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     if not now_dt:
         return {"ok": False, "error": "time_parse_failed"}
 
-    if _is_in_quiet_hours(now_dt):
-        return {"ok": True, "quiet": True, "sent": False, "now": now_iso}
-
     # 若最近任一入口有消息活动（正在聊天），本 tick 不主动发。
     # 这里必须与主动概率计算使用同一个口径，避免 SumiTalk/QQ/微信等入口正在聊时误触发主动消息。
     skip_min = int(TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES or 0)
@@ -842,7 +812,7 @@ def run_scheduler_loop():
         return
     interval_min = max(1, int(TELEGRAM_PROACTIVE_INTERVAL_MINUTES or 30))
     uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
-    logger.info("主动发消息调度启动 interval_min=%s target_user_id=%s quiet=%s-%s", interval_min, uid, TELEGRAM_PROACTIVE_QUIET_START_HM, TELEGRAM_PROACTIVE_QUIET_END_HM)
+    logger.info("主动发消息调度启动 interval_min=%s target_user_id=%s", interval_min, uid)
     next_main_at = 0.0
     next_followup_at = 0.0
     next_du_daily_at = 0.0

@@ -21,6 +21,9 @@ _MIN_NIGHT_OFF_MINUTES = 45
 _SLEEP_STILL_AWAKE_AFTER_MINUTES = 30
 _SLEEP_STILL_AWAKE_MAX_MINUTES = 180
 _XHS_LONG_USE_MINUTES = 120
+_NO_REPLY_SOFT_TRIGGER_AFTER_MINUTES = 30
+_NO_REPLY_SOFT_TRIGGER_MAX_MINUTES = 360
+_NO_REPLY_APP_LOOKBACK_MINUTES = 30
 
 _SLEEP_PATTERNS = (
     "我要睡",
@@ -35,11 +38,48 @@ _SLEEP_PATTERNS = (
 
 _XHS_PACKAGES = {"com.xingin.xhs"}
 _XHS_NAME_HINTS = ("小红书", "xiaohongshu", "xhs", "rednote")
+_AWAY_INTENT_HINTS = (
+    "我去洗澡",
+    "去洗澡",
+    "洗澡去了",
+    "我去睡",
+    "去睡",
+    "睡觉",
+    "睡了",
+    "晚安",
+    "我去吃饭",
+    "去吃饭",
+    "我去做饭",
+    "去做饭",
+    "我去上课",
+    "去上课",
+    "我去开会",
+    "去开会",
+    "我去忙",
+    "先忙",
+    "忙去了",
+    "我去写代码",
+    "去写代码",
+    "我去工作",
+    "去工作",
+    "我出门",
+    "要出门",
+    "我去拿快递",
+    "去拿快递",
+    "我下楼",
+    "去下楼",
+    "等我一下",
+    "待会聊",
+    "一会儿回来",
+    "回头聊",
+    "先不聊",
+)
 _EVENT_PRIORITY = {
     "sleep_intent_still_screen_on": 10,
     "night_reawake_screen_on": 20,
     "morning_first_screen_on": 30,
     "xiaohongshu_over_2h": 40,
+    "no_reply_30m_app_activity": 90,
 }
 
 
@@ -197,6 +237,63 @@ def _latest_sleep_message(window_id: str) -> dict | None:
     return None
 
 
+def _round_user_text(row: dict) -> str:
+    for msg in row.get("messages") or []:
+        if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "user":
+            continue
+        text = _message_text(msg.get("content")).strip()
+        if text:
+            return text
+    return ""
+
+
+def _round_has_assistant(row: dict) -> bool:
+    for msg in row.get("messages") or []:
+        if isinstance(msg, dict) and str(msg.get("role") or "").strip().lower() == "assistant":
+            if _message_text(msg.get("content")).strip():
+                return True
+    return False
+
+
+def _is_backend_event_text(text: str) -> bool:
+    s = str(text or "").strip()
+    return (
+        s.startswith("[Proactive trigger fact]")
+        or "SumiTalk 双选项弹窗收到了回应" in s
+        or "弹窗结果：" in s
+    )
+
+
+def _latest_normal_chat_round(window_id: str) -> dict | None:
+    rounds = r2_store.get_conversation_rounds(window_id, last_n=30) or []
+    for row in reversed(rounds):
+        if not isinstance(row, dict) or not _round_has_assistant(row):
+            continue
+        text = _round_user_text(row)
+        if not text or _is_backend_event_text(text):
+            continue
+        return {
+            "timestamp": str(row.get("timestamp") or "").strip(),
+            "index": str(row.get("index") or "").strip(),
+            "user_text": text,
+        }
+    return None
+
+
+def _user_announced_away(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s:
+        return False
+    return any(h in s for h in _AWAY_INTENT_HINTS)
+
+
+def _has_user_reply_after(at_dt: datetime) -> bool:
+    last_user_dt = _dt(r2_store.get_last_telegram_user_activity_at())
+    if not last_user_dt:
+        return False
+    return last_user_dt > at_dt + timedelta(seconds=30)
+
+
 def _is_xhs_app(item: dict) -> bool:
     pkg = str((item or {}).get("packageName") or "").strip().lower()
     app = str((item or {}).get("appName") or "").strip().lower()
@@ -212,6 +309,150 @@ def _active_xhs_minutes(doc: dict, now_dt) -> tuple[int, str]:
         return 0, ""
     started = _dt(active.get("startedAt"))
     return _minutes_between(started, now_dt), str(active.get("startedAt") or "").strip()
+
+
+def _clock(dt: datetime | None) -> str:
+    if not dt:
+        return ""
+    return dt.strftime("%H:%M")
+
+
+def _duration_text(minutes: int) -> str:
+    m = max(1, int(minutes or 0))
+    if m < 60:
+        return f"{m} 分钟"
+    h = m // 60
+    rest = m % 60
+    return f"{h} 小时 {rest} 分钟" if rest else f"{h} 小时"
+
+
+def _session_minutes(start_dt, end_dt, since_dt, now_dt) -> int:
+    if not start_dt:
+        return 0
+    s = max(start_dt, since_dt)
+    e = min(end_dt or now_dt, now_dt)
+    return _minutes_between(s, e)
+
+
+def _add_session(out: list[dict], seen: set[tuple[str, str, str]], item: dict, since_dt, now_dt, active: bool = False) -> None:
+    if not isinstance(item, dict):
+        return
+    app = str(item.get("appName") or item.get("packageName") or "").strip()
+    pkg = str(item.get("packageName") or app).strip()
+    started = _dt(item.get("startedAt"))
+    ended = _dt(item.get("endedAt")) if not active else now_dt
+    if not app or not started:
+        return
+    if ended and ended < since_dt:
+        return
+    if started > now_dt:
+        return
+    key = (pkg, str(item.get("startedAt") or ""), str(item.get("endedAt") or "active"))
+    if key in seen:
+        return
+    seen.add(key)
+    minutes = _session_minutes(started, ended, since_dt, now_dt)
+    if minutes <= 0:
+        return
+    out.append({"app": app, "started": started, "ended": ended, "minutes": minutes, "active": active})
+
+
+def _recent_app_activity_lines(doc: dict, history: list[dict], now_dt) -> list[str]:
+    since_dt = now_dt - timedelta(minutes=_NO_REPLY_APP_LOOKBACK_MINUTES)
+    sessions: list[dict] = []
+    seen_sessions: set[tuple[str, str, str]] = set()
+
+    app_sessions = doc.get("app_sessions") if isinstance(doc.get("app_sessions"), dict) else {}
+    active = app_sessions.get("active") if isinstance(app_sessions.get("active"), dict) else {}
+    if active:
+        _add_session(sessions, seen_sessions, active, since_dt, now_dt, active=True)
+    for item in app_sessions.get("recent") or []:
+        _add_session(sessions, seen_sessions, item, since_dt, now_dt)
+
+    for row in history or []:
+        if not isinstance(row, dict) or str(row.get("type") or "") != "app_sessions":
+            continue
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        for item in data.get("recent") or []:
+            _add_session(sessions, seen_sessions, item, since_dt, now_dt)
+
+    if sessions:
+        sessions.sort(key=lambda x: x["started"])
+        lines = []
+        for item in sessions[-6:]:
+            start = _clock(item.get("started"))
+            app = item.get("app") or "未知应用"
+            minutes = _duration_text(item.get("minutes") or 0)
+            if item.get("active"):
+                lines.append(f"{start} 打开{app}，现在还在前台，过去半小时内已用约 {minutes}")
+            else:
+                lines.append(f"{start} 打开{app}，用了约 {minutes}")
+        return lines
+
+    foreground_lines: list[str] = []
+    seen_fg: set[tuple[str, str]] = set()
+    for row in history or []:
+        if not isinstance(row, dict) or str(row.get("type") or "") != "foreground":
+            continue
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        at = _dt(data.get("observedAt") or data.get("updatedAt") or row.get("at"))
+        if not at or at < since_dt or at > now_dt:
+            continue
+        app = str(data.get("appName") or data.get("packageName") or "").strip()
+        if not app:
+            continue
+        key = (app, _clock(at))
+        if key in seen_fg:
+            continue
+        seen_fg.add(key)
+        foreground_lines.append(f"{_clock(at)} 打开{app}")
+    if foreground_lines:
+        return foreground_lines[-6:]
+
+    screen_lines: list[str] = []
+    for item in _history_screen_events(history):
+        at = item.get("at")
+        if not at or at < since_dt or at > now_dt:
+            continue
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        if _is_screen_on(data):
+            screen_lines.append(f"{_clock(at)} 亮屏")
+        elif _is_screen_off(data):
+            screen_lines.append(f"{_clock(at)} 熄屏")
+    return screen_lines[-4:]
+
+
+def _build_no_reply_soft_trigger(doc: dict, history: list[dict], window_id: str, now_dt) -> TriggerEvent | None:
+    latest = _latest_normal_chat_round(window_id)
+    if not latest:
+        return None
+    round_dt = _dt(latest.get("timestamp"))
+    if not round_dt:
+        return None
+    elapsed = _minutes_between(round_dt, now_dt)
+    if elapsed < _NO_REPLY_SOFT_TRIGGER_AFTER_MINUTES or elapsed > _NO_REPLY_SOFT_TRIGGER_MAX_MINUTES:
+        return None
+    if _has_user_reply_after(round_dt):
+        return None
+    if _user_announced_away(str(latest.get("user_text") or "")):
+        return None
+    activity_lines = _recent_app_activity_lines(doc, history, now_dt)
+    if not activity_lines:
+        return None
+    fact = (
+        f"她已经大约 {elapsed} 分钟没有回你了。"
+        f"她刚才没有说要去做别的事。过去半小时手机活动："
+        + "；".join(activity_lines)
+        + "。"
+    )
+    key_tail = latest.get("index") or latest.get("timestamp") or round_dt.isoformat()
+    return TriggerEvent(
+        "no_reply_30m_app_activity",
+        f"no_reply_30m_app_activity:{window_id}:{key_tail}",
+        fact,
+        device_id=_device_id(doc),
+        event_at=now_beijing_iso(),
+    )
 
 
 def _read_state() -> dict:
@@ -317,6 +558,9 @@ def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> lis
                 event_at=now_beijing_iso(),
             )
         )
+    soft_no_reply = _build_no_reply_soft_trigger(doc, history, window_id, now_dt)
+    if soft_no_reply:
+        events.append(soft_no_reply)
     return events
 
 
