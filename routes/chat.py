@@ -1680,25 +1680,32 @@ def _collect_tool_trace_from_messages(messages: list) -> list[dict]:
     从消息链提取工具调用与结果，供存档后 MiniApp 展示。
     返回项结构：{id,type,function:{name,arguments},result}
     """
-    out: list[dict] = []
-    tool_result_by_id: dict[str, str] = {}
-    for m in messages or []:
-        if not isinstance(m, dict):
-            continue
-        if str(m.get("role") or "").strip().lower() != "tool":
-            continue
-        tid = str(m.get("tool_call_id") or "").strip()
-        if not tid:
-            continue
-        c = m.get("content")
+    def _tool_content_to_str(msg: dict) -> str:
+        c = msg.get("content")
         if isinstance(c, str):
-            tool_result_by_id[tid] = c
-        else:
-            try:
-                tool_result_by_id[tid] = json.dumps(c, ensure_ascii=False)
-            except Exception:
-                tool_result_by_id[tid] = str(c)
-    for m in messages or []:
+            return c
+        try:
+            return json.dumps(c, ensure_ascii=False)
+        except Exception:
+            return str(c)
+
+    def _following_tool_message_indices(start_idx: int) -> list[int]:
+        indices: list[int] = []
+        for j in range(start_idx + 1, len(messages or [])):
+            mm = messages[j]
+            if not isinstance(mm, dict):
+                continue
+            role = str(mm.get("role") or "").strip().lower()
+            if role == "tool":
+                indices.append(j)
+                continue
+            if role in {"assistant", "user"}:
+                break
+        return indices
+
+    out: list[dict] = []
+    used_tool_indices: set[int] = set()
+    for i, m in enumerate(messages or []):
         if not isinstance(m, dict):
             continue
         if str(m.get("role") or "").strip().lower() != "assistant":
@@ -1706,12 +1713,32 @@ def _collect_tool_trace_from_messages(messages: list) -> list[dict]:
         tcs = m.get("tool_calls")
         if not isinstance(tcs, list):
             continue
-        for tc in tcs:
+        following_tool_indices = _following_tool_message_indices(i)
+        for pos, tc in enumerate(tcs):
             if not isinstance(tc, dict):
                 continue
             tid = str(tc.get("id") or "").strip()
             row = dict(tc)
-            row["result"] = tool_result_by_id.get(tid, "")
+            result_idx = None
+            if tid:
+                for idx in following_tool_indices:
+                    if idx in used_tool_indices:
+                        continue
+                    tm = messages[idx]
+                    if str(tm.get("tool_call_id") or "").strip() == tid:
+                        result_idx = idx
+                        break
+            if result_idx is None:
+                remaining = [idx for idx in following_tool_indices if idx not in used_tool_indices]
+                if pos < len(remaining):
+                    result_idx = remaining[pos]
+                elif remaining:
+                    result_idx = remaining[0]
+            if result_idx is not None:
+                used_tool_indices.add(result_idx)
+                row["result"] = _tool_content_to_str(messages[result_idx])
+            else:
+                row["result"] = ""
             out.append(row)
     return out
 
