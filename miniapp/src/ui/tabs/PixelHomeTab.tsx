@@ -87,38 +87,72 @@ function isWalkable(pos: Pos): boolean {
   return true;
 }
 
-function nearestWalkable(pos: Pos): Pos {
-  if (isWalkable(pos)) return pos;
-  for (let radius = 1; radius <= 8; radius += 1) {
-    for (let dy = -radius; dy <= radius; dy += 1) {
-      for (let dx = -radius; dx <= radius; dx += 1) {
-        const candidate = clampPos({ x: pos.x + dx, y: pos.y + dy });
-        if (isWalkable(candidate)) return candidate;
-      }
+function neighbors(pos: Pos): Pos[] {
+  return [
+    { x: pos.x + 1, y: pos.y },
+    { x: pos.x - 1, y: pos.y },
+    { x: pos.x, y: pos.y + 1 },
+    { x: pos.x, y: pos.y - 1 },
+  ].filter(isWalkable);
+}
+
+function findPath(from: Pos, to: Pos): Pos[] | null {
+  if (!isWalkable(from) || !isWalkable(to)) return null;
+  const startKey = keyOf(from);
+  const endKey = keyOf(to);
+  const queue: Pos[] = [from];
+  const cameFrom = new Map<string, string | null>([[startKey, null]]);
+  const byKey = new Map<string, Pos>([[startKey, from]]);
+  for (let head = 0; head < queue.length; head += 1) {
+    const current = queue[head];
+    const currentKey = keyOf(current);
+    if (currentKey === endKey) break;
+    for (const next of neighbors(current)) {
+      const nextKey = keyOf(next);
+      if (cameFrom.has(nextKey)) continue;
+      cameFrom.set(nextKey, currentKey);
+      byKey.set(nextKey, next);
+      queue.push(next);
     }
   }
-  return { x: 13, y: 13 };
+  if (!cameFrom.has(endKey)) return null;
+  const path: Pos[] = [];
+  let cursor: string | null = endKey;
+  while (cursor) {
+    const pos = byKey.get(cursor);
+    if (pos) path.push(pos);
+    cursor = cameFrom.get(cursor) ?? null;
+  }
+  return path.reverse();
+}
+
+function nearestReachableWalkable(from: Pos, target: Pos): Pos | null {
+  if (!isWalkable(from)) return null;
+  const queue: Pos[] = [from];
+  const seen = new Set<string>([keyOf(from)]);
+  let best = from;
+  let bestScore = distance(from, target);
+  for (let head = 0; head < queue.length; head += 1) {
+    const current = queue[head];
+    const score = distance(current, target);
+    if (score < bestScore) {
+      best = current;
+      bestScore = score;
+    }
+    for (const next of neighbors(current)) {
+      const nextKey = keyOf(next);
+      if (seen.has(nextKey)) continue;
+      seen.add(nextKey);
+      queue.push(next);
+    }
+  }
+  return best;
 }
 
 function stepToward(from: Pos, to: Pos): Pos {
   if (distance(from, to) === 0) return from;
-  const options: Pos[] = [];
-  const dx = Math.sign(to.x - from.x);
-  const dy = Math.sign(to.y - from.y);
-  if (Math.abs(to.x - from.x) >= Math.abs(to.y - from.y)) {
-    if (dx) options.push({ x: from.x + dx, y: from.y });
-    if (dy) options.push({ x: from.x, y: from.y + dy });
-  } else {
-    if (dy) options.push({ x: from.x, y: from.y + dy });
-    if (dx) options.push({ x: from.x + dx, y: from.y });
-  }
-  options.push(
-    { x: from.x + 1, y: from.y },
-    { x: from.x - 1, y: from.y },
-    { x: from.x, y: from.y + 1 },
-    { x: from.x, y: from.y - 1 },
-  );
-  return options.find(isWalkable) || from;
+  const path = findPath(from, to);
+  return path?.[1] || from;
 }
 
 function distance(a: Pos, b: Pos): number {
@@ -202,7 +236,9 @@ export function PixelHomeTab() {
           setPlayerTarget(null);
           return current;
         }
-        return stepToward(current, playerTarget);
+        const next = stepToward(current, playerTarget);
+        if (keyOf(next) === keyOf(current)) setPlayerTarget(null);
+        return next;
       });
     }, 140);
     return () => window.clearInterval(timer);
@@ -218,10 +254,16 @@ export function PixelHomeTab() {
             { x: player.x - 1, y: player.y },
             { x: player.x, y: player.y + 1 },
             { x: player.x, y: player.y - 1 },
-          ].filter(isWalkable);
-          nextTarget = candidates.sort((a, b) => distance(current, a) - distance(current, b))[0] || player;
+          ]
+            .filter(isWalkable)
+            .map((candidate) => ({ candidate, path: findPath(current, candidate) }))
+            .filter((item): item is { candidate: Pos; path: Pos[] } => Boolean(item.path))
+            .sort((a, b) => a.path.length - b.path.length);
+          nextTarget = candidates[0]?.candidate || nearestReachableWalkable(current, player) || current;
         } else if (!nextTarget || distance(current, nextTarget) === 0) {
-          const list = POIS[mode].filter(isWalkable);
+          const list = POIS[mode]
+            .map((poi) => nearestReachableWalkable(current, poi))
+            .filter((poi): poi is Pos => Boolean(poi));
           nextTarget = list[Math.floor(Math.random() * list.length)] || current;
           setDuTarget(nextTarget);
         }
@@ -296,7 +338,8 @@ export function PixelHomeTab() {
     const rect = stageRef.current.getBoundingClientRect();
     const x = Math.floor(((e.clientX - rect.left) / rect.width) * COLS);
     const y = Math.floor(((e.clientY - rect.top) / rect.height) * ROWS);
-    const pos = nearestWalkable({ x, y });
+    const clicked = { x, y };
+    const pos = nearestReachableWalkable(player, clicked) || player;
     if (decorateMode) {
       if (occupied.has(keyOf(pos))) {
         setLine("这里放不下，换一格。");
@@ -445,30 +488,41 @@ function WalkHint({ pos }: { pos: Pos | null }) {
 
 function PixelPerson({ pos, tone, label }: { pos: Pos; tone: "me" | "du"; label: string }) {
   const colors = tone === "du"
-    ? { body: "#F1D38C", hair: "#5A4637", shirt: "#FFF0C7", outline: "#5E4A34", tag: "#FFF3C2" }
-    : { body: "#F5CEC8", hair: "#27242C", shirt: "#F3AFC1", outline: "#5E4A34", tag: "#FFE2EA" };
+    ? { skin: "#F0C98F", hair: "#5A3E2D", shirt: "#F6D17C", pants: "#6E563A", accent: "#FFF0BD", outline: "#4D3526" }
+    : { skin: "#F1B9A7", hair: "#2D2430", shirt: "#F3A7B6", pants: "#8B5F5A", accent: "#F86F8C", outline: "#4D3526" };
   return (
     <div
       className="absolute z-20"
       style={{
-        left: `${(pos.x / COLS) * 100}%`,
-        top: `${(pos.y / ROWS) * 100}%`,
-        width: `${(1.12 / COLS) * 100}%`,
-        height: `${(1.32 / ROWS) * 100}%`,
+        left: `${((pos.x + 0.02) / COLS) * 100}%`,
+        top: `${((pos.y - 0.08) / ROWS) * 100}%`,
+        width: `${(0.78 / COLS) * 100}%`,
+        height: `${(1.08 / ROWS) * 100}%`,
         transition: "left 180ms linear, top 180ms linear",
-        filter: "drop-shadow(0 3px 0 rgba(83,58,32,0.26))",
+        filter: "drop-shadow(0 2px 0 rgba(83,58,32,0.26))",
       }}
       aria-label={label}
     >
       <div className="relative h-full w-full">
-        <div className="absolute left-[16%] top-[18%] h-[62%] w-[68%] rounded-[5px] border-2" style={{ background: colors.body, borderColor: colors.outline }} />
-        <div className="absolute left-[18%] top-[18%] h-[18%] w-[64%] rounded-t-[4px] border-x-2 border-t-2" style={{ background: colors.hair, borderColor: colors.outline }} />
-        <div className="absolute left-[32%] top-[43%] h-[7%] w-[7%] bg-[#2F2A26]" />
-        <div className="absolute right-[32%] top-[43%] h-[7%] w-[7%] bg-[#2F2A26]" />
-        <div className="absolute left-[28%] bottom-[10%] h-[24%] w-[44%] border-x-2 border-b-2" style={{ background: colors.shirt, borderColor: colors.outline }} />
-        <div className="absolute -top-[4px] left-1/2 -translate-x-1/2 rounded-[5px] border border-[#70583A] px-1 text-[9px] font-bold leading-[14px] text-[#5B442C]" style={{ background: colors.tag }}>
-          {label}
-        </div>
+        <div className="absolute bottom-0 left-[18%] h-[12%] w-[64%] rounded-full bg-black/20" />
+        <div className="absolute left-[18%] top-[6%] h-[45%] w-[64%] border-2" style={{ background: colors.skin, borderColor: colors.outline }} />
+        <div className="absolute left-[10%] top-[2%] h-[22%] w-[80%] border-2" style={{ background: colors.hair, borderColor: colors.outline }} />
+        <div className="absolute left-[13%] top-[23%] h-[18%] w-[13%]" style={{ background: colors.hair }} />
+        <div className="absolute right-[13%] top-[23%] h-[18%] w-[13%]" style={{ background: colors.hair }} />
+        {tone === "me" ? (
+          <>
+            <div className="absolute left-[5%] top-[4%] h-[12%] w-[14%]" style={{ background: colors.accent }} />
+            <div className="absolute right-[5%] top-[4%] h-[12%] w-[14%]" style={{ background: colors.accent }} />
+          </>
+        ) : null}
+        <div className="absolute left-[32%] top-[28%] h-[8%] w-[8%] bg-[#1F1A18]" />
+        <div className="absolute right-[32%] top-[28%] h-[8%] w-[8%] bg-[#1F1A18]" />
+        <div className="absolute left-[29%] top-[43%] h-[7%] w-[42%]" style={{ background: colors.accent }} />
+        <div className="absolute left-[22%] top-[50%] h-[30%] w-[56%] border-2" style={{ background: colors.shirt, borderColor: colors.outline }} />
+        <div className="absolute left-[4%] top-[54%] h-[24%] w-[18%] border-2" style={{ background: colors.skin, borderColor: colors.outline }} />
+        <div className="absolute right-[4%] top-[54%] h-[24%] w-[18%] border-2" style={{ background: colors.skin, borderColor: colors.outline }} />
+        <div className="absolute left-[27%] bottom-[7%] h-[18%] w-[18%] border-2" style={{ background: colors.pants, borderColor: colors.outline }} />
+        <div className="absolute right-[27%] bottom-[7%] h-[18%] w-[18%] border-2" style={{ background: colors.pants, borderColor: colors.outline }} />
       </div>
     </div>
   );
