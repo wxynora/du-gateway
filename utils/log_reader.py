@@ -8,6 +8,9 @@ from utils.log_buffer import tail_lines as tail_buffer_lines
 from utils.log_buffer import tail_lines_with_last_idx
 from utils.log_buffer import stream_events
 
+TAIL_READ_BLOCK_BYTES = 64 * 1024
+TAIL_MAX_SCAN_BYTES = 8 * 1024 * 1024
+
 
 def resolve_log_path(path: str) -> str:
     path = (path or "").strip()
@@ -36,15 +39,38 @@ def tail_file_lines(
     if not os.path.exists(path):
         raise FileNotFoundError(path)
 
-    # 简单实现：顺序读（日志一般不会大到不可接受；后续需要再做反向 seek 优化）
-    dq = deque(maxlen=max(1, int(lines)))
-    with open(path, "r", encoding=encoding, errors="replace") as f:
-        for line in f:
-            text = line.rstrip("\n")
-            if line_filter and not line_filter(text):
-                continue
-            dq.append(text)
-    return list(dq)
+    want = max(1, int(lines))
+    matched = deque(maxlen=want)
+    pending = b""
+    scanned = 0
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        while pos > 0 and len(matched) < want and scanned < TAIL_MAX_SCAN_BYTES:
+            size = min(TAIL_READ_BLOCK_BYTES, pos, TAIL_MAX_SCAN_BYTES - scanned)
+            if size <= 0:
+                break
+            pos -= size
+            f.seek(pos)
+            block = f.read(size)
+            scanned += len(block)
+            parts = (block + pending).splitlines()
+            if pos > 0 and parts:
+                pending = parts.pop(0)
+            else:
+                pending = b""
+            for raw in reversed(parts):
+                text = raw.decode(encoding, errors="replace").rstrip("\n")
+                if line_filter and not line_filter(text):
+                    continue
+                matched.appendleft(text)
+                if len(matched) >= want:
+                    break
+        if len(matched) < want and pending:
+            text = pending.decode(encoding, errors="replace").rstrip("\n")
+            if not line_filter or line_filter(text):
+                matched.appendleft(text)
+    return list(matched)
 
 
 def stream_file_tail_sse(path: str, start_lines: int = 80, poll_interval_s: float = 0.5):
