@@ -640,7 +640,7 @@ def schedule_tick(target_user_id: int = 0) -> dict:
     }
 
 
-def _send_via_wechat(text: str) -> bool:
+def _send_via_wechat(text: str, split: bool = True) -> bool:
     """通过微信 connector 的 /push 端点主动发消息。"""
     url = WECHAT_PROACTIVE_PUSH_URL
     if not url:
@@ -650,7 +650,7 @@ def _send_via_wechat(text: str) -> bool:
     if WECHAT_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {WECHAT_PROACTIVE_PUSH_TOKEN}"
     try:
-        r = requests.post(url, headers=headers, json={"text": text}, timeout=30)
+        r = requests.post(url, headers=headers, json={"text": text, "split": bool(split)}, timeout=30)
         if r.status_code == 200 and r.json().get("ok"):
             return True
         logger.warning("微信 /push 失败 status=%s body=%s", r.status_code, (r.text or "")[:200])
@@ -660,14 +660,14 @@ def _send_via_wechat(text: str) -> bool:
         return False
 
 
-def _send_via_qq(text: str) -> bool:
+def _send_via_qq(text: str, split: bool = True) -> bool:
     """通过 QQ connector 的 /push 端点主动发消息。"""
     url = QQ_PROACTIVE_PUSH_URL or "http://127.0.0.1:8092/push"
     headers = {"Content-Type": "application/json"}
     if QQ_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {QQ_PROACTIVE_PUSH_TOKEN}"
     try:
-        r = requests.post(url, headers=headers, json={"text": text}, timeout=30)
+        r = requests.post(url, headers=headers, json={"text": text, "split": bool(split)}, timeout=30)
         if r.status_code == 200 and r.json().get("ok"):
             return True
         logger.warning("QQ /push 失败 status=%s body=%s", r.status_code, (r.text or "")[:200])
@@ -677,12 +677,12 @@ def _send_via_qq(text: str) -> bool:
         return False
 
 
-def _dispatch_send(channel: str, text: str) -> bool:
+def _dispatch_send(channel: str, text: str, split: bool = True) -> bool:
     """根据 channel 选择发送入口，返回是否发送成功。"""
     if channel == "wechat":
-        return _send_via_wechat(text)
+        return _send_via_wechat(text, split=split)
     if channel == "qq":
-        return _send_via_qq(text)
+        return _send_via_qq(text, split=split)
     logger.warning("主动消息发送入口不可用 channel=%s", channel)
     return False
 

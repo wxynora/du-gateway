@@ -566,6 +566,8 @@ def _choice_dialog_wakeup_event_text(item: dict) -> str:
     if str(item.get("status") or "").strip().lower() != "done":
         return ""
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    if payload.get("notifyDu") is False:
+        return ""
     result = item.get("result") if isinstance(item.get("result"), dict) else {}
     title = str(payload.get("title") or "弹窗").strip() or "弹窗"
     message = str(payload.get("message") or "").strip()
@@ -665,10 +667,12 @@ def _wake_du_for_device_action_results(device_id: str, items: list[dict]) -> int
                 else:
                     result = send_choice_dialog_wakeup(window_id=window_id, target=device_id, event_text=str(event.get("text") or ""))
                 sumitalk_logger.info(
-                    "choice_dialog_wakeup_done ok=%s device_id=%s window_id=%s error=%s preview=%s",
+                    "choice_dialog_wakeup_done ok=%s device_id=%s window_id=%s channel=%s preferred=%s error=%s preview=%s",
                     bool(result.get("ok")),
                     device_id,
                     window_id,
+                    str(result.get("channel") or ""),
+                    str(result.get("preferred_channel") or ""),
                     str(result.get("error") or ""),
                     str(result.get("reply_preview") or "")[:80],
                 )

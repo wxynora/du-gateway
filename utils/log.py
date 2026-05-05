@@ -60,6 +60,13 @@ class LogBufferHandler(logging.Handler):
         except Exception:
             line = record.getMessage()
         add_log_line(line)
+        if record.levelno >= logging.ERROR:
+            try:
+                from services.log_error_alert import maybe_enqueue_log_error_alert
+
+                maybe_enqueue_log_error_alert(line, record.levelname)
+            except Exception:
+                pass
 
 
 def setup_logging():

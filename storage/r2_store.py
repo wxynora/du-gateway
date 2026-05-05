@@ -1099,12 +1099,14 @@ def _normalize_choice_dialog_payload(payload: dict) -> tuple[Optional[dict], Opt
     except Exception:
         timeout_seconds = 600
     timeout_seconds = max(30, min(1800, timeout_seconds))
+    notify_du = bool(src.get("notifyDu") if "notifyDu" in src else src.get("notify_du", True))
     return {
         "title": title,
         "message": message,
         "level": level,
         "dismissible": dismissible,
         "timeoutSeconds": timeout_seconds,
+        "notifyDu": notify_du,
         "choices": [
             {"id": "choice_a", "label": label_a},
             {"id": "choice_b", "label": label_b},

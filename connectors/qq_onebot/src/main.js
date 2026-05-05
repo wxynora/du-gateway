@@ -596,7 +596,8 @@ async function main() {
         }
         const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
         const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
-        const chunks = splitReplyByNewlineAndLen(text, outChunkChars, 0);
+        const shouldSplit = body?.split !== false && body?.single_message !== true;
+        const chunks = shouldSplit ? splitReplyByNewlineAndLen(text, outChunkChars, 0) : [text];
         for (const part of chunks) {
           try {
             await sendQqText(targetUserId, part);

@@ -768,7 +768,8 @@ function _startPushServer(botToken) {
         }
         const { fromUserId, contextToken } = _proactiveCtx;
         // 按 WECHAT_OUTPUT_CHUNK_CHARS 切段发送
-        const chunks = splitReplyByNewlineAndLen(text, outChunkChars, 0);
+        const shouldSplit = body?.split !== false && body?.single_message !== true;
+        const chunks = shouldSplit ? splitReplyByNewlineAndLen(text, outChunkChars, 0) : [text];
         for (const part of chunks) {
           const r = await sendWeixinText(botToken, fromUserId, contextToken, part);
           if (!r.ok) {

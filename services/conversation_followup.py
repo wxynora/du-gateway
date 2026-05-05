@@ -484,7 +484,7 @@ def _dispatch_choice_dialog_reply(channel: str, target: str, text: str, created_
     if ch in {"wechat", "qq"}:
         from services.telegram_proactive import _dispatch_send
 
-        return _dispatch_send(ch, text)
+        return _dispatch_send(ch, text, split=False)
     if ch in {"tg", "sumitalk"}:
         return _dispatch_followup(ch, target, text, created_at or now_beijing_iso())
     return False
