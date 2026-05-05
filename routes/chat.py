@@ -1411,6 +1411,31 @@ def _maybe_record_last_reply_channel(window_id: str, body: dict) -> None:
         logger.warning("更新最近对话入口失败 window_id=%s channel=%s error=%s", window_id, reply_channel, e)
 
 
+def _archive_nonstream_in_background(
+    *,
+    window_id: str,
+    messages: list,
+    msg: dict,
+    round_cleaned_for_r2=None,
+    reply_channel: str = "",
+) -> None:
+    """非流式入口先回包，R2 存档/动态层后台补做，避免 QQ/微信等待过久误判失败。"""
+
+    def _runner():
+        try:
+            step_archive_and_maybe_summary(
+                window_id,
+                messages,
+                msg,
+                round_cleaned_for_r2=round_cleaned_for_r2,
+            )
+            logger.info("非流式后台存档完成 window_id=%s channel=%s", window_id, reply_channel)
+        except Exception:
+            logger.warning("非流式后台存档失败 window_id=%s channel=%s", window_id, reply_channel, exc_info=True)
+
+    threading.Thread(target=_runner, name=f"nonstream-archive-{window_id}", daemon=True).start()
+
+
 def _extract_last_user_text(messages) -> str:
     for m in reversed(messages or []):
         if (m.get("role") or "").lower() != "user":
@@ -2170,15 +2195,33 @@ def chat_completions():
                 msg_for_r2["tool_calls"] = tc_trace
             last_user = _last_user_message(body.get("messages"))
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
+            archive_messages = _copy.deepcopy(body.get("messages") or [])
             if last_user:
                 if reply_target == "co_read_section":
                     last_user = _strip_co_read_section_raw_text_for_archive(last_user)
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg_for_r2)
-                step_archive_and_maybe_summary(
-                    window_id, body.get("messages") or [], msg_for_r2, round_cleaned_for_r2=round_cleaned
-                )
+                if reply_channel in {"qq", "wechat"}:
+                    _archive_nonstream_in_background(
+                        window_id=window_id,
+                        messages=archive_messages,
+                        msg=msg_for_r2,
+                        round_cleaned_for_r2=round_cleaned,
+                        reply_channel=reply_channel,
+                    )
+                else:
+                    step_archive_and_maybe_summary(
+                        window_id, archive_messages, msg_for_r2, round_cleaned_for_r2=round_cleaned
+                    )
             else:
-                step_archive_and_maybe_summary(window_id, body.get("messages") or [], msg_for_r2)
+                if reply_channel in {"qq", "wechat"}:
+                    _archive_nonstream_in_background(
+                        window_id=window_id,
+                        messages=archive_messages,
+                        msg=msg_for_r2,
+                        reply_channel=reply_channel,
+                    )
+                else:
+                    step_archive_and_maybe_summary(window_id, archive_messages, msg_for_r2)
     else:
         logger.info("R2 未存档：上游无 choices 或响应为空")
     if is_sumitalk_request:
