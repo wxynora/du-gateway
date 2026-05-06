@@ -66,6 +66,12 @@ type DiagnosticsResponse = {
   generated_at?: string;
   items?: DiagnosticItem[];
 };
+type SilenceModeResponse = {
+  ok?: boolean;
+  enabled?: boolean;
+  updated_at?: string;
+  error?: string;
+};
 type MainTab = "chats" | "daily" | "tools" | "settings";
 type ChatScreenId = "du" | "wenyou" | null;
 type ChatDraftMessage = {
@@ -1072,6 +1078,8 @@ function Shell({
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
   const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
+  const [silenceModeEnabled, setSilenceModeEnabled] = useState(false);
+  const [silenceModeSaving, setSilenceModeSaving] = useState(false);
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
@@ -1186,6 +1194,19 @@ function Shell({
 
   useEffect(() => {
     if (mainTab !== "settings") return;
+    let cancelled = false;
+    void apiJson<SilenceModeResponse>("/miniapp-api/silence-mode")
+      .then((j) => {
+        if (!cancelled && j?.ok) setSilenceModeEnabled(!!j.enabled);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mainTab]);
+
+  useEffect(() => {
+    if (mainTab !== "settings") return;
     if (Capacitor.getPlatform() !== "android") return;
     let cancelled = false;
     void SumiOverlay.getFloatingBallEnabled()
@@ -1280,6 +1301,27 @@ function Shell({
     } catch (e: any) {
       setFloatingBallEnabled(prev);
       toast(`悬浮球设置失败：${e?.message || e}`);
+    }
+  }
+
+  async function saveSilenceMode(next: boolean) {
+    const prev = silenceModeEnabled;
+    setSilenceModeEnabled(next);
+    setSilenceModeSaving(true);
+    try {
+      const j = await apiJson<SilenceModeResponse>("/miniapp-api/silence-mode", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "保存失败");
+      setSilenceModeEnabled(!!j.enabled);
+      toast(j.enabled ? "禁言模式已开启" : "禁言模式已关闭");
+    } catch (e: any) {
+      setSilenceModeEnabled(prev);
+      toast(`禁言模式设置失败：${e?.message || e}`);
+    } finally {
+      setSilenceModeSaving(false);
     }
   }
 
@@ -1468,6 +1510,13 @@ function Shell({
             {Capacitor.getPlatform() === "android" ? (
               <FloatingBallSettingRow enabled={floatingBallEnabled} onToggle={(v) => void setFloatingBallNative(v)} />
             ) : null}
+            <SwitchSettingRow
+              icon={<MuteIconMini />}
+              label="禁言模式"
+              enabled={silenceModeEnabled}
+              disabled={silenceModeSaving}
+              onToggle={(v) => void saveSilenceMode(v)}
+            />
             <ListRow icon={<FeatherIcon />} label="个性化" onClick={() => setShowPersonalization(true)} />
             <ListRow icon={<CpuIcon />} label="系统诊断" onClick={() => setShowDiagnostics(true)} />
             <ListRow icon={<SmartphoneIconMini />} label="设备管理" onClick={() => onOpenDevices?.()} />
@@ -5715,6 +5764,41 @@ function FloatingBallSettingRow({
   );
 }
 
+function SwitchSettingRow({
+  icon,
+  label,
+  enabled,
+  disabled = false,
+  onToggle,
+  last,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  enabled: boolean;
+  disabled?: boolean;
+  onToggle: (next: boolean) => void;
+  last?: boolean;
+}) {
+  return (
+    <div className={`flex min-h-[60px] w-full items-center px-4 py-4 ${last ? "" : "border-b border-gray-50"} ${disabled ? "opacity-60" : ""}`}>
+      <span className="mr-4 text-gray-400">{icon}</span>
+      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={enabled}
+        disabled={disabled}
+        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${enabled ? "bg-gray-800" : "bg-gray-200"} ${disabled ? "cursor-not-allowed" : ""}`}
+        onClick={() => onToggle(!enabled)}
+      >
+        <span
+          className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-[22px]" : "translate-x-0"}`}
+        />
+      </button>
+    </div>
+  );
+}
+
 function ListRow({
   icon,
   label,
@@ -5856,6 +5940,10 @@ function CodeIcon() {
 
 function ToggleRightIcon() {
   return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="10" rx="5" ry="5" /><circle cx="16" cy="12" r="3" /></svg>;
+}
+
+function MuteIconMini() {
+  return <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h8" /><path d="M18 6l4-4" /><path d="M22 6l-4-4" /></svg>;
 }
 
 function SmartphoneIconMini() {

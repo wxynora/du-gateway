@@ -41,6 +41,7 @@ from config import (
 )
 from storage import r2_store, whitelist_store, blacklist_store
 from storage import upstream_store
+from storage import silence_mode_store
 from storage.miniapp_panel_store import list_trusted_devices, revoke_trusted_device, upsert_trusted_device
 from utils.ip_allowlist import enforce_ip_allowlist
 from utils.log_reader import resolve_log_path, stream_logs_sse, tail_logs
@@ -3212,6 +3213,24 @@ def miniapp_put_core_prompt():
         return jsonify({"ok": False, "error": "content 不能为空"}), 400
     ok = r2_store.save_core_prompt_text(content)
     return jsonify({"ok": ok})
+
+
+@bp.route("/silence-mode", methods=["GET"])
+def miniapp_get_silence_mode():
+    state = silence_mode_store.get_state()
+    return jsonify({"ok": True, **state})
+
+
+@bp.route("/silence-mode", methods=["PUT"])
+def miniapp_put_silence_mode():
+    data = request.get_json(silent=True) or {}
+    raw = data.get("enabled")
+    if isinstance(raw, str):
+        enabled = raw.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        enabled = bool(raw)
+    state = silence_mode_store.set_enabled(enabled, updated_at=now_beijing_iso())
+    return jsonify({"ok": True, **state})
 
 
 @bp.route("/background-config", methods=["GET"])

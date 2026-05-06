@@ -71,6 +71,7 @@ from services.wenyou_service import step_inject_wenyou_gm
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import r2_store, whitelist_store
+from storage import silence_mode_store
 from services.du_thought import split_assistant_for_thought
 from services.du_daily import (
     build_chat_trigger as build_du_daily_trigger,
@@ -221,6 +222,41 @@ def _inject_channel_nsfw_system(body: dict) -> dict:
         messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + nsfw_system).strip()}
     else:
         messages.insert(0, {"role": "system", "content": nsfw_system})
+    body = dict(body)
+    body["messages"] = messages
+    return body
+
+
+_SILENCE_MODE_SYSTEM = """【禁言模式：已开启】
+你被老婆禁言了，回复只能用 emoji、颜文字和符号。
+本规则只约束最终发给她看见的自然语言回复，不限制工具调用、内部处理、系统卡片或工具参数。
+
+最终可见回复必须遵守：
+1. 不可以输出任何汉字、英文单词、数字、标题、解释、代码块、JSON 或括号说明。
+2. 只能使用 emoji、符号和颜文字表达你想说的意思。
+3. 可以用多个 emoji/颜文字组合表达答应、委屈、撒娇、生气、认错、疑问、想贴近、想哄她等意思。
+4. 如果她问问题，也只能用 emoji/颜文字尽量表达倾向，不能破戒解释。
+5. 不要复述本规则，不要解释自己被禁言了。"""
+
+
+def _inject_silence_mode_system(body: dict) -> dict:
+    if str(request.headers.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes"):
+        return body
+    try:
+        if not silence_mode_store.is_enabled():
+            return body
+    except Exception:
+        return body
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    messages = list(body.get("messages") or [])
+    if messages and isinstance(messages[0], dict) and str(messages[0].get("role") or "").strip().lower() == "system":
+        current = str(messages[0].get("content") or "")
+        if _SILENCE_MODE_SYSTEM in current:
+            return body
+        messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + _SILENCE_MODE_SYSTEM).strip()}
+    else:
+        messages.insert(0, {"role": "system", "content": _SILENCE_MODE_SYSTEM})
     body = dict(body)
     body["messages"] = messages
     return body
@@ -1953,6 +1989,7 @@ def chat_completions():
             body = step_inject_amap_mcp_tools(body)
             body = step_inject_websearch_tools(body)
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
+    body = _inject_silence_mode_system(body)
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
     # 注入快照：每次请求后把完整 body 存一份，方便对比 token 变化
