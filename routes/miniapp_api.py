@@ -616,11 +616,22 @@ def _diag_latest_sense_time(sense: dict) -> tuple[str, str]:
 def _build_miniapp_diagnostics() -> list[dict]:
     items: list[dict] = []
 
-    items.append(_diag_item("gateway", "网关进程", "ok", "当前请求已由 Flask 正常处理"))
+    items.append(_diag_item("gateway", "网关进程", "ok", "当前请求已由 Web API 正常处理"))
 
-    gateway_count = _diag_count_processes("du-gateway", "app.py")
-    status = "ok" if gateway_count == 1 else "warn" if gateway_count > 1 else "error"
-    items.append(_diag_item("gateway_process_count", "网关进程数", status, f"app.py={gateway_count}"))
+    gunicorn_count = _diag_count_processes("gunicorn", "app:app")
+    flask_dev_count = _diag_count_processes("app.py")
+    if gunicorn_count > 0:
+        status = "ok"
+    else:
+        status = "ok" if flask_dev_count == 1 else "warn" if flask_dev_count > 1 else "error"
+    items.append(
+        _diag_item(
+            "gateway_process_count",
+            "网关进程数",
+            status,
+            f"gunicorn={gunicorn_count} · app.py={flask_dev_count}",
+        )
+    )
 
     proactive_count = _diag_count_processes("run_telegram_proactive.py")
     status = "ok" if proactive_count == 1 else "warn" if proactive_count > 1 else "error"
