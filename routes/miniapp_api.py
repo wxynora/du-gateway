@@ -4,6 +4,7 @@ import math
 import logging
 import json
 import re
+import hashlib
 import base64
 import threading
 from uuid import uuid4
@@ -768,6 +769,23 @@ def _merge_sumitalk_messages(*groups: list[dict]) -> list[dict]:
 
     merged.sort(key=_sort_key)
     return merged[-_SUMITALK_HISTORY_MAX_MESSAGES:]
+
+
+def _sumitalk_message_poll_key(msg: dict) -> str:
+    msg_id = str((msg or {}).get("id") or "").strip()
+    if msg_id:
+        return msg_id
+    created_at = str((msg or {}).get("createdAt") or "").strip()
+    content = str((msg or {}).get("content") or "").strip()
+    digest = hashlib.sha1(f"{created_at}\n{content}".encode("utf-8", errors="ignore")).hexdigest()[:16]
+    return f"{created_at}|{digest}"
+
+
+def _latest_sumitalk_assistant_message(messages: list[dict]) -> dict | None:
+    for item in reversed(_normalize_sumitalk_messages(messages or [])):
+        if str(item.get("role") or "").strip().lower() == "assistant":
+            return item
+    return None
 
 
 def _choice_dialog_wakeup_event_text(item: dict) -> str:
@@ -1770,6 +1788,50 @@ def miniapp_sumitalk_history():
         "messages": messages,
         "count": len(messages),
         "updated_at": str((row or {}).get("updated_at") or "").strip(),
+    })
+
+
+@bp.route("/sumitalk-history/latest", methods=["GET"])
+def miniapp_sumitalk_history_latest():
+    device_id = _get_sumitalk_history_device_id()
+    if not device_id:
+        meta = _sumitalk_request_brief()
+        sumitalk_logger.warning(
+            "history_latest_reject reason=missing_device_id remote=%s subject=%s ua=%s",
+            meta["remote"],
+            meta["subject"],
+            meta["ua"],
+        )
+        return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+    after_key = str(request.args.get("after_key") or request.args.get("after") or "").strip()
+    with _SUMITALK_HISTORY_LOCK:
+        data = _load_sumitalk_histories()
+        row = data.get(device_id) if isinstance(data, dict) else None
+    messages = _normalize_sumitalk_messages((row or {}).get("messages") or [])
+    latest = _latest_sumitalk_assistant_message(messages)
+    latest_key = _sumitalk_message_poll_key(latest or {}) if latest else ""
+    has_new = bool(latest_key and latest_key != after_key)
+    meta = _sumitalk_request_brief()
+    sumitalk_logger.info(
+        "history_latest_ok device_id=%s count=%s has_new=%s latest_key=%s after_key=%s updated_at=%s remote=%s ua=%s",
+        device_id,
+        len(messages),
+        has_new,
+        latest_key[:32],
+        after_key[:32],
+        str((row or {}).get("updated_at") or "").strip(),
+        meta["remote"],
+        meta["ua"],
+    )
+    return jsonify({
+        "ok": True,
+        "device_id": device_id,
+        "count": len(messages),
+        "updated_at": str((row or {}).get("updated_at") or "").strip(),
+        "latest_key": latest_key,
+        "has_new": has_new,
+        "message": latest if has_new else None,
+        "messages": [latest] if has_new and latest else [],
     })
 
 

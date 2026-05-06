@@ -89,6 +89,7 @@ public class FloatingBallService extends Service {
     private static final String MESSAGE_CHANNEL_ID = "sumitalk_message";
     private static final int NOTIFICATION_ID = 2001;
     private static final long HISTORY_POLL_INTERVAL_MS = 20000L;
+    private static final long BATTERY_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long LOCATION_REPORT_INTERVAL_MS = 15L * 60L * 1000L;
     private static final long SCREEN_STATE_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long LOCATION_MAX_STALE_MS = 2L * 60L * 1000L;
@@ -104,13 +105,14 @@ public class FloatingBallService extends Service {
     private SharedPreferences prefs;
     private String panelToken = "";
     private String panelDeviceId = "";
+    private long lastBatteryReportMs = 0L;
     private final Runnable historyPollRunnable =
             new Runnable() {
                 @Override
                 public void run() {
                     pollLatestAssistantMessage();
                     pollPendingDeviceActions();
-                    reportBatterySnapshot();
+                    reportBatterySnapshotIfDue();
                     mainHandler.postDelayed(this, HISTORY_POLL_INTERVAL_MS);
                 }
             };
@@ -720,13 +722,26 @@ public class FloatingBallService extends Service {
                 });
     }
 
+    private void reportBatterySnapshotIfDue() {
+        long now = System.currentTimeMillis();
+        if (lastBatteryReportMs > 0 && now - lastBatteryReportMs < BATTERY_REPORT_INTERVAL_MS) {
+            return;
+        }
+        lastBatteryReportMs = now;
+        reportBatterySnapshot();
+    }
+
     private void pollLatestAssistantMessage() {
         if (panelToken.isEmpty()) return;
         ioExecutor.execute(
                 () -> {
                     HttpURLConnection conn = null;
                     try {
-                        URL url = new URL(API_BASE + "/miniapp-api/sumitalk-history");
+                        String previousKey = String.valueOf(prefs.getString(PREF_LAST_HISTORY_MESSAGE_KEY, "")).trim();
+                        String query = previousKey.isEmpty()
+                                ? ""
+                                : "?after_key=" + java.net.URLEncoder.encode(previousKey, "UTF-8");
+                        URL url = new URL(API_BASE + "/miniapp-api/sumitalk-history/latest" + query);
                         conn = (HttpURLConnection) url.openConnection();
                         conn.setRequestMethod("GET");
                         conn.setConnectTimeout(10000);
@@ -739,24 +754,32 @@ public class FloatingBallService extends Service {
                         }
                         String body = readAllText(conn.getInputStream());
                         JSONObject root = new JSONObject(body);
+                        String latestKey = String.valueOf(root.optString("latest_key", "")).trim();
                         JSONArray messages = root.optJSONArray("messages");
-                        if (messages == null || messages.length() <= 0) return;
-                        String latestKey = "";
+                        JSONObject latestMessage = null;
+                        if (messages != null && messages.length() > 0) {
+                            latestMessage = messages.optJSONObject(0);
+                        }
+                        if (latestMessage == null) {
+                            JSONObject msg = root.optJSONObject("message");
+                            if (msg != null) latestMessage = msg;
+                        }
+                        if (latestMessage == null) {
+                            if (!latestKey.isEmpty() && previousKey.isEmpty()) {
+                                prefs.edit().putString(PREF_LAST_HISTORY_MESSAGE_KEY, latestKey).apply();
+                            }
+                            return;
+                        }
                         String latestPreview = "";
-                        for (int i = messages.length() - 1; i >= 0; i -= 1) {
-                            JSONObject item = messages.optJSONObject(i);
-                            if (item == null) continue;
-                            if (!"assistant".equals(String.valueOf(item.optString("role", "")).trim())) continue;
-                            String content = messageContentToText(item.opt("content"));
-                            if (content.isEmpty()) continue;
-                            String id = String.valueOf(item.optString("id", "")).trim();
-                            String createdAt = String.valueOf(item.optString("createdAt", "")).trim();
-                            latestKey = !id.isEmpty() ? id : createdAt + "|" + content.hashCode();
-                            latestPreview = content;
-                            break;
+                        if ("assistant".equals(String.valueOf(latestMessage.optString("role", "")).trim())) {
+                            latestPreview = messageContentToText(latestMessage.opt("content"));
+                            if (latestKey.isEmpty()) {
+                                String id = String.valueOf(latestMessage.optString("id", "")).trim();
+                                String createdAt = String.valueOf(latestMessage.optString("createdAt", "")).trim();
+                                latestKey = !id.isEmpty() ? id : createdAt + "|" + latestPreview.hashCode();
+                            }
                         }
                         if (latestKey.isEmpty() || latestPreview.isEmpty()) return;
-                        String previousKey = String.valueOf(prefs.getString(PREF_LAST_HISTORY_MESSAGE_KEY, "")).trim();
                         if (previousKey.isEmpty()) {
                             prefs.edit().putString(PREF_LAST_HISTORY_MESSAGE_KEY, latestKey).apply();
                             return;
