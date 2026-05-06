@@ -497,9 +497,9 @@ def _send_wakeup_event(
     created_at: str | None = None,
     extra_instruction: str = "",
     image_url: str = "",
-    archive: bool = False,
+    archive: bool = True,
 ) -> dict:
-    """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。"""
+    """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
         from storage.upstream_store import get_cached_active_model
 
@@ -646,7 +646,7 @@ def send_screen_check_wakeup(window_id: str, target: str, event_text: str, image
 
 def send_proactive_trigger_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
     """立即让渡基于后端主动触发事实生成回应。event_text 只放事实，不追加回应指令。"""
-    return _send_wakeup_event(window_id=window_id, target=target, event_text=event_text, created_at=created_at)
+    return _send_wakeup_event(window_id=window_id, target=target, event_text=event_text, created_at=created_at, archive=True)
 
 
 def tick_conversation_followups() -> dict:
