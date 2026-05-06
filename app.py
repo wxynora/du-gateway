@@ -64,6 +64,10 @@ CORS_ALLOW_HEADERS = os.environ.get(
     "CORS_ALLOW_HEADERS",
     "Content-Type, Authorization, X-Telegram-Init-Data, X-Panel-Token, X-Force-Last4, X-Reply-Channel, X-Reply-Target, X-Window-Id",
 ).strip()
+CORS_ALLOW_METHODS = os.environ.get(
+    "CORS_ALLOW_METHODS",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+).strip()
 
 
 @app.before_request
@@ -76,7 +80,7 @@ def _cors_preflight():
 def _cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = CORS_ORIGIN
     response.headers["Access-Control-Allow-Headers"] = CORS_ALLOW_HEADERS
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = CORS_ALLOW_METHODS
     return response
 
 
