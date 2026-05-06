@@ -152,7 +152,7 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
     return ok
 
 
-def _send_via_wechat(text: str) -> bool:
+def _send_via_wechat(text: str, split: bool = True) -> bool:
     url = WECHAT_PROACTIVE_PUSH_URL
     if not url:
         return False
@@ -160,14 +160,14 @@ def _send_via_wechat(text: str) -> bool:
     if WECHAT_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {WECHAT_PROACTIVE_PUSH_TOKEN}"
     try:
-        r = requests.post(url, headers=headers, json={"text": text}, timeout=30)
+        r = requests.post(url, headers=headers, json={"text": text, "split": bool(split)}, timeout=30)
         return r.status_code == 200 and bool((r.json() or {}).get("ok"))
     except Exception:
         logger.warning("延迟续话发微信失败", exc_info=True)
         return False
 
 
-def _send_via_qq(text: str) -> bool:
+def _send_via_qq(text: str, split: bool = True) -> bool:
     url = QQ_PROACTIVE_PUSH_URL
     if not url:
         return False
@@ -175,21 +175,21 @@ def _send_via_qq(text: str) -> bool:
     if QQ_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {QQ_PROACTIVE_PUSH_TOKEN}"
     try:
-        r = requests.post(url, headers=headers, json={"text": text}, timeout=30)
+        r = requests.post(url, headers=headers, json={"text": text, "split": bool(split)}, timeout=30)
         return r.status_code == 200 and bool((r.json() or {}).get("ok"))
     except Exception:
         logger.warning("延迟续话发 QQ 失败", exc_info=True)
         return False
 
 
-def _dispatch_followup(channel: str, target: str, text: str, created_at: str) -> bool:
+def _dispatch_followup(channel: str, target: str, text: str, created_at: str, split: bool = True) -> bool:
     ch = _normalize_reply_channel(channel, default="sumitalk", allow_tg=True)
     if ch == "sumitalk":
         sumitalk_logger.info("followup_dispatch_start channel=%s target=%s chars=%s created_at=%s", ch, target, len(str(text or "").strip()), created_at)
     if ch == "wechat":
-        return _send_via_wechat(text)
+        return _send_via_wechat(text, split=split)
     if ch == "qq":
-        return _send_via_qq(text)
+        return _send_via_qq(text, split=split)
     if ch == "tg":
         try:
             uid = int(str(target or "").strip() or "0")
@@ -484,7 +484,7 @@ def _dispatch_choice_dialog_reply(channel: str, target: str, text: str, created_
     if ch in {"wechat", "qq"}:
         from services.telegram_proactive import _dispatch_send
 
-        return _dispatch_send(ch, text, split=False)
+        return _dispatch_send(ch, text, split=True)
     if ch in {"tg", "sumitalk"}:
         return _dispatch_followup(ch, target, text, created_at or now_beijing_iso())
     return False
