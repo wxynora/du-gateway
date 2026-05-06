@@ -21,6 +21,8 @@ from config import (
     TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN,
     TELEGRAM_PROACTIVE_INTERVAL_MINUTES,
     TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES,
+    MINIAPP_SCHEDULE_RUNTIME_ENABLED,
+    MINIAPP_SCHEDULE_RUNTIME_INTERVAL_SECONDS,
     WECHAT_PROACTIVE_PUSH_URL,
     WECHAT_PROACTIVE_PUSH_TOKEN,
     QQ_PROACTIVE_PUSH_URL,
@@ -806,37 +808,50 @@ def proactive_tick(target_user_id: int = 0) -> dict:
 
 
 def run_scheduler_loop():
-    """常驻循环：按 interval 跑 proactive_tick。"""
-    if not TELEGRAM_PROACTIVE_ENABLED:
-        logger.warning("主动发消息调度未开启（TELEGRAM_PROACTIVE_ENABLED!=1），直接退出")
+    """常驻循环：统一跑主动消息、延迟续话、硬触发和日历闹钟。"""
+    schedule_enabled = bool(MINIAPP_SCHEDULE_RUNTIME_ENABLED)
+    proactive_enabled = bool(TELEGRAM_PROACTIVE_ENABLED)
+    if not proactive_enabled and not schedule_enabled:
+        logger.warning("主动发消息和日历闹钟调度均未开启，直接退出")
         return
     interval_min = max(1, int(TELEGRAM_PROACTIVE_INTERVAL_MINUTES or 30))
+    schedule_interval_s = max(30, int(MINIAPP_SCHEDULE_RUNTIME_INTERVAL_SECONDS or 60))
     uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
-    logger.info("主动发消息调度启动 interval_min=%s target_user_id=%s", interval_min, uid)
+    logger.info(
+        "主动调度进程启动 proactive_enabled=%s interval_min=%s schedule_enabled=%s schedule_interval_s=%s target_user_id=%s",
+        proactive_enabled,
+        interval_min,
+        schedule_enabled,
+        schedule_interval_s,
+        uid,
+    )
     next_main_at = 0.0
+    next_schedule_at = 0.0
     next_followup_at = 0.0
     next_du_daily_at = 0.0
     next_hard_trigger_at = 0.0
     while True:
         now_ts = time.time()
         try:
-            if now_ts >= next_followup_at:
+            if schedule_enabled and now_ts >= next_schedule_at:
+                sched = schedule_tick(uid)
+                logger.info("日历闹钟 tick result=%s", sched)
+                next_schedule_at = now_ts + schedule_interval_s
+            if proactive_enabled and now_ts >= next_followup_at:
                 followup = tick_conversation_followups()
                 logger.info("延迟续话 tick result=%s", followup)
                 next_followup_at = now_ts + max(15, int(FOLLOWUP_TICK_SECONDS or 60))
-            if now_ts >= next_hard_trigger_at:
+            if proactive_enabled and now_ts >= next_hard_trigger_at:
                 from services.proactive_trigger_engine import tick_proactive_triggers
 
                 hard_trigger = tick_proactive_triggers(uid)
                 logger.info("主动硬触发 tick result=%s", hard_trigger)
                 next_hard_trigger_at = now_ts + 60
-            if now_ts >= next_du_daily_at:
+            if proactive_enabled and now_ts >= next_du_daily_at:
                 daily = du_daily_sleep_tick(uid)
                 logger.info("渡的日常入睡收口 tick result=%s", daily)
                 next_du_daily_at = now_ts + 300
-            if now_ts >= next_main_at:
-                sched = schedule_tick(uid)
-                logger.info("日历闹钟 tick result=%s", sched)
+            if proactive_enabled and now_ts >= next_main_at:
                 result = proactive_tick(uid)
                 logger.info("主动发消息 tick result=%s", result)
                 next_main_at = now_ts + interval_min * 60

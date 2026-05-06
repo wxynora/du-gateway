@@ -49,13 +49,15 @@ try:
 except Exception:
     pass
 
-# MiniApp 日历闹钟内置调度：网关启动后自动跑（不需要单独脚本）
-try:
-    from services.schedule_runtime import start_schedule_runtime_if_enabled
+# MiniApp 日历闹钟调度默认不挂在 Web worker 里。
+# 生产环境由 du-telegram-proactive 统一 tick，避免 gunicorn 多 worker 重复启动后台线程。
+if os.environ.get("GATEWAY_EMBEDDED_SCHEDULE_RUNTIME_ENABLED", "0").strip().lower() in ("1", "true", "yes"):
+    try:
+        from services.schedule_runtime import start_schedule_runtime_if_enabled
 
-    start_schedule_runtime_if_enabled()
-except Exception:
-    pass
+        start_schedule_runtime_if_enabled()
+    except Exception:
+        pass
 
 # CORS：RikkaHub 等前端带自定义请求头时，浏览器会先发 OPTIONS 预检
 # MiniApp 表情包预览等请求需带 X-Telegram-Init-Data（仅 Header、不拼 URL），须在此列出否则跨域预检失败

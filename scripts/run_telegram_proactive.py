@@ -1,5 +1,5 @@
 """
-Telegram 主动发消息调度器（常驻进程）。
+Telegram 主动调度器（常驻进程）。
 
 在项目根目录执行：python scripts/run_telegram_proactive.py
 
@@ -7,7 +7,8 @@ Telegram 主动发消息调度器（常驻进程）。
 - 网关已启动（本机或服务器）
 - .env 已配置 TELEGRAM_BOT_TOKEN（用于发消息）
 - .env 已配置 TELEGRAM_GATEWAY_URL（用于调网关）
-- .env 已配置 TELEGRAM_PROACTIVE_ENABLED=1 和 TELEGRAM_PROACTIVE_TARGET_USER_ID
+- 主动消息：.env 已配置 TELEGRAM_PROACTIVE_ENABLED=1 和 TELEGRAM_PROACTIVE_TARGET_USER_ID
+- 日历闹钟：.env 已配置 MINIAPP_SCHEDULE_RUNTIME_ENABLED=1 和 TELEGRAM_PROACTIVE_TARGET_USER_ID
 """
 import os
 import sys
