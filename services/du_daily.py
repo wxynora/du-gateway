@@ -20,6 +20,7 @@ _SLEEP_INACTIVITY_MINUTES = 60
 _SLEEP_SIGNAL_LOOKBACK_MINUTES = 120
 _SLEEP_STEP_DELTA_MAX = 20
 _SLEEP_HEART_RATE_MAX = 95
+_MAX_TODAY_EVENTS = 8
 
 _SLEEP_RE = re.compile(
     r"(晚安|先睡了|我(?:先|要|准备|打算|去|该|真的|马上)?睡(?:了|觉了|觉|觉去)?|去睡(?:了|觉)?|困得不行.*睡|撑不住.*睡)",
@@ -72,8 +73,8 @@ def looks_like_plain_maintenance_daily(text: str, trigger: Optional[dict] = None
     if not s or MARKER_START in s or MARKER_END in s:
         return False
     kind = str((trigger or {}).get("kind") or "").strip()
-    if _is_sleep_rollover_kind(kind):
-        return bool(re.search(r"(昨天|昨日缩略|总结)\s*[：:]", s))
+    if _is_today_summary_kind(kind):
+        return bool(re.search(r"(今天|今日总结|总结)\s*[：:]", s))
     return bool(re.search(r"(新增|今天)\s*[：:]", s) or re.match(r"^\d{1,2}[:：]\d{2}\s+", s))
 
 
@@ -136,6 +137,26 @@ def _normalize_today_lines(lines: list[Any]) -> list[str]:
     return out
 
 
+def _normalize_today_events(lines: list[Any]) -> list[str]:
+    return _normalize_today_lines(lines)[-_MAX_TODAY_EVENTS:]
+
+
+def _normalize_summary_text(text: Any, max_chars: int = 900) -> str:
+    s = " ".join(x.strip() for x in str(text or "").splitlines() if x.strip()).strip()
+    if len(s) > max_chars:
+        s = s[: max_chars - 1].rstrip() + "…"
+    return s
+
+
+def _looks_like_event_line(text: str) -> bool:
+    s = str(text or "").strip()
+    return bool(
+        re.match(r"^\d{1,2}[:：]\d{2}\s+", s)
+        or re.match(r"^(新增|追加|今天新增|记录)\s*[：:]", s)
+        or re.match(r"^[-*•]\s*(新增|追加|\d{1,2}[:：]\d{2})", s)
+    )
+
+
 def _clean_append_line(line: str) -> str:
     s = str(line or "").strip()
     s = re.sub(r"^[-*•]\s*", "", s).strip()
@@ -147,38 +168,54 @@ def _clean_append_line(line: str) -> str:
     return s
 
 
+def _parse_today_section(raw_text: str) -> tuple[str, list[str]]:
+    text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return "", []
+    parts = re.split(r"\n\s*今日硬触发素材\s*[：:]\s*\n?", text, maxsplit=1)
+    if len(parts) == 2:
+        summary = _normalize_summary_text(parts[0])
+        events = [_clean_append_line(x) for x in parts[1].splitlines()]
+        return summary, _normalize_today_events([x for x in events if x])
+
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    if lines and all(_looks_like_event_line(x) for x in lines):
+        return "", _normalize_today_events([_clean_append_line(x) for x in lines])
+    return _normalize_summary_text(text), []
+
+
 def _extract_append_lines(raw_text: str) -> list[str]:
     text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         return []
     if re.search(r"今天\s*[：:]", text):
         parsed = parse_du_daily_block(text)
-        return _normalize_today_lines(parsed.get("today_timeline") or [])
+        return _normalize_today_events(parsed.get("today_events") or parsed.get("today_timeline") or [])
     lines = [_clean_append_line(x) for x in text.splitlines()]
     return _normalize_today_lines([x for x in lines if x])
 
 
-def _extract_sleep_summary(raw_text: str, fallback_lines: list[str], fallback_summary: str = "") -> str:
+def _extract_today_summary(raw_text: str, fallback_events: list[str], fallback_summary: str = "") -> str:
     text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if text:
-        match = re.search(r"昨天\s*[：:]\s*(.*?)(?:\n\s*今天\s*[：:]|\Z)", text, flags=re.DOTALL)
+        match = re.search(r"今天\s*[：:]\s*(.*)$", text, flags=re.DOTALL)
         if match:
-            summary = " ".join(x.strip() for x in match.group(1).splitlines() if x.strip()).strip()
+            summary, _events = _parse_today_section(match.group(1))
             if summary:
                 return summary
-        text = re.sub(r"^(昨天|昨日缩略|总结)\s*[：:]\s*", "", text).strip()
+        text = re.sub(r"^(今天|今日总结|总结)\s*[：:]\s*", "", text).strip()
         lines = [_clean_append_line(x) for x in text.splitlines()]
-        summary = " ".join(x for x in lines if x).strip()
+        summary = _normalize_summary_text("\n".join(x for x in lines if x))
         if summary:
             return summary
-    return _fallback_compress_today_lines(fallback_lines, fallback=fallback_summary)
+    return _fallback_compress_today_lines(fallback_events, fallback=fallback_summary)
 
 
-def _looks_like_sleep_rollover_block(raw_text: str) -> bool:
+def _looks_like_today_summary_block(raw_text: str) -> bool:
     text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         return False
-    return bool(re.search(r"^\s*(昨天|昨日缩略|总结)\s*[：:]", text))
+    return bool(re.search(r"^\s*(今天|今日总结|总结|昨天|昨日缩略)\s*[：:]", text))
 
 
 def _fallback_compress_today_lines(lines: list[str], fallback: str = "") -> str:
@@ -194,33 +231,49 @@ def _fallback_compress_today_lines(lines: list[str], fallback: str = "") -> str:
     return summary
 
 
-def format_du_daily_block(yesterday_summary: str, today_lines: list[str]) -> str:
+def format_du_daily_block(
+    yesterday_summary: str,
+    today_summary: str = "",
+    today_events: Optional[list[str]] = None,
+) -> str:
     yesterday = str(yesterday_summary or "").strip()
-    today = _normalize_today_lines(today_lines)
+    if isinstance(today_summary, list):
+        today_events = today_summary
+        today_summary = ""
+    today_text = _normalize_summary_text(today_summary)
+    events = _normalize_today_events(today_events or [])
     lines = ["昨天："]
     if yesterday:
         lines.append(yesterday)
     lines.append("")
     lines.append("今天：")
-    if today:
-        lines.extend(today)
+    if today_text:
+        lines.append(today_text)
+    if events:
+        if today_text:
+            lines.append("")
+            lines.append("今日硬触发素材：")
+        lines.extend(f"- {x}" for x in events)
     return "\n".join(lines).strip()
 
 
 def parse_du_daily_block(raw_text: str) -> dict:
     text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
-        return {"yesterday_summary": "", "today_timeline": [], "content": ""}
+        return {"yesterday_summary": "", "today_summary": "", "today_events": [], "today_timeline": [], "content": ""}
 
     yesterday_summary = ""
-    today_lines: list[str] = []
+    today_summary = ""
+    today_events: list[str] = []
 
     if "今天" not in text:
-        today_lines = _normalize_today_lines([x for x in text.split("\n") if str(x).strip()])
+        today_summary, today_events = _parse_today_section(text)
         return {
             "yesterday_summary": "",
-            "today_timeline": today_lines,
-            "content": format_du_daily_block("", today_lines),
+            "today_summary": today_summary,
+            "today_events": today_events,
+            "today_timeline": today_events,
+            "content": format_du_daily_block("", today_summary, today_events),
         }
 
     match = re.search(r"昨天\s*[：:]\s*(.*?)\s*今天\s*[：:]\s*(.*)$", text, flags=re.DOTALL)
@@ -228,19 +281,21 @@ def parse_du_daily_block(raw_text: str) -> dict:
         yesterday_summary = " ".join(
             x.strip() for x in str(match.group(1) or "").splitlines() if str(x).strip()
         ).strip()
-        today_lines = _normalize_today_lines(str(match.group(2) or "").splitlines())
+        today_summary, today_events = _parse_today_section(str(match.group(2) or ""))
     else:
         parts = re.split(r"今天\s*[：:]", text, maxsplit=1, flags=re.DOTALL)
         before = parts[0] if parts else ""
         after = parts[1] if len(parts) > 1 else ""
         before = re.sub(r"昨天\s*[：:]", "", before).strip()
         yesterday_summary = " ".join(x.strip() for x in before.splitlines() if x.strip()).strip()
-        today_lines = _normalize_today_lines(after.splitlines())
+        today_summary, today_events = _parse_today_section(after)
 
     return {
         "yesterday_summary": yesterday_summary,
-        "today_timeline": today_lines,
-        "content": format_du_daily_block(yesterday_summary, today_lines),
+        "today_summary": today_summary,
+        "today_events": today_events,
+        "today_timeline": today_events,
+        "content": format_du_daily_block(yesterday_summary, today_summary, today_events),
     }
 
 
@@ -248,16 +303,25 @@ def _normalize_state(raw: Optional[dict]) -> dict:
     today = today_beijing()
     data = raw if isinstance(raw, dict) else {}
     yesterday = str(data.get("yesterday_summary") or "").strip()
-    today_lines = _normalize_today_lines(data.get("today_timeline") or [])
+    today_summary = _normalize_summary_text(data.get("today_summary") or "")
+    today_events = _normalize_today_events(data.get("today_events") or data.get("today_timeline") or [])
     day = str(data.get("day") or "").strip() or today
     content = str(data.get("content") or "").strip()
+    if content and (not today_summary and not today_events):
+        parsed = parse_du_daily_block(content)
+        if not yesterday:
+            yesterday = str(parsed.get("yesterday_summary") or "").strip()
+        today_summary = _normalize_summary_text(parsed.get("today_summary") or "")
+        today_events = _normalize_today_events(parsed.get("today_events") or parsed.get("today_timeline") or [])
     if not content:
-        content = format_du_daily_block(yesterday, today_lines)
+        content = format_du_daily_block(yesterday, today_summary, today_events)
     return {
         "day": day,
         "yesterday_summary": yesterday,
-        "today_timeline": today_lines,
-        "content": content,
+        "today_summary": today_summary,
+        "today_events": today_events,
+        "today_timeline": today_events,
+        "content": format_du_daily_block(yesterday, today_summary, today_events),
         "updated_at": str(data.get("updated_at") or "").strip(),
         "last_trigger_kind": str(data.get("last_trigger_kind") or "").strip(),
         "last_trigger_at": str(data.get("last_trigger_at") or "").strip(),
@@ -267,6 +331,7 @@ def _normalize_state(raw: Optional[dict]) -> dict:
         "sleep_candidate_at": str(data.get("sleep_candidate_at") or "").strip(),
         "sleep_candidate_day": str(data.get("sleep_candidate_day") or "").strip(),
         "sleep_candidate_text": str(data.get("sleep_candidate_text") or "").strip(),
+        "today_finalized_for_date": str(data.get("today_finalized_for_date") or "").strip(),
     }
 
 
@@ -275,13 +340,19 @@ def prepare_state_for_today(raw: Optional[dict], today: str = "") -> tuple[dict,
     state = _normalize_state(raw)
     changed = False
     if state["day"] != target_day:
-        if state["today_timeline"]:
-            state["yesterday_summary"] = _fallback_compress_today_lines(
-                state["today_timeline"], state.get("yesterday_summary") or ""
+        if state["today_summary"] or state["today_events"]:
+            state["yesterday_summary"] = _normalize_summary_text(
+                state["today_summary"]
+                or _fallback_compress_today_lines(state["today_events"], state.get("yesterday_summary") or "")
             )
+            state["today_summary"] = ""
+            state["today_events"] = []
             state["today_timeline"] = []
+            state["today_finalized_for_date"] = ""
         state["day"] = target_day
-        state["content"] = format_du_daily_block(state["yesterday_summary"], state["today_timeline"])
+        state["content"] = format_du_daily_block(
+            state["yesterday_summary"], state["today_summary"], state["today_events"]
+        )
         changed = True
     return state, changed
 
@@ -333,6 +404,10 @@ def _is_sleep_rollover_kind(kind: str) -> bool:
     return str(kind or "").strip() in {"sleep_inferred", "sleep_rollover"}
 
 
+def _is_today_summary_kind(kind: str) -> bool:
+    return _is_sleep_rollover_kind(kind) or str(kind or "").strip() in {"daily_finalize", "today_summary"}
+
+
 def build_chat_trigger(window_id: str, body: dict, headers: Optional[dict] = None) -> Optional[dict]:
     _ = window_id
     hdrs = headers or {}
@@ -378,7 +453,7 @@ def build_maintenance_trigger(body: dict, headers: Optional[dict] = None) -> dic
                 continue
             if line in {MARKER_START, MARKER_END}:
                 continue
-            if re.match(r"^(新增|昨天)\s*[：:]", line):
+            if re.match(r"^(新增|昨天|今天|今日总结)\s*[：:]", line):
                 continue
             facts.append(line)
     if not facts and text.strip():
@@ -400,25 +475,15 @@ def format_inject_block(state: dict, trigger: Optional[dict] = None, maintenance
 
     lines = [
         "【渡的日常（仅你与网关可见，勿在回复正文复述给老婆）】",
-        "你有一块隐藏滚动记忆，始终只保留“昨天缩略 + 今天的时间线”。",
-        "写法边界：可以写我的观察、判断、挂念、打算；不替她写内心独白、动机或未发生事实。",
-        "这不是网关替你判断的任务；是否记录由你自己判断，网关只负责截取和追加保存。",
-        "下面的软/硬触发不是网关判定规则，只是给你参考的记录时机。",
-        "硬参考：闹钟/主动信息决策、她醒来或准备睡、隔很久又来找你、吵架或和好、聊了比较深的话、测试功能发现或修好 bug。",
-        "软参考：一串日常聊完了某个小事、状态有一点变化、你做了一个关心她或不打扰她的决定、今天的生活感往前推进了一小步。",
-        "普通聊天里如果你觉得今天往前走了一点，就在回复正文末尾追加完整 marker 隐藏块；如果不值得记录，就不要输出隐藏块。",
-        "普通更新时只写本次新增的一条，不要从头重写旧时间线。",
-        "普通更新格式：",
-        MARKER_START,
-        "新增：07:30 ……",
-        MARKER_END,
+        "这块只保留“昨天缩略 + 今天总结/少量硬触发素材”。",
+        "普通聊天不要写 DU_DAILY；白天细节和氛围由近期记忆兜底。",
     ]
     if maintenance_mode:
         lines.append("本轮是内部维护任务：不要写任何给老婆看的正文，只输出完整 marker 隐藏块。")
     elif trigger:
-        lines.append("本轮已经命中更新：请正常回复正文后，再在末尾追加完整 marker 隐藏块。")
+        lines.append("本轮已经命中硬触发：正常回复正文后，末尾追加完整 marker 隐藏块。")
     else:
-        lines.append("本轮没有网关强制写入；按上面的参考时机，由你自己判断是否需要记录。")
+        lines.append("本轮没有网关硬触发，不要输出 DU_DAILY marker。")
     if trigger:
         lines.append(f"触发原因：{str(trigger.get('reason') or '').strip() or '—'}")
         hm = _current_hm()
@@ -432,16 +497,22 @@ def format_inject_block(state: dict, trigger: Optional[dict] = None, maintenance
                 if s:
                     lines.append(f"- {s}")
         kind = str(trigger.get("kind") or "").strip()
-        if _is_sleep_rollover_kind(kind):
-            lines.append("睡眠收口格式：")
+        if _is_today_summary_kind(kind):
+            lines.append("今天总结格式：")
             lines.append(MARKER_START)
-            lines.append("昨天：一小段昨天缩略")
+            lines.append("今天：一段连贯的今天总结")
             lines.append(MARKER_END)
-            lines.append("这次是一天收口：只在 marker 里写“昨天：一句缩略总结”，网关会清空今天。")
+            lines.append("这次是一天收口：写完整今天总结，网关会替换今天内容，并合并白天硬触发素材。")
         elif kind.startswith("proactive_"):
-            lines.append("这次是你自己的主动决策结果：只写本次新增的一条，网关会追加到今天。")
+            lines.append("这次是你自己的主动决策结果：只写本次新增的一条短记录。")
+            lines.append(MARKER_START)
+            lines.append("新增：HH:MM ……")
+            lines.append(MARKER_END)
         else:
-            lines.append("这次只写本次新增的一条，网关会追加到今天。")
+            lines.append("这次只写本次新增的一条短记录。")
+            lines.append(MARKER_START)
+            lines.append("新增：HH:MM ……")
+            lines.append(MARKER_END)
     lines.append("当前保存版本：")
     lines.append(current_text)
     return "\n".join(lines).strip()
@@ -461,38 +532,47 @@ def _apply_trigger_metadata(state: dict, trigger: Optional[dict]) -> dict:
         state["last_soft_trigger_at"] = now_iso
     if _is_sleep_rollover_kind(str(trigger.get("kind") or "")):
         state["sleep_closed_for_date"] = today_beijing()
+    if _is_today_summary_kind(str(trigger.get("kind") or "")):
+        state["today_finalized_for_date"] = today_beijing()
     return state
 
 
 def save_hidden_block(raw_block: str, trigger: Optional[dict] = None) -> bool:
     state, _ = get_prepared_state()
     kind = str((trigger or {}).get("kind") or "").strip()
-    if _is_sleep_rollover_kind(kind):
-        summary = _extract_sleep_summary(
+    if not trigger:
+        logger.info("du_daily 忽略无触发隐藏块，避免普通聊天逐条写入")
+        return False
+    if _is_today_summary_kind(kind):
+        summary = _extract_today_summary(
             raw_block,
-            _normalize_today_lines(state.get("today_timeline") or []),
-            fallback_summary=str(state.get("yesterday_summary") or "").strip(),
+            _normalize_today_events(state.get("today_events") or state.get("today_timeline") or []),
+            fallback_summary=str(state.get("today_summary") or "").strip(),
         )
-        state["yesterday_summary"] = summary
+        state["today_summary"] = summary
+        state["today_events"] = []
         state["today_timeline"] = []
         state["sleep_candidate_at"] = ""
         state["sleep_candidate_day"] = ""
         state["sleep_candidate_text"] = ""
     else:
-        if _looks_like_sleep_rollover_block(raw_block):
-            logger.warning("du_daily 拒绝非睡眠触发的昨天收口块，避免污染今天 timeline")
+        if _looks_like_today_summary_block(raw_block):
+            logger.warning("du_daily 拒绝非总结触发的总结块，避免污染今天内容")
             return False
         new_lines = _extract_append_lines(raw_block)
         if not new_lines:
             return False
-        today_lines = _normalize_today_lines(state.get("today_timeline") or [])
-        seen = set(today_lines)
+        today_events = _normalize_today_events(state.get("today_events") or state.get("today_timeline") or [])
+        seen = set(today_events)
         for line in new_lines[:3]:
             if line not in seen:
-                today_lines.append(line)
+                today_events.append(line)
                 seen.add(line)
-        state["today_timeline"] = today_lines
-    state["content"] = format_du_daily_block(state["yesterday_summary"], state["today_timeline"])
+        state["today_events"] = _normalize_today_events(today_events)
+        state["today_timeline"] = state["today_events"]
+    state["content"] = format_du_daily_block(
+        state["yesterday_summary"], state.get("today_summary") or "", state.get("today_events") or []
+    )
     state = _apply_trigger_metadata(state, trigger)
     return bool(r2_store.save_du_daily_state(state))
 
@@ -535,10 +615,10 @@ def _extract_recent_health_stats(now_dt) -> tuple[Optional[int], Optional[int]]:
 
 def infer_sleep_rollover_trigger() -> Optional[dict]:
     state, _ = get_prepared_state()
-    if not state.get("today_timeline"):
+    if not state.get("today_summary") and not state.get("today_events"):
         return None
     today = today_beijing()
-    if str(state.get("sleep_closed_for_date") or "").strip() == today:
+    if str(state.get("today_finalized_for_date") or state.get("sleep_closed_for_date") or "").strip() == today:
         return None
     candidate_iso = str(state.get("sleep_candidate_at") or "").strip()
     candidate_text = str(state.get("sleep_candidate_text") or "").strip()
@@ -562,7 +642,6 @@ def infer_sleep_rollover_trigger() -> Optional[dict]:
     if not now_dt:
         return None
     screen = sense.get("screen") if isinstance(sense.get("screen"), dict) else {}
-    music = sense.get("music") if isinstance(sense.get("music"), dict) else {}
     health = sense.get("health") if isinstance(sense.get("health"), dict) else {}
 
     screen_dt = _sense_bucket_dt(screen)
@@ -580,15 +659,6 @@ def infer_sleep_rollover_trigger() -> Optional[dict]:
         f"之后已经大约 {int(inactive_minutes)} 分钟没回复。",
         "手机最近是熄屏状态。",
     ]
-
-    music_dt = _sense_bucket_dt(music)
-    if music_dt and (now_dt - music_dt).total_seconds() / 60.0 <= _SLEEP_SIGNAL_LOOKBACK_MINUTES:
-        playing = music.get("playing")
-        if playing is False or str(playing).strip().lower() in ("false", "0", "no", "off"):
-            score += 1
-            facts.append("音乐当前没有在播放。")
-        elif playing is True or str(playing).strip().lower() in ("true", "1", "yes", "on"):
-            return None
 
     try:
         hr = int(health.get("heart_rate"))
@@ -617,7 +687,7 @@ def infer_sleep_rollover_trigger() -> Optional[dict]:
     return {
         "kind": "sleep_inferred",
         "hard": True,
-        "reason": "多信号推定已睡，做当天收口",
+        "reason": "多信号推定已睡，做今天总结收口",
         "facts": facts,
         "topic_key": "sleep",
         "hidden_only": True,
@@ -634,11 +704,11 @@ def build_background_prompt(trigger: dict) -> str:
     hm = _current_hm()
     if hm:
         lines.append(f"当前北京时间约 {hm}。")
-    if _is_sleep_rollover_kind(kind):
-        lines.append("这次是一天收口：只输出完整 marker 隐藏块，marker 里写“昨天：一句缩略总结”。")
+    if _is_today_summary_kind(kind):
+        lines.append("这次是一天收口：只输出完整 marker 隐藏块，marker 里写“今天：一段连贯总结”。")
         lines.append("格式必须是：")
         lines.append(MARKER_START)
-        lines.append("昨天：……")
+        lines.append("今天：……")
         lines.append(MARKER_END)
     else:
         lines.append("这次是一个应写进“今天”的日常推进：只输出完整 marker 隐藏块，marker 里只写本次新增的一条。")
