@@ -20,14 +20,34 @@ fi
 
 HOST="${GATEWAY_BIND_HOST:-127.0.0.1}"
 PORT="${GATEWAY_BIND_PORT:-5000}"
-WORKERS="${GATEWAY_WORKERS:-2}"
-THREADS="${GATEWAY_THREADS:-8}"
+# Keep the default profile conservative: the gateway usually shares a small VPS
+# with NapCat/NTQQ, where extra workers/threads cost real memory headroom.
+WORKERS="${GATEWAY_WORKERS:-1}"
+THREADS="${GATEWAY_THREADS:-4}"
 TIMEOUT="${GATEWAY_TIMEOUT:-240}"
 GRACEFUL_TIMEOUT="${GATEWAY_GRACEFUL_TIMEOUT:-30}"
 KEEP_ALIVE="${GATEWAY_KEEP_ALIVE:-5}"
-MAX_REQUESTS="${GATEWAY_MAX_REQUESTS:-800}"
-MAX_REQUESTS_JITTER="${GATEWAY_MAX_REQUESTS_JITTER:-80}"
+MAX_REQUESTS="${GATEWAY_MAX_REQUESTS:-240}"
+MAX_REQUESTS_JITTER="${GATEWAY_MAX_REQUESTS_JITTER:-40}"
 LOG_LEVEL="${GATEWAY_LOG_LEVEL:-info}"
+
+cap_positive_int() {
+  local label="$1"
+  local current="$2"
+  local cap="$3"
+  if [[ "$current" =~ ^[0-9]+$ && "$cap" =~ ^[0-9]+$ && "$cap" -gt 0 && "$current" -gt "$cap" ]]; then
+    echo "${label}=${current} exceeds safety cap ${cap}; using ${cap}. Set GATEWAY_DISABLE_SAFETY_CAPS=1 to override." >&2
+    printf '%s' "$cap"
+    return
+  fi
+  printf '%s' "$current"
+}
+
+if [ "${GATEWAY_DISABLE_SAFETY_CAPS:-0}" != "1" ]; then
+  WORKERS="$(cap_positive_int GATEWAY_WORKERS "$WORKERS" "${GATEWAY_WORKERS_MAX:-1}")"
+  THREADS="$(cap_positive_int GATEWAY_THREADS "$THREADS" "${GATEWAY_THREADS_MAX:-6}")"
+  MAX_REQUESTS="$(cap_positive_int GATEWAY_MAX_REQUESTS "$MAX_REQUESTS" "${GATEWAY_MAX_REQUESTS_CAP:-300}")"
+fi
 
 export GATEWAY_EMBEDDED_SCHEDULE_RUNTIME_ENABLED="${GATEWAY_EMBEDDED_SCHEDULE_RUNTIME_ENABLED:-0}"
 
