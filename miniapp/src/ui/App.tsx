@@ -73,7 +73,7 @@ type SilenceModeResponse = {
   error?: string;
 };
 type MainTab = "chats" | "daily" | "tools" | "settings";
-type ChatScreenId = "du" | "wenyou" | null;
+type ChatScreenId = "du" | "group" | "wenyou" | null;
 type ChatRole = "user" | "assistant" | "benben";
 type ChatDraftMessage = {
   id: string;
@@ -1573,6 +1573,7 @@ function Shell({
         dailyReport={dailyReport}
         duAvatarImage={duAvatarImage}
         onOpenDu={() => setActiveScreen("du")}
+        onOpenGroup={() => setActiveScreen("group")}
         onOpenWenyou={() => setActiveScreen("wenyou")}
         onRefreshTodayNote={() => {
           if (!todayNoteRefreshing) void loadDailyWhisper(true);
@@ -1607,6 +1608,33 @@ function Shell({
         <MainChatScreen
           title="渡"
           windowId={sharedChatWindowId}
+          avatarLabel="渡"
+          accent="du"
+          transparentBubbleEnabled={transparentBubbleEnabled}
+          showChatAvatars={showChatAvatars}
+          chatContentFontSize={chatContentFontSize}
+          chatTitleFontSize={chatTitleFontSize}
+          chatFontFamily={resolveChatFontFamily(chatFontKey)}
+          showChatTimestamps={showChatTimestamps}
+          chatTimeFormat={chatTimeFormat}
+          showTokenCount={showTokenCount}
+          expandReasoningByDefault={expandReasoningByDefault}
+          chatBackgroundOpacity={chatBackgroundOpacity}
+          userBubbleStyle={userBubbleStyle}
+          assistantBubbleStyle={assistantBubbleStyle}
+          myAvatarImage={myAvatarImage}
+          duAvatarImage={duAvatarImage}
+          chatBackgroundImage={chatBackgroundImage}
+          onBack={() => setActiveScreen(null)}
+          onOpenStickers={() => setPanel("stickers")}
+          onOpenCall={() => setShowCallHub(true)}
+        />
+      ) : null}
+      {activeScreen === "group" ? (
+        <MainChatScreen
+          title="三人群聊"
+          windowId={sharedChatWindowId}
+          groupChatMode
           avatarLabel="渡"
           accent="du"
           transparentBubbleEnabled={transparentBubbleEnabled}
@@ -3526,13 +3554,13 @@ function groupRoleLabel(role: ChatRole): string {
   return "渡";
 }
 
-function buildBenbenGroupContext(messages: ChatDraftMessage[]): string {
+function buildBenbenGroupContext(messages: ChatDraftMessage[], force = false): string {
   const lines = (Array.isArray(messages) ? messages : [])
     .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
     .filter((msg) => String(msg.content || "").trim())
     .slice(-12)
     .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`);
-  if (!lines.some((line) => line.startsWith("笨笨："))) return "";
+  if (!force && !lines.some((line) => line.startsWith("笨笨："))) return "";
   return [
     "【三人群聊上下文】",
     "这是辛玥、渡、笨笨的日常群聊。笨笨的话来自第三个群成员，不是辛玥说的；回复时可以自然看见笨笨刚才说过什么，但不要把笨笨当成辛玥。",
@@ -4484,6 +4512,7 @@ function ChatsHome({
   dailyReport,
   duAvatarImage,
   onOpenDu,
+  onOpenGroup,
   onOpenWenyou,
   onRefreshTodayNote,
   onRefreshDailyReport,
@@ -4494,6 +4523,7 @@ function ChatsHome({
   dailyReport: DailyReport | null;
   duAvatarImage: string;
   onOpenDu: () => void;
+  onOpenGroup: () => void;
   onOpenWenyou: () => void;
   onRefreshTodayNote: () => void;
   onRefreshDailyReport: () => void;
@@ -4589,6 +4619,13 @@ function ChatsHome({
           pinned
         />
         <ChatEntryRow
+          title="三人群聊"
+          preview={duPreview}
+          time={duTime}
+          tone="group"
+          onClick={onOpenGroup}
+        />
+        <ChatEntryRow
           title="文游"
           preview={wenyouPreview}
           time={wenyouTime}
@@ -4612,14 +4649,16 @@ function ChatEntryRow({
   title: string;
   preview: string;
   time: string;
-  tone: "du" | "wenyou";
+  tone: "du" | "group" | "wenyou";
   avatarImage?: string;
   pinned?: boolean;
   onClick: () => void;
 }) {
   const palette = tone === "wenyou"
     ? { shell: "bg-[#F8F0F4] text-[#704A5D]" }
-    : { shell: "bg-[#F0F4F8] text-[#4A5568]" };
+    : tone === "group"
+      ? { shell: "bg-[#FFF3D7] text-[#8A5A10]" }
+      : { shell: "bg-[#F0F4F8] text-[#4A5568]" };
   return (
     <button className="flex w-full items-center px-4 py-3.5 text-left transition-colors active:bg-gray-50" onClick={onClick}>
       <div className="relative shrink-0">
@@ -4769,6 +4808,7 @@ function MainChatScreen({
   title,
   avatarLabel,
   windowId,
+  groupChatMode = false,
   accent,
   transparentBubbleEnabled,
   showChatAvatars,
@@ -4792,6 +4832,7 @@ function MainChatScreen({
   title: string;
   avatarLabel: string;
   windowId: string;
+  groupChatMode?: boolean;
   accent: "du" | "wenyou";
   transparentBubbleEnabled: boolean;
   showChatAvatars: boolean;
@@ -4814,16 +4855,14 @@ function MainChatScreen({
 }) {
   const toast = useToast();
   const modelKey = `miniapp.chat.${windowId}.model.v1`;
-  const benbenGroupKey = "miniapp.chat.du.benbenGroup.v1";
   const [deviceId, setDeviceId] = useState("");
-  const [benbenGroupEnabled, setBenbenGroupEnabled] = useState(() => readStoredBoolean(benbenGroupKey, false));
   const remoteHistoryReadyRef = useRef(false);
   const remoteHistoryWarningShownRef = useRef(false);
   const seedMessages: ChatDraftMessage[] = [
     {
       id: "seed-1",
       role: "assistant",
-      content: "我在。你直接说就好。",
+      content: groupChatMode ? "三人群聊开着。你直接说就好。" : "我在。你直接说就好。",
       createdAt: new Date().toISOString(),
     },
   ];
@@ -4842,15 +4881,6 @@ function MainChatScreen({
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  useEffect(() => {
-    setBenbenGroupEnabled(readStoredBoolean(benbenGroupKey, false));
-  }, [benbenGroupKey]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(benbenGroupKey, benbenGroupEnabled ? "1" : "0");
-    } catch {}
-  }, [benbenGroupEnabled, benbenGroupKey]);
   const [activeModel, setActiveModel] = useState(() => {
     try {
       return (localStorage.getItem(modelKey) || "").trim();
@@ -4986,6 +5016,7 @@ function MainChatScreen({
   }
 
   async function appendSystemAlarmCreatedCard(detail: { hour?: number; minute?: number; title?: string }) {
+    if (groupChatMode) return;
     const cardContent = buildSystemAlarmCreatedCardContent(detail);
     const now = Date.now();
     const nextMessages = [
@@ -5027,7 +5058,7 @@ function MainChatScreen({
     const pendingMsg: ChatDraftMessage = {
       id: benbenId,
       role: "benben",
-      content: "",
+      content: "笨笨正在看群聊...",
       createdAt: new Date(createdAtMs).toISOString(),
       status: "pending",
       clientRequestId: `${params.clientRequestId}-benben`,
@@ -5051,6 +5082,15 @@ function MainChatScreen({
       });
       const taskId = String(created.task?.id || "").trim();
       if (!taskId) throw new Error(created.error || "笨笨任务没有返回 ID");
+      const queuedMessages = applyMessageById(messagesRef.current, benbenId, {
+        ...pendingMsg,
+        content: "笨笨任务已创建，等我一下...",
+        status: "pending",
+        jobId: taskId,
+      });
+      messagesRef.current = queuedMessages;
+      setMessages(queuedMessages);
+      await saveDisplayHistory(queuedMessages, { localDeviceId: params.replyTarget });
       const task = await waitForCodexGroupChatTask(taskId);
       const reply = String(task.response || "").trim();
       if (!reply) throw new Error("笨笨没有返回内容");
@@ -5119,7 +5159,7 @@ function MainChatScreen({
     messagesRef.current = draftMessages;
     await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
     try {
-      const groupContext = benbenGroupActive ? buildBenbenGroupContext(messagesRef.current) : "";
+      const groupContext = benbenGroupActive ? buildBenbenGroupContext(messagesRef.current, groupChatMode) : "";
       const requestBody = {
         model: activeModel,
         messages: [
@@ -5204,7 +5244,7 @@ function MainChatScreen({
   const avatarClass = accent === "wenyou"
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
-  const benbenGroupActive = accent === "du" && benbenGroupEnabled;
+  const benbenGroupActive = groupChatMode;
   const groupedMessages = groupChatMessages(messages);
   const assistantTyping = sending && messages.some(
     (msg) => (msg.role === "assistant" || msg.role === "benben") && String(msg.status || "").trim().toLowerCase() === "pending",
@@ -5290,20 +5330,6 @@ function MainChatScreen({
             <div className="font-medium text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
             <ChatHeaderStatus sending={assistantTyping} />
           </div>
-          {accent === "du" ? (
-            <button
-              className={`mr-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                benbenGroupEnabled
-                  ? "bg-[#FFF3D7] text-[#8A5A10] active:bg-[#FFE7AD]"
-                  : "bg-gray-100 text-gray-500 active:bg-gray-200"
-              }`}
-              onClick={() => setBenbenGroupEnabled((prev) => !prev)}
-              aria-label="笨笨入群"
-              title="笨笨入群"
-            >
-              笨
-            </button>
-          ) : null}
           <button
             className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100"
             onClick={() => {
