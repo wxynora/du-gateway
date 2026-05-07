@@ -101,7 +101,7 @@ def _resolve_sumitalk_target_device_id(preferred: str = "") -> str:
 
 
 def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, created_at: str | None = None) -> bool:
-    from routes.miniapp_api import (
+    from routes.miniapp.sumitalk_history import (
         _SUMITALK_HISTORY_LOCK,
         _load_sumitalk_histories,
         _merge_sumitalk_messages,

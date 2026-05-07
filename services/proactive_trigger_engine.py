@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -24,16 +25,24 @@ _XHS_LONG_USE_MINUTES = 120
 _NO_REPLY_SOFT_TRIGGER_AFTER_MINUTES = 30
 _NO_REPLY_SOFT_TRIGGER_MAX_MINUTES = 360
 _NO_REPLY_APP_LOOKBACK_MINUTES = 30
+_RECENT_NORMAL_CHAT_SUPPRESS_MINUTES = 12
+_CHAT_AFTER_SLEEP_GRACE_SECONDS = 90
 
-_SLEEP_PATTERNS = (
-    "我要睡",
-    "我去睡",
-    "准备睡",
-    "先睡",
-    "睡觉",
-    "睡了",
-    "睡啦",
-    "晚安",
+_SLEEP_INTENT_RE = re.compile(
+    r"(晚安(?:啦|了|喽|呀)?|先睡(?:了|啦)?|我(?:先|要|准备|打算|去|该|真的|马上)?睡(?:了|啦|觉了|觉|觉去)?|(?:准备|打算|马上|该)睡(?:了|啦|觉了|觉)?|去睡(?:了|啦|觉)?|困得不行.*睡|撑不住.*睡)",
+    re.IGNORECASE,
+)
+_SLEEP_INTENT_NEGATION_OR_QUESTION_RE = re.compile(
+    r"(不是|没有|没睡|还没睡|不睡|不想睡|别睡|不要睡|睡不着|睡太少|睡眠|睡醒|刚睡|睡前|睡后|睡得|睡过|睡够|睡不好|睡不够|是不是|是否|为什么|怎么|咋|多久|几个小时|吗|么|嘛|？|\?)",
+    re.IGNORECASE,
+)
+_SLEEP_INTENT_META_RE = re.compile(
+    r"(trigger|触发|规则|代码|bug|日志|网关|系统|误触发|主动硬触发|主动触发|硬触发|半小时一次|每半小时)",
+    re.IGNORECASE,
+)
+_SLEEP_INTENT_OTHER_SUBJECT_RE = re.compile(
+    r"(你|渡|笨笨|笨笨机|模型|assistant)(?:先|要|准备|打算|去|该|真的|马上)?睡",
+    re.IGNORECASE,
 )
 
 _XHS_PACKAGES = {"com.xingin.xhs"}
@@ -221,6 +230,19 @@ def _message_text(content: Any) -> str:
     return str(content or "")
 
 
+def _is_explicit_sleep_intent_text(text: str) -> bool:
+    s = re.sub(r"\s+", "", str(text or "").strip())
+    if not s:
+        return False
+    if _SLEEP_INTENT_META_RE.search(s):
+        return False
+    if _SLEEP_INTENT_NEGATION_OR_QUESTION_RE.search(s):
+        return False
+    if _SLEEP_INTENT_OTHER_SUBJECT_RE.search(s):
+        return False
+    return bool(_SLEEP_INTENT_RE.search(s))
+
+
 def _latest_sleep_message(window_id: str) -> dict | None:
     rounds = r2_store.get_conversation_rounds(window_id, last_n=80) or []
     for row in reversed(rounds):
@@ -232,7 +254,7 @@ def _latest_sleep_message(window_id: str) -> dict | None:
             if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "user":
                 continue
             text = _message_text(msg.get("content")).strip()
-            if text and any(p in text for p in _SLEEP_PATTERNS):
+            if text and _is_explicit_sleep_intent_text(text):
                 return {"timestamp": ts, "index": idx, "text": text}
     return None
 
@@ -278,6 +300,36 @@ def _latest_normal_chat_round(window_id: str) -> dict | None:
             "user_text": text,
         }
     return None
+
+
+def _recent_normal_chat_suppress_reason(window_id: str, now_dt) -> str:
+    latest = _latest_normal_chat_round(window_id)
+    if not latest:
+        return ""
+    latest_dt = _dt(latest.get("timestamp"))
+    if not latest_dt:
+        return ""
+    elapsed = _minutes_between(latest_dt, now_dt)
+    if elapsed < _RECENT_NORMAL_CHAT_SUPPRESS_MINUTES:
+        return f"recent_normal_chat:{elapsed}m:index={latest.get('index') or ''}"
+    return ""
+
+
+def _has_normal_user_chat_after(window_id: str, at_dt: datetime) -> bool:
+    rounds = r2_store.get_conversation_rounds(window_id, last_n=80) or []
+    threshold = at_dt + timedelta(seconds=_CHAT_AFTER_SLEEP_GRACE_SECONDS)
+    for row in reversed(rounds):
+        if not isinstance(row, dict):
+            continue
+        row_dt = _dt(row.get("timestamp"))
+        if not row_dt:
+            continue
+        if row_dt <= threshold:
+            break
+        text = _round_user_text(row)
+        if text and not _is_backend_event_text(text):
+            return True
+    return False
 
 
 def _user_announced_away(text: str) -> bool:
@@ -535,7 +587,12 @@ def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> lis
         sleep = _latest_sleep_message(window_id)
         sleep_dt = _dt((sleep or {}).get("timestamp"))
         elapsed = _minutes_between(sleep_dt, now_dt)
-        if sleep and _SLEEP_STILL_AWAKE_AFTER_MINUTES <= elapsed <= _SLEEP_STILL_AWAKE_MAX_MINUTES:
+        if (
+            sleep
+            and sleep_dt
+            and _SLEEP_STILL_AWAKE_AFTER_MINUTES <= elapsed <= _SLEEP_STILL_AWAKE_MAX_MINUTES
+            and not _has_normal_user_chat_after(window_id, sleep_dt)
+        ):
             app_tail = f"，前台是{foreground}" if foreground else ""
             events.append(
                 TriggerEvent(
@@ -579,6 +636,9 @@ def tick_proactive_triggers(target_user_id: int = 0) -> dict:
     yesterday = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
     history = (r2_store.get_sense_history_for_date(yesterday) or []) + (r2_store.get_sense_history_for_date(today) or [])
     state = _read_state()
+    suppress_reason = _recent_normal_chat_suppress_reason(window_id, now_dt)
+    if suppress_reason:
+        return {"ok": True, "sent": False, "skip_reason": "recent_normal_chat", "detail": suppress_reason}
     events = sorted(
         _build_events(doc, history, window_id, now_dt),
         key=lambda e: _EVENT_PRIORITY.get(e.trigger_type, 999),
