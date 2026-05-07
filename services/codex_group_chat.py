@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -15,6 +16,10 @@ _TASK_FILE = DATA_DIR / "codex_group_chat_tasks.json"
 _LOCK = threading.Lock()
 _MAX_TASKS = 200
 _TASK_TTL_SECONDS = 2 * 24 * 60 * 60
+_RUNNING_RECLAIM_SECONDS = max(
+    60,
+    int(float(os.environ.get("CODEX_GROUP_CHAT_RUNNING_RECLAIM_SECONDS") or "120")),
+)
 
 
 def _load_state() -> dict:
@@ -158,6 +163,21 @@ def get_task(task_id: str) -> dict | None:
     return None
 
 
+def list_tasks(limit: int = 20) -> list[dict]:
+    limit = max(1, min(int(limit or 20), 100))
+    with _LOCK:
+        state = _load_state()
+        tasks = _cleanup_tasks(state.get("tasks") or [])
+        return [t for t in (_public_task(task) for task in tasks[-limit:]) if t]
+
+
+def _is_stale_running(task: dict, now_ts: float) -> bool:
+    if str(task.get("status") or "") != "running":
+        return False
+    claimed_ts = float(task.get("claimed_ts") or task.get("updated_ts") or 0)
+    return bool(claimed_ts and now_ts - claimed_ts >= _RUNNING_RECLAIM_SECONDS)
+
+
 def claim_next(worker_id: str = "") -> dict | None:
     now_ts = _now_ts()
     with _LOCK:
@@ -165,7 +185,7 @@ def claim_next(worker_id: str = "") -> dict | None:
         tasks = _cleanup_tasks(state.get("tasks") or [])
         selected: dict | None = None
         for task in tasks:
-            if str(task.get("status") or "") == "queued":
+            if str(task.get("status") or "") == "queued" or _is_stale_running(task, now_ts):
                 selected = task
                 break
         if selected is None:
@@ -173,7 +193,10 @@ def claim_next(worker_id: str = "") -> dict | None:
             _save_state(state)
             return None
         selected["status"] = "running"
+        if selected.get("worker_id"):
+            selected["previous_worker_id"] = selected.get("worker_id")
         selected["worker_id"] = str(worker_id or "").strip()[:80]
+        selected["reclaimed_count"] = int(float(selected.get("reclaimed_count") or 0)) + (1 if selected.get("claimed_ts") else 0)
         selected["claimed_ts"] = now_ts
         selected["updated_ts"] = now_ts
         selected["claimed_at"] = now_beijing_iso()

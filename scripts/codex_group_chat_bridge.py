@@ -17,6 +17,7 @@ import socket
 import subprocess
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -345,8 +346,11 @@ def main() -> int:
                 _post_json(f"/api/codex_group_chat/tasks/{task_id}/finish", {"response": response})
                 _log(f"done task={task_id} chars={len(response)} thread={str(state.get('thread_id') or '')[:8] or '-'}")
             except Exception as e:
-                _post_json(f"/api/codex_group_chat/tasks/{task_id}/finish", {"error": str(e)})
-                _log(f"failed task={task_id} error={e}")
+                try:
+                    _post_json(f"/api/codex_group_chat/tasks/{task_id}/finish", {"error": str(e)})
+                    _log(f"failed task={task_id} error={e}")
+                except Exception as finish_error:
+                    _log(f"failed task={task_id} error={e}; finish_error={finish_error}")
         except KeyboardInterrupt:
             raise
         except Exception as e:
@@ -355,4 +359,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        raise
+    except BaseException:
+        _log("fatal:\n" + traceback.format_exc())
+        raise

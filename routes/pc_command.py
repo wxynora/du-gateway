@@ -98,13 +98,32 @@ def claim_codex_group_chat_task():
     return jsonify({"ok": True, "task": task})
 
 
-@bp.route("/api/codex_group_chat/tasks/<task_id>/finish", methods=["POST", "OPTIONS"])
+@bp.route("/api/codex_group_chat/tasks/recent", methods=["GET", "OPTIONS"])
+def recent_codex_group_chat_tasks():
+    if request.method == "OPTIONS":
+        return "", 204
+    token_err = _require_pc_token()
+    if token_err:
+        return token_err
+    try:
+        limit = int(request.args.get("limit") or "20")
+    except Exception:
+        limit = 20
+    return jsonify({"ok": True, "tasks": codex_group_chat.list_tasks(limit=limit)})
+
+
+@bp.route("/api/codex_group_chat/tasks/<task_id>/finish", methods=["GET", "POST", "OPTIONS"])
 def finish_codex_group_chat_task(task_id: str):
     if request.method == "OPTIONS":
         return "", 204
     token_err = _require_pc_token()
     if token_err:
         return token_err
+    if request.method == "GET":
+        task = codex_group_chat.get_task(task_id)
+        if not task:
+            return jsonify({"ok": False, "error": "任务不存在"}), 404
+        return jsonify({"ok": True, "task": task})
     body = request.get_json(silent=True) or {}
     response = str((body or {}).get("response") or "")
     error = str((body or {}).get("error") or "")
