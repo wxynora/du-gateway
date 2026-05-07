@@ -13,4 +13,4 @@ if [[ -z "${PYTHON_BIN:-}" ]]; then
 fi
 
 cd "$REPO_ROOT"
-exec "$PYTHON_BIN" "$REPO_ROOT/scripts/codex_group_chat_worker.py"
+exec "$PYTHON_BIN" "$REPO_ROOT/scripts/codex_group_chat_bridge.py"

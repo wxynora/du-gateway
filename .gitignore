@@ -19,6 +19,7 @@ data/
 scripts/feed_archive_checkpoint.json
 scripts/feed_archive.lock
 scripts/feed_archive.stop
+.codex_group_chat_bridge_state.json
 
 # IDE / 编辑器
 .cursor/
