@@ -588,7 +588,7 @@ def _sense_bucket_dt(bucket: dict) -> Optional[object]:
 
 
 def _extract_recent_health_stats(now_dt) -> tuple[Optional[int], Optional[int]]:
-    history = r2_store.get_sense_history_for_date(today_beijing()) or []
+    history = r2_store.get_sense_history_for_date(today_beijing(), limit=300) or []
     floor_dt = now_dt - timedelta(minutes=_SLEEP_SIGNAL_LOOKBACK_MINUTES)
     steps: list[int] = []
     for item in history:

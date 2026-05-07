@@ -27,6 +27,8 @@ _NO_REPLY_SOFT_TRIGGER_MAX_MINUTES = 360
 _NO_REPLY_APP_LOOKBACK_MINUTES = 30
 _RECENT_NORMAL_CHAT_SUPPRESS_MINUTES = 12
 _CHAT_AFTER_SLEEP_GRACE_SECONDS = 90
+_SENSE_TRIGGER_HISTORY_LIMIT = 500
+_SENSE_TRIGGER_YESTERDAY_LIMIT = 80
 
 _SLEEP_INTENT_RE = re.compile(
     r"(晚安(?:啦|了|喽|呀)?|先睡(?:了|啦)?|我(?:先|要|准备|打算|去|该|真的|马上)?睡(?:了|啦|觉了|觉|觉去)?|(?:准备|打算|马上|该)睡(?:了|啦|觉了|觉)?|去睡(?:了|啦|觉)?|困得不行.*睡|撑不住.*睡)",
@@ -634,7 +636,10 @@ def tick_proactive_triggers(target_user_id: int = 0) -> dict:
         return {"ok": True, "sent": False, "skip_reason": "no_sense"}
     today = now_dt.strftime("%Y-%m-%d")
     yesterday = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-    history = (r2_store.get_sense_history_for_date(yesterday) or []) + (r2_store.get_sense_history_for_date(today) or [])
+    history: list[dict] = []
+    if now_dt.hour < _NIGHT_REAWAKE_END_HOUR:
+        history.extend(r2_store.get_sense_history_for_date(yesterday, limit=_SENSE_TRIGGER_YESTERDAY_LIMIT) or [])
+    history.extend(r2_store.get_sense_history_for_date(today, limit=_SENSE_TRIGGER_HISTORY_LIMIT) or [])
     state = _read_state()
     suppress_reason = _recent_normal_chat_suppress_reason(window_id, now_dt)
     if suppress_reason:

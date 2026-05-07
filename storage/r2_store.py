@@ -87,6 +87,14 @@ R2_KEY_DYNAMIC_RECALL_DEBUG = "dynamic_memory/recall_debug.json"
 R2_KEY_DYNAMIC_MAINTENANCE_REPORT = "dynamic_memory/maintenance_report.json"
 # 设备感知聚合：电量/位置/网络等（POST /api/sense 写入）
 R2_KEY_SENSE_LATEST = "sense/latest.json"
+_SENSE_HISTORY_CAP = 500
+_SENSE_HISTORY_READ_DEFAULT_LIMIT = 500
+_SENSE_HISTORY_LATEST_ONLY_TYPES = {"usage"}
+_SENSE_HISTORY_MIN_INTERVAL_SECONDS = {
+    "battery": 30 * 60,
+    "health": 5 * 60,
+    "location": 30 * 60,
+}
 # 渡的心事：网关从助手回复截取后写入，仅注入渡侧 system
 R2_KEY_DU_THOUGHT_LATEST = "global/du_thought_latest.json"
 # 渡的日常：隐藏滚动记忆（昨天缩略 + 今天时间线）
@@ -1579,24 +1587,107 @@ def update_trip_plan(plan_id: str, patch: dict) -> dict:
     return existing
 
 
+def _last_sense_history_item(existing: list, sense_type: str) -> dict | None:
+    for item in reversed(existing or []):
+        if isinstance(item, dict) and str(item.get("type") or "").strip() == sense_type:
+            return item
+    return None
+
+
+def _history_item_data(item: dict | None) -> dict:
+    if not isinstance(item, dict):
+        return {}
+    data = item.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def _history_item_age_seconds(item: dict | None) -> float:
+    at = parse_iso_to_beijing(str((item or {}).get("at") or "").strip())
+    now_dt = parse_iso_to_beijing(now_beijing_iso())
+    if not at or not now_dt:
+        return 10**9
+    return max(0.0, (now_dt - at).total_seconds())
+
+
+def _same_str_field(a: dict, b: dict, field: str) -> bool:
+    return str((a or {}).get(field) or "").strip() == str((b or {}).get(field) or "").strip()
+
+
+def _sense_history_should_append(existing: list, sense_type: str, bucket_snapshot: dict) -> bool:
+    key = str(sense_type or "").strip()
+    if key in _SENSE_HISTORY_LATEST_ONLY_TYPES:
+        return False
+    last = _last_sense_history_item(existing, key)
+    if not last:
+        return True
+    last_data = _history_item_data(last)
+    data = bucket_snapshot if isinstance(bucket_snapshot, dict) else {}
+
+    if key == "screen":
+        event = str(data.get("event") or "").strip().lower()
+        if event == "app_active":
+            return False
+        return event in {"screen_on", "screen_off", "user_present"} and not _same_str_field(data, last_data, "event")
+
+    if key == "foreground":
+        return not (
+            _same_str_field(data, last_data, "deviceId")
+            and _same_str_field(data, last_data, "packageName")
+            and _same_str_field(data, last_data, "className")
+        )
+
+    if key == "app_sessions":
+        return True
+
+    if key == "battery":
+        try:
+            level = int(data.get("level"))
+            last_level = int(last_data.get("level"))
+        except Exception:
+            level = last_level = -1
+        charging_changed = bool(data.get("charging")) != bool(last_data.get("charging"))
+        return charging_changed or abs(level - last_level) >= 5 or _history_item_age_seconds(last) >= _SENSE_HISTORY_MIN_INTERVAL_SECONDS["battery"]
+
+    if key == "health":
+        return _history_item_age_seconds(last) >= _SENSE_HISTORY_MIN_INTERVAL_SECONDS["health"] and (
+            not _same_str_field(data, last_data, "heart_rate")
+            or not _same_str_field(data, last_data, "steps")
+        )
+
+    if key == "location":
+        if _history_item_age_seconds(last) >= _SENSE_HISTORY_MIN_INTERVAL_SECONDS["location"]:
+            return True
+        try:
+            lat_delta = abs(float(data.get("lat")) - float(last_data.get("lat")))
+            lng_delta = abs(float(data.get("lng")) - float(last_data.get("lng")))
+            return lat_delta >= 0.001 or lng_delta >= 0.001
+        except Exception:
+            return False
+
+    return _history_item_age_seconds(last) >= 5 * 60
+
+
 def _append_sense_history_event(client, sense_type: str, bucket_snapshot: dict) -> None:
-    """按北京日期写入 sense/history/YYYY-MM-DD.json，仅归档，失败静默。"""
+    """按北京日期写入短尾 sense/history/YYYY-MM-DD.json，仅保留最近必要事件。"""
     try:
         d = today_beijing()
         hk = f"sense/history/{d}.json"
         existing = _read_json(client, hk)
         if not isinstance(existing, list):
             existing = []
+        if not _sense_history_should_append(existing, sense_type, bucket_snapshot):
+            if len(existing) > _SENSE_HISTORY_CAP:
+                _write_json(client, hk, existing[-_SENSE_HISTORY_CAP:])
+            return
         existing.append({"type": sense_type, "at": now_beijing_iso(), "data": bucket_snapshot})
-        cap = 3000
-        if len(existing) > cap:
-            existing = existing[-cap:]
+        if len(existing) > _SENSE_HISTORY_CAP:
+            existing = existing[-_SENSE_HISTORY_CAP:]
         _write_json(client, hk, existing)
     except Exception as e:
         logger.warning("sense 历史归档失败 type=%s error=%s", sense_type, e)
 
 
-def get_sense_history_for_date(date_str: str) -> list[dict]:
+def get_sense_history_for_date(date_str: str, limit: int | None = _SENSE_HISTORY_READ_DEFAULT_LIMIT) -> list[dict]:
     """读取某日 sense/history/YYYY-MM-DD.json；失败返回 []。"""
     client = _s3_client()
     if not client:
@@ -1608,7 +1699,15 @@ def get_sense_history_for_date(date_str: str) -> list[dict]:
     data = _read_json(client, key)
     if not isinstance(data, list):
         return []
-    return [dict(x) for x in data if isinstance(x, dict)]
+    rows = [dict(x) for x in data if isinstance(x, dict)]
+    if limit is not None:
+        try:
+            n = int(limit)
+        except Exception:
+            n = _SENSE_HISTORY_READ_DEFAULT_LIMIT
+        if n > 0 and len(rows) > n:
+            rows = rows[-n:]
+    return rows
 
 
 # ---------- 全局「最新四轮」供新窗口注入 ----------
