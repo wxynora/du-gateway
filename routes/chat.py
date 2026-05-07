@@ -2019,6 +2019,7 @@ def chat_completions():
     for msg in body.get("messages") or []:
         if not preserve_dynamic_marker:
             msg.pop("__dynamic__", None)
+            msg.pop("__summary_cache__", None)
     if body.get("stream"):
         if is_sumitalk_request:
             sumitalk_logger.info(

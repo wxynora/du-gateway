@@ -40,6 +40,7 @@ from services.dynamic_memory_citation import DYNAMIC_MEMORY_CITATION_MAP_BODY_KE
 # ---------------------------------------------------------------------------
 
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
+_SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _LAST4_REFERENCE_NOTE = (
     "【指代提醒】上述记忆和摘要中的“她”均指辛玥。回复辛玥时不要用“她”代称她；"
     "需要指代时用“你”或“辛玥”，按语境自然表达。"
@@ -188,12 +189,48 @@ def _append_to_static_system(body: dict, text: str) -> dict:
         if (msg.get("role") or "").lower() != "system":
             break
         insert_idx = i + 1
+        if msg.get(_DYNAMIC_SYSTEM_MARKER) or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
+            insert_idx = i
+            break
         if not msg.get(_DYNAMIC_SYSTEM_MARKER):
             last_plain_system_idx = i
     if last_plain_system_idx >= 0:
         messages[last_plain_system_idx]["content"] = (messages[last_plain_system_idx].get("content") or "") + text
         return body
     messages.insert(insert_idx, {"role": "system", "content": text})
+    return body
+
+
+def _upsert_summary_cache_system(body: dict, text: str) -> dict:
+    """
+    把近期记忆放在静态 system 之后、动态 system 之前的独立 block。
+    Claude proxy 可在这个 block 上放缓存断点；普通静态注入仍会插在它前面。
+    """
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    if not messages:
+        body["messages"] = [{"role": "system", "content": text, _SUMMARY_CACHE_SYSTEM_MARKER: True}]
+        return body
+
+    existing_idx = -1
+    first_dynamic_idx = -1
+    first_non_system_idx = len(messages)
+    for i, msg in enumerate(messages):
+        if (msg.get("role") or "").lower() != "system":
+            first_non_system_idx = i
+            break
+        if msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
+            existing_idx = i
+        if first_dynamic_idx == -1 and msg.get(_DYNAMIC_SYSTEM_MARKER):
+            first_dynamic_idx = i
+
+    if existing_idx >= 0:
+        messages[existing_idx]["content"] = text
+        return body
+
+    insert_idx = first_dynamic_idx if first_dynamic_idx >= 0 else first_non_system_idx
+    messages.insert(insert_idx, {"role": "system", "content": text, _SUMMARY_CACHE_SYSTEM_MARKER: True})
+    body["messages"] = messages
     return body
 
 
@@ -734,7 +771,9 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
             except Exception:
                 summary = truncate_to_tokens(summary, budget)
             logger.debug("summary trimmed to %s tokens", budget)
-        inject = f"{head}\n\n【近期记忆】\n{summary.strip()}\n【以上为近期记忆】"
+        summary_inject = f"\n\n【近期记忆】\n{summary.strip()}\n【以上为近期记忆】"
+        body = _upsert_summary_cache_system(body, summary_inject)
+        inject = head
     else:
         inject = head
     body = _append_to_dynamic_system(body, inject)

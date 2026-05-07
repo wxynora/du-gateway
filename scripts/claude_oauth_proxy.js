@@ -31,6 +31,7 @@ const BETA_HEADER = [
   "effort-2025-11-24",
 ].join(",");
 const DYNAMIC_SYSTEM_MARKER = "__dynamic__";
+const SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__";
 const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
   "【渡的心事",
   "【渡的日常",
@@ -441,6 +442,7 @@ async function openaiToAnthropic(oai) {
       if (text) {
         const block = { type: "text", text };
         if (msg[DYNAMIC_SYSTEM_MARKER]) block[DYNAMIC_SYSTEM_MARKER] = true;
+        if (msg[SUMMARY_CACHE_SYSTEM_MARKER]) block[SUMMARY_CACHE_SYSTEM_MARKER] = true;
         systemBlocks.push(block);
       }
     } else if (msg.role === "tool" || msg.role === "function") {
@@ -736,16 +738,30 @@ function applyPromptCache(body) {
 
   if (Array.isArray(body.system) && body.system.length > 0) {
     let staticSystem = null;
+    let summarySystem = null;
     for (let i = 1; i < body.system.length; i += 1) {
       const item = body.system[i];
       if (item?.[DYNAMIC_SYSTEM_MARKER] || looksLikeGatewayDynamicSystemBlock(item)) break;
+      if (item?.[SUMMARY_CACHE_SYSTEM_MARKER] || looksLikeGatewaySummaryCacheBlock(item)) {
+        summarySystem = item;
+        continue;
+      }
       if (item && typeof item === "object") staticSystem = item;
     }
     if (staticSystem) staticSystem.cache_control = { type: "ephemeral" };
+    if (summarySystem) summarySystem.cache_control = { type: "ephemeral" };
     for (const item of body.system) {
-      if (item && typeof item === "object") delete item[DYNAMIC_SYSTEM_MARKER];
+      if (item && typeof item === "object") {
+        delete item[DYNAMIC_SYSTEM_MARKER];
+        delete item[SUMMARY_CACHE_SYSTEM_MARKER];
+      }
     }
   }
+}
+
+function looksLikeGatewaySummaryCacheBlock(item) {
+  const text = String(item?.text || "").trimStart();
+  return text.startsWith("【近期记忆】");
 }
 
 function looksLikeGatewayDynamicSystemBlock(item) {
