@@ -62,7 +62,7 @@ def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "").strip().lower()
-        if role not in {"user", "assistant"}:
+        if role not in {"user", "assistant", "benben"}:
             continue
         content = str(item.get("content") or "").strip()
         if not content:

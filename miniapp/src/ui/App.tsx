@@ -74,9 +74,10 @@ type SilenceModeResponse = {
 };
 type MainTab = "chats" | "daily" | "tools" | "settings";
 type ChatScreenId = "du" | "wenyou" | null;
+type ChatRole = "user" | "assistant" | "benben";
 type ChatDraftMessage = {
   id: string;
-  role: "user" | "assistant";
+  role: ChatRole;
   content: string;
   createdAt: string;
   status?: "pending" | "sent" | "failed";
@@ -112,6 +113,20 @@ function applyAssistantTerminalMessage(
     };
   });
   if (!replaced) next.push(assistantMessage);
+  return next;
+}
+
+function applyMessageById(currentMessages: ChatDraftMessage[], messageId: string, nextMessage: ChatDraftMessage): ChatDraftMessage[] {
+  const targetId = String(messageId || "").trim();
+  const list = Array.isArray(currentMessages) ? currentMessages : [];
+  if (!targetId) return [...list, nextMessage];
+  let replaced = false;
+  const next = list.map((msg) => {
+    if (msg.id !== targetId) return msg;
+    replaced = true;
+    return { ...nextMessage, id: msg.id, createdAt: msg.createdAt };
+  });
+  if (!replaced) next.push(nextMessage);
   return next;
 }
 type SystemAlarmCreatedCard = {
@@ -355,6 +370,17 @@ type SumiTalkChatJobStatusResponse = {
   response?: any;
   error?: string;
 };
+type CodexGroupChatTask = {
+  id?: string;
+  status?: "queued" | "running" | "done" | "error" | "cancelled";
+  response?: string;
+  error?: string;
+};
+type CodexGroupChatTaskResponse = {
+  ok?: boolean;
+  task?: CodexGroupChatTask | null;
+  error?: string;
+};
 
 const TRANSPARENT_BUBBLE_CLASS =
   "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
@@ -368,6 +394,8 @@ const SYSTEM_CARD_PREFIX = "<<<SUMITALK_CARD ";
 const SYSTEM_CARD_SUFFIX = ">>>";
 const SUMITALK_CHAT_JOB_POLL_MS = 1800;
 const SUMITALK_CHAT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+const CODEX_GROUP_CHAT_POLL_MS = 2200;
+const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
 
 function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -388,6 +416,20 @@ async function waitForSumiTalkChatJob(jobId: string): Promise<any> {
     }
   }
   throw new Error("等待渡回复超时");
+}
+
+async function waitForCodexGroupChatTask(taskId: string): Promise<CodexGroupChatTask> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < CODEX_GROUP_CHAT_TIMEOUT_MS) {
+    await waitMs(CODEX_GROUP_CHAT_POLL_MS);
+    const data = await apiJson<CodexGroupChatTaskResponse>(`/miniapp-api/codex-group-chat-tasks/${encodeURIComponent(taskId)}`);
+    const task = data.task || {};
+    if (task.status === "done") return task;
+    if (task.status === "error" || task.status === "cancelled") {
+      throw new Error(String(task.error || data.error || "笨笨回复失败"));
+    }
+  }
+  throw new Error("等待笨笨回复超时");
 }
 
 function readStoredBoolean(key: string, fallback = false): boolean {
@@ -3188,7 +3230,7 @@ function extractTokenCount(data: any): { input?: number; output?: number } | und
 
 type ChatMessageGroup = {
   id: string;
-  role: "user" | "assistant";
+  role: ChatRole;
   createdAt: string;
   lastCreatedAt: string;
   parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number }; systemCard?: SumiTalkSystemCard | null }>;
@@ -3320,7 +3362,7 @@ function hasMarkdownSyntax(content: string): boolean {
   return /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|```|`[^`\n]+`|\[.+?\]\(.+?\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|\|.+\|/.test(raw);
 }
 
-function detectMessageRender(role: "user" | "assistant", content: string): "plain" | "rich" | "html" {
+function detectMessageRender(role: ChatRole, content: string): "plain" | "rich" | "html" {
   const raw = String(content || "").replace(/\r/g, "").trim();
   if (!raw) return "plain";
   if (role === "user") return "plain";
@@ -3404,12 +3446,15 @@ function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage
       const rawContent = extractMessageContentSource(msg);
       const rawReasoning = extractMessageReasoningSource(msg);
       const normalizedRole = String(msg?.role || "").trim().toLowerCase();
+      const role: ChatRole = normalizedRole === "user" || normalizedRole === "assistant" || normalizedRole === "benben"
+        ? normalizedRole
+        : "assistant";
       const reasoning = contentToPlainText(rawReasoning) || fallbackRawContentText(rawReasoning);
       const rawStatus = String((msg as any)?.status || "").trim().toLowerCase();
       const status = rawStatus === "pending" || rawStatus === "sent" || rawStatus === "failed"
         ? rawStatus as ChatDraftMessage["status"]
         : undefined;
-      const content = status === "pending" && normalizedRole === "assistant"
+      const content = status === "pending" && (role === "assistant" || role === "benben")
         ? ""
         : stripInlineBase64Images(contentToPlainText(rawContent) || fallbackRawContentText(rawContent));
       let tokenCount: { input?: number; output?: number } | undefined;
@@ -3428,6 +3473,7 @@ function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage
       }
       return {
         ...msg,
+        role,
         content,
         status,
         clientRequestId: String((msg as any)?.clientRequestId || "").trim() || undefined,
@@ -3472,6 +3518,39 @@ function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
     });
   }
   return groups;
+}
+
+function groupRoleLabel(role: ChatRole): string {
+  if (role === "user") return "辛玥";
+  if (role === "benben") return "笨笨";
+  return "渡";
+}
+
+function buildBenbenGroupContext(messages: ChatDraftMessage[]): string {
+  const lines = (Array.isArray(messages) ? messages : [])
+    .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .filter((msg) => String(msg.content || "").trim())
+    .slice(-12)
+    .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`);
+  if (!lines.some((line) => line.startsWith("笨笨："))) return "";
+  return [
+    "【三人群聊上下文】",
+    "这是辛玥、渡、笨笨的日常群聊。笨笨的话来自第三个群成员，不是辛玥说的；回复时可以自然看见笨笨刚才说过什么，但不要把笨笨当成辛玥。",
+    ...lines,
+    "【以上为群聊上下文】",
+  ].join("\n");
+}
+
+function buildCodexGroupRecentMessages(messages: ChatDraftMessage[]): Array<{ role: ChatRole; content: string; createdAt?: string }> {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .filter((msg) => String(msg.content || "").trim())
+    .slice(-14)
+    .map((msg) => ({
+      role: msg.role,
+      content: String(msg.content || "").trim(),
+      createdAt: msg.createdAt,
+    }));
 }
 
 function RichTextBlock({ content }: { content: string }) {
@@ -4735,7 +4814,9 @@ function MainChatScreen({
 }) {
   const toast = useToast();
   const modelKey = `miniapp.chat.${windowId}.model.v1`;
+  const benbenGroupKey = "miniapp.chat.du.benbenGroup.v1";
   const [deviceId, setDeviceId] = useState("");
+  const [benbenGroupEnabled, setBenbenGroupEnabled] = useState(() => readStoredBoolean(benbenGroupKey, false));
   const remoteHistoryReadyRef = useRef(false);
   const remoteHistoryWarningShownRef = useRef(false);
   const seedMessages: ChatDraftMessage[] = [
@@ -4760,6 +4841,16 @@ function MainChatScreen({
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  useEffect(() => {
+    setBenbenGroupEnabled(readStoredBoolean(benbenGroupKey, false));
+  }, [benbenGroupKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(benbenGroupKey, benbenGroupEnabled ? "1" : "0");
+    } catch {}
+  }, [benbenGroupEnabled, benbenGroupKey]);
   const [activeModel, setActiveModel] = useState(() => {
     try {
       return (localStorage.getItem(modelKey) || "").trim();
@@ -4924,6 +5015,69 @@ function MainChatScreen({
     };
   }, [deviceId, windowId]);
 
+  async function requestBenbenGroupReply(params: {
+    baseMessages: ChatDraftMessage[];
+    userContent: string;
+    duReply: string;
+    replyTarget: string;
+    clientRequestId: string;
+  }): Promise<ChatDraftMessage[]> {
+    const createdAtMs = Date.now();
+    const benbenId = `benben-${createdAtMs}`;
+    const pendingMsg: ChatDraftMessage = {
+      id: benbenId,
+      role: "benben",
+      content: "",
+      createdAt: new Date(createdAtMs).toISOString(),
+      status: "pending",
+      clientRequestId: `${params.clientRequestId}-benben`,
+    };
+    const pendingMessages = [...params.baseMessages, pendingMsg];
+    messagesRef.current = pendingMessages;
+    setMessages(pendingMessages);
+    await saveDisplayHistory(pendingMessages, { localDeviceId: params.replyTarget });
+    try {
+      const created = await apiJson<CodexGroupChatTaskResponse>("/miniapp-api/codex-group-chat-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          window_id: windowId,
+          reply_target: params.replyTarget,
+          user_message: params.userContent,
+          du_reply: params.duReply,
+          recent_messages: buildCodexGroupRecentMessages(params.baseMessages),
+          client_request_id: `${params.clientRequestId}-benben`,
+        }),
+      });
+      const taskId = String(created.task?.id || "").trim();
+      if (!taskId) throw new Error(created.error || "笨笨任务没有返回 ID");
+      const task = await waitForCodexGroupChatTask(taskId);
+      const reply = String(task.response || "").trim();
+      if (!reply) throw new Error("笨笨没有返回内容");
+      const finalMessages = applyMessageById(messagesRef.current, benbenId, {
+        ...pendingMsg,
+        content: reply,
+        status: "sent",
+        jobId: taskId,
+      });
+      messagesRef.current = finalMessages;
+      setMessages(finalMessages);
+      await saveDisplayHistory(finalMessages, { localDeviceId: params.replyTarget });
+      return finalMessages;
+    } catch (e: any) {
+      const failedMessages = applyMessageById(messagesRef.current, benbenId, {
+        ...pendingMsg,
+        content: `（笨笨入群失败：${e?.message || e}）`,
+        status: "failed",
+      });
+      messagesRef.current = failedMessages;
+      setMessages(failedMessages);
+      await saveDisplayHistory(failedMessages, { localDeviceId: params.replyTarget });
+      toast(`笨笨入群失败：${e?.message || e}`);
+      return failedMessages;
+    }
+  }
+
   async function sendChatContent(rawContent: string, options: { displayContent?: string } = {}) {
     const content = String(rawContent || "").trim();
     if (!content || sending) return;
@@ -4965,9 +5119,13 @@ function MainChatScreen({
     messagesRef.current = draftMessages;
     await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
     try {
+      const groupContext = benbenGroupActive ? buildBenbenGroupContext(messagesRef.current) : "";
       const requestBody = {
         model: activeModel,
-        messages: [{ role: "user", content }],
+        messages: [
+          ...(groupContext ? [{ role: "system", content: groupContext }] : []),
+          { role: "user", content },
+        ],
         stream: false,
         window_id: windowId,
       };
@@ -5012,6 +5170,15 @@ function MainChatScreen({
       messagesRef.current = finalMessages;
       setMessages(finalMessages);
       await saveDisplayHistory(finalMessages);
+      if (benbenGroupActive) {
+        await requestBenbenGroupReply({
+          baseMessages: finalMessages,
+          userContent: content,
+          duReply: reply,
+          replyTarget,
+          clientRequestId,
+        });
+      }
     } catch (e: any) {
       const failedMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
         id: assistantId,
@@ -5037,9 +5204,10 @@ function MainChatScreen({
   const avatarClass = accent === "wenyou"
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
+  const benbenGroupActive = accent === "du" && benbenGroupEnabled;
   const groupedMessages = groupChatMessages(messages);
   const assistantTyping = sending && messages.some(
-    (msg) => msg.role === "assistant" && String(msg.status || "").trim().toLowerCase() === "pending",
+    (msg) => (msg.role === "assistant" || msg.role === "benben") && String(msg.status || "").trim().toLowerCase() === "pending",
   );
   const searchMatches = useMemo<ChatSearchMatch[]>(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -5122,6 +5290,20 @@ function MainChatScreen({
             <div className="font-medium text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
             <ChatHeaderStatus sending={assistantTyping} />
           </div>
+          {accent === "du" ? (
+            <button
+              className={`mr-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                benbenGroupEnabled
+                  ? "bg-[#FFF3D7] text-[#8A5A10] active:bg-[#FFE7AD]"
+                  : "bg-gray-100 text-gray-500 active:bg-gray-200"
+              }`}
+              onClick={() => setBenbenGroupEnabled((prev) => !prev)}
+              aria-label="笨笨入群"
+              title="笨笨入群"
+            >
+              笨
+            </button>
+          ) : null}
           <button
             className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100"
             onClick={() => {
@@ -5216,7 +5398,11 @@ function MainChatScreen({
               ) : (
                 <div className="flex items-start space-x-3 rounded-[22px]">
                   {showChatAvatars ? (
-                    <AvatarBubble image={duAvatarImage} label={avatarLabel} className={avatarClass} />
+                    <AvatarBubble
+                      image={group.role === "benben" ? "" : duAvatarImage}
+                      label={group.role === "benben" ? "笨" : avatarLabel}
+                      className={group.role === "benben" ? "bg-[#FFF3D7] text-[#8A5A10]" : avatarClass}
+                    />
                   ) : null}
                   <div className={`mt-[2px] ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} space-y-1.5`}>
                     {group.parts.map((part, index) => {
@@ -5278,7 +5464,11 @@ function MainChatScreen({
                             <>
                               <div
                                 className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
-                                  transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)
+                                  transparentBubbleEnabled
+                                    ? TRANSPARENT_BUBBLE_CLASS
+                                    : group.role === "benben"
+                                      ? "border border-amber-100 bg-[#FFF7E6] text-[#3F2A11]"
+                                      : resolveBubbleClass("assistant", assistantBubbleStyle)
                                 }`}
                                 style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                               >

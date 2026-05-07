@@ -29,6 +29,7 @@ from config import (
 )
 from storage import r2_store, whitelist_store, blacklist_store
 from storage import silence_mode_store
+from services import codex_group_chat
 from utils.ip_allowlist import enforce_ip_allowlist
 from utils.miniapp_panel_auth import (
     enforce_panel_token,
@@ -1070,6 +1071,23 @@ def miniapp_sumitalk_chat_job_get(job_id: str):
     public_job = {k: v for k, v in job.items() if k not in {"created_ts", "updated_ts"}}
     public_job["ok"] = public_job.get("status") != "error"
     return jsonify(public_job)
+
+
+@bp.route("/codex-group-chat-tasks", methods=["POST"])
+def miniapp_codex_group_chat_task_create():
+    body = request.get_json(silent=True) or {}
+    task = codex_group_chat.create_task(body, device_id=_get_panel_device_id())
+    if not task:
+        return jsonify({"ok": False, "error": "缺少 window_id / user_message / du_reply，无法创建笨笨群聊任务"}), 400
+    return jsonify({"ok": True, "task": task})
+
+
+@bp.route("/codex-group-chat-tasks/<task_id>", methods=["GET"])
+def miniapp_codex_group_chat_task_get(task_id: str):
+    task = codex_group_chat.get_task(task_id)
+    if not task:
+        return jsonify({"ok": False, "error": "笨笨群聊任务不存在或已过期"}), 404
+    return jsonify({"ok": True, "task": task})
 
 
 @bp.route("/wenyou/last-archive", methods=["GET"])

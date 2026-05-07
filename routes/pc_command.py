@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from config import PC_COMMAND_TOKEN
 from storage import r2_store
+from services import codex_group_chat
 from services.pc_command_handler import process_pcmd_in_assistant_text
 
 bp = Blueprint("pc_command", __name__)
@@ -82,3 +83,32 @@ def process_pc_command_from_assistant():
     text = str(body.get("text") or "")
     visible, queued = process_pcmd_in_assistant_text(text)
     return jsonify({"ok": True, "visible_text": visible, "queued": bool(queued)})
+
+
+@bp.route("/api/codex_group_chat/tasks/claim", methods=["POST", "OPTIONS"])
+def claim_codex_group_chat_task():
+    if request.method == "OPTIONS":
+        return "", 204
+    token_err = _require_pc_token()
+    if token_err:
+        return token_err
+    body = request.get_json(silent=True) or {}
+    worker_id = str((body or {}).get("worker_id") or request.headers.get("X-Worker-Id") or "").strip()
+    task = codex_group_chat.claim_next(worker_id=worker_id)
+    return jsonify({"ok": True, "task": task})
+
+
+@bp.route("/api/codex_group_chat/tasks/<task_id>/finish", methods=["POST", "OPTIONS"])
+def finish_codex_group_chat_task(task_id: str):
+    if request.method == "OPTIONS":
+        return "", 204
+    token_err = _require_pc_token()
+    if token_err:
+        return token_err
+    body = request.get_json(silent=True) or {}
+    response = str((body or {}).get("response") or "")
+    error = str((body or {}).get("error") or "")
+    task = codex_group_chat.finish_task(task_id, response=response, error=error)
+    if not task:
+        return jsonify({"ok": False, "error": "任务不存在"}), 404
+    return jsonify({"ok": True, "task": task})
