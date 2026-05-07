@@ -4,11 +4,27 @@ import re
 
 import requests
 
-from config import DEEPSEEK_API_URL, DEEPSEEK_API_KEY, DEEPSEEK_CHAT_MODEL, SUMMARY_COMPRESSION_PROFILE
+from config import (
+    DEEPSEEK_API_URL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_CHAT_MODEL,
+    SUMMARY_COMPRESSION_PROFILE,
+    SUMMARY_EVERY_N_ROUNDS,
+    SUMMARY_COMPRESSION_EVERY_N_ROUNDS,
+)
 from utils.log import get_logger
 from utils.tokens import estimate_tokens, memory_summary_budget
 
 logger = get_logger(__name__)
+
+_SUMMARY_RECENT_LEVEL = "recent"
+_SUMMARY_SLIGHTLY_LEVEL = "slightly"
+_SUMMARY_OLDER_LEVEL = "older"
+_SUMMARY_LEVELS = {_SUMMARY_RECENT_LEVEL, _SUMMARY_SLIGHTLY_LEVEL, _SUMMARY_OLDER_LEVEL}
+_SUMMARY_NEW_CHUNK_PLACEHOLDER_ID = "__new_chunk__"
+_SUMMARY_RECENT_MAX_CHUNKS = 4
+_SUMMARY_SLIGHTLY_MAX_CHUNKS = 5
+_SUMMARY_OLDER_MAX_CHUNKS = 3
 
 _SUMMARY_RETRY_INSTRUCTION = """
 
@@ -169,8 +185,8 @@ def _sanitize_co_read_du_result_for_summary(text: str) -> str:
 def build_summary_prompt(
     recent_4_rounds: list | None = None,
     *,
-    chunk_to_compress_to_slightly: str | None = None,
-    chunk_to_compress_to_older: str | None = None,
+    chunk_to_compress_to_slightly: object | None = None,
+    chunk_to_compress_to_older: object | None = None,
 ) -> str:
     """拼出实时层小段总结任务的 prompt。"""
     from services.notebook_gateway import NOTEBOOK_EMOJI, NOTEBOOK_PHRASE
@@ -233,9 +249,31 @@ def build_summary_prompt(
         rounds_text += "\n"
     return _REALTIME_LAYER_PROMPT.format(
         latest_4_rounds=rounds_text,
-        chunk_to_compress_to_slightly=(chunk_to_compress_to_slightly or "").strip() or "null",
-        chunk_to_compress_to_older=(chunk_to_compress_to_older or "").strip() or "null",
+        chunk_to_compress_to_slightly=_format_summary_compression_input(chunk_to_compress_to_slightly),
+        chunk_to_compress_to_older=_format_summary_compression_input(chunk_to_compress_to_older),
     )
+
+
+def _format_summary_compression_input(value: object | None) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, str):
+        text = value.strip()
+        return text or "null"
+    if isinstance(value, list):
+        items = []
+        for raw in value:
+            if not isinstance(raw, dict):
+                continue
+            item_id = str(raw.get("id") or "").strip()
+            text = str(raw.get("text") or "").strip()
+            if not item_id or not text:
+                continue
+            items.append({"id": item_id, "text": text})
+        if not items:
+            return "null"
+        return json.dumps(items, ensure_ascii=False)
+    return str(value).strip() or "null"
 
 
 # 实时层给 DS 的完整 prompt：DS 只处理小段，网关负责队列/分区/淘汰。
@@ -246,8 +284,8 @@ _REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 你这次只处理三个独立任务：
 
 1. 总结「最新4轮对话」，生成一个新的小段总结。
-2. 如果提供了「需要轻压缩的小段」，把它压缩成适合放入【稍早】的小段。
-3. 如果提供了「需要重压缩的小段」，把它压缩成适合放入【更早】的小段。
+2. 如果提供了「需要轻压缩的小段」，把每个小段分别压缩成适合放入【稍早】的小段。
+3. 如果提供了「需要重压缩的小段」，把每个小段分别压缩成适合放入【更早】的小段。
 
 你不负责维护整份总结。
 你不负责决定小段放进【最近】、【稍早】还是【更早】。
@@ -284,6 +322,8 @@ _REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 ## 稳定性规则
 
 如果某项输入为空或 null，对应输出返回 null，不要强行生成。
+如果压缩输入是 JSON 数组，输出也必须是数组，且数量和顺序必须与输入数组一致。
+如果轻压缩输入中出现 id 为 "__new_chunk__" 的项，表示要把你本次生成的 new_chunk 按轻压缩规则再压缩一次，并放在输出数组的对应位置。
 
 情绪温度只能来自输入中已经存在的语气、关系状态、称呼、明确情绪或自然反应。
 如果输入中没有明显情绪，只保留自然语气，不要强行编造心理反应。
@@ -308,8 +348,8 @@ _REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 
 ## 轻压缩规则
 
-输入是一个即将从【最近】进入【稍早】的小段。
-输出压缩后的小段。
+输入是一个或多个即将从【最近】进入【稍早】的小段。
+输出压缩后的小段；如果输入是数组，输出同长度数组。
 
 要求：
 - 1到2句话。
@@ -321,8 +361,8 @@ _REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 
 ## 重压缩规则
 
-输入是一个即将从【稍早】进入【更早】的小段。
-输出更短的小段。
+输入是一个或多个即将从【稍早】进入【更早】的小段。
+输出更短的小段；如果输入是数组，输出同长度数组。
 
 要求：
 - 1句话为主，最多2句话。
@@ -350,6 +390,8 @@ _REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 
 如果「需要轻压缩的小段」为空，compress_to_slightly 返回 null。
 如果「需要重压缩的小段」为空，compress_to_older 返回 null。
+如果「需要轻压缩的小段」是数组，compress_to_slightly 返回字符串数组。
+如果「需要重压缩的小段」是数组，compress_to_older 返回字符串数组。
 
 ## 输入
 
@@ -417,11 +459,17 @@ def _clean_summary_chunk_text(text: object, max_chars: int) -> str:
 
 
 def _summary_json_has_forbidden_second_person(data: dict) -> bool:
-    for key in ("new_chunk", "compress_to_slightly", "compress_to_older"):
-        value = data.get(key)
+    def _check(value: object) -> bool:
         if value is None:
-            continue
-        if _summary_has_forbidden_second_person(str(value)):
+            return False
+        if isinstance(value, list):
+            return any(_check(item) for item in value)
+        if isinstance(value, dict):
+            return any(_check(item) for item in value.values())
+        return _summary_has_forbidden_second_person(str(value))
+
+    for key in ("new_chunk", "compress_to_slightly", "compress_to_older"):
+        if _check(data.get(key)):
             return True
     return False
 
@@ -486,8 +534,28 @@ def _normalize_summary_chunks_state(chunks_state: dict | None) -> dict:
         item["id"] = str(item.get("id") or f"legacy:{item['sequence']}")
         chunks.append(item)
     chunks.sort(key=lambda x: int(x.get("sequence") or 0))
-    data["version"] = 1
-    data["chunks"] = chunks[-10:]
+    chunks = chunks[-(_SUMMARY_OLDER_MAX_CHUNKS + _SUMMARY_SLIGHTLY_MAX_CHUNKS + _SUMMARY_RECENT_MAX_CHUNKS):]
+    if chunks and not all(str(c.get("level") or "") in _SUMMARY_LEVELS for c in chunks):
+        legacy_recent, legacy_slightly, legacy_older = _split_summary_chunks_by_sequence(chunks)
+        level_by_id: dict[str, str] = {}
+        for item in legacy_recent:
+            level_by_id[str(item.get("id") or "")] = _SUMMARY_RECENT_LEVEL
+        for item in legacy_slightly:
+            level_by_id[str(item.get("id") or "")] = _SUMMARY_SLIGHTLY_LEVEL
+        for item in legacy_older:
+            level_by_id[str(item.get("id") or "")] = _SUMMARY_OLDER_LEVEL
+        for item in chunks:
+            item["level"] = level_by_id.get(str(item.get("id") or ""), _SUMMARY_RECENT_LEVEL)
+    for item in chunks:
+        if str(item.get("level") or "") not in _SUMMARY_LEVELS:
+            item["level"] = _SUMMARY_RECENT_LEVEL
+    data["version"] = 2
+    try:
+        update_count = int(data.get("update_count"))
+    except Exception:
+        update_count = len(chunks)
+    data["update_count"] = max(0, update_count)
+    data["chunks"] = _trim_summary_chunks_by_level(chunks)
     return data
 
 
@@ -527,11 +595,35 @@ def _legacy_summary_to_chunks(current_summary: str) -> list[dict]:
     return out
 
 
-def _split_summary_chunks(chunks: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+def _split_summary_chunks_by_sequence(chunks: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
     ordered = sorted(chunks, key=lambda x: int(x.get("sequence") or 0))[-10:]
     recent = ordered[-2:]
     slightly = ordered[-7:-2] if len(ordered) > 2 else []
     older = ordered[-10:-7] if len(ordered) > 7 else []
+    return recent, slightly, older
+
+
+def _bucket_summary_chunks(chunks: list[dict], level: str) -> list[dict]:
+    return sorted(
+        [c for c in chunks if str(c.get("level") or "") == level],
+        key=lambda x: int(x.get("sequence") or 0),
+    )
+
+
+def _trim_summary_chunks_by_level(chunks: list[dict]) -> list[dict]:
+    older = _bucket_summary_chunks(chunks, _SUMMARY_OLDER_LEVEL)[-_SUMMARY_OLDER_MAX_CHUNKS:]
+    slightly = _bucket_summary_chunks(chunks, _SUMMARY_SLIGHTLY_LEVEL)[-_SUMMARY_SLIGHTLY_MAX_CHUNKS:]
+    recent = _bucket_summary_chunks(chunks, _SUMMARY_RECENT_LEVEL)[-_SUMMARY_RECENT_MAX_CHUNKS:]
+    out = older + slightly + recent
+    out.sort(key=lambda x: int(x.get("sequence") or 0))
+    return out
+
+
+def _split_summary_chunks(chunks: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    normalized = _trim_summary_chunks_by_level(chunks)
+    recent = _bucket_summary_chunks(normalized, _SUMMARY_RECENT_LEVEL)
+    slightly = _bucket_summary_chunks(normalized, _SUMMARY_SLIGHTLY_LEVEL)
+    older = _bucket_summary_chunks(normalized, _SUMMARY_OLDER_LEVEL)
     return recent, slightly, older
 
 
@@ -543,7 +635,7 @@ def render_summary_from_chunks(chunks_state: dict | None) -> str:
         if not items:
             return ""
         lines = [title]
-        for item in reversed(items):
+        for item in sorted(items, key=lambda x: int(x.get("sequence") or 0)):
             bucket = str(item.get("bucket") or "").strip()
             if bucket:
                 lines.append(f"（{bucket}）")
@@ -566,55 +658,131 @@ def _build_updated_summary_chunks(
     recent_4_rounds: list,
     chunks_state: dict | None,
     ds_result: dict,
-    light_chunk_id: str | None,
-    heavy_chunk_id: str | None,
+    recent_to_slightly: list[dict],
+    slightly_to_older: list[dict],
+    older_to_drop_ids: set[str],
+    next_update_count: int,
 ) -> dict | None:
     state = _normalize_summary_chunks_state(chunks_state)
     chunks = state.get("chunks") or []
     if not chunks:
-        chunks = _legacy_summary_to_chunks(current_summary)
+        chunks = _normalize_summary_chunks_state({"chunks": _legacy_summary_to_chunks(current_summary)}).get("chunks") or []
 
     meta = _summary_rounds_meta(recent_4_rounds)
     new_text = _clean_summary_chunk_text(ds_result.get("new_chunk"), 700)
     if not new_text:
         return None
 
-    light_text = _clean_summary_chunk_text(ds_result.get("compress_to_slightly"), 420)
-    heavy_text = _clean_summary_chunk_text(ds_result.get("compress_to_older"), 260)
+    light_texts = _clean_summary_compression_outputs(
+        ds_result.get("compress_to_slightly"),
+        expected_count=len(recent_to_slightly),
+        max_chars=420,
+        expected_ids=[str(item.get("id") or "") for item in recent_to_slightly],
+    )
+    heavy_texts = _clean_summary_compression_outputs(
+        ds_result.get("compress_to_older"),
+        expected_count=len(slightly_to_older),
+        max_chars=260,
+        expected_ids=[str(item.get("id") or "") for item in slightly_to_older],
+    )
+    if len(light_texts) != len(recent_to_slightly) or len(heavy_texts) != len(slightly_to_older):
+        return None
 
     current_id = meta["id"]
     chunks = [c for c in chunks if str(c.get("id") or "") != current_id]
     max_sequence = max([int(c.get("sequence") or 0) for c in chunks], default=-1)
-
-    for item in chunks:
-        item_id = str(item.get("id") or "")
-        if light_chunk_id and item_id == light_chunk_id and light_text:
-            item["text"] = light_text
-            item["compressed_to_slightly"] = True
-        if heavy_chunk_id and item_id == heavy_chunk_id and heavy_text:
-            item["text"] = heavy_text
-            item["compressed_to_older"] = True
-
     new_chunk = {
         **meta,
         "text": new_text,
         "sequence": max_sequence + 1,
+        "level": _SUMMARY_RECENT_LEVEL,
     }
-    chunks.append(new_chunk)
-    chunks.sort(key=lambda x: int(x.get("sequence") or 0))
-    chunks = chunks[-10:]
 
-    recent, slightly, older = _split_summary_chunks(chunks)
+    if heavy_texts and older_to_drop_ids:
+        chunks = [c for c in chunks if str(c.get("id") or "") not in older_to_drop_ids]
+
+    text_by_recent_id = {
+        str(item.get("id") or ""): text
+        for item, text in zip(recent_to_slightly, light_texts)
+    }
+    text_by_slightly_id = {
+        str(item.get("id") or ""): text
+        for item, text in zip(slightly_to_older, heavy_texts)
+    }
     for item in chunks:
         item_id = str(item.get("id") or "")
-        if any(str(x.get("id") or "") == item_id for x in recent):
-            item["level"] = "recent"
-        elif any(str(x.get("id") or "") == item_id for x in slightly):
-            item["level"] = "slightly"
-        elif any(str(x.get("id") or "") == item_id for x in older):
-            item["level"] = "older"
+        if item_id in text_by_recent_id:
+            item["text"] = text_by_recent_id[item_id]
+            item["level"] = _SUMMARY_SLIGHTLY_LEVEL
+            item["compressed_to_slightly"] = True
+        if item_id in text_by_slightly_id:
+            item["text"] = text_by_slightly_id[item_id]
+            item["level"] = _SUMMARY_OLDER_LEVEL
+            item["compressed_to_older"] = True
 
-    return {"version": 1, "chunks": chunks}
+    new_light_text = text_by_recent_id.get(_SUMMARY_NEW_CHUNK_PLACEHOLDER_ID)
+    if new_light_text:
+        new_chunk["text"] = new_light_text
+        new_chunk["level"] = _SUMMARY_SLIGHTLY_LEVEL
+        new_chunk["compressed_to_slightly"] = True
+
+    chunks.append(new_chunk)
+    chunks.sort(key=lambda x: int(x.get("sequence") or 0))
+    chunks = _trim_summary_chunks_by_level(chunks)
+    return {"version": 2, "update_count": next_update_count, "chunks": chunks}
+
+
+def _clean_summary_compression_outputs(
+    value: object,
+    *,
+    expected_count: int,
+    max_chars: int,
+    expected_ids: list[str],
+) -> list[str]:
+    if expected_count <= 0:
+        return []
+    if value is None:
+        return []
+    raw_items: list[object]
+    if isinstance(value, list):
+        raw_items = [item.get("text") if isinstance(item, dict) else item for item in value]
+    elif isinstance(value, dict):
+        if "text" in value and len(expected_ids) == 1:
+            raw_items = [value.get("text")]
+        else:
+            raw_items = [value.get(item_id) for item_id in expected_ids]
+    else:
+        raw_items = [value]
+    out = [_clean_summary_chunk_text(item, max_chars) for item in raw_items]
+    out = [item for item in out if item]
+    return out if len(out) == expected_count else []
+
+
+def _summary_compress_every_updates() -> int:
+    try:
+        rounds = max(1, int(SUMMARY_COMPRESSION_EVERY_N_ROUNDS))
+        every = max(1, int(SUMMARY_EVERY_N_ROUNDS))
+        return max(1, rounds // every)
+    except Exception:
+        return 2
+
+
+def _summary_compression_plan(chunks: list[dict], should_compress: bool) -> tuple[list[dict], list[dict], set[str]]:
+    if not should_compress:
+        return [], [], set()
+    recent_pool = _bucket_summary_chunks(chunks, _SUMMARY_RECENT_LEVEL) + [
+        {
+            "id": _SUMMARY_NEW_CHUNK_PLACEHOLDER_ID,
+            "text": "请使用本次生成的 new_chunk 内容，按轻压缩规则再压缩一次。",
+        }
+    ]
+    recent_to_slightly = recent_pool[:2] if len(recent_pool) >= 2 else []
+    slightly_to_older = _bucket_summary_chunks(chunks, _SUMMARY_SLIGHTLY_LEVEL)[:2]
+    if len(slightly_to_older) < 2:
+        slightly_to_older = []
+    older_to_drop = _bucket_summary_chunks(chunks, _SUMMARY_OLDER_LEVEL)[:2] if slightly_to_older else []
+    older_to_drop_ids = {str(item.get("id") or "") for item in older_to_drop}
+    return recent_to_slightly, slightly_to_older, older_to_drop_ids
 
 
 def fetch_new_summary_update(
@@ -624,21 +792,29 @@ def fetch_new_summary_update(
 ) -> tuple[str | None, dict | None]:
     """
     调用 DeepSeek 完成一次小段更新：
-    1) 总结最新 4 轮；2) 轻压缩刚进入【稍早】的小段；3) 重压缩刚进入【更早】的小段。
+    1) 每次总结最新 4 轮；2) 每两次总结才批量迁移/压缩两个旧小段。
     """
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
         return None, None
 
     state = _normalize_summary_chunks_state(chunks_state)
     chunks = state.get("chunks") or _legacy_summary_to_chunks(current_summary)
-    light_chunk = chunks[-2] if len(chunks) >= 2 else None
-    heavy_chunk = chunks[-7] if len(chunks) >= 7 else None
-    light_text = str((light_chunk or {}).get("text") or "").strip()
-    heavy_text = str((heavy_chunk or {}).get("text") or "").strip()
+    state = _normalize_summary_chunks_state({"version": 2, **state, "chunks": chunks})
+    chunks = state.get("chunks") or []
+    try:
+        update_count = int(state.get("update_count") or 0)
+    except Exception:
+        update_count = 0
+    next_update_count = update_count + 1
+    should_compress = next_update_count % _summary_compress_every_updates() == 0
+    recent_to_slightly, slightly_to_older, older_to_drop_ids = _summary_compression_plan(
+        chunks,
+        should_compress=should_compress,
+    )
     prompt = build_summary_prompt(
         recent_4_rounds=recent_4_rounds,
-        chunk_to_compress_to_slightly=light_text,
-        chunk_to_compress_to_older=heavy_text,
+        chunk_to_compress_to_slightly=recent_to_slightly,
+        chunk_to_compress_to_older=slightly_to_older,
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     try:
@@ -674,10 +850,12 @@ def fetch_new_summary_update(
         updated_state = _build_updated_summary_chunks(
             current_summary=current_summary,
             recent_4_rounds=recent_4_rounds,
-            chunks_state={"version": 1, "chunks": chunks},
+            chunks_state={"version": 2, "update_count": update_count, "chunks": chunks},
             ds_result=result,
-            light_chunk_id=str((light_chunk or {}).get("id") or "") or None,
-            heavy_chunk_id=str((heavy_chunk or {}).get("id") or "") or None,
+            recent_to_slightly=recent_to_slightly,
+            slightly_to_older=slightly_to_older,
+            older_to_drop_ids=older_to_drop_ids,
+            next_update_count=next_update_count,
         )
         if not updated_state:
             return None, None

@@ -210,6 +210,8 @@ NOTEBOOK_TRIGGER_KEYWORDS = [k.strip() for k in _NOTEBOOK_KEYWORDS_STR.split(","
 ARCHIVE_ALLOWED_MODEL_IDS = [x.strip() for x in os.environ.get("ARCHIVE_ALLOWED_MODEL_IDS", "").strip().split(",") if x.strip()]
 # 每 N 轮触发一次总结
 SUMMARY_EVERY_N_ROUNDS = 4
+# 每 N 轮对旧总结小段做一次迁移/压缩；默认 8 轮，即每两次 4 轮总结压缩一次
+SUMMARY_COMPRESSION_EVERY_N_ROUNDS = int(os.environ.get("SUMMARY_COMPRESSION_EVERY_N_ROUNDS", "8"))
 # 新窗口注入：R2 中“最新四轮”的存储键（全局）
 R2_KEY_LATEST_4_ROUNDS = "global/latest_4_rounds.json"
 
