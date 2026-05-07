@@ -105,7 +105,10 @@ _TRAVEL_TOOL_NAMES = frozenset(
 def should_inject_amap_mcp_tools(text: str) -> bool:
     if not amap_mcp_enabled():
         return False
-    q = str(text or "").strip().lower()
+    raw = str(text or "").strip()
+    if "[Proactive trigger fact]" in raw:
+        return False
+    q = raw.lower()
     return bool(q) and any(k in q for k in _TRAVEL_KEYWORDS)
 
 
