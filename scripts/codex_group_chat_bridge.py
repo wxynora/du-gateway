@@ -54,6 +54,7 @@ REPO_ROOT = Path(_env("CODEX_GROUP_CHAT_REPO", str(Path.home() / "Downloads" / "
 POLL_SECONDS = max(1.0, float(_env("CODEX_GROUP_CHAT_POLL_SECONDS", "3") or "3"))
 IDLE_POLL_SECONDS = max(POLL_SECONDS, float(_env("CODEX_GROUP_CHAT_IDLE_POLL_SECONDS", "6") or "6"))
 CODEX_MODEL = _env("CODEX_GROUP_CHAT_MODEL")
+CODEX_BIN = _env("CODEX_BIN", "codex")
 WORKER_ID = _env("CODEX_GROUP_CHAT_WORKER_ID", f"benben-codex-bridge@{socket.gethostname()}")
 CODEX_TIMEOUT_SECONDS = int(float(_env("CODEX_GROUP_CHAT_TIMEOUT_SECONDS", "600") or "600"))
 PROJECT_RULES_MAX_CHARS = int(float(_env("CODEX_GROUP_CHAT_RULES_MAX_CHARS", "10000") or "10000"))
@@ -232,7 +233,7 @@ def _extract_thread_id(events_path: Path) -> str:
 
 
 def _codex_base_args() -> list[str]:
-    args = ["codex", "exec"]
+    args = [CODEX_BIN, "exec"]
     if IGNORE_USER_CONFIG:
         args.append("--ignore-user-config")
     if IGNORE_RULES:
