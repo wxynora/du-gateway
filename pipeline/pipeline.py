@@ -201,10 +201,44 @@ def _append_to_static_system(body: dict, text: str) -> dict:
     return body
 
 
+def _reorder_summary_for_prompt_cache(summary: str) -> str:
+    """
+    R2/UI 里的近期记忆保持「最近→稍早→更早」方便阅读；
+    发给模型时改成「更早→稍早→最近」，缓存断点仍打在整块近期记忆末尾。
+    """
+    text = (summary or "").strip()
+    if not text:
+        return ""
+
+    parts = re.split(r"(【(?:最近|稍早|更早)】)", text)
+    if len(parts) < 3:
+        return text
+
+    preamble = parts[0].strip()
+    sections: dict[str, list[str]] = {"最近": [], "稍早": [], "更早": []}
+    for i in range(1, len(parts), 2):
+        title = parts[i]
+        body = (parts[i + 1] if i + 1 < len(parts) else "").strip()
+        key = title.strip("【】")
+        if key in sections:
+            sections[key].append(f"{title}\n{body}".strip())
+
+    if not any(sections.values()):
+        return text
+
+    ordered_parts: list[str] = []
+    if preamble:
+        ordered_parts.append(preamble)
+    ordered_parts.extend(sections["更早"])
+    ordered_parts.extend(sections["稍早"])
+    ordered_parts.extend(sections["最近"])
+    return "\n\n".join(p for p in ordered_parts if p).strip()
+
+
 def _upsert_summary_cache_system(body: dict, text: str) -> dict:
     """
     把近期记忆放在静态 system 之后、动态 system 之前的独立 block。
-    Claude proxy 可在这个 block 上放缓存断点；普通静态注入仍会插在它前面。
+    Claude proxy 可在这个 block 末尾放缓存断点；普通静态注入仍会插在它前面。
     """
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
@@ -771,7 +805,8 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
             except Exception:
                 summary = truncate_to_tokens(summary, budget)
             logger.debug("summary trimmed to %s tokens", budget)
-        summary_inject = f"\n\n【近期记忆】\n{summary.strip()}\n【以上为近期记忆】"
+        prompt_summary = _reorder_summary_for_prompt_cache(summary)
+        summary_inject = f"\n\n【近期记忆】\n{prompt_summary}\n【以上为近期记忆】"
         body = _upsert_summary_cache_system(body, summary_inject)
         inject = head
     else:
