@@ -1,0 +1,500 @@
+import { firstSystemCard, formatAlarmTime, splitSystemCardSegments, type SumiTalkSystemCard } from "./sumitalkSystemCards";
+
+export type ChatFontKey = "yahei" | "system" | "pingfang";
+export type ChatTimeFormat = "hhmm" | "ampm";
+
+export type ChatRole = "user" | "assistant" | "benben";
+export type ChatDraftMessage = {
+  id: string;
+  role: ChatRole;
+  content: string;
+  createdAt: string;
+  status?: "pending" | "sent" | "failed";
+  clientRequestId?: string;
+  jobId?: string;
+  reasoning?: string;
+  tokenCount?: {
+    input?: number;
+    output?: number;
+  };
+};
+
+export function applyAssistantTerminalMessage(
+  currentMessages: ChatDraftMessage[],
+  clientRequestId: string,
+  assistantMessage: ChatDraftMessage,
+): ChatDraftMessage[] {
+  const cid = String(clientRequestId || "").trim();
+  const list = Array.isArray(currentMessages) ? currentMessages : [];
+  if (cid && list.some((msg) => msg.role === "assistant" && msg.clientRequestId === cid && msg.status === "sent")) {
+    return list;
+  }
+  let replaced = false;
+  const next = list.map((msg) => {
+    if (!cid || msg.role !== "assistant" || msg.clientRequestId !== cid || msg.status === "sent") return msg;
+    replaced = true;
+    return {
+      ...assistantMessage,
+      id: msg.id,
+      createdAt: msg.createdAt,
+      clientRequestId: cid,
+      jobId: assistantMessage.jobId || msg.jobId,
+    };
+  });
+  if (!replaced) next.push(assistantMessage);
+  return next;
+}
+
+export function applyMessageById(currentMessages: ChatDraftMessage[], messageId: string, nextMessage: ChatDraftMessage): ChatDraftMessage[] {
+  const targetId = String(messageId || "").trim();
+  const list = Array.isArray(currentMessages) ? currentMessages : [];
+  if (!targetId) return [...list, nextMessage];
+  let replaced = false;
+  const next = list.map((msg) => {
+    if (msg.id !== targetId) return msg;
+    replaced = true;
+    return { ...nextMessage, id: msg.id, createdAt: msg.createdAt };
+  });
+  if (!replaced) next.push(nextMessage);
+  return next;
+}
+
+export function contentToPlainText(content: any): string {
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part.trim();
+        if (!part || typeof part !== "object") return "";
+        if (part.type === "text" || part.type === "output_text" || part.type === "input_text") {
+          if (typeof part.text === "string") return String(part.text || "").trim();
+          if (part.text && typeof part.text === "object" && typeof part.text.value === "string") {
+            return String(part.text.value || "").trim();
+          }
+        }
+        if (typeof part.content === "string") return String(part.content || "").trim();
+        if (part.type === "image_url") return "[图片]";
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (content && typeof content === "object") {
+    if (typeof content.text === "string") return String(content.text || "").trim();
+    if (content.text && typeof content.text === "object" && typeof content.text.value === "string") {
+      return String(content.text.value || "").trim();
+    }
+    if (typeof content.content === "string") return String(content.content || "").trim();
+    if (Array.isArray(content.content)) return contentToPlainText(content.content);
+  }
+  return "";
+}
+
+export function extractLegacyMessageField(msg: any, keys: string[]): any {
+  if (!msg || typeof msg !== "object") return "";
+  for (const key of keys) {
+    const value = (msg as any)?.[key];
+    if (value == null) continue;
+    if (typeof value === "string" && value.trim()) return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value) && value.length) return value;
+    if (value && typeof value === "object") return value;
+  }
+  return "";
+}
+
+export function extractMessageContentSource(msg: any): any {
+  if (msg == null) return "";
+  if (typeof msg === "string") return msg;
+  return extractLegacyMessageField(msg, [
+    "content",
+    "text",
+    "message",
+    "body",
+    "value",
+    "reply",
+    "response",
+    "markdown",
+    "html",
+    "parts",
+  ]);
+}
+
+export function extractMessageReasoningSource(msg: any): any {
+  if (!msg || typeof msg !== "object") return "";
+  return extractLegacyMessageField(msg, [
+    "reasoning",
+    "reasoningContent",
+    "reasoning_content",
+    "thinking",
+    "thoughts",
+  ]);
+}
+
+export function fallbackRawContentText(content: any): string {
+  if (content == null) return "";
+  if (typeof content === "string") return content.trim();
+  if (typeof content === "number" || typeof content === "boolean") return String(content).trim();
+  try {
+    const raw = JSON.stringify(content);
+    return typeof raw === "string" ? raw.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+export function extractAssistantMessage(data: any): any {
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+  if (choice?.message) return choice.message;
+  if (data?.message && typeof data.message === "object") return data.message;
+  return {};
+}
+
+export function extractAssistantReplyText(data: any): string {
+  const msg = extractAssistantMessage(data);
+  return contentToPlainText(msg?.content) || contentToPlainText(data?.content) || "";
+}
+
+export function extractAssistantReasoning(data: any): string {
+  const msg = extractAssistantMessage(data);
+  return contentToPlainText(extractMessageReasoningSource(msg));
+}
+
+export function extractTokenCount(data: any): { input?: number; output?: number } | undefined {
+  const usage = data?.usage || {};
+  const input = Number(usage?.prompt_tokens || usage?.input_tokens || usage?.promptTokens || usage?.inputTokens || 0);
+  const output = Number(usage?.completion_tokens || usage?.output_tokens || usage?.completionTokens || usage?.outputTokens || 0);
+  const safeInput = Number.isFinite(input) && input > 0 ? input : 0;
+  const safeOutput = Number.isFinite(output) && output > 0 ? output : 0;
+  if (!safeInput && !safeOutput) return undefined;
+  return {
+    input: safeInput || undefined,
+    output: safeOutput || undefined,
+  };
+}
+
+export type ChatMessageGroup = {
+  id: string;
+  role: ChatRole;
+  createdAt: string;
+  lastCreatedAt: string;
+  parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number }; systemCard?: SumiTalkSystemCard | null }>;
+};
+
+export type ChatSearchMatch = {
+  id: string;
+  groupId: string;
+  partIndex: number;
+};
+
+export function getChatSearchMatchId(groupId: string, partIndex: number): string {
+  return `${groupId}::${partIndex}`;
+}
+
+export function formatClockTime(value: string, timeFormat: ChatTimeFormat = "hhmm"): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "最近";
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) {
+    const m = raw.match(/(\d{2}):(\d{2})/);
+    if (!m) return "最近";
+    if (timeFormat === "ampm") {
+      const hour = Number(m[1]);
+      const period = hour >= 12 ? "下午" : "上午";
+      const displayHour = String(hour % 12 || 12).padStart(2, "0");
+      return `${period} ${displayHour}:${m[2]}`;
+    }
+    return `${m[1]}:${m[2]}`;
+  }
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mm = String(dt.getMinutes()).padStart(2, "0");
+  if (timeFormat === "ampm") {
+    const hour = dt.getHours();
+    const period = hour >= 12 ? "下午" : "上午";
+    return `${period} ${String(hour % 12 || 12).padStart(2, "0")}:${mm}`;
+  }
+  return `${hh}:${mm}`;
+}
+
+export function getChatFontLabel(fontKey: ChatFontKey): string {
+  if (fontKey === "system") return "系统默认";
+  if (fontKey === "pingfang") return "苹方";
+  return "微软雅黑";
+}
+
+export function shouldShowGroupTime(current: string, previous?: string): boolean {
+  const cur = new Date(String(current || ""));
+  if (Number.isNaN(cur.getTime())) return !previous;
+  if (!previous) return true;
+  const prev = new Date(String(previous || ""));
+  if (Number.isNaN(prev.getTime())) return true;
+  const dayChanged =
+    cur.getFullYear() !== prev.getFullYear() ||
+    cur.getMonth() !== prev.getMonth() ||
+    cur.getDate() !== prev.getDate();
+  if (dayChanged) return true;
+  return cur.getTime() - prev.getTime() >= 5 * 60 * 1000;
+}
+
+export function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview: string; time: string } {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const msg = list[i];
+    if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") continue;
+    const text = String(msg?.content || "").trim();
+    if (!text) continue;
+    const systemCard = firstSystemCard(text);
+    if (systemCard?.type === "system_alarm_created") {
+      return {
+        preview: `已创建 ${formatAlarmTime(systemCard.hour, systemCard.minute)} 系统闹钟`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
+    if (systemCard?.type === "calendar_event_created") {
+      return {
+        preview: `已创建系统行程：${systemCard.title}`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
+    if (systemCard?.type === "travel_plan_form") {
+      return {
+        preview: `填写${systemCard.title || "出行规划"}表单`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
+    if (systemCard?.type === "travel_plan_result") {
+      return {
+        preview: `${systemCard.title || "渡安排好了"}：${(systemCard.destinations || []).join("、") || "路线"}`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
+    if (systemCard?.type === "travel_transport_detail") {
+      return {
+        preview: `${systemCard.title || "这段怎么走"}：${systemCard.from} 到 ${systemCard.to}`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
+    if (systemCard?.type === "travel_food_detail") {
+      return {
+        preview: `${systemCard.title || "附近吃这些"}：${systemCard.placeName || systemCard.keywords || "吃喝"}`,
+        time: formatClockTime(String(msg?.createdAt || "").trim()),
+      };
+    }
+    return {
+      preview: text,
+      time: formatClockTime(String(msg?.createdAt || "").trim()),
+    };
+  }
+  return { preview: "主会话", time: "主会话" };
+}
+
+export function isHtmlBlock(content: string): boolean {
+  const raw = String(content || "").trim();
+  if (!raw) return false;
+  return /<\/?[a-z][\s\S]*>/i.test(raw);
+}
+
+export function isCodeBlock(content: string): boolean {
+  const raw = String(content || "").trim();
+  if (!raw) return false;
+  return /```[\s\S]*```/.test(raw) || /^( {4}|\t).+/m.test(raw);
+}
+
+export function hasMarkdownSyntax(content: string): boolean {
+  const raw = String(content || "").trim();
+  if (!raw) return false;
+  // Only treat as markdown when explicit syntax appears.
+  return /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s)|```|`[^`\n]+`|\[.+?\]\(.+?\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|\|.+\|/.test(raw);
+}
+
+export function detectMessageRender(role: ChatRole, content: string): "plain" | "rich" | "html" {
+  const raw = String(content || "").replace(/\r/g, "").trim();
+  if (!raw) return "plain";
+  if (role === "user") return "plain";
+  if (isHtmlBlock(raw)) return "html";
+  if (isCodeBlock(raw)) return "rich";
+  if (hasMarkdownSyntax(raw)) return "rich";
+  return "plain";
+}
+
+export function stripInlineBase64Images(content: string): string {
+  const raw = String(content || "");
+  if (!raw) return "";
+  return raw.replace(/data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=\s]+/g, "[图片base64已省略，请改用图片URL]");
+}
+
+export function historyRenderableScore(messages: ChatDraftMessage[]): number {
+  const list = Array.isArray(messages) ? messages : [];
+  return list.reduce((score, msg) => {
+    const content = String(msg?.content || "").trim();
+    const reasoning = String(msg?.reasoning || "").trim();
+    if (content) return score + 2;
+    if (reasoning) return score + 1;
+    return score;
+  }, 0);
+}
+
+export function parseChatMessageTime(value: string): number {
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+  const ts = Date.parse(raw);
+  if (Number.isFinite(ts)) return ts;
+  const m = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?([+-]\d{2}:?\d{2})?$/);
+  if (!m) return 0;
+  const normalized = `${m[1]}T${m[2]}${m[3] || "+08:00"}`;
+  const next = Date.parse(normalized);
+  return Number.isFinite(next) ? next : 0;
+}
+
+export function latestHistoryTimestamp(messages: ChatDraftMessage[]): number {
+  const list = Array.isArray(messages) ? messages : [];
+  return list.reduce((latest, msg) => {
+    if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") {
+      return latest;
+    }
+    const ts = parseChatMessageTime(String(msg?.createdAt || ""));
+    return ts > latest ? ts : latest;
+  }, 0);
+}
+
+export function sortHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  list.sort((a, b) => {
+    const diff = parseChatMessageTime(String(a?.createdAt || "")) - parseChatMessageTime(String(b?.createdAt || ""));
+    if (diff !== 0) return diff;
+    const roleA = String(a?.role || "").trim().toLowerCase();
+    const roleB = String(b?.role || "").trim().toLowerCase();
+    if (roleA !== roleB) {
+      if (roleA === "user") return -1;
+      if (roleB === "user") return 1;
+    }
+    return String(a?.id || "").localeCompare(String(b?.id || ""));
+  });
+  return list;
+}
+
+export function pickBetterHistory(primary: ChatDraftMessage[], fallback: ChatDraftMessage[], seed: ChatDraftMessage[]): ChatDraftMessage[] {
+  const primaryScore = historyRenderableScore(primary);
+  const fallbackScore = historyRenderableScore(fallback);
+  const primaryLatest = latestHistoryTimestamp(primary);
+  const fallbackLatest = latestHistoryTimestamp(fallback);
+  if (primaryScore <= 0 && fallbackScore <= 0) return seed;
+  if (fallbackLatest > primaryLatest) return fallback.length ? fallback : (primary.length ? primary : seed);
+  if (primaryLatest > fallbackLatest) return primary.length ? primary : (fallback.length ? fallback : seed);
+  if (fallbackScore > primaryScore) return fallback.length ? fallback : (primary.length ? primary : seed);
+  return primary.length ? primary : (fallback.length ? fallback : seed);
+}
+
+export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
+  const list = Array.isArray(messages) ? messages : [];
+  return sortHistoryMessages(list.map((msg) => {
+      const rawContent = extractMessageContentSource(msg);
+      const rawReasoning = extractMessageReasoningSource(msg);
+      const normalizedRole = String(msg?.role || "").trim().toLowerCase();
+      const role: ChatRole = normalizedRole === "user" || normalizedRole === "assistant" || normalizedRole === "benben"
+        ? normalizedRole
+        : "assistant";
+      const reasoning = contentToPlainText(rawReasoning) || fallbackRawContentText(rawReasoning);
+      const rawStatus = String((msg as any)?.status || "").trim().toLowerCase();
+      const status = rawStatus === "pending" || rawStatus === "sent" || rawStatus === "failed"
+        ? rawStatus as ChatDraftMessage["status"]
+        : undefined;
+      const content = status === "pending" && role === "assistant"
+        ? ""
+        : stripInlineBase64Images(contentToPlainText(rawContent) || fallbackRawContentText(rawContent));
+      let tokenCount: { input?: number; output?: number } | undefined;
+      if (msg?.tokenCount && typeof msg.tokenCount === "object") {
+        const input = Number(msg.tokenCount.input || 0);
+        const output = Number(msg.tokenCount.output || 0);
+        tokenCount = {
+          input: Number.isFinite(input) && input > 0 ? input : undefined,
+          output: Number.isFinite(output) && output > 0 ? output : undefined,
+        };
+      } else {
+        const legacyCount = Number((msg as any)?.tokenCount || 0);
+        if (Number.isFinite(legacyCount) && legacyCount > 0) {
+          tokenCount = { output: legacyCount };
+        }
+      }
+      return {
+        ...msg,
+        role,
+        content,
+        status,
+        clientRequestId: String((msg as any)?.clientRequestId || "").trim() || undefined,
+        jobId: String((msg as any)?.jobId || "").trim() || undefined,
+        reasoning: reasoning || undefined,
+        tokenCount,
+      };
+    }));
+}
+
+export function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
+  const groups: ChatMessageGroup[] = [];
+  for (const msg of messages) {
+    if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") continue;
+    const normalizedContent = String(msg?.content || "").trim();
+    const normalizedReasoning = String(msg?.reasoning || "").trim();
+    if (!normalizedContent && !normalizedReasoning) continue;
+    const segments = msg.role === "assistant"
+      ? splitSystemCardSegments(normalizedContent)
+      : [{ content: normalizedContent, systemCard: null }];
+    const safeParts = (segments.length ? segments : [{ content: normalizedContent, systemCard: null }])
+      .filter((segment) => String(segment.content || "").trim() || segment.systemCard || normalizedReasoning)
+      .map((segment, index) => ({
+        content: String(segment.content || "").trim(),
+        render: segment.systemCard ? "plain" as const : detectMessageRender(msg.role, String(segment.content || "").trim()),
+        reasoning: index === 0 ? normalizedReasoning || undefined : undefined,
+        tokenCount: index === 0 ? msg.tokenCount : undefined,
+        systemCard: segment.systemCard,
+      }));
+    const last = groups[groups.length - 1];
+    if (last && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {
+      last.parts.push(...safeParts);
+      last.lastCreatedAt = msg.createdAt;
+      continue;
+    }
+    groups.push({
+      id: msg.id,
+      role: msg.role,
+      createdAt: msg.createdAt,
+      lastCreatedAt: msg.createdAt,
+      parts: [...safeParts],
+    });
+  }
+  return groups;
+}
+
+export function groupRoleLabel(role: ChatRole): string {
+  if (role === "user") return "辛玥";
+  if (role === "benben") return "笨笨";
+  return "渡";
+}
+
+export function buildBenbenGroupContext(messages: ChatDraftMessage[], force = false): string {
+  const lines = (Array.isArray(messages) ? messages : [])
+    .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .filter((msg) => String(msg.content || "").trim())
+    .slice(-12)
+    .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`);
+  if (!force && !lines.some((line) => line.startsWith("笨笨："))) return "";
+  return [
+    "【三人群聊上下文】",
+    "这是辛玥、渡、笨笨的日常群聊。笨笨的话来自第三个群成员，不是辛玥说的；回复时可以自然看见笨笨刚才说过什么，但不要把笨笨当成辛玥。",
+    ...lines,
+    "【以上为群聊上下文】",
+  ].join("\n");
+}
+
+export function buildCodexGroupRecentMessages(messages: ChatDraftMessage[]): Array<{ role: ChatRole; content: string; createdAt?: string }> {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .filter((msg) => String(msg.content || "").trim())
+    .slice(-14)
+    .map((msg) => ({
+      role: msg.role,
+      content: String(msg.content || "").trim(),
+      createdAt: msg.createdAt,
+    }));
+}
