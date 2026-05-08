@@ -798,6 +798,14 @@ function applyPromptCache(body) {
     if (summaryIdx > 0) {
       setCacheControl(findCacheableSystemBefore(body.system, summaryIdx));
       setCacheControl(body.system[summaryIdx]);
+      const recentIdx = body.system.findIndex(
+        (item, idx) =>
+          idx > summaryIdx &&
+          (item?.[SUMMARY_RECENT_SYSTEM_MARKER] || looksLikeGatewayRecentSummaryBlock(item))
+      );
+      if (recentIdx > summaryIdx) {
+        setCacheControl(body.system[recentIdx]);
+      }
     } else {
       let staticSystem = null;
       for (let i = 1; i < body.system.length; i += 1) {
