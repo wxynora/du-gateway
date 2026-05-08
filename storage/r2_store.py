@@ -4264,6 +4264,12 @@ def save_stickers_meta(payload: dict) -> bool:
     with _global_write_lock:
         try:
             _write_json(client, R2_KEY_STICKERS_META, p)
+            try:
+                from services.sticker_tags import cache_sticker_tag_keys_from_meta
+
+                cache_sticker_tag_keys_from_meta(p)
+            except Exception:
+                pass
             return True
         except Exception as e:
             logger.error("save_stickers_meta 失败 error=%s", e, exc_info=True)

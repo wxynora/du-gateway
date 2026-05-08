@@ -52,17 +52,10 @@ def register_routes(bp) -> None:
     @bp.route("/stickers/tags-public", methods=["GET"])
     def miniapp_stickers_tags_public():
         """给服务端入口用：仅返回可用英文 tag 列表，不走 panel 鉴权。"""
-        meta = r2_store.get_stickers_meta()
-        keys: list[str] = []
-        for it in meta.get("tags") or []:
-            if not isinstance(it, dict):
-                continue
-            k = str(it.get("key") or "").strip().lower()
-            if k:
-                keys.append(k)
-        if not keys:
-            keys = sorted(r2_store.get_sticker_tag_keys())
-        return jsonify({"ok": True, "tags": sorted(set(keys))})
+        from services.sticker_tags import get_cached_sticker_tag_keys
+
+        refresh = str(request.args.get("refresh") or "").strip().lower() in ("1", "true", "yes")
+        return jsonify({"ok": True, "tags": get_cached_sticker_tag_keys(refresh=refresh)})
 
     @bp.route("/stickers/resolve", methods=["GET"])
     def miniapp_stickers_resolve():
