@@ -630,6 +630,70 @@ _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION = (
 )
 
 
+def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
+    stripped = content.lstrip()
+    if msg.get("__summary_cache__") or "【近期记忆】" in content:
+        return "近期记忆"
+    if stripped.startswith("【入口风格：QQ】"):
+        return "QQ入口风格"
+    if stripped.startswith("【入口风格：微信】"):
+        return "微信入口风格"
+    if stripped.startswith("【入口风格：SumiTalk】"):
+        return "SumiTalk入口风格"
+    if stripped.startswith("【入口风格：TG】"):
+        return "TG入口风格"
+    if stripped.startswith("### thinking block 约束"):
+        return "thinking规则"
+    if stripped.startswith("### 核心行为与前置判断规则"):
+        return "核心行为规则"
+    if stripped.startswith("【核心XP与互动逻辑】"):
+        return "NSFW规则"
+    if stripped.startswith("如果你这句话说完，心里还是惦记着她"):
+        return "followup规则"
+    if idx == 0:
+        return "核心prompt"
+    return f"system#{idx + 1}"
+
+
+def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
+    content = str(msg.get("content") or "")
+    if not content:
+        return []
+    marker_labels = [
+        ("【核心XP与互动逻辑】", "NSFW规则"),
+        ("如果你这句话说完，心里还是惦记着她", "followup规则"),
+    ]
+    markers: dict[int, str] = {}
+    for marker, label in marker_labels:
+        pos = content.find(marker)
+        if pos >= 0:
+            markers[pos] = label
+    base_label = _static_system_base_label(msg, idx, content)
+    boundaries: list[tuple[int, str]] = []
+    if 0 in markers:
+        boundaries.append((0, markers.pop(0)))
+    else:
+        boundaries.append((0, base_label))
+    for pos in sorted(markers):
+        boundaries.append((pos, markers[pos]))
+
+    out: list[dict] = []
+    for i, (start, label) in enumerate(boundaries):
+        end = boundaries[i + 1][0] if i + 1 < len(boundaries) else len(content)
+        chars = max(0, end - start)
+        if chars <= 0:
+            continue
+        out.append(
+            {
+                "index": idx,
+                "label": label,
+                "chars": chars,
+                "est_tokens": estimate_tokens("x" * chars),
+            }
+        )
+    return out
+
+
 def _build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
     messages = (body or {}).get("messages") or []
     tools = (body or {}).get("tools") or []
@@ -638,12 +702,13 @@ def _build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
     leading_system_chars = 0
     total_message_chars = 0
     dynamic_marker_seen = False
+    static_breakdown: list[dict] = []
     for m in messages:
         if not isinstance(m, dict):
             continue
         chars = _message_content_chars(m.get("content"))
         total_message_chars += chars
-    for m in messages:
+    for msg_idx, m in enumerate(messages):
         if not isinstance(m, dict):
             break
         if str(m.get("role") or "").strip().lower() != "system":
@@ -657,6 +722,7 @@ def _build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
             dynamic_chars += chars
         else:
             static_chars += chars
+            static_breakdown.extend(_static_system_breakdown_parts(m, msg_idx))
     try:
         tools_chars = sum(len(json.dumps(t, ensure_ascii=False, default=str)) for t in tools if isinstance(t, dict))
     except Exception:
@@ -678,6 +744,7 @@ def _build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
         "message_est_tokens": estimate_tokens("x" * total_message_chars),
         "tools_chars": tools_chars,
         "tools_est_tokens": estimate_tokens("x" * tools_chars),
+        "static_breakdown": static_breakdown,
         "dynamic_marker_seen": dynamic_marker_seen,
         "prompt_cache_key": str((body or {}).get("prompt_cache_key") or ""),
         "prompt_cache_retention": str((body or {}).get("prompt_cache_retention") or ""),

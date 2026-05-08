@@ -7,6 +7,11 @@ type PromptCacheDebugEntry = {
   request?: Record<string, unknown>;
   usage?: Record<string, unknown>;
 };
+type PromptCacheBreakdownItem = {
+  label?: string;
+  chars?: number;
+  est_tokens?: number;
+};
 type ReasoningItem = {
   window_id?: string;
   index?: number;
@@ -36,6 +41,18 @@ function firstUsageValue(usage: Record<string, unknown>, keys: string[]) {
   return undefined;
 }
 
+function promptCacheBreakdown(value: unknown): PromptCacheBreakdownItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+    .map((item) => ({
+      label: String(item.label || "system"),
+      chars: typeof item.chars === "number" ? item.chars : Number(item.chars || 0),
+      est_tokens: typeof item.est_tokens === "number" ? item.est_tokens : Number(item.est_tokens || 0),
+    }))
+    .filter((item) => item.chars || item.est_tokens);
+}
+
 function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }) {
   const items = Array.isArray(entries) ? entries.filter(Boolean).slice(-4) : [];
   if (!items.length) return null;
@@ -54,6 +71,7 @@ function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }
           const anthropicCreated = usage.cache_creation_input_tokens;
           const inputTokens = firstUsageValue(usage, ["input_tokens", "prompt_tokens"]);
           const cacheKey = req.prompt_cache_key ? "已设置" : "未设置";
+          const staticBreakdown = promptCacheBreakdown(req.static_breakdown);
           return (
             <div key={idx} className="space-y-1.5 text-[11px] leading-4">
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
@@ -67,6 +85,18 @@ function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }
                 <span>static {tokenValue(req.static_prefix_est_tokens)}</span>
                 <span>dynamic {tokenValue(req.dynamic_system_est_tokens)}</span>
               </div>
+              {staticBreakdown.length ? (
+                <div className="rounded-md border border-[#f6d7df] bg-white/45 px-2 py-1.5 text-[10px] leading-4 text-[#8a4055]">
+                  <div className="mb-0.5 font-semibold text-[#7a2d45]">static breakdown</div>
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                    {staticBreakdown.map((part, partIdx) => (
+                      <span key={`${part.label || "system"}-${partIdx}`} className="min-w-0 truncate">
+                        {part.label || "system"} {tokenValue(part.est_tokens)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="break-words text-[#9b5368]">
                 model={debugValue(req.model)} · host={debugValue(req.upstream_host)} · prompt_cache_key={cacheKey}
               </div>
