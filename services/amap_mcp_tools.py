@@ -58,8 +58,6 @@ TOOL_OPEN_TRAVEL_PLAN_FORM = {
 }
 
 _TRAVEL_KEYWORDS = (
-    "想去",
-    "要去",
     "去哪",
     "哪里玩",
     "路线",
@@ -79,6 +77,40 @@ _TRAVEL_KEYWORDS = (
     "攻略",
     "poi",
     "高德",
+)
+
+_NON_TRAVEL_GO_KEYWORDS = (
+    "去睡",
+    "去睡觉",
+    "睡觉",
+    "睡了",
+    "睡啦",
+    "去洗澡",
+    "去休息",
+    "去躺",
+)
+
+_TRAVEL_GO_HINTS = (
+    "玩",
+    "逛",
+    "吃",
+    "旅游",
+    "旅行",
+    "景点",
+    "公园",
+    "商场",
+    "餐厅",
+    "酒店",
+    "民宿",
+    "机场",
+    "车站",
+    "火车站",
+    "高铁站",
+    "地铁站",
+    "博物馆",
+    "展览",
+    "迪士尼",
+    "环球",
 )
 
 _TRAVEL_TOOL_NAMES = frozenset(
@@ -109,7 +141,16 @@ def should_inject_amap_mcp_tools(text: str) -> bool:
     if "[Proactive trigger fact]" in raw:
         return False
     q = raw.lower()
-    return bool(q) and any(k in q for k in _TRAVEL_KEYWORDS)
+    if not q:
+        return False
+    if any(k in q for k in _TRAVEL_KEYWORDS):
+        return True
+    if any(k in q for k in _NON_TRAVEL_GO_KEYWORDS):
+        return False
+    has_go_intent = any(k in q for k in ("想去", "要去", "打算去", "准备去", "计划去"))
+    if has_go_intent and any(k in q for k in _TRAVEL_GO_HINTS):
+        return True
+    return False
 
 
 def _sanitize_schema(input_schema: dict | None) -> dict:
