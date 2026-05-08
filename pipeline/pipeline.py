@@ -41,6 +41,7 @@ from services.dynamic_memory_citation import DYNAMIC_MEMORY_CITATION_MAP_BODY_KE
 
 _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
+_SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _LAST4_REFERENCE_NOTE = (
     "【指代提醒】上述记忆和摘要中的“她”均指辛玥。回复辛玥时不要用“她”代称她；"
     "需要指代时用“你”或“辛玥”，按语境自然表达。"
@@ -189,7 +190,7 @@ def _append_to_static_system(body: dict, text: str) -> dict:
         if (msg.get("role") or "").lower() != "system":
             break
         insert_idx = i + 1
-        if msg.get(_DYNAMIC_SYSTEM_MARKER) or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
+        if msg.get(_DYNAMIC_SYSTEM_MARKER) or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER) or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
             insert_idx = i
             break
         if not msg.get(_DYNAMIC_SYSTEM_MARKER):
@@ -201,18 +202,19 @@ def _append_to_static_system(body: dict, text: str) -> dict:
     return body
 
 
-def _reorder_summary_for_prompt_cache(summary: str) -> str:
+def _split_summary_for_prompt_cache(summary: str) -> tuple[str, str]:
     """
     R2/UI 里的近期记忆保持「最近→稍早→更早」方便阅读；
-    发给模型时改成「更早→稍早→最近」，缓存断点仍打在整块近期记忆末尾。
+    发给模型时改成「更早→稍早→最近」，缓存断点只打到「稍早」末尾，
+    避免「最近」频繁变化导致整块近期记忆 miss。
     """
     text = (summary or "").strip()
     if not text:
-        return ""
+        return "", ""
 
     parts = re.split(r"(【(?:最近|稍早|更早)】)", text)
     if len(parts) < 3:
-        return text
+        return f"\n\n【近期记忆】\n{text}\n【以上为近期记忆】", ""
 
     preamble = parts[0].strip()
     sections: dict[str, list[str]] = {"最近": [], "稍早": [], "更早": []}
@@ -224,46 +226,58 @@ def _reorder_summary_for_prompt_cache(summary: str) -> str:
             sections[key].append(f"{title}\n{body}".strip())
 
     if not any(sections.values()):
-        return text
+        return f"\n\n【近期记忆】\n{text}\n【以上为近期记忆】", ""
 
-    ordered_parts: list[str] = []
+    stable_parts: list[str] = []
     if preamble:
-        ordered_parts.append(preamble)
-    ordered_parts.extend(sections["更早"])
-    ordered_parts.extend(sections["稍早"])
-    ordered_parts.extend(sections["最近"])
-    return "\n\n".join(p for p in ordered_parts if p).strip()
+        stable_parts.append(preamble)
+    stable_parts.extend(sections["更早"])
+    stable_parts.extend(sections["稍早"])
+    recent_parts = sections["最近"]
+
+    stable_text = "\n\n".join(p for p in stable_parts if p).strip()
+    recent_text = "\n\n".join(p for p in recent_parts if p).strip()
+    stable_block = f"\n\n【近期记忆】\n{stable_text}\n【以上为较稳定的近期记忆】" if stable_text else ""
+    recent_block = f"\n\n【近期记忆（最近）】\n{recent_text}\n【以上为最近记忆】" if recent_text else ""
+    return stable_block, recent_block
 
 
-def _upsert_summary_cache_system(body: dict, text: str) -> dict:
+def _upsert_summary_cache_system(body: dict, stable_text: str, recent_text: str = "") -> dict:
     """
-    把近期记忆放在静态 system 之后、动态 system 之前的独立 block。
-    Claude proxy 可在这个 block 末尾放缓存断点；普通静态注入仍会插在它前面。
+    把近期记忆放在静态 system 之后、动态 system 之前。
+    stable_text 只包含「更早/稍早」，Claude proxy 在它末尾放缓存断点；
+    recent_text 单独成块，不参与缓存断点，避免最近几轮变化污染前缀缓存。
     """
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
     if not messages:
-        body["messages"] = [{"role": "system", "content": text, _SUMMARY_CACHE_SYSTEM_MARKER: True}]
+        body["messages"] = []
+        if stable_text:
+            body["messages"].append({"role": "system", "content": stable_text, _SUMMARY_CACHE_SYSTEM_MARKER: True})
+        if recent_text:
+            body["messages"].append({"role": "system", "content": recent_text, _SUMMARY_RECENT_SYSTEM_MARKER: True})
         return body
 
-    existing_idx = -1
+    messages = [
+        msg for msg in messages
+        if not (msg.get(_SUMMARY_CACHE_SYSTEM_MARKER) or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER))
+    ]
     first_dynamic_idx = -1
     first_non_system_idx = len(messages)
     for i, msg in enumerate(messages):
         if (msg.get("role") or "").lower() != "system":
             first_non_system_idx = i
             break
-        if msg.get(_SUMMARY_CACHE_SYSTEM_MARKER):
-            existing_idx = i
         if first_dynamic_idx == -1 and msg.get(_DYNAMIC_SYSTEM_MARKER):
             first_dynamic_idx = i
 
-    if existing_idx >= 0:
-        messages[existing_idx]["content"] = text
-        return body
-
     insert_idx = first_dynamic_idx if first_dynamic_idx >= 0 else first_non_system_idx
-    messages.insert(insert_idx, {"role": "system", "content": text, _SUMMARY_CACHE_SYSTEM_MARKER: True})
+    new_blocks = []
+    if stable_text:
+        new_blocks.append({"role": "system", "content": stable_text, _SUMMARY_CACHE_SYSTEM_MARKER: True})
+    if recent_text:
+        new_blocks.append({"role": "system", "content": recent_text, _SUMMARY_RECENT_SYSTEM_MARKER: True})
+    messages[insert_idx:insert_idx] = new_blocks
     body["messages"] = messages
     return body
 
@@ -805,9 +819,8 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
             except Exception:
                 summary = truncate_to_tokens(summary, budget)
             logger.debug("summary trimmed to %s tokens", budget)
-        prompt_summary = _reorder_summary_for_prompt_cache(summary)
-        summary_inject = f"\n\n【近期记忆】\n{prompt_summary}\n【以上为近期记忆】"
-        body = _upsert_summary_cache_system(body, summary_inject)
+        stable_summary, recent_summary = _split_summary_for_prompt_cache(summary)
+        body = _upsert_summary_cache_system(body, stable_summary, recent_summary)
         inject = head
     else:
         inject = head

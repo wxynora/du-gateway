@@ -632,7 +632,7 @@ _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION = (
 
 def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
     stripped = content.lstrip()
-    if msg.get("__summary_cache__") or "【近期记忆】" in content:
+    if msg.get("__summary_cache__") or msg.get("__summary_recent__") or "【近期记忆】" in content:
         return "近期记忆"
     if stripped.startswith("【入口风格：QQ】"):
         return "QQ入口风格"
@@ -2194,6 +2194,7 @@ def chat_completions():
         if not preserve_dynamic_marker:
             msg.pop("__dynamic__", None)
             msg.pop("__summary_cache__", None)
+            msg.pop("__summary_recent__", None)
     if body.get("stream"):
         if is_sumitalk_request:
             sumitalk_logger.info(

@@ -4,7 +4,7 @@ const http = require("http");
 const https = require("https");
 const fs = require("fs");
 const { StringDecoder } = require("string_decoder");
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 
 const PORT = parseInt(process.env.PORT || "8082");
 const HOST = process.env.HOST || "127.0.0.1";
@@ -16,6 +16,15 @@ const THINKING_BUDGET_TOKENS = parseInt(
 );
 const CLAUDE_OAUTH_FILE = process.env.CLAUDE_OAUTH_FILE || "";
 const CLAUDE_OAUTH_JSON = process.env.CLAUDE_OAUTH_JSON || "";
+const CLAUDE_OAUTH_KEYCHAIN_SERVICE =
+  process.env.CLAUDE_OAUTH_KEYCHAIN_SERVICE || "Claude Code-credentials";
+const CLAUDE_OAUTH_KEYCHAIN_WRITE =
+  String(process.env.CLAUDE_OAUTH_KEYCHAIN_WRITE || "1").trim().toLowerCase() !== "0";
+const REFRESH_SKEW_MS = Math.max(
+  60,
+  parseInt(process.env.CLAUDE_REFRESH_SKEW_SECONDS || "300", 10)
+) * 1000;
+const CLAUDE_PROMPT_CACHE_TTL = String(process.env.CLAUDE_PROMPT_CACHE_TTL || "1h").trim();
 const TARGET_HOST = "api.anthropic.com";
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const REFRESH_URL = "https://console.anthropic.com/v1/oauth/token";
@@ -32,6 +41,7 @@ const BETA_HEADER = [
 ].join(",");
 const DYNAMIC_SYSTEM_MARKER = "__dynamic__";
 const SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__";
+const SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__";
 const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
   "【渡的心事",
   "【渡的日常",
@@ -60,18 +70,19 @@ const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gi
 
 let cachedOAuth = null;
 let cachedOAuthRaw = null;
+let cachedOAuthSource = "";
 
 function log(msg) {
   console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 }
 
 function readKeychainOAuth() {
-  const raw = execSync(
-    'security find-generic-password -s "Claude Code-credentials" -w'
-  )
-    .toString()
-    .trim();
-  return JSON.parse(raw).claudeAiOauth;
+  const raw = execFileSync(
+    "security",
+    ["find-generic-password", "-s", CLAUDE_OAUTH_KEYCHAIN_SERVICE, "-w"],
+    { encoding: "utf8" }
+  ).trim();
+  return JSON.parse(raw);
 }
 
 function parseExpiresAt(value) {
@@ -107,19 +118,21 @@ function normalizeOAuth(raw) {
 
 function readOAuthCredentials() {
   if (CLAUDE_OAUTH_JSON) {
+    cachedOAuthSource = "env";
     cachedOAuthRaw = JSON.parse(CLAUDE_OAUTH_JSON);
     return normalizeOAuth(cachedOAuthRaw);
   }
   if (CLAUDE_OAUTH_FILE) {
+    cachedOAuthSource = "file";
     cachedOAuthRaw = JSON.parse(fs.readFileSync(CLAUDE_OAUTH_FILE, "utf8"));
     return normalizeOAuth(cachedOAuthRaw);
   }
-  cachedOAuthRaw = { claudeAiOauth: readKeychainOAuth() };
+  cachedOAuthSource = "keychain";
+  cachedOAuthRaw = readKeychainOAuth();
   return normalizeOAuth(cachedOAuthRaw);
 }
 
-function writeOAuthCredentials(next) {
-  if (!CLAUDE_OAUTH_FILE || !cachedOAuthRaw) return;
+function updatedOAuthRaw(next) {
   const updated = JSON.parse(JSON.stringify(cachedOAuthRaw));
   if (updated.claudeAiOauth) {
     updated.claudeAiOauth.accessToken = next.accessToken;
@@ -135,10 +148,35 @@ function writeOAuthCredentials(next) {
     updated.refreshToken = next.refreshToken;
     updated.expiresAt = next.expiresAt;
   }
-  const tmp = `${CLAUDE_OAUTH_FILE}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(updated, null, 2) + "\n", { mode: 0o600 });
-  fs.renameSync(tmp, CLAUDE_OAUTH_FILE);
-  cachedOAuthRaw = updated;
+  return updated;
+}
+
+function writeOAuthCredentials(next) {
+  if (!cachedOAuthRaw) return;
+  if (cachedOAuthSource === "env") return;
+  const updated = updatedOAuthRaw(next);
+  if (CLAUDE_OAUTH_FILE) {
+    const tmp = `${CLAUDE_OAUTH_FILE}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(updated, null, 2) + "\n", { mode: 0o600 });
+    fs.renameSync(tmp, CLAUDE_OAUTH_FILE);
+    cachedOAuthRaw = updated;
+    return;
+  }
+  if (cachedOAuthSource === "keychain" && CLAUDE_OAUTH_KEYCHAIN_WRITE) {
+    execFileSync(
+      "security",
+      [
+        "add-generic-password",
+        "-U",
+        "-s",
+        CLAUDE_OAUTH_KEYCHAIN_SERVICE,
+        "-w",
+        JSON.stringify(updated),
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] }
+    );
+    cachedOAuthRaw = updated;
+  }
 }
 
 function httpsRequest(url, method, headers, body) {
@@ -182,13 +220,21 @@ async function refreshToken(refreshTk) {
 async function getAccessToken() {
   if (!cachedOAuth) {
     cachedOAuth = readOAuthCredentials();
-    log(`Token loaded (expires ${new Date(cachedOAuth.expiresAt).toLocaleString()})`);
+    log(
+      `Token loaded from ${cachedOAuthSource || "unknown"} (expires ${new Date(
+        cachedOAuth.expiresAt
+      ).toLocaleString()})`
+    );
   }
-  if (Date.now() > cachedOAuth.expiresAt - 5 * 60 * 1000) {
+  if (Date.now() > cachedOAuth.expiresAt - REFRESH_SKEW_MS) {
     try {
       const r = await refreshToken(cachedOAuth.refreshToken);
       Object.assign(cachedOAuth, r);
-      writeOAuthCredentials(cachedOAuth);
+      try {
+        writeOAuthCredentials(cachedOAuth);
+      } catch (e) {
+        log(`Persist refreshed token failed: ${e.message}`);
+      }
       log(`Token refreshed (expires ${new Date(r.expiresAt).toLocaleString()})`);
     } catch (e) {
       log(`Refresh failed: ${e.message}, re-reading credentials...`);
@@ -443,6 +489,7 @@ async function openaiToAnthropic(oai) {
         const block = { type: "text", text };
         if (msg[DYNAMIC_SYSTEM_MARKER]) block[DYNAMIC_SYSTEM_MARKER] = true;
         if (msg[SUMMARY_CACHE_SYSTEM_MARKER]) block[SUMMARY_CACHE_SYSTEM_MARKER] = true;
+        if (msg[SUMMARY_RECENT_SYSTEM_MARKER]) block[SUMMARY_RECENT_SYSTEM_MARKER] = true;
         systemBlocks.push(block);
       }
     } else if (msg.role === "tool" || msg.role === "function") {
@@ -729,39 +776,115 @@ function staticSystemPromptBlock() {
 }
 
 function applyPromptCache(body) {
+  const cacheControl = CLAUDE_PROMPT_CACHE_TTL
+    ? { type: "ephemeral", ttl: CLAUDE_PROMPT_CACHE_TTL }
+    : { type: "ephemeral" };
+      const setCacheControl = (item) => {
+    if (item && typeof item === "object") item.cache_control = { ...cacheControl };
+  };
+
   if (Array.isArray(body.tools) && body.tools.length > 0) {
     const lastTool = body.tools[body.tools.length - 1];
-    if (lastTool && typeof lastTool === "object") {
-      lastTool.cache_control = { type: "ephemeral" };
-    }
+    setCacheControl(lastTool);
   }
 
   if (Array.isArray(body.system) && body.system.length > 0) {
-    let staticSystem = null;
-    let summarySystem = null;
-    for (let i = 1; i < body.system.length; i += 1) {
-      const item = body.system[i];
-      if (item?.[DYNAMIC_SYSTEM_MARKER] || looksLikeGatewayDynamicSystemBlock(item)) break;
-      if (item?.[SUMMARY_CACHE_SYSTEM_MARKER] || looksLikeGatewaySummaryCacheBlock(item)) {
-        summarySystem = item;
-        continue;
+    splitGatewaySummaryBlocks(body.system);
+
+    const summaryIdx = body.system.findIndex(
+      (item, idx) => idx > 0 && (item?.[SUMMARY_CACHE_SYSTEM_MARKER] || looksLikeGatewaySummaryCacheBlock(item))
+    );
+
+    if (summaryIdx > 0) {
+      setCacheControl(findCacheableSystemBefore(body.system, summaryIdx));
+      setCacheControl(body.system[summaryIdx]);
+    } else {
+      let staticSystem = null;
+      for (let i = 1; i < body.system.length; i += 1) {
+        const item = body.system[i];
+        if (
+          item?.[DYNAMIC_SYSTEM_MARKER] ||
+          item?.[SUMMARY_RECENT_SYSTEM_MARKER] ||
+          looksLikeGatewayDynamicSystemBlock(item) ||
+          looksLikeGatewayRecentSummaryBlock(item)
+        ) break;
+        if (item && typeof item === "object") staticSystem = item;
       }
-      if (item && typeof item === "object") staticSystem = item;
+      setCacheControl(staticSystem);
     }
-    if (staticSystem) staticSystem.cache_control = { type: "ephemeral" };
-    if (summarySystem) summarySystem.cache_control = { type: "ephemeral" };
+
     for (const item of body.system) {
       if (item && typeof item === "object") {
         delete item[DYNAMIC_SYSTEM_MARKER];
         delete item[SUMMARY_CACHE_SYSTEM_MARKER];
+        delete item[SUMMARY_RECENT_SYSTEM_MARKER];
       }
     }
   }
 }
 
+function splitGatewaySummaryBlocks(systemBlocks) {
+  if (!Array.isArray(systemBlocks)) return;
+  for (let i = 1; i < systemBlocks.length; i += 1) {
+    const item = systemBlocks[i];
+    if (!(item?.[SUMMARY_CACHE_SYSTEM_MARKER] || looksLikeGatewaySummaryCacheBlock(item))) continue;
+    if (systemBlocks[i + 1]?.[SUMMARY_RECENT_SYSTEM_MARKER] || looksLikeGatewayRecentSummaryBlock(systemBlocks[i + 1])) return;
+
+    const split = splitGatewaySummaryText(item.text);
+    if (!split.recentText) return;
+    item.text = split.stableText;
+    item[SUMMARY_CACHE_SYSTEM_MARKER] = true;
+    systemBlocks.splice(i + 1, 0, {
+      type: "text",
+      text: split.recentText,
+      [SUMMARY_RECENT_SYSTEM_MARKER]: true,
+    });
+    return;
+  }
+}
+
+function splitGatewaySummaryText(value) {
+  let text = String(value || "").trim();
+  if (!text) return { stableText: "", recentText: "" };
+  text = text.replace(/【以上为近期记忆】\s*$/u, "").trim();
+  const recentIdx = text.indexOf("【最近】");
+  if (recentIdx < 0) return { stableText: String(value || ""), recentText: "" };
+
+  const stableRaw = text.slice(0, recentIdx).trim();
+  const recentRaw = text.slice(recentIdx).trim();
+  if (!recentRaw) return { stableText: String(value || ""), recentText: "" };
+  return {
+    stableText: stableRaw
+      ? `${stableRaw}\n【以上为较稳定的近期记忆】`
+      : "",
+    recentText: `\n\n【近期记忆（最近）】\n${recentRaw}\n【以上为最近记忆】`,
+  };
+}
+
+function findCacheableSystemBefore(systemBlocks, endIdx) {
+  for (let i = endIdx - 1; i > 0; i -= 1) {
+    const item = systemBlocks[i];
+    if (
+      item &&
+      typeof item === "object" &&
+      !item?.[DYNAMIC_SYSTEM_MARKER] &&
+      !item?.[SUMMARY_RECENT_SYSTEM_MARKER] &&
+      !looksLikeGatewayRecentSummaryBlock(item)
+    ) {
+      return item;
+    }
+  }
+  return null;
+}
+
 function looksLikeGatewaySummaryCacheBlock(item) {
   const text = String(item?.text || "").trimStart();
   return text.startsWith("【近期记忆】");
+}
+
+function looksLikeGatewayRecentSummaryBlock(item) {
+  const text = String(item?.text || "").trimStart();
+  return text.startsWith("【近期记忆（最近）】");
 }
 
 function looksLikeGatewayDynamicSystemBlock(item) {
