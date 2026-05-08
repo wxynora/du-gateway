@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import random
 import re
@@ -226,6 +227,33 @@ def _strip_json_fence(text: str) -> str:
     return t
 
 
+def _extract_json_object_text(text: str) -> str:
+    """从裸 JSON、Markdown 代码块或前后带说明的回复里提取第一个 JSON 对象。"""
+    t = _strip_json_fence(text)
+    if t.startswith("{") and t.endswith("}"):
+        return t
+    fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*\})\s*```", str(text or ""), flags=re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+    start = t.find("{")
+    end = t.rfind("}")
+    if 0 <= start < end:
+        return t[start : end + 1].strip()
+    return ""
+
+
+def _looks_like_control_json_reply(text: str) -> bool:
+    t = str(text or "").strip()
+    if not t:
+        return False
+    return (
+        t.startswith("```")
+        or t.startswith("{")
+        or ('"action"' in t and '"message"' in t)
+        or ("'action'" in t and "'message'" in t)
+    )
+
+
 def _normalize_reply_channel(value: str, default: str = "", allowed: list[str] | None = None) -> str:
     s = str(value or "").strip().lower()
     alias = {
@@ -251,19 +279,29 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
             False, "", "no_contact", action="no_contact", du_reason="（使用 NO_CONTACT 标记，未给理由）", channel=default_channel
         )
 
-    cleaned = _strip_json_fence(t)
+    cleaned = _extract_json_object_text(t) or _strip_json_fence(t)
     obj = None
     try:
         obj = json.loads(cleaned)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         m = re.search(r"\{[\s\S]*\}", cleaned)
         if m:
             try:
                 obj = json.loads(m.group(0))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, TypeError):
                 obj = None
 
     if not isinstance(obj, dict):
+        if _looks_like_control_json_reply(t):
+            logger.warning("主动决策返回疑似控制 JSON 但解析失败，已拦截 raw_preview=%s", t[:300])
+            return ProactiveDecision(
+                False,
+                "",
+                "structured_parse_failed",
+                action="error",
+                du_reason="模型返回了疑似控制 JSON，但解析失败；为避免原样泄漏，已拦截。",
+                channel=default_channel,
+            )
         return ProactiveDecision(
             True,
             t,
