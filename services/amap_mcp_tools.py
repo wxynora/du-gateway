@@ -57,28 +57,6 @@ TOOL_OPEN_TRAVEL_PLAN_FORM = {
     },
 }
 
-_TRAVEL_KEYWORDS = (
-    "去哪",
-    "哪里玩",
-    "路线",
-    "导航",
-    "怎么去",
-    "怎么走",
-    "地铁",
-    "公交",
-    "打车",
-    "出租车",
-    "网约车",
-    "换乘",
-    "出行",
-    "旅游",
-    "旅行",
-    "景点",
-    "攻略",
-    "poi",
-    "高德",
-)
-
 _NON_TRAVEL_GO_KEYWORDS = (
     "去睡",
     "去睡觉",
@@ -88,6 +66,39 @@ _NON_TRAVEL_GO_KEYWORDS = (
     "去洗澡",
     "去休息",
     "去躺",
+)
+
+_TRAVEL_FORM_KEYWORDS = (
+    "旅游计划表单",
+    "旅行计划表单",
+    "出行规划表单",
+    "路线规划表单",
+    "旅游计划",
+    "旅行计划",
+    "出行规划",
+    "行程规划",
+)
+
+_TRAVEL_ASK_KEYWORDS = (
+    "去哪玩",
+    "去哪儿玩",
+    "哪里玩",
+    "哪里好玩",
+    "去哪旅游",
+    "去哪儿旅游",
+    "哪里旅游",
+    "去哪旅行",
+    "去哪儿旅行",
+    "哪里旅行",
+)
+
+_TRAVEL_GO_INTENTS = (
+    "想去",
+    "要去",
+    "我要去",
+    "打算去",
+    "准备去",
+    "计划去",
 )
 
 _TRAVEL_GO_HINTS = (
@@ -143,11 +154,13 @@ def should_inject_amap_mcp_tools(text: str) -> bool:
     q = raw.lower()
     if not q:
         return False
-    if any(k in q for k in _TRAVEL_KEYWORDS):
-        return True
     if any(k in q for k in _NON_TRAVEL_GO_KEYWORDS):
         return False
-    has_go_intent = any(k in q for k in ("想去", "要去", "打算去", "准备去", "计划去"))
+    if any(k in q for k in _TRAVEL_FORM_KEYWORDS):
+        return True
+    if any(k in q for k in _TRAVEL_ASK_KEYWORDS):
+        return True
+    has_go_intent = any(k in q for k in _TRAVEL_GO_INTENTS)
     if has_go_intent and any(k in q for k in _TRAVEL_GO_HINTS):
         return True
     return False
