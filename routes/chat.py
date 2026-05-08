@@ -66,6 +66,8 @@ from pipeline.pipeline import (
     step_inject_html_preview_tool,
     step_trim_messages_if_over_limit,
     step_archive_and_maybe_summary,
+    step_archive_round,
+    step_run_post_archive_tasks,
 )
 from services.wenyou_service import step_inject_wenyou_gm
 from pipeline.cleaner import build_round_cleaned_for_r2
@@ -883,6 +885,31 @@ def _extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
             val = obj.get(rk)
             if isinstance(val, str) and val.strip():
                 reasoning_parts.append(val.strip())
+        for block in obj.get("thinking_blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            btype = str(block.get("type") or "").strip()
+            if btype == "thinking":
+                val = block.get("thinking") or block.get("text")
+                if isinstance(val, str) and val.strip():
+                    reasoning_parts.append(val.strip())
+            elif btype == "redacted_thinking":
+                omitted = True
+            details.append(block)
+        content = obj.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = str(block.get("type") or "").strip()
+                if btype == "thinking":
+                    val = block.get("thinking") or block.get("text")
+                    if isinstance(val, str) and val.strip():
+                        reasoning_parts.append(val.strip())
+                elif btype == "redacted_thinking":
+                    omitted = True
+                if btype in {"thinking", "redacted_thinking"}:
+                    details.append(block)
         for item in details:
             for key in ("type", "display", "format"):
                 val = str(item.get(key) or "").strip().lower()
@@ -890,7 +917,16 @@ def _extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
                     omitted = True
             if item.get("omitted") is True:
                 omitted = True
-    return "\n\n".join([x for x in reasoning_parts if x]).strip(), details, omitted
+    deduped_parts: list[str] = []
+    seen_parts: set[str] = set()
+    for part in reasoning_parts:
+        text = str(part or "").strip()
+        key = " ".join(text.split())
+        if not key or key in seen_parts:
+            continue
+        seen_parts.add(key)
+        deduped_parts.append(text)
+    return "\n\n".join(deduped_parts).strip(), details, omitted
 
 
 def _apply_reasoning_metadata(msg: dict) -> dict:
@@ -1625,29 +1661,29 @@ def _maybe_record_last_reply_channel(window_id: str, body: dict) -> None:
         logger.warning("更新最近对话入口失败 window_id=%s channel=%s error=%s", window_id, reply_channel, e)
 
 
-def _archive_nonstream_in_background(
+def _run_nonstream_post_archive_in_background(
     *,
     window_id: str,
-    messages: list,
-    msg: dict,
-    round_cleaned_for_r2=None,
+    round_index: int,
+    round_messages: list,
     reply_channel: str = "",
 ) -> None:
-    """非流式入口先回包，R2 存档/动态层后台补做，避免 QQ/微信等待过久误判失败。"""
+    """非流式入口已同步写入 R2 后，只把总结/动态层等慢任务放后台。"""
 
     def _runner():
         try:
-            step_archive_and_maybe_summary(
-                window_id,
-                messages,
-                msg,
-                round_cleaned_for_r2=round_cleaned_for_r2,
-            )
-            logger.info("非流式后台存档完成 window_id=%s channel=%s", window_id, reply_channel)
+            step_run_post_archive_tasks(window_id, round_index, round_messages)
+            logger.info("非流式后台慢任务完成 window_id=%s channel=%s round_index=%s", window_id, reply_channel, round_index)
         except Exception:
-            logger.warning("非流式后台存档失败 window_id=%s channel=%s", window_id, reply_channel, exc_info=True)
+            logger.warning(
+                "非流式后台慢任务失败 window_id=%s channel=%s round_index=%s",
+                window_id,
+                reply_channel,
+                round_index,
+                exc_info=True,
+            )
 
-    threading.Thread(target=_runner, name=f"nonstream-archive-{window_id}", daemon=True).start()
+    threading.Thread(target=_runner, name=f"nonstream-post-archive-{window_id}", daemon=True).start()
 
 
 def _extract_last_user_text(messages) -> str:
@@ -2445,25 +2481,30 @@ def chat_completions():
                     last_user = _strip_co_read_section_raw_text_for_archive(last_user)
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg_for_r2)
                 if reply_channel in {"qq", "wechat"}:
-                    _archive_nonstream_in_background(
-                        window_id=window_id,
-                        messages=archive_messages,
-                        msg=msg_for_r2,
-                        round_cleaned_for_r2=round_cleaned,
-                        reply_channel=reply_channel,
+                    archived = step_archive_round(
+                        window_id, archive_messages, msg_for_r2, round_cleaned_for_r2=round_cleaned
                     )
+                    if archived:
+                        _run_nonstream_post_archive_in_background(
+                            window_id=window_id,
+                            round_index=int(archived.get("round_index") or 0),
+                            round_messages=archived.get("round_messages") or round_cleaned,
+                            reply_channel=reply_channel,
+                        )
                 else:
                     step_archive_and_maybe_summary(
                         window_id, archive_messages, msg_for_r2, round_cleaned_for_r2=round_cleaned
                     )
             else:
                 if reply_channel in {"qq", "wechat"}:
-                    _archive_nonstream_in_background(
-                        window_id=window_id,
-                        messages=archive_messages,
-                        msg=msg_for_r2,
-                        reply_channel=reply_channel,
-                    )
+                    archived = step_archive_round(window_id, archive_messages, msg_for_r2)
+                    if archived:
+                        _run_nonstream_post_archive_in_background(
+                            window_id=window_id,
+                            round_index=int(archived.get("round_index") or 0),
+                            round_messages=archived.get("round_messages") or [],
+                            reply_channel=reply_channel,
+                        )
                 else:
                     step_archive_and_maybe_summary(window_id, archive_messages, msg_for_r2)
     else:

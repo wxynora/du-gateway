@@ -50,6 +50,49 @@ def _normalize_cache_debug_items(value) -> list[dict]:
     return []
 
 
+def _extract_reasoning_text_from_message(msg: dict) -> tuple[str, bool]:
+    if not isinstance(msg, dict):
+        return "", False
+    parts: list[str] = []
+    omitted = bool(msg.get("reasoning_omitted") or msg.get("reasoning_details"))
+    for key in ("reasoning", "reasoning_content", "thinking"):
+        val = msg.get(key)
+        if isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+    for block in msg.get("thinking_blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        btype = str(block.get("type") or "").strip()
+        if btype == "thinking":
+            val = block.get("thinking") or block.get("text")
+            if isinstance(val, str) and val.strip():
+                parts.append(val.strip())
+        elif btype == "redacted_thinking":
+            omitted = True
+    content = msg.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = str(block.get("type") or "").strip()
+            if btype == "thinking":
+                val = block.get("thinking") or block.get("text")
+                if isinstance(val, str) and val.strip():
+                    parts.append(val.strip())
+            elif btype == "redacted_thinking":
+                omitted = True
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        text = str(part or "").strip()
+        key = " ".join(text.split())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(text)
+    return "\n\n".join(deduped).strip(), omitted
+
+
 def _split_reasoning_translate_chunks(src: str, max_chars: int = _REASONING_TRANSLATE_CHUNK_CHARS) -> list[str]:
     text = str(src or "").strip()
     if not text:
@@ -260,10 +303,10 @@ def register_routes(bp) -> None:
                                     }
                                 )
                     if not reasoning_text:
-                        val = (m.get("reasoning") or m.get("reasoning_content") or m.get("thinking") or "").strip()
+                        val, omitted = _extract_reasoning_text_from_message(m)
                         if val:
                             reasoning_text = val
-                        elif m.get("reasoning_omitted") or m.get("reasoning_details"):
+                        elif omitted:
                             reasoning_text = "（模型已进行 adaptive thinking，但当前上游未返回可展示的思维链正文）"
                     if not cache_debug_items:
                         cache_debug_items = _normalize_cache_debug_items(m.get("cache_debug"))

@@ -2432,12 +2432,30 @@ def step_archive_and_maybe_summary(
     存记忆只存对话（user + assistant），不含 system / RikkaHub 说明；内容必走 R2 清洗（Rikka 预设、表情包→文字）。
     round_cleaned_for_r2: 可选，[user_msg_cleaned, assistant_msg_cleaned]。
     """
+    archived = step_archive_round(
+        window_id,
+        request_messages,
+        assistant_message,
+        round_cleaned_for_r2=round_cleaned_for_r2,
+    )
+    if not archived:
+        return
+    step_run_post_archive_tasks(window_id, archived["round_index"], archived["round_messages"])
+
+
+def step_archive_round(
+    window_id: str,
+    request_messages: list,
+    assistant_message: dict,
+    round_cleaned_for_r2: Optional[list] = None,
+) -> Optional[dict]:
+    """同步写入本轮对话存档与 latest4，返回后续慢任务需要的 round_index/round_messages。"""
     last_user = None
     for m in request_messages:
         if (m.get("role") or "").lower() == "user":
             last_user = m
     if not last_user or not assistant_message:
-        return
+        return None
     # 只存对话两条（user + assistant），且一律清洗，不存 system / Rikka 自带说明
     from pipeline.cleaner import build_round_cleaned_for_r2
     round_messages = (
@@ -2447,17 +2465,29 @@ def step_archive_and_maybe_summary(
     )
     action_note = _build_action_note_from_tool_calls((assistant_message or {}).get("tool_calls"))
     # 小本本：网关提前拎出，打时间戳，存 R2（按时间排序）+ Notion，不动原文
-    from services.notebook_gateway import extract_entries_from_round, save_entry
-    for content in extract_entries_from_round(round_messages):
-        save_entry(content)
+    try:
+        from services.notebook_gateway import extract_entries_from_round, save_entry
+
+        for content in extract_entries_from_round(round_messages):
+            save_entry(content)
+    except Exception as e:
+        logger.warning("小本本提取/保存失败，不阻断本轮对话存档 window_id=%s error=%s", window_id, e, exc_info=True)
     from utils.time_aware import now_beijing_iso
 
     round_index = r2_store.get_next_round_index(window_id)
     ts = now_beijing_iso()
-    r2_store.append_conversation_round(window_id, round_index, round_messages, timestamp=ts, action_note=action_note)
+    ok = r2_store.append_conversation_round(window_id, round_index, round_messages, timestamp=ts, action_note=action_note)
+    if not ok:
+        logger.warning("本轮对话 R2 存档失败 window_id=%s round_index=%s", window_id, round_index)
+        return None
     # 全局 Last4 只需最近四轮：append 后读即可，不必拉 last_n=1000 再拼（省内存、也避免误用 len 当总轮数）
     tail4 = r2_store.get_conversation_rounds(window_id, last_n=4)
     r2_store.update_latest_4_rounds_global(tail4)
+    return {"round_index": round_index, "round_messages": round_messages}
+
+
+def step_run_post_archive_tasks(window_id: str, round_index: int, round_messages: list) -> None:
+    """本轮已写入 R2 后执行实时层总结与动态层演化等慢任务。"""
     # 实时层：每 4 轮 → DS 总结成「渡的回忆」（第一人称、详细版）
     if round_index % SUMMARY_EVERY_N_ROUNDS == 0:
         logger.info("实时层总结已调度 window_id=%s round_index=%s", window_id, round_index)
