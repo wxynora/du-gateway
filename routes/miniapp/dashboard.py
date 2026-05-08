@@ -1,0 +1,534 @@
+from __future__ import annotations
+
+import math
+import re
+from collections import Counter
+from datetime import datetime
+
+from flask import jsonify, request
+
+from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
+from storage import r2_store
+from utils.time_aware import now_beijing_iso, today_beijing
+
+
+def _season_label(month: int) -> str:
+    if month in (3, 4, 5):
+        return "spring"
+    if month in (6, 7, 8):
+        return "summer"
+    if month in (9, 10, 11):
+        return "autumn"
+    return "winter"
+
+
+def _default_cyber_tree_start_date(today: str) -> str:
+    """
+    默认从“今年”的纪念日 03-04 开始（不按每年回溯）。
+    """
+    try:
+        y = int(str(today).split("-", 2)[0])
+    except Exception:
+        return "2026-03-04"
+    return f"{y:04d}-03-04"
+
+
+_DAILY_KW_STOPWORDS = {
+    "今天",
+    "现在",
+    "这个",
+    "那个",
+    "然后",
+    "就是",
+    "还是",
+    "感觉",
+    "我们",
+    "你们",
+    "他们",
+    "自己",
+    "已经",
+    "一下",
+    "可能",
+    "因为",
+    "所以",
+    "如果",
+    "但是",
+    "而且",
+    "以及",
+    "其实",
+    "真的",
+    "不会",
+    "可以",
+    "不要",
+    "还有",
+    "一个",
+    "这个时候",
+    "然后呢",
+    "知道了",
+}
+
+
+def _message_text(content) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or "").strip())
+        return " ".join(x for x in parts if x).strip()
+    return ""
+
+
+def _extract_daily_keywords(texts: list[str], limit: int = 3) -> list[str]:
+    """
+    从文本中提取高频关键词（中英文），避免固定词表导致“每天都一样”。
+    """
+    tokens: list[str] = []
+    for raw in texts or []:
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        for t in re.findall(r"[\u4e00-\u9fff]{2,6}", s):
+            t = t.strip()
+            if t and t not in _DAILY_KW_STOPWORDS:
+                tokens.append(t)
+        for t in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,24}", s):
+            lo = t.lower().strip()
+            if lo and lo not in _DAILY_KW_STOPWORDS:
+                tokens.append(lo)
+    if not tokens:
+        return []
+    cnt = Counter(tokens)
+    ranked = sorted(cnt.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))
+    return [k for k, _ in ranked[: max(1, int(limit or 3))]]
+
+
+def _parse_beijing_dt(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(tz=None).astimezone()
+
+
+def _generate_daily_report(today: str) -> dict:
+    """按北京日期统计「今日」对话轮次与关键词（从最近存档中筛当日）。"""
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    window_id = f"tg_{uid}" if uid > 0 else ""
+    # 拉取足够多的最近轮次，再按日期过滤（单日上限通常远小于此）
+    all_rounds = r2_store.get_conversation_rounds(window_id, last_n=500) if window_id else []
+    day_rounds: list[dict] = []
+    user_text: list[str] = []
+    all_text: list[str] = []
+    for r in all_rounds or []:
+        dt = _parse_beijing_dt(r.get("timestamp"))
+        if not dt:
+            continue
+        if dt.strftime("%Y-%m-%d") != today:
+            continue
+        day_rounds.append(r)
+        for m in (r.get("messages") or []):
+            if not isinstance(m, dict):
+                continue
+            tx = _message_text(m.get("content"))
+            if not tx:
+                continue
+            all_text.append(tx)
+            role = str(m.get("role") or "").strip().lower()
+            if role == "user":
+                user_text.append(tx)
+    rounds_count = len(day_rounds)
+    # 优先用户消息关键词，避免被助手高频措辞“刷屏”成固定词。
+    hot = _extract_daily_keywords(user_text, limit=3)
+    if not hot:
+        hot = _extract_daily_keywords(all_text, limit=3)
+    if not hot:
+        hot = ["陪伴", "日常", "关心"]
+    report = {
+        "report_date": today,
+        "window_id": window_id,
+        "rounds": rounds_count,
+        "keywords": hot[:3],
+        "done_count": 0,
+        "summary_text": f"今天我们聊了 {rounds_count} 轮，关键词是 {' / '.join(hot[:3])}。",
+        "generated_at": now_beijing_iso(),
+    }
+    return report
+
+
+def _mood_day_wave(seed_text: str) -> int:
+    seed = sum(ord(ch) for ch in (seed_text or ""))
+    return (seed % 5) - 2
+
+
+def _extract_last_user_message_text(msgs: list[dict]) -> str:
+    for m in reversed(msgs or []):
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "").strip().lower() != "user":
+            continue
+        text = _message_text(m.get("content"))
+        if text:
+            return text
+    return ""
+
+
+def _tool_call_name(tc: dict) -> str:
+    if not isinstance(tc, dict):
+        return ""
+    fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+    return str(fn.get("name") or "").strip()
+
+
+def _summarize_alarm_actions(msgs: list[dict]) -> list[str]:
+    labels: list[str] = []
+    for m in msgs or []:
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "").strip().lower() != "assistant":
+            continue
+        tcs = m.get("tool_calls") or []
+        if not isinstance(tcs, list):
+            continue
+        for tc in tcs:
+            name = _tool_call_name(tc)
+            if not name:
+                continue
+            label = ""
+            if name == "notion_diary_create":
+                label = "写了日记"
+            elif name == "daily_whisper_write":
+                label = "写了气泡"
+            elif name in {"forum_read_feed", "forum_open_thread"}:
+                label = "看了论坛"
+            elif name == "note_write":
+                label = "写了便签"
+            elif name in {"schedule_list", "get_time_info", "search_memory", "notion_diary_list"}:
+                label = ""
+            if label and label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _build_du_day_events(today: str) -> list[dict]:
+    out: list[dict] = []
+
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    window_id = f"tg_{uid}" if uid > 0 else ""
+    rounds = r2_store.get_conversation_rounds(window_id, last_n=240) if window_id else []
+    for r in rounds or []:
+        dt = _parse_beijing_dt(r.get("timestamp"))
+        if not dt or dt.strftime("%Y-%m-%d") != today:
+            continue
+        msgs = r.get("messages") or []
+        user_text = _extract_last_user_message_text(msgs)
+        if not user_text.startswith("你给自己定的「"):
+            continue
+        actions = _summarize_alarm_actions(msgs)
+        out.append(
+            {
+                "kind": "routine",
+                "timestamp": dt.isoformat(),
+                "time": dt.strftime("%H:%M"),
+                "title": "Morning Alarm",
+                "subtitle": "醒来第一件事" if "醒来第一件事" in user_text else "",
+                "actions": actions,
+            }
+        )
+
+    for item in r2_store.get_proactive_decision_memory_items() or []:
+        at = str(item.get("at") or "").strip()
+        dt = _parse_beijing_dt(at)
+        if not dt or dt.strftime("%Y-%m-%d") != today:
+            continue
+        action = str(item.get("action") or "").strip() or "unknown"
+        reason = str(item.get("reason") or "").strip() or "—"
+        if action == "error":
+            continue
+        lowered_reason = reason.lower()
+        if "gateway_status=" in lowered_reason or "http 403" in lowered_reason or "403" in lowered_reason:
+            continue
+        out.append(
+            {
+                "kind": "decision",
+                "timestamp": dt.isoformat(),
+                "time": dt.strftime("%H:%M"),
+                "title": "Active Reach",
+                "decision_label": f"渡选择了 {action}",
+                "reason": reason,
+            }
+        )
+
+    out.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+    return out
+
+
+def _mood_keyword_adjustment(text: str) -> tuple[int, list[str]]:
+    raw = str(text or "").strip()
+    if not raw:
+        return 0, []
+    negative = {
+        "吵架": -12,
+        "生气": -10,
+        "冷战": -12,
+        "委屈": -8,
+        "难过": -8,
+        "烦": -4,
+        "哭": -7,
+        "崩溃": -10,
+        "失望": -7,
+    }
+    positive = {
+        "爱你": 8,
+        "想你": 5,
+        "抱抱": 6,
+        "晚安": 3,
+        "开心": 6,
+        "高兴": 5,
+        "谢谢": 2,
+        "散步": 3,
+        "吃饭": 2,
+        "陪你": 5,
+    }
+    score = 0
+    hits: list[str] = []
+    for word, delta in negative.items():
+        if word in raw:
+            score += delta
+            hits.append(word)
+    for word, delta in positive.items():
+        if word in raw:
+            score += delta
+            hits.append(word)
+    return max(-22, min(18, score)), hits[:6]
+
+
+def _generate_mood_meter(today: str) -> dict:
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    window_id = f"tg_{uid}" if uid > 0 else ""
+    rounds = r2_store.get_conversation_rounds(window_id, last_n=24) if window_id else []
+    total_recent = len(rounds or [])
+    today_count = 0
+    latest_dt = None
+    today_text_parts: list[str] = []
+    for r in rounds or []:
+        dt = _parse_beijing_dt(r.get("timestamp"))
+        if not dt:
+            continue
+        if dt.strftime("%Y-%m-%d") == today:
+            today_count += 1
+            for msg in (r.get("messages") or []):
+                if not isinstance(msg, dict):
+                    continue
+                text = _message_text(msg.get("content"))
+                if text:
+                    today_text_parts.append(text)
+        if latest_dt is None or dt > latest_dt:
+            latest_dt = dt
+
+    recency_bonus = 0
+    if latest_dt is not None:
+        age_hours = max(0.0, (datetime.now(latest_dt.tzinfo) - latest_dt).total_seconds() / 3600.0)
+        if age_hours <= 6:
+            recency_bonus = 8
+        elif age_hours <= 24:
+            recency_bonus = 5
+        elif age_hours <= 48:
+            recency_bonus = 2
+        else:
+            recency_bonus = -2
+
+    activity_bonus = min(18, today_count * 4) + min(10, max(0, total_recent - 4))
+    keyword_bonus, keyword_hits = _mood_keyword_adjustment(" ".join(today_text_parts))
+    day_wave = _mood_day_wave(f"{window_id}:{today}")
+    score = max(35, min(95, 48 + activity_bonus + recency_bonus + keyword_bonus + day_wave))
+    return {
+        "date": today,
+        "score": score,
+        "today_rounds": today_count,
+        "recent_rounds": total_recent,
+        "keyword_hits": keyword_hits,
+        "updated_at": now_beijing_iso(),
+    }
+
+
+def register_routes(bp) -> None:
+    @bp.route("/daily-whisper", methods=["GET"])
+    def miniapp_daily_whisper():
+        today = today_beijing()
+        force_refresh = request.args.get("refresh", type=int, default=0) == 1
+        data = r2_store.get_miniapp_daily_whisper() or {}
+        cached_text = str(data.get("text") or "").strip()
+        cached_date = str(data.get("date") or "").strip()
+        if (not force_refresh) and cached_date == today and cached_text:
+            return jsonify({"ok": True, "date": today, "text": cached_text, "cached": True})
+
+        default_text = "今天也想抱抱你，慢慢来，我们一起把今天过好。"
+        generated_text = ""
+        try:
+            from services.deepseek_summary import fetch_daily_whisper_from_summary
+
+            generated_text = (
+                fetch_daily_whisper_from_summary(
+                    r2_store.get_summary("") or "",
+                    r2_store.get_latest_4_rounds_global() or [],
+                )
+            ).strip()
+        except Exception:
+            generated_text = ""
+        if generated_text:
+            payload = {"date": today, "text": generated_text, "updatedAt": now_beijing_iso()}
+            r2_store.save_miniapp_daily_whisper(payload)
+            return jsonify({"ok": True, "date": today, "text": generated_text, "cached": False})
+        if cached_text and not force_refresh:
+            return jsonify(
+                {
+                    "ok": True,
+                    "date": cached_date or today,
+                    "text": cached_text,
+                    "cached": True,
+                    "stale": cached_date != today,
+                }
+            )
+        if cached_text:
+            return jsonify(
+                {
+                    "ok": False,
+                    "date": cached_date or today,
+                    "text": cached_text,
+                    "cached": True,
+                    "error": "Today note 刷新失败，已保留原文",
+                }
+            )
+        text = default_text
+        payload = {"date": today, "text": text, "updatedAt": now_beijing_iso()}
+        r2_store.save_miniapp_daily_whisper(payload)
+        return jsonify({"ok": True, "date": today, "text": text, "cached": False, "fallback": True})
+
+    @bp.route("/cyber-tree", methods=["GET"])
+    def miniapp_cyber_tree():
+        today = today_beijing()
+        meta = r2_store.get_cyber_tree_meta() or {}
+        start_date = str(meta.get("startDate") or "").strip() or _default_cyber_tree_start_date(today)
+        if not (meta.get("startDate")):
+            r2_store.save_cyber_tree_meta({"startDate": start_date, "createdAt": now_beijing_iso()})
+
+        try:
+            d0 = datetime.strptime(start_date, "%Y-%m-%d").date()
+            d1 = datetime.strptime(today, "%Y-%m-%d").date()
+            days = max(1, (d1 - d0).days + 1)
+        except Exception:
+            days = 1
+        tg_uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+        rounds = 0
+        if tg_uid > 0:
+            rounds = r2_store.get_window_conversation_rounds(f"tg_{tg_uid}")
+        if rounds <= 0:
+            rounds = r2_store.get_total_conversation_rounds()
+        growth = float(days) * (1.0 + math.log(max(1, rounds)) / 10.0)
+        # 阶段阈值调高：按当前纪念日起点，默认应先处于树苗期。
+        if growth < 50:
+            stage = "seedling"
+        elif growth < 140:
+            stage = "young"
+        elif growth < 320:
+            stage = "big"
+        else:
+            stage = "lush"
+        month = int(today.split("-", 2)[1]) if "-" in today else 1
+        season = _season_label(month)
+        if season == "winter":
+            weather_fx = "snowy"
+        elif season == "summer":
+            weather_fx = "sunny"
+        else:
+            weather_fx = "rainy"
+        milestones = {
+            "days": [30, 100, 365],
+            "rounds": [300, 1000, 3000],
+            "reachedDays": [x for x in (30, 100, 365) if days >= x],
+            "reachedRounds": [x for x in (300, 1000, 3000) if rounds >= x],
+        }
+        mood = r2_store.get_miniapp_mood_meter() or _generate_mood_meter(today)
+        if not (r2_store.get_miniapp_mood_meter() or {}).get("date"):
+            r2_store.save_miniapp_mood_meter(mood)
+        return jsonify(
+            {
+                "ok": True,
+                "startDate": start_date,
+                "today": today,
+                "daysTogether": days,
+                "totalRounds": rounds,
+                "growth": round(growth, 2),
+                "stage": stage,
+                "season": season,
+                "weatherFx": weather_fx,
+                "milestones": milestones,
+                "mood": mood,
+            }
+        )
+
+    @bp.route("/daily-report", methods=["GET"])
+    def miniapp_daily_report():
+        today = today_beijing()
+        data = r2_store.get_miniapp_daily_report() or {}
+        if str(data.get("report_date") or "") != today:
+            data = _generate_daily_report(today)
+            r2_store.save_miniapp_daily_report(data)
+        return jsonify({"ok": True, "report": data})
+
+    @bp.route("/daily-report/refresh", methods=["POST"])
+    def miniapp_daily_report_refresh():
+        today = today_beijing()
+        data = _generate_daily_report(today)
+        ok = r2_store.save_miniapp_daily_report(data)
+        return jsonify({"ok": bool(ok), "report": data})
+
+    @bp.route("/du-day", methods=["GET"])
+    def miniapp_du_day():
+        today = today_beijing()
+        items = _build_du_day_events(today)
+        return jsonify({"ok": True, "date": today, "items": items, "count": len(items)})
+
+    # 兼容旧前端路径：与 daily-report 行为一致
+    @bp.route("/weekly-report", methods=["GET"])
+    def miniapp_weekly_report():
+        return miniapp_daily_report()
+
+    @bp.route("/weekly-report/refresh", methods=["POST"])
+    def miniapp_weekly_report_refresh():
+        return miniapp_daily_report_refresh()
+
+    @bp.route("/mood-meter", methods=["GET"])
+    def miniapp_mood_meter():
+        today = today_beijing()
+        data = _generate_mood_meter(today)
+        r2_store.save_miniapp_mood_meter(data)
+        return jsonify({"ok": True, "mood": data})
+
+    @bp.route("/mood-meter/refresh", methods=["POST"])
+    def miniapp_mood_meter_refresh():
+        today = today_beijing()
+        data = _generate_mood_meter(today)
+        ok = r2_store.save_miniapp_mood_meter(data)
+        return jsonify({"ok": bool(ok), "mood": data})
+
+    @bp.route("/cyber-tree/start-date", methods=["PUT"])
+    def miniapp_set_cyber_tree_start_date():
+        data = request.get_json(silent=True) or {}
+        start_date = str(data.get("startDate") or "").strip()
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+        except Exception:
+            return jsonify({"ok": False, "error": "startDate 格式需为 YYYY-MM-DD"}), 400
+        meta = r2_store.get_cyber_tree_meta() or {}
+        meta["startDate"] = start_date
+        meta["updatedAt"] = now_beijing_iso()
+        ok = r2_store.save_cyber_tree_meta(meta)
+        return jsonify({"ok": bool(ok), "startDate": start_date})
