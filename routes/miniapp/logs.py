@@ -10,6 +10,23 @@ from utils.log_reader import resolve_log_path, stream_logs_sse, tail_logs
 
 sumitalk_logger = logging.getLogger("sumitalk")
 _LOG_CATEGORIES = {"all", "proactive", "sumitalk", "wechat", "tgbot", "qq"}
+_LOG_LINE_MAX_CHARS = 6000
+
+
+def _clip_log_line(line: str) -> str:
+    text = str(line or "")
+    if len(text) <= _LOG_LINE_MAX_CHARS:
+        return text
+    omitted = len(text) - _LOG_LINE_MAX_CHARS
+    return f"{text[:_LOG_LINE_MAX_CHARS]} ...（日志单行过长，已截断 {omitted} 字）"
+
+
+def _clip_sse_chunk(chunk: bytes) -> bytes:
+    if not chunk.startswith(b"data: "):
+        return chunk
+    text = chunk.decode("utf-8", errors="replace")
+    line = text[6:].rstrip("\n")
+    return ("data: " + _clip_log_line(line) + "\n\n").encode("utf-8")
 
 
 def _miniapp_log_category() -> str:
@@ -87,7 +104,10 @@ def register_routes(bp) -> None:
             lines = 2000
         try:
             log_path, source_kind = _miniapp_log_source(category)
-            out_lines = tail_logs(log_path, lines=lines, line_filter=lambda line: _line_matches_log_category(line, category))
+            out_lines = [
+                _clip_log_line(line)
+                for line in tail_logs(log_path, lines=lines, line_filter=lambda line: _line_matches_log_category(line, category))
+            ]
             file_exists = False
             try:
                 log_file = resolve_log_path(log_path)
@@ -128,11 +148,12 @@ def register_routes(bp) -> None:
         def gen():
             yield b": ready\n\n"
             time.sleep(0.01)
-            yield from stream_logs_sse(
+            for chunk in stream_logs_sse(
                 log_path,
                 start_lines=start_lines,
                 line_filter=lambda line: _line_matches_log_category(line, category),
-            )
+            ):
+                yield _clip_sse_chunk(chunk)
 
         return Response(
             stream_with_context(gen()),

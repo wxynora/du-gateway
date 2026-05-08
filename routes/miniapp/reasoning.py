@@ -13,6 +13,19 @@ from storage import r2_store, whitelist_store
 logger = logging.getLogger(__name__)
 
 _REASONING_TRANSLATE_CHUNK_CHARS = 6000
+_REASONING_SCAN_ROUNDS_DEFAULT = 80
+_REASONING_TARGETS_DEFAULT = 6
+_REASONING_TEXT_MAX_CHARS = 60000
+_TOOL_ARGUMENTS_MAX_CHARS = 8000
+_TOOL_RESULT_MAX_CHARS = 12000
+
+
+def _clip_text(value, max_chars: int) -> str:
+    text = str(value or "")
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return f"{text[:max_chars]}\n...（内容过长，已截断 {omitted} 字）"
 
 
 def _resolve_primary_chat_window_id() -> str:
@@ -215,32 +228,45 @@ def register_routes(bp) -> None:
             limit = 1
         if limit > 30:
             limit = 30
+        scan_rounds = request.args.get("scan_rounds", type=int, default=_REASONING_SCAN_ROUNDS_DEFAULT)
+        if scan_rounds < 20:
+            scan_rounds = 20
+        if scan_rounds > 200:
+            scan_rounds = 200
+        target_limit = request.args.get("windows", type=int, default=_REASONING_TARGETS_DEFAULT)
+        if target_limit < 1:
+            target_limit = 1
+        if target_limit > 20:
+            target_limit = 20
 
         recent = whitelist_store.list_recent_windows(limit=200) or []
-        targets: list[str] = []
+        target_candidates: list[str] = []
         for w in recent:
             wid = (w.get("id") or "").strip()
             if not wid:
                 continue
             if wid.startswith("tg_") or wid.startswith("wechat_") or wid.startswith("wx_"):
-                if wid not in targets:
-                    targets.append(wid)
-        if not targets and recent:
+                if wid not in target_candidates:
+                    target_candidates.append(wid)
+        if not target_candidates and recent:
             wid0 = (recent[0].get("id") or "").strip()
             if wid0:
-                targets = [wid0]
+                target_candidates = [wid0]
 
         primary_wid = _resolve_primary_chat_window_id()
-        if primary_wid and primary_wid not in targets:
-            if primary_wid.startswith("tg_") or primary_wid.startswith("wechat_") or primary_wid.startswith("wx_"):
-                targets.insert(0, primary_wid)
+        if primary_wid and (primary_wid.startswith("tg_") or primary_wid.startswith("wechat_") or primary_wid.startswith("wx_")):
+            if primary_wid in target_candidates:
+                target_candidates.remove(primary_wid)
+            target_candidates.insert(0, primary_wid)
+
+        targets = target_candidates[:target_limit]
 
         if not targets:
             return jsonify({"ok": True, "window_id": "", "items": [], "count": 0})
 
         out = []
         for target in targets:
-            rounds = r2_store.get_conversation_rounds(target, last_n=160) or []
+            rounds = r2_store.get_conversation_rounds(target, last_n=scan_rounds) or []
             for r in reversed(rounds):
                 idx = int(r.get("index") or 0)
                 ts = (r.get("timestamp") or "").strip()
@@ -268,7 +294,7 @@ def register_routes(bp) -> None:
                             val = json.dumps(content, ensure_ascii=False)
                         except Exception:
                             val = str(content)
-                    tool_results_map[tid] = val
+                    tool_results_map[tid] = _clip_text(val, _TOOL_RESULT_MAX_CHARS)
                 for m in reversed(msgs):
                     role = (m.get("role") or "").strip().lower() if isinstance(m, dict) else ""
                     if role != "assistant":
@@ -294,6 +320,7 @@ def register_routes(bp) -> None:
                                         args_text = json.dumps(args, ensure_ascii=False)
                                     except Exception:
                                         args_text = str(args)
+                                args_text = _clip_text(args_text, _TOOL_ARGUMENTS_MAX_CHARS)
                                 tool_calls_out.append(
                                     {
                                         "id": tid,
@@ -305,7 +332,7 @@ def register_routes(bp) -> None:
                     if not reasoning_text:
                         val, omitted = _extract_reasoning_text_from_message(m)
                         if val:
-                            reasoning_text = val
+                            reasoning_text = _clip_text(val, _REASONING_TEXT_MAX_CHARS)
                         elif omitted:
                             reasoning_text = "（模型已进行 adaptive thinking，但当前上游未返回可展示的思维链正文）"
                     if not cache_debug_items:
