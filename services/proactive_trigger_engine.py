@@ -27,7 +27,7 @@ _NO_REPLY_SOFT_TRIGGER_MAX_MINUTES = 360
 _NO_REPLY_APP_LOOKBACK_MINUTES = 30
 _RECENT_NORMAL_CHAT_SUPPRESS_MINUTES = 12
 _CHAT_AFTER_SLEEP_GRACE_SECONDS = 90
-_SENSE_TRIGGER_HISTORY_LIMIT = 500
+_SENSE_TRIGGER_HISTORY_LIMIT = 200
 _SENSE_TRIGGER_YESTERDAY_LIMIT = 80
 
 _SLEEP_INTENT_RE = re.compile(
@@ -203,8 +203,19 @@ def _latest_screen_on(events: list[dict]) -> dict | None:
     return None
 
 
-def _screen_off_minutes(prev_off: dict | None, on_at: datetime) -> int:
+def _screen_off_minutes(prev_off: dict | None, on_at: datetime, on_data: dict | None = None) -> int:
     if not prev_off:
+        block = (on_data or {}).get("lastSleepBlock")
+        if isinstance(block, dict):
+            try:
+                duration_ms = int(block.get("durationMs") or 0)
+            except Exception:
+                duration_ms = 0
+            if duration_ms > 0:
+                return max(0, int(duration_ms // 60000))
+            start_at = _dt(block.get("startAt"))
+            end_at = _dt(block.get("endAt")) or on_at
+            return _minutes_between(start_at, end_at)
         return 0
     data = prev_off.get("data") if isinstance(prev_off.get("data"), dict) else {}
     try:
@@ -558,7 +569,8 @@ def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> lis
     if latest_on:
         on_at = latest_on["at"]
         prev_off = _previous_screen_off(screen_events, on_at)
-        off_minutes = _screen_off_minutes(prev_off, on_at)
+        latest_on_data = latest_on.get("data") if isinstance(latest_on.get("data"), dict) else {}
+        off_minutes = _screen_off_minutes(prev_off, on_at, latest_on_data)
         event_at = on_at.strftime("%Y-%m-%dT%H:%M:%S+08:00")
         if (
             on_at.strftime("%Y-%m-%d") == now_dt.strftime("%Y-%m-%d")

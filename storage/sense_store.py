@@ -7,8 +7,8 @@ from utils.log import get_logger
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing, today_beijing
 
 R2_KEY_SENSE_LATEST = "sense/latest.json"
-_SENSE_HISTORY_CAP = 500
-_SENSE_HISTORY_READ_DEFAULT_LIMIT = 500
+_SENSE_HISTORY_CAP = 200
+_SENSE_HISTORY_READ_DEFAULT_LIMIT = 200
 _SENSE_HISTORY_LATEST_ONLY_TYPES = {"usage"}
 _SENSE_HISTORY_MIN_INTERVAL_SECONDS = {
     "battery": 30 * 60,
@@ -56,6 +56,75 @@ def _duration_ms_between(started_at: str, ended_at: str) -> int:
     if not start or not end:
         return 0
     return max(0, int((end - start).total_seconds() * 1000))
+
+
+def _screen_event_time(data: dict, fallback: str = "") -> str:
+    return str(
+        (data or {}).get("occurredAt")
+        or (data or {}).get("observedAt")
+        or (data or {}).get("updatedAt")
+        or fallback
+        or ""
+    ).strip()
+
+
+def _truthy_value(value: Any) -> bool:
+    return value is True or str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _screen_logical_state(data: dict) -> str:
+    event = str((data or {}).get("event") or "").strip().lower()
+    if event == "screen_off":
+        return "off"
+    if event in {"screen_on", "user_present"}:
+        return "on"
+    if event == "app_active" and _truthy_value((data or {}).get("interactive")):
+        return "on"
+    return ""
+
+
+def _prepare_screen_bucket_snapshot(previous: dict, patch: dict) -> dict:
+    prev = previous if isinstance(previous, dict) else {}
+    incoming = patch if isinstance(patch, dict) else {}
+    merged = dict(prev)
+    merged.update(incoming)
+
+    event_state = _screen_logical_state(merged)
+    prev_state = _screen_logical_state(prev)
+    event_at = _screen_event_time(merged, now_beijing_iso()) or now_beijing_iso()
+    merged["lastSeen"] = event_at
+
+    if event_state == "off":
+        prev_since = str(prev.get("screenOffSince") or "").strip()
+        incoming_since = str(incoming.get("screenOffSince") or "").strip()
+        since = incoming_since or (prev_since if prev_state == "off" else "") or event_at
+        merged["screenOffSince"] = since
+        try:
+            duration_ms = int(merged.get("screenOffDurationMs") or 0)
+        except Exception:
+            duration_ms = 0
+        if duration_ms <= 0:
+            duration_ms = _duration_ms_between(since, event_at)
+        merged["screenOffDurationMs"] = duration_ms
+        merged["lastScreenOffAt"] = since
+        return merged
+
+    if event_state == "on":
+        prev_since = str(prev.get("screenOffSince") or "").strip()
+        if prev_state == "off" and prev_since:
+            duration_ms = _duration_ms_between(prev_since, event_at)
+            merged["lastSleepBlock"] = {
+                "startAt": prev_since,
+                "endAt": event_at,
+                "durationMs": duration_ms,
+                "minutes": max(0, duration_ms // 60000),
+            }
+            merged["lastScreenOffAt"] = prev_since
+        merged["lastScreenOnAt"] = event_at
+        merged["screenOffSince"] = ""
+        merged["screenOffDurationMs"] = 0
+
+    return merged
 
 
 def _closed_app_session(active: dict, ended_at: str, reason: str) -> dict | None:
@@ -262,8 +331,11 @@ def merge_and_save_sense_bucket(sense_type: str, patch: dict) -> bool:
             bucket = doc.get(key)
             if not isinstance(bucket, dict):
                 bucket = {}
-            merged = dict(bucket)
-            merged.update(patch)
+            if key == "screen":
+                merged = _prepare_screen_bucket_snapshot(bucket, patch)
+            else:
+                merged = dict(bucket)
+                merged.update(patch)
             # battery 桶不保留 power（Tasker 误传或未展开变量时污染快照）
             if key == "battery":
                 merged.pop("power", None)
@@ -317,7 +389,9 @@ def _sense_history_should_append(existing: list, sense_type: str, bucket_snapsho
         event = str(data.get("event") or "").strip().lower()
         if event == "app_active":
             return False
-        return event in {"screen_on", "screen_off", "user_present"} and not _same_str_field(data, last_data, "event")
+        state = _screen_logical_state(data)
+        last_state = _screen_logical_state(last_data)
+        return state in {"on", "off"} and state != last_state
 
     if key == "foreground":
         return not (
