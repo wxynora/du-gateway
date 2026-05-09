@@ -45,6 +45,7 @@ import {
   pickBetterHistory,
   pickLatestDraftPreview,
   sanitizeHistoryMessages,
+  shouldShowGroupTime,
   type ChatDraftMessage,
   type ChatRole,
   type ChatSearchMatch,
