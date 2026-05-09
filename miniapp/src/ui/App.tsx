@@ -2193,6 +2193,7 @@ function MainChatScreen({
               {group.role === "user" ? (
                 <div className="flex items-start justify-end space-x-3 rounded-[22px]">
                   <div className={`mt-[2px] flex ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} flex-col items-end space-y-1.5`}>
+                    {groupChatMode ? <div className="px-1 text-[11px] font-medium leading-none text-gray-400">辛玥</div> : null}
                     {group.parts.map((part, index) => {
                       const matchId = getChatSearchMatchId(group.id, index);
                       const isActiveSearchPart = activeSearchMatchId === matchId;
@@ -2226,6 +2227,11 @@ function MainChatScreen({
                     />
                   ) : null}
                   <div className={`mt-[2px] ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} space-y-1.5`}>
+                    {groupChatMode ? (
+                      <div className="px-1 text-[11px] font-medium leading-none text-gray-400">
+                        {group.role === "benben" ? "笨笨" : avatarLabel || "渡"}
+                      </div>
+                    ) : null}
                     {group.parts.map((part, index) => {
                       const matchId = getChatSearchMatchId(group.id, index);
                       const isActiveSearchPart = activeSearchMatchId === matchId;
