@@ -285,7 +285,12 @@ def _inject_entry_style_system(body: dict) -> dict:
 
 
 def _inject_followup_instruction(body: dict) -> dict:
-    if (request.headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes"):
+    # 延迟续话本身不再注入 followup 规则，避免模型继续排队形成连环续话。
+    # 但 trigger/弹窗/查屏这类后端唤醒会带 X-DU-FOLLOWUP-ARCHIVE=1 归档到正常对话，
+    # 它们应保持和普通聊天一致的静态 system 前缀，否则 prompt cache 会因为少一段 followup 规则而断开。
+    is_followup_gen = (request.headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes")
+    should_archive = (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
+    if is_followup_gen and not should_archive:
         return body
     if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
         return body
