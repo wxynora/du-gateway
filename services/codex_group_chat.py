@@ -124,11 +124,12 @@ def _cleanup_tasks(tasks: list[dict]) -> list[dict]:
 
 def create_task(body: dict, device_id: str = "") -> dict | None:
     now_ts = _now_ts()
+    mode = str((body or {}).get("mode") or "daily_chat").strip() or "daily_chat"
     task = {
         "id": uuid4().hex,
         "ok": True,
         "status": "queued",
-        "mode": "daily_chat",
+        "mode": mode,
         "created_ts": now_ts,
         "updated_ts": now_ts,
         "created_at": now_beijing_iso(),
@@ -140,7 +141,17 @@ def create_task(body: dict, device_id: str = "") -> dict | None:
         "recent_messages": _normalize_recent_messages((body or {}).get("recent_messages")),
         "client_request_id": re.sub(r"[^a-zA-Z0-9_.:-]", "", str((body or {}).get("client_request_id") or "").strip())[:120],
     }
-    if not task["window_id"] or not task["user_message"] or not task["du_reply"]:
+    if mode == "studyroom":
+        task["study_item_id"] = re.sub(r"[^a-zA-Z0-9_.:-]", "", str((body or {}).get("study_item_id") or (body or {}).get("exam_item_id") or "").strip())[:120]
+        task["study_title"] = _safe_text((body or {}).get("study_title") or (body or {}).get("exam_title"), 240)
+        task["study_module"] = _safe_text((body or {}).get("study_module") or (body or {}).get("exam_module"), 120)
+        task["study_source"] = _safe_text((body or {}).get("study_source") or (body or {}).get("exam_source"), 120)
+        task["study_url"] = _safe_text((body or {}).get("study_url") or (body or {}).get("exam_url"), 1000)
+        if not task["window_id"]:
+            task["window_id"] = "studyroom"
+        if not task["user_message"]:
+            return None
+    elif not task["window_id"] or not task["user_message"] or not task["du_reply"]:
         return None
     with _LOCK:
         state = _load_state()

@@ -26,6 +26,7 @@ from routes.miniapp.device_state import register_routes as register_device_state
 from routes.miniapp.co_read import register_routes as register_co_read_routes
 from routes.miniapp.dashboard import register_routes as register_dashboard_routes
 from routes.miniapp.diagnostics import register_routes as register_diagnostics_routes
+from routes.miniapp.studyroom import register_routes as register_studyroom_routes
 from routes.miniapp.logs import register_routes as register_logs_routes
 from routes.miniapp.media import register_routes as register_media_routes
 from routes.miniapp.memory_panel import register_routes as register_memory_panel_routes
@@ -46,6 +47,7 @@ register_dashboard_routes(bp)
 register_device_actions_routes(bp)
 register_device_state_routes(bp)
 register_diagnostics_routes(bp)
+register_studyroom_routes(bp)
 register_logs_routes(bp)
 register_media_routes(bp)
 register_memory_panel_routes(bp)

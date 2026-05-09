@@ -99,6 +99,7 @@ const CallHubScreen = lazy(() => import("./tabs/CallHubScreen").then((m) => ({ d
 const PixelHomeTab = lazy(() => import("./tabs/PixelHomeTab").then((m) => ({ default: m.PixelHomeTab })));
 const StayWithDuScreen = lazy(() => import("./tabs/StayWithDuScreen").then((m) => ({ default: m.StayWithDuScreen })));
 const CoReadScreen = lazy(() => import("./tabs/CoReadScreen").then((m) => ({ default: m.CoReadScreen })));
+const StudyRoomTab = lazy(() => import("./tabs/StudyRoomTab").then((m) => ({ default: m.StudyRoomTab })));
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | null;
 type CyberTreeData = {
@@ -131,7 +132,7 @@ type SilenceModeResponse = {
   updated_at?: string;
   error?: string;
 };
-type MainTab = "chats" | "daily" | "tools" | "settings";
+type MainTab = "chats" | "daily" | "study" | "tools" | "settings";
 type ChatScreenId = "du" | "group" | "wenyou" | null;
 type ChatFontKey = "yahei" | "system" | "pingfang";
 type ChatTimeFormat = "hhmm" | "ampm";
@@ -861,6 +862,13 @@ function Shell({
         </div>
       );
     }
+    if (mainTab === "study") {
+      return (
+        <LazyPane>
+          <StudyRoomTab />
+        </LazyPane>
+      );
+    }
     if (mainTab === "settings") {
       return (
         <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
@@ -1457,6 +1465,7 @@ function BottomNav({
   const items: Array<{ id: MainTab; label: string }> = [
     { id: "chats", label: "会话" },
     { id: "daily", label: "日常" },
+    { id: "study", label: "学习" },
     { id: "tools", label: "工具" },
     { id: "settings", label: "设置" },
   ];

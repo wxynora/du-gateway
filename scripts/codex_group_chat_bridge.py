@@ -181,6 +181,8 @@ def _build_transcript(task: dict[str, Any], max_items: int = 16) -> str:
 
 
 def _build_initial_prompt(task: dict[str, Any]) -> str:
+    if str(task.get("mode") or "") == "studyroom":
+        return _build_studyroom_prompt(task)
     transcript = _build_transcript(task)
     rules_block = f"\n项目人格与协作规则（来自 AGENTS.md）：\n{PROJECT_RULES}\n" if PROJECT_RULES else ""
     return f"""你是笨笨机，正在辛玥和渡的日常三人群聊里。
@@ -217,6 +219,8 @@ def _build_initial_prompt(task: dict[str, Any]) -> str:
 
 
 def _build_resume_prompt(task: dict[str, Any]) -> str:
+    if str(task.get("mode") or "") == "studyroom":
+        return _build_studyroom_prompt(task)
     transcript = _build_transcript(task, max_items=10)
     return f"""继续作为三人群聊里的笨笨机，只发一条自然短回复，不要输出“笨笨：”前缀。
 保持群聊口吻：少汇报、少解释、少总结；先接住当下这句话，再自然补一句自己的反应。除非辛玥明确让你查代码、看日志、做方案，否则不要进入工作汇报模式。
@@ -226,6 +230,51 @@ def _build_resume_prompt(task: dict[str, Any]) -> str:
 {transcript}
 
 现在轮到你插一句。"""
+
+
+def _build_studyroom_prompt(task: dict[str, Any]) -> str:
+    title = str(task.get("study_title") or task.get("exam_title") or "未命名资料").strip()
+    module = str(task.get("study_module") or task.get("exam_module") or "待整理").strip()
+    source = str(task.get("study_source") or task.get("exam_source") or "资料").strip()
+    url = str(task.get("study_url") or task.get("exam_url") or "").strip()
+    content = str(task.get("user_message") or "").strip()
+    rules_block = f"\n项目人格与协作规则（来自 AGENTS.md）：\n{PROJECT_RULES}\n" if PROJECT_RULES else ""
+    return f"""你是笨笨机，正在 StudyRoom 里帮辛玥整理学习资料。
+{rules_block}
+
+这不是闲聊，不要改代码，不要运行命令，不要联网搜索。只根据辛玥给的资料做整理。
+
+整理目标：
+- 把零散资料压成她能直接理解、能背、能练、能复盘的学习材料。
+- 当前学习目标默认是安徽省铜陵市枞阳县村级后备干部考试；如果资料明显属于别的学习目标，就按资料本身整理，不要硬拽回村干部考试。
+- 当前目标是村干部考试时，重点贴近：时政、党建、乡村振兴、基层治理、村务管理、法律法规、公文写作、计算机办公、安徽/铜陵/枞阳本地政策。
+- 如果资料本身很短或只是链接，要先说明“资料不足”，再给出根据标题可先准备的整理框架。
+
+输出格式：
+## 考点笔记
+用短句列出最该记的点。
+
+## 高频问法
+列出可能怎么考。
+
+## 易错点
+列出容易混淆/容易答偏的地方。
+
+## 背诵卡
+做 3-6 张 Q&A。
+
+## 练习题
+出 5 道题，附答案和简短解析。
+
+资料信息：
+- 标题：{title}
+- 模块：{module}
+- 来源：{source}
+{f"- 链接：{url}" if url else ""}
+
+资料内容：
+{content}
+"""
 
 
 def _extract_thread_id(events_path: Path) -> str:
@@ -261,8 +310,9 @@ def _run_codex(task: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[s
     if _state_should_reset(state):
         state = _reset_state("scheduled_reset")
 
+    mode = str(task.get("mode") or "daily_chat").strip()
     thread_id = str(state.get("thread_id") or "").strip()
-    use_resume = bool(RESUME_ENABLED and thread_id)
+    use_resume = bool(mode == "daily_chat" and RESUME_ENABLED and thread_id)
     prompt = _build_resume_prompt(task) if use_resume else _build_initial_prompt(task)
     with tempfile.TemporaryDirectory(prefix="codex-group-bridge-") as td:
         tmp_dir = Path(td)
@@ -315,7 +365,7 @@ def _run_codex(task: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[s
             except Exception:
                 text = ""
         next_thread_id = _extract_thread_id(events_path) or thread_id
-        if next_thread_id:
+        if mode == "daily_chat" and next_thread_id:
             state["thread_id"] = next_thread_id
         state["tasks_done"] = int(float(state.get("tasks_done") or 0)) + 1
         state["updated_ts"] = time.time()

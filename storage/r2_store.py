@@ -124,6 +124,8 @@ R2_KEY_MINIAPP_DAILY_REPORT = "global/miniapp_daily_report.json"
 R2_KEY_MINIAPP_MOOD_METER = "global/miniapp_mood_meter.json"
 # 渡的记事本：固定注入记忆（按条目维护）
 R2_KEY_DU_NOTEBOOK = "global/du_notebook.json"
+# StudyRoom：资料 Inbox、模块归档和学习记录
+R2_KEY_STUDYROOM = "global/studyroom.json"
 # MiniApp 赛博种树：开始日期等元信息
 R2_KEY_CYBER_TREE_META = "global/cyber_tree_meta.json"
 # 小渡的记忆文档：固定文本，供以后版本读取（不参与检索/注入逻辑）
@@ -1854,6 +1856,179 @@ def delete_du_notebook_entry(entry_id: str) -> bool:
     if len(new_items) == len(items):
         return False
     return save_du_notebook_entries(new_items)
+
+
+_STUDYROOM_MODULES = [
+    {"id": "inbox", "label": "待整理"},
+    {"id": "current_affairs", "label": "时政"},
+    {"id": "party", "label": "党建"},
+    {"id": "rural", "label": "乡村振兴"},
+    {"id": "governance", "label": "基层治理"},
+    {"id": "village_affairs", "label": "村务管理"},
+    {"id": "law", "label": "法律法规"},
+    {"id": "writing", "label": "公文写作"},
+    {"id": "computer", "label": "计算机"},
+    {"id": "local", "label": "安徽/铜陵/枞阳"},
+    {"id": "wrong_questions", "label": "错题"},
+]
+_STUDYROOM_SOURCE_TYPES = {"bilibili", "web", "pdf", "screenshot", "fenbi", "note", "wrong_question"}
+_STUDYROOM_STATUSES = {"todo", "sorting", "done"}
+_STUDYROOM_MODULE_IDS = {m["id"] for m in _STUDYROOM_MODULES}
+
+
+def _trim_study_text(value: Any, limit: int) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _normalize_studyroom_item(raw: Any) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    title = _trim_study_text(raw.get("title"), 120)
+    content = _trim_study_text(raw.get("content"), 20000)
+    url = _trim_study_text(raw.get("url"), 1000)
+    if not title and not content and not url:
+        return None
+    module_id = _trim_study_text(raw.get("module_id"), 64) or "inbox"
+    if module_id not in _STUDYROOM_MODULE_IDS:
+        module_id = "inbox"
+    source_type = _trim_study_text(raw.get("source_type"), 32) or "note"
+    if source_type not in _STUDYROOM_SOURCE_TYPES:
+        source_type = "note"
+    status = _trim_study_text(raw.get("status"), 32) or "todo"
+    if status not in _STUDYROOM_STATUSES:
+        status = "todo"
+    now = now_beijing_iso()
+    created_at = _trim_study_text(raw.get("created_at"), 64) or now
+    updated_at = _trim_study_text(raw.get("updated_at"), 64) or created_at
+    return {
+        "id": _trim_study_text(raw.get("id"), 80) or str(uuid4()),
+        "title": title or "未命名资料",
+        "content": content,
+        "url": url,
+        "module_id": module_id,
+        "source_type": source_type,
+        "status": status,
+        "note": _trim_study_text(raw.get("note"), 16000),
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+def _normalize_studyroom_log(raw: Any) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    content = _trim_study_text(raw.get("content"), 8000)
+    if not content:
+        return None
+    now = now_beijing_iso()
+    created_at = _trim_study_text(raw.get("created_at"), 64) or now
+    return {
+        "id": _trim_study_text(raw.get("id"), 80) or str(uuid4()),
+        "content": content,
+        "created_at": created_at,
+    }
+
+
+def normalize_studyroom_data(raw: Any) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+    items = [_normalize_studyroom_item(x) for x in data.get("items", []) if isinstance(x, dict)]
+    logs = [_normalize_studyroom_log(x) for x in data.get("study_logs", []) if isinstance(x, dict)]
+    now = now_beijing_iso()
+    return {
+        "profile": {
+            "target_name": _trim_study_text(profile.get("target_name") or profile.get("exam_name"), 120)
+            or "安徽省铜陵市枞阳县村级后备干部考试",
+            "expected_month": _trim_study_text(profile.get("expected_month"), 40) or "2026年7月左右",
+            "goal": _trim_study_text(profile.get("goal"), 200) or "先把资料收齐，按模块整理成能理解、能背、能练、能复盘的学习库。",
+        },
+        "modules": list(_STUDYROOM_MODULES),
+        "items": sorted([x for x in items if x], key=lambda x: str(x.get("updated_at") or ""), reverse=True)[:300],
+        "study_logs": sorted([x for x in logs if x], key=lambda x: str(x.get("created_at") or ""), reverse=True)[:120],
+        "updated_at": _trim_study_text(data.get("updated_at"), 64) or now,
+    }
+
+
+def get_studyroom_data() -> dict:
+    """读取 StudyRoom 数据。"""
+    client = _s3_client()
+    if not client:
+        return normalize_studyroom_data({})
+    data = _read_json(client, R2_KEY_STUDYROOM)
+    return normalize_studyroom_data(data)
+
+
+def save_studyroom_data(data: dict) -> bool:
+    """覆盖保存 StudyRoom 数据。"""
+    client = _s3_client()
+    if not client:
+        return False
+    payload = normalize_studyroom_data(data)
+    payload["updated_at"] = now_beijing_iso()
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_STUDYROOM, payload)
+            return True
+        except Exception as e:
+            logger.error("save_studyroom_data 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def add_studyroom_item(item: dict) -> Optional[dict]:
+    data = get_studyroom_data()
+    now = now_beijing_iso()
+    normalized = _normalize_studyroom_item({**(item or {}), "created_at": now, "updated_at": now})
+    if not normalized:
+        return None
+    data["items"] = [normalized, *(data.get("items") or [])]
+    return normalized if save_studyroom_data(data) else None
+
+
+def update_studyroom_item(item_id: str, patch: dict) -> Optional[dict]:
+    eid = _trim_study_text(item_id, 80)
+    if not eid:
+        return None
+    data = get_studyroom_data()
+    now = now_beijing_iso()
+    updated = None
+    next_items = []
+    for item in data.get("items") or []:
+        if str(item.get("id") or "") == eid:
+            merged = {**item, **(patch or {}), "id": eid, "created_at": item.get("created_at"), "updated_at": now}
+            normalized = _normalize_studyroom_item(merged)
+            if not normalized:
+                return None
+            updated = normalized
+            next_items.append(normalized)
+        else:
+            next_items.append(item)
+    if not updated:
+        return None
+    data["items"] = next_items
+    return updated if save_studyroom_data(data) else None
+
+
+def delete_studyroom_item(item_id: str) -> bool:
+    eid = _trim_study_text(item_id, 80)
+    if not eid:
+        return False
+    data = get_studyroom_data()
+    items = data.get("items") or []
+    next_items = [x for x in items if str(x.get("id") or "") != eid]
+    if len(next_items) == len(items):
+        return False
+    data["items"] = next_items
+    return save_studyroom_data(data)
+
+
+def add_studyroom_log(content: str) -> Optional[dict]:
+    text = _trim_study_text(content, 8000)
+    if not text:
+        return None
+    data = get_studyroom_data()
+    entry = {"id": str(uuid4()), "content": text, "created_at": now_beijing_iso()}
+    data["study_logs"] = [entry, *(data.get("study_logs") or [])]
+    return entry if save_studyroom_data(data) else None
 
 
 def save_miniapp_daily_whisper(data: dict) -> bool:
