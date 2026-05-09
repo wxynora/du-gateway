@@ -34,6 +34,7 @@ _DYNAMIC_LAYER_PROMPT = """你叫渡。
 一条记忆不超过两行；写成段落 = 写错了。
 单条建议 35-70 字，必要时可到 90 字；宁可稍长也不要丢关键事实。
 每条尽量同时带「事实 + 情绪」：至少包含一件发生了什么，以及一句当下感受/语气。
+如果对话内容带有“辛玥：”“笨笨：”这类群聊前缀，或“[辛玥]:”“[我]:”这类上下文前缀，必须按前缀区分说话人；“[我]”是渡，笨笨是第三个群成员，不要把笨笨说的话当成辛玥或渡说的话。
 
 ---
 
@@ -198,9 +199,10 @@ def _extract_decision_fields_from_text(text: str) -> Optional[dict]:
         "content",
         "fused_with_id",
     }
+    raw_text = str(text or "").strip()
     out: dict[str, Any] = {}
-    for line in (text or "").splitlines():
-        m = re.match(r'^\s*"?([A-Za-z_]+)"?\s*:\s*(.+?)\s*,?\s*$', line.strip())
+    for line in raw_text.splitlines():
+        m = re.match(r'^\s*"?([A-Za-z_]+)"?\s*[:：]\s*(.+?)\s*,?\s*$', line.strip())
         if not m:
             continue
         key = m.group(1)
@@ -209,10 +211,31 @@ def _extract_decision_fields_from_text(text: str) -> Optional[dict]:
         val = m.group(2).strip().rstrip(",").strip()
         if val in ("null", "None", "none"):
             out[key] = None
-        elif len(val) >= 2 and val[0] == '"' and val[-1] == '"':
+        elif len(val) >= 2 and val[0] in ("'", '"') and val[-1] == val[0]:
             out[key] = val[1:-1]
         else:
             out[key] = val
+    if "action" not in out:
+        lower = raw_text.lower()
+        if re.search(r"\bskip\b|跳过|不记|不用记|无需记|没有值得记", lower):
+            out["action"] = "skip"
+        elif re.search(r"\bmerge\b|融合|合并", lower):
+            out["action"] = "merge"
+        elif re.search(r"\bnew\b|新记忆|新增|值得记|要记", lower):
+            out["action"] = "new"
+    if "tag" not in out:
+        for tag in ("卧室", "书房", "图书馆", "客厅"):
+            if tag in raw_text:
+                out["tag"] = tag
+                break
+    if "importance" not in out:
+        m = re.search(r"(?:importance|重要性|分数|评分)\s*[:：]?\s*([1-4])", raw_text, flags=re.IGNORECASE)
+        if m:
+            out["importance"] = m.group(1)
+    if "content" not in out and out.get("action") in {"new", "merge"}:
+        m = re.search(r"(?:content|记忆|内容|便签)\s*[:：]\s*(.+)", raw_text, flags=re.IGNORECASE)
+        if m:
+            out["content"] = m.group(1).strip().strip("'\"")
     return out if "action" in out else None
 
 
@@ -329,7 +352,7 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
         for attempt in range(2):  # 最多试 2 次
             request_payload = payload
             if attempt > 0:
-                logger.info("动态层 DS JSON 解析失败后重试 attempt=%s", attempt + 1)
+                logger.info("动态层 DS 结构化解析失败后重试 attempt=%s", attempt + 1)
                 request_payload = {
                     **payload,
                     "messages": [
@@ -337,8 +360,9 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
                             "role": "user",
                             "content": (
                                 prompt
-                                + "\n\n上一次输出没有通过 JSON 解析。"
-                                "这次只输出严格合法 JSON 对象：双引号字段名、字符串内引号必须转义、不要 markdown、不要前后解释。"
+                                + "\n\n上一次输出没有解析成功。"
+                                "这次可以输出 JSON，也可以一行一个字段，例如 action: skip。"
+                                "不要解释原因，不要输出长文。"
                             ),
                         }
                     ],
@@ -357,9 +381,12 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
             obj = _extract_json_from_ds_response(content)
             if isinstance(obj, dict):
                 if attempt > 0:
-                    logger.info("动态层 DS JSON 解析重试成功 attempt=%s", attempt + 1)
+                    logger.info("动态层 DS 结构化解析重试成功 attempt=%s", attempt + 1)
                 break
-            logger.warning("动态层 DS 返回非 JSON attempt=%s preview=%s", attempt + 1, _one_line_preview(content))
+            if content:
+                logger.warning("动态层 DS 返回无法解析 attempt=%s preview=%s", attempt + 1, _one_line_preview(content))
+            else:
+                logger.info("动态层 DS 空回 attempt=%s，已按 skip/default 处理", attempt + 1)
             if attempt == 0:
                 continue  # 重试一次
             return default

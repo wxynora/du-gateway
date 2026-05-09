@@ -487,6 +487,30 @@ export function buildBenbenGroupContext(messages: ChatDraftMessage[], force = fa
   ].join("\n");
 }
 
+export function buildGroupTurnUserContent(messages: ChatDraftMessage[], fallbackUserContent: string): string {
+  const list = Array.isArray(messages) ? messages : [];
+  let lastAssistantIndex = -1;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const msg = list[i];
+    if (msg?.role === "assistant" && msg.status !== "pending" && msg.status !== "failed") {
+      lastAssistantIndex = i;
+      break;
+    }
+  }
+  const turnLines = list
+    .slice(lastAssistantIndex + 1)
+    .filter((msg) => msg?.role === "user" || msg?.role === "benben")
+    .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`)
+    .filter((line) => !line.endsWith("："));
+  const fallback = String(fallbackUserContent || "").trim();
+  if (!turnLines.length && fallback) {
+    turnLines.push(`辛玥：${fallback}`);
+  }
+  if (!turnLines.length) return fallback;
+  return ["【三人群聊当前轮】", ...turnLines].join("\n");
+}
+
 export function buildCodexGroupRecentMessages(messages: ChatDraftMessage[]): Array<{ role: ChatRole; content: string; createdAt?: string }> {
   return (Array.isArray(messages) ? messages : [])
     .filter((msg) => msg.status !== "pending" && msg.status !== "failed")

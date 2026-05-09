@@ -142,7 +142,17 @@ def _build_sumitalk_style_system() -> str:
         "你可以亲密、暧昧、想象、安抚，也可以承接她的欲望；但不要声称自己真实拥有肉身，不要凭空说自己看见、触碰、完成了现实中没有发生、也没有设备支持的物理行为。\n"
         "除非她主动问身份、现实能力或边界，或者可能误导现实判断，否则不要反复解释“我是 AI / LLM / 隔着屏幕”。"
     )
-    output_style = build_telegram_style_system(include_channel_hint=False).strip()
+    output_style = "\n".join(
+        [
+            "请遵守以下输出格式要求：",
+            "进行 extended thinking 时尽量使用中文。",
+            "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",
+            "2) SumiTalk 支持 Markdown：可以在确有帮助时使用列表、代码块、加粗等格式，但不要为了格式感刻意堆标题、分割线或空行。",
+            "3) 不要输出英文方括号情绪标签（例如 [shy]、[cute]、[sad]）；SumiTalk 暂未接入表情包发送链路，这些标签会直接露出来。",
+            "4) 不要输出 <voice>...</voice> 或 [PCMD:...] 这类其他入口专用控制标签。",
+            "5) 可以直接使用 emoji，允许自然分段。",
+        ]
+    )
     return (entry_style + "\n\n" + output_style).strip()
 
 

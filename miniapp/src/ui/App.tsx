@@ -33,8 +33,8 @@ import {
 import {
   applyAssistantTerminalMessage,
   applyMessageById,
-  buildBenbenGroupContext,
   buildCodexGroupRecentMessages,
+  buildGroupTurnUserContent,
   extractAssistantReasoning,
   extractAssistantReplyText,
   extractTokenCount,
@@ -169,6 +169,16 @@ const SUMITALK_CHAT_JOB_POLL_MS = 1800;
 const SUMITALK_CHAT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_POLL_MS = 2200;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_GROUP_CHAT_TITLE = "三人群聊";
+const GROUP_CHAT_TITLE_MAX_LENGTH = 24;
+
+function limitGroupChatTitle(value: string): string {
+  return Array.from(String(value || "")).slice(0, GROUP_CHAT_TITLE_MAX_LENGTH).join("");
+}
+
+function getDisplayGroupChatTitle(value?: string): string {
+  return limitGroupChatTitle(String(value || "")).trim() || DEFAULT_GROUP_CHAT_TITLE;
+}
 
 function buildGroupDisplayWindowId(_primaryWindowId?: string): string {
   return "sumitalk-group";
@@ -454,6 +464,20 @@ function Shell({
       return "";
     }
   });
+  const [benbenAvatarImage, setBenbenAvatarImage] = useState(() => {
+    try {
+      return localStorage.getItem("miniapp.ui.benbenAvatar") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [groupChatTitle, setGroupChatTitle] = useState(() => {
+    try {
+      return limitGroupChatTitle(localStorage.getItem("miniapp.ui.groupChatTitle") || DEFAULT_GROUP_CHAT_TITLE);
+    } catch {
+      return DEFAULT_GROUP_CHAT_TITLE;
+    }
+  });
   const [chatBackgroundImage, setChatBackgroundImage] = useState(() => {
     try {
       return localStorage.getItem("miniapp.ui.chatBackgroundImage") || "";
@@ -463,7 +487,9 @@ function Shell({
   });
   const myAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const duAvatarInputRef = useRef<HTMLInputElement | null>(null);
+  const benbenAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const backgroundInputRef = useRef<HTMLInputElement | null>(null);
+  const groupChatDisplayTitle = getDisplayGroupChatTitle(groupChatTitle);
   const loadTree = () =>
     apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
       .then((j) => {
@@ -561,6 +587,8 @@ function Shell({
       localStorage.setItem("miniapp.ui.assistantBubbleStyle", assistantBubbleStyle);
       localStorage.setItem("miniapp.ui.myAvatar", myAvatarImage);
       localStorage.setItem("miniapp.ui.duAvatar", duAvatarImage);
+      localStorage.setItem("miniapp.ui.benbenAvatar", benbenAvatarImage);
+      localStorage.setItem("miniapp.ui.groupChatTitle", limitGroupChatTitle(groupChatTitle));
       localStorage.setItem("miniapp.ui.chatBackgroundImage", chatBackgroundImage);
     } catch {}
   }, [
@@ -578,12 +606,14 @@ function Shell({
     assistantBubbleStyle,
     myAvatarImage,
     duAvatarImage,
+    benbenAvatarImage,
+    groupChatTitle,
     chatBackgroundImage,
   ]);
 
   async function handleImageSelection(
     file: File | undefined,
-    kind: "myAvatar" | "duAvatar" | "background",
+    kind: "myAvatar" | "duAvatar" | "benbenAvatar" | "background",
   ) {
     if (!file) return;
     try {
@@ -596,9 +626,12 @@ function Shell({
       if (kind === "myAvatar") {
         setMyAvatarImage(next);
         toast("我的头像已更新");
-      } else {
+      } else if (kind === "duAvatar") {
         setDuAvatarImage(next);
         toast("渡的头像已更新");
+      } else {
+        setBenbenAvatarImage(next);
+        toast("笨笨头像已更新");
       }
     } catch (e: any) {
       toast(`图片设置失败：${e?.message || e}`);
@@ -856,6 +889,8 @@ function Shell({
         dailyWhisper={dailyWhisper}
         dailyReport={dailyReport}
         duAvatarImage={duAvatarImage}
+        benbenAvatarImage={benbenAvatarImage}
+        groupTitle={groupChatDisplayTitle}
         privateWindowId={sharedChatWindowId}
         groupWindowId={buildGroupDisplayWindowId(sharedChatWindowId)}
         onOpenDu={() => setActiveScreen("du")}
@@ -910,6 +945,7 @@ function Shell({
           assistantBubbleStyle={assistantBubbleStyle}
           myAvatarImage={myAvatarImage}
           duAvatarImage={duAvatarImage}
+          benbenAvatarImage={benbenAvatarImage}
           chatBackgroundImage={chatBackgroundImage}
           onBack={() => setActiveScreen(null)}
           onOpenStickers={() => setPanel("stickers")}
@@ -918,7 +954,7 @@ function Shell({
       ) : null}
       {activeScreen === "group" ? (
         <MainChatScreen
-          title="三人群聊"
+          title={groupChatDisplayTitle}
           windowId={sharedChatWindowId}
           displayWindowId={buildGroupDisplayWindowId(sharedChatWindowId)}
           groupChatMode
@@ -938,6 +974,7 @@ function Shell({
           assistantBubbleStyle={assistantBubbleStyle}
           myAvatarImage={myAvatarImage}
           duAvatarImage={duAvatarImage}
+          benbenAvatarImage={benbenAvatarImage}
           chatBackgroundImage={chatBackgroundImage}
           onBack={() => setActiveScreen(null)}
           onOpenStickers={() => setPanel("stickers")}
@@ -1029,9 +1066,13 @@ function Shell({
             onCycleAssistantBubbleStyle={() => setAssistantBubbleStyle((prev) => (prev === "default" ? "soft" : prev === "soft" ? "outline" : "default"))}
             myAvatarImage={myAvatarImage}
             duAvatarImage={duAvatarImage}
+            benbenAvatarImage={benbenAvatarImage}
+            groupChatTitle={groupChatTitle}
             chatBackgroundImage={chatBackgroundImage}
             onPickMyAvatar={() => myAvatarInputRef.current?.click()}
             onPickDuAvatar={() => duAvatarInputRef.current?.click()}
+            onPickBenbenAvatar={() => benbenAvatarInputRef.current?.click()}
+            onChangeGroupChatTitle={(next) => setGroupChatTitle(limitGroupChatTitle(next))}
             onPickChatBackground={() => backgroundInputRef.current?.click()}
           />
         </FullScreenPane>
@@ -1080,6 +1121,16 @@ function Shell({
         className="hidden"
         onChange={(e) => {
           void handleImageSelection(e.target.files?.[0], "duAvatar");
+          e.currentTarget.value = "";
+        }}
+      />
+      <input
+        ref={benbenAvatarInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void handleImageSelection(e.target.files?.[0], "benbenAvatar");
           e.currentTarget.value = "";
         }}
       />
@@ -1179,6 +1230,8 @@ function ChatsHome({
   dailyWhisper,
   dailyReport,
   duAvatarImage,
+  benbenAvatarImage,
+  groupTitle,
   privateWindowId,
   groupWindowId,
   onOpenDu,
@@ -1192,6 +1245,8 @@ function ChatsHome({
   dailyWhisper: string;
   dailyReport: DailyReport | null;
   duAvatarImage: string;
+  benbenAvatarImage: string;
+  groupTitle: string;
   privateWindowId: string;
   groupWindowId: string;
   onOpenDu: () => void;
@@ -1202,9 +1257,10 @@ function ChatsHome({
   todayNoteRefreshing: boolean;
   dailyRefreshing: boolean;
 }) {
+  const groupDisplayTitle = getDisplayGroupChatTitle(groupTitle);
   const [duPreview, setDuPreview] = useState("主会话");
   const [duTime, setDuTime] = useState("主会话");
-  const [groupPreview, setGroupPreview] = useState("三人群聊");
+  const [groupPreview, setGroupPreview] = useState(groupDisplayTitle);
   const [groupTime, setGroupTime] = useState("群聊");
   const [wenyouPreview, setWenyouPreview] = useState("独立文游会话");
   const [wenyouTime, setWenyouTime] = useState("独立会话");
@@ -1212,6 +1268,10 @@ function ChatsHome({
   const reportSummary = dailyReport
     ? `聊了 ${String(dailyReport.rounds || 0)} 轮 · ${Array.isArray(dailyReport.keywords) && dailyReport.keywords.length ? dailyReport.keywords.join(" / ") : "暂无关键词"}`
     : "今天的日报还没生成。";
+
+  useEffect(() => {
+    setGroupPreview((prev) => (prev === DEFAULT_GROUP_CHAT_TITLE || !String(prev || "").trim() ? groupDisplayTitle : prev));
+  }, [groupDisplayTitle]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1317,10 +1377,11 @@ function ChatsHome({
           pinned
         />
         <ChatEntryRow
-          title="三人群聊"
+          title={groupDisplayTitle}
           preview={groupPreview}
           time={groupTime}
           tone="group"
+          avatarImage={benbenAvatarImage}
           onClick={onOpenGroup}
         />
         <ChatEntryRow
@@ -1441,6 +1502,7 @@ function MainChatScreen({
   assistantBubbleStyle,
   myAvatarImage,
   duAvatarImage,
+  benbenAvatarImage,
   chatBackgroundImage,
   onBack,
   onOpenStickers,
@@ -1466,6 +1528,7 @@ function MainChatScreen({
   assistantBubbleStyle: BubbleStyleKey;
   myAvatarImage: string;
   duAvatarImage: string;
+  benbenAvatarImage: string;
   chatBackgroundImage: string;
   onBack: () => void;
   onOpenStickers: () => void;
@@ -1482,7 +1545,7 @@ function MainChatScreen({
     {
       id: "seed-1",
       role: "assistant",
-      content: groupChatMode ? "三人群聊开着。你直接说就好。" : "我在。你直接说就好。",
+      content: groupChatMode ? `${title}开着。你直接说就好。` : "我在。你直接说就好。",
       createdAt: new Date().toISOString(),
     },
   ];
@@ -1882,15 +1945,13 @@ function MainChatScreen({
     messagesRef.current = draftMessages;
     await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
     try {
-      const groupContext = benbenGroupActive ? buildBenbenGroupContext(messagesRef.current, groupChatMode) : "";
+      const requestUserContent = groupChatMode ? buildGroupTurnUserContent(nextMessages, content) : content;
+      const requestWindowId = windowId;
       const requestBody = {
         model: activeModel,
-        messages: [
-          ...(groupContext ? [{ role: "system", content: groupContext }] : []),
-          { role: "user", content },
-        ],
+        messages: [{ role: "user", content: requestUserContent }],
         stream: false,
-        window_id: windowId,
+        window_id: requestWindowId,
       };
       const started = await apiJson<SumiTalkChatJobCreateResponse>("/miniapp-api/sumitalk-chat", {
         method: "POST",
@@ -2159,7 +2220,7 @@ function MainChatScreen({
                 <div className="flex items-start space-x-3 rounded-[22px]">
                   {showChatAvatars ? (
                     <AvatarBubble
-                      image={group.role === "benben" ? "" : duAvatarImage}
+                      image={group.role === "benben" ? benbenAvatarImage : duAvatarImage}
                       label={group.role === "benben" ? "笨" : avatarLabel}
                       className={group.role === "benben" ? "bg-[#FFF3D7] text-[#8A5A10]" : avatarClass}
                     />
@@ -2443,9 +2504,13 @@ function PersonalizationScreen({
   onCycleAssistantBubbleStyle,
   myAvatarImage,
   duAvatarImage,
+  benbenAvatarImage,
+  groupChatTitle,
   chatBackgroundImage,
   onPickMyAvatar,
   onPickDuAvatar,
+  onPickBenbenAvatar,
+  onChangeGroupChatTitle,
   onPickChatBackground,
 }: {
   transparentBubbleEnabled: boolean;
@@ -2474,14 +2539,33 @@ function PersonalizationScreen({
   onCycleAssistantBubbleStyle: () => void;
   myAvatarImage: string;
   duAvatarImage: string;
+  benbenAvatarImage: string;
+  groupChatTitle: string;
   chatBackgroundImage: string;
   onPickMyAvatar: () => void;
   onPickDuAvatar: () => void;
+  onPickBenbenAvatar: () => void;
+  onChangeGroupChatTitle: (next: string) => void;
   onPickChatBackground: () => void;
 }) {
   return (
     <div className="bg-[#FDFDFD] px-1 pb-6 pt-4">
       <div className="space-y-6">
+        <section>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">群聊设置</h2>
+          <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
+            <PersonalizationTextInputRow
+              title="群聊名"
+              subtitle="会显示在会话列表和群聊顶部"
+              value={groupChatTitle}
+              placeholder={DEFAULT_GROUP_CHAT_TITLE}
+              maxLength={GROUP_CHAT_TITLE_MAX_LENGTH}
+              onChange={onChangeGroupChatTitle}
+              last
+            />
+          </div>
+        </section>
+
         <section>
           <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">头像设置</h2>
           <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
@@ -2496,6 +2580,12 @@ function PersonalizationScreen({
               subtitle="自定义助手的头像"
               leading={<PreviewAvatar image={duAvatarImage} label="渡" shellClass="bg-[#EEF2FF] text-gray-700" />}
               onClick={onPickDuAvatar}
+            />
+            <PersonalizationRow
+              title="笨笨头像"
+              subtitle="群聊里笨笨的头像"
+              leading={<PreviewAvatar image={benbenAvatarImage} label="笨" shellClass="bg-[#FFF3D7] text-[#8A5A10]" />}
+              onClick={onPickBenbenAvatar}
               last
             />
           </div>
@@ -2612,6 +2702,41 @@ function PersonalizationRow({
         <ChevronRightIcon />
       </div>
     </button>
+  );
+}
+
+function PersonalizationTextInputRow({
+  title,
+  subtitle,
+  value,
+  placeholder,
+  maxLength,
+  onChange,
+  last = false,
+}: {
+  title: string;
+  subtitle?: string;
+  value: string;
+  placeholder?: string;
+  maxLength?: number;
+  onChange: (next: string) => void;
+  last?: boolean;
+}) {
+  return (
+    <label className={`block py-[14px] ${last ? "" : "border-b border-[#F9FAFB]"}`}>
+      <div className="mb-3">
+        <p className="text-[15px] font-semibold text-gray-800">{title}</p>
+        {subtitle ? <p className="mt-0.5 text-[12px] text-gray-400">{subtitle}</p> : null}
+      </div>
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-11 w-full rounded-[16px] border border-gray-100 bg-[#F8FAFC] px-4 text-[15px] font-medium text-gray-800 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-200 focus:bg-white"
+      />
+    </label>
   );
 }
 
