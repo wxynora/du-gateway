@@ -2,7 +2,7 @@ import Dexie, { type Table } from "dexie";
 
 export type ChatHistoryMessage = {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "benben";
   content: string;
   createdAt: string;
   status?: "pending" | "sent" | "failed";

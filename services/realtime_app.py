@@ -16,6 +16,7 @@ from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
 
 from config import DATA_DIR
+from services import codex_group_chat
 from storage import r2_store
 from storage.miniapp_panel_store import is_trusted_device, touch_trusted_device
 from utils.miniapp_panel_auth import panel_auth_enabled, verify_panel_token
@@ -30,6 +31,7 @@ _POLL_INTERVAL_SECONDS = max(1.0, float(os.environ.get("REALTIME_POLL_INTERVAL_S
 _FAIL_BACKOFF_BASE_SECONDS = max(1.0, float(os.environ.get("REALTIME_FAIL_BACKOFF_BASE_SECONDS", "3") or "3"))
 _MAX_BACKOFF_SECONDS = max(5.0, float(os.environ.get("REALTIME_MAX_BACKOFF_SECONDS", "60") or "60"))
 _ACTION_LIMIT = max(1, int(os.environ.get("REALTIME_ACTION_LIMIT", "5") or "5"))
+_CODEX_GROUP_TASK_LIMIT = max(1, int(os.environ.get("REALTIME_CODEX_GROUP_TASK_LIMIT", "50") or "50"))
 
 
 def _bearer_from_header(raw: str) -> str:
@@ -104,6 +106,36 @@ def _latest_assistant_message(device_id: str) -> dict:
             "preview": content[:500],
         }
     return {}
+
+
+def _codex_group_tasks_for_device(device_id: str) -> list[dict]:
+    did = str(device_id or "").strip()
+    if not did:
+        return []
+    try:
+        tasks = codex_group_chat.list_tasks(limit=_CODEX_GROUP_TASK_LIMIT)
+    except Exception as e:
+        logger.warning("load codex group tasks failed device_id=%s error=%s", did, e)
+        return []
+    out: list[dict] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if str(task.get("reply_target") or "").strip() != did:
+            continue
+        task_id = str(task.get("id") or "").strip()
+        if not task_id:
+            continue
+        out.append(task)
+    return out
+
+
+def _codex_group_task_state_key(task: dict) -> str:
+    status_value = str(task.get("status") or "").strip()
+    updated_at = str(task.get("updated_at") or task.get("finished_at") or task.get("claimed_at") or task.get("created_at") or "").strip()
+    response_len = len(str(task.get("response") or ""))
+    error_len = len(str(task.get("error") or ""))
+    return f"{status_value}|{updated_at}|{response_len}|{error_len}"
 
 
 def _verify_ws(websocket: WebSocket) -> tuple[bool, str, str]:
@@ -183,6 +215,7 @@ async def _receiver_loop(websocket: WebSocket, device_id: str) -> None:
 
 async def _sender_loop(websocket: WebSocket, device_id: str) -> None:
     last_message_key = str(websocket.query_params.get("last_message_key") or "").strip()
+    last_codex_task_states: dict[str, str] = {}
     if not last_message_key:
         latest = await asyncio.to_thread(_latest_assistant_message, device_id)
         last_message_key = str(latest.get("key") or "")
@@ -201,6 +234,17 @@ async def _sender_loop(websocket: WebSocket, device_id: str) -> None:
             pending = actions.get("actions") if isinstance(actions, dict) else None
             if isinstance(pending, list) and pending:
                 await _send_json(websocket, {"type": "device_actions", "actions": pending})
+
+            codex_tasks = await asyncio.to_thread(_codex_group_tasks_for_device, device_id)
+            for task in codex_tasks:
+                task_id = str(task.get("id") or "").strip()
+                if not task_id:
+                    continue
+                state_key = _codex_group_task_state_key(task)
+                if not state_key or last_codex_task_states.get(task_id) == state_key:
+                    continue
+                last_codex_task_states[task_id] = state_key
+                await _send_json(websocket, {"type": "codex_group_chat_task", "task": task})
 
             failures = 0
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)

@@ -171,6 +171,17 @@ export function buildLogStreamUrl(startLines: number, category: string = "all"):
   return url.toString();
 }
 
+export function buildRealtimeWebSocketUrl(path: string, params: Record<string, string> = {}): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  const url = new URL(withAuthUrl(p), API_BASE_URL || window.location.origin);
+  for (const [key, value] of Object.entries(params)) {
+    const v = String(value || "").trim();
+    if (v && !url.searchParams.get(key)) url.searchParams.set(key, v);
+  }
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
 export function buildApiAssetUrl(path: string): string {
   const p = path.startsWith("/") ? path : `/${path}`;
   return withAuthUrl(p);

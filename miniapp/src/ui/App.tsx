@@ -81,7 +81,8 @@ import {
   TrashIconMini,
 } from "./icons";
 import { SumiOverlay } from "../plugins/sumi-overlay";
-import { migrateLocalChatHistoryDevice, readLatestLocalChatHistory, readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
+import { migrateLocalChatHistoryDevice, readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
+import { useCodexGroupTaskRealtime, type CodexGroupTaskRealtimeTask } from "./hooks/useCodexGroupTaskRealtime";
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
 const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
@@ -167,6 +168,20 @@ const SUMITALK_CHAT_JOB_POLL_MS = 1800;
 const SUMITALK_CHAT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_POLL_MS = 2200;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
+
+function buildGroupDisplayWindowId(_primaryWindowId?: string): string {
+  return "sumitalk-group";
+}
+
+function sumitalkHistoryPath(displayWindowId?: string): string {
+  const wid = String(displayWindowId || "").trim();
+  return wid ? `/miniapp-api/sumitalk-history?window_id=${encodeURIComponent(wid)}` : "/miniapp-api/sumitalk-history";
+}
+
+function sumitalkHistoryPayload(messages: ChatDraftMessage[], displayWindowId?: string): Record<string, unknown> {
+  const wid = String(displayWindowId || "").trim();
+  return wid ? { messages, window_id: wid } : { messages };
+}
 
 function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -840,6 +855,8 @@ function Shell({
         dailyWhisper={dailyWhisper}
         dailyReport={dailyReport}
         duAvatarImage={duAvatarImage}
+        privateWindowId={sharedChatWindowId}
+        groupWindowId={buildGroupDisplayWindowId(sharedChatWindowId)}
         onOpenDu={() => setActiveScreen("du")}
         onOpenGroup={() => setActiveScreen("group")}
         onOpenWenyou={() => setActiveScreen("wenyou")}
@@ -902,6 +919,7 @@ function Shell({
         <MainChatScreen
           title="三人群聊"
           windowId={sharedChatWindowId}
+          displayWindowId={buildGroupDisplayWindowId(sharedChatWindowId)}
           groupChatMode
           avatarLabel="渡"
           accent="du"
@@ -1160,6 +1178,8 @@ function ChatsHome({
   dailyWhisper,
   dailyReport,
   duAvatarImage,
+  privateWindowId,
+  groupWindowId,
   onOpenDu,
   onOpenGroup,
   onOpenWenyou,
@@ -1171,6 +1191,8 @@ function ChatsHome({
   dailyWhisper: string;
   dailyReport: DailyReport | null;
   duAvatarImage: string;
+  privateWindowId: string;
+  groupWindowId: string;
   onOpenDu: () => void;
   onOpenGroup: () => void;
   onOpenWenyou: () => void;
@@ -1181,6 +1203,8 @@ function ChatsHome({
 }) {
   const [duPreview, setDuPreview] = useState("主会话");
   const [duTime, setDuTime] = useState("主会话");
+  const [groupPreview, setGroupPreview] = useState("三人群聊");
+  const [groupTime, setGroupTime] = useState("群聊");
   const [wenyouPreview, setWenyouPreview] = useState("独立文游会话");
   const [wenyouTime, setWenyouTime] = useState("独立会话");
 
@@ -1193,7 +1217,12 @@ function ChatsHome({
     (async () => {
       try {
         const did = await getOrCreatePanelDeviceId();
-        const localMessages = sanitizeHistoryMessages(await readLatestLocalChatHistory(did));
+        const mainWindowId = String(privateWindowId || "sumitalk-main").trim() || "sumitalk-main";
+        const mainLocalMessages = sanitizeHistoryMessages(await readLocalChatHistory(did, mainWindowId));
+        const legacyLocalMessages = mainWindowId === "sumitalk-main"
+          ? []
+          : sanitizeHistoryMessages(await readLocalChatHistory(did, "sumitalk-main"));
+        const localMessages = pickBetterHistory(mainLocalMessages, legacyLocalMessages, []);
         if (!cancelled && localMessages.length) {
           const pickedLocal = pickLatestDraftPreview(localMessages);
           setDuPreview(pickedLocal.preview);
@@ -1207,14 +1236,33 @@ function ChatsHome({
         setDuPreview(picked.preview);
         setDuTime(picked.time);
         if (nextMessages === remoteMessages && remoteMessages.length) {
-          await writeLocalChatHistory(did, "sumitalk-main", remoteMessages);
+          await writeLocalChatHistory(did, mainWindowId, remoteMessages);
+        }
+
+        const groupLocalMessages = sanitizeHistoryMessages(await readLocalChatHistory(did, groupWindowId));
+        if (!cancelled && groupLocalMessages.length) {
+          const pickedLocalGroup = pickLatestDraftPreview(groupLocalMessages);
+          setGroupPreview(pickedLocalGroup.preview);
+          setGroupTime(pickedLocalGroup.time);
+        }
+        const groupHistory = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(groupWindowId));
+        if (cancelled) return;
+        const groupRemoteMessages = sanitizeHistoryMessages(Array.isArray(groupHistory?.messages) ? groupHistory.messages : []);
+        const groupMessages = pickBetterHistory(groupRemoteMessages, groupLocalMessages, []);
+        if (groupMessages.length) {
+          const pickedGroup = pickLatestDraftPreview(groupMessages);
+          setGroupPreview(pickedGroup.preview);
+          setGroupTime(pickedGroup.time);
+          if (groupMessages === groupRemoteMessages) {
+            await writeLocalChatHistory(did, groupWindowId, groupRemoteMessages);
+          }
         }
       } catch {}
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [groupWindowId, privateWindowId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1269,8 +1317,8 @@ function ChatsHome({
         />
         <ChatEntryRow
           title="三人群聊"
-          preview={duPreview}
-          time={duTime}
+          preview={groupPreview}
+          time={groupTime}
           tone="group"
           onClick={onOpenGroup}
         />
@@ -1375,6 +1423,7 @@ function MainChatScreen({
   title,
   avatarLabel,
   windowId,
+  displayWindowId,
   groupChatMode = false,
   accent,
   transparentBubbleEnabled,
@@ -1399,6 +1448,7 @@ function MainChatScreen({
   title: string;
   avatarLabel: string;
   windowId: string;
+  displayWindowId?: string;
   groupChatMode?: boolean;
   accent: "du" | "wenyou";
   transparentBubbleEnabled: boolean;
@@ -1422,6 +1472,8 @@ function MainChatScreen({
 }) {
   const toast = useToast();
   const modelKey = `miniapp.chat.${windowId}.model.v1`;
+  const historyWindowId = String(displayWindowId || windowId || "").trim();
+  const remoteHistoryWindowId = String(displayWindowId || "").trim();
   const [deviceId, setDeviceId] = useState("");
   const remoteHistoryReadyRef = useRef(false);
   const remoteHistoryWarningShownRef = useRef(false);
@@ -1456,6 +1508,7 @@ function MainChatScreen({
     }
   });
   const benbenTaskRecoveringRef = useRef<Set<string>>(new Set());
+  const benbenTaskFinalizedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -1524,17 +1577,20 @@ function MainChatScreen({
     let cancelled = false;
     (async () => {
       try {
-        if (!deviceId || !windowId) return;
+        if (!deviceId || !historyWindowId) return;
         remoteHistoryReadyRef.current = false;
         remoteHistoryWarningShownRef.current = false;
-        const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(deviceId, windowId));
+        const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(deviceId, historyWindowId));
+        const legacyLocalMessages = !remoteHistoryWindowId && historyWindowId !== "sumitalk-main"
+          ? sanitizeHistoryMessages(await readLocalChatHistory(deviceId, "sumitalk-main"))
+          : [];
         const fallbackLocalMessages = localMessages.length
           ? localMessages
-          : sanitizeHistoryMessages(await readLatestLocalChatHistory(deviceId));
+          : legacyLocalMessages;
         if (!cancelled && fallbackLocalMessages.length) {
           setMessages(fallbackLocalMessages);
         }
-        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
+        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
         if (cancelled) return;
         if (j?.ok) {
           remoteHistoryReadyRef.current = true;
@@ -1543,7 +1599,7 @@ function MainChatScreen({
         const next = pickBetterHistory(remoteMessages, fallbackLocalMessages, seedMessages);
         setMessages(next);
         if (next === remoteMessages && remoteMessages.length) {
-          await writeLocalChatHistory(deviceId, windowId, remoteMessages);
+          await writeLocalChatHistory(deviceId, historyWindowId, remoteMessages);
         }
       } catch (e: any) {
         if (!cancelled) {
@@ -1554,7 +1610,7 @@ function MainChatScreen({
     return () => {
       cancelled = true;
     };
-  }, [deviceId, windowId]);
+  }, [deviceId, historyWindowId, remoteHistoryWindowId]);
 
   async function saveDisplayHistory(
     nextMessages: ChatDraftMessage[],
@@ -1563,8 +1619,8 @@ function MainChatScreen({
     const sanitizedMessages = sanitizeHistoryMessages(nextMessages);
     const resolvedDeviceId = String(options.localDeviceId || deviceId || "").trim();
     const syncRemote = options.syncRemote !== false;
-    if (resolvedDeviceId && windowId) {
-      await writeLocalChatHistory(resolvedDeviceId, windowId, sanitizedMessages);
+    if (resolvedDeviceId && historyWindowId) {
+      await writeLocalChatHistory(resolvedDeviceId, historyWindowId, sanitizedMessages);
     }
     if (!syncRemote) return;
     if (!remoteHistoryReadyRef.current) {
@@ -1578,10 +1634,59 @@ function MainChatScreen({
       await apiJson("/miniapp-api/sumitalk-history", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: sanitizedMessages }),
+        body: JSON.stringify(sumitalkHistoryPayload(sanitizedMessages, remoteHistoryWindowId)),
       });
     } catch {}
   }
+
+  async function applyBenbenTaskTerminal(
+    task: CodexGroupTaskRealtimeTask,
+    options: { messageId?: string; localDeviceId?: string } = {},
+  ): Promise<boolean> {
+    const taskId = String(task?.id || "").trim();
+    const statusValue = String(task?.status || "").trim();
+    if (!taskId || !["done", "error", "cancelled"].includes(statusValue)) return false;
+    if (benbenTaskFinalizedRef.current.has(taskId)) return true;
+
+    const currentMessages = messagesRef.current;
+    const targetMessageId = String(options.messageId || "").trim()
+      || String(currentMessages.find((msg) => msg.role === "benben" && String(msg.jobId || "").trim() === taskId)?.id || "").trim();
+    if (!targetMessageId) return false;
+
+    const currentMessage = currentMessages.find((msg) => msg.id === targetMessageId);
+    const createdAt = currentMessage?.createdAt || new Date().toISOString();
+    const terminalMessage: ChatDraftMessage = statusValue === "done"
+      ? {
+          id: targetMessageId,
+          role: "benben",
+          content: String(task.response || "").trim() || "（笨笨没有返回内容）",
+          createdAt,
+          status: "sent",
+          jobId: taskId,
+        }
+      : {
+          id: targetMessageId,
+          role: "benben",
+          content: `（笨笨入群失败：${task.error || "任务已取消"}）`,
+          createdAt,
+          status: "failed",
+          jobId: taskId,
+        };
+    const nextMessages = applyMessageById(currentMessages, targetMessageId, terminalMessage);
+    benbenTaskFinalizedRef.current.add(taskId);
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    await saveDisplayHistory(nextMessages, { localDeviceId: options.localDeviceId || deviceId });
+    return true;
+  }
+
+  useCodexGroupTaskRealtime({
+    enabled: groupChatMode,
+    deviceId,
+    onTask: (task) => {
+      void applyBenbenTaskTerminal(task, { localDeviceId: deviceId });
+    },
+  });
 
   async function appendSystemAlarmCreatedCard(detail: { hour?: number; minute?: number; title?: string }) {
     if (groupChatMode) return;
@@ -1640,6 +1745,7 @@ function MainChatScreen({
     messagesRef.current = pendingMessages;
     setMessages(pendingMessages);
     await saveDisplayHistory(pendingMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+    let taskId = "";
     try {
       const created = await apiJson<CodexGroupChatTaskResponse>("/miniapp-api/codex-group-chat-tasks", {
         method: "POST",
@@ -1653,7 +1759,7 @@ function MainChatScreen({
           client_request_id: `${params.clientRequestId}-benben`,
         }),
       });
-      const taskId = String(created.task?.id || "").trim();
+      taskId = String(created.task?.id || "").trim();
       if (!taskId) throw new Error(created.error || "笨笨任务没有返回 ID");
       const queuedMessages = applyMessageById(messagesRef.current, benbenId, {
         ...pendingMsg,
@@ -1665,19 +1771,13 @@ function MainChatScreen({
       setMessages(queuedMessages);
       await saveDisplayHistory(queuedMessages, { syncRemote: false, localDeviceId: params.replyTarget });
       const task = await waitForCodexGroupChatTask(taskId);
-      const reply = String(task.response || "").trim();
-      if (!reply) throw new Error("笨笨没有返回内容");
-      const finalMessages = applyMessageById(messagesRef.current, benbenId, {
-        ...pendingMsg,
-        content: reply,
-        status: "sent",
-        jobId: taskId,
-      });
-      messagesRef.current = finalMessages;
-      setMessages(finalMessages);
-      await saveDisplayHistory(finalMessages, { localDeviceId: params.replyTarget });
-      return finalMessages;
+      const applied = await applyBenbenTaskTerminal(task, { messageId: benbenId, localDeviceId: params.replyTarget });
+      if (!applied) throw new Error("笨笨没有返回内容");
+      return messagesRef.current;
     } catch (e: any) {
+      if (taskId && benbenTaskFinalizedRef.current.has(taskId)) {
+        return messagesRef.current;
+      }
       const failedMessages = applyMessageById(messagesRef.current, benbenId, {
         ...pendingMsg,
         content: `（笨笨入群失败：${e?.message || e}）`,
@@ -1705,20 +1805,10 @@ function MainChatScreen({
       void (async () => {
         try {
           const task = await waitForCodexGroupChatTask(item.taskId);
-          const reply = String(task.response || "").trim();
-          if (!reply) throw new Error("笨笨没有返回内容");
-          const finalMessages = applyMessageById(messagesRef.current, item.messageId, {
-            id: item.messageId,
-            role: "benben",
-            content: reply,
-            createdAt: messagesRef.current.find((msg) => msg.id === item.messageId)?.createdAt || new Date().toISOString(),
-            status: "sent",
-            jobId: item.taskId,
-          });
-          messagesRef.current = finalMessages;
-          setMessages(finalMessages);
-          await saveDisplayHistory(finalMessages, { localDeviceId: deviceId });
+          const applied = await applyBenbenTaskTerminal(task, { messageId: item.messageId, localDeviceId: deviceId });
+          if (!applied) throw new Error("笨笨没有返回内容");
         } catch (e: any) {
+          if (benbenTaskFinalizedRef.current.has(item.taskId)) return;
           const failedMessages = applyMessageById(messagesRef.current, item.messageId, {
             id: item.messageId,
             role: "benben",
