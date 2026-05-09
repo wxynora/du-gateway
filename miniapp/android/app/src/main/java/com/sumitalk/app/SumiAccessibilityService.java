@@ -28,11 +28,13 @@ public class SumiAccessibilityService extends AccessibilityService {
     private static final String TAG = "SumiA11yService";
     private static final String API_BASE = "https://duxy-home.com";
     private static final long REPORT_MIN_INTERVAL_MS = 1500L;
+    private static final long SAME_APP_ACTIVITY_REPORT_INTERVAL_MS = 2L * 60L * 1000L;
     private static final int MAX_IMAGE_WIDTH = 1080;
     private static volatile SumiAccessibilityService activeInstance;
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private String lastPackageName = "";
     private long lastReportedAt = 0L;
+    private long lastSameAppActivityReportedAt = 0L;
 
     @Override
     protected void onServiceConnected() {
@@ -44,20 +46,40 @@ public class SumiAccessibilityService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null) return;
         int type = event.getEventType();
-        if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-                && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+        boolean windowEvent = type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED;
+        boolean activityEvent = type == AccessibilityEvent.TYPE_VIEW_SCROLLED
+                || type == AccessibilityEvent.TYPE_VIEW_CLICKED;
+        if (!windowEvent && !activityEvent) {
             return;
         }
         CharSequence pkg = event.getPackageName();
         String packageName = String.valueOf(pkg == null ? "" : pkg).trim();
         if (packageName.isEmpty() || packageName.equals(getPackageName())) return;
         long now = System.currentTimeMillis();
-        if (packageName.equals(lastPackageName) && now - lastReportedAt < REPORT_MIN_INTERVAL_MS) {
+        String className = String.valueOf(event.getClassName() == null ? "" : event.getClassName()).trim();
+        boolean samePackage = packageName.equals(lastPackageName);
+        if (!samePackage) {
+            lastPackageName = packageName;
+            lastReportedAt = now;
+            lastSameAppActivityReportedAt = now;
+            reportForegroundApp(packageName, className, "accessibility");
             return;
         }
-        lastPackageName = packageName;
+        if (windowEvent) {
+            if (now - lastReportedAt < REPORT_MIN_INTERVAL_MS) {
+                return;
+            }
+            lastReportedAt = now;
+            reportForegroundApp(packageName, className, "accessibility");
+            return;
+        }
+        if (now - lastSameAppActivityReportedAt < SAME_APP_ACTIVITY_REPORT_INTERVAL_MS) {
+            return;
+        }
+        lastSameAppActivityReportedAt = now;
         lastReportedAt = now;
-        reportForegroundApp(packageName, String.valueOf(event.getClassName() == null ? "" : event.getClassName()).trim());
+        reportForegroundApp(packageName, className, "accessibility_activity");
     }
 
     @Override
@@ -84,11 +106,11 @@ public class SumiAccessibilityService extends AccessibilityService {
         return true;
     }
 
-    private void reportForegroundApp(String packageName, String className) {
-        ioExecutor.execute(() -> doReportForegroundApp(packageName, className));
+    private void reportForegroundApp(String packageName, String className, String source) {
+        ioExecutor.execute(() -> doReportForegroundApp(packageName, className, source));
     }
 
-    private void doReportForegroundApp(String packageName, String className) {
+    private void doReportForegroundApp(String packageName, String className, String source) {
         SharedPreferences sp = getSharedPreferences(FloatingBallService.PREFS_NAME, MODE_PRIVATE);
         String panelToken = String.valueOf(sp.getString(FloatingBallService.PREF_PANEL_TOKEN, "")).trim();
         String deviceId = String.valueOf(sp.getString(FloatingBallService.PREF_DEVICE_ID, "")).trim();
@@ -100,7 +122,7 @@ public class SumiAccessibilityService extends AccessibilityService {
             app.put("packageName", packageName);
             app.put("appName", resolveAppLabel(packageName));
             if (!className.isEmpty()) app.put("className", className);
-            app.put("source", "accessibility");
+            app.put("source", source == null || source.trim().isEmpty() ? "accessibility" : source.trim());
             app.put("observedAt", nowIso());
 
             JSONObject payload = new JSONObject();

@@ -12,6 +12,7 @@ _SENSE_HISTORY_READ_DEFAULT_LIMIT = 200
 _SENSE_HISTORY_LATEST_ONLY_TYPES = {"usage"}
 _SENSE_HISTORY_MIN_INTERVAL_SECONDS = {
     "battery": 30 * 60,
+    "foreground": 10 * 60,
     "health": 5 * 60,
     "location": 30 * 60,
 }
@@ -234,6 +235,27 @@ def update_app_sessions_from_foreground(foreground_patch: dict) -> bool:
             active_device = str(active.get("deviceId") or device_id).strip()
             active_pkg = str(active.get("packageName") or "").strip()
             if active_device == device_id and active_pkg == pkg:
+                next_active = dict(active)
+                next_active["deviceId"] = device_id
+                next_active["packageName"] = pkg
+                next_active["appName"] = app_name[:80]
+                next_active.setdefault("startedAt", observed_at)
+                next_active["lastSeenAt"] = observed_at
+                next_active["lastActivityAt"] = observed_at
+                source = str(foreground_patch.get("source") or next_active.get("source") or "accessibility").strip()
+                if source:
+                    next_active["source"] = source[:40]
+                class_name = str(foreground_patch.get("className") or "").strip()
+                if class_name:
+                    next_active["className"] = class_name[:240]
+                next_bucket = {
+                    "deviceId": device_id,
+                    "active": next_active,
+                    "recent": _compact_app_sessions(bucket.get("recent") if isinstance(bucket.get("recent"), list) else [], device_id, limit=5),
+                    "updatedAt": now_beijing_iso(),
+                }
+                doc["app_sessions"] = next_bucket
+                _write_json(client, R2_KEY_SENSE_LATEST, doc)
                 return True
 
             old_recent = bucket.get("recent")
@@ -247,6 +269,8 @@ def update_app_sessions_from_foreground(foreground_patch: dict) -> bool:
                 "packageName": pkg,
                 "appName": app_name[:80],
                 "startedAt": observed_at,
+                "lastSeenAt": observed_at,
+                "lastActivityAt": observed_at,
                 "source": str(foreground_patch.get("source") or "accessibility").strip()[:40] or "accessibility",
             }
             class_name = str(foreground_patch.get("className") or "").strip()
@@ -394,11 +418,14 @@ def _sense_history_should_append(existing: list, sense_type: str, bucket_snapsho
         return state in {"on", "off"} and state != last_state
 
     if key == "foreground":
-        return not (
+        same_foreground = (
             _same_str_field(data, last_data, "deviceId")
             and _same_str_field(data, last_data, "packageName")
             and _same_str_field(data, last_data, "className")
         )
+        if not same_foreground:
+            return True
+        return _history_item_age_seconds(last) >= _SENSE_HISTORY_MIN_INTERVAL_SECONDS["foreground"]
 
     if key == "app_sessions":
         return True
