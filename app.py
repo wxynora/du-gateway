@@ -61,7 +61,7 @@ if os.environ.get("GATEWAY_EMBEDDED_SCHEDULE_RUNTIME_ENABLED", "0").strip().lowe
 
 # CORS：RikkaHub 等前端带自定义请求头时，浏览器会先发 OPTIONS 预检
 # MiniApp 表情包预览等请求需带 X-Telegram-Init-Data（仅 Header、不拼 URL），须在此列出否则跨域预检失败
-CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "*")
+CORS_ORIGIN = os.environ.get("CORS_ORIGIN", "https://duxy-home.com").strip()
 CORS_ALLOW_HEADERS = os.environ.get(
     "CORS_ALLOW_HEADERS",
     "Content-Type, Authorization, X-Telegram-Init-Data, X-Panel-Token, X-Force-Last4, X-Reply-Channel, X-Reply-Target, X-Window-Id",
@@ -80,7 +80,9 @@ def _cors_preflight():
 
 @app.after_request
 def _cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = CORS_ORIGIN
+    if CORS_ORIGIN:
+        response.headers["Access-Control-Allow-Origin"] = CORS_ORIGIN
+        response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Headers"] = CORS_ALLOW_HEADERS
     response.headers["Access-Control-Allow-Methods"] = CORS_ALLOW_METHODS
     return response
