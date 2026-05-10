@@ -1,3 +1,4 @@
+import re
 import time
 from hashlib import sha256
 
@@ -24,9 +25,55 @@ logger = get_logger(__name__)
 
 _embed_cache: dict[str, tuple[float, list[float]]] = {}
 
+_DATA_IMAGE_URL_RE = re.compile(
+    r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/_=\-\r\n]+",
+    re.IGNORECASE,
+)
+_REMOTE_IMAGE_URL_RE = re.compile(
+    r"https?://[^\s\"')<>]+?\.(?:png|jpe?g|webp|gif|bmp|heic)(?:\?[^\s\"')<>]*)?",
+    re.IGNORECASE,
+)
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*]\([^)]*\)")
+_HTML_IMAGE_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_XML_IMAGE_BLOCK_RE = re.compile(r"<image\b[^>]*>.*?</image>", re.IGNORECASE | re.DOTALL)
+_IMAGE_PLACEHOLDER_RE = re.compile(r"\[(?:图片|图像|Image)(?:\s*#|[:：])?[^\]]*]", re.IGNORECASE)
+_IMAGE_PART_OBJECT_RE = re.compile(
+    r"\{[^{}]*['\"]type['\"]\s*:\s*['\"](?:image_url|image)['\"][^{}]*(?:\{[^{}]*\}[^{}]*)?\}",
+    re.IGNORECASE | re.DOTALL,
+)
+_MULTIMODAL_IMAGE_TYPE_RE = re.compile(
+    r"['\"]type['\"]\s*:\s*['\"](?:image_url|image)['\"]",
+    re.IGNORECASE,
+)
+_EMPTY_IMAGE_URL_OBJECT_RE = re.compile(
+    r"['\"]image_url['\"]\s*:\s*\{\s*['\"]url['\"]\s*:\s*['\"]\s*['\"]\s*\}",
+    re.IGNORECASE,
+)
+
+
+def strip_images_for_embedding(text: str) -> str:
+    """
+    去掉只对图片有意义的内容，避免动态记忆向量被图片描述或 base64 污染。
+    只用于 embedding 文本，不影响 R2 原文存档和聊天注入。
+    """
+    t = str(text or "")
+    if not t:
+        return ""
+    t = _XML_IMAGE_BLOCK_RE.sub(" ", t)
+    t = _HTML_IMAGE_RE.sub(" ", t)
+    t = _MARKDOWN_IMAGE_RE.sub(" ", t)
+    t = _IMAGE_PART_OBJECT_RE.sub(" ", t)
+    t = _DATA_IMAGE_URL_RE.sub(" ", t)
+    t = _REMOTE_IMAGE_URL_RE.sub(" ", t)
+    t = _IMAGE_PLACEHOLDER_RE.sub(" ", t)
+    t = _EMPTY_IMAGE_URL_OBJECT_RE.sub(" ", t)
+    t = _MULTIMODAL_IMAGE_TYPE_RE.sub(" ", t)
+    return t
+
 
 def normalize_text(text: str) -> str:
-    t = (text or "").replace("\n", " ").strip()
+    t = strip_images_for_embedding(text).replace("\n", " ").strip()
+    t = re.sub(r"\s+", " ", t)
     if EMBEDDING_MAX_CHARS and len(t) > EMBEDDING_MAX_CHARS:
         t = t[:EMBEDDING_MAX_CHARS]
     return t
