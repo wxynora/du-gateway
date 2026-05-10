@@ -4,12 +4,15 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { ToastProvider, useToast } from "./toast";
 import { apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
-import { AvatarBubble, ChatActionButton, HtmlBlock, PlainTextBlock, RichTextBlock, SummaryBlock, copyText } from "./ChatPresentation";
+import { AvatarBubble, ChatActionButton, ChatHeaderStatus, HtmlBlock, PlainTextBlock, RichTextBlock, copyText, formatTokenCountValue } from "./ChatPresentation";
+import { ChatsHome } from "./ChatsHome";
+import { BottomNav, type MainTab } from "./BottomNav";
 import { CorePromptEditor } from "./CorePromptEditor";
 import { DiagnosticsScreen } from "./DiagnosticsScreen";
 import { DeviceManagerModal } from "./DeviceManagerModal";
 import { FullScreenPane } from "./FullScreenPane";
 import { PersonalizationScreen } from "./PersonalizationScreen";
+import { FloatingBallSettingRow, ListRow, PageCardRow, SwitchSettingRow } from "./SettingsRows";
 import { TreeScreen, type CyberTreeData } from "./TreeScreen";
 import {
   DEFAULT_GROUP_CHAT_TITLE,
@@ -61,18 +64,20 @@ import {
   type ChatTimeFormat,
 } from "./chatMessages";
 import {
+  buildGroupDisplayWindowId,
+  sumitalkHistoryPath,
+  sumitalkHistoryPayload,
+} from "./chatWindowIds";
+import {
   ArrowUpIcon,
   BookOpenIcon,
-  BottomNavIcon,
   CalendarIconMini,
   ChevronDownMini,
   ChevronLeftIcon,
-  ChevronRightIcon,
   ChevronUpMini,
   ClockIconMini,
   CodeIcon,
   CopyIconMini,
-  CornerDownIcon,
   CpuIcon,
   FeatherIcon,
   FileTextIcon,
@@ -91,6 +96,8 @@ import {
 import { SumiOverlay } from "../plugins/sumi-overlay";
 import { migrateLocalChatHistoryDevice, readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
 import { useCodexGroupTaskRealtime, type CodexGroupTaskRealtimeTask } from "./hooks/useCodexGroupTaskRealtime";
+import { buildAvatarDataUrl, buildBackgroundDataUrl } from "./imageDataUrl";
+import { clampStoredNumber, readStoredBoolean, readStoredNumber, readStoredString } from "./uiStorage";
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
 const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
@@ -123,7 +130,6 @@ type SilenceModeResponse = {
   updated_at?: string;
   error?: string;
 };
-type MainTab = "chats" | "daily" | "study" | "tools" | "settings";
 type ChatScreenId = "du" | "group" | "wenyou" | null;
 type SumiTalkChatJobCreateResponse = {
   ok?: boolean;
@@ -155,20 +161,6 @@ const SUMITALK_CHAT_JOB_POLL_MS = 1800;
 const SUMITALK_CHAT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_POLL_MS = 2200;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
-
-function buildGroupDisplayWindowId(_primaryWindowId?: string): string {
-  return "sumitalk-group";
-}
-
-function sumitalkHistoryPath(displayWindowId?: string): string {
-  const wid = String(displayWindowId || "").trim();
-  return wid ? `/miniapp-api/sumitalk-history?window_id=${encodeURIComponent(wid)}` : "/miniapp-api/sumitalk-history";
-}
-
-function sumitalkHistoryPayload(messages: ChatDraftMessage[], displayWindowId?: string): Record<string, unknown> {
-  const wid = String(displayWindowId || "").trim();
-  return wid ? { messages, window_id: wid } : { messages };
-}
 
 function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -223,121 +215,6 @@ async function waitForCodexGroupChatTask(taskId: string): Promise<CodexGroupChat
     }
   }
   throw new Error(lastError ? `等待笨笨回复超时：${lastError}` : "等待笨笨回复超时");
-}
-
-function readStoredBoolean(key: string, fallback = false): boolean {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw == null) return fallback;
-    return raw === "1";
-  } catch {
-    return fallback;
-  }
-}
-
-function readStoredNumber(key: string, fallback: number): number {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw == null) return fallback;
-    const text = String(raw).trim();
-    if (!text) return fallback;
-    const num = Number(text);
-    return Number.isFinite(num) && num > 0 ? num : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function clampStoredNumber(value: number, min: number, max: number, fallback: number): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return Math.max(min, Math.min(max, num));
-}
-
-function readStoredString<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
-  try {
-    const raw = String(localStorage.getItem(key) || "").trim() as T;
-    return allowed.includes(raw) ? raw : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-async function fileToDataUrl(file: File): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("图片读取失败"));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function loadImageElement(src: string): Promise<HTMLImageElement> {
-  return await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("图片加载失败"));
-    img.src = src;
-  });
-}
-
-async function buildAvatarDataUrl(file: File): Promise<string> {
-  const src = await fileToDataUrl(file);
-  const img = await loadImageElement(src);
-  const size = 256;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("图片处理失败");
-  const minSide = Math.min(img.width, img.height);
-  const sx = (img.width - minSide) / 2;
-  const sy = (img.height - minSide) / 2;
-  ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
-  return canvas.toDataURL("image/jpeg", 0.9);
-}
-
-async function buildBackgroundDataUrl(file: File): Promise<string> {
-  const src = await fileToDataUrl(file);
-  const img = await loadImageElement(src);
-  const maxWidth = 1280;
-  const scale = Math.min(1, maxWidth / img.width);
-  const width = Math.max(1, Math.round(img.width * scale));
-  const height = Math.max(1, Math.round(img.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("图片处理失败");
-  ctx.drawImage(img, 0, 0, width, height);
-  return canvas.toDataURL("image/jpeg", 0.82);
-}
-
-function formatTokenCountValue(value?: number): string {
-  return value ? `${value}tokens` : "";
-}
-
-function ChatHeaderStatus({ sending }: { sending: boolean }) {
-  if (!sending) {
-    return <div className="text-[11px] font-medium text-gray-900">在线</div>;
-  }
-  return (
-    <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#5F6C7B]" aria-label="正在输入中">
-      <span>正在输入中</span>
-      <span className="inline-flex items-end gap-1">
-        {[0, 1, 2].map((index) => (
-          <span
-            key={index}
-            className="inline-block h-[4px] w-[4px] rounded-full bg-[#5F6C7B] animate-pulse"
-            style={{
-              animationDelay: `${index * 0.18}s`,
-              animationDuration: "1s",
-            }}
-          />
-        ))}
-      </span>
-    </div>
-  );
 }
 
 function Shell({
@@ -1108,262 +985,6 @@ function Shell({
   );
 }
 
-
-function ChatsHome({
-  dailyWhisper,
-  dailyReport,
-  duAvatarImage,
-  benbenAvatarImage,
-  groupTitle,
-  privateWindowId,
-  groupWindowId,
-  onOpenDu,
-  onOpenGroup,
-  onOpenWenyou,
-  onRefreshTodayNote,
-  onRefreshDailyReport,
-  todayNoteRefreshing,
-  dailyRefreshing,
-}: {
-  dailyWhisper: string;
-  dailyReport: DailyReport | null;
-  duAvatarImage: string;
-  benbenAvatarImage: string;
-  groupTitle: string;
-  privateWindowId: string;
-  groupWindowId: string;
-  onOpenDu: () => void;
-  onOpenGroup: () => void;
-  onOpenWenyou: () => void;
-  onRefreshTodayNote: () => void;
-  onRefreshDailyReport: () => void;
-  todayNoteRefreshing: boolean;
-  dailyRefreshing: boolean;
-}) {
-  const groupDisplayTitle = getDisplayGroupChatTitle(groupTitle);
-  const [duPreview, setDuPreview] = useState("主会话");
-  const [duTime, setDuTime] = useState("主会话");
-  const [groupPreview, setGroupPreview] = useState(groupDisplayTitle);
-  const [groupTime, setGroupTime] = useState("群聊");
-  const [wenyouPreview, setWenyouPreview] = useState("独立文游会话");
-  const [wenyouTime, setWenyouTime] = useState("独立会话");
-
-  const reportSummary = dailyReport
-    ? `聊了 ${String(dailyReport.rounds || 0)} 轮 · ${Array.isArray(dailyReport.keywords) && dailyReport.keywords.length ? dailyReport.keywords.join(" / ") : "暂无关键词"}`
-    : "今天的日报还没生成。";
-
-  useEffect(() => {
-    setGroupPreview((prev) => (prev === DEFAULT_GROUP_CHAT_TITLE || !String(prev || "").trim() ? groupDisplayTitle : prev));
-  }, [groupDisplayTitle]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const did = await getOrCreatePanelDeviceId();
-        const mainWindowId = String(privateWindowId || "sumitalk-main").trim() || "sumitalk-main";
-        const mainLocalMessages = sanitizeHistoryMessages(await readLocalChatHistory(did, mainWindowId));
-        const legacyLocalMessages = mainWindowId === "sumitalk-main"
-          ? []
-          : sanitizeHistoryMessages(await readLocalChatHistory(did, "sumitalk-main"));
-        const localMessages = pickBetterHistory(mainLocalMessages, legacyLocalMessages, []);
-        if (!cancelled && localMessages.length) {
-          const pickedLocal = pickLatestDraftPreview(localMessages);
-          setDuPreview(pickedLocal.preview);
-          setDuTime(pickedLocal.time);
-        }
-        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
-        if (cancelled) return;
-        const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
-        const nextMessages = pickBetterHistory(remoteMessages, localMessages, []);
-        const picked = pickLatestDraftPreview(nextMessages);
-        setDuPreview(picked.preview);
-        setDuTime(picked.time);
-        if (nextMessages === remoteMessages && remoteMessages.length) {
-          await writeLocalChatHistory(did, mainWindowId, remoteMessages);
-        }
-
-        const groupLocalMessages = sanitizeHistoryMessages(await readLocalChatHistory(did, groupWindowId));
-        if (!cancelled && groupLocalMessages.length) {
-          const pickedLocalGroup = pickLatestDraftPreview(groupLocalMessages);
-          setGroupPreview(pickedLocalGroup.preview);
-          setGroupTime(pickedLocalGroup.time);
-        }
-        const groupHistory = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(groupWindowId));
-        if (cancelled) return;
-        const groupRemoteMessages = sanitizeHistoryMessages(Array.isArray(groupHistory?.messages) ? groupHistory.messages : []);
-        const groupMessages = pickBetterHistory(groupRemoteMessages, groupLocalMessages, []);
-        if (groupMessages.length) {
-          const pickedGroup = pickLatestDraftPreview(groupMessages);
-          setGroupPreview(pickedGroup.preview);
-          setGroupTime(pickedGroup.time);
-          if (groupMessages === groupRemoteMessages) {
-            await writeLocalChatHistory(did, groupWindowId, groupRemoteMessages);
-          }
-        }
-      } catch {}
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [groupWindowId, privateWindowId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const j = await apiJson<{ ok?: boolean; active?: boolean; session?: { instance_name?: string; startedAt?: string } | null }>("/miniapp-api/wenyou/status");
-        if (cancelled) return;
-        if (j?.ok && j?.active && j?.session) {
-          setWenyouPreview(`当前副本：${String(j.session.instance_name || "系统空间进行中")}`);
-          setWenyouTime(String(j.session.startedAt || "").trim() || "进行中");
-        }
-      } catch {}
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return (
-    <div
-      className="bg-white pb-8"
-      style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)", fontFamily: "'Microsoft YaHei', sans-serif" }}
-    >
-      <div className="px-4">
-        <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">会话</h1>
-        <div className="space-y-5">
-          <SummaryBlock
-            label="Today Note"
-            text={todayNoteRefreshing ? "正在刷新..." : dailyWhisper || "今天还没有新的 note。"}
-            onClick={onRefreshTodayNote}
-          />
-          <div className="ml-3 h-px w-full bg-gray-50" />
-          <SummaryBlock
-            label="日报摘要"
-            text={dailyRefreshing ? "正在刷新..." : reportSummary}
-            onClick={onRefreshDailyReport}
-          />
-        </div>
-      </div>
-
-      <div className="mt-6 h-2 bg-[#F8F9FA]" />
-
-      <div className="bg-white">
-        <ChatEntryRow
-          title="渡"
-          preview={duPreview}
-          time={duTime}
-          tone="du"
-          avatarImage={duAvatarImage}
-          onClick={onOpenDu}
-          pinned
-        />
-        <ChatEntryRow
-          title={groupDisplayTitle}
-          preview={groupPreview}
-          time={groupTime}
-          tone="group"
-          avatarImage={benbenAvatarImage}
-          onClick={onOpenGroup}
-        />
-        <ChatEntryRow
-          title="文游"
-          preview={wenyouPreview}
-          time={wenyouTime}
-          tone="wenyou"
-          onClick={onOpenWenyou}
-        />
-      </div>
-    </div>
-  );
-}
-
-function ChatEntryRow({
-  title,
-  preview,
-  time,
-  tone,
-  avatarImage,
-  pinned,
-  onClick,
-}: {
-  title: string;
-  preview: string;
-  time: string;
-  tone: "du" | "group" | "wenyou";
-  avatarImage?: string;
-  pinned?: boolean;
-  onClick: () => void;
-}) {
-  const palette = tone === "wenyou"
-    ? { shell: "bg-[#F8F0F4] text-[#704A5D]" }
-    : tone === "group"
-      ? { shell: "bg-[#FFF3D7] text-[#8A5A10]" }
-      : { shell: "bg-[#F0F4F8] text-[#4A5568]" };
-  return (
-    <button className="flex w-full items-center px-4 py-3.5 text-left transition-colors active:bg-gray-50" onClick={onClick}>
-      <div className="relative shrink-0">
-        {avatarImage ? (
-          <div className="h-[48px] w-[48px] overflow-hidden rounded-2xl shadow-sm">
-            <img src={avatarImage} alt={title} className="h-full w-full object-cover" />
-          </div>
-        ) : (
-          <div className={`flex h-[48px] w-[48px] items-center justify-center rounded-2xl text-[18px] font-medium shadow-sm ${palette.shell}`}>
-            {title.slice(0, 1)}
-          </div>
-        )}
-        {pinned ? (
-          <div className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-gray-100 bg-white shadow-sm">
-            <CornerDownIcon />
-          </div>
-        ) : null}
-      </div>
-      <div className={`ml-3 min-w-0 flex-1 pt-0.5 ${pinned ? "border-b border-gray-50 pb-3.5" : ""}`}>
-        <div className="mb-1 flex items-baseline justify-between">
-          <span className="text-[16px] font-medium text-gray-900">{title}</span>
-          <span className="text-[11px] font-normal text-gray-900">{time}</span>
-        </div>
-        <p className="truncate text-[13px] font-normal text-gray-600">{preview}</p>
-      </div>
-    </button>
-  );
-}
-
-function BottomNav({
-  current,
-  onChange,
-}: {
-  current: MainTab;
-  onChange: (tab: MainTab) => void;
-}) {
-  const items: Array<{ id: MainTab; label: string }> = [
-    { id: "chats", label: "会话" },
-    { id: "daily", label: "日常" },
-    { id: "study", label: "学习" },
-    { id: "tools", label: "工具" },
-    { id: "settings", label: "设置" },
-  ];
-  return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between border-t border-gray-100 bg-white/90 px-4 pb-[calc(env(safe-area-inset-bottom,20px))] pt-2 backdrop-blur-md">
-      <div className="mx-auto flex w-full max-w-xl items-center justify-between">
-        {items.map((item) => {
-          const active = current === item.id;
-          return (
-            <button
-              key={item.id}
-              className={`flex flex-col items-center p-2 transition-colors ${active ? "text-gray-900" : "text-gray-400 hover:text-gray-600"}`}
-              onClick={() => onChange(item.id)}
-            >
-              <BottomNavIcon id={item.id} />
-              <span className="text-[10px] font-medium tracking-wide">{item.label}</span>
-            </button>
-          );
-        })}
-      </div>
-    </nav>
-  );
-}
 
 function MainChatScreen({
   title,
@@ -2300,110 +1921,6 @@ function MainChatScreen({
         />
       ) : null}
     </div>
-  );
-}
-
-function PageCardRow({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
-  return (
-    <button
-      className="flex w-full items-center rounded-[22px] border border-gray-100/60 bg-white p-4 text-left shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)] transition-transform active:scale-[0.98]"
-      onClick={onClick}
-    >
-      <div className="mr-3 flex h-[38px] w-[38px] items-center justify-center rounded-full bg-gray-50 text-gray-600">
-        {icon}
-      </div>
-      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
-      <ChevronRightIcon />
-    </button>
-  );
-}
-
-function FloatingBallSettingRow({
-  enabled,
-  onToggle,
-}: {
-  enabled: boolean;
-  onToggle: (next: boolean) => void;
-}) {
-  return (
-    <div className="flex min-h-[60px] w-full items-center border-b border-gray-50 px-4 py-4">
-      <span className="mr-4 text-gray-400">
-        <svg className="h-5 w-5 stroke-[1.5]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <circle cx="12" cy="12" r="8" opacity="0.35" />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
-      </span>
-      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">显示悬浮球</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={enabled}
-        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${enabled ? "bg-gray-800" : "bg-gray-200"}`}
-        onClick={() => onToggle(!enabled)}
-      >
-        <span
-          className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-[22px]" : "translate-x-0"}`}
-        />
-      </button>
-    </div>
-  );
-}
-
-function SwitchSettingRow({
-  icon,
-  label,
-  enabled,
-  disabled = false,
-  onToggle,
-  last,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  enabled: boolean;
-  disabled?: boolean;
-  onToggle: (next: boolean) => void;
-  last?: boolean;
-}) {
-  return (
-    <div className={`flex min-h-[60px] w-full items-center px-4 py-4 ${last ? "" : "border-b border-gray-50"} ${disabled ? "opacity-60" : ""}`}>
-      <span className="mr-4 text-gray-400">{icon}</span>
-      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={enabled}
-        disabled={disabled}
-        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${enabled ? "bg-gray-800" : "bg-gray-200"} ${disabled ? "cursor-not-allowed" : ""}`}
-        onClick={() => onToggle(!enabled)}
-      >
-        <span
-          className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-[22px]" : "translate-x-0"}`}
-        />
-      </button>
-    </div>
-  );
-}
-
-function ListRow({
-  icon,
-  label,
-  onClick,
-  last,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick?: () => void;
-  last?: boolean;
-}) {
-  return (
-    <button
-      className={`flex min-h-[60px] w-full items-center px-4 py-4 text-left transition-colors active:bg-gray-50 ${last ? "" : "border-b border-gray-50"}`}
-      onClick={onClick}
-    >
-      <span className="mr-4 text-gray-400">{icon}</span>
-      <span className="flex-1 text-[15px] font-medium tracking-wide text-gray-800">{label}</span>
-      <ChevronRightIcon />
-    </button>
   );
 }
 

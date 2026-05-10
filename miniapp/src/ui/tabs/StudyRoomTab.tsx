@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { apiJson } from "../api";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch, apiJson } from "../api";
 import { useToast } from "../toast";
 
 type StudyRoomModule = {
@@ -47,6 +47,10 @@ type StudyRoomResponse = {
   error?: string;
 };
 
+type StudyRoomImportResponse = StudyRoomResponse & {
+  chars?: number;
+};
+
 type CodexTask = {
   id?: string;
   status?: "queued" | "running" | "done" | "error" | "cancelled";
@@ -64,7 +68,9 @@ type CodexTaskResponse = {
 const SOURCE_LABELS: Record<string, string> = {
   bilibili: "B站视频",
   web: "网页资料",
-  pdf: "PDF/文件",
+  pdf: "PDF",
+  word: "Word",
+  text: "文本文件",
   screenshot: "截图",
   fenbi: "粉笔错题",
   note: "手写备注",
@@ -171,9 +177,11 @@ async function waitForCodexTask(taskId: string): Promise<CodexTask> {
 
 export function StudyRoomTab() {
   const toast = useToast();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [data, setData] = useState<StudyRoomData>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [moduleFilter, setModuleFilter] = useState("all");
   const [sourceType, setSourceType] = useState("bilibili");
   const [moduleId, setModuleId] = useState("inbox");
@@ -251,6 +259,32 @@ export function StudyRoomTab() {
       toast(`保存失败：${e?.message || e}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function importFile(file: File | null) {
+    if (!file || uploading) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("module_id", moduleId);
+      if (title.trim()) form.append("title", title.trim());
+      const r = await apiFetch("/miniapp-api/studyroom/import", {
+        method: "POST",
+        body: form,
+      });
+      const j = (await r.json().catch(() => ({}))) as StudyRoomImportResponse;
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setData(j.data || {});
+      setTitle("");
+      setContent("");
+      setUrl("");
+      toast(`已导入 ${j.chars || 0} 字`);
+    } catch (e: any) {
+      toast(`导入失败：${e?.message || e}`);
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -384,6 +418,26 @@ export function StudyRoomTab() {
             {modules.map((module) => <option key={module.id} value={module.id}>{module.label}</option>)}
           </select>
         </div>
+        <input
+          ref={fileInputRef}
+          className="hidden"
+          type="file"
+          accept=".pdf,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+          onChange={(e) => {
+            const file = e.currentTarget.files?.[0] || null;
+            e.currentTarget.value = "";
+            void importFile(file);
+          }}
+        />
+        <button
+          type="button"
+          className="mt-2 w-full rounded-2xl border border-[#D8C4A5] bg-[#FFFCF5] px-4 py-3 text-[13px] font-semibold text-[#6B5538] transition active:scale-[0.99] disabled:opacity-60"
+          disabled={uploading}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          {uploading ? "正在导入..." : "上传 PDF / Word / TXT"}
+        </button>
+        <div className="mt-2 text-[11px] leading-5 text-stone-400">支持文字版 PDF、docx、txt、md；扫描版 PDF 先不做 OCR。</div>
         <input
           className="mt-2 w-full rounded-2xl bg-[#F7F0E3] px-3 py-2 text-[13px] outline-none placeholder:text-stone-400"
           placeholder="标题，例如：B站公文写作第一课"

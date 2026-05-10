@@ -4,6 +4,33 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
 
+export function formatTokenCountValue(value?: number): string {
+  return value ? `${value}tokens` : "";
+}
+
+export function ChatHeaderStatus({ sending }: { sending: boolean }) {
+  if (!sending) {
+    return <div className="text-[11px] font-medium text-gray-900">在线</div>;
+  }
+  return (
+    <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#5F6C7B]" aria-label="正在输入中">
+      <span>正在输入中</span>
+      <span className="inline-flex items-end gap-1">
+        {[0, 1, 2].map((index) => (
+          <span
+            key={index}
+            className="inline-block h-[4px] w-[4px] rounded-full bg-[#5F6C7B] animate-pulse"
+            style={{
+              animationDelay: `${index * 0.18}s`,
+              animationDuration: "1s",
+            }}
+          />
+        ))}
+      </span>
+    </div>
+  );
+}
+
 export function RichTextBlock({ content }: { content: string }) {
   return (
     <ReactMarkdown
