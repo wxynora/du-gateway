@@ -7,8 +7,7 @@ export default defineConfig(({ mode }) => ({
   base: mode === "android" ? "./" : "/miniapp/",
   build: {
     outDir: path.resolve(__dirname, "../miniapp_static"),
-    emptyOutDir: true,
+    emptyOutDir: false,
     assetsDir: "assets",
   },
 }));
-
