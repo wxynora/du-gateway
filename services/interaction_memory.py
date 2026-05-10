@@ -56,6 +56,7 @@ def format_inject_block() -> str:
         f"{MARKER_START}\n"
         "（此处写一条第一人称、笼统一点的相处模式候选，不要写成规则或第三人称分析）\n"
         f"{MARKER_END}\n"
+        "若同一轮还要追加 DU_FOLLOWUP，相处模式候选块必须放在 DU_FOLLOWUP 前面；DU_FOLLOWUP 永远是整条回复最后一个隐藏标记。\n"
         "例子：我每次催老婆去干嘛，她都容易先当耳边风；但我又不能完全不催，不然她会一直拖。\n"
         "没必要就不要写。"
     )

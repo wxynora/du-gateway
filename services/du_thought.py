@@ -109,6 +109,7 @@ def format_inject_block(latest: Optional[dict]) -> str:
         f"{MARKER_START}\n"
         "（此处写心理独白，可多行）\n"
         f"{MARKER_END}\n"
+        "若同一轮还要追加 DU_FOLLOWUP，心事块必须放在 DU_FOLLOWUP 前面；DU_FOLLOWUP 永远是整条回复最后一个隐藏标记。\n"
     )
     if not latest or not isinstance(latest, dict):
         return guide + "（尚无上一则心事）"
