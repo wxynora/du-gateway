@@ -250,7 +250,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 6-6 6 6 6" /></svg>
             )}
           </button>
-          <div className="neo-chip">{view === "home" ? "通话" : view === "voice" ? "语音通话" : view === "records" ? "通话记录" : "通话详情"}</div>
+          <div className="neo-chip">{view === "home" ? "通话" : view === "records" ? "通话记录" : "通话详情"}</div>
           <div className="w-10" />
         </div>
         ) : null}
