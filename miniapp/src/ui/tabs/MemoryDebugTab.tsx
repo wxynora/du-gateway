@@ -146,7 +146,7 @@ export function MemoryDebugTab() {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const j = await apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=10&core_limit=120&scope=${scope}`);
+      const j = await apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=10&core_limit=180&scope=${scope}`);
       if (!j?.ok) throw new Error(j?.error || "加载失败");
       setData(j);
     } catch (e: any) {
