@@ -79,6 +79,19 @@ def _extract_import_text(filename: str, content: bytes) -> tuple[str, str]:
     raise ValueError("暂只支持 pdf、docx、txt、md")
 
 
+def _with_auto_module(data: dict) -> dict:
+    payload = dict(data or {})
+    module_id = str(payload.get("module_id") or "").strip() or "inbox"
+    if module_id == "inbox":
+        payload["module_id"] = r2_store.guess_studyroom_module_id(
+            payload.get("title"),
+            payload.get("content"),
+            payload.get("url"),
+            payload.get("source_type"),
+        )
+    return payload
+
+
 def register_routes(bp) -> None:
     @bp.route("/studyroom", methods=["GET"])
     def miniapp_studyroom_get():
@@ -113,14 +126,16 @@ def register_routes(bp) -> None:
         title = str(request.form.get("title") or "").strip() or Path(filename).stem or "未命名资料"
         module_id = str(request.form.get("module_id") or "inbox").strip() or "inbox"
         item = r2_store.add_studyroom_item(
-            {
-                "title": title,
-                "content": text,
-                "module_id": module_id,
-                "source_type": source_type,
-                "status": "todo",
-                "note": f"导入文件：{filename}",
-            }
+            _with_auto_module(
+                {
+                    "title": title,
+                    "content": text,
+                    "module_id": module_id,
+                    "source_type": source_type,
+                    "status": "todo",
+                    "note": f"导入文件：{filename}",
+                }
+            )
         )
         if not item:
             return jsonify({"ok": False, "error": "导入后保存失败"}), 500
@@ -129,7 +144,7 @@ def register_routes(bp) -> None:
     @bp.route("/studyroom/items", methods=["POST"])
     def miniapp_studyroom_add_item():
         data = request.get_json(silent=True) or {}
-        item = r2_store.add_studyroom_item(data)
+        item = r2_store.add_studyroom_item(_with_auto_module(data))
         if not item:
             return jsonify({"ok": False, "error": "资料内容不能为空"}), 400
         return jsonify({"ok": True, "item": item, "data": r2_store.get_studyroom_data()})
@@ -183,6 +198,24 @@ def register_routes(bp) -> None:
             return jsonify({"ok": False, "error": "创建整理任务失败"}), 500
         r2_store.update_studyroom_item(item_id, {"status": "sorting"})
         return jsonify({"ok": True, "task": task, "data": r2_store.get_studyroom_data()})
+
+    @bp.route("/studyroom/items/<item_id>/auto-module", methods=["POST"])
+    def miniapp_studyroom_auto_module(item_id: str):
+        data = r2_store.get_studyroom_data()
+        items = data.get("items") or []
+        item = next((x for x in items if str((x or {}).get("id") or "") == str(item_id or "")), None)
+        if not item:
+            return jsonify({"ok": False, "error": "未找到资料"}), 404
+        module_id = r2_store.guess_studyroom_module_id(
+            item.get("title"),
+            item.get("content"),
+            item.get("url"),
+            item.get("source_type"),
+        )
+        updated = r2_store.update_studyroom_item(item_id, {"module_id": module_id})
+        if not updated:
+            return jsonify({"ok": False, "error": "自动归类失败"}), 500
+        return jsonify({"ok": True, "item": updated, "module_id": module_id, "data": r2_store.get_studyroom_data()})
 
     @bp.route("/studyroom/study-logs", methods=["POST"])
     def miniapp_studyroom_add_study_log():

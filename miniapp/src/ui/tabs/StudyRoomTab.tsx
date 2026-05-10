@@ -51,6 +51,10 @@ type StudyRoomImportResponse = StudyRoomResponse & {
   chars?: number;
 };
 
+type StudyRoomAutoModuleResponse = StudyRoomResponse & {
+  module_id?: string;
+};
+
 type CodexTask = {
   id?: string;
   status?: "queued" | "running" | "done" | "error" | "cancelled";
@@ -126,6 +130,11 @@ function statusLabel(value?: string): string {
   return STATUS_LABELS[String(value || "")] || "待整理";
 }
 
+function moduleLabel(value?: string, modules: StudyRoomModule[] = []): string {
+  const id = String(value || "inbox");
+  return modules.find((m) => m.id === id)?.label || "待整理";
+}
+
 function nextStatus(value?: string): "todo" | "sorting" | "done" {
   if (value === "todo") return "sorting";
   if (value === "sorting") return "done";
@@ -190,6 +199,7 @@ export function StudyRoomTab() {
   const [url, setUrl] = useState("");
   const [studyLog, setStudyLog] = useState("");
   const [sortingItemId, setSortingItemId] = useState("");
+  const [classifyingItemId, setClassifyingItemId] = useState("");
 
   const modules = useMemo(() => normalizeModules(data.modules), [data.modules]);
   const items = useMemo(() => normalizeItems(data.items), [data.items]);
@@ -254,7 +264,7 @@ export function StudyRoomTab() {
       setTitle("");
       setContent("");
       setUrl("");
-      toast("已放进 StudyRoom");
+      toast(`已放进 ${moduleLabel(j.item?.module_id, modules)}`);
     } catch (e: any) {
       toast(`保存失败：${e?.message || e}`);
     } finally {
@@ -280,7 +290,7 @@ export function StudyRoomTab() {
       setTitle("");
       setContent("");
       setUrl("");
-      toast(`已导入 ${j.chars || 0} 字`);
+      toast(`已导入 ${j.chars || 0} 字，归到 ${moduleLabel(j.item?.module_id, modules)}`);
     } catch (e: any) {
       toast(`导入失败：${e?.message || e}`);
     } finally {
@@ -357,6 +367,26 @@ export function StudyRoomTab() {
     }
   }
 
+  async function autoModuleItem(item: StudyRoomItem) {
+    const id = String(item.id || "");
+    if (!id || classifyingItemId) return;
+    setClassifyingItemId(id);
+    try {
+      const j = await apiJson<StudyRoomAutoModuleResponse>(`/miniapp-api/studyroom/items/${encodeURIComponent(id)}/auto-module`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (!j?.ok) throw new Error(j?.error || "归类失败");
+      setData(j.data || {});
+      toast(`已归到 ${moduleLabel(j.item?.module_id || j.module_id, j.data?.modules || modules)}`);
+    } catch (e: any) {
+      toast(`归类失败：${e?.message || e}`);
+    } finally {
+      setClassifyingItemId("");
+    }
+  }
+
   async function runCodexSort(item: StudyRoomItem) {
     const id = String(item.id || "");
     if (!id || sortingItemId) return;
@@ -407,8 +437,8 @@ export function StudyRoomTab() {
 
       <section className="mt-5 rounded-[28px] border border-[#EFE2CB] bg-white/85 p-4 shadow-[0_10px_28px_rgba(94,73,47,0.07)]">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-[16px] font-semibold">丢进 Inbox</h2>
-          <span className="text-[11px] text-stone-400">{loading ? "加载中" : "先收，后整理"}</span>
+          <h2 className="text-[16px] font-semibold">丢进 StudyRoom</h2>
+          <span className="text-[11px] text-stone-400">{loading ? "加载中" : "先收，自动归类"}</span>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <select className="rounded-2xl bg-[#F7F0E3] px-3 py-2 text-[13px] outline-none" value={sourceType} onChange={(e) => setSourceType(e.target.value)}>
@@ -437,7 +467,7 @@ export function StudyRoomTab() {
         >
           {uploading ? "正在导入..." : "上传 PDF / Word / TXT"}
         </button>
-        <div className="mt-2 text-[11px] leading-5 text-stone-400">支持文字版 PDF、docx、txt、md；扫描版 PDF 先不做 OCR。</div>
+        <div className="mt-2 text-[11px] leading-5 text-stone-400">支持文字版 PDF、docx、txt、md；选“待整理”时会自动猜模块，扫描版 PDF 先不做 OCR。</div>
         <input
           className="mt-2 w-full rounded-2xl bg-[#F7F0E3] px-3 py-2 text-[13px] outline-none placeholder:text-stone-400"
           placeholder="标题，例如：B站公文写作第一课"
@@ -497,6 +527,7 @@ export function StudyRoomTab() {
               <div>
                 <div className="mb-2 flex flex-wrap gap-1.5">
                   <span className="rounded-full bg-[#F4E8D4] px-2.5 py-1 text-[10px] text-[#765C35]">{sourceLabel(item.source_type)}</span>
+                  <span className="rounded-full bg-[#EEF0E8] px-2.5 py-1 text-[10px] text-[#697052]">{moduleLabel(item.module_id, modules)}</span>
                   <span className="rounded-full bg-[#E7EFE6] px-2.5 py-1 text-[10px] text-[#4F684F]">{statusLabel(item.status)}</span>
                 </div>
                 <h3 className="text-[15px] font-semibold leading-6">{item.title || "未命名资料"}</h3>
@@ -523,6 +554,13 @@ export function StudyRoomTab() {
                 {sortingItemId === String(item.id || "") ? "整理中..." : "让笨笨整理"}
               </button>
               <button className="rounded-full bg-[#3F392F] px-3 py-2 text-[12px] font-semibold text-white" onClick={() => copySortPrompt(item)}>复制整理请求</button>
+              <button
+                className="rounded-full bg-[#F7F0E3] px-3 py-2 text-[12px] text-[#6B5538] disabled:opacity-60"
+                disabled={Boolean(classifyingItemId)}
+                onClick={() => void autoModuleItem(item)}
+              >
+                {classifyingItemId === String(item.id || "") ? "归类中..." : "自动归类"}
+              </button>
               <button className="rounded-full bg-[#F7F0E3] px-3 py-2 text-[12px] text-[#6B5538]" onClick={() => updateItem(item, { module_id: "wrong_questions" })}>归到错题</button>
               <button className="rounded-full bg-[#FAE7E2] px-3 py-2 text-[12px] text-[#8A4A3B]" onClick={() => deleteItem(item)}>删除</button>
             </div>

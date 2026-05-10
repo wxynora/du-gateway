@@ -1874,10 +1874,50 @@ _STUDYROOM_MODULES = [
 _STUDYROOM_SOURCE_TYPES = {"bilibili", "web", "pdf", "word", "text", "screenshot", "fenbi", "note", "wrong_question"}
 _STUDYROOM_STATUSES = {"todo", "sorting", "done"}
 _STUDYROOM_MODULE_IDS = {m["id"] for m in _STUDYROOM_MODULES}
+_STUDYROOM_MODULE_KEYWORDS = [
+    ("wrong_questions", ("错题", "错因", "错选", "答案解析", "正确答案", "题干", "选项", "真题", "模拟题", "刷题", "本题")),
+    ("local", ("安徽", "铜陵", "枞阳", "枞阳县", "铜陵市", "安庆", "池州", "长江经济带")),
+    ("writing", ("公文", "通知", "请示", "报告", "函", "纪要", "简报", "材料写作", "应用文", "标题", "主送机关", "落款")),
+    ("computer", ("计算机", "office", "word", "excel", "wps", "信息技术", "网络安全", "文件管理", "快捷键", "数据库")),
+    ("law", ("法律", "法规", "宪法", "民法典", "行政法", "村民委员会组织法", "条例", "法治", "依法", "权利义务")),
+    ("party", ("党建", "党员", "党支部", "党组织", "党章", "党纪", "党课", "三会一课", "组织生活", "主题党日")),
+    ("rural", ("乡村振兴", "三农", "农业", "农村", "农民", "产业振兴", "耕地", "宅基地", "集体经济", "人居环境")),
+    ("governance", ("基层治理", "网格", "矛盾纠纷", "调解", "信访", "综治", "公共服务", "群众工作", "应急管理")),
+    ("village_affairs", ("村务", "村委会", "村干部", "村民代表", "村民会议", "民主决策", "财务公开", "四议两公开")),
+    ("current_affairs", ("时政", "中央", "国务院", "政府工作报告", "两会", "二十大", "全会", "政策", "会议精神", "热点")),
+]
 
 
 def _trim_study_text(value: Any, limit: int) -> str:
     return str(value or "").strip()[:limit]
+
+
+def guess_studyroom_module_id(title: Any = "", content: Any = "", url: Any = "", source_type: Any = "") -> str:
+    """根据资料文本做轻量关键词归类；不确定时保持 inbox。"""
+    source = _trim_study_text(source_type, 32)
+    if source in {"fenbi", "wrong_question"}:
+        return "wrong_questions"
+    text = "\n".join(
+        [
+            _trim_study_text(title, 300),
+            _trim_study_text(content, 5000),
+            _trim_study_text(url, 500),
+            source,
+        ]
+    ).lower()
+    if not text.strip():
+        return "inbox"
+    best_module = "inbox"
+    best_score = 0
+    for module_id, keywords in _STUDYROOM_MODULE_KEYWORDS:
+        score = 0
+        for keyword in keywords:
+            if keyword.lower() in text:
+                score += 2 if len(keyword) >= 3 else 1
+        if score > best_score:
+            best_module = module_id
+            best_score = score
+    return best_module if best_score >= 2 else "inbox"
 
 
 def _normalize_studyroom_item(raw: Any) -> Optional[dict]:
