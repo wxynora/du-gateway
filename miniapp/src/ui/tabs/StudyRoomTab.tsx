@@ -26,6 +26,21 @@ type StudyRoomLog = {
   created_at?: string;
 };
 
+type KnowledgeDebtItem = {
+  id: string;
+  text: string;
+  title: string;
+  module_id?: string;
+  updated_at?: string;
+};
+
+type ExamLane = {
+  id: string;
+  title: string;
+  subtitle: string;
+  modules: string[];
+};
+
 type StudyRoomData = {
   profile?: {
     target_name?: string;
@@ -86,6 +101,38 @@ const STATUS_LABELS: Record<string, string> = {
   sorting: "整理中",
   done: "已整理",
 };
+const EXAM_LANES: ExamLane[] = [
+  {
+    id: "objective",
+    title: "客观题底盘",
+    subtitle: "时政、党建、三农、法律、计算机这些先铺熟。",
+    modules: ["current_affairs", "party", "rural", "law", "computer"],
+  },
+  {
+    id: "case",
+    title: "基层案例",
+    subtitle: "群众工作、矛盾调解、村务处理，练答题框架。",
+    modules: ["governance", "village_affairs", "rural"],
+  },
+  {
+    id: "writing",
+    title: "公文写作",
+    subtitle: "通知、请示、报告、简报，重点练格式和语气。",
+    modules: ["writing"],
+  },
+  {
+    id: "local",
+    title: "本地县情",
+    subtitle: "安徽、铜陵、枞阳相关政策和县情做速记。",
+    modules: ["local"],
+  },
+  {
+    id: "wrong_questions",
+    title: "错题回炉",
+    subtitle: "错因、同类题、知识债，形成闭环。",
+    modules: ["wrong_questions"],
+  },
+];
 const CODEX_SORT_POLL_MS = 2200;
 const CODEX_SORT_TIMEOUT_MS = 8 * 60 * 1000;
 
@@ -141,6 +188,45 @@ function nextStatus(value?: string): "todo" | "sorting" | "done" {
   return "todo";
 }
 
+function cleanDebtLine(line: string): string {
+  return String(line || "")
+    .replace(/^\s*[-*•]\s*/, "")
+    .replace(/^\s*\d+[.、)]\s*/, "")
+    .replace(/^\s*\[[ xX]\]\s*/, "")
+    .trim();
+}
+
+function extractKnowledgeDebts(item: StudyRoomItem): KnowledgeDebtItem[] {
+  const note = String(item.note || "");
+  if (!note.trim()) return [];
+  const lines = note.split(/\r?\n/);
+  const out: KnowledgeDebtItem[] = [];
+  let active = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^(#{1,6}\s*)?知识债(清单)?\s*[:：]?\s*$/.test(line)) {
+      active = true;
+      continue;
+    }
+    if (active && /^(#{1,6}\s*)?(考点笔记|高频问法|易错点|背诵卡|卡点预测|练习题)\s*[:：]?\s*$/.test(line)) {
+      break;
+    }
+    if (!active) continue;
+    const text = cleanDebtLine(line);
+    if (!text || /^(无|暂无|没有|无明显)/.test(text)) continue;
+    out.push({
+      id: `${item.id || item.title || "debt"}-${out.length}`,
+      text,
+      title: String(item.title || "未命名资料"),
+      module_id: item.module_id,
+      updated_at: item.updated_at || item.created_at,
+    });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
 function buildSortPrompt(item: StudyRoomItem, modules: StudyRoomModule[], profile?: StudyRoomData["profile"]): string {
   const moduleLabel = modules.find((m) => m.id === item.module_id)?.label || "待整理";
   return [
@@ -154,12 +240,14 @@ function buildSortPrompt(item: StudyRoomItem, modules: StudyRoomModule[], profil
     "",
     "请输出：",
     "1. 考点笔记",
-    "2. 高频问法",
-    "3. 易错点",
-    "4. 背诵卡",
-    "5. 卡点预测",
-    "6. 知识债清单",
-    "7. 5道练习题",
+    "2. 题型落点",
+    "3. 高频问法",
+    "4. 易错点",
+    "5. 应试用法",
+    "6. 背诵卡",
+    "7. 卡点预测",
+    "8. 知识债清单",
+    "9. 5道练习题",
     "",
     "资料内容：",
     item.content || item.note || item.url || "",
@@ -221,6 +309,35 @@ export function StudyRoomTab() {
     if (moduleFilter === "all") return list;
     return list.filter((item) => String(item.module_id || "inbox") === moduleFilter);
   }, [items, moduleFilter]);
+
+  const knowledgeDebts = useMemo(() => {
+    const seen = new Set<string>();
+    const debts: KnowledgeDebtItem[] = [];
+    const sorted = items.slice().sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")));
+    for (const item of sorted) {
+      for (const debt of extractKnowledgeDebts(item)) {
+        const key = debt.text.replace(/\s+/g, "");
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        debts.push(debt);
+        if (debts.length >= 8) return debts;
+      }
+    }
+    return debts;
+  }, [items]);
+
+  const examLaneStats = useMemo(() => {
+    return EXAM_LANES.map((lane) => {
+      const laneItems = items.filter((item) => lane.modules.includes(String(item.module_id || "inbox")));
+      const laneDebts = knowledgeDebts.filter((debt) => lane.modules.includes(String(debt.module_id || "inbox")));
+      return {
+        ...lane,
+        itemCount: laneItems.length,
+        doneCount: laneItems.filter((item) => item.status === "done").length,
+        debtCount: laneDebts.length,
+      };
+    });
+  }, [items, knowledgeDebts]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -434,6 +551,66 @@ export function StudyRoomTab() {
             <span className="rounded-full bg-white/55 px-3 py-1.5">{items.length} 份资料</span>
             <span className="rounded-full bg-white/55 px-3 py-1.5">{logs.length} 条记录</span>
           </div>
+        </div>
+      </section>
+
+      <section className="mt-5 overflow-hidden rounded-[30px] bg-[#3F392F] p-4 text-[#FFF8EA] shadow-[0_18px_40px_rgba(63,57,47,0.18)]">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-semibold tracking-[0.22em] text-[#D9C19A]">KNOWLEDGE DEBT</div>
+            <h2 className="mt-1 text-[17px] font-semibold">知识债清单</h2>
+          </div>
+          <span className="rounded-full bg-[#FFF8EA]/12 px-3 py-1.5 text-[11px] text-[#E8D6B8]">{knowledgeDebts.length || "未生成"} 条</span>
+        </div>
+        {knowledgeDebts.length ? (
+          <div className="mt-4 space-y-2">
+            {knowledgeDebts.slice(0, 5).map((debt) => (
+              <div key={debt.id} className="rounded-2xl bg-[#FFF8EA]/10 px-3 py-3">
+                <div className="mb-1 flex flex-wrap gap-1.5 text-[10px] text-[#D9C19A]">
+                  <span>{moduleLabel(debt.module_id, modules)}</span>
+                  <span>·</span>
+                  <span className="line-clamp-1">{debt.title}</span>
+                </div>
+                <p className="text-[13px] leading-6 text-[#FFF8EA]">{debt.text}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-4 rounded-2xl bg-[#FFF8EA]/10 px-3 py-3 text-[13px] leading-6 text-[#E8D6B8]">
+            让笨笨整理几份资料后，这里会自动收集“还没补齐的坑”。
+          </p>
+        )}
+      </section>
+
+      <section className="mt-5 rounded-[30px] border border-[#EFE2CB] bg-white/90 p-4 shadow-[0_12px_30px_rgba(94,73,47,0.08)]">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-semibold tracking-[0.22em] text-[#8C6A3D]">EXAM ROUTE</div>
+            <h2 className="mt-1 text-[17px] font-semibold">备考路线</h2>
+          </div>
+          <span className="rounded-full bg-[#F7F0E3] px-3 py-1.5 text-[11px] text-[#6B5538]">按能力拆</span>
+        </div>
+        <div className="mt-4 space-y-2">
+          {examLaneStats.map((lane) => (
+            <div key={lane.id} className="rounded-2xl bg-[#FAF5EA] px-3 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[13px] font-semibold text-[#3F392F]">{lane.title}</div>
+                  <p className="mt-1 text-[11px] leading-5 text-[#7A6648]">{lane.subtitle}</p>
+                </div>
+                <div className="shrink-0 text-right text-[11px] leading-5 text-[#8C6A3D]">
+                  <div>{lane.itemCount} 份</div>
+                  <div>{lane.debtCount} 债</div>
+                </div>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#E9D8BC]">
+                <div
+                  className="h-full rounded-full bg-[#C89B5E]"
+                  style={{ width: `${lane.itemCount ? Math.max(12, Math.min(100, Math.round((lane.doneCount / lane.itemCount) * 100))) : 0}%` }}
+                />
+              </div>
+            </div>
+          ))}
         </div>
       </section>
 
