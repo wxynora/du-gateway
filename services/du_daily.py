@@ -741,8 +741,10 @@ def request_gateway_maintenance(window_id: str, trigger: dict) -> bool:
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": str(window_id or "").strip(),
+        "X-DU-GATEWAY-WAKEUP": "1",
         "X-DU-DAILY-MAINTAIN": "1",
         "X-DU-DAILY-TRIGGER-KIND": str((trigger or {}).get("kind") or "maintenance").strip() or "maintenance",
+        "X-Skip-Dynamic-Memory": "1",
         "X-Force-Last4": "1",
     }
     topic_key = str((trigger or {}).get("topic_key") or "").strip()

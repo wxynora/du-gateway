@@ -390,6 +390,20 @@ def _is_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _is_gateway_wakeup_request() -> bool:
+    """后端自行唤醒渡的请求：保留完整静态/短程上下文，但不做动态记忆召回。"""
+    truthy = ("1", "true", "yes")
+    for name in (
+        "X-DU-GATEWAY-WAKEUP",
+        "X-DU-FOLLOWUP-GEN",
+        "X-DU-DAILY-MAINTAIN",
+        "X-DU-PROACTIVE-DECISION",
+    ):
+        if (request.headers.get(name) or "").strip().lower() in truthy:
+            return True
+    return False
+
+
 def _should_archive_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
 
@@ -2190,7 +2204,10 @@ def chat_completions():
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
-    skip_dynamic_memory = (request.headers.get("X-Skip-Dynamic-Memory") or "").strip().lower() in ("1", "true", "yes")
+    skip_dynamic_memory = (
+        (request.headers.get("X-Skip-Dynamic-Memory") or "").strip().lower() in ("1", "true", "yes")
+        or _is_gateway_wakeup_request()
+    )
     du_daily_maintenance = _is_du_daily_maintenance_request()
     du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
     if not slim_voice_call:

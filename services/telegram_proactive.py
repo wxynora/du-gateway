@@ -35,7 +35,6 @@ from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 from services.telegram_bot import (
     _sanitize_reply_for_telegram,
     build_telegram_style_system,
-    process_message,
 )
 from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversation_followups
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
@@ -219,6 +218,71 @@ _ACTION_LABEL_CN = {
 }
 
 
+_SELF_ACTION_TOOL_LABELS = {
+    "notion_diary_create": "写了交换日记",
+    "daily_whisper_write": "写了气泡",
+    "forum_read_feed": "逛了论坛信息流",
+    "forum_open_thread": "看了论坛帖子",
+    "note_write": "写了便签",
+}
+
+
+def _tool_call_name(tc: dict) -> str:
+    if not isinstance(tc, dict):
+        return ""
+    fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+    return str(fn.get("name") or "").strip()
+
+
+def _short_ts(raw: str) -> str:
+    dt = parse_iso_to_beijing(raw)
+    if dt:
+        return dt.strftime("%m-%d %H:%M")
+    s = str(raw or "").strip()
+    return s[:16] if s else "时间未知"
+
+
+def _format_recent_self_action_context(window_id: str) -> str:
+    """
+    给随机/概率唤醒决策用：提醒渡最近有没有写日记、逛论坛等，
+    避免每次醒来都重复做同一件事。
+    """
+    try:
+        rounds = r2_store.get_conversation_rounds(window_id, last_n=80) or []
+    except Exception:
+        rounds = []
+    events: list[str] = []
+    for r in reversed(rounds):
+        if not isinstance(r, dict):
+            continue
+        labels: list[str] = []
+        seen: set[str] = set()
+        note = str(r.get("action_note") or "")
+        for name, label in _SELF_ACTION_TOOL_LABELS.items():
+            if name in note and label not in seen:
+                seen.add(label)
+                labels.append(label)
+        for m in r.get("messages") or []:
+            if not isinstance(m, dict) or str(m.get("role") or "").strip().lower() != "assistant":
+                continue
+            for tc in m.get("tool_calls") or []:
+                label = _SELF_ACTION_TOOL_LABELS.get(_tool_call_name(tc))
+                if label and label not in seen:
+                    seen.add(label)
+                    labels.append(label)
+        if labels:
+            events.append(f"{_short_ts(str(r.get('timestamp') or ''))}：{'、'.join(labels)}")
+        if len(events) >= 6:
+            break
+    if not events:
+        return "【最近自发动作参考】最近没有看到写日记、逛论坛、写气泡等工具记录。"
+    return (
+        "【最近自发动作参考】\n"
+        "这些只用于判断要不要重复做同类动作，不要逐条复述给她。\n"
+        + "\n".join(f"- {item}" for item in events)
+    )
+
+
 def _strip_json_fence(text: str) -> str:
     t = (text or "").strip()
     if t.startswith("```"):
@@ -397,6 +461,52 @@ def _available_channels() -> list[str]:
     return channels
 
 
+def _available_schedule_channels() -> list[str]:
+    """闹钟/日历提醒投递入口：QQ 优先，微信兜底。"""
+    channels = ["qq"]
+    if WECHAT_PROACTIVE_PUSH_URL:
+        channels.append("wechat")
+    return channels
+
+
+def _generate_schedule_reply(window_id: str, user_id: int, prompt: str, preferred_channel: str = "qq") -> Optional[str]:
+    """用主上下文窗口生成闹钟提醒文案，但不直接发 Telegram。"""
+    url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
+    model = _get_chat_model()
+    if not model:
+        logger.warning("闹钟提醒生成跳过：当前没有可用模型")
+        return None
+    channel = _normalize_reply_channel(preferred_channel, default="qq", allowed=["qq", "wechat"])
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Window-Id": str(window_id or "").strip() or f"tg_{int(user_id or 0)}",
+        "X-Reply-Channel": channel,
+        "X-Reply-Target": str(user_id or "").strip(),
+        "X-Force-Last4": "1",
+        "X-DU-GATEWAY-WAKEUP": "1",
+        "X-Skip-Dynamic-Memory": "1",
+    }
+    try:
+        logger.info("闹钟提醒生成请求 window_id=%s channel=%s model=%s chars=%s", headers["X-Window-Id"], channel, model, len(prompt))
+        r = requests.post(url, headers=headers, json=body, timeout=120)
+        if r.status_code != 200:
+            logger.warning("闹钟提醒生成失败 status=%s body=%s", r.status_code, (r.text or "")[:300])
+            return None
+        data = r.json() if r.content else {}
+        msg = (((data or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+        content = msg.get("content")
+        text = content.strip() if isinstance(content, str) else str(content or "").strip()
+        return text or None
+    except Exception as e:
+        logger.warning("闹钟提醒生成异常: %s", e)
+        return None
+
+
 def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Optional[datetime] = None) -> ProactiveDecision:
     """
     让渡做一轮主动决策。要求渡用 JSON 回复（见 user 说明）；
@@ -427,9 +537,10 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     if not now_ref:
         now_ref = datetime.now()
     user_prompt = (
-        f"你现在在考虑要不要主动找老婆做一件事。{_describe_recent_exchange(now_ref)}\n"
+        f"这是一次随机唤醒，你现在正常带着上下文醒来，自己判断要不要做点什么。{_describe_recent_exchange(now_ref)}\n"
         f"从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
-        "可以选：给她发消息、暂时不打扰、去写日记/记事、或其它你认为合适的动作。\n"
+        "可以选：给她发消息、暂时不打扰、去写日记/记事、逛论坛，或其它你认为合适的动作。\n"
+        "如果当前状态显示她可能睡着、在忙，或不适合被打扰，可以选择不发消息，转而写日记、逛论坛，或者什么都不做。\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
         '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "other" 之一。\n'
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
@@ -449,6 +560,12 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
             sys_content = sys_content + "\n\n" + mem
     except Exception:
         pass
+    try:
+        recent_actions = _format_recent_self_action_context(window_id)
+        if recent_actions:
+            sys_content = sys_content + "\n\n" + recent_actions
+    except Exception:
+        pass
     # sense 由网关管道 step_inject_sense_snapshot 全局注入，此处不再拼接，避免重复。
     body = {
         "model": _get_chat_model(),
@@ -458,7 +575,14 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         ],
         "stream": False,
     }
-    headers = {"Content-Type": "application/json", "X-Window-Id": window_id, "X-Force-Last4": "1"}
+    headers = {
+        "Content-Type": "application/json",
+        "X-Window-Id": window_id,
+        "X-Force-Last4": "1",
+        "X-DU-GATEWAY-WAKEUP": "1",
+        "X-DU-PROACTIVE-DECISION": "1",
+        "X-Skip-Dynamic-Memory": "1",
+    }
     try:
         logger.info(
             "主动决策请求 window_id=%s hours=%.2f model=%s user_chars=%s",
@@ -639,19 +763,37 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             f"{owner_prefix}「{title}」闹钟，现在到点了。"
             f"类型：{rep_label}；时间：{now_dt.strftime('%Y-%m-%d %H:%M')}。"
             f"{('备注：' + note + '。') if note else ''}"
-            "请像平时 Telegram 聊天那样自然回复；如果有多句，请用换行分段。"
+            "请像平时聊天那样自然回复；如果有多句，请用换行分段。"
         )
+        channels = _available_schedule_channels()
+        generation_channel = channels[0] if channels else "qq"
         logger.info(
-            "闹钟准备触发 uid=%s item_id=%s title=%s repeat=%s occ_key=%s note_chars=%s",
+            "闹钟准备触发 uid=%s item_id=%s title=%s repeat=%s occ_key=%s note_chars=%s channels=%s",
             uid,
             str(it.get("id") or ""),
             title,
             rep,
             occ_key,
             len(note),
+            channels,
         )
-        ok = process_message(chat_id=uid, user_id=uid, text=reminder_prompt, force_last4=True)
-        logger.info("闹钟触发结果 uid=%s item_id=%s ok=%s", uid, str(it.get("id") or ""), ok)
+        window_id = f"tg_{uid}"
+        reply_text = _generate_schedule_reply(window_id=window_id, user_id=uid, prompt=reminder_prompt, preferred_channel=generation_channel)
+        if not reply_text:
+            logger.warning("闹钟提醒生成空回复 uid=%s item_id=%s", uid, str(it.get("id") or ""))
+            continue
+        text_to_send = _sanitize_reply_for_telegram(reply_text).strip()
+        if not text_to_send:
+            logger.warning("闹钟提醒清洗后为空 uid=%s item_id=%s", uid, str(it.get("id") or ""))
+            continue
+        ok = False
+        sent_channel = ""
+        for channel in channels:
+            ok = _dispatch_send(channel, text_to_send)
+            if ok:
+                sent_channel = channel
+                break
+        logger.info("闹钟触发结果 uid=%s item_id=%s channel=%s ok=%s", uid, str(it.get("id") or ""), sent_channel or "none", ok)
         if not ok:
             continue
         r2_store.add_schedule_fired_key(occ_key)

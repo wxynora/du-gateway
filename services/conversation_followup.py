@@ -413,7 +413,9 @@ def _call_gateway_followup(window_id: str, channel: str, reason: str, chain_id: 
         "Content-Type": "application/json",
         "X-Window-Id": str(window_id or "").strip(),
         "X-Reply-Channel": _normalize_reply_channel(channel, default="sumitalk", allow_tg=True),
+        "X-DU-GATEWAY-WAKEUP": "1",
         "X-DU-FOLLOWUP-GEN": "1",
+        "X-Skip-Dynamic-Memory": "1",
         "X-DU-FOLLOWUP-CHAIN-ID": str(chain_id or "").strip(),
         "X-DU-FOLLOWUP-COUNT": str(int(followup_index or 0)),
         "X-DU-FOLLOWUP-ROOT-AT": str(root_created_at or "").strip(),
@@ -545,7 +547,9 @@ def _send_wakeup_event(
         "X-Window-Id": context_window_id,
         "X-Reply-Channel": generation_channel,
         "X-Reply-Target": str(preferred_target or target or "").strip(),
+        "X-DU-GATEWAY-WAKEUP": "1",
         "X-DU-FOLLOWUP-GEN": "1",
+        "X-Skip-Dynamic-Memory": "1",
         "X-Force-Last4": "1",
     }
     if archive:
