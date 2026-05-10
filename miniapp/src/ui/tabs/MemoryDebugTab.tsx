@@ -141,6 +141,7 @@ export function MemoryDebugTab() {
   const [data, setData] = useState<MemoryDebugResp | null>(null);
   const [scope, setScope] = useState<"all" | "target">("all");
   const [tab, setTab] = useState<"summary" | "dynamic" | "core">("summary");
+  const [deletingCoreId, setDeletingCoreId] = useState("");
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -197,6 +198,30 @@ export function MemoryDebugTab() {
       toast(`整理失败：${e?.message || e}`);
     } finally {
       setMaintenanceLoading(false);
+    }
+  }
+
+  async function deleteCoreCacheItem(item: CoreCacheEntry) {
+    const entryId = String(item.id || "").trim();
+    if (!entryId) {
+      toast("这条核心缓存没有可删除的 id");
+      return;
+    }
+    if (deletingCoreId) return;
+    const ok = window.confirm("删除这条核心缓存待审记忆？");
+    if (!ok) return;
+    setDeletingCoreId(entryId);
+    try {
+      const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/core_cache/${encodeURIComponent(entryId)}`, {
+        method: "DELETE",
+      });
+      if (!j?.ok) throw new Error(j?.error || "删除失败");
+      toast("已删除核心缓存");
+      await reload();
+    } catch (e: any) {
+      toast(`删除失败：${e?.message || e}`);
+    } finally {
+      setDeletingCoreId("");
     }
   }
 
@@ -557,10 +582,31 @@ export function MemoryDebugTab() {
                     {item.scene_type ? <span className="rounded bg-gray-50 px-2 py-1">{item.scene_type}</span> : null}
                     {item.target_type ? <span className="rounded bg-gray-50 px-2 py-1">{item.target_type}</span> : null}
                   </div>
-                  <div className="break-all text-[10px] leading-relaxed text-gray-300">
-                    id: {String(item.memory_id || item.id || "")}
-                    <br />
-                    promoted_at: {String(item.promoted_at || "")}
+                  <div className="flex items-end justify-between gap-3">
+                    <div className="min-w-0 break-all text-[10px] leading-relaxed text-gray-300">
+                      id: {String(item.memory_id || item.id || "")}
+                      <br />
+                      promoted_at: {String(item.promoted_at || "")}
+                    </div>
+                    <button
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-red-100 bg-red-50 text-red-400 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        deleteCoreCacheItem(item);
+                      }}
+                      disabled={deletingCoreId === String(item.id || "")}
+                      title="删除核心缓存"
+                      aria-label="删除核心缓存"
+                    >
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M3 6h18" />
+                        <path d="M8 6V4h8v2" />
+                        <path d="M19 6l-1 14H6L5 6" />
+                        <path d="M10 11v5" />
+                        <path d="M14 11v5" />
+                      </svg>
+                    </button>
                   </div>
                 </div>
               </details>
