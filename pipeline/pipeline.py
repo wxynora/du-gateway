@@ -1796,7 +1796,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         mem = t[2]
         mid = str(mem.get("id") or "").strip()
         citation_label = ""
-        if mid and not mid.startswith("core::"):
+        if mid:
             citation_label = str(len(citation_map) + 1)
         citation_prefix = f"[memory {citation_label}] " if citation_label else ""
         line = f"- {citation_prefix}[{_fuzzy_time_label(mem)}] {mem.get('content', '').strip()}"
@@ -1857,10 +1857,10 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     citation_hint = ""
     if citation_map:
         citation_hint = (
-            "\n如果回复实际参考了某条动态记忆，请在相关句尾写对应标记（如 [memory 1]）；"
+            "\n如果回复实际参考了某条动态记忆或核心缓存记忆，请在相关句尾写对应标记（如 [memory 1]）；"
             "没有参考就不要写。引用标记只供网关回写，会被剥离。"
         )
-    inject = "\n\n听了老婆的话，我想起来了一些之前的事——" + citation_hint + "\n" + "\n".join(lines) + "\n【以上为动态记忆】"
+    inject = "\n\n听了老婆的话，我想起来了一些之前的事——" + citation_hint + "\n" + "\n".join(lines) + "\n【以上为可召回记忆】"
     body = _append_to_dynamic_system(body, inject)
     if citation_map:
         body[DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY] = citation_map

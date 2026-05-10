@@ -11,6 +11,19 @@ type RecallScore = {
   sem_ctx?: number;
 };
 
+type ReferencedMemory = {
+  id?: string;
+  entry_id?: string;
+  source?: string;
+  content?: string;
+  tag?: string;
+  promoted_by?: string;
+  promoted_at?: string;
+  importance?: number;
+  mention_count?: number;
+  last_mentioned?: string;
+};
+
 type RecallEvent = {
   timestamp?: string;
   window_id?: string;
@@ -38,6 +51,23 @@ type RecallEvent = {
   >;
   recalled_count?: number;
   scores?: RecallScore[];
+  referenced_memory_ids?: string[];
+  referenced_memories?: ReferencedMemory[];
+  assistant_preview?: string;
+};
+
+type CoreCacheEntry = {
+  id?: string;
+  memory_id?: string;
+  content?: string;
+  tag?: string;
+  promoted_by?: string;
+  promoted_at?: string;
+  importance?: number;
+  mention_count?: number;
+  emotion_label?: string;
+  scene_type?: string;
+  target_type?: string;
 };
 
 type MemoryDebugResp = {
@@ -48,10 +78,18 @@ type MemoryDebugResp = {
   summary_exists?: boolean;
   recalls?: RecallEvent[];
   search_memory_events?: RecallEvent[];
+  citation_events?: RecallEvent[];
   count?: number;
   total_count?: number;
   search_count?: number;
   search_total_count?: number;
+  citation_count?: number;
+  citation_total_count?: number;
+  core_cache?: {
+    count?: number;
+    visible_count?: number;
+    items?: CoreCacheEntry[];
+  };
   dynamic_stats?: {
     memory_count?: number;
     memory_tags?: string[];
@@ -102,12 +140,12 @@ export function MemoryDebugTab() {
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
   const [data, setData] = useState<MemoryDebugResp | null>(null);
   const [scope, setScope] = useState<"all" | "target">("all");
-  const [tab, setTab] = useState<"summary" | "dynamic">("summary");
+  const [tab, setTab] = useState<"summary" | "dynamic" | "core">("summary");
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const j = await apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=10&scope=${scope}`);
+      const j = await apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=10&core_limit=120&scope=${scope}`);
       if (!j?.ok) throw new Error(j?.error || "加载失败");
       setData(j);
     } catch (e: any) {
@@ -140,6 +178,8 @@ export function MemoryDebugTab() {
 
   const recalls = Array.isArray(data?.recalls) ? data!.recalls! : [];
   const searchEvents = Array.isArray(data?.search_memory_events) ? data!.search_memory_events! : [];
+  const citationEvents = Array.isArray(data?.citation_events) ? data!.citation_events! : [];
+  const coreItems = Array.isArray(data?.core_cache?.items) ? data!.core_cache!.items! : [];
   const maintenance = data?.dynamic_stats?.maintenance_report;
 
   async function runMaintenance() {
@@ -235,6 +275,12 @@ export function MemoryDebugTab() {
           >
             动态记忆
           </button>
+          <button
+            className={`pb-2 text-[15px] font-bold transition-all ${tab === "core" ? "tab-active" : "text-gray-300"}`}
+            onClick={() => setTab("core")}
+          >
+            核心缓存
+          </button>
         </div>
       </div>
 
@@ -267,7 +313,7 @@ export function MemoryDebugTab() {
               </div>
             ) : null}
           </div>
-        ) : (
+        ) : tab === "dynamic" ? (
           <div className="space-y-6">
             <details className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft" open>
               <summary className="flex cursor-pointer list-none items-center justify-between">
@@ -334,6 +380,50 @@ export function MemoryDebugTab() {
                   </div>
                 </div>
               </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-baseline space-x-2">
+                  <h2 className="text-[11px] font-bold uppercase tracking-widest text-gray-400">渡实际引用</h2>
+                  <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-500">
+                    {String(data?.citation_count ?? citationEvents.length)} / {String(data?.citation_total_count ?? citationEvents.length)}
+                  </span>
+                </div>
+              </div>
+              {citationEvents.map((it, idx) => (
+                <details key={`${String(it.timestamp || "")}-citation-${idx}`} className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft" open={idx === 0}>
+                  <summary className="cursor-pointer list-none">
+                    <div className="mb-2 flex items-start justify-between">
+                      <span className="status-badge bg-emerald-50 text-emerald-500">citation</span>
+                      <span className="text-[11px] text-gray-300">{String(it.timestamp || "")}</span>
+                    </div>
+                    <h3 className="text-[15px] font-bold text-gray-800">{firstLinePreview(String(it.assistant_preview || ""), 42)}</h3>
+                  </summary>
+                  <div className="mt-4 space-y-3 border-t border-gray-50 pt-4">
+                    {(it.referenced_memories || []).map((m, mi) => (
+                      <div key={`${String(m.id || "")}-${mi}`} className="rounded-2xl bg-gray-50 p-4">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className={`status-badge ${m.source === "core_cache" ? "bg-purple-50 text-purple-500" : "bg-blue-50 text-blue-500"}`}>
+                            {m.source === "core_cache" ? "core" : "dynamic"}
+                          </span>
+                          <span className="truncate text-[10px] text-gray-300">{String(m.id || "")}</span>
+                        </div>
+                        <p className="text-[12px] leading-relaxed text-gray-600 break-words">{String(m.content || "(空)")}</p>
+                        <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-gray-400">
+                          {m.tag ? <span className="rounded bg-white px-2 py-1">{m.tag}</span> : null}
+                          <span className="rounded bg-white px-2 py-1">imp {String(m.importance ?? 0)}</span>
+                          <span className="rounded bg-white px-2 py-1">mention {String(m.mention_count ?? 0)}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {!(it.referenced_memories || []).length ? (
+                      <p className="py-2 text-center text-[12px] italic text-gray-400">这次只记录到了引用 id，没取到详情</p>
+                    ) : null}
+                  </div>
+                </details>
+              ))}
+              {!citationEvents.length ? <div className="px-1 py-4 text-[12px] text-gray-300">（暂无渡实际引用记录）</div> : null}
             </div>
 
             <div className="space-y-4">
@@ -414,6 +504,68 @@ export function MemoryDebugTab() {
               ))}
               {!searchEvents.length ? <div className="px-1 py-4 text-[12px] text-gray-300">（暂无 search_memory 记录）</div> : null}
             </div>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <div className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft">
+              <div className="mb-4 flex items-start justify-between">
+                <div>
+                  <h3 className="text-[14px] font-bold text-gray-800">核心缓存待审</h3>
+                  <p className="mt-1 text-[12px] text-gray-400">按提拔时间倒序显示</p>
+                </div>
+                <span className="status-badge bg-purple-50 text-purple-500">
+                  {String(data?.core_cache?.visible_count ?? coreItems.length)} / {String(data?.core_cache?.count ?? coreItems.length)}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-2xl bg-gray-50 p-3">
+                  <p className="text-[16px] font-bold text-gray-800">{String(data?.core_cache?.count ?? 0)}</p>
+                  <p className="mt-1 text-[10px] text-gray-400">Total</p>
+                </div>
+                <div className="rounded-2xl bg-gray-50 p-3">
+                  <p className="text-[16px] font-bold text-gray-800">{String(coreItems.filter((x) => x.promoted_by === "importance").length)}</p>
+                  <p className="mt-1 text-[10px] text-gray-400">Importance</p>
+                </div>
+                <div className="rounded-2xl bg-gray-50 p-3">
+                  <p className="text-[16px] font-bold text-gray-800">{String(coreItems.filter((x) => x.promoted_by === "mention_count").length)}</p>
+                  <p className="mt-1 text-[10px] text-gray-400">Mention</p>
+                </div>
+              </div>
+            </div>
+
+            {coreItems.map((item, idx) => (
+              <details key={`${String(item.id || "")}-${idx}`} className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft" open={idx < 3}>
+                <summary className="cursor-pointer list-none">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="mb-2 flex flex-wrap gap-1.5">
+                        <span className="status-badge bg-purple-50 text-purple-500">{String(item.tag || "core")}</span>
+                        <span className="status-badge bg-gray-50 text-gray-400">{String(item.promoted_by || "-")}</span>
+                      </div>
+                      <h3 className="text-[14px] font-bold leading-snug text-gray-800 break-words">{firstLinePreview(String(item.content || ""), 58)}</h3>
+                    </div>
+                    <svg className="mt-1 h-4 w-4 shrink-0 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </div>
+                </summary>
+                <div className="mt-4 space-y-3 border-t border-gray-50 pt-4">
+                  <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-gray-600 break-words">{String(item.content || "(空)")}</p>
+                  <div className="flex flex-wrap gap-1.5 text-[10px] text-gray-400">
+                    <span className="rounded bg-gray-50 px-2 py-1">imp {String(item.importance ?? 0)}</span>
+                    <span className="rounded bg-gray-50 px-2 py-1">mention {String(item.mention_count ?? 0)}</span>
+                    {item.scene_type ? <span className="rounded bg-gray-50 px-2 py-1">{item.scene_type}</span> : null}
+                    {item.target_type ? <span className="rounded bg-gray-50 px-2 py-1">{item.target_type}</span> : null}
+                  </div>
+                  <div className="break-all text-[10px] leading-relaxed text-gray-300">
+                    id: {String(item.memory_id || item.id || "")}
+                    <br />
+                    promoted_at: {String(item.promoted_at || "")}
+                  </div>
+                </div>
+              </details>
+            ))}
+            {!coreItems.length ? <div className="px-1 py-10 text-center text-[12px] text-gray-300">（暂无核心缓存条目）</div> : null}
           </div>
         )}
       </div>

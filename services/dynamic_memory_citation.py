@@ -16,7 +16,7 @@ def normalize_citation_map(citation_map: Any) -> dict[str, str]:
     for label, memory_id in citation_map.items():
         label_s = str(label or "").strip()
         memory_id_s = str(memory_id or "").strip()
-        if not label_s.isdigit() or not memory_id_s or memory_id_s.startswith("core::"):
+        if not label_s.isdigit() or not memory_id_s:
             continue
         out[label_s] = memory_id_s
     return out
@@ -24,7 +24,7 @@ def normalize_citation_map(citation_map: Any) -> dict[str, str]:
 
 def strip_assistant_memory_citations(text: str, citation_map: Any) -> tuple[str, list[str]]:
     """
-    剥离动态记忆引用标记，如 [memory 1] / [memory 1, 2]。
+    剥离记忆引用标记，如 [memory 1] / [memory 1, 2]。
     返回 (可见文本, 被引用的 memory_id 列表)。
     """
     if not text:

@@ -114,6 +114,31 @@ def _failed_rebuild_ids_path() -> Path:
     return Path(__file__).resolve().parents[2] / "data" / "rebuild_index_failed_ids.json"
 
 
+def _core_cache_items_for_debug(limit: int) -> dict:
+    pending = r2_store.get_core_cache_pending() or []
+    rows = [x for x in pending if isinstance(x, dict)]
+    rows.sort(key=lambda x: str(x.get("promoted_at") or ""), reverse=True)
+    out = []
+    for item in rows[:limit]:
+        entry_id = str(item.get("id") or "").strip()
+        out.append(
+            {
+                "id": entry_id,
+                "memory_id": f"core::{entry_id}" if entry_id else "",
+                "content": str(item.get("content") or "").strip(),
+                "tag": str(item.get("tag") or "").strip(),
+                "promoted_by": str(item.get("promoted_by") or "").strip(),
+                "promoted_at": str(item.get("promoted_at") or "").strip(),
+                "importance": int(item.get("importance") or 0),
+                "mention_count": int(item.get("mention_count") or 0),
+                "emotion_label": str(item.get("emotion_label") or "").strip(),
+                "scene_type": str(item.get("scene_type") or "").strip(),
+                "target_type": str(item.get("target_type") or "").strip(),
+            }
+        )
+    return {"count": len(rows), "visible_count": len(out), "items": out}
+
+
 def register_routes(bp) -> None:
     @bp.route("/status", methods=["GET"])
     def miniapp_status():
@@ -244,6 +269,11 @@ def register_routes(bp) -> None:
                 limit = 1
             if limit > 100:
                 limit = 100
+            core_limit = request.args.get("core_limit", type=int, default=120)
+            if core_limit < 1:
+                core_limit = 1
+            if core_limit > 300:
+                core_limit = 300
             target = ""
             recent = whitelist_store.list_recent_windows(limit=200) or []
             for w in recent:
@@ -254,7 +284,7 @@ def register_routes(bp) -> None:
             if not target and recent:
                 target = (recent[0].get("id") or "").strip()
             summary = (r2_store.get_summary(target) or "").strip()
-            all_events = r2_store.get_dynamic_recall_debug_events(limit=limit * 3) or []
+            all_events = r2_store.get_dynamic_recall_debug_events(limit=limit * 5) or []
             if not all_events:
                 live_preview = _build_live_dynamic_recall_preview(target)
                 if live_preview:
@@ -270,9 +300,15 @@ def register_routes(bp) -> None:
                 ]
             else:
                 events = all_events
-            recall_events = [e for e in events if str((e or {}).get("source") or "").strip() != "search_memory"]
+            citation_events = [e for e in events if str((e or {}).get("source") or "").strip() == "memory_citation"]
+            recall_events = [
+                e
+                for e in events
+                if str((e or {}).get("source") or "").strip() not in ("search_memory", "memory_citation")
+            ]
             search_events = [e for e in events if str((e or {}).get("source") or "").strip() == "search_memory"]
             maintenance_report = r2_store.get_dynamic_memory_maintenance_report() or {}
+            core_cache = _core_cache_items_for_debug(core_limit)
             dynamic_stats = {"maintenance_report": maintenance_report}
             try:
                 from memory_vector.config import (
@@ -358,6 +394,10 @@ def register_routes(bp) -> None:
                     "search_memory_events": search_events[:limit],
                     "search_count": len(search_events[:limit]),
                     "search_total_count": len(search_events),
+                    "citation_events": citation_events[:limit],
+                    "citation_count": len(citation_events[:limit]),
+                    "citation_total_count": len(citation_events),
+                    "core_cache": core_cache,
                     "dynamic_stats": dynamic_stats,
                 }
             )
