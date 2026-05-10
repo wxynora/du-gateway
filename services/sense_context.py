@@ -1,5 +1,5 @@
 # 设备感知（sense/latest.json）→ 渡的 system 注入。
-# battery + location + health + music + screen + foreground + app_sessions + usage。
+# battery + location + health + screen + foreground + app_sessions + usage。
 # 字段约定见 docs/感知模块方案.md
 from __future__ import annotations
 
@@ -79,38 +79,6 @@ def _format_health_line(health: dict) -> str | None:
     if not parts:
         return None
     return "，".join(parts)
-
-
-def _format_music_line(music: dict) -> str | None:
-    """格式化当前音乐：优先歌名，其次补充歌手/专辑与播放状态。"""
-    track = str(music.get("track") or "").strip()
-    artist = str(music.get("artist") or "").strip()
-    album = str(music.get("album") or "").strip()
-    playing = music.get("playing")
-
-    if not track and not artist and not album:
-        return None
-
-    parts: list[str] = []
-    if track:
-        parts.append(track)
-    if artist:
-        parts.append(artist)
-    if album:
-        parts.append(album)
-
-    text = " - ".join(parts) if parts else ""
-    return f"音乐：{text}" if text else None
-
-
-def _format_music_playing_line(music: dict) -> str | None:
-    """单独格式化播放状态，便于在注入中直观看到当前是否在播。"""
-    playing = music.get("playing")
-    if playing is True or str(playing).lower() in ("true", "1", "yes", "on"):
-        return "播放状态：播放中"
-    if playing is False or str(playing).lower() in ("false", "0", "no", "off"):
-        return "播放状态：已暂停"
-    return None
 
 
 def _format_elapsed_from_iso(iso_str: str) -> str:
@@ -302,7 +270,7 @@ def _format_foreground_line(foreground: dict) -> str | None:
 
 def format_sense_snapshot_for_system() -> str:
     """
-    标题「老婆当前状态」+ 电量 / 定位 / 心率步数 / 音乐 / 屏幕状态 / 前台应用 / 应用使用（有数据就注入）。
+    标题「老婆当前状态」+ 电量 / 定位 / 心率步数 / 屏幕状态 / 前台应用 / 应用使用（有数据就注入）。
     """
     try:
         doc = r2_store.get_sense_latest()
@@ -315,7 +283,6 @@ def format_sense_snapshot_for_system() -> str:
     bat = _as_dict(doc.get("battery"))
     loc = _as_dict(doc.get("location"))
     health = _as_dict(doc.get("health"))
-    music = _as_dict(doc.get("music"))
     screen = _as_dict(doc.get("screen"))
     foreground = _as_dict(doc.get("foreground"))
     usage = _as_dict(doc.get("usage"))
@@ -323,14 +290,12 @@ def format_sense_snapshot_for_system() -> str:
     has_battery = bool(bat) and "level" in bat
     loc_line = _format_location_line(loc)
     health_line = _format_health_line(health)
-    music_line = _format_music_line(music)
-    music_playing_line = _format_music_playing_line(music)
     screen_line = _format_screen_line(screen)
     sleep_guess_line = _format_sleep_guess_line(screen)
     foreground_line = _format_foreground_line(foreground)
     app_sessions_line = _format_app_sessions_line(app_sessions)
     usage_line = _format_usage_line(usage)
-    if not has_battery and not loc_line and not health_line and not music_line and not music_playing_line and not screen_line and not sleep_guess_line and not foreground_line and not app_sessions_line and not usage_line:
+    if not has_battery and not loc_line and not health_line and not screen_line and not sleep_guess_line and not foreground_line and not app_sessions_line and not usage_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -346,10 +311,6 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(loc_line)
     if health_line:
         lines.append(health_line)
-    if music_line:
-        lines.append(music_line)
-    if music_playing_line:
-        lines.append(music_playing_line)
     if sleep_guess_line:
         lines.append(sleep_guess_line)
     elif screen_line:
