@@ -1871,7 +1871,7 @@ _STUDYROOM_MODULES = [
     {"id": "local", "label": "安徽/铜陵/枞阳"},
     {"id": "wrong_questions", "label": "错题"},
 ]
-_STUDYROOM_SOURCE_TYPES = {"bilibili", "web", "pdf", "screenshot", "fenbi", "note", "wrong_question"}
+_STUDYROOM_SOURCE_TYPES = {"bilibili", "web", "pdf", "word", "text", "screenshot", "fenbi", "note", "wrong_question"}
 _STUDYROOM_STATUSES = {"todo", "sorting", "done"}
 _STUDYROOM_MODULE_IDS = {m["id"] for m in _STUDYROOM_MODULES}
 
