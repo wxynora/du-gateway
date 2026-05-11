@@ -41,13 +41,16 @@ app.register_blueprint(pc_command_bp)
 app.register_blueprint(co_read_api_bp)
 app.register_blueprint(html_preview_bp)
 
-# Telegram（Webhook）运行时初始化：命令菜单等。放在 app 启动阶段，避免依赖 Blueprint 钩子。
-try:
-    from services.telegram_bot import init_telegram_bot_runtime
+# Telegram Webhook 只在 web worker 内快速落持久队列；输入聚合与回复发送由
+# scripts/run_telegram_webhook_worker.py 持有。默认不在 gunicorn worker 里启动 TG runtime，
+# 避免 max-requests 回收时丢掉 timer/buffer。
+if os.environ.get("GATEWAY_EMBEDDED_TELEGRAM_RUNTIME_ENABLED", "0").strip().lower() in ("1", "true", "yes"):
+    try:
+        from services.telegram_bot import init_telegram_bot_runtime
 
-    init_telegram_bot_runtime()
-except Exception:
-    pass
+        init_telegram_bot_runtime()
+    except Exception:
+        pass
 
 # MiniApp 日历闹钟调度默认不挂在 Web worker 里。
 # 生产环境由 du-telegram-proactive 统一 tick，避免 gunicorn 多 worker 重复启动后台线程。

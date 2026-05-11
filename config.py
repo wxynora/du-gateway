@@ -348,6 +348,18 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_GM_BOT_TOKEN = os.environ.get("TELEGRAM_GM_BOT_TOKEN", "").strip()
 # Telegram Webhook：网关接收更新的 secret（可选）。若设置了，Telegram 会在请求头携带 X-Telegram-Bot-Api-Secret-Token
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
+# Telegram Webhook 持久队列：web worker 只入队，独立 worker 消费，避免 gunicorn 回收丢输入聚合状态
+_TELEGRAM_WEBHOOK_QUEUE_DB_STR = os.environ.get("TELEGRAM_WEBHOOK_QUEUE_DB", "").strip()
+TELEGRAM_WEBHOOK_QUEUE_DB = (
+    Path(_TELEGRAM_WEBHOOK_QUEUE_DB_STR)
+    if _TELEGRAM_WEBHOOK_QUEUE_DB_STR
+    else DATA_DIR / "telegram_webhook_queue.sqlite3"
+)
+if not TELEGRAM_WEBHOOK_QUEUE_DB.is_absolute():
+    TELEGRAM_WEBHOOK_QUEUE_DB = BASE_DIR / TELEGRAM_WEBHOOK_QUEUE_DB
+TELEGRAM_WEBHOOK_WORKER_IDLE_SECONDS = float(os.environ.get("TELEGRAM_WEBHOOK_WORKER_IDLE_SECONDS", "0.5") or "0.5")
+TELEGRAM_WEBHOOK_QUEUE_STALE_SECONDS = float(os.environ.get("TELEGRAM_WEBHOOK_QUEUE_STALE_SECONDS", "300") or "300")
+TELEGRAM_WEBHOOK_QUEUE_MAX_ATTEMPTS = int(float(os.environ.get("TELEGRAM_WEBHOOK_QUEUE_MAX_ATTEMPTS", "8") or "8"))
 # Bot 调网关的 base URL（如 http://127.0.0.1:5000 或公网网关地址）
 TELEGRAM_GATEWAY_URL = os.environ.get("TELEGRAM_GATEWAY_URL", "http://127.0.0.1:5000").strip().rstrip("/")
 # Telegram MiniApp（WebApp）对外入口：仅用于 ReplyKeyboard 的 web_app 按钮（Telegram 强制要求 HTTPS）
@@ -430,7 +442,7 @@ MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "").strip()
 MINIMAX_T2A_URL = os.environ.get("MINIMAX_T2A_URL", "https://api.minimaxi.com/v1/t2a_v2").strip()
 MINIMAX_T2A_MODEL = os.environ.get("MINIMAX_T2A_MODEL", "speech-2.8-hd").strip()
 MINIMAX_VOICE_ID = os.environ.get("MINIMAX_VOICE_ID", "du_123456").strip()
-MINIMAX_VOICE_SPEED = float(os.environ.get("MINIMAX_VOICE_SPEED", "0.92"))
+MINIMAX_VOICE_SPEED = float(os.environ.get("MINIMAX_VOICE_SPEED", "0.95"))
 MINIMAX_VOICE_VOL = int(float(os.environ.get("MINIMAX_VOICE_VOL", "1")))
 MINIMAX_VOICE_PITCH = int(float(os.environ.get("MINIMAX_VOICE_PITCH", "0")))
 MINIMAX_VOICE_EMOTION = os.environ.get("MINIMAX_VOICE_EMOTION", "happy").strip()

@@ -1,72 +1,11 @@
-import queue
-import threading
-
 from flask import Blueprint, request, jsonify
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_GM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
+from services.telegram_update_queue import enqueue_update, summarize_update
 from utils.log import get_logger
 
 logger = get_logger(__name__)
 bp = Blueprint("telegram_webhook", __name__)
-
-_WEBHOOK_QUEUE_MAX = 2000
-_WEBHOOK_QUEUE: "queue.Queue[tuple[dict, str]]" = queue.Queue(maxsize=_WEBHOOK_QUEUE_MAX)
-_WEBHOOK_WORKER_STARTED = False
-_WEBHOOK_WORKER_LOCK = threading.Lock()
-
-
-def _update_summary(update: dict) -> str:
-    update = update or {}
-    msg = update.get("message") or update.get("edited_message") or {}
-    chat = msg.get("chat") or {}
-    from_user = msg.get("from") or {}
-    text = (msg.get("text") or msg.get("caption") or "").strip()
-    return (
-        f"update_id={update.get('update_id')} "
-        f"keys={','.join(sorted(update.keys()))} "
-        f"chat_id={chat.get('id')} chat_type={chat.get('type')} "
-        f"user_id={from_user.get('id')} "
-        f"has_message={bool(msg)} has_text={bool(text)} text_len={len(text)} "
-        f"has_photo={bool(msg.get('photo'))} has_callback={bool(update.get('callback_query'))}"
-    )
-
-
-def _webhook_worker_loop():
-    while True:
-        update, bot_token = _WEBHOOK_QUEUE.get()
-        try:
-            from services.telegram_bot import handle_telegram_update
-
-            logger.info("Telegram webhook worker 消费 update %s", _update_summary(update))
-            handle_telegram_update(update, bot_token=bot_token)
-        except Exception as e:
-            logger.exception("处理 Telegram webhook update 失败: %s", e)
-        finally:
-            _WEBHOOK_QUEUE.task_done()
-
-
-def _ensure_webhook_worker():
-    global _WEBHOOK_WORKER_STARTED
-    if _WEBHOOK_WORKER_STARTED:
-        return
-    with _WEBHOOK_WORKER_LOCK:
-        if _WEBHOOK_WORKER_STARTED:
-            return
-        t = threading.Thread(target=_webhook_worker_loop, name="tg-webhook-worker", daemon=True)
-        t.start()
-        _WEBHOOK_WORKER_STARTED = True
-        logger.info("Telegram webhook worker 已启动（单线程顺序消费）")
-
-
-def _enqueue_update(update: dict, bot_token: str) -> bool:
-    _ensure_webhook_worker()
-    try:
-        _WEBHOOK_QUEUE.put_nowait((update, bot_token))
-        logger.info("Telegram webhook 已入队 queue_size=%s %s", _WEBHOOK_QUEUE.qsize(), _update_summary(update))
-        return True
-    except queue.Full:
-        logger.warning("Telegram webhook 队列已满，丢弃 update")
-        return False
 
 
 def _webhook_check_secret():
@@ -90,9 +29,19 @@ def telegram_webhook():
         return jsonify({"ok": False, "error": "main_bot_not_configured"}), 503
 
     update = request.get_json(silent=True) or {}
-    if not _enqueue_update(update, TELEGRAM_BOT_TOKEN):
-        return jsonify({"ok": False, "error": "webhook_queue_full"}), 503
-    return jsonify({"ok": True})
+    try:
+        result = enqueue_update(update, bot_kind="main")
+    except Exception as e:
+        logger.exception("Telegram webhook 持久队列写入失败 bot=main: %s", e)
+        return jsonify({"ok": False, "error": "webhook_queue_error"}), 503
+    logger.info(
+        "Telegram webhook 已落持久队列 bot=main queued=%s duplicate=%s key=%s %s",
+        result.enqueued,
+        result.duplicate,
+        result.update_key,
+        summarize_update(update),
+    )
+    return jsonify({"ok": True, "queued": result.enqueued, "duplicate": result.duplicate})
 
 
 @bp.route("/telegram/webhook_gm", methods=["POST"])
@@ -107,12 +56,22 @@ def telegram_webhook_gm():
         return jsonify({"ok": False, "error": "gm_bot_not_configured"}), 404
 
     update = request.get_json(silent=True) or {}
-    if not _enqueue_update(update, TELEGRAM_GM_BOT_TOKEN):
-        return jsonify({"ok": False, "error": "webhook_queue_full"}), 503
-    return jsonify({"ok": True})
+    try:
+        result = enqueue_update(update, bot_kind="gm")
+    except Exception as e:
+        logger.exception("Telegram webhook 持久队列写入失败 bot=gm: %s", e)
+        return jsonify({"ok": False, "error": "webhook_queue_error"}), 503
+    logger.info(
+        "Telegram webhook 已落持久队列 bot=gm queued=%s duplicate=%s key=%s %s",
+        result.enqueued,
+        result.duplicate,
+        result.update_key,
+        summarize_update(update),
+    )
+    return jsonify({"ok": True, "queued": result.enqueued, "duplicate": result.duplicate})
 
 
 """
 注意：不要在 Blueprint 上使用 before_app_first_request（不同 Flask 版本可能不存在）。
-Telegram 运行时初始化由 app.py 在启动时调用。
+Webhook 只负责快速落持久队列；Telegram 运行时由 scripts/run_telegram_webhook_worker.py 常驻进程持有。
 """

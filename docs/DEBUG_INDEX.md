@@ -34,7 +34,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 论坛 MCP 工具 | `services/mcp_forum_tools.py`、`services/forum_mcp_client.py` | 论坛高层工具、`cli/get_guide` 映射、外部 SSE MCP 调用 |
 | 设备状态注入 | `services/sense_context.py` | 电量、亮屏、前台 app、位置等 sense 注入 |
 | 主动触发规则 | `services/proactive_trigger_engine.py` | 睡眠、亮屏、使用时长等硬触发 |
-| Telegram Bot | `services/telegram_bot.py` | TG 风格 system、TG 上下文、主动发送工具 |
+| Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送 |
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js` | 自用 Claude 反代、thinking/cache/tool 格式转换 |
 
 ## 聊天失败 / 上游不可用
@@ -143,6 +143,29 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 未完成：`duxy-home.com` 偶发 `SSL EOF`/超时仍可能来自本机网络或代理链路，代码已降低拖延但没有根治网络层。
 - 下次继续：若仍慢或前端没显示渡消息，先看 MiniApp network 里 `/sumitalk-chat-jobs` 的创建和 GET 轮询响应，再看 `/Users/doraemon/.du-gateway-codex-bridge/logs/codex_group_chat_bridge.out.log` 的 claim 错误密度。
 - 不要碰：小爱音箱接入半成品、QQ group chat 未收束改动、旧的未跟踪 `miniapp_static/assets/*` 杂散构建产物。
+
+## Telegram Webhook / TG 回复延迟
+
+现象：
+- TG 日志出现 webhook 收到消息，但后面没有网关 chat / embedding / 转发日志
+- gunicorn worker 回收后，15 秒输入聚合 buffer 消失
+
+入口：
+- Webhook 入队：`routes/telegram_webhook.py`
+- 持久队列：`services/telegram_update_queue.py`
+- 独立消费进程：`scripts/run_telegram_webhook_worker.py`
+- 输入聚合和发送：`services/telegram_bot.py`
+
+常查：
+
+```bash
+rg -n "TGHook|TGQueue|TGWorker|TGBot|webhook 已落持久队列|queue worker 消费|输入聚合" gateway.log
+```
+
+当前状态（2026-05-12）：
+- 已完成：Webhook 只写 SQLite 持久队列；TG 输入聚合和回复发送由独立 worker 持有，避免 gunicorn `max_requests` 回收直接吞掉 pending buffer。
+- 未完成：线上还需要把 `scripts/run_telegram_webhook_worker.py` 配成常驻进程；只重启 `du-gateway` 不会消费新队列。
+- 不要碰：现有 `du-telegram-proactive` 是主动消息/闹钟调度，不是 webhook 消费 worker，不能拿它替代。
 
 ## 事件唤醒 / Trigger / 弹窗回执
 
