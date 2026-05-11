@@ -217,6 +217,30 @@ async function refreshToken(refreshTk) {
   };
 }
 
+async function refreshCachedAccessToken(reason) {
+  if (!cachedOAuth) {
+    cachedOAuth = readOAuthCredentials();
+    log(
+      `Token loaded from ${cachedOAuthSource || "unknown"} (expires ${new Date(
+        cachedOAuth.expiresAt
+      ).toLocaleString()})`
+    );
+  }
+  const r = await refreshToken(cachedOAuth.refreshToken);
+  Object.assign(cachedOAuth, r);
+  try {
+    writeOAuthCredentials(cachedOAuth);
+  } catch (e) {
+    log(`Persist refreshed token failed: ${e.message}`);
+  }
+  log(
+    `Token refreshed${reason ? ` (${reason})` : ""} (expires ${new Date(
+      r.expiresAt
+    ).toLocaleString()})`
+  );
+  return cachedOAuth.accessToken;
+}
+
 async function getAccessToken() {
   if (!cachedOAuth) {
     cachedOAuth = readOAuthCredentials();
@@ -227,18 +251,18 @@ async function getAccessToken() {
     );
   }
   if (Date.now() > cachedOAuth.expiresAt - REFRESH_SKEW_MS) {
+    const staleAccessToken = cachedOAuth.accessToken;
     try {
-      const r = await refreshToken(cachedOAuth.refreshToken);
-      Object.assign(cachedOAuth, r);
-      try {
-        writeOAuthCredentials(cachedOAuth);
-      } catch (e) {
-        log(`Persist refreshed token failed: ${e.message}`);
-      }
-      log(`Token refreshed (expires ${new Date(r.expiresAt).toLocaleString()})`);
+      await refreshCachedAccessToken("before request");
     } catch (e) {
       log(`Refresh failed: ${e.message}, re-reading credentials...`);
       cachedOAuth = readOAuthCredentials();
+      if (
+        cachedOAuth.accessToken === staleAccessToken &&
+        Date.now() > cachedOAuth.expiresAt - REFRESH_SKEW_MS
+      ) {
+        throw e;
+      }
     }
   }
   return cachedOAuth.accessToken;
@@ -936,6 +960,16 @@ function proxyToAnthropic(token, path, payload) {
   });
 }
 
+async function retryAfterUnauthorized(proxyRes, path, payload, routeLabel) {
+  const errData = await readStreamText(proxyRes).catch((e) => `read error: ${e.message}`);
+  const hint = errData ? `: ${errData.slice(0, 500)}` : "";
+  log(`Got 401 from Anthropic for ${routeLabel}; refreshing token and retrying once${hint}`);
+  const retryToken = await refreshCachedAccessToken("after 401");
+  const retryRes = await proxyToAnthropic(retryToken, path, payload);
+  log(`<= ${retryRes.statusCode} ${routeLabel} (retry after token refresh)`);
+  return retryRes;
+}
+
 // ──────────────────────────────────────
 // Server
 // ──────────────────────────────────────
@@ -993,12 +1027,11 @@ const server = http.createServer(async (req, res) => {
       const requestModel = anthropicBody.model;
       processAnthropicBody(anthropicBody);
 
-      const proxyRes = await proxyToAnthropic(token, "/v1/messages", anthropicBody);
+      let proxyRes = await proxyToAnthropic(token, "/v1/messages", anthropicBody);
       log(`<= ${proxyRes.statusCode} ${req.url}`);
 
       if (proxyRes.statusCode === 401) {
-        cachedOAuth = null;
-        log("Got 401, will refresh token on next request");
+        proxyRes = await retryAfterUnauthorized(proxyRes, "/v1/messages", anthropicBody, req.url);
       }
 
       if (proxyRes.statusCode !== 200) {
@@ -1063,12 +1096,11 @@ const server = http.createServer(async (req, res) => {
     } else {
       // ─── Anthropic 原生路径 ───
       processAnthropicBody(body);
-      const proxyRes = await proxyToAnthropic(token, req.url, body);
+      let proxyRes = await proxyToAnthropic(token, req.url, body);
       log(`<= ${proxyRes.statusCode} ${req.url}`);
 
       if (proxyRes.statusCode === 401) {
-        cachedOAuth = null;
-        log("Got 401, will refresh token on next request");
+        proxyRes = await retryAfterUnauthorized(proxyRes, req.url, body, req.url);
       }
 
       const responseHeaders = { ...proxyRes.headers, "access-control-allow-origin": "*" };
