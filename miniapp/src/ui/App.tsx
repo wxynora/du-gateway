@@ -3,6 +3,7 @@ import { ToastProvider, useToast } from "./toast";
 import { apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
 import { AppShell } from "./AppShell";
 import { DeviceManagerModal } from "./DeviceManagerModal";
+import { migrateLocalChatHistoriesToDevice, migrateLocalChatHistoryDevice } from "./storage/chatHistoryDb";
 
 export function App() {
   return (
@@ -27,7 +28,9 @@ function AppWithAuth() {
 
   async function repairPanelDeviceMigration(currentDeviceId: string) {
     const migration = consumePendingPanelDeviceIdMigration();
+    await migrateLocalChatHistoriesToDevice(currentDeviceId);
     if (!migration?.from || !migration.to || migration.to !== currentDeviceId) return;
+    await migrateLocalChatHistoryDevice(migration.from, migration.to);
     try {
       const j = await apiJson<{ ok?: boolean; panel_token?: string }>("/miniapp-api/sumitalk-history/migrate", {
         method: "POST",
@@ -127,6 +130,7 @@ function AppWithAuth() {
         return;
       }
       const deviceId = await getOrCreatePanelDeviceId();
+      await migrateLocalChatHistoriesToDevice(deviceId);
       const j = await publicApiFetch("/miniapp-api/panel-auth/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

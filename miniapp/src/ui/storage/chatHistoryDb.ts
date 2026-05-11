@@ -38,6 +38,44 @@ function historyKey(deviceId: string, windowId: string): string {
   return `${deviceId}::${windowId || "default"}`;
 }
 
+function canonicalHistoryWindowId(windowId: string): string {
+  const wid = String(windowId || "").trim();
+  if (!wid) return "sumitalk-main";
+  if (wid.startsWith("tg_")) return "sumitalk-main";
+  return wid;
+}
+
+function messageKey(message: ChatHistoryMessage): string {
+  const id = String(message?.id || "").trim();
+  if (id) return `id:${id}`;
+  return [
+    String(message?.role || "").trim(),
+    String(message?.createdAt || "").trim(),
+    String(message?.content || "").trim(),
+  ].join("|");
+}
+
+function mergeHistoryMessages(...groups: Array<ChatHistoryMessage[] | undefined>): ChatHistoryMessage[] {
+  const out: ChatHistoryMessage[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const message of Array.isArray(group) ? group : []) {
+      if (!message || typeof message !== "object") continue;
+      const key = messageKey(message);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(message);
+    }
+  }
+  out.sort((a, b) => {
+    const at = Date.parse(String(a?.createdAt || ""));
+    const bt = Date.parse(String(b?.createdAt || ""));
+    const diff = (Number.isFinite(at) ? at : 0) - (Number.isFinite(bt) ? bt : 0);
+    return diff || String(a?.id || "").localeCompare(String(b?.id || ""));
+  });
+  return out;
+}
+
 export async function readLocalChatHistory(deviceId: string, windowId: string): Promise<ChatHistoryMessage[]> {
   const did = String(deviceId || "").trim();
   const wid = String(windowId || "").trim();
@@ -104,13 +142,49 @@ export async function migrateLocalChatHistoryDevice(oldDeviceId: string, newDevi
     if (!rows.length) return;
     await db.transaction("rw", db.histories, async () => {
       for (const row of rows) {
+        const targetWindowId = canonicalHistoryWindowId(row.windowId);
+        const key = historyKey(newId, targetWindowId);
+        const existing = await db.histories.get(key);
         await db.histories.put({
           ...row,
-          key: historyKey(newId, row.windowId),
+          key,
           deviceId: newId,
+          windowId: targetWindowId,
           updatedAt: new Date().toISOString(),
+          messages: mergeHistoryMessages(existing?.messages, row.messages),
         });
         await db.histories.delete(row.key);
+      }
+    });
+  } catch {
+    // Ignore migration errors to avoid blocking chat flow.
+  }
+}
+
+export async function migrateLocalChatHistoriesToDevice(deviceId: string): Promise<void> {
+  const did = String(deviceId || "").trim();
+  if (!did) return;
+  try {
+    const rows = await db.histories.toArray();
+    if (!rows.length) return;
+    await db.transaction("rw", db.histories, async () => {
+      for (const row of rows) {
+        const sourceKey = String(row?.key || "").trim();
+        const targetWindowId = canonicalHistoryWindowId(row.windowId);
+        const key = historyKey(did, targetWindowId);
+        if (!key) continue;
+        const existing = await db.histories.get(key);
+        await db.histories.put({
+          ...row,
+          key,
+          deviceId: did,
+          windowId: targetWindowId,
+          updatedAt: new Date().toISOString(),
+          messages: mergeHistoryMessages(existing?.messages, row.messages),
+        });
+        if (sourceKey && sourceKey !== key) {
+          await db.histories.delete(sourceKey);
+        }
       }
     });
   } catch {

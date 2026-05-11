@@ -9,7 +9,7 @@ import {
 } from "./chatMessages";
 import { MAIN_SUMITALK_DISPLAY_WINDOW_ID, sumitalkHistoryPath } from "./chatWindowIds";
 import { CornerDownIcon } from "./icons";
-import { readLocalChatHistory, readLocalChatHistoryRows, writeLocalChatHistory } from "./storage/chatHistoryDb";
+import { migrateLocalChatHistoriesToDevice, readLocalChatHistory, readLocalChatHistoryRows, writeLocalChatHistory } from "./storage/chatHistoryDb";
 import { SummaryBlock } from "./ChatPresentation";
 
 type DailyReport = {
@@ -96,6 +96,7 @@ export function ChatsHome({
     (async () => {
       try {
         const did = await getOrCreatePanelDeviceId();
+        await migrateLocalChatHistoriesToDevice(did);
         const mainWindowId = String(privateWindowId || MAIN_SUMITALK_DISPLAY_WINDOW_ID).trim() || MAIN_SUMITALK_DISPLAY_WINDOW_ID;
         const mainLocalMessages = sanitizeHistoryMessages(await readLocalChatHistory(did, mainWindowId));
         const legacyLocalMessages = mainWindowId === "sumitalk-main"

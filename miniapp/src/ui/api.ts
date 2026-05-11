@@ -4,6 +4,7 @@ import { SumiOverlay } from "../plugins/sumi-overlay";
 const PANEL_TOKEN_STORAGE_KEY = "miniapp.panel.token.v1";
 const PANEL_DEVICE_ID_STORAGE_KEY = "miniapp.panel.device-id.v1";
 const PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY = "miniapp.panel.device-id.previous.v1";
+const PANEL_DEVICE_ID_ALIASES_STORAGE_KEY = "miniapp.panel.device-id.aliases.v1";
 const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
 let pendingDeviceIdMigration: { from: string; to: string } | null = null;
 
@@ -64,42 +65,83 @@ function randomId(): string {
   return out;
 }
 
+function rememberPanelDeviceIds(...ids: string[]) {
+  try {
+    const existing = JSON.parse(window.localStorage.getItem(PANEL_DEVICE_ID_ALIASES_STORAGE_KEY) || "[]");
+    const values = Array.isArray(existing) ? existing : [];
+    const seen = new Set(values.map((item) => String(item || "").trim()).filter(Boolean));
+    for (const id of ids) {
+      const item = String(id || "").trim();
+      if (item) seen.add(item);
+    }
+    window.localStorage.setItem(PANEL_DEVICE_ID_ALIASES_STORAGE_KEY, JSON.stringify(Array.from(seen).slice(-12)));
+  } catch {}
+}
+
+function queuePanelDeviceMigration(from: string, to: string) {
+  const oldId = String(from || "").trim();
+  const newId = String(to || "").trim();
+  if (!oldId || !newId || oldId === newId) return;
+  rememberPanelDeviceIds(oldId, newId);
+  pendingDeviceIdMigration = { from: oldId, to: newId };
+  try {
+    window.localStorage.setItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY, oldId);
+  } catch {}
+}
+
 export async function getOrCreatePanelDeviceId(): Promise<string> {
   try {
     const existing = (window.localStorage.getItem(PANEL_DEVICE_ID_STORAGE_KEY) || "").trim();
     const previous = (window.localStorage.getItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY) || "").trim();
     const tokenDeviceId = getPanelTokenDeviceId();
     if (existing && previous && previous !== existing) {
-      pendingDeviceIdMigration = { from: previous, to: existing };
+      queuePanelDeviceMigration(previous, existing);
       window.localStorage.removeItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY);
     }
     const native = String((await SumiOverlay.getStableDeviceId().catch(() => ({ deviceId: "" })))?.deviceId || "").trim();
     if (native) {
       if (tokenDeviceId && tokenDeviceId !== native) {
-        pendingDeviceIdMigration = { from: tokenDeviceId, to: native };
+        queuePanelDeviceMigration(tokenDeviceId, native);
       } else if (existing && existing !== native) {
-        pendingDeviceIdMigration = { from: existing, to: native };
+        queuePanelDeviceMigration(existing, native);
       }
+      rememberPanelDeviceIds(existing, tokenDeviceId, native);
       window.localStorage.setItem(PANEL_DEVICE_ID_STORAGE_KEY, native);
       return native;
     }
     if (tokenDeviceId && tokenDeviceId !== existing) {
-      if (existing) window.localStorage.setItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY, existing);
+      if (existing) queuePanelDeviceMigration(existing, tokenDeviceId);
+      rememberPanelDeviceIds(existing, tokenDeviceId);
       window.localStorage.setItem(PANEL_DEVICE_ID_STORAGE_KEY, tokenDeviceId);
       return tokenDeviceId;
     }
-    if (existing) return existing;
+    if (existing) {
+      rememberPanelDeviceIds(existing, tokenDeviceId);
+      return existing;
+    }
     const next = `device_${randomId()}`;
+    rememberPanelDeviceIds(next);
     window.localStorage.setItem(PANEL_DEVICE_ID_STORAGE_KEY, next);
     return next;
   } catch {
-    return `device_${randomId()}`;
+    try {
+      const existing = (window.localStorage.getItem(PANEL_DEVICE_ID_STORAGE_KEY) || "").trim();
+      if (existing) return existing;
+      const next = `device_${randomId()}`;
+      window.localStorage.setItem(PANEL_DEVICE_ID_STORAGE_KEY, next);
+      return next;
+    } catch {
+      return `device_${randomId()}`;
+    }
   }
 }
 
 export function consumePendingPanelDeviceIdMigration(): { from: string; to: string } | null {
   const next = pendingDeviceIdMigration;
   pendingDeviceIdMigration = null;
+  try {
+    if (next?.from) window.localStorage.removeItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY);
+  } catch {}
   return next;
 }
 

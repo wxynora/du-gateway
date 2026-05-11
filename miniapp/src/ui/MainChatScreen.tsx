@@ -58,7 +58,7 @@ import {
   SearchIconMini,
 } from "./icons";
 import { SumiOverlay } from "../plugins/sumi-overlay";
-import { migrateLocalChatHistoryDevice, readLocalChatHistory, readLocalChatHistoryRows, writeLocalChatHistory } from "./storage/chatHistoryDb";
+import { migrateLocalChatHistoriesToDevice, migrateLocalChatHistoryDevice, readLocalChatHistory, readLocalChatHistoryRows, writeLocalChatHistory } from "./storage/chatHistoryDb";
 import { useCodexGroupTaskRealtime, type CodexGroupTaskRealtimeTask } from "./hooks/useCodexGroupTaskRealtime";
 import { useToast } from "./toast";
 
@@ -291,6 +291,7 @@ export function MainChatScreen({
         try {
           const did = await getOrCreatePanelDeviceId();
           const migration = consumePendingPanelDeviceIdMigration();
+          await migrateLocalChatHistoriesToDevice(did);
           if (migration?.from && migration.to === did) {
             await migrateLocalChatHistoryDevice(migration.from, migration.to);
             try {
