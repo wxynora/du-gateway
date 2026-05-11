@@ -6,6 +6,8 @@ import threading
 from flask import jsonify, request
 
 from config import DATA_DIR
+from storage.miniapp_panel_store import upsert_trusted_device
+from utils.miniapp_panel_auth import issue_panel_token, panel_auth_enabled
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
 
@@ -381,6 +383,19 @@ def register_routes(bp) -> None:
         total_new = sum(int(row.get("new_count") or 0) for row in migrated_rows)
         total_merged = sum(int(row.get("merged_count") or 0) for row in migrated_rows)
         latest_updated_at = str((migrated_rows[-1] if migrated_rows else {}).get("updated_at") or "").strip()
+        panel_token = ""
+        panel_token_ttl = 0
+        try:
+            upsert_trusted_device(new_device_id)
+            if panel_auth_enabled():
+                panel_token, panel_token_ttl = issue_panel_token(subject=f"device:{new_device_id}", device_id=new_device_id)
+        except Exception as e:
+            sumitalk_logger.warning(
+                "history_migrate_token_refresh_failed old_device_id=%s new_device_id=%s error=%s",
+                old_device_id,
+                new_device_id,
+                e,
+            )
         sumitalk_logger.info(
             "history_migrate_ok old_device_id=%s new_device_id=%s rows=%s old_count=%s new_count=%s merged=%s copied=%s updated_at=%s remote=%s ua=%s",
             old_device_id,
@@ -403,5 +418,7 @@ def register_routes(bp) -> None:
                 "rows": len(migrated_rows),
                 "copied": bool(total_old),
                 "updated_at": latest_updated_at,
+                "panel_token": panel_token,
+                "expires_in": panel_token_ttl,
             }
         )

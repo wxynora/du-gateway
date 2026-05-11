@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { apiJson, getOrCreatePanelDeviceId } from "./api";
+import { apiJson, getOrCreatePanelDeviceId, setPanelToken } from "./api";
 import { AvatarBubble, ChatActionButton, ChatHeaderStatus, HtmlBlock, PlainTextBlock, RichTextBlock, copyText, formatTokenCountValue } from "./ChatPresentation";
 import {
   TRANSPARENT_BUBBLE_CLASS,
@@ -280,11 +280,13 @@ export function MainChatScreen({
           if (migration?.from && migration.to === did) {
             await migrateLocalChatHistoryDevice(migration.from, migration.to);
             try {
-              await apiJson("/miniapp-api/sumitalk-history/migrate", {
+              const migrated = await apiJson<{ ok?: boolean; panel_token?: string }>("/miniapp-api/sumitalk-history/migrate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ new_device_id: migration.to }),
               });
+              const nextToken = String(migrated?.panel_token || "").trim();
+              if (nextToken) setPanelToken(nextToken);
             } catch {}
           }
           if (!cancelled) {

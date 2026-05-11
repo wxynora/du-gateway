@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { ToastProvider, useToast } from "./toast";
-import { apiJson, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
+import { apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, getPanelDeviceLabel, getPanelToken, publicApiFetch, setPanelToken } from "./api";
 import { AppShell } from "./AppShell";
 import { DeviceManagerModal } from "./DeviceManagerModal";
 
@@ -25,6 +25,20 @@ function AppWithAuth() {
   const [secondPrompt, setSecondPrompt] = useState("");
   const [showDeviceManager, setShowDeviceManager] = useState(false);
 
+  async function repairPanelDeviceMigration(currentDeviceId: string) {
+    const migration = consumePendingPanelDeviceIdMigration();
+    if (!migration?.from || !migration.to || migration.to !== currentDeviceId) return;
+    try {
+      const j = await apiJson<{ ok?: boolean; panel_token?: string }>("/miniapp-api/sumitalk-history/migrate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_device_id: migration.to }),
+      });
+      const nextToken = String(j?.panel_token || "").trim();
+      if (nextToken) setPanelToken(nextToken);
+    } catch {}
+  }
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -43,9 +57,17 @@ function AppWithAuth() {
           setReady(false);
           return;
         }
-        const s = await apiJson<{ ok?: boolean; authenticated?: boolean }>("/miniapp-api/panel-auth/session");
+        const currentDeviceId = await getOrCreatePanelDeviceId();
+        await repairPanelDeviceMigration(currentDeviceId);
+        const s = await apiJson<{ ok?: boolean; authenticated?: boolean; device_id?: string }>("/miniapp-api/panel-auth/session");
         if (cancelled) return;
         if (s?.ok && s?.authenticated) {
+          const tokenDeviceId = String(s?.device_id || "").trim();
+          if (currentDeviceId && tokenDeviceId && tokenDeviceId !== currentDeviceId) {
+            setPanelToken("");
+            setReady(false);
+            return;
+          }
           setReady(true);
           return;
         }

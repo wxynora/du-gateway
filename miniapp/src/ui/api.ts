@@ -35,6 +35,19 @@ export function getPanelToken(): string {
   }
 }
 
+export function getPanelTokenDeviceId(token: string = getPanelToken()): string {
+  try {
+    const payload = String(token || "").split(".")[0] || "";
+    if (!payload) return "";
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    const parsed = JSON.parse(window.atob(padded));
+    return String(parsed?.device_id || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 export function setPanelToken(token: string) {
   try {
     if (token) window.localStorage.setItem(PANEL_TOKEN_STORAGE_KEY, token);
@@ -55,17 +68,25 @@ export async function getOrCreatePanelDeviceId(): Promise<string> {
   try {
     const existing = (window.localStorage.getItem(PANEL_DEVICE_ID_STORAGE_KEY) || "").trim();
     const previous = (window.localStorage.getItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY) || "").trim();
+    const tokenDeviceId = getPanelTokenDeviceId();
     if (existing && previous && previous !== existing) {
       pendingDeviceIdMigration = { from: previous, to: existing };
       window.localStorage.removeItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY);
     }
     const native = String((await SumiOverlay.getStableDeviceId().catch(() => ({ deviceId: "" })))?.deviceId || "").trim();
     if (native) {
-      if (existing && existing !== native) {
+      if (tokenDeviceId && tokenDeviceId !== native) {
+        pendingDeviceIdMigration = { from: tokenDeviceId, to: native };
+      } else if (existing && existing !== native) {
         pendingDeviceIdMigration = { from: existing, to: native };
       }
       window.localStorage.setItem(PANEL_DEVICE_ID_STORAGE_KEY, native);
       return native;
+    }
+    if (tokenDeviceId && tokenDeviceId !== existing) {
+      if (existing) window.localStorage.setItem(PANEL_PREVIOUS_DEVICE_ID_STORAGE_KEY, existing);
+      window.localStorage.setItem(PANEL_DEVICE_ID_STORAGE_KEY, tokenDeviceId);
+      return tokenDeviceId;
     }
     if (existing) return existing;
     const next = `device_${randomId()}`;
