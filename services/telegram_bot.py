@@ -30,7 +30,6 @@ from config import (
     TELEGRAM_WEBAPP_VERSION,
     TELEGRAM_CHAT_PATH,
     TELEGRAM_INPUT_IDLE_SECONDS,
-    TELEGRAM_OUTPUT_CHUNK_CHARS,
     TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS,
     TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS,
     TELEGRAM_CONTEXT_LAST_TURNS,
@@ -215,33 +214,15 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
         f"   {tags_line}\n"
         "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"
         "2) 不要输出分割线（例如 ---、———、***）。\n"
-        "3) 不要使用 Markdown 强调符号 * 或 **（Telegram 会显得很奇怪）。\n"
+        "3) 不要使用 Markdown 强调符号 * 或 **。\n"
         "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji。\n"
         "5) 允许自然分段，但不要为了格式刻意堆很多空行。\n"
         "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。\n"
         "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。\n"
+        "   - 语音要像口语短句；停顿可少量用 <#0.5#> 或 <#1#>，不要连续写，也不要堆省略号/破折号。\n"
+        "   - 可少量用 MiniMax 动作：(laughs)、(sighs)、(gasps)、(clear-throat)、(breath)；自然时才用。\n"
+        "   - 情绪由 TTS 配置控制，不写进 <voice>；2.8 常用值：happy、sad、angry、fearful、disgusted、surprised、calm。\n"
         "   - 如果你不想发语音，就不要输出 <voice> 标签。\n"
-        "7) 如需控制电脑，可在整条回复里最多追加一个 [PCMD:...] 标签；不确定就不要加。\n"
-        "   - 仅允许这些指令：\n"
-        "     [PCMD:lock] 锁屏\n"
-        "     [PCMD:shutdown] 关机（默认 60 秒后）\n"
-        "     [PCMD:shutdown:秒数] 定时关机（0-86400）\n"
-        "     [PCMD:restart] 重启（默认 60 秒后）\n"
-        "     [PCMD:restart:秒数] 定时重启（0-86400）\n"
-        "     [PCMD:sleep] 睡眠\n"
-        "     [PCMD:mute] 静音\n"
-        "     [PCMD:volume:0-100] 设置音量（整数）\n"
-        "     [PCMD:notify:标题:内容] 电脑通知\n"
-        "     [PCMD:open:notepad] 打开记事本\n"
-        "     [PCMD:open:notepad:要写入的内容] 打开记事本并预填内容\n"
-        "     [PCMD:open:chrome] 打开 Chrome\n"
-        "     [PCMD:open:vscode] 打开 VS Code\n"
-        "     [PCMD:open:wechat] 打开微信\n"
-        "     [PCMD:open:notion] 打开 Notion\n"
-        "     [PCMD:url:https://... ] 打开网页（仅 https）\n"
-        "     [PCMD:media:play] 播放/暂停媒体\n"
-        "   - 严禁输出未列出的 PCMD；若不确定，请不要输出 PCMD。\n"
-        "   - 仅在确有必要时输出；平时不要输出。\n"
     )
 
 
@@ -289,102 +270,9 @@ def _sleep_between_sends():
 
 
 def _split_reply_text(text: str) -> list[str]:
-    """
-    将回复拆成多条发回 Telegram，避免一次性超长。
-    规则：
-    - 先把「很多短段落」尽量合并到接近上限（避免渡爱换行导致太碎）
-    - 段落过长时，再按中英文句末标点切
-    - 最后按 TELEGRAM_OUTPUT_CHUNK_CHARS 做硬截断（Telegram 单条上限 4096）
-    """
-    if not text:
-        return []
-    max_len = int(TELEGRAM_OUTPUT_CHUNK_CHARS or 1500)
-    if max_len <= 0:
-        max_len = 1500
-
-    # 归一化换行
-    t = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not t:
-        return []
-
-    # 有换行：优先按换行切（短信感），避免渡一整段糊在一起
-    if "\n" in t:
-        out: list[str] = []
-
-        def _flush_piece(piece: str):
-            piece = (piece or "").strip()
-            if not piece:
-                return
-            while len(piece) > max_len:
-                out.append(piece[:max_len])
-                piece = piece[max_len:].lstrip()
-            if piece:
-                out.append(piece)
-
-        for line in t.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            _flush_piece(line)
-        return [x for x in (s.strip() for s in out) if x]
-
-    paras = [p.strip() for p in t.split("\n\n") if p.strip()]
-    out: list[str] = []
-    seps = set("。！？.!?")
-
-    def _flush_piece(piece: str):
-        piece = (piece or "").strip()
-        if not piece:
-            return
-        # 硬切
-        while len(piece) > max_len:
-            out.append(piece[:max_len])
-            piece = piece[max_len:].lstrip()
-        if piece:
-            out.append(piece)
-
-    def _split_long_para(p: str):
-        buf = ""
-        for ch in p:
-            buf += ch
-            if ch in seps and len(buf) >= max_len * 0.6:
-                _flush_piece(buf)
-                buf = ""
-        if buf:
-            _flush_piece(buf)
-
-    # 先尽量合并小段落，减少「一换行就一条」的碎片
-    acc = ""
-    for p in paras:
-        if not acc:
-            # acc 为空，直接放入（若很长，后面处理）
-            if len(p) > max_len:
-                _split_long_para(p)
-                acc = ""
-            else:
-                acc = p
-            continue
-
-        sep = "\n\n"
-        if len(acc) + len(sep) + len(p) <= max_len:
-            acc = acc + sep + p
-            continue
-
-        # acc 放不下了，先 flush acc
-        _flush_piece(acc)
-        acc = ""
-
-        # 再处理当前段落
-        if len(p) > max_len:
-            _split_long_para(p)
-        else:
-            acc = p
-
-    if acc:
-        _flush_piece(acc)
-
-    # 兜底去空
-    return [x for x in (s.strip() for s in out) if x]
+    """主 TG 回复不再拆条；保留旧函数名，避免调用点大改。"""
+    t = (text or "").strip()
+    return [t] if t else []
 
 
 def _sanitize_reply_for_telegram(text: str) -> str:
@@ -996,7 +884,7 @@ def send_message_to_user(telegram_user_id: int, text: str, bot_token: Optional[s
 
 
 def send_message_segmented(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
-    """把一段长文本拆成多条发回 Telegram（带间隔）。"""
+    """主 TG 回复单条发送，不按换行或长度拆条。"""
     parts = _split_reply_text(text)
     if not parts:
         return send_message(chat_id=chat_id, text=text or "", bot_token=bot_token)
@@ -1011,26 +899,13 @@ def send_message_segmented(chat_id: int, text: str, bot_token: Optional[str] = N
 
 
 def _split_reply_text_by_len_only(text: str) -> list[str]:
-    """
-    仅按长度硬切分，不按换行/段落切。
-    用于 GM 回复：保留原始换行展示，避免“每行一条”。
-    """
+    """TG 回复不再按长度拆条；保留旧函数名，避免调用点大改。"""
     t = (text or "").strip()
-    if not t:
-        return []
-    max_len = int(TELEGRAM_OUTPUT_CHUNK_CHARS or 1500)
-    max_len = max(200, min(4096, max_len))
-    out: list[str] = []
-    i = 0
-    n = len(t)
-    while i < n:
-        out.append(t[i : i + max_len])
-        i += max_len
-    return out
+    return [t] if t else []
 
 
 def send_message_segmented_gm(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
-    """GM 专用发送：仅长度切分，保留换行，不按行拆条。"""
+    """GM 专用发送：单条发送，保留换行。"""
     parts = _split_reply_text_by_len_only(text)
     if not parts:
         return send_message(chat_id=chat_id, text=text or "", bot_token=bot_token)
@@ -1092,7 +967,7 @@ def process_message(
             force_last4,
         )
         reply_clean = "我刚刚处理完了，这轮先记上了。你戳我一下，我接着说。"
-    # 先发文字（短信分段）
+    # 先发文字；TG 主回复不再拆条。
     outbound = reply_clean or ""
     ok_text = send_message_segmented(chat_id=chat_id, text=outbound, bot_token=bot_token) if outbound else True
     logger.info(
@@ -1182,7 +1057,7 @@ def append_user_input(chat_id: int, user_id: int, text: str):
 
 
 def flush_user_buffer(user_id: int, expected_version: int = 0):
-    """把缓存的用户输入（多模态 parts）合并成一条，调用网关并回复（分段发送）。"""
+    """把缓存的用户输入（多模态 parts）合并成一条，调用网关并回复。"""
     with _BUF_LOCK:
         buf = _INPUT_BUFFERS.get(user_id)
         if not buf:
