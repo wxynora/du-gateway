@@ -13,8 +13,8 @@ _APP_ACTION_ALLOWLIST = {
     "create_system_alarm",
     "create_calendar_event",
     "show_choice_dialog",
+    "show_system_notification",
     "request_screen_check",
-    "show_overlay_bubble",
 }
 _APP_ACTION_HISTORY_MAX = 100
 _APP_ACTION_EXPIRES_DEFAULT = 900
@@ -148,10 +148,10 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_calendar_event_payload(payload)
     if action_type == "show_choice_dialog":
         return _normalize_choice_dialog_payload(payload)
+    if action_type == "show_system_notification":
+        return _normalize_system_notification_payload(payload)
     if action_type == "request_screen_check":
         return _normalize_screen_check_payload(payload)
-    if action_type == "show_overlay_bubble":
-        return _normalize_overlay_bubble_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}
@@ -236,6 +236,32 @@ def _normalize_choice_dialog_payload(payload: dict) -> tuple[Optional[dict], Opt
     }, None
 
 
+def _normalize_system_notification_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    title = str(src.get("title") or "SumiTalk").strip() or "SumiTalk"
+    if len(title) > 80:
+        title = title[:80]
+    message = str(src.get("message") or src.get("content") or "").strip()
+    if not message:
+        return None, "message 不能为空"
+    if len(message) > 800:
+        message = message[:800]
+    level = str(src.get("level") or "info").strip().lower()
+    if level not in {"info", "message", "success", "warning", "error"}:
+        level = "info"
+    category = str(src.get("category") or "").strip().lower()
+    if category not in {"", "message", "status", "reminder", "event", "error"}:
+        category = ""
+    open_app = bool(src.get("openApp") if "openApp" in src else src.get("open_app", True))
+    return {
+        "title": title,
+        "message": message,
+        "level": level,
+        "category": category,
+        "openApp": open_app,
+    }, None
+
+
 def _normalize_screen_check_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
     src = payload if isinstance(payload, dict) else {}
     title = str(src.get("title") or "渡想查岗").strip() or "渡想查岗"
@@ -255,32 +281,6 @@ def _normalize_screen_check_payload(payload: dict) -> tuple[Optional[dict], Opti
         "title": title,
         "message": message,
         "timeoutSeconds": timeout_seconds,
-    }, None
-
-
-def _normalize_overlay_bubble_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
-    src = payload if isinstance(payload, dict) else {}
-    title = str(src.get("title") or "SumiTalk").strip() or "SumiTalk"
-    if len(title) > 80:
-        title = title[:80]
-    message = str(src.get("message") or src.get("content") or "").strip()
-    if not message:
-        return None, "message 不能为空"
-    if len(message) > 600:
-        message = message[:600]
-    level = str(src.get("level") or "info").strip().lower()
-    if level not in {"info", "message", "success", "warning", "error"}:
-        level = "info"
-    try:
-        duration_seconds = int(src.get("duration_seconds") if "duration_seconds" in src else src.get("durationSeconds", 6))
-    except Exception:
-        duration_seconds = 6
-    duration_seconds = max(2, min(30, duration_seconds))
-    return {
-        "title": title,
-        "message": message,
-        "level": level,
-        "durationSeconds": duration_seconds,
     }, None
 
 

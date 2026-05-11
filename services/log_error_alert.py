@@ -70,12 +70,13 @@ def _enqueue_alert(line: str, level_name: str, fp: str) -> None:
         if len(msg) > 360:
             msg = msg[:360] + "..."
         r2_store.append_app_action(
-            "show_overlay_bubble",
+            "show_system_notification",
             {
                 "title": title,
                 "message": f"检测到一条 {level_name.upper()} 日志：\n{msg}",
-                "level": "error" if level_name.upper() in {"ERROR", "CRITICAL", "FATAL"} else "warning",
-                "durationSeconds": 10,
+                "level": "error" if str(level_name or "").strip().upper() in {"ERROR", "CRITICAL", "FATAL"} else "warning",
+                "category": "error",
+                "openApp": True,
             },
             source="log_error_alert",
             expires_in_sec=1800,

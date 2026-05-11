@@ -192,6 +192,7 @@ rg -n "device-state|device-screenshots|screen_check|sense|foreground-app|usage-s
 注意：
 - 截图不是偷偷读屏，必须由客户端授权/执行后回传。
 - 图片会增加大量 token，图片压缩和描述归档在聊天清洗链路里查。
+- 悬浮球旁边的旧气泡能力已移除；日志告警改投 SumiTalk 安卓壳的 `show_system_notification` 系统通知，会走顶部消息提醒通道。后续推送优先试 FCM，不行再接 ntfy。
 
 ## 图片 / token 暴涨
 

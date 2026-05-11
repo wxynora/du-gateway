@@ -14,9 +14,12 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.database.Cursor;
+import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.graphics.Rect;
+import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.location.Criteria;
 import android.location.Location;
@@ -40,7 +43,9 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewOutlineProvider;
 import android.view.WindowManager;
+import android.widget.Button;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
@@ -104,16 +109,12 @@ public class FloatingBallService extends Service {
     private static final long SCREEN_STATE_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long LOCATION_MAX_STALE_MS = 2L * 60L * 1000L;
     private static final float LOCATION_REPORT_MIN_DISTANCE_M = 5000f;
-    private static final int OVERLAY_BUBBLE_MAX_CHARS = 180;
-    private static final long OVERLAY_BUBBLE_DEFAULT_DURATION_MS = 6000L;
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private WindowManager windowManager;
     private ImageView overlayView;
     private WindowManager.LayoutParams overlayParams;
-    private TextView overlayBubbleView;
-    private WindowManager.LayoutParams overlayBubbleParams;
     private BroadcastReceiver screenStateReceiver;
     private BroadcastReceiver configChangeReceiver;
     private SharedPreferences prefs;
@@ -156,14 +157,6 @@ public class FloatingBallService extends Service {
                     mainHandler.postDelayed(this, SCREEN_STATE_REPORT_INTERVAL_MS);
                 }
             };
-    private final Runnable hideOverlayBubbleRunnable =
-            new Runnable() {
-                @Override
-                public void run() {
-                    hideOverlayBubble();
-                }
-            };
-
     @Override
     public void onCreate() {
         super.onCreate();
@@ -411,7 +404,6 @@ public class FloatingBallService extends Service {
     }
 
     private void removeOverlay() {
-        removeOverlayBubble();
         if (overlayView == null || windowManager == null) return;
         try {
             windowManager.removeView(overlayView);
@@ -463,7 +455,6 @@ public class FloatingBallService extends Service {
                             windowManager.updateViewLayout(overlayView, overlayParams);
                         } catch (Exception ignored) {
                         }
-                        updateOverlayBubblePosition();
                         saveOverlayPosition();
                     }
                 };
@@ -548,137 +539,6 @@ public class FloatingBallService extends Service {
     private boolean canUseOverlayWindow() {
         return windowManager != null
                 && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || android.provider.Settings.canDrawOverlays(this));
-    }
-
-    private String compactOverlayBubbleText(String text) {
-        String raw = String.valueOf(text == null ? "" : text).trim().replaceAll("\\s+", " ");
-        if (raw.length() <= OVERLAY_BUBBLE_MAX_CHARS) return raw;
-        return raw.substring(0, OVERLAY_BUBBLE_MAX_CHARS) + "…";
-    }
-
-    private void styleOverlayBubble(TextView view, String level) {
-        String lv = String.valueOf(level == null ? "" : level).trim().toLowerCase(Locale.US);
-        int bgColor = 0xF2FFFFFF;
-        int strokeColor = 0x22000000;
-        int textColor = 0xFF20242A;
-        if ("error".equals(lv)) {
-            bgColor = 0xF2B4232B;
-            strokeColor = 0x44FFFFFF;
-            textColor = 0xFFFFFFFF;
-        } else if ("warning".equals(lv)) {
-            bgColor = 0xF2FFF4DB;
-            strokeColor = 0x66D89B21;
-            textColor = 0xFF4F3410;
-        } else if ("success".equals(lv)) {
-            bgColor = 0xF2EAF8F0;
-            strokeColor = 0x66389964;
-            textColor = 0xFF1E4E34;
-        }
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(bgColor);
-        bg.setCornerRadius(dp(16));
-        bg.setStroke(dp(1), strokeColor);
-        view.setBackground(bg);
-        view.setTextColor(textColor);
-    }
-
-    private void showOverlayBubble(String title, String message, String level, long durationMs) {
-        mainHandler.post(
-                () -> {
-                    if (!canUseOverlayWindow()) {
-                        Log.w(TAG, "overlay bubble skipped: overlay unavailable");
-                        return;
-                    }
-                    if (!prefs.getBoolean(PREF_OVERLAY_VISIBLE, true)) {
-                        Log.i(TAG, "overlay bubble skipped: floating ball disabled");
-                        return;
-                    }
-                    ensureOverlay();
-                    if (overlayView == null || overlayParams == null || windowManager == null) {
-                        Log.w(TAG, "overlay bubble skipped: floating ball unavailable");
-                        return;
-                    }
-                    String body = compactOverlayBubbleText(message);
-                    if (body.isEmpty()) return;
-                    String head = String.valueOf(title == null ? "" : title).trim();
-                    if (head.length() > 40) head = head.substring(0, 40) + "…";
-                    String text = head.isEmpty() ? body : head + "\n" + body;
-
-                    if (overlayBubbleView == null) {
-                        overlayBubbleView = new TextView(this);
-                        overlayBubbleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-                        overlayBubbleView.setLineSpacing(dp(2), 1.0f);
-                        overlayBubbleView.setMaxLines(5);
-                        overlayBubbleView.setPadding(dp(12), dp(9), dp(12), dp(9));
-                        overlayBubbleView.setOnClickListener(v -> openApp());
-                        overlayBubbleParams =
-                                new WindowManager.LayoutParams(
-                                        WindowManager.LayoutParams.WRAP_CONTENT,
-                                        WindowManager.LayoutParams.WRAP_CONTENT,
-                                        overlayWindowType(),
-                                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                                                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                                        PixelFormat.TRANSLUCENT);
-                        overlayBubbleParams.gravity = Gravity.TOP | Gravity.START;
-                        try {
-                            windowManager.addView(overlayBubbleView, overlayBubbleParams);
-                        } catch (Exception e) {
-                            Log.w(TAG, "add overlay bubble failed", e);
-                            overlayBubbleView = null;
-                            overlayBubbleParams = null;
-                            return;
-                        }
-                    }
-                    styleOverlayBubble(overlayBubbleView, level);
-                    overlayBubbleView.setText(text);
-                    updateOverlayBubblePosition();
-                    mainHandler.removeCallbacks(hideOverlayBubbleRunnable);
-                    mainHandler.postDelayed(
-                            hideOverlayBubbleRunnable,
-                            Math.max(2000L, Math.min(30000L, durationMs > 0L ? durationMs : OVERLAY_BUBBLE_DEFAULT_DURATION_MS)));
-                });
-    }
-
-    private void updateOverlayBubblePosition() {
-        if (overlayBubbleView == null || overlayBubbleParams == null || overlayParams == null || windowManager == null) return;
-        Point sz = new Point();
-        getScreenPixels(sz);
-        if (sz.x <= 0 || sz.y <= 0) return;
-        int margin = overlayMarginPx();
-        int ball = overlayBallPx();
-        int gap = dp(8);
-        int maxWidth = Math.max(dp(160), Math.min(dp(280), sz.x - margin * 2));
-        overlayBubbleView.setMaxWidth(maxWidth);
-        boolean leftSide = overlayParams.x + ball / 2 <= sz.x / 2;
-        overlayBubbleParams.x = leftSide
-                ? Math.min(sz.x - maxWidth - margin, overlayParams.x + ball + gap)
-                : Math.max(margin, overlayParams.x - maxWidth - gap);
-        overlayBubbleParams.x = Math.max(margin, overlayBubbleParams.x);
-        overlayBubbleParams.y = Math.max(margin, Math.min(overlayParams.y + dp(2), sz.y - dp(120)));
-        try {
-            windowManager.updateViewLayout(overlayBubbleView, overlayBubbleParams);
-        } catch (Exception ignored) {
-        }
-    }
-
-    private void hideOverlayBubble() {
-        removeOverlayBubble();
-    }
-
-    private void removeOverlayBubble() {
-        mainHandler.removeCallbacks(hideOverlayBubbleRunnable);
-        if (overlayBubbleView == null || windowManager == null) {
-            overlayBubbleView = null;
-            overlayBubbleParams = null;
-            return;
-        }
-        try {
-            windowManager.removeView(overlayBubbleView);
-        } catch (Exception ignored) {
-        }
-        overlayBubbleView = null;
-        overlayBubbleParams = null;
     }
 
     private boolean hasLocationPermission() {
@@ -1219,8 +1079,8 @@ public class FloatingBallService extends Service {
                 result.put("detail", detail);
                 return result;
             }
-            if ("show_overlay_bubble".equals(type)) {
-                JSONObject detail = showOverlayBubbleFromAction(payload == null ? new JSONObject() : payload);
+            if ("show_system_notification".equals(type)) {
+                JSONObject detail = showSystemNotificationFromAction(payload == null ? new JSONObject() : payload);
                 result.put("status", "done");
                 result.put("detail", detail);
                 return result;
@@ -1376,22 +1236,6 @@ public class FloatingBallService extends Service {
         return detail;
     }
 
-    private JSONObject showOverlayBubbleFromAction(JSONObject payload) throws Exception {
-        String title = String.valueOf(payload.optString("title", "SumiTalk")).trim();
-        if (title.isEmpty()) title = "SumiTalk";
-        String message = String.valueOf(payload.optString("message", "")).trim();
-        if (message.isEmpty()) throw new IllegalArgumentException("message_empty");
-        String level = String.valueOf(payload.optString("level", "info")).trim();
-        long durationMs = Math.max(2L, Math.min(30L, payload.optLong("durationSeconds", 6L))) * 1000L;
-        showOverlayBubble(title, message, level, durationMs);
-        JSONObject detail = new JSONObject();
-        detail.put("displayed", true);
-        detail.put("title", title);
-        detail.put("level", level);
-        detail.put("durationMs", durationMs);
-        return detail;
-    }
-
     private JSONObject requestScreenCheckFromAction(JSONObject payload) throws Exception {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
             throw new IllegalStateException("overlay_permission_denied");
@@ -1489,6 +1333,22 @@ public class FloatingBallService extends Service {
         return detail;
     }
 
+    private JSONObject showSystemNotificationFromAction(JSONObject payload) throws Exception {
+        String title = String.valueOf(payload.optString("title", "SumiTalk")).trim();
+        String message = String.valueOf(payload.optString("message", "")).trim();
+        if (title.isEmpty()) title = "SumiTalk";
+        if (message.isEmpty()) throw new IllegalArgumentException("message_empty");
+        String level = String.valueOf(payload.optString("level", "info")).trim();
+        String category = String.valueOf(payload.optString("category", "")).trim();
+        boolean openApp = payload.optBoolean("openApp", true);
+        boolean notified = showAppSystemNotification(title, message, level, category, openApp);
+        JSONObject detail = new JSONObject();
+        detail.put("notified", notified);
+        detail.put("title", title);
+        detail.put("openApp", openApp);
+        return detail;
+    }
+
     private boolean hasCalendarPermission() {
         return ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
                 && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED;
@@ -1574,10 +1434,66 @@ public class FloatingBallService extends Service {
         return new Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
     }
 
+    private boolean canPostNotifications() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                        == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private Intent buildOpenAppIntent() {
+        Intent openIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (openIntent == null) {
+            openIntent = new Intent(this, MainActivity.class);
+        }
+        return openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+    }
+
+    private String resolveNotificationCategory(String category, String level) {
+        String raw = String.valueOf(category == null ? "" : category).trim().toLowerCase(Locale.US);
+        if ("error".equals(raw)) return NotificationCompat.CATEGORY_ERROR;
+        if ("event".equals(raw)) return NotificationCompat.CATEGORY_EVENT;
+        if ("reminder".equals(raw)) return NotificationCompat.CATEGORY_REMINDER;
+        if ("status".equals(raw)) return NotificationCompat.CATEGORY_STATUS;
+        if ("message".equals(raw)) return NotificationCompat.CATEGORY_MESSAGE;
+        String lv = String.valueOf(level == null ? "" : level).trim().toLowerCase(Locale.US);
+        if ("error".equals(lv) || "warning".equals(lv)) return NotificationCompat.CATEGORY_ERROR;
+        return NotificationCompat.CATEGORY_MESSAGE;
+    }
+
+    private boolean showAppSystemNotification(String title, String message, String level, String category, boolean openApp) {
+        if (!canPostNotifications()) {
+            Log.w(TAG, "system notification skipped: notification permission denied");
+            return false;
+        }
+        NotificationCompat.Builder builder =
+                new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+                        .setSmallIcon(R.mipmap.ic_launcher_round)
+                        .setContentTitle(title)
+                        .setContentText(message)
+                        .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
+                        .setAutoCancel(true)
+                        .setPriority(NotificationCompat.PRIORITY_HIGH)
+                        .setDefaults(Notification.DEFAULT_ALL)
+                        .setCategory(resolveNotificationCategory(category, level))
+                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                        .setWhen(System.currentTimeMillis())
+                        .setShowWhen(true);
+        if (openApp) {
+            PendingIntent pi =
+                    PendingIntent.getActivity(
+                            this,
+                            (int) (System.currentTimeMillis() & 0x7fffffff),
+                            buildOpenAppIntent(),
+                            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            builder.setContentIntent(pi);
+        }
+        NotificationManagerCompat.from(this)
+                .notify((int) (System.currentTimeMillis() & 0x7fffffff), builder.build());
+        return true;
+    }
+
     private void showCalendarEventCreatedNotification(long eventId, long startMillis, String title) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                        != PackageManager.PERMISSION_GRANTED) {
+        if (!canPostNotifications()) {
             return;
         }
         PendingIntent pi =
@@ -1603,9 +1519,7 @@ public class FloatingBallService extends Service {
     }
 
     private void showSystemAlarmCreatedNotification(int hour, int minute, String title) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                        != PackageManager.PERMISSION_GRANTED) {
+        if (!canPostNotifications()) {
             return;
         }
         Intent openIntent = new Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -1633,7 +1547,7 @@ public class FloatingBallService extends Service {
     }
 
     private void showMessagePopup(String preview) {
-        showOverlayBubble("渡", preview, "message", OVERLAY_BUBBLE_DEFAULT_DURATION_MS);
+        Log.i(TAG, "message overlay bubble disabled");
     }
 
     private String readAllText(InputStream is) throws Exception {
@@ -1790,7 +1704,6 @@ public class FloatingBallService extends Service {
                     overlayParams.y = startY + dy;
                     clampOverlayIntoScreen();
                     windowManager.updateViewLayout(overlayView, overlayParams);
-                    updateOverlayBubblePosition();
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
@@ -1800,7 +1713,6 @@ public class FloatingBallService extends Service {
                             windowManager.updateViewLayout(overlayView, overlayParams);
                         } catch (Exception ignored) {
                         }
-                        updateOverlayBubblePosition();
                         saveOverlayPosition();
                     } else {
                         openApp();
