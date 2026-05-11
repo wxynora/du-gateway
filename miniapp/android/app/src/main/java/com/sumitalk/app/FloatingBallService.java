@@ -44,8 +44,10 @@ import android.view.View;
 import android.view.ViewOutlineProvider;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
@@ -1177,25 +1179,33 @@ public class FloatingBallService extends Service {
         mainHandler.post(
                 () -> {
                     try {
-                        AlertDialog dialog =
-                                new AlertDialog.Builder(this)
-                                        .setTitle(title.isEmpty() ? "渡" : title)
-                                        .setMessage(message)
-                                        .setPositiveButton(
-                                                finalChoiceALabel,
-                                                (d, which) ->
-                                                        completeChoiceDialog(
-                                                                resultRef,
-                                                                latch,
-                                                                buildChoiceDialogResult(finalChoiceAId, finalChoiceALabel, level, false, false)))
-                                        .setNegativeButton(
-                                                finalChoiceBLabel,
-                                                (d, which) ->
-                                                        completeChoiceDialog(
-                                                                resultRef,
-                                                                latch,
-                                                                buildChoiceDialogResult(finalChoiceBId, finalChoiceBLabel, level, false, false)))
-                                        .create();
+                        AlertDialog dialog = new AlertDialog.Builder(this).create();
+                        dialog.setView(
+                                buildChoiceDialogView(
+                                        title.isEmpty() ? "渡" : title,
+                                        message,
+                                        level,
+                                        finalChoiceALabel,
+                                        finalChoiceBLabel,
+                                        timeoutSeconds,
+                                        () -> {
+                                            completeChoiceDialog(
+                                                    resultRef,
+                                                    latch,
+                                                    buildChoiceDialogResult(finalChoiceAId, finalChoiceALabel, level, false, false));
+                                            dismissChoiceDialog(dialogRef);
+                                        },
+                                        () -> {
+                                            completeChoiceDialog(
+                                                    resultRef,
+                                                    latch,
+                                                    buildChoiceDialogResult(finalChoiceBId, finalChoiceBLabel, level, false, false));
+                                            dismissChoiceDialog(dialogRef);
+                                        }),
+                                0,
+                                0,
+                                0,
+                                0);
                         dialog.setCancelable(dismissible);
                         dialog.setCanceledOnTouchOutside(dismissible);
                         dialog.setOnCancelListener(
@@ -1212,6 +1222,14 @@ public class FloatingBallService extends Service {
                                         : WindowManager.LayoutParams.TYPE_PHONE);
                         dialogRef.set(dialog);
                         dialog.show();
+                        android.view.Window shownWindow = dialog.getWindow();
+                        if (shownWindow != null) {
+                            shownWindow.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+                            shownWindow.getDecorView().setPadding(0, 0, 0, 0);
+                            WindowManager.LayoutParams attrs = shownWindow.getAttributes();
+                            attrs.width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(40), dp(360));
+                            shownWindow.setAttributes(attrs);
+                        }
                     } catch (Exception e) {
                         completeChoiceDialog(resultRef, latch, buildChoiceDialogError(e));
                     }
@@ -1234,6 +1252,317 @@ public class FloatingBallService extends Service {
         String error = String.valueOf(detail.optString("error", "")).trim();
         if (!error.isEmpty()) throw new IllegalStateException(error);
         return detail;
+    }
+
+    private View buildChoiceDialogView(
+            String title,
+            String message,
+            String level,
+            String choiceALabel,
+            String choiceBLabel,
+            int timeoutSeconds,
+            Runnable onChoiceA,
+            Runnable onChoiceB) {
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setClipChildren(false);
+        wrapper.setClipToPadding(false);
+        wrapper.setPadding(0, dp(14), 0, 0);
+
+        View leftEar = buildChoiceDialogEar(false);
+        FrameLayout.LayoutParams leftEarParams =
+                new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP | Gravity.START);
+        leftEarParams.leftMargin = dp(56);
+        wrapper.addView(leftEar, leftEarParams);
+
+        View rightEar = buildChoiceDialogEar(true);
+        FrameLayout.LayoutParams rightEarParams =
+                new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP | Gravity.END);
+        rightEarParams.rightMargin = dp(56);
+        wrapper.addView(rightEar, rightEarParams);
+
+        FrameLayout card = new FrameLayout(this);
+        card.setBackground(choiceDialogCardBackground());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            card.setElevation(dp(18));
+        }
+        FrameLayout.LayoutParams cardParams =
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        cardParams.topMargin = dp(14);
+        wrapper.addView(card, cardParams);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setClipToPadding(false);
+        card.addView(
+                content,
+                new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams topRowParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        topRowParams.setMargins(dp(24), dp(24), dp(24), 0);
+        content.addView(
+                topRow,
+                topRowParams);
+
+        TextView badge = new TextView(this);
+        badge.setText("✦  渡的确认");
+        badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        badge.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        badge.setTextColor(choiceDialogBadgeTextColor(level));
+        badge.setIncludeFontPadding(false);
+        badge.setGravity(Gravity.CENTER);
+        badge.setPadding(dp(10), dp(6), dp(10), dp(6));
+        badge.setBackground(roundedChoiceDialogRect(choiceDialogAccentSoftColor(level), 999, 0x00000000, 0));
+        topRow.addView(
+                badge,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView timeout = new TextView(this);
+        timeout.setText(formatChoiceDialogTimeout(timeoutSeconds));
+        timeout.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        timeout.setTextColor(0xFFA6998E);
+        timeout.setIncludeFontPadding(false);
+        timeout.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams timeoutParams =
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        timeoutParams.leftMargin = dp(12);
+        topRow.addView(timeout, timeoutParams);
+
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams titleRowParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        titleRowParams.setMargins(dp(28), dp(24), dp(28), 0);
+        content.addView(titleRow, titleRowParams);
+
+        TextView titleView = new TextView(this);
+        titleView.setText(title);
+        titleView.setTextColor(0xFF4A4440);
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
+        titleView.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        titleView.setIncludeFontPadding(false);
+        titleView.setLineSpacing(dp(2), 1.0f);
+        titleRow.addView(
+                titleView,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        View titleDot = new View(this);
+        titleDot.setBackground(roundedChoiceDialogRect(choiceDialogPrimaryEndColor(level), 999, 0x00000000, 0));
+        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(8), dp(8));
+        dotParams.leftMargin = dp(8);
+        titleRow.addView(titleDot, dotParams);
+
+        TextView messageView = new TextView(this);
+        messageView.setText(message);
+        messageView.setTextColor(0xFF635C56);
+        messageView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        messageView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        messageView.setLineSpacing(dp(5), 1.0f);
+        messageView.setIncludeFontPadding(true);
+        BoundedScrollView messageScroll = new BoundedScrollView(this, dp(320));
+        messageScroll.setFillViewport(false);
+        messageScroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        messageScroll.setVerticalScrollBarEnabled(false);
+        messageScroll.addView(
+                messageView,
+                new ScrollView.LayoutParams(
+                        ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams messageParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        messageParams.setMargins(dp(28), dp(12), dp(28), 0);
+        content.addView(messageScroll, messageParams);
+
+        LinearLayout buttonStack = new LinearLayout(this);
+        buttonStack.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams buttonStackParams =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        buttonStackParams.setMargins(dp(24), dp(22), dp(24), 0);
+        content.addView(buttonStack, buttonStackParams);
+
+        Button primaryButton = buildChoiceDialogButton(choiceALabel, true, level);
+        primaryButton.setOnClickListener(v -> onChoiceA.run());
+        buttonStack.addView(primaryButton, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
+
+        Button secondaryButton = buildChoiceDialogButton(choiceBLabel, false, level);
+        secondaryButton.setOnClickListener(v -> onChoiceB.run());
+        LinearLayout.LayoutParams secondaryParams =
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52));
+        secondaryParams.topMargin = dp(12);
+        buttonStack.addView(secondaryButton, secondaryParams);
+
+        View handle = new View(this);
+        handle.setBackground(roundedChoiceDialogRect(0x80E8E0D8, 999, 0x00000000, 0));
+        LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(dp(32), dp(4));
+        handleParams.gravity = Gravity.CENTER_HORIZONTAL;
+        handleParams.setMargins(0, dp(16), 0, dp(12));
+        content.addView(handle, handleParams);
+
+        return wrapper;
+    }
+
+    private Button buildChoiceDialogButton(String label, boolean primary, String level) {
+        Button button = new Button(this);
+        button.setText(primary ? label + "  ›" : label);
+        button.setAllCaps(false);
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, primary ? 16 : 15);
+        button.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        button.setGravity(Gravity.CENTER);
+        button.setIncludeFontPadding(false);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setPadding(dp(10), 0, dp(10), 0);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            button.setStateListAnimator(null);
+        }
+        if (primary) {
+            button.setTextColor(Color.WHITE);
+            button.setBackground(choiceDialogPrimaryBackground(level));
+        } else {
+            button.setTextColor(0xFF8B7E74);
+            button.setBackground(roundedChoiceDialogRect(0xFFFDF2F0, 24, 0x00000000, 0));
+        }
+        return button;
+    }
+
+    private View buildChoiceDialogEar(boolean right) {
+        View ear = new View(this);
+        ear.setBackground(roundedChoiceDialogRect(0xFFFFF9F2, 12, 0x14D7B89A, 1));
+        ear.setRotation(right ? 10f : -10f);
+        return ear;
+    }
+
+    private GradientDrawable choiceDialogCardBackground() {
+        GradientDrawable drawable =
+                new GradientDrawable(
+                        GradientDrawable.Orientation.TOP_BOTTOM,
+                        new int[] {0xFFFFFFFF, 0xFFFFF9F2});
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setCornerRadius(dp(32));
+        drawable.setStroke(dp(1), 0x80FFFFFF);
+        return drawable;
+    }
+
+    private GradientDrawable choiceDialogPrimaryBackground(String level) {
+        GradientDrawable drawable =
+                new GradientDrawable(
+                        GradientDrawable.Orientation.TL_BR,
+                        new int[] {choiceDialogPrimaryStartColor(level), choiceDialogPrimaryEndColor(level)});
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setCornerRadius(dp(24));
+        return drawable;
+    }
+
+    private GradientDrawable roundedChoiceDialogRect(int color, int radiusDp, int strokeColor, int strokeDp) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(radiusDp));
+        if (strokeDp > 0) {
+            drawable.setStroke(dp(strokeDp), strokeColor);
+        }
+        return drawable;
+    }
+
+    private int choiceDialogBadgeTextColor(String level) {
+        String normalized = level == null ? "" : level.toLowerCase(Locale.US);
+        if (normalized.contains("danger") || normalized.contains("error") || normalized.contains("critical")) {
+            return 0xFF9B4545;
+        }
+        if (normalized.contains("warn")) {
+            return 0xFF9A5A27;
+        }
+        if (normalized.contains("success")) {
+            return 0xFF3F7A61;
+        }
+        return 0xFF8B5E3C;
+    }
+
+    private int choiceDialogAccentSoftColor(String level) {
+        String normalized = level == null ? "" : level.toLowerCase(Locale.US);
+        if (normalized.contains("danger") || normalized.contains("error") || normalized.contains("critical")) {
+            return 0xFFFFECEB;
+        }
+        if (normalized.contains("warn")) {
+            return 0xFFFFF0E3;
+        }
+        if (normalized.contains("success")) {
+            return 0xFFEAF6F1;
+        }
+        return 0xFFFFF0E8;
+    }
+
+    private int choiceDialogPrimaryStartColor(String level) {
+        String normalized = level == null ? "" : level.toLowerCase(Locale.US);
+        if (normalized.contains("danger") || normalized.contains("error") || normalized.contains("critical")) {
+            return 0xFFE45F5B;
+        }
+        if (normalized.contains("warn")) {
+            return 0xFFFF9866;
+        }
+        if (normalized.contains("success")) {
+            return 0xFF62A985;
+        }
+        return 0xFFFF9B9B;
+    }
+
+    private int choiceDialogPrimaryEndColor(String level) {
+        String normalized = level == null ? "" : level.toLowerCase(Locale.US);
+        if (normalized.contains("danger") || normalized.contains("error") || normalized.contains("critical")) {
+            return 0xFFFF9B9B;
+        }
+        if (normalized.contains("warn")) {
+            return 0xFFFFC071;
+        }
+        if (normalized.contains("success")) {
+            return 0xFF91CFB1;
+        }
+        return 0xFFFFB4A2;
+    }
+
+    private String formatChoiceDialogTimeout(int timeoutSeconds) {
+        if (timeoutSeconds >= 60) {
+            int minutes = Math.max(1, Math.round(timeoutSeconds / 60f));
+            return "约 " + minutes + " 分钟后自动收起";
+        }
+        return timeoutSeconds + " 秒后自动收起";
+    }
+
+    private void dismissChoiceDialog(AtomicReference<AlertDialog> dialogRef) {
+        AlertDialog dialog = dialogRef.get();
+        if (dialog == null) return;
+        try {
+            dialog.dismiss();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static final class BoundedScrollView extends ScrollView {
+        private final int maxHeight;
+
+        BoundedScrollView(Context context, int maxHeight) {
+            super(context);
+            this.maxHeight = maxHeight;
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int limitedHeight = MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST);
+            super.onMeasure(widthMeasureSpec, limitedHeight);
+        }
     }
 
     private JSONObject requestScreenCheckFromAction(JSONObject payload) throws Exception {
