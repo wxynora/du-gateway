@@ -219,7 +219,7 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
         "5) 允许自然分段，但不要为了格式刻意堆很多空行。\n"
         "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。\n"
         "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。\n"
-        "   - 语音要像口语短句；停顿可少量用 <#0.5#> 或 <#1#>，不要连续写，也不要堆省略号/破折号。\n"
+        "   - 语音要像口语短句；停顿只靠自然短句和标点，不写停顿控制标签，也不要堆省略号/破折号。\n"
         "   - 可少量用 MiniMax 动作：(laughs)、(sighs)、(gasps)、(clear-throat)、(breath)；自然时才用。\n"
         "   - 情绪由 TTS 配置控制，不写进 <voice>；2.8 常用值：happy、sad、angry、fearful、disgusted、surprised、calm。\n"
         "   - 如果你不想发语音，就不要输出 <voice> 标签。\n"
