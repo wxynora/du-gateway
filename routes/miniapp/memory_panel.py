@@ -139,6 +139,77 @@ def _core_cache_items_for_debug(limit: int) -> dict:
     return {"count": len(rows), "visible_count": len(out), "items": out}
 
 
+def _event_window_id(event: dict) -> str:
+    return str((event or {}).get("window_id") or "").strip() or "__default__"
+
+
+def _merge_citation_events_into_recalls(recall_events: list[dict], citation_events: list[dict]) -> list[dict]:
+    """把“实际引用”的调试事件贴回对应的召回事件，前端只需要在召回卡片里高亮。"""
+    recalls = [dict(e) for e in recall_events if isinstance(e, dict)]
+    if not recalls or not citation_events:
+        return recalls
+
+    ordered_recalls = sorted(
+        enumerate(recalls),
+        key=lambda pair: str((pair[1] or {}).get("timestamp") or ""),
+    )
+    for citation in sorted(
+        [e for e in citation_events if isinstance(e, dict)],
+        key=lambda e: str((e or {}).get("timestamp") or ""),
+    ):
+        cited_ts = str(citation.get("timestamp") or "")
+        cited_window = _event_window_id(citation)
+        if not cited_ts:
+            continue
+
+        target_idx = None
+        for idx, recall in ordered_recalls:
+            recall_ts = str((recall or {}).get("timestamp") or "")
+            if not recall_ts or recall_ts > cited_ts:
+                continue
+            recall_window = _event_window_id(recall)
+            if recall_window != cited_window:
+                continue
+            target_idx = idx
+
+        if target_idx is None:
+            continue
+
+        target = recalls[target_idx]
+        existing_ids = [
+            str(x).strip()
+            for x in (target.get("referenced_memory_ids") or [])
+            if str(x).strip()
+        ]
+        seen_ids = set(existing_ids)
+        next_ids = existing_ids[:]
+        for raw in citation.get("referenced_memory_ids") or []:
+            mid = str(raw or "").strip()
+            if mid and mid not in seen_ids:
+                seen_ids.add(mid)
+                next_ids.append(mid)
+
+        existing_memories = [
+            x for x in (target.get("referenced_memories") or []) if isinstance(x, dict)
+        ]
+        seen_memory_ids = {str((x or {}).get("id") or "").strip() for x in existing_memories}
+        next_memories = existing_memories[:]
+        for mem in citation.get("referenced_memories") or []:
+            if not isinstance(mem, dict):
+                continue
+            mid = str(mem.get("id") or "").strip()
+            if mid and mid not in seen_memory_ids:
+                seen_memory_ids.add(mid)
+                next_memories.append(mem)
+
+        target["referenced_memory_ids"] = next_ids
+        target["referenced_memories"] = next_memories
+        target["assistant_preview"] = str(citation.get("assistant_preview") or target.get("assistant_preview") or "")
+        target["citation_timestamp"] = str(citation.get("timestamp") or target.get("citation_timestamp") or "")
+
+    return recalls
+
+
 def register_routes(bp) -> None:
     @bp.route("/status", methods=["GET"])
     def miniapp_status():
@@ -306,6 +377,7 @@ def register_routes(bp) -> None:
                 for e in events
                 if str((e or {}).get("source") or "").strip() not in ("search_memory", "memory_citation")
             ]
+            recall_events = _merge_citation_events_into_recalls(recall_events, citation_events)
             search_events = [e for e in events if str((e or {}).get("source") or "").strip() == "search_memory"]
             maintenance_report = r2_store.get_dynamic_memory_maintenance_report() or {}
             core_cache = _core_cache_items_for_debug(core_limit)

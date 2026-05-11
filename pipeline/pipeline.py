@@ -1794,6 +1794,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         return "好些天前"
 
     lines = []
+    recalled_items = []
     citation_map: dict[str, str] = {}
     for t in scored[: max(1, DYNAMIC_MEMORY_TOP_N)]:
         mem = t[2]
@@ -1807,6 +1808,22 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
         if estimate_tokens(new_text) > budget:
             break
         lines.append(line)
+        recalled_items.append(
+            {
+                "label": citation_label,
+                "memory_id": mid,
+                "source": "core_cache" if mid.startswith("core::") else "dynamic_memory",
+                "content": str(mem.get("content") or "").strip(),
+                "line": line,
+                "tag": str(mem.get("tag") or "").strip(),
+                "emotion_label": str(mem.get("emotion_label") or "").strip(),
+                "scene_type": str(mem.get("scene_type") or "").strip(),
+                "target_type": str(mem.get("target_type") or "").strip(),
+                "importance": int(mem.get("importance") or 0),
+                "mention_count": int(mem.get("mention_count") or 0),
+                "last_mentioned": str(mem.get("last_mentioned") or mem.get("created_at") or "").strip(),
+            }
+        )
         if citation_label:
             citation_map[citation_label] = mid
     if not lines:
@@ -1853,8 +1870,10 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             "source": "vector" if recalled else "keyword",
             "expanded_queries": expanded_queries,
             "recalled_lines": lines,
+            "recalled_items": recalled_items,
             "recalled_count": len(lines),
             "scores": injected_scores,
+            "citation_map": citation_map,
         }
     )
     citation_hint = ""
