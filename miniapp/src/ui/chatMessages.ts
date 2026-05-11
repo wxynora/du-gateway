@@ -388,7 +388,17 @@ export function pickBetterHistory(primary: ChatDraftMessage[], fallback: ChatDra
 
 export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
   const list = Array.isArray(messages) ? messages : [];
-  return sortHistoryMessages(list.map((msg) => {
+  return sortHistoryMessages(list.filter((msg) => {
+      const id = String((msg as any)?.id || "").trim();
+      const role = String((msg as any)?.role || "").trim().toLowerCase();
+      const content = contentToPlainText(extractMessageContentSource(msg)) || fallbackRawContentText(extractMessageContentSource(msg));
+      const isSeedId = id.startsWith("seed-");
+      const isDefaultGreeting = role === "assistant" && (
+        content === "我在。你直接说就好。" ||
+        /开着。你直接说就好。$/.test(content)
+      );
+      return !(isSeedId || isDefaultGreeting);
+    }).map((msg) => {
       const rawContent = extractMessageContentSource(msg);
       const rawReasoning = extractMessageReasoningSource(msg);
       const normalizedRole = String(msg?.role || "").trim().toLowerCase();
