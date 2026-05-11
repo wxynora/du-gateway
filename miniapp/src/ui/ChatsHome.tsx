@@ -9,7 +9,7 @@ import {
 } from "./chatMessages";
 import { MAIN_SUMITALK_DISPLAY_WINDOW_ID, sumitalkHistoryPath } from "./chatWindowIds";
 import { CornerDownIcon } from "./icons";
-import { readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
+import { readLocalChatHistory, readLocalChatHistoryRows, writeLocalChatHistory } from "./storage/chatHistoryDb";
 import { SummaryBlock } from "./ChatPresentation";
 
 type DailyReport = {
@@ -20,6 +20,29 @@ type DailyReport = {
   summary_text?: string;
   generated_at?: string;
 };
+
+function uniqueNonEmptyStrings(values: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const item = String(value || "").trim();
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+async function readBestLocalHistoryForWindows(windowIds: string[]): Promise<ChatDraftMessage[]> {
+  const rows = await readLocalChatHistoryRows(uniqueNonEmptyStrings(windowIds));
+  return rows.reduce(
+    (best, row) => {
+      const messages = sanitizeHistoryMessages((row?.messages || []) as ChatDraftMessage[]);
+      return pickBetterHistory(messages, best, []);
+    },
+    [] as ChatDraftMessage[],
+  );
+}
 
 export function ChatsHome({
   dailyWhisper,
@@ -78,11 +101,13 @@ export function ChatsHome({
         const legacyLocalMessages = mainWindowId === "sumitalk-main"
           ? []
           : sanitizeHistoryMessages(await readLocalChatHistory(did, "sumitalk-main"));
-        const localMessages = pickBetterHistory(mainLocalMessages, legacyLocalMessages, []);
+        const recoveredMainMessages = await readBestLocalHistoryForWindows([mainWindowId, MAIN_SUMITALK_DISPLAY_WINDOW_ID]);
+        const localMessages = pickBetterHistory(recoveredMainMessages, pickBetterHistory(mainLocalMessages, legacyLocalMessages, []), []);
         if (!cancelled && localMessages.length) {
           const pickedLocal = pickLatestDraftPreview(localMessages);
           setDuPreview(pickedLocal.preview);
           setDuTime(pickedLocal.time);
+          await writeLocalChatHistory(did, mainWindowId, localMessages);
         }
         const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(MAIN_SUMITALK_DISPLAY_WINDOW_ID));
         if (cancelled) return;
@@ -95,11 +120,14 @@ export function ChatsHome({
           await writeLocalChatHistory(did, mainWindowId, remoteMessages);
         }
 
-        const groupLocalMessages = sanitizeHistoryMessages(await readLocalChatHistory(did, groupWindowId));
+        const groupCurrentLocalMessages = sanitizeHistoryMessages(await readLocalChatHistory(did, groupWindowId));
+        const groupRecoveredMessages = await readBestLocalHistoryForWindows([groupWindowId]);
+        const groupLocalMessages = pickBetterHistory(groupRecoveredMessages, groupCurrentLocalMessages, []);
         if (!cancelled && groupLocalMessages.length) {
           const pickedLocalGroup = pickLatestDraftPreview(groupLocalMessages);
           setGroupPreview(pickedLocalGroup.preview);
           setGroupTime(pickedLocalGroup.time);
+          await writeLocalChatHistory(did, groupWindowId, groupLocalMessages);
         }
         const groupHistory = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(groupWindowId));
         if (cancelled) return;

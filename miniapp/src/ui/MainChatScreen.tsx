@@ -58,7 +58,7 @@ import {
   SearchIconMini,
 } from "./icons";
 import { SumiOverlay } from "../plugins/sumi-overlay";
-import { migrateLocalChatHistoryDevice, readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
+import { migrateLocalChatHistoryDevice, readLocalChatHistory, readLocalChatHistoryRows, writeLocalChatHistory } from "./storage/chatHistoryDb";
 import { useCodexGroupTaskRealtime, type CodexGroupTaskRealtimeTask } from "./hooks/useCodexGroupTaskRealtime";
 import { useToast } from "./toast";
 
@@ -122,6 +122,18 @@ async function apiJsonWithTimeout<T>(path: string, timeoutMs: number): Promise<T
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+function uniqueNonEmptyStrings(values: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const item = String(value || "").trim();
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
 }
 
 async function waitForCodexGroupChatTask(taskId: string): Promise<CodexGroupChatTask> {
@@ -315,6 +327,17 @@ export function MainChatScreen({
         remoteHistoryReadyRef.current = false;
         remoteHistoryWarningShownRef.current = false;
         const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(deviceId, historyWindowId));
+        const localRecoveryWindowIds = groupChatMode
+          ? uniqueNonEmptyStrings([historyWindowId, displayHistoryWindowId, windowId])
+          : uniqueNonEmptyStrings([historyWindowId, displayHistoryWindowId, windowId, MAIN_SUMITALK_DISPLAY_WINDOW_ID]);
+        const localCandidateRows = await readLocalChatHistoryRows(localRecoveryWindowIds);
+        const localCandidateMessages = localCandidateRows.reduce(
+          (best, row) => {
+            const rowMessages = sanitizeHistoryMessages((row?.messages || []) as ChatDraftMessage[]);
+            return pickBetterHistory(rowMessages, best, []);
+          },
+          [] as ChatDraftMessage[],
+        );
         const legacyLocalGroups = [];
         if (!groupChatMode && windowId && windowId !== historyWindowId) {
           legacyLocalGroups.push(sanitizeHistoryMessages(await readLocalChatHistory(deviceId, windowId)));
@@ -326,11 +349,11 @@ export function MainChatScreen({
           (best, item) => pickBetterHistory(item, best, []),
           [] as ChatDraftMessage[],
         );
-        const fallbackLocalMessages = localMessages.length
-          ? localMessages
-          : legacyLocalMessages;
+        const recoveredLocalMessages = pickBetterHistory(localCandidateMessages, localMessages, []);
+        const fallbackLocalMessages = pickBetterHistory(recoveredLocalMessages, legacyLocalMessages, []);
         if (!cancelled && fallbackLocalMessages.length) {
           setMessages(fallbackLocalMessages);
+          await writeLocalChatHistory(deviceId, historyWindowId, fallbackLocalMessages);
         }
         const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
         if (cancelled) return;
@@ -495,7 +518,7 @@ export function MainChatScreen({
       : [...params.baseMessages, pendingMsg];
     messagesRef.current = pendingMessages;
     setMessages(pendingMessages);
-    await saveDisplayHistory(pendingMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+    await saveDisplayHistory(pendingMessages, { localDeviceId: params.replyTarget });
     let taskId = "";
     try {
       const created = await apiJson<CodexGroupChatTaskResponse>("/miniapp-api/codex-group-chat-tasks", {
@@ -520,7 +543,7 @@ export function MainChatScreen({
       });
       messagesRef.current = queuedMessages;
       setMessages(queuedMessages);
-      await saveDisplayHistory(queuedMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+      await saveDisplayHistory(queuedMessages, { localDeviceId: params.replyTarget });
       const task = await waitForCodexGroupChatTask(taskId);
       const applied = await applyBenbenTaskTerminal(task, { messageId: benbenId, localDeviceId: params.replyTarget });
       if (!applied) throw new Error("笨笨没有返回内容");
@@ -630,7 +653,7 @@ export function MainChatScreen({
     setSending(true);
     setMessages(draftMessages);
     messagesRef.current = draftMessages;
-    await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
+    await saveDisplayHistory(draftMessages, { syncRemote: groupChatMode, localDeviceId: resolvedDeviceId });
     try {
       const requestUserContent = groupChatMode ? buildGroupTurnUserContent(nextMessages, content) : content;
       const requestWindowId = windowId;
@@ -681,7 +704,7 @@ export function MainChatScreen({
       messagesRef.current = finalMessages;
       setMessages(finalMessages);
       if (groupChatMode) {
-        await saveDisplayHistory(finalMessages, { syncRemote: false, localDeviceId: replyTarget });
+        await saveDisplayHistory(finalMessages, { localDeviceId: replyTarget });
         await requestBenbenGroupReply({
           baseMessages: finalMessages,
           userContent: content,
@@ -712,7 +735,7 @@ export function MainChatScreen({
       }
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
-      await saveDisplayHistory(failedMessages);
+      await saveDisplayHistory(failedMessages, { localDeviceId: replyTarget });
       toast(`发送失败：${e?.message || e}`);
     } finally {
       setSending(false);

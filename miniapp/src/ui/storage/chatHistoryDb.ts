@@ -13,7 +13,7 @@ export type ChatHistoryMessage = {
   };
 };
 
-type ChatHistoryRow = {
+export type ChatHistoryRow = {
   key: string;
   deviceId: string;
   windowId: string;
@@ -45,6 +45,21 @@ export async function readLocalChatHistory(deviceId: string, windowId: string): 
   try {
     const row = await db.histories.get(historyKey(did, wid));
     return Array.isArray(row?.messages) ? row.messages : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function readLocalChatHistoryRows(windowIds: string[]): Promise<ChatHistoryRow[]> {
+  const wanted = new Set(
+    (Array.isArray(windowIds) ? windowIds : [])
+      .map((item) => String(item || "").trim())
+      .filter(Boolean),
+  );
+  if (!wanted.size) return [];
+  try {
+    const rows = await db.histories.toArray();
+    return rows.filter((row) => wanted.has(String(row?.windowId || "").trim()));
   } catch {
     return [];
   }
