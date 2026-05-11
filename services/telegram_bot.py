@@ -134,6 +134,8 @@ _CTX_LOCK = threading.Lock()
 _CONTEXT_MESSAGES: dict[int, list[dict]] = {}
 _PENDING_LOCK = threading.Lock()
 _PENDING_USER_CONTENTS: dict[int, list[Union[str, list]]] = {}
+_FLUSH_WATCHDOG_LOCK = threading.Lock()
+_FLUSH_WATCHDOG_STARTED = False
 _UPDATE_DEDUP_LOCK = threading.Lock()
 _PROCESSED_UPDATE_IDS: dict[str, float] = {}
 _UPDATE_DEDUP_TTL_SECONDS = 10 * 60
@@ -1114,8 +1116,61 @@ def flush_user_buffer(user_id: int, expected_version: int = 0):
     process_message(chat_id=int(chat_id), user_id=user_id, user_content=merged_parts)
 
 
+def _flush_watchdog_loop():
+    while True:
+        time.sleep(1.0)
+        due: list[tuple[int, int, int, float]] = []
+        now = time.time()
+        with _BUF_LOCK:
+            for user_id, buf in list(_INPUT_BUFFERS.items()):
+                parts = buf.get("parts") or []
+                flush_at = buf.get("flush_at")
+                if not parts or not flush_at:
+                    continue
+                try:
+                    overdue = now - float(flush_at)
+                except (TypeError, ValueError):
+                    overdue = 0.0
+                if overdue < 1.0:
+                    continue
+                timer: Optional[threading.Timer] = buf.get("timer")
+                if timer:
+                    try:
+                        timer.cancel()
+                    except Exception:
+                        pass
+                    buf["timer"] = None
+                due.append((int(user_id), int(buf.get("flush_version") or 0), len(parts), overdue))
+        for user_id, version, parts_count, overdue in due:
+            logger.warning(
+                "输入聚合 watchdog 发现到期未 flush，兜底触发 user_id=%s version=%s parts=%d overdue=%.1f",
+                user_id,
+                version,
+                parts_count,
+                overdue,
+            )
+            try:
+                flush_user_buffer(user_id, version)
+            except Exception:
+                logger.exception("输入聚合 watchdog flush 异常 user_id=%s version=%s", user_id, version)
+
+
+def _start_flush_watchdog_once():
+    global _FLUSH_WATCHDOG_STARTED
+    if _FLUSH_WATCHDOG_STARTED:
+        return
+    with _FLUSH_WATCHDOG_LOCK:
+        if _FLUSH_WATCHDOG_STARTED:
+            return
+        t = threading.Thread(target=_flush_watchdog_loop, name="tg-input-flush-watchdog", daemon=True)
+        t.start()
+        _FLUSH_WATCHDOG_STARTED = True
+        logger.info("输入聚合 watchdog 已启动")
+
+
 def init_telegram_bot_runtime():
     """在服务启动时调用：清主 Bot 默认命令菜单、设文游群专属命令等。Webhook 模式下无需轮询。"""
+    _start_flush_watchdog_once()
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN 未配置，Telegram 功能将不可用")
         return
@@ -1135,34 +1190,52 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     """
     token = _effective_tg_token(bot_token)
     if not token:
+        logger.warning("TG update 忽略：bot token 为空")
         return
     gm_split = bool(TELEGRAM_GM_BOT_TOKEN)
     is_gm = gm_split and token == TELEGRAM_GM_BOT_TOKEN
     is_main = token == TELEGRAM_BOT_TOKEN
     if gm_split and not is_gm and not is_main:
+        logger.warning("TG update 忽略：bot token 不匹配 gm_split=%s", gm_split)
         return
 
     update_id = (upd or {}).get("update_id")
     msg = (upd or {}).get("message") or (upd or {}).get("edited_message")
     if not msg:
+        logger.info("TG update 忽略：无 message update_id=%s keys=%s", update_id, sorted((upd or {}).keys()))
         return
     chat_id = msg.get("chat", {}).get("id")
     chat_type = (msg.get("chat") or {}).get("type") or ""
     from_user = msg.get("from") or {}
     user_id = from_user.get("id")
     if chat_id is None or user_id is None:
+        logger.warning("TG update 忽略：缺 chat_id/user_id update_id=%s chat_id=%s user_id=%s", update_id, chat_id, user_id)
         return
     if not _register_update_once(update_id=update_id, token=token, user_id=user_id, chat_id=chat_id):
         return
 
     text = (msg.get("text") or "").strip()
     caption = (msg.get("caption") or "").strip()
+    logger.info(
+        "TG update 进入处理 update_id=%s bot=%s chat_id=%s chat_type=%s user_id=%s text_len=%s caption_len=%s has_photo=%s gm_split=%s",
+        update_id,
+        "gm" if is_gm else "main",
+        chat_id,
+        chat_type,
+        user_id,
+        len(text),
+        len(caption),
+        bool(msg.get("photo")),
+        gm_split,
+    )
 
     # —— 文游专用 GM Bot：只处理文游群；其它聊天仅简短提示 ——
     if is_gm:
         if (not text) and msg.get("photo"):
+            logger.info("TG GM update 忽略：GM Bot 不处理图片 update_id=%s chat_id=%s", update_id, chat_id)
             return
         if not text:
+            logger.info("TG GM update 忽略：无文本 update_id=%s chat_id=%s", update_id, chat_id)
             return
         if not WENYOU_GROUP_CHAT_ID or int(chat_id) != int(WENYOU_GROUP_CHAT_ID):
             if chat_type == "private":
@@ -1171,6 +1244,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
                     "本 Bot 仅用于文游跑团群。与渡私聊请使用主 Bot。",
                     bot_token=token,
                 )
+            logger.info("TG GM update 忽略：非文游群 update_id=%s chat_id=%s chat_type=%s", update_id, chat_id, chat_type)
             return
         parts = text.strip().split(maxsplit=1)
         cmd0 = (parts[0] if parts else "").split("@", 1)[0].lower()
@@ -1231,6 +1305,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         return
 
     if not text:
+        logger.info("TG update 忽略：无文本且非图片 update_id=%s chat_id=%s", update_id, chat_id)
         return
 
     # 文游群内：主 Bot 发的消息 = 玩家二（渡）发言，记入本轮（仅你发 /story /go /end 等指令）
@@ -1241,6 +1316,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         and not text.startswith("/")
         and _is_message_from_main_bot(msg)
     ):
+        logger.info("TG update 记录为文游玩家二发言 update_id=%s chat_id=%s", update_id, chat_id)
         record_group_player2_line(text, session_id=int(chat_id))
         return
 
@@ -1250,8 +1326,10 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     #   同时 GM Bot 已在其 webhook 侧记录玩家行动，这里不再重复 record。
     if gm_split and WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
         if text.startswith("/"):
+            logger.info("TG update 忽略：文游群指令交给 GM Bot update_id=%s chat_id=%s cmd=%s", update_id, chat_id, text.split(maxsplit=1)[0])
             return
         # 走主链路（聚合输入 -> 调网关 -> 主 Bot 回复）
+        logger.info("TG update 文游群普通发言进入主链路 update_id=%s chat_id=%s user_id=%s", update_id, chat_id, user_id)
         append_user_input(chat_id=int(chat_id), user_id=int(user_id), text=text)
         return
 
@@ -1284,6 +1362,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
             send_message(int(chat_id), out, bot_token=token)
             return
         record_group_player_line(int(chat_id), text)
+        logger.info("TG update 记录为文游玩家行动 update_id=%s chat_id=%s", update_id, chat_id)
         return
 
     cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()

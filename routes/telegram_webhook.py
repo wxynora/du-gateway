@@ -15,12 +15,29 @@ _WEBHOOK_WORKER_STARTED = False
 _WEBHOOK_WORKER_LOCK = threading.Lock()
 
 
+def _update_summary(update: dict) -> str:
+    update = update or {}
+    msg = update.get("message") or update.get("edited_message") or {}
+    chat = msg.get("chat") or {}
+    from_user = msg.get("from") or {}
+    text = (msg.get("text") or msg.get("caption") or "").strip()
+    return (
+        f"update_id={update.get('update_id')} "
+        f"keys={','.join(sorted(update.keys()))} "
+        f"chat_id={chat.get('id')} chat_type={chat.get('type')} "
+        f"user_id={from_user.get('id')} "
+        f"has_message={bool(msg)} has_text={bool(text)} text_len={len(text)} "
+        f"has_photo={bool(msg.get('photo'))} has_callback={bool(update.get('callback_query'))}"
+    )
+
+
 def _webhook_worker_loop():
     while True:
         update, bot_token = _WEBHOOK_QUEUE.get()
         try:
             from services.telegram_bot import handle_telegram_update
 
+            logger.info("Telegram webhook worker 消费 update %s", _update_summary(update))
             handle_telegram_update(update, bot_token=bot_token)
         except Exception as e:
             logger.exception("处理 Telegram webhook update 失败: %s", e)
@@ -45,6 +62,7 @@ def _enqueue_update(update: dict, bot_token: str) -> bool:
     _ensure_webhook_worker()
     try:
         _WEBHOOK_QUEUE.put_nowait((update, bot_token))
+        logger.info("Telegram webhook 已入队 queue_size=%s %s", _WEBHOOK_QUEUE.qsize(), _update_summary(update))
         return True
     except queue.Full:
         logger.warning("Telegram webhook 队列已满，丢弃 update")
