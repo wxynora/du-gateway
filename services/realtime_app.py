@@ -27,6 +27,7 @@ logger = logging.getLogger("realtime")
 app = FastAPI(title="du-gateway realtime", version="0.1.0")
 
 _SUMITALK_HISTORY_FILE = DATA_DIR / "sumitalk_display_histories.json"
+_SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
 _POLL_INTERVAL_SECONDS = max(1.0, float(os.environ.get("REALTIME_POLL_INTERVAL_SECONDS", "5") or "5"))
 _FAIL_BACKOFF_BASE_SECONDS = max(1.0, float(os.environ.get("REALTIME_FAIL_BACKOFF_BASE_SECONDS", "3") or "3"))
 _MAX_BACKOFF_SECONDS = max(5.0, float(os.environ.get("REALTIME_MAX_BACKOFF_SECONDS", "60") or "60"))
@@ -67,7 +68,40 @@ def _message_content_to_text(content: Any) -> str:
     return str(content).strip()
 
 
-def _load_history_for_device(device_id: str) -> dict:
+def _history_storage_key(device_id: str, window_id: str = _SUMITALK_MAIN_WINDOW_ID) -> str:
+    did = str(device_id or "").strip()
+    wid = str(window_id or "").strip() or _SUMITALK_MAIN_WINDOW_ID
+    return f"{did}::{wid}" if wid else did
+
+
+def _history_candidate_keys(device_id: str, window_id: str = _SUMITALK_MAIN_WINDOW_ID) -> list[str]:
+    did = str(device_id or "").strip()
+    wid = str(window_id or "").strip() or _SUMITALK_MAIN_WINDOW_ID
+    if not did:
+        return []
+    keys = [_history_storage_key(did, wid)]
+    if wid == _SUMITALK_MAIN_WINDOW_ID:
+        keys.append(did)
+    out = []
+    seen = set()
+    for key in keys:
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def _sort_history_messages(messages: list[dict]) -> list[dict]:
+    def _key(row: dict) -> tuple[str, str]:
+        return (
+            str((row or {}).get("createdAt") or (row or {}).get("created_at") or ""),
+            str((row or {}).get("id") or ""),
+        )
+
+    return sorted([m for m in messages if isinstance(m, dict)], key=_key)
+
+
+def _load_history_for_device(device_id: str, window_id: str = _SUMITALK_MAIN_WINDOW_ID) -> dict:
     did = str(device_id or "").strip()
     if not did or not _SUMITALK_HISTORY_FILE.exists():
         return {}
@@ -76,15 +110,34 @@ def _load_history_for_device(device_id: str) -> dict:
             data = json.load(f) or {}
         if not isinstance(data, dict):
             return {}
-        row = data.get(did)
-        return row if isinstance(row, dict) else {}
+        rows = [data.get(key) for key in _history_candidate_keys(did, window_id)]
+        rows = [row for row in rows if isinstance(row, dict)]
+        if not rows:
+            return {}
+        messages = []
+        seen = set()
+        for row in rows:
+            for item in row.get("messages") or []:
+                if not isinstance(item, dict):
+                    continue
+                key = (
+                    str(item.get("id") or ""),
+                    str(item.get("role") or ""),
+                    str(item.get("createdAt") or ""),
+                    str(item.get("content") or ""),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                messages.append(item)
+        return {"messages": _sort_history_messages(messages)}
     except Exception as e:
         logger.warning("load history failed device_id=%s error=%s", did, e)
         return {}
 
 
-def _latest_assistant_message(device_id: str) -> dict:
-    row = _load_history_for_device(device_id)
+def _latest_assistant_message(device_id: str, window_id: str = _SUMITALK_MAIN_WINDOW_ID) -> dict:
+    row = _load_history_for_device(device_id, window_id=window_id)
     messages = row.get("messages") if isinstance(row.get("messages"), list) else []
     for item in reversed(messages):
         if not isinstance(item, dict):
@@ -208,6 +261,19 @@ async def _receiver_loop(websocket: WebSocket, device_id: str) -> None:
                 await _send_json(websocket, {"type": "device_action_results_ack", "ok": False, "error": "results must be list"})
                 continue
             result = await asyncio.to_thread(r2_store.report_app_actions, results, device_id=device_id)
+            if isinstance(result, dict) and result.get("ok"):
+                try:
+                    from routes.miniapp.device_actions import _wake_du_for_device_action_results
+
+                    queued = await asyncio.to_thread(
+                        _wake_du_for_device_action_results,
+                        device_id,
+                        result.get("items") or [],
+                    )
+                    if queued:
+                        result["proactive_wakeup_queued"] = queued
+                except Exception as e:
+                    logger.warning("device action realtime wake failed device_id=%s error=%s", device_id, e)
             await _send_json(websocket, {"type": "device_action_results_ack", **(result or {})})
             continue
         await _send_json(websocket, {"type": "error", "error": f"unknown_type:{kind or '(empty)'}"})
@@ -215,16 +281,17 @@ async def _receiver_loop(websocket: WebSocket, device_id: str) -> None:
 
 async def _sender_loop(websocket: WebSocket, device_id: str) -> None:
     last_message_key = str(websocket.query_params.get("last_message_key") or "").strip()
+    window_id = str(websocket.query_params.get("window_id") or "").strip() or _SUMITALK_MAIN_WINDOW_ID
     last_codex_task_states: dict[str, str] = {}
     if not last_message_key:
-        latest = await asyncio.to_thread(_latest_assistant_message, device_id)
+        latest = await asyncio.to_thread(_latest_assistant_message, device_id, window_id)
         last_message_key = str(latest.get("key") or "")
         await _send_json(websocket, {"type": "ready", "device_id": device_id, "latest_message_key": last_message_key})
 
     failures = 0
     while True:
         try:
-            latest = await asyncio.to_thread(_latest_assistant_message, device_id)
+            latest = await asyncio.to_thread(_latest_assistant_message, device_id, window_id)
             latest_key = str(latest.get("key") or "")
             if latest_key and latest_key != last_message_key:
                 last_message_key = latest_key
@@ -267,6 +334,7 @@ async def health():
 @app.get("/realtime/latest")
 async def realtime_latest(
     device_id: str = "",
+    window_id: str = _SUMITALK_MAIN_WINDOW_ID,
     panel_token: str = "",
     authorization: str = Header(default=""),
     x_panel_token: str = Header(default="", alias="X-Panel-Token"),
@@ -276,7 +344,7 @@ async def realtime_latest(
     if not ok:
         http_status = 503 if code == "panel_auth_misconfigured" else (403 if code in {"not_trusted", "device_id_mismatch"} else 401)
         return JSONResponse({"ok": False, "error": code}, status_code=http_status)
-    return {"ok": True, "device_id": did, "message": await asyncio.to_thread(_latest_assistant_message, did)}
+    return {"ok": True, "device_id": did, "window_id": window_id or _SUMITALK_MAIN_WINDOW_ID, "message": await asyncio.to_thread(_latest_assistant_message, did, window_id or _SUMITALK_MAIN_WINDOW_ID)}
 
 
 @app.websocket("/ws/device")

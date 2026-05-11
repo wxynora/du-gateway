@@ -1,5 +1,7 @@
 import type { ChatDraftMessage } from "./chatMessages";
 
+export const MAIN_SUMITALK_DISPLAY_WINDOW_ID = "sumitalk-main";
+
 export function buildGroupDisplayWindowId(_primaryWindowId?: string): string {
   return "sumitalk-group";
 }

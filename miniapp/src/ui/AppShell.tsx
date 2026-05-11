@@ -24,7 +24,7 @@ import {
   type ChatFontKey,
   type ChatTimeFormat,
 } from "./chatMessages";
-import { buildGroupDisplayWindowId } from "./chatWindowIds";
+import { MAIN_SUMITALK_DISPLAY_WINDOW_ID, buildGroupDisplayWindowId } from "./chatWindowIds";
 import {
   BookOpenIcon,
   CalendarIconMini,
@@ -590,7 +590,7 @@ export function AppShell({
         duAvatarImage={duAvatarImage}
         benbenAvatarImage={benbenAvatarImage}
         groupTitle={groupChatDisplayTitle}
-        privateWindowId={sharedChatWindowId}
+        privateWindowId={MAIN_SUMITALK_DISPLAY_WINDOW_ID}
         groupWindowId={buildGroupDisplayWindowId(sharedChatWindowId)}
         onOpenDu={() => setActiveScreen("du")}
         onOpenGroup={() => setActiveScreen("group")}
@@ -628,6 +628,7 @@ export function AppShell({
         <MainChatScreen
           title="渡"
           windowId={sharedChatWindowId}
+          displayWindowId={MAIN_SUMITALK_DISPLAY_WINDOW_ID}
           avatarLabel="渡"
           accent="du"
           transparentBubbleEnabled={transparentBubbleEnabled}

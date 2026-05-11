@@ -15,6 +15,7 @@ sumitalk_logger = logging.getLogger("sumitalk")
 _SUMITALK_HISTORY_FILE = DATA_DIR / "sumitalk_display_histories.json"
 _SUMITALK_HISTORY_LOCK = threading.Lock()
 _SUMITALK_HISTORY_MAX_MESSAGES = 80
+_SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
 
 
 def _load_sumitalk_histories() -> dict:
@@ -53,6 +54,11 @@ def _normalize_sumitalk_history_window_id(value) -> str:
     return str(value or "").strip()[:160]
 
 
+def _canonical_sumitalk_history_window_id(value) -> str:
+    wid = _normalize_sumitalk_history_window_id(value)
+    return wid or _SUMITALK_MAIN_WINDOW_ID
+
+
 def _get_sumitalk_history_window_id_from_args() -> str:
     return _normalize_sumitalk_history_window_id(
         request.args.get("window_id") or request.args.get("history_window_id") or ""
@@ -67,8 +73,53 @@ def _get_sumitalk_history_window_id_from_body(body: dict) -> str:
 
 def _sumitalk_history_storage_key(device_id: str, window_id: str = "") -> str:
     did = str(device_id or "").strip()
-    wid = _normalize_sumitalk_history_window_id(window_id)
+    wid = _canonical_sumitalk_history_window_id(window_id)
     return did if not wid else f"{did}::{wid}"
+
+
+def _sumitalk_history_candidate_keys(device_id: str, window_id: str = "") -> list[str]:
+    did = str(device_id or "").strip()
+    if not did:
+        return []
+    wid = _canonical_sumitalk_history_window_id(window_id)
+    keys = [_sumitalk_history_storage_key(did, wid)]
+    if wid == _SUMITALK_MAIN_WINDOW_ID:
+        keys.append(did)  # 旧版主会话没有 window_id，兼容读回来。
+    elif wid.startswith("tg_"):
+        keys.append(_sumitalk_history_storage_key(did, _SUMITALK_MAIN_WINDOW_ID))
+        keys.append(did)
+    out = []
+    seen = set()
+    for key in keys:
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def _load_sumitalk_history_row(data: dict, device_id: str, window_id: str = "") -> dict:
+    rows = []
+    for key in _sumitalk_history_candidate_keys(device_id, window_id):
+        row = data.get(key) if isinstance(data, dict) else None
+        if isinstance(row, dict):
+            rows.append(row)
+    if not rows:
+        return {}
+    messages = _merge_sumitalk_messages(*[(row.get("messages") or []) for row in rows])
+    updated_at = ""
+    latest_dt = None
+    for row in rows:
+        raw = str(row.get("updated_at") or "").strip()
+        dt = parse_iso_to_beijing(raw)
+        if raw and (latest_dt is None or (dt and dt > latest_dt)):
+            updated_at = raw
+            latest_dt = dt
+    return {
+        "device_id": device_id,
+        "window_id": _canonical_sumitalk_history_window_id(window_id),
+        "updated_at": updated_at,
+        "messages": messages,
+    }
 
 
 def _sumitalk_request_brief() -> dict:
@@ -167,11 +218,11 @@ def register_routes(bp) -> None:
                 meta["ua"],
             )
             return jsonify({"ok": False, "error": "缺少设备标识"}), 400
-        window_id = _get_sumitalk_history_window_id_from_args()
+        window_id = _canonical_sumitalk_history_window_id(_get_sumitalk_history_window_id_from_args())
         storage_key = _sumitalk_history_storage_key(device_id, window_id)
         with _SUMITALK_HISTORY_LOCK:
             data = _load_sumitalk_histories()
-            row = data.get(storage_key) if isinstance(data, dict) else None
+            row = _load_sumitalk_history_row(data, device_id, window_id)
         messages = _normalize_sumitalk_messages((row or {}).get("messages") or [])
         meta = _sumitalk_request_brief()
         sumitalk_logger.info(
@@ -207,11 +258,11 @@ def register_routes(bp) -> None:
             )
             return jsonify({"ok": False, "error": "缺少设备标识"}), 400
         after_key = str(request.args.get("after_key") or request.args.get("after") or "").strip()
-        window_id = _get_sumitalk_history_window_id_from_args()
+        window_id = _canonical_sumitalk_history_window_id(_get_sumitalk_history_window_id_from_args())
         storage_key = _sumitalk_history_storage_key(device_id, window_id)
         with _SUMITALK_HISTORY_LOCK:
             data = _load_sumitalk_histories()
-            row = data.get(storage_key) if isinstance(data, dict) else None
+            row = _load_sumitalk_history_row(data, device_id, window_id)
         messages = _normalize_sumitalk_messages((row or {}).get("messages") or [])
         latest = _latest_sumitalk_assistant_message(messages)
         latest_key = _sumitalk_message_poll_key(latest or {}) if latest else ""
@@ -254,13 +305,13 @@ def register_routes(bp) -> None:
             )
             return jsonify({"ok": False, "error": "缺少设备标识"}), 400
         body = request.get_json(silent=True) or {}
-        window_id = _get_sumitalk_history_window_id_from_body(body)
+        window_id = _canonical_sumitalk_history_window_id(_get_sumitalk_history_window_id_from_body(body))
         storage_key = _sumitalk_history_storage_key(device_id, window_id)
         incoming = body.get("messages") or []
         incoming_count = len(incoming) if isinstance(incoming, list) else 0
         with _SUMITALK_HISTORY_LOCK:
             data = _load_sumitalk_histories()
-            current_row = data.get(storage_key) if isinstance(data, dict) else None
+            current_row = _load_sumitalk_history_row(data, device_id, window_id)
             current_count = len((current_row or {}).get("messages") or [])
             messages = _merge_sumitalk_messages(
                 (current_row or {}).get("messages") or [],
@@ -337,7 +388,8 @@ def register_routes(bp) -> None:
             for old_key in old_keys:
                 suffix = str(old_key)[len(old_device_id):]
                 window_id = suffix[2:] if suffix.startswith("::") else ""
-                new_key = f"{new_device_id}{suffix}"
+                canonical_window_id = _canonical_sumitalk_history_window_id(window_id)
+                new_key = _sumitalk_history_storage_key(new_device_id, canonical_window_id)
                 old_row = data.get(old_key) if isinstance(data, dict) else None
                 new_row = data.get(new_key) if isinstance(data, dict) else None
                 merged_messages = _merge_sumitalk_messages(
@@ -346,7 +398,7 @@ def register_routes(bp) -> None:
                 )
                 payload = {
                     "device_id": new_device_id,
-                    "window_id": window_id,
+                    "window_id": canonical_window_id,
                     "updated_at": now_beijing_iso(),
                     "messages": merged_messages,
                 }
@@ -354,7 +406,7 @@ def register_routes(bp) -> None:
                 migrated_rows.append({
                     "old_key": old_key,
                     "new_key": new_key,
-                    "window_id": window_id,
+                    "window_id": canonical_window_id,
                     "old_count": len((old_row or {}).get("messages") or []),
                     "new_count": len((new_row or {}).get("messages") or []),
                     "merged_count": len(merged_messages),

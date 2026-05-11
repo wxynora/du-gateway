@@ -51,6 +51,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
 import java.util.List;
 import java.util.Locale;
@@ -60,6 +61,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.WebSocket;
+import okhttp3.WebSocketListener;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -87,8 +93,11 @@ public class FloatingBallService extends Service {
     private static final String API_BASE = "https://duxy-home.com";
     private static final String CHANNEL_ID = "sumitalk_overlay";
     private static final String MESSAGE_CHANNEL_ID = "sumitalk_message";
+    private static final String SUMITALK_MAIN_WINDOW_ID = "sumitalk-main";
     private static final int NOTIFICATION_ID = 2001;
     private static final long HISTORY_POLL_INTERVAL_MS = 20000L;
+    private static final long REALTIME_RECONNECT_BASE_MS = 3000L;
+    private static final long REALTIME_RECONNECT_MAX_MS = 60000L;
     private static final long BATTERY_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long LOCATION_REPORT_INTERVAL_MS = 15L * 60L * 1000L;
     private static final long SCREEN_STATE_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
@@ -106,12 +115,22 @@ public class FloatingBallService extends Service {
     private String panelToken = "";
     private String panelDeviceId = "";
     private long lastBatteryReportMs = 0L;
+    private OkHttpClient realtimeClient;
+    private WebSocket realtimeSocket;
+    private volatile boolean realtimeConnected = false;
+    private volatile boolean realtimeConnecting = false;
+    private volatile boolean realtimeReconnectScheduled = false;
+    private volatile boolean serviceStopping = false;
+    private int realtimeReconnectAttempts = 0;
     private final Runnable historyPollRunnable =
             new Runnable() {
                 @Override
                 public void run() {
-                    pollLatestAssistantMessage();
-                    pollPendingDeviceActions();
+                    ensureRealtimeWebSocket();
+                    if (!realtimeConnected) {
+                        pollLatestAssistantMessage();
+                        pollPendingDeviceActions();
+                    }
                     reportBatterySnapshotIfDue();
                     mainHandler.postDelayed(this, HISTORY_POLL_INTERVAL_MS);
                 }
@@ -154,6 +173,8 @@ public class FloatingBallService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent != null ? String.valueOf(intent.getAction()) : "";
         if (ACTION_STOP.equals(action)) {
+            serviceStopping = true;
+            closeRealtimeWebSocket(false);
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -165,6 +186,7 @@ public class FloatingBallService extends Service {
             startForegroundNotification(false, false);
             return START_STICKY;
         }
+        serviceStopping = false;
         updatePanelState(intent);
         applyOverlayVisibility();
         reportScreenState("app_active");
@@ -178,6 +200,7 @@ public class FloatingBallService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        serviceStopping = true;
         removeOverlay();
         if (screenStateReceiver != null) {
             try {
@@ -193,6 +216,7 @@ public class FloatingBallService extends Service {
             }
             configChangeReceiver = null;
         }
+        closeRealtimeWebSocket(true);
         ioExecutor.shutdownNow();
         mainHandler.removeCallbacksAndMessages(null);
     }
@@ -209,11 +233,21 @@ public class FloatingBallService extends Service {
 
     private void updatePanelState(Intent intent) {
         if (intent == null) return;
-        String nextToken = String.valueOf(intent.getStringExtra(EXTRA_PANEL_TOKEN)).trim();
-        String nextDeviceId = String.valueOf(intent.getStringExtra(EXTRA_DEVICE_ID)).trim();
-        if (!nextToken.isEmpty()) panelToken = nextToken;
-        if (!nextDeviceId.isEmpty()) panelDeviceId = nextDeviceId;
+        String nextToken = intent.hasExtra(EXTRA_PANEL_TOKEN) ? String.valueOf(intent.getStringExtra(EXTRA_PANEL_TOKEN)).trim() : "";
+        String nextDeviceId = intent.hasExtra(EXTRA_DEVICE_ID) ? String.valueOf(intent.getStringExtra(EXTRA_DEVICE_ID)).trim() : "";
+        boolean changed = false;
+        if (!nextToken.isEmpty() && !"null".equalsIgnoreCase(nextToken) && !nextToken.equals(panelToken)) {
+            panelToken = nextToken;
+            changed = true;
+        }
+        if (!nextDeviceId.isEmpty() && !"null".equalsIgnoreCase(nextDeviceId) && !nextDeviceId.equals(panelDeviceId)) {
+            panelDeviceId = nextDeviceId;
+            changed = true;
+        }
         prefs.edit().putString(PREF_PANEL_TOKEN, panelToken).putString(PREF_DEVICE_ID, panelDeviceId).apply();
+        if (changed) {
+            closeRealtimeWebSocket(false);
+        }
     }
 
     private Notification buildNotification() {
@@ -738,9 +772,8 @@ public class FloatingBallService extends Service {
                     HttpURLConnection conn = null;
                     try {
                         String previousKey = String.valueOf(prefs.getString(PREF_LAST_HISTORY_MESSAGE_KEY, "")).trim();
-                        String query = previousKey.isEmpty()
-                                ? ""
-                                : "?after_key=" + java.net.URLEncoder.encode(previousKey, "UTF-8");
+                        String query = "?window_id=" + encodeQueryValue(SUMITALK_MAIN_WINDOW_ID)
+                                + (previousKey.isEmpty() ? "" : "&after_key=" + encodeQueryValue(previousKey));
                         URL url = new URL(API_BASE + "/miniapp-api/sumitalk-history/latest" + query);
                         conn = (HttpURLConnection) url.openConnection();
                         conn.setRequestMethod("GET");
@@ -833,6 +866,178 @@ public class FloatingBallService extends Service {
                         if (conn != null) conn.disconnect();
                     }
                 });
+    }
+
+    private String encodeQueryValue(String value) throws Exception {
+        return URLEncoder.encode(String.valueOf(value == null ? "" : value), "UTF-8");
+    }
+
+    private String buildRealtimeWebSocketUrl() throws Exception {
+        String base = API_BASE.trim();
+        String wsBase;
+        if (base.startsWith("https://")) {
+            wsBase = "wss://" + base.substring("https://".length());
+        } else if (base.startsWith("http://")) {
+            wsBase = "ws://" + base.substring("http://".length());
+        } else {
+            wsBase = "wss://" + base;
+        }
+        while (wsBase.endsWith("/")) {
+            wsBase = wsBase.substring(0, wsBase.length() - 1);
+        }
+        StringBuilder url = new StringBuilder(wsBase)
+                .append("/ws/device?device_id=")
+                .append(encodeQueryValue(panelDeviceId))
+                .append("&window_id=")
+                .append(encodeQueryValue(SUMITALK_MAIN_WINDOW_ID));
+        String lastKey = String.valueOf(prefs.getString(PREF_LAST_HISTORY_MESSAGE_KEY, "")).trim();
+        if (!lastKey.isEmpty()) {
+            url.append("&last_message_key=").append(encodeQueryValue(lastKey));
+        }
+        return url.toString();
+    }
+
+    private void ensureRealtimeWebSocket() {
+        if (serviceStopping || panelToken.isEmpty() || panelDeviceId.isEmpty()) return;
+        if (realtimeConnected || realtimeConnecting) return;
+        try {
+            if (realtimeClient == null) {
+                realtimeClient =
+                        new OkHttpClient.Builder()
+                                .connectTimeout(10, TimeUnit.SECONDS)
+                                .readTimeout(0, TimeUnit.SECONDS)
+                                .pingInterval(25, TimeUnit.SECONDS)
+                                .build();
+            }
+            Request request =
+                    new Request.Builder()
+                            .url(buildRealtimeWebSocketUrl())
+                            .header("Authorization", "Bearer " + panelToken)
+                            .build();
+            realtimeConnecting = true;
+            realtimeReconnectScheduled = false;
+            realtimeSocket = realtimeClient.newWebSocket(request, new DeviceRealtimeWebSocketListener());
+        } catch (Exception e) {
+            realtimeConnecting = false;
+            Log.w(TAG, "ensureRealtimeWebSocket failed", e);
+            scheduleRealtimeReconnect();
+        }
+    }
+
+    private void scheduleRealtimeReconnect() {
+        if (serviceStopping || realtimeReconnectScheduled || panelToken.isEmpty()) return;
+        realtimeReconnectScheduled = true;
+        int attempt = Math.min(6, realtimeReconnectAttempts + 1);
+        realtimeReconnectAttempts = attempt;
+        long delay = Math.min(REALTIME_RECONNECT_MAX_MS, REALTIME_RECONNECT_BASE_MS * (1L << Math.min(5, attempt - 1)));
+        mainHandler.postDelayed(
+                () -> {
+                    realtimeReconnectScheduled = false;
+                    ensureRealtimeWebSocket();
+                },
+                delay);
+    }
+
+    private void closeRealtimeWebSocket(boolean shutdownClient) {
+        realtimeConnected = false;
+        realtimeConnecting = false;
+        realtimeReconnectScheduled = false;
+        WebSocket socket = realtimeSocket;
+        realtimeSocket = null;
+        if (socket != null) {
+            try {
+                socket.close(1000, "service_update");
+            } catch (Exception ignored) {
+            }
+        }
+        if (shutdownClient && realtimeClient != null) {
+            try {
+                realtimeClient.dispatcher().executorService().shutdown();
+                realtimeClient.connectionPool().evictAll();
+            } catch (Exception ignored) {
+            }
+            realtimeClient = null;
+        }
+    }
+
+    private boolean sendRealtimeJson(JSONObject payload) {
+        WebSocket socket = realtimeSocket;
+        if (socket == null || payload == null) return false;
+        try {
+            return socket.send(payload.toString());
+        } catch (Exception e) {
+            Log.w(TAG, "sendRealtimeJson failed", e);
+            return false;
+        }
+    }
+
+    private void handleRealtimeTextMessage(String text) {
+        try {
+            JSONObject root = new JSONObject(String.valueOf(text == null ? "" : text));
+            String type = String.valueOf(root.optString("type", "")).trim();
+            if ("ready".equals(type)) {
+                String latestKey = String.valueOf(root.optString("latest_message_key", "")).trim();
+                if (!latestKey.isEmpty() && String.valueOf(prefs.getString(PREF_LAST_HISTORY_MESSAGE_KEY, "")).trim().isEmpty()) {
+                    prefs.edit().putString(PREF_LAST_HISTORY_MESSAGE_KEY, latestKey).apply();
+                }
+                return;
+            }
+            if ("assistant_message".equals(type)) {
+                handleRealtimeAssistantMessage(root.optJSONObject("message"));
+                return;
+            }
+            if ("device_actions".equals(type)) {
+                JSONArray actions = root.optJSONArray("actions");
+                if (actions != null && actions.length() > 0) {
+                    ioExecutor.execute(() -> handleRealtimeDeviceActions(actions));
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "handleRealtimeTextMessage failed", e);
+        }
+    }
+
+    private void handleRealtimeAssistantMessage(JSONObject message) {
+        if (message == null) return;
+        String latestKey = String.valueOf(message.optString("key", "")).trim();
+        String latestPreview = String.valueOf(message.optString("preview", "")).trim();
+        if (latestPreview.isEmpty()) {
+            latestPreview = messageContentToText(message.opt("content"));
+        }
+        if (latestKey.isEmpty() && !latestPreview.isEmpty()) {
+            String id = String.valueOf(message.optString("id", "")).trim();
+            String createdAt = String.valueOf(message.optString("createdAt", "")).trim();
+            latestKey = !id.isEmpty() ? id : createdAt + "|" + latestPreview.hashCode();
+        }
+        if (latestKey.isEmpty() || latestPreview.isEmpty()) return;
+        String previousKey = String.valueOf(prefs.getString(PREF_LAST_HISTORY_MESSAGE_KEY, "")).trim();
+        if (latestKey.equals(previousKey)) return;
+        prefs.edit().putString(PREF_LAST_HISTORY_MESSAGE_KEY, latestKey).apply();
+        if (!prefs.getBoolean(PREF_APP_VISIBLE, false)) {
+            showMessagePopup(latestPreview);
+        }
+    }
+
+    private void handleRealtimeDeviceActions(JSONArray actions) {
+        try {
+            JSONArray results = new JSONArray();
+            for (int i = 0; i < actions.length(); i += 1) {
+                JSONObject action = actions.optJSONObject(i);
+                if (action == null) continue;
+                results.put(executeDeviceAction(action));
+            }
+            if (results.length() <= 0) return;
+            JSONObject payload = new JSONObject();
+            payload.put("type", "device_action_results");
+            payload.put("results", results);
+            if (!sendRealtimeJson(payload)) {
+                JSONObject httpPayload = new JSONObject();
+                httpPayload.put("results", results);
+                postJson("/miniapp-api/device-actions/done", httpPayload);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "handleRealtimeDeviceActions failed", e);
+        }
     }
 
     private JSONObject executeDeviceAction(JSONObject action) {
@@ -1369,6 +1574,46 @@ public class FloatingBallService extends Service {
         }
         openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(openIntent);
+    }
+
+    private final class DeviceRealtimeWebSocketListener extends WebSocketListener {
+        @Override
+        public void onOpen(WebSocket webSocket, Response response) {
+            realtimeSocket = webSocket;
+            realtimeConnected = true;
+            realtimeConnecting = false;
+            realtimeReconnectAttempts = 0;
+            realtimeReconnectScheduled = false;
+            Log.i(TAG, "realtime websocket connected");
+        }
+
+        @Override
+        public void onMessage(WebSocket webSocket, String text) {
+            handleRealtimeTextMessage(text);
+        }
+
+        @Override
+        public void onClosed(WebSocket webSocket, int code, String reason) {
+            if (webSocket == realtimeSocket) {
+                realtimeSocket = null;
+            }
+            realtimeConnected = false;
+            realtimeConnecting = false;
+            Log.i(TAG, "realtime websocket closed code=" + code + " reason=" + reason);
+            scheduleRealtimeReconnect();
+        }
+
+        @Override
+        public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+            if (webSocket == realtimeSocket) {
+                realtimeSocket = null;
+            }
+            realtimeConnected = false;
+            realtimeConnecting = false;
+            String status = response == null ? "" : (" status=" + response.code());
+            Log.w(TAG, "realtime websocket failed" + status, t);
+            scheduleRealtimeReconnect();
+        }
     }
 
     private final class FloatingTouchListener implements View.OnTouchListener {

@@ -7,7 +7,7 @@ import {
   sanitizeHistoryMessages,
   type ChatDraftMessage,
 } from "./chatMessages";
-import { sumitalkHistoryPath } from "./chatWindowIds";
+import { MAIN_SUMITALK_DISPLAY_WINDOW_ID, sumitalkHistoryPath } from "./chatWindowIds";
 import { CornerDownIcon } from "./icons";
 import { readLocalChatHistory, writeLocalChatHistory } from "./storage/chatHistoryDb";
 import { SummaryBlock } from "./ChatPresentation";
@@ -73,7 +73,7 @@ export function ChatsHome({
     (async () => {
       try {
         const did = await getOrCreatePanelDeviceId();
-        const mainWindowId = String(privateWindowId || "sumitalk-main").trim() || "sumitalk-main";
+        const mainWindowId = String(privateWindowId || MAIN_SUMITALK_DISPLAY_WINDOW_ID).trim() || MAIN_SUMITALK_DISPLAY_WINDOW_ID;
         const mainLocalMessages = sanitizeHistoryMessages(await readLocalChatHistory(did, mainWindowId));
         const legacyLocalMessages = mainWindowId === "sumitalk-main"
           ? []
@@ -84,7 +84,7 @@ export function ChatsHome({
           setDuPreview(pickedLocal.preview);
           setDuTime(pickedLocal.time);
         }
-        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>("/miniapp-api/sumitalk-history");
+        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(MAIN_SUMITALK_DISPLAY_WINDOW_ID));
         if (cancelled) return;
         const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
         const nextMessages = pickBetterHistory(remoteMessages, localMessages, []);
