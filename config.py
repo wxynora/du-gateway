@@ -15,6 +15,16 @@ BASE_DIR = Path(__file__).resolve().parent
 if load_dotenv:
     load_dotenv(BASE_DIR / ".env", override=False)
 
+
+def _strip_inline_env_comment(value: str) -> str:
+    raw = str(value or "").strip()
+    for marker in (" #", "\t#"):
+        idx = raw.find(marker)
+        if idx >= 0:
+            raw = raw[:idx].strip()
+    return raw
+
+
 # 数据目录：白名单、最近窗口等
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -398,10 +408,10 @@ TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES = int(float(os.environ.get("TELEGRAM_P
 # 多入口主动发消息：微信 / QQ 的推送 URL 和鉴权 token
 # 微信：WECHAT_PROACTIVE_PUSH_URL=http://127.0.0.1:8091/push（connector 内的 push server）
 WECHAT_PROACTIVE_PUSH_URL = os.environ.get("WECHAT_PROACTIVE_PUSH_URL", "").strip()
-WECHAT_PROACTIVE_PUSH_TOKEN = os.environ.get("WECHAT_PROACTIVE_PUSH_TOKEN", "").strip()
+WECHAT_PROACTIVE_PUSH_TOKEN = _strip_inline_env_comment(os.environ.get("WECHAT_PROACTIVE_PUSH_TOKEN", ""))
 # QQ：QQ_PROACTIVE_PUSH_URL=http://127.0.0.1:8092/push（connector 内的 push server）
 QQ_PROACTIVE_PUSH_URL = os.environ.get("QQ_PROACTIVE_PUSH_URL", "").strip()
-QQ_PROACTIVE_PUSH_TOKEN = os.environ.get("QQ_PROACTIVE_PUSH_TOKEN", "").strip()
+QQ_PROACTIVE_PUSH_TOKEN = _strip_inline_env_comment(os.environ.get("QQ_PROACTIVE_PUSH_TOKEN", ""))
 
 # QQ / NapCat 掉线巡检：检测二维码文件，一旦进入扫码登录态就发 Telegram 告警
 QQ_ENTRY_WATCHDOG_ENABLED = os.environ.get("QQ_ENTRY_WATCHDOG_ENABLED", "").strip().lower() in ("1", "true", "yes")

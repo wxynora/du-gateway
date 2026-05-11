@@ -18,6 +18,10 @@ function envStr(name, fallback = "") {
   return (process.env[name] || fallback || "").trim();
 }
 
+function envSecret(name, fallback = "") {
+  return envStr(name, fallback).replace(/\s+#.*$/, "").trim();
+}
+
 function envInt(name, fallback) {
   const raw = envStr(name, "");
   if (!raw) return fallback;
@@ -29,6 +33,12 @@ function envBool(name, fallback = false) {
   const raw = envStr(name, "");
   if (!raw) return fallback;
   return ["1", "true", "yes", "y", "on"].includes(raw.toLowerCase());
+}
+
+function isAbortError(e) {
+  const name = String(e?.name || "");
+  const message = String(e?.message || e || "");
+  return name === "AbortError" || /aborted/i.test(message);
 }
 
 function sleep(ms) {
@@ -112,7 +122,7 @@ async function ilinkGetJson(url, botToken = "") {
   return { status: r.status, data, text };
 }
 
-async function ilinkPostJson(pathname, body, botToken) {
+async function ilinkPostJson(pathname, body, botToken, options = {}) {
   const url = ilinkBaseUrl() + (pathname.startsWith("/") ? pathname : `/${pathname}`);
   const headers = {
     "Content-Type": "application/json",
@@ -121,7 +131,7 @@ async function ilinkPostJson(pathname, body, botToken) {
     "Authorization": `Bearer ${botToken}`,
   };
   const controller = new AbortController();
-  const timeoutMs = Math.max(3000, envInt("WECHAT_ILINK_HTTP_TIMEOUT_MS", 15000));
+  const timeoutMs = Math.max(3000, Number(options.timeoutMs || envInt("WECHAT_ILINK_HTTP_TIMEOUT_MS", 15000)));
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let r;
   try {
@@ -732,7 +742,7 @@ function _readJsonBody(req) {
 
 function _startPushServer(botToken) {
   const port = Math.max(1, envInt("WECHAT_PROACTIVE_PORT", 8091));
-  const pushToken = envStr("WECHAT_PROACTIVE_PUSH_TOKEN", "");
+  const pushToken = envSecret("WECHAT_PROACTIVE_PUSH_TOKEN", "");
   const outChunkChars = Math.max(20, envInt("WECHAT_OUTPUT_CHUNK_CHARS", 200));
   const sendDelayMs = Math.max(0, envInt("WECHAT_OUTPUT_SEND_DELAY_MS", 600));
 
@@ -1008,13 +1018,15 @@ async function main() {
     pending.delete(fromUserId);
   }
 
+  const getUpdatesTimeoutMs = Math.max(15000, envInt("WECHAT_ILINK_GETUPDATES_TIMEOUT_MS", 75000));
+
   while (true) {
     try {
       const body = {
         get_updates_buf: String(state.get_updates_buf || ""),
         base_info: { channel_version: "1.0.2" },
       };
-      const r = await ilinkPostJson("/ilink/bot/getupdates", body, botToken);
+      const r = await ilinkPostJson("/ilink/bot/getupdates", body, botToken, { timeoutMs: getUpdatesTimeoutMs });
       if (r.status < 200 || r.status >= 300) {
         throw new Error(`getupdates 非 2xx status=${r.status} body=${(r.text || "").slice(0, 200)}`);
       }
@@ -1074,7 +1086,11 @@ async function main() {
         }
       }
     } catch (e) {
-      console.log(`[wechat-ilink] loop 异常：${String(e?.message || e)}`);
+      if (isAbortError(e)) {
+        console.log(`[wechat-ilink] getupdates 轮询超时 ${getUpdatesTimeoutMs}ms，重试中`);
+      } else {
+        console.log(`[wechat-ilink] loop 异常：${String(e?.message || e)}`);
+      }
       await sleep(2000);
     }
   }

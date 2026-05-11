@@ -836,11 +836,12 @@ def _send_via_wechat(text: str, split: bool = True) -> bool:
     if not url:
         logger.warning("WECHAT_PROACTIVE_PUSH_URL 未配置，跳过微信发送")
         return False
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json; charset=utf-8"}
     if WECHAT_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {WECHAT_PROACTIVE_PUSH_TOKEN}"
     try:
-        r = requests.post(url, headers=headers, json={"text": text, "split": bool(split)}, timeout=30)
+        body = json.dumps({"text": str(text or ""), "split": bool(split)}, ensure_ascii=False).encode("utf-8")
+        r = requests.post(url, headers=headers, data=body, timeout=30)
         if r.status_code == 200 and r.json().get("ok"):
             return True
         logger.warning("微信 /push 失败 status=%s body=%s", r.status_code, (r.text or "")[:200])
@@ -853,11 +854,12 @@ def _send_via_wechat(text: str, split: bool = True) -> bool:
 def _send_via_qq(text: str, split: bool = True) -> bool:
     """通过 QQ connector 的 /push 端点主动发消息。"""
     url = QQ_PROACTIVE_PUSH_URL or "http://127.0.0.1:8092/push"
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json; charset=utf-8"}
     if QQ_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {QQ_PROACTIVE_PUSH_TOKEN}"
     try:
-        r = requests.post(url, headers=headers, json={"text": text, "split": bool(split)}, timeout=30)
+        body = json.dumps({"text": str(text or ""), "split": bool(split)}, ensure_ascii=False).encode("utf-8")
+        r = requests.post(url, headers=headers, data=body, timeout=30)
         if r.status_code == 200 and r.json().get("ok"):
             return True
         logger.warning("QQ /push 失败 status=%s body=%s", r.status_code, (r.text or "")[:200])

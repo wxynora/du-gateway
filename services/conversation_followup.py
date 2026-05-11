@@ -164,11 +164,12 @@ def _send_via_wechat(text: str, split: bool = True) -> bool:
     url = WECHAT_PROACTIVE_PUSH_URL
     if not url:
         return False
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json; charset=utf-8"}
     if WECHAT_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {WECHAT_PROACTIVE_PUSH_TOKEN}"
     try:
-        r = requests.post(url, headers=headers, json={"text": text, "split": bool(split)}, timeout=30)
+        body = json.dumps({"text": str(text or ""), "split": bool(split)}, ensure_ascii=False).encode("utf-8")
+        r = requests.post(url, headers=headers, data=body, timeout=30)
         return r.status_code == 200 and bool((r.json() or {}).get("ok"))
     except Exception:
         logger.warning("延迟续话发微信失败", exc_info=True)
@@ -179,11 +180,12 @@ def _send_via_qq(text: str, split: bool = True) -> bool:
     url = QQ_PROACTIVE_PUSH_URL
     if not url:
         return False
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json; charset=utf-8"}
     if QQ_PROACTIVE_PUSH_TOKEN:
         headers["Authorization"] = f"Bearer {QQ_PROACTIVE_PUSH_TOKEN}"
     try:
-        r = requests.post(url, headers=headers, json={"text": text, "split": bool(split)}, timeout=30)
+        body = json.dumps({"text": str(text or ""), "split": bool(split)}, ensure_ascii=False).encode("utf-8")
+        r = requests.post(url, headers=headers, data=body, timeout=30)
         return r.status_code == 200 and bool((r.json() or {}).get("ok"))
     except Exception:
         logger.warning("延迟续话发 QQ 失败", exc_info=True)

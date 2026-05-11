@@ -305,6 +305,8 @@ rg -n "主动|proactive|last_reply_channel|last_proactive|trigger" services stor
 - SumiTalk 暂不一定作为主动投递主通道。
 - 最近真实对话入口会影响弹窗/trigger 回发通道。
 - 主动 trigger 和概率主动不是一回事。
+- 微信/QQ `/push` 中文正文要显式按 UTF-8 bytes 发送；如果日志出现 `latin-1 codec can't encode characters`，先查 `WECHAT_PROACTIVE_PUSH_TOKEN` / `QQ_PROACTIVE_PUSH_TOKEN` 是否把 `.env` 行尾中文注释带进 header，再查 `services/telegram_proactive.py` / `services/conversation_followup.py` 的主动投递请求体编码。
+- 微信 connector 日志出现 `This operation was aborted` 多半是 `getupdates` 长轮询超时；查 `WECHAT_ILINK_GETUPDATES_TIMEOUT_MS`，默认 75 秒，普通请求仍走 `WECHAT_ILINK_HTTP_TIMEOUT_MS`。
 
 ## 记忆 / 总结 / 动态层
 
