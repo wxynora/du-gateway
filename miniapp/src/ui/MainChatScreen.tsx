@@ -324,10 +324,16 @@ export function MainChatScreen({
     let cancelled = false;
     (async () => {
       try {
-        if (!deviceId || !historyWindowId) return;
+        if (!historyWindowId) return;
+        const resolvedDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
+        if (!resolvedDeviceId) return;
+        if (!deviceId && !cancelled) {
+          setDeviceId(resolvedDeviceId);
+        }
+        await migrateLocalChatHistoriesToDevice(resolvedDeviceId);
         remoteHistoryReadyRef.current = false;
         remoteHistoryWarningShownRef.current = false;
-        const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(deviceId, historyWindowId));
+        const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(resolvedDeviceId, historyWindowId));
         const localRecoveryWindowIds = groupChatMode
           ? uniqueNonEmptyStrings([historyWindowId, displayHistoryWindowId, windowId])
           : uniqueNonEmptyStrings([historyWindowId, displayHistoryWindowId, windowId, MAIN_SUMITALK_DISPLAY_WINDOW_ID]);
@@ -341,10 +347,10 @@ export function MainChatScreen({
         );
         const legacyLocalGroups = [];
         if (!groupChatMode && windowId && windowId !== historyWindowId) {
-          legacyLocalGroups.push(sanitizeHistoryMessages(await readLocalChatHistory(deviceId, windowId)));
+          legacyLocalGroups.push(sanitizeHistoryMessages(await readLocalChatHistory(resolvedDeviceId, windowId)));
         }
         if (!groupChatMode && historyWindowId !== MAIN_SUMITALK_DISPLAY_WINDOW_ID) {
-          legacyLocalGroups.push(sanitizeHistoryMessages(await readLocalChatHistory(deviceId, MAIN_SUMITALK_DISPLAY_WINDOW_ID)));
+          legacyLocalGroups.push(sanitizeHistoryMessages(await readLocalChatHistory(resolvedDeviceId, MAIN_SUMITALK_DISPLAY_WINDOW_ID)));
         }
         const legacyLocalMessages = legacyLocalGroups.reduce(
           (best, item) => pickBetterHistory(item, best, []),
@@ -353,8 +359,9 @@ export function MainChatScreen({
         const recoveredLocalMessages = pickBetterHistory(localCandidateMessages, localMessages, []);
         const fallbackLocalMessages = pickBetterHistory(recoveredLocalMessages, legacyLocalMessages, []);
         if (!cancelled && fallbackLocalMessages.length) {
+          messagesRef.current = fallbackLocalMessages;
           setMessages(fallbackLocalMessages);
-          await writeLocalChatHistory(deviceId, historyWindowId, fallbackLocalMessages);
+          await writeLocalChatHistory(resolvedDeviceId, historyWindowId, fallbackLocalMessages);
         }
         const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
         if (cancelled) return;
@@ -363,9 +370,10 @@ export function MainChatScreen({
         }
         const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
         const next = pickBetterHistory(remoteMessages, fallbackLocalMessages, seedMessages);
+        messagesRef.current = next;
         setMessages(next);
         if (next !== seedMessages && next.length) {
-          await writeLocalChatHistory(deviceId, historyWindowId, next);
+          await writeLocalChatHistory(resolvedDeviceId, historyWindowId, next);
           if (remoteHistoryReadyRef.current && next !== remoteMessages) {
             try {
               await apiJson("/miniapp-api/sumitalk-history", {
