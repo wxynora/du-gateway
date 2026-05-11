@@ -88,9 +88,9 @@ type CodexGroupChatTaskResponse = {
   task?: CodexGroupChatTask | null;
   error?: string;
 };
-const SUMITALK_CHAT_JOB_POLL_MS = 1800;
+const SUMITALK_CHAT_JOB_POLL_MS = 1000;
 const SUMITALK_CHAT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
-const CODEX_GROUP_CHAT_POLL_MS = 2200;
+const CODEX_GROUP_CHAT_POLL_MS = 1000;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
 
 function waitMs(ms: number): Promise<void> {
@@ -99,19 +99,27 @@ function waitMs(ms: number): Promise<void> {
 
 async function waitForSumiTalkChatJob(jobId: string): Promise<any> {
   const startedAt = Date.now();
+  let lastError = "";
   while (Date.now() - startedAt < SUMITALK_CHAT_JOB_TIMEOUT_MS) {
     await waitMs(SUMITALK_CHAT_JOB_POLL_MS);
-    const job = await apiJson<SumiTalkChatJobStatusResponse>(`/miniapp-api/sumitalk-chat-jobs/${encodeURIComponent(jobId)}`);
+    let job: SumiTalkChatJobStatusResponse;
+    try {
+      job = await apiJson<SumiTalkChatJobStatusResponse>(`/miniapp-api/sumitalk-chat-jobs/${encodeURIComponent(jobId)}`);
+    } catch (e: any) {
+      lastError = String(e?.message || e);
+      continue;
+    }
     if (job.status === "done") return job.response || {};
     if (job.status === "error") {
       const upstreamError = job.response?.error || job.response?.message || "";
       throw new Error(String(job.error || upstreamError || "渡回复失败"));
     }
-    if (job.status !== "running") {
+    if (job.response?.choices) return job.response;
+    if (job.status && !["running", "queued", "pending"].includes(job.status)) {
       throw new Error("任务状态异常");
     }
   }
-  throw new Error("等待渡回复超时");
+  throw new Error(lastError ? `等待渡回复超时：${lastError}` : "等待渡回复超时");
 }
 
 async function apiJsonWithTimeout<T>(path: string, timeoutMs: number, init?: RequestInit): Promise<T> {
@@ -569,10 +577,7 @@ export function MainChatScreen({
       setMessages(queuedMessages);
       await saveDisplayHistory(queuedMessages, { syncRemote: false, localDeviceId: params.replyTarget });
       saveDisplayHistoryInBackground(queuedMessages, { localDeviceId: params.replyTarget });
-      const task = await waitForCodexGroupChatTask(taskId);
-      const applied = await applyBenbenTaskTerminal(task, { messageId: benbenId, localDeviceId: params.replyTarget });
-      if (!applied) throw new Error("笨笨没有返回内容");
-      return messagesRef.current;
+      return queuedMessages;
     } catch (e: any) {
       if (taskId && benbenTaskFinalizedRef.current.has(taskId)) {
         return messagesRef.current;
@@ -619,7 +624,8 @@ export function MainChatScreen({
           });
           messagesRef.current = failedMessages;
           setMessages(failedMessages);
-          await saveDisplayHistory(failedMessages, { localDeviceId: deviceId });
+          await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: deviceId });
+          saveDisplayHistoryInBackground(failedMessages, { localDeviceId: deviceId });
         } finally {
           benbenTaskRecoveringRef.current.delete(item.taskId);
         }
@@ -679,7 +685,7 @@ export function MainChatScreen({
     setSending(true);
     setMessages(draftMessages);
     messagesRef.current = draftMessages;
-    await saveDisplayHistory(draftMessages, { syncRemote: groupChatMode, localDeviceId: resolvedDeviceId });
+    await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
     try {
       const requestUserContent = groupChatMode ? buildGroupTurnUserContent(nextMessages, content) : content;
       const requestWindowId = windowId;
@@ -689,7 +695,7 @@ export function MainChatScreen({
         stream: false,
         window_id: requestWindowId,
       };
-      const started = await apiJson<SumiTalkChatJobCreateResponse>("/miniapp-api/sumitalk-chat", {
+      const started = await apiJson<SumiTalkChatJobCreateResponse>(groupChatMode ? "/miniapp-api/sumitalk-chat-jobs" : "/miniapp-api/sumitalk-chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -705,7 +711,10 @@ export function MainChatScreen({
         throw new Error(String(started.error || upstreamError || "渡回复失败"));
       }
       const jobId = String(started?.job_id || "").trim();
-      const data = started?.status === "running" && jobId
+      const startedStatus = String(started?.status || "").trim();
+      const data = startedStatus === "done"
+        ? started?.response || started
+        : jobId
         ? await waitForSumiTalkChatJob(jobId)
         : started?.response || started;
       if (data?.error) {
@@ -730,7 +739,7 @@ export function MainChatScreen({
       messagesRef.current = finalMessages;
       setMessages(finalMessages);
       if (groupChatMode) {
-        await saveDisplayHistory(finalMessages, { localDeviceId: replyTarget });
+        await saveDisplayHistory(finalMessages, { syncRemote: false, localDeviceId: replyTarget });
         await requestBenbenGroupReply({
           baseMessages: finalMessages,
           userContent: content,
@@ -761,7 +770,10 @@ export function MainChatScreen({
       }
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
-      await saveDisplayHistory(failedMessages, { localDeviceId: replyTarget });
+      await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: replyTarget });
+      if (groupChatMode) {
+        saveDisplayHistoryInBackground(failedMessages, { localDeviceId: replyTarget });
+      }
       toast(`发送失败：${e?.message || e}`);
     } finally {
       setSending(false);

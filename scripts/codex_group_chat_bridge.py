@@ -51,12 +51,16 @@ def _env_bool(name: str, default: bool = False) -> bool:
 GATEWAY_URL = _env("GATEWAY_URL").rstrip("/")
 PC_COMMAND_TOKEN = _env("PC_COMMAND_TOKEN")
 REPO_ROOT = Path(_env("CODEX_GROUP_CHAT_REPO", str(Path.home() / "Downloads" / "du-gateway"))).expanduser()
-POLL_SECONDS = max(1.0, float(_env("CODEX_GROUP_CHAT_POLL_SECONDS", "3") or "3"))
-IDLE_POLL_SECONDS = max(POLL_SECONDS, float(_env("CODEX_GROUP_CHAT_IDLE_POLL_SECONDS", "6") or "6"))
+POLL_SECONDS = max(0.5, float(_env("CODEX_GROUP_CHAT_POLL_SECONDS", "0.5") or "0.5"))
+IDLE_POLL_SECONDS = max(POLL_SECONDS, float(_env("CODEX_GROUP_CHAT_IDLE_POLL_SECONDS", "1") or "1"))
 CODEX_MODEL = _env("CODEX_GROUP_CHAT_MODEL")
 CODEX_BIN = _env("CODEX_BIN", "codex")
 WORKER_ID = _env("CODEX_GROUP_CHAT_WORKER_ID", f"benben-codex-bridge@{socket.gethostname()}")
 CODEX_TIMEOUT_SECONDS = int(float(_env("CODEX_GROUP_CHAT_TIMEOUT_SECONDS", "600") or "600"))
+CLAIM_TIMEOUT_SECONDS = max(1.0, float(_env("CODEX_GROUP_CHAT_CLAIM_TIMEOUT_SECONDS", "3") or "3"))
+FINISH_TIMEOUT_SECONDS = max(2.0, float(_env("CODEX_GROUP_CHAT_FINISH_TIMEOUT_SECONDS", "15") or "15"))
+POST_RETRY_ATTEMPTS = max(1, int(float(_env("CODEX_GROUP_CHAT_POST_RETRY_ATTEMPTS", "2") or "2")))
+POST_RETRY_SLEEP_SECONDS = max(0.0, float(_env("CODEX_GROUP_CHAT_POST_RETRY_SLEEP_SECONDS", "0.2") or "0.2"))
 PROJECT_RULES_MAX_CHARS = int(float(_env("CODEX_GROUP_CHAT_RULES_MAX_CHARS", "10000") or "10000"))
 STATE_PATH = Path(_env("CODEX_GROUP_CHAT_STATE_PATH", str(REPO_ROOT / ".codex_group_chat_bridge_state.json"))).expanduser()
 RESUME_ENABLED = _env_bool("CODEX_GROUP_CHAT_RESUME_ENABLED", True)
@@ -65,6 +69,16 @@ RESET_AFTER_SECONDS = max(0, int(float(_env("CODEX_GROUP_CHAT_RESET_AFTER_SECOND
 IGNORE_USER_CONFIG = _env_bool("CODEX_GROUP_CHAT_IGNORE_USER_CONFIG", False)
 IGNORE_RULES = _env_bool("CODEX_GROUP_CHAT_IGNORE_RULES", False)
 EXTRA_CODEX_ARGS = shlex.split(_env("CODEX_GROUP_CHAT_EXTRA_CODEX_ARGS"))
+HTTP_TRUST_ENV = _env_bool("CODEX_GROUP_CHAT_HTTP_TRUST_ENV", False)
+
+
+def _new_http_session() -> requests.Session:
+    session = requests.Session()
+    session.trust_env = HTTP_TRUST_ENV
+    return session
+
+
+HTTP = _new_http_session()
 
 
 def _headers() -> dict[str, str]:
@@ -136,15 +150,30 @@ def _state_should_reset(state: dict[str, Any]) -> bool:
 
 
 def _post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
+    global HTTP
     url = f"{GATEWAY_URL}{path}"
-    r = requests.post(url, headers=_headers(), json=body, timeout=30)
-    try:
-        data = r.json()
-    except Exception:
-        data = {"raw": r.text}
-    if not r.ok:
-        raise RuntimeError(data.get("error") or data.get("message") or f"HTTP {r.status_code}")
-    return data if isinstance(data, dict) else {"data": data}
+    timeout = FINISH_TIMEOUT_SECONDS if "/finish" in path else CLAIM_TIMEOUT_SECONDS
+    last_error: BaseException | None = None
+    for attempt in range(1, POST_RETRY_ATTEMPTS + 1):
+        try:
+            r = HTTP.post(url, headers=_headers(), json=body, timeout=timeout)
+            try:
+                data = r.json()
+            except Exception:
+                data = {"raw": r.text}
+            if not r.ok:
+                raise RuntimeError(data.get("error") or data.get("message") or f"HTTP {r.status_code}")
+            return data if isinstance(data, dict) else {"data": data}
+        except requests.RequestException as e:
+            last_error = e
+            HTTP.close()
+            HTTP = _new_http_session()
+            if attempt >= POST_RETRY_ATTEMPTS:
+                break
+            time.sleep(POST_RETRY_SLEEP_SECONDS)
+    if last_error:
+        raise last_error
+    raise RuntimeError("request failed")
 
 
 def _role_label(role: str) -> str:
@@ -398,7 +427,7 @@ def main() -> int:
     if not isinstance(state, dict) or "created_ts" not in state:
         state = _reset_state("startup")
     _log(
-        "worker=%s gateway=%s repo=%s resume=%s thread=%s agents_md_chars=%s"
+        "worker=%s gateway=%s repo=%s resume=%s thread=%s agents_md_chars=%s poll=%.2fs idle=%.2fs claim_timeout=%.1fs finish_timeout=%.1fs retries=%s trust_env=%s"
         % (
             WORKER_ID,
             GATEWAY_URL,
@@ -406,6 +435,12 @@ def main() -> int:
             "on" if RESUME_ENABLED else "off",
             str(state.get("thread_id") or "")[:8] or "-",
             len(PROJECT_RULES),
+            POLL_SECONDS,
+            IDLE_POLL_SECONDS,
+            CLAIM_TIMEOUT_SECONDS,
+            FINISH_TIMEOUT_SECONDS,
+            POST_RETRY_ATTEMPTS,
+            "on" if HTTP_TRUST_ENV else "off",
         )
     )
     while True:

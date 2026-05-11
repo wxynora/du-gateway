@@ -134,6 +134,15 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - `sumitalk-chat` 走 job 包装，不是前端直接打 `/v1/chat/completions`。
 - 回包 reasoning 会从客户端可见消息里剥离，但归档副本可能保留。
 - Today note 刷新失败时不应该覆盖旧内容。
+- 群聊链路慢先拆三段看：渡回复前端等待、笨笨任务创建、Codex bridge 认领/回写。前端不应为了远端历史保存或笨笨最终回复阻塞发送链路。
+- 笨笨任务已创建后，应靠 realtime 或 `codex-group-chat-tasks/<id>` fallback 轮询贴回最终回复；不要在发送函数里一直等到 Codex 完成。
+- 本机 Codex bridge 默认参数应偏快：`CODEX_GROUP_CHAT_POLL_SECONDS=0.5`、`CODEX_GROUP_CHAT_IDLE_POLL_SECONDS=1`、`CODEX_GROUP_CHAT_CLAIM_TIMEOUT_SECONDS=3`，并用短重试降低 `SSL EOF`/超时导致的随机拖延。
+
+当前状态（2026-05-11）：
+- 已完成：群聊发送本地历史优先；群聊模式改为直接创建 `sumitalk-chat-jobs` 并轮询渡回复，避免自适应接口回包丢失时前端拿不到渡消息；笨笨任务创建后立即释放前端发送链路；fallback 轮询调到 1s；本机 Codex bridge 已重启到快轮询和短重试参数。
+- 未完成：`duxy-home.com` 偶发 `SSL EOF`/超时仍可能来自本机网络或代理链路，代码已降低拖延但没有根治网络层。
+- 下次继续：若仍慢或前端没显示渡消息，先看 MiniApp network 里 `/sumitalk-chat-jobs` 的创建和 GET 轮询响应，再看 `/Users/doraemon/.du-gateway-codex-bridge/logs/codex_group_chat_bridge.out.log` 的 claim 错误密度。
+- 不要碰：小爱音箱接入半成品、QQ group chat 未收束改动、旧的未跟踪 `miniapp_static/assets/*` 杂散构建产物。
 
 ## 事件唤醒 / Trigger / 弹窗回执
 
