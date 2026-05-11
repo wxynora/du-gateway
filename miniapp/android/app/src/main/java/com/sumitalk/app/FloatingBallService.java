@@ -41,6 +41,7 @@ import android.view.View;
 import android.view.ViewOutlineProvider;
 import android.view.WindowManager;
 import android.widget.ImageView;
+import android.widget.TextView;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
@@ -103,12 +104,16 @@ public class FloatingBallService extends Service {
     private static final long SCREEN_STATE_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long LOCATION_MAX_STALE_MS = 2L * 60L * 1000L;
     private static final float LOCATION_REPORT_MIN_DISTANCE_M = 5000f;
+    private static final int OVERLAY_BUBBLE_MAX_CHARS = 180;
+    private static final long OVERLAY_BUBBLE_DEFAULT_DURATION_MS = 6000L;
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private WindowManager windowManager;
     private ImageView overlayView;
     private WindowManager.LayoutParams overlayParams;
+    private TextView overlayBubbleView;
+    private WindowManager.LayoutParams overlayBubbleParams;
     private BroadcastReceiver screenStateReceiver;
     private BroadcastReceiver configChangeReceiver;
     private SharedPreferences prefs;
@@ -149,6 +154,13 @@ public class FloatingBallService extends Service {
                 public void run() {
                     reportScreenOffSnapshotIfNeeded();
                     mainHandler.postDelayed(this, SCREEN_STATE_REPORT_INTERVAL_MS);
+                }
+            };
+    private final Runnable hideOverlayBubbleRunnable =
+            new Runnable() {
+                @Override
+                public void run() {
+                    hideOverlayBubble();
                 }
             };
 
@@ -381,9 +393,7 @@ public class FloatingBallService extends Service {
                 new WindowManager.LayoutParams(
                         size,
                         size,
-                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                                : WindowManager.LayoutParams.TYPE_PHONE,
+                        overlayWindowType(),
                         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                         PixelFormat.TRANSLUCENT);
@@ -401,6 +411,7 @@ public class FloatingBallService extends Service {
     }
 
     private void removeOverlay() {
+        removeOverlayBubble();
         if (overlayView == null || windowManager == null) return;
         try {
             windowManager.removeView(overlayView);
@@ -408,6 +419,12 @@ public class FloatingBallService extends Service {
         }
         overlayView = null;
         overlayParams = null;
+    }
+
+    private int overlayWindowType() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : WindowManager.LayoutParams.TYPE_PHONE;
     }
 
     private void registerScreenStateReceiver() {
@@ -446,6 +463,7 @@ public class FloatingBallService extends Service {
                             windowManager.updateViewLayout(overlayView, overlayParams);
                         } catch (Exception ignored) {
                         }
+                        updateOverlayBubblePosition();
                         saveOverlayPosition();
                     }
                 };
@@ -525,6 +543,142 @@ public class FloatingBallService extends Service {
             overlayParams.y = defY;
         }
         clampOverlayIntoScreen();
+    }
+
+    private boolean canUseOverlayWindow() {
+        return windowManager != null
+                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || android.provider.Settings.canDrawOverlays(this));
+    }
+
+    private String compactOverlayBubbleText(String text) {
+        String raw = String.valueOf(text == null ? "" : text).trim().replaceAll("\\s+", " ");
+        if (raw.length() <= OVERLAY_BUBBLE_MAX_CHARS) return raw;
+        return raw.substring(0, OVERLAY_BUBBLE_MAX_CHARS) + "…";
+    }
+
+    private void styleOverlayBubble(TextView view, String level) {
+        String lv = String.valueOf(level == null ? "" : level).trim().toLowerCase(Locale.US);
+        int bgColor = 0xF2FFFFFF;
+        int strokeColor = 0x22000000;
+        int textColor = 0xFF20242A;
+        if ("error".equals(lv)) {
+            bgColor = 0xF2B4232B;
+            strokeColor = 0x44FFFFFF;
+            textColor = 0xFFFFFFFF;
+        } else if ("warning".equals(lv)) {
+            bgColor = 0xF2FFF4DB;
+            strokeColor = 0x66D89B21;
+            textColor = 0xFF4F3410;
+        } else if ("success".equals(lv)) {
+            bgColor = 0xF2EAF8F0;
+            strokeColor = 0x66389964;
+            textColor = 0xFF1E4E34;
+        }
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(bgColor);
+        bg.setCornerRadius(dp(16));
+        bg.setStroke(dp(1), strokeColor);
+        view.setBackground(bg);
+        view.setTextColor(textColor);
+    }
+
+    private void showOverlayBubble(String title, String message, String level, long durationMs) {
+        mainHandler.post(
+                () -> {
+                    if (!canUseOverlayWindow()) {
+                        Log.w(TAG, "overlay bubble skipped: overlay unavailable");
+                        return;
+                    }
+                    if (!prefs.getBoolean(PREF_OVERLAY_VISIBLE, true)) {
+                        Log.i(TAG, "overlay bubble skipped: floating ball disabled");
+                        return;
+                    }
+                    ensureOverlay();
+                    if (overlayView == null || overlayParams == null || windowManager == null) {
+                        Log.w(TAG, "overlay bubble skipped: floating ball unavailable");
+                        return;
+                    }
+                    String body = compactOverlayBubbleText(message);
+                    if (body.isEmpty()) return;
+                    String head = String.valueOf(title == null ? "" : title).trim();
+                    if (head.length() > 40) head = head.substring(0, 40) + "…";
+                    String text = head.isEmpty() ? body : head + "\n" + body;
+
+                    if (overlayBubbleView == null) {
+                        overlayBubbleView = new TextView(this);
+                        overlayBubbleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+                        overlayBubbleView.setLineSpacing(dp(2), 1.0f);
+                        overlayBubbleView.setMaxLines(5);
+                        overlayBubbleView.setPadding(dp(12), dp(9), dp(12), dp(9));
+                        overlayBubbleView.setOnClickListener(v -> openApp());
+                        overlayBubbleParams =
+                                new WindowManager.LayoutParams(
+                                        WindowManager.LayoutParams.WRAP_CONTENT,
+                                        WindowManager.LayoutParams.WRAP_CONTENT,
+                                        overlayWindowType(),
+                                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                                                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                                        PixelFormat.TRANSLUCENT);
+                        overlayBubbleParams.gravity = Gravity.TOP | Gravity.START;
+                        try {
+                            windowManager.addView(overlayBubbleView, overlayBubbleParams);
+                        } catch (Exception e) {
+                            Log.w(TAG, "add overlay bubble failed", e);
+                            overlayBubbleView = null;
+                            overlayBubbleParams = null;
+                            return;
+                        }
+                    }
+                    styleOverlayBubble(overlayBubbleView, level);
+                    overlayBubbleView.setText(text);
+                    updateOverlayBubblePosition();
+                    mainHandler.removeCallbacks(hideOverlayBubbleRunnable);
+                    mainHandler.postDelayed(
+                            hideOverlayBubbleRunnable,
+                            Math.max(2000L, Math.min(30000L, durationMs > 0L ? durationMs : OVERLAY_BUBBLE_DEFAULT_DURATION_MS)));
+                });
+    }
+
+    private void updateOverlayBubblePosition() {
+        if (overlayBubbleView == null || overlayBubbleParams == null || overlayParams == null || windowManager == null) return;
+        Point sz = new Point();
+        getScreenPixels(sz);
+        if (sz.x <= 0 || sz.y <= 0) return;
+        int margin = overlayMarginPx();
+        int ball = overlayBallPx();
+        int gap = dp(8);
+        int maxWidth = Math.max(dp(160), Math.min(dp(280), sz.x - margin * 2));
+        overlayBubbleView.setMaxWidth(maxWidth);
+        boolean leftSide = overlayParams.x + ball / 2 <= sz.x / 2;
+        overlayBubbleParams.x = leftSide
+                ? Math.min(sz.x - maxWidth - margin, overlayParams.x + ball + gap)
+                : Math.max(margin, overlayParams.x - maxWidth - gap);
+        overlayBubbleParams.x = Math.max(margin, overlayBubbleParams.x);
+        overlayBubbleParams.y = Math.max(margin, Math.min(overlayParams.y + dp(2), sz.y - dp(120)));
+        try {
+            windowManager.updateViewLayout(overlayBubbleView, overlayBubbleParams);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void hideOverlayBubble() {
+        removeOverlayBubble();
+    }
+
+    private void removeOverlayBubble() {
+        mainHandler.removeCallbacks(hideOverlayBubbleRunnable);
+        if (overlayBubbleView == null || windowManager == null) {
+            overlayBubbleView = null;
+            overlayBubbleParams = null;
+            return;
+        }
+        try {
+            windowManager.removeView(overlayBubbleView);
+        } catch (Exception ignored) {
+        }
+        overlayBubbleView = null;
+        overlayBubbleParams = null;
     }
 
     private boolean hasLocationPermission() {
@@ -1065,6 +1219,12 @@ public class FloatingBallService extends Service {
                 result.put("detail", detail);
                 return result;
             }
+            if ("show_overlay_bubble".equals(type)) {
+                JSONObject detail = showOverlayBubbleFromAction(payload == null ? new JSONObject() : payload);
+                result.put("status", "done");
+                result.put("detail", detail);
+                return result;
+            }
             if ("request_screen_check".equals(type)) {
                 JSONObject detail = requestScreenCheckFromAction(payload == null ? new JSONObject() : payload);
                 result.put("status", "done");
@@ -1213,6 +1373,22 @@ public class FloatingBallService extends Service {
         if (detail == null) throw new IllegalStateException("dialog_no_result");
         String error = String.valueOf(detail.optString("error", "")).trim();
         if (!error.isEmpty()) throw new IllegalStateException(error);
+        return detail;
+    }
+
+    private JSONObject showOverlayBubbleFromAction(JSONObject payload) throws Exception {
+        String title = String.valueOf(payload.optString("title", "SumiTalk")).trim();
+        if (title.isEmpty()) title = "SumiTalk";
+        String message = String.valueOf(payload.optString("message", "")).trim();
+        if (message.isEmpty()) throw new IllegalArgumentException("message_empty");
+        String level = String.valueOf(payload.optString("level", "info")).trim();
+        long durationMs = Math.max(2L, Math.min(30L, payload.optLong("durationSeconds", 6L))) * 1000L;
+        showOverlayBubble(title, message, level, durationMs);
+        JSONObject detail = new JSONObject();
+        detail.put("displayed", true);
+        detail.put("title", title);
+        detail.put("level", level);
+        detail.put("durationMs", durationMs);
         return detail;
     }
 
@@ -1457,37 +1633,7 @@ public class FloatingBallService extends Service {
     }
 
     private void showMessagePopup(String preview) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                        != PackageManager.PERMISSION_GRANTED) {
-            return;
-        }
-        Intent openIntent = getPackageManager().getLaunchIntentForPackage(getPackageName());
-        if (openIntent == null) {
-            openIntent = new Intent(this, MainActivity.class);
-        }
-        openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent pi =
-                PendingIntent.getActivity(
-                        this,
-                        (int) (System.currentTimeMillis() & 0x7fffffff),
-                        openIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        String text = preview.length() > 120 ? preview.substring(0, 120) + "…" : preview;
-        Notification notification =
-                new NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
-                        .setSmallIcon(R.mipmap.ic_launcher_round)
-                        .setContentTitle("渡")
-                        .setContentText(text)
-                        .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
-                        .setContentIntent(pi)
-                        .setAutoCancel(true)
-                        .setPriority(NotificationCompat.PRIORITY_HIGH)
-                        .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                        .build();
-        NotificationManagerCompat.from(this)
-                .notify((int) (System.currentTimeMillis() & 0x7fffffff), notification);
+        showOverlayBubble("渡", preview, "message", OVERLAY_BUBBLE_DEFAULT_DURATION_MS);
     }
 
     private String readAllText(InputStream is) throws Exception {
@@ -1644,6 +1790,7 @@ public class FloatingBallService extends Service {
                     overlayParams.y = startY + dy;
                     clampOverlayIntoScreen();
                     windowManager.updateViewLayout(overlayView, overlayParams);
+                    updateOverlayBubblePosition();
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
@@ -1653,6 +1800,7 @@ public class FloatingBallService extends Service {
                             windowManager.updateViewLayout(overlayView, overlayParams);
                         } catch (Exception ignored) {
                         }
+                        updateOverlayBubblePosition();
                         saveOverlayPosition();
                     } else {
                         openApp();

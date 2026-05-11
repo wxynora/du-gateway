@@ -7,12 +7,13 @@ import logging
 import os
 import time
 from typing import Any
+from uuid import uuid4
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
 
 from config import DATA_DIR
@@ -28,11 +29,83 @@ app = FastAPI(title="du-gateway realtime", version="0.1.0")
 
 _SUMITALK_HISTORY_FILE = DATA_DIR / "sumitalk_display_histories.json"
 _SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
-_POLL_INTERVAL_SECONDS = max(1.0, float(os.environ.get("REALTIME_POLL_INTERVAL_SECONDS", "5") or "5"))
+_POLL_INTERVAL_SECONDS = max(1.0, float(os.environ.get("REALTIME_POLL_INTERVAL_SECONDS", "60") or "60"))
 _FAIL_BACKOFF_BASE_SECONDS = max(1.0, float(os.environ.get("REALTIME_FAIL_BACKOFF_BASE_SECONDS", "3") or "3"))
 _MAX_BACKOFF_SECONDS = max(5.0, float(os.environ.get("REALTIME_MAX_BACKOFF_SECONDS", "60") or "60"))
 _ACTION_LIMIT = max(1, int(os.environ.get("REALTIME_ACTION_LIMIT", "5") or "5"))
 _CODEX_GROUP_TASK_LIMIT = max(1, int(os.environ.get("REALTIME_CODEX_GROUP_TASK_LIMIT", "50") or "50"))
+_INTERNAL_TOKEN = (
+    os.environ.get("REALTIME_INTERNAL_TOKEN", "").strip()
+    or os.environ.get("MINIAPP_PANEL_SIGNING_SECRET", "").strip()
+)
+
+
+class RealtimeConnection:
+    def __init__(self, websocket: WebSocket, device_id: str, window_id: str) -> None:
+        self.websocket = websocket
+        self.device_id = str(device_id or "").strip()
+        self.window_id = str(window_id or "").strip() or _SUMITALK_MAIN_WINDOW_ID
+        self.send_lock = asyncio.Lock()
+        self.last_codex_task_states: dict[str, str] = {}
+
+    async def send_json(self, payload: dict) -> None:
+        async with self.send_lock:
+            await self.websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+
+
+class RealtimeConnectionManager:
+    def __init__(self) -> None:
+        self._connections: set[RealtimeConnection] = set()
+        self._lock = asyncio.Lock()
+
+    async def add(self, conn: RealtimeConnection) -> None:
+        async with self._lock:
+            self._connections.add(conn)
+
+    async def remove(self, conn: RealtimeConnection) -> None:
+        async with self._lock:
+            self._connections.discard(conn)
+
+    async def broadcast(self, payload: dict, device_id: str = "", window_id: str = "") -> int:
+        did = str(device_id or "").strip()
+        wid = str(window_id or "").strip()
+        async with self._lock:
+            targets = [
+                conn
+                for conn in self._connections
+                if (not did or conn.device_id == did)
+                and (not wid or conn.window_id == wid)
+            ]
+        sent = 0
+        dead: list[RealtimeConnection] = []
+        for conn in targets:
+            try:
+                await conn.send_json(payload)
+                sent += 1
+            except Exception as e:
+                logger.warning(
+                    "realtime broadcast failed device_id=%s window_id=%s error=%s",
+                    conn.device_id,
+                    conn.window_id,
+                    e,
+                )
+                dead.append(conn)
+        if dead:
+            async with self._lock:
+                for conn in dead:
+                    self._connections.discard(conn)
+        return sent
+
+    async def stats(self) -> dict:
+        async with self._lock:
+            rows = list(self._connections)
+        by_device: dict[str, int] = {}
+        for conn in rows:
+            by_device[conn.device_id] = by_device.get(conn.device_id, 0) + 1
+        return {"connections": len(rows), "devices": by_device}
+
+
+_connections = RealtimeConnectionManager()
 
 
 def _bearer_from_header(raw: str) -> str:
@@ -239,79 +312,83 @@ def _verify_token_for_device(token: str, device_id: str) -> tuple[bool, str, str
     return True, did, ""
 
 
-async def _send_json(websocket: WebSocket, payload: dict) -> None:
-    await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+async def _send_json(conn: RealtimeConnection, payload: dict) -> None:
+    await conn.send_json(payload)
 
 
-async def _receiver_loop(websocket: WebSocket, device_id: str) -> None:
+async def _receiver_loop(conn: RealtimeConnection) -> None:
     while True:
-        raw = await websocket.receive_text()
+        raw = await conn.websocket.receive_text()
         try:
             data = json.loads(raw) if raw else {}
         except Exception:
-            await _send_json(websocket, {"type": "error", "error": "invalid_json"})
+            await _send_json(conn, {"type": "error", "error": "invalid_json"})
             continue
         kind = str(data.get("type") or "").strip()
         if kind in {"ping", "heartbeat"}:
-            await _send_json(websocket, {"type": "pong", "ts": int(time.time())})
+            await _send_json(conn, {"type": "pong", "ts": int(time.time())})
             continue
         if kind in {"device_action_results", "device_actions_done"}:
             results = data.get("results")
             if not isinstance(results, list):
-                await _send_json(websocket, {"type": "device_action_results_ack", "ok": False, "error": "results must be list"})
+                await _send_json(conn, {"type": "device_action_results_ack", "ok": False, "error": "results must be list"})
                 continue
-            result = await asyncio.to_thread(r2_store.report_app_actions, results, device_id=device_id)
+            result = await asyncio.to_thread(r2_store.report_app_actions, results, device_id=conn.device_id)
             if isinstance(result, dict) and result.get("ok"):
                 try:
                     from routes.miniapp.device_actions import _wake_du_for_device_action_results
 
                     queued = await asyncio.to_thread(
                         _wake_du_for_device_action_results,
-                        device_id,
+                        conn.device_id,
                         result.get("items") or [],
                     )
                     if queued:
                         result["proactive_wakeup_queued"] = queued
                 except Exception as e:
-                    logger.warning("device action realtime wake failed device_id=%s error=%s", device_id, e)
-            await _send_json(websocket, {"type": "device_action_results_ack", **(result or {})})
+                    logger.warning("device action realtime wake failed device_id=%s error=%s", conn.device_id, e)
+            await _send_json(conn, {"type": "device_action_results_ack", **(result or {})})
             continue
-        await _send_json(websocket, {"type": "error", "error": f"unknown_type:{kind or '(empty)'}"})
+        await _send_json(conn, {"type": "error", "error": f"unknown_type:{kind or '(empty)'}"})
 
 
-async def _sender_loop(websocket: WebSocket, device_id: str) -> None:
-    last_message_key = str(websocket.query_params.get("last_message_key") or "").strip()
-    window_id = str(websocket.query_params.get("window_id") or "").strip() or _SUMITALK_MAIN_WINDOW_ID
-    last_codex_task_states: dict[str, str] = {}
+async def _sender_loop(conn: RealtimeConnection) -> None:
+    last_message_key = str(conn.websocket.query_params.get("last_message_key") or "").strip()
     if not last_message_key:
-        latest = await asyncio.to_thread(_latest_assistant_message, device_id, window_id)
+        latest = await asyncio.to_thread(_latest_assistant_message, conn.device_id, conn.window_id)
         last_message_key = str(latest.get("key") or "")
-        await _send_json(websocket, {"type": "ready", "device_id": device_id, "latest_message_key": last_message_key})
+        await _send_json(conn, {
+            "type": "ready",
+            "device_id": conn.device_id,
+            "window_id": conn.window_id,
+            "latest_message_key": last_message_key,
+            "poll_interval_seconds": _POLL_INTERVAL_SECONDS,
+        })
 
     failures = 0
     while True:
         try:
-            latest = await asyncio.to_thread(_latest_assistant_message, device_id, window_id)
+            latest = await asyncio.to_thread(_latest_assistant_message, conn.device_id, conn.window_id)
             latest_key = str(latest.get("key") or "")
             if latest_key and latest_key != last_message_key:
                 last_message_key = latest_key
-                await _send_json(websocket, {"type": "assistant_message", "message": latest})
+                await _send_json(conn, {"type": "assistant_message", "message": latest, "source": "fallback_poll"})
 
-            actions = await asyncio.to_thread(r2_store.poll_app_actions, device_id=device_id, limit=_ACTION_LIMIT)
+            actions = await asyncio.to_thread(r2_store.poll_app_actions, device_id=conn.device_id, limit=_ACTION_LIMIT)
             pending = actions.get("actions") if isinstance(actions, dict) else None
             if isinstance(pending, list) and pending:
-                await _send_json(websocket, {"type": "device_actions", "actions": pending})
+                await _send_json(conn, {"type": "device_actions", "actions": pending, "source": "fallback_poll"})
 
-            codex_tasks = await asyncio.to_thread(_codex_group_tasks_for_device, device_id)
+            codex_tasks = await asyncio.to_thread(_codex_group_tasks_for_device, conn.device_id)
             for task in codex_tasks:
                 task_id = str(task.get("id") or "").strip()
                 if not task_id:
                     continue
                 state_key = _codex_group_task_state_key(task)
-                if not state_key or last_codex_task_states.get(task_id) == state_key:
+                if not state_key or conn.last_codex_task_states.get(task_id) == state_key:
                     continue
-                last_codex_task_states[task_id] = state_key
-                await _send_json(websocket, {"type": "codex_group_chat_task", "task": task})
+                conn.last_codex_task_states[task_id] = state_key
+                await _send_json(conn, {"type": "codex_group_chat_task", "task": task, "source": "fallback_poll"})
 
             failures = 0
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)
@@ -321,14 +398,71 @@ async def _sender_loop(websocket: WebSocket, device_id: str) -> None:
             raise
         except Exception as e:
             failures += 1
-            logger.warning("realtime sender failed device_id=%s failures=%s error=%s", device_id, failures, e)
+            logger.warning("realtime sender failed device_id=%s failures=%s error=%s", conn.device_id, failures, e)
             delay = min(_MAX_BACKOFF_SECONDS, _FAIL_BACKOFF_BASE_SECONDS * (2 ** min(failures, 5)))
             await asyncio.sleep(delay)
 
 
+def _is_local_request(request: Request) -> bool:
+    host = str((request.client.host if request.client else "") or "").strip()
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
+def _internal_publish_authorized(request: Request, token: str) -> tuple[bool, str]:
+    if not _is_local_request(request):
+        return False, "local_only"
+    if _INTERNAL_TOKEN and str(token or "").strip() != _INTERNAL_TOKEN:
+        return False, "bad_internal_token"
+    return True, ""
+
+
+def _event_payload_from_internal(body: dict) -> tuple[str, str, dict]:
+    event_type = str((body or {}).get("type") or "").strip()
+    device_id = str((body or {}).get("device_id") or (body or {}).get("deviceId") or "").strip()
+    window_id = str((body or {}).get("window_id") or (body or {}).get("windowId") or "").strip()
+    payload: dict[str, Any] = {
+        "type": event_type,
+        "event_id": str((body or {}).get("event_id") or uuid4().hex),
+        "source": "publish",
+    }
+    if event_type == "assistant_message":
+        message = (body or {}).get("message")
+        payload["message"] = message if isinstance(message, dict) else {}
+        if window_id:
+            payload["window_id"] = window_id
+    elif event_type == "device_actions":
+        actions = (body or {}).get("actions")
+        payload["actions"] = actions if isinstance(actions, list) else []
+    elif event_type == "codex_group_chat_task":
+        task = (body or {}).get("task")
+        payload["task"] = task if isinstance(task, dict) else {}
+    else:
+        payload.update({k: v for k, v in (body or {}).items() if k not in {"device_id", "deviceId", "window_id", "windowId"}})
+    return device_id, window_id, payload
+
+
 @app.get("/health")
 async def health():
-    return {"ok": True, "service": "du-gateway-realtime"}
+    stats = await _connections.stats()
+    return {"ok": True, "service": "du-gateway-realtime", "realtime": stats}
+
+
+@app.post("/internal/publish")
+async def internal_publish(request: Request, x_realtime_token: str = Header(default="", alias="X-Realtime-Token")):
+    ok, code = _internal_publish_authorized(request, x_realtime_token)
+    if not ok:
+        return JSONResponse({"ok": False, "error": code}, status_code=403 if code == "local_only" else 401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid_json"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "body_must_be_object"}, status_code=400)
+    device_id, window_id, payload = _event_payload_from_internal(body)
+    if not payload.get("type"):
+        return JSONResponse({"ok": False, "error": "missing_type"}, status_code=400)
+    sent = await _connections.broadcast(payload, device_id=device_id, window_id=window_id)
+    return {"ok": True, "sent": sent, "type": payload.get("type"), "event_id": payload.get("event_id")}
 
 
 @app.get("/realtime/latest")
@@ -355,9 +489,12 @@ async def websocket_device(websocket: WebSocket):
         return
 
     await websocket.accept()
-    logger.info("device websocket connected device_id=%s client=%s", device_id, websocket.client)
-    receiver = asyncio.create_task(_receiver_loop(websocket, device_id))
-    sender = asyncio.create_task(_sender_loop(websocket, device_id))
+    window_id = str(websocket.query_params.get("window_id") or "").strip() or _SUMITALK_MAIN_WINDOW_ID
+    conn = RealtimeConnection(websocket, device_id, window_id)
+    await _connections.add(conn)
+    logger.info("device websocket connected device_id=%s window_id=%s client=%s", device_id, window_id, websocket.client)
+    receiver = asyncio.create_task(_receiver_loop(conn))
+    sender = asyncio.create_task(_sender_loop(conn))
     try:
         done, pending = await asyncio.wait({receiver, sender}, return_when=asyncio.FIRST_EXCEPTION)
         for task in pending:
@@ -371,4 +508,5 @@ async def websocket_device(websocket: WebSocket):
     finally:
         receiver.cancel()
         sender.cancel()
-        logger.info("device websocket disconnected device_id=%s", device_id)
+        await _connections.remove(conn)
+        logger.info("device websocket disconnected device_id=%s window_id=%s", device_id, window_id)

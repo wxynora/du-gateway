@@ -108,6 +108,18 @@ def _public_task(task: dict | None) -> dict | None:
     return {k: task.get(k) for k in keep if k in task}
 
 
+def _publish_task(task: dict | None) -> None:
+    public = _public_task(task)
+    if not public:
+        return
+    try:
+        from services.realtime_publish import publish_codex_group_task
+
+        publish_codex_group_task(public)
+    except Exception:
+        pass
+
+
 def _cleanup_tasks(tasks: list[dict]) -> list[dict]:
     cutoff = _now_ts() - _TASK_TTL_SECONDS
     kept = []
@@ -159,7 +171,9 @@ def create_task(body: dict, device_id: str = "") -> dict | None:
         state["tasks"].append(task)
         if not _save_state(state):
             return None
-    return _public_task(task)
+    public = _public_task(task)
+    _publish_task(public)
+    return public
 
 
 def get_task(task_id: str) -> dict | None:
@@ -215,7 +229,9 @@ def claim_next(worker_id: str = "") -> dict | None:
         state["tasks"] = tasks
         if not _save_state(state):
             return None
-        return dict(selected)
+        public = dict(selected)
+        _publish_task(public)
+        return public
 
 
 def finish_task(task_id: str, response: str = "", error: str = "") -> dict | None:
@@ -249,4 +265,6 @@ def finish_task(task_id: str, response: str = "", error: str = "") -> dict | Non
         state["tasks"] = tasks
         if not _save_state(state):
             return None
-        return _public_task(found)
+        public = _public_task(found)
+        _publish_task(public)
+        return public

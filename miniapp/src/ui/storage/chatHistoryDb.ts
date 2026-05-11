@@ -21,6 +21,14 @@ export type ChatHistoryRow = {
   messages: ChatHistoryMessage[];
 };
 
+export type ChatHistoryLocalStatRow = {
+  key: string;
+  deviceId: string;
+  windowId: string;
+  updatedAt: string;
+  count: number;
+};
+
 class MiniappChatHistoryDb extends Dexie {
   histories!: Table<ChatHistoryRow, string>;
 
@@ -110,6 +118,23 @@ export async function readLatestLocalChatHistory(deviceId: string): Promise<Chat
     const rows = await db.histories.where("deviceId").equals(did).sortBy("updatedAt");
     const latest = rows.length ? rows[rows.length - 1] : null;
     return Array.isArray(latest?.messages) ? latest.messages : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function inspectLocalChatHistoryRows(): Promise<ChatHistoryLocalStatRow[]> {
+  try {
+    const rows = await db.histories.toArray();
+    return rows
+      .map((row) => ({
+        key: String(row?.key || ""),
+        deviceId: String(row?.deviceId || ""),
+        windowId: String(row?.windowId || ""),
+        updatedAt: String(row?.updatedAt || ""),
+        count: Array.isArray(row?.messages) ? row.messages.length : 0,
+      }))
+      .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
   } catch {
     return [];
   }

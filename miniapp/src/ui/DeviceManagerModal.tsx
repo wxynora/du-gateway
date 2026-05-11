@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { apiJson } from "./api";
+import { apiJson, getOrCreatePanelDeviceId } from "./api";
 import { FullScreenPane } from "./FullScreenPane";
+import { inspectLocalChatHistoryRows, migrateLocalChatHistoriesToDevice, type ChatHistoryLocalStatRow } from "./storage/chatHistoryDb";
 import { useToast } from "./toast";
 
 type DeviceItem = {
@@ -12,11 +13,28 @@ type DeviceItem = {
   current?: boolean;
 };
 
+type RemoteHistoryStatRow = {
+  key?: string;
+  device_id?: string;
+  window_id?: string;
+  count?: number;
+  updated_at?: string;
+  current?: boolean;
+};
+
+type HistoryDiagnostics = {
+  deviceId: string;
+  localRows: ChatHistoryLocalStatRow[];
+  remoteRows: RemoteHistoryStatRow[];
+};
+
 export function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void; onLogout?: () => void }) {
   const toast = useToast();
   const [items, setItems] = useState<DeviceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
+  const [checkingHistory, setCheckingHistory] = useState(false);
+  const [historyDiagnostics, setHistoryDiagnostics] = useState<HistoryDiagnostics | null>(null);
 
   async function load() {
     setLoading(true);
@@ -62,8 +80,61 @@ export function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void;
     }
   }
 
+  async function checkHistoryStorage(showToast = true) {
+    setCheckingHistory(true);
+    try {
+      const did = await getOrCreatePanelDeviceId();
+      await migrateLocalChatHistoriesToDevice(did);
+      const localRows = await inspectLocalChatHistoryRows();
+      const remote = await apiJson<{ ok?: boolean; rows?: RemoteHistoryStatRow[] }>("/miniapp-api/sumitalk-history/stats");
+      const remoteRows = Array.isArray(remote?.rows) ? remote.rows : [];
+      setHistoryDiagnostics({ deviceId: did, localRows, remoteRows });
+      if (showToast) {
+        const localTotal = localRows.reduce((sum, row) => sum + Number(row.count || 0), 0);
+        const remoteTotal = remoteRows.reduce((sum, row) => sum + Number(row.count || 0), 0);
+        toast(localTotal || remoteTotal ? `查到了：本地 ${localTotal} 条，云端 ${remoteTotal} 条` : "本地和云端都没查到聊天记录");
+      }
+    } catch (e: any) {
+      toast(`检查聊天记录失败：${e?.message || e}`);
+    } finally {
+      setCheckingHistory(false);
+    }
+  }
+
+  async function migrateRemoteHistoryFrom(oldDeviceId: string) {
+    const from = String(oldDeviceId || "").trim();
+    const to = String(historyDiagnostics?.deviceId || "").trim();
+    if (!from || !to || from === to) return;
+    const ok = window.confirm("把这台旧设备的云端聊天记录合并到当前设备吗？");
+    if (!ok) return;
+    setBusyId(from);
+    try {
+      const j = await apiJson<{ ok?: boolean; count?: number; error?: string }>("/miniapp-api/sumitalk-history/migrate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ old_device_id: from, new_device_id: to }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "迁移失败");
+      toast(`已合并云端记录：${Number(j.count || 0)} 条`);
+      await checkHistoryStorage(false);
+    } catch (e: any) {
+      toast(`迁移失败：${e?.message || e}`);
+    } finally {
+      setBusyId("");
+    }
+  }
+
   const currentItem = items.find((it) => !!it.current) || null;
   const otherItems = items.filter((it) => !it.current);
+  const localHistoryTotal = (historyDiagnostics?.localRows || []).reduce((sum, row) => sum + Number(row.count || 0), 0);
+  const remoteHistoryTotal = (historyDiagnostics?.remoteRows || []).reduce((sum, row) => sum + Number(row.count || 0), 0);
+  const remoteOtherHistoryRows = Array.from(
+    new Map(
+      (historyDiagnostics?.remoteRows || [])
+        .filter((row) => String(row.device_id || "").trim() && String(row.device_id || "").trim() !== historyDiagnostics?.deviceId && Number(row.count || 0) > 0)
+        .map((row) => [String(row.device_id || "").trim(), row]),
+    ).values(),
+  );
 
   function getDeviceIcon(item: DeviceItem): "phone" | "tablet" | "desktop" {
     const note = String(item.note || "").toLowerCase();
@@ -138,6 +209,76 @@ export function DeviceManagerModal({ onClose, onLogout }: { onClose: () => void;
               当前没有可识别设备。
             </div>
           ) : null}
+        </div>
+
+        <div className="mt-8 px-1">
+          <div className="mb-4 flex items-center justify-between px-1">
+            <h2 className="text-[13px] font-bold uppercase tracking-widest text-gray-400">聊天记录诊断</h2>
+            <button
+              type="button"
+              onClick={() => void checkHistoryStorage(true)}
+              disabled={checkingHistory}
+              className="rounded-full px-3 py-1.5 text-[12px] font-semibold text-blue-500 transition active:bg-blue-50 disabled:opacity-60"
+            >
+              {checkingHistory ? "检查中..." : "检查/修复"}
+            </button>
+          </div>
+          <div className="rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+            {historyDiagnostics ? (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                    <div className="text-[11px] font-bold text-gray-400">本地 IndexedDB</div>
+                    <div className="mt-1 text-[22px] font-bold text-gray-800">{localHistoryTotal}</div>
+                  </div>
+                  <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                    <div className="text-[11px] font-bold text-gray-400">云端 R2</div>
+                    <div className="mt-1 text-[22px] font-bold text-gray-800">{remoteHistoryTotal}</div>
+                  </div>
+                </div>
+                <div className="mt-4 break-all rounded-2xl bg-blue-50 px-4 py-3 text-[12px] leading-5 text-blue-500">
+                  当前设备：{historyDiagnostics.deviceId || "-"}
+                </div>
+                <div className="mt-4 space-y-2">
+                  {[...historyDiagnostics.localRows.slice(0, 4), ...historyDiagnostics.remoteRows.slice(0, 4)].map((row, idx) => {
+                    const isLocal = "deviceId" in row;
+                    const did = isLocal ? String((row as ChatHistoryLocalStatRow).deviceId || "") : String((row as RemoteHistoryStatRow).device_id || "");
+                    const wid = isLocal ? String((row as ChatHistoryLocalStatRow).windowId || "") : String((row as RemoteHistoryStatRow).window_id || "");
+                    const count = Number((row as any).count || 0);
+                    return (
+                      <div key={`${isLocal ? "local" : "remote"}-${idx}-${did}-${wid}`} className="flex items-center justify-between gap-3 rounded-2xl bg-gray-50 px-4 py-3 text-[12px]">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-gray-700">{isLocal ? "本地" : "云端"} · {wid || "default"}</div>
+                          <div className="truncate text-gray-400">{did || "-"}</div>
+                        </div>
+                        <div className="shrink-0 font-bold text-gray-700">{count} 条</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {remoteOtherHistoryRows.length ? (
+                  <div className="mt-4 space-y-2">
+                    {remoteOtherHistoryRows.slice(0, 3).map((row) => {
+                      const did = String(row.device_id || "").trim();
+                      return (
+                        <button
+                          key={`${did}-${row.window_id}`}
+                          type="button"
+                          onClick={() => void migrateRemoteHistoryFrom(did)}
+                          disabled={busyId === did}
+                          className="w-full rounded-2xl bg-amber-50 px-4 py-3 text-left text-[12px] font-semibold text-amber-700 transition active:scale-[0.99] disabled:opacity-60"
+                        >
+                          {busyId === did ? "合并中..." : `合并旧设备 ${did.slice(0, 10)}... 的云端记录`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="text-[13px] leading-6 text-gray-400">点一下检查，就能看到本机本地库是不是空的，以及云端还有没有旧设备记录。</div>
+            )}
+          </div>
         </div>
 
         <div className="mt-8 px-1">

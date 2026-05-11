@@ -6,7 +6,7 @@ import threading
 from flask import jsonify, request
 
 from config import DATA_DIR
-from storage.miniapp_panel_store import upsert_trusted_device
+from storage.miniapp_panel_store import is_trusted_device, upsert_trusted_device
 from utils.miniapp_panel_auth import issue_panel_token, panel_auth_enabled
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
@@ -198,11 +198,52 @@ def _sumitalk_message_poll_key(msg: dict) -> str:
     return f"{created_at}|{digest}"
 
 
+def _sumitalk_message_content_to_text(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+                elif "text" in item:
+                    parts.append(str(item.get("text") or ""))
+        return "".join(parts).strip()
+    if isinstance(content, dict):
+        return str(content.get("text") or content.get("content") or "").strip()
+    return str(content).strip()
+
+
 def _latest_sumitalk_assistant_message(messages: list[dict]) -> dict | None:
     for item in reversed(_normalize_sumitalk_messages(messages or [])):
         if str(item.get("role") or "").strip().lower() == "assistant":
             return item
     return None
+
+
+def _publish_latest_sumitalk_assistant_message(device_id: str, window_id: str, messages: list[dict]) -> None:
+    latest = _latest_sumitalk_assistant_message(messages)
+    if not latest:
+        return
+    try:
+        msg = dict(latest)
+        msg["key"] = _sumitalk_message_poll_key(msg)
+        msg["preview"] = _sumitalk_message_content_to_text(msg.get("content"))[:500]
+        from services.realtime_publish import publish_assistant_message
+
+        publish_assistant_message(device_id, msg, window_id=window_id)
+    except Exception as e:
+        sumitalk_logger.debug(
+            "history_publish_latest_failed device_id=%s window_id=%s error=%s",
+            device_id,
+            window_id,
+            e,
+        )
 
 
 def register_routes(bp) -> None:
@@ -292,6 +333,34 @@ def register_routes(bp) -> None:
             "messages": [latest] if has_new and latest else [],
         })
 
+    @bp.route("/sumitalk-history/stats", methods=["GET"])
+    def miniapp_sumitalk_history_stats():
+        current_device_id = _get_sumitalk_history_device_id()
+        if not current_device_id:
+            return jsonify({"ok": False, "error": "缺少设备标识", "rows": []}), 400
+        data = _load_sumitalk_histories()
+        rows = []
+        if isinstance(data, dict):
+            for key, row in data.items():
+                if not isinstance(row, dict):
+                    continue
+                device_id = str(row.get("device_id") or "").strip()
+                window_id = _canonical_sumitalk_history_window_id(row.get("window_id"))
+                if not device_id:
+                    raw_key = str(key or "").strip()
+                    device_id = raw_key.split("::", 1)[0]
+                messages = row.get("messages") if isinstance(row.get("messages"), list) else []
+                rows.append({
+                    "key": str(key or ""),
+                    "device_id": device_id,
+                    "window_id": window_id,
+                    "count": len(messages),
+                    "updated_at": str(row.get("updated_at") or ""),
+                    "current": device_id == current_device_id,
+                })
+        rows.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+        return jsonify({"ok": True, "device_id": current_device_id, "rows": rows})
+
     @bp.route("/sumitalk-history", methods=["PUT"])
     def miniapp_sumitalk_history_save():
         device_id = _get_sumitalk_history_device_id()
@@ -350,11 +419,13 @@ def register_routes(bp) -> None:
             meta["remote"],
             meta["ua"],
         )
+        _publish_latest_sumitalk_assistant_message(device_id, window_id, messages)
         return jsonify({"ok": True, "device_id": device_id, "window_id": window_id, "count": len(messages), "updated_at": payload["updated_at"]})
 
     @bp.route("/sumitalk-history/migrate", methods=["POST"])
     def miniapp_sumitalk_history_migrate():
-        old_device_id = _get_sumitalk_history_device_id()
+        auth_device_id = _get_sumitalk_history_device_id()
+        old_device_id = auth_device_id
         if not old_device_id:
             meta = _sumitalk_request_brief()
             sumitalk_logger.warning(
@@ -365,6 +436,11 @@ def register_routes(bp) -> None:
             )
             return jsonify({"ok": False, "error": "缺少旧设备标识"}), 400
         body = request.get_json(silent=True) or {}
+        requested_old_device_id = str(body.get("old_device_id") or body.get("from_device_id") or "").strip()
+        if requested_old_device_id and requested_old_device_id != auth_device_id:
+            if not is_trusted_device(requested_old_device_id):
+                return jsonify({"ok": False, "error": "旧设备未授信，不能迁移"}), 403
+            old_device_id = requested_old_device_id
         new_device_id = str(body.get("new_device_id") or "").strip()
         if not new_device_id:
             meta = _sumitalk_request_brief()

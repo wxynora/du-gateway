@@ -149,6 +149,12 @@ def _append_sumitalk_assistant_message_to_device(device_id: str, text: str, crea
         ok = bool(_save_sumitalk_histories(data))
     if ok:
         sumitalk_logger.info("followup_append_ok preferred=%s device_id=%s chars=%s after=%s", device_id, did, len(content), len(merged_messages))
+        try:
+            from services.realtime_publish import publish_assistant_message
+
+            publish_assistant_message(did, message, window_id="sumitalk-main")
+        except Exception as e:
+            sumitalk_logger.debug("followup_realtime_publish_failed device_id=%s error=%s", did, e)
     else:
         sumitalk_logger.error("followup_append_failed reason=save_failed preferred=%s device_id=%s chars=%s", device_id, did, len(content))
     return ok

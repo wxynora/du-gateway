@@ -9,7 +9,13 @@ from utils.time_aware import BEIJING_TZ
 
 R2_KEY_APP_ACTION_QUEUE = "sumitalk/app_actions.json"
 
-_APP_ACTION_ALLOWLIST = {"create_system_alarm", "create_calendar_event", "show_choice_dialog", "request_screen_check"}
+_APP_ACTION_ALLOWLIST = {
+    "create_system_alarm",
+    "create_calendar_event",
+    "show_choice_dialog",
+    "request_screen_check",
+    "show_overlay_bubble",
+}
 _APP_ACTION_HISTORY_MAX = 100
 _APP_ACTION_EXPIRES_DEFAULT = 900
 _APP_ACTION_EXPIRES_MIN = 30
@@ -144,6 +150,8 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_choice_dialog_payload(payload)
     if action_type == "request_screen_check":
         return _normalize_screen_check_payload(payload)
+    if action_type == "show_overlay_bubble":
+        return _normalize_overlay_bubble_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}
@@ -250,6 +258,52 @@ def _normalize_screen_check_payload(payload: dict) -> tuple[Optional[dict], Opti
     }, None
 
 
+def _normalize_overlay_bubble_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    title = str(src.get("title") or "SumiTalk").strip() or "SumiTalk"
+    if len(title) > 80:
+        title = title[:80]
+    message = str(src.get("message") or src.get("content") or "").strip()
+    if not message:
+        return None, "message 不能为空"
+    if len(message) > 600:
+        message = message[:600]
+    level = str(src.get("level") or "info").strip().lower()
+    if level not in {"info", "message", "success", "warning", "error"}:
+        level = "info"
+    try:
+        duration_seconds = int(src.get("duration_seconds") if "duration_seconds" in src else src.get("durationSeconds", 6))
+    except Exception:
+        duration_seconds = 6
+    duration_seconds = max(2, min(30, duration_seconds))
+    return {
+        "title": title,
+        "message": message,
+        "level": level,
+        "durationSeconds": duration_seconds,
+    }, None
+
+
+def _public_app_action(item: dict) -> dict:
+    return {
+        "id": str((item or {}).get("id") or ""),
+        "type": str((item or {}).get("type") or ""),
+        "payload": (item or {}).get("payload") if isinstance((item or {}).get("payload"), dict) else {},
+    }
+
+
+def _publish_app_action(item: dict) -> None:
+    try:
+        from services.realtime_publish import publish_device_actions
+
+        publish_device_actions(
+            device_id=str((item or {}).get("deviceId") or "").strip(),
+            actions=[_public_app_action(item)],
+        )
+    except Exception as e:
+        logger.debug("publish_app_action failed id=%s error=%s", str((item or {}).get("id") or ""), e)
+
+
 def append_app_action(
     action_type: str,
     payload: dict,
@@ -312,6 +366,7 @@ def append_app_action(
                 idem_keys[idem] = {"id": item["id"], "expiresAt": expires_at}
                 data["idempotencyKeys"] = idem_keys
             _write_json(client, R2_KEY_APP_ACTION_QUEUE, data)
+            _publish_app_action(item)
             return item, None
         except Exception as e:
             logger.error("append_app_action 失败 type=%s error=%s", action, e, exc_info=True)
@@ -369,11 +424,7 @@ def poll_app_actions(device_id: str = "", limit: int = 10) -> dict:
                 if len(out) < max_items:
                     item["leasedUntil"] = lease_until
                     item["retryCount"] = retry_count
-                    out.append({
-                        "id": str(item.get("id") or ""),
-                        "type": str(item.get("type") or ""),
-                        "payload": item.get("payload") if isinstance(item.get("payload"), dict) else {},
-                    })
+                    out.append(_public_app_action(item))
                     changed = True
                 next_pending.append(item)
             if changed:
