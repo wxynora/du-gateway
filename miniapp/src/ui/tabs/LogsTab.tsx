@@ -45,7 +45,7 @@ const ERROR_PATTERNS = [
   /(^|\s)(timeout|timed out|connection (closed|reset|refused))(\s|:|$)/i,
   /\bhttp\s*[45]\d{2}\b/i,
   /\bstatus\s*[:=]?\s*[45]\d{2}\b/i,
-  /\b(401|403|404|408|409|429|500|502|503|504)\b/i,
+  /\b(?:code|status|http|状态码|返回码|响应码)\s*[:=]?\s*(401|403|404|408|409|429|500|502|503|504)\b/i,
   /非\s*200|接口加载失败|请求失败|操作失败|转发失败|发送失败|生成失败|保存失败|加载失败|\/push 失败|失败|异常|报错|错误|上游返回异常|未送达|未找到|权限不足|鉴权失败|无权限|unauthorized|forbidden|no access|permission denied|rate limit|too many requests/i,
 ];
 
