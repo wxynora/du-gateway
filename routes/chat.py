@@ -116,6 +116,7 @@ bp = Blueprint("chat", __name__)
 WINDOW_ID_DEFAULT = ""
 _NSFW_PROMPT_CACHE = {"text": None, "ts": 0.0}
 _NSFW_REPLY_CHANNELS = {"tg", "qq", "wechat", "sumitalk"}
+_NONSTREAM_FAST_RETURN_CHANNELS = {"tg", "qq", "wechat", "sumitalk"}
 
 
 def _get_window_id_from_request(body: dict) -> str:
@@ -2617,7 +2618,7 @@ def chat_completions():
                 if reply_target == "co_read_section":
                     last_user = _strip_co_read_section_raw_text_for_archive(last_user)
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg_for_r2)
-                if reply_channel in {"qq", "wechat"}:
+                if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
                     archived = step_archive_round(
                         window_id, archive_messages, msg_for_r2, round_cleaned_for_r2=round_cleaned
                     )
@@ -2633,7 +2634,7 @@ def chat_completions():
                         window_id, archive_messages, msg_for_r2, round_cleaned_for_r2=round_cleaned
                     )
             else:
-                if reply_channel in {"qq", "wechat"}:
+                if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
                     archived = step_archive_round(window_id, archive_messages, msg_for_r2)
                     if archived:
                         _run_nonstream_post_archive_in_background(
