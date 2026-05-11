@@ -1041,6 +1041,7 @@ def _parse_stream_to_message(chunks: list) -> dict:
     content_parts = []
     reasoning_parts = []
     reasoning_details: list[dict] = []
+    thinking_blocks: list[dict] = []
     reasoning_omitted = False
     # tool_calls 按 index 聚合，arguments 可能多 delta 拼接
     tool_calls_by_index = {}
@@ -1062,6 +1063,9 @@ def _parse_stream_to_message(chunks: list) -> dict:
             reasoning_parts.append(text)
         if details:
             reasoning_details.extend(details)
+        for block in delta.get("thinking_blocks") or []:
+            if isinstance(block, dict):
+                thinking_blocks.append(block)
         if omitted:
             reasoning_omitted = True
         for tc in delta.get("tool_calls") or []:
@@ -1085,6 +1089,7 @@ def _parse_stream_to_message(chunks: list) -> dict:
         "content": "".join(content_parts),
         "tool_calls": sorted_tcs if sorted_tcs else None,
         "reasoning": "".join(reasoning_parts).strip() or None,
+        "thinking_blocks": thinking_blocks or None,
         "reasoning_details": reasoning_details or None,
         "reasoning_omitted": reasoning_omitted,
     }
@@ -1376,6 +1381,8 @@ def _stream_with_r2_archive(
                 if parsed.get("reasoning_details"):
                     msg["reasoning_details"] = parsed.get("reasoning_details")
                     reasoning_details_parts.extend(parsed.get("reasoning_details") or [])
+                if parsed.get("thinking_blocks"):
+                    msg["thinking_blocks"] = parsed.get("thinking_blocks")
                 if parsed.get("reasoning_omitted"):
                     msg["reasoning_omitted"] = True
                     reasoning_omitted = True
@@ -2029,7 +2036,7 @@ def _append_tool_results_and_continue(body: dict, assistant_message: dict, tool_
         "content": assistant_message.get("content") or None,
         "tool_calls": assistant_message.get("tool_calls"),
     }
-    for rk in ("reasoning", "reasoning_content", "thinking", "reasoning_details", "reasoning_omitted"):
+    for rk in ("reasoning", "reasoning_content", "thinking", "thinking_blocks", "reasoning_details", "reasoning_omitted"):
         if assistant_message.get(rk):
             assistant_trace[rk] = assistant_message.get(rk)
     messages.append(assistant_trace)
