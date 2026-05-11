@@ -185,8 +185,9 @@ def _build_qq_style_system() -> str:
             "5) 允许自然分段，但不要为了格式刻意堆很多空行。",
             "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。",
             "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。",
-            "   - 语音要像口语短句；停顿只靠自然短句和标点，不写停顿控制标签，也不要堆省略号/破折号。",
-            "   - 可少量用 MiniMax 动作：(laughs)、(sighs)、(gasps)、(clear-throat)、(breath)；自然时才用。",
+            "   - 语音文本像平时聊天一样：短句、顺口、贴近当下；可以认真、吐槽或偶尔调笑，但不要写励志口号、舞台指令或语气括号词。",
+            "   - 停顿只靠自然短句和标点，不写停顿控制标签，也不要堆省略号/破折号。",
+            "   - 可少量用 MiniMax 声响动作：(laughs)、(sighs)、(gasps)、(clear-throat)、(breath)；真有声响时才用，不要写 (softly)、[softly] 这类语气词。",
             "   - 情绪由 TTS 配置控制，不写进 <voice>；2.8 常用值：happy、sad、angry、fearful、disgusted、surprised、calm。",
             "   - 如果你不想发语音，就不要输出 <voice> 标签。",
         ]
