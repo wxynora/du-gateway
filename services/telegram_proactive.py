@@ -21,6 +21,8 @@ from config import (
     TELEGRAM_PROACTIVE_PROB_MULTIPLIER,
     TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN,
     TELEGRAM_PROACTIVE_INTERVAL_MINUTES,
+    TELEGRAM_PROACTIVE_RANDOM_MIN_MINUTES,
+    TELEGRAM_PROACTIVE_RANDOM_MAX_MINUTES,
     TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES,
     MINIAPP_SCHEDULE_RUNTIME_ENABLED,
     MINIAPP_SCHEDULE_RUNTIME_INTERVAL_SECONDS,
@@ -205,6 +207,12 @@ def _probability(hours_since_last: float) -> float:
     if p > 1:
         p = 1.0
     return p
+
+
+def _next_proactive_delay_seconds() -> int:
+    min_min = max(1, int(TELEGRAM_PROACTIVE_RANDOM_MIN_MINUTES or 35))
+    max_min = max(min_min, int(TELEGRAM_PROACTIVE_RANDOM_MAX_MINUTES or min_min))
+    return random.randint(min_min * 60, max_min * 60)
 
 
 _ACTION_LABEL_CN = {
@@ -906,10 +914,16 @@ def proactive_tick(target_user_id: int = 0) -> dict:
 
     hours = _hours_since_last(last_iso, now_dt)
     p = _probability(hours)
-    hit = random.random() < p
-    out = {"ok": True, "quiet": False, "sent": False, "now": now_iso, "last": last_iso, "hours": hours, "p": p, "hit": hit}
-    if not hit:
-        return out
+    out = {
+        "ok": True,
+        "quiet": False,
+        "sent": False,
+        "now": now_iso,
+        "last": last_iso,
+        "hours": hours,
+        "legacy_p": p,
+        "wake_mode": "random_decision",
+    }
     channels = _available_channels()
     out["channels"] = channels
     if not channels:
@@ -923,7 +937,7 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     out["du_action"] = decision.action
     out["du_intent_reason"] = decision.du_reason
 
-    # 仅概率主动：记下本轮决策（闹钟不走这里）
+    # 随机唤醒主动决策：记下本轮决策（闹钟不走这里）
     try:
         pv = ""
         if decision.text and decision.text.strip():
@@ -995,17 +1009,23 @@ def run_scheduler_loop():
         logger.warning("主动发消息和日历闹钟调度均未开启，直接退出")
         return
     interval_min = max(1, int(TELEGRAM_PROACTIVE_INTERVAL_MINUTES or 30))
+    random_min = max(1, int(TELEGRAM_PROACTIVE_RANDOM_MIN_MINUTES or 35))
+    random_max = max(random_min, int(TELEGRAM_PROACTIVE_RANDOM_MAX_MINUTES or random_min))
     schedule_interval_s = max(30, int(MINIAPP_SCHEDULE_RUNTIME_INTERVAL_SECONDS or 60))
     uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
     logger.info(
-        "主动调度进程启动 proactive_enabled=%s interval_min=%s schedule_enabled=%s schedule_interval_s=%s target_user_id=%s",
+        "主动调度进程启动 proactive_enabled=%s legacy_interval_min=%s random_window=%s-%smin schedule_enabled=%s schedule_interval_s=%s target_user_id=%s",
         proactive_enabled,
         interval_min,
+        random_min,
+        random_max,
         schedule_enabled,
         schedule_interval_s,
         uid,
     )
-    next_main_at = 0.0
+    first_delay = _next_proactive_delay_seconds()
+    next_main_at = time.time() + first_delay
+    logger.info("下一次随机主动唤醒 scheduled_in=%.1fmin", first_delay / 60.0)
     next_schedule_at = 0.0
     next_followup_at = 0.0
     next_du_daily_at = 0.0
@@ -1034,7 +1054,9 @@ def run_scheduler_loop():
             if proactive_enabled and now_ts >= next_main_at:
                 result = proactive_tick(uid)
                 logger.info("主动发消息 tick result=%s", result)
-                next_main_at = now_ts + interval_min * 60
+                next_delay = _next_proactive_delay_seconds()
+                next_main_at = now_ts + next_delay
+                logger.info("下一次随机主动唤醒 scheduled_in=%.1fmin", next_delay / 60.0)
         except Exception as e:
             logger.exception("主动发消息 tick 异常: %s", e)
         time.sleep(15)

@@ -1,4 +1,3 @@
-import copy
 import json
 import shlex
 
@@ -9,7 +8,6 @@ from services.forum_mcp_client import (
     call_cli,
     call_tool,
     forum_mcp_enabled,
-    list_tools,
 )
 from services.device_action_tools import (
     TOOL_CREATE_CALENDAR_EVENT,
@@ -36,27 +34,13 @@ LEGACY_SUBMOLT_MAP = {
 
 REMOTE_TOOL_DESCRIPTION_OVERRIDES = {
     "cli": (
-        "论坛原始命令工具。适合发帖、评论、私信、查看资料、主页装修、以及论坛新增功能。\n"
-        "参数：command 必填；stdin 可选，长正文或长 Markdown/SVG/HTML 时使用。\n"
-        "格式规则：command 不要带 lutopia 前缀；短码 SSE 已自带身份，不需要再传论坛 token。\n"
-        "常用例子：whoami；list --limit 10；show 84cf1af0；comment 84cf1af0 你好；"
-        "post tech 标题 --content-stdin（正文放 stdin）。\n"
-        "主页相关命令：homepage-layout；homepage-guide <block>；homepage-read <block> [--parse]；"
-        "homepage-preview <block> <md> | --file X | --stdin；homepage-write <block> <md> | --file X | --stdin。\n"
-        "主页使用规则：当前 get_guide(section=\"cli\") 和 cli(command=\"help\") 可能还没列出 homepage 命令，"
-        "不要因此判断主页命令不可用；主页命令以这里的说明和 homepage-guide <block> 为准。"
-        "homepage-layout / homepage-read 返回空或 not found 通常表示还没配置，不代表工具失败；"
-        "如果只是想知道某个 block 怎么写，直接用 homepage-guide <block> 查单个组件说明；"
-        "如果要看某个组件当前内容，用 homepage-read <block> [--parse]；"
-        "如果要写入，先 homepage-preview <block> --stdin 校验，通过后再 homepage-write <block> --stdin --i-read-warning。"
-        "不要因为主页为空就反复重试同一个命令，也不要用 get_guide(section=\"cli\") 或 cli(command=\"help\") 反复验证 homepage 是否存在。\n"
-        "非主页命令不确定格式时，再用 get_guide(section=\"cli\") 或 cli(command=\"help\")。"
+        "论坛 CLI 工具。用于发帖、评论、私信、资料、主页装修和论坛新功能。"
+        "command 必填，不带 lutopia 前缀；stdin 可选，长正文或 Markdown/SVG/HTML 用 stdin。"
+        "不确定格式时先用 get_guide(section=\"cli\") 或 cli(command=\"help\")。"
     ),
     "get_guide": (
-        "论坛指南工具。用于查命令和规则说明；不确定怎么用 cli 时先调这个。\n"
-        "参数：section 可选。常用 section：cli、rules、api.posts、api.dm、voice、full。\n"
-        "推荐：第一次使用论坛原始命令时，先 get_guide(section=\"cli\")。"
-        "注意：当前 section=\"cli\" 可能还没列出 homepage 命令；主页装修请优先用 cli 的 homepage-* 说明和 homepage-guide <block>。"
+        "论坛指南工具。用于查询 CLI 命令、论坛规则和接口说明。"
+        "section 可选，常用：cli、rules、api.posts、api.dm、voice、full。"
     ),
 }
 
@@ -94,6 +78,36 @@ TOOL_FORUM_OPEN_THREAD = {
                 "post_id": {"type": "string", "description": "必填：帖子 ID"},
             },
             "required": ["post_id"],
+        },
+    },
+}
+
+TOOL_FORUM_CLI = {
+    "type": "function",
+    "function": {
+        "name": "cli",
+        "description": REMOTE_TOOL_DESCRIPTION_OVERRIDES["cli"],
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "论坛 CLI 命令，不带 lutopia 前缀"},
+                "stdin": {"type": "string", "description": "可选：长正文或文件内容"},
+            },
+            "required": ["command"],
+        },
+    },
+}
+
+TOOL_FORUM_GET_GUIDE = {
+    "type": "function",
+    "function": {
+        "name": "get_guide",
+        "description": REMOTE_TOOL_DESCRIPTION_OVERRIDES["get_guide"],
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section": {"type": "string", "description": "可选指南分区，如 cli、rules、api.posts、full"},
+            },
         },
     },
 }
@@ -223,63 +237,13 @@ def get_forum_tools_for_inject(mode: str = "forum") -> list[dict]:
         TOOL_FORUM_READ_FEED,
         TOOL_FORUM_OPEN_THREAD,
     ]
-    return schedule_tools + high_level + _get_remote_forum_tools_for_inject() + [TOOL_SEARCH_MEMORY]
-
-def _sanitize_remote_schema(input_schema: dict | None) -> dict:
-    schema = copy.deepcopy(input_schema if isinstance(input_schema, dict) else {})
-    if not isinstance(schema, dict):
-        schema = {}
-    props = schema.get("properties")
-    if not isinstance(props, dict):
-        props = {}
-    else:
-        props = dict(props)
-    props.pop("token", None)
-    schema["type"] = "object"
-    schema["properties"] = props
-    required = schema.get("required")
-    if isinstance(required, list):
-        schema["required"] = [x for x in required if str(x).strip() != "token"]
-    return schema
+    return schedule_tools + high_level + _get_forum_passthrough_tools_for_inject() + [TOOL_SEARCH_MEMORY]
 
 
-def _remote_tool_description_for_inject(name: str, remote_desc: str) -> str:
-    local = str(REMOTE_TOOL_DESCRIPTION_OVERRIDES.get(name) or "").strip()
-    remote = str(remote_desc or "").strip()
-    if local and remote:
-        return f"{local}\n\n补充：{remote}"
-    return local or remote
-
-
-def _get_remote_forum_tools_for_inject() -> list[dict]:
+def _get_forum_passthrough_tools_for_inject() -> list[dict]:
     if not forum_mcp_enabled():
         return []
-    try:
-        remote_tools = list_tools()
-    except Exception as e:
-        logger.warning("forum_mcp list_tools failed while building inject tools: %s", e)
-        return []
-
-    out: list[dict] = []
-    for name in ("cli", "get_guide"):
-        meta = remote_tools.get(name) or {}
-        tool_name = str(meta.get("name") or "").strip()
-        if not tool_name:
-            continue
-        out.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "description": _remote_tool_description_for_inject(
-                        tool_name,
-                        str(meta.get("description") or "").strip(),
-                    ),
-                    "parameters": _sanitize_remote_schema(meta.get("input_schema") or {}),
-                },
-            }
-        )
-    return out
+    return [TOOL_FORUM_CLI, TOOL_FORUM_GET_GUIDE]
 
 
 def _quote_cli_arg(value) -> str:
