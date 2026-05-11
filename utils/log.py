@@ -60,13 +60,18 @@ class LogBufferHandler(logging.Handler):
         except Exception:
             line = record.getMessage()
         add_log_line(line)
-        if record.levelno >= logging.ERROR and os.environ.get("LOG_ERROR_APP_ALERT_ENABLED", "").strip().lower() in ("1", "true", "yes", "on"):
-            try:
-                from services.log_error_alert import maybe_enqueue_log_error_alert
+        try:
+            from services.log_error_alert import is_alertworthy_log_line, maybe_enqueue_log_error_alert
 
+            explicit_enabled = os.environ.get("LOG_ERROR_APP_ALERT_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+            should_alert = (
+                (explicit_enabled and record.levelno >= logging.ERROR)
+                or is_alertworthy_log_line(line, record.levelname)
+            )
+            if should_alert:
                 maybe_enqueue_log_error_alert(line, record.levelname)
-            except Exception:
-                pass
+        except Exception:
+            pass
 
 
 def setup_logging():

@@ -11,6 +11,24 @@ _global_last_at = 0.0
 _COOLDOWN_SECONDS = 300.0
 _GLOBAL_MIN_INTERVAL_SECONDS = 30.0
 
+_IMPORTANT_WARNING_PATTERNS = [
+    re.compile(r"\bstatus\s*[:=]?\s*(?:401|403|429|5\d{2})\b", re.I),
+    re.compile(r"\bhttp\s*(?:401|403|429|5\d{2})\b", re.I),
+    re.compile(r"非\s*200"),
+    re.compile(r"(上游|主动|网关|/push|sendMessage|sendVoice).{0,40}(失败|异常|非200|未送达)", re.I),
+    re.compile(r"(权限不足|鉴权失败|无权限|unauthorized|forbidden|no access|permission denied|rate limit|too many requests)", re.I),
+]
+
+
+def is_alertworthy_log_line(line: str, level_name: str = "ERROR") -> bool:
+    level = str(level_name or "").strip().upper()
+    raw = str(line or "")
+    if level in {"ERROR", "CRITICAL", "FATAL"}:
+        return True
+    if level not in {"WARNING", "WARN"}:
+        return False
+    return any(pattern.search(raw) for pattern in _IMPORTANT_WARNING_PATTERNS)
+
 
 def _fingerprint(line: str) -> str:
     text = str(line or "")

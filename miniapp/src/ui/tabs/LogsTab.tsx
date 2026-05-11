@@ -40,11 +40,13 @@ function TrashIcon() {
 }
 
 const ERROR_PATTERNS = [
-  /(^|\s)(error|err|exception|fatal|fail(ed|ure)?|traceback|panic)(\s|:|$)/i,
+  /\]\s*(ERROR|CRITICAL|FATAL):/i,
+  /(^|\s)(error|err|exception|fatal|fail(ed|ure)?|traceback|panic)(\s|:|=|$)/i,
   /(^|\s)(timeout|timed out|connection (closed|reset|refused))(\s|:|$)/i,
-  /\bhttp\s*5\d{2}\b/i,
-  /\bstatus\s*[:=]?\s*5\d{2}\b/i,
-  /接口加载失败|请求失败|操作失败|转发失败|上游返回异常|未找到|权限不足|鉴权失败/i,
+  /\bhttp\s*[45]\d{2}\b/i,
+  /\bstatus\s*[:=]?\s*[45]\d{2}\b/i,
+  /\b(401|403|404|408|409|429|500|502|503|504)\b/i,
+  /非\s*200|接口加载失败|请求失败|操作失败|转发失败|发送失败|生成失败|保存失败|加载失败|\/push 失败|失败|异常|报错|错误|上游返回异常|未送达|未找到|权限不足|鉴权失败|无权限|unauthorized|forbidden|no access|permission denied|rate limit|too many requests/i,
 ];
 
 export function LogsTab() {
@@ -56,6 +58,7 @@ export function LogsTab() {
   const [filterText, setFilterText] = useState("");
   const [filterKind, setFilterKind] = useState<LogCategory>("all");
   const [loadError, setLoadError] = useState("");
+  const alertedErrorLinesRef = useRef<Set<string>>(new Set());
 
   function lineKind(line: string): LogCategory | "other" {
     const raw = String(line || "");
@@ -93,6 +96,28 @@ export function LogsTab() {
   function isErrorLine(line: string) {
     const raw = String(line || "");
     return ERROR_PATTERNS.some((p) => p.test(raw));
+  }
+
+  function compactErrorLine(line: string) {
+    const raw = String(line || "")
+      .replace(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}\s*/, "")
+      .replace(/^\[[^\]]+\]\s*/, "")
+      .trim();
+    return raw.length > 180 ? `${raw.slice(0, 180)}...` : raw;
+  }
+
+  function notifyErrorLine(line: string) {
+    if (!isErrorLine(line)) return false;
+    const raw = String(line || "");
+    const key = raw
+      .replace(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}/g, "<time>")
+      .slice(0, 800);
+    const seen = alertedErrorLinesRef.current;
+    if (seen.has(key)) return false;
+    if (seen.size > 120) seen.clear();
+    seen.add(key);
+    toast(`日志报错：${compactErrorLine(raw)}`);
+    return true;
   }
 
   const filtered = useMemo(() => {
@@ -155,9 +180,13 @@ export function LogsTab() {
     try {
       const q = new URLSearchParams({ lines: "200", category: filterKind });
       const j = await apiJson<LogsResp>(`/miniapp-api/logs?${q.toString()}`);
-      setLines((j.lines || []).slice().reverse());
+      const latestFirst = (j.lines || []).slice().reverse();
+      setLines(latestFirst);
       setLoadError("");
-      if (!silent) toast("已加载最新日志");
+      if (!silent) {
+        const latestError = latestFirst.find((line) => isErrorLine(line));
+        if (!latestError || !notifyErrorLine(latestError)) toast("已加载最新日志");
+      }
     } catch (e: any) {
       setLoadError(e?.message || String(e));
       if (!silent) toast(`加载失败：${e?.message || e}`);
@@ -171,8 +200,10 @@ export function LogsTab() {
     setConnected(true);
     es.onmessage = (ev) => {
       if (paused) return;
+      const line = String(ev.data || "");
+      notifyErrorLine(line);
       setLines((prev) => {
-        const next = [ev.data, ...prev];
+        const next = [line, ...prev];
         if (next.length > 2000) next.splice(2000);
         return next;
       });
