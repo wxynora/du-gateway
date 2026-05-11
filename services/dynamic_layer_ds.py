@@ -90,6 +90,7 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 但如果本轮出现关键事实锚点（时间/地点/明确决定/待办结论）或明显情绪起伏，不要因为“太短”而 skip。
 健康数据默认不记；只有出现生病/不适/就医相关情境时才记。
 额外要求：若 action 是 new/merge，content 必须是“概括后的便签”，不要照抄原对话原文。
+额外要求：若 action 是 merge，fused_with_id 必须精确填写“当前记忆列表”里的已有 id；如果找不到明确 id，不要 merge，有新内容就改为 new，没有就 skip。
 额外要求：
 - emotion_label 只标“当前/latest 的态度”，不要写历史态度
 - scene_type 只能从这些值里选一个：problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict
@@ -263,6 +264,30 @@ def _extract_json_from_ds_response(text: str) -> Optional[dict]:
     return _extract_decision_fields_from_text(text)
 
 
+def _normalize_fused_with_id(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return str(value) if value else None
+    value = value.strip()
+    if not value or value.lower() in ("null", "none"):
+        return None
+    if "仅 merge 时填写" in value:
+        return None
+    return value
+
+
+def _decision_structural_issue(obj: dict) -> str:
+    action = str(obj.get("action") or "skip").strip().lower()
+    content_text = str(obj.get("content") or "").strip()
+    fused_with_id = _normalize_fused_with_id(obj.get("fused_with_id"))
+    if action == "new" and not content_text:
+        return "new_missing_content"
+    if action == "merge" and not content_text and not fused_with_id:
+        return "merge_missing_content_and_id"
+    return ""
+
+
 def _extract_json_array_from_ds_response(text: str) -> Optional[list]:
     """从 DS 返回中解析 JSON 数组 [...]。"""
     text = _strip_json_fence(text)
@@ -360,7 +385,7 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
         for attempt in range(2):  # 最多试 2 次
             request_payload = payload
             if attempt > 0:
-                logger.info("动态层 DS 结构化解析失败后重试 attempt=%s", attempt + 1)
+                logger.info("动态层 DS 首次未解析，开始重试 attempt=%s", attempt + 1)
                 request_payload = {
                     **payload,
                     "messages": [
@@ -370,6 +395,8 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
                                 prompt
                                 + "\n\n上一次输出没有解析成功。"
                                 "这次可以输出 JSON，也可以一行一个字段，例如 action: skip。"
+                                "若 action 是 merge，fused_with_id 必须精确填写当前记忆列表里的已有 id；找不到明确 id 就不要 merge，有新内容改为 new，没有就 skip。"
+                                "若 action 是 new 或 merge，content 必须填写概括后的便签。"
                                 "不要解释原因，不要输出长文。"
                             ),
                         }
@@ -388,8 +415,18 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
             content = (content or "").strip()
             obj = _extract_json_from_ds_response(content)
             if isinstance(obj, dict):
+                structural_issue = _decision_structural_issue(obj)
+                if structural_issue:
+                    logger.warning(
+                        "动态层 DS 返回结构不完整 attempt=%s issue=%s preview=%s",
+                        attempt + 1,
+                        structural_issue,
+                        _one_line_preview(content),
+                    )
+                    if attempt == 0:
+                        continue
                 if attempt > 0:
-                    logger.info("动态层 DS 结构化解析重试成功 attempt=%s", attempt + 1)
+                    logger.info("动态层 DS 重试解析成功 attempt=%s", attempt + 1)
                 break
             if content:
                 logger.warning("动态层 DS 返回无法解析 attempt=%s preview=%s", attempt + 1, _one_line_preview(content))
@@ -404,17 +441,20 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
         importance = int(obj.get("importance") or 0)
         importance = max(1, min(4, importance))  # 1-4
         content_text = (obj.get("content") or "").strip()
-        fused_with_id = obj.get("fused_with_id")
+        fused_with_id = _normalize_fused_with_id(obj.get("fused_with_id"))
         emotion_label = str(obj.get("emotion_label") or "").strip().lower()
         scene_type = str(obj.get("scene_type") or "").strip()
         target_type = str(obj.get("target_type") or "").strip()
-        if fused_with_id is not None and not isinstance(fused_with_id, str):
-            fused_with_id = str(fused_with_id) if fused_with_id else None
-        elif fused_with_id is not None and not fused_with_id.strip():
-            fused_with_id = None
 
         if action == "merge" and not content_text and not fused_with_id:
             logger.warning("动态层 DS 返回 action=merge 但 content/fused_with_id 缺失，按 skip 处理")
+            action = "skip"
+        elif action == "merge" and content_text and not fused_with_id:
+            logger.warning("动态层 DS 返回 action=merge 但 fused_with_id 缺失，降级为 new")
+            action = "new"
+        elif action == "new" and not content_text:
+            logger.warning("动态层 DS 返回 action=new 但 content 缺失，按 skip 处理")
+            action = "skip"
 
         return {
             "tag": tag,
