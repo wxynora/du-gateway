@@ -114,11 +114,11 @@ async function waitForSumiTalkChatJob(jobId: string): Promise<any> {
   throw new Error("等待渡回复超时");
 }
 
-async function apiJsonWithTimeout<T>(path: string, timeoutMs: number): Promise<T> {
+async function apiJsonWithTimeout<T>(path: string, timeoutMs: number, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await apiJson<T>(path, { signal: controller.signal });
+    return await apiJson<T>(path, { ...init, signal: controller.signal });
   } finally {
     window.clearTimeout(timer);
   }
@@ -397,7 +397,7 @@ export function MainChatScreen({
 
   async function saveDisplayHistory(
     nextMessages: ChatDraftMessage[],
-    options: { syncRemote?: boolean; localDeviceId?: string } = {},
+    options: { syncRemote?: boolean; localDeviceId?: string; remoteTimeoutMs?: number } = {},
   ) {
     const sanitizedMessages = sanitizeHistoryMessages(nextMessages);
     const resolvedDeviceId = String(options.localDeviceId || deviceId || "").trim();
@@ -414,12 +414,27 @@ export function MainChatScreen({
       return;
     }
     try {
-      await apiJson("/miniapp-api/sumitalk-history", {
+      const init = {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(sumitalkHistoryPayload(sanitizedMessages, remoteHistoryWindowId)),
-      });
+      };
+      if (options.remoteTimeoutMs && options.remoteTimeoutMs > 0) {
+        await apiJsonWithTimeout("/miniapp-api/sumitalk-history", options.remoteTimeoutMs, init);
+      } else {
+        await apiJson("/miniapp-api/sumitalk-history", init);
+      }
     } catch {}
+  }
+
+  function saveDisplayHistoryInBackground(
+    nextMessages: ChatDraftMessage[],
+    options: { localDeviceId?: string } = {},
+  ) {
+    void saveDisplayHistory(nextMessages, {
+      localDeviceId: options.localDeviceId,
+      remoteTimeoutMs: 8000,
+    }).catch(() => {});
   }
 
   async function applyBenbenTaskTerminal(
@@ -527,10 +542,10 @@ export function MainChatScreen({
       : [...params.baseMessages, pendingMsg];
     messagesRef.current = pendingMessages;
     setMessages(pendingMessages);
-    await saveDisplayHistory(pendingMessages, { localDeviceId: params.replyTarget });
+    await saveDisplayHistory(pendingMessages, { syncRemote: false, localDeviceId: params.replyTarget });
     let taskId = "";
     try {
-      const created = await apiJson<CodexGroupChatTaskResponse>("/miniapp-api/codex-group-chat-tasks", {
+      const created = await apiJsonWithTimeout<CodexGroupChatTaskResponse>("/miniapp-api/codex-group-chat-tasks", 15000, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -552,7 +567,8 @@ export function MainChatScreen({
       });
       messagesRef.current = queuedMessages;
       setMessages(queuedMessages);
-      await saveDisplayHistory(queuedMessages, { localDeviceId: params.replyTarget });
+      await saveDisplayHistory(queuedMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+      saveDisplayHistoryInBackground(queuedMessages, { localDeviceId: params.replyTarget });
       const task = await waitForCodexGroupChatTask(taskId);
       const applied = await applyBenbenTaskTerminal(task, { messageId: benbenId, localDeviceId: params.replyTarget });
       if (!applied) throw new Error("笨笨没有返回内容");
@@ -568,7 +584,8 @@ export function MainChatScreen({
       });
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
-      await saveDisplayHistory(failedMessages, { localDeviceId: params.replyTarget });
+      await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+      saveDisplayHistoryInBackground(failedMessages, { localDeviceId: params.replyTarget });
       toast(`笨笨入群失败：${e?.message || e}`);
       return failedMessages;
     }
