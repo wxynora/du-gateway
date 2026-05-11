@@ -58,7 +58,6 @@ export function LogsTab() {
   const [filterText, setFilterText] = useState("");
   const [filterKind, setFilterKind] = useState<LogCategory>("all");
   const [loadError, setLoadError] = useState("");
-  const alertedErrorLinesRef = useRef<Set<string>>(new Set());
 
   function lineKind(line: string): LogCategory | "other" {
     const raw = String(line || "");
@@ -96,28 +95,6 @@ export function LogsTab() {
   function isErrorLine(line: string) {
     const raw = String(line || "");
     return ERROR_PATTERNS.some((p) => p.test(raw));
-  }
-
-  function compactErrorLine(line: string) {
-    const raw = String(line || "")
-      .replace(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}\s*/, "")
-      .replace(/^\[[^\]]+\]\s*/, "")
-      .trim();
-    return raw.length > 180 ? `${raw.slice(0, 180)}...` : raw;
-  }
-
-  function notifyErrorLine(line: string) {
-    if (!isErrorLine(line)) return false;
-    const raw = String(line || "");
-    const key = raw
-      .replace(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}/g, "<time>")
-      .slice(0, 800);
-    const seen = alertedErrorLinesRef.current;
-    if (seen.has(key)) return false;
-    if (seen.size > 120) seen.clear();
-    seen.add(key);
-    toast(`日志报错：${compactErrorLine(raw)}`);
-    return true;
   }
 
   const filtered = useMemo(() => {
@@ -184,8 +161,7 @@ export function LogsTab() {
       setLines(latestFirst);
       setLoadError("");
       if (!silent) {
-        const latestError = latestFirst.find((line) => isErrorLine(line));
-        if (!latestError || !notifyErrorLine(latestError)) toast("已加载最新日志");
+        toast("已加载最新日志");
       }
     } catch (e: any) {
       setLoadError(e?.message || String(e));
@@ -201,7 +177,6 @@ export function LogsTab() {
     es.onmessage = (ev) => {
       if (paused) return;
       const line = String(ev.data || "");
-      notifyErrorLine(line);
       setLines((prev) => {
         const next = [line, ...prev];
         if (next.length > 2000) next.splice(2000);
