@@ -200,7 +200,8 @@ rg -n "choice_dialog|screen_check|proactive_trigger|send_proactive_trigger_wakeu
 - 查手机结果和回复不匹配
 
 入口：
-- 状态上报：`routes/miniapp_api.py` 的 `/device-state/*`
+- Sense 上报：`routes/sense_api.py` 的 `/api/sense`
+- 状态上报：MiniApp 设备状态路由的 `/device-state/*`
 - 截图：`routes/miniapp_api.py` 的 `/device-screenshots*`
 - 原生动作队列：`services/device_action_tools.py`
 - Sense 注入：`services/sense_context.py`
@@ -216,6 +217,10 @@ rg -n "device-state|device-screenshots|screen_check|sense|foreground-app|usage-s
 - 截图不是偷偷读屏，必须由客户端授权/执行后回传。
 - 图片会增加大量 token，图片压缩和描述归档在聊天清洗链路里查。
 - 悬浮球旁边的旧气泡能力已移除；日志告警改投 SumiTalk 安卓壳的 `show_system_notification` 系统通知，会走顶部消息提醒通道。日志页实时错误提醒不要用 app 内 toast；通知栏提醒由后端 `log_error_alert` 投递现有 `show_system_notification` 动作给安卓壳处理。后续推送优先试 FCM，不行再接 ntfy。
+
+当前状态（2026-05-12）：
+- 已拆：根路由 `/api/sense` 和 location/health normalize helper 已从 `app.py` 移到 `routes/sense_api.py`，公开路径和 R2 写入行为不变。
+- 未完成 / 不要碰：MiniApp device-state、截图、原生动作队列仍维持现有文件边界；不要把 QQ connector、小爱文件、共读文档或旧 `miniapp_static/assets/*` hash 资源混进这轮拆分。
 
 ## 图片 / token 暴涨
 
@@ -447,21 +452,26 @@ npm -C miniapp run android
 先建索引，再小步拆分。不要一次性大重构。
 
 1. `routes/miniapp_api.py`
+   - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
+   - 已拆：Codex group chat task 路由已移到 `routes/miniapp/codex_group_chat.py`；`/codex-group-chat-tasks*` 路径保持不变
    - `miniapp_auth.py`
-   - `miniapp_sumitalk.py`
    - `miniapp_device.py`
    - `miniapp_reasoning.py`
    - `miniapp_settings.py`
    - `miniapp_upstreams.py`
 
-2. `miniapp/src/ui/App.tsx`
+2. `app.py`
+   - 已拆：`/api/sense` 已移到 `routes/sense_api.py`
+   - 后续可拆：MiniApp 静态入口 / app-version、天气/时间这类独立工具路由
+
+3. `miniapp/src/ui/App.tsx`
    - 聊天页面
    - 首页
    - 设置页
    - 消息渲染
    - SumiTalk job/client
 
-3. `routes/chat.py`
+4. `routes/chat.py`
    - request normalize
    - system injection
    - upstream forward
