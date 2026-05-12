@@ -48,6 +48,7 @@ def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optiona
         "model": MINIMAX_T2A_MODEL,
         "text": t,
         "stream": False,
+        "language_boost": "auto",
         "voice_setting": voice_setting,
         "audio_setting": {
             "sample_rate": MINIMAX_AUDIO_SAMPLE_RATE,
@@ -55,7 +56,9 @@ def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optiona
             "format": fmt,
             "channel": MINIMAX_AUDIO_CHANNEL,
         },
+        "pronunciation_dict": {"tone": []},
         "subtitle_enable": False,
+        "output_format": "hex",
     }
     try:
         r = requests.post(MINIMAX_T2A_URL, headers=headers, json=payload, timeout=60)
