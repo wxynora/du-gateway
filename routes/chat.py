@@ -114,6 +114,7 @@ from services.anthropic_format import (
     prepare_anthropic_body,
 )
 from services.telegram_bot import build_telegram_style_system
+from services.voice_line_prompt import build_voice_line_rules
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 from utils.tokens import estimate_tokens
@@ -194,9 +195,8 @@ def _build_qq_style_system() -> str:
             "5) 允许自然分段，但不要为了格式刻意堆很多空行。",
             "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。",
             "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。",
-            "   - 语音文本像平时聊天一样：短句、顺口、贴近当下；可以认真、吐槽或偶尔调笑，但不要写励志口号、舞台指令或语气括号词。",
-            "   - 语音里表达边界或拒绝时，少用“不可以 / 不行 / 不能”这类硬否定；换成更顺口的“先别这样”“这个先放一下”“换个说法”；“又不乖了”这种轻轻调笑可以用。",
-            "   - 停顿只靠自然短句和标点，不写停顿控制标签，也不要堆省略号/破折号。",
+            "   - 写 <voice> 里的语音文本时，遵守语音台词撰写规范：",
+            build_voice_line_rules("     - "),
             "   - 情绪由 TTS 配置控制，不写进 <voice>；2.8 常用值：happy、sad、angry、fearful、disgusted、surprised、calm。",
             "   - 如果你不想发语音，就不要输出 <voice> 标签。",
         ]
@@ -248,6 +248,34 @@ def _inject_entry_style_system(body: dict) -> dict:
             return body
         insert_idx = i + 1
     messages.insert(insert_idx, {"role": "system", "content": style_system})
+    body = dict(body)
+    body["messages"] = messages
+    return body
+
+
+def _inject_voice_call_style_system(body: dict) -> dict:
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    marker = "【语音通话台词规范】"
+    instruction = "\n".join(
+        [
+            marker,
+            "你现在在语音通话里回复，最终文本会直接转成语音。",
+            "只输出需要朗读的正文，不要输出 <voice> 标签、动作注解、括号提示或表演说明。",
+            build_voice_line_rules(),
+        ]
+    ).strip()
+    messages = list(body.get("messages") or [])
+    for msg in messages:
+        if isinstance(msg, dict) and str(msg.get("role") or "").strip().lower() == "system":
+            if marker in str(msg.get("content") or ""):
+                return body
+    insert_idx = 0
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "system":
+            break
+        insert_idx = i + 1
+    messages.insert(insert_idx, {"role": "system", "content": instruction})
     body = dict(body)
     body["messages"] = messages
     return body
@@ -2335,6 +2363,8 @@ def chat_completions():
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
+    if slim_voice_call:
+        body = _inject_voice_call_style_system(body)
     skip_dynamic_memory = (
         (request.headers.get("X-Skip-Dynamic-Memory") or "").strip().lower() in ("1", "true", "yes")
         or _is_gateway_wakeup_request()

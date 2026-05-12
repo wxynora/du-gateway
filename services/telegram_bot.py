@@ -40,6 +40,7 @@ from config import (
     R2_PUBLIC_URL,
 )
 from storage import r2_store
+from services.voice_line_prompt import build_voice_line_rules
 
 logger = logging.getLogger(__name__)
 
@@ -225,9 +226,8 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
         "5) 允许自然分段，但不要为了格式刻意堆很多空行。\n"
         "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。\n"
         "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。\n"
-        "   - 语音文本像平时聊天一样：短句、顺口、贴近当下；可以认真、吐槽或偶尔调笑，但不要写励志口号、舞台指令或语气括号词。\n"
-        "   - 语音里表达边界或拒绝时，少用“不可以 / 不行 / 不能”这类硬否定；换成更顺口的“先别这样”“这个先放一下”“换个说法”；“又不乖了”这种轻轻调笑可以用。\n"
-        "   - 停顿只靠自然短句和标点，不写停顿控制标签，也不要堆省略号/破折号。\n"
+        "   - 写 <voice> 里的语音文本时，遵守语音台词撰写规范：\n"
+        f"{build_voice_line_rules('     - ')}\n"
         "   - 如果你不想发语音，就不要输出 <voice> 标签。\n"
     )
 

@@ -138,11 +138,11 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 笨笨任务已创建后，应靠 realtime 或 `codex-group-chat-tasks/<id>` fallback 轮询贴回最终回复；不要在发送函数里一直等到 Codex 完成。
 - 本机 Codex bridge 默认参数应偏快：`CODEX_GROUP_CHAT_POLL_SECONDS=0.5`、`CODEX_GROUP_CHAT_IDLE_POLL_SECONDS=1`、`CODEX_GROUP_CHAT_CLAIM_TIMEOUT_SECONDS=3`，并用短重试降低 `SSL EOF`/超时导致的随机拖延。
 
-当前状态（2026-05-11）：
-- 已完成：群聊发送本地历史优先；群聊模式改为直接创建 `sumitalk-chat-jobs` 并轮询渡回复，避免自适应接口回包丢失时前端拿不到渡消息；笨笨任务创建后立即释放前端发送链路；fallback 轮询调到 1s；本机 Codex bridge 已重启到快轮询和短重试参数。
-- 未完成：`duxy-home.com` 偶发 `SSL EOF`/超时仍可能来自本机网络或代理链路，代码已降低拖延但没有根治网络层。
-- 下次继续：若仍慢或前端没显示渡消息，先看 MiniApp network 里 `/sumitalk-chat-jobs` 的创建和 GET 轮询响应，再看 `/Users/doraemon/.du-gateway-codex-bridge/logs/codex_group_chat_bridge.out.log` 的 claim 错误密度。
-- 不要碰：小爱音箱接入半成品、QQ group chat 未收束改动、旧的未跟踪 `miniapp_static/assets/*` 杂散构建产物。
+当前状态（2026-05-12）：
+- 已完成并推送：`d6ca54a Stop log page error toasts` 已到 `main`；日志页不再弹应用内 `日志报错` toast，系统通知继续走后端 `log_error_alert` -> `show_system_notification` -> 安卓壳 `FloatingBallService` 的现有通知栏链路。
+- 已验证：前端 `npm run build` 通过；Android `:app:compileDebugJavaWithJavac` 通过；远端 `main` 已确认到 `d6ca54a128d84d292be33367563c48036ef77a78`。
+- 推送踩坑：普通 `git push` 多次被 SSH/HTTPS 网络层断开；最终用 `git send-pack` 通过 `ssh.github.com:443` + 本地 socks 代理推送成功。
+- 未完成 / 不要碰：QQ connector 改动、小爱音箱接入文件、`pipeline.py`、`routes/miniapp/memory_panel.py`、共读文档、旧的未跟踪 `miniapp_static/assets/*` hash 资源仍是本地半成品或杂散产物；没有明确要求前不要 stage、commit、push、delete 或 revert。
 
 ## Telegram Webhook / TG 回复延迟
 
@@ -384,6 +384,15 @@ rg -n "core-prompt|核心|入口风格|SumiTalk|禁言|silence" routes services 
 注意：
 - 禁言模式只约束最终可见回复，不限制工具调用和内部处理。
 - 风格 system 的位置会影响 prompt cache 静态区命中。
+- 写系统类、规则类提示词时，先看 `AGENTS.md` 的“提示词写法规则”：优先第二人称或无人称；参考段落只用于判断写法风格，不要把示例里的具体互动内容照搬成默认规则。
+
+当前状态（2026-05-12）：
+- 已完成：`AGENTS.md` 已补“提示词写法规则”，并把现有 AGENTS 表述收成第二人称/无人称风格；刚才误把参考段落的具体互动内容写进去，已删除，只保留写法口吻规则。
+- 未完成 / 不要碰：没有改运行时核心 prompt、SumiTalk/TG 风格注入或 DS 总结提示词；后续只有明确要调线上人格/风格时再改对应入口。
+
+当前状态（2026-05-13）：
+- 已完成：语音台词撰写规范已抽到 `services/voice_line_prompt.py`，并注入 QQ/TG 的 `<voice>` 规则与 `X-Voice-Call-Slim` 语音通话回复；只约束会被朗读的语音文本，不改普通文字聊天、核心 prompt 或 DS 总结提示词。
+- 未完成 / 不要碰：这次不处理 voice prompt 之外的风格规则；不要把这份规范做成 Codex skill，也不要塞进全局普通聊天 prompt。
 
 ## Claude proxy / CPA / OAuth
 
@@ -451,6 +460,10 @@ npm -C miniapp run android
 
 先建索引，再小步拆分。不要一次性大重构。
 
+当前状态（2026-05-12）：
+- 已完成：`app.py` 已拆出 SumiTalk job、Codex group task、`/api/sense`、MiniApp 静态入口/资源/app-version/favicon、`/time-info`、`/time-now`、根记忆读取和写入工具路由；公开路径保持不变，已做 py_compile、import 使用检查、Flask url_map 检查和 diff 空白检查。
+- 未完成 / 不要碰：`AGENTS.md` 的提示词写法修正、QQ connector、小爱文件、共读文档、旧 `miniapp_static/assets/*` hash 资源仍是本地未推内容；继续拆分时只碰当前明确选中的代码边界。
+
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
    - 已拆：Codex group chat task 路由已移到 `routes/miniapp/codex_group_chat.py`；`/codex-group-chat-tasks*` 路径保持不变
@@ -462,7 +475,10 @@ npm -C miniapp run android
 
 2. `app.py`
    - 已拆：`/api/sense` 已移到 `routes/sense_api.py`
-   - 后续可拆：MiniApp 静态入口 / app-version、天气/时间这类独立工具路由
+   - 已拆：MiniApp 静态入口、静态资源、app-version 和 favicon 已移到 `routes/miniapp_static.py`
+   - 已拆：`/time-info` 和 `/time-now` 已移到 `routes/time_api.py`
+   - 已拆：`/summary`、`/dynamic-memory`、`/api/memory/append` 和 `/api/cc_log` 已移到 `routes/memory_api.py`
+   - 后续可拆：root/health 或 CORS/setup 边界；再往后优先看 `routes/chat.py`
 
 3. `miniapp/src/ui/App.tsx`
    - 聊天页面
