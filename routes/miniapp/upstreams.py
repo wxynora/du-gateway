@@ -12,6 +12,13 @@ from config import (
     OPENROUTER_VERBOSITY,
     is_openrouter_url,
 )
+from services.anthropic_format import (
+    anthropic_messages_url,
+    anthropic_models_url,
+    build_anthropic_headers,
+    is_anthropic_request_format,
+    prepare_anthropic_body,
+)
 from storage import upstream_store
 
 
@@ -19,12 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 def _chat_url_to_models_url(chat_url: str) -> str:
-    base = (chat_url or "").strip().rstrip("/")
-    for suffix in ("/v1/chat/completions", "/chat/completions"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-            break
-    return base.rstrip("/") + "/v1/models"
+    return anthropic_models_url(chat_url)
 
 
 def _probe_upstream_item(it: dict) -> dict:
@@ -47,8 +49,10 @@ def _probe_upstream_item(it: dict) -> dict:
         out["error"] = "URL 为空"
         return out
 
-    headers = {"Content-Type": "application/json"}
-    if api_key:
+    request_format = upstream_store.get_request_format()
+    use_anthropic = is_anthropic_request_format(request_format)
+    headers = build_anthropic_headers(api_key, url) if use_anthropic else {"Content-Type": "application/json"}
+    if api_key and not use_anthropic:
         headers["Authorization"] = f"Bearer {api_key}"
 
     model_name = ""
@@ -114,7 +118,9 @@ def _probe_upstream_item(it: dict) -> dict:
                 }
             if OPENROUTER_CACHE_CONTROL_TYPE:
                 body["cache_control"] = {"type": OPENROUTER_CACHE_CONTROL_TYPE}
-        rc = requests.post(url, headers=headers, json=body, timeout=20)
+        chat_url = anthropic_messages_url(url) if use_anthropic else url
+        body_send = prepare_anthropic_body(body) if use_anthropic else body
+        rc = requests.post(chat_url, headers=headers, json=body_send, timeout=20)
         out["chat_status"] = int(rc.status_code or 0)
         if rc.status_code >= 400:
             logger.warning(
@@ -122,7 +128,7 @@ def _probe_upstream_item(it: dict) -> dict:
                 name or "(empty)",
                 rc.status_code,
                 model_name,
-                url,
+                chat_url,
                 (rc.text or "")[:300],
             )
         if 200 <= rc.status_code < 300:
@@ -157,6 +163,7 @@ def register_routes(bp) -> None:
         return jsonify(
             {
                 "active": int(data.get("active") or 0),
+                "request_format": upstream_store.get_request_format(),
                 "model": model,
                 "items": items,
             }
@@ -166,6 +173,8 @@ def register_routes(bp) -> None:
     def miniapp_put_upstreams():
         data = request.get_json(silent=True) or {}
         active = int(data.get("active") or 0)
+        if "request_format" in data:
+            upstream_store.set_request_format(data.get("request_format"))
         ok = upstream_store.set_active(active)
         model = upstream_store.refresh_active_model_cache() if ok else ""
         saved = upstream_store.load_upstreams()
@@ -173,6 +182,7 @@ def register_routes(bp) -> None:
             {
                 "ok": ok,
                 "active": int(saved.get("active") or 0),
+                "request_format": upstream_store.get_request_format(),
                 "model": model,
             }
         )
@@ -181,12 +191,30 @@ def register_routes(bp) -> None:
     def miniapp_set_active_upstream():
         data = request.get_json(silent=True) or {}
         idx = int(data.get("active") or 0)
+        if "request_format" in data:
+            upstream_store.set_request_format(data.get("request_format"))
         ok = upstream_store.set_active(idx)
         model = upstream_store.refresh_active_model_cache() if ok else ""
         saved = upstream_store.load_upstreams()
         return jsonify(
             {
                 "ok": ok,
+                "active": int(saved.get("active") or 0),
+                "request_format": upstream_store.get_request_format(),
+                "model": model,
+            }
+        )
+
+    @bp.route("/upstreams/request-format", methods=["PUT"])
+    def miniapp_set_upstream_request_format():
+        data = request.get_json(silent=True) or {}
+        ok = upstream_store.set_request_format(data.get("request_format"))
+        model = upstream_store.refresh_active_model_cache() if ok else ""
+        saved = upstream_store.load_upstreams()
+        return jsonify(
+            {
+                "ok": ok,
+                "request_format": upstream_store.get_request_format(),
                 "active": int(saved.get("active") or 0),
                 "model": model,
             }

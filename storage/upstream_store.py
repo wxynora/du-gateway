@@ -12,6 +12,12 @@ from config import (
     SILICONFLOW_DEFAULT_MODEL,
     is_openrouter_url,
 )
+from services.anthropic_format import (
+    anthropic_models_url,
+    build_anthropic_headers,
+    is_anthropic_request_format,
+    normalize_request_format,
+)
 
 
 UPSTREAMS_FILE = DATA_DIR / "upstreams.json"
@@ -41,7 +47,7 @@ def _default_payload():
                 continue
             items.append({"name": f"upstream{i+1}", "url": u, "api_key": k or ""})
             seen.add(u)
-    return {"active": 0, "items": items}
+    return {"active": 0, "request_format": "openai", "items": items}
 
 
 def load_upstreams() -> dict:
@@ -52,27 +58,29 @@ def load_upstreams() -> dict:
     payload = _default_payload()
     items = payload.get("items") or []
     if not UPSTREAMS_FILE.exists():
-        return {"active": 0, "items": items}
+        return {"active": 0, "request_format": "openai", "items": items}
     try:
         with open(UPSTREAMS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f) or {}
     except Exception:
-        return {"active": 0, "items": items}
+        return {"active": 0, "request_format": "openai", "items": items}
 
     active = int(data.get("active") or 0)
     if active < 0 or active >= len(items):
         active = 0
-    return {"active": active, "items": items}
+    request_format = normalize_request_format(data.get("request_format"))
+    return {"active": active, "request_format": request_format, "items": items}
 
 
 def save_upstreams(payload: dict) -> bool:
-    # 只保存 active，items 从 env 重新构建
+    # 只保存 active/request_format，items 从 env 重新构建
     UPSTREAMS_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(UPSTREAMS_FILE, "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "active": int(payload.get("active") or 0),
+                    "request_format": normalize_request_format(payload.get("request_format")),
                 },
                 f,
                 ensure_ascii=False,
@@ -84,12 +92,7 @@ def save_upstreams(payload: dict) -> bool:
 
 
 def _chat_url_to_models_url(chat_url: str) -> str:
-    base = (chat_url or "").strip().rstrip("/")
-    for suffix in ("/v1/chat/completions", "/chat/completions"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-            break
-    return base.rstrip("/") + "/v1/models"
+    return anthropic_models_url(chat_url)
 
 
 def _load_active_model_payload() -> dict:
@@ -131,8 +134,9 @@ def list_models_for_item(it: dict) -> list[str]:
         return [model] if model else []
     if _is_siliconflow_url(url) and SILICONFLOW_DEFAULT_MODEL:
         return [str(SILICONFLOW_DEFAULT_MODEL or "").strip()]
-    headers = {"Content-Type": "application/json"}
-    if api_key:
+    use_anthropic = is_anthropic_request_format(load_upstreams().get("request_format"))
+    headers = build_anthropic_headers(api_key, url) if use_anthropic else {"Content-Type": "application/json"}
+    if api_key and not use_anthropic:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
         resp = requests.get(_chat_url_to_models_url(url), headers=headers, timeout=20)
@@ -220,6 +224,19 @@ def set_active(index: int) -> bool:
     if index < 0 or index >= len(items):
         return False
     data["active"] = int(index)
+    ok = save_upstreams(data)
+    if ok:
+        clear_active_model_cache()
+    return ok
+
+
+def get_request_format() -> str:
+    return normalize_request_format(load_upstreams().get("request_format"))
+
+
+def set_request_format(request_format: str) -> bool:
+    data = load_upstreams()
+    data["request_format"] = normalize_request_format(request_format)
     ok = save_upstreams(data)
     if ok:
         clear_active_model_cache()

@@ -3,7 +3,8 @@ import { apiJson } from "../api";
 import { useToast } from "../toast";
 
 type UpstreamItem = { name: string; url: string };
-type UpstreamsResp = { active: number; model?: string; items: UpstreamItem[] };
+type RequestFormat = "openai" | "anthropic";
+type UpstreamsResp = { active: number; request_format?: RequestFormat; model?: string; items: UpstreamItem[] };
 type ProbeItem = {
   index: number;
   isActive: boolean;
@@ -20,6 +21,7 @@ type ProbeResp = { ok: boolean; status: "ok" | "degraded" | "fail"; results: Pro
 type ActivePutResp = { ok?: boolean; error?: string; active?: number; model?: string };
 type ModelsResp = { ok?: boolean; error?: string; active?: number; index?: number; model?: string; models?: string[] };
 type ModelPutResp = { ok?: boolean; error?: string; active?: number; model?: string };
+type RequestFormatPutResp = { ok?: boolean; error?: string; request_format?: RequestFormat; model?: string };
 
 function hostFromUrl(url: string): string {
   const raw = String(url || "").trim();
@@ -57,6 +59,10 @@ function probeStatusBadgeClass(p?: ProbeItem): string {
   return "bg-red-100 text-red-700";
 }
 
+function normalizeRequestFormat(value?: string): RequestFormat {
+  return value === "anthropic" ? "anthropic" : "openai";
+}
+
 export function SettingsUpstream() {
   const toast = useToast();
   const [active, setActive] = useState(0);
@@ -73,6 +79,9 @@ export function SettingsUpstream() {
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
+  const [requestFormat, setRequestFormat] = useState<RequestFormat>("openai");
+  const [pendingRequestFormat, setPendingRequestFormat] = useState<RequestFormat>("openai");
+  const [requestFormatSaving, setRequestFormatSaving] = useState(false);
 
   const loadModels = useCallback(async (index?: number) => {
     setModelsLoading(true);
@@ -100,11 +109,14 @@ export function SettingsUpstream() {
       const j = await apiJson<UpstreamsResp>("/miniapp-api/upstreams");
       const nextActive = Number(j.active || 0);
       const nextModel = String(j.model || "").trim();
+      const nextRequestFormat = normalizeRequestFormat(j.request_format);
       const nextItems = Array.isArray(j.items) ? j.items : [];
       setActive(nextActive);
       setItems(nextItems);
       setCurrentModel(nextModel);
       setPendingModel(nextModel);
+      setRequestFormat(nextRequestFormat);
+      setPendingRequestFormat(nextRequestFormat);
       if (nextItems.length) {
         await loadModels(nextActive);
       } else {
@@ -206,12 +218,38 @@ export function SettingsUpstream() {
     }
   }
 
+  async function saveRequestFormat() {
+    if (pendingRequestFormat === requestFormat || requestFormatSaving) return;
+    setRequestFormatSaving(true);
+    try {
+      const r = await apiJson<RequestFormatPutResp>("/miniapp-api/upstreams/request-format", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_format: pendingRequestFormat }),
+      });
+      if (!r?.ok) throw new Error(r?.error || "保存失败");
+      const next = normalizeRequestFormat(r.request_format || pendingRequestFormat);
+      setRequestFormat(next);
+      setPendingRequestFormat(next);
+      const nextModel = String(r.model || "").trim();
+      setCurrentModel(nextModel);
+      setPendingModel(nextModel);
+      toast(next === "anthropic" ? "已切到 Anthropic 格式" : "已切回 OpenAI 格式");
+      await loadModels(active);
+    } catch (e: any) {
+      toast(`格式保存失败：${e?.message || e}`);
+    } finally {
+      setRequestFormatSaving(false);
+    }
+  }
+
   const activeItem = items[active];
   const activeHost = activeItem ? hostFromUrl(activeItem.url) : "—";
   const activeProbe = probes[active];
   const pendingHost = pendingIndex !== null && items[pendingIndex] ? hostFromUrl(items[pendingIndex].url) : "";
   const canConfirm = pendingIndex !== null && pendingIndex !== active && !submitting && !loading && items.length > 0;
   const canSaveModel = !!pendingModel && pendingModel !== currentModel && !modelSaving && !modelsLoading;
+  const canSaveRequestFormat = pendingRequestFormat !== requestFormat && !requestFormatSaving;
   const modelOptions = pendingModel && !models.includes(pendingModel) ? [pendingModel, ...models] : models;
 
   function renderProbeCodes(p?: ProbeItem) {
@@ -329,6 +367,46 @@ export function SettingsUpstream() {
                     <svg className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
+                  </div>
+                  <div className="mt-5 border-t border-gray-50 pt-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">请求格式</p>
+                        <p className="mt-1 text-[12px] font-medium text-gray-500">
+                          {requestFormat === "anthropic" ? "Anthropic 原生 /v1/messages" : "OpenAI 兼容 /chat/completions"}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!canSaveRequestFormat}
+                        onClick={() => void saveRequestFormat()}
+                        className="h-8 shrink-0 rounded-full bg-gray-900 px-3 text-[12px] font-bold text-white shadow-sm active:scale-[0.98] disabled:bg-gray-100 disabled:text-gray-400 disabled:shadow-none"
+                      >
+                        {requestFormatSaving ? "保存中" : "保存"}
+                      </button>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-gray-50 p-1">
+                      {([
+                        ["openai", "OpenAI", "默认"],
+                        ["anthropic", "Anthropic", "Claude 断点"],
+                      ] as const).map(([value, label, hint]) => {
+                        const selected = pendingRequestFormat === value;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => setPendingRequestFormat(value)}
+                            className={
+                              "rounded-xl px-3 py-2 text-left transition " +
+                              (selected ? "bg-white shadow-sm" : "active:bg-white/70")
+                            }
+                          >
+                            <span className={"block text-[13px] font-extrabold " + (selected ? "text-gray-900" : "text-gray-500")}>{label}</span>
+                            <span className={"mt-0.5 block text-[10px] font-bold " + (selected ? "text-blue-600" : "text-gray-400")}>{hint}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                   <p className="mt-5 text-[11px] font-medium text-gray-400">探活（HTTP）</p>
                   <div className="mt-1">{renderProbeCodes(activeProbe)}</div>
