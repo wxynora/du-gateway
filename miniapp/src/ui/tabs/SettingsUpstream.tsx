@@ -3,7 +3,7 @@ import { apiJson } from "../api";
 import { useToast } from "../toast";
 
 type UpstreamItem = { name: string; url: string };
-type RequestFormat = "openai" | "anthropic";
+type RequestFormat = "openai" | "openai_compat";
 type UpstreamsResp = { active: number; request_format?: RequestFormat; model?: string; items: UpstreamItem[] };
 type ProbeItem = {
   index: number;
@@ -60,7 +60,7 @@ function probeStatusBadgeClass(p?: ProbeItem): string {
 }
 
 function normalizeRequestFormat(value?: string): RequestFormat {
-  return value === "anthropic" ? "anthropic" : "openai";
+  return value === "openai_compat" || value === "anthropic" ? "openai_compat" : "openai";
 }
 
 export function SettingsUpstream() {
@@ -234,7 +234,7 @@ export function SettingsUpstream() {
       const nextModel = String(r.model || "").trim();
       setCurrentModel(nextModel);
       setPendingModel(nextModel);
-      toast(next === "anthropic" ? "已切到 Anthropic 格式" : "已切回 OpenAI 格式");
+      toast(next === "openai_compat" ? "已切到 OpenAI 兼容中转" : "已切回默认 OpenAI");
       await loadModels(active);
     } catch (e: any) {
       toast(`格式保存失败：${e?.message || e}`);
@@ -373,7 +373,7 @@ export function SettingsUpstream() {
                       <div className="min-w-0">
                         <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">请求格式</p>
                         <p className="mt-1 text-[12px] font-medium text-gray-500">
-                          {requestFormat === "anthropic" ? "Anthropic 原生 /v1/messages" : "OpenAI 兼容 /chat/completions"}
+                          {requestFormat === "openai_compat" ? "OpenAI 兼容中转 /chat/completions + Claude 缓存断点" : "默认 OpenAI /chat/completions"}
                         </p>
                       </div>
                       <button
@@ -388,7 +388,7 @@ export function SettingsUpstream() {
                     <div className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-gray-50 p-1">
                       {([
                         ["openai", "OpenAI", "默认"],
-                        ["anthropic", "Anthropic", "Claude 断点"],
+                        ["openai_compat", "OpenAI 兼容中转", "Claude 断点"],
                       ] as const).map(([value, label, hint]) => {
                         const selected = pendingRequestFormat === value;
                         return (

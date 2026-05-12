@@ -56,13 +56,29 @@ IMAGE_DOWNLOAD_MAX_BYTES = 10 * 1024 * 1024
 
 def normalize_request_format(value: Any) -> str:
     mode = str(value or "").strip().lower()
-    if mode in {"anthropic", "claude"}:
-        return "anthropic"
+    if mode in {
+        "openai_compat",
+        "openai-compatible",
+        "openai_compatible",
+        "openai_compatible_relay",
+        "openai-compat-relay",
+        "openai兼容中转",
+        # 旧版 UI 写入过 anthropic；升级后迁移到 OpenAI 兼容中转，不再走 /v1/messages。
+        "anthropic",
+        "claude",
+    }:
+        return "openai_compat"
+    if mode in {"anthropic_native", "native_anthropic"}:
+        return "anthropic_native"
     return "openai"
 
 
 def is_anthropic_request_format(value: Any) -> bool:
-    return normalize_request_format(value) == "anthropic"
+    return normalize_request_format(value) == "anthropic_native"
+
+
+def is_openai_compat_request_format(value: Any) -> bool:
+    return normalize_request_format(value) == "openai_compat"
 
 
 def anthropic_messages_url(url: str) -> str:
@@ -404,8 +420,81 @@ def prepare_anthropic_body(openai_body: dict) -> dict:
     return process_anthropic_body(openai_to_anthropic(openai_body))
 
 
+def prepare_openai_compat_body(openai_body: dict) -> dict:
+    body = copy.deepcopy(openai_body or {})
+    apply_openai_compat_prompt_cache(body)
+    strip_gateway_prompt_cache_markers(body)
+    return body
+
+
 def static_system_prompt_block() -> dict:
     return dict(SYSTEM_PROMPT_PREFIX)
+
+
+def strip_gateway_prompt_cache_markers(body: dict) -> None:
+    for msg in (body or {}).get("messages") or []:
+        if not isinstance(msg, dict):
+            continue
+        msg.pop(DYNAMIC_SYSTEM_MARKER, None)
+        msg.pop(SUMMARY_CACHE_SYSTEM_MARKER, None)
+        msg.pop(SUMMARY_RECENT_SYSTEM_MARKER, None)
+
+
+def apply_openai_compat_prompt_cache(body: dict) -> None:
+    messages = (body or {}).get("messages")
+    if not isinstance(messages, list) or not messages:
+        return
+    cache_control = {"type": "ephemeral", "ttl": CLAUDE_PROMPT_CACHE_TTL} if CLAUDE_PROMPT_CACHE_TTL else {"type": "ephemeral"}
+    target = find_openai_compat_static_cache_message(messages)
+    if target is not None:
+        set_openai_message_cache_control(target, cache_control)
+
+
+def find_openai_compat_static_cache_message(messages: list) -> dict | None:
+    static_system = None
+    for msg in messages:
+        if not isinstance(msg, dict):
+            break
+        if str(msg.get("role") or "").strip().lower() != "system":
+            break
+        text = _content_to_text(msg.get("content")).lstrip()
+        text_item = {"text": text}
+        if (
+            msg.get(DYNAMIC_SYSTEM_MARKER)
+            or msg.get(SUMMARY_CACHE_SYSTEM_MARKER)
+            or msg.get(SUMMARY_RECENT_SYSTEM_MARKER)
+            or looks_like_gateway_summary_cache_block(text_item)
+            or looks_like_gateway_recent_summary_block(text_item)
+            or looks_like_gateway_dynamic_system_block(text_item)
+        ):
+            break
+        static_system = msg
+    return static_system
+
+
+def set_openai_message_cache_control(msg: dict, cache_control: dict) -> None:
+    content = msg.get("content")
+    if isinstance(content, str):
+        if not content:
+            return
+        msg["content"] = [{"type": "text", "text": content, "cache_control": dict(cache_control)}]
+        return
+    if not isinstance(content, list):
+        return
+    parts = []
+    last_text_idx = -1
+    for part in content:
+        if isinstance(part, dict):
+            next_part = dict(part)
+            if str(next_part.get("type") or "").strip().lower() in {"text", "input_text"} and str(next_part.get("text") or ""):
+                last_text_idx = len(parts)
+            parts.append(next_part)
+        else:
+            parts.append(part)
+    if last_text_idx < 0:
+        return
+    parts[last_text_idx]["cache_control"] = dict(cache_control)
+    msg["content"] = parts
 
 
 def apply_prompt_cache(body: dict) -> None:

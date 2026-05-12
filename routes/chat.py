@@ -111,7 +111,9 @@ from services.anthropic_format import (
     anthropic_to_openai,
     build_anthropic_headers,
     is_anthropic_request_format,
+    is_openai_compat_request_format,
     prepare_anthropic_body,
+    prepare_openai_compat_body,
 )
 from services.telegram_bot import build_telegram_style_system
 from services.voice_line_prompt import build_voice_line_rules
@@ -535,6 +537,10 @@ def _get_upstream_request_format() -> str:
 
 def _use_anthropic_upstream_format() -> bool:
     return is_anthropic_request_format(_get_upstream_request_format())
+
+
+def _use_openai_compat_upstream_format() -> bool:
+    return is_openai_compat_request_format(_get_upstream_request_format())
 
 
 def _is_local_cliproxyapi_url(url: str) -> bool:
@@ -1118,6 +1124,7 @@ def _stream_forward_to_ai(body: dict, headers: dict):
     if accept:
         req_headers["Accept"] = accept
     use_anthropic = _use_anthropic_upstream_format()
+    use_openai_compat = _use_openai_compat_upstream_format()
     last_err = None
     for url, api_key in targets:
         body_send = dict(body)
@@ -1147,6 +1154,8 @@ def _stream_forward_to_ai(body: dict, headers: dict):
                 body_send = prepare_anthropic_body(body_send)
             else:
                 body_send = _apply_openrouter_request_policy(body_send, url)
+                if use_openai_compat:
+                    body_send = prepare_openai_compat_body(body_send)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(target_url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
@@ -1557,6 +1566,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
     last_err = None
     last_status = 502
     use_anthropic = _use_anthropic_upstream_format()
+    use_openai_compat = _use_openai_compat_upstream_format()
     for i, (url, api_key) in enumerate(targets):
         req_headers = build_anthropic_headers(api_key, url) if use_anthropic else {"Content-Type": "application/json"}
         if api_key and not use_anthropic:
@@ -1580,6 +1590,8 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                 body_send = prepare_anthropic_body(body_send)
             else:
                 body_send = _apply_openrouter_request_policy(body_send, url)
+                if use_openai_compat:
+                    body_send = prepare_openai_compat_body(body_send)
             r = requests.post(target_url, headers=req_headers, json=body_send, timeout=120)
             # 为排查上游 403：记录鉴权是否携带（不泄露 key），以及响应正文前缀
             try:
@@ -2417,8 +2429,12 @@ def chat_completions():
         pass
     active_upstream_url = _get_active_upstream_url()
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
-    # Claude OAuth 代理/Anthropic 原生模式需要这些标记打缓存断点；OpenAI 兼容上游继续清掉。
-    preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(active_upstream_url) or _use_anthropic_upstream_format()
+    # Claude OAuth 代理/OpenAI 兼容中转/Anthropic 原生模式需要这些标记打缓存断点；默认 OpenAI 继续清掉。
+    preserve_dynamic_marker = (
+        _is_local_claude_oauth_proxy_url(active_upstream_url)
+        or _use_openai_compat_upstream_format()
+        or _use_anthropic_upstream_format()
+    )
     for msg in body.get("messages") or []:
         if not preserve_dynamic_marker:
             msg.pop("__dynamic__", None)
