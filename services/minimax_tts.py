@@ -36,17 +36,19 @@ def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optiona
         return None
     headers = {"Authorization": f"Bearer {MINIMAX_API_KEY}", "Content-Type": "application/json"}
     fmt = str(audio_format or MINIMAX_AUDIO_FORMAT or "").strip() or "mp3"
+    voice_setting = {
+        "voice_id": MINIMAX_VOICE_ID,
+        "speed": float(MINIMAX_VOICE_SPEED),
+        "vol": int(MINIMAX_VOICE_VOL),
+        "pitch": int(MINIMAX_VOICE_PITCH),
+    }
+    if MINIMAX_VOICE_EMOTION:
+        voice_setting["emotion"] = MINIMAX_VOICE_EMOTION
     payload = {
         "model": MINIMAX_T2A_MODEL,
         "text": t,
         "stream": False,
-        "voice_setting": {
-            "voice_id": MINIMAX_VOICE_ID,
-            "speed": float(MINIMAX_VOICE_SPEED),
-            "vol": int(MINIMAX_VOICE_VOL),
-            "pitch": int(MINIMAX_VOICE_PITCH),
-            "emotion": MINIMAX_VOICE_EMOTION,
-        },
+        "voice_setting": voice_setting,
         "audio_setting": {
             "sample_rate": MINIMAX_AUDIO_SAMPLE_RATE,
             "bitrate": MINIMAX_AUDIO_BITRATE,
