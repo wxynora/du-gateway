@@ -226,7 +226,6 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
         "   - 语音文本像平时聊天一样：短句、顺口、贴近当下；可以认真、吐槽或偶尔调笑，但不要写励志口号、舞台指令或语气括号词。\n"
         "   - 语音里表达边界或拒绝时，少用“不可以 / 不行 / 不能”这类硬否定；换成更顺口的“先别这样”“这个先放一下”“换个说法”；“又不乖了”这种轻轻调笑可以用。\n"
         "   - 停顿只靠自然短句和标点，不写停顿控制标签，也不要堆省略号/破折号。\n"
-        "   - 情绪由 TTS 配置控制，不写进 <voice>；2.8 常用值：happy、sad、angry、fearful、disgusted、surprised、calm。\n"
         "   - 如果你不想发语音，就不要输出 <voice> 标签。\n"
     )
 
