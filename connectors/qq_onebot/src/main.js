@@ -375,6 +375,54 @@ const dedupeMax = 2000;
 const recentInboundByUser = new Map();
 const inboundDedupeWindowMs = Math.max(2000, envInt("QQ_INBOUND_DEDUPE_WINDOW_MS", 12000));
 
+async function sendQqPrivateRichReply(userId, reply, options = {}) {
+  const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
+  const maxReplyTotalChars = Math.max(0, envInt("QQ_MAX_REPLY_TOTAL_CHARS", 0));
+  const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
+  const shouldSplit = options.split !== false && options.singleMessage !== true;
+  const strict = options.strict === true;
+  const { cleanText: noVoiceText, voiceText } = extractVoiceTag(reply);
+  const pcmdHandled = await processPcmdViaGateway(noVoiceText);
+  const { cleanText: replyClean, tag: stickerTag } = await extractStickerTag(pcmdHandled.visibleText);
+  const stickerUrl = await resolveStickerUrl(stickerTag);
+  const chunks = shouldSplit ? splitReplyByNewlineAndLen(replyClean, outChunkChars, maxReplyTotalChars) : [replyClean].filter(Boolean);
+  let sentAny = false;
+  for (const part of chunks) {
+    try {
+      await sendQqText(userId, part);
+      sentAny = true;
+    } catch (e) {
+      console.log(`[qq-onebot] 发消息失败 user=${userId}: ${String(e?.message || e)}`);
+      if (strict) throw e;
+      break;
+    }
+    if (sendDelayMs > 0) await sleep(sendDelayMs);
+  }
+  if (stickerUrl) {
+    try {
+      await sendQqImage(userId, stickerUrl);
+      sentAny = true;
+      if (sendDelayMs > 0) await sleep(sendDelayMs);
+    } catch (e) {
+      console.log(`[qq-onebot] 发送表情失败 user=${userId}: ${String(e?.message || e)}`);
+      if (strict && !sentAny) throw e;
+    }
+  }
+  if (voiceText) {
+    try {
+      const audioBytes = await callGatewayTts(voiceText);
+      if (audioBytes?.length) {
+        await sendQqRecord(userId, audioBytes);
+        sentAny = true;
+      }
+    } catch (e) {
+      console.log(`[qq-onebot] 发送语音失败 user=${userId}: ${String(e?.message || e)}`);
+      if (strict && !sentAny) throw e;
+    }
+  }
+  return sentAny;
+}
+
 async function flushUser(userId) {
   const it = pending.get(userId);
   if (!it) return;
@@ -399,40 +447,10 @@ async function flushUser(userId) {
       pending.delete(userId);
       return;
     }
-    const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
-    const maxReplyTotalChars = Math.max(0, envInt("QQ_MAX_REPLY_TOTAL_CHARS", 0));
-    const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
-    const { cleanText: noVoiceText, voiceText } = extractVoiceTag(reply);
-    const pcmdHandled = await processPcmdViaGateway(noVoiceText);
-    const { cleanText: replyClean, tag: stickerTag } = await extractStickerTag(pcmdHandled.visibleText);
-    const stickerUrl = await resolveStickerUrl(stickerTag);
-    const chunks = splitReplyByNewlineAndLen(replyClean, outChunkChars, maxReplyTotalChars);
-    for (const part of chunks) {
-      try {
-        await sendQqText(userId, part);
-      } catch (e) {
-        console.log(`[qq-onebot] 发消息失败：${String(e?.message || e)}`);
-        break;
-      }
-      if (sendDelayMs > 0) await sleep(sendDelayMs);
-    }
-    if (stickerUrl) {
-      try {
-        await sendQqImage(userId, stickerUrl);
-      } catch (e) {
-        console.log(`[qq-onebot] 发表情包失败：${String(e?.message || e)}`);
-      }
-      if (sendDelayMs > 0) await sleep(sendDelayMs);
-    }
-    if (voiceText) {
-      try {
-        const audioBytes = await callGatewayTts(voiceText);
-        if (audioBytes?.length) {
-          await sendQqRecord(userId, audioBytes);
-        }
-      } catch (e) {
-        console.log(`[qq-onebot] 发语音失败：${String(e?.message || e)}`);
-      }
+    try {
+      await sendQqPrivateRichReply(userId, reply);
+    } catch (e) {
+      console.log(`[qq-onebot] 发送回复失败：${String(e?.message || e)}`);
     }
   } finally {
     // 本轮 flush 结束后，无论成功与否，都视为这一轮已经消费完成
@@ -542,20 +560,22 @@ async function main() {
           res.end(JSON.stringify({ ok: false, error: "QQ_PROACTIVE_TARGET_USER_ID not configured" }));
           return;
         }
-        const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
-        const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
-        const shouldSplit = body?.split !== false && body?.single_message !== true;
-        const chunks = shouldSplit ? splitReplyByNewlineAndLen(text, outChunkChars, 0) : [text];
-        for (const part of chunks) {
-          try {
-            await sendQqText(targetUserId, part);
-          } catch (e) {
-            console.log(`[qq-onebot] /push 发消息失败：${String(e?.message || e)}`);
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }));
+        try {
+          const sent = await sendQqPrivateRichReply(targetUserId, text, {
+            split: body?.split !== false,
+            singleMessage: body?.single_message === true,
+            strict: true,
+          });
+          if (!sent) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: "empty_after_parse" }));
             return;
           }
-          if (sendDelayMs > 0) await sleep(sendDelayMs);
+        } catch (e) {
+          console.log(`[qq-onebot] /push 发送失败：${String(e?.message || e)}`);
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }));
+          return;
         }
         console.log(`[qq-onebot] /push 已发送 user=${targetUserId} preview=${text.slice(0, 80)}`);
         res.writeHead(200, { "Content-Type": "application/json" });

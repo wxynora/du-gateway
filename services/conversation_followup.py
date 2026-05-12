@@ -18,6 +18,7 @@ from config import (
 from services.telegram_bot import (
     _sanitize_reply_for_telegram,
     build_telegram_style_system,
+    send_rich_message,
     send_message_segmented,
 )
 from storage import r2_store
@@ -208,8 +209,7 @@ def _dispatch_followup(channel: str, target: str, text: str, created_at: str, sp
         if uid <= 0:
             logger.warning("延迟续话发 TG 失败：target 无效 target=%s", target)
             return False
-        outbound = _sanitize_reply_for_telegram(text)
-        return send_message_segmented(chat_id=uid, text=outbound, bot_token=None) if outbound else False
+        return send_rich_message(chat_id=uid, text=text, bot_token=None)
     return _append_sumitalk_assistant_message_to_device(target, text, created_at=created_at)
 
 

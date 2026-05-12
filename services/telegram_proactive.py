@@ -12,6 +12,7 @@ from typing import Optional
 import requests
 
 from config import (
+    TELEGRAM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
     TELEGRAM_CHAT_PATH,
     TELEGRAM_PROACTIVE_ENABLED,
@@ -37,6 +38,7 @@ from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 from services.telegram_bot import (
     _sanitize_reply_for_telegram,
     build_telegram_style_system,
+    send_rich_message,
 )
 from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversation_followups
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
@@ -333,7 +335,7 @@ def _normalize_reply_channel(value: str, default: str = "", allowed: list[str] |
         "weixin": "wechat",
     }
     s = alias.get(s, s)
-    allowed_set = set(allowed or ["wechat", "qq"])
+    allowed_set = set(allowed or ["wechat", "qq", "tg"])
     if s not in allowed_set:
         return default
     return s
@@ -466,14 +468,18 @@ def _available_channels() -> list[str]:
         channels.append("qq")
     if not channels:
         channels.append("qq")
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_PROACTIVE_TARGET_USER_ID:
+        channels.append("tg")
     return channels
 
 
 def _available_schedule_channels() -> list[str]:
-    """闹钟/日历提醒投递入口：QQ 优先，微信兜底。"""
+    """闹钟/日历提醒投递入口：QQ 优先，微信/TG 兜底。"""
     channels = ["qq"]
     if WECHAT_PROACTIVE_PUSH_URL:
         channels.append("wechat")
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_PROACTIVE_TARGET_USER_ID:
+        channels.append("tg")
     return channels
 
 
@@ -484,7 +490,7 @@ def _generate_schedule_reply(window_id: str, user_id: int, prompt: str, preferre
     if not model:
         logger.warning("闹钟提醒生成跳过：当前没有可用模型")
         return None
-    channel = _normalize_reply_channel(preferred_channel, default="qq", allowed=["qq", "wechat"])
+    channel = _normalize_reply_channel(preferred_channel, default="qq", allowed=["qq", "wechat", "tg"])
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -527,6 +533,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     channel_desc_map = {
         "wechat": "微信（国内直连，更稳定）",
         "qq": "QQ",
+        "tg": "Telegram",
     }
     channel_lines = "\n".join(
         f'  - "{ch}"：{channel_desc_map.get(ch, ch)}' for ch in channels
@@ -797,7 +804,7 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         ok = False
         sent_channel = ""
         for channel in channels:
-            ok = _dispatch_send(channel, text_to_send)
+            ok = _dispatch_send(channel, text_to_send, target_user_id=uid)
             if ok:
                 sent_channel = channel
                 break
@@ -869,12 +876,23 @@ def _send_via_qq(text: str, split: bool = True) -> bool:
         return False
 
 
-def _dispatch_send(channel: str, text: str, split: bool = True) -> bool:
+def _send_via_tg(text: str, target_user_id: int = 0) -> bool:
+    """通过 Telegram Bot 主动发富媒体消息。"""
+    uid = int(target_user_id or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if uid <= 0:
+        logger.warning("TG 主动发送失败：target_user_id 为空")
+        return False
+    return send_rich_message(chat_id=uid, text=text, bot_token=None)
+
+
+def _dispatch_send(channel: str, text: str, split: bool = True, target_user_id: int = 0) -> bool:
     """根据 channel 选择发送入口，返回是否发送成功。"""
     if channel == "wechat":
         return _send_via_wechat(text, split=split)
     if channel == "qq":
         return _send_via_qq(text, split=split)
+    if channel == "tg":
+        return _send_via_tg(text, target_user_id=target_user_id)
     logger.warning("主动消息发送入口不可用 channel=%s", channel)
     return False
 
@@ -984,7 +1002,7 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     if not channel:
         out["skip_reason"] = "no_delivery_channel"
         return out
-    ok = _dispatch_send(channel, text_to_send)
+    ok = _dispatch_send(channel, text_to_send, target_user_id=uid)
     logger.info("主动消息发送结果 channel=%s chat_id=%s sent=%s", channel, uid, ok)
     out["sent"] = bool(ok)
     out["text_preview"] = (decision.text.strip()[:120] + "…") if len(decision.text.strip()) > 120 else decision.text.strip()

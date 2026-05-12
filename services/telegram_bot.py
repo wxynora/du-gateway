@@ -901,6 +901,36 @@ def send_message_segmented(chat_id: int, text: str, bot_token: Optional[str] = N
     return ok_any
 
 
+def send_rich_message(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
+    """直发 TG 富媒体回复：正文 + 表情包标签 + <voice> 语音。"""
+    reply = str(text or "").strip()
+    if not reply:
+        return False
+    reply_clean, voice_text = _extract_voice_tag(reply)
+    reply_clean = _sanitize_reply_for_telegram(reply_clean)
+    reply_clean, sticker_tag = _extract_sticker_tag(reply_clean)
+    ok_any = False
+    if reply_clean:
+        ok_any = send_message_segmented(chat_id=chat_id, text=reply_clean, bot_token=bot_token) or ok_any
+    if sticker_tag:
+        sk = _pick_random_sticker_key(sticker_tag)
+        if sk:
+            _sleep_between_sends()
+            ok_any = send_sticker_photo(chat_id=int(chat_id), r2_key=sk, bot_token=bot_token) or ok_any
+    if TELEGRAM_VOICE_REPLY_ENABLED and voice_text:
+        try:
+            from services.minimax_tts import tts_to_audio_bytes
+
+            audio = tts_to_audio_bytes(voice_text)
+            if audio:
+                _sleep_between_sends()
+                send_chat_action(chat_id=int(chat_id), action="record_voice", bot_token=bot_token)
+                ok_any = send_voice(chat_id=int(chat_id), audio_bytes=audio, filename="du.mp3", bot_token=bot_token) or ok_any
+        except Exception:
+            logger.exception("TG rich message 语音发送失败 chat_id=%s", chat_id)
+    return ok_any
+
+
 def _split_reply_text_by_len_only(text: str) -> list[str]:
     """TG 回复不再按长度拆条；保留旧函数名，避免调用点大改。"""
     t = (text or "").strip()
