@@ -13,6 +13,8 @@ from utils.time_aware import now_beijing_iso
 
 logger = logging.getLogger(__name__)
 
+TTS_EMOTION_VALUES = {"", "happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whisper"}
+
 
 def _voice_call_default_config() -> dict:
     return {
@@ -21,7 +23,13 @@ def _voice_call_default_config() -> dict:
         "avatarVersion": 0,
         "useAvatarImage": False,
         "theme": "night",
+        "ttsEmotion": "",
     }
+
+
+def _normalize_tts_emotion(value: object) -> str:
+    emotion = str(value or "").strip().lower()
+    return emotion if emotion in TTS_EMOTION_VALUES else ""
 
 
 def _miniapp_voice_avatar_url(avatar_version: int) -> str:
@@ -231,6 +239,10 @@ def register_routes(bp) -> None:
         display_name = str(data.get("displayName") or payload.get("displayName") or "渡").strip()[:24] or "渡"
         subtitle = str(data.get("subtitle") or payload.get("subtitle") or "语音通话中").strip()[:40] or "语音通话中"
         theme = str(data.get("theme") or payload.get("theme") or "night").strip()[:16] or "night"
+        if "ttsEmotion" in data:
+            tts_emotion = _normalize_tts_emotion(data.get("ttsEmotion"))
+        else:
+            tts_emotion = _normalize_tts_emotion(payload.get("ttsEmotion"))
         # 防止客户端携带旧 draft 覆盖新头像版本号：版本号只允许前进不回退。
         current_ver = int(payload.get("avatarVersion") or 0)
         avatar_version = max(current_ver, max(0, int(data.get("avatarVersion") or 0)))
@@ -239,6 +251,7 @@ def register_routes(bp) -> None:
                 "displayName": display_name,
                 "subtitle": subtitle,
                 "theme": theme,
+                "ttsEmotion": tts_emotion,
                 "avatarVersion": avatar_version,
                 "useAvatarImage": bool(data.get("useAvatarImage", payload.get("useAvatarImage"))),
             }

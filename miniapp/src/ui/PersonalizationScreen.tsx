@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+import { apiJson } from "./api";
 import {
   DEFAULT_GROUP_CHAT_TITLE,
   GROUP_CHAT_TITLE_MAX_LENGTH,
@@ -10,6 +11,27 @@ import {
 } from "./chatAppearance";
 import { getChatFontLabel, type ChatFontKey, type ChatTimeFormat } from "./chatMessages";
 import { ChevronRightIcon } from "./icons";
+import { useToast } from "./toast";
+
+type TtsEmotionKey = "" | "happy" | "sad" | "angry" | "fearful" | "disgusted" | "surprised" | "calm" | "fluent" | "whisper";
+
+const TTS_EMOTION_OPTIONS: Array<{ value: TtsEmotionKey; label: string }> = [
+  { value: "", label: "默认" },
+  { value: "calm", label: "平静" },
+  { value: "fluent", label: "流畅" },
+  { value: "whisper", label: "低语" },
+  { value: "happy", label: "轻快" },
+  { value: "sad", label: "低落" },
+  { value: "surprised", label: "惊讶" },
+  { value: "fearful", label: "紧张" },
+  { value: "angry", label: "生气" },
+  { value: "disgusted", label: "嫌弃" },
+];
+
+function normalizeTtsEmotion(value: unknown): TtsEmotionKey {
+  const raw = String(value || "").trim().toLowerCase();
+  return TTS_EMOTION_OPTIONS.some((it) => it.value === raw) ? (raw as TtsEmotionKey) : "";
+}
 
 function PreviewAvatar({
   image,
@@ -170,6 +192,45 @@ function PersonalizationSliderRow({
   );
 }
 
+function PersonalizationSelectRow({
+  title,
+  subtitle,
+  value,
+  options,
+  onChange,
+  disabled = false,
+  last = false,
+}: {
+  title: string;
+  subtitle?: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+  last?: boolean;
+}) {
+  return (
+    <label className={`flex items-center justify-between gap-4 py-[14px] ${last ? "" : "border-b border-[#F9FAFB]"}`}>
+      <div>
+        <p className="text-[15px] font-semibold text-gray-800">{title}</p>
+        {subtitle ? <p className="mt-0.5 text-[12px] text-gray-400">{subtitle}</p> : null}
+      </div>
+      <select
+        className="h-10 min-w-[112px] rounded-[14px] border border-gray-100 bg-[#F8FAFC] px-3 text-[14px] font-semibold text-gray-700 outline-none disabled:opacity-60"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {options.map((item) => (
+          <option key={item.value || "default"} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export function PersonalizationScreen({
   transparentBubbleEnabled,
   onToggleTransparentBubble,
@@ -241,6 +302,45 @@ export function PersonalizationScreen({
   onChangeGroupChatTitle: (next: string) => void;
   onPickChatBackground: () => void;
 }) {
+  const toast = useToast();
+  const [ttsEmotion, setTtsEmotion] = useState<TtsEmotionKey>("");
+  const [savingTtsEmotion, setSavingTtsEmotion] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiJson<{ ok?: boolean; config?: { ttsEmotion?: string } }>("/miniapp-api/voice-config")
+      .then((data) => {
+        if (cancelled || !data?.ok) return;
+        setTtsEmotion(normalizeTtsEmotion(data.config?.ttsEmotion));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function changeTtsEmotion(nextValue: string) {
+    const next = normalizeTtsEmotion(nextValue);
+    const previous = ttsEmotion;
+    setTtsEmotion(next);
+    setSavingTtsEmotion(true);
+    try {
+      const data = await apiJson<{ ok?: boolean; config?: { ttsEmotion?: string }; error?: string }>("/miniapp-api/voice-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ttsEmotion: next }),
+      });
+      if (!data?.ok) throw new Error(data?.error || "保存失败");
+      setTtsEmotion(normalizeTtsEmotion(data.config?.ttsEmotion));
+      toast(next ? "语音情绪已切换" : "语音情绪已改为默认");
+    } catch (e: any) {
+      setTtsEmotion(previous);
+      toast(e?.message || "保存失败");
+    } finally {
+      setSavingTtsEmotion(false);
+    }
+  }
+
   return (
     <div className="bg-[#FDFDFD] px-1 pb-6 pt-4">
       <div className="space-y-6">
@@ -279,6 +379,21 @@ export function PersonalizationScreen({
               subtitle="群聊里笨笨的头像"
               leading={<PreviewAvatar image={benbenAvatarImage} label="笨" shellClass="bg-[#FFF3D7] text-[#8A5A10]" />}
               onClick={onPickBenbenAvatar}
+              last
+            />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">语音设置</h2>
+          <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
+            <PersonalizationSelectRow
+              title="MiniMax 情绪"
+              subtitle="默认是不传 emotion；保存后下一条语音生效"
+              value={ttsEmotion}
+              options={TTS_EMOTION_OPTIONS}
+              onChange={changeTtsEmotion}
+              disabled={savingTtsEmotion}
               last
             />
           </div>

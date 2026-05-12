@@ -17,9 +17,27 @@ from config import (
     MINIMAX_AUDIO_FORMAT,
     MINIMAX_AUDIO_CHANNEL,
 )
+from storage import r2_store
 from utils.log import get_logger
 
 logger = get_logger(__name__)
+
+TTS_EMOTION_VALUES = {"", "happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whisper"}
+
+
+def _normalize_voice_emotion(value: object) -> str:
+    emotion = str(value or "").strip().lower()
+    return emotion if emotion in TTS_EMOTION_VALUES else ""
+
+
+def _runtime_voice_emotion() -> str:
+    try:
+        conf = r2_store.get_miniapp_voice_config() or {}
+        if isinstance(conf, dict) and "ttsEmotion" in conf:
+            return _normalize_voice_emotion(conf.get("ttsEmotion"))
+    except Exception as e:
+        logger.debug("读取 MiniMax 运行时 emotion 配置失败: %s", e)
+    return _normalize_voice_emotion(MINIMAX_VOICE_EMOTION)
 
 
 def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optional[bytes]:
@@ -42,8 +60,9 @@ def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optiona
         "vol": int(MINIMAX_VOICE_VOL),
         "pitch": int(MINIMAX_VOICE_PITCH),
     }
-    if MINIMAX_VOICE_EMOTION:
-        voice_setting["emotion"] = MINIMAX_VOICE_EMOTION
+    voice_emotion = _runtime_voice_emotion()
+    if voice_emotion:
+        voice_setting["emotion"] = voice_emotion
     payload = {
         "model": MINIMAX_T2A_MODEL,
         "text": t,
@@ -77,4 +96,3 @@ def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optiona
     except Exception as e:
         logger.warning("MiniMax TTS 异常: %s", e)
         return None
-
