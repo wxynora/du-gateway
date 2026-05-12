@@ -7,7 +7,7 @@ import random
 import re
 import threading
 import time
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 from uuid import uuid4
 
 import requests
@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS = 180
+TelegramParseMode = Literal["HTML", "MarkdownV2"]
 
 
 def _telegram_webapp_url() -> str:
@@ -216,7 +217,8 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
         f"   {tags_line}\n"
         "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。\n"
         "2) 不要输出分割线（例如 ---、———、***）。\n"
-        "3) 不要使用 Markdown 强调符号 * 或 **。\n"
+        "3) 不要使用 Markdown 强调符号 * 或 **；需要少量格式强调时，优先使用 Telegram HTML 标签，例如 <b>加粗</b>、<i>斜体</i>、<u>下划线</u>、<s>删除线</s>、<code>代码</code>、<pre>代码块</pre>。\n"
+        "   普通聊天不要刻意加格式；如果只是想表达 <、>、& 这些字符本身，写成 &lt;、&gt;、&amp;。\n"
         "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji。\n"
         "5) 允许自然分段，但不要为了格式刻意堆很多空行。\n"
         "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。\n"
@@ -784,6 +786,8 @@ def send_message(
     text: str,
     bot_token: Optional[str] = None,
     reply_markup: Optional[dict] = None,
+    parse_mode: Optional[TelegramParseMode] = None,
+    entities: Optional[list[dict]] = None,
 ) -> bool:
     """向指定 chat 发送一条文字消息。HTTP 200 时也检查 body 里 ok，避免 Telegram 返回 200 但未送达（如被拉黑）。"""
     tok = _effective_tg_token(bot_token)
@@ -791,6 +795,10 @@ def send_message(
         return False
     url = f"{TELEGRAM_API_BASE}{tok}/sendMessage"
     payload: dict = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    if entities is not None:
+        payload["entities"] = entities
     final_reply_markup = reply_markup if reply_markup is not None else _private_miniapp_reply_markup(chat_id)
     if final_reply_markup is not None:
         payload["reply_markup"] = final_reply_markup
@@ -878,22 +886,52 @@ def _start_typing_indicator(
         return
 
 
-def send_message_to_user(telegram_user_id: int, text: str, bot_token: Optional[str] = None) -> bool:
+def send_message_to_user(
+    telegram_user_id: int,
+    text: str,
+    bot_token: Optional[str] = None,
+    parse_mode: Optional[TelegramParseMode] = None,
+    entities: Optional[list[dict]] = None,
+) -> bool:
     """
     向指定 Telegram 用户发消息（用于主动发消息等）。
     chat_id 与 user 私聊时等于 telegram_user_id。
     """
-    return send_message(chat_id=telegram_user_id, text=text, bot_token=bot_token)
+    return send_message(
+        chat_id=telegram_user_id,
+        text=text,
+        bot_token=bot_token,
+        parse_mode=parse_mode,
+        entities=entities,
+    )
 
 
-def send_message_segmented(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
+def send_message_segmented(
+    chat_id: int,
+    text: str,
+    bot_token: Optional[str] = None,
+    parse_mode: Optional[TelegramParseMode] = None,
+    entities: Optional[list[dict]] = None,
+) -> bool:
     """主 TG 回复单条发送，不按换行或长度拆条。"""
     parts = _split_reply_text(text)
     if not parts:
-        return send_message(chat_id=chat_id, text=text or "", bot_token=bot_token)
+        return send_message(
+            chat_id=chat_id,
+            text=text or "",
+            bot_token=bot_token,
+            parse_mode=parse_mode,
+            entities=entities,
+        )
     ok_any = False
     for i, part in enumerate(parts):
-        ok = send_message(chat_id=chat_id, text=part, bot_token=bot_token)
+        ok = send_message(
+            chat_id=chat_id,
+            text=part,
+            bot_token=bot_token,
+            parse_mode=parse_mode,
+            entities=entities,
+        )
         ok_any = ok_any or ok
         # 最后一条不 sleep
         if i != len(parts) - 1:
@@ -901,7 +939,13 @@ def send_message_segmented(chat_id: int, text: str, bot_token: Optional[str] = N
     return ok_any
 
 
-def send_rich_message(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
+def send_rich_message(
+    chat_id: int,
+    text: str,
+    bot_token: Optional[str] = None,
+    parse_mode: Optional[TelegramParseMode] = None,
+    entities: Optional[list[dict]] = None,
+) -> bool:
     """直发 TG 富媒体回复：正文 + 表情包标签 + <voice> 语音。"""
     reply = str(text or "").strip()
     if not reply:
@@ -911,7 +955,13 @@ def send_rich_message(chat_id: int, text: str, bot_token: Optional[str] = None) 
     reply_clean, sticker_tag = _extract_sticker_tag(reply_clean)
     ok_any = False
     if reply_clean:
-        ok_any = send_message_segmented(chat_id=chat_id, text=reply_clean, bot_token=bot_token) or ok_any
+        ok_any = send_message_segmented(
+            chat_id=chat_id,
+            text=reply_clean,
+            bot_token=bot_token,
+            parse_mode=parse_mode,
+            entities=entities,
+        ) or ok_any
     if sticker_tag:
         sk = _pick_random_sticker_key(sticker_tag)
         if sk:
@@ -937,14 +987,32 @@ def _split_reply_text_by_len_only(text: str) -> list[str]:
     return [t] if t else []
 
 
-def send_message_segmented_gm(chat_id: int, text: str, bot_token: Optional[str] = None) -> bool:
+def send_message_segmented_gm(
+    chat_id: int,
+    text: str,
+    bot_token: Optional[str] = None,
+    parse_mode: Optional[TelegramParseMode] = None,
+    entities: Optional[list[dict]] = None,
+) -> bool:
     """GM 专用发送：单条发送，保留换行。"""
     parts = _split_reply_text_by_len_only(text)
     if not parts:
-        return send_message(chat_id=chat_id, text=text or "", bot_token=bot_token)
+        return send_message(
+            chat_id=chat_id,
+            text=text or "",
+            bot_token=bot_token,
+            parse_mode=parse_mode,
+            entities=entities,
+        )
     ok_any = False
     for i, part in enumerate(parts):
-        ok = send_message(chat_id=chat_id, text=part, bot_token=bot_token)
+        ok = send_message(
+            chat_id=chat_id,
+            text=part,
+            bot_token=bot_token,
+            parse_mode=parse_mode,
+            entities=entities,
+        )
         ok_any = ok_any or ok
         if i != len(parts) - 1:
             _sleep_between_sends()
