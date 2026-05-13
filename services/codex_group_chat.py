@@ -173,6 +173,7 @@ def _cleanup_tasks(tasks: list[dict]) -> list[dict]:
 def create_task(body: dict, device_id: str = "") -> dict | None:
     now_ts = _now_ts()
     mode = str((body or {}).get("mode") or "daily_chat").strip() or "daily_chat"
+    user_message_limit = 20000 if mode == "studyroom" else 6000
     task = {
         "id": uuid4().hex,
         "ok": True,
@@ -184,7 +185,7 @@ def create_task(body: dict, device_id: str = "") -> dict | None:
         "updated_at": now_beijing_iso(),
         "window_id": str((body or {}).get("window_id") or "").strip(),
         "reply_target": str((body or {}).get("reply_target") or device_id or "").strip(),
-        "user_message": _safe_text((body or {}).get("user_message"), 6000),
+        "user_message": _safe_text((body or {}).get("user_message"), user_message_limit),
         "du_reply": _safe_text((body or {}).get("du_reply"), 12000),
         "recent_messages": _normalize_recent_messages((body or {}).get("recent_messages")),
         "client_request_id": re.sub(r"[^a-zA-Z0-9_.:-]", "", str((body or {}).get("client_request_id") or "").strip())[:120],

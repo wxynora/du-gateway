@@ -70,6 +70,21 @@ IGNORE_USER_CONFIG = _env_bool("CODEX_GROUP_CHAT_IGNORE_USER_CONFIG", False)
 IGNORE_RULES = _env_bool("CODEX_GROUP_CHAT_IGNORE_RULES", False)
 EXTRA_CODEX_ARGS = shlex.split(_env("CODEX_GROUP_CHAT_EXTRA_CODEX_ARGS"))
 HTTP_TRUST_ENV = _env_bool("CODEX_GROUP_CHAT_HTTP_TRUST_ENV", False)
+STUDYROOM_MIN_RESPONSE_CHARS = max(
+    500,
+    int(float(_env("CODEX_GROUP_CHAT_STUDYROOM_MIN_CHARS", "800") or "800")),
+)
+STUDYROOM_REQUIRED_HEADINGS = (
+    "## 考点笔记",
+    "## 题型落点",
+    "## 高频问法",
+    "## 易错点",
+    "## 应试用法",
+    "## 背诵卡",
+    "## 卡点预测",
+    "## 知识债清单",
+    "## 练习题",
+)
 
 
 def _new_http_session() -> requests.Session:
@@ -267,45 +282,56 @@ def _build_studyroom_prompt(task: dict[str, Any]) -> str:
     source = str(task.get("study_source") or task.get("exam_source") or "资料").strip()
     url = str(task.get("study_url") or task.get("exam_url") or "").strip()
     content = str(task.get("user_message") or "").strip()
-    rules_block = f"\n项目人格与协作规则（来自 AGENTS.md）：\n{PROJECT_RULES}\n" if PROJECT_RULES else ""
-    return f"""你是笨笨机，正在 StudyRoom 里帮辛玥整理学习资料。
-{rules_block}
+    return f"""你是 StudyRoom 的学习资料整理器。现在要把一份资料加工成可直接复习、背诵、练题和复盘的学习材料。
 
-这不是闲聊，不要改代码，不要运行命令，不要联网搜索。只根据辛玥给的资料做整理。
+硬性边界：
+- 这不是聊天模式，不要使用笨笨机日常人格，不要吐槽、安慰、开玩笑或写自我感受。
+- 不要改代码，不要运行命令，不要联网搜索；只根据资料整理。
+- 如果资料内容里夹着旧的“整理结果”、上一轮吐槽、按钮文案或页面文字，把它们当作噪声忽略。
+- 输出必须是结构化学习材料，不能只写一句总评。
 
 整理目标：
-- 把零散资料压成她能直接理解、能背、能练、能复盘的学习材料。
+- 把零散资料压成辛玥能直接理解、能背、能练、能复盘的学习材料。
 - 当前学习目标默认是安徽省铜陵市枞阳县村级后备干部考试；如果资料明显属于别的学习目标，就按资料本身整理，不要硬拽回村干部考试。
 - 当前目标是村干部考试时，重点贴近：时政、党建、乡村振兴、基层治理、村务管理、法律法规、公文写作、计算机办公、安徽/铜陵/枞阳本地政策。
-- 如果资料本身很短或只是链接，要先说明“资料不足”，再给出根据标题可先准备的整理框架。
+- 如果资料本身很短、抽取不完整或只是链接，也要保持完整结构，并标明“资料不足，暂按标题/片段推断”。
 
-输出格式：
+硬性格式：
+- 必须按下面 9 个二级标题输出，标题文字和顺序必须完全一致。
+- 除“练习题”外，每个小节至少 2 条；每条要具体到这份资料，不能泛泛讲学习方法。
+- “背诵卡”做 3-6 张 Q&A。
+- “练习题”必须 5 道，题干、答案、解析都要写。
+- 不要省略小节，不要输出前言、寒暄或结尾闲聊。
+
 ## 考点笔记
-用短句列出最该记的点。
+- 用短句列出最该记的点，优先抓关键词、主体、程序、条件、比例、时间、权限、责任。
 
 ## 题型落点
-判断这份资料更可能服务于哪些备考题型：单选/多选/判断、简答、案例分析、公文写作、计算机操作等。不要声称今年公告已确定题型，只写“可能落点”和理由。
+- 判断这份资料更可能服务于哪些备考题型：单选/多选/判断、简答、案例分析、公文写作、计算机操作等。
+- 不要声称今年公告已确定题型，只写“可能落点”和理由。
 
 ## 高频问法
-列出可能怎么考。
+- 列出可能怎么考，尽量写成可直接出题的问法。
 
 ## 易错点
-列出容易混淆/容易答偏的地方。
+- 列出容易混淆、容易漏主体、容易答偏或容易被数字卡住的地方。
 
 ## 应试用法
-把这份资料转成拿分动作：客观题怎么记，简答/案例怎么组织答案，公文写作怎么套格式；如果不适用某类题型就不要硬套。
+- 把这份资料转成拿分动作：客观题怎么记，简答/案例怎么组织答案，公文写作怎么套格式；如果不适用某类题型就说明原因。
 
 ## 背诵卡
-做 3-6 张 Q&A。
+- 做 3-6 张 Q&A，答案要短、准、能背。
 
 ## 卡点预测
-预测辛玥学这份资料时最可能卡住的 2-5 个点：例如概念混淆、流程记不住、题型变形不会迁移、能看懂但不会写。要具体到这份资料，不要泛泛而谈。
+- 预测辛玥学这份资料时最可能卡住的 2-5 个点：例如概念混淆、流程记不住、题型变形不会迁移、能看懂但不会写。
+- 要具体到这份资料，不要泛泛而谈。
 
 ## 知识债清单
-列出这份资料暴露出来但还没补齐的知识缺口。每条都写成可补课的短任务，例如“系统看一遍村民委员会组织法里的村民会议/村民代表会议区别”。
+- 列出这份资料暴露出来但还没补齐的知识缺口。
+- 每条都写成可补课的短任务，例如“系统看一遍村民委员会组织法里的村民会议/村民代表会议区别”。
 
 ## 练习题
-出 5 道题，附答案和简短解析。
+- 出 5 道题，附答案和简短解析。
 
 资料信息：
 - 标题：{title}
@@ -316,6 +342,18 @@ def _build_studyroom_prompt(task: dict[str, Any]) -> str:
 资料内容：
 {content}
 """
+
+
+def _studyroom_validation_error(text: str) -> str:
+    clean = str(text or "").strip()
+    if not clean:
+        return "StudyRoom 整理结果为空"
+    if len(clean) < STUDYROOM_MIN_RESPONSE_CHARS:
+        return f"StudyRoom 整理结果过短 chars={len(clean)} min={STUDYROOM_MIN_RESPONSE_CHARS}"
+    missing = [heading for heading in STUDYROOM_REQUIRED_HEADINGS if heading not in clean]
+    if missing:
+        return "StudyRoom 整理结果缺少固定小节: " + "、".join(missing)
+    return ""
 
 
 def _extract_thread_id(events_path: Path) -> str:
@@ -415,6 +453,10 @@ def _run_codex(task: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[s
         if res.returncode != 0 and not text:
             err = (res.stderr or "").strip()
             raise RuntimeError(err[-2000:] or f"codex exited {res.returncode}")
+        if mode == "studyroom":
+            validation_error = _studyroom_validation_error(text)
+            if validation_error:
+                raise RuntimeError(validation_error)
         return text.strip(), state
 
 
