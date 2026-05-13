@@ -16,8 +16,9 @@ load_dotenv()
 from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
 
-from config import DATA_DIR
 from services import codex_group_chat
+from services.sumitalk_history_file import SUMITALK_HISTORY_FILE as _SUMITALK_HISTORY_FILE
+from services.sumitalk_history_file import load_sumitalk_histories
 from storage import r2_store
 from storage.miniapp_panel_store import is_trusted_device, touch_trusted_device
 from utils.miniapp_panel_auth import panel_auth_enabled, verify_panel_token
@@ -27,7 +28,6 @@ logger = logging.getLogger("realtime")
 
 app = FastAPI(title="du-gateway realtime", version="0.1.0")
 
-_SUMITALK_HISTORY_FILE = DATA_DIR / "sumitalk_display_histories.json"
 _SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
 _POLL_INTERVAL_SECONDS = max(1.0, float(os.environ.get("REALTIME_POLL_INTERVAL_SECONDS", "60") or "60"))
 _FAIL_BACKOFF_BASE_SECONDS = max(1.0, float(os.environ.get("REALTIME_FAIL_BACKOFF_BASE_SECONDS", "3") or "3"))
@@ -179,8 +179,7 @@ def _load_history_for_device(device_id: str, window_id: str = _SUMITALK_MAIN_WIN
     if not did or not _SUMITALK_HISTORY_FILE.exists():
         return {}
     try:
-        with _SUMITALK_HISTORY_FILE.open("r", encoding="utf-8") as f:
-            data = json.load(f) or {}
+        data = load_sumitalk_histories()
         if not isinstance(data, dict):
             return {}
         rows = [data.get(key) for key in _history_candidate_keys(did, window_id)]

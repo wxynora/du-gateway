@@ -1,48 +1,32 @@
 import hashlib
-import json
 import logging
 import threading
 
 from flask import jsonify, request
 
-from config import DATA_DIR
+from services.sumitalk_history_file import (
+    SUMITALK_HISTORY_FILE as _SUMITALK_HISTORY_FILE,
+    load_sumitalk_histories,
+    prune_sumitalk_histories,
+    save_sumitalk_histories,
+)
 from storage.miniapp_panel_store import is_trusted_device, upsert_trusted_device
 from utils.miniapp_panel_auth import issue_panel_token, panel_auth_enabled
 from utils.time_aware import now_beijing_iso, parse_iso_to_beijing
 
 
 sumitalk_logger = logging.getLogger("sumitalk")
-_SUMITALK_HISTORY_FILE = DATA_DIR / "sumitalk_display_histories.json"
 _SUMITALK_HISTORY_LOCK = threading.Lock()
 _SUMITALK_HISTORY_MAX_MESSAGES = 80
 _SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
 
 
 def _load_sumitalk_histories() -> dict:
-    try:
-        if not _SUMITALK_HISTORY_FILE.exists():
-            return {}
-        with _SUMITALK_HISTORY_FILE.open("r", encoding="utf-8") as f:
-            data = json.load(f) or {}
-        return data if isinstance(data, dict) else {}
-    except Exception as e:
-        sumitalk_logger.warning("history_load_failed path=%s error=%s", _SUMITALK_HISTORY_FILE, e)
-        return {}
+    return load_sumitalk_histories()
 
 
 def _save_sumitalk_histories(data: dict) -> bool:
-    try:
-        _SUMITALK_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with _SUMITALK_HISTORY_FILE.open("w", encoding="utf-8") as f:
-            json.dump(data or {}, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception:
-        sumitalk_logger.exception(
-            "history_save_exception path=%s device_rows=%s",
-            _SUMITALK_HISTORY_FILE,
-            len(data or {}) if isinstance(data, dict) else 0,
-        )
-        return False
+    return save_sumitalk_histories(data)
 
 
 def _get_sumitalk_history_device_id() -> str:
@@ -393,6 +377,10 @@ def register_routes(bp) -> None:
                 "messages": messages,
             }
             data[storage_key] = payload
+            data, pruned_count = prune_sumitalk_histories(
+                data,
+                keep_keys=_sumitalk_history_candidate_keys(device_id, window_id),
+            )
             ok = _save_sumitalk_histories(data)
         if not ok:
             meta = _sumitalk_request_brief()
@@ -419,6 +407,8 @@ def register_routes(bp) -> None:
             meta["remote"],
             meta["ua"],
         )
+        if pruned_count:
+            sumitalk_logger.info("history_pruned rows=%s reason=ttl_or_row_cap", pruned_count)
         _publish_latest_sumitalk_assistant_message(device_id, window_id, messages)
         return jsonify({"ok": True, "device_id": device_id, "window_id": window_id, "count": len(messages), "updated_at": payload["updated_at"]})
 
@@ -488,6 +478,12 @@ def register_routes(bp) -> None:
                     "merged_count": len(merged_messages),
                     "updated_at": payload["updated_at"],
                 })
+            keep_keys = []
+            for row in migrated_rows:
+                new_key = str(row.get("new_key") or "").strip()
+                if new_key:
+                    keep_keys.append(new_key)
+            data, pruned_count = prune_sumitalk_histories(data, keep_keys=keep_keys)
             ok = _save_sumitalk_histories(data)
         if not ok:
             meta = _sumitalk_request_brief()
@@ -537,6 +533,8 @@ def register_routes(bp) -> None:
             meta["remote"],
             meta["ua"],
         )
+        if pruned_count:
+            sumitalk_logger.info("history_pruned rows=%s reason=ttl_or_row_cap", pruned_count)
         return jsonify(
             {
                 "ok": True,

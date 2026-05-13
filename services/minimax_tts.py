@@ -1,4 +1,5 @@
 import binascii
+import os
 from typing import Optional
 
 import requests
@@ -25,6 +26,18 @@ logger = get_logger(__name__)
 TTS_EMOTION_VALUES = {"", "happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whisper"}
 
 
+def _positive_int_env(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        value = int(float(os.environ.get(name, str(default)) or default))
+    except Exception:
+        value = default
+    return max(int(minimum), value)
+
+
+MINIMAX_TTS_MAX_CHARS = _positive_int_env("MINIMAX_TTS_MAX_CHARS", 800)
+MINIMAX_TTS_MAX_AUDIO_BYTES = _positive_int_env("MINIMAX_TTS_MAX_AUDIO_BYTES", 5 * 1024 * 1024, minimum=1024)
+
+
 def _normalize_voice_emotion(value: object) -> str:
     emotion = str(value or "").strip().lower()
     return emotion if emotion in TTS_EMOTION_VALUES else ""
@@ -40,6 +53,19 @@ def _runtime_voice_emotion() -> str:
     return _normalize_voice_emotion(MINIMAX_VOICE_EMOTION)
 
 
+def _prepare_tts_text(text: str) -> str:
+    t = (text or "").strip()
+    if len(t) <= MINIMAX_TTS_MAX_CHARS:
+        return t
+    logger.warning(
+        "MiniMax TTS 文本过长，已截断 chars=%s max_chars=%s preview=%s",
+        len(t),
+        MINIMAX_TTS_MAX_CHARS,
+        t[:80].replace("\n", " "),
+    )
+    return t[:MINIMAX_TTS_MAX_CHARS].rstrip()
+
+
 def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optional[bytes]:
     """
     MiniMax T2A v2：返回音频 bytes（默认 mp3）。
@@ -49,7 +75,7 @@ def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optiona
     if not MINIMAX_API_KEY:
         logger.warning("MINIMAX_API_KEY 未配置，跳过 TTS")
         return None
-    t = (text or "").strip()
+    t = _prepare_tts_text(text)
     if not t:
         return None
     headers = {"Authorization": f"Bearer {MINIMAX_API_KEY}", "Content-Type": "application/json"}
@@ -92,7 +118,15 @@ def tts_to_audio_bytes(text: str, audio_format: Optional[str] = None) -> Optiona
         hex_audio = ((data or {}).get("data") or {}).get("audio") or ""
         if not isinstance(hex_audio, str) or not hex_audio.strip():
             return None
-        return binascii.unhexlify(hex_audio.strip())
+        hex_audio = hex_audio.strip()
+        if len(hex_audio) > MINIMAX_TTS_MAX_AUDIO_BYTES * 2:
+            logger.warning(
+                "MiniMax TTS 音频过大，已拒绝 bytes_est=%s max_bytes=%s",
+                len(hex_audio) // 2,
+                MINIMAX_TTS_MAX_AUDIO_BYTES,
+            )
+            return None
+        return binascii.unhexlify(hex_audio)
     except Exception as e:
         logger.warning("MiniMax TTS 异常: %s", e)
         return None
