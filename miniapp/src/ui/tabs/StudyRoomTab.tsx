@@ -64,6 +64,8 @@ type StudyRoomResponse = {
 
 type StudyRoomImportResponse = StudyRoomResponse & {
   chars?: number;
+  chunks?: number;
+  items?: StudyRoomItem[];
 };
 
 type StudyRoomAutoModuleResponse = StudyRoomResponse & {
@@ -135,8 +137,11 @@ const EXAM_LANES: ExamLane[] = [
 ];
 const CODEX_SORT_POLL_MS = 2200;
 const CODEX_SORT_TIMEOUT_MS = 8 * 60 * 1000;
-const MAX_CLIENT_IMPORT_CHARS = 20000;
+const MAX_CLIENT_IMPORT_CHARS = 120000;
 const MAX_CLIENT_PDF_PAGES = 200;
+const STUDYROOM_CHUNK_TARGET_CHARS = 9000;
+const STUDYROOM_CHUNK_MAX_CHARS = 12000;
+const STUDYROOM_MAX_IMPORT_CHUNKS = 10;
 
 function clipClientImportText(text: string): string {
   const clean = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
@@ -153,6 +158,147 @@ function isPdfFile(file: File): boolean {
   const name = String(file.name || "").toLowerCase();
   const type = String(file.type || "").toLowerCase();
   return type === "application/pdf" || name.endsWith(".pdf");
+}
+
+function pdfTextContentToLines(items: any[]): string {
+  const rows = new Map<number, { x: number; text: string }[]>();
+  for (const item of items || []) {
+    const text = String(item?.str || "").trim();
+    if (!text) continue;
+    const transform = Array.isArray(item?.transform) ? item.transform : [];
+    const y = Math.round(Number(transform[5] || 0));
+    const x = Number(transform[4] || 0);
+    const row = rows.get(y) || [];
+    row.push({ x, text });
+    rows.set(y, row);
+  }
+  if (!rows.size) {
+    return (items || []).map((item) => String(item?.str || "").trim()).filter(Boolean).join(" ");
+  }
+  return Array.from(rows.entries())
+    .sort((a, b) => b[0] - a[0])
+    .map(([, row]) => row.sort((a, b) => a.x - b.x).map((part) => part.text).join(" ").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function isStudyRoomHeading(line: string): boolean {
+  const clean = String(line || "").trim();
+  if (!clean || clean.length > 90) return false;
+  if (/^---\s*第\s*\d+\s*页\s*---$/.test(clean)) return false;
+  return [
+    /^第[一二三四五六七八九十百千\d]+[章节讲课部分单元]\s*[:：、.\s-]?.{0,60}$/,
+    /^[一二三四五六七八九十]+[、.．]\s*\S.{0,60}$/,
+    /^\d+(?:\.\d+){0,3}[、.．\s]\s*\S.{0,60}$/,
+    /^（[一二三四五六七八九十\d]+）\s*\S.{0,60}$/,
+  ].some((pattern) => pattern.test(clean));
+}
+
+function chunkLabel(label: string, fallback = "正文"): string {
+  const clean = String(label || "").replace(/\s+/g, " ").replace(/^---\s*|\s*---$/g, "").trim();
+  return (clean || fallback).slice(0, 36);
+}
+
+function splitSectionsByHeadings(text: string): Array<{ label: string; content: string }> {
+  const sections: Array<{ label: string; content: string }> = [];
+  let label = "开头";
+  let lines: string[] = [];
+  for (const raw of text.split(/\n/)) {
+    const line = raw.trimEnd();
+    if (isStudyRoomHeading(line) && lines.length) {
+      const content = lines.join("\n").trim();
+      if (content) sections.push({ label, content });
+      label = line.trim();
+      lines = [line];
+    } else {
+      lines.push(line);
+      if (isStudyRoomHeading(line)) label = line.trim();
+    }
+  }
+  const content = lines.join("\n").trim();
+  if (content) sections.push({ label, content });
+  return sections;
+}
+
+function splitSectionsByPages(text: string): Array<{ label: string; content: string }> {
+  const sections = text
+    .split(/(?=^---\s*第\s*\d+\s*页\s*---$)/m)
+    .map((part, index) => {
+      const content = part.trim();
+      if (!content) return null;
+      const firstLine = content.split(/\n/)[0]?.trim() || "";
+      const label = /^---\s*第\s*\d+\s*页\s*---$/.test(firstLine) ? firstLine : `第 ${index + 1} 段`;
+      return { label, content };
+    })
+    .filter(Boolean) as Array<{ label: string; content: string }>;
+  return sections.length ? sections : [{ label: "正文", content: text.trim() }];
+}
+
+function splitLongSection(section: { label: string; content: string }): Array<{ label: string; content: string }> {
+  const clean = section.content.trim();
+  if (clean.length <= STUDYROOM_CHUNK_MAX_CHARS) return clean ? [section] : [];
+  const out: Array<{ label: string; content: string }> = [];
+  let current: string[] = [];
+  for (let part of clean.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean)) {
+    while (part.length > STUDYROOM_CHUNK_MAX_CHARS) {
+      if (current.length) {
+        out.push({ label: section.label, content: current.join("\n\n").trim() });
+        current = [];
+      }
+      out.push({ label: section.label, content: part.slice(0, STUDYROOM_CHUNK_MAX_CHARS).trimEnd() });
+      part = part.slice(STUDYROOM_CHUNK_MAX_CHARS).trimStart();
+    }
+    const candidate = [...current, part].join("\n\n").trim();
+    if (current.length && candidate.length > STUDYROOM_CHUNK_MAX_CHARS) {
+      out.push({ label: section.label, content: current.join("\n\n").trim() });
+      current = [part];
+    } else {
+      current.push(part);
+    }
+  }
+  if (current.length) out.push({ label: section.label, content: current.join("\n\n").trim() });
+  return out;
+}
+
+function splitStudyRoomText(text: string): Array<{ label: string; content: string }> {
+  const clean = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!clean) return [];
+  if (clean.length <= STUDYROOM_CHUNK_MAX_CHARS) return [{ label: "正文", content: clean }];
+
+  let sections = splitSectionsByHeadings(clean);
+  if (sections.length <= 1) sections = splitSectionsByPages(clean);
+  const pieces = sections.flatMap(splitLongSection);
+  const chunks: Array<{ label: string; content: string }> = [];
+  let currentParts: string[] = [];
+  let currentLabels: string[] = [];
+
+  for (const piece of pieces) {
+    const candidate = [...currentParts, piece.content].join("\n\n").trim();
+    if (currentParts.length && candidate.length > STUDYROOM_CHUNK_TARGET_CHARS) {
+      chunks.push({ label: chunkLabel(currentLabels[0] || "正文"), content: currentParts.join("\n\n").trim() });
+      currentParts = [piece.content];
+      currentLabels = [piece.label];
+    } else {
+      currentParts.push(piece.content);
+      if (piece.label && !currentLabels.includes(piece.label)) currentLabels.push(piece.label);
+    }
+  }
+  if (currentParts.length) chunks.push({ label: chunkLabel(currentLabels[0] || "正文"), content: currentParts.join("\n\n").trim() });
+  if (chunks.length > STUDYROOM_MAX_IMPORT_CHUNKS) {
+    const kept = chunks.slice(0, STUDYROOM_MAX_IMPORT_CHUNKS);
+    kept[kept.length - 1] = {
+      ...kept[kept.length - 1],
+      content: `${kept[kept.length - 1].content.trimEnd()}\n\n...[后续内容超过自动拆分上限，先保留前面重点段落]`,
+    };
+    return kept;
+  }
+  return chunks;
+}
+
+function chunkedTitle(baseTitle: string, index: number, total: number, label: string): string {
+  const cleanTitle = String(baseTitle || "").trim() || "未命名资料";
+  if (total <= 1) return cleanTitle;
+  return `${cleanTitle}（${index}/${total}：${chunkLabel(label, `第 ${index} 段`)}）`;
 }
 
 async function extractPdfTextInBrowser(file: File, onStatus?: (text: string) => void): Promise<string> {
@@ -172,11 +318,7 @@ async function extractPdfTextInBrowser(file: File, onStatus?: (text: string) => 
       onStatus?.(`解析第 ${pageNo}/${pageCount} 页`);
       const page = await pdf.getPage(pageNo);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item: any) => String(item?.str || ""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
+      const pageText = pdfTextContentToLines(textContent.items as any[]);
       if (pageText) parts.push(`--- 第 ${pageNo} 页 ---\n${pageText}`);
       if (parts.join("\n\n").length >= MAX_CLIENT_IMPORT_CHARS) break;
     }
@@ -449,25 +591,36 @@ export function StudyRoomTab() {
       if (isPdfFile(file)) {
         const text = await extractPdfTextInBrowser(file, setUploadStatus);
         if (!text) throw new Error("没有抽到文字；扫描版 PDF/图片需要 OCR，当前还没接。");
-        setUploadStatus("保存中...");
-        const j = await apiJson<StudyRoomResponse>("/miniapp-api/studyroom/items", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: title.trim() || fileStem(file),
-            content: text,
-            module_id: moduleId,
-            source_type: "pdf",
-            status: "todo",
-            note: `本地解析 PDF：${file.name || "资料.pdf"}`,
-          }),
-        });
-        setData(j.data || {});
+        const chunks = splitStudyRoomText(text);
+        if (!chunks.length) throw new Error("没有抽到可保存的文字");
+        const baseTitle = title.trim() || fileStem(file);
+        const createdItems: StudyRoomItem[] = [];
+        for (let index = 0; index < chunks.length; index += 1) {
+          const chunk = chunks[index];
+          setUploadStatus(chunks.length > 1 ? `保存第 ${index + 1}/${chunks.length} 段...` : "保存中...");
+          const j = await apiJson<StudyRoomResponse>("/miniapp-api/studyroom/items", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: chunkedTitle(baseTitle, index + 1, chunks.length, chunk.label),
+              content: chunk.content,
+              module_id: moduleId,
+              source_type: "pdf",
+              status: "todo",
+              note: chunks.length > 1
+                ? `本地解析 PDF：${file.name || "资料.pdf"}\n自动拆分：第 ${index + 1}/${chunks.length} 段 · ${chunkLabel(chunk.label, `第 ${index + 1} 段`)}`
+                : `本地解析 PDF：${file.name || "资料.pdf"}`,
+            }),
+          });
+          if (!j?.ok) throw new Error(j?.error || "保存失败");
+          if (j.item) createdItems.push(j.item);
+          setData(j.data || {});
+        }
         setTitle("");
         setContent("");
         setUrl("");
-        toast(`已导入 ${text.length || 0} 字，开始整理`);
-        if (j.item) void runCodexSort(j.item);
+        toast(chunks.length > 1 ? `已拆成 ${chunks.length} 段，开始逐段整理` : `已导入 ${text.length || 0} 字，开始整理`);
+        if (createdItems.length) void sortItemsSequentially(createdItems);
         return;
       }
       setUploadStatus("上传中...");
@@ -485,8 +638,9 @@ export function StudyRoomTab() {
       setTitle("");
       setContent("");
       setUrl("");
-      toast(`已导入 ${j.chars || 0} 字，开始整理`);
-      if (j.item) void runCodexSort(j.item);
+      const importedItems = Array.isArray(j.items) && j.items.length ? j.items : (j.item ? [j.item] : []);
+      toast((j.chunks || importedItems.length || 1) > 1 ? `已拆成 ${j.chunks || importedItems.length} 段，开始逐段整理` : `已导入 ${j.chars || 0} 字，开始整理`);
+      if (importedItems.length) void sortItemsSequentially(importedItems);
     } catch (e: any) {
       toast(`导入失败：${e?.message || e}`);
     } finally {
@@ -584,9 +738,9 @@ export function StudyRoomTab() {
     }
   }
 
-  async function runCodexSort(item: StudyRoomItem) {
+  async function runCodexSortItem(item: StudyRoomItem): Promise<void> {
     const id = String(item.id || "");
-    if (!id || sortingItemId) return;
+    if (!id) throw new Error("资料 ID 为空");
     setSortingItemId(id);
     try {
       const created = await apiJson<CodexTaskResponse>(`/miniapp-api/studyroom/items/${encodeURIComponent(id)}/codex-sort`, {
@@ -597,20 +751,57 @@ export function StudyRoomTab() {
       if (created.data) setData(created.data);
       const taskId = String(created.task?.id || "").trim();
       if (!taskId) throw new Error(created.error || "没有拿到整理任务 ID");
-      toast("笨笨开始整理了");
       const task = await waitForCodexTask(taskId);
       const response = String(task.response || "").trim();
       if (!response) throw new Error("整理结果为空");
-      await updateItem(item, { note: response, status: "done" });
-      toast("整理好了，结果写回来了");
+      const updated = await apiJson<StudyRoomResponse>(`/miniapp-api/studyroom/items/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: response, status: "done" }),
+      });
+      if (updated.data) setData(updated.data);
     } catch (e: any) {
-      toast(`整理失败：${e?.message || e}`);
       try {
-        await updateItem(item, { status: "todo" });
+        const reverted = await apiJson<StudyRoomResponse>(`/miniapp-api/studyroom/items/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "todo" }),
+        });
+        if (reverted.data) setData(reverted.data);
       } catch {}
+      throw e;
     } finally {
       setSortingItemId("");
     }
+  }
+
+  async function runCodexSort(item: StudyRoomItem) {
+    if (sortingItemId) return;
+    try {
+      toast("笨笨开始整理了");
+      await runCodexSortItem(item);
+      toast("整理好了，结果写回来了");
+    } catch (e: any) {
+      toast(`整理失败：${e?.message || e}`);
+    }
+  }
+
+  async function sortItemsSequentially(targetItems: StudyRoomItem[]) {
+    if (sortingItemId) return;
+    const queue = targetItems.filter((item) => String(item.id || "").trim());
+    if (!queue.length) return;
+    let done = 0;
+    for (let index = 0; index < queue.length; index += 1) {
+      try {
+        if (queue.length > 1) toast(`整理第 ${index + 1}/${queue.length} 段`);
+        await runCodexSortItem(queue[index]);
+        done += 1;
+      } catch (e: any) {
+        toast(`第 ${index + 1} 段整理失败：${e?.message || e}`);
+        break;
+      }
+    }
+    if (queue.length > 1 && done) toast(`已整理 ${done}/${queue.length} 段`);
   }
 
   return (
@@ -723,7 +914,7 @@ export function StudyRoomTab() {
             }}
           />
         </label>
-        <div className="mt-2 text-[11px] leading-5 text-stone-400">支持文字版 PDF、docx、txt、md；选“待整理”时会自动猜模块，扫描版 PDF 先不做 OCR。</div>
+        <div className="mt-2 text-[11px] leading-5 text-stone-400">支持文字版 PDF、docx、txt、md；长资料会按章节/页码拆段，扫描版 PDF 先不做 OCR。</div>
         <input
           className="mt-2 w-full rounded-2xl bg-[#F7F0E3] px-3 py-2 text-[13px] outline-none placeholder:text-stone-400"
           placeholder="标题，例如：B站公文写作第一课"

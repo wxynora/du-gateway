@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 
 from flask import jsonify, request
@@ -10,7 +11,10 @@ from storage import r2_store
 
 
 _MAX_IMPORT_BYTES = 16 * 1024 * 1024
-_MAX_EXTRACT_CHARS = 20000
+_MAX_IMPORT_CHUNKS = 10
+_IMPORT_CHUNK_TARGET_CHARS = 9000
+_IMPORT_CHUNK_MAX_CHARS = 12000
+_MAX_EXTRACT_CHARS = _MAX_IMPORT_CHUNKS * _IMPORT_CHUNK_MAX_CHARS
 _TEXT_EXTS = {".txt", ".md", ".markdown"}
 _PDF_EXTS = {".pdf"}
 _WORD_EXTS = {".docx"}
@@ -21,6 +25,138 @@ def _clip_import_text(text: str) -> str:
     if len(clean) <= _MAX_EXTRACT_CHARS:
         return clean
     return clean[:_MAX_EXTRACT_CHARS].rstrip() + "\n\n...[导入时已截断，原文件仍可重新拆分导入]"
+
+
+def _is_import_heading(line: str) -> bool:
+    clean = str(line or "").strip()
+    if not clean or len(clean) > 90:
+        return False
+    if re.match(r"^---\s*第\s*\d+\s*页\s*---$", clean):
+        return False
+    patterns = (
+        r"^第[一二三四五六七八九十百千\d]+[章节讲课部分单元]\s*[:：、.\s-]?.{0,60}$",
+        r"^[一二三四五六七八九十]+[、.．]\s*\S.{0,60}$",
+        r"^\d+(?:\.\d+){0,3}[、.．\s]\s*\S.{0,60}$",
+        r"^（[一二三四五六七八九十\d]+）\s*\S.{0,60}$",
+    )
+    return any(re.match(pattern, clean) for pattern in patterns)
+
+
+def _chunk_label(label: str, fallback: str = "正文") -> str:
+    clean = re.sub(r"\s+", " ", str(label or "").strip())
+    clean = re.sub(r"^---\s*|\s*---$", "", clean).strip()
+    return (clean or fallback)[:36]
+
+
+def _split_sections_by_headings(text: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    current_label = "开头"
+    current_lines: list[str] = []
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if _is_import_heading(line) and current_lines:
+            body = "\n".join(current_lines).strip()
+            if body:
+                sections.append((current_label, body))
+            current_label = line.strip()
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+            if _is_import_heading(line):
+                current_label = line.strip()
+    body = "\n".join(current_lines).strip()
+    if body:
+        sections.append((current_label, body))
+    return sections
+
+
+def _split_sections_by_pages(text: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    parts = re.split(r"(?=^---\s*第\s*\d+\s*页\s*---$)", text, flags=re.MULTILINE)
+    for index, part in enumerate(parts, start=1):
+        body = part.strip()
+        if not body:
+            continue
+        first_line = body.splitlines()[0].strip()
+        label = first_line if re.match(r"^---\s*第\s*\d+\s*页\s*---$", first_line) else f"第 {index} 段"
+        sections.append((label, body))
+    return sections or [("正文", text.strip())]
+
+
+def _split_long_section(label: str, body: str) -> list[tuple[str, str]]:
+    clean = str(body or "").strip()
+    if len(clean) <= _IMPORT_CHUNK_MAX_CHARS:
+        return [(label, clean)] if clean else []
+    out: list[tuple[str, str]] = []
+    current: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", clean):
+        part = paragraph.strip()
+        if not part:
+            continue
+        while len(part) > _IMPORT_CHUNK_MAX_CHARS:
+            head = part[:_IMPORT_CHUNK_MAX_CHARS].rstrip()
+            if current:
+                out.append((label, "\n\n".join(current).strip()))
+                current = []
+            out.append((label, head))
+            part = part[_IMPORT_CHUNK_MAX_CHARS:].lstrip()
+        candidate = "\n\n".join([*current, part]).strip()
+        if current and len(candidate) > _IMPORT_CHUNK_MAX_CHARS:
+            out.append((label, "\n\n".join(current).strip()))
+            current = [part]
+        else:
+            current.append(part)
+    if current:
+        out.append((label, "\n\n".join(current).strip()))
+    return out
+
+
+def _split_import_chunks(text: str) -> list[dict]:
+    clean = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not clean:
+        return []
+    if len(clean) <= _IMPORT_CHUNK_MAX_CHARS:
+        return [{"label": "正文", "content": clean}]
+
+    sections = _split_sections_by_headings(clean)
+    if len(sections) <= 1:
+        sections = _split_sections_by_pages(clean)
+
+    pieces: list[tuple[str, str]] = []
+    for label, body in sections:
+        pieces.extend(_split_long_section(label, body))
+
+    chunks: list[dict] = []
+    current_parts: list[str] = []
+    current_labels: list[str] = []
+    for label, body in pieces:
+        candidate = "\n\n".join([*current_parts, body]).strip()
+        if current_parts and len(candidate) > _IMPORT_CHUNK_TARGET_CHARS:
+            chunks.append({"label": _chunk_label(current_labels[0] if current_labels else "正文"), "content": "\n\n".join(current_parts).strip()})
+            current_parts = [body]
+            current_labels = [label]
+        else:
+            current_parts.append(body)
+            if label and label not in current_labels:
+                current_labels.append(label)
+    if current_parts:
+        chunks.append({"label": _chunk_label(current_labels[0] if current_labels else "正文"), "content": "\n\n".join(current_parts).strip()})
+
+    if len(chunks) > _MAX_IMPORT_CHUNKS:
+        chunks = chunks[:_MAX_IMPORT_CHUNKS]
+        chunks[-1]["content"] = (
+            str(chunks[-1].get("content") or "").rstrip()
+            + "\n\n...[后续内容超过自动拆分上限，先保留前面重点段落]"
+        )
+    return [chunk for chunk in chunks if str(chunk.get("content") or "").strip()]
+
+
+def _chunked_title(title: str, index: int, total: int, label: str) -> str:
+    clean_title = str(title or "").strip() or "未命名资料"
+    if total <= 1:
+        return clean_title
+    clean_label = _chunk_label(label, f"第 {index} 段")
+    return f"{clean_title}（{index}/{total}：{clean_label}）"
 
 
 def _decode_text_file(content: bytes) -> str:
@@ -137,21 +273,39 @@ def register_routes(bp) -> None:
 
         title = str(request.form.get("title") or "").strip() or Path(filename).stem or "未命名资料"
         module_id = str(request.form.get("module_id") or "inbox").strip() or "inbox"
-        item = r2_store.add_studyroom_item(
-            _with_auto_module(
-                {
-                    "title": title,
-                    "content": text,
-                    "module_id": module_id,
-                    "source_type": source_type,
-                    "status": "todo",
-                    "note": f"导入文件：{filename}",
-                }
+        chunks = _split_import_chunks(text)
+        created_items = []
+        for index, chunk in enumerate(chunks, start=1):
+            chunk_label = str(chunk.get("label") or "").strip()
+            note = f"导入文件：{filename}"
+            if len(chunks) > 1:
+                note += f"\n自动拆分：第 {index}/{len(chunks)} 段 · {_chunk_label(chunk_label, f'第 {index} 段')}"
+            item = r2_store.add_studyroom_item(
+                _with_auto_module(
+                    {
+                        "title": _chunked_title(title, index, len(chunks), chunk_label),
+                        "content": str(chunk.get("content") or "").strip(),
+                        "module_id": module_id,
+                        "source_type": source_type,
+                        "status": "todo",
+                        "note": note,
+                    }
+                )
             )
-        )
-        if not item:
+            if item:
+                created_items.append(item)
+        if not created_items:
             return jsonify({"ok": False, "error": "导入后保存失败"}), 500
-        return jsonify({"ok": True, "item": item, "data": r2_store.get_studyroom_data(), "chars": len(text)})
+        return jsonify(
+            {
+                "ok": True,
+                "item": created_items[0],
+                "items": created_items,
+                "data": r2_store.get_studyroom_data(),
+                "chars": len(text),
+                "chunks": len(created_items),
+            }
+        )
 
     @bp.route("/studyroom/items", methods=["POST"])
     def miniapp_studyroom_add_item():
