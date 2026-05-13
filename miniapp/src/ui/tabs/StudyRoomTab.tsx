@@ -466,7 +466,8 @@ export function StudyRoomTab() {
         setTitle("");
         setContent("");
         setUrl("");
-        toast(`已导入 ${text.length || 0} 字，归到 ${moduleLabel(j.item?.module_id, modules)}`);
+        toast(`已导入 ${text.length || 0} 字，开始整理`);
+        if (j.item) void runCodexSort(j.item);
         return;
       }
       setUploadStatus("上传中...");
@@ -484,7 +485,8 @@ export function StudyRoomTab() {
       setTitle("");
       setContent("");
       setUrl("");
-      toast(`已导入 ${j.chars || 0} 字，归到 ${moduleLabel(j.item?.module_id, modules)}`);
+      toast(`已导入 ${j.chars || 0} 字，开始整理`);
+      if (j.item) void runCodexSort(j.item);
     } catch (e: any) {
       toast(`导入失败：${e?.message || e}`);
     } finally {
