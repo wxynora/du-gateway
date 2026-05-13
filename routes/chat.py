@@ -104,17 +104,6 @@ from services.pc_command_handler import (
     process_pcmd_in_assistant_text,
     transform_sse_chunk_bytes as transform_sse_chunk_bytes_pcmd,
 )
-from services.anthropic_format import (
-    AnthropicStreamConverter,
-    anthropic_messages_url,
-    anthropic_models_url,
-    anthropic_to_openai,
-    build_anthropic_headers,
-    is_anthropic_request_format,
-    is_openai_compat_request_format,
-    prepare_anthropic_body,
-    prepare_openai_compat_body,
-)
 from services.telegram_bot import build_telegram_style_system
 from services.voice_line_prompt import build_voice_line_rules
 from utils.log import get_logger
@@ -526,23 +515,6 @@ def _get_active_upstream_url() -> str:
     return ""
 
 
-def _get_upstream_request_format() -> str:
-    try:
-        from storage.upstream_store import get_request_format
-
-        return get_request_format()
-    except Exception:
-        return "openai"
-
-
-def _use_anthropic_upstream_format() -> bool:
-    return is_anthropic_request_format(_get_upstream_request_format())
-
-
-def _use_openai_compat_upstream_format() -> bool:
-    return is_openai_compat_request_format(_get_upstream_request_format())
-
-
 def _is_local_cliproxyapi_url(url: str) -> bool:
     parsed = urlparse(str(url or "").strip())
     host = (parsed.hostname or "").lower()
@@ -643,9 +615,14 @@ def _inject_openrouter_ultra_think_prompt(messages: list) -> list:
 
 def _chat_url_to_models_url(chat_url: str) -> str:
     """从 chat completions URL 推出 /v1/models 的 URL。"""
-    if not chat_url:
+    base = str(chat_url or "").strip().rstrip("/")
+    if not base:
         return ""
-    return anthropic_models_url(chat_url)
+    for suffix in ("/v1/chat/completions", "/chat/completions"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/") + "/v1/models"
 
 
 _THINK_BLOCK_RE = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
@@ -1123,8 +1100,6 @@ def _stream_forward_to_ai(body: dict, headers: dict):
     accept = str((headers or {}).get("Accept") or "").strip()
     if accept:
         req_headers["Accept"] = accept
-    use_anthropic = _use_anthropic_upstream_format()
-    use_openai_compat = _use_openai_compat_upstream_format()
     last_err = None
     for url, api_key in targets:
         body_send = dict(body)
@@ -1143,57 +1118,16 @@ def _stream_forward_to_ai(body: dict, headers: dict):
             logger.info("转发前 messages 总字符数约 %s（过大时上游可能因 input+output 超限截断输出）", msg_len)
         except Exception:
             pass
-        h = build_anthropic_headers(api_key, url, req_headers) if use_anthropic else dict(req_headers)
-        if api_key and not use_anthropic:
+        h = dict(req_headers)
+        if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         try:
             body_send = _apply_active_model_request_policy(body_send, url)
             target_url = url
-            if use_anthropic:
-                target_url = anthropic_messages_url(url)
-                body_send = prepare_anthropic_body(body_send)
-            else:
-                body_send = _apply_openrouter_request_policy(body_send, url)
-                if use_openai_compat:
-                    body_send = prepare_openai_compat_body(body_send)
+            body_send = _apply_openrouter_request_policy(body_send, url)
             # timeout 同时作 connect/read：流式时若超过该秒数未收到数据会 ReadTimeout 断流，过短会导致回复中途截断
             r = requests.post(target_url, headers=h, json=body_send, timeout=STREAM_TIMEOUT_SECONDS, stream=True)
             if r.status_code == 200:
-                if use_anthropic:
-                    converter = AnthropicStreamConverter(str(body_send.get("model") or ""))
-                    first_chunk_logged = False
-                    last_data_line = None
-                    for line in r.iter_lines():
-                        if not line:
-                            continue
-                        if not line.startswith(b"data:"):
-                            continue
-                        raw = line[5:].strip()
-                        if not raw or raw == b"[DONE]":
-                            continue
-                        try:
-                            event = json.loads(raw.decode("utf-8", errors="ignore"))
-                            converted = converter.convert_event(event)
-                        except Exception:
-                            converted = None
-                        if not converted:
-                            continue
-                        if not first_chunk_logged:
-                            logger.debug("Anthropic 流式收到首包并转换为 OpenAI SSE")
-                            first_chunk_logged = True
-                        chunk = ("data: " + json.dumps(converted, ensure_ascii=False) + "\n\n").encode("utf-8")
-                        last_data_line = chunk.rstrip()
-                        yield chunk
-                    if last_data_line:
-                        try:
-                            j = json.loads(last_data_line[6:].strip().decode("utf-8", errors="ignore"))
-                            fr = (j.get("choices") or [{}])[0].get("finish_reason")
-                            if fr is not None and fr != "":
-                                logger.debug("Anthropic 流式转换结束 finish_reason=%s", fr)
-                        except Exception:
-                            pass
-                    yield b"data: [DONE]\n\n"
-                    return
                 last_data_line = None
                 first_chunk_logged = False
                 for line in r.iter_lines():
@@ -1565,11 +1499,9 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
         return None, 502, _build_upstream_error_hint("TARGET_AI_URL 或 TARGET_AI_URLS 未配置"), None
     last_err = None
     last_status = 502
-    use_anthropic = _use_anthropic_upstream_format()
-    use_openai_compat = _use_openai_compat_upstream_format()
     for i, (url, api_key) in enumerate(targets):
-        req_headers = build_anthropic_headers(api_key, url) if use_anthropic else {"Content-Type": "application/json"}
-        if api_key and not use_anthropic:
+        req_headers = {"Content-Type": "application/json"}
+        if api_key:
             req_headers["Authorization"] = f"Bearer {api_key}"
         for h in ("Accept", "Accept-Encoding"):
             if request.headers.get(h):
@@ -1585,13 +1517,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                     logger.info("转发已设 max_tokens=%s（原=%s）", MAX_COMPLETION_TOKENS, cur)
             body_send = _apply_active_model_request_policy(body_send, url)
             target_url = url
-            if use_anthropic:
-                target_url = anthropic_messages_url(url)
-                body_send = prepare_anthropic_body(body_send)
-            else:
-                body_send = _apply_openrouter_request_policy(body_send, url)
-                if use_openai_compat:
-                    body_send = prepare_openai_compat_body(body_send)
+            body_send = _apply_openrouter_request_policy(body_send, url)
             r = requests.post(target_url, headers=req_headers, json=body_send, timeout=120)
             # 为排查上游 403：记录鉴权是否携带（不泄露 key），以及响应正文前缀
             try:
@@ -1627,8 +1553,6 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                 continue
             # 只有 2xx 算成功，其余（4xx/5xx/429 等）直接失败（不再自动 fallback）
             if 200 <= r.status_code < 300:
-                if use_anthropic and isinstance(data, dict):
-                    data = anthropic_to_openai(data, str(body_send.get("model") or ""), False)
                 cache_debug = _build_cache_debug_entry(body_send, target_url, prompt_cache_profile, data or {})
                 usage_debug = cache_debug.get("usage") or {}
                 profile_debug = cache_debug.get("request") or {}
@@ -2276,9 +2200,8 @@ def list_models():
     models_url = _chat_url_to_models_url(url)
     if not models_url:
         return jsonify({"error": "无法解析模型列表地址"}), 502
-    use_anthropic = _use_anthropic_upstream_format()
-    req_headers = build_anthropic_headers(api_key, url) if use_anthropic else {"Content-Type": "application/json"}
-    if api_key and not use_anthropic:
+    req_headers = {"Content-Type": "application/json"}
+    if api_key:
         req_headers["Authorization"] = f"Bearer {api_key}"
     try:
         r = requests.get(models_url, headers=req_headers, timeout=30)
@@ -2429,12 +2352,8 @@ def chat_completions():
         pass
     active_upstream_url = _get_active_upstream_url()
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
-    # Claude OAuth 代理/OpenAI 兼容中转/Anthropic 原生模式需要这些标记打缓存断点；默认 OpenAI 继续清掉。
-    preserve_dynamic_marker = (
-        _is_local_claude_oauth_proxy_url(active_upstream_url)
-        or _use_openai_compat_upstream_format()
-        or _use_anthropic_upstream_format()
-    )
+    # Claude OAuth 代理自己会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
+    preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(active_upstream_url)
     for msg in body.get("messages") or []:
         if not preserve_dynamic_marker:
             msg.pop("__dynamic__", None)
