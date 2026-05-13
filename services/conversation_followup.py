@@ -195,6 +195,15 @@ def _send_via_qq(text: str, split: bool = True) -> bool:
 
 def _dispatch_followup(channel: str, target: str, text: str, created_at: str, split: bool = True) -> bool:
     ch = _normalize_reply_channel(channel, default="sumitalk", allow_tg=True)
+    try:
+        from services.telegram_proactive import _sanitize_control_reply_for_delivery
+
+        text = _sanitize_control_reply_for_delivery(text).strip()
+    except Exception:
+        text = str(text or "").strip()
+    if not text:
+        logger.warning("延迟续话外发跳过：清洗后为空 channel=%s target=%s", ch, target)
+        return False
     if ch == "sumitalk":
         sumitalk_logger.info("followup_dispatch_start channel=%s target=%s chars=%s created_at=%s", ch, target, len(str(text or "").strip()), created_at)
     if ch == "wechat":
@@ -593,6 +602,12 @@ def _send_wakeup_event(
         if not channels:
             return {"ok": False, "error": "no_proactive_channel", "reply_preview": text[:120]}
         outbound = _sanitize_reply_for_telegram(text).strip()
+        try:
+            from services.telegram_proactive import _sanitize_control_reply_for_delivery
+
+            outbound = _sanitize_control_reply_for_delivery(outbound).strip()
+        except Exception:
+            outbound = str(outbound or "").strip()
         if not outbound:
             return {"ok": False, "error": "empty_after_sanitize"}
         attempted_channels = []

@@ -327,16 +327,77 @@ def _extract_json_object_text(text: str) -> str:
     return ""
 
 
+def _load_proactive_control_object(text: str) -> Optional[dict]:
+    """
+    解析主动决策 JSON。兼容几类模型/兼容层偶发格式：
+    - 裸 JSON / fenced JSON / 前后带说明
+    - JSON string 里再包了一层对象
+    - 引号被双写成 {""action"":""diary""}
+    """
+    first = _extract_json_object_text(text) or _strip_json_fence(text)
+    queue = [first]
+    seen: set[str] = set()
+    while queue:
+        raw = str(queue.pop(0) or "").strip()
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+            if isinstance(data, str):
+                queue.append(data)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        if '""action""' in raw or '""message""' in raw or '""channel""' in raw:
+            queue.append(raw.replace('""', '"'))
+        if '\\"action\\"' in raw or '\\"message\\"' in raw or '\\"channel\\"' in raw:
+            queue.append(raw.replace('\\"', '"'))
+    return None
+
+
 def _looks_like_control_json_reply(text: str) -> bool:
     t = str(text or "").strip()
     if not t:
         return False
+    normalized = t.replace('""', '"').replace('\\"', '"')
     return (
         t.startswith("```")
         or t.startswith("{")
-        or ('"action"' in t and '"message"' in t)
+        or ('"action"' in normalized and '"message"' in normalized)
         or ("'action'" in t and "'message'" in t)
     )
+
+
+def _sanitize_control_reply_for_delivery(text: str) -> str:
+    """
+    最后一层外发保险：控制 JSON 不能作为用户可见正文发出去。
+    send_message 只取 message；diary/no_contact/other 说明本轮不该发。
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    obj = _load_proactive_control_object(raw)
+    if isinstance(obj, dict) and ("action" in obj or "message" in obj or "channel" in obj):
+        action = str(obj.get("action") or "").strip().lower()
+        alias = {"send": "send_message", "msg": "send_message", "text": "send_message", "chat": "send_message"}
+        action = alias.get(action, action)
+        message = str(obj.get("message") or "").strip()
+        if action == "send_message" and message:
+            return message
+        logger.warning(
+            "主动/唤醒外发拦截控制 JSON action=%s channel=%s reason=%s raw_preview=%s",
+            action or "unknown",
+            str(obj.get("channel") or "").strip(),
+            str(obj.get("reason") or "").strip()[:120],
+            raw[:300],
+        )
+        return ""
+    if _looks_like_control_json_reply(raw):
+        logger.warning("主动/唤醒外发拦截疑似控制 JSON raw_preview=%s", raw[:300])
+        return ""
+    return raw
 
 
 def _normalize_reply_channel(value: str, default: str = "", allowed: list[str] | None = None) -> str:
@@ -364,17 +425,7 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
             False, "", "no_contact", action="no_contact", du_reason="（使用 NO_CONTACT 标记，未给理由）", channel=default_channel
         )
 
-    cleaned = _extract_json_object_text(t) or _strip_json_fence(t)
-    obj = None
-    try:
-        obj = json.loads(cleaned)
-    except (json.JSONDecodeError, TypeError):
-        m = re.search(r"\{[\s\S]*\}", cleaned)
-        if m:
-            try:
-                obj = json.loads(m.group(0))
-            except (json.JSONDecodeError, TypeError):
-                obj = None
+    obj = _load_proactive_control_object(t)
 
     if not isinstance(obj, dict):
         if _looks_like_control_json_reply(t):
@@ -898,6 +949,10 @@ def _send_via_tg(text: str, target_user_id: int = 0) -> bool:
 
 def _dispatch_send(channel: str, text: str, split: bool = True, target_user_id: int = 0) -> bool:
     """根据 channel 选择发送入口，返回是否发送成功。"""
+    text = _sanitize_control_reply_for_delivery(text).strip()
+    if not text:
+        logger.warning("主动消息发送跳过：清洗后为空 channel=%s", channel)
+        return False
     if channel == "wechat":
         return _send_via_wechat(text, split=split)
     if channel == "qq":
@@ -1000,6 +1055,7 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     text_to_send = decision.text.strip()
     # 主动发消息也复用 Telegram 侧的清洗规则：避免出现“（脑内OS：）”等格式
     text_to_send = _sanitize_reply_for_telegram(text_to_send).strip()
+    text_to_send = _sanitize_control_reply_for_delivery(text_to_send).strip()
     default_channel = channels[0] if channels else ""
     channel = _normalize_reply_channel(decision.channel or default_channel, default=default_channel, allowed=channels)
     out["channel"] = channel
