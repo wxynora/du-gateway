@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, apiJson } from "../api";
 import { useToast } from "../toast";
 
@@ -276,7 +276,6 @@ async function waitForCodexTask(taskId: string): Promise<CodexTask> {
 
 export function StudyRoomTab() {
   const toast = useToast();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [data, setData] = useState<StudyRoomData>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -627,25 +626,24 @@ export function StudyRoomTab() {
             {modules.map((module) => <option key={module.id} value={module.id}>{module.label}</option>)}
           </select>
         </div>
-        <input
-          ref={fileInputRef}
-          className="hidden"
-          type="file"
-          accept=".pdf,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
-          onChange={(e) => {
-            const file = e.currentTarget.files?.[0] || null;
-            e.currentTarget.value = "";
-            void importFile(file);
-          }}
-        />
-        <button
-          type="button"
-          className="mt-2 w-full rounded-2xl border border-[#D8C4A5] bg-[#FFFCF5] px-4 py-3 text-[13px] font-semibold text-[#6B5538] transition active:scale-[0.99] disabled:opacity-60"
-          disabled={uploading}
-          onClick={() => fileInputRef.current?.click()}
+        <label
+          className={`relative mt-2 flex w-full items-center justify-center overflow-hidden rounded-2xl border border-[#D8C4A5] bg-[#FFFCF5] px-4 py-3 text-[13px] font-semibold text-[#6B5538] transition ${
+            uploading ? "cursor-not-allowed opacity-60" : "cursor-pointer active:scale-[0.99]"
+          }`}
         >
-          {uploading ? "正在导入..." : "上传 PDF / Word / TXT"}
-        </button>
+          <span>{uploading ? "正在导入..." : "上传 PDF / Word / TXT"}</span>
+          <input
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+            type="file"
+            accept=".pdf,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+            disabled={uploading}
+            onChange={(e) => {
+              const file = e.currentTarget.files?.[0] || null;
+              e.currentTarget.value = "";
+              void importFile(file);
+            }}
+          />
+        </label>
         <div className="mt-2 text-[11px] leading-5 text-stone-400">支持文字版 PDF、docx、txt、md；选“待整理”时会自动猜模块，扫描版 PDF 先不做 OCR。</div>
         <input
           className="mt-2 w-full rounded-2xl bg-[#F7F0E3] px-3 py-2 text-[13px] outline-none placeholder:text-stone-400"
