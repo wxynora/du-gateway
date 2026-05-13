@@ -217,6 +217,17 @@ def _next_proactive_delay_seconds() -> int:
     return random.randint(min_min * 60, max_min * 60)
 
 
+def _next_post_hard_trigger_delay_seconds() -> int:
+    """
+    硬触发已经主动叫过她一次后，如果她没有回，别再完全等原随机窗口。
+    等过“正在聊天”冷却期再补一次随机决策；如果她回了，proactive_tick 会按 recent_activity 跳过。
+    """
+    skip_min = max(0, int(TELEGRAM_PROACTIVE_SKIP_IF_ACTIVE_MINUTES or 0))
+    min_min = max(20, skip_min + 5)
+    max_min = max(min_min, min_min + 10)
+    return random.randint(min_min * 60, max_min * 60)
+
+
 _ACTION_LABEL_CN = {
     "send_message": "发消息",
     "no_contact": "不发消息",
@@ -1066,6 +1077,13 @@ def run_scheduler_loop():
 
                 hard_trigger = tick_proactive_triggers(uid)
                 logger.info("主动硬触发 tick result=%s", hard_trigger)
+                if hard_trigger.get("sent"):
+                    post_delay = _next_post_hard_trigger_delay_seconds()
+                    next_main_at = now_ts + post_delay
+                    logger.info(
+                        "硬触发已发出，下一次随机主动唤醒重排 scheduled_in=%.1fmin",
+                        post_delay / 60.0,
+                    )
                 next_hard_trigger_at = now_ts + 60
             if proactive_enabled and now_ts >= next_du_daily_at:
                 daily = du_daily_sleep_tick(uid)
