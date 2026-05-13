@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from config import DATA_DIR
+from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 
 
@@ -20,6 +21,7 @@ _RUNNING_RECLAIM_SECONDS = max(
     60,
     int(float(os.environ.get("CODEX_GROUP_CHAT_RUNNING_RECLAIM_SECONDS") or "120")),
 )
+logger = get_logger(__name__)
 
 
 def _load_state() -> dict:
@@ -118,6 +120,40 @@ def _publish_task(task: dict | None) -> None:
         publish_codex_group_task(public)
     except Exception:
         pass
+
+
+def _sync_studyroom_task_result(task: dict | None) -> None:
+    if not isinstance(task, dict) or str(task.get("mode") or "") != "studyroom":
+        return
+    item_id = str(task.get("study_item_id") or "").strip()
+    if not item_id:
+        return
+    status = str(task.get("status") or "").strip()
+    try:
+        from storage import r2_store
+
+        if status == "done":
+            response = _safe_text(task.get("response"), 16000)
+            if not response:
+                updated = r2_store.update_studyroom_item(item_id, {"status": "todo"})
+                logger.warning("StudyRoom 整理结果为空，已退回 todo item_id=%s task_id=%s", item_id, task.get("id"))
+            else:
+                updated = r2_store.update_studyroom_item(item_id, {"note": response, "status": "done"})
+                logger.info("StudyRoom 整理结果已写回 item_id=%s task_id=%s chars=%s", item_id, task.get("id"), len(response))
+        elif status == "error":
+            updated = r2_store.update_studyroom_item(item_id, {"status": "todo"})
+            logger.warning(
+                "StudyRoom 整理失败，已退回 todo item_id=%s task_id=%s error=%s",
+                item_id,
+                task.get("id"),
+                _safe_text(task.get("error"), 300),
+            )
+        else:
+            return
+        if not updated:
+            logger.error("StudyRoom 整理结果写回失败 item_id=%s task_id=%s status=%s", item_id, task.get("id"), status)
+    except Exception:
+        logger.exception("StudyRoom 整理结果写回异常 item_id=%s task_id=%s", item_id, task.get("id"))
 
 
 def _cleanup_tasks(tasks: list[dict]) -> list[dict]:
@@ -239,6 +275,7 @@ def finish_task(task_id: str, response: str = "", error: str = "") -> dict | Non
     if not re.fullmatch(r"[a-f0-9]{32}", task_id):
         return None
     now_ts = _now_ts()
+    sync_task = None
     with _LOCK:
         state = _load_state()
         tasks = _cleanup_tasks(state.get("tasks") or [])
@@ -259,6 +296,7 @@ def finish_task(task_id: str, response: str = "", error: str = "") -> dict | Non
             task["updated_ts"] = now_ts
             task["finished_at"] = now_beijing_iso()
             task["updated_at"] = now_beijing_iso()
+            sync_task = dict(task)
             break
         if found is None:
             return None
@@ -266,5 +304,6 @@ def finish_task(task_id: str, response: str = "", error: str = "") -> dict | Non
         if not _save_state(state):
             return None
         public = _public_task(found)
-        _publish_task(public)
-        return public
+    _publish_task(public)
+    _sync_studyroom_task_result(sync_task)
+    return public
