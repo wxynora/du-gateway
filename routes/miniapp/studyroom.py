@@ -32,6 +32,10 @@ def _decode_text_file(content: bytes) -> str:
     return content.decode("utf-8", errors="ignore")
 
 
+def _has_enough_import_text(parts: list[str]) -> bool:
+    return sum(len(part) for part in parts) >= _MAX_EXTRACT_CHARS
+
+
 def _extract_pdf_text(content: bytes) -> str:
     try:
         from pypdf import PdfReader
@@ -48,6 +52,8 @@ def _extract_pdf_text(content: bytes) -> str:
         page_text = page_text.strip()
         if page_text:
             parts.append(f"--- 第 {index} 页 ---\n{page_text}")
+        if _has_enough_import_text(parts):
+            break
     return "\n\n".join(parts)
 
 
@@ -59,12 +65,18 @@ def _extract_docx_text(content: bytes) -> str:
 
     doc = Document(io.BytesIO(content))
     parts: list[str] = []
-    parts.extend(p.text.strip() for p in doc.paragraphs if p.text and p.text.strip())
+    for paragraph in doc.paragraphs:
+        if paragraph.text and paragraph.text.strip():
+            parts.append(paragraph.text.strip())
+        if _has_enough_import_text(parts):
+            return "\n".join(parts)
     for table in doc.tables:
         for row in table.rows:
             cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
             if cells:
                 parts.append(" | ".join(cells))
+            if _has_enough_import_text(parts):
+                return "\n".join(parts)
     return "\n".join(parts)
 
 

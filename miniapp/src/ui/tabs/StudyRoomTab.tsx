@@ -135,6 +135,56 @@ const EXAM_LANES: ExamLane[] = [
 ];
 const CODEX_SORT_POLL_MS = 2200;
 const CODEX_SORT_TIMEOUT_MS = 8 * 60 * 1000;
+const MAX_CLIENT_IMPORT_CHARS = 20000;
+const MAX_CLIENT_PDF_PAGES = 200;
+
+function clipClientImportText(text: string): string {
+  const clean = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (clean.length <= MAX_CLIENT_IMPORT_CHARS) return clean;
+  return `${clean.slice(0, MAX_CLIENT_IMPORT_CHARS).trimEnd()}\n\n...[导入时已截断，原文件仍可重新拆分导入]`;
+}
+
+function fileStem(file: File): string {
+  const name = String(file.name || "").trim();
+  return name.replace(/\.[^.]+$/, "").trim() || "未命名资料";
+}
+
+function isPdfFile(file: File): boolean {
+  const name = String(file.name || "").toLowerCase();
+  const type = String(file.type || "").toLowerCase();
+  return type === "application/pdf" || name.endsWith(".pdf");
+}
+
+async function extractPdfTextInBrowser(file: File, onStatus?: (text: string) => void): Promise<string> {
+  onStatus?.("读取 PDF...");
+  const [{ getDocument, GlobalWorkerOptions }, workerSrc] = await Promise.all([
+    import("pdfjs-dist"),
+    import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+  ]);
+  GlobalWorkerOptions.workerSrc = String(workerSrc.default || "");
+
+  const data = new Uint8Array(await file.arrayBuffer());
+  const pdf = await getDocument({ data }).promise;
+  try {
+    const pageCount = Math.min(Number(pdf.numPages || 0), MAX_CLIENT_PDF_PAGES);
+    const parts: string[] = [];
+    for (let pageNo = 1; pageNo <= pageCount; pageNo += 1) {
+      onStatus?.(`解析第 ${pageNo}/${pageCount} 页`);
+      const page = await pdf.getPage(pageNo);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => String(item?.str || ""))
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (pageText) parts.push(`--- 第 ${pageNo} 页 ---\n${pageText}`);
+      if (parts.join("\n\n").length >= MAX_CLIENT_IMPORT_CHARS) break;
+    }
+    return clipClientImportText(parts.join("\n\n"));
+  } finally {
+    await pdf.destroy().catch(() => undefined);
+  }
+}
 
 function normalizeModules(input: unknown): StudyRoomModule[] {
   if (!Array.isArray(input)) return [];
@@ -280,6 +330,7 @@ export function StudyRoomTab() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
   const [moduleFilter, setModuleFilter] = useState("all");
   const [sourceType, setSourceType] = useState("bilibili");
   const [moduleId, setModuleId] = useState("inbox");
@@ -393,7 +444,32 @@ export function StudyRoomTab() {
   async function importFile(file: File | null) {
     if (!file || uploading) return;
     setUploading(true);
+    setUploadStatus("");
     try {
+      if (isPdfFile(file)) {
+        const text = await extractPdfTextInBrowser(file, setUploadStatus);
+        if (!text) throw new Error("没有抽到文字；扫描版 PDF/图片需要 OCR，当前还没接。");
+        setUploadStatus("保存中...");
+        const j = await apiJson<StudyRoomResponse>("/miniapp-api/studyroom/items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: title.trim() || fileStem(file),
+            content: text,
+            module_id: moduleId,
+            source_type: "pdf",
+            status: "todo",
+            note: `本地解析 PDF：${file.name || "资料.pdf"}`,
+          }),
+        });
+        setData(j.data || {});
+        setTitle("");
+        setContent("");
+        setUrl("");
+        toast(`已导入 ${text.length || 0} 字，归到 ${moduleLabel(j.item?.module_id, modules)}`);
+        return;
+      }
+      setUploadStatus("上传中...");
       const form = new FormData();
       form.append("file", file);
       form.append("module_id", moduleId);
@@ -413,6 +489,7 @@ export function StudyRoomTab() {
       toast(`导入失败：${e?.message || e}`);
     } finally {
       setUploading(false);
+      setUploadStatus("");
     }
   }
 
@@ -631,7 +708,7 @@ export function StudyRoomTab() {
             uploading ? "cursor-not-allowed opacity-60" : "cursor-pointer active:scale-[0.99]"
           }`}
         >
-          <span>{uploading ? "正在导入..." : "上传 PDF / Word / TXT"}</span>
+          <span>{uploading ? (uploadStatus || "正在导入...") : "上传 PDF / Word / TXT"}</span>
           <input
             className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
             type="file"
