@@ -143,37 +143,15 @@ _PROCESSED_UPDATE_IDS: dict[str, float] = {}
 _UPDATE_DEDUP_TTL_SECONDS = 10 * 60
 _UPDATE_DEDUP_MAX = 20000
 
-# Telegram 端的输出风格约束（只影响 Telegram）；表情包代号行从 R2 meta 动态生成，见 build_telegram_style_system
-_STICKER_SYS_LINE_CACHE_AT: float = 0.0
-_STICKER_SYS_LINE_CACHE_TEXT: str = ""
-
-
 def _sticker_tags_line_for_system_prompt() -> str:
-    """从 stickers/meta.json 读出当前全部英文代号，让模型知道 MiniApp 里有哪些分类。"""
-    global _STICKER_SYS_LINE_CACHE_AT, _STICKER_SYS_LINE_CACHE_TEXT
-    now = time.time()
-    if now - _STICKER_SYS_LINE_CACHE_AT < 45.0 and _STICKER_SYS_LINE_CACHE_TEXT:
-        return _STICKER_SYS_LINE_CACHE_TEXT
+    """和 QQ 一样读取全局缓存的表情包代号列表，不在这里直接扫 R2 meta。"""
     try:
-        meta = r2_store.get_stickers_meta()
-        keys: list[str] = []
-        for it in meta.get("tags") or []:
-            if isinstance(it, dict) and it.get("key"):
-                k = str(it["key"]).strip().lower()
-                if k:
-                    keys.append(k)
-        if not keys:
-            keys = sorted(r2_store.get_sticker_tag_keys())
-        if not keys:
-            text = "（暂无表情包分类元数据；可在 MiniApp 里添加分类后再用句末 [tag]。）"
-        else:
-            listed = " ".join(f"[{k}]" for k in keys)
-            text = f"当前全部可用英文代号（与 MiniApp/R2 一致，新增分类也会出现在此列表）：{listed}"
+        from services.sticker_tags import sticker_tags_line_for_system_prompt
+
+        return sticker_tags_line_for_system_prompt()
     except Exception:
-        text = "表情包英文代号以 MiniApp 配置为准；句末可加小写 [tag]。"
-    _STICKER_SYS_LINE_CACHE_AT = now
-    _STICKER_SYS_LINE_CACHE_TEXT = text
-    return text
+        logger.warning("读取表情包 tag 缓存失败，TG 入口风格使用默认列表", exc_info=True)
+        return "当前全部可用英文代号（与 MiniApp/R2 一致，新增分类也会出现在此列表）：[cute] [pitiful] [affectionate] [speechless] [angry] [sad] [happy] [shy]"
 
 
 def _register_update_once(update_id, token: str, user_id, chat_id) -> bool:
@@ -201,7 +179,7 @@ def _register_update_once(update_id, token: str, user_id, chat_id) -> bool:
 
 
 def build_telegram_style_system(include_channel_hint: bool = True) -> str:
-    """每次请求网关前调用，使渡掌握最新表情包分类列表。"""
+    """构建稳定的 Telegram 入口风格 system。"""
     tags_line = _sticker_tags_line_for_system_prompt()
     # include_channel_hint 保留给旧调用点兼容；TG 入口标记和主体必须保持稳定。
     # 否则 webhook / wakeup 等链路会被 chat 路由当成“没有 TG 风格”，重复插入 system，
