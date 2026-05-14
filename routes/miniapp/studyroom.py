@@ -18,6 +18,7 @@ _MAX_EXTRACT_CHARS = _MAX_IMPORT_CHUNKS * _IMPORT_CHUNK_MAX_CHARS
 _TEXT_EXTS = {".txt", ".md", ".markdown"}
 _PDF_EXTS = {".pdf"}
 _WORD_EXTS = {".docx"}
+_SOURCE_TYPE_OVERRIDES = {"pdf", "question_bank", "word", "text", "fenbi", "note", "wrong_question"}
 
 
 def _clip_import_text(text: str) -> str:
@@ -260,7 +261,7 @@ def register_routes(bp) -> None:
             return jsonify({"ok": False, "error": "文件太大，先控制在 16MB 内"}), 413
 
         try:
-            text, source_type = _extract_import_text(filename, content)
+            text, detected_source_type = _extract_import_text(filename, content)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except RuntimeError as exc:
@@ -273,6 +274,8 @@ def register_routes(bp) -> None:
 
         title = str(request.form.get("title") or "").strip() or Path(filename).stem or "未命名资料"
         module_id = str(request.form.get("module_id") or "inbox").strip() or "inbox"
+        requested_source_type = str(request.form.get("source_type") or "").strip()
+        source_type = requested_source_type if requested_source_type in _SOURCE_TYPE_OVERRIDES else detected_source_type
         chunks = _split_import_chunks(text)
         created_items = []
         for index, chunk in enumerate(chunks, start=1):

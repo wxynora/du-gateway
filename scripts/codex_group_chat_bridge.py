@@ -282,6 +282,16 @@ def _build_studyroom_prompt(task: dict[str, Any]) -> str:
     source = str(task.get("study_source") or task.get("exam_source") or "资料").strip()
     url = str(task.get("study_url") or task.get("exam_url") or "").strip()
     content = str(task.get("user_message") or "").strip()
+    question_bank_hint = ""
+    if source in {"question_bank", "wrong_question", "fenbi"} or "题库" in title:
+        question_bank_hint = """
+题库资料额外规则：
+- 如果资料本身是题库，不要重新编题代替原题；优先提取原题的章节、题干、选项、参考答案和解析线索。
+- 参考答案通常在末尾，匹配时要按题号对应；不确定的题目标明“答案未匹配”，不要硬猜。
+- 如果题号在不同章节重复，必须保留“章节 + 题号”的对应关系，不能只按全局题号匹配。
+- “练习题”小节可以选取原题中的 5 道代表题，并附资料内可匹配到的答案/解析；如果匹配不到答案，要写明未匹配。
+- “背诵卡”和“知识债清单”要服务于错题复盘：指出哪类概念需要回炉。
+"""
     return f"""你是 StudyRoom 的学习资料整理器。现在要把一份资料加工成可直接复习、背诵、练题和复盘的学习材料。
 
 硬性边界：
@@ -302,6 +312,7 @@ def _build_studyroom_prompt(task: dict[str, Any]) -> str:
 - “背诵卡”做 3-6 张 Q&A。
 - “练习题”必须 5 道，题干、答案、解析都要写。
 - 不要省略小节，不要输出前言、寒暄或结尾闲聊。
+{question_bank_hint}
 
 ## 考点笔记
 - 用短句列出最该记的点，优先抓关键词、主体、程序、条件、比例、时间、权限、责任。
