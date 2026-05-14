@@ -915,6 +915,7 @@ export function StudyRoomTab() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
+  const [activeModuleId, setActiveModuleId] = useState("");
   const [moduleFilter, setModuleFilter] = useState("all");
   const [studyView, setStudyView] = useState<StudyView>("materials");
   const [sourceType, setSourceType] = useState("bilibili");
@@ -1370,6 +1371,22 @@ export function StudyRoomTab() {
     if (queue.length > 1 && done) toast(`已整理 ${done}/${queue.length} 段`);
   }
 
+  function openModulePage(nextModuleId: string, nextView: StudyView = "materials") {
+    setActiveModuleId(nextModuleId);
+    setModuleFilter(nextModuleId);
+    setStudyView(nextView);
+    setSelectedItemId("");
+    setQuizGroupIndex(0);
+  }
+
+  function closeModulePage() {
+    setActiveModuleId("");
+    setModuleFilter("all");
+    setStudyView("materials");
+    setSelectedItemId("");
+    setQuizGroupIndex(0);
+  }
+
   if (selectedItem) {
     const resultSections = splitStudyResult(selectedItem.note);
     const sourceText = String(selectedItem.content || selectedItem.url || "").trim();
@@ -1621,7 +1638,7 @@ export function StudyRoomTab() {
     );
   }
 
-  const activeModuleName = moduleFilter === "all" ? "全部资料" : moduleLabel(moduleFilter, modules);
+  const activeModuleName = activeModuleId ? moduleLabel(activeModuleId, modules) : (moduleFilter === "all" ? "全部资料" : moduleLabel(moduleFilter, modules));
   const overallProgress = items.length ? Math.round((doneItemsCount / items.length) * 100) : 0;
   const studyTabs: Array<{ id: StudyView; label: string; count: number }> = [
     { id: "materials", label: "资料", count: viewCounts.materials },
@@ -1630,6 +1647,198 @@ export function StudyRoomTab() {
     { id: "recite", label: "背诵", count: viewCounts.recite },
     { id: "wrong", label: "错题", count: viewCounts.wrong },
   ];
+
+  if (activeModuleId) {
+    const moduleItems = items
+      .slice()
+      .sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")))
+      .filter((item) => String(item.module_id || "inbox") === activeModuleId);
+    const moduleDoneCount = moduleItems.filter((item) => item.status === "done").length;
+    const moduleProgress = moduleItems.length ? Math.round((moduleDoneCount / moduleItems.length) * 100) : 0;
+    const tabItems = visibleItems;
+    const questionRows = studyView === "questions"
+      ? tabItems.map((item) => {
+        const parsedQuestions = parseChoiceQuestions(`${item.content || ""}\n\n${item.note || ""}`, String(item.id || item.title || "studyroom"));
+        return { item, parsedQuestions, groups: buildQuestionGroups(parsedQuestions) };
+      })
+      : [];
+
+    return (
+      <div className="min-h-full bg-white pb-8 text-black">
+        <header className="sticky top-0 z-20 bg-white px-5 pt-[calc(env(safe-area-inset-top,0px)+0px)]">
+          <nav className="flex h-16 items-center justify-between">
+            <button
+              type="button"
+              className="-ml-2 flex h-10 w-10 items-center justify-center rounded-lg text-black active:bg-[#F7F7F7]"
+              aria-label="返回 StudyRoom"
+              onClick={closeModulePage}
+            >
+              <ArrowLeftIcon />
+            </button>
+            <div className="max-w-[220px] truncate text-[15px] font-bold">{activeModuleName}</div>
+            <button
+              type="button"
+              className="flex h-10 w-10 items-center justify-center rounded-lg text-black active:bg-[#F7F7F7]"
+              aria-label="刷新 StudyRoom"
+              onClick={() => void load()}
+            >
+              <RefreshIcon />
+            </button>
+          </nav>
+        </header>
+
+        <div className="no-scrollbar flex overflow-x-auto border-b border-[#F0F0F0] bg-white px-5">
+          {studyTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`mr-6 shrink-0 border-b-2 py-3 text-[15px] ${
+                studyView === tab.id ? "border-black font-bold text-black" : "border-transparent font-medium text-[#707070]"
+              }`}
+              onClick={() => {
+                setStudyView(tab.id);
+                setQuizGroupIndex(0);
+                if (tab.id === "questions") setSourceType("question_bank");
+                if (tab.id === "notes") setSourceType("note");
+                if (tab.id === "wrong") setSourceType("wrong_question");
+                if (tab.id === "materials" && ["question_bank", "wrong_question"].includes(sourceType)) setSourceType("pdf");
+              }}
+            >
+              {tab.label} {tab.count}
+            </button>
+          ))}
+        </div>
+
+        <main className="px-5">
+          <section className="mt-6">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase text-[#707070]">Module</span>
+              <span className="text-[11px] font-bold uppercase text-[#707070]">{moduleProgress}%</span>
+            </div>
+            <h1 className="text-[28px] font-bold leading-9">{activeModuleName}</h1>
+            <div className="mt-5 flex items-center gap-3">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#EEEEEE]">
+                <div className="h-full rounded-full bg-[#E67E22]" style={{ width: `${moduleProgress}%` }} />
+              </div>
+              <div className="text-[12px] font-semibold text-[#707070]">{moduleDoneCount}/{moduleItems.length || 0}</div>
+            </div>
+          </section>
+
+          {studyView === "questions" ? (
+            <section className="mt-8">
+              <div className="mb-4 flex items-end justify-between">
+                <h2 className="text-[20px] font-semibold">章节题组</h2>
+                <span className="text-[11px] font-bold uppercase text-[#707070]">Quiz</span>
+              </div>
+              <div className="space-y-3">
+                {questionRows.map(({ item, parsedQuestions, groups }) => (
+                  <article key={String(item.id || item.title || "")} className="border-b border-[#F0F0F0] py-4">
+                    <button
+                      type="button"
+                      className="flex w-full items-start gap-3 text-left"
+                      onClick={() => setSelectedItemId(String(item.id || ""))}
+                    >
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[12px] font-bold text-white">
+                        题
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex flex-wrap gap-1.5">
+                          <span className="rounded bg-[#FFF4E8] px-2 py-1 text-[11px] font-semibold text-[#E67E22]">{parsedQuestions.length || 0} 题</span>
+                          <span className="rounded bg-[#F7F7F7] px-2 py-1 text-[11px] font-semibold text-[#707070]">{groups.length || 0} 组</span>
+                        </div>
+                        <h3 className="text-[15px] font-semibold leading-6">{item.title || "未命名题库"}</h3>
+                        <p className="mt-1 line-clamp-2 text-[13px] leading-6 text-[#707070]">{notePreview(item)}</p>
+                      </div>
+                      <ChevronRightIcon className="mt-2 shrink-0 text-[#B0B0B0]" />
+                    </button>
+                    {groups.length ? (
+                      <div className="no-scrollbar -mx-1 mt-4 flex overflow-x-auto px-1 pb-1">
+                        {groups.map((group, index) => (
+                          <button
+                            key={group.id}
+                            type="button"
+                            className="mr-2 shrink-0 rounded-lg bg-[#F7F7F7] px-3 py-2 text-left text-[12px] font-semibold text-black active:scale-[0.99]"
+                            onClick={() => {
+                              setSelectedItemId(String(item.id || ""));
+                              setQuizGroupIndex(index);
+                            }}
+                          >
+                            {group.label} · {group.questions.length}题
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-4 rounded-lg bg-[#FFF4E8] px-3 py-3 text-[12px] leading-5 text-[#7C3D0A]">
+                        还没识别出标准选择题，先点进去看原整理或重新导入文字版题库。
+                      </div>
+                    )}
+                  </article>
+                ))}
+                {!questionRows.length ? (
+                  <div className="rounded-xl border border-dashed border-[#DADADA] px-4 py-8 text-center text-[13px] leading-6 text-[#707070]">
+                    这个模块还没有题库。上传时选“题库PDF”，会按章节切题组。
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          ) : (
+            <section className="mt-8">
+              <div className="mb-4 flex items-end justify-between">
+                <h2 className="text-[20px] font-semibold">{studyTabs.find((tab) => tab.id === studyView)?.label || "资料"}</h2>
+                <span className="text-[11px] font-bold uppercase text-[#707070]">{tabItems.length} 项</span>
+              </div>
+              <div className="space-y-3">
+                {tabItems.map((item) => (
+                  <article key={String(item.id || "")} className="border-b border-[#F0F0F0] py-4">
+                    <button
+                      type="button"
+                      className="flex w-full items-start gap-3 text-left"
+                      onClick={() => setSelectedItemId(String(item.id || ""))}
+                    >
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[12px] font-bold text-white">
+                        {itemInitial(sourceLabel(item.source_type))}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex flex-wrap gap-1.5">
+                          <span className="rounded bg-[#F7F7F7] px-2 py-1 text-[11px] font-semibold text-[#707070]">{sourceLabel(item.source_type)}</span>
+                          <span className="rounded bg-[#FFF4E8] px-2 py-1 text-[11px] font-semibold text-[#E67E22]">{statusLabel(item.status)}</span>
+                        </div>
+                        <h3 className="text-[15px] font-semibold leading-6">{item.title || "未命名资料"}</h3>
+                        <p className="mt-1 line-clamp-2 text-[13px] leading-6 text-[#707070]">{notePreview(item)}</p>
+                      </div>
+                      <ChevronRightIcon className="mt-2 shrink-0 text-[#B0B0B0]" />
+                    </button>
+                    <div className="mt-4 flex gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg bg-black px-4 py-2.5 text-[12px] font-semibold text-white disabled:opacity-60"
+                        disabled={Boolean(sortingItemId)}
+                        onClick={() => void runCodexSort(item)}
+                      >
+                        {sortingItemId === String(item.id || "") ? "整理中" : item.note ? "重整" : "整理"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg bg-[#F7F7F7] px-4 py-2.5 text-[12px] font-semibold text-black"
+                        onClick={() => void updateItem(item, { status: nextStatus(item.status) })}
+                      >
+                        状态
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {!tabItems.length ? (
+                  <div className="rounded-xl border border-dashed border-[#DADADA] px-4 py-8 text-center text-[13px] leading-6 text-[#707070]">
+                    这里还空着。回首页上传，或者换一个分类看看。
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          )}
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-full bg-white pb-8 text-black">
@@ -1694,17 +1903,13 @@ export function StudyRoomTab() {
                 <button
                   key={module.id}
                   type="button"
-                  className={`rounded-xl p-5 text-left active:scale-[0.995] ${
-                    moduleFilter === module.id ? "bg-black text-white" : "bg-[#F7F7F7] text-black"
-                  }`}
-                  onClick={() => setModuleFilter(module.id)}
+                  className="rounded-xl bg-[#F7F7F7] p-5 text-left text-black active:scale-[0.995]"
+                  onClick={() => openModulePage(module.id)}
                 >
-                  <div className={`mb-3 text-[11px] font-bold uppercase ${moduleFilter === module.id ? "text-white/55" : "text-[#707070]"}`}>
-                    Module
-                  </div>
+                  <div className="mb-3 text-[11px] font-bold uppercase text-[#707070]">Module</div>
                   <h3 className="text-[16px] font-semibold leading-6">{module.label}</h3>
-                  <div className={`mt-1 text-[12px] ${moduleFilter === module.id ? "text-white/55" : "text-[#707070]"}`}>{itemCount} 份资料</div>
-                  <div className={`mt-4 h-1 overflow-hidden rounded-full ${moduleFilter === module.id ? "bg-white/20" : "bg-[#E8E8E8]"}`}>
+                  <div className="mt-1 text-[12px] text-[#707070]">{itemCount} 份资料</div>
+                  <div className="mt-4 h-1 overflow-hidden rounded-full bg-[#E8E8E8]">
                     <div className="h-full rounded-full bg-[#E67E22]" style={{ width: `${progress}%` }} />
                   </div>
                 </button>
@@ -1825,93 +2030,34 @@ export function StudyRoomTab() {
 
         <section className="mt-8">
           <div className="mb-4 flex items-end justify-between">
-            <h2 className="text-[20px] font-semibold">{activeModuleName}</h2>
-            <button
-              className="text-[11px] font-bold uppercase text-[#707070]"
-              onClick={() => {
-                setModuleFilter("all");
-                setStudyView("materials");
-              }}
-            >
-              看全部
-            </button>
+            <h2 className="text-[20px] font-semibold">最近入库</h2>
+            <span className="text-[11px] font-bold uppercase text-[#707070]">Latest</span>
           </div>
-          <div className="no-scrollbar -mx-5 flex overflow-x-auto border-b border-[#F0F0F0] px-5">
-            {studyTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={`mr-6 shrink-0 border-b-2 py-3 text-[15px] ${
-                  studyView === tab.id ? "border-black font-bold text-black" : "border-transparent font-medium text-[#707070]"
-                }`}
-                onClick={() => {
-                  setStudyView(tab.id);
-                  if (tab.id === "questions") setSourceType("question_bank");
-                  if (tab.id === "notes") setSourceType("note");
-                  if (tab.id === "wrong") setSourceType("wrong_question");
-                  if (tab.id === "materials" && ["question_bank", "wrong_question"].includes(sourceType)) setSourceType("pdf");
-                }}
-              >
-                {tab.label} {tab.count}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-5 space-y-3">
-            {visibleItems.map((item) => (
-              <article key={String(item.id || "")} className="rounded-xl border border-[#EEEEEE] bg-white p-4">
+          <div className="space-y-1">
+            {items
+              .slice()
+              .sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")))
+              .slice(0, 3)
+              .map((item) => (
                 <button
+                  key={String(item.id || "")}
                   type="button"
-                  className="flex w-full items-start gap-3 text-left"
+                  className="flex w-full items-center border-b border-[#F0F0F0] py-4 text-left"
                   onClick={() => setSelectedItemId(String(item.id || ""))}
                 >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[12px] font-bold text-white">
-                    {itemInitial(moduleLabel(item.module_id, modules))}
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#F7F7F7] text-[12px] font-bold text-black">
+                    {itemInitial(sourceLabel(item.source_type))}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-1 flex flex-wrap gap-1.5">
-                      <span className="rounded bg-[#F7F7F7] px-2 py-1 text-[11px] font-semibold text-[#707070]">{sourceLabel(item.source_type)}</span>
-                      <span className="rounded bg-[#FFF4E8] px-2 py-1 text-[11px] font-semibold text-[#E67E22]">{statusLabel(item.status)}</span>
-                    </div>
-                    <h3 className="text-[15px] font-semibold leading-6">{item.title || "未命名资料"}</h3>
-                    <p className="mt-2 line-clamp-2 text-[13px] leading-6 text-[#707070]">{notePreview(item)}</p>
+                  <div className="ml-3 min-w-0 flex-1">
+                    <div className="truncate text-[14px] font-semibold">{item.title || "未命名资料"}</div>
+                    <div className="mt-1 text-[12px] text-[#707070]">{moduleLabel(item.module_id, modules)} · {sourceLabel(item.source_type)}</div>
                   </div>
-                  <ChevronRightIcon className="mt-2 shrink-0 text-[#B0B0B0]" />
+                  <ChevronRightIcon className="ml-3 shrink-0 text-[#B0B0B0]" />
                 </button>
-                <div className="mt-4 grid grid-cols-3 gap-2">
-                  <button className="rounded-lg bg-black px-3 py-3 text-[12px] font-semibold text-white" onClick={() => setSelectedItemId(String(item.id || ""))}>
-                    查看
-                  </button>
-                  <button
-                    className="rounded-lg bg-[#FFF4E8] px-3 py-3 text-[12px] font-semibold text-[#B95E0D] disabled:opacity-60"
-                    disabled={Boolean(sortingItemId)}
-                    onClick={() => void runCodexSort(item)}
-                  >
-                    {sortingItemId === String(item.id || "") ? "整理中" : item.note ? "重整" : "整理"}
-                  </button>
-                  <button
-                    className="rounded-lg bg-[#F7F7F7] px-3 py-3 text-[12px] font-semibold text-black"
-                    onClick={() => void updateItem(item, { status: nextStatus(item.status) })}
-                  >
-                    状态
-                  </button>
-                </div>
-                <div className="mt-2 grid grid-cols-3 gap-2">
-                  <button className="rounded-lg bg-[#F7F7F7] px-3 py-3 text-[12px] font-semibold text-black" onClick={() => copySortPrompt(item)}>复制</button>
-                  <button
-                    className="rounded-lg bg-[#F7F7F7] px-3 py-3 text-[12px] font-semibold text-black disabled:opacity-60"
-                    disabled={Boolean(classifyingItemId)}
-                    onClick={() => void autoModuleItem(item)}
-                  >
-                    {classifyingItemId === String(item.id || "") ? "归类中" : "归类"}
-                  </button>
-                  <button className="rounded-lg bg-[#FEE2E2] px-3 py-3 text-[12px] font-semibold text-[#B91C1C]" onClick={() => deleteItem(item)}>删除</button>
-                </div>
-              </article>
-            ))}
-            {!visibleItems.length ? (
+              ))}
+            {!items.length ? (
               <div className="rounded-xl border border-dashed border-[#DADADA] px-4 py-8 text-center text-[13px] leading-6 text-[#707070]">
-                这里还空着。看到 B站课、网页、错题就先扔进来。
+                还没有资料。先上传，之后从上面的模块进入二级页面学习。
               </div>
             ) : null}
           </div>
