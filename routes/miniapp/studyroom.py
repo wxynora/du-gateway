@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import re
 from pathlib import Path
 
@@ -19,6 +20,13 @@ _TEXT_EXTS = {".txt", ".md", ".markdown"}
 _PDF_EXTS = {".pdf"}
 _WORD_EXTS = {".docx"}
 _SOURCE_TYPE_OVERRIDES = {"pdf", "question_bank", "word", "text", "fenbi", "note", "wrong_question"}
+_LOCAL_STUDY_ROOT = Path(os.environ.get("STUDYROOM_LOCAL_IMPORT_DIR") or (Path.home() / "Downloads" / "study")).expanduser()
+_LOCAL_STUDY_MAX_CHARS = 800_000
+_LOCAL_STUDY_MAX_PDF_PAGES = 500
+_LOCAL_STUDY_MATERIAL_MAX_CHUNKS = 24
+_LOCAL_STUDY_QUESTION_MAX_CHUNKS = 160
+_LOCAL_STUDY_QUESTION_GROUP_SIZE = 20
+_LOCAL_STUDY_EXTS = _TEXT_EXTS | _PDF_EXTS | _WORD_EXTS
 
 
 def _clip_import_text(text: str) -> str:
@@ -112,7 +120,7 @@ def _split_long_section(label: str, body: str) -> list[tuple[str, str]]:
     return out
 
 
-def _split_import_chunks(text: str) -> list[dict]:
+def _split_import_chunks(text: str, max_chunks: int = _MAX_IMPORT_CHUNKS) -> list[dict]:
     clean = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not clean:
         return []
@@ -143,8 +151,8 @@ def _split_import_chunks(text: str) -> list[dict]:
     if current_parts:
         chunks.append({"label": _chunk_label(current_labels[0] if current_labels else "正文"), "content": "\n\n".join(current_parts).strip()})
 
-    if len(chunks) > _MAX_IMPORT_CHUNKS:
-        chunks = chunks[:_MAX_IMPORT_CHUNKS]
+    if max_chunks > 0 and len(chunks) > max_chunks:
+        chunks = chunks[:max_chunks]
         chunks[-1]["content"] = (
             str(chunks[-1].get("content") or "").rstrip()
             + "\n\n...[后续内容超过自动拆分上限，先保留前面重点段落]"
@@ -217,6 +225,67 @@ def _extract_docx_text(content: bytes) -> str:
     return "\n".join(parts)
 
 
+def _clip_local_import_text(text: str, max_chars: int = _LOCAL_STUDY_MAX_CHARS) -> str:
+    clean = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(clean) <= max_chars:
+        return clean
+    return clean[:max_chars].rstrip() + "\n\n...[本地导入已截断，可单独加大上限重新导入]"
+
+
+def _extract_local_pdf_text(path: Path, max_chars: int = _LOCAL_STUDY_MAX_CHARS, max_pages: int = _LOCAL_STUDY_MAX_PDF_PAGES) -> str:
+    try:
+        from pypdf import PdfReader
+    except Exception as exc:
+        raise RuntimeError("服务器缺少 pypdf，请先安装 requirements.txt") from exc
+
+    reader = PdfReader(str(path))
+    parts: list[str] = []
+    total = 0
+    for index, page in enumerate(reader.pages[:max_pages], start=1):
+        try:
+            page_text = page.extract_text() or ""
+        except Exception:
+            page_text = ""
+        page_text = page_text.strip()
+        if page_text:
+            block = f"--- 第 {index} 页 ---\n{page_text}"
+            parts.append(block)
+            total += len(block)
+        if total >= max_chars:
+            break
+    return _clip_local_import_text("\n\n".join(parts), max_chars)
+
+
+def _extract_local_docx_text(path: Path, max_chars: int = _LOCAL_STUDY_MAX_CHARS) -> str:
+    try:
+        from docx import Document
+    except Exception as exc:
+        raise RuntimeError("服务器缺少 python-docx，请先安装 requirements.txt") from exc
+
+    doc = Document(str(path))
+    parts: list[str] = []
+    total = 0
+    for paragraph in doc.paragraphs:
+        text = (paragraph.text or "").strip()
+        if text:
+            parts.append(text)
+            total += len(text)
+        if total >= max_chars:
+            break
+    return _clip_local_import_text("\n".join(parts), max_chars)
+
+
+def _extract_local_file_text(path: Path) -> tuple[str, str]:
+    suffix = path.suffix.lower()
+    if suffix in _TEXT_EXTS:
+        return _clip_local_import_text(_decode_text_file(path.read_bytes())), "text"
+    if suffix in _PDF_EXTS:
+        return _extract_local_pdf_text(path), "pdf"
+    if suffix in _WORD_EXTS:
+        return _extract_local_docx_text(path), "word"
+    raise ValueError("暂只支持 pdf、docx、txt、md")
+
+
 def _extract_import_text(filename: str, content: bytes) -> tuple[str, str]:
     suffix = Path(filename or "").suffix.lower()
     if suffix in _TEXT_EXTS:
@@ -226,6 +295,282 @@ def _extract_import_text(filename: str, content: bytes) -> tuple[str, str]:
     if suffix in _WORD_EXTS:
         return _clip_import_text(_extract_docx_text(content)), "word"
     raise ValueError("暂只支持 pdf、docx、txt、md")
+
+
+def _split_answer_section(text: str) -> tuple[str, str]:
+    clean = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    matches = list(re.finditer(r"(?:^|\n)\s*(?:参考答案|答案速查|参考答案及解析|答案解析|答案：|答案)\s*", clean))
+    if not matches:
+        return clean, ""
+    match = next((m for m in matches if m.start() >= len(clean) * 0.35), None)
+    if not match:
+        return clean, ""
+    if match.start() < len(clean) * 0.35:
+        return clean, ""
+    return clean[: match.start()].strip(), clean[match.start() :].strip()
+
+
+def _parse_answer_entries(answer_text: str) -> dict[str, str]:
+    normalized = re.sub(r"【\s*答案\s*】", "答案", str(answer_text or ""))
+    normalized = normalized.replace("正确答案", "答案")
+    normalized = re.sub(r"正\s*确", "正确", normalized)
+    normalized = re.sub(r"错\s*误", "错误", normalized)
+    buckets: dict[str, set[str]] = {}
+    answer_token = r"([A-H]{1,6}|正确|错误|对|错|√|✓|×|✕|X|T|F|TRUE|FALSE)"
+    patterns = (
+        rf"(?:^|[\s。；;，,])(?:第\s*)?(\d{{1,4}})\s*(?:题)?\s*[.、:：）)]?\s*(?:答案\s*[:：]?)?\s*{answer_token}(?=$|[\s。；;，,【\[])",
+        rf"(?:^|\n)\s*(\d{{1,4}})\s*(?:题)?\s*答案\s*[:：]?\s*{answer_token}",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, normalized, flags=re.IGNORECASE):
+            number = str(match.group(1) or "").strip()
+            raw_answer = str(match.group(2) or "").strip().upper()
+            if raw_answer in {"正确", "对", "√", "✓", "T", "TRUE"}:
+                answer = "A"
+            elif raw_answer in {"错误", "错", "×", "✕", "X", "F", "FALSE"}:
+                answer = "B"
+            else:
+                answer = re.sub(r"[^A-H]", "", raw_answer)
+            if number and answer:
+                buckets.setdefault(number, set()).add(answer)
+    return {number: next(iter(values)) for number, values in buckets.items() if len(values) == 1}
+
+
+def _question_numbers(text: str) -> list[str]:
+    seen: list[str] = []
+    for match in re.finditer(r"(?:^|\n)\s*(\d{1,4})\s*[、.．)]\s*(?=\S)", str(text or "")):
+        number = str(match.group(1) or "").strip()
+        if number and number not in seen:
+            seen.append(number)
+    return seen
+
+
+def _is_question_bank_chapter_heading(line: str) -> bool:
+    clean = _chunk_label(line, "")
+    if not clean or len(clean) > 80:
+        return False
+    if re.search(r"\.{4,}|…{2,}", clean):
+        return False
+    if re.match(r"^---\s*第\s*\d+\s*页\s*---$", clean):
+        return False
+    if re.match(r"^\d{1,4}\s*[、.．)]\s*\S", clean):
+        return False
+    if re.match(r"^[A-H]\s*[.．、)]\s*", clean, flags=re.IGNORECASE):
+        return False
+    if re.match(r"^第[一二三四五六七八九十百千万零〇\d]+[章节编篇部分单元讲]\s*[:：、.\s-]?.{0,50}$", clean):
+        return True
+    if re.match(r"^(?:专题|模块|单元|章节)\s*[一二三四五六七八九十百千万零〇\d]+[：:、.\s-]?.{0,50}$", clean):
+        return True
+    if re.match(r"^(?:法理学|宪法|民法|刑法|行政法|经济法|商法|诉讼法|其他法律法规|党建|时政|三农|乡村振兴|基层治理|村务管理|公文写作|计算机)(?:\s|$|[：:、-]).{0,32}$", clean):
+        return True
+    return False
+
+
+def _split_question_bank_chapters(text: str) -> list[dict]:
+    clean = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not clean:
+        return []
+    chapters: list[dict] = []
+    current_title = "未分章"
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        content = "\n".join(current_lines).strip()
+        if content:
+            chapters.append({"title": _chunk_label(current_title, "未分章"), "content": content})
+
+    for raw in clean.splitlines():
+        line = raw.strip()
+        if _is_question_bank_chapter_heading(line):
+            if _chapter_titles_match(current_title, line):
+                current_lines.append(raw)
+                continue
+            flush()
+            current_title = line
+            current_lines = [line]
+            continue
+        current_lines.append(raw)
+    flush()
+    return chapters or [{"title": "未分章", "content": clean}]
+
+
+def _split_question_blocks(text: str) -> tuple[str, list[dict]]:
+    intro: list[str] = []
+    blocks: list[dict] = []
+    current_number = ""
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_number, current_lines
+        content = "\n".join(current_lines).strip()
+        if current_number and content:
+            blocks.append({"number": current_number, "content": content})
+        current_number = ""
+        current_lines = []
+
+    for raw in str(text or "").splitlines():
+        match = re.match(r"^\s*(\d{1,4})\s*[、.．)]\s*(?=\S)", raw)
+        if match:
+            flush()
+            current_number = str(match.group(1) or "").strip()
+            current_lines = [raw]
+        elif current_number:
+            current_lines.append(raw)
+        else:
+            intro.append(raw)
+    flush()
+    return "\n".join(intro).strip(), blocks
+
+
+def _normalize_chapter_key(text: str) -> str:
+    clean = re.sub(r"\s+", "", _chunk_label(text, ""))
+    return re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9]+", "", clean)
+
+
+def _chapter_titles_match(left: str, right: str) -> bool:
+    a = _normalize_chapter_key(left)
+    b = _normalize_chapter_key(right)
+    if not a or not b:
+        return False
+    return a == b or a in b or b in a
+
+
+def _parse_answer_sections(answer_text: str) -> list[dict]:
+    clean = str(answer_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not clean:
+        return []
+    sections: list[dict] = []
+    current_title = "参考答案"
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        content = "\n".join(current_lines).strip()
+        if not content:
+            return
+        entries = _parse_answer_entries(content)
+        if entries:
+            sections.append({"title": _chunk_label(current_title, "参考答案"), "answers": entries})
+
+    for raw in clean.splitlines():
+        line = raw.strip()
+        if not line:
+            current_lines.append(raw)
+            continue
+        if re.match(r"^---\s*第\s*\d+\s*页\s*---$", line) or re.match(r"^\d{1,4}$", line):
+            continue
+        if re.match(r"^(?:参考答案|答案速查|参考答案及解析|答案解析)\s*$", line):
+            continue
+        if _is_question_bank_chapter_heading(line):
+            flush()
+            current_title = line
+            current_lines = []
+            continue
+        current_lines.append(raw)
+    flush()
+    return sections
+
+
+def _answers_for_chapter(chapter_title: str, answer_sections: list[dict]) -> dict[str, str]:
+    if not answer_sections:
+        return {}
+    matched = next((section for section in answer_sections if _chapter_titles_match(chapter_title, str(section.get("title") or ""))), None)
+    if matched:
+        return dict(matched.get("answers") or {})
+    if len(answer_sections) == 1:
+        return dict(answer_sections[0].get("answers") or {})
+    return {}
+
+
+def _split_question_bank_chunks(text: str, max_chunks: int = _LOCAL_STUDY_QUESTION_MAX_CHUNKS) -> list[dict]:
+    body, answers = _split_answer_section(text)
+    answer_sections = _parse_answer_sections(answers)
+    chapters = _split_question_bank_chapters(body)
+    chunks: list[dict] = []
+
+    for chapter in chapters:
+        chapter_title = str(chapter.get("title") or "未分章")
+        intro, blocks = _split_question_blocks(str(chapter.get("content") or ""))
+        answer_lookup = _answers_for_chapter(chapter_title, answer_sections)
+        if not blocks:
+            continue
+        for start in range(0, len(blocks), _LOCAL_STUDY_QUESTION_GROUP_SIZE):
+            group = blocks[start : start + _LOCAL_STUDY_QUESTION_GROUP_SIZE]
+            if not group:
+                continue
+            group_numbers = [str(block.get("number") or "").strip() for block in group]
+            group_text = "\n\n".join(str(block.get("content") or "").strip() for block in group if str(block.get("content") or "").strip())
+            if start == 0 and intro:
+                group_text = f"{intro}\n\n{group_text}".strip()
+            answer_lines = [f"{number}. {answer_lookup[number]}" for number in group_numbers if number and number in answer_lookup]
+            if answer_lines:
+                group_text = f"{group_text.rstrip()}\n\n参考答案\n" + "\n".join(answer_lines)
+            first = group_numbers[0] if group_numbers else str(start + 1)
+            last = group_numbers[-1] if group_numbers else str(start + len(group))
+            chunks.append({"label": f"{chapter_title} 第{first}-{last}题", "content": group_text})
+
+    if not chunks:
+        return _split_import_chunks(body, max_chunks=max_chunks)
+    if max_chunks > 0 and len(chunks) > max_chunks:
+        chunks = chunks[:max_chunks]
+        chunks[-1]["content"] = (
+            str(chunks[-1].get("content") or "").rstrip()
+            + "\n\n...[后续题组超过自动拆分上限，先保留前面题组]"
+        )
+    return chunks
+
+
+def _split_local_material_chunks(text: str, max_chunks: int = _LOCAL_STUDY_MATERIAL_MAX_CHUNKS) -> list[dict]:
+    return _split_import_chunks(text, max_chunks=max_chunks)
+
+
+def _infer_local_source_type(path: Path, detected_source_type: str) -> str:
+    text = "/".join(path.parts[-3:])
+    if "题库" in text or "刷题" in path.name or "题" in path.stem:
+        return "question_bank"
+    return detected_source_type
+
+
+def _infer_local_module_id(path: Path) -> str:
+    text = "/".join(path.parts[-3:])
+    rules = (
+        ("law", ("法律", "宪法", "民法", "刑法", "行政法", "法理")),
+        ("philosophy", ("哲学", "唯物", "辩证法", "认识论", "历史观")),
+        ("economy", ("经济", "财政", "货币", "市场", "宏观", "微观")),
+        ("writing", ("公文", "写作", "通知", "请示", "报告")),
+        ("rural", ("三农", "乡村", "农村", "农业", "农民")),
+        ("governance", ("基层", "治理", "群众", "调解", "信访")),
+        ("village_affairs", ("村务", "村委会", "村干部", "村民")),
+        ("computer", ("计算机", "office", "word", "excel", "wps")),
+        ("party", ("党建", "党员", "党章", "党纪")),
+        ("current_affairs", ("时政", "两会", "政府工作报告")),
+    )
+    for module_id, keywords in rules:
+        if any(keyword in text for keyword in keywords):
+            return module_id
+    return "inbox"
+
+
+def _local_study_key(root: Path, path: Path) -> str:
+    return path.relative_to(root).as_posix()
+
+
+def _existing_local_study_keys() -> set[str]:
+    keys: set[str] = set()
+    for item in r2_store.get_studyroom_data().get("items") or []:
+        note = str((item or {}).get("note") or "")
+        match = re.search(r"本地 study 导入：([^\n]+)", note)
+        if match:
+            keys.add(match.group(1).strip())
+    return keys
+
+
+def _iter_local_study_files(root: Path) -> list[Path]:
+    return sorted(
+        path for path in root.rglob("*")
+        if path.is_file()
+        and path.name != ".DS_Store"
+        and path.suffix.lower() in _LOCAL_STUDY_EXTS
+    )
 
 
 def _with_auto_module(data: dict) -> dict:
@@ -276,7 +621,7 @@ def register_routes(bp) -> None:
         module_id = str(request.form.get("module_id") or "inbox").strip() or "inbox"
         requested_source_type = str(request.form.get("source_type") or "").strip()
         source_type = requested_source_type if requested_source_type in _SOURCE_TYPE_OVERRIDES else detected_source_type
-        chunks = _split_import_chunks(text)
+        chunks = _split_question_bank_chunks(text) if source_type == "question_bank" else _split_import_chunks(text)
         created_items = []
         for index, chunk in enumerate(chunks, start=1):
             chunk_label = str(chunk.get("label") or "").strip()
@@ -307,6 +652,87 @@ def register_routes(bp) -> None:
                 "data": r2_store.get_studyroom_data(),
                 "chars": len(text),
                 "chunks": len(created_items),
+            }
+        )
+
+    @bp.route("/studyroom/local-study/import", methods=["POST"])
+    def miniapp_studyroom_local_study_import():
+        root = _LOCAL_STUDY_ROOT.resolve()
+        if not root.exists() or not root.is_dir():
+            return jsonify({"ok": False, "error": f"没有找到本地 study 文件夹：{root}", "root": str(root)}), 404
+
+        body = request.get_json(silent=True) or {}
+        try:
+            max_files = max(1, min(int(body.get("max_files") or 50), 100))
+        except Exception:
+            max_files = 50
+        skip_existing = bool(body.get("skip_existing", True))
+        files = _iter_local_study_files(root)[:max_files]
+        if not files:
+            return jsonify({"ok": False, "error": f"study 文件夹里没有可导入文件：{root}", "root": str(root)}), 404
+
+        existing_keys = _existing_local_study_keys() if skip_existing else set()
+        created_items = []
+        imported_files = 0
+        skipped_files = 0
+        errors: list[dict] = []
+
+        for path in files:
+            key = _local_study_key(root, path)
+            if key in existing_keys:
+                skipped_files += 1
+                continue
+            try:
+                text, detected_source_type = _extract_local_file_text(path)
+                if not text.strip():
+                    skipped_files += 1
+                    continue
+                source_type = _infer_local_source_type(path, detected_source_type)
+                chunks = _split_question_bank_chunks(text) if source_type == "question_bank" else _split_local_material_chunks(text)
+                chunks = [chunk for chunk in chunks if str(chunk.get("content") or "").strip()]
+                if not chunks:
+                    skipped_files += 1
+                    continue
+                imported_files += 1
+                module_id = _infer_local_module_id(path)
+                title = path.stem.strip() or "未命名资料"
+                for index, chunk in enumerate(chunks, start=1):
+                    chunk_label = str(chunk.get("label") or "").strip()
+                    content = str(chunk.get("content") or "").strip()
+                    item = r2_store.add_studyroom_item(
+                        _with_auto_module(
+                            {
+                                "title": _chunked_title(title, index, len(chunks), chunk_label),
+                                "content": content,
+                                "module_id": module_id,
+                                "source_type": source_type,
+                                "status": "todo",
+                                "note": "\n".join(
+                                    [
+                                        f"本地 study 导入：{key}",
+                                        f"文件类型：{path.parent.name}",
+                                        f"自动拆分：第 {index}/{len(chunks)} 段 · {_chunk_label(chunk_label, f'第 {index} 段')}",
+                                    ]
+                                ),
+                            }
+                        )
+                    )
+                    if item:
+                        created_items.append(item)
+                existing_keys.add(key)
+            except Exception as exc:
+                errors.append({"file": key, "error": str(exc)})
+
+        return jsonify(
+            {
+                "ok": not errors or bool(created_items),
+                "root": str(root),
+                "files": len(files),
+                "imported_files": imported_files,
+                "skipped_files": skipped_files,
+                "created": len(created_items),
+                "errors": errors[:10],
+                "data": r2_store.get_studyroom_data(),
             }
         )
 

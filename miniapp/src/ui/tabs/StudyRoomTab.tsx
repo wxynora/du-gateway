@@ -124,6 +124,15 @@ type StudyRoomAutoModuleResponse = StudyRoomResponse & {
   module_id?: string;
 };
 
+type StudyRoomLocalImportResponse = StudyRoomResponse & {
+  root?: string;
+  files?: number;
+  imported_files?: number;
+  skipped_files?: number;
+  created?: number;
+  errors?: Array<{ file?: string; error?: string }>;
+};
+
 type CodexTask = {
   id?: string;
   status?: "queued" | "running" | "done" | "error" | "cancelled";
@@ -160,8 +169,8 @@ const EXAM_LANES: ExamLane[] = [
   {
     id: "objective",
     title: "客观题底盘",
-    subtitle: "时政、党建、三农、法律、计算机这些先铺熟。",
-    modules: ["current_affairs", "party", "rural", "law", "computer"],
+    subtitle: "时政、党建、三农、法律、哲学、经济、计算机这些先铺熟。",
+    modules: ["current_affairs", "party", "rural", "law", "philosophy", "economy", "computer"],
   },
   {
     id: "case",
@@ -347,6 +356,45 @@ function splitStudyRoomText(text: string): Array<{ label: string; content: strin
     return kept;
   }
   return chunks;
+}
+
+function questionNumbersInText(text: string): string[] {
+  const seen: string[] = [];
+  for (const match of String(text || "").matchAll(/(?:^|\n)\s*(\d{1,4})\s*[、.．)]\s*(?=\S)/g)) {
+    const number = String(match[1] || "").trim();
+    if (number && !seen.includes(number)) seen.push(number);
+  }
+  return seen;
+}
+
+function splitQuestionBankText(text: string): Array<{ label: string; content: string }> {
+  const { body, answers } = stripQuestionBankAnswerSection(text);
+  const chunks = splitStudyRoomText(body || text);
+  const entries = parseAnswerEntries(answers);
+  if (!entries.length) return chunks;
+
+  const buckets = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const bucket = buckets.get(entry.number) || new Set<string>();
+    bucket.add(entry.answer);
+    buckets.set(entry.number, bucket);
+  }
+  const answerLookup = new Map<string, string>();
+  for (const [number, bucket] of buckets.entries()) {
+    if (bucket.size === 1) answerLookup.set(number, Array.from(bucket)[0]);
+  }
+  if (!answerLookup.size) return chunks;
+
+  return chunks.map((chunk) => {
+    const answerLines = questionNumbersInText(chunk.content)
+      .filter((number) => answerLookup.has(number))
+      .map((number) => `${number}. ${answerLookup.get(number)}`);
+    if (!answerLines.length) return chunk;
+    return {
+      ...chunk,
+      content: `${chunk.content.trimEnd()}\n\n参考答案\n${answerLines.join("\n")}`,
+    };
+  });
 }
 
 function chunkedTitle(baseTitle: string, index: number, total: number, label: string): string {
@@ -667,16 +715,19 @@ function parseAnswerEntries(text: string): Array<{ number: string; answer: strin
   const normalized = answerText
     .replace(/【\s*答案\s*】/g, "答案")
     .replace(/正确答案/g, "答案")
+    .replace(/正\s*确/g, "正确")
+    .replace(/错\s*误/g, "错误")
     .replace(/([。；;，,])\s*/g, "$1 ");
+  const answerToken = "([A-H]{1,6}|正确|错误|对|错|√|✓|×|✕|X|T|F|TRUE|FALSE)";
   const patterns = [
-    /(?:^|[\s。；;，,])(?:第\s*)?(\d{1,4})\s*(?:题)?\s*[.、:：）)]?\s*(?:答案\s*[:：]?)?\s*([A-H]{1,6})(?=$|[\s。；;，,])/gi,
-    /(?:^|\n)\s*(\d{1,4})\s*(?:题)?\s*答案\s*[:：]?\s*([A-H]{1,6})/gi,
+    new RegExp(`(?:^|[\\s。；;，,])(?:第\\s*)?(\\d{1,4})\\s*(?:题)?\\s*[.、:：）)]?\\s*(?:答案\\s*[:：]?)?\\s*${answerToken}(?=$|[\\s。；;，,【\\[])`, "gi"),
+    new RegExp(`(?:^|\\n)\\s*(\\d{1,4})\\s*(?:题)?\\s*答案\\s*[:：]?\\s*${answerToken}`, "gi"),
   ];
   const seen = new Set<string>();
   for (const pattern of patterns) {
     for (const match of normalized.matchAll(pattern)) {
       const number = String(match[1] || "").trim();
-      const answer = String(match[2] || "").toUpperCase().replace(/[^A-H]/g, "");
+      const answer = normalizedAnswer(match[2]);
       const key = `${number}:${answer}:${match.index ?? entries.length}`;
       if (number && answer && !seen.has(key)) {
         entries.push({ number, answer });
@@ -747,6 +798,11 @@ function parseChoiceOptions(block: string): { stem: string; options: ParsedChoic
   return { stem, options };
 }
 
+function isJudgementQuestion(block: string, stem: string): boolean {
+  const text = `${block}\n${stem}`;
+  return /【\s*判断\s*】|（\s*[√×对错正确错误]?\s*）|判断下列|判断题/.test(text);
+}
+
 function parseChoiceQuestions(text: string, itemKey: string): ParsedChoiceQuestion[] {
   const { body, answers } = stripQuestionBankAnswerSection(text);
   const chapters = splitQuizTextByChapters(body);
@@ -760,9 +816,15 @@ function parseChoiceQuestions(text: string, itemKey: string): ParsedChoiceQuesti
       const end = index + 1 < markers.length && typeof markers[index + 1].index === "number" ? Number(markers[index + 1].index) : chapter.content.length;
       const rawBlock = chapter.content.slice(start, end).trim();
       const number = String(marker[1] || index + 1);
-      const { stem, options } = parseChoiceOptions(rawBlock);
+      const parsed = parseChoiceOptions(rawBlock);
+      const options = parsed.options.length >= 2
+        ? parsed.options
+        : (isJudgementQuestion(rawBlock, parsed.stem) ? [{ key: "A", text: "正确" }, { key: "B", text: "错误" }] : parsed.options);
+      const stem = parsed.stem
+        .replace(/(?:答案|正确答案)\s*[:：]?\s*(?:[A-H]{1,6}|正确|错误|对|错|√|✓|×|✕|X|T|F|TRUE|FALSE)\s*$/i, "")
+        .trim();
       if (!stem || options.length < 2) continue;
-      const inlineAnswer = rawBlock.match(/(?:答案|正确答案)\s*[:：]?\s*([A-H]{1,6})/i)?.[1];
+      const inlineAnswer = rawBlock.match(/(?:答案|正确答案)\s*[:：]?\s*([A-H]{1,6}|正确|错误|对|错|√|✓|×|✕|X|T|F|TRUE|FALSE)/i)?.[1];
       questions.push({
         id: `${itemKey}-${chapter.key}-${number}-${questions.length}`,
         number,
@@ -858,13 +920,18 @@ function quizGroupKey(item: StudyRoomItem, groupId: string | number): string {
 }
 
 function normalizedAnswer(value?: string): string {
-  return String(value || "").toUpperCase().replace(/[^A-H]/g, "");
+  const raw = String(value || "").trim();
+  const clean = raw.toUpperCase().replace(/\s+/g, "");
+  if (/^(正确|对|√|✓|T|TRUE)$/.test(clean)) return "A";
+  if (/^(错误|错|×|✕|X|F|FALSE)$/.test(clean)) return "B";
+  return clean.replace(/[^A-H]/g, "");
 }
 
 function buildSortPrompt(item: StudyRoomItem, modules: StudyRoomModule[], profile?: StudyRoomData["profile"]): string {
   const moduleLabel = modules.find((m) => m.id === item.module_id)?.label || "待整理";
+  const isQuestionBank = item.source_type === "question_bank";
   return [
-    "请帮我把这份学习资料整理成当前目标可用材料。",
+    "请帮我把这份学习资料整理成按章节学习的第一轮材料。",
     "",
     `当前目标：${profile?.target_name || profile?.exam_name || "安徽省铜陵市枞阳县村级后备干部考试"}`,
     `模块：${moduleLabel}`,
@@ -872,7 +939,15 @@ function buildSortPrompt(item: StudyRoomItem, modules: StudyRoomModule[], profil
     item.url ? `链接：${item.url}` : "",
     `标题：${item.title || "未命名资料"}`,
     "",
-    "请输出：",
+    "处理方式：",
+    "1. 这不是重新写一本教材，第一轮只给学习方向。",
+    "2. 按当前章节/片段整理：看网课该听什么、笔记该抓什么、刷题要验证什么。",
+    "3. 不要大段搬运原文；短、准、贴本章。",
+    isQuestionBank
+      ? "4. 这是题库，只能抽原题代表题；参考答案不确定就写未匹配，不要猜。"
+      : "4. 这是资料，不需要强行编 5 道题，做 2-3 道自测方向题即可。",
+    "",
+    "请固定输出这 9 个小节：",
     "1. 考点笔记",
     "2. 题型落点",
     "3. 高频问法",
@@ -881,7 +956,7 @@ function buildSortPrompt(item: StudyRoomItem, modules: StudyRoomModule[], profil
     "6. 背诵卡",
     "7. 卡点预测",
     "8. 知识债清单",
-    "9. 5道练习题",
+    "9. 练习题",
     "",
     "资料内容：",
     item.content || item.note || item.url || "",
@@ -915,6 +990,7 @@ export function StudyRoomTab() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
+  const [localImporting, setLocalImporting] = useState(false);
   const [activeModuleId, setActiveModuleId] = useState("");
   const [moduleFilter, setModuleFilter] = useState("all");
   const [studyView, setStudyView] = useState<StudyView>("materials");
@@ -1075,10 +1151,9 @@ export function StudyRoomTab() {
       if (isPdfFile(file)) {
         const text = await extractPdfTextInBrowser(file, setUploadStatus);
         if (!text) throw new Error("没有抽到文字；扫描版 PDF/图片需要 OCR，当前还没接。");
-        const chunks = splitStudyRoomText(text);
+        const chunks = uploadSourceType === "question_bank" ? splitQuestionBankText(text) : splitStudyRoomText(text);
         if (!chunks.length) throw new Error("没有抽到可保存的文字");
         const baseTitle = title.trim() || fileStem(file);
-        const createdItems: StudyRoomItem[] = [];
         for (let index = 0; index < chunks.length; index += 1) {
           const chunk = chunks[index];
           setUploadStatus(chunks.length > 1 ? `保存第 ${index + 1}/${chunks.length} 段...` : "保存中...");
@@ -1097,7 +1172,6 @@ export function StudyRoomTab() {
             }),
           });
           if (!j?.ok) throw new Error(j?.error || "保存失败");
-          if (j.item) createdItems.push(j.item);
           setData(j.data || {});
         }
         setTitle("");
@@ -1107,8 +1181,7 @@ export function StudyRoomTab() {
           setStudyView("questions");
           toast(chunks.length > 1 ? `题库已拆成 ${chunks.length} 段，可按题组练` : `题库已导入，解析到 ${parseChoiceQuestions(text, fileStem(file)).length} 道选择题`);
         } else {
-          toast(chunks.length > 1 ? `已拆成 ${chunks.length} 段，开始逐段整理` : `已导入 ${text.length || 0} 字，开始整理`);
-          if (createdItems.length) void sortItemsSequentially(createdItems);
+          toast(chunks.length > 1 ? `已拆成 ${chunks.length} 个章节片段，可按章生成学习方向` : `已导入 ${text.length || 0} 字，可生成学习方向`);
         }
         return;
       }
@@ -1133,14 +1206,33 @@ export function StudyRoomTab() {
         setStudyView("questions");
         toast((j.chunks || importedItems.length || 1) > 1 ? `题库已拆成 ${j.chunks || importedItems.length} 段` : `题库已导入 ${j.chars || 0} 字`);
       } else {
-        toast((j.chunks || importedItems.length || 1) > 1 ? `已拆成 ${j.chunks || importedItems.length} 段，开始逐段整理` : `已导入 ${j.chars || 0} 字，开始整理`);
-        if (importedItems.length) void sortItemsSequentially(importedItems);
+        toast((j.chunks || importedItems.length || 1) > 1 ? `已拆成 ${j.chunks || importedItems.length} 个章节片段，可按章生成学习方向` : `已导入 ${j.chars || 0} 字，可生成学习方向`);
       }
     } catch (e: any) {
       toast(`导入失败：${e?.message || e}`);
     } finally {
       setUploading(false);
       setUploadStatus("");
+    }
+  }
+
+  async function importLocalStudyFolder() {
+    if (localImporting) return;
+    setLocalImporting(true);
+    try {
+      const j = await apiJson<StudyRoomLocalImportResponse>("/miniapp-api/studyroom/local-study/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skip_existing: true }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "本地导入失败");
+      setData(j.data || {});
+      const errorHint = j.errors?.length ? `，${j.errors.length} 个文件有报错` : "";
+      toast(`已读取 study：${j.imported_files || 0} 个文件，生成 ${j.created || 0} 个学习单元${errorHint}`);
+    } catch (e: any) {
+      toast(`本地导入失败：${e?.message || e}`);
+    } finally {
+      setLocalImporting(false);
     }
   }
 
@@ -1213,20 +1305,11 @@ export function StudyRoomTab() {
     }
   }
 
-  async function copyText(text: string, label: string = "内容") {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast(`${label}已复制`);
-    } catch {
-      toast("复制失败，可以长按内容手动复制");
-    }
-  }
-
   async function submitQuestionGroup(item: StudyRoomItem, questions: ParsedChoiceQuestion[], groupId: string | number) {
     if (!questions.length || saving) return;
     const groupKey = quizGroupKey(item, groupId);
-    const answered = questions.filter((question) => quizAnswers[question.id]);
     const gradable = questions.filter((question) => normalizedAnswer(question.answer));
+    const answered = gradable.filter((question) => quizAnswers[question.id]);
     const wrongQuestions = questions.filter((question) => {
       const answer = normalizedAnswer(question.answer);
       const chosen = normalizedAnswer(quizAnswers[question.id]);
@@ -1345,30 +1428,12 @@ export function StudyRoomTab() {
   async function runCodexSort(item: StudyRoomItem) {
     if (sortingItemId) return;
     try {
-      toast("笨笨开始整理了");
+      toast("笨笨开始生成学习方向");
       await runCodexSortItem(item);
-      toast("整理好了，结果写回来了");
+      toast("学习方向写回来了");
     } catch (e: any) {
       toast(`整理失败：${e?.message || e}`);
     }
-  }
-
-  async function sortItemsSequentially(targetItems: StudyRoomItem[]) {
-    if (sortingItemId) return;
-    const queue = targetItems.filter((item) => String(item.id || "").trim());
-    if (!queue.length) return;
-    let done = 0;
-    for (let index = 0; index < queue.length; index += 1) {
-      try {
-        if (queue.length > 1) toast(`整理第 ${index + 1}/${queue.length} 段`);
-        await runCodexSortItem(queue[index]);
-        done += 1;
-      } catch (e: any) {
-        toast(`第 ${index + 1} 段整理失败：${e?.message || e}`);
-        break;
-      }
-    }
-    if (queue.length > 1 && done) toast(`已整理 ${done}/${queue.length} 段`);
   }
 
   function openModulePage(nextModuleId: string, nextView: StudyView = "materials") {
@@ -1389,7 +1454,6 @@ export function StudyRoomTab() {
 
   if (selectedItem) {
     const resultSections = splitStudyResult(selectedItem.note);
-    const sourceText = String(selectedItem.content || selectedItem.url || "").trim();
     const selectedId = String(selectedItem.id || "");
     const shouldParseQuiz = matchesStudyView(selectedItem, "questions") || /题库|题组|试卷|模拟/.test(String(selectedItem.title || ""));
     const parsedQuestions = shouldParseQuiz ? parseChoiceQuestions(`${selectedItem.content || ""}\n\n${selectedItem.note || ""}`, selectedId || selectedItem.title || "studyroom") : [];
@@ -1444,7 +1508,7 @@ export function StudyRoomTab() {
           >
             <div className="text-[11px] font-bold uppercase text-white/55">Study Action</div>
             <h2 className="mt-1 text-[20px] font-semibold">{sortingItemId === selectedId ? "正在整理这份资料" : selectedItem.note ? "重新生成学习方向" : "生成学习方向"}</h2>
-            <p className="mt-2 text-[13px] leading-5 text-white/55">考点笔记、背诵卡、知识债和练习题会写回这个页面。</p>
+            <p className="mt-2 text-[13px] leading-5 text-white/55">按本章生成学习方向、背诵卡、知识债和少量自测。</p>
           </button>
 
           {parsedQuestions.length ? (
@@ -1471,6 +1535,7 @@ export function StudyRoomTab() {
                 {activeQuestionGroup.map((question, index) => {
                   const chosen = normalizedAnswer(quizAnswers[question.id]);
                   const answer = normalizedAnswer(question.answer);
+                  const hasAnswer = Boolean(answer);
                   const submitted = Boolean(activeQuizResult);
                   return (
                     <div key={question.id} className="rounded-xl border border-[#EEEEEE] p-4">
@@ -1482,12 +1547,13 @@ export function StudyRoomTab() {
                         {question.options.map((option) => {
                           const optionKey = normalizedAnswer(option.key);
                           const isChosen = chosen === optionKey;
-                          const isCorrect = submitted && answer && answer === optionKey;
-                          const isWrongChoice = submitted && isChosen && answer && answer !== optionKey;
+                          const isCorrect = submitted && hasAnswer && answer === optionKey;
+                          const isWrongChoice = submitted && isChosen && hasAnswer && answer !== optionKey;
                           return (
                             <button
                               key={`${question.id}-${option.key}`}
                               type="button"
+                              disabled={!hasAnswer || submitted}
                               className={`flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left text-[13px] leading-6 ${
                                 isCorrect
                                   ? "border-[#22C55E] bg-[#DCFCE7] text-[#166534]"
@@ -1495,10 +1561,12 @@ export function StudyRoomTab() {
                                     ? "border-[#EF4444] bg-[#FEE2E2] text-[#991B1B]"
                                     : isChosen
                                       ? "border-[#E67E22] bg-[#FFF4E8] text-[#7C3D0A]"
-                                      : "border-[#EEEEEE] bg-[#F7F7F7] text-[#333333]"
+                                      : hasAnswer
+                                        ? "border-[#EEEEEE] bg-[#F7F7F7] text-[#333333]"
+                                        : "border-[#EEEEEE] bg-[#F7F7F7] text-[#999999] opacity-70"
                               }`}
                               onClick={() => {
-                                if (submitted) return;
+                                if (submitted || !hasAnswer) return;
                                 setQuizAnswers((prev) => ({ ...prev, [question.id]: optionKey }));
                               }}
                             >
@@ -1508,6 +1576,11 @@ export function StudyRoomTab() {
                           );
                         })}
                       </div>
+                      {!hasAnswer ? (
+                        <div className="mt-3 rounded-lg bg-[#FFF4E8] px-3 py-2 text-[12px] leading-5 text-[#7C3D0A]">
+                          这题答案缺失或有争议，先空着，不参与本组计分。
+                        </div>
+                      ) : null}
                       {submitted ? (
                         <div className="mt-3 rounded-lg bg-[#F7F7F7] px-3 py-2 text-[12px] leading-5 text-[#707070]">
                           {answer ? `正确答案：${answer}${chosen ? ` · 你选：${chosen}` : " · 你未作答"}` : "这题没匹配到答案，先不计分。"}
@@ -1585,20 +1658,6 @@ export function StudyRoomTab() {
               </div>
             )}
           </section>
-
-          {sourceText ? (
-            <section className="mt-8">
-              <div className="mb-4 flex items-end justify-between">
-                <h2 className="text-[20px] font-semibold">原资料预览</h2>
-                <button className="rounded-lg bg-[#F7F7F7] px-3 py-2 text-[12px] font-semibold text-black" onClick={() => void copyText(sourceText, "原资料")}>
-                  复制
-                </button>
-              </div>
-              <div className="max-h-[280px] overflow-auto rounded-xl bg-[#F7F7F7] px-4 py-4 whitespace-pre-wrap text-[12px] leading-6 text-[#707070]">
-                {sourceText}
-              </div>
-            </section>
-          ) : null}
 
           <section className="mt-8">
             <div className="mb-4 flex items-end justify-between">
@@ -1999,7 +2058,15 @@ export function StudyRoomTab() {
               }}
             />
           </label>
-          <div className="mt-2 text-[11px] leading-5 text-[#707070]">支持文字版 PDF、docx、txt、md；长资料会按章节/页码拆段，扫描版 PDF 先不做 OCR。</div>
+          <button
+            type="button"
+            className="mt-2 w-full rounded-lg bg-[#FFF4E8] px-4 py-3 text-[13px] font-semibold text-[#B95E0D] active:scale-[0.99] disabled:opacity-60"
+            disabled={localImporting || uploading}
+            onClick={() => void importLocalStudyFolder()}
+          >
+            {localImporting ? "正在读取 Downloads/study..." : "读取 Downloads/study 文件夹"}
+          </button>
+          <div className="mt-2 text-[11px] leading-5 text-[#707070]">支持文字版 PDF、docx、txt、md；长资料会按章节/页码拆成学习单元，页面不展示整本原文。本地文件夹导入只在后端能看到这台电脑的 Downloads/study 时可用。</div>
           <input
             className="mt-2 w-full rounded-lg bg-white px-3 py-3 text-[13px] outline-none placeholder:text-[#A0A0A0]"
             placeholder="标题，例如：B站公文写作第一课"
