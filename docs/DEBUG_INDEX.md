@@ -373,6 +373,12 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 普通聊天归档后才会触发后续总结/动态层。
 - 内部维护请求和部分 followup 请求可能跳过归档。
 - `X-Force-Last4` 会强制带最近 4 轮。
+- 动态层 DS 现在优先要求固定标签格式（`ACTION:` / `CONTENT:` 等），旧 JSON 只作为兼容解析；`new/merge` 的 `content` 如果太短、像半句话或标题词，会重试一次，仍不完整则 skip，不写入 R2。
+
+当前状态（2026-05-15）：
+- 已完成：`services/dynamic_layer_ds.py` 单轮/批量解析都兼容固定标签格式，`scripts/archive_ds_prompt.txt` 已从 JSON 数组改成每轮固定标签块；残缺便签会被质量门槛拦住。
+- 已验证：`.venv/bin/python -m py_compile services/dynamic_layer_ds.py scripts/test_dynamic_layer_ds_parser.py`、`.venv/bin/python scripts/test_dynamic_layer_ds_parser.py`。
+- 未完成 / 下次先查：历史 R2 里已经写进去的残缺动态记忆不会自动清理；如果要修旧数据，先走 MiniApp memory debug 或维护脚本，别直接手删 R2。
 
 ## 核心 Prompt / 风格规则 / 禁言模式
 

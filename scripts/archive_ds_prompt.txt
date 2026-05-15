@@ -48,17 +48,16 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 
 ---
 
-单条输出格式（你需返回「JSON 数组」，每项如下）：
-{
-  "action": "new / merge / skip",
-  "importance": 1-4,
-  "tag": "客厅 / 书房 / 图书馆 / 卧室",
-  "content": "记忆正文（第一人称、简短一句）",
-  "fused_with_id": "（仅 merge 时填已有记忆的 id）",
-  "timestamp": "原始记录时间（ISO 或与输入一致）",
-  "mention_count": 1,
-  "last_mentioned": "同 timestamp"
-}
+每轮输出格式（固定标签格式；每轮一个块，不要 JSON，不要 markdown，不要解释）：
+ROUND: 1
+ACTION: new / skip
+IMPORTANCE: 1-4
+TAG: 客厅 / 书房 / 图书馆 / 卧室
+CONTENT: 记忆正文（第一人称、简短一句；new 必填，至少 12 个有效字符，禁止只写几个字、半句话或标题词）
+FUSED_WITH_ID:
+TIMESTAMP: 原始记录时间（ISO 或与输入一致）
+MENTION_COUNT: 1
+LAST_MENTIONED: 同 timestamp
 
 ---
 
@@ -72,6 +71,6 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 
 重要：只有「有信息量、值得日后回顾」的一轮才 new；废话、纯闲聊、无实质内容的统统 skip。涉及私密/亲密/性行为/性暗示/露骨言语必须 tag=卧室，不要标客厅。
 
-请对每一轮做单条决策，返回一个 JSON 数组，长度等于 rounds 长度，与 rounds 一一对应。每项格式同上述单条（含 timestamp、mention_count、last_mentioned）。本批内只允许 new 或 skip，不要 merge（不要引用本批内刚产生的记忆）。
+请对每一轮做单条决策，每轮输出一个固定标签块，块数等于 rounds 长度，与 rounds 一一对应。每个块以 ROUND: n 开头，块之间用一行 --- 分隔。本批内只允许 new 或 skip，不要 merge（不要引用本批内刚产生的记忆）。
 
-只输出上述格式的 JSON 数组，不要其他文字。
+只输出上述固定标签块，不要其他文字。

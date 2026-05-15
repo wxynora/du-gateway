@@ -1,6 +1,6 @@
 """
 动态层 DS 调用（与「终稿」prompt 对接）：
-- DS 每轮返回单条决策：action(new/merge/skip)、importance(1-4)、tag(单值)、content、fused_with_id(merge 时)。
+- DS 每轮返回单条固定标签决策：ACTION(new/merge/skip)、IMPORTANCE(1-4)、TAG(单值)、CONTENT、FUSED_WITH_ID(merge 时)。
 - 同时返回 emotion_label / scene_type / target_type 三个稳定标签。
 - 网关按 tag 判定卧室（tag === "卧室"）；按 action 单条应用：new 追加、merge 按 id 更新+mention_count+1、skip 不写。
 """
@@ -100,17 +100,15 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 
 ---
 
-输出格式（严格 JSON，只输出这一段，不要其他文字）：
-{{
-  "action": "new / merge / skip",
-  "importance": 1-4,
-  "tag": "客厅 / 书房 / 图书馆 / 卧室",
-  "emotion_label": "positive / negative / neutral",
-  "scene_type": "problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict",
-  "target_type": "external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic",
-  "content": "记忆正文（简短一句，禁止段落或散文）",
-  "fused_with_id": "（仅 merge 时填写，已有记忆的 id）"
-}}
+输出格式（固定标签格式，只输出这一段，不要 JSON，不要 markdown，不要解释）：
+ACTION: new / merge / skip
+IMPORTANCE: 1-4
+TAG: 客厅 / 书房 / 图书馆 / 卧室
+EMOTION: positive / negative / neutral
+SCENE: problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict
+TARGET: external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic
+FUSED_WITH_ID: （仅 merge 时填写已有记忆 id；否则留空）
+CONTENT: 记忆正文（new/merge 必填，简短一句，至少 12 个有效字符，禁止只写几个字、半句话、标题词或散文）
 
 ---
 
@@ -122,16 +120,22 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 当前轮对话：
 {round_messages_json}
 
-请对当前这一轮做单条决策，只输出上述格式的 JSON，不要其他内容。
+请对当前这一轮做单条决策，只输出上述固定标签格式，不要其他内容。
 """
 
-# 批处理用：一次多轮，返回数组；本批内只 new/skip，不 merge
+# 批处理用：一次多轮，DS 输出固定标签块；函数返回决策列表。本批内只 new/skip，不 merge
 _DYNAMIC_LAYER_BATCH_PROMPT = _DYNAMIC_LAYER_PROMPT.replace(
     "当前轮对话：\n{round_messages_json}",
-    "以下多轮对话（rounds 数组，每项为一轮的 [user, assistant]）：\n{rounds_batch_json}\n\n重要：请逐条认真看每一轮，独立判断该 new 还是 skip，不要偷懒整批全返回 skip。有值得记的内容就 new，没有才 skip。\n\n请对每一轮做单条决策，返回一个 **JSON 数组** decisions，长度等于 rounds 长度，与 rounds 一一对应。每项格式同单条（action/importance/tag/content/fused_with_id）。本批内只允许 new 或 skip，不要 merge（不要引用本批内刚产生的记忆）。",
+    "以下多轮对话（rounds 数组，每项为一轮的 [user, assistant]）：\n{rounds_batch_json}\n\n重要：请逐条认真看每一轮，独立判断该 new 还是 skip，不要偷懒整批全返回 skip。有值得记的内容就 new，没有才 skip。每一轮都必须输出一个独立块，块序号从 1 开始，与输入 rounds 顺序一一对应。本批内只允许 new 或 skip，不要 merge（不要引用本批内刚产生的记忆）。",
 ).replace(
-    "请对当前这一轮做单条决策，只输出上述格式的 JSON，不要其他内容。",
-    "只输出上述格式的 JSON 数组，不要其他文字。",
+    "输出格式（固定标签格式，只输出这一段，不要 JSON，不要 markdown，不要解释）：",
+    "每轮输出格式（固定标签格式；每轮一个块，不要 JSON，不要 markdown，不要解释）：\nROUND: 1",
+).replace(
+    "ACTION: new / merge / skip",
+    "ACTION: new / skip",
+).replace(
+    "请对当前这一轮做单条决策，只输出上述固定标签格式，不要其他内容。",
+    "请对每一轮做单条决策，只输出固定标签块。每个块以 ROUND: n 开头，块之间用一行 --- 分隔，不要其他文字。",
 )
 
 
@@ -196,30 +200,55 @@ def _json_loads_loose(raw: str) -> Any:
     return None
 
 
+def _coerce_int_1_to_4(value: Any, default: int = 0) -> int:
+    if isinstance(value, int):
+        return max(1, min(4, value))
+    m = re.search(r"[1-4]", str(value or ""))
+    if not m:
+        return default
+    return max(1, min(4, int(m.group(0))))
+
+
+_FIELD_ALIASES = {
+    "action": "action",
+    "importance": "importance",
+    "tag": "tag",
+    "emotion": "emotion_label",
+    "emotion_label": "emotion_label",
+    "scene": "scene_type",
+    "scene_type": "scene_type",
+    "target": "target_type",
+    "target_type": "target_type",
+    "content": "content",
+    "fused": "fused_with_id",
+    "fused_with_id": "fused_with_id",
+    "timestamp": "timestamp",
+    "mention_count": "mention_count",
+    "last_mentioned": "last_mentioned",
+    "round": "round",
+}
+
+
 def _extract_decision_fields_from_text(text: str) -> Optional[dict]:
-    """兜底解析一行一个字段的 JSON-like 输出，避免格式小错导致整轮记忆丢失。"""
-    allowed = {
-        "action",
-        "importance",
-        "tag",
-        "emotion_label",
-        "scene_type",
-        "target_type",
-        "content",
-        "fused_with_id",
-    }
+    """兜底解析固定标签/一行一个字段输出，避免格式小错导致整轮记忆丢失。"""
     raw_text = str(text or "").strip()
     out: dict[str, Any] = {}
     for line in raw_text.splitlines():
-        m = re.match(r'^\s*"?([A-Za-z_]+)"?\s*[:：]\s*(.+?)\s*,?\s*$', line.strip())
+        m = re.match(r'^\s*"?([A-Za-z_]+)"?\s*[:：]\s*(.*?)\s*,?\s*$', line.strip())
         if not m:
             continue
-        key = m.group(1)
-        if key not in allowed:
+        key = _FIELD_ALIASES.get(m.group(1).strip().lower())
+        if not key:
             continue
         val = m.group(2).strip().rstrip(",").strip()
-        if val in ("null", "None", "none"):
+        if key == "round":
+            continue
+        if val in ("", "null", "None", "none"):
             out[key] = None
+        elif key == "importance":
+            out[key] = _coerce_int_1_to_4(val, default=0)
+        elif key == "mention_count" and re.fullmatch(r"\d+", val):
+            out[key] = int(val)
         elif len(val) >= 2 and val[0] in ("'", '"') and val[-1] == val[0]:
             out[key] = val[1:-1]
         else:
@@ -250,8 +279,8 @@ def _extract_decision_fields_from_text(text: str) -> Optional[dict]:
 
 def _extract_json_from_ds_response(text: str) -> Optional[dict]:
     """
-    从 DS 返回中剥离 markdown、前后缀，只解析第一个完整 JSON 对象。
-    解析器会忽略字符串里的括号；JSON-like 输出也会尽量兜底解析。
+    从 DS 返回中剥离 markdown、前后缀，优先兼容旧 JSON，再解析固定标签格式。
+    解析器会忽略字符串里的括号；一行一个字段也会尽量兜底解析。
     """
     text = _strip_json_fence(text)
     if not text:
@@ -277,6 +306,31 @@ def _normalize_fused_with_id(value: Any) -> Optional[str]:
     return value
 
 
+def _content_quality_issue(content: str) -> str:
+    """拦截明显残缺的动态层便签。只拦低质量，不做语义裁判。"""
+    text = re.sub(r"\s+", "", str(content or ""))
+    if not text:
+        return "missing_content"
+    compact = re.sub(r"[，。！？、；：,.!?;:()（）【】\[\]{}《》\"'“”‘’…—\-_/\\|~`]+", "", text)
+    if len(compact) < 12:
+        return "content_too_short"
+    if re.search(r"[，、；：,:;]$", str(content or "").strip()):
+        return "content_incomplete_tail"
+    low_signal = {
+        "记下了",
+        "先记下",
+        "测试一下",
+        "动态层",
+        "记忆",
+        "老婆说",
+        "辛玥说",
+        "我知道了",
+    }
+    if compact in low_signal:
+        return "content_too_generic"
+    return ""
+
+
 def _decision_structural_issue(obj: dict) -> str:
     action = str(obj.get("action") or "skip").strip().lower()
     content_text = str(obj.get("content") or "").strip()
@@ -285,11 +339,48 @@ def _decision_structural_issue(obj: dict) -> str:
         return "new_missing_content"
     if action == "merge" and not content_text and not fused_with_id:
         return "merge_missing_content_and_id"
+    if action in ("new", "merge"):
+        issue = _content_quality_issue(content_text)
+        if issue:
+            return issue
     return ""
 
 
+def _extract_tagged_decision_blocks(text: str) -> Optional[list]:
+    raw_text = _strip_json_fence(text)
+    if not raw_text:
+        return None
+    lines = raw_text.splitlines()
+    blocks: list[str] = []
+    current: list[str] = []
+    saw_round = False
+    for line in lines:
+        if re.match(r"^\s*ROUND\s*[:：]\s*\d+\s*$", line, flags=re.IGNORECASE):
+            saw_round = True
+            if current:
+                blocks.append("\n".join(current))
+            current = [line]
+            continue
+        if re.match(r"^\s*-{3,}\s*$", line) and current:
+            blocks.append("\n".join(current))
+            current = []
+            continue
+        current.append(line)
+    if current:
+        blocks.append("\n".join(current))
+
+    parsed: list[dict] = []
+    for block in blocks:
+        obj = _extract_decision_fields_from_text(block)
+        if isinstance(obj, dict):
+            parsed.append(obj)
+    if parsed and (saw_round or len(parsed) > 1):
+        return parsed
+    return None
+
+
 def _extract_json_array_from_ds_response(text: str) -> Optional[list]:
-    """从 DS 返回中解析 JSON 数组 [...]。"""
+    """从 DS 返回中解析旧 JSON 数组或新的固定标签块。"""
     text = _strip_json_fence(text)
     if not text:
         return None
@@ -298,6 +389,9 @@ def _extract_json_array_from_ds_response(text: str) -> Optional[list]:
         arr = _json_loads_loose(raw)
         if isinstance(arr, list):
             return arr
+    tagged = _extract_tagged_decision_blocks(text)
+    if isinstance(tagged, list):
+        return tagged
     return None
 
 
@@ -393,10 +487,10 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
                             "role": "user",
                             "content": (
                                 prompt
-                                + "\n\n上一次输出没有解析成功。"
-                                "这次可以输出 JSON，也可以一行一个字段，例如 action: skip。"
+                                + "\n\n上一次输出没有解析成功，或 CONTENT 太短/不完整。"
+                                "这次只输出固定标签格式，例如 ACTION: skip。"
                                 "若 action 是 merge，fused_with_id 必须精确填写当前记忆列表里的已有 id；找不到明确 id 就不要 merge，有新内容改为 new，没有就 skip。"
-                                "若 action 是 new 或 merge，content 必须填写概括后的便签。"
+                                "若 action 是 new 或 merge，CONTENT 必须填写概括后的完整便签，至少 12 个有效字符，不要只写几个字、标题词或半句话。"
                                 "不要解释原因，不要输出长文。"
                             ),
                         }
@@ -425,6 +519,8 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
                     )
                     if attempt == 0:
                         continue
+                    logger.warning("动态层 DS 最终输出仍不完整，按 skip 处理 issue=%s", structural_issue)
+                    return default
                 if attempt > 0:
                     logger.info("动态层 DS 重试解析成功 attempt=%s", attempt + 1)
                 break
@@ -438,8 +534,7 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
 
         tag = (obj.get("tag") or "").strip()
         action = (obj.get("action") or "skip").strip().lower()
-        importance = int(obj.get("importance") or 0)
-        importance = max(1, min(4, importance))  # 1-4
+        importance = _coerce_int_1_to_4(obj.get("importance"), default=0)
         content_text = (obj.get("content") or "").strip()
         fused_with_id = _normalize_fused_with_id(obj.get("fused_with_id"))
         emotion_label = str(obj.get("emotion_label") or "").strip().lower()
@@ -488,8 +583,7 @@ def _normalize_single_decision(obj: Any) -> dict:
     tag = (obj.get("tag") or "").strip()
     action = (obj.get("action") or "skip").strip().lower()
     action = action if action in ("new", "merge", "skip") else "skip"
-    importance = int(obj.get("importance") or 0)
-    importance = max(1, min(4, importance))
+    importance = _coerce_int_1_to_4(obj.get("importance"), default=0)
     content_text = (obj.get("content") or "").strip()
     fused_with_id = obj.get("fused_with_id")
     emotion_label = str(obj.get("emotion_label") or "").strip().lower()
@@ -499,6 +593,13 @@ def _normalize_single_decision(obj: Any) -> dict:
         fused_with_id = str(fused_with_id) if fused_with_id else None
     elif fused_with_id is not None and not fused_with_id.strip():
         fused_with_id = None
+    if action in ("new", "merge"):
+        issue = _content_quality_issue(content_text)
+        if issue:
+            logger.warning("动态层 DS batch 单条内容不完整，按 skip 处理 issue=%s preview=%s", issue, _one_line_preview(content_text))
+            action = "skip"
+            content_text = ""
+            fused_with_id = None
     return {
         "tag": tag,
         "action": action,
@@ -516,7 +617,7 @@ def _normalize_single_decision(obj: Any) -> dict:
 
 def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> list:
     """
-    一次请求处理多轮：把多轮对话发给 DS，返回决策数组，与 batch_rounds 一一对应。
+    一次请求处理多轮：把多轮对话发给 DS，解析出决策列表，与 batch_rounds 一一对应。
     本批内只做 new/skip（prompt 已约束不 merge 本批内新记忆）。
     """
     if not batch_rounds:
@@ -576,7 +677,7 @@ def _load_archive_batch_prompt_template() -> str:
 
 def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
     """
-    归档脚本批处理：用 scripts/archive_ds_prompt.txt 一次请求多轮，返回决策数组。
+    归档脚本批处理：用 scripts/archive_ds_prompt.txt 一次请求多轮，解析出决策列表。
     与 call_dynamic_layer_ds_batch 同逻辑，仅 prompt 来源不同。
     """
     if not batch_rounds:

@@ -62,7 +62,7 @@ DS 分类 + 决策（new/merge/skip，tag：书房/客厅/图书馆/卧室）
 - **用法**：`python scripts/feed_conversation_for_memory.py [--window-id ""] [--batch-size 8] <input.json>`，一般用 `feed_input.json`。`--batch-size 8` 表示每 8 轮打成一个 DS 请求（用归档 prompt）。
 - **做的事**：
   - 读取 `window_id` 和 `rounds`；本地预筛空轮（极短/纯嗯啊哦）不调 DS。
-  - **batch_size > 1**：非空轮按批打包，每批调 `call_archive_batch_ds`（读 `scripts/archive_ds_prompt.txt`），拿到决策数组后逐条 `_apply_one_decision`。
+  - **batch_size > 1**：非空轮按批打包，每批调 `call_archive_batch_ds`（读 `scripts/archive_ds_prompt.txt`），拿到固定标签块解析出的决策列表后逐条 `_apply_one_decision`。
   - **batch_size == 1**：逐轮调 `_step_dynamic_layer_evolve`（网关单轮 DS），只跑动态层和卧室 Notion。
   - 不写窗口存档、不做每 4 轮总结。
 
@@ -80,14 +80,14 @@ DS 分类 + 决策（new/merge/skip，tag：书房/客厅/图书馆/卧室）
      - **merge**：找到 `fused_with_id` 对应的旧记忆，用 DS 返回的 content 覆盖，更新 `last_mentioned` 和 `mention_count`（+1），写回 R2，并 `promote_to_core_cache`。
      - **skip**：不写。
 
-当前实现里，时间用的是「当前时间」`now_beijing_iso()`；归档模式要改成用「本条记录的原始时间」（由 DS 返回的 timestamp，或从输入 round 里传入）。
+当前实现会优先使用 DS 决策里的 `timestamp` / `last_mentioned`；没有这些字段时才回退到「当前时间」`now_beijing_iso()`。
 
 ---
 
 ## 4. DS 与 prompt
 
-- **正常对话**：用 `services/dynamic_layer_ds.py` 里的 `_DYNAMIC_LAYER_PROMPT`，`call_dynamic_layer_ds(round_messages, current_memories)` 返回 tag、action、importance、content、fused_with_id。
-- **归档脚本**：用 `scripts/archive_ds_prompt.txt` 的 prompt（批处理多轮版）；DS 返回 `timestamp`、`mention_count`、`last_mentioned` 等。脚本批处理时调用 `call_archive_batch_ds` 读该文件发请求；卧室存**本轮原文**到 Notion，不存 DS 的 content。
+- **正常对话**：用 `services/dynamic_layer_ds.py` 里的 `_DYNAMIC_LAYER_PROMPT`，要求 DS 输出固定标签格式；`call_dynamic_layer_ds(round_messages, current_memories)` 解析出 tag、action、importance、content、fused_with_id。
+- **归档脚本**：用 `scripts/archive_ds_prompt.txt` 的 prompt（批处理多轮版）；DS 每轮输出固定标签块，包含 `timestamp`、`mention_count`、`last_mentioned` 等。脚本批处理时调用 `call_archive_batch_ds` 读该文件发请求；卧室存**本轮原文**到 Notion，不存 DS 的 content。
 
 ---
 
@@ -110,7 +110,7 @@ DS 分类 + 决策（new/merge/skip，tag：书房/客厅/图书馆/卧室）
 ## 7. 尚未接好的部分（归档专用）
 
 - 转换或 feed 输入里带**每轮原始时间**（如从导出 `createdAt` 解析），并传给 `_step_dynamic_layer_evolve` 或 DS 入参。
-- 归档跑时改用 **archive_ds_prompt**，并解析 DS 返回的 timestamp、mention_count、last_mentioned；写 R2 时用这些值，且动态层按时间排序。
+- 归档跑时使用 **archive_ds_prompt**，解析 DS 返回的 timestamp、mention_count、last_mentioned；写 R2 时用这些值，且动态层按时间排序。
 - 卧室：原文按「该条记录原始时间」存到 Notion（若 Notion API 支持带时间则带上，否则至少逻辑上按轮顺序对应原始时间）。
 
 以上即当前「历史记录归档」从导出到 R2/Notion 的完整流程。
