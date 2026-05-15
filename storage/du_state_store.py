@@ -8,6 +8,7 @@ from utils.time_aware import now_beijing_iso
 
 R2_KEY_DU_THOUGHT_LATEST = "global/du_thought_latest.json"
 R2_KEY_DU_DAILY_STATE = "global/du_daily_state.json"
+R2_KEY_DU_DAILY_ARCHIVE = "global/du_daily_archive.json"
 R2_KEY_XINYUE_PORTRAIT_CANDIDATES = "portrait_memory/xinyue_candidates.json"
 R2_KEY_DU_PORTRAIT_CANDIDATES = "portrait_memory/du_candidates.json"
 R2_KEY_INTERACTION_CANDIDATES = "portrait_memory/interaction_candidates.json"
@@ -88,6 +89,53 @@ def get_du_daily_state() -> Optional[dict]:
     if not isinstance(data, dict):
         return None
     return data
+
+
+def get_du_daily_archive() -> list[dict]:
+    return _get_items_json(R2_KEY_DU_DAILY_ARCHIVE)
+
+
+def save_du_daily_archive(items: list[dict]) -> bool:
+    return _save_items_json(R2_KEY_DU_DAILY_ARCHIVE, items)
+
+
+def upsert_du_daily_archive_entry(entry: dict, limit: int = 45) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    day = str(entry.get("day") or "").strip()
+    if not day:
+        return False
+    items = get_du_daily_archive()
+    now = now_beijing_iso()
+    payload = {
+        "id": day,
+        "day": day,
+        "yesterday_summary": str(entry.get("yesterday_summary") or "").strip(),
+        "today_summary": str(entry.get("today_summary") or "").strip(),
+        "today_events": entry.get("today_events") if isinstance(entry.get("today_events"), list) else [],
+        "content": str(entry.get("content") or "").strip(),
+        "source": str(entry.get("source") or "du_daily").strip() or "du_daily",
+        "trigger_kind": str(entry.get("trigger_kind") or "").strip(),
+        "created_at": str(entry.get("created_at") or now).strip(),
+        "updated_at": now,
+    }
+    replaced = False
+    out: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("day") or "").strip() == day:
+            old_created = str(item.get("created_at") or "").strip()
+            if old_created:
+                payload["created_at"] = old_created
+            out.append(payload)
+            replaced = True
+        else:
+            out.append(item)
+    if not replaced:
+        out.append(payload)
+    out = sorted(out, key=lambda x: str((x or {}).get("day") or ""))[-max(1, int(limit or 45)) :]
+    return save_du_daily_archive(out)
 
 
 def _get_items_json(key: str) -> list[dict]:

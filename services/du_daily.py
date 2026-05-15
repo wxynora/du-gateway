@@ -22,6 +22,15 @@ _SLEEP_STEP_DELTA_MAX = 20
 _SLEEP_HEART_RATE_MAX = 95
 _MAX_TODAY_EVENTS = 8
 
+_CONFLICT_STRONG_RE = re.compile(
+    r"(吵架|吵起来|吵过|冷暴力|退缩|主观能动性|你凶我|你又凶|不想说|不喜欢你了|"
+    r"态度不好|没接住|你没接住|失望|你又退|你又缩|你又把球|你又甩|你又敷衍)",
+    re.IGNORECASE,
+)
+_CONFLICT_EMOTION_RE = re.compile(r"(生气|气死|烦死|烦你|崩溃|委屈|难受|伤心|火大)", re.IGNORECASE)
+_CONFLICT_RELATION_RE = re.compile(r"(你|渡|老公|我们|我俩|咱俩)", re.IGNORECASE)
+_CONFLICT_QUESTION_RE = re.compile(r"你.*(为什么|怎么|到底|是不是).*(又|总是|老是|每次|一直)", re.IGNORECASE)
+
 _SLEEP_RE = re.compile(
     r"(晚安|先睡了|我(?:先|要|准备|打算|去|该|真的|马上)?睡(?:了|觉了|觉|觉去)?|去睡(?:了|觉)?|困得不行.*睡|撑不住.*睡)",
     re.IGNORECASE,
@@ -107,6 +116,36 @@ def _extract_last_user_text(messages: list[dict]) -> str:
     return ""
 
 
+def _extract_recent_dialogue_facts(messages: list[dict], limit: int = 6) -> list[str]:
+    rows: list[str] = []
+    for msg in reversed(messages or []):
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        text = _content_to_text(msg.get("content"))
+        if not text:
+            continue
+        speaker = "辛玥" if role == "user" else "我"
+        text = re.sub(r"\s+", " ", text).strip()
+        rows.append(f"{speaker}：{text[:180]}")
+        if len(rows) >= limit:
+            break
+    return list(reversed(rows))
+
+
+def _looks_like_conflict_or_relation_tension(text: str) -> bool:
+    s = re.sub(r"\s+", "", str(text or "").strip())
+    if not s:
+        return False
+    if _CONFLICT_STRONG_RE.search(s):
+        return True
+    if _CONFLICT_EMOTION_RE.search(s) and _CONFLICT_RELATION_RE.search(s):
+        return True
+    return bool(_CONFLICT_QUESTION_RE.search(s))
+
+
 def is_explicit_user_sleep_intent(text: str) -> bool:
     s = re.sub(r"\s+", "", str(text or "").strip())
     if not s:
@@ -146,6 +185,35 @@ def _normalize_summary_text(text: Any, max_chars: int = 900) -> str:
     if len(s) > max_chars:
         s = s[: max_chars - 1].rstrip() + "…"
     return s
+
+
+def _archive_daily_state(state: dict, trigger_kind: str = "") -> None:
+    if not isinstance(state, dict):
+        return
+    day = str(state.get("day") or "").strip()
+    if not day:
+        return
+    today_summary = _normalize_summary_text(state.get("today_summary") or "")
+    today_events = _normalize_today_events(state.get("today_events") or state.get("today_timeline") or [])
+    if not today_summary and not today_events:
+        return
+    content = format_du_daily_block(str(state.get("yesterday_summary") or "").strip(), today_summary, today_events)
+    try:
+        from storage.du_state_store import upsert_du_daily_archive_entry
+
+        upsert_du_daily_archive_entry(
+            {
+                "day": day,
+                "yesterday_summary": str(state.get("yesterday_summary") or "").strip(),
+                "today_summary": today_summary,
+                "today_events": today_events,
+                "content": content,
+                "source": "du_daily",
+                "trigger_kind": trigger_kind,
+            }
+        )
+    except Exception:
+        logger.warning("du_daily 日归档失败 day=%s", day, exc_info=True)
 
 
 def _looks_like_event_line(text: str) -> bool:
@@ -341,6 +409,7 @@ def prepare_state_for_today(raw: Optional[dict], today: str = "") -> tuple[dict,
     changed = False
     if state["day"] != target_day:
         if state["today_summary"] or state["today_events"]:
+            _archive_daily_state(state, trigger_kind="day_rollover")
             state["yesterday_summary"] = _normalize_summary_text(
                 state["today_summary"]
                 or _fallback_compress_today_lines(state["today_events"], state.get("yesterday_summary") or "")
@@ -424,6 +493,17 @@ def build_chat_trigger(window_id: str, body: dict, headers: Optional[dict] = Non
         _save_sleep_candidate(state, text)
     else:
         _clear_sleep_candidate_if_needed(state)
+    if _looks_like_conflict_or_relation_tension(text):
+        facts = _extract_recent_dialogue_facts((body or {}).get("messages") or [])
+        if not facts:
+            facts = [f"辛玥：{text[:180]}"]
+        return {
+            "kind": "conflict",
+            "hard": True,
+            "reason": "对话出现争执或关系拉扯，应写进渡的日常",
+            "facts": facts,
+            "topic_key": "conflict",
+        }
     return None
 
 
@@ -550,6 +630,9 @@ def save_hidden_block(raw_block: str, trigger: Optional[dict] = None) -> bool:
             _normalize_today_events(state.get("today_events") or state.get("today_timeline") or []),
             fallback_summary=str(state.get("today_summary") or "").strip(),
         )
+        archive_state = dict(state)
+        archive_state["today_summary"] = summary
+        _archive_daily_state(archive_state, trigger_kind=kind or "today_summary")
         state["today_summary"] = summary
         state["today_events"] = []
         state["today_timeline"] = []
