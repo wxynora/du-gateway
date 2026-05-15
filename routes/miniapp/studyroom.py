@@ -550,6 +550,13 @@ def _infer_local_module_id(path: Path) -> str:
     return "inbox"
 
 
+def _infer_local_chunk_module_id(path: Path, chunk_label: str, content: str, source_type: str) -> str:
+    guessed = r2_store.guess_studyroom_module_id(chunk_label, content, "", source_type)
+    if guessed != "inbox":
+        return guessed
+    return _infer_local_module_id(path)
+
+
 def _local_study_key(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
@@ -690,15 +697,19 @@ def register_routes(bp) -> None:
                 source_type = _infer_local_source_type(path, detected_source_type)
                 chunks = _split_question_bank_chunks(text) if source_type == "question_bank" else _split_local_material_chunks(text)
                 chunks = [chunk for chunk in chunks if str(chunk.get("content") or "").strip()]
+                if source_type == "question_bank" and not any("\n\n参考答案\n" in str(chunk.get("content") or "") for chunk in chunks):
+                    skipped_files += 1
+                    errors.append({"file": key, "error": "题库未识别到可判参考答案，已跳过"})
+                    continue
                 if not chunks:
                     skipped_files += 1
                     continue
                 imported_files += 1
-                module_id = _infer_local_module_id(path)
                 title = path.stem.strip() or "未命名资料"
                 for index, chunk in enumerate(chunks, start=1):
                     chunk_label = str(chunk.get("label") or "").strip()
                     content = str(chunk.get("content") or "").strip()
+                    module_id = _infer_local_chunk_module_id(path, chunk_label, content, source_type)
                     item = r2_store.add_studyroom_item(
                         _with_auto_module(
                             {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch, apiJson } from "../api";
+import { apiJson } from "../api";
 import { useToast } from "../toast";
 
 type StudyRoomModule = {
@@ -114,12 +114,6 @@ type StudyRoomResponse = {
   error?: string;
 };
 
-type StudyRoomImportResponse = StudyRoomResponse & {
-  chars?: number;
-  chunks?: number;
-  items?: StudyRoomItem[];
-};
-
 type StudyRoomAutoModuleResponse = StudyRoomResponse & {
   module_id?: string;
 };
@@ -199,236 +193,7 @@ const EXAM_LANES: ExamLane[] = [
 ];
 const CODEX_SORT_POLL_MS = 2200;
 const CODEX_SORT_TIMEOUT_MS = 8 * 60 * 1000;
-const MAX_CLIENT_IMPORT_CHARS = 120000;
-const MAX_CLIENT_PDF_PAGES = 200;
-const STUDYROOM_CHUNK_TARGET_CHARS = 9000;
-const STUDYROOM_CHUNK_MAX_CHARS = 12000;
-const STUDYROOM_MAX_IMPORT_CHUNKS = 10;
 const STUDYROOM_QUIZ_GROUP_SIZE = 20;
-
-function clipClientImportText(text: string): string {
-  const clean = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  if (clean.length <= MAX_CLIENT_IMPORT_CHARS) return clean;
-  return `${clean.slice(0, MAX_CLIENT_IMPORT_CHARS).trimEnd()}\n\n...[导入时已截断，原文件仍可重新拆分导入]`;
-}
-
-function fileStem(file: File): string {
-  const name = String(file.name || "").trim();
-  return name.replace(/\.[^.]+$/, "").trim() || "未命名资料";
-}
-
-function isPdfFile(file: File): boolean {
-  const name = String(file.name || "").toLowerCase();
-  const type = String(file.type || "").toLowerCase();
-  return type === "application/pdf" || name.endsWith(".pdf");
-}
-
-function pdfTextContentToLines(items: any[]): string {
-  const rows = new Map<number, { x: number; text: string }[]>();
-  for (const item of items || []) {
-    const text = String(item?.str || "").trim();
-    if (!text) continue;
-    const transform = Array.isArray(item?.transform) ? item.transform : [];
-    const y = Math.round(Number(transform[5] || 0));
-    const x = Number(transform[4] || 0);
-    const row = rows.get(y) || [];
-    row.push({ x, text });
-    rows.set(y, row);
-  }
-  if (!rows.size) {
-    return (items || []).map((item) => String(item?.str || "").trim()).filter(Boolean).join(" ");
-  }
-  return Array.from(rows.entries())
-    .sort((a, b) => b[0] - a[0])
-    .map(([, row]) => row.sort((a, b) => a.x - b.x).map((part) => part.text).join(" ").replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .join("\n");
-}
-
-function isStudyRoomHeading(line: string): boolean {
-  const clean = String(line || "").trim();
-  if (!clean || clean.length > 90) return false;
-  if (/^---\s*第\s*\d+\s*页\s*---$/.test(clean)) return false;
-  return [
-    /^第[一二三四五六七八九十百千\d]+[章节讲课部分单元]\s*[:：、.\s-]?.{0,60}$/,
-    /^[一二三四五六七八九十]+[、.．]\s*\S.{0,60}$/,
-    /^\d+(?:\.\d+){0,3}[、.．\s]\s*\S.{0,60}$/,
-    /^（[一二三四五六七八九十\d]+）\s*\S.{0,60}$/,
-  ].some((pattern) => pattern.test(clean));
-}
-
-function chunkLabel(label: string, fallback = "正文"): string {
-  const clean = String(label || "").replace(/\s+/g, " ").replace(/^---\s*|\s*---$/g, "").trim();
-  return (clean || fallback).slice(0, 36);
-}
-
-function splitSectionsByHeadings(text: string): Array<{ label: string; content: string }> {
-  const sections: Array<{ label: string; content: string }> = [];
-  let label = "开头";
-  let lines: string[] = [];
-  for (const raw of text.split(/\n/)) {
-    const line = raw.trimEnd();
-    if (isStudyRoomHeading(line) && lines.length) {
-      const content = lines.join("\n").trim();
-      if (content) sections.push({ label, content });
-      label = line.trim();
-      lines = [line];
-    } else {
-      lines.push(line);
-      if (isStudyRoomHeading(line)) label = line.trim();
-    }
-  }
-  const content = lines.join("\n").trim();
-  if (content) sections.push({ label, content });
-  return sections;
-}
-
-function splitSectionsByPages(text: string): Array<{ label: string; content: string }> {
-  const sections = text
-    .split(/(?=^---\s*第\s*\d+\s*页\s*---$)/m)
-    .map((part, index) => {
-      const content = part.trim();
-      if (!content) return null;
-      const firstLine = content.split(/\n/)[0]?.trim() || "";
-      const label = /^---\s*第\s*\d+\s*页\s*---$/.test(firstLine) ? firstLine : `第 ${index + 1} 段`;
-      return { label, content };
-    })
-    .filter(Boolean) as Array<{ label: string; content: string }>;
-  return sections.length ? sections : [{ label: "正文", content: text.trim() }];
-}
-
-function splitLongSection(section: { label: string; content: string }): Array<{ label: string; content: string }> {
-  const clean = section.content.trim();
-  if (clean.length <= STUDYROOM_CHUNK_MAX_CHARS) return clean ? [section] : [];
-  const out: Array<{ label: string; content: string }> = [];
-  let current: string[] = [];
-  for (let part of clean.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean)) {
-    while (part.length > STUDYROOM_CHUNK_MAX_CHARS) {
-      if (current.length) {
-        out.push({ label: section.label, content: current.join("\n\n").trim() });
-        current = [];
-      }
-      out.push({ label: section.label, content: part.slice(0, STUDYROOM_CHUNK_MAX_CHARS).trimEnd() });
-      part = part.slice(STUDYROOM_CHUNK_MAX_CHARS).trimStart();
-    }
-    const candidate = [...current, part].join("\n\n").trim();
-    if (current.length && candidate.length > STUDYROOM_CHUNK_MAX_CHARS) {
-      out.push({ label: section.label, content: current.join("\n\n").trim() });
-      current = [part];
-    } else {
-      current.push(part);
-    }
-  }
-  if (current.length) out.push({ label: section.label, content: current.join("\n\n").trim() });
-  return out;
-}
-
-function splitStudyRoomText(text: string): Array<{ label: string; content: string }> {
-  const clean = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  if (!clean) return [];
-  if (clean.length <= STUDYROOM_CHUNK_MAX_CHARS) return [{ label: "正文", content: clean }];
-
-  let sections = splitSectionsByHeadings(clean);
-  if (sections.length <= 1) sections = splitSectionsByPages(clean);
-  const pieces = sections.flatMap(splitLongSection);
-  const chunks: Array<{ label: string; content: string }> = [];
-  let currentParts: string[] = [];
-  let currentLabels: string[] = [];
-
-  for (const piece of pieces) {
-    const candidate = [...currentParts, piece.content].join("\n\n").trim();
-    if (currentParts.length && candidate.length > STUDYROOM_CHUNK_TARGET_CHARS) {
-      chunks.push({ label: chunkLabel(currentLabels[0] || "正文"), content: currentParts.join("\n\n").trim() });
-      currentParts = [piece.content];
-      currentLabels = [piece.label];
-    } else {
-      currentParts.push(piece.content);
-      if (piece.label && !currentLabels.includes(piece.label)) currentLabels.push(piece.label);
-    }
-  }
-  if (currentParts.length) chunks.push({ label: chunkLabel(currentLabels[0] || "正文"), content: currentParts.join("\n\n").trim() });
-  if (chunks.length > STUDYROOM_MAX_IMPORT_CHUNKS) {
-    const kept = chunks.slice(0, STUDYROOM_MAX_IMPORT_CHUNKS);
-    kept[kept.length - 1] = {
-      ...kept[kept.length - 1],
-      content: `${kept[kept.length - 1].content.trimEnd()}\n\n...[后续内容超过自动拆分上限，先保留前面重点段落]`,
-    };
-    return kept;
-  }
-  return chunks;
-}
-
-function questionNumbersInText(text: string): string[] {
-  const seen: string[] = [];
-  for (const match of String(text || "").matchAll(/(?:^|\n)\s*(\d{1,4})\s*[、.．)]\s*(?=\S)/g)) {
-    const number = String(match[1] || "").trim();
-    if (number && !seen.includes(number)) seen.push(number);
-  }
-  return seen;
-}
-
-function splitQuestionBankText(text: string): Array<{ label: string; content: string }> {
-  const { body, answers } = stripQuestionBankAnswerSection(text);
-  const chunks = splitStudyRoomText(body || text);
-  const entries = parseAnswerEntries(answers);
-  if (!entries.length) return chunks;
-
-  const buckets = new Map<string, Set<string>>();
-  for (const entry of entries) {
-    const bucket = buckets.get(entry.number) || new Set<string>();
-    bucket.add(entry.answer);
-    buckets.set(entry.number, bucket);
-  }
-  const answerLookup = new Map<string, string>();
-  for (const [number, bucket] of buckets.entries()) {
-    if (bucket.size === 1) answerLookup.set(number, Array.from(bucket)[0]);
-  }
-  if (!answerLookup.size) return chunks;
-
-  return chunks.map((chunk) => {
-    const answerLines = questionNumbersInText(chunk.content)
-      .filter((number) => answerLookup.has(number))
-      .map((number) => `${number}. ${answerLookup.get(number)}`);
-    if (!answerLines.length) return chunk;
-    return {
-      ...chunk,
-      content: `${chunk.content.trimEnd()}\n\n参考答案\n${answerLines.join("\n")}`,
-    };
-  });
-}
-
-function chunkedTitle(baseTitle: string, index: number, total: number, label: string): string {
-  const cleanTitle = String(baseTitle || "").trim() || "未命名资料";
-  if (total <= 1) return cleanTitle;
-  return `${cleanTitle}（${index}/${total}：${chunkLabel(label, `第 ${index} 段`)}）`;
-}
-
-async function extractPdfTextInBrowser(file: File, onStatus?: (text: string) => void): Promise<string> {
-  onStatus?.("读取 PDF...");
-  const [{ getDocument, GlobalWorkerOptions }, workerSrc] = await Promise.all([
-    import("pdfjs-dist"),
-    import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
-  ]);
-  GlobalWorkerOptions.workerSrc = String(workerSrc.default || "");
-
-  const data = new Uint8Array(await file.arrayBuffer());
-  const pdf = await getDocument({ data }).promise;
-  try {
-    const pageCount = Math.min(Number(pdf.numPages || 0), MAX_CLIENT_PDF_PAGES);
-    const parts: string[] = [];
-    for (let pageNo = 1; pageNo <= pageCount; pageNo += 1) {
-      onStatus?.(`解析第 ${pageNo}/${pageCount} 页`);
-      const page = await pdf.getPage(pageNo);
-      const textContent = await page.getTextContent();
-      const pageText = pdfTextContentToLines(textContent.items as any[]);
-      if (pageText) parts.push(`--- 第 ${pageNo} 页 ---\n${pageText}`);
-      if (parts.join("\n\n").length >= MAX_CLIENT_IMPORT_CHARS) break;
-    }
-    return clipClientImportText(parts.join("\n\n"));
-  } finally {
-    await pdf.destroy().catch(() => undefined);
-  }
-}
 
 function normalizeModules(input: unknown): StudyRoomModule[] {
   if (!Array.isArray(input)) return [];
@@ -582,19 +347,27 @@ function extractKnowledgeDebts(item: StudyRoomItem): KnowledgeDebtItem[] {
 
 function notePreview(item: StudyRoomItem): string {
   const note = String(item.note || "").trim();
-  if (note) {
+  if (hasStudyResult(note)) {
     const firstUsefulLine = note
       .split(/\r?\n/)
       .map((line) => line.trim())
       .find((line) => line && !/^(#{1,6}\s*)?(考点笔记|题型落点|高频问法|易错点|应试用法|背诵卡|卡点预测|知识债清单|练习题|5道练习题)\s*[:：]?$/.test(line));
     return compactText(firstUsefulLine || note, 92);
   }
-  return compactText(item.content || item.url || "还没整理，点进去可以看原资料和发起整理。", 92);
+  return compactText(item.content || item.url || "还没整理，点进去可以生成学习方向。", 92);
+}
+
+function hasStudyResult(note?: string): boolean {
+  return /(?:^|\n)\s*(?:#{1,6}\s*)?(?:考点笔记|题型落点|高频问法|易错点|应试用法|背诵卡|卡点预测|知识债清单|练习题|5道练习题)\s*[:：]?\s*(?:\n|$)/.test(String(note || ""));
+}
+
+function stripStudyRoomMeta(note?: string): string {
+  return String(note || "").replace(/\n?\s*<!--\s*studyroom-meta[\s\S]*?-->\s*$/i, "").trim();
 }
 
 function splitStudyResult(note?: string): StudyResultSection[] {
-  const text = String(note || "").trim();
-  if (!text) return [];
+  const text = stripStudyRoomMeta(note);
+  if (!text || !hasStudyResult(text)) return [];
   const sectionNames = "(考点笔记|题型落点|高频问法|易错点|应试用法|背诵卡|卡点预测|知识债清单|练习题|5道练习题)";
   const headingRe = new RegExp(`^\\s*(?:#{1,6}\\s*)?(?:\\d+[.、)]\\s*)?${sectionNames}\\s*[:：]?\\s*$`);
   const sections: StudyResultSection[] = [];
@@ -905,16 +678,6 @@ function buildQuestionGroups(questions: ParsedChoiceQuestion[], size = STUDYROOM
   return groups;
 }
 
-function uploadSourceTypeForFile(file: File, selectedSourceType: string): string {
-  const selected = String(selectedSourceType || "").trim();
-  if (isPdfFile(file)) {
-    if (["question_bank", "wrong_question", "fenbi", "note"].includes(selected)) return selected;
-    return "pdf";
-  }
-  if (["question_bank", "wrong_question", "fenbi", "note"].includes(selected)) return selected;
-  return "";
-}
-
 function quizGroupKey(item: StudyRoomItem, groupId: string | number): string {
   return `${item.id || item.title || "item"}::group::${groupId}`;
 }
@@ -988,8 +751,6 @@ export function StudyRoomTab() {
   const [data, setData] = useState<StudyRoomData>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState("");
   const [localImporting, setLocalImporting] = useState(false);
   const [activeModuleId, setActiveModuleId] = useState("");
   const [moduleFilter, setModuleFilter] = useState("all");
@@ -1139,80 +900,6 @@ export function StudyRoomTab() {
       toast(`保存失败：${e?.message || e}`);
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function importFile(file: File | null) {
-    if (!file || uploading) return;
-    setUploading(true);
-    setUploadStatus("");
-    try {
-      const uploadSourceType = uploadSourceTypeForFile(file, sourceType);
-      if (isPdfFile(file)) {
-        const text = await extractPdfTextInBrowser(file, setUploadStatus);
-        if (!text) throw new Error("没有抽到文字；扫描版 PDF/图片需要 OCR，当前还没接。");
-        const chunks = uploadSourceType === "question_bank" ? splitQuestionBankText(text) : splitStudyRoomText(text);
-        if (!chunks.length) throw new Error("没有抽到可保存的文字");
-        const baseTitle = title.trim() || fileStem(file);
-        for (let index = 0; index < chunks.length; index += 1) {
-          const chunk = chunks[index];
-          setUploadStatus(chunks.length > 1 ? `保存第 ${index + 1}/${chunks.length} 段...` : "保存中...");
-          const j = await apiJson<StudyRoomResponse>("/miniapp-api/studyroom/items", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              title: chunkedTitle(baseTitle, index + 1, chunks.length, chunk.label),
-              content: chunk.content,
-              module_id: moduleId,
-              source_type: uploadSourceType || "pdf",
-              status: "todo",
-              note: chunks.length > 1
-                ? `本地解析 PDF：${file.name || "资料.pdf"}\n自动拆分：第 ${index + 1}/${chunks.length} 段 · ${chunkLabel(chunk.label, `第 ${index + 1} 段`)}`
-                : `本地解析 PDF：${file.name || "资料.pdf"}`,
-            }),
-          });
-          if (!j?.ok) throw new Error(j?.error || "保存失败");
-          setData(j.data || {});
-        }
-        setTitle("");
-        setContent("");
-        setUrl("");
-        if (uploadSourceType === "question_bank") {
-          setStudyView("questions");
-          toast(chunks.length > 1 ? `题库已拆成 ${chunks.length} 段，可按题组练` : `题库已导入，解析到 ${parseChoiceQuestions(text, fileStem(file)).length} 道选择题`);
-        } else {
-          toast(chunks.length > 1 ? `已拆成 ${chunks.length} 个章节片段，可按章生成学习方向` : `已导入 ${text.length || 0} 字，可生成学习方向`);
-        }
-        return;
-      }
-      setUploadStatus("上传中...");
-      const form = new FormData();
-      form.append("file", file);
-      form.append("module_id", moduleId);
-      if (uploadSourceType) form.append("source_type", uploadSourceType);
-      if (title.trim()) form.append("title", title.trim());
-      const r = await apiFetch("/miniapp-api/studyroom/import", {
-        method: "POST",
-        body: form,
-      });
-      const j = (await r.json().catch(() => ({}))) as StudyRoomImportResponse;
-      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setData(j.data || {});
-      setTitle("");
-      setContent("");
-      setUrl("");
-      const importedItems = Array.isArray(j.items) && j.items.length ? j.items : (j.item ? [j.item] : []);
-      if (uploadSourceType === "question_bank") {
-        setStudyView("questions");
-        toast((j.chunks || importedItems.length || 1) > 1 ? `题库已拆成 ${j.chunks || importedItems.length} 段` : `题库已导入 ${j.chars || 0} 字`);
-      } else {
-        toast((j.chunks || importedItems.length || 1) > 1 ? `已拆成 ${j.chunks || importedItems.length} 个章节片段，可按章生成学习方向` : `已导入 ${j.chars || 0} 字，可生成学习方向`);
-      }
-    } catch (e: any) {
-      toast(`导入失败：${e?.message || e}`);
-    } finally {
-      setUploading(false);
-      setUploadStatus("");
     }
   }
 
@@ -1453,7 +1140,8 @@ export function StudyRoomTab() {
   }
 
   if (selectedItem) {
-    const resultSections = splitStudyResult(selectedItem.note);
+    const selectedHasStudyResult = hasStudyResult(selectedItem.note);
+    const resultSections = selectedHasStudyResult ? splitStudyResult(selectedItem.note) : [];
     const selectedId = String(selectedItem.id || "");
     const shouldParseQuiz = matchesStudyView(selectedItem, "questions") || /题库|题组|试卷|模拟/.test(String(selectedItem.title || ""));
     const parsedQuestions = shouldParseQuiz ? parseChoiceQuestions(`${selectedItem.content || ""}\n\n${selectedItem.note || ""}`, selectedId || selectedItem.title || "studyroom") : [];
@@ -1507,7 +1195,7 @@ export function StudyRoomTab() {
             onClick={() => void runCodexSort(selectedItem)}
           >
             <div className="text-[11px] font-bold uppercase text-white/55">Study Action</div>
-            <h2 className="mt-1 text-[20px] font-semibold">{sortingItemId === selectedId ? "正在整理这份资料" : selectedItem.note ? "重新生成学习方向" : "生成学习方向"}</h2>
+            <h2 className="mt-1 text-[20px] font-semibold">{sortingItemId === selectedId ? "正在整理这份资料" : selectedHasStudyResult ? "重新生成学习方向" : "生成学习方向"}</h2>
             <p className="mt-2 text-[13px] leading-5 text-white/55">按本章生成学习方向、背诵卡、知识债和少量自测。</p>
           </button>
 
@@ -1835,7 +1523,7 @@ export function StudyRoomTab() {
                 ))}
                 {!questionRows.length ? (
                   <div className="rounded-xl border border-dashed border-[#DADADA] px-4 py-8 text-center text-[13px] leading-6 text-[#707070]">
-                    这个模块还没有题库。上传时选“题库PDF”，会按章节切题组。
+                    这个模块还没有题库。把题库 PDF 放进电脑 Downloads/study 后读取，会按章节切题组。
                   </div>
                 ) : null}
               </div>
@@ -1888,7 +1576,7 @@ export function StudyRoomTab() {
                 ))}
                 {!tabItems.length ? (
                   <div className="rounded-xl border border-dashed border-[#DADADA] px-4 py-8 text-center text-[13px] leading-6 text-[#707070]">
-                    这里还空着。回首页上传，或者换一个分类看看。
+                    这里还空着。回首页读取 Downloads/study，或者换一个分类看看。
                   </div>
                 ) : null}
               </div>
@@ -2040,33 +1728,15 @@ export function StudyRoomTab() {
               {modules.map((module) => <option key={module.id} value={module.id}>{module.label}</option>)}
             </select>
           </div>
-          <label
-            className={`relative mt-2 flex w-full items-center justify-center overflow-hidden rounded-lg border border-[#E8E8E8] bg-white px-4 py-3 text-[13px] font-semibold text-black ${
-              uploading ? "cursor-not-allowed opacity-60" : "cursor-pointer active:scale-[0.99]"
-            }`}
-          >
-            <span>{uploading ? (uploadStatus || "正在导入...") : "上传 PDF / Word / TXT"}</span>
-            <input
-              className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
-              type="file"
-              accept=".pdf,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
-              disabled={uploading}
-              onChange={(e) => {
-                const file = e.currentTarget.files?.[0] || null;
-                e.currentTarget.value = "";
-                void importFile(file);
-              }}
-            />
-          </label>
           <button
             type="button"
             className="mt-2 w-full rounded-lg bg-[#FFF4E8] px-4 py-3 text-[13px] font-semibold text-[#B95E0D] active:scale-[0.99] disabled:opacity-60"
-            disabled={localImporting || uploading}
+            disabled={localImporting}
             onClick={() => void importLocalStudyFolder()}
           >
             {localImporting ? "正在读取 Downloads/study..." : "读取 Downloads/study 文件夹"}
           </button>
-          <div className="mt-2 text-[11px] leading-5 text-[#707070]">支持文字版 PDF、docx、txt、md；长资料会按章节/页码拆成学习单元，页面不展示整本原文。本地文件夹导入只在后端能看到这台电脑的 Downloads/study 时可用。</div>
+          <div className="mt-2 text-[11px] leading-5 text-[#707070]">PDF、docx、txt、md 统一放到电脑 Downloads/study 后读取；长资料会按章节/页码拆成学习单元，页面不展示整本原文。</div>
           <input
             className="mt-2 w-full rounded-lg bg-white px-3 py-3 text-[13px] outline-none placeholder:text-[#A0A0A0]"
             placeholder="标题，例如：B站公文写作第一课"
@@ -2124,7 +1794,7 @@ export function StudyRoomTab() {
               ))}
             {!items.length ? (
               <div className="rounded-xl border border-dashed border-[#DADADA] px-4 py-8 text-center text-[13px] leading-6 text-[#707070]">
-                还没有资料。先上传，之后从上面的模块进入二级页面学习。
+                还没有资料。先把文件放进 Downloads/study 并读取，之后从上面的模块进入二级页面学习。
               </div>
             ) : null}
           </div>
