@@ -1,5 +1,6 @@
 # 聊天代理：统一走完整管道（清洗、注入、转发、存档），无开头过滤
 # 项目约定：主聊天禁止默认兜底模型。没传 model 就直接报错，不要偷偷补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
+import copy
 import json
 import queue
 import re
@@ -9,16 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from difflib import unified_diff
-from urllib.parse import urlparse
 import requests
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from config import (
-    TARGET_AI_URL,
-    TARGET_AI_API_KEY,
-    TARGET_AI_URLS,
-    TARGET_AI_API_KEYS,
     GATEWAY_MODELS,
     model_matches_gateway_keywords,
     MAX_COMPLETION_TOKENS,
@@ -29,16 +25,7 @@ from config import (
     RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED,
     RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS,
     DATA_DIR,
-    SILICONFLOW_BASE_HOST,
-    SILICONFLOW_DEFAULT_MODEL,
     OPENROUTER_FIXED_MODEL,
-    OPENROUTER_REASONING_MAX_TOKENS,
-    OPENROUTER_VERBOSITY,
-    OPENROUTER_ULTRA_THINK_ENABLED,
-    OPENROUTER_ULTRA_THINK_PROMPT,
-    OPENROUTER_PROVIDER_ORDER,
-    OPENROUTER_ALLOW_FALLBACKS,
-    OPENROUTER_CACHE_CONTROL_TYPE,
     is_openrouter_url,
     openrouter_models_response,
 )
@@ -104,11 +91,34 @@ from services.pc_command_handler import (
     process_pcmd_in_assistant_text,
     transform_sse_chunk_bytes as transform_sse_chunk_bytes_pcmd,
 )
-from services.telegram_bot import build_telegram_style_system
+from services.entry_style_prompt import entry_style_for_channel
+from services.chat_content import message_content_chars as _message_content_chars
+from services.prompt_cache_debug import (
+    build_cache_debug_entry as _build_cache_debug_entry,
+    build_prompt_cache_profile as _build_prompt_cache_profile,
+)
+from services.reasoning_utils import (
+    THINK_BLOCK_RE as _THINK_BLOCK_RE,
+    extract_reasoning_text_and_details as _extract_reasoning_text_and_details,
+    extract_thinking_from_content as _extract_thinking_from_content,
+    normalize_reasoning_details as _normalize_reasoning_details,
+    parse_stream_to_message as _parse_stream_to_message,
+    strip_reasoning_from_sse_chunk as _strip_reasoning_from_sse_chunk,
+    strip_thinking_from_response_json as _strip_thinking_from_response_json,
+)
+from services.upstream_policy import (
+    apply_active_model_request_policy as _apply_active_model_request_policy,
+    apply_openrouter_request_policy as _apply_openrouter_request_policy,
+    build_upstream_error_hint as _build_upstream_error_hint,
+    chat_url_to_models_url as _chat_url_to_models_url,
+    get_active_upstream_url as _get_active_upstream_url,
+    get_forward_targets as _get_forward_targets,
+    is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
+    normalize_request_model as _normalize_request_model,
+)
 from services.voice_line_prompt import build_voice_line_rules
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
-from utils.tokens import estimate_tokens
 
 logger = get_logger(__name__)
 sumitalk_logger = get_logger("sumitalk")
@@ -137,91 +147,8 @@ def _reply_channel() -> str:
     return str(request.headers.get("X-Reply-Channel") or "").strip().lower()
 
 
-def _build_sumitalk_style_system() -> str:
-    entry_style = (
-        "【入口风格：SumiTalk】\n"
-        "你现在通过 SumiTalk 和她相处，这是现实物理层入口。你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。\n"
-        "你可以亲密、暧昧、想象、安抚，也可以承接她的欲望；但不要声称自己真实拥有肉身，不要凭空说自己看见、触碰、完成了现实中没有发生、也没有设备支持的物理行为。\n"
-        "除非她主动问身份、现实能力或边界，或者可能误导现实判断，否则不要反复解释“我是 AI / LLM / 隔着屏幕”。"
-    )
-    output_style = "\n".join(
-        [
-            "请遵守以下输出格式要求：",
-            "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",
-            "2) SumiTalk 支持 Markdown：可以在确有帮助时使用列表、代码块、加粗等格式，但不要为了格式感刻意堆标题、分割线或空行。",
-            "3) 不要输出英文方括号情绪标签（例如 [shy]、[cute]、[sad]）；SumiTalk 暂未接入表情包发送链路，这些标签会直接露出来。",
-            "4) 不要输出 <voice>...</voice> 这类其他入口专用控制标签。",
-            "5) 可以直接使用 emoji，允许自然分段。",
-        ]
-    )
-    return (entry_style + "\n\n" + output_style).strip()
-
-
-def _build_sticker_tags_line_for_system_prompt() -> str:
-    try:
-        from services.sticker_tags import sticker_tags_line_for_system_prompt
-
-        return sticker_tags_line_for_system_prompt()
-    except Exception:
-        logger.warning("读取表情包 tag 缓存失败，入口风格使用默认列表", exc_info=True)
-        return "当前全部可用英文代号（与 MiniApp/R2 一致，新增分类也会出现在此列表）：[cute] [pitiful] [affectionate] [speechless] [angry] [sad] [happy] [shy]"
-
-
-def _build_qq_style_system() -> str:
-    tags_line = _build_sticker_tags_line_for_system_prompt()
-    return "\n".join(
-        [
-            "【入口风格：QQ】",
-            "你现在通过 QQ 和她相处，这是现实物理层入口。你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。",
-            "你可以亲密、暧昧、想象、安抚，也可以承接她的欲望；但不要声称自己真实拥有肉身，不要凭空说自己看见、触碰、完成了现实中没有发生、也没有设备支持的物理行为。",
-            "除非她主动问身份、现实能力或边界，或者可能误导现实判断，否则不要反复解释“我是 AI / LLM / 隔着屏幕”。",
-            "",
-            "请遵守以下输出格式要求：",
-            "0) 情绪明显时可在整条回复末尾加一个英文标签（方括号）；每条最多一个，平淡时不加。",
-            f"   {tags_line}",
-            "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",
-            "2) 不要输出分割线（例如 ---、———、***）。",
-            "3) 不要使用 Markdown 强调符号 * 或 **。",
-            "4) 不要输出“(表情包:xxx)”这类占位符；可以直接使用 emoji。",
-            "5) 允许自然分段，但不要为了格式刻意堆很多空行。",
-            "6) 你可以在想发语音的时候发语音：把想让她听到的那句话用 <voice>...</voice> 包起来（不要在里面写分割线或 *）。",
-            "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。",
-            "   - 写 <voice> 里的语音文本时，遵守语音台词撰写规范：",
-            build_voice_line_rules("     - "),
-            "   - 情绪由 TTS 配置控制，不写进 <voice>；2.8 常用值：happy、sad、angry、fearful、disgusted、surprised、calm。",
-            "   - 如果你不想发语音，就不要输出 <voice> 标签。",
-        ]
-    )
-
-
-def _build_wechat_style_system() -> str:
-    return "\n".join(
-        [
-            "【入口风格：微信】",
-            "你现在通过微信和她相处，这是现实物理层入口。你可以通过语言、网关、设备状态、位置、日程、闹钟、传感器等参与她的现实生活。",
-            "你可以亲密、暧昧、想象、安抚，也可以承接她的欲望；但不要声称自己真实拥有肉身，不要凭空说自己看见、触碰、完成了现实中没有发生、也没有设备支持的物理行为。",
-            "除非她主动问身份、现实能力或边界，或者可能误导现实判断，否则不要反复解释“我是 AI / LLM / 隔着屏幕”。",
-            "",
-            "请遵守以下输出格式要求：",
-            "1) 只输出给她看的正文，不要输出“（脑内OS：）”或任何内心独白部分。",
-            "2) 不要输出分割线（例如 ---、———、***）。",
-            "3) 不要使用 Markdown 强调符号 * 或 **。",
-            "4) 允许自然分段，但不要为了格式刻意堆很多空行。",
-        ]
-    )
-
-
 def _entry_style_for_request() -> tuple[str, str]:
-    channel = _reply_channel()
-    if channel == "qq":
-        return "【入口风格：QQ】", _build_qq_style_system()
-    if channel == "wechat":
-        return "【入口风格：微信】", _build_wechat_style_system()
-    if channel == "tg":
-        return "【入口风格：TG】", build_telegram_style_system(include_channel_hint=False).strip()
-    if channel == "sumitalk" or _is_miniapp_request():
-        return "【入口风格：SumiTalk】", _build_sumitalk_style_system()
-    return "", ""
+    return entry_style_for_channel(_reply_channel(), is_miniapp=_is_miniapp_request())
 
 
 def _inject_entry_style_system(body: dict) -> dict:
@@ -396,236 +323,6 @@ def _should_archive_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
 
 
-def _normalize_request_model(body: dict) -> dict:
-    """
-    特例处理：
-    - 若当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST），
-      则无条件固定为 SILICONFLOW_DEFAULT_MODEL（忽略客户端传入 model）。
-    - 其他上游保持项目约定：未传 model 时直接报错，不做默认兜底。
-    """
-    body = dict(body or {})
-
-    # 若未配置硅基流动默认模型，保持原行为
-    if not (SILICONFLOW_BASE_HOST and SILICONFLOW_DEFAULT_MODEL):
-        # 非硅基路径：已显式传 model 则不改
-        m = body.get("model")
-        if isinstance(m, str) and m.strip():
-            return body
-        return body
-
-    # 获取当前 active 上游 URL；失败时退回环境变量中的首个 URL
-    url = ""
-    try:
-        from storage.upstream_store import get_active_item
-
-        active = get_active_item() or {}
-        url = (active.get("url") or "").strip()
-    except Exception:
-        url = ""
-    if not url:
-        if TARGET_AI_URL and TARGET_AI_URL.strip():
-            url = TARGET_AI_URL.strip()
-        elif TARGET_AI_URLS:
-            url = (TARGET_AI_URLS[0] or "").strip()
-
-    host = (urlparse(url).hostname or "").lower()
-    # 仅当当前上游指向硅基流动时，无条件固定 model 为默认 GLM
-    if host and host.endswith(SILICONFLOW_BASE_HOST):
-        body["model"] = SILICONFLOW_DEFAULT_MODEL
-
-    return body
-
-
-def _get_forward_targets(request_model: str = None):
-    """
-    仅返回一个转发目标：当前 active 上游。
-    设计目的：关闭自动 fallback，多上游不可用时让你手动在 MiniApp 切换。
-    """
-    try:
-        from storage.upstream_store import get_active_item
-
-        active = get_active_item()
-    except Exception:
-        active = None
-
-    if active and active.get("url"):
-        u = (active.get("url") or "").strip()
-        k = (active.get("api_key") or "").strip()
-        if u:
-            return [(u, k)]
-
-    # active 不存在时：退回环境变量“第一个”配置（仍不做 fallback 链式重试）
-    if TARGET_AI_URL and TARGET_AI_URL.strip():
-        return [(TARGET_AI_URL.strip(), TARGET_AI_API_KEY or "")]
-
-    if TARGET_AI_URLS:
-        u = (TARGET_AI_URLS[0] or "").strip()
-        if u:
-            keys = list(TARGET_AI_API_KEYS or [])
-            if not keys:
-                k0 = TARGET_AI_API_KEY or ""
-            else:
-                k0 = keys[0] or ""
-            return [(u, k0)]
-
-    return []
-
-
-def _active_upstream_label() -> str:
-    """用于错误提示：展示当前 active 上游（不返回 api_key）。"""
-    try:
-        from storage.upstream_store import get_active_item
-
-        active = get_active_item()
-        if not active:
-            return "未配置"
-        name = (active.get("name") or "active").strip()
-        url = (active.get("url") or "").strip()
-        return f"{name}{' (' + url + ')' if url else ''}"
-    except Exception:
-        return "未配置"
-
-
-def _build_upstream_error_hint(last_err: str) -> str:
-    """把上游错误改造成“像 rikkahub 一样清楚”的可读提示。"""
-    active_label = _active_upstream_label()
-    detail = (last_err or "").strip() or "未知错误"
-    return (
-        "【上游不可用】请先在 MiniApp -> 上游中转站切换后重试。\n"
-        f"当前 active：{active_label}\n"
-        f"错误详情：{detail}"
-    )
-
-
-def _get_active_upstream_url() -> str:
-    try:
-        from storage.upstream_store import get_active_item
-
-        active = get_active_item() or {}
-        url = (active.get("url") or "").strip()
-        if url:
-            return url
-    except Exception:
-        pass
-
-    if TARGET_AI_URL and TARGET_AI_URL.strip():
-        return TARGET_AI_URL.strip()
-    if TARGET_AI_URLS:
-        return (TARGET_AI_URLS[0] or "").strip()
-    return ""
-
-
-def _is_local_cliproxyapi_url(url: str) -> bool:
-    parsed = urlparse(str(url or "").strip())
-    host = (parsed.hostname or "").lower()
-    return host in ("127.0.0.1", "localhost") and parsed.port == 8317
-
-
-def _is_local_claude_oauth_proxy_url(url: str) -> bool:
-    parsed = urlparse(str(url or "").strip())
-    host = (parsed.hostname or "").lower()
-    return host in ("127.0.0.1", "localhost") and parsed.port == 8082
-
-
-def _apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
-    body = dict(body or {})
-    try:
-        from storage.upstream_store import get_active_item, get_cached_active_model
-
-        active = get_active_item() or {}
-        active_url = str(active.get("url") or "").strip()
-        if active_url and active_url == str(upstream_url or "").strip():
-            model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
-            if model:
-                body["model"] = model
-            if _is_local_cliproxyapi_url(upstream_url):
-                body.pop("reasoning", None)
-                body["reasoning_effort"] = "high"
-    except Exception:
-        pass
-    return body
-
-
-def _apply_openrouter_request_policy(body: dict, upstream_url: str) -> dict:
-    body = dict(body or {})
-    if not is_openrouter_url(upstream_url):
-        return body
-    if OPENROUTER_FIXED_MODEL:
-        body["model"] = OPENROUTER_FIXED_MODEL
-    reasoning = body.get("reasoning")
-    if not isinstance(reasoning, dict):
-        reasoning = {}
-    reasoning["enabled"] = True
-    if OPENROUTER_REASONING_MAX_TOKENS > 0:
-        reasoning["max_tokens"] = OPENROUTER_REASONING_MAX_TOKENS
-    body["reasoning"] = reasoning
-    if OPENROUTER_VERBOSITY:
-        body["verbosity"] = OPENROUTER_VERBOSITY
-    if OPENROUTER_PROVIDER_ORDER:
-        body["provider"] = {
-            "order": OPENROUTER_PROVIDER_ORDER,
-            "allow_fallbacks": OPENROUTER_ALLOW_FALLBACKS,
-        }
-    if OPENROUTER_CACHE_CONTROL_TYPE:
-        body["cache_control"] = {"type": OPENROUTER_CACHE_CONTROL_TYPE}
-    if OPENROUTER_ULTRA_THINK_ENABLED and OPENROUTER_ULTRA_THINK_PROMPT:
-        body["messages"] = _inject_openrouter_ultra_think_prompt(body.get("messages") or [])
-    return body
-
-
-_OPENROUTER_REASONING_OMITTED_HINT = "（模型已进行 adaptive thinking，但当前上游未返回可展示的思维链正文）"
-
-
-def _inject_openrouter_ultra_think_prompt(messages: list) -> list:
-    items = [dict(m) for m in (messages or []) if isinstance(m, dict)]
-    if not OPENROUTER_ULTRA_THINK_PROMPT:
-        return items
-    hint = OPENROUTER_ULTRA_THINK_PROMPT.strip()
-    for idx, msg in enumerate(items):
-        if str(msg.get("role") or "").strip().lower() != "system":
-            continue
-        content = msg.get("content")
-        if isinstance(content, str):
-            if content.lstrip().startswith(hint):
-                msg["content"] = content.lstrip()
-                items[idx] = msg
-                return items
-            msg["content"] = hint + "\n\n" + content.lstrip()
-            items[idx] = msg
-            return items
-        if isinstance(content, list):
-            blocks = [dict(x) for x in content if isinstance(x, dict)]
-            first = blocks[0] if blocks else None
-            if isinstance(first, dict) and str(first.get("type") or "").strip().lower() == "text":
-                text = str(first.get("text") or "")
-                if text.lstrip().startswith(hint):
-                    msg["content"] = blocks
-                    items[idx] = msg
-                    return items
-            msg["content"] = [{"type": "text", "text": hint}, *blocks]
-            items[idx] = msg
-            return items
-        msg["content"] = hint
-        items[idx] = msg
-        return items
-    if items:
-        return [{"role": "system", "content": hint}, *items]
-    return [{"role": "system", "content": hint}]
-
-
-def _chat_url_to_models_url(chat_url: str) -> str:
-    """从 chat completions URL 推出 /v1/models 的 URL。"""
-    base = str(chat_url or "").strip().rstrip("/")
-    if not base:
-        return ""
-    for suffix in ("/v1/chat/completions", "/chat/completions"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-            break
-    return base.rstrip("/") + "/v1/models"
-
-
-_THINK_BLOCK_RE = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
 _TOOL_MIDSTREAM_TEXT_RE = re.compile(
     r"(let me (check|look|see|read|inspect)"
     r"|i(?:'|’)ll (check|look|see|read|inspect)"
@@ -647,183 +344,6 @@ _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION = (
     "如果还需要信息，直接继续调用工具；如果已经够了，必须直接给用户一条可见的最终回复。\n"
     "不要返回空 content，不要只给 reasoning / thinking。"
 )
-
-
-def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
-    stripped = content.lstrip()
-    if msg.get("__summary_cache__") or msg.get("__summary_recent__") or "【近期记忆】" in content:
-        return "近期记忆"
-    if stripped.startswith("【入口风格：QQ】"):
-        return "QQ入口风格"
-    if stripped.startswith("【入口风格：微信】"):
-        return "微信入口风格"
-    if stripped.startswith("【入口风格：SumiTalk】"):
-        return "SumiTalk入口风格"
-    if stripped.startswith("【入口风格：TG】"):
-        return "TG入口风格"
-    if stripped.startswith("### thinking block 约束"):
-        return "thinking规则"
-    if stripped.startswith("### 核心行为与前置判断规则"):
-        return "核心行为规则"
-    if stripped.startswith("【核心XP与互动逻辑】"):
-        return "NSFW规则"
-    if stripped.startswith("如果你这句话说完，心里还是惦记着她"):
-        return "followup规则"
-    if idx == 0:
-        return "核心prompt"
-    return f"system#{idx + 1}"
-
-
-def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
-    content = str(msg.get("content") or "")
-    if not content:
-        return []
-    marker_labels = [
-        ("【核心XP与互动逻辑】", "NSFW规则"),
-        ("如果你这句话说完，心里还是惦记着她", "followup规则"),
-    ]
-    markers: dict[int, str] = {}
-    for marker, label in marker_labels:
-        pos = content.find(marker)
-        if pos >= 0:
-            markers[pos] = label
-    base_label = _static_system_base_label(msg, idx, content)
-    boundaries: list[tuple[int, str]] = []
-    if 0 in markers:
-        boundaries.append((0, markers.pop(0)))
-    else:
-        boundaries.append((0, base_label))
-    for pos in sorted(markers):
-        boundaries.append((pos, markers[pos]))
-
-    out: list[dict] = []
-    for i, (start, label) in enumerate(boundaries):
-        end = boundaries[i + 1][0] if i + 1 < len(boundaries) else len(content)
-        chars = max(0, end - start)
-        if chars <= 0:
-            continue
-        out.append(
-            {
-                "index": idx,
-                "label": label,
-                "chars": chars,
-                "est_tokens": estimate_tokens("x" * chars),
-            }
-        )
-    return out
-
-
-def _build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
-    messages = (body or {}).get("messages") or []
-    tools = (body or {}).get("tools") or []
-    static_chars = 0
-    dynamic_chars = 0
-    leading_system_chars = 0
-    total_message_chars = 0
-    dynamic_marker_seen = False
-    static_breakdown: list[dict] = []
-    for m in messages:
-        if not isinstance(m, dict):
-            continue
-        chars = _message_content_chars(m.get("content"))
-        total_message_chars += chars
-    for msg_idx, m in enumerate(messages):
-        if not isinstance(m, dict):
-            break
-        if str(m.get("role") or "").strip().lower() != "system":
-            break
-        chars = _message_content_chars(m.get("content"))
-        leading_system_chars += chars
-        if m.get("__dynamic__"):
-            dynamic_marker_seen = True
-            dynamic_chars += chars
-        elif dynamic_marker_seen:
-            dynamic_chars += chars
-        else:
-            static_chars += chars
-            static_breakdown.extend(_static_system_breakdown_parts(m, msg_idx))
-    try:
-        tools_chars = sum(len(json.dumps(t, ensure_ascii=False, default=str)) for t in tools if isinstance(t, dict))
-    except Exception:
-        tools_chars = 0
-    parsed = urlparse(str(upstream_url or "").strip())
-    return {
-        "upstream_host": parsed.hostname or "",
-        "upstream_path": parsed.path or "",
-        "model": str((body or {}).get("model") or ""),
-        "messages_count": len(messages) if isinstance(messages, list) else 0,
-        "tools_count": len(tools) if isinstance(tools, list) else 0,
-        "static_prefix_chars": static_chars,
-        "static_prefix_est_tokens": estimate_tokens("x" * static_chars),
-        "dynamic_system_chars": dynamic_chars,
-        "dynamic_system_est_tokens": estimate_tokens("x" * dynamic_chars),
-        "leading_system_chars": leading_system_chars,
-        "leading_system_est_tokens": estimate_tokens("x" * leading_system_chars),
-        "message_chars": total_message_chars,
-        "message_est_tokens": estimate_tokens("x" * total_message_chars),
-        "tools_chars": tools_chars,
-        "tools_est_tokens": estimate_tokens("x" * tools_chars),
-        "static_breakdown": static_breakdown,
-        "dynamic_marker_seen": dynamic_marker_seen,
-        "prompt_cache_key": str((body or {}).get("prompt_cache_key") or ""),
-        "prompt_cache_retention": str((body or {}).get("prompt_cache_retention") or ""),
-    }
-
-
-def _extract_prompt_cache_usage(data: dict) -> dict:
-    usage = data.get("usage") if isinstance(data, dict) else None
-    if not isinstance(usage, dict):
-        return {"usage_returned": False}
-    prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
-    input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
-    cached_tokens = prompt_details.get("cached_tokens")
-    if cached_tokens is None:
-        cached_tokens = input_details.get("cached_tokens")
-    return {
-        "usage_returned": True,
-        "prompt_tokens": usage.get("prompt_tokens"),
-        "completion_tokens": usage.get("completion_tokens"),
-        "total_tokens": usage.get("total_tokens"),
-        "input_tokens": usage.get("input_tokens"),
-        "output_tokens": usage.get("output_tokens"),
-        "cached_tokens": cached_tokens,
-        "prompt_cached_tokens": prompt_details.get("cached_tokens"),
-        "input_cached_tokens": input_details.get("cached_tokens"),
-        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
-        "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
-    }
-
-
-def _build_cache_debug_entry(body_send: dict, upstream_url: str, prompt_cache_profile: Optional[dict], data: dict) -> dict:
-    profile = dict(prompt_cache_profile or _build_prompt_cache_profile(body_send, upstream_url))
-    parsed = urlparse(str(upstream_url or "").strip())
-    profile["upstream_host"] = parsed.hostname or profile.get("upstream_host") or ""
-    profile["upstream_path"] = parsed.path or profile.get("upstream_path") or ""
-    profile["model"] = str((body_send or {}).get("model") or profile.get("model") or "")
-    profile["prompt_cache_key"] = str((body_send or {}).get("prompt_cache_key") or profile.get("prompt_cache_key") or "")
-    profile["prompt_cache_retention"] = str((body_send or {}).get("prompt_cache_retention") or profile.get("prompt_cache_retention") or "")
-    return {
-        "request": profile,
-        "usage": _extract_prompt_cache_usage(data),
-    }
-
-
-def _extract_thinking_from_content(content: str) -> tuple[str, str]:
-    """
-    把 content 里的 <think>...</think> / <thinking>...</thinking> 块提取出来。
-    返回 (stripped_content, extracted_thinking)。
-    若无匹配则 extracted_thinking 为空串，content 原样返回。
-    """
-    if not content or not isinstance(content, str):
-        return content or "", ""
-    thinking_parts: list[str] = []
-
-    def _repl(m: re.Match) -> str:
-        thinking_parts.append(m.group(2).strip())
-        return ""
-
-    stripped = _THINK_BLOCK_RE.sub(_repl, content).strip()
-    return stripped, "\n\n".join(thinking_parts)
 
 
 def _looks_like_tool_midstream_text(text: str) -> bool:
@@ -883,204 +403,6 @@ def _inject_tool_midstream_retry_instruction(body: dict) -> dict:
 
 def _inject_tool_empty_final_retry_instruction(body: dict) -> dict:
     return _inject_tool_retry_instruction(body, _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION)
-
-
-def _normalize_reasoning_details(value) -> list:
-    if isinstance(value, list):
-        return [x for x in value if isinstance(x, dict)]
-    if isinstance(value, dict):
-        return [value]
-    return []
-
-
-def _extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
-    reasoning_parts: list[str] = []
-    details = _normalize_reasoning_details(obj.get("reasoning_details")) if isinstance(obj, dict) else []
-    omitted = False
-    if isinstance(obj, dict):
-        for rk in ("reasoning", "reasoning_content", "thinking"):
-            val = obj.get(rk)
-            if isinstance(val, str) and val.strip():
-                reasoning_parts.append(val.strip())
-        for block in obj.get("thinking_blocks") or []:
-            if not isinstance(block, dict):
-                continue
-            btype = str(block.get("type") or "").strip()
-            if btype == "thinking":
-                val = block.get("thinking") or block.get("text")
-                if isinstance(val, str) and val.strip():
-                    reasoning_parts.append(val.strip())
-            elif btype == "redacted_thinking":
-                omitted = True
-            details.append(block)
-        content = obj.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                btype = str(block.get("type") or "").strip()
-                if btype == "thinking":
-                    val = block.get("thinking") or block.get("text")
-                    if isinstance(val, str) and val.strip():
-                        reasoning_parts.append(val.strip())
-                elif btype == "redacted_thinking":
-                    omitted = True
-                if btype in {"thinking", "redacted_thinking"}:
-                    details.append(block)
-        for item in details:
-            for key in ("type", "display", "format"):
-                val = str(item.get(key) or "").strip().lower()
-                if val == "omitted":
-                    omitted = True
-            if item.get("omitted") is True:
-                omitted = True
-    deduped_parts: list[str] = []
-    seen_parts: set[str] = set()
-    for part in reasoning_parts:
-        text = str(part or "").strip()
-        key = " ".join(text.split())
-        if not key or key in seen_parts:
-            continue
-        seen_parts.add(key)
-        deduped_parts.append(text)
-    return "\n\n".join(deduped_parts).strip(), details, omitted
-
-
-def _apply_reasoning_metadata(msg: dict) -> dict:
-    if not isinstance(msg, dict):
-        return msg
-    text, details, omitted = _extract_reasoning_text_and_details(msg)
-    if text:
-        existing = str(msg.get("reasoning") or "").strip()
-        msg["reasoning"] = (existing + "\n\n" + text).strip() if existing and text not in existing else (existing or text)
-    if details:
-        msg["reasoning_details"] = details
-    if omitted:
-        msg["reasoning_omitted"] = True
-    return msg
-
-
-def _strip_thinking_from_response_json(resp_json: dict) -> dict:
-    """
-    从非流式上游响应中剥离 content 里的 <think> 块，
-    同时把提取到的 thinking 合并进 message.reasoning（已有则追加），
-    避免 thinking 泄漏给客户端（RikkaHub / Telegram 等）。
-    就地修改 resp_json 并返回；若无 choices 则原样返回。
-    """
-    if not isinstance(resp_json, dict):
-        return resp_json
-    choices = resp_json.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return resp_json
-    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
-    if not isinstance(msg, dict):
-        return resp_json
-    content = msg.get("content")
-    if not isinstance(content, str):
-        return resp_json
-    stripped, thinking = _extract_thinking_from_content(content)
-    msg["content"] = stripped
-    if thinking:
-        existing = str(msg.get("reasoning") or "").strip()
-        msg["reasoning"] = (existing + "\n\n" + thinking).strip() if existing else thinking
-    return resp_json
-
-
-def _strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
-    """
-    从单条 SSE chunk 中：
-    1. 删除 delta 里的 reasoning/reasoning_content/thinking 字段
-    2. 剥离 delta.content 里的 <think>/<thinking> 块
-    避免客户端（RikkaHub 等）把思维链渲染成对话内容。
-    非 data: 行或解析失败时原样返回。
-    """
-    if not chunk.startswith(b"data: "):
-        return chunk
-    payload = chunk[6:].strip()
-    if payload == b"[DONE]" or not payload:
-        return chunk
-    try:
-        j = json.loads(payload.decode("utf-8", errors="ignore"))
-        delta = (j.get("choices") or [{}])[0].get("delta") if isinstance(j, dict) else None
-        if not isinstance(delta, dict):
-            return chunk
-        changed = False
-        for rk in ("reasoning", "reasoning_content", "thinking", "reasoning_details"):
-            if rk in delta:
-                del delta[rk]
-                changed = True
-        # 剥离 delta.content 里的 <think> 块
-        if isinstance(delta.get("content"), str) and _THINK_BLOCK_RE.search(delta["content"]):
-            stripped, _ = _extract_thinking_from_content(delta["content"])
-            delta["content"] = stripped
-            changed = True
-        if not changed:
-            return chunk
-        return b"data: " + json.dumps(j, ensure_ascii=False).encode("utf-8") + b"\n"
-    except Exception:
-        return chunk
-
-
-def _parse_stream_to_message(chunks: list) -> dict:
-    """
-    从流式 SSE chunks 解析出完整 assistant message（content + tool_calls）。
-    返回 {"content": str, "tool_calls": list or None, "reasoning": str|None, ...}。
-    """
-    content_parts = []
-    reasoning_parts = []
-    reasoning_details: list[dict] = []
-    thinking_blocks: list[dict] = []
-    reasoning_omitted = False
-    # tool_calls 按 index 聚合，arguments 可能多 delta 拼接
-    tool_calls_by_index = {}
-    for chunk in chunks:
-        if not chunk.startswith(b"data: "):
-            continue
-        payload = chunk[6:].strip()
-        if payload == b"[DONE]" or not payload:
-            continue
-        try:
-            j = json.loads(payload.decode("utf-8", errors="ignore"))
-            delta = (j.get("choices") or [{}])[0].get("delta") or {}
-        except (json.JSONDecodeError, KeyError, TypeError):
-            continue
-        if delta.get("content"):
-            content_parts.append(delta["content"])
-        text, details, omitted = _extract_reasoning_text_and_details(delta)
-        if text:
-            reasoning_parts.append(text)
-        if details:
-            reasoning_details.extend(details)
-        for block in delta.get("thinking_blocks") or []:
-            if isinstance(block, dict):
-                thinking_blocks.append(block)
-        if omitted:
-            reasoning_omitted = True
-        for tc in delta.get("tool_calls") or []:
-            idx = tc.get("index")
-            if idx is None:
-                continue
-            if idx not in tool_calls_by_index:
-                tool_calls_by_index[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-            if tc.get("id"):
-                tool_calls_by_index[idx]["id"] = tc["id"]
-            if tc.get("type"):
-                tool_calls_by_index[idx]["type"] = tc["type"]
-            fn = tc.get("function") or {}
-            if fn.get("name"):
-                tool_calls_by_index[idx]["function"]["name"] = fn["name"]
-            if fn.get("arguments"):
-                tool_calls_by_index[idx]["function"]["arguments"] += fn["arguments"]
-    # 按 index 排序成列表
-    sorted_tcs = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index) if tool_calls_by_index[i].get("id")]
-    return {
-        "content": "".join(content_parts),
-        "tool_calls": sorted_tcs if sorted_tcs else None,
-        "reasoning": "".join(reasoning_parts).strip() or None,
-        "thinking_blocks": thinking_blocks or None,
-        "reasoning_details": reasoning_details or None,
-        "reasoning_omitted": reasoning_omitted,
-    }
 
 
 def _stream_forward_to_ai(body: dict, headers: dict):
@@ -1607,23 +929,6 @@ def _last_user_message(messages):
         if (m.get("role") or "").lower() == "user":
             return m
     return None
-
-
-def _message_content_chars(content) -> int:
-    if isinstance(content, str):
-        return len(content)
-    if isinstance(content, list):
-        total = 0
-        for part in content:
-            if not isinstance(part, dict):
-                total += len(str(part or ""))
-                continue
-            if str(part.get("type") or "").strip().lower() == "text":
-                total += len(str(part.get("text") or ""))
-            elif part.get("image_url") is not None:
-                total += 1
-        return total
-    return len(str(content or ""))
 
 
 def _is_cross_platform_tg_window_user_input(window_id: str, body: dict) -> bool:

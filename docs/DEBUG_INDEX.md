@@ -21,7 +21,9 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 
 | 模块 | 主要文件 | 说明 |
 | --- | --- | --- |
-| 主聊天网关 | `routes/chat.py` | `/v1/chat/completions`，上游转发、stream、tool loop、reasoning、归档 |
+| 主聊天网关 | `routes/chat.py` | `/v1/chat/completions`，stream、tool loop、reasoning、归档 |
+| 主聊天策略 | `services/entry_style_prompt.py`、`services/upstream_policy.py` | 入口风格 system、active upstream 选择、OpenRouter/CPA/Claude OAuth 请求策略 |
+| 主聊天诊断/思维链 | `services/prompt_cache_debug.py`、`services/reasoning_utils.py`、`services/chat_content.py` | prompt/cache debug、reasoning/thinking 剥离、SSE message 解析、消息字符统计 |
 | 注入管道 | `pipeline/pipeline.py` | core prompt、summary、last4、sense、dynamic memory、tools 注入 |
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
@@ -47,7 +49,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 入口：
 - `routes/chat.py::chat_completions`
 - `routes/chat.py::_forward_to_ai`
-- `routes/chat.py::_get_forward_targets`
+- `services/upstream_policy.py::get_forward_targets`
 - `storage/upstream_store.py`
 - `config.py` 里的 `TARGET_AI_URLS` / `TARGET_AI_API_KEYS`
 
@@ -140,6 +142,40 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - VPS 系统盘读数突然抬高时，先查是否有高频整读本地状态文件：SumiTalk 安卓壳 realtime 断开后会每 20 秒 fallback 轮询 `/sumitalk-history/latest`，realtime 服务也会每 60 秒兜底读最新消息；`data/sumitalk_display_histories.json` 必须走缓存和行数/TTL 收口。
 - `<voice>`/TTS 事故先查 `services/minimax_tts.py`：超长 voice 文本会被截断到 `MINIMAX_TTS_MAX_CHARS`，MiniMax 返回音频也受 `MINIMAX_TTS_MAX_AUDIO_BYTES` 限制，避免几千字语音把 CPU/内存/网络一起拖爆。
 - QQ/SumiTalk/触发唤醒里看到 `{"action":"...","message":"...","channel":"..."}` 原样正文时，先查 `services/telegram_proactive.py::_parse_proactive_model_reply`、`_sanitize_control_reply_for_delivery` 和 `services/conversation_followup.py` 的外发清洗；这类 JSON 是主动决策控制格式，不应该作为用户可见正文发出。
+
+## 和渡一起听 / 音乐旋律分析
+
+现象：
+- App 需要按歌名/歌手查一首歌的旋律和情绪段落描述
+- 已有音频但不想长期保存音频，只想缓存文字分析结果
+- OpenRouter/Gemini 音频分析失败或缓存没命中
+
+入口：
+- API：`routes/music_melody_api.py`
+- 分析服务：`services/music_melody_analyzer.py`
+- 文字缓存：`storage/music_melody_store.py`
+- 配置：`config.py` 的 `MUSIC_ANALYSIS_*` / `MUSIC_PROMPT_VERSION`
+
+接口：
+
+```bash
+GET  /api/music/listen/cache?title=歌名&artist=歌手
+POST /api/music/listen/analyze
+POST /api/music/listen/result
+GET  /api/music/listen/recent
+```
+
+注意：
+- 音频只在请求内读取并发给模型，不落库；缓存只存 `artist + title + provider + model + prompt_version` 对应的文字和结构化结果。
+- 默认模型为 `google/gemini-3-flash-preview`，备用 `google/gemini-2.5-flash`；Lite 下架时不要再作为默认。
+- 未命中缓存且没有上传普通音频文件时，接口会返回错误，不会自动扫描网易云/手机沙盒缓存。
+- 这条通道是工具结果，不写入聊天记忆、不走普通对话归档；后续前端可以把结果作为“和渡一起听”的上下文使用。
+- 本地脚本模式用 `scripts/analyze_music_file.py --title "歌名" --artist "歌手" song.mp3`；脚本本地调 OpenRouter/Gemini，只把分析后的 JSON 发到 `/api/music/listen/result`。
+
+当前状态（2026-05-16）：
+- 已完成：新增音乐旋律分析后端 MVP，包含缓存查询、上传分析、结果写入和最近缓存列表；音频不持久化，文字结果优先写 R2，未配置 R2 时落本地 `data/music_melody_cache.json`。本地脚本 `scripts/analyze_music_file.py` 可用同一份 Gemini Flash prompt 分析本地音频，再只上传文字结果。
+- 已验证：`python3 -m py_compile` 覆盖 `storage/music_melody_store.py`、`services/music_melody_analyzer.py`、`routes/music_melody_api.py`、`scripts/analyze_music_file.py`、`app.py`；Flask `url_map` 确认 `/api/music/listen/*` 和 `/api/music-melody/*` 已注册；`scripts/analyze_music_file.py --help` 正常。
+- 未完成 / 不要碰：MiniApp “和渡一起听”界面还没做；本轮没有改 `miniapp/src` 或 `miniapp_static`，也没有触碰 QQ connector、小爱音箱文件和既有半成品。
 
 当前状态（2026-05-12）：
 - 已完成并推送：`d6ca54a Stop log page error toasts` 已到 `main`；日志页不再弹应用内 `日志报错` toast，系统通知继续走后端 `log_error_alert` -> `show_system_notification` -> 安卓壳 `FloatingBallService` 的现有通知栏链路。
@@ -611,6 +647,17 @@ npm -C miniapp run android
 - 已验证：`python3 -m py_compile services/co_read_flow.py services/co_read_books.py routes/co_read_api.py routes/miniapp/co_read.py`、`.venv/bin/python` 路由导入与共读解析/切段/quote 定位小自测、`git diff --check` 均通过。
 - 未完成 / 不要碰：QQ connector、小爱音箱文件、共读需求文档仍是本地半成品；本轮拆分没有改前端、静态产物或线上部署。后续继续拆分可优先看 `routes/chat.py` 或把共读卡片更新进一步拆到独立 service。
 
+当前状态（2026-05-16）：
+- 已完成：`routes/chat.py` 拆出入口风格 prompt 到 `services/entry_style_prompt.py`，拆出 active upstream / OpenRouter / Claude OAuth / CPA 请求策略到 `services/upstream_policy.py`；路由文件保留请求入口、stream/non-stream 转发、tool loop、归档和响应拼装。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py services/entry_style_prompt.py services/upstream_policy.py`、入口风格构造小检查、`services.upstream_policy` 轻量函数调用、`git diff --check` 均通过。
+- 未完成 / 不要碰：`connectors/qq_onebot/src/main.js`、小爱文件、共读文档、`miniapp_static/assets/*` 仍是本地半成品/构建产物；继续拆分可优先看 `routes/chat.py` 的 prompt-cache/reasoning/tool-loop，或 `storage/r2_store.py` 的 R2 key 分组。
+
+当前状态（2026-05-16 续）：
+- 已完成：继续拆 `routes/chat.py`，把 prompt/cache debug 移到 `services/prompt_cache_debug.py`，把 reasoning/thinking 剥离、SSE chunk 清洗、流式 message 解析移到 `services/reasoning_utils.py`，把通用消息字符统计移到 `services/chat_content.py`；`routes/chat.py` 约 1966 行，主要剩请求管线、stream/non-stream、tool loop、归档和 sidecar。
+- 已修正：同文件工具重试路径使用 `copy.deepcopy` 但缺少 `import copy`，已补 import。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py services/chat_content.py services/prompt_cache_debug.py services/reasoning_utils.py services/entry_style_prompt.py services/upstream_policy.py`、新服务 smoke check、`routes.chat` import check、`git diff --check` 均通过。
+- 未完成 / 不要碰：`app.py`、`config.py`、QQ connector、小爱/音乐相关文件、共读文档、`miniapp_static/assets/*` 仍是本地已有改动或半成品；继续拆分可优先看 `routes/chat.py` 的 tool-loop/归档 sidecar，或转拆 `storage/r2_store.py`。
+
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
    - 已拆：Codex group chat task 路由已移到 `routes/miniapp/codex_group_chat.py`；`/codex-group-chat-tasks*` 路径保持不变
@@ -635,9 +682,11 @@ npm -C miniapp run android
    - SumiTalk job/client
 
 4. `routes/chat.py`
-   - request normalize
-   - system injection
-   - upstream forward
+   - 已拆：入口风格 system 构造移到 `services/entry_style_prompt.py`
+   - 已拆：上游选择、active 模型策略、OpenRouter 请求策略移到 `services/upstream_policy.py`
+   - 已拆：prompt-cache / cache debug 移到 `services/prompt_cache_debug.py`
+   - 已拆：reasoning/thinking/SSE message 解析移到 `services/reasoning_utils.py`
+   - 已拆：消息内容字符统计移到 `services/chat_content.py`
    - stream handling
    - tool loop
    - archive/reasoning collection

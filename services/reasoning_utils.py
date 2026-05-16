@@ -1,0 +1,206 @@
+import json
+import re
+
+THINK_BLOCK_RE = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
+
+
+def extract_thinking_from_content(content: str) -> tuple[str, str]:
+    """
+    把 content 里的 <think>...</think> / <thinking>...</thinking> 块提取出来。
+    返回 (stripped_content, extracted_thinking)。
+    若无匹配则 extracted_thinking 为空串，content 原样返回。
+    """
+    if not content or not isinstance(content, str):
+        return content or "", ""
+    thinking_parts: list[str] = []
+
+    def _repl(m: re.Match) -> str:
+        thinking_parts.append(m.group(2).strip())
+        return ""
+
+    stripped = THINK_BLOCK_RE.sub(_repl, content).strip()
+    return stripped, "\n\n".join(thinking_parts)
+
+
+def normalize_reasoning_details(value) -> list:
+    if isinstance(value, list):
+        return [x for x in value if isinstance(x, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
+    reasoning_parts: list[str] = []
+    details = normalize_reasoning_details(obj.get("reasoning_details")) if isinstance(obj, dict) else []
+    omitted = False
+    if isinstance(obj, dict):
+        for rk in ("reasoning", "reasoning_content", "thinking"):
+            val = obj.get(rk)
+            if isinstance(val, str) and val.strip():
+                reasoning_parts.append(val.strip())
+        for block in obj.get("thinking_blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            btype = str(block.get("type") or "").strip()
+            if btype == "thinking":
+                val = block.get("thinking") or block.get("text")
+                if isinstance(val, str) and val.strip():
+                    reasoning_parts.append(val.strip())
+            elif btype == "redacted_thinking":
+                omitted = True
+            details.append(block)
+        content = obj.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = str(block.get("type") or "").strip()
+                if btype == "thinking":
+                    val = block.get("thinking") or block.get("text")
+                    if isinstance(val, str) and val.strip():
+                        reasoning_parts.append(val.strip())
+                elif btype == "redacted_thinking":
+                    omitted = True
+                if btype in {"thinking", "redacted_thinking"}:
+                    details.append(block)
+        for item in details:
+            for key in ("type", "display", "format"):
+                val = str(item.get(key) or "").strip().lower()
+                if val == "omitted":
+                    omitted = True
+            if item.get("omitted") is True:
+                omitted = True
+    deduped_parts: list[str] = []
+    seen_parts: set[str] = set()
+    for part in reasoning_parts:
+        text = str(part or "").strip()
+        key = " ".join(text.split())
+        if not key or key in seen_parts:
+            continue
+        seen_parts.add(key)
+        deduped_parts.append(text)
+    return "\n\n".join(deduped_parts).strip(), details, omitted
+
+
+def strip_thinking_from_response_json(resp_json: dict) -> dict:
+    """
+    从非流式上游响应中剥离 content 里的 <think> 块，
+    同时把提取到的 thinking 合并进 message.reasoning（已有则追加），
+    避免 thinking 泄漏给客户端（RikkaHub / Telegram 等）。
+    就地修改 resp_json 并返回；若无 choices 则原样返回。
+    """
+    if not isinstance(resp_json, dict):
+        return resp_json
+    choices = resp_json.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return resp_json
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(msg, dict):
+        return resp_json
+    content = msg.get("content")
+    if not isinstance(content, str):
+        return resp_json
+    stripped, thinking = extract_thinking_from_content(content)
+    msg["content"] = stripped
+    if thinking:
+        existing = str(msg.get("reasoning") or "").strip()
+        msg["reasoning"] = (existing + "\n\n" + thinking).strip() if existing else thinking
+    return resp_json
+
+
+def strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
+    """
+    从单条 SSE chunk 中：
+    1. 删除 delta 里的 reasoning/reasoning_content/thinking 字段
+    2. 剥离 delta.content 里的 <think>/<thinking> 块
+    避免客户端（RikkaHub 等）把思维链渲染成对话内容。
+    非 data: 行或解析失败时原样返回。
+    """
+    if not chunk.startswith(b"data: "):
+        return chunk
+    payload = chunk[6:].strip()
+    if payload == b"[DONE]" or not payload:
+        return chunk
+    try:
+        j = json.loads(payload.decode("utf-8", errors="ignore"))
+        delta = (j.get("choices") or [{}])[0].get("delta") if isinstance(j, dict) else None
+        if not isinstance(delta, dict):
+            return chunk
+        changed = False
+        for rk in ("reasoning", "reasoning_content", "thinking", "reasoning_details"):
+            if rk in delta:
+                del delta[rk]
+                changed = True
+        # 剥离 delta.content 里的 <think> 块
+        if isinstance(delta.get("content"), str) and THINK_BLOCK_RE.search(delta["content"]):
+            stripped, _ = extract_thinking_from_content(delta["content"])
+            delta["content"] = stripped
+            changed = True
+        if not changed:
+            return chunk
+        return b"data: " + json.dumps(j, ensure_ascii=False).encode("utf-8") + b"\n"
+    except Exception:
+        return chunk
+
+
+def parse_stream_to_message(chunks: list) -> dict:
+    """
+    从流式 SSE chunks 解析出完整 assistant message（content + tool_calls）。
+    返回 {"content": str, "tool_calls": list or None, "reasoning": str|None, ...}。
+    """
+    content_parts = []
+    reasoning_parts = []
+    reasoning_details: list[dict] = []
+    thinking_blocks: list[dict] = []
+    reasoning_omitted = False
+    # tool_calls 按 index 聚合，arguments 可能多 delta 拼接
+    tool_calls_by_index = {}
+    for chunk in chunks:
+        if not chunk.startswith(b"data: "):
+            continue
+        payload = chunk[6:].strip()
+        if payload == b"[DONE]" or not payload:
+            continue
+        try:
+            j = json.loads(payload.decode("utf-8", errors="ignore"))
+            delta = (j.get("choices") or [{}])[0].get("delta") or {}
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+        if delta.get("content"):
+            content_parts.append(delta["content"])
+        text, details, omitted = extract_reasoning_text_and_details(delta)
+        if text:
+            reasoning_parts.append(text)
+        if details:
+            reasoning_details.extend(details)
+        for block in delta.get("thinking_blocks") or []:
+            if isinstance(block, dict):
+                thinking_blocks.append(block)
+        if omitted:
+            reasoning_omitted = True
+        for tc in delta.get("tool_calls") or []:
+            idx = tc.get("index")
+            if idx is None:
+                continue
+            if idx not in tool_calls_by_index:
+                tool_calls_by_index[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+            if tc.get("id"):
+                tool_calls_by_index[idx]["id"] = tc["id"]
+            if tc.get("type"):
+                tool_calls_by_index[idx]["type"] = tc["type"]
+            fn = tc.get("function") or {}
+            if fn.get("name"):
+                tool_calls_by_index[idx]["function"]["name"] = fn["name"]
+            if fn.get("arguments"):
+                tool_calls_by_index[idx]["function"]["arguments"] += fn["arguments"]
+    # 按 index 排序成列表
+    sorted_tcs = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index) if tool_calls_by_index[i].get("id")]
+    return {
+        "content": "".join(content_parts),
+        "tool_calls": sorted_tcs if sorted_tcs else None,
+        "reasoning": "".join(reasoning_parts).strip() or None,
+        "thinking_blocks": thinking_blocks or None,
+        "reasoning_details": reasoning_details or None,
+        "reasoning_omitted": reasoning_omitted,
+    }

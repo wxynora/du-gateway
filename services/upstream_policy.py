@@ -1,0 +1,245 @@
+from urllib.parse import urlparse
+
+from config import (
+    TARGET_AI_URL,
+    TARGET_AI_API_KEY,
+    TARGET_AI_URLS,
+    TARGET_AI_API_KEYS,
+    SILICONFLOW_BASE_HOST,
+    SILICONFLOW_DEFAULT_MODEL,
+    OPENROUTER_FIXED_MODEL,
+    OPENROUTER_REASONING_MAX_TOKENS,
+    OPENROUTER_VERBOSITY,
+    OPENROUTER_ULTRA_THINK_ENABLED,
+    OPENROUTER_ULTRA_THINK_PROMPT,
+    OPENROUTER_PROVIDER_ORDER,
+    OPENROUTER_ALLOW_FALLBACKS,
+    OPENROUTER_CACHE_CONTROL_TYPE,
+    is_openrouter_url,
+)
+
+
+def normalize_request_model(body: dict) -> dict:
+    """
+    特例处理：
+    - 若当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST），
+      则无条件固定为 SILICONFLOW_DEFAULT_MODEL（忽略客户端传入 model）。
+    - 其他上游保持项目约定：未传 model 时直接报错，不做默认兜底。
+    """
+    body = dict(body or {})
+
+    # 若未配置硅基流动默认模型，保持原行为
+    if not (SILICONFLOW_BASE_HOST and SILICONFLOW_DEFAULT_MODEL):
+        # 非硅基路径：已显式传 model 则不改
+        m = body.get("model")
+        if isinstance(m, str) and m.strip():
+            return body
+        return body
+
+    # 获取当前 active 上游 URL；失败时退回环境变量中的首个 URL
+    url = ""
+    try:
+        from storage.upstream_store import get_active_item
+
+        active = get_active_item() or {}
+        url = (active.get("url") or "").strip()
+    except Exception:
+        url = ""
+    if not url:
+        if TARGET_AI_URL and TARGET_AI_URL.strip():
+            url = TARGET_AI_URL.strip()
+        elif TARGET_AI_URLS:
+            url = (TARGET_AI_URLS[0] or "").strip()
+
+    host = (urlparse(url).hostname or "").lower()
+    # 仅当当前上游指向硅基流动时，无条件固定 model 为默认 GLM
+    if host and host.endswith(SILICONFLOW_BASE_HOST):
+        body["model"] = SILICONFLOW_DEFAULT_MODEL
+
+    return body
+
+
+def get_forward_targets(request_model: str = None):
+    """
+    仅返回一个转发目标：当前 active 上游。
+    设计目的：关闭自动 fallback，多上游不可用时让你手动在 MiniApp 切换。
+    """
+    try:
+        from storage.upstream_store import get_active_item
+
+        active = get_active_item()
+    except Exception:
+        active = None
+
+    if active and active.get("url"):
+        u = (active.get("url") or "").strip()
+        k = (active.get("api_key") or "").strip()
+        if u:
+            return [(u, k)]
+
+    # active 不存在时：退回环境变量“第一个”配置（仍不做 fallback 链式重试）
+    if TARGET_AI_URL and TARGET_AI_URL.strip():
+        return [(TARGET_AI_URL.strip(), TARGET_AI_API_KEY or "")]
+
+    if TARGET_AI_URLS:
+        u = (TARGET_AI_URLS[0] or "").strip()
+        if u:
+            keys = list(TARGET_AI_API_KEYS or [])
+            if not keys:
+                k0 = TARGET_AI_API_KEY or ""
+            else:
+                k0 = keys[0] or ""
+            return [(u, k0)]
+
+    return []
+
+
+def active_upstream_label() -> str:
+    """用于错误提示：展示当前 active 上游（不返回 api_key）。"""
+    try:
+        from storage.upstream_store import get_active_item
+
+        active = get_active_item()
+        if not active:
+            return "未配置"
+        name = (active.get("name") or "active").strip()
+        url = (active.get("url") or "").strip()
+        return f"{name}{' (' + url + ')' if url else ''}"
+    except Exception:
+        return "未配置"
+
+
+def build_upstream_error_hint(last_err: str) -> str:
+    """把上游错误改造成“像 rikkahub 一样清楚”的可读提示。"""
+    active_label = active_upstream_label()
+    detail = (last_err or "").strip() or "未知错误"
+    return (
+        "【上游不可用】请先在 MiniApp -> 上游中转站切换后重试。\n"
+        f"当前 active：{active_label}\n"
+        f"错误详情：{detail}"
+    )
+
+
+def get_active_upstream_url() -> str:
+    try:
+        from storage.upstream_store import get_active_item
+
+        active = get_active_item() or {}
+        url = (active.get("url") or "").strip()
+        if url:
+            return url
+    except Exception:
+        pass
+
+    if TARGET_AI_URL and TARGET_AI_URL.strip():
+        return TARGET_AI_URL.strip()
+    if TARGET_AI_URLS:
+        return (TARGET_AI_URLS[0] or "").strip()
+    return ""
+
+
+def is_local_cliproxyapi_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.hostname or "").lower()
+    return host in ("127.0.0.1", "localhost") and parsed.port == 8317
+
+
+def is_local_claude_oauth_proxy_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = (parsed.hostname or "").lower()
+    return host in ("127.0.0.1", "localhost") and parsed.port == 8082
+
+
+def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
+    body = dict(body or {})
+    try:
+        from storage.upstream_store import get_active_item, get_cached_active_model
+
+        active = get_active_item() or {}
+        active_url = str(active.get("url") or "").strip()
+        if active_url and active_url == str(upstream_url or "").strip():
+            model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
+            if model:
+                body["model"] = model
+            if is_local_cliproxyapi_url(upstream_url):
+                body.pop("reasoning", None)
+                body["reasoning_effort"] = "high"
+    except Exception:
+        pass
+    return body
+
+
+def apply_openrouter_request_policy(body: dict, upstream_url: str) -> dict:
+    body = dict(body or {})
+    if not is_openrouter_url(upstream_url):
+        return body
+    if OPENROUTER_FIXED_MODEL:
+        body["model"] = OPENROUTER_FIXED_MODEL
+    reasoning = body.get("reasoning")
+    if not isinstance(reasoning, dict):
+        reasoning = {}
+    reasoning["enabled"] = True
+    if OPENROUTER_REASONING_MAX_TOKENS > 0:
+        reasoning["max_tokens"] = OPENROUTER_REASONING_MAX_TOKENS
+    body["reasoning"] = reasoning
+    if OPENROUTER_VERBOSITY:
+        body["verbosity"] = OPENROUTER_VERBOSITY
+    if OPENROUTER_PROVIDER_ORDER:
+        body["provider"] = {
+            "order": OPENROUTER_PROVIDER_ORDER,
+            "allow_fallbacks": OPENROUTER_ALLOW_FALLBACKS,
+        }
+    if OPENROUTER_CACHE_CONTROL_TYPE:
+        body["cache_control"] = {"type": OPENROUTER_CACHE_CONTROL_TYPE}
+    if OPENROUTER_ULTRA_THINK_ENABLED and OPENROUTER_ULTRA_THINK_PROMPT:
+        body["messages"] = inject_openrouter_ultra_think_prompt(body.get("messages") or [])
+    return body
+
+
+def inject_openrouter_ultra_think_prompt(messages: list) -> list:
+    items = [dict(m) for m in (messages or []) if isinstance(m, dict)]
+    if not OPENROUTER_ULTRA_THINK_PROMPT:
+        return items
+    hint = OPENROUTER_ULTRA_THINK_PROMPT.strip()
+    for idx, msg in enumerate(items):
+        if str(msg.get("role") or "").strip().lower() != "system":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            if content.lstrip().startswith(hint):
+                msg["content"] = content.lstrip()
+                items[idx] = msg
+                return items
+            msg["content"] = hint + "\n\n" + content.lstrip()
+            items[idx] = msg
+            return items
+        if isinstance(content, list):
+            blocks = [dict(x) for x in content if isinstance(x, dict)]
+            first = blocks[0] if blocks else None
+            if isinstance(first, dict) and str(first.get("type") or "").strip().lower() == "text":
+                text = str(first.get("text") or "")
+                if text.lstrip().startswith(hint):
+                    msg["content"] = blocks
+                    items[idx] = msg
+                    return items
+            msg["content"] = [{"type": "text", "text": hint}, *blocks]
+            items[idx] = msg
+            return items
+        msg["content"] = hint
+        items[idx] = msg
+        return items
+    if items:
+        return [{"role": "system", "content": hint}, *items]
+    return [{"role": "system", "content": hint}]
+
+
+def chat_url_to_models_url(chat_url: str) -> str:
+    """从 chat completions URL 推出 /v1/models 的 URL。"""
+    base = str(chat_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    for suffix in ("/v1/chat/completions", "/chat/completions"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/") + "/v1/models"
