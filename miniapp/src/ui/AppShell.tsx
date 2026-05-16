@@ -506,6 +506,11 @@ export function AppShell({
               onClick={() => setShowCoRead(true)}
             />
             <PageCardRow
+              icon={<HeartIconMini />}
+              label="和渡一起听"
+              onClick={() => setShowListenWithDu(true)}
+            />
+            <PageCardRow
               icon={<BookOpenIcon />}
               label="渡的记事本"
               onClick={() => setPanel("du-notebook")}
@@ -572,7 +577,6 @@ export function AppShell({
         onOpenDu={() => setActiveScreen("du")}
         onOpenGroup={() => setActiveScreen("group")}
         onOpenWenyou={() => setActiveScreen("wenyou")}
-        onOpenListenWithDu={() => setShowListenWithDu(true)}
         onRefreshTodayNote={() => {
           if (!todayNoteRefreshing) void loadDailyWhisper(true);
         }}
