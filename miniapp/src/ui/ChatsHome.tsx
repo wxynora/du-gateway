@@ -55,6 +55,7 @@ export function ChatsHome({
   onOpenDu,
   onOpenGroup,
   onOpenWenyou,
+  onOpenListenWithDu,
   onRefreshTodayNote,
   onRefreshDailyReport,
   todayNoteRefreshing,
@@ -70,6 +71,7 @@ export function ChatsHome({
   onOpenDu: () => void;
   onOpenGroup: () => void;
   onOpenWenyou: () => void;
+  onOpenListenWithDu: () => void;
   onRefreshTodayNote: () => void;
   onRefreshDailyReport: () => void;
   todayNoteRefreshing: boolean;
@@ -215,6 +217,13 @@ export function ChatsHome({
           tone="wenyou"
           onClick={onOpenWenyou}
         />
+        <ChatEntryRow
+          title="和渡一起听"
+          preview="遥远的歌 · 渡准备就绪"
+          time="一起听"
+          tone="listen"
+          onClick={onOpenListenWithDu}
+        />
       </div>
     </div>
   );
@@ -232,12 +241,14 @@ function ChatEntryRow({
   title: string;
   preview: string;
   time: string;
-  tone: "du" | "group" | "wenyou";
+  tone: "du" | "group" | "wenyou" | "listen";
   avatarImage?: string;
   pinned?: boolean;
   onClick: () => void;
 }) {
-  const palette = tone === "wenyou"
+  const palette = tone === "listen"
+    ? { shell: "bg-[#EEF5FB] text-[#55789D]" }
+    : tone === "wenyou"
     ? { shell: "bg-[#F8F0F4] text-[#704A5D]" }
     : tone === "group"
       ? { shell: "bg-[#FFF3D7] text-[#8A5A10]" }

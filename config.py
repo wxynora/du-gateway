@@ -123,6 +123,50 @@ def model_matches_gateway_keywords(model_str: str) -> bool:
     return True
 
 
+def _resolve_music_analysis_api_key() -> str:
+    explicit = os.environ.get("MUSIC_ANALYSIS_API_KEY", "").strip()
+    if explicit:
+        return explicit
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if openrouter_key:
+        return openrouter_key
+
+    analysis_url = os.environ.get(
+        "MUSIC_ANALYSIS_API_URL",
+        "https://openrouter.ai/api/v1/chat/completions",
+    ).strip()
+    if not is_openrouter_url(analysis_url):
+        return ""
+    if TARGET_AI_URL and TARGET_AI_API_KEY and is_openrouter_url(TARGET_AI_URL):
+        return TARGET_AI_API_KEY.strip()
+    for idx, url in enumerate(TARGET_AI_URLS):
+        if not is_openrouter_url(url):
+            continue
+        if idx < len(TARGET_AI_API_KEYS):
+            return TARGET_AI_API_KEYS[idx].strip()
+    return ""
+
+
+# 音乐旋律/情绪分析：独立工具通道，不走普通聊天记忆归档。
+MUSIC_ANALYSIS_API_URL = os.environ.get(
+    "MUSIC_ANALYSIS_API_URL",
+    "https://openrouter.ai/api/v1/chat/completions",
+).strip()
+MUSIC_ANALYSIS_API_KEY = _resolve_music_analysis_api_key()
+MUSIC_ANALYSIS_PROVIDER = os.environ.get("MUSIC_ANALYSIS_PROVIDER", "openrouter").strip() or "openrouter"
+MUSIC_ANALYSIS_MODEL = os.environ.get(
+    "MUSIC_ANALYSIS_MODEL",
+    "google/gemini-3-flash-preview",
+).strip()
+MUSIC_ANALYSIS_FALLBACK_MODEL = os.environ.get(
+    "MUSIC_ANALYSIS_FALLBACK_MODEL",
+    "google/gemini-2.5-flash",
+).strip()
+MUSIC_PROMPT_VERSION = os.environ.get("MUSIC_PROMPT_VERSION", "v1").strip() or "v1"
+MUSIC_ANALYSIS_TIMEOUT_SECONDS = int(os.environ.get("MUSIC_ANALYSIS_TIMEOUT_SECONDS", "180"))
+MUSIC_ANALYSIS_MAX_AUDIO_BYTES = int(os.environ.get("MUSIC_ANALYSIS_MAX_AUDIO_BYTES", str(28 * 1024 * 1024)))
+
+
 # DeepSeek：窗口总结
 DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -344,8 +388,6 @@ LAST_USER_REPLY_FILE = DATA_DIR / "last_user_reply.json"
 
 # Telegram Bot（接入方案见 docs/主动发消息与Telegram完整方案.md）
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-# 文游跑团专用 GM Bot（可选）：与主 Bot 区分时使用；Webhook 路径为 /telegram/webhook_gm（与主 Bot 的 /telegram/webhook 分开设）
-TELEGRAM_GM_BOT_TOKEN = os.environ.get("TELEGRAM_GM_BOT_TOKEN", "").strip()
 # Telegram Webhook：网关接收更新的 secret（可选）。若设置了，Telegram 会在请求头携带 X-Telegram-Bot-Api-Secret-Token
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
 # Telegram Webhook 持久队列：web worker 只入队，独立 worker 消费，避免 gunicorn 回收丢输入聚合状态
@@ -470,11 +512,6 @@ MAIN_GATEWAY_BEARER_TOKEN = os.environ.get("MAIN_GATEWAY_BEARER_TOKEN", "").stri
 
 # 文游：App 内独立会话 ID，不再绑定 Telegram 群或 TG 用户。
 WENYOU_SESSION_ID = int(os.environ.get("WENYOU_SESSION_ID", "1") or "1")
-# 文游：固定 Telegram 群（仅该群内处理 /story /go /end；0=关闭）
-WENYOU_GROUP_CHAT_ID = int(os.environ.get("WENYOU_GROUP_CHAT_ID", "0") or "0")
-# 文游：只认该用户 ID 的指令（留空则沿用 TELEGRAM_PROACTIVE_TARGET_USER_ID）
-_WENYOU_OWNER_STR = os.environ.get("TELEGRAM_WENYOU_OWNER_USER_ID", "").strip()
-TELEGRAM_WENYOU_OWNER_USER_ID = int(_WENYOU_OWNER_STR) if _WENYOU_OWNER_STR else int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
 # 文游 GM 使用的 DeepSeek 模型名
 WENYOU_DS_MODEL = os.environ.get("WENYOU_DS_MODEL", DEEPSEEK_CHAT_MODEL).strip()
 

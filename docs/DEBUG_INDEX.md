@@ -152,6 +152,8 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - OpenRouter/Gemini 音频分析失败或缓存没命中
 
 入口：
+- MiniApp 界面：`miniapp/src/ui/tabs/ListenWithDuScreen.tsx`
+- MiniApp 入口：`miniapp/src/ui/ChatsHome.tsx` 的“和渡一起听”会话行，`miniapp/src/ui/AppShell.tsx` 负责全屏打开
 - API：`routes/music_melody_api.py`
 - 分析服务：`services/music_melody_analyzer.py`
 - 文字缓存：`storage/music_melody_store.py`
@@ -170,13 +172,13 @@ GET  /api/music/listen/recent
 - 音频只在请求内读取并发给模型，不落库；缓存只存 `artist + title + provider + model + prompt_version` 对应的文字和结构化结果。
 - 默认模型为 `google/gemini-3-flash-preview`，备用 `google/gemini-2.5-flash`；Lite 下架时不要再作为默认。
 - 未命中缓存且没有上传普通音频文件时，接口会返回错误，不会自动扫描网易云/手机沙盒缓存。
-- 这条通道是工具结果，不写入聊天记忆、不走普通对话归档；后续前端可以把结果作为“和渡一起听”的上下文使用。
+- 这条通道是工具结果，不写入聊天记忆、不走普通对话归档；MiniApp “和渡一起听”界面目前只展示一起听 UI，不直接暴露给渡看的分析条目。一起听背景图在「个性化」里选择，图片压缩后只存本机 `localStorage`，不上传网关。
 - 本地脚本模式用 `scripts/analyze_music_file.py --title "歌名" --artist "歌手" song.mp3`；脚本本地调 OpenRouter/Gemini，只把分析后的 JSON 发到 `/api/music/listen/result`。
 
 当前状态（2026-05-16）：
-- 已完成：新增音乐旋律分析后端 MVP，包含缓存查询、上传分析、结果写入和最近缓存列表；音频不持久化，文字结果优先写 R2，未配置 R2 时落本地 `data/music_melody_cache.json`。本地脚本 `scripts/analyze_music_file.py` 可用同一份 Gemini Flash prompt 分析本地音频，再只上传文字结果。
-- 已验证：`python3 -m py_compile` 覆盖 `storage/music_melody_store.py`、`services/music_melody_analyzer.py`、`routes/music_melody_api.py`、`scripts/analyze_music_file.py`、`app.py`；Flask `url_map` 确认 `/api/music/listen/*` 和 `/api/music-melody/*` 已注册；`scripts/analyze_music_file.py --help` 正常。
-- 未完成 / 不要碰：MiniApp “和渡一起听”界面还没做；本轮没有改 `miniapp/src` 或 `miniapp_static`，也没有触碰 QQ connector、小爱音箱文件和既有半成品。
+- 已完成：新增音乐旋律分析后端 MVP，包含缓存查询、上传分析、结果写入和最近缓存列表；音频不持久化，文字结果优先写 R2，未配置 R2 时落本地 `data/music_melody_cache.json`。本地脚本 `scripts/analyze_music_file.py` 可用同一份 Gemini Flash prompt 分析本地音频，再只上传文字结果。MiniApp 已按 `ui合集/和渡一起听ui` 接入“和渡一起听”全屏界面和会话入口，并在「个性化」里支持用户本机替换一起听背景图。
+- 已验证：`python3 -m py_compile` 覆盖 `storage/music_melody_store.py`、`services/music_melody_analyzer.py`、`routes/music_melody_api.py`、`scripts/analyze_music_file.py`、`app.py`；Flask `url_map` 确认 `/api/music/listen/*` 和 `/api/music-melody/*` 已注册；`scripts/analyze_music_file.py --help` 正常；`npm -C miniapp run build` 通过并生成 `ListenWithDuScreen` 前端 chunk。
+- 未完成 / 不要碰：界面暂未接真实歌曲选择和真实聊天上下文注入；本轮没有触碰 QQ connector、小爱音箱文件和既有半成品。
 
 当前状态（2026-05-12）：
 - 已完成并推送：`d6ca54a Stop log page error toasts` 已到 `main`；日志页不再弹应用内 `日志报错` toast，系统通知继续走后端 `log_error_alert` -> `show_system_notification` -> 安卓壳 `FloatingBallService` 的现有通知栏链路。

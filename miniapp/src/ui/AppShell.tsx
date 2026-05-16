@@ -45,6 +45,8 @@ import { SumiOverlay } from "../plugins/sumi-overlay";
 import { buildAvatarDataUrl, buildBackgroundDataUrl } from "./imageDataUrl";
 import { clampStoredNumber, readStoredBoolean, readStoredNumber, readStoredString } from "./uiStorage";
 
+const LISTEN_BACKGROUND_STORAGE_KEY = "miniapp.listenWithDu.backgroundImage";
+
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
 const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
 const ReasoningTab = lazy(() => import("./tabs/ReasoningTab").then((m) => ({ default: m.ReasoningTab })));
@@ -59,6 +61,7 @@ const CallHubScreen = lazy(() => import("./tabs/CallHubScreen").then((m) => ({ d
 const PixelHomeTab = lazy(() => import("./tabs/PixelHomeTab").then((m) => ({ default: m.PixelHomeTab })));
 const StayWithDuScreen = lazy(() => import("./tabs/StayWithDuScreen").then((m) => ({ default: m.StayWithDuScreen })));
 const CoReadScreen = lazy(() => import("./tabs/CoReadScreen").then((m) => ({ default: m.CoReadScreen })));
+const ListenWithDuScreen = lazy(() => import("./tabs/ListenWithDuScreen").then((m) => ({ default: m.ListenWithDuScreen })));
 const StudyRoomTab = lazy(() => import("./tabs/StudyRoomTab").then((m) => ({ default: m.StudyRoomTab })));
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | null;
@@ -100,6 +103,7 @@ export function AppShell({
   const [showStayWithDu, setShowStayWithDu] = useState(false);
   const [showPixelHome, setShowPixelHome] = useState(false);
   const [showCoRead, setShowCoRead] = useState(false);
+  const [showListenWithDu, setShowListenWithDu] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
@@ -174,10 +178,18 @@ export function AppShell({
       return "";
     }
   });
+  const [listenBackgroundImage, setListenBackgroundImage] = useState(() => {
+    try {
+      return localStorage.getItem(LISTEN_BACKGROUND_STORAGE_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
   const myAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const duAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const benbenAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const backgroundInputRef = useRef<HTMLInputElement | null>(null);
+  const listenBackgroundInputRef = useRef<HTMLInputElement | null>(null);
   const groupChatDisplayTitle = getDisplayGroupChatTitle(groupChatTitle);
   const loadDailyReport = () =>
     apiJson<{ ok?: boolean; report?: DailyReport }>("/miniapp-api/daily-report")
@@ -272,6 +284,7 @@ export function AppShell({
       localStorage.setItem("miniapp.ui.benbenAvatar", benbenAvatarImage);
       localStorage.setItem("miniapp.ui.groupChatTitle", limitGroupChatTitle(groupChatTitle));
       localStorage.setItem("miniapp.ui.chatBackgroundImage", chatBackgroundImage);
+      localStorage.setItem(LISTEN_BACKGROUND_STORAGE_KEY, listenBackgroundImage);
     } catch {}
   }, [
     transparentBubbleEnabled,
@@ -291,17 +304,23 @@ export function AppShell({
     benbenAvatarImage,
     groupChatTitle,
     chatBackgroundImage,
+    listenBackgroundImage,
   ]);
 
   async function handleImageSelection(
     file: File | undefined,
-    kind: "myAvatar" | "duAvatar" | "benbenAvatar" | "background",
+    kind: "myAvatar" | "duAvatar" | "benbenAvatar" | "background" | "listenBackground",
   ) {
     if (!file) return;
     try {
       if (kind === "background") {
         setChatBackgroundImage(await buildBackgroundDataUrl(file));
         toast("聊天背景已更新");
+        return;
+      }
+      if (kind === "listenBackground") {
+        setListenBackgroundImage(await buildBackgroundDataUrl(file));
+        toast("一起听背景已更新");
         return;
       }
       const next = await buildAvatarDataUrl(file);
@@ -418,6 +437,10 @@ export function AppShell({
         setShowCoRead(false);
         return;
       }
+      if (showListenWithDu) {
+        setShowListenWithDu(false);
+        return;
+      }
       if (showDiagnostics) {
         setShowDiagnostics(false);
         return;
@@ -446,6 +469,7 @@ export function AppShell({
     showCallHub,
     showCorePrompt,
     showCoRead,
+    showListenWithDu,
     showDuDay,
     showPixelHome,
     showPersonalization,
@@ -548,6 +572,7 @@ export function AppShell({
         onOpenDu={() => setActiveScreen("du")}
         onOpenGroup={() => setActiveScreen("group")}
         onOpenWenyou={() => setActiveScreen("wenyou")}
+        onOpenListenWithDu={() => setShowListenWithDu(true)}
         onRefreshTodayNote={() => {
           if (!todayNoteRefreshing) void loadDailyWhisper(true);
         }}
@@ -571,6 +596,7 @@ export function AppShell({
     showStayWithDu ||
     showPixelHome ||
     showCoRead ||
+    showListenWithDu ||
     showDiagnostics ||
     showCallHub;
 
@@ -721,11 +747,13 @@ export function AppShell({
             benbenAvatarImage={benbenAvatarImage}
             groupChatTitle={groupChatTitle}
             chatBackgroundImage={chatBackgroundImage}
+            listenBackgroundImage={listenBackgroundImage}
             onPickMyAvatar={() => myAvatarInputRef.current?.click()}
             onPickDuAvatar={() => duAvatarInputRef.current?.click()}
             onPickBenbenAvatar={() => benbenAvatarInputRef.current?.click()}
             onChangeGroupChatTitle={(next) => setGroupChatTitle(limitGroupChatTitle(next))}
             onPickChatBackground={() => backgroundInputRef.current?.click()}
+            onPickListenBackground={() => listenBackgroundInputRef.current?.click()}
           />
         </FullScreenPane>
       ) : null}
@@ -745,6 +773,7 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {showCoRead ? <LazyPane><CoReadScreen onBack={() => setShowCoRead(false)} windowId={sharedChatWindowId} /></LazyPane> : null}
+      {showListenWithDu ? <LazyPane><ListenWithDuScreen onBack={() => setShowListenWithDu(false)} backgroundImage={listenBackgroundImage} /></LazyPane> : null}
       {showDiagnostics ? (
         <FullScreenPane title="系统诊断" accent="neutral" headerMode="simple" onBack={() => setShowDiagnostics(false)}>
           <DiagnosticsScreen />
@@ -788,6 +817,16 @@ export function AppShell({
         className="hidden"
         onChange={(e) => {
           void handleImageSelection(e.target.files?.[0], "background");
+          e.currentTarget.value = "";
+        }}
+      />
+      <input
+        ref={listenBackgroundInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void handleImageSelection(e.target.files?.[0], "listenBackground");
           e.currentTarget.value = "";
         }}
       />

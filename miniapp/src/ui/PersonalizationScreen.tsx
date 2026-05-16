@@ -261,11 +261,13 @@ export function PersonalizationScreen({
   benbenAvatarImage,
   groupChatTitle,
   chatBackgroundImage,
+  listenBackgroundImage,
   onPickMyAvatar,
   onPickDuAvatar,
   onPickBenbenAvatar,
   onChangeGroupChatTitle,
   onPickChatBackground,
+  onPickListenBackground,
 }: {
   transparentBubbleEnabled: boolean;
   onToggleTransparentBubble: (next: boolean) => void;
@@ -296,11 +298,13 @@ export function PersonalizationScreen({
   benbenAvatarImage: string;
   groupChatTitle: string;
   chatBackgroundImage: string;
+  listenBackgroundImage: string;
   onPickMyAvatar: () => void;
   onPickDuAvatar: () => void;
   onPickBenbenAvatar: () => void;
   onChangeGroupChatTitle: (next: string) => void;
   onPickChatBackground: () => void;
+  onPickListenBackground: () => void;
 }) {
   const toast = useToast();
   const [ttsEmotion, setTtsEmotion] = useState<TtsEmotionKey>("");
@@ -416,6 +420,29 @@ export function PersonalizationScreen({
             </div>
             <PersonalizationRow title="背景图设置" onClick={onPickChatBackground} />
             <PersonalizationSliderRow title="背景透明度" value={`${chatBackgroundOpacity}%`} min={20} max={100} step={1} currentValue={chatBackgroundOpacity} onChange={onChangeChatBackgroundOpacity} />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">一起听背景</h2>
+          <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
+            <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
+              <p className="mb-3 text-[12px] font-medium text-gray-400">当前背景预览</p>
+              <div
+                className="h-[112px] rounded-[18px] bg-cover bg-center"
+                style={{
+                  backgroundImage: listenBackgroundImage
+                    ? `linear-gradient(180deg,rgba(37,58,85,0.16),rgba(232,215,225,0.44)),url(${listenBackgroundImage})`
+                    : "linear-gradient(180deg,#6a9bd1 0%,#9ebadc 48%,#e8d7e1 100%)",
+                }}
+              />
+            </div>
+            <PersonalizationRow
+              title="背景图设置"
+              value={listenBackgroundImage ? "已设置" : "默认"}
+              onClick={onPickListenBackground}
+              last
+            />
           </div>
         </section>
 
