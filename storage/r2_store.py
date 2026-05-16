@@ -2177,6 +2177,14 @@ def wenyou_last_archive_key(user_id: int) -> str:
     return f"wenyou/last_archive/{int(user_id)}.json"
 
 
+def wenyou_candidates_key(user_id: int) -> str:
+    return f"wenyou/candidates/{int(user_id)}.json"
+
+
+def wenyou_card_key(user_id: int) -> str:
+    return f"wenyou/cards/{int(user_id)}.json"
+
+
 def get_wenyou_session(user_id: int) -> Optional[Any]:
     """读取进行中的文游局；无则 None。"""
     client = _s3_client()
@@ -2247,6 +2255,50 @@ def get_wenyou_last_archive(user_id: int) -> Optional[Any]:
     if not client:
         return None
     return _read_json(client, wenyou_last_archive_key(user_id))
+
+
+def get_wenyou_candidates(user_id: int) -> Optional[Any]:
+    """读取文游副本候选设定池。"""
+    client = _s3_client()
+    if not client:
+        return None
+    return _read_json(client, wenyou_candidates_key(user_id))
+
+
+def save_wenyou_candidates(user_id: int, data: Any) -> bool:
+    """保存文游副本候选设定池。"""
+    client = _s3_client()
+    if not client:
+        logger.warning("R2 未配置，跳过 save_wenyou_candidates user_id=%s", user_id)
+        return False
+    try:
+        _write_json(client, wenyou_candidates_key(user_id), data)
+        return True
+    except Exception as e:
+        logger.error("save_wenyou_candidates 失败 user_id=%s error=%s", user_id, e, exc_info=True)
+        return False
+
+
+def get_wenyou_card(user_id: int) -> Optional[Any]:
+    """读取文游连续性卡片（只供文游上下文，不参与动态召回）。"""
+    client = _s3_client()
+    if not client:
+        return None
+    return _read_json(client, wenyou_card_key(user_id))
+
+
+def save_wenyou_card(user_id: int, data: Any) -> bool:
+    """保存文游连续性卡片（类似共读卡片）。"""
+    client = _s3_client()
+    if not client:
+        logger.warning("R2 未配置，跳过 save_wenyou_card user_id=%s", user_id)
+        return False
+    try:
+        _write_json(client, wenyou_card_key(user_id), data)
+        return True
+    except Exception as e:
+        logger.error("save_wenyou_card 失败 user_id=%s error=%s", user_id, e, exc_info=True)
+        return False
 
 
 def list_wenyou_archives(user_id: int, limit: int = 20) -> list[dict]:

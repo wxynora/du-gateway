@@ -22,8 +22,9 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 模块 | 主要文件 | 说明 |
 | --- | --- | --- |
 | 主聊天网关 | `routes/chat.py` | `/v1/chat/completions`，stream、tool loop、reasoning、归档 |
-| 主聊天策略 | `services/entry_style_prompt.py`、`services/upstream_policy.py` | 入口风格 system、active upstream 选择、OpenRouter/CPA/Claude OAuth 请求策略 |
+| 主聊天策略 | `services/entry_style_prompt.py`、`services/chat_prompt_injections.py`、`services/upstream_policy.py` | 入口风格 system、voice/followup/NSFW/禁言注入、active upstream 选择、OpenRouter/CPA/Claude OAuth 请求策略 |
 | 主聊天诊断/思维链 | `services/prompt_cache_debug.py`、`services/reasoning_utils.py`、`services/chat_content.py` | prompt/cache debug、reasoning/thinking 剥离、SSE message 解析、消息字符统计 |
+| 主聊天响应辅助 | `services/chat_sidecars.py`、`services/chat_response_enrichers.py`、`services/chat_tool_helpers.py`、`services/chat_request_helpers.py`、`services/chat_archive_helpers.py` | 隐藏 sidecar 写入、HTML 预览/SumiTalk 卡片补全、tool 重试/SSE 小工具、入口状态/误触保护、归档后台辅助 |
 | 注入管道 | `pipeline/pipeline.py` | core prompt、summary、last4、sense、dynamic memory、tools 注入 |
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
@@ -215,6 +216,55 @@ rg -n "TGHook|TGQueue|TGWorker|TGBot|webhook 已落持久队列|queue worker 消
 - 已完成：Webhook 只写 SQLite 持久队列；TG 输入聚合和回复发送由独立 worker 持有，避免 gunicorn `max_requests` 回收直接吞掉 pending buffer。
 - 未完成：线上还需要把 `scripts/run_telegram_webhook_worker.py` 配成常驻进程；只重启 `du-gateway` 不会消费新队列。
 - 不要碰：现有 `du-telegram-proactive` 是主动消息/闹钟调度，不是 webhook 消费 worker，不能拿它替代。
+
+## 文游 App 迁移 / TG 旧链路清理
+
+入口：
+- MiniApp API：`routes/miniapp/wenyou.py`
+- 文游核心：`services/wenyou_service.py`
+- 存储：`storage/r2_store.py` 的 `wenyou/active/`、`wenyou/archive/`、`wenyou/last_archive/`、`wenyou/candidates/`、`wenyou/cards/`
+- 配置：`config.py::WENYOU_SESSION_ID`、`config.py::WENYOU_DS_MODEL`
+- 升级方案：`docs/文游升级优化方案.md`
+
+当前状态（2026-05-16）：
+- 已完成：文游不再绑定 Telegram 群、TG 用户或 GM Bot；`/telegram/webhook_gm`、TG 文游群命令、群内玩家行动记录、TG 私聊 GM 剧情注入和文游群 Last4 混入均已移除。MiniApp 文游状态/归档/开局仍走 `WENYOU_SESSION_ID` 对应的 R2 `wenyou/` 会话。
+- 已验证：`python3 -m py_compile` 和 `.venv/bin/python -m py_compile` 覆盖本组文件；`.venv/bin/python` 路由表确认 `/telegram/webhook` 保留、`/telegram/webhook_gm` 移除、`/miniapp-api/wenyou/story` 保留；`rg` 确认 `TELEGRAM_GM_BOT_TOKEN`、`WENYOU_GROUP_CHAT_ID`、`TELEGRAM_WENYOU_OWNER_USER_ID`、`step_inject_wenyou_gm`、`record_group_player*` 已无运行时代码引用；`git diff --check` 通过。
+- 未完成 / 不要碰：本轮没有重做文游 App 交互、没有迁移旧 TG 群会话数据、没有改 MiniApp 前端构建产物；真正的新 App 文游形态等下一阶段再定。
+
+当前状态（2026-05-16 续）：
+- 已完成：`miniapp/src/ui/tabs/WenyouTab.tsx` 在文游开局成功后展示入副本文字动画，文案为“欢迎来到 {副本名} / 努力生存下去吧”，并显示副本编号、类型、难度；动画可点击关闭，约 4.2 秒后自动消失，尊重 `prefers-reduced-motion`。样式改为黑场、扫描网格、主神系统字幕方向，落在 `miniapp/src/styles.css`，构建产物同步到 `miniapp_static/`。
+- 已验证：`npm -C miniapp run build` 通过；`rg` 确认旧版 `wenyou-entry-card/chip/line` 已无引用；构建输出为 `miniapp_static/assets/WenyouTab-D4kLZKF1.js` 与 `miniapp_static/assets/index-B3C3M5QZ.css`；`git diff --check` 通过但仍提示既有 CRLF warning。
+- 未完成 / 不要碰：本轮没有做副本模式选择、任务进度、背包/道具使用、角色状态等下一阶段结构化玩法；没有清理既有 `miniapp_static/assets/*` 旧哈希产物。
+
+当前状态（2026-05-16 续2）：
+- 已完成：新增 `docs/文游升级优化方案.md`，把文游 App 化后的完整 UI 与功能目标写成方案：主神空间、副本选择/随机、入场动画、主界面、任务、背包、状态、线索、地点、人物关系、历史、结算、归档和设置。
+- 已验证：文档文件已创建，`docs/DEBUG_INDEX.md` 已补方案入口。
+- 未完成 / 不要碰：本轮只写产品/交互/功能方案，没有改前端实现、后端实现或构建产物。
+
+当前状态（2026-05-16 续3）：
+- 已完成：按下载的 `ui合集/文游ui.html` 参考，把文游入场动画调成更赛博的主神终端风格：青色扫描网格、CRT 纹理、LINK 状态、终端标签、进度条和标题轻微 glitch；仍保持“欢迎来到 {副本名} / 努力生存下去吧”的入场文案。
+- 已验证：`npm -C miniapp run build` 通过；构建输出为 `miniapp_static/assets/WenyouTab-CCA4zc_p.js` 与 `miniapp_static/assets/index-C3vf5Atl.css`。
+- 未完成 / 不要碰：本轮只调整副本入场动画，没有改一级页面骨架、任务/背包/状态/线索二级面板或后端接口。
+
+当前状态（2026-05-16 续4）：
+- 已完成：按下载的 `ui合集/文游ui.html` 一级页面参考，重做 `miniapp/src/ui/tabs/WenyouTab.tsx` 的主神空间、副本大厅、游玩主界面、历史归档和随机匹配弹窗；`miniapp/src/styles.css` 补 cyber 暗底网格、扫描线、霓虹边框、筛选条、副本卡、状态条和输入区样式。现有 `/miniapp-api/wenyou/status`、`/archives`、`/story`、`/archive/{id}` 调用路径保留，任务/背包/状态/线索二级面板先保留前端占位。
+- 已验证：`npm -C miniapp run build` 通过；构建输出为 `miniapp_static/assets/WenyouTab-Ch36gUu0.js` 与 `miniapp_static/assets/index-DLEYPdeX.css`；本地 `http://127.0.0.1:5174/miniapp/` 在 Edge 打开并进入文游页，主神空间和副本大厅渲染正常；`git diff --check` 通过但仍提示既有 CRLF warning。
+- 未完成 / 不要碰：本轮只抄一级 UI 和前端交互壳，没有接入任务进度、背包物品、状态详情、线索板等二级真实数据；没有改 `routes/miniapp/wenyou.py`、`services/wenyou_service.py` 或其他后端；不要清理既有 `miniapp_static/assets/*` 旧哈希产物。
+
+当前状态（2026-05-16 续5）：
+- 已完成：把副本大厅从前端写死卡片改成 DS 候选设定池：新增 `/miniapp-api/wenyou/candidates`，GET 优先读 R2 `wenyou/candidates/{WENYOU_SESSION_ID}.json`，无缓存或 POST 刷新时才调用 DS 一次生成 3-8 条轻量候选；选中候选后 `/wenyou/story` 接收 `candidate`，由 `services/wenyou_service.py::format_candidate_expansion_prompt` 转成 custom 开局提示，再扩展为完整副本框架。前端大厅显示候选生成时间、刷新候选、筛选/搜索、候选任务/生存点/风险/标签，并把“随机进入”改成生成候选池。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/wenyou.py services/wenyou_service.py storage/r2_store.py` 通过；`.venv/bin/python` smoke check 确认候选 seed 能格式化为完整副本扩展提示；`npm -C miniapp run build` 通过，当前入口指向 `miniapp_static/assets/index-DIqBcn2P.js`、`miniapp_static/assets/index-DdU-hu8p.css`，文游 chunk 为 `miniapp_static/assets/WenyouTab-C81wM0Uv.js`。
+- 未完成 / 不要碰：本轮没有接任务推进、背包、状态、线索二级真实接口；没有清理旧 `miniapp_static/assets/*` 哈希产物；候选池刷新会真实调用 DS，线上需确认 `DEEPSEEK_API_KEY` 与 R2 配置可用。
+
+当前状态（2026-05-16 续6）：
+- 已完成：接上文游具体后端功能闭环：新增 `/miniapp-api/wenyou/session` 结构化读取任务、背包、状态、线索和历史；新增 `/wenyou/action` 记录玩家行动并复用 `cmd_go` 推进 GM；新增 `/wenyou/item/use` 校验背包道具并交给 GM 判定效果/消耗；新增 `/wenyou/go`、`/wenyou/end`、`/wenyou/settle` 供后续 UI 做推进/结算。`cmd_go` 会把本轮玩家行动写进 history，再保存 GM 回复与解析后的主神面板。前端行动输入、任务/背包/状态/线索面板、背包道具使用已接这些接口。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/wenyou.py services/wenyou_service.py storage/r2_store.py` 通过；`.venv/bin/python` smoke check 覆盖 `get_session_view` 的背包和线索提取；`npm -C miniapp run build` 通过，当前入口指向 `miniapp_static/assets/index-75o6menU.js`、`miniapp_static/assets/index-D4ifVuNu.css`，文游 chunk 为 `miniapp_static/assets/WenyouTab-BFpz_uzq.js`。
+- 未完成 / 不要碰：行动推进和道具使用会真实调用 DS；任务进度/线索仍来自 framework 与 GM 文本备忘解析，还不是独立数据库任务系统；没有清理旧 `miniapp_static/assets/*` 哈希产物。
+
+当前状态（2026-05-16 续7）：
+- 已完成：按共读卡片思路给文游补连续性卡片 `wenyou/cards/{WENYOU_SESSION_ID}.json`，只供文游上下文使用，不进动态召回；玩家提交行动时 `/wenyou/action` 会先生成“渡本轮行动”，再把辛玥行动 + 渡行动一起交给 GM 推进，前端 feed 会显示“渡的行动”。每轮 GM 结算后会把 `[文游]` / `[文游·GM]` 前缀的虚构游戏回合写入普通 `windows/wenyou/conversation.json`，同步全局 latest4，并每 4 轮触发近期总结；摘要 prompt 已明确这些是文游游戏内容，避免 DS 当成现实经历。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/wenyou.py services/wenyou_service.py storage/r2_store.py` 通过；`npm -C miniapp run build` 通过，当前入口指向 `miniapp_static/assets/index-8r4gdEvI.js`、`miniapp_static/assets/index-D4ifVuNu.css`，文游 chunk 为 `miniapp_static/assets/WenyouTab-cQYbHaGv.js`。
+- 未完成 / 不要碰：本轮没有启用动态记忆召回，也没有把文游卡片混入普通聊天；没有清理旧 `miniapp_static/assets/*` 哈希产物。渡自动行动和 GM 推进线上会真实调用 DeepSeek，需线上确认 `DEEPSEEK_API_KEY` 可用。
 
 ## 事件唤醒 / Trigger / 弹窗回执
 
@@ -658,6 +708,21 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile routes/chat.py services/chat_content.py services/prompt_cache_debug.py services/reasoning_utils.py services/entry_style_prompt.py services/upstream_policy.py`、新服务 smoke check、`routes.chat` import check、`git diff --check` 均通过。
 - 未完成 / 不要碰：`app.py`、`config.py`、QQ connector、小爱/音乐相关文件、共读文档、`miniapp_static/assets/*` 仍是本地已有改动或半成品；继续拆分可优先看 `routes/chat.py` 的 tool-loop/归档 sidecar，或转拆 `storage/r2_store.py`。
 
+当前状态（2026-05-16 续2）：
+- 已完成：继续拆 `routes/chat.py`，把隐藏 sidecar 处理移到 `services/chat_sidecars.py`，把 HTML preview / SumiTalk 卡片补全移到 `services/chat_response_enrichers.py`，把 tool 调用结果拼接、tool trace 收集和 SSE 小工具移到 `services/chat_tool_helpers.py`；`routes/chat.py` 约 1645 行。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py services/chat_sidecars.py services/chat_response_enrichers.py services/chat_tool_helpers.py services/chat_content.py services/prompt_cache_debug.py services/reasoning_utils.py services/entry_style_prompt.py services/upstream_policy.py`、新服务 smoke check、`routes.chat` import check、`git diff --check` 均通过。
+- 未完成 / 不要碰：`app.py`、`config.py`、`connectors/qq_onebot/src/main.js`、`routes/miniapp/wenyou.py`、`services/telegram_bot.py`、`services/wenyou_service.py`、小爱/音乐相关文件、共读文档、`miniapp_static/assets/*` 仍是本地已有改动或半成品；继续拆分可优先看 `routes/chat.py` 的 stream/non-stream 主流程，或转拆 `storage/r2_store.py`。
+
+当前状态（2026-05-16 续3）：
+- 已完成：继续拆 `routes/chat.py`，把 tool 续轮重试判断/补问注入补进 `services/chat_tool_helpers.py`，把 last user 提取、RikkaHub 幽灵 1 保护、最近入口记录移到 `services/chat_request_helpers.py`，把非流式归档后台任务和共读原文存档裁剪移到 `services/chat_archive_helpers.py`；`routes/chat.py` 约 1357 行。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py services/chat_tool_helpers.py services/chat_request_helpers.py services/chat_archive_helpers.py services/chat_sidecars.py services/chat_response_enrichers.py services/chat_content.py services/prompt_cache_debug.py services/reasoning_utils.py services/entry_style_prompt.py services/upstream_policy.py`、新 helper smoke check、`routes.chat` import check、`git diff --check` 均通过。
+- 未完成 / 不要碰：`app.py`、`config.py`、`connectors/qq_onebot/src/main.js`、`routes/miniapp/wenyou.py`、`services/telegram_bot.py`、`services/wenyou_service.py`、小爱/音乐相关文件、共读文档、`miniapp_static/assets/*` 仍是本地已有改动或半成品；继续拆分可优先看 `routes/chat.py` 剩余 stream/non-stream 主流程，或转拆 `storage/r2_store.py`。
+
+当前状态（2026-05-16 续4）：
+- 已完成：继续拆 `routes/chat.py`，把入口 prompt 注入集中到 `services/chat_prompt_injections.py`：入口风格、语音通话台词、followup 静态规则、渠道 NSFW 和禁言模式；路由侧只保留请求 header 判断和调用顺序。`routes/chat.py` 约 1204 行。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py services/chat_prompt_injections.py services/chat_tool_helpers.py services/chat_request_helpers.py services/chat_archive_helpers.py services/chat_sidecars.py services/chat_response_enrichers.py services/chat_content.py services/prompt_cache_debug.py services/reasoning_utils.py services/entry_style_prompt.py services/upstream_policy.py`、prompt/helper smoke check、`routes.chat` import check、`git diff --check` 均通过。
+- 未完成 / 不要碰：`app.py`、`config.py`、`connectors/qq_onebot/src/main.js`、`routes/miniapp/wenyou.py`、`services/telegram_bot.py`、`services/wenyou_service.py`、小爱/音乐相关文件、共读文档、`miniapp_static/assets/*` 仍是本地已有改动或半成品；下一步优先拆 `routes/chat.py` 的 stream/non-stream 主流程，或转拆 `storage/r2_store.py`。
+
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
    - 已拆：Codex group chat task 路由已移到 `routes/miniapp/codex_group_chat.py`；`/codex-group-chat-tasks*` 路径保持不变
@@ -683,10 +748,17 @@ npm -C miniapp run android
 
 4. `routes/chat.py`
    - 已拆：入口风格 system 构造移到 `services/entry_style_prompt.py`
+   - 已拆：入口 prompt 注入（入口风格调用、voice/followup/NSFW/禁言）移到 `services/chat_prompt_injections.py`
    - 已拆：上游选择、active 模型策略、OpenRouter 请求策略移到 `services/upstream_policy.py`
    - 已拆：prompt-cache / cache debug 移到 `services/prompt_cache_debug.py`
    - 已拆：reasoning/thinking/SSE message 解析移到 `services/reasoning_utils.py`
    - 已拆：消息内容字符统计移到 `services/chat_content.py`
+   - 已拆：隐藏 sidecar 写入移到 `services/chat_sidecars.py`
+   - 已拆：HTML preview / SumiTalk 卡片补全移到 `services/chat_response_enrichers.py`
+   - 已拆：tool 调用结果拼接、tool trace、SSE 小工具移到 `services/chat_tool_helpers.py`
+   - 已拆：tool 续轮重试判断/补问注入补进 `services/chat_tool_helpers.py`
+   - 已拆：last user 提取、RikkaHub 幽灵 1 保护、最近入口记录移到 `services/chat_request_helpers.py`
+   - 已拆：非流式归档后台任务和共读原文存档裁剪移到 `services/chat_archive_helpers.py`
    - stream handling
    - tool loop
    - archive/reasoning collection
