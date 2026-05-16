@@ -194,7 +194,11 @@ function Icon({ name }: { name: string }) {
 
 export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitialView }) {
   const toast = useToast();
-  const [view, setView] = useState<WenyouView>(() => normalizeInitialView(initialView));
+  const normalizedInitialView = normalizeInitialView(initialView);
+  const [view, setView] = useState<WenyouView>(() => normalizedInitialView);
+  const [spaceBootVisible, setSpaceBootVisible] = useState(() => normalizedInitialView === "home");
+  const [spaceBootFading, setSpaceBootFading] = useState(false);
+  const [spaceBootProgress, setSpaceBootProgress] = useState(0);
   const [archivesLoading, setArchivesLoading] = useState(false);
   const [archives, setArchives] = useState<WenyouArchiveItem[]>([]);
   const [openGameId, setOpenGameId] = useState("");
@@ -310,6 +314,23 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
     loadStatus();
     loadArchives();
   }, [loadStatus, loadArchives]);
+
+  useEffect(() => {
+    if (!spaceBootVisible) return;
+    let width = 0;
+    const interval = window.setInterval(() => {
+      width = Math.min(100, width + 8 + Math.random() * 12);
+      setSpaceBootProgress(width);
+      if (width >= 100) {
+        window.clearInterval(interval);
+        window.setTimeout(() => {
+          setSpaceBootFading(true);
+          window.setTimeout(() => setSpaceBootVisible(false), 1000);
+        }, 500);
+      }
+    }, 150);
+    return () => window.clearInterval(interval);
+  }, [spaceBootVisible]);
 
   useEffect(() => {
     if (view === "selection" && !candidates.length && !candidatesLoading) {
@@ -473,6 +494,19 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
     <div className="wenyou-shell">
       <span className="wenyou-shell-grid" />
       <span className="wenyou-shell-scan" />
+
+      {spaceBootVisible ? (
+        <div className={`wenyou-space-entry ${spaceBootFading ? "wenyou-space-entry-hide" : ""}`} role="status" aria-live="polite">
+          <div className="wenyou-space-entry-title">
+            <h1>MAIN GOD</h1>
+            <h2>SYSTEM SCANNING...</h2>
+          </div>
+          <div className="wenyou-space-entry-track">
+            <span style={{ width: `${spaceBootProgress}%` }} />
+          </div>
+          <p>Initializing Neural Link</p>
+        </div>
+      ) : null}
 
       {entryScene ? (
         <div className="wenyou-entry fixed inset-0 z-[80]" role="status" aria-live="polite">
