@@ -23,7 +23,6 @@ from config import (
     DEEPSEEK_API_URL,
     DEEPSEEK_API_KEY,
     DEEPSEEK_CHAT_MODEL,
-    WENYOU_GROUP_CHAT_ID,
 )
 from pathlib import Path
 from storage import r2_store
@@ -645,8 +644,7 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
     is_telegram_window = window_id.startswith("tg_")
 
     if is_telegram_window:
-        # Telegram 默认仍按“本窗口 Last4”注入。
-        # 仅当文游进行中时，再叠加文游群窗口上下文，确保平时聊天不受干扰。
+        # Telegram 只按“本窗口 Last4”注入；文游已迁出 TG，不再混入群窗口上下文。
         if force_last4 or len(messages) <= 2 or r2_store.has_window_history(window_id):
             private_rounds = r2_store.get_conversation_rounds(window_id, last_n=4) or []
             merged = []
@@ -662,26 +660,9 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
 
             merged.extend(_with_src(private_rounds, "私聊"))
 
-            group_rounds = []
-            wenyou_active = False
-            gid_num = int(WENYOU_GROUP_CHAT_ID or 0)
-            if gid_num:
-                try:
-                    sid = r2_store.get_wenyou_session(gid_num)
-                    wenyou_active = bool(isinstance(sid, dict) and sid.get("gameId"))
-                except Exception:
-                    wenyou_active = False
-                if wenyou_active:
-                    gid = f"tg_{gid_num}"
-                    if gid != window_id:
-                        group_rounds = r2_store.get_conversation_rounds(gid, last_n=4) or []
-                    merged.extend(_with_src(group_rounds, "群聊"))
-
             merged.sort(key=lambda x: str(x.get("timestamp") or ""))
             rounds = merged[-4:]
             inject_label = "最近的对话"
-            if wenyou_active and group_rounds:
-                inject_label = "最近的对话（文游进行中）"
     else:
         if not r2_store.has_window_history(window_id):
             rounds = r2_store.get_latest_4_rounds_global()
@@ -695,7 +676,7 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
 
     if not rounds:
         return body
-    # Telegram 合并注入时，给每轮加来源标签，避免群聊/私聊语义混淆。
+    # Telegram 注入时保留来源标签，便于后续扩展其它入口时区分上下文。
     if is_telegram_window:
         lines = []
         for r in rounds:
