@@ -60,8 +60,8 @@ rg -n "TARGET_AI_URLS|TARGET_AI_API_KEYS|OPENROUTER|SILICONFLOW" .env config.py
 
 注意：
 - `/v1/models` 不一定能代表 chat 可用。
-- OpenRouter / SiliconFlow / 本地 Claude proxy / CPA 都有特殊模型策略。
-- CPA 本地地址 `127.0.0.1:8317` 在服务器上指服务器自己，不是手机。
+- OpenRouter / SiliconFlow / Claude OAuth proxy / CPA（Codex 反代）都有各自的模型和鉴权策略，排查时不要混用。
+- 所有 `127.0.0.1:*` 上游地址在服务器上都指服务器自己，不是手机或本机 Mac。
 
 ## 上游切换失败
 
@@ -413,30 +413,153 @@ rg -n "core-prompt|核心|入口风格|SumiTalk|禁言|silence" routes services 
 - 已完成：语音台词撰写规范已抽到 `services/voice_line_prompt.py`，并注入 QQ/TG 的 `<voice>` 规则与 `X-Voice-Call-Slim` 语音通话回复；只约束会被朗读的语音文本，不改普通文字聊天、核心 prompt 或 DS 总结提示词。
 - 未完成 / 不要碰：这次不处理 voice prompt 之外的风格规则；不要把这份规范做成 Codex skill，也不要塞进全局普通聊天 prompt。
 
-## Claude proxy / CPA / OAuth
+## Claude OAuth proxy / token sync
 
 现象：
-- Claude proxy 401
-- CPA 429/503
+- Claude OAuth proxy 401
+- Claude OAuth proxy refresh 失败
 - thinking/cache/tool 格式不对
 - Claude 看不了图
 
 入口：
-- Claude proxy：`scripts/claude_oauth_proxy.js`
-- CPA 上游配置：`.env` 的 `TARGET_AI_URLS`
+- Claude OAuth proxy 实现：`scripts/claude_oauth_proxy.js`
+- 服务器 Claude 上游配置：`.env` 的 `TARGET_AI_URLS`
 - 网关转发：`routes/chat.py`
 - 上游选择：`storage/upstream_store.py`
+- 本机 token 同步脚本：`/Users/doraemon/claude-token-sync.sh`
+- 本机 LaunchAgent：`/Users/doraemon/Library/LaunchAgents/com.doraemon.claude-token-sync.plist`
 
 常查：
 
 ```bash
-rg -n "claude|anthropic|thinking|cache_control|tool_use|oauth|CPA|8317" scripts routes storage .env
+rg -n "claude|anthropic|thinking|cache_control|tool_use|oauth|8317|8082" scripts routes storage .env
+ssh -o ControlMaster=no ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
+ssh -o ControlMaster=no ali-du 'systemctl --user list-units --type=service --all | grep -Ei "claude|proxy|oauth"'
 ```
 
 注意：
-- CPA 是模拟 CLI/Codex 类链路，是否可用取决于 OAuth/限流/服务状态。
-- 本地 `127.0.0.1:8317` 在手机看来不是手机本地，而是网关服务器本地。
-- Claude proxy 401 多半先查 OAuth token 是否刷新并推到服务器。
+- Claude OAuth proxy 是 Claude 反代，不是 CPA。CPA 另有一节，按 Codex 反代排查。
+- 不要擅自改 `/Users/doraemon/claude-token-sync.sh` 的默认重启服务；默认应是 `claude-oauth-proxy.service`。只有用户明确说服务名变了，才改 `CLAUDE_PROXY_SERVICE` 或脚本默认值。
+- Claude OAuth proxy 401 不要先猜模型，先分清是哪层 401：
+  - `Invalid proxy key` / `AUTH REJECTED`：网关到代理的 key 不匹配，查 `.env` 的 `TARGET_AI_API_KEYS` 和代理服务配置。
+  - `<= 401 /v1/chat/completions`、`Got 401`、`Refresh failed`：代理到 Anthropic / Claude OAuth 的 token 问题，优先查 token sync。
+  - `Refresh failed: HTTP 403 ... Just a moment... Cloudflare`：服务器自己刷新 token 被 Cloudflare 挡住，不能指望远端自动刷新；要用 Mac 本地 Keychain 的 token 同步到 VPS。
+  - `429`：额度/限流，不是 token sync 能修。
+
+### Claude token sync 快查
+
+这套脚本是为了修 Claude OAuth proxy 401：从 Mac 本机 Claude Code Keychain 取 OAuth JSON，必要时本地刷新，然后通过 HTTP POST 同步到 VPS 的 Claude OAuth proxy。不要再把“同步 token”做成 SSH 写文件 + 重启服务的主链路。
+
+关键路径：
+- 脚本：`/Users/doraemon/claude-token-sync.sh`
+- LaunchAgent：`/Users/doraemon/Library/LaunchAgents/com.doraemon.claude-token-sync.plist`
+- 本机日志：`/Users/doraemon/claude-token-sync.log`
+- launchd stdout/stderr：`/Users/doraemon/claude-token-sync.launchd.log`、`/Users/doraemon/claude-token-sync.launchd.err`
+- 状态文件：`/Users/doraemon/.claude-token-sync.state`、`/Users/doraemon/.claude-token-sync.wake`
+- 本机 Keychain service：`Claude Code-credentials`
+- 远端 Claude OAuth auth 文件：`/home/nora/.cli-proxy-api/claude-sumikamiss@gmail.com.json`
+- Claude OAuth proxy 内部同步接口：`POST /internal/oauth-sync`
+- 网关转发同步接口：`POST /internal/claude-oauth-sync`
+- 网关转发状态接口：`GET /internal/claude-oauth-status`
+- 本机私有配置：`/Users/doraemon/.claude-token-sync.env`
+
+LaunchAgent 默认 `StartInterval=300`，也就是约 5 分钟跑一次。脚本先查本机 Keychain token 是否接近过期，必要时本机刷新后 POST；远端状态接口若报告新 401 或远端 token 比本机旧，也会触发 POST。远端 401 只是补救信号，不再是主链路。
+
+本机配置示例（不要提交，不要贴密钥）：
+
+```bash
+CLAUDE_PROXY_SYNC_URL=https://duxy-home.com/internal/claude-oauth-sync
+CLAUDE_PROXY_STATUS_URL=https://duxy-home.com/internal/claude-oauth-status
+CLAUDE_PROXY_SYNC_KEY=...
+```
+
+服务端约束：
+- `scripts/claude_oauth_proxy.js` 的同步接口用 `CLAUDE_OAUTH_SYNC_KEY` 校验；未配置时默认复用 `PROXY_KEY`。
+- Claude OAuth proxy 应继续只监听服务器本机或内网；公网只暴露网关转发接口或受控内网入口。
+- 同步接口只接收完整 OAuth JSON，验证 `accessToken/refreshToken/expiresAt`，原子写入 `CLAUDE_OAUTH_FILE`，并热更新内存 token，不需要 `systemctl restart`。
+
+先查本机脚本有没有跑：
+
+```bash
+launchctl print gui/$(id -u)/com.doraemon.claude-token-sync | sed -n '1,80p'
+tail -n 80 /Users/doraemon/claude-token-sync.log
+tail -n 80 /Users/doraemon/claude-token-sync.launchd.err
+```
+
+需要立刻同步时：
+
+```bash
+bash -n /Users/doraemon/claude-token-sync.sh
+/Users/doraemon/claude-token-sync.sh --force
+launchctl kickstart -k gui/$(id -u)/com.doraemon.claude-token-sync
+```
+
+查远端 Claude OAuth proxy 服务：
+
+```bash
+ssh -o ControlMaster=no ali-du 'systemctl --user is-active claude-oauth-proxy.service'
+ssh -o ControlMaster=no ali-du 'ss -ltnp 2>/dev/null | grep -E "(:8082|:8317)"'
+ssh -o ControlMaster=no ali-du 'journalctl --user -u claude-oauth-proxy.service -n 120 --no-pager -o cat | grep -Ei "401|refresh|auth file|cloudflare|error|model"'
+```
+
+确认 token 是否已同步成功：
+- 本机日志应出现类似：`synced oauth via_http reason=... oauth_ready refreshed=...`
+- 远端 Claude OAuth proxy 日志应出现 `OAuth synced by HTTP`，或状态接口返回新的 `expiresAt`。
+- `launchctl print ...` 里 `last exit code` 应为 `0`
+
+先确认当前 active upstream 指向哪条线，别把 Claude OAuth proxy 和 CPA 混在一起：
+
+```bash
+ssh -o ControlMaster=no ali-du 'cd /root/du-gateway && .venv/bin/python - <<'"'"'PY'"'"'
+from storage.upstream_store import load_upstreams, get_cached_active_model
+data = load_upstreams()
+items = data.get("items") or []
+active = int(data.get("active") or 0)
+item = items[active] if 0 <= active < len(items) else {}
+print("active=", active)
+print("url=", item.get("url") or "")
+print("model=", get_cached_active_model(refresh_if_missing=False))
+PY
+'
+```
+
+如果 active URL 确认是 Claude OAuth proxy，再对该 URL 做最小 chat 探活；如果 active URL 是 CPA/Codex 反代，转去 CPA 章节排查。若 Claude OAuth proxy 仍是 `401`：
+1. 先看 `/Users/doraemon/claude-token-sync.log` 最新一轮有没有 `synced oauth via_http`。
+2. 看 `launchd.err` 有没有 `claude_local_refresh_failed`、`429`、`did_not_update_keychain`。
+3. 用 `GET /internal/claude-oauth-status` 看远端 `expiresAt`、`lastUnauthorizedAt`。
+4. 看远端 `claude-oauth-proxy.service` journal 是否继续 `Refresh failed: HTTP 403 ... Cloudflare`。
+5. 确认脚本走的是 Claude OAuth sync URL，不要把 CPA/Codex 反代服务混进来。
+
+当前状态（2026-05-16）：
+- 已纠正：不要把 Claude OAuth proxy 和 CPA 混在一起；Claude 401 先查 Claude OAuth proxy 和 token sync。
+- 已撤回：刚才把 token sync 默认重启服务改成 `cliproxyapi.service` 是错误改动，已改回 `claude-oauth-proxy.service`。
+- 已改动：token sync 主链路改为 HTTP POST；新增 Claude proxy 内部同步/状态接口，网关新增 `/internal/claude-oauth-sync` 和 `/internal/claude-oauth-status` 转发。
+- 已部署：`/home/nora/claude-proxy/proxy.js` 已更新并重启 `claude-oauth-proxy.service`；服务器本机 `GET /internal/oauth-status`、`POST /internal/oauth-sync` 已验证通过。
+- 已配置：`/Users/doraemon/.claude-token-sync.env` 已创建；本地 `CLAUDE_PROXY_SYNC_KEY` 已同步到服务器 `/home/nora/claude-proxy/.env` 的 `CLAUDE_OAUTH_SYNC_KEY`，不要打印或提交该 key。
+- 未完成 / 下次先查：线上网关实际目录在 `/root/du-gateway`，当前 `nora` 用户无 sudo、无 `/root/du-gateway` 写权限，网关转发路由尚未部署到线上；`https://duxy-home.com/internal/claude-oauth-status` 当前仍是 404。启用 Mac 端公网 POST 前，需要部署网关 route 或配置一个可达的内网/VPN 同步 URL。
+
+## CPA / Codex 反代
+
+现象：
+- Codex 反代不可用
+- Codex 相关 401 / 429 / 503
+- Codex 模型列表、模型权限或限流异常
+
+入口：
+- CPA 是 Codex 反代，不是 Claude OAuth proxy。
+- `.env` 里的上游 URL / key 可能同时配置 Claude OAuth proxy、OpenRouter、SiliconFlow、CPA 等；看 active upstream 时必须先确认当前 URL 指向哪一类服务。
+
+常查：
+
+```bash
+rg -n "Codex|codex|CPA|cliproxy|proxy|upstream|TARGET_AI_URLS|TARGET_AI_API_KEYS" docs scripts routes storage .env
+ssh -o ControlMaster=no ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
+ssh -o ControlMaster=no ali-du 'systemctl --user list-units --type=service --all | grep -Ei "codex|cliproxy|proxy|cpa"'
+```
+
+注意：
+- CPA 和 Claude OAuth proxy 都可能长得像 OpenAI-compatible `/v1/chat/completions`，但鉴权、token 刷新、限流来源不是一回事。
+- Claude OAuth proxy 的 401 不要按 CPA 处理；CPA 的 Codex 限流/鉴权也不要用 Claude token sync 解释。
 
 ## 前端构建 / APK
 

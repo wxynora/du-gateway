@@ -3,12 +3,15 @@
 const http = require("http");
 const https = require("https");
 const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
 const { StringDecoder } = require("string_decoder");
 const { execFileSync } = require("child_process");
 
 const PORT = parseInt(process.env.PORT || "8082");
 const HOST = process.env.HOST || "127.0.0.1";
 const PROXY_KEY = process.env.PROXY_KEY;
+const OAUTH_SYNC_KEY = process.env.CLAUDE_OAUTH_SYNC_KEY || PROXY_KEY;
 const DEFAULT_MAX_TOKENS = parseInt(process.env.CLAUDE_MAX_TOKENS || "33000", 10);
 const THINKING_BUDGET_TOKENS = parseInt(
   process.env.CLAUDE_THINKING_BUDGET_TOKENS || "32000",
@@ -71,6 +74,8 @@ const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gi
 let cachedOAuth = null;
 let cachedOAuthRaw = null;
 let cachedOAuthSource = "";
+let lastUnauthorizedAt = 0;
+let lastUnauthorizedRoute = "";
 
 function log(msg) {
   console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
@@ -179,6 +184,24 @@ function writeOAuthCredentials(next) {
   }
 }
 
+function writeSyncedOAuthCredentials(raw) {
+  if (!CLAUDE_OAUTH_FILE) {
+    throw new Error("CLAUDE_OAUTH_FILE is required for OAuth sync");
+  }
+  const normalized = normalizeOAuth(raw);
+  if (!normalized.expiresAt || normalized.expiresAt <= Date.now()) {
+    throw new Error("Synced OAuth token is already expired");
+  }
+  fs.mkdirSync(path.dirname(CLAUDE_OAUTH_FILE), { recursive: true, mode: 0o700 });
+  const tmp = `${CLAUDE_OAUTH_FILE}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, CLAUDE_OAUTH_FILE);
+  cachedOAuthRaw = raw;
+  cachedOAuth = normalized;
+  cachedOAuthSource = "file";
+  return normalized;
+}
+
 function httpsRequest(url, method, headers, body) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -274,6 +297,20 @@ function readBody(req) {
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => resolve(Buffer.concat(chunks)));
   });
+}
+
+function requestSecret(req) {
+  const auth = String(req.headers.authorization || "").trim();
+  const bearer = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+  return String(req.headers["x-oauth-sync-key"] || req.headers["x-sync-key"] || req.headers["x-api-key"] || bearer || "");
+}
+
+function secretMatches(actual, expected) {
+  if (!actual || !expected) return false;
+  const a = Buffer.from(String(actual));
+  const b = Buffer.from(String(expected));
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 async function readStreamText(stream) {
@@ -935,6 +972,32 @@ function sendOpenaiError(res, status, msg) {
   res.end(JSON.stringify({ error: { message: msg, type: "proxy_error", code: status } }));
 }
 
+function sendJson(res, status, payload) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(payload));
+}
+
+function oauthStatusPayload() {
+  if (!cachedOAuth) {
+    cachedOAuth = readOAuthCredentials();
+    log(
+      `Token loaded from ${cachedOAuthSource || "unknown"} (expires ${new Date(
+        cachedOAuth.expiresAt
+      ).toLocaleString()})`
+    );
+  }
+  const expiresInSeconds = Math.floor((cachedOAuth.expiresAt - Date.now()) / 1000);
+  return {
+    ok: true,
+    source: cachedOAuthSource || "unknown",
+    expiresAt: cachedOAuth.expiresAt,
+    expiresInSeconds,
+    stale: expiresInSeconds <= Math.ceil(REFRESH_SKEW_MS / 1000),
+    lastUnauthorizedAt,
+    lastUnauthorizedRoute,
+  };
+}
+
 function proxyToAnthropic(token, path, payload) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(payload);
@@ -963,6 +1026,8 @@ function proxyToAnthropic(token, path, payload) {
 async function retryAfterUnauthorized(proxyRes, path, payload, routeLabel) {
   const errData = await readStreamText(proxyRes).catch((e) => `read error: ${e.message}`);
   const hint = errData ? `: ${errData.slice(0, 500)}` : "";
+  lastUnauthorizedAt = Date.now();
+  lastUnauthorizedRoute = routeLabel || path || "";
   log(`Got 401 from Anthropic for ${routeLabel}; refreshing token and retrying once${hint}`);
   const retryToken = await refreshCachedAccessToken("after 401");
   const retryRes = await proxyToAnthropic(retryToken, path, payload);
@@ -987,10 +1052,62 @@ const server = http.createServer(async (req, res) => {
     return sendError(res, 500, "PROXY_KEY is required");
   }
 
-  const clientKey =
-    req.headers["x-api-key"] ||
-    (req.headers.authorization || "").replace("Bearer ", "");
-  if (clientKey !== PROXY_KEY) {
+  const urlPath = String(req.url || "").split("?")[0];
+  if (urlPath === "/internal/oauth-status") {
+    if (!OAUTH_SYNC_KEY) {
+      return sendError(res, 500, "CLAUDE_OAUTH_SYNC_KEY is required");
+    }
+    if (!secretMatches(requestSecret(req), OAUTH_SYNC_KEY)) {
+      log(`OAUTH SYNC AUTH REJECTED ${req.method} ${req.url}`);
+      return sendError(res, 401, "Invalid sync key");
+    }
+    if (req.method !== "GET") {
+      return sendError(res, 405, "Method not allowed");
+    }
+    try {
+      return sendJson(res, 200, oauthStatusPayload());
+    } catch (e) {
+      return sendError(res, 500, e.message);
+    }
+  }
+
+  if (urlPath === "/internal/oauth-sync") {
+    if (!OAUTH_SYNC_KEY) {
+      return sendError(res, 500, "CLAUDE_OAUTH_SYNC_KEY is required");
+    }
+    if (!secretMatches(requestSecret(req), OAUTH_SYNC_KEY)) {
+      log(`OAUTH SYNC AUTH REJECTED ${req.method} ${req.url}`);
+      return sendError(res, 401, "Invalid sync key");
+    }
+    if (req.method !== "POST") {
+      return sendError(res, 405, "Method not allowed");
+    }
+    const rawBody = await readBody(req);
+    let payload;
+    try {
+      payload = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      return sendError(res, 400, "Invalid JSON body");
+    }
+    try {
+      const synced = writeSyncedOAuthCredentials(payload);
+      log(`OAuth synced by HTTP (expires ${new Date(synced.expiresAt).toLocaleString()})`);
+      return sendJson(res, 200, {
+        ok: true,
+        source: cachedOAuthSource,
+        expiresAt: synced.expiresAt,
+        expiresInSeconds: Math.floor((synced.expiresAt - Date.now()) / 1000),
+        lastUnauthorizedAt,
+        lastUnauthorizedRoute,
+      });
+    } catch (e) {
+      log(`OAuth sync failed: ${e.message}`);
+      return sendError(res, 400, e.message);
+    }
+  }
+
+  const clientKey = requestSecret(req);
+  if (!secretMatches(clientKey, PROXY_KEY)) {
     log(`AUTH REJECTED ${req.method} ${req.url}`);
     return sendError(res, 401, "Invalid proxy key");
   }
@@ -1121,4 +1238,6 @@ server.listen(PORT, HOST, () => {
   log(`  POST http://localhost:${PORT}/v1/chat/completions  (OpenAI format)`);
   log(`  POST http://localhost:${PORT}/v1/messages          (Anthropic format)`);
   log(`  GET  http://localhost:${PORT}/v1/models`);
+  log(`  POST http://localhost:${PORT}/internal/oauth-sync   (OAuth sync)`);
+  log(`  GET  http://localhost:${PORT}/internal/oauth-status (OAuth status)`);
 });
