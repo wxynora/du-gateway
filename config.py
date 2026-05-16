@@ -468,6 +468,8 @@ VOICE_CALL_WINDOW_ID = os.environ.get("VOICE_CALL_WINDOW_ID", "miniapp_voice_cal
 MAIN_GATEWAY_BASE_URL = os.environ.get("MAIN_GATEWAY_BASE_URL", "http://127.0.0.1:5000").strip()
 MAIN_GATEWAY_BEARER_TOKEN = os.environ.get("MAIN_GATEWAY_BEARER_TOKEN", "").strip()
 
+# 文游：App 内独立会话 ID，不再绑定 Telegram 群或 TG 用户。
+WENYOU_SESSION_ID = int(os.environ.get("WENYOU_SESSION_ID", "1") or "1")
 # 文游：固定 Telegram 群（仅该群内处理 /story /go /end；0=关闭）
 WENYOU_GROUP_CHAT_ID = int(os.environ.get("WENYOU_GROUP_CHAT_ID", "0") or "0")
 # 文游：只认该用户 ID 的指令（留空则沿用 TELEGRAM_PROACTIVE_TARGET_USER_ID）

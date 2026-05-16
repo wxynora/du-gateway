@@ -12,19 +12,10 @@ from uuid import uuid4
 
 import requests
 
-from services.wenyou_service import (
-    cmd_end,
-    cmd_go,
-    cmd_settle,
-    cmd_story,
-    record_group_player2_line,
-    record_group_player_line,
-)
 from services.pc_command_handler import process_pcmd_in_assistant_text
 
 from config import (
     TELEGRAM_BOT_TOKEN,
-    TELEGRAM_GM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
     TELEGRAM_WEBAPP_URL,
     TELEGRAM_WEBAPP_VERSION,
@@ -35,8 +26,6 @@ from config import (
     TELEGRAM_CONTEXT_LAST_TURNS,
     TELEGRAM_VOICE_REPLY_ENABLED,
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
-    WENYOU_GROUP_CHAT_ID,
-    TELEGRAM_WENYOU_OWNER_USER_ID,
     R2_PUBLIC_URL,
 )
 from storage import r2_store
@@ -77,59 +66,13 @@ def _private_miniapp_reply_markup(chat_id: int) -> Optional[dict]:
     }
 
 
-def _is_wenyou_active() -> bool:
-    """是否存在进行中的文游局（按文游群 chat_id 会话）。"""
-    gid = int(WENYOU_GROUP_CHAT_ID or 0)
-    if gid == 0:
-        return False
-    try:
-        s = r2_store.get_wenyou_session(gid)
-        return bool(isinstance(s, dict) and s.get("gameId"))
-    except Exception:
-        return False
-
-
-def _get_main_bot_telegram_user_id() -> Optional[int]:
-    """缓存主 Bot 的 id（与群内发言 from.id 对齐）。"""
-    global _MAIN_BOT_TELEGRAM_USER_ID
-    if _MAIN_BOT_TELEGRAM_USER_ID is not None:
-        return _MAIN_BOT_TELEGRAM_USER_ID
-    if not TELEGRAM_BOT_TOKEN:
-        return None
-    try:
-        r = requests.get(f"{TELEGRAM_API_BASE}{TELEGRAM_BOT_TOKEN}/getMe", timeout=15)
-        data = r.json() if r.content else {}
-        if data.get("ok") and isinstance(data.get("result"), dict):
-            bid = (data.get("result") or {}).get("id")
-            if bid is not None:
-                _MAIN_BOT_TELEGRAM_USER_ID = int(bid)
-                return _MAIN_BOT_TELEGRAM_USER_ID
-    except Exception:
-        pass
-    return None
-
-
-def _is_message_from_main_bot(msg: dict) -> bool:
-    """是否为当前主 Bot 在群内发的消息（渡作为玩家二发言）。"""
-    fr = msg.get("from") or {}
-    if not fr.get("is_bot"):
-        return False
-    mid = _get_main_bot_telegram_user_id()
-    if mid is None:
-        return False
-    try:
-        return int(fr.get("id") or 0) == int(mid)
-    except (TypeError, ValueError):
-        return False
-
-
 def _effective_tg_token(bot_token: Optional[str]) -> str:
     """发 Telegram API 时使用的 Token：显式传入优先，否则主 Bot。"""
     if bot_token is not None and str(bot_token).strip():
         return str(bot_token).strip()
     return (TELEGRAM_BOT_TOKEN or "").strip()
-# 主 Bot 的 Telegram user id（getMe.id），用于识别群内「渡」的发言
-_MAIN_BOT_TELEGRAM_USER_ID: Optional[int] = None
+
+
 _BUF_LOCK = threading.Lock()
 _INPUT_BUFFERS: dict[int, dict] = {}
 _CTX_LOCK = threading.Lock()
@@ -728,35 +671,6 @@ def _delete_my_commands_default() -> bool:
         return False
 
 
-def _set_my_commands_wenyou_group(cmd_token: str) -> bool:
-    """文游固定群：/story /go /end /settle（仅在该群菜单中显示）；cmd_token 为承担文游菜单的 Bot。"""
-    if not WENYOU_GROUP_CHAT_ID:
-        return False
-    tok = (cmd_token or "").strip()
-    if not tok:
-        return False
-    url = f"{TELEGRAM_API_BASE}{tok}/setMyCommands"
-    payload = {
-        "commands": [
-            {"command": "story", "description": "开局（随机或加关键词）"},
-            {"command": "go", "description": "结算本轮，推进剧情"},
-            {"command": "end", "description": "结束副本并进入系统空间结算"},
-            {"command": "settle", "description": "完成最终结算并归档本局"},
-        ],
-        "scope": {"type": "chat", "chat_id": int(WENYOU_GROUP_CHAT_ID)},
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=15)
-        if r.status_code != 200:
-            logger.warning("setMyCommands(wenyou) 非 200 status=%s body=%s", r.status_code, (r.text or "")[:200])
-            return False
-        data = r.json() if r.content else {}
-        return bool(data.get("ok", True))
-    except Exception as e:
-        logger.warning("setMyCommands(wenyou) 失败: %s", e)
-        return False
-
-
 ## 已移除：按钮式 Todo 便签（避免占用输入区交互与 R2 写入）
 
 
@@ -964,38 +878,6 @@ def _split_reply_text_by_len_only(text: str) -> list[str]:
     """TG 回复不再按长度拆条；保留旧函数名，避免调用点大改。"""
     t = (text or "").strip()
     return [t] if t else []
-
-
-def send_message_segmented_gm(
-    chat_id: int,
-    text: str,
-    bot_token: Optional[str] = None,
-    parse_mode: Optional[TelegramParseMode] = None,
-    entities: Optional[list[dict]] = None,
-) -> bool:
-    """GM 专用发送：单条发送，保留换行。"""
-    parts = _split_reply_text_by_len_only(text)
-    if not parts:
-        return send_message(
-            chat_id=chat_id,
-            text=text or "",
-            bot_token=bot_token,
-            parse_mode=parse_mode,
-            entities=entities,
-        )
-    ok_any = False
-    for i, part in enumerate(parts):
-        ok = send_message(
-            chat_id=chat_id,
-            text=part,
-            bot_token=bot_token,
-            parse_mode=parse_mode,
-            entities=entities,
-        )
-        ok_any = ok_any or ok
-        if i != len(parts) - 1:
-            _sleep_between_sends()
-    return ok_any
 
 
 def process_message(
@@ -1246,34 +1128,26 @@ def _start_flush_watchdog_once():
 
 
 def init_telegram_bot_runtime():
-    """在服务启动时调用：清主 Bot 默认命令菜单、设文游群专属命令等。Webhook 模式下无需轮询。"""
+    """在服务启动时调用：清主 Bot 默认命令菜单。Webhook 模式下无需轮询。"""
     _start_flush_watchdog_once()
     if not TELEGRAM_BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN 未配置，Telegram 功能将不可用")
         return
     _delete_my_commands_default()
-    if WENYOU_GROUP_CHAT_ID:
-        # 文游菜单挂在主 Bot 或专用 GM Bot（若配置了 TELEGRAM_GM_BOT_TOKEN）
-        wtok = TELEGRAM_GM_BOT_TOKEN or TELEGRAM_BOT_TOKEN
-        _set_my_commands_wenyou_group(wtok)
 
 
 def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     """
     处理一条 Telegram update。
     - 主 Bot：POST /telegram/webhook，bot_token=TELEGRAM_BOT_TOKEN（私聊渡、运维 /start）。
-    - 文游 GM Bot（可选）：POST /telegram/webhook_gm，bot_token=TELEGRAM_GM_BOT_TOKEN（仅文游群）。
-    若未配置 TELEGRAM_GM_BOT_TOKEN，行为与旧版一致：文游仍在主 Bot 上处理。
     """
     token = _effective_tg_token(bot_token)
     if not token:
         logger.warning("TG update 忽略：bot token 为空")
         return
-    gm_split = bool(TELEGRAM_GM_BOT_TOKEN)
-    is_gm = gm_split and token == TELEGRAM_GM_BOT_TOKEN
     is_main = token == TELEGRAM_BOT_TOKEN
-    if gm_split and not is_gm and not is_main:
-        logger.warning("TG update 忽略：bot token 不匹配 gm_split=%s", gm_split)
+    if not is_main:
+        logger.warning("TG update 忽略：bot token 不匹配主 Bot")
         return
 
     update_id = (upd or {}).get("update_id")
@@ -1294,64 +1168,15 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     text = (msg.get("text") or "").strip()
     caption = (msg.get("caption") or "").strip()
     logger.info(
-        "TG update 进入处理 update_id=%s bot=%s chat_id=%s chat_type=%s user_id=%s text_len=%s caption_len=%s has_photo=%s gm_split=%s",
+        "TG update 进入处理 update_id=%s bot=main chat_id=%s chat_type=%s user_id=%s text_len=%s caption_len=%s has_photo=%s",
         update_id,
-        "gm" if is_gm else "main",
         chat_id,
         chat_type,
         user_id,
         len(text),
         len(caption),
         bool(msg.get("photo")),
-        gm_split,
     )
-
-    # —— 文游专用 GM Bot：只处理文游群；其它聊天仅简短提示 ——
-    if is_gm:
-        if (not text) and msg.get("photo"):
-            logger.info("TG GM update 忽略：GM Bot 不处理图片 update_id=%s chat_id=%s", update_id, chat_id)
-            return
-        if not text:
-            logger.info("TG GM update 忽略：无文本 update_id=%s chat_id=%s", update_id, chat_id)
-            return
-        if not WENYOU_GROUP_CHAT_ID or int(chat_id) != int(WENYOU_GROUP_CHAT_ID):
-            if chat_type == "private":
-                send_message(
-                    int(chat_id),
-                    "本 Bot 仅用于文游跑团群。与渡私聊请使用主 Bot。",
-                    bot_token=token,
-                )
-            logger.info("TG GM update 忽略：非文游群 update_id=%s chat_id=%s chat_type=%s", update_id, chat_id, chat_type)
-            return
-        parts = text.strip().split(maxsplit=1)
-        cmd0 = (parts[0] if parts else "").split("@", 1)[0].lower()
-        if cmd0 == "/start":
-            send_message(
-                int(chat_id),
-                "MiniApp 与运维面板请在私聊对主 Bot 发送 /start。本群文游：/story /go /end /settle。",
-                bot_token=token,
-            )
-            return
-        if cmd0 == "/story":
-            rest = parts[1] if len(parts) > 1 else None
-            out = cmd_story(int(chat_id), rest)
-            send_message_segmented_gm(int(chat_id), out, bot_token=token)
-            return
-        if cmd0 == "/go":
-            out = cmd_go(int(chat_id))
-            send_message_segmented_gm(int(chat_id), out, bot_token=token)
-            return
-        if cmd0 == "/end":
-            out = cmd_end(int(chat_id))
-            send_message(int(chat_id), out, bot_token=token)
-            return
-        if cmd0 == "/settle":
-            out = cmd_settle(int(chat_id))
-            send_message(int(chat_id), out, bot_token=token)
-            return
-        # 群内普通发言也记入文游玩家行动，供后续 /go 让 GM 基于行动推进剧情。
-        record_group_player_line(int(chat_id), text)
-        return
 
     # 图片（带或不带 caption）→ 追加到聚合缓冲（仅主 Bot）
     if (not text) and msg.get("photo"):
@@ -1385,63 +1210,6 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         logger.info("TG update 忽略：无文本且非图片 update_id=%s chat_id=%s", update_id, chat_id)
         return
 
-    # 文游群内：主 Bot 发的消息 = 玩家二（渡）发言，记入本轮（仅你发 /story /go /end 等指令）
-    if (
-        token == TELEGRAM_BOT_TOKEN
-        and WENYOU_GROUP_CHAT_ID
-        and int(chat_id) == int(WENYOU_GROUP_CHAT_ID)
-        and not text.startswith("/")
-        and _is_message_from_main_bot(msg)
-    ):
-        logger.info("TG update 记录为文游玩家二发言 update_id=%s chat_id=%s", update_id, chat_id)
-        record_group_player2_line(text, session_id=int(chat_id))
-        return
-
-    # 已配置 GM Bot 时：
-    # - /story /go /end 等文游指令由 GM Webhook 处理
-    # - 群内普通发言仍由主 Bot 按“私聊同逻辑”走网关回复（玩家二发言）
-    #   同时 GM Bot 已在其 webhook 侧记录玩家行动，这里不再重复 record。
-    if gm_split and WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
-        if text.startswith("/"):
-            logger.info("TG update 忽略：文游群指令交给 GM Bot update_id=%s chat_id=%s cmd=%s", update_id, chat_id, text.split(maxsplit=1)[0])
-            return
-        # 走主链路（聚合输入 -> 调网关 -> 主 Bot 回复）
-        logger.info("TG update 文游群普通发言进入主链路 update_id=%s chat_id=%s user_id=%s", update_id, chat_id, user_id)
-        append_user_input(chat_id=int(chat_id), user_id=int(user_id), text=text)
-        return
-
-    # 未配置 GM Bot 时：文游仍在主 Bot 上（与旧版一致）
-    if not gm_split and WENYOU_GROUP_CHAT_ID and int(chat_id) == int(WENYOU_GROUP_CHAT_ID):
-        parts = text.strip().split(maxsplit=1)
-        cmd0 = (parts[0] if parts else "").split("@", 1)[0].lower()
-        if cmd0 == "/start":
-            send_message(
-                int(chat_id),
-                "MiniApp 与运维面板请在私聊对 Bot 发送 /start。本群文游：/story /go /end /settle（主神积分、系统商店、等级阶位 D～S、血统与体力/智慧见剧情与状态栏）。",
-                bot_token=token,
-            )
-            return
-        if cmd0 == "/story":
-            rest = parts[1] if len(parts) > 1 else None
-            out = cmd_story(int(chat_id), rest)
-            send_message_segmented(int(chat_id), out, bot_token=token)
-            return
-        if cmd0 == "/go":
-            out = cmd_go(int(chat_id))
-            send_message_segmented(int(chat_id), out, bot_token=token)
-            return
-        if cmd0 == "/end":
-            out = cmd_end(int(chat_id))
-            send_message(int(chat_id), out, bot_token=token)
-            return
-        if cmd0 == "/settle":
-            out = cmd_settle(int(chat_id))
-            send_message(int(chat_id), out, bot_token=token)
-            return
-        record_group_player_line(int(chat_id), text)
-        logger.info("TG update 记录为文游玩家行动 update_id=%s chat_id=%s", update_id, chat_id)
-        return
-
     cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
     if cmd0 == "/start":
         if not _telegram_webapp_url():
@@ -1455,16 +1223,4 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         from utils.time_aware import now_beijing_iso
 
         r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
-    # 文游进行中时，私聊自动给“切回日常聊天”提示，避免渡在私聊继续跑副本剧情。
-    final_text = text
-    if (
-        chat_type == "private"
-        and not text.startswith("/")
-        and _is_wenyou_active()
-        and "[当前在私聊" not in text
-    ):
-        final_text = (
-            "[当前在私聊，不在文游群；此消息按日常聊天处理，不推进副本剧情。]\n"
-            + text
-        )
-    append_user_input(chat_id=chat_id, user_id=user_id, text=final_text)
+    append_user_input(chat_id=chat_id, user_id=user_id, text=text)

@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
-_BOT_KINDS = {"main", "gm"}
+_BOT_KINDS = {"main"}
 
 
 @dataclass(frozen=True)

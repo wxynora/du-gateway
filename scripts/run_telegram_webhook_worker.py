@@ -24,7 +24,6 @@ load_dotenv(ROOT / ".env", override=False)
 from config import (  # noqa: E402
     DATA_DIR,
     TELEGRAM_BOT_TOKEN,
-    TELEGRAM_GM_BOT_TOKEN,
     TELEGRAM_WEBHOOK_QUEUE_MAX_ATTEMPTS,
     TELEGRAM_WEBHOOK_QUEUE_STALE_SECONDS,
     TELEGRAM_WEBHOOK_WORKER_IDLE_SECONDS,
@@ -45,8 +44,8 @@ from services.telegram_update_queue import (  # noqa: E402
 
 
 def _resolve_bot_token(bot_kind: str) -> str:
-    if bot_kind == "gm":
-        return (TELEGRAM_GM_BOT_TOKEN or "").strip()
+    if bot_kind != "main":
+        return ""
     return (TELEGRAM_BOT_TOKEN or "").strip()
 
 
@@ -71,6 +70,16 @@ def run_worker_loop() -> None:
         )
         if item is None:
             time.sleep(idle)
+            continue
+
+        if item.bot_kind != "main":
+            logger.info(
+                "Telegram webhook queue worker 丢弃旧文游/非主 Bot 队列项 queued_id=%s bot=%s key=%s",
+                item.id,
+                item.bot_kind,
+                item.update_key,
+            )
+            ack_update(item.id)
             continue
 
         token = _resolve_bot_token(item.bot_kind)
