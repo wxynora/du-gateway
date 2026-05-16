@@ -12,7 +12,6 @@ import { FullScreenPane } from "./FullScreenPane";
 import { MainChatScreen } from "./MainChatScreen";
 import { PersonalizationScreen } from "./PersonalizationScreen";
 import { FloatingBallSettingRow, ListRow, PageCardRow, SwitchSettingRow } from "./SettingsRows";
-import { TreeScreen, type CyberTreeData } from "./TreeScreen";
 import {
   DEFAULT_GROUP_CHAT_TITLE,
   getDisplayGroupChatTitle,
@@ -101,7 +100,6 @@ export function AppShell({
   const [showStayWithDu, setShowStayWithDu] = useState(false);
   const [showPixelHome, setShowPixelHome] = useState(false);
   const [showCoRead, setShowCoRead] = useState(false);
-  const [showTree, setShowTree] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
@@ -113,7 +111,6 @@ export function AppShell({
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [todayNoteRefreshing, setTodayNoteRefreshing] = useState(false);
   const [dailyRefreshing, setDailyRefreshing] = useState(false);
-  const [tree, setTree] = useState<CyberTreeData | null>(null);
   const [deferHomeExtras, setDeferHomeExtras] = useState(false);
   const [floatingBallEnabled, setFloatingBallEnabled] = useState(true);
   const [transparentBubbleEnabled, setTransparentBubbleEnabled] = useState(() => readStoredBoolean("miniapp.ui.transparentBubble"));
@@ -182,12 +179,6 @@ export function AppShell({
   const benbenAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const backgroundInputRef = useRef<HTMLInputElement | null>(null);
   const groupChatDisplayTitle = getDisplayGroupChatTitle(groupChatTitle);
-  const loadTree = () =>
-    apiJson<CyberTreeData>("/miniapp-api/cyber-tree")
-      .then((j) => {
-        if (j?.ok) setTree(j);
-      })
-      .catch(() => {});
   const loadDailyReport = () =>
     apiJson<{ ok?: boolean; report?: DailyReport }>("/miniapp-api/daily-report")
       .then((j) => {
@@ -233,7 +224,6 @@ export function AppShell({
     if (!deferHomeExtras) return;
     void loadDailyWhisper(false);
     loadDailyReport();
-    loadTree();
   }, [deferHomeExtras, loadDailyWhisper]);
 
   useEffect(() => {
@@ -377,13 +367,6 @@ export function AppShell({
   }
 
   useEffect(() => {
-    if (!showTree) return;
-    loadTree();
-    const timer = setInterval(() => loadTree(), 30000);
-    return () => clearInterval(timer);
-  }, [showTree]);
-
-  useEffect(() => {
     let disposed = false;
     const removePromise = CapacitorApp.addListener("backButton", async () => {
       if (disposed) return;
@@ -435,10 +418,6 @@ export function AppShell({
         setShowCoRead(false);
         return;
       }
-      if (showTree) {
-        setShowTree(false);
-        return;
-      }
       if (showDiagnostics) {
         setShowDiagnostics(false);
         return;
@@ -473,29 +452,8 @@ export function AppShell({
     showSchedule,
     showSettings,
     showStayWithDu,
-    showTree,
     showDiagnostics,
   ]);
-
-  useEffect(() => {
-    if (!tree) return;
-    const dayMarks = tree.milestones?.reachedDays || [];
-    const roundMarks = tree.milestones?.reachedRounds || [];
-    for (const d of dayMarks) {
-      const key = `tree.milestone.day.${d}`;
-      if (!localStorage.getItem(key)) {
-        localStorage.setItem(key, "1");
-        toast(`🎉 在一起第 ${d} 天，种树里程碑达成！`);
-      }
-    }
-    for (const r of roundMarks) {
-      const key = `tree.milestone.round.${r}`;
-      if (!localStorage.getItem(key)) {
-        localStorage.setItem(key, "1");
-        toast(`🎉 聊到第 ${r} 轮，种树里程碑达成！`);
-      }
-    }
-  }, [tree, toast]);
 
   const renderMainTab = () => {
     if (mainTab === "daily") {
@@ -503,11 +461,6 @@ export function AppShell({
         <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
           <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">日常</h1>
           <div className="space-y-4">
-            <PageCardRow
-              icon={<FeatherIcon />}
-              label="树"
-              onClick={() => setShowTree(true)}
-            />
             <PageCardRow
               icon={<SunIconMini />}
               label="渡的一天"
@@ -618,7 +571,6 @@ export function AppShell({
     showStayWithDu ||
     showPixelHome ||
     showCoRead ||
-    showTree ||
     showDiagnostics ||
     showCallHub;
 
@@ -793,11 +745,6 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {showCoRead ? <LazyPane><CoReadScreen onBack={() => setShowCoRead(false)} windowId={sharedChatWindowId} /></LazyPane> : null}
-      {showTree ? (
-        <FullScreenPane title="树" accent="neutral" onBack={() => setShowTree(false)}>
-          <TreeScreen data={tree} onRefresh={loadTree} />
-        </FullScreenPane>
-      ) : null}
       {showDiagnostics ? (
         <FullScreenPane title="系统诊断" accent="neutral" headerMode="simple" onBack={() => setShowDiagnostics(false)}>
           <DiagnosticsScreen />

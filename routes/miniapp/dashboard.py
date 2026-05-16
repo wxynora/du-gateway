@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import re
 from collections import Counter
 from datetime import datetime
@@ -10,27 +9,6 @@ from flask import jsonify, request
 from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
 from storage import r2_store
 from utils.time_aware import now_beijing_iso, today_beijing
-
-
-def _season_label(month: int) -> str:
-    if month in (3, 4, 5):
-        return "spring"
-    if month in (6, 7, 8):
-        return "summer"
-    if month in (9, 10, 11):
-        return "autumn"
-    return "winter"
-
-
-def _default_cyber_tree_start_date(today: str) -> str:
-    """
-    默认从“今年”的纪念日 03-04 开始（不按每年回溯）。
-    """
-    try:
-        y = int(str(today).split("-", 2)[0])
-    except Exception:
-        return "2026-03-04"
-    return f"{y:04d}-03-04"
 
 
 _DAILY_KW_STOPWORDS = {
@@ -411,69 +389,6 @@ def register_routes(bp) -> None:
         r2_store.save_miniapp_daily_whisper(payload)
         return jsonify({"ok": True, "date": today, "text": text, "cached": False, "fallback": True})
 
-    @bp.route("/cyber-tree", methods=["GET"])
-    def miniapp_cyber_tree():
-        today = today_beijing()
-        meta = r2_store.get_cyber_tree_meta() or {}
-        start_date = str(meta.get("startDate") or "").strip() or _default_cyber_tree_start_date(today)
-        if not (meta.get("startDate")):
-            r2_store.save_cyber_tree_meta({"startDate": start_date, "createdAt": now_beijing_iso()})
-
-        try:
-            d0 = datetime.strptime(start_date, "%Y-%m-%d").date()
-            d1 = datetime.strptime(today, "%Y-%m-%d").date()
-            days = max(1, (d1 - d0).days + 1)
-        except Exception:
-            days = 1
-        tg_uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
-        rounds = 0
-        if tg_uid > 0:
-            rounds = r2_store.get_window_conversation_rounds(f"tg_{tg_uid}")
-        if rounds <= 0:
-            rounds = r2_store.get_total_conversation_rounds()
-        growth = float(days) * (1.0 + math.log(max(1, rounds)) / 10.0)
-        # 阶段阈值调高：按当前纪念日起点，默认应先处于树苗期。
-        if growth < 50:
-            stage = "seedling"
-        elif growth < 140:
-            stage = "young"
-        elif growth < 320:
-            stage = "big"
-        else:
-            stage = "lush"
-        month = int(today.split("-", 2)[1]) if "-" in today else 1
-        season = _season_label(month)
-        if season == "winter":
-            weather_fx = "snowy"
-        elif season == "summer":
-            weather_fx = "sunny"
-        else:
-            weather_fx = "rainy"
-        milestones = {
-            "days": [30, 100, 365],
-            "rounds": [300, 1000, 3000],
-            "reachedDays": [x for x in (30, 100, 365) if days >= x],
-            "reachedRounds": [x for x in (300, 1000, 3000) if rounds >= x],
-        }
-        mood = r2_store.get_miniapp_mood_meter() or _generate_mood_meter(today)
-        if not (r2_store.get_miniapp_mood_meter() or {}).get("date"):
-            r2_store.save_miniapp_mood_meter(mood)
-        return jsonify(
-            {
-                "ok": True,
-                "startDate": start_date,
-                "today": today,
-                "daysTogether": days,
-                "totalRounds": rounds,
-                "growth": round(growth, 2),
-                "stage": stage,
-                "season": season,
-                "weatherFx": weather_fx,
-                "milestones": milestones,
-                "mood": mood,
-            }
-        )
-
     @bp.route("/daily-report", methods=["GET"])
     def miniapp_daily_report():
         today = today_beijing()
@@ -518,17 +433,3 @@ def register_routes(bp) -> None:
         data = _generate_mood_meter(today)
         ok = r2_store.save_miniapp_mood_meter(data)
         return jsonify({"ok": bool(ok), "mood": data})
-
-    @bp.route("/cyber-tree/start-date", methods=["PUT"])
-    def miniapp_set_cyber_tree_start_date():
-        data = request.get_json(silent=True) or {}
-        start_date = str(data.get("startDate") or "").strip()
-        try:
-            datetime.strptime(start_date, "%Y-%m-%d")
-        except Exception:
-            return jsonify({"ok": False, "error": "startDate 格式需为 YYYY-MM-DD"}), 400
-        meta = r2_store.get_cyber_tree_meta() or {}
-        meta["startDate"] = start_date
-        meta["updatedAt"] = now_beijing_iso()
-        ok = r2_store.save_cyber_tree_meta(meta)
-        return jsonify({"ok": bool(ok), "startDate": start_date})
