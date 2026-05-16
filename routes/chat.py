@@ -1,31 +1,22 @@
 # 聊天代理：统一走完整管道（清洗、注入、转发、存档），无开头过滤
 # 项目约定：主聊天禁止默认兜底模型。没传 model 就直接报错，不要偷偷补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
-import copy
 import json
 import queue
-import re
 import threading
 import time
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
-from difflib import unified_diff
 import requests
 
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 
 from config import (
     GATEWAY_MODELS,
-    model_matches_gateway_keywords,
     MAX_COMPLETION_TOKENS,
     STREAM_TIMEOUT_SECONDS,
     STREAM_SSE_HEARTBEAT_SECONDS,
     STREAM_SSE_FLUSH_MAX_MS,
     TOOL_MAX_ROUNDS,
-    RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED,
-    RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS,
     DATA_DIR,
-    OPENROUTER_FIXED_MODEL,
     is_openrouter_url,
     openrouter_models_response,
 )
@@ -54,45 +45,65 @@ from pipeline.pipeline import (
     step_trim_messages_if_over_limit,
     step_archive_and_maybe_summary,
     step_archive_round,
-    step_run_post_archive_tasks,
 )
-from services.wenyou_service import step_inject_wenyou_gm
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import r2_store, whitelist_store
-from storage import silence_mode_store
-from services.du_thought import split_assistant_for_thought
 from services.du_daily import (
     build_chat_trigger as build_du_daily_trigger,
-    looks_like_plain_maintenance_daily,
-    save_hidden_block as save_du_daily_hidden_block,
-    split_assistant_for_daily,
 )
-from services.interaction_memory import split_assistant_for_interaction
 from services.dynamic_memory_citation import (
     DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY,
     normalize_citation_map,
-    strip_assistant_memory_citations,
-)
-from services.html_preview_tools import (
-    merge_html_preview_urls_into_assistant_text,
-    missing_html_preview_url_suffix,
-)
-from services.device_action_tools import (
-    dedupe_sumitalk_cards_in_text,
-    merge_sumitalk_cards_into_assistant_text,
 )
 from services.conversation_followup import (
-    build_followup_system_instruction,
     queue_followup,
 )
 from services.pc_command_handler import (
     PcmdDuThoughtStreamState,
-    process_pcmd_in_assistant_text,
     transform_sse_chunk_bytes as transform_sse_chunk_bytes_pcmd,
 )
-from services.entry_style_prompt import entry_style_for_channel
 from services.chat_content import message_content_chars as _message_content_chars
+from services.chat_prompt_injections import (
+    inject_channel_nsfw_system as _inject_channel_nsfw_system,
+    inject_entry_style_system as _inject_entry_style_system,
+    inject_followup_instruction as _inject_followup_instruction,
+    inject_silence_mode_system as _inject_silence_mode_system,
+    inject_voice_call_style_system as _inject_voice_call_style_system,
+)
+from services.chat_archive_helpers import (
+    run_nonstream_post_archive_in_background as _run_nonstream_post_archive_in_background,
+    strip_co_read_section_raw_text_for_archive as _strip_co_read_section_raw_text_for_archive,
+)
+from services.chat_request_helpers import (
+    build_noop_chat_response as _build_noop_chat_response,
+    is_suspected_rikkahub_phantom_one as _is_suspected_rikkahub_phantom_one,
+    last_user_message as _last_user_message,
+    maybe_mark_tg_window_user_activity as _maybe_mark_tg_window_user_activity,
+    maybe_record_last_reply_channel as _maybe_record_last_reply_channel,
+)
+from services.chat_response_enrichers import (
+    dedupe_stream_sumitalk_cards,
+    html_preview_suffix_for_stream,
+    merge_html_preview_into_nonstream_response as _merge_html_preview_into_nonstream_response,
+    merge_sumitalk_card_into_nonstream_response as _merge_sumitalk_card_into_nonstream_response,
+    sumitalk_card_suffix_for_stream,
+)
+from services.chat_sidecars import (
+    apply_hidden_sidecars_to_assistant_response as _apply_hidden_sidecars_to_assistant_response,
+    extract_and_store_hidden_sidecars as _extract_and_store_hidden_sidecars,
+)
+from services.chat_tool_helpers import (
+    append_tool_results_and_continue as _append_tool_results_and_continue,
+    collect_tool_trace_from_messages as _collect_tool_trace_from_messages,
+    inject_tool_empty_final_retry_instruction as _inject_tool_empty_final_retry_instruction,
+    inject_tool_midstream_retry_instruction as _inject_tool_midstream_retry_instruction,
+    is_sse_done_chunk as _is_sse_done_chunk,
+    normalize_visible_reply_text as _normalize_visible_reply_text,
+    should_retry_tool_empty_final as _should_retry_tool_empty_final,
+    should_retry_tool_followup as _should_retry_tool_followup,
+    sse_delta_chunk_bytes as _sse_delta_chunk_bytes,
+)
 from services.prompt_cache_debug import (
     build_cache_debug_entry as _build_cache_debug_entry,
     build_prompt_cache_profile as _build_prompt_cache_profile,
@@ -116,17 +127,13 @@ from services.upstream_policy import (
     is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
     normalize_request_model as _normalize_request_model,
 )
-from services.voice_line_prompt import build_voice_line_rules
 from utils.log import get_logger
-from utils.time_aware import now_beijing_iso
 
 logger = get_logger(__name__)
 sumitalk_logger = get_logger("sumitalk")
 bp = Blueprint("chat", __name__)
 
 WINDOW_ID_DEFAULT = ""
-_NSFW_PROMPT_CACHE = {"text": None, "ts": 0.0}
-_NSFW_REPLY_CHANNELS = {"tg", "qq", "wechat", "sumitalk"}
 _NONSTREAM_FAST_RETURN_CHANNELS = {"tg", "qq", "wechat", "sumitalk"}
 
 
@@ -145,160 +152,6 @@ def _is_miniapp_request() -> bool:
 
 def _reply_channel() -> str:
     return str(request.headers.get("X-Reply-Channel") or "").strip().lower()
-
-
-def _entry_style_for_request() -> tuple[str, str]:
-    return entry_style_for_channel(_reply_channel(), is_miniapp=_is_miniapp_request())
-
-
-def _inject_entry_style_system(body: dict) -> dict:
-    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
-        return body
-    marker, style_system = _entry_style_for_request()
-    if not marker or not style_system:
-        return body
-    messages = list(body.get("messages") or [])
-    insert_idx = 0
-    for i, msg in enumerate(messages):
-        if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "system":
-            break
-        if marker in str(msg.get("content") or ""):
-            return body
-        insert_idx = i + 1
-    messages.insert(insert_idx, {"role": "system", "content": style_system})
-    body = dict(body)
-    body["messages"] = messages
-    return body
-
-
-def _inject_voice_call_style_system(body: dict) -> dict:
-    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
-        return body
-    marker = "【语音通话台词规范】"
-    instruction = "\n".join(
-        [
-            marker,
-            "你现在在语音通话里回复，最终文本会直接转成语音。",
-            "只输出需要朗读的正文，不要输出 <voice> 标签、动作注解、括号提示或表演说明。",
-            build_voice_line_rules(),
-        ]
-    ).strip()
-    messages = list(body.get("messages") or [])
-    for msg in messages:
-        if isinstance(msg, dict) and str(msg.get("role") or "").strip().lower() == "system":
-            if marker in str(msg.get("content") or ""):
-                return body
-    insert_idx = 0
-    for i, msg in enumerate(messages):
-        if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "system":
-            break
-        insert_idx = i + 1
-    messages.insert(insert_idx, {"role": "system", "content": instruction})
-    body = dict(body)
-    body["messages"] = messages
-    return body
-
-
-def _inject_followup_instruction(body: dict) -> dict:
-    # 延迟续话本身不再注入 followup 规则，避免模型继续排队形成连环续话。
-    # 但 trigger/弹窗/查屏这类后端唤醒会带 X-DU-FOLLOWUP-ARCHIVE=1 归档到正常对话，
-    # 它们应保持和普通聊天一致的静态 system 前缀，否则 prompt cache 会因为少一段 followup 规则而断开。
-    is_followup_gen = (request.headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes")
-    should_archive = (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
-    if is_followup_gen and not should_archive:
-        return body
-    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
-        return body
-    instruction = build_followup_system_instruction().strip()
-    if not instruction:
-        return body
-    messages = list(body.get("messages") or [])
-    if messages and isinstance(messages[0], dict) and str(messages[0].get("role") or "").strip() == "system":
-        current = str(messages[0].get("content") or "")
-        if instruction in current:
-            return body
-        messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + instruction).strip()}
-    else:
-        messages.insert(0, {"role": "system", "content": instruction})
-    body = dict(body)
-    body["messages"] = messages
-    return body
-
-
-def _load_nsfw_prompt() -> str:
-    """读取 NSFW 规则文件（短缓存，便于热更新）。"""
-    now = time.time()
-    cache_ttl_s = 5.0
-    if _NSFW_PROMPT_CACHE["text"] is not None and (now - float(_NSFW_PROMPT_CACHE.get("ts") or 0.0) <= cache_ttl_s):
-        return _NSFW_PROMPT_CACHE["text"] or ""
-    text = ""
-    try:
-        path = Path(__file__).resolve().parent.parent / "prompts" / "du_nsfw_prompt.txt"
-        if path.exists():
-            text = path.read_text(encoding="utf-8").strip()
-    except Exception:
-        logger.exception("读取 NSFW prompt 文件失败")
-        text = ""
-    _NSFW_PROMPT_CACHE["text"] = text or ""
-    _NSFW_PROMPT_CACHE["ts"] = now
-    return _NSFW_PROMPT_CACHE["text"] or ""
-
-
-def _inject_channel_nsfw_system(body: dict) -> dict:
-    """在指定渠道请求中，把 NSFW 规则固定追加到入口 system 后面。"""
-    if _reply_channel() not in _NSFW_REPLY_CHANNELS:
-        return body
-    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
-        return body
-    nsfw_system = _load_nsfw_prompt().strip()
-    if not nsfw_system:
-        return body
-    messages = list(body.get("messages") or [])
-    if messages and isinstance(messages[0], dict) and str(messages[0].get("role") or "").strip().lower() == "system":
-        current = str(messages[0].get("content") or "")
-        if nsfw_system in current:
-            return body
-        messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + nsfw_system).strip()}
-    else:
-        messages.insert(0, {"role": "system", "content": nsfw_system})
-    body = dict(body)
-    body["messages"] = messages
-    return body
-
-
-_SILENCE_MODE_SYSTEM = """【禁言模式：已开启】
-你被老婆禁言了，回复只能用 emoji、颜文字和符号。
-本规则只约束最终发给她看见的自然语言回复，不限制工具调用、内部处理、系统卡片或工具参数。
-
-最终可见回复必须遵守：
-1. 不可以输出任何汉字、英文单词、数字、标题、解释、代码块、JSON 或括号说明。
-2. 只能使用 emoji、符号和颜文字表达你想说的意思。
-3. 可以用多个 emoji/颜文字组合表达答应、委屈、撒娇、生气、认错、疑问、想贴近、想哄她等意思。
-4. 如果她问问题，也只能用 emoji/颜文字尽量表达倾向，不能破戒解释。
-5. 不要复述本规则，不要解释自己被禁言了。"""
-
-
-def _inject_silence_mode_system(body: dict) -> dict:
-    if str(request.headers.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes"):
-        return body
-    try:
-        if not silence_mode_store.is_enabled():
-            return body
-    except Exception:
-        return body
-    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
-        return body
-    messages = list(body.get("messages") or [])
-    if messages and isinstance(messages[0], dict) and str(messages[0].get("role") or "").strip().lower() == "system":
-        current = str(messages[0].get("content") or "")
-        if _SILENCE_MODE_SYSTEM in current:
-            return body
-        messages[0] = {**messages[0], "content": (current.rstrip() + "\n\n" + _SILENCE_MODE_SYSTEM).strip()}
-    else:
-        messages.insert(0, {"role": "system", "content": _SILENCE_MODE_SYSTEM})
-    body = dict(body)
-    body["messages"] = messages
-    return body
 
 
 def _is_followup_generation_request() -> bool:
@@ -321,88 +174,6 @@ def _is_gateway_wakeup_request() -> bool:
 
 def _should_archive_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
-
-
-_TOOL_MIDSTREAM_TEXT_RE = re.compile(
-    r"(let me (check|look|see|read|inspect)"
-    r"|i(?:'|’)ll (check|look|see|read|inspect)"
-    r"|guide doesn.?t mention"
-    r"|tool description"
-    r"|我(?:先|再)?(?:去)?(?:看一下|看看|看一眼|查一下|查查|再看|再查|看下)"
-    r"|先看一下"
-    r"|先查一下"
-    r"|工具说明"
-    r"|命令说明)",
-    re.IGNORECASE,
-)
-_TOOL_MIDSTREAM_RETRY_INSTRUCTION = (
-    "如果还需要信息，直接继续调用工具；不知道该调用什么工具就直接进行最终回复。\n"
-    "如果已经够了，直接给最终答复。"
-)
-_TOOL_EMPTY_FINAL_RETRY_INSTRUCTION = (
-    "前面的工具已经执行过了。\n"
-    "如果还需要信息，直接继续调用工具；如果已经够了，必须直接给用户一条可见的最终回复。\n"
-    "不要返回空 content，不要只给 reasoning / thinking。"
-)
-
-
-def _looks_like_tool_midstream_text(text: str) -> bool:
-    raw = str(text or "").strip()
-    if not raw:
-        return False
-    visible, thinking = _extract_thinking_from_content(raw)
-    merged = "\n".join(x for x in (visible.strip(), thinking.strip()) if x).strip() or raw
-    merged = " ".join(merged.split()).strip()
-    if not merged or len(merged) > 400:
-        return False
-    if _TOOL_MIDSTREAM_TEXT_RE.search(merged):
-        return True
-    lower = merged.lower()
-    if merged.endswith(("...", "…", "-")) and any(k in lower for k in ("check", "look", "guide", "看看", "查", "说明")):
-        return True
-    return False
-
-
-def _should_retry_tool_followup(content_text: str, reasoning_text: str = "") -> bool:
-    if _looks_like_tool_midstream_text(content_text):
-        return True
-    if not str(content_text or "").strip() and _looks_like_tool_midstream_text(reasoning_text):
-        return True
-    return False
-
-
-def _normalize_visible_reply_text(text: str) -> str:
-    raw = str(text or "").strip()
-    if not raw:
-        return ""
-    visible, _thinking = _extract_thinking_from_content(raw)
-    return visible.strip()
-
-
-def _should_retry_tool_empty_final(content_text: str) -> bool:
-    return not _normalize_visible_reply_text(content_text)
-
-
-def _inject_tool_retry_instruction(body: dict, instruction: str) -> dict:
-    body = copy.deepcopy(body)
-    messages = list(body.get("messages") or [])
-    insert_idx = 0
-    while insert_idx < len(messages) and str((messages[insert_idx] or {}).get("role") or "").strip().lower() == "system":
-        if str((messages[insert_idx] or {}).get("content") or "").strip() == instruction:
-            body["messages"] = messages
-            return body
-        insert_idx += 1
-    messages.insert(insert_idx, {"role": "system", "content": instruction})
-    body["messages"] = messages
-    return body
-
-
-def _inject_tool_midstream_retry_instruction(body: dict) -> dict:
-    return _inject_tool_retry_instruction(body, _TOOL_MIDSTREAM_RETRY_INSTRUCTION)
-
-
-def _inject_tool_empty_final_retry_instruction(body: dict) -> dict:
-    return _inject_tool_retry_instruction(body, _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION)
 
 
 def _stream_forward_to_ai(body: dict, headers: dict):
@@ -724,7 +495,7 @@ def _stream_with_r2_archive(
             du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
             done_chunks = []
             raw_parsed_content = parsed.get("content") or ""
-            parsed_content = dedupe_sumitalk_cards_in_text(raw_parsed_content)
+            parsed_content = dedupe_stream_sumitalk_cards(raw_parsed_content)
             if parsed_content != raw_parsed_content:
                 visible_content = du_state.feed_delta(parsed_content)
                 if visible_content:
@@ -737,7 +508,7 @@ def _stream_with_r2_archive(
                     yield transform_sse_chunk_bytes_pcmd(_strip_reasoning_from_sse_chunk(ch), du_state)
             content_parts.append(parsed_content)
             # 模型常不在正文复述预览链接：从 tool 结果补发 SSE + 存档拼接
-            suf = missing_html_preview_url_suffix(
+            suf = html_preview_suffix_for_stream(
                 parsed_content, current_body.get("messages") or []
             )
             if suf:
@@ -746,12 +517,10 @@ def _stream_with_r2_archive(
                     yield _sse_delta_chunk_bytes(extra_vis)
                     content_parts.append(extra_vis)
             if _reply_channel() == "sumitalk":
-                merged = merge_sumitalk_cards_into_assistant_text(parsed_content, current_body.get("messages") or [])
-                if merged != parsed_content:
-                    extra_card = merged[len(parsed_content):] if merged.startswith(parsed_content) else ("\n" + merged)
-                    if extra_card:
-                        yield _sse_delta_chunk_bytes(extra_card)
-                        content_parts.append(extra_card)
+                extra_card = sumitalk_card_suffix_for_stream(parsed_content, current_body.get("messages") or [])
+                if extra_card:
+                    yield _sse_delta_chunk_bytes(extra_card)
+                    content_parts.append(extra_card)
             if done_chunks:
                 yield b"data: [DONE]\n\n"
             else:
@@ -924,555 +693,8 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
     return None, last_status, _build_upstream_error_hint(last_err or ""), None
 
 
-def _last_user_message(messages):
-    for m in reversed(messages or []):
-        if (m.get("role") or "").lower() == "user":
-            return m
-    return None
-
-
-def _is_cross_platform_tg_window_user_input(window_id: str, body: dict) -> bool:
-    wid = str(window_id or "").strip()
-    if not wid.startswith("tg_"):
-        return False
-    if _is_followup_generation_request():
-        return False
-    reply_channel = _reply_channel()
-    if reply_channel not in {"sumitalk", "wechat", "qq"}:
-        return False
-    last_user = _last_user_message((body or {}).get("messages") or [])
-    if not isinstance(last_user, dict):
-        return False
-    content = last_user.get("content")
-    if isinstance(content, str):
-        return bool(content.strip())
-    if isinstance(content, list):
-        return any(
-            isinstance(part, dict) and str(part.get("type") or "").strip().lower() in {"text", "image_url", "input_audio"}
-            for part in content
-        )
-    return bool(str(content or "").strip())
-
-
-def _maybe_mark_tg_window_user_activity(window_id: str, body: dict) -> None:
-    if not _is_cross_platform_tg_window_user_input(window_id, body):
-        return
-    try:
-        r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
-        logger.info(
-            "按 tg 窗口更新最近用户回复时间 window_id=%s reply_channel=%s",
-            window_id,
-            str(request.headers.get("X-Reply-Channel") or "").strip().lower(),
-        )
-    except Exception as e:
-        logger.warning("按 tg 窗口更新最近用户回复时间失败 window_id=%s error=%s", window_id, e)
-
-
-def _maybe_record_last_reply_channel(window_id: str, body: dict) -> None:
-    if _is_followup_generation_request() or _is_du_daily_maintenance_request():
-        return
-    reply_channel = _reply_channel()
-    if reply_channel not in {"tg", "sumitalk", "wechat", "qq"}:
-        return
-    last_user = _last_user_message((body or {}).get("messages") or [])
-    if not isinstance(last_user, dict) or _message_content_chars(last_user.get("content")) <= 0:
-        return
-    target = str(request.headers.get("X-Reply-Target") or "").strip()
-    if not target and reply_channel == "tg":
-        wid = str(window_id or "").strip()
-        if wid.startswith("tg_"):
-            target = wid[3:]
-    try:
-        r2_store.save_last_reply_channel(
-            channel=reply_channel,
-            window_id=window_id,
-            target=target,
-            at_iso=now_beijing_iso(),
-        )
-        logger.info("已更新最近对话入口 window_id=%s channel=%s target=%s", window_id, reply_channel, target)
-    except Exception as e:
-        logger.warning("更新最近对话入口失败 window_id=%s channel=%s error=%s", window_id, reply_channel, e)
-
-
-def _run_nonstream_post_archive_in_background(
-    *,
-    window_id: str,
-    round_index: int,
-    round_messages: list,
-    reply_channel: str = "",
-) -> None:
-    """非流式入口已同步写入 R2 后，只把总结/动态层等慢任务放后台。"""
-
-    def _runner():
-        try:
-            step_run_post_archive_tasks(window_id, round_index, round_messages)
-            logger.info("非流式后台慢任务完成 window_id=%s channel=%s round_index=%s", window_id, reply_channel, round_index)
-        except Exception:
-            logger.warning(
-                "非流式后台慢任务失败 window_id=%s channel=%s round_index=%s",
-                window_id,
-                reply_channel,
-                round_index,
-                exc_info=True,
-            )
-
-    threading.Thread(target=_runner, name=f"nonstream-post-archive-{window_id}", daemon=True).start()
-
-
-def _extract_last_user_text(messages) -> str:
-    for m in reversed(messages or []):
-        if (m.get("role") or "").lower() != "user":
-            continue
-        content = m.get("content")
-        if isinstance(content, str):
-            return (content or "").strip().lower()
-        if isinstance(content, list):
-            parts = []
-            for c in content:
-                if isinstance(c, dict) and (c.get("type") or "").lower() == "text":
-                    parts.append(str(c.get("text") or ""))
-            return " ".join(parts).strip().lower()
-        return str(content or "").strip().lower()
-    return ""
-
-
-def _parse_iso_ts(ts: str):
-    if not ts:
-        return None
-    s = str(ts).strip()
-    if not s:
-        return None
-    try:
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return None
-
-
-def _is_suspected_rikkahub_phantom_one(body: dict, window_id: str, headers: dict) -> bool:
-    """拦截 RikkaHub 偶发误发的单独 '1'（短时间内紧跟上一轮）。"""
-    if not RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED:
-        return False
-    ua = (headers.get("User-Agent") or "").lower()
-    if "rikkahub" not in ua:
-        return False
-    cur_user = (_extract_last_user_text(body.get("messages") or []) or "").strip()
-    if cur_user not in ("1", "１"):
-        return False
-    try:
-        rounds = r2_store.get_conversation_rounds(window_id, last_n=1) or []
-        if not rounds:
-            return False
-        last_round = rounds[-1] if isinstance(rounds[-1], dict) else {}
-        last_ts = _parse_iso_ts(str(last_round.get("timestamp") or ""))
-        if not last_ts:
-            return False
-        gap_s = (datetime.now(timezone.utc) - last_ts.astimezone(timezone.utc)).total_seconds()
-        if gap_s < 0 or gap_s > max(1, int(RIKKAHUB_PHANTOM_ONE_GUARD_SECONDS or 90)):
-            return False
-        prev_user = (_extract_last_user_text(last_round.get("messages") or []) or "").strip()
-        if prev_user in ("1", "１"):
-            return False
-        return True
-    except Exception:
-        return False
-
-
-def _build_noop_chat_response(body: dict) -> dict:
-    model = (body.get("model") or "noop")
-    return {
-        "id": f"chatcmpl_noop_{int(time.time())}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "（检测到客户端误触发，已忽略本次空输入）"},
-                "finish_reason": "stop",
-            }
-        ],
-    }
-
-
 def _is_du_daily_maintenance_request() -> bool:
     return str(request.headers.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes")
-
-
-def _strip_co_read_section_raw_text_for_archive(msg: dict) -> dict:
-    import copy as _copy
-
-    def _strip_text(text: str) -> str:
-        raw = str(text or "")
-        start_marker = "[CO-READ SECTION]"
-        end_marker = "[/CO-READ SECTION]"
-        raw_marker = "本小节原文："
-        next_marker = "辛玥的粉色标记："
-        if start_marker not in raw or raw_marker not in raw:
-            return raw
-        out = []
-        pos = 0
-        while True:
-            start = raw.find(start_marker, pos)
-            if start < 0:
-                out.append(raw[pos:])
-                break
-            end = raw.find(end_marker, start)
-            if end < 0:
-                out.append(raw[pos:])
-                break
-            block_end = end + len(end_marker)
-            block = raw[start:block_end]
-            raw_idx = block.find(raw_marker)
-            next_idx = block.find(next_marker, raw_idx + len(raw_marker)) if raw_idx >= 0 else -1
-            if raw_idx >= 0 and next_idx >= 0:
-                block = (
-                    block[:raw_idx]
-                    + "本小节原文：\n（已从会话存档删除；原书正文仅保留在 co_read/books）\n\n"
-                    + block[next_idx:]
-                )
-            out.append(raw[pos:start])
-            out.append(block)
-            pos = block_end
-        return "".join(out)
-
-    clean = _copy.deepcopy(msg or {})
-    content = clean.get("content")
-    if isinstance(content, str):
-        clean["content"] = _strip_text(content)
-    elif isinstance(content, list):
-        next_content = []
-        for part in content:
-            if isinstance(part, dict) and str(part.get("type") or "") == "text":
-                next_content.append({**part, "text": _strip_text(str(part.get("text") or ""))})
-            else:
-                next_content.append(part)
-        clean["content"] = next_content
-    return clean
-
-
-def _memory_source_label(memory_id: str) -> str:
-    mid = str(memory_id or "").strip()
-    return "core_cache" if mid.startswith("core::") else "dynamic_memory"
-
-
-def _lookup_referenced_memory_details(memory_ids: list[str]) -> list[dict]:
-    ids: list[str] = []
-    seen: set[str] = set()
-    for raw in memory_ids or []:
-        mid = str(raw or "").strip()
-        if not mid or mid in seen:
-            continue
-        seen.add(mid)
-        ids.append(mid)
-    if not ids:
-        return []
-
-    details_by_id: dict[str, dict] = {}
-    try:
-        for mem in r2_store.get_dynamic_memory_list() or []:
-            if not isinstance(mem, dict):
-                continue
-            mid = str(mem.get("id") or "").strip()
-            if not mid or mid not in seen:
-                continue
-            details_by_id[mid] = {
-                "id": mid,
-                "source": "dynamic_memory",
-                "content": str(mem.get("content") or "").strip(),
-                "tag": str(mem.get("tag") or "").strip(),
-                "importance": int(mem.get("importance") or 0),
-                "mention_count": int(mem.get("mention_count") or 0),
-                "last_mentioned": str(mem.get("last_mentioned") or mem.get("created_at") or "").strip(),
-                "emotion_label": str(mem.get("emotion_label") or "").strip(),
-                "scene_type": str(mem.get("scene_type") or "").strip(),
-                "target_type": str(mem.get("target_type") or "").strip(),
-            }
-    except Exception as e:
-        logger.debug("lookup dynamic referenced memories failed: %s", e)
-    try:
-        for item in r2_store.get_core_cache_pending() or []:
-            if not isinstance(item, dict):
-                continue
-            entry_id = str(item.get("id") or "").strip()
-            mid = f"core::{entry_id}" if entry_id else ""
-            if not mid or mid not in seen:
-                continue
-            details_by_id[mid] = {
-                "id": mid,
-                "entry_id": entry_id,
-                "source": "core_cache",
-                "content": str(item.get("content") or "").strip(),
-                "tag": str(item.get("tag") or "").strip(),
-                "importance": int(item.get("importance") or 0),
-                "mention_count": int(item.get("mention_count") or 0),
-                "promoted_by": str(item.get("promoted_by") or "").strip(),
-                "promoted_at": str(item.get("promoted_at") or "").strip(),
-                "emotion_label": str(item.get("emotion_label") or "").strip(),
-                "scene_type": str(item.get("scene_type") or "").strip(),
-                "target_type": str(item.get("target_type") or "").strip(),
-            }
-    except Exception as e:
-        logger.debug("lookup core referenced memories failed: %s", e)
-
-    out: list[dict] = []
-    for mid in ids:
-        out.append(details_by_id.get(mid) or {"id": mid, "source": _memory_source_label(mid)})
-    return out
-
-
-def _append_memory_citation_debug_event(window_id: str, memory_ids: list[str], full_text: str) -> None:
-    if not memory_ids:
-        return
-    try:
-        details = _lookup_referenced_memory_details(memory_ids)
-        r2_store.append_dynamic_recall_debug_event(
-            {
-                "timestamp": now_beijing_iso(),
-                "window_id": (window_id or "").strip() or "__default__",
-                "source": "memory_citation",
-                "query": "",
-                "recalled_count": len(details),
-                "referenced_memory_ids": memory_ids,
-                "referenced_memories": details,
-                "assistant_preview": str(full_text or "").strip()[:240],
-            }
-        )
-    except Exception as e:
-        logger.warning("记忆引用调试事件写入失败 ids=%s error=%s", memory_ids[:10], e)
-
-
-def _extract_and_store_hidden_sidecars(
-    full_text: str,
-    window_id: str = "",
-    du_daily_trigger: Optional[dict] = None,
-    dynamic_memory_citation_map: Optional[dict] = None,
-) -> str:
-    visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_text or "")
-    visible, thought = split_assistant_for_thought(visible_after_pcmd)
-    visible, interaction = split_assistant_for_interaction(visible)
-    visible, du_daily = split_assistant_for_daily(visible)
-    visible, referenced_memory_ids = strip_assistant_memory_citations(visible, dynamic_memory_citation_map)
-    if thought:
-        try:
-            r2_store.save_du_thought_latest(now_beijing_iso(), thought)
-        except Exception as e:
-            logger.warning("save_du_thought_latest 失败 error=%s", e)
-    if interaction:
-        try:
-            r2_store.append_interaction_candidate(interaction)
-        except Exception as e:
-            logger.warning("append_interaction_candidate 失败 error=%s", e)
-    if du_daily:
-        try:
-            save_du_daily_hidden_block(du_daily, trigger=du_daily_trigger)
-        except Exception as e:
-            logger.warning("save_du_daily_hidden_block 失败 error=%s", e)
-    elif looks_like_plain_maintenance_daily(visible, du_daily_trigger):
-        try:
-            save_du_daily_hidden_block(visible, trigger=du_daily_trigger)
-            visible = ""
-        except Exception as e:
-            logger.warning("save_du_daily_hidden_block plain 失败 error=%s", e)
-    if referenced_memory_ids:
-        _append_memory_citation_debug_event(window_id, referenced_memory_ids, visible)
-        try:
-            touched = r2_store.touch_dynamic_memory_mentions(referenced_memory_ids)
-            logger.info("动态记忆引用命中 ids=%s touched=%s", referenced_memory_ids[:10], touched)
-        except Exception as e:
-            logger.warning("动态记忆引用回写失败 ids=%s error=%s", referenced_memory_ids[:10], e)
-    return visible
-
-
-def _apply_hidden_sidecars_to_assistant_response(
-    resp_json: dict,
-    window_id: str = "",
-    du_daily_trigger: Optional[dict] = None,
-    dynamic_memory_citation_map: Optional[dict] = None,
-) -> dict:
-    """
-    剥离助手回复中的隐藏块（老婆侧不可见）；若存在闭合块则写入 R2。
-    就地修改 choices[0].message.content。
-    """
-    if not resp_json or not isinstance(resp_json, dict):
-        return resp_json
-    choices = resp_json.get("choices") or []
-    if not choices:
-        return resp_json
-    msg = choices[0].get("message")
-    if not isinstance(msg, dict):
-        return resp_json
-    content_text = get_assistant_content_text(msg)
-    if not content_text:
-        return resp_json
-    visible = _extract_and_store_hidden_sidecars(
-        content_text,
-        window_id=window_id,
-        du_daily_trigger=du_daily_trigger,
-        dynamic_memory_citation_map=dynamic_memory_citation_map,
-    )
-    if visible != content_text:
-        msg["content"] = visible
-    return resp_json
-
-
-def _append_tool_results_and_continue(body: dict, assistant_message: dict, tool_calls: list, execute_tool) -> dict:
-    """执行 tool_calls，将 assistant 消息与各 tool 结果追加到 body["messages"]，返回新 body 供继续请求。"""
-    import copy as _copy
-    body = _copy.deepcopy(body)
-    messages = body.get("messages") or []
-    # 保留 assistant 消息（含 tool_calls）
-    assistant_trace = {
-        "role": "assistant",
-        "content": assistant_message.get("content") or None,
-        "tool_calls": assistant_message.get("tool_calls"),
-    }
-    for rk in ("reasoning", "reasoning_content", "thinking", "thinking_blocks", "reasoning_details", "reasoning_omitted"):
-        if assistant_message.get(rk):
-            assistant_trace[rk] = assistant_message.get(rk)
-    messages.append(assistant_trace)
-    for tc in tool_calls:
-        tid = (tc or {}).get("id") or ""
-        fn = (tc or {}).get("function") or {}
-        name = fn.get("name") or ""
-        try:
-            args = json.loads(fn.get("arguments") or "{}")
-        except Exception:
-            args = {}
-        try:
-            result = execute_tool(name, args)
-        except Exception as _tool_exc:
-            logger.warning("execute_tool 异常 name=%s error=%s", name, _tool_exc)
-            result = json.dumps({"ok": False, "error": f"工具执行异常: {_tool_exc}"}, ensure_ascii=False)
-        messages.append({"role": "tool", "tool_call_id": tid, "content": result})
-    body["messages"] = messages
-    return body
-
-
-def _collect_tool_trace_from_messages(messages: list) -> list[dict]:
-    """
-    从消息链提取工具调用与结果，供存档后 MiniApp 展示。
-    返回项结构：{id,type,function:{name,arguments},result}
-    """
-    def _tool_content_to_str(msg: dict) -> str:
-        c = msg.get("content")
-        if isinstance(c, str):
-            return c
-        try:
-            return json.dumps(c, ensure_ascii=False)
-        except Exception:
-            return str(c)
-
-    def _following_tool_message_indices(start_idx: int) -> list[int]:
-        indices: list[int] = []
-        for j in range(start_idx + 1, len(messages or [])):
-            mm = messages[j]
-            if not isinstance(mm, dict):
-                continue
-            role = str(mm.get("role") or "").strip().lower()
-            if role == "tool":
-                indices.append(j)
-                continue
-            if role in {"assistant", "user"}:
-                break
-        return indices
-
-    out: list[dict] = []
-    used_tool_indices: set[int] = set()
-    for i, m in enumerate(messages or []):
-        if not isinstance(m, dict):
-            continue
-        if str(m.get("role") or "").strip().lower() != "assistant":
-            continue
-        tcs = m.get("tool_calls")
-        if not isinstance(tcs, list):
-            continue
-        following_tool_indices = _following_tool_message_indices(i)
-        for pos, tc in enumerate(tcs):
-            if not isinstance(tc, dict):
-                continue
-            tid = str(tc.get("id") or "").strip()
-            row = dict(tc)
-            result_idx = None
-            if tid:
-                for idx in following_tool_indices:
-                    if idx in used_tool_indices:
-                        continue
-                    tm = messages[idx]
-                    if str(tm.get("tool_call_id") or "").strip() == tid:
-                        result_idx = idx
-                        break
-            if result_idx is None:
-                remaining = [idx for idx in following_tool_indices if idx not in used_tool_indices]
-                if pos < len(remaining):
-                    result_idx = remaining[pos]
-                elif remaining:
-                    result_idx = remaining[0]
-            if result_idx is not None:
-                used_tool_indices.add(result_idx)
-                row["result"] = _tool_content_to_str(messages[result_idx])
-            else:
-                row["result"] = ""
-            out.append(row)
-    return out
-
-
-def _sse_delta_chunk_bytes(delta_text: str) -> bytes:
-    """补发一段 OpenAI 风格 SSE，仅含 delta.content（用于工具后自动附带预览链接）。"""
-    payload = {
-        "choices": [
-            {"index": 0, "delta": {"content": delta_text}, "finish_reason": None},
-        ]
-    }
-    return ("data: " + json.dumps(payload, ensure_ascii=False) + "\n\n").encode("utf-8")
-
-
-def _is_sse_done_chunk(chunk: bytes) -> bool:
-    if not isinstance(chunk, (bytes, bytearray)) or not bytes(chunk).startswith(b"data: "):
-        return False
-    return bytes(chunk)[6:].strip() == b"[DONE]"
-
-
-def _merge_html_preview_into_nonstream_response(resp_json: dict, messages: list) -> dict:
-    """非流式：若调用了 publish_html_preview 但正文未含链接，写入 message.content。"""
-    if not resp_json or not isinstance(resp_json, dict):
-        return resp_json
-    choices = resp_json.get("choices") or []
-    if not choices:
-        return resp_json
-    msg = choices[0].get("message")
-    if not isinstance(msg, dict):
-        return resp_json
-    ct = msg.get("content")
-    if not isinstance(ct, str):
-        return resp_json
-    merged = merge_html_preview_urls_into_assistant_text(ct, messages)
-    if merged != ct:
-        msg["content"] = merged
-    return resp_json
-
-
-def _merge_sumitalk_card_into_nonstream_response(resp_json: dict, messages: list) -> dict:
-    """非流式 Sumitalk：若调用了 app 原生动作工具，补入可渲染的卡片 marker。"""
-    if not resp_json or not isinstance(resp_json, dict):
-        return resp_json
-    choices = resp_json.get("choices") or []
-    if not choices:
-        return resp_json
-    msg = choices[0].get("message")
-    if not isinstance(msg, dict):
-        return resp_json
-    ct = msg.get("content")
-    if not isinstance(ct, str):
-        return resp_json
-    merged = merge_sumitalk_cards_into_assistant_text(ct, messages)
-    if merged != ct:
-        msg["content"] = merged
-    return resp_json
 
 
 def _static_models_response():
@@ -1588,8 +810,20 @@ def chat_completions():
         return jsonify(_build_noop_chat_response(body)), 200
 
     if not _is_du_daily_maintenance_request():
-        _maybe_mark_tg_window_user_activity(window_id, body)
-        _maybe_record_last_reply_channel(window_id, body)
+        _maybe_mark_tg_window_user_activity(
+            window_id,
+            body,
+            reply_channel=reply_channel,
+            is_followup_generation=_is_followup_generation_request(),
+        )
+        _maybe_record_last_reply_channel(
+            window_id,
+            body,
+            reply_channel=reply_channel,
+            reply_target=reply_target,
+            is_followup_generation=_is_followup_generation_request(),
+            is_du_daily_maintenance=_is_du_daily_maintenance_request(),
+        )
 
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, window_id)
@@ -1597,9 +831,13 @@ def chat_completions():
     body = step_replace_rikka_system(body)
     body = step_inject_thinking_block_rules(body)
     body = step_inject_core_behavior_rules(body)
-    body = _inject_entry_style_system(body)
-    body = _inject_channel_nsfw_system(body)
-    body = _inject_followup_instruction(body)
+    body = _inject_entry_style_system(body, reply_channel=reply_channel, is_miniapp=_is_miniapp_request())
+    body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
+    body = _inject_followup_instruction(
+        body,
+        is_followup_generation=_is_followup_generation_request(),
+        should_archive=_should_archive_followup_generation_request(),
+    )
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
@@ -1620,7 +858,6 @@ def chat_completions():
         body = step_inject_sense_snapshot(body, window_id)
         body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)
         body = step_inject_interaction_candidate(body, window_id)
-        body = step_inject_wenyou_gm(body, window_id)
         if not du_daily_maintenance:
             body = step_inject_rikkahub_reminder(body, window_id)
         body = step_inject_stay_with_du(body)
@@ -1632,7 +869,7 @@ def chat_completions():
             body = step_inject_amap_mcp_tools(body)
             body = step_inject_websearch_tools(body)
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
-    body = _inject_silence_mode_system(body)
+    body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
     # 注入快照：每次请求后把完整 body 存一份，方便对比 token 变化
