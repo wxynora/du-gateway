@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiJson } from "../api";
 import { useToast } from "../toast";
 
@@ -221,6 +221,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
   const [randomLength, setRandomLength] = useState("标准");
   const [randomStyle, setRandomStyle] = useState("全随机");
   const [actionText, setActionText] = useState("");
+  const actionInputRef = useRef<HTMLInputElement | null>(null);
   const [feed, setFeed] = useState<FeedItem[]>([
     {
       id: "scene-1",
@@ -460,32 +461,12 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
     loadSessionPanel();
   }
 
-  async function useInventoryItem(item: string) {
-    setActing(true);
-    try {
-      const j = await apiJson<{ ok?: boolean; text?: string; du_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/item/use", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item }),
-      });
-      if (!j?.ok) throw new Error(j?.error || "使用失败");
-      const text = String(j.text || "");
-      const duAction = String(j.du_action || "").trim();
-      const stamp = Date.now();
-      setFeed((prev) => [
-        ...prev,
-        { id: `u-${stamp}`, kind: "user", text: `使用道具【${item}】` },
-        ...(duAction ? [{ id: `du-${stamp}`, kind: "du" as const, text: duAction }] : []),
-        { id: `gm-${stamp}`, kind: "system", text: text || "主神系统暂无回应。" },
-      ]);
-      if (j.session) setSessionPanel(j.session);
-      setPanelView(null);
-      await loadStatus();
-    } catch (e: any) {
-      toast(`使用道具失败：${e?.message || e}`);
-    } finally {
-      setActing(false);
-    }
+  function useInventoryItem(item: string) {
+    const next = `使用道具【${item}】：`;
+    setActionText(next);
+    setPanelView(null);
+    toast("已填入行动，发送后才结算本轮");
+    window.setTimeout(() => actionInputRef.current?.focus(), 0);
   }
 
   return (
@@ -661,7 +642,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
               ))}
             </div>
             <div className="wenyou-input-row">
-              <input value={actionText} onChange={(e) => setActionText(e.target.value)} placeholder={acting ? "主神演算中..." : "输入你的行动..."} disabled={acting} onKeyDown={(e) => { if (e.key === "Enter") submitAction(); }} />
+              <input ref={actionInputRef} value={actionText} onChange={(e) => setActionText(e.target.value)} placeholder={acting ? "主神演算中..." : "输入你的行动..."} disabled={acting} onKeyDown={(e) => { if (e.key === "Enter") submitAction(); }} />
               <button onClick={submitAction} aria-label="发送行动" disabled={acting}><Icon name="send" /></button>
             </div>
           </div>
@@ -821,7 +802,7 @@ function PanelModal({
             {inventory.length ? inventory.map((item) => (
               <div className="wenyou-inventory-row" key={item}>
                 <span>{item}</span>
-                <button onClick={() => onUseItem(item)} disabled={acting}>{acting ? "演算中" : "使用"}</button>
+                <button onClick={() => onUseItem(item)} disabled={acting}>{acting ? "演算中" : "填入"}</button>
               </div>
             )) : <div className="wenyou-empty">背包为空。</div>}
           </div>
