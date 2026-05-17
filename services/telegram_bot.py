@@ -23,7 +23,6 @@ from config import (
     TELEGRAM_INPUT_IDLE_SECONDS,
     TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS,
     TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS,
-    TELEGRAM_CONTEXT_LAST_TURNS,
     TELEGRAM_VOICE_REPLY_ENABLED,
     TELEGRAM_PROACTIVE_TARGET_USER_ID,
     R2_PUBLIC_URL,
@@ -75,8 +74,6 @@ def _effective_tg_token(bot_token: Optional[str]) -> str:
 
 _BUF_LOCK = threading.Lock()
 _INPUT_BUFFERS: dict[int, dict] = {}
-_CTX_LOCK = threading.Lock()
-_CONTEXT_MESSAGES: dict[int, list[dict]] = {}
 _PENDING_LOCK = threading.Lock()
 _PENDING_USER_CONTENTS: dict[int, list[Union[str, list]]] = {}
 _FLUSH_WATCHDOG_LOCK = threading.Lock()
@@ -361,42 +358,6 @@ def _extract_voice_tag(text: str) -> tuple[str, str]:
     return clean, voice_text
 
 
-def _trim_context_messages(msgs: list[dict]) -> list[dict]:
-    """只保留最近 N 轮（每轮 user+assistant 两条）。"""
-    n_turns = int(TELEGRAM_CONTEXT_LAST_TURNS or 0)
-    if n_turns <= 0:
-        return []
-    max_msgs = n_turns * 2
-    if len(msgs) <= max_msgs:
-        return msgs
-    return msgs[-max_msgs:]
-
-
-def _bootstrap_context_from_r2(window_id: str) -> list[dict]:
-    """
-    当 Telegram 进程内上下文为空时，从 R2 的该窗口最近 N 轮回填 user/assistant 上下文，
-    解决“Bot 侧 Last4 偶发为空（重启/波动后）”的问题。
-    """
-    try:
-        from storage import r2_store
-        rounds = r2_store.get_conversation_rounds(window_id, last_n=max(1, int(TELEGRAM_CONTEXT_LAST_TURNS or 4)))
-    except Exception:
-        rounds = []
-    if not rounds:
-        return []
-    out: list[dict] = []
-    for r in rounds:
-        for m in (r.get("messages") or []):
-            role = (m.get("role") or "").lower()
-            if role not in ("user", "assistant"):
-                continue
-            content = m.get("content")
-            if content is None:
-                continue
-            out.append({"role": role, "content": content})
-    return _trim_context_messages(out)
-
-
 def _normalize_user_content_to_parts(content: Union[str, list]) -> list[dict]:
     """把 user_content 归一化为多模态 parts（text/image_url）。"""
     if isinstance(content, str):
@@ -478,22 +439,14 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
     # 拉取失败时再用本地解析逻辑兜底。
     model = _fetch_gateway_first_model() or _resolve_chat_model()
 
-    # 历史上下文统一交给网关按 window_id 从 R2 注入。
-    # Bot 侧不再拼 R2/进程内历史，避免 worker 内存里的旧上下文把过期消息当成本轮 history 带进网关。
-    history = []
-    with _CTX_LOCK:
-        _CONTEXT_MESSAGES[user_id] = []
     # 上游波动时先缓存用户输入；下一次成功时一并带上，避免“我发了但丢轮次/Last4 断片”
     with _PENDING_LOCK:
         pending = list(_PENDING_USER_CONTENTS.get(user_id) or [])
     merged_user_content = _merge_user_contents(pending + [user_content]) if pending else user_content
-    # Telegram 端增加一条风格 system（网关还会在最前面插入 du_core_prompt）
-    messages = [{"role": "system", "content": build_telegram_style_system()}] + history + [{"role": "user", "content": merged_user_content}]
+    # Telegram 端只发送入口风格和本轮用户输入；历史统一由网关按 window_id 注入。
+    messages = [{"role": "system", "content": build_telegram_style_system()}, {"role": "user", "content": merged_user_content}]
     messages_chars = sum(_message_content_len(m.get("content")) for m in messages if isinstance(m, dict))
-    user_chars = _message_content_len(user_content)
     merged_user_chars = _message_content_len(merged_user_content)
-    history_turns = len(history) // 2
-    user_preview = _content_preview(user_content)
     merged_preview = _content_preview(merged_user_content)
     body = {
         "model": model,
@@ -511,13 +464,11 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         headers["X-Force-Last4"] = "1"
     try:
         logger.info(
-            "调用网关 chat window_id=%s user_id=%s model=%s force_last4=%s history_msgs=%s history_turns~=%s user_chars=%s messages_chars=%s preview=%s",
+            "调用网关 chat window_id=%s user_id=%s model=%s force_last4=%s user_chars=%s messages_chars=%s preview=%s",
             window_id,
             user_id,
             model,
             force_last4,
-            len(history),
-            history_turns,
             merged_user_chars,
             messages_chars,
             merged_preview,
@@ -584,13 +535,6 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         reply_text = _sanitize_reply_for_telegram(reply_text)
         # 电脑控制标签：入队并从可见正文移除（与手机/Tasker 隔离）
         reply_text, _ = process_pcmd_in_assistant_text(reply_text)
-        # 写入上下文时不带 <voice> 与 [情绪标签]，避免污染多轮记忆
-        for_ctx = reply_text
-        for_ctx, _ = _extract_voice_tag(for_ctx)
-        for_ctx, _ = _extract_sticker_tag(for_ctx)
-        # Bot 侧不维护对话 history；下一轮仍由网关按 R2 注入最近对话。
-        with _CTX_LOCK:
-            _CONTEXT_MESSAGES[user_id] = []
         with _PENDING_LOCK:
             _PENDING_USER_CONTENTS[user_id] = []
         return reply_text
