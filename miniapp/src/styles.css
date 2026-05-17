@@ -2101,10 +2101,11 @@
 
   .wenyou-rift-portal {
     position: absolute;
-    top: 50%;
+    top: 0;
+    bottom: 0;
     left: -40vw;
     right: -40vw;
-    height: 100dvh;
+    min-height: 100dvh;
     background:
       repeating-linear-gradient(0deg, rgba(3, 3, 5, 0.08) 0 1px, transparent 1px 4px),
       #f8fbff;
