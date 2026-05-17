@@ -424,9 +424,6 @@ TELEGRAM_OUTPUT_CHUNK_CHARS = int(os.environ.get("TELEGRAM_OUTPUT_CHUNK_CHARS", 
 TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_SEND_DELAY_MIN_SECONDS", "0.4"))
 TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS = float(os.environ.get("TELEGRAM_OUTPUT_SEND_DELAY_MAX_SECONDS", "1.0"))
 
-# Telegram 上下文缓存：每次请求网关时携带最近 N 轮（user+assistant=一轮两条消息），默认 4
-TELEGRAM_CONTEXT_LAST_TURNS = int(os.environ.get("TELEGRAM_CONTEXT_LAST_TURNS", "4"))
-
 # RikkaHub 客户端偶发“幽灵 1”误发保护：短时间内收到单独 "1" 时拦截为 no-op（仅 RikkaHub UA）
 RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED = os.environ.get("RIKKAHUB_PHANTOM_ONE_GUARD_ENABLED", "1").strip().lower() in (
     "1",
