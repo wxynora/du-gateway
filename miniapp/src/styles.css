@@ -2243,11 +2243,11 @@
   }
 
   .wenyou-rift-overlay-opening .wenyou-rift-portal {
-    animation: wenyou-rift-portal 0.92s cubic-bezier(0.19, 1, 0.22, 1) both;
+    animation: wenyou-rift-portal 1.18s cubic-bezier(0.19, 1, 0.22, 1) both;
   }
 
   .wenyou-rift-overlay-opening {
-    animation: wenyou-rift-impact-shake 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: wenyou-rift-impact-shake 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   .wenyou-rift-shatter {
@@ -2272,17 +2272,17 @@
 
   .wenyou-rift-crack-line {
     fill: none;
-    stroke: rgba(199, 204, 209, 0.42);
+    stroke: rgba(226, 232, 240, 0.5);
     stroke-dasharray: 1000;
     stroke-dashoffset: 1000;
     stroke-linecap: round;
     stroke-linejoin: round;
-    stroke-width: 0.5;
-    filter: drop-shadow(0 0 6px rgba(238, 242, 247, 0.22));
+    stroke-width: 0.68;
+    filter: drop-shadow(0 0 8px rgba(238, 242, 247, 0.28));
   }
 
   .wenyou-rift-overlay-opening .wenyou-rift-crack-line {
-    animation: wenyou-rift-draw-crack 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation: wenyou-rift-draw-crack 0.72s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
 
   .wenyou-rift-shards-canvas {
@@ -3028,4 +3028,3 @@
     background: rgba(255, 255, 255, 0.08);
   }
 }
-
