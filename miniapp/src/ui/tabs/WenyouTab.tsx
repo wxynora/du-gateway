@@ -435,11 +435,11 @@ function playRiftShatterSound() {
     const now = ctx.currentTime + 0.012;
     const master = ctx.createGain();
     master.gain.setValueAtTime(0.0001, now);
-    master.gain.exponentialRampToValueAtTime(0.34, now + 0.018);
-    master.gain.exponentialRampToValueAtTime(0.0001, now + 0.86);
+    master.gain.exponentialRampToValueAtTime(0.22, now + 0.018);
+    master.gain.exponentialRampToValueAtTime(0.0001, now + 0.72);
     master.connect(ctx.destination);
 
-    const noise = (delay: number, duration: number, frequency: number, gainValue: number) => {
+    const noise = (delay: number, duration: number, frequency: number, gainValue: number, type: BiquadFilterType = "bandpass") => {
       const length = Math.max(1, Math.floor(ctx.sampleRate * duration));
       const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
       const data = buffer.getChannelData(0);
@@ -451,8 +451,9 @@ function playRiftShatterSound() {
       const filter = ctx.createBiquadFilter();
       const gain = ctx.createGain();
       source.buffer = buffer;
-      filter.type = "highpass";
+      filter.type = type;
       filter.frequency.setValueAtTime(frequency, now + delay);
+      filter.Q.setValueAtTime(type === "bandpass" ? 1.8 : 0.7, now + delay);
       gain.gain.setValueAtTime(0.0001, now + delay);
       gain.gain.exponentialRampToValueAtTime(gainValue, now + delay + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + duration);
@@ -463,12 +464,12 @@ function playRiftShatterSound() {
       source.stop(now + delay + duration);
     };
 
-    const ping = (delay: number, frequency: number, duration: number, gainValue: number) => {
+    const tone = (delay: number, frequency: number, duration: number, gainValue: number, type: OscillatorType = "sine") => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = "square";
+      osc.type = type;
       osc.frequency.setValueAtTime(frequency, now + delay);
-      osc.frequency.exponentialRampToValueAtTime(Math.max(80, frequency * 0.32), now + delay + duration);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(60, frequency * 0.55), now + delay + duration);
       gain.gain.setValueAtTime(0.0001, now + delay);
       gain.gain.exponentialRampToValueAtTime(gainValue, now + delay + 0.008);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + duration);
@@ -478,12 +479,12 @@ function playRiftShatterSound() {
       osc.stop(now + delay + duration + 0.02);
     };
 
-    noise(0, 0.16, 1800, 0.5);
-    noise(0.08, 0.32, 3100, 0.26);
-    ping(0.02, 1280, 0.18, 0.18);
-    ping(0.065, 2480, 0.11, 0.11);
-    ping(0.14, 860, 0.28, 0.14);
-    window.setTimeout(() => master.disconnect(), 1200);
+    noise(0, 0.12, 720, 0.34, "bandpass");
+    noise(0.055, 0.2, 1800, 0.12, "highpass");
+    tone(0.01, 118, 0.26, 0.16, "sine");
+    tone(0.09, 520, 0.08, 0.045, "triangle");
+    tone(0.17, 390, 0.1, 0.035, "sine");
+    window.setTimeout(() => master.disconnect(), 980);
   } catch {
     // Audio is non-critical and may be blocked by the WebView.
   }
@@ -1573,8 +1574,9 @@ function RiftOverlay({
       <div className="wenyou-rift-results-wrap">
         {phase === "opening" ? (
           <div className="wenyou-rift-opening-text">
-            <span>FATE SIGNAL</span>
-            <strong>裂隙展开中</strong>
+            <span>RIFT BREACH</span>
+            <strong data-text="命运正在裂开">命运正在裂开</strong>
+            <small>抽取结果即将显影</small>
           </div>
         ) : null}
         {phase === "results" && count === 1 ? (

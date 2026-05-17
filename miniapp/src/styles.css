@@ -254,23 +254,23 @@
 @keyframes wenyou-rift-portal {
   0% {
     opacity: 0;
-    transform: scale3d(0.18, 0.012, 1);
+    transform: scale3d(0.24, 0.018, 1);
   }
   26% {
-    opacity: 0.92;
-    transform: scale3d(1, 0.018, 1);
+    opacity: 0.68;
+    transform: scale3d(0.92, 0.025, 1);
   }
   54% {
-    opacity: 0.78;
-    transform: scale3d(1.02, 1, 1);
+    opacity: 0.42;
+    transform: scale3d(1, 0.72, 1);
   }
   78% {
-    opacity: 0.28;
-    transform: scale3d(1.06, 1.04, 1);
+    opacity: 0.18;
+    transform: scale3d(1.02, 0.96, 1);
   }
   100% {
     opacity: 0;
-    transform: scale3d(1.1, 1.08, 1);
+    transform: scale3d(1.04, 1, 1);
   }
 }
 
@@ -280,12 +280,12 @@
     transform: scale3d(0.32, 0.08, 1);
   }
   16% {
-    opacity: 0.98;
+    opacity: 0.82;
     transform: scale3d(1, 1, 1);
   }
   64% {
-    opacity: 0.54;
-    transform: scale3d(1.018, 1.012, 1);
+    opacity: 0.38;
+    transform: scale3d(1.01, 1.008, 1);
   }
   100% {
     opacity: 0;
@@ -300,28 +300,125 @@
   }
   12%,
   68% {
-    opacity: 1;
+    opacity: 0.82;
   }
 }
 
 @keyframes wenyou-rift-shard-burst {
   0% {
     opacity: 0;
-    filter: blur(7px);
-    transform: translate3d(-50%, -50%, 0) scale(0.08) rotate(var(--r0, 0deg));
+    filter: blur(4px);
+    transform: translate3d(-50%, -50%, 0) scale(0.18) rotate(var(--r0, 0deg));
   }
-  18% {
-    opacity: 0.95;
+  20% {
+    opacity: 0.62;
     filter: blur(0);
-    transform: translate3d(-50%, -50%, 0) scale(0.76) rotate(var(--r0, 0deg));
+    transform: translate3d(-50%, -50%, 0) scale(0.72) rotate(var(--r0, 0deg));
   }
   72% {
-    opacity: 0.72;
+    opacity: 0.34;
   }
   100% {
     opacity: 0;
     filter: blur(1px);
     transform: translate3d(calc(-50% + var(--x)), calc(-50% + var(--y)), 0) scale(var(--s, 1)) rotate(var(--r, 0deg));
+  }
+}
+
+@keyframes wenyou-rift-opening-crack {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale3d(0.12, 0.04, 1) rotate(-8deg);
+  }
+  28% {
+    opacity: 0.76;
+    transform: translate(-50%, -50%) scale3d(1, 1, 1) rotate(-8deg);
+  }
+  100% {
+    opacity: 0.18;
+    transform: translate(-50%, -50%) scale3d(1.08, 1.02, 1) rotate(-8deg);
+  }
+}
+
+@keyframes wenyou-rift-opening-code {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(8px);
+  }
+  40%,
+  100% {
+    opacity: 0.58;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes wenyou-rift-opening-title {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+    filter: blur(10px);
+  }
+  36% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  50% {
+    transform: translate(-2px, 1px) scale(1);
+  }
+  56% {
+    transform: translate(2px, -1px) scale(1);
+  }
+  72%,
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes wenyou-rift-opening-slice {
+  0%,
+  100% {
+    opacity: 0;
+    clip-path: inset(0 0 0 0);
+    transform: translate(0, 0);
+  }
+  16% {
+    opacity: 0.46;
+    clip-path: inset(0 0 70% 0);
+    transform: translate(-4px, -1px);
+  }
+  27% {
+    opacity: 0.32;
+    clip-path: inset(42% 0 36% 0);
+    transform: translate(4px, 1px);
+  }
+  38% {
+    opacity: 0.4;
+    clip-path: inset(72% 0 0 0);
+    transform: translate(-2px, 2px);
+  }
+  54%,
+  74% {
+    opacity: 0;
+  }
+}
+
+@keyframes wenyou-rift-opening-small {
+  0%,
+  38% {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(6px);
+  }
+  76%,
+  100% {
+    opacity: 0.62;
+    transform: translateY(0);
+    filter: blur(0);
   }
 }
 
@@ -2162,9 +2259,9 @@
     right: -40vw;
     min-height: 100dvh;
     background:
-      repeating-linear-gradient(0deg, rgba(3, 3, 5, 0.12) 0 1px, transparent 1px 5px),
-      radial-gradient(circle at 50% 50%, rgba(248, 251, 255, 0.96), rgba(180, 216, 230, 0.56) 34%, rgba(248, 251, 255, 0.16) 62%, transparent 74%);
-    filter: contrast(1.18) brightness(1.08);
+      repeating-linear-gradient(0deg, rgba(3, 3, 5, 0.16) 0 1px, transparent 1px 6px),
+      radial-gradient(circle at 50% 50%, rgba(248, 251, 255, 0.78), rgba(205, 213, 224, 0.34) 34%, rgba(248, 251, 255, 0.1) 58%, transparent 72%);
+    filter: contrast(1.05) brightness(0.96);
     mix-blend-mode: screen;
     transform-origin: center;
     opacity: 0;
@@ -2193,11 +2290,11 @@
     position: absolute;
     inset: -8%;
     background:
-      linear-gradient(101deg, transparent 0 49.55%, rgba(248, 251, 255, 0.9) 49.72% 50.08%, transparent 50.3%),
-      linear-gradient(53deg, transparent 0 50.1%, rgba(34, 211, 238, 0.54) 50.24% 50.48%, transparent 50.72%),
-      linear-gradient(143deg, transparent 0 48.8%, rgba(244, 63, 239, 0.52) 49.02% 49.24%, transparent 49.54%),
-      linear-gradient(16deg, transparent 0 54.4%, rgba(248, 251, 255, 0.48) 54.54% 54.82%, transparent 55.08%);
-    filter: drop-shadow(0 0 10px rgba(248, 251, 255, 0.72));
+      linear-gradient(101deg, transparent 0 49.6%, rgba(248, 251, 255, 0.72) 49.76% 49.98%, transparent 50.18%),
+      linear-gradient(53deg, transparent 0 50.12%, rgba(226, 232, 240, 0.46) 50.24% 50.4%, transparent 50.58%),
+      linear-gradient(143deg, transparent 0 48.86%, rgba(203, 213, 225, 0.42) 49.02% 49.18%, transparent 49.38%),
+      linear-gradient(16deg, transparent 0 54.44%, rgba(248, 251, 255, 0.36) 54.56% 54.72%, transparent 54.92%);
+    filter: drop-shadow(0 0 6px rgba(248, 251, 255, 0.4));
     mix-blend-mode: screen;
     opacity: 0;
     transform-origin: center;
@@ -2215,9 +2312,9 @@
     height: var(--h, 108px);
     border: 1px solid rgba(248, 251, 255, 0.48);
     background:
-      linear-gradient(135deg, rgba(248, 251, 255, 0.72), rgba(34, 211, 238, 0.12) 48%, rgba(244, 63, 239, 0.26)),
-      rgba(248, 251, 255, 0.2);
-    box-shadow: inset 0 0 18px rgba(248, 251, 255, 0.16), 0 0 16px rgba(34, 211, 238, 0.16);
+      linear-gradient(135deg, rgba(248, 251, 255, 0.46), rgba(148, 163, 184, 0.1) 54%, rgba(15, 23, 42, 0.2)),
+      rgba(248, 251, 255, 0.12);
+    box-shadow: inset 0 0 14px rgba(248, 251, 255, 0.12), 0 0 8px rgba(226, 232, 240, 0.12);
     clip-path: var(--clip, polygon(18% 0, 100% 16%, 74% 100%, 0 70%));
     mix-blend-mode: screen;
     opacity: 0;
@@ -2230,22 +2327,22 @@
   }
 
   .wenyou-rift-shard-1 {
-    --x: -39vw;
-    --y: -31vh;
-    --r: -44deg;
+    --x: -24vw;
+    --y: -20vh;
+    --r: -24deg;
     --r0: -12deg;
-    --s: 1.1;
+    --s: 0.92;
     --w: 86px;
     --h: 118px;
     --d: 0.01s;
   }
 
   .wenyou-rift-shard-2 {
-    --x: 34vw;
-    --y: -34vh;
-    --r: 38deg;
+    --x: 22vw;
+    --y: -22vh;
+    --r: 26deg;
     --r0: 14deg;
-    --s: 0.94;
+    --s: 0.82;
     --w: 70px;
     --h: 132px;
     --clip: polygon(0 12%, 88% 0, 100% 78%, 24% 100%);
@@ -2253,11 +2350,11 @@
   }
 
   .wenyou-rift-shard-3 {
-    --x: -24vw;
-    --y: 34vh;
-    --r: 54deg;
+    --x: -18vw;
+    --y: 23vh;
+    --r: 34deg;
     --r0: -18deg;
-    --s: 1;
+    --s: 0.86;
     --w: 94px;
     --h: 96px;
     --clip: polygon(22% 0, 100% 42%, 68% 100%, 0 64%);
@@ -2265,11 +2362,11 @@
   }
 
   .wenyou-rift-shard-4 {
-    --x: 41vw;
-    --y: 26vh;
-    --r: -62deg;
+    --x: 25vw;
+    --y: 18vh;
+    --r: -36deg;
     --r0: 24deg;
-    --s: 1.18;
+    --s: 0.96;
     --w: 76px;
     --h: 104px;
     --clip: polygon(10% 0, 100% 20%, 82% 100%, 0 86%);
@@ -2277,11 +2374,11 @@
   }
 
   .wenyou-rift-shard-5 {
-    --x: 4vw;
-    --y: -42vh;
-    --r: 22deg;
+    --x: 3vw;
+    --y: -28vh;
+    --r: 16deg;
     --r0: -6deg;
-    --s: 0.9;
+    --s: 0.78;
     --w: 116px;
     --h: 72px;
     --clip: polygon(0 22%, 74% 0, 100% 70%, 28% 100%);
@@ -2289,11 +2386,11 @@
   }
 
   .wenyou-rift-shard-6 {
-    --x: -3vw;
-    --y: 42vh;
-    --r: -26deg;
+    --x: -2vw;
+    --y: 29vh;
+    --r: -18deg;
     --r0: 9deg;
-    --s: 1.08;
+    --s: 0.9;
     --w: 126px;
     --h: 78px;
     --clip: polygon(16% 0, 100% 30%, 78% 100%, 0 62%);
@@ -2301,11 +2398,11 @@
   }
 
   .wenyou-rift-shard-7 {
-    --x: -47vw;
+    --x: -30vw;
     --y: 3vh;
-    --r: -12deg;
+    --r: -9deg;
     --r0: 4deg;
-    --s: 0.82;
+    --s: 0.66;
     --w: 62px;
     --h: 142px;
     --clip: polygon(36% 0, 100% 8%, 72% 100%, 0 86%);
@@ -2313,11 +2410,11 @@
   }
 
   .wenyou-rift-shard-8 {
-    --x: 46vw;
+    --x: 30vw;
     --y: -4vh;
-    --r: 16deg;
+    --r: 11deg;
     --r0: -4deg;
-    --s: 0.86;
+    --s: 0.68;
     --w: 60px;
     --h: 136px;
     --clip: polygon(0 4%, 70% 0, 100% 94%, 28% 100%);
@@ -2325,11 +2422,11 @@
   }
 
   .wenyou-rift-shard-9 {
-    --x: -31vw;
-    --y: -8vh;
-    --r: 72deg;
+    --x: -20vw;
+    --y: -7vh;
+    --r: 40deg;
     --r0: -20deg;
-    --s: 0.72;
+    --s: 0.58;
     --w: 56px;
     --h: 76px;
     --clip: polygon(20% 0, 100% 38%, 62% 100%, 0 62%);
@@ -2337,11 +2434,11 @@
   }
 
   .wenyou-rift-shard-10 {
-    --x: 29vw;
-    --y: 10vh;
-    --r: -78deg;
+    --x: 19vw;
+    --y: 9vh;
+    --r: -42deg;
     --r0: 18deg;
-    --s: 0.76;
+    --s: 0.6;
     --w: 54px;
     --h: 82px;
     --clip: polygon(0 28%, 76% 0, 100% 68%, 24% 100%);
@@ -2358,23 +2455,98 @@
   }
 
   .wenyou-rift-opening-text {
+    position: relative;
     display: grid;
     justify-items: center;
-    gap: 8px;
+    gap: 10px;
+    isolation: isolate;
+    padding: 28px 18px 26px;
     text-align: center;
   }
 
+  .wenyou-rift-opening-text::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: -1;
+    width: min(62vw, 240px);
+    height: 116px;
+    background:
+      linear-gradient(101deg, transparent 0 48.8%, rgba(238, 242, 247, 0.5) 49% 49.3%, transparent 49.55%),
+      linear-gradient(22deg, transparent 0 55%, rgba(202, 208, 216, 0.3) 55.18% 55.42%, transparent 55.7%),
+      linear-gradient(149deg, transparent 0 44.4%, rgba(238, 242, 247, 0.26) 44.58% 44.82%, transparent 45.1%);
+    filter: drop-shadow(0 0 8px rgba(238, 242, 247, 0.18));
+    opacity: 0;
+    transform-origin: center;
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-opening-text::before {
+    animation: wenyou-rift-opening-crack 0.78s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
   .wenyou-rift-opening-text span {
-    color: rgba(180, 216, 230, 0.55);
+    color: rgba(221, 226, 233, 0.58);
     font-size: 10px;
     font-weight: 900;
-    letter-spacing: 0.42em;
+    letter-spacing: 0.34em;
+    text-transform: uppercase;
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-opening-text span {
+    animation: wenyou-rift-opening-code 0.62s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   .wenyou-rift-opening-text strong {
-    font-size: 24px;
+    position: relative;
+    color: rgba(248, 251, 255, 0.96);
+    font-family: "Noto Serif SC", "Songti SC", serif;
+    font-size: clamp(26px, 8vw, 38px);
     font-weight: 900;
     letter-spacing: 0;
+    line-height: 1.04;
+    text-shadow: 0 10px 28px rgba(0, 0, 0, 0.58), 0 0 12px rgba(238, 242, 247, 0.12);
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-opening-text strong {
+    animation: wenyou-rift-opening-title 0.92s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .wenyou-rift-opening-text strong::before,
+  .wenyou-rift-opening-text strong::after {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    mix-blend-mode: screen;
+    opacity: 0;
+  }
+
+  .wenyou-rift-opening-text strong::before {
+    color: rgba(248, 251, 255, 0.62);
+  }
+
+  .wenyou-rift-opening-text strong::after {
+    color: rgba(170, 177, 188, 0.52);
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-opening-text strong::before {
+    animation: wenyou-rift-opening-slice 0.7s steps(1, end) 0.12s both;
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-opening-text strong::after {
+    animation: wenyou-rift-opening-slice 0.62s steps(1, end) 0.2s reverse both;
+  }
+
+  .wenyou-rift-opening-text small {
+    color: rgba(202, 208, 216, 0.62);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-opening-text small {
+    animation: wenyou-rift-opening-small 0.92s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   .wenyou-rift-single {
