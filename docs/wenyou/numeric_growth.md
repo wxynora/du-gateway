@@ -135,10 +135,11 @@ spi_current = clamp(spi_current, 0, spi_max)
 
 ```text
 1. 玩家提交行动
-2. GM 输出事件意图 event_intent
-3. Rules Engine 根据 ruleset 计算数值
-4. 后端写入 state_patch
-5. GM 根据 state_patch 写叙事反馈
+2. 后端归类 action_type，处理确定性 pre-rule
+3. GM 输出叙事草稿和事件意图 event_intent
+4. Rules Engine 根据 ruleset 计算数值
+5. 后端写入 state_patch
+6. GM 或模板根据 state_patch 写叙事反馈
 ```
 
 GM 只能提出事件意图，不直接写精确数值：
@@ -249,6 +250,8 @@ attribute_mod = floor((相关属性 - 10) / 2)
 | 失败但推进 | `score < DC - 5` | 目标失败，同时触发后果或新线索 |
 
 失败不能等于“什么都没发生”。失败必须推进剧情、威胁、时限、NPC 关系或线索状态。
+
+自由文本声明不改变判定结果。玩家可以写“我成功翻墙逃掉”，但后端只把它归类为 `move`、`evade` 或 `flee` 意图；成功、部分成功或失败仍由 DC、属性、道具、场景和怪物状态决定。
 
 ## 状态效果
 
@@ -566,6 +569,7 @@ allocate_attribute_points(state, player_id, deltas):
 
 - 立刻应用阶位加成。
 - 解锁对应阶位的进化、能力、物品使用权限。
+- D -> C 后解锁特殊商店/限定兑换所入口；入口解锁后可购买已上架且积分足够的特殊商品，但高阶效果仍按 `rank_min`、`seal_rank`、限购和库存判断，不足阶位时进入封印或降级效果。
 - 如果已有高阶进化模板或能力处于封印状态，按新阶位解锁对应效果。
 - 额外获得 2 点自由属性点，用于体现身体/精神适应。
 
