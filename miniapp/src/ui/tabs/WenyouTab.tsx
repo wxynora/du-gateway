@@ -417,7 +417,6 @@ function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): Rift
   };
 }
 
-const RIFT_SHARD_IDS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"] as const;
 let riftAudioContext: AudioContext | null = null;
 
 function playRiftShatterSound() {
@@ -1545,6 +1544,159 @@ export function WenyouTab({
   );
 }
 
+type RiftPoint = { x: number; y: number };
+type RiftGlassShard = {
+  x: number;
+  y: number;
+  size: number;
+  vx: number;
+  vy: number;
+  rotation: number;
+  vRot: number;
+  opacity: number;
+  points: RiftPoint[];
+};
+
+function createRiftGlassShard(x: number, y: number): RiftGlassShard {
+  const size = Math.random() * 15 + 5;
+  const steps = Math.floor(Math.random() * 3) + 3;
+  const points = Array.from({ length: steps }, (_, index) => {
+    const angle = (index / steps) * Math.PI * 2;
+    const radius = size * (0.5 + Math.random() * 0.5);
+    return {
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
+    };
+  });
+  return {
+    x,
+    y,
+    size,
+    vx: (Math.random() - 0.5) * 25,
+    vy: (Math.random() - 0.5) * 25 - 5,
+    rotation: Math.random() * Math.PI * 2,
+    vRot: (Math.random() - 0.5) * 0.2,
+    opacity: 1,
+    points,
+  };
+}
+
+function drawRiftGlassShard(ctx: CanvasRenderingContext2D, shard: RiftGlassShard) {
+  if (!shard.points.length) return;
+  ctx.save();
+  ctx.translate(shard.x, shard.y);
+  ctx.rotate(shard.rotation);
+  ctx.beginPath();
+  ctx.moveTo(shard.points[0].x, shard.points[0].y);
+  for (let index = 1; index < shard.points.length; index += 1) {
+    ctx.lineTo(shard.points[index].x, shard.points[index].y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = `rgba(199, 204, 209, ${Math.max(0, shard.opacity * 0.6)})`;
+  ctx.strokeStyle = `rgba(255, 255, 255, ${Math.max(0, shard.opacity)})`;
+  ctx.lineWidth = 0.5;
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function RiftShatterLayer({ active }: { active: boolean }) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (!active || typeof window === "undefined") return undefined;
+    const svg = svgRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!svg || !canvas || !ctx) return undefined;
+
+    let raf = 0;
+    let cssWidth = window.innerWidth;
+    let cssHeight = window.innerHeight;
+    let shards: RiftGlassShard[] = [];
+
+    const resize = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      cssWidth = window.innerWidth;
+      cssHeight = window.innerHeight;
+      canvas.width = Math.floor(cssWidth * dpr);
+      canvas.height = Math.floor(cssHeight * dpr);
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+
+    const createCracks = () => {
+      svg.replaceChildren();
+      const crackCount = 12;
+      const px = 50;
+      const py = 48;
+      for (let index = 0; index < crackCount; index += 1) {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.classList.add("wenyou-rift-crack-line");
+        let d = `M ${px} ${py} `;
+        let curX = px;
+        let curY = py;
+        const segments = 5;
+        const angleBase = (index / crackCount) * Math.PI * 2;
+        for (let segment = 0; segment < segments; segment += 1) {
+          const length = 15 + Math.random() * 20;
+          const angleVar = (Math.random() - 0.5) * 0.8;
+          curX += Math.cos(angleBase + angleVar) * length;
+          curY += Math.sin(angleBase + angleVar) * length;
+          d += `L ${curX} ${curY} `;
+          if (Math.random() > 0.6) {
+            const sideX = curX + (Math.random() - 0.5) * 10;
+            const sideY = curY + (Math.random() - 0.5) * 10;
+            d += `M ${curX} ${curY} L ${sideX} ${sideY} M ${curX} ${curY} `;
+          }
+        }
+        path.setAttribute("d", d);
+        path.style.animationDelay = `${index * 0.012}s`;
+        svg.appendChild(path);
+      }
+    };
+
+    const animate = () => {
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+      shards = shards.filter((shard) => shard.opacity > 0);
+      for (const shard of shards) {
+        shard.x += shard.vx;
+        shard.y += shard.vy;
+        shard.vy += 0.4;
+        shard.rotation += shard.vRot;
+        shard.opacity -= 0.01;
+        drawRiftGlassShard(ctx, shard);
+      }
+      if (shards.length > 0) raf = window.requestAnimationFrame(animate);
+    };
+
+    resize();
+    createCracks();
+    const originX = cssWidth * 0.5;
+    const originY = cssHeight * 0.48;
+    shards = Array.from({ length: 40 }, () => createRiftGlassShard(originX, originY));
+    raf = window.requestAnimationFrame(animate);
+    window.addEventListener("resize", resize);
+    if ("vibrate" in navigator) navigator.vibrate([50, 30, 100]);
+
+    return () => {
+      window.removeEventListener("resize", resize);
+      window.cancelAnimationFrame(raf);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+      svg.replaceChildren();
+    };
+  }, [active]);
+
+  return (
+    <div className="wenyou-rift-shatter" aria-hidden="true">
+      <svg ref={svgRef} className="wenyou-rift-cracks" viewBox="0 0 100 100" preserveAspectRatio="none" />
+      <canvas ref={canvasRef} className="wenyou-rift-shards-canvas" />
+    </div>
+  );
+}
+
 function RiftOverlay({
   phase,
   count,
@@ -1568,15 +1720,13 @@ function RiftOverlay({
     <div className={`wenyou-rift-overlay wenyou-rift-overlay-${phase} ${hasS ? "wenyou-rift-overlay-s" : ""}`} role="dialog" aria-modal="true">
       <div className="wenyou-rift-overlay-noise" />
       <div className="wenyou-rift-portal" />
-      <div className="wenyou-rift-shatter" aria-hidden="true">
-        {RIFT_SHARD_IDS.map((id) => <span key={id} className={`wenyou-rift-shard wenyou-rift-shard-${id}`} />)}
-      </div>
+      <RiftShatterLayer active={phase === "opening"} />
       <div className="wenyou-rift-results-wrap">
         {phase === "opening" ? (
           <div className="wenyou-rift-opening-text">
-            <span>RIFT BREACH</span>
-            <strong data-text="命运正在裂开">命运正在裂开</strong>
-            <small>抽取结果即将显影</small>
+            <span>RIFT TRACE</span>
+            <strong data-text="裂隙显影中">裂隙显影中</strong>
+            <small>结果即将浮现</small>
           </div>
         ) : null}
         {phase === "results" && count === 1 ? (

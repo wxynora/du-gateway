@@ -274,54 +274,28 @@
   }
 }
 
-@keyframes wenyou-rift-crack-lines {
-  0% {
-    opacity: 0;
-    transform: scale3d(0.32, 0.08, 1);
-  }
-  16% {
-    opacity: 0.82;
-    transform: scale3d(1, 1, 1);
-  }
-  64% {
-    opacity: 0.38;
-    transform: scale3d(1.01, 1.008, 1);
-  }
-  100% {
-    opacity: 0;
-    transform: scale3d(1.04, 1.03, 1);
+@keyframes wenyou-rift-draw-crack {
+  to {
+    stroke-dashoffset: 0;
   }
 }
 
-@keyframes wenyou-rift-shatter-field {
+@keyframes wenyou-rift-impact-shake {
   0%,
   100% {
-    opacity: 0;
+    transform: translate3d(0, 0, 0);
   }
-  12%,
-  68% {
-    opacity: 0.82;
+  18% {
+    transform: translate3d(-8px, 4px, 0);
   }
-}
-
-@keyframes wenyou-rift-shard-burst {
-  0% {
-    opacity: 0;
-    filter: blur(4px);
-    transform: translate3d(-50%, -50%, 0) scale(0.18) rotate(var(--r0, 0deg));
+  38% {
+    transform: translate3d(7px, -5px, 0);
   }
-  20% {
-    opacity: 0.62;
-    filter: blur(0);
-    transform: translate3d(-50%, -50%, 0) scale(0.72) rotate(var(--r0, 0deg));
+  62% {
+    transform: translate3d(-4px, -2px, 0);
   }
-  72% {
-    opacity: 0.34;
-  }
-  100% {
-    opacity: 0;
-    filter: blur(1px);
-    transform: translate3d(calc(-50% + var(--x)), calc(-50% + var(--y)), 0) scale(var(--s, 1)) rotate(var(--r, 0deg));
+  82% {
+    transform: translate3d(3px, 2px, 0);
   }
 }
 
@@ -2272,177 +2246,49 @@
     animation: wenyou-rift-portal 0.92s cubic-bezier(0.19, 1, 0.22, 1) both;
   }
 
+  .wenyou-rift-overlay-opening {
+    animation: wenyou-rift-impact-shake 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
   .wenyou-rift-shatter {
     position: absolute;
     inset: 0;
     z-index: 2;
     overflow: hidden;
-    opacity: 0;
     pointer-events: none;
   }
 
-  .wenyou-rift-overlay-opening .wenyou-rift-shatter {
-    animation: wenyou-rift-shatter-field 0.92s cubic-bezier(0.19, 1, 0.22, 1) both;
-  }
-
-  .wenyou-rift-shatter::before {
-    content: "";
+  .wenyou-rift-cracks,
+  .wenyou-rift-shards-canvas {
     position: absolute;
-    inset: -8%;
-    background:
-      linear-gradient(101deg, transparent 0 49.6%, rgba(248, 251, 255, 0.72) 49.76% 49.98%, transparent 50.18%),
-      linear-gradient(53deg, transparent 0 50.12%, rgba(226, 232, 240, 0.46) 50.24% 50.4%, transparent 50.58%),
-      linear-gradient(143deg, transparent 0 48.86%, rgba(203, 213, 225, 0.42) 49.02% 49.18%, transparent 49.38%),
-      linear-gradient(16deg, transparent 0 54.44%, rgba(248, 251, 255, 0.36) 54.56% 54.72%, transparent 54.92%);
-    filter: drop-shadow(0 0 6px rgba(248, 251, 255, 0.4));
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .wenyou-rift-cracks {
+    z-index: 2;
+  }
+
+  .wenyou-rift-crack-line {
+    fill: none;
+    stroke: rgba(199, 204, 209, 0.42);
+    stroke-dasharray: 1000;
+    stroke-dashoffset: 1000;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 0.5;
+    filter: drop-shadow(0 0 6px rgba(238, 242, 247, 0.22));
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-crack-line {
+    animation: wenyou-rift-draw-crack 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .wenyou-rift-shards-canvas {
+    z-index: 3;
     mix-blend-mode: screen;
-    opacity: 0;
-    transform-origin: center;
-  }
-
-  .wenyou-rift-overlay-opening .wenyou-rift-shatter::before {
-    animation: wenyou-rift-crack-lines 0.78s cubic-bezier(0.19, 1, 0.22, 1) both;
-  }
-
-  .wenyou-rift-shard {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: var(--w, 74px);
-    height: var(--h, 108px);
-    border: 1px solid rgba(248, 251, 255, 0.48);
-    background:
-      linear-gradient(135deg, rgba(248, 251, 255, 0.46), rgba(148, 163, 184, 0.1) 54%, rgba(15, 23, 42, 0.2)),
-      rgba(248, 251, 255, 0.12);
-    box-shadow: inset 0 0 14px rgba(248, 251, 255, 0.12), 0 0 8px rgba(226, 232, 240, 0.12);
-    clip-path: var(--clip, polygon(18% 0, 100% 16%, 74% 100%, 0 70%));
-    mix-blend-mode: screen;
-    opacity: 0;
-    transform-origin: center;
-  }
-
-  .wenyou-rift-overlay-opening .wenyou-rift-shard {
-    animation: wenyou-rift-shard-burst 0.86s cubic-bezier(0.19, 1, 0.22, 1) both;
-    animation-delay: var(--d, 0s);
-  }
-
-  .wenyou-rift-shard-1 {
-    --x: -24vw;
-    --y: -20vh;
-    --r: -24deg;
-    --r0: -12deg;
-    --s: 0.92;
-    --w: 86px;
-    --h: 118px;
-    --d: 0.01s;
-  }
-
-  .wenyou-rift-shard-2 {
-    --x: 22vw;
-    --y: -22vh;
-    --r: 26deg;
-    --r0: 14deg;
-    --s: 0.82;
-    --w: 70px;
-    --h: 132px;
-    --clip: polygon(0 12%, 88% 0, 100% 78%, 24% 100%);
-    --d: 0.04s;
-  }
-
-  .wenyou-rift-shard-3 {
-    --x: -18vw;
-    --y: 23vh;
-    --r: 34deg;
-    --r0: -18deg;
-    --s: 0.86;
-    --w: 94px;
-    --h: 96px;
-    --clip: polygon(22% 0, 100% 42%, 68% 100%, 0 64%);
-    --d: 0.02s;
-  }
-
-  .wenyou-rift-shard-4 {
-    --x: 25vw;
-    --y: 18vh;
-    --r: -36deg;
-    --r0: 24deg;
-    --s: 0.96;
-    --w: 76px;
-    --h: 104px;
-    --clip: polygon(10% 0, 100% 20%, 82% 100%, 0 86%);
-    --d: 0.06s;
-  }
-
-  .wenyou-rift-shard-5 {
-    --x: 3vw;
-    --y: -28vh;
-    --r: 16deg;
-    --r0: -6deg;
-    --s: 0.78;
-    --w: 116px;
-    --h: 72px;
-    --clip: polygon(0 22%, 74% 0, 100% 70%, 28% 100%);
-    --d: 0s;
-  }
-
-  .wenyou-rift-shard-6 {
-    --x: -2vw;
-    --y: 29vh;
-    --r: -18deg;
-    --r0: 9deg;
-    --s: 0.9;
-    --w: 126px;
-    --h: 78px;
-    --clip: polygon(16% 0, 100% 30%, 78% 100%, 0 62%);
-    --d: 0.05s;
-  }
-
-  .wenyou-rift-shard-7 {
-    --x: -30vw;
-    --y: 3vh;
-    --r: -9deg;
-    --r0: 4deg;
-    --s: 0.66;
-    --w: 62px;
-    --h: 142px;
-    --clip: polygon(36% 0, 100% 8%, 72% 100%, 0 86%);
-    --d: 0.03s;
-  }
-
-  .wenyou-rift-shard-8 {
-    --x: 30vw;
-    --y: -4vh;
-    --r: 11deg;
-    --r0: -4deg;
-    --s: 0.68;
-    --w: 60px;
-    --h: 136px;
-    --clip: polygon(0 4%, 70% 0, 100% 94%, 28% 100%);
-    --d: 0.035s;
-  }
-
-  .wenyou-rift-shard-9 {
-    --x: -20vw;
-    --y: -7vh;
-    --r: 40deg;
-    --r0: -20deg;
-    --s: 0.58;
-    --w: 56px;
-    --h: 76px;
-    --clip: polygon(20% 0, 100% 38%, 62% 100%, 0 62%);
-    --d: 0.075s;
-  }
-
-  .wenyou-rift-shard-10 {
-    --x: 19vw;
-    --y: 9vh;
-    --r: -42deg;
-    --r0: 18deg;
-    --s: 0.6;
-    --w: 54px;
-    --h: 82px;
-    --clip: polygon(0 28%, 76% 0, 100% 68%, 24% 100%);
-    --d: 0.08s;
+    opacity: 0.96;
   }
 
   .wenyou-rift-results-wrap {
