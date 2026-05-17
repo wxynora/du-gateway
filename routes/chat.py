@@ -127,7 +127,6 @@ from services.upstream_policy import (
     is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
     normalize_request_model as _normalize_request_model,
 )
-from utils.time_aware import now_beijing_iso
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -136,18 +135,6 @@ bp = Blueprint("chat", __name__)
 
 WINDOW_ID_DEFAULT = ""
 _NONSTREAM_FAST_RETURN_CHANNELS = {"tg", "qq", "wechat", "sumitalk"}
-_INJECT_SNAPSHOT_KEEP = 80
-_INJECT_SNAPSHOT_NEEDLES = (
-    "【最近的对话】",
-    "【近期记忆】",
-    "洗床单",
-    "床单",
-    "关我何事",
-    "你给自己定的",
-    "主动。去看她写了什么",
-    "闹钟，现在到点了",
-    "去吃早饭了没",
-)
 
 
 def _get_window_id_from_request(body: dict) -> str:
@@ -157,136 +144,6 @@ def _get_window_id_from_request(body: dict) -> str:
     if isinstance(body, dict) and body.get("window_id") is not None:
         return str(body.get("window_id", "")).strip()
     return WINDOW_ID_DEFAULT
-
-
-def _snapshot_text(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value, ensure_ascii=False, default=str)
-    except Exception:
-        return str(value)
-
-
-def _save_inject_snapshot(
-    body: dict,
-    *,
-    window_id: str,
-    reply_channel: str,
-    force_last4: bool,
-    tg_user_input: bool,
-    skip_dynamic_memory: bool,
-) -> None:
-    """保存转发上游前的完整注入快照；失败不能影响聊天主链路。"""
-    try:
-        messages = body.get("messages") or []
-        tools = body.get("tools") or []
-        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-        safe_window = "".join(c if c.isalnum() or c in "-_" else "_" for c in (window_id or "default"))[:80]
-        snapshot_id = f"{stamp}-{int(time.time() * 1000) % 1000:03d}-{safe_window or 'default'}"
-
-        hit_counts: dict[str, int] = {}
-        per_message_hits: list[dict] = []
-        for idx, msg in enumerate(messages):
-            if not isinstance(msg, dict):
-                continue
-            content_text = _snapshot_text(msg.get("content"))
-            full_text = _snapshot_text(msg)
-            hits = {needle: full_text.count(needle) for needle in _INJECT_SNAPSHOT_NEEDLES if needle in full_text}
-            if hits:
-                per_message_hits.append(
-                    {
-                        "index": idx,
-                        "role": str(msg.get("role") or ""),
-                        "content_chars": len(content_text),
-                        "full_chars": len(full_text),
-                        "hits": hits,
-                        "keys": list(msg.keys()),
-                    }
-                )
-                for needle, count in hits.items():
-                    hit_counts[needle] = hit_counts.get(needle, 0) + int(count)
-
-        last_user_preview = ""
-        for msg in reversed(messages):
-            if isinstance(msg, dict) and str(msg.get("role") or "").lower() == "user":
-                last_user_preview = _snapshot_text(msg.get("content")).replace("\n", " ")[:240]
-                break
-
-        try:
-            tools_chars = sum(len(json.dumps(t, ensure_ascii=False, default=str)) for t in tools if isinstance(t, dict))
-        except Exception:
-            tools_chars = 0
-        snapshot = {
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": body.get("tool_choice"),
-            "_meta": {
-                "snapshot_id": snapshot_id,
-                "created_at": now_beijing_iso(),
-                "window_id": window_id,
-                "reply_channel": reply_channel,
-                "force_last4": bool(force_last4),
-                "tg_user_input": bool(tg_user_input),
-                "skip_dynamic_memory": bool(skip_dynamic_memory),
-                "messages_count": len(messages) if isinstance(messages, list) else 0,
-                "messages_chars": sum(len(_snapshot_text(m.get("content"))) for m in messages if isinstance(m, dict)),
-                "tools_count": len(tools) if isinstance(tools, list) else 0,
-                "tools_chars": tools_chars,
-                "tool_names": [((t.get("function") or {}).get("name") or "") for t in tools if isinstance(t, dict)],
-                "hit_counts": hit_counts,
-                "per_message_hits": per_message_hits,
-                "last_user_preview": last_user_preview,
-                "headers": {
-                    name: str(request.headers.get(name) or "")
-                    for name in (
-                        "X-Window-Id",
-                        "X-Reply-Channel",
-                        "X-Reply-Target",
-                        "X-TG-User-Input",
-                        "X-Force-Last4",
-                        "X-DU-GATEWAY-WAKEUP",
-                        "X-DU-FOLLOWUP-GEN",
-                        "X-DU-PROACTIVE-DECISION",
-                        "X-Skip-Dynamic-Memory",
-                    )
-                    if request.headers.get(name) is not None
-                },
-            },
-        }
-
-        snap_dir = DATA_DIR / "inject_snapshots"
-        snap_dir.mkdir(parents=True, exist_ok=True)
-        (DATA_DIR / "last_inject_snapshot.json").write_text(
-            json.dumps(snapshot, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
-        )
-        (snap_dir / f"{snapshot_id}.json").write_text(
-            json.dumps(snapshot, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
-        )
-        (snap_dir / "latest.json").write_text(
-            json.dumps(snapshot, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
-        )
-        files = sorted(
-            [p for p in snap_dir.glob("*.json") if p.name != "latest.json"],
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        for old in files[_INJECT_SNAPSHOT_KEEP:]:
-            try:
-                old.unlink()
-            except Exception:
-                pass
-        if window_id.startswith("tg_") or reply_channel == "tg" or request.headers.get("X-DU-GATEWAY-WAKEUP"):
-            threading.Thread(
-                target=r2_store.save_chat_inject_snapshot,
-                args=(snapshot,),
-                kwargs={"max_keep": _INJECT_SNAPSHOT_KEEP},
-                daemon=True,
-            ).start()
-    except Exception:
-        logger.warning("保存聊天注入快照失败", exc_info=True)
 
 
 def _is_miniapp_request() -> bool:
@@ -1015,14 +872,6 @@ def chat_completions():
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
-    _save_inject_snapshot(
-        body,
-        window_id=window_id,
-        reply_channel=reply_channel,
-        force_last4=force_last4,
-        tg_user_input=tg_user_input,
-        skip_dynamic_memory=skip_dynamic_memory,
-    )
     active_upstream_url = _get_active_upstream_url()
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
     # Claude OAuth 代理自己会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
