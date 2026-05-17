@@ -1265,7 +1265,7 @@
 
   .wenyou-shop-brief {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     align-items: stretch;
   }
@@ -1303,27 +1303,6 @@
     font-size: 12px;
     font-style: normal;
     font-weight: 900;
-  }
-
-  .wenyou-shop-brief-actions {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
-
-  .wenyou-shop-brief button {
-    display: inline-flex;
-    min-height: 100%;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    border: 1px solid rgba(148, 163, 184, 0.24);
-    border-radius: 8px;
-    background: rgba(15, 23, 42, 0.72);
-    color: rgba(224, 242, 254, 0.84);
-    font-size: 12px;
-    font-weight: 800;
-    padding: 0 12px;
   }
 
   .wenyou-shop-lock {

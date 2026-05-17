@@ -108,6 +108,7 @@ export function AppShell({
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
   const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
+  const wenyouBackHandlerRef = useRef<(() => boolean) | null>(null);
   const [silenceModeEnabled, setSilenceModeEnabled] = useState(false);
   const [silenceModeSaving, setSilenceModeSaving] = useState(false);
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
@@ -191,6 +192,10 @@ export function AppShell({
   const backgroundInputRef = useRef<HTMLInputElement | null>(null);
   const listenBackgroundInputRef = useRef<HTMLInputElement | null>(null);
   const groupChatDisplayTitle = getDisplayGroupChatTitle(groupChatTitle);
+  const handleWenyouBack = useCallback(() => {
+    if (wenyouBackHandlerRef.current?.()) return;
+    setActiveScreen(null);
+  }, []);
   const loadDailyReport = () =>
     apiJson<{ ok?: boolean; report?: DailyReport }>("/miniapp-api/daily-report")
       .then((j) => {
@@ -445,6 +450,9 @@ export function AppShell({
         setShowDiagnostics(false);
         return;
       }
+      if (activeScreen === "wenyou" && wenyouBackHandlerRef.current?.()) {
+        return;
+      }
       if (activeScreen) {
         setActiveScreen(null);
         return;
@@ -664,8 +672,8 @@ export function AppShell({
         />
       ) : null}
       {activeScreen === "wenyou" ? (
-        <FullScreenPane title="文游" accent="wenyou" onBack={() => setActiveScreen(null)}>
-          <LazyPane><WenyouTab initialView="hub" /></LazyPane>
+        <FullScreenPane title="文游" accent="wenyou" onBack={handleWenyouBack} edgeSwipeBack>
+          <LazyPane><WenyouTab initialView="hub" backHandlerRef={wenyouBackHandlerRef} /></LazyPane>
         </FullScreenPane>
       ) : null}
       {!activeScreen ? (

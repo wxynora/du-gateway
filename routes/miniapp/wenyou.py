@@ -151,6 +151,47 @@ def register_routes(bp) -> None:
         ok, message, view = roll_gacha(uid, pool_id=pool_id, count=count)
         return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
 
+    @bp.route("/wenyou/player/attributes", methods=["POST"])
+    def miniapp_wenyou_allocate_attributes():
+        """文游：固定规则分配六基础属性点，不交给 GM 判定。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        player = str(data.get("player") or data.get("player_id") or "player1").strip()
+        deltas = data.get("deltas") if isinstance(data.get("deltas"), dict) else {}
+        from services.wenyou_service import allocate_attribute_points
+
+        ok, message, view = allocate_attribute_points(uid, player_id=player, deltas=deltas)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/player/promote", methods=["POST"])
+    def miniapp_wenyou_promote_rank():
+        """文游：固定规则晋升阶位，扣积分并解封可用道具。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        player = str(data.get("player") or data.get("player_id") or "player1").strip()
+        target_rank = str(data.get("target_rank") or data.get("rank") or "").strip()
+        from services.wenyou_service import promote_player_rank
+
+        ok, message, view = promote_player_rank(uid, player_id=player, target_rank=target_rank)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/player/revive", methods=["POST"])
+    def miniapp_wenyou_revive_player():
+        """文游：固定规则复活角色，扣积分/写债务并添加复活疲惫。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        player = str(data.get("player") or data.get("player_id") or "player1").strip()
+        from services.wenyou_service import revive_player
+
+        ok, message, view = revive_player(uid, player_id=player)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
     @bp.route("/wenyou/candidates", methods=["GET", "POST"])
     def miniapp_wenyou_candidates():
         """文游：副本大厅候选设定池。优先读缓存，刷新时才调用 DS。"""
@@ -266,7 +307,7 @@ def register_routes(bp) -> None:
 
     @bp.route("/wenyou/item/use", methods=["POST"])
     def miniapp_wenyou_use_item():
-        """文游：使用背包道具，交给 GM 判定效果/消耗。"""
+        """文游：使用背包道具，系统判定效果/消耗后交给 GM 叙事。"""
         uid = _wenyou_session_id()
         if uid == 0:
             return _missing_wenyou_session_response()
@@ -278,7 +319,7 @@ def register_routes(bp) -> None:
         from services.wenyou_service import cmd_use_item_with_du, get_session_view
 
         out, du_action = cmd_use_item_with_du(uid, item, action)
-        failed = out.startswith("文游：请选择") or out.startswith("文游：背包里没有") or out.startswith("文游：当前没有") or out.startswith("文游：GM 调用失败")
+        failed = out.startswith("文游：")
         payload = {"ok": not failed, "text": out, **get_session_view(uid)}
         if du_action:
             payload["du_action"] = du_action

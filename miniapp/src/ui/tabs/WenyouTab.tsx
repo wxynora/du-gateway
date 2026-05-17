@@ -329,10 +329,10 @@ function Icon({ name }: { name: string }) {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 2 4 12l8 10 8-10-8-10Z" /><path d="m12 2-1.4 8.2L4 12M12 22l1.4-8.2L20 12M10.6 10.2h2.8l-1.4 3.6-1.4-3.6Z" /></svg>;
   }
   if (name === "archive") {
-    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M6 7v13h12V7M9 11h6M7 3h10l2 4H5l2-4Z" /></svg>;
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 4h11a2 2 0 0 1 2 2v14H8a3 3 0 0 1-3-3V5a1 1 0 0 1 1-1Z" /><path d="M8 17h11" /><path d="M9 8h6M9 12h5" /></svg>;
   }
   if (name === "shop") {
-    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 10h14l-1.2 10H6.2L5 10Z" /><path d="M8 10V8a4 4 0 0 1 8 0v2" /><path d="M4 10h16" /></svg>;
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M6 7v13h12V7M9 11h6M7 3h10l2 4H5l2-4Z" /></svg>;
   }
   if (name === "play") {
     return <svg className={common} viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7L8 5Z" /></svg>;
@@ -417,10 +417,20 @@ function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): Rift
   };
 }
 
-export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitialView }) {
+type WenyouBackHandlerRef = React.MutableRefObject<(() => boolean) | null>;
+
+export function WenyouTab({
+  initialView = "home",
+  backHandlerRef,
+}: {
+  initialView?: WenyouInitialView;
+  backHandlerRef?: WenyouBackHandlerRef;
+}) {
   const toast = useToast();
   const normalizedInitialView = normalizeInitialView(initialView);
   const [view, setView] = useState<WenyouView>(() => normalizedInitialView);
+  const viewRef = useRef<WenyouView>(normalizedInitialView);
+  const viewHistoryRef = useRef<WenyouView[]>([]);
   const [spaceBootVisible, setSpaceBootVisible] = useState(() => normalizedInitialView === "home");
   const [spaceBootFading, setSpaceBootFading] = useState(false);
   const [spaceBootProgress, setSpaceBootProgress] = useState(0);
@@ -474,6 +484,75 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
     { id: "notice-1", kind: "notice", text: "任务更新：尝试确认这堵“不存在”的墙壁。" },
     { id: "loot-1", kind: "loot", text: "获得物品：【染血的校徽】已放入背包。" },
   ]);
+
+  const pushView = useCallback((next: WenyouView) => {
+    setView((prev) => {
+      if (prev === next) return prev;
+      viewHistoryRef.current = [...viewHistoryRef.current, prev].slice(-12);
+      viewRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const resetView = useCallback((next: WenyouView) => {
+    viewHistoryRef.current = [];
+    viewRef.current = next;
+    setView(next);
+  }, []);
+
+  const goBackInsideWenyou = useCallback(() => {
+    if (riftOverlay !== "closed") {
+      setRiftOverlay("closed");
+      window.setTimeout(() => {
+        setRiftResults([]);
+        setRiftRevealed([]);
+        setRiftPullCount(0);
+      }, 260);
+      return true;
+    }
+    if (panelView) {
+      setPanelView(null);
+      return true;
+    }
+    if (settlementDraftOpen) {
+      setSettlementDraftOpen(false);
+      return true;
+    }
+    if (randomOpen) {
+      setRandomOpen(false);
+      return true;
+    }
+
+    while (viewHistoryRef.current.length) {
+      const previous = viewHistoryRef.current.pop();
+      if (previous && previous !== viewRef.current) {
+        viewRef.current = previous;
+        setView(previous);
+        return true;
+      }
+    }
+
+    if (viewRef.current !== normalizedInitialView) {
+      viewRef.current = normalizedInitialView;
+      setView(normalizedInitialView);
+      return true;
+    }
+    return false;
+  }, [normalizedInitialView, panelView, randomOpen, riftOverlay, settlementDraftOpen]);
+
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+
+  useEffect(() => {
+    if (!backHandlerRef) return;
+    backHandlerRef.current = goBackInsideWenyou;
+    return () => {
+      if (backHandlerRef.current === goBackInsideWenyou) {
+        backHandlerRef.current = null;
+      }
+    };
+  }, [backHandlerRef, goBackInsideWenyou]);
 
   const loadArchives = useCallback(async () => {
     setArchivesLoading(true);
@@ -742,7 +821,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
         { id: `story-${Date.now()}`, kind: "system", text: text || `欢迎来到 ${scene.name}。` },
         { id: `notice-${Date.now()}`, kind: "notice", text: "任务更新：确认当前环境，找到第一条可行动线索。" },
       ]);
-      setView("game");
+      resetView("game");
       toast("副本已载入");
       await loadStatus();
       await loadSessionPanel();
@@ -767,7 +846,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
       "请生成多条彼此差异明显的轻量候选设定，先不要扩展成完整副本。",
     ].join("\n");
     setRandomOpen(false);
-    setView("selection");
+    pushView("selection");
     loadCandidates(true, keywords);
   }
 
@@ -892,7 +971,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
       setSettlementRating("");
       await loadStatus();
       await loadArchives();
-      setView("archive");
+      resetView("archive");
     } catch (e: any) {
       toast(`归档失败：${e?.message || e}`);
     } finally {
@@ -1037,11 +1116,14 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
               <p>{statusLoading ? "同步主神空间..." : `编号: ${currentScene.code || "ZS-9527"} | 等级: E-`}</p>
             </div>
             <div className="wenyou-page-head-actions">
-              <button className="wenyou-icon-btn wenyou-icon-btn-rift" onClick={() => setView("rift")} aria-label="命运裂隙">
+              <button className="wenyou-icon-btn wenyou-icon-btn-rift" onClick={() => pushView("rift")} aria-label="命运裂隙">
                 <Icon name="rift" />
               </button>
-              <button className="wenyou-icon-btn" onClick={() => setView("shop")} aria-label="系统商店">
+              <button className="wenyou-icon-btn" onClick={() => pushView("shop")} aria-label="系统商店">
                 <Icon name="shop" />
+              </button>
+              <button className="wenyou-icon-btn" onClick={() => pushView("archive")} aria-label="历史存档">
+                <Icon name="archive" />
               </button>
             </div>
           </div>
@@ -1069,11 +1151,11 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
           </div>
 
           <div className="wenyou-home-actions">
-            <button className="wenyou-primary-btn" onClick={() => status.active || activeScene ? setView("game") : setView("selection")}>
+            <button className="wenyou-primary-btn" onClick={() => status.active || activeScene ? pushView("game") : pushView("selection")}>
               <Icon name="play" />{status.active || activeScene ? "继续副本" : "开始副本"}
             </button>
             <div className="wenyou-action-grid">
-              <button onClick={() => setView("selection")}><Icon name="list" />选择副本</button>
+              <button onClick={() => pushView("selection")}><Icon name="list" />选择副本</button>
               <button onClick={() => setRandomOpen(true)}><Icon name="shuffle" />随机进入</button>
             </div>
           </div>
@@ -1082,16 +1164,12 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
 
       {view === "shop" ? (
         <section className="wenyou-screen">
-          <Header title="系统商店" onBack={() => setView("home")} />
+          <Header title="系统商店" onBack={() => void goBackInsideWenyou()} />
           <div className="wenyou-shop-brief">
             <div>
               <span>主神积分</span>
               <strong>{shopLoading ? "同步中" : String(shop?.points ?? 0)}</strong>
               {shop?.phaseLabel ? <em>{shop.phaseLabel}</em> : null}
-            </div>
-            <div className="wenyou-shop-brief-actions">
-              <button onClick={() => setView("rift")}><Icon name="rift" />命运裂隙</button>
-              <button onClick={() => setView("archive")}><Icon name="archive" />历史归档</button>
             </div>
           </div>
           <div className="wenyou-generation-status">
@@ -1139,12 +1217,12 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
         <section className="wenyou-screen wenyou-rift-screen">
           <div className="wenyou-rift-noise" />
           <div className="wenyou-rift-top">
-            <button onClick={() => setView("home")} aria-label="返回主神空间"><Icon name="back" /></button>
+            <button onClick={() => void goBackInsideWenyou()} aria-label="返回"><Icon name="back" /></button>
             <div>
               <h1>命运裂隙</h1>
               <p>FATE RIFT // MIXED POOL</p>
             </div>
-            <button onClick={() => setView("shop")} aria-label="系统商店"><Icon name="shop" /></button>
+            <button onClick={() => pushView("shop")} aria-label="系统商店"><Icon name="shop" /></button>
           </div>
 
           <main className="wenyou-rift-main">
@@ -1193,7 +1271,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
 
       {view === "selection" ? (
         <section className="wenyou-screen">
-          <Header title="副本大厅" onBack={() => setView("home")} />
+          <Header title="副本大厅" onBack={() => void goBackInsideWenyou()} />
           <div className="wenyou-generation-status">
             <div>
               <strong>候选设定池</strong>
@@ -1243,7 +1321,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
       {view === "game" ? (
         <section className="wenyou-screen wenyou-game">
           <div className="wenyou-game-top">
-            <button onClick={() => setView("home")} aria-label="返回主神空间"><Icon name="back" /></button>
+            <button onClick={() => void goBackInsideWenyou()} aria-label="返回"><Icon name="back" /></button>
             <div>
               <h2>{currentScene.name}</h2>
               <p><span />阶段: {sessionPanel?.phase_label || status.session?.phase_label || (status.active ? "进行中" : "模拟预览")}</p>
@@ -1293,7 +1371,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
             <div className="wenyou-settlement-actions">
               {sessionPanel?.phase === "settlement" ? (
                 <>
-                  <button onClick={() => setView("shop")} disabled={settlementLoading}>系统商店</button>
+                  <button onClick={() => pushView("shop")} disabled={settlementLoading}>系统商店</button>
                   <button onClick={archiveSettlement} disabled={settlementLoading}>{settlementLoading ? "归档中..." : "归档本局"}</button>
                 </>
               ) : (
@@ -1310,11 +1388,11 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
 
       {view === "archive" ? (
         <section className="wenyou-screen">
-          <Header title="历史归档" onBack={() => setView("home")} />
+          <Header title="历史归档" onBack={() => void goBackInsideWenyou()} />
           <FilterRow items={ARCHIVE_FILTERS} value={archiveFilter} onChange={setArchiveFilter} />
           <div className="wenyou-archive-list">
             {archiveFilter === "进行中" && status.active ? (
-              <ArchiveCard active title={currentScene.name} genre={currentScene.genre || "未知"} difficulty={currentScene.difficulty || "-"} turns="进行中" onPrimary={() => setView("game")} />
+              <ArchiveCard active title={currentScene.name} genre={currentScene.genre || "未知"} difficulty={currentScene.difficulty || "-"} turns="进行中" onPrimary={() => pushView("game")} />
             ) : null}
             {archiveFilter !== "进行中" ? sortedArchives.map((it, index) => (
               <ArchiveCard
