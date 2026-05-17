@@ -2272,13 +2272,13 @@
 
   .wenyou-rift-crack-line {
     fill: none;
-    stroke: rgba(226, 232, 240, 0.5);
+    stroke: rgba(190, 202, 214, 0.34);
     stroke-dasharray: 1000;
     stroke-dashoffset: 1000;
     stroke-linecap: round;
     stroke-linejoin: round;
-    stroke-width: 0.68;
-    filter: drop-shadow(0 0 8px rgba(238, 242, 247, 0.28));
+    stroke-width: 0.46;
+    filter: drop-shadow(0 0 5px rgba(180, 196, 210, 0.16));
   }
 
   .wenyou-rift-overlay-opening .wenyou-rift-crack-line {
@@ -2288,7 +2288,7 @@
   .wenyou-rift-shards-canvas {
     z-index: 3;
     mix-blend-mode: screen;
-    opacity: 0.96;
+    opacity: 0.72;
   }
 
   .wenyou-rift-results-wrap {

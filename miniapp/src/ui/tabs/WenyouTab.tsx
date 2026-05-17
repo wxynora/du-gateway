@@ -1546,21 +1546,39 @@ export function WenyouTab({
 
 type RiftPoint = { x: number; y: number };
 type RiftGlassShard = {
-  x: number;
-  y: number;
+  startX: number;
+  startY: number;
   size: number;
-  vx: number;
-  vy: number;
-  rotation: number;
-  vRot: number;
-  opacity: number;
+  driftX: number;
+  driftY: number;
+  baseRotation: number;
+  spin: number;
+  delay: number;
+  duration: number;
   points: RiftPoint[];
   tint: number;
   innerCuts: Array<{ from: RiftPoint; to: RiftPoint; alpha: number }>;
 };
 
-function createRiftGlassShard(x: number, y: number, viewportSize: number): RiftGlassShard {
-  const size = Math.min(viewportSize * 0.18, Math.random() * 42 + 24);
+function clamp01(value: number) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function easeOutQuart(value: number) {
+  return 1 - Math.pow(1 - value, 4);
+}
+
+function createRiftGlassShard(cssWidth: number, cssHeight: number, index: number, total: number): RiftGlassShard {
+  const cols = Math.max(3, Math.ceil(Math.sqrt(total * (cssWidth / Math.max(cssHeight, 1)))));
+  const rows = Math.ceil(total / cols);
+  const cellW = cssWidth / cols;
+  const cellH = cssHeight / rows;
+  const col = index % cols;
+  const row = Math.floor(index / cols);
+  const startX = (col + 0.2 + Math.random() * 0.6) * cellW;
+  const startY = (row + 0.18 + Math.random() * 0.64) * cellH;
+  const viewportSize = Math.min(cssWidth, cssHeight);
+  const size = Math.min(viewportSize * 0.2, Math.max(34, Math.random() * 42 + Math.min(cellW, cellH) * 0.38));
   const steps = Math.floor(Math.random() * 4) + 4;
   const points = Array.from({ length: steps }, (_, index) => {
     const angle = (index / steps) * Math.PI * 2;
@@ -1570,8 +1588,8 @@ function createRiftGlassShard(x: number, y: number, viewportSize: number): RiftG
       y: Math.sin(angle) * radius,
     };
   });
-  const angle = Math.random() * Math.PI * 2;
-  const speed = Math.random() * 5.8 + 2.2;
+  const sideBias = (startX / Math.max(cssWidth, 1) - 0.5) * 42;
+  const verticalBias = startY > cssHeight * 0.52 ? 26 : -10;
   const innerCuts = Array.from({ length: Math.floor(Math.random() * 3) + 1 }, () => {
     const fromAngle = Math.random() * Math.PI * 2;
     const toAngle = fromAngle + (Math.random() - 0.5) * 1.5 + Math.PI;
@@ -1584,25 +1602,35 @@ function createRiftGlassShard(x: number, y: number, viewportSize: number): RiftG
     };
   });
   return {
-    x,
-    y,
+    startX,
+    startY,
     size,
-    vx: Math.cos(angle) * speed,
-    vy: Math.sin(angle) * speed - 2.6,
-    rotation: Math.random() * Math.PI * 2,
-    vRot: (Math.random() - 0.5) * 0.052,
-    opacity: 1,
+    driftX: sideBias + (Math.random() - 0.5) * 86,
+    driftY: verticalBias + Math.random() * 96,
+    baseRotation: Math.random() * Math.PI * 2,
+    spin: (Math.random() - 0.5) * 0.82,
+    delay: Math.random() * 130,
+    duration: 1180 + Math.random() * 540,
     points,
     tint: Math.random(),
     innerCuts,
   };
 }
 
-function drawRiftGlassShard(ctx: CanvasRenderingContext2D, shard: RiftGlassShard) {
+function drawRiftGlassShard(ctx: CanvasRenderingContext2D, shard: RiftGlassShard, elapsed: number) {
   if (!shard.points.length) return;
+  const progress = clamp01((elapsed - shard.delay) / shard.duration);
+  if (progress <= 0) return;
+  const eased = easeOutQuart(progress);
+  const fade = progress < 0.74 ? 1 : Math.max(0, 1 - (progress - 0.74) / 0.26);
+  const opacity = fade * (0.58 + (1 - progress) * 0.18);
+  const snap = progress < 0.18 ? Math.sin(progress * Math.PI * 18) * (1 - progress / 0.18) : 0;
+  const x = shard.startX + shard.driftX * eased + snap * 2.4;
+  const y = shard.startY + shard.driftY * eased - snap * 1.2;
+  const rotation = shard.baseRotation + shard.spin * eased;
   ctx.save();
-  ctx.translate(shard.x, shard.y);
-  ctx.rotate(shard.rotation);
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
   ctx.beginPath();
   ctx.moveTo(shard.points[0].x, shard.points[0].y);
   for (let index = 1; index < shard.points.length; index += 1) {
@@ -1610,12 +1638,12 @@ function drawRiftGlassShard(ctx: CanvasRenderingContext2D, shard: RiftGlassShard
   }
   ctx.closePath();
   const gradient = ctx.createLinearGradient(-shard.size, -shard.size, shard.size, shard.size);
-  gradient.addColorStop(0, `rgba(255, 255, 255, ${Math.max(0, shard.opacity * 0.5)})`);
-  gradient.addColorStop(0.48, `rgba(${shard.tint > 0.5 ? "178, 222, 238" : "205, 213, 224"}, ${Math.max(0, shard.opacity * 0.2)})`);
-  gradient.addColorStop(1, `rgba(40, 48, 66, ${Math.max(0, shard.opacity * 0.1)})`);
+  gradient.addColorStop(0, `rgba(235, 242, 248, ${Math.max(0, opacity * 0.24)})`);
+  gradient.addColorStop(0.48, `rgba(${shard.tint > 0.5 ? "132, 180, 198" : "154, 166, 184"}, ${Math.max(0, opacity * 0.13)})`);
+  gradient.addColorStop(1, `rgba(18, 24, 38, ${Math.max(0, opacity * 0.12)})`);
   ctx.fillStyle = gradient;
-  ctx.strokeStyle = `rgba(255, 255, 255, ${Math.max(0, shard.opacity * 0.82)})`;
-  ctx.lineWidth = 1.05;
+  ctx.strokeStyle = `rgba(225, 233, 240, ${Math.max(0, opacity * 0.32)})`;
+  ctx.lineWidth = 0.72;
   ctx.fill();
   ctx.stroke();
   ctx.clip();
@@ -1625,13 +1653,13 @@ function drawRiftGlassShard(ctx: CanvasRenderingContext2D, shard: RiftGlassShard
     ctx.beginPath();
     ctx.moveTo(cut.from.x, cut.from.y);
     ctx.lineTo(cut.to.x, cut.to.y);
-    ctx.strokeStyle = `rgba(255, 255, 255, ${Math.max(0, shard.opacity * cut.alpha)})`;
+    ctx.strokeStyle = `rgba(225, 233, 240, ${Math.max(0, opacity * cut.alpha * 0.42)})`;
     ctx.stroke();
   }
   ctx.beginPath();
   ctx.moveTo(-shard.size * 0.45, -shard.size * 0.18);
   ctx.lineTo(shard.size * 0.35, -shard.size * 0.42);
-  ctx.strokeStyle = `rgba(255, 255, 255, ${Math.max(0, shard.opacity * 0.2)})`;
+  ctx.strokeStyle = `rgba(235, 242, 248, ${Math.max(0, opacity * 0.08)})`;
   ctx.stroke();
   ctx.restore();
 }
@@ -1665,54 +1693,54 @@ function RiftShatterLayer({ active }: { active: boolean }) {
 
     const createCracks = () => {
       svg.replaceChildren();
-      const crackCount = 9;
-      const px = 50;
-      const py = 48;
-      for (let index = 0; index < crackCount; index += 1) {
-        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.classList.add("wenyou-rift-crack-line");
-        let d = `M ${px} ${py} `;
-        let curX = px;
-        let curY = py;
-        const segments = 4;
-        const angleBase = (index / crackCount) * Math.PI * 2;
-        for (let segment = 0; segment < segments; segment += 1) {
-          const length = 18 + Math.random() * 24;
-          const angleVar = (Math.random() - 0.5) * 0.62;
-          curX += Math.cos(angleBase + angleVar) * length;
-          curY += Math.sin(angleBase + angleVar) * length;
-          d += `L ${curX} ${curY} `;
-          if (Math.random() > 0.74) {
-            const sideX = curX + (Math.random() - 0.5) * 16;
-            const sideY = curY + (Math.random() - 0.5) * 16;
-            d += `M ${curX} ${curY} L ${sideX} ${sideY} M ${curX} ${curY} `;
+      const anchors = [
+        { x: 18 + Math.random() * 16, y: 18 + Math.random() * 18, count: 3 },
+        { x: 62 + Math.random() * 20, y: 20 + Math.random() * 18, count: 3 },
+        { x: 26 + Math.random() * 18, y: 58 + Math.random() * 22, count: 4 },
+        { x: 66 + Math.random() * 18, y: 62 + Math.random() * 20, count: 3 },
+      ];
+      anchors.forEach((anchor, anchorIndex) => {
+        for (let index = 0; index < anchor.count; index += 1) {
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.classList.add("wenyou-rift-crack-line");
+          let d = `M ${anchor.x} ${anchor.y} `;
+          let curX = anchor.x;
+          let curY = anchor.y;
+          const segments = 3 + Math.floor(Math.random() * 3);
+          const angleBase = ((index / anchor.count) * Math.PI * 2) + (anchorIndex * 0.58);
+          for (let segment = 0; segment < segments; segment += 1) {
+            const length = 10 + Math.random() * 18;
+            const angleVar = (Math.random() - 0.5) * 0.9;
+            curX += Math.cos(angleBase + angleVar) * length;
+            curY += Math.sin(angleBase + angleVar) * length;
+            d += `L ${curX} ${curY} `;
+            if (Math.random() > 0.78) {
+              const sideX = curX + (Math.random() - 0.5) * 12;
+              const sideY = curY + (Math.random() - 0.5) * 12;
+              d += `M ${curX} ${curY} L ${sideX} ${sideY} M ${curX} ${curY} `;
+            }
           }
+          path.setAttribute("d", d);
+          path.style.animationDelay = `${(anchorIndex * 0.045) + (index * 0.028)}s`;
+          svg.appendChild(path);
         }
-        path.setAttribute("d", d);
-        path.style.animationDelay = `${index * 0.028}s`;
-        svg.appendChild(path);
-      }
+      });
     };
 
-    const animate = () => {
+    const startedAt = window.performance?.now?.() ?? Date.now();
+    const animate = (now = window.performance?.now?.() ?? Date.now()) => {
+      const elapsed = now - startedAt;
       ctx.clearRect(0, 0, cssWidth, cssHeight);
-      shards = shards.filter((shard) => shard.opacity > 0);
+      shards = shards.filter((shard) => elapsed - shard.delay < shard.duration);
       for (const shard of shards) {
-        shard.x += shard.vx;
-        shard.y += shard.vy;
-        shard.vy += 0.11;
-        shard.rotation += shard.vRot;
-        shard.opacity -= 0.0052;
-        drawRiftGlassShard(ctx, shard);
+        drawRiftGlassShard(ctx, shard, elapsed);
       }
       if (shards.length > 0) raf = window.requestAnimationFrame(animate);
     };
 
     resize();
     createCracks();
-    const originX = cssWidth * 0.5;
-    const originY = cssHeight * 0.48;
-    shards = Array.from({ length: 18 }, () => createRiftGlassShard(originX, originY, Math.min(cssWidth, cssHeight)));
+    shards = Array.from({ length: 20 }, (_, index) => createRiftGlassShard(cssWidth, cssHeight, index, 20));
     raf = window.requestAnimationFrame(animate);
     window.addEventListener("resize", resize);
     if ("vibrate" in navigator) navigator.vibrate([50, 30, 100]);
