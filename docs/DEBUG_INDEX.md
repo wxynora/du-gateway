@@ -29,6 +29,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
 | MiniApp 分页 | `miniapp/src/ui/tabs/*` | 日志、思维链、上游、日历、贴纸、记忆调试等子页 |
+| 文游规则草案 | `docs/wenyou_rules.md` | 开源版文游核心规则、副本蓝图、数值、固定装备槽位、武器锻造、回收拆解、商店、抽卡、奖励、升级、惩罚副本、后端规则引擎边界 |
 | R2 存储 | `storage/r2_store.py` | 会话、summary、动态记忆、设置、贴纸、设备状态、日程等 R2 key |
 | 上游配置 | `storage/upstream_store.py` | active upstream、model cache、models 探测 |
 | 主动消息 | `services/telegram_proactive.py` | 概率主动、主动决策、通道投递、trigger tick |
@@ -272,6 +273,26 @@ rg -n "TGHook|TGQueue|TGWorker|TGBot|webhook 已落持久队列|queue worker 消
 - 已完成：修正文游背包交互节奏：前端背包按钮不再直接调用 `/wenyou/item/use` 推进 GM；点击道具只把 `使用道具【道具名】：` 填进行动输入框并聚焦，必须由玩家点发送后才算一轮行动。查看任务/背包/状态/线索和选择道具都只读缓存/session，不触发 DS。
 - 已验证：`npm -C miniapp run build` 通过；当前入口指向 `miniapp_static/assets/index-BXWyjSNl.js`、`miniapp_static/assets/index-D4ifVuNu.css`，文游 chunk 为 `miniapp_static/assets/WenyouTab-Dav6824r.js`。
 - 未完成 / 不要碰：后端 `/wenyou/item/use` 暂时保留为快捷接口，但 MiniApp 默认不使用；下一步若要严谨，可以加“道具详情/使用说明”二级弹窗。
+
+当前状态（2026-05-17 文游规则对齐）：
+- 已完成：按 `docs/wenyou_rules.md` 对齐现有文游硬规则：阶段统一到 `hub / candidate_selection / instance_running / settlement / archived`，新局默认 `instance_running`，结算进入 `settlement`；副本生成不再写死 6 人/4NPC，改为 `tasker_total 2-13` 且 `npc_taskers = tasker_total - player_count`；新人初始数值改为 HP/SAN 180/180、Lv1、D 阶、EXP 0、体力/智慧 10、血统凡人、能力/武器/状态为空；新增 `public` / `gm_secret` / `instance_blueprint` 规范化，GM 推进时会读取蓝图短纲但前端不整段展示隐藏内容；系统商店只在 `hub` 或 `settlement` 可购买，副本中只能查看货架和使用已有背包物品；默认商店货架扩成规则文档里的商品表，前端显示阶段锁定原因和 EXP/状态。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`import app` 与文游 shop/framework/blueprint smoke check 通过；`rg` 扫描确认源码里已无旧的固定 4NPC/6 人硬规则命中；`npm -C miniapp run build` 通过，当前构建输出 `miniapp_static/assets/WenyouTab-BmrlS9UT.js`、`miniapp_static/assets/index-MhmZJNL5.css`、`miniapp_static/assets/index-C2lubs5K.js`；`curl -I http://127.0.0.1:5174/miniapp/` 返回 200。
+- 未完成 / 不要碰：这次没有把完整 Rules Engine / `state_patch`、结算奖励公式、抽卡、锻造和长期钱包一次性落完；当前仍保留兼容用【主神面板】解析，后续要逐步迁到 `GM event_intent -> Rules Engine -> state_patch -> GM narrative`。
+
+当前状态（2026-05-17 文游规则引擎小步）：
+- 已完成：在 `services/wenyou_service.py` 接上轻量 Rules Engine：GM 每轮先输出【事件意图】JSON（风险等级、目标、标签、行动状态、状态增删、威胁时钟），后端按 `docs/wenyou_rules.md` 的风险基础伤害、难度倍率、体力/智慧减免和阶位减伤计算 HP/SAN；状态阈值会自动添加轻伤/重伤/濒死、动摇/污染/失控；`state_patch` 写入 `session["event_log"]` 和 `last_state_patch`，前端剧情下方展示【规则结算】摘要。普通副本行动中若有事件意图，GM 面板里的 HP/SAN 不再覆盖后端计算。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`import app` 通过；规则烟测覆盖 `dangerous + mental/rule_pollution`，B 难度下玩家一 SAN 从 180 结算到 153，威胁时钟推进到 1/6；`git diff --check` 通过（仅既有 CRLF warning）；`npm -C miniapp run build` 通过。
+- 未完成 / 不要碰：这一步还不是完整独立 ruleset/content-pack 文件，也没有把奖励结算、抽卡、锻造、钱包和物品效果全部迁出 prompt；GM 叙事目前仍是同一轮调用里读事件意图规则，不是严格两阶段二次调用。
+
+当前状态（2026-05-17 文游结算/钱包骨架）：
+- 已完成：跳过抽卡动画与抽卡机制，先补结算和长期钱包：`storage/r2_store.py` 新增 `wenyou/wallet/{user_id}.json` 读写；商店改为扣长期钱包积分并同步当前 session；`cmd_end` 进入 `settlement` 时按难度、通关结果和评级发放积分/EXP，优先偿还债务，写入钱包 ledger、session settlement、event_log；玩家 EXP 会按 `level * 100` 循环升级并发自由属性点/能力 token；归档会带上 wallet、settlement 和 event_log。MiniApp 文游主界面补“进入结算 / 系统商店 / 归档本局”操作。
+- 已验证：`.venv/bin/python -m py_compile storage/r2_store.py services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；结算烟测覆盖 D 难度标准通关 B 评级，积分 +120、EXP +36、钱包 100 -> 220；`git diff --check` 通过（仅既有 CRLF warning）；`npm -C miniapp run build` 通过，当前构建输出 `miniapp_static/assets/WenyouTab-BZ8ljq8u.js`、`miniapp_static/assets/index-DbUb1qhR.css`、`miniapp_static/assets/index-CwRe37Ka.js`；`curl -I http://127.0.0.1:5174/miniapp/` 返回 200。
+- 未完成 / 不要碰：抽卡与抽卡动画按辛玥要求先不动；奖励掉落 roll 目前只记录次数，还没接奖励池/物品掉落表；结算按钮当前默认按“标准通关 B 评级”发放，后续需要做成结算页让用户选择/确认结果或由 GM 触发。
+
+当前状态（2026-05-17 文游结算核准页）：
+- 已完成：把“进入结算”从前端硬编码 `standard_clear + B` 改成后端结算预览：新增 `/miniapp-api/wenyou/settlement/preview`，根据最近 GM 文本、玩家 HP/SAN/状态、线索数、回合数、威胁时钟等推断通关结果、评级分和评级；前端点“申请结算”先展示结算核准面板，可查看建议结果、评级分、分项、积分/EXP/奖励次数预估，也可手动调整结果/评级后再确认进入结算。`cmd_end` 不再使用前端默认 B 级，而是复用同一套 preview 结果发奖。
+- 已验证：`.venv/bin/python -m py_compile storage/r2_store.py services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`import app` 与结算预览/确认 smoke 通过，最近 GM 写“任务完成/副本结束”时预览为 `standard_clear`、评级 B、评级分 61，确认后钱包 100 -> 220；`rg` 确认源码里无前端硬编码 `standard_clear + B`；`npm -C miniapp run build` 通过，当前构建输出 `miniapp_static/assets/WenyouTab-BwHO6XdB.js`、`miniapp_static/assets/index-CwKmZp6-.css`、`miniapp_static/assets/index-DHfIexEZ.js`；`git diff --check` 通过（仅既有 CRLF warning）；`curl -I http://127.0.0.1:5174/miniapp/` 返回 200。
+- 未完成 / 不要碰：抽卡与抽卡动画继续不动；结算奖励 roll 仍只记录次数，尚未接真实掉落表；结算结果目前是规则引擎根据结构化记录 + 最近 GM 文本估算，不是独立二阶段 GM 复核调用。
 
 ## 事件唤醒 / Trigger / 弹窗回执
 
@@ -729,6 +750,16 @@ npm -C miniapp run android
 - 已完成：继续拆 `routes/chat.py`，把入口 prompt 注入集中到 `services/chat_prompt_injections.py`：入口风格、语音通话台词、followup 静态规则、渠道 NSFW 和禁言模式；路由侧只保留请求 header 判断和调用顺序。`routes/chat.py` 约 1204 行。
 - 已验证：`.venv/bin/python -m py_compile routes/chat.py services/chat_prompt_injections.py services/chat_tool_helpers.py services/chat_request_helpers.py services/chat_archive_helpers.py services/chat_sidecars.py services/chat_response_enrichers.py services/chat_content.py services/prompt_cache_debug.py services/reasoning_utils.py services/entry_style_prompt.py services/upstream_policy.py`、prompt/helper smoke check、`routes.chat` import check、`git diff --check` 均通过。
 - 未完成 / 不要碰：`app.py`、`config.py`、`connectors/qq_onebot/src/main.js`、`routes/miniapp/wenyou.py`、`services/telegram_bot.py`、`services/wenyou_service.py`、小爱/音乐相关文件、共读文档、`miniapp_static/assets/*` 仍是本地已有改动或半成品；下一步优先拆 `routes/chat.py` 的 stream/non-stream 主流程，或转拆 `storage/r2_store.py`。
+
+当前状态（2026-05-17 文游规则草案）：
+- 已完成：新增并继续补全 `docs/wenyou_rules.md`，把文游开源版规则整理成后端无关草案，包含任务者总数 2-13、玩家人数不固定、任务者 NPC 是非真人的其他任务者玩家、默认不能直接致死但可阴人、状态机、纯功能区 hub、公开/隐藏信息、副本蓝图（主线/支线/隐藏结局/线索图/NPC 弧线/威胁时钟/硬约束）、核心数值公式、伤害/精神判定、死亡走债务不默认删档、复活债务偿还和强制惩罚副本队列、属性点分配 UI/后端流程、阶位晋升条件/消耗/阻断、S 级封印体、血统/能力完整结算表、固定装备槽位、防具饰品基准、武器数值公式/模板/耐久/升级锻造/维修、出售回收/拆解流程、系统商店、道具规则表结算、100 积分/抽与 100 抽随机传说大保底、基础通关保底积分 + 剧情探索/隐藏支线/隐藏结局/特殊成就评级叠加（含具体百分比与叠加上限）、失败不发积分且通过复活/债务/装备损耗形成成本、奖励稀有度和类别掉落表、`state_patch` 边界；当前项目先按此实现测试，稳定后 copy 新仓库开源。
+- 已验证：本轮为文档改动，已检查文档结构、索引和 Markdown 栅栏；未运行代码测试。
+- 未完成 / 不要碰：尚未改 `routes/miniapp/wenyou.py`、`services/wenyou_service.py` 或 `miniapp/src/ui/tabs/WenyouTab.tsx`；现有文游实现仍可能固定 2 玩家 + 4 NPC，且属性点分配、晋升、血统/能力/武器数值、装备耐久/锻造/回收拆解、道具表结算、复活债务惩罚副本、奖励掉落表都还只是文档规则，后续要另起实现任务迁入后端 ruleset 和 UI。
+
+当前状态（2026-05-17 文游命运裂隙 UI）：
+- 已完成：`miniapp/src/ui/tabs/WenyouTab.tsx` 新增“命运裂隙”一级入口和前端抽卡演示流程，右上角裂隙按钮可进入，支持单抽/十连、100/1000 积分本地预览扣除、十连 C+ 兜底、裂隙展开动画、卡背结果区、逐张/批量显影和确认返回；`miniapp/src/styles.css` 参照下载 UI 合集的赛博黑白/故障/扫描线/翻牌风格重做视觉，并修正十连结果区与底部操作按钮重叠问题。
+- 已验证：`npm -C miniapp run build` 通过；本地 `http://127.0.0.1:5174/miniapp/` 打开后已点击进入“命运裂隙”、执行十连、`REVEAL DATA` 显影、`CONFIRM SYNCHRONY` 返回；本地 Vite 没接 Flask 时商店/会话接口会 404，但裂隙 UI 使用前端预览积分可继续看动画。
+- 未完成 / 不要碰：命运裂隙目前只是前端 UI/动画与本地结果演示，尚未接后端真实扣积分、抽卡记录、道具入背包、概率审计和 100 抽大保底持久化；后续接后端时继续限定文游相关文件，不要动 QQ connector、小爱、共读和其他半成品。
 
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变

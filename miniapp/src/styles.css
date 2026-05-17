@@ -194,6 +194,82 @@
   }
 }
 
+@keyframes wenyou-rift-glitch {
+  0%,
+  100% {
+    transform: translate(0, 0);
+    text-shadow: -2px 0 #f43fef, 2px 0 #22d3ee;
+  }
+  28% {
+    transform: translate(-2px, 1px);
+    text-shadow: 2px 0 #f43fef, -2px 0 #22d3ee;
+  }
+  58% {
+    transform: translate(2px, -1px);
+  }
+}
+
+@keyframes wenyou-rift-fracture {
+  0% {
+    transform: scale(1) rotate(0deg);
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  }
+  50% {
+    transform: scale(1.08) rotate(180deg);
+    clip-path: polygon(18% 0%, 82% 7%, 100% 100%, 0% 92%);
+  }
+  100% {
+    transform: scale(1) rotate(360deg);
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  }
+}
+
+@keyframes wenyou-rift-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes wenyou-rift-noise {
+  0% {
+    transform: translate(0, 0);
+  }
+  20% {
+    transform: translate(-3%, 2%);
+  }
+  40% {
+    transform: translate(2%, -3%);
+  }
+  60% {
+    transform: translate(-2%, -1%);
+  }
+  80% {
+    transform: translate(3%, 2%);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes wenyou-rift-portal {
+  0% {
+    opacity: 0;
+    transform: scaleY(0.01);
+  }
+  35% {
+    opacity: 1;
+    transform: scaleY(0.01);
+  }
+  72% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleY(1);
+  }
+}
+
 @layer components {
   .neo-panel {
     @apply rounded-[30px] backdrop-blur-xl;
@@ -711,6 +787,12 @@
     box-shadow: 0 0 18px rgba(34, 211, 238, 0.64);
   }
 
+  .wenyou-page-head-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .wenyou-icon-btn,
   .wenyou-sub-head button,
   .wenyou-game-top button,
@@ -726,6 +808,12 @@
     background: rgba(8, 16, 32, 0.72);
     color: #9beafe;
     box-shadow: inset 0 0 18px rgba(34, 211, 238, 0.08);
+  }
+
+  .wenyou-icon-btn-rift {
+    border-color: rgba(244, 63, 239, 0.42);
+    color: #f5d0fe;
+    box-shadow: inset 0 0 18px rgba(244, 63, 239, 0.12), 0 0 18px rgba(34, 211, 238, 0.08);
   }
 
   .wenyou-sub-head {
@@ -746,6 +834,7 @@
   .wenyou-instance-card,
   .wenyou-select-card,
   .wenyou-archive-card,
+  .wenyou-shop-card,
   .wenyou-command,
   .wenyou-random-panel {
     position: relative;
@@ -763,6 +852,7 @@
   .wenyou-instance-card::before,
   .wenyou-select-card::before,
   .wenyou-archive-card::before,
+  .wenyou-shop-card::before,
   .wenyou-random-panel::before {
     content: "";
     position: absolute;
@@ -943,6 +1033,7 @@
   .wenyou-action-grid,
   .wenyou-panel-shortcuts,
   .wenyou-quick-actions,
+  .wenyou-settlement-actions,
   .wenyou-input-row,
   .wenyou-modal-actions {
     display: grid;
@@ -952,8 +1043,10 @@
   .wenyou-primary-btn,
   .wenyou-action-grid button,
   .wenyou-select-card button,
+  .wenyou-shop-card button,
   .wenyou-panel-shortcuts button,
   .wenyou-quick-actions button,
+  .wenyou-settlement-actions button,
   .wenyou-archive-actions button,
   .wenyou-option-group button,
   .wenyou-modal-actions button {
@@ -993,9 +1086,18 @@
   .wenyou-primary-btn:active,
   .wenyou-action-grid button:active,
   .wenyou-select-card button:active,
+  .wenyou-shop-card button:active,
   .wenyou-archive-actions button:active,
   .wenyou-modal-actions button:active {
     transform: scale(0.98);
+  }
+
+  .wenyou-shop-card button:disabled,
+  .wenyou-select-card button:disabled,
+  .wenyou-modal-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+    transform: none;
   }
 
   .wenyou-search {
@@ -1093,24 +1195,28 @@
   }
 
   .wenyou-instance-list,
-  .wenyou-archive-list {
+  .wenyou-archive-list,
+  .wenyou-shop-grid {
     display: grid;
     gap: 12px;
   }
 
   .wenyou-select-card,
-  .wenyou-archive-card {
+  .wenyou-archive-card,
+  .wenyou-shop-card {
     display: grid;
     gap: 12px;
     padding: 14px;
   }
 
   .wenyou-select-card h3,
-  .wenyou-archive-card h3 {
+  .wenyou-archive-card h3,
+  .wenyou-shop-card h3 {
     font-size: 18px;
   }
 
   .wenyou-select-card p,
+  .wenyou-shop-card p,
   .wenyou-archive-detail,
   .wenyou-empty {
     color: rgba(224, 242, 254, 0.78);
@@ -1149,11 +1255,459 @@
   }
 
   .wenyou-select-card button,
+  .wenyou-shop-card button,
   .wenyou-modal-actions button:last-child,
   .wenyou-archive-actions button:first-child {
     border-color: rgba(34, 211, 238, 0.46);
     background: rgba(34, 211, 238, 0.16);
     color: #cffafe;
+  }
+
+  .wenyou-shop-brief {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .wenyou-shop-brief > div,
+  .wenyou-shop-lock {
+    border: 1px solid rgba(34, 211, 238, 0.22);
+    border-radius: 8px;
+    background:
+      linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(244, 63, 94, 0.08)),
+      rgba(3, 7, 18, 0.56);
+    padding: 12px;
+  }
+
+  .wenyou-shop-brief span {
+    display: block;
+    color: rgba(180, 216, 230, 0.68);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .wenyou-shop-brief strong {
+    display: block;
+    margin-top: 4px;
+    color: #fbbf24;
+    font-size: 26px;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .wenyou-shop-brief em {
+    display: inline-flex;
+    margin-top: 8px;
+    color: rgba(103, 232, 249, 0.88);
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 900;
+  }
+
+  .wenyou-shop-brief-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .wenyou-shop-brief button {
+    display: inline-flex;
+    min-height: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.72);
+    color: rgba(224, 242, 254, 0.84);
+    font-size: 12px;
+    font-weight: 800;
+    padding: 0 12px;
+  }
+
+  .wenyou-shop-lock {
+    color: rgba(224, 242, 254, 0.78);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .wenyou-shop-card {
+    min-height: 158px;
+  }
+
+  .wenyou-shop-card-top,
+  .wenyou-shop-card-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .wenyou-shop-card-top span,
+  .wenyou-shop-card-top strong {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 6px;
+    padding: 4px 7px;
+    font-size: 11px;
+    font-weight: 900;
+  }
+
+  .wenyou-shop-card-top span {
+    border: 1px solid rgba(34, 211, 238, 0.26);
+    background: rgba(34, 211, 238, 0.1);
+    color: #a5f3fc;
+  }
+
+  .wenyou-shop-card-top strong {
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    background: rgba(251, 191, 36, 0.1);
+    color: #fbbf24;
+  }
+
+  .wenyou-shop-card h3 {
+    margin: 0;
+    color: #f8fbff;
+    font-weight: 900;
+    line-height: 1.12;
+    overflow-wrap: anywhere;
+  }
+
+  .wenyou-shop-card p {
+    min-height: 40px;
+  }
+
+  .wenyou-shop-card-bottom b {
+    color: #fbbf24;
+    font-size: 13px;
+    font-weight: 900;
+    white-space: nowrap;
+  }
+
+  .wenyou-shop-card-bottom button {
+    min-height: 34px;
+    padding: 0 12px;
+  }
+
+  .wenyou-shop-rarity-A,
+  .wenyou-shop-rarity-S {
+    border-color: rgba(244, 63, 94, 0.34);
+  }
+
+  .wenyou-rift-screen {
+    isolation: isolate;
+    overflow: hidden;
+    background:
+      linear-gradient(rgba(255, 255, 255, 0.018) 50%, rgba(0, 0, 0, 0.18) 50%) 0 0 / 100% 3px,
+      radial-gradient(circle at 50% 42%, rgba(244, 63, 239, 0.16), transparent 34%),
+      radial-gradient(circle at 50% 52%, rgba(34, 211, 238, 0.1), transparent 28%),
+      #030305;
+    color: #f8fbff;
+  }
+
+  .wenyou-rift-noise,
+  .wenyou-rift-overlay-noise {
+    position: absolute;
+    inset: -20%;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 7px),
+      repeating-linear-gradient(0deg, rgba(244, 63, 239, 0.035) 0 1px, transparent 1px 9px);
+    opacity: 0.25;
+    animation: wenyou-rift-noise 0.7s steps(1, end) infinite;
+  }
+
+  .wenyou-rift-top {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    gap: 10px;
+    align-items: center;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    padding-bottom: 10px;
+  }
+
+  .wenyou-rift-top button {
+    display: inline-flex;
+    height: 42px;
+    width: 42px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.38);
+    color: rgba(248, 251, 255, 0.86);
+  }
+
+  .wenyou-rift-top h1 {
+    margin: 0;
+    color: #f8fbff;
+    font-family: "Playfair Display", "Noto Serif SC", serif;
+    font-size: 18px;
+    font-style: italic;
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .wenyou-rift-top p {
+    margin-top: 5px;
+    color: rgba(180, 216, 230, 0.55);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.22em;
+  }
+
+  .wenyou-rift-main {
+    position: relative;
+    display: grid;
+    flex: 1;
+    min-height: 0;
+    place-items: center;
+    padding: 18px 0 8px;
+  }
+
+  .wenyou-rift-title {
+    position: absolute;
+    top: 18px;
+    left: 0;
+    right: 0;
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    text-align: center;
+  }
+
+  .wenyou-rift-title span,
+  .wenyou-rift-footer p {
+    color: rgba(180, 216, 230, 0.54);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 0.34em;
+    text-transform: uppercase;
+  }
+
+  .wenyou-rift-title strong {
+    position: relative;
+    color: #f8fbff;
+    font-family: "Playfair Display", "Noto Serif SC", serif;
+    font-size: clamp(30px, 9vw, 42px);
+    font-style: italic;
+    font-weight: 900;
+    letter-spacing: 0;
+    line-height: 0.92;
+    animation: wenyou-rift-glitch 0.36s steps(2, end) infinite;
+  }
+
+  .wenyou-rift-title strong::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    color: rgba(34, 211, 238, 0.72);
+    transform: translate(2px, -1px);
+    clip-path: inset(38% 0 42% 0);
+  }
+
+  .wenyou-rift-title i {
+    display: inline-flex;
+    gap: 8px;
+  }
+
+  .wenyou-rift-title b {
+    display: block;
+    width: 5px;
+    height: 5px;
+    background: #f8fbff;
+    transform: rotate(45deg);
+  }
+
+  .wenyou-rift-core {
+    position: relative;
+    width: min(78vw, 330px);
+    aspect-ratio: 1;
+    margin-top: 36px;
+  }
+
+  .wenyou-rift-glow {
+    position: absolute;
+    inset: 10%;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    filter: blur(34px);
+  }
+
+  .wenyou-rift-square {
+    position: absolute;
+    inset: 13%;
+    border: 1px solid rgba(224, 242, 254, 0.16);
+  }
+
+  .wenyou-rift-square-a {
+    transform: rotate(45deg);
+  }
+
+  .wenyou-rift-square-b {
+    inset: 22%;
+    animation: wenyou-rift-spin 52s linear infinite;
+  }
+
+  .wenyou-rift-fragment {
+    position: absolute;
+    inset: 31%;
+    border: 1px solid rgba(248, 251, 255, 0.18);
+    background: rgba(248, 251, 255, 0.1);
+    animation: wenyou-rift-fracture 4.4s linear infinite;
+  }
+
+  .wenyou-rift-fragment-b {
+    inset: 37%;
+    border-color: rgba(244, 63, 239, 0.32);
+    background: rgba(244, 63, 239, 0.12);
+    animation-direction: reverse;
+  }
+
+  .wenyou-rift-symbol {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: #f8fbff;
+    filter: drop-shadow(0 0 12px rgba(34, 211, 238, 0.46));
+    mix-blend-mode: difference;
+  }
+
+  .wenyou-rift-symbol svg {
+    width: 74px;
+    height: 74px;
+    stroke-width: 1.2;
+  }
+
+  .wenyou-rift-rates {
+    position: absolute;
+    bottom: 14px;
+    left: 0;
+    right: 0;
+    display: grid;
+    grid-template-columns: 1fr 1px 1fr 1px 1fr;
+    align-items: center;
+    gap: 12px;
+    text-align: center;
+  }
+
+  .wenyou-rift-rates span {
+    display: block;
+    color: rgba(180, 216, 230, 0.42);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+  }
+
+  .wenyou-rift-rates strong {
+    display: block;
+    margin-top: 4px;
+    color: #f8fbff;
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  .wenyou-rift-rates i {
+    height: 28px;
+    background: rgba(148, 163, 184, 0.16);
+  }
+
+  .wenyou-rift-footer {
+    display: grid;
+    gap: 12px;
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    padding-top: 12px;
+  }
+
+  .wenyou-rift-footer p {
+    text-align: center;
+  }
+
+  .wenyou-rift-currency {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.42);
+    padding: 9px 11px;
+  }
+
+  .wenyou-rift-currency span {
+    color: rgba(180, 216, 230, 0.58);
+    font-size: 11px;
+    font-weight: 900;
+  }
+
+  .wenyou-rift-currency strong {
+    color: #f8fbff;
+    font-size: 14px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+  }
+
+  .wenyou-rift-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .wenyou-rift-actions button {
+    position: relative;
+    min-height: 76px;
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.32);
+    color: #f8fbff;
+    padding: 14px 10px;
+    text-align: center;
+  }
+
+  .wenyou-rift-actions button:last-child {
+    border-color: rgba(248, 251, 255, 0.9);
+    background:
+      repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.08) 0 1px, transparent 1px 4px),
+      #f8fbff;
+    color: #030305;
+  }
+
+  .wenyou-rift-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.46;
+  }
+
+  .wenyou-rift-actions span,
+  .wenyou-rift-actions b {
+    display: block;
+  }
+
+  .wenyou-rift-actions span {
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+  }
+
+  .wenyou-rift-actions b {
+    margin-top: 8px;
+    font-size: 15px;
+  }
+
+  .wenyou-rift-actions em {
+    position: absolute;
+    top: 0;
+    right: 0;
+    background: #030305;
+    color: #f8fbff;
+    font-size: 8px;
+    font-style: normal;
+    font-weight: 900;
+    padding: 3px 6px;
   }
 
   .wenyou-game {
@@ -1298,6 +1852,194 @@
     white-space: nowrap;
   }
 
+  .wenyou-settlement-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wenyou-settlement-actions button:only-child {
+    grid-column: 1 / -1;
+  }
+
+  .wenyou-settlement-actions button {
+    min-height: 36px;
+    border-color: rgba(251, 191, 36, 0.28);
+    background: rgba(39, 27, 8, 0.55);
+    color: #fde68a;
+    font-size: 12px;
+    padding: 0 8px;
+  }
+
+  .wenyou-settlement-draft {
+    display: grid;
+    gap: 10px;
+    border: 1px solid rgba(251, 191, 36, 0.24);
+    border-radius: 8px;
+    background:
+      linear-gradient(135deg, rgba(251, 191, 36, 0.12), rgba(34, 211, 238, 0.08)),
+      rgba(3, 7, 18, 0.82);
+    box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.06), 0 18px 44px rgba(0, 0, 0, 0.25);
+    padding: 12px;
+  }
+
+  .wenyou-settlement-head,
+  .wenyou-settlement-meta,
+  .wenyou-settlement-reward,
+  .wenyou-settlement-breakdown > div,
+  .wenyou-settlement-confirm {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .wenyou-settlement-head span,
+  .wenyou-settlement-reward span,
+  .wenyou-settlement-breakdown span,
+  .wenyou-settlement-options label {
+    display: block;
+    color: rgba(180, 216, 230, 0.66);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0;
+  }
+
+  .wenyou-settlement-head strong {
+    display: block;
+    margin-top: 3px;
+    color: #f8fbff;
+    font-size: 16px;
+    line-height: 1.18;
+  }
+
+  .wenyou-settlement-head b {
+    border: 1px solid rgba(251, 191, 36, 0.36);
+    border-radius: 7px;
+    background: rgba(251, 191, 36, 0.12);
+    color: #fbbf24;
+    font-size: 13px;
+    padding: 7px 9px;
+    white-space: nowrap;
+  }
+
+  .wenyou-settlement-meter {
+    height: 6px;
+    overflow: hidden;
+    border: 1px solid rgba(34, 211, 238, 0.2);
+    border-radius: 999px;
+    background: rgba(2, 6, 23, 0.76);
+  }
+
+  .wenyou-settlement-meter span {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #22d3ee, #fbbf24, #fb7185);
+    box-shadow: 0 0 16px rgba(251, 191, 36, 0.35);
+  }
+
+  .wenyou-settlement-meta {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .wenyou-settlement-meta span {
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.55);
+    color: rgba(224, 242, 254, 0.76);
+    font-size: 11px;
+    font-weight: 800;
+    padding: 4px 7px;
+  }
+
+  .wenyou-settlement-reason {
+    margin: 0;
+    color: rgba(224, 242, 254, 0.78);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .wenyou-settlement-reward {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .wenyou-settlement-reward div {
+    min-width: 0;
+    border: 1px solid rgba(34, 211, 238, 0.18);
+    border-radius: 7px;
+    background: rgba(8, 13, 31, 0.74);
+    padding: 9px;
+  }
+
+  .wenyou-settlement-reward strong {
+    display: block;
+    margin-top: 4px;
+    color: #f8fbff;
+    font-size: 16px;
+    line-height: 1;
+    overflow-wrap: anywhere;
+  }
+
+  .wenyou-settlement-breakdown {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .wenyou-settlement-breakdown > div {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    padding-bottom: 5px;
+  }
+
+  .wenyou-settlement-breakdown b {
+    color: #a5f3fc;
+    font-size: 11px;
+  }
+
+  .wenyou-settlement-options {
+    display: grid;
+    gap: 6px;
+  }
+
+  .wenyou-settlement-options > div {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .wenyou-settlement-options button,
+  .wenyou-settlement-confirm button {
+    min-height: 32px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 7px;
+    background: rgba(15, 23, 42, 0.72);
+    color: rgba(224, 242, 254, 0.82);
+    font-size: 11px;
+    font-weight: 900;
+    padding: 0 9px;
+    white-space: nowrap;
+  }
+
+  .wenyou-settlement-options button.active,
+  .wenyou-settlement-confirm button:last-child {
+    border-color: rgba(251, 191, 36, 0.42);
+    background: rgba(251, 191, 36, 0.14);
+    color: #fde68a;
+  }
+
+  .wenyou-settlement-confirm {
+    display: grid;
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  }
+
+  .wenyou-settlement-granted {
+    border-color: rgba(34, 211, 238, 0.22);
+    background:
+      linear-gradient(135deg, rgba(34, 211, 238, 0.11), rgba(251, 191, 36, 0.08)),
+      rgba(3, 7, 18, 0.82);
+  }
+
   .wenyou-input-row {
     grid-template-columns: minmax(0, 1fr) 42px;
     align-items: center;
@@ -1363,6 +2105,350 @@
     border-radius: 8px;
     padding: 20px 12px;
     text-align: center;
+  }
+
+  .wenyou-rift-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    overflow: hidden;
+    background:
+      linear-gradient(rgba(255, 255, 255, 0.018) 50%, rgba(0, 0, 0, 0.22) 50%) 0 0 / 100% 3px,
+      #030305;
+    color: #f8fbff;
+  }
+
+  .wenyou-rift-portal {
+    position: absolute;
+    top: 50%;
+    left: -40vw;
+    right: -40vw;
+    height: 100dvh;
+    background:
+      repeating-linear-gradient(0deg, rgba(3, 3, 5, 0.08) 0 1px, transparent 1px 4px),
+      #f8fbff;
+    transform-origin: center;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-portal {
+    animation: wenyou-rift-portal 0.92s cubic-bezier(0.19, 1, 0.22, 1) both;
+  }
+
+  .wenyou-rift-results-wrap {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    min-height: 0;
+    place-items: center;
+    padding: calc(24px + env(safe-area-inset-top)) 18px 118px;
+  }
+
+  .wenyou-rift-opening-text {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    text-align: center;
+  }
+
+  .wenyou-rift-opening-text span {
+    color: rgba(180, 216, 230, 0.55);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.42em;
+  }
+
+  .wenyou-rift-opening-text strong {
+    font-size: 24px;
+    font-weight: 900;
+    letter-spacing: 0;
+  }
+
+  .wenyou-rift-single {
+    display: grid;
+    width: 100%;
+    place-items: center;
+  }
+
+  .wenyou-rift-results-scroll {
+    width: min(100%, 430px);
+    max-height: calc(100dvh - 156px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    min-height: 0;
+    overflow-y: auto;
+    padding: 4px 0 18px;
+    scrollbar-width: none;
+  }
+
+  .wenyou-rift-results-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .wenyou-rift-results-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding-bottom: 16px;
+  }
+
+  .wenyou-rift-card {
+    display: block;
+    width: 100%;
+    aspect-ratio: 2 / 3;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    perspective: 1000px;
+    text-align: left;
+  }
+
+  .wenyou-rift-card-large {
+    width: min(68vw, 260px);
+    max-height: calc(100dvh - 220px);
+  }
+
+  .wenyou-rift-card-inner {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    transform-style: preserve-3d;
+    transition: transform 0.62s cubic-bezier(0.19, 1, 0.22, 1);
+  }
+
+  .wenyou-rift-card.is-revealed .wenyou-rift-card-inner {
+    transform: rotateY(180deg);
+  }
+
+  .wenyou-rift-card-back,
+  .wenyou-rift-card-front {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(0, 0, 0, 0.82);
+    backface-visibility: hidden;
+  }
+
+  .wenyou-rift-card-back {
+    place-items: center;
+  }
+
+  .wenyou-rift-card-back::before,
+  .wenyou-rift-card-front::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.034) 0 1px, transparent 1px 4px);
+    pointer-events: none;
+  }
+
+  .wenyou-rift-card-back i {
+    width: 34px;
+    height: 24px;
+    border: 2px solid rgba(248, 251, 255, 0.22);
+    border-left: 0;
+    border-right: 0;
+    opacity: 0.7;
+  }
+
+  .wenyou-rift-card-back b {
+    position: absolute;
+    bottom: 12px;
+    left: 10px;
+    color: rgba(180, 216, 230, 0.42);
+    font-size: 9px;
+    letter-spacing: 0.18em;
+  }
+
+  .wenyou-rift-card-front {
+    transform: rotateY(180deg);
+    padding: 8px;
+  }
+
+  .wenyou-rift-card-art {
+    display: grid;
+    min-height: 46%;
+    place-items: center;
+    border: 1px solid rgba(3, 3, 5, 0.32);
+  }
+
+  .wenyou-rift-card-art b {
+    color: rgba(0, 0, 0, 0.62);
+    font-size: clamp(20px, 8vw, 42px);
+    font-weight: 900;
+    letter-spacing: 0;
+    mix-blend-mode: multiply;
+  }
+
+  .wenyou-rift-card-copy {
+    display: grid;
+    gap: 4px;
+    align-content: space-between;
+    min-height: 0;
+    margin-top: 8px;
+    background: rgba(0, 0, 0, 0.92);
+    padding: 8px;
+  }
+
+  .wenyou-rift-card-copy em {
+    font-size: 10px;
+    font-style: italic;
+    font-weight: 900;
+    letter-spacing: 0.1em;
+  }
+
+  .wenyou-rift-card-copy strong {
+    color: #f8fbff;
+    font-family: "Playfair Display", "Noto Serif SC", serif;
+    font-size: clamp(15px, 4.5vw, 21px);
+    font-weight: 900;
+    line-height: 1.02;
+    overflow-wrap: anywhere;
+    text-transform: uppercase;
+  }
+
+  .wenyou-rift-card-copy small {
+    color: rgba(224, 242, 254, 0.68);
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
+  .wenyou-rift-card-copy span {
+    display: inline-flex;
+    gap: 5px;
+    margin-top: 4px;
+  }
+
+  .wenyou-rift-card-copy i {
+    width: 6px;
+    height: 6px;
+    background: currentColor;
+    transform: rotate(45deg);
+  }
+
+  .wenyou-rift-card-D .wenyou-rift-card-front {
+    border-color: rgba(34, 211, 238, 0.52);
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.26);
+  }
+
+  .wenyou-rift-card-D .wenyou-rift-card-art {
+    background: #0891b2;
+  }
+
+  .wenyou-rift-card-D .wenyou-rift-card-copy {
+    color: #67e8f9;
+  }
+
+  .wenyou-rift-card-C .wenyou-rift-card-front {
+    border-color: rgba(56, 189, 248, 0.62);
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+  }
+
+  .wenyou-rift-card-C .wenyou-rift-card-art {
+    background: #2563eb;
+  }
+
+  .wenyou-rift-card-C .wenyou-rift-card-copy {
+    color: #93c5fd;
+  }
+
+  .wenyou-rift-card-B .wenyou-rift-card-front {
+    border-color: rgba(217, 70, 239, 0.72);
+    box-shadow: 0 0 12px rgba(217, 70, 239, 0.38);
+  }
+
+  .wenyou-rift-card-B .wenyou-rift-card-art {
+    background: #a21caf;
+  }
+
+  .wenyou-rift-card-B .wenyou-rift-card-copy {
+    color: #f0abfc;
+  }
+
+  .wenyou-rift-card-A .wenyou-rift-card-front {
+    border-color: rgba(251, 191, 36, 0.78);
+    box-shadow: 0 0 14px rgba(251, 191, 36, 0.42), inset 0 0 12px rgba(251, 191, 36, 0.18);
+  }
+
+  .wenyou-rift-card-A .wenyou-rift-card-art {
+    background: #f59e0b;
+  }
+
+  .wenyou-rift-card-A .wenyou-rift-card-copy {
+    color: #fde68a;
+  }
+
+  .wenyou-rift-card-S .wenyou-rift-card-front {
+    border-color: rgba(248, 251, 255, 0.95);
+    box-shadow: 0 0 18px rgba(248, 251, 255, 0.62), inset 0 0 18px rgba(248, 251, 255, 0.22);
+  }
+
+  .wenyou-rift-card-S .wenyou-rift-card-art {
+    background: #f8fbff;
+  }
+
+  .wenyou-rift-card-S .wenyou-rift-card-copy {
+    color: #f8fbff;
+  }
+
+  .wenyou-rift-overlay-s::after {
+    content: "";
+    position: absolute;
+    inset: -12%;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.2), transparent 18%),
+      radial-gradient(circle at 38% 58%, rgba(244, 63, 239, 0.22), transparent 22%),
+      radial-gradient(circle at 62% 54%, rgba(34, 211, 238, 0.2), transparent 20%);
+    filter: blur(18px);
+    opacity: 0.72;
+  }
+
+  .wenyou-rift-overlay-actions {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    z-index: 3;
+    display: grid;
+    gap: 10px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(10px);
+    transition: opacity 0.32s ease, transform 0.32s ease;
+  }
+
+  .wenyou-rift-overlay-actions.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+
+  .wenyou-rift-overlay-actions button {
+    min-height: 48px;
+    border: 1px solid rgba(148, 163, 184, 0.38);
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.86);
+    color: #f8fbff;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.24em;
+  }
+
+  .wenyou-rift-overlay-actions button:last-child {
+    border-color: #f8fbff;
+    background:
+      repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.08) 0 1px, transparent 1px 4px),
+      #f8fbff;
+    color: #030305;
+  }
+
+  .wenyou-rift-overlay-actions button:disabled {
+    opacity: 0.45;
   }
 
   .wenyou-modal {
