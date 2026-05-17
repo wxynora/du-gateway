@@ -478,16 +478,11 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
     # 拉取失败时再用本地解析逻辑兜底。
     model = _fetch_gateway_first_model() or _resolve_chat_model()
 
-    # 始终从 R2 取最新历史，确保 QQ / 微信等其他入口的对话也能衔接进来
-    # 若 R2 无数据（首次对话 / R2 故障）则降级使用内存缓存
-    history = _bootstrap_context_from_r2(window_id)
-    if history:
-        with _CTX_LOCK:
-            _CONTEXT_MESSAGES[user_id] = list(history)
-    else:
-        with _CTX_LOCK:
-            history = list(_CONTEXT_MESSAGES.get(user_id) or [])
-    history = _trim_context_messages(history)
+    # 历史上下文统一交给网关按 window_id 从 R2 注入。
+    # Bot 侧不再拼 R2/进程内历史，避免 worker 内存里的旧上下文把过期消息当成本轮 history 带进网关。
+    history = []
+    with _CTX_LOCK:
+        _CONTEXT_MESSAGES[user_id] = []
     # 上游波动时先缓存用户输入；下一次成功时一并带上，避免“我发了但丢轮次/Last4 断片”
     with _PENDING_LOCK:
         pending = list(_PENDING_USER_CONTENTS.get(user_id) or [])
@@ -593,12 +588,9 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         for_ctx = reply_text
         for_ctx, _ = _extract_voice_tag(for_ctx)
         for_ctx, _ = _extract_sticker_tag(for_ctx)
-        # 更新上下文：只缓存 user/assistant（不存 system），下次请求自动带上
+        # Bot 侧不维护对话 history；下一轮仍由网关按 R2 注入最近对话。
         with _CTX_LOCK:
-            cur = list(_CONTEXT_MESSAGES.get(user_id) or [])
-            cur.append({"role": "user", "content": merged_user_content})
-            cur.append({"role": "assistant", "content": for_ctx})
-            _CONTEXT_MESSAGES[user_id] = _trim_context_messages(cur)
+            _CONTEXT_MESSAGES[user_id] = []
         with _PENDING_LOCK:
             _PENDING_USER_CONTENTS[user_id] = []
         return reply_text
