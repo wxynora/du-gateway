@@ -254,19 +254,74 @@
 @keyframes wenyou-rift-portal {
   0% {
     opacity: 0;
-    transform: scaleY(0.01);
+    transform: scale3d(0.18, 0.012, 1);
   }
-  35% {
-    opacity: 1;
-    transform: scaleY(0.01);
+  26% {
+    opacity: 0.92;
+    transform: scale3d(1, 0.018, 1);
   }
-  72% {
-    opacity: 1;
-    transform: scaleY(1);
+  54% {
+    opacity: 0.78;
+    transform: scale3d(1.02, 1, 1);
+  }
+  78% {
+    opacity: 0.28;
+    transform: scale3d(1.06, 1.04, 1);
   }
   100% {
     opacity: 0;
-    transform: scaleY(1);
+    transform: scale3d(1.1, 1.08, 1);
+  }
+}
+
+@keyframes wenyou-rift-crack-lines {
+  0% {
+    opacity: 0;
+    transform: scale3d(0.32, 0.08, 1);
+  }
+  16% {
+    opacity: 0.98;
+    transform: scale3d(1, 1, 1);
+  }
+  64% {
+    opacity: 0.54;
+    transform: scale3d(1.018, 1.012, 1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale3d(1.04, 1.03, 1);
+  }
+}
+
+@keyframes wenyou-rift-shatter-field {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  12%,
+  68% {
+    opacity: 1;
+  }
+}
+
+@keyframes wenyou-rift-shard-burst {
+  0% {
+    opacity: 0;
+    filter: blur(7px);
+    transform: translate3d(-50%, -50%, 0) scale(0.08) rotate(var(--r0, 0deg));
+  }
+  18% {
+    opacity: 0.95;
+    filter: blur(0);
+    transform: translate3d(-50%, -50%, 0) scale(0.76) rotate(var(--r0, 0deg));
+  }
+  72% {
+    opacity: 0.72;
+  }
+  100% {
+    opacity: 0;
+    filter: blur(1px);
+    transform: translate3d(calc(-50% + var(--x)), calc(-50% + var(--y)), 0) scale(var(--s, 1)) rotate(var(--r, 0deg));
   }
 }
 
@@ -2107,8 +2162,10 @@
     right: -40vw;
     min-height: 100dvh;
     background:
-      repeating-linear-gradient(0deg, rgba(3, 3, 5, 0.08) 0 1px, transparent 1px 4px),
-      #f8fbff;
+      repeating-linear-gradient(0deg, rgba(3, 3, 5, 0.12) 0 1px, transparent 1px 5px),
+      radial-gradient(circle at 50% 50%, rgba(248, 251, 255, 0.96), rgba(180, 216, 230, 0.56) 34%, rgba(248, 251, 255, 0.16) 62%, transparent 74%);
+    filter: contrast(1.18) brightness(1.08);
+    mix-blend-mode: screen;
     transform-origin: center;
     opacity: 0;
     pointer-events: none;
@@ -2118,9 +2175,182 @@
     animation: wenyou-rift-portal 0.92s cubic-bezier(0.19, 1, 0.22, 1) both;
   }
 
+  .wenyou-rift-shatter {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-shatter {
+    animation: wenyou-rift-shatter-field 0.92s cubic-bezier(0.19, 1, 0.22, 1) both;
+  }
+
+  .wenyou-rift-shatter::before {
+    content: "";
+    position: absolute;
+    inset: -8%;
+    background:
+      linear-gradient(101deg, transparent 0 49.55%, rgba(248, 251, 255, 0.9) 49.72% 50.08%, transparent 50.3%),
+      linear-gradient(53deg, transparent 0 50.1%, rgba(34, 211, 238, 0.54) 50.24% 50.48%, transparent 50.72%),
+      linear-gradient(143deg, transparent 0 48.8%, rgba(244, 63, 239, 0.52) 49.02% 49.24%, transparent 49.54%),
+      linear-gradient(16deg, transparent 0 54.4%, rgba(248, 251, 255, 0.48) 54.54% 54.82%, transparent 55.08%);
+    filter: drop-shadow(0 0 10px rgba(248, 251, 255, 0.72));
+    mix-blend-mode: screen;
+    opacity: 0;
+    transform-origin: center;
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-shatter::before {
+    animation: wenyou-rift-crack-lines 0.78s cubic-bezier(0.19, 1, 0.22, 1) both;
+  }
+
+  .wenyou-rift-shard {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: var(--w, 74px);
+    height: var(--h, 108px);
+    border: 1px solid rgba(248, 251, 255, 0.48);
+    background:
+      linear-gradient(135deg, rgba(248, 251, 255, 0.72), rgba(34, 211, 238, 0.12) 48%, rgba(244, 63, 239, 0.26)),
+      rgba(248, 251, 255, 0.2);
+    box-shadow: inset 0 0 18px rgba(248, 251, 255, 0.16), 0 0 16px rgba(34, 211, 238, 0.16);
+    clip-path: var(--clip, polygon(18% 0, 100% 16%, 74% 100%, 0 70%));
+    mix-blend-mode: screen;
+    opacity: 0;
+    transform-origin: center;
+  }
+
+  .wenyou-rift-overlay-opening .wenyou-rift-shard {
+    animation: wenyou-rift-shard-burst 0.86s cubic-bezier(0.19, 1, 0.22, 1) both;
+    animation-delay: var(--d, 0s);
+  }
+
+  .wenyou-rift-shard-1 {
+    --x: -39vw;
+    --y: -31vh;
+    --r: -44deg;
+    --r0: -12deg;
+    --s: 1.1;
+    --w: 86px;
+    --h: 118px;
+    --d: 0.01s;
+  }
+
+  .wenyou-rift-shard-2 {
+    --x: 34vw;
+    --y: -34vh;
+    --r: 38deg;
+    --r0: 14deg;
+    --s: 0.94;
+    --w: 70px;
+    --h: 132px;
+    --clip: polygon(0 12%, 88% 0, 100% 78%, 24% 100%);
+    --d: 0.04s;
+  }
+
+  .wenyou-rift-shard-3 {
+    --x: -24vw;
+    --y: 34vh;
+    --r: 54deg;
+    --r0: -18deg;
+    --s: 1;
+    --w: 94px;
+    --h: 96px;
+    --clip: polygon(22% 0, 100% 42%, 68% 100%, 0 64%);
+    --d: 0.02s;
+  }
+
+  .wenyou-rift-shard-4 {
+    --x: 41vw;
+    --y: 26vh;
+    --r: -62deg;
+    --r0: 24deg;
+    --s: 1.18;
+    --w: 76px;
+    --h: 104px;
+    --clip: polygon(10% 0, 100% 20%, 82% 100%, 0 86%);
+    --d: 0.06s;
+  }
+
+  .wenyou-rift-shard-5 {
+    --x: 4vw;
+    --y: -42vh;
+    --r: 22deg;
+    --r0: -6deg;
+    --s: 0.9;
+    --w: 116px;
+    --h: 72px;
+    --clip: polygon(0 22%, 74% 0, 100% 70%, 28% 100%);
+    --d: 0s;
+  }
+
+  .wenyou-rift-shard-6 {
+    --x: -3vw;
+    --y: 42vh;
+    --r: -26deg;
+    --r0: 9deg;
+    --s: 1.08;
+    --w: 126px;
+    --h: 78px;
+    --clip: polygon(16% 0, 100% 30%, 78% 100%, 0 62%);
+    --d: 0.05s;
+  }
+
+  .wenyou-rift-shard-7 {
+    --x: -47vw;
+    --y: 3vh;
+    --r: -12deg;
+    --r0: 4deg;
+    --s: 0.82;
+    --w: 62px;
+    --h: 142px;
+    --clip: polygon(36% 0, 100% 8%, 72% 100%, 0 86%);
+    --d: 0.03s;
+  }
+
+  .wenyou-rift-shard-8 {
+    --x: 46vw;
+    --y: -4vh;
+    --r: 16deg;
+    --r0: -4deg;
+    --s: 0.86;
+    --w: 60px;
+    --h: 136px;
+    --clip: polygon(0 4%, 70% 0, 100% 94%, 28% 100%);
+    --d: 0.035s;
+  }
+
+  .wenyou-rift-shard-9 {
+    --x: -31vw;
+    --y: -8vh;
+    --r: 72deg;
+    --r0: -20deg;
+    --s: 0.72;
+    --w: 56px;
+    --h: 76px;
+    --clip: polygon(20% 0, 100% 38%, 62% 100%, 0 62%);
+    --d: 0.075s;
+  }
+
+  .wenyou-rift-shard-10 {
+    --x: 29vw;
+    --y: 10vh;
+    --r: -78deg;
+    --r0: 18deg;
+    --s: 0.76;
+    --w: 54px;
+    --h: 82px;
+    --clip: polygon(0 28%, 76% 0, 100% 68%, 24% 100%);
+    --d: 0.08s;
+  }
+
   .wenyou-rift-results-wrap {
     position: relative;
-    z-index: 1;
+    z-index: 3;
     display: grid;
     min-height: 0;
     place-items: center;

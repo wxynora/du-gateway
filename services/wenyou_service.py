@@ -2,6 +2,7 @@
 import copy
 import json
 import math
+import os
 import random
 import re
 import threading
@@ -39,6 +40,10 @@ _WENYOU_SUMMARY_EVERY_N_ROUNDS = 4
 _DEFAULT_PLAYER_COUNT = 2
 _DEFAULT_TASKER_TOTAL = 6
 _WENYOU_PHASES = frozenset({"hub", "candidate_selection", "instance_running", "settlement", "archived"})
+try:
+    _WENYOU_TEST_MIN_POINTS = max(0, int(os.environ.get("WENYOU_TEST_MIN_POINTS", "100000") or "0"))
+except Exception:
+    _WENYOU_TEST_MIN_POINTS = 100000
 
 
 def _normalize_phase(value: Any, default: str = "instance_running") -> str:
@@ -1637,9 +1642,15 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
     ledger = data.get("ledger") if isinstance(data.get("ledger"), list) else []
     clear_records = data.get("clear_records") if isinstance(data.get("clear_records"), list) else []
     promotion_history = data.get("promotion_history") if isinstance(data.get("promotion_history"), list) else []
+    points = max(0, int(data.get("points") if data.get("points") is not None else seed_points))
+    test_grant_min = max(0, int(data.get("test_points_grant_min") or 0))
+    if _WENYOU_TEST_MIN_POINTS and points < _WENYOU_TEST_MIN_POINTS and test_grant_min < _WENYOU_TEST_MIN_POINTS:
+        points = _WENYOU_TEST_MIN_POINTS
+        test_grant_min = _WENYOU_TEST_MIN_POINTS
+        ledger = ledger[-79:] + [{"at": now_beijing_iso(), "type": "test_points_grant", "points": points}]
     return {
         "version": 1,
-        "points": max(0, int(data.get("points") if data.get("points") is not None else seed_points)),
+        "points": points,
         "debts": max(0, int(data.get("debts") or 0)),
         "total_exp": max(0, int(data.get("total_exp") or 0)),
         "settlement_count": max(0, int(data.get("settlement_count") or 0)),
@@ -1647,6 +1658,7 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
         "inventory": _normalize_inventory(data.get("inventory"), source="wallet"),
         "clear_records": [x for x in clear_records[-30:] if isinstance(x, dict)],
         "promotion_history": [x for x in promotion_history[-20:] if isinstance(x, dict)],
+        "test_points_grant_min": test_grant_min,
         "ledger": ledger[-80:],
         "updated_at": str(data.get("updated_at") or now_beijing_iso()),
     }

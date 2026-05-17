@@ -417,6 +417,78 @@ function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): Rift
   };
 }
 
+const RIFT_SHARD_IDS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"] as const;
+let riftAudioContext: AudioContext | null = null;
+
+function playRiftShatterSound() {
+  if (typeof window === "undefined") return;
+  const AudioCtor =
+    window.AudioContext ||
+    (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtor) return;
+
+  try {
+    const ctx = riftAudioContext ?? new AudioCtor();
+    riftAudioContext = ctx;
+    if (ctx.state === "suspended") void ctx.resume();
+
+    const now = ctx.currentTime + 0.012;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, now);
+    master.gain.exponentialRampToValueAtTime(0.34, now + 0.018);
+    master.gain.exponentialRampToValueAtTime(0.0001, now + 0.86);
+    master.connect(ctx.destination);
+
+    const noise = (delay: number, duration: number, frequency: number, gainValue: number) => {
+      const length = Math.max(1, Math.floor(ctx.sampleRate * duration));
+      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i += 1) {
+        const fade = 1 - i / length;
+        data[i] = (Math.random() * 2 - 1) * fade * fade;
+      }
+      const source = ctx.createBufferSource();
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+      source.buffer = buffer;
+      filter.type = "highpass";
+      filter.frequency.setValueAtTime(frequency, now + delay);
+      gain.gain.setValueAtTime(0.0001, now + delay);
+      gain.gain.exponentialRampToValueAtTime(gainValue, now + delay + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + duration);
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(master);
+      source.start(now + delay);
+      source.stop(now + delay + duration);
+    };
+
+    const ping = (delay: number, frequency: number, duration: number, gainValue: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.setValueAtTime(frequency, now + delay);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(80, frequency * 0.32), now + delay + duration);
+      gain.gain.setValueAtTime(0.0001, now + delay);
+      gain.gain.exponentialRampToValueAtTime(gainValue, now + delay + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + duration);
+      osc.connect(gain);
+      gain.connect(master);
+      osc.start(now + delay);
+      osc.stop(now + delay + duration + 0.02);
+    };
+
+    noise(0, 0.16, 1800, 0.5);
+    noise(0.08, 0.32, 3100, 0.26);
+    ping(0.02, 1280, 0.18, 0.18);
+    ping(0.065, 2480, 0.11, 0.11);
+    ping(0.14, 860, 0.28, 0.14);
+    window.setTimeout(() => master.disconnect(), 1200);
+  } catch {
+    // Audio is non-critical and may be blocked by the WebView.
+  }
+}
+
 type WenyouBackHandlerRef = React.MutableRefObject<(() => boolean) | null>;
 
 export function WenyouTab({
@@ -461,6 +533,7 @@ export function WenyouTab({
   const [riftPointPreview, setRiftPointPreview] = useState<number | null>(null);
   const [riftPullCount, setRiftPullCount] = useState(0);
   const [riftLoading, setRiftLoading] = useState(false);
+  const riftPullTokenRef = useRef(0);
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
   const [panelView, setPanelView] = useState<"任务" | "背包" | "状态" | "线索" | null>(null);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
@@ -502,6 +575,7 @@ export function WenyouTab({
 
   const goBackInsideWenyou = useCallback(() => {
     if (riftOverlay !== "closed") {
+      riftPullTokenRef.current += 1;
       setRiftOverlay("closed");
       window.setTimeout(() => {
         setRiftResults([]);
@@ -1000,7 +1074,15 @@ export function WenyouTab({
       toast("主神积分不足，裂隙没有响应");
       return;
     }
+    const pullToken = riftPullTokenRef.current + 1;
+    riftPullTokenRef.current = pullToken;
+    const openedAt = window.performance?.now?.() ?? Date.now();
     setRiftLoading(true);
+    setRiftPullCount(count);
+    setRiftResults([]);
+    setRiftRevealed([]);
+    setRiftOverlay("opening");
+    playRiftShatterSound();
     try {
       const j = await apiJson<{
         ok?: boolean;
@@ -1022,12 +1104,17 @@ export function WenyouTab({
       setRiftPointPreview(nextPoints);
       setShop((prev) => prev ? { ...prev, points: nextPoints, inventory: nextInventory } : prev);
       if (j.session) setSessionPanel(j.session);
-      setRiftPullCount(count);
+      if (riftPullTokenRef.current !== pullToken) return;
       setRiftResults((j.results || []).map(normalizeRiftResult));
       setRiftRevealed([]);
-      setRiftOverlay("opening");
-      window.setTimeout(() => setRiftOverlay("results"), 920);
+      const elapsed = (window.performance?.now?.() ?? Date.now()) - openedAt;
+      window.setTimeout(() => {
+        if (riftPullTokenRef.current === pullToken) setRiftOverlay("results");
+      }, Math.max(0, 920 - elapsed));
     } catch (e) {
+      if (riftPullTokenRef.current === pullToken) {
+        setRiftOverlay("closed");
+      }
       toast(e instanceof Error ? e.message : "命运裂隙牵引失败");
     } finally {
       setRiftLoading(false);
@@ -1045,6 +1132,7 @@ export function WenyouTab({
   }
 
   function closeRiftOverlay() {
+    riftPullTokenRef.current += 1;
     setRiftOverlay("closed");
     window.setTimeout(() => {
       setRiftResults([]);
@@ -1479,6 +1567,9 @@ function RiftOverlay({
     <div className={`wenyou-rift-overlay wenyou-rift-overlay-${phase} ${hasS ? "wenyou-rift-overlay-s" : ""}`} role="dialog" aria-modal="true">
       <div className="wenyou-rift-overlay-noise" />
       <div className="wenyou-rift-portal" />
+      <div className="wenyou-rift-shatter" aria-hidden="true">
+        {RIFT_SHARD_IDS.map((id) => <span key={id} className={`wenyou-rift-shard wenyou-rift-shard-${id}`} />)}
+      </div>
       <div className="wenyou-rift-results-wrap">
         {phase === "opening" ? (
           <div className="wenyou-rift-opening-text">
