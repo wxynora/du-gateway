@@ -81,6 +81,12 @@ def register_routes(bp) -> None:
         if not session or not session.get("gameId"):
             return jsonify({"ok": True, "active": False, "session": None})
         fw = (session.get("framework") or {}) if isinstance(session.get("framework"), dict) else {}
+        try:
+            from services.wenyou_service import get_session_view
+
+            view = get_session_view(uid).get("session") or {}
+        except Exception:
+            view = {}
         return jsonify(
             {
                 "ok": True,
@@ -88,6 +94,8 @@ def register_routes(bp) -> None:
                 "session": {
                     "gameId": str(session.get("gameId") or ""),
                     "startedAt": str(session.get("startedAt") or ""),
+                    "phase": str(view.get("phase") or ""),
+                    "phase_label": str(view.get("phase_label") or ""),
                     "instance_code": str(fw.get("instance_code") or ""),
                     "instance_name": str(fw.get("instance_name") or ""),
                     "instance_genre": str(fw.get("instance_genre") or ""),
@@ -105,6 +113,43 @@ def register_routes(bp) -> None:
         from services.wenyou_service import get_session_view
 
         return jsonify({"ok": True, **get_session_view(uid)})
+
+    @bp.route("/wenyou/shop", methods=["GET"])
+    def miniapp_wenyou_shop():
+        """文游：系统商店。每日随机商品，购买写入当前文游背包。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        from services.wenyou_service import get_shop_view
+
+        return jsonify({"ok": True, **get_shop_view(uid)})
+
+    @bp.route("/wenyou/shop/buy", methods=["POST"])
+    def miniapp_wenyou_shop_buy():
+        """文游：购买系统商店道具，扣当前 session 积分。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        item_id = str(data.get("item_id") or data.get("id") or "").strip()
+        from services.wenyou_service import buy_shop_item
+
+        ok, message, view = buy_shop_item(uid, item_id)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/gacha/roll", methods=["POST"])
+    def miniapp_wenyou_gacha_roll():
+        """文游：命运裂隙抽卡。后端扣积分、写背包、记录保底。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        pool_id = str(data.get("pool_id") or data.get("pool") or "mixed").strip()
+        count = data.get("count") or 1
+        from services.wenyou_service import roll_gacha
+
+        ok, message, view = roll_gacha(uid, pool_id=pool_id, count=count)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
 
     @bp.route("/wenyou/candidates", methods=["GET", "POST"])
     def miniapp_wenyou_candidates():
@@ -144,10 +189,12 @@ def register_routes(bp) -> None:
         keywords = str(data.get("keywords") or "").strip()
         candidate = data.get("candidate") if isinstance(data.get("candidate"), dict) else None
         if candidate and not keywords:
-            from services.wenyou_service import format_candidate_expansion_prompt
+            from services.wenyou_service import start_story_candidate_expansion_job
 
-            keywords = format_candidate_expansion_prompt(candidate)
-            mode = "custom"
+            job, err = start_story_candidate_expansion_job(uid, candidate)
+            if err or not job:
+                return jsonify({"ok": False, "error": err or "候选扩展任务创建失败"}), 400
+            return jsonify({"ok": True, "expanding": True, **job}), 202
         if mode not in ("random", "custom"):
             return jsonify({"ok": False, "error": "mode 须为 random 或 custom"}), 400
         if mode == "custom" and not keywords:
@@ -157,6 +204,22 @@ def register_routes(bp) -> None:
         text = cmd_story(uid, keywords if mode == "custom" else None)
         need_confirm = "若确定要开新局" in (text or "")
         return jsonify({"ok": True, "text": text, "need_confirm_new_game": bool(need_confirm)})
+
+    @bp.route("/wenyou/story-job/<job_id>", methods=["GET"])
+    def miniapp_wenyou_story_job(job_id: str):
+        """文游：查询候选副本后台扩展任务。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        from services.wenyou_service import get_session_view, get_story_expansion_job
+
+        job = get_story_expansion_job(uid, job_id)
+        if not job:
+            return jsonify({"ok": False, "error": "未找到扩展任务"}), 404
+        payload = {"ok": True, **job}
+        if job.get("status") == "done":
+            payload.update(get_session_view(uid))
+        return jsonify(payload)
 
     @bp.route("/wenyou/action", methods=["POST"])
     def miniapp_wenyou_action():
@@ -221,6 +284,21 @@ def register_routes(bp) -> None:
             payload["du_action"] = du_action
         return jsonify(payload), (400 if failed else 200)
 
+    @bp.route("/wenyou/settlement/preview", methods=["GET", "POST"])
+    def miniapp_wenyou_settlement_preview():
+        """文游：预览最终结算建议，不发奖。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        from services.wenyou_service import get_settlement_preview
+
+        data = request.get_json(silent=True) or {}
+        result = str(data.get("result") or request.args.get("result") or "")
+        rating = str(data.get("rating") or request.args.get("rating") or "")
+        payload = get_settlement_preview(uid, result=result, rating=rating)
+        failed = not payload.get("active")
+        return jsonify({"ok": not failed, **payload}), (400 if failed else 200)
+
     @bp.route("/wenyou/end", methods=["POST"])
     def miniapp_wenyou_end():
         """文游：进入系统空间结算阶段。"""
@@ -229,7 +307,10 @@ def register_routes(bp) -> None:
             return _missing_wenyou_session_response()
         from services.wenyou_service import cmd_end, get_session_view
 
-        out = cmd_end(uid)
+        data = request.get_json(silent=True) or {}
+        result = str(data.get("result") or "")
+        rating = str(data.get("rating") or "")
+        out = cmd_end(uid, result=result, rating=rating)
         failed = out.startswith("文游：当前没有")
         return jsonify({"ok": not failed, "text": out, **get_session_view(uid)}), (400 if failed else 200)
 
@@ -243,4 +324,4 @@ def register_routes(bp) -> None:
 
         out = cmd_settle(uid)
         failed = out.startswith("文游：当前没有") or out.startswith("文游：当前不在")
-        return jsonify({"ok": not failed, "text": out}), (400 if failed else 200)
+        return jsonify({"ok": not failed, "text": out, "active": False, "session": None}), (400 if failed else 200)

@@ -2351,6 +2351,10 @@ def wenyou_card_key(user_id: int) -> str:
     return f"wenyou/cards/{int(user_id)}.json"
 
 
+def wenyou_wallet_key(user_id: int) -> str:
+    return f"wenyou/wallet/{int(user_id)}.json"
+
+
 def get_wenyou_session(user_id: int) -> Optional[Any]:
     """读取进行中的文游局；无则 None。"""
     client = _s3_client()
@@ -2464,6 +2468,28 @@ def save_wenyou_card(user_id: int, data: Any) -> bool:
         return True
     except Exception as e:
         logger.error("save_wenyou_card 失败 user_id=%s error=%s", user_id, e, exc_info=True)
+        return False
+
+
+def get_wenyou_wallet(user_id: int) -> Optional[Any]:
+    """读取文游长期钱包：积分、债务、结算流水等。"""
+    client = _s3_client()
+    if not client:
+        return None
+    return _read_json(client, wenyou_wallet_key(user_id))
+
+
+def save_wenyou_wallet(user_id: int, data: Any) -> bool:
+    """保存文游长期钱包。"""
+    client = _s3_client()
+    if not client:
+        logger.warning("R2 未配置，跳过 save_wenyou_wallet user_id=%s", user_id)
+        return False
+    try:
+        _write_json(client, wenyou_wallet_key(user_id), data)
+        return True
+    except Exception as e:
+        logger.error("save_wenyou_wallet 失败 user_id=%s error=%s", user_id, e, exc_info=True)
         return False
 
 

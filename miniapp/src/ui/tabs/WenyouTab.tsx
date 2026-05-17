@@ -59,13 +59,27 @@ type WenyouShopItem = {
   desc: string;
 };
 
+type WenyouInventoryItem = {
+  uid?: string;
+  id?: string;
+  name: string;
+  kind?: string;
+  category?: string;
+  rarity?: string;
+  desc?: string;
+  quantity?: number;
+  sigil?: string;
+  sealed?: boolean;
+  sealed_reason?: string;
+};
+
 type WenyouShopView = {
   active?: boolean;
   can_buy?: boolean;
   phase?: string;
   phaseLabel?: string;
   points?: number;
-  inventory?: string[];
+  inventory?: WenyouInventoryItem[];
   generatedAt?: string;
   items?: WenyouShopItem[];
 };
@@ -143,11 +157,11 @@ type WenyouSessionPanel = {
     points?: number;
     player1?: WenyouPlayerStats;
     player2?: WenyouPlayerStats;
-    inventory?: string[];
+    inventory?: WenyouInventoryItem[];
   };
   wallet?: { points?: number; debts?: number; total_exp?: number } | null;
   settlement?: Record<string, unknown> | null;
-  inventory?: string[];
+  inventory?: WenyouInventoryItem[];
   clues?: string[];
   history?: Array<{ role?: string; content?: string; timestamp?: string }>;
 };
@@ -199,6 +213,17 @@ type WenyouSettlementPreview = {
   };
 };
 
+type WenyouStoryResponse = {
+  ok?: boolean;
+  text?: string;
+  need_confirm_new_game?: boolean;
+  error?: string;
+  expanding?: boolean;
+  job_id?: string;
+  status?: "running" | "done" | "failed" | "confirm" | string;
+  session?: WenyouSessionPanel;
+};
+
 type RiftRarity = "D" | "C" | "B" | "A" | "S";
 
 type RiftItem = {
@@ -212,6 +237,11 @@ type RiftItem = {
 
 type RiftPullResult = RiftItem & {
   pullId: string;
+  uid?: string;
+  quantity?: number;
+  sealed?: boolean;
+  converted?: boolean;
+  converted_to?: WenyouInventoryItem;
 };
 
 const TYPE_FILTERS = ["全部类型", "规则怪谈", "剧情解密", "大逃杀", "对抗", "生存撤离", "潜伏调查", "限时任务"];
@@ -226,6 +256,8 @@ const QUICK_ACTIONS = [
 ];
 const RIFT_SINGLE_COST = 100;
 const RIFT_TEN_COST = 1000;
+const STORY_EXPANSION_POLL_MS = 1200;
+const STORY_EXPANSION_MAX_POLLS = 160;
 const RIFT_POOL: Record<RiftRarity, RiftItem[]> = {
   D: [
     { id: "d-bandage", name: "应急绷带", rarity: "D", kind: "物资", desc: "一次性治疗道具。", sigil: "BND" },
@@ -350,6 +382,41 @@ function generateRiftResults(count: number): RiftPullResult[] {
   return results;
 }
 
+function inventoryItemName(item: WenyouInventoryItem | string | undefined): string {
+  if (!item) return "";
+  return typeof item === "string" ? item : String(item.name || "");
+}
+
+function inventoryItemLabel(item: WenyouInventoryItem | string): string {
+  if (typeof item === "string") return item;
+  const qty = Number(item.quantity || 1);
+  return `${item.name || "未知物品"}${qty > 1 ? ` x${qty}` : ""}${item.sealed ? "（封印）" : ""}`;
+}
+
+function inventoryItemKey(item: WenyouInventoryItem | string, index: number): string {
+  if (typeof item === "string") return `${item}-${index}`;
+  return String(item.uid || item.id || item.name || index);
+}
+
+function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): RiftPullResult {
+  const rarity = String(item.rarity || "D").toUpperCase() as RiftRarity;
+  const name = String(item.name || "未知物品");
+  return {
+    id: String(item.id || item.uid || `rift-${index}`),
+    uid: item.uid,
+    name,
+    rarity: ["D", "C", "B", "A", "S"].includes(rarity) ? rarity : "D",
+    kind: String(item.kind || "道具"),
+    desc: String(item.desc || ""),
+    sigil: String(item.sigil || name.slice(0, 4).toUpperCase() || "DATA"),
+    pullId: String(item.pullId || item.uid || `rift-${Date.now()}-${index}`),
+    quantity: item.quantity,
+    sealed: !!item.sealed,
+    converted: !!item.converted,
+    converted_to: item.converted_to,
+  };
+}
+
 export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitialView }) {
   const toast = useToast();
   const normalizedInitialView = normalizeInitialView(initialView);
@@ -383,6 +450,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
   const [riftRevealed, setRiftRevealed] = useState<string[]>([]);
   const [riftPointPreview, setRiftPointPreview] = useState<number | null>(null);
   const [riftPullCount, setRiftPullCount] = useState(0);
+  const [riftLoading, setRiftLoading] = useState(false);
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
   const [panelView, setPanelView] = useState<"任务" | "背包" | "状态" | "线索" | null>(null);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
@@ -578,7 +646,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
     difficulty: status.session?.difficulty || "普通",
   };
   const riftPointRaw = shop?.points ?? sessionPanel?.wallet?.points;
-  const riftPoints = riftPointPreview ?? (riftPointRaw == null ? 10000 : Number(riftPointRaw || 0));
+  const riftPoints = riftPointPreview ?? Number(riftPointRaw ?? 0);
 
   async function buyShopItem(item: WenyouShopItem) {
     if (!item?.id || shopBuyingId) return;
@@ -629,6 +697,15 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
     }
   }
 
+  async function waitStoryExpansion(jobId: string): Promise<WenyouStoryResponse> {
+    for (let i = 0; i < STORY_EXPANSION_MAX_POLLS; i += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, i === 0 ? 500 : STORY_EXPANSION_POLL_MS));
+      const j = await apiJson<WenyouStoryResponse>(`/miniapp-api/wenyou/story-job/${encodeURIComponent(jobId)}`);
+      if (j.status && j.status !== "running") return j;
+    }
+    throw new Error("副本扩展仍在进行，请稍后重试或刷新状态");
+  }
+
   async function startStory(mode: "random" | "custom", keywords = "", fallback?: EntryScene, candidate?: InstanceCandidate) {
     if (mode === "custom" && !keywords.trim() && !candidate) {
       toast("请填写任务描述");
@@ -636,12 +713,18 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
     }
     setStarting(true);
     try {
-      const j = await apiJson<{ ok?: boolean; text?: string; need_confirm_new_game?: boolean; error?: string }>("/miniapp-api/wenyou/story", {
+      let j = await apiJson<WenyouStoryResponse>("/miniapp-api/wenyou/story", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode, keywords: mode === "custom" ? keywords : "", candidate }),
       });
       if (!j?.ok) throw new Error(j?.error || "开局失败");
+      if (j.expanding && j.job_id) {
+        toast("主神正在并行扩展副本");
+        j = await waitStoryExpansion(j.job_id);
+        if (!j?.ok) throw new Error(j?.error || "扩展副本失败");
+        if (j.status === "failed") throw new Error(j.error || "扩展副本失败");
+      }
       const text = String(j?.text || "");
       if (j.need_confirm_new_game) {
         toast("检测到已有进行中副本，请再点一次以确认开新局");
@@ -822,27 +905,54 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
     loadSessionPanel();
   }
 
-  function useInventoryItem(item: string) {
-    const next = `使用道具【${item}】：`;
+  function useInventoryItem(item: WenyouInventoryItem | string) {
+    const name = inventoryItemName(item);
+    const next = `使用道具【${name}】：`;
     setActionText(next);
     setPanelView(null);
     toast("已填入行动，发送后才结算本轮");
     window.setTimeout(() => actionInputRef.current?.focus(), 0);
   }
 
-  function startRiftPull(count: 1 | 10) {
+  async function startRiftPull(count: 1 | 10) {
     const cost = count === 1 ? RIFT_SINGLE_COST : RIFT_TEN_COST;
-    if (riftOverlay !== "closed") return;
+    if (riftOverlay !== "closed" || riftLoading) return;
     if (riftPoints < cost) {
       toast("主神积分不足，裂隙没有响应");
       return;
     }
-    setRiftPointPreview(Math.max(0, riftPoints - cost));
-    setRiftPullCount(count);
-    setRiftResults(generateRiftResults(count));
-    setRiftRevealed([]);
-    setRiftOverlay("opening");
-    window.setTimeout(() => setRiftOverlay("results"), 920);
+    setRiftLoading(true);
+    try {
+      const j = await apiJson<{
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        points?: number;
+        wallet?: { points?: number; debts?: number; total_exp?: number };
+        inventory?: WenyouInventoryItem[];
+        results?: RiftPullResult[];
+        session?: WenyouSessionPanel;
+      }>("/miniapp-api/wenyou/gacha/roll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pool_id: "mixed", count }),
+      });
+      if (!j?.ok) throw new Error(j?.message || j?.error || "命运裂隙牵引失败");
+      const nextPoints = Number(j.points ?? j.wallet?.points ?? Math.max(0, riftPoints - cost));
+      const nextInventory = Array.isArray(j.inventory) ? j.inventory : shop?.inventory || [];
+      setRiftPointPreview(nextPoints);
+      setShop((prev) => prev ? { ...prev, points: nextPoints, inventory: nextInventory } : prev);
+      if (j.session) setSessionPanel(j.session);
+      setRiftPullCount(count);
+      setRiftResults((j.results || []).map(normalizeRiftResult));
+      setRiftRevealed([]);
+      setRiftOverlay("opening");
+      window.setTimeout(() => setRiftOverlay("results"), 920);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "命运裂隙牵引失败");
+    } finally {
+      setRiftLoading(false);
+    }
   }
 
   function revealRiftCard(pullId: string) {
@@ -1001,7 +1111,7 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
           <div className="wenyou-shop-grid">
             {shopLoading ? <div className="wenyou-empty">主神商店正在校准货架...</div> : null}
             {(shop?.items || []).map((item) => {
-              const owned = (shop?.inventory || []).includes(item.name);
+              const owned = (shop?.inventory || []).some((it) => inventoryItemName(it) === item.name || String(it.id || "") === item.id);
               const disabled = !shop?.can_buy || owned || shopBuyingId === item.id || Number(shop?.points || 0) < Number(item.price || 0);
               return (
                 <article key={item.id} className={`wenyou-shop-card wenyou-shop-rarity-${item.rarity || "D"}`}>
@@ -1064,16 +1174,16 @@ export function WenyouTab({ initialView = "home" }: { initialView?: WenyouInitia
             <p>裂隙展开 / 命运信号同步 / 数据显影</p>
             <div className="wenyou-rift-currency">
               <span>主神积分</span>
-              <strong>{shopLoading ? "同步中" : riftPoints.toLocaleString()}</strong>
+              <strong>{shopLoading || riftLoading ? "同步中" : riftPoints.toLocaleString()}</strong>
             </div>
             <div className="wenyou-rift-actions">
-              <button onClick={() => startRiftPull(1)} disabled={riftOverlay !== "closed" || riftPoints < RIFT_SINGLE_COST}>
-                <span>裂隙牵引 x1</span>
+              <button onClick={() => void startRiftPull(1)} disabled={riftOverlay !== "closed" || riftLoading || riftPoints < RIFT_SINGLE_COST}>
+                <span>{riftLoading ? "裂隙同步中" : "裂隙牵引 x1"}</span>
                 <b>{RIFT_SINGLE_COST}</b>
               </button>
-              <button onClick={() => startRiftPull(10)} disabled={riftOverlay !== "closed" || riftPoints < RIFT_TEN_COST}>
+              <button onClick={() => void startRiftPull(10)} disabled={riftOverlay !== "closed" || riftLoading || riftPoints < RIFT_TEN_COST}>
                 <em>保底 C+</em>
-                <span>裂隙牵引 x10</span>
+                <span>{riftLoading ? "裂隙同步中" : "裂隙牵引 x10"}</span>
                 <b>{RIFT_TEN_COST}</b>
               </button>
             </div>
@@ -1350,7 +1460,7 @@ function RiftCard({
           <span className="wenyou-rift-card-copy">
             <em>{item.rarity} // {item.kind}</em>
             <strong>{item.name}</strong>
-            <small>{item.desc}</small>
+            <small>{item.converted && item.converted_to ? `重复转化：${inventoryItemLabel(item.converted_to)}` : item.sealed ? `${item.desc}（阶位不足，已封印）` : item.desc}</small>
             <span>{stars.map((_, index) => <i key={index} />)}</span>
           </span>
         </span>
@@ -1542,7 +1652,7 @@ function PanelModal({
   session: WenyouSessionPanel | null;
   acting: boolean;
   onClose: () => void;
-  onUseItem: (item: string) => void;
+  onUseItem: (item: WenyouInventoryItem | string) => void;
 }) {
   const stats = session?.stats || {};
   const inventory = session?.inventory || stats.inventory || [];
@@ -1571,9 +1681,9 @@ function PanelModal({
 
         {session && view === "背包" ? (
           <div className="wenyou-panel-body">
-            {inventory.length ? inventory.map((item) => (
-              <div className="wenyou-inventory-row" key={item}>
-                <span>{item}</span>
+            {inventory.length ? inventory.map((item, index) => (
+              <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
+                <span>{inventoryItemLabel(item)}</span>
                 <button onClick={() => onUseItem(item)} disabled={acting}>{acting ? "演算中" : "填入"}</button>
               </div>
             )) : <div className="wenyou-empty">背包为空。</div>}
