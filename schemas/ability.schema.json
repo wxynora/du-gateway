@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Wenyou Ability Catalog",
+  "type": "object",
+  "required": ["schema_version", "abilities"],
+  "properties": {
+    "schema_version": { "type": "integer" },
+    "source": { "type": "string" },
+    "abilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "rarity", "desc"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "rarity": { "enum": ["D", "C", "B", "A", "S"] },
+          "rank_min": { "enum": ["D", "C", "B", "A", "S"] },
+          "slot_type": { "type": "string" },
+          "uses_per_instance": { "type": "integer", "minimum": 1 },
+          "max_level": { "type": "integer", "minimum": 1 },
+          "fragment_cost": { "type": "integer", "minimum": 0 },
+          "desc": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "effect_json": { "type": "object" },
+          "level_scaling": { "type": "array" }
+        }
+      }
+    }
+  }
+}

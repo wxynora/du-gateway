@@ -41,9 +41,9 @@ _DEFAULT_PLAYER_COUNT = 2
 _DEFAULT_TASKER_TOTAL = 6
 _WENYOU_PHASES = frozenset({"hub", "candidate_selection", "instance_running", "settlement", "archived"})
 try:
-    _WENYOU_TEST_MIN_POINTS = max(0, int(os.environ.get("WENYOU_TEST_MIN_POINTS", "100000") or "0"))
+    _WENYOU_TEST_MIN_POINTS = max(0, int(os.environ.get("WENYOU_TEST_MIN_POINTS", "0") or "0"))
 except Exception:
-    _WENYOU_TEST_MIN_POINTS = 100000
+    _WENYOU_TEST_MIN_POINTS = 0
 
 
 def _normalize_phase(value: Any, default: str = "instance_running") -> str:
@@ -88,19 +88,20 @@ def _shop_open_for_phase(phase: Any) -> bool:
 _FRAMEWORK_SYSTEM = """你在为一款「无限流」App 文字跑团生成**单个副本**的设定数据。
 整体世界观：存在主神空间；玩家被投入一个又一个副本世界，每个副本有独立规则与任务；你是数据侧，JSON 内用中性表述即可。
 **副本类型 instance_genre**（必须选其一，并决定节奏与机关侧重）：**规则怪谈**（条款式规则、告示、广播；**部分规则可为假**、矛盾或诱导，须由玩家自行判断）；**剧情解密**（线索、证言、机关、因果链）；**大逃杀**（缩圈、资源稀缺、淘汰压力）；**对抗**（阵营、互害、结盟与背叛）；**生存撤离**（物资、环境伤害、向撤离点转移）；**潜伏调查**（伪装身份、套取情报、搜查）；**限时任务**（硬性时限或阶段倒计时）。在 `genre_note` 中用一句话写清本局如何体现该类型。
-**编制硬性规则**：每个副本的 `tasker_total` 为 **2-13**，当前默认有 2 名玩家角色（玩家一、玩家二「渡」），`npc_taskers` 数量必须等于 `tasker_total - 2`。所有任务者同场竞技或同规则约束；难度 **D～S**（D 最低、S 最高），难度越高环境越险。**任务者都用自己的身体进入副本**，不更换躯体。**NPC 的善恶/立场对玩家应默认不可知**，不要在框架里直接写“好人/坏人/害人”等结论，只能给公开可见信息（外貌、身份、当下公开行为）。
+**编制硬性规则**：每个副本的 `tasker_total` 为 **2-13**。当前 App 运行实例默认传入 2 名真实玩家角色（玩家一、玩家二「渡」），所以本次 JSON 的 `npc_taskers` 数量必须等于 `tasker_total - 2`；不要把“固定 2 玩家”写成开源规则。所有任务者同场竞技或同规则约束；难度 **D～S**（D 最低、S 最高），难度越高环境越险。**任务者都用自己的身体进入副本**，不更换躯体。**NPC 的善恶/真实立场对玩家应默认不可知**，公开字段只写外貌、身份、当下公开行为；真实立场、当前意图和是否会使坏写入 `gm_secret.npc_private_state`。
 **角色信息规则**：除非用户明确要求“角色扮演副本”或副本规则明确禁止 OOC（越界会惩罚），否则玩家与 NPC 都只给**身份/职业 + 外貌特征**，不要预写性格、价值观、隐秘动机或“一个秘密”；这些应在剧情中让玩家自行判断。默认设定：**玩家一为女性**、**玩家二（渡）为男性**。  
 玩家固定外貌：玩家一（辛玥）黑色长发黑眼、中等身高（一米六多）、二十岁出头；玩家二（渡）银色短发、一米八多、薄肌、二十多岁。**禁止预设玩家一/二的性格与穿搭**。
-**任务者 NPC 规则**：这些 NPC 是与玩家同批进入副本、完成任务后会回主神空间结算奖励的“任务者”，通常有自己的名字；他们默认**不认同副本内分配身份**，副本身份只是临时伪装或场景壳。
+**任务者 NPC 规则**：这些 NPC 是与玩家同批进入副本、完成任务后会回主神空间结算奖励的“任务者”，通常有自己的名字；他们默认**不认同副本内分配身份**，副本身份只是临时伪装或场景壳。NPC 不做复杂关系值；最小字段是公开态度/真实立场/当前意图/使坏概率或触发条件/存活状态。坏立场 NPC 可以抢资源、误导、关门、嫁祸或触发危险，但不能无因果直接杀玩家。
 **难度匹配规则**：随机开局时副本难度必须参考玩家当前成长（等级/阶位）。默认两名玩家都是新人（Lv1、D 阶），应优先 D/C；随玩家升级才逐步出现更高难度，不可开局就长期给 A/S。
-须给出 **initial_stats**：按默认新人规则，等级 1、阶位 D、经验 0、体力 10、智慧 10、HP/SAN 180/180、主神积分 100、血统「凡人」、能力/武器/状态为空；可给少量初始道具。体力/智慧后续由规则引擎重算上限，开局不要乱改。
+须给出 **initial_stats**：按默认新人规则，等级 1、阶位 D、经验 0、六基础属性 `str/con/agi/int/spi/luk=10`、`spi_current=10`、HP/SAN 180/180、主神积分 100、进化「凡人」、能力/装备/状态为空；可给少量初始道具。数值后续由规则引擎重算，开局不要乱改。
+必须先生成 `instance_blueprint` 和 `encounter_profile`，再生成 opening；副本被选中后，后端会缓存 runtime_state。DS/GM 不是状态事实源，不能每轮重写任务、线索、背包、奖励或精确数值。
 opening 建议包含传送/白光/提示音/主神刻板广播之一切入副本场景，但不要冗长。"""
 
 
 _CANDIDATES_SYSTEM = """你在为一款「无限流」App 文字跑团生成**副本候选设定池**。
 这些只是大厅里供玩家挑选的轻量设定，不是完整副本框架；不要写 opening、NPC 名单、玩家属性或完整通关细节。
 每条候选要足够能勾起兴趣：有副本名、类型、难度、核心场景、通关方向、危险钩子和一个未展开的悬念。
-整体世界观：主神空间会一次投放多个候选，玩家选中某一条后，系统再把它扩展成完整副本。"""
+整体世界观：主神空间会一次投放多个候选，玩家选中某一条后，系统再把它扩展成完整副本，并由后端缓存蓝图、怪物生态和 runtime_state。"""
 
 
 _DU_ACTION_SYSTEM = """你是渡。你正在和辛玥一起玩 App 里的「文游 / 无限流跑团」。
@@ -136,66 +137,51 @@ _GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统*
 {blueprint_block}
 
 ## 主神空间 · 积分 · 系统商店 · 成长 · 生死与回程（叙事规则）
-- **主神积分**：用于复活、治疗、**系统商店**购物与强化；精确数值最终以后端规则引擎为准。当前兼容面板只同步系统记录，除非本轮叙事明确触发消耗、伤害、奖励或结算，不要随意改精确数值。
-- **系统商店**只在 `hub` 或 `settlement` 阶段开放。副本进行中不能购买系统商店物品，只能使用背包已有物品，或通过剧情获得临时物品。
-- **结构化能力**：每名玩家有 **abilities**（技能/被动/血统技等），须在【主神面板】用固定格式列出（名称｜简述）；获得、升级、封印或失去能力时**整行替换**为当前完整列表，与剧情一致，便于程序解析、避免状态漂移。
-- **玩家等级与阶位**：每名玩家有 **等级（Lv）**，等级越高综合越强（伤害豁免、判定加值等由叙事体现）；另有 **阶位 D～S**（D 最低、S 最高），可与血统强化、主神评价挂钩。副本结算可发经验、升级或阶位提升契机，**必须**在【主神面板】中更新。
-- **死亡与复活**：若玩家角色死亡或判定出局，须给出主神选项感：可用**积分复活**（扣多少在面板中写明，可与难度挂钩），或消耗**指定道具**复活/续命；不得无故满血无代价复活。
-- **副本结束**：当副本以通关、失败或强制结算等方式**结束**时，须描写**白光/传送**回到**主神空间**（场地切到主神空间）；之后可逛**系统商店**、治疗、整备再接下一副本。
+- 后端 runtime state 是唯一事实源。你负责叙事、环境反馈、NPC 表演和事件意图，不直接判定精确 HP/SAN/积分/EXP/抽卡/掉落/晋升。
+- **主神积分**：用于复活、治疗、系统商店购物、抽卡与强化；精确数值以后端规则引擎为准。副本进行中不要临场发积分、扣积分或发抽卡资源。
+- **系统商店**只在 `hub` 或 `settlement` 阶段开放。副本进行中不能购买系统商店物品，只能使用背包已有物品，或通过剧情获得临时/副本专属物。
+- **能力、装备、进化、属性和阶位**由后端维护；你可以在 `state_proposals` 建议“发现能力线索/触发封印/获得临时物”，但不能直接写成永久到账。
+- **死亡与复活**：若玩家角色死亡或判定出局，只描述死亡/濒死/撤离意图；复活价格、债务、状态和是否触发惩罚副本由后端结算。
+- **副本结束**：当副本以通关、失败或强制结算等方式结束时，可描写白光/传送回到主神空间；通关评级只看真实玩家角色/玩家队伍，NPC 任务者不参与玩家评级，除非 NPC 相关目标已写入玩家支线/隐藏支线/隐藏结局/特殊成就。
 - **主神空间内**：它是纯功能区，以休整、商店、治疗、兑换、抽卡、强化、接下一副本为主；不要发展长期 hub 剧情或 NPC 日常线。
 
-## 当前系统记录的状态（你必须在回复末尾用【主神面板】更新，与剧情一致）
+## 当前后端缓存状态摘要（只读，不要重写成面板）
 {current_stats_block}
 
 ## 无限流玩法（叙事层）
 - 每个故事都是**一次副本**；关键节点可有一两句 **【主神提示】**，平时克制。
 - **任务者编制**：本局 `tasker_total` 和 NPC 名单以副本框架为准，不固定 6 人。NPC 须在剧中可追溯（可退场或死亡，须有因果），不得无交代消失。
-- 可埋伏线：规则类陷阱、NPC 互害、时间压力等。
-- **副本结算**须符合因果；bad end 亦同。
+- NPC 不做关系值系统；只按公开态度、真实立场、当前意图、使坏触发和存活状态行动。坏 NPC 可以阴人，但不能无因果直接致死玩家。
+- 可埋伏线：规则类陷阱、NPC 误导/互害、时间压力等。
+- **副本结算**须符合因果；bad end 亦同。NPC 的存活/死亡/逃脱只作为副本事实记录，不自动影响玩家评级。
 
 ## 你的职责
-- 描述环境、NPC、主神播报、事件结果；根据两位玩家行动推进；收到结算信号后做**本轮**推进。
-- 你只输出本轮事件意图，不直接裁定精确 HP/SAN/积分/等级变化；后端 Rules Engine 会根据风险、难度、属性和阶位计算 `state_patch`。
+- 描述环境、NPC、主神播报、事件结果；根据玩家行动推进；收到结算信号后做**本轮**推进。
+- 每轮只输出剧情、事件意图和状态建议；后端 Rules Engine 会根据风险、难度、属性、阶位和 runtime_state 计算 `state_patch`。
+- 不要每轮重写完整任务、线索、背包、状态、奖励或主神面板。
 
 ## 【事件意图】固定格式（每轮必须先输出，随后再写叙事）
 【事件意图】
-{{"event":"short_event_id","risk":"safe/minor/risky/dangerous/desperate/lethal","targets":["player1"],"tags":["physical/mental/rule_pollution/mixed/clue/npc_relation/time/resource"],"action_state":"prepared/normal/reckless/forced","fiction":"一句说明触发了什么","conditions_add":[],"conditions_remove":[],"clock_updates":[{{"id":"clock_id","name":"威胁名","delta":1,"max":6}}]}}
+{{"event":"short_event_id","risk":"safe/minor/risky/dangerous/desperate/lethal","targets":["player1"],"tags":["physical/mental/rule_pollution/mixed/clue/npc_relation/time/resource"],"action_state":"prepared/normal/reckless/forced","fiction":"一句说明触发了什么","conditions_add":[],"conditions_remove":[],"clock_updates":[{{"id":"clock_id","name":"威胁名","delta":1,"max":6,"visibility":"hidden"}}],"rule_updates":[],"clue_updates":[],"task_update":"","state_proposals":[{{"type":"discover_clue/task_update/location_update/npc_update/monster_update/clock_delta/acquire_item/acquire_task_item/acquire_unique_item","id":"object_id_or_item_name","visibility":"public/hidden","reason":"为什么建议更新"}}]}}
 
 规则：
 - `risk` 只表达风险等级，不写精确扣血/扣精神数字。
 - `targets` 只允许 `player1`、`player2` 或 `all`；不确定时优先写实际承受后果的人。
 - `tags` 必须至少写一个。纯身体伤害写 `physical`，精神/污染写 `mental` 或 `rule_pollution`，两者都有写 `mixed`。
 - 没有伤害也要输出 `safe`，可用 `clue`、`npc_relation`、`time`、`resource` 表示剧情推进方向。
+- `rule_updates`、`clue_updates`、`task_update` 和 `state_proposals` 都只是建议；最终是否写入任务、线索、NPC、怪物、地点或威胁时钟由后端判断。
+- 局内获得**任务物品/副本内临时物**时，用 `acquire_task_item`，写清 `name/rarity/effect/reason`；这类物品可很强、不受副本等级上限限制，但默认 `carry_out=false`，离开副本不带走。
+- 局内获得**可带出通用物品**时，才用 `acquire_item`，`id` 必须是内容表 item_id 或精确物品名；能否入背包、是否封印、数量和稀有度上限由后端判断。
+- 极特殊的隐藏好结局奖励（例如 Boss 被感化/超度后留下的祝福、信物、赐福）用 `acquire_unique_item`；必须写 `name/rarity/effect/reason`，并写 `seal_rank` 或 `requirements`（如 `{{"level_min":10}}`、`{{"spi_min":18}}`、`{{"int_min":16}}`）。这类物品可高等级、可带走，但默认按门槛封印，不能当普通掉落刷。
+- 威胁时钟精确值默认隐藏；叙事中只写“危险升高/接近清算”等模糊提示。
 - 【事件意图】是给后端看的，不要在叙事里解释 JSON。
 
 ## 回复规范
-- 先输出【事件意图】JSON，再写叙事。叙事约 150-300 字，有画面感；在【主神面板】**之前**，按**副本类型**附上对应**备忘**（见上「本类型玩法要点」）；其中 **规则怪谈** 类**每轮不可省略**【规则备忘】。
+- 先输出【事件意图】JSON，再写叙事。叙事约 150-300 字，有画面感。
 - 叙事之后列出 2-3 个行动选项，最后一个固定为「C. 自由行动」。
-- **最后**必须附 **【主神面板】**（见下，不可省略）；备忘块始终在【主神面板】**上方**，便于玩家对照。
-
-## 【主神面板】固定格式（每次回复末尾必须原样包含，一行一项，便于系统解析）
-【主神面板】
-场地：副本 或 主神空间
-积分：整数
-玩家一 HP 当前/最大 精神 当前/最大
-玩家一等级：正整数
-玩家一经验：非负整数
-玩家一阶位：D、C、B、A、S 之一
-玩家一体力：正整数（关联生命上限为主）
-玩家一智慧：正整数（关联精神上限为主）
-玩家一血统：简短名称（含强化说明亦可）
-玩家一能力：无 或 名称｜一句效果；名称｜一句效果（多条用中文分号「；」分隔，**整行一行**，勿换行）
-玩家二 HP 当前/最大 精神 当前/最大
-玩家二等级：正整数
-玩家二经验：非负整数
-玩家二阶位：D、C、B、A、S 之一
-玩家二体力：正整数
-玩家二智慧：正整数
-玩家二血统：简短名称
-玩家二能力：无 或 名称｜一句效果；名称｜一句效果（格式同玩家一）
-道具：无 或 道具名用顿号分隔
-
-说明：场地为「主神空间」时表示已回到主神空间；购物、强化血统、加体力/智慧、治疗、升级与阶位变化、**能力增删改**，均须体现在面板与积分中；能力行必须与当前剧情一致（整行即完整能力列表）。普通副本行动里的 HP/SAN 精确变化由后端 Rules Engine 按【事件意图】计算，面板可保持系统记录，不要自行编扣减数字。
+- 不输出完整【主神面板】；前端会从后端缓存状态读取任务、线索、背包、状态和奖励。
+- 若旧兼容链路强制要求你输出【主神面板】，只能按“当前后端缓存状态摘要”原样保守复述，不要新增任务、线索、背包、能力、积分、EXP 或精确 HP/SAN 变化。
+- 不要把 `state_proposals` 里的隐藏线索、隐藏结局、NPC 真实立场或精确威胁时钟写给玩家。
 
 ## 严格禁止
 - 不得替玩家做决定，不得描写玩家角色的具体行动、表情、内心独白
@@ -329,34 +315,36 @@ def _framework_prompt_random(seeds: dict) -> str:
   "player2_instance_name": "可选：副本内身份名；仅角色扮演副本或用户明确要求时填写",
   "player2_role": "渡在本副本中的身份 + 外貌特征（简短；默认不写性格与秘密）",
   "npc_taskers": [
-    {{"name": "任务者 NPC 本名", "instance_name": "可选：副本内身份名（角色扮演副本才建议填）", "tier_note": "内部难度定位字段（仅供系统，不可在叙事里直给玩家）", "stance": "未知（玩家不可知；勿直给善恶）", "blurb": "一句话外貌或公开可见特征；可写其不认同副本身份"}}
+    {{"name": "任务者 NPC 本名", "instance_name": "可选：副本内身份名（角色扮演副本才建议填）", "tier_note": "内部难度定位字段（仅供系统，不可在叙事里直给玩家）", "stance": "公开态度：立场未明/表面合作/冷淡观望/敌意不明", "intent": "公开短期意图，不写真实阴谋", "trouble_chance": "0-100 的整数，公开字段默认 0 或低值", "status": "alive", "blurb": "一句话外貌或公开可见特征；可写其不认同副本身份"}}
   ],
   "conflict": "主神发布的核心任务 / 通关条件 1-3 句，可略带残酷或幽默感",
   "failure_hint": "失败、抹杀或惩罚方向的**一句**提示（虚构，勿过度血腥）",
   "reward_hint": "通关后可能获得的奖励风味一句（如积分、线索、豁免；可不写具体数字）",
   "public": {{"instance_name": "公开副本名", "genre": ["类型"], "difficulty": "D/C/B/A/S", "visible_rules": [], "public_task": "玩家公开可见任务"}},
-  "gm_secret": {{"true_rules": [], "false_rules": [], "npc_goals": {{}}, "hidden_endings": []}},
+  "gm_secret": {{"true_rules": [], "false_rules": [], "npc_private_state": {{"npc_name": {{"stance": "good/neutral/bad/unknown", "intent": "真实短期意图", "trouble_chance": 0, "trigger": "何时使坏或合作"}}}}, "hidden_endings": []}},
   "instance_blueprint": {{
     "blueprint_version": 1,
     "logline": "一句话核心矛盾",
     "mainline": [{{"phase": "开场", "goal": "确认任务与第一处异常", "required_clues": [], "fail_forward": "错过线索时以更高代价推进"}}],
     "side_quests": [],
+    "hidden_side_quests": [],
     "hidden_endings": [],
     "clue_graph": [],
     "npc_arcs": {{}},
     "threat_clocks": [],
     "hard_constraints": ["每条主线关键线索至少保留替代获得方式", "NPC 可误导但不能无因果直接致死玩家"]
   }},
+  "encounter_profile": {{"common": [], "elite": [], "boss": {{}}, "spawn_rules": [], "balance_notes": "怪物生态简表；Boss 默认不可正面战胜"}},
     "initial_stats": {{
     "points": 100,
-    "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "level": 1, "rank": "D", "exp": 0, "vit": 10, "wis": 10, "bloodline": "凡人", "abilities": [], "weapons": [], "conditions": []}},
-    "player2": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "level": 1, "rank": "D", "exp": 0, "vit": 10, "wis": 10, "bloodline": "凡人", "abilities": [], "weapons": [], "conditions": []}},
+    "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "evolution": "凡人", "abilities": [], "gear": [], "conditions": []}},
+    "player2": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "evolution": "凡人", "abilities": [], "gear": [], "conditions": []}},
     "items": ["可选：与副本相关的消耗品或线索道具，无则 []"]
   }},
   "opening": "开场 4-8 句：建议含传送/白光/提示音/主神刻板广播之一；若本局存在 NPC，必须出现同场任务者的登场感或存在感，再进入场景，有画面感"
 }}
 
-**编制硬性规则**：`tasker_total` 必须为 2-13；当前默认 2 名玩家角色，因此 `npc_taskers` 数量必须等于 `tasker_total - 2`。NPC 的善恶与立场对玩家默认不可知，勿在框架里直给结论；“新人/炮灰/大佬”等仅作为系统内部定位，不可直接告诉玩家。**instance_genre** 须与 `world`、`conflict` 一致；必须先写 `instance_blueprint`，再写 opening；**initial_stats** 须含主神积分、双方 HP/精神、**等级与阶位（D～S）、经验、体力与智慧、血统名称**、**双方 abilities 数组（元素为 name/desc，可无项）**、weapons、conditions 与背包（可为空数组）。
+**编制硬性规则**：`tasker_total` 必须为 2-13；当前 App 默认 2 名玩家角色，因此本次 `npc_taskers` 数量必须等于 `tasker_total - 2`，但不要把“2 玩家”写成开源规则。NPC 公开态度不能直给真实善恶；真实 `stance/intent/trouble_chance` 写入 `gm_secret.npc_private_state`。“新人/炮灰/大佬”等仅作为系统内部定位，不可直接告诉玩家。**instance_genre** 须与 `world`、`conflict` 一致；必须先写 `instance_blueprint` 和 `encounter_profile`，再写 opening；**initial_stats** 须含主神积分、双方 HP/SAN、当前精神力、**等级与阶位（D～S）、经验、六基础属性、进化名称**、**双方 abilities 数组（元素为 name/desc，可无项）**、gear、conditions 与背包（可为空数组）。
 
 随机种子（融入副本，不必照抄字面）：
 - 建议难度：{seeds.get("difficulty", "C")}
@@ -386,34 +374,36 @@ def _framework_prompt_custom(keywords: str) -> str:
   "player2_instance_name": "可选：副本内身份名；仅角色扮演副本或用户明确要求时填写",
   "player2_role": "渡在本副本中的身份（外貌固定：银色短发、一米八多、薄肌、二十多岁；默认不写性格与穿搭）",
   "npc_taskers": [
-    {{"name": "任务者本名", "instance_name": "可选：副本内身份名（角色扮演副本才建议填）", "tier_note": "内部定位，不对玩家直给", "stance": "未知", "blurb": "外貌或公开可见特征；可写其不认同副本身份"}}
+    {{"name": "任务者本名", "instance_name": "可选：副本内身份名（角色扮演副本才建议填）", "tier_note": "内部定位，不对玩家直给", "stance": "公开态度：立场未明/表面合作/冷淡观望/敌意不明", "intent": "公开短期意图，不写真实阴谋", "trouble_chance": "0-100 的整数，公开字段默认 0 或低值", "status": "alive", "blurb": "外貌或公开可见特征；可写其不认同副本身份"}}
   ],
   "conflict": "主神核心任务 / 通关条件 1-3 句",
   "failure_hint": "失败或惩罚方向一句（虚构，勿过度血腥）",
   "reward_hint": "通关奖励风味一句（可不写具体数字）",
   "public": {{"instance_name": "公开副本名", "genre": ["类型"], "difficulty": "D/C/B/A/S", "visible_rules": [], "public_task": "玩家公开可见任务"}},
-  "gm_secret": {{"true_rules": [], "false_rules": [], "npc_goals": {{}}, "hidden_endings": []}},
+  "gm_secret": {{"true_rules": [], "false_rules": [], "npc_private_state": {{"npc_name": {{"stance": "good/neutral/bad/unknown", "intent": "真实短期意图", "trouble_chance": 0, "trigger": "何时使坏或合作"}}}}, "hidden_endings": []}},
   "instance_blueprint": {{
     "blueprint_version": 1,
     "logline": "一句话核心矛盾",
     "mainline": [{{"phase": "开场", "goal": "确认任务与第一处异常", "required_clues": [], "fail_forward": "错过线索时以更高代价推进"}}],
     "side_quests": [],
+    "hidden_side_quests": [],
     "hidden_endings": [],
     "clue_graph": [],
     "npc_arcs": {{}},
     "threat_clocks": [],
     "hard_constraints": ["每条主线关键线索至少保留替代获得方式", "NPC 可误导但不能无因果直接致死玩家"]
   }},
+  "encounter_profile": {{"common": [], "elite": [], "boss": {{}}, "spawn_rules": [], "balance_notes": "怪物生态简表；Boss 默认不可正面战胜"}},
   "initial_stats": {{
     "points": 100,
-  "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "level": 1, "rank": "D", "exp": 0, "vit": 10, "wis": 10, "bloodline": "凡人", "abilities": [], "weapons": [], "conditions": []}},
-  "player2": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "level": 1, "rank": "D", "exp": 0, "vit": 10, "wis": 10, "bloodline": "凡人", "abilities": [], "weapons": [], "conditions": []}},
+  "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "evolution": "凡人", "abilities": [], "gear": [], "conditions": []}},
+  "player2": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "evolution": "凡人", "abilities": [], "gear": [], "conditions": []}},
     "items": []
   }},
   "opening": "开场 4-8 句，建议含主神传送或播报感；若本局存在 NPC，须体现同场任务者"
 }}
 
-**编制**：`tasker_total` 必须为 2-13；当前默认 2 名玩家角色，`npc_taskers` 数量必须等于 `tasker_total - 2`。任务者使用自身身体进入副本；NPC 的立场与善恶对玩家默认不可知，且“新人/炮灰/大佬”等定位不可在叙事中直给。须带 **instance_genre**、**genre_note**、`public`、`gm_secret`、`instance_blueprint` 与 **initial_stats**（含等级、阶位 D～S、经验、体力、智慧、血统、**abilities**、weapons、conditions）。
+**编制**：`tasker_total` 必须为 2-13；当前 App 默认 2 名玩家角色，`npc_taskers` 数量必须等于 `tasker_total - 2`，但不要把“2 玩家”写成开源规则。任务者使用自身身体进入副本；NPC 公开态度不能直给真实善恶，真实 `stance/intent/trouble_chance` 写入 `gm_secret.npc_private_state`。须带 **instance_genre**、**genre_note**、`public`、`gm_secret`、`instance_blueprint`、`encounter_profile` 与 **initial_stats**（含等级、阶位 D～S、经验、六基础属性、当前精神力、进化、**abilities**、gear、conditions）。
 
 关键词：{keywords}
 
@@ -466,7 +456,38 @@ _WENYOU_RANK_MENTAL_REDUCTION = {"D": 0, "C": 2, "B": 5, "A": 9, "S": 15}
 _WENYOU_RANK_HP_BONUS = {"D": 0, "C": 20, "B": 45, "A": 80, "S": 130}
 _WENYOU_RANK_SAN_BONUS = {"D": 0, "C": 20, "B": 45, "A": 80, "S": 130}
 _WENYOU_RANK_SPI_BONUS = {"D": 0, "C": 2, "B": 5, "A": 9, "S": 15}
-_WENYOU_RANK_ATTRIBUTE_SOFT_CAP = {"D": 14, "C": 20, "B": 28, "A": 38, "S": 50}
+_WENYOU_RANK_ATTRIBUTE_SOFT_CAP = {"D": 14, "C": 18, "B": 24, "A": 32, "S": 42}
+_WENYOU_LEVEL_EXP_TABLE = {
+    1: 40,
+    2: 70,
+    3: 110,
+    4: 150,
+    5: 200,
+    6: 260,
+    7: 340,
+    8: 440,
+    9: 560,
+    10: 720,
+    11: 900,
+    12: 1100,
+    13: 1320,
+    14: 1560,
+    15: 1820,
+    16: 2100,
+    17: 2400,
+    18: 2730,
+    19: 3090,
+    20: 3480,
+    21: 3900,
+    22: 4350,
+    23: 4830,
+    24: 5340,
+    25: 5880,
+    26: 6450,
+    27: 7050,
+    28: 7680,
+    29: 8340,
+}
 _WENYOU_ATTRIBUTE_KEYS = ("str", "con", "agi", "int", "spi", "luk")
 _WENYOU_RANK_ORDER = ("D", "C", "B", "A", "S")
 _WENYOU_PROMOTION_RULES = {
@@ -476,6 +497,33 @@ _WENYOU_PROMOTION_RULES = {
     "S": {"from": "A", "level": 15, "cost": 2000, "clear": "S", "perfect": "A", "special_trial": True},
 }
 _WENYOU_REVIVE_BASE_COST = {"D": 200, "C": 500, "B": 1200, "A": 2600, "S": 6000}
+_WENYOU_GEAR_LEVEL_CAP = {"D": 3, "C": 5, "B": 7, "A": 9, "S": 12}
+_WENYOU_GEAR_BASE_BONUS = {"D": 2, "C": 6, "B": 11, "A": 19, "S": 32}
+_WENYOU_GEAR_LEVEL_GROWTH = {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5}
+_WENYOU_GEAR_FORGE_BONUS = {"D": 1, "C": 2, "B": 4, "A": 6, "S": 10}
+_WENYOU_GEAR_UPGRADE_BASE_COST = {"D": 40, "C": 90, "B": 180, "A": 360, "S": 800}
+_WENYOU_GEAR_FORGE_BASE_COST = {"D": 120, "C": 300, "B": 700, "A": 1600, "S": 4000}
+_WENYOU_GEAR_REPAIR_PRICE = {"D": 1, "C": 3, "B": 7, "A": 15, "S": 35}
+_WENYOU_GEAR_DEFAULT_DURABILITY = {"D": 30, "C": 40, "B": 55, "A": 70, "S": 90}
+_WENYOU_SELL_RATIO = {"D": 0.25, "C": 0.30, "B": 0.35, "A": 0.40, "S": 0.45}
+_WENYOU_ABILITY_SLOTS = {"D": 2, "C": 3, "B": 4, "A": 5, "S": 6}
+_WENYOU_ABILITY_UPGRADE_COST = {2: 120, 3: 300, 4: 700, 5: 1500}
+_WENYOU_EVOLUTION_COST = {
+    "D": {"points": 200, "fragments": 30, "level": 1, "rank": "D"},
+    "C": {"points": 500, "fragments": 90, "level": 3, "rank": "C"},
+    "B": {"points": 1200, "fragments": 300, "level": 6, "rank": "B"},
+    "A": {"points": 2800, "fragments": 900, "level": 10, "rank": "A"},
+    "S": {"points": 6500, "fragments": 3000, "level": 15, "rank": "S"},
+}
+_WENYOU_EVOLUTION_ROUTE_DEFAULTS = {
+    "human_stable": {"id": "human_stable", "name": "人类稳定", "tags": ["human", "stable"], "attrs": {"con": 1, "int": 1}, "hp_ratio": 0.5, "san_ratio": 0.5, "pollution": 0},
+    "night_shadow": {"id": "night_shadow", "name": "夜行/阴影", "tags": ["night", "shadow"], "attrs": {"agi": 1, "spi": 1}, "hp_ratio": 0.0, "san_ratio": 1.0, "pollution": 2},
+    "regen_beast": {"id": "regen_beast", "name": "再生/兽化", "tags": ["beast", "regeneration"], "attrs": {"str": 1, "con": 1}, "hp_ratio": 1.0, "san_ratio": 0.0, "pollution": 5},
+    "mechanical": {"id": "mechanical", "name": "机械/义体", "tags": ["machine", "repair"], "attrs": {"int": 1, "str": 1}, "hp_ratio": 1.0, "san_ratio": 0.0, "pollution": 1},
+    "pollution_resist": {"id": "pollution_resist", "name": "污染抗性", "tags": ["pollution_resist"], "attrs": {"spi": 2}, "hp_ratio": 0.0, "san_ratio": 1.0, "pollution": 5},
+    "mirror_gate": {"id": "mirror_gate", "name": "镜界/门径", "tags": ["mirror", "gate"], "attrs": {"luk": 1, "spi": 1}, "hp_ratio": 0.0, "san_ratio": 1.0, "pollution": 3},
+}
+_WENYOU_EVOLUTION_ROUTES = dict(_WENYOU_EVOLUTION_ROUTE_DEFAULTS)
 _WENYOU_ACTION_MODIFIER = {
     "prepared": 0.70,
     "normal": 1.00,
@@ -518,6 +566,8 @@ _WENYOU_REWARD_CATEGORY_RATES: dict[str, list[tuple[str, float]]] = {
     "A": [("consumable_item", 10.0), ("material", 22.0), ("gear", 25.0), ("ability_fragment", 20.0), ("evolution_fragment", 15.0), ("special", 8.0)],
     "S": [("consumable_item", 5.0), ("material", 15.0), ("gear", 30.0), ("ability_fragment", 20.0), ("evolution_fragment", 18.0), ("special", 12.0)],
 }
+_WENYOU_REWARD_TABLE_CONFIG: Optional[dict[str, Any]] = None
+_WENYOU_EVOLUTION_ROUTE_CONFIG: Optional[dict[str, dict[str, Any]]] = None
 _WENYOU_REWARD_CATEGORY_LABELS = {
     "consumable_item": "消耗道具",
     "material": "锻造材料",
@@ -530,6 +580,141 @@ _WENYOU_REWARD_FRAGMENT_AMOUNTS = {
     "ability_fragment": {"D": 10, "C": 25, "B": 60, "A": 160, "S": 500},
     "evolution_fragment": {"D": 8, "C": 20, "B": 50, "A": 140, "S": 450},
 }
+_WENYOU_DEFAULT_ABILITIES = {
+    "quick_bandage": {"id": "quick_bandage", "name": "快速包扎", "rarity": "D", "slot_type": "active", "uses_per_instance": 1, "tags": ["heal"], "desc": "每副本 1 次，非战斗恢复 20 HP。"},
+    "steady_breath": {"id": "steady_breath", "name": "稳定呼吸", "rarity": "D", "slot_type": "active", "uses_per_instance": 1, "tags": ["mental"], "desc": "每副本 1 次，恢复 20 SAN。"},
+    "anomaly_intuition": {"id": "anomaly_intuition", "name": "异常直觉", "rarity": "D", "slot_type": "active", "uses_per_instance": 1, "tags": ["investigation"], "desc": "发现一个轻微异常，但不保证解释。"},
+    "danger_premonition": {"id": "danger_premonition", "name": "危险预感", "rarity": "C", "slot_type": "active", "uses_per_instance": 1, "tags": ["risk"], "desc": "危险事件前获得一次提示。"},
+    "short_tracking": {"id": "short_tracking", "name": "短距追踪", "rarity": "C", "slot_type": "active", "uses_per_instance": 1, "tags": ["tracking"], "desc": "标记目标，3 轮内追踪判定 +3。"},
+    "mental_anchor": {"id": "mental_anchor", "name": "精神锚点", "rarity": "C", "slot_type": "active", "uses_per_instance": 1, "tags": ["mental"], "desc": "抵消一次动摇。"},
+    "rule_probe": {"id": "rule_probe", "name": "规则试探", "rarity": "B", "slot_type": "active", "uses_per_instance": 1, "tags": ["rule", "investigation"], "desc": "验证一条低级规则，结果可能是真/假/不完整。"},
+    "shadow_hide": {"id": "shadow_hide", "name": "影中藏身", "rarity": "B", "slot_type": "active", "uses_per_instance": 1, "tags": ["stealth"], "desc": "潜伏行动风险降低一级。"},
+    "damage_shift": {"id": "damage_shift", "name": "伤害转移", "rarity": "B", "slot_type": "active", "uses_per_instance": 1, "tags": ["defense"], "desc": "将 50% HP 伤害转为 SAN 伤害。"},
+    "causal_rollback": {"id": "causal_rollback", "name": "因果回滚", "rarity": "A", "slot_type": "active", "uses_per_instance": 1, "tags": ["causal"], "desc": "撤销本轮一次非死亡后果，SAN -35。"},
+    "identity_disguise": {"id": "identity_disguise", "name": "身份伪装", "rarity": "A", "slot_type": "active", "uses_per_instance": 1, "tags": ["stealth"], "desc": "潜伏调查中伪装暴露度 -2。"},
+    "pollution_immunity": {"id": "pollution_immunity", "name": "污染豁免", "rarity": "A", "slot_type": "active", "uses_per_instance": 1, "tags": ["pollution"], "desc": "抵消一次 A 级以下精神污染。"},
+    "death_denial": {"id": "death_denial", "name": "拒绝一次死亡", "rarity": "S", "slot_type": "active", "uses_per_instance": 1, "cooldown_instances": 3, "tags": ["death"], "desc": "每 3 个副本 1 次，死亡时保留 1 HP，SAN 清零。"},
+    "minor_rule_rewrite": {"id": "minor_rule_rewrite", "name": "低级规则改写", "rarity": "S", "slot_type": "active", "uses_per_instance": 1, "tags": ["rule"], "desc": "改写一条低级公开规则，威胁时钟 +2。"},
+    "settlement_audit": {"id": "settlement_audit", "name": "强制结算复核", "rarity": "S", "slot_type": "active", "uses_per_instance": 1, "tags": ["settlement"], "desc": "结算时重算一次奖励或死亡判定，必须接受新结果。"},
+}
+
+
+def _normalize_ability_definition(raw: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    raw_id = str(raw.get("id") or raw.get("name") or "ability").strip().lower()
+    ability_id = re.sub(r"[^a-z0-9_\u4e00-\u9fff-]+", "_", raw_id).strip("_")[:80] or "ability"
+    name = str(raw.get("name") or "").strip()
+    if not ability_id or not name:
+        return None
+    uses = raw.get("uses") if isinstance(raw.get("uses"), dict) else {}
+    unlock = raw.get("unlock") if isinstance(raw.get("unlock"), dict) else {}
+    cost = raw.get("cost") if isinstance(raw.get("cost"), dict) else {}
+    rarity = str(raw.get("rarity") or unlock.get("rank_min") or "D").strip().upper()
+    if rarity not in {"D", "C", "B", "A", "S"}:
+        rarity = "D"
+    rank_min = str(unlock.get("rank_min") or raw.get("rank_min") or rarity).strip().upper()
+    if rank_min not in {"D", "C", "B", "A", "S"}:
+        rank_min = rarity
+    tags = raw.get("tags") if isinstance(raw.get("tags"), list) else []
+    return {
+        "id": ability_id,
+        "name": name[:80],
+        "rarity": rarity,
+        "slot_type": str(raw.get("slot_type") or "active").strip()[:40] or "active",
+        "uses_per_instance": max(1, int(raw.get("uses_per_instance") or uses.get("per_instance") or 1)),
+        "cooldown_instances": max(0, int(raw.get("cooldown_instances") or uses.get("cooldown_instances") or uses.get("cooldown") or 0)),
+        "max_level": max(1, int(raw.get("max_level") or 5)),
+        "rank_min": rank_min,
+        "fragment_cost": max(0, int(cost.get("ability_fragments") or raw.get("fragment_cost") or 0)),
+        "desc": str(raw.get("desc") or raw.get("description") or raw.get("effect") or "").strip()[:260],
+        "tags": [str(x).strip()[:40] for x in tags if str(x).strip()][:12],
+        "effect_json": raw.get("effect_json") if isinstance(raw.get("effect_json"), dict) else {},
+        "level_scaling": raw.get("level_scaling") if isinstance(raw.get("level_scaling"), list) else [],
+    }
+
+
+def _load_content_ability_catalog() -> dict[str, dict[str, Any]]:
+    path = Path(BASE_DIR) / "content" / "default" / "abilities.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        logger.warning("文游能力目录加载失败 path=%s err=%s", path, exc)
+        return {}
+    raw_items = data.get("abilities") if isinstance(data, dict) else data
+    if not isinstance(raw_items, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for raw in raw_items:
+        item = _normalize_ability_definition(raw)
+        if item:
+            out[str(item["id"])] = item
+    return out
+
+
+def _normalize_evolution_route_definition(raw: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    route_id = str(raw.get("id") or raw.get("name") or "").strip().lower()
+    route_id = re.sub(r"[^a-z0-9_\u4e00-\u9fff-]+", "_", route_id).strip("_")[:80]
+    name = str(raw.get("name") or "").strip()
+    if not route_id or not name:
+        return None
+    attrs_raw = raw.get("attrs") if isinstance(raw.get("attrs"), dict) else raw.get("attribute_bonus")
+    attrs: dict[str, int] = {}
+    if isinstance(attrs_raw, dict):
+        for key in _WENYOU_ATTRIBUTE_KEYS:
+            try:
+                value = int(attrs_raw.get(key) or 0)
+            except Exception:
+                value = 0
+            if value:
+                attrs[key] = max(-3, min(3, value))
+    tags = raw.get("tags") if isinstance(raw.get("tags"), list) else []
+    try:
+        hp_ratio = float(raw.get("hp_ratio") or raw.get("hp_bonus_ratio") or 0)
+    except Exception:
+        hp_ratio = 0.0
+    try:
+        san_ratio = float(raw.get("san_ratio") or raw.get("san_bonus_ratio") or 0)
+    except Exception:
+        san_ratio = 0.0
+    return {
+        "id": route_id,
+        "name": name[:80],
+        "tags": [str(x).strip()[:40] for x in tags if str(x).strip()][:12],
+        "attrs": attrs,
+        "hp_ratio": max(0.0, min(2.0, hp_ratio)),
+        "san_ratio": max(0.0, min(2.0, san_ratio)),
+        "pollution": max(0, min(30, int(raw.get("pollution") or raw.get("pollution_delta") or 0))),
+        "desc": str(raw.get("desc") or raw.get("description") or "").strip()[:220],
+    }
+
+
+def _load_content_evolution_routes() -> dict[str, dict[str, Any]]:
+    path = Path(BASE_DIR) / "content" / "default" / "evolution_paths.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        logger.warning("文游进化路径目录加载失败 path=%s err=%s", path, exc)
+        return {}
+    raw_items = data.get("routes") if isinstance(data, dict) else data
+    if not isinstance(raw_items, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for raw in raw_items:
+        item = _normalize_evolution_route_definition(raw)
+        if item:
+            out[str(item["id"])] = item
+    return out
+
+
+_WENYOU_ABILITY_CATALOG = {**_WENYOU_DEFAULT_ABILITIES, **_load_content_ability_catalog()}
+_WENYOU_EVOLUTION_ROUTES = {**_WENYOU_EVOLUTION_ROUTE_DEFAULTS, **_load_content_evolution_routes()}
 _WENYOU_RATING_LABELS = {
     "S": "S 完美",
     "A": "A 优秀",
@@ -606,26 +791,26 @@ def _format_genre_rules_for_gm(fw: dict) -> str:
     blocks: dict[str, str] = {
         "规则怪谈": (
             "- **规则怪谈**：环境中须有**条款式规则**、告示、广播或系统音；**部分规则可能为假**、**相互矛盾**或**诱导送死**，玩家须自行判断；NPC 与「官方」也可能误导。\n"
-            "- **【规则备忘】**（本类型**每轮必附**，且放在**【主神面板】之前**）：用 2～5 条列出**当前已知的规则要点**（可缩写原文），并标注「待验证」「疑似假」「已证真」等，**避免玩家忘记**。\n"
+            "- 不要每轮输出完整规则面板；若本轮确实发现/验证/推翻规则，把摘要写入【事件意图】的 `rule_updates` 或 `state_proposals`，由后端决定是否进入公开规则缓存。\n"
         ),
         "剧情解密": (
             "- **剧情解密**：以**线索、证言、机关、因果链**推进；避免无条件通关。\n"
-            "- **【线索备忘】**（每轮建议在【主神面板】之前**简短**）：列出当前已掌握关键线索或待解疑点 1～4 条。\n"
+            "- 不要每轮输出完整线索清单；若本轮发现、验证、矛盾或消耗线索，把摘要写入 `clue_updates` 或 `state_proposals`，由后端更新线索缓存。\n"
         ),
         "大逃杀": (
-            "- **大逃杀**：**缩圈、资源稀缺、淘汰或击杀威胁**构成压力；**【安全区·威胁备忘】**（每轮在【主神面板】之前**简短**）：安全区/倒计时/场上主要威胁。\n"
+            "- **大逃杀**：**缩圈、资源稀缺、淘汰或击杀威胁**构成压力；威胁变化写入 `clock_updates/state_proposals`，叙事只给模糊危险感，不暴露精确隐藏时钟。\n"
         ),
         "对抗": (
-            "- **对抗**：**阵营目标、互害、结盟与背叛**；**【阵营备忘】**（每轮【主神面板】之前**简短**）：已知阵营与当前目标。\n"
+            "- **对抗**：**阵营目标、互害、结盟与背叛**；NPC 使坏要有立场、压力或触发条件，不直接致死玩家，也不把 NPC 真实立场写给玩家。\n"
         ),
         "生存撤离": (
-            "- **生存撤离**：**物资、环境伤害、向撤离点推进**；**【撤离·物资备忘】**（每轮【主神面板】之前**简短**）：撤离点、物资、环境威胁。\n"
+            "- **生存撤离**：**物资、环境伤害、向撤离点推进**；临时物资和撤离条件只能作为状态建议，能否带出副本由后端结算。\n"
         ),
         "潜伏调查": (
-            "- **潜伏调查**：**身份伪装、套取情报、搜查**；**【身份·嫌疑备忘】**（每轮【主神面板】之前**简短**）：当前怀疑对象与已暴露信息。\n"
+            "- **潜伏调查**：**身份伪装、套取情报、搜查**；暴露、身份和嫌疑变化写入事件意图，不输出完整嫌疑面板。\n"
         ),
         "限时任务": (
-            "- **限时任务**：**硬性时限或阶段倒计时**；**【时限备忘】**（每轮【主神面板】之前**一行**）：剩余时间或阶段。\n"
+            "- **限时任务**：**硬性时限或阶段倒计时**；倒计时精确值默认隐藏，公开提示只写阶段感，精确推进写入 `clock_updates`。\n"
         ),
     }
     body = blocks.get(g, blocks["剧情解密"])
@@ -662,6 +847,7 @@ def _default_player_stats() -> dict:
         "bloodline": "凡人",
         "abilities": [],
         "ability_tokens": 0,
+        "growth_milestone_tokens": 0,
         "unspent_attribute_points": 0,
         "gear": [],
         "weapons": [],
@@ -776,6 +962,7 @@ def _normalize_instance_blueprint(raw: Any, fw: Optional[dict] = None) -> dict:
         "logline": str(data.get("logline") or conflict or name).strip()[:240],
         "mainline": _normalize_blueprint_list(data.get("mainline"), 8),
         "side_quests": _normalize_blueprint_list(data.get("side_quests"), 8),
+        "hidden_side_quests": _normalize_blueprint_list(data.get("hidden_side_quests"), 8),
         "hidden_endings": _normalize_blueprint_list(data.get("hidden_endings"), 8),
         "clue_graph": _normalize_blueprint_list(data.get("clue_graph"), 16),
         "npc_arcs": data.get("npc_arcs") if isinstance(data.get("npc_arcs"), dict) else {},
@@ -823,9 +1010,22 @@ def _normalize_public_secret(raw: dict, fw: dict) -> tuple[dict, dict]:
         "true_rules": _normalize_text_list(secret.get("true_rules"), 180, 20),
         "false_rules": _normalize_text_list(secret.get("false_rules"), 180, 20),
         "npc_goals": secret.get("npc_goals") if isinstance(secret.get("npc_goals"), dict) else {},
+        "npc_private_state": secret.get("npc_private_state") if isinstance(secret.get("npc_private_state"), dict) else {},
         "hidden_endings": _normalize_blueprint_list(secret.get("hidden_endings"), 10),
     }
     return clean_public, clean_secret
+
+
+def _normalize_encounter_profile(raw: Any) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    boss = data.get("boss") if isinstance(data.get("boss"), dict) else {}
+    return {
+        "common": _normalize_blueprint_list(data.get("common"), 8),
+        "elite": _normalize_blueprint_list(data.get("elite"), 4),
+        "boss": boss,
+        "spawn_rules": _normalize_blueprint_list(data.get("spawn_rules"), 12),
+        "balance_notes": str(data.get("balance_notes") or "").strip()[:500],
+    }
 
 
 def _format_abilities_for_prompt(p: dict) -> str:
@@ -946,6 +1146,9 @@ def _normalize_npc_taskers(raw: dict, tasker_total: Optional[int] = None, player
                     "instance_name": str(d.get("instance_name") or d.get("alias_name") or "")[:48].strip(),
                     "tier_note": str(d.get("tier_note") or "未知")[:32].strip(),
                     "stance": str(d.get("stance") or "立场未明")[:48].strip(),
+                    "intent": str(d.get("intent") or "")[:80].strip(),
+                    "trouble_chance": max(0, min(100, _to_non_negative_int(d.get("trouble_chance"), 0))),
+                    "status": str(d.get("status") or "alive")[:24].strip() or "alive",
                     "blurb": str(d.get("blurb") or "")[:200].strip(),
                 }
             )
@@ -956,6 +1159,9 @@ def _normalize_npc_taskers(raw: dict, tasker_total: Optional[int] = None, player
                     "instance_name": "",
                     "tier_note": "待定",
                     "stance": "立场未明",
+                    "intent": "",
+                    "trouble_chance": 0,
+                    "status": "alive",
                     "blurb": "主神档案尚未同步",
                 }
             )
@@ -1007,8 +1213,10 @@ def _format_tasker_regiment_for_gm(fw: dict) -> str:
     for i, n in enumerate(fw.get("npc_taskers") or []):
         if isinstance(n, dict):
             nshow = _show_name(n.get("name", ""), n.get("instance_name", ""))
+            status = n.get("status") or "alive"
+            intent = n.get("intent") or "未公开"
             lines.append(
-                f"  · {i+1}. 「{nshow}」｜{n.get('tier_note', '')}｜公开信息：{n.get('blurb', '')}（立场：{n.get('stance', '未知')}）"
+                f"  · {i+1}. 「{nshow}」｜{n.get('tier_note', '')}｜公开信息：{n.get('blurb', '')}（公开态度：{n.get('stance', '未知')}；状态：{status}；意图：{intent}）"
             )
     return "\n".join(lines)
 
@@ -1022,8 +1230,10 @@ def _format_blueprint_for_gm(fw: dict) -> str:
             "true_rules": secret.get("true_rules") or [],
             "false_rules": secret.get("false_rules") or [],
             "npc_goals": secret.get("npc_goals") or {},
+            "npc_private_state": secret.get("npc_private_state") or {},
             "hidden_endings": secret.get("hidden_endings") or [],
         },
+        "encounter_profile": _normalize_encounter_profile(fw.get("encounter_profile")),
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))[:4000]
 
@@ -1061,6 +1271,7 @@ def _normalize_framework(raw: dict) -> dict:
         "player_count": player_count,
         "tasker_total": tasker_total,
         "npc_taskers": _normalize_npc_taskers(raw, tasker_total, player_count),
+        "encounter_profile": _normalize_encounter_profile(raw.get("encounter_profile")),
         "initial_stats": _normalize_initial_stats(raw),
     }
     public, gm_secret = _normalize_public_secret(raw, out)
@@ -1279,6 +1490,42 @@ def _strip_main_god_panel(text: str) -> str:
     return _strip_event_intent_block(body).strip()
 
 
+def _strip_player_brief_blocks(text: str) -> str:
+    """去掉给面板/线索板读取的备忘块，避免挤进主叙事。"""
+    headings = (
+        "规则备忘",
+        "线索备忘",
+        "安全区·威胁备忘",
+        "阵营备忘",
+        "撤离·物资备忘",
+        "身份·嫌疑备忘",
+        "时限备忘",
+    )
+    lines = str(text or "").splitlines()
+    out: list[str] = []
+    skipping = False
+    for raw in lines:
+        line = raw.strip()
+        if any(f"【{heading}】" in line for heading in headings):
+            skipping = True
+            continue
+        if skipping:
+            if not line:
+                continue
+            if re.match(r"^[-*·\d一二三四五六七八九十]+[、.．:：]\s*", line):
+                continue
+            if line.startswith(("规则", "线索", "注", "来源", "（来源", "【待验证】", "【疑似", "【已证")):
+                continue
+            if any(mark in line for mark in ("【待验证】", "【疑似假】", "【已证真】", "待验证", "疑似假", "已证真")) and any(k in line for k in ("规则", "线索", "来源", "注")):
+                continue
+            skipping = False
+        out.append(raw)
+    cleaned = "\n".join(out)
+    cleaned = re.sub(r"(?m)^\s*[—\-]+\s*主神系统\s*[—\-]+\s*$", "", cleaned)
+    cleaned = re.sub(r"(?m)^\s*-{3,}\s*$", "", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
 def _parse_player_panel_block(block: str, label: str) -> dict:
     """解析【主神面板】中某一玩家的字段（可部分出现）。"""
     out: dict[str, Any] = {}
@@ -1423,7 +1670,58 @@ def _normalize_event_intent(raw: Any) -> Optional[dict]:
         "conditions_add": _normalize_text_list(raw.get("conditions_add"), 40, 8),
         "conditions_remove": _normalize_text_list(raw.get("conditions_remove"), 40, 8),
         "clock_updates": _normalize_clock_updates(raw.get("clock_updates")),
+        "rule_updates": _normalize_text_list(raw.get("rule_updates") or raw.get("rules"), 180, 8),
+        "clue_updates": _normalize_text_list(raw.get("clue_updates") or raw.get("clues"), 180, 8),
+        "task_update": _compact_text(raw.get("task_update") or raw.get("progress_update"), 220),
+        "state_proposals": _normalize_state_proposals(raw.get("state_proposals")),
     }
+
+
+def _normalize_state_proposals(raw: Any) -> list[dict]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    allowed_types = {
+        "discover_clue",
+        "verify_clue",
+        "task_update",
+        "location_update",
+        "npc_update",
+        "monster_update",
+        "rule_violation",
+        "violate_rule",
+        "clock_delta",
+        "settlement_flag",
+        "acquire_item",
+        "acquire_task_item",
+        "acquire_unique_item",
+    }
+    for item in raw[:12]:
+        if not isinstance(item, dict):
+            continue
+        ptype = str(item.get("type") or "").strip()
+        if ptype not in allowed_types:
+            ptype = "task_update" if "task" in ptype else "discover_clue"
+        visibility = str(item.get("visibility") or "hidden").strip().lower()
+        if visibility not in {"public", "hidden"}:
+            visibility = "hidden"
+        out.append(
+            {
+                "type": ptype,
+                "id": _compact_text(item.get("id") or item.get("name"), 80),
+                "name": _compact_text(item.get("name"), 80),
+                "rarity": _normalize_difficulty(item.get("rarity") or "D"),
+                "category": _compact_text(item.get("category"), 40),
+                "effect": _compact_text(item.get("effect") or item.get("desc") or item.get("description"), 240),
+                "carry_out": bool(item.get("carry_out")) if "carry_out" in item else None,
+                "seal_rank": _normalize_difficulty(item.get("seal_rank")) if item.get("seal_rank") else None,
+                "requirements": item.get("requirements") if isinstance(item.get("requirements"), dict) else {},
+                "visibility": visibility,
+                "reason": _compact_text(item.get("reason"), 180),
+                "quantity": max(1, min(3, _to_non_negative_int(item.get("quantity") or item.get("qty"), 1))),
+            }
+        )
+    return out
 
 
 def _normalize_clock_updates(raw: Any) -> list[dict]:
@@ -1528,6 +1826,379 @@ def _apply_clock_updates(session: dict, updates: list[dict]) -> list[dict]:
     return results
 
 
+def _rules_mapping(raw: Any, prefix: str) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    if isinstance(raw, dict):
+        items = raw.values()
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        key = _slug_id(item.get("id") or item.get("name") or item.get("title") or f"{prefix}_{idx + 1}", f"{prefix}_{idx + 1}")
+        cur = dict(item)
+        cur["id"] = key
+        out[key] = cur
+    return out
+
+
+def _infer_progress_status(text: Any, fallback: str = "active") -> str:
+    body = _compact_text(text, 260)
+    if re.search(r"(失败|错过|失效|死亡|团灭|崩坏)", body):
+        return "failed"
+    if re.search(r"(完成|达成|通关|验证成功|已验证|解决|封印|撤离成功|结算)", body):
+        return "completed"
+    if re.search(r"(隐藏|暗线)", body):
+        return "hidden_completed" if re.search(r"(完成|达成|真结局)", body) else fallback
+    return fallback
+
+
+def _task_progress_entry(item: Any, index: int, phase: str, fallback_type: str = "main") -> Optional[dict]:
+    task = _normalize_public_task_item(item, index, phase)
+    if not task:
+        return None
+    text = " ".join(
+        str(x or "")
+        for x in (
+            task.get("title"),
+            task.get("status"),
+            (task.get("progress") or {}).get("text") if isinstance(task.get("progress"), dict) else task.get("progress"),
+        )
+    )
+    task["status"] = _infer_progress_status(text, str(task.get("status") or "active"))
+    task["type"] = _compact_text(task.get("type") or fallback_type, 40)
+    task["updated_at"] = now_beijing_iso()
+    return task
+
+
+def _clue_state_entry(item: Any, index: int, verified: bool = False, visibility: str = "public") -> Optional[dict]:
+    clue = _normalize_public_clue_item(item, index)
+    if not clue:
+        return None
+    clue["status"] = "verified" if verified or clue.get("verified") else _compact_text(clue.get("status") or "discovered", 40)
+    clue["verified"] = bool(verified or clue.get("verified") or clue.get("status") == "verified")
+    clue["visibility"] = "hidden" if visibility == "hidden" else "public"
+    clue["updated_at"] = now_beijing_iso()
+    return clue
+
+
+def _marker_state_entry(item: Any, index: int, prefix: str, visibility: str = "hidden") -> Optional[dict]:
+    marker = _normalize_public_marker_item(item, index, prefix)
+    if not marker:
+        return None
+    marker["visibility"] = "public" if visibility == "public" else "hidden"
+    marker["updated_at"] = now_beijing_iso()
+    if isinstance(item, dict):
+        for key in (
+            "location",
+            "last_location",
+            "attitude",
+            "stance",
+            "intent",
+            "trigger",
+            "trouble_chance",
+            "alive",
+            "danger_level",
+            "locked",
+            "resources",
+        ):
+            if item.get(key) is not None:
+                marker[key] = item.get(key) if isinstance(item.get(key), (int, float, bool, list, dict)) else _compact_text(item.get(key), 180)
+    return marker
+
+
+def _public_rule_update_stub(entry: dict) -> dict:
+    return {
+        "id": entry.get("id"),
+        "name": entry.get("name") or entry.get("title"),
+        "status": entry.get("status"),
+        "visibility": entry.get("visibility") or "hidden",
+    }
+
+
+def _settlement_flags_from_raw(raw: Any) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    player_flags = data.get("player1") if isinstance(data.get("player1"), dict) else {}
+    mainline = player_flags.get("mainline") if isinstance(player_flags.get("mainline"), dict) else {}
+    mainline_completion = data.get("mainline_completion")
+    if mainline.get("completion") is not None:
+        mainline_completion = mainline.get("completion")
+    try:
+        mainline_completion_value = max(0.0, min(1.0, float(mainline_completion or 0)))
+    except (TypeError, ValueError):
+        mainline_completion_value = 0.0
+    mainline_completed = bool(mainline.get("completed"))
+    mainline_status = _compact_text(data.get("mainline_status") or "active", 40)
+    if mainline_completed or mainline_completion_value >= 1:
+        mainline_status = "completed"
+
+    def completed_names(mapping: Any) -> list[str]:
+        if not isinstance(mapping, dict):
+            return []
+        out: list[str] = []
+        for key, item in mapping.items():
+            if isinstance(item, dict) and not bool(item.get("completed", True)):
+                continue
+            name = item.get("name") or item.get("title") or item.get("id") if isinstance(item, dict) else key
+            text = _compact_text(name or key, 80)
+            if text and text not in out:
+                out.append(text)
+        return out
+
+    side_completed = _normalize_text_list(data.get("side_completed"), 80, 30)
+    side_completed.extend(x for x in completed_names(player_flags.get("side_quests")) if x not in side_completed)
+    hidden_completed = _normalize_text_list(data.get("hidden_completed"), 80, 30)
+    hidden_completed.extend(x for x in completed_names(player_flags.get("hidden_side_quests")) if x not in hidden_completed)
+    hidden_endings = _normalize_text_list(data.get("hidden_endings"), 80, 20)
+    hidden_endings.extend(x for x in completed_names(player_flags.get("hidden_endings")) if x not in hidden_endings)
+    achievements = _normalize_text_list(data.get("achievements"), 80, 30)
+    achievements.extend(x for x in _normalize_text_list(player_flags.get("achievements"), 80, 30) if x not in achievements)
+    loss_flags = _normalize_text_list(data.get("loss_flags"), 80, 30)
+    losses = player_flags.get("losses") if isinstance(player_flags.get("losses"), dict) else data.get("losses")
+    losses = dict(losses) if isinstance(losses, dict) else {}
+    reward_tags = _normalize_text_list(data.get("reward_tags"), 60, 40)
+    reward_tags.extend(x for x in _normalize_text_list(player_flags.get("reward_tags"), 60, 40) if x not in reward_tags)
+    return {
+        "mainline_status": mainline_status,
+        "mainline_completion": mainline_completion_value,
+        "side_completed": side_completed[:30],
+        "hidden_completed": hidden_completed[:30],
+        "hidden_endings": hidden_endings[:20],
+        "achievements": achievements[:30],
+        "loss_flags": loss_flags[:30],
+        "losses": losses,
+        "reward_tags": reward_tags[:40],
+        "player1": {
+            "mainline": {"completion": mainline_completion_value, "completed": mainline_status == "completed"},
+            "side_quests": player_flags.get("side_quests") if isinstance(player_flags.get("side_quests"), dict) else {},
+            "hidden_side_quests": player_flags.get("hidden_side_quests") if isinstance(player_flags.get("hidden_side_quests"), dict) else {},
+            "hidden_endings": player_flags.get("hidden_endings") if isinstance(player_flags.get("hidden_endings"), dict) else {},
+            "achievements": achievements[:30],
+            "losses": losses,
+            "reward_tags": reward_tags[:40],
+        },
+    }
+
+
+def _record_settlement_flag(flags: dict, category: str, value: str) -> None:
+    text = _compact_text(value, 80)
+    if not text:
+        return
+    raw = str(category or "").strip().lower()
+    player = flags.setdefault("player1", {})
+    if not isinstance(player, dict):
+        player = {}
+        flags["player1"] = player
+    if raw in {"main", "mainline", "主线"}:
+        flags["mainline_status"] = "completed"
+        flags["mainline_completion"] = 1.0
+        player["mainline"] = {"completion": 1.0, "completed": True}
+        return
+    if raw in {"side", "side_quest", "支线"}:
+        key = "side_completed"
+        player_key = "side_quests"
+    elif raw in {"hidden", "hidden_side", "隐藏", "隐藏支线"}:
+        key = "hidden_completed"
+        player_key = "hidden_side_quests"
+    elif raw in {"ending", "hidden_ending", "true_ending", "隐藏结局", "真结局"}:
+        key = "hidden_endings"
+        player_key = "hidden_endings"
+    elif raw in {"loss", "damage", "损耗", "惩罚"}:
+        key = "loss_flags"
+        player_key = ""
+    else:
+        key = "achievements"
+        player_key = ""
+    arr = _normalize_text_list(flags.get(key), 80, 30)
+    if text not in arr:
+        arr.append(text)
+    flags[key] = arr[:30]
+    if player_key:
+        bucket = player.get(player_key) if isinstance(player.get(player_key), dict) else {}
+        sid = _slug_id(text, player_key)
+        bucket[sid] = {"id": sid, "name": text, "completed": True}
+        player[player_key] = bucket
+    elif key == "achievements":
+        player["achievements"] = flags[key]
+
+
+def _reward_context_from_raw(raw: Any) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    return {
+        "reward_tags": _normalize_text_list(data.get("reward_tags"), 60, 40),
+        "item_grants": [dict(x) for x in data.get("item_grants") or [] if isinstance(x, dict)][-40:],
+        "unique_rewards": _normalize_text_list(data.get("unique_rewards"), 80, 20),
+    }
+
+
+def _apply_rules_state_updates(session: dict, event_intent: dict) -> dict:
+    if not isinstance(event_intent, dict):
+        return {}
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
+    phase = _session_phase(session)
+    task_progress = _rules_mapping(rules.get("task_progress"), "task")
+    clue_state = _rules_mapping(rules.get("clue_state"), "clue")
+    location_state = _rules_mapping(rules.get("location_state"), "location")
+    npc_state = _rules_mapping(rules.get("npc_state"), "npc")
+    settlement_flags = _settlement_flags_from_raw(rules.get("settlement_flags"))
+    reward_context = _reward_context_from_raw(rules.get("reward_context"))
+    rule_violations = [dict(x) for x in rules.get("rule_violations") or [] if isinstance(x, dict)][-80:]
+
+    task_updates: list[dict] = []
+    clue_updates: list[dict] = []
+    location_updates: list[dict] = []
+    npc_updates: list[dict] = []
+    violation_updates: list[dict] = []
+    settlement_updates: list[dict] = []
+    reward_updates: list[dict] = []
+
+    if event_intent.get("task_update"):
+        entry = _task_progress_entry(
+            {
+                "id": "main_task",
+                "title": event_intent.get("task_update"),
+                "type": "main",
+                "progress": {"text": event_intent.get("task_update")},
+            },
+            len(task_progress),
+            phase,
+            "main",
+        )
+        if entry:
+            task_progress[str(entry["id"])] = {**task_progress.get(str(entry["id"]), {}), **entry}
+            task_updates.append(entry)
+            if entry.get("type") == "main" and entry.get("status") == "completed":
+                settlement_flags["mainline_status"] = "completed"
+
+    for idx, text in enumerate(event_intent.get("clue_updates") or []):
+        entry = _clue_state_entry(text, len(clue_state) + idx, visibility="public")
+        if entry:
+            clue_state[str(entry["id"])] = {**clue_state.get(str(entry["id"]), {}), **entry}
+            clue_updates.append(entry)
+
+    for proposal in event_intent.get("state_proposals") or []:
+        if not isinstance(proposal, dict):
+            continue
+        ptype = str(proposal.get("type") or "")
+        visibility = str(proposal.get("visibility") or "hidden")
+        name = _compact_text(proposal.get("name") or proposal.get("id") or proposal.get("reason"), 120)
+        if ptype in {"discover_clue", "verify_clue"}:
+            entry = _clue_state_entry(
+                {
+                    "id": proposal.get("id") or name,
+                    "title": name,
+                    "public_text": proposal.get("reason") or name,
+                    "status": "verified" if ptype == "verify_clue" else "discovered",
+                    "verified": ptype == "verify_clue",
+                },
+                len(clue_state),
+                verified=ptype == "verify_clue",
+                visibility=visibility,
+            )
+            if entry:
+                clue_state[str(entry["id"])] = {**clue_state.get(str(entry["id"]), {}), **entry}
+                clue_updates.append(entry)
+        elif ptype == "task_update":
+            entry = _task_progress_entry(
+                {
+                    "id": proposal.get("id") or name,
+                    "title": name or proposal.get("reason"),
+                    "type": proposal.get("category") or ("hidden" if visibility == "hidden" else "side"),
+                    "progress": {"text": proposal.get("reason") or name},
+                },
+                len(task_progress),
+                phase,
+                "side",
+            )
+            if entry:
+                task_progress[str(entry["id"])] = {**task_progress.get(str(entry["id"]), {}), **entry}
+                task_updates.append(entry)
+                if entry.get("status") in {"completed", "hidden_completed"}:
+                    _record_settlement_flag(settlement_flags, str(entry.get("type") or ""), entry.get("title") or entry.get("id") or "")
+        elif ptype == "settlement_flag":
+            category = str(proposal.get("category") or "")
+            value = name or proposal.get("reason") or proposal.get("id")
+            _record_settlement_flag(settlement_flags, category, str(value or ""))
+            settlement_updates.append({"category": category or "achievement", "value": _compact_text(value, 80)})
+        elif ptype == "location_update":
+            entry = _marker_state_entry(proposal, len(location_state), "location", visibility)
+            if entry:
+                location_state[str(entry["id"])] = {**location_state.get(str(entry["id"]), {}), **entry}
+                location_updates.append(_public_rule_update_stub(entry))
+        elif ptype == "npc_update":
+            entry = _marker_state_entry(proposal, len(npc_state), "npc", visibility)
+            if entry:
+                npc_state[str(entry["id"])] = {**npc_state.get(str(entry["id"]), {}), **entry}
+                npc_updates.append(_public_rule_update_stub(entry))
+                if re.search(r"(暴露|怀疑|识破|身份)", str(proposal.get("reason") or name or "")):
+                    _bump_forced_instance_exposure(session, "taskers", 1, "NPC/任务者怀疑身份")
+        elif ptype in {"rule_violation", "violate_rule"}:
+            violation = {
+                "id": _slug_id(proposal.get("id") or name or f"rule_violation_{len(rule_violations) + 1}", "rule_violation"),
+                "name": name or _compact_text(proposal.get("reason") or "规则触犯", 80),
+                "rule_id": _compact_text(proposal.get("rule_id") or proposal.get("id"), 80),
+                "severity": _compact_text(proposal.get("severity") or "minor", 40),
+                "visibility": visibility,
+                "reason": _compact_text(proposal.get("reason") or "", 220),
+                "created_at": now_beijing_iso(),
+            }
+            rule_violations.append(violation)
+            violation_updates.append(_public_rule_update_stub(violation))
+            _bump_forced_instance_exposure(session, "taskers", 1, "规则触犯")
+        elif ptype in {"acquire_item", "acquire_task_item", "acquire_unique_item"}:
+            grant = {
+                "type": ptype,
+                "id": _slug_id(proposal.get("id") or name, "item"),
+                "name": name,
+                "rarity": proposal.get("rarity") or "D",
+                "category": proposal.get("category") or "",
+                "visibility": visibility,
+                "reason": proposal.get("reason") or "",
+                "created_at": now_beijing_iso(),
+            }
+            reward_context["item_grants"] = (reward_context.get("item_grants") or [])[-39:] + [grant]
+            reward_updates.append(grant)
+            if ptype == "acquire_unique_item":
+                unique = _normalize_text_list(reward_context.get("unique_rewards"), 80, 20)
+                if name and name not in unique:
+                    unique.append(name)
+                reward_context["unique_rewards"] = unique[:20]
+        elif ptype == "monster_update" and visibility == "hidden":
+            _record_settlement_flag(settlement_flags, "hidden", proposal.get("reason") or name or "怪物暗线推进")
+
+    for task in task_progress.values():
+        if task.get("type") == "main" and task.get("status") == "completed":
+            settlement_flags["mainline_status"] = "completed"
+        elif task.get("status") in {"completed", "hidden_completed"} and task.get("type") in {"side", "hidden"}:
+            _record_settlement_flag(settlement_flags, str(task.get("type") or "side"), task.get("title") or task.get("id") or "")
+
+    rules["task_progress"] = task_progress
+    rules["clue_state"] = clue_state
+    rules["location_state"] = location_state
+    rules["npc_state"] = npc_state
+    rules["rule_violations"] = rule_violations[-80:]
+    rules["settlement_flags"] = settlement_flags
+    rules["reward_context"] = reward_context
+    if isinstance(session.get("forced_instance"), dict):
+        rules["forced_instance"] = copy.deepcopy(session.get("forced_instance"))
+    runtime["rules_state"] = rules
+    runtime.setdefault("gm_state", {})
+    runtime.setdefault("runtime_indexes", {})
+    session["runtime_state"] = runtime
+    return {
+        "rules_task_updates": task_updates,
+        "rules_clue_updates": clue_updates,
+        "rules_location_updates": location_updates,
+        "rules_npc_updates": npc_updates,
+        "rule_violation_updates": violation_updates,
+        "settlement_flag_updates": settlement_updates,
+        "reward_context_updates": reward_updates,
+    }
+
+
 def _apply_event_intent(session: dict, event_intent: Optional[dict]) -> Optional[dict]:
     if not event_intent:
         return None
@@ -1588,6 +2259,9 @@ def _apply_event_intent(session: dict, event_intent: Optional[dict]) -> Optional
             "conditions_remove": event_intent.get("conditions_remove") or [],
         }
     changes["clock_updates"] = _apply_clock_updates(session, event_intent.get("clock_updates") or [])
+    changes["inventory_add"] = _apply_state_proposal_item_grants(session, event_intent.get("state_proposals") or [])
+    changes.update(_apply_public_state_updates(session, event_intent))
+    changes.update(_apply_rules_state_updates(session, event_intent))
     event_log = session.get("event_log") if isinstance(session.get("event_log"), list) else []
     round_id = f"round_{len(event_log) + 1:03d}"
     state_patch = {
@@ -1631,7 +2305,15 @@ def _format_state_patch_for_display(state_patch: Optional[dict]) -> str:
             lines.append(f"{label.get(pid, pid)}：" + "；".join(parts))
     for clk in changes.get("clock_updates") or []:
         if isinstance(clk, dict) and int(clk.get("delta") or 0):
-            lines.append(f"威胁时钟 {clk.get('id')}：{clk.get('value')}/{clk.get('max')}")
+            delta = int(clk.get("delta") or 0)
+            lines.append("威胁时钟：" + ("上升" if delta > 0 else "下降"))
+    inventory_add = [
+        str(item.get("name") or "").strip()
+        for item in changes.get("inventory_add") or []
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    if inventory_add:
+        lines.append("背包获得：" + "、".join(inventory_add[:4]))
     if not lines:
         return ""
     return "【规则结算】\n" + "\n".join(lines[:6])
@@ -1642,6 +2324,10 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
     ledger = data.get("ledger") if isinstance(data.get("ledger"), list) else []
     clear_records = data.get("clear_records") if isinstance(data.get("clear_records"), list) else []
     promotion_history = data.get("promotion_history") if isinstance(data.get("promotion_history"), list) else []
+    forced_queue = data.get("forced_instance_queue") if isinstance(data.get("forced_instance_queue"), list) else []
+    settlement_history = data.get("settlement_history") if isinstance(data.get("settlement_history"), list) else []
+    shop_state = data.get("shop_state") if isinstance(data.get("shop_state"), dict) else {}
+    regular_shop = shop_state.get("regular") if isinstance(shop_state.get("regular"), dict) else {}
     points = max(0, int(data.get("points") if data.get("points") is not None else seed_points))
     test_grant_min = max(0, int(data.get("test_points_grant_min") or 0))
     if _WENYOU_TEST_MIN_POINTS and points < _WENYOU_TEST_MIN_POINTS and test_grant_min < _WENYOU_TEST_MIN_POINTS:
@@ -1658,6 +2344,18 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
         "inventory": _normalize_inventory(data.get("inventory"), source="wallet"),
         "clear_records": [x for x in clear_records[-30:] if isinstance(x, dict)],
         "promotion_history": [x for x in promotion_history[-20:] if isinstance(x, dict)],
+        "forced_instance_queue": [x for x in forced_queue[-8:] if isinstance(x, dict)],
+        "settlement_history": [x for x in settlement_history[-12:] if isinstance(x, dict)],
+        "ability_cooldowns": dict(data.get("ability_cooldowns") or {}) if isinstance(data.get("ability_cooldowns"), dict) else {},
+        "shop_state": {
+            "regular": {
+                "date": str(regular_shop.get("date") or now_beijing_iso()[:10]),
+                "refresh_count": max(0, int(regular_shop.get("refresh_count") or 0)),
+                "refresh_limit": 3,
+                "refresh_cost": 20,
+                "rotation_nonce": str(regular_shop.get("rotation_nonce") or ""),
+            }
+        },
         "test_points_grant_min": test_grant_min,
         "ledger": ledger[-80:],
         "updated_at": str(data.get("updated_at") or now_beijing_iso()),
@@ -1675,6 +2373,7 @@ def _load_wenyou_wallet(user_id: int, session: Optional[dict] = None) -> dict:
 
 def _save_wenyou_wallet(user_id: int, wallet: dict) -> None:
     wallet["updated_at"] = now_beijing_iso()
+    wallet["inventory"] = _carryable_inventory(wallet.get("inventory"))
     r2_store.save_wenyou_wallet(int(user_id), _normalize_wallet(wallet, seed_points=int(wallet.get("points") or 0)))
 
 
@@ -1685,7 +2384,175 @@ def _sync_session_points_with_wallet(session: dict, wallet: dict) -> None:
         "points": max(0, int(wallet.get("points") or 0)),
         "debts": max(0, int(wallet.get("debts") or 0)),
         "total_exp": max(0, int(wallet.get("total_exp") or 0)),
+        "forced_instance_queue": [x for x in (wallet.get("forced_instance_queue") or []) if isinstance(x, dict)][:8],
     }
+
+
+def _session_max_pollution(session: Optional[dict]) -> int:
+    if not isinstance(session, dict):
+        return 0
+    _session_ensure_stats(session)
+    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
+    values = []
+    for pid in ("player1", "player2"):
+        player = st.get(pid)
+        if isinstance(player, dict):
+            values.append(max(0, int(player.get("pollution") or 0)))
+    return max(values or [0])
+
+
+def _player_recommended_rank(session: Optional[dict]) -> str:
+    if not isinstance(session, dict):
+        return "D"
+    _session_ensure_stats(session)
+    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
+    player = st.get("player1") if isinstance(st.get("player1"), dict) else {}
+    return _normalize_difficulty(player.get("rank") or "D")
+
+
+def _forced_queue_item(queue_id: str, title: str, difficulty: str, reason: str, penalty_type: str, locked: bool = False) -> dict[str, Any]:
+    return {
+        "id": queue_id,
+        "title": title,
+        "difficulty": _normalize_difficulty(difficulty),
+        "reason": reason,
+        "penalty_type": penalty_type,
+        "locked": bool(locked),
+        "created_at": now_beijing_iso(),
+    }
+
+
+def _higher_rank(a: Any, b: Any) -> str:
+    left = _normalize_difficulty(a)
+    right = _normalize_difficulty(b)
+    return left if _rarity_rank(left) >= _rarity_rank(right) else right
+
+
+def _refresh_forced_instance_queue(wallet: dict, session: Optional[dict] = None) -> bool:
+    existing = [x for x in (wallet.get("forced_instance_queue") or []) if isinstance(x, dict) and not x.get("resolved")]
+    by_id = {str(x.get("id") or ""): dict(x) for x in existing if str(x.get("id") or "")}
+    rank = _player_recommended_rank(session)
+    debts = max(0, int(wallet.get("debts") or 0))
+    pollution = _session_max_pollution(session)
+    history = [x for x in (wallet.get("settlement_history") or []) if isinstance(x, dict)]
+    recent_deaths = 0
+    for rec in reversed(history[-4:]):
+        if str(rec.get("result") or "") == "death_failed":
+            recent_deaths += 1
+        else:
+            break
+    if debts >= 3000:
+        by_id["debt_clearance"] = _forced_queue_item("debt_clearance", "债务清算：主神临时工单", _higher_rank(rank, "B"), "债务达到 3000，必须进入高压清算副本。", "debt", True)
+    elif debts >= 1000:
+        by_id["debt_collection"] = _forced_queue_item("debt_collection", "债务催收：午夜客服", _higher_rank(rank, "C"), "债务达到 1000，候选池插入催收副本。", "debt", False)
+    if pollution >= 90:
+        by_id["pollution_clearance"] = _forced_queue_item("pollution_clearance", "污染清算：白室净化班", _higher_rank(rank, "B"), "污染达到 90，必须进入污染清算副本。", "pollution", True)
+    elif pollution >= 60:
+        by_id["pollution_purification"] = _forced_queue_item("pollution_purification", "污染净化：异常门诊夜班", _higher_rank(rank, "C"), "污染达到 60，候选池插入净化副本。", "pollution", False)
+    if recent_deaths >= 2:
+        by_id["revive_labor"] = _forced_queue_item("revive_labor", "复活代价：替系统打工", _higher_rank(rank, "C"), "连续 2 次死亡失败，需以 NPC 身份偿还复活代价。", "revive", True)
+    if wallet.get("contract_debt"):
+        by_id["contract_collection"] = _forced_queue_item("contract_collection", "契约追偿：坏账处理处", _higher_rank(rank, "B"), "存在未偿还的 S 级能力或契约代价。", "contract", True)
+    priority = {"debt_clearance": 0, "pollution_clearance": 1, "revive_labor": 2, "contract_collection": 3, "debt_collection": 4, "pollution_purification": 5}
+    queue = sorted(by_id.values(), key=lambda x: (priority.get(str(x.get("id") or ""), 99), str(x.get("created_at") or "")))[:8]
+    old_ids = [(x.get("id"), x.get("locked")) for x in existing]
+    new_ids = [(x.get("id"), x.get("locked")) for x in queue]
+    wallet["forced_instance_queue"] = queue
+    return old_ids != new_ids
+
+
+def _forced_candidate_from_queue(item: dict) -> dict[str, Any]:
+    penalty_type = str(item.get("penalty_type") or "system")
+    if penalty_type == "debt":
+        genre = "潜伏调查"
+        core_task = "以系统临时工身份完成催收工单，通关收益优先偿还债务。"
+        hook = "不能暴露自己是任务者或复活债务人；暴露会追加追偿。"
+    elif penalty_type == "pollution":
+        genre = "生存撤离"
+        core_task = "在净化流程失控前找到污染源并完成剥离。"
+        hook = "污染会影响判断，精确污染值隐藏，只给阶段提示。"
+    elif penalty_type == "revive":
+        genre = "潜伏调查"
+        core_task = "被临时塞进其他副本扮演 NPC，完成主神派发的工单。"
+        hook = "必须维持 NPC 身份，不得直接泄露副本真相或系统身份。"
+    else:
+        genre = "对抗"
+        core_task = "偿还契约追偿，完成系统指定的等价代价。"
+        hook = "契约代价未清前，高阶能力可能被封印或追猎。"
+    return {
+        "id": "forced_" + str(item.get("id") or "penalty"),
+        "title": str(item.get("title") or "强制惩罚副本"),
+        "instance_genre": genre,
+        "difficulty": _normalize_difficulty(item.get("difficulty") or "C"),
+        "tagline": "主神空间强制插队，不能普通刷新掉。",
+        "premise": str(item.get("reason") or "系统检测到未清算代价。"),
+        "core_task": core_task,
+        "survival_hook": hook,
+        "risk": "失败会追加债务、污染、封印或追猎状态。",
+        "twist": "本局不是普通任务者身份，行动边界由系统工单约束。",
+        "tags": ["强制", "惩罚副本", "系统打工" if penalty_type == "revive" else penalty_type],
+        "estimated_length": "短中篇",
+        "forced": True,
+        "locked": bool(item.get("locked")),
+        "queue_id": str(item.get("id") or ""),
+    }
+
+
+def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
+    if not isinstance(candidate, dict) or not candidate.get("forced"):
+        return
+    queue_id = str(candidate.get("queue_id") or candidate.get("id") or "forced_penalty").replace("forced_", "", 1)
+    penalty_type = "system"
+    for tag in candidate.get("tags") or []:
+        tag_text = str(tag or "")
+        if tag_text in {"debt", "pollution", "revive", "contract"}:
+            penalty_type = tag_text
+            break
+        if "系统打工" in tag_text:
+            penalty_type = "revive"
+    work_order = str(candidate.get("core_task") or "完成系统指定工单并存活。")
+    forced = {
+        "queue_id": queue_id,
+        "penalty_type": penalty_type,
+        "locked": bool(candidate.get("locked")),
+        "mode": "npc_labor" if penalty_type == "revive" else "penalty_instance",
+        "disguised_identity": "系统临时 NPC" if penalty_type == "revive" else "异常清算任务者",
+        "work_order": _compact_text(work_order, 220),
+        "forbidden_disclosures": ["主神系统身份", "复活债务来源", "副本结局/隐藏规则"],
+        "exposure_to_taskers": 0,
+        "exposure_to_monsters": 0,
+        "resolved": False,
+        "started_at": now_beijing_iso(),
+    }
+    session["forced_instance"] = forced
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
+    rules["forced_instance"] = copy.deepcopy(forced)
+    runtime["rules_state"] = rules
+    public = runtime.get("public_state") if isinstance(runtime.get("public_state"), dict) else {}
+    public["forced_notice"] = "强制工单已接入：按当前身份完成系统任务，避免暴露。"
+    runtime["public_state"] = public
+    session["runtime_state"] = runtime
+
+
+def apply_forced_instance_candidates(user_id: int, payload: Optional[dict] = None) -> dict:
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    wallet = _load_wenyou_wallet(uid, session if isinstance(session, dict) else None)
+    changed = _refresh_forced_instance_queue(wallet, session if isinstance(session, dict) else None)
+    if changed:
+        _save_wenyou_wallet(uid, wallet)
+    queue = [x for x in (wallet.get("forced_instance_queue") or []) if isinstance(x, dict)]
+    data = copy.deepcopy(payload) if isinstance(payload, dict) else {"version": 1, "generatedAt": now_beijing_iso(), "items": []}
+    items = [x for x in (data.get("items") or []) if isinstance(x, dict) and not x.get("forced")]
+    forced = [_forced_candidate_from_queue(x) for x in queue[:2]]
+    if forced:
+        data["items"] = (forced + items)[:8]
+        data["forced_instance_queue"] = queue
+    else:
+        data["items"] = items[:8]
+        data["forced_instance_queue"] = []
+    return data
 
 
 def _normalize_settlement_result(value: Any) -> str:
@@ -1705,6 +2572,48 @@ def _normalize_settlement_result(value: Any) -> str:
     }
     result = aliases.get(result, result)
     return result if result in _WENYOU_RESULT_FACTORS else "standard_clear"
+
+
+def _gear_main_bonus(item: dict) -> int:
+    rarity = _normalize_difficulty(item.get("rarity") or "D")
+    level = max(1, int(item.get("gear_level") or item.get("level") or 1))
+    forge_level = max(0, int(item.get("forge_level") or 0))
+    return (
+        int(_WENYOU_GEAR_BASE_BONUS.get(rarity, 2))
+        + max(0, level - 1) * int(_WENYOU_GEAR_LEVEL_GROWTH.get(rarity, 1))
+        + forge_level * int(_WENYOU_GEAR_FORGE_BONUS.get(rarity, 1))
+    )
+
+
+def _gear_bonus_from_player(player: dict) -> dict[str, int]:
+    bonuses = {"attack": 0, "defense": 0, "mental_resist": 0, "initiative": 0}
+    gear = player.get("gear") if isinstance(player.get("gear"), list) else []
+    for item in gear[:8]:
+        if isinstance(item, dict):
+            if item.get("broken") or (item.get("durability") is not None and int(item.get("durability") or 0) <= 0):
+                continue
+            if item.get("sealed"):
+                continue
+            slot = str(item.get("slot") or item.get("equip_slot") or "").strip()
+            rarity = str(item.get("rarity") or "D").strip().upper()
+            text = " ".join(
+                str(item.get(k) or "")
+                for k in ("name", "desc", "effect", "kind", "category")
+            )
+        else:
+            slot = ""
+            rarity = "D"
+            text = str(item or "")
+        base = _gear_main_bonus(item if isinstance(item, dict) else {"rarity": rarity})
+        if slot in {"main_weapon", "offhand_weapon"} or any(k in text for k in ("武器", "攻击", "破坏", "威慑")):
+            bonuses["attack"] += base
+        if slot == "armor" or any(k in text for k in ("防具", "减伤", "抵消", "防护")):
+            bonuses["defense"] += base
+        if slot.startswith("accessory") or any(k in text for k in ("精神", "污染", "规则", "护符")):
+            bonuses["mental_resist"] += max(1, base // 2)
+        if any(k in text for k in ("先手", "追逐", "移动", "潜行")):
+            bonuses["initiative"] += max(1, base // 2)
+    return bonuses
 
 
 def _normalize_rating(value: Any, result: str) -> str:
@@ -1730,20 +2639,21 @@ def _recalc_player_caps(player: dict) -> None:
     spi = max(0, int(player.get("spi") or 10))
     luk = max(0, int(player.get("luk") or 10))
     rank = _normalize_difficulty(player.get("rank") or "D")
-    hp_max = 80 + con * 10 + (level - 1) * 6 + _WENYOU_RANK_HP_BONUS.get(rank, 0)
-    san_max = 120 + intel * 6 + (level - 1) * 6 + _WENYOU_RANK_SAN_BONUS.get(rank, 0)
-    spi_max = spi + _WENYOU_RANK_SPI_BONUS.get(rank, 0)
+    gear_bonus = _gear_bonus_from_player(player)
+    hp_max = 80 + con * 10 + (level - 1) * 6 + _WENYOU_RANK_HP_BONUS.get(rank, 0) + int(player.get("evolution_hp_bonus") or 0)
+    san_max = 120 + intel * 6 + (level - 1) * 6 + _WENYOU_RANK_SAN_BONUS.get(rank, 0) + int(player.get("evolution_san_bonus") or 0)
+    spi_max = spi + _WENYOU_RANK_SPI_BONUS.get(rank, 0) + int(player.get("evolution_spi_bonus") or 0)
     player["hp_max"] = max(1, hp_max)
     player["san_max"] = max(1, san_max)
     player["spi_max"] = max(0, spi_max)
     player["hp"] = max(0, min(int(player.get("hp") or 0), player["hp_max"]))
     player["san"] = max(0, min(int(player.get("san") or 0), player["san_max"]))
     player["spi_current"] = max(0, min(int(player.get("spi_current") or 0), player["spi_max"]))
-    player["physical_attack"] = math.floor(strength / 2)
-    player["ranged_attack"] = math.floor((agi + intel) / 4)
-    player["defense"] = math.floor(con / 3) + int(_WENYOU_RANK_PHYSICAL_REDUCTION.get(rank, 0))
-    player["mental_resist"] = math.floor(int(player.get("spi_current") or 0) / 3) + int(_WENYOU_RANK_MENTAL_REDUCTION.get(rank, 0))
-    player["initiative"] = math.floor(agi / 2) + math.floor(luk / 4)
+    player["physical_attack"] = math.floor(strength / 2) + gear_bonus["attack"]
+    player["ranged_attack"] = math.floor((agi + intel) / 4) + max(0, gear_bonus["attack"] // 2)
+    player["defense"] = math.floor(con / 3) + int(_WENYOU_RANK_PHYSICAL_REDUCTION.get(rank, 0)) + gear_bonus["defense"]
+    player["mental_resist"] = math.floor(int(player.get("spi_current") or 0) / 3) + int(_WENYOU_RANK_MENTAL_REDUCTION.get(rank, 0)) + gear_bonus["mental_resist"]
+    player["initiative"] = math.floor(agi / 2) + math.floor(luk / 4) + gear_bonus["initiative"]
     player["carry_limit"] = strength + math.floor(con / 2)
 
 
@@ -1763,20 +2673,30 @@ def _apply_san_delta_to_spi(player: dict, san_delta: int, mental_recovery: bool 
 def _grant_player_exp(player: dict, exp_gain: int) -> dict:
     gained_levels = 0
     ability_tokens = int(player.get("ability_tokens") or 0)
+    growth_tokens = int(player.get("growth_milestone_tokens") or 0)
     unspent = int(player.get("unspent_attribute_points") or 0)
     player["exp"] = max(0, int(player.get("exp") or 0)) + max(0, int(exp_gain or 0))
     player["level"] = max(1, int(player.get("level") or 1))
-    while player["exp"] >= player["level"] * 100:
-        player["exp"] -= player["level"] * 100
+    while player["level"] < 30 and player["exp"] >= int(_WENYOU_LEVEL_EXP_TABLE.get(player["level"], 999999)):
+        need = int(_WENYOU_LEVEL_EXP_TABLE.get(player["level"], 999999))
+        player["exp"] -= need
         player["level"] += 1
         gained_levels += 1
         unspent += 3
-        if player["level"] % 3 == 0:
+        if player["level"] in {3, 6, 9, 12, 15, 18, 21, 24, 27, 30}:
             ability_tokens += 1
+        if player["level"] in {5, 10, 15, 20, 25, 30}:
+            growth_tokens += 1
     player["ability_tokens"] = ability_tokens
+    player["growth_milestone_tokens"] = growth_tokens
     player["unspent_attribute_points"] = unspent
     _recalc_player_caps(player)
-    return {"level_delta": gained_levels, "ability_tokens": ability_tokens, "unspent_attribute_points": unspent}
+    return {
+        "level_delta": gained_levels,
+        "ability_tokens": ability_tokens,
+        "growth_milestone_tokens": growth_tokens,
+        "unspent_attribute_points": unspent,
+    }
 
 
 def _recent_gm_text(session: dict, limit: int = 4) -> str:
@@ -1811,21 +2731,32 @@ def _infer_settlement_result(session: dict) -> tuple[str, str, str]:
     if any(int(p.get("hp") or 0) <= 0 for p in players):
         return "death_failed", "high", "检测到玩家 HP 归零。"
 
+    rules = _rules_state_from_session(session)
+    flags = _settlement_flags_from_raw(rules.get("settlement_flags"))
+    tasks = _rules_mapping(rules.get("task_progress"), "task")
+    main_tasks = [x for x in tasks.values() if str(x.get("type") or "main") == "main"]
+    if flags.get("mainline_status") == "failed" or any(str(x.get("status") or "") == "failed" for x in main_tasks):
+        return "failed_escape", "high", "规则缓存记录主线失败。"
+    if flags.get("hidden_endings"):
+        return "standard_clear", "high", "规则缓存记录隐藏结局已触发。"
+    if flags.get("mainline_status") == "completed" or any(str(x.get("status") or "") == "completed" for x in main_tasks):
+        return "standard_clear", "high", "规则缓存记录主线已完成。"
+
     recent = _recent_gm_text(session)
     if re.search(r"(团灭|彻底失败|死亡失败|任务失败|副本失败)", recent):
-        return "death_failed", "medium", "最近 GM 叙述出现失败/死亡信号。"
+        return "death_failed", "low", "未发现规则缓存通关标记，仅旧叙事出现失败/死亡信号。"
     if re.search(r"(失败撤离|强制撤离|撤离失败|只保住性命)", recent):
-        return "failed_escape", "medium", "最近 GM 叙述出现失败撤离信号。"
+        return "failed_escape", "low", "未发现规则缓存通关标记，仅旧叙事出现失败撤离信号。"
     if re.search(r"(低完成逃生|逃出生天|成功撤离|脱出|逃离副本|生还)", recent):
-        return "low_escape", "medium", "最近 GM 叙述出现撤离/生还信号。"
+        return "low_escape", "low", "未发现规则缓存主线完成标记，仅旧叙事出现撤离/生还信号。"
     if re.search(r"(通关|达成主线|主线完成|任务完成|副本结束|回归主神空间|进入结算)", recent):
-        return "standard_clear", "medium", "最近 GM 叙述出现通关/结算信号。"
+        return "low_escape", "low", "旧叙事疑似通关，但规则缓存未确认主线完成。"
 
     clocks = session.get("clocks") if isinstance(session.get("clocks"), list) else []
     if any(isinstance(c, dict) and int(c.get("value") or 0) >= int(c.get("max") or 9999) for c in clocks):
         return "failed_escape", "medium", "威胁时钟已触顶。"
 
-    return "standard_clear", "low", "未检测到明确失败信号，按可确认的通关结算预估。"
+    return "low_escape", "low", "规则缓存未确认主线完成，按低完成撤离预估。"
 
 
 def _rating_from_score(score: int, result: str) -> str:
@@ -1846,39 +2777,60 @@ def _rating_from_score(score: int, result: str) -> str:
 
 def _estimate_settlement_score(session: dict, result: str) -> dict:
     players = _all_player_stats(session)
-    history_rounds = sum(1 for item in (session.get("history") or []) if isinstance(item, dict) and item.get("role") == "gm")
     clues = _clues_from_session(session)
-    recent = _recent_gm_text(session, limit=8)
     event_log = session.get("event_log") if isinstance(session.get("event_log"), list) else []
+    rules = _rules_state_from_session(session)
+    flags = _settlement_flags_from_raw(rules.get("settlement_flags"))
+    task_progress = _rules_mapping(rules.get("task_progress"), "task")
+    clue_state = _rules_mapping(rules.get("clue_state"), "clue")
+    main_tasks = [x for x in task_progress.values() if str(x.get("type") or "main") == "main"]
+    side_tasks = [
+        x
+        for x in task_progress.values()
+        if str(x.get("type") or "") in {"side", "side_quest", "支线"} and str(x.get("status") or "") == "completed"
+    ]
+    hidden_tasks = [
+        x
+        for x in task_progress.values()
+        if str(x.get("type") or "") in {"hidden", "hidden_side", "隐藏", "隐藏支线"} and str(x.get("status") or "") in {"completed", "hidden_completed"}
+    ]
 
-    mainline_map = {
-        "standard_clear": 34,
-        "low_escape": 22,
-        "failed_escape": 8,
-        "death_failed": 0,
-        "abandoned": 0,
-    }
-    mainline = mainline_map.get(result, 0)
-    exploration = min(20, len(clues) * 4 + min(8, history_rounds * 2))
+    mainline_completion = float(flags.get("mainline_completion") or 0)
+    if flags.get("mainline_status") == "completed" or any(str(x.get("status") or "") == "completed" for x in main_tasks):
+        mainline_completion = max(mainline_completion, 1.0)
+    elif main_tasks:
+        active_count = sum(1 for x in main_tasks if str(x.get("status") or "") in {"active", "completed"})
+        mainline_completion = max(mainline_completion, min(0.7, active_count / max(1, len(main_tasks))))
+    if result in {"failed_escape", "death_failed", "abandoned"}:
+        mainline = 0 if result in {"death_failed", "abandoned"} else min(10, round(45 * mainline_completion))
+    elif result == "low_escape":
+        mainline = min(25, round(45 * mainline_completion))
+    else:
+        mainline = round(45 * max(mainline_completion, 0.75))
 
-    side = 0
-    if re.search(r"(支线|救援|额外任务|隐藏任务)", recent):
-        side += 8
-    if re.search(r"(关键 NPC|救下|保护.*NPC|盟友)", recent):
-        side += 6
-    side = min(15, side)
+    verified_clues = [
+        x
+        for x in clue_state.values()
+        if str(x.get("status") or "") == "verified" or bool(x.get("verified"))
+    ]
+    discovered_clues = max(len(clues), len(clue_state))
 
-    hidden = 0
-    if re.search(r"(隐藏结局|真结局|隐藏真相|核心真相)", recent):
-        hidden = 15
-    elif re.search(r"(隐藏线索|真相|幕后|源头)", recent):
-        hidden = 8
+    side_completed = list(dict.fromkeys((flags.get("side_completed") or []) + [str(x.get("title") or x.get("id")) for x in side_tasks]))
+    side = min(15, len(side_completed) * 5)
+
+    hidden_completed = list(dict.fromkeys((flags.get("hidden_completed") or []) + [str(x.get("title") or x.get("id")) for x in hidden_tasks]))
+    hidden_endings = _normalize_text_list(flags.get("hidden_endings"), 80, 20)
+    hidden_side = min(15, len(hidden_completed) * 5)
+    hidden_ending = min(15, len(hidden_endings) * 15)
 
     achievements = 0
-    achievement_notes: list[str] = []
+    achievement_notes: list[str] = _normalize_text_list(flags.get("achievements"), 80, 4)
+    if flags.get("achievements"):
+        achievements += min(10, len(flags.get("achievements") or []) * 4)
     if players and all(int(p.get("hp") or 0) > 0 for p in players) and result not in {"death_failed", "abandoned"}:
         achievements += 8
-        achievement_notes.append("全员存活")
+        if "玩家角色全部存活" not in achievement_notes:
+            achievement_notes.append("玩家角色全部存活")
     severe_conditions = {"污染", "失控", "濒死", "重伤"}
     all_conditions: list[str] = []
     for p in players:
@@ -1887,10 +2839,14 @@ def _estimate_settlement_score(session: dict, result: str) -> dict:
         san_ratio = sum((int(p.get("san") or 0) / max(1, int(p.get("san_max") or 180))) for p in players) / len(players)
         if san_ratio >= 0.55 and not any(c in severe_conditions for c in all_conditions):
             achievements += 6
-            achievement_notes.append("低污染")
-    if "复活" not in recent:
+            if "低污染" not in achievement_notes:
+                achievement_notes.append("低污染")
+    losses = flags.get("losses") if isinstance(flags.get("losses"), dict) else {}
+    revive_count = max(0, int(losses.get("revive_count") or 0))
+    if revive_count <= 0:
         achievements += 5
-        achievement_notes.append("无复活")
+        if "无复活" not in achievement_notes:
+            achievement_notes.append("无复活")
     achievements = min(15, achievements)
 
     loss = 5
@@ -1914,27 +2870,35 @@ def _estimate_settlement_score(session: dict, result: str) -> dict:
     debts = 0
     if isinstance(wallet, dict):
         debts = int(wallet.get("debts") or 0)
+    debts += max(0, int(losses.get("debt_added") or 0))
     if debts:
         loss -= min(10, math.ceil(debts / 300))
+    heavy_injury_count = max(0, int(losses.get("heavy_injury_count") or 0))
+    death_count = max(0, int(losses.get("death_count") or 0))
+    gear_broken_count = max(0, int(losses.get("gear_broken_count") or 0))
+    loss -= min(10, heavy_injury_count * 3 + death_count * 8 + gear_broken_count * 2)
+    if flags.get("loss_flags"):
+        loss -= min(8, len(flags.get("loss_flags") or []) * 2)
     if result == "death_failed":
         loss -= 20
     elif result == "abandoned":
         loss -= 10
     loss = max(-20, min(10, loss))
 
-    total = max(0, min(100, mainline + exploration + side + hidden + achievements + loss))
+    total = max(0, min(100, mainline + side + hidden_side + hidden_ending + achievements + loss))
     return {
         "rating_score": total,
         "score_breakdown": [
-            {"id": "mainline", "label": "主线完成度", "score": mainline, "max": 40},
-            {"id": "exploration", "label": "剧情探索度", "score": exploration, "max": 20},
-            {"id": "side", "label": "隐藏支线", "score": side, "max": 15},
-            {"id": "hidden", "label": "隐藏结局", "score": hidden, "max": 15},
+            {"id": "mainline", "label": "主线完成度", "score": mainline, "max": 45},
+            {"id": "side", "label": "支线完成", "score": side, "max": 15, "notes": side_completed[:4]},
+            {"id": "hidden_side", "label": "隐藏支线", "score": hidden_side, "max": 15, "notes": hidden_completed[:4]},
+            {"id": "hidden_ending", "label": "隐藏结局", "score": hidden_ending, "max": 15, "notes": hidden_endings[:4]},
             {"id": "achievements", "label": "特殊成就", "score": achievements, "max": 15, "notes": achievement_notes[:4]},
             {"id": "loss", "label": "损耗控制", "score": loss, "max": 10},
         ],
-        "history_rounds": history_rounds,
-        "clue_count": len(clues),
+        "history_rounds": sum(1 for item in (session.get("history") or []) if isinstance(item, dict) and item.get("role") == "gm"),
+        "clue_count": discovered_clues,
+        "verified_clue_count": len(verified_clues),
         "event_count": len(event_log),
     }
 
@@ -1971,9 +2935,53 @@ def _build_settlement_preview(session: dict, result: str = "", rating: str = "")
         "score_breakdown": score.get("score_breakdown") or [],
         "history_rounds": int(score.get("history_rounds") or 0),
         "clue_count": int(score.get("clue_count") or 0),
+        "verified_clue_count": int(score.get("verified_clue_count") or 0),
         "event_count": int(score.get("event_count") or 0),
         "reward": reward,
         "options": {"results": _WENYOU_RESULT_OPTIONS, "ratings": _WENYOU_RATING_OPTIONS},
+    }
+
+
+def _settlement_achievement_reward_bonus(session: dict, result: str) -> dict:
+    if result in {"failed_escape", "death_failed", "abandoned"}:
+        return {"points_bonus": 0.0, "exp_bonus": 0.0, "notes": []}
+    rules = _rules_state_from_session(session)
+    flags = _settlement_flags_from_raw(rules.get("settlement_flags"))
+    points_bonus = 0.0
+    exp_bonus = 0.0
+    notes: list[str] = []
+
+    def add(note: str, points: float, exp: float) -> None:
+        nonlocal points_bonus, exp_bonus
+        text = _compact_text(note, 80)
+        if text and text not in notes:
+            notes.append(text)
+        points_bonus += points
+        exp_bonus += exp
+
+    hidden_endings = _normalize_text_list(flags.get("hidden_endings"), 80, 20)
+    hidden_completed = _normalize_text_list(flags.get("hidden_completed"), 80, 30)
+    side_completed = _normalize_text_list(flags.get("side_completed"), 80, 30)
+    if hidden_endings:
+        add("触发隐藏结局", 0.20, 0.15)
+    if hidden_completed:
+        add("完成隐藏支线", min(0.24, 0.08 * len(hidden_completed)), min(0.24, 0.08 * len(hidden_completed)))
+    if side_completed:
+        add("完成普通支线", min(0.18, 0.06 * len(side_completed)), min(0.18, 0.06 * len(side_completed)))
+    for achievement in _normalize_text_list(flags.get("achievements"), 80, 30):
+        lower = achievement.lower()
+        if "低污染" in achievement or "low_pollution" in lower:
+            add(achievement, 0.06, 0.05)
+        elif "无复活" in achievement or "no_revive" in lower:
+            add(achievement, 0.05, 0.05)
+        elif "限时" in achievement or "time" in lower:
+            add(achievement, 0.06, 0.05)
+        else:
+            add(achievement, 0.05, 0.04)
+    return {
+        "points_bonus": min(0.60, max(0.0, points_bonus)),
+        "exp_bonus": min(0.50, max(0.0, exp_bonus)),
+        "notes": notes[:6],
     }
 
 
@@ -1983,15 +2991,19 @@ def _calculate_settlement_reward(session: dict, result: str, rating: str) -> dic
     base = _WENYOU_CLEAR_BASE_REWARD[difficulty]
     factors = _WENYOU_RESULT_FACTORS[result]
     rating_bonus = _WENYOU_RATING_BONUS[rating]
+    achievement_bonus = _settlement_achievement_reward_bonus(session, result)
     base_points = round(base["points"] * factors["points"])
     base_exp = round(base["exp"] * factors["exp"])
     rating_points = round(base_points * rating_bonus["points"])
     rating_exp = round(base_exp * rating_bonus["exp"])
-    gross_points = max(0, base_points + rating_points)
-    gross_exp = max(0, base_exp + rating_exp)
+    achievement_points = round(base_points * float(achievement_bonus.get("points_bonus") or 0.0))
+    achievement_exp = round(base_exp * float(achievement_bonus.get("exp_bonus") or 0.0))
+    gross_points = max(0, base_points + rating_points + achievement_points)
+    gross_exp = max(0, base_exp + rating_exp + achievement_exp)
     abandon_penalty = round(base["points"] * 0.15) if result == "abandoned" else 0
     base_rolls = int(base.get("rolls") or 1) if gross_points > 0 else 0
     rating_extra_rolls = 2 if rating == "S" else 1 if rating == "A" else 0
+    hidden_bonus_rolls = 1 if gross_points > 0 and "触发隐藏结局" in (achievement_bonus.get("notes") or []) else 0
     return {
         "difficulty": difficulty,
         "result": result,
@@ -2001,13 +3013,95 @@ def _calculate_settlement_reward(session: dict, result: str, rating: str) -> dic
         "base_exp": base_exp,
         "rating_points": rating_points,
         "rating_exp": rating_exp,
+        "achievement_points": achievement_points,
+        "achievement_exp": achievement_exp,
+        "achievement_bonus": achievement_bonus,
         "gross_points": gross_points,
         "gross_exp": gross_exp,
         "penalty_points": abandon_penalty,
-        "reward_rolls": base_rolls + rating_extra_rolls if gross_points > 0 else 0,
+        "reward_rolls": base_rolls + rating_extra_rolls + hidden_bonus_rolls if gross_points > 0 else 0,
         "base_reward_rolls": base_rolls,
         "rating_extra_rolls": rating_extra_rolls if gross_points > 0 else 0,
+        "hidden_bonus_rolls": hidden_bonus_rolls,
     }
+
+
+def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: dict, result: str) -> dict[str, Any]:
+    forced = session.get("forced_instance") if isinstance(session.get("forced_instance"), dict) else None
+    if not forced or forced.get("resolved"):
+        return {}
+    penalty_type = str(forced.get("penalty_type") or "system")
+    success = result in {"standard_clear", "low_escape"}
+    exposure = max(0, int(forced.get("exposure_to_taskers") or 0) + int(forced.get("exposure_to_monsters") or 0))
+    difficulty = _normalize_difficulty(settlement.get("difficulty") or _framework_for_runtime(session.get("framework") or {}).get("difficulty"))
+    rank_scale = max(1, _rarity_rank(difficulty) + 1)
+    outcome: dict[str, Any] = {
+        "queue_id": str(forced.get("queue_id") or ""),
+        "penalty_type": penalty_type,
+        "success": success,
+        "exposure": exposure,
+        "notes": [],
+    }
+    if success:
+        if penalty_type == "debt":
+            repay = min(max(0, int(wallet.get("debts") or 0)), 350 * rank_scale)
+            wallet["debts"] = max(0, int(wallet.get("debts") or 0) - repay)
+            outcome["debt_repaid_extra"] = repay
+            outcome["notes"].append(f"强制清算额外偿还债务 {repay}")
+        elif penalty_type == "pollution":
+            st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
+            reduction = 10 * rank_scale
+            for pid in ("player1", "player2"):
+                player = st.get(pid) if isinstance(st.get(pid), dict) else None
+                if player:
+                    player["pollution"] = max(0, int(player.get("pollution") or 0) - reduction)
+            session["stats"] = st
+            outcome["pollution_reduced"] = reduction
+            outcome["notes"].append(f"污染清算降低污染 {reduction}")
+        elif penalty_type == "revive":
+            outcome["notes"].append("复活代价工单完成，NPC 身份解除")
+        elif penalty_type == "contract":
+            wallet["contract_debt"] = False
+            outcome["notes"].append("契约追偿完成")
+        forced["resolved"] = True
+        forced["resolved_at"] = now_beijing_iso()
+        forced["result"] = "success"
+    else:
+        if penalty_type in {"debt", "contract", "revive"}:
+            debt_delta = 120 * rank_scale + exposure * 50
+            wallet["debts"] = max(0, int(wallet.get("debts") or 0) + debt_delta)
+            outcome["debt_added"] = debt_delta
+            outcome["notes"].append(f"工单失败追加债务 {debt_delta}")
+        if penalty_type in {"pollution", "revive"}:
+            st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
+            pollution_delta = 4 * rank_scale + exposure * 2
+            for pid in ("player1", "player2"):
+                player = st.get(pid) if isinstance(st.get(pid), dict) else None
+                if player:
+                    player["pollution"] = max(0, int(player.get("pollution") or 0) + pollution_delta)
+                    _add_condition_unique(player, "污染")
+            session["stats"] = st
+            outcome["pollution_added"] = pollution_delta
+            outcome["notes"].append(f"工单失败追加污染 {pollution_delta}")
+        forced["result"] = "failed"
+    queue_id = str(forced.get("queue_id") or "")
+    queue = []
+    for item in wallet.get("forced_instance_queue") or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if queue_id and str(row.get("id") or "") == queue_id and success:
+            row["resolved"] = True
+            row["resolved_at"] = now_beijing_iso()
+        queue.append(row)
+    wallet["forced_instance_queue"] = queue[:8]
+    session["forced_instance"] = forced
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
+    rules["forced_instance"] = copy.deepcopy(forced)
+    runtime["rules_state"] = rules
+    session["runtime_state"] = runtime
+    return outcome
 
 
 def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rating: str = "") -> dict:
@@ -2019,6 +3113,7 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
     rating = str(preview.get("rating") or _normalize_rating("", result))
     settlement = dict(preview.get("reward") or _calculate_settlement_reward(session, result, rating))
     wallet = _load_wenyou_wallet(user_id, session)
+    forced_result = _apply_forced_instance_settlement(wallet, session, settlement, result)
     debt_before = max(0, int(wallet.get("debts") or 0))
     gross_points = int(settlement.get("gross_points") or 0)
     penalty = int(settlement.get("penalty_points") or 0)
@@ -2055,6 +3150,15 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
         "reward_items": [str((grant.get("item") or {}).get("id") or "") for grant in reward_grants if isinstance(grant, dict)],
     }
     wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [ledger_entry]
+    wallet["settlement_history"] = (wallet.get("settlement_history") or [])[-11:] + [
+        {
+            "at": ledger_entry["at"],
+            "gameId": ledger_entry["gameId"],
+            "difficulty": str(settlement.get("difficulty") or ""),
+            "result": result,
+            "rating": rating,
+        }
+    ]
     if result == "standard_clear":
         clear_record = {
             "at": ledger_entry["at"],
@@ -2064,6 +3168,7 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
             "result": result,
         }
         wallet["clear_records"] = (wallet.get("clear_records") or [])[-29:] + [clear_record]
+    _refresh_forced_instance_queue(wallet, session)
     _save_wenyou_wallet(user_id, wallet)
     _sync_session_points_with_wallet(session, wallet)
 
@@ -2088,6 +3193,7 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
             "points_delta": final_points,
             "exp_delta": int(settlement.get("gross_exp") or 0),
             "reward_items": reward_grants,
+            "forced_instance_result": forced_result or None,
             "debt_before": debt_before,
             "debt_repaid": debt_repaid,
             "debt_after": int(wallet.get("debts") or 0),
@@ -2104,6 +3210,7 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
         "changes": {
             "wallet": {"points_delta": final_points, "debt_repaid": debt_repaid, "debts": settlement["debt_after"]},
             "inventory_add": [grant.get("item") for grant in reward_grants if isinstance(grant, dict) and isinstance(grant.get("item"), dict)],
+            "forced_instance_result": forced_result or None,
             "players": {
                 "player1": {"exp_delta": settlement["exp_delta"], **level_changes.get("player1", {})},
                 "player2": {"exp_delta": settlement["exp_delta"], **level_changes.get("player2", {})},
@@ -2211,7 +3318,47 @@ def _normalize_inventory_item(raw: Any, index: int = 0, source: str = "session")
             "source": str(raw.get("source") or source).strip()[:40],
             "acquired_at": str(raw.get("acquired_at") or raw.get("created_at") or now_beijing_iso()),
         }
-        for key in ("sigil", "pool_id", "sealed", "sealed_reason", "converted_from"):
+        for key in (
+            "sigil",
+            "price",
+            "bound",
+            "broken",
+            "depleted",
+            "equipped_by",
+            "equipped_slot",
+            "gear_level",
+            "forge_level",
+            "gear_level_cap",
+            "traits",
+            "ability_id",
+            "ability_template",
+            "evolution_id",
+            "evolution_template",
+            "fragments_value",
+            "pool_id",
+            "sealed",
+            "sealed_reason",
+            "converted_from",
+            "item_type",
+            "equip_slot",
+            "use_category",
+            "effect_json",
+            "requirements",
+            "use_cost",
+            "tags",
+            "era_tags",
+            "use_phase",
+            "consume",
+            "durability",
+            "durability_max",
+            "uses_left",
+            "seal_rank",
+            "instance_grant_reason",
+            "carry_out",
+            "temporary",
+            "quest_item",
+            "unique",
+        ):
             if key in raw:
                 item[key] = raw[key]
         if "stackable" in raw:
@@ -2259,7 +3406,8 @@ def _inventory_item_label(item: Any) -> str:
     qty = int(item.get("quantity") or 1)
     suffix = f" x{qty}" if qty > 1 else ""
     sealed = "（封印）" if item.get("sealed") else ""
-    return f"{name}{suffix}{sealed}".strip()
+    temporary = "（任务）" if item.get("carry_out") is False or item.get("temporary") else ""
+    return f"{name}{suffix}{sealed}{temporary}".strip()
 
 
 def _inventory_label_list(items: Any) -> list[str]:
@@ -2310,8 +3458,33 @@ def _consume_inventory_item(inventory: list[dict], target: dict) -> tuple[list[d
         if not used and _inventory_item_matches(cur, target):
             used = True
             consumed = dict(cur)
+            inventory_update = target.get("_inventory_update") if isinstance(target.get("_inventory_update"), dict) else {}
+            keep_item = bool(target.get("_use_keep")) or cur.get("consume") is False
+            if keep_item:
+                for key, value in inventory_update.items():
+                    cur[key] = value
+                    consumed[key] = value
+                uses_left = max(0, int(cur.get("uses_left") or 0))
+                if uses_left:
+                    cur["uses_left"] = max(0, uses_left - 1)
+                    consumed["uses_left_after"] = cur["uses_left"]
+                    if cur["uses_left"] == 0:
+                        cur["depleted"] = True
+                        consumed["depleted"] = True
+                consumed["use_consumed"] = False
+                out.append(cur)
+                continue
+            uses_left = max(0, int(cur.get("uses_left") or 0))
+            if uses_left > 1:
+                cur["uses_left"] = uses_left - 1
+                consumed["quantity"] = 1
+                consumed["use_consumed"] = False
+                consumed["uses_left_after"] = cur["uses_left"]
+                out.append(cur)
+                continue
             qty = max(1, int(cur.get("quantity") or 1))
             consumed["quantity"] = 1
+            consumed["use_consumed"] = True
             if qty > 1:
                 cur["quantity"] = qty - 1
                 out.append(cur)
@@ -2326,7 +3499,10 @@ def _unseal_inventory_by_rank(inventory: list[dict], rank: str) -> tuple[list[di
     unlocked: list[dict] = []
     for item in _normalize_inventory(inventory, source="session"):
         cur = dict(item)
-        if cur.get("sealed") and _rarity_rank(cur.get("rarity")) <= _rarity_rank(max_rank):
+        req = cur.get("requirements") if isinstance(cur.get("requirements"), dict) else {}
+        has_attr_or_level_req = bool(req.get("level_min") or any(req.get(f"{attr}_min") for attr in ("str", "con", "agi", "int", "spi", "luk", "spi_current")))
+        seal_rank = str(cur.get("seal_rank") or cur.get("rarity") or "D").strip().upper()
+        if cur.get("sealed") and not has_attr_or_level_req and _rarity_rank(seal_rank) <= _rarity_rank(max_rank):
             cur.pop("sealed", None)
             cur.pop("sealed_reason", None)
             unlocked.append(cur)
@@ -2415,27 +3591,273 @@ def _item_effect_for(item: dict) -> dict[str, Any]:
     iid = str(item.get("id") or "").strip()
     if iid in _ITEM_EFFECTS:
         return dict(_ITEM_EFFECTS[iid])
+    effect_json = item.get("effect_json") if isinstance(item.get("effect_json"), dict) else {}
+    if effect_json:
+        parsed: dict[str, Any] = {"label": str(item.get("desc") or effect_json.get("text") or _inventory_item_name(item) or "效果已生效")[:80]}
+        if effect_json.get("hp_restore"):
+            parsed["hp"] = int(effect_json.get("hp_restore") or 0)
+        if effect_json.get("san_restore"):
+            parsed["san"] = int(effect_json.get("san_restore") or 0)
+            parsed["mental_recovery"] = True
+        if effect_json.get("hp_full"):
+            parsed["hp_full"] = True
+        if effect_json.get("san_full"):
+            parsed["san_full"] = True
+            parsed["mental_recovery"] = True
+        remove_conditions = effect_json.get("remove_conditions")
+        if isinstance(remove_conditions, list):
+            parsed["remove"] = [str(x).strip() for x in remove_conditions if str(x).strip()][:4]
+        conditions_add = effect_json.get("conditions_add") or effect_json.get("add_conditions")
+        if isinstance(conditions_add, list):
+            parsed["conditions_add"] = [str(x).strip() for x in conditions_add if str(x).strip()][:8]
+        if effect_json.get("condition"):
+            parsed["condition"] = str(effect_json.get("condition") or "")[:120]
+        if effect_json.get("threat_clock_delta") or effect_json.get("clock_delta"):
+            parsed["clock"] = {
+                "id": str(effect_json.get("clock_id") or "threat")[:80],
+                "name": str(effect_json.get("clock_name") or "威胁时钟")[:80],
+                "delta": int(effect_json.get("threat_clock_delta") or effect_json.get("clock_delta") or 0),
+                "max": int(effect_json.get("clock_max") or 6),
+            }
+        if isinstance(effect_json.get("clock_updates"), list):
+            parsed["clock_updates"] = _normalize_clock_updates(effect_json.get("clock_updates"))
+        if effect_json.get("safe_rest_node"):
+            parsed["safe_rest_node"] = True
+        if effect_json.get("public_clue") or effect_json.get("discover_clue"):
+            parsed["public_clue"] = str(effect_json.get("public_clue") or effect_json.get("discover_clue") or "")[:220]
+        if effect_json.get("pollution_delta") is not None:
+            parsed["pollution_delta"] = int(effect_json.get("pollution_delta") or 0)
+        if effect_json.get("debt_delta") is not None:
+            parsed["debt_delta"] = int(effect_json.get("debt_delta") or 0)
+        if parsed.keys() - {"label"}:
+            return parsed
     kind = str(item.get("kind") or "").strip()
+    name = _inventory_item_name(item)
     desc = str(item.get("desc") or "").strip()
-    if any(k in kind + desc for k in ("治疗", "急救", "绷带", "凝胶")):
+    text = kind + name + desc
+    hp_match = re.search(r"恢复\s*(\d+)\s*HP", text)
+    san_match = re.search(r"恢复\s*(\d+)\s*SAN", text)
+    if hp_match:
+        return {"hp": int(hp_match.group(1)), "label": f"恢复 {hp_match.group(1)} HP"}
+    if san_match:
+        return {"san": int(san_match.group(1)), "mental_recovery": True, "label": f"恢复 {san_match.group(1)} SAN"}
+    if any(k in text for k in ("治疗", "治愈", "急救", "绷带", "凝胶")):
         return {"hp": 25, "label": "恢复 25 HP"}
-    if any(k in kind + desc for k in ("镇静", "精神", "记忆")):
+    if any(k in text for k in ("镇静", "精神", "记忆")):
         return {"san": 25, "label": "恢复 25 SAN"}
     return {"condition": f"{_inventory_item_name(item)}：一次性效果已生效", "label": "一次性效果已生效"}
+
+
+def _item_phase_token(session: dict) -> str:
+    phase = _session_phase(session)
+    if phase == "instance_running":
+        return "instance"
+    if phase in {"settlement", "archived"}:
+        return "settlement"
+    return "hub"
+
+
+def _item_allowed_in_phase(item: dict, session: dict) -> bool:
+    phases = item.get("use_phase")
+    if not isinstance(phases, list) or not phases:
+        return True
+    allowed = {str(x or "").strip().lower() for x in phases}
+    return _item_phase_token(session) in allowed
+
+
+def _check_item_requirements(session: dict, item: dict, player: dict) -> Optional[str]:
+    req = item.get("requirements") if isinstance(item.get("requirements"), dict) else {}
+    if not req:
+        return None
+    rank = _normalize_difficulty(player.get("rank") or "D")
+    if req.get("rank_min") and _rarity_rank(rank) < _rarity_rank(req.get("rank_min")):
+        return f"阶位不足，需要 {str(req.get('rank_min')).upper()} 阶。"
+    if req.get("level_min") and int(player.get("level") or 1) < int(req.get("level_min") or 0):
+        return f"等级不足，需要 Lv{int(req.get('level_min') or 0)}。"
+    for key in _WENYOU_ATTRIBUTE_KEYS:
+        min_key = f"{key}_min"
+        if req.get(min_key) and int(player.get(key) or 0) < int(req.get(min_key) or 0):
+            return f"{key} 不足，需要 {int(req.get(min_key) or 0)}。"
+    if req.get("spi_current_min") and int(player.get("spi_current") or 0) < int(req.get("spi_current_min") or 0):
+        return f"当前精神力不足，需要 {int(req.get('spi_current_min') or 0)}。"
+    if req.get("san_current_min") and int(player.get("san") or 0) < int(req.get("san_current_min") or 0):
+        return f"当前 SAN 不足，需要 {int(req.get('san_current_min') or 0)}。"
+    forbidden = req.get("forbidden_conditions") if isinstance(req.get("forbidden_conditions"), list) else []
+    if forbidden:
+        existing = set(_normalize_text_list(player.get("conditions"), 60, 30))
+        hit = [str(x).strip() for x in forbidden if str(x).strip() in existing]
+        if hit:
+            return "当前状态禁止使用：" + "、".join(hit[:3]) + "。"
+    ability_ids = req.get("ability_ids_any") if isinstance(req.get("ability_ids_any"), list) else []
+    if ability_ids:
+        owned = {
+            str((a or {}).get("id") or (a or {}).get("ability_id") or (a or {}).get("name") or "").strip()
+            for a in (player.get("abilities") or [])
+            if isinstance(a, dict)
+        }
+        if not any(str(x).strip() in owned for x in ability_ids):
+            return "缺少指定能力。"
+    evo_tags = req.get("evolution_tags_any") if isinstance(req.get("evolution_tags_any"), list) else []
+    if evo_tags:
+        owned_tags = {str(x).strip() for x in (player.get("evolution_tags") or []) if str(x).strip()}
+        evo_name = str(player.get("evolution") or player.get("bloodline") or "")
+        if not any(str(x).strip() in owned_tags or str(x).strip() in evo_name for x in evo_tags):
+            return "当前进化方向不匹配。"
+    flags = session.get("flags") if isinstance(session.get("flags"), dict) else {}
+    if req.get("safe_node") and not flags.get("safe_rest_node"):
+        return "需要安全休整节点。"
+    if req.get("hub_only") and _item_phase_token(session) != "hub":
+        return "只能在主神空间使用。"
+    return None
+
+
+def _apply_item_use_cost(session: dict, player: dict, item: dict) -> tuple[list[str], dict[str, Any]]:
+    cost = item.get("use_cost") if isinstance(item.get("use_cost"), dict) else {}
+    if not cost:
+        return [], {"hp_delta": 0, "san_delta": 0, "spi_delta": 0, "conditions_add": [], "clock_updates": [], "debt_delta": 0}
+    notes: list[str] = []
+    changes: dict[str, Any] = {"hp_delta": 0, "san_delta": 0, "spi_delta": 0, "conditions_add": [], "clock_updates": [], "debt_delta": 0}
+    hp_cost = int(cost.get("hp") or 0)
+    san_cost = int(cost.get("san") or 0)
+    spi_cost = int(cost.get("spi_current") or 0)
+    if cost.get("hp_delta") is not None:
+        hp_cost = max(hp_cost, abs(min(0, int(cost.get("hp_delta") or 0))))
+    if cost.get("san_delta") is not None:
+        san_cost = max(san_cost, abs(min(0, int(cost.get("san_delta") or 0))))
+    if hp_cost:
+        before = int(player.get("hp") or 0)
+        player["hp"] = max(0, before - hp_cost)
+        changes["hp_delta"] += int(player.get("hp") or 0) - before
+        notes.append(f"HP -{hp_cost}")
+    if san_cost:
+        before = int(player.get("san") or 0)
+        player["san"] = max(0, before - san_cost)
+        changes["san_delta"] += int(player.get("san") or 0) - before
+        changes["spi_delta"] += _apply_san_delta_to_spi(player, int(player.get("san") or 0) - before)
+        notes.append(f"SAN -{san_cost}")
+    if spi_cost:
+        before = int(player.get("spi_current") or 0)
+        player["spi_current"] = max(0, before - spi_cost)
+        changes["spi_delta"] += int(player.get("spi_current") or 0) - before
+        notes.append(f"精神力 -{spi_cost}")
+    for cond_key, cond_name in (("exposure", "暴露"), ("fatigue", "疲劳"), ("pollution", "轻度污染")):
+        amount = int(cost.get(cond_key) or 0)
+        if amount:
+            for _ in range(min(3, amount)):
+                _add_condition_unique(player, cond_name)
+            changes["conditions_add"].append(cond_name)
+            notes.append(f"{cond_name} +{amount}")
+    pollution_delta = int(cost.get("pollution_delta") or 0)
+    if pollution_delta:
+        before_pollution = int(player.get("pollution") or 0)
+        player["pollution"] = max(0, min(999, before_pollution + pollution_delta))
+        if pollution_delta > 0:
+            _add_condition_unique(player, "污染")
+            changes["conditions_add"].append("污染")
+        notes.append(f"污染 {pollution_delta:+d}")
+    threat_delta = int(cost.get("threat_clock_delta") or cost.get("threat_clock") or 0)
+    if threat_delta:
+        updates = _apply_clock_updates(
+            session,
+            [{"id": "threat", "name": "威胁时钟", "delta": threat_delta, "max": 6}],
+        )
+        changes["clock_updates"].extend(updates)
+        notes.append("威胁时钟推进")
+    debt_delta = int(cost.get("debt_delta") or cost.get("debt") or 0)
+    if debt_delta:
+        changes["debt_delta"] = max(0, debt_delta)
+        notes.append(f"债务 +{changes['debt_delta']}")
+    return notes, changes
+
+
+def _item_inventory_update_after_use(item: dict) -> dict:
+    update: dict[str, Any] = {}
+    cost = item.get("use_cost") if isinstance(item.get("use_cost"), dict) else {}
+    durability_cost = max(0, int(cost.get("durability") or 0))
+    if cost.get("durability_delta") is not None:
+        durability_cost = max(durability_cost, abs(min(0, int(cost.get("durability_delta") or 0))))
+    if durability_cost and item.get("durability") is not None:
+        durability = max(0, int(item.get("durability") or 0) - durability_cost)
+        update["durability"] = durability
+        if durability == 0:
+            update["broken"] = True
+    return update
+
+
+def _equip_item_to_player(player: dict, item: dict, slot_override: str = "") -> tuple[str, dict]:
+    slot = str(slot_override or item.get("equip_slot") or item.get("slot") or "special").strip() or "special"
+    gear = player.get("gear") if isinstance(player.get("gear"), list) else []
+    if slot == "accessory":
+        used = {str(g.get("slot") or "") for g in gear if isinstance(g, dict)}
+        slot = "accessory1" if "accessory1" not in used else "accessory2" if "accessory2" not in used else "accessory1"
+    next_gear = [g for g in gear if not (isinstance(g, dict) and str(g.get("slot") or g.get("equip_slot") or "") == slot)]
+    rarity = _normalize_difficulty(item.get("rarity") or "D")
+    durability_max = int(item.get("durability_max") or _WENYOU_GEAR_DEFAULT_DURABILITY.get(rarity, 30))
+    durability = int(item.get("durability") if item.get("durability") is not None else durability_max)
+    equipped = {
+        "uid": str(item.get("uid") or ""),
+        "id": str(item.get("id") or ""),
+        "name": _inventory_item_name(item),
+        "slot": slot,
+        "rarity": rarity,
+        "kind": str(item.get("kind") or item.get("use_category") or item.get("category") or "装备"),
+        "desc": str(item.get("desc") or item.get("effect") or "")[:160],
+        "gear_level": max(1, int(item.get("gear_level") or 1)),
+        "forge_level": max(0, int(item.get("forge_level") or 0)),
+        "gear_level_cap": max(1, int(item.get("gear_level_cap") or _WENYOU_GEAR_LEVEL_CAP.get(rarity, 3))),
+        "durability": max(0, min(durability, durability_max)),
+        "durability_max": durability_max,
+        "sealed": bool(item.get("sealed")),
+        "broken": bool(item.get("broken")) or durability <= 0,
+    }
+    if item.get("traits") is not None:
+        equipped["traits"] = item.get("traits")
+    next_gear.append(equipped)
+    player["gear"] = next_gear[:8]
+    player["equipment"] = list(player["gear"])
+    if slot in {"main_weapon", "offhand_weapon"}:
+        weapons = [g.get("name") for g in player["gear"] if isinstance(g, dict) and str(g.get("slot") or "") in {"main_weapon", "offhand_weapon"} and g.get("name")]
+        player["weapons"] = weapons[:4]
+    return slot, equipped
 
 
 def _apply_item_effect_to_session(session: dict, item: dict, detail: str = "") -> tuple[bool, str, Optional[dict]]:
     _session_ensure_stats(session)
     if item.get("sealed"):
         return False, f"文游：【{_inventory_item_name(item)}】还处于封印状态，不能使用。", None
-    category = str(item.get("category") or "consumable").strip()
-    if category in {"weapon", "ability", "bloodline", "fragment", "material"}:
-        return False, f"文游：【{_inventory_item_name(item)}】不是可直接消耗的局内道具。", None
+    if not _item_allowed_in_phase(item, session):
+        return False, f"文游：【{_inventory_item_name(item)}】当前阶段不能使用。", None
 
     st = session["stats"]
     player = st.get("player1") if isinstance(st.get("player1"), dict) else _default_player_stats()
     _recalc_player_caps(player)
+    req_error = _check_item_requirements(session, item, player)
+    if req_error:
+        return False, f"文游：【{_inventory_item_name(item)}】{req_error}", None
+    category = str(item.get("category") or item.get("item_type") or "consumable").strip()
+    item_type = str(item.get("item_type") or category).strip()
+    if item_type in {"weapon", "armor", "accessory", "equippable_tool"} or item.get("equip_slot"):
+        before_gear = list(player.get("gear") or [])
+        slot, equipped = _equip_item_to_player(player, item)
+        _recalc_player_caps(player)
+        st["player1"] = player
+        st["equipment"] = list(player.get("gear") or [])
+        session["stats"] = st
+        item["_use_keep"] = True
+        item["_inventory_update"] = {"equipped_by": "player1", "equipped_slot": slot}
+        return True, f"已装备【{_inventory_item_name(item)}】到 {slot}。", {
+            "players": {"player1": {"gear_before": before_gear, "gear_after": player.get("gear") or []}},
+            "equipment": {"player1": equipped},
+            "inventory_add": [],
+            "inventory_remove": [],
+            "clock_updates": [],
+            "flags_set": {},
+        }
+    if category in {"ability", "bloodline", "evolution", "fragment", "material"}:
+        return False, f"文游：【{_inventory_item_name(item)}】需要在成长/锻造系统中处理，不能当作局内消耗品直接使用。", None
+
     before = {"hp": int(player.get("hp") or 0), "san": int(player.get("san") or 0), "conditions": list(player.get("conditions") or [])}
+    cost_notes, cost_changes = _apply_item_use_cost(session, player, item)
     effect = _item_effect_for(item)
     hp_delta = _adjust_player_stat(player, "hp", int(effect.get("hp") or 0)) if effect.get("hp") else 0
     san_delta = _adjust_player_stat(player, "san", int(effect.get("san") or 0)) if effect.get("san") else 0
@@ -2452,10 +3874,41 @@ def _apply_item_effect_to_session(session: dict, item: dict, detail: str = "") -
     if condition:
         _add_condition_unique(player, condition)
         added.append(condition)
+    for condition_add in effect.get("conditions_add") or []:
+        cond = str(condition_add or "").strip()
+        if cond:
+            _add_condition_unique(player, cond)
+            added.append(cond)
+    pollution_delta = int(effect.get("pollution_delta") or 0)
+    if pollution_delta:
+        before_pollution = int(player.get("pollution") or 0)
+        player["pollution"] = max(0, min(999, before_pollution + pollution_delta))
+        if pollution_delta > 0:
+            _add_condition_unique(player, "污染")
+            added.append("污染")
     threshold_add = _apply_threshold_conditions(player)
     st["player1"] = player
     session["stats"] = st
-    clock_updates = _apply_clock_updates(session, [effect["clock"]]) if isinstance(effect.get("clock"), dict) else []
+    clock_inputs = []
+    if isinstance(effect.get("clock"), dict):
+        clock_inputs.append(effect["clock"])
+    if isinstance(effect.get("clock_updates"), list):
+        clock_inputs.extend(effect.get("clock_updates") or [])
+    clock_updates = _apply_clock_updates(session, clock_inputs) if clock_inputs else []
+    flags_set: dict[str, Any] = {}
+    if effect.get("safe_rest_node"):
+        flags = session.get("flags") if isinstance(session.get("flags"), dict) else {}
+        flags["safe_rest_node"] = True
+        flags["safe_rest_node_at"] = now_beijing_iso()
+        session["flags"] = flags
+        flags_set["safe_rest_node"] = True
+    clue_updates: dict[str, Any] = {}
+    if effect.get("public_clue"):
+        synthetic = {"clue_updates": [str(effect.get("public_clue") or "")], "state_proposals": []}
+        clue_updates = {
+            "public": _apply_public_state_updates(session, synthetic),
+            "rules": _apply_rules_state_updates(session, synthetic),
+        }
 
     parts = [str(effect.get("label") or "效果已生效")]
     if hp_delta:
@@ -2470,36 +3923,61 @@ def _apply_item_effect_to_session(session: dict, item: dict, detail: str = "") -
         parts.append("新增状态：" + "、".join(added))
     if clock_updates:
         parts.extend(f"{x.get('name') or x.get('id')} {x.get('value')}/{x.get('max')}" for x in clock_updates)
+    if pollution_delta:
+        parts.append(f"污染 {pollution_delta:+d}（{player.get('pollution', 0)}）")
+    if flags_set.get("safe_rest_node"):
+        parts.append("已建立安全休整节点")
+    if effect.get("public_clue"):
+        parts.append("线索已写入缓存")
+    if cost_notes:
+        parts.append("代价：" + "、".join(cost_notes))
     if detail:
         parts.append(f"使用意图：{detail[:160]}")
     result_text = "；".join(parts)
+    inventory_update = _item_inventory_update_after_use(item)
+    if inventory_update:
+        item["_inventory_update"] = inventory_update
+    will_consume = item.get("consume") is not False and not item.get("_use_keep")
     changes = {
         "players": {
             "player1": {
                 "hp_delta": int(player.get("hp") or 0) - before["hp"],
                 "san_delta": int(player.get("san") or 0) - before["san"],
-                "spi_delta": spi_delta,
-                "conditions_add": list(dict.fromkeys(added + threshold_add)),
+                "spi_delta": spi_delta + int(cost_changes.get("spi_delta") or 0),
+                "conditions_add": list(dict.fromkeys(added + threshold_add + list(cost_changes.get("conditions_add") or []))),
                 "conditions_remove": removed,
             }
         },
         "inventory_add": [],
-        "inventory_remove": [dict(item, quantity=1)],
-        "clock_updates": clock_updates,
-        "flags_set": {},
+        "inventory_remove": [dict(item, quantity=1)] if will_consume else [],
+        "inventory_update": dict(inventory_update),
+        "clock_updates": list(cost_changes.get("clock_updates") or []) + clock_updates,
+        "flags_set": flags_set,
+        "clue_updates": clue_updates,
+        "wallet": {"debt_delta": int(cost_changes.get("debt_delta") or 0) + int(effect.get("debt_delta") or 0)}
+        if int(cost_changes.get("debt_delta") or 0) + int(effect.get("debt_delta") or 0)
+        else {},
     }
     return True, result_text, changes
 
 
+def _format_item_consumption_note(item: dict) -> str:
+    if item.get("use_consumed") is False and item.get("uses_left_after") is not None:
+        return f"剩余次数 {item.get('uses_left_after')}。"
+    if item.get("use_consumed") is False:
+        return "未消耗本体。"
+    return "已消耗 1 个。"
+
+
 def _format_item_result_for_gm(item: dict, result_text: str) -> str:
     return (
-        f"【系统判定】辛玥使用【{_inventory_item_name(item)}】，{result_text}，已消耗 1 个。"
+        f"【系统判定】辛玥使用【{_inventory_item_name(item)}】，{result_text}，{_format_item_consumption_note(item)}"
         "请只根据这个已结算结果生成剧情反应；不要改写道具效果，不要重复扣除或治疗。"
     )
 
 
 def _format_item_result_block(item: dict, result_text: str) -> str:
-    return f"【道具结算】{_inventory_item_name(item)}：{result_text}；消耗 1。"
+    return f"【道具结算】{_inventory_item_name(item)}：{result_text}；{_format_item_consumption_note(item)}"
 
 
 def _inject_item_result_into_output(output: str, item: dict, result_text: str) -> str:
@@ -2552,6 +4030,789 @@ def _merge_inventory(base: Any, extra: Any) -> list[dict]:
         elif not _inventory_has_item(inv, item_id=str(item.get("id") or ""), name=_inventory_item_name(item)):
             inv.append(item)
     return inv[:80]
+
+
+def _inventory_item_can_carry_out(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return True
+    if item.get("carry_out") is False or item.get("temporary") or item.get("quest_item"):
+        return False
+    if str(item.get("category") or "") in {"quest", "task_item"}:
+        return False
+    return True
+
+
+def _carryable_inventory(raw: Any) -> list[dict]:
+    return [item for item in _normalize_inventory(raw, source="wallet") if _inventory_item_can_carry_out(item)][:80]
+
+
+def _is_gear_item(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    item_type = str(item.get("item_type") or item.get("category") or "").strip()
+    return item_type in {"weapon", "armor", "accessory", "equippable_tool"} or bool(item.get("equip_slot"))
+
+
+def _inventory_update_item(inventory: list[dict], target: dict, updates: dict) -> tuple[list[dict], Optional[dict]]:
+    inv = _normalize_inventory(inventory, source="session")
+    out: list[dict] = []
+    updated: Optional[dict] = None
+    used = False
+    for item in inv:
+        cur = dict(item)
+        if not used and _inventory_item_matches(cur, target):
+            used = True
+            cur.update(updates or {})
+            updated = dict(cur)
+        out.append(cur)
+    return out[:80], updated
+
+
+def _inventory_quantity(inventory: list[dict], item_id: str = "", name: str = "", category: str = "") -> int:
+    total = 0
+    iid = str(item_id or "").strip()
+    target_name = str(name or "").strip()
+    target_category = str(category or "").strip()
+    for item in _normalize_inventory(inventory, source="session"):
+        if iid and str(item.get("id") or "") != iid:
+            continue
+        if target_name and _inventory_item_name(item) != target_name:
+            continue
+        if target_category and str(item.get("category") or "") != target_category:
+            continue
+        total += max(1, int(item.get("quantity") or 1))
+    return total
+
+
+def _consume_inventory_requirements(inventory: list[dict], requirements: list[dict[str, Any]]) -> tuple[list[dict], list[str]]:
+    inv = _normalize_inventory(inventory, source="session")
+    missing: list[str] = []
+    for req in requirements:
+        need = max(1, int(req.get("quantity") or 1))
+        have = _inventory_quantity(inv, str(req.get("id") or ""), str(req.get("name") or ""), str(req.get("category") or ""))
+        if have < need:
+            missing.append(f"{req.get('name') or req.get('id')} x{need - have}")
+    if missing:
+        return inv, missing
+    for req in requirements:
+        remain = max(1, int(req.get("quantity") or 1))
+        out: list[dict] = []
+        for item in inv:
+            cur = dict(item)
+            matched = True
+            if req.get("id") and str(cur.get("id") or "") != str(req.get("id") or ""):
+                matched = False
+            if req.get("name") and _inventory_item_name(cur) != str(req.get("name") or ""):
+                matched = False
+            if req.get("category") and str(cur.get("category") or "") != str(req.get("category") or ""):
+                matched = False
+            if matched and remain > 0:
+                qty = max(1, int(cur.get("quantity") or 1))
+                take = min(qty, remain)
+                remain -= take
+                if qty > take:
+                    cur["quantity"] = qty - take
+                    out.append(cur)
+                continue
+            out.append(cur)
+        inv = out[:80]
+    return inv[:80], []
+
+
+def _material_def(item_id: str, name: str, rarity: str, quantity: int, desc: str = "") -> dict[str, Any]:
+    return {
+        "id": item_id,
+        "name": name,
+        "kind": "材料",
+        "category": "material",
+        "item_type": "material",
+        "rarity": _normalize_difficulty(rarity),
+        "quantity": max(1, int(quantity or 1)),
+        "desc": desc or "文游装备系统材料。",
+        "stackable": True,
+    }
+
+
+def _gear_material_requirements(rarity: str, mode: str) -> list[dict[str, Any]]:
+    rarity = _normalize_difficulty(rarity)
+    if mode == "forge":
+        table = {
+            "D": [_material_def("low_forge_material", "低级锻材", "D", 3)],
+            "C": [_material_def("low_forge_material", "低级锻材", "D", 5), _material_def("wy_c_044", "低级异常残片", "C", 1)],
+            "B": [_material_def("mid_forge_material", "中级锻材", "B", 4), _material_def("wy_b_034", "中级异常结晶", "B", 1)],
+            "A": [_material_def("high_forge_material", "高级锻材", "A", 4), _material_def("instance_core", "副本核心", "A", 1)],
+            "S": [_material_def("legend_forge_material", "传说锻材", "S", 2), _material_def("instance_core", "副本核心", "A", 3)],
+        }
+    else:
+        table = {
+            "D": [_material_def("low_forge_material", "低级锻材", "D", 1)],
+            "C": [_material_def("low_forge_material", "低级锻材", "D", 2)],
+            "B": [_material_def("mid_forge_material", "中级锻材", "B", 2)],
+            "A": [_material_def("high_forge_material", "高级锻材", "A", 2)],
+            "S": [_material_def("legend_forge_material", "传说锻材", "S", 1), _material_def("high_forge_material", "高级锻材", "A", 3)],
+        }
+    return [dict(x) for x in table.get(rarity, table["D"])]
+
+
+def _gear_reference_price(item: dict) -> int:
+    if int(item.get("price") or 0) > 0:
+        return int(item.get("price") or 0)
+    return {"D": 60, "C": 150, "B": 420, "A": 1200, "S": 12000}.get(_normalize_difficulty(item.get("rarity") or "D"), 60)
+
+
+def _item_locked_for_recycle(item: dict) -> Optional[str]:
+    if item.get("quest_item") or item.get("temporary") or item.get("carry_out") is False:
+        return "副本任务物/临时物不能出售或拆解。"
+    if item.get("unique") or item.get("bound"):
+        return "唯一物或绑定物不能出售或拆解。"
+    if item.get("equipped_by") or item.get("equipped_slot"):
+        return "已装备物品请先更换/卸下后再处理。"
+    return None
+
+
+def _persist_inventory_rule_result(user_id: int, session: dict, wallet: dict, source: str, changes: dict) -> dict:
+    _sync_session_points_with_wallet(session, wallet)
+    patch = _append_rules_patch(session, source, changes)
+    _save_wenyou_wallet(int(user_id), wallet)
+    r2_store.save_wenyou_session(int(user_id), session)
+    view = get_session_view(int(user_id))
+    view["state_patch"] = patch
+    return view
+
+
+def equip_inventory_item(user_id: int, item_ref: str, player_id: Any = "player1", slot: str = "") -> tuple[bool, str, dict]:
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return False, "当前没有可装备的文游存档。", get_session_view(uid)
+    _session_ensure_stats(session)
+    pid = _resolve_player_key(player_id)
+    wallet = _load_wenyou_wallet(uid, session)
+    st = session["stats"]
+    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    item = _inventory_find_by_name(inventory, item_ref)
+    if not item:
+        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+    if not _is_gear_item(item):
+        return False, "该物品不是可装备物。", get_session_view(uid)
+    if item.get("sealed"):
+        return False, f"【{_inventory_item_name(item)}】仍处于封印状态。", get_session_view(uid)
+    if item.get("broken") or (item.get("durability") is not None and int(item.get("durability") or 0) <= 0):
+        return False, "该装备已损坏，需要维修后再装备。", get_session_view(uid)
+    player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
+    _recalc_player_caps(player)
+    req_error = _check_item_requirements(session, item, player)
+    if req_error:
+        return False, f"【{_inventory_item_name(item)}】{req_error}", get_session_view(uid)
+    before_gear = list(player.get("gear") or [])
+    slot_used, equipped = _equip_item_to_player(player, item, slot_override=slot)
+    _recalc_player_caps(player)
+    st[pid] = player
+    st["equipment"] = list(player.get("gear") or [])
+    for cur in inventory:
+        if isinstance(cur, dict) and str(cur.get("equipped_by") or "") == pid and str(cur.get("equipped_slot") or "") == slot_used:
+            cur.pop("equipped_by", None)
+            cur.pop("equipped_slot", None)
+    inventory, updated = _inventory_update_item(inventory, item, {"equipped_by": pid, "equipped_slot": slot_used})
+    wallet["inventory"] = inventory[:80]
+    st["inventory"] = inventory[:80]
+    session["stats"] = st
+    view = _persist_inventory_rule_result(
+        uid,
+        session,
+        wallet,
+        "rules_engine.equip_item",
+        {"players": {pid: {"gear_before": before_gear, "gear_after": player.get("gear") or []}}, "equipment": {pid: equipped}, "inventory_update": updated or {}},
+    )
+    return True, f"已装备【{_inventory_item_name(item)}】到 {slot_used}。", view
+
+
+def repair_inventory_item(user_id: int, item_ref: str) -> tuple[bool, str, dict]:
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return False, "当前没有可维修的文游存档。", get_session_view(uid)
+    _session_ensure_stats(session)
+    wallet = _load_wenyou_wallet(uid, session)
+    st = session["stats"]
+    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    item = _inventory_find_by_name(inventory, item_ref)
+    if not item:
+        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+    if not _is_gear_item(item) and not bool((item.get("effect_json") or {}).get("repair_allowed")):
+        return False, "该物品不能维修。", get_session_view(uid)
+    rarity = _normalize_difficulty(item.get("rarity") or "D")
+    durability_max = int(item.get("durability_max") or _WENYOU_GEAR_DEFAULT_DURABILITY.get(rarity, 30))
+    durability = int(item.get("durability") if item.get("durability") is not None else durability_max)
+    missing = max(0, durability_max - durability)
+    if missing <= 0 and not item.get("broken"):
+        return False, "该装备耐久已满。", get_session_view(uid)
+    cost = missing * int(_WENYOU_GEAR_REPAIR_PRICE.get(rarity, 1))
+    if int(wallet.get("points") or 0) < cost:
+        return False, f"主神积分不足，维修需要 {cost}。", get_session_view(uid)
+    wallet["points"] = max(0, int(wallet.get("points") or 0) - cost)
+    inventory, updated = _inventory_update_item(inventory, item, {"durability": durability_max, "durability_max": durability_max, "broken": False})
+    wallet["inventory"] = inventory[:80]
+    st["inventory"] = inventory[:80]
+    session["stats"] = st
+    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "gear_repair", "item": _inventory_item_name(item), "points_delta": -cost}]
+    view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.repair_item", {"wallet": {"points_delta": -cost}, "inventory_update": updated or {}})
+    return True, f"已维修【{_inventory_item_name(item)}】，扣除 {cost} 主神积分。", view
+
+
+def sell_inventory_item(user_id: int, item_ref: str) -> tuple[bool, str, dict]:
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return False, "当前没有可出售的文游存档。", get_session_view(uid)
+    _session_ensure_stats(session)
+    wallet = _load_wenyou_wallet(uid, session)
+    st = session["stats"]
+    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    item = _inventory_find_by_name(inventory, item_ref)
+    if not item:
+        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+    locked = _item_locked_for_recycle(item)
+    if locked:
+        return False, locked, get_session_view(uid)
+    rarity = _normalize_difficulty(item.get("rarity") or "D")
+    qty = max(1, int(item.get("quantity") or 1))
+    value = max(1, math.floor(_gear_reference_price(item) * float(_WENYOU_SELL_RATIO.get(rarity, 0.25)))) * qty
+    inventory, consumed = _consume_inventory_item(inventory, item)
+    if not consumed:
+        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+    wallet["points"] = max(0, int(wallet.get("points") or 0) + value)
+    wallet["inventory"] = inventory[:80]
+    st["inventory"] = inventory[:80]
+    session["stats"] = st
+    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "item_sell", "item": _inventory_item_name(item), "points_delta": value}]
+    view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.sell_item", {"wallet": {"points_delta": value}, "inventory_remove": [consumed]})
+    return True, f"已回收【{_inventory_item_name(item)}】，获得 {value} 主神积分。", view
+
+
+def disassemble_inventory_item(user_id: int, item_ref: str) -> tuple[bool, str, dict]:
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return False, "当前没有可拆解的文游存档。", get_session_view(uid)
+    _session_ensure_stats(session)
+    wallet = _load_wenyou_wallet(uid, session)
+    st = session["stats"]
+    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    item = _inventory_find_by_name(inventory, item_ref)
+    if not item:
+        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+    locked = _item_locked_for_recycle(item)
+    if locked:
+        return False, locked, get_session_view(uid)
+    if not _is_gear_item(item):
+        return False, "只有武器、防具、饰品或可装备工具可拆解。", get_session_view(uid)
+    rarity = _normalize_difficulty(item.get("rarity") or "D")
+    grants = {
+        "D": [_material_def("low_forge_material", "低级锻材", "D", 1)],
+        "C": [_material_def("low_forge_material", "低级锻材", "D", 2), _material_def("gear_fragment", "装备碎片", "C", 5)],
+        "B": [_material_def("mid_forge_material", "中级锻材", "B", 2), _material_def("gear_fragment", "装备碎片", "B", 20)],
+        "A": [_material_def("high_forge_material", "高级锻材", "A", 2), _material_def("gear_fragment", "装备碎片", "A", 80)],
+        "S": [_material_def("legend_forge_material", "传说锻材", "S", 1), _material_def("gear_fragment", "装备碎片", "S", 300)],
+    }[rarity]
+    inventory, consumed = _consume_inventory_item(inventory, item)
+    if not consumed:
+        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+    material_items: list[dict] = []
+    for grant in grants:
+        material = _new_inventory_item(grant, "disassemble", "mat")
+        material_items.append(material)
+        inventory = _add_inventory_item(inventory, material)
+    wallet["inventory"] = inventory[:80]
+    st["inventory"] = inventory[:80]
+    session["stats"] = st
+    view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.disassemble_item", {"inventory_remove": [consumed], "inventory_add": material_items})
+    return True, f"已拆解【{_inventory_item_name(item)}】，获得 " + "、".join(f"{x.get('name')} x{x.get('quantity', 1)}" for x in material_items) + "。", view
+
+
+def upgrade_or_forge_gear(user_id: int, item_ref: str, mode: str = "upgrade") -> tuple[bool, str, dict]:
+    uid = int(user_id)
+    mode = "forge" if str(mode or "").strip().lower() in {"forge", "breakthrough", "锻造", "突破"} else "upgrade"
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return False, "当前没有可强化的文游存档。", get_session_view(uid)
+    _session_ensure_stats(session)
+    if _session_phase(session) not in {"hub", "settlement"}:
+        return False, "只能在主神空间或结算阶段强化装备。", get_session_view(uid)
+    wallet = _load_wenyou_wallet(uid, session)
+    st = session["stats"]
+    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    item = _inventory_find_by_name(inventory, item_ref)
+    if not item:
+        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+    if not _is_gear_item(item):
+        return False, "该物品不是可强化装备。", get_session_view(uid)
+    if item.get("sealed"):
+        return False, "封印装备不能强化，请先达到解封条件。", get_session_view(uid)
+    rarity = _normalize_difficulty(item.get("rarity") or "D")
+    level = max(1, int(item.get("gear_level") or 1))
+    forge_level = max(0, int(item.get("forge_level") or 0))
+    level_cap = max(1, int(item.get("gear_level_cap") or _WENYOU_GEAR_LEVEL_CAP.get(rarity, 3)))
+    if mode == "upgrade":
+        if level >= level_cap:
+            return False, f"当前等级已达上限 Lv{level_cap}，请先锻造突破。", get_session_view(uid)
+        target_level = level + 1
+        cost = int(_WENYOU_GEAR_UPGRADE_BASE_COST.get(rarity, 40)) * target_level + level * 20
+        material_reqs = _gear_material_requirements(rarity, "upgrade")
+        updates = {"gear_level": target_level}
+    else:
+        cost = int(_WENYOU_GEAR_FORGE_BASE_COST.get(rarity, 120)) * (forge_level + 1)
+        material_reqs = _gear_material_requirements(rarity, "forge")
+        cap_delta = 2 if rarity in {"B", "A"} else 1
+        updates = {"forge_level": forge_level + 1, "gear_level_cap": level_cap + cap_delta}
+    if int(wallet.get("points") or 0) < cost:
+        return False, f"主神积分不足，需要 {cost}。", get_session_view(uid)
+    inventory_after, missing = _consume_inventory_requirements(inventory, material_reqs)
+    if missing:
+        return False, "材料不足：" + "、".join(missing), get_session_view(uid)
+    wallet["points"] = max(0, int(wallet.get("points") or 0) - cost)
+    inventory_after, updated = _inventory_update_item(inventory_after, item, updates)
+    if not updated:
+        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+    wallet["inventory"] = inventory_after[:80]
+    st["inventory"] = inventory_after[:80]
+    session["stats"] = st
+    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "gear_forge" if mode == "forge" else "gear_upgrade", "item": _inventory_item_name(item), "points_delta": -cost}]
+    view = _persist_inventory_rule_result(
+        uid,
+        session,
+        wallet,
+        "rules_engine.upgrade_or_forge_gear",
+        {"wallet": {"points_delta": -cost}, "inventory_update": updated, "materials_spent": material_reqs},
+    )
+    if mode == "forge":
+        return True, f"已锻造【{_inventory_item_name(item)}】，等级上限提升至 Lv{updated.get('gear_level_cap')}，扣除 {cost} 积分。", view
+    return True, f"已升级【{_inventory_item_name(item)}】至 Lv{updated.get('gear_level')}，扣除 {cost} 积分。", view
+
+
+def _ability_definition(ability_ref: str) -> Optional[dict[str, Any]]:
+    ref = str(ability_ref or "").strip()
+    if not ref:
+        return None
+    slug = _slug_id(ref)
+    if slug in _WENYOU_ABILITY_CATALOG:
+        return dict(_WENYOU_ABILITY_CATALOG[slug])
+    for item in _WENYOU_ABILITY_CATALOG.values():
+        if ref == str(item.get("name") or ""):
+            return dict(item)
+    return None
+
+
+def _player_ability_slot_limit(player: dict) -> int:
+    return int(_WENYOU_ABILITY_SLOTS.get(_normalize_difficulty(player.get("rank") or "D"), 2))
+
+
+def _find_player_ability(player: dict, ability_ref: str) -> Optional[dict]:
+    ref = str(ability_ref or "").strip()
+    slug = _slug_id(ref)
+    for ability in player.get("abilities") or []:
+        if not isinstance(ability, dict):
+            continue
+        if str(ability.get("id") or ability.get("ability_id") or "") == slug or str(ability.get("name") or "") == ref:
+            return ability
+    return None
+
+
+def _fragment_requirement(fragment_id: str, label: str, quantity: int) -> list[dict[str, Any]]:
+    return [{"id": fragment_id, "name": label, "category": "fragment", "quantity": max(1, int(quantity or 1))}]
+
+
+def learn_or_upgrade_ability(user_id: int, ability_ref: str, player_id: Any = "player1") -> tuple[bool, str, dict]:
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return False, "当前没有可学习能力的文游存档。", get_session_view(uid)
+    _session_ensure_stats(session)
+    phase = _session_phase(session)
+    safe_rest = bool((session.get("flags") or {}).get("safe_rest_node")) if isinstance(session.get("flags"), dict) else False
+    if phase not in {"hub", "settlement"} and not safe_rest:
+        return False, "能力学习/升级只能在主神空间、结算阶段或安全休整节点进行。", get_session_view(uid)
+    definition = _ability_definition(ability_ref)
+    if not definition:
+        return False, "未找到该能力模板。", get_session_view(uid)
+    pid = _resolve_player_key(player_id)
+    wallet = _load_wenyou_wallet(uid, session)
+    st = session["stats"]
+    player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
+    _recalc_player_caps(player)
+    rank = _normalize_difficulty(player.get("rank") or "D")
+    ability_rarity = _normalize_difficulty(definition.get("rarity") or "D")
+    if _rarity_rank(rank) < _rarity_rank(ability_rarity):
+        return False, f"阶位不足，需要 {ability_rarity} 阶才能学习该能力。", get_session_view(uid)
+    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    existing = _find_player_ability(player, str(definition.get("id") or ""))
+    changes: dict[str, Any] = {"players": {pid: {}}, "inventory_remove": []}
+    if existing:
+        cur_level = max(1, int(existing.get("level") or 1))
+        max_level = max(1, int(definition.get("max_level") or 5))
+        if cur_level >= max_level:
+            return False, f"该能力已达到 Lv{max_level}。", get_session_view(uid)
+        target_level = cur_level + 1
+        rank_gate = {3: "C", 4: "B", 5: "A"}.get(target_level, "D")
+        if _rarity_rank(rank) < _rarity_rank(rank_gate):
+            return False, f"升级到 Lv{target_level} 需要 {rank_gate} 阶。", get_session_view(uid)
+        cost = int(_WENYOU_ABILITY_UPGRADE_COST.get(target_level, 120))
+        inventory, missing = _consume_inventory_requirements(inventory, _fragment_requirement("ability_fragment", "能力碎片", cost))
+        if missing:
+            return False, "能力碎片不足：" + "、".join(missing), get_session_view(uid)
+        existing["level"] = target_level
+        existing["desc"] = str(definition.get("desc") or existing.get("desc") or "")
+        changes["players"][pid] = {"ability_upgraded": {"id": definition["id"], "level": target_level}, "ability_fragments_delta": -cost}
+        message = f"能力【{definition['name']}】已升级到 Lv{target_level}。"
+    else:
+        ability = {
+            "id": str(definition.get("id") or ""),
+            "name": str(definition.get("name") or ""),
+            "rarity": ability_rarity,
+            "level": 1,
+            "slot_type": str(definition.get("slot_type") or "active"),
+            "uses_per_instance": int(definition.get("uses_per_instance") or 1),
+            "cooldown_instances": int(definition.get("cooldown_instances") or 0),
+            "desc": str(definition.get("desc") or ""),
+            "tags": list(definition.get("tags") or []),
+        }
+        token_used = False
+        if int(player.get("ability_tokens") or 0) > 0:
+            player["ability_tokens"] = max(0, int(player.get("ability_tokens") or 0) - 1)
+            token_used = True
+        else:
+            template_item = next(
+                (
+                    x
+                    for x in inventory
+                    if isinstance(x, dict)
+                    and str(x.get("category") or x.get("item_type") or "") == "ability"
+                    and (str(x.get("id") or "") == str(definition.get("id") or "") or str(x.get("name") or "") == str(definition.get("name") or ""))
+                ),
+                None,
+            )
+            if template_item:
+                inventory, consumed_template = _consume_inventory_item(inventory, template_item)
+                if consumed_template:
+                    changes["inventory_remove"].append(consumed_template)
+                    changes["players"][pid]["ability_template_consumed"] = {"id": definition["id"], "name": definition["name"]}
+            else:
+                cost = int(definition.get("fragment_cost") or _WENYOU_REWARD_FRAGMENT_AMOUNTS["ability_fragment"].get(ability_rarity, 10))
+                inventory, missing = _consume_inventory_requirements(inventory, _fragment_requirement("ability_fragment", "能力碎片", cost))
+                if missing:
+                    return False, "缺少能力点、能力模板或能力碎片：" + "、".join(missing), get_session_view(uid)
+                changes["players"][pid]["ability_fragments_delta"] = -cost
+        abilities = [x for x in (player.get("abilities") or []) if isinstance(x, dict)]
+        dormant = [x for x in (player.get("dormant_abilities") or []) if isinstance(x, dict)]
+        if len(abilities) < _player_ability_slot_limit(player):
+            abilities.append(ability)
+            changes["players"][pid]["ability_learned"] = ability
+            message = f"已学习能力【{definition['name']}】。"
+        else:
+            dormant.append(ability)
+            changes["players"][pid]["ability_dormant"] = ability
+            message = f"能力槽已满，【{definition['name']}】已进入休眠能力。"
+        if token_used:
+            changes["players"][pid]["ability_tokens_delta"] = -1
+        player["abilities"] = abilities[:8]
+        player["dormant_abilities"] = dormant[:8]
+    wallet["inventory"] = inventory[:80]
+    st["inventory"] = inventory[:80]
+    _recalc_player_caps(player)
+    st[pid] = player
+    session["stats"] = st
+    view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.learn_or_upgrade_ability", changes)
+    return True, message, view
+
+
+def use_player_ability(user_id: int, ability_ref: str, player_id: Any = "player1", detail: str = "") -> tuple[bool, str, dict]:
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return False, "当前没有可使用能力的文游存档。", get_session_view(uid)
+    _session_ensure_stats(session)
+    pid = _resolve_player_key(player_id)
+    wallet = _load_wenyou_wallet(uid, session)
+    st = session["stats"]
+    player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
+    _recalc_player_caps(player)
+    ability = _find_player_ability(player, ability_ref)
+    if not ability:
+        return False, "未学习该能力，或该能力处于休眠状态。", get_session_view(uid)
+    ability_id = str(ability.get("id") or _slug_id(ability.get("name")))
+    rank = _normalize_difficulty(player.get("rank") or "D")
+    rarity = _normalize_difficulty(ability.get("rarity") or "D")
+    if _rarity_rank(rank) < _rarity_rank(rarity):
+        return False, f"能力【{ability.get('name')}】仍处于封印状态，需要 {rarity} 阶。", get_session_view(uid)
+    cooldowns = wallet.get("ability_cooldowns") if isinstance(wallet.get("ability_cooldowns"), dict) else {}
+    ability_uses = session.get("ability_uses") if isinstance(session.get("ability_uses"), dict) else {}
+    use_key = f"{pid}:{ability_id}"
+    settlement_count = max(0, int(wallet.get("settlement_count") or 0))
+    ready_after = max(0, int(cooldowns.get(use_key) or 0))
+    if ready_after > settlement_count:
+        return False, f"能力【{ability.get('name')}】仍在冷却，还需完成 {ready_after - settlement_count} 个副本后可用。", get_session_view(uid)
+    used = max(0, int(ability_uses.get(use_key) or 0))
+    max_uses = max(1, int(ability.get("uses_per_instance") or 1))
+    if used >= max_uses and _session_phase(session) == "instance_running":
+        return False, "该能力本副本次数已用完。", get_session_view(uid)
+    level = max(1, int(ability.get("level") or 1))
+    hp_before = int(player.get("hp") or 0)
+    san_before = int(player.get("san") or 0)
+    changes: dict[str, Any] = {"players": {pid: {}}, "clock_updates": [], "flags_set": {}}
+    notes: list[str] = []
+    if ability_id == "quick_bandage":
+        amount = 20 + (level - 1) * 10
+        delta = _adjust_player_stat(player, "hp", amount)
+        notes.append(f"HP {delta:+d}")
+    elif ability_id == "steady_breath":
+        amount = 20 + (level - 1) * 10
+        delta = _adjust_player_stat(player, "san", amount)
+        spi_delta = _apply_san_delta_to_spi(player, delta, mental_recovery=True)
+        notes.append(f"SAN {delta:+d}，精神力 {spi_delta:+d}")
+    elif ability_id == "mental_anchor":
+        removed = _remove_first_condition(player, ["动摇", "污染"] if level >= 4 else ["动摇"])
+        notes.append("移除状态：" + "、".join(removed) if removed else "建立精神锚点")
+        _add_condition_unique(player, "精神锚点：抵消一次精神动摇")
+    elif ability_id == "causal_rollback":
+        san_delta = _adjust_player_stat(player, "san", -(35 - min(20, (level - 1) * 5)))
+        spi_delta = _apply_san_delta_to_spi(player, san_delta)
+        flags = session.get("flags") if isinstance(session.get("flags"), dict) else {}
+        flags["causal_rollback_available"] = True
+        session["flags"] = flags
+        notes.append(f"因果回滚待触发，SAN {san_delta:+d}，精神力 {spi_delta:+d}")
+    elif ability_id == "minor_rule_rewrite":
+        updates = _apply_clock_updates(session, [{"id": "threat", "name": "威胁时钟", "delta": max(1, 2 - (1 if level >= 5 else 0)), "max": 6}])
+        changes["clock_updates"].extend(updates)
+        flags = session.get("flags") if isinstance(session.get("flags"), dict) else {}
+        flags["minor_rule_rewrite_available"] = True
+        session["flags"] = flags
+        notes.append("可改写一条低级公开规则")
+    elif ability_id == "settlement_audit":
+        flags = session.get("flags") if isinstance(session.get("flags"), dict) else {}
+        flags["settlement_audit_available"] = True
+        session["flags"] = flags
+        notes.append("结算复核机会已登记")
+    else:
+        condition = {
+            "anomaly_intuition": "异常直觉：下次观察获得轻微异常提示",
+            "danger_premonition": "危险预感：下一次危险事件前获得提示",
+            "short_tracking": "短距追踪：3 轮内追踪判定 +3",
+            "rule_probe": "规则试探：可验证一条低级规则",
+            "shadow_hide": "影中藏身：潜伏行动风险降低一级",
+            "damage_shift": "伤害转移：下一次 HP 伤害可转移 50% 为 SAN 伤害",
+            "identity_disguise": "身份伪装：潜伏调查暴露度 -2",
+            "pollution_immunity": "污染豁免：抵消一次 A 级以下精神污染",
+            "death_denial": "拒绝一次死亡：濒死时保留 1 HP，SAN 清零",
+        }.get(ability_id, f"{ability.get('name')}：效果已登记")
+        _add_condition_unique(player, condition)
+        notes.append(condition)
+    ability_uses[use_key] = used + 1
+    session["ability_uses"] = ability_uses
+    cooldown_instances = max(0, int(ability.get("cooldown_instances") or 0))
+    if cooldown_instances:
+        cooldowns[use_key] = settlement_count + cooldown_instances
+        wallet["ability_cooldowns"] = cooldowns
+    _recalc_player_caps(player)
+    st[pid] = player
+    session["stats"] = st
+    changes["players"][pid].update(
+        {
+            "ability_used": {"id": ability_id, "name": ability.get("name"), "level": level, "detail": str(detail or "")[:160]},
+            "hp_delta": int(player.get("hp") or 0) - hp_before,
+            "san_delta": int(player.get("san") or 0) - san_before,
+            "conditions": list(player.get("conditions") or []),
+        }
+    )
+    if ability_id in {"death_denial"}:
+        wallet["contract_debt"] = True
+        _refresh_forced_instance_queue(wallet, session)
+    view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.use_ability", changes)
+    return True, f"能力【{ability.get('name')}】已使用：" + "；".join(notes), view
+
+
+def _evolution_route_bonus(route_id: str, target_rank: str) -> dict[str, Any]:
+    route = str(route_id or "human_stable").strip() or "human_stable"
+    route = _slug_id(route)
+    stage_bonus = {"D": 10, "C": 20, "B": 40, "A": 80, "S": 130}.get(_normalize_difficulty(target_rank), 10)
+    item = _WENYOU_EVOLUTION_ROUTES.get(route, _WENYOU_EVOLUTION_ROUTES["human_stable"])
+    return {
+        "name": item.get("name") or "人类稳定",
+        "tags": list(item.get("tags") or []),
+        "attrs": dict(item.get("attrs") or {}),
+        "hp": round(stage_bonus * float(item.get("hp_ratio") or 0.0)),
+        "san": round(stage_bonus * float(item.get("san_ratio") or 0.0)),
+        "pollution": int(item.get("pollution") or 0),
+    }
+
+
+def apply_evolution_effect(user_id: int, route_id: str = "human_stable", player_id: Any = "player1", target_rank: str = "") -> tuple[bool, str, dict]:
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return False, "当前没有可进化的文游存档。", get_session_view(uid)
+    _session_ensure_stats(session)
+    phase = _session_phase(session)
+    if phase not in {"hub", "settlement"}:
+        return False, "进化只能在主神空间或结算阶段进行。", get_session_view(uid)
+    pid = _resolve_player_key(player_id)
+    wallet = _load_wenyou_wallet(uid, session)
+    st = session["stats"]
+    player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
+    _recalc_player_caps(player)
+    current_rank = _normalize_difficulty(player.get("evolution_rank") or "D")
+    if not player.get("evolution_rank") and str(player.get("evolution") or "凡人") in {"凡人", "人类稳定"}:
+        current_idx = -1
+    else:
+        current_idx = _WENYOU_RANK_ORDER.index(current_rank)
+    if current_idx >= len(_WENYOU_RANK_ORDER) - 1:
+        return False, "进化已达到最高阶段。", get_session_view(uid)
+    target_raw = str(target_rank or "").strip().upper()
+    next_rank = target_raw if target_raw else _WENYOU_RANK_ORDER[min(len(_WENYOU_RANK_ORDER) - 1, current_idx + 1)]
+    next_rank = _normalize_difficulty(next_rank)
+    expected = _WENYOU_RANK_ORDER[min(len(_WENYOU_RANK_ORDER) - 1, current_idx + 1)]
+    if next_rank != expected:
+        return False, f"进化必须逐阶进行，下一阶段是 {expected}。", get_session_view(uid)
+    cost_rule = _WENYOU_EVOLUTION_COST[next_rank]
+    if int(player.get("level") or 1) < int(cost_rule["level"]):
+        return False, f"等级不足，需要 Lv{cost_rule['level']}。", get_session_view(uid)
+    if _rarity_rank(player.get("rank") or "D") < _rarity_rank(cost_rule["rank"]):
+        return False, f"阶位不足，需要 {cost_rule['rank']} 阶。", get_session_view(uid)
+    if int(wallet.get("points") or 0) < int(cost_rule["points"]):
+        return False, f"主神积分不足，需要 {cost_rule['points']}。", get_session_view(uid)
+    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    inventory, missing = _consume_inventory_requirements(inventory, _fragment_requirement("evolution_fragment", "进化碎片", int(cost_rule["fragments"])))
+    if missing:
+        return False, "进化碎片不足：" + "、".join(missing), get_session_view(uid)
+    before = {key: int(player.get(key) or 0) for key in _WENYOU_ATTRIBUTE_KEYS}
+    caps_before = {"hp_max": int(player.get("hp_max") or 0), "san_max": int(player.get("san_max") or 0), "spi_max": int(player.get("spi_max") or 0)}
+    bonus = _evolution_route_bonus(route_id, next_rank)
+    for key, amount in (bonus.get("attrs") or {}).items():
+        if key in _WENYOU_ATTRIBUTE_KEYS:
+            player[key] = int(player.get(key) or 0) + int(amount or 0)
+    player["evolution"] = str(bonus.get("name") or "人类稳定")
+    player["bloodline"] = player["evolution"]
+    player["evolution_rank"] = next_rank
+    player["evolution_tags"] = list(dict.fromkeys(list(player.get("evolution_tags") or []) + list(bonus.get("tags") or [])))[:8]
+    player["evolution_hp_bonus"] = int(player.get("evolution_hp_bonus") or 0) + int(bonus.get("hp") or 0)
+    player["evolution_san_bonus"] = int(player.get("evolution_san_bonus") or 0) + int(bonus.get("san") or 0)
+    player["evolution_spi_bonus"] = int(player.get("evolution_spi_bonus") or 0) + (1 if next_rank in {"B", "A", "S"} else 0)
+    if int(bonus.get("pollution") or 0):
+        player["pollution"] = max(0, int(player.get("pollution") or 0) + int(bonus.get("pollution") or 0))
+    wallet["points"] = max(0, int(wallet.get("points") or 0) - int(cost_rule["points"]))
+    wallet["inventory"] = inventory[:80]
+    st["inventory"] = inventory[:80]
+    _recalc_player_caps(player)
+    st[pid] = player
+    session["stats"] = st
+    _refresh_forced_instance_queue(wallet, session)
+    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "evolution_apply", "player": pid, "route": player["evolution"], "rank": next_rank, "points_delta": -int(cost_rule["points"])}]
+    view = _persist_inventory_rule_result(
+        uid,
+        session,
+        wallet,
+        "rules_engine.apply_evolution_effect",
+        {
+            "wallet": {"points_delta": -int(cost_rule["points"])},
+            "players": {
+                pid: {
+                    "evolution": player["evolution"],
+                    "evolution_rank": next_rank,
+                    "attribute_before": before,
+                    "attribute_after": {key: int(player.get(key) or 0) for key in _WENYOU_ATTRIBUTE_KEYS},
+                    "hp_max_delta": int(player.get("hp_max") or 0) - caps_before["hp_max"],
+                    "san_max_delta": int(player.get("san_max") or 0) - caps_before["san_max"],
+                    "spi_max_delta": int(player.get("spi_max") or 0) - caps_before["spi_max"],
+                    "pollution": int(player.get("pollution") or 0),
+                }
+            },
+            "materials_spent": _fragment_requirement("evolution_fragment", "进化碎片", int(cost_rule["fragments"])),
+        },
+    )
+    return True, f"{pid} 已进化为【{player['evolution']}】{next_rank} 阶。", view
+
+
+_CATALOG_ITEM_TYPES = frozenset({"consumable", "weapon", "armor", "accessory", "equippable_tool", "material", "special"})
+
+
+def _normalize_catalog_definition(raw: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        return None
+    rarity = _normalize_difficulty(raw.get("rarity") or "D")
+    item_type = str(raw.get("item_type") or "").strip()
+    if item_type not in _CATALOG_ITEM_TYPES:
+        item_type = str(raw.get("category") or "consumable").strip()
+    if item_type not in _CATALOG_ITEM_TYPES:
+        item_type = "consumable"
+    use_category = str(raw.get("category") or raw.get("kind") or "道具").strip()[:40] or "道具"
+    effect_json = raw.get("effect_json") if isinstance(raw.get("effect_json"), dict) else {}
+    effect_text = str(raw.get("effect") or effect_json.get("text") or raw.get("desc") or "").strip()
+    item: dict[str, Any] = {
+        "id": _slug_id(raw.get("id") or name),
+        "name": name[:80],
+        "kind": use_category,
+        "use_category": use_category,
+        "category": item_type,
+        "item_type": item_type,
+        "rarity": rarity,
+        "price": max(0, int(raw.get("price") or 0)),
+        "desc": effect_text[:240],
+        "effect_json": effect_json,
+        "requirements": raw.get("requirements") if isinstance(raw.get("requirements"), dict) else {},
+        "use_cost": raw.get("use_cost") if isinstance(raw.get("use_cost"), dict) else {},
+        "tags": raw.get("tags") if isinstance(raw.get("tags"), list) else [],
+        "era_tags": raw.get("era_tags") if isinstance(raw.get("era_tags"), list) else ["universal"],
+        "use_phase": raw.get("use_phase") if isinstance(raw.get("use_phase"), list) else [],
+        "consume": bool(raw.get("consume")),
+        "stackable": bool(raw.get("stackable")),
+        "shop_allowed": bool(raw.get("shop_allowed")),
+        "gacha_allowed": bool(raw.get("gacha_allowed")),
+        "seal_rank": str(raw.get("seal_rank") or "").strip() or None,
+        "weight": max(0, int(raw.get("weight") or 100)),
+    }
+    equip_slot = str(raw.get("equip_slot") or "").strip()
+    if equip_slot:
+        item["equip_slot"] = equip_slot
+    if effect_json.get("durability"):
+        try:
+            item["durability"] = max(0, int(effect_json.get("durability") or 0))
+            item["durability_max"] = item["durability"]
+        except Exception:
+            pass
+    if effect_json.get("uses"):
+        try:
+            item["uses_left"] = max(0, int(effect_json.get("uses") or 0))
+        except Exception:
+            pass
+    return item
+
+
+def _load_content_item_catalog() -> list[dict[str, Any]]:
+    path = Path(BASE_DIR) / "content" / "default" / "items.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        logger.warning("文游道具目录加载失败 path=%s err=%s", path, exc)
+        return []
+    raw_items = data.get("items") if isinstance(data, dict) else data
+    if not isinstance(raw_items, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        item = _normalize_catalog_definition(raw)
+        if not item:
+            continue
+        iid = str(item.get("id") or "")
+        if not iid or iid in seen:
+            continue
+        seen.add(iid)
+        out.append(item)
+    return out
 
 
 _SHOP_CATALOG: list[dict[str, Any]] = [
@@ -2808,6 +5069,25 @@ _GACHA_CATALOG: list[dict[str, Any]] = [
     {"id": "god_echo", "name": "主神残响", "rarity": "S", "kind": "能力", "category": "ability", "desc": "封印体，需阶位解锁完整效果。", "sigil": "ECHO"},
     {"id": "memory_needle", "name": "记忆缝针", "rarity": "S", "kind": "记忆", "category": "consumable", "desc": "缝合一次被污染的关键记忆。", "sigil": "NEED"},
 ]
+
+_FALLBACK_SHOP_CATALOG = list(_SHOP_CATALOG)
+_FALLBACK_GACHA_CATALOG = list(_GACHA_CATALOG)
+_CONTENT_ITEM_CATALOG = _load_content_item_catalog()
+if _CONTENT_ITEM_CATALOG:
+    _SHOP_CATALOG = [
+        dict(item)
+        for item in _CONTENT_ITEM_CATALOG
+        if item.get("shop_allowed") and item.get("category") in _CATALOG_ITEM_TYPES and str(item.get("rarity") or "D") in {"D", "C", "B"}
+    ]
+    _GACHA_CATALOG = [dict(item) for item in _CONTENT_ITEM_CATALOG if item.get("gacha_allowed")]
+    existing_gacha_ids = {str(item.get("id") or "") for item in _GACHA_CATALOG}
+    for legacy_item in _FALLBACK_GACHA_CATALOG:
+        if str(legacy_item.get("category") or "") in {"ability", "bloodline", "evolution"} and str(legacy_item.get("id") or "") not in existing_gacha_ids:
+            _GACHA_CATALOG.append(dict(legacy_item))
+_SHOP_CATALOG_BY_ID = {str(item.get("id") or ""): item for item in _SHOP_CATALOG}
+_ITEM_CATALOG_BY_ID = {str(item.get("id") or ""): item for item in _CONTENT_ITEM_CATALOG}
+_ITEM_CATALOG_BY_NAME = {str(item.get("name") or ""): item for item in _CONTENT_ITEM_CATALOG}
+
 _GACHA_ITEMS_BY_RARITY: dict[str, list[dict[str, Any]]] = {}
 for _gacha_item in _GACHA_CATALOG:
     _GACHA_ITEMS_BY_RARITY.setdefault(str(_gacha_item.get("rarity") or "D"), []).append(_gacha_item)
@@ -2837,10 +5117,342 @@ def _shift_rarity(rarity: str, delta: int) -> str:
     return ranks[max(0, min(len(ranks) - 1, idx + int(delta or 0)))]
 
 
+def _instance_item_grant_cap(session: dict) -> str:
+    fw = _framework_for_runtime(session.get("framework") or {})
+    difficulty = _normalize_difficulty(fw.get("difficulty") or "D")
+    # 常规局内掉落最多比副本难度高 1 阶：D 本最多 C，避免 GM 把隐藏奖励写穿。
+    return _shift_rarity(difficulty, 1)
+
+
+def _resolve_catalog_item_for_proposal(proposal: dict, session: dict) -> Optional[dict[str, Any]]:
+    if not isinstance(proposal, dict):
+        return None
+    raw_key = str(proposal.get("id") or proposal.get("name") or "").strip()
+    if not raw_key:
+        return None
+    item = _ITEM_CATALOG_BY_ID.get(_slug_id(raw_key)) or _ITEM_CATALOG_BY_ID.get(raw_key) or _ITEM_CATALOG_BY_NAME.get(raw_key)
+    if not item:
+        return None
+    cap = _instance_item_grant_cap(session)
+    if _rarity_rank(item.get("rarity")) > _rarity_rank(cap):
+        return None
+    prepared = dict(item)
+    max_rank = _max_player_rank(session)
+    if str(prepared.get("rarity") or "D") in {"A", "S"} and _rarity_rank(prepared.get("rarity")) > _rarity_rank(max_rank):
+        prepared["sealed"] = True
+        prepared["sealed_reason"] = f"当前最高阶位 {max_rank}，需达到 {prepared.get('rarity')} 阶后解封。"
+    return prepared
+
+
+def _max_player_level(session: dict) -> int:
+    _session_ensure_stats(session)
+    levels: list[int] = []
+    for pk in ("player1", "player2"):
+        player = session.get("stats", {}).get(pk)
+        if isinstance(player, dict):
+            levels.append(max(1, int(player.get("level") or 1)))
+    return max(levels or [1])
+
+
+def _max_player_attr(session: dict, attr: str) -> int:
+    _session_ensure_stats(session)
+    values: list[int] = []
+    aliases = {"int": "int", "wis": "int", "vit": "con", "spi_current": "spi_current"}
+    key = aliases.get(attr, attr)
+    for pk in ("player1", "player2"):
+        player = session.get("stats", {}).get(pk)
+        if not isinstance(player, dict):
+            continue
+        if key == "spi_current":
+            values.append(max(0, int(player.get("spi_current") or 0)))
+        else:
+            values.append(max(0, int(player.get(key) or player.get(attr) or 0)))
+    return max(values or [0])
+
+
+def _item_requirement_blockers(item: dict, session: dict) -> list[str]:
+    blockers: list[str] = []
+    seal_rank = str(item.get("seal_rank") or "").strip().upper()
+    if seal_rank and _rarity_rank(_max_player_rank(session)) < _rarity_rank(seal_rank):
+        blockers.append(f"需达到 {seal_rank} 阶")
+    req = item.get("requirements") if isinstance(item.get("requirements"), dict) else {}
+    level_min = _to_non_negative_int(req.get("level_min"), 0)
+    if level_min and _max_player_level(session) < level_min:
+        blockers.append(f"需等级 {level_min}")
+    for attr in ("str", "con", "agi", "int", "spi", "luk", "spi_current"):
+        key = f"{attr}_min"
+        needed = _to_non_negative_int(req.get(key), 0)
+        if needed and _max_player_attr(session, attr) < needed:
+            label = {
+                "str": "力量",
+                "con": "体质",
+                "agi": "敏捷",
+                "int": "智力",
+                "spi": "精神",
+                "luk": "幸运",
+                "spi_current": "当前精神力",
+            }.get(attr, attr)
+            blockers.append(f"需{label} {needed}")
+    return blockers
+
+
+def _seal_item_if_needed(item: dict, session: dict) -> dict:
+    prepared = dict(item)
+    blockers = _item_requirement_blockers(prepared, session)
+    if blockers:
+        prepared["sealed"] = True
+        prepared["sealed_reason"] = "；".join(blockers[:4])
+    return prepared
+
+
+def _unique_item_for_proposal(proposal: dict, session: dict) -> Optional[dict[str, Any]]:
+    if not isinstance(proposal, dict):
+        return None
+    name = str(proposal.get("name") or proposal.get("id") or "").strip()
+    effect = str(proposal.get("effect") or proposal.get("reason") or "").strip()
+    if not name or not effect:
+        return None
+    rarity = _normalize_difficulty(proposal.get("rarity") or "A")
+    requirements = proposal.get("requirements") if isinstance(proposal.get("requirements"), dict) else {}
+    seal_rank = str(proposal.get("seal_rank") or "").strip().upper()
+    if not seal_rank and not requirements and rarity in {"A", "S"}:
+        seal_rank = rarity
+    item = {
+        "id": _slug_id(proposal.get("id") or name, "unique_item"),
+        "name": name[:80],
+        "kind": str(proposal.get("category") or "唯一奖励").strip()[:40] or "唯一奖励",
+        "category": "special",
+        "item_type": "special",
+        "rarity": rarity,
+        "desc": effect[:240],
+        "quantity": 1,
+        "carry_out": True,
+        "temporary": False,
+        "quest_item": False,
+        "unique": True,
+        "stackable": False,
+        "consume": False,
+        "use_phase": ["hub", "settlement", "instance"],
+        "requirements": requirements,
+        "seal_rank": seal_rank or None,
+        "instance_grant_reason": str(proposal.get("reason") or "")[:180],
+    }
+    return _seal_item_if_needed(item, session)
+
+
+def _unique_duplicate_fragment_item(item: dict) -> dict[str, Any]:
+    rarity = _normalize_difficulty(item.get("rarity") or "D")
+    qty = max(5, int(_GACHA_FRAGMENT_VALUES.get(rarity, 5) * 1.5))
+    return {
+        "id": f"{item.get('id')}_echo_fragment",
+        "name": f"{item.get('name')}回响碎片",
+        "kind": "碎片",
+        "category": "fragment",
+        "item_type": "material",
+        "rarity": rarity,
+        "quantity": qty,
+        "desc": f"重复获得唯一物【{item.get('name')}】后由主神转化。",
+        "stackable": True,
+        "carry_out": True,
+        "converted_from": item.get("id"),
+    }
+
+
+def _task_item_for_proposal(proposal: dict) -> Optional[dict[str, Any]]:
+    if not isinstance(proposal, dict):
+        return None
+    name = str(proposal.get("name") or proposal.get("id") or "").strip()
+    if not name:
+        return None
+    rarity = _normalize_difficulty(proposal.get("rarity") or "D")
+    desc = str(proposal.get("effect") or proposal.get("reason") or "副本内任务物品。").strip()
+    item_id = _slug_id(proposal.get("id") or name, "task_item")
+    return {
+        "id": item_id,
+        "name": name[:80],
+        "kind": str(proposal.get("category") or "任务物品").strip()[:40] or "任务物品",
+        "category": "quest",
+        "item_type": "quest",
+        "rarity": rarity,
+        "desc": desc[:240],
+        "quantity": max(1, min(3, int(proposal.get("quantity") or 1))),
+        "carry_out": False,
+        "temporary": True,
+        "quest_item": True,
+        "stackable": False,
+        "use_phase": ["instance"],
+        "instance_grant_reason": str(proposal.get("reason") or "")[:180],
+    }
+
+
+def _apply_state_proposal_item_grants(session: dict, proposals: Any) -> list[dict[str, Any]]:
+    if not isinstance(proposals, list):
+        return []
+    _session_ensure_stats(session)
+    st = session["stats"]
+    inventory = _normalize_inventory(st.get("inventory"), source="session")
+    grants: list[dict[str, Any]] = []
+    for proposal in proposals[:12]:
+        if not isinstance(proposal, dict):
+            continue
+        ptype = str(proposal.get("type") or "")
+        if ptype not in {"acquire_item", "acquire_task_item", "acquire_unique_item"}:
+            continue
+        if str(proposal.get("visibility") or "hidden") != "public":
+            continue
+        if ptype == "acquire_task_item":
+            item = _task_item_for_proposal(proposal)
+        elif ptype == "acquire_unique_item":
+            item = _unique_item_for_proposal(proposal, session)
+        else:
+            item = _resolve_catalog_item_for_proposal(proposal, session)
+        if not item:
+            continue
+        quantity = max(1, min(3, int(proposal.get("quantity") or 1)))
+        if ptype == "acquire_unique_item":
+            quantity = 1
+        elif ptype == "acquire_task_item":
+            quantity = int(item.get("quantity") or quantity)
+        elif not item.get("stackable"):
+            quantity = 1
+        if ptype == "acquire_unique_item" and _inventory_has_item(inventory, item_id=str(item.get("id") or "")):
+            item = _unique_duplicate_fragment_item(item)
+            quantity = int(item.get("quantity") or 1)
+            grant_source = "instance_unique_duplicate"
+            grant_prefix = "unique-frag"
+        else:
+            grant_source = "instance_task" if ptype == "acquire_task_item" else "instance_unique" if ptype == "acquire_unique_item" else "instance"
+            grant_prefix = "task" if ptype == "acquire_task_item" else "unique" if ptype == "acquire_unique_item" else "instance"
+        item_obj = _new_inventory_item(
+            item,
+            grant_source,
+            grant_prefix,
+            {
+                "quantity": quantity,
+                "instance_grant_reason": str(proposal.get("reason") or "")[:180],
+            },
+        )
+        inventory = _add_inventory_item(inventory, item_obj)
+        grants.append(item_obj)
+        if len(grants) >= 3:
+            break
+    if grants:
+        st["inventory"] = inventory[:80]
+        session["stats"] = st
+    return grants
+
+
+def _regular_reward_rarity_cap(difficulty: str) -> str:
+    difficulty = _normalize_difficulty(difficulty)
+    if difficulty in {"D", "C", "B"}:
+        return _shift_rarity(difficulty, 1)
+    return "S"
+
+
+def _cap_reward_rarity(rarity: str, cap: str) -> tuple[str, bool]:
+    normalized = _normalize_difficulty(rarity)
+    cap = _normalize_difficulty(cap)
+    if _rarity_rank(normalized) > _rarity_rank(cap):
+        return cap, True
+    return normalized, False
+
+
+def _load_reward_table_config() -> dict[str, Any]:
+    global _WENYOU_REWARD_TABLE_CONFIG
+    if _WENYOU_REWARD_TABLE_CONFIG is not None:
+        return _WENYOU_REWARD_TABLE_CONFIG
+    path = Path(BASE_DIR) / "content" / "default" / "reward_tables.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        data = {}
+    except Exception as exc:
+        logger.warning("文游奖励表加载失败 path=%s err=%s", path, exc)
+        data = {}
+    _WENYOU_REWARD_TABLE_CONFIG = data if isinstance(data, dict) else {}
+    return _WENYOU_REWARD_TABLE_CONFIG
+
+
+def _reward_weight_options(section: str, key: str, fallback: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    data = _load_reward_table_config()
+    section_data = data.get(section) if isinstance(data.get(section), dict) else {}
+    raw = section_data.get(key) if isinstance(section_data, dict) else None
+    if not isinstance(raw, list):
+        return list(fallback)
+    out: list[tuple[str, float]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            name = str(item.get("id") or item.get("rarity") or item.get("category") or item.get("name") or "").strip()
+            weight = item.get("weight")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            name = str(item[0] or "").strip()
+            weight = item[1]
+        else:
+            continue
+        try:
+            weight_f = float(weight)
+        except Exception:
+            weight_f = 0.0
+        if name and weight_f > 0:
+            out.append((name, weight_f))
+    return out or list(fallback)
+
+
+def _reward_category_boosts_from_context(session: dict) -> dict[str, float]:
+    rules = _rules_state_from_session(session)
+    context = _reward_context_from_raw(rules.get("reward_context"))
+    tags = _normalize_text_list(context.get("reward_tags"), 80, 40)
+    flags = _settlement_flags_from_raw(rules.get("settlement_flags"))
+    tags.extend(f"hidden:{x}" for x in _normalize_text_list(flags.get("hidden_endings"), 80, 20))
+    config = _load_reward_table_config()
+    configured = config.get("tag_category_boosts") if isinstance(config.get("tag_category_boosts"), dict) else {}
+    boosts: dict[str, float] = {}
+
+    def add(category: str, amount: float) -> None:
+        if not category or amount <= 0:
+            return
+        boosts[category] = boosts.get(category, 0.0) + amount
+
+    for tag in tags:
+        lower = str(tag or "").lower()
+        if "monster_sealed" in lower or "boss" in lower:
+            add("special", 8.0)
+            add("evolution_fragment", 5.0)
+            add("gear", 3.0)
+        if "monster_defeated" in lower:
+            add("gear", 8.0)
+            add("material", 5.0)
+        if "monster_evaded" in lower:
+            add("consumable_item", 5.0)
+            add("ability_fragment", 3.0)
+        if "hidden" in lower:
+            add("special", 8.0)
+            add("evolution_fragment", 6.0)
+        for marker, cfg in configured.items():
+            if str(marker or "").lower() not in lower or not isinstance(cfg, dict):
+                continue
+            for category, amount in cfg.items():
+                try:
+                    add(str(category), float(amount))
+                except Exception:
+                    continue
+    return boosts
+
+
+def _apply_reward_category_boosts(options: list[tuple[str, float]], boosts: dict[str, float]) -> list[tuple[str, float]]:
+    if not boosts:
+        return options
+    by_category = {name: float(weight or 0.0) for name, weight in options}
+    for category, amount in boosts.items():
+        by_category[category] = max(0.0, by_category.get(category, 0.0) + float(amount or 0.0))
+    return [(name, weight) for name, weight in by_category.items() if weight > 0]
+
+
 def _reward_catalog_candidates(category: str, rarity: str) -> list[dict[str, Any]]:
     seen: set[str] = set()
     catalog: list[dict[str, Any]] = []
-    for raw in list(_SHOP_CATALOG) + list(_GACHA_CATALOG):
+    source_catalog = _CONTENT_ITEM_CATALOG if _CONTENT_ITEM_CATALOG else list(_SHOP_CATALOG) + list(_GACHA_CATALOG)
+    for raw in source_catalog:
         item = dict(raw)
         iid = str(item.get("id") or item.get("name") or "")
         if not iid or iid in seen:
@@ -2849,9 +5461,21 @@ def _reward_catalog_candidates(category: str, rarity: str) -> list[dict[str, Any
         catalog.append(item)
     same_rarity = [item for item in catalog if str(item.get("rarity") or "D").upper() == rarity]
     if category == "gear":
-        return [item for item in same_rarity if str(item.get("category") or "") in {"weapon", "armor", "accessory", "equippable_tool"}]
+        return [
+            item
+            for item in same_rarity
+            if str(item.get("item_type") or item.get("category") or "") in {"weapon", "armor", "accessory", "equippable_tool"}
+        ]
     if category == "consumable_item":
-        return [item for item in same_rarity if str(item.get("category") or "consumable") == "consumable"]
+        return [item for item in same_rarity if str(item.get("item_type") or item.get("category") or "consumable") == "consumable"]
+    if category == "material":
+        return [item for item in same_rarity if str(item.get("item_type") or item.get("category") or "") == "material"]
+    if category == "special":
+        return [item for item in same_rarity if str(item.get("item_type") or item.get("category") or "") == "special"]
+    if category == "ability_fragment":
+        return [item for item in same_rarity if str(item.get("category") or "") == "ability"]
+    if category == "evolution_fragment":
+        return [item for item in same_rarity if str(item.get("category") or "") in {"bloodline", "evolution"}]
     return []
 
 
@@ -2909,23 +5533,65 @@ def _roll_settlement_rewards(user_id: int, session: dict, settlement: dict) -> l
     rng = random.Random(seed)
     rewards: list[dict[str, Any]] = []
     has_bplus = False
+    material_streak = 0
+    regular_cap = _regular_reward_rarity_cap(difficulty)
+    category_boosts = _reward_category_boosts_from_context(session)
+    bonus_bplus_remaining = 0
+    if rating == "S":
+        bonus_bplus_remaining += 1
+    bonus_bplus_remaining += max(0, int(settlement.get("hidden_bonus_rolls") or 0))
+    allow_over_cap_bonus = bonus_bplus_remaining > 0
     for index in range(rolls):
-        rarity = _weighted_pick(_WENYOU_REWARD_RARITY_RATES.get(difficulty, []), rng, fallback=difficulty)
+        raw_rarity = _weighted_pick(
+            _reward_weight_options("rarity_rates", difficulty, _WENYOU_REWARD_RARITY_RATES.get(difficulty, [])),
+            rng,
+            fallback=difficulty,
+        )
+        rarity = raw_rarity
         if rating == "S":
             rarity = _shift_rarity(rarity, 1)
         elif rating == "A" and rng.random() < 0.3:
             rarity = _shift_rarity(rarity, 1)
         elif (rating == "C" and rng.random() < 0.3) or rating in {"D", "F"}:
             rarity = _shift_rarity(rarity, -1)
-        if rating == "S" and index == 0 and _rarity_rank(rarity) < _rarity_rank("B"):
+        exceptional_over_cap = False
+        if bonus_bplus_remaining > 0 and _rarity_rank(rarity) < _rarity_rank("B"):
             rarity = "B"
-        category = _weighted_pick(_WENYOU_REWARD_CATEGORY_RATES.get(rarity, []), rng, fallback="consumable_item")
+            bonus_bplus_remaining -= 1
+        capped_rarity, capped = _cap_reward_rarity(rarity, regular_cap)
+        if capped:
+            if allow_over_cap_bonus and _rarity_rank(rarity) <= _rarity_rank("B") and _rarity_rank(regular_cap) < _rarity_rank("B"):
+                exceptional_over_cap = True
+            else:
+                rarity = capped_rarity
+        category_options = _reward_weight_options("category_rates", rarity, _WENYOU_REWARD_CATEGORY_RATES.get(rarity, []))
+        category_options = _apply_reward_category_boosts(category_options, category_boosts)
+        if material_streak >= 3:
+            category_options = [(name, weight) for name, weight in category_options if name != "material"]
+        category = _weighted_pick(category_options, rng, fallback="consumable_item")
         candidates = _reward_catalog_candidates(category, rarity)
         if candidates:
             picked = dict(candidates[rng.randrange(len(candidates))])
         else:
             picked = _reward_stack_item(category, rarity)
-        item = _new_inventory_item(picked, "settlement", "reward", {"reward_category": category})
+        extra = {
+            "reward_category": category,
+            "reward_roll": {
+                "seed": seed,
+                "raw_rarity": raw_rarity,
+                "final_rarity": rarity,
+                "regular_cap": regular_cap,
+                "capped": bool(capped and not exceptional_over_cap),
+                "exceptional_over_cap": exceptional_over_cap,
+            },
+        }
+        if exceptional_over_cap:
+            picked["shop_allowed"] = False
+            picked["gacha_allowed"] = False
+            picked["sealed"] = True
+            picked["seal_rank"] = picked.get("seal_rank") or rarity
+            picked["sealed_reason"] = f"{difficulty} 级副本的越级奖励，需达到 {rarity} 阶或按内容包降级生效。"
+        item = _new_inventory_item(picked, "settlement", "reward", extra)
         rewards.append(
             {
                 "roll_id": f"reward-{index + 1:02d}",
@@ -2933,17 +5599,38 @@ def _roll_settlement_rewards(user_id: int, session: dict, settlement: dict) -> l
                 "category": category,
                 "category_label": _WENYOU_REWARD_CATEGORY_LABELS.get(category, category),
                 "item": item,
+                "raw_rarity": raw_rarity,
+                "regular_cap": regular_cap,
+                "capped": bool(capped and not exceptional_over_cap),
+                "exceptional_over_cap": exceptional_over_cap,
             }
         )
         has_bplus = has_bplus or _rarity_rank(rarity) >= _rarity_rank("B")
-    if rating == "S" and rewards and not has_bplus:
-        replacement = _new_inventory_item(_reward_stack_item("material", "B"), "settlement", "reward", {"reward_category": "material"})
+        material_streak = material_streak + 1 if category == "material" else 0
+    if (rating == "S" or int(settlement.get("hidden_bonus_rolls") or 0) > 0) and rewards and not has_bplus:
+        picked = _reward_stack_item("material", "B")
+        exceptional_over_cap = _rarity_rank("B") > _rarity_rank(regular_cap)
+        if exceptional_over_cap:
+            picked["sealed"] = True
+            picked["seal_rank"] = "B"
+            picked["sealed_reason"] = f"{difficulty} 级副本的 B+ 保底奖励，需达到 B 阶或按内容包降级生效。"
+        replacement = _new_inventory_item(
+            picked,
+            "settlement",
+            "reward",
+            {"reward_category": "material", "reward_roll": {"seed": seed, "forced_bplus": True, "regular_cap": regular_cap}},
+        )
         rewards[0] = {
             "roll_id": rewards[0].get("roll_id") or "reward-01",
             "rarity": "B",
             "category": "material",
             "category_label": _WENYOU_REWARD_CATEGORY_LABELS["material"],
             "item": replacement,
+            "raw_rarity": rewards[0].get("raw_rarity"),
+            "regular_cap": regular_cap,
+            "capped": False,
+            "exceptional_over_cap": exceptional_over_cap,
+            "forced_bplus": True,
         }
     return rewards
 
@@ -3031,6 +5718,16 @@ def _max_player_rank(session: dict) -> str:
 
 def _pick_gacha_definition(pool_id: str, rarity: str, rng: random.Random) -> dict:
     pool = _GACHA_ITEMS_BY_RARITY.get(rarity) or _GACHA_ITEMS_BY_RARITY.get("D") or []
+    normalized_pool = _normalize_gacha_pool_id(pool_id)
+    if normalized_pool == "weapon_pool":
+        filtered = [item for item in pool if str(item.get("category") or "") in {"weapon", "armor", "accessory", "equippable_tool"}]
+        pool = filtered or pool
+    elif normalized_pool == "ability_pool":
+        filtered = [item for item in pool if str(item.get("category") or "") == "ability"]
+        pool = filtered or pool
+    elif normalized_pool == "evolution_pool":
+        filtered = [item for item in pool if str(item.get("category") or "") in {"bloodline", "evolution"}]
+        pool = filtered or pool
     if not pool:
         return {"id": "unknown", "name": "未知残片", "rarity": rarity, "kind": "残片", "category": "fragment", "desc": "", "sigil": "UNK", "stackable": True}
     return dict(pool[rng.randrange(len(pool))])
@@ -3169,9 +5866,24 @@ def _shop_today_key() -> str:
     return now_beijing_iso()[:10]
 
 
-def _shop_offer_items(user_id: int) -> list[dict[str, Any]]:
+def _regular_shop_state(wallet: dict) -> dict:
+    shop_state = wallet.get("shop_state") if isinstance(wallet.get("shop_state"), dict) else {}
+    regular = shop_state.get("regular") if isinstance(shop_state.get("regular"), dict) else {}
+    today = _shop_today_key()
+    if str(regular.get("date") or "") != today:
+        regular = {"date": today, "refresh_count": 0, "refresh_limit": 3, "refresh_cost": 20, "rotation_nonce": ""}
+        shop_state["regular"] = regular
+        wallet["shop_state"] = shop_state
+    regular["refresh_limit"] = 3
+    regular["refresh_cost"] = 20
+    regular["refresh_count"] = max(0, int(regular.get("refresh_count") or 0))
+    return regular
+
+
+def _shop_offer_items(user_id: int, wallet: Optional[dict] = None) -> list[dict[str, Any]]:
     """每天按用户固定随机 7-8 个商品；普通商店只出 D/C，低概率 1 个 B。"""
-    rng = random.Random(f"wenyou-shop:{int(user_id or 0)}:{_shop_today_key()}")
+    regular = _regular_shop_state(wallet) if isinstance(wallet, dict) else {"refresh_count": 0, "rotation_nonce": ""}
+    rng = random.Random(f"wenyou-shop:{int(user_id or 0)}:{_shop_today_key()}:{regular.get('refresh_count', 0)}:{regular.get('rotation_nonce') or ''}")
     low = [dict(item) for item in _SHOP_CATALOG if str(item.get("rarity") or "D") in {"D", "C"}]
     mid = [dict(item) for item in _SHOP_CATALOG if str(item.get("rarity") or "D") == "B"]
     rng.shuffle(low)
@@ -3183,6 +5895,51 @@ def _shop_offer_items(user_id: int) -> list[dict[str, Any]]:
     return offers[:8]
 
 
+def _special_shop_items(user_id: int, session: Optional[dict], wallet: dict) -> list[dict[str, Any]]:
+    if not isinstance(session, dict) or not session.get("gameId"):
+        return []
+    rank = _max_player_rank(session)
+    if _rarity_rank(rank) < _rarity_rank("C"):
+        return []
+    source = _CONTENT_ITEM_CATALOG or _GACHA_CATALOG or _SHOP_CATALOG
+    allowed_rarities = {"B", "C"}
+    if _rarity_rank(rank) >= _rarity_rank("A"):
+        allowed_rarities.add("A")
+    if _rarity_rank(rank) >= _rarity_rank("S"):
+        allowed_rarities.add("S")
+    candidates = [
+        dict(item)
+        for item in source
+        if str(item.get("rarity") or "D").upper() in allowed_rarities
+        and str(item.get("item_type") or item.get("category") or "") in {"material", "weapon", "armor", "accessory", "equippable_tool", "special"}
+        and not item.get("temporary")
+        and not item.get("quest_item")
+    ]
+    rng = random.Random(f"wenyou-special-shop:{int(user_id or 0)}:{now_beijing_iso()[:8]}:{rank}")
+    rng.shuffle(candidates)
+    out: list[dict[str, Any]] = []
+    for item in candidates:
+        rarity = _normalize_difficulty(item.get("rarity") or "B")
+        cur = dict(item)
+        cur["shop_type"] = "special"
+        if rarity == "S":
+            cur["price"] = max(12000, int(cur.get("price") or 0))
+            cur["unique"] = True
+            cur["sealed"] = cur.get("sealed") if cur.get("sealed") is not None else True
+            cur["seal_rank"] = cur.get("seal_rank") or "S"
+        elif rarity == "A":
+            cur["price"] = max(900, int(cur.get("price") or 0))
+        elif rarity == "B":
+            cur["price"] = max(260, int(cur.get("price") or 0))
+        if _rarity_rank(rarity) > _rarity_rank(rank):
+            cur["sealed"] = True
+            cur["sealed_reason"] = f"当前最高阶位 {rank}，购买后需达到 {rarity} 阶完整解封。"
+        out.append(cur)
+        if len(out) >= 6:
+            break
+    return out
+
+
 def get_shop_view(user_id: int) -> dict:
     """文游系统商店：只读取当前 session 积分与背包。"""
     uid = int(user_id)
@@ -3191,6 +5948,7 @@ def get_shop_view(user_id: int) -> dict:
     phase = "hub"
     inventory: list[dict] = []
     wallet = _load_wenyou_wallet(uid, session if active else None)
+    regular_state = _regular_shop_state(wallet)
     if active:
         _session_ensure_stats(session)
         st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
@@ -3198,6 +5956,9 @@ def get_shop_view(user_id: int) -> dict:
         _sync_session_points_with_wallet(session, wallet)
         inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
     can_buy = bool(active and _shop_open_for_phase(phase))
+    regular_items = _shop_offer_items(uid, wallet)
+    special_items = _special_shop_items(uid, session if active else None, wallet)
+    special_unlocked = bool(special_items)
     return {
         "active": active,
         "phase": phase,
@@ -3207,8 +5968,52 @@ def get_shop_view(user_id: int) -> dict:
         "debts": max(0, int(wallet.get("debts") or 0)),
         "inventory": inventory,
         "generatedAt": _shop_today_key(),
-        "items": _shop_offer_items(uid),
+        "items": regular_items,
+        "shop_state": {
+            "regular": {
+                "rotation_id": f"regular_{regular_state.get('date')}_{regular_state.get('refresh_count', 0)}",
+                "refresh_count": int(regular_state.get("refresh_count") or 0),
+                "refresh_limit": int(regular_state.get("refresh_limit") or 3),
+                "refresh_cost": int(regular_state.get("refresh_cost") or 20),
+                "items": regular_items,
+            },
+            "special": {
+                "unlocked": special_unlocked,
+                "unlock_rank": "C",
+                "rotation_id": f"special_{now_beijing_iso()[:8]}",
+                "items": special_items,
+            },
+        },
     }
+
+
+def refresh_shop_items(user_id: int) -> tuple[bool, str, dict]:
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return False, "当前没有可刷新的文游存档。", get_shop_view(uid)
+    _session_ensure_stats(session)
+    phase = _session_phase(session)
+    if not _shop_open_for_phase(phase):
+        return False, "副本进行中，系统商店关闭，不能刷新货架。", get_shop_view(uid)
+    wallet = _load_wenyou_wallet(uid, session)
+    regular = _regular_shop_state(wallet)
+    limit = int(regular.get("refresh_limit") or 3)
+    count = int(regular.get("refresh_count") or 0)
+    cost = int(regular.get("refresh_cost") or 20)
+    if count >= limit:
+        return False, "今日普通商店刷新次数已用完。", get_shop_view(uid)
+    if int(wallet.get("points") or 0) < cost:
+        return False, f"主神积分不足，刷新需要 {cost}。", get_shop_view(uid)
+    wallet["points"] = max(0, int(wallet.get("points") or 0) - cost)
+    regular["refresh_count"] = count + 1
+    regular["rotation_nonce"] = uuid4().hex[:8]
+    wallet.setdefault("shop_state", {})["regular"] = regular
+    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "shop_refresh", "points_delta": -cost, "refresh_count": regular["refresh_count"]}]
+    _save_wenyou_wallet(uid, wallet)
+    _sync_session_points_with_wallet(session, wallet)
+    r2_store.save_wenyou_session(uid, session)
+    return True, f"普通商店已刷新，扣除 {cost} 主神积分。", get_shop_view(uid)
 
 
 def buy_shop_item(user_id: int, item_id: str) -> tuple[bool, str, dict]:
@@ -3224,12 +6029,12 @@ def buy_shop_item(user_id: int, item_id: str) -> tuple[bool, str, dict]:
     phase = _session_phase(session)
     if not _shop_open_for_phase(phase):
         return False, "副本进行中，系统商店关闭；只能使用背包已有物品，结束并进入结算后再购买。", get_shop_view(uid)
-    offers = {str(item.get("id") or ""): item for item in _shop_offer_items(uid)}
+    wallet = _load_wenyou_wallet(uid, session)
+    offers = {str(item.get("id") or ""): item for item in (_shop_offer_items(uid, wallet) + _special_shop_items(uid, session, wallet))}
     item = offers.get(iid)
     if not item:
         return False, "该商品已下架，请刷新系统商店。", get_shop_view(uid)
     st = session["stats"]
-    wallet = _load_wenyou_wallet(uid, session)
     points = max(0, int(wallet.get("points") or 0))
     price = max(0, int(item.get("price") or 0))
     if points < price:
@@ -3238,7 +6043,7 @@ def buy_shop_item(user_id: int, item_id: str) -> tuple[bool, str, dict]:
     name = str(item.get("name") or "").strip()
     if not name:
         return False, "商品数据异常。", get_shop_view(uid)
-    if _inventory_has_item(inv, item_id=iid, name=name):
+    if _inventory_has_item(inv, item_id=iid, name=name) and not item.get("stackable") and not item.get("unique"):
         return False, f"背包里已有【{name}】。", get_shop_view(uid)
     inv = _add_inventory_item(inv, _new_inventory_item(item, "shop", "shop"))
     wallet["points"] = points - price
@@ -3345,11 +6150,50 @@ def _growth_view(session: dict, wallet: dict) -> dict:
         player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
         _recalc_player_caps(player)
         rank = _normalize_difficulty(player.get("rank") or "D")
+        evo_rank = str(player.get("evolution_rank") or "").strip().upper()
+        next_evo_rank = "D" if not evo_rank else (_next_rank(evo_rank) or "")
+        known_ability_ids = {str(x.get("id") or "") for x in (player.get("abilities") or []) if isinstance(x, dict)}
+        known_ability_ids.update(str(x.get("id") or "") for x in (player.get("dormant_abilities") or []) if isinstance(x, dict))
+        available_abilities = []
+        for ability in _WENYOU_ABILITY_CATALOG.values():
+            aid = str(ability.get("id") or "")
+            rarity = _normalize_difficulty(ability.get("rank_min") or ability.get("rarity") or "D")
+            available_abilities.append(
+                {
+                    "id": aid,
+                    "name": str(ability.get("name") or aid),
+                    "rarity": rarity,
+                    "desc": str(ability.get("desc") or ""),
+                    "known": aid in known_ability_ids,
+                    "locked": _rarity_rank(rank) < _rarity_rank(rarity),
+                    "fragment_cost": int(ability.get("fragment_cost") or _WENYOU_REWARD_FRAGMENT_AMOUNTS["ability_fragment"].get(rarity, 10)),
+                }
+            )
+        available_abilities.sort(key=lambda item: (_rarity_rank(item.get("rarity")), bool(item.get("locked")), item.get("name") or ""))
         players[pid] = {
             "attributes": {key: int(player.get(key) or 0) for key in _WENYOU_ATTRIBUTE_KEYS},
             "soft_cap": _WENYOU_RANK_ATTRIBUTE_SOFT_CAP.get(rank, 14),
             "unspent_attribute_points": int(player.get("unspent_attribute_points") or 0),
             "ability_tokens": int(player.get("ability_tokens") or 0),
+            "ability_slots": _player_ability_slot_limit(player),
+            "abilities": [x for x in (player.get("abilities") or []) if isinstance(x, dict)],
+            "dormant_abilities": [x for x in (player.get("dormant_abilities") or []) if isinstance(x, dict)],
+            "growth_milestone_tokens": int(player.get("growth_milestone_tokens") or 0),
+            "evolution": str(player.get("evolution") or "凡人"),
+            "evolution_rank": evo_rank,
+            "evolution_tags": list(player.get("evolution_tags") or []),
+            "next_evolution_cost": _WENYOU_EVOLUTION_COST.get(next_evo_rank),
+            "evolution_routes": [
+                {
+                    "id": str(route.get("id") or route_id),
+                    "name": str(route.get("name") or route_id),
+                    "tags": list(route.get("tags") or []),
+                    "pollution": int(route.get("pollution") or 0),
+                }
+                for route_id, route in _WENYOU_EVOLUTION_ROUTES.items()
+            ],
+            "available_abilities": available_abilities[:20],
+            "next_level_exp": int(_WENYOU_LEVEL_EXP_TABLE.get(int(player.get("level") or 1), 0)),
             "spi_current": int(player.get("spi_current") or 0),
             "spi_max": int(player.get("spi_max") or 0),
             "promotion": _promotion_preview(player, wallet),
@@ -3550,6 +6394,7 @@ def revive_player(user_id: int, player_id: Any = "player1") -> tuple[bool, str, 
             "debts": wallet["debts"],
         }
     ]
+    _refresh_forced_instance_queue(wallet, session)
     _save_wenyou_wallet(uid, wallet)
     _sync_session_points_with_wallet(session, wallet)
     patch = _append_rules_patch(
@@ -3633,12 +6478,13 @@ def generate_instance_candidates(user_id: int, count: int = 6, keywords: str = "
     items = _normalize_candidate_payload(data)
     if not items:
         return None, "文游：候选设定解析失败，请重试。"
-    return {
+    payload = {
         "version": 1,
         "generatedAt": now_beijing_iso(),
         "difficultyHint": difficulty_hint,
         "items": items[:n],
-    }, None
+    }
+    return apply_forced_instance_candidates(uid, payload), None
 
 
 def format_candidate_expansion_prompt(candidate: Any) -> str:
@@ -3688,6 +6534,8 @@ def _candidate_core_prompt(item: dict) -> str:
 - 只写自然语言，不要 JSON，不要 markdown 代码块，不要表格。
 - 4-7 行，每行尽量短。
 - 必须包含：副本内部场景、核心矛盾、玩家公开任务、隐藏悬念、危险规则方向。
+- 只写副本核心，不写长期主神空间剧情。
+- NPC 任务者只写公开态度和可见行为，不直给真实善恶；真实立场留给后端隐藏状态。
 - 不要写 opening，不要写属性数值，不要替玩家行动。
 
 【候选设定】
@@ -3719,6 +6567,9 @@ def _candidate_blueprint_prompt(item: dict, core_text: str = "") -> str:
 - 只写自然语言，不要 JSON，不要 markdown 代码块，不要表格。
 - 按三段写：开场、探索、收束。
 - 每段写“阶段目标 / 关键线索 / 错过线索时如何推进”。
+- 额外列出：普通支线、隐藏支线、隐藏结局、威胁时钟、NPC 任务者立场边界、怪物/核心压力源简表。
+- 怪物生态只写普通怪/精英怪/Boss 或核心压力源的用途和解法；Boss 默认不可正面战胜。
+- 结算只看真实玩家角色/玩家队伍；NPC 结局只作为支线/隐藏目标证据，不自动影响评级。
 - 只给 GM/后端内部短纲，不要整段剧透给玩家。
 
 【已确定核心设定】
@@ -3733,6 +6584,7 @@ def _candidate_opening_prompt(item: dict, core_text: str = "") -> str:
 - 只写开场正文，不要 JSON，不要 markdown 代码块。
 - 4-8 句，含主神传送/白光/提示音/刻板广播之一。
 - 落入副本场景，点出第一处异常。
+- 只写玩家可见开场，不剧透隐藏支线、隐藏结局、NPC 真实立场或威胁时钟精确值。
 - 不要替玩家做行动决定。
 
 【已确定核心设定】
@@ -3770,14 +6622,24 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
     failure_hint = risk or "违反关键规则会触发副本惩罚，具体代价随剧情推进显露。"
     genre_note = (tagline or hook or twist or f"本局以{genre}节奏推进。")[:300]
     blueprint_logline = core.splitlines()[0].strip() if core.splitlines() else conflict
+    try:
+        player_count = int(item.get("player_count") or _DEFAULT_PLAYER_COUNT)
+    except Exception:
+        player_count = _DEFAULT_PLAYER_COUNT
+    player_count = max(1, min(13, player_count))
+    try:
+        tasker_total = int(item.get("tasker_total") or item.get("tasker_count") or _DEFAULT_TASKER_TOTAL)
+    except Exception:
+        tasker_total = _DEFAULT_TASKER_TOTAL
+    tasker_total = max(player_count, min(13, max(2, tasker_total)))
     raw = {
         "instance_code": _candidate_instance_code(item),
         "instance_name": title,
         "instance_genre": genre,
         "genre_note": genre_note,
         "difficulty": difficulty,
-        "tasker_total": 2,
-        "player_count": 2,
+        "tasker_total": tasker_total,
+        "player_count": player_count,
         "world": world,
         "player1_name": "辛玥",
         "player1_instance_name": "",
@@ -3827,6 +6689,7 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
                 },
             ],
             "side_quests": [],
+            "hidden_side_quests": [],
             "hidden_endings": [{"name": "未揭悬念", "hint": twist}] if twist else [],
             "clue_graph": [
                 {
@@ -3843,6 +6706,17 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
                 "关键线索错过时必须 fail-forward，而不是让剧情卡死",
                 "不要替玩家做行动决定",
             ],
+        },
+        "encounter_profile": {
+            "common": [],
+            "elite": [],
+            "boss": {
+                "name": "核心压力源",
+                "default_invincible": True,
+                "counterplay": ["削弱", "封印", "规避", "撤离"],
+            },
+            "spawn_rules": [],
+            "balance_notes": "候选扩展开局默认先缓存简表，后续可由怪物生成器补全数值。",
         },
         "initial_stats": {
             "points": 100,
@@ -3956,12 +6830,44 @@ def generate_framework_custom(keywords: str) -> tuple[Optional[dict], Optional[s
     return _normalize_framework(data), None
 
 
+def _grant_starter_attribute_bonus(session: dict, points: int = 6) -> None:
+    if not isinstance(session, dict) or session.get("starter_attribute_bonus_granted"):
+        return
+    bonus = max(0, int(points or 0))
+    if bonus <= 0:
+        return
+    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
+    players_changed: dict[str, dict[str, Any]] = {}
+    for pid in ("player1", "player2"):
+        player = st.get(pid) if isinstance(st.get(pid), dict) else None
+        if not player:
+            continue
+        before = int(player.get("unspent_attribute_points") or 0)
+        player["unspent_attribute_points"] = before + bonus
+        st[pid] = player
+        players_changed[pid] = {"unspent_attribute_points_delta": bonus, "unspent_attribute_points": player["unspent_attribute_points"]}
+    if not players_changed:
+        return
+    session["stats"] = st
+    session["starter_attribute_bonus_granted"] = True
+    event_log = session.get("event_log") if isinstance(session.get("event_log"), list) else []
+    patch = {
+        "round_id": f"starter_bonus_{len(event_log) + 1:03d}",
+        "source": "rules_engine.starter_attribute_bonus",
+        "changes": {"players": players_changed},
+        "created_at": now_beijing_iso(),
+    }
+    event_log.append(patch)
+    session["event_log"] = event_log[-200:]
+    session["last_state_patch"] = patch
+
+
 def _new_session(framework: dict) -> dict:
     gid = str(uuid4())
     ts = now_beijing_iso()
     opening = framework.get("opening") or "【主神提示】副本同步完成。白光散去，你们已抵达任务区域。"
     fw = _framework_for_runtime(framework)
-    return {
+    session = {
         "gameId": gid,
         "startedAt": ts,
         "phase": "instance_running",
@@ -3975,6 +6881,9 @@ def _new_session(framework: dict) -> dict:
         ],
         "pending_round": {"player1_lines": [], "player2_lines": []},
     }
+    _grant_starter_attribute_bonus(session)
+    session["runtime_state"] = _runtime_state_view(session)
+    return session
 
 
 def _format_framework_lines(fw: dict) -> str:
@@ -4038,6 +6947,479 @@ def _framework_instance_line(fw: dict) -> str:
     return "未命名副本"
 
 
+def _panel_object_id(value: Any, prefix: str, index: int = 0) -> str:
+    raw = _compact_text(value, 80)
+    if not raw:
+        return f"{prefix}_{index + 1}"
+    slug = re.sub(r"[^a-zA-Z0-9_\u4e00-\u9fff-]+", "_", raw).strip("_")
+    return (slug or f"{prefix}_{index + 1}")[:80]
+
+
+def _normalize_public_task_item(item: Any, index: int, phase: str = "instance_running") -> Optional[dict]:
+    status = "completed" if phase in {"settlement", "archived"} else "active"
+    if isinstance(item, dict):
+        title = _compact_text(item.get("title") or item.get("current") or item.get("goal") or item.get("public_text"), 160)
+        if not title:
+            return None
+        progress = item.get("progress") if isinstance(item.get("progress"), dict) else {}
+        return {
+            "id": _panel_object_id(item.get("id") or title, "task", index),
+            "title": title,
+            "type": _compact_text(item.get("type") or "main", 40),
+            "status": _compact_text(item.get("status") or status, 40),
+            "progress": progress,
+            "required_clues": _normalize_text_list(item.get("required_clues"), 80, 12),
+            "related_clues": _normalize_text_list(item.get("related_clues"), 80, 12),
+            "fail_forward": _compact_text(item.get("fail_forward"), 220),
+            "reward_tags": _normalize_text_list(item.get("reward_tags"), 60, 12),
+        }
+    title = _compact_text(item, 160)
+    if not title:
+        return None
+    return {
+        "id": _panel_object_id(title, "task", index),
+        "title": title,
+        "type": "main" if index == 0 else "side",
+        "status": status,
+        "progress": {},
+        "required_clues": [],
+        "related_clues": [],
+        "fail_forward": "",
+        "reward_tags": [],
+    }
+
+
+def _normalize_public_clue_item(item: Any, index: int) -> Optional[dict]:
+    if isinstance(item, dict):
+        title = _compact_text(item.get("title") or item.get("name") or item.get("public_text") or item.get("text"), 120)
+        text = _compact_text(item.get("public_text") or item.get("text") or item.get("reason") or title, 220)
+        if not title and not text:
+            return None
+        return {
+            "id": _panel_object_id(item.get("id") or title or text, "clue", index),
+            "title": title or text,
+            "status": _compact_text(item.get("status") or ("verified" if item.get("verified") else "discovered"), 40),
+            "verified": bool(item.get("verified")),
+            "source": _compact_text(item.get("source"), 80),
+            "related_tasks": _normalize_text_list(item.get("related_tasks"), 80, 12),
+            "leads_to": _normalize_text_list(item.get("leads_to"), 80, 12),
+            "tags": _normalize_text_list(item.get("tags"), 40, 12),
+            "public_text": text,
+        }
+    text = _compact_text(item, 220)
+    if not text:
+        return None
+    return {
+        "id": _panel_object_id(text, "clue", index),
+        "title": text[:40],
+        "status": "discovered",
+        "verified": False,
+        "source": "",
+        "related_tasks": [],
+        "leads_to": [],
+        "tags": [],
+        "public_text": text,
+    }
+
+
+def _normalize_public_marker_item(item: Any, index: int, prefix: str) -> Optional[dict]:
+    if isinstance(item, dict):
+        title = _compact_text(item.get("name") or item.get("title") or item.get("id"), 120)
+        text = _compact_text(item.get("public_text") or item.get("desc") or item.get("blurb") or item.get("reason") or item.get("status"), 240)
+        if not title and not text:
+            return None
+        out = {
+            "id": _panel_object_id(item.get("id") or title or text, prefix, index),
+            "name": title or text[:40],
+            "status": _compact_text(item.get("status") or item.get("public_status"), 80),
+            "public_text": text,
+        }
+        for key in (
+            "danger",
+            "last_location",
+            "attitude",
+            "weakness",
+            "type",
+            "tier",
+            "rank",
+            "stability",
+            "stability_max",
+            "seal_progress",
+            "seal_target",
+            "weaknesses",
+            "counterplay",
+        ):
+            if item.get(key) is not None and item.get(key) != "":
+                out[key] = item.get(key) if isinstance(item.get(key), (int, float, list)) else _compact_text(item.get(key), 120)
+        return out
+    text = _compact_text(item, 240)
+    if not text:
+        return None
+    return {"id": _panel_object_id(text, prefix, index), "name": text[:40], "status": "", "public_text": text}
+
+
+def _merge_panel_list(existing: Any, additions: list[dict], prefix: str, limit: int = 40) -> list[dict]:
+    out: list[dict] = []
+    seen: set[str] = set()
+    for idx, item in enumerate(existing if isinstance(existing, list) else []):
+        norm = (
+            _normalize_public_task_item(item, idx)
+            if prefix == "task"
+            else _normalize_public_clue_item(item, idx)
+            if prefix == "clue"
+            else _normalize_public_marker_item(item, idx, prefix)
+        )
+        if norm:
+            key = str(norm.get("id") or norm.get("title") or norm.get("name"))
+            seen.add(key)
+            out.append(norm)
+    for item in additions:
+        key = str(item.get("id") or item.get("title") or item.get("name"))
+        if key in seen:
+            for idx, cur in enumerate(out):
+                if str(cur.get("id") or cur.get("title") or cur.get("name")) == key:
+                    out[idx] = {**cur, **item}
+                    break
+            continue
+        seen.add(key)
+        out.append(item)
+    return out[-limit:]
+
+
+def _public_threat_label(session: dict) -> str:
+    clocks = session.get("clocks") if isinstance(session.get("clocks"), list) else []
+    ratios: list[float] = []
+    for item in clocks:
+        if not isinstance(item, dict):
+            continue
+        max_value = max(1, int(item.get("max") or 1))
+        ratios.append(max(0.0, min(1.0, float(item.get("value") or 0) / max_value)))
+    if not ratios:
+        return "平稳"
+    ratio = max(ratios)
+    if ratio >= 1:
+        return "接近清算"
+    if ratio >= 0.67:
+        return "高危"
+    if ratio >= 0.34:
+        return "升高"
+    return "平稳"
+
+
+def _public_clock_status(clock: Any) -> str:
+    if not isinstance(clock, dict):
+        return "未知"
+    max_value = max(1, int(clock.get("max") or 1))
+    ratio = max(0.0, min(1.0, float(clock.get("value") or 0) / max_value))
+    if ratio >= 1:
+        return "已满"
+    if ratio >= 0.67:
+        return "高危"
+    if ratio >= 0.34:
+        return "升高"
+    if ratio > 0:
+        return "轻微"
+    return "平稳"
+
+
+def _public_clue_lines_from_history(session: dict) -> list[str]:
+    headings = (
+        "规则备忘",
+        "线索备忘",
+        "安全区·威胁备忘",
+        "阵营备忘",
+        "撤离·物资备忘",
+        "身份·嫌疑备忘",
+        "时限备忘",
+    )
+    for h in reversed(session.get("history") or []):
+        if isinstance(h, dict) and h.get("role") == "gm":
+            lines = _extract_brief_block(str(h.get("content") or ""), headings)
+            if lines:
+                return lines
+    return []
+
+
+def _public_state_from_session(session: dict) -> dict:
+    fw = _framework_for_runtime(session.get("framework") or {})
+    phase = _session_phase(session)
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    public = copy.deepcopy(runtime.get("public_state") if isinstance(runtime.get("public_state"), dict) else {})
+    existing_tasks = public.get("public_tasks") if isinstance(public.get("public_tasks"), list) else []
+    tasks = [_normalize_public_task_item(item, i, phase) for i, item in enumerate(existing_tasks)]
+    tasks = [x for x in tasks if x]
+    if not tasks:
+        tasks = [
+            {
+                "id": "main_task",
+                "title": _compact_text(fw.get("public", {}).get("public_task") if isinstance(fw.get("public"), dict) else fw.get("conflict"), 160)
+                or "确认副本规则，找到通关路径并存活。",
+                "type": "main",
+                "status": "completed" if phase in {"settlement", "archived"} else "active",
+                "progress": {},
+                "required_clues": [],
+                "related_clues": [],
+                "fail_forward": _compact_text(fw.get("failure_hint"), 220),
+                "reward_tags": ["mainline"],
+            }
+        ]
+    clues_raw = public.get("discovered_clues") if isinstance(public.get("discovered_clues"), list) else _public_clue_lines_from_history(session)
+    clues = [_normalize_public_clue_item(item, i) for i, item in enumerate(clues_raw)]
+    locations_raw = public.get("known_locations") if isinstance(public.get("known_locations"), list) else []
+    locations = [_normalize_public_marker_item(item, i, "location") for i, item in enumerate(locations_raw)]
+    locations = [x for x in locations if x]
+    if not locations and fw.get("world"):
+        locations = [
+            {
+                "id": "current_location",
+                "name": "当前场景",
+                "status": "known",
+                "danger": _public_threat_label(session),
+                "public_text": _compact_text(fw.get("world"), 260),
+            }
+        ]
+    npcs_raw = public.get("visible_npcs") if isinstance(public.get("visible_npcs"), list) else fw.get("npc_taskers") or []
+    npcs = [_normalize_public_marker_item(item, i, "npc") for i, item in enumerate(npcs_raw)]
+    encounter = fw.get("encounter_profile") if isinstance(fw.get("encounter_profile"), dict) else {}
+    monsters_raw = public.get("visible_monsters") if isinstance(public.get("visible_monsters"), list) else []
+    if not monsters_raw and isinstance(encounter.get("boss"), dict) and encounter.get("boss"):
+        boss = encounter.get("boss") or {}
+        monsters_raw = [
+            {
+                "id": "boss",
+                "name": boss.get("name") or "核心压力源",
+                "status": "未完全显现",
+                "public_text": "Boss 默认不可正面硬杀，优先寻找削弱、封印、规避或撤离条件。",
+                "weakness": "待验证",
+            }
+        ]
+    monsters = [_normalize_public_marker_item(item, i, "monster") for i, item in enumerate(monsters_raw)]
+    public.update(
+        {
+            "scene_summary": _compact_text(public.get("scene_summary") or fw.get("world"), 260),
+            "visible_rules": _normalize_text_list(public.get("visible_rules") or (fw.get("public") or {}).get("visible_rules"), 180, 12)
+            if isinstance(fw.get("public"), dict)
+            else _normalize_text_list(public.get("visible_rules"), 180, 12),
+            "public_tasks": tasks[:20],
+            "discovered_clues": [x for x in clues if x][:40],
+            "known_locations": locations[:20],
+            "visible_npcs": [x for x in npcs if x][:20],
+            "visible_monsters": [x for x in monsters if x][:20],
+            "public_threat": _compact_text(public.get("public_threat") or _public_threat_label(session), 80),
+            "last_rules_result": _compact_text(public.get("last_rules_result"), 260),
+        }
+    )
+    return public
+
+
+def _rules_state_from_session(session: dict) -> dict:
+    _session_ensure_stats(session)
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    existing = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
+    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
+    equipment = st.get("equipment") if isinstance(st.get("equipment"), list) else []
+    if not equipment:
+        player1 = st.get("player1") if isinstance(st.get("player1"), dict) else {}
+        equipment = player1.get("gear") if isinstance(player1.get("gear"), list) else []
+    monster_instances = [dict(x) for x in existing.get("monster_instances") or [] if isinstance(x, dict)]
+    return {
+        **copy.deepcopy(existing),
+        "players": {"player1": st.get("player1") or {}, "player2": st.get("player2") or {}},
+        "inventory": _normalize_inventory(st.get("inventory"), source="session"),
+        "equipment": [dict(x) if isinstance(x, dict) else x for x in equipment][:20],
+        "task_progress": _rules_mapping(existing.get("task_progress"), "task"),
+        "clue_state": _rules_mapping(existing.get("clue_state"), "clue"),
+        "location_state": _rules_mapping(existing.get("location_state"), "location"),
+        "npc_state": _rules_mapping(existing.get("npc_state"), "npc"),
+        "monster_instances": monster_instances[:20],
+        "forced_instance": copy.deepcopy(session.get("forced_instance")) if isinstance(session.get("forced_instance"), dict) else existing.get("forced_instance"),
+        "rule_violations": [dict(x) for x in existing.get("rule_violations") or [] if isinstance(x, dict)][-80:],
+        "settlement_flags": _settlement_flags_from_raw(existing.get("settlement_flags")),
+        "reward_context": _reward_context_from_raw(existing.get("reward_context")),
+        "threat_clocks": list(session.get("clocks") or []),
+        "last_state_patch": session.get("last_state_patch") if isinstance(session.get("last_state_patch"), dict) else None,
+    }
+
+
+def _runtime_state_view(session: dict) -> dict:
+    runtime = copy.deepcopy(session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {})
+    runtime["public_state"] = _public_state_from_session(session)
+    runtime["rules_state"] = _rules_state_from_session(session)
+    runtime.setdefault("gm_state", {})
+    runtime.setdefault("runtime_indexes", {})
+    runtime["last_state_patch"] = session.get("last_state_patch") if isinstance(session.get("last_state_patch"), dict) else None
+    return runtime
+
+
+def _client_state_patch_view(patch: Any) -> Optional[dict]:
+    if not isinstance(patch, dict):
+        return None
+    out = copy.deepcopy(patch)
+    changes = out.get("changes") if isinstance(out.get("changes"), dict) else {}
+    for key in ("clock_updates", "threat_clocks"):
+        raw_updates = changes.get(key)
+        if isinstance(raw_updates, list):
+            changes[key] = [
+                {"id": c.get("id"), "name": c.get("name"), "status": _public_clock_status(c)}
+                for c in raw_updates
+                if isinstance(c, dict)
+            ]
+    out["changes"] = changes
+    return out
+
+
+def _client_rules_state_view(rules: Any) -> dict:
+    data = rules if isinstance(rules, dict) else {}
+
+    def public_only(raw: Any, prefix: str) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for key, item in _rules_mapping(raw, prefix).items():
+            if str(item.get("visibility") or "public") == "hidden":
+                continue
+            out[key] = dict(item)
+        return out
+
+    monsters: list[dict] = []
+    for monster in data.get("monster_instances") or []:
+        if not isinstance(monster, dict):
+            continue
+        monsters.append(
+            {
+                "id": monster.get("id"),
+                "name": monster.get("name"),
+                "tier": monster.get("tier"),
+                "rank": monster.get("rank"),
+                "status": monster.get("status"),
+                "public_text": monster.get("public_text"),
+                "weaknesses": monster.get("weaknesses") or [],
+                "counterplay": monster.get("counterplay") or [],
+                "stability": monster.get("stability"),
+                "stability_max": monster.get("stability_max"),
+                "seal_progress": monster.get("seal_progress"),
+                "seal_target": monster.get("seal_target"),
+                "default_invincible": bool(monster.get("default_invincible")),
+                "can_be_killed": bool(monster.get("can_be_killed")),
+            }
+        )
+    flags = _settlement_flags_from_raw(data.get("settlement_flags"))
+    return {
+        "players": data.get("players") if isinstance(data.get("players"), dict) else {},
+        "inventory": _normalize_inventory(data.get("inventory"), source="session"),
+        "equipment": [dict(x) for x in data.get("equipment") or [] if isinstance(x, dict)][:20],
+        "task_progress": public_only(data.get("task_progress"), "task"),
+        "clue_state": public_only(data.get("clue_state"), "clue"),
+        "location_state": public_only(data.get("location_state"), "location"),
+        "npc_state": public_only(data.get("npc_state"), "npc"),
+        "monster_instances": monsters[:20],
+        "forced_instance": copy.deepcopy(data.get("forced_instance")) if isinstance(data.get("forced_instance"), dict) else None,
+        "settlement_flags": {
+            "mainline_status": flags.get("mainline_status"),
+            "mainline_completion": flags.get("mainline_completion"),
+            "side_completed": flags.get("side_completed") or [],
+            "achievements": flags.get("achievements") or [],
+        },
+        "threat_clocks": [
+            {"id": c.get("id"), "name": c.get("name"), "status": _public_clock_status(c)}
+            for c in data.get("threat_clocks") or []
+            if isinstance(c, dict)
+        ][:20],
+        "last_state_patch": _client_state_patch_view(data.get("last_state_patch")),
+    }
+
+
+def _apply_public_state_updates(session: dict, event_intent: dict) -> dict:
+    if not isinstance(event_intent, dict):
+        return {}
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    public = _public_state_from_session(session)
+    phase = _session_phase(session)
+    task_add: list[dict] = []
+    clue_add: list[dict] = []
+    location_add: list[dict] = []
+    npc_add: list[dict] = []
+    monster_add: list[dict] = []
+
+    if event_intent.get("task_update"):
+        task_add.append(
+            {
+                "id": "current_task_update",
+                "title": _compact_text(event_intent.get("task_update"), 160),
+                "type": "main",
+                "status": "completed" if phase in {"settlement", "archived"} else "active",
+                "progress": {"text": _compact_text(event_intent.get("task_update"), 180)},
+                "required_clues": [],
+                "related_clues": [],
+                "fail_forward": "",
+                "reward_tags": ["mainline"],
+            }
+        )
+    for idx, text in enumerate(event_intent.get("clue_updates") or []):
+        clue = _normalize_public_clue_item(text, idx)
+        if clue:
+            clue_add.append(clue)
+    for proposal in event_intent.get("state_proposals") or []:
+        if not isinstance(proposal, dict) or proposal.get("visibility") != "public":
+            continue
+        ptype = str(proposal.get("type") or "")
+        if ptype in {"discover_clue", "verify_clue"}:
+            clue = _normalize_public_clue_item(
+                {
+                    "id": proposal.get("id") or proposal.get("name"),
+                    "title": proposal.get("name") or proposal.get("id"),
+                    "public_text": proposal.get("reason") or proposal.get("name") or proposal.get("id"),
+                    "status": "verified" if ptype == "verify_clue" else "discovered",
+                    "verified": ptype == "verify_clue",
+                },
+                len(clue_add),
+            )
+            if clue:
+                clue_add.append(clue)
+        elif ptype == "task_update":
+            task = _normalize_public_task_item(
+                {
+                    "id": proposal.get("id") or proposal.get("name") or "task_update",
+                    "title": proposal.get("name") or proposal.get("reason") or proposal.get("id"),
+                    "status": "active",
+                    "progress": {"text": proposal.get("reason") or ""},
+                },
+                len(task_add),
+                phase,
+            )
+            if task:
+                task_add.append(task)
+        elif ptype == "location_update":
+            item = _normalize_public_marker_item(proposal, len(location_add), "location")
+            if item:
+                location_add.append(item)
+        elif ptype == "npc_update":
+            item = _normalize_public_marker_item(proposal, len(npc_add), "npc")
+            if item:
+                npc_add.append(item)
+        elif ptype == "monster_update":
+            item = _normalize_public_marker_item(proposal, len(monster_add), "monster")
+            if item:
+                monster_add.append(item)
+
+    public["public_tasks"] = _merge_panel_list(public.get("public_tasks"), task_add, "task", 20)
+    public["discovered_clues"] = _merge_panel_list(public.get("discovered_clues"), clue_add, "clue", 40)
+    public["known_locations"] = _merge_panel_list(public.get("known_locations"), location_add, "location", 20)
+    public["visible_npcs"] = _merge_panel_list(public.get("visible_npcs"), npc_add, "npc", 20)
+    public["visible_monsters"] = _merge_panel_list(public.get("visible_monsters"), monster_add, "monster", 20)
+    public["public_threat"] = _public_threat_label(session)
+    runtime["public_state"] = public
+    runtime["rules_state"] = _rules_state_from_session(session)
+    runtime.setdefault("gm_state", {})
+    runtime.setdefault("runtime_indexes", {})
+    session["runtime_state"] = runtime
+    return {
+        "task_updates": task_add,
+        "clue_updates": clue_add,
+        "location_updates": location_add,
+        "npc_updates": npc_add,
+        "monster_updates": monster_add,
+    }
+
+
 def cmd_story(user_id: int, keywords: Optional[str]) -> str:
     """处理开局请求；含二次确认逻辑。"""
     uid = int(user_id)
@@ -4066,6 +7448,7 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
     wallet = _load_wenyou_wallet(uid, session)
     _sync_session_points_with_wallet(session, wallet)
     session.setdefault("stats", {})["inventory"] = _merge_inventory(wallet.get("inventory"), session.get("stats", {}).get("inventory"))
+    _attach_forced_instance_contract(session, candidate if isinstance(candidate, dict) else {})
     r2_store.save_wenyou_session(uid, session)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
@@ -4569,7 +7952,20 @@ def get_session_view(user_id: int) -> dict:
     st = session.get("stats") or {}
     pr = session.get("pending_round") if isinstance(session.get("pending_round"), dict) else {}
     wallet = _load_wenyou_wallet(uid, session)
+    if _refresh_forced_instance_queue(wallet, session):
+        _save_wenyou_wallet(uid, wallet)
     _sync_session_points_with_wallet(session, wallet)
+    if _session_phase(session) == "instance_running":
+        _ensure_monster_instances(session)
+        r2_store.save_wenyou_session(uid, session)
+    runtime_state = _runtime_state_view(session)
+    public_state = runtime_state.get("public_state") if isinstance(runtime_state.get("public_state"), dict) else {}
+    rules_state = _client_rules_state_view(runtime_state.get("rules_state"))
+    client_runtime_state = copy.deepcopy(runtime_state)
+    client_runtime_state["rules_state"] = rules_state
+    client_runtime_state["last_state_patch"] = _client_state_patch_view(runtime_state.get("last_state_patch"))
+    client_runtime_state.pop("gm_state", None)
+    client_runtime_state.pop("runtime_indexes", None)
     return {
         "active": True,
         "session": {
@@ -4603,8 +7999,17 @@ def get_session_view(user_id: int) -> dict:
             "settlement": session.get("settlement") if isinstance(session.get("settlement"), dict) else None,
             "inventory": list(st.get("inventory") or []),
             "clues": _clues_from_session(session),
-            "clocks": list(session.get("clocks") or []),
-            "last_state_patch": session.get("last_state_patch") if isinstance(session.get("last_state_patch"), dict) else None,
+            "public_state": public_state,
+            "rules_state": rules_state,
+            "runtime_state": client_runtime_state,
+            "forced_instance": copy.deepcopy(session.get("forced_instance")) if isinstance(session.get("forced_instance"), dict) else None,
+            "public_view": public_state,
+            "clocks": [
+                {"id": c.get("id"), "name": c.get("name"), "status": _public_clock_status(c)}
+                for c in session.get("clocks") or []
+                if isinstance(c, dict)
+            ][:20],
+            "last_state_patch": _client_state_patch_view(session.get("last_state_patch")),
             "pending_round": {
                 "player1_lines": list(pr.get("player1_lines") or []),
                 "player2_lines": list(pr.get("player2_lines") or []),
@@ -4612,6 +8017,43 @@ def get_session_view(user_id: int) -> dict:
             "history": history,
         },
     }
+
+
+def classify_wenyou_action_text(text: str) -> dict[str, Any]:
+    """把自由文本先归到规则动作；成功与否仍由系统裁判，不信玩家自述。"""
+    raw = str(text or "").strip()
+    compact = re.sub(r"\s+", "", raw)
+    lower = compact.lower()
+    system_keywords = ("商店", "系统商店", "抽卡", "命运裂隙", "加点", "属性点", "晋升", "复活", "背包", "状态面板", "结算", "申请结算", "归档")
+    if any(k in compact for k in system_keywords):
+        return {"action_type": "system_action", "confidence": "high", "text": raw, "reason": "系统操作不进入 GM"}
+    if re.search(r"(逃跑|逃走|逃离|撤退|跑路|脱离|撤离|甩开)", compact):
+        return {"action_type": "flee", "confidence": "high", "text": raw, "target": "", "reason": "逃跑由 flee_score/flee_dc 判定"}
+    if re.search(r"(绕开|躲开|躲藏|潜行|避开|藏起来|不惊动)", compact):
+        return {"action_type": "evade", "confidence": "medium", "text": raw, "target": "", "reason": "规避由系统判定"}
+    if re.search(r"(封印|镇压|净化|超度|封住|封起来|做仪式)", compact):
+        target = ""
+        m = re.search(r"(?:封印|镇压|净化|超度|封住)(.{0,24})", raw)
+        if m:
+            target = m.group(1).strip(" ，。！？,.;:：")
+        return {"action_type": "seal", "confidence": "high", "text": raw, "target": target, "reason": "封印由系统 seal_score 判定"}
+    if re.search(r"(削弱|试探|验证.*弱点|找.*破绽|破解|识破|确认.*本体|确认.*弱点)", compact):
+        return {"action_type": "weaken", "confidence": "high", "text": raw, "target": "", "reason": "削弱由系统稳定度/线索判定"}
+    if re.search(r"(攻击|砍|刺|开枪|射击|殴打|打倒|杀死|一刀|击杀|干掉|破坏)", compact):
+        target = ""
+        m = re.search(r"(?:攻击|砍|刺|射击|打倒|杀死|击杀|干掉|破坏)(.{0,24})", raw)
+        if m:
+            target = m.group(1).strip(" ，。！？,.;:：")
+        return {"action_type": "attack", "confidence": "high", "text": raw, "target": target, "reason": "战斗由命中/防御/Boss 规则判定"}
+    if re.search(r"(交谈|询问|问问|套话|威胁|安抚|说服|谈判)", compact):
+        return {"action_type": "talk", "confidence": "medium", "text": raw, "target": "", "reason": "社交推进"}
+    if re.search(r"(观察|查看|调查|搜索|检查|翻找|阅读|验证|确认|比对)", compact):
+        return {"action_type": "investigate", "confidence": "medium", "text": raw, "target": "", "reason": "调查推进"}
+    if re.search(r"(前往|进入|离开|打开|推门|上楼|下楼|移动|去)", compact):
+        return {"action_type": "move", "confidence": "medium", "text": raw, "target": "", "reason": "移动推进"}
+    if "使用" in compact or compact.startswith("用") or lower.startswith("use"):
+        return {"action_type": "use_item", "confidence": "medium", "text": raw, "target": "", "reason": "疑似道具动作，优先走道具接口"}
+    return {"action_type": "act", "confidence": "low", "text": raw, "target": "", "reason": "普通剧情行动"}
 
 
 def cmd_record_action(user_id: int, text: str, player: str = "player1") -> tuple[bool, str]:
@@ -4633,11 +8075,17 @@ def cmd_record_action(user_id: int, text: str, player: str = "player1") -> tuple
     key = "player2_lines" if role == "player2" else "player1_lines"
     pr.setdefault("player1_lines", [])
     pr.setdefault("player2_lines", [])
+    pr.setdefault("action_intents", [])
     arr = pr.get(key)
     if not isinstance(arr, list):
         arr = []
     arr.append(action)
     pr[key] = arr[-8:]
+    intents = pr.get("action_intents")
+    if not isinstance(intents, list):
+        intents = []
+    intents.append({"player": role, **classify_wenyou_action_text(action), "created_at": now_beijing_iso()})
+    pr["action_intents"] = intents[-12:]
     session["pending_round"] = pr
     r2_store.save_wenyou_session(uid, session)
     with _PENDING_LOCK:
@@ -4692,6 +8140,10 @@ def _use_item_system_result(user_id: int, item_name: str, action: str = "") -> t
     inventory_after, consumed = _consume_inventory_item(inventory, target)
     if not consumed:
         return False, f"文游：背包里没有【{item}】。", "", session, wallet, target
+    wallet_changes = changes.get("wallet") if isinstance(changes, dict) and isinstance(changes.get("wallet"), dict) else {}
+    if int(wallet_changes.get("debt_delta") or 0):
+        wallet["debts"] = max(0, int(wallet.get("debts") or 0) + int(wallet_changes.get("debt_delta") or 0))
+    _refresh_forced_instance_queue(wallet, session)
     wallet["inventory"] = inventory_after[:80]
     st["inventory"] = inventory_after[:80]
     session["stats"] = st
@@ -4707,6 +8159,7 @@ def _use_item_system_result(user_id: int, item_name: str, action: str = "") -> t
     event_log.append(patch)
     session["event_log"] = event_log[-200:]
     session["last_state_patch"] = patch
+    session["runtime_state"] = _runtime_state_view(session)
     return True, result_text, _format_item_result_for_gm(consumed, result_text), session, wallet, consumed
 
 
@@ -4763,6 +8216,451 @@ def cmd_use_item_with_du(user_id: int, item_name: str, action: str = "") -> tupl
         _save_wenyou_wallet(uid, copy.deepcopy(original_wallet))
         return out, ""
     return _inject_item_result_into_output(out, consumed or {}, result_text), du_action
+
+
+def _monster_template_to_instance(raw: Any, index: int, tier: str = "common", difficulty: str = "D") -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or raw.get("title") or "").strip()
+    if not name:
+        return None
+    rank = _normalize_difficulty(raw.get("rank") or difficulty)
+    mtier = str(raw.get("tier") or tier or "common").strip().lower()
+    if mtier not in {"common", "elite", "boss"}:
+        mtier = "common"
+    hp = None if mtier == "boss" else max(1, int(raw.get("hp") or (45 if mtier == "elite" else 24)))
+    stability = max(0, int(raw.get("stability") or (5 if mtier == "boss" else 0)))
+    seal_target = max(1, int(raw.get("seal_target") or raw.get("seal_progress_target") or (3 if mtier == "boss" else 2)))
+    return {
+        "id": str(raw.get("id") or f"{mtier}_{index + 1}")[:80],
+        "name": name[:80],
+        "tier": mtier,
+        "rank": rank,
+        "status": str(raw.get("status") or ("dormant" if mtier == "boss" else "patrolling")),
+        "hp": hp,
+        "hp_max": hp,
+        "attack": max(0, int(raw.get("attack") or (12 if mtier == "elite" else 7))),
+        "defense": 999 if mtier == "boss" else max(0, int(raw.get("defense") or (2 if mtier == "elite" else 1))),
+        "mental_attack": max(0, int(raw.get("mental_attack") or (16 if mtier == "boss" else 5))),
+        "mental_resist": 999 if mtier == "boss" else max(0, int(raw.get("mental_resist") or 1)),
+        "speed": max(1, int(raw.get("speed") or 10)),
+        "detection": max(1, int(raw.get("detection") or 10)),
+        "default_invincible": bool(raw.get("default_invincible")) if "default_invincible" in raw else mtier == "boss",
+        "can_be_killed": bool(raw.get("can_be_killed")),
+        "stability": stability,
+        "stability_max": max(stability, int(raw.get("stability_max") or stability or 1)),
+        "seal_progress": max(0, int(raw.get("seal_progress") or 0)),
+        "seal_target": seal_target,
+        "weaknesses": _normalize_text_list(raw.get("weaknesses"), 80, 6),
+        "counterplay": _normalize_text_list(raw.get("counterplay"), 100, 6),
+        "weaken_conditions": _normalize_text_list(raw.get("weaken_conditions"), 120, 6),
+        "seal_conditions": _normalize_text_list(raw.get("seal_conditions"), 120, 6),
+        "escape_conditions": _normalize_text_list(raw.get("escape_conditions"), 120, 6),
+        "public_text": _compact_text(raw.get("public_text") or raw.get("desc") or raw.get("role") or "", 180),
+    }
+
+
+def _ensure_monster_instances(session: dict) -> list[dict]:
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
+    monsters = [dict(x) for x in rules.get("monster_instances") or [] if isinstance(x, dict)]
+    if monsters:
+        return monsters[:20]
+    fw = _framework_for_runtime(session.get("framework") or {})
+    diff = _normalize_difficulty(fw.get("difficulty"))
+    encounter = fw.get("encounter_profile") if isinstance(fw.get("encounter_profile"), dict) else {}
+    raw_monsters: list[tuple[Any, str]] = []
+    for item in (encounter.get("common") if isinstance(encounter.get("common"), list) else [])[:2]:
+        raw_monsters.append((item, "common"))
+    for item in (encounter.get("elite") if isinstance(encounter.get("elite"), list) else [])[:1]:
+        raw_monsters.append((item, "elite"))
+    if isinstance(encounter.get("boss"), dict):
+        raw_monsters.append((encounter.get("boss"), "boss"))
+    for i, (raw, tier) in enumerate(raw_monsters):
+        monster = _monster_template_to_instance(raw, i, tier, diff)
+        if monster:
+            monsters.append(monster)
+    if not monsters:
+        monsters = [{
+            "id": "ambient_threat",
+            "name": "当前异常源",
+            "tier": "common",
+            "rank": diff,
+            "status": "patrolling",
+            "hp": 24,
+            "hp_max": 24,
+            "attack": 7,
+            "defense": 1,
+            "mental_attack": 5,
+            "mental_resist": 1,
+            "speed": 10,
+            "detection": 10,
+            "default_invincible": False,
+            "can_be_killed": True,
+            "stability": 0,
+            "stability_max": 1,
+            "seal_progress": 0,
+            "seal_target": 2,
+            "weaknesses": [],
+            "counterplay": ["规避", "线索削弱"],
+            "public_text": "系统根据当前副本压力生成的临时异常实体。",
+        }]
+    rules["monster_instances"] = monsters[:20]
+    runtime["rules_state"] = rules
+    session["runtime_state"] = runtime
+    _save_monster_instances(session, monsters, "")
+    return monsters[:20]
+
+
+def _save_monster_instances(session: dict, monsters: list[dict], result_text: str = "") -> None:
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
+    rules["monster_instances"] = [dict(x) for x in monsters if isinstance(x, dict)][:20]
+    runtime["rules_state"] = rules
+    public = _public_state_from_session(session)
+    visible = []
+    for i, monster in enumerate(monsters[:6]):
+        if not isinstance(monster, dict):
+            continue
+        visible.append(_normalize_public_marker_item({
+            "id": monster.get("id"),
+            "name": monster.get("name"),
+            "status": monster.get("status"),
+            "public_status": monster.get("status"),
+            "public_text": result_text if i == 0 and result_text else monster.get("public_text") or "已进入可见威胁记录。",
+            "type": monster.get("tier"),
+            "tier": monster.get("tier"),
+            "rank": monster.get("rank"),
+            "danger": monster.get("rank"),
+            "weakness": "、".join(monster.get("weaknesses") or []) or "待验证",
+            "weaknesses": monster.get("weaknesses") or [],
+            "counterplay": monster.get("counterplay") or [],
+            "stability": monster.get("stability"),
+            "stability_max": monster.get("stability_max"),
+            "seal_progress": monster.get("seal_progress"),
+            "seal_target": monster.get("seal_target"),
+        }, i, "monster"))
+    public["visible_monsters"] = [x for x in visible if x][:20]
+    if result_text:
+        public["last_rules_result"] = _compact_text(result_text, 260)
+    public["public_threat"] = _public_threat_label(session)
+    runtime["public_state"] = public
+    session["runtime_state"] = runtime
+
+
+def _first_active_monster(monsters: list[dict], target: str = "", allow_boss: bool = False) -> Optional[dict]:
+    target = str(target or "").strip()
+    for monster in monsters:
+        if not isinstance(monster, dict):
+            continue
+        if target and target not in {str(monster.get("id") or ""), str(monster.get("name") or "")}:
+            continue
+        if str(monster.get("status") or "") in {"defeated", "sealed", "evaded"}:
+            continue
+        if not allow_boss and str(monster.get("tier") or "") == "boss":
+            continue
+        return monster
+    if allow_boss:
+        for monster in monsters:
+            if isinstance(monster, dict) and str(monster.get("status") or "") not in {"defeated", "sealed", "evaded"}:
+                return monster
+    return None
+
+
+def _apply_monster_retaliation(player: dict, monster: dict, severity: float = 1.0) -> dict:
+    hp_before = int(player.get("hp") or 0)
+    san_before = int(player.get("san") or 0)
+    hp_damage = math.ceil(max(0, int(monster.get("attack") or 0) - int(player.get("defense") or 0)) * severity)
+    san_damage = math.ceil(max(0, int(monster.get("mental_attack") or 0) - int(player.get("mental_resist") or 0)) * severity)
+    if hp_damage:
+        player["hp"] = max(0, hp_before - max(1, hp_damage))
+    if san_damage:
+        player["san"] = max(0, san_before - max(1, san_damage))
+    spi_delta = _apply_san_delta_to_spi(player, int(player.get("san") or 0) - san_before)
+    threshold = _apply_threshold_conditions(player)
+    return {
+        "hp_delta": int(player.get("hp") or 0) - hp_before,
+        "san_delta": int(player.get("san") or 0) - san_before,
+        "spi_delta": spi_delta,
+        "conditions_add": threshold,
+        "conditions_remove": [],
+    }
+
+
+def _encounter_detail_bonuses(detail: str, player: dict, monster: dict, action: str) -> dict[str, Any]:
+    text = str(detail or "")
+    bonuses: dict[str, Any] = {"total": 0, "notes": []}
+
+    def add(key: str, value: int, note: str) -> None:
+        if value <= 0:
+            return
+        bonuses[key] = value
+        bonuses["total"] = int(bonuses.get("total") or 0) + value
+        bonuses["notes"].append(note)
+
+    if action in {"escape", "avoid", "flee", "evade"}:
+        if re.search(r"(路线|出口|退路|安全屋|安全区|门|楼梯|窗|地图|绕路|掩护)", text):
+            add("route_bonus", 2, "利用路线/掩护")
+        if re.search(r"(道具|绳|钥匙|烟雾|闪光|诱饵|手电|符|药剂|工具)", text):
+            add("item_bonus", 2, "使用合适道具或工具")
+        if re.search(r"(分散|声东击西|制造噪声|引开|障碍|关门|封门)", text):
+            add("distraction_bonus", 2, "制造干扰")
+        if str(monster.get("tier") or "") == "boss":
+            bonuses["boss_lock_penalty"] = 5
+            bonuses["notes"].append("Boss 规则锁定，逃跑 DC +5")
+    elif action in {"attack", "combat", "fight"}:
+        weaknesses = [str(x) for x in (monster.get("weaknesses") or []) if str(x).strip()]
+        if weaknesses and any(w and w in text for w in weaknesses):
+            add("weakness_bonus", 4, "命中已知弱点")
+        elif re.search(r"(弱点|线索|规则|破绽|克制|封印)", text):
+            add("weakness_bonus", 2, "尝试利用弱点/线索")
+        if re.search(r"(偷袭|伏击|先手|背后|瞄准|蓄力)", text):
+            add("tactic_bonus", 2, "战术准备")
+    elif action in {"weaken", "probe"}:
+        weaknesses = [str(x) for x in (monster.get("weaknesses") or []) if str(x).strip()]
+        if weaknesses and any(w and w in text for w in weaknesses):
+            add("weakness_bonus", 4, "对上已知弱点")
+        elif re.search(r"(弱点|规则|线索|破绽|验证|试探|污染源|名字|本体)", text):
+            add("insight_bonus", 2, "用线索试探弱点")
+        if re.search(r"(录像|录音|镜子|灯|盐|符|粉笔|身份|证词|道具|工具)", text):
+            add("tool_bonus", 2, "使用可解释工具")
+    elif action in {"seal", "purify", "exorcise"}:
+        seal_conditions = [str(x) for x in (monster.get("seal_conditions") or []) if str(x).strip()]
+        if seal_conditions and any(w and w in text for w in seal_conditions):
+            add("ritual_bonus", 4, "满足封印条件")
+        elif re.search(r"(封印|镇压|净化|超度|仪式|规则|名字|本体|弱点|核心)", text):
+            add("ritual_bonus", 2, "尝试按规则封印")
+        if re.search(r"(符|阵|粉笔|蜡烛|镜|钥匙|证词|道具|媒介)", text):
+            add("medium_bonus", 2, "使用封印媒介")
+    return bonuses
+
+
+def _record_encounter_reward(session: dict, monster: dict, outcome: str) -> dict[str, Any]:
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
+    reward_context = _reward_context_from_raw(rules.get("reward_context"))
+    flags = _settlement_flags_from_raw(rules.get("settlement_flags"))
+    mid = _slug_id(monster.get("id") or monster.get("name") or "monster", "monster")
+    name = _compact_text(monster.get("name") or "威胁", 80)
+    tag = f"{outcome}:{mid}"
+    tags = _normalize_text_list(reward_context.get("reward_tags"), 60, 40)
+    if tag not in tags:
+        tags.append(tag)
+    reward_context["reward_tags"] = tags[:40]
+    reward_context["item_grants"] = reward_context.get("item_grants") or []
+    if outcome in {"monster_defeated", "monster_evaded", "monster_sealed", "monster_weakened"}:
+        label = {"monster_defeated": "击退", "monster_evaded": "规避", "monster_sealed": "封印", "monster_weakened": "削弱"}.get(outcome, "处理")
+        _record_settlement_flag(flags, "achievement", f"{label}威胁：{name}")
+    rules["reward_context"] = reward_context
+    rules["settlement_flags"] = flags
+    runtime["rules_state"] = rules
+    session["runtime_state"] = runtime
+    return {"tag": tag, "name": name, "outcome": outcome}
+
+
+def _bump_forced_instance_exposure(session: dict, channel: str, amount: int = 1, reason: str = "") -> None:
+    forced = session.get("forced_instance") if isinstance(session.get("forced_instance"), dict) else None
+    if not forced or forced.get("resolved"):
+        return
+    key = "exposure_to_taskers" if channel == "taskers" else "exposure_to_monsters"
+    forced[key] = max(0, int(forced.get(key) or 0) + max(1, int(amount or 1)))
+    if reason:
+        log = forced.get("exposure_log") if isinstance(forced.get("exposure_log"), list) else []
+        log.append({"at": now_beijing_iso(), "channel": channel, "reason": _compact_text(reason, 120)})
+        forced["exposure_log"] = log[-12:]
+    session["forced_instance"] = forced
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
+    rules["forced_instance"] = copy.deepcopy(forced)
+    runtime["rules_state"] = rules
+    session["runtime_state"] = runtime
+
+
+def _resolve_encounter_action(session: dict, action_type: str, target: str = "", detail: str = "") -> tuple[bool, str, dict]:
+    _session_ensure_stats(session)
+    if _session_phase(session) != "instance_running":
+        return False, "只有副本进行中才能进行战斗或逃跑判定。", {}
+    st = session["stats"]
+    player = st.get("player1") if isinstance(st.get("player1"), dict) else _default_player_stats()
+    _recalc_player_caps(player)
+    action = str(action_type or "").strip().lower()
+    monsters = _ensure_monster_instances(session)
+    monster = _first_active_monster(monsters, target, allow_boss=action in {"attack", "combat", "fight", "escape", "avoid", "flee", "evade", "weaken", "probe", "seal", "purify", "exorcise"})
+    if not monster:
+        return False, "当前没有可结算的可见威胁。", {}
+    seed = f"wenyou-encounter:{session.get('gameId')}:{len(session.get('event_log') or [])}:{action}:{monster.get('id')}"
+    rng = random.Random(seed)
+    d20 = rng.randint(1, 20)
+    bonuses = _encounter_detail_bonuses(detail, player, monster, action)
+    changes: dict[str, Any] = {"players": {}, "monster_updates": [], "clock_updates": [], "flags_set": {}, "reward_updates": []}
+    result_text = ""
+    if action in {"attack", "combat", "fight"}:
+        if str(monster.get("tier") or "") == "boss":
+            changes["clock_updates"] = _apply_clock_updates(session, [{"id": "boss_pressure", "name": "Boss 压力", "delta": 1, "max": 6}])
+            changes["players"]["player1"] = _apply_monster_retaliation(player, monster, severity=0.6)
+            result_text = f"你尝试正面攻击【{monster.get('name')}】，系统判定 Boss 默认不可硬杀；威胁上升，并触发反冲。"
+            changes["roll_log"] = {"seed": seed, "d20": d20, "action": action, "target": monster.get("id"), "boss_guard": True}
+        else:
+            score = d20 + math.floor((int(player.get("str") or 10) - 10) / 2) + math.floor(int(player.get("physical_attack") or 0) / 3) + int(bonuses.get("total") or 0)
+            dc = 10 + math.floor(int(monster.get("speed") or 10) / 2)
+            hp_before = int(monster.get("hp") or 0)
+            if score >= dc:
+                damage = max(1, int(player.get("physical_attack") or 1) + int(bonuses.get("weakness_bonus") or 0) - int(monster.get("defense") or 0))
+                monster["hp"] = max(0, hp_before - damage)
+                if int(monster.get("hp") or 0) <= 0:
+                    monster["status"] = "defeated"
+                    changes["reward_updates"].append(_record_encounter_reward(session, monster, "monster_defeated"))
+                    result_text = f"攻击判定 {score}/{dc} 成功，造成 {damage} 伤害；【{monster.get('name')}】被击退。"
+                else:
+                    monster["status"] = "alerted"
+                    changes["players"]["player1"] = _apply_monster_retaliation(player, monster, severity=0.5)
+                    result_text = f"攻击判定 {score}/{dc} 成功，造成 {damage} 伤害；【{monster.get('name')}】仍在逼近。"
+            else:
+                monster["status"] = "chasing"
+                changes["players"]["player1"] = _apply_monster_retaliation(player, monster, severity=1.0)
+                result_text = f"攻击判定 {score}/{dc} 失败；【{monster.get('name')}】抢到反击窗口。"
+            changes["monster_updates"].append({"id": monster.get("id"), "hp_before": hp_before, "hp_after": monster.get("hp"), "status": monster.get("status")})
+            changes["roll_log"] = {"seed": seed, "d20": d20, "action": action, "target": monster.get("id"), "score": score, "dc": dc, "bonuses": bonuses}
+    elif action in {"weaken", "probe"}:
+        stability_before = max(0, int(monster.get("stability") or 0))
+        score = d20 + math.floor((int(player.get("int") or 10) - 10) / 2) + math.floor((int(player.get("spi") or 10) - 10) / 3) + int(bonuses.get("total") or 0)
+        dc = 11 + _rarity_rank(monster.get("rank") or "D") * 2 + (2 if str(monster.get("tier") or "") == "boss" else 0)
+        if score >= dc:
+            if str(monster.get("tier") or "") == "boss":
+                monster["stability"] = max(0, stability_before - (2 if score >= dc + 5 else 1))
+                monster["status"] = "weakened" if int(monster.get("stability") or 0) <= 0 else "unstable"
+                if int(monster.get("stability") or 0) <= 0:
+                    changes["reward_updates"].append(_record_encounter_reward(session, monster, "monster_weakened"))
+                result_text = f"削弱判定 {score}/{dc} 成功；【{monster.get('name')}】稳定度 {stability_before}->{monster.get('stability')}，正面硬杀仍禁止，但封印/撤离窗口扩大。"
+            else:
+                monster["status"] = "weakened"
+                monster["defense"] = max(0, int(monster.get("defense") or 0) - 1)
+                monster["mental_resist"] = max(0, int(monster.get("mental_resist") or 0) - 1)
+                changes["reward_updates"].append(_record_encounter_reward(session, monster, "monster_weakened"))
+                result_text = f"削弱判定 {score}/{dc} 成功；【{monster.get('name')}】进入削弱状态，后续攻击、封印或逃离更容易。"
+        elif score >= dc - 4:
+            monster["status"] = "alerted"
+            changes["clock_updates"] = _apply_clock_updates(session, [{"id": "anomaly_attention", "name": "异常注意", "delta": 1, "max": 6}])
+            result_text = f"削弱判定 {score}/{dc} 只得到部分信息；【{monster.get('name')}】被惊动，异常注意上升。"
+        else:
+            monster["status"] = "alerted"
+            changes["players"]["player1"] = _apply_monster_retaliation(player, monster, severity=0.45)
+            changes["clock_updates"] = _apply_clock_updates(session, [{"id": "anomaly_attention", "name": "异常注意", "delta": 1, "max": 6}])
+            _bump_forced_instance_exposure(session, "monsters", 1, "削弱/试探失败")
+            result_text = f"削弱判定 {score}/{dc} 失败；【{monster.get('name')}】捕捉到你的试探，触发轻度反噬。"
+        changes["monster_updates"].append({
+            "id": monster.get("id"),
+            "stability_before": stability_before,
+            "stability_after": monster.get("stability"),
+            "status": monster.get("status"),
+        })
+        changes["roll_log"] = {"seed": seed, "d20": d20, "action": action, "target": monster.get("id"), "score": score, "dc": dc, "bonuses": bonuses}
+    elif action in {"seal", "purify", "exorcise"}:
+        seal_before = max(0, int(monster.get("seal_progress") or 0))
+        seal_target = max(1, int(monster.get("seal_target") or (3 if str(monster.get("tier") or "") == "boss" else 2)))
+        stability = max(0, int(monster.get("stability") or 0))
+        stability_penalty = 2 if str(monster.get("tier") or "") == "boss" and stability > 0 else 0
+        score = d20 + math.floor((int(player.get("spi") or 10) - 10) / 2) + math.floor((int(player.get("int") or 10) - 10) / 3) + int(bonuses.get("total") or 0)
+        dc = 12 + _rarity_rank(monster.get("rank") or "D") * 2 + stability_penalty
+        if score >= dc:
+            gain = 2 if score >= dc + 5 else 1
+            monster["seal_progress"] = min(seal_target, seal_before + gain)
+            if int(monster.get("seal_progress") or 0) >= seal_target:
+                monster["status"] = "sealed"
+                changes["reward_updates"].append(_record_encounter_reward(session, monster, "monster_sealed"))
+                result_text = f"封印判定 {score}/{dc} 成功；封印进度 {seal_before}->{monster.get('seal_progress')}/{seal_target}，【{monster.get('name')}】已被系统记录为封印。"
+            else:
+                monster["status"] = "contained"
+                result_text = f"封印判定 {score}/{dc} 成功；封印进度 {seal_before}->{monster.get('seal_progress')}/{seal_target}，还需要继续补完条件。"
+        elif score >= dc - 4:
+            monster["seal_progress"] = min(seal_target, seal_before + 1)
+            monster["status"] = "unstable"
+            changes["clock_updates"] = _apply_clock_updates(session, [{"id": "seal_backlash", "name": "封印反噬", "delta": 1, "max": 6}])
+            result_text = f"封印判定 {score}/{dc} 部分成功；封印进度 {seal_before}->{monster.get('seal_progress')}/{seal_target}，但反噬时钟推进。"
+        else:
+            monster["status"] = "chasing"
+            changes["players"]["player1"] = _apply_monster_retaliation(player, monster, severity=0.55)
+            changes["clock_updates"] = _apply_clock_updates(session, [{"id": "seal_backlash", "name": "封印反噬", "delta": 1, "max": 6}])
+            _bump_forced_instance_exposure(session, "monsters", 1, "封印失败")
+            result_text = f"封印判定 {score}/{dc} 失败；封印结构被冲开，【{monster.get('name')}】开始追击。"
+        changes["monster_updates"].append({
+            "id": monster.get("id"),
+            "seal_before": seal_before,
+            "seal_after": monster.get("seal_progress"),
+            "seal_target": seal_target,
+            "status": monster.get("status"),
+        })
+        changes["roll_log"] = {"seed": seed, "d20": d20, "action": action, "target": monster.get("id"), "score": score, "dc": dc, "bonuses": bonuses}
+    elif action in {"escape", "avoid", "flee", "evade"}:
+        alert_bonus = 2 if str(monster.get("status") or "") in {"alerted", "chasing"} else 0
+        score = d20 + math.floor((int(player.get("agi") or 10) - 10) / 2) + math.floor(int(player.get("initiative") or 0) / 4) + int(bonuses.get("total") or 0)
+        dc = int(monster.get("detection") or 10) + math.floor(int(monster.get("speed") or 10) / 2) + alert_bonus + int(bonuses.get("boss_lock_penalty") or 0)
+        if score >= dc + 5:
+            monster["status"] = "evaded"
+            _add_condition_unique(player, "脱离遭遇窗口")
+            changes["players"]["player1"] = {"hp_delta": 0, "san_delta": 0, "spi_delta": 0, "conditions_add": ["脱离遭遇窗口"], "conditions_remove": []}
+            changes["reward_updates"].append(_record_encounter_reward(session, monster, "monster_evaded"))
+            result_text = f"逃跑判定 {score}/{dc} 大成功；你移动到安全相邻区域，暂时摆脱了【{monster.get('name')}】。"
+        elif score >= dc:
+            monster["status"] = "alerted"
+            _add_condition_unique(player, "脱离遭遇窗口")
+            changes["players"]["player1"] = {"hp_delta": 0, "san_delta": 0, "spi_delta": 0, "conditions_add": ["脱离遭遇窗口"], "conditions_remove": []}
+            changes["reward_updates"].append(_record_encounter_reward(session, monster, "monster_evaded"))
+            result_text = f"逃跑判定 {score}/{dc} 成功；你脱离当前遭遇，但【{monster.get('name')}】仍保持警戒。"
+        elif score >= dc - 5:
+            monster["status"] = "chasing"
+            _add_condition_unique(player, "路线暴露")
+            retaliation = _apply_monster_retaliation(player, monster, severity=0.35)
+            retaliation["conditions_add"] = list(dict.fromkeys((retaliation.get("conditions_add") or []) + ["路线暴露"]))
+            changes["players"]["player1"] = retaliation
+            changes["clock_updates"] = _apply_clock_updates(session, [{"id": "chase_pressure", "name": "追逐压力", "delta": 1, "max": 6}])
+            result_text = f"逃跑判定 {score}/{dc} 部分成功；你离开原地，但路线暴露，追逐压力上升。"
+        else:
+            monster["status"] = "chasing"
+            _add_condition_unique(player, "暴露")
+            retaliation = _apply_monster_retaliation(player, monster, severity=0.8)
+            retaliation["conditions_add"] = list(dict.fromkeys((retaliation.get("conditions_add") or []) + ["暴露"]))
+            changes["players"]["player1"] = retaliation
+            changes["clock_updates"] = _apply_clock_updates(session, [{"id": "chase_pressure", "name": "追逐压力", "delta": 1, "max": 6}])
+            _bump_forced_instance_exposure(session, "monsters", 1, "逃离失败")
+            result_text = f"逃跑判定 {score}/{dc} 失败；你暴露了路线，【{monster.get('name')}】开始追击。"
+        changes["monster_updates"].append({"id": monster.get("id"), "status": monster.get("status")})
+        changes["roll_log"] = {"seed": seed, "d20": d20, "action": action, "target": monster.get("id"), "score": score, "dc": dc, "bonuses": bonuses}
+    else:
+        return False, "未知遭遇动作。", {}
+    st["player1"] = player
+    session["stats"] = st
+    _save_monster_instances(session, monsters, result_text)
+    patch = _append_rules_patch(session, "rules_engine.encounter", changes)
+    session["runtime_state"] = _runtime_state_view(session)
+    return True, result_text, patch
+
+
+def cmd_encounter_action_with_du(user_id: int, action_type: str, target: str = "", detail: str = "") -> tuple[str, str]:
+    uid = int(user_id)
+    original_session = r2_store.get_wenyou_session(uid)
+    if not isinstance(original_session, dict):
+        return "文游：当前没有进行中的局，请先开局。", ""
+    session = copy.deepcopy(original_session)
+    ok, result_text, _patch = _resolve_encounter_action(session, action_type, target=target, detail=detail)
+    if not ok:
+        return f"文游：{result_text}", ""
+    r2_store.save_wenyou_session(uid, session)
+    gm_note = f"【系统判定】{result_text}请只根据这个已结算结果生成剧情反应；不要重算命中、逃跑、怪物 HP、稳定度、封印进度或玩家伤害。"
+    ok_action, msg = cmd_record_action(uid, gm_note, "player1")
+    if not ok_action:
+        return msg, ""
+    du_action = generate_du_action_for_round(uid, gm_note)
+    if du_action:
+        ok_du, du_msg = cmd_record_action(uid, du_action, "player2")
+        if not ok_du:
+            logger.warning("文游渡自动行动记录失败 user_id=%s error=%s", user_id, du_msg)
+            du_action = ""
+    out = cmd_go(uid)
+    if out.startswith("文游：GM 调用失败"):
+        r2_store.save_wenyou_session(uid, original_session)
+        return out, ""
+    return f"【遭遇结算】{result_text}\n\n{out}", du_action
 
 
 def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
@@ -4848,7 +8746,7 @@ def cmd_go(user_id: int) -> str:
     _update_wenyou_card_for_round(uid, session, p1_text, p2_text, gm_out)
     _archive_wenyou_round_for_recent_memory(uid, session, p1_text, p2_text, gm_out)
 
-    narrative = _strip_main_god_panel(gm_out)
+    narrative = _strip_player_brief_blocks(_strip_main_god_panel(gm_out))
     patch_text = _format_state_patch_for_display(state_patch)
     foot = _format_status_footer(session)
     if patch_text:

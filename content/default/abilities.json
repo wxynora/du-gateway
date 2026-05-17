@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "abilities": [
+    {
+      "id": "quick_bandage",
+      "name": "快速包扎",
+      "rarity": "D",
+      "max_level": 5,
+      "slot_type": "active",
+      "cost": { "ability_fragments": 10 },
+      "uses": { "per_instance": 1 },
+      "effect_json": { "effect_type": "heal", "hp_restore": 20, "hp_restore_per_level": 10 },
+      "tags": ["heal", "survival"],
+      "desc": "每副本 1 次，非战斗恢复 HP。"
+    },
+    {
+      "id": "steady_breath",
+      "name": "稳定呼吸",
+      "rarity": "D",
+      "max_level": 5,
+      "slot_type": "active",
+      "cost": { "ability_fragments": 10 },
+      "uses": { "per_instance": 1 },
+      "effect_json": { "effect_type": "mental_recover", "san_restore": 20, "san_restore_per_level": 10 },
+      "tags": ["mental", "survival"],
+      "desc": "每副本 1 次，恢复 SAN 并同步当前精神力。"
+    },
+    {
+      "id": "anomaly_intuition",
+      "name": "异常直觉",
+      "rarity": "D",
+      "max_level": 5,
+      "slot_type": "active",
+      "cost": { "ability_fragments": 10 },
+      "uses": { "per_instance": 1 },
+      "effect_json": { "effect_type": "investigation_hint", "scope": "minor_anomaly" },
+      "tags": ["investigation"],
+      "desc": "发现一个轻微异常，但不保证解释。"
+    },
+    {
+      "id": "mental_anchor",
+      "name": "精神锚点",
+      "rarity": "C",
+      "max_level": 5,
+      "slot_type": "active",
+      "unlock": { "rank_min": "C" },
+      "cost": { "ability_fragments": 25 },
+      "uses": { "per_instance": 1 },
+      "effect_json": { "effect_type": "remove_condition", "conditions": ["动摇"] },
+      "tags": ["mental", "defense"],
+      "desc": "抵消或移除一次精神动摇，高等级可处理轻度污染。"
+    },
+    {
+      "id": "rule_probe",
+      "name": "规则试探",
+      "rarity": "B",
+      "max_level": 5,
+      "slot_type": "active",
+      "unlock": { "rank_min": "B" },
+      "cost": { "ability_fragments": 60 },
+      "uses": { "per_instance": 1 },
+      "effect_json": { "effect_type": "rule_probe", "rule_scope": "low_or_medium_fragment", "result_mode": "true_false_incomplete" },
+      "tags": ["rule", "investigation"],
+      "desc": "验证一条低级规则，结果可能是真、假或不完整。"
+    },
+    {
+      "id": "causal_rollback",
+      "name": "因果回滚",
+      "rarity": "A",
+      "max_level": 5,
+      "slot_type": "active",
+      "unlock": { "rank_min": "A" },
+      "cost": { "ability_fragments": 160 },
+      "uses": { "per_instance": 1 },
+      "effect_json": { "effect_type": "causal_rollback", "san_cost": 35 },
+      "tags": ["causal", "defense"],
+      "desc": "撤销本轮一次非死亡后果，支付 SAN 代价。"
+    },
+    {
+      "id": "settlement_audit",
+      "name": "强制结算复核",
+      "rarity": "S",
+      "max_level": 5,
+      "slot_type": "active",
+      "unlock": { "rank_min": "S" },
+      "cost": { "ability_fragments": 500 },
+      "uses": { "per_instance": 1 },
+      "effect_json": { "effect_type": "settlement_audit", "accept_new_result": true },
+      "tags": ["settlement"],
+      "desc": "结算时重算一次奖励或死亡判定，必须接受新结果。"
+    }
+  ]
+}

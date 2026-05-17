@@ -137,6 +137,17 @@ def register_routes(bp) -> None:
         ok, message, view = buy_shop_item(uid, item_id)
         return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
 
+    @bp.route("/wenyou/shop/refresh", methods=["POST"])
+    def miniapp_wenyou_shop_refresh():
+        """文游：刷新普通商店，扣刷新积分并遵守每日次数。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        from services.wenyou_service import refresh_shop_items
+
+        ok, message, view = refresh_shop_items(uid)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
     @bp.route("/wenyou/gacha/roll", methods=["POST"])
     def miniapp_wenyou_gacha_roll():
         """文游：命运裂隙抽卡。后端扣积分、写背包、记录保底。"""
@@ -192,6 +203,54 @@ def register_routes(bp) -> None:
         ok, message, view = revive_player(uid, player_id=player)
         return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
 
+    @bp.route("/wenyou/player/ability/learn", methods=["POST"])
+    def miniapp_wenyou_learn_ability():
+        """文游：学习或升级能力，系统检查能力槽、阶位和碎片。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        player = str(data.get("player") or data.get("player_id") or "player1").strip()
+        ability = str(data.get("ability") or data.get("ability_id") or data.get("id") or "").strip()
+        if not ability:
+            return jsonify({"ok": False, "error": "请选择能力"}), 400
+        from services.wenyou_service import learn_or_upgrade_ability
+
+        ok, message, view = learn_or_upgrade_ability(uid, ability, player_id=player)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/player/ability/use", methods=["POST"])
+    def miniapp_wenyou_use_ability():
+        """文游：使用能力，系统检查次数、封印和代价。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        player = str(data.get("player") or data.get("player_id") or "player1").strip()
+        ability = str(data.get("ability") or data.get("ability_id") or data.get("id") or "").strip()
+        detail = str(data.get("detail") or data.get("action") or "").strip()
+        if not ability:
+            return jsonify({"ok": False, "error": "请选择能力"}), 400
+        from services.wenyou_service import use_player_ability
+
+        ok, message, view = use_player_ability(uid, ability, player_id=player, detail=detail)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/player/evolution/apply", methods=["POST"])
+    def miniapp_wenyou_apply_evolution():
+        """文游：进化升级，系统扣积分和进化碎片。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        player = str(data.get("player") or data.get("player_id") or "player1").strip()
+        route = str(data.get("route") or data.get("route_id") or "human_stable").strip()
+        target_rank = str(data.get("target_rank") or data.get("rank") or "").strip()
+        from services.wenyou_service import apply_evolution_effect
+
+        ok, message, view = apply_evolution_effect(uid, route_id=route, player_id=player, target_rank=target_rank)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
     @bp.route("/wenyou/candidates", methods=["GET", "POST"])
     def miniapp_wenyou_candidates():
         """文游：副本大厅候选设定池。优先读缓存，刷新时才调用 DS。"""
@@ -207,6 +266,9 @@ def register_routes(bp) -> None:
         keywords = str(data.get("keywords") or request.args.get("keywords") or "").strip()
         cached = r2_store.get_wenyou_candidates(uid)
         if isinstance(cached, dict) and isinstance(cached.get("items"), list) and cached.get("items") and not force:
+            from services.wenyou_service import apply_forced_instance_candidates
+
+            cached = apply_forced_instance_candidates(uid, cached)
             return jsonify({"ok": True, "generated": False, **cached})
 
         from services.wenyou_service import generate_instance_candidates
@@ -274,13 +336,37 @@ def register_routes(bp) -> None:
         auto_go = data.get("auto_go", True)
         if not text:
             return jsonify({"ok": False, "error": "行动内容不能为空"}), 400
-        from services.wenyou_service import cmd_action, cmd_action_with_du, cmd_record_action, get_session_view
+        from services.wenyou_service import (
+            classify_wenyou_action_text,
+            cmd_action,
+            cmd_action_with_du,
+            cmd_encounter_action_with_du,
+            cmd_record_action,
+            get_session_view,
+        )
 
+        action_intent = classify_wenyou_action_text(text)
+        if action_intent.get("action_type") == "system_action":
+            return jsonify({"ok": False, "error": "这是系统操作，请使用对应面板入口。", "action_intent": action_intent, **get_session_view(uid)}), 400
+        if action_intent.get("action_type") == "use_item":
+            return jsonify({"ok": False, "error": "道具使用请从背包选择物品，走系统判定。", "action_intent": action_intent, **get_session_view(uid)}), 400
         if auto_go is False:
             ok, msg = cmd_record_action(uid, text, player)
             if not ok:
                 return jsonify({"ok": False, "error": msg}), 400
-            return jsonify({"ok": True, "queued": True, "text": msg, **get_session_view(uid)})
+            return jsonify({"ok": True, "queued": True, "text": msg, "action_intent": action_intent, **get_session_view(uid)})
+        if action_intent.get("action_type") in {"attack", "flee", "evade", "weaken", "seal"}:
+            out, du_action = cmd_encounter_action_with_du(
+                uid,
+                str(action_intent.get("action_type") or ""),
+                target=str(action_intent.get("target") or ""),
+                detail=text,
+            )
+            failed = out.startswith("文游：")
+            payload = {"ok": not failed, "text": out, "action_intent": action_intent, **get_session_view(uid)}
+            if du_action:
+                payload["du_action"] = du_action
+            return jsonify(payload), (400 if failed else 200)
         du_action = ""
         player_key = player.lower()
         if player_key in ("player1", "p1") or player in ("辛玥", ""):
@@ -288,7 +374,7 @@ def register_routes(bp) -> None:
         else:
             out = cmd_action(uid, text, player)
         failed = out.startswith("文游：当前没有") or out.startswith("文游：GM 调用失败") or out.startswith("文游：当前处于")
-        payload = {"ok": not failed, "text": out, **get_session_view(uid)}
+        payload = {"ok": not failed, "text": out, "action_intent": action_intent, **get_session_view(uid)}
         if du_action:
             payload["du_action"] = du_action
         return jsonify(payload), (400 if failed else 200)
@@ -319,6 +405,105 @@ def register_routes(bp) -> None:
         from services.wenyou_service import cmd_use_item_with_du, get_session_view
 
         out, du_action = cmd_use_item_with_du(uid, item, action)
+        failed = out.startswith("文游：")
+        payload = {"ok": not failed, "text": out, **get_session_view(uid)}
+        if du_action:
+            payload["du_action"] = du_action
+        return jsonify(payload), (400 if failed else 200)
+
+    @bp.route("/wenyou/item/equip", methods=["POST"])
+    def miniapp_wenyou_equip_item():
+        """文游：装备武器/防具/饰品/工具，系统判定槽位和门槛。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        item = str(data.get("item") or data.get("item_ref") or data.get("uid") or data.get("id") or "").strip()
+        player = str(data.get("player") or data.get("player_id") or "player1").strip()
+        slot = str(data.get("slot") or "").strip()
+        if not item:
+            return jsonify({"ok": False, "error": "请选择装备"}), 400
+        from services.wenyou_service import equip_inventory_item
+
+        ok, message, view = equip_inventory_item(uid, item, player_id=player, slot=slot)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/item/repair", methods=["POST"])
+    def miniapp_wenyou_repair_item():
+        """文游：维修装备耐久，系统扣积分。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        item = str(data.get("item") or data.get("item_ref") or data.get("uid") or data.get("id") or "").strip()
+        if not item:
+            return jsonify({"ok": False, "error": "请选择维修物品"}), 400
+        from services.wenyou_service import repair_inventory_item
+
+        ok, message, view = repair_inventory_item(uid, item)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/item/sell", methods=["POST"])
+    def miniapp_wenyou_sell_item():
+        """文游：出售回收背包物品，绑定/任务/唯一物禁止。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        item = str(data.get("item") or data.get("item_ref") or data.get("uid") or data.get("id") or "").strip()
+        if not item:
+            return jsonify({"ok": False, "error": "请选择出售物品"}), 400
+        from services.wenyou_service import sell_inventory_item
+
+        ok, message, view = sell_inventory_item(uid, item)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/item/disassemble", methods=["POST"])
+    def miniapp_wenyou_disassemble_item():
+        """文游：拆解装备为锻材/碎片，不返还积分。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        item = str(data.get("item") or data.get("item_ref") or data.get("uid") or data.get("id") or "").strip()
+        if not item:
+            return jsonify({"ok": False, "error": "请选择拆解物品"}), 400
+        from services.wenyou_service import disassemble_inventory_item
+
+        ok, message, view = disassemble_inventory_item(uid, item)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/item/forge", methods=["POST"])
+    def miniapp_wenyou_forge_item():
+        """文游：装备升级/锻造突破，系统扣积分和材料。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        item = str(data.get("item") or data.get("item_ref") or data.get("uid") or data.get("id") or "").strip()
+        mode = str(data.get("mode") or "upgrade").strip()
+        if not item:
+            return jsonify({"ok": False, "error": "请选择强化装备"}), 400
+        from services.wenyou_service import upgrade_or_forge_gear
+
+        ok, message, view = upgrade_or_forge_gear(uid, item, mode=mode)
+        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/encounter/action", methods=["POST"])
+    def miniapp_wenyou_encounter_action():
+        """文游：战斗/逃跑等遭遇动作先由系统规则裁判，再交给 GM 叙事。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        action = str(data.get("action") or data.get("type") or "").strip()
+        target = str(data.get("target") or "").strip()
+        detail = str(data.get("detail") or "").strip()
+        if not action:
+            return jsonify({"ok": False, "error": "请选择遭遇动作"}), 400
+        from services.wenyou_service import cmd_encounter_action_with_du, get_session_view
+
+        out, du_action = cmd_encounter_action_with_du(uid, action, target=target, detail=detail)
         failed = out.startswith("文游：")
         payload = {"ok": not failed, "text": out, **get_session_view(uid)}
         if du_action:

@@ -4,6 +4,8 @@ import { useToast } from "../toast";
 
 type WenyouView = "home" | "selection" | "game" | "archive" | "shop" | "rift";
 type WenyouInitialView = WenyouView | "archives" | "hub";
+type WenyouPanelView = "局内资料";
+type WenyouPanelTab = "情报" | "背包" | "状态" | "记录";
 
 type WenyouArchiveItem = {
   gameId?: string;
@@ -54,9 +56,14 @@ type WenyouShopItem = {
   id: string;
   name: string;
   kind: string;
+  category?: string;
+  item_type?: string;
   rarity: string;
   price: number;
   desc: string;
+  shop_type?: "regular" | "special";
+  sealed?: boolean;
+  sealed_reason?: string;
 };
 
 type WenyouInventoryItem = {
@@ -66,11 +73,27 @@ type WenyouInventoryItem = {
   kind?: string;
   category?: string;
   rarity?: string;
+  effect?: string;
   desc?: string;
   quantity?: number;
+  uses_left?: number;
+  durability?: number;
+  durability_max?: number;
+  item_type?: string;
+  equip_slot?: string;
+  equipped_by?: string;
+  equipped_slot?: string;
+  gear_level?: number;
+  forge_level?: number;
+  gear_level_cap?: number;
+  broken?: boolean;
+  temporary?: boolean;
+  quest_item?: boolean;
+  carry_out?: boolean;
   sigil?: string;
   sealed?: boolean;
   sealed_reason?: string;
+  source?: string;
 };
 
 type WenyouShopView = {
@@ -82,6 +105,21 @@ type WenyouShopView = {
   inventory?: WenyouInventoryItem[];
   generatedAt?: string;
   items?: WenyouShopItem[];
+  shop_state?: {
+    regular?: {
+      rotation_id?: string;
+      refresh_count?: number;
+      refresh_limit?: number;
+      refresh_cost?: number;
+      items?: WenyouShopItem[];
+    };
+    special?: {
+      unlocked?: boolean;
+      unlock_rank?: string;
+      rotation_id?: string;
+      items?: WenyouShopItem[];
+    };
+  };
 };
 
 type EntryScene = {
@@ -117,15 +155,146 @@ type WenyouPlayerStats = {
   hp_max?: number;
   san?: number;
   san_max?: number;
+  spi_current?: number;
+  spi_max?: number;
   level?: number;
   rank?: string;
   exp?: number;
+  str?: number;
+  con?: number;
+  agi?: number;
+  int?: number;
+  spi?: number;
+  luk?: number;
   vit?: number;
   wis?: number;
+  evolution?: string;
+  evolution_rank?: string;
+  evolution_tags?: string[];
   bloodline?: string;
-  abilities?: Array<{ name?: string; desc?: string }>;
+  abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string; uses_per_instance?: number }>;
+  dormant_abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
+  gear?: Array<string | { name?: string; slot?: string; desc?: string; gear_level?: number; forge_level?: number; durability?: number; durability_max?: number; rarity?: string; broken?: boolean }>;
+  equipment?: Array<string | { name?: string; slot?: string; desc?: string; gear_level?: number; forge_level?: number; durability?: number; durability_max?: number; rarity?: string; broken?: boolean }>;
   weapons?: string[];
   conditions?: string[];
+  unspent_attribute_points?: number;
+  ability_tokens?: number;
+  growth_milestone_tokens?: number;
+  physical_attack?: number;
+  ranged_attack?: number;
+  defense?: number;
+  mental_resist?: number;
+  initiative?: number;
+};
+
+type WenyouPromotionPreview = {
+  available?: boolean;
+  current_rank?: string;
+  target_rank?: string;
+  required_level?: number;
+  cost?: number;
+  attribute_bonus?: number;
+  reasons?: string[];
+};
+
+type WenyouGrowthPlayer = {
+  attributes?: Record<string, number>;
+  soft_cap?: number;
+  unspent_attribute_points?: number;
+  ability_tokens?: number;
+  ability_slots?: number;
+  abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
+  dormant_abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
+  available_abilities?: Array<{ id?: string; name?: string; desc?: string; rarity?: string; known?: boolean; locked?: boolean; fragment_cost?: number }>;
+  growth_milestone_tokens?: number;
+  evolution?: string;
+  evolution_rank?: string;
+  evolution_tags?: string[];
+  evolution_routes?: Array<{ id?: string; name?: string; tags?: string[]; pollution?: number }>;
+  next_evolution_cost?: { points?: number; fragments?: number; level?: number; rank?: string } | null;
+  next_level_exp?: number;
+  spi_current?: number;
+  spi_max?: number;
+  promotion?: WenyouPromotionPreview;
+};
+
+type WenyouGrowthView = {
+  attribute_keys?: string[];
+  rank_soft_caps?: Record<string, number>;
+  players?: Record<string, WenyouGrowthPlayer>;
+};
+
+type WenyouTaskPanelItem = string | {
+  id?: string;
+  title?: string;
+  current?: string;
+  goal?: string;
+  type?: string;
+  status?: string;
+  progress?: { current?: number; target?: number; mode?: string; text?: string } | string;
+  required_clues?: string[];
+  related_clues?: string[];
+  fail_forward?: string;
+  reward_tags?: string[];
+};
+
+type WenyouCluePanelItem = string | {
+  id?: string;
+  title?: string;
+  status?: string;
+  verified?: boolean;
+  source?: string;
+  public_text?: string;
+  text?: string;
+  related_tasks?: string[];
+  leads_to?: string[];
+  tags?: string[];
+};
+
+type WenyouPublicMarker = string | {
+  id?: string;
+  name?: string;
+  title?: string;
+  status?: string;
+  public_status?: string;
+  public_text?: string;
+  desc?: string;
+  blurb?: string;
+  danger?: string;
+  last_location?: string;
+  attitude?: string;
+  weakness?: string;
+  type?: string;
+  tier?: string;
+  rank?: string;
+  stability?: number;
+  stability_max?: number;
+  seal_progress?: number;
+  seal_target?: number;
+  weaknesses?: string[];
+  counterplay?: string[];
+};
+
+type WenyouPublicState = {
+  scene_summary?: string;
+  visible_rules?: string[];
+  public_tasks?: WenyouTaskPanelItem[];
+  discovered_clues?: WenyouCluePanelItem[];
+  known_locations?: WenyouPublicMarker[];
+  visible_npcs?: WenyouPublicMarker[];
+  visible_monsters?: WenyouPublicMarker[];
+  public_threat?: string;
+  last_rules_result?: string;
+  forced_notice?: string;
+};
+
+type WenyouRulesState = {
+  players?: Record<string, WenyouPlayerStats>;
+  inventory?: WenyouInventoryItem[];
+  equipment?: Array<string | Record<string, unknown>>;
+  threat_clocks?: Array<Record<string, unknown>>;
+  last_state_patch?: Record<string, unknown> | null;
 };
 
 type WenyouSessionPanel = {
@@ -160,9 +329,20 @@ type WenyouSessionPanel = {
     inventory?: WenyouInventoryItem[];
   };
   wallet?: { points?: number; debts?: number; total_exp?: number } | null;
+  growth?: WenyouGrowthView | null;
   settlement?: Record<string, unknown> | null;
   inventory?: WenyouInventoryItem[];
   clues?: string[];
+  public_state?: WenyouPublicState;
+  public_view?: WenyouPublicState;
+  rules_state?: WenyouRulesState;
+  runtime_state?: {
+    public_state?: WenyouPublicState;
+    rules_state?: WenyouRulesState;
+    last_state_patch?: Record<string, unknown> | null;
+  };
+  clocks?: Array<Record<string, unknown>>;
+  last_state_patch?: Record<string, unknown> | null;
   history?: Array<{ role?: string; content?: string; timestamp?: string }>;
 };
 
@@ -251,9 +431,21 @@ const QUICK_ACTIONS = [
   { label: "观察", text: "观察周围环境，留意异常细节。" },
   { label: "检查", text: "检查离我最近的可疑物。" },
   { label: "交谈", text: "尝试和当前场景里的人交谈。" },
+  { label: "攻击", text: "攻击当前可见威胁。", encounterAction: "attack" as const },
+  { label: "削弱", text: "根据已知线索试探并削弱当前威胁。", encounterAction: "weaken" as const },
+  { label: "封印", text: "尝试按规则封印当前威胁。", encounterAction: "seal" as const },
+  { label: "逃跑", text: "尝试脱离当前遭遇。", encounterAction: "escape" as const },
   { label: "移动", text: "寻找可以前往的下一个地点。" },
   { label: "使用", text: "打开背包，选择一个合适的物品使用。" },
 ];
+const ATTRIBUTE_LABELS: Record<string, string> = {
+  str: "力",
+  con: "体",
+  agi: "敏",
+  int: "智",
+  spi: "精",
+  luk: "运",
+};
 const RIFT_SINGLE_COST = 100;
 const RIFT_TEN_COST = 1000;
 const STORY_EXPANSION_POLL_MS = 1200;
@@ -340,6 +532,12 @@ function Icon({ name }: { name: string }) {
   if (name === "list") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>;
   }
+  if (name === "x") {
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>;
+  }
+  if (name === "plus") {
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>;
+  }
   if (name === "shuffle") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5" /></svg>;
   }
@@ -396,6 +594,113 @@ function inventoryItemLabel(item: WenyouInventoryItem | string): string {
 function inventoryItemKey(item: WenyouInventoryItem | string, index: number): string {
   if (typeof item === "string") return `${item}-${index}`;
   return String(item.uid || item.id || item.name || index);
+}
+
+function isGearInventoryItem(item: WenyouInventoryItem | string): item is WenyouInventoryItem {
+  if (typeof item === "string") return false;
+  const type = String(item.item_type || item.category || "").trim();
+  return ["weapon", "armor", "accessory", "equippable_tool"].includes(type) || !!item.equip_slot;
+}
+
+function inventoryActionKey(item: WenyouInventoryItem | string): string {
+  if (typeof item === "string") return item;
+  return String(item.uid || item.id || item.name || "");
+}
+
+function normalizeShopView(j: Partial<WenyouShopView>): WenyouShopView {
+  return {
+    active: !!j.active,
+    can_buy: !!j.can_buy,
+    phase: String(j.phase || ""),
+    phaseLabel: String(j.phaseLabel || ""),
+    points: Number(j.points || 0),
+    inventory: Array.isArray(j.inventory) ? j.inventory : [],
+    generatedAt: String(j.generatedAt || ""),
+    items: Array.isArray(j.items) ? j.items : [],
+    shop_state: j.shop_state || undefined,
+  };
+}
+
+function compactPanelText(value: unknown, fallback = ""): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim() || fallback;
+  }
+  return fallback;
+}
+
+function panelListText(items?: unknown[], fallback = "无"): string {
+  if (!Array.isArray(items) || !items.length) return fallback;
+  const out = items.map((item) => compactPanelText(item)).filter(Boolean);
+  return out.length ? out.join("、") : fallback;
+}
+
+function getSessionPublicState(session: WenyouSessionPanel | null): WenyouPublicState {
+  return session?.public_state || session?.public_view || session?.runtime_state?.public_state || {};
+}
+
+function getSessionRulesState(session: WenyouSessionPanel | null): WenyouRulesState {
+  return session?.rules_state || session?.runtime_state?.rules_state || {};
+}
+
+function taskTitle(item: WenyouTaskPanelItem): string {
+  if (typeof item === "string") return item;
+  return compactPanelText(item.title || item.current || item.goal || item.id, "未命名任务");
+}
+
+function taskMeta(item: WenyouTaskPanelItem): string {
+  if (typeof item === "string") return "active";
+  const chunks = [item.type, item.status].map((it) => compactPanelText(it)).filter(Boolean);
+  const progress = item.progress;
+  if (typeof progress === "string" && progress.trim()) chunks.push(progress.trim());
+  if (progress && typeof progress === "object") {
+    if (progress.text) chunks.push(compactPanelText(progress.text));
+    else if (progress.target) chunks.push(`${progress.current ?? 0}/${progress.target}${progress.mode ? ` ${progress.mode}` : ""}`);
+  }
+  return chunks.join(" · ") || "active";
+}
+
+function clueTitle(item: WenyouCluePanelItem): string {
+  if (typeof item === "string") return item.slice(0, 42);
+  return compactPanelText(item.title || item.public_text || item.text || item.id, "未命名线索");
+}
+
+function clueText(item: WenyouCluePanelItem): string {
+  if (typeof item === "string") return item;
+  return compactPanelText(item.public_text || item.text || item.source || item.id, "");
+}
+
+function markerTitle(item: WenyouPublicMarker): string {
+  if (typeof item === "string") return item.slice(0, 42);
+  return compactPanelText(item.name || item.title || item.id, "未命名记录");
+}
+
+function markerText(item: WenyouPublicMarker): string {
+  if (typeof item === "string") return item;
+  return compactPanelText(item.public_text || item.desc || item.blurb || item.status || item.public_status, "");
+}
+
+function markerMeta(item: WenyouPublicMarker): string {
+  if (typeof item === "string") return "";
+  return [item.type || item.tier, item.rank || item.danger, item.status || item.public_status, item.last_location, item.attitude, item.weakness]
+    .map((it) => compactPanelText(it))
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function currentLocationName(publicState: WenyouPublicState, fallback = "未知区域"): string {
+  const first = publicState.known_locations?.[0];
+  const title = first ? markerTitle(first) : "";
+  const text = first ? markerText(first) : "";
+  const raw = title && !["当前场景", "未命名记录"].includes(title)
+    ? title
+    : text || publicState.scene_summary || fallback;
+  return raw.replace(/^当前在[:：]?\s*/, "").trim().slice(0, 34) || fallback;
+}
+
+function gearLabel(item: string | { name?: string; slot?: string; desc?: string }): string {
+  if (typeof item === "string") return item;
+  return [item.name, item.slot].map((it) => compactPanelText(it)).filter(Boolean).join(" · ") || "未命名装备";
 }
 
 function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): RiftPullResult {
@@ -535,7 +840,8 @@ export function WenyouTab({
   const [riftLoading, setRiftLoading] = useState(false);
   const riftPullTokenRef = useRef(0);
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
-  const [panelView, setPanelView] = useState<"任务" | "背包" | "状态" | "线索" | null>(null);
+  const [panelView, setPanelView] = useState<WenyouPanelView | null>(null);
+  const [quickDecisionOpen, setQuickDecisionOpen] = useState(false);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
   const [activeScene, setActiveScene] = useState<EntryScene | null>(null);
   const [typeFilter, setTypeFilter] = useState("全部类型");
@@ -588,6 +894,10 @@ export function WenyouTab({
       setPanelView(null);
       return true;
     }
+    if (quickDecisionOpen) {
+      setQuickDecisionOpen(false);
+      return true;
+    }
     if (settlementDraftOpen) {
       setSettlementDraftOpen(false);
       return true;
@@ -612,10 +922,13 @@ export function WenyouTab({
       return true;
     }
     return false;
-  }, [normalizedInitialView, panelView, randomOpen, riftOverlay, settlementDraftOpen]);
+  }, [normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen]);
 
   useEffect(() => {
     viewRef.current = view;
+    if (view !== "game") {
+      setQuickDecisionOpen(false);
+    }
   }, [view]);
 
   useEffect(() => {
@@ -707,16 +1020,7 @@ export function WenyouTab({
     try {
       const j = await apiJson<{ ok?: boolean; error?: string } & WenyouShopView>("/miniapp-api/wenyou/shop");
       if (!j?.ok) throw new Error(j?.error || "加载失败");
-      setShop({
-        active: !!j.active,
-        can_buy: !!j.can_buy,
-        phase: String(j.phase || ""),
-        phaseLabel: String(j.phaseLabel || ""),
-        points: Number(j.points || 0),
-        inventory: Array.isArray(j.inventory) ? j.inventory : [],
-        generatedAt: String(j.generatedAt || ""),
-        items: Array.isArray(j.items) ? j.items : [],
-      });
+      setShop(normalizeShopView(j));
     } catch (e: any) {
       toast(`加载系统商店失败：${e?.message || e}`);
     } finally {
@@ -798,8 +1102,15 @@ export function WenyouTab({
     genre: status.session?.instance_genre || "规则怪谈",
     difficulty: status.session?.difficulty || "普通",
   };
+  const gamePublicState = getSessionPublicState(sessionPanel);
+  const currentLocation = currentLocationName(gamePublicState);
+  const hasActiveRun = !!(status.active || activeScene);
   const riftPointRaw = shop?.points ?? sessionPanel?.wallet?.points;
   const riftPoints = riftPointPreview ?? Number(riftPointRaw ?? 0);
+  const regularShop = shop?.shop_state?.regular;
+  const specialShop = shop?.shop_state?.special;
+  const regularShopItems = regularShop?.items?.length ? regularShop.items : (shop?.items || []);
+  const specialShopItems = specialShop?.items || [];
 
   async function buyShopItem(item: WenyouShopItem) {
     if (!item?.id || shopBuyingId) return;
@@ -811,22 +1122,33 @@ export function WenyouTab({
         body: JSON.stringify({ item_id: item.id }),
       });
       if (!j?.ok) throw new Error(j?.message || j?.error || "购买失败");
-      setShop({
-        active: !!j.active,
-        can_buy: !!j.can_buy,
-        phase: String(j.phase || ""),
-        phaseLabel: String(j.phaseLabel || ""),
-        points: Number(j.points || 0),
-        inventory: Array.isArray(j.inventory) ? j.inventory : [],
-        generatedAt: String(j.generatedAt || ""),
-        items: Array.isArray(j.items) ? j.items : [],
-      });
+      setShop(normalizeShopView(j));
       toast(j.message || `已购买【${item.name}】`);
       await loadSessionPanel();
     } catch (e: any) {
       toast(`购买失败：${e?.message || e}`);
     } finally {
       setShopBuyingId("");
+    }
+  }
+
+  async function refreshShop() {
+    if (shopLoading) return;
+    setShopLoading(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; message?: string; error?: string } & WenyouShopView>("/miniapp-api/wenyou/shop/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!j?.ok) throw new Error(j?.message || j?.error || "刷新失败");
+      setShop(normalizeShopView(j));
+      toast(j.message || "商店已刷新");
+      await loadSessionPanel();
+    } catch (e: any) {
+      toast(`刷新失败：${e?.message || e}`);
+    } finally {
+      setShopLoading(false);
     }
   }
 
@@ -927,6 +1249,7 @@ export function WenyouTab({
   async function submitAction() {
     const text = actionText.trim();
     if (!text) return;
+    setQuickDecisionOpen(false);
     setActing(true);
     try {
       const j = await apiJson<{ ok?: boolean; text?: string; du_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/action", {
@@ -998,6 +1321,7 @@ export function WenyouTab({
   }
 
   async function openSettlementDraft() {
+    setQuickDecisionOpen(false);
     await loadSettlementPreview();
   }
 
@@ -1053,18 +1377,240 @@ export function WenyouTab({
     }
   }
 
-  function showPlaceholder(name: string) {
-    setPanelView(name as "任务" | "背包" | "状态" | "线索");
+  function showPlaceholder(name: WenyouPanelView) {
+    setPanelView(name);
     loadSessionPanel();
   }
 
-  function useInventoryItem(item: WenyouInventoryItem | string) {
-    const name = inventoryItemName(item);
-    const next = `使用道具【${name}】：`;
-    setActionText(next);
-    setPanelView(null);
-    toast("已填入行动，发送后才结算本轮");
+  function selectQuickAction(text: string) {
+    setActionText(text);
+    setQuickDecisionOpen(false);
     window.setTimeout(() => actionInputRef.current?.focus(), 0);
+  }
+
+  async function runEncounterAction(action: "attack" | "escape" | "weaken" | "seal", detail: string) {
+    if (acting) return;
+    setQuickDecisionOpen(false);
+    setActing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; text?: string; du_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/encounter/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, detail }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "遭遇判定失败");
+      const stamp = Date.now();
+      const duAction = String(j.du_action || "").trim();
+      setFeed((prev) => [
+        ...prev,
+        { id: `u-${stamp}`, kind: "user", text: detail },
+        ...(duAction ? [{ id: `du-${stamp}`, kind: "du" as const, text: duAction }] : []),
+        { id: `gm-${stamp}`, kind: "system", text: String(j.text || "主神系统暂无回应。") },
+      ]);
+      setActionText("");
+      if (j.session) setSessionPanel(j.session);
+      await loadStatus();
+    } catch (e: any) {
+      toast(`遭遇判定失败：${e?.message || e}`);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  function handleQuickAction(item: (typeof QUICK_ACTIONS)[number]) {
+    if ("encounterAction" in item && item.encounterAction) {
+      runEncounterAction(item.encounterAction, item.text);
+      return;
+    }
+    if (item.label === "使用") {
+      showPlaceholder("局内资料");
+      setQuickDecisionOpen(false);
+      return;
+    }
+    selectQuickAction(item.text);
+  }
+
+  async function useInventoryItem(item: WenyouInventoryItem | string) {
+    if (acting) return;
+    const name = inventoryItemName(item);
+    if (!name) return;
+    const itemKey = typeof item === "string" ? name : String(item.uid || item.id || item.name || name);
+    const detail = actionText.trim();
+    setPanelView(null);
+    setQuickDecisionOpen(false);
+    setActing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; text?: string; du_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/item/use", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item: itemKey, action: detail }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "道具使用失败");
+      const stamp = Date.now();
+      const duAction = String(j.du_action || "").trim();
+      const userText = `使用道具【${name}】${detail ? `：${detail}` : ""}`;
+      setFeed((prev) => [
+        ...prev,
+        { id: `u-${stamp}`, kind: "user", text: userText },
+        ...(duAction ? [{ id: `du-${stamp}`, kind: "du" as const, text: duAction }] : []),
+        { id: `gm-${stamp}`, kind: "system", text: String(j.text || "主神系统暂无回应。") },
+      ]);
+      setActionText("");
+      if (j.session) setSessionPanel(j.session);
+      await loadStatus();
+    } catch (e: any) {
+      toast(`道具使用失败：${e?.message || e}`);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function runInventoryCommand(
+    item: WenyouInventoryItem | string,
+    endpoint: "equip" | "repair" | "sell" | "disassemble" | "forge",
+    label: string,
+    body: Record<string, unknown> = {}
+  ) {
+    if (acting) return;
+    const itemRef = inventoryActionKey(item);
+    if (!itemRef) return;
+    setActing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>(`/miniapp-api/wenyou/item/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item: itemRef, ...body }),
+      });
+      if (!j?.ok) throw new Error(j?.message || j?.error || `${label}失败`);
+      toast(j.message || `${label}完成`);
+      if (j.session) setSessionPanel(j.session);
+      await loadStatus();
+      await loadShop();
+    } catch (e: any) {
+      toast(`${label}失败：${e?.message || e}`);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function allocateAttribute(player: "player1" | "player2", attr: string) {
+    if (acting) return;
+    setActing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/player/attributes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player, deltas: { [attr]: 1 } }),
+      });
+      if (!j?.ok) throw new Error(j?.message || j?.error || "属性分配失败");
+      toast(j.message || "属性点已分配");
+      if (j.session) setSessionPanel(j.session);
+      await loadStatus();
+    } catch (e: any) {
+      toast(`属性分配失败：${e?.message || e}`);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function promotePlayer(player: "player1" | "player2") {
+    if (acting) return;
+    setActing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/player/promote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player }),
+      });
+      if (!j?.ok) throw new Error(j?.message || j?.error || "晋升失败");
+      toast(j.message || "晋升完成");
+      if (j.session) setSessionPanel(j.session);
+      await loadStatus();
+    } catch (e: any) {
+      toast(`晋升失败：${e?.message || e}`);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function revivePlayer(player: "player1" | "player2") {
+    if (acting) return;
+    setActing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/player/revive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player }),
+      });
+      if (!j?.ok) throw new Error(j?.message || j?.error || "复活失败");
+      toast(j.message || "复活完成");
+      if (j.session) setSessionPanel(j.session);
+      await loadStatus();
+    } catch (e: any) {
+      toast(`复活失败：${e?.message || e}`);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function learnAbility(player: "player1" | "player2", ability: string) {
+    if (acting) return;
+    setActing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/player/ability/learn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player, ability }),
+      });
+      if (!j?.ok) throw new Error(j?.message || j?.error || "能力学习失败");
+      toast(j.message || "能力已更新");
+      if (j.session) setSessionPanel(j.session);
+      await loadStatus();
+    } catch (e: any) {
+      toast(`能力学习失败：${e?.message || e}`);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function useAbility(player: "player1" | "player2", ability: string) {
+    if (acting) return;
+    setActing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/player/ability/use", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player, ability, detail: actionText.trim() }),
+      });
+      if (!j?.ok) throw new Error(j?.message || j?.error || "能力使用失败");
+      toast(j.message || "能力已使用");
+      if (j.session) setSessionPanel(j.session);
+      await loadStatus();
+    } catch (e: any) {
+      toast(`能力使用失败：${e?.message || e}`);
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function applyEvolution(player: "player1" | "player2", route = "human_stable") {
+    if (acting) return;
+    setActing(true);
+    try {
+      const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/player/evolution/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ player, route }),
+      });
+      if (!j?.ok) throw new Error(j?.message || j?.error || "进化失败");
+      toast(j.message || "进化已完成");
+      if (j.session) setSessionPanel(j.session);
+      await loadStatus();
+    } catch (e: any) {
+      toast(`进化失败：${e?.message || e}`);
+    } finally {
+      setActing(false);
+    }
   }
 
   async function startRiftPull(count: 1 | 10) {
@@ -1110,7 +1656,7 @@ export function WenyouTab({
       const elapsed = (window.performance?.now?.() ?? Date.now()) - openedAt;
       window.setTimeout(() => {
         if (riftPullTokenRef.current === pullToken) setRiftOverlay("results");
-      }, Math.max(0, 920 - elapsed));
+      }, Math.max(0, 1480 - elapsed));
     } catch (e) {
       if (riftPullTokenRef.current === pullToken) {
         setRiftOverlay("closed");
@@ -1260,13 +1806,18 @@ export function WenyouTab({
               {shop?.phaseLabel ? <em>{shop.phaseLabel}</em> : null}
             </div>
           </div>
-          <div className="wenyou-generation-status">
-            <div>
-              <strong>今日货架</strong>
-              <span>{shop?.generatedAt ? `${shop.generatedAt} 刷新 · ${shop?.items?.length || 0} 件商品` : "系统正在配货"}</span>
-            </div>
-            <button onClick={loadShop} disabled={shopLoading}>{shopLoading ? "同步中..." : "同步"}</button>
-          </div>
+	          <div className="wenyou-generation-status">
+	            <div>
+	              <strong>今日货架</strong>
+	              <span>{shop?.generatedAt ? `${shop.generatedAt} · 普通 ${regularShopItems.length} 件 · 刷新 ${regularShop?.refresh_count ?? 0}/${regularShop?.refresh_limit ?? 3}` : "系统正在配货"}</span>
+	            </div>
+	            <div className="wenyou-shop-toolbar">
+	              <button onClick={loadShop} disabled={shopLoading}>{shopLoading ? "同步中..." : "同步"}</button>
+	              <button onClick={refreshShop} disabled={shopLoading || !shop?.can_buy || (regularShop?.refresh_count ?? 0) >= (regularShop?.refresh_limit ?? 3)}>
+	                刷新 {regularShop?.refresh_cost ?? 20}
+	              </button>
+	            </div>
+	          </div>
           {!shopLoading && !shop?.can_buy ? (
             <div className="wenyou-shop-lock">
               {shop?.active
@@ -1274,11 +1825,12 @@ export function WenyouTab({
                 : "当前没有可写入背包的副本。开始副本或进入结算阶段后，可用主神积分购买道具。"}
             </div>
           ) : null}
-          <div className="wenyou-shop-grid">
-            {shopLoading ? <div className="wenyou-empty">主神商店正在校准货架...</div> : null}
-            {(shop?.items || []).map((item) => {
-              const owned = (shop?.inventory || []).some((it) => inventoryItemName(it) === item.name || String(it.id || "") === item.id);
-              const disabled = !shop?.can_buy || owned || shopBuyingId === item.id || Number(shop?.points || 0) < Number(item.price || 0);
+	          <div className="wenyou-panel-subtitle">普通商店</div>
+	          <div className="wenyou-shop-grid">
+	            {shopLoading ? <div className="wenyou-empty">主神商店正在校准货架...</div> : null}
+	            {regularShopItems.map((item) => {
+	              const owned = (shop?.inventory || []).some((it) => inventoryItemName(it) === item.name || String(it.id || "") === item.id);
+	              const disabled = !shop?.can_buy || owned || shopBuyingId === item.id || Number(shop?.points || 0) < Number(item.price || 0);
               return (
                 <article key={item.id} className={`wenyou-shop-card wenyou-shop-rarity-${item.rarity || "D"}`}>
                   <div className="wenyou-shop-card-top">
@@ -1294,11 +1846,39 @@ export function WenyouTab({
                     </button>
                   </div>
                 </article>
-              );
-            })}
-            {!shopLoading && !(shop?.items || []).length ? <div className="wenyou-empty">今日货架为空。</div> : null}
-          </div>
-        </section>
+	              );
+	            })}
+	            {!shopLoading && !regularShopItems.length ? <div className="wenyou-empty">今日货架为空。</div> : null}
+	          </div>
+	          <div className="wenyou-panel-subtitle">特殊兑换</div>
+	          {specialShop?.unlocked ? (
+	            <div className="wenyou-shop-grid">
+	              {specialShopItems.map((item) => {
+	                const owned = (shop?.inventory || []).some((it) => inventoryItemName(it) === item.name || String(it.id || "") === item.id);
+	                const disabled = !shop?.can_buy || owned || shopBuyingId === item.id || Number(shop?.points || 0) < Number(item.price || 0);
+	                return (
+	                  <article key={`special-${item.id}`} className={`wenyou-shop-card wenyou-shop-rarity-${item.rarity || "B"}`}>
+	                    <div className="wenyou-shop-card-top">
+	                      <span>特殊 · {item.kind || item.category || "兑换"}</span>
+	                      <strong>{item.rarity || "B"}</strong>
+	                    </div>
+	                    <h3>{item.name}</h3>
+	                    <p>{item.sealed ? `${item.desc}（购买后封印）` : item.desc}</p>
+	                    <div className="wenyou-shop-card-bottom">
+	                      <b>{item.price} pts</b>
+	                      <button onClick={() => buyShopItem(item)} disabled={disabled}>
+	                        {owned ? "已拥有" : shopBuyingId === item.id ? "购买中" : "兑换"}
+	                      </button>
+	                    </div>
+	                  </article>
+	                );
+	              })}
+	              {!specialShopItems.length ? <div className="wenyou-empty">特殊兑换所暂无商品。</div> : null}
+	            </div>
+	          ) : (
+	            <div className="wenyou-shop-lock">C 阶后开启特殊兑换所。</div>
+	          )}
+	        </section>
       ) : null}
 
       {view === "rift" ? (
@@ -1310,7 +1890,7 @@ export function WenyouTab({
               <h1>命运裂隙</h1>
               <p>FATE RIFT // MIXED POOL</p>
             </div>
-            <button onClick={() => pushView("shop")} aria-label="系统商店"><Icon name="shop" /></button>
+            <span aria-hidden="true" />
           </div>
 
           <main className="wenyou-rift-main">
@@ -1413,8 +1993,18 @@ export function WenyouTab({
             <div>
               <h2>{currentScene.name}</h2>
               <p><span />阶段: {sessionPanel?.phase_label || status.session?.phase_label || (status.active ? "进行中" : "模拟预览")}</p>
+              <p className="wenyou-location-hint"><span />当前在 {currentLocation}</p>
             </div>
-            <button onClick={() => showPlaceholder("状态")}>VIT</button>
+            <button
+              className="wenyou-game-data-trigger"
+              onClick={() => {
+                setQuickDecisionOpen(false);
+                showPlaceholder("局内资料");
+              }}
+              aria-label="打开局内资料"
+            >
+              <Icon name="list" />
+            </button>
           </div>
 
           <div className="wenyou-feed">
@@ -1429,18 +2019,6 @@ export function WenyouTab({
           </div>
 
           <div className="wenyou-command">
-            <div className="wenyou-panel-shortcuts">
-              {["任务", "背包", "状态", "线索"].map((item) => (
-                <button key={item} onClick={() => showPlaceholder(item)}>{item}</button>
-              ))}
-            </div>
-            <div className="wenyou-quick-actions">
-              {QUICK_ACTIONS.map((item) => (
-                <button key={item.label} onClick={() => setActionText(item.text)}>
-                  <span>{item.label}</span>
-                </button>
-              ))}
-            </div>
             {sessionPanel?.phase === "settlement" && sessionPanel.settlement ? (
               <SettlementGranted settlement={sessionPanel.settlement} />
             ) : null}
@@ -1456,19 +2034,35 @@ export function WenyouTab({
                 onConfirm={enterSettlement}
               />
             ) : null}
-            <div className="wenyou-settlement-actions">
-              {sessionPanel?.phase === "settlement" ? (
-                <>
-                  <button onClick={() => pushView("shop")} disabled={settlementLoading}>系统商店</button>
-                  <button onClick={archiveSettlement} disabled={settlementLoading}>{settlementLoading ? "归档中..." : "归档本局"}</button>
-                </>
-              ) : (
-                <button onClick={openSettlementDraft} disabled={acting || settlementLoading}>{settlementLoading ? "结算校准中..." : "申请结算"}</button>
-              )}
-            </div>
+            {quickDecisionOpen ? (
+              <div className="wenyou-quick-decision-menu" role="menu" aria-label="快捷决策">
+                {QUICK_ACTIONS.map((item) => (
+                  <button key={item.label} type="button" onClick={() => handleQuickAction(item)}>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+                {sessionPanel?.phase !== "settlement" ? (
+                  <button type="button" className="warning" onClick={openSettlementDraft} disabled={acting || settlementLoading}>
+                    <span>{settlementLoading ? "结算校准中..." : "申请结算"}</span>
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <div className="wenyou-input-row">
+              <button
+                type="button"
+                className={`wenyou-input-tool ${quickDecisionOpen ? "active" : ""}`}
+                onClick={() => {
+                  setQuickDecisionOpen((open) => !open);
+                }}
+                aria-label="快捷决策"
+                aria-expanded={quickDecisionOpen}
+                disabled={acting}
+              >
+                <Icon name="plus" />
+              </button>
               <input ref={actionInputRef} value={actionText} onChange={(e) => setActionText(e.target.value)} placeholder={acting ? "主神演算中..." : "输入你的行动..."} disabled={acting} onKeyDown={(e) => { if (e.key === "Enter") submitAction(); }} />
-              <button onClick={submitAction} aria-label="发送行动" disabled={acting}><Icon name="send" /></button>
+              <button type="button" onClick={submitAction} aria-label="发送行动" disabled={acting}><Icon name="send" /></button>
             </div>
           </div>
         </section>
@@ -1538,6 +2132,13 @@ export function WenyouTab({
           acting={acting}
           onClose={() => setPanelView(null)}
           onUseItem={useInventoryItem}
+          onInventoryCommand={runInventoryCommand}
+          onAllocateAttribute={allocateAttribute}
+          onPromote={promotePlayer}
+          onRevive={revivePlayer}
+          onLearnAbility={learnAbility}
+          onUseAbility={useAbility}
+          onApplyEvolution={applyEvolution}
         />
       ) : null}
     </div>
@@ -1545,71 +2146,148 @@ export function WenyouTab({
 }
 
 type RiftPoint = { x: number; y: number };
-type RiftGlassShard = {
+type RiftShardBlueprint = {
   x: number;
   y: number;
   size: number;
-  vx: number;
-  vy: number;
+  driftX: number;
+  driftY: number;
   rotation: number;
-  vRot: number;
-  opacity: number;
-  points: RiftPoint[];
+  spin: number;
+  delay: number;
+  duration: number;
+  tint: number;
+  points: Array<[number, number]>;
+  innerCuts: Array<{ from: [number, number]; to: [number, number]; alpha: number }>;
 };
 
-function createRiftGlassShard(x: number, y: number): RiftGlassShard {
-  const size = Math.random() * 15 + 5;
-  const steps = Math.floor(Math.random() * 3) + 3;
-  const points = Array.from({ length: steps }, (_, index) => {
-    const angle = (index / steps) * Math.PI * 2;
-    const radius = size * (0.5 + Math.random() * 0.5);
-    return {
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius,
-    };
-  });
+type RiftGlassShard = {
+  startX: number;
+  startY: number;
+  size: number;
+  driftX: number;
+  driftY: number;
+  baseRotation: number;
+  spin: number;
+  delay: number;
+  duration: number;
+  points: RiftPoint[];
+  tint: number;
+  innerCuts: Array<{ from: RiftPoint; to: RiftPoint; alpha: number }>;
+};
+
+const RIFT_CRACK_PATHS = [
+  "M 51 16 L 48 26 L 53 34 L 47 45 L 51 57 L 44 70 L 47 86",
+  "M 50 30 L 36 24 L 27 18 L 18 21",
+  "M 49 43 L 36 45 L 24 53 L 13 58",
+  "M 51 57 L 64 60 L 75 68 L 87 72",
+  "M 48 69 L 37 78 L 28 88",
+  "M 52 34 L 65 29 L 78 31 L 90 25",
+  "M 51 51 L 63 45 L 76 44",
+];
+
+const RIFT_SHARD_BLUEPRINTS: RiftShardBlueprint[] = [
+  { x: 0.49, y: 0.22, size: 0.112, driftX: -0.16, driftY: -0.18, rotation: -0.52, spin: -0.32, delay: 0, duration: 1780, tint: 0.62, points: [[-0.2, -0.56], [0.52, -0.32], [0.22, 0.52], [-0.42, 0.28]], innerCuts: [{ from: [-0.08, -0.34], to: [0.2, 0.34], alpha: 0.18 }] },
+  { x: 0.53, y: 0.29, size: 0.13, driftX: 0.15, driftY: -0.15, rotation: 0.28, spin: 0.24, delay: 22, duration: 1840, tint: 0.36, points: [[-0.5, -0.24], [0.18, -0.48], [0.52, 0.16], [-0.16, 0.56], [-0.52, 0.18]], innerCuts: [{ from: [-0.28, -0.16], to: [0.34, 0.18], alpha: 0.16 }] },
+  { x: 0.45, y: 0.35, size: 0.145, driftX: -0.22, driftY: -0.04, rotation: -0.18, spin: -0.2, delay: 48, duration: 1900, tint: 0.68, points: [[-0.54, -0.12], [-0.04, -0.54], [0.42, -0.28], [0.48, 0.28], [-0.18, 0.54]], innerCuts: [{ from: [-0.32, 0.06], to: [0.32, -0.16], alpha: 0.18 }] },
+  { x: 0.56, y: 0.39, size: 0.126, driftX: 0.24, driftY: -0.02, rotation: 0.58, spin: 0.18, delay: 64, duration: 1940, tint: 0.44, points: [[-0.28, -0.52], [0.5, -0.22], [0.34, 0.46], [-0.36, 0.4], [-0.54, -0.1]], innerCuts: [{ from: [-0.18, -0.26], to: [0.2, 0.3], alpha: 0.14 }] },
+  { x: 0.5, y: 0.48, size: 0.16, driftX: -0.08, driftY: 0.06, rotation: -0.04, spin: 0.1, delay: 86, duration: 2020, tint: 0.58, points: [[-0.36, -0.56], [0.22, -0.48], [0.54, 0.04], [0.18, 0.58], [-0.5, 0.28]], innerCuts: [{ from: [-0.26, -0.2], to: [0.28, 0.26], alpha: 0.2 }, { from: [0.1, -0.36], to: [-0.12, 0.38], alpha: 0.12 }] },
+  { x: 0.43, y: 0.55, size: 0.138, driftX: -0.26, driftY: 0.12, rotation: -0.42, spin: -0.16, delay: 118, duration: 1980, tint: 0.34, points: [[-0.52, -0.32], [0.06, -0.56], [0.5, -0.02], [0.18, 0.52], [-0.42, 0.36]], innerCuts: [{ from: [-0.3, -0.02], to: [0.34, 0.04], alpha: 0.18 }] },
+  { x: 0.57, y: 0.58, size: 0.148, driftX: 0.25, driftY: 0.14, rotation: 0.36, spin: 0.22, delay: 136, duration: 2060, tint: 0.64, points: [[-0.48, -0.18], [0.0, -0.54], [0.5, -0.26], [0.42, 0.38], [-0.2, 0.56]], innerCuts: [{ from: [-0.16, -0.34], to: [0.24, 0.34], alpha: 0.16 }] },
+  { x: 0.49, y: 0.67, size: 0.12, driftX: -0.08, driftY: 0.28, rotation: 0.08, spin: -0.14, delay: 166, duration: 2120, tint: 0.42, points: [[-0.32, -0.5], [0.42, -0.36], [0.5, 0.18], [0.02, 0.58], [-0.5, 0.18]], innerCuts: [{ from: [-0.2, -0.26], to: [0.26, 0.2], alpha: 0.14 }] },
+  { x: 0.36, y: 0.46, size: 0.104, driftX: -0.31, driftY: 0.02, rotation: -0.78, spin: -0.28, delay: 88, duration: 1860, tint: 0.72, points: [[-0.5, -0.1], [0.18, -0.5], [0.52, 0.14], [-0.12, 0.54]], innerCuts: [{ from: [-0.24, -0.08], to: [0.26, 0.12], alpha: 0.12 }] },
+  { x: 0.64, y: 0.47, size: 0.102, driftX: 0.32, driftY: 0.04, rotation: 0.8, spin: 0.3, delay: 104, duration: 1880, tint: 0.3, points: [[-0.42, -0.34], [0.34, -0.48], [0.5, 0.2], [-0.12, 0.52]], innerCuts: [{ from: [-0.18, -0.24], to: [0.2, 0.26], alpha: 0.12 }] },
+  { x: 0.39, y: 0.75, size: 0.09, driftX: -0.22, driftY: 0.27, rotation: -0.3, spin: -0.2, delay: 198, duration: 2020, tint: 0.5, points: [[-0.42, -0.32], [0.28, -0.44], [0.46, 0.28], [-0.26, 0.5]], innerCuts: [{ from: [-0.2, -0.1], to: [0.22, 0.18], alpha: 0.12 }] },
+  { x: 0.62, y: 0.72, size: 0.096, driftX: 0.2, driftY: 0.26, rotation: 0.44, spin: 0.16, delay: 214, duration: 2040, tint: 0.78, points: [[-0.5, -0.2], [0.1, -0.5], [0.52, 0.0], [0.0, 0.54]], innerCuts: [{ from: [-0.24, -0.12], to: [0.24, 0.12], alpha: 0.1 }] },
+];
+
+function clamp01(value: number) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function easeOutQuart(value: number) {
+  return 1 - Math.pow(1 - value, 4);
+}
+
+function createRiftGlassShard(cssWidth: number, cssHeight: number, index: number): RiftGlassShard {
+  const blueprint = RIFT_SHARD_BLUEPRINTS[index % RIFT_SHARD_BLUEPRINTS.length];
+  const scale = Math.min(cssWidth, cssHeight);
+  const size = Math.max(34, blueprint.size * scale);
   return {
-    x,
-    y,
+    startX: blueprint.x * cssWidth,
+    startY: blueprint.y * cssHeight,
     size,
-    vx: (Math.random() - 0.5) * 25,
-    vy: (Math.random() - 0.5) * 25 - 5,
-    rotation: Math.random() * Math.PI * 2,
-    vRot: (Math.random() - 0.5) * 0.2,
-    opacity: 1,
-    points,
+    driftX: blueprint.driftX * scale,
+    driftY: blueprint.driftY * scale,
+    baseRotation: blueprint.rotation,
+    spin: blueprint.spin,
+    delay: blueprint.delay,
+    duration: blueprint.duration,
+    points: blueprint.points.map(([x, y]) => ({ x: x * size, y: y * size })),
+    tint: blueprint.tint,
+    innerCuts: blueprint.innerCuts.map((cut) => ({
+      from: { x: cut.from[0] * size, y: cut.from[1] * size },
+      to: { x: cut.to[0] * size, y: cut.to[1] * size },
+      alpha: cut.alpha,
+    })),
   };
 }
 
-function drawRiftGlassShard(ctx: CanvasRenderingContext2D, shard: RiftGlassShard) {
+function drawRiftGlassShard(ctx: CanvasRenderingContext2D, shard: RiftGlassShard, elapsed: number) {
   if (!shard.points.length) return;
+  const progress = clamp01((elapsed - shard.delay) / shard.duration);
+  if (progress <= 0) return;
+  const eased = easeOutQuart(progress);
+  const fade = progress < 0.74 ? 1 : Math.max(0, 1 - (progress - 0.74) / 0.26);
+  const opacity = fade * (0.48 + (1 - progress) * 0.12);
+  const snap = progress < 0.18 ? Math.sin(progress * Math.PI * 18) * (1 - progress / 0.18) : 0;
+  const x = shard.startX + shard.driftX * eased + snap * 2.4;
+  const y = shard.startY + shard.driftY * eased - snap * 1.2;
+  const rotation = shard.baseRotation + shard.spin * eased;
   ctx.save();
-  ctx.translate(shard.x, shard.y);
-  ctx.rotate(shard.rotation);
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
   ctx.beginPath();
   ctx.moveTo(shard.points[0].x, shard.points[0].y);
   for (let index = 1; index < shard.points.length; index += 1) {
     ctx.lineTo(shard.points[index].x, shard.points[index].y);
   }
   ctx.closePath();
-  ctx.fillStyle = `rgba(199, 204, 209, ${Math.max(0, shard.opacity * 0.6)})`;
-  ctx.strokeStyle = `rgba(255, 255, 255, ${Math.max(0, shard.opacity)})`;
-  ctx.lineWidth = 0.5;
+  const gradient = ctx.createLinearGradient(-shard.size, -shard.size, shard.size, shard.size);
+  gradient.addColorStop(0, `rgba(235, 242, 248, ${Math.max(0, opacity * 0.18)})`);
+  gradient.addColorStop(0.48, `rgba(${shard.tint > 0.5 ? "132, 180, 198" : "154, 166, 184"}, ${Math.max(0, opacity * 0.11)})`);
+  gradient.addColorStop(1, `rgba(18, 24, 38, ${Math.max(0, opacity * 0.1)})`);
+  ctx.fillStyle = gradient;
+  ctx.strokeStyle = `rgba(225, 233, 240, ${Math.max(0, opacity * 0.18)})`;
+  ctx.lineWidth = 0.56;
   ctx.fill();
+  ctx.stroke();
+  ctx.clip();
+  ctx.globalCompositeOperation = "screen";
+  ctx.lineWidth = 0.58;
+  for (const cut of shard.innerCuts) {
+    ctx.beginPath();
+    ctx.moveTo(cut.from.x, cut.from.y);
+    ctx.lineTo(cut.to.x, cut.to.y);
+    ctx.strokeStyle = `rgba(225, 233, 240, ${Math.max(0, opacity * cut.alpha * 0.32)})`;
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  ctx.moveTo(-shard.size * 0.45, -shard.size * 0.18);
+  ctx.lineTo(shard.size * 0.35, -shard.size * 0.42);
+  ctx.strokeStyle = `rgba(235, 242, 248, ${Math.max(0, opacity * 0.05)})`;
   ctx.stroke();
   ctx.restore();
 }
 
 function RiftShatterLayer({ active }: { active: boolean }) {
-  const svgRef = useRef<SVGSVGElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     if (!active || typeof window === "undefined") return undefined;
-    const svg = svgRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
-    if (!svg || !canvas || !ctx) return undefined;
+    if (!canvas || !ctx) return undefined;
 
     let raf = 0;
     let cssWidth = window.innerWidth;
@@ -1627,56 +2305,19 @@ function RiftShatterLayer({ active }: { active: boolean }) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
 
-    const createCracks = () => {
-      svg.replaceChildren();
-      const crackCount = 12;
-      const px = 50;
-      const py = 48;
-      for (let index = 0; index < crackCount; index += 1) {
-        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.classList.add("wenyou-rift-crack-line");
-        let d = `M ${px} ${py} `;
-        let curX = px;
-        let curY = py;
-        const segments = 5;
-        const angleBase = (index / crackCount) * Math.PI * 2;
-        for (let segment = 0; segment < segments; segment += 1) {
-          const length = 15 + Math.random() * 20;
-          const angleVar = (Math.random() - 0.5) * 0.8;
-          curX += Math.cos(angleBase + angleVar) * length;
-          curY += Math.sin(angleBase + angleVar) * length;
-          d += `L ${curX} ${curY} `;
-          if (Math.random() > 0.6) {
-            const sideX = curX + (Math.random() - 0.5) * 10;
-            const sideY = curY + (Math.random() - 0.5) * 10;
-            d += `M ${curX} ${curY} L ${sideX} ${sideY} M ${curX} ${curY} `;
-          }
-        }
-        path.setAttribute("d", d);
-        path.style.animationDelay = `${index * 0.012}s`;
-        svg.appendChild(path);
-      }
-    };
-
-    const animate = () => {
+    const startedAt = window.performance?.now?.() ?? Date.now();
+    const animate = (now = window.performance?.now?.() ?? Date.now()) => {
+      const elapsed = now - startedAt;
       ctx.clearRect(0, 0, cssWidth, cssHeight);
-      shards = shards.filter((shard) => shard.opacity > 0);
+      shards = shards.filter((shard) => elapsed - shard.delay < shard.duration);
       for (const shard of shards) {
-        shard.x += shard.vx;
-        shard.y += shard.vy;
-        shard.vy += 0.4;
-        shard.rotation += shard.vRot;
-        shard.opacity -= 0.01;
-        drawRiftGlassShard(ctx, shard);
+        drawRiftGlassShard(ctx, shard, elapsed);
       }
       if (shards.length > 0) raf = window.requestAnimationFrame(animate);
     };
 
     resize();
-    createCracks();
-    const originX = cssWidth * 0.5;
-    const originY = cssHeight * 0.48;
-    shards = Array.from({ length: 40 }, () => createRiftGlassShard(originX, originY));
+    shards = RIFT_SHARD_BLUEPRINTS.map((_, index) => createRiftGlassShard(cssWidth, cssHeight, index));
     raf = window.requestAnimationFrame(animate);
     window.addEventListener("resize", resize);
     if ("vibrate" in navigator) navigator.vibrate([50, 30, 100]);
@@ -1685,13 +2326,21 @@ function RiftShatterLayer({ active }: { active: boolean }) {
       window.removeEventListener("resize", resize);
       window.cancelAnimationFrame(raf);
       ctx.clearRect(0, 0, cssWidth, cssHeight);
-      svg.replaceChildren();
     };
   }, [active]);
 
   return (
     <div className="wenyou-rift-shatter" aria-hidden="true">
-      <svg ref={svgRef} className="wenyou-rift-cracks" viewBox="0 0 100 100" preserveAspectRatio="none" />
+      <svg className="wenyou-rift-cracks" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {RIFT_CRACK_PATHS.map((d, index) => (
+          <path
+            key={d}
+            className="wenyou-rift-crack-line"
+            d={d}
+            style={{ animationDelay: `${index * 0.045}s` }}
+          />
+        ))}
+      </svg>
       <canvas ref={canvasRef} className="wenyou-rift-shards-canvas" />
     </div>
   );
@@ -1968,64 +2617,198 @@ function PanelModal({
   acting,
   onClose,
   onUseItem,
+  onInventoryCommand,
+  onAllocateAttribute,
+  onPromote,
+  onRevive,
+  onLearnAbility,
+  onUseAbility,
+  onApplyEvolution,
 }: {
-  view: "任务" | "背包" | "状态" | "线索";
+  view: WenyouPanelView;
   session: WenyouSessionPanel | null;
   acting: boolean;
   onClose: () => void;
   onUseItem: (item: WenyouInventoryItem | string) => void;
+  onInventoryCommand: (
+    item: WenyouInventoryItem | string,
+    endpoint: "equip" | "repair" | "sell" | "disassemble" | "forge",
+    label: string,
+    body?: Record<string, unknown>
+  ) => void;
+  onAllocateAttribute: (player: "player1" | "player2", attr: string) => void;
+  onPromote: (player: "player1" | "player2") => void;
+  onRevive: (player: "player1" | "player2") => void;
+  onLearnAbility: (player: "player1" | "player2", ability: string) => void;
+  onUseAbility: (player: "player1" | "player2", ability: string) => void;
+  onApplyEvolution: (player: "player1" | "player2", route?: string) => void;
 }) {
+  const [activeTab, setActiveTab] = useState<WenyouPanelTab>("情报");
   const stats = session?.stats || {};
-  const inventory = session?.inventory || stats.inventory || [];
-  const clues = session?.clues || [];
+  const publicState = getSessionPublicState(session);
+  const rulesState = getSessionRulesState(session);
+  const inventory = rulesState.inventory || session?.inventory || stats.inventory || [];
+  const tasks = publicState.public_tasks?.length
+    ? publicState.public_tasks
+    : session?.task?.current
+      ? [{
+          id: "main_task",
+          title: session.task.current,
+          type: "main",
+          status: session.phase === "settlement" ? "completed" : "active",
+          fail_forward: session.task.failure_hint,
+          reward_tags: session.task.reward_hint ? [session.task.reward_hint] : [],
+        }]
+      : [];
+  const clues = publicState.discovered_clues?.length
+    ? publicState.discovered_clues
+    : (session?.clues || []).map((item) => ({ title: item, public_text: item, status: "discovered" }));
+  const locations = publicState.known_locations || [];
+  const npcs = publicState.visible_npcs || [];
+  const monsters = publicState.visible_monsters || [];
+  const history = session?.history || [];
   const task = session?.task || {};
+  const framework = session?.framework || {};
+  const taskerTotal = Number(framework.tasker_total || 0);
+  const playerCount = Number(framework.player_count || 0);
+  const growthPlayers = session?.growth?.players || {};
+  const tabs: WenyouPanelTab[] = ["情报", "背包", "状态", "记录"];
   return (
     <div className="wenyou-modal">
       <button className="wenyou-modal-backdrop" onClick={onClose} aria-label="关闭面板" />
       <div className="wenyou-random-panel wenyou-panel-modal">
         <span className="wenyou-random-line" />
-        <div className="wenyou-panel-title">
-          <h2>{view}</h2>
-          <button onClick={onClose}>关闭</button>
-        </div>
+        <button className="wenyou-panel-close" onClick={onClose} aria-label="关闭面板"><Icon name="x" /></button>
 
         {!session ? <div className="wenyou-empty">当前没有进行中的副本。</div> : null}
 
-        {session && view === "任务" ? (
-          <div className="wenyou-panel-body">
-            <PanelRow label="当前阶段" value={task.phase || "副本"} />
-            <PanelRow label="主神任务" value={task.current || "暂无任务同步"} />
-            <PanelRow label="失败倾向" value={task.failure_hint || "未知"} />
-            <PanelRow label="通关回报" value={task.reward_hint || "未知"} />
-          </div>
+        {session && view === "局内资料" ? (
+          <>
+            <div className="wenyou-panel-tabs" role="tablist" aria-label="局内资料导航">
+              {tabs.map((tab) => (
+                <button
+                  type="button"
+                  key={tab}
+                  className={tab === activeTab ? "active" : ""}
+                  onClick={() => setActiveTab(tab)}
+                  role="tab"
+                  aria-selected={tab === activeTab}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+            <div className="wenyou-panel-body">
+              {activeTab === "情报" ? (
+                <>
+                  <div className="wenyou-panel-brief-grid">
+                    <PanelRow label="当前阶段" value={task.phase || session.phase_label || "副本"} />
+                    <PanelRow label="当前位置" value={currentLocationName(publicState)} />
+                    {publicState.public_threat ? <PanelRow label="危险程度" value={publicState.public_threat} /> : null}
+                  </div>
+                  {publicState.scene_summary ? <PanelRow label="场景摘要" value={publicState.scene_summary} /> : null}
+                  {publicState.forced_notice ? <PanelRow label="强制工单" value={publicState.forced_notice} /> : null}
+                  {publicState.visible_rules?.length ? <PanelRow label="公开规则" value={publicState.visible_rules.join("；")} /> : null}
+                  <div className="wenyou-panel-subtitle">任务</div>
+                  {tasks.length ? tasks.map((item, index) => (
+                    <TaskPanelCard item={item} key={`${taskTitle(item)}-${index}`} />
+                  )) : <div className="wenyou-empty">暂无任务同步。</div>}
+                  <div className="wenyou-panel-subtitle">线索备忘</div>
+                  {clues.length ? clues.map((item, index) => (
+                    <CluePanelCard item={item} key={`${clueTitle(item)}-${index}`} />
+                  )) : <div className="wenyou-empty">暂无线索备忘。</div>}
+                  <div className="wenyou-panel-subtitle">环境与威胁</div>
+                  {locations.length ? locations.map((item, index) => (
+                    <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
+                  )) : <div className="wenyou-empty">暂无地点缓存。继续探索后会在这里更新。</div>}
+                  <PanelRow label="任务者编制" value={taskerTotal ? `共 ${taskerTotal} 人：玩家 ${playerCount || 2} + NPC ${Math.max(0, taskerTotal - (playerCount || 2))}` : "未同步"} />
+                  {npcs.length ? npcs.map((item, index) => (
+                    <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
+                  )) : <div className="wenyou-empty">暂无公开 NPC 记录。</div>}
+                  {monsters.length ? monsters.map((item, index) => (
+                    <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
+                  )) : <div className="wenyou-empty">暂无可见怪物。Boss 与怪物暗线仍按副本缓存推进。</div>}
+                </>
+              ) : null}
+
+              {activeTab === "背包" ? (
+                <>
+                  {inventory.length ? inventory.map((item, index) => (
+                    <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
+                      <span>
+                        {inventoryItemLabel(item)}
+                        {typeof item !== "string" ? (
+                          <small>
+                            {[item.rarity, item.category || item.kind, item.uses_left !== undefined ? `次数 ${item.uses_left}` : "", item.durability !== undefined ? `耐久 ${item.durability}/${item.durability_max ?? "?"}` : ""].filter(Boolean).join(" · ")}
+                            {item.desc || item.effect ? `｜${item.desc || item.effect}` : ""}
+                          </small>
+                        ) : null}
+	                      </span>
+	                      <div className="wenyou-inventory-actions">
+	                        {isGearInventoryItem(item) ? (
+	                          <>
+	                            <button type="button" onClick={() => onInventoryCommand(item, "equip", "装备")} disabled={acting || item.sealed || item.broken}>装备</button>
+	                            <button type="button" onClick={() => onInventoryCommand(item, "repair", "维修")} disabled={acting}>维修</button>
+	                            <button type="button" onClick={() => onInventoryCommand(item, "forge", "升级", { mode: "upgrade" })} disabled={acting || item.sealed}>升级</button>
+	                            <button type="button" onClick={() => onInventoryCommand(item, "forge", "锻造", { mode: "forge" })} disabled={acting || item.sealed}>锻造</button>
+	                            <button type="button" onClick={() => onInventoryCommand(item, "disassemble", "拆解")} disabled={acting || !!item.equipped_by}>拆解</button>
+	                          </>
+	                        ) : (
+	                          <button type="button" onClick={() => onUseItem(item)} disabled={acting || (typeof item !== "string" && !!item.sealed)}>{acting ? "演算中" : "使用"}</button>
+	                        )}
+	                        <button type="button" onClick={() => onInventoryCommand(item, "sell", "出售")} disabled={acting || (typeof item !== "string" && (!!item.equipped_by || !!item.quest_item || item.carry_out === false))}>出售</button>
+	                      </div>
+	                    </div>
+                  )) : <div className="wenyou-empty">背包为空。</div>}
+                </>
+              ) : null}
+
+              {activeTab === "状态" ? (
+                <>
+                  <div className="wenyou-panel-brief-grid">
+                    <PanelRow label="主神积分" value={String(stats.points ?? session.wallet?.points ?? 0)} />
+                    <PanelRow label="主神债务" value={String(session.wallet?.debts ?? 0)} />
+                  </div>
+                  <PlayerStatCard
+                    title="玩家一"
+                    player={stats.player1}
+                    playerId="player1"
+                    growth={growthPlayers.player1}
+                    acting={acting}
+	                    onAllocateAttribute={onAllocateAttribute}
+	                    onPromote={onPromote}
+	                    onRevive={onRevive}
+	                    onLearnAbility={onLearnAbility}
+	                    onUseAbility={onUseAbility}
+	                    onApplyEvolution={onApplyEvolution}
+	                  />
+	                  <PlayerStatCard
+                    title="玩家二 · 渡"
+                    player={stats.player2}
+                    playerId="player2"
+                    growth={growthPlayers.player2}
+                    acting={acting}
+	                    onAllocateAttribute={onAllocateAttribute}
+	                    onPromote={onPromote}
+	                    onRevive={onRevive}
+	                    onLearnAbility={onLearnAbility}
+	                    onUseAbility={onUseAbility}
+	                    onApplyEvolution={onApplyEvolution}
+	                  />
+                </>
+              ) : null}
+
+              {activeTab === "记录" ? (
+                <>
+                  {history.length ? history.slice(-12).reverse().map((item, index) => (
+                    <HistoryPanelRow item={item} key={`${item.timestamp || index}-${index}`} />
+                  )) : <div className="wenyou-empty">暂无行动历史。</div>}
+                </>
+              ) : null}
+            </div>
+          </>
         ) : null}
 
-        {session && view === "背包" ? (
-          <div className="wenyou-panel-body">
-            {inventory.length ? inventory.map((item, index) => (
-              <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
-                <span>{inventoryItemLabel(item)}</span>
-                <button onClick={() => onUseItem(item)} disabled={acting}>{acting ? "演算中" : "填入"}</button>
-              </div>
-            )) : <div className="wenyou-empty">背包为空。</div>}
-          </div>
-        ) : null}
-
-        {session && view === "状态" ? (
-          <div className="wenyou-panel-body">
-            <PanelRow label="主神积分" value={String(stats.points ?? 0)} />
-            <PlayerStatCard title="玩家一" player={stats.player1} />
-            <PlayerStatCard title="玩家二 · 渡" player={stats.player2} />
-          </div>
-        ) : null}
-
-        {session && view === "线索" ? (
-          <div className="wenyou-panel-body">
-            {clues.length ? clues.map((item, index) => (
-              <div className="wenyou-clue-row" key={`${item}-${index}`}>{item}</div>
-            )) : <div className="wenyou-empty">暂无线索备忘。</div>}
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -2040,21 +2823,197 @@ function PanelRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PlayerStatCard({ title, player }: { title: string; player?: WenyouPlayerStats }) {
+function TaskPanelCard({ item }: { item: WenyouTaskPanelItem }) {
+  const title = taskTitle(item);
+  const meta = taskMeta(item);
+  const failForward = typeof item === "string" ? "" : compactPanelText(item.fail_forward);
+  const required = typeof item === "string" ? [] : item.required_clues || item.related_clues || [];
+  return (
+    <div className="wenyou-task-row">
+      <strong>{title}</strong>
+      <span>{meta}</span>
+      {required.length ? <small>关联线索：{required.join("、")}</small> : null}
+      {failForward ? <small>失败推进：{failForward}</small> : null}
+    </div>
+  );
+}
+
+function CluePanelCard({ item }: { item: WenyouCluePanelItem }) {
+  const title = clueTitle(item);
+  const text = clueText(item);
+  const meta = typeof item === "string"
+    ? "discovered"
+    : [item.status, item.verified ? "已验证" : "", item.source].map((it) => compactPanelText(it)).filter(Boolean).join(" · ");
+  const related = typeof item === "string" ? [] : item.related_tasks || item.leads_to || [];
+  return (
+    <div className="wenyou-clue-row">
+      <strong>{title}</strong>
+      {meta ? <span>{meta}</span> : null}
+      {text && text !== title ? <p>{text}</p> : null}
+      {related.length ? <small>关联：{related.join("、")}</small> : null}
+    </div>
+  );
+}
+
+function MarkerPanelCard({ item }: { item: WenyouPublicMarker }) {
+  const title = markerTitle(item);
+  const text = markerText(item);
+  const meta = markerMeta(item);
+  const stability = typeof item === "string" ? "" : item.stability !== undefined && item.stability_max !== undefined ? `稳定度 ${item.stability}/${item.stability_max}` : "";
+  const seal = typeof item === "string" ? "" : item.seal_progress !== undefined && item.seal_target !== undefined ? `封印 ${item.seal_progress}/${item.seal_target}` : "";
+  const counterplay = typeof item === "string" ? "" : panelListText(item.counterplay, "");
+  return (
+    <div className="wenyou-marker-row">
+      <strong>{title}</strong>
+      {meta ? <span>{meta}</span> : null}
+      {stability || seal ? <small>{[stability, seal].filter(Boolean).join(" · ")}</small> : null}
+      {counterplay ? <small>处理：{counterplay}</small> : null}
+      {text && text !== title ? <p>{text}</p> : null}
+    </div>
+  );
+}
+
+function HistoryPanelRow({ item }: { item: { role?: string; content?: string; timestamp?: string } }) {
+  const roleMap: Record<string, string> = { gm: "GM", player1: "玩家一", player2: "渡", system: "系统" };
+  const role = roleMap[String(item.role || "")] || String(item.role || "记录");
+  return (
+    <div className="wenyou-history-row">
+      <span>{role}{item.timestamp ? ` · ${item.timestamp}` : ""}</span>
+      <p>{String(item.content || "").trim()}</p>
+    </div>
+  );
+}
+
+function PlayerStatCard({
+  title,
+  player,
+  compact = false,
+  playerId,
+  growth,
+  acting = false,
+  onAllocateAttribute,
+  onPromote,
+  onRevive,
+  onLearnAbility,
+  onUseAbility,
+  onApplyEvolution,
+}: {
+  title: string;
+  player?: WenyouPlayerStats;
+  compact?: boolean;
+  playerId?: "player1" | "player2";
+  growth?: WenyouGrowthPlayer;
+  acting?: boolean;
+  onAllocateAttribute?: (player: "player1" | "player2", attr: string) => void;
+  onPromote?: (player: "player1" | "player2") => void;
+  onRevive?: (player: "player1" | "player2") => void;
+  onLearnAbility?: (player: "player1" | "player2", ability: string) => void;
+  onUseAbility?: (player: "player1" | "player2", ability: string) => void;
+  onApplyEvolution?: (player: "player1" | "player2", route?: string) => void;
+}) {
   const p = player || {};
-  const abilities = p.abilities || [];
+  const abilities = growth?.abilities || p.abilities || [];
+  const dormantAbilities = growth?.dormant_abilities || p.dormant_abilities || [];
+  const gear = p.gear || p.equipment || p.weapons || [];
+  const unspent = Number(growth?.unspent_attribute_points ?? p.unspent_attribute_points ?? 0);
+  const abilityTokens = Number(growth?.ability_tokens ?? p.ability_tokens ?? 0);
+  const abilitySlots = Number(growth?.ability_slots || 0);
+  const milestoneTokens = Number(growth?.growth_milestone_tokens ?? p.growth_milestone_tokens ?? 0);
+  const nextLevelExp = Number(growth?.next_level_exp || 0);
+  const nextEvolutionCost = growth?.next_evolution_cost || null;
+  const evolutionRoutes = growth?.evolution_routes?.length ? growth.evolution_routes : [{ id: "human_stable", name: "人类稳定" }];
+  const [evolutionRoute, setEvolutionRoute] = useState(evolutionRoutes[0]?.id || "human_stable");
+  const availableAbilities = growth?.available_abilities?.length
+    ? growth.available_abilities
+    : [
+        { id: "quick_bandage", name: "快速包扎", rarity: "D" },
+        { id: "rule_probe", name: "规则试探", rarity: "B" },
+      ];
+  const learnChoices = availableAbilities.filter((it) => !it.known).slice(0, 4);
+  const promotion = growth?.promotion;
+  const promotionReasons = promotion?.reasons?.filter(Boolean) || [];
+  const canRevive = Number(p.hp || 0) <= 0 || !!p.conditions?.includes("濒死");
+  const actionPlayer = playerId || "player1";
   return (
     <div className="wenyou-stat-card">
       <h3>{title}</h3>
       <div className="wenyou-stat-grid">
         <span>HP {p.hp ?? 0}/{p.hp_max ?? 0}</span>
         <span>SAN {p.san ?? 0}/{p.san_max ?? 0}</span>
+        <span>精神力 {p.spi_current ?? 0}/{p.spi_max ?? p.spi ?? 0}</span>
         <span>Lv{p.level ?? 1} · {p.rank || "D"}阶 · EXP {p.exp ?? 0}</span>
-        <span>体 {p.vit ?? 0} / 智 {p.wis ?? 0}</span>
+        <span>力 {p.str ?? 0} / 体 {p.con ?? p.vit ?? 0} / 敏 {p.agi ?? 0}</span>
+        <span>智 {p.int ?? p.wis ?? 0} / 精 {p.spi ?? 0} / 运 {p.luk ?? 0}</span>
+        <span>攻击 {p.physical_attack ?? 0} / 防御 {p.defense ?? 0} / 先攻 {p.initiative ?? 0}</span>
+        <span>属性点 {unspent} / 能力令牌 {abilityTokens} / 成长令牌 {milestoneTokens}</span>
       </div>
-      <p>血统：{p.bloodline || "凡人"}</p>
-      <p>能力：{abilities.length ? abilities.map((it) => it.name).filter(Boolean).join("、") : "无"}</p>
-      <p>状态：{p.conditions?.length ? p.conditions.join("、") : "无"}</p>
+      {compact ? null : (
+        <>
+          {nextLevelExp ? <p>下级经验：{p.exp ?? 0}/{nextLevelExp}</p> : null}
+	          <p>进化：{growth?.evolution || p.evolution || p.bloodline || "凡人"}{growth?.evolution_rank ? ` · ${growth.evolution_rank}` : ""}</p>
+	          <p>能力：{abilities.length ? abilities.map((it) => `${it.name || it.id}${it.level ? ` Lv${it.level}` : ""}`).filter(Boolean).join("、") : "无"}{abilitySlots ? `（槽位 ${abilities.length}/${abilitySlots}）` : ""}</p>
+	          {dormantAbilities.length ? <p>休眠能力：{dormantAbilities.map((it) => it.name || it.id).filter(Boolean).join("、")}</p> : null}
+	          <p>装备：{gear.length ? gear.map(gearLabel).join("、") : "无"}</p>
+	          <p>状态：{p.conditions?.length ? p.conditions.join("、") : "无"}</p>
+	          {playerId ? (
+	            <div className="wenyou-growth-actions">
+              <div className="wenyou-attribute-buttons" aria-label={`${title} 属性加点`}>
+                {Object.entries(ATTRIBUTE_LABELS).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => onAllocateAttribute?.(actionPlayer, key)}
+                    disabled={acting || !onAllocateAttribute || unspent <= 0}
+                  >
+                    +{label}
+                  </button>
+                ))}
+              </div>
+	              <div className="wenyou-growth-command-row">
+	                <button onClick={() => onPromote?.(actionPlayer)} disabled={acting || !onPromote || !promotion?.available}>
+	                  晋升{promotion?.target_rank ? ` ${promotion.target_rank}` : ""}
+	                </button>
+	                <button onClick={() => onRevive?.(actionPlayer)} disabled={acting || !onRevive || !canRevive}>
+	                  复活
+	                </button>
+	                <select value={evolutionRoute} onChange={(e) => setEvolutionRoute(e.target.value)} disabled={acting || !nextEvolutionCost}>
+	                  {evolutionRoutes.map((route) => (
+	                    <option key={route.id || route.name} value={route.id || "human_stable"}>{route.name || route.id}</option>
+	                  ))}
+	                </select>
+	                <button onClick={() => onApplyEvolution?.(actionPlayer, evolutionRoute)} disabled={acting || !onApplyEvolution || !nextEvolutionCost}>
+	                  进化{nextEvolutionCost?.rank ? ` ${nextEvolutionCost.rank}` : ""}
+	                </button>
+	              </div>
+	              {nextEvolutionCost ? <small>进化消耗：{nextEvolutionCost.points || 0} 积分 / {nextEvolutionCost.fragments || 0} 进化碎片</small> : null}
+	              {learnChoices.length ? (
+	                <div className="wenyou-growth-command-row">
+	                  {learnChoices.map((ability) => {
+	                    const key = String(ability.id || ability.name || "");
+	                    if (!key) return null;
+	                    return (
+	                      <button key={key} onClick={() => onLearnAbility?.(actionPlayer, key)} disabled={acting || !onLearnAbility || ability.locked}>
+	                        学{ability.name || key}{ability.locked ? ` · ${ability.rarity || ""}锁` : ""}
+	                      </button>
+	                    );
+	                  })}
+	                </div>
+	              ) : null}
+	              {abilities.length ? (
+	                <div className="wenyou-growth-command-row">
+	                  {abilities.slice(0, 3).map((ability) => {
+	                    const key = String(ability.id || ability.name || "");
+	                    if (!key) return null;
+	                    return <button key={key} onClick={() => onUseAbility?.(actionPlayer, key)} disabled={acting || !onUseAbility}>用{ability.name || key}</button>;
+	                  })}
+	                </div>
+	              ) : null}
+	              {!promotion?.available && promotionReasons.length ? (
+	                <small>{promotionReasons.slice(0, 2).join("；")}</small>
+	              ) : null}
+            </div>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

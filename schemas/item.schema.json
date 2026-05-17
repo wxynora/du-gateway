@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Wenyou Item Catalog",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "items"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer"
+    },
+    "source": {
+      "type": "string"
+    },
+    "item_count": {
+      "type": "integer"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "rarity",
+          "category",
+          "item_type",
+          "effect",
+          "price"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "rarity": {
+            "enum": [
+              "D",
+              "C",
+              "B",
+              "A",
+              "S"
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "item_type": {
+            "enum": [
+              "accessory",
+              "armor",
+              "consumable",
+              "equippable_tool",
+              "material",
+              "special",
+              "weapon"
+            ]
+          },
+          "equip_slot": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effect": {
+            "type": "string"
+          },
+          "effect_json": {
+            "type": "object"
+          },
+          "requirements": {
+            "type": "object"
+          },
+          "use_cost": {
+            "type": "object"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "era_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "use_phase": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "consume": {
+            "type": "boolean"
+          },
+          "stackable": {
+            "type": "boolean"
+          },
+          "shop_allowed": {
+            "type": "boolean"
+          },
+          "gacha_allowed": {
+            "type": "boolean"
+          },
+          "seal_rank": {
+            "enum": [
+              "D",
+              "C",
+              "B",
+              "A",
+              "S",
+              null
+            ]
+          },
+          "price": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "weight": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

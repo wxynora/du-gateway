@@ -24,6 +24,13 @@
   "players": [],
   "npc_taskers": [],
   "encounter_profile": {},
+  "runtime_state": {
+    "public_state": {},
+    "gm_state": {},
+    "rules_state": {},
+    "runtime_indexes": {},
+    "last_state_patch": null
+  },
   "gear": [],
   "clocks": [],
   "flags": {},
@@ -51,6 +58,11 @@
     },
     "inventory_add": [],
     "inventory_remove": [],
+    "task_updates": [],
+    "clue_updates": [],
+    "location_updates": [],
+    "npc_updates": [],
+    "monster_updates": [],
     "clock_updates": [
       { "id": "harbor_broadcast", "delta": 1 }
     ],
@@ -66,8 +78,21 @@
 后端至少实现这些纯规则函数：
 
 ```text
+classify_player_action(runtime_state, raw_action) -> action_intent
 apply_event(state, event_intent) -> state_patch
+create_instance_runtime(candidate, player_profile, ruleset, content_pack) -> runtime_state
+get_public_view(runtime_state, player_id) -> public_view
+compose_gm_context(runtime_state, player_action) -> gm_context
+apply_pre_rules(runtime_state, player_action) -> pre_state_patch
+parse_gm_intent(gm_output) -> event_intent + state_proposals
+resolve_action(runtime_state, action_intent, gm_intent) -> state_patch
+resolve_combat_or_escape(runtime_state, action_intent, monster_id) -> state_patch
+apply_state_patch(runtime_state, state_patch) -> runtime_state
 allocate_attribute_points(state, player_id, deltas) -> state_patch
+use_item(state, player_id, item_uid, context) -> state_patch
+equip_item(state, player_id, item_uid, slot) -> state_patch
+upgrade_or_forge_gear(state, player_id, item_uid, recipe_id) -> state_patch
+use_ability(state, player_id, ability_id, context) -> state_patch
 roll_reward(state, player_id, reward_context) -> state_patch
 grant_reward(state, settlement_result) -> state_patch
 level_up_if_needed(state, player_id) -> state_patch
@@ -83,7 +108,15 @@ settle_instance(state, result) -> archive
 - 所有随机必须来自可记录 seed。
 - 所有数值变化都写入 `event_log`，方便回放和 debug。
 - GM 输出不能直接覆盖 `hp/san/points/level/rank`。
+- 任务、线索、位置、NPC、怪物、威胁时钟和背包都从 runtime state 派生；GM 不能每轮重写这些面板。
+- GM 每轮输入由 `compose_gm_context` 从 runtime state 裁剪生成，不发送全量隐藏状态和全量内容表。
+- 最小实现必须支持 `public_state/gm_state/rules_state/state_patch`；更复杂的数据库表、索引和缓存策略可以后续替换。
+- 结算评级只读取当前玩家角色/玩家队伍的主线、普通支线、隐藏支线、隐藏结局、特殊成就和损耗记录，不按“线索数量”或 NPC 自身结局单独评分。
+- NPC 任务者不参与玩家评级；只有 NPC 相关目标被写入当前玩家的支线、隐藏支线、隐藏结局或特殊成就时，才影响该玩家结算。
+- NPC 任务者最小实现只需要 `stance/intent/trouble_chance/status`，不强制实现关系值或好感系统。
+- 玩家自由文本必须先归类为固定 `action_type`，文本声明“成功/击杀/逃脱”不构成规则结果。
 - 物品、商店、抽卡、装备、锻造、进化相关函数见 `docs/wenyou/item_evolution_system.md`。
+- 运行时状态缓存、状态分层和 GM 输入输出边界见 `docs/wenyou/runtime_state.md`。
 
 ## 内容包建议
 
@@ -91,11 +124,16 @@ settle_instance(state, result) -> archive
 
 ```text
 content/default/genres.json
+content/default/items.json
 content/default/abilities.json
+content/default/evolution_paths.json
 content/default/reward_tables.json
 rulesets/default.json
 schemas/game_state.schema.json
 schemas/state_patch.schema.json
+schemas/item.schema.json
+schemas/ability.schema.json
+schemas/evolution.schema.json
 ```
 
 物品、装备和进化内容包目录见 `docs/wenyou/item_evolution_system.md`。
@@ -137,18 +175,29 @@ schemas/state_patch.schema.json
 
 - 将固定“2 玩家 + 4 NPC”改成 `tasker_total 2-13`。
 - 将文本版【主神面板】升级为 `state_patch`。
-- 将道具目录、商店、抽卡、奖励、升级、武器锻造从 prompt 迁出到 ruleset/content JSON。
+- 将任务、线索、位置、NPC、怪物实例和威胁时钟迁入 `runtime_state`，前端面板改为读取 `public_view`，不再从 GM 文本解析。
+- 道具目录已先迁到 `content/default/items.json`，并生成 `content/default/item_catalog.sql` 与 `schemas/item.schema.json`；后续继续把升级、武器锻造、进化从 prompt 迁出到 ruleset/content JSON。
 - 将默认内容包从业务代码拆到 JSON。
 - 保留当前无限流玩法作为 `main_god_infinite` preset；核心引擎不绑定“主神”设定。
 
-当前代码落地缺口：
+### 功能实现对齐表
 
-- 属性点分配 UI 和实际 `allocate_attribute_points` 流程还没接。
-- 六基础属性 `str/con/agi/int/spi/luk`、当前精神力 `spi_current`、派生攻击/防御/精神抗性还没迁入当前实现，现有代码仍是体力/智慧旧字段。
-- 阶位晋升条件、积分扣除、封印解除和阻断条件还没接。
-- 进化、能力、武器的完整数值效果还没从文档表迁到内容包/规则引擎。
-- 装备槽、武器耐久、锻造、维修、出售、回收、拆解还没完整接入前后端。
-- 道具目录还没落成 `content/default/items.json` 和 `schemas/item.schema.json`；商店、抽卡、奖励还没改成复用同一份道具目录。
-- 道具效果需要从普通文本效果升级为 `use_item` 规则表结算，GM 只接收后端返回的 `item_result`。
-- 复活、死亡债务、债务偿还、强制惩罚副本队列还没完全接。
-- 奖励 roll 不能只记录次数，需要接入稀有度、类别、数量和内容包掉落表。
+这张表用于 `du-gateway` 测试期对齐文档和代码。功能做完后，应把“当前状态”更新为已实现版本号，或移到实现清单/变更记录；不要让旧缺口长期留在开源说明里。
+
+| 规则模块 | 文档真源 | 当前状态口径 | 实现入口 |
+| --- | --- | --- | --- |
+| 副本蓝图与任务者 2-13 | `core_loop.md`、`instance_generation.md` | 已接：候选和自定义生成统一归一化 `tasker_total/player_count/npc_taskers`，候选不再硬写 2 人 | `generate_framework_*`、`_framework_for_runtime`、`_framework_from_candidate_text` |
+| runtime state 三层缓存 | `runtime_state.md` | 已接：`public_state/gm_state/rules_state` 随 session 生成和 state patch 更新，前端面板读结构化 view | `_runtime_state_view`、`_apply_public_state_updates`、`_apply_rules_state_updates`、`get_session_view` |
+| 自由文本行动归类 | `runtime_state.md` | 已接：固定 `action_type`，系统操作/道具/遭遇动作不交给 GM 自判 | `classify_wenyou_action_text`、`cmd_record_action` |
+| 战斗/逃跑/怪物 | `monster_system.md` | 已接：怪物实例、逃跑/规避、攻击、削弱、封印、Boss 默认不可硬杀与 reward tag | `_ensure_monster_instances`、`_resolve_encounter_action`、`cmd_encounter_action_with_du` |
+| 属性加点和派生面板 | `numeric_growth.md` | 已接：六属性、软上限、当前精神力、升级经验、新手属性点和前端成长入口 | `allocate_attribute_points`、`_grant_player_exp`、`_growth_view` |
+| 阶位晋升 | `numeric_growth.md` | 已接：晋升条件、扣积分、属性奖励、封印重扫和特殊商店解锁联动 | `promote_player_rank`、`_unlock_items_for_player_progress` |
+| 道具效果执行 | `item_evolution_system.md` | 已接：使用阶段、门槛、代价、HP/SAN、状态、污染、债务、威胁时钟、线索缓存和安全节点读 `effect_json` | `_apply_item_effect_to_session`、`cmd_use_item_with_du` |
+| 装备/耐久/锻造/回收 | `item_evolution_system.md` | 已接：装备槽、耐久、维修、出售、拆解、升级和锻造统一走规则函数 | `cmd_inventory_command`、`upgrade_or_forge_gear`、`repair_equipped_gear`、`sell_inventory_item`、`disassemble_inventory_item` |
+| 能力/进化 | `numeric_growth.md`、`item_evolution_system.md` | 已接：能力和进化路线从内容包读取，支持学习、使用、升级、进化、封印模板和成长面板展示 | `learn_or_upgrade_ability`、`use_player_ability`、`apply_evolution_effect`、`content/default/abilities.json`、`content/default/evolution_paths.json` |
+| 商店/抽卡 | `item_evolution_system.md` | 已接：商店和抽卡复用内容表；抽卡扣积分/保底不读幸运；特殊商店随阶位开放 | `get_wenyou_shop_view`、`buy_shop_item`、`roll_gacha` |
+| 结算评级 | `rewards_economy.md` | 已接：评级读 `settlement_flags/reward_context/损耗`，不要求 GM 每轮重写面板 | `_build_settlement_preview`、`_grant_settlement_reward` |
+| 奖励 roll | `rewards_economy.md` | 已接：稀有度、类别、内容表、难度上限、B+ 保底和连续材料保护；奖励表可由 JSON 覆盖 | `_roll_settlement_rewards`、`content/default/reward_tables.json` |
+| 惩罚副本 | `rewards_economy.md` | 已接：债务/污染/复活/契约进入强制队列，候选池插入强制本，NPC 打工模式有运行状态和结算清算 | `_refresh_forced_instance_queue`、`apply_forced_instance_candidates`、`_attach_forced_instance_contract`、`_apply_forced_instance_settlement` |
+
+开发验收用例见 `docs/wenyou/implementation_checklist.md`。

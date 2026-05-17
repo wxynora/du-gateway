@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Wenyou Reward Tables",
+  "type": "object",
+  "required": ["schema_version", "rarity_rates", "category_rates"],
+  "properties": {
+    "schema_version": { "type": "integer" },
+    "source": { "type": "string" },
+    "rarity_rates": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["rarity", "weight"],
+          "properties": {
+            "rarity": { "enum": ["D", "C", "B", "A", "S"] },
+            "weight": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    },
+    "category_rates": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["category", "weight"],
+          "properties": {
+            "category": { "type": "string" },
+            "weight": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    },
+    "tag_category_boosts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": { "type": "number" }
+      }
+    }
+  }
+}

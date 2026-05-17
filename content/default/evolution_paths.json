@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "source": "wenyou_rules_default",
+  "routes": [
+    {
+      "id": "human_stable",
+      "name": "人类稳定",
+      "tags": ["human", "stable"],
+      "attrs": { "con": 1, "int": 1 },
+      "hp_ratio": 0.5,
+      "san_ratio": 0.5,
+      "pollution": 0,
+      "desc": "保留人类稳定性，兼顾生命和理智。"
+    },
+    {
+      "id": "night_shadow",
+      "name": "夜行/阴影",
+      "tags": ["night", "shadow"],
+      "attrs": { "agi": 1, "spi": 1 },
+      "hp_ratio": 0,
+      "san_ratio": 1,
+      "pollution": 2,
+      "desc": "适合潜伏、规避和黑暗环境。"
+    },
+    {
+      "id": "regen_beast",
+      "name": "再生/兽化",
+      "tags": ["beast", "regeneration"],
+      "attrs": { "str": 1, "con": 1 },
+      "hp_ratio": 1,
+      "san_ratio": 0,
+      "pollution": 5,
+      "desc": "提高肉体强度和恢复倾向，污染代价更高。"
+    },
+    {
+      "id": "mechanical",
+      "name": "机械/义体",
+      "tags": ["machine", "repair"],
+      "attrs": { "int": 1, "str": 1 },
+      "hp_ratio": 1,
+      "san_ratio": 0,
+      "pollution": 1,
+      "desc": "偏向工具、结构理解和物理稳定。"
+    },
+    {
+      "id": "pollution_resist",
+      "name": "污染抗性",
+      "tags": ["pollution_resist"],
+      "attrs": { "spi": 2 },
+      "hp_ratio": 0,
+      "san_ratio": 1,
+      "pollution": 5,
+      "desc": "以污染承受换取精神韧性。"
+    },
+    {
+      "id": "mirror_gate",
+      "name": "镜界/门径",
+      "tags": ["mirror", "gate"],
+      "attrs": { "luk": 1, "spi": 1 },
+      "hp_ratio": 0,
+      "san_ratio": 1,
+      "pollution": 3,
+      "desc": "适合镜面、门径、撤离和异常通路。"
+    }
+  ]
+}
