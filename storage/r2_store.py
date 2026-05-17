@@ -141,6 +141,9 @@ R2_KEY_CONVERSATION_FOLLOWUPS = "global/conversation_followups.json"
 R2_KEY_TG_TODOS = "tg/todos.json"
 # 动态记忆召回调试记录（用于 MiniApp 可视化排查）
 R2_KEY_DYNAMIC_RECALL_DEBUG = "dynamic_memory/recall_debug.json"
+# 聊天注入快照：保存转发上游前的完整 body，排查上下文污染
+R2_KEY_CHAT_INJECT_SNAPSHOT_INDEX = "debug/chat_inject_snapshots/index.json"
+R2_KEY_CHAT_INJECT_SNAPSHOT_LATEST = "debug/chat_inject_snapshots/latest.json"
 # 动态记忆离线慢整理最近一次结果
 R2_KEY_DYNAMIC_MAINTENANCE_REPORT = "dynamic_memory/maintenance_report.json"
 # Telegram 表情包：映射表（各 tag 下对象 key 列表）+ 分类元数据（中文名等）
@@ -1384,6 +1387,65 @@ def append_dynamic_recall_debug_event(event: dict, max_keep: int = 200) -> bool:
             return True
         except Exception as e:
             logger.error("append_dynamic_recall_debug_event 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def save_chat_inject_snapshot(snapshot: dict, max_keep: int = 80) -> bool:
+    """保存聊天注入后的完整请求快照到 R2，便于排查上下文污染。"""
+    if not isinstance(snapshot, dict):
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    meta = snapshot.get("_meta") if isinstance(snapshot.get("_meta"), dict) else {}
+    raw_id = str(meta.get("snapshot_id") or uuid4()).strip()
+    safe_id = "".join(c if c.isalnum() or c in "-_." else "_" for c in raw_id)[:180] or str(uuid4())
+    key = f"debug/chat_inject_snapshots/{safe_id}.json"
+    try:
+        keep = max(1, min(int(max_keep or 80), 300))
+    except Exception:
+        keep = 80
+    with _global_write_lock:
+        try:
+            _write_json(client, key, snapshot)
+            _write_json(client, R2_KEY_CHAT_INJECT_SNAPSHOT_LATEST, snapshot)
+            index = _read_json(client, R2_KEY_CHAT_INJECT_SNAPSHOT_INDEX)
+            items = index.get("items") if isinstance(index, dict) else []
+            if not isinstance(items, list):
+                items = []
+            items = [it for it in items if isinstance(it, dict) and it.get("key") != key]
+            hit_counts = meta.get("hit_counts") if isinstance(meta.get("hit_counts"), dict) else {}
+            items.insert(
+                0,
+                {
+                    "key": key,
+                    "snapshot_id": safe_id,
+                    "created_at": str(meta.get("created_at") or now_beijing_iso()),
+                    "window_id": str(meta.get("window_id") or ""),
+                    "reply_channel": str(meta.get("reply_channel") or ""),
+                    "messages_count": int(meta.get("messages_count") or 0),
+                    "messages_chars": int(meta.get("messages_chars") or 0),
+                    "tools_count": int(meta.get("tools_count") or 0),
+                    "hit_counts": hit_counts,
+                },
+            )
+            old_items = items[keep:]
+            items = items[:keep]
+            _write_json(
+                client,
+                R2_KEY_CHAT_INJECT_SNAPSHOT_INDEX,
+                {"items": items, "updated_at": now_beijing_iso(), "keep": keep},
+            )
+            for old in old_items:
+                old_key = str(old.get("key") or "").strip()
+                if old_key.startswith("debug/chat_inject_snapshots/"):
+                    try:
+                        client.delete_object(Bucket=R2_BUCKET_NAME, Key=old_key)
+                    except Exception:
+                        pass
+            return True
+        except Exception as e:
+            logger.error("save_chat_inject_snapshot 失败 key=%s error=%s", key, e, exc_info=True)
             return False
 
 
@@ -2934,6 +2996,7 @@ _R2_WIPE_PREFIXES = (
     "global/",
     "dynamic_memory/",
     "core_cache/",
+    "debug/",
     "notebook/",
     "docs/",
     "wenyou/",
