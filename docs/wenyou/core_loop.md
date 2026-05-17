@@ -20,6 +20,8 @@
 Player Action -> GM Event Intent -> Rules Engine -> State Patch -> GM Narrative -> Archive
 ```
 
+运行时状态规则见 `docs/wenyou/runtime_state.md`。核心循环只定义职责边界：副本生成后，后端维护权威 runtime state；GM/DS 每轮只接收裁剪后的上下文和上一轮规则结算摘要，不负责重写完整任务、线索、状态或背包。
+
 ## 术语
 
 | 名称 | 含义 |
@@ -30,6 +32,7 @@ Player Action -> GM Event Intent -> Rules Engine -> State Patch -> GM Narrative 
 | GM | 叙事与世界反馈层，可以由 LLM、真人或混合系统承担 |
 | Rules Engine | 后端数值裁判，所有精确数值变化由它计算 |
 | State Patch | 一轮规则结算后的结构化状态变更 |
+| Runtime State | 副本运行期缓存状态，包含公开层、隐藏层和规则层 |
 | Content Pack | 可替换内容包，包含副本类型、物品、武器、能力、进化、商店和奖励表 |
 | Ruleset | 可替换规则包，包含公式、价格、概率、升级曲线和结算规则 |
 
@@ -43,9 +46,9 @@ hub -> candidate_selection -> instance_running -> settlement -> archived
 
 | 阶段 | 允许操作 | 禁止操作 |
 | --- | --- | --- |
-| `hub` 整备空间 | 查看归档、购买商店物品、治疗、强化、抽卡、进入候选池 | 推进副本剧情 |
+| `hub` 整备空间 | 查看归档、购买商店物品、C 阶后访问特殊商店/限定兑换所、治疗、强化、抽卡、进入候选池 | 推进副本剧情 |
 | `candidate_selection` 候选池 | 生成候选、筛选候选、选择副本、返回整备空间 | 结算奖励 |
-| `instance_running` 副本中 | 行动、使用道具、查看状态/线索/关系、触发 GM 结算 | 系统商店购买、长期强化、最终归档 |
+| `instance_running` 副本中 | 行动、使用道具、查看状态/线索/NPC 状态、触发 GM 结算 | 系统商店购买、长期强化、最终归档 |
 | `settlement` 结算中 | 发放奖励、治疗、复活、商店、抽卡、强化、归档 | 继续推进副本剧情 |
 | `archived` 已归档 | 查看历史、复盘、导出、重新挑战 | 修改原存档 |
 
@@ -54,8 +57,8 @@ hub -> candidate_selection -> instance_running -> settlement -> archived
 核心规则里，`hub` 是纯功能区，不承担剧情。
 
 - 默认内容包可把 `hub` 命名为“主神空间”。
-- `hub` 只负责商店、治疗、抽卡、强化、锻造、归档、候选池和整备。
-- 不在 `hub` 引入长期剧情、NPC 关系线、房间经营或日常事件。
+- `hub` 只负责普通商店、C 阶后特殊商店/限定兑换所、治疗、抽卡、强化、锻造、归档、候选池和整备。
+- 不在 `hub` 引入长期剧情、NPC 长线经营、房间经营或日常事件。
 - 如果其他开源使用者想做剧情 hub，应作为独立内容包扩展，不进入默认规则。
 
 ## 任务者编制
@@ -76,7 +79,27 @@ npc_tasker_count = tasker_total - player_count
 - 所有任务者受同一副本规则约束，但目标、立场、能力、情报和胜利条件可以不同。
 - 任务者 NPC 是游戏内“其他任务者玩家”，不是真人联机玩家；由系统/GM 扮演。
 - 任务者 NPC 必须可追溯：登场、退场、死亡、背叛、失踪都需要有因果。
-- NPC 的真实立场、隐藏目标、是否可信，默认写入 `gm_secret`，不直接展示给玩家。
+- NPC 不需要复杂关系值；默认只记录公开态度、真实立场、当前意图、存活状态和是否会使坏。
+- NPC 的真实立场、当前意图、是否可信，默认写入 `gm_secret`，不直接展示给玩家。
+
+NPC 任务者最小字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id/name` | NPC 任务者身份 |
+| `public_profile` | 玩家能看到的公开印象 |
+| `stance` | `good` / `neutral` / `bad` / `unknown` |
+| `intent` | 当前短期意图，例如撤离、找线索、抢资源、隐藏身份 |
+| `trouble_chance` | 只有坏立场或被副本污染/逼急时才需要；表示本轮使坏概率或触发条件 |
+| `status` | `alive` / `missing` / `dead` / `escaped` |
+
+规则：
+
+- `good` NPC 倾向合作、提醒、交换线索，但也会自保。
+- `neutral` NPC 根据场景行动，不主动害人。
+- `bad` NPC 有概率抢资源、误导、关门、嫁祸或触发危险，但不能无因果直接杀玩家。
+- NPC 死亡后只更新角色卡状态为 `dead`，必要时写入死亡原因；不需要继续维护复杂关系。
+- NPC 合作、背叛、使坏都由 `stance + intent + trouble_chance + 当前压力` 决定，不单独做好感度系统。
 
 ### 任务者互动边界
 
@@ -112,9 +135,11 @@ npc_tasker_count = tasker_total - player_count
       "name": "林砚",
       "public_profile": "穿旧风衣的任务者，右手缠着绷带",
       "gm_secret": {
-        "goal": "优先寻找撤离门，不主动害人",
-        "stance": "uncertain"
-      }
+        "stance": "neutral",
+        "intent": "优先寻找撤离门，不主动害人",
+        "trouble_chance": 0
+      },
+      "status": "alive"
     }
   ]
 }

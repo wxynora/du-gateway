@@ -91,6 +91,8 @@
 
 每个副本生成蓝图后，后台必须结合副本设定生成 `encounter_profile`。怪物不是全局固定图鉴，而是当前副本主题下的一组临时实体模板。
 
+详细数值模板、生成预算、战斗/规避结算和 Boss 平衡规则见 `docs/wenyou/monster_system.md`。本文只保留副本生成链路中的怪物结构示例。
+
 生成层级：
 
 | 层级 | 数量建议 | 定位 | 是否可战胜 |
@@ -229,10 +231,12 @@ target_dc = 10 + floor(target.speed / 2) + target_evasion_bonus
 伤害结算：
 
 ```text
-physical_hit_damage = max(1, physical_attack + weapon_damage + situational_bonus - target.defense)
-ranged_hit_damage = max(1, ranged_attack + weapon_damage + situational_bonus - target.defense)
+physical_hit_damage = max(1, physical_attack + situational_bonus - target.defense)
+ranged_hit_damage = max(1, ranged_attack + situational_bonus - target.defense)
 mental_hit_damage = max(1, floor(spi_current / 2) + rule_weapon_bonus - target.mental_resist)
 ```
+
+`physical_attack` / `ranged_attack` 已经包含当前武器加成，不能再重复叠 `weapon_damage`。
 
 精英怪物修正：
 
@@ -260,6 +264,8 @@ mental_hit_damage = max(1, floor(spi_current / 2) + rule_weapon_bonus - target.m
 
 ### 每轮使用方式
 
+每轮状态缓存与 GM 输入输出边界见 `docs/wenyou/runtime_state.md`。副本蓝图和怪物生态只在副本生成时完整缓存；每轮 GM 推进时只读取相关切片。
+
 每轮 GM 推进时，输入应包含：
 
 ```text
@@ -271,9 +277,9 @@ mental_hit_damage = max(1, floor(spi_current / 2) + rule_weapon_bonus - target.m
 - Rules Engine 上一轮 state_patch
 ```
 
-GM 不应整段复述蓝图，只根据当前阶段和玩家行动推进。若玩家走出蓝图预设路径，GM 可以扩展，但必须维护：
+GM 不应整段复述蓝图，也不应每轮输出完整任务、线索、背包或状态面板。若玩家走出蓝图预设路径，GM 可以提出扩展意图，但必须由后端校验后写入 runtime state：
 
 - 主线仍有可达路径。
 - 支线和隐藏结局的触发条件能被更新。
-- 新增关键线索要写回 `clue_graph` 或事件日志。
-- 新增硬约束要写回 `hard_constraints`，避免下一轮遗忘。
+- 新增关键线索必须以 `state_proposals` 形式提交，由后端写回 `clue_graph`、`public_state` 或事件日志。
+- 新增硬约束必须以 `state_proposals` 形式提交，由后端写回 `hard_constraints`，避免下一轮遗忘。

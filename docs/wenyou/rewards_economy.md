@@ -2,7 +2,7 @@
 
 ## 通关奖励
 
-奖励由规则引擎根据难度、通关结果、隐藏目标和副本表现计算。
+奖励由规则引擎根据难度、玩家角色通关结果、隐藏目标和副本表现计算。
 
 ### 基础保底奖励
 
@@ -10,7 +10,7 @@
 
 ```text
 基础保底 = 只要达成最低过关/撤离条件就发放
-评级叠加 = 根据剧情探索度、隐藏支线、隐藏结局、特殊成就等增加
+评级叠加 = 根据主线、普通支线、隐藏支线、隐藏结局、特殊成就和损耗记录增加或扣减
 ```
 
 基础保底不随机，保证玩家完成副本后有稳定收入。
@@ -42,17 +42,31 @@
 | 污染/伤势 | 可保留 1 个负面状态进入下个副本，除非支付治疗费用 |
 | 放弃惩罚 | 放弃副本可额外扣除本难度通关保底的 10%-30%，不足则写入债务 |
 
+### 结算对象
+
+默认只结算真实玩家控制的玩家角色。
+
+规则：
+
+- 单人游玩时，通关结果、评级、积分、EXP、奖励 roll 只看该玩家角色。
+- 多名真实玩家时，可以分别结算每名玩家角色，也可以按玩家队伍共享一次副本评级；NPC 任务者不参与玩家评级。
+- NPC 任务者的存活、死亡、逃脱、背叛或合作只作为副本事实记录。
+- NPC 结果不会自动加分或扣分；只有当当前玩家明确完成了“救下某 NPC”“护送 NPC”“利用 NPC 身份完成工单”等公开支线、隐藏支线、隐藏结局或特殊成就时，才写入该玩家的 `settlement_flags`。
+- NPC 自己不发玩家积分、EXP、抽卡资源或成长奖励。
+
 ### 评级分
 
-后端根据结构化记录计算 `rating_score`，再映射成结算评级。
+后端根据结构化完成标记计算 `rating_score`，再映射成结算评级。
+
+评级不单独给“线索分”。线索、地点探索和规则理解只作为完成主线、支线、隐藏支线或隐藏结局的证据；最终看玩家实际完成了哪些目标，而不是机械统计发现了多少条线索。
 
 | 项目 | 分值 | 说明 |
 | --- | ---: | --- |
-| 主线完成度 | 0-40 | 完成核心任务、达成通关条件、没有跳过关键代价 |
-| 剧情探索度 | 0-20 | 探索地点、发现线索、理解规则或真相 |
-| 隐藏支线 | 0-15 | 完成隐藏任务、支线救援、额外调查 |
-| 隐藏结局 | 0-15 | 触发特殊结局、真结局或高难结局 |
-| 特殊成就 | 0-15 | 全员存活、低污染、限时优秀、无复活等 |
+| 主线完成度 | 0-45 | 完成核心任务、达成通关条件、没有跳过关键代价 |
+| 普通支线完成度 | 0-15 | 完成公开支线、救援、资源回收或额外任务 |
+| 隐藏支线完成度 | 0-15 | 完成隐藏任务、额外调查或特殊 NPC 线 |
+| 隐藏结局完成度 | 0-15 | 触发特殊结局、真结局或高难结局 |
+| 特殊成就 | 0-15 | 玩家角色全部存活、低污染、限时优秀、无复活等 |
 | 损耗控制 | -20 到 10 | 复活、重伤、污染、债务会扣分；低损耗加分 |
 
 结算评级：
@@ -78,10 +92,10 @@ rating_exp_bonus: S=0.70, A=0.45, B=0.20, C=0, D=-0.20, F=0
 | 成就 | 评级分 | 积分叠加 | EXP 叠加 | 额外效果 |
 | --- | ---: | ---: | ---: | --- |
 | 解开隐藏真相 | +10 | +12% | +10% | +1 次线索/剧情奖励 |
-| 完成隐藏支线 | +8 | +8% | +8% | 支线相关物品或关系奖励 |
+| 完成隐藏支线 | +8 | +8% | +8% | 支线相关物品、称号或情报 |
 | 触发隐藏结局 | +12 | +20% | +15% | 至少 1 次 B+ 奖励 |
-| 救下关键 NPC | +6 | +6% | +6% | 关系、称号或情报 |
-| 全员存活 | +8 | +8% | +5% | 团队类称号 |
+| 完成 NPC 相关支线 | +6 | +6% | +6% | 仅限该 NPC 目标被写入本局支线/隐藏支线/成就 |
+| 玩家角色全部存活 | +8 | +8% | +5% | 多玩家时只计算真实玩家角色，不含 NPC 任务者 |
 | 低污染通关 | +6 | +6% | +5% | 精神类奖励概率 +10% |
 | 限时优秀完成 | +6 | +6% | +5% | 时间类奖励概率 +10% |
 | 无复活通关 | +5 | +5% | +5% | 结算称号或额外记录奖励 |
@@ -94,6 +108,73 @@ achievement_exp_bonus_cap = +50%
 ```
 
 也就是说，多项隐藏内容可以叠，但默认最多再叠基础保底的 60% 积分、50% EXP；内容包可以为真结局或唯一成就单独突破上限，但必须写在 `gm_secret.reward_overrides`。
+
+最小结算字段：
+
+```json
+{
+  "mainline": { "completed": true, "completion": 1.0 },
+  "side_quests": [{ "id": "save_guard", "completed": true }],
+  "hidden_side_quests": [{ "id": "find_fake_rule_source", "completed": false }],
+  "hidden_endings": [{ "id": "true_escape", "completed": true }],
+  "achievements": ["low_pollution_clear"],
+  "player_scope": ["player1"],
+  "losses": {
+    "revive_count": 0,
+    "death_count": 0,
+    "heavy_injury_count": 1,
+    "pollution": 12,
+    "debt_added": 0
+  }
+}
+```
+
+`discovered_clues` 可以帮助后端判断上面这些字段是否完成，但不直接变成独立评分项。
+
+### 结算标记写入
+
+评级不应该在结算时临时读 GM 文本猜。副本运行过程中，每次任务、线索、隐藏结局、NPC 相关目标或损耗发生变化，都要通过 `state_patch` 写入 `rules_state.settlement_flags`。
+
+推荐字段：
+
+```json
+{
+  "settlement_flags": {
+    "player1": {
+      "mainline": { "completion": 0.75, "completed": false },
+      "side_quests": {},
+      "hidden_side_quests": {},
+      "hidden_endings": {},
+      "achievements": [],
+      "losses": {
+        "revive_count": 0,
+        "death_count": 0,
+        "heavy_injury_count": 0,
+        "pollution_peak": 12,
+        "debt_added": 0,
+        "gear_broken_count": 1
+      },
+      "reward_tags": []
+    }
+  }
+}
+```
+
+写入来源：
+
+| 事件 | 写入字段 | 说明 |
+| --- | --- | --- |
+| 主线任务完成或推进 | `mainline.completion/completed` | 由任务状态或蓝图通关条件触发 |
+| 普通支线完成 | `side_quests[id]` | 只记录当前玩家/队伍实际完成的支线 |
+| 隐藏支线完成 | `hidden_side_quests[id]` | 可以隐藏到结算才展示名称 |
+| 隐藏结局触发 | `hidden_endings[id]` | 必须来自蓝图或内容包，不由 GM 临场发明 |
+| 特殊成就 | `achievements[]` | 例如低污染、无复活、限时优秀 |
+| NPC 相关目标 | `side_quests` / `hidden_side_quests` / `achievements` | NPC 自身结局不自动加分，必须绑定玩家目标 |
+| 复活、死亡、重伤 | `losses` | 作为损耗控制和债务计算输入 |
+| 污染、债务、装备损坏 | `losses` | 结算时扣分或追加成本 |
+| 特殊奖励资格 | `reward_tags` | 例如 `hidden_truth`、`boss_redeemed`、`low_pollution` |
+
+结算时只读取 `settlement_flags`、玩家当前状态和 `reward_context`。如果 GM 文本说“你完成了隐藏结局”，但没有对应 flag，后端应返回“未确认”，并让下一轮 GM 根据规则结果纠偏。
 
 最终计算：
 
@@ -128,6 +209,18 @@ final_exp = round(base_exp + rating_exp + achievement_exp)
 | A | 0% | 0% | 35% | 55% | 10% |
 | S | 0% | 0% | 0% | 45% | 55% |
 
+难度上限：
+
+| 副本难度 | 通用道具/装备默认上限 | 副本专属可带出物默认上限 | 例外 |
+| --- | --- | --- | --- |
+| D | C | C | 不允许 A/S；B 只能作为隐藏唯一奖励，且必须封印或降级生效 |
+| C | B | B | A 只能作为隐藏唯一奖励，且必须封印或降级生效 |
+| B | A | A | S 只能作为隐藏唯一奖励，且必须封印或降级生效 |
+| A | S | S | 可掉 S，但必须有代价、封印或使用限制 |
+| S | S | S | 仍需遵守唯一物、代价和封印规则 |
+
+也就是说，D 级副本的常规产出最多到 C 级。即使 D 级副本触发隐藏支线、隐藏结局或特殊成就，默认也只能给 C 级以内的通用道具；若内容包确实要给 B 级纪念物，必须写在 `gm_secret.reward_overrides` 或 `instance_unique_rewards`，并默认 `shop_allowed=false`、`gacha_allowed=false`、`seal_rank=B` 或只允许 D 阶降级效果。
+
 结果评级修正：
 
 - S 完美：稀有度上调 1 档，最高 S。
@@ -137,7 +230,14 @@ final_exp = round(base_exp + rating_exp + achievement_exp)
 
 ### 奖励掉落表
 
-奖励 roll 必须先确定稀有度，再确定奖励类别，最后从内容包表中取具体物品。若类别为消耗道具，则只从 `content/default/items.json` 或当前内容包覆盖的道具目录中按 `rarity/tags/gacha_allowed` 取道具，不另写奖励专用道具。
+奖励 roll 必须先确定稀有度，再确定奖励类别，最后从内容包表中取具体物品。
+
+通用道具和副本专属可带出物分开处理：
+
+- 通用商店/抽卡/奖励道具从 `item_catalog` 或当前内容包覆盖的通用目录中按 `rarity/tags/era_tags/gacha_allowed` 取。
+- 副本专属可带出物从当前副本或内容包的 `instance_unique_rewards` / `content_pack_rewards` 里取，不要求进入通用道具目录。
+- 副本专属物可以带出副本，但默认 `shop_allowed=false`、`gacha_allowed=false`，不能出现在普通商店或通用抽卡池。
+- 如果某个副本专属物后来被确认可复用，再补价格、标签、开关和封印规则，提升进通用 `item_catalog`。
 
 类别概率：
 
@@ -166,9 +266,12 @@ final_exp = round(base_exp + rating_exp + achievement_exp)
 roll_reward(state, player_id, instance_difficulty, rating, reward_table_id):
   rarity = roll_rarity(instance_difficulty)
   rarity = apply_rating_modifier(rarity, rating)
+  rarity = clamp_by_instance_reward_cap(rarity, instance_difficulty, reward_source)
   category = roll_category(rarity)
   if category == "consumable_item":
     reward = pick_from_item_catalog(rarity, instance.tags, seed)
+  elif category == "instance_unique":
+    reward = pick_from_instance_unique_rewards(instance.id, rarity, seed)
   else:
     reward = pick_from_content_pack(reward_table_id, rarity, category, seed)
   apply_reward_to_inventory_or_profile(reward)
@@ -214,6 +317,7 @@ roll_reward(state, player_id, instance_difficulty, rating, reward_table_id):
 - 武器升级、锻造、维修持续消耗积分和材料。
 - 抽卡重复转化为碎片，不直接返还积分。
 - 抽卡单抽固定 100 积分，100 抽传说大保底固定消耗 10000 积分。
+- S 级道具若进入特殊商店或活动商店指定购买，价格必须高于 100 抽随机 S 大保底；默认不低于 12000 积分。
 - 商店每天或每次结算刷新，刷新可收取 20 积分。
 - 债务、污染、诅咒等负面状态可以作为高阶能力代价。
 
@@ -275,7 +379,7 @@ roll_reward(state, player_id, instance_difficulty, rating, reward_table_id):
 
 - 成功时优先减少债务、污染、封印或契约，不默认发普通副本完整奖励。
 - 可以发少量“系统工资”，默认不超过同阶位通关保底积分的 30%。
-- 隐藏完成可给称号、特殊 NPC 关系、低概率系统商店折扣或一次惩罚豁免券。
+- 隐藏完成可给称号、NPC 记录标记、低概率系统商店折扣或一次惩罚豁免券。
 - 失败不发积分；按暴露对象追加债务、污染、封印或下一次强制工单。
 
 结构化字段建议：
