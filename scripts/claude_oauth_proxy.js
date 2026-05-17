@@ -28,6 +28,12 @@ const REFRESH_SKEW_MS = Math.max(
   parseInt(process.env.CLAUDE_REFRESH_SKEW_SECONDS || "300", 10)
 ) * 1000;
 const CLAUDE_PROMPT_CACHE_TTL = String(process.env.CLAUDE_PROMPT_CACHE_TTL || "1h").trim();
+const CLAUDE_PROXY_SNAPSHOT_DIR =
+  process.env.CLAUDE_PROXY_SNAPSHOT_DIR || "/tmp/claude-oauth-proxy-snapshots";
+const CLAUDE_PROXY_SNAPSHOT_KEEP = Math.max(
+  1,
+  Math.min(parseInt(process.env.CLAUDE_PROXY_SNAPSHOT_KEEP || "40", 10), 200)
+);
 const TARGET_HOST = "api.anthropic.com";
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const REFRESH_URL = "https://console.anthropic.com/v1/oauth/token";
@@ -55,6 +61,17 @@ const GATEWAY_DYNAMIC_SYSTEM_HINTS = [
   "【当前是在 RikkaHub 和渡聊天】",
   "【Notion 相关】",
 ];
+const SNAPSHOT_NEEDLES = [
+  "【最近的对话】",
+  "【近期记忆】",
+  "洗床单",
+  "床单",
+  "关我何事",
+  "你给自己定的",
+  "主动。去看她写了什么",
+  "闹钟，现在到点了",
+  "去吃早饭了没",
+];
 
 const SYSTEM_PROMPT_PREFIX = {
   type: "text",
@@ -79,6 +96,140 @@ let lastUnauthorizedRoute = "";
 
 function log(msg) {
   console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
+}
+
+function textForSnapshot(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function hitCounts(text) {
+  const s = String(text || "");
+  const out = {};
+  for (const needle of SNAPSHOT_NEEDLES) {
+    let count = 0;
+    let idx = s.indexOf(needle);
+    while (idx >= 0) {
+      count += 1;
+      idx = s.indexOf(needle, idx + needle.length);
+    }
+    if (count > 0) out[needle] = count;
+  }
+  return out;
+}
+
+function saveAnthropicRequestSnapshot(routeLabel, body) {
+  try {
+    const createdAt = new Date().toISOString();
+    const suffix = createdAt.replace(/[:.]/g, "-");
+    const id = `${suffix}-${Math.floor(Math.random() * 1000)
+      .toString()
+      .padStart(3, "0")}`;
+    const fullText = textForSnapshot(body);
+    const totalHits = hitCounts(fullText);
+    const sections = [];
+    const system = Array.isArray(body?.system) ? body.system : [];
+    const messages = Array.isArray(body?.messages) ? body.messages : [];
+    const tools = Array.isArray(body?.tools) ? body.tools : [];
+
+    system.forEach((item, index) => {
+      const text = textForSnapshot(item);
+      const hits = hitCounts(text);
+      if (Object.keys(hits).length) {
+        sections.push({
+          kind: "system",
+          index,
+          chars: text.length,
+          cache_control: item?.cache_control || null,
+          hits,
+          preview: text.slice(0, 500),
+        });
+      }
+    });
+    messages.forEach((item, index) => {
+      const text = textForSnapshot(item);
+      const hits = hitCounts(text);
+      if (Object.keys(hits).length) {
+        sections.push({
+          kind: "message",
+          index,
+          role: item?.role || "",
+          chars: text.length,
+          hits,
+          preview: text.slice(0, 500),
+        });
+      }
+    });
+    tools.forEach((item, index) => {
+      const text = textForSnapshot(item);
+      const hits = hitCounts(text);
+      if (Object.keys(hits).length) {
+        sections.push({
+          kind: "tool",
+          index,
+          name: item?.name || "",
+          chars: text.length,
+          cache_control: item?.cache_control || null,
+          hits,
+          preview: text.slice(0, 500),
+        });
+      }
+    });
+
+    const cacheControlBlocks = [];
+    system.forEach((item, index) => {
+      if (item?.cache_control) cacheControlBlocks.push({ kind: "system", index, cache_control: item.cache_control });
+    });
+    tools.forEach((item, index) => {
+      if (item?.cache_control) cacheControlBlocks.push({ kind: "tool", index, name: item?.name || "", cache_control: item.cache_control });
+    });
+
+    const payload = {
+      _meta: {
+        id,
+        created_at: createdAt,
+        route: routeLabel || "",
+        model: body?.model || "",
+        system_count: system.length,
+        message_count: messages.length,
+        tool_count: tools.length,
+        total_chars: fullText.length,
+        hit_counts: totalHits,
+        hit_sections: sections,
+        cache_control_blocks: cacheControlBlocks,
+      },
+      body,
+    };
+    fs.mkdirSync(CLAUDE_PROXY_SNAPSHOT_DIR, { recursive: true });
+    const file = path.join(CLAUDE_PROXY_SNAPSHOT_DIR, `${id}.json`);
+    const latest = path.join(CLAUDE_PROXY_SNAPSHOT_DIR, "latest.json");
+    const data = JSON.stringify(payload, null, 2);
+    fs.writeFile(file, data, () => {});
+    fs.writeFile(latest, data, () => {});
+    fs.readdir(CLAUDE_PROXY_SNAPSHOT_DIR, (err, files) => {
+      if (err) return;
+      const jsonFiles = files
+        .filter((name) => name.endsWith(".json") && name !== "latest.json")
+        .map((name) => path.join(CLAUDE_PROXY_SNAPSHOT_DIR, name));
+      jsonFiles.sort((a, b) => {
+        try {
+          return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+        } catch {
+          return 0;
+        }
+      });
+      for (const old of jsonFiles.slice(CLAUDE_PROXY_SNAPSHOT_KEEP)) {
+        fs.unlink(old, () => {});
+      }
+    });
+  } catch (e) {
+    log(`Failed to save Anthropic request snapshot: ${e.message}`);
+  }
 }
 
 function readKeychainOAuth() {
@@ -1143,6 +1294,7 @@ const server = http.createServer(async (req, res) => {
       const anthropicBody = await openaiToAnthropic(body);
       const requestModel = anthropicBody.model;
       processAnthropicBody(anthropicBody);
+      saveAnthropicRequestSnapshot(req.url, anthropicBody);
 
       let proxyRes = await proxyToAnthropic(token, "/v1/messages", anthropicBody);
       log(`<= ${proxyRes.statusCode} ${req.url}`);
@@ -1213,6 +1365,7 @@ const server = http.createServer(async (req, res) => {
     } else {
       // ─── Anthropic 原生路径 ───
       processAnthropicBody(body);
+      saveAnthropicRequestSnapshot(req.url, body);
       let proxyRes = await proxyToAnthropic(token, req.url, body);
       log(`<= ${proxyRes.statusCode} ${req.url}`);
 
