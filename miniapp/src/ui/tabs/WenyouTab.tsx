@@ -4,7 +4,7 @@ import { useToast } from "../toast";
 
 type WenyouView = "home" | "selection" | "game" | "archive" | "shop" | "rift";
 type WenyouInitialView = WenyouView | "archives" | "hub";
-type WenyouPanelView = "任务线索" | "地点" | "任务者" | "怪物" | "背包" | "状态" | "历史";
+type WenyouPanelView = "局内资料";
 
 type WenyouArchiveItem = {
   gameId?: string;
@@ -431,6 +431,9 @@ function Icon({ name }: { name: string }) {
   if (name === "list") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>;
   }
+  if (name === "x") {
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>;
+  }
   if (name === "plus") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>;
   }
@@ -557,6 +560,16 @@ function markerMeta(item: WenyouPublicMarker): string {
     .map((it) => compactPanelText(it))
     .filter(Boolean)
     .join(" · ");
+}
+
+function currentLocationName(publicState: WenyouPublicState, fallback = "未知区域"): string {
+  const first = publicState.known_locations?.[0];
+  const title = first ? markerTitle(first) : "";
+  const text = first ? markerText(first) : "";
+  const raw = title && !["当前场景", "未命名记录"].includes(title)
+    ? title
+    : text || publicState.scene_summary || fallback;
+  return raw.replace(/^当前在[:：]?\s*/, "").trim().slice(0, 34) || fallback;
 }
 
 function gearLabel(item: string | { name?: string; slot?: string; desc?: string }): string {
@@ -702,7 +715,6 @@ export function WenyouTab({
   const riftPullTokenRef = useRef(0);
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
   const [panelView, setPanelView] = useState<WenyouPanelView | null>(null);
-  const [gameMenuOpen, setGameMenuOpen] = useState(false);
   const [quickDecisionOpen, setQuickDecisionOpen] = useState(false);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
   const [activeScene, setActiveScene] = useState<EntryScene | null>(null);
@@ -756,10 +768,6 @@ export function WenyouTab({
       setPanelView(null);
       return true;
     }
-    if (gameMenuOpen) {
-      setGameMenuOpen(false);
-      return true;
-    }
     if (quickDecisionOpen) {
       setQuickDecisionOpen(false);
       return true;
@@ -788,12 +796,11 @@ export function WenyouTab({
       return true;
     }
     return false;
-  }, [gameMenuOpen, normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen]);
+  }, [normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen]);
 
   useEffect(() => {
     viewRef.current = view;
     if (view !== "game") {
-      setGameMenuOpen(false);
       setQuickDecisionOpen(false);
     }
   }, [view]);
@@ -978,6 +985,8 @@ export function WenyouTab({
     genre: status.session?.instance_genre || "规则怪谈",
     difficulty: status.session?.difficulty || "普通",
   };
+  const gamePublicState = getSessionPublicState(sessionPanel);
+  const currentLocation = currentLocationName(gamePublicState);
   const hasActiveRun = !!(status.active || activeScene);
   const riftPointRaw = shop?.points ?? sessionPanel?.wallet?.points;
   const riftPoints = riftPointPreview ?? Number(riftPointRaw ?? 0);
@@ -1108,7 +1117,6 @@ export function WenyouTab({
   async function submitAction() {
     const text = actionText.trim();
     if (!text) return;
-    setGameMenuOpen(false);
     setQuickDecisionOpen(false);
     setActing(true);
     try {
@@ -1181,7 +1189,6 @@ export function WenyouTab({
   }
 
   async function openSettlementDraft() {
-    setGameMenuOpen(false);
     setQuickDecisionOpen(false);
     await loadSettlementPreview();
   }
@@ -1239,26 +1246,24 @@ export function WenyouTab({
   }
 
   function showPlaceholder(name: WenyouPanelView) {
-    setGameMenuOpen(false);
     setPanelView(name);
     loadSessionPanel();
   }
 
   function selectQuickAction(text: string) {
     setActionText(text);
-    setGameMenuOpen(false);
     setQuickDecisionOpen(false);
     window.setTimeout(() => actionInputRef.current?.focus(), 0);
   }
 
   function handleQuickAction(item: (typeof QUICK_ACTIONS)[number]) {
     if (item.label === "移动") {
-      showPlaceholder("地点");
+      showPlaceholder("局内资料");
       setQuickDecisionOpen(false);
       return;
     }
     if (item.label === "使用") {
-      showPlaceholder("背包");
+      showPlaceholder("局内资料");
       setQuickDecisionOpen(false);
       return;
     }
@@ -1624,43 +1629,18 @@ export function WenyouTab({
             <div>
               <h2>{currentScene.name}</h2>
               <p><span />阶段: {sessionPanel?.phase_label || status.session?.phase_label || (status.active ? "进行中" : "模拟预览")}</p>
+              <p className="wenyou-location-hint"><span />当前在 {currentLocation}</p>
             </div>
-            <div className="wenyou-game-menu-wrap">
-              <button
-                className={`wenyou-game-menu-trigger ${gameMenuOpen ? "active" : ""}`}
-                onClick={() => {
-                  setQuickDecisionOpen(false);
-                  setGameMenuOpen((open) => !open);
-                }}
-                aria-label="打开局内菜单"
-                aria-expanded={gameMenuOpen}
-              >
-                <Icon name="list" />
-              </button>
-              {gameMenuOpen ? (
-                <>
-                  <div className="wenyou-game-menu-scrim" onClick={() => setGameMenuOpen(false)} />
-                  <div className="wenyou-game-menu" role="menu">
-                    <div className="wenyou-game-menu-section">
-                      <span>运行态</span>
-                      <div>
-                        {(["任务线索", "地点", "任务者", "怪物"] as WenyouPanelView[]).map((item) => (
-                          <button key={item} onClick={() => showPlaceholder(item)} role="menuitem">{item}</button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="wenyou-game-menu-section">
-                      <span>玩家</span>
-                      <div>
-                        {(["背包", "状态", "历史"] as WenyouPanelView[]).map((item) => (
-                          <button key={item} onClick={() => showPlaceholder(item)} role="menuitem">{item}</button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : null}
-            </div>
+            <button
+              className="wenyou-game-data-trigger"
+              onClick={() => {
+                setQuickDecisionOpen(false);
+                showPlaceholder("局内资料");
+              }}
+              aria-label="打开局内资料"
+            >
+              <Icon name="list" />
+            </button>
           </div>
 
           <div className="wenyou-feed">
@@ -2321,17 +2301,15 @@ function PanelModal({
       <button className="wenyou-modal-backdrop" onClick={onClose} aria-label="关闭面板" />
       <div className="wenyou-random-panel wenyou-panel-modal">
         <span className="wenyou-random-line" />
-        <div className="wenyou-panel-title">
-          <h2>{view}</h2>
-          <button onClick={onClose}>关闭</button>
-        </div>
+        <button className="wenyou-panel-close" onClick={onClose} aria-label="关闭面板"><Icon name="x" /></button>
 
         {!session ? <div className="wenyou-empty">当前没有进行中的副本。</div> : null}
 
-        {session && view === "任务线索" ? (
+        {session && view === "局内资料" ? (
           <div className="wenyou-panel-body">
             <PanelRow label="当前阶段" value={task.phase || session.phase_label || "副本"} />
-            {publicState.scene_summary ? <PanelRow label="当前场景" value={publicState.scene_summary} /> : null}
+            <PanelRow label="当前位置" value={currentLocationName(publicState)} />
+            {publicState.scene_summary ? <PanelRow label="场景摘要" value={publicState.scene_summary} /> : null}
             {publicState.public_threat ? <PanelRow label="危险程度" value={publicState.public_threat} /> : null}
             {publicState.visible_rules?.length ? <PanelRow label="公开规则" value={publicState.visible_rules.join("；")} /> : null}
             <div className="wenyou-panel-subtitle">任务</div>
@@ -2342,40 +2320,22 @@ function PanelModal({
             {clues.length ? clues.map((item, index) => (
               <CluePanelCard item={item} key={`${clueTitle(item)}-${index}`} />
             )) : <div className="wenyou-empty">暂无线索备忘。</div>}
-          </div>
-        ) : null}
 
-        {session && view === "地点" ? (
-          <div className="wenyou-panel-body">
-            <PanelRow label="危险程度" value={publicState.public_threat || "平稳"} />
+            <div className="wenyou-panel-subtitle">环境</div>
             {locations.length ? locations.map((item, index) => (
               <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
             )) : <div className="wenyou-empty">暂无地点缓存。继续探索后会在这里更新。</div>}
-          </div>
-        ) : null}
 
-        {session && view === "任务者" ? (
-          <div className="wenyou-panel-body">
+            <div className="wenyou-panel-subtitle">角色与威胁</div>
             <PanelRow label="任务者编制" value={taskerTotal ? `共 ${taskerTotal} 人：玩家 ${playerCount || 2} + NPC ${Math.max(0, taskerTotal - (playerCount || 2))}` : "未同步"} />
-            <PlayerStatCard title="玩家一" player={stats.player1} compact />
-            <PlayerStatCard title="玩家二 · 渡" player={stats.player2} compact />
-            <div className="wenyou-panel-subtitle">NPC 任务者</div>
             {npcs.length ? npcs.map((item, index) => (
               <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
             )) : <div className="wenyou-empty">暂无公开 NPC 记录。</div>}
-          </div>
-        ) : null}
-
-        {session && view === "怪物" ? (
-          <div className="wenyou-panel-body">
             {monsters.length ? monsters.map((item, index) => (
               <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
             )) : <div className="wenyou-empty">暂无可见怪物。Boss 与怪物暗线仍按副本缓存推进。</div>}
-          </div>
-        ) : null}
 
-        {session && view === "背包" ? (
-          <div className="wenyou-panel-body">
+            <div className="wenyou-panel-subtitle">背包</div>
             {inventory.length ? inventory.map((item, index) => (
               <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
                 <span>
@@ -2390,20 +2350,14 @@ function PanelModal({
                 <button onClick={() => onUseItem(item)} disabled={acting}>{acting ? "演算中" : "填入"}</button>
               </div>
             )) : <div className="wenyou-empty">背包为空。</div>}
-          </div>
-        ) : null}
 
-        {session && view === "状态" ? (
-          <div className="wenyou-panel-body">
+            <div className="wenyou-panel-subtitle">状态</div>
             <PanelRow label="主神积分" value={String(stats.points ?? session.wallet?.points ?? 0)} />
             {session.wallet?.debts ? <PanelRow label="主神债务" value={String(session.wallet.debts)} /> : null}
             <PlayerStatCard title="玩家一" player={stats.player1} />
             <PlayerStatCard title="玩家二 · 渡" player={stats.player2} />
-          </div>
-        ) : null}
 
-        {session && view === "历史" ? (
-          <div className="wenyou-panel-body">
+            <div className="wenyou-panel-subtitle">行动记录</div>
             {history.length ? history.slice(-12).reverse().map((item, index) => (
               <HistoryPanelRow item={item} key={`${item.timestamp || index}-${index}`} />
             )) : <div className="wenyou-empty">暂无行动历史。</div>}

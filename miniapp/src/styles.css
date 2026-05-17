@@ -1825,7 +1825,7 @@
     z-index: 5;
   }
 
-  .wenyou-game-top > div:not(.wenyou-game-menu-wrap) {
+  .wenyou-game-top > div {
     flex: 1;
   }
 
@@ -1844,6 +1844,20 @@
     box-shadow: 0 0 12px rgba(34, 197, 94, 0.7);
   }
 
+  .wenyou-game-top .wenyou-location-hint {
+    max-width: min(58vw, 260px);
+    color: rgba(180, 216, 230, 0.78);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .wenyou-game-top .wenyou-location-hint span {
+    background: #67e8f9;
+    box-shadow: 0 0 12px rgba(103, 232, 249, 0.5);
+  }
+
   .wenyou-game-top button:last-child {
     width: auto;
     min-width: 42px;
@@ -1852,97 +1866,10 @@
     font-weight: 800;
   }
 
-  .wenyou-game-menu-wrap {
-    position: relative;
-    flex: 0 0 auto;
-  }
-
-  .wenyou-game-top .wenyou-game-menu-trigger {
+  .wenyou-game-top .wenyou-game-data-trigger {
     width: 42px;
     min-width: 42px;
     color: #b8f7ff;
-  }
-
-  .wenyou-game-menu-trigger.active {
-    border-color: rgba(251, 191, 36, 0.45);
-    background: rgba(39, 27, 8, 0.82);
-    color: #fde68a;
-  }
-
-  .wenyou-game-menu {
-    position: absolute;
-    top: 50px;
-    right: 0;
-    z-index: 9;
-    display: grid;
-    width: min(68vw, 232px);
-    gap: 8px;
-    border: 1px solid rgba(34, 211, 238, 0.28);
-    border-radius: 8px;
-    background:
-      linear-gradient(135deg, rgba(10, 18, 38, 0.98), rgba(6, 9, 20, 0.98)),
-      rgba(3, 7, 18, 0.98);
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.07);
-    padding: 12px;
-  }
-
-  .wenyou-game-menu-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 7;
-  }
-
-  .wenyou-game-menu::before {
-    content: "";
-    position: absolute;
-    top: -6px;
-    right: 14px;
-    width: 10px;
-    height: 10px;
-    border-top: 1px solid rgba(34, 211, 238, 0.28);
-    border-left: 1px solid rgba(34, 211, 238, 0.28);
-    background: rgba(10, 18, 38, 0.98);
-    transform: rotate(45deg);
-  }
-
-  .wenyou-game-menu-section {
-    display: grid;
-    gap: 8px;
-  }
-
-  .wenyou-game-menu-section > span {
-    color: rgba(148, 163, 184, 0.86);
-    font-size: 10px;
-    font-weight: 900;
-    letter-spacing: 0.18em;
-  }
-
-  .wenyou-game-menu-section > div {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 7px;
-  }
-
-  .wenyou-game-top .wenyou-game-menu button {
-    display: inline-flex;
-    width: auto;
-    min-width: 0;
-    min-height: 34px;
-    height: auto;
-    flex: 0 1 auto;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid rgba(34, 211, 238, 0.22);
-    border-radius: 7px;
-    background: rgba(8, 16, 32, 0.78);
-    color: rgba(228, 248, 255, 0.9);
-    font-size: 12px;
-    font-weight: 900;
-    padding: 0 9px;
-  }
-
-  .wenyou-game-top .wenyou-game-menu button:disabled {
-    opacity: 0.48;
   }
 
   .wenyou-feed {
@@ -2865,25 +2792,27 @@
   .wenyou-panel-modal {
     max-height: min(78vh, 640px);
     overflow-y: auto;
+    padding-top: 42px;
   }
 
-  .wenyou-panel-title {
-    display: flex;
+  .wenyou-panel-close {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    display: inline-flex;
+    width: 34px;
+    height: 34px;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .wenyou-panel-title button {
-    flex: 0 0 auto;
-    min-height: 34px;
+    justify-content: center;
     border: 1px solid rgba(148, 163, 184, 0.24);
     border-radius: 8px;
-    background: rgba(15, 23, 42, 0.72);
-    color: rgba(224, 242, 254, 0.84);
-    font-size: 12px;
-    font-weight: 800;
-    padding: 0 12px;
+    background: rgba(8, 16, 32, 0.72);
+    color: rgba(224, 242, 254, 0.88);
+  }
+
+  .wenyou-panel-close svg {
+    width: 18px;
+    height: 18px;
   }
 
   .wenyou-panel-body {
