@@ -1821,9 +1821,11 @@
 
   .wenyou-game-top {
     align-items: flex-start;
+    position: relative;
+    z-index: 5;
   }
 
-  .wenyou-game-top div {
+  .wenyou-game-top > div:not(.wenyou-game-menu-wrap) {
     flex: 1;
   }
 
@@ -1848,6 +1850,99 @@
     color: #86efac;
     font-size: 11px;
     font-weight: 800;
+  }
+
+  .wenyou-game-menu-wrap {
+    position: relative;
+    flex: 0 0 auto;
+  }
+
+  .wenyou-game-top .wenyou-game-menu-trigger {
+    width: 42px;
+    min-width: 42px;
+    color: #b8f7ff;
+  }
+
+  .wenyou-game-menu-trigger.active {
+    border-color: rgba(251, 191, 36, 0.45);
+    background: rgba(39, 27, 8, 0.82);
+    color: #fde68a;
+  }
+
+  .wenyou-game-menu {
+    position: absolute;
+    top: 50px;
+    right: 0;
+    z-index: 9;
+    display: grid;
+    width: min(68vw, 232px);
+    gap: 8px;
+    border: 1px solid rgba(34, 211, 238, 0.28);
+    border-radius: 8px;
+    background:
+      linear-gradient(135deg, rgba(10, 18, 38, 0.98), rgba(6, 9, 20, 0.98)),
+      rgba(3, 7, 18, 0.98);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    padding: 12px;
+  }
+
+  .wenyou-game-menu-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 7;
+  }
+
+  .wenyou-game-menu::before {
+    content: "";
+    position: absolute;
+    top: -6px;
+    right: 14px;
+    width: 10px;
+    height: 10px;
+    border-top: 1px solid rgba(34, 211, 238, 0.28);
+    border-left: 1px solid rgba(34, 211, 238, 0.28);
+    background: rgba(10, 18, 38, 0.98);
+    transform: rotate(45deg);
+  }
+
+  .wenyou-game-menu-section {
+    display: grid;
+    gap: 8px;
+  }
+
+  .wenyou-game-menu-section > span {
+    color: rgba(148, 163, 184, 0.86);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.18em;
+  }
+
+  .wenyou-game-menu-section > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .wenyou-game-top .wenyou-game-menu button {
+    display: inline-flex;
+    width: auto;
+    min-width: 0;
+    min-height: 34px;
+    height: auto;
+    flex: 0 1 auto;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(34, 211, 238, 0.22);
+    border-radius: 7px;
+    background: rgba(8, 16, 32, 0.78);
+    color: rgba(228, 248, 255, 0.9);
+    font-size: 12px;
+    font-weight: 900;
+    padding: 0 9px;
+  }
+
+  .wenyou-game-top .wenyou-game-menu button:disabled {
+    opacity: 0.48;
   }
 
   .wenyou-feed {
@@ -1932,6 +2027,41 @@
     display: grid;
     gap: 10px;
     padding: 10px;
+  }
+
+  .wenyou-quick-decision-menu {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 7px;
+    border: 1px solid rgba(34, 211, 238, 0.16);
+    border-radius: 8px;
+    background: rgba(3, 7, 18, 0.62);
+    padding: 7px;
+  }
+
+  .wenyou-quick-decision-menu button {
+    min-height: 34px;
+    border: 1px solid rgba(34, 211, 238, 0.2);
+    border-radius: 7px;
+    background: rgba(8, 16, 32, 0.76);
+    color: rgba(228, 248, 255, 0.9);
+    font-size: 12px;
+    font-weight: 900;
+    padding: 0 4px;
+  }
+
+  .wenyou-quick-decision-menu button span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .wenyou-quick-decision-menu button.warning {
+    grid-column: 1 / -1;
+    border-color: rgba(251, 191, 36, 0.34);
+    background: rgba(39, 27, 8, 0.64);
+    color: #fde68a;
   }
 
   .wenyou-panel-shortcuts,
@@ -2146,12 +2276,22 @@
   }
 
   .wenyou-input-row {
-    grid-template-columns: minmax(0, 1fr) 42px;
+    grid-template-columns: 42px minmax(0, 1fr) 42px;
     align-items: center;
     border: 1px solid rgba(34, 211, 238, 0.2);
     border-radius: 8px;
     background: rgba(4, 9, 22, 0.72);
     padding: 7px;
+  }
+
+  .wenyou-input-row .wenyou-input-tool {
+    color: #c4b5fd;
+  }
+
+  .wenyou-input-row .wenyou-input-tool.active {
+    border-color: rgba(196, 181, 253, 0.42);
+    background: rgba(49, 32, 96, 0.72);
+    color: #ede9fe;
   }
 
   .wenyou-archive-card.active {
@@ -2754,6 +2894,9 @@
   .wenyou-panel-row,
   .wenyou-inventory-row,
   .wenyou-clue-row,
+  .wenyou-task-row,
+  .wenyou-marker-row,
+  .wenyou-history-row,
   .wenyou-stat-card {
     border: 1px solid rgba(34, 211, 238, 0.18);
     border-radius: 8px;
@@ -2768,14 +2911,64 @@
     letter-spacing: 0.08em;
   }
 
+  .wenyou-panel-subtitle {
+    margin-top: 4px;
+    color: rgba(103, 232, 249, 0.82);
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+  }
+
   .wenyou-panel-row strong,
-  .wenyou-clue-row {
+  .wenyou-clue-row,
+  .wenyou-task-row,
+  .wenyou-marker-row,
+  .wenyou-history-row {
     display: block;
     margin-top: 5px;
     color: rgba(224, 242, 254, 0.88);
     font-size: 13px;
     line-height: 1.55;
     overflow-wrap: anywhere;
+  }
+
+  .wenyou-clue-row strong,
+  .wenyou-task-row strong,
+  .wenyou-marker-row strong {
+    display: block;
+    color: #e0f2fe;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .wenyou-clue-row span,
+  .wenyou-task-row span,
+  .wenyou-marker-row span,
+  .wenyou-history-row span {
+    display: block;
+    margin-top: 4px;
+    color: rgba(148, 163, 184, 0.86);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .wenyou-clue-row p,
+  .wenyou-marker-row p,
+  .wenyou-history-row p {
+    margin: 6px 0 0;
+    color: rgba(224, 242, 254, 0.84);
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+  }
+
+  .wenyou-clue-row small,
+  .wenyou-task-row small {
+    display: block;
+    margin-top: 6px;
+    color: rgba(180, 216, 230, 0.72);
+    font-size: 11px;
+    line-height: 1.45;
   }
 
   .wenyou-inventory-row {
@@ -2786,10 +2979,19 @@
   }
 
   .wenyou-inventory-row span {
+    display: grid;
+    gap: 4px;
     color: #e0f2fe;
     font-size: 13px;
     font-weight: 800;
     overflow-wrap: anywhere;
+  }
+
+  .wenyou-inventory-row small {
+    color: rgba(180, 216, 230, 0.72);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.4;
   }
 
   .wenyou-inventory-row button {

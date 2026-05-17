@@ -4,6 +4,7 @@ import { useToast } from "../toast";
 
 type WenyouView = "home" | "selection" | "game" | "archive" | "shop" | "rift";
 type WenyouInitialView = WenyouView | "archives" | "hub";
+type WenyouPanelView = "任务线索" | "地点" | "任务者" | "怪物" | "背包" | "状态" | "历史";
 
 type WenyouArchiveItem = {
   gameId?: string;
@@ -66,11 +67,16 @@ type WenyouInventoryItem = {
   kind?: string;
   category?: string;
   rarity?: string;
+  effect?: string;
   desc?: string;
   quantity?: number;
+  uses_left?: number;
+  durability?: number;
+  durability_max?: number;
   sigil?: string;
   sealed?: boolean;
   sealed_reason?: string;
+  source?: string;
 };
 
 type WenyouShopView = {
@@ -117,15 +123,89 @@ type WenyouPlayerStats = {
   hp_max?: number;
   san?: number;
   san_max?: number;
+  spi_current?: number;
+  spi_max?: number;
   level?: number;
   rank?: string;
   exp?: number;
+  str?: number;
+  con?: number;
+  agi?: number;
+  int?: number;
+  spi?: number;
+  luk?: number;
   vit?: number;
   wis?: number;
+  evolution?: string;
   bloodline?: string;
   abilities?: Array<{ name?: string; desc?: string }>;
+  gear?: Array<string | { name?: string; slot?: string; desc?: string }>;
+  equipment?: Array<string | { name?: string; slot?: string; desc?: string }>;
   weapons?: string[];
   conditions?: string[];
+};
+
+type WenyouTaskPanelItem = string | {
+  id?: string;
+  title?: string;
+  current?: string;
+  goal?: string;
+  type?: string;
+  status?: string;
+  progress?: { current?: number; target?: number; mode?: string; text?: string } | string;
+  required_clues?: string[];
+  related_clues?: string[];
+  fail_forward?: string;
+  reward_tags?: string[];
+};
+
+type WenyouCluePanelItem = string | {
+  id?: string;
+  title?: string;
+  status?: string;
+  verified?: boolean;
+  source?: string;
+  public_text?: string;
+  text?: string;
+  related_tasks?: string[];
+  leads_to?: string[];
+  tags?: string[];
+};
+
+type WenyouPublicMarker = string | {
+  id?: string;
+  name?: string;
+  title?: string;
+  status?: string;
+  public_status?: string;
+  public_text?: string;
+  desc?: string;
+  blurb?: string;
+  danger?: string;
+  last_location?: string;
+  attitude?: string;
+  weakness?: string;
+  type?: string;
+};
+
+type WenyouPublicState = {
+  scene_summary?: string;
+  visible_rules?: string[];
+  public_tasks?: WenyouTaskPanelItem[];
+  discovered_clues?: WenyouCluePanelItem[];
+  known_locations?: WenyouPublicMarker[];
+  visible_npcs?: WenyouPublicMarker[];
+  visible_monsters?: WenyouPublicMarker[];
+  public_threat?: string;
+  last_rules_result?: string;
+};
+
+type WenyouRulesState = {
+  players?: Record<string, WenyouPlayerStats>;
+  inventory?: WenyouInventoryItem[];
+  equipment?: Array<string | Record<string, unknown>>;
+  threat_clocks?: Array<Record<string, unknown>>;
+  last_state_patch?: Record<string, unknown> | null;
 };
 
 type WenyouSessionPanel = {
@@ -160,9 +240,20 @@ type WenyouSessionPanel = {
     inventory?: WenyouInventoryItem[];
   };
   wallet?: { points?: number; debts?: number; total_exp?: number } | null;
+  growth?: Record<string, unknown> | null;
   settlement?: Record<string, unknown> | null;
   inventory?: WenyouInventoryItem[];
   clues?: string[];
+  public_state?: WenyouPublicState;
+  public_view?: WenyouPublicState;
+  rules_state?: WenyouRulesState;
+  runtime_state?: {
+    public_state?: WenyouPublicState;
+    rules_state?: WenyouRulesState;
+    last_state_patch?: Record<string, unknown> | null;
+  };
+  clocks?: Array<Record<string, unknown>>;
+  last_state_patch?: Record<string, unknown> | null;
   history?: Array<{ role?: string; content?: string; timestamp?: string }>;
 };
 
@@ -340,6 +431,9 @@ function Icon({ name }: { name: string }) {
   if (name === "list") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>;
   }
+  if (name === "plus") {
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>;
+  }
   if (name === "shuffle") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5" /></svg>;
   }
@@ -396,6 +490,78 @@ function inventoryItemLabel(item: WenyouInventoryItem | string): string {
 function inventoryItemKey(item: WenyouInventoryItem | string, index: number): string {
   if (typeof item === "string") return `${item}-${index}`;
   return String(item.uid || item.id || item.name || index);
+}
+
+function compactPanelText(value: unknown, fallback = ""): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim() || fallback;
+  }
+  return fallback;
+}
+
+function panelListText(items?: unknown[], fallback = "无"): string {
+  if (!Array.isArray(items) || !items.length) return fallback;
+  const out = items.map((item) => compactPanelText(item)).filter(Boolean);
+  return out.length ? out.join("、") : fallback;
+}
+
+function getSessionPublicState(session: WenyouSessionPanel | null): WenyouPublicState {
+  return session?.public_state || session?.public_view || session?.runtime_state?.public_state || {};
+}
+
+function getSessionRulesState(session: WenyouSessionPanel | null): WenyouRulesState {
+  return session?.rules_state || session?.runtime_state?.rules_state || {};
+}
+
+function taskTitle(item: WenyouTaskPanelItem): string {
+  if (typeof item === "string") return item;
+  return compactPanelText(item.title || item.current || item.goal || item.id, "未命名任务");
+}
+
+function taskMeta(item: WenyouTaskPanelItem): string {
+  if (typeof item === "string") return "active";
+  const chunks = [item.type, item.status].map((it) => compactPanelText(it)).filter(Boolean);
+  const progress = item.progress;
+  if (typeof progress === "string" && progress.trim()) chunks.push(progress.trim());
+  if (progress && typeof progress === "object") {
+    if (progress.text) chunks.push(compactPanelText(progress.text));
+    else if (progress.target) chunks.push(`${progress.current ?? 0}/${progress.target}${progress.mode ? ` ${progress.mode}` : ""}`);
+  }
+  return chunks.join(" · ") || "active";
+}
+
+function clueTitle(item: WenyouCluePanelItem): string {
+  if (typeof item === "string") return item.slice(0, 42);
+  return compactPanelText(item.title || item.public_text || item.text || item.id, "未命名线索");
+}
+
+function clueText(item: WenyouCluePanelItem): string {
+  if (typeof item === "string") return item;
+  return compactPanelText(item.public_text || item.text || item.source || item.id, "");
+}
+
+function markerTitle(item: WenyouPublicMarker): string {
+  if (typeof item === "string") return item.slice(0, 42);
+  return compactPanelText(item.name || item.title || item.id, "未命名记录");
+}
+
+function markerText(item: WenyouPublicMarker): string {
+  if (typeof item === "string") return item;
+  return compactPanelText(item.public_text || item.desc || item.blurb || item.status || item.public_status, "");
+}
+
+function markerMeta(item: WenyouPublicMarker): string {
+  if (typeof item === "string") return "";
+  return [item.type, item.status || item.public_status, item.danger, item.last_location, item.attitude, item.weakness]
+    .map((it) => compactPanelText(it))
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function gearLabel(item: string | { name?: string; slot?: string; desc?: string }): string {
+  if (typeof item === "string") return item;
+  return [item.name, item.slot].map((it) => compactPanelText(it)).filter(Boolean).join(" · ") || "未命名装备";
 }
 
 function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): RiftPullResult {
@@ -535,7 +701,9 @@ export function WenyouTab({
   const [riftLoading, setRiftLoading] = useState(false);
   const riftPullTokenRef = useRef(0);
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
-  const [panelView, setPanelView] = useState<"任务" | "背包" | "状态" | "线索" | null>(null);
+  const [panelView, setPanelView] = useState<WenyouPanelView | null>(null);
+  const [gameMenuOpen, setGameMenuOpen] = useState(false);
+  const [quickDecisionOpen, setQuickDecisionOpen] = useState(false);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
   const [activeScene, setActiveScene] = useState<EntryScene | null>(null);
   const [typeFilter, setTypeFilter] = useState("全部类型");
@@ -588,6 +756,14 @@ export function WenyouTab({
       setPanelView(null);
       return true;
     }
+    if (gameMenuOpen) {
+      setGameMenuOpen(false);
+      return true;
+    }
+    if (quickDecisionOpen) {
+      setQuickDecisionOpen(false);
+      return true;
+    }
     if (settlementDraftOpen) {
       setSettlementDraftOpen(false);
       return true;
@@ -612,10 +788,14 @@ export function WenyouTab({
       return true;
     }
     return false;
-  }, [normalizedInitialView, panelView, randomOpen, riftOverlay, settlementDraftOpen]);
+  }, [gameMenuOpen, normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen]);
 
   useEffect(() => {
     viewRef.current = view;
+    if (view !== "game") {
+      setGameMenuOpen(false);
+      setQuickDecisionOpen(false);
+    }
   }, [view]);
 
   useEffect(() => {
@@ -798,6 +978,7 @@ export function WenyouTab({
     genre: status.session?.instance_genre || "规则怪谈",
     difficulty: status.session?.difficulty || "普通",
   };
+  const hasActiveRun = !!(status.active || activeScene);
   const riftPointRaw = shop?.points ?? sessionPanel?.wallet?.points;
   const riftPoints = riftPointPreview ?? Number(riftPointRaw ?? 0);
 
@@ -927,6 +1108,8 @@ export function WenyouTab({
   async function submitAction() {
     const text = actionText.trim();
     if (!text) return;
+    setGameMenuOpen(false);
+    setQuickDecisionOpen(false);
     setActing(true);
     try {
       const j = await apiJson<{ ok?: boolean; text?: string; du_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/action", {
@@ -998,6 +1181,8 @@ export function WenyouTab({
   }
 
   async function openSettlementDraft() {
+    setGameMenuOpen(false);
+    setQuickDecisionOpen(false);
     await loadSettlementPreview();
   }
 
@@ -1053,9 +1238,31 @@ export function WenyouTab({
     }
   }
 
-  function showPlaceholder(name: string) {
-    setPanelView(name as "任务" | "背包" | "状态" | "线索");
+  function showPlaceholder(name: WenyouPanelView) {
+    setGameMenuOpen(false);
+    setPanelView(name);
     loadSessionPanel();
+  }
+
+  function selectQuickAction(text: string) {
+    setActionText(text);
+    setGameMenuOpen(false);
+    setQuickDecisionOpen(false);
+    window.setTimeout(() => actionInputRef.current?.focus(), 0);
+  }
+
+  function handleQuickAction(item: (typeof QUICK_ACTIONS)[number]) {
+    if (item.label === "移动") {
+      showPlaceholder("地点");
+      setQuickDecisionOpen(false);
+      return;
+    }
+    if (item.label === "使用") {
+      showPlaceholder("背包");
+      setQuickDecisionOpen(false);
+      return;
+    }
+    selectQuickAction(item.text);
   }
 
   function useInventoryItem(item: WenyouInventoryItem | string) {
@@ -1063,6 +1270,8 @@ export function WenyouTab({
     const next = `使用道具【${name}】：`;
     setActionText(next);
     setPanelView(null);
+    setGameMenuOpen(false);
+    setQuickDecisionOpen(false);
     toast("已填入行动，发送后才结算本轮");
     window.setTimeout(() => actionInputRef.current?.focus(), 0);
   }
@@ -1207,9 +1416,11 @@ export function WenyouTab({
               <button className="wenyou-icon-btn wenyou-icon-btn-rift" onClick={() => pushView("rift")} aria-label="命运裂隙">
                 <Icon name="rift" />
               </button>
-              <button className="wenyou-icon-btn" onClick={() => pushView("shop")} aria-label="系统商店">
-                <Icon name="shop" />
-              </button>
+              {!hasActiveRun ? (
+                <button className="wenyou-icon-btn" onClick={() => pushView("shop")} aria-label="系统商店">
+                  <Icon name="shop" />
+                </button>
+              ) : null}
               <button className="wenyou-icon-btn" onClick={() => pushView("archive")} aria-label="历史存档">
                 <Icon name="archive" />
               </button>
@@ -1310,7 +1521,7 @@ export function WenyouTab({
               <h1>命运裂隙</h1>
               <p>FATE RIFT // MIXED POOL</p>
             </div>
-            <button onClick={() => pushView("shop")} aria-label="系统商店"><Icon name="shop" /></button>
+            <span aria-hidden="true" />
           </div>
 
           <main className="wenyou-rift-main">
@@ -1414,7 +1625,42 @@ export function WenyouTab({
               <h2>{currentScene.name}</h2>
               <p><span />阶段: {sessionPanel?.phase_label || status.session?.phase_label || (status.active ? "进行中" : "模拟预览")}</p>
             </div>
-            <button onClick={() => showPlaceholder("状态")}>VIT</button>
+            <div className="wenyou-game-menu-wrap">
+              <button
+                className={`wenyou-game-menu-trigger ${gameMenuOpen ? "active" : ""}`}
+                onClick={() => {
+                  setQuickDecisionOpen(false);
+                  setGameMenuOpen((open) => !open);
+                }}
+                aria-label="打开局内菜单"
+                aria-expanded={gameMenuOpen}
+              >
+                <Icon name="list" />
+              </button>
+              {gameMenuOpen ? (
+                <>
+                  <div className="wenyou-game-menu-scrim" onClick={() => setGameMenuOpen(false)} />
+                  <div className="wenyou-game-menu" role="menu">
+                    <div className="wenyou-game-menu-section">
+                      <span>运行态</span>
+                      <div>
+                        {(["任务线索", "地点", "任务者", "怪物"] as WenyouPanelView[]).map((item) => (
+                          <button key={item} onClick={() => showPlaceholder(item)} role="menuitem">{item}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="wenyou-game-menu-section">
+                      <span>玩家</span>
+                      <div>
+                        {(["背包", "状态", "历史"] as WenyouPanelView[]).map((item) => (
+                          <button key={item} onClick={() => showPlaceholder(item)} role="menuitem">{item}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
           </div>
 
           <div className="wenyou-feed">
@@ -1429,18 +1675,6 @@ export function WenyouTab({
           </div>
 
           <div className="wenyou-command">
-            <div className="wenyou-panel-shortcuts">
-              {["任务", "背包", "状态", "线索"].map((item) => (
-                <button key={item} onClick={() => showPlaceholder(item)}>{item}</button>
-              ))}
-            </div>
-            <div className="wenyou-quick-actions">
-              {QUICK_ACTIONS.map((item) => (
-                <button key={item.label} onClick={() => setActionText(item.text)}>
-                  <span>{item.label}</span>
-                </button>
-              ))}
-            </div>
             {sessionPanel?.phase === "settlement" && sessionPanel.settlement ? (
               <SettlementGranted settlement={sessionPanel.settlement} />
             ) : null}
@@ -1456,17 +1690,33 @@ export function WenyouTab({
                 onConfirm={enterSettlement}
               />
             ) : null}
-            <div className="wenyou-settlement-actions">
-              {sessionPanel?.phase === "settlement" ? (
-                <>
-                  <button onClick={() => pushView("shop")} disabled={settlementLoading}>系统商店</button>
-                  <button onClick={archiveSettlement} disabled={settlementLoading}>{settlementLoading ? "归档中..." : "归档本局"}</button>
-                </>
-              ) : (
-                <button onClick={openSettlementDraft} disabled={acting || settlementLoading}>{settlementLoading ? "结算校准中..." : "申请结算"}</button>
-              )}
-            </div>
+            {quickDecisionOpen ? (
+              <div className="wenyou-quick-decision-menu">
+                {QUICK_ACTIONS.map((item) => (
+                  <button key={item.label} onClick={() => handleQuickAction(item)}>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+                {sessionPanel?.phase !== "settlement" ? (
+                  <button className="warning" onClick={openSettlementDraft} disabled={acting || settlementLoading}>
+                    <span>{settlementLoading ? "结算校准中..." : "申请结算"}</span>
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <div className="wenyou-input-row">
+              <button
+                className={`wenyou-input-tool ${quickDecisionOpen ? "active" : ""}`}
+                onClick={() => {
+                  setGameMenuOpen(false);
+                  setQuickDecisionOpen((open) => !open);
+                }}
+                aria-label="快捷决策"
+                aria-expanded={quickDecisionOpen}
+                disabled={acting}
+              >
+                <Icon name="plus" />
+              </button>
               <input ref={actionInputRef} value={actionText} onChange={(e) => setActionText(e.target.value)} placeholder={acting ? "主神演算中..." : "输入你的行动..."} disabled={acting} onKeyDown={(e) => { if (e.key === "Enter") submitAction(); }} />
               <button onClick={submitAction} aria-label="发送行动" disabled={acting}><Icon name="send" /></button>
             </div>
@@ -2033,16 +2283,39 @@ function PanelModal({
   onClose,
   onUseItem,
 }: {
-  view: "任务" | "背包" | "状态" | "线索";
+  view: WenyouPanelView;
   session: WenyouSessionPanel | null;
   acting: boolean;
   onClose: () => void;
   onUseItem: (item: WenyouInventoryItem | string) => void;
 }) {
   const stats = session?.stats || {};
-  const inventory = session?.inventory || stats.inventory || [];
-  const clues = session?.clues || [];
+  const publicState = getSessionPublicState(session);
+  const rulesState = getSessionRulesState(session);
+  const inventory = rulesState.inventory || session?.inventory || stats.inventory || [];
+  const tasks = publicState.public_tasks?.length
+    ? publicState.public_tasks
+    : session?.task?.current
+      ? [{
+          id: "main_task",
+          title: session.task.current,
+          type: "main",
+          status: session.phase === "settlement" ? "completed" : "active",
+          fail_forward: session.task.failure_hint,
+          reward_tags: session.task.reward_hint ? [session.task.reward_hint] : [],
+        }]
+      : [];
+  const clues = publicState.discovered_clues?.length
+    ? publicState.discovered_clues
+    : (session?.clues || []).map((item) => ({ title: item, public_text: item, status: "discovered" }));
+  const locations = publicState.known_locations || [];
+  const npcs = publicState.visible_npcs || [];
+  const monsters = publicState.visible_monsters || [];
+  const history = session?.history || [];
   const task = session?.task || {};
+  const framework = session?.framework || {};
+  const taskerTotal = Number(framework.tasker_total || 0);
+  const playerCount = Number(framework.player_count || 0);
   return (
     <div className="wenyou-modal">
       <button className="wenyou-modal-backdrop" onClick={onClose} aria-label="关闭面板" />
@@ -2055,12 +2328,49 @@ function PanelModal({
 
         {!session ? <div className="wenyou-empty">当前没有进行中的副本。</div> : null}
 
-        {session && view === "任务" ? (
+        {session && view === "任务线索" ? (
           <div className="wenyou-panel-body">
-            <PanelRow label="当前阶段" value={task.phase || "副本"} />
-            <PanelRow label="主神任务" value={task.current || "暂无任务同步"} />
-            <PanelRow label="失败倾向" value={task.failure_hint || "未知"} />
-            <PanelRow label="通关回报" value={task.reward_hint || "未知"} />
+            <PanelRow label="当前阶段" value={task.phase || session.phase_label || "副本"} />
+            {publicState.scene_summary ? <PanelRow label="当前场景" value={publicState.scene_summary} /> : null}
+            {publicState.public_threat ? <PanelRow label="危险程度" value={publicState.public_threat} /> : null}
+            {publicState.visible_rules?.length ? <PanelRow label="公开规则" value={publicState.visible_rules.join("；")} /> : null}
+            <div className="wenyou-panel-subtitle">任务</div>
+            {tasks.length ? tasks.map((item, index) => (
+              <TaskPanelCard item={item} key={`${taskTitle(item)}-${index}`} />
+            )) : <div className="wenyou-empty">暂无任务同步。</div>}
+            <div className="wenyou-panel-subtitle">线索备忘</div>
+            {clues.length ? clues.map((item, index) => (
+              <CluePanelCard item={item} key={`${clueTitle(item)}-${index}`} />
+            )) : <div className="wenyou-empty">暂无线索备忘。</div>}
+          </div>
+        ) : null}
+
+        {session && view === "地点" ? (
+          <div className="wenyou-panel-body">
+            <PanelRow label="危险程度" value={publicState.public_threat || "平稳"} />
+            {locations.length ? locations.map((item, index) => (
+              <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
+            )) : <div className="wenyou-empty">暂无地点缓存。继续探索后会在这里更新。</div>}
+          </div>
+        ) : null}
+
+        {session && view === "任务者" ? (
+          <div className="wenyou-panel-body">
+            <PanelRow label="任务者编制" value={taskerTotal ? `共 ${taskerTotal} 人：玩家 ${playerCount || 2} + NPC ${Math.max(0, taskerTotal - (playerCount || 2))}` : "未同步"} />
+            <PlayerStatCard title="玩家一" player={stats.player1} compact />
+            <PlayerStatCard title="玩家二 · 渡" player={stats.player2} compact />
+            <div className="wenyou-panel-subtitle">NPC 任务者</div>
+            {npcs.length ? npcs.map((item, index) => (
+              <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
+            )) : <div className="wenyou-empty">暂无公开 NPC 记录。</div>}
+          </div>
+        ) : null}
+
+        {session && view === "怪物" ? (
+          <div className="wenyou-panel-body">
+            {monsters.length ? monsters.map((item, index) => (
+              <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
+            )) : <div className="wenyou-empty">暂无可见怪物。Boss 与怪物暗线仍按副本缓存推进。</div>}
           </div>
         ) : null}
 
@@ -2068,7 +2378,15 @@ function PanelModal({
           <div className="wenyou-panel-body">
             {inventory.length ? inventory.map((item, index) => (
               <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
-                <span>{inventoryItemLabel(item)}</span>
+                <span>
+                  {inventoryItemLabel(item)}
+                  {typeof item !== "string" ? (
+                    <small>
+                      {[item.rarity, item.category || item.kind, item.uses_left !== undefined ? `次数 ${item.uses_left}` : "", item.durability !== undefined ? `耐久 ${item.durability}/${item.durability_max ?? "?"}` : ""].filter(Boolean).join(" · ")}
+                      {item.desc || item.effect ? `｜${item.desc || item.effect}` : ""}
+                    </small>
+                  ) : null}
+                </span>
                 <button onClick={() => onUseItem(item)} disabled={acting}>{acting ? "演算中" : "填入"}</button>
               </div>
             )) : <div className="wenyou-empty">背包为空。</div>}
@@ -2077,19 +2395,21 @@ function PanelModal({
 
         {session && view === "状态" ? (
           <div className="wenyou-panel-body">
-            <PanelRow label="主神积分" value={String(stats.points ?? 0)} />
+            <PanelRow label="主神积分" value={String(stats.points ?? session.wallet?.points ?? 0)} />
+            {session.wallet?.debts ? <PanelRow label="主神债务" value={String(session.wallet.debts)} /> : null}
             <PlayerStatCard title="玩家一" player={stats.player1} />
             <PlayerStatCard title="玩家二 · 渡" player={stats.player2} />
           </div>
         ) : null}
 
-        {session && view === "线索" ? (
+        {session && view === "历史" ? (
           <div className="wenyou-panel-body">
-            {clues.length ? clues.map((item, index) => (
-              <div className="wenyou-clue-row" key={`${item}-${index}`}>{item}</div>
-            )) : <div className="wenyou-empty">暂无线索备忘。</div>}
+            {history.length ? history.slice(-12).reverse().map((item, index) => (
+              <HistoryPanelRow item={item} key={`${item.timestamp || index}-${index}`} />
+            )) : <div className="wenyou-empty">暂无行动历史。</div>}
           </div>
         ) : null}
+
       </div>
     </div>
   );
@@ -2104,21 +2424,85 @@ function PanelRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PlayerStatCard({ title, player }: { title: string; player?: WenyouPlayerStats }) {
+function TaskPanelCard({ item }: { item: WenyouTaskPanelItem }) {
+  const title = taskTitle(item);
+  const meta = taskMeta(item);
+  const failForward = typeof item === "string" ? "" : compactPanelText(item.fail_forward);
+  const required = typeof item === "string" ? [] : item.required_clues || item.related_clues || [];
+  return (
+    <div className="wenyou-task-row">
+      <strong>{title}</strong>
+      <span>{meta}</span>
+      {required.length ? <small>关联线索：{required.join("、")}</small> : null}
+      {failForward ? <small>失败推进：{failForward}</small> : null}
+    </div>
+  );
+}
+
+function CluePanelCard({ item }: { item: WenyouCluePanelItem }) {
+  const title = clueTitle(item);
+  const text = clueText(item);
+  const meta = typeof item === "string"
+    ? "discovered"
+    : [item.status, item.verified ? "已验证" : "", item.source].map((it) => compactPanelText(it)).filter(Boolean).join(" · ");
+  const related = typeof item === "string" ? [] : item.related_tasks || item.leads_to || [];
+  return (
+    <div className="wenyou-clue-row">
+      <strong>{title}</strong>
+      {meta ? <span>{meta}</span> : null}
+      {text && text !== title ? <p>{text}</p> : null}
+      {related.length ? <small>关联：{related.join("、")}</small> : null}
+    </div>
+  );
+}
+
+function MarkerPanelCard({ item }: { item: WenyouPublicMarker }) {
+  const title = markerTitle(item);
+  const text = markerText(item);
+  const meta = markerMeta(item);
+  return (
+    <div className="wenyou-marker-row">
+      <strong>{title}</strong>
+      {meta ? <span>{meta}</span> : null}
+      {text && text !== title ? <p>{text}</p> : null}
+    </div>
+  );
+}
+
+function HistoryPanelRow({ item }: { item: { role?: string; content?: string; timestamp?: string } }) {
+  const roleMap: Record<string, string> = { gm: "GM", player1: "玩家一", player2: "渡", system: "系统" };
+  const role = roleMap[String(item.role || "")] || String(item.role || "记录");
+  return (
+    <div className="wenyou-history-row">
+      <span>{role}{item.timestamp ? ` · ${item.timestamp}` : ""}</span>
+      <p>{String(item.content || "").trim()}</p>
+    </div>
+  );
+}
+
+function PlayerStatCard({ title, player, compact = false }: { title: string; player?: WenyouPlayerStats; compact?: boolean }) {
   const p = player || {};
   const abilities = p.abilities || [];
+  const gear = p.gear || p.equipment || p.weapons || [];
   return (
     <div className="wenyou-stat-card">
       <h3>{title}</h3>
       <div className="wenyou-stat-grid">
         <span>HP {p.hp ?? 0}/{p.hp_max ?? 0}</span>
         <span>SAN {p.san ?? 0}/{p.san_max ?? 0}</span>
+        <span>精神力 {p.spi_current ?? 0}/{p.spi_max ?? p.spi ?? 0}</span>
         <span>Lv{p.level ?? 1} · {p.rank || "D"}阶 · EXP {p.exp ?? 0}</span>
-        <span>体 {p.vit ?? 0} / 智 {p.wis ?? 0}</span>
+        <span>力 {p.str ?? 0} / 体 {p.con ?? p.vit ?? 0} / 敏 {p.agi ?? 0}</span>
+        <span>智 {p.int ?? p.wis ?? 0} / 精 {p.spi ?? 0} / 运 {p.luk ?? 0}</span>
       </div>
-      <p>血统：{p.bloodline || "凡人"}</p>
-      <p>能力：{abilities.length ? abilities.map((it) => it.name).filter(Boolean).join("、") : "无"}</p>
-      <p>状态：{p.conditions?.length ? p.conditions.join("、") : "无"}</p>
+      {compact ? null : (
+        <>
+          <p>进化：{p.evolution || p.bloodline || "凡人"}</p>
+          <p>能力：{abilities.length ? abilities.map((it) => it.name).filter(Boolean).join("、") : "无"}</p>
+          <p>装备：{gear.length ? gear.map(gearLabel).join("、") : "无"}</p>
+          <p>状态：{p.conditions?.length ? p.conditions.join("、") : "无"}</p>
+        </>
+      )}
     </div>
   );
 }
