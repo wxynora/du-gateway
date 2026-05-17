@@ -161,6 +161,9 @@ logger = get_logger(__name__)
 WINDOW_ID_DEFAULT = "__default__"
 # 历史 bug：空 window_id 时主存写在 windows//conversation.json（prefix 为 "windows/"）
 LEGACY_EMPTY_CONVERSATION_KEY = "windows//conversation.json"
+CONVERSATION_COMPACT_SCHEMA_VERSION = 2
+CONVERSATION_RECENT_MAX_ROUNDS = 120
+_conversation_write_lock = threading.Lock()
 
 
 def normalize_window_id(window_id: str) -> str:
@@ -171,6 +174,130 @@ def normalize_window_id(window_id: str) -> str:
 
 def _prefix(window_id: str) -> str:
     return f"windows/{normalize_window_id(window_id)}"
+
+
+def _conversation_meta_key(window_id: str) -> str:
+    return _get_key(_prefix(window_id), "conversation_meta.json")
+
+
+def _conversation_recent_key(window_id: str) -> str:
+    return _get_key(_prefix(window_id), "recent_rounds.json")
+
+
+def _conversation_round_key(window_id: str, round_index: int) -> str:
+    return _get_key(_prefix(window_id), f"rounds/{int(round_index):06d}.json")
+
+
+def _round_index_value(round_entry: dict) -> int:
+    try:
+        return int((round_entry or {}).get("index") or 0)
+    except Exception:
+        return 0
+
+
+def _sort_rounds(rounds: list[dict]) -> list[dict]:
+    return sorted(
+        [r for r in (rounds or []) if isinstance(r, dict)],
+        key=lambda r: (_round_index_value(r), str(r.get("timestamp") or "")),
+    )
+
+
+def _latest_rounds(rounds: list[dict], limit: int) -> list[dict]:
+    try:
+        n = int(limit or 0)
+    except Exception:
+        n = 0
+    if n <= 0:
+        return []
+    return _sort_rounds(rounds)[-n:]
+
+
+def _read_conversation_meta(client, window_id: str) -> dict:
+    data = _read_json(client, _conversation_meta_key(window_id))
+    return data if isinstance(data, dict) else {}
+
+
+def _read_recent_rounds(client, window_id: str) -> list[dict]:
+    data = _read_json(client, _conversation_recent_key(window_id))
+    rounds = data.get("rounds") if isinstance(data, dict) else []
+    return _sort_rounds(rounds if isinstance(rounds, list) else [])
+
+
+def _write_compact_conversation_state_from_rounds(
+    client,
+    window_id: str,
+    rounds: list[dict],
+    *,
+    write_recent_round_files: bool = False,
+) -> dict:
+    sorted_rounds = _sort_rounds(rounds)
+    max_idx = max((_round_index_value(r) for r in sorted_rounds), default=0)
+    recent = sorted_rounds[-CONVERSATION_RECENT_MAX_ROUNDS:]
+    now = now_beijing_iso()
+    meta = {
+        "schema_version": CONVERSATION_COMPACT_SCHEMA_VERSION,
+        "window_id": normalize_window_id(window_id),
+        "last_round_index": max_idx,
+        "next_round_index": max_idx + 1 if max_idx > 0 else 1,
+        "round_count": len(sorted_rounds),
+        "recent_keep": CONVERSATION_RECENT_MAX_ROUNDS,
+        "updated_at": now,
+    }
+    recent_payload = {
+        "schema_version": CONVERSATION_COMPACT_SCHEMA_VERSION,
+        "window_id": normalize_window_id(window_id),
+        "rounds": recent,
+        "updated_at": now,
+    }
+    _write_json(client, _conversation_recent_key(window_id), recent_payload)
+    _write_json(client, _conversation_meta_key(window_id), meta)
+    if write_recent_round_files:
+        for r in recent:
+            idx = _round_index_value(r)
+            if idx > 0:
+                _write_json(client, _conversation_round_key(window_id, idx), r)
+    return meta
+
+
+def _ensure_compact_conversation_state(client, window_id: str) -> dict:
+    meta = _read_conversation_meta(client, window_id)
+    if meta:
+        return meta
+
+    # Legacy bootstrap is intentionally one-shot. After meta/recent exist, hot chat
+    # paths no longer read the growing windows/<id>/conversation.json object.
+    data = _read_conversation_data_with_legacy_migrate(window_id)
+    rounds = data.get("rounds") if isinstance(data, dict) else []
+    if not isinstance(rounds, list):
+        rounds = []
+    try:
+        meta = _write_compact_conversation_state_from_rounds(
+            client,
+            window_id,
+            rounds,
+            write_recent_round_files=False,
+        )
+    except Exception as e:
+        sorted_rounds = _sort_rounds(rounds)
+        max_idx = max((_round_index_value(r) for r in sorted_rounds), default=0)
+        meta = {
+            "schema_version": CONVERSATION_COMPACT_SCHEMA_VERSION,
+            "window_id": normalize_window_id(window_id),
+            "last_round_index": max_idx,
+            "next_round_index": max_idx + 1 if max_idx > 0 else 1,
+            "round_count": len(sorted_rounds),
+            "recent_keep": CONVERSATION_RECENT_MAX_ROUNDS,
+            "updated_at": now_beijing_iso(),
+            "bootstrap_write_failed": True,
+        }
+        logger.warning("conversation compact bootstrap 写入失败 window_id=%s error=%s", window_id, e, exc_info=True)
+    logger.info(
+        "conversation compact bootstrap window_id=%s rounds=%s last_round_index=%s",
+        window_id,
+        len(rounds),
+        meta.get("last_round_index"),
+    )
+    return meta
 
 
 def _read_conversation_data_with_legacy_migrate(window_id: str) -> dict:
@@ -263,7 +390,8 @@ def _write_json(client, key: str, data: Any):
 
 
 # ---------- 对话原文存档 ----------
-# 主存：windows/<id>/conversation.json（按窗口读最近 N 轮、总结用）
+# 热路径：windows/<id>/conversation_meta.json + recent_rounds.json + rounds/<index>.json
+# 旧主存：windows/<id>/conversation.json 只做 legacy 兼容，不再在每轮聊天里整包读写。
 # 备份：conversations/YYYY-MM-DD/window_<id>.json（按日期归档，与文档十一一致）
 
 
@@ -276,8 +404,10 @@ def _conversations_key_for_date(window_id: str, date: str) -> str:
 def append_conversation_round(window_id: str, round_index: int, messages: list, timestamp: str = "", action_note: str = "") -> bool:
     """
     追加一轮对话原文。
-    ① 写 windows/<id>/conversation.json（主存，总结/读轮用）
-    ② 写 conversations/YYYY-MM-DD/window_<id>.json（按日期备份，与文档一致）
+    ① 写 windows/<id>/rounds/<index>.json（单轮存档）
+    ② 滚动写 windows/<id>/recent_rounds.json（热路径最近 N 轮）
+    ③ 写 windows/<id>/conversation_meta.json（下一轮 index）
+    ④ 写 conversations/YYYY-MM-DD/window_<id>.json（按日期备份，与文档一致）
     """
     client = _s3_client()
     if not client:
@@ -286,26 +416,57 @@ def append_conversation_round(window_id: str, round_index: int, messages: list, 
         return False
     try:
         wid_norm = normalize_window_id(window_id)
-        prefix = _prefix(window_id)
-        key = _get_key(prefix, "conversation.json")
-        existing = _read_conversation_data_with_legacy_migrate(window_id)
-        if not existing.get("rounds"):
-            existing = {"rounds": []}
         ts = (timestamp or "").strip() or now_beijing_iso()
         round_entry = {"index": round_index, "timestamp": ts, "messages": messages}
         if str(action_note or "").strip():
             round_entry["action_note"] = str(action_note).strip()
-        existing.setdefault("rounds", []).append(round_entry)
-        _write_json(client, key, existing)
-        # 按日期备份到 conversations/（文档十一：原文存档）
-        today = today_beijing()
-        conv_key = _conversations_key_for_date(window_id, today)
-        conv_existing = _read_json(client, conv_key)
-        if conv_existing is None:
-            conv_existing = {"window_id": wid_norm, "date": today, "rounds": []}
-        conv_existing.setdefault("rounds", []).append(round_entry)
-        _write_json(client, conv_key, conv_existing)
-        logger.info("R2 已写入 对话轮次 window_id=%s round_index=%s key=%s", window_id, round_index, key)
+        with _conversation_write_lock:
+            meta = _ensure_compact_conversation_state(client, window_id)
+            round_key = _conversation_round_key(window_id, round_index)
+            _write_json(client, round_key, round_entry)
+
+            recent = _read_recent_rounds(client, window_id)
+            recent = [r for r in recent if _round_index_value(r) != int(round_index)]
+            recent.append(round_entry)
+            recent = _latest_rounds(recent, CONVERSATION_RECENT_MAX_ROUNDS)
+            now = now_beijing_iso()
+            _write_json(
+                client,
+                _conversation_recent_key(window_id),
+                {
+                    "schema_version": CONVERSATION_COMPACT_SCHEMA_VERSION,
+                    "window_id": wid_norm,
+                    "rounds": recent,
+                    "updated_at": now,
+                },
+            )
+
+            last_idx = max(int(meta.get("last_round_index") or 0), int(round_index or 0))
+            round_count = int(meta.get("round_count") or 0)
+            if int(round_index or 0) > int(meta.get("last_round_index") or 0):
+                round_count += 1
+            meta.update(
+                {
+                    "schema_version": CONVERSATION_COMPACT_SCHEMA_VERSION,
+                    "window_id": wid_norm,
+                    "last_round_index": last_idx,
+                    "next_round_index": last_idx + 1 if last_idx > 0 else 1,
+                    "round_count": max(round_count, len(recent)),
+                    "recent_keep": CONVERSATION_RECENT_MAX_ROUNDS,
+                    "updated_at": now,
+                }
+            )
+            _write_json(client, _conversation_meta_key(window_id), meta)
+
+            # 按日期备份到 conversations/（文档十一：原文存档）。日备份通常很小，保留兼容。
+            today = today_beijing()
+            conv_key = _conversations_key_for_date(window_id, today)
+            conv_existing = _read_json(client, conv_key)
+            if conv_existing is None:
+                conv_existing = {"window_id": wid_norm, "date": today, "rounds": []}
+            conv_existing.setdefault("rounds", []).append(round_entry)
+            _write_json(client, conv_key, conv_existing)
+        logger.info("R2 已写入 对话轮次 window_id=%s round_index=%s key=%s", window_id, round_index, round_key)
         return True
     except Exception as e:
         logger.error("append_conversation_round 失败 window_id=%s round_index=%s error=%s", window_id, round_index, e, exc_info=True)
@@ -323,11 +484,17 @@ def overwrite_conversation_rounds(window_id: str, rounds: list[dict]) -> bool:
         logger.warning("R2 client 未配置，跳过 overwrite_conversation_rounds window_id=%s", window_id)
         return False
     try:
-        # 仅覆盖主存 windows/<id>/conversation.json
+        # 显式覆盖仍保留 legacy 主存，方便管理端/旧脚本兜底读取。
         prefix = _prefix(window_id)
         key = _get_key(prefix, "conversation.json")
         payload = {"rounds": rounds or []}
         _write_json(client, key, payload)
+        _write_compact_conversation_state_from_rounds(
+            client,
+            window_id,
+            rounds or [],
+            write_recent_round_files=True,
+        )
         logger.info(
             "overwrite_conversation_rounds 完成 window_id=%s rounds=%s key=%s",
             window_id,
@@ -413,48 +580,82 @@ def notebook_delete_entry_by_timestamp(timestamp: str) -> bool:
 
 def get_next_round_index(window_id: str) -> int:
     """
-    根据主存全文计算下一轮应使用的 round index（从 1 起）。
-    不可用「最近 1000 轮的条数 + 1」：超过 1000 轮时该长度恒为 1000，会导致 index 卡在 1001，
-    round_index % 4 永远不为 0，实时层总结不再触发。
+    根据轻量 meta 计算下一轮应使用的 round index（从 1 起）。
+    meta 缺失时只做一次 legacy bootstrap，避免每轮读取完整 conversation.json。
     """
     client = _s3_client()
     if not client:
         return 1
-    data = _read_conversation_data_with_legacy_migrate(window_id)
-    if not data or not data.get("rounds"):
-        return 1
-    rounds = data.get("rounds") or []
-    if not isinstance(rounds, list) or not rounds:
-        return 1
-    max_idx = 0
-    for r in rounds:
-        if not isinstance(r, dict):
-            continue
-        idx = r.get("index")
-        if isinstance(idx, int) and idx > max_idx:
-            max_idx = idx
-    if max_idx == 0:
-        return len(rounds) + 1
-    return max_idx + 1
+    meta = _ensure_compact_conversation_state(client, window_id)
+    try:
+        next_idx = int(meta.get("next_round_index") or 0)
+    except Exception:
+        next_idx = 0
+    if next_idx > 0:
+        return next_idx
+    try:
+        last_idx = int(meta.get("last_round_index") or 0)
+    except Exception:
+        last_idx = 0
+    return last_idx + 1 if last_idx > 0 else 1
 
 
 def get_conversation_rounds(window_id: str, last_n: int = 4) -> list:
-    """获取该窗口最近 N 轮对话原文（只读对象尾部，避免整文件过大时一次载入全部 rounds）。"""
-    if not _s3_client():
+    """获取该窗口最近 N 轮对话原文。热路径走 recent_rounds.json，不读整包 conversation.json。"""
+    try:
+        n = int(last_n or 0)
+    except Exception:
+        n = 0
+    if n <= 0:
         return []
+    client = _s3_client()
+    if not client:
+        return []
+    meta = _ensure_compact_conversation_state(client, window_id)
+    recent = _read_recent_rounds(client, window_id)
+    if recent and n <= CONVERSATION_RECENT_MAX_ROUNDS:
+        return _latest_rounds(recent, n)
+
+    if n <= CONVERSATION_RECENT_MAX_ROUNDS:
+        try:
+            if int(meta.get("round_count") or 0) <= 0:
+                return []
+        except Exception:
+            pass
+        data = _read_conversation_data_with_legacy_migrate(window_id)
+        legacy_rounds = data.get("rounds") if isinstance(data, dict) else []
+        return _latest_rounds(legacy_rounds if isinstance(legacy_rounds, list) else [], n)
+
+    # 大范围管理视图才回退 legacy，避免日常聊天路径搬 10MB+ 大对象。
     data = _read_conversation_data_with_legacy_migrate(window_id)
-    if not data or not data.get("rounds"):
+    legacy_rounds = data.get("rounds") if isinstance(data, dict) else []
+    merged: dict[int, dict] = {}
+    for r in legacy_rounds if isinstance(legacy_rounds, list) else []:
+        idx = _round_index_value(r)
+        if idx > 0:
+            merged[idx] = r
+    for r in recent:
+        idx = _round_index_value(r)
+        if idx > 0:
+            merged[idx] = r
+    if not merged and meta:
         return []
-    rounds = data["rounds"][-last_n:]
-    return rounds
+    return _latest_rounds(list(merged.values()), n)
 
 
 def get_conversation_round_by_index(window_id: str, round_index: int) -> Optional[dict]:
     """读取该窗口指定 index 的轮次（返回 {index,timestamp,messages} 或 None）。"""
     if round_index < 1:
         return None
-    if not _s3_client():
+    client = _s3_client()
+    if not client:
         return None
+    compact_round = _read_json(client, _conversation_round_key(window_id, round_index))
+    if isinstance(compact_round, dict) and _round_index_value(compact_round) == round_index:
+        return compact_round
+    for r in _read_recent_rounds(client, window_id):
+        if _round_index_value(r) == round_index:
+            return r
     data = _read_conversation_data_with_legacy_migrate(window_id)
     if not data or not data.get("rounds"):
         return None
@@ -489,14 +690,24 @@ def list_conversation_rounds_preview(window_id: str, preview_chars: int = 24) ->
     列出该窗口所有轮次的序号 + 前几个字预览（便于管理端定位 round_index）。
     返回：[{ "index": 1, "preview": "user:... | assistant:..." }, ...]
     """
-    if not _s3_client():
+    client = _s3_client()
+    if not client:
         return []
     data = _read_conversation_data_with_legacy_migrate(window_id)
-    if not data or not data.get("rounds"):
-        return []
+    rounds = data.get("rounds") if isinstance(data, dict) else []
+    recent = _read_recent_rounds(client, window_id)
+    by_idx: dict[int, dict] = {}
+    for r in rounds if isinstance(rounds, list) else []:
+        idx = _round_index_value(r)
+        if idx > 0:
+            by_idx[idx] = r
+    for r in recent:
+        idx = _round_index_value(r)
+        if idx > 0:
+            by_idx[idx] = r
 
     out: list[dict] = []
-    for r in data.get("rounds") or []:
+    for r in by_idx.values():
         idx = r.get("index")
         msgs = r.get("messages") or []
         user_text = ""
@@ -530,17 +741,46 @@ def delete_conversation_round(window_id: str, round_index: int) -> bool:
     if not client:
         return False
     try:
+        compact_deleted = False
+        try:
+            client.delete_object(Bucket=R2_BUCKET_NAME, Key=_conversation_round_key(window_id, round_index))
+            compact_deleted = True
+        except Exception as e:
+            logger.warning("delete_conversation_round compact 单轮删除失败 window_id=%s round_index=%s error=%s", window_id, round_index, e)
+
+        recent = _read_recent_rounds(client, window_id)
+        if recent:
+            next_recent = [r for r in recent if _round_index_value(r) != round_index]
+            if len(next_recent) != len(recent):
+                _write_json(
+                    client,
+                    _conversation_recent_key(window_id),
+                    {
+                        "schema_version": CONVERSATION_COMPACT_SCHEMA_VERSION,
+                        "window_id": normalize_window_id(window_id),
+                        "rounds": next_recent[-CONVERSATION_RECENT_MAX_ROUNDS:],
+                        "updated_at": now_beijing_iso(),
+                    },
+                )
+                compact_deleted = True
+
         prefix = _prefix(window_id)
         key = _get_key(prefix, "conversation.json")
         data = _read_conversation_data_with_legacy_migrate(window_id)
         if not data or not data.get("rounds"):
-            return False
+            return compact_deleted
         new_rounds = [r for r in data["rounds"] if r.get("index") != round_index]
         if len(new_rounds) == len(data["rounds"]):
             logger.warning("delete_conversation_round 未找到 round_index=%s window_id=%s", round_index, window_id)
-            return False
+            return compact_deleted
         data["rounds"] = new_rounds
         _write_json(client, key, data)
+        _write_compact_conversation_state_from_rounds(
+            client,
+            window_id,
+            new_rounds,
+            write_recent_round_files=True,
+        )
         # 回溯删除 conversations/ 下按日期备份
         safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in normalize_window_id(window_id))
         suffix = f"/window_{safe_id}.json"

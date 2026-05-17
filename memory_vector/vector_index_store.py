@@ -1,5 +1,9 @@
+import base64
 import json
-from typing import Any, Optional
+import sys
+import zlib
+from array import array
+from typing import Any
 
 import boto3
 from botocore.config import Config
@@ -17,6 +21,8 @@ from utils.time_aware import now_beijing_iso
 logger = get_logger(__name__)
 
 R2_DYNAMIC_EMBEDDINGS_PREFIX = "dynamic_memory/embeddings"
+COMPACT_INDEX_SCHEMA_VERSION = 2
+COMPACT_INDEX_FORMAT = "compact-f32-zlib-base64"
 
 
 def _s3_client():
@@ -40,26 +46,114 @@ def _key_for_tag(tag: str) -> str:
     return f"{R2_DYNAMIC_EMBEDDINGS_PREFIX}/{safe}.embeddings.json"
 
 
+def _empty_index(tag: str, model_name: str) -> dict:
+    return {"schema_version": 1, "tag": tag, "embedding_model": model_name, "updated_at": now_beijing_iso(), "records": []}
+
+
+def _records_from_compact_payload(data: dict) -> list[dict]:
+    ids = data.get("ids") if isinstance(data, dict) else []
+    hashes = data.get("content_hashes") if isinstance(data, dict) else []
+    blob = str((data or {}).get("vectors") or "").strip()
+    dim = int((data or {}).get("dim") or 0)
+    if not isinstance(ids, list) or dim <= 0 or not blob:
+        return []
+    raw = zlib.decompress(base64.b64decode(blob.encode("ascii")))
+    values = array("f")
+    values.frombytes(raw)
+    if sys.byteorder != "little":
+        values.byteswap()
+    records: list[dict] = []
+    total = len(values)
+    for i, raw_id in enumerate(ids):
+        mid = str(raw_id or "").strip()
+        start = i * dim
+        end = start + dim
+        if not mid or end > total:
+            continue
+        rec = {"memory_id": mid, "embedding": list(values[start:end])}
+        if isinstance(hashes, list) and i < len(hashes) and str(hashes[i] or "").strip():
+            rec["content_hash"] = str(hashes[i] or "").strip()
+        records.append(rec)
+    return records
+
+
+def _normalize_index_payload(tag: str, model_name: str, data: Any) -> dict:
+    if not isinstance(data, dict):
+        raise ValueError("index json 非 dict")
+    if data.get("schema_version") == COMPACT_INDEX_SCHEMA_VERSION and data.get("format") == COMPACT_INDEX_FORMAT:
+        data = dict(data)
+        data["records"] = _records_from_compact_payload(data)
+        return data
+    if "records" not in data or not isinstance(data.get("records"), list):
+        data["records"] = []
+    data.setdefault("schema_version", 1)
+    data.setdefault("tag", tag)
+    data.setdefault("embedding_model", model_name)
+    return data
+
+
+def _compact_payload_from_records(tag: str, model_name: str, index: dict) -> dict:
+    records = (index or {}).get("records") or []
+    ids: list[str] = []
+    hashes: list[str] = []
+    values = array("f")
+    dim = 0
+    skipped = 0
+    for rec in records:
+        if not isinstance(rec, dict):
+            skipped += 1
+            continue
+        mid = str(rec.get("memory_id") or "").strip()
+        emb = rec.get("embedding")
+        if not mid or not isinstance(emb, list) or not emb:
+            skipped += 1
+            continue
+        if dim <= 0:
+            dim = len(emb)
+        if len(emb) != dim:
+            skipped += 1
+            continue
+        try:
+            values.extend(float(x) for x in emb)
+        except Exception:
+            skipped += 1
+            continue
+        ids.append(mid)
+        hashes.append(str(rec.get("content_hash") or "").strip())
+
+    if sys.byteorder != "little":
+        values.byteswap()
+    raw = values.tobytes()
+    payload = {
+        "schema_version": COMPACT_INDEX_SCHEMA_VERSION,
+        "format": COMPACT_INDEX_FORMAT,
+        "tag": tag,
+        "embedding_model": (index or {}).get("embedding_model") or model_name,
+        "updated_at": now_beijing_iso(),
+        "dim": dim,
+        "count": len(ids),
+        "ids": ids,
+        "content_hashes": hashes,
+        "vectors": base64.b64encode(zlib.compress(raw, level=6)).decode("ascii"),
+    }
+    if skipped:
+        payload["skipped_records"] = skipped
+    return payload
+
+
 def load_index(tag: str) -> dict:
     model_name = current_embedding_model()
     client = _s3_client()
     if not client:
-        return {"schema_version": 1, "tag": tag, "embedding_model": model_name, "updated_at": now_beijing_iso(), "records": []}
+        return _empty_index(tag, model_name)
     key = _key_for_tag(tag)
     try:
         resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=key)
         body = resp["Body"].read().decode("utf-8")
-        data = json.loads(body)
-        if not isinstance(data, dict):
-            raise ValueError("index json 非 dict")
-        if "records" not in data or not isinstance(data.get("records"), list):
-            data["records"] = []
-        data.setdefault("schema_version", 1)
-        data.setdefault("tag", tag)
-        data.setdefault("embedding_model", model_name)
+        data = _normalize_index_payload(tag, model_name, json.loads(body))
         return data
     except Exception:
-        return {"schema_version": 1, "tag": tag, "embedding_model": model_name, "updated_at": now_beijing_iso(), "records": []}
+        return _empty_index(tag, model_name)
 
 
 def save_index(tag: str, index: dict) -> bool:
@@ -70,14 +164,15 @@ def save_index(tag: str, index: dict) -> bool:
     key = _key_for_tag(tag)
     try:
         index = dict(index or {})
-        index["schema_version"] = int(index.get("schema_version") or 1)
+        index["schema_version"] = COMPACT_INDEX_SCHEMA_VERSION
         index["tag"] = tag
         index["embedding_model"] = index.get("embedding_model") or model_name
         index["updated_at"] = now_beijing_iso()
+        payload = _compact_payload_from_records(tag, model_name, index)
         client.put_object(
             Bucket=R2_BUCKET_NAME,
             Key=key,
-            Body=json.dumps(index, ensure_ascii=False).encode("utf-8"),
+            Body=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
             ContentType="application/json",
         )
         return True
@@ -107,6 +202,11 @@ def upsert_records(tag: str, records: list[dict]) -> bool:
         mp[str(mid)] = r
     idx["records"] = list(mp.values())
     return save_index(tag, idx)
+
+
+def replace_records(tag: str, records: list[dict]) -> bool:
+    """Replace a tag index exactly, dropping stale records."""
+    return save_index(tag, {"records": records or []})
 
 
 def list_existing_tags() -> list[str]:
@@ -173,4 +273,3 @@ def remove_memory_ids_from_all_indices(memory_ids: set[str]) -> int:
             else:
                 logger.warning("remove_memory_ids_from_all_indices 写回失败 tag=%s dropped=%s", tag, dropped)
     return removed_total
-

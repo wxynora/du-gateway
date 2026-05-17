@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 
 from memory_vector.embedding_client import embed_text, content_hash, normalize_text
-from memory_vector.vector_index_store import upsert_records
+from memory_vector.core_pending_index import CORE_PENDING_INDEX_TAG
+from memory_vector.vector_index_store import list_existing_tags, replace_records, upsert_records
 from storage import r2_store
 from utils.log import get_logger
 
@@ -40,6 +41,22 @@ def _flush_records(batch_by_tag: dict[str, list[dict]]) -> int:
         logger.info("rebuild_index: tag=%s records=%s ok=%s", tag, len(records), ok)
         if ok:
             written += len(records)
+    return written
+
+
+def _replace_records(batch_by_tag: dict[str, list[dict]]) -> int:
+    written = 0
+    tags = set(batch_by_tag.keys())
+    for tag, records in batch_by_tag.items():
+        ok = replace_records(tag, records)
+        logger.info("rebuild_index: replace tag=%s records=%s ok=%s", tag, len(records), ok)
+        if ok:
+            written += len(records)
+    for tag in list_existing_tags():
+        if tag in tags or tag == CORE_PENDING_INDEX_TAG:
+            continue
+        ok = replace_records(tag, [])
+        logger.info("rebuild_index: clear stale tag=%s ok=%s", tag, ok)
     return written
 
 
@@ -90,6 +107,7 @@ def rebuild(
         logger.info("rebuild_index: start=%s 后无可处理动态记忆，跳过", start)
         return
 
+    exact_rebuild = not failed_only and start == 0 and not (max_items and max_items > 0)
     batch_by_tag: dict[str, list[dict]] = {}
     batch_count = 0
     written_total = 0
@@ -130,16 +148,28 @@ def rebuild(
         batch_by_tag.setdefault(tag, []).append(rec)
         batch_count += 1
 
-        if batch_count >= batch_size:
+        if (not exact_rebuild) and batch_count >= batch_size:
             written_total += _flush_records(batch_by_tag)
             logger.info("rebuild_index: progress=%s/%s written=%s", i, total, written_total)
             batch_by_tag = {}
             batch_count = 0
             if sleep_seconds > 0:
                 time.sleep(float(sleep_seconds))
+        elif exact_rebuild and batch_count >= batch_size:
+            logger.info("rebuild_index: progress=%s/%s embedded=%s（exact 模式延迟到最后一次性写索引）", i, total, batch_count)
+            batch_count = 0
+            if sleep_seconds > 0:
+                time.sleep(float(sleep_seconds))
 
     if batch_by_tag:
-        written_total += _flush_records(batch_by_tag)
+        if exact_rebuild:
+            if failed_ids:
+                logger.warning("rebuild_index: 存在 embed 失败 ids=%s，跳过 exact replace，改用 upsert 避免误删有效索引", len(failed_ids))
+                written_total += _flush_records(batch_by_tag)
+            else:
+                written_total += _replace_records(batch_by_tag)
+        else:
+            written_total += _flush_records(batch_by_tag)
     _save_failed_ids(failed_ids)
     logger.info("rebuild_index: done total=%s written=%s start=%s batch_size=%s", total, written_total, start, batch_size)
 
