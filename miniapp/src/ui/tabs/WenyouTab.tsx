@@ -5,7 +5,7 @@ import { useToast } from "../toast";
 type WenyouView = "home" | "selection" | "game" | "archive" | "shop" | "rift";
 type WenyouInitialView = WenyouView | "archives" | "hub";
 type WenyouPanelView = "局内资料";
-type WenyouPanelTab = "情报" | "背包" | "状态" | "记录";
+type WenyouPanelTab = "任务" | "背包" | "角色" | "记录";
 
 type WenyouArchiveItem = {
   gameId?: string;
@@ -427,16 +427,26 @@ type RiftPullResult = RiftItem & {
 const TYPE_FILTERS = ["全部类型", "规则怪谈", "剧情解密", "大逃杀", "对抗", "生存撤离", "潜伏调查", "限时任务"];
 const DIFFICULTY_FILTERS = ["全部难度", "D", "C", "B", "A", "S"];
 const ARCHIVE_FILTERS = ["全部", "已完成", "死亡", "放弃", "进行中"];
-const QUICK_ACTIONS = [
+type QuickAction = {
+  label: string;
+  text: string;
+  encounterAction?: "attack" | "weaken" | "seal" | "escape";
+  panelTab?: WenyouPanelTab;
+};
+
+const BASE_QUICK_ACTIONS: QuickAction[] = [
   { label: "观察", text: "观察周围环境，留意异常细节。" },
   { label: "检查", text: "检查离我最近的可疑物。" },
   { label: "交谈", text: "尝试和当前场景里的人交谈。" },
+  { label: "移动", text: "寻找可以前往的下一个地点。" },
+  { label: "背包", text: "打开背包，选择一个合适的物品使用。", panelTab: "背包" },
+];
+
+const ENCOUNTER_QUICK_ACTIONS: QuickAction[] = [
   { label: "攻击", text: "攻击当前可见威胁。", encounterAction: "attack" as const },
   { label: "削弱", text: "根据已知线索试探并削弱当前威胁。", encounterAction: "weaken" as const },
   { label: "封印", text: "尝试按规则封印当前威胁。", encounterAction: "seal" as const },
   { label: "逃跑", text: "尝试脱离当前遭遇。", encounterAction: "escape" as const },
-  { label: "移动", text: "寻找可以前往的下一个地点。" },
-  { label: "使用", text: "打开背包，选择一个合适的物品使用。" },
 ];
 const ATTRIBUTE_LABELS: Record<string, string> = {
   str: "力",
@@ -450,34 +460,6 @@ const RIFT_SINGLE_COST = 100;
 const RIFT_TEN_COST = 1000;
 const STORY_EXPANSION_POLL_MS = 1200;
 const STORY_EXPANSION_MAX_POLLS = 160;
-const RIFT_POOL: Record<RiftRarity, RiftItem[]> = {
-  D: [
-    { id: "d-bandage", name: "应急绷带", rarity: "D", kind: "物资", desc: "一次性治疗道具。", sigil: "BND" },
-    { id: "d-candle", name: "白蜡烛", rarity: "D", kind: "规则", desc: "短暂标记安全区域。", sigil: "CDL" },
-    { id: "d-rope", name: "安全绳", rarity: "D", kind: "工具", desc: "降低坠落与脱队风险。", sigil: "RPE" },
-  ],
-  C: [
-    { id: "c-radio", name: "静电收音机", rarity: "C", kind: "线索", desc: "偶尔捕获副本广播残响。", sigil: "RAD" },
-    { id: "c-id", name: "空白身份牌", rarity: "C", kind: "潜伏", desc: "可写入一次临时身份。", sigil: "ID" },
-    { id: "c-bottle", name: "证言瓶", rarity: "C", kind: "记忆", desc: "封存一段关键证词。", sigil: "MEM" },
-  ],
-  B: [
-    { id: "b-eraser", name: "规则橡皮", rarity: "B", kind: "干涉", desc: "验证性擦除一条低级规则。", sigil: "DEL" },
-    { id: "b-ticket", name: "主神治疗券", rarity: "B", kind: "治疗", desc: "结算或安全场景恢复重伤。", sigil: "HEAL" },
-    { id: "b-thread", name: "血色牵引线", rarity: "B", kind: "追踪", desc: "锁定一个目标的残留路线。", sigil: "LINE" },
-  ],
-  A: [
-    { id: "a-door", name: "门钥碎片", rarity: "A", kind: "撤离", desc: "拼合后可开启异常出口。", sigil: "GATE" },
-    { id: "a-pod", name: "回溯急救仓", rarity: "A", kind: "治疗", desc: "结算阶段移除严重状态。", sigil: "POD" },
-    { id: "a-pen", name: "弱改写笔", rarity: "A", kind: "规则", desc: "短暂改写一个可验证条件。", sigil: "PEN" },
-  ],
-  S: [
-    { id: "s-receipt", name: "主神小票", rarity: "S", kind: "凭证", desc: "申请复核一次主神判定。", sigil: "VOID" },
-    { id: "s-echo", name: "主神残响", rarity: "S", kind: "能力", desc: "封印体，需阶位解锁完整效果。", sigil: "ECHO" },
-    { id: "s-needle", name: "记忆缝针", rarity: "S", kind: "记忆", desc: "缝合一次被污染的关键记忆。", sigil: "NEED" },
-  ],
-};
-
 function normalizeInitialView(view: WenyouInitialView): WenyouView {
   if (view === "archives") return "archive";
   if (view === "hub") return "home";
@@ -507,12 +489,21 @@ function difficultyStars(value?: string) {
 
 function colorClass(value?: string) {
   const key = String(value || "");
-  if (key === "对抗" || key === "A" || key === "S") return "wenyou-chip-rose";
+  if (key === "S") return "wenyou-chip-gold";
+  if (key === "A" || key === "对抗") return "wenyou-chip-rose";
   if (key === "潜伏调查" || key === "规则怪谈") return "wenyou-chip-purple";
-  if (key === "生存撤离" || key === "D") return "wenyou-chip-green";
+  if (key === "D") return "wenyou-chip-white";
+  if (key === "生存撤离") return "wenyou-chip-green";
   if (key === "剧情解密" || key === "B") return "wenyou-chip-blue";
   if (key === "大逃杀" || key === "限时任务") return "wenyou-chip-orange";
   return "wenyou-chip-cyan";
+}
+
+function percentOf(value: unknown, max: unknown): number | null {
+  const current = Number(value);
+  const total = Number(max);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return null;
+  return Math.max(0, Math.min(100, Math.round((current / total) * 100)));
 }
 
 function Icon({ name }: { name: string }) {
@@ -552,32 +543,6 @@ function Icon({ name }: { name: string }) {
 
 function riftRarityRank(rarity: RiftRarity) {
   return { D: 1, C: 2, B: 3, A: 4, S: 5 }[rarity];
-}
-
-function pickRiftRarity(): RiftRarity {
-  const roll = Math.random() * 100;
-  if (roll < 0.3) return "S";
-  if (roll < 4.0) return "A";
-  if (roll < 16.0) return "B";
-  if (roll < 50.0) return "C";
-  return "D";
-}
-
-function pickRiftItem(rarity: RiftRarity): RiftItem {
-  const pool = RIFT_POOL[rarity] || RIFT_POOL.D;
-  return pool[Math.floor(Math.random() * pool.length)] || RIFT_POOL.D[0];
-}
-
-function generateRiftResults(count: number): RiftPullResult[] {
-  const results = Array.from({ length: count }, (_, index) => {
-    const rarity = pickRiftRarity();
-    return { ...pickRiftItem(rarity), pullId: `rift-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}` };
-  });
-  if (count === 10 && !results.some((item) => riftRarityRank(item.rarity) >= riftRarityRank("C"))) {
-    const item = pickRiftItem("C");
-    results[results.length - 1] = { ...item, pullId: `rift-${Date.now()}-guaranteed` };
-  }
-  return results;
 }
 
 function inventoryItemName(item: WenyouInventoryItem | string | undefined): string {
@@ -841,6 +806,7 @@ export function WenyouTab({
   const riftPullTokenRef = useRef(0);
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
   const [panelView, setPanelView] = useState<WenyouPanelView | null>(null);
+  const [panelInitialTab, setPanelInitialTab] = useState<WenyouPanelTab>("任务");
   const [quickDecisionOpen, setQuickDecisionOpen] = useState(false);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
   const [activeScene, setActiveScene] = useState<EntryScene | null>(null);
@@ -854,15 +820,12 @@ export function WenyouTab({
   const [randomStyle, setRandomStyle] = useState("全随机");
   const [actionText, setActionText] = useState("");
   const actionInputRef = useRef<HTMLInputElement | null>(null);
-  const [feed, setFeed] = useState<FeedItem[]>([
-    {
-      id: "scene-1",
-      kind: "system",
-      text: "你站在三楼尽头的走廊里，空气中弥漫着陈旧木头和消毒水混合的怪味。应急灯闪着微弱的绿光，墙上的影子像被拉长的手。",
-    },
-    { id: "notice-1", kind: "notice", text: "任务更新：尝试确认这堵“不存在”的墙壁。" },
-    { id: "loot-1", kind: "loot", text: "获得物品：【染血的校徽】已放入背包。" },
-  ]);
+  const [feed, setFeed] = useState<FeedItem[]>([]);
+  const initialLoadRef = useRef(false);
+  const candidatesAutoLoadRef = useRef(false);
+  const gamePanelAutoLoadRef = useRef(false);
+  const shopAutoLoadRef = useRef(false);
+  const riftAutoLoadRef = useRef(false);
 
   const pushView = useCallback((next: WenyouView) => {
     setView((prev) => {
@@ -1029,6 +992,8 @@ export function WenyouTab({
   }, [toast]);
 
   useEffect(() => {
+    if (initialLoadRef.current) return;
+    initialLoadRef.current = true;
     loadStatus();
     loadArchives();
   }, [loadStatus, loadArchives]);
@@ -1051,28 +1016,46 @@ export function WenyouTab({
   }, [spaceBootVisible]);
 
   useEffect(() => {
+    if (view !== "selection") {
+      candidatesAutoLoadRef.current = false;
+      return;
+    }
     if (view === "selection" && !candidates.length && !candidatesLoading) {
+      if (candidatesAutoLoadRef.current) return;
+      candidatesAutoLoadRef.current = true;
       loadCandidates(false);
     }
   }, [candidates.length, candidatesLoading, loadCandidates, view]);
 
   useEffect(() => {
-    if (view === "game") {
-      loadSessionPanel();
+    if (view !== "game") {
+      gamePanelAutoLoadRef.current = false;
+      return;
     }
+    if (gamePanelAutoLoadRef.current) return;
+    gamePanelAutoLoadRef.current = true;
+    loadSessionPanel();
   }, [loadSessionPanel, view]);
 
   useEffect(() => {
-    if (view === "shop") {
-      loadShop();
+    if (view !== "shop") {
+      shopAutoLoadRef.current = false;
+      return;
     }
+    if (shopAutoLoadRef.current) return;
+    shopAutoLoadRef.current = true;
+    loadShop();
   }, [loadShop, view]);
 
   useEffect(() => {
-    if (view === "rift") {
-      loadShop();
-      loadSessionPanel();
+    if (view !== "rift") {
+      riftAutoLoadRef.current = false;
+      return;
     }
+    if (riftAutoLoadRef.current) return;
+    riftAutoLoadRef.current = true;
+    loadShop();
+    loadSessionPanel();
   }, [loadSessionPanel, loadShop, view]);
 
   useEffect(() => {
@@ -1097,14 +1080,46 @@ export function WenyouTab({
   }, [candidates, difficultyFilter, search, typeFilter]);
 
   const currentScene: EntryScene = activeScene || {
-    name: status.session?.instance_name || "幽灵校舍：不存在的404室",
-    code: status.session?.instance_code || "ZS-9527",
-    genre: status.session?.instance_genre || "规则怪谈",
-    difficulty: status.session?.difficulty || "普通",
+    name: status.session?.instance_name || "等待接入",
+    code: status.session?.instance_code || undefined,
+    genre: status.session?.instance_genre || undefined,
+    difficulty: status.session?.difficulty || undefined,
   };
   const gamePublicState = getSessionPublicState(sessionPanel);
+  const gameRulesState = getSessionRulesState(sessionPanel);
   const currentLocation = currentLocationName(gamePublicState);
-  const hasActiveRun = !!(status.active || activeScene);
+  const hasActiveRun = !!(status.active || activeScene || sessionPanel?.gameId);
+  const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
+  const homeHpPercent = percentOf(homePlayer.hp, homePlayer.hp_max);
+  const homeSanPercent = percentOf(homePlayer.san, homePlayer.san_max);
+  const homeSpiPercent = percentOf(homePlayer.spi_current, homePlayer.spi_max);
+  const homeStatusBars = [
+    homeHpPercent !== null ? { label: "生命值 HP", value: homeHpPercent, detail: `${homePlayer.hp ?? "-"} / ${homePlayer.hp_max ?? "-"}`, tone: "green" as const } : null,
+    homeSanPercent !== null ? { label: "理智值 SAN", value: homeSanPercent, detail: `${homePlayer.san ?? "-"} / ${homePlayer.san_max ?? "-"}`, tone: "cyan" as const } : null,
+    homeSpiPercent !== null ? { label: "精神力 SPI", value: homeSpiPercent, detail: `${homePlayer.spi_current ?? "-"} / ${homePlayer.spi_max ?? "-"}`, tone: "purple" as const } : null,
+  ].filter((item): item is { label: string; value: number; detail: string; tone: "green" | "cyan" | "purple" } => !!item);
+  const homeTask = gamePublicState.public_tasks?.[0];
+  const homeObjective = hasActiveRun
+    ? (homeTask ? taskTitle(homeTask) : sessionPanel?.task?.current || "等待主神同步任务。")
+    : "选择副本，或让主神随机投放。";
+  const homePhase = hasActiveRun ? (sessionPanel?.phase_label || status.session?.phase_label || "副本中") : "主神空间待机";
+  const homeMeta = statusLoading
+    ? "同步主神空间..."
+    : hasActiveRun
+      ? `编号: ${currentScene.code || "未同步"} | 阶位: ${homePlayer.rank || "E"} | Lv.${homePlayer.level ?? 1}`
+      : "未接入副本 | 商店、裂隙、归档可用";
+  const hasVisibleEncounter = (gamePublicState.visible_monsters || []).length > 0;
+  const quickActions = useMemo(
+    () => hasVisibleEncounter ? [...BASE_QUICK_ACTIONS, ...ENCOUNTER_QUICK_ACTIONS] : BASE_QUICK_ACTIONS,
+    [hasVisibleEncounter]
+  );
+  const feedTimeLabel = new Date().toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
   const riftPointRaw = shop?.points ?? sessionPanel?.wallet?.points;
   const riftPoints = riftPointPreview ?? Number(riftPointRaw ?? 0);
   const regularShop = shop?.shop_state?.regular;
@@ -1377,8 +1392,9 @@ export function WenyouTab({
     }
   }
 
-  function showPlaceholder(name: WenyouPanelView) {
-    setPanelView(name);
+  function openPanel(tab: WenyouPanelTab = "任务") {
+    setPanelInitialTab(tab);
+    setPanelView("局内资料");
     loadSessionPanel();
   }
 
@@ -1417,13 +1433,13 @@ export function WenyouTab({
     }
   }
 
-  function handleQuickAction(item: (typeof QUICK_ACTIONS)[number]) {
+  function handleQuickAction(item: QuickAction) {
     if ("encounterAction" in item && item.encounterAction) {
       runEncounterAction(item.encounterAction, item.text);
       return;
     }
-    if (item.label === "使用") {
-      showPlaceholder("局内资料");
+    if (item.panelTab) {
+      openPanel(item.panelTab);
       setQuickDecisionOpen(false);
       return;
     }
@@ -1747,17 +1763,20 @@ export function WenyouTab({
           <div className="wenyou-page-head">
             <div>
               <div className="wenyou-title-mark"><span />主神空间</div>
-              <p>{statusLoading ? "同步主神空间..." : `编号: ${currentScene.code || "ZS-9527"} | 等级: E-`}</p>
+              <p>{homeMeta}</p>
             </div>
-            <div className="wenyou-page-head-actions">
+            <div className="wenyou-page-head-actions wenyou-hub-tools">
               <button className="wenyou-icon-btn wenyou-icon-btn-rift" onClick={() => pushView("rift")} aria-label="命运裂隙">
                 <Icon name="rift" />
+                <span>裂隙</span>
               </button>
               <button className="wenyou-icon-btn" onClick={() => pushView("shop")} aria-label="系统商店">
                 <Icon name="shop" />
+                <span>商店</span>
               </button>
               <button className="wenyou-icon-btn" onClick={() => pushView("archive")} aria-label="历史存档">
                 <Icon name="archive" />
+                <span>归档</span>
               </button>
             </div>
           </div>
@@ -1767,20 +1786,24 @@ export function WenyouTab({
             <div className="wenyou-instance-body">
               <div className="wenyou-instance-top">
                 <div>
-                  <span className={`wenyou-chip ${colorClass("rose")}`}>{currentScene.genre || "未知类型"}</span>
+                  <span className={`wenyou-chip ${colorClass(currentScene.genre)}`}>{currentScene.genre || "未选择副本"}</span>
                   <h2>{currentScene.name}</h2>
                 </div>
-                <span className="wenyou-difficulty">难度: {difficultyStars(currentScene.difficulty)}</span>
+                <span className="wenyou-difficulty">{currentScene.difficulty ? `难度: ${difficultyStars(currentScene.difficulty)}` : "待接入"}</span>
               </div>
               <div className="wenyou-objectives">
-                <div><i /> <strong>当前阶段</strong><span>{status.active ? (status.session?.phase_label || "副本中") : "等待接入"}</span></div>
-                <div><i /> <strong>当前目标</strong><span>找到第一条可验证线索，并活过开场。</span></div>
+                <div><i /> <strong>当前阶段</strong><span>{homePhase}</span></div>
+                <div><i /> <strong>当前目标</strong><span>{homeObjective}</span></div>
               </div>
-              <div className="wenyou-bars">
-                <StatusBar label="生命值 VIT" value={85} tone="green" />
-                <StatusBar label="理智值 SAN" value={62} tone="cyan" />
-                <StatusBar label="污染度 INF" value={12} tone="purple" />
-              </div>
+              {homeStatusBars.length ? (
+                <div className="wenyou-bars">
+                  {homeStatusBars.map((item) => (
+                    <StatusBar key={item.label} label={item.label} value={item.value} detail={item.detail} tone={item.tone} />
+                  ))}
+                </div>
+              ) : (
+                <div className="wenyou-home-standby">暂无角色数值。进入副本后这里会显示生命、理智和精神力。</div>
+              )}
             </div>
           </div>
 
@@ -1822,7 +1845,7 @@ export function WenyouTab({
             <div className="wenyou-shop-lock">
               {shop?.active
                 ? "副本进行中，系统商店关闭；只能使用背包已有物品，进入结算后再购买。"
-                : "当前没有可写入背包的副本。开始副本或进入结算阶段后，可用主神积分购买道具。"}
+                : "当前购买写入暂未开放。回到主神空间整备完成后，可用主神积分购买道具。"}
             </div>
           ) : null}
 	          <div className="wenyou-panel-subtitle">普通商店</div>
@@ -1908,16 +1931,16 @@ export function WenyouTab({
               <span className="wenyou-rift-symbol"><Icon name="rift" /></span>
             </div>
             <div className="wenyou-rift-rates">
-              <div><span>S RATE</span><strong>0.3%</strong></div>
-              <i />
-              <div><span>A RATE</span><strong>3.7%</strong></div>
-              <i />
-              <div><span>B RATE</span><strong>12%</strong></div>
+              <div><span>S</span><strong>0.3%</strong></div>
+              <div><span>A</span><strong>3.7%</strong></div>
+              <div><span>B</span><strong>12%</strong></div>
+              <div><span>C</span><strong>34%</strong></div>
+              <div><span>D</span><strong>50%</strong></div>
             </div>
           </main>
 
           <footer className="wenyou-rift-footer">
-            <p>裂隙展开 / 命运信号同步 / 数据显影</p>
+            <p>单抽 100 / 十连 1000 / 十连 C+ 保底 / 100 抽 S 保底</p>
             <div className="wenyou-rift-currency">
               <span>主神积分</span>
               <strong>{shopLoading || riftLoading ? "同步中" : riftPoints.toLocaleString()}</strong>
@@ -1942,21 +1965,21 @@ export function WenyouTab({
           <Header title="副本大厅" onBack={() => void goBackInsideWenyou()} />
           <div className="wenyou-generation-status">
             <div>
-              <strong>候选设定池</strong>
-              <span>{candidateGeneratedAt ? `上次生成：${candidateGeneratedAt.slice(0, 16).replace("T", " ")}` : "未生成候选"}</span>
+              <strong>副本池</strong>
+              <span>{candidateGeneratedAt ? `上次生成：${candidateGeneratedAt.slice(0, 16).replace("T", " ")}` : "等待主神投放入口"}</span>
             </div>
             <button onClick={() => loadCandidates(true, search)} disabled={candidatesRefreshing || candidatesLoading}>
-              {candidatesRefreshing ? "生成中..." : "刷新候选"}
+              {candidatesRefreshing ? "生成中..." : "换一批"}
             </button>
           </div>
           <div className="wenyou-search">
             <span>⌕</span>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索候选，或作为刷新关键词..." />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索副本，或写偏好让主神换一批..." />
           </div>
           <FilterRow items={TYPE_FILTERS} value={typeFilter} onChange={setTypeFilter} />
           <FilterRow items={DIFFICULTY_FILTERS} value={difficultyFilter} onChange={setDifficultyFilter} />
           <div className="wenyou-instance-list">
-            {candidatesLoading ? <div className="wenyou-empty">主神正在生成候选设定池...</div> : null}
+            {candidatesLoading ? <div className="wenyou-empty">主神正在排列副本入口...</div> : null}
             {filteredCandidates.map((item) => (
               <article key={item.id} className="wenyou-select-card">
                 <div className="wenyou-card-meta">
@@ -1977,11 +2000,11 @@ export function WenyouTab({
                   </div>
                 ) : null}
                 <button onClick={() => startCandidate(item)} disabled={starting}>
-                  {starting ? "扩展中..." : "选中并扩展"}
+                  {starting ? "接入中..." : "进入副本"}
                 </button>
               </article>
             ))}
-            {!candidatesLoading && !filteredCandidates.length ? <div className="wenyou-empty">没有匹配的候选。换个筛选，或者刷新生成一批。</div> : null}
+            {!candidatesLoading && !filteredCandidates.length ? <div className="wenyou-empty">没有匹配的副本。换个筛选，或者让主神换一批。</div> : null}
           </div>
         </section>
       ) : null}
@@ -1999,23 +2022,28 @@ export function WenyouTab({
               className="wenyou-game-data-trigger"
               onClick={() => {
                 setQuickDecisionOpen(false);
-                showPlaceholder("局内资料");
+                openPanel("任务");
               }}
-              aria-label="打开局内资料"
+              aria-label="打开任务与背包"
             >
               <Icon name="list" />
             </button>
           </div>
 
           <div className="wenyou-feed">
-            <div className="wenyou-time-chip">{new Date().toLocaleDateString()} 23:45:12</div>
-            {feed.map((item) => {
+            {feed.length ? <div className="wenyou-time-chip">{feedTimeLabel}</div> : null}
+            {feed.length ? feed.map((item) => {
               if (item.kind === "user") return <div key={item.id} className="wenyou-user-bubble">{item.text}</div>;
               if (item.kind === "notice") return <SystemNotice key={item.id} tone="cyan" label="任务更新" text={item.text} />;
               if (item.kind === "loot") return <SystemNotice key={item.id} tone="purple" label="获得物品" text={item.text} />;
               if (item.kind === "du") return <SystemNotice key={item.id} tone="purple" label="渡的行动" text={item.text} />;
               return <div key={item.id} className="wenyou-story-text">{item.text}</div>;
-            })}
+            }) : (
+              <div className="wenyou-feed-empty">
+                <strong>等待副本接入</strong>
+                <span>进入副本后，剧情、任务更新和获得物品会按行动记录在这里。</span>
+              </div>
+            )}
           </div>
 
           <div className="wenyou-command">
@@ -2036,18 +2064,14 @@ export function WenyouTab({
             ) : null}
             {quickDecisionOpen ? (
               <div className="wenyou-quick-decision-menu" role="menu" aria-label="快捷决策">
-                {QUICK_ACTIONS.map((item) => (
+                {quickActions.map((item) => (
                   <button key={item.label} type="button" onClick={() => handleQuickAction(item)}>
                     <span>{item.label}</span>
                   </button>
                 ))}
-                {sessionPanel?.phase !== "settlement" ? (
-                  <button type="button" className="warning" onClick={openSettlementDraft} disabled={acting || settlementLoading}>
-                    <span>{settlementLoading ? "结算校准中..." : "申请结算"}</span>
-                  </button>
-                ) : null}
               </div>
             ) : null}
+            {acting || settlementLoading ? <div className="wenyou-action-progress"><span /></div> : null}
             <div className="wenyou-input-row">
               <button
                 type="button"
@@ -2064,6 +2088,11 @@ export function WenyouTab({
               <input ref={actionInputRef} value={actionText} onChange={(e) => setActionText(e.target.value)} placeholder={acting ? "主神演算中..." : "输入你的行动..."} disabled={acting} onKeyDown={(e) => { if (e.key === "Enter") submitAction(); }} />
               <button type="button" onClick={submitAction} aria-label="发送行动" disabled={acting}><Icon name="send" /></button>
             </div>
+            {sessionPanel?.phase !== "settlement" ? (
+              <button type="button" className="wenyou-settlement-link" onClick={openSettlementDraft} disabled={acting || settlementLoading}>
+                {settlementLoading ? "结算校准中..." : "申请结算"}
+              </button>
+            ) : null}
           </div>
         </section>
       ) : null}
@@ -2119,7 +2148,7 @@ export function WenyouTab({
             <OptionGroup label="风格倾向" items={["悬疑", "生存", "推理", "高压", "轻剧情", "全随机"]} value={randomStyle} onChange={setRandomStyle} grid />
             <div className="wenyou-modal-actions">
               <button onClick={() => setRandomOpen(false)}>取消</button>
-              <button onClick={startRandom} disabled={candidatesRefreshing}>{candidatesRefreshing ? "生成中..." : "生成候选池"}</button>
+              <button onClick={startRandom} disabled={candidatesRefreshing}>{candidatesRefreshing ? "生成中..." : "生成副本池"}</button>
             </div>
           </div>
         </div>
@@ -2129,6 +2158,7 @@ export function WenyouTab({
         <PanelModal
           view={panelView}
           session={sessionPanel}
+          initialTab={panelInitialTab}
           acting={acting}
           onClose={() => setPanelView(null)}
           onUseItem={useInventoryItem}
@@ -2394,8 +2424,8 @@ function RiftOverlay({
         ) : null}
       </div>
       <div className={`wenyou-rift-overlay-actions ${phase === "results" ? "is-visible" : ""}`}>
-        {count !== 1 ? <button onClick={onRevealAll} disabled={allRevealed}>REVEAL DATA</button> : null}
-        <button onClick={onClose}>CONFIRM SYNCHRONY</button>
+        {count !== 1 ? <button onClick={onRevealAll} disabled={allRevealed}>全部显影</button> : null}
+        <button onClick={onClose}>收束裂隙</button>
       </div>
     </div>
   );
@@ -2460,11 +2490,12 @@ function FilterRow({ items, value, onChange }: { items: string[]; value: string;
   );
 }
 
-function StatusBar({ label, value, tone }: { label: string; value: number; tone: "green" | "cyan" | "purple" }) {
+function StatusBar({ label, value, tone, detail }: { label: string; value: number; tone: "green" | "cyan" | "purple"; detail?: string }) {
+  const width = Math.max(0, Math.min(100, value));
   return (
     <div className={`wenyou-status wenyou-status-${tone}`}>
-      <div><span>{label}</span><span>{value}/100</span></div>
-      <i><b style={{ width: `${value}%` }} /></i>
+      <div><span>{label}</span><span>{detail || `${width}/100`}</span></div>
+      <i><b style={{ width: `${width}%` }} /></i>
     </div>
   );
 }
@@ -2505,7 +2536,7 @@ function SettlementDraft({
     <div className="wenyou-settlement-draft">
       <div className="wenyou-settlement-head">
         <div>
-          <span>SETTLEMENT CHECK</span>
+          <span>结算预览</span>
           <strong>{preview?.result_label || "结算校准"}</strong>
         </div>
         <b>{preview?.rating_label || rating || "-"}</b>
@@ -2514,9 +2545,8 @@ function SettlementDraft({
         <span style={{ width: `${Math.max(0, Math.min(100, score))}%` }} />
       </div>
       <div className="wenyou-settlement-meta">
-        <span>评级分 {score}</span>
-        <span>线索 {preview?.clue_count ?? 0}</span>
-        <span>回合 {preview?.history_rounds ?? 0}</span>
+        <span>完成度 {score}</span>
+        <span>事件 {preview?.history_rounds ?? 0}</span>
         <span>{preview?.confidence === "manual" ? "手动核准" : "系统建议"}</span>
       </div>
       {preview?.reason ? <p className="wenyou-settlement-reason">{preview.reason}</p> : null}
@@ -2537,7 +2567,7 @@ function SettlementDraft({
       <OptionStrip label="评级" items={ratingOptions} value={rating || preview?.rating || ""} onChange={onRating} disabled={loading} />
       <div className="wenyou-settlement-confirm">
         <button onClick={onCancel} disabled={loading}>取消</button>
-        <button onClick={onConfirm} disabled={loading}>{loading ? "结算中..." : "确认进入结算"}</button>
+        <button onClick={onConfirm} disabled={loading}>{loading ? "结算中..." : "确认结算"}</button>
       </div>
     </div>
   );
@@ -2614,6 +2644,7 @@ function OptionGroup({ label, items, value, onChange, grid }: { label: string; i
 function PanelModal({
   view,
   session,
+  initialTab,
   acting,
   onClose,
   onUseItem,
@@ -2627,6 +2658,7 @@ function PanelModal({
 }: {
   view: WenyouPanelView;
   session: WenyouSessionPanel | null;
+  initialTab: WenyouPanelTab;
   acting: boolean;
   onClose: () => void;
   onUseItem: (item: WenyouInventoryItem | string) => void;
@@ -2643,7 +2675,7 @@ function PanelModal({
   onUseAbility: (player: "player1" | "player2", ability: string) => void;
   onApplyEvolution: (player: "player1" | "player2", route?: string) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<WenyouPanelTab>("情报");
+  const [activeTab, setActiveTab] = useState<WenyouPanelTab>(initialTab);
   const stats = session?.stats || {};
   const publicState = getSessionPublicState(session);
   const rulesState = getSessionRulesState(session);
@@ -2672,7 +2704,10 @@ function PanelModal({
   const taskerTotal = Number(framework.tasker_total || 0);
   const playerCount = Number(framework.player_count || 0);
   const growthPlayers = session?.growth?.players || {};
-  const tabs: WenyouPanelTab[] = ["情报", "背包", "状态", "记录"];
+  const tabs: WenyouPanelTab[] = ["任务", "背包", "角色", "记录"];
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab, session?.gameId]);
   return (
     <div className="wenyou-modal">
       <button className="wenyou-modal-backdrop" onClick={onClose} aria-label="关闭面板" />
@@ -2699,7 +2734,7 @@ function PanelModal({
               ))}
             </div>
             <div className="wenyou-panel-body">
-              {activeTab === "情报" ? (
+              {activeTab === "任务" ? (
                 <>
                   <div className="wenyou-panel-brief-grid">
                     <PanelRow label="当前阶段" value={task.phase || session.phase_label || "副本"} />
@@ -2709,25 +2744,24 @@ function PanelModal({
                   {publicState.scene_summary ? <PanelRow label="场景摘要" value={publicState.scene_summary} /> : null}
                   {publicState.forced_notice ? <PanelRow label="强制工单" value={publicState.forced_notice} /> : null}
                   {publicState.visible_rules?.length ? <PanelRow label="公开规则" value={publicState.visible_rules.join("；")} /> : null}
-                  <div className="wenyou-panel-subtitle">任务</div>
+                  <div className="wenyou-panel-subtitle">任务与线索</div>
                   {tasks.length ? tasks.map((item, index) => (
                     <TaskPanelCard item={item} key={`${taskTitle(item)}-${index}`} />
                   )) : <div className="wenyou-empty">暂无任务同步。</div>}
-                  <div className="wenyou-panel-subtitle">线索备忘</div>
                   {clues.length ? clues.map((item, index) => (
                     <CluePanelCard item={item} key={`${clueTitle(item)}-${index}`} />
                   )) : <div className="wenyou-empty">暂无线索备忘。</div>}
-                  <div className="wenyou-panel-subtitle">环境与威胁</div>
+                  {locations.length || npcs.length || monsters.length || taskerTotal ? <div className="wenyou-panel-subtitle">副本缓存</div> : null}
                   {locations.length ? locations.map((item, index) => (
                     <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
-                  )) : <div className="wenyou-empty">暂无地点缓存。继续探索后会在这里更新。</div>}
-                  <PanelRow label="任务者编制" value={taskerTotal ? `共 ${taskerTotal} 人：玩家 ${playerCount || 2} + NPC ${Math.max(0, taskerTotal - (playerCount || 2))}` : "未同步"} />
+                  )) : null}
+                  {taskerTotal ? <PanelRow label="任务者编制" value={`共 ${taskerTotal} 人：玩家 ${playerCount || 2} + NPC ${Math.max(0, taskerTotal - (playerCount || 2))}`} /> : null}
                   {npcs.length ? npcs.map((item, index) => (
                     <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
-                  )) : <div className="wenyou-empty">暂无公开 NPC 记录。</div>}
+                  )) : null}
                   {monsters.length ? monsters.map((item, index) => (
                     <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
-                  )) : <div className="wenyou-empty">暂无可见怪物。Boss 与怪物暗线仍按副本缓存推进。</div>}
+                  )) : null}
                 </>
               ) : null}
 
@@ -2763,7 +2797,7 @@ function PanelModal({
                 </>
               ) : null}
 
-              {activeTab === "状态" ? (
+              {activeTab === "角色" ? (
                 <>
                   <div className="wenyou-panel-brief-grid">
                     <PanelRow label="主神积分" value={String(stats.points ?? session.wallet?.points ?? 0)} />
