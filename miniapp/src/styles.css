@@ -886,61 +886,123 @@
 
   .wenyou-home-hud {
     display: grid;
-    grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr) minmax(0, 1fr);
-    gap: 9px;
+    gap: 16px;
   }
 
-  .wenyou-home-stat {
-    position: relative;
-    min-height: 58px;
-    overflow: hidden;
-    border: 1px solid rgba(34, 211, 238, 0.22);
-    border-radius: 8px;
-    background:
-      linear-gradient(135deg, rgba(8, 20, 38, 0.84), rgba(4, 8, 20, 0.72)),
-      rgba(3, 7, 18, 0.82);
-    padding: 10px;
-    box-shadow: inset 0 0 18px rgba(34, 211, 238, 0.06);
+  .wenyou-home-hud-line {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
   }
 
-  .wenyou-home-stat::after {
-    content: "";
-    position: absolute;
-    right: -10px;
-    bottom: 0;
-    width: 48px;
-    height: 2px;
-    background: rgba(34, 211, 238, 0.68);
-    transform: skewX(-28deg);
-    box-shadow: 0 0 14px rgba(34, 211, 238, 0.48);
+  .wenyou-home-signal {
+    display: grid;
+    flex: 1 1 0;
+    min-width: 0;
+    gap: 5px;
   }
 
-  .wenyou-home-stat span {
-    display: block;
-    color: rgba(180, 216, 230, 0.58);
+  .wenyou-home-signal-primary {
+    flex: 0 0 60%;
+  }
+
+  .wenyou-home-signal div:first-child {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    color: rgba(180, 216, 230, 0.72);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 
-  .wenyou-home-stat strong {
-    display: block;
-    margin-top: 7px;
-    color: #f8fbff;
-    font-size: 15px;
-    font-weight: 900;
-    line-height: 1.15;
-    overflow-wrap: anywhere;
+  .wenyou-home-signal strong {
+    color: #67e8f9;
+    font-size: 11px;
+    text-align: right;
+    text-shadow: 0 0 10px rgba(34, 211, 238, 0.48);
+    white-space: nowrap;
   }
 
-  .wenyou-home-stat-points strong {
-    color: #67e8f9;
+  .wenyou-home-signal-bar {
+    position: relative;
+    height: 6px;
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.86);
+  }
+
+  .wenyou-home-signal-bar b {
+    position: absolute;
+    inset: 0 auto 0 0;
+    min-width: 6px;
+    background: #22d3ee;
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.72), inset 0 0 5px rgba(255, 255, 255, 0.26);
+  }
+
+  .wenyou-home-signal-bar i {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: 34px;
+    background: rgba(34, 211, 238, 0.22);
+    animation: wenyou-home-wave 1.8s ease-in-out infinite;
+  }
+
+  .wenyou-home-signal-bar-blue b {
+    background: #3b82f6;
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.58);
+  }
+
+  .wenyou-home-signal-bar-purple b {
+    background: #9333ea;
+    box-shadow: 0 0 10px rgba(147, 51, 234, 0.58);
+  }
+
+  .wenyou-home-signal-bar-purple::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.08);
+    mix-blend-mode: overlay;
+  }
+
+  .wenyou-home-operator {
+    display: grid;
+    flex: 1 1 0;
+    min-width: 78px;
+    justify-items: end;
+    gap: 3px;
+    text-align: right;
+  }
+
+  .wenyou-home-operator span {
+    color: rgba(180, 216, 230, 0.42);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 19px;
-    letter-spacing: 0;
-    text-shadow: 0 0 14px rgba(34, 211, 238, 0.35);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .wenyou-home-operator strong {
+    color: #e0f2fe;
+    font-size: 14px;
+    font-weight: 900;
+    line-height: 1.05;
+  }
+
+  @keyframes wenyou-home-wave {
+    0%, 100% {
+      opacity: 0.24;
+      transform: translateX(0);
+    }
+    50% {
+      opacity: 0.72;
+      transform: translateX(-10px);
+    }
   }
 
   .wenyou-home-sector-grid {
@@ -1698,6 +1760,68 @@
   .wenyou-shop-grid {
     display: grid;
     gap: 12px;
+  }
+
+  .wenyou-profile-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .wenyou-profile-tabs button {
+    min-height: 42px;
+    border: 1px solid rgba(34, 211, 238, 0.22);
+    border-radius: 8px;
+    background: rgba(5, 12, 28, 0.72);
+    color: rgba(180, 216, 230, 0.76);
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  .wenyou-profile-tabs button.active {
+    border-color: rgba(103, 232, 249, 0.48);
+    background:
+      linear-gradient(135deg, rgba(34, 211, 238, 0.16), rgba(124, 58, 237, 0.12)),
+      rgba(5, 12, 28, 0.86);
+    color: #e0f2fe;
+    box-shadow: inset 0 -2px 0 rgba(103, 232, 249, 0.46);
+  }
+
+  .wenyou-profile-panel {
+    display: grid;
+    gap: 10px;
+  }
+
+  .wenyou-profile-wallet {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 12px;
+    border: 1px solid rgba(34, 211, 238, 0.22);
+    border-radius: 8px;
+    background:
+      linear-gradient(135deg, rgba(6, 182, 212, 0.13), rgba(124, 58, 237, 0.08)),
+      rgba(3, 7, 18, 0.5);
+    padding: 12px;
+  }
+
+  .wenyou-profile-wallet span,
+  .wenyou-profile-wallet em {
+    color: rgba(180, 216, 230, 0.72);
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+  }
+
+  .wenyou-profile-wallet strong {
+    color: #e0f2fe;
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .wenyou-profile-wallet em {
+    justify-self: end;
   }
 
   .wenyou-select-card,
@@ -3631,20 +3755,24 @@
     }
 
     .wenyou-home-hud {
-      gap: 7px;
+      gap: 14px;
     }
 
-    .wenyou-home-stat {
-      min-height: 54px;
-      padding: 9px 8px;
+    .wenyou-home-hud-line {
+      gap: 12px;
     }
 
-    .wenyou-home-stat strong {
+    .wenyou-home-signal-primary {
+      flex-basis: 60%;
+    }
+
+    .wenyou-home-signal div:first-child,
+    .wenyou-home-operator span {
+      font-size: 9px;
+    }
+
+    .wenyou-home-operator strong {
       font-size: 13px;
-    }
-
-    .wenyou-home-stat-points strong {
-      font-size: 17px;
     }
 
     .wenyou-home-sector-grid {

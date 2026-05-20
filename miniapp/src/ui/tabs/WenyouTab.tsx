@@ -6,6 +6,7 @@ type WenyouView = "home" | "selection" | "game" | "archive" | "shop" | "rift";
 type WenyouInitialView = WenyouView | "archives" | "hub";
 type WenyouPanelView = "局内资料";
 type WenyouPanelTab = "任务" | "背包" | "角色";
+type WenyouProfileTab = "副本存档" | "背包" | "角色面板";
 
 type WenyouArchiveItem = {
   gameId?: string;
@@ -425,6 +426,7 @@ type RiftPullResult = RiftItem & {
 const TYPE_FILTERS = ["全部类型", "规则怪谈", "剧情解密", "大逃杀", "对抗", "生存撤离", "潜伏调查", "限时任务"];
 const DIFFICULTY_FILTERS = ["全部难度", "D", "C", "B", "A", "S"];
 const ARCHIVE_FILTERS = ["全部", "已完成", "死亡", "放弃", "进行中"];
+const PROFILE_TABS: WenyouProfileTab[] = ["副本存档", "背包", "角色面板"];
 type QuickAction = {
   label: string;
   text: string;
@@ -829,6 +831,7 @@ export function WenyouTab({
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
   const [panelView, setPanelView] = useState<WenyouPanelView | null>(null);
   const [panelInitialTab, setPanelInitialTab] = useState<WenyouPanelTab>("任务");
+  const [profileTab, setProfileTab] = useState<WenyouProfileTab>("副本存档");
   const [quickDecisionOpen, setQuickDecisionOpen] = useState(false);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
   const [activeScene, setActiveScene] = useState<EntryScene | null>(null);
@@ -1111,6 +1114,10 @@ export function WenyouTab({
   };
   const gamePublicState = getSessionPublicState(sessionPanel);
   const gameRulesState = getSessionRulesState(sessionPanel);
+  const profileInventory = shop?.inventory?.length
+    ? shop.inventory
+    : (gameRulesState.inventory || sessionPanel?.inventory || sessionPanel?.stats?.inventory || []);
+  const profileGrowthPlayers = sessionPanel?.growth?.players || {};
   const currentLocation = currentLocationName(gamePublicState);
   const hasActiveRun = !!(status.active || activeScene || sessionPanel?.gameId);
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
@@ -1137,11 +1144,14 @@ export function WenyouTab({
   const hubDebts = Number(shop?.debts ?? sessionPanel?.wallet?.debts ?? 0);
   const hubRank = String(homePlayer.rank || "E");
   const hubLevel = Number(homePlayer.level ?? 1);
+  const hubPointSignal = Math.max(8, Math.min(100, Math.round((hubPoints / 2000) * 100)));
+  const hubRankSignal = ({ E: 18, D: 30, C: 46, B: 64, A: 82, S: 100 } as Record<string, number>)[hubRank] || 18;
   const hubStatusLabel = statusLoading
     ? "同步中"
     : hasActiveRun
       ? (homePhase || "副本中")
       : "待机";
+  const hubStatusSignal = statusLoading ? 32 : hasActiveRun ? 88 : 56;
   const hubMissionCta = hasActiveRun ? "继续副本" : "选择副本";
   const hubMissionSub = hasActiveRun ? "RETURN TO ACTIVE INSTANCE" : "AVAILABLE MISSIONS";
   const hubMissionDetail = hasActiveRun
@@ -1258,7 +1268,6 @@ export function WenyouTab({
       setSettlementRating("");
       setFeed([
         { id: `story-${Date.now()}`, kind: "system", text: text || `欢迎来到 ${scene.name}。` },
-        { id: `notice-${Date.now()}`, kind: "notice", text: "任务更新：确认当前环境，找到第一条可行动线索。" },
       ]);
       resetView("game");
       toast("副本已载入");
@@ -1789,17 +1798,42 @@ export function WenyouTab({
       {view === "home" ? (
         <section className="wenyou-screen wenyou-home wenyou-home-cyber">
           <header className="wenyou-home-hud" aria-label="主神空间状态">
-            <div className="wenyou-home-stat wenyou-home-stat-points">
-              <span>主神积分</span>
-              <strong>{shopLoading ? "同步中" : hubPoints.toLocaleString()}</strong>
+            <div className="wenyou-home-hud-line">
+              <div className="wenyou-home-signal wenyou-home-signal-primary">
+                <div>
+                  <span>Credits / PTS</span>
+                  <strong>{shopLoading ? "SYNC" : hubPoints.toLocaleString()}</strong>
+                </div>
+                <div className="wenyou-home-signal-bar">
+                  <b style={{ width: `${hubPointSignal}%` }} />
+                  <i />
+                </div>
+              </div>
+              <div className="wenyou-home-operator">
+                <span>Rank / Level</span>
+                <strong>{hubRank}阶 Lv.{hubLevel}</strong>
+              </div>
             </div>
-            <div className="wenyou-home-stat">
-              <span>等级</span>
-              <strong>{hubRank}阶 · Lv.{hubLevel}</strong>
-            </div>
-            <div className="wenyou-home-stat">
-              <span>副本状态</span>
-              <strong>{hubStatusLabel}</strong>
+            <div className="wenyou-home-hud-line wenyou-home-hud-subline">
+              <div className="wenyou-home-signal">
+                <div>
+                  <span>Level / Rank</span>
+                  <strong>{hubRank}阶</strong>
+                </div>
+                <div className="wenyou-home-signal-bar wenyou-home-signal-bar-blue">
+                  <b style={{ width: `${hubRankSignal}%` }} />
+                </div>
+              </div>
+              <div className="wenyou-home-signal">
+                <div>
+                  <span>Instance / Run</span>
+                  <strong>{hubStatusLabel}</strong>
+                </div>
+                <div className="wenyou-home-signal-bar wenyou-home-signal-bar-purple">
+                  <b style={{ width: `${hubStatusSignal}%` }} />
+                  <i />
+                </div>
+              </div>
             </div>
           </header>
 
@@ -1844,7 +1878,14 @@ export function WenyouTab({
           </main>
 
           <footer className="wenyou-home-dock">
-            <button type="button" className="wenyou-home-profile" onClick={() => pushView("archive")}>
+            <button
+              type="button"
+              className="wenyou-home-profile"
+              onClick={() => {
+                setProfileTab("副本存档");
+                pushView("archive");
+              }}
+            >
               <span>
                 <small>Operator</small>
                 <strong>个人空间</strong>
@@ -2139,29 +2180,100 @@ export function WenyouTab({
 
       {view === "archive" ? (
         <section className="wenyou-screen">
-          <Header title="历史归档" onBack={() => void goBackInsideWenyou()} />
-          <FilterRow items={ARCHIVE_FILTERS} value={archiveFilter} onChange={setArchiveFilter} />
-          <div className="wenyou-archive-list">
-            {archiveFilter === "进行中" && status.active ? (
-              <ArchiveCard active title={currentScene.name} genre={currentScene.genre || "未知"} difficulty={currentScene.difficulty || "-"} turns="进行中" onPrimary={() => pushView("game")} />
-            ) : null}
-            {archiveFilter !== "进行中" ? sortedArchives.map((it, index) => (
-              <ArchiveCard
-                key={`${it.gameId || "archive"}-${index}`}
-                title={it.instance_name || "未命名副本"}
-                genre={it.instance_genre || "未知"}
-                difficulty={it.difficulty || "-"}
-                endedAt={it.endedAt || "-"}
-                turns={`${Number(it.history_count || 0)} 回合`}
-                open={openGameId === String(it.gameId || "")}
-                loading={detailLoading && openGameId === String(it.gameId || "")}
-                detail={archiveDetails[String(it.gameId || "")]}
-                onPrimary={() => toggleArchive(String(it.gameId || ""))}
-                onRetry={() => startStory("custom", `重新挑战副本：${it.instance_name || "未命名副本"}`, { name: it.instance_name || "未命名副本", genre: it.instance_genre, difficulty: it.difficulty })}
-              />
-            )) : null}
-            {!sortedArchives.length && !archivesLoading && archiveFilter !== "进行中" ? <div className="wenyou-empty">还没有副本归档。</div> : null}
+          <Header title="个人空间" onBack={() => void goBackInsideWenyou()} />
+          <div className="wenyou-profile-tabs" role="tablist" aria-label="个人空间导航">
+            {PROFILE_TABS.map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                className={profileTab === tab ? "active" : ""}
+                onClick={() => setProfileTab(tab)}
+                role="tab"
+                aria-selected={profileTab === tab}
+              >
+                {tab}
+              </button>
+            ))}
           </div>
+
+          {profileTab === "副本存档" ? (
+            <>
+              <FilterRow items={ARCHIVE_FILTERS} value={archiveFilter} onChange={setArchiveFilter} />
+              <div className="wenyou-archive-list">
+                {archiveFilter === "进行中" && status.active ? (
+                  <ArchiveCard active title={currentScene.name} genre={currentScene.genre || "未知"} difficulty={currentScene.difficulty || "-"} turns="进行中" onPrimary={() => pushView("game")} />
+                ) : null}
+                {archiveFilter !== "进行中" ? sortedArchives.map((it, index) => (
+                  <ArchiveCard
+                    key={`${it.gameId || "archive"}-${index}`}
+                    title={it.instance_name || "未命名副本"}
+                    genre={it.instance_genre || "未知"}
+                    difficulty={it.difficulty || "-"}
+                    endedAt={it.endedAt || "-"}
+                    turns={`${Number(it.history_count || 0)} 回合`}
+                    open={openGameId === String(it.gameId || "")}
+                    loading={detailLoading && openGameId === String(it.gameId || "")}
+                    detail={archiveDetails[String(it.gameId || "")]}
+                    onPrimary={() => toggleArchive(String(it.gameId || ""))}
+                    onRetry={() => startStory("custom", `重新挑战副本：${it.instance_name || "未命名副本"}`, { name: it.instance_name || "未命名副本", genre: it.instance_genre, difficulty: it.difficulty })}
+                  />
+                )) : null}
+                {!sortedArchives.length && !archivesLoading && archiveFilter !== "进行中" ? <div className="wenyou-empty">还没有副本归档。</div> : null}
+              </div>
+            </>
+          ) : null}
+
+          {profileTab === "背包" ? (
+            <div className="wenyou-profile-panel">
+              <div className="wenyou-profile-wallet">
+                <span>主神积分</span>
+                <strong>{hubPoints.toLocaleString()}</strong>
+                <em>{profileInventory.length} 件物品</em>
+              </div>
+              <InventoryList
+                inventory={profileInventory}
+                acting={acting}
+                onUseItem={useInventoryItem}
+                onInventoryCommand={runInventoryCommand}
+                emptyText="背包为空。"
+              />
+            </div>
+          ) : null}
+
+          {profileTab === "角色面板" ? (
+            <div className="wenyou-profile-panel">
+              <div className="wenyou-panel-brief-grid">
+                <PanelRow label="主神积分" value={hubPoints.toLocaleString()} />
+                <PanelRow label="主神债务" value={String(hubDebts)} />
+              </div>
+              <PlayerStatCard
+                title="玩家一"
+                player={sessionPanel?.stats?.player1 || gameRulesState.players?.player1}
+                playerId="player1"
+                growth={profileGrowthPlayers.player1}
+                acting={acting}
+                onAllocateAttribute={allocateAttribute}
+                onPromote={promotePlayer}
+                onRevive={revivePlayer}
+                onLearnAbility={learnAbility}
+                onUseAbility={useAbility}
+                onApplyEvolution={applyEvolution}
+              />
+              <PlayerStatCard
+                title="玩家二 · 渡"
+                player={sessionPanel?.stats?.player2 || gameRulesState.players?.player2}
+                playerId="player2"
+                growth={profileGrowthPlayers.player2}
+                acting={acting}
+                onAllocateAttribute={allocateAttribute}
+                onPromote={promotePlayer}
+                onRevive={revivePlayer}
+                onLearnAbility={learnAbility}
+                onUseAbility={useAbility}
+                onApplyEvolution={applyEvolution}
+              />
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -2203,12 +2315,6 @@ export function WenyouTab({
           onClose={() => setPanelView(null)}
           onUseItem={useInventoryItem}
           onInventoryCommand={runInventoryCommand}
-          onAllocateAttribute={allocateAttribute}
-          onPromote={promotePlayer}
-          onRevive={revivePlayer}
-          onLearnAbility={learnAbility}
-          onUseAbility={useAbility}
-          onApplyEvolution={applyEvolution}
         />
       ) : null}
     </div>
@@ -2679,12 +2785,6 @@ function PanelModal({
   onClose,
   onUseItem,
   onInventoryCommand,
-  onAllocateAttribute,
-  onPromote,
-  onRevive,
-  onLearnAbility,
-  onUseAbility,
-  onApplyEvolution,
 }: {
   view: WenyouPanelView;
   session: WenyouSessionPanel | null;
@@ -2698,12 +2798,6 @@ function PanelModal({
     label: string,
     body?: Record<string, unknown>
   ) => void;
-  onAllocateAttribute: (player: "player1" | "player2", attr: string) => void;
-  onPromote: (player: "player1" | "player2") => void;
-  onRevive: (player: "player1" | "player2") => void;
-  onLearnAbility: (player: "player1" | "player2", ability: string) => void;
-  onUseAbility: (player: "player1" | "player2", ability: string) => void;
-  onApplyEvolution: (player: "player1" | "player2", route?: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<WenyouPanelTab>(initialTab);
   const stats = session?.stats || {};
@@ -2722,9 +2816,7 @@ function PanelModal({
           reward_tags: session.task.reward_hint ? [session.task.reward_hint] : [],
         }]
       : [];
-  const clues = publicState.discovered_clues?.length
-    ? publicState.discovered_clues
-    : (session?.clues || []).map((item) => ({ title: item, public_text: item, status: "discovered" }));
+  const clues = (publicState.discovered_clues || []).filter(Boolean);
   const task = session?.task || {};
   const growthPlayers = session?.growth?.players || {};
   const tabs: WenyouPanelTab[] = ["任务", "背包", "角色"];
@@ -2764,46 +2856,24 @@ function PanelModal({
                     <PanelRow label="当前位置" value={currentLocationName(publicState)} />
                     {publicState.public_threat ? <PanelRow label="危险程度" value={publicState.public_threat} /> : null}
                   </div>
-                  <div className="wenyou-panel-subtitle">任务与线索</div>
+                  <div className="wenyou-panel-subtitle">任务与已确认线索</div>
                   {tasks.length ? tasks.map((item, index) => (
                     <TaskPanelCard item={item} key={`${taskTitle(item)}-${index}`} />
                   )) : <div className="wenyou-empty">暂无任务同步。</div>}
                   {clues.length ? clues.map((item, index) => (
                     <CluePanelCard item={item} key={`${clueTitle(item)}-${index}`} />
-                  )) : <div className="wenyou-empty">暂无线索备忘。</div>}
+                  )) : <div className="wenyou-empty">暂无已确认线索。</div>}
                 </>
               ) : null}
 
               {activeTab === "背包" ? (
-                <>
-                  {inventory.length ? inventory.map((item, index) => {
-                    const detail = typeof item === "string" ? "" : itemDisplayDescription(item);
-                    return (
-                      <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
-                        <span>
-                          {inventoryItemLabel(item)}
-                          {typeof item !== "string" ? (
-                            <small>
-                              {[item.rarity, item.category || item.kind, item.uses_left !== undefined ? `次数 ${item.uses_left}` : "", item.durability !== undefined ? `耐久 ${item.durability}/${item.durability_max ?? "?"}` : ""].filter(Boolean).join(" · ")}
-                              {detail ? `｜${detail}` : ""}
-                            </small>
-                          ) : null}
-                        </span>
-                        <div className="wenyou-inventory-actions">
-                          {isGearInventoryItem(item) ? (
-                            <>
-                              <button type="button" onClick={() => onInventoryCommand(item, "equip", "装备")} disabled={acting || item.sealed || item.broken}>装备</button>
-                              <button type="button" onClick={() => onInventoryCommand(item, "repair", "维修")} disabled={acting}>维修</button>
-                            </>
-                          ) : (
-                            <button type="button" onClick={() => onUseItem(item)} disabled={acting || (typeof item !== "string" && !!item.sealed)}>{acting ? "演算中" : "使用"}</button>
-                          )}
-                          <button type="button" onClick={() => onInventoryCommand(item, "sell", "出售")} disabled={acting || (typeof item !== "string" && (!!item.equipped_by || !!item.quest_item || item.carry_out === false))}>出售</button>
-                        </div>
-                      </div>
-                    );
-                  }) : <div className="wenyou-empty">背包为空。</div>}
-                </>
+                <InventoryList
+                  inventory={inventory}
+                  acting={acting}
+                  onUseItem={onUseItem}
+                  onInventoryCommand={onInventoryCommand}
+                  emptyText="背包为空。"
+                />
               ) : null}
 
               {activeTab === "角色" ? (
@@ -2815,28 +2885,14 @@ function PanelModal({
                   <PlayerStatCard
                     title="玩家一"
                     player={stats.player1}
-                    playerId="player1"
                     growth={growthPlayers.player1}
                     acting={acting}
-	                    onAllocateAttribute={onAllocateAttribute}
-	                    onPromote={onPromote}
-	                    onRevive={onRevive}
-	                    onLearnAbility={onLearnAbility}
-	                    onUseAbility={onUseAbility}
-	                    onApplyEvolution={onApplyEvolution}
 	                  />
 	                  <PlayerStatCard
                     title="玩家二 · 渡"
                     player={stats.player2}
-                    playerId="player2"
                     growth={growthPlayers.player2}
                     acting={acting}
-	                    onAllocateAttribute={onAllocateAttribute}
-	                    onPromote={onPromote}
-	                    onRevive={onRevive}
-	                    onLearnAbility={onLearnAbility}
-	                    onUseAbility={onUseAbility}
-	                    onApplyEvolution={onApplyEvolution}
 	                  />
                 </>
               ) : null}
@@ -2847,6 +2903,60 @@ function PanelModal({
 
       </div>
     </div>
+  );
+}
+
+function InventoryList({
+  inventory,
+  acting,
+  onUseItem,
+  onInventoryCommand,
+  emptyText = "背包为空。",
+}: {
+  inventory: Array<WenyouInventoryItem | string>;
+  acting: boolean;
+  onUseItem: (item: WenyouInventoryItem | string) => void;
+  onInventoryCommand: (
+    item: WenyouInventoryItem | string,
+    endpoint: "equip" | "repair" | "sell",
+    label: string,
+    body?: Record<string, unknown>
+  ) => void;
+  emptyText?: string;
+}) {
+  if (!inventory.length) return <div className="wenyou-empty">{emptyText}</div>;
+  return (
+    <>
+      {inventory.map((item, index) => {
+        const detail = typeof item === "string" ? "" : itemDisplayDescription(item);
+        const sealed = typeof item !== "string" && !!item.sealed;
+        const lockedForSale = typeof item !== "string" && (!!item.equipped_by || !!item.quest_item || item.carry_out === false);
+        return (
+          <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
+            <span>
+              {inventoryItemLabel(item)}
+              {typeof item !== "string" ? (
+                <small>
+                  {[item.rarity, item.category || item.kind, item.uses_left !== undefined ? `次数 ${item.uses_left}` : "", item.durability !== undefined ? `耐久 ${item.durability}/${item.durability_max ?? "?"}` : ""].filter(Boolean).join(" · ")}
+                  {detail ? `｜${detail}` : ""}
+                </small>
+              ) : null}
+            </span>
+            <div className="wenyou-inventory-actions">
+              {isGearInventoryItem(item) ? (
+                <>
+                  <button type="button" onClick={() => onInventoryCommand(item, "equip", "装备")} disabled={acting || sealed || !!item.broken}>装备</button>
+                  <button type="button" onClick={() => onInventoryCommand(item, "repair", "维修")} disabled={acting}>维修</button>
+                </>
+              ) : (
+                <button type="button" onClick={() => onUseItem(item)} disabled={acting || sealed}>{acting ? "演算中" : "使用"}</button>
+              )}
+              <button type="button" onClick={() => onInventoryCommand(item, "sell", "出售")} disabled={acting || lockedForSale}>出售</button>
+            </div>
+          </div>
+        );
+      })}
+    </>
   );
 }
 
