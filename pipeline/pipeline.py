@@ -1755,21 +1755,37 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     def _fuzzy_time_label(mem: dict) -> str:
         from utils.time_aware import parse_iso_to_beijing, _now_beijing
 
+        def _daypart(dt) -> str:
+            hour = dt.hour
+            if hour < 6:
+                return "凌晨"
+            if hour < 11:
+                return "上午"
+            if hour < 14:
+                return "中午"
+            if hour < 18:
+                return "下午"
+            if hour < 22:
+                return "晚上"
+            return "深夜"
+
         last_mentioned = mem.get("last_mentioned") or mem.get("created_at") or ""
         dt = parse_iso_to_beijing(last_mentioned)
         if dt is None:
             return "之前"
-        days = max(0, (_now_beijing() - dt).days)
+        now_dt = _now_beijing()
+        days = max(0, (now_dt.date() - dt.date()).days)
+        daypart = _daypart(dt)
         if days == 0:
-            return "今天"
+            return f"今天{daypart}"
         if days == 1:
-            return "昨天"
+            return f"昨天{daypart}"
         if days == 2:
-            return "前天"
+            return f"前天{daypart}"
         if days <= 4:
-            return f"{days}天前"
+            return f"{days}天前{daypart}"
         if days <= 9:
-            return "几天前"
+            return f"几天前{daypart}"
         return "好些天前"
 
     lines = []
