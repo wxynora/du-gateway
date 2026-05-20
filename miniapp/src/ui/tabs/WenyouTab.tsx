@@ -99,6 +99,7 @@ type WenyouShopView = {
   phase?: string;
   phaseLabel?: string;
   points?: number;
+  debts?: number;
   inventory?: WenyouInventoryItem[];
   generatedAt?: string;
   items?: WenyouShopItem[];
@@ -504,6 +505,15 @@ function Icon({ name }: { name: string }) {
   if (name === "archive") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 4h11a2 2 0 0 1 2 2v14H8a3 3 0 0 1-3-3V5a1 1 0 0 1 1-1Z" /><path d="M8 17h11" /><path d="M9 8h6M9 12h5" /></svg>;
   }
+  if (name === "profile") {
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /><path d="M4.5 21a7.5 7.5 0 0 1 15 0" /><path d="M18 4.5 21 3v5l-3-1.5" /></svg>;
+  }
+  if (name === "terminal") {
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="m8 9 3 3-3 3M13 15h3" /></svg>;
+  }
+  if (name === "arrow") {
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M7 17 17 7M9 7h8v8" /></svg>;
+  }
   if (name === "shop") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M6 7v13h12V7M9 11h6M7 3h10l2 4H5l2-4Z" /></svg>;
   }
@@ -569,6 +579,7 @@ function normalizeShopView(j: Partial<WenyouShopView>): WenyouShopView {
     phase: String(j.phase || ""),
     phaseLabel: String(j.phaseLabel || ""),
     points: Number(j.points || 0),
+    debts: Number(j.debts || 0),
     inventory: Array.isArray(j.inventory) ? j.inventory : [],
     generatedAt: String(j.generatedAt || ""),
     items: Array.isArray(j.items) ? j.items : [],
@@ -1007,7 +1018,9 @@ export function WenyouTab({
     initialLoadRef.current = true;
     loadStatus();
     loadArchives();
-  }, [loadStatus, loadArchives]);
+    loadShop();
+    loadSessionPanel();
+  }, [loadArchives, loadSessionPanel, loadShop, loadStatus]);
 
   useEffect(() => {
     if (!spaceBootVisible) return;
@@ -1101,16 +1114,7 @@ export function WenyouTab({
   const currentLocation = currentLocationName(gamePublicState);
   const hasActiveRun = !!(status.active || activeScene || sessionPanel?.gameId);
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
-  const homeTask = gamePublicState.public_tasks?.[0];
-  const homeObjective = hasActiveRun
-    ? (homeTask ? taskTitle(homeTask) : sessionPanel?.task?.current || "等待主神同步任务。")
-    : "选择副本，或让主神随机投放。";
   const homePhase = hasActiveRun ? (sessionPanel?.phase_label || status.session?.phase_label || "副本中") : "主神空间待机";
-  const homeMeta = statusLoading
-    ? "同步主神空间..."
-    : hasActiveRun
-      ? `编号: ${currentScene.code || "未同步"} | 阶位: ${homePlayer.rank || "E"} | Lv.${homePlayer.level ?? 1}`
-      : "未接入副本 | 商店、裂隙、归档可用";
   const hasVisibleEncounter = (gamePublicState.visible_monsters || []).length > 0;
   const quickActions = useMemo(
     () => hasVisibleEncounter ? [...BASE_QUICK_ACTIONS, ...ENCOUNTER_QUICK_ACTIONS] : BASE_QUICK_ACTIONS,
@@ -1129,6 +1133,27 @@ export function WenyouTab({
   const specialShop = shop?.shop_state?.special;
   const regularShopItems = regularShop?.items?.length ? regularShop.items : (shop?.items || []);
   const specialShopItems = specialShop?.items || [];
+  const hubPoints = Number(shop?.points ?? sessionPanel?.wallet?.points ?? sessionPanel?.stats?.points ?? 0);
+  const hubDebts = Number(shop?.debts ?? sessionPanel?.wallet?.debts ?? 0);
+  const hubRank = String(homePlayer.rank || "E");
+  const hubLevel = Number(homePlayer.level ?? 1);
+  const hubStatusLabel = statusLoading
+    ? "同步中"
+    : hasActiveRun
+      ? (homePhase || "副本中")
+      : "待机";
+  const hubMissionCta = hasActiveRun ? "继续副本" : "选择副本";
+  const hubMissionSub = hasActiveRun ? "RETURN TO ACTIVE INSTANCE" : "AVAILABLE MISSIONS";
+  const hubMissionDetail = hasActiveRun
+    ? `${currentScene.code || "ACTIVE"} | ${currentScene.difficulty || "?"}`
+    : "等待选择副本入口";
+
+  function syncHomeHub() {
+    loadStatus();
+    loadShop();
+    loadSessionPanel();
+    loadArchives();
+  }
 
   async function buyShopItem(item: WenyouShopItem) {
     if (!item?.id || shopBuyingId) return;
@@ -1762,54 +1787,75 @@ export function WenyouTab({
       ) : null}
 
       {view === "home" ? (
-        <section className="wenyou-screen wenyou-home">
-          <div className="wenyou-page-head">
-            <div>
-              <div className="wenyou-title-mark"><span />主神空间</div>
-              <p>{homeMeta}</p>
+        <section className="wenyou-screen wenyou-home wenyou-home-cyber">
+          <header className="wenyou-home-hud" aria-label="主神空间状态">
+            <div className="wenyou-home-stat wenyou-home-stat-points">
+              <span>主神积分</span>
+              <strong>{shopLoading ? "同步中" : hubPoints.toLocaleString()}</strong>
             </div>
-            <div className="wenyou-page-head-actions wenyou-hub-tools">
-              <button className="wenyou-icon-btn wenyou-icon-btn-rift" onClick={() => pushView("rift")} aria-label="命运裂隙">
-                <Icon name="rift" />
-                <span>裂隙</span>
-              </button>
-              <button className="wenyou-icon-btn" onClick={() => pushView("shop")} aria-label="系统商店">
-                <Icon name="shop" />
-                <span>商店</span>
-              </button>
-              <button className="wenyou-icon-btn" onClick={() => pushView("archive")} aria-label="历史存档">
-                <Icon name="archive" />
-                <span>归档</span>
-              </button>
+            <div className="wenyou-home-stat">
+              <span>等级</span>
+              <strong>{hubRank}阶 · Lv.{hubLevel}</strong>
             </div>
-          </div>
+            <div className="wenyou-home-stat">
+              <span>副本状态</span>
+              <strong>{hubStatusLabel}</strong>
+            </div>
+          </header>
 
-          <div className="wenyou-instance-card">
-            <div className="wenyou-instance-glow" />
-            <div className="wenyou-instance-body">
-              <div className="wenyou-instance-top">
-                <div>
-                  <span className={`wenyou-chip ${colorClass(currentScene.genre)}`}>{currentScene.genre || "未选择副本"}</span>
-                  <h2>{currentScene.name}</h2>
-                </div>
-                <span className="wenyou-difficulty">{currentScene.difficulty ? `难度: ${difficultyStars(currentScene.difficulty)}` : "待接入"}</span>
+          <main className="wenyou-home-sector-grid">
+            <button
+              type="button"
+              className="wenyou-sector-card wenyou-sector-main"
+              onClick={() => hasActiveRun ? pushView("game") : pushView("selection")}
+            >
+              <span className="wenyou-sector-rail" />
+              <span className="wenyou-sector-watermark" aria-hidden="true">VII</span>
+              <div className="wenyou-sector-kicker">
+                <i />
+                <span>{hubMissionSub}</span>
               </div>
-              <div className="wenyou-objectives">
-                <div><i /> <strong>当前阶段</strong><span>{homePhase}</span></div>
-                <div><i /> <strong>当前目标</strong><span>{homeObjective}</span></div>
+              <h1>Dungeon<br />Hall</h1>
+              <p>{hasActiveRun ? currentScene.name : "副本池已待命，选择入口后接入。"}</p>
+              <div className="wenyou-sector-foot">
+                <span>{hubMissionDetail}</span>
+                <b>{hubMissionCta}<Icon name="arrow" /></b>
               </div>
-            </div>
-          </div>
-
-          <div className="wenyou-home-actions">
-            <button className="wenyou-primary-btn" onClick={() => status.active || activeScene ? pushView("game") : pushView("selection")}>
-              <Icon name="play" />{status.active || activeScene ? "继续副本" : "开始副本"}
             </button>
-            <div className="wenyou-action-grid">
-              <button onClick={() => pushView("selection")}><Icon name="list" />选择副本</button>
-              <button onClick={() => setRandomOpen(true)}><Icon name="shuffle" />随机进入</button>
+
+            <button type="button" className="wenyou-sector-card wenyou-sector-rift" onClick={() => pushView("rift")}>
+              <Icon name="rift" />
+              <span>DESTINY</span>
+              <strong>Rift of<br />Fate</strong>
+            </button>
+
+            <button type="button" className="wenyou-sector-card wenyou-sector-shop" onClick={() => pushView("shop")}>
+              <div>
+                <strong>System<br />Shop</strong>
+                <span>POINTS: {hubPoints.toLocaleString()}</span>
+              </div>
+              <i><Icon name="shop" /></i>
+            </button>
+
+            <div className="wenyou-sector-protocol" aria-hidden="true">
+              <span>PROTOCOL_VOID_ACTIVE</span>
+              <span>{hubDebts > 0 ? `DEBT_${hubDebts}` : "SYSTEM_STABLE"}</span>
             </div>
-          </div>
+          </main>
+
+          <footer className="wenyou-home-dock">
+            <button type="button" className="wenyou-home-profile" onClick={() => pushView("archive")}>
+              <span>
+                <small>Operator</small>
+                <strong>个人空间</strong>
+              </span>
+              <Icon name="profile" />
+            </button>
+            <button type="button" className="wenyou-home-terminal" onClick={syncHomeHub} aria-label="同步主神空间">
+              <Icon name="terminal" />
+              <i />
+            </button>
+          </footer>
         </section>
       ) : null}
 
