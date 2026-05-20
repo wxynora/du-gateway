@@ -496,7 +496,7 @@ def register_routes(bp) -> None:
 
     @bp.route("/wenyou/end", methods=["POST"])
     def miniapp_wenyou_end():
-        """文游：进入系统空间结算阶段。"""
+        """文游：最终结算并立即归档。"""
         uid = _wenyou_session_id()
         if uid == 0:
             return _missing_wenyou_session_response()

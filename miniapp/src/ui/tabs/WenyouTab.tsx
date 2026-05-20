@@ -102,6 +102,14 @@ type WenyouShopView = {
   points?: number;
   debts?: number;
   inventory?: WenyouInventoryItem[];
+  stats?: {
+    phase?: string;
+    points?: number;
+    player1?: WenyouPlayerStats;
+    player2?: WenyouPlayerStats;
+    inventory?: WenyouInventoryItem[];
+  };
+  growth?: WenyouGrowthView | null;
   generatedAt?: string;
   items?: WenyouShopItem[];
   shop_state?: {
@@ -583,6 +591,8 @@ function normalizeShopView(j: Partial<WenyouShopView>): WenyouShopView {
     points: Number(j.points || 0),
     debts: Number(j.debts || 0),
     inventory: Array.isArray(j.inventory) ? j.inventory : [],
+    stats: j.stats || undefined,
+    growth: j.growth || undefined,
     generatedAt: String(j.generatedAt || ""),
     items: Array.isArray(j.items) ? j.items : [],
     shop_state: j.shop_state || undefined,
@@ -1117,7 +1127,8 @@ export function WenyouTab({
   const profileInventory = shop?.inventory?.length
     ? shop.inventory
     : (gameRulesState.inventory || sessionPanel?.inventory || sessionPanel?.stats?.inventory || []);
-  const profileGrowthPlayers = sessionPanel?.growth?.players || {};
+  const profileGrowthPlayers = sessionPanel?.growth?.players || shop?.growth?.players || {};
+  const profileStats = sessionPanel?.stats || shop?.stats || {};
   const currentLocation = currentLocationName(gamePublicState);
   const hasActiveRun = !!(status.active || activeScene || sessionPanel?.gameId);
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
@@ -1153,17 +1164,10 @@ export function WenyouTab({
       : "待机";
   const hubStatusSignal = statusLoading ? 32 : hasActiveRun ? 88 : 56;
   const hubMissionCta = hasActiveRun ? "继续副本" : "选择副本";
-  const hubMissionSub = hasActiveRun ? "RETURN TO ACTIVE INSTANCE" : "AVAILABLE MISSIONS";
+  const hubMissionSub = hasActiveRun ? "继续当前副本" : "可接入副本";
   const hubMissionDetail = hasActiveRun
     ? `${currentScene.code || "ACTIVE"} | ${currentScene.difficulty || "?"}`
     : "等待选择副本入口";
-
-  function syncHomeHub() {
-    loadStatus();
-    loadShop();
-    loadSessionPanel();
-    loadArchives();
-  }
 
   async function buyShopItem(item: WenyouShopItem) {
     if (!item?.id || shopBuyingId) return;
@@ -1389,12 +1393,19 @@ export function WenyouTab({
         body: JSON.stringify({ result, rating }),
       });
       if (!j?.ok) throw new Error(j?.error || "结算失败");
-      const text = String(j.text || "已进入结算。");
+      const text = String(j.text || "本局已归档。");
+      toast(text.split("\n", 1)[0] || "本局已归档");
       setFeed((prev) => [...prev, { id: `settlement-${Date.now()}`, kind: "notice", text }]);
       setSettlementDraftOpen(false);
       setSettlementPreview(null);
-      if (j.session) setSessionPanel(j.session);
+      setSettlementResult("");
+      setSettlementRating("");
+      setSessionPanel(null);
+      setActiveScene(null);
+      setArchiveFilter("全部");
       await loadStatus();
+      await loadArchives();
+      resetView("archive");
     } catch (e: any) {
       toast(`结算失败：${e?.message || e}`);
     } finally {
@@ -1526,7 +1537,10 @@ export function WenyouTab({
   ) {
     if (acting) return;
     const itemRef = inventoryActionKey(item);
-    if (!itemRef) return;
+    if (!itemRef) {
+      toast("找不到这个物品的系统编号，先同步一下背包。");
+      return;
+    }
     setActing(true);
     try {
       const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>(`/miniapp-api/wenyou/item/${endpoint}`, {
@@ -1798,41 +1812,33 @@ export function WenyouTab({
       {view === "home" ? (
         <section className="wenyou-screen wenyou-home wenyou-home-cyber">
           <header className="wenyou-home-hud" aria-label="主神空间状态">
-            <div className="wenyou-home-hud-line">
-              <div className="wenyou-home-signal wenyou-home-signal-primary">
-                <div>
-                  <span>Credits / PTS</span>
-                  <strong>{shopLoading ? "SYNC" : hubPoints.toLocaleString()}</strong>
-                </div>
-                <div className="wenyou-home-signal-bar">
-                  <b style={{ width: `${hubPointSignal}%` }} />
-                  <i />
-                </div>
+            <div className="wenyou-home-signal">
+              <div>
+                <span>主神积分</span>
+                <strong>{shopLoading ? "同步中" : hubPoints.toLocaleString()}</strong>
               </div>
-              <div className="wenyou-home-operator">
-                <span>Rank / Level</span>
-                <strong>{hubRank}阶 Lv.{hubLevel}</strong>
+              <div className="wenyou-home-signal-bar">
+                <b style={{ width: `${hubPointSignal}%` }} />
+                <i />
               </div>
             </div>
-            <div className="wenyou-home-hud-line wenyou-home-hud-subline">
-              <div className="wenyou-home-signal">
-                <div>
-                  <span>Level / Rank</span>
-                  <strong>{hubRank}阶</strong>
-                </div>
-                <div className="wenyou-home-signal-bar wenyou-home-signal-bar-blue">
-                  <b style={{ width: `${hubRankSignal}%` }} />
-                </div>
+            <div className="wenyou-home-signal">
+              <div>
+                <span>等级阶位</span>
+                <strong>{hubRank}阶 Lv.{hubLevel}</strong>
               </div>
-              <div className="wenyou-home-signal">
-                <div>
-                  <span>Instance / Run</span>
-                  <strong>{hubStatusLabel}</strong>
-                </div>
-                <div className="wenyou-home-signal-bar wenyou-home-signal-bar-purple">
-                  <b style={{ width: `${hubStatusSignal}%` }} />
-                  <i />
-                </div>
+              <div className="wenyou-home-signal-bar wenyou-home-signal-bar-blue">
+                <b style={{ width: `${hubRankSignal}%` }} />
+              </div>
+            </div>
+            <div className="wenyou-home-signal">
+              <div>
+                <span>副本状态</span>
+                <strong>{hubStatusLabel}</strong>
+              </div>
+              <div className="wenyou-home-signal-bar wenyou-home-signal-bar-purple">
+                <b style={{ width: `${hubStatusSignal}%` }} />
+                <i />
               </div>
             </div>
           </header>
@@ -1849,7 +1855,7 @@ export function WenyouTab({
                 <i />
                 <span>{hubMissionSub}</span>
               </div>
-              <h1>Dungeon<br />Hall</h1>
+              <h1>副本<br />大厅</h1>
               <p>{hasActiveRun ? currentScene.name : "副本池已待命，选择入口后接入。"}</p>
               <div className="wenyou-sector-foot">
                 <span>{hubMissionDetail}</span>
@@ -1859,22 +1865,17 @@ export function WenyouTab({
 
             <button type="button" className="wenyou-sector-card wenyou-sector-rift" onClick={() => pushView("rift")}>
               <Icon name="rift" />
-              <span>DESTINY</span>
-              <strong>Rift of<br />Fate</strong>
+              <span>抽卡入口</span>
+              <strong>命运<br />裂隙</strong>
             </button>
 
             <button type="button" className="wenyou-sector-card wenyou-sector-shop" onClick={() => pushView("shop")}>
               <div>
-                <strong>System<br />Shop</strong>
-                <span>POINTS: {hubPoints.toLocaleString()}</span>
+                <strong>系统<br />商店</strong>
+                <span>积分: {hubPoints.toLocaleString()}</span>
               </div>
               <i><Icon name="shop" /></i>
             </button>
-
-            <div className="wenyou-sector-protocol" aria-hidden="true">
-              <span>PROTOCOL_VOID_ACTIVE</span>
-              <span>{hubDebts > 0 ? `DEBT_${hubDebts}` : "SYSTEM_STABLE"}</span>
-            </div>
           </main>
 
           <footer className="wenyou-home-dock">
@@ -1887,14 +1888,10 @@ export function WenyouTab({
               }}
             >
               <span>
-                <small>Operator</small>
+                <small>玩家中心</small>
                 <strong>个人空间</strong>
               </span>
               <Icon name="profile" />
-            </button>
-            <button type="button" className="wenyou-home-terminal" onClick={syncHomeHub} aria-label="同步主神空间">
-              <Icon name="terminal" />
-              <i />
             </button>
           </footer>
         </section>
@@ -2248,7 +2245,7 @@ export function WenyouTab({
               </div>
               <PlayerStatCard
                 title="玩家一"
-                player={sessionPanel?.stats?.player1 || gameRulesState.players?.player1}
+                player={profileStats.player1 || gameRulesState.players?.player1}
                 playerId="player1"
                 growth={profileGrowthPlayers.player1}
                 acting={acting}
@@ -2261,7 +2258,7 @@ export function WenyouTab({
               />
               <PlayerStatCard
                 title="玩家二 · 渡"
-                player={sessionPanel?.stats?.player2 || gameRulesState.players?.player2}
+                player={profileStats.player2 || gameRulesState.players?.player2}
                 playerId="player2"
                 growth={profileGrowthPlayers.player2}
                 acting={acting}

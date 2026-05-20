@@ -143,6 +143,7 @@ _GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统*
 - 开局和普通观察写成小说式场景，不要把任务者名单、怪物生态、地点档案、规则全文、线索列表直接甩给玩家。
 - “线索”必须是可被验证、能推进任务或规则判断的信息。普通场景描写、氛围句、NPC 外貌和开局世界观不自动算线索；需要写入面板时，只通过【事件意图】里的 `clue_updates` 或 public `state_proposals` 建议。
 - 任务、线索、背包、角色数值和地点资料由后端缓存面板展示。正文里只写玩家此刻能经历到的内容，必要时用一两句【主神提示】点明新信息。
+{tutorial_guidance_block}
 
 ## 主神空间 · 积分 · 系统商店 · 成长 · 生死与回程（叙事规则）
 - 后端 runtime state 是唯一事实源。你负责叙事、环境反馈、NPC 表演和事件意图，不直接判定精确 HP/SAN/积分/EXP/抽卡/掉落/晋升。
@@ -548,6 +549,9 @@ _WENYOU_RESULT_FACTORS = {
     "death_failed": {"points": 0.0, "exp": 0.0, "label": "死亡失败"},
     "abandoned": {"points": 0.0, "exp": 0.0, "label": "放弃副本"},
 }
+_WENYOU_TUTORIAL_INSTANCE_ID = "tutorial_white_box_corridor"
+_WENYOU_TUTORIAL_ATTRIBUTE_POINTS = 6
+_WENYOU_TUTORIAL_GIFT_ITEM_IDS = ("wy_d_001", "wy_d_002")
 _WENYOU_RATING_BONUS = {
     "S": {"points": 0.70, "exp": 0.70},
     "A": {"points": 0.45, "exp": 0.45},
@@ -1214,6 +1218,14 @@ def _format_tasker_regiment_for_gm(fw: dict) -> str:
         "",
         "NPC 任务者档案（须在剧情中落实）：",
     ]
+    if npc_count <= 0:
+        return "\n".join(
+            [
+                f"- 难度等级：**{diff}**（D 最易，S 最险）。",
+                f"- 编制：tasker_total={total}，当前玩家角色 {pc} 名（玩家一「{p1n}」、玩家二「{p2n}」），没有其他任务者 NPC。",
+                "- 本局只围绕真实玩家角色推进，不要临时生成同场任务者，不要写陌生任务者名单。",
+            ]
+        )
     for i, n in enumerate(fw.get("npc_taskers") or []):
         if isinstance(n, dict):
             nshow = _show_name(n.get("name", ""), n.get("instance_name", ""))
@@ -1223,6 +1235,20 @@ def _format_tasker_regiment_for_gm(fw: dict) -> str:
                 f"  · {i+1}. 「{nshow}」｜{n.get('tier_note', '')}｜公开信息：{n.get('blurb', '')}（公开态度：{n.get('stance', '未知')}；状态：{status}；意图：{intent}）"
             )
     return "\n".join(lines)
+
+
+def _format_tutorial_guides_for_gm(fw: dict) -> str:
+    if not (fw.get("is_tutorial") or str(fw.get("tutorial_id") or "") == _WENYOU_TUTORIAL_INSTANCE_ID):
+        return ""
+    guides = _normalize_text_list(fw.get("tutorial_guides"), 220, 12)
+    if not guides:
+        guides = [
+            "只在关键节点用一两句【主神提示】引导，不要整段教学说明。",
+            "第一轮优先提示可用“观察 / 检查 / 移动 / 使用道具”等基础行动。",
+            "玩家卡住时提示可查看任务、背包和角色面板；不要替玩家做选择。",
+        ]
+    body = "\n".join(f"- {line}" for line in guides)
+    return "\n## 新手副本引导（本局额外规则）\n" + body
 
 
 def _format_blueprint_for_gm(fw: dict) -> str:
@@ -1277,6 +1303,9 @@ def _normalize_framework(raw: dict) -> dict:
         "npc_taskers": _normalize_npc_taskers(raw, tasker_total, player_count),
         "encounter_profile": _normalize_encounter_profile(raw.get("encounter_profile")),
         "initial_stats": _normalize_initial_stats(raw),
+        "is_tutorial": bool(raw.get("is_tutorial") or raw.get("tutorial") or str(raw.get("tutorial_id") or "") == _WENYOU_TUTORIAL_INSTANCE_ID),
+        "tutorial_id": str(raw.get("tutorial_id") or "").strip(),
+        "tutorial_guides": _normalize_text_list(raw.get("tutorial_guides"), 220, 12),
     }
     public, gm_secret = _normalize_public_secret(raw, out)
     out["public"] = public
@@ -2332,6 +2361,19 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
     settlement_history = data.get("settlement_history") if isinstance(data.get("settlement_history"), list) else []
     shop_state = data.get("shop_state") if isinstance(data.get("shop_state"), dict) else {}
     regular_shop = shop_state.get("regular") if isinstance(shop_state.get("regular"), dict) else {}
+    raw_players = data.get("players") if isinstance(data.get("players"), dict) else {}
+    players: dict[str, dict] = {}
+    base_player = _default_player_stats()
+    for pid in ("player1", "player2"):
+        cur = raw_players.get(pid) if isinstance(raw_players.get(pid), dict) else {}
+        player = dict(base_player)
+        player.update(cur)
+        _normalize_player_growth_fields(player)
+        player["abilities"] = _normalize_abilities_list(player.get("abilities"))
+        player["weapons"] = _normalize_text_list(player.get("weapons"))
+        player["conditions"] = _normalize_text_list(player.get("conditions"))
+        _recalc_player_caps(player)
+        players[pid] = player
     points = max(0, int(data.get("points") if data.get("points") is not None else seed_points))
     test_grant_min = max(0, int(data.get("test_points_grant_min") or 0))
     if _WENYOU_TEST_MIN_POINTS and points < _WENYOU_TEST_MIN_POINTS and test_grant_min < _WENYOU_TEST_MIN_POINTS:
@@ -2346,6 +2388,10 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
         "settlement_count": max(0, int(data.get("settlement_count") or 0)),
         "gacha": _normalize_gacha_state(data.get("gacha")),
         "inventory": _normalize_inventory(data.get("inventory"), source="wallet"),
+        "players": players,
+        "newbie_starter_pack_granted": bool(data.get("newbie_starter_pack_granted") or data.get("tutorial_clear_reward_granted")),
+        "newbie_starter_pack_granted_at": str(data.get("newbie_starter_pack_granted_at") or data.get("tutorial_completed_at") or ""),
+        "tutorial_started_at": str(data.get("tutorial_started_at") or ""),
         "clear_records": [x for x in clear_records[-30:] if isinstance(x, dict)],
         "promotion_history": [x for x in promotion_history[-20:] if isinstance(x, dict)],
         "forced_instance_queue": [x for x in forced_queue[-8:] if isinstance(x, dict)],
@@ -2502,6 +2548,41 @@ def _forced_candidate_from_queue(item: dict) -> dict[str, Any]:
     }
 
 
+def _tutorial_pack_granted(wallet: Optional[dict]) -> bool:
+    return bool(isinstance(wallet, dict) and wallet.get("newbie_starter_pack_granted"))
+
+
+def _should_offer_tutorial(user_id: int, wallet: Optional[dict] = None) -> bool:
+    if wallet is None:
+        wallet = _load_wenyou_wallet(int(user_id))
+    return not _tutorial_pack_granted(wallet)
+
+
+def _tutorial_candidate() -> dict[str, Any]:
+    return {
+        "id": _WENYOU_TUTORIAL_INSTANCE_ID,
+        "title": "白箱回廊",
+        "instance_genre": "剧情解密",
+        "difficulty": "D",
+        "tagline": "主神为新任务者准备的低危校准副本。",
+        "premise": "一条洁白回廊被分成三段，墙面会在玩家行动后亮起提示。这里没有其他任务者，危险主要来自误操作和规则理解错误。",
+        "core_task": "完成三段基础行动校准，找到出口并返回主神空间。",
+        "survival_hook": "红灯亮起时先停下观察，白灯亮起时再移动。",
+        "risk": "连续无视提示会被弹回起点，造成少量 HP/SAN 损耗。",
+        "twist": "最后一道门会检查玩家是否真的理解了任务、背包和角色面板。",
+        "tags": ["新手引导", "无NPC", "低危", "系统教学"],
+        "estimated_length": "短篇",
+        "tutorial": True,
+        "locked": True,
+    }
+
+
+def _is_tutorial_candidate(candidate: Any) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    return bool(candidate.get("tutorial") or candidate.get("is_tutorial") or str(candidate.get("id") or "") == _WENYOU_TUTORIAL_INSTANCE_ID)
+
+
 def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
     if not isinstance(candidate, dict) or not candidate.get("forced"):
         return
@@ -2548,14 +2629,15 @@ def apply_forced_instance_candidates(user_id: int, payload: Optional[dict] = Non
         _save_wenyou_wallet(uid, wallet)
     queue = [x for x in (wallet.get("forced_instance_queue") or []) if isinstance(x, dict)]
     data = copy.deepcopy(payload) if isinstance(payload, dict) else {"version": 1, "generatedAt": now_beijing_iso(), "items": []}
-    items = [x for x in (data.get("items") or []) if isinstance(x, dict) and not x.get("forced")]
+    items = [
+        x
+        for x in (data.get("items") or [])
+        if isinstance(x, dict) and not x.get("forced") and str(x.get("id") or "") != _WENYOU_TUTORIAL_INSTANCE_ID and not x.get("tutorial")
+    ]
     forced = [_forced_candidate_from_queue(x) for x in queue[:2]]
-    if forced:
-        data["items"] = (forced + items)[:8]
-        data["forced_instance_queue"] = queue
-    else:
-        data["items"] = items[:8]
-        data["forced_instance_queue"] = []
+    tutorial = [_tutorial_candidate()] if _should_offer_tutorial(uid, wallet) else []
+    data["items"] = (forced + tutorial + items)[:8]
+    data["forced_instance_queue"] = queue if forced else []
     return data
 
 
@@ -3136,6 +3218,91 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
     return outcome
 
 
+def _is_tutorial_session(session: dict) -> bool:
+    if not isinstance(session, dict):
+        return False
+    fw = _framework_for_runtime(session.get("framework") or {})
+    return bool(fw.get("is_tutorial") or str(fw.get("tutorial_id") or "") == _WENYOU_TUTORIAL_INSTANCE_ID)
+
+
+def _mark_tutorial_started(user_id: int, session: dict, wallet: dict) -> None:
+    if not _is_tutorial_session(session) or wallet.get("tutorial_started_at"):
+        return
+    wallet["tutorial_started_at"] = now_beijing_iso()
+    _save_wenyou_wallet(int(user_id), wallet)
+
+
+def _grant_newbie_starter_pack(session: dict, wallet: dict, result: str) -> dict[str, Any]:
+    if result != "standard_clear" or not _is_tutorial_session(session) or _tutorial_pack_granted(wallet):
+        return {"granted": False}
+
+    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
+    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    gift_items: list[dict] = []
+    gift_fallbacks = {
+        "wy_d_001": ("初级治愈药剂", {"hp_restore": 30, "label": "恢复 30 HP"}),
+        "wy_d_002": ("初级精神药剂", {"san_restore": 30, "label": "恢复 30 SAN"}),
+    }
+    gift_defs = [
+        _catalog_item_definition(item_id, gift_fallbacks[item_id][0], gift_fallbacks[item_id][1])
+        for item_id in _WENYOU_TUTORIAL_GIFT_ITEM_IDS
+    ]
+    for definition in gift_defs:
+        item = _new_inventory_item(definition, "newbie_starter_pack", "newbie-gift")
+        inventory = _add_inventory_item(inventory, item)
+        gift_items.append(item)
+
+    players_changed: dict[str, dict[str, Any]] = {}
+    for pid in ("player1", "player2"):
+        player = st.get(pid) if isinstance(st.get(pid), dict) else None
+        if not player:
+            continue
+        before = int(player.get("unspent_attribute_points") or 0)
+        player["unspent_attribute_points"] = before + _WENYOU_TUTORIAL_ATTRIBUTE_POINTS
+        st[pid] = player
+        players_changed[pid] = {
+            "unspent_attribute_points_delta": _WENYOU_TUTORIAL_ATTRIBUTE_POINTS,
+            "unspent_attribute_points": player["unspent_attribute_points"],
+        }
+
+    st["inventory"] = inventory[:80]
+    session["stats"] = st
+    wallet["inventory"] = inventory[:80]
+    wallet["newbie_starter_pack_granted"] = True
+    wallet["newbie_starter_pack_granted_at"] = now_beijing_iso()
+    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [
+        {
+            "at": wallet["newbie_starter_pack_granted_at"],
+            "type": "newbie_starter_pack",
+            "gameId": str(session.get("gameId") or ""),
+            "items": [str(item.get("id") or "") for item in gift_items],
+            "attribute_points_delta": _WENYOU_TUTORIAL_ATTRIBUTE_POINTS,
+        }
+    ]
+
+    event_log = session.get("event_log") if isinstance(session.get("event_log"), list) else []
+    patch = {
+        "round_id": f"newbie_pack_{len(event_log) + 1:03d}",
+        "source": "rules_engine.newbie_starter_pack",
+        "changes": {
+            "inventory_add": gift_items,
+            "players": players_changed,
+            "wallet": {"newbie_starter_pack_granted": True},
+        },
+        "created_at": now_beijing_iso(),
+    }
+    event_log.append(patch)
+    session["event_log"] = event_log[-200:]
+    session["last_state_patch"] = patch
+    return {
+        "granted": True,
+        "items": gift_items,
+        "attribute_points": _WENYOU_TUTORIAL_ATTRIBUTE_POINTS,
+        "players": players_changed,
+        "granted_at": wallet["newbie_starter_pack_granted_at"],
+    }
+
+
 def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rating: str = "") -> dict:
     existing = session.get("settlement") if isinstance(session.get("settlement"), dict) else {}
     if existing.get("reward_granted"):
@@ -3211,6 +3378,14 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
         level_changes[pk] = _grant_player_exp(player, int(settlement.get("gross_exp") or 0))
         st[pk] = player
     session["stats"] = st
+    newbie_pack = _grant_newbie_starter_pack(session, wallet, result)
+    st = session.get("stats") if isinstance(session.get("stats"), dict) else st
+    wallet["players"] = {
+        "player1": copy.deepcopy(st.get("player1") if isinstance(st.get("player1"), dict) else _default_player_stats()),
+        "player2": copy.deepcopy(st.get("player2") if isinstance(st.get("player2"), dict) else _default_player_stats()),
+    }
+    _save_wenyou_wallet(user_id, wallet)
+    _sync_session_points_with_wallet(session, wallet)
 
     settlement.update(
         {
@@ -3225,6 +3400,7 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
             "points_delta": final_points,
             "exp_delta": int(settlement.get("gross_exp") or 0),
             "reward_items": reward_grants,
+            "newbie_starter_pack": newbie_pack if newbie_pack.get("granted") else None,
             "forced_instance_result": forced_result or None,
             "debt_before": debt_before,
             "debt_repaid": debt_repaid,
@@ -3248,6 +3424,7 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
                 "player2": {"exp_delta": settlement["exp_delta"], **level_changes.get("player2", {})},
             },
             "rewards": reward_grants,
+            "newbie_starter_pack": newbie_pack if newbie_pack.get("granted") else None,
         },
         "created_at": now_beijing_iso(),
     }
@@ -3315,6 +3492,15 @@ def _format_settlement_summary(settlement: dict) -> str:
             lines.append(f"基础奖励：{rolls} 次｜{suffix}")
         else:
             lines.append(f"基础奖励次数：{rolls} 次")
+    pack = settlement.get("newbie_starter_pack") if isinstance(settlement.get("newbie_starter_pack"), dict) else None
+    if pack and pack.get("granted"):
+        item_names = [
+            str(item.get("name") or "")
+            for item in (pack.get("items") or [])
+            if isinstance(item, dict) and item.get("name")
+        ]
+        suffix = "、".join(item_names) if item_names else "新手补给"
+        lines.append(f"新手礼包：{suffix}｜自由属性点 +{int(pack.get('attribute_points') or 0)}")
     return "\n".join(lines)
 
 
@@ -3477,7 +3663,7 @@ def _inventory_item_matches(item: dict, target: dict) -> bool:
     return bool(name and _inventory_item_name(item) == name)
 
 
-def _consume_inventory_item(inventory: list[dict], target: dict) -> tuple[list[dict], Optional[dict]]:
+def _consume_inventory_item(inventory: list[dict], target: dict, force_remove: bool = False) -> tuple[list[dict], Optional[dict]]:
     inv = _normalize_inventory(inventory, source="session")
     consumed: Optional[dict] = None
     out: list[dict] = []
@@ -3488,7 +3674,7 @@ def _consume_inventory_item(inventory: list[dict], target: dict) -> tuple[list[d
             used = True
             consumed = dict(cur)
             inventory_update = target.get("_inventory_update") if isinstance(target.get("_inventory_update"), dict) else {}
-            keep_item = bool(target.get("_use_keep")) or cur.get("consume") is False
+            keep_item = not force_remove and (bool(target.get("_use_keep")) or cur.get("consume") is False)
             if keep_item:
                 for key, value in inventory_update.items():
                     cur[key] = value
@@ -4161,6 +4347,62 @@ def _item_locked_for_recycle(item: dict) -> Optional[str]:
     return None
 
 
+def _wallet_stats_from_wallet(wallet: dict) -> dict:
+    players = wallet.get("players") if isinstance(wallet.get("players"), dict) else {}
+    st = {
+        "phase": "hub",
+        "points": max(0, int(wallet.get("points") or 0)),
+        "inventory": _normalize_inventory(wallet.get("inventory"), source="wallet"),
+    }
+    base = _default_player_stats()
+    for pid in ("player1", "player2"):
+        cur = players.get(pid) if isinstance(players.get(pid), dict) else {}
+        player = dict(base)
+        player.update(copy.deepcopy(cur))
+        _normalize_player_growth_fields(player)
+        player["abilities"] = _normalize_abilities_list(player.get("abilities"))
+        player["weapons"] = _normalize_text_list(player.get("weapons"))
+        player["conditions"] = _normalize_text_list(player.get("conditions"))
+        _recalc_player_caps(player)
+        st[pid] = player
+    return st
+
+
+def _load_inventory_action_context(uid: int) -> tuple[bool, dict, dict, dict, list[dict]]:
+    session = r2_store.get_wenyou_session(uid)
+    active = bool(session and isinstance(session, dict) and session.get("gameId"))
+    wallet = _load_wenyou_wallet(uid, session if active else None)
+    if active:
+        _session_ensure_stats(session)
+        st = session["stats"]
+        inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+        return True, session, wallet, st, inventory
+    st = _wallet_stats_from_wallet(wallet)
+    session_ctx = {"phase": "hub", "stats": st, "flags": {}}
+    return False, session_ctx, wallet, st, list(st.get("inventory") or [])
+
+
+def _inventory_action_view(uid: int, active: bool) -> dict:
+    return get_session_view(uid) if active else get_shop_view(uid)
+
+
+def _persist_wallet_inventory_result(user_id: int, wallet: dict, st: dict, source: str, changes: dict) -> dict:
+    wallet["inventory"] = _normalize_inventory(st.get("inventory"), source="wallet")[:80]
+    wallet["players"] = {
+        "player1": copy.deepcopy(st.get("player1") if isinstance(st.get("player1"), dict) else _default_player_stats()),
+        "player2": copy.deepcopy(st.get("player2") if isinstance(st.get("player2"), dict) else _default_player_stats()),
+    }
+    _save_wenyou_wallet(int(user_id), wallet)
+    view = get_shop_view(int(user_id))
+    view["state_patch"] = {
+        "round_id": f"{source.split('.')[-1]}_wallet",
+        "source": source,
+        "changes": changes,
+        "created_at": now_beijing_iso(),
+    }
+    return view
+
+
 def _persist_inventory_rule_result(user_id: int, session: dict, wallet: dict, source: str, changes: dict) -> dict:
     _sync_session_points_with_wallet(session, wallet)
     patch = _append_rules_patch(session, source, changes)
@@ -4173,28 +4415,22 @@ def _persist_inventory_rule_result(user_id: int, session: dict, wallet: dict, so
 
 def equip_inventory_item(user_id: int, item_ref: str, player_id: Any = "player1", slot: str = "") -> tuple[bool, str, dict]:
     uid = int(user_id)
-    session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return False, "当前没有可装备的文游存档。", get_session_view(uid)
-    _session_ensure_stats(session)
     pid = _resolve_player_key(player_id)
-    wallet = _load_wenyou_wallet(uid, session)
-    st = session["stats"]
-    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    active, session, wallet, st, inventory = _load_inventory_action_context(uid)
     item = _inventory_find_by_name(inventory, item_ref)
     if not item:
-        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+        return False, f"背包里没有【{item_ref}】。", _inventory_action_view(uid, active)
     if not _is_gear_item(item):
-        return False, "该物品不是可装备物。", get_session_view(uid)
+        return False, "该物品不是可装备物。", _inventory_action_view(uid, active)
     if item.get("sealed"):
-        return False, f"【{_inventory_item_name(item)}】仍处于封印状态。", get_session_view(uid)
+        return False, f"【{_inventory_item_name(item)}】仍处于封印状态。", _inventory_action_view(uid, active)
     if item.get("broken") or (item.get("durability") is not None and int(item.get("durability") or 0) <= 0):
-        return False, "该装备已损坏，需要维修后再装备。", get_session_view(uid)
+        return False, "该装备已损坏，需要维修后再装备。", _inventory_action_view(uid, active)
     player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
     _recalc_player_caps(player)
     req_error = _check_item_requirements(session, item, player)
     if req_error:
-        return False, f"【{_inventory_item_name(item)}】{req_error}", get_session_view(uid)
+        return False, f"【{_inventory_item_name(item)}】{req_error}", _inventory_action_view(uid, active)
     before_gear = list(player.get("gear") or [])
     slot_used, equipped = _equip_item_to_player(player, item, slot_override=slot)
     _recalc_player_caps(player)
@@ -4207,77 +4443,72 @@ def equip_inventory_item(user_id: int, item_ref: str, player_id: Any = "player1"
     inventory, updated = _inventory_update_item(inventory, item, {"equipped_by": pid, "equipped_slot": slot_used})
     wallet["inventory"] = inventory[:80]
     st["inventory"] = inventory[:80]
-    session["stats"] = st
-    view = _persist_inventory_rule_result(
-        uid,
-        session,
-        wallet,
-        "rules_engine.equip_item",
-        {"players": {pid: {"gear_before": before_gear, "gear_after": player.get("gear") or []}}, "equipment": {pid: equipped}, "inventory_update": updated or {}},
-    )
+    changes = {"players": {pid: {"gear_before": before_gear, "gear_after": player.get("gear") or []}}, "equipment": {pid: equipped}, "inventory_update": updated or {}}
+    if active:
+        session["stats"] = st
+        view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.equip_item", changes)
+    else:
+        wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "gear_equip", "player": pid, "item": _inventory_item_name(item), "slot": slot_used}]
+        view = _persist_wallet_inventory_result(uid, wallet, st, "rules_engine.equip_item", changes)
     return True, f"已装备【{_inventory_item_name(item)}】到 {slot_used}。", view
 
 
 def repair_inventory_item(user_id: int, item_ref: str) -> tuple[bool, str, dict]:
     uid = int(user_id)
-    session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return False, "当前没有可维修的文游存档。", get_session_view(uid)
-    _session_ensure_stats(session)
-    wallet = _load_wenyou_wallet(uid, session)
-    st = session["stats"]
-    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    active, session, wallet, st, inventory = _load_inventory_action_context(uid)
     item = _inventory_find_by_name(inventory, item_ref)
     if not item:
-        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+        return False, f"背包里没有【{item_ref}】。", _inventory_action_view(uid, active)
     if not _is_gear_item(item) and not bool((item.get("effect_json") or {}).get("repair_allowed")):
-        return False, "该物品不能维修。", get_session_view(uid)
+        return False, "该物品不能维修。", _inventory_action_view(uid, active)
     rarity = _normalize_difficulty(item.get("rarity") or "D")
     durability_max = int(item.get("durability_max") or _WENYOU_GEAR_DEFAULT_DURABILITY.get(rarity, 30))
     durability = int(item.get("durability") if item.get("durability") is not None else durability_max)
     missing = max(0, durability_max - durability)
     if missing <= 0 and not item.get("broken"):
-        return False, "该装备耐久已满。", get_session_view(uid)
+        return False, "该装备耐久已满。", _inventory_action_view(uid, active)
     cost = missing * int(_WENYOU_GEAR_REPAIR_PRICE.get(rarity, 1))
     if int(wallet.get("points") or 0) < cost:
-        return False, f"主神积分不足，维修需要 {cost}。", get_session_view(uid)
+        return False, f"主神积分不足，维修需要 {cost}。", _inventory_action_view(uid, active)
     wallet["points"] = max(0, int(wallet.get("points") or 0) - cost)
     inventory, updated = _inventory_update_item(inventory, item, {"durability": durability_max, "durability_max": durability_max, "broken": False})
     wallet["inventory"] = inventory[:80]
     st["inventory"] = inventory[:80]
-    session["stats"] = st
     wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "gear_repair", "item": _inventory_item_name(item), "points_delta": -cost}]
-    view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.repair_item", {"wallet": {"points_delta": -cost}, "inventory_update": updated or {}})
+    changes = {"wallet": {"points_delta": -cost}, "inventory_update": updated or {}}
+    if active:
+        session["stats"] = st
+        view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.repair_item", changes)
+    else:
+        view = _persist_wallet_inventory_result(uid, wallet, st, "rules_engine.repair_item", changes)
     return True, f"已维修【{_inventory_item_name(item)}】，扣除 {cost} 主神积分。", view
 
 
 def sell_inventory_item(user_id: int, item_ref: str) -> tuple[bool, str, dict]:
     uid = int(user_id)
-    session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return False, "当前没有可出售的文游存档。", get_session_view(uid)
-    _session_ensure_stats(session)
-    wallet = _load_wenyou_wallet(uid, session)
-    st = session["stats"]
-    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    active, session, wallet, st, inventory = _load_inventory_action_context(uid)
     item = _inventory_find_by_name(inventory, item_ref)
     if not item:
-        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+        return False, f"背包里没有【{item_ref}】。", _inventory_action_view(uid, active)
     locked = _item_locked_for_recycle(item)
     if locked:
-        return False, locked, get_session_view(uid)
+        return False, locked, _inventory_action_view(uid, active)
     rarity = _normalize_difficulty(item.get("rarity") or "D")
     qty = max(1, int(item.get("quantity") or 1))
     value = max(1, math.floor(_gear_reference_price(item) * float(_WENYOU_SELL_RATIO.get(rarity, 0.25)))) * qty
-    inventory, consumed = _consume_inventory_item(inventory, item)
+    inventory, consumed = _consume_inventory_item(inventory, item, force_remove=True)
     if not consumed:
-        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
+        return False, f"背包里没有【{item_ref}】。", _inventory_action_view(uid, active)
     wallet["points"] = max(0, int(wallet.get("points") or 0) + value)
     wallet["inventory"] = inventory[:80]
     st["inventory"] = inventory[:80]
-    session["stats"] = st
     wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "item_sell", "item": _inventory_item_name(item), "points_delta": value}]
-    view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.sell_item", {"wallet": {"points_delta": value}, "inventory_remove": [consumed]})
+    changes = {"wallet": {"points_delta": value}, "inventory_remove": [consumed]}
+    if active:
+        session["stats"] = st
+        view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.sell_item", changes)
+    else:
+        view = _persist_wallet_inventory_result(uid, wallet, st, "rules_engine.sell_item", changes)
     return True, f"已回收【{_inventory_item_name(item)}】，获得 {value} 主神积分。", view
 
 
@@ -4985,6 +5216,26 @@ if _CONTENT_ITEM_CATALOG:
 _SHOP_CATALOG_BY_ID = {str(item.get("id") or ""): item for item in _SHOP_CATALOG}
 _ITEM_CATALOG_BY_ID = {str(item.get("id") or ""): item for item in _CONTENT_ITEM_CATALOG}
 _ITEM_CATALOG_BY_NAME = {str(item.get("name") or ""): item for item in _CONTENT_ITEM_CATALOG}
+
+
+def _catalog_item_definition(item_id: str, fallback_name: str, fallback_effect: dict[str, Any]) -> dict[str, Any]:
+    item = _ITEM_CATALOG_BY_ID.get(str(item_id or "")) or _SHOP_CATALOG_BY_ID.get(str(item_id or ""))
+    if isinstance(item, dict) and item:
+        return dict(item)
+    return {
+        "id": str(item_id or fallback_name),
+        "name": fallback_name,
+        "kind": "新手补给",
+        "category": "consumable",
+        "item_type": "consumable",
+        "rarity": "D",
+        "desc": str(fallback_effect.get("label") or "新手补给。"),
+        "effect_json": dict(fallback_effect),
+        "consume": True,
+        "stackable": True,
+        "price": 30,
+    }
+
 
 _GACHA_ITEMS_BY_RARITY: dict[str, list[dict[str, Any]]] = {}
 for _gacha_item in _GACHA_CATALOG:
@@ -5835,13 +6086,18 @@ def _special_shop_items(user_id: int, session: Optional[dict], wallet: dict) -> 
 
 
 def get_shop_view(user_id: int) -> dict:
-    """文游系统商店：只读取当前 session 积分与背包。"""
+    """文游系统商店/个人空间：优先读当前 session，归档后读 wallet 背包。"""
     uid = int(user_id)
     session = r2_store.get_wenyou_session(uid)
     active = bool(session and isinstance(session, dict) and session.get("gameId"))
     phase = "hub"
-    inventory: list[dict] = []
     wallet = _load_wenyou_wallet(uid, session if active else None)
+    wallet_stats = _wallet_stats_from_wallet(wallet)
+    inventory: list[dict] = list(wallet_stats.get("inventory") or [])
+    players = {
+        "player1": copy.deepcopy(wallet_stats.get("player1") if isinstance(wallet_stats.get("player1"), dict) else _default_player_stats()),
+        "player2": copy.deepcopy(wallet_stats.get("player2") if isinstance(wallet_stats.get("player2"), dict) else _default_player_stats()),
+    }
     regular_state = _regular_shop_state(wallet)
     if active:
         _session_ensure_stats(session)
@@ -5849,10 +6105,22 @@ def get_shop_view(user_id: int) -> dict:
         phase = _session_phase(session)
         _sync_session_points_with_wallet(session, wallet)
         inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+        players = {
+            "player1": copy.deepcopy(st.get("player1") if isinstance(st.get("player1"), dict) else players["player1"]),
+            "player2": copy.deepcopy(st.get("player2") if isinstance(st.get("player2"), dict) else players["player2"]),
+        }
     can_buy = bool(active and _shop_open_for_phase(phase))
     regular_items = _shop_offer_items(uid, wallet)
     special_items = _special_shop_items(uid, session if active else None, wallet)
     special_unlocked = bool(special_items)
+    stats_view = {
+        "phase": phase,
+        "points": max(0, int(wallet.get("points") or 0)),
+        "inventory": inventory,
+        "player1": players["player1"],
+        "player2": players["player2"],
+    }
+    growth_session = {"phase": phase, "stats": copy.deepcopy(stats_view)}
     return {
         "active": active,
         "phase": phase,
@@ -5861,6 +6129,8 @@ def get_shop_view(user_id: int) -> dict:
         "points": max(0, int(wallet.get("points") or 0)),
         "debts": max(0, int(wallet.get("debts") or 0)),
         "inventory": inventory,
+        "stats": stats_view,
+        "growth": _growth_view(growth_session, wallet),
         "generatedAt": _shop_today_key(),
         "items": regular_items,
         "shop_state": {
@@ -6343,6 +6613,8 @@ def _normalize_candidate_item(raw: Any, index: int = 0) -> Optional[dict]:
         "twist": str(raw.get("twist") or raw.get("mystery") or "").strip()[:180],
         "tags": clean_tags,
         "estimated_length": str(raw.get("estimated_length") or raw.get("length") or "标准").strip()[:20] or "标准",
+        "tutorial": bool(raw.get("tutorial") or raw.get("is_tutorial") or cid == _WENYOU_TUTORIAL_INSTANCE_ID),
+        "locked": bool(raw.get("locked")),
     }
 
 
@@ -6367,10 +6639,20 @@ def generate_instance_candidates(user_id: int, count: int = 6, keywords: str = "
     prompt = _candidates_prompt(n, difficulty_hint, keywords)
     text = call_wenyou_deepseek([{"role": "user", "content": prompt}], system=_CANDIDATES_SYSTEM, temperature=0.9)
     if not text:
+        if _should_offer_tutorial(uid):
+            return apply_forced_instance_candidates(
+                uid,
+                {"version": 1, "generatedAt": now_beijing_iso(), "difficultyHint": difficulty_hint, "items": []},
+            ), None
         return None, "文游：候选设定生成失败（DeepSeek 无响应）。"
     data = _extract_json_object(text)
     items = _normalize_candidate_payload(data)
     if not items:
+        if _should_offer_tutorial(uid):
+            return apply_forced_instance_candidates(
+                uid,
+                {"version": 1, "generatedAt": now_beijing_iso(), "difficultyHint": difficulty_hint, "items": []},
+            ), None
         return None, "文游：候选设定解析失败，请重试。"
     payload = {
         "version": 1,
@@ -6625,6 +6907,123 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
     return _normalize_framework(raw)
 
 
+def _tutorial_framework() -> dict:
+    raw = {
+        "instance_code": "T-000",
+        "instance_name": "白箱回廊",
+        "instance_genre": "剧情解密",
+        "genre_note": "低危教学副本，用三段回廊引导玩家熟悉任务、背包、角色面板和基础行动。",
+        "difficulty": "D",
+        "player_count": 2,
+        "tasker_total": 2,
+        "npc_taskers": [],
+        "is_tutorial": True,
+        "tutorial_id": _WENYOU_TUTORIAL_INSTANCE_ID,
+        "tutorial_guides": [
+            "新手副本没有其他任务者 NPC；不要临时生成同场任务者。",
+            "只在关键节点用一两句【主神提示】引导，不要把教程写成说明书。",
+            "第一段提示玩家可以“观察”环境，第二段提示可以“检查/移动”，第三段提示任务、背包、角色面板和结算入口。",
+            "如果玩家卡住，给出低压提示；不要替玩家做行动决定。",
+            "失败只做轻微损耗或弹回起点，不要写死亡惩罚。",
+        ],
+        "world": (
+            "白箱回廊是一段主神空间投放给新任务者的低危校准区。墙壁像未加载完成的白色模型，地面嵌着三条细光轨，"
+            "每次行动后都会有一块半透明系统屏短暂亮起。这里没有其他任务者，只有玩家角色与主神系统的基础引导。"
+        ),
+        "player1_name": "辛玥",
+        "player1_instance_name": "",
+        "player1_role": "新任务者。黑色长发黑眼，中等身高一米六多，二十岁出头。",
+        "player2_name": "渡",
+        "player2_instance_name": "",
+        "player2_role": "新任务者。银色短发，一米八多，薄肌，二十多岁。",
+        "conflict": "通过三段白箱回廊：确认任务提示，完成一次有效观察/检查/移动，找到出口并返回主神空间。",
+        "failure_hint": "连续无视系统提示会被弹回当前段起点，并承受轻微 HP/SAN 损耗；不会触发死亡惩罚。",
+        "reward_hint": "首次标准通关除基础通关奖励外，会额外发放新手大礼包。",
+        "public": {
+            "instance_name": "白箱回廊",
+            "genre": ["剧情解密", "新手引导"],
+            "difficulty": "D",
+            "visible_rules": [
+                "本副本没有其他任务者。",
+                "红灯亮起时请先观察，白灯亮起时可以前进。",
+                "卡住时可以查看任务、背包、角色面板，或输入观察/检查/移动。",
+            ],
+            "public_task": "通过三段基础行动校准，找到出口并完成结算。",
+        },
+        "gm_secret": {
+            "true_rules": [
+                "玩家完成观察后，第一段门禁解除。",
+                "玩家检查墙面/光轨后，第二段出口标记出现。",
+                "玩家主动确认任务或面板信息后，第三段出口稳定。",
+            ],
+            "false_rules": [],
+            "npc_private_state": {},
+            "hidden_endings": [],
+        },
+        "instance_blueprint": {
+            "blueprint_version": 1,
+            "logline": "玩家在低危白箱回廊完成主神系统基础校准。",
+            "mainline": [
+                {
+                    "phase": "开场",
+                    "goal": "阅读主神提示并观察第一段回廊",
+                    "required_clues": ["guide_observe"],
+                    "fail_forward": "如果玩家没有观察，系统屏闪烁提示“先看清环境”。",
+                },
+                {
+                    "phase": "行动校准",
+                    "goal": "通过检查、移动或使用基础道具理解行动输入",
+                    "required_clues": ["guide_action"],
+                    "fail_forward": "错误行动只触发轻微回弹，不阻断剧情。",
+                },
+                {
+                    "phase": "面板校准",
+                    "goal": "确认任务/背包/角色面板的用途并打开出口",
+                    "required_clues": ["guide_panel"],
+                    "fail_forward": "主神提示出口需要一次明确确认或推进。",
+                },
+            ],
+            "side_quests": [],
+            "hidden_side_quests": [],
+            "hidden_endings": [],
+            "clue_graph": [
+                {"id": "guide_observe", "public_text": "白墙上的系统屏提示：先观察，再行动。", "leads_to": ["guide_action"], "is_required_for_mainline": True},
+                {"id": "guide_action", "public_text": "光轨会响应观察、检查、移动等基础行动。", "leads_to": ["guide_panel"], "is_required_for_mainline": True},
+                {"id": "guide_panel", "public_text": "任务、背包、角色面板会记录系统事实，正文不会每次重复。", "leads_to": [], "is_required_for_mainline": True},
+            ],
+            "npc_arcs": {},
+            "threat_clocks": [{"id": "tutorial_mistakes", "name": "误操作累积", "value": 0, "max": 3, "visibility": "hidden"}],
+            "hard_constraints": [
+                "没有其他任务者 NPC",
+                "不写死亡惩罚",
+                "主神提示短而明确，不替玩家行动",
+                "完成主线后允许标准通关结算",
+            ],
+        },
+        "encounter_profile": {
+            "common": [],
+            "elite": [],
+            "boss": {},
+            "spawn_rules": ["不生成怪物；误操作只用环境回弹和提示处理。"],
+            "balance_notes": "低危教学副本，不使用怪物战斗。",
+        },
+        "initial_stats": {
+            "points": 100,
+            "player1": dict(_default_player_stats()),
+            "player2": dict(_default_player_stats()),
+            "items": [],
+        },
+        "opening": (
+            "白光像一张被拉平的纸，从脚下铺到视野尽头。\n"
+            "你和渡站在一条洁白的回廊里，墙面没有门牌，只有三条细细的光轨向前延伸。\n"
+            "半透明的系统屏在半空亮起：【新手副本 T-000｜白箱回廊】。\n"
+            "【主神提示】本副本没有其他任务者。请先观察环境，再决定下一步行动。\n"
+            "远处第一道门亮着柔和的白光，像是在等你们给出第一个指令。"
+        ),
+    }
+    return _normalize_framework(raw)
+
+
 def generate_framework_random(target_difficulty: Optional[str] = None) -> tuple[Optional[dict], Optional[str]]:
     tpl = _load_templates()
     worlds = tpl.get("worlds") or ["原创世界"]
@@ -6659,6 +7058,8 @@ def generate_framework_from_candidate(candidate: Any) -> tuple[Optional[dict], O
     item = _normalize_candidate_item(candidate, 0)
     if not item:
         return None, "文游：候选设定为空，无法扩展。"
+    if _is_tutorial_candidate(item):
+        return _tutorial_framework(), None
 
     started = time.monotonic()
     core_text = call_wenyou_deepseek(
@@ -6725,39 +7126,6 @@ def generate_framework_custom(keywords: str) -> tuple[Optional[dict], Optional[s
         return None, "文游：框架解析失败，请重试。"
     return _normalize_framework(data), None
 
-
-def _grant_starter_attribute_bonus(session: dict, points: int = 6) -> None:
-    if not isinstance(session, dict) or session.get("starter_attribute_bonus_granted"):
-        return
-    bonus = max(0, int(points or 0))
-    if bonus <= 0:
-        return
-    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
-    players_changed: dict[str, dict[str, Any]] = {}
-    for pid in ("player1", "player2"):
-        player = st.get(pid) if isinstance(st.get(pid), dict) else None
-        if not player:
-            continue
-        before = int(player.get("unspent_attribute_points") or 0)
-        player["unspent_attribute_points"] = before + bonus
-        st[pid] = player
-        players_changed[pid] = {"unspent_attribute_points_delta": bonus, "unspent_attribute_points": player["unspent_attribute_points"]}
-    if not players_changed:
-        return
-    session["stats"] = st
-    session["starter_attribute_bonus_granted"] = True
-    event_log = session.get("event_log") if isinstance(session.get("event_log"), list) else []
-    patch = {
-        "round_id": f"starter_bonus_{len(event_log) + 1:03d}",
-        "source": "rules_engine.starter_attribute_bonus",
-        "changes": {"players": players_changed},
-        "created_at": now_beijing_iso(),
-    }
-    event_log.append(patch)
-    session["event_log"] = event_log[-200:]
-    session["last_state_patch"] = patch
-
-
 def _new_session(framework: dict) -> dict:
     gid = str(uuid4())
     ts = now_beijing_iso()
@@ -6777,7 +7145,6 @@ def _new_session(framework: dict) -> dict:
         ],
         "pending_round": {"player1_lines": [], "player2_lines": []},
     }
-    _grant_starter_attribute_bonus(session)
     session["runtime_state"] = _runtime_state_view(session)
     return session
 
@@ -7348,7 +7715,9 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
         with _PENDING_LOCK:
             _PENDING_STORY_CONFIRM.pop(uid, None)
 
-    if keywords and keywords.strip():
+    if not (keywords and keywords.strip()) and _should_offer_tutorial(uid):
+        fw, err = _tutorial_framework(), None
+    elif keywords and keywords.strip():
         fw, err = generate_framework_custom(keywords)
     else:
         fw, err = generate_framework_random(_difficulty_from_progress(uid))
@@ -7357,6 +7726,7 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
 
     session = _new_session(fw)
     wallet = _load_wenyou_wallet(uid, session)
+    _mark_tutorial_started(uid, session, wallet)
     _sync_session_points_with_wallet(session, wallet)
     session.setdefault("stats", {})["inventory"] = _merge_inventory(wallet.get("inventory"), session.get("stats", {}).get("inventory"))
     _attach_forced_instance_contract(session, {})
@@ -7390,6 +7760,7 @@ def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
 
     session = _new_session(fw)
     wallet = _load_wenyou_wallet(uid, session)
+    _mark_tutorial_started(uid, session, wallet)
     _sync_session_points_with_wallet(session, wallet)
     session.setdefault("stats", {})["inventory"] = _merge_inventory(wallet.get("inventory"), session.get("stats", {}).get("inventory"))
     r2_store.save_wenyou_session(uid, session)
@@ -8578,6 +8949,7 @@ def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
         conflict=fw.get("conflict", ""),
         failure_hint=fw.get("failure_hint") or "由主神规则判定。",
         reward_hint=fw.get("reward_hint") or "视表现给予风味向回报。",
+        tutorial_guidance_block=_format_tutorial_guides_for_gm(fw),
         tasker_regiment_block=_format_tasker_regiment_for_gm(fw),
         blueprint_block=_format_blueprint_for_gm(fw),
         current_stats_block=_format_stats_for_gm_prompt(session),
@@ -8654,43 +9026,9 @@ def cmd_go(user_id: int) -> str:
     return f"—— 主神系统 ——\n\n{display}"
 
 
-def cmd_end(user_id: int, result: str = "", rating: str = "") -> str:
-    """进入系统空间结算阶段（不立即归档）。"""
-    uid = int(user_id)
-    with _PENDING_LOCK:
-        _PENDING_STORY_CONFIRM.pop(uid, None)
-    session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        with _PENDING_LOCK:
-            _PENDING_STORY_CONFIRM.pop(uid, None)
-        return "文游：当前没有进行中的局。"
-
-    _session_ensure_stats(session)
-    session["phase"] = "settlement"
-    session.setdefault("stats", {})["phase"] = "settlement"
-    settlement = _grant_settlement_reward(uid, session, result=result, rating=rating)
-    summary = _format_settlement_summary(settlement)
-    ts = now_beijing_iso()
-    session.setdefault("history", []).append(
-        {
-            "role": "gm",
-            "content": "【主神提示】副本已结束，进入系统空间结算阶段。可进行购买道具、治疗、强化与整备；整备完成后请完成最终结算归档。\n\n" + summary,
-            "timestamp": ts,
-        }
-    )
-    r2_store.save_wenyou_session(uid, session)
-    return "文游：已进入系统空间结算阶段。\n\n" + summary + "\n\n现在可进行商店、治疗与整备；完成后请归档本局。"
-
-
-def cmd_settle(user_id: int) -> str:
-    """结算完成并归档本局。"""
-    uid = int(user_id)
-    session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return "文游：当前没有进行中的局。"
-    if _session_phase(session) != "settlement":
-        return "文游：当前不在结算阶段。请先结束副本并进入系统空间结算。"
-
+def _archive_settled_session(uid: int, session: dict) -> None:
+    session["phase"] = "archived"
+    session.setdefault("stats", {})["phase"] = "archived"
     archive = {
         "gameId": session.get("gameId"),
         "endedAt": now_beijing_iso(),
@@ -8707,4 +9045,42 @@ def cmd_settle(user_id: int) -> str:
     r2_store.delete_wenyou_active_session(uid)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)
+
+
+def cmd_end(user_id: int, result: str = "", rating: str = "") -> str:
+    """最终结算并立即归档本局。"""
+    uid = int(user_id)
+    with _PENDING_LOCK:
+        _PENDING_STORY_CONFIRM.pop(uid, None)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        with _PENDING_LOCK:
+            _PENDING_STORY_CONFIRM.pop(uid, None)
+        return "文游：当前没有进行中的局。"
+
+    _session_ensure_stats(session)
+    settlement = _grant_settlement_reward(uid, session, result=result, rating=rating)
+    summary = _format_settlement_summary(settlement)
+    ts = now_beijing_iso()
+    session.setdefault("history", []).append(
+        {
+            "role": "gm",
+            "content": "【主神提示】副本已结束，主神系统完成结算并归档。\n\n" + summary,
+            "timestamp": ts,
+        }
+    )
+    _archive_settled_session(uid, session)
+    return "文游：本局已完成结算并归档。\n\n" + summary + "\n\n下一局可在主神空间重新开局。"
+
+
+def cmd_settle(user_id: int) -> str:
+    """结算完成并归档本局。"""
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return "文游：当前没有进行中的局。"
+    if _session_phase(session) != "settlement":
+        return "文游：当前不在结算阶段。请先结束副本并进入系统空间结算。"
+
+    _archive_settled_session(uid, session)
     return "文游：本局已完成最终结算并归档。下一局可在系统空间重新开局。MiniApp 可查看已完成副本。"

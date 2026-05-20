@@ -842,6 +842,11 @@ npm -C miniapp run android
 - 已验证：`git diff --check -- miniapp/src/styles.css` 通过（仅提示该文件既有 CRLF 会在 Git 触碰时转 LF）；`npm run build` 通过。当前静态入口引用 `miniapp_static/assets/index-DqV2cCNW.js`、`miniapp_static/assets/index-D5v3i7a_.css`，当前文游 chunk 为 `miniapp_static/assets/WenyouTab-BqBXklcv.js`。
 - 未完成 / 不要碰：本次不清理历史 `miniapp_static/assets/*` 旧 hash 产物；抽卡音效/动画后续单独做。
 
+当前状态（2026-05-21 文游首页/个人空间/新手副本收束）：
+- 已完成：主神空间首页回到三条系统状态条（主神积分、等级阶位、副本状态），一级入口文字本地化为“副本大厅 / 命运裂隙 / 系统商店 / 个人空间”，去掉右下角同步按钮并保留方正点击波动；个人空间实际读取 wallet 背包和双玩家面板，归档后仍可装备、维修和出售钱包物品；`/wenyou/end` 改为结算后立即归档，前端随即进入个人空间归档页；默认未首通用户的第一个候选/空开局会出现固定新手副本 `T-000 白箱回廊`，仅玩家一和渡参与，无其他任务者 NPC；首次标准通关在基础奖励外发新手礼包（初级治愈药剂、初级精神药剂、双玩家自由属性点 +6）且只发一次。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py` 通过；`.venv/bin/python - <<'PY' import app` 通过；mock 烟测覆盖新手候选优先、空开局进入 `白箱回廊`、首次标准通关发礼包并归档、二次通关不重复发礼包、无 active session 的钱包装备/维修/出售；`npm --prefix miniapp run build` 通过，当前静态入口引用 `miniapp_static/assets/index-ChzfTziK.js`、`miniapp_static/assets/index-Qv12-DO-.css`，文游 chunk 为 `miniapp_static/assets/WenyouTab-BYm4OjTy.js`；本地 preview `http://127.0.0.1:5175/miniapp/` 进入文游页无前端崩溃/动态 import 缺失（API 404 仅因 preview 未挂后端）。
+- 未完成 / 不要碰：本轮按用户要求没有接“渡主动使用背包道具”；没有清理大量既有 `miniapp_static/assets/*` 旧 hash 产物；非文游脏文件仍保持原样不碰。
+
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
    - 已拆：Codex group chat task 路由已移到 `routes/miniapp/codex_group_chat.py`；`/codex-group-chat-tasks*` 路径保持不变
