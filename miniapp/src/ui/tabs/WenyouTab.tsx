@@ -5,7 +5,7 @@ import { useToast } from "../toast";
 type WenyouView = "home" | "selection" | "game" | "archive" | "shop" | "rift";
 type WenyouInitialView = WenyouView | "archives" | "hub";
 type WenyouPanelView = "局内资料";
-type WenyouPanelTab = "任务" | "背包" | "角色" | "记录";
+type WenyouPanelTab = "任务" | "背包" | "角色";
 
 type WenyouArchiveItem = {
   gameId?: string;
@@ -83,9 +83,6 @@ type WenyouInventoryItem = {
   equip_slot?: string;
   equipped_by?: string;
   equipped_slot?: string;
-  gear_level?: number;
-  forge_level?: number;
-  gear_level_cap?: number;
   broken?: boolean;
   temporary?: boolean;
   quest_item?: boolean;
@@ -174,8 +171,8 @@ type WenyouPlayerStats = {
   bloodline?: string;
   abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string; uses_per_instance?: number }>;
   dormant_abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
-  gear?: Array<string | { name?: string; slot?: string; desc?: string; gear_level?: number; forge_level?: number; durability?: number; durability_max?: number; rarity?: string; broken?: boolean }>;
-  equipment?: Array<string | { name?: string; slot?: string; desc?: string; gear_level?: number; forge_level?: number; durability?: number; durability_max?: number; rarity?: string; broken?: boolean }>;
+  gear?: Array<string | { name?: string; slot?: string; desc?: string; durability?: number; durability_max?: number; rarity?: string; broken?: boolean }>;
+  equipment?: Array<string | { name?: string; slot?: string; desc?: string; durability?: number; durability_max?: number; rarity?: string; broken?: boolean }>;
   weapons?: string[];
   conditions?: string[];
   unspent_attribute_points?: number;
@@ -499,13 +496,6 @@ function colorClass(value?: string) {
   return "wenyou-chip-cyan";
 }
 
-function percentOf(value: unknown, max: unknown): number | null {
-  const current = Number(value);
-  const total = Number(max);
-  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return null;
-  return Math.max(0, Math.min(100, Math.round((current / total) * 100)));
-}
-
 function Icon({ name }: { name: string }) {
   const common = "h-[18px] w-[18px]";
   if (name === "rift") {
@@ -594,6 +584,27 @@ function compactPanelText(value: unknown, fallback = ""): string {
   return fallback;
 }
 
+function itemDisplayDescription(item: { desc?: unknown; effect?: unknown } | unknown): string {
+  const source = typeof item === "object" && item !== null
+    ? ((item as { desc?: unknown; effect?: unknown }).desc || (item as { desc?: unknown; effect?: unknown }).effect)
+    : item;
+  const text = compactPanelText(source);
+  if (!text) return "";
+  const hidden = [
+    /^槽位\s+/i,
+    /^物品形态[:：]/,
+    /^时代标签[:：]/,
+    /^[a-z_]+_min\s+\d+/i,
+    /^rank_min\s+/i,
+    /^seal_rank\s+/i,
+  ];
+  return text
+    .split(/[；;]/)
+    .map((part) => part.trim())
+    .filter((part) => part && !hidden.some((rule) => rule.test(part)))
+    .join("；");
+}
+
 function panelListText(items?: unknown[], fallback = "无"): string {
   if (!Array.isArray(items) || !items.length) return fallback;
   const out = items.map((item) => compactPanelText(item)).filter(Boolean);
@@ -659,7 +670,7 @@ function currentLocationName(publicState: WenyouPublicState, fallback = "未知�
   const text = first ? markerText(first) : "";
   const raw = title && !["当前场景", "未命名记录"].includes(title)
     ? title
-    : text || publicState.scene_summary || fallback;
+    : text || fallback;
   return raw.replace(/^当前在[:：]?\s*/, "").trim().slice(0, 34) || fallback;
 }
 
@@ -677,7 +688,7 @@ function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): Rift
     name,
     rarity: ["D", "C", "B", "A", "S"].includes(rarity) ? rarity : "D",
     kind: String(item.kind || "道具"),
-    desc: String(item.desc || ""),
+    desc: itemDisplayDescription(item.desc),
     sigil: String(item.sigil || name.slice(0, 4).toUpperCase() || "DATA"),
     pullId: String(item.pullId || item.uid || `rift-${Date.now()}-${index}`),
     quantity: item.quantity,
@@ -1090,14 +1101,6 @@ export function WenyouTab({
   const currentLocation = currentLocationName(gamePublicState);
   const hasActiveRun = !!(status.active || activeScene || sessionPanel?.gameId);
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
-  const homeHpPercent = percentOf(homePlayer.hp, homePlayer.hp_max);
-  const homeSanPercent = percentOf(homePlayer.san, homePlayer.san_max);
-  const homeSpiPercent = percentOf(homePlayer.spi_current, homePlayer.spi_max);
-  const homeStatusBars = [
-    homeHpPercent !== null ? { label: "生命值 HP", value: homeHpPercent, detail: `${homePlayer.hp ?? "-"} / ${homePlayer.hp_max ?? "-"}`, tone: "green" as const } : null,
-    homeSanPercent !== null ? { label: "理智值 SAN", value: homeSanPercent, detail: `${homePlayer.san ?? "-"} / ${homePlayer.san_max ?? "-"}`, tone: "cyan" as const } : null,
-    homeSpiPercent !== null ? { label: "精神力 SPI", value: homeSpiPercent, detail: `${homePlayer.spi_current ?? "-"} / ${homePlayer.spi_max ?? "-"}`, tone: "purple" as const } : null,
-  ].filter((item): item is { label: string; value: number; detail: string; tone: "green" | "cyan" | "purple" } => !!item);
   const homeTask = gamePublicState.public_tasks?.[0];
   const homeObjective = hasActiveRun
     ? (homeTask ? taskTitle(homeTask) : sessionPanel?.task?.current || "等待主神同步任务。")
@@ -1483,7 +1486,7 @@ export function WenyouTab({
 
   async function runInventoryCommand(
     item: WenyouInventoryItem | string,
-    endpoint: "equip" | "repair" | "sell" | "disassemble" | "forge",
+    endpoint: "equip" | "repair" | "sell",
     label: string,
     body: Record<string, unknown> = {}
   ) {
@@ -1795,15 +1798,6 @@ export function WenyouTab({
                 <div><i /> <strong>当前阶段</strong><span>{homePhase}</span></div>
                 <div><i /> <strong>当前目标</strong><span>{homeObjective}</span></div>
               </div>
-              {homeStatusBars.length ? (
-                <div className="wenyou-bars">
-                  {homeStatusBars.map((item) => (
-                    <StatusBar key={item.label} label={item.label} value={item.value} detail={item.detail} tone={item.tone} />
-                  ))}
-                </div>
-              ) : (
-                <div className="wenyou-home-standby">暂无角色数值。进入副本后这里会显示生命、理智和精神力。</div>
-              )}
             </div>
           </div>
 
@@ -1861,7 +1855,7 @@ export function WenyouTab({
                     <strong>{item.rarity || "D"}</strong>
                   </div>
                   <h3>{item.name}</h3>
-                  <p>{item.desc}</p>
+                  <p>{itemDisplayDescription(item)}</p>
                   <div className="wenyou-shop-card-bottom">
                     <b>{item.price} pts</b>
                     <button onClick={() => buyShopItem(item)} disabled={disabled}>
@@ -1885,8 +1879,8 @@ export function WenyouTab({
 	                      <span>特殊 · {item.kind || item.category || "兑换"}</span>
 	                      <strong>{item.rarity || "B"}</strong>
 	                    </div>
-	                    <h3>{item.name}</h3>
-	                    <p>{item.sealed ? `${item.desc}（购买后封印）` : item.desc}</p>
+                    <h3>{item.name}</h3>
+                    <p>{item.sealed ? `${itemDisplayDescription(item)}（购买后封印）` : itemDisplayDescription(item)}</p>
 	                    <div className="wenyou-shop-card-bottom">
 	                      <b>{item.price} pts</b>
 	                      <button onClick={() => buyShopItem(item)} disabled={disabled}>
@@ -2460,7 +2454,7 @@ function RiftCard({
           <span className="wenyou-rift-card-copy">
             <em>{item.rarity} // {item.kind}</em>
             <strong>{item.name}</strong>
-            <small>{item.converted && item.converted_to ? `重复转化：${inventoryItemLabel(item.converted_to)}` : item.sealed ? `${item.desc}（阶位不足，已封印）` : item.desc}</small>
+            <small>{item.converted && item.converted_to ? `重复转化：${inventoryItemLabel(item.converted_to)}` : item.sealed ? `${itemDisplayDescription(item)}（阶位不足，已封印）` : itemDisplayDescription(item)}</small>
             <span>{stars.map((_, index) => <i key={index} />)}</span>
           </span>
         </span>
@@ -2486,16 +2480,6 @@ function FilterRow({ items, value, onChange }: { items: string[]; value: string;
           {item}
         </button>
       ))}
-    </div>
-  );
-}
-
-function StatusBar({ label, value, tone, detail }: { label: string; value: number; tone: "green" | "cyan" | "purple"; detail?: string }) {
-  const width = Math.max(0, Math.min(100, value));
-  return (
-    <div className={`wenyou-status wenyou-status-${tone}`}>
-      <div><span>{label}</span><span>{detail || `${width}/100`}</span></div>
-      <i><b style={{ width: `${width}%` }} /></i>
     </div>
   );
 }
@@ -2664,7 +2648,7 @@ function PanelModal({
   onUseItem: (item: WenyouInventoryItem | string) => void;
   onInventoryCommand: (
     item: WenyouInventoryItem | string,
-    endpoint: "equip" | "repair" | "sell" | "disassemble" | "forge",
+    endpoint: "equip" | "repair" | "sell",
     label: string,
     body?: Record<string, unknown>
   ) => void;
@@ -2695,16 +2679,9 @@ function PanelModal({
   const clues = publicState.discovered_clues?.length
     ? publicState.discovered_clues
     : (session?.clues || []).map((item) => ({ title: item, public_text: item, status: "discovered" }));
-  const locations = publicState.known_locations || [];
-  const npcs = publicState.visible_npcs || [];
-  const monsters = publicState.visible_monsters || [];
-  const history = session?.history || [];
   const task = session?.task || {};
-  const framework = session?.framework || {};
-  const taskerTotal = Number(framework.tasker_total || 0);
-  const playerCount = Number(framework.player_count || 0);
   const growthPlayers = session?.growth?.players || {};
-  const tabs: WenyouPanelTab[] = ["任务", "背包", "角色", "记录"];
+  const tabs: WenyouPanelTab[] = ["任务", "背包", "角色"];
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab, session?.gameId]);
@@ -2741,9 +2718,6 @@ function PanelModal({
                     <PanelRow label="当前位置" value={currentLocationName(publicState)} />
                     {publicState.public_threat ? <PanelRow label="危险程度" value={publicState.public_threat} /> : null}
                   </div>
-                  {publicState.scene_summary ? <PanelRow label="场景摘要" value={publicState.scene_summary} /> : null}
-                  {publicState.forced_notice ? <PanelRow label="强制工单" value={publicState.forced_notice} /> : null}
-                  {publicState.visible_rules?.length ? <PanelRow label="公开规则" value={publicState.visible_rules.join("；")} /> : null}
                   <div className="wenyou-panel-subtitle">任务与线索</div>
                   {tasks.length ? tasks.map((item, index) => (
                     <TaskPanelCard item={item} key={`${taskTitle(item)}-${index}`} />
@@ -2751,49 +2725,38 @@ function PanelModal({
                   {clues.length ? clues.map((item, index) => (
                     <CluePanelCard item={item} key={`${clueTitle(item)}-${index}`} />
                   )) : <div className="wenyou-empty">暂无线索备忘。</div>}
-                  {locations.length || npcs.length || monsters.length || taskerTotal ? <div className="wenyou-panel-subtitle">副本缓存</div> : null}
-                  {locations.length ? locations.map((item, index) => (
-                    <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
-                  )) : null}
-                  {taskerTotal ? <PanelRow label="任务者编制" value={`共 ${taskerTotal} 人：玩家 ${playerCount || 2} + NPC ${Math.max(0, taskerTotal - (playerCount || 2))}`} /> : null}
-                  {npcs.length ? npcs.map((item, index) => (
-                    <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
-                  )) : null}
-                  {monsters.length ? monsters.map((item, index) => (
-                    <MarkerPanelCard item={item} key={`${markerTitle(item)}-${index}`} />
-                  )) : null}
                 </>
               ) : null}
 
               {activeTab === "背包" ? (
                 <>
-                  {inventory.length ? inventory.map((item, index) => (
-                    <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
-                      <span>
-                        {inventoryItemLabel(item)}
-                        {typeof item !== "string" ? (
-                          <small>
-                            {[item.rarity, item.category || item.kind, item.uses_left !== undefined ? `次数 ${item.uses_left}` : "", item.durability !== undefined ? `耐久 ${item.durability}/${item.durability_max ?? "?"}` : ""].filter(Boolean).join(" · ")}
-                            {item.desc || item.effect ? `｜${item.desc || item.effect}` : ""}
-                          </small>
-                        ) : null}
-	                      </span>
-	                      <div className="wenyou-inventory-actions">
-	                        {isGearInventoryItem(item) ? (
-	                          <>
-	                            <button type="button" onClick={() => onInventoryCommand(item, "equip", "装备")} disabled={acting || item.sealed || item.broken}>装备</button>
-	                            <button type="button" onClick={() => onInventoryCommand(item, "repair", "维修")} disabled={acting}>维修</button>
-	                            <button type="button" onClick={() => onInventoryCommand(item, "forge", "升级", { mode: "upgrade" })} disabled={acting || item.sealed}>升级</button>
-	                            <button type="button" onClick={() => onInventoryCommand(item, "forge", "锻造", { mode: "forge" })} disabled={acting || item.sealed}>锻造</button>
-	                            <button type="button" onClick={() => onInventoryCommand(item, "disassemble", "拆解")} disabled={acting || !!item.equipped_by}>拆解</button>
-	                          </>
-	                        ) : (
-	                          <button type="button" onClick={() => onUseItem(item)} disabled={acting || (typeof item !== "string" && !!item.sealed)}>{acting ? "演算中" : "使用"}</button>
-	                        )}
-	                        <button type="button" onClick={() => onInventoryCommand(item, "sell", "出售")} disabled={acting || (typeof item !== "string" && (!!item.equipped_by || !!item.quest_item || item.carry_out === false))}>出售</button>
-	                      </div>
-	                    </div>
-                  )) : <div className="wenyou-empty">背包为空。</div>}
+                  {inventory.length ? inventory.map((item, index) => {
+                    const detail = typeof item === "string" ? "" : itemDisplayDescription(item);
+                    return (
+                      <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
+                        <span>
+                          {inventoryItemLabel(item)}
+                          {typeof item !== "string" ? (
+                            <small>
+                              {[item.rarity, item.category || item.kind, item.uses_left !== undefined ? `次数 ${item.uses_left}` : "", item.durability !== undefined ? `耐久 ${item.durability}/${item.durability_max ?? "?"}` : ""].filter(Boolean).join(" · ")}
+                              {detail ? `｜${detail}` : ""}
+                            </small>
+                          ) : null}
+                        </span>
+                        <div className="wenyou-inventory-actions">
+                          {isGearInventoryItem(item) ? (
+                            <>
+                              <button type="button" onClick={() => onInventoryCommand(item, "equip", "装备")} disabled={acting || item.sealed || item.broken}>装备</button>
+                              <button type="button" onClick={() => onInventoryCommand(item, "repair", "维修")} disabled={acting}>维修</button>
+                            </>
+                          ) : (
+                            <button type="button" onClick={() => onUseItem(item)} disabled={acting || (typeof item !== "string" && !!item.sealed)}>{acting ? "演算中" : "使用"}</button>
+                          )}
+                          <button type="button" onClick={() => onInventoryCommand(item, "sell", "出售")} disabled={acting || (typeof item !== "string" && (!!item.equipped_by || !!item.quest_item || item.carry_out === false))}>出售</button>
+                        </div>
+                      </div>
+                    );
+                  }) : <div className="wenyou-empty">背包为空。</div>}
                 </>
               ) : null}
 
@@ -2832,13 +2795,6 @@ function PanelModal({
                 </>
               ) : null}
 
-              {activeTab === "记录" ? (
-                <>
-                  {history.length ? history.slice(-12).reverse().map((item, index) => (
-                    <HistoryPanelRow item={item} key={`${item.timestamp || index}-${index}`} />
-                  )) : <div className="wenyou-empty">暂无行动历史。</div>}
-                </>
-              ) : null}
             </div>
           </>
         ) : null}
@@ -2985,7 +2941,7 @@ function PlayerStatCard({
         <>
           {nextLevelExp ? <p>下级经验：{p.exp ?? 0}/{nextLevelExp}</p> : null}
 	          <p>进化：{growth?.evolution || p.evolution || p.bloodline || "凡人"}{growth?.evolution_rank ? ` · ${growth.evolution_rank}` : ""}</p>
-	          <p>能力：{abilities.length ? abilities.map((it) => `${it.name || it.id}${it.level ? ` Lv${it.level}` : ""}`).filter(Boolean).join("、") : "无"}{abilitySlots ? `（槽位 ${abilities.length}/${abilitySlots}）` : ""}</p>
+	          <p>能力：{abilities.length ? abilities.map((it) => `${it.name || it.id}${it.level ? ` Lv${it.level}` : ""}`).filter(Boolean).join("、") : "无"}{abilitySlots ? `（能力栏 ${abilities.length}/${abilitySlots}）` : ""}</p>
 	          {dormantAbilities.length ? <p>休眠能力：{dormantAbilities.map((it) => it.name || it.id).filter(Boolean).join("、")}</p> : null}
 	          <p>装备：{gear.length ? gear.map(gearLabel).join("、") : "无"}</p>
 	          <p>状态：{p.conditions?.length ? p.conditions.join("、") : "无"}</p>

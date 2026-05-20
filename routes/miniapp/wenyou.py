@@ -458,37 +458,6 @@ def register_routes(bp) -> None:
         ok, message, view = sell_inventory_item(uid, item)
         return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
 
-    @bp.route("/wenyou/item/disassemble", methods=["POST"])
-    def miniapp_wenyou_disassemble_item():
-        """文游：拆解装备为锻材/碎片，不返还积分。"""
-        uid = _wenyou_session_id()
-        if uid == 0:
-            return _missing_wenyou_session_response()
-        data = request.get_json(silent=True) or {}
-        item = str(data.get("item") or data.get("item_ref") or data.get("uid") or data.get("id") or "").strip()
-        if not item:
-            return jsonify({"ok": False, "error": "请选择拆解物品"}), 400
-        from services.wenyou_service import disassemble_inventory_item
-
-        ok, message, view = disassemble_inventory_item(uid, item)
-        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
-
-    @bp.route("/wenyou/item/forge", methods=["POST"])
-    def miniapp_wenyou_forge_item():
-        """文游：装备升级/锻造突破，系统扣积分和材料。"""
-        uid = _wenyou_session_id()
-        if uid == 0:
-            return _missing_wenyou_session_response()
-        data = request.get_json(silent=True) or {}
-        item = str(data.get("item") or data.get("item_ref") or data.get("uid") or data.get("id") or "").strip()
-        mode = str(data.get("mode") or "upgrade").strip()
-        if not item:
-            return jsonify({"ok": False, "error": "请选择强化装备"}), 400
-        from services.wenyou_service import upgrade_or_forge_gear
-
-        ok, message, view = upgrade_or_forge_gear(uid, item, mode=mode)
-        return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
-
     @bp.route("/wenyou/encounter/action", methods=["POST"])
     def miniapp_wenyou_encounter_action():
         """文游：战斗/逃跑等遭遇动作先由系统规则裁判，再交给 GM 叙事。"""

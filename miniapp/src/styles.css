@@ -1158,59 +1158,6 @@
     white-space: nowrap;
   }
 
-  .wenyou-bars {
-    display: grid;
-    gap: 10px;
-  }
-
-  .wenyou-home-standby {
-    border: 1px dashed rgba(148, 163, 184, 0.24);
-    border-radius: 8px;
-    background: rgba(3, 7, 18, 0.38);
-    color: rgba(224, 242, 254, 0.7);
-    font-size: 12px;
-    line-height: 1.55;
-    padding: 12px;
-  }
-
-  .wenyou-status div {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    color: rgba(180, 216, 230, 0.74);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-  }
-
-  .wenyou-status i {
-    display: block;
-    height: 8px;
-    margin-top: 6px;
-    overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 6px;
-    background: rgba(1, 4, 12, 0.72);
-  }
-
-  .wenyou-status b {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-  }
-
-  .wenyou-status-green b {
-    background: linear-gradient(90deg, #22c55e, #a3e635);
-  }
-
-  .wenyou-status-cyan b {
-    background: linear-gradient(90deg, #0891b2, #67e8f9);
-  }
-
-  .wenyou-status-purple b {
-    background: linear-gradient(90deg, #8b5cf6, #f43f5e);
-  }
-
   .wenyou-home-actions,
   .wenyou-action-grid,
   .wenyou-panel-shortcuts,

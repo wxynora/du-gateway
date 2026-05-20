@@ -497,12 +497,7 @@ _WENYOU_PROMOTION_RULES = {
     "S": {"from": "A", "level": 15, "cost": 2000, "clear": "S", "perfect": "A", "special_trial": True},
 }
 _WENYOU_REVIVE_BASE_COST = {"D": 200, "C": 500, "B": 1200, "A": 2600, "S": 6000}
-_WENYOU_GEAR_LEVEL_CAP = {"D": 3, "C": 5, "B": 7, "A": 9, "S": 12}
 _WENYOU_GEAR_BASE_BONUS = {"D": 2, "C": 6, "B": 11, "A": 19, "S": 32}
-_WENYOU_GEAR_LEVEL_GROWTH = {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5}
-_WENYOU_GEAR_FORGE_BONUS = {"D": 1, "C": 2, "B": 4, "A": 6, "S": 10}
-_WENYOU_GEAR_UPGRADE_BASE_COST = {"D": 40, "C": 90, "B": 180, "A": 360, "S": 800}
-_WENYOU_GEAR_FORGE_BASE_COST = {"D": 120, "C": 300, "B": 700, "A": 1600, "S": 4000}
 _WENYOU_GEAR_REPAIR_PRICE = {"D": 1, "C": 3, "B": 7, "A": 15, "S": 35}
 _WENYOU_GEAR_DEFAULT_DURABILITY = {"D": 30, "C": 40, "B": 55, "A": 70, "S": 90}
 _WENYOU_SELL_RATIO = {"D": 0.25, "C": 0.30, "B": 0.35, "A": 0.40, "S": 0.45}
@@ -560,17 +555,17 @@ _WENYOU_REWARD_RARITY_RATES: dict[str, list[tuple[str, float]]] = {
     "S": [("A", 45.0), ("S", 55.0)],
 }
 _WENYOU_REWARD_CATEGORY_RATES: dict[str, list[tuple[str, float]]] = {
-    "D": [("consumable_item", 45.0), ("material", 25.0), ("gear", 15.0), ("ability_fragment", 10.0), ("evolution_fragment", 5.0)],
-    "C": [("consumable_item", 30.0), ("material", 25.0), ("gear", 20.0), ("ability_fragment", 15.0), ("evolution_fragment", 8.0), ("special", 2.0)],
-    "B": [("consumable_item", 18.0), ("material", 24.0), ("gear", 24.0), ("ability_fragment", 18.0), ("evolution_fragment", 12.0), ("special", 4.0)],
-    "A": [("consumable_item", 10.0), ("material", 22.0), ("gear", 25.0), ("ability_fragment", 20.0), ("evolution_fragment", 15.0), ("special", 8.0)],
-    "S": [("consumable_item", 5.0), ("material", 15.0), ("gear", 30.0), ("ability_fragment", 20.0), ("evolution_fragment", 18.0), ("special", 12.0)],
+    "D": [("consumable_item", 50.0), ("gear", 20.0), ("ability_fragment", 20.0), ("evolution_fragment", 10.0)],
+    "C": [("consumable_item", 35.0), ("gear", 25.0), ("ability_fragment", 24.0), ("evolution_fragment", 13.0), ("special", 3.0)],
+    "B": [("consumable_item", 20.0), ("gear", 30.0), ("ability_fragment", 26.0), ("evolution_fragment", 18.0), ("special", 6.0)],
+    "A": [("consumable_item", 12.0), ("gear", 32.0), ("ability_fragment", 26.0), ("evolution_fragment", 20.0), ("special", 10.0)],
+    "S": [("consumable_item", 6.0), ("gear", 36.0), ("ability_fragment", 24.0), ("evolution_fragment", 20.0), ("special", 14.0)],
 }
 _WENYOU_REWARD_TABLE_CONFIG: Optional[dict[str, Any]] = None
 _WENYOU_EVOLUTION_ROUTE_CONFIG: Optional[dict[str, dict[str, Any]]] = None
 _WENYOU_REWARD_CATEGORY_LABELS = {
     "consumable_item": "消耗道具",
-    "material": "锻造材料",
+    "material": "材料",
     "gear": "武器/装备",
     "ability_fragment": "能力碎片",
     "evolution_fragment": "进化碎片",
@@ -2576,13 +2571,41 @@ def _normalize_settlement_result(value: Any) -> str:
 
 def _gear_main_bonus(item: dict) -> int:
     rarity = _normalize_difficulty(item.get("rarity") or "D")
-    level = max(1, int(item.get("gear_level") or item.get("level") or 1))
-    forge_level = max(0, int(item.get("forge_level") or 0))
-    return (
-        int(_WENYOU_GEAR_BASE_BONUS.get(rarity, 2))
-        + max(0, level - 1) * int(_WENYOU_GEAR_LEVEL_GROWTH.get(rarity, 1))
-        + forge_level * int(_WENYOU_GEAR_FORGE_BONUS.get(rarity, 1))
-    )
+    base = int(_WENYOU_GEAR_BASE_BONUS.get(rarity, 2))
+    requirements = item.get("requirements") if isinstance(item.get("requirements"), dict) else {}
+    req_bonus = 0
+    rank_min = str(requirements.get("rank_min") or item.get("rank_min") or "").strip().upper()
+    if rank_min in {"B", "A", "S"}:
+        req_bonus += {"B": 1, "A": 2, "S": 3}[rank_min]
+    for key in ("str_min", "con_min", "agi_min", "int_min", "spi_min", "luk_min"):
+        try:
+            req_bonus += 1 if int(requirements.get(key) or 0) >= 16 else 0
+        except Exception:
+            continue
+
+    cost = item.get("use_cost") if isinstance(item.get("use_cost"), dict) else {}
+    side_effect_bonus = 0
+    if any(cost.get(key) for key in ("hp", "san", "pollution", "pollution_delta", "debt", "debt_delta", "threat_clock", "durability", "durability_delta")):
+        side_effect_bonus += 1
+    text = " ".join(str(item.get(k) or "") for k in ("name", "desc", "effect", "kind", "category"))
+    if any(keyword in text for keyword in ("副作用", "污染", "代价", "诅咒", "反噬")):
+        side_effect_bonus += 1
+
+    score = base + min(3, req_bonus) + min(2, side_effect_bonus)
+    durability_max = item.get("durability_max")
+    durability = item.get("durability")
+    try:
+        if durability is not None and durability_max is not None and int(durability_max) > 0:
+            ratio = max(0.0, min(1.0, int(durability) / int(durability_max)))
+            if ratio <= 0:
+                return 0
+            if ratio < 0.25:
+                score = max(1, math.floor(score * 0.6))
+            elif ratio < 0.5:
+                score = max(1, math.floor(score * 0.85))
+    except Exception:
+        pass
+    return max(1, score)
 
 
 def _gear_bonus_from_player(player: dict) -> dict[str, int]:
@@ -3326,9 +3349,6 @@ def _normalize_inventory_item(raw: Any, index: int = 0, source: str = "session")
             "depleted",
             "equipped_by",
             "equipped_slot",
-            "gear_level",
-            "forge_level",
-            "gear_level_cap",
             "traits",
             "ability_id",
             "ability_template",
@@ -3802,9 +3822,6 @@ def _equip_item_to_player(player: dict, item: dict, slot_override: str = "") -> 
         "rarity": rarity,
         "kind": str(item.get("kind") or item.get("use_category") or item.get("category") or "装备"),
         "desc": str(item.get("desc") or item.get("effect") or "")[:160],
-        "gear_level": max(1, int(item.get("gear_level") or 1)),
-        "forge_level": max(0, int(item.get("forge_level") or 0)),
-        "gear_level_cap": max(1, int(item.get("gear_level_cap") or _WENYOU_GEAR_LEVEL_CAP.get(rarity, 3))),
         "durability": max(0, min(durability, durability_max)),
         "durability_max": durability_max,
         "sealed": bool(item.get("sealed")),
@@ -3854,7 +3871,7 @@ def _apply_item_effect_to_session(session: dict, item: dict, detail: str = "") -
             "flags_set": {},
         }
     if category in {"ability", "bloodline", "evolution", "fragment", "material"}:
-        return False, f"文游：【{_inventory_item_name(item)}】需要在成长/锻造系统中处理，不能当作局内消耗品直接使用。", None
+        return False, f"文游：【{_inventory_item_name(item)}】需要在成长或兑换流程中处理，不能当作局内消耗品直接使用。", None
 
     before = {"hp": int(player.get("hp") or 0), "san": int(player.get("san") or 0), "conditions": list(player.get("conditions") or [])}
     cost_notes, cost_changes = _apply_item_use_cost(session, player, item)
@@ -4119,41 +4136,6 @@ def _consume_inventory_requirements(inventory: list[dict], requirements: list[di
     return inv[:80], []
 
 
-def _material_def(item_id: str, name: str, rarity: str, quantity: int, desc: str = "") -> dict[str, Any]:
-    return {
-        "id": item_id,
-        "name": name,
-        "kind": "材料",
-        "category": "material",
-        "item_type": "material",
-        "rarity": _normalize_difficulty(rarity),
-        "quantity": max(1, int(quantity or 1)),
-        "desc": desc or "文游装备系统材料。",
-        "stackable": True,
-    }
-
-
-def _gear_material_requirements(rarity: str, mode: str) -> list[dict[str, Any]]:
-    rarity = _normalize_difficulty(rarity)
-    if mode == "forge":
-        table = {
-            "D": [_material_def("low_forge_material", "低级锻材", "D", 3)],
-            "C": [_material_def("low_forge_material", "低级锻材", "D", 5), _material_def("wy_c_044", "低级异常残片", "C", 1)],
-            "B": [_material_def("mid_forge_material", "中级锻材", "B", 4), _material_def("wy_b_034", "中级异常结晶", "B", 1)],
-            "A": [_material_def("high_forge_material", "高级锻材", "A", 4), _material_def("instance_core", "副本核心", "A", 1)],
-            "S": [_material_def("legend_forge_material", "传说锻材", "S", 2), _material_def("instance_core", "副本核心", "A", 3)],
-        }
-    else:
-        table = {
-            "D": [_material_def("low_forge_material", "低级锻材", "D", 1)],
-            "C": [_material_def("low_forge_material", "低级锻材", "D", 2)],
-            "B": [_material_def("mid_forge_material", "中级锻材", "B", 2)],
-            "A": [_material_def("high_forge_material", "高级锻材", "A", 2)],
-            "S": [_material_def("legend_forge_material", "传说锻材", "S", 1), _material_def("high_forge_material", "高级锻材", "A", 3)],
-        }
-    return [dict(x) for x in table.get(rarity, table["D"])]
-
-
 def _gear_reference_price(item: dict) -> int:
     if int(item.get("price") or 0) > 0:
         return int(item.get("price") or 0)
@@ -4162,9 +4144,9 @@ def _gear_reference_price(item: dict) -> int:
 
 def _item_locked_for_recycle(item: dict) -> Optional[str]:
     if item.get("quest_item") or item.get("temporary") or item.get("carry_out") is False:
-        return "副本任务物/临时物不能出售或拆解。"
+        return "副本任务物/临时物不能出售或回收。"
     if item.get("unique") or item.get("bound"):
-        return "唯一物或绑定物不能出售或拆解。"
+        return "唯一物或绑定物不能出售或回收。"
     if item.get("equipped_by") or item.get("equipped_slot"):
         return "已装备物品请先更换/卸下后再处理。"
     return None
@@ -4288,106 +4270,6 @@ def sell_inventory_item(user_id: int, item_ref: str) -> tuple[bool, str, dict]:
     wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "item_sell", "item": _inventory_item_name(item), "points_delta": value}]
     view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.sell_item", {"wallet": {"points_delta": value}, "inventory_remove": [consumed]})
     return True, f"已回收【{_inventory_item_name(item)}】，获得 {value} 主神积分。", view
-
-
-def disassemble_inventory_item(user_id: int, item_ref: str) -> tuple[bool, str, dict]:
-    uid = int(user_id)
-    session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return False, "当前没有可拆解的文游存档。", get_session_view(uid)
-    _session_ensure_stats(session)
-    wallet = _load_wenyou_wallet(uid, session)
-    st = session["stats"]
-    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
-    item = _inventory_find_by_name(inventory, item_ref)
-    if not item:
-        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
-    locked = _item_locked_for_recycle(item)
-    if locked:
-        return False, locked, get_session_view(uid)
-    if not _is_gear_item(item):
-        return False, "只有武器、防具、饰品或可装备工具可拆解。", get_session_view(uid)
-    rarity = _normalize_difficulty(item.get("rarity") or "D")
-    grants = {
-        "D": [_material_def("low_forge_material", "低级锻材", "D", 1)],
-        "C": [_material_def("low_forge_material", "低级锻材", "D", 2), _material_def("gear_fragment", "装备碎片", "C", 5)],
-        "B": [_material_def("mid_forge_material", "中级锻材", "B", 2), _material_def("gear_fragment", "装备碎片", "B", 20)],
-        "A": [_material_def("high_forge_material", "高级锻材", "A", 2), _material_def("gear_fragment", "装备碎片", "A", 80)],
-        "S": [_material_def("legend_forge_material", "传说锻材", "S", 1), _material_def("gear_fragment", "装备碎片", "S", 300)],
-    }[rarity]
-    inventory, consumed = _consume_inventory_item(inventory, item)
-    if not consumed:
-        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
-    material_items: list[dict] = []
-    for grant in grants:
-        material = _new_inventory_item(grant, "disassemble", "mat")
-        material_items.append(material)
-        inventory = _add_inventory_item(inventory, material)
-    wallet["inventory"] = inventory[:80]
-    st["inventory"] = inventory[:80]
-    session["stats"] = st
-    view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.disassemble_item", {"inventory_remove": [consumed], "inventory_add": material_items})
-    return True, f"已拆解【{_inventory_item_name(item)}】，获得 " + "、".join(f"{x.get('name')} x{x.get('quantity', 1)}" for x in material_items) + "。", view
-
-
-def upgrade_or_forge_gear(user_id: int, item_ref: str, mode: str = "upgrade") -> tuple[bool, str, dict]:
-    uid = int(user_id)
-    mode = "forge" if str(mode or "").strip().lower() in {"forge", "breakthrough", "锻造", "突破"} else "upgrade"
-    session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return False, "当前没有可强化的文游存档。", get_session_view(uid)
-    _session_ensure_stats(session)
-    if _session_phase(session) not in {"hub", "settlement"}:
-        return False, "只能在主神空间或结算阶段强化装备。", get_session_view(uid)
-    wallet = _load_wenyou_wallet(uid, session)
-    st = session["stats"]
-    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
-    item = _inventory_find_by_name(inventory, item_ref)
-    if not item:
-        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
-    if not _is_gear_item(item):
-        return False, "该物品不是可强化装备。", get_session_view(uid)
-    if item.get("sealed"):
-        return False, "封印装备不能强化，请先达到解封条件。", get_session_view(uid)
-    rarity = _normalize_difficulty(item.get("rarity") or "D")
-    level = max(1, int(item.get("gear_level") or 1))
-    forge_level = max(0, int(item.get("forge_level") or 0))
-    level_cap = max(1, int(item.get("gear_level_cap") or _WENYOU_GEAR_LEVEL_CAP.get(rarity, 3)))
-    if mode == "upgrade":
-        if level >= level_cap:
-            return False, f"当前等级已达上限 Lv{level_cap}，请先锻造突破。", get_session_view(uid)
-        target_level = level + 1
-        cost = int(_WENYOU_GEAR_UPGRADE_BASE_COST.get(rarity, 40)) * target_level + level * 20
-        material_reqs = _gear_material_requirements(rarity, "upgrade")
-        updates = {"gear_level": target_level}
-    else:
-        cost = int(_WENYOU_GEAR_FORGE_BASE_COST.get(rarity, 120)) * (forge_level + 1)
-        material_reqs = _gear_material_requirements(rarity, "forge")
-        cap_delta = 2 if rarity in {"B", "A"} else 1
-        updates = {"forge_level": forge_level + 1, "gear_level_cap": level_cap + cap_delta}
-    if int(wallet.get("points") or 0) < cost:
-        return False, f"主神积分不足，需要 {cost}。", get_session_view(uid)
-    inventory_after, missing = _consume_inventory_requirements(inventory, material_reqs)
-    if missing:
-        return False, "材料不足：" + "、".join(missing), get_session_view(uid)
-    wallet["points"] = max(0, int(wallet.get("points") or 0) - cost)
-    inventory_after, updated = _inventory_update_item(inventory_after, item, updates)
-    if not updated:
-        return False, f"背包里没有【{item_ref}】。", get_session_view(uid)
-    wallet["inventory"] = inventory_after[:80]
-    st["inventory"] = inventory_after[:80]
-    session["stats"] = st
-    wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "gear_forge" if mode == "forge" else "gear_upgrade", "item": _inventory_item_name(item), "points_delta": -cost}]
-    view = _persist_inventory_rule_result(
-        uid,
-        session,
-        wallet,
-        "rules_engine.upgrade_or_forge_gear",
-        {"wallet": {"points_delta": -cost}, "inventory_update": updated, "materials_spent": material_reqs},
-    )
-    if mode == "forge":
-        return True, f"已锻造【{_inventory_item_name(item)}】，等级上限提升至 Lv{updated.get('gear_level_cap')}，扣除 {cost} 积分。", view
-    return True, f"已升级【{_inventory_item_name(item)}】至 Lv{updated.get('gear_level')}，扣除 {cost} 积分。", view
 
 
 def _ability_definition(ability_ref: str) -> Optional[dict[str, Any]]:
@@ -5077,9 +4959,16 @@ if _CONTENT_ITEM_CATALOG:
     _SHOP_CATALOG = [
         dict(item)
         for item in _CONTENT_ITEM_CATALOG
-        if item.get("shop_allowed") and item.get("category") in _CATALOG_ITEM_TYPES and str(item.get("rarity") or "D") in {"D", "C", "B"}
+        if item.get("shop_allowed")
+        and item.get("category") in _CATALOG_ITEM_TYPES
+        and item.get("category") != "material"
+        and str(item.get("rarity") or "D") in {"D", "C", "B"}
     ]
-    _GACHA_CATALOG = [dict(item) for item in _CONTENT_ITEM_CATALOG if item.get("gacha_allowed")]
+    _GACHA_CATALOG = [
+        dict(item)
+        for item in _CONTENT_ITEM_CATALOG
+        if item.get("gacha_allowed") and item.get("category") != "material"
+    ]
     existing_gacha_ids = {str(item.get("id") or "") for item in _GACHA_CATALOG}
     for legacy_item in _FALLBACK_GACHA_CATALOG:
         if str(legacy_item.get("category") or "") in {"ability", "bloodline", "evolution"} and str(legacy_item.get("id") or "") not in existing_gacha_ids:
@@ -5421,7 +5310,7 @@ def _reward_category_boosts_from_context(session: dict) -> dict[str, float]:
             add("gear", 3.0)
         if "monster_defeated" in lower:
             add("gear", 8.0)
-            add("material", 5.0)
+            add("ability_fragment", 5.0)
         if "monster_evaded" in lower:
             add("consumable_item", 5.0)
             add("ability_fragment", 3.0)
@@ -5482,21 +5371,21 @@ def _reward_catalog_candidates(category: str, rarity: str) -> list[dict[str, Any
 def _reward_stack_item(category: str, rarity: str) -> dict[str, Any]:
     if category == "material":
         names = {
-            "D": ("low_forge_material", "低级锻材", 1),
-            "C": ("low_forge_material", "低级锻材", 2),
-            "B": ("mid_forge_material", "中级锻材", 2),
-            "A": ("high_forge_material", "高级锻材", 2),
-            "S": ("legend_forge_material", "传说锻材", 1),
+            "D": ("anomaly_sample_d", "灰烬样本", 1),
+            "C": ("anomaly_sample_c", "异常样本", 1),
+            "B": ("anomaly_crystal_b", "异常结晶", 1),
+            "A": ("instance_core_shard", "副本核心碎片", 1),
+            "S": ("instance_core", "副本核心", 1),
         }
         iid, name, qty = names.get(rarity, names["D"])
         return {
             "id": iid,
             "name": name,
-            "kind": "锻材",
+            "kind": "材料",
             "category": "material",
             "rarity": rarity,
             "quantity": qty,
-            "desc": "副本结算获得的锻造材料。",
+            "desc": "副本结算获得的异常材料，可用于成长、兑换或特殊内容包规则。",
             "stackable": True,
         }
     if category in {"ability_fragment", "evolution_fragment"}:
@@ -5533,7 +5422,6 @@ def _roll_settlement_rewards(user_id: int, session: dict, settlement: dict) -> l
     rng = random.Random(seed)
     rewards: list[dict[str, Any]] = []
     has_bplus = False
-    material_streak = 0
     regular_cap = _regular_reward_rarity_cap(difficulty)
     category_boosts = _reward_category_boosts_from_context(session)
     bonus_bplus_remaining = 0
@@ -5566,8 +5454,6 @@ def _roll_settlement_rewards(user_id: int, session: dict, settlement: dict) -> l
                 rarity = capped_rarity
         category_options = _reward_weight_options("category_rates", rarity, _WENYOU_REWARD_CATEGORY_RATES.get(rarity, []))
         category_options = _apply_reward_category_boosts(category_options, category_boosts)
-        if material_streak >= 3:
-            category_options = [(name, weight) for name, weight in category_options if name != "material"]
         category = _weighted_pick(category_options, rng, fallback="consumable_item")
         candidates = _reward_catalog_candidates(category, rarity)
         if candidates:
@@ -5606,9 +5492,8 @@ def _roll_settlement_rewards(user_id: int, session: dict, settlement: dict) -> l
             }
         )
         has_bplus = has_bplus or _rarity_rank(rarity) >= _rarity_rank("B")
-        material_streak = material_streak + 1 if category == "material" else 0
     if (rating == "S" or int(settlement.get("hidden_bonus_rolls") or 0) > 0) and rewards and not has_bplus:
-        picked = _reward_stack_item("material", "B")
+        picked = _reward_stack_item("ability_fragment", "B")
         exceptional_over_cap = _rarity_rank("B") > _rarity_rank(regular_cap)
         if exceptional_over_cap:
             picked["sealed"] = True
@@ -5618,13 +5503,13 @@ def _roll_settlement_rewards(user_id: int, session: dict, settlement: dict) -> l
             picked,
             "settlement",
             "reward",
-            {"reward_category": "material", "reward_roll": {"seed": seed, "forced_bplus": True, "regular_cap": regular_cap}},
+            {"reward_category": "ability_fragment", "reward_roll": {"seed": seed, "forced_bplus": True, "regular_cap": regular_cap}},
         )
         rewards[0] = {
             "roll_id": rewards[0].get("roll_id") or "reward-01",
             "rarity": "B",
-            "category": "material",
-            "category_label": _WENYOU_REWARD_CATEGORY_LABELS["material"],
+            "category": "ability_fragment",
+            "category_label": _WENYOU_REWARD_CATEGORY_LABELS["ability_fragment"],
             "item": replacement,
             "raw_rarity": rewards[0].get("raw_rarity"),
             "regular_cap": regular_cap,
@@ -5911,7 +5796,7 @@ def _special_shop_items(user_id: int, session: Optional[dict], wallet: dict) -> 
         dict(item)
         for item in source
         if str(item.get("rarity") or "D").upper() in allowed_rarities
-        and str(item.get("item_type") or item.get("category") or "") in {"material", "weapon", "armor", "accessory", "equippable_tool", "special"}
+        and str(item.get("item_type") or item.get("category") or "") in {"weapon", "armor", "accessory", "equippable_tool", "special"}
         and not item.get("temporary")
         and not item.get("quest_item")
     ]
