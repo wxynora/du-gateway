@@ -838,6 +838,7 @@ export function WenyouTab({
   const [riftPullCount, setRiftPullCount] = useState(0);
   const [riftLoading, setRiftLoading] = useState(false);
   const riftPullTokenRef = useRef(0);
+  const settlementAutoArchiveRef = useRef("");
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
   const [panelView, setPanelView] = useState<WenyouPanelView | null>(null);
   const [panelInitialTab, setPanelInitialTab] = useState<WenyouPanelTab>("任务");
@@ -966,6 +967,8 @@ export function WenyouTab({
           genre: nextStatus.session.instance_genre || undefined,
           difficulty: nextStatus.session.difficulty || undefined,
         });
+      } else if (!nextStatus.active) {
+        setActiveScene(null);
       }
     } catch (e: any) {
       toast(`加载系统空间状态失败：${e?.message || e}`);
@@ -1131,6 +1134,7 @@ export function WenyouTab({
   const profileStats = sessionPanel?.stats || shop?.stats || {};
   const currentLocation = currentLocationName(gamePublicState);
   const hasActiveRun = !!(status.active || activeScene || sessionPanel?.gameId);
+  const gameSettlementReady = sessionPanel?.phase === "settlement" && !!sessionPanel.settlement;
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
   const homePhase = hasActiveRun ? (sessionPanel?.phase_label || status.session?.phase_label || "副本中") : "主神空间待机";
   const hasVisibleEncounter = (gamePublicState.visible_monsters || []).length > 0;
@@ -1426,10 +1430,12 @@ export function WenyouTab({
       const text = String(j.text || "本局已归档。");
       setFeed((prev) => [...prev, { id: `archive-${Date.now()}`, kind: "notice", text }]);
       setSessionPanel(null);
+      setActiveScene(null);
       setSettlementDraftOpen(false);
       setSettlementPreview(null);
       setSettlementResult("");
       setSettlementRating("");
+      setArchiveFilter("全部");
       await loadStatus();
       await loadArchives();
       resetView("archive");
@@ -1439,6 +1445,52 @@ export function WenyouTab({
       setSettlementLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (view !== "game" || sessionPanel?.phase !== "settlement" || !sessionPanel.settlement) return;
+    const settlement = sessionPanel.settlement as Record<string, unknown>;
+    const key = `${sessionPanel.gameId || "unknown"}:${String(settlement.granted_at || settlement.rating || settlement.result || "settlement")}`;
+    if (settlementAutoArchiveRef.current === key) return;
+    settlementAutoArchiveRef.current = key;
+
+    let cancelled = false;
+    (async () => {
+      setSettlementLoading(true);
+      try {
+        const j = await apiJson<{ ok?: boolean; text?: string; error?: string }>("/miniapp-api/wenyou/settle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (!j?.ok) throw new Error(j?.error || "归档失败");
+        if (cancelled) return;
+        const text = String(j.text || "本局已归档。");
+        toast(text.split("\n", 1)[0] || "本局已归档");
+        setFeed((prev) => [...prev, { id: `archive-${Date.now()}`, kind: "notice", text }]);
+        setSessionPanel(null);
+        setActiveScene(null);
+        setSettlementDraftOpen(false);
+        setSettlementPreview(null);
+        setSettlementResult("");
+        setSettlementRating("");
+        setArchiveFilter("全部");
+        await loadStatus();
+        await loadArchives();
+        resetView("archive");
+      } catch (e: any) {
+        if (!cancelled) {
+          settlementAutoArchiveRef.current = "";
+          toast(`归档失败：${e?.message || e}`);
+        }
+      } finally {
+        if (!cancelled) setSettlementLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadArchives, loadStatus, resetView, sessionPanel?.gameId, sessionPanel?.phase, sessionPanel?.settlement, toast, view]);
 
   function openPanel(tab: WenyouPanelTab = "任务") {
     setPanelInitialTab(tab);
@@ -2116,7 +2168,12 @@ export function WenyouTab({
               if (item.kind === "loot") return <SystemNotice key={item.id} tone="purple" label="获得物品" text={item.text} />;
               if (item.kind === "du") return <SystemNotice key={item.id} tone="purple" label="渡的行动" text={item.text} />;
               return <div key={item.id} className="wenyou-story-text">{item.text}</div>;
-            }) : (
+            }) : gameSettlementReady ? (
+              <div className="wenyou-feed-empty">
+                <strong>结算完成，正在归档</strong>
+                <span>奖励已入账，本局会自动收入个人空间。</span>
+              </div>
+            ) : (
               <div className="wenyou-feed-empty">
                 <strong>等待副本接入</strong>
                 <span>进入副本后，剧情、任务更新和获得物品会按行动记录在这里。</span>
@@ -2125,10 +2182,10 @@ export function WenyouTab({
           </div>
 
           <div className="wenyou-command">
-            {sessionPanel?.phase === "settlement" && sessionPanel.settlement ? (
-              <SettlementGranted settlement={sessionPanel.settlement} />
+            {gameSettlementReady && sessionPanel?.settlement ? (
+              <SettlementGranted settlement={sessionPanel.settlement} loading={settlementLoading} onArchive={archiveSettlement} />
             ) : null}
-            {sessionPanel?.phase !== "settlement" && settlementDraftOpen ? (
+            {!gameSettlementReady && sessionPanel?.phase !== "settlement" && settlementDraftOpen ? (
               <SettlementDraft
                 preview={settlementPreview}
                 result={settlementResult}
@@ -2140,7 +2197,7 @@ export function WenyouTab({
                 onConfirm={enterSettlement}
               />
             ) : null}
-            {quickDecisionOpen ? (
+            {!gameSettlementReady && quickDecisionOpen ? (
               <div className="wenyou-quick-decision-menu" role="menu" aria-label="快捷决策">
                 {quickActions.map((item) => (
                   <button key={item.label} type="button" onClick={() => handleQuickAction(item)}>
@@ -2150,26 +2207,30 @@ export function WenyouTab({
               </div>
             ) : null}
             {acting || settlementLoading ? <div className="wenyou-action-progress"><span /></div> : null}
-            <div className="wenyou-input-row">
-              <button
-                type="button"
-                className={`wenyou-input-tool ${quickDecisionOpen ? "active" : ""}`}
-                onClick={() => {
-                  setQuickDecisionOpen((open) => !open);
-                }}
-                aria-label="快捷决策"
-                aria-expanded={quickDecisionOpen}
-                disabled={acting}
-              >
-                <Icon name="plus" />
-              </button>
-              <input ref={actionInputRef} value={actionText} onChange={(e) => setActionText(e.target.value)} placeholder={acting ? "主神演算中..." : "输入你的行动..."} disabled={acting} onKeyDown={(e) => { if (e.key === "Enter") submitAction(); }} />
-              <button type="button" onClick={submitAction} aria-label="发送行动" disabled={acting}><Icon name="send" /></button>
-            </div>
-            {sessionPanel?.phase !== "settlement" ? (
-              <button type="button" className="wenyou-settlement-link" onClick={openSettlementDraft} disabled={acting || settlementLoading}>
-                {settlementLoading ? "结算校准中..." : "申请结算"}
-              </button>
+            {!gameSettlementReady ? (
+              <>
+                <div className="wenyou-input-row">
+                  <button
+                    type="button"
+                    className={`wenyou-input-tool ${quickDecisionOpen ? "active" : ""}`}
+                    onClick={() => {
+                      setQuickDecisionOpen((open) => !open);
+                    }}
+                    aria-label="快捷决策"
+                    aria-expanded={quickDecisionOpen}
+                    disabled={acting}
+                  >
+                    <Icon name="plus" />
+                  </button>
+                  <input ref={actionInputRef} value={actionText} onChange={(e) => setActionText(e.target.value)} placeholder={acting ? "主神演算中..." : "输入你的行动..."} disabled={acting} onKeyDown={(e) => { if (e.key === "Enter") submitAction(); }} />
+                  <button type="button" onClick={submitAction} aria-label="发送行动" disabled={acting}><Icon name="send" /></button>
+                </div>
+                {sessionPanel?.phase !== "settlement" ? (
+                  <button type="button" className="wenyou-settlement-link" onClick={openSettlementDraft} disabled={acting || settlementLoading}>
+                    {settlementLoading ? "结算校准中..." : "申请结算"}
+                  </button>
+                ) : null}
+              </>
             ) : null}
           </div>
         </section>
@@ -2706,7 +2767,15 @@ function SettlementDraft({
   );
 }
 
-function SettlementGranted({ settlement }: { settlement: Record<string, unknown> }) {
+function SettlementGranted({
+  settlement,
+  loading = false,
+  onArchive,
+}: {
+  settlement: Record<string, unknown>;
+  loading?: boolean;
+  onArchive?: () => void;
+}) {
   const rating = String(settlement.rating_label || settlement.rating || "-");
   const result = String(settlement.result_label || settlement.result || "已结算");
   return (
@@ -2723,6 +2792,11 @@ function SettlementGranted({ settlement }: { settlement: Record<string, unknown>
         <div><span>EXP</span><strong>+{Number(settlement.exp_delta || 0)}</strong></div>
         <div><span>钱包</span><strong>{Number(settlement.wallet_points || 0)}</strong></div>
       </div>
+      {onArchive ? (
+        <div className="wenyou-settlement-confirm">
+          <button type="button" onClick={onArchive} disabled={loading}>{loading ? "归档中..." : "归档本局"}</button>
+        </div>
+      ) : null}
     </div>
   );
 }
