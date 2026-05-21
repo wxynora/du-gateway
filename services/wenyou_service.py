@@ -5916,14 +5916,13 @@ def roll_gacha(user_id: int, pool_id: str = "mixed", count: int = 1) -> tuple[bo
         return False, "命运裂隙目前只支持单抽或十连。", get_shop_view(uid)
 
     session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return False, "当前没有可写入背包的文游存档，请先开始副本。", get_shop_view(uid)
-    _session_ensure_stats(session)
-    phase = _session_phase(session)
-    if phase not in {"hub", "settlement"}:
+    has_session = bool(session and isinstance(session, dict) and session.get("gameId"))
+    phase = _session_phase(session) if has_session else "hub"
+    has_economy_session = bool(has_session and phase in {"hub", "settlement"})
+    if has_session and phase not in {"hub", "settlement", "archived"}:
         return False, "副本进行中，命运裂隙关闭；请回到主神空间或结算阶段再抽取。", get_shop_view(uid)
 
-    wallet = _load_wenyou_wallet(uid, session)
+    wallet = _load_wenyou_wallet(uid, session if has_economy_session else None)
     cost = pull_count * _GACHA_SINGLE_COST
     if int(wallet.get("points") or 0) < cost:
         return False, "主神积分不足，命运裂隙没有响应。", get_shop_view(uid)
@@ -5932,8 +5931,15 @@ def roll_gacha(user_id: int, pool_id: str = "mixed", count: int = 1) -> tuple[bo
     pool_state = _normalize_gacha_pool_state(gacha["pools"].get(pool))
     seed = f"wenyou-gacha:{uid}:{pool}:{pool_state.get('total', 0)}:{now_beijing_iso()}:{uuid4().hex[:8]}"
     rng = random.Random(seed)
-    st = session["stats"]
-    inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    if has_economy_session:
+        _session_ensure_stats(session)
+        st = session["stats"]
+        rank_context = session
+        inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+    else:
+        st = _wallet_stats_from_wallet(wallet)
+        rank_context = {"phase": "hub", "stats": st}
+        inventory = list(st.get("inventory") or [])
     results: list[dict] = []
     inventory_added: list[dict] = []
 
@@ -5942,7 +5948,7 @@ def roll_gacha(user_id: int, pool_id: str = "mixed", count: int = 1) -> tuple[bo
         rarity, pity_hit = _apply_gacha_pity(pool_state, rarity)
         pool_state = _update_gacha_pity(pool_state, rarity)
         picked = _pick_gacha_definition(pool, rarity, rng)
-        prepared = _prepare_gacha_item_for_inventory(picked, session, pool)
+        prepared = _prepare_gacha_item_for_inventory(picked, rank_context, pool)
         duplicate_to_fragment = str(prepared.get("category") or "") in {"weapon", "ability", "bloodline", "evolution"} and _inventory_has_item(inventory, item_id=str(prepared.get("id") or ""))
         if duplicate_to_fragment:
             fragment = _new_inventory_item(_gacha_fragment_item(prepared), "gacha", "gacha-frag", {"pool_id": pool})
@@ -5974,10 +5980,8 @@ def roll_gacha(user_id: int, pool_id: str = "mixed", count: int = 1) -> tuple[bo
         }
     ]
     _save_wenyou_wallet(uid, wallet)
-    st["inventory"] = inventory
-    session["stats"] = st
-    _sync_session_points_with_wallet(session, wallet)
-    event_log = session.get("event_log") if isinstance(session.get("event_log"), list) else []
+    view_session = None
+    event_log = session.get("event_log") if has_economy_session and isinstance(session.get("event_log"), list) else []
     patch = {
         "round_id": f"gacha_{len(event_log) + 1:03d}",
         "source": "rules_engine.gacha",
@@ -5989,12 +5993,17 @@ def roll_gacha(user_id: int, pool_id: str = "mixed", count: int = 1) -> tuple[bo
         "seed": seed,
         "created_at": now_beijing_iso(),
     }
-    event_log.append(patch)
-    session["event_log"] = event_log[-200:]
-    session["last_state_patch"] = patch
-    r2_store.save_wenyou_session(uid, session)
+    if has_economy_session:
+        st["inventory"] = inventory
+        session["stats"] = st
+        _sync_session_points_with_wallet(session, wallet)
+        event_log.append(patch)
+        session["event_log"] = event_log[-200:]
+        session["last_state_patch"] = patch
+        r2_store.save_wenyou_session(uid, session)
+        view_session = get_session_view(uid).get("session")
     return True, f"命运裂隙完成 {pull_count} 次牵引，扣除 {cost} 主神积分。", {
-        "active": True,
+        "active": has_economy_session,
         "pool_id": pool,
         "count": pull_count,
         "cost": cost,
@@ -6003,7 +6012,8 @@ def roll_gacha(user_id: int, pool_id: str = "mixed", count: int = 1) -> tuple[bo
         "pity": pool_state,
         "results": results,
         "inventory": inventory,
-        "session": get_session_view(uid).get("session"),
+        "state_patch": patch,
+        "session": view_session,
     }
 
 
