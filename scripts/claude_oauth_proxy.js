@@ -7,6 +7,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { StringDecoder } = require("string_decoder");
 const { execFileSync } = require("child_process");
+const { Readable } = require("stream");
 
 const PORT = parseInt(process.env.PORT || "8082");
 const HOST = process.env.HOST || "127.0.0.1";
@@ -21,16 +22,12 @@ const CLAUDE_OAUTH_FILE = process.env.CLAUDE_OAUTH_FILE || "";
 const CLAUDE_OAUTH_JSON = process.env.CLAUDE_OAUTH_JSON || "";
 const CLAUDE_OAUTH_KEYCHAIN_SERVICE =
   process.env.CLAUDE_OAUTH_KEYCHAIN_SERVICE || "Claude Code-credentials";
-const CLAUDE_OAUTH_KEYCHAIN_WRITE =
-  String(process.env.CLAUDE_OAUTH_KEYCHAIN_WRITE || "1").trim().toLowerCase() !== "0";
 const REFRESH_SKEW_MS = Math.max(
   60,
   parseInt(process.env.CLAUDE_REFRESH_SKEW_SECONDS || "300", 10)
 ) * 1000;
 const CLAUDE_PROMPT_CACHE_TTL = String(process.env.CLAUDE_PROMPT_CACHE_TTL || "1h").trim();
 const TARGET_HOST = "api.anthropic.com";
-const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const REFRESH_URL = "https://console.anthropic.com/v1/oauth/token";
 const ANTHROPIC_VERSION = "2023-06-01";
 const BETA_HEADER = [
   "claude-code-20250219",
@@ -111,14 +108,24 @@ function normalizeOAuth(raw) {
     obj;
   const accessToken = src.accessToken || src.access_token;
   const refreshToken = src.refreshToken || src.refresh_token;
-  if (!accessToken || !refreshToken) {
-    throw new Error("OAuth credentials must include accessToken/access_token and refreshToken/refresh_token");
+  if (!accessToken) {
+    throw new Error("OAuth credentials must include accessToken/access_token");
   }
   return {
     accessToken,
     refreshToken,
     expiresAt: parseExpiresAt(src.expiresAt || src.expires_at || src.expiry || src.expires || src.expired),
   };
+}
+
+function loadOAuthCredentials(reason) {
+  cachedOAuth = readOAuthCredentials();
+  log(
+    `Token ${reason || "loaded"} from ${cachedOAuthSource || "unknown"} (expires ${new Date(
+      cachedOAuth.expiresAt
+    ).toLocaleString()})`
+  );
+  return cachedOAuth;
 }
 
 function readOAuthCredentials() {
@@ -135,53 +142,6 @@ function readOAuthCredentials() {
   cachedOAuthSource = "keychain";
   cachedOAuthRaw = readKeychainOAuth();
   return normalizeOAuth(cachedOAuthRaw);
-}
-
-function updatedOAuthRaw(next) {
-  const updated = JSON.parse(JSON.stringify(cachedOAuthRaw));
-  if (updated.claudeAiOauth) {
-    updated.claudeAiOauth.accessToken = next.accessToken;
-    updated.claudeAiOauth.refreshToken = next.refreshToken;
-    updated.claudeAiOauth.expiresAt = next.expiresAt;
-  } else if ("access_token" in updated || "refresh_token" in updated) {
-    updated.access_token = next.accessToken;
-    updated.refresh_token = next.refreshToken;
-    updated.expired = new Date(next.expiresAt).toISOString();
-    updated.last_refresh = new Date().toISOString();
-  } else {
-    updated.accessToken = next.accessToken;
-    updated.refreshToken = next.refreshToken;
-    updated.expiresAt = next.expiresAt;
-  }
-  return updated;
-}
-
-function writeOAuthCredentials(next) {
-  if (!cachedOAuthRaw) return;
-  if (cachedOAuthSource === "env") return;
-  const updated = updatedOAuthRaw(next);
-  if (CLAUDE_OAUTH_FILE) {
-    const tmp = `${CLAUDE_OAUTH_FILE}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, JSON.stringify(updated, null, 2) + "\n", { mode: 0o600 });
-    fs.renameSync(tmp, CLAUDE_OAUTH_FILE);
-    cachedOAuthRaw = updated;
-    return;
-  }
-  if (cachedOAuthSource === "keychain" && CLAUDE_OAUTH_KEYCHAIN_WRITE) {
-    execFileSync(
-      "security",
-      [
-        "add-generic-password",
-        "-U",
-        "-s",
-        CLAUDE_OAUTH_KEYCHAIN_SERVICE,
-        "-w",
-        JSON.stringify(updated),
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] }
-    );
-    cachedOAuthRaw = updated;
-  }
 }
 
 function writeSyncedOAuthCredentials(raw) {
@@ -202,90 +162,23 @@ function writeSyncedOAuthCredentials(raw) {
   return normalized;
 }
 
-function httpsRequest(url, method, headers, body) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const req = https.request(
-      { hostname: u.hostname, port: 443, path: u.pathname, method, headers },
-      (res) => {
-        let data = "";
-        res.on("data", (c) => (data += c));
-        res.on("end", () => {
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(JSON.parse(data));
-          } else {
-            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
-          }
-        });
-      }
-    );
-    req.on("error", reject);
-    if (body) req.write(typeof body === "string" ? body : JSON.stringify(body));
-    req.end();
-  });
-}
-
-async function refreshToken(refreshTk) {
-  log("Refreshing access token...");
-  const result = await httpsRequest(
-    REFRESH_URL,
-    "POST",
-    { "Content-Type": "application/json" },
-    { grant_type: "refresh_token", refresh_token: refreshTk, client_id: CLIENT_ID }
-  );
-  return {
-    accessToken: result.access_token,
-    refreshToken: result.refresh_token || refreshTk,
-    expiresAt: Date.now() + result.expires_in * 1000,
-  };
-}
-
-async function refreshCachedAccessToken(reason) {
-  if (!cachedOAuth) {
-    cachedOAuth = readOAuthCredentials();
-    log(
-      `Token loaded from ${cachedOAuthSource || "unknown"} (expires ${new Date(
-        cachedOAuth.expiresAt
-      ).toLocaleString()})`
-    );
-  }
-  const r = await refreshToken(cachedOAuth.refreshToken);
-  Object.assign(cachedOAuth, r);
-  try {
-    writeOAuthCredentials(cachedOAuth);
-  } catch (e) {
-    log(`Persist refreshed token failed: ${e.message}`);
-  }
-  log(
-    `Token refreshed${reason ? ` (${reason})` : ""} (expires ${new Date(
-      r.expiresAt
-    ).toLocaleString()})`
-  );
-  return cachedOAuth.accessToken;
-}
-
 async function getAccessToken() {
   if (!cachedOAuth) {
-    cachedOAuth = readOAuthCredentials();
-    log(
-      `Token loaded from ${cachedOAuthSource || "unknown"} (expires ${new Date(
-        cachedOAuth.expiresAt
-      ).toLocaleString()})`
-    );
+    loadOAuthCredentials();
   }
   if (Date.now() > cachedOAuth.expiresAt - REFRESH_SKEW_MS) {
     const staleAccessToken = cachedOAuth.accessToken;
-    try {
-      await refreshCachedAccessToken("before request");
-    } catch (e) {
-      log(`Refresh failed: ${e.message}, re-reading credentials...`);
-      cachedOAuth = readOAuthCredentials();
-      if (
-        cachedOAuth.accessToken === staleAccessToken &&
-        Date.now() > cachedOAuth.expiresAt - REFRESH_SKEW_MS
-      ) {
-        throw e;
-      }
+    log("Token is near expiry; re-reading synced credentials instead of proxy refresh");
+    loadOAuthCredentials("re-read");
+    if (
+      cachedOAuth.accessToken === staleAccessToken &&
+      Date.now() > cachedOAuth.expiresAt - REFRESH_SKEW_MS
+    ) {
+      throw new Error(
+        `Claude OAuth token is expired or near expiry (expires ${new Date(
+          cachedOAuth.expiresAt
+        ).toLocaleString()}); proxy-side refresh is disabled, waiting for local token sync`
+      );
     }
   }
   return cachedOAuth.accessToken;
@@ -1023,15 +916,47 @@ function proxyToAnthropic(token, path, payload) {
   });
 }
 
+function makeJsonProxyResponse(statusCode, payload) {
+  const stream = Readable.from([JSON.stringify(payload)]);
+  stream.statusCode = statusCode;
+  stream.headers = { "content-type": "application/json" };
+  return stream;
+}
+
 async function retryAfterUnauthorized(proxyRes, path, payload, routeLabel) {
   const errData = await readStreamText(proxyRes).catch((e) => `read error: ${e.message}`);
   const hint = errData ? `: ${errData.slice(0, 500)}` : "";
   lastUnauthorizedAt = Date.now();
   lastUnauthorizedRoute = routeLabel || path || "";
-  log(`Got 401 from Anthropic for ${routeLabel}; refreshing token and retrying once${hint}`);
-  const retryToken = await refreshCachedAccessToken("after 401");
-  const retryRes = await proxyToAnthropic(retryToken, path, payload);
-  log(`<= ${retryRes.statusCode} ${routeLabel} (retry after token refresh)`);
+  const staleAccessToken = cachedOAuth?.accessToken || "";
+  log(`Got 401 from Anthropic for ${routeLabel}; re-reading synced credentials only${hint}`);
+
+  try {
+    loadOAuthCredentials("re-read after 401");
+  } catch (e) {
+    log(`OAuth credential re-read failed after 401: ${e.message}`);
+    return makeJsonProxyResponse(401, {
+      error: {
+        type: "authentication_error",
+        message:
+          "Claude OAuth token was rejected; proxy-side refresh is disabled and synced credentials could not be re-read",
+      },
+    });
+  }
+
+  if (!cachedOAuth.accessToken || cachedOAuth.accessToken === staleAccessToken) {
+    log("OAuth credentials unchanged after 401; proxy-side refresh is disabled");
+    return makeJsonProxyResponse(401, {
+      error: {
+        type: "authentication_error",
+        message:
+          "Claude OAuth token was rejected; proxy-side refresh is disabled, waiting for local token sync",
+      },
+    });
+  }
+
+  const retryRes = await proxyToAnthropic(cachedOAuth.accessToken, path, payload);
+  log(`<= ${retryRes.statusCode} ${routeLabel} (retry after synced token re-read)`);
   return retryRes;
 }
 
