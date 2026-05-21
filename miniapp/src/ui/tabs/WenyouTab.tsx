@@ -53,6 +53,21 @@ type WenyouStatus = {
   } | null;
 };
 
+const PLAYABLE_WENYOU_PHASES = new Set(["candidate_selection", "instance_running"]);
+
+function isPlayableWenyouPhase(phase?: string | null): boolean {
+  if (!phase) return true;
+  return PLAYABLE_WENYOU_PHASES.has(phase);
+}
+
+function isPlayableWenyouStatusSession(session?: WenyouStatus["session"]): boolean {
+  return !!session?.gameId && isPlayableWenyouPhase(session.phase);
+}
+
+function isPlayableWenyouPanel(session?: WenyouSessionPanel | null): boolean {
+  return !!session?.gameId && isPlayableWenyouPhase(session.phase);
+}
+
 type WenyouShopItem = {
   id: string;
   name: string;
@@ -958,7 +973,9 @@ export function WenyouTab({
     try {
       const j = await apiJson<{ ok?: boolean; active?: boolean; session?: WenyouStatus["session"]; error?: string }>("/miniapp-api/wenyou/status");
       if (!j?.ok) throw new Error(j?.error || "加载失败");
-      const nextStatus = { active: !!j.active, session: j.session || null };
+      const rawSession = j.session || null;
+      const hasPlayableSession = !!j.active && isPlayableWenyouStatusSession(rawSession);
+      const nextStatus = { active: hasPlayableSession, session: hasPlayableSession ? rawSession : null };
       setStatus(nextStatus);
       if (nextStatus.active && nextStatus.session?.instance_name) {
         setActiveScene({
@@ -967,7 +984,7 @@ export function WenyouTab({
           genre: nextStatus.session.instance_genre || undefined,
           difficulty: nextStatus.session.difficulty || undefined,
         });
-      } else if (!nextStatus.active) {
+      } else {
         setActiveScene(null);
       }
     } catch (e: any) {
@@ -1008,8 +1025,12 @@ export function WenyouTab({
     try {
       const j = await apiJson<{ ok?: boolean; active?: boolean; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/session");
       if (!j?.ok) throw new Error(j?.error || "加载失败");
-      setSessionPanel(j.active ? (j.session || null) : null);
-      return j.session || null;
+      const nextSession = j.active ? (j.session || null) : null;
+      const keepSession =
+        isPlayableWenyouPanel(nextSession) ||
+        (nextSession?.phase === "settlement" && !!nextSession.settlement);
+      setSessionPanel(keepSession ? nextSession : null);
+      return keepSession ? nextSession : null;
     } catch (e: any) {
       toast(`加载文游面板失败：${e?.message || e}`);
       return null;
@@ -1119,12 +1140,6 @@ export function WenyouTab({
     });
   }, [candidates, difficultyFilter, search, typeFilter]);
 
-  const currentScene: EntryScene = activeScene || {
-    name: status.session?.instance_name || "等待接入",
-    code: status.session?.instance_code || undefined,
-    genre: status.session?.instance_genre || undefined,
-    difficulty: status.session?.difficulty || undefined,
-  };
   const gamePublicState = getSessionPublicState(sessionPanel);
   const gameRulesState = getSessionRulesState(sessionPanel);
   const profileInventory = shop?.inventory?.length
@@ -1133,7 +1148,22 @@ export function WenyouTab({
   const profileGrowthPlayers = sessionPanel?.growth?.players || shop?.growth?.players || {};
   const profileStats = sessionPanel?.stats || shop?.stats || {};
   const currentLocation = currentLocationName(gamePublicState);
-  const hasActiveRun = !!(status.active || activeScene || sessionPanel?.gameId);
+  const hasPlayableStatus = !!status.active && isPlayableWenyouStatusSession(status.session);
+  const hasPlayablePanel = isPlayableWenyouPanel(sessionPanel);
+  const hasActiveRun = hasPlayableStatus || hasPlayablePanel;
+  const currentScene: EntryScene = hasActiveRun
+    ? (activeScene || {
+        name: status.session?.instance_name || sessionPanel?.framework?.instance_name || "等待接入",
+        code: status.session?.instance_code || sessionPanel?.framework?.instance_code || undefined,
+        genre: status.session?.instance_genre || sessionPanel?.framework?.instance_genre || undefined,
+        difficulty: status.session?.difficulty || sessionPanel?.framework?.difficulty || undefined,
+      })
+    : {
+        name: "等待接入",
+        code: undefined,
+        genre: undefined,
+        difficulty: undefined,
+      };
   const gameSettlementReady = sessionPanel?.phase === "settlement" && !!sessionPanel.settlement;
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
   const homePhase = hasActiveRun ? (sessionPanel?.phase_label || status.session?.phase_label || "副本中") : "主神空间待机";
@@ -1863,46 +1893,72 @@ export function WenyouTab({
 
       {view === "home" ? (
         <section className="wenyou-screen wenyou-home wenyou-home-cyber">
+          <span className="wenyou-home-scanlines" aria-hidden="true" />
+          <span className="wenyou-home-glow wenyou-home-glow-a" aria-hidden="true" />
+          <span className="wenyou-home-glow wenyou-home-glow-b" aria-hidden="true" />
+          <span className="wenyou-home-edge wenyou-home-edge-right" aria-hidden="true" />
+          <span className="wenyou-home-edge wenyou-home-edge-left" aria-hidden="true" />
+
+          <div className="wenyou-home-debug wenyou-home-debug-left" aria-hidden="true">
+            SYS_BOOT: OK<br />
+            NEURAL_LINK: 98%<br />
+            FLOW_STATE: CRITICAL
+          </div>
+          <div className="wenyou-home-debug wenyou-home-debug-right" aria-hidden="true">
+            //INFINITE_FLOW_OS<br />
+            //VER_2.0.4b<br />
+            //ENCRYPTED
+          </div>
+
           <header className="wenyou-home-hud" aria-label="主神空间状态">
-            <div className="wenyou-home-signal">
-              <div>
-                <span>主神积分</span>
-                <strong>{shopLoading ? "同步中" : hubPoints.toLocaleString()}</strong>
+            <div className="wenyou-home-hud-row">
+              <div className="wenyou-home-signal wenyou-home-signal-wide">
+                <div>
+                  <span>主神积分 / PTS</span>
+                  <strong>{shopLoading ? "SYNC" : hubPoints.toLocaleString()}</strong>
+                </div>
+                <div className="wenyou-home-signal-bar">
+                  <b style={{ width: `${hubPointSignal}%` }} />
+                  <i />
+                </div>
               </div>
-              <div className="wenyou-home-signal-bar">
-                <b style={{ width: `${hubPointSignal}%` }} />
-                <i />
-              </div>
-            </div>
-            <div className="wenyou-home-signal">
-              <div>
+              <div className="wenyou-home-user">
                 <span>等级阶位</span>
                 <strong>{hubRank}阶 Lv.{hubLevel}</strong>
               </div>
-              <div className="wenyou-home-signal-bar wenyou-home-signal-bar-blue">
-                <b style={{ width: `${hubRankSignal}%` }} />
-              </div>
             </div>
-            <div className="wenyou-home-signal">
-              <div>
-                <span>副本状态</span>
-                <strong>{hubStatusLabel}</strong>
+            <div className="wenyou-home-hud-row wenyou-home-hud-row-split">
+              <div className="wenyou-home-signal">
+                <div>
+                  <span>副本状态 / STATE</span>
+                  <strong>{hubStatusLabel}</strong>
+                </div>
+                <div className="wenyou-home-signal-bar wenyou-home-signal-bar-blue">
+                  <b style={{ width: `${hubStatusSignal}%` }} />
+                </div>
               </div>
-              <div className="wenyou-home-signal-bar wenyou-home-signal-bar-purple">
-                <b style={{ width: `${hubStatusSignal}%` }} />
-                <i />
+              <div className="wenyou-home-signal">
+                <div>
+                  <span>债务 / DEBT</span>
+                  <strong>{hubDebts}</strong>
+                </div>
+                <div className="wenyou-home-signal-bar wenyou-home-signal-bar-purple">
+                  <b style={{ width: `${hubRankSignal}%` }} />
+                  <i />
+                </div>
               </div>
             </div>
           </header>
 
-          <main className="wenyou-home-sector-grid">
+          <main className="wenyou-home-sector-grid" aria-label="主神空间入口">
             <button
               type="button"
-              className="wenyou-sector-card wenyou-sector-main"
+              className="wenyou-sector-card wenyou-sector-main wenyou-glitch-tile"
               onClick={() => hasActiveRun ? pushView("game") : pushView("selection")}
             >
               <span className="wenyou-sector-rail" />
               <span className="wenyou-sector-watermark" aria-hidden="true">VII</span>
+              <span className="wenyou-sector-corner" aria-hidden="true" />
               <div className="wenyou-sector-kicker">
                 <i />
                 <span>{hubMissionSub}</span>
@@ -1915,25 +1971,31 @@ export function WenyouTab({
               </div>
             </button>
 
-            <button type="button" className="wenyou-sector-card wenyou-sector-rift" onClick={() => pushView("rift")}>
-              <Icon name="rift" />
+            <button type="button" className="wenyou-sector-card wenyou-sector-rift wenyou-glitch-tile" onClick={() => pushView("rift")}>
+              <span className="wenyou-sector-icon"><Icon name="rift" /></span>
               <span>抽卡入口</span>
               <strong>命运<br />裂隙</strong>
+              <i className="wenyou-sector-pink-line" aria-hidden="true" />
             </button>
 
-            <button type="button" className="wenyou-sector-card wenyou-sector-shop" onClick={() => pushView("shop")}>
+            <button type="button" className="wenyou-sector-card wenyou-sector-shop wenyou-glitch-tile" onClick={() => pushView("shop")}>
               <div>
                 <strong>系统<br />商店</strong>
                 <span>积分: {hubPoints.toLocaleString()}</span>
               </div>
               <i><Icon name="shop" /></i>
             </button>
+
+            <div className="wenyou-home-protocol" aria-hidden="true">
+              PROTOCOL_VOID_ACTIVE<br />
+              SYSTEM_STABLE_88%
+            </div>
           </main>
 
           <footer className="wenyou-home-dock">
             <button
               type="button"
-              className="wenyou-home-profile"
+              className="wenyou-home-profile wenyou-glitch-tile"
               onClick={() => {
                 setProfileTab("副本存档");
                 pushView("archive");
@@ -1946,6 +2008,11 @@ export function WenyouTab({
               <Icon name="profile" />
             </button>
           </footer>
+          <div className="wenyou-home-bottom-mark" aria-hidden="true">
+            <span />
+            <i />
+            <span />
+          </div>
         </section>
       ) : null}
 
@@ -2258,7 +2325,7 @@ export function WenyouTab({
             <>
               <FilterRow items={ARCHIVE_FILTERS} value={archiveFilter} onChange={setArchiveFilter} />
               <div className="wenyou-archive-list">
-                {archiveFilter === "进行中" && status.active ? (
+                {archiveFilter === "进行中" && hasActiveRun ? (
                   <ArchiveCard active title={currentScene.name} genre={currentScene.genre || "未知"} difficulty={currentScene.difficulty || "-"} turns="进行中" onPrimary={() => pushView("game")} />
                 ) : null}
                 {archiveFilter !== "进行中" ? sortedArchives.map((it, index) => (
