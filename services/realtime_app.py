@@ -76,6 +76,13 @@ class RealtimeConnectionManager:
                 if (not did or conn.device_id == did)
                 and (not wid or conn.window_id == wid)
             ]
+        if str((payload or {}).get("type") or "").strip() == "device_actions":
+            logger.info(
+                "device_actions_broadcast_targets target_device=%s target_window=%s targets=%s",
+                did,
+                wid,
+                [conn.device_id for conn in targets],
+            )
         sent = 0
         dead: list[RealtimeConnection] = []
         for conn in targets:
@@ -333,6 +340,15 @@ async def _receiver_loop(conn: RealtimeConnection) -> None:
                 await _send_json(conn, {"type": "device_action_results_ack", "ok": False, "error": "results must be list"})
                 continue
             result = await asyncio.to_thread(r2_store.report_app_actions, results, device_id=conn.device_id)
+            logger.info(
+                "device_action_results_realtime device_id=%s count=%s ok=%s processed=%s ids=%s statuses=%s",
+                conn.device_id,
+                len(results),
+                bool(isinstance(result, dict) and result.get("ok")),
+                (result or {}).get("processed") if isinstance(result, dict) else "",
+                [str((x or {}).get("id") or "") for x in results if isinstance(x, dict)],
+                [str((x or {}).get("status") or "") for x in results if isinstance(x, dict)],
+            )
             if isinstance(result, dict) and result.get("ok"):
                 try:
                     from routes.miniapp.device_actions import _wake_du_for_device_action_results
@@ -376,6 +392,13 @@ async def _sender_loop(conn: RealtimeConnection) -> None:
             actions = await asyncio.to_thread(r2_store.poll_app_actions, device_id=conn.device_id, limit=_ACTION_LIMIT)
             pending = actions.get("actions") if isinstance(actions, dict) else None
             if isinstance(pending, list) and pending:
+                logger.info(
+                    "device_actions_send_realtime device_id=%s source=fallback_poll count=%s ids=%s types=%s",
+                    conn.device_id,
+                    len(pending),
+                    [str((x or {}).get("id") or "") for x in pending if isinstance(x, dict)],
+                    [str((x or {}).get("type") or "") for x in pending if isinstance(x, dict)],
+                )
                 await _send_json(conn, {"type": "device_actions", "actions": pending, "source": "fallback_poll"})
 
             codex_tasks = await asyncio.to_thread(_codex_group_tasks_for_device, conn.device_id)
@@ -461,6 +484,16 @@ async def internal_publish(request: Request, x_realtime_token: str = Header(defa
     if not payload.get("type"):
         return JSONResponse({"ok": False, "error": "missing_type"}, status_code=400)
     sent = await _connections.broadcast(payload, device_id=device_id, window_id=window_id)
+    if payload.get("type") == "device_actions":
+        actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
+        logger.info(
+            "device_actions_broadcast target_device=%s sent=%s count=%s ids=%s types=%s",
+            device_id,
+            sent,
+            len(actions),
+            [str((x or {}).get("id") or "") for x in actions if isinstance(x, dict)],
+            [str((x or {}).get("type") or "") for x in actions if isinstance(x, dict)],
+        )
     return {"ok": True, "sent": sent, "type": payload.get("type"), "event_id": payload.get("event_id")}
 
 

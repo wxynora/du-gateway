@@ -163,6 +163,15 @@ def register_routes(bp) -> None:
         except Exception:
             limit = 10
         result = r2_store.poll_app_actions(device_id=device_id, limit=limit)
+        actions = result.get("actions") if isinstance(result, dict) else None
+        if isinstance(actions, list) and actions:
+            sumitalk_logger.info(
+                "device_actions_poll device_id=%s count=%s ids=%s types=%s",
+                device_id,
+                len(actions),
+                [str((x or {}).get("id") or "") for x in actions if isinstance(x, dict)],
+                [str((x or {}).get("type") or "") for x in actions if isinstance(x, dict)],
+            )
         return jsonify(result)
 
     @bp.route("/device-actions/done", methods=["POST"])
@@ -175,6 +184,15 @@ def register_routes(bp) -> None:
         if not isinstance(results, list):
             return jsonify({"ok": False, "error": "results 必须是数组"}), 400
         result = r2_store.report_app_actions(results, device_id=device_id)
+        sumitalk_logger.info(
+            "device_actions_done device_id=%s result_count=%s ok=%s processed=%s ids=%s statuses=%s",
+            device_id,
+            len(results),
+            bool(result.get("ok")),
+            result.get("processed"),
+            [str((x or {}).get("id") or "") for x in results if isinstance(x, dict)],
+            [str((x or {}).get("status") or "") for x in results if isinstance(x, dict)],
+        )
         if result.get("ok"):
             queued = _wake_du_for_device_action_results(device_id, result.get("items") or [])
             if queued:

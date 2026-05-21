@@ -866,15 +866,18 @@ public class FloatingBallService extends Service {
                         JSONObject root = new JSONObject(readAllText(conn.getInputStream()));
                         JSONArray actions = root.optJSONArray("actions");
                         if (actions == null || actions.length() <= 0) return;
+                        Log.i(TAG, "device_actions poll received count=" + actions.length() + " deviceId=" + panelDeviceId);
                         JSONArray results = new JSONArray();
                         for (int i = 0; i < actions.length(); i += 1) {
                             JSONObject action = actions.optJSONObject(i);
                             if (action == null) continue;
+                            Log.i(TAG, "device_action poll execute " + summarizeDeviceAction(action));
                             results.put(executeDeviceAction(action));
                         }
                         if (results.length() <= 0) return;
                         JSONObject payload = new JSONObject();
                         payload.put("results", results);
+                        Log.i(TAG, "device_actions poll posting results count=" + results.length() + " " + summarizeDeviceActionResults(results));
                         postJson("/miniapp-api/device-actions/done", payload);
                     } catch (Exception e) {
                         Log.w(TAG, "pollPendingDeviceActions failed", e);
@@ -1005,6 +1008,7 @@ public class FloatingBallService extends Service {
             if ("device_actions".equals(type)) {
                 JSONArray actions = root.optJSONArray("actions");
                 if (actions != null && actions.length() > 0) {
+                    Log.i(TAG, "device_actions realtime received source=" + root.optString("source", "") + " count=" + actions.length() + " deviceId=" + panelDeviceId);
                     ioExecutor.execute(() -> handleRealtimeDeviceActions(actions));
                 }
             }
@@ -1040,13 +1044,16 @@ public class FloatingBallService extends Service {
             for (int i = 0; i < actions.length(); i += 1) {
                 JSONObject action = actions.optJSONObject(i);
                 if (action == null) continue;
+                Log.i(TAG, "device_action realtime execute " + summarizeDeviceAction(action));
                 results.put(executeDeviceAction(action));
             }
             if (results.length() <= 0) return;
             JSONObject payload = new JSONObject();
             payload.put("type", "device_action_results");
             payload.put("results", results);
+            Log.i(TAG, "device_actions realtime posting results count=" + results.length() + " " + summarizeDeviceActionResults(results));
             if (!sendRealtimeJson(payload)) {
+                Log.w(TAG, "device_actions realtime result send failed, falling back to HTTP");
                 JSONObject httpPayload = new JSONObject();
                 httpPayload.put("results", results);
                 postJson("/miniapp-api/device-actions/done", httpPayload);
@@ -1059,42 +1066,49 @@ public class FloatingBallService extends Service {
     private JSONObject executeDeviceAction(JSONObject action) {
         JSONObject result = new JSONObject();
         String id = String.valueOf(action.optString("id", "")).trim();
+        String type = String.valueOf(action.optString("type", "")).trim();
         try {
             result.put("id", id);
-            String type = String.valueOf(action.optString("type", "")).trim();
             JSONObject payload = action.optJSONObject("payload");
+            Log.i(TAG, "device_action start id=" + id + " type=" + type + " payload=" + summarizeActionPayload(payload));
             if ("create_system_alarm".equals(type)) {
                 JSONObject detail = createSystemAlarmFromAction(payload == null ? new JSONObject() : payload);
                 result.put("status", "done");
                 result.put("detail", detail);
+                Log.i(TAG, "device_action done id=" + id + " type=" + type + " " + summarizeDeviceActionResult(result));
                 return result;
             }
             if ("create_calendar_event".equals(type)) {
                 JSONObject detail = createCalendarEventFromAction(payload == null ? new JSONObject() : payload);
                 result.put("status", "done");
                 result.put("detail", detail);
+                Log.i(TAG, "device_action done id=" + id + " type=" + type + " " + summarizeDeviceActionResult(result));
                 return result;
             }
             if ("show_choice_dialog".equals(type)) {
                 JSONObject detail = showChoiceDialogFromAction(payload == null ? new JSONObject() : payload);
                 result.put("status", "done");
                 result.put("detail", detail);
+                Log.i(TAG, "device_action done id=" + id + " type=" + type + " " + summarizeDeviceActionResult(result));
                 return result;
             }
             if ("show_system_notification".equals(type)) {
                 JSONObject detail = showSystemNotificationFromAction(payload == null ? new JSONObject() : payload);
                 result.put("status", "done");
                 result.put("detail", detail);
+                Log.i(TAG, "device_action done id=" + id + " type=" + type + " " + summarizeDeviceActionResult(result));
                 return result;
             }
             if ("request_screen_check".equals(type)) {
                 JSONObject detail = requestScreenCheckFromAction(payload == null ? new JSONObject() : payload);
                 result.put("status", "done");
                 result.put("detail", detail);
+                Log.i(TAG, "device_action done id=" + id + " type=" + type + " " + summarizeDeviceActionResult(result));
                 return result;
             }
             result.put("status", "failed");
             result.put("error", "unknown_action");
+            Log.w(TAG, "device_action failed id=" + id + " type=" + type + " error=unknown_action");
             return result;
         } catch (Exception e) {
             try {
@@ -1102,6 +1116,7 @@ public class FloatingBallService extends Service {
                 result.put("error", e.getMessage() == null ? String.valueOf(e) : e.getMessage());
             } catch (Exception ignored) {
             }
+            Log.w(TAG, "device_action exception id=" + id + " type=" + type + " " + summarizeDeviceActionResult(result), e);
             return result;
         }
     }
@@ -1138,6 +1153,7 @@ public class FloatingBallService extends Service {
 
     private JSONObject showChoiceDialogFromAction(JSONObject payload) throws Exception {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "choice_dialog overlay_permission_denied");
             throw new IllegalStateException("overlay_permission_denied");
         }
         final String title = String.valueOf(payload.optString("title", "渡")).trim();
@@ -1146,6 +1162,7 @@ public class FloatingBallService extends Service {
         final String level = String.valueOf(payload.optString("level", "info")).trim();
         final boolean dismissible = payload.optBoolean("dismissible", true);
         final int timeoutSeconds = Math.max(30, Math.min(1800, payload.optInt("timeoutSeconds", 600)));
+        Log.i(TAG, "choice_dialog start title=" + title + " level=" + level + " timeoutSeconds=" + timeoutSeconds + " messageLen=" + message.length());
 
         JSONArray choices = payload.optJSONArray("choices");
         String choiceAId = "choice_a";
@@ -1179,6 +1196,7 @@ public class FloatingBallService extends Service {
         mainHandler.post(
                 () -> {
                     try {
+                        Log.i(TAG, "choice_dialog ui_create title=" + title + " level=" + level);
                         AlertDialog dialog = new AlertDialog.Builder(this).create();
                         dialog.setView(
                                 buildChoiceDialogView(
@@ -1222,6 +1240,7 @@ public class FloatingBallService extends Service {
                                         : WindowManager.LayoutParams.TYPE_PHONE);
                         dialogRef.set(dialog);
                         dialog.show();
+                        Log.i(TAG, "choice_dialog shown title=" + title + " level=" + level);
                         android.view.Window shownWindow = dialog.getWindow();
                         if (shownWindow != null) {
                             shownWindow.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
@@ -1231,10 +1250,12 @@ public class FloatingBallService extends Service {
                             shownWindow.setAttributes(attrs);
                         }
                     } catch (Exception e) {
+                        Log.w(TAG, "choice_dialog ui_failed title=" + title + " error=" + e.getMessage(), e);
                         completeChoiceDialog(resultRef, latch, buildChoiceDialogError(e));
                     }
                 });
         if (!latch.await(timeoutSeconds, TimeUnit.SECONDS)) {
+            Log.w(TAG, "choice_dialog timeout title=" + title + " timeoutSeconds=" + timeoutSeconds);
             resultRef.compareAndSet(null, buildChoiceDialogResult("timeout", "", level, true, true));
             AlertDialog dialog = dialogRef.get();
             if (dialog != null) {
@@ -1251,6 +1272,7 @@ public class FloatingBallService extends Service {
         if (detail == null) throw new IllegalStateException("dialog_no_result");
         String error = String.valueOf(detail.optString("error", "")).trim();
         if (!error.isEmpty()) throw new IllegalStateException(error);
+        Log.i(TAG, "choice_dialog result title=" + title + " " + summarizeDetail(detail));
         return detail;
     }
 
@@ -1567,6 +1589,7 @@ public class FloatingBallService extends Service {
 
     private JSONObject requestScreenCheckFromAction(JSONObject payload) throws Exception {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !android.provider.Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "screen_check overlay_permission_denied");
             throw new IllegalStateException("overlay_permission_denied");
         }
         String title = String.valueOf(payload.optString("title", "渡想查岗")).trim();
@@ -1577,6 +1600,7 @@ public class FloatingBallService extends Service {
             message += "\n\n同意后会通过 SumiTalk 辅助功能截取当前屏幕，不会主动跳转应用；如果辅助功能没开，则不会截图。";
         }
         int timeoutSeconds = Math.max(30, Math.min(300, payload.optInt("timeoutSeconds", 120)));
+        Log.i(TAG, "screen_check start title=" + title + " timeoutSeconds=" + timeoutSeconds + " messageLen=" + message.length());
 
         JSONObject dialogPayload = new JSONObject();
         dialogPayload.put("title", title);
@@ -1595,7 +1619,9 @@ public class FloatingBallService extends Service {
         choices.put(decline);
         dialogPayload.put("choices", choices);
 
+        Log.i(TAG, "screen_check confirm_dialog_before title=" + title + " timeoutSeconds=" + timeoutSeconds);
         JSONObject choice = showChoiceDialogFromAction(dialogPayload);
+        Log.i(TAG, "screen_check confirm_dialog_result " + summarizeDetail(choice));
         String choiceId = String.valueOf(choice.optString("choice_id", "")).trim();
         if (!"approve".equals(choiceId)) {
             JSONObject detail = new JSONObject();
@@ -1609,6 +1635,7 @@ public class FloatingBallService extends Service {
         }
 
         String requestId = "screen_check_" + System.currentTimeMillis();
+        Log.i(TAG, "screen_check capture_prepare requestId=" + requestId);
         ScreenCaptureBridge.create(requestId);
         try {
             Thread.sleep(350L);
@@ -1616,6 +1643,7 @@ public class FloatingBallService extends Service {
             Thread.currentThread().interrupt();
         }
         if (!SumiAccessibilityService.requestScreenshot(requestId)) {
+            Log.w(TAG, "screen_check accessibility_request_failed requestId=" + requestId);
             JSONObject detail = new JSONObject();
             detail.put("approved", false);
             detail.put("stage", "accessibility_screenshot");
@@ -1625,12 +1653,14 @@ public class FloatingBallService extends Service {
 
         JSONObject detail = ScreenCaptureBridge.await(requestId, Math.max(45L, timeoutSeconds) * 1000L);
         if (detail == null) {
+            Log.w(TAG, "screen_check capture_timeout requestId=" + requestId + " timeoutSeconds=" + timeoutSeconds);
             detail = new JSONObject();
             detail.put("approved", false);
             detail.put("stage", "capture_wait");
             detail.put("reason", "capture_timeout");
             detail.put("timeout", true);
         }
+        Log.i(TAG, "screen_check result requestId=" + requestId + " " + summarizeDetail(detail));
         return detail;
     }
 
@@ -1879,6 +1909,85 @@ public class FloatingBallService extends Service {
         Log.i(TAG, "message overlay bubble disabled");
     }
 
+    private String summarizeDeviceAction(JSONObject action) {
+        if (action == null) return "action=null";
+        JSONObject payload = action.optJSONObject("payload");
+        return "id="
+                + String.valueOf(action.optString("id", "")).trim()
+                + " type="
+                + String.valueOf(action.optString("type", "")).trim()
+                + " payload="
+                + summarizeActionPayload(payload);
+    }
+
+    private String summarizeActionPayload(JSONObject payload) {
+        if (payload == null) return "{}";
+        String title = String.valueOf(payload.optString("title", "")).trim();
+        String message = String.valueOf(payload.optString("message", payload.optString("content", ""))).trim();
+        JSONArray choices = payload.optJSONArray("choices");
+        return "{title="
+                + title
+                + ", messageLen="
+                + message.length()
+                + ", timeoutSeconds="
+                + payload.optString("timeoutSeconds", "")
+                + ", choices="
+                + (choices == null ? 0 : choices.length())
+                + "}";
+    }
+
+    private String summarizeDetail(JSONObject detail) {
+        if (detail == null) return "{}";
+        StringBuilder sb = new StringBuilder("{");
+        appendSummaryField(sb, "stage", detail.optString("stage", ""));
+        appendSummaryField(sb, "approved", detail.has("approved") ? String.valueOf(detail.optBoolean("approved")) : "");
+        appendSummaryField(sb, "choice_id", detail.optString("choice_id", ""));
+        appendSummaryField(sb, "dismissed", detail.has("dismissed") ? String.valueOf(detail.optBoolean("dismissed")) : "");
+        appendSummaryField(sb, "timeout", detail.has("timeout") ? String.valueOf(detail.optBoolean("timeout")) : "");
+        appendSummaryField(sb, "reason", detail.optString("reason", ""));
+        appendSummaryField(sb, "error", detail.optString("error", ""));
+        appendSummaryField(sb, "image_url", detail.optString("image_url", "").isEmpty() ? "" : "present");
+        sb.append("}");
+        return sb.toString();
+    }
+
+    private String summarizeDeviceActionResult(JSONObject result) {
+        if (result == null) return "{}";
+        JSONObject detail = result.optJSONObject("detail");
+        return "{status="
+                + result.optString("status", "")
+                + ", error="
+                + result.optString("error", "")
+                + ", detail="
+                + summarizeDetail(detail)
+                + "}";
+    }
+
+    private String summarizeDeviceActionResults(JSONArray results) {
+        if (results == null) return "[]";
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < results.length(); i += 1) {
+            JSONObject row = results.optJSONObject(i);
+            if (row == null) continue;
+            if (sb.length() > 1) sb.append(", ");
+            sb.append(row.optString("id", ""))
+                    .append(":")
+                    .append(row.optString("status", ""))
+                    .append("/")
+                    .append(summarizeDetail(row.optJSONObject("detail")));
+        }
+        sb.append("]");
+        return sb.toString();
+    }
+
+    private void appendSummaryField(StringBuilder sb, String key, String value) {
+        String raw = String.valueOf(value == null ? "" : value).trim();
+        if (raw.isEmpty()) return;
+        if (raw.length() > 80) raw = raw.substring(0, 80);
+        if (sb.length() > 1) sb.append(", ");
+        sb.append(key).append("=").append(raw);
+    }
+
     private String readAllText(InputStream is) throws Exception {
         ByteArrayOutputStream os = new ByteArrayOutputStream();
         byte[] buf = new byte[2048];
@@ -1906,7 +2015,12 @@ public class FloatingBallService extends Service {
             }
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
-                Log.w(TAG, "postJson non-2xx " + path + " code=" + code);
+                String errorBody = "";
+                InputStream errorStream = conn.getErrorStream();
+                if (errorStream != null) {
+                    errorBody = readAllText(errorStream);
+                }
+                Log.w(TAG, "postJson non-2xx " + path + " code=" + code + " body=" + errorBody);
             }
         } finally {
             if (conn != null) conn.disconnect();

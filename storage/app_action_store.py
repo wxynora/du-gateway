@@ -28,6 +28,38 @@ _app_action_write_lock = threading.Lock()
 logger = get_logger(__name__)
 
 
+def _payload_log_summary(payload: Any) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    summary: dict[str, Any] = {}
+    title = str(payload.get("title") or "").strip()
+    message = str(payload.get("message") or payload.get("content") or "").strip()
+    if title:
+        summary["title"] = title[:60]
+    if message:
+        summary["message_len"] = len(message)
+    if "timeoutSeconds" in payload:
+        summary["timeoutSeconds"] = payload.get("timeoutSeconds")
+    if "choices" in payload and isinstance(payload.get("choices"), list):
+        summary["choices"] = len(payload.get("choices") or [])
+    return summary
+
+
+def _result_log_summary(result: Any) -> dict:
+    if not isinstance(result, dict):
+        return {}
+    detail = result.get("detail") if isinstance(result.get("detail"), dict) else {}
+    return {
+        "status": str(result.get("status") or "").strip(),
+        "error": str(result.get("error") or "").strip()[:120],
+        "stage": str(detail.get("stage") or "").strip(),
+        "approved": detail.get("approved") if "approved" in detail else "",
+        "choice_id": str(detail.get("choice_id") or "").strip(),
+        "timeout": detail.get("timeout") if "timeout" in detail else "",
+        "detail_error": str(detail.get("error") or "").strip()[:120],
+    }
+
+
 def _r2_store():
     from storage import r2_store
 
@@ -296,9 +328,14 @@ def _publish_app_action(item: dict) -> None:
     try:
         from services.realtime_publish import publish_device_actions
 
-        publish_device_actions(
-            device_id=str((item or {}).get("deviceId") or "").strip(),
-            actions=[_public_app_action(item)],
+        target_device = str((item or {}).get("deviceId") or "").strip()
+        ok = publish_device_actions(device_id=target_device, actions=[_public_app_action(item)])
+        logger.info(
+            "app_action_realtime_publish id=%s type=%s target_device=%s ok=%s",
+            str((item or {}).get("id") or ""),
+            str((item or {}).get("type") or ""),
+            target_device,
+            ok,
         )
     except Exception as e:
         logger.debug("publish_app_action failed id=%s error=%s", str((item or {}).get("id") or ""), e)
@@ -341,6 +378,8 @@ def append_app_action(
         "createdAt": now_iso,
         "expiresAt": expires_at,
         "leasedUntil": "",
+        "leasedAt": "",
+        "leasedByDeviceId": "",
         "retryCount": 0,
     }
     with _app_action_write_lock:
@@ -358,6 +397,14 @@ def append_app_action(
                 if existing_id:
                     for old in data.get("pending") or []:
                         if isinstance(old, dict) and str(old.get("id") or "") == existing_id:
+                            logger.info(
+                                "app_action_enqueue_duplicate type=%s id=%s target_device=%s source=%s expires_at=%s",
+                                action,
+                                existing_id,
+                                str(old.get("deviceId") or ""),
+                                item["source"],
+                                str(old.get("expiresAt") or ""),
+                            )
                             return {**old, "duplicate": True}, None
             pending = data.get("pending") if isinstance(data.get("pending"), list) else []
             pending.append(item)
@@ -366,6 +413,16 @@ def append_app_action(
                 idem_keys[idem] = {"id": item["id"], "expiresAt": expires_at}
                 data["idempotencyKeys"] = idem_keys
             _write_json(client, R2_KEY_APP_ACTION_QUEUE, data)
+            logger.info(
+                "app_action_enqueued id=%s type=%s target_device=%s source=%s ttl=%s expires_at=%s payload=%s",
+                item["id"],
+                item["type"],
+                item["deviceId"],
+                item["source"],
+                ttl,
+                item["expiresAt"],
+                _payload_log_summary(normalized_payload),
+            )
             _publish_app_action(item)
             return item, None
         except Exception as e:
@@ -401,6 +458,15 @@ def poll_app_actions(device_id: str = "", limit: int = 10) -> dict:
                     continue
                 exp = _parse_utc_iso(str(item.get("expiresAt") or ""))
                 if exp and exp <= now:
+                    logger.info(
+                        "app_action_expired id=%s type=%s target_device=%s leased_by=%s retry=%s expires_at=%s",
+                        str(item.get("id") or ""),
+                        str(item.get("type") or ""),
+                        str(item.get("deviceId") or ""),
+                        str(item.get("leasedByDeviceId") or ""),
+                        int(item.get("retryCount") or 0),
+                        str(item.get("expiresAt") or ""),
+                    )
                     history.append({**item, "status": "expired", "finishedAt": now_iso})
                     changed = True
                     continue
@@ -417,15 +483,46 @@ def poll_app_actions(device_id: str = "", limit: int = 10) -> dict:
                     retry_count += 1
                     item["retryCount"] = retry_count
                     changed = True
+                    logger.info(
+                        "app_action_lease_retry id=%s type=%s device_id=%s previous_leased_by=%s retry=%s previous_leased_until=%s",
+                        str(item.get("id") or ""),
+                        str(item.get("type") or ""),
+                        device,
+                        str(item.get("leasedByDeviceId") or ""),
+                        retry_count,
+                        str(item.get("leasedUntil") or ""),
+                    )
                 if retry_count >= _APP_ACTION_MAX_RETRY:
+                    logger.warning(
+                        "app_action_abandoned id=%s type=%s device_id=%s target_device=%s leased_by=%s retry=%s payload=%s",
+                        str(item.get("id") or ""),
+                        str(item.get("type") or ""),
+                        device,
+                        str(item.get("deviceId") or ""),
+                        str(item.get("leasedByDeviceId") or ""),
+                        retry_count,
+                        _payload_log_summary(item.get("payload")),
+                    )
                     history.append({**item, "status": "abandoned", "finishedAt": now_iso})
                     changed = True
                     continue
                 if len(out) < max_items:
+                    target_device = str(item.get("deviceId") or "").strip()
                     item["leasedUntil"] = lease_until
+                    item["leasedAt"] = now_iso
+                    item["leasedByDeviceId"] = device
                     item["retryCount"] = retry_count
                     out.append(_public_app_action(item))
                     changed = True
+                    logger.info(
+                        "app_action_leased id=%s type=%s device_id=%s target_device=%s retry=%s leased_until=%s via=poll",
+                        str(item.get("id") or ""),
+                        str(item.get("type") or ""),
+                        device,
+                        target_device,
+                        retry_count,
+                        lease_until,
+                    )
                 next_pending.append(item)
             if changed:
                 data["pending"] = next_pending
@@ -463,6 +560,7 @@ def report_app_actions(results: list, device_id: str = "") -> dict:
             history = data.get("history") if isinstance(data.get("history"), list) else []
             next_pending = []
             processed_items = []
+            processed_ids = set()
             for item in pending:
                 if not isinstance(item, dict):
                     continue
@@ -473,11 +571,27 @@ def report_app_actions(results: list, device_id: str = "") -> dict:
                     continue
                 target_device = str(item.get("deviceId") or "").strip()
                 if target_device and device and target_device != device:
+                    logger.warning(
+                        "app_action_result_device_mismatch id=%s type=%s device_id=%s target_device=%s",
+                        item_id,
+                        str(item.get("type") or ""),
+                        device,
+                        target_device,
+                    )
                     next_pending.append(item)
                     continue
                 status = str(result.get("status") or "").strip().lower()
                 if status not in {"done", "failed"}:
                     status = "failed"
+                logger.info(
+                    "app_action_result id=%s type=%s device_id=%s target_device=%s status=%s summary=%s",
+                    item_id,
+                    str(item.get("type") or ""),
+                    device,
+                    target_device,
+                    status,
+                    _result_log_summary(result),
+                )
                 finished = {
                     **item,
                     "status": status,
@@ -488,6 +602,10 @@ def report_app_actions(results: list, device_id: str = "") -> dict:
                 }
                 history.append(finished)
                 processed_items.append(finished)
+                processed_ids.add(item_id)
+            unmatched_ids = [item_id for item_id in result_map.keys() if item_id not in processed_ids]
+            if unmatched_ids:
+                logger.warning("app_action_result_unmatched device_id=%s ids=%s", device, unmatched_ids)
             data["pending"] = next_pending
             data["history"] = _trim_app_action_history(history)
             _write_json(client, R2_KEY_APP_ACTION_QUEUE, data)
