@@ -63,6 +63,100 @@ def normalize_visible_reply_text(text: str) -> str:
     return visible.strip()
 
 
+def _tool_round_content_text(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "text":
+                parts.append(str(item.get("text") or ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(part for part in parts if part).strip()
+    return str(content)
+
+
+def _tool_round_text_key(text: str) -> str:
+    return " ".join(str(text or "").split()).strip()
+
+
+def append_visible_tool_round_content(parts: list[str], content) -> None:
+    """
+    工具调用中间轮也可能带可见 content；这些 content 需要跟最终回复一起返回给客户端。
+    这里先收集正文，去掉 thinking 块，并做轻量去重，避免最终轮已复述时重复刷屏。
+    """
+    visible = normalize_visible_reply_text(_tool_round_content_text(content))
+    key = _tool_round_text_key(visible)
+    if not key:
+        return
+    for idx, existing in enumerate(parts):
+        existing_key = _tool_round_text_key(existing)
+        if key == existing_key or key in existing_key:
+            return
+        if existing_key and existing_key in key:
+            parts[idx] = visible
+            return
+    parts.append(visible)
+
+
+def merge_visible_tool_round_content(prefix_parts: list[str], final_content: str) -> str:
+    final = str(final_content or "")
+    final_key = _tool_round_text_key(final)
+    merged_prefix: list[str] = []
+    seen_keys: set[str] = set()
+    for part in prefix_parts or []:
+        text = normalize_visible_reply_text(part)
+        key = _tool_round_text_key(text)
+        if not key or key in seen_keys:
+            continue
+        if final_key and (key == final_key or key in final_key):
+            continue
+        seen_keys.add(key)
+        merged_prefix.append(text)
+    if not merged_prefix:
+        return final
+    final_stripped = final.strip()
+    if not final_stripped:
+        return "\n\n".join(merged_prefix).strip()
+    return "\n\n".join([*merged_prefix, final_stripped]).strip()
+
+
+def merge_visible_tool_round_content_into_response(resp_json: dict, prefix_parts: list[str]) -> dict:
+    if not prefix_parts or not isinstance(resp_json, dict):
+        return resp_json
+    out = copy.deepcopy(resp_json)
+    try:
+        choices = out.get("choices") or []
+        if not choices:
+            return out
+        msg = (choices[0] or {}).get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, list):
+            text_index = None
+            for idx, item in enumerate(content):
+                if isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "text":
+                    text_index = idx
+                    break
+            if text_index is None:
+                msg["content"] = [{"type": "text", "text": merge_visible_tool_round_content(prefix_parts, "")}, *content]
+            else:
+                item = dict(content[text_index])
+                item["text"] = merge_visible_tool_round_content(prefix_parts, item.get("text") or "")
+                new_content = list(content)
+                new_content[text_index] = item
+                msg["content"] = new_content
+        else:
+            msg["content"] = merge_visible_tool_round_content(prefix_parts, content or "")
+        choices[0]["message"] = msg
+    except Exception:
+        logger.warning("合并工具中间轮正文失败", exc_info=True)
+        return resp_json
+    return out
+
+
 def should_retry_tool_empty_final(content_text: str) -> bool:
     return not normalize_visible_reply_text(content_text)
 

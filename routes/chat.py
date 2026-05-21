@@ -94,11 +94,14 @@ from services.chat_sidecars import (
     extract_and_store_hidden_sidecars as _extract_and_store_hidden_sidecars,
 )
 from services.chat_tool_helpers import (
+    append_visible_tool_round_content as _append_visible_tool_round_content,
     append_tool_results_and_continue as _append_tool_results_and_continue,
     collect_tool_trace_from_messages as _collect_tool_trace_from_messages,
     inject_tool_empty_final_retry_instruction as _inject_tool_empty_final_retry_instruction,
     inject_tool_midstream_retry_instruction as _inject_tool_midstream_retry_instruction,
     is_sse_done_chunk as _is_sse_done_chunk,
+    merge_visible_tool_round_content as _merge_visible_tool_round_content,
+    merge_visible_tool_round_content_into_response as _merge_visible_tool_round_content_into_response,
     normalize_visible_reply_text as _normalize_visible_reply_text,
     should_retry_tool_empty_final as _should_retry_tool_empty_final,
     should_retry_tool_followup as _should_retry_tool_followup,
@@ -407,13 +410,14 @@ def _stream_with_r2_archive(
                 logger.info("R2 未存档：流式回复为空，跳过")
         return
 
-    # 有 tools：缓冲 + 工具循环，最后把最后一轮流发给客户端
+    # 有 tools：缓冲 + 工具循环；保留中间轮可见正文，再与最终轮一起发给客户端。
     current_body = body
     max_tool_rounds = TOOL_MAX_ROUNDS
     max_processed_tool_rounds = max(0, int(max_tool_rounds))
     tool_rounds_used = 0
     tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
+    tool_visible_content_parts: list[str] = []
     try:
         while True:
             chunks = []
@@ -452,10 +456,12 @@ def _stream_with_r2_archive(
                         len(tool_calls),
                     )
                     cap_hint = "（已达到工具调用轮数上限，为控制费用已停止继续自动调工具。你可以让我基于现有结果继续回答。）"
+                    cap_hint = _merge_visible_tool_round_content(tool_visible_content_parts, cap_hint)
                     yield _sse_delta_chunk_bytes(cap_hint)
                     content_parts.append(cap_hint)
                     break
                 from services.notion_tools import execute_tool
+                _append_visible_tool_round_content(tool_visible_content_parts, parsed.get("content") or "")
                 msg = {"content": parsed.get("content") or None, "tool_calls": tool_calls}
                 if parsed.get("reasoning"):
                     msg["reasoning"] = parsed.get("reasoning")
@@ -496,7 +502,9 @@ def _stream_with_r2_archive(
             done_chunks = []
             raw_parsed_content = parsed.get("content") or ""
             parsed_content = dedupe_stream_sumitalk_cards(raw_parsed_content)
-            if parsed_content != raw_parsed_content:
+            merged_parsed_content = _merge_visible_tool_round_content(tool_visible_content_parts, parsed_content)
+            if merged_parsed_content != raw_parsed_content:
+                parsed_content = merged_parsed_content
                 visible_content = du_state.feed_delta(parsed_content)
                 if visible_content:
                     yield _sse_delta_chunk_bytes(visible_content)
@@ -930,6 +938,7 @@ def chat_completions():
     accumulated_reasoning_details: list[dict] = []
     accumulated_reasoning_details_seen: set[str] = set()
     accumulated_reasoning_omitted = False
+    accumulated_tool_visible_parts: list[str] = []
 
     def _reasoning_text_fingerprint(text: str) -> str:
         return " ".join(str(text or "").split()).strip()
@@ -988,6 +997,7 @@ def chat_completions():
                 break
             if isinstance(msg, dict):
                 _accumulate_nonstream_reasoning(msg)
+                _append_visible_tool_round_content(accumulated_tool_visible_parts, msg.get("content"))
             from services.notion_tools import execute_tool
             body = _append_tool_results_and_continue(body, msg, tool_calls, execute_tool)
             tool_rounds_used += 1
@@ -1034,6 +1044,8 @@ def chat_completions():
         if isinstance(msg, dict):
             _accumulate_nonstream_reasoning(msg)
             break
+    if resp_json:
+        resp_json = _merge_visible_tool_round_content_into_response(resp_json, accumulated_tool_visible_parts)
     if resp_json and tool_rounds_used > 0:
         final_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
         final_visible = _normalize_visible_reply_text(
