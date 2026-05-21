@@ -6099,8 +6099,10 @@ def get_shop_view(user_id: int) -> dict:
     """文游系统商店/个人空间：优先读当前 session，归档后读 wallet 背包。"""
     uid = int(user_id)
     session = r2_store.get_wenyou_session(uid)
-    active = bool(session and isinstance(session, dict) and session.get("gameId"))
-    phase = "hub"
+    has_session = bool(session and isinstance(session, dict) and session.get("gameId"))
+    raw_phase = _session_phase(session) if has_session else "hub"
+    active = bool(has_session and raw_phase != "archived")
+    phase = raw_phase if active else "hub"
     wallet = _load_wenyou_wallet(uid, session if active else None)
     wallet_stats = _wallet_stats_from_wallet(wallet)
     inventory: list[dict] = list(wallet_stats.get("inventory") or [])
@@ -6119,7 +6121,7 @@ def get_shop_view(user_id: int) -> dict:
             "player1": copy.deepcopy(st.get("player1") if isinstance(st.get("player1"), dict) else players["player1"]),
             "player2": copy.deepcopy(st.get("player2") if isinstance(st.get("player2"), dict) else players["player2"]),
         }
-    can_buy = bool(active and _shop_open_for_phase(phase))
+    can_buy = bool(_shop_open_for_phase(phase))
     regular_items = _shop_offer_items(uid, wallet)
     special_items = _special_shop_items(uid, session if active else None, wallet)
     special_unlocked = bool(special_items)
@@ -6164,13 +6166,15 @@ def get_shop_view(user_id: int) -> dict:
 def refresh_shop_items(user_id: int) -> tuple[bool, str, dict]:
     uid = int(user_id)
     session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return False, "当前没有可刷新的文游存档。", get_shop_view(uid)
-    _session_ensure_stats(session)
-    phase = _session_phase(session)
+    has_session = bool(session and isinstance(session, dict) and session.get("gameId"))
+    raw_phase = _session_phase(session) if has_session else "hub"
+    phase = "hub" if raw_phase == "archived" else raw_phase
     if not _shop_open_for_phase(phase):
         return False, "副本进行中，系统商店关闭，不能刷新货架。", get_shop_view(uid)
-    wallet = _load_wenyou_wallet(uid, session)
+    has_economy_session = bool(has_session and raw_phase in {"hub", "settlement"})
+    if has_economy_session:
+        _session_ensure_stats(session)
+    wallet = _load_wenyou_wallet(uid, session if has_economy_session else None)
     regular = _regular_shop_state(wallet)
     limit = int(regular.get("refresh_limit") or 3)
     count = int(regular.get("refresh_count") or 0)
@@ -6185,8 +6189,9 @@ def refresh_shop_items(user_id: int) -> tuple[bool, str, dict]:
     wallet.setdefault("shop_state", {})["regular"] = regular
     wallet["ledger"] = (wallet.get("ledger") or [])[-79:] + [{"at": now_beijing_iso(), "type": "shop_refresh", "points_delta": -cost, "refresh_count": regular["refresh_count"]}]
     _save_wenyou_wallet(uid, wallet)
-    _sync_session_points_with_wallet(session, wallet)
-    r2_store.save_wenyou_session(uid, session)
+    if has_economy_session:
+        _sync_session_points_with_wallet(session, wallet)
+        r2_store.save_wenyou_session(uid, session)
     return True, f"普通商店已刷新，扣除 {cost} 主神积分。", get_shop_view(uid)
 
 
@@ -6197,18 +6202,20 @@ def buy_shop_item(user_id: int, item_id: str) -> tuple[bool, str, dict]:
     if not iid:
         return False, "请选择要购买的道具。", get_shop_view(uid)
     session = r2_store.get_wenyou_session(uid)
-    if not session or not session.get("gameId"):
-        return False, "当前没有可写入背包的副本，请先开始副本或进入结算阶段。", get_shop_view(uid)
-    _session_ensure_stats(session)
-    phase = _session_phase(session)
+    has_session = bool(session and isinstance(session, dict) and session.get("gameId"))
+    raw_phase = _session_phase(session) if has_session else "hub"
+    phase = "hub" if raw_phase == "archived" else raw_phase
     if not _shop_open_for_phase(phase):
         return False, "副本进行中，系统商店关闭；只能使用背包已有物品，结束并进入结算后再购买。", get_shop_view(uid)
-    wallet = _load_wenyou_wallet(uid, session)
-    offers = {str(item.get("id") or ""): item for item in (_shop_offer_items(uid, wallet) + _special_shop_items(uid, session, wallet))}
+    has_economy_session = bool(has_session and raw_phase in {"hub", "settlement"})
+    if has_economy_session:
+        _session_ensure_stats(session)
+    wallet = _load_wenyou_wallet(uid, session if has_economy_session else None)
+    offers = {str(item.get("id") or ""): item for item in (_shop_offer_items(uid, wallet) + _special_shop_items(uid, session if has_economy_session else None, wallet))}
     item = offers.get(iid)
     if not item:
         return False, "该商品已下架，请刷新系统商店。", get_shop_view(uid)
-    st = session["stats"]
+    st = session["stats"] if has_economy_session else _wallet_stats_from_wallet(wallet)
     points = max(0, int(wallet.get("points") or 0))
     price = max(0, int(item.get("price") or 0))
     if points < price:
@@ -6226,11 +6233,12 @@ def buy_shop_item(user_id: int, item_id: str) -> tuple[bool, str, dict]:
         {"at": now_beijing_iso(), "type": "shop_buy", "item_id": iid, "item_name": name, "points_delta": -price}
     ]
     _save_wenyou_wallet(uid, wallet)
-    st["points"] = int(wallet.get("points") or 0)
-    st["inventory"] = inv[:80]
-    session["stats"] = st
-    _sync_session_points_with_wallet(session, wallet)
-    r2_store.save_wenyou_session(uid, session)
+    if has_economy_session:
+        st["points"] = int(wallet.get("points") or 0)
+        st["inventory"] = inv[:80]
+        session["stats"] = st
+        _sync_session_points_with_wallet(session, wallet)
+        r2_store.save_wenyou_session(uid, session)
     view = get_shop_view(uid)
     view["bought"] = {"id": iid, "name": name, "price": price}
     return True, f"已购买【{name}】，扣除 {price} 主神积分。", view

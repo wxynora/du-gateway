@@ -172,6 +172,13 @@ type FeedItem = {
   text: string;
 };
 
+type StorySegment = {
+  id: string;
+  kind: "story" | "system";
+  label?: string;
+  text: string;
+};
+
 type WenyouPlayerStats = {
   hp?: number;
   hp_max?: number;
@@ -502,6 +509,127 @@ function extractEntryScene(text: string): EntryScene {
     genre: genre || undefined,
     difficulty: difficulty || undefined,
   };
+}
+
+function storySystemLabel(raw: string): string | null {
+  const label = String(raw || "").trim();
+  if (!label) return null;
+  if (label.startsWith("无限流")) return "副本接入";
+  if (label === "副本类型") return "副本类型";
+  if (label === "难度") return "难度";
+  if (label.startsWith("新手副本") || label.startsWith("副本 ")) return "系统提示";
+  if (label === "主神提示") return "主神提示";
+  if (label === "规则结算") return "规则结算";
+  if (label === "状态") return "状态";
+  if (label === "状态更新") return "状态更新";
+  if (label === "遭遇结算") return "遭遇结算";
+  if (label === "道具结算" || label === "系统判定") return "系统判定";
+  if (label === "任务更新" || label === "获得物品") return label;
+  return null;
+}
+
+function cleanStorySystemText(text: string) {
+  return String(text || "")
+    .replace(/^[\s｜|:：。]+/, "")
+    .replace(/[\s｜|]+$/, "")
+    .trim();
+}
+
+function formatStorySystemText(rawLabel: string, content = "") {
+  const label = String(rawLabel || "").trim();
+  const text = cleanStorySystemText(content);
+  if (label.startsWith("无限流")) return label.replace(/｜/g, " | ");
+  if (label === "副本类型") return `副本类型：${text || "未知"}`;
+  if (label === "难度") return `难度：${text || "-"}`;
+  if (label === "状态") return text ? `状态：${text}` : "状态更新";
+  return text || label;
+}
+
+function pushStorySegment(segments: StorySegment[], text: string) {
+  const t = String(text || "").trim();
+  if (!t || t === "—— 主神系统 ——" || /^━+$/.test(t)) return;
+  const last = segments[segments.length - 1];
+  if (last?.kind === "story") {
+    last.text = `${last.text}\n${t}`;
+    return;
+  }
+  segments.push({ id: `story-${segments.length}`, kind: "story", text: t });
+}
+
+function pushSystemSegment(segments: StorySegment[], label: string, text: string) {
+  const body = cleanStorySystemText(text);
+  if (!body) return;
+  segments.push({ id: `system-${segments.length}`, kind: "system", label, text: body });
+}
+
+function knownMarkers(line: string) {
+  const matches: Array<{ start: number; end: number; raw: string; label: string }> = [];
+  const re = /【([^】]{1,42})】/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(line))) {
+    const label = storySystemLabel(match[1]);
+    if (label) {
+      matches.push({ start: match.index, end: match.index + match[0].length, raw: match[1], label });
+    }
+  }
+  return matches;
+}
+
+function formatEntryMetadataBlock(block: string) {
+  const lines: string[] = [];
+  for (const line of block.split("\n").map((it) => it.trim()).filter(Boolean)) {
+    const matches = knownMarkers(line);
+    for (let i = 0; i < matches.length; i += 1) {
+      const marker = matches[i];
+      const next = matches[i + 1]?.start ?? line.length;
+      lines.push(formatStorySystemText(marker.raw, line.slice(marker.end, next)));
+    }
+  }
+  return lines.filter(Boolean).join("\n");
+}
+
+function splitStoryLine(segments: StorySegment[], line: string) {
+  const matches = knownMarkers(line);
+  if (!matches.length) {
+    pushStorySegment(segments, line);
+    return;
+  }
+  let cursor = 0;
+  for (let i = 0; i < matches.length; i += 1) {
+    const marker = matches[i];
+    const next = matches[i + 1]?.start ?? line.length;
+    pushStorySegment(segments, line.slice(cursor, marker.start));
+    pushSystemSegment(segments, marker.label, formatStorySystemText(marker.raw, line.slice(marker.end, next)));
+    cursor = next;
+  }
+  pushStorySegment(segments, line.slice(cursor));
+}
+
+function parseStorySegments(text: string): StorySegment[] {
+  const clean = String(text || "").replace(/\r/g, "").trim();
+  if (!clean) return [];
+  const segments: StorySegment[] = [];
+  for (const rawBlock of clean.split(/\n{2,}/)) {
+    const block = rawBlock.trim();
+    if (!block || block === "—— 主神系统 ——") continue;
+    if (/^━+\n?/.test(block) && block.includes("【状态】")) {
+      pushSystemSegment(segments, "状态", block.replace(/^━+\n?/, "").replace(/\n?━+$/, ""));
+      continue;
+    }
+    if (block.startsWith("【无限流") || (block.includes("【副本类型】") && block.includes("【难度】"))) {
+      pushSystemSegment(segments, "副本接入", formatEntryMetadataBlock(block));
+      continue;
+    }
+    const lines = block.split("\n").map((it) => it.trim()).filter(Boolean);
+    const firstOnlyMarker = lines[0]?.match(/^【([^】]{1,42})】$/);
+    const firstLabel = firstOnlyMarker ? storySystemLabel(firstOnlyMarker[1]) : null;
+    if (firstOnlyMarker && firstLabel && lines.length > 1) {
+      pushSystemSegment(segments, firstLabel, lines.slice(1).join("\n"));
+      continue;
+    }
+    for (const line of lines) splitStoryLine(segments, line);
+  }
+  return segments.length ? segments : [{ id: "story-0", kind: "story", text: clean }];
 }
 
 function difficultyStars(value?: string) {
@@ -2234,7 +2362,7 @@ export function WenyouTab({
               if (item.kind === "notice") return <SystemNotice key={item.id} tone="cyan" label="任务更新" text={item.text} />;
               if (item.kind === "loot") return <SystemNotice key={item.id} tone="purple" label="获得物品" text={item.text} />;
               if (item.kind === "du") return <SystemNotice key={item.id} tone="purple" label="渡的行动" text={item.text} />;
-              return <div key={item.id} className="wenyou-story-text">{item.text}</div>;
+              return <StoryFeedMessage key={item.id} text={item.text} />;
             }) : gameSettlementReady ? (
               <div className="wenyou-feed-empty">
                 <strong>结算完成，正在归档</strong>
@@ -2756,6 +2884,21 @@ function FilterRow({ items, value, onChange }: { items: string[]; value: string;
         <button key={item} className={item === value ? "active" : ""} onClick={() => onChange(item)}>
           {item}
         </button>
+      ))}
+    </div>
+  );
+}
+
+function StoryFeedMessage({ text }: { text: string }) {
+  const segments = parseStorySegments(text);
+  return (
+    <div className="wenyou-message-stack">
+      {segments.map((segment) => (
+        segment.kind === "system" ? (
+          <SystemNotice key={segment.id} tone="cyan" label={segment.label || "系统提示"} text={segment.text} />
+        ) : (
+          <div key={segment.id} className="wenyou-story-text">{segment.text}</div>
+        )
       ))}
     </div>
   );

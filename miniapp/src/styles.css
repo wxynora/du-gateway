@@ -2640,6 +2640,11 @@
     padding: 5px 8px;
   }
 
+  .wenyou-message-stack {
+    display: grid;
+    gap: 10px;
+  }
+
   .wenyou-story-text,
   .wenyou-notice,
   .wenyou-user-bubble {
@@ -2654,6 +2659,7 @@
     font-size: 14px;
     line-height: 1.72;
     padding: 10px 0 10px 12px;
+    white-space: pre-wrap;
   }
 
   .wenyou-notice {
@@ -2682,6 +2688,7 @@
     color: rgba(224, 242, 254, 0.8);
     font-size: 13px;
     line-height: 1.45;
+    white-space: pre-wrap;
   }
 
   .wenyou-user-bubble {
