@@ -473,13 +473,14 @@ const ENCOUNTER_QUICK_ACTIONS: QuickAction[] = [
   { label: "逃跑", text: "尝试脱离当前遭遇。", encounterAction: "escape" as const },
 ];
 const ATTRIBUTE_CHOICES = [
-  { key: "str", label: "力", hint: "近战、破坏、搬运" },
-  { key: "con", label: "体", hint: "生命、抗伤、耐力" },
-  { key: "agi", label: "敏", hint: "闪避、潜行、追逐" },
-  { key: "int", label: "智", hint: "推理、识别、解谜" },
-  { key: "spi", label: "精", hint: "精神力、抗污染" },
-  { key: "luk", label: "运", hint: "发现隐藏与奖励" },
+  { key: "str", label: "力", hint: "近战、破坏、搬运", tone: "str" },
+  { key: "con", label: "体", hint: "生命、抗伤、耐力", tone: "con" },
+  { key: "agi", label: "敏", hint: "闪避、潜行、追逐", tone: "agi" },
+  { key: "int", label: "智", hint: "推理、识别、解谜", tone: "int" },
+  { key: "spi", label: "精", hint: "精神力、抗污染", tone: "spi" },
+  { key: "luk", label: "运", hint: "发现隐藏与奖励", tone: "luk" },
 ] as const;
+const ATTRIBUTE_DISPLAY_MAX = 20;
 const RIFT_SINGLE_COST = 100;
 const RIFT_TEN_COST = 1000;
 const STORY_EXPANSION_POLL_MS = 1200;
@@ -3621,14 +3622,19 @@ function PlayerStatCard({
     { label: "HP", value: num(p.hp), max: num(p.hp_max), tone: "hp" },
     { label: "SAN", value: num(p.san), max: num(p.san_max), tone: "san" },
   ];
-  const attributes = [
-    ["力", p.str],
-    ["体", p.con ?? p.vit],
-    ["敏", p.agi],
-    ["智", p.int ?? p.wis],
-    ["精", p.spi],
-    ["运", p.luk],
-  ];
+  const attrValue = (key: typeof ATTRIBUTE_CHOICES[number]["key"]) => {
+    if (key === "con") return num(p.con ?? p.vit);
+    if (key === "int") return num(p.int ?? p.wis);
+    return num(p[key]);
+  };
+  const attributes = ATTRIBUTE_CHOICES.map((attr) => {
+    const value = attrValue(attr.key);
+    return {
+      ...attr,
+      value,
+      fill: Math.max(0, Math.min(100, (value / ATTRIBUTE_DISPLAY_MAX) * 100)),
+    };
+  });
   const battleStats = [
     ["攻击", p.physical_attack],
     ["防御", p.defense],
@@ -3669,10 +3675,13 @@ function PlayerStatCard({
       </div>
 
       <div className="wenyou-attr-board" aria-label={`${title} 基础属性`}>
-        {attributes.map(([label, value]) => (
-          <span key={String(label)} className="wenyou-attr-cell">
-            <small>{label}</small>
-            <b>{num(value)}</b>
+        {attributes.map((attr) => (
+          <span key={attr.key} className={`wenyou-attr-meter wenyou-attr-meter-${attr.tone}`}>
+            <small>{attr.label}</small>
+            <i className="wenyou-attr-meter-track" aria-hidden="true">
+              <em style={{ width: `${attr.fill}%` }} />
+            </i>
+            <b>{attr.value}</b>
           </span>
         ))}
       </div>
