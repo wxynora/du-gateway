@@ -480,14 +480,14 @@ const ENCOUNTER_QUICK_ACTIONS: QuickAction[] = [
   { label: "封印", text: "尝试按规则封印当前威胁。", encounterAction: "seal" as const },
   { label: "逃跑", text: "尝试脱离当前遭遇。", encounterAction: "escape" as const },
 ];
-const ATTRIBUTE_LABELS: Record<string, string> = {
-  str: "力",
-  con: "体",
-  agi: "敏",
-  int: "智",
-  spi: "精",
-  luk: "运",
-};
+const ATTRIBUTE_CHOICES = [
+  { key: "str", label: "力", hint: "近战、破坏、搬运" },
+  { key: "con", label: "体", hint: "生命、抗伤、耐力" },
+  { key: "agi", label: "敏", hint: "闪避、潜行、先手" },
+  { key: "int", label: "智", hint: "推理、识别、解谜" },
+  { key: "spi", label: "精", hint: "精神力、抗污染" },
+  { key: "luk", label: "运", hint: "发现隐藏与奖励" },
+] as const;
 const RIFT_SINGLE_COST = 100;
 const RIFT_TEN_COST = 1000;
 const STORY_EXPANSION_POLL_MS = 1200;
@@ -637,7 +637,7 @@ function parseStorySegments(text: string): StorySegment[] {
 function feedFromSessionHistory(history?: WenyouHistoryItem[]): FeedItem[] {
   if (!Array.isArray(history)) return [];
   return history
-    .map((item, index) => {
+    .map<FeedItem | null>((item, index) => {
       const text = String(item?.content || "").trim();
       if (!text) return null;
       const role = String(item?.role || "").trim().toLowerCase();
@@ -1022,6 +1022,8 @@ export function WenyouTab({
   const [randomLength, setRandomLength] = useState("标准");
   const [randomStyle, setRandomStyle] = useState("全随机");
   const [actionText, setActionText] = useState("");
+  const [attributePromptPlayer, setAttributePromptPlayer] = useState<"player1" | "player2" | null>(null);
+  const [attributePromptDismissedKey, setAttributePromptDismissedKey] = useState("");
   const actionInputRef = useRef<HTMLInputElement | null>(null);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const initialLoadRef = useRef(false);
@@ -1321,12 +1323,42 @@ export function WenyouTab({
       };
   const gameSettlementReady = sessionPanel?.phase === "settlement" && !!sessionPanel.settlement;
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
+  const attributePointEntries = useMemo(() => {
+    return (["player1", "player2"] as const)
+      .map((player) => {
+        const growthPlayer = profileGrowthPlayers[player];
+        const statPlayer = profileStats[player];
+        const points = Number(growthPlayer?.unspent_attribute_points ?? statPlayer?.unspent_attribute_points ?? 0);
+        const level = Number(statPlayer?.level ?? 1);
+        const rank = String(statPlayer?.rank || "D");
+        return {
+          player,
+          title: player === "player1" ? "玩家一" : "玩家二 · 渡",
+          points: Number.isFinite(points) ? points : 0,
+          key: `${player}:${rank}:${level}:${points}`,
+        };
+      })
+      .filter((entry) => entry.points > 0);
+  }, [profileGrowthPlayers, profileStats]);
+  const activeAttributePrompt = attributePointEntries.find((entry) => entry.player === attributePromptPlayer) || null;
+  const gamePlayerAbilities = (sessionPanel?.growth?.players?.player1?.abilities || sessionPanel?.stats?.player1?.abilities || [])
+    .map((ability) => ({
+      id: String(ability.id || ability.name || ""),
+      name: String(ability.name || ability.id || ""),
+    }))
+    .filter((ability) => ability.id && ability.name)
+    .slice(0, 4);
   const homePhase = hasActiveRun ? (sessionPanel?.phase_label || status.session?.phase_label || "副本中") : "主神空间待机";
   const hasVisibleEncounter = (gamePublicState.visible_monsters || []).length > 0;
   const quickActions = useMemo(
     () => hasVisibleEncounter ? [...BASE_QUICK_ACTIONS, ...ENCOUNTER_QUICK_ACTIONS] : BASE_QUICK_ACTIONS,
     [hasVisibleEncounter]
   );
+  useEffect(() => {
+    if (attributePromptPlayer && attributePointEntries.some((entry) => entry.player === attributePromptPlayer)) return;
+    const nextPrompt = attributePointEntries.find((entry) => entry.key !== attributePromptDismissedKey) || null;
+    setAttributePromptPlayer(nextPrompt?.player || null);
+  }, [attributePointEntries, attributePromptDismissedKey, attributePromptPlayer]);
   const feedTimeLabel = new Date().toLocaleString("zh-CN", {
     month: "2-digit",
     day: "2-digit",
@@ -1810,6 +1842,8 @@ export function WenyouTab({
       toast(j.message || "属性点已分配");
       if (j.session) setSessionPanel(j.session);
       await loadStatus();
+      await loadSessionPanel();
+      await loadShop();
     } catch (e: any) {
       toast(`属性分配失败：${e?.message || e}`);
     } finally {
@@ -1852,26 +1886,6 @@ export function WenyouTab({
       await loadStatus();
     } catch (e: any) {
       toast(`复活失败：${e?.message || e}`);
-    } finally {
-      setActing(false);
-    }
-  }
-
-  async function learnAbility(player: "player1" | "player2", ability: string) {
-    if (acting) return;
-    setActing(true);
-    try {
-      const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/player/ability/learn", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ player, ability }),
-      });
-      if (!j?.ok) throw new Error(j?.message || j?.error || "能力学习失败");
-      toast(j.message || "能力已更新");
-      if (j.session) setSessionPanel(j.session);
-      await loadStatus();
-    } catch (e: any) {
-      toast(`能力学习失败：${e?.message || e}`);
     } finally {
       setActing(false);
     }
@@ -2426,6 +2440,21 @@ export function WenyouTab({
                     <span>{item.label}</span>
                   </button>
                 ))}
+                {gamePlayerAbilities.length ? <div className="wenyou-quick-menu-label">能力</div> : null}
+                {gamePlayerAbilities.map((ability) => (
+                  <button
+                    key={ability.id}
+                    type="button"
+                    className="wenyou-quick-ability"
+                    onClick={() => {
+                      setQuickDecisionOpen(false);
+                      void useAbility("player1", ability.id);
+                    }}
+                    disabled={acting}
+                  >
+                    <span>{ability.name}</span>
+                  </button>
+                ))}
               </div>
             ) : null}
             {acting || settlementLoading ? <div className="wenyou-action-progress"><span /></div> : null}
@@ -2529,32 +2558,29 @@ export function WenyouTab({
               <PlayerStatCard
                 title="玩家一"
                 player={profileStats.player1 || gameRulesState.players?.player1}
-                playerId="player1"
                 growth={profileGrowthPlayers.player1}
-                acting={acting}
-                onAllocateAttribute={allocateAttribute}
-                onPromote={promotePlayer}
-                onRevive={revivePlayer}
-                onLearnAbility={learnAbility}
-                onUseAbility={useAbility}
-                onApplyEvolution={applyEvolution}
               />
               <PlayerStatCard
                 title="玩家二 · 渡"
                 player={profileStats.player2 || gameRulesState.players?.player2}
-                playerId="player2"
                 growth={profileGrowthPlayers.player2}
-                acting={acting}
-                onAllocateAttribute={allocateAttribute}
-                onPromote={promotePlayer}
-                onRevive={revivePlayer}
-                onLearnAbility={learnAbility}
-                onUseAbility={useAbility}
-                onApplyEvolution={applyEvolution}
               />
             </div>
           ) : null}
         </section>
+      ) : null}
+
+      {activeAttributePrompt ? (
+        <AttributePointModal
+          title={activeAttributePrompt.title}
+          points={activeAttributePrompt.points}
+          acting={acting}
+          onAllocate={(attr) => allocateAttribute(activeAttributePrompt.player, attr)}
+          onClose={() => {
+            setAttributePromptDismissedKey(activeAttributePrompt.key);
+            setAttributePromptPlayer(null);
+          }}
+        />
       ) : null}
 
       {riftOverlay !== "closed" ? (
@@ -3085,6 +3111,46 @@ function OptionGroup({ label, items, value, onChange, grid }: { label: string; i
   );
 }
 
+function AttributePointModal({
+  title,
+  points,
+  acting,
+  onAllocate,
+  onClose,
+}: {
+  title: string;
+  points: number;
+  acting: boolean;
+  onAllocate: (attr: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="wenyou-modal" role="dialog" aria-modal="true" aria-label="属性点分配">
+      <button className="wenyou-modal-backdrop" onClick={onClose} aria-label="稍后分配属性点" />
+      <div className="wenyou-random-panel wenyou-attribute-panel">
+        <span className="wenyou-random-line" />
+        <div className="wenyou-attribute-head">
+          <small>{title}</small>
+          <h2>获得 {points} 点属性点</h2>
+          <p>这次奖励需要选择落点。角色面板只保留结果，成长规则由后端结算。</p>
+        </div>
+        <div className="wenyou-attribute-choice-grid">
+          {ATTRIBUTE_CHOICES.map((item) => (
+            <button key={item.key} type="button" onClick={() => onAllocate(item.key)} disabled={acting}>
+              <strong>+{item.label}</strong>
+              <span>{item.hint}</span>
+            </button>
+          ))}
+        </div>
+        <div className="wenyou-modal-actions">
+          <button type="button" onClick={onClose} disabled={acting}>稍后</button>
+          <button type="button" disabled>{points} 点待分配</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PanelModal({
   view,
   session,
@@ -3194,14 +3260,12 @@ function PanelModal({
                     title="玩家一"
                     player={stats.player1}
                     growth={growthPlayers.player1}
-                    acting={acting}
-	                  />
-	                  <PlayerStatCard
+                  />
+                  <PlayerStatCard
                     title="玩家二 · 渡"
                     player={stats.player2}
                     growth={growthPlayers.player2}
-                    acting={acting}
-	                  />
+                  />
                 </>
               ) : null}
 
@@ -3342,133 +3406,105 @@ function PlayerStatCard({
   title,
   player,
   compact = false,
-  playerId,
   growth,
-  acting = false,
-  onAllocateAttribute,
-  onPromote,
-  onRevive,
-  onLearnAbility,
-  onUseAbility,
-  onApplyEvolution,
 }: {
   title: string;
   player?: WenyouPlayerStats;
   compact?: boolean;
-  playerId?: "player1" | "player2";
   growth?: WenyouGrowthPlayer;
-  acting?: boolean;
-  onAllocateAttribute?: (player: "player1" | "player2", attr: string) => void;
-  onPromote?: (player: "player1" | "player2") => void;
-  onRevive?: (player: "player1" | "player2") => void;
-  onLearnAbility?: (player: "player1" | "player2", ability: string) => void;
-  onUseAbility?: (player: "player1" | "player2", ability: string) => void;
-  onApplyEvolution?: (player: "player1" | "player2", route?: string) => void;
 }) {
   const p = player || {};
   const abilities = growth?.abilities || p.abilities || [];
   const dormantAbilities = growth?.dormant_abilities || p.dormant_abilities || [];
   const gear = p.gear || p.equipment || p.weapons || [];
-  const unspent = Number(growth?.unspent_attribute_points ?? p.unspent_attribute_points ?? 0);
-  const abilityTokens = Number(growth?.ability_tokens ?? p.ability_tokens ?? 0);
   const abilitySlots = Number(growth?.ability_slots || 0);
-  const milestoneTokens = Number(growth?.growth_milestone_tokens ?? p.growth_milestone_tokens ?? 0);
-  const nextLevelExp = Number(growth?.next_level_exp || 0);
-  const nextEvolutionCost = growth?.next_evolution_cost || null;
-  const evolutionRoutes = growth?.evolution_routes?.length ? growth.evolution_routes : [{ id: "human_stable", name: "人类稳定" }];
-  const [evolutionRoute, setEvolutionRoute] = useState(evolutionRoutes[0]?.id || "human_stable");
-  const availableAbilities = growth?.available_abilities?.length
-    ? growth.available_abilities
-    : [
-        { id: "quick_bandage", name: "快速包扎", rarity: "D" },
-        { id: "rule_probe", name: "规则试探", rarity: "B" },
-      ];
-  const learnChoices = availableAbilities.filter((it) => !it.known).slice(0, 4);
-  const promotion = growth?.promotion;
-  const promotionReasons = promotion?.reasons?.filter(Boolean) || [];
-  const canRevive = Number(p.hp || 0) <= 0 || !!p.conditions?.includes("濒死");
-  const actionPlayer = playerId || "player1";
+  const rank = p.rank || "D";
+  const num = (value: unknown) => {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const pct = (value: unknown, max: unknown) => {
+    const maxValue = num(max);
+    if (maxValue <= 0) return 0;
+    return Math.max(0, Math.min(100, (num(value) / maxValue) * 100));
+  };
+  const resources = [
+    { label: "HP", value: num(p.hp), max: num(p.hp_max), tone: "hp" },
+    { label: "SAN", value: num(p.san), max: num(p.san_max), tone: "san" },
+  ];
+  const attributes = [
+    ["力", p.str],
+    ["体", p.con ?? p.vit],
+    ["敏", p.agi],
+    ["智", p.int ?? p.wis],
+    ["精", p.spi],
+    ["运", p.luk],
+  ];
+  const battleStats = [
+    ["攻击", p.physical_attack],
+    ["防御", p.defense],
+    ["先攻", p.initiative],
+  ];
+  const evolution = growth?.evolution || p.evolution || p.bloodline || "凡人";
+  const abilitySummary = abilities.length
+    ? abilities.map((it) => `${it.name || it.id}${it.level ? ` Lv${it.level}` : ""}`).filter(Boolean).join("、")
+    : "无";
+  const dormantSummary = dormantAbilities.length
+    ? `休眠：${dormantAbilities.map((it) => it.name || it.id).filter(Boolean).join("、")}`
+    : "";
+  const gearSummary = gear.length ? gear.map(gearLabel).join("、") : "无";
+  const conditionSummary = p.conditions?.length ? p.conditions.join("、") : "稳定";
+
   return (
-    <div className="wenyou-stat-card">
-      <h3>{title}</h3>
-      <div className="wenyou-stat-grid">
-        <span>HP {p.hp ?? 0}/{p.hp_max ?? 0}</span>
-        <span>SAN {p.san ?? 0}/{p.san_max ?? 0}</span>
-        <span>精神力 {p.spi_current ?? 0}/{p.spi_max ?? p.spi ?? 0}</span>
-        <span>Lv{p.level ?? 1} · {p.rank || "D"}阶 · EXP {p.exp ?? 0}</span>
-        <span>力 {p.str ?? 0} / 体 {p.con ?? p.vit ?? 0} / 敏 {p.agi ?? 0}</span>
-        <span>智 {p.int ?? p.wis ?? 0} / 精 {p.spi ?? 0} / 运 {p.luk ?? 0}</span>
-        <span>攻击 {p.physical_attack ?? 0} / 防御 {p.defense ?? 0} / 先攻 {p.initiative ?? 0}</span>
-        <span>属性点 {unspent} / 能力令牌 {abilityTokens} / 成长令牌 {milestoneTokens}</span>
+    <article className="wenyou-stat-card">
+      <header className="wenyou-character-head">
+        <div>
+          <h3>{title}</h3>
+          <p>Lv{p.level ?? 1} · EXP {p.exp ?? 0}</p>
+        </div>
+        <span className="wenyou-rank-badge">{rank}</span>
+      </header>
+
+      <div className="wenyou-vital-stack" aria-label={`${title} 当前资源`}>
+        {resources.map((row) => (
+          <div className="wenyou-vital-line" key={row.label}>
+            <span className="wenyou-vital-label">{row.label}</span>
+            <i className="wenyou-vital-track" aria-hidden="true">
+              <b className={`wenyou-vital-fill wenyou-vital-fill-${row.tone}`} style={{ width: `${pct(row.value, row.max)}%` }} />
+            </i>
+            <strong>{row.value}/{row.max}</strong>
+          </div>
+        ))}
       </div>
+
+      <div className="wenyou-character-strip" aria-label={`${title} 派生数值`}>
+        {battleStats.map(([label, value]) => (
+          <span key={label}>
+            <small>{label}</small>
+            <b>{num(value)}</b>
+          </span>
+        ))}
+      </div>
+
+      <div className="wenyou-attr-board" aria-label={`${title} 基础属性`}>
+        {attributes.map(([label, value]) => (
+          <span key={String(label)} className="wenyou-attr-cell">
+            <small>{label}</small>
+            <b>{num(value)}</b>
+          </span>
+        ))}
+      </div>
+
       {compact ? null : (
-        <>
-          {nextLevelExp ? <p>下级经验：{p.exp ?? 0}/{nextLevelExp}</p> : null}
-	          <p>进化：{growth?.evolution || p.evolution || p.bloodline || "凡人"}{growth?.evolution_rank ? ` · ${growth.evolution_rank}` : ""}</p>
-	          <p>能力：{abilities.length ? abilities.map((it) => `${it.name || it.id}${it.level ? ` Lv${it.level}` : ""}`).filter(Boolean).join("、") : "无"}{abilitySlots ? `（能力栏 ${abilities.length}/${abilitySlots}）` : ""}</p>
-	          {dormantAbilities.length ? <p>休眠能力：{dormantAbilities.map((it) => it.name || it.id).filter(Boolean).join("、")}</p> : null}
-	          <p>装备：{gear.length ? gear.map(gearLabel).join("、") : "无"}</p>
-	          <p>状态：{p.conditions?.length ? p.conditions.join("、") : "无"}</p>
-	          {playerId ? (
-	            <div className="wenyou-growth-actions">
-              <div className="wenyou-attribute-buttons" aria-label={`${title} 属性加点`}>
-                {Object.entries(ATTRIBUTE_LABELS).map(([key, label]) => (
-                  <button
-                    key={key}
-                    onClick={() => onAllocateAttribute?.(actionPlayer, key)}
-                    disabled={acting || !onAllocateAttribute || unspent <= 0}
-                  >
-                    +{label}
-                  </button>
-                ))}
-              </div>
-	              <div className="wenyou-growth-command-row">
-	                <button onClick={() => onPromote?.(actionPlayer)} disabled={acting || !onPromote || !promotion?.available}>
-	                  晋升{promotion?.target_rank ? ` ${promotion.target_rank}` : ""}
-	                </button>
-	                <button onClick={() => onRevive?.(actionPlayer)} disabled={acting || !onRevive || !canRevive}>
-	                  复活
-	                </button>
-	                <select value={evolutionRoute} onChange={(e) => setEvolutionRoute(e.target.value)} disabled={acting || !nextEvolutionCost}>
-	                  {evolutionRoutes.map((route) => (
-	                    <option key={route.id || route.name} value={route.id || "human_stable"}>{route.name || route.id}</option>
-	                  ))}
-	                </select>
-	                <button onClick={() => onApplyEvolution?.(actionPlayer, evolutionRoute)} disabled={acting || !onApplyEvolution || !nextEvolutionCost}>
-	                  进化{nextEvolutionCost?.rank ? ` ${nextEvolutionCost.rank}` : ""}
-	                </button>
-	              </div>
-	              {nextEvolutionCost ? <small>进化消耗：{nextEvolutionCost.points || 0} 积分 / {nextEvolutionCost.fragments || 0} 进化碎片</small> : null}
-	              {learnChoices.length ? (
-	                <div className="wenyou-growth-command-row">
-	                  {learnChoices.map((ability) => {
-	                    const key = String(ability.id || ability.name || "");
-	                    if (!key) return null;
-	                    return (
-	                      <button key={key} onClick={() => onLearnAbility?.(actionPlayer, key)} disabled={acting || !onLearnAbility || ability.locked}>
-	                        学{ability.name || key}{ability.locked ? ` · ${ability.rarity || ""}锁` : ""}
-	                      </button>
-	                    );
-	                  })}
-	                </div>
-	              ) : null}
-	              {abilities.length ? (
-	                <div className="wenyou-growth-command-row">
-	                  {abilities.slice(0, 3).map((ability) => {
-	                    const key = String(ability.id || ability.name || "");
-	                    if (!key) return null;
-	                    return <button key={key} onClick={() => onUseAbility?.(actionPlayer, key)} disabled={acting || !onUseAbility}>用{ability.name || key}</button>;
-	                  })}
-	                </div>
-	              ) : null}
-	              {!promotion?.available && promotionReasons.length ? (
-	                <small>{promotionReasons.slice(0, 2).join("；")}</small>
-	              ) : null}
-            </div>
-          ) : null}
-        </>
+        <div className="wenyou-character-notes">
+          <p><span>进化</span><strong>{evolution}{growth?.evolution_rank ? ` · ${growth.evolution_rank}` : ""}</strong></p>
+          <p><span>能力</span><strong>{abilitySummary}{abilitySlots ? `（${abilities.length}/${abilitySlots}）` : ""}</strong></p>
+          {dormantSummary ? <p><span>休眠</span><strong>{dormantSummary}</strong></p> : null}
+          <p><span>装备</span><strong>{gearSummary}</strong></p>
+          <p><span>状态</span><strong>{conditionSummary}</strong></p>
+        </div>
       )}
-    </div>
+    </article>
   );
 }
 
