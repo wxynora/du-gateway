@@ -2564,6 +2564,118 @@ def step_archive_round(
     return {"round_index": round_index, "round_messages": round_messages}
 
 
+def _summary_existing_round_ranges(chunks_state: dict | None) -> set[tuple[int, int]]:
+    chunks = (chunks_state or {}).get("chunks") if isinstance(chunks_state, dict) else []
+    if not isinstance(chunks, list):
+        return set()
+    ranges: set[tuple[int, int]] = set()
+    id_re = re.compile(r"^current:(\d+)-(\d+)$")
+    for item in chunks:
+        if not isinstance(item, dict):
+            continue
+        raw_start = item.get("round_start")
+        raw_end = item.get("round_end")
+        if raw_start in (None, "") or raw_end in (None, ""):
+            m = id_re.match(str(item.get("id") or "").strip())
+            if m:
+                raw_start = raw_start or m.group(1)
+                raw_end = raw_end or m.group(2)
+        try:
+            round_start = int(raw_start or 0)
+            round_end = int(raw_end or 0)
+        except Exception:
+            continue
+        if round_start > 0 and round_end >= round_start:
+            ranges.add((round_start, round_end))
+    return ranges
+
+
+def _summary_read_round_group(window_id: str, start: int, end: int) -> list[dict]:
+    group: list[dict] = []
+    missing = 0
+    for idx in range(start, end + 1):
+        item = r2_store.get_conversation_round_by_index(window_id, idx)
+        if not item:
+            missing = idx
+            break
+        group.append(item)
+    if missing:
+        logger.warning(
+            "实时层总结读取轮次失败 window_id=%s range=%s-%s missing=%s，本组跳过",
+            window_id,
+            start,
+            end,
+            missing,
+        )
+        return []
+    return group
+
+
+def _summary_round_groups_to_process(
+    window_id: str,
+    round_index: int,
+    chunks_state: dict | None,
+) -> list[list[dict]]:
+    """
+    总结失败不能让后续触发直接跳到最新 last4。
+    若 chunks 里已有 round_end，就从最后成功位置往后补完整 4 轮组；没有元数据时保持旧行为。
+    """
+    try:
+        every = max(1, int(SUMMARY_EVERY_N_ROUNDS))
+    except Exception:
+        every = 4
+    try:
+        current_round = int(round_index or 0)
+    except Exception:
+        current_round = 0
+    if current_round <= 0:
+        return []
+
+    current_start = current_round - every + 1
+    current_range = (current_start, current_round)
+    existing_ranges = _summary_existing_round_ranges(chunks_state)
+    if not existing_ranges:
+        return [r2_store.get_conversation_rounds(window_id, last_n=every)]
+
+    first_seen = min(start for start, _end in existing_ranges)
+    lookback_start = max(1, current_round - every * 6 + 1)
+    start = max(first_seen, ((lookback_start - 1) // every) * every + 1)
+    ranges_to_process: list[tuple[int, int]] = []
+    while start + every - 1 <= current_round:
+        end = start + every - 1
+        span = (start, end)
+        if span not in existing_ranges:
+            ranges_to_process.append(span)
+        start = end + 1
+
+    if current_range not in ranges_to_process and current_range not in existing_ranges:
+        ranges_to_process.append(current_range)
+
+    # 缺口补跑不能无限堆 DS 请求；保留最近两个缺口，并始终保留当前新组。
+    missing_ranges = [span for span in ranges_to_process if span != current_range]
+    ranges_to_process = missing_ranges[-2:] + ([current_range] if current_range in ranges_to_process else [])
+    deduped_ranges: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for span in ranges_to_process:
+        if span in seen:
+            continue
+        seen.add(span)
+        deduped_ranges.append(span)
+
+    if len(deduped_ranges) > 1:
+        logger.warning(
+            "实时层总结检测到断层，本轮补缺口并继续最新组 window_id=%s ranges=%s current_round=%s",
+            window_id,
+            deduped_ranges,
+            current_round,
+        )
+    return [
+        group
+        for start, end in deduped_ranges
+        if (group := _summary_read_round_group(window_id, start, end))
+    ]
+
+
 def step_run_post_archive_tasks(
     window_id: str,
     round_index: int,
@@ -2575,24 +2687,36 @@ def step_run_post_archive_tasks(
     # 实时层：每 4 轮 → DS 总结成「渡的回忆」（第一人称、详细版）
     if round_index % SUMMARY_EVERY_N_ROUNDS == 0:
         logger.info("实时层总结已调度 window_id=%s round_index=%s", window_id, round_index)
-        recent = r2_store.get_conversation_rounds(window_id, last_n=4)
-        if recent:
-            def _summarize():
-                from services.deepseek_summary import fetch_new_summary_update
 
-                current = r2_store.get_summary(window_id) or ""
-                chunks_state = r2_store.get_summary_chunks(window_id)
+        def _summarize():
+            from services.deepseek_summary import fetch_new_summary_update
+
+            current = r2_store.get_summary(window_id) or ""
+            chunks_state = r2_store.get_summary_chunks(window_id)
+            groups = _summary_round_groups_to_process(window_id, round_index, chunks_state)
+            for recent in groups:
+                if not recent:
+                    continue
                 new_summary, new_chunks = fetch_new_summary_update(current, recent, chunks_state)
                 if new_summary and new_chunks:
                     if r2_store.save_summary(window_id, new_summary):
                         if not r2_store.save_summary_chunks(window_id, new_chunks):
                             logger.warning("Pipeline 保存实时层小段队列失败 window_id=%s", window_id)
-                else:
-                    logger.warning("Pipeline 本窗口触发总结但 DeepSeek 未返回新总结 window_id=%s", window_id)
+                            break
+                        current = new_summary
+                        chunks_state = new_chunks
+                        continue
+                indices = [r.get("index") for r in recent if isinstance(r, dict)]
+                logger.warning(
+                    "Pipeline 本窗口触发总结但 DeepSeek 未返回新总结 window_id=%s indices=%s，本组跳过并继续后续组",
+                    window_id,
+                    indices,
+                )
+                continue
 
-            t = threading.Thread(target=_summarize)
-            t.daemon = True
-            t.start()
+        t = threading.Thread(target=_summarize)
+        t.daemon = True
+        t.start()
     if skip_dynamic_layer:
         logger.info("动态层跳过：请求要求跳过归档后动态层 window_id=%s round_index=%s", window_id, round_index)
         return None
