@@ -2226,30 +2226,178 @@
     margin-bottom: 12px;
   }
 
+  .wenyou-profile-screen {
+    gap: 12px;
+    background:
+      linear-gradient(90deg, rgba(34, 211, 238, 0.04) 1px, transparent 1px),
+      linear-gradient(rgba(34, 211, 238, 0.035) 1px, transparent 1px);
+    background-size: 34px 34px;
+  }
+
+  .wenyou-profile-hero {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 10px 14px;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .wenyou-profile-back {
+    position: relative;
+    display: inline-flex;
+    width: 54px;
+    height: 54px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(103, 232, 249, 0.38);
+    border-radius: 0;
+    background:
+      linear-gradient(135deg, rgba(34, 211, 238, 0.15), transparent 48%),
+      rgba(4, 11, 25, 0.86);
+    color: #9beafe;
+    box-shadow: inset 0 0 22px rgba(34, 211, 238, 0.1), 0 0 18px rgba(34, 211, 238, 0.12);
+  }
+
+  .wenyou-profile-title {
+    min-width: 0;
+  }
+
+  .wenyou-profile-title h1 {
+    margin: 0;
+    color: #f8fbff;
+    font-size: clamp(28px, 8vw, 40px);
+    font-weight: 950;
+    letter-spacing: 0;
+    line-height: 1;
+  }
+
+  .wenyou-profile-title p {
+    margin: 7px 0 0;
+    color: rgba(180, 216, 230, 0.5);
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.18em;
+  }
+
+  .wenyou-profile-status {
+    grid-column: 2;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px 12px;
+    padding: 2px 0 0;
+  }
+
+  .wenyou-profile-status span {
+    position: relative;
+    min-width: 0;
+    color: rgba(180, 216, 230, 0.62);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .wenyou-profile-status span:nth-child(2)::before {
+    content: "";
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-right: 6px;
+    border-radius: 999px;
+    background: #22d3ee;
+    box-shadow: 0 0 10px rgba(34, 211, 238, 0.78);
+    vertical-align: 1px;
+  }
+
   .wenyou-profile-tabs button {
     position: relative;
     overflow: hidden;
     min-height: 42px;
-    border: 1px solid rgba(34, 211, 238, 0.22);
+    border: 1px solid rgba(34, 211, 238, 0.2);
     border-radius: 0;
-    background: rgba(5, 12, 28, 0.72);
+    background:
+      linear-gradient(180deg, rgba(8, 20, 42, 0.82), rgba(4, 9, 22, 0.82)),
+      rgba(5, 12, 28, 0.72);
     color: rgba(180, 216, 230, 0.76);
     font-size: 13px;
     font-weight: 900;
+    box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.04);
   }
 
   .wenyou-profile-tabs button.active {
-    border-color: rgba(103, 232, 249, 0.48);
+    border-color: rgba(103, 232, 249, 0.68);
     background:
-      linear-gradient(135deg, rgba(34, 211, 238, 0.16), rgba(124, 58, 237, 0.12)),
+      linear-gradient(135deg, rgba(34, 211, 238, 0.22), rgba(124, 58, 237, 0.1)),
       rgba(5, 12, 28, 0.86);
     color: #e0f2fe;
-    box-shadow: inset 0 -2px 0 rgba(103, 232, 249, 0.46);
+    box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.18), 0 0 18px rgba(34, 211, 238, 0.18);
+  }
+
+  .wenyou-profile-overview {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .wenyou-profile-overview > div {
+    position: relative;
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 4px 10px;
+    min-width: 0;
+    border: 1px solid rgba(34, 211, 238, 0.22);
+    background:
+      linear-gradient(135deg, rgba(34, 211, 238, 0.1), rgba(2, 6, 23, 0) 54%),
+      rgba(3, 7, 18, 0.56);
+    padding: 12px 12px 12px 10px;
+    box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.04);
+  }
+
+  .wenyou-profile-overview i {
+    grid-row: 1 / span 2;
+    display: block;
+    align-self: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid rgba(103, 232, 249, 0.32);
+    background:
+      radial-gradient(circle, rgba(103, 232, 249, 0.24), transparent 58%),
+      rgba(8, 19, 36, 0.9);
+    box-shadow: inset 0 0 16px rgba(34, 211, 238, 0.12);
+    clip-path: polygon(50% 0, 90% 24%, 90% 76%, 50% 100%, 10% 76%, 10% 24%);
+  }
+
+  .wenyou-profile-overview span {
+    min-width: 0;
+    color: rgba(180, 216, 230, 0.72);
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+
+  .wenyou-profile-overview em {
+    margin-left: 5px;
+    color: rgba(180, 216, 230, 0.38);
+    font-size: 9px;
+    font-style: normal;
+    letter-spacing: 0.08em;
+  }
+
+  .wenyou-profile-overview strong {
+    min-width: 0;
+    color: #f8fbff;
+    font-size: 24px;
+    font-weight: 950;
+    line-height: 1.05;
+    overflow-wrap: anywhere;
   }
 
   .wenyou-profile-panel {
     display: grid;
-    gap: 10px;
+    gap: 12px;
   }
 
   .wenyou-profile-wallet {
@@ -3120,6 +3268,11 @@
   .wenyou-settlement-draft {
     display: grid;
     gap: 10px;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
     border: 1px solid rgba(251, 191, 36, 0.24);
     border-radius: 8px;
     background:
@@ -3134,10 +3287,15 @@
   .wenyou-settlement-reward,
   .wenyou-settlement-breakdown > div,
   .wenyou-settlement-confirm {
+    min-width: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+  }
+
+  .wenyou-settlement-head > div {
+    min-width: 0;
   }
 
   .wenyou-settlement-head span,
@@ -3157,6 +3315,7 @@
     color: #f8fbff;
     font-size: 16px;
     line-height: 1.18;
+    overflow-wrap: anywhere;
   }
 
   .wenyou-settlement-head b {
@@ -3246,18 +3405,23 @@
 
   .wenyou-settlement-options {
     display: grid;
+    min-width: 0;
+    max-width: 100%;
     gap: 6px;
   }
 
   .wenyou-settlement-options > div {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(86px, 100%), 1fr));
+    min-width: 0;
     gap: 6px;
-    overflow-x: auto;
     padding-bottom: 2px;
   }
 
   .wenyou-settlement-options button,
   .wenyou-settlement-confirm button {
+    min-width: 0;
+    width: 100%;
     min-height: 32px;
     border: 1px solid rgba(148, 163, 184, 0.22);
     border-radius: 7px;
@@ -3265,8 +3429,10 @@
     color: rgba(224, 242, 254, 0.82);
     font-size: 11px;
     font-weight: 900;
-    padding: 0 9px;
-    white-space: nowrap;
+    line-height: 1.18;
+    padding: 0 7px;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .wenyou-settlement-options button.active,
@@ -4135,22 +4301,43 @@
   .wenyou-stat-card {
     position: relative;
     display: grid;
-    gap: 12px;
+    gap: 14px;
     overflow: hidden;
-    padding: 14px;
-    border-color: rgba(103, 232, 249, 0.22);
+    padding: 16px;
+    border-color: rgba(103, 232, 249, 0.36);
+    border-radius: 0;
     background:
-      linear-gradient(180deg, rgba(15, 23, 42, 0.58), rgba(3, 7, 18, 0.62)),
-      rgba(3, 7, 18, 0.62);
+      linear-gradient(90deg, rgba(103, 232, 249, 0.04) 1px, transparent 1px),
+      linear-gradient(rgba(103, 232, 249, 0.035) 1px, transparent 1px),
+      linear-gradient(135deg, rgba(34, 211, 238, 0.08), rgba(124, 58, 237, 0.04) 54%, rgba(2, 6, 23, 0.58)),
+      rgba(2, 6, 23, 0.78);
+    background-size: 22px 22px, 22px 22px, auto, auto;
+    box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.08), 0 0 28px rgba(34, 211, 238, 0.08);
   }
 
   .wenyou-stat-card::before {
     content: "";
     position: absolute;
+    inset: 0;
+    border: 1px solid transparent;
+    background:
+      linear-gradient(135deg, #67e8f9 0 18px, transparent 18px) top left / 44px 44px no-repeat,
+      linear-gradient(225deg, #67e8f9 0 18px, transparent 18px) top right / 44px 44px no-repeat,
+      linear-gradient(45deg, #67e8f9 0 18px, transparent 18px) bottom left / 44px 44px no-repeat,
+      linear-gradient(315deg, #67e8f9 0 18px, transparent 18px) bottom right / 44px 44px no-repeat;
+    opacity: 0.52;
+    pointer-events: none;
+  }
+
+  .wenyou-stat-card::after {
+    content: "";
+    position: absolute;
     inset: 0 auto 0 0;
-    width: 3px;
-    background: linear-gradient(180deg, rgba(103, 232, 249, 0.7), rgba(168, 85, 247, 0.35), transparent);
-    opacity: 0.8;
+    width: 2px;
+    background: linear-gradient(180deg, rgba(103, 232, 249, 0.92), rgba(168, 85, 247, 0.48), transparent);
+    box-shadow: 0 0 18px rgba(34, 211, 238, 0.42);
+    opacity: 0.85;
+    pointer-events: none;
   }
 
   .wenyou-character-head {
@@ -4162,50 +4349,106 @@
   }
 
   .wenyou-character-head h3 {
-    margin: 0;
+    margin: 7px 0 0;
     color: #f8fbff;
-    font-size: 18px;
-    font-weight: 900;
+    font-size: clamp(28px, 7vw, 38px);
+    font-weight: 950;
     line-height: 1.1;
+    overflow-wrap: anywhere;
   }
 
   .wenyou-character-head p {
-    margin: 5px 0 0;
-    color: rgba(180, 216, 230, 0.68);
-    font-size: 11px;
+    margin: 7px 0 0;
+    color: rgba(180, 216, 230, 0.58);
+    font-size: 13px;
     font-weight: 800;
     letter-spacing: 0.08em;
   }
 
-  .wenyou-rank-badge {
-    display: inline-grid;
-    min-width: 42px;
-    height: 30px;
-    place-items: center;
-    border: 1px solid rgba(103, 232, 249, 0.34);
-    background: rgba(8, 19, 36, 0.82);
-    color: #ecfeff;
-    font-size: 14px;
+  .wenyou-character-id {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    color: rgba(165, 243, 252, 0.9);
+    font-size: 11px;
     font-weight: 950;
-    box-shadow: inset 0 -2px 0 rgba(34, 211, 238, 0.16);
+    letter-spacing: 0.08em;
+  }
+
+  .wenyou-character-id i {
+    position: relative;
+    color: rgba(180, 216, 230, 0.68);
+    font-style: normal;
+    font-size: 10px;
+  }
+
+  .wenyou-character-id i::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 999px;
+    background: #22d3ee;
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.78);
+    vertical-align: 1px;
+  }
+
+  .wenyou-rank-badge {
+    display: grid;
+    flex: 0 0 74px;
+    min-width: 74px;
+    min-height: 72px;
+    place-items: center;
+    border: 1px solid rgba(103, 232, 249, 0.42);
+    background:
+      linear-gradient(135deg, rgba(34, 211, 238, 0.12), transparent 54%),
+      rgba(8, 19, 36, 0.86);
+    color: #ecfeff;
+    box-shadow: inset 0 0 20px rgba(34, 211, 238, 0.1);
+  }
+
+  .wenyou-rank-badge small {
+    color: rgba(180, 216, 230, 0.62);
+    font-size: 10px;
+    font-weight: 950;
+    letter-spacing: 0.12em;
+  }
+
+  .wenyou-rank-badge b {
+    color: #f8fbff;
+    font-size: 34px;
+    font-weight: 950;
+    line-height: 0.9;
+  }
+
+  .wenyou-rank-badge em {
+    color: rgba(180, 216, 230, 0.68);
+    font-size: 9px;
+    font-style: normal;
+    font-weight: 900;
+    letter-spacing: 0;
   }
 
   .wenyou-vital-stack {
     display: grid;
-    gap: 8px;
+    gap: 9px;
   }
 
   .wenyou-vital-line {
     display: grid;
-    grid-template-columns: 42px minmax(0, 1fr) 62px;
+    grid-template-columns: 50px minmax(0, 1fr) 72px;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     min-width: 0;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(8, 13, 28, 0.7);
+    padding: 8px 8px;
   }
 
   .wenyou-vital-label {
-    color: rgba(180, 216, 230, 0.76);
-    font-size: 11px;
+    color: rgba(165, 243, 252, 0.88);
+    font-size: 13px;
     font-weight: 900;
     letter-spacing: 0.08em;
   }
@@ -4213,9 +4456,11 @@
   .wenyou-vital-track {
     display: block;
     overflow: hidden;
-    height: 6px;
+    height: 12px;
     border: 1px solid rgba(148, 163, 184, 0.12);
-    background: rgba(15, 23, 42, 0.82);
+    background:
+      repeating-linear-gradient(90deg, rgba(148, 163, 184, 0.14) 0 1px, transparent 1px 10px),
+      rgba(15, 23, 42, 0.82);
   }
 
   .wenyou-vital-fill {
@@ -4225,11 +4470,13 @@
   }
 
   .wenyou-vital-fill-hp {
-    background: linear-gradient(90deg, #22c55e, #bef264);
+    background: linear-gradient(90deg, #22d3ee, #67e8f9, rgba(248, 251, 255, 0.82));
+    box-shadow: 0 0 18px rgba(34, 211, 238, 0.42);
   }
 
   .wenyou-vital-fill-san {
-    background: linear-gradient(90deg, #38bdf8, #a78bfa);
+    background: linear-gradient(90deg, #7c3aed, #a78bfa, rgba(248, 251, 255, 0.82));
+    box-shadow: 0 0 18px rgba(167, 139, 250, 0.4);
   }
 
   .wenyou-vital-line strong {
@@ -4244,8 +4491,8 @@
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 1px;
-    border: 1px solid rgba(148, 163, 184, 0.14);
-    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(103, 232, 249, 0.16);
+    background: rgba(103, 232, 249, 0.1);
   }
 
   .wenyou-character-strip span {
@@ -4253,27 +4500,30 @@
     gap: 3px;
     min-width: 0;
     background: rgba(8, 13, 28, 0.86);
-    padding: 8px 6px;
-    text-align: center;
+    padding: 10px 8px;
+    text-align: left;
   }
 
   .wenyou-character-strip small {
     color: rgba(180, 216, 230, 0.66);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 900;
     letter-spacing: 0.08em;
   }
 
   .wenyou-character-strip b {
     color: rgba(248, 251, 255, 0.94);
-    font-size: 15px;
+    font-size: 18px;
     font-weight: 950;
     line-height: 1.05;
   }
 
   .wenyou-attr-board {
     display: grid;
-    gap: 7px;
+    gap: 8px;
+    border: 1px solid rgba(103, 232, 249, 0.14);
+    background: rgba(2, 6, 23, 0.3);
+    padding: 10px;
   }
 
   .wenyou-attr-meter {
@@ -4282,7 +4532,7 @@
     --attr-soft: rgba(103, 232, 249, 0.14);
     --attr-glow: rgba(103, 232, 249, 0.34);
     display: grid;
-    grid-template-columns: 28px minmax(0, 1fr) 30px;
+    grid-template-columns: 36px minmax(0, 1fr) 34px;
     align-items: center;
     gap: 8px;
     min-width: 0;
@@ -4290,13 +4540,13 @@
 
   .wenyou-attr-meter small {
     display: grid;
-    width: 26px;
-    height: 22px;
-    place-items: center;
-    border: 1px solid var(--attr-line);
-    background: var(--attr-soft);
+    width: auto;
+    height: auto;
+    place-items: start;
+    border: 0;
+    background: transparent;
     color: var(--attr-color);
-    font-size: 11px;
+    font-size: 15px;
     font-weight: 950;
     line-height: 1;
     text-shadow: 0 0 10px var(--attr-glow);
@@ -4315,7 +4565,7 @@
     position: relative;
     display: block;
     overflow: hidden;
-    height: 8px;
+    height: 9px;
     border: 1px solid rgba(148, 163, 184, 0.14);
     background:
       linear-gradient(90deg, rgba(148, 163, 184, 0.12), rgba(15, 23, 42, 0.52)),

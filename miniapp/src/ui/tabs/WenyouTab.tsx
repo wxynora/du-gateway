@@ -670,6 +670,20 @@ function feedFromSessionHistory(history?: WenyouHistoryItem[]): FeedItem[] {
     .filter((item): item is FeedItem => !!item);
 }
 
+function formatWenyouArchiveTime(value?: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
 function difficultyStars(value?: string) {
   const map: Record<string, number> = { 新手: 1, 普通: 2, 困难: 3, 噩梦: 5, D: 1, C: 2, B: 3, A: 4, S: 5 };
   const count = map[String(value || "")] || 3;
@@ -1448,8 +1462,9 @@ export function WenyouTab({
   const hasPlayerCodes = hasPlayerOneCode && hasPlayerTwoCode;
   const isEntryResolving = view === "home" && !spaceBootVisible && statusLoading && !status.entry && !hasActiveRun;
   const needsTutorialIntro = !hasActiveRun && !statusLoading && !hasPlayerCodes;
-  const musicMode: WenyouMusicMode = view === "home" && !spaceBootVisible
-    ? needsTutorialIntro || isEntryResolving
+  const hubMusicView = (view === "home" && !spaceBootVisible) || view === "archive";
+  const musicMode: WenyouMusicMode = hubMusicView
+    ? view === "home" && (needsTutorialIntro || isEntryResolving)
       ? "intro"
       : "hub"
     : "off";
@@ -2688,8 +2703,22 @@ export function WenyouTab({
       ) : null}
 
       {view === "archive" ? (
-        <section className="wenyou-screen">
-          <Header title="个人空间" onBack={() => void goBackInsideWenyou()} />
+        <section className="wenyou-screen wenyou-profile-screen">
+          <div className="wenyou-profile-hero">
+            <button type="button" className="wenyou-profile-back" onClick={() => void goBackInsideWenyou()} aria-label="返回">
+              <Icon name="back" />
+            </button>
+            <div className="wenyou-profile-title">
+              <h1>个人空间</h1>
+              <p>PERSONAL SPACE</p>
+            </div>
+            <div className="wenyou-profile-status" aria-label="个人空间状态">
+              <span>STATUS : STABLE</span>
+              <span>ONLINE</span>
+              <span>SYNC : NORMAL</span>
+              <span>MENTAL STATE : CLEAN</span>
+            </div>
+          </div>
           <div className="wenyou-profile-tabs" role="tablist" aria-label="个人空间导航">
             {PROFILE_TABS.map((tab) => (
               <button
@@ -2703,6 +2732,18 @@ export function WenyouTab({
                 {tab}
               </button>
             ))}
+          </div>
+          <div className="wenyou-profile-overview" aria-label="个人空间资产概览">
+            <div>
+              <i aria-hidden="true" />
+              <span>主神积分 <em>PRIMARY SCORE</em></span>
+              <strong>{hubPoints.toLocaleString()}</strong>
+            </div>
+            <div>
+              <i aria-hidden="true" />
+              <span>主神债务 <em>DEBT</em></span>
+              <strong>{hubDebts.toLocaleString()}</strong>
+            </div>
           </div>
 
           {profileTab === "副本存档" ? (
@@ -2735,9 +2776,9 @@ export function WenyouTab({
           {profileTab === "背包" ? (
             <div className="wenyou-profile-panel">
               <div className="wenyou-profile-wallet">
-                <span>主神积分</span>
-                <strong>{hubPoints.toLocaleString()}</strong>
-                <em>{profileInventory.length} 件物品</em>
+                <span>背包库存</span>
+                <strong>{profileInventory.length}</strong>
+                <em>{profileInventory.length ? "可调取物品" : "暂无可用物品"}</em>
               </div>
               <InventoryList
                 inventory={profileInventory}
@@ -2751,17 +2792,15 @@ export function WenyouTab({
 
           {profileTab === "角色面板" ? (
             <div className="wenyou-profile-panel">
-              <div className="wenyou-panel-brief-grid">
-                <PanelRow label="主神积分" value={hubPoints.toLocaleString()} />
-                <PanelRow label="主神债务" value={String(hubDebts)} />
-              </div>
               <PlayerStatCard
                 title={playerOneName}
+                slot="PLAYER-01"
                 player={profileStats.player1 || gameRulesState.players?.player1}
                 growth={profileGrowthPlayers.player1}
               />
               <PlayerStatCard
                 title={`玩家二 · ${playerTwoName}`}
+                slot="PLAYER-02"
                 player={profileStats.player2 || gameRulesState.players?.player2}
                 growth={profileGrowthPlayers.player2}
               />
@@ -3458,11 +3497,13 @@ function PanelModal({
                   </div>
                   <PlayerStatCard
                     title={playerDisplayName(stats.player1, "玩家一")}
+                    slot="PLAYER-01"
                     player={stats.player1}
                     growth={growthPlayers.player1}
                   />
                   <PlayerStatCard
                     title={`玩家二 · ${playerDisplayName(stats.player2, "玩家二")}`}
+                    slot="PLAYER-02"
                     player={stats.player2}
                     growth={growthPlayers.player2}
                   />
@@ -3598,11 +3639,13 @@ function HistoryPanelRow({ item }: { item: { role?: string; content?: string; ti
 function PlayerStatCard({
   title,
   player,
+  slot = "PLAYER",
   compact = false,
   growth,
 }: {
   title: string;
   player?: WenyouPlayerStats;
+  slot?: string;
   compact?: boolean;
   growth?: WenyouGrowthPlayer;
 }) {
@@ -3642,15 +3685,21 @@ function PlayerStatCard({
   ];
   const abilitySummary = coreAbility?.name || "新手副本通关后生成";
   const conditionSummary = p.conditions?.length ? p.conditions.join("、") : "稳定";
+  const rankLabel = `${rank}级调查员`;
 
   return (
     <article className="wenyou-stat-card">
       <header className="wenyou-character-head">
         <div>
+          <span className="wenyou-character-id">[ {slot} ]<i>ONLINE</i></span>
           <h3>{title}</h3>
           <p>Lv{p.level ?? 1} · EXP {p.exp ?? 0}</p>
         </div>
-        <span className="wenyou-rank-badge">{rank}</span>
+        <span className="wenyou-rank-badge">
+          <small>RANK</small>
+          <b>{rank}</b>
+          <em>{rankLabel}</em>
+        </span>
       </header>
 
       <div className="wenyou-vital-stack" aria-label={`${title} 当前资源`}>
@@ -3722,6 +3771,7 @@ function ArchiveCard({
   onPrimary: () => void;
   onRetry?: () => void;
 }) {
+  const endedAtLabel = formatWenyouArchiveTime(endedAt);
   return (
     <article className={`wenyou-archive-card ${active ? "active" : ""}`}>
       <div className="wenyou-archive-top">
@@ -3729,7 +3779,7 @@ function ArchiveCard({
           <span>{active ? "状态: 进行中" : "结局: 已归档"}</span>
           <h3>{title}</h3>
         </div>
-        <time>{endedAt || "现在"}</time>
+        <time>{endedAtLabel || "现在"}</time>
       </div>
       <div className="wenyou-archive-meta">
         <div><span>类型/难度</span><strong>{genre} / {difficulty}</strong></div>

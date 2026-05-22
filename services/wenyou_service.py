@@ -1442,6 +1442,12 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
     promotion_history = data.get("promotion_history") if isinstance(data.get("promotion_history"), list) else []
     forced_queue = data.get("forced_instance_queue") if isinstance(data.get("forced_instance_queue"), list) else []
     settlement_history = data.get("settlement_history") if isinstance(data.get("settlement_history"), list) else []
+    tutorial_completed_at = str(data.get("tutorial_completed_at") or data.get("tutorial_completed_time") or "").strip()
+    if not tutorial_completed_at and data.get("newbie_starter_pack_granted"):
+        tutorial_completed_at = str(data.get("newbie_starter_pack_granted_at") or data.get("tutorial_completed_at") or "").strip()
+    if not tutorial_completed_at and data.get("tutorial_started_at") and settlement_history:
+        last_settlement = settlement_history[-1] if isinstance(settlement_history[-1], dict) else {}
+        tutorial_completed_at = str(last_settlement.get("at") or data.get("updated_at") or "").strip()
     shop_state = data.get("shop_state") if isinstance(data.get("shop_state"), dict) else {}
     regular_shop = shop_state.get("regular") if isinstance(shop_state.get("regular"), dict) else {}
     raw_players = data.get("players") if isinstance(data.get("players"), dict) else {}
@@ -1482,6 +1488,9 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
         "inventories": inventories,
         "wallets": wallets,
         "players": players,
+        "tutorial_completed": bool(data.get("tutorial_completed") or tutorial_completed_at),
+        "tutorial_completed_at": tutorial_completed_at,
+        "tutorial_completion_result": str(data.get("tutorial_completion_result") or ""),
         "newbie_starter_pack_granted": bool(data.get("newbie_starter_pack_granted") or data.get("tutorial_clear_reward_granted")),
         "newbie_starter_pack_granted_at": str(data.get("newbie_starter_pack_granted_at") or data.get("tutorial_completed_at") or ""),
         "tutorial_started_at": str(data.get("tutorial_started_at") or ""),
@@ -1747,10 +1756,21 @@ def _tutorial_pack_granted(wallet: Optional[dict]) -> bool:
     return bool(isinstance(wallet, dict) and wallet.get("newbie_starter_pack_granted"))
 
 
+def _tutorial_flow_completed(wallet: Optional[dict]) -> bool:
+    return bool(
+        isinstance(wallet, dict)
+        and (
+            wallet.get("tutorial_completed")
+            or wallet.get("tutorial_completed_at")
+            or wallet.get("newbie_starter_pack_granted")
+        )
+    )
+
+
 def _should_offer_tutorial(user_id: int, wallet: Optional[dict] = None) -> bool:
     if wallet is None:
         wallet = _load_wenyou_wallet(int(user_id))
-    return not _tutorial_pack_granted(wallet)
+    return not _tutorial_flow_completed(wallet)
 
 
 def _tutorial_candidate() -> dict[str, Any]:
@@ -2640,11 +2660,25 @@ def _grant_settlement_reward(user_id: int, session: dict, result: str = "", rati
         st[pk] = player
     session["stats"] = st
     newbie_pack = _grant_newbie_starter_pack(session, wallet, result)
+    if _is_tutorial_session(session):
+        wallet["tutorial_completed"] = True
+        wallet["tutorial_completed_at"] = str(wallet.get("tutorial_completed_at") or now_beijing_iso())
+        wallet["tutorial_completion_result"] = result
     st = session.get("stats") if isinstance(session.get("stats"), dict) else st
-    wallet["players"] = {
-        "player1": copy.deepcopy(st.get("player1") if isinstance(st.get("player1"), dict) else _default_player_stats()),
-        "player2": copy.deepcopy(st.get("player2") if isinstance(st.get("player2"), dict) else _default_player_stats()),
-    }
+    existing_players = wallet.get("players") if isinstance(wallet.get("players"), dict) else {}
+    merged_players: dict[str, dict[str, Any]] = {}
+    for pid in ("player1", "player2"):
+        player = copy.deepcopy(st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats())
+        existing_player = existing_players.get(pid) if isinstance(existing_players.get(pid), dict) else {}
+        if existing_player.get("display_name"):
+            player["display_name"] = existing_player.get("display_name")
+        if existing_player.get("display_name_set"):
+            player["display_name_set"] = True
+            if existing_player.get("display_name_set_at"):
+                player["display_name_set_at"] = existing_player.get("display_name_set_at")
+        player.setdefault("controller", _WENYOU_PLAYER_CONTROLLERS.get(pid, "human"))
+        merged_players[pid] = player
+    wallet["players"] = merged_players
     _save_wenyou_wallet(user_id, wallet)
     _sync_session_points_with_wallet(session, wallet)
 

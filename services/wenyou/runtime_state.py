@@ -49,6 +49,8 @@ _WENYOU_PLAYER_STATE_KEYS = frozenset(
         "id",
         "player_id",
         "display_name",
+        "display_name_set",
+        "display_name_set_at",
         "controller",
         "hp",
         "hp_max",
