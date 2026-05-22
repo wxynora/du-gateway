@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiJson } from "../api";
 import { useToast } from "../toast";
+import wenyouKeyClickUrl from "../../assets/sfx/wenyou_key_click.wav";
 
 type WenyouView = "home" | "selection" | "game" | "archive" | "shop" | "rift";
 type WenyouInitialView = WenyouView | "archives" | "hub";
@@ -41,6 +42,15 @@ type WenyouArchiveDetail = {
 
 type WenyouStatus = {
   active?: boolean;
+  entry?: {
+    tutorial_required?: boolean;
+    player_name?: string;
+    player2_name?: string;
+    player_name_required?: boolean;
+    player2_name_required?: boolean;
+    tutorial_code?: string;
+    tutorial_title?: string;
+  };
   session?: {
     gameId?: string;
     startedAt?: string;
@@ -182,6 +192,7 @@ type StorySegment = {
 };
 
 type WenyouPlayerStats = {
+  display_name?: string;
   hp?: number;
   hp_max?: number;
   san?: number;
@@ -474,6 +485,29 @@ function normalizeInitialView(view: WenyouInitialView): WenyouView {
   if (view === "archives") return "archive";
   if (view === "hub") return "home";
   return view;
+}
+
+function SignalText({
+  as: Tag = "span",
+  className = "",
+  children,
+}: {
+  as?: "span" | "h1" | "h2" | "b";
+  className?: string;
+  children: string;
+}) {
+  return (
+    <Tag className={`wenyou-signal-text ${className}`.trim()} aria-label={children}>
+      <span className="wenyou-signal-main">{children}</span>
+      <span className="wenyou-signal-layer wenyou-signal-layer-cyan" aria-hidden="true">{children}</span>
+      <span className="wenyou-signal-layer wenyou-signal-layer-rose" aria-hidden="true">{children}</span>
+    </Tag>
+  );
+}
+
+function playerDisplayName(player: WenyouPlayerStats | undefined, fallback: string) {
+  const name = String(player?.display_name || "").trim();
+  return name || fallback;
 }
 
 function extractEntryScene(text: string): EntryScene {
@@ -926,6 +960,46 @@ function playRiftShatterSound() {
 
 type WenyouBackHandlerRef = React.MutableRefObject<(() => boolean) | null>;
 
+function installWenyouButtonSound(root: HTMLElement) {
+  const pool = Array.from({ length: 4 }, () => {
+    const audio = new Audio(wenyouKeyClickUrl);
+    audio.preload = "auto";
+    audio.volume = 0.5;
+    return audio;
+  });
+  let cursor = 0;
+
+  const play = () => {
+    const audio = pool[cursor] || pool[0];
+    cursor = (cursor + 1) % pool.length;
+    try {
+      audio.currentTime = 0;
+      void audio.play().catch(() => undefined);
+    } catch {
+      // UI sound is optional; WebViews can block playback before user activation.
+    }
+  };
+
+  const onClick = (event: MouseEvent) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const button = target?.closest("button");
+    if (!button || !root.contains(button)) return;
+    const realButton = button as HTMLButtonElement;
+    if (realButton.disabled || realButton.getAttribute("aria-disabled") === "true") return;
+    play();
+  };
+
+  root.addEventListener("click", onClick, true);
+  return () => {
+    root.removeEventListener("click", onClick, true);
+    for (const audio of pool) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    }
+  };
+}
+
 export function WenyouTab({
   initialView = "home",
   backHandlerRef,
@@ -936,11 +1010,13 @@ export function WenyouTab({
   windowId?: string;
 }) {
   const toast = useToast();
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const normalizedInitialView = normalizeInitialView(initialView);
   const [view, setView] = useState<WenyouView>(() => normalizedInitialView);
   const viewRef = useRef<WenyouView>(normalizedInitialView);
   const viewHistoryRef = useRef<WenyouView[]>([]);
   const [spaceBootVisible, setSpaceBootVisible] = useState(() => normalizedInitialView === "home");
+  const [spaceBootComplete, setSpaceBootComplete] = useState(false);
   const [spaceBootFading, setSpaceBootFading] = useState(false);
   const [spaceBootProgress, setSpaceBootProgress] = useState(0);
   const [archivesLoading, setArchivesLoading] = useState(false);
@@ -951,13 +1027,16 @@ export function WenyouTab({
   const [shopLoading, setShopLoading] = useState(false);
   const [shopBuyingId, setShopBuyingId] = useState("");
   const [shop, setShop] = useState<WenyouShopView | null>(null);
-  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(true);
   const [status, setStatus] = useState<WenyouStatus>({ active: false, session: null });
   const [candidatesLoading, setCandidatesLoading] = useState(false);
   const [candidatesRefreshing, setCandidatesRefreshing] = useState(false);
   const [candidates, setCandidates] = useState<InstanceCandidate[]>([]);
   const [candidateGeneratedAt, setCandidateGeneratedAt] = useState("");
   const [starting, setStarting] = useState(false);
+  const [tutorialName, setTutorialName] = useState("");
+  const [tutorialPlayerTwoName, setTutorialPlayerTwoName] = useState("");
+  const [tutorialNameStep, setTutorialNameStep] = useState<"player1" | "player2">("player1");
   const [acting, setActing] = useState(false);
   const [settlementLoading, setSettlementLoading] = useState(false);
   const [settlementDraftOpen, setSettlementDraftOpen] = useState(false);
@@ -997,6 +1076,12 @@ export function WenyouTab({
   const gamePanelAutoLoadRef = useRef(false);
   const shopAutoLoadRef = useRef(false);
   const riftAutoLoadRef = useRef(false);
+
+  useEffect(() => {
+    const root = shellRef.current;
+    if (!root) return undefined;
+    return installWenyouButtonSound(root);
+  }, []);
 
   const pushView = useCallback((next: WenyouView) => {
     setView((prev) => {
@@ -1091,11 +1176,11 @@ export function WenyouTab({
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
     try {
-      const j = await apiJson<{ ok?: boolean; active?: boolean; session?: WenyouStatus["session"]; error?: string }>("/miniapp-api/wenyou/status");
+      const j = await apiJson<{ ok?: boolean; active?: boolean; entry?: WenyouStatus["entry"]; session?: WenyouStatus["session"]; error?: string }>("/miniapp-api/wenyou/status");
       if (!j?.ok) throw new Error(j?.error || "加载失败");
       const rawSession = j.session || null;
       const hasPlayableSession = !!j.active && isPlayableWenyouStatusSession(rawSession);
-      const nextStatus = { active: hasPlayableSession, session: hasPlayableSession ? rawSession : null };
+      const nextStatus = { active: hasPlayableSession, entry: j.entry || undefined, session: hasPlayableSession ? rawSession : null };
       setStatus(nextStatus);
       if (nextStatus.active && nextStatus.session?.instance_name) {
         setActiveScene({
@@ -1184,20 +1269,34 @@ export function WenyouTab({
 
   useEffect(() => {
     if (!spaceBootVisible) return;
+    setSpaceBootComplete(false);
     let width = 0;
     const interval = window.setInterval(() => {
       width = Math.min(100, width + 8 + Math.random() * 12);
       setSpaceBootProgress(width);
       if (width >= 100) {
         window.clearInterval(interval);
-        window.setTimeout(() => {
-          setSpaceBootFading(true);
-          window.setTimeout(() => setSpaceBootVisible(false), 1000);
-        }, 500);
+        window.setTimeout(() => setSpaceBootComplete(true), 350);
       }
     }, 150);
     return () => window.clearInterval(interval);
   }, [spaceBootVisible]);
+
+  useEffect(() => {
+    if (!spaceBootVisible || !spaceBootComplete || statusLoading) return;
+    setSpaceBootFading(true);
+    const timer = window.setTimeout(() => setSpaceBootVisible(false), 520);
+    return () => window.clearTimeout(timer);
+  }, [spaceBootComplete, spaceBootVisible, statusLoading]);
+
+  useEffect(() => {
+    const p1 = String(status.entry?.player_name || "").trim();
+    const p2 = String(status.entry?.player2_name || "").trim();
+    if (p1) setTutorialName((prev) => (prev.trim() ? prev : p1));
+    if (p2) setTutorialPlayerTwoName((prev) => (prev.trim() ? prev : p2));
+    if (p1 && !p2) setTutorialNameStep("player2");
+    else if (!p1) setTutorialNameStep("player1");
+  }, [status.entry?.player2_name, status.entry?.player_name]);
 
   useEffect(() => {
     if (view !== "selection") {
@@ -1274,6 +1373,11 @@ export function WenyouTab({
   const hasPlayableStatus = !!status.active && isPlayableWenyouStatusSession(status.session);
   const hasPlayablePanel = isPlayableWenyouPanel(sessionPanel);
   const hasActiveRun = hasPlayableStatus || hasPlayablePanel;
+  const hasPlayerOneCode = !!String(status.entry?.player_name || "").trim();
+  const hasPlayerTwoCode = !!String(status.entry?.player2_name || "").trim();
+  const hasPlayerCodes = hasPlayerOneCode && hasPlayerTwoCode;
+  const isEntryResolving = view === "home" && !spaceBootVisible && statusLoading && !status.entry && !hasActiveRun;
+  const needsTutorialIntro = !hasActiveRun && !statusLoading && !hasPlayerCodes;
   const currentScene: EntryScene = hasActiveRun
     ? (activeScene || {
         name: status.session?.instance_name || sessionPanel?.framework?.instance_name || "等待接入",
@@ -1289,6 +1393,8 @@ export function WenyouTab({
       };
   const gameSettlementReady = sessionPanel?.phase === "settlement" && !!sessionPanel.settlement;
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
+  const playerOneName = playerDisplayName(profileStats.player1 || gameRulesState.players?.player1 || homePlayer, "玩家一");
+  const playerTwoName = playerDisplayName(profileStats.player2 || gameRulesState.players?.player2, "玩家二");
   const attributePointEntries = useMemo(() => {
     return (["player1", "player2"] as const)
       .map((player) => {
@@ -1299,7 +1405,7 @@ export function WenyouTab({
         const rank = String(statPlayer?.rank || "D");
         return {
           player,
-          title: player === "player1" ? "玩家一" : "玩家二 · 渡",
+          title: player === "player1" ? playerDisplayName(statPlayer, "玩家一") : `玩家二 · ${playerDisplayName(statPlayer, "玩家二")}`,
           points: Number.isFinite(points) ? points : 0,
           key: `${player}:${rank}:${level}:${points}`,
         };
@@ -1420,7 +1526,7 @@ export function WenyouTab({
     throw new Error("副本扩展仍在进行，请稍后重试或刷新状态");
   }
 
-  async function startStory(mode: "random" | "custom", keywords = "", fallback?: EntryScene, candidate?: InstanceCandidate) {
+  async function startStory(mode: "random" | "custom", keywords = "", fallback?: EntryScene, candidate?: InstanceCandidate, playerName = "", playerTwoName = "") {
     if (mode === "custom" && !keywords.trim() && !candidate) {
       toast("请填写任务描述");
       return;
@@ -1430,7 +1536,13 @@ export function WenyouTab({
       let j = await apiJson<WenyouStoryResponse>("/miniapp-api/wenyou/story", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, keywords: mode === "custom" ? keywords : "", candidate }),
+        body: JSON.stringify({
+          mode,
+          keywords: mode === "custom" ? keywords : "",
+          candidate,
+          player_name: playerName.trim(),
+          player2_name: playerTwoName.trim(),
+        }),
       });
       if (!j?.ok) throw new Error(j?.error || "开局失败");
       if (j.expanding && j.job_id) {
@@ -1465,6 +1577,38 @@ export function WenyouTab({
     } finally {
       setStarting(false);
     }
+  }
+
+  function startTutorialIntro() {
+    const name = tutorialName.trim();
+    const teammateName = tutorialPlayerTwoName.trim();
+    if (!name) {
+      toast("请输入你的代号");
+      setTutorialNameStep("player1");
+      return;
+    }
+    if (tutorialNameStep === "player1") {
+      setTutorialNameStep("player2");
+      return;
+    }
+    if (!teammateName) {
+      toast("请输入你队友的代号");
+      setTutorialNameStep("player2");
+      return;
+    }
+    startStory(
+      "random",
+      "",
+      {
+        name: status.entry?.tutorial_title || "白箱回廊",
+        code: status.entry?.tutorial_code || "T-000",
+        genre: "剧情解密",
+        difficulty: "D",
+      },
+      undefined,
+      name,
+      teammateName
+    );
   }
 
   function startCandidate(item: InstanceCandidate) {
@@ -1946,16 +2090,21 @@ export function WenyouTab({
     }, 260);
   }
 
+  const tutorialActiveName = tutorialNameStep === "player1" ? tutorialName : tutorialPlayerTwoName;
+  const tutorialActiveLabel = tutorialNameStep === "player1" ? "你的代号" : "队友的代号";
+  const tutorialPromptLine = tutorialNameStep === "player1" ? "【请输入你的代号】" : "【请输入你队友的代号】";
+  const tutorialSubmitText = starting ? "接入中..." : tutorialNameStep === "player1" ? "确认代号" : "进入白箱回廊";
+
   return (
-    <div className="wenyou-shell">
+    <div ref={shellRef} className="wenyou-shell">
       <span className="wenyou-shell-grid" />
       <span className="wenyou-shell-scan" />
 
       {spaceBootVisible ? (
         <div className={`wenyou-space-entry ${spaceBootFading ? "wenyou-space-entry-hide" : ""}`} role="status" aria-live="polite">
           <div className="wenyou-space-entry-title">
-            <h1>MAIN GOD</h1>
-            <h2>SYSTEM SCANNING...</h2>
+            <SignalText as="h1" className="wenyou-signal-text-heavy">MAIN GOD</SignalText>
+            <SignalText as="h2">SYSTEM SCANNING...</SignalText>
           </div>
           <div className="wenyou-space-entry-track">
             <span style={{ width: `${spaceBootProgress}%` }} />
@@ -2002,6 +2151,60 @@ export function WenyouTab({
       ) : null}
 
       {view === "home" ? (
+        isEntryResolving ? (
+        <section className="wenyou-screen wenyou-home wenyou-home-cyber wenyou-tutorial-gate wenyou-tutorial-gate-loading">
+          <span className="wenyou-home-scanlines" aria-hidden="true" />
+          <span className="wenyou-home-edge wenyou-home-edge-right" aria-hidden="true" />
+          <span className="wenyou-home-edge wenyou-home-edge-left" aria-hidden="true" />
+          <div className="wenyou-tutorial-copy">
+            <SignalText>SYNCING TASKER FILE</SignalText>
+            <SignalText as="h1" className="wenyou-signal-text-heavy">正在接入副本入口。</SignalText>
+          </div>
+        </section>
+        ) : needsTutorialIntro ? (
+        <section className="wenyou-screen wenyou-home wenyou-home-cyber wenyou-tutorial-gate">
+          <span className="wenyou-home-scanlines" aria-hidden="true" />
+          <span className="wenyou-home-edge wenyou-home-edge-right" aria-hidden="true" />
+          <span className="wenyou-home-edge wenyou-home-edge-left" aria-hidden="true" />
+          <div className="wenyou-home-debug wenyou-home-debug-left" aria-hidden="true">
+            FILE: NEW_TASKER<br />
+            INSTANCE: T-000<br />
+            STATUS: AWAKE
+          </div>
+          <div className="wenyou-tutorial-copy">
+            <SignalText>WHITE CORRIDOR // T-000</SignalText>
+            <SignalText as="h1" className="wenyou-signal-text-heavy">你醒来的时候，耳边先是一阵很轻的电流声。</SignalText>
+            <p>白光铺满视野，像有人把世界擦到只剩一种颜色。远处有一扇没有把手的门，门上浮着一行黑字。</p>
+            <div className="wenyou-tutorial-terminal" aria-label="主神系统提示">
+              <SignalText as="b">【新任务者档案未建立】</SignalText>
+              <SignalText as="b">{tutorialPromptLine}</SignalText>
+            </div>
+          </div>
+          <form
+            className="wenyou-tutorial-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              startTutorialIntro();
+            }}
+          >
+            <label htmlFor="wenyou-tasker-name">{tutorialActiveLabel}</label>
+            <input
+              id="wenyou-tasker-name"
+              value={tutorialActiveName}
+              maxLength={16}
+              autoComplete="off"
+              onChange={(event) => {
+                if (tutorialNameStep === "player1") setTutorialName(event.target.value);
+                else setTutorialPlayerTwoName(event.target.value);
+              }}
+              disabled={starting}
+            />
+            <button type="submit" disabled={starting || !tutorialActiveName.trim()}>
+              {tutorialSubmitText}
+            </button>
+          </form>
+        </section>
+        ) : (
         <section className="wenyou-screen wenyou-home wenyou-home-cyber">
           <span className="wenyou-home-scanlines" aria-hidden="true" />
           <span className="wenyou-home-glow wenyou-home-glow-a" aria-hidden="true" />
@@ -2124,6 +2327,7 @@ export function WenyouTab({
             <span />
           </div>
         </section>
+        )
       ) : null}
 
       {view === "shop" ? (
@@ -2315,7 +2519,7 @@ export function WenyouTab({
               if (item.kind === "user") return <div key={item.id} className="wenyou-user-bubble">{item.text}</div>;
               if (item.kind === "notice") return <SystemNotice key={item.id} tone="cyan" label="任务更新" text={item.text} />;
               if (item.kind === "loot") return <SystemNotice key={item.id} tone="purple" label="获得物品" text={item.text} />;
-              if (item.kind === "ai_player") return <SystemNotice key={item.id} tone="purple" label="渡的行动" text={item.text} />;
+              if (item.kind === "ai_player") return <SystemNotice key={item.id} tone="purple" label="玩家二的行动" text={item.text} />;
               return <StoryFeedMessage key={item.id} text={item.text} />;
             }) : gameSettlementReady ? (
               <div className="wenyou-feed-empty">
@@ -2469,12 +2673,12 @@ export function WenyouTab({
                 <PanelRow label="主神债务" value={String(hubDebts)} />
               </div>
               <PlayerStatCard
-                title="玩家一"
+                title={playerOneName}
                 player={profileStats.player1 || gameRulesState.players?.player1}
                 growth={profileGrowthPlayers.player1}
               />
               <PlayerStatCard
-                title="玩家二 · 渡"
+                title={`玩家二 · ${playerTwoName}`}
                 player={profileStats.player2 || gameRulesState.players?.player2}
                 growth={profileGrowthPlayers.player2}
               />
@@ -3170,12 +3374,12 @@ function PanelModal({
                     <PanelRow label="主神债务" value={String(session.wallet?.debts ?? 0)} />
                   </div>
                   <PlayerStatCard
-                    title="玩家一"
+                    title={playerDisplayName(stats.player1, "玩家一")}
                     player={stats.player1}
                     growth={growthPlayers.player1}
                   />
                   <PlayerStatCard
-                    title="玩家二 · 渡"
+                    title={`玩家二 · ${playerDisplayName(stats.player2, "玩家二")}`}
                     player={stats.player2}
                     growth={growthPlayers.player2}
                   />
@@ -3298,7 +3502,7 @@ function MarkerPanelCard({ item }: { item: WenyouPublicMarker }) {
 }
 
 function HistoryPanelRow({ item }: { item: { role?: string; content?: string; timestamp?: string } }) {
-  const roleMap: Record<string, string> = { gm: "GM", player1: "玩家一", player2: "渡", system: "系统" };
+  const roleMap: Record<string, string> = { gm: "GM", player1: "玩家一", player2: "玩家二", system: "系统" };
   const role = roleMap[String(item.role || "")] || String(item.role || "记录");
   return (
     <div className="wenyou-history-row">

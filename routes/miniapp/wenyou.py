@@ -227,7 +227,13 @@ def register_routes(bp) -> None:
             return _missing_wenyou_session_response()
         session = r2_store.get_wenyou_session(uid)
         if not session or not session.get("gameId"):
-            return jsonify({"ok": True, "active": False, "session": None})
+            try:
+                from services.wenyou_service import get_wenyou_entry_state
+
+                entry = get_wenyou_entry_state(uid)
+            except Exception:
+                entry = {}
+            return jsonify({"ok": True, "active": False, "session": None, "entry": entry})
         fw = (session.get("framework") or {}) if isinstance(session.get("framework"), dict) else {}
         try:
             from services.wenyou_service import get_session_view
@@ -413,7 +419,16 @@ def register_routes(bp) -> None:
         data = request.get_json(silent=True) or {}
         mode = str(data.get("mode") or "random").strip().lower()
         keywords = str(data.get("keywords") or "").strip()
+        player_name = str(data.get("player_name") or data.get("playerName") or "").strip()
+        player2_name = str(data.get("player2_name") or data.get("player2Name") or "").strip()
         candidate = data.get("candidate") if isinstance(data.get("candidate"), dict) else None
+        if player_name or player2_name:
+            from services.wenyou_service import set_wenyou_player_display_name
+
+            if player_name:
+                set_wenyou_player_display_name(uid, player_name, "player1")
+            if player2_name:
+                set_wenyou_player_display_name(uid, player2_name, "player2")
         if candidate and not keywords:
             from services.wenyou_service import start_story_candidate_expansion_job
 
@@ -481,7 +496,7 @@ def register_routes(bp) -> None:
             return jsonify({"ok": True, "queued": True, "text": msg, "action_intent": action_intent, **get_session_view(uid)})
         ai_player_error = ""
         player_key = player.lower()
-        if player_key in ("player1", "p1") or player in ("辛玥", ""):
+        if player_key in ("player1", "p1") or player in ("玩家一", ""):
             external_ai_player_action, ai_player_error = _maybe_generate_ai_player_action(
                 uid,
                 external_action=external_ai_player_action,
@@ -505,7 +520,7 @@ def register_routes(bp) -> None:
                 payload["ai_player_error"] = ai_player_error
             return jsonify(payload), (400 if failed else 200)
         ai_player_action = ""
-        if player_key in ("player1", "p1") or player in ("辛玥", ""):
+        if player_key in ("player1", "p1") or player in ("玩家一", ""):
             out, ai_player_action = cmd_action_with_ai_player(uid, text, ai_player_action=external_ai_player_action)
         else:
             out = cmd_action(uid, text, player)
@@ -543,7 +558,7 @@ def register_routes(bp) -> None:
         target_id = str(data.get("target_id") or actor_id).strip()
         if not item:
             return jsonify({"ok": False, "error": "请选择道具"}), 400
-        if actor_id and actor_id not in {"player1", "p1", "辛玥", "xinyue"}:
+        if actor_id and actor_id not in {"player1", "p1", "玩家一"}:
             from services.wenyou_service import player_tool_use_item
 
             ok, message, view = player_tool_use_item(uid, actor_id=actor_id, item_ref=item, target_id=target_id, context=action)
