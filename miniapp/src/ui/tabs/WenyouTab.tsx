@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiJson } from "../api";
 import { useToast } from "../toast";
+import wenyouCardRevealUrl from "../../assets/sfx/wenyou_card_reveal.flac";
 import wenyouKeyClickUrl from "../../assets/sfx/wenyou_key_click.wav";
 
 type WenyouView = "home" | "selection" | "game" | "archive" | "shop" | "rift";
@@ -999,6 +1000,30 @@ function installWenyouButtonSound(root: HTMLElement) {
     }
   };
 }
+
+const riftCardRevealSound = (() => {
+  let pool: HTMLAudioElement[] | null = null;
+  let cursor = 0;
+  return () => {
+    if (typeof window === "undefined") return;
+    if (!pool) {
+      pool = Array.from({ length: 5 }, () => {
+        const audio = new Audio(wenyouCardRevealUrl);
+        audio.preload = "auto";
+        audio.volume = 0.62;
+        return audio;
+      });
+    }
+    const audio = pool[cursor] || pool[0];
+    cursor = (cursor + 1) % pool.length;
+    try {
+      audio.currentTime = 0;
+      void audio.play().catch(() => undefined);
+    } catch {
+      // Card reveal audio is decorative and can be blocked by the WebView.
+    }
+  };
+})();
 
 export function WenyouTab({
   initialView = "home",
@@ -2071,7 +2096,11 @@ export function WenyouTab({
   }
 
   function revealRiftCard(pullId: string) {
-    setRiftRevealed((prev) => (prev.includes(pullId) ? prev : [...prev, pullId]));
+    setRiftRevealed((prev) => {
+      if (prev.includes(pullId)) return prev;
+      riftCardRevealSound();
+      return [...prev, pullId];
+    });
   }
 
   function revealAllRiftCards() {
@@ -2103,13 +2132,13 @@ export function WenyouTab({
       {spaceBootVisible ? (
         <div className={`wenyou-space-entry ${spaceBootFading ? "wenyou-space-entry-hide" : ""}`} role="status" aria-live="polite">
           <div className="wenyou-space-entry-title">
-            <SignalText as="h1" className="wenyou-signal-text-heavy">MAIN GOD</SignalText>
-            <SignalText as="h2">SYSTEM SCANNING...</SignalText>
+            <SignalText as="h1" className="wenyou-signal-text-heavy">FATE NEXUS</SignalText>
+            <SignalText as="h2">REALITY LINK SCANNING...</SignalText>
           </div>
           <div className="wenyou-space-entry-track">
             <span style={{ width: `${spaceBootProgress}%` }} />
           </div>
-          <p>Initializing Neural Link</p>
+          <p>Connecting to Fate Nexus</p>
         </div>
       ) : null}
 
@@ -2127,7 +2156,7 @@ export function WenyouTab({
             <span className="wenyou-entry-corner wenyou-entry-corner-tl" />
             <span className="wenyou-entry-corner wenyou-entry-corner-br" />
             <div className="wenyou-entry-header">
-              <span>MAIN GOD SYSTEM</span>
+              <span>FATE NEXUS PROTOCOL</span>
             </div>
             <div className="wenyou-entry-inner">
               <div className="wenyou-entry-terminal">
