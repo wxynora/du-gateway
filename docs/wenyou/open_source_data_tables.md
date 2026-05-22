@@ -8,7 +8,7 @@
 
 | 表/文件 | 类型 | 当前默认来源 | 接入方需要做什么 | 用途 |
 | --- | --- | --- | --- | --- |
-| `item_catalog` | 静态内容表 | `content/default/items.json`、`content/default/item_catalog.sql`、`schemas/item.schema.json` | 直接导入或按 schema 转成自己的数据库表 | 商店、抽卡、奖励、使用道具、装备校验 |
+| `item_catalog` | 静态内容表 | `content/default/items.json`、`content/default/item_catalog.sql`、`schemas/item.schema.json` | 直接导入或按 schema 转成自己的数据库表 | 商店、抽卡、奖励、使用道具 |
 | `ability_catalog` | 静态内容表 | `content/default/abilities.json`、`schemas/ability.schema.json` | 导入为能力模板表，或保持 JSON 查询 | 能力抽取、解锁、封印、升级 |
 | `evolution_paths` | 静态内容表 | `content/default/evolution_paths.json`、`schemas/evolution.schema.json` | 导入为进化路线表，或保持 JSON 查询 | 进化方向、阶位门槛、身体强化效果 |
 | `reward_tables` | 静态规则表 | `content/default/reward_tables.json`、`schemas/reward_table.schema.json` | 导入为奖励概率/掉落规则表 | 通关奖励、奖励 roll、隐藏奖励池 |
@@ -20,7 +20,6 @@
 | `players` | 运行时存档表 | 无默认数据 | 接入方创建 | 玩家角色卡、控制者、等级、阶位、基础属性 |
 | `player_wallets` | 运行时存档表 | 无默认数据 | 接入方创建 | 积分、债务、抽卡保底、钱包状态 |
 | `player_item_instances` | 运行时存档表 | 无默认数据 | 接入方创建 | 玩家实际拥有的道具实例、数量、次数、耐久、封印状态 |
-| `player_equipment` | 运行时存档表 | 无默认数据 | 接入方创建 | 每个玩家当前装备槽、武器、防具、饰品、工具 |
 | `instance_runs` | 运行时副本表 | 无默认数据 | 接入方创建 | 当前副本、阶段、轮次、公开/隐藏状态、威胁时钟 |
 | `public_panel` | 运行时公开面板 | 无默认数据 | 接入方从副本状态生成或缓存 | 当前任务、已知线索、公开规则、地点、时间状态 |
 | `task_items` | 运行时副本物品表 | 无默认数据 | 接入方创建 | 不能带出副本的任务物品、持有人、用途、是否已消耗 |

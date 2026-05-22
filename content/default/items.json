@@ -9,10 +9,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "非战斗中恢复 30 HP；若处于 `轻伤`，额外让下一次 physical 行动惩罚 -1 降为 0；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；非战斗中恢复 30 HP；若处于 `轻伤`，额外让下一次 physical 行动惩罚 -1 降为 0；一次性",
+        "text": "非战斗中恢复 30 HP；若处于 `轻伤`，额外让下一次 physical 行动惩罚 -1 降为 0；一次性",
         "hp_restore": 30
       },
       "requirements": {},
@@ -44,10 +43,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 30 SAN；若处于 `动摇`，额外移除 `动摇`；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；恢复 30 SAN；若处于 `动摇`，额外移除 `动摇`；一次性",
+        "text": "恢复 30 SAN；若处于 `动摇`，额外移除 `动摇`；一次性",
         "san_restore": 30,
         "remove_conditions": [
           "动摇"
@@ -82,10 +80,9 @@
       "rarity": "D",
       "category": "工具类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "临时固定一件轻小物体或封住一处细小缝隙，相关维修/封堵判定 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；临时固定一件轻小物体或封住一处细小缝隙，相关维修/封堵判定 +1；一次性"
+        "text": "临时固定一件轻小物体或封住一处细小缝隙，相关维修/封堵判定 +1；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -116,10 +113,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "学校类副本中校验一次时间、教室或教师安排矛盾，成功时探索度 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；学校类副本中校验一次时间、教室或教师安排矛盾，成功时探索度 +1；一次性"
+        "text": "学校类副本中校验一次时间、教室或教师安排矛盾，成功时探索度 +1；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -149,11 +145,10 @@
       "name": "少一颗螺丝的折叠椅",
       "rarity": "D",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 8；近战威慑/破坏 +1，对门窗、玻璃、简易隔板判定 +2；每次攻击耐久 -1，耐久 5",
+      "item_type": "tool",
+      "effect": "str_min 8；近战威慑/破坏 +1，对门窗、玻璃、简易隔板判定 +2；每次攻击耐久 -1，耐久 5",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern；槽位 main_weapon；str_min 8；近战威慑/破坏 +1，对门窗、玻璃、简易隔板判定 +2；每次攻击耐久 -1，耐久 5",
+        "text": "str_min 8；近战威慑/破坏 +1，对门窗、玻璃、简易隔板判定 +2；每次攻击耐久 -1，耐久 5",
         "durability": 5
       },
       "requirements": {
@@ -164,7 +159,7 @@
       },
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -188,11 +183,10 @@
       "name": "洗衣粉量勺",
       "rarity": "D",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；对粉末、灰尘、药剂残留的观察判定 +1；可用 3 次，耐久 3",
+      "item_type": "tool",
+      "effect": "对粉末、灰尘、药剂残留的观察判定 +1；可用 3 次，耐久 3",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 accessory；对粉末、灰尘、药剂残留的观察判定 +1；可用 3 次，耐久 3",
+        "text": "对粉末、灰尘、药剂残留的观察判定 +1；可用 3 次，耐久 3",
         "uses": 3,
         "durability": 3
       },
@@ -200,7 +194,7 @@
       "use_cost": {},
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -224,11 +218,10 @@
       "name": "医院陪护腕带",
       "rarity": "D",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；医院类副本中社交伪装 +1；被医护身份系统核验失败时暴露度 +1；耐久 4",
+      "item_type": "tool",
+      "effect": "医院类副本中社交伪装 +1；被医护身份系统核验失败时暴露度 +1；耐久 4",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：modern；槽位 accessory；医院类副本中社交伪装 +1；被医护身份系统核验失败时暴露度 +1；耐久 4",
+        "text": "医院类副本中社交伪装 +1；被医护身份系统核验失败时暴露度 +1；耐久 4",
         "durability": 4
       },
       "requirements": {},
@@ -237,7 +230,7 @@
       },
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -262,10 +255,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "让一件小型电子工具额外使用 1 次，或抵消一次低电量惩罚；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；让一件小型电子工具额外使用 1 次，或抵消一次低电量惩罚；一次性"
+        "text": "让一件小型电子工具额外使用 1 次，或抵消一次低电量惩罚；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -296,10 +288,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "老小区/出租屋副本中校验一次门牌、停水、停电或维修时间矛盾；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；老小区/出租屋副本中校验一次门牌、停水、停电或维修时间矛盾；一次性"
+        "text": "老小区/出租屋副本中校验一次门牌、停水、停电或维修时间矛盾；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -330,10 +321,9 @@
       "rarity": "D",
       "category": "探查类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "对镜子、头发、浴室、梳妆台类异常观察 +2；使用后 SAN -2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；对镜子、头发、浴室、梳妆台类异常观察 +2；使用后 SAN -2；一次性"
+        "text": "对镜子、头发、浴室、梳妆台类异常观察 +2；使用后 SAN -2；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -365,18 +355,17 @@
       "name": "旧校服外套",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；学校类副本中身份伪装 +1，抵消一次粉尘、泼水或轻微抓挠；耐久 6",
+      "item_type": "tool",
+      "effect": "学校类副本中身份伪装 +1，抵消一次粉尘、泼水或轻微抓挠；耐久 6",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 armor；学校类副本中身份伪装 +1，抵消一次粉尘、泼水或轻微抓挠；耐久 6",
+        "text": "学校类副本中身份伪装 +1，抵消一次粉尘、泼水或轻微抓挠；耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -401,10 +390,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 20 SAN，或让下一次呼喊/沟通/广播类行动判定 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；恢复 20 SAN，或让下一次呼喊/沟通/广播类行动判定 +1；一次性",
+        "text": "恢复 20 SAN，或让下一次呼喊/沟通/广播类行动判定 +1；一次性",
         "san_restore": 20
       },
       "requirements": {},
@@ -435,18 +423,17 @@
       "name": "快递纸箱",
       "rarity": "D",
       "category": "伪装类",
-      "item_type": "equippable_tool",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；静止不动时藏匿判定 +1；移动时敏捷判定 -1；耐久 4",
+      "item_type": "tool",
+      "effect": "静止不动时藏匿判定 +1；移动时敏捷判定 -1；耐久 4",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 offhand_weapon；静止不动时藏匿判定 +1；移动时敏捷判定 -1；耐久 4",
+        "text": "静止不动时藏匿判定 +1；移动时敏捷判定 -1；耐久 4",
         "durability": 4
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "伪装",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -470,18 +457,17 @@
       "name": "发霉的毛巾",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；抵消一次烟雾、灰尘、低级气味污染；使用后社交伪装 -1，耐久 3",
+      "item_type": "tool",
+      "effect": "抵消一次烟雾、灰尘、低级气味污染；使用后社交伪装 -1，耐久 3",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 offhand_weapon；抵消一次烟雾、灰尘、低级气味污染；使用后社交伪装 -1，耐久 3",
+        "text": "抵消一次烟雾、灰尘、低级气味污染；使用后社交伪装 -1，耐久 3",
         "durability": 3
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -506,10 +492,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "可在地图、门牌或纸面上标记 3 个线索点，线索被覆盖时保留一次提示；可用 3 次",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；可在地图、门牌或纸面上标记 3 个线索点，线索被覆盖时保留一次提示；可用 3 次",
+        "text": "可在地图、门牌或纸面上标记 3 个线索点，线索被覆盖时保留一次提示；可用 3 次",
         "uses": 3
       },
       "requirements": {},
@@ -540,18 +525,17 @@
       "name": "超市购物篮",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；格挡一次轻微投掷物或小型实体扑咬，减伤 2；耐久 6",
+      "item_type": "tool",
+      "effect": "格挡一次轻微投掷物或小型实体扑咬，减伤 2；耐久 6",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 offhand_weapon；格挡一次轻微投掷物或小型实体扑咬，减伤 2；耐久 6",
+        "text": "格挡一次轻微投掷物或小型实体扑咬，减伤 2；耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -575,11 +559,10 @@
       "name": "断齿塑料叉",
       "rarity": "D",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；agi_min 8；近身挣脱、割开软质封条判定 +1；对硬物无效，耐久 3",
+      "item_type": "tool",
+      "effect": "agi_min 8；近身挣脱、割开软质封条判定 +1；对硬物无效，耐久 3",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern；槽位 offhand_weapon；agi_min 8；近身挣脱、割开软质封条判定 +1；对硬物无效，耐久 3",
+        "text": "agi_min 8；近身挣脱、割开软质封条判定 +1；对硬物无效，耐久 3",
         "durability": 3
       },
       "requirements": {
@@ -588,7 +571,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -613,10 +596,9 @@
       "rarity": "D",
       "category": "探查类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "装取一次液体、粉末或气味样本，后续分析判定 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；装取一次液体、粉末或气味样本，后续分析判定 +1；一次性"
+        "text": "装取一次液体、粉末或气味样本，后续分析判定 +1；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -646,11 +628,10 @@
       "name": "没贴好的工牌",
       "rarity": "D",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；办公室/商场/医院后勤区域身份伪装 +1；被仔细检查时暴露度 +1，耐久 5",
+      "item_type": "tool",
+      "effect": "办公室/商场/医院后勤区域身份伪装 +1；被仔细检查时暴露度 +1，耐久 5",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：modern；槽位 accessory；办公室/商场/医院后勤区域身份伪装 +1；被仔细检查时暴露度 +1，耐久 5",
+        "text": "办公室/商场/医院后勤区域身份伪装 +1；被仔细检查时暴露度 +1，耐久 5",
         "durability": 5
       },
       "requirements": {},
@@ -659,7 +640,7 @@
       },
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -684,10 +665,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "校验一次车辆、车位、进出时间或楼层矛盾；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；校验一次车辆、车位、进出时间或楼层矛盾；一次性"
+        "text": "校验一次车辆、车位、进出时间或楼层矛盾；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -718,10 +698,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "移除一次轻微污渍、血迹或气味标记；若用于伪装，暴露度 -1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；移除一次轻微污渍、血迹或气味标记；若用于伪装，暴露度 -1；一次性"
+        "text": "移除一次轻微污渍、血迹或气味标记；若用于伪装，暴露度 -1；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -751,11 +730,10 @@
       "name": "便携小镜子",
       "rarity": "D",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；观察拐角、背后或镜面异常判定 +1；镜类异常场景首次使用 SAN -2，耐久 5",
+      "item_type": "tool",
+      "effect": "观察拐角、背后或镜面异常判定 +1；镜类异常场景首次使用 SAN -2，耐久 5",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：universal；槽位 accessory；观察拐角、背后或镜面异常判定 +1；镜类异常场景首次使用 SAN -2，耐久 5",
+        "text": "观察拐角、背后或镜面异常判定 +1；镜类异常场景首次使用 SAN -2，耐久 5",
         "durability": 5
       },
       "requirements": {},
@@ -764,7 +742,7 @@
       },
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "universal"
@@ -789,10 +767,9 @@
       "rarity": "D",
       "category": "工具类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "低级门禁尝试刷开，成功率按工具判定 +1；失败时触发一次低级警报；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；低级门禁尝试刷开，成功率按工具判定 +1；失败时触发一次低级警报；一次性"
+        "text": "低级门禁尝试刷开，成功率按工具判定 +1；失败时触发一次低级警报；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -822,11 +799,10 @@
       "name": "掉漆保温杯",
       "rarity": "D",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；str_min 8；近战敲击 +1，也可装水/热液触发场景互动；耐久 6",
+      "item_type": "tool",
+      "effect": "str_min 8；近战敲击 +1，也可装水/热液触发场景互动；耐久 6",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：universal；槽位 offhand_weapon；str_min 8；近战敲击 +1，也可装水/热液触发场景互动；耐久 6",
+        "text": "str_min 8；近战敲击 +1，也可装水/热液触发场景互动；耐久 6",
         "durability": 6
       },
       "requirements": {
@@ -835,7 +811,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "universal"
@@ -860,10 +836,9 @@
       "rarity": "D",
       "category": "防护类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "3 轮内对蚊虫、腐臭、轻微追踪气味抗性 +1；遇到火源时风险 +1；可用 2 次",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；3 轮内对蚊虫、腐臭、轻微追踪气味抗性 +1；遇到火源时风险 +1；可用 2 次",
+        "text": "3 轮内对蚊虫、腐臭、轻微追踪气味抗性 +1；遇到火源时风险 +1；可用 2 次",
         "uses": 2
       },
       "requirements": {},
@@ -894,18 +869,17 @@
       "name": "失效的体温计",
       "rarity": "D",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；检测环境异常冷热或尸体温度矛盾判定 +1；耐久 4",
+      "item_type": "tool",
+      "effect": "检测环境异常冷热或尸体温度矛盾判定 +1；耐久 4",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 accessory；检测环境异常冷热或尸体温度矛盾判定 +1；耐久 4",
+        "text": "检测环境异常冷热或尸体温度矛盾判定 +1；耐久 4",
         "durability": 4
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -930,10 +904,9 @@
       "rarity": "D",
       "category": "结算类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "结算时若本副本发现过消费/店铺类线索，额外探索度 +1；每副本最多生效 1 次",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：modern；结算时若本副本发现过消费/店铺类线索，额外探索度 +1；每副本最多生效 1 次"
+        "text": "结算时若本副本发现过消费/店铺类线索，额外探索度 +1；每副本最多生效 1 次"
       },
       "requirements": {},
       "use_cost": {},
@@ -962,10 +935,9 @@
       "rarity": "D",
       "category": "防护类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "贴在门/窗上后，1 轮内低级灵体进入判定 DC +1；使用后若门被打开则失效；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；贴在门/窗上后，1 轮内低级灵体进入判定 DC +1；使用后若门被打开则失效；一次性"
+        "text": "贴在门/窗上后，1 轮内低级灵体进入判定 DC +1；使用后若门被打开则失效；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -996,10 +968,9 @@
       "rarity": "D",
       "category": "伪装类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "学校/办公室副本中让一次缺席、迟到或离岗解释判定 +1；失败时暴露度 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；学校/办公室副本中让一次缺席、迟到或离岗解释判定 +1；失败时暴露度 +1；一次性"
+        "text": "学校/办公室副本中让一次缺席、迟到或离岗解释判定 +1；失败时暴露度 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -1031,11 +1002,10 @@
       "name": "裂开的塑料脸盆",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；抵消一次泼洒、坠落小物或液体接触，减伤 1；也可盛水但每次使用耐久 -1，耐久 5",
+      "item_type": "tool",
+      "effect": "抵消一次泼洒、坠落小物或液体接触，减伤 1；也可盛水但每次使用耐久 -1，耐久 5",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：universal；槽位 armor；抵消一次泼洒、坠落小物或液体接触，减伤 1；也可盛水但每次使用耐久 -1，耐久 5",
+        "text": "抵消一次泼洒、坠落小物或液体接触，减伤 1；也可盛水但每次使用耐久 -1，耐久 5",
         "durability": 5
       },
       "requirements": {},
@@ -1044,7 +1014,7 @@
       },
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "universal"
@@ -1069,10 +1039,9 @@
       "rarity": "D",
       "category": "探查类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "3 轮内行动不留下普通脚印，或追踪地面痕迹时判定 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；3 轮内行动不留下普通脚印，或追踪地面痕迹时判定 +1；一次性"
+        "text": "3 轮内行动不留下普通脚印，或追踪地面痕迹时判定 +1；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -1103,10 +1072,9 @@
       "rarity": "D",
       "category": "规则类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "验证一次“时间/路线/站点是否被副本轻微篡改”，只返回是/否/不完整；使用后 SAN -3；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；验证一次“时间/路线/站点是否被副本轻微篡改”，只返回是/否/不完整；使用后 SAN -3；一次性"
+        "text": "验证一次“时间/路线/站点是否被副本轻微篡改”，只返回是/否/不完整；使用后 SAN -3；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -1139,10 +1107,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "非战斗中恢复 20 HP，并移除一次轻微流血标记；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；非战斗中恢复 20 HP，并移除一次轻微流血标记；一次性",
+        "text": "非战斗中恢复 20 HP，并移除一次轻微流血标记；一次性",
         "hp_restore": 20
       },
       "requirements": {},
@@ -1174,10 +1141,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 20 SAN；3 轮内第一次抗困倦/催眠判定 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；恢复 20 SAN；3 轮内第一次抗困倦/催眠判定 +1；一次性",
+        "text": "恢复 20 SAN；3 轮内第一次抗困倦/催眠判定 +1；一次性",
         "san_restore": 20
       },
       "requirements": {},
@@ -1208,11 +1174,10 @@
       "name": "生锈螺丝刀",
       "rarity": "D",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；str_min 8；撬开小锁、拆卸螺丝、破坏薄板判定 +1；攻击失败时耐久额外 -1，耐久 5",
+      "item_type": "tool",
+      "effect": "str_min 8；撬开小锁、拆卸螺丝、破坏薄板判定 +1；攻击失败时耐久额外 -1，耐久 5",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern；槽位 offhand_weapon；str_min 8；撬开小锁、拆卸螺丝、破坏薄板判定 +1；攻击失败时耐久额外 -1，耐久 5",
+        "text": "str_min 8；撬开小锁、拆卸螺丝、破坏薄板判定 +1；攻击失败时耐久额外 -1，耐久 5",
         "durability": 5
       },
       "requirements": {
@@ -1221,7 +1186,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1245,11 +1210,10 @@
       "name": "办公室订书机",
       "rarity": "D",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；str_min 8；近战夹击/砸击 +1，也可临时固定纸张或布料；耐久 5",
+      "item_type": "tool",
+      "effect": "str_min 8；近战夹击/砸击 +1，也可临时固定纸张或布料；耐久 5",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern；槽位 offhand_weapon；str_min 8；近战夹击/砸击 +1，也可临时固定纸张或布料；耐久 5",
+        "text": "str_min 8；近战夹击/砸击 +1，也可临时固定纸张或布料；耐久 5",
         "durability": 5
       },
       "requirements": {
@@ -1258,7 +1222,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1283,10 +1247,9 @@
       "rarity": "D",
       "category": "防护类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "封住一条普通通道或标记危险区域，1 轮内追逐/误入该区域 DC +1；可用 2 次",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；封住一条普通通道或标记危险区域，1 轮内追逐/误入该区域 DC +1；可用 2 次",
+        "text": "封住一条普通通道或标记危险区域，1 轮内追逐/误入该区域 DC +1；可用 2 次",
         "uses": 2
       },
       "requirements": {},
@@ -1318,10 +1281,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "医院类副本中校验一次科室、排队号、医生姓名或就诊时间矛盾；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；医院类副本中校验一次科室、排队号、医生姓名或就诊时间矛盾；一次性"
+        "text": "医院类副本中校验一次科室、排队号、医生姓名或就诊时间矛盾；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -1351,11 +1313,10 @@
       "name": "住户门禁扣",
       "rarity": "D",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；老小区/公寓类副本中进入公共区域伪装 +1；被保安或门禁系统核验失败时暴露度 +1，耐久 4",
+      "item_type": "tool",
+      "effect": "老小区/公寓类副本中进入公共区域伪装 +1；被保安或门禁系统核验失败时暴露度 +1，耐久 4",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：modern；槽位 accessory；老小区/公寓类副本中进入公共区域伪装 +1；被保安或门禁系统核验失败时暴露度 +1，耐久 4",
+        "text": "老小区/公寓类副本中进入公共区域伪装 +1；被保安或门禁系统核验失败时暴露度 +1，耐久 4",
         "durability": 4
       },
       "requirements": {},
@@ -1364,7 +1325,7 @@
       },
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1388,18 +1349,17 @@
       "name": "外卖保温袋",
       "rarity": "D",
       "category": "伪装类",
-      "item_type": "equippable_tool",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；以配送身份进入商场、写字楼、小区公共区判定 +1；携带武器时该加成失效，耐久 5",
+      "item_type": "tool",
+      "effect": "以配送身份进入商场、写字楼、小区公共区判定 +1；携带显眼工具时该加成失效，耐久 5",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 offhand_weapon；以配送身份进入商场、写字楼、小区公共区判定 +1；携带武器时该加成失效，耐久 5",
+        "text": "以配送身份进入商场、写字楼、小区公共区判定 +1；携带显眼工具时该加成失效，耐久 5",
         "durability": 5
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "伪装",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1424,10 +1384,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "让一件小型探查类电子道具额外使用 1 次；若用于非探查电子设备，行动判定 +1 但失败时设备耐久 -1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；让一件小型探查类电子道具额外使用 1 次；若用于非探查电子设备，行动判定 +1 但失败时设备耐久 -1；一次性"
+        "text": "让一件小型探查类电子道具额外使用 1 次；若用于非探查电子设备，行动判定 +1 但失败时设备耐久 -1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -1460,10 +1419,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "记录并固定一句 20 字以内的线索，3 轮内不会被普通记忆干扰覆盖；可用 3 次",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；记录并固定一句 20 字以内的线索，3 轮内不会被普通记忆干扰覆盖；可用 3 次",
+        "text": "记录并固定一句 20 字以内的线索，3 轮内不会被普通记忆干扰覆盖；可用 3 次",
         "uses": 3
       },
       "requirements": {},
@@ -1494,18 +1452,17 @@
       "name": "反光安全背心",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；施工、停车场、仓库类副本中身份伪装 +1；黑暗环境被发现概率 +1，耐久 6",
+      "item_type": "tool",
+      "effect": "施工、停车场、仓库类副本中身份伪装 +1；黑暗环境被发现概率 +1，耐久 6",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 armor；施工、停车场、仓库类副本中身份伪装 +1；黑暗环境被发现概率 +1，耐久 6",
+        "text": "施工、停车场、仓库类副本中身份伪装 +1；黑暗环境被发现概率 +1，耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1529,18 +1486,17 @@
       "name": "微波炉手套",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；抵消一次高温、烫伤或厨房类轻微伤害，减伤 2；潮湿时无效，耐久 4",
+      "item_type": "tool",
+      "effect": "抵消一次高温、烫伤或厨房类轻微伤害，减伤 2；潮湿时无效，耐久 4",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 offhand_weapon；抵消一次高温、烫伤或厨房类轻微伤害，减伤 2；潮湿时无效，耐久 4",
+        "text": "抵消一次高温、烫伤或厨房类轻微伤害，减伤 2；潮湿时无效，耐久 4",
         "durability": 4
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1564,18 +1520,17 @@
       "name": "口袋手账本",
       "rarity": "D",
       "category": "线索类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；记录 5 条短线索；每副本 1 次，回看记录时记忆混乱判定 +1；耐久 6",
+      "item_type": "tool",
+      "effect": "记录 5 条短线索；每副本 1 次，回看记录时记忆混乱判定 +1；耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 accessory；记录 5 条短线索；每副本 1 次，回看记录时记忆混乱判定 +1；耐久 6",
+        "text": "记录 5 条短线索；每副本 1 次，回看记录时记忆混乱判定 +1；耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "线索",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1599,11 +1554,10 @@
       "name": "拖把杆",
       "rarity": "D",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 8；近战推开、支撑、够取高处物体判定 +1；对潮湿地面异常判定 +2；耐久 6",
+      "item_type": "tool",
+      "effect": "str_min 8；近战推开、支撑、够取高处物体判定 +1；对潮湿地面异常判定 +2；耐久 6",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern；槽位 main_weapon；str_min 8；近战推开、支撑、够取高处物体判定 +1；对潮湿地面异常判定 +2；耐久 6",
+        "text": "str_min 8；近战推开、支撑、够取高处物体判定 +1；对潮湿地面异常判定 +2；耐久 6",
         "durability": 6
       },
       "requirements": {
@@ -1612,7 +1566,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1636,18 +1590,17 @@
       "name": "破损雨伞",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；抵消一次雨水、坠落小物或液体泼洒；强风场景行动 DC +1，耐久 5",
+      "item_type": "tool",
+      "effect": "抵消一次雨水、坠落小物或液体泼洒；强风场景行动 DC +1，耐久 5",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 offhand_weapon；抵消一次雨水、坠落小物或液体泼洒；强风场景行动 DC +1，耐久 5",
+        "text": "抵消一次雨水、坠落小物或液体泼洒；强风场景行动 DC +1，耐久 5",
         "durability": 5
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1671,11 +1624,10 @@
       "name": "无声口哨",
       "rarity": "D",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；吹响后若附近有动物、儿童或听觉类异常，获得一次方向提示；使用后 SAN -1，耐久 3",
+      "item_type": "tool",
+      "effect": "吹响后若附近有动物、儿童或听觉类异常，获得一次方向提示；使用后 SAN -1，耐久 3",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：universal；槽位 accessory；吹响后若附近有动物、儿童或听觉类异常，获得一次方向提示；使用后 SAN -1，耐久 3",
+        "text": "吹响后若附近有动物、儿童或听觉类异常，获得一次方向提示；使用后 SAN -1，耐久 3",
         "durability": 3
       },
       "requirements": {},
@@ -1684,7 +1636,7 @@
       },
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "universal"
@@ -1709,10 +1661,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "办公室、医院、学校副本中校验一次人员轮班、空岗或异常出勤；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；办公室、医院、学校副本中校验一次人员轮班、空岗或异常出勤；一次性"
+        "text": "办公室、医院、学校副本中校验一次人员轮班、空岗或异常出勤；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -1742,11 +1693,10 @@
       "name": "透明塑料文件袋",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；保护一张纸质线索不被水、血迹或普通污染损坏；可用 2 次，耐久 2",
+      "item_type": "tool",
+      "effect": "保护一张纸质线索不被水、血迹或普通污染损坏；可用 2 次，耐久 2",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 accessory；保护一张纸质线索不被水、血迹或普通污染损坏；可用 2 次，耐久 2",
+        "text": "保护一张纸质线索不被水、血迹或普通污染损坏；可用 2 次，耐久 2",
         "uses": 2,
         "durability": 2
       },
@@ -1754,7 +1704,7 @@
       "use_cost": {},
       "tags": [
         "防护",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -1779,10 +1729,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "非战斗中恢复 25 HP，并移除一次轻微流血标记；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/universal；非战斗中恢复 25 HP，并移除一次轻微流血标记；一次性",
+        "text": "非战斗中恢复 25 HP，并移除一次轻微流血标记；一次性",
         "hp_restore": 25
       },
       "requirements": {},
@@ -1815,10 +1764,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 25 SAN；若在祠堂、寺观、义庄使用，额外让下一次恐惧判定 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient；恢复 25 SAN；若在祠堂、寺观、义庄使用，额外让下一次恐惧判定 +1；一次性",
+        "text": "恢复 25 SAN；若在祠堂、寺观、义庄使用，额外让下一次恐惧判定 +1；一次性",
         "san_restore": 25
       },
       "requirements": {},
@@ -1850,10 +1798,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "客栈/驿站副本中校验一次住客、房号、银钱或夜间出入矛盾；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient；客栈/驿站副本中校验一次住客、房号、银钱或夜间出入矛盾；一次性"
+        "text": "客栈/驿站副本中校验一次住客、房号、银钱或夜间出入矛盾；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -1883,11 +1830,10 @@
       "name": "磨钝柴刀",
       "rarity": "D",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 8；砍断细绳、木栅、藤蔓判定 +1；对硬甲无效，耐久 6",
+      "item_type": "tool",
+      "effect": "str_min 8；砍断细绳、木栅、藤蔓判定 +1；对硬甲无效，耐久 6",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：ancient/universal；槽位 main_weapon；str_min 8；砍断细绳、木栅、藤蔓判定 +1；对硬甲无效，耐久 6",
+        "text": "str_min 8；砍断细绳、木栅、藤蔓判定 +1；对硬甲无效，耐久 6",
         "durability": 6
       },
       "requirements": {
@@ -1896,7 +1842,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -1921,18 +1867,17 @@
       "name": "破竹斗笠",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；抵消一次雨水、落灰或轻微头部擦伤；强风场景行动 DC +1，耐久 5",
+      "item_type": "tool",
+      "effect": "抵消一次雨水、落灰或轻微头部擦伤；强风场景行动 DC +1，耐久 5",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：ancient；槽位 armor；抵消一次雨水、落灰或轻微头部擦伤；强风场景行动 DC +1，耐久 5",
+        "text": "抵消一次雨水、落灰或轻微头部擦伤；强风场景行动 DC +1，耐久 5",
         "durability": 5
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "ancient"
@@ -1956,11 +1901,10 @@
       "name": "褪色平安符",
       "rarity": "D",
       "category": "防护类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；1 轮内低级灵体靠近判定 DC +1；触发后耐久 -1，耐久 2",
+      "item_type": "tool",
+      "effect": "1 轮内低级灵体靠近判定 DC +1；触发后耐久 -1，耐久 2",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：ancient/universal；槽位 accessory；1 轮内低级灵体靠近判定 DC +1；触发后耐久 -1，耐久 2",
+        "text": "1 轮内低级灵体靠近判定 DC +1；触发后耐久 -1，耐久 2",
         "durability": 2
       },
       "requirements": {},
@@ -1969,7 +1913,7 @@
       },
       "tags": [
         "防护",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -1995,10 +1939,9 @@
       "rarity": "D",
       "category": "探查类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "校验一次账目、数量、贡品或银钱记录矛盾；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/republican；校验一次账目、数量、贡品或银钱记录矛盾；一次性"
+        "text": "校验一次账目、数量、贡品或银钱记录矛盾；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -2030,10 +1973,9 @@
       "rarity": "D",
       "category": "规则类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "标记一个门槛、床脚或井沿，验证一次“是否被低级空间规则轻微挪动”；使用后 SAN -3；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/universal；标记一个门槛、床脚或井沿，验证一次“是否被低级空间规则轻微挪动”；使用后 SAN -3；一次性"
+        "text": "标记一个门槛、床脚或井沿，验证一次“是否被低级空间规则轻微挪动”；使用后 SAN -3；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -2066,11 +2008,10 @@
       "name": "旧铜钱串",
       "rarity": "D",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；市集、客栈、码头交易类社交伪装 +1；被仔细验看时暴露度 +1，耐久 4",
+      "item_type": "tool",
+      "effect": "市集、客栈、码头交易类社交伪装 +1；被仔细验看时暴露度 +1，耐久 4",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：ancient/republican；槽位 accessory；市集、客栈、码头交易类社交伪装 +1；被仔细验看时暴露度 +1，耐久 4",
+        "text": "市集、客栈、码头交易类社交伪装 +1；被仔细验看时暴露度 +1，耐久 4",
         "durability": 4
       },
       "requirements": {},
@@ -2079,7 +2020,7 @@
       },
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -2105,10 +2046,9 @@
       "rarity": "D",
       "category": "探查类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "检测尸身、棺木或停灵房中一次轻微移动痕迹；使用后 SAN -2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient；检测尸身、棺木或停灵房中一次轻微移动痕迹；使用后 SAN -2；一次性"
+        "text": "检测尸身、棺木或停灵房中一次轻微移动痕迹；使用后 SAN -2；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -2141,10 +2081,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "非战斗中恢复 25 HP；若处于轻微擦伤或割伤，额外移除该轻微伤势标记；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：republican；非战斗中恢复 25 HP；若处于轻微擦伤或割伤，额外移除该轻微伤势标记；一次性",
+        "text": "非战斗中恢复 25 HP；若处于轻微擦伤或割伤，额外移除该轻微伤势标记；一次性",
         "hp_restore": 25
       },
       "requirements": {},
@@ -2176,10 +2115,9 @@
       "rarity": "D",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 25 SAN；3 轮内第一次抗困倦、迷香或催眠判定 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：republican；恢复 25 SAN；3 轮内第一次抗困倦、迷香或催眠判定 +1；一次性",
+        "text": "恢复 25 SAN；3 轮内第一次抗困倦、迷香或催眠判定 +1；一次性",
         "san_restore": 25
       },
       "requirements": {},
@@ -2211,10 +2149,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "校验一次新闻日期、人物姓名、码头事故或旧案时间线矛盾；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：republican；校验一次新闻日期、人物姓名、码头事故或旧案时间线矛盾；一次性"
+        "text": "校验一次新闻日期、人物姓名、码头事故或旧案时间线矛盾；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -2244,18 +2181,17 @@
       "name": "旧式钢笔",
       "rarity": "D",
       "category": "线索类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；记录 5 条短线索；若线索涉及签名、字迹或契约，判定 +1；耐久 5",
+      "item_type": "tool",
+      "effect": "记录 5 条短线索；若线索涉及签名、字迹或契约，判定 +1；耐久 5",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：republican；槽位 accessory；记录 5 条短线索；若线索涉及签名、字迹或契约，判定 +1；耐久 5",
+        "text": "记录 5 条短线索；若线索涉及签名、字迹或契约，判定 +1；耐久 5",
         "durability": 5
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "线索",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "republican"
@@ -2279,11 +2215,10 @@
       "name": "巡捕房袖章",
       "rarity": "D",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；巡捕房、码头、街巷盘查场景社交伪装 +1；被正式警员核验失败时暴露度 +1，耐久 4",
+      "item_type": "tool",
+      "effect": "巡捕房、码头、街巷盘查场景社交伪装 +1；被正式警员核验失败时暴露度 +1，耐久 4",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：republican；槽位 accessory；巡捕房、码头、街巷盘查场景社交伪装 +1；被正式警员核验失败时暴露度 +1，耐久 4",
+        "text": "巡捕房、码头、街巷盘查场景社交伪装 +1；被正式警员核验失败时暴露度 +1，耐久 4",
         "durability": 4
       },
       "requirements": {},
@@ -2292,7 +2227,7 @@
       },
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "republican"
@@ -2317,10 +2252,9 @@
       "rarity": "D",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "戏院/茶楼副本中校验一次座位、场次、演员或入场时间矛盾；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：republican；戏院/茶楼副本中校验一次座位、场次、演员或入场时间矛盾；一次性"
+        "text": "戏院/茶楼副本中校验一次座位、场次、演员或入场时间矛盾；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -2350,11 +2284,10 @@
       "name": "黄包车铜牌",
       "rarity": "D",
       "category": "工具类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；街巷、码头、租界移动路线询问判定 +1；被车夫行会盘问失败时暴露度 +1，耐久 5",
+      "item_type": "tool",
+      "effect": "街巷、码头、租界移动路线询问判定 +1；被车夫行会盘问失败时暴露度 +1，耐久 5",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：republican；槽位 accessory；街巷、码头、租界移动路线询问判定 +1；被车夫行会盘问失败时暴露度 +1，耐久 5",
+        "text": "街巷、码头、租界移动路线询问判定 +1；被车夫行会盘问失败时暴露度 +1，耐久 5",
         "durability": 5
       },
       "requirements": {},
@@ -2363,7 +2296,7 @@
       },
       "tags": [
         "工具",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "republican"
@@ -2388,10 +2321,9 @@
       "rarity": "D",
       "category": "探查类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "显影一次照片、影子或镜中人数矛盾；使用后 SAN -2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：republican；显影一次照片、影子或镜中人数矛盾；使用后 SAN -2；一次性"
+        "text": "显影一次照片、影子或镜中人数矛盾；使用后 SAN -2；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -2424,10 +2356,9 @@
       "rarity": "D",
       "category": "工具类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "点燃蜡烛、纸符或油灯，3 轮内黑暗观察惩罚 -1；潮湿时 50% 失效；可用 3 次",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：republican/ancient；点燃蜡烛、纸符或油灯，3 轮内黑暗观察惩罚 -1；潮湿时 50% 失效；可用 3 次",
+        "text": "点燃蜡烛、纸符或油灯，3 轮内黑暗观察惩罚 -1；潮湿时 50% 失效；可用 3 次",
         "uses": 3
       },
       "requirements": {},
@@ -2460,10 +2391,9 @@
       "rarity": "D",
       "category": "防护类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "包裹一份粉末、药渣或小型证物，防止普通气味/湿气污染；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：republican/ancient；包裹一份粉末、药渣或小型证物，防止普通气味/湿气污染；一次性"
+        "text": "包裹一份粉末、药渣或小型证物，防止普通气味/湿气污染；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -2495,10 +2425,9 @@
       "rarity": "C",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "非战斗中恢复 60 HP，并移除 `轻伤`；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；非战斗中恢复 60 HP，并移除 `轻伤`；一次性",
+        "text": "非战斗中恢复 60 HP，并移除 `轻伤`；一次性",
         "hp_restore": 60,
         "remove_conditions": [
           "轻伤"
@@ -2533,10 +2462,9 @@
       "rarity": "C",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 60 SAN，并移除 `动摇`；若在安全节点使用，额外恢复 `spi_current +1`，不超过上限；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；恢复 60 SAN，并移除 `动摇`；若在安全节点使用，额外恢复 `spi_current +1`，不超过上限；一次性",
+        "text": "恢复 60 SAN，并移除 `动摇`；若在安全节点使用，额外恢复 `spi_current +1`，不超过上限；一次性",
         "san_restore": 60,
         "spi_restore": 1,
         "remove_conditions": [
@@ -2570,10 +2498,9 @@
       "rarity": "C",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 45 HP；可在非战斗中移除一次轻微流血或感染风险；可用 2 次",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；恢复 45 HP；可在非战斗中移除一次轻微流血或感染风险；可用 2 次",
+        "text": "恢复 45 HP；可在非战斗中移除一次轻微流血或感染风险；可用 2 次",
         "hp_restore": 45,
         "uses": 2
       },
@@ -2606,10 +2533,9 @@
       "rarity": "C",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 50 SAN；3 轮内第一次恐惧、梦魇或迷香判定 +2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/republican；恢复 50 SAN；3 轮内第一次恐惧、梦魇或迷香判定 +2；一次性",
+        "text": "恢复 50 SAN；3 轮内第一次恐惧、梦魇或迷香判定 +2；一次性",
         "san_restore": 50
       },
       "requirements": {},
@@ -2642,10 +2568,9 @@
       "rarity": "C",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "移除 1 层疲劳，并恢复 25 HP；只能在安全节点或短休时使用；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/republican；移除 1 层疲劳，并恢复 25 HP；只能在安全节点或短休时使用；一次性",
+        "text": "移除 1 层疲劳，并恢复 25 HP；只能在安全节点或短休时使用；一次性",
         "hp_restore": 25
       },
       "requirements": {
@@ -2678,10 +2603,9 @@
       "rarity": "C",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "3 轮内低级污染伤害 -3；若已经有轻度污染，额外让下一次污染判定 +2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；3 轮内低级污染伤害 -3；若已经有轻度污染，额外让下一次污染判定 +2；一次性"
+        "text": "3 轮内低级污染伤害 -3；若已经有轻度污染，额外让下一次污染判定 +2；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -2712,10 +2636,9 @@
       "rarity": "C",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 40 SAN；3 轮内第一次 `spi_current` 消耗减少 1，最低仍消耗 1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/universal；恢复 40 SAN；3 轮内第一次 `spi_current` 消耗减少 1，最低仍消耗 1；一次性",
+        "text": "恢复 40 SAN；3 轮内第一次 `spi_current` 消耗减少 1，最低仍消耗 1；一次性",
         "san_restore": 40
       },
       "requirements": {},
@@ -2747,18 +2670,17 @@
       "name": "下雨也要上班的加厚雨披",
       "rarity": "C",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；抵消雨水、血迹、低级体液污染或酸性泼洒，减伤 4；遇到火源风险 +1，耐久 10",
+      "item_type": "tool",
+      "effect": "抵消雨水、血迹、低级体液污染或酸性泼洒，减伤 4；遇到火源风险 +1，耐久 10",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 armor；抵消雨水、血迹、低级体液污染或酸性泼洒，减伤 4；遇到火源风险 +1，耐久 10",
+        "text": "抵消雨水、血迹、低级体液污染或酸性泼洒，减伤 4；遇到火源风险 +1，耐久 10",
         "durability": 10
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -2782,18 +2704,17 @@
       "name": "夹棉护身袄",
       "rarity": "C",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；寒冷、抓挠、跌撞类 HP 伤害 -4；潮湿后防护减半，耐久 10",
+      "item_type": "tool",
+      "effect": "寒冷、抓挠、跌撞类 HP 伤害 -4；潮湿后防护减半，耐久 10",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：ancient/republican；槽位 armor；寒冷、抓挠、跌撞类 HP 伤害 -4；潮湿后防护减半，耐久 10",
+        "text": "寒冷、抓挠、跌撞类 HP 伤害 -4；潮湿后防护减半，耐久 10",
         "durability": 10
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -2818,18 +2739,17 @@
       "name": "铁皮护心镜",
       "rarity": "C",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；抵消一次胸口、背后或飞来物轻中伤，减伤 5；耐久 8",
+      "item_type": "tool",
+      "effect": "抵消一次胸口、背后或飞来物轻中伤，减伤 5；耐久 8",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：ancient/republican；槽位 armor；抵消一次胸口、背后或飞来物轻中伤，减伤 5；耐久 8",
+        "text": "抵消一次胸口、背后或飞来物轻中伤，减伤 5；耐久 8",
         "durability": 8
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -2854,11 +2774,10 @@
       "name": "厚胶手套",
       "rarity": "C",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；接触电线、腐蚀液、血迹或污染物时判定 +2；每次接触耐久 -1，耐久 8",
+      "item_type": "tool",
+      "effect": "接触电线、腐蚀液、血迹或污染物时判定 +2；每次接触耐久 -1，耐久 8",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 offhand_weapon；接触电线、腐蚀液、血迹或污染物时判定 +2；每次接触耐久 -1，耐久 8",
+        "text": "接触电线、腐蚀液、血迹或污染物时判定 +2；每次接触耐久 -1，耐久 8",
         "durability": 8
       },
       "requirements": {},
@@ -2867,7 +2786,7 @@
       },
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -2892,10 +2811,9 @@
       "rarity": "C",
       "category": "防护类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "贴在门、窗或床帐处，2 轮内低级灵体进入判定 DC +2；被强行撕开后失效；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/universal；贴在门、窗或床帐处，2 轮内低级灵体进入判定 DC +2；被强行撕开后失效；一次性"
+        "text": "贴在门、窗或床帐处，2 轮内低级灵体进入判定 DC +2；被强行撕开后失效；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -2926,11 +2844,10 @@
       "name": "护目风镜",
       "rarity": "C",
       "category": "防护类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；烟尘、强光、飞溅液体造成的观察惩罚 -2；镜面异常首次触发时 SAN -5，耐久 7",
+      "item_type": "tool",
+      "effect": "烟尘、强光、飞溅液体造成的观察惩罚 -2；镜面异常首次触发时 SAN -5，耐久 7",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：modern/republican；槽位 accessory；烟尘、强光、飞溅液体造成的观察惩罚 -2；镜面异常首次触发时 SAN -5，耐久 7",
+        "text": "烟尘、强光、飞溅液体造成的观察惩罚 -2；镜面异常首次触发时 SAN -5，耐久 7",
         "durability": 7
       },
       "requirements": {},
@@ -2939,7 +2856,7 @@
       },
       "tags": [
         "防护",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -2964,11 +2881,10 @@
       "name": "旧式防毒面罩",
       "rarity": "C",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；毒雾、灰尘、腐臭环境 3 轮内行动惩罚 -2；使用后耐久 -1，耐久 6",
+      "item_type": "tool",
+      "effect": "毒雾、灰尘、腐臭环境 3 轮内行动惩罚 -2；使用后耐久 -1，耐久 6",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern/republican；槽位 accessory；毒雾、灰尘、腐臭环境 3 轮内行动惩罚 -2；使用后耐久 -1，耐久 6",
+        "text": "毒雾、灰尘、腐臭环境 3 轮内行动惩罚 -2；使用后耐久 -1，耐久 6",
         "durability": 6
       },
       "requirements": {},
@@ -2977,7 +2893,7 @@
       },
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -3002,18 +2918,17 @@
       "name": "只录倒霉话的录音笔",
       "rarity": "C",
       "category": "线索类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；保存一段 3 轮以内的声音线索，防止普通记忆干扰；电磁异常中使用失败率 +30%，耐久 6",
+      "item_type": "tool",
+      "effect": "保存一段 3 轮以内的声音线索，防止普通记忆干扰；电磁异常中使用失败率 +30%，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 accessory；保存一段 3 轮以内的声音线索，防止普通记忆干扰；电磁异常中使用失败率 +30%，耐久 6",
+        "text": "保存一段 3 轮以内的声音线索，防止普通记忆干扰；电磁异常中使用失败率 +30%，耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "线索",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -3037,11 +2952,10 @@
       "name": "拍完才多一个人的老照相机",
       "rarity": "C",
       "category": "线索类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；拍下一处场景，后续校验人物、影子或门窗变化判定 +2；闪光会增加暴露度 +1，耐久 6",
+      "item_type": "tool",
+      "effect": "拍下一处场景，后续校验人物、影子或门窗变化判定 +2；闪光会增加暴露度 +1，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：republican/modern；槽位 accessory；拍下一处场景，后续校验人物、影子或门窗变化判定 +2；闪光会增加暴露度 +1，耐久 6",
+        "text": "拍下一处场景，后续校验人物、影子或门窗变化判定 +2；闪光会增加暴露度 +1，耐久 6",
         "durability": 6
       },
       "requirements": {},
@@ -3050,7 +2964,7 @@
       },
       "tags": [
         "线索",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "republican",
@@ -3076,10 +2990,9 @@
       "rarity": "C",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "打开低级账房、柜台或暗格；若目标不是账目/信件类容器，判定只 +1；使用后 50% 损坏",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/republican；打开低级账房、柜台或暗格；若目标不是账目/信件类容器，判定只 +1；使用后 50% 损坏"
+        "text": "打开低级账房、柜台或暗格；若目标不是账目/信件类容器，判定只 +1；使用后 50% 损坏"
       },
       "requirements": {},
       "use_cost": {},
@@ -3111,10 +3024,9 @@
       "rarity": "C",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "校验一次失踪者姓名、照片、画像或时间线矛盾；成功时探索度 +2；使用后 SAN -3；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；校验一次失踪者姓名、照片、画像或时间线矛盾；成功时探索度 +2；使用后 SAN -3；一次性"
+        "text": "校验一次失踪者姓名、照片、画像或时间线矛盾；成功时探索度 +2；使用后 SAN -3；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -3146,18 +3058,17 @@
       "name": "证物牛皮袋",
       "rarity": "C",
       "category": "线索类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；保存 2 件小型证物，防止普通水渍、血迹或低级篡改污染；耐久 6",
+      "item_type": "tool",
+      "effect": "保存 2 件小型证物，防止普通水渍、血迹或低级篡改污染；耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern/republican；槽位 accessory；保存 2 件小型证物，防止普通水渍、血迹或低级篡改污染；耐久 6",
+        "text": "保存 2 件小型证物，防止普通水渍、血迹或低级篡改污染；耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "线索",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -3183,10 +3094,9 @@
       "rarity": "C",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "校验一次亲属关系、祖先牌位、继承顺序或姓名禁忌；成功时获得一个家族线索标签；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient；校验一次亲属关系、祖先牌位、继承顺序或姓名禁忌；成功时获得一个家族线索标签；一次性"
+        "text": "校验一次亲属关系、祖先牌位、继承顺序或姓名禁忌；成功时获得一个家族线索标签；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -3216,18 +3126,17 @@
       "name": "报馆排字盒",
       "rarity": "C",
       "category": "线索类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；对报纸、印刷、错字、匿名信线索判定 +2；若暴露携带，社交伪装 -1，耐久 6",
+      "item_type": "tool",
+      "effect": "对报纸、印刷、错字、匿名信线索判定 +2；若暴露携带，社交伪装 -1，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：republican；槽位 accessory；对报纸、印刷、错字、匿名信线索判定 +2；若暴露携带，社交伪装 -1，耐久 6",
+        "text": "对报纸、印刷、错字、匿名信线索判定 +2；若暴露携带，社交伪装 -1，耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "线索",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "republican"
@@ -3251,11 +3160,10 @@
       "name": "越怕越亮的低噪手电",
       "rarity": "C",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；黑暗观察惩罚 -2，异常源方向提示 +1；每轮使用耐久 -1，耐久 8",
+      "item_type": "tool",
+      "effect": "黑暗观察惩罚 -2，异常源方向提示 +1；每轮使用耐久 -1，耐久 8",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 offhand_weapon；黑暗观察惩罚 -2，异常源方向提示 +1；每轮使用耐久 -1，耐久 8",
+        "text": "黑暗观察惩罚 -2，异常源方向提示 +1；每轮使用耐久 -1，耐久 8",
         "durability": 8
       },
       "requirements": {},
@@ -3264,7 +3172,7 @@
       },
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -3288,18 +3196,17 @@
       "name": "铜铃探路串",
       "rarity": "C",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；经过门槛、井口、棺木、楼梯时，若存在低级空间异常获得一次提示；响动会暴露位置，耐久 6",
+      "item_type": "tool",
+      "effect": "经过门槛、井口、棺木、楼梯时，若存在低级空间异常获得一次提示；响动会暴露位置，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：ancient/universal；槽位 accessory；经过门槛、井口、棺木、楼梯时，若存在低级空间异常获得一次提示；响动会暴露位置，耐久 6",
+        "text": "经过门槛、井口、棺木、楼梯时，若存在低级空间异常获得一次提示；响动会暴露位置，耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -3324,11 +3231,10 @@
       "name": "罗盘裂针",
       "rarity": "C",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；定位一处阴气、磁场或方向异常，相关探查 +2；强污染区域首次使用 SAN -5，耐久 6",
+      "item_type": "tool",
+      "effect": "定位一处阴气、磁场或方向异常，相关探查 +2；强污染区域首次使用 SAN -5，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：ancient/republican；槽位 accessory；定位一处阴气、磁场或方向异常，相关探查 +2；强污染区域首次使用 SAN -5，耐久 6",
+        "text": "定位一处阴气、磁场或方向异常，相关探查 +2；强污染区域首次使用 SAN -5，耐久 6",
         "durability": 6
       },
       "requirements": {},
@@ -3337,7 +3243,7 @@
       },
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -3362,18 +3268,17 @@
       "name": "巡夜煤油灯",
       "rarity": "C",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；3 轮内黑暗观察惩罚 -2，并能照出低级脚印/拖痕；遇风雨耐久额外 -1，耐久 7",
+      "item_type": "tool",
+      "effect": "3 轮内黑暗观察惩罚 -2，并能照出低级脚印/拖痕；遇风雨耐久额外 -1，耐久 7",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：ancient/republican；槽位 offhand_weapon；3 轮内黑暗观察惩罚 -2，并能照出低级脚印/拖痕；遇风雨耐久额外 -1，耐久 7",
+        "text": "3 轮内黑暗观察惩罚 -2，并能照出低级脚印/拖痕；遇风雨耐久额外 -1，耐久 7",
         "durability": 7
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -3399,10 +3304,9 @@
       "rarity": "C",
       "category": "探查类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "3 轮内检测活物、余温、隐藏管道或墙后热源判定 +2；低温异常场景效果减半；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；3 轮内检测活物、余温、隐藏管道或墙后热源判定 +2；低温异常场景效果减半；一次性"
+        "text": "3 轮内检测活物、余温、隐藏管道或墙后热源判定 +2；低温异常场景效果减半；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -3432,11 +3336,10 @@
       "name": "闹鬼频段收音机",
       "rarity": "C",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；接近广播、电话、电台、哭声类异常时获得方向提示；每次提示 SAN -3，耐久 6",
+      "item_type": "tool",
+      "effect": "接近广播、电话、电台、哭声类异常时获得方向提示；每次提示 SAN -3，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern/republican；槽位 accessory；接近广播、电话、电台、哭声类异常时获得方向提示；每次提示 SAN -3，耐久 6",
+        "text": "接近广播、电话、电台、哭声类异常时获得方向提示；每次提示 SAN -3，耐久 6",
         "durability": 6
       },
       "requirements": {},
@@ -3445,7 +3348,7 @@
       },
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -3470,11 +3373,10 @@
       "name": "消防斧",
       "rarity": "C",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 12；破门、砍断木板、威慑判定 +3；连续使用 2 次后疲劳 +1，耐久 10",
+      "item_type": "tool",
+      "effect": "str_min 12；破门、砍断木板、威慑判定 +3；连续使用 2 次后疲劳 +1，耐久 10",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern/republican；槽位 main_weapon；str_min 12；破门、砍断木板、威慑判定 +3；连续使用 2 次后疲劳 +1，耐久 10",
+        "text": "str_min 12；破门、砍断木板、威慑判定 +3；连续使用 2 次后疲劳 +1，耐久 10",
         "durability": 10
       },
       "requirements": {
@@ -3485,7 +3387,7 @@
       },
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -3510,11 +3412,10 @@
       "name": "镖局短棍",
       "rarity": "C",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 10；近战压制、推开、格挡判定 +2；对灵体无效，耐久 10",
+      "item_type": "tool",
+      "effect": "str_min 10；近战压制、推开、格挡判定 +2；对灵体无效，耐久 10",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：ancient/republican；槽位 main_weapon；str_min 10；近战压制、推开、格挡判定 +2；对灵体无效，耐久 10",
+        "text": "str_min 10；近战压制、推开、格挡判定 +2；对灵体无效，耐久 10",
         "durability": 10
       },
       "requirements": {
@@ -3523,7 +3424,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -3548,11 +3449,10 @@
       "name": "桃木短剑",
       "rarity": "C",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；spi_current_min 6；对低级灵体、纸人、影子类目标判定 +3；每次命中 SAN -2，耐久 7",
+      "item_type": "tool",
+      "effect": "spi_current_min 6；对低级灵体、纸人、影子类目标判定 +3；每次命中 SAN -2，耐久 7",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：ancient/universal；槽位 offhand_weapon；spi_current_min 6；对低级灵体、纸人、影子类目标判定 +3；每次命中 SAN -2，耐久 7",
+        "text": "spi_current_min 6；对低级灵体、纸人、影子类目标判定 +3；每次命中 SAN -2，耐久 7",
         "durability": 7
       },
       "requirements": {
@@ -3563,7 +3463,7 @@
       },
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -3588,11 +3488,10 @@
       "name": "物业说打不开也赔的加固撬棍",
       "rarity": "C",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 10；开锁、撬门、拆卸栅栏判定 +3；失败时耐久额外 -1，耐久 9",
+      "item_type": "tool",
+      "effect": "str_min 10；开锁、撬门、拆卸栅栏判定 +3；失败时耐久额外 -1，耐久 9",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern/universal；槽位 main_weapon；str_min 10；开锁、撬门、拆卸栅栏判定 +3；失败时耐久额外 -1，耐久 9",
+        "text": "str_min 10；开锁、撬门、拆卸栅栏判定 +3；失败时耐久额外 -1，耐久 9",
         "durability": 9
       },
       "requirements": {
@@ -3601,7 +3500,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -3626,11 +3525,10 @@
       "name": "折叠工兵铲",
       "rarity": "C",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 10；挖掘、破土、清障、近战判定 +2；狭窄空间行动 DC +1，耐久 9",
+      "item_type": "tool",
+      "effect": "str_min 10；挖掘、破土、清障、近战判定 +2；狭窄空间行动 DC +1，耐久 9",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern/republican；槽位 main_weapon；str_min 10；挖掘、破土、清障、近战判定 +2；狭窄空间行动 DC +1，耐久 9",
+        "text": "str_min 10；挖掘、破土、清障、近战判定 +2；狭窄空间行动 DC +1，耐久 9",
         "durability": 9
       },
       "requirements": {
@@ -3639,7 +3537,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -3664,11 +3562,10 @@
       "name": "墨斗线",
       "rarity": "C",
       "category": "工具类",
-      "item_type": "equippable_tool",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；标记一条直线或门槛，2 轮内低级空间偏移判定 DC +2；使用后耐久 -1，耐久 5",
+      "item_type": "tool",
+      "effect": "标记一条直线或门槛，2 轮内低级空间偏移判定 DC +2；使用后耐久 -1，耐久 5",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：ancient/republican；槽位 offhand_weapon；标记一条直线或门槛，2 轮内低级空间偏移判定 DC +2；使用后耐久 -1，耐久 5",
+        "text": "标记一条直线或门槛，2 轮内低级空间偏移判定 DC +2；使用后耐久 -1，耐久 5",
         "durability": 5
       },
       "requirements": {},
@@ -3677,7 +3574,7 @@
       },
       "tags": [
         "工具",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -3703,10 +3600,9 @@
       "rarity": "C",
       "category": "伪装类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "3 轮内身份暴露度 -2；遇到 B 级以上身份系统时必须额外判定，失败暴露度 +2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/republican；3 轮内身份暴露度 -2；遇到 B 级以上身份系统时必须额外判定，失败暴露度 +2；一次性"
+        "text": "3 轮内身份暴露度 -2；遇到 B 级以上身份系统时必须额外判定，失败暴露度 +2；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -3740,10 +3636,9 @@
       "rarity": "C",
       "category": "伪装类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "宴会、戏院、茶楼、公馆类场景入场判定 +2；被主人或管事核验失败时暴露度 +2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：republican/ancient；宴会、戏院、茶楼、公馆类场景入场判定 +2；被主人或管事核验失败时暴露度 +2；一次性"
+        "text": "宴会、戏院、茶楼、公馆类场景入场判定 +2；被主人或管事核验失败时暴露度 +2；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -3776,18 +3671,17 @@
       "name": "香客木牌",
       "rarity": "C",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；寺观、祠堂、庙会类场景社交伪装 +2；对官府、军警场景无效，耐久 6",
+      "item_type": "tool",
+      "effect": "寺观、祠堂、庙会类场景社交伪装 +2；对官府、军警场景无效，耐久 6",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：ancient；槽位 accessory；寺观、祠堂、庙会类场景社交伪装 +2；对官府、军警场景无效，耐久 6",
+        "text": "寺观、祠堂、庙会类场景社交伪装 +2；对官府、军警场景无效，耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "ancient"
@@ -3811,11 +3705,10 @@
       "name": "维修工马甲",
       "rarity": "C",
       "category": "伪装类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；后勤、机房、电梯、地下车库场景伪装 +2；被要求出示工单时若无对应线索，暴露度 +1，耐久 8",
+      "item_type": "tool",
+      "effect": "后勤、机房、电梯、地下车库场景伪装 +2；被要求出示工单时若无对应线索，暴露度 +1，耐久 8",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 armor；后勤、机房、电梯、地下车库场景伪装 +2；被要求出示工单时若无对应线索，暴露度 +1，耐久 8",
+        "text": "后勤、机房、电梯、地下车库场景伪装 +2；被要求出示工单时若无对应线索，暴露度 +1，耐久 8",
         "durability": 8
       },
       "requirements": {},
@@ -3824,7 +3717,7 @@
       },
       "tags": [
         "伪装",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -3848,11 +3741,10 @@
       "name": "码头通行木牌",
       "rarity": "C",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；码头、仓库、船坞场景通行判定 +2；被帮派或官差核验失败时暴露度 +2，耐久 5",
+      "item_type": "tool",
+      "effect": "码头、仓库、船坞场景通行判定 +2；被帮派或官差核验失败时暴露度 +2，耐久 5",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：ancient/republican；槽位 accessory；码头、仓库、船坞场景通行判定 +2；被帮派或官差核验失败时暴露度 +2，耐久 5",
+        "text": "码头、仓库、船坞场景通行判定 +2；被帮派或官差核验失败时暴露度 +2，耐久 5",
         "durability": 5
       },
       "requirements": {},
@@ -3861,7 +3753,7 @@
       },
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -3887,10 +3779,9 @@
       "rarity": "C",
       "category": "规则类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "贴在门、柜、棺、镜之一上，1 轮内隔离一条低级规则触发；使用后 SAN -6，失败时威胁时钟 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；贴在门、柜、棺、镜之一上，1 轮内隔离一条低级规则触发；使用后 SAN -6，失败时威胁时钟 +1；一次性"
+        "text": "贴在门、柜、棺、镜之一上，1 轮内隔离一条低级规则触发；使用后 SAN -6，失败时威胁时钟 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -3923,11 +3814,10 @@
       "name": "听见规则咳嗽的听诊器",
       "rarity": "C",
       "category": "规则类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；验证一条低级公开规则是否正在生效，只返回生效/未生效/不完整；每次使用 SAN -4，耐久 5",
+      "item_type": "tool",
+      "effect": "验证一条低级公开规则是否正在生效，只返回生效/未生效/不完整；每次使用 SAN -4，耐久 5",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern/universal；槽位 accessory；验证一条低级公开规则是否正在生效，只返回生效/未生效/不完整；每次使用 SAN -4，耐久 5",
+        "text": "验证一条低级公开规则是否正在生效，只返回生效/未生效/不完整；每次使用 SAN -4，耐久 5",
         "durability": 5
       },
       "requirements": {},
@@ -3936,7 +3826,7 @@
       },
       "tags": [
         "规则",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -3961,11 +3851,10 @@
       "name": "染黑的铜镜",
       "rarity": "C",
       "category": "规则类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；抵消一次低级镜面误认或倒影诱导；触发后耐久 -1，并 SAN -5，耐久 3",
+      "item_type": "tool",
+      "effect": "抵消一次低级镜面误认或倒影诱导；触发后耐久 -1，并 SAN -5，耐久 3",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：ancient/republican；槽位 accessory；抵消一次低级镜面误认或倒影诱导；触发后耐久 -1，并 SAN -5，耐久 3",
+        "text": "抵消一次低级镜面误认或倒影诱导；触发后耐久 -1，并 SAN -5，耐久 3",
         "durability": 3
       },
       "requirements": {},
@@ -3975,7 +3864,7 @@
       },
       "tags": [
         "规则",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -4001,10 +3890,9 @@
       "rarity": "C",
       "category": "位移类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "从二层以内窗口、阳台、墙头移动到相邻安全节点，不能用于最终撤离；使用后疲劳 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/republican；从二层以内窗口、阳台、墙头移动到相邻安全节点，不能用于最终撤离；使用后疲劳 +1；一次性"
+        "text": "从二层以内窗口、阳台、墙头移动到相邻安全节点，不能用于最终撤离；使用后疲劳 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -4036,10 +3924,9 @@
       "rarity": "C",
       "category": "位移类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "在驿站、码头、车站类节点中转到相邻公共节点；不能跳过主线封锁；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/republican；在驿站、码头、车站类节点中转到相邻公共节点；不能跳过主线封锁；一次性"
+        "text": "在驿站、码头、车站类节点中转到相邻公共节点；不能跳过主线封锁；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -4071,10 +3958,9 @@
       "rarity": "C",
       "category": "材料类",
       "item_type": "material",
-      "equip_slot": null,
-      "effect": "用于 C 级装备维修、D 级装备锻造或低阶进化媒介合成；不可在副本内直接使用；可堆叠",
+      "effect": "用于 C 级道具维护、D 级道具调校或低阶进化媒介合成；不可在副本内直接使用；可堆叠",
       "effect_json": {
-        "text": "物品形态：材料；时代标签：universal；用于 C 级装备维修、D 级装备锻造或低阶进化媒介合成；不可在副本内直接使用；可堆叠"
+        "text": "用于 C 级道具维护、D 级道具调校或低阶进化媒介合成；不可在副本内直接使用；可堆叠"
       },
       "requirements": {},
       "use_cost": {},
@@ -4104,10 +3990,9 @@
       "rarity": "C",
       "category": "结算类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "结算时将 1 件 D 级未损坏通用道具按 60% 估值回收为积分；每次结算最多使用 1 张",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：universal；结算时将 1 件 D 级未损坏通用道具按 60% 估值回收为积分；每次结算最多使用 1 张"
+        "text": "结算时将 1 件 D 级未损坏通用道具按 60% 估值回收为积分；每次结算最多使用 1 张"
       },
       "requirements": {},
       "use_cost": {},
@@ -4136,10 +4021,9 @@
       "rarity": "B",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "非战斗中恢复 100 HP，并移除 `重伤` 或 2 个轻微伤势标记；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；非战斗中恢复 100 HP，并移除 `重伤` 或 2 个轻微伤势标记；一次性",
+        "text": "非战斗中恢复 100 HP，并移除 `重伤` 或 2 个轻微伤势标记；一次性",
         "hp_restore": 100,
         "remove_conditions": [
           "重伤"
@@ -4174,10 +4058,9 @@
       "rarity": "B",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 100 SAN，并移除 `恐慌` 或 `动摇`；若在安全节点使用，额外恢复 `spi_current +2`，不超过上限；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；恢复 100 SAN，并移除 `恐慌` 或 `动摇`；若在安全节点使用，额外恢复 `spi_current +2`，不超过上限；一次性",
+        "text": "恢复 100 SAN，并移除 `恐慌` 或 `动摇`；若在安全节点使用，额外恢复 `spi_current +2`，不超过上限；一次性",
         "san_restore": 100,
         "spi_restore": 2,
         "remove_conditions": [
@@ -4211,10 +4094,9 @@
       "rarity": "B",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "非战斗中恢复 80 HP，移除流血/骨裂/感染风险之一；使用后 2 轮敏捷判定 -1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/republican；非战斗中恢复 80 HP，移除流血/骨裂/感染风险之一；使用后 2 轮敏捷判定 -1；一次性",
+        "text": "非战斗中恢复 80 HP，移除流血/骨裂/感染风险之一；使用后 2 轮敏捷判定 -1；一次性",
         "hp_restore": 80
       },
       "requirements": {},
@@ -4247,10 +4129,9 @@
       "rarity": "B",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "恢复 80 SAN；3 轮内第一次幻觉、迷香、梦魇或低级心智诱导判定 +3；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/republican；恢复 80 SAN；3 轮内第一次幻觉、迷香、梦魇或低级心智诱导判定 +3；一次性",
+        "text": "恢复 80 SAN；3 轮内第一次幻觉、迷香、梦魇或低级心智诱导判定 +3；一次性",
         "san_restore": 80
       },
       "requirements": {},
@@ -4283,10 +4164,9 @@
       "rarity": "B",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "移除 1 层轻度污染，或 4 轮内污染伤害 -6；使用后疲劳 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；移除 1 层轻度污染，或 4 轮内污染伤害 -6；使用后疲劳 +1；一次性"
+        "text": "移除 1 层轻度污染，或 4 轮内污染伤害 -6；使用后疲劳 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -4319,10 +4199,9 @@
       "rarity": "B",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "3 轮内力量或敏捷相关行动 +3，结束后疲劳 +2 且 SAN -8；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/universal；3 轮内力量或敏捷相关行动 +3，结束后疲劳 +2 且 SAN -8；一次性"
+        "text": "3 轮内力量或敏捷相关行动 +3，结束后疲劳 +2 且 SAN -8；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -4356,11 +4235,10 @@
       "name": "防爆透明盾",
       "rarity": "B",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；str_min 12；正面投掷物、冲撞、破片伤害 -8；连续格挡 2 次后行动 DC +1，耐久 12",
+      "item_type": "tool",
+      "effect": "str_min 12；正面投掷物、冲撞、破片伤害 -8；连续格挡 2 次后行动 DC +1，耐久 12",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern/republican；槽位 offhand_weapon；str_min 12；正面投掷物、冲撞、破片伤害 -8；连续格挡 2 次后行动 DC +1，耐久 12",
+        "text": "str_min 12；正面投掷物、冲撞、破片伤害 -8；连续格挡 2 次后行动 DC +1，耐久 12",
         "durability": 12
       },
       "requirements": {
@@ -4369,7 +4247,7 @@
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -4394,18 +4272,17 @@
       "name": "租界防弹马甲",
       "rarity": "B",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；枪击、穿刺、碎片类 HP 伤害 -8；火焰/灵体伤害无效，耐久 10",
+      "item_type": "tool",
+      "effect": "枪击、穿刺、碎片类 HP 伤害 -8；火焰/灵体伤害无效，耐久 10",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern/republican；槽位 armor；枪击、穿刺、碎片类 HP 伤害 -8；火焰/灵体伤害无效，耐久 10",
+        "text": "枪击、穿刺、碎片类 HP 伤害 -8；火焰/灵体伤害无效，耐久 10",
         "durability": 10
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -4430,11 +4307,10 @@
       "name": "铜钱护腕",
       "rarity": "B",
       "category": "防护类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；低级诅咒、缠身、牵引类判定 +3；每次触发 SAN -3，耐久 8",
+      "item_type": "tool",
+      "effect": "低级诅咒、缠身、牵引类判定 +3；每次触发 SAN -3，耐久 8",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：ancient/republican；槽位 accessory；低级诅咒、缠身、牵引类判定 +3；每次触发 SAN -3，耐久 8",
+        "text": "低级诅咒、缠身、牵引类判定 +3；每次触发 SAN -3，耐久 8",
         "durability": 8
       },
       "requirements": {},
@@ -4443,7 +4319,7 @@
       },
       "tags": [
         "防护",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -4468,11 +4344,10 @@
       "name": "阴刻护心符",
       "rarity": "B",
       "category": "防护类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；抵消一次心口、背刺、梦中惊醒造成的中等伤害，减伤 8；触发后污染 +2，耐久 3",
+      "item_type": "tool",
+      "effect": "抵消一次心口、背刺、梦中惊醒造成的中等伤害，减伤 8；触发后污染 +2，耐久 3",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：ancient/universal；槽位 accessory；抵消一次心口、背刺、梦中惊醒造成的中等伤害，减伤 8；触发后污染 +2，耐久 3",
+        "text": "抵消一次心口、背刺、梦中惊醒造成的中等伤害，减伤 8；触发后污染 +2，耐久 3",
         "durability": 3
       },
       "requirements": {},
@@ -4481,7 +4356,7 @@
       },
       "tags": [
         "防护",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -4506,18 +4381,17 @@
       "name": "抗污染雨衣",
       "rarity": "B",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；血雨、黑水、体液污染和低级酸蚀伤害 -6；遇火源或高温时伤害 +2，耐久 10",
+      "item_type": "tool",
+      "effect": "血雨、黑水、体液污染和低级酸蚀伤害 -6；遇火源或高温时伤害 +2，耐久 10",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：modern；槽位 armor；血雨、黑水、体液污染和低级酸蚀伤害 -6；遇火源或高温时伤害 +2，耐久 10",
+        "text": "血雨、黑水、体液污染和低级酸蚀伤害 -6；遇火源或高温时伤害 +2，耐久 10",
         "durability": 10
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -4541,18 +4415,17 @@
       "name": "夜巡黑斗篷",
       "rarity": "B",
       "category": "防护类",
-      "item_type": "armor",
-      "equip_slot": "armor",
-      "effect": "槽位 armor；夜间、雨巷、墓地、祠堂场景中潜行/躲藏 +3；正午或强光下无效，耐久 9",
+      "item_type": "tool",
+      "effect": "夜间、雨巷、墓地、祠堂场景中潜行/躲藏 +3；正午或强光下无效，耐久 9",
       "effect_json": {
-        "text": "物品形态：防具；时代标签：ancient/republican；槽位 armor；夜间、雨巷、墓地、祠堂场景中潜行/躲藏 +3；正午或强光下无效，耐久 9",
+        "text": "夜间、雨巷、墓地、祠堂场景中潜行/躲藏 +3；正午或强光下无效，耐久 9",
         "durability": 9
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "armor"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -4577,11 +4450,10 @@
       "name": "异常热源镜",
       "rarity": "B",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；4 轮内检测活物、余温、墙后热源、伪装尸体判定 +3；低温异常场景首次使用 SAN -5，耐久 7",
+      "item_type": "tool",
+      "effect": "4 轮内检测活物、余温、墙后热源、伪装尸体判定 +3；低温异常场景首次使用 SAN -5，耐久 7",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 accessory；4 轮内检测活物、余温、墙后热源、伪装尸体判定 +3；低温异常场景首次使用 SAN -5，耐久 7",
+        "text": "4 轮内检测活物、余温、墙后热源、伪装尸体判定 +3；低温异常场景首次使用 SAN -5，耐久 7",
         "durability": 7
       },
       "requirements": {},
@@ -4590,7 +4462,7 @@
       },
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -4614,18 +4486,17 @@
       "name": "旧案胶片盒",
       "rarity": "B",
       "category": "线索类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；保存 3 张场景影像，防止普通篡改；回看时可校验一次人物、影子、门窗或时间线矛盾 +3，耐久 6",
+      "item_type": "tool",
+      "effect": "保存 3 张场景影像，防止普通篡改；回看时可校验一次人物、影子、门窗或时间线矛盾 +3，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：republican/modern；槽位 accessory；保存 3 张场景影像，防止普通篡改；回看时可校验一次人物、影子、门窗或时间线矛盾 +3，耐久 6",
+        "text": "保存 3 张场景影像，防止普通篡改；回看时可校验一次人物、影子、门窗或时间线矛盾 +3，耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "线索",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "republican",
@@ -4651,10 +4522,9 @@
       "rarity": "B",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "医院类或排队规则场景中，锁定一次真实顺序/科室/叫号矛盾；成功时探索度 +3；使用后 SAN -5；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；医院类或排队规则场景中，锁定一次真实顺序/科室/叫号矛盾；成功时探索度 +3；使用后 SAN -5；一次性"
+        "text": "医院类或排队规则场景中，锁定一次真实顺序/科室/叫号矛盾；成功时探索度 +3；使用后 SAN -5；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -4686,11 +4556,10 @@
       "name": "祖传罗盘裂盘版",
       "rarity": "B",
       "category": "探查类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；定位一处中等阴气、空间偏移或方向异常，相关探查 +3；强污染区域使用污染 +2，耐久 6",
+      "item_type": "tool",
+      "effect": "定位一处中等阴气、空间偏移或方向异常，相关探查 +3；强污染区域使用污染 +2，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：ancient/republican；槽位 accessory；定位一处中等阴气、空间偏移或方向异常，相关探查 +3；强污染区域使用污染 +2，耐久 6",
+        "text": "定位一处中等阴气、空间偏移或方向异常，相关探查 +3；强污染区域使用污染 +2，耐久 6",
         "durability": 6
       },
       "requirements": {},
@@ -4699,7 +4568,7 @@
       },
       "tags": [
         "探查",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -4725,10 +4594,9 @@
       "rarity": "B",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "校验一次电梯楼层、停靠时间、监控盲区或失踪者移动路径；成功时探索度 +3；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；校验一次电梯楼层、停靠时间、监控盲区或失踪者移动路径；成功时探索度 +3；一次性"
+        "text": "校验一次电梯楼层、停靠时间、监控盲区或失踪者移动路径；成功时探索度 +3；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -4759,10 +4627,9 @@
       "rarity": "B",
       "category": "线索类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "校验一次官府判词、牢房顺序、夜审时间或犯人姓名禁忌；失败时暴露度 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient；校验一次官府判词、牢房顺序、夜审时间或犯人姓名禁忌；失败时暴露度 +1；一次性"
+        "text": "校验一次官府判词、牢房顺序、夜审时间或犯人姓名禁忌；失败时暴露度 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -4794,11 +4661,10 @@
       "name": "液压破门器",
       "rarity": "B",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 14；破门、顶开金属门、压制小型实体判定 +4；每次使用疲劳 +1，耐久 8",
+      "item_type": "tool",
+      "effect": "str_min 14；破门、顶开金属门、压制小型实体判定 +4；每次使用疲劳 +1，耐久 8",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern；槽位 main_weapon；str_min 14；破门、顶开金属门、压制小型实体判定 +4；每次使用疲劳 +1，耐久 8",
+        "text": "str_min 14；破门、顶开金属门、压制小型实体判定 +4；每次使用疲劳 +1，耐久 8",
         "durability": 8
       },
       "requirements": {
@@ -4809,7 +4675,7 @@
       },
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -4833,11 +4699,10 @@
       "name": "镇魂桃木锤",
       "rarity": "B",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；spi_current_min 7；对低中级灵体、纸人、影子目标判定 +4；每次命中 SAN -4，耐久 8",
+      "item_type": "tool",
+      "effect": "spi_current_min 7；对低中级灵体、纸人、影子目标判定 +4；每次命中 SAN -4，耐久 8",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：ancient/universal；槽位 main_weapon；spi_current_min 7；对低中级灵体、纸人、影子目标判定 +4；每次命中 SAN -4，耐久 8",
+        "text": "spi_current_min 7；对低中级灵体、纸人、影子目标判定 +4；每次命中 SAN -4，耐久 8",
         "durability": 8
       },
       "requirements": {
@@ -4848,7 +4713,7 @@
       },
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -4873,11 +4738,10 @@
       "name": "骨柄短刀",
       "rarity": "B",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；agi_min 12；近战挣脱、割断血线/发丝/软质封印 +3；每次攻击污染 +1，耐久 7",
+      "item_type": "tool",
+      "effect": "agi_min 12；近战挣脱、割断血线/发丝/软质封印 +3；每次攻击污染 +1，耐久 7",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：ancient/republican；槽位 offhand_weapon；agi_min 12；近战挣脱、割断血线/发丝/软质封印 +3；每次攻击污染 +1，耐久 7",
+        "text": "agi_min 12；近战挣脱、割断血线/发丝/软质封印 +3；每次攻击污染 +1，耐久 7",
         "durability": 7
       },
       "requirements": {
@@ -4888,7 +4752,7 @@
       },
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -4913,11 +4777,10 @@
       "name": "阴影钉枪",
       "rarity": "B",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 12；固定门板、影子边缘、移动家具或低级实体判定 +3；每次使用 SAN -3，耐久 7",
+      "item_type": "tool",
+      "effect": "str_min 12；固定门板、影子边缘、移动家具或低级实体判定 +3；每次使用 SAN -3，耐久 7",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：modern；槽位 main_weapon；str_min 12；固定门板、影子边缘、移动家具或低级实体判定 +3；每次使用 SAN -3，耐久 7",
+        "text": "str_min 12；固定门板、影子边缘、移动家具或低级实体判定 +3；每次使用 SAN -3，耐久 7",
         "durability": 7
       },
       "requirements": {
@@ -4928,7 +4791,7 @@
       },
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -4952,11 +4815,10 @@
       "name": "镖局铁尺",
       "rarity": "B",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；str_min 12；近战格挡、缴械、压制判定 +3；对无形目标无效，耐久 11",
+      "item_type": "tool",
+      "effect": "str_min 12；近战格挡、缴械、压制判定 +3；对无形目标无效，耐久 11",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：ancient/republican；槽位 main_weapon；str_min 12；近战格挡、缴械、压制判定 +3；对无形目标无效，耐久 11",
+        "text": "str_min 12；近战格挡、缴械、压制判定 +3；对无形目标无效，耐久 11",
         "durability": 11
       },
       "requirements": {
@@ -4965,7 +4827,7 @@
       "use_cost": {},
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -4990,18 +4852,17 @@
       "name": "报馆铅字匣",
       "rarity": "B",
       "category": "工具类",
-      "item_type": "equippable_tool",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；对报纸、印刷、匿名信、错字规则判定 +3；可重排一句 20 字内的普通文本线索，耐久 6",
+      "item_type": "tool",
+      "effect": "对报纸、印刷、匿名信、错字规则判定 +3；可重排一句 20 字内的普通文本线索，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：republican；槽位 offhand_weapon；对报纸、印刷、匿名信、错字规则判定 +3；可重排一句 20 字内的普通文本线索，耐久 6",
+        "text": "对报纸、印刷、匿名信、错字规则判定 +3；可重排一句 20 字内的普通文本线索，耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "工具",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "republican"
@@ -5025,11 +4886,10 @@
       "name": "临时调查员证",
       "rarity": "B",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；警局、医院、学校、物业类场景身份伪装 +3；遇 B+ 身份系统核验失败时暴露度 +3，耐久 5",
+      "item_type": "tool",
+      "effect": "警局、医院、学校、物业类场景身份伪装 +3；遇 B+ 身份系统核验失败时暴露度 +3，耐久 5",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：modern/republican；槽位 accessory；警局、医院、学校、物业类场景身份伪装 +3；遇 B+ 身份系统核验失败时暴露度 +3，耐久 5",
+        "text": "警局、医院、学校、物业类场景身份伪装 +3；遇 B+ 身份系统核验失败时暴露度 +3，耐久 5",
         "durability": 5
       },
       "requirements": {},
@@ -5038,7 +4898,7 @@
       },
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -5063,18 +4923,17 @@
       "name": "旧戏班脸谱",
       "rarity": "B",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；戏院、庙会、婚丧队伍场景伪装 +3；摘下后 1 轮社交伪装 -2，耐久 6",
+      "item_type": "tool",
+      "effect": "戏院、庙会、婚丧队伍场景伪装 +3；摘下后 1 轮社交伪装 -2，耐久 6",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：ancient/republican；槽位 accessory；戏院、庙会、婚丧队伍场景伪装 +3；摘下后 1 轮社交伪装 -2，耐久 6",
+        "text": "戏院、庙会、婚丧队伍场景伪装 +3；摘下后 1 轮社交伪装 -2，耐久 6",
         "durability": 6
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -5099,11 +4958,10 @@
       "name": "空房东钥匙串",
       "rarity": "B",
       "category": "伪装类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；公寓、出租屋、老小区公共房间进入判定 +3；若被真实住户撞见暴露度 +2，耐久 6",
+      "item_type": "tool",
+      "effect": "公寓、出租屋、老小区公共房间进入判定 +3；若被真实住户撞见暴露度 +2，耐久 6",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 accessory；公寓、出租屋、老小区公共房间进入判定 +3；若被真实住户撞见暴露度 +2，耐久 6",
+        "text": "公寓、出租屋、老小区公共房间进入判定 +3；若被真实住户撞见暴露度 +2，耐久 6",
         "durability": 6
       },
       "requirements": {},
@@ -5112,7 +4970,7 @@
       },
       "tags": [
         "伪装",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -5137,10 +4995,9 @@
       "rarity": "B",
       "category": "位移类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "在公交站、走廊、医院候诊区等公共节点移动到相邻公共节点；不能跳过主线封锁；使用后 SAN -5；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern；在公交站、走廊、医院候诊区等公共节点移动到相邻公共节点；不能跳过主线封锁；使用后 SAN -5；一次性"
+        "text": "在公交站、走廊、医院候诊区等公共节点移动到相邻公共节点；不能跳过主线封锁；使用后 SAN -5；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -5173,10 +5030,9 @@
       "rarity": "B",
       "category": "位移类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "在驿站、码头、城门、车站类节点中转到相邻安全或公共节点；失败时疲劳 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/republican；在驿站、码头、城门、车站类节点中转到相邻安全或公共节点；失败时疲劳 +1；一次性"
+        "text": "在驿站、码头、城门、车站类节点中转到相邻安全或公共节点；失败时疲劳 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -5210,10 +5066,9 @@
       "rarity": "B",
       "category": "规则类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "擦除一个物体表面的低级污染标记或隔离一次低级触发条件；使用后 SAN -8，失败时威胁时钟 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/universal；擦除一个物体表面的低级污染标记或隔离一次低级触发条件；使用后 SAN -8，失败时威胁时钟 +1；一次性"
+        "text": "擦除一个物体表面的低级污染标记或隔离一次低级触发条件；使用后 SAN -8，失败时威胁时钟 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -5248,10 +5103,9 @@
       "rarity": "B",
       "category": "规则类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "让当前节点的照明/监控/广播类低级规则暂停 1 轮；不能影响核心规则；使用后 SAN -6、暴露度 +2；失败时威胁时钟 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/republican；让当前节点的照明/监控/广播类低级规则暂停 1 轮；不能影响核心规则；使用后 SAN -6、暴露度 +2；失败时威胁时钟 +1；一次性"
+        "text": "让当前节点的照明/监控/广播类低级规则暂停 1 轮；不能影响核心规则；使用后 SAN -6、暴露度 +2；失败时威胁时钟 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -5286,11 +5140,10 @@
       "name": "低阶因果夹",
       "rarity": "B",
       "category": "规则类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；夹住一张纸质线索或小型物品，2 轮内防止低级因果篡改；每轮 SAN -3，耐久 4",
+      "item_type": "tool",
+      "effect": "夹住一张纸质线索或小型物品，2 轮内防止低级因果篡改；每轮 SAN -3，耐久 4",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：universal；槽位 accessory；夹住一张纸质线索或小型物品，2 轮内防止低级因果篡改；每轮 SAN -3，耐久 4",
+        "text": "夹住一张纸质线索或小型物品，2 轮内防止低级因果篡改；每轮 SAN -3，耐久 4",
         "durability": 4
       },
       "requirements": {},
@@ -5299,7 +5152,7 @@
       },
       "tags": [
         "规则",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "universal"
@@ -5324,10 +5177,9 @@
       "rarity": "B",
       "category": "规则类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "封住一面镜子、玻璃、黑水倒影的低级通道 2 轮；使用后污染 +3；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：ancient/republican/universal；封住一面镜子、玻璃、黑水倒影的低级通道 2 轮；使用后污染 +3；一次性"
+        "text": "封住一面镜子、玻璃、黑水倒影的低级通道 2 轮；使用后污染 +3；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -5362,10 +5214,9 @@
       "rarity": "B",
       "category": "材料类",
       "item_type": "material",
-      "equip_slot": null,
-      "effect": "用于 B 级装备维修、C 级装备锻造、低阶进化媒介合成或 A 级物品解封材料；不可在副本内直接使用；可堆叠",
+      "effect": "用于 B 级道具维护、C 级道具调校、低阶进化媒介合成或 A 级物品解封材料；不可在副本内直接使用；可堆叠",
       "effect_json": {
-        "text": "物品形态：材料；时代标签：universal；用于 B 级装备维修、C 级装备锻造、低阶进化媒介合成或 A 级物品解封材料；不可在副本内直接使用；可堆叠"
+        "text": "用于 B 级道具维护、C 级道具调校、低阶进化媒介合成或 A 级物品解封材料；不可在副本内直接使用；可堆叠"
       },
       "requirements": {},
       "use_cost": {},
@@ -5395,10 +5246,9 @@
       "rarity": "B",
       "category": "结算类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "结算时将 1 件 C 级未损坏通用道具按 65% 估值回收为积分；每次结算最多使用 1 张",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：universal；结算时将 1 件 C 级未损坏通用道具按 65% 估值回收为积分；每次结算最多使用 1 张"
+        "text": "结算时将 1 件 C 级未损坏通用道具按 65% 估值回收为积分；每次结算最多使用 1 张"
       },
       "requirements": {},
       "use_cost": {},
@@ -5427,10 +5277,9 @@
       "rarity": "A",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "只能在安全节点或结算前休整使用；恢复至 HP 上限，并移除 1 个重伤状态；使用后疲劳 +2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；只能在安全节点或结算前休整使用；恢复至 HP 上限，并移除 1 个重伤状态；使用后疲劳 +2；一次性",
+        "text": "只能在安全节点或结算前休整使用；恢复至 HP 上限，并移除 1 个重伤状态；使用后疲劳 +2；一次性",
         "hp_full": true
       },
       "requirements": {
@@ -5464,10 +5313,9 @@
       "rarity": "A",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "只能在安全节点或主神空间使用；恢复至 SAN 上限，并恢复 `spi_current +3`，不超过上限；使用后 1 个副本内精神类恢复效果 -50%；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；只能在安全节点或主神空间使用；恢复至 SAN 上限，并恢复 `spi_current +3`，不超过上限；使用后 1 个副本内精神类恢复效果 -50%；一次性",
+        "text": "只能在安全节点或主神空间使用；恢复至 SAN 上限，并恢复 `spi_current +3`，不超过上限；使用后 1 个副本内精神类恢复效果 -50%；一次性",
         "san_full": true,
         "spi_restore": 3
       },
@@ -5501,10 +5349,9 @@
       "rarity": "A",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "受到致命 HP 伤害时可触发，保留 1 HP 并移除流血；触发后债务 +300、疲劳 +3、3 轮内行动 DC +2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/universal；受到致命 HP 伤害时可触发，保留 1 HP 并移除流血；触发后债务 +300、疲劳 +3、3 轮内行动 DC +2；一次性"
+        "text": "受到致命 HP 伤害时可触发，保留 1 HP 并移除流血；触发后债务 +300、疲劳 +3、3 轮内行动 DC +2；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -5539,10 +5386,9 @@
       "rarity": "A",
       "category": "增益类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "仅 `settlement` 或安全节点可用；本局内一次濒死结算改为重伤存活，不改写失败结果；使用后奖励积分 -30%；一次性",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：universal；仅 `settlement` 或安全节点可用；本局内一次濒死结算改为重伤存活，不改写失败结果；使用后奖励积分 -30%；一次性"
+        "text": "仅 `settlement` 或安全节点可用；本局内一次濒死结算改为重伤存活，不改写失败结果；使用后奖励积分 -30%；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -5571,10 +5417,9 @@
       "rarity": "A",
       "category": "位移类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "在非 Boss 追逐且主线完成度至少 40% 时撤离到结算；结算评级最高只能到 B，债务 +500；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；在非 Boss 追逐且主线完成度至少 40% 时撤离到结算；结算评级最高只能到 B，债务 +500；一次性"
+        "text": "在非 Boss 追逐且主线完成度至少 40% 时撤离到结算；结算评级最高只能到 B，债务 +500；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -5607,10 +5452,9 @@
       "rarity": "A",
       "category": "结算类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "结算时复核一次探索度、隐藏支线或特殊成就漏判；只能让一个评分项重算一次；使用后复核成功也要扣 10% 额外奖励；一次性",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：modern/republican/universal；结算时复核一次探索度、隐藏支线或特殊成就漏判；只能让一个评分项重算一次；使用后复核成功也要扣 10% 额外奖励；一次性"
+        "text": "结算时复核一次探索度、隐藏支线或特殊成就漏判；只能让一个评分项重算一次；使用后复核成功也要扣 10% 额外奖励；一次性"
       },
       "requirements": {},
       "use_cost": {},
@@ -5641,10 +5485,9 @@
       "rarity": "A",
       "category": "规则类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "擦掉一条低级公开规则中的 1 个非核心词，持续 2 轮；不能改写主线胜负条件；使用后 SAN -20、威胁时钟 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：modern/universal；擦掉一条低级公开规则中的 1 个非核心词，持续 2 轮；不能改写主线胜负条件；使用后 SAN -20、威胁时钟 +1；一次性"
+        "text": "擦掉一条低级公开规则中的 1 个非核心词，持续 2 轮；不能改写主线胜负条件；使用后 SAN -20、威胁时钟 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -5678,11 +5521,10 @@
       "name": "替身工牌",
       "rarity": "A",
       "category": "防护类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；受到一次直接致死攻击时，改为工牌损毁并承受 50% HP 上限伤害；触发后债务 +600，耐久 1",
+      "item_type": "tool",
+      "effect": "受到一次直接致死攻击时，改为工牌损毁并承受 50% HP 上限伤害；触发后债务 +600，耐久 1",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：modern/universal；槽位 accessory；受到一次直接致死攻击时，改为工牌损毁并承受 50% HP 上限伤害；触发后债务 +600，耐久 1",
+        "text": "受到一次直接致死攻击时，改为工牌损毁并承受 50% HP 上限伤害；触发后债务 +600，耐久 1",
         "durability": 1
       },
       "requirements": {},
@@ -5691,7 +5533,7 @@
       },
       "tags": [
         "防护",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -5716,11 +5558,10 @@
       "name": "饿鬼胃袋",
       "rarity": "A",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "special",
-      "effect": "槽位 special；rank_min B、spi_current_min 10；吞噬一件小型污染物或低中级实体残片，相关压制判定 +5；使用后 SAN -18、污染 +6、冷却 2 轮，耐久 4",
+      "item_type": "tool",
+      "effect": "rank_min B、spi_current_min 10；吞噬一件小型污染物或低中级实体残片，相关压制判定 +5；使用后 SAN -18、污染 +6、冷却 2 轮，耐久 4",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：ancient/universal；槽位 special；rank_min B、spi_current_min 10；吞噬一件小型污染物或低中级实体残片，相关压制判定 +5；使用后 SAN -18、污染 +6、冷却 2 轮，耐久 4",
+        "text": "rank_min B、spi_current_min 10；吞噬一件小型污染物或低中级实体残片，相关压制判定 +5；使用后 SAN -18、污染 +6、冷却 2 轮，耐久 4",
         "durability": 4
       },
       "requirements": {
@@ -5733,7 +5574,7 @@
       },
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -5758,11 +5599,10 @@
       "name": "钟楼倒针表",
       "rarity": "A",
       "category": "规则类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；将当前节点时间回拨 1 轮，只撤销位置和一次普通行动结果，不能撤销死亡/结算/核心规则；使用后威胁时钟 +1、SAN -15，耐久 2",
+      "item_type": "tool",
+      "effect": "将当前节点时间回拨 1 轮，只撤销位置和一次普通行动结果，不能撤销死亡/结算/核心规则；使用后威胁时钟 +1、SAN -15，耐久 2",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：republican/modern；槽位 accessory；将当前节点时间回拨 1 轮，只撤销位置和一次普通行动结果，不能撤销死亡/结算/核心规则；使用后威胁时钟 +1、SAN -15，耐久 2",
+        "text": "将当前节点时间回拨 1 轮，只撤销位置和一次普通行动结果，不能撤销死亡/结算/核心规则；使用后威胁时钟 +1、SAN -15，耐久 2",
         "durability": 2
       },
       "requirements": {},
@@ -5772,7 +5612,7 @@
       },
       "tags": [
         "规则",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "republican",
@@ -5797,11 +5637,10 @@
       "name": "无脸人面具",
       "rarity": "A",
       "category": "伪装类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；5 轮内普通 NPC 记不住你的脸，社交伪装 +5；对 Boss、核心怪物和 B+ 身份系统无效；摘下面具后污染 +4，耐久 3",
+      "item_type": "tool",
+      "effect": "5 轮内普通 NPC 记不住你的脸，社交伪装 +5；对 Boss、核心怪物和 B+ 身份系统无效；摘下面具后污染 +4，耐久 3",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：modern/republican/universal；槽位 accessory；5 轮内普通 NPC 记不住你的脸，社交伪装 +5；对 Boss、核心怪物和 B+ 身份系统无效；摘下面具后污染 +4，耐久 3",
+        "text": "5 轮内普通 NPC 记不住你的脸，社交伪装 +5；对 Boss、核心怪物和 B+ 身份系统无效；摘下面具后污染 +4，耐久 3",
         "durability": 3
       },
       "requirements": {},
@@ -5810,7 +5649,7 @@
       },
       "tags": [
         "伪装",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -5836,18 +5675,17 @@
       "name": "禁病房床帘",
       "rarity": "A",
       "category": "防护类",
-      "item_type": "equippable_tool",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；在当前房间建立 2 轮临时安全节点，低中级实体进入 DC +5；不能用于 Boss 房或最终逃生节点；使用后耐久归零，耐久 1",
+      "item_type": "tool",
+      "effect": "在当前房间建立 2 轮临时安全节点，低中级实体进入 DC +5；不能用于 Boss 房或最终逃生节点；使用后耐久归零，耐久 1",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern；槽位 offhand_weapon；在当前房间建立 2 轮临时安全节点，低中级实体进入 DC +5；不能用于 Boss 房或最终逃生节点；使用后耐久归零，耐久 1",
+        "text": "在当前房间建立 2 轮临时安全节点，低中级实体进入 DC +5；不能用于 Boss 房或最终逃生节点；使用后耐久归零，耐久 1",
         "durability": 1
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "防护",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern"
@@ -5869,11 +5707,10 @@
       "name": "切线剪刀",
       "rarity": "A",
       "category": "位移类",
-      "item_type": "weapon",
-      "equip_slot": "offhand_weapon",
-      "effect": "槽位 offhand_weapon；agi_min 14、spi_current_min 9；剪断一条低中级追踪线、牵引线或路径锁定，移动到相邻安全节点；使用后 SAN -15，耐久 3",
+      "item_type": "tool",
+      "effect": "agi_min 14、spi_current_min 9；剪断一条低中级追踪线、牵引线或路径锁定，移动到相邻安全节点；使用后 SAN -15，耐久 3",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：universal；槽位 offhand_weapon；agi_min 14、spi_current_min 9；剪断一条低中级追踪线、牵引线或路径锁定，移动到相邻安全节点；使用后 SAN -15，耐久 3",
+        "text": "agi_min 14、spi_current_min 9；剪断一条低中级追踪线、牵引线或路径锁定，移动到相邻安全节点；使用后 SAN -15，耐久 3",
         "durability": 3
       },
       "requirements": {
@@ -5885,7 +5722,7 @@
       },
       "tags": [
         "位移",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "universal"
@@ -5907,11 +5744,10 @@
       "name": "判官木牌",
       "rarity": "A",
       "category": "工具类",
-      "item_type": "weapon",
-      "equip_slot": "main_weapon",
-      "effect": "槽位 main_weapon；rank_min B、spi_current_min 10；对低中级灵体、伪装尸身、影子目标判定 +5；命中后目标 1 轮内追击 DC +3；每次使用 SAN -10，耐久 6",
+      "item_type": "tool",
+      "effect": "rank_min B、spi_current_min 10；对低中级灵体、伪装尸身、影子目标判定 +5；命中后目标 1 轮内追击 DC +3；每次使用 SAN -10，耐久 6",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：ancient/republican；槽位 main_weapon；rank_min B、spi_current_min 10；对低中级灵体、伪装尸身、影子目标判定 +5；命中后目标 1 轮内追击 DC +3；每次使用 SAN -10，耐久 6",
+        "text": "rank_min B、spi_current_min 10；对低中级灵体、伪装尸身、影子目标判定 +5；命中后目标 1 轮内追击 DC +3；每次使用 SAN -10，耐久 6",
         "durability": 6
       },
       "requirements": {
@@ -5923,7 +5759,7 @@
       },
       "tags": [
         "工具",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -5948,18 +5784,17 @@
       "name": "遗忘相机",
       "rarity": "A",
       "category": "线索类",
-      "item_type": "equippable_tool",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；抹去一次自身暴露记录、监控影像或普通 NPC 目击记忆；成功后探索度 -3，且使用者遗忘一条非核心线索，耐久 2",
+      "item_type": "tool",
+      "effect": "抹去一次自身暴露记录、监控影像或普通 NPC 目击记忆；成功后探索度 -3，且使用者遗忘一条非核心线索，耐久 2",
       "effect_json": {
-        "text": "物品形态：可装备工具；时代标签：modern/republican；槽位 accessory；抹去一次自身暴露记录、监控影像或普通 NPC 目击记忆；成功后探索度 -3，且使用者遗忘一条非核心线索，耐久 2",
+        "text": "抹去一次自身暴露记录、监控影像或普通 NPC 目击记忆；成功后探索度 -3，且使用者遗忘一条非核心线索，耐久 2",
         "durability": 2
       },
       "requirements": {},
       "use_cost": {},
       "tags": [
         "线索",
-        "equippable_tool"
+        "tool"
       ],
       "era_tags": [
         "modern",
@@ -5985,10 +5820,9 @@
       "rarity": "A",
       "category": "材料类",
       "item_type": "material",
-      "equip_slot": null,
-      "effect": "用于 A 级装备维修、B 级装备锻造、进化阶段突破或 S 级物品低阶解封材料；不可在副本内直接使用；可堆叠",
+      "effect": "用于 A 级道具维护、B 级道具调校、A/S 级进化印记低阶解封材料；不可在副本内直接使用；可堆叠",
       "effect_json": {
-        "text": "物品形态：材料；时代标签：universal；用于 A 级装备维修、B 级装备锻造、进化阶段突破或 S 级物品低阶解封材料；不可在副本内直接使用；可堆叠"
+        "text": "用于 A 级道具维护、B 级道具调校、A/S 级进化印记低阶解封材料；不可在副本内直接使用；可堆叠"
       },
       "requirements": {},
       "use_cost": {},
@@ -6018,10 +5852,9 @@
       "rarity": "A",
       "category": "结算类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "结算时将 1 件 B 级未损坏通用道具按 70% 估值回收为积分，或将 1 件 A 级道具按 55% 回收；每次结算最多使用 1 张",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：universal；结算时将 1 件 B 级未损坏通用道具按 70% 估值回收为积分，或将 1 件 A 级道具按 55% 回收；每次结算最多使用 1 张"
+        "text": "结算时将 1 件 B 级未损坏通用道具按 70% 估值回收为积分，或将 1 件 A 级道具按 55% 回收；每次结算最多使用 1 张"
       },
       "requirements": {},
       "use_cost": {},
@@ -6050,10 +5883,9 @@
       "rarity": "A",
       "category": "彩蛋类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "仅主神空间或安全节点可用；从 D/C/B 通用道具池随机取出 1 件临时道具，本副本结束后自动消失；每次使用债务 +200，冷却 1 个副本，可用 2 次",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：universal；仅主神空间或安全节点可用；从 D/C/B 通用道具池随机取出 1 件临时道具，本副本结束后自动消失；每次使用债务 +200，冷却 1 个副本，可用 2 次",
+        "text": "仅主神空间或安全节点可用；从 D/C/B 通用道具池随机取出 1 件临时道具，本副本结束后自动消失；每次使用债务 +200，冷却 1 个副本，可用 2 次",
         "uses": 2
       },
       "requirements": {
@@ -6088,10 +5920,9 @@
       "rarity": "S",
       "category": "增益类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "seal_rank S；主神空间或安全节点使用，HP 与 SAN 恢复至上限，移除 2 个重伤/严重精神状态；若持有者低于 S 阶，只能恢复单项至 70%；使用后债务 +1000、下个副本初始威胁时钟 +1；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；seal_rank S；主神空间或安全节点使用，HP 与 SAN 恢复至上限，移除 2 个重伤/严重精神状态；若持有者低于 S 阶，只能恢复单项至 70%；使用后债务 +1000、下个副本初始威胁时钟 +1；一次性"
+        "text": "seal_rank S；主神空间或安全节点使用，HP 与 SAN 恢复至上限，移除 2 个重伤/严重精神状态；若持有者低于 S 阶，只能恢复单项至 70%；使用后债务 +1000、下个副本初始威胁时钟 +1；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -6124,10 +5955,9 @@
       "rarity": "S",
       "category": "彩蛋类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "seal_rank S；主神空间或安全节点使用，从 D-A 通用池指定一个功能标签后随机取 1 件道具；低于 S 阶只能取 D/C；每次使用债务 +500，连续使用追加污染 +5，冷却 1 个副本",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：universal；seal_rank S；主神空间或安全节点使用，从 D-A 通用池指定一个功能标签后随机取 1 件道具；低于 S 阶只能取 D/C；每次使用债务 +500，连续使用追加污染 +5，冷却 1 个副本"
+        "text": "seal_rank S；主神空间或安全节点使用，从 D-A 通用池指定一个功能标签后随机取 1 件道具；低于 S 阶只能取 D/C；每次使用债务 +500，连续使用追加污染 +5，冷却 1 个副本"
       },
       "requirements": {},
       "use_cost": {
@@ -6159,11 +5989,10 @@
       "name": "邪神的心脏",
       "rarity": "S",
       "category": "规则类",
-      "item_type": "weapon",
-      "equip_slot": "special",
-      "effect": "槽位 special；seal_rank S、rank_min A、spi_min 18、spi_current_min 12、san_current_min 80；对规则实体、污染核心、血肉门判定 +6；使用后 SAN -35、污染 +12、威胁时钟 +1、冷却 3 轮，耐久 5",
+      "item_type": "tool",
+      "effect": "seal_rank S、rank_min A、spi_min 18、spi_current_min 12、san_current_min 80；对规则实体、污染核心、血肉门判定 +6；使用后 SAN -35、污染 +12、威胁时钟 +1、冷却 3 轮，耐久 5",
       "effect_json": {
-        "text": "物品形态：武器；时代标签：ancient/universal；槽位 special；seal_rank S、rank_min A、spi_min 18、spi_current_min 12、san_current_min 80；对规则实体、污染核心、血肉门判定 +6；使用后 SAN -35、污染 +12、威胁时钟 +1、冷却 3 轮，耐久 5",
+        "text": "seal_rank S、rank_min A、spi_min 18、spi_current_min 12、san_current_min 80；对规则实体、污染核心、血肉门判定 +6；使用后 SAN -35、污染 +12、威胁时钟 +1、冷却 3 轮，耐久 5",
         "durability": 5
       },
       "requirements": {
@@ -6178,7 +6007,7 @@
       },
       "tags": [
         "规则",
-        "weapon"
+        "tool"
       ],
       "era_tags": [
         "ancient",
@@ -6204,10 +6033,9 @@
       "rarity": "S",
       "category": "规则类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "seal_rank S；结算或主神空间使用，复核一次重大争议结算或异常扣债，只返回通过/驳回/需惩罚副本仲裁；低于 A 阶使用必定追加债务 +800；冷却 3 个副本，可用 2 次",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：universal；seal_rank S；结算或主神空间使用，复核一次重大争议结算或异常扣债，只返回通过/驳回/需惩罚副本仲裁；低于 A 阶使用必定追加债务 +800；冷却 3 个副本，可用 2 次",
+        "text": "seal_rank S；结算或主神空间使用，复核一次重大争议结算或异常扣债，只返回通过/驳回/需惩罚副本仲裁；低于 A 阶使用必定追加债务 +800；冷却 3 个副本，可用 2 次",
         "uses": 2
       },
       "requirements": {},
@@ -6239,10 +6067,9 @@
       "rarity": "S",
       "category": "结算类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "seal_rank S；失败结算时可将死亡/团灭结果改为强制惩罚副本队列，保留 30% 已获探索奖励；使用后债务 +1500，且下次副本必须系统打工 NPC 模式；一次性",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：universal；seal_rank S；失败结算时可将死亡/团灭结果改为强制惩罚副本队列，保留 30% 已获探索奖励；使用后债务 +1500，且下次副本必须系统打工 NPC 模式；一次性"
+        "text": "seal_rank S；失败结算时可将死亡/团灭结果改为强制惩罚副本队列，保留 30% 已获探索奖励；使用后债务 +1500，且下次副本必须系统打工 NPC 模式；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -6273,10 +6100,9 @@
       "rarity": "S",
       "category": "结算类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "seal_rank S；主神空间使用，清除最多 3000 点死亡债务；若债务不足 3000，差额转为 1-3 个副本的奖励折扣；低于 A 阶使用追加污染 +10；一次性",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：universal；seal_rank S；主神空间使用，清除最多 3000 点死亡债务；若债务不足 3000，差额转为 1-3 个副本的奖励折扣；低于 A 阶使用追加污染 +10；一次性"
+        "text": "seal_rank S；主神空间使用，清除最多 3000 点死亡债务；若债务不足 3000，差额转为 1-3 个副本的奖励折扣；低于 A 阶使用追加污染 +10；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -6307,10 +6133,9 @@
       "rarity": "S",
       "category": "位移类",
       "item_type": "consumable",
-      "equip_slot": null,
       "effect": "seal_rank S；在主线完成度至少 60% 且非 Boss 最终压制中，转移到隐藏结局入口或特殊撤离节点；结算评级最高 A，威胁时钟 +2；一次性",
       "effect_json": {
-        "text": "物品形态：消耗品；时代标签：universal；seal_rank S；在主线完成度至少 60% 且非 Boss 最终压制中，转移到隐藏结局入口或特殊撤离节点；结算评级最高 A，威胁时钟 +2；一次性"
+        "text": "seal_rank S；在主线完成度至少 60% 且非 Boss 最终压制中，转移到隐藏结局入口或特殊撤离节点；结算评级最高 A，威胁时钟 +2；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -6343,10 +6168,9 @@
       "rarity": "S",
       "category": "材料类",
       "item_type": "material",
-      "equip_slot": null,
-      "effect": "seal_rank S；用于一次 S 阶进化路线突破或重选一个已确定进化分支；低于 A 阶只能作为 A 级进化媒介使用；使用后污染 +15，且 1 个副本内 SAN 上限 -20；一次性",
+      "effect": "seal_rank S；用于一次 S 阶进化印记解封，或将一个未生效进化印记转化为同阶随机印记；低于 A 阶只能作为 A 级进化媒介使用；使用后污染 +15，且 1 个副本内 SAN 上限 -20；一次性",
       "effect_json": {
-        "text": "物品形态：材料；时代标签：universal；seal_rank S；用于一次 S 阶进化路线突破或重选一个已确定进化分支；低于 A 阶只能作为 A 级进化媒介使用；使用后污染 +15，且 1 个副本内 SAN 上限 -20；一次性"
+        "text": "seal_rank S；用于一次 S 阶进化印记解封，或将一个未生效进化印记转化为同阶随机印记；低于 A 阶只能作为 A 级进化媒介使用；使用后污染 +15，且 1 个副本内 SAN 上限 -20；一次性"
       },
       "requirements": {},
       "use_cost": {
@@ -6377,11 +6201,10 @@
       "name": "万用替身人偶",
       "rarity": "S",
       "category": "防护类",
-      "item_type": "accessory",
-      "equip_slot": "accessory",
-      "effect": "槽位 accessory；seal_rank S；抵消一次死亡、替换、献祭或身份抹除结算，改为保留 1 HP/1 SAN 并进入撤离倒计时；触发后债务 +2000、惩罚副本标记 +1，耐久 1",
+      "item_type": "tool",
+      "effect": "seal_rank S；抵消一次死亡、替换、献祭或身份抹除结算，改为保留 1 HP/1 SAN 并进入撤离倒计时；触发后债务 +2000、惩罚副本标记 +1，耐久 1",
       "effect_json": {
-        "text": "物品形态：饰品；时代标签：universal；槽位 accessory；seal_rank S；抵消一次死亡、替换、献祭或身份抹除结算，改为保留 1 HP/1 SAN 并进入撤离倒计时；触发后债务 +2000、惩罚副本标记 +1，耐久 1",
+        "text": "seal_rank S；抵消一次死亡、替换、献祭或身份抹除结算，改为保留 1 HP/1 SAN 并进入撤离倒计时；触发后债务 +2000、惩罚副本标记 +1，耐久 1",
         "durability": 1
       },
       "requirements": {},
@@ -6390,7 +6213,7 @@
       },
       "tags": [
         "防护",
-        "accessory"
+        "tool"
       ],
       "era_tags": [
         "universal"
@@ -6415,10 +6238,9 @@
       "rarity": "S",
       "category": "线索类",
       "item_type": "special",
-      "equip_slot": null,
       "effect": "seal_rank S；安全节点使用，揭示 Boss 或核心规则的一个真实弱点/禁忌/不可战胜条件；不会直接击败 Boss；使用后 SAN -40、污染 +8、探索度 +8；一次性",
       "effect_json": {
-        "text": "物品形态：特殊物；时代标签：modern/republican/universal；seal_rank S；安全节点使用，揭示 Boss 或核心规则的一个真实弱点/禁忌/不可战胜条件；不会直接击败 Boss；使用后 SAN -40、污染 +8、探索度 +8；一次性"
+        "text": "seal_rank S；安全节点使用，揭示 Boss 或核心规则的一个真实弱点/禁忌/不可战胜条件；不会直接击败 Boss；使用后 SAN -40、污染 +8、探索度 +8；一次性"
       },
       "requirements": {},
       "use_cost": {

@@ -33,47 +33,47 @@
     "D": [
       { "category": "consumable_item", "weight": 45 },
       { "category": "material", "weight": 25 },
-      { "category": "gear", "weight": 15 },
-      { "category": "ability_fragment", "weight": 10 },
-      { "category": "evolution_fragment", "weight": 5 }
+      { "category": "tool_item", "weight": 20 },
+      { "category": "ability_template", "weight": 4 },
+      { "category": "evolution_template", "weight": 1 }
     ],
     "C": [
-      { "category": "consumable_item", "weight": 30 },
+      { "category": "consumable_item", "weight": 35 },
       { "category": "material", "weight": 25 },
-      { "category": "gear", "weight": 20 },
-      { "category": "ability_fragment", "weight": 15 },
-      { "category": "evolution_fragment", "weight": 8 },
-      { "category": "special", "weight": 2 }
+      { "category": "tool_item", "weight": 25 },
+      { "category": "ability_template", "weight": 8 },
+      { "category": "evolution_template", "weight": 4 },
+      { "category": "special", "weight": 3 }
     ],
     "B": [
-      { "category": "consumable_item", "weight": 18 },
+      { "category": "consumable_item", "weight": 20 },
       { "category": "material", "weight": 24 },
-      { "category": "gear", "weight": 24 },
-      { "category": "ability_fragment", "weight": 18 },
-      { "category": "evolution_fragment", "weight": 12 },
-      { "category": "special", "weight": 4 }
+      { "category": "tool_item", "weight": 30 },
+      { "category": "ability_template", "weight": 12 },
+      { "category": "evolution_template", "weight": 8 },
+      { "category": "special", "weight": 6 }
     ],
     "A": [
-      { "category": "consumable_item", "weight": 10 },
+      { "category": "consumable_item", "weight": 12 },
       { "category": "material", "weight": 22 },
-      { "category": "gear", "weight": 25 },
-      { "category": "ability_fragment", "weight": 20 },
-      { "category": "evolution_fragment", "weight": 15 },
-      { "category": "special", "weight": 8 }
+      { "category": "tool_item", "weight": 32 },
+      { "category": "ability_template", "weight": 14 },
+      { "category": "evolution_template", "weight": 10 },
+      { "category": "special", "weight": 10 }
     ],
     "S": [
-      { "category": "consumable_item", "weight": 5 },
+      { "category": "consumable_item", "weight": 6 },
       { "category": "material", "weight": 15 },
-      { "category": "gear", "weight": 30 },
-      { "category": "ability_fragment", "weight": 20 },
-      { "category": "evolution_fragment", "weight": 18 },
-      { "category": "special", "weight": 12 }
+      { "category": "tool_item", "weight": 36 },
+      { "category": "ability_template", "weight": 16 },
+      { "category": "evolution_template", "weight": 13 },
+      { "category": "special", "weight": 14 }
     ]
   },
   "tag_category_boosts": {
-    "monster_sealed": { "special": 8, "evolution_fragment": 5, "gear": 3 },
-    "monster_defeated": { "gear": 8, "material": 5 },
-    "monster_evaded": { "consumable_item": 5, "ability_fragment": 3 },
-    "hidden": { "special": 8, "evolution_fragment": 6 }
+    "monster_sealed": { "special": 8, "evolution_template": 5, "tool_item": 3 },
+    "monster_defeated": { "tool_item": 8, "material": 5 },
+    "monster_evaded": { "consumable_item": 5, "ability_template": 3 },
+    "hidden": { "special": 8, "evolution_template": 6 }
   }
 }

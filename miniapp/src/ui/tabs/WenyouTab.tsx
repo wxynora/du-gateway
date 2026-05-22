@@ -96,9 +96,6 @@ type WenyouInventoryItem = {
   durability?: number;
   durability_max?: number;
   item_type?: string;
-  equip_slot?: string;
-  equipped_by?: string;
-  equipped_slot?: string;
   broken?: boolean;
   temporary?: boolean;
   quest_item?: boolean;
@@ -202,16 +199,10 @@ type WenyouPlayerStats = {
   evolution?: string;
   evolution_rank?: string;
   evolution_tags?: string[];
-  bloodline?: string;
   abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string; uses_per_instance?: number }>;
   dormant_abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
-  gear?: Array<string | { name?: string; slot?: string; desc?: string; durability?: number; durability_max?: number; rarity?: string; broken?: boolean }>;
-  equipment?: Array<string | { name?: string; slot?: string; desc?: string; durability?: number; durability_max?: number; rarity?: string; broken?: boolean }>;
-  weapons?: string[];
   conditions?: string[];
   unspent_attribute_points?: number;
-  ability_tokens?: number;
-  growth_milestone_tokens?: number;
   physical_attack?: number;
   ranged_attack?: number;
   defense?: number;
@@ -233,17 +224,12 @@ type WenyouGrowthPlayer = {
   attributes?: Record<string, number>;
   soft_cap?: number;
   unspent_attribute_points?: number;
-  ability_tokens?: number;
   ability_slots?: number;
   abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
   dormant_abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
-  available_abilities?: Array<{ id?: string; name?: string; desc?: string; rarity?: string; known?: boolean; locked?: boolean; fragment_cost?: number }>;
-  growth_milestone_tokens?: number;
   evolution?: string;
   evolution_rank?: string;
   evolution_tags?: string[];
-  evolution_routes?: Array<{ id?: string; name?: string; tags?: string[]; pollution?: number }>;
-  next_evolution_cost?: { points?: number; fragments?: number; level?: number; rank?: string } | null;
   next_level_exp?: number;
   spi_current?: number;
   spi_max?: number;
@@ -323,7 +309,6 @@ type WenyouPublicState = {
 type WenyouRulesState = {
   players?: Record<string, WenyouPlayerStats>;
   inventory?: WenyouInventoryItem[];
-  equipment?: Array<string | Record<string, unknown>>;
   threat_clocks?: Array<Record<string, unknown>>;
   last_state_patch?: Record<string, unknown> | null;
 };
@@ -736,12 +721,6 @@ function inventoryItemKey(item: WenyouInventoryItem | string, index: number): st
   return String(item.uid || item.id || item.name || index);
 }
 
-function isGearInventoryItem(item: WenyouInventoryItem | string): item is WenyouInventoryItem {
-  if (typeof item === "string") return false;
-  const type = String(item.item_type || item.category || "").trim();
-  return ["weapon", "armor", "accessory", "equippable_tool"].includes(type) || !!item.equip_slot;
-}
-
 function inventoryActionKey(item: WenyouInventoryItem | string): string {
   if (typeof item === "string") return item;
   return String(item.uid || item.id || item.name || "");
@@ -779,7 +758,6 @@ function itemDisplayDescription(item: { desc?: unknown; effect?: unknown } | unk
   const text = compactPanelText(source);
   if (!text) return "";
   const hidden = [
-    /^槽位\s+/i,
     /^物品形态[:：]/,
     /^时代标签[:：]/,
     /^[a-z_]+_min\s+\d+/i,
@@ -860,11 +838,6 @@ function currentLocationName(publicState: WenyouPublicState, fallback = "未知�
     ? title
     : text || fallback;
   return raw.replace(/^当前在[:：]?\s*/, "").trim().slice(0, 34) || fallback;
-}
-
-function gearLabel(item: string | { name?: string; slot?: string; desc?: string }): string {
-  if (typeof item === "string") return item;
-  return [item.name, item.slot].map((it) => compactPanelText(it)).filter(Boolean).join(" · ") || "未命名装备";
 }
 
 function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): RiftPullResult {
@@ -1800,7 +1773,7 @@ export function WenyouTab({
 
   async function runInventoryCommand(
     item: WenyouInventoryItem | string,
-    endpoint: "equip" | "repair" | "sell",
+    endpoint: "sell",
     label: string,
     body: Record<string, unknown> = {}
   ) {
@@ -1906,26 +1879,6 @@ export function WenyouTab({
       await loadStatus();
     } catch (e: any) {
       toast(`能力使用失败：${e?.message || e}`);
-    } finally {
-      setActing(false);
-    }
-  }
-
-  async function applyEvolution(player: "player1" | "player2", route = "human_stable") {
-    if (acting) return;
-    setActing(true);
-    try {
-      const j = await apiJson<{ ok?: boolean; message?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/player/evolution/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ player, route }),
-      });
-      if (!j?.ok) throw new Error(j?.message || j?.error || "进化失败");
-      toast(j.message || "进化已完成");
-      if (j.session) setSessionPanel(j.session);
-      await loadStatus();
-    } catch (e: any) {
-      toast(`进化失败：${e?.message || e}`);
     } finally {
       setActing(false);
     }
@@ -3168,7 +3121,7 @@ function PanelModal({
   onUseItem: (item: WenyouInventoryItem | string) => void;
   onInventoryCommand: (
     item: WenyouInventoryItem | string,
-    endpoint: "equip" | "repair" | "sell",
+    endpoint: "sell",
     label: string,
     body?: Record<string, unknown>
   ) => void;
@@ -3290,7 +3243,7 @@ function InventoryList({
   onUseItem: (item: WenyouInventoryItem | string) => void;
   onInventoryCommand: (
     item: WenyouInventoryItem | string,
-    endpoint: "equip" | "repair" | "sell",
+    endpoint: "sell",
     label: string,
     body?: Record<string, unknown>
   ) => void;
@@ -3302,7 +3255,7 @@ function InventoryList({
       {inventory.map((item, index) => {
         const detail = typeof item === "string" ? "" : itemDisplayDescription(item);
         const sealed = typeof item !== "string" && !!item.sealed;
-        const lockedForSale = typeof item !== "string" && (!!item.equipped_by || !!item.quest_item || item.carry_out === false);
+        const lockedForSale = typeof item !== "string" && (!!item.quest_item || item.carry_out === false);
         return (
           <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
             <span>
@@ -3315,14 +3268,7 @@ function InventoryList({
               ) : null}
             </span>
             <div className="wenyou-inventory-actions">
-              {isGearInventoryItem(item) ? (
-                <>
-                  <button type="button" onClick={() => onInventoryCommand(item, "equip", "装备")} disabled={acting || sealed || !!item.broken}>装备</button>
-                  <button type="button" onClick={() => onInventoryCommand(item, "repair", "维修")} disabled={acting}>维修</button>
-                </>
-              ) : (
-                <button type="button" onClick={() => onUseItem(item)} disabled={acting || sealed}>{acting ? "演算中" : "使用"}</button>
-              )}
+              <button type="button" onClick={() => onUseItem(item)} disabled={acting || sealed || (typeof item !== "string" && !!item.broken)}>{acting ? "演算中" : "使用"}</button>
               <button type="button" onClick={() => onInventoryCommand(item, "sell", "出售")} disabled={acting || lockedForSale}>出售</button>
             </div>
           </div>
@@ -3416,7 +3362,6 @@ function PlayerStatCard({
   const p = player || {};
   const abilities = growth?.abilities || p.abilities || [];
   const dormantAbilities = growth?.dormant_abilities || p.dormant_abilities || [];
-  const gear = p.gear || p.equipment || p.weapons || [];
   const abilitySlots = Number(growth?.ability_slots || 0);
   const rank = p.rank || "D";
   const num = (value: unknown) => {
@@ -3445,14 +3390,13 @@ function PlayerStatCard({
     ["防御", p.defense],
     ["先攻", p.initiative],
   ];
-  const evolution = growth?.evolution || p.evolution || p.bloodline || "凡人";
+  const evolution = growth?.evolution || p.evolution || "凡人";
   const abilitySummary = abilities.length
     ? abilities.map((it) => `${it.name || it.id}${it.level ? ` Lv${it.level}` : ""}`).filter(Boolean).join("、")
     : "无";
   const dormantSummary = dormantAbilities.length
     ? `休眠：${dormantAbilities.map((it) => it.name || it.id).filter(Boolean).join("、")}`
     : "";
-  const gearSummary = gear.length ? gear.map(gearLabel).join("、") : "无";
   const conditionSummary = p.conditions?.length ? p.conditions.join("、") : "稳定";
 
   return (
@@ -3500,7 +3444,6 @@ function PlayerStatCard({
           <p><span>进化</span><strong>{evolution}{growth?.evolution_rank ? ` · ${growth.evolution_rank}` : ""}</strong></p>
           <p><span>能力</span><strong>{abilitySummary}{abilitySlots ? `（${abilities.length}/${abilitySlots}）` : ""}</strong></p>
           {dormantSummary ? <p><span>休眠</span><strong>{dormantSummary}</strong></p> : null}
-          <p><span>装备</span><strong>{gearSummary}</strong></p>
           <p><span>状态</span><strong>{conditionSummary}</strong></p>
         </div>
       )}

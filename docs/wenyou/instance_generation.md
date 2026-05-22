@@ -215,7 +215,7 @@ Boss 可交互结果：
 命中判定：
 
 ```text
-hit_score = d20 + attack_attribute_mod + weapon_dc_bonus + situational_bonus
+hit_score = d20 + attack_attribute_mod + tool_bonus + situational_bonus
 target_dc = 10 + floor(target.speed / 2) + target_evasion_bonus
 ```
 
@@ -223,20 +223,20 @@ target_dc = 10 + floor(target.speed / 2) + target_evasion_bonus
 
 | 攻击方式 | 主要属性 |
 | --- | --- |
-| 近战/重武器 | `str` |
-| 远程/投掷/轻武器 | `agi` |
+| 近战/重物破坏 | `str` |
+| 远程/投掷/轻巧工具 | `agi` |
 | 机关/术式/精准工具 | `int` |
-| 规则/污染武器 | `spi_current` |
+| 规则/污染道具 | `spi_current` |
 
 伤害结算：
 
 ```text
 physical_hit_damage = max(1, physical_attack + situational_bonus - target.defense)
 ranged_hit_damage = max(1, ranged_attack + situational_bonus - target.defense)
-mental_hit_damage = max(1, floor(spi_current / 2) + rule_weapon_bonus - target.mental_resist)
+mental_hit_damage = max(1, floor(spi_current / 2) + rule_item_bonus - target.mental_resist)
 ```
 
-`physical_attack` / `ranged_attack` 已经包含当前武器加成，不能再重复叠 `weapon_damage`。
+`physical_attack` / `ranged_attack` 已经包含基础属性、能力、进化和明确道具效果加成，不能再重复叠同源 bonus。
 
 精英怪物修正：
 

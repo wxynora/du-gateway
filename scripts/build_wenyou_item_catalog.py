@@ -21,10 +21,7 @@ RARITY_FILES = {
 
 VALID_ITEM_TYPES = {
     "consumable",
-    "weapon",
-    "armor",
-    "accessory",
-    "equippable_tool",
+    "tool",
     "material",
     "special",
 }
@@ -63,14 +60,8 @@ def parse_table(path: Path, rarity: str) -> list[dict[str, str]]:
 
 
 def parse_item_type(effect: str) -> str:
-    if "物品形态：武器" in effect:
-        return "weapon"
-    if "物品形态：防具" in effect:
-        return "armor"
-    if "物品形态：饰品" in effect:
-        return "accessory"
-    if "物品形态：可装备工具" in effect:
-        return "equippable_tool"
+    if any(marker in effect for marker in ("物品形态：武器", "物品形态：防具", "物品形态：饰品", "物品形态：可装备工具", "物品形态：工具")):
+        return "tool"
     if "物品形态：材料" in effect:
         return "material"
     if "物品形态：特殊物" in effect:
@@ -84,11 +75,6 @@ def parse_era_tags(effect: str) -> list[str]:
         return ["universal"]
     tags = [x.strip() for x in re.split(r"[/,，、]", m.group(1)) if x.strip()]
     return tags or ["universal"]
-
-
-def parse_equip_slot(effect: str) -> str | None:
-    m = re.search(r"槽位\s+([a-z_]+)", effect)
-    return m.group(1) if m else None
 
 
 def parse_requirements(effect: str) -> dict[str, Any]:
@@ -122,7 +108,7 @@ def parse_use_cost(effect: str) -> dict[str, Any]:
 
 
 def parse_effect_json(effect: str) -> dict[str, Any]:
-    data: dict[str, Any] = {"text": effect}
+    data: dict[str, Any] = {"text": compact_effect(effect)}
     hp = re.search(r"恢复\s*(\d+)\s*HP", effect)
     san = re.search(r"恢复\s*(\d+)\s*SAN", effect)
     spi = re.search(r"spi_current\s*\+(\d+)", effect)
@@ -166,7 +152,11 @@ def parse_use_phase(effect: str, item_type: str) -> list[str]:
 
 
 def compact_effect(effect: str) -> str:
-    text = re.sub(r"物品形态：[^；]+；", "", effect)
+    text = re.sub(r"物品形态：(?:武器|防具|饰品|可装备工具)", "物品形态：工具", effect)
+    text = re.sub(r"槽位\s+[a-z_]+；?", "", text)
+    text = re.sub(r"装备维修", "道具维护", text)
+    text = re.sub(r"装备锻造", "道具调校", text)
+    text = re.sub(r"物品形态：[^；]+；", "", text)
     text = re.sub(r"时代标签：[^；]+；", "", text)
     return text.strip("； ")
 
@@ -197,7 +187,7 @@ def build_items() -> list[dict[str, Any]]:
             if item_type not in VALID_ITEM_TYPES:
                 item_type = "consumable"
             consume = item_type == "consumable" or "一次性" in effect
-            if item_type in {"weapon", "armor", "accessory", "equippable_tool", "material"}:
+            if item_type in {"tool", "material"}:
                 consume = False
             stackable = item_type in {"consumable", "material"} or "可堆叠" in effect
             item = {
@@ -206,7 +196,6 @@ def build_items() -> list[dict[str, Any]]:
                 "rarity": rarity,
                 "category": row["category"],
                 "item_type": item_type,
-                "equip_slot": parse_equip_slot(effect),
                 "effect": compact_effect(effect),
                 "effect_json": parse_effect_json(effect),
                 "requirements": parse_requirements(effect),
@@ -260,7 +249,6 @@ def write_schema() -> None:
                         "rarity": {"enum": ["D", "C", "B", "A", "S"]},
                         "category": {"type": "string"},
                         "item_type": {"enum": sorted(VALID_ITEM_TYPES)},
-                        "equip_slot": {"type": ["string", "null"]},
                         "effect": {"type": "string"},
                         "effect_json": {"type": "object"},
                         "requirements": {"type": "object"},
@@ -293,7 +281,6 @@ def write_sql(items: list[dict[str, Any]]) -> None:
         "  name TEXT NOT NULL,",
         "  rarity TEXT NOT NULL CHECK (rarity IN ('D', 'C', 'B', 'A', 'S')),",
         "  item_type TEXT NOT NULL,",
-        "  equip_slot TEXT,",
         "  category TEXT NOT NULL,",
         "  effect_json TEXT NOT NULL,",
         "  requirements_json TEXT NOT NULL DEFAULT '{}',",
@@ -323,7 +310,6 @@ def write_sql(items: list[dict[str, Any]]) -> None:
         "name",
         "rarity",
         "item_type",
-        "equip_slot",
         "category",
         "effect_json",
         "requirements_json",
@@ -346,7 +332,6 @@ def write_sql(items: list[dict[str, Any]]) -> None:
             item["name"],
             item["rarity"],
             item["item_type"],
-            item["equip_slot"],
             item["category"],
             json.dumps(item["effect_json"], ensure_ascii=False, separators=(",", ":")),
             json.dumps(item["requirements"], ensure_ascii=False, separators=(",", ":")),

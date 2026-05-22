@@ -33,7 +33,7 @@ Player Action -> GM Event Intent -> Rules Engine -> State Patch -> GM Narrative 
 | Rules Engine | 后端数值裁判，所有精确数值变化由它计算 |
 | State Patch | 一轮规则结算后的结构化状态变更 |
 | Runtime State | 副本运行期缓存状态，包含公开层、隐藏层和规则层 |
-| Content Pack | 可替换内容包，包含副本类型、物品、武器、能力、进化、商店和奖励表 |
+| Content Pack | 可替换内容包，包含副本类型、物品、工具、能力、进化、商店和奖励表 |
 | Ruleset | 可替换规则包，包含公式、价格、概率、升级曲线和结算规则 |
 
 ## 状态机
@@ -57,7 +57,7 @@ hub -> candidate_selection -> instance_running -> settlement -> archived
 核心规则里，`hub` 是纯功能区，不承担剧情。
 
 - 默认内容包可把 `hub` 命名为“主神空间”。
-- `hub` 只负责普通商店、C 阶后特殊商店/限定兑换所、治疗、抽卡、强化、锻造、归档、候选池和整备。
+- `hub` 只负责普通商店、C 阶后特殊商店/限定兑换所、治疗、抽卡、加点、晋升、归档、候选池和整备。
 - 不在 `hub` 引入长期剧情、NPC 长线经营、房间经营或日常事件。
 - 如果其他开源使用者想做剧情 hub，应作为独立内容包扩展，不进入默认规则。
 

@@ -50,19 +50,10 @@
           },
           "item_type": {
             "enum": [
-              "accessory",
-              "armor",
               "consumable",
-              "equippable_tool",
               "material",
               "special",
-              "weapon"
-            ]
-          },
-          "equip_slot": {
-            "type": [
-              "string",
-              "null"
+              "tool"
             ]
           },
           "effect": {

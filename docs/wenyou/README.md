@@ -21,7 +21,7 @@
 | [`monster_system.md`](monster_system.md) | 普通怪、精英怪、Boss、遭遇预算、战斗/规避/封印规则 |
 | [`numeric_growth.md`](numeric_growth.md) | 属性、HP/SAN、精神力、状态、升级、晋升、复活、成长曲线 |
 | [`rewards_economy.md`](rewards_economy.md) | 通关评级、积分、EXP、奖励 roll、债务、惩罚副本 |
-| [`item_evolution_system.md`](item_evolution_system.md) | 道具、武器、防具、商店、抽卡、回收、进化系统 |
+| [`item_evolution_system.md`](item_evolution_system.md) | 道具、背包物品、商店、抽卡、回收、能力与进化系统 |
 | [`open_source_data_tables.md`](open_source_data_tables.md) | 开源默认内容表与接入方运行时存档表的边界 |
 | [`backend_contracts.md`](backend_contracts.md) | 后端规则函数、状态补丁、内容包和 GM/DS 权限边界 |
 | [`ai_player_integration.md`](ai_player_integration.md) | AI 玩家角色的钱包、背包、上下文、工具和消费流水 |

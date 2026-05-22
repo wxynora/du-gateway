@@ -159,15 +159,15 @@ Boss 压力源模板：
 玩家攻击普通怪/精英怪：
 
 ```text
-hit_score = d20 + attack_attribute_mod + weapon_dc_bonus + situational_bonus + weakness_bonus
+hit_score = d20 + attack_attribute_mod + tool_bonus + situational_bonus + weakness_bonus
 target_dc = 10 + floor(monster.speed / 2) + monster_evasion_bonus
 
 physical_damage = max(1, player.physical_attack + weakness_damage - monster.defense)
 ranged_damage = max(1, player.ranged_attack + weakness_damage - monster.defense)
-mental_damage = max(1, floor(player.spi_current / 2) + rule_weapon_bonus + weakness_damage - monster.mental_resist)
+mental_damage = max(1, floor(player.spi_current / 2) + rule_item_bonus + weakness_damage - monster.mental_resist)
 ```
 
-`physical_attack` 和 `ranged_attack` 已经包含当前武器、能力和进化加成，不能再重复叠一次 `weapon_damage`。
+`physical_attack` 和 `ranged_attack` 已经包含基础属性、能力、进化和明确道具效果加成，不能再重复叠一次同源 bonus。
 
 怪物攻击玩家：
 
@@ -231,7 +231,7 @@ flee_dc = monster.detection + floor(monster.speed / 2) + alert_level + threat_cl
 | 条件 | 修正 |
 | --- | ---: |
 | 已知安全出口、提前踩点 | `route_bonus +2` |
-| 使用合适道具或装备 | `item_bonus +1` 到 `+5` |
+| 使用合适道具 | `item_bonus +1` 到 `+5` |
 | 有队友掩护或制造干扰 | `distraction_bonus +2` |
 | 负重过高、重伤、疲劳 | `-2` 到 `-5` |
 | 正被 Boss 规则锁定 | `flee_dc +5`，且成功也可能只争取 1 轮 |

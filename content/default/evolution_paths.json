@@ -23,9 +23,9 @@
       "desc": "适合潜伏、规避和黑暗环境。"
     },
     {
-      "id": "regen_beast",
-      "name": "再生/兽化",
-      "tags": ["beast", "regeneration"],
+      "id": "regen_boost",
+      "name": "再生/强化",
+      "tags": ["regeneration", "body_rebuild"],
       "attrs": { "str": 1, "con": 1 },
       "hp_ratio": 1,
       "san_ratio": 0,

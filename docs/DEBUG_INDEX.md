@@ -30,7 +30,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
 | MiniApp 分页 | `miniapp/src/ui/tabs/*` | 日志、思维链、上游、日历、贴纸、记忆调试等子页 |
 | 文游规则入口 | `docs/wenyou_rules.md`、`docs/wenyou/*.md` | 开源版文游规则入口与拆分文档：核心循环、运行时状态缓存、副本生成、怪物系统、数值成长、奖励经济、后端契约 |
-| 文游物品/进化系统 | `docs/wenyou/item_evolution_system.md`、`docs/wenyou/item_catalog_draft_d.md`、`docs/wenyou/item_catalog_draft_c.md`、`docs/wenyou/item_catalog_draft_b.md`、`docs/wenyou/item_catalog_draft_a.md`、`docs/wenyou/item_catalog_draft_s.md`、`content/default/items.json`、`content/default/item_catalog.sql`、`schemas/item.schema.json` | 通用商店/抽卡/奖励道具目录、用途分类、物品形态、时代标签、武器/防具/饰品槽位、耐久、锻造、回收、商店、抽卡、进化系统；道具生成规则要求 D/C 普通池保留 25%-35% 生活怪梗；D/C/B/A/S 道具已从 Markdown 审校源表生成结构化内容表和 SQL seed；副本专属可带出物先归内容包/副本奖励表，不默认进通用目录；D 级副本常规产出最多 C 级 |
+| 文游物品/进化系统 | `docs/wenyou/item_evolution_system.md`、`docs/wenyou/item_catalog_draft_d.md`、`docs/wenyou/item_catalog_draft_c.md`、`docs/wenyou/item_catalog_draft_b.md`、`docs/wenyou/item_catalog_draft_a.md`、`docs/wenyou/item_catalog_draft_s.md`、`content/default/items.json`、`content/default/item_catalog.sql`、`schemas/item.schema.json`、`content/default/reward_tables.json`、`content/default/evolution_paths.json` | 通用商店/抽卡/奖励道具目录、用途分类、物品形态、时代标签、耐久/次数、背包使用/出售、商店、抽卡、能力模板和进化印记/路线模板；不再保留装备栏、穿戴、锻造、拆解或旧身体来源字段；D/C/B/A/S 道具已从 Markdown 审校源表生成结构化内容表和 SQL seed；副本专属可带出物先归内容包/副本奖励表，不默认进通用目录；D 级副本常规产出最多 C 级 |
 | R2 存储 | `storage/r2_store.py` | 会话、summary、动态记忆、设置、贴纸、设备状态、日程等 R2 key |
 | 上游配置 | `storage/upstream_store.py` | active upstream、model cache、models 探测 |
 | 主动消息 | `services/telegram_proactive.py` | 概率主动、主动决策、通道投递、trigger tick |
@@ -276,17 +276,17 @@ rg -n "TGHook|TGQueue|TGWorker|TGBot|webhook 已落持久队列|queue worker 消
 - 未完成 / 不要碰：后端 `/wenyou/item/use` 暂时保留为快捷接口，但 MiniApp 默认不使用；下一步若要严谨，可以加“道具详情/使用说明”二级弹窗。
 
 当前状态（2026-05-17 文游规则对齐）：
-- 已完成：按 `docs/wenyou_rules.md` 对齐现有文游硬规则：阶段统一到 `hub / candidate_selection / instance_running / settlement / archived`，新局默认 `instance_running`，结算进入 `settlement`；副本生成不再写死 6 人/4NPC，改为 `tasker_total 2-13` 且 `npc_taskers = tasker_total - player_count`；新人初始数值改为 HP/SAN 180/180、Lv1、D 阶、EXP 0、体力/智慧 10、血统凡人、能力/武器/状态为空；新增 `public` / `gm_secret` / `instance_blueprint` 规范化，GM 推进时会读取蓝图短纲但前端不整段展示隐藏内容；系统商店只在 `hub` 或 `settlement` 可购买，副本中只能查看货架和使用已有背包物品；默认商店货架扩成规则文档里的商品表，前端显示阶段锁定原因和 EXP/状态。
+- 已完成：按 `docs/wenyou_rules.md` 对齐现有文游硬规则：阶段统一到 `hub / candidate_selection / instance_running / settlement / archived`，新局默认 `instance_running`，结算进入 `settlement`；副本生成不再写死 6 人/4NPC，改为 `tasker_total 2-13` 且 `npc_taskers = tasker_total - player_count`；新人初始数值改为 HP/SAN 180/180、Lv1、D 阶、EXP 0、体力/智慧 10、进化凡人、能力/状态为空；新增 `public` / `gm_secret` / `instance_blueprint` 规范化，GM 推进时会读取蓝图短纲但前端不整段展示隐藏内容；系统商店只在 `hub` 或 `settlement` 可购买，副本中只能查看货架和使用已有背包物品；默认商店货架扩成规则文档里的商品表，前端显示阶段锁定原因和 EXP/状态。
 - 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`import app` 与文游 shop/framework/blueprint smoke check 通过；`rg` 扫描确认源码里已无旧的固定 4NPC/6 人硬规则命中；`npm -C miniapp run build` 通过，当前构建输出 `miniapp_static/assets/WenyouTab-BmrlS9UT.js`、`miniapp_static/assets/index-MhmZJNL5.css`、`miniapp_static/assets/index-C2lubs5K.js`；`curl -I http://127.0.0.1:5174/miniapp/` 返回 200。
-- 未完成 / 不要碰：这次没有把完整 Rules Engine / `state_patch`、结算奖励公式、抽卡、锻造和长期钱包一次性落完；当前仍保留兼容用【主神面板】解析，后续要逐步迁到 `GM event_intent -> Rules Engine -> state_patch -> GM narrative`。
+- 历史备注 / 后续状态：当时未落地完整 Rules Engine、`state_patch`、结算、抽卡和长期钱包；后续已接入轻量规则结算、结算奖励、抽卡、长期钱包和道具目录。默认锻造/装备养成链路已取消；仍可后续继续收敛到更严格的 `GM event_intent -> Rules Engine -> state_patch -> GM narrative` 两阶段执行。
 
 当前状态（2026-05-17 文游规则引擎小步）：
 - 已完成：在 `services/wenyou_service.py` 接上轻量 Rules Engine：GM 每轮先输出【事件意图】JSON（风险等级、目标、标签、行动状态、状态增删、威胁时钟），后端按 `docs/wenyou_rules.md` 的风险基础伤害、难度倍率、体力/智慧减免和阶位减伤计算 HP/SAN；状态阈值会自动添加轻伤/重伤/濒死、动摇/污染/失控；`state_patch` 写入 `session["event_log"]` 和 `last_state_patch`，前端剧情下方展示【规则结算】摘要。普通副本行动中若有事件意图，GM 面板里的 HP/SAN 不再覆盖后端计算。
 - 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`import app` 通过；规则烟测覆盖 `dangerous + mental/rule_pollution`，B 难度下玩家一 SAN 从 180 结算到 153，威胁时钟推进到 1/6；`git diff --check` 通过（仅既有 CRLF warning）；`npm -C miniapp run build` 通过。
-- 未完成 / 不要碰：这一步还不是完整独立 ruleset/content-pack 文件，也没有把奖励结算、抽卡、锻造、钱包和物品效果全部迁出 prompt；GM 叙事目前仍是同一轮调用里读事件意图规则，不是严格两阶段二次调用。
+- 历史备注 / 后续状态：这一步当时还不是完整独立 ruleset/content-pack；后续已补结算奖励、抽卡、长期钱包、结构化道具目录和部分物品效果执行。默认锻造系统已取消；严格两阶段 GM/Rules Engine 仍是可选后续优化。
 
 当前状态（2026-05-17 文游结算/钱包骨架）：
-- 已完成：跳过抽卡动画与抽卡机制，先补结算和长期钱包：`storage/r2_store.py` 新增 `wenyou/wallet/{user_id}.json` 读写；商店改为扣长期钱包积分并同步当前 session；`cmd_end` 进入 `settlement` 时按难度、通关结果和评级发放积分/EXP，优先偿还债务，写入钱包 ledger、session settlement、event_log；玩家 EXP 会按 `level * 100` 循环升级并发自由属性点/能力 token；归档会带上 wallet、settlement 和 event_log。MiniApp 文游主界面补“进入结算 / 系统商店 / 归档本局”操作。
+- 已完成：跳过抽卡动画与抽卡机制，先补结算和长期钱包：`storage/r2_store.py` 新增 `wenyou/wallet/{user_id}.json` 读写；商店改为扣长期钱包积分并同步当前 session；`cmd_end` 进入 `settlement` 时按难度、通关结果和评级发放积分/EXP，优先偿还债务，写入钱包 ledger、session settlement、event_log；玩家 EXP 当时会按 `level * 100` 循环升级，后续成长简化后只保留自由属性点奖励；归档会带上 wallet、settlement 和 event_log。MiniApp 文游主界面补“进入结算 / 系统商店 / 归档本局”操作。
 - 已验证：`.venv/bin/python -m py_compile storage/r2_store.py services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；结算烟测覆盖 D 难度标准通关 B 评级，积分 +120、EXP +36、钱包 100 -> 220；`git diff --check` 通过（仅既有 CRLF warning）；`npm -C miniapp run build` 通过，当前构建输出 `miniapp_static/assets/WenyouTab-BZ8ljq8u.js`、`miniapp_static/assets/index-DbUb1qhR.css`、`miniapp_static/assets/index-CwRe37Ka.js`；`curl -I http://127.0.0.1:5174/miniapp/` 返回 200。
 - 未完成 / 不要碰：抽卡与抽卡动画按辛玥要求先不动；奖励掉落 roll 目前只记录次数，还没接奖励池/物品掉落表；结算按钮当前默认按“标准通关 B 评级”发放，后续需要做成结算页让用户选择/确认结果或由 GM 触发。
 
@@ -755,7 +755,7 @@ npm -C miniapp run android
 当前状态（2026-05-17 文游规则草案）：
 - 已完成：`docs/wenyou_rules.md` 已瘦身为文游开源规则入口；原大文档拆到 `docs/wenyou/core_loop.md`、`docs/wenyou/instance_generation.md`、`docs/wenyou/numeric_growth.md`、`docs/wenyou/rewards_economy.md`、`docs/wenyou/backend_contracts.md`，物品/进化文档迁到 `docs/wenyou/item_evolution_system.md`。拆分后分别承载核心循环与信息边界、副本蓝图与怪物生态、六基础属性/当前精神力/判定/状态/复活/Lv1-30 成长曲线/新手 6 点属性礼包/软硬属性上限/晋升/期望战斗面板/能力、通关奖励/经济/强制惩罚副本/系统打工 NPC 模式、默认 Schema/State Patch/接口建议/内容包建议/迁移备注。新增 `docs/wenyou/item_catalog_draft_d.md`，作为 D 级 70 个通用商店/抽卡/奖励道具草稿，已草稿定价并补时代标签，但未入正式目录；副本专属可带出物不默认进通用目录。
 - 已验证：本轮为文档拆分改动，已检查文档结构、索引、Markdown 栅栏和尾随空格；未运行代码测试。
-- 未完成 / 不要碰：尚未改 `routes/miniapp/wenyou.py`、`services/wenyou_service.py` 或 `miniapp/src/ui/tabs/WenyouTab.tsx`；现有文游实现仍可能固定 2 玩家 + 4 NPC，且属性点分配、晋升、能力、进化、武器装备、道具目录、商店/抽卡/奖励复用目录、复活债务惩罚副本、奖励掉落表都还只是文档规则，后续要另起实现任务迁入后端 ruleset 和 UI。
+- 历史备注 / 后续状态：该阶段尚未改 `routes/miniapp/wenyou.py`、`services/wenyou_service.py` 或 `miniapp/src/ui/tabs/WenyouTab.tsx`；后续已接入自由任务者数量、属性点分配、晋升、能力模板、进化印记、道具目录、商店/抽卡/奖励复用目录、复活债务、惩罚副本、奖励掉落和 UI。默认武器装备养成链路已取消。
 
 当前状态（2026-05-17 文游命运裂隙 UI）：
 - 已完成：`miniapp/src/ui/tabs/WenyouTab.tsx` 新增“命运裂隙”一级入口和前端抽卡演示流程，右上角裂隙按钮可进入，支持单抽/十连、100/1000 积分本地预览扣除、十连 C+ 兜底、裂隙展开动画、卡背结果区、逐张/批量显影和确认返回；`miniapp/src/styles.css` 参照下载 UI 合集的赛博黑白/故障/扫描线/翻牌风格重做视觉，并修正十连结果区与底部操作按钮重叠问题。
@@ -763,9 +763,9 @@ npm -C miniapp run android
 - 未完成 / 不要碰：命运裂隙目前只是前端 UI/动画与本地结果演示，尚未接后端真实扣积分、抽卡记录、道具入背包、概率审计和 100 抽大保底持久化；后续接后端时继续限定文游相关文件，不要动 QQ connector、小爱、共读和其他半成品。
 
 当前状态（2026-05-17 文游命运裂隙后端/对象背包）：
-- 已完成：`services/wenyou_service.py` 新增对象化背包兼容层，旧字符串背包会读成 `{uid,id,name,kind,category,rarity,quantity,source}` 对象；钱包开始保存长期 `inventory` 和每池 `gacha.pools` 保底计数。新增 `roll_gacha` 后端规则：仅 `hub/settlement` 可抽，单抽 100/十连 1000，积分不足直接拒绝，按混合池概率抽取，10/30/100 抽保底分别记录，A/S 高阶物按当前阶位封印，重复武器/能力/血统转碎片。`routes/miniapp/wenyou.py` 新增 `/miniapp-api/wenyou/gacha/roll`；`miniapp/src/ui/tabs/WenyouTab.tsx` 的命运裂隙改为调用后端，不再使用前端预览积分凭空抽。
+- 已完成：`services/wenyou_service.py` 新增对象化背包兼容层，旧字符串背包会读成 `{uid,id,name,kind,category,rarity,quantity,source}` 对象；钱包开始保存长期 `inventory` 和每池 `gacha.pools` 保底计数。新增 `roll_gacha` 后端规则：仅 `hub/settlement` 可抽，单抽 100/十连 1000，积分不足直接拒绝，按混合池概率抽取，10/30/100 抽保底分别记录，A/S 高阶物按当前阶位封印；重复结果后续已改为按当前回收/材料/模板规则处理，不再作为升级材料链路。`routes/miniapp/wenyou.py` 新增 `/miniapp-api/wenyou/gacha/roll`；`miniapp/src/ui/tabs/WenyouTab.tsx` 的命运裂隙改为调用后端，不再使用前端预览积分凭空抽。
 - 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py storage/r2_store.py` 通过；`.venv/bin/python - <<'PY' import app` 通过；内存 monkeypatch 烟测覆盖 0 积分不能抽、副本中不能抽、结算阶段扣 100 并写对象背包；`npm -C miniapp run build` 通过，当前构建输出 `miniapp_static/assets/WenyouTab-BanpyNQn.js`、`miniapp_static/assets/index-Cf0MmulS.js`、`miniapp_static/assets/index-BVLf9Srz.css`，并检查当前 `index` 引用的静态 chunk 均存在。
-- 未完成 / 不要碰：道具 `use_item` 仍只是把“使用道具”交给 GM，不按道具规则表扣次数/结算效果；属性点分配、阶位晋升、装备槽、武器耐久/锻造/维修/出售/拆解、复活债务和奖励掉落表仍未完整接入。继续限定文游相关文件，不要动 QQ connector、小爱、共读和其它半成品。
+- 历史备注 / 后续状态：此阶段后，属性点分配、阶位晋升、复活债务、奖励掉落、出售和结构化物品使用已逐步接入；默认装备槽、锻造、维修、拆解和武器养成链路已按后续规则取消。继续限定文游相关文件，不要动 QQ connector、小爱、共读和其它半成品。
 
 当前状态（2026-05-17 文游候选扩展并行化）：
 - 已完成：候选副本点击进入不再同步等待一个巨大 DS 请求。`/miniapp-api/wenyou/story` 收到 candidate 后创建后台扩展任务并返回 `expanding/job_id`；新增 `/miniapp-api/wenyou/story-job/<job_id>` 供前端轮询。后台扩展先让 DS 生成自然语言核心短稿，再并行生成自然语言蓝图短稿和开场正文；后端用候选 seed + 文本块组装完整 framework，不再要求 DS 输出严格 JSON，避免单个超大 JSON 请求拖到网关/浏览器超时或因解析失败中断；失败时返回明确子任务错误，不造本地假副本。
@@ -773,19 +773,19 @@ npm -C miniapp run android
 - 未完成 / 不要碰：随机开局和手写自定义关键词仍是同步完整框架生成；本次只修“大厅候选 -> 扩展完整副本”的超时路径。继续限定文游相关文件，不要动 QQ connector、小爱、共读和其它半成品。
 
 当前状态（2026-05-17 文游后端规则补齐）：
-- 已完成：按 `docs/wenyou/*.md` 先补可落地后端：六基础属性 `str/con/agi/int/spi/luk`、`spi_current/spi_max`、派生数值、属性软上限 D14/C20/B28/A38/S50；GM 事件结算的精神减免改用 `spi_current`；升级每级给 3 点自由属性点；新增固定规则接口 `/miniapp-api/wenyou/player/attributes`、`/player/promote`、`/player/revive`；晋升会扣积分、校验通关记录/债务/污染/特殊试炼并解封对应阶位物品；复活会扣积分、不足写债务、恢复半血半 SAN 并添加 `复活疲惫`；奖励结算从“只记录次数”升级为按难度/评级 roll 稀有度和类别，并把具体奖励写入钱包与当前背包；普通商店限制 7-8 件 D/C 商品，低概率最多 1 件 B，抽卡旧 `bloodline_pool` 兼容迁到 `evolution_pool`。
+- 已完成：按 `docs/wenyou/*.md` 先补可落地后端：六基础属性 `str/con/agi/int/spi/luk`、`spi_current/spi_max`、派生数值、属性软上限 D14/C20/B28/A38/S50；GM 事件结算的精神减免改用 `spi_current`；升级每级给 3 点自由属性点；新增固定规则接口 `/miniapp-api/wenyou/player/attributes`、`/player/promote`、`/player/revive`；晋升会扣积分、校验通关记录/债务/污染/特殊试炼并解封对应阶位物品；复活会扣积分、不足写债务、恢复半血半 SAN 并添加 `复活疲惫`；奖励结算从“只记录次数”升级为按难度/评级 roll 稀有度和类别，并把具体奖励写入钱包与当前背包；普通商店限制 7-8 件 D/C 商品，低概率最多 1 件 B，抽卡使用 `evolution_pool`。
 - 已验证：`python3 -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py` 通过；`.venv/bin/python - <<'PY' import app` 通过；路由表确认 `/miniapp-api/wenyou/player/attributes`、`/promote`、`/revive` 已注册；monkeypatch 烟测覆盖属性分配、D->C 晋升、复活债务、精神伤害按 `spi_current`、商店稀有度边界、旧抽卡池迁移、S 评级结算奖励入背包；`git diff --check -- services/wenyou_service.py routes/miniapp/wenyou.py` 通过。
-- 未完成 / 不要碰：内容包/SQL 化道具目录、装备槽与耐久、锻造/维修/出售/拆解、能力/进化完整效果、惩罚副本队列、自定义/随机开局并行化、前端个人中心/成长面板/背包详情还没接；本轮没有改文游 UI 和构建产物。
+- 历史备注 / 后续状态：内容包/SQL 化道具目录、出售、能力模板和进化印记流程、前端个人空间/角色面板已后续接入或重做；默认装备槽、锻造、维修、拆解已取消，不再作为待办；惩罚副本队列、自定义/随机开局并行化仍可作为独立后续项。
 
 当前状态（2026-05-17 文游道具目录续）：
 - 已完成：`docs/wenyou/item_evolution_system.md` 的道具生成提示词补充 D/C 普通池 25%-35% 生活怪梗比例，并明确玩梗不是独立分类，仍需落到后端可执行效果；`docs/wenyou/item_catalog_draft_c.md` 保持 45 个 C 级道具和原定价区间，把一批过于正经的名称改成生活化/怪谈化表达，少量补了对应代价。
 - 已验证：已跑 C 级道具表结构校验、数量/分类/时代标签/价格区间检查、Markdown 尾随空格检查和 `git diff --check -- docs/wenyou/item_evolution_system.md docs/wenyou/item_catalog_draft_c.md docs/DEBUG_INDEX.md`。
-- 未完成 / 不要碰：该阶段时 C 级道具仍是草稿目录；后续已统一生成 `content/default/items.json` 与 `content/default/item_catalog.sql`。装备耐久/锻造/拆解后端执行仍待后续任务。
+- 历史备注 / 后续状态：该阶段时 C 级道具仍是草稿目录；后续已统一生成 `content/default/items.json` 与 `content/default/item_catalog.sql`。默认装备耐久/锻造/拆解后端链路已取消，耐久只作为背包物品使用规则的一部分。
 
 当前状态（2026-05-17 文游道具目录完备草稿）：
-- 已完成：新增 `docs/wenyou/item_catalog_draft_b.md`、`docs/wenyou/item_catalog_draft_a.md`、`docs/wenyou/item_catalog_draft_s.md`，补齐 B/A/S 通用道具草稿目录；B 级 35 个，A 级 18 个，S 级 10 个，均包含武器/防具/饰品/工具/材料/规则/位移/结算/彩蛋道具、时代标签、使用限制、代价、耐久或封印说明，并按功能补草稿价格。
+- 已完成：新增 `docs/wenyou/item_catalog_draft_b.md`、`docs/wenyou/item_catalog_draft_a.md`、`docs/wenyou/item_catalog_draft_s.md`，补齐 B/A/S 通用道具草稿目录；B 级 35 个，A 级 18 个，S 级 10 个，均包含工具、防护物、材料、规则、位移、结算、彩蛋道具、时代标签、使用限制、代价、耐久或封印说明，并按功能补草稿价格。
 - 已验证：已跑 D/C/B/A/S 五张道具表结构校验、数量/分类/时代标签/价格区间/重复名检查、Markdown 尾随空格检查和 `git diff --check -- docs/wenyou/item_catalog_draft_*.md docs/wenyou/item_evolution_system.md docs/DEBUG_INDEX.md`。
-- 未完成 / 不要碰：五张 Markdown 表后续已作为审校源生成 `content/default/items.json` 与 `content/default/item_catalog.sql`；装备耐久/锻造/维修/拆解后端执行仍待后续任务。
+- 历史备注 / 后续状态：五张 Markdown 表后续已作为审校源生成 `content/default/items.json` 与 `content/default/item_catalog.sql`；默认装备耐久/锻造/维修/拆解后端链路已取消，物品耐久/次数由背包使用规则处理。
 
 当前状态（2026-05-17 文游 S 级定价校准）：
 - 已完成：修正 S/传说级道具价格锚点：抽卡仍为单抽 100、100 抽随机 S 大保底 10000；S 级若进入特殊商店或活动商店指定购买，价格必须高于随机保底成本，草稿表统一调到 12000-22000，并在规则入口、物品系统和奖励经济文档写明防套利约束。
@@ -803,7 +803,7 @@ npm -C miniapp run android
 - 未完成 / 不要碰：当前只补文档规则，未改后端怪物生成、战斗结算接口或 UI；后续需要把 `encounter_profile` schema、怪物实例状态和战斗 state_patch 接入 ruleset。
 
 当前状态（2026-05-17 文游运行时状态缓存规则）：
-- 已完成：新增并补充 `docs/wenyou/runtime_state.md`，明确副本正式生成后要缓存 `instance_runtime_state`，拆分 `public_state/gm_state/rules_state/archive_state`；任务进度、线索、地点、NPC、怪物实例、威胁时钟、背包、装备、奖励上下文都由后端按 `state_patch` 更新，GM/DS 每轮只接收裁剪后的上下文、输出叙事和非权威 `event_intent/state_proposals`。补了最小可运行闭环和 DS 提示词最小约束；NPC 任务者降为立场/意图/使坏概率/存活状态，不强制关系值；结算评级只看真实玩家角色/玩家队伍的主线、普通支线、隐藏支线、隐藏结局、特殊成就和损耗记录，不把线索数量或 NPC 自身结局作为独立评分项。同步更新规则入口、核心循环、副本生成、奖励经济和后端契约。
+- 已完成：新增并补充 `docs/wenyou/runtime_state.md`，明确副本正式生成后要缓存 `instance_runtime_state`，拆分 `public_state/gm_state/rules_state/archive_state`；任务进度、线索、地点、NPC、怪物实例、威胁时钟、背包物品和奖励上下文都由后端按 `state_patch` 更新，GM/DS 每轮只接收裁剪后的上下文、输出叙事和非权威 `event_intent/state_proposals`。补了最小可运行闭环和 DS 提示词最小约束；NPC 任务者降为立场/意图/使坏概率/存活状态，不强制关系值；结算评级只看真实玩家角色/玩家队伍的主线、普通支线、隐藏支线、隐藏结局、特殊成就和损耗记录，不把线索数量或 NPC 自身结局作为独立评分项。同步更新规则入口、核心循环、副本生成、奖励经济和后端契约。
 - 已验证：已跑 `rg` 检查 runtime state、GM context、state proposals、NPC 最小字段、结算对象、NPC 不参与玩家评级、结算评级口径和面板读取规则引用；`git diff --check -- docs/wenyou/runtime_state.md docs/wenyou/core_loop.md docs/wenyou/rewards_economy.md docs/wenyou/backend_contracts.md docs/wenyou_rules.md docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 不要碰：当前只补文档规则，没有改 `services/wenyou_service.py`、前端面板或数据库；后续实现要把现有 GM 文本/主神面板解析迁到 `runtime_state -> public_view -> state_patch`。
 
@@ -813,14 +813,15 @@ npm -C miniapp run android
 - 未完成 / 不要碰：这次只改现有 DS/GM prompt 与兼容字段归一化，不改前端、数据库、商店抽卡接口或完整 runtime_state 落地逻辑；后续需要再把 `state_proposals` 真正接入 ruleset/state_patch 执行层。
 
 当前状态（2026-05-17 文游道具表结构化落地）：
-- 已完成：新增 `scripts/build_wenyou_item_catalog.py`，把 D/C/B/A/S 五张 Markdown 道具审校源表生成 `content/default/items.json`、`content/default/item_catalog.sql` 和 `schemas/item.schema.json`；当前共 178 个通用道具，字段包含 `id/name/rarity/category/item_type/equip_slot/effect/effect_json/requirements/use_cost/tags/era_tags/use_phase/consume/stackable/shop_allowed/gacha_allowed/seal_rank/price/weight/enabled`。`services/wenyou_service.py` 已改为商店、抽卡和结算奖励优先读取该内容表，失败时才回退旧内置小列表；装备/多次使用/耐久字段会随背包实例保留。
+- 已完成：新增 `scripts/build_wenyou_item_catalog.py`，把 D/C/B/A/S 五张 Markdown 道具审校源表生成 `content/default/items.json`、`content/default/item_catalog.sql` 和 `schemas/item.schema.json`；当前共 178 个通用道具，字段包含 `id/name/rarity/category/item_type/effect/effect_json/requirements/use_cost/tags/era_tags/use_phase/consume/stackable/shop_allowed/gacha_allowed/seal_rank/price/weight/enabled`。`services/wenyou_service.py` 已改为商店、抽卡和结算奖励优先读取该内容表，失败时才回退旧内置小列表；多次使用/耐久字段会随背包物品实例保留。
 - 已验证：已跑 `.venv/bin/python scripts/build_wenyou_item_catalog.py` 生成 178 条；已做 JSON/SQL/Schema 结构校验、SQLite 导入 `content/default/item_catalog.sql` 并查询 178 条、服务导入与商店/抽卡目录烟测、`.venv/bin/python -m py_compile services/wenyou_service.py scripts/build_wenyou_item_catalog.py`、`git diff --check`。
-- 未完成 / 不要碰：这次没有做前端背包详情、装备槽 UI、锻造/维修/出售/拆解接口，也没有把所有道具效果拆成完整规则 DSL；目前只把目录和基础 HP/SAN/次数/耐久等可解析字段落成内容表。
+- 历史备注 / 后续状态：前端背包和出售接口已后续接入；装备槽 UI、锻造、维修、拆解已取消，不再作为默认待办。完整道具效果 DSL 仍可后续扩展，但当前以结构化 `effect_json/requirements/use_cost` 和后端规则判定为准。
 
 当前状态（2026-05-17 文游局内获得物品入背包）：
 - 已完成：`services/wenyou_service.py` 的 GM 事件意图区分两类局内物品：`acquire_task_item` 用于副本内任务物品/临时物品，允许 S 级强效果、不受副本难度上限限制，写入当前 session 背包并标记 `carry_out=false/temporary=true/quest_item=true`；`acquire_item` 用于可带出通用物品，按 `content/default/items.json` 查 item_id 或精确物品名，并按“副本难度最多 +1 阶”的常规掉落上限校验，通过后写入当前 session 背包与 `state_patch.changes.inventory_add`。隐藏提议、内容表不存在、越级可带出物都会被忽略。
 - 已验证：已跑局内获得物品烟测：D 级副本公开提议 S 级 `acquire_task_item` 能加入局内背包且保存钱包时会被过滤；公开提议 `wy_d_002` 能作为可带出通用物加入背包；公开提议 A 级 `acquire_item` 被难度上限拒绝；已跑 `.venv/bin/python -m py_compile services/wenyou_service.py` 和 `git diff --check`。
-- 未完成 / 不要碰：副本专属唯一物品还没有独立 `instance_unique_rewards` 内容包表；当前 `acquire_task_item` 是运行时临时实例，不进入通用目录。完整装备槽、耐久 tick、锻造/维修/出售/拆解仍未接 UI 和接口。
+- 未完成 / 不要碰：副本专属唯一物品还没有独立 `instance_unique_rewards` 内容包表；当前 `acquire_task_item` 是运行时临时实例，不进入通用目录。
+- 历史备注 / 后续状态：出售和背包物品使用已后续接入；默认装备槽、锻造、维修、拆解已取消，不再作为 UI/接口待办。
 
 当前状态（2026-05-17 文游隐藏好结局唯一奖励）：
 - 已完成：补第三类物品提议 `acquire_unique_item`，用于隐藏好结局、Boss 被感化/超度后赠予的可带走唯一奖励；这类物品不查通用道具表、不受副本难度掉落上限限制，但必须写 `name/rarity/effect/reason`，并携带 `seal_rank` 或 `requirements`（如 `level_min`、`spi_min`、`int_min`）。后端写入当前背包时标记 `carry_out=true/unique=true`，如果当前等级、阶位或属性未达标则 `sealed=true` 并写 `sealed_reason`；只有无额外属性/等级门槛的阶位封印会在晋升时自动解封。
@@ -843,9 +844,24 @@ npm -C miniapp run android
 - 未完成 / 不要碰：本次不清理历史 `miniapp_static/assets/*` 旧 hash 产物；抽卡音效/动画后续单独做。
 
 当前状态（2026-05-21 文游首页/个人空间/新手副本收束）：
-- 已完成：主神空间首页回到三条系统状态条（主神积分、等级阶位、副本状态），一级入口文字本地化为“副本大厅 / 命运裂隙 / 系统商店 / 个人空间”，去掉右下角同步按钮并保留方正点击波动；个人空间实际读取 wallet 背包和双玩家面板，归档后仍可装备、维修和出售钱包物品；`/wenyou/end` 改为结算后立即归档，前端随即进入个人空间归档页；默认未首通用户的第一个候选/空开局会出现固定新手副本 `T-000 白箱回廊`，仅玩家一和渡参与，无其他任务者 NPC；首次标准通关在基础奖励外发新手礼包（初级治愈药剂、初级精神药剂、双玩家自由属性点 +6）且只发一次。
-- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py` 通过；`.venv/bin/python - <<'PY' import app` 通过；mock 烟测覆盖新手候选优先、空开局进入 `白箱回廊`、首次标准通关发礼包并归档、二次通关不重复发礼包、无 active session 的钱包装备/维修/出售；`npm --prefix miniapp run build` 通过，当前静态入口引用 `miniapp_static/assets/index-ChzfTziK.js`、`miniapp_static/assets/index-Qv12-DO-.css`，文游 chunk 为 `miniapp_static/assets/WenyouTab-BYm4OjTy.js`；本地 preview `http://127.0.0.1:5175/miniapp/` 进入文游页无前端崩溃/动态 import 缺失（API 404 仅因 preview 未挂后端）。
+- 已完成：主神空间首页回到三条系统状态条（主神积分、等级阶位、副本状态），一级入口文字本地化为“副本大厅 / 命运裂隙 / 系统商店 / 个人空间”，去掉右下角同步按钮并保留方正点击波动；个人空间实际读取 wallet 背包和双玩家面板，归档后可使用和出售钱包物品；`/wenyou/end` 改为结算后立即归档，前端随即进入个人空间归档页；默认未首通用户的第一个候选/空开局会出现固定新手副本 `T-000 白箱回廊`，仅玩家一和渡参与，无其他任务者 NPC；首次标准通关在基础奖励外发新手礼包（初级治愈药剂、初级精神药剂、双玩家自由属性点 +6）且只发一次。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py` 通过；`.venv/bin/python - <<'PY' import app` 通过；mock 烟测覆盖新手候选优先、空开局进入 `白箱回廊`、首次标准通关发礼包并归档、二次通关不重复发礼包、无 active session 的钱包使用/出售；`npm --prefix miniapp run build` 通过，当前静态入口引用 `miniapp_static/assets/index-ChzfTziK.js`、`miniapp_static/assets/index-Qv12-DO-.css`，文游 chunk 为 `miniapp_static/assets/WenyouTab-BYm4OjTy.js`；本地 preview `http://127.0.0.1:5175/miniapp/` 进入文游页无前端崩溃/动态 import 缺失（API 404 仅因 preview 未挂后端）。
 - 未完成 / 不要碰：本轮按用户要求没有接“渡主动使用背包道具”；没有清理大量既有 `miniapp_static/assets/*` 旧 hash 产物；非文游脏文件仍保持原样不碰。
+
+当前状态（2026-05-21 文游 AI 玩家接入对齐）：
+- 已完成：按 `docs/wenyou/ai_player_integration.md` 补 AI 玩家真实玩家位：wallet 兼容旧 `points/gacha/inventory` 的同时新增 `wallets[player_id]`、`inventories[player_id]`，`player2` 默认为 `controller=ai` 且拥有独立积分、债务、抽卡保底、背包和个人 ledger；商店、抽卡、出售和道具使用均支持 `actor_id/player_id`，默认仍是 `player1`，AI 工具固定可传 `player2`。新增 `summarize_story_for_ai_player`、`compose_ai_player_context`、`get_ai_player_context` 与 `ai_player_buy_item / ai_player_roll_gacha / ai_player_inventory_action / ai_player_use_item / ai_player_transfer`，并补 `/wenyou/ai-player/*` 路由；渡自动行动 prompt 会收到裁剪后的只读 AI 玩家上下文，不再只看共享背包文本。所有 AI 玩家消费/使用/转交写入个人 ledger 和 `state_patch`，失败返回结构化 `error_code`。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`import services.wenyou_service / routes.miniapp.wenyou / app` 通过；mock 烟测覆盖 AI 玩家上下文、`player2` 用独立积分买商店、抽卡不扣 `player1`、转交积分给 `player1`、使用 `player2` 背包里的精神药剂并写入 `player2` ledger；`git diff --check -- services/wenyou_service.py routes/miniapp/wenyou.py` 通过。
+- 未完成 / 不要碰：这次只对齐后端账户、工具和上下文；没有改文游前端 UI 去展示 AI 玩家消费明细/双背包切换，也没有把真实模型工具调用 loop 接成自动买卖抽卡执行器。用户新加的 `docs/wenyou/ai_player_integration.md` 等文档保持原样，不擅自纳入提交范围；非文游脏文件和旧静态 hash 产物继续不碰。
+
+当前状态（2026-05-22 文游装备栏移除）：
+- 已完成：按用户决定删除默认装备养成链路，背包物品统一走“使用 / 出售 / 转交”；后端移除穿戴、维修、锻造、拆解入口和装备加成计算，`/wenyou/item/equip`、`/wenyou/item/repair` 不再注册；AI 玩家 `inventory_action` 只保留 `use/sell`；内容表 `item_type` 收敛为 `consumable/tool/material/special`，奖励表 `gear` 分类改为 `tool_item`；前端个人空间背包不再显示装备/维修动作，角色面板不再展示装备摘要；相关 wenyou 文档和本索引已同步到无装备栏版本。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py services/notion_tools.py routes/chat.py` 通过；`import app / services.wenyou_service / routes.miniapp.wenyou` 通过；mock 烟测覆盖装备/维修路由不存在、出售路由存在、工具道具按背包使用扣耐久、不写入 `equipment/gear`、AI 工具 schema 无 `slot`；`npm --prefix miniapp run build` 通过；`git diff --check` 针对本轮文游文件通过。
+- 未完成 / 不要碰：仍不清理大量既有 `miniapp_static/assets/*` 旧 hash 产物；非文游脏文件继续保持原样。`services/wenyou_service.py` 里保留少量旧存档兼容清理，只负责丢弃历史 `gear/equipment/weapons` 字段，不是新功能入口。
+
+当前状态（2026-05-22 文游成长简化与残留复扫）：
+- 已完成：进化保留为唯一身体强化路线概念，不再输出或保存旧身体来源字段；成长链路收敛为“升级给属性点、阶位晋升、抽卡/奖励得到具体能力模板或进化印记”，不再发能力点、成长令牌、能力碎片或进化碎片；能力目录移除 `max_level/fragment_cost/level_scaling`；后端删除自主学习能力和手动进化应用接口，背包使用能力/进化物品时由规则系统绑定模板或印记；前端背包动作类型只保留使用/出售，不再残留装备/维修动作类型。
+- 已验证：`python3 -m json.tool` 覆盖 `schemas/ability.schema.json`、`schemas/item.schema.json`、`content/default/items.json`、`content/default/abilities.json`、`content/default/reward_tables.json` 通过；`python3 -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py` 通过；`python3 scripts/build_wenyou_item_catalog.py` 重建 178 个默认道具与 SQL seed；`npm --prefix miniapp run build` 通过；本轮复扫整个仓库无旧字段命中；额外删除 65 个残留旧文案的 `miniapp_static/assets/WenyouTab-*.js` 哈希产物；`git diff --check` 针对本轮文件和已删除静态产物通过。
+- 未完成 / 不要碰：非文游脏文件继续保持原样；历史阶段记录里的旧 TODO 文字不代表当前规则，暂不重写旧日志。
 
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
