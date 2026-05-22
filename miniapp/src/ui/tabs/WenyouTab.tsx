@@ -2187,7 +2187,7 @@ export function WenyouTab({
         <div className={`wenyou-space-entry ${spaceBootFading ? "wenyou-space-entry-hide" : ""}`} role="status" aria-live="polite">
           <div className="wenyou-space-entry-title">
             <SignalText as="h1" className="wenyou-signal-text-heavy">FATE NEXUS</SignalText>
-            <SignalText as="h2">REALITY LINK SCANNING...</SignalText>
+            <SignalText as="h2" className="wenyou-space-entry-scan-title">REALITY LINK SCANNING...</SignalText>
           </div>
           <div className="wenyou-space-entry-track">
             <span style={{ width: `${spaceBootProgress}%` }} />

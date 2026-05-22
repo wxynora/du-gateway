@@ -983,6 +983,31 @@
     line-height: 1.12;
   }
 
+  .wenyou-space-entry h2.wenyou-space-entry-scan-title {
+    margin-top: 10px;
+    color: rgba(207, 236, 246, 0.76);
+    font-family: "Cormorant Garamond", "Playfair Display", "Noto Serif SC", serif;
+    font-size: 16px;
+    font-style: italic;
+    font-weight: 500;
+    letter-spacing: 0;
+    line-height: 1;
+    text-shadow:
+      0 0 18px rgba(103, 232, 249, 0.22),
+      1px 0 rgba(103, 232, 249, 0.22),
+      -1px 0 rgba(251, 113, 133, 0.12);
+  }
+
+  .wenyou-space-entry-scan-title .wenyou-signal-layer-cyan {
+    color: rgba(180, 235, 248, 0.5);
+    text-shadow: 0 0 14px rgba(103, 232, 249, 0.22);
+  }
+
+  .wenyou-space-entry-scan-title .wenyou-signal-layer-rose {
+    color: rgba(251, 113, 133, 0.34);
+    text-shadow: 0 0 12px rgba(251, 113, 133, 0.16);
+  }
+
   .wenyou-space-entry-track {
     width: 256px;
     height: 4px;
