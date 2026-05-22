@@ -893,6 +893,11 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py services/wenyou/phase.py services/wenyou/common.py services/wenyou/constants.py routes/miniapp/wenyou.py app.py` 通过；`PYTHONPATH="$PWD" .venv/bin/python` 导入 `app / routes.miniapp.wenyou / services.wenyou_service` 通过；`git diff --check -- services/wenyou_service.py services/wenyou` 通过。
 - 未完成 / 下次继续：下一刀优先拆提示词与副本生成、背包/商店/抽卡、结算/成长、怪物遭遇、AI 玩家上下文。非文游脏文件、旧静态 hash 产物和其他模块继续不碰。
 
+当前状态（2026-05-23 文游服务拆分第二阶段）：
+- 已完成：继续压缩 `services/wenyou_service.py`，把 DeepSeek system prompt、候选/框架 prompt builder、类型玩法说明移到 `services/wenyou/prompts.py`；把 DeepSeek 非流式调用和 `wenyou_templates.json` 缓存移到 `services/wenyou/deepseek_client.py`；把难度与副本类型归一化移到 `services/wenyou/common.py`。业务流程、路由、R2 存储和前端不改。
+- 已验证：新旧 prompt 输出等价脚本通过；`.venv/bin/python -m py_compile services/wenyou_service.py services/wenyou/common.py services/wenyou/constants.py services/wenyou/phase.py services/wenyou/prompts.py services/wenyou/deepseek_client.py routes/miniapp/wenyou.py app.py` 通过；`PYTHONPATH="$PWD" .venv/bin/python` 导入 `app / routes.miniapp.wenyou / services.wenyou_service` 通过；固定新手副本 `_build_gm_messages` smoke 通过；`git diff --check -- services/wenyou_service.py services/wenyou docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：下一刀再拆副本 framework/runtime 归一化、背包/商店/抽卡、结算/成长、怪物遭遇和 AI 玩家上下文；不要碰非文游脏文件和旧静态 hash 产物。
+
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
    - 已拆：Codex group chat task 路由已移到 `routes/miniapp/codex_group_chat.py`；`/codex-group-chat-tasks*` 路径保持不变

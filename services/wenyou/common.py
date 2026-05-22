@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any, Optional
 
-from services.wenyou.constants import _WENYOU_RANK_ORDER
+from services.wenyou.constants import _WENYOU_DIFFICULTIES, _WENYOU_INSTANCE_GENRES, _WENYOU_RANK_ORDER
 
 
 def _extract_json_object(text: str) -> Optional[dict]:
@@ -70,3 +70,13 @@ def _slug_id(value: Any, fallback: str = "item") -> str:
 def _rarity_rank(value: Any) -> int:
     rank = str(value or "D").strip().upper()
     return _WENYOU_RANK_ORDER.index(rank) + 1 if rank in _WENYOU_RANK_ORDER else 1
+
+
+def _normalize_difficulty(value: Any) -> str:
+    rank = str(value or "").strip().upper()
+    return rank if rank in _WENYOU_DIFFICULTIES else "C"
+
+
+def _normalize_instance_genre(value: Any) -> str:
+    genre = str(value or "").strip()
+    return genre if genre in _WENYOU_INSTANCE_GENRES else "剧情解密"
