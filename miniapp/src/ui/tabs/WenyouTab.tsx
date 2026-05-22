@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { apiJson } from "../api";
 import { useToast } from "../toast";
 import wenyouCardRevealUrl from "../../assets/sfx/wenyou_card_reveal.flac";
+import wenyouHubLoopUrl from "../../assets/sfx/wenyou_hub_loop.mp3";
+import wenyouIntroLoopUrl from "../../assets/sfx/wenyou_intro_loop.mp3";
 import wenyouKeyClickUrl from "../../assets/sfx/wenyou_key_click.wav";
 
 type WenyouView = "home" | "selection" | "game" | "archive" | "shop" | "rift";
@@ -1025,6 +1027,46 @@ const riftCardRevealSound = (() => {
   };
 })();
 
+type WenyouMusicMode = "intro" | "hub" | "off";
+
+const wenyouMusic = (() => {
+  let current: HTMLAudioElement | null = null;
+  let mode: WenyouMusicMode = "off";
+
+  const stop = () => {
+    if (!current) return;
+    current.pause();
+    current.currentTime = 0;
+    current = null;
+    mode = "off";
+  };
+
+  const play = (nextMode: Exclude<WenyouMusicMode, "off">) => {
+    if (typeof window === "undefined") return;
+    if (mode === nextMode && current) return;
+    stop();
+    const audio = new Audio(nextMode === "intro" ? wenyouIntroLoopUrl : wenyouHubLoopUrl);
+    audio.loop = true;
+    audio.preload = "auto";
+    audio.volume = nextMode === "intro" ? 0.34 : 0.2;
+    current = audio;
+    mode = nextMode;
+    try {
+      void audio.play().catch(() => undefined);
+    } catch {
+      // Background music can be blocked until the WebView receives user input.
+    }
+  };
+
+  return {
+    setMode(nextMode: WenyouMusicMode) {
+      if (nextMode === "off") stop();
+      else play(nextMode);
+    },
+    stop,
+  };
+})();
+
 export function WenyouTab({
   initialView = "home",
   backHandlerRef,
@@ -1107,6 +1149,8 @@ export function WenyouTab({
     if (!root) return undefined;
     return installWenyouButtonSound(root);
   }, []);
+
+  useEffect(() => () => wenyouMusic.stop(), []);
 
   const pushView = useCallback((next: WenyouView) => {
     setView((prev) => {
@@ -1403,6 +1447,11 @@ export function WenyouTab({
   const hasPlayerCodes = hasPlayerOneCode && hasPlayerTwoCode;
   const isEntryResolving = view === "home" && !spaceBootVisible && statusLoading && !status.entry && !hasActiveRun;
   const needsTutorialIntro = !hasActiveRun && !statusLoading && !hasPlayerCodes;
+  const musicMode: WenyouMusicMode = view === "home" && !spaceBootVisible
+    ? needsTutorialIntro || isEntryResolving
+      ? "intro"
+      : "hub"
+    : "off";
   const currentScene: EntryScene = hasActiveRun
     ? (activeScene || {
         name: status.session?.instance_name || sessionPanel?.framework?.instance_name || "等待接入",
@@ -1466,6 +1515,10 @@ export function WenyouTab({
   const regularShopItems = regularShop?.items?.length ? regularShop.items : (shop?.items || []);
   const hubPoints = Number(shop?.points ?? sessionPanel?.wallet?.points ?? sessionPanel?.stats?.points ?? 0);
   const hubDebts = Number(shop?.debts ?? sessionPanel?.wallet?.debts ?? 0);
+
+  useEffect(() => {
+    wenyouMusic.setMode(musicMode);
+  }, [musicMode]);
   const hubRank = String(homePlayer.rank || "E");
   const hubLevel = Number(homePlayer.level ?? 1);
   const hubPointSignal = Math.max(8, Math.min(100, Math.round((hubPoints / 2000) * 100)));
