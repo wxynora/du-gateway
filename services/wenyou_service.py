@@ -23,6 +23,57 @@ from config import (
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
+from services.wenyou.common import (
+    _extract_json_object,
+    _first_json_object_span,
+    _rarity_rank,
+    _slug_id,
+    _to_non_negative_int,
+)
+from services.wenyou.constants import (
+    _DEFAULT_PLAYER_COUNT,
+    _DEFAULT_TASKER_TOTAL,
+    _WENYOU_ACTION_MODIFIER,
+    _WENYOU_ATTRIBUTE_KEYS,
+    _WENYOU_CLEAR_BASE_REWARD,
+    _WENYOU_CORE_ABILITY_ARCHETYPES,
+    _WENYOU_DEFAULT_ABILITIES,
+    _WENYOU_DIFFICULTIES,
+    _WENYOU_DIFFICULTY_MULTIPLIER,
+    _WENYOU_EVENT_TAGS,
+    _WENYOU_INSTANCE_GENRES,
+    _WENYOU_LEVEL_EXP_TABLE,
+    _WENYOU_PROMOTION_RULES,
+    _WENYOU_RANK_ATTRIBUTE_HARD_CAP,
+    _WENYOU_RANK_ATTRIBUTE_SOFT_CAP,
+    _WENYOU_RANK_HP_BONUS,
+    _WENYOU_RANK_MENTAL_REDUCTION,
+    _WENYOU_RANK_ORDER,
+    _WENYOU_RANK_PHYSICAL_REDUCTION,
+    _WENYOU_RANK_SAN_BONUS,
+    _WENYOU_RANK_SPI_BONUS,
+    _WENYOU_RATING_BONUS,
+    _WENYOU_RATING_LABELS,
+    _WENYOU_RATING_OPTIONS,
+    _WENYOU_RESULT_FACTORS,
+    _WENYOU_RESULT_OPTIONS,
+    _WENYOU_REVIVE_BASE_COST,
+    _WENYOU_REWARD_CATEGORY_LABELS,
+    _WENYOU_REWARD_CATEGORY_RATES,
+    _WENYOU_REWARD_RARITY_RATES,
+    _WENYOU_REWARD_TABLE_CONFIG,
+    _WENYOU_RISK_DAMAGE,
+    _WENYOU_SELL_RATIO,
+    _WENYOU_TUTORIAL_ATTRIBUTE_POINTS,
+    _WENYOU_TUTORIAL_GIFT_ITEM_IDS,
+    _WENYOU_TUTORIAL_INSTANCE_ID,
+)
+from services.wenyou.phase import (
+    _normalize_phase,
+    _phase_label,
+    _session_phase,
+    _shop_open_for_phase,
+)
 
 logger = get_logger(__name__)
 
@@ -37,52 +88,10 @@ _STORY_EXPANSION_JOBS_LOCK = threading.Lock()
 _STORY_EXPANSION_JOB_TTL_SECONDS = 15 * 60
 _WENYOU_MEMORY_WINDOW_ID = "wenyou"
 _WENYOU_SUMMARY_EVERY_N_ROUNDS = 4
-_DEFAULT_PLAYER_COUNT = 2
-_DEFAULT_TASKER_TOTAL = 6
-_WENYOU_PHASES = frozenset({"hub", "candidate_selection", "instance_running", "settlement", "archived"})
 try:
     _WENYOU_TEST_MIN_POINTS = max(0, int(os.environ.get("WENYOU_TEST_MIN_POINTS", "0") or "0"))
 except Exception:
     _WENYOU_TEST_MIN_POINTS = 0
-
-
-def _normalize_phase(value: Any, default: str = "instance_running") -> str:
-    """Normalize old local phase names to the rules-doc state machine."""
-    raw = str(value or "").strip().lower()
-    if raw in _WENYOU_PHASES:
-        return raw
-    if raw in ("instance", "running", "game", "副本", "副本中", "进行中"):
-        return "instance_running"
-    if raw in ("main_god", "space", "主神", "主神空间", "系统空间"):
-        return "hub"
-    if raw in ("settle", "结算", "结算中"):
-        return "settlement"
-    if raw in ("archive", "归档", "已归档"):
-        return "archived"
-    if raw in ("selection", "candidate", "候选池", "副本选择"):
-        return "candidate_selection"
-    return default if default in _WENYOU_PHASES else "instance_running"
-
-
-def _phase_label(phase: Any) -> str:
-    return {
-        "hub": "主神空间",
-        "candidate_selection": "候选池",
-        "instance_running": "副本中",
-        "settlement": "结算中",
-        "archived": "已归档",
-    }.get(_normalize_phase(phase), "副本中")
-
-
-def _session_phase(session: dict) -> str:
-    if isinstance(session, dict) and session.get("phase"):
-        return _normalize_phase(session.get("phase"))
-    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
-    return _normalize_phase(st.get("phase"))
-
-
-def _shop_open_for_phase(phase: Any) -> bool:
-    return _normalize_phase(phase) in {"hub", "settlement"}
 
 # 开局生成框架时注入的 system（无限流 / 副本）
 _FRAMEWORK_SYSTEM = """你在为一款「无限流」App 文字跑团生成**单个副本**的设定数据。
@@ -207,56 +216,6 @@ def _load_templates() -> dict:
             logger.exception("读取 wenyou_templates.json 失败")
             _TEMPLATES_CACHE = {"worlds": [], "conflicts": [], "roles": []}
         return _TEMPLATES_CACHE
-
-
-def _extract_json_object(text: str) -> Optional[dict]:
-    """从模型输出中解析第一个 JSON 对象。"""
-    if not text or not isinstance(text, str):
-        return None
-    t = text.strip()
-    span = _first_json_object_span(t)
-    if not span:
-        return None
-    raw = t[span[0] : span[1]]
-    for attempt in (raw, raw.replace("\n", " ")):
-        try:
-            data = json.loads(attempt)
-            if isinstance(data, dict):
-                return data
-        except json.JSONDecodeError:
-            continue
-    return None
-
-
-def _first_json_object_span(text: str, start_index: int = 0) -> Optional[tuple[int, int]]:
-    """Return the first balanced JSON-object span in text, tolerant of nested objects."""
-    if not text:
-        return None
-    start = text.find("{", max(0, start_index))
-    if start < 0:
-        return None
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return start, i + 1
-    return None
 
 
 def call_wenyou_deepseek(
@@ -440,178 +399,6 @@ def _candidates_prompt(count: int, difficulty_hint: str, keywords: str = "") -> 
 只输出 JSON，不要解释。"""
 
 
-# 副本难度 D～S（D 最低，S 最高）
-_WENYOU_DIFFICULTIES = frozenset({"D", "C", "B", "A", "S"})
-_WENYOU_RISK_DAMAGE: dict[str, tuple[int, int]] = {
-    "safe": (0, 0),
-    "minor": (5, 4),
-    "risky": (12, 10),
-    "dangerous": (25, 22),
-    "desperate": (45, 40),
-    "lethal": (80, 70),
-}
-_WENYOU_DIFFICULTY_MULTIPLIER = {"D": 0.75, "C": 1.0, "B": 1.35, "A": 1.75, "S": 2.25}
-_WENYOU_RANK_PHYSICAL_REDUCTION = {"D": 0, "C": 2, "B": 5, "A": 9, "S": 15}
-_WENYOU_RANK_MENTAL_REDUCTION = {"D": 0, "C": 2, "B": 5, "A": 9, "S": 15}
-_WENYOU_RANK_HP_BONUS = {"D": 0, "C": 20, "B": 45, "A": 80, "S": 130}
-_WENYOU_RANK_SAN_BONUS = {"D": 0, "C": 20, "B": 45, "A": 80, "S": 130}
-_WENYOU_RANK_SPI_BONUS = {"D": 0, "C": 2, "B": 5, "A": 9, "S": 15}
-_WENYOU_RANK_ATTRIBUTE_SOFT_CAP = {"D": 14, "C": 18, "B": 24, "A": 32, "S": 42}
-_WENYOU_RANK_ATTRIBUTE_HARD_CAP = {"D": 16, "C": 22, "B": 30, "A": 40, "S": 50}
-_WENYOU_LEVEL_EXP_TABLE = {
-    1: 40,
-    2: 70,
-    3: 110,
-    4: 150,
-    5: 200,
-    6: 260,
-    7: 340,
-    8: 440,
-    9: 560,
-    10: 720,
-    11: 900,
-    12: 1100,
-    13: 1320,
-    14: 1560,
-    15: 1820,
-    16: 2100,
-    17: 2400,
-    18: 2730,
-    19: 3090,
-    20: 3480,
-    21: 3900,
-    22: 4350,
-    23: 4830,
-    24: 5340,
-    25: 5880,
-    26: 6450,
-    27: 7050,
-    28: 7680,
-    29: 8340,
-}
-_WENYOU_ATTRIBUTE_KEYS = ("str", "con", "agi", "int", "spi", "luk")
-_WENYOU_RANK_ORDER = ("D", "C", "B", "A", "S")
-_WENYOU_PROMOTION_RULES = {
-    "C": {"from": "D", "level": 3, "cost": 200, "clear": "C", "perfect": "D"},
-    "B": {"from": "C", "level": 6, "cost": 500, "clear": "B", "perfect": "C"},
-    "A": {"from": "B", "level": 10, "cost": 1000, "clear": "A", "perfect": "B"},
-    "S": {"from": "A", "level": 15, "cost": 2000, "clear": "S", "perfect": "A", "special_trial": True},
-}
-_WENYOU_REVIVE_BASE_COST = {"D": 200, "C": 500, "B": 1200, "A": 2600, "S": 6000}
-_WENYOU_SELL_RATIO = {"D": 0.25, "C": 0.30, "B": 0.35, "A": 0.40, "S": 0.45}
-_WENYOU_CORE_ABILITY_ARCHETYPES = {
-    "observe": {
-        "id": "core_observe",
-        "name": "异常余光",
-        "rarity": "D",
-        "tags": ["observe", "investigation"],
-        "desc": "每副本 1 次，获得当前场景中一处被忽略的异常提示；若涉及隐藏规则，SAN -5。",
-    },
-    "escape": {
-        "id": "core_escape",
-        "name": "退路直觉",
-        "rarity": "D",
-        "tags": ["escape", "stealth"],
-        "desc": "每副本 1 次，逃离、规避或脱身判定 +3。",
-    },
-    "protect": {
-        "id": "core_protect",
-        "name": "代偿护手",
-        "rarity": "D",
-        "tags": ["protect", "support"],
-        "desc": "每副本 1 次，为自己或同伴抵消 15 点 HP 伤害；自己 SAN -5。",
-    },
-    "combat": {
-        "id": "core_combat",
-        "name": "破局冲击",
-        "rarity": "D",
-        "tags": ["combat", "force"],
-        "desc": "每副本 1 次，破坏、压制或强行突破判定 +3；失败时自身 HP -5。",
-    },
-    "social": {
-        "id": "core_social",
-        "name": "人群伪装",
-        "rarity": "D",
-        "tags": ["social", "deception"],
-        "desc": "每副本 1 次，社交、伪装或混入人群判定 +3；失败时暴露风险 +1。",
-    },
-    "rule": {
-        "id": "core_rule",
-        "name": "规则嗅觉",
-        "rarity": "D",
-        "tags": ["rule", "investigation"],
-        "desc": "每副本 1 次，验证一条低级规则是否会立刻造成危险；SAN -5。",
-    },
-    "resilience": {
-        "id": "core_resilience",
-        "name": "残响锚点",
-        "rarity": "D",
-        "tags": ["resilience", "mental"],
-        "desc": "每副本 1 次，抵消一次动摇或轻度污染；SAN 低于一半时额外稳定当前精神力 +1。",
-    },
-    "survival": {
-        "id": "core_survival",
-        "name": "求生本能",
-        "rarity": "D",
-        "tags": ["survival"],
-        "desc": "每副本 1 次，在险境行动前获得一次保守提示，或将一次低级风险降低一级。",
-    },
-}
-_WENYOU_ACTION_MODIFIER = {
-    "prepared": 0.70,
-    "normal": 1.00,
-    "reckless": 1.30,
-    "forced": 1.60,
-}
-_WENYOU_CLEAR_BASE_REWARD = {
-    "D": {"points": 100, "exp": 30, "rolls": 1},
-    "C": {"points": 220, "exp": 60, "rolls": 1},
-    "B": {"points": 450, "exp": 120, "rolls": 2},
-    "A": {"points": 900, "exp": 220, "rolls": 2},
-    "S": {"points": 1800, "exp": 420, "rolls": 3},
-}
-_WENYOU_RESULT_FACTORS = {
-    "standard_clear": {"points": 1.0, "exp": 1.0, "label": "标准通关"},
-    "low_escape": {"points": 0.5, "exp": 0.5, "label": "低完成逃生"},
-    "failed_escape": {"points": 0.0, "exp": 0.2, "label": "失败撤离"},
-    "death_failed": {"points": 0.0, "exp": 0.0, "label": "死亡失败"},
-    "abandoned": {"points": 0.0, "exp": 0.0, "label": "放弃副本"},
-}
-_WENYOU_TUTORIAL_INSTANCE_ID = "tutorial_white_box_corridor"
-_WENYOU_TUTORIAL_ATTRIBUTE_POINTS = 6
-_WENYOU_TUTORIAL_GIFT_ITEM_IDS = ("wy_d_001", "wy_d_002")
-_WENYOU_RATING_BONUS = {
-    "S": {"points": 0.70, "exp": 0.70},
-    "A": {"points": 0.45, "exp": 0.45},
-    "B": {"points": 0.20, "exp": 0.20},
-    "C": {"points": 0.0, "exp": 0.0},
-    "D": {"points": -0.20, "exp": -0.20},
-    "F": {"points": 0.0, "exp": 0.0},
-}
-_WENYOU_REWARD_RARITY_RATES: dict[str, list[tuple[str, float]]] = {
-    "D": [("D", 70.0), ("C", 25.0), ("B", 5.0)],
-    "C": [("D", 20.0), ("C", 60.0), ("B", 18.0), ("A", 2.0)],
-    "B": [("C", 25.0), ("B", 55.0), ("A", 18.0), ("S", 2.0)],
-    "A": [("B", 35.0), ("A", 55.0), ("S", 10.0)],
-    "S": [("A", 45.0), ("S", 55.0)],
-}
-_WENYOU_REWARD_CATEGORY_RATES: dict[str, list[tuple[str, float]]] = {
-    "D": [("consumable_item", 56.0), ("material", 24.0), ("tool_item", 18.0), ("special", 2.0)],
-    "C": [("consumable_item", 40.0), ("material", 25.0), ("tool_item", 30.0), ("special", 5.0)],
-    "B": [("consumable_item", 24.0), ("material", 26.0), ("tool_item", 38.0), ("special", 12.0)],
-    "A": [("consumable_item", 14.0), ("material", 24.0), ("tool_item", 42.0), ("special", 20.0)],
-    "S": [("consumable_item", 8.0), ("material", 18.0), ("tool_item", 44.0), ("special", 30.0)],
-}
-_WENYOU_REWARD_TABLE_CONFIG: Optional[dict[str, Any]] = None
-_WENYOU_REWARD_CATEGORY_LABELS = {
-    "consumable_item": "消耗道具",
-    "material": "材料",
-    "tool_item": "工具道具",
-    "special": "特殊物/称号",
-}
-_WENYOU_DEFAULT_ABILITIES = {item["id"]: item for item in _WENYOU_CORE_ABILITY_ARCHETYPES.values()}
-
-
 def _normalize_ability_definition(raw: Any) -> Optional[dict[str, Any]]:
     if not isinstance(raw, dict):
         return None
@@ -664,55 +451,6 @@ def _load_content_ability_catalog() -> dict[str, dict[str, Any]]:
 
 
 _WENYOU_ABILITY_CATALOG = {**_WENYOU_DEFAULT_ABILITIES, **_load_content_ability_catalog()}
-_WENYOU_RATING_LABELS = {
-    "S": "S 完美",
-    "A": "A 优秀",
-    "B": "B 标准",
-    "C": "C 勉强",
-    "D": "D 低完成",
-    "F": "F 失败",
-}
-_WENYOU_RATING_OPTIONS = [
-    {"id": "S", "label": "S 完美", "desc": "95+ 分，高探索、低损耗或隐藏结局。"},
-    {"id": "A", "label": "A 优秀", "desc": "80-94 分，主线清楚且有额外收益。"},
-    {"id": "B", "label": "B 标准", "desc": "60-79 分，完成核心目标。"},
-    {"id": "C", "label": "C 勉强", "desc": "40-59 分，活着完成但缺口较多。"},
-    {"id": "D", "label": "D 低完成", "desc": "20-39 分，只保留很少成果。"},
-    {"id": "F", "label": "F 失败", "desc": "0-19 分，不发积分奖励。"},
-]
-_WENYOU_RESULT_OPTIONS = [
-    {"id": "standard_clear", "label": "标准通关", "desc": "达成主线最低条件，按基础保底结算。"},
-    {"id": "low_escape", "label": "低完成逃生", "desc": "活着离开，但只带回最低记录或情报。"},
-    {"id": "failed_escape", "label": "失败撤离", "desc": "强制撤离或只保住性命，不发积分。"},
-    {"id": "death_failed", "label": "死亡失败", "desc": "死亡或彻底失败，后续接复活/债务。"},
-    {"id": "abandoned", "label": "放弃副本", "desc": "主动放弃，触发放弃惩罚。"},
-]
-_WENYOU_EVENT_TAGS = frozenset(
-    {
-        "physical",
-        "mental",
-        "rule_pollution",
-        "memory",
-        "mixed",
-        "clue",
-        "npc_relation",
-        "time",
-        "resource",
-    }
-)
-
-# 副本玩法类型（须与框架 JSON 字段 instance_genre 一致）
-_WENYOU_INSTANCE_GENRES = frozenset(
-    {
-        "规则怪谈",
-        "剧情解密",
-        "大逃杀",
-        "对抗",
-        "生存撤离",
-        "潜伏调查",
-        "限时任务",
-    }
-)
 
 
 def _normalize_difficulty(value: Any) -> str:
@@ -841,13 +579,6 @@ _WENYOU_PLAYER_STATE_KEYS = frozenset(
         "special_trial_cleared",
     }
 )
-
-
-def _to_non_negative_int(value: Any, default: int = 0) -> int:
-    try:
-        return max(0, int(value))
-    except Exception:
-        return max(0, int(default))
 
 
 def _normalize_core_ability(raw: Any) -> Optional[dict[str, Any]]:
@@ -1391,13 +1122,18 @@ def _stats_runtime_from_framework(fw: dict) -> dict:
     """由 framework.initial_stats 生成运行时 stats（含 phase、inventory）。"""
     fw = _framework_for_runtime(dict(fw or {}))
     init = _normalize_initial_stats({"initial_stats": fw.get("initial_stats")})
-    return {
+    stats = {
         "phase": "instance_running",
         "points": init["points"],
         "player1": dict(init["player1"]),
         "player2": dict(init["player2"]),
         "inventory": _normalize_inventory(init.get("items"), source="initial"),
     }
+    stats["player1"]["display_name"] = _normalize_player_display_name(fw.get("player1_name"), "玩家一")
+    stats["player1"]["controller"] = "human"
+    stats["player2"]["display_name"] = _normalize_player_display_name(fw.get("player2_name"), "渡")
+    stats["player2"]["controller"] = "ai"
+    return stats
 
 
 def _session_ensure_stats(session: dict) -> None:
@@ -1480,11 +1216,13 @@ def _format_status_footer(session: dict) -> str:
             f"{_foot_ability(p)}"
         )
 
+    p1_label = _normalize_player_display_name(p1.get("display_name"), "玩家一")
+    p2_label = _normalize_player_display_name(p2.get("display_name"), "渡")
     return (
         "━━━━━━━━━━━━\n"
         f"【状态】{loc}｜主神积分：{int(st.get('points') or 0)}\n"
-        f"玩家一 {_foot_player(p1)}\n"
-        f"玩家二 {_foot_player(p2)}\n"
+        f"{p1_label} {_foot_player(p1)}\n"
+        f"{p2_label} {_foot_player(p2)}\n"
         f"道具：{inv_s}\n"
         "━━━━━━━━━━━━"
     )
@@ -2345,6 +2083,21 @@ _WENYOU_PLAYER_CONTROLLERS = {"player1": "human", "player2": "ai"}
 
 def _player_display_name(player_id: Any) -> str:
     return _WENYOU_PLAYER_LABELS.get(_resolve_player_key(player_id), "玩家")
+
+
+def _normalize_player_display_name(value: Any, fallback: str = "") -> str:
+    text = _compact_text(value, 24).replace("\n", "").replace("\r", "").strip()
+    if not text:
+        return fallback
+    return text[:16]
+
+
+def _wallet_player_display_name(wallet: Optional[dict], player_id: str, fallback: str = "") -> str:
+    if not isinstance(wallet, dict):
+        return fallback
+    players = wallet.get("players") if isinstance(wallet.get("players"), dict) else {}
+    player = players.get(player_id) if isinstance(players.get(player_id), dict) else {}
+    return _normalize_player_display_name(player.get("display_name"), fallback)
 
 
 def _normalize_player_wallet(raw: Any, seed_points: int = 100, seed_debts: int = 0, seed_gacha: Any = None, seed_ledger: Any = None) -> dict:
@@ -3310,14 +3063,71 @@ def _mark_tutorial_started(user_id: int, session: dict, wallet: dict) -> None:
     _save_wenyou_wallet(int(user_id), wallet)
 
 
+def set_wenyou_player_display_name(user_id: int, player_name: Any, player_id: str = "player1") -> str:
+    uid = int(user_id or 0)
+    pid = _resolve_player_key(player_id)
+    fallback = _WENYOU_PLAYER_LABELS.get(pid, pid)
+    name = _normalize_player_display_name(player_name, "")
+    if not name:
+        return ""
+    session = r2_store.get_wenyou_session(uid)
+    wallet = _load_wenyou_wallet(uid, session if isinstance(session, dict) else None)
+    players = wallet.get("players") if isinstance(wallet.get("players"), dict) else {}
+    player = players.get(pid) if isinstance(players.get(pid), dict) else dict(_default_player_stats())
+    player["display_name"] = name
+    player.setdefault("controller", _WENYOU_PLAYER_CONTROLLERS.get(pid, "human"))
+    _normalize_player_growth_fields(player)
+    players[pid] = player
+    wallet["players"] = players
+    _save_wenyou_wallet(uid, wallet)
+
+    if isinstance(session, dict) and session.get("gameId"):
+        _session_ensure_stats(session)
+        st_player = session["stats"].get(pid) if isinstance(session["stats"].get(pid), dict) else dict(_default_player_stats())
+        st_player["display_name"] = name
+        st_player.setdefault("controller", _WENYOU_PLAYER_CONTROLLERS.get(pid, "human"))
+        session["stats"][pid] = st_player
+        fw = session.get("framework") if isinstance(session.get("framework"), dict) else {}
+        if pid == "player1":
+            fw["player1_name"] = name
+        elif pid == "player2":
+            fw["player2_name"] = name
+        session["framework"] = fw
+        session["runtime_state"] = _runtime_state_view(session)
+        r2_store.save_wenyou_session(uid, session)
+    return name or fallback
+
+
+def _apply_wallet_player_names_to_framework(framework: dict, wallet: dict) -> dict:
+    fw = dict(framework or {})
+    p1 = _wallet_player_display_name(wallet, "player1", "")
+    p2 = _wallet_player_display_name(wallet, "player2", "")
+    if p1:
+        fw["player1_name"] = p1
+    if p2:
+        fw["player2_name"] = p2
+    return _normalize_framework(fw)
+
+
+def get_wenyou_entry_state(user_id: int) -> dict[str, Any]:
+    uid = int(user_id or 0)
+    wallet = _load_wenyou_wallet(uid)
+    return {
+        "tutorial_required": _should_offer_tutorial(uid, wallet),
+        "player_name": _wallet_player_display_name(wallet, "player1", ""),
+        "tutorial_code": "T-000",
+        "tutorial_title": "白箱回廊",
+    }
+
+
 _WENYOU_CORE_ABILITY_KEYWORDS = {
-    "observe": ("观察", "检查", "线索", "记录", "调查", "分析", "推理", "确认", "看", "搜索", "验证"),
-    "escape": ("逃", "跑", "躲", "绕开", "潜行", "撤退", "退后", "藏", "避开", "脱身"),
-    "protect": ("保护", "挡", "救", "治疗", "扶", "拉", "掩护", "照顾", "包扎"),
-    "combat": ("打", "砸", "攻击", "硬闯", "破坏", "撞", "压制", "踹", "挥", "砍"),
-    "social": ("交谈", "询问", "说服", "骗", "伪装", "谈判", "搭话", "套话", "解释"),
-    "rule": ("规则", "禁忌", "广播", "时钟", "门牌", "试探", "条件", "仪式", "循环"),
-    "resilience": ("受伤", "san", "污染", "死亡", "濒死", "忍", "坚持", "疼", "恐惧"),
+    "observe": ("observe", "观察", "检查", "线索", "记录", "调查", "分析", "推理", "确认", "打量", "留意", "搜索", "验证"),
+    "escape": ("escape", "逃", "跑", "躲", "绕开", "潜行", "撤退", "退后", "藏", "避开", "脱身", "冲过去", "冲"),
+    "protect": ("protect", "保护", "挡", "救", "治疗", "扶", "拉住", "掩护", "照顾", "包扎"),
+    "combat": ("combat", "打", "砸", "攻击", "硬闯", "破坏", "撞", "压制", "踹", "挥", "砍", "拆", "撬"),
+    "social": ("social", "交谈", "询问", "说服", "骗", "伪装", "谈判", "搭话", "套话", "解释", "安慰", "呼唤"),
+    "rule": ("rule", "规则", "禁忌", "广播", "时钟", "门牌", "试探", "条件", "仪式", "循环", "红灯", "白灯", "光轨"),
+    "resilience": ("resilience", "受伤", "san", "污染", "死亡", "濒死", "忍", "坚持", "疼", "恐惧", "冷静"),
 }
 
 
@@ -3664,16 +3474,6 @@ def _format_settlement_summary(settlement: dict) -> str:
         suffix = "、".join(item_names) if item_names else "新手补给"
         lines.append(f"新手礼包：{suffix}｜自由属性点 +{int(pack.get('attribute_points') or 0)}")
     return "\n".join(lines)
-
-
-def _slug_id(value: Any, fallback: str = "item") -> str:
-    raw = str(value or "").strip().lower()
-    raw = re.sub(r"[^0-9a-zA-Z_\-\u4e00-\u9fff]+", "_", raw).strip("_")
-    return (raw or fallback)[:80]
-
-
-def _rarity_rank(value: Any) -> int:
-    return {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5}.get(str(value or "D").strip().upper(), 1)
 
 
 def _normalize_inventory_item(raw: Any, index: int = 0, source: str = "session") -> Optional[dict]:
@@ -6768,7 +6568,7 @@ def _tutorial_framework() -> dict:
         "instance_code": "T-000",
         "instance_name": "白箱回廊",
         "instance_genre": "剧情解密",
-        "genre_note": "低危教学副本，用三段回廊引导玩家熟悉任务、背包、角色面板和基础行动。",
+        "genre_note": "固定低危新手副本，用小说式开局和三段简单选择测试玩家行动倾向。",
         "difficulty": "D",
         "player_count": 2,
         "tasker_total": 2,
@@ -6777,14 +6577,15 @@ def _tutorial_framework() -> dict:
         "tutorial_id": _WENYOU_TUTORIAL_INSTANCE_ID,
         "tutorial_guides": [
             "新手副本没有其他任务者 NPC；不要临时生成同场任务者。",
-            "只在关键节点用一两句【主神提示】引导，不要把教程写成说明书。",
-            "第一段提示玩家可以“观察”环境，第二段提示可以“检查/移动”，第三段提示任务、背包、角色面板和结算入口。",
-            "如果玩家卡住，给出低压提示；不要替玩家做行动决定。",
-            "失败只做轻微损耗或弹回起点，不要写死亡惩罚。",
+            "开局按无限流小说写：玩家已经被扔进副本，不要写成表单、说明书或身份校准流程。",
+            "本局只做三段低危测试：醒来观察、灯色规则、出口选择；每段最多给 2-3 个自然行动方向。",
+            "允许玩家用观察、冲刺、保护同伴、询问系统、破坏面板、验证规则等方式通过；不同方式只影响核心能力倾向。",
+            "若能判断行动倾向，在【事件意图】tags 或 state_proposals reason 中写 observe/escape/protect/combat/social/rule/resilience 之一，帮助后端生成核心能力画像。",
+            "玩家卡住时给低压提示；失败只做轻微回弹或少量 HP/SAN 损耗，不死亡、不惩罚债务。",
         ],
         "world": (
-            "白箱回廊是一段主神空间投放给新任务者的低危校准区。墙壁像未加载完成的白色模型，地面嵌着三条细光轨，"
-            "每次行动后都会有一块半透明系统屏短暂亮起。这里没有其他任务者，只有玩家角色与主神系统的基础引导。"
+            "玩家在一段没有窗户的白色回廊醒来。墙面干净得像未加载完成，地面嵌着红白两色光轨，远处有一扇没有把手的门。"
+            "这里没有其他任务者，也没有怪物；危险来自误判、慌乱和对规则的忽视。主神系统只给极短提示，不解释全貌。"
         ),
         "player1_name": "辛玥",
         "player1_instance_name": "",
@@ -6792,8 +6593,8 @@ def _tutorial_framework() -> dict:
         "player2_name": "渡",
         "player2_instance_name": "",
         "player2_role": "新任务者。银色短发，一米八多，薄肌，二十多岁。",
-        "conflict": "通过三段白箱回廊：确认任务提示，完成一次有效观察/检查/移动，找到出口并返回主神空间。",
-        "failure_hint": "连续无视系统提示会被弹回当前段起点，并承受轻微 HP/SAN 损耗；不会触发死亡惩罚。",
+        "conflict": "在白箱回廊中读懂红白灯规则，抵达尽头的门，并完成第一次副本返回。",
+        "failure_hint": "错误行动只会触发回弹、短暂眩晕或少量 HP/SAN 损耗；不会触发死亡惩罚。",
         "reward_hint": "首次标准通关除基础通关奖励外，会额外发放新手大礼包。",
         "public": {
             "instance_name": "白箱回廊",
@@ -6801,16 +6602,17 @@ def _tutorial_framework() -> dict:
             "difficulty": "D",
             "visible_rules": [
                 "本副本没有其他任务者。",
-                "红灯亮起时请先观察，白灯亮起时可以前进。",
-                "卡住时可以查看任务、背包、角色面板，或输入观察/检查/移动。",
+                "红灯亮起时贸然前进会被回弹。",
+                "白灯亮起时可以接近下一段回廊。",
+                "出口不会考验唯一答案，只记录你解决问题的方式。",
             ],
-            "public_task": "通过三段基础行动校准，找到出口并完成结算。",
+            "public_task": "抵达白箱回廊尽头，找到开门方式并完成返回。",
         },
         "gm_secret": {
             "true_rules": [
-                "玩家完成观察后，第一段门禁解除。",
-                "玩家检查墙面/光轨后，第二段出口标记出现。",
-                "玩家主动确认任务或面板信息后，第三段出口稳定。",
+                "第一段：玩家只要主动观察、放慢脚步、安抚同伴或询问系统，就能获得红白灯规则；直接冲刺会轻微回弹但仍给提示。",
+                "第二段：玩家需要验证一次灯色节奏；可通过等待、试探、丢物、分工观察、询问渡或破坏小面板得到等价进展。",
+                "第三段：出口记录玩家最偏好的解决方式；观察/逃脱/保护/破坏/社交/规则/抗压都能通关，不设唯一正确答案。",
             ],
             "false_rules": [],
             "npc_private_state": {},
@@ -6818,41 +6620,46 @@ def _tutorial_framework() -> dict:
         },
         "instance_blueprint": {
             "blueprint_version": 1,
-            "logline": "玩家在低危白箱回廊完成主神系统基础校准。",
+            "logline": "玩家在醒来后的白色回廊中用自己的方式读懂规则，完成第一次返回。",
             "mainline": [
                 {
-                    "phase": "开场",
-                    "goal": "阅读主神提示并观察第一段回廊",
-                    "required_clues": ["guide_observe"],
-                    "fail_forward": "如果玩家没有观察，系统屏闪烁提示“先看清环境”。",
+                    "phase": "醒来",
+                    "goal": "让玩家意识到自己身处副本，并对第一道红灯做出反应",
+                    "required_clues": ["red_light_stops"],
+                    "fail_forward": "如果玩家直接冲刺，触发轻微回弹并让系统屏补一句“红灯时请停下”。",
+                    "reward_tags": ["observe", "escape", "protect", "social"],
                 },
                 {
-                    "phase": "行动校准",
-                    "goal": "通过检查、移动或使用基础道具理解行动输入",
-                    "required_clues": ["guide_action"],
-                    "fail_forward": "错误行动只触发轻微回弹，不阻断剧情。",
+                    "phase": "灯色规则",
+                    "goal": "让玩家用等待、试探、检查、协作或强行处理理解红白灯节奏",
+                    "required_clues": ["white_light_allows_entry"],
+                    "fail_forward": "失败只扣少量 HP/SAN 或弹回原位，随后给出更明显的灯色变化。",
+                    "reward_tags": ["rule", "combat", "resilience"],
                 },
                 {
-                    "phase": "面板校准",
-                    "goal": "确认任务/背包/角色面板的用途并打开出口",
-                    "required_clues": ["guide_panel"],
-                    "fail_forward": "主神提示出口需要一次明确确认或推进。",
+                    "phase": "出口",
+                    "goal": "让玩家选择一种开门方式，并记录其核心行动倾向",
+                    "required_clues": ["exit_records_intent"],
+                    "fail_forward": "任何有明确意图的行动都可以开门，只用叙事差异记录倾向。",
+                    "reward_tags": ["observe", "escape", "protect", "combat", "social", "rule", "resilience"],
                 },
             ],
             "side_quests": [],
             "hidden_side_quests": [],
             "hidden_endings": [],
             "clue_graph": [
-                {"id": "guide_observe", "public_text": "白墙上的系统屏提示：先观察，再行动。", "leads_to": ["guide_action"], "is_required_for_mainline": True},
-                {"id": "guide_action", "public_text": "光轨会响应观察、检查、移动等基础行动。", "leads_to": ["guide_panel"], "is_required_for_mainline": True},
-                {"id": "guide_panel", "public_text": "任务、背包、角色面板会记录系统事实，正文不会每次重复。", "leads_to": [], "is_required_for_mainline": True},
+                {"id": "red_light_stops", "public_text": "红灯亮起时，靠近门的人会被轻轻推回原位。", "leads_to": ["white_light_allows_entry"], "is_required_for_mainline": True},
+                {"id": "white_light_allows_entry", "public_text": "白灯亮起时，光轨会稳定，下一段回廊可以进入。", "leads_to": ["exit_records_intent"], "is_required_for_mainline": True},
+                {"id": "exit_records_intent", "public_text": "尽头的门并不要求固定答案，它会记录任务者最自然的解决方式。", "leads_to": [], "is_required_for_mainline": True},
             ],
             "npc_arcs": {},
-            "threat_clocks": [{"id": "tutorial_mistakes", "name": "误操作累积", "value": 0, "max": 3, "visibility": "hidden"}],
+            "threat_clocks": [{"id": "tutorial_mistakes", "name": "误操作累积", "value": 0, "max": 4, "visibility": "hidden"}],
             "hard_constraints": [
                 "没有其他任务者 NPC",
+                "不生成怪物",
                 "不写死亡惩罚",
-                "主神提示短而明确，不替玩家行动",
+                "不要把新手副本写成表单、设置页或说明书",
+                "每段都允许多种通过方式，只记录倾向差异",
                 "完成主线后允许标准通关结算",
             ],
         },
@@ -6870,11 +6677,13 @@ def _tutorial_framework() -> dict:
             "items": [],
         },
         "opening": (
-            "白光像一张被拉平的纸，从脚下铺到视野尽头。\n"
-            "你和渡站在一条洁白的回廊里，墙面没有门牌，只有三条细细的光轨向前延伸。\n"
-            "半透明的系统屏在半空亮起：【新手副本 T-000｜白箱回廊】。\n"
-            "【主神提示】本副本没有其他任务者。请先观察环境，再决定下一步行动。\n"
-            "远处第一道门亮着柔和的白光，像是在等你们给出第一个指令。"
+            "你醒来的时候，耳边先是一阵很轻的电流声。\n"
+            "白光铺满视野，像有人把世界擦到只剩一种颜色。等眼前慢慢清晰，你发现自己站在一条没有窗户的回廊里，"
+            "墙面干净得过分，地面嵌着两条细细的光轨，一红一白，安静地延伸到尽头。\n"
+            "渡就在几步外，也刚睁开眼。远处有一扇没有把手的门，门上浮着一行黑字：\n"
+            "【新手副本 T-000｜白箱回廊】\n"
+            "【任务：抵达尽头的门。】\n"
+            "第一盏红灯忽然亮起，脚下的白光往后一退，像是在提醒你们：别急着往前走。"
         ),
     }
     return _normalize_framework(raw)
@@ -7567,7 +7376,8 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
         with _PENDING_LOCK:
             _PENDING_STORY_CONFIRM.pop(uid, None)
 
-    if not (keywords and keywords.strip()) and _should_offer_tutorial(uid):
+    wallet = _load_wenyou_wallet(uid)
+    if not (keywords and keywords.strip()) and _should_offer_tutorial(uid, wallet):
         fw, err = _tutorial_framework(), None
     elif keywords and keywords.strip():
         fw, err = generate_framework_custom(keywords)
@@ -7576,6 +7386,7 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
     if err or not fw:
         return err or "文游：开局失败。"
 
+    fw = _apply_wallet_player_names_to_framework(fw, wallet)
     session = _new_session(fw)
     wallet = _load_wenyou_wallet(uid, session)
     _mark_tutorial_started(uid, session, wallet)
@@ -7610,6 +7421,8 @@ def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
     if err or not fw:
         return err or "文游：候选扩展开局失败。"
 
+    wallet = _load_wenyou_wallet(uid)
+    fw = _apply_wallet_player_names_to_framework(fw, wallet)
     session = _new_session(fw)
     wallet = _load_wenyou_wallet(uid, session)
     _mark_tutorial_started(uid, session, wallet)

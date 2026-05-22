@@ -878,6 +878,21 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；mock 烟测确认观察/逃脱文本会分别生成 `core_observe/core_escape`，并写入对应 `core_ability_profile.scores/picked`；`git diff --check` 针对本轮文件通过。
 - 未完成 / 不要碰：本轮只补核心能力生成画像，不改前端展示、不改能力生成关键词表、不清理旧静态 hash 产物；非文游脏文件继续保持原样。
 
+当前状态（2026-05-23 文游固定新手副本）：
+- 已完成：`T-000 白箱回廊` 收束为默认内容包的手写固定新手副本，不走随机生成；开局改成小说式醒来进入白色回廊，三段低危结构为醒来、灯色规则、出口选择；每段都允许观察、冲刺、保护、询问、破坏、规则试探或抗压等多种通关方式，只用于记录玩家自然倾向并生成 `core_ability_profile`。核心能力关键词补充自然说法和 `observe/escape/protect/combat/social/rule/resilience` 标签。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`import app / services.wenyou_service / routes.miniapp.wenyou` 通过；固定副本结构烟测确认 `T-000 白箱回廊`、`is_tutorial=True`、三段主线为 `醒来/灯色规则/出口`；核心能力倾向打分烟测可识别观察、规则和保护；`git diff --check` 针对本轮文件通过。
+- 历史备注：该轮未接玩家名登记 UI；下一条“文游首次进入 UI 流程”已补上。仍不清理旧静态 hash 产物，非文游脏文件继续保持原样。
+
+当前状态（2026-05-23 文游首次进入 UI 流程）：
+- 已完成：`/miniapp-api/wenyou/status` 在无进行中副本时返回 `entry.tutorial_required/player_name/tutorial_code/tutorial_title`；`/wenyou/story` 接收 `player_name` 并写入文游 wallet、当前副本 framework 和角色 `display_name`。MiniApp 首页在新手礼包未领取且无进行中副本时，不再展示主神空间大厅，而是展示小说式醒来文案、代号输入和“进入白箱回廊”按钮；确认后直接启动固定新手副本。角色面板和状态脚注会优先展示玩家代号。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`import app / services.wenyou_service / routes.miniapp.wenyou` 通过；本地烟测确认 wallet 代号可写入白箱回廊 framework 和 session stats；`npm --prefix miniapp run build` 通过，当前构建输出 `miniapp_static/assets/WenyouTab-BY00vddN.js`、`miniapp_static/assets/index-C6F-5rcM.js`、`miniapp_static/assets/index-He2_qc1y.css`；`git diff --check` 针对本轮文件通过。
+- 未完成 / 不要碰：本轮只接首次进入和代号落库，不改通关后主神空间解锁细节、不改候选副本规则、不清理旧静态 hash 产物；非文游脏文件继续保持原样。
+
+当前状态（2026-05-23 文游服务拆分第一阶段）：
+- 已完成：`services/wenyou_service.py` 开始拆分，先把无状态基础层移到 `services/wenyou/` 包：`constants.py` 承接难度、阶位、奖励、成长、教学副本等常量；`phase.py` 承接阶段归一化、阶段标签和商店开放判断；`common.py` 承接 JSON 提取、slug、非负整数和稀有度排序工具。原 `wenyou_service.py` 改为从新包导入，业务逻辑和路由行为不改。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py services/wenyou/phase.py services/wenyou/common.py services/wenyou/constants.py routes/miniapp/wenyou.py app.py` 通过；`PYTHONPATH="$PWD" .venv/bin/python` 导入 `app / routes.miniapp.wenyou / services.wenyou_service` 通过；`git diff --check -- services/wenyou_service.py services/wenyou` 通过。
+- 未完成 / 下次继续：下一刀优先拆提示词与副本生成、背包/商店/抽卡、结算/成长、怪物遭遇、AI 玩家上下文。非文游脏文件、旧静态 hash 产物和其他模块继续不碰。
+
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
    - 已拆：Codex group chat task 路由已移到 `routes/miniapp/codex_group_chat.py`；`/codex-group-chat-tasks*` 路径保持不变
