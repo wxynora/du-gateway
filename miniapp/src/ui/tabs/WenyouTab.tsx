@@ -172,6 +172,8 @@ type FeedItem = {
   text: string;
 };
 
+type WenyouHistoryItem = { role?: string; content?: string; timestamp?: string };
+
 type StorySegment = {
   id: string;
   kind: "story" | "system";
@@ -372,7 +374,7 @@ type WenyouSessionPanel = {
   };
   clocks?: Array<Record<string, unknown>>;
   last_state_patch?: Record<string, unknown> | null;
-  history?: Array<{ role?: string; content?: string; timestamp?: string }>;
+  history?: WenyouHistoryItem[];
 };
 
 type WenyouSettlementOption = {
@@ -630,6 +632,26 @@ function parseStorySegments(text: string): StorySegment[] {
     for (const line of lines) splitStoryLine(segments, line);
   }
   return segments.length ? segments : [{ id: "story-0", kind: "story", text: clean }];
+}
+
+function feedFromSessionHistory(history?: WenyouHistoryItem[]): FeedItem[] {
+  if (!Array.isArray(history)) return [];
+  return history
+    .map((item, index) => {
+      const text = String(item?.content || "").trim();
+      if (!text) return null;
+      const role = String(item?.role || "").trim().toLowerCase();
+      const stamp = String(item?.timestamp || index || "");
+      const id = `history-${role || "row"}-${index}-${stamp}`;
+      if (role === "player1" || role === "user") {
+        return { id, kind: "user" as const, text };
+      }
+      if (role === "player2" || role === "ai_player") {
+        return { id, kind: "ai_player" as const, text };
+      }
+      return { id, kind: "system" as const, text };
+    })
+    .filter((item): item is FeedItem => !!item);
 }
 
 function difficultyStars(value?: string) {
@@ -1160,6 +1182,9 @@ export function WenyouTab({
         isPlayableWenyouPanel(nextSession) ||
         (nextSession?.phase === "settlement" && !!nextSession.settlement);
       setSessionPanel(keepSession ? nextSession : null);
+      if (keepSession && nextSession?.gameId) {
+        setFeed((prev) => (prev.length ? prev : feedFromSessionHistory(nextSession.history)));
+      }
       return keepSession ? nextSession : null;
     } catch (e: any) {
       toast(`加载文游面板失败：${e?.message || e}`);
