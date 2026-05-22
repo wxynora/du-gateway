@@ -90,7 +90,7 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 但如果本轮出现关键事实锚点（时间/地点/明确决定/待办结论）或明显情绪起伏，不要因为“太短”而 skip。
 健康数据默认不记；只有出现生病/不适/就医相关情境时才记。
 额外要求：若 action 是 new/merge，content 必须是“概括后的便签”，不要照抄原对话原文。
-额外要求：若 action 是 merge，fused_with_id 必须精确填写“当前记忆列表”里的已有 id；如果找不到明确 id，不要 merge，有新内容就改为 new，没有就 skip。
+额外要求：若 action 是 merge，FUSED_WITH_ID 必须精确填写“当前记忆列表”里的 ref（如 M01 / M02），不要填写 UUID 或自己编 id；如果找不到明确 ref，不要 merge，有新内容就改为 new，没有就 skip。
 额外要求：
 - emotion_label 只标“当前/latest 的态度”，不要写历史态度
 - scene_type 只能从这些值里选一个：problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict
@@ -107,14 +107,14 @@ TAG: 客厅 / 书房 / 图书馆 / 卧室
 EMOTION: positive / negative / neutral
 SCENE: problem_solving / learning / planning / emotional_venting / heart_to_heart / casual_chat / affection / conflict
 TARGET: external_tools / self_state / work_career / our_project / our_relationship / about_me / third_party_people / other_topic
-FUSED_WITH_ID: （仅 merge 时填写已有记忆 id；否则留空）
+FUSED_WITH_ID: （仅 merge 时填写当前记忆列表里的 ref，如 M01；否则留空）
 CONTENT: 记忆正文（new/merge 必填，简短一句，至少 12 个有效字符，禁止只写几个字、半句话、标题词或散文）
 
 ---
 
 本次输入
 
-当前记忆列表（含 id）：
+当前记忆列表（含 ref）：
 {current_memories_json}
 
 当前轮对话：
@@ -141,6 +141,55 @@ _DYNAMIC_LAYER_BATCH_PROMPT = _DYNAMIC_LAYER_PROMPT.replace(
 
 def _one_line_preview(text: str, limit: int = 300) -> str:
     return " ".join(str(text or "").split())[:limit]
+
+
+_MEMORY_PROMPT_FIELDS = (
+    "content",
+    "retrieval_text",
+    "importance",
+    "tag",
+    "emotion_label",
+    "scene_type",
+    "target_type",
+    "mention_count",
+    "created_at",
+    "last_mentioned",
+)
+
+
+def _compact_ref_token(value: Any) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", str(value or "")).upper()
+
+
+def _build_memory_ref_prompt_items(memories: list) -> tuple[list[dict], dict[str, str], set[str]]:
+    """
+    给候选记忆分配短 ref，避免让 DS 抄 UUID。
+    返回 prompt_items、ref->real_id 映射、真实 id 集合。
+    """
+    prompt_items: list[dict] = []
+    ref_to_id: dict[str, str] = {}
+    valid_ids: set[str] = set()
+    for mem in memories or []:
+        if not isinstance(mem, dict):
+            continue
+        mid = str(mem.get("id") or "").strip()
+        if not mid:
+            continue
+        n = len(prompt_items) + 1
+        ref = f"M{n:02d}"
+        ref_to_id[ref] = mid
+        ref_to_id[f"M{n}"] = mid
+        valid_ids.add(mid)
+        item = {"ref": ref}
+        for key in _MEMORY_PROMPT_FIELDS:
+            value = mem.get(key)
+            if value in (None, "", [], {}):
+                continue
+            if key == "retrieval_text" and value == item.get("content"):
+                continue
+            item[key] = value
+        prompt_items.append(item)
+    return prompt_items, ref_to_id, valid_ids
 
 
 def _strip_json_fence(text: str) -> str:
@@ -306,6 +355,23 @@ def _normalize_fused_with_id(value: Any) -> Optional[str]:
     return value
 
 
+def _resolve_fused_with_id(value: Any, ref_to_id: dict[str, str], valid_ids: set[str]) -> Optional[str]:
+    """把 DS 输出的 M01/M1/ref 或兼容旧 UUID 映射成真实 memory id。"""
+    fused = _normalize_fused_with_id(value)
+    if not fused:
+        return None
+    if fused in valid_ids:
+        return fused
+    compact = _compact_ref_token(fused)
+    if compact in ref_to_id:
+        return ref_to_id[compact]
+    m = re.search(r"\bM\s*0*(\d{1,3})\b", fused, flags=re.IGNORECASE)
+    if m:
+        n = int(m.group(1))
+        return ref_to_id.get(f"M{n:02d}") or ref_to_id.get(f"M{n}")
+    return None
+
+
 def _content_quality_issue(content: str) -> str:
     """拦截明显残缺的动态层便签。只拦低质量，不做语义裁判。"""
     text = re.sub(r"\s+", "", str(content or ""))
@@ -463,8 +529,9 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
         N = 10
         candidates = (current_memories or [])[-N:]
 
+    prompt_memories, ref_to_id, valid_ids = _build_memory_ref_prompt_items(candidates)
     prompt = _DYNAMIC_LAYER_PROMPT.format(
-        current_memories_json=json.dumps(candidates or [], ensure_ascii=False),
+        current_memories_json=json.dumps(prompt_memories or [], ensure_ascii=False),
         round_messages_json=json.dumps(round_messages or [], ensure_ascii=False),
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
@@ -489,7 +556,7 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
                                 prompt
                                 + "\n\n上一次输出没有解析成功，或 CONTENT 太短/不完整。"
                                 "这次只输出固定标签格式，例如 ACTION: skip。"
-                                "若 action 是 merge，fused_with_id 必须精确填写当前记忆列表里的已有 id；找不到明确 id 就不要 merge，有新内容改为 new，没有就 skip。"
+                                "若 action 是 merge，FUSED_WITH_ID 必须精确填写当前记忆列表里的 ref（如 M01），不要填写 UUID 或自己编 id；找不到明确 ref 就不要 merge，有新内容改为 new，没有就 skip。"
                                 "若 action 是 new 或 merge，CONTENT 必须填写概括后的完整便签，至少 12 个有效字符，不要只写几个字、标题词或半句话。"
                                 "不要解释原因，不要输出长文。"
                             ),
@@ -536,7 +603,8 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
         action = (obj.get("action") or "skip").strip().lower()
         importance = _coerce_int_1_to_4(obj.get("importance"), default=0)
         content_text = (obj.get("content") or "").strip()
-        fused_with_id = _normalize_fused_with_id(obj.get("fused_with_id"))
+        raw_fused_with_id = _normalize_fused_with_id(obj.get("fused_with_id"))
+        fused_with_id = _resolve_fused_with_id(raw_fused_with_id, ref_to_id, valid_ids)
         emotion_label = str(obj.get("emotion_label") or "").strip().lower()
         scene_type = str(obj.get("scene_type") or "").strip()
         target_type = str(obj.get("target_type") or "").strip()
@@ -545,7 +613,10 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
             logger.warning("动态层 DS 返回 action=merge 但 content/fused_with_id 缺失，按 skip 处理")
             action = "skip"
         elif action == "merge" and content_text and not fused_with_id:
-            logger.warning("动态层 DS 返回 action=merge 但 fused_with_id 缺失，降级为 new")
+            logger.warning(
+                "动态层 DS 返回 action=merge 但 fused_with_id 缺失或无法映射 raw=%s，降级为 new",
+                raw_fused_with_id,
+            )
             action = "new"
         elif action == "new" and not content_text:
             logger.warning("动态层 DS 返回 action=new 但 content 缺失，按 skip 处理")
@@ -625,9 +696,10 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
     if not DEEPSEEK_API_KEY or not DEEPSEEK_API_URL:
         return [_normalize_single_decision(None) for _ in batch_rounds]
 
+    prompt_memories, _ref_to_id, _valid_ids = _build_memory_ref_prompt_items(current_memories or [])
     rounds_batch_json = json.dumps(batch_rounds or [], ensure_ascii=False)
     prompt = _DYNAMIC_LAYER_BATCH_PROMPT.format(
-        current_memories_json=json.dumps(current_memories or [], ensure_ascii=False),
+        current_memories_json=json.dumps(prompt_memories or [], ensure_ascii=False),
         rounds_batch_json=rounds_batch_json,
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}

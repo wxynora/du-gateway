@@ -6,10 +6,12 @@ import sys
 sys.path.insert(0, __file__.replace("\\", "/").rsplit("/", 2)[0])
 
 from services.dynamic_layer_ds import (  # noqa: E402
+    _build_memory_ref_prompt_items,
     _decision_structural_issue,
     _extract_json_array_from_ds_response,
     _extract_json_from_ds_response,
     _normalize_single_decision,
+    _resolve_fused_with_id,
 )
 
 
@@ -80,8 +82,23 @@ LAST_MENTIONED: 2026-05-15T12:01:00+08:00"""
     _assert(second.get("action") == "skip", "second block should stay skip")
 
 
+def test_fused_ref_mapping() -> None:
+    prompt_items, ref_to_id, valid_ids = _build_memory_ref_prompt_items(
+        [
+            {"id": "real-id-1", "content": "第一条旧记忆", "tag": "客厅"},
+            {"id": "real-id-2", "content": "第二条旧记忆", "tag": "书房"},
+        ]
+    )
+    _assert(prompt_items[0].get("ref") == "M01", "first memory should get M01")
+    _assert("id" not in prompt_items[0], "prompt item should hide raw id")
+    _assert(_resolve_fused_with_id("M02", ref_to_id, valid_ids) == "real-id-2", "M02 should map to real id")
+    _assert(_resolve_fused_with_id("m2", ref_to_id, valid_ids) == "real-id-2", "m2 should map to real id")
+    _assert(_resolve_fused_with_id("real-id-1", ref_to_id, valid_ids) == "real-id-1", "old raw id should remain compatible")
+    _assert(_resolve_fused_with_id("not-a-real-id", ref_to_id, valid_ids) is None, "unknown id should not resolve")
+
 if __name__ == "__main__":
     test_single_tagged_decision()
     test_short_content_is_rejected()
     test_batch_tagged_blocks()
+    test_fused_ref_mapping()
     print("dynamic_layer_ds parser checks passed")
