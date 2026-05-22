@@ -903,6 +903,21 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py services/wenyou/common.py services/wenyou/constants.py services/wenyou/phase.py services/wenyou/prompts.py services/wenyou/deepseek_client.py services/wenyou/runtime_state.py routes/miniapp/wenyou.py app.py` 通过；`PYTHONPATH="$PWD" .venv/bin/python` 导入 `app / routes.miniapp.wenyou / services.wenyou_service` 通过；固定新手副本 `_build_gm_messages` smoke 通过；`git diff --check -- services/wenyou_service.py services/wenyou docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 下次继续：后续再拆背包/商店/抽卡、结算/成长、怪物遭遇、AI 玩家上下文。继续不碰非文游脏文件和旧静态 hash 产物。
 
+当前状态（2026-05-23 文游服务拆分第四阶段）：
+- 已完成：把背包/物品基础操作拆到 `services/wenyou/inventory.py`，包含物品归一化、背包合并、消耗、数量判定、带出过滤、物品更新、出售/回收锁定和参考价格等纯结构逻辑；`services/wenyou_service.py` 只保留业务编排并从新模块导入。业务流程、路由、前端、静态资源不改。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py services/wenyou/common.py services/wenyou/constants.py services/wenyou/phase.py services/wenyou/prompts.py services/wenyou/deepseek_client.py services/wenyou/runtime_state.py services/wenyou/inventory.py routes/miniapp/wenyou.py app.py` 通过；`PYTHONPATH="$PWD" .venv/bin/python` 导入 `app / routes.miniapp.wenyou / services.wenyou_service` 通过；背包归一化、消耗和合并 smoke 通过；`git diff --check -- services/wenyou_service.py services/wenyou/inventory.py` 通过。
+- 未完成 / 下次继续：下一刀优先拆商店/抽卡经济、结算/成长、怪物遭遇或 AI 玩家上下文；继续不碰非文游脏文件和旧静态 hash 产物。
+
+当前状态（2026-05-23 文游服务拆分第五阶段）：
+- 已完成：把道具目录、默认商店目录、抽卡目录、内容包 `content/default/items.json` 加载、目录索引和新手礼包 fallback 物品定义拆到 `services/wenyou/catalog.py`；`services/wenyou_service.py` 继续保留购买、抽卡、奖励结算等业务流程，只从目录模块读取表和索引。路由、前端、静态资源不改。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py services/wenyou/common.py services/wenyou/constants.py services/wenyou/phase.py services/wenyou/prompts.py services/wenyou/deepseek_client.py services/wenyou/runtime_state.py services/wenyou/inventory.py services/wenyou/catalog.py routes/miniapp/wenyou.py app.py` 通过；`PYTHONPATH="$PWD" .venv/bin/python` 导入 `app / routes.miniapp.wenyou / services.wenyou_service / services.wenyou.catalog` 通过；catalog/gacha/shop 常量初始化 smoke 通过；`git diff --check -- services/wenyou_service.py services/wenyou/inventory.py services/wenyou/catalog.py docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：后续再拆商店/抽卡流程、结算/成长流程、怪物遭遇和 AI 玩家上下文；继续不碰非文游脏文件和旧静态 hash 产物。
+
+当前状态（2026-05-23 文游服务拆分第六阶段）：
+- 已完成：把核心能力目录加载拆到 `services/wenyou/abilities.py`，包含 `content/default/abilities.json` 读取、能力定义归一化和默认能力目录合并；`services/wenyou_service.py` 仍保留能力使用/规则结算业务，只导入 `_WENYOU_ABILITY_CATALOG`。路由、前端、静态资源不改。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py services/wenyou/common.py services/wenyou/constants.py services/wenyou/phase.py services/wenyou/prompts.py services/wenyou/deepseek_client.py services/wenyou/runtime_state.py services/wenyou/inventory.py services/wenyou/catalog.py services/wenyou/abilities.py routes/miniapp/wenyou.py app.py` 通过；`PYTHONPATH="$PWD" .venv/bin/python` 导入 `app / routes.miniapp.wenyou / services.wenyou_service / services.wenyou.abilities / services.wenyou.catalog` 通过；`_ability_definition("core_survival")` 和固定新手副本 GM 消息 smoke 通过；`git diff --check -- services/wenyou_service.py services/wenyou/inventory.py services/wenyou/catalog.py services/wenyou/abilities.py docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：服务主文件仍有约 7.8k 行；后续优先拆商店/抽卡流程、结算/成长流程、怪物遭遇和 AI 玩家上下文。继续不碰非文游脏文件和旧静态 hash 产物。
+
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
    - 已拆：Codex group chat task 路由已移到 `routes/miniapp/codex_group_chat.py`；`/codex-group-chat-tasks*` 路径保持不变
