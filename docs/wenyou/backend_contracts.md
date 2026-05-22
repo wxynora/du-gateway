@@ -189,10 +189,11 @@ schemas/evolution.schema.json
 | 副本蓝图与任务者 2-13 | `core_loop.md`、`instance_generation.md` | 已接：候选和自定义生成统一归一化 `tasker_total/player_count/npc_taskers`，候选不再硬写 2 人 | `generate_framework_*`、`_framework_for_runtime`、`_framework_from_candidate_text` |
 | runtime state 三层缓存 | `runtime_state.md` | 已接：`public_state/gm_state/rules_state` 随 session 生成和 state patch 更新，前端面板读结构化 view | `_runtime_state_view`、`_apply_public_state_updates`、`_apply_rules_state_updates`、`get_session_view` |
 | 自由文本行动归类 | `runtime_state.md` | 已接：固定 `action_type`，系统操作/道具/遭遇动作不交给 GM 自判 | `classify_wenyou_action_text`、`cmd_record_action` |
-| 战斗/逃跑/怪物 | `monster_system.md` | 已接：怪物实例、逃跑/规避、攻击、削弱、封印、Boss 默认不可硬杀与 reward tag | `_ensure_monster_instances`、`_resolve_encounter_action`、`cmd_encounter_action_with_du` |
+| AI 玩家行动接入 | `ai_player_integration.md` | 已接：后端只接受外部 AI 玩家已经决定好的 `ai_player_action`，不再由 GM/DS 代生成玩家行动 | `compose_ai_player_context`、`cmd_action_with_ai_player`、`cmd_use_item_with_ai_player`、`cmd_encounter_action_with_ai_player` |
+| 战斗/逃跑/怪物 | `monster_system.md` | 已接：怪物实例、逃跑/规避、攻击、削弱、封印、Boss 默认不可硬杀与 reward tag | `_ensure_monster_instances`、`_resolve_encounter_action`、`cmd_encounter_action_with_ai_player` |
 | 属性加点和派生面板 | `numeric_growth.md` | 已接：六属性、软上限、当前精神力、升级经验、新手属性点和前端成长入口 | `allocate_attribute_points`、`_grant_player_exp`、`_growth_view` |
 | 阶位晋升 | `numeric_growth.md` | 已接：晋升条件、扣积分、属性奖励、封印重扫和特殊商店解锁联动 | `promote_player_rank`、`_unlock_items_for_player_progress` |
-| 道具效果执行 | `item_evolution_system.md` | 已接：使用阶段、门槛、代价、HP/SAN、状态、污染、债务、威胁时钟、线索缓存和安全节点读 `effect_json` | `_apply_item_effect_to_session`、`cmd_use_item_with_du` |
+| 道具效果执行 | `item_evolution_system.md` | 已接：使用阶段、门槛、代价、HP/SAN、状态、污染、债务、威胁时钟、线索缓存和安全节点读 `effect_json` | `_apply_item_effect_to_session`、`cmd_use_item_with_ai_player` |
 | 装备/耐久/锻造/回收 | `item_evolution_system.md` | 已接：装备槽、耐久、维修、出售、拆解、升级和锻造统一走规则函数 | `cmd_inventory_command`、`upgrade_or_forge_gear`、`repair_equipped_gear`、`sell_inventory_item`、`disassemble_inventory_item` |
 | 能力/进化 | `numeric_growth.md`、`item_evolution_system.md` | 已接：能力和进化路线从内容包读取，支持学习、使用、升级、进化、封印模板和成长面板展示 | `learn_or_upgrade_ability`、`use_player_ability`、`apply_evolution_effect`、`content/default/abilities.json`、`content/default/evolution_paths.json` |
 | 商店/抽卡 | `item_evolution_system.md` | 已接：商店和抽卡复用内容表；抽卡扣积分/保底不读幸运；特殊商店随阶位开放 | `get_wenyou_shop_view`、`buy_shop_item`、`roll_gacha` |

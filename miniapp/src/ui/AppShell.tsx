@@ -673,7 +673,7 @@ export function AppShell({
       ) : null}
       {activeScreen === "wenyou" ? (
         <FullScreenPane title="文游" accent="wenyou" onBack={handleWenyouBack} edgeSwipeBack>
-          <LazyPane><WenyouTab initialView="hub" backHandlerRef={wenyouBackHandlerRef} /></LazyPane>
+          <LazyPane><WenyouTab initialView="hub" backHandlerRef={wenyouBackHandlerRef} windowId={sharedChatWindowId} /></LazyPane>
         </FullScreenPane>
       ) : null}
       {!activeScreen ? (

@@ -552,6 +552,11 @@ def _append_content_to_page(page_id: str, content: str, add_timestamp: bool = Tr
 def execute_tool(name: str, arguments: dict) -> str:
     """执行单个工具（Notion、网关 sync、天气、黄历），返回给模型的字符串结果。"""
     from services.gateway_tools import SYNC_TOOL_NAMES, execute_gateway_tool
+    if name in {"buy_item", "roll_gacha", "inventory_action", "use_item", "transfer"}:
+        from config import WENYOU_SESSION_ID
+        from services.wenyou_service import execute_player_tool
+
+        return execute_player_tool(int(WENYOU_SESSION_ID or 0), name, arguments if isinstance(arguments, dict) else {})
     if name == "publish_html_preview":
         from services.html_preview_tools import execute_publish_html_preview
 

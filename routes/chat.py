@@ -75,6 +75,7 @@ from services.chat_prompt_injections import (
 from services.chat_archive_helpers import (
     run_nonstream_post_archive_in_background as _run_nonstream_post_archive_in_background,
     strip_co_read_section_raw_text_for_archive as _strip_co_read_section_raw_text_for_archive,
+    strip_wenyou_ai_player_context_for_archive as _strip_wenyou_ai_player_context_for_archive,
 )
 from services.chat_request_helpers import (
     build_noop_chat_response as _build_noop_chat_response,
@@ -1144,6 +1145,8 @@ def chat_completions():
             if last_user:
                 if reply_target == "co_read_section":
                     last_user = _strip_co_read_section_raw_text_for_archive(last_user)
+                elif reply_target == "wenyou_ai_player":
+                    last_user = _strip_wenyou_ai_player_context_for_archive(last_user)
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg_for_r2)
                 if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
                     archived = step_archive_round(

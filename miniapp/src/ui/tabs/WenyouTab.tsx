@@ -168,7 +168,7 @@ type InstanceCandidate = {
 
 type FeedItem = {
   id: string;
-  kind: "user" | "system" | "notice" | "loot" | "du";
+  kind: "user" | "system" | "notice" | "loot" | "ai_player";
   text: string;
 };
 
@@ -941,9 +941,11 @@ type WenyouBackHandlerRef = React.MutableRefObject<(() => boolean) | null>;
 export function WenyouTab({
   initialView = "home",
   backHandlerRef,
+  windowId = "",
 }: {
   initialView?: WenyouInitialView;
   backHandlerRef?: WenyouBackHandlerRef;
+  windowId?: string;
 }) {
   const toast = useToast();
   const normalizedInitialView = normalizeInitialView(initialView);
@@ -1470,19 +1472,19 @@ export function WenyouTab({
     setQuickDecisionOpen(false);
     setActing(true);
     try {
-      const j = await apiJson<{ ok?: boolean; text?: string; du_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/action", {
+      const j = await apiJson<{ ok?: boolean; text?: string; ai_player_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, player: "player1", auto_go: true }),
+        body: JSON.stringify({ text, player: "player1", auto_go: true, window_id: windowId }),
       });
       if (!j?.ok) throw new Error(j?.error || "行动失败");
       const gmText = String(j.text || "");
-      const duAction = String(j.du_action || "").trim();
+      const aiPlayerAction = String(j.ai_player_action || "").trim();
       const stamp = Date.now();
       setFeed((prev) => [
         ...prev,
         { id: `u-${stamp}`, kind: "user", text },
-        ...(duAction ? [{ id: `du-${stamp}`, kind: "du" as const, text: duAction }] : []),
+        ...(aiPlayerAction ? [{ id: `ai-player-${stamp}`, kind: "ai_player" as const, text: aiPlayerAction }] : []),
         { id: `gm-${stamp}`, kind: "system", text: gmText || "主神系统暂无回应。" },
       ]);
       setActionText("");
@@ -1667,18 +1669,18 @@ export function WenyouTab({
     setQuickDecisionOpen(false);
     setActing(true);
     try {
-      const j = await apiJson<{ ok?: boolean; text?: string; du_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/encounter/action", {
+      const j = await apiJson<{ ok?: boolean; text?: string; ai_player_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/encounter/action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, detail }),
+        body: JSON.stringify({ action, detail, window_id: windowId }),
       });
       if (!j?.ok) throw new Error(j?.error || "遭遇判定失败");
       const stamp = Date.now();
-      const duAction = String(j.du_action || "").trim();
+      const aiPlayerAction = String(j.ai_player_action || "").trim();
       setFeed((prev) => [
         ...prev,
         { id: `u-${stamp}`, kind: "user", text: detail },
-        ...(duAction ? [{ id: `du-${stamp}`, kind: "du" as const, text: duAction }] : []),
+        ...(aiPlayerAction ? [{ id: `ai-player-${stamp}`, kind: "ai_player" as const, text: aiPlayerAction }] : []),
         { id: `gm-${stamp}`, kind: "system", text: String(j.text || "主神系统暂无回应。") },
       ]);
       setActionText("");
@@ -1714,19 +1716,19 @@ export function WenyouTab({
     setQuickDecisionOpen(false);
     setActing(true);
     try {
-      const j = await apiJson<{ ok?: boolean; text?: string; du_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/item/use", {
+      const j = await apiJson<{ ok?: boolean; text?: string; ai_player_action?: string; session?: WenyouSessionPanel; error?: string }>("/miniapp-api/wenyou/item/use", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item: itemKey, action: detail }),
+        body: JSON.stringify({ item: itemKey, action: detail, window_id: windowId }),
       });
       if (!j?.ok) throw new Error(j?.error || "道具使用失败");
       const stamp = Date.now();
-      const duAction = String(j.du_action || "").trim();
+      const aiPlayerAction = String(j.ai_player_action || "").trim();
       const userText = `使用道具【${name}】${detail ? `：${detail}` : ""}`;
       setFeed((prev) => [
         ...prev,
         { id: `u-${stamp}`, kind: "user", text: userText },
-        ...(duAction ? [{ id: `du-${stamp}`, kind: "du" as const, text: duAction }] : []),
+        ...(aiPlayerAction ? [{ id: `ai-player-${stamp}`, kind: "ai_player" as const, text: aiPlayerAction }] : []),
         { id: `gm-${stamp}`, kind: "system", text: String(j.text || "主神系统暂无回应。") },
       ]);
       setActionText("");
@@ -2361,7 +2363,7 @@ export function WenyouTab({
               if (item.kind === "user") return <div key={item.id} className="wenyou-user-bubble">{item.text}</div>;
               if (item.kind === "notice") return <SystemNotice key={item.id} tone="cyan" label="任务更新" text={item.text} />;
               if (item.kind === "loot") return <SystemNotice key={item.id} tone="purple" label="获得物品" text={item.text} />;
-              if (item.kind === "du") return <SystemNotice key={item.id} tone="purple" label="渡的行动" text={item.text} />;
+              if (item.kind === "ai_player") return <SystemNotice key={item.id} tone="purple" label="渡的行动" text={item.text} />;
               return <StoryFeedMessage key={item.id} text={item.text} />;
             }) : gameSettlementReady ? (
               <div className="wenyou-feed-empty">

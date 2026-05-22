@@ -80,3 +80,53 @@ def strip_co_read_section_raw_text_for_archive(msg: dict) -> dict:
                 next_content.append(part)
         clean["content"] = next_content
     return clean
+
+
+def strip_wenyou_ai_player_context_for_archive(msg: dict) -> dict:
+    def _strip_text(text: str) -> str:
+        raw = str(text or "")
+        start_marker = "[WENYOU AI PLAYER TURN]"
+        end_marker = "[/WENYOU AI PLAYER TURN]"
+        context_marker = "只读上下文 JSON："
+        action_marker = "辛玥本轮行动："
+        if start_marker not in raw or context_marker not in raw:
+            return raw
+        out = []
+        pos = 0
+        while True:
+            start = raw.find(start_marker, pos)
+            if start < 0:
+                out.append(raw[pos:])
+                break
+            end = raw.find(end_marker, start)
+            if end < 0:
+                out.append(raw[pos:])
+                break
+            block_end = end + len(end_marker)
+            block = raw[start:block_end]
+            context_idx = block.find(context_marker)
+            action_idx = block.find(action_marker, context_idx + len(context_marker)) if context_idx >= 0 else -1
+            if context_idx >= 0 and action_idx >= 0:
+                block = (
+                    block[:context_idx]
+                    + "只读上下文 JSON：\n（已从会话存档删除；文游状态保留在 wenyou/session 与 wallet 中）\n\n"
+                    + block[action_idx:]
+                )
+            out.append(raw[pos:start])
+            out.append(block)
+            pos = block_end
+        return "".join(out)
+
+    clean = copy.deepcopy(msg or {})
+    content = clean.get("content")
+    if isinstance(content, str):
+        clean["content"] = _strip_text(content)
+    elif isinstance(content, list):
+        next_content = []
+        for part in content:
+            if isinstance(part, dict) and str(part.get("type") or "") == "text":
+                next_content.append({**part, "text": _strip_text(str(part.get("text") or ""))})
+            else:
+                next_content.append(part)
+        clean["content"] = next_content
+    return clean
