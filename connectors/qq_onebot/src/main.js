@@ -163,7 +163,7 @@ async function fetchGatewayFirstModel(base) {
   }
 }
 
-async function callGatewayChat(windowId, userContent) {
+async function callGatewayChat(windowId, userContent, options = {}) {
   const base = gatewayBaseUrl();
   const chatPath = envStr("GATEWAY_CHAT_PATH", "/v1/chat/completions");
   const url = base + (chatPath.startsWith("/") ? chatPath : `/${chatPath}`);
@@ -179,9 +179,11 @@ async function callGatewayChat(windowId, userContent) {
   const headers = {
     "Content-Type": "application/json",
     "X-Window-Id": String(windowId || "").trim(),
-    "X-Reply-Channel": "qq",
+    "X-Reply-Channel": String(options.replyChannel || "qq").trim() || "qq",
   };
   if (envBool("GATEWAY_TG_USER_INPUT", true)) headers["X-TG-User-Input"] = "1";
+  if (options.skipDynamicMemory) headers["X-Skip-Dynamic-Memory"] = "1";
+  if (options.skipPostArchiveDynamicMemory) headers["X-Skip-Post-Archive-Dynamic-Memory"] = "1";
   const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
   const text = await r.text();
   let data = null;
@@ -353,10 +355,21 @@ async function sendQqText(userId, text) {
   return onebotApi("send_private_msg", { user_id: Number(userId), message: String(text || "") });
 }
 
+async function sendQqGroupText(groupId, text) {
+  return onebotApi("send_group_msg", { group_id: Number(groupId), message: String(text || "") });
+}
+
 
 async function sendQqImage(userId, imageUrl) {
   return onebotApi("send_private_msg", {
     user_id: Number(userId),
+    message: [{ type: "image", data: { file: String(imageUrl || "").trim() } }],
+  });
+}
+
+async function sendQqGroupImage(groupId, imageUrl) {
+  return onebotApi("send_group_msg", {
+    group_id: Number(groupId),
     message: [{ type: "image", data: { file: String(imageUrl || "").trim() } }],
   });
 }
@@ -369,11 +382,22 @@ async function sendQqRecord(userId, audioBytes) {
   });
 }
 
+async function sendQqGroupRecord(groupId, audioBytes) {
+  const b64 = Buffer.from(audioBytes || []).toString("base64");
+  return onebotApi("send_group_msg", {
+    group_id: Number(groupId),
+    message: [{ type: "record", data: { file: `base64://${b64}` } }],
+  });
+}
+
 const pending = new Map();
 const dedupe = new Set();
 const dedupeMax = 2000;
 const recentInboundByUser = new Map();
+const recentGroupMessages = new Map();
 const inboundDedupeWindowMs = Math.max(2000, envInt("QQ_INBOUND_DEDUPE_WINDOW_MS", 12000));
+const groupHistoryContextLimit = Math.max(1, envInt("QQ_GROUP_CONTEXT_MESSAGES", 5));
+const groupHistoryKeepLimit = Math.max(groupHistoryContextLimit, envInt("QQ_GROUP_HISTORY_KEEP_MESSAGES", 50));
 
 async function sendQqPrivateRichReply(userId, reply, options = {}) {
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
@@ -489,10 +513,181 @@ function isPrivateMessageEvent(j) {
   );
 }
 
+function isGroupMessageEvent(j) {
+  return (
+    String(j?.post_type || "") === "message" &&
+    String(j?.message_type || "") === "group"
+  );
+}
+
+function isSelfMessage(j) {
+  return j?.sub_type === "self" || Number(j?.sender?.user_id || 0) === Number(j?.self_id || 0);
+}
+
+function senderLabel(j) {
+  const userId = Number(j?.user_id || j?.sender?.user_id || 0);
+  const sender = j?.sender && typeof j.sender === "object" ? j.sender : {};
+  const card = String(sender.card || "").trim();
+  const nickname = String(sender.nickname || "").trim();
+  const name = card || nickname || (userId ? `QQ${userId}` : "群成员");
+  return { userId, name };
+}
+
+function contentTextForGroupContext(content, limit = 300) {
+  const preview = userContentPreview(content, limit).trim();
+  return preview || "[非文本消息]";
+}
+
+function getGroupHistory(groupId) {
+  return recentGroupMessages.get(String(groupId || "")) || [];
+}
+
+function rememberGroupMessage(j, content) {
+  const groupId = Number(j?.group_id || 0);
+  if (!groupId) return;
+  const { userId, name } = senderLabel(j);
+  const text = contentTextForGroupContext(content);
+  const rows = getGroupHistory(groupId);
+  rows.push({
+    userId,
+    name,
+    text,
+    messageId: String(j?.message_id || ""),
+    ts: Number(j?.time || 0),
+  });
+  if (rows.length > groupHistoryKeepLimit) rows.splice(0, rows.length - groupHistoryKeepLimit);
+  recentGroupMessages.set(String(groupId), rows);
+}
+
+function messageMentionsSelf(j) {
+  const selfId = String(j?.self_id || "").trim();
+  if (!selfId) return false;
+  const msg = j?.message;
+  if (Array.isArray(msg)) {
+    for (const seg of msg) {
+      if (!seg || typeof seg !== "object") continue;
+      if (String(seg.type || "") !== "at") continue;
+      const qq = String(seg.data?.qq || "").trim();
+      if (qq === selfId) return true;
+    }
+  }
+  const raw = String(j?.raw_message || "");
+  return raw.includes(`[CQ:at,qq=${selfId}]`);
+}
+
+function contentWithoutSelfAt(j) {
+  const selfId = String(j?.self_id || "").trim();
+  const msg = j?.message;
+  if (Array.isArray(msg)) {
+    const filtered = msg.filter((seg) => {
+      if (!seg || typeof seg !== "object") return false;
+      if (String(seg.type || "") !== "at") return true;
+      return String(seg.data?.qq || "").trim() !== selfId;
+    });
+    return extractUserContentFromMessage(filtered);
+  }
+  const raw = String(j?.raw_message || "");
+  const clean = selfId ? raw.replaceAll(`[CQ:at,qq=${selfId}]`, "").trim() : raw.trim();
+  return extractUserContentFromMessage(clean);
+}
+
+function buildGroupGatewayContent(j, previousRows, currentContent) {
+  const groupId = Number(j?.group_id || 0);
+  const { userId, name } = senderLabel(j);
+  const lines = (previousRows || []).slice(-groupHistoryContextLimit).map((row) => {
+    const rowName = String(row?.name || "群成员").trim();
+    const rowUserId = Number(row?.userId || 0);
+    const prefix = rowUserId ? `${rowName}(${rowUserId})` : rowName;
+    return `${prefix}：${String(row?.text || "").trim() || "[非文本消息]"}`;
+  });
+  const currentText = contentTextForGroupContext(currentContent);
+  const headerText = [
+    "【QQ 群聊】",
+    `群号：${groupId}`,
+    `当前发言人：${name}${userId ? `(${userId})` : ""}`,
+    "你只有在被 @ 时才回复。下面是本次 @ 前的最近群聊消息，用作公开上下文：",
+    lines.length ? lines.join("\n") : "（前面没有可用群聊消息）",
+    "",
+    "当前 @ 你的消息：",
+    `${name}${userId ? `(${userId})` : ""}：${currentText}`,
+  ].join("\n");
+  const parts = normalizeUserContentToParts(currentContent);
+  const imageParts = parts.filter((p) => p?.type === "image_url");
+  if (!imageParts.length) return headerText;
+  return [{ type: "text", text: headerText }, ...imageParts];
+}
+
+async function sendQqReplyToGroup(groupId, reply) {
+  const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
+  const maxReplyTotalChars = Math.max(0, envInt("QQ_MAX_REPLY_TOTAL_CHARS", 0));
+  const sendDelayMs = Math.max(0, envInt("QQ_OUTPUT_SEND_DELAY_MS", 400));
+  const { cleanText: noVoiceText, voiceText } = extractVoiceTag(reply);
+  const pcmdHandled = await processPcmdViaGateway(noVoiceText);
+  const { cleanText: replyClean, tag: stickerTag } = await extractStickerTag(pcmdHandled.visibleText);
+  const stickerUrl = await resolveStickerUrl(stickerTag);
+  const chunks = splitReplyByNewlineAndLen(replyClean, outChunkChars, maxReplyTotalChars);
+  for (const part of chunks) {
+    await sendQqGroupText(groupId, part);
+    if (sendDelayMs > 0) await sleep(sendDelayMs);
+  }
+  if (stickerUrl) {
+    await sendQqGroupImage(groupId, stickerUrl);
+    if (sendDelayMs > 0) await sleep(sendDelayMs);
+  }
+  if (voiceText) {
+    const audioBytes = await callGatewayTts(voiceText);
+    if (audioBytes?.length) await sendQqGroupRecord(groupId, audioBytes);
+  }
+}
+
+async function handleGroupEvent(j) {
+  const groupId = Number(j?.group_id || 0);
+  if (!groupId) return;
+  const content = contentWithoutSelfAt(j);
+  const previousRows = getGroupHistory(groupId).slice(-groupHistoryContextLimit);
+  rememberGroupMessage(j, content || extractUserContentFromMessage(j?.message || j?.raw_message || ""));
+  if (!messageMentionsSelf(j)) return;
+  const now = Date.now();
+  const scopeKey = `g:${groupId}`;
+  const fp = `${Number(j?.user_id || 0)}|${userContentPreview(content, 200)}|${String(j?.raw_message || "")}`.slice(0, 800);
+  const recent = recentInboundByUser.get(scopeKey);
+  if (recent && recent.fp === fp && now - Number(recent.ts || 0) <= inboundDedupeWindowMs) return;
+  recentInboundByUser.set(scopeKey, { fp, ts: now });
+  if (recentInboundByUser.size > dedupeMax) recentInboundByUser.clear();
+  const dedupeKey = `${scopeKey}:${String(j?.message_id || "")}:${userContentPreview(content, 200)}`;
+  if (dedupe.has(dedupeKey)) return;
+  dedupe.add(dedupeKey);
+  if (dedupe.size > dedupeMax) dedupe.clear();
+
+  const windowId = resolveSharedWindowId();
+  const gatewayContent = buildGroupGatewayContent(j, previousRows, content || "（只 @ 了你，没有附加文字）");
+  console.log(`[qq-onebot] inbound group=${groupId} window_id=${windowId} content=${userContentPreview(content, 80)}`);
+  let reply = "";
+  try {
+    reply = await callGatewayChat(windowId, gatewayContent, {
+      replyChannel: "qq",
+      skipDynamicMemory: true,
+      skipPostArchiveDynamicMemory: true,
+    });
+  } catch (e) {
+    console.log(`[qq-onebot] 群聊调网关失败 group=${groupId}：${String(e?.message || e)}`);
+    return;
+  }
+  try {
+    await sendQqReplyToGroup(groupId, reply);
+  } catch (e) {
+    console.log(`[qq-onebot] 群聊发送失败 group=${groupId}：${String(e?.message || e)}`);
+  }
+}
+
 async function handleEvent(j) {
-  if (!isPrivateMessageEvent(j)) return;
   // 过滤 self-message：NapCatQQ reportSelfMessage=true 时 bot 自己发的消息也会推回来
-  if (j?.sub_type === "self" || Number(j?.sender?.user_id || 0) === Number(j?.self_id || 0)) return;
+  if (isSelfMessage(j)) return;
+  if (isGroupMessageEvent(j)) {
+    await handleGroupEvent(j);
+    return;
+  }
+  if (!isPrivateMessageEvent(j)) return;
   const userId = Number(j?.user_id || 0);
   if (!userId) return;
   const content = extractUserContentFromMessage(j?.message || j?.raw_message || "");

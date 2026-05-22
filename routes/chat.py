@@ -177,6 +177,10 @@ def _is_gateway_wakeup_request() -> bool:
     return False
 
 
+def _skip_post_archive_dynamic_memory_request() -> bool:
+    return (request.headers.get("X-Skip-Post-Archive-Dynamic-Memory") or "").strip().lower() in ("1", "true", "yes")
+
+
 def _should_archive_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
 
@@ -263,6 +267,7 @@ def _stream_with_r2_archive(
     window_id: str = "",
     du_daily_trigger: Optional[dict] = None,
     dynamic_memory_citation_map: Optional[dict] = None,
+    skip_post_archive_dynamic_memory: bool = False,
 ):
     """
     包装流式响应：原样转发 SSE，同时在流结束后用收集到的 content 写 R2。
@@ -398,7 +403,11 @@ def _stream_with_r2_archive(
                 round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
                 logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
                 step_archive_and_maybe_summary(
-                    window_id, body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned,
+                    window_id,
+                    body.get("messages") or [],
+                    msg,
+                    round_cleaned_for_r2=round_cleaned,
+                    skip_dynamic_layer=skip_post_archive_dynamic_memory,
                 )
                 try:
                     from services.notion_write_from_assistant import process_assistant_content_for_notion_write
@@ -580,7 +589,11 @@ def _stream_with_r2_archive(
             round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             step_archive_and_maybe_summary(
-                window_id, current_body.get("messages") or [], msg, round_cleaned_for_r2=round_cleaned,
+                window_id,
+                current_body.get("messages") or [],
+                msg,
+                round_cleaned_for_r2=round_cleaned,
+                skip_dynamic_layer=skip_post_archive_dynamic_memory,
             )
             try:
                 from services.notion_write_from_assistant import process_assistant_content_for_notion_write
@@ -858,6 +871,7 @@ def chat_completions():
         (request.headers.get("X-Skip-Dynamic-Memory") or "").strip().lower() in ("1", "true", "yes")
         or _is_gateway_wakeup_request()
     )
+    skip_post_archive_dynamic_memory = _skip_post_archive_dynamic_memory_request()
     du_daily_maintenance = _is_du_daily_maintenance_request()
     du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
     if not slim_voice_call:
@@ -908,6 +922,7 @@ def chat_completions():
                 window_id,
                 du_daily_trigger=du_daily_trigger,
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
+                skip_post_archive_dynamic_memory=skip_post_archive_dynamic_memory,
             )
         )
     resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
@@ -1158,10 +1173,15 @@ def chat_completions():
                             round_index=int(archived.get("round_index") or 0),
                             round_messages=archived.get("round_messages") or round_cleaned,
                             reply_channel=reply_channel,
+                            skip_dynamic_layer=skip_post_archive_dynamic_memory,
                         )
                 else:
                     step_archive_and_maybe_summary(
-                        window_id, archive_messages, msg_for_r2, round_cleaned_for_r2=round_cleaned
+                        window_id,
+                        archive_messages,
+                        msg_for_r2,
+                        round_cleaned_for_r2=round_cleaned,
+                        skip_dynamic_layer=skip_post_archive_dynamic_memory,
                     )
             else:
                 if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
@@ -1172,9 +1192,15 @@ def chat_completions():
                             round_index=int(archived.get("round_index") or 0),
                             round_messages=archived.get("round_messages") or [],
                             reply_channel=reply_channel,
+                            skip_dynamic_layer=skip_post_archive_dynamic_memory,
                         )
                 else:
-                    step_archive_and_maybe_summary(window_id, archive_messages, msg_for_r2)
+                    step_archive_and_maybe_summary(
+                        window_id,
+                        archive_messages,
+                        msg_for_r2,
+                        skip_dynamic_layer=skip_post_archive_dynamic_memory,
+                    )
     else:
         logger.info("R2 未存档：上游无 choices 或响应为空")
     if is_sumitalk_request:

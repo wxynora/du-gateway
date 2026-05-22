@@ -2497,6 +2497,7 @@ def step_archive_and_maybe_summary(
     request_messages: list,
     assistant_message: dict,
     round_cleaned_for_r2: Optional[list] = None,
+    skip_dynamic_layer: bool = False,
 ) -> None:
     """
     存档本轮对话到 R2（完整清洗版）；每 4 轮异步更新实时层「渡的回忆」；动态层演化占位。
@@ -2512,7 +2513,12 @@ def step_archive_and_maybe_summary(
     )
     if not archived:
         return
-    step_run_post_archive_tasks(window_id, archived["round_index"], archived["round_messages"])
+    step_run_post_archive_tasks(
+        window_id,
+        archived["round_index"],
+        archived["round_messages"],
+        skip_dynamic_layer=skip_dynamic_layer,
+    )
 
 
 def step_archive_round(
@@ -2558,7 +2564,13 @@ def step_archive_round(
     return {"round_index": round_index, "round_messages": round_messages}
 
 
-def step_run_post_archive_tasks(window_id: str, round_index: int, round_messages: list) -> None:
+def step_run_post_archive_tasks(
+    window_id: str,
+    round_index: int,
+    round_messages: list,
+    *,
+    skip_dynamic_layer: bool = False,
+) -> None:
     """本轮已写入 R2 后执行实时层总结与动态层演化等慢任务。"""
     # 实时层：每 4 轮 → DS 总结成「渡的回忆」（第一人称、详细版）
     if round_index % SUMMARY_EVERY_N_ROUNDS == 0:
@@ -2581,5 +2593,8 @@ def step_run_post_archive_tasks(window_id: str, round_index: int, round_messages
             t = threading.Thread(target=_summarize)
             t.daemon = True
             t.start()
+    if skip_dynamic_layer:
+        logger.info("动态层跳过：请求要求跳过归档后动态层 window_id=%s round_index=%s", window_id, round_index)
+        return None
     # 动态层演化：调用 DS 产出 tag/融合等结果；网关决定是否写入动态层；卧室通道短路写 Notion
     _step_dynamic_layer_evolve(window_id, round_index, round_messages)

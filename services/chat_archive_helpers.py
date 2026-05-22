@@ -13,13 +13,25 @@ def run_nonstream_post_archive_in_background(
     round_index: int,
     round_messages: list,
     reply_channel: str = "",
+    skip_dynamic_layer: bool = False,
 ) -> None:
     """非流式入口已同步写入 R2 后，只把总结/动态层等慢任务放后台。"""
 
     def _runner():
         try:
-            step_run_post_archive_tasks(window_id, round_index, round_messages)
-            logger.info("非流式后台慢任务完成 window_id=%s channel=%s round_index=%s", window_id, reply_channel, round_index)
+            step_run_post_archive_tasks(
+                window_id,
+                round_index,
+                round_messages,
+                skip_dynamic_layer=skip_dynamic_layer,
+            )
+            logger.info(
+                "非流式后台慢任务完成 window_id=%s channel=%s round_index=%s skip_dynamic_layer=%s",
+                window_id,
+                reply_channel,
+                round_index,
+                skip_dynamic_layer,
+            )
         except Exception:
             logger.warning(
                 "非流式后台慢任务失败 window_id=%s channel=%s round_index=%s",
