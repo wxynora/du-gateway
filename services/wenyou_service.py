@@ -93,7 +93,7 @@ _FRAMEWORK_SYSTEM = """你在为一款「无限流」App 文字跑团生成**单
 玩家固定外貌：玩家一（辛玥）黑色长发黑眼、中等身高（一米六多）、二十岁出头；玩家二（渡）银色短发、一米八多、薄肌、二十多岁。**禁止预设玩家一/二的性格与穿搭**。
 **任务者 NPC 规则**：这些 NPC 是与玩家同批进入副本、完成任务后会回主神空间结算奖励的“任务者”，通常有自己的名字；他们默认**不认同副本内分配身份**，副本身份只是临时伪装或场景壳。NPC 不做复杂关系值；最小字段是公开态度/真实立场/当前意图/使坏概率或触发条件/存活状态。坏立场 NPC 可以抢资源、误导、关门、嫁祸或触发危险，但不能无因果直接杀玩家。
 **难度匹配规则**：随机开局时副本难度必须参考玩家当前成长（等级/阶位）。默认两名玩家都是新人（Lv1、D 阶），应优先 D/C；随玩家升级才逐步出现更高难度，不可开局就长期给 A/S。
-须给出 **initial_stats**：按默认新人规则，等级 1、阶位 D、经验 0、六基础属性 `str/con/agi/int/spi/luk=10`、`spi_current=10`、HP/SAN 180/180、主神积分 100、进化「凡人」、能力/状态为空；可给少量初始道具。数值后续由规则引擎重算，开局不要乱改。
+须给出 **initial_stats**：按默认新人规则，等级 1、阶位 D、经验 0、六基础属性 `str/con/agi/int/spi/luk=10`、`spi_current=10`、HP/SAN 180/180、主神积分 100、`core_ability=null`、状态为空；可给少量初始道具。数值后续由规则引擎重算，开局不要乱改。新手副本通关前不要给玩家核心能力。
 必须先生成 `instance_blueprint` 和 `encounter_profile`，再生成 opening；副本被选中后，后端会缓存 runtime_state。DS/GM 不是状态事实源，不能每轮重写任务、线索、背包、奖励或精确数值。
 opening 建议包含传送/白光/提示音/主神刻板广播之一切入副本场景，但不要冗长。"""
 
@@ -139,7 +139,7 @@ _GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统*
 - 后端 runtime state 是唯一事实源。你负责叙事、环境反馈、NPC 表演和事件意图，不直接判定精确 HP/SAN/积分/EXP/抽卡/掉落/晋升。
 - **主神积分**：用于复活、治疗、系统商店购物、抽卡与强化；精确数值以后端规则引擎为准。副本进行中不要临场发积分、扣积分或发抽卡资源。
 - **系统商店**只在 `hub` 或 `settlement` 阶段开放。副本进行中不能购买系统商店物品，只能使用背包已有物品，或通过剧情获得临时/副本专属物。
-- **能力、进化、属性和阶位**由后端维护；你可以在 `state_proposals` 建议“发现能力线索/触发封印/获得临时物”，但不能直接写成永久到账。
+- **核心能力、属性和阶位**由后端维护；核心能力只在新手副本标准通关后由后端按玩家表现生成。你可以在 `state_proposals` 建议“发现能力线索/触发封印/获得临时物”，但不能直接写成永久到账。
 - **死亡与复活**：若玩家角色死亡或判定出局，只描述死亡/濒死/撤离意图；复活价格、债务、状态和是否触发惩罚副本由后端结算。
 - **副本结束**：当副本以通关、失败或强制结算等方式结束时，可描写白光/传送回到主神空间；通关评级只看真实玩家角色/玩家队伍，NPC 任务者不参与玩家评级，除非 NPC 相关目标已写入玩家支线/隐藏支线/隐藏结局/特殊成就。
 - **主神空间内**：它是纯功能区，以休整、商店、治疗、兑换、抽卡、强化、接下一副本为主；不要发展长期 hub 剧情或 NPC 日常线。
@@ -337,14 +337,14 @@ def _framework_prompt_random(seeds: dict) -> str:
   "encounter_profile": {{"common": [], "elite": [], "boss": {{}}, "spawn_rules": [], "balance_notes": "怪物生态简表；Boss 默认不可正面战胜"}},
     "initial_stats": {{
     "points": 100,
-    "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "evolution": "凡人", "abilities": [], "conditions": []}},
-    "player2": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "evolution": "凡人", "abilities": [], "conditions": []}},
+    "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "core_ability": null, "conditions": []}},
+    "player2": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "core_ability": null, "conditions": []}},
     "items": ["可选：与副本相关的消耗品或线索道具，无则 []"]
   }},
   "opening": "开场 4-8 句：建议含传送/白光/提示音/主神刻板广播之一；若本局存在 NPC，必须出现同场任务者的登场感或存在感，再进入场景，有画面感"
 }}
 
-**编制硬性规则**：`tasker_total` 必须为 2-13；当前 App 默认 2 名玩家角色，因此本次 `npc_taskers` 数量必须等于 `tasker_total - 2`，但不要把“2 玩家”写成开源规则。NPC 公开态度不能直给真实善恶；真实 `stance/intent/trouble_chance` 写入 `gm_secret.npc_private_state`。“新人/炮灰/大佬”等仅作为系统内部定位，不可直接告诉玩家。**instance_genre** 须与 `world`、`conflict` 一致；必须先写 `instance_blueprint` 和 `encounter_profile`，再写 opening；**initial_stats** 须含主神积分、双方 HP/SAN、当前精神力、**等级与阶位（D～S）、经验、六基础属性、进化名称**、**双方 abilities 数组（元素为 name/desc，可无项）**、conditions 与背包（可为空数组）。
+**编制硬性规则**：`tasker_total` 必须为 2-13；当前 App 默认 2 名玩家角色，因此本次 `npc_taskers` 数量必须等于 `tasker_total - 2`，但不要把“2 玩家”写成开源规则。NPC 公开态度不能直给真实善恶；真实 `stance/intent/trouble_chance` 写入 `gm_secret.npc_private_state`。“新人/炮灰/大佬”等仅作为系统内部定位，不可直接告诉玩家。**instance_genre** 须与 `world`、`conflict` 一致；必须先写 `instance_blueprint` 和 `encounter_profile`，再写 opening；**initial_stats** 须含主神积分、双方 HP/SAN、当前精神力、**等级与阶位（D～S）、经验、六基础属性**、`core_ability`（新手副本前为 null）、conditions 与背包（可为空数组）。
 
 随机种子（融入副本，不必照抄字面）：
 - 建议难度：{seeds.get("difficulty", "C")}
@@ -396,14 +396,14 @@ def _framework_prompt_custom(keywords: str) -> str:
   "encounter_profile": {{"common": [], "elite": [], "boss": {{}}, "spawn_rules": [], "balance_notes": "怪物生态简表；Boss 默认不可正面战胜"}},
   "initial_stats": {{
     "points": 100,
-  "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "evolution": "凡人", "abilities": [], "conditions": []}},
-  "player2": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "evolution": "凡人", "abilities": [], "conditions": []}},
+  "player1": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "core_ability": null, "conditions": []}},
+  "player2": {{"hp": 180, "hp_max": 180, "san": 180, "san_max": 180, "spi_current": 10, "spi_max": 10, "level": 1, "rank": "D", "exp": 0, "str": 10, "con": 10, "agi": 10, "int": 10, "spi": 10, "luk": 10, "core_ability": null, "conditions": []}},
     "items": []
   }},
   "opening": "开场 4-8 句，建议含主神传送或播报感；若本局存在 NPC，须体现同场任务者"
 }}
 
-**编制**：`tasker_total` 必须为 2-13；当前 App 默认 2 名玩家角色，`npc_taskers` 数量必须等于 `tasker_total - 2`，但不要把“2 玩家”写成开源规则。任务者使用自身身体进入副本；NPC 公开态度不能直给真实善恶，真实 `stance/intent/trouble_chance` 写入 `gm_secret.npc_private_state`。须带 **instance_genre**、**genre_note**、`public`、`gm_secret`、`instance_blueprint`、`encounter_profile` 与 **initial_stats**（含等级、阶位 D～S、经验、六基础属性、当前精神力、进化、**abilities**、conditions）。
+**编制**：`tasker_total` 必须为 2-13；当前 App 默认 2 名玩家角色，`npc_taskers` 数量必须等于 `tasker_total - 2`，但不要把“2 玩家”写成开源规则。任务者使用自身身体进入副本；NPC 公开态度不能直给真实善恶，真实 `stance/intent/trouble_chance` 写入 `gm_secret.npc_private_state`。须带 **instance_genre**、**genre_note**、`public`、`gm_secret`、`instance_blueprint`、`encounter_profile` 与 **initial_stats**（含等级、阶位 D～S、经验、六基础属性、当前精神力、`core_ability`、conditions）。
 
 关键词：{keywords}
 
@@ -499,16 +499,64 @@ _WENYOU_PROMOTION_RULES = {
 }
 _WENYOU_REVIVE_BASE_COST = {"D": 200, "C": 500, "B": 1200, "A": 2600, "S": 6000}
 _WENYOU_SELL_RATIO = {"D": 0.25, "C": 0.30, "B": 0.35, "A": 0.40, "S": 0.45}
-_WENYOU_ABILITY_SLOTS = {"D": 2, "C": 3, "B": 4, "A": 5, "S": 6}
-_WENYOU_EVOLUTION_ROUTE_DEFAULTS = {
-    "human_stable": {"id": "human_stable", "name": "人类稳定", "tags": ["human", "stable"], "attrs": {"con": 1, "int": 1}, "hp_ratio": 0.5, "san_ratio": 0.5, "pollution": 0},
-    "night_shadow": {"id": "night_shadow", "name": "夜行/阴影", "tags": ["night", "shadow"], "attrs": {"agi": 1, "spi": 1}, "hp_ratio": 0.0, "san_ratio": 1.0, "pollution": 2},
-    "regen_boost": {"id": "regen_boost", "name": "再生/强化", "tags": ["regeneration", "body_rebuild"], "attrs": {"str": 1, "con": 1}, "hp_ratio": 1.0, "san_ratio": 0.0, "pollution": 5},
-    "mechanical": {"id": "mechanical", "name": "机械/义体", "tags": ["machine", "repair"], "attrs": {"int": 1, "str": 1}, "hp_ratio": 1.0, "san_ratio": 0.0, "pollution": 1},
-    "pollution_resist": {"id": "pollution_resist", "name": "污染抗性", "tags": ["pollution_resist"], "attrs": {"spi": 2}, "hp_ratio": 0.0, "san_ratio": 1.0, "pollution": 5},
-    "mirror_gate": {"id": "mirror_gate", "name": "镜界/门径", "tags": ["mirror", "gate"], "attrs": {"luk": 1, "spi": 1}, "hp_ratio": 0.0, "san_ratio": 1.0, "pollution": 3},
+_WENYOU_CORE_ABILITY_ARCHETYPES = {
+    "observe": {
+        "id": "core_observe",
+        "name": "异常余光",
+        "rarity": "D",
+        "tags": ["observe", "investigation"],
+        "desc": "每副本 1 次，获得当前场景中一处被忽略的异常提示；若涉及隐藏规则，SAN -5。",
+    },
+    "escape": {
+        "id": "core_escape",
+        "name": "退路直觉",
+        "rarity": "D",
+        "tags": ["escape", "stealth"],
+        "desc": "每副本 1 次，逃离、规避或脱身判定 +3。",
+    },
+    "protect": {
+        "id": "core_protect",
+        "name": "代偿护手",
+        "rarity": "D",
+        "tags": ["protect", "support"],
+        "desc": "每副本 1 次，为自己或同伴抵消 15 点 HP 伤害；自己 SAN -5。",
+    },
+    "combat": {
+        "id": "core_combat",
+        "name": "破局冲击",
+        "rarity": "D",
+        "tags": ["combat", "force"],
+        "desc": "每副本 1 次，破坏、压制或强行突破判定 +3；失败时自身 HP -5。",
+    },
+    "social": {
+        "id": "core_social",
+        "name": "人群伪装",
+        "rarity": "D",
+        "tags": ["social", "deception"],
+        "desc": "每副本 1 次，社交、伪装或混入人群判定 +3；失败时暴露风险 +1。",
+    },
+    "rule": {
+        "id": "core_rule",
+        "name": "规则嗅觉",
+        "rarity": "D",
+        "tags": ["rule", "investigation"],
+        "desc": "每副本 1 次，验证一条低级规则是否会立刻造成危险；SAN -5。",
+    },
+    "resilience": {
+        "id": "core_resilience",
+        "name": "残响锚点",
+        "rarity": "D",
+        "tags": ["resilience", "mental"],
+        "desc": "每副本 1 次，抵消一次动摇或轻度污染；SAN 低于一半时额外稳定当前精神力 +1。",
+    },
+    "survival": {
+        "id": "core_survival",
+        "name": "求生本能",
+        "rarity": "D",
+        "tags": ["survival"],
+        "desc": "每副本 1 次，在险境行动前获得一次保守提示，或将一次低级风险降低一级。",
+    },
 }
-_WENYOU_EVOLUTION_ROUTES = dict(_WENYOU_EVOLUTION_ROUTE_DEFAULTS)
 _WENYOU_ACTION_MODIFIER = {
     "prepared": 0.70,
     "normal": 1.00,
@@ -548,39 +596,20 @@ _WENYOU_REWARD_RARITY_RATES: dict[str, list[tuple[str, float]]] = {
     "S": [("A", 45.0), ("S", 55.0)],
 }
 _WENYOU_REWARD_CATEGORY_RATES: dict[str, list[tuple[str, float]]] = {
-    "D": [("consumable_item", 50.0), ("material", 25.0), ("tool_item", 20.0), ("ability_template", 4.0), ("evolution_template", 1.0)],
-    "C": [("consumable_item", 35.0), ("material", 25.0), ("tool_item", 25.0), ("ability_template", 8.0), ("evolution_template", 4.0), ("special", 3.0)],
-    "B": [("consumable_item", 20.0), ("material", 24.0), ("tool_item", 30.0), ("ability_template", 12.0), ("evolution_template", 8.0), ("special", 6.0)],
-    "A": [("consumable_item", 12.0), ("material", 22.0), ("tool_item", 32.0), ("ability_template", 14.0), ("evolution_template", 10.0), ("special", 10.0)],
-    "S": [("consumable_item", 6.0), ("material", 15.0), ("tool_item", 36.0), ("ability_template", 16.0), ("evolution_template", 13.0), ("special", 14.0)],
+    "D": [("consumable_item", 56.0), ("material", 24.0), ("tool_item", 18.0), ("special", 2.0)],
+    "C": [("consumable_item", 40.0), ("material", 25.0), ("tool_item", 30.0), ("special", 5.0)],
+    "B": [("consumable_item", 24.0), ("material", 26.0), ("tool_item", 38.0), ("special", 12.0)],
+    "A": [("consumable_item", 14.0), ("material", 24.0), ("tool_item", 42.0), ("special", 20.0)],
+    "S": [("consumable_item", 8.0), ("material", 18.0), ("tool_item", 44.0), ("special", 30.0)],
 }
 _WENYOU_REWARD_TABLE_CONFIG: Optional[dict[str, Any]] = None
-_WENYOU_EVOLUTION_ROUTE_CONFIG: Optional[dict[str, dict[str, Any]]] = None
 _WENYOU_REWARD_CATEGORY_LABELS = {
     "consumable_item": "消耗道具",
     "material": "材料",
     "tool_item": "工具道具",
-    "ability_template": "能力模板",
-    "evolution_template": "进化印记",
     "special": "特殊物/称号",
 }
-_WENYOU_DEFAULT_ABILITIES = {
-    "quick_bandage": {"id": "quick_bandage", "name": "快速包扎", "rarity": "D", "slot_type": "active", "uses_per_instance": 1, "tags": ["heal"], "desc": "每副本 1 次，非战斗恢复 20 HP。"},
-    "steady_breath": {"id": "steady_breath", "name": "稳定呼吸", "rarity": "D", "slot_type": "active", "uses_per_instance": 1, "tags": ["mental"], "desc": "每副本 1 次，恢复 20 SAN。"},
-    "anomaly_intuition": {"id": "anomaly_intuition", "name": "异常直觉", "rarity": "D", "slot_type": "active", "uses_per_instance": 1, "tags": ["investigation"], "desc": "发现一个轻微异常，但不保证解释。"},
-    "danger_premonition": {"id": "danger_premonition", "name": "危险预感", "rarity": "C", "slot_type": "active", "uses_per_instance": 1, "tags": ["risk"], "desc": "危险事件前获得一次提示。"},
-    "short_tracking": {"id": "short_tracking", "name": "短距追踪", "rarity": "C", "slot_type": "active", "uses_per_instance": 1, "tags": ["tracking"], "desc": "标记目标，3 轮内追踪判定 +3。"},
-    "mental_anchor": {"id": "mental_anchor", "name": "精神锚点", "rarity": "C", "slot_type": "active", "uses_per_instance": 1, "tags": ["mental"], "desc": "抵消一次动摇。"},
-    "rule_probe": {"id": "rule_probe", "name": "规则试探", "rarity": "B", "slot_type": "active", "uses_per_instance": 1, "tags": ["rule", "investigation"], "desc": "验证一条低级规则，结果可能是真/假/不完整。"},
-    "shadow_hide": {"id": "shadow_hide", "name": "影中藏身", "rarity": "B", "slot_type": "active", "uses_per_instance": 1, "tags": ["stealth"], "desc": "潜伏行动风险降低一级。"},
-    "damage_shift": {"id": "damage_shift", "name": "伤害转移", "rarity": "B", "slot_type": "active", "uses_per_instance": 1, "tags": ["defense"], "desc": "将 50% HP 伤害转为 SAN 伤害。"},
-    "causal_rollback": {"id": "causal_rollback", "name": "因果回滚", "rarity": "A", "slot_type": "active", "uses_per_instance": 1, "tags": ["causal"], "desc": "撤销本轮一次非死亡后果，SAN -35。"},
-    "identity_disguise": {"id": "identity_disguise", "name": "身份伪装", "rarity": "A", "slot_type": "active", "uses_per_instance": 1, "tags": ["stealth"], "desc": "潜伏调查中伪装暴露度 -2。"},
-    "pollution_immunity": {"id": "pollution_immunity", "name": "污染豁免", "rarity": "A", "slot_type": "active", "uses_per_instance": 1, "tags": ["pollution"], "desc": "抵消一次 A 级以下精神污染。"},
-    "death_denial": {"id": "death_denial", "name": "拒绝一次死亡", "rarity": "S", "slot_type": "active", "uses_per_instance": 1, "cooldown_instances": 3, "tags": ["death"], "desc": "每 3 个副本 1 次，死亡时保留 1 HP，SAN 清零。"},
-    "minor_rule_rewrite": {"id": "minor_rule_rewrite", "name": "低级规则改写", "rarity": "S", "slot_type": "active", "uses_per_instance": 1, "tags": ["rule"], "desc": "改写一条低级公开规则，威胁时钟 +2。"},
-    "settlement_audit": {"id": "settlement_audit", "name": "强制结算复核", "rarity": "S", "slot_type": "active", "uses_per_instance": 1, "tags": ["settlement"], "desc": "结算时重算一次奖励或死亡判定，必须接受新结果。"},
-}
+_WENYOU_DEFAULT_ABILITIES = {item["id"]: item for item in _WENYOU_CORE_ABILITY_ARCHETYPES.values()}
 
 
 def _normalize_ability_definition(raw: Any) -> Optional[dict[str, Any]]:
@@ -634,67 +663,7 @@ def _load_content_ability_catalog() -> dict[str, dict[str, Any]]:
     return out
 
 
-def _normalize_evolution_route_definition(raw: Any) -> Optional[dict[str, Any]]:
-    if not isinstance(raw, dict):
-        return None
-    route_id = str(raw.get("id") or raw.get("name") or "").strip().lower()
-    route_id = re.sub(r"[^a-z0-9_\u4e00-\u9fff-]+", "_", route_id).strip("_")[:80]
-    name = str(raw.get("name") or "").strip()
-    if not route_id or not name:
-        return None
-    attrs_raw = raw.get("attrs") if isinstance(raw.get("attrs"), dict) else raw.get("attribute_bonus")
-    attrs: dict[str, int] = {}
-    if isinstance(attrs_raw, dict):
-        for key in _WENYOU_ATTRIBUTE_KEYS:
-            try:
-                value = int(attrs_raw.get(key) or 0)
-            except Exception:
-                value = 0
-            if value:
-                attrs[key] = max(-3, min(3, value))
-    tags = raw.get("tags") if isinstance(raw.get("tags"), list) else []
-    try:
-        hp_ratio = float(raw.get("hp_ratio") or raw.get("hp_bonus_ratio") or 0)
-    except Exception:
-        hp_ratio = 0.0
-    try:
-        san_ratio = float(raw.get("san_ratio") or raw.get("san_bonus_ratio") or 0)
-    except Exception:
-        san_ratio = 0.0
-    return {
-        "id": route_id,
-        "name": name[:80],
-        "tags": [str(x).strip()[:40] for x in tags if str(x).strip()][:12],
-        "attrs": attrs,
-        "hp_ratio": max(0.0, min(2.0, hp_ratio)),
-        "san_ratio": max(0.0, min(2.0, san_ratio)),
-        "pollution": max(0, min(30, int(raw.get("pollution") or raw.get("pollution_delta") or 0))),
-        "desc": str(raw.get("desc") or raw.get("description") or "").strip()[:220],
-    }
-
-
-def _load_content_evolution_routes() -> dict[str, dict[str, Any]]:
-    path = Path(BASE_DIR) / "content" / "default" / "evolution_paths.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except Exception as exc:
-        logger.warning("文游进化路径目录加载失败 path=%s err=%s", path, exc)
-        return {}
-    raw_items = data.get("routes") if isinstance(data, dict) else data
-    if not isinstance(raw_items, list):
-        return {}
-    out: dict[str, dict[str, Any]] = {}
-    for raw in raw_items:
-        item = _normalize_evolution_route_definition(raw)
-        if item:
-            out[str(item["id"])] = item
-    return out
-
-
 _WENYOU_ABILITY_CATALOG = {**_WENYOU_DEFAULT_ABILITIES, **_load_content_ability_catalog()}
-_WENYOU_EVOLUTION_ROUTES = {**_WENYOU_EVOLUTION_ROUTE_DEFAULTS, **_load_content_evolution_routes()}
 _WENYOU_RATING_LABELS = {
     "S": "S 完美",
     "A": "A 优秀",
@@ -821,10 +790,9 @@ def _default_player_stats() -> dict:
         "ranged_attack": 5,
         "defense": 3,
         "mental_resist": 3,
-        "initiative": 7,
         "carry_limit": 15,
-        "evolution": "凡人",
-        "abilities": [],
+        "core_ability": None,
+        "core_ability_profile": None,
         "unspent_attribute_points": 0,
         "conditions": [],
         "death_count": 0,
@@ -859,16 +827,9 @@ _WENYOU_PLAYER_STATE_KEYS = frozenset(
         "ranged_attack",
         "defense",
         "mental_resist",
-        "initiative",
         "carry_limit",
-        "evolution",
-        "evolution_rank",
-        "evolution_tags",
-        "evolution_hp_bonus",
-        "evolution_san_bonus",
-        "evolution_spi_bonus",
-        "abilities",
-        "dormant_abilities",
+        "core_ability",
+        "core_ability_profile",
         "unspent_attribute_points",
         "conditions",
         "death_count",
@@ -887,6 +848,40 @@ def _to_non_negative_int(value: Any, default: int = 0) -> int:
         return max(0, int(value))
     except Exception:
         return max(0, int(default))
+
+
+def _normalize_core_ability(raw: Any) -> Optional[dict[str, Any]]:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    raw_id = str(raw.get("id") or raw.get("ability_id") or raw.get("name") or "core_ability").strip()
+    ability_id = _slug_id(raw_id, "core_ability")
+    name = str(raw.get("name") or "").strip()[:80]
+    if not name:
+        return None
+    try:
+        uses_per_instance = max(1, int(raw.get("uses_per_instance") or 1))
+    except Exception:
+        uses_per_instance = 1
+    tags = raw.get("tags") or raw.get("source_tags")
+    if not isinstance(tags, list):
+        tags = []
+    ability = {
+        "id": ability_id,
+        "name": name,
+        "rarity": _normalize_difficulty(raw.get("rarity") or "D"),
+        "origin": str(raw.get("origin") or "tutorial_performance")[:60],
+        "desc": str(raw.get("desc") or raw.get("description") or raw.get("effect") or "").strip()[:260],
+        "tags": [str(x).strip()[:40] for x in tags if str(x).strip()][:8],
+        "uses_per_instance": uses_per_instance,
+    }
+    source_tags = raw.get("source_tags")
+    if isinstance(source_tags, list):
+        ability["source_tags"] = [str(x).strip()[:40] for x in source_tags if str(x).strip()][:8]
+    if raw.get("created_at"):
+        ability["created_at"] = str(raw.get("created_at"))[:40]
+    return ability
 
 
 def _normalize_player_growth_fields(player: dict) -> dict:
@@ -908,8 +903,13 @@ def _normalize_player_growth_fields(player: dict) -> dict:
     p["unspent_attribute_points"] = _to_non_negative_int(p.get("unspent_attribute_points"), 0)
     p.pop("ability_tokens", None)
     p.pop("growth_milestone_tokens", None)
-    evo = str(p.get("evolution") or "凡人").strip()[:48] or "凡人"
-    p["evolution"] = evo
+    if not isinstance(p.get("core_ability"), dict):
+        legacy = _normalize_abilities_list(p.get("abilities"))
+        p["core_ability"] = _normalize_core_ability(legacy[0]) if legacy else None
+    else:
+        p["core_ability"] = _normalize_core_ability(p.get("core_ability"))
+    if not isinstance(p.get("core_ability_profile"), dict):
+        p["core_ability_profile"] = None
     p["death_count"] = _to_non_negative_int(p.get("death_count"), 0)
     p["pollution"] = _to_non_negative_int(p.get("pollution"), 0)
     p.pop("gear", None)
@@ -1058,15 +1058,6 @@ def _normalize_encounter_profile(raw: Any) -> dict:
     }
 
 
-def _format_abilities_for_prompt(p: dict) -> str:
-    """写入 GM 占位：与面板要求一致的单行格式。"""
-    ab = p.get("abilities") if isinstance(p, dict) else None
-    ab = _normalize_abilities_list(ab)
-    if not ab:
-        return "无"
-    return "；".join(f"{a['name']}｜{a['desc']}" for a in ab)
-
-
 def _merge_one_player(cur: dict, new: dict, include_vitals: bool = True) -> dict:
     """将 GM 面板中的部分字段合并进玩家状态，并约束血/精神在上限内。"""
     out = dict(cur)
@@ -1104,12 +1095,8 @@ def _merge_one_player(cur: dict, new: dict, include_vitals: bool = True) -> dict
             out[k] = max(0, v)
     if "rank" in new:
         out["rank"] = _normalize_difficulty(new["rank"])
-    if "evolution" in new:
-        evo = str(new["evolution"]).strip()[:48]
-        if evo:
-            out["evolution"] = evo
-    if "abilities" in new and isinstance(new["abilities"], list):
-        out["abilities"] = _normalize_abilities_list(new["abilities"])
+    if "core_ability" in new:
+        out["core_ability"] = _normalize_core_ability(new.get("core_ability"))
     if "conditions" in new and isinstance(new["conditions"], list):
         out["conditions"] = _normalize_text_list(new["conditions"])
     out = _normalize_player_growth_fields(out)
@@ -1326,7 +1313,7 @@ def _normalize_framework(raw: dict) -> dict:
 
 
 def _normalize_initial_stats(raw: dict) -> dict:
-    """开局 JSON 中的 initial_stats：积分、双玩家血/精神/等级阶位/六属性/进化、道具列表。"""
+    """开局 JSON 中的 initial_stats：积分、双玩家血/精神/等级阶位/六属性/核心能力、道具列表。"""
     ist = raw.get("initial_stats")
     if not isinstance(ist, dict):
         ist = {}
@@ -1350,10 +1337,7 @@ def _normalize_initial_stats(raw: dict) -> dict:
                 "pollution": max(0, int(d.get("pollution") or 0)),
             }
         )
-        evo = str(d.get("evolution") or "凡人").strip()[:48] or "凡人"
-        player["evolution"] = evo
-        ab = _normalize_abilities_list(d.get("abilities"))
-        player["abilities"] = ab
+        player["core_ability"] = _normalize_core_ability(d.get("core_ability"))
         player["conditions"] = _normalize_text_list(d.get("conditions"))
         player = _normalize_player_growth_fields(player)
         _recalc_player_caps(player)
@@ -1436,8 +1420,6 @@ def _session_ensure_stats(session: dict) -> None:
                 cur.setdefault("display_name", _WENYOU_PLAYER_LABELS.get(k, k))
                 cur.setdefault("controller", _WENYOU_PLAYER_CONTROLLERS.get(k, "human"))
                 _normalize_player_growth_fields(cur)
-                # 旧存档或脏数据：统一成结构化能力列表
-                cur["abilities"] = _normalize_abilities_list(cur.get("abilities"))
                 cur["conditions"] = _normalize_text_list(cur.get("conditions"))
                 _recalc_player_caps(cur)
         return
@@ -1446,7 +1428,7 @@ def _session_ensure_stats(session: dict) -> None:
 
 
 def _format_stats_for_gm_prompt(session: dict) -> str:
-    """供 GM system 占位：当前积分、场地、血精神、成长与进化、道具。"""
+    """供 GM system 占位：当前积分、场地、血精神、成长与核心能力、道具。"""
     _session_ensure_stats(session)
     st = session["stats"]
     phase = _normalize_phase(st.get("phase"))
@@ -1457,11 +1439,13 @@ def _format_stats_for_gm_prompt(session: dict) -> str:
     inv_s = "、".join(_inventory_label_list(inv)) if inv else "无"
 
     def _line_player(label: str, p: dict) -> str:
+        core = _normalize_core_ability(p.get("core_ability"))
+        core_text = f"{core.get('name')}｜{core.get('desc')}" if core else "无（新手副本通关后按表现生成）"
         return (
             f"- {label}：HP {p.get('hp', 0)}/{p.get('hp_max', 1)}，SAN {p.get('san', 0)}/{p.get('san_max', 1)}，当前精神力 {p.get('spi_current', 0)}/{p.get('spi_max', 0)}；"
             f"Lv{p.get('level', 1)} EXP {p.get('exp', 0)} 阶位{p.get('rank', 'D')}；"
-            f"力{p.get('str', 0)} 体{p.get('con', p.get('vit', 0))} 敏{p.get('agi', 0)} 智{p.get('int', p.get('wis', 0))} 精{p.get('spi', 0)} 运{p.get('luk', 0)}；进化：{p.get('evolution') or '凡人'}\n"
-            f"- {label}能力（须在面板原样同步）：{_format_abilities_for_prompt(p)}"
+            f"力{p.get('str', 0)} 体{p.get('con', p.get('vit', 0))} 敏{p.get('agi', 0)} 智{p.get('int', p.get('wis', 0))} 精{p.get('spi', 0)} 运{p.get('luk', 0)}\n"
+            f"- {label}核心能力（系统字段，GM 不自行新增）：{core_text}"
         )
 
     return (
@@ -1484,20 +1468,16 @@ def _format_status_footer(session: dict) -> str:
     inv = _normalize_inventory(st.get("inventory"), source="session")
     inv_s = "、".join(_inventory_label_list(inv)) if inv else "无"
 
-    def _foot_abilities(p: dict) -> str:
-        ab = _normalize_abilities_list(p.get("abilities"))
-        if not ab:
-            return "能力无"
-        shown = [a.get("name", "") for a in ab[:3] if isinstance(a, dict) and a.get("name")]
-        tail = f"等{len(ab)}项" if len(ab) > 3 else ""
-        return (" ".join(shown) + (f" {tail}" if tail else "")).strip() or "能力无"
+    def _foot_ability(p: dict) -> str:
+        core = _normalize_core_ability(p.get("core_ability"))
+        return f"核心能力{core.get('name')}" if core else "核心能力无"
 
     def _foot_player(p: dict) -> str:
         return (
             f"血{p.get('hp', 0)}/{p.get('hp_max', 1)} SAN{p.get('san', 0)}/{p.get('san_max', 1)} 精神力{p.get('spi_current', 0)}/{p.get('spi_max', 0)}｜"
             f"Lv{p.get('level', 1)}·{p.get('rank', 'D')}阶 EXP{p.get('exp', 0)}｜"
             f"力{p.get('str', 0)} 体{p.get('con', p.get('vit', 0))} 敏{p.get('agi', 0)} 智{p.get('int', p.get('wis', 0))} 精{p.get('spi', 0)} 运{p.get('luk', 0)}｜"
-            f"{p.get('evolution') or '凡人'}｜{_foot_abilities(p)}"
+            f"{_foot_ability(p)}"
         )
 
     return (
@@ -1591,12 +1571,10 @@ def _parse_player_panel_block(block: str, label: str) -> dict:
     m = re.search(rf"{label}智慧[：:]\s*(\d+)", block)
     if m:
         out["wis"] = int(m.group(1))
-    m = re.search(rf"{label}进化[：:]\s*(.+?)(?:\n|$)", block)
+    m = re.search(rf"{label}核心能力[：:]\s*(.+?)(?:\n|$)", block)
     if m:
-        out["evolution"] = m.group(1).strip()
-    m = re.search(rf"{label}能力[：:]\s*(.+?)(?:\n|$)", block)
-    if m:
-        out["abilities"] = _parse_abilities_line(m.group(1))
+        parsed = _parse_abilities_line(m.group(1))
+        out["core_ability"] = _normalize_core_ability(parsed[0]) if parsed else None
     return out
 
 
@@ -2442,7 +2420,6 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
         player.setdefault("display_name", _WENYOU_PLAYER_LABELS.get(pid, pid))
         player.setdefault("controller", _WENYOU_PLAYER_CONTROLLERS.get(pid, "human"))
         _normalize_player_growth_fields(player)
-        player["abilities"] = _normalize_abilities_list(player.get("abilities"))
         player["conditions"] = _normalize_text_list(player.get("conditions"))
         _recalc_player_caps(player)
         players[pid] = player
@@ -2867,9 +2844,9 @@ def _recalc_player_caps(player: dict) -> None:
     spi = max(0, int(player.get("spi") or 10))
     luk = max(0, int(player.get("luk") or 10))
     rank = _normalize_difficulty(player.get("rank") or "D")
-    hp_max = 80 + con * 10 + (level - 1) * 6 + _WENYOU_RANK_HP_BONUS.get(rank, 0) + int(player.get("evolution_hp_bonus") or 0)
-    san_max = 120 + intel * 6 + (level - 1) * 6 + _WENYOU_RANK_SAN_BONUS.get(rank, 0) + int(player.get("evolution_san_bonus") or 0)
-    spi_max = spi + _WENYOU_RANK_SPI_BONUS.get(rank, 0) + int(player.get("evolution_spi_bonus") or 0)
+    hp_max = 80 + con * 10 + (level - 1) * 6 + _WENYOU_RANK_HP_BONUS.get(rank, 0)
+    san_max = 120 + intel * 6 + (level - 1) * 6 + _WENYOU_RANK_SAN_BONUS.get(rank, 0)
+    spi_max = spi + _WENYOU_RANK_SPI_BONUS.get(rank, 0)
     player["hp_max"] = max(1, hp_max)
     player["san_max"] = max(1, san_max)
     player["spi_max"] = max(0, spi_max)
@@ -2880,7 +2857,6 @@ def _recalc_player_caps(player: dict) -> None:
     player["ranged_attack"] = math.floor((agi + intel) / 4)
     player["defense"] = math.floor(con / 3) + int(_WENYOU_RANK_PHYSICAL_REDUCTION.get(rank, 0))
     player["mental_resist"] = math.floor(int(player.get("spi_current") or 0) / 3) + int(_WENYOU_RANK_MENTAL_REDUCTION.get(rank, 0))
-    player["initiative"] = math.floor(agi / 2) + math.floor(luk / 4)
     player["carry_limit"] = strength + math.floor(con / 2)
 
 
@@ -3334,6 +3310,83 @@ def _mark_tutorial_started(user_id: int, session: dict, wallet: dict) -> None:
     _save_wenyou_wallet(int(user_id), wallet)
 
 
+_WENYOU_CORE_ABILITY_KEYWORDS = {
+    "observe": ("观察", "检查", "线索", "记录", "调查", "分析", "推理", "确认", "看", "搜索", "验证"),
+    "escape": ("逃", "跑", "躲", "绕开", "潜行", "撤退", "退后", "藏", "避开", "脱身"),
+    "protect": ("保护", "挡", "救", "治疗", "扶", "拉", "掩护", "照顾", "包扎"),
+    "combat": ("打", "砸", "攻击", "硬闯", "破坏", "撞", "压制", "踹", "挥", "砍"),
+    "social": ("交谈", "询问", "说服", "骗", "伪装", "谈判", "搭话", "套话", "解释"),
+    "rule": ("规则", "禁忌", "广播", "时钟", "门牌", "试探", "条件", "仪式", "循环"),
+    "resilience": ("受伤", "san", "污染", "死亡", "濒死", "忍", "坚持", "疼", "恐惧"),
+}
+
+
+def _core_ability_text_source(session: dict, player_id: str) -> str:
+    pieces: list[str] = []
+    history = session.get("history") if isinstance(session.get("history"), list) else []
+    labels = {
+        "player1": ("player1", "玩家一", "我"),
+        "player2": ("player2", "玩家二", "渡", "AI"),
+    }.get(player_id, (player_id,))
+    for entry in history[-80:]:
+        if isinstance(entry, dict):
+            role = str(entry.get("role") or entry.get("speaker") or entry.get("player_id") or "")
+            text = str(entry.get("content") or entry.get("text") or entry.get("message") or "")
+            if player_id == "player2" and role and not any(label in role for label in labels):
+                continue
+            if player_id == "player1" and role and "player2" in role.lower():
+                continue
+        else:
+            text = str(entry or "")
+        if text:
+            pieces.append(text)
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
+    reward_context = rules.get("reward_context") if isinstance(rules.get("reward_context"), dict) else {}
+    pieces.extend(str(x) for x in reward_context.get("reward_tags") or [] if str(x).strip())
+    return "\n".join(pieces)[-4000:]
+
+
+def _score_core_ability_archetypes(session: dict, player_id: str) -> dict[str, int]:
+    text = _core_ability_text_source(session, player_id).lower()
+    scores = {key: 0 for key in _WENYOU_CORE_ABILITY_ARCHETYPES}
+    for key, words in _WENYOU_CORE_ABILITY_KEYWORDS.items():
+        for word in words:
+            if not word:
+                continue
+            scores[key] = scores.get(key, 0) + text.count(str(word).lower())
+    if not any(scores.values()):
+        scores["survival"] = 1
+    return scores
+
+
+def _core_ability_from_tutorial(session: dict, player_id: str) -> dict[str, Any]:
+    scores = _score_core_ability_archetypes(session, player_id)
+    archetype = max(scores, key=lambda key: (scores.get(key, 0), -list(_WENYOU_CORE_ABILITY_ARCHETYPES).index(key)))
+    template = dict(_WENYOU_CORE_ABILITY_ARCHETYPES.get(archetype) or _WENYOU_CORE_ABILITY_ARCHETYPES["survival"])
+    template["origin"] = "tutorial_performance"
+    template["source_tags"] = [key for key, value in sorted(scores.items(), key=lambda kv: kv[1], reverse=True) if value > 0][:4]
+    template["created_at"] = now_beijing_iso()
+    return _normalize_core_ability(template) or dict(_WENYOU_CORE_ABILITY_ARCHETYPES["survival"])
+
+
+def _core_ability_profile_from_tutorial(session: dict, player_id: str, ability: dict[str, Any]) -> dict[str, Any]:
+    scores = _score_core_ability_archetypes(session, player_id)
+    picked = str(ability.get("id") or "").replace("core_", "", 1) or "survival"
+    source_tags = [key for key, value in sorted(scores.items(), key=lambda kv: kv[1], reverse=True) if value > 0][:4]
+    return {
+        "source": "tutorial_performance",
+        "algorithm_version": 1,
+        "history_window": 80,
+        "scores": {key: int(value or 0) for key, value in scores.items()},
+        "picked": picked,
+        "source_tags": source_tags,
+        "ability_id": str(ability.get("id") or ""),
+        "ability_name": str(ability.get("name") or ""),
+        "created_at": str(ability.get("created_at") or now_beijing_iso()),
+    }
+
+
 def _grant_newbie_starter_pack(session: dict, wallet: dict, result: str) -> dict[str, Any]:
     if result != "standard_clear" or not _is_tutorial_session(session) or _tutorial_pack_granted(wallet):
         return {"granted": False}
@@ -3361,10 +3414,15 @@ def _grant_newbie_starter_pack(session: dict, wallet: dict, result: str) -> dict
             continue
         before = int(player.get("unspent_attribute_points") or 0)
         player["unspent_attribute_points"] = before + _WENYOU_TUTORIAL_ATTRIBUTE_POINTS
+        if not _normalize_core_ability(player.get("core_ability")):
+            player["core_ability"] = _core_ability_from_tutorial(session, pid)
+            player["core_ability_profile"] = _core_ability_profile_from_tutorial(session, pid, player["core_ability"])
         st[pid] = player
         players_changed[pid] = {
             "unspent_attribute_points_delta": _WENYOU_TUTORIAL_ATTRIBUTE_POINTS,
             "unspent_attribute_points": player["unspent_attribute_points"],
+            "core_ability": player.get("core_ability"),
+            "core_ability_profile": player.get("core_ability_profile"),
         }
 
     st["inventory"] = inventory[:80]
@@ -3379,6 +3437,8 @@ def _grant_newbie_starter_pack(session: dict, wallet: dict, result: str) -> dict
             "gameId": str(session.get("gameId") or ""),
             "items": [str(item.get("id") or "") for item in gift_items],
             "attribute_points_delta": _WENYOU_TUTORIAL_ATTRIBUTE_POINTS,
+            "core_abilities": {pid: data.get("core_ability") for pid, data in players_changed.items()},
+            "core_ability_profiles": {pid: data.get("core_ability_profile") for pid, data in players_changed.items()},
         }
     ]
 
@@ -3645,10 +3705,6 @@ def _normalize_inventory_item(raw: Any, index: int = 0, source: str = "session")
             "broken",
             "depleted",
             "traits",
-            "ability_id",
-            "ability_template",
-            "evolution_id",
-            "evolution_template",
             "fragments_value",
             "pool_id",
             "sealed",
@@ -4002,21 +4058,12 @@ def _check_item_requirements(session: dict, item: dict, player: dict) -> Optiona
         hit = [str(x).strip() for x in forbidden if str(x).strip() in existing]
         if hit:
             return "当前状态禁止使用：" + "、".join(hit[:3]) + "。"
-    ability_ids = req.get("ability_ids_any") if isinstance(req.get("ability_ids_any"), list) else []
+    ability_ids = req.get("core_ability_ids_any") if isinstance(req.get("core_ability_ids_any"), list) else req.get("ability_ids_any") if isinstance(req.get("ability_ids_any"), list) else []
     if ability_ids:
-        owned = {
-            str((a or {}).get("id") or (a or {}).get("ability_id") or (a or {}).get("name") or "").strip()
-            for a in (player.get("abilities") or [])
-            if isinstance(a, dict)
-        }
+        core = _normalize_core_ability(player.get("core_ability"))
+        owned = {str(core.get("id") or "").strip(), str(core.get("name") or "").strip()} if core else set()
         if not any(str(x).strip() in owned for x in ability_ids):
-            return "缺少指定能力。"
-    evo_tags = req.get("evolution_tags_any") if isinstance(req.get("evolution_tags_any"), list) else []
-    if evo_tags:
-        owned_tags = {str(x).strip() for x in (player.get("evolution_tags") or []) if str(x).strip()}
-        evo_name = str(player.get("evolution") or "")
-        if not any(str(x).strip() in owned_tags or str(x).strip() in evo_name for x in evo_tags):
-            return "当前进化方向不匹配。"
+            return "缺少指定核心能力。"
     flags = session.get("flags") if isinstance(session.get("flags"), dict) else {}
     if req.get("safe_node") and not flags.get("safe_rest_node"):
         return "需要安全休整节点。"
@@ -4114,10 +4161,8 @@ def _apply_item_effect_to_session(session: dict, item: dict, detail: str = "", p
     if req_error:
         return False, f"文游：【{_inventory_item_name(item)}】{req_error}", None
     category = str(item.get("category") or item.get("item_type") or "consumable").strip()
-    if category == "ability":
-        return _apply_ability_template_to_session(session, item, pid)
-    if category == "evolution":
-        return _apply_evolution_template_to_session(session, item, pid)
+    if category in {"ability", "evolution"}:
+        return False, "文游：当前规则不再通过背包绑定额外成长；核心能力只在新手副本通关后按表现生成。", None
     if category in {"fragment", "material"}:
         return False, f"文游：【{_inventory_item_name(item)}】需要在成长或兑换流程中处理，不能当作局内消耗品直接使用。", None
 
@@ -4427,7 +4472,6 @@ def _wallet_stats_from_wallet(wallet: dict) -> dict:
         player.setdefault("display_name", _WENYOU_PLAYER_LABELS.get(pid, pid))
         player.setdefault("controller", _WENYOU_PLAYER_CONTROLLERS.get(pid, "human"))
         _normalize_player_growth_fields(player)
-        player["abilities"] = _normalize_abilities_list(player.get("abilities"))
         player["conditions"] = _normalize_text_list(player.get("conditions"))
         _recalc_player_caps(player)
         st[pid] = player
@@ -4539,79 +4583,13 @@ def _ability_definition(ability_ref: str) -> Optional[dict[str, Any]]:
     return None
 
 
-def _player_ability_slot_limit(player: dict) -> int:
-    return int(_WENYOU_ABILITY_SLOTS.get(_normalize_difficulty(player.get("rank") or "D"), 2))
-
-
 def _find_player_ability(player: dict, ability_ref: str) -> Optional[dict]:
     ref = str(ability_ref or "").strip()
     slug = _slug_id(ref)
-    for ability in player.get("abilities") or []:
-        if not isinstance(ability, dict):
-            continue
-        if str(ability.get("id") or ability.get("ability_id") or "") == slug or str(ability.get("name") or "") == ref:
-            return ability
+    ability = _normalize_core_ability(player.get("core_ability"))
+    if ability and (str(ability.get("id") or "") == slug or str(ability.get("name") or "") == ref):
+        return ability
     return None
-
-
-def _ability_from_template(item: dict) -> dict[str, Any]:
-    definition = _ability_definition(str(item.get("id") or item.get("name") or ""))
-    if not definition:
-        definition = {
-            "id": _slug_id(item.get("id") or item.get("name") or "ability"),
-            "name": _inventory_item_name(item),
-            "rarity": _normalize_difficulty(item.get("rarity") or "D"),
-            "slot_type": "active",
-            "uses_per_instance": 1,
-            "cooldown_instances": 0,
-            "desc": str(item.get("desc") or ""),
-            "tags": list(item.get("tags") or []),
-        }
-    return {
-        "id": str(definition.get("id") or ""),
-        "name": str(definition.get("name") or ""),
-        "rarity": _normalize_difficulty(definition.get("rarity") or item.get("rarity") or "D"),
-        "level": 1,
-        "slot_type": str(definition.get("slot_type") or "active"),
-        "uses_per_instance": int(definition.get("uses_per_instance") or 1),
-        "cooldown_instances": int(definition.get("cooldown_instances") or 0),
-        "desc": str(definition.get("desc") or item.get("desc") or ""),
-        "tags": list(definition.get("tags") or item.get("tags") or []),
-    }
-
-
-def _apply_ability_template_to_session(session: dict, item: dict, player_id: Any = "player1") -> tuple[bool, str, Optional[dict]]:
-    pid = _resolve_player_key(player_id)
-    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
-    player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
-    _recalc_player_caps(player)
-    ability = _ability_from_template(item)
-    rarity = _normalize_difficulty(ability.get("rarity") or "D")
-    if _rarity_rank(player.get("rank") or "D") < _rarity_rank(rarity):
-        return False, f"文游：【{ability.get('name')}】仍处于封印状态，需要 {rarity} 阶。", None
-    if _find_player_ability(player, str(ability.get("id") or ability.get("name") or "")):
-        return False, f"文游：已经拥有能力【{ability.get('name')}】，不能重复绑定。", None
-    abilities = [x for x in (player.get("abilities") or []) if isinstance(x, dict)]
-    dormant = [x for x in (player.get("dormant_abilities") or []) if isinstance(x, dict)]
-    slot_limit = _player_ability_slot_limit(player)
-    target_key = "ability_learned"
-    if len(abilities) < slot_limit:
-        abilities.append(ability)
-        place_text = f"已进入能力槽（{len(abilities)}/{slot_limit}）"
-    else:
-        dormant.append(ability)
-        target_key = "ability_dormant"
-        place_text = "能力槽已满，已进入休眠能力"
-    player["abilities"] = abilities[:8]
-    player["dormant_abilities"] = dormant[:8]
-    _recalc_player_caps(player)
-    st[pid] = player
-    session["stats"] = st
-    return True, f"能力模板已绑定：【{ability.get('name')}】{place_text}。", {
-        "players": {pid: {target_key: ability, "ability_slots": slot_limit}},
-        "inventory_remove": [dict(item, quantity=1)],
-        "inventory_add": [],
-    }
 
 
 def use_player_ability(user_id: int, ability_ref: str, player_id: Any = "player1", detail: str = "") -> tuple[bool, str, dict]:
@@ -4627,19 +4605,14 @@ def use_player_ability(user_id: int, ability_ref: str, player_id: Any = "player1
     _recalc_player_caps(player)
     ability = _find_player_ability(player, ability_ref)
     if not ability:
-        return False, "未拥有该能力，或该能力处于休眠状态。", get_session_view(uid)
+        return False, "还没有核心能力；新手副本标准通关后会按表现生成。", get_session_view(uid)
     ability_id = str(ability.get("id") or _slug_id(ability.get("name")))
     rank = _normalize_difficulty(player.get("rank") or "D")
     rarity = _normalize_difficulty(ability.get("rarity") or "D")
     if _rarity_rank(rank) < _rarity_rank(rarity):
         return False, f"能力【{ability.get('name')}】仍处于封印状态，需要 {rarity} 阶。", get_session_view(uid)
-    cooldowns = wallet.get("ability_cooldowns") if isinstance(wallet.get("ability_cooldowns"), dict) else {}
     ability_uses = session.get("ability_uses") if isinstance(session.get("ability_uses"), dict) else {}
     use_key = f"{pid}:{ability_id}"
-    settlement_count = max(0, int(wallet.get("settlement_count") or 0))
-    ready_after = max(0, int(cooldowns.get(use_key) or 0))
-    if ready_after > settlement_count:
-        return False, f"能力【{ability.get('name')}】仍在冷却，还需完成 {ready_after - settlement_count} 个副本后可用。", get_session_view(uid)
     used = max(0, int(ability_uses.get(use_key) or 0))
     max_uses = max(1, int(ability.get("uses_per_instance") or 1))
     if used >= max_uses and _session_phase(session) == "instance_running":
@@ -4649,151 +4622,50 @@ def use_player_ability(user_id: int, ability_ref: str, player_id: Any = "player1
     san_before = int(player.get("san") or 0)
     changes: dict[str, Any] = {"players": {pid: {}}, "clock_updates": [], "flags_set": {}}
     notes: list[str] = []
-    if ability_id == "quick_bandage":
-        amount = 20 + (level - 1) * 10
-        delta = _adjust_player_stat(player, "hp", amount)
-        notes.append(f"HP {delta:+d}")
-    elif ability_id == "steady_breath":
-        amount = 20 + (level - 1) * 10
-        delta = _adjust_player_stat(player, "san", amount)
-        spi_delta = _apply_san_delta_to_spi(player, delta, mental_recovery=True)
-        notes.append(f"SAN {delta:+d}，精神力 {spi_delta:+d}")
-    elif ability_id == "mental_anchor":
+    if ability_id == "core_protect":
+        san_delta = _adjust_player_stat(player, "san", -5)
+        _apply_san_delta_to_spi(player, san_delta)
+        _add_condition_unique(player, "代偿护手：抵消下一次 15 点 HP 伤害")
+        notes.append(f"代偿护手已登记，SAN {san_delta:+d}")
+    elif ability_id == "core_resilience":
         removed = _remove_first_condition(player, ["动摇", "污染"] if level >= 4 else ["动摇"])
-        notes.append("移除状态：" + "、".join(removed) if removed else "建立精神锚点")
-        _add_condition_unique(player, "精神锚点：抵消一次精神动摇")
-    elif ability_id == "causal_rollback":
-        san_delta = _adjust_player_stat(player, "san", -(35 - min(20, (level - 1) * 5)))
-        spi_delta = _apply_san_delta_to_spi(player, san_delta)
-        flags = session.get("flags") if isinstance(session.get("flags"), dict) else {}
-        flags["causal_rollback_available"] = True
-        session["flags"] = flags
-        notes.append(f"因果回滚待触发，SAN {san_delta:+d}，精神力 {spi_delta:+d}")
-    elif ability_id == "minor_rule_rewrite":
-        updates = _apply_clock_updates(session, [{"id": "threat", "name": "威胁时钟", "delta": max(1, 2 - (1 if level >= 5 else 0)), "max": 6}])
-        changes["clock_updates"].extend(updates)
-        flags = session.get("flags") if isinstance(session.get("flags"), dict) else {}
-        flags["minor_rule_rewrite_available"] = True
-        session["flags"] = flags
-        notes.append("可改写一条低级公开规则")
-    elif ability_id == "settlement_audit":
-        flags = session.get("flags") if isinstance(session.get("flags"), dict) else {}
-        flags["settlement_audit_available"] = True
-        session["flags"] = flags
-        notes.append("结算复核机会已登记")
+        if int(player.get("san") or 0) * 2 < int(player.get("san_max") or 1):
+            player["spi_current"] = min(int(player.get("spi_max") or 0), int(player.get("spi_current") or 0) + 1)
+        notes.append("移除状态：" + "、".join(removed) if removed else "残响锚点已登记：抵消一次动摇或轻度污染")
     else:
         condition = {
-            "anomaly_intuition": "异常直觉：下次观察获得轻微异常提示",
-            "danger_premonition": "危险预感：下一次危险事件前获得提示",
-            "short_tracking": "短距追踪：3 轮内追踪判定 +3",
-            "rule_probe": "规则试探：可验证一条低级规则",
-            "shadow_hide": "影中藏身：潜伏行动风险降低一级",
-            "damage_shift": "伤害转移：下一次 HP 伤害可转移 50% 为 SAN 伤害",
-            "identity_disguise": "身份伪装：潜伏调查暴露度 -2",
-            "pollution_immunity": "污染豁免：抵消一次 A 级以下精神污染",
-            "death_denial": "拒绝一次死亡：濒死时保留 1 HP，SAN 清零",
+            "core_observe": "异常余光：下次观察获得一处被忽略的异常提示",
+            "core_escape": "退路直觉：下一次逃离、规避或脱身判定 +3",
+            "core_combat": "破局冲击：下一次破坏、压制或强行突破判定 +3",
+            "core_social": "人群伪装：下一次社交、伪装或混入人群判定 +3",
+            "core_rule": "规则嗅觉：可验证一条低级规则是否立刻危险",
+            "core_survival": "求生本能：下一次险境行动前获得保守提示或降低一级低级风险",
         }.get(ability_id, f"{ability.get('name')}：效果已登记")
+        if ability_id in {"core_observe", "core_rule"}:
+            san_delta = _adjust_player_stat(player, "san", -5)
+            _apply_san_delta_to_spi(player, san_delta)
+            notes.append(f"SAN {san_delta:+d}")
+        elif ability_id == "core_combat":
+            hp_delta = _adjust_player_stat(player, "hp", -5)
+            notes.append(f"HP {hp_delta:+d}")
         _add_condition_unique(player, condition)
         notes.append(condition)
     ability_uses[use_key] = used + 1
     session["ability_uses"] = ability_uses
-    cooldown_instances = max(0, int(ability.get("cooldown_instances") or 0))
-    if cooldown_instances:
-        cooldowns[use_key] = settlement_count + cooldown_instances
-        wallet["ability_cooldowns"] = cooldowns
     _recalc_player_caps(player)
     st[pid] = player
     session["stats"] = st
     changes["players"][pid].update(
         {
             "ability_used": {"id": ability_id, "name": ability.get("name"), "level": level, "detail": str(detail or "")[:160]},
+            "core_ability_used": {"id": ability_id, "name": ability.get("name"), "detail": str(detail or "")[:160]},
             "hp_delta": int(player.get("hp") or 0) - hp_before,
             "san_delta": int(player.get("san") or 0) - san_before,
             "conditions": list(player.get("conditions") or []),
         }
     )
-    if ability_id in {"death_denial"}:
-        wallet["contract_debt"] = True
-        _refresh_forced_instance_queue(wallet, session)
     view = _persist_inventory_rule_result(uid, session, wallet, "rules_engine.use_ability", changes)
-    return True, f"能力【{ability.get('name')}】已使用：" + "；".join(notes), view
-
-
-def _evolution_route_bonus(route_id: str, target_rank: str) -> dict[str, Any]:
-    route = str(route_id or "human_stable").strip() or "human_stable"
-    route = _slug_id(route)
-    stage_bonus = {"D": 10, "C": 20, "B": 40, "A": 80, "S": 130}.get(_normalize_difficulty(target_rank), 10)
-    item = _WENYOU_EVOLUTION_ROUTES.get(route, _WENYOU_EVOLUTION_ROUTES["human_stable"])
-    return {
-        "name": item.get("name") or "人类稳定",
-        "tags": list(item.get("tags") or []),
-        "attrs": dict(item.get("attrs") or {}),
-        "hp": round(stage_bonus * float(item.get("hp_ratio") or 0.0)),
-        "san": round(stage_bonus * float(item.get("san_ratio") or 0.0)),
-        "pollution": int(item.get("pollution") or 0),
-    }
-
-
-def _evolution_bonus_from_template(item: dict, rarity: str) -> dict[str, Any]:
-    route_id = _slug_id(item.get("id") or item.get("name") or "")
-    if route_id in _WENYOU_EVOLUTION_ROUTES:
-        return _evolution_route_bonus(route_id, rarity)
-    effect = item.get("effect_json") if isinstance(item.get("effect_json"), dict) else {}
-    return {
-        "name": _inventory_item_name(item),
-        "tags": list(dict.fromkeys([route_id] + [str(x) for x in (item.get("tags") or []) if str(x).strip()]))[:8],
-        "attrs": {key: int(effect.get(f"{key}_bonus") or 0) for key in _WENYOU_ATTRIBUTE_KEYS if int(effect.get(f"{key}_bonus") or 0)},
-        "hp": int(effect.get("hp_bonus") or 0),
-        "san": int(effect.get("san_bonus") or 0),
-        "spi": int(effect.get("spi_bonus") or 0),
-        "pollution": int(effect.get("pollution_delta") or 0),
-    }
-
-
-def _apply_evolution_template_to_session(session: dict, item: dict, player_id: Any = "player1") -> tuple[bool, str, Optional[dict]]:
-    pid = _resolve_player_key(player_id)
-    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
-    player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
-    _recalc_player_caps(player)
-    rarity = _normalize_difficulty(item.get("rarity") or "D")
-    if _rarity_rank(player.get("rank") or "D") < _rarity_rank(rarity):
-        return False, f"文游：【{_inventory_item_name(item)}】仍处于封印状态，需要 {rarity} 阶。", None
-    before = {key: int(player.get(key) or 0) for key in _WENYOU_ATTRIBUTE_KEYS}
-    caps_before = {"hp_max": int(player.get("hp_max") or 0), "san_max": int(player.get("san_max") or 0), "spi_max": int(player.get("spi_max") or 0)}
-    bonus = _evolution_bonus_from_template(item, rarity)
-    hard_cap = _WENYOU_RANK_ATTRIBUTE_HARD_CAP.get(_normalize_difficulty(player.get("rank") or "D"), 16)
-    for key, amount in (bonus.get("attrs") or {}).items():
-        if key in _WENYOU_ATTRIBUTE_KEYS and int(amount or 0):
-            player[key] = min(hard_cap, int(player.get(key) or 0) + int(amount or 0))
-    player["evolution"] = str(bonus.get("name") or _inventory_item_name(item) or "未知进化")[:48]
-    player["evolution_rank"] = rarity
-    player["evolution_tags"] = list(dict.fromkeys(list(player.get("evolution_tags") or []) + list(bonus.get("tags") or [])))[:8]
-    player["evolution_hp_bonus"] = int(player.get("evolution_hp_bonus") or 0) + int(bonus.get("hp") or 0)
-    player["evolution_san_bonus"] = int(player.get("evolution_san_bonus") or 0) + int(bonus.get("san") or 0)
-    player["evolution_spi_bonus"] = int(player.get("evolution_spi_bonus") or 0) + int(bonus.get("spi") or 0)
-    if int(bonus.get("pollution") or 0):
-        player["pollution"] = max(0, min(999, int(player.get("pollution") or 0) + int(bonus.get("pollution") or 0)))
-        _add_condition_unique(player, "污染")
-    _recalc_player_caps(player)
-    st[pid] = player
-    session["stats"] = st
-    return True, f"进化印记已生效：【{player['evolution']}】。", {
-        "players": {
-            pid: {
-                "evolution": player["evolution"],
-                "evolution_rank": rarity,
-                "evolution_tags": list(player.get("evolution_tags") or []),
-                "attribute_before": before,
-                "attribute_after": {key: int(player.get(key) or 0) for key in _WENYOU_ATTRIBUTE_KEYS},
-                "hp_max_delta": int(player.get("hp_max") or 0) - caps_before["hp_max"],
-                "san_max_delta": int(player.get("san_max") or 0) - caps_before["san_max"],
-                "spi_max_delta": int(player.get("spi_max") or 0) - caps_before["spi_max"],
-                "pollution": int(player.get("pollution") or 0),
-            }
-        },
-        "inventory_remove": [dict(item, quantity=1)],
-        "inventory_add": [],
-    }
+    return True, f"核心能力【{ability.get('name')}】已使用：" + "；".join(notes), view
 
 
 _CATALOG_ITEM_TYPES = frozenset({"consumable", "tool", "material", "special"})
@@ -5103,8 +4975,7 @@ _GACHA_FRAGMENT_VALUES = {"D": 5, "C": 15, "B": 50, "A": 180, "S": 600}
 _GACHA_POOL_RATES: dict[str, list[tuple[str, float]]] = {
     "mixed": [("D", 50.0), ("C", 34.0), ("B", 12.0), ("A", 3.7), ("S", 0.3)],
     "tool_pool": [("D", 45.0), ("C", 36.0), ("B", 14.0), ("A", 4.5), ("S", 0.5)],
-    "ability_pool": [("D", 50.0), ("C", 35.0), ("B", 11.0), ("A", 3.7), ("S", 0.3)],
-    "evolution_pool": [("D", 55.0), ("C", 32.0), ("B", 9.0), ("A", 3.7), ("S", 0.3)],
+    "supply_pool": [("D", 60.0), ("C", 30.0), ("B", 8.5), ("A", 1.4), ("S", 0.1)],
     "limited_pool": [("D", 35.0), ("C", 40.0), ("B", 18.0), ("A", 6.4), ("S", 0.6)],
 }
 _GACHA_CATALOG: list[dict[str, Any]] = [
@@ -5123,12 +4994,7 @@ _GACHA_CATALOG: list[dict[str, Any]] = [
     {"id": "door_key_fragment", "name": "门钥碎片", "rarity": "A", "kind": "撤离", "category": "consumable", "desc": "拼合后可开启异常出口。", "sigil": "GATE"},
     {"id": "rewind_pod", "name": "回溯急救仓", "rarity": "A", "kind": "治疗", "category": "consumable", "desc": "结算阶段移除严重状态。", "sigil": "POD"},
     {"id": "weak_rewrite_pen", "name": "弱改写笔", "rarity": "A", "kind": "规则", "category": "consumable", "desc": "短暂改写一个可验证条件。", "sigil": "PEN"},
-    {"id": "anomaly_intuition", "name": "异常直觉", "rarity": "D", "kind": "能力", "category": "ability", "desc": "每副本 1 次，获得一个轻微异常提示。", "sigil": "INT"},
-    {"id": "shadow_hide", "name": "影中藏身", "rarity": "B", "kind": "能力", "category": "ability", "desc": "潜伏行动风险降低一级。", "sigil": "SHD"},
-    {"id": "night_body", "name": "夜视体质", "rarity": "D", "kind": "进化", "category": "evolution", "desc": "黑暗环境观察惩罚 -1。", "sigil": "NITE"},
-    {"id": "regen_boost", "name": "再生强化", "rarity": "B", "kind": "进化", "category": "evolution", "desc": "HP +40，物理伤害 -3。", "sigil": "REGN"},
     {"id": "god_receipt", "name": "主神小票", "rarity": "S", "kind": "凭证", "category": "consumable", "desc": "申请复核一次主神判定。", "sigil": "VOID"},
-    {"id": "god_echo", "name": "主神残响", "rarity": "S", "kind": "能力", "category": "ability", "desc": "封印体，需阶位解锁完整效果。", "sigil": "ECHO"},
     {"id": "memory_needle", "name": "记忆缝针", "rarity": "S", "kind": "记忆", "category": "consumable", "desc": "缝合一次被污染的关键记忆。", "sigil": "NEED"},
 ]
 
@@ -5139,20 +5005,16 @@ if _CONTENT_ITEM_CATALOG:
     _SHOP_CATALOG = [
         dict(item)
         for item in _CONTENT_ITEM_CATALOG
-        if item.get("shop_allowed")
-        and item.get("category") in _CATALOG_ITEM_TYPES
+        if item.get("category") in _CATALOG_ITEM_TYPES
         and item.get("category") != "material"
-        and str(item.get("rarity") or "D") in {"D", "C", "B"}
+        and not item.get("temporary")
+        and not item.get("quest_item")
     ]
     _GACHA_CATALOG = [
         dict(item)
         for item in _CONTENT_ITEM_CATALOG
         if item.get("gacha_allowed") and item.get("category") != "material"
     ]
-    existing_gacha_ids = {str(item.get("id") or "") for item in _GACHA_CATALOG}
-    for legacy_item in _FALLBACK_GACHA_CATALOG:
-        if str(legacy_item.get("category") or "") in {"ability", "evolution"} and str(legacy_item.get("id") or "") not in existing_gacha_ids:
-            _GACHA_CATALOG.append(dict(legacy_item))
 _SHOP_CATALOG_BY_ID = {str(item.get("id") or ""): item for item in _SHOP_CATALOG}
 _ITEM_CATALOG_BY_ID = {str(item.get("id") or ""): item for item in _CONTENT_ITEM_CATALOG}
 _ITEM_CATALOG_BY_NAME = {str(item.get("name") or ""): item for item in _CONTENT_ITEM_CATALOG}
@@ -5506,17 +5368,15 @@ def _reward_category_boosts_from_context(session: dict) -> dict[str, float]:
         lower = str(tag or "").lower()
         if "monster_sealed" in lower or "boss" in lower:
             add("special", 8.0)
-            add("evolution_template", 5.0)
             add("tool_item", 3.0)
         if "monster_defeated" in lower:
             add("tool_item", 8.0)
-            add("ability_template", 5.0)
+            add("material", 5.0)
         if "monster_evaded" in lower:
             add("consumable_item", 5.0)
-            add("ability_template", 3.0)
+            add("tool_item", 3.0)
         if "hidden" in lower:
             add("special", 8.0)
-            add("evolution_template", 6.0)
         for marker, cfg in configured.items():
             if str(marker or "").lower() not in lower or not isinstance(cfg, dict):
                 continue
@@ -5557,10 +5417,6 @@ def _reward_catalog_candidates(category: str, rarity: str) -> list[dict[str, Any
         return [item for item in same_rarity if str(item.get("item_type") or item.get("category") or "") == "material"]
     if category == "special":
         return [item for item in same_rarity if str(item.get("item_type") or item.get("category") or "") == "special"]
-    if category == "ability_template":
-        return [item for item in same_rarity if str(item.get("category") or "") == "ability"]
-    if category == "evolution_template":
-        return [item for item in same_rarity if str(item.get("category") or "") == "evolution"]
     return []
 
 
@@ -5584,10 +5440,13 @@ def _reward_stack_item(category: str, rarity: str) -> dict[str, Any]:
             "desc": "副本结算获得的异常材料，可用于成长、兑换或特殊内容包规则。",
             "stackable": True,
         }
-    if category in {"ability_template", "evolution_template"}:
-        wanted = "ability" if category == "ability_template" else "evolution"
+    if category == "tool_item":
         for item in _GACHA_CATALOG:
-            if str(item.get("category") or "") == wanted and _normalize_difficulty(item.get("rarity") or "D") == rarity:
+            if str(item.get("category") or item.get("item_type") or "") == "tool" and _normalize_difficulty(item.get("rarity") or "D") == rarity:
+                return dict(item, shop_allowed=False, gacha_allowed=True)
+    if category == "consumable_item":
+        for item in _GACHA_CATALOG:
+            if str(item.get("category") or item.get("item_type") or "") == "consumable" and _normalize_difficulty(item.get("rarity") or "D") == rarity:
                 return dict(item, shop_allowed=False, gacha_allowed=True)
     return {
         "id": f"special_record_{rarity.lower()}",
@@ -5681,7 +5540,7 @@ def _roll_settlement_rewards(user_id: int, session: dict, settlement: dict) -> l
         )
         has_bplus = has_bplus or _rarity_rank(rarity) >= _rarity_rank("B")
     if (rating == "S" or int(settlement.get("hidden_bonus_rolls") or 0) > 0) and rewards and not has_bplus:
-        picked = _reward_stack_item("ability_template", "B")
+        picked = _reward_stack_item("tool_item", "B")
         exceptional_over_cap = _rarity_rank("B") > _rarity_rank(regular_cap)
         if exceptional_over_cap:
             picked["sealed"] = True
@@ -5691,13 +5550,13 @@ def _roll_settlement_rewards(user_id: int, session: dict, settlement: dict) -> l
             picked,
             "settlement",
             "reward",
-            {"reward_category": "ability_template", "reward_roll": {"seed": seed, "forced_bplus": True, "regular_cap": regular_cap}},
+            {"reward_category": "tool_item", "reward_roll": {"seed": seed, "forced_bplus": True, "regular_cap": regular_cap}},
         )
         rewards[0] = {
             "roll_id": rewards[0].get("roll_id") or "reward-01",
             "rarity": "B",
-            "category": "ability_template",
-            "category_label": _WENYOU_REWARD_CATEGORY_LABELS["ability_template"],
+            "category": "tool_item",
+            "category_label": _WENYOU_REWARD_CATEGORY_LABELS["tool_item"],
             "item": replacement,
             "raw_rarity": rewards[0].get("raw_rarity"),
             "regular_cap": regular_cap,
@@ -5789,11 +5648,8 @@ def _pick_gacha_definition(pool_id: str, rarity: str, rng: random.Random) -> dic
     if normalized_pool == "tool_pool":
         filtered = [item for item in pool if str(item.get("category") or "") == "tool"]
         pool = filtered or pool
-    elif normalized_pool == "ability_pool":
-        filtered = [item for item in pool if str(item.get("category") or "") == "ability"]
-        pool = filtered or pool
-    elif normalized_pool == "evolution_pool":
-        filtered = [item for item in pool if str(item.get("category") or "") == "evolution"]
+    elif normalized_pool == "supply_pool":
+        filtered = [item for item in pool if str(item.get("category") or "") == "consumable"]
         pool = filtered or pool
     if not pool:
         return {"id": "unknown", "name": "未知残片", "rarity": rarity, "kind": "残片", "category": "fragment", "desc": "", "sigil": "UNK", "stackable": True}
@@ -5875,11 +5731,7 @@ def roll_gacha(user_id: int, pool_id: str = "mixed", count: int = 1, actor_id: A
         picked = _pick_gacha_definition(pool, rarity, rng)
         prepared = _prepare_gacha_item_for_inventory(picked, rank_context, pool)
         prepared_category = str(prepared.get("category") or "")
-        actor_profile = st.get(actor) if isinstance(st.get(actor), dict) else {}
-        profile_duplicate = prepared_category == "ability" and isinstance(actor_profile, dict) and bool(_find_player_ability(actor_profile, str(prepared.get("id") or prepared.get("name") or "")))
-        duplicate_to_fragment = prepared_category in {"tool", "ability", "evolution"} and (
-            _inventory_has_item(inventory, item_id=str(prepared.get("id") or "")) or profile_duplicate
-        )
+        duplicate_to_fragment = prepared_category in {"tool", "special"} and _inventory_has_item(inventory, item_id=str(prepared.get("id") or ""))
         if duplicate_to_fragment:
             fragment = _new_inventory_item(_gacha_fragment_item(prepared), "gacha", "gacha-frag", {"pool_id": pool, "holder_id": actor})
             inventory = _add_inventory_item(inventory, fragment)
@@ -5980,50 +5832,64 @@ def _regular_shop_state(wallet: dict) -> dict:
     return regular
 
 
-def _shop_offer_items(user_id: int, wallet: Optional[dict] = None) -> list[dict[str, Any]]:
-    """每天按用户固定随机 7-8 个商品；普通商店只出 D/C，低概率 1 个 B。"""
+def _shop_rank_context(wallet: Optional[dict], session: Optional[dict] = None) -> str:
+    if isinstance(session, dict) and session.get("gameId"):
+        try:
+            return _max_player_rank(session)
+        except Exception:
+            pass
+    if isinstance(wallet, dict):
+        stats = _wallet_stats_from_wallet(wallet)
+        ranks = []
+        for pid in ("player1", "player2"):
+            player = stats.get(pid) if isinstance(stats.get(pid), dict) else {}
+            ranks.append(_normalize_difficulty(player.get("rank") or "D"))
+        return max(ranks or ["D"], key=_rarity_rank)
+    return "D"
+
+
+_WENYOU_SHOP_RARITY_RATES: dict[str, list[tuple[str, float]]] = {
+    "D": [("D", 60.0), ("C", 32.0), ("B", 7.5), ("A", 0.5)],
+    "C": [("D", 25.0), ("C", 45.0), ("B", 25.0), ("A", 4.8), ("S", 0.2)],
+    "B": [("C", 32.0), ("B", 45.0), ("A", 20.0), ("S", 3.0)],
+    "A": [("C", 10.0), ("B", 28.0), ("A", 54.0), ("S", 8.0)],
+    "S": [("B", 15.0), ("A", 45.0), ("S", 40.0)],
+}
+
+
+def _shop_offer_items(user_id: int, wallet: Optional[dict] = None, session: Optional[dict] = None) -> list[dict[str, Any]]:
+    """每天按用户固定随机 7-8 个商品；高阶物品只随玩家阶位极低概率进入普通商店。"""
     regular = _regular_shop_state(wallet) if isinstance(wallet, dict) else {"refresh_count": 0, "rotation_nonce": ""}
-    rng = random.Random(f"wenyou-shop:{int(user_id or 0)}:{_shop_today_key()}:{regular.get('refresh_count', 0)}:{regular.get('rotation_nonce') or ''}")
-    low = [dict(item) for item in _SHOP_CATALOG if str(item.get("rarity") or "D") in {"D", "C"}]
-    mid = [dict(item) for item in _SHOP_CATALOG if str(item.get("rarity") or "D") == "B"]
-    rng.shuffle(low)
-    rng.shuffle(mid)
-    offers = low[:8]
-    if mid and rng.random() < 0.35:
-        offers = low[:7] + [mid[0]]
-        rng.shuffle(offers)
-    return offers[:8]
-
-
-def _special_shop_items(user_id: int, session: Optional[dict], wallet: dict) -> list[dict[str, Any]]:
-    if not isinstance(session, dict) or not session.get("gameId"):
-        return []
-    rank = _max_player_rank(session)
-    if _rarity_rank(rank) < _rarity_rank("C"):
-        return []
-    source = _CONTENT_ITEM_CATALOG or _GACHA_CATALOG or _SHOP_CATALOG
-    allowed_rarities = {"B", "C"}
-    if _rarity_rank(rank) >= _rarity_rank("A"):
-        allowed_rarities.add("A")
-    if _rarity_rank(rank) >= _rarity_rank("S"):
-        allowed_rarities.add("S")
-    candidates = [
-        dict(item)
-        for item in source
-        if str(item.get("rarity") or "D").upper() in allowed_rarities
-        and str(item.get("item_type") or item.get("category") or "") in {"tool", "special"}
-        and not item.get("temporary")
-        and not item.get("quest_item")
-    ]
-    rng = random.Random(f"wenyou-special-shop:{int(user_id or 0)}:{now_beijing_iso()[:8]}:{rank}")
-    rng.shuffle(candidates)
+    rank = _shop_rank_context(wallet, session)
+    rng = random.Random(f"wenyou-shop:{int(user_id or 0)}:{_shop_today_key()}:{regular.get('refresh_count', 0)}:{regular.get('rotation_nonce') or ''}:{rank}")
+    source = _SHOP_CATALOG or _GACHA_CATALOG
+    by_rarity: dict[str, list[dict[str, Any]]] = {}
+    for item in source:
+        rarity = _normalize_difficulty(item.get("rarity") or "D")
+        if str(item.get("category") or item.get("item_type") or "") not in {"consumable", "tool", "special"}:
+            continue
+        if item.get("quest_item") or item.get("temporary"):
+            continue
+        by_rarity.setdefault(rarity, []).append(dict(item))
+    for items in by_rarity.values():
+        rng.shuffle(items)
     out: list[dict[str, Any]] = []
-    for item in candidates:
-        rarity = _normalize_difficulty(item.get("rarity") or "B")
-        cur = dict(item)
-        cur["shop_type"] = "special"
+    seen: set[str] = set()
+    target_count = 8 if rng.random() < 0.65 else 7
+    attempts = 0
+    while len(out) < target_count and attempts < 80:
+        attempts += 1
+        rarity = _weighted_pick(_WENYOU_SHOP_RARITY_RATES.get(rank, _WENYOU_SHOP_RARITY_RATES["D"]), rng, fallback="D")
+        candidates = by_rarity.get(rarity) or []
+        if not candidates:
+            continue
+        cur = dict(candidates[attempts % len(candidates)])
+        iid = str(cur.get("id") or cur.get("name") or "")
+        if iid in seen:
+            continue
+        seen.add(iid)
         if rarity == "S":
-            cur["price"] = max(12000, int(cur.get("price") or 0))
+            cur["price"] = max(_GACHA_SINGLE_COST * 100 + 2000, int(cur.get("price") or 0))
             cur["unique"] = True
             cur["sealed"] = cur.get("sealed") if cur.get("sealed") is not None else True
             cur["seal_rank"] = cur.get("seal_rank") or "S"
@@ -6035,8 +5901,16 @@ def _special_shop_items(user_id: int, session: Optional[dict], wallet: dict) -> 
             cur["sealed"] = True
             cur["sealed_reason"] = f"当前最高阶位 {rank}，购买后需达到 {rarity} 阶完整解封。"
         out.append(cur)
-        if len(out) >= 6:
-            break
+    if len(out) < 7:
+        fallback = [dict(item) for item in source if str(item.get("rarity") or "D") in {"D", "C"}]
+        rng.shuffle(fallback)
+        for cur in fallback:
+            iid = str(cur.get("id") or cur.get("name") or "")
+            if iid and iid not in seen:
+                out.append(cur)
+                seen.add(iid)
+            if len(out) >= 7:
+                break
     return out
 
 
@@ -6077,9 +5951,7 @@ def get_shop_view(user_id: int, actor_id: Any = "player1") -> dict:
             "player2": copy.deepcopy(st.get("player2") if isinstance(st.get("player2"), dict) else players["player2"]),
         }
     can_buy = bool(_shop_open_for_phase(phase))
-    regular_items = _shop_items_with_offer_refs(_shop_offer_items(uid, wallet), "R")
-    special_items = _shop_items_with_offer_refs(_special_shop_items(uid, session if active else None, wallet), "S")
-    special_unlocked = bool(special_items)
+    regular_items = _shop_items_with_offer_refs(_shop_offer_items(uid, wallet, session if active else None), "R")
     account = _player_account(wallet, actor)
     inventories = {
         "player1": _get_player_inventory(wallet, "player1"),
@@ -6118,12 +5990,6 @@ def get_shop_view(user_id: int, actor_id: Any = "player1") -> dict:
                 "refresh_limit": int(regular_state.get("refresh_limit") or 3),
                 "refresh_cost": int(regular_state.get("refresh_cost") or 20),
                 "items": regular_items,
-            },
-            "special": {
-                "unlocked": special_unlocked,
-                "unlock_rank": "C",
-                "rotation_id": f"special_{now_beijing_iso()[:8]}",
-                "items": special_items,
             },
         },
     }
@@ -6192,7 +6058,7 @@ def buy_shop_item(user_id: int, item_id: str = "", actor_id: Any = "player1", of
     if has_economy_session:
         _session_ensure_stats(session)
     wallet = _load_wenyou_wallet(uid, session if has_economy_session else None)
-    offers = _shop_items_with_offer_refs(_shop_offer_items(uid, wallet), "R") + _shop_items_with_offer_refs(_special_shop_items(uid, session if has_economy_session else None, wallet), "S")
+    offers = _shop_items_with_offer_refs(_shop_offer_items(uid, wallet, session if has_economy_session else None), "R")
     item = _resolve_shop_offer(offers, iid, ref)
     if not item:
         return False, "该商品已下架，请刷新系统商店。", get_shop_view(uid, actor)
@@ -6342,17 +6208,12 @@ def _growth_view(session: dict, wallet: dict) -> dict:
         player = st.get(pid) if isinstance(st.get(pid), dict) else _default_player_stats()
         _recalc_player_caps(player)
         rank = _normalize_difficulty(player.get("rank") or "D")
-        evo_rank = str(player.get("evolution_rank") or "").strip().upper()
         players[pid] = {
             "attributes": {key: int(player.get(key) or 0) for key in _WENYOU_ATTRIBUTE_KEYS},
             "soft_cap": _WENYOU_RANK_ATTRIBUTE_SOFT_CAP.get(rank, 14),
             "unspent_attribute_points": int(player.get("unspent_attribute_points") or 0),
-            "ability_slots": _player_ability_slot_limit(player),
-            "abilities": [x for x in (player.get("abilities") or []) if isinstance(x, dict)],
-            "dormant_abilities": [x for x in (player.get("dormant_abilities") or []) if isinstance(x, dict)],
-            "evolution": str(player.get("evolution") or "凡人"),
-            "evolution_rank": evo_rank,
-            "evolution_tags": list(player.get("evolution_tags") or []),
+            "core_ability": _normalize_core_ability(player.get("core_ability")),
+            "core_ability_profile": copy.deepcopy(player.get("core_ability_profile") if isinstance(player.get("core_ability_profile"), dict) else None),
             "next_level_exp": int(_WENYOU_LEVEL_EXP_TABLE.get(int(player.get("level") or 1), 0)),
             "spi_current": int(player.get("spi_current") or 0),
             "spi_max": int(player.get("spi_max") or 0),
@@ -7927,13 +7788,13 @@ def _compact_text(value: Any, limit: int = 600) -> str:
 
 def _player_summary_for_card(player: Any) -> str:
     p = player if isinstance(player, dict) else {}
-    ab = _normalize_abilities_list(p.get("abilities"))
-    ab_names = "、".join(a.get("name", "") for a in ab[:4] if a.get("name")) or "无"
+    core = _normalize_core_ability(p.get("core_ability"))
+    ability_name = core.get("name") if core else "无"
     return (
         f"HP {p.get('hp', 0)}/{p.get('hp_max', 0)}，SAN {p.get('san', 0)}/{p.get('san_max', 0)}，精神力 {p.get('spi_current', 0)}/{p.get('spi_max', 0)}，"
         f"Lv{p.get('level', 1)}·{p.get('rank', 'D')}阶，EXP {p.get('exp', 0)}，"
         f"力{p.get('str', 0)}/体{p.get('con', p.get('vit', 0))}/敏{p.get('agi', 0)}/智{p.get('int', p.get('wis', 0))}/精{p.get('spi', 0)}/运{p.get('luk', 0)}，"
-        f"进化：{p.get('evolution') or '凡人'}，能力：{ab_names}"
+        f"核心能力：{ability_name}"
     )
 
 
@@ -9216,7 +9077,7 @@ def _encounter_detail_bonuses(detail: str, player: dict, monster: dict, action: 
             add("weakness_bonus", 4, "命中已知弱点")
         elif re.search(r"(弱点|线索|规则|破绽|克制|封印)", text):
             add("weakness_bonus", 2, "尝试利用弱点/线索")
-        if re.search(r"(偷袭|伏击|先手|背后|瞄准|蓄力)", text):
+        if re.search(r"(偷袭|伏击|背后|瞄准|蓄力)", text):
             add("tactic_bonus", 2, "战术准备")
     elif action in {"weaken", "probe"}:
         weaknesses = [str(x) for x in (monster.get("weaknesses") or []) if str(x).strip()]
@@ -9395,7 +9256,7 @@ def _resolve_encounter_action(session: dict, action_type: str, target: str = "",
         changes["roll_log"] = {"seed": seed, "d20": d20, "action": action, "target": monster.get("id"), "score": score, "dc": dc, "bonuses": bonuses}
     elif action in {"escape", "avoid", "flee", "evade"}:
         alert_bonus = 2 if str(monster.get("status") or "") in {"alerted", "chasing"} else 0
-        score = d20 + math.floor((int(player.get("agi") or 10) - 10) / 2) + math.floor(int(player.get("initiative") or 0) / 4) + int(bonuses.get("total") or 0)
+        score = d20 + math.floor((int(player.get("agi") or 10) - 10) / 2) + int(bonuses.get("total") or 0)
         dc = int(monster.get("detection") or 10) + math.floor(int(monster.get("speed") or 10) / 2) + alert_bonus + int(bonuses.get("boss_lock_penalty") or 0)
         if score >= dc + 5:
             monster["status"] = "evaded"

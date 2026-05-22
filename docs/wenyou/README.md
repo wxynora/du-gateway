@@ -21,7 +21,7 @@
 | [`monster_system.md`](monster_system.md) | 普通怪、精英怪、Boss、遭遇预算、战斗/规避/封印规则 |
 | [`numeric_growth.md`](numeric_growth.md) | 属性、HP/SAN、精神力、状态、升级、晋升、复活、成长曲线 |
 | [`rewards_economy.md`](rewards_economy.md) | 通关评级、积分、EXP、奖励 roll、债务、惩罚副本 |
-| [`item_evolution_system.md`](item_evolution_system.md) | 道具、背包物品、商店、抽卡、回收、能力与进化系统 |
+| [`item_ability_system.md`](item_ability_system.md) | 道具、背包物品、商店、抽卡、回收、核心能力系统 |
 | [`open_source_data_tables.md`](open_source_data_tables.md) | 开源默认内容表与接入方运行时存档表的边界 |
 | [`backend_contracts.md`](backend_contracts.md) | 后端规则函数、状态补丁、内容包和 GM/DS 权限边界 |
 | [`ai_player_integration.md`](ai_player_integration.md) | AI 玩家角色的钱包、背包、上下文、工具和消费流水 |
@@ -33,8 +33,7 @@
 | --- | --- |
 | [`../../content/default/items.json`](../../content/default/items.json) | 默认通用道具目录，商店、抽卡和奖励复用 |
 | [`../../content/default/item_catalog.sql`](../../content/default/item_catalog.sql) | 默认道具 SQL 建表和 seed |
-| [`../../content/default/abilities.json`](../../content/default/abilities.json) | 默认能力模板 |
-| [`../../content/default/evolution_paths.json`](../../content/default/evolution_paths.json) | 默认进化路线 |
+| [`../../content/default/abilities.json`](../../content/default/abilities.json) | 默认核心能力原型 |
 | [`../../content/default/reward_tables.json`](../../content/default/reward_tables.json) | 默认奖励概率和类别偏置 |
 
 ## Schema
@@ -42,8 +41,7 @@
 | 文件 | 作用 |
 | --- | --- |
 | [`../../schemas/item.schema.json`](../../schemas/item.schema.json) | 道具目录结构校验 |
-| [`../../schemas/ability.schema.json`](../../schemas/ability.schema.json) | 能力模板结构校验 |
-| [`../../schemas/evolution.schema.json`](../../schemas/evolution.schema.json) | 进化路线结构校验 |
+| [`../../schemas/ability.schema.json`](../../schemas/ability.schema.json) | 核心能力原型结构校验 |
 | [`../../schemas/reward_table.schema.json`](../../schemas/reward_table.schema.json) | 奖励表结构校验 |
 
 ## 道具草稿源

@@ -349,7 +349,7 @@ AI 玩家使用自己的积分抽卡。
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `actor_id` | 是 | 发起抽卡的 AI 玩家角色 id |
-| `pool_id` | 是 | 卡池 id，例如 `mixed`、`tool_pool`、`ability_pool`、`evolution_pool` |
+| `pool_id` | 是 | 卡池 id，例如 `mixed`、`tool_pool`、`supply_pool`、`limited_pool` |
 | `count` | 是 | 只允许 1 或 10 |
 | `reason` | 否 | AI 玩家自述抽卡理由 |
 
@@ -361,7 +361,7 @@ AI 玩家使用自己的积分抽卡。
 - 读取并更新 `wallets[actor_id].gacha[pool_id]`。
 - 抽卡不读取 `luk`，不受幸运影响。
 - 抽到物品进入 `inventories[actor_id]`。
-- 抽到能力/进化/高阶封印物时，按 `rank_min/seal_rank/requirements` 记录为可用、休眠或封印。
+- 抽到高阶封印物时，按 `rank_min/seal_rank/requirements` 记录为可用或封印；核心能力不从抽卡获得。
 - AI 玩家和真实玩家的保底互不影响。
 
 返回必须包含：

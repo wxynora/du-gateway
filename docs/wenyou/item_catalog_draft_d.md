@@ -1,6 +1,6 @@
 # D 级道具目录草稿
 
-本文件是道具目录第一批生成草稿，用于测试 `docs/wenyou/item_evolution_system.md` 的道具生成提示词是否稳定。
+本文件是道具目录第一批生成草稿，用于测试 `docs/wenyou/item_ability_system.md` 的道具生成提示词是否稳定。
 
 状态：
 

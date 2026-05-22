@@ -179,7 +179,7 @@
 | `defense` | 物理防御 |
 | `mental_attack` | SAN/污染伤害基准 |
 | `mental_resist` | 精神/规则抗性 |
-| `speed` | 追逐、先手、逃脱和命中修正 |
+| `speed` | 追逐、逃脱和命中修正 |
 | `tags` | 主题、弱点匹配、奖励和道具互动标签 |
 | `weaknesses` | 可降低难度或造成额外效果的弱点 |
 | `resistances` | 伤害减免或无效手段 |
@@ -236,7 +236,7 @@ ranged_hit_damage = max(1, ranged_attack + situational_bonus - target.defense)
 mental_hit_damage = max(1, floor(spi_current / 2) + rule_item_bonus - target.mental_resist)
 ```
 
-`physical_attack` / `ranged_attack` 已经包含基础属性、能力、进化和明确道具效果加成，不能再重复叠同源 bonus。
+`physical_attack` / `ranged_attack` 已经包含基础属性、核心能力和明确道具效果加成，不能再重复叠同源 bonus。
 
 精英怪物修正：
 

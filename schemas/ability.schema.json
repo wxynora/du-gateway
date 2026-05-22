@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Wenyou Ability Catalog",
+  "title": "Wenyou Core Ability Archetype Catalog",
   "type": "object",
   "required": ["schema_version", "abilities"],
   "properties": {
@@ -16,10 +16,10 @@
           "name": { "type": "string" },
           "rarity": { "enum": ["D", "C", "B", "A", "S"] },
           "rank_min": { "enum": ["D", "C", "B", "A", "S"] },
-          "slot_type": { "type": "string" },
           "uses_per_instance": { "type": "integer", "minimum": 1 },
           "desc": { "type": "string" },
           "tags": { "type": "array", "items": { "type": "string" } },
+          "source_tags": { "type": "array", "items": { "type": "string" } },
           "effect_json": { "type": "object" }
         }
       }

@@ -113,7 +113,7 @@ settle_instance(state, result) -> archive
 - NPC 任务者不参与玩家评级；只有 NPC 相关目标被写入当前玩家的支线、隐藏支线、隐藏结局或特殊成就时，才影响该玩家结算。
 - NPC 任务者最小实现只需要 `stance/intent/trouble_chance/status`，不强制实现关系值或好感系统。
 - 玩家自由文本必须先归类为固定 `action_type`，文本声明“成功/击杀/逃脱”不构成规则结果。
-- 物品、商店、抽卡和进化相关函数见 `docs/wenyou/item_evolution_system.md`。
+- 物品、商店、抽卡和核心能力相关函数见 `docs/wenyou/item_ability_system.md`。
 - 运行时状态缓存、状态分层和 GM 输入输出边界见 `docs/wenyou/runtime_state.md`。
 
 ## 内容包建议
@@ -124,17 +124,15 @@ settle_instance(state, result) -> archive
 content/default/genres.json
 content/default/items.json
 content/default/abilities.json
-content/default/evolution_paths.json
 content/default/reward_tables.json
 rulesets/default.json
 schemas/game_state.schema.json
 schemas/state_patch.schema.json
 schemas/item.schema.json
 schemas/ability.schema.json
-schemas/evolution.schema.json
 ```
 
-物品和进化内容包目录见 `docs/wenyou/item_evolution_system.md`。
+物品和核心能力内容包目录见 `docs/wenyou/item_ability_system.md`。
 
 内容包可以换成：
 
@@ -165,7 +163,7 @@ schemas/evolution.schema.json
 
 - 主神空间/副本/归档流程。
 - 候选池和自定义开局。
-- HP、SAN、等级、阶位、体力/智慧旧字段、进化、能力、积分、背包；后续要迁移到 `str/con/agi/int/spi/luk` 六基础属性和 `spi_current` 当前精神力。
+- HP、SAN、等级、阶位、六基础属性、当前精神力、核心能力、积分、背包。
 - 商店和道具购买。
 - 文游连续性卡片。
 
@@ -174,7 +172,7 @@ schemas/evolution.schema.json
 - 将固定“2 玩家 + 4 NPC”改成 `tasker_total 2-13`。
 - 将文本版【主神面板】升级为 `state_patch`。
 - 将任务、线索、位置、NPC、怪物实例和威胁时钟迁入 `runtime_state`，前端面板改为读取 `public_view`，不再从 GM 文本解析。
-- 道具目录已先迁到 `content/default/items.json`，并生成 `content/default/item_catalog.sql` 与 `schemas/item.schema.json`；背包物品不再区分装备槽，后续继续把进化和更细的物品效果从 prompt 迁出到 ruleset/content JSON。
+- 道具目录已迁到 `content/default/items.json`，并生成 `content/default/item_catalog.sql` 与 `schemas/item.schema.json`；背包物品不再区分装备槽，更细的物品效果继续从 prompt 迁出到 ruleset/content JSON。
 - 将默认内容包从业务代码拆到 JSON。
 - 保留当前无限流玩法作为 `main_god_infinite` preset；核心引擎不绑定“主神”设定。
 
@@ -190,11 +188,11 @@ schemas/evolution.schema.json
 | AI 玩家行动接入 | `ai_player_integration.md` | 已接：后端只接受外部 AI 玩家已经决定好的 `ai_player_action`，不再由 GM/DS 代生成玩家行动 | `compose_ai_player_context`、`cmd_action_with_ai_player`、`cmd_use_item_with_ai_player`、`cmd_encounter_action_with_ai_player` |
 | 战斗/逃跑/怪物 | `monster_system.md` | 已接：怪物实例、逃跑/规避、攻击、削弱、封印、Boss 默认不可硬杀与 reward tag | `_ensure_monster_instances`、`_resolve_encounter_action`、`cmd_encounter_action_with_ai_player` |
 | 属性加点和派生面板 | `numeric_growth.md` | 已接：六属性、软上限、当前精神力、升级经验、新手属性点和前端成长入口 | `allocate_attribute_points`、`_grant_player_exp`、`_growth_view` |
-| 阶位晋升 | `numeric_growth.md` | 已接：晋升条件、扣积分、封印重扫和特殊商店解锁联动；晋升不再额外发属性点 | `promote_player_rank`、`_unlock_items_for_player_progress` |
-| 道具效果执行 | `item_evolution_system.md` | 已接：使用阶段、门槛、代价、HP/SAN、状态、污染、债务、威胁时钟、线索缓存和安全节点读 `effect_json` | `_apply_item_effect_to_session`、`cmd_use_item_with_ai_player` |
-| 背包物品使用/出售 | `item_evolution_system.md` | 已接：背包物品不走装备栏；道具使用由系统判定效果、次数、耐久、门槛和代价，出售只回收可出售物 | `_apply_item_effect_to_session`、`cmd_use_item_with_ai_player`、`sell_inventory_item` |
-| 能力/进化 | `numeric_growth.md`、`item_evolution_system.md` | 已接：能力和进化模板从内容包读取；玩家不再自主学习/升级，随机获得模板后通过背包绑定或解封，局内只使用已有能力 | `_apply_ability_template_to_session`、`use_player_ability`、`_apply_evolution_template_to_session`、`content/default/abilities.json`、`content/default/evolution_paths.json` |
-| 商店/抽卡 | `item_evolution_system.md` | 已接：商店和抽卡复用内容表；抽卡扣积分/保底不读幸运；特殊商店随阶位开放 | `get_wenyou_shop_view`、`buy_shop_item`、`roll_gacha` |
+| 阶位晋升 | `numeric_growth.md` | 已接：晋升条件、扣积分和封印重扫；晋升不再额外发属性点 | `promote_player_rank`、`_unlock_items_for_player_progress` |
+| 道具效果执行 | `item_ability_system.md` | 已接：使用阶段、门槛、代价、HP/SAN、状态、污染、债务、威胁时钟、线索缓存和安全节点读 `effect_json` | `_apply_item_effect_to_session`、`cmd_use_item_with_ai_player` |
+| 背包物品使用/出售 | `item_ability_system.md` | 已接：背包物品不走装备栏；道具使用由系统判定效果、次数、耐久、门槛和代价，出售只回收可出售物 | `_apply_item_effect_to_session`、`cmd_use_item_with_ai_player`、`sell_inventory_item` |
+| 核心能力 | `numeric_growth.md`、`item_ability_system.md` | 已接：新手副本标准通关后按表现生成一个 `core_ability`，并保存 `core_ability_profile` 记录倾向分数；玩家不自主学习，局内只使用该核心能力 | `_grant_newbie_starter_pack`、`use_player_ability`、`content/default/abilities.json` |
+| 商店/抽卡 | `item_ability_system.md` | 已接：商店和抽卡复用内容表；抽卡扣积分/保底不读幸运；普通商店按阶位低概率出现越级物 | `get_wenyou_shop_view`、`buy_shop_item`、`roll_gacha` |
 | 结算评级 | `rewards_economy.md` | 已接：评级读 `settlement_flags/reward_context/损耗`，不要求 GM 每轮重写面板 | `_build_settlement_preview`、`_grant_settlement_reward` |
 | 奖励 roll | `rewards_economy.md` | 已接：稀有度、类别、内容表、难度上限、B+ 保底和连续材料保护；奖励表可由 JSON 覆盖 | `_roll_settlement_rewards`、`content/default/reward_tables.json` |
 | 惩罚副本 | `rewards_economy.md` | 已接：债务/污染/复活/契约进入强制队列，候选池插入强制本，NPC 打工模式有运行状态和结算清算 | `_refresh_forced_instance_queue`、`apply_forced_instance_candidates`、`_attach_forced_instance_contract`、`_apply_forced_instance_settlement` |

@@ -105,7 +105,7 @@
 | `defense` | 物理防御 |
 | `mental_attack` | SAN/污染/精神冲击基准 |
 | `mental_resist` | 精神、规则和污染抗性 |
-| `speed` | 追逐、先手、逃脱和命中修正 |
+| `speed` | 追逐、逃脱和命中修正 |
 | `detection` | 发现潜行、伪装、异常行动的 DC 基准 |
 | `morale` | 退缩、被威慑、被引走的抵抗值；无理智怪物可为 `null` |
 | `tags` | 主题、弱点、奖励、道具互动标签 |
@@ -167,7 +167,7 @@ ranged_damage = max(1, player.ranged_attack + weakness_damage - monster.defense)
 mental_damage = max(1, floor(player.spi_current / 2) + rule_item_bonus + weakness_damage - monster.mental_resist)
 ```
 
-`physical_attack` 和 `ranged_attack` 已经包含基础属性、能力、进化和明确道具效果加成，不能再重复叠一次同源 bonus。
+`physical_attack` 和 `ranged_attack` 已经包含基础属性、核心能力和明确道具效果加成，不能再重复叠一次同源 bonus。
 
 怪物攻击玩家：
 
@@ -188,7 +188,7 @@ avoid_dc = monster.detection + alert_level + threat_clock_modifier
 
 | 行动 | 常用属性 | 成功 | 失败 |
 | --- | --- | --- | --- |
-| 潜行绕开 | `agi` | 跳过遭遇或获得先手 | 暴露 +1，怪物先手 |
+| 潜行绕开 | `agi` | 跳过遭遇或获得短暂安全窗口 | 暴露 +1，怪物进入警戒或追逐 |
 | 伪装通过 | `int` / `luk` | 暂时不触发战斗 | 暴露 +1，身份系统标记 |
 | 威慑逼退 | `str` / `spi_current` | 怪物退避 1-2 轮 | 怪物攻击，或呼叫同类 |
 | 线索削弱 | `int` | 触发弱点或降低特殊规则 | 线索失效或威胁时钟 +1 |
@@ -244,7 +244,7 @@ flee_dc = monster.detection + floor(monster.speed / 2) + alert_level + threat_cl
 | 大成功 `score >= dc + 5` | 玩家移动到安全相邻节点，怪物 `retreated` 或丢失目标 | 通常无额外代价 |
 | 成功 `score >= dc` | 玩家脱离当前遭遇，怪物进入 `alerted` 或 `chasing` 延迟状态 | 可能扣少量耐久或留下痕迹 |
 | 部分成功 `score >= dc - 5` | 玩家离开原地，但怪物追逐继续或路线被封 | 威胁时钟 +1、掉落物资、HP/SAN 小损耗三选一 |
-| 失败 | 怪物先手、堵路或进入 `engaged` | 结算一次怪物攻击或状态损失 |
+| 失败 | 怪物堵路、追击或进入 `engaged` | 结算一次怪物攻击或状态损失 |
 
 回合处理建议：
 

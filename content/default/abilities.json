@@ -1,79 +1,70 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "source": "wenyou_core_ability_archetypes",
   "abilities": [
     {
-      "id": "quick_bandage",
-      "name": "快速包扎",
+      "id": "core_observe",
+      "name": "异常余光",
       "rarity": "D",
-      "slot_type": "active",
-      "uses": { "per_instance": 1 },
-      "effect_json": { "effect_type": "heal", "hp_restore": 20, "hp_restore_per_level": 10 },
-      "tags": ["heal", "survival"],
-      "desc": "每副本 1 次，非战斗恢复 HP。"
+      "uses_per_instance": 1,
+      "tags": ["observe", "investigation"],
+      "desc": "每副本 1 次，获得当前场景中一处被忽略的异常提示；若涉及隐藏规则，SAN -5。"
     },
     {
-      "id": "steady_breath",
-      "name": "稳定呼吸",
+      "id": "core_escape",
+      "name": "退路直觉",
       "rarity": "D",
-      "slot_type": "active",
-      "uses": { "per_instance": 1 },
-      "effect_json": { "effect_type": "mental_recover", "san_restore": 20, "san_restore_per_level": 10 },
-      "tags": ["mental", "survival"],
-      "desc": "每副本 1 次，恢复 SAN 并同步当前精神力。"
+      "uses_per_instance": 1,
+      "tags": ["escape", "stealth"],
+      "desc": "每副本 1 次，逃离、规避或脱身判定 +3。"
     },
     {
-      "id": "anomaly_intuition",
-      "name": "异常直觉",
+      "id": "core_protect",
+      "name": "代偿护手",
       "rarity": "D",
-      "slot_type": "active",
-      "uses": { "per_instance": 1 },
-      "effect_json": { "effect_type": "investigation_hint", "scope": "minor_anomaly" },
-      "tags": ["investigation"],
-      "desc": "发现一个轻微异常，但不保证解释。"
+      "uses_per_instance": 1,
+      "tags": ["protect", "support"],
+      "desc": "每副本 1 次，为自己或同伴抵消 15 点 HP 伤害；自己 SAN -5。"
     },
     {
-      "id": "mental_anchor",
-      "name": "精神锚点",
-      "rarity": "C",
-      "slot_type": "active",
-      "unlock": { "rank_min": "C" },
-      "uses": { "per_instance": 1 },
-      "effect_json": { "effect_type": "remove_condition", "conditions": ["动摇"] },
-      "tags": ["mental", "defense"],
-      "desc": "抵消或移除一次精神动摇，高等级可处理轻度污染。"
+      "id": "core_combat",
+      "name": "破局冲击",
+      "rarity": "D",
+      "uses_per_instance": 1,
+      "tags": ["combat", "force"],
+      "desc": "每副本 1 次，破坏、压制或强行突破判定 +3；失败时自身 HP -5。"
     },
     {
-      "id": "rule_probe",
-      "name": "规则试探",
-      "rarity": "B",
-      "slot_type": "active",
-      "unlock": { "rank_min": "B" },
-      "uses": { "per_instance": 1 },
-      "effect_json": { "effect_type": "rule_probe", "rule_scope": "low_or_medium_fragment", "result_mode": "true_false_incomplete" },
+      "id": "core_social",
+      "name": "人群伪装",
+      "rarity": "D",
+      "uses_per_instance": 1,
+      "tags": ["social", "deception"],
+      "desc": "每副本 1 次，社交、伪装或混入人群判定 +3；失败时暴露风险 +1。"
+    },
+    {
+      "id": "core_rule",
+      "name": "规则嗅觉",
+      "rarity": "D",
+      "uses_per_instance": 1,
       "tags": ["rule", "investigation"],
-      "desc": "验证一条低级规则，结果可能是真、假或不完整。"
+      "desc": "每副本 1 次，验证一条低级规则是否会立刻造成危险；SAN -5。"
     },
     {
-      "id": "causal_rollback",
-      "name": "因果回滚",
-      "rarity": "A",
-      "slot_type": "active",
-      "unlock": { "rank_min": "A" },
-      "uses": { "per_instance": 1 },
-      "effect_json": { "effect_type": "causal_rollback", "san_cost": 35 },
-      "tags": ["causal", "defense"],
-      "desc": "撤销本轮一次非死亡后果，支付 SAN 代价。"
+      "id": "core_resilience",
+      "name": "残响锚点",
+      "rarity": "D",
+      "uses_per_instance": 1,
+      "tags": ["resilience", "mental"],
+      "desc": "每副本 1 次，抵消一次动摇或轻度污染；SAN 低于一半时额外稳定当前精神力 +1。"
     },
     {
-      "id": "settlement_audit",
-      "name": "强制结算复核",
-      "rarity": "S",
-      "slot_type": "active",
-      "unlock": { "rank_min": "S" },
-      "uses": { "per_instance": 1 },
-      "effect_json": { "effect_type": "settlement_audit", "accept_new_result": true },
-      "tags": ["settlement"],
-      "desc": "结算时重算一次奖励或死亡判定，必须接受新结果。"
+      "id": "core_survival",
+      "name": "求生本能",
+      "rarity": "D",
+      "uses_per_instance": 1,
+      "tags": ["survival"],
+      "desc": "每副本 1 次，在险境行动前获得一次保守提示，或将一次低级风险降低一级。"
     }
   ]
 }

@@ -9,8 +9,7 @@
 | 表/文件 | 类型 | 当前默认来源 | 接入方需要做什么 | 用途 |
 | --- | --- | --- | --- | --- |
 | `item_catalog` | 静态内容表 | `content/default/items.json`、`content/default/item_catalog.sql`、`schemas/item.schema.json` | 直接导入或按 schema 转成自己的数据库表 | 商店、抽卡、奖励、使用道具 |
-| `ability_catalog` | 静态内容表 | `content/default/abilities.json`、`schemas/ability.schema.json` | 导入为能力模板表，或保持 JSON 查询 | 能力抽取、解锁、封印、升级 |
-| `evolution_paths` | 静态内容表 | `content/default/evolution_paths.json`、`schemas/evolution.schema.json` | 导入为进化路线表，或保持 JSON 查询 | 进化方向、阶位门槛、身体强化效果 |
+| `ability_catalog` | 静态内容表 | `content/default/abilities.json`、`schemas/ability.schema.json` | 导入为核心能力原型表，或保持 JSON 查询 | 新手副本通关后的核心能力生成与使用 |
 | `reward_tables` | 静态规则表 | `content/default/reward_tables.json`、`schemas/reward_table.schema.json` | 导入为奖励概率/掉落规则表 | 通关奖励、奖励 roll、隐藏奖励池 |
 
 ## 运行时存档表

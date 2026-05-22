@@ -18,7 +18,7 @@
 | [`docs/wenyou/instance_generation.md`](wenyou/instance_generation.md) | 副本蓝图、生成顺序、怪物生态结构 |
 | [`docs/wenyou/monster_system.md`](wenyou/monster_system.md) | 怪物生成预算、普通怪/精英怪/Boss 面板、战斗/规避结算、Boss 不可硬杀规则 |
 | [`docs/wenyou/numeric_growth.md`](wenyou/numeric_growth.md) | 六基础属性、当前精神力、行动判定、状态效果、复活债务、Lv1-30 成长曲线、属性点、晋升、能力 |
-| [`docs/wenyou/item_evolution_system.md`](wenyou/item_evolution_system.md) | 道具目录、分类、SQL 表、商店、抽卡、背包物品、耐久、回收、能力与进化系统 |
+| [`docs/wenyou/item_ability_system.md`](wenyou/item_ability_system.md) | 道具目录、分类、SQL 表、商店、抽卡、背包物品、耐久、回收、核心能力系统 |
 | [`docs/wenyou/rewards_economy.md`](wenyou/rewards_economy.md) | 通关奖励、评级、奖励 roll、掉落表、经济平衡、强制惩罚副本、系统打工 NPC 模式 |
 | [`docs/wenyou/backend_contracts.md`](wenyou/backend_contracts.md) | 默认 Schema、State Patch、后端接口建议、内容包建议、当前项目迁移备注 |
 | [`docs/wenyou/implementation_checklist.md`](wenyou/implementation_checklist.md) | 功能实现验收清单、规则测试用例、开源前文档收束项 |
@@ -40,9 +40,9 @@
 - 幸运只影响副本内随机、隐藏支线发现和结算掉落小幅加权；不影响付费抽卡概率、十连保底、100 抽大保底、卡池权重和抽卡价格。
 - 失败默认不给积分；死亡、复活、治疗、债务和污染构成失败成本。
 - 抽卡单抽 100 积分，100 抽大保底必出随机 S/传说；抽卡接口不能读取幸运相关字段。
-- 特殊商店/限定兑换所在玩家达到 C 阶后开启；积分足够即可购买已上架特殊商品，但高阶效果仍按 `rank_min`、`seal_rank`、限购和库存判断，不足阶位时封印或降级生效。
-- S/传说级道具若可在特殊商店指定购买，价格必须高于 100 抽随机 S 大保底成本，默认不低于 12000 积分。
-- 背包道具、能力和进化的精准效果由后端规则引擎判定，GM 只收到判定结果。
+- 普通商店每日轮转 7-8 个物品；随玩家阶位提高，可以低概率出现越级物品，但高阶效果仍按 `rank_min`、`seal_rank`、限购和库存判断，不足阶位时封印或降级生效。
+- S/传说级道具若在普通商店低概率出现，价格必须高于 100 抽随机 S 大保底成本，默认不低于 12000 积分。
+- 背包道具和核心能力的精准效果由后端规则引擎判定，GM 只收到判定结果。
 - 自由文本行动必须先归类为固定 `action_type`；玩家或 GM 文本声明“已经成功”不等于规则成功。
 - 惩罚副本可以是“替系统打工”的 NPC 工单：玩家进入其他副本扮演 NPC，不能暴露给任务者或怪物阵营。
 

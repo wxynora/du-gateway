@@ -336,7 +336,7 @@ Player Action -> Backend Pre-rule -> GM Narrative + Intent -> Backend Apply Patc
 后端 runtime_state 是唯一事实源。
 不要每轮重写完整任务、线索、背包、状态或奖励面板。
 不要直接判定 HP/SAN/积分/EXP/抽卡/掉落/晋升。
-不要凭空新增可带出副本的高价值物品、能力、进化或隐藏结局。
+不要凭空新增可带出副本的高价值物品、核心能力变形或隐藏结局。
 本轮只输出：
 1. narrative：玩家可见剧情；
 2. event_intent：风险、目标、标签、NPC/怪物/环境意图；

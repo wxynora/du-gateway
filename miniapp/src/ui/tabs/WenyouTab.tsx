@@ -77,7 +77,6 @@ type WenyouShopItem = {
   rarity: string;
   price: number;
   desc: string;
-  shop_type?: "regular" | "special";
   sealed?: boolean;
   sealed_reason?: string;
 };
@@ -132,12 +131,6 @@ type WenyouShopView = {
       refresh_cost?: number;
       items?: WenyouShopItem[];
     };
-    special?: {
-      unlocked?: boolean;
-      unlock_rank?: string;
-      rotation_id?: string;
-      items?: WenyouShopItem[];
-    };
   };
 };
 
@@ -171,6 +164,16 @@ type FeedItem = {
 
 type WenyouHistoryItem = { role?: string; content?: string; timestamp?: string };
 
+type WenyouCoreAbility = {
+  id?: string;
+  name?: string;
+  desc?: string;
+  rarity?: string;
+  uses_per_instance?: number;
+  tags?: string[];
+  source_tags?: string[];
+};
+
 type StorySegment = {
   id: string;
   kind: "story" | "system";
@@ -196,18 +199,13 @@ type WenyouPlayerStats = {
   luk?: number;
   vit?: number;
   wis?: number;
-  evolution?: string;
-  evolution_rank?: string;
-  evolution_tags?: string[];
-  abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string; uses_per_instance?: number }>;
-  dormant_abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
+  core_ability?: WenyouCoreAbility | null;
   conditions?: string[];
   unspent_attribute_points?: number;
   physical_attack?: number;
   ranged_attack?: number;
   defense?: number;
   mental_resist?: number;
-  initiative?: number;
 };
 
 type WenyouPromotionPreview = {
@@ -224,12 +222,7 @@ type WenyouGrowthPlayer = {
   attributes?: Record<string, number>;
   soft_cap?: number;
   unspent_attribute_points?: number;
-  ability_slots?: number;
-  abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
-  dormant_abilities?: Array<{ id?: string; name?: string; desc?: string; level?: number; rarity?: string }>;
-  evolution?: string;
-  evolution_rank?: string;
-  evolution_tags?: string[];
+  core_ability?: WenyouCoreAbility | null;
   next_level_exp?: number;
   spi_current?: number;
   spi_max?: number;
@@ -468,7 +461,7 @@ const ENCOUNTER_QUICK_ACTIONS: QuickAction[] = [
 const ATTRIBUTE_CHOICES = [
   { key: "str", label: "力", hint: "近战、破坏、搬运" },
   { key: "con", label: "体", hint: "生命、抗伤、耐力" },
-  { key: "agi", label: "敏", hint: "闪避、潜行、先手" },
+  { key: "agi", label: "敏", hint: "闪避、潜行、追逐" },
   { key: "int", label: "智", hint: "推理、识别、解谜" },
   { key: "spi", label: "精", hint: "精神力、抗污染" },
   { key: "luk", label: "运", hint: "发现隐藏与奖励" },
@@ -1314,13 +1307,10 @@ export function WenyouTab({
       .filter((entry) => entry.points > 0);
   }, [profileGrowthPlayers, profileStats]);
   const activeAttributePrompt = attributePointEntries.find((entry) => entry.player === attributePromptPlayer) || null;
-  const gamePlayerAbilities = (sessionPanel?.growth?.players?.player1?.abilities || sessionPanel?.stats?.player1?.abilities || [])
-    .map((ability) => ({
-      id: String(ability.id || ability.name || ""),
-      name: String(ability.name || ability.id || ""),
-    }))
-    .filter((ability) => ability.id && ability.name)
-    .slice(0, 4);
+  const gameCoreAbility = sessionPanel?.growth?.players?.player1?.core_ability || sessionPanel?.stats?.player1?.core_ability || null;
+  const gamePlayerAbilities = gameCoreAbility?.id || gameCoreAbility?.name
+    ? [{ id: String(gameCoreAbility.id || gameCoreAbility.name || ""), name: String(gameCoreAbility.name || gameCoreAbility.id || "核心能力") }]
+    : [];
   const homePhase = hasActiveRun ? (sessionPanel?.phase_label || status.session?.phase_label || "副本中") : "主神空间待机";
   const hasVisibleEncounter = (gamePublicState.visible_monsters || []).length > 0;
   const quickActions = useMemo(
@@ -1342,9 +1332,7 @@ export function WenyouTab({
   const riftPointRaw = shop?.points ?? sessionPanel?.wallet?.points;
   const riftPoints = riftPointPreview ?? Number(riftPointRaw ?? 0);
   const regularShop = shop?.shop_state?.regular;
-  const specialShop = shop?.shop_state?.special;
   const regularShopItems = regularShop?.items?.length ? regularShop.items : (shop?.items || []);
-  const specialShopItems = specialShop?.items || [];
   const hubPoints = Number(shop?.points ?? sessionPanel?.wallet?.points ?? sessionPanel?.stats?.points ?? 0);
   const hubDebts = Number(shop?.debts ?? sessionPanel?.wallet?.debts ?? 0);
   const hubRank = String(homePlayer.rank || "E");
@@ -2192,34 +2180,6 @@ export function WenyouTab({
 	            })}
 	            {!shopLoading && !regularShopItems.length ? <div className="wenyou-empty">今日货架为空。</div> : null}
 	          </div>
-	          <div className="wenyou-panel-subtitle">特殊兑换</div>
-	          {specialShop?.unlocked ? (
-	            <div className="wenyou-shop-grid">
-	              {specialShopItems.map((item) => {
-	                const owned = (shop?.inventory || []).some((it) => inventoryItemName(it) === item.name || String(it.id || "") === item.id);
-	                const disabled = !shop?.can_buy || owned || shopBuyingId === item.id || Number(shop?.points || 0) < Number(item.price || 0);
-	                return (
-	                  <article key={`special-${item.id}`} className={`wenyou-shop-card wenyou-shop-rarity-${item.rarity || "B"}`}>
-	                    <div className="wenyou-shop-card-top">
-	                      <span>特殊 · {item.kind || item.category || "兑换"}</span>
-	                      <strong>{item.rarity || "B"}</strong>
-	                    </div>
-                    <h3>{item.name}</h3>
-                    <p>{item.sealed ? `${itemDisplayDescription(item)}（购买后封印）` : itemDisplayDescription(item)}</p>
-	                    <div className="wenyou-shop-card-bottom">
-	                      <b>{item.price} pts</b>
-	                      <button onClick={() => buyShopItem(item)} disabled={disabled}>
-	                        {owned ? "已拥有" : shopBuyingId === item.id ? "购买中" : "兑换"}
-	                      </button>
-	                    </div>
-	                  </article>
-	                );
-	              })}
-	              {!specialShopItems.length ? <div className="wenyou-empty">特殊兑换所暂无商品。</div> : null}
-	            </div>
-	          ) : (
-	            <div className="wenyou-shop-lock">C 阶后开启特殊兑换所。</div>
-	          )}
 	        </section>
       ) : null}
 
@@ -3360,9 +3320,7 @@ function PlayerStatCard({
   growth?: WenyouGrowthPlayer;
 }) {
   const p = player || {};
-  const abilities = growth?.abilities || p.abilities || [];
-  const dormantAbilities = growth?.dormant_abilities || p.dormant_abilities || [];
-  const abilitySlots = Number(growth?.ability_slots || 0);
+  const coreAbility = growth?.core_ability || p.core_ability || null;
   const rank = p.rank || "D";
   const num = (value: unknown) => {
     const n = Number(value ?? 0);
@@ -3388,15 +3346,9 @@ function PlayerStatCard({
   const battleStats = [
     ["攻击", p.physical_attack],
     ["防御", p.defense],
-    ["先攻", p.initiative],
+    ["精神抗性", p.mental_resist],
   ];
-  const evolution = growth?.evolution || p.evolution || "凡人";
-  const abilitySummary = abilities.length
-    ? abilities.map((it) => `${it.name || it.id}${it.level ? ` Lv${it.level}` : ""}`).filter(Boolean).join("、")
-    : "无";
-  const dormantSummary = dormantAbilities.length
-    ? `休眠：${dormantAbilities.map((it) => it.name || it.id).filter(Boolean).join("、")}`
-    : "";
+  const abilitySummary = coreAbility?.name || "新手副本通关后生成";
   const conditionSummary = p.conditions?.length ? p.conditions.join("、") : "稳定";
 
   return (
@@ -3441,9 +3393,8 @@ function PlayerStatCard({
 
       {compact ? null : (
         <div className="wenyou-character-notes">
-          <p><span>进化</span><strong>{evolution}{growth?.evolution_rank ? ` · ${growth.evolution_rank}` : ""}</strong></p>
-          <p><span>能力</span><strong>{abilitySummary}{abilitySlots ? `（${abilities.length}/${abilitySlots}）` : ""}</strong></p>
-          {dormantSummary ? <p><span>休眠</span><strong>{dormantSummary}</strong></p> : null}
+          <p><span>核心能力</span><strong>{abilitySummary}</strong></p>
+          {coreAbility?.desc ? <p><span>效果</span><strong>{coreAbility.desc}</strong></p> : null}
           <p><span>状态</span><strong>{conditionSummary}</strong></p>
         </div>
       )}
