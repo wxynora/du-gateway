@@ -194,9 +194,16 @@ type WenyouCoreAbility = {
 
 type StorySegment = {
   id: string;
-  kind: "story" | "system";
+  kind: "story" | "system" | "actions";
   label?: string;
   text: string;
+  options?: StoryActionOption[];
+};
+
+type StoryActionOption = {
+  key: string;
+  text: string;
+  free?: boolean;
 };
 
 type WenyouPlayerStats = {
@@ -581,6 +588,10 @@ function formatStorySystemText(rawLabel: string, content = "") {
   return text || label;
 }
 
+function hiddenStorySystemLabel(label: string) {
+  return ["规则结算", "状态"].includes(String(label || "").trim());
+}
+
 function pushStorySegment(segments: StorySegment[], text: string) {
   const t = String(text || "").trim();
   if (!t || t === "—— 主神系统 ——" || /^━+$/.test(t)) return;
@@ -594,8 +605,99 @@ function pushStorySegment(segments: StorySegment[], text: string) {
 
 function pushSystemSegment(segments: StorySegment[], label: string, text: string) {
   const body = cleanStorySystemText(text);
-  if (!body) return;
+  if (!body || hiddenStorySystemLabel(label)) return false;
   segments.push({ id: `system-${segments.length}`, kind: "system", label, text: body });
+  return true;
+}
+
+function cleanActionOptionText(text: string) {
+  return String(text || "")
+    .replace(/\*\*/g, "")
+    .replace(/^[-*·]\s*/, "")
+    .replace(/[“”]/g, "\"")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function actionOptionLine(line: string) {
+  return cleanActionOptionText(line).match(/^([A-Ha-hＡ-Ｈａ-ｈ])\s*[.．、:：]\s*(.+)$/);
+}
+
+function isStandaloneStorySystemLine(line: string) {
+  const match = cleanActionOptionText(line).match(/^【([^】]{1,42})】$/);
+  return match ? storySystemLabel(match[1]) : null;
+}
+
+function extractActionOptions(lines: string[]) {
+  const headingIndex = lines.findIndex((line) => /【\s*行动选项\s*】|^行动选项[:：]?$/.test(cleanActionOptionText(line)));
+  let startIndex = headingIndex >= 0 ? headingIndex + 1 : -1;
+  if (startIndex < 0) {
+    const firstOptionIndex = lines.findIndex((line, index) => {
+      const current = actionOptionLine(line);
+      const next = lines.slice(index + 1).some((it) => actionOptionLine(it));
+      return !!current && next;
+    });
+    if (firstOptionIndex >= 0) startIndex = firstOptionIndex;
+  }
+  if (startIndex < 0) return null;
+  const options: StoryActionOption[] = [];
+  let current: StoryActionOption | null = null;
+  let stopIndex = lines.length;
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const rawLine = lines[index];
+    const line = cleanActionOptionText(rawLine);
+    if (!line) continue;
+    if (options.length && isStandaloneStorySystemLine(line)) {
+      stopIndex = index;
+      break;
+    }
+    const match = actionOptionLine(line);
+    if (match) {
+      const key = match[1].normalize("NFKC").toUpperCase();
+      const text = cleanActionOptionText(match[2]);
+      current = {
+        key,
+        text,
+        free: /^自由行动[。.!！?？]*$/.test(text),
+      };
+      options.push(current);
+      continue;
+    }
+    if (current) {
+      current.text = cleanActionOptionText(`${current.text} ${line}`);
+      current.free = /^自由行动[。.!！?？]*$/.test(current.text);
+    }
+  }
+  if (!options.length) return null;
+  return {
+    before: lines.slice(0, headingIndex >= 0 ? headingIndex : startIndex),
+    options,
+    after: lines.slice(stopIndex),
+  };
+}
+
+function pushActionSegment(segments: StorySegment[], options: StoryActionOption[]) {
+  if (!options.length) return;
+  segments.push({ id: `actions-${segments.length}`, kind: "actions", text: "", options });
+}
+
+function appendStorySegments(segments: StorySegment[], nextSegments: StorySegment[]) {
+  for (const segment of nextSegments) {
+    segments.push({ ...segment, id: `${segment.id}-${segments.length}` });
+  }
+}
+
+function splitInlineSystemPrompt(segments: StorySegment[], line: string): boolean {
+  const text = String(line || "").trim();
+  if (!text) return false;
+  const re = /(.*?(?:机械女声|冰冷女声|电子音|提示音|系统(?:提示|广播|音)?|主神(?:提示|广播|音)?)[^“”"「」]{0,36}(?:响起|传来|播报|宣告|提示|开口|说道|说|道)?\s*[：:]\s*)[“"「]([^”"」]{6,360}(?:系统|副本|任务|清算|载入|锁定|提示|规则|编号)[^”"」]{0,360})[”"」](.*)/;
+  const match = text.match(re);
+  if (!match) return false;
+  pushStorySegment(segments, match[1].replace(/[：:]\s*$/, "。"));
+  pushSystemSegment(segments, "系统提示", match[2]);
+  const rest = String(match[3] || "").trim();
+  if (rest) splitStoryLine(segments, rest);
+  return true;
 }
 
 function knownMarkers(line: string) {
@@ -625,6 +727,7 @@ function formatEntryMetadataBlock(block: string) {
 }
 
 function splitStoryLine(segments: StorySegment[], line: string) {
+  if (splitInlineSystemPrompt(segments, line)) return;
   const matches = knownMarkers(line);
   if (!matches.length) {
     pushStorySegment(segments, line);
@@ -645,27 +748,45 @@ function parseStorySegments(text: string): StorySegment[] {
   const clean = String(text || "").replace(/\r/g, "").trim();
   if (!clean) return [];
   const segments: StorySegment[] = [];
+  let consumedStructuredBlock = false;
   for (const rawBlock of clean.split(/\n{2,}/)) {
     const block = rawBlock.trim();
     if (!block || block === "—— 主神系统 ——") continue;
     if (/^━+\n?/.test(block) && block.includes("【状态】")) {
+      consumedStructuredBlock = true;
       pushSystemSegment(segments, "状态", block.replace(/^━+\n?/, "").replace(/\n?━+$/, ""));
       continue;
     }
     if (block.startsWith("【无限流") || (block.includes("【副本类型】") && block.includes("【难度】"))) {
+      consumedStructuredBlock = true;
       pushSystemSegment(segments, "副本接入", formatEntryMetadataBlock(block));
       continue;
     }
     const lines = block.split("\n").map((it) => it.trim()).filter(Boolean);
+    const firstInlineMarker = lines[0]?.match(/^【([^】]{1,42})】/);
+    const firstInlineLabel = firstInlineMarker ? storySystemLabel(firstInlineMarker[1]) : null;
+    if (firstInlineLabel && hiddenStorySystemLabel(firstInlineLabel)) {
+      consumedStructuredBlock = true;
+      continue;
+    }
+    const actionOptions = extractActionOptions(lines);
+    if (actionOptions) {
+      consumedStructuredBlock = true;
+      for (const line of actionOptions.before) splitStoryLine(segments, line);
+      pushActionSegment(segments, actionOptions.options);
+      appendStorySegments(segments, parseStorySegments(actionOptions.after.join("\n")));
+      continue;
+    }
     const firstOnlyMarker = lines[0]?.match(/^【([^】]{1,42})】$/);
     const firstLabel = firstOnlyMarker ? storySystemLabel(firstOnlyMarker[1]) : null;
     if (firstOnlyMarker && firstLabel && lines.length > 1) {
+      consumedStructuredBlock = true;
       pushSystemSegment(segments, firstLabel, lines.slice(1).join("\n"));
       continue;
     }
     for (const line of lines) splitStoryLine(segments, line);
   }
-  return segments.length ? segments : [{ id: "story-0", kind: "story", text: clean }];
+  return segments.length || consumedStructuredBlock ? segments : [{ id: "story-0", kind: "story", text: clean }];
 }
 
 function feedFromSessionHistory(history?: WenyouHistoryItem[]): FeedItem[] {
@@ -814,6 +935,16 @@ function compactPanelText(value: unknown, fallback = ""): string {
   return fallback;
 }
 
+function panelObjectStringField(value: unknown, keys: string[]): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text.startsWith("{") || !text.endsWith("}")) return "";
+  for (const key of keys) {
+    const match = text.match(new RegExp(`['"]${key}['"]\\s*:\\s*(['"])([\\s\\S]*?)\\1`));
+    if (match?.[2]) return match[2].trim();
+  }
+  return "";
+}
+
 function itemDisplayDescription(item: { desc?: unknown; effect?: unknown } | unknown): string {
   const source = typeof item === "object" && item !== null
     ? ((item as { desc?: unknown; effect?: unknown }).desc || (item as { desc?: unknown; effect?: unknown }).effect)
@@ -866,12 +997,15 @@ function taskMeta(item: WenyouTaskPanelItem): string {
 }
 
 function clueTitle(item: WenyouCluePanelItem): string {
-  if (typeof item === "string") return item.slice(0, 42);
+  if (typeof item === "string") {
+    const parsed = panelObjectStringField(item, ["title", "name", "public_text", "text", "id"]);
+    return (parsed || item).slice(0, 42);
+  }
   return compactPanelText(item.title || item.public_text || item.text || item.id, "未命名线索");
 }
 
 function clueText(item: WenyouCluePanelItem): string {
-  if (typeof item === "string") return item;
+  if (typeof item === "string") return panelObjectStringField(item, ["public_text", "text", "reason", "title", "id"]) || item;
   return compactPanelText(item.public_text || item.text || item.source || item.id, "");
 }
 
@@ -895,12 +1029,14 @@ function markerMeta(item: WenyouPublicMarker): string {
 
 function currentLocationName(publicState: WenyouPublicState, fallback = "未知区域"): string {
   const first = publicState.known_locations?.[0];
+  const cleanFallback = compactPanelText(fallback, "未知区域");
+  const genericTitles = new Set(["当前场景", "当前区域", "未命名记录", "未知区域", "current_location"]);
   const title = first ? markerTitle(first) : "";
-  const text = first ? markerText(first) : "";
-  const raw = title && !["当前场景", "未命名记录"].includes(title)
+  const text = first && !genericTitles.has(title) ? markerText(first) : "";
+  const raw = title && !genericTitles.has(title)
     ? title
-    : text || fallback;
-  return raw.replace(/^当前在[:：]?\s*/, "").trim().slice(0, 34) || fallback;
+    : text || cleanFallback;
+  return raw.replace(/^当前在[:：]?\s*/, "").trim().slice(0, 34) || cleanFallback;
 }
 
 function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): RiftPullResult {
@@ -1175,6 +1311,7 @@ export function WenyouTab({
   const [profileTab, setProfileTab] = useState<WenyouProfileTab>("副本存档");
   const [quickDecisionOpen, setQuickDecisionOpen] = useState(false);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
+  const [entryScenePending, setEntryScenePending] = useState(false);
   const [activeScene, setActiveScene] = useState<EntryScene | null>(null);
   const [typeFilter, setTypeFilter] = useState("全部类型");
   const [difficultyFilter, setDifficultyFilter] = useState("全部难度");
@@ -1241,6 +1378,9 @@ export function WenyouTab({
       setSettlementDraftOpen(false);
       return true;
     }
+    if (entryScenePending) {
+      return true;
+    }
     if (randomOpen) {
       setRandomOpen(false);
       return true;
@@ -1265,7 +1405,7 @@ export function WenyouTab({
       return true;
     }
     return false;
-  }, [forcedPrompt, normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen]);
+  }, [entryScenePending, forcedPrompt, normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen]);
 
   useEffect(() => {
     viewRef.current = view;
@@ -1494,10 +1634,10 @@ export function WenyouTab({
   }, [loadSessionPanel, loadShop, view]);
 
   useEffect(() => {
-    if (!entryScene) return;
+    if (!entryScene || entryScenePending) return;
     const timer = window.setTimeout(() => setEntryScene(null), 4200);
     return () => window.clearTimeout(timer);
-  }, [entryScene]);
+  }, [entryScene, entryScenePending]);
 
   const sortedArchives = useMemo(
     () => (archives || []).slice().sort((a, b) => String(b.endedAt || "").localeCompare(String(a.endedAt || ""))),
@@ -1521,7 +1661,8 @@ export function WenyouTab({
     : (gameRulesState.inventory || sessionPanel?.inventory || sessionPanel?.stats?.inventory || []);
   const profileGrowthPlayers = sessionPanel?.growth?.players || shop?.growth?.players || {};
   const profileStats = sessionPanel?.stats || shop?.stats || {};
-  const currentLocation = currentLocationName(gamePublicState);
+  const currentLocationFallback = status.session?.instance_name || sessionPanel?.framework?.instance_name || "未知区域";
+  const currentLocation = currentLocationName(gamePublicState, currentLocationFallback);
   const hasPlayableStatus = !!status.active && isPlayableWenyouStatusSession(status.session);
   const hasPlayablePanel = isPlayableWenyouPanel(sessionPanel);
   const hasActiveRun = hasPlayableStatus || hasPlayablePanel;
@@ -1574,8 +1715,9 @@ export function WenyouTab({
 
   const gameSettlementReady = sessionPanel?.phase === "settlement" && !!sessionPanel.settlement;
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
-  const playerOneName = playerDisplayName(profileStats.player1 || gameRulesState.players?.player1 || homePlayer, "玩家一");
-  const playerTwoName = playerDisplayName(profileStats.player2 || gameRulesState.players?.player2, "玩家二");
+  const playerOneName = playerDisplayName(profileStats.player1 || gameRulesState.players?.player1 || homePlayer, String(status.entry?.player_name || "").trim() || "玩家一");
+  const playerTwoName = playerDisplayName(profileStats.player2 || gameRulesState.players?.player2, String(status.entry?.player2_name || "").trim() || "玩家二");
+  const aiPlayerActionLabel = `${playerTwoName}的行动`;
   const attributePointEntries = useMemo(() => {
     return (["player1", "player2"] as const)
       .map((player) => {
@@ -1702,12 +1844,26 @@ export function WenyouTab({
     throw new Error("副本扩展仍在进行，请稍后重试或刷新状态");
   }
 
-  async function startStory(mode: "random" | "custom", keywords = "", fallback?: EntryScene, candidate?: InstanceCandidate, playerName = "", playerTwoName = "") {
+  async function startStory(
+    mode: "random" | "custom",
+    keywords = "",
+    fallback?: EntryScene,
+    candidate?: InstanceCandidate,
+    playerName = "",
+    playerTwoName = "",
+    options: { immediateEntry?: boolean } = {}
+  ) {
     if (mode === "custom" && !keywords.trim() && !candidate) {
       toast("请填写任务描述");
       return;
     }
     setStarting(true);
+    if (options.immediateEntry && fallback) {
+      setActiveScene(fallback);
+      setEntryScene(fallback);
+      setEntryScenePending(true);
+      resetView("game");
+    }
     try {
       let j = await apiJson<WenyouStoryResponse>("/miniapp-api/wenyou/story", {
         method: "POST",
@@ -1729,12 +1885,18 @@ export function WenyouTab({
       }
       const text = String(j?.text || "");
       if (j.need_confirm_new_game) {
+        if (options.immediateEntry) {
+          setEntryScene(null);
+          setEntryScenePending(false);
+          resetView("home");
+        }
         toast("检测到已有进行中副本，请再点一次以确认开新局");
         return;
       }
       const parsed = extractEntryScene(text);
       const scene = parsed.name === "未知副本" && fallback ? fallback : { ...(fallback || {}), ...parsed, name: parsed.name || fallback?.name || "未知副本" };
       setActiveScene(scene);
+      setEntryScenePending(false);
       setEntryScene(scene);
       setSettlementDraftOpen(false);
       setSettlementPreview(null);
@@ -1749,6 +1911,12 @@ export function WenyouTab({
       await loadSessionPanel();
       await loadArchives();
     } catch (e: any) {
+      if (options.immediateEntry) {
+        setEntryScene(null);
+        setEntryScenePending(false);
+        resetView("home");
+        void loadForcedPrompt();
+      }
       toast(`开局失败：${e?.message || e}`);
     } finally {
       setStarting(false);
@@ -1788,8 +1956,9 @@ export function WenyouTab({
   }
 
   function startCandidate(item: InstanceCandidate) {
+    const scene = { name: item.title, genre: item.instance_genre, difficulty: item.difficulty, code: item.id.toUpperCase() };
     setForcedPrompt(null);
-    startStory("custom", "", { name: item.title, genre: item.instance_genre, difficulty: item.difficulty, code: item.id.toUpperCase() }, item);
+    startStory("custom", "", scene, item, "", "", { immediateEntry: !!item.forced });
   }
 
   function startRandom() {
@@ -1805,8 +1974,13 @@ export function WenyouTab({
     loadCandidates(true, keywords);
   }
 
-  async function submitAction() {
-    const text = actionText.trim();
+  function focusFreeActionInput() {
+    setQuickDecisionOpen(false);
+    window.setTimeout(() => actionInputRef.current?.focus(), 0);
+  }
+
+  async function submitAction(inputText?: string) {
+    const text = String(inputText ?? actionText).trim();
     if (!text) return;
     setQuickDecisionOpen(false);
     setActing(true);
@@ -1836,6 +2010,16 @@ export function WenyouTab({
     } finally {
       setActing(false);
     }
+  }
+
+  function handleStoryActionOption(option: StoryActionOption) {
+    if (acting) return;
+    if (option.free) {
+      focusFreeActionInput();
+      return;
+    }
+    setActionText(option.text);
+    void submitAction(option.text);
   }
 
   async function loadSettlementPreview(result = "", rating = "") {
@@ -2298,12 +2482,14 @@ export function WenyouTab({
       ) : null}
 
       {entryScene ? (
-        <div className="wenyou-entry fixed inset-0 z-[80]" role="status" aria-live="polite">
+        <div className={`wenyou-entry fixed inset-0 z-[80] ${entryScenePending ? "wenyou-entry-pending" : ""}`} role="status" aria-live="polite">
           <button
             type="button"
             className="wenyou-entry-stage relative h-full w-full overflow-hidden px-6 py-8 text-left"
-            onClick={() => setEntryScene(null)}
-            aria-label="关闭入场动画"
+            onClick={() => {
+              if (!entryScenePending) setEntryScene(null);
+            }}
+            aria-label={entryScenePending ? "副本接入中" : "关闭入场动画"}
           >
             <span className="wenyou-entry-grid" />
             <span className="wenyou-entry-scan" />
@@ -2315,13 +2501,13 @@ export function WenyouTab({
             </div>
             <div className="wenyou-entry-inner">
               <div className="wenyou-entry-terminal">
-                <span>NEURAL LINK ESTABLISHED</span>
-                <span>INSTANCE GATE OPEN</span>
+                <span>{entryScenePending ? "CLEARANCE ROUTE LOCKED" : "NEURAL LINK ESTABLISHED"}</span>
+                <span>{entryScenePending ? "INSTANCE GATE CONNECTING" : "INSTANCE GATE OPEN"}</span>
               </div>
               <div className="wenyou-entry-seal">{entryScene.code || "INSTANCE"}</div>
-              <div className="wenyou-entry-kicker">欢迎来到</div>
+              <div className="wenyou-entry-kicker">{entryScenePending ? "正在接入" : "欢迎来到"}</div>
               <div className="wenyou-entry-title" data-text={entryScene.name}>{entryScene.name}</div>
-              <div className="wenyou-entry-sub">努力生存下去吧。</div>
+              <div className="wenyou-entry-sub">{entryScenePending ? "入口已锁定，副本正在展开。" : "努力生存下去吧。"}</div>
               <div className="wenyou-entry-progress" aria-hidden="true">
                 <span />
               </div>
@@ -2677,8 +2863,8 @@ export function WenyouTab({
               if (item.kind === "user") return <div key={item.id} className="wenyou-user-bubble">{item.text}</div>;
               if (item.kind === "notice") return <SystemNotice key={item.id} tone="cyan" label="任务更新" text={item.text} />;
               if (item.kind === "loot") return <SystemNotice key={item.id} tone="purple" label="获得物品" text={item.text} />;
-              if (item.kind === "ai_player") return <SystemNotice key={item.id} tone="purple" label="玩家二的行动" text={item.text} />;
-              return <StoryFeedMessage key={item.id} text={item.text} />;
+              if (item.kind === "ai_player") return <SystemNotice key={item.id} tone="purple" label={aiPlayerActionLabel} text={item.text} />;
+              return <StoryFeedMessage key={item.id} text={item.text} disabled={acting} onAction={handleStoryActionOption} />;
             }) : gameSettlementReady ? (
               <div className="wenyou-feed-empty">
                 <strong>结算完成，正在归档</strong>
@@ -3300,16 +3486,54 @@ function FilterRow({ items, value, onChange }: { items: string[]; value: string;
   );
 }
 
-function StoryFeedMessage({ text }: { text: string }) {
+function StoryFeedMessage({
+  text,
+  disabled,
+  onAction,
+}: {
+  text: string;
+  disabled?: boolean;
+  onAction: (option: StoryActionOption) => void;
+}) {
   const segments = parseStorySegments(text);
   return (
     <div className="wenyou-message-stack">
       {segments.map((segment) => (
-        segment.kind === "system" ? (
+        segment.kind === "actions" ? (
+          <ActionOptions key={segment.id} options={segment.options || []} disabled={disabled} onAction={onAction} />
+        ) : segment.kind === "system" ? (
           <SystemNotice key={segment.id} tone="cyan" label={segment.label || "系统提示"} text={segment.text} />
         ) : (
           <div key={segment.id} className="wenyou-story-text">{segment.text}</div>
         )
+      ))}
+    </div>
+  );
+}
+
+function ActionOptions({
+  options,
+  disabled,
+  onAction,
+}: {
+  options: StoryActionOption[];
+  disabled?: boolean;
+  onAction: (option: StoryActionOption) => void;
+}) {
+  if (!options.length) return null;
+  return (
+    <div className="wenyou-action-options" aria-label="行动选项">
+      {options.map((option) => (
+        <button
+          key={option.key}
+          type="button"
+          className={option.free ? "wenyou-action-option-free" : ""}
+          disabled={disabled}
+          onClick={() => onAction(option)}
+        >
+          <span>{option.key}</span>
+          <b>{option.text}</b>
+        </button>
       ))}
     </div>
   );
@@ -3655,7 +3879,7 @@ function PanelModal({
                 <>
                   <div className="wenyou-panel-brief-grid">
                     <PanelRow label="当前阶段" value={task.phase || session.phase_label || "副本"} />
-                    <PanelRow label="当前位置" value={currentLocationName(publicState)} />
+                    <PanelRow label="当前位置" value={currentLocationName(publicState, session.framework?.instance_name || "当前副本")} />
                     {publicState.public_threat ? <PanelRow label="危险程度" value={publicState.public_threat} /> : null}
                   </div>
                   <div className="wenyou-panel-subtitle">任务与已确认线索</div>

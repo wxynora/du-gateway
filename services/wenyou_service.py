@@ -1,4 +1,5 @@
 # 文游：App 内独立副本会话，GM 走 DeepSeek，与主聊天链路隔离（存 R2 wenyou/）
+import ast
 import copy
 import json
 import math
@@ -5100,6 +5101,7 @@ def _candidate_opening_prompt(item: dict, core_text: str = "") -> str:
 - 4-8 句，像小说正文一样续写，含主神传送/白光/提示音/刻板广播之一。
 - 落入副本场景，点出第一处异常。
 - 只写玩家可见开场，不剧透隐藏支线、隐藏结局、NPC 真实立场或威胁时钟精确值。
+- 如果写系统/主神广播，必须独立成行：`【系统提示】广播内容`，不要混在叙事长句里。
 - 未经玩家看见名牌、听见自我介绍或主神点名前，不要直接写 NPC 姓名；用“戴眼镜的年轻男性”“穿冲锋衣的短发女性”等可见特征称呼。
 - 不要输出任务者名单、线索列表、规则档案或情报卡。普通环境描写不是线索。
 - 如果候选写明“强制清算：是”，开场要让玩家感到入口被锁定/被迫接入，但不要把隐藏规则、清算队列或后端状态直接念成说明书。
@@ -5617,6 +5619,15 @@ def _normalize_public_task_item(item: Any, index: int, phase: str = "instance_ru
 
 
 def _normalize_public_clue_item(item: Any, index: int) -> Optional[dict]:
+    if isinstance(item, str):
+        raw = item.strip()
+        if raw.startswith("{") and raw.endswith("}"):
+            try:
+                parsed = ast.literal_eval(raw)
+            except (ValueError, SyntaxError):
+                parsed = None
+            if isinstance(parsed, dict):
+                item = parsed
     if isinstance(item, dict):
         title = _compact_text(item.get("title") or item.get("name") or item.get("public_text") or item.get("text"), 120)
         text = _compact_text(item.get("public_text") or item.get("text") or item.get("reason") or title, 220)

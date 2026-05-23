@@ -176,6 +176,53 @@
   }
 }
 
+@keyframes wenyou-entry-grid-pending {
+  0% {
+    background-position: 0 0, 0 0, 0 0;
+  }
+  100% {
+    background-position: 0 84px, 84px 0, 0 36px;
+  }
+}
+
+@keyframes wenyou-entry-pending-scan {
+  0% {
+    opacity: 0;
+    transform: translateY(-120%);
+  }
+  38% {
+    opacity: 0.68;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(120%);
+  }
+}
+
+@keyframes wenyou-entry-pending-pulse {
+  0%,
+  100% {
+    opacity: 0.82;
+    filter: blur(0);
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 14px rgba(34, 211, 238, 0.18));
+  }
+}
+
+@keyframes wenyou-entry-progress-pending {
+  0% {
+    transform: translateX(-105%) scaleX(0.34);
+  }
+  55% {
+    transform: translateX(18%) scaleX(0.62);
+  }
+  100% {
+    transform: translateX(120%) scaleX(0.34);
+  }
+}
+
 @keyframes wenyou-entry-glitch {
   0%,
   86%,
@@ -676,6 +723,11 @@
     backdrop-filter: blur(4px);
   }
 
+  .wenyou-entry-pending {
+    animation: none;
+    opacity: 1;
+  }
+
   .wenyou-entry-stage {
     color: #f4eee6;
   }
@@ -692,12 +744,21 @@
     pointer-events: none;
   }
 
+  .wenyou-entry-pending .wenyou-entry-grid {
+    animation: wenyou-entry-grid-pending 7s linear infinite;
+    opacity: 0.28;
+  }
+
   .wenyou-entry-scan {
     position: absolute;
     inset: -18%;
     background: linear-gradient(180deg, transparent, rgba(34, 211, 238, 0.18), rgba(244, 238, 230, 0.12), transparent);
     animation: wenyou-entry-scan 2.2s cubic-bezier(0.19, 1, 0.22, 1) both;
     pointer-events: none;
+  }
+
+  .wenyou-entry-pending .wenyou-entry-scan {
+    animation: wenyou-entry-pending-scan 1.7s cubic-bezier(0.19, 1, 0.22, 1) infinite;
   }
 
   .wenyou-entry-crt {
@@ -709,6 +770,24 @@
     mix-blend-mode: screen;
     animation: wenyou-entry-crt 1.8s steps(2, end) infinite;
     pointer-events: none;
+  }
+
+  .wenyou-entry-pending .wenyou-entry-header,
+  .wenyou-entry-pending .wenyou-entry-terminal,
+  .wenyou-entry-pending .wenyou-entry-seal,
+  .wenyou-entry-pending .wenyou-entry-kicker,
+  .wenyou-entry-pending .wenyou-entry-title,
+  .wenyou-entry-pending .wenyou-entry-sub,
+  .wenyou-entry-pending .wenyou-entry-progress,
+  .wenyou-entry-pending .wenyou-entry-meta {
+    animation: wenyou-entry-pending-pulse 1.5s ease-in-out infinite;
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+
+  .wenyou-entry-pending .wenyou-entry-title::before {
+    animation: wenyou-entry-glitch 1.4s steps(1, end) infinite;
   }
 
   .wenyou-entry-corner {
@@ -859,6 +938,11 @@
     background: linear-gradient(90deg, rgba(34, 211, 238, 0.94), rgba(244, 63, 94, 0.82));
     box-shadow: 0 0 18px rgba(34, 211, 238, 0.42);
     animation: wenyou-entry-progress 4.6s cubic-bezier(0.19, 1, 0.22, 1) both;
+  }
+
+  .wenyou-entry-pending .wenyou-entry-progress span {
+    transform-origin: center;
+    animation: wenyou-entry-progress-pending 1.25s cubic-bezier(0.19, 1, 0.22, 1) infinite;
   }
 
   .wenyou-entry-meta span {
@@ -2859,8 +2943,18 @@
 
   .wenyou-game-top {
     align-items: flex-start;
-    position: relative;
-    z-index: 5;
+    position: sticky;
+    top: calc(8px + env(safe-area-inset-top));
+    z-index: 30;
+    margin: -6px -2px 0;
+    border: 1px solid rgba(34, 211, 238, 0.14);
+    border-radius: 8px;
+    background:
+      linear-gradient(180deg, rgba(5, 12, 27, 0.96), rgba(4, 8, 20, 0.9)),
+      rgba(3, 7, 18, 0.96);
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    padding: 6px 8px;
+    backdrop-filter: blur(12px);
   }
 
   .wenyou-game-top > div {
@@ -2978,6 +3072,71 @@
     line-height: 1.72;
     padding: 10px 0 10px 12px;
     white-space: pre-wrap;
+  }
+
+  .wenyou-action-options {
+    display: grid;
+    gap: 8px;
+    border-left: 2px solid rgba(125, 211, 252, 0.72);
+    background: linear-gradient(90deg, rgba(14, 165, 233, 0.1), rgba(14, 165, 233, 0.02));
+    padding: 10px 0 10px 12px;
+  }
+
+  .wenyou-action-options button {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    min-height: 42px;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid rgba(34, 211, 238, 0.24);
+    border-radius: 8px;
+    background: rgba(8, 16, 32, 0.74);
+    color: rgba(238, 247, 255, 0.9);
+    padding: 8px 10px;
+    text-align: left;
+    transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+  }
+
+  .wenyou-action-options button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    border-color: rgba(125, 211, 252, 0.48);
+    background: rgba(14, 165, 233, 0.16);
+  }
+
+  .wenyou-action-options button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .wenyou-action-options button span {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+    border: 1px solid rgba(125, 211, 252, 0.34);
+    border-radius: 6px;
+    color: #a5f3fc;
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  .wenyou-action-options button b {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.45;
+  }
+
+  .wenyou-action-options .wenyou-action-option-free {
+    border-color: rgba(148, 163, 184, 0.24);
+    background: rgba(15, 23, 42, 0.66);
+    color: rgba(203, 213, 225, 0.88);
+  }
+
+  .wenyou-action-options .wenyou-action-option-free span {
+    border-color: rgba(148, 163, 184, 0.36);
+    color: rgba(203, 213, 225, 0.92);
   }
 
   .wenyou-notice {
