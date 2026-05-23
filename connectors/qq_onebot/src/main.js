@@ -400,6 +400,8 @@ const groupHistoryContextLimit = Math.max(1, envInt("QQ_GROUP_CONTEXT_MESSAGES",
 const groupHistoryKeepLimit = Math.max(groupHistoryContextLimit, envInt("QQ_GROUP_HISTORY_KEEP_MESSAGES", 50));
 const configuredBotUserId = Number(envStr("QQ_BOT_USER_ID", "3195570280") || 0);
 let resolvedBotUserId = configuredBotUserId;
+const logInboundEvents = envBool("QQ_INBOUND_EVENT_LOG", true);
+const logGroupEvents = envBool("QQ_GROUP_EVENT_LOG", true);
 const ownerQqUserId = Number(envStr("QQ_OWNER_USER_ID", "1336091712") || 0);
 const ownerQqDisplayName = envStr("QQ_OWNER_DISPLAY_NAME", "辛玥");
 
@@ -528,6 +530,34 @@ function eventSelfId(j) {
   return String(j?.self_id || resolvedBotUserId || configuredBotUserId || "").trim();
 }
 
+function eventSummary(j) {
+  return [
+    `post_type=${String(j?.post_type || "-")}`,
+    `message_type=${String(j?.message_type || "-")}`,
+    `sub_type=${String(j?.sub_type || "-")}`,
+    `self_id=${eventSelfId(j) || "unknown"}`,
+    `user=${Number(j?.user_id || j?.sender?.user_id || 0) || "-"}`,
+    `group=${Number(j?.group_id || 0) || "-"}`,
+    `message_id=${String(j?.message_id || "-")}`,
+  ].join(" ");
+}
+
+function eventPreview(j) {
+  const raw = String(j?.raw_message || "").trim();
+  if (raw) return raw.length > 120 ? `${raw.slice(0, 120)}...` : raw;
+  return userContentPreview(extractUserContentFromMessage(j?.message || ""), 120) || "-";
+}
+
+function logIncomingEvent(j) {
+  if (!logInboundEvents) return;
+  console.log(`[qq-onebot] event ${eventSummary(j)} preview=${eventPreview(j)}`);
+}
+
+function logIgnoredEvent(j, reason) {
+  if (!logInboundEvents) return;
+  console.log(`[qq-onebot] ignored event reason=${reason} ${eventSummary(j)} preview=${eventPreview(j)}`);
+}
+
 async function resolveBotUserId() {
   if (resolvedBotUserId) return resolvedBotUserId;
   try {
@@ -598,17 +628,31 @@ function rememberGroupMessage(j, content) {
 function messageMentionsSelf(j) {
   const selfId = eventSelfId(j);
   if (!selfId) return false;
-  const msg = j?.message;
-  if (Array.isArray(msg)) {
-    for (const seg of msg) {
-      if (!seg || typeof seg !== "object") continue;
-      if (String(seg.type || "") !== "at") continue;
-      const qq = String(seg.data?.qq || "").trim();
-      if (qq === selfId) return true;
+  return groupAtTargets(j).some((qq) => qq === selfId);
+}
+
+function cqAtTargets(raw) {
+  const out = [];
+  for (const m of String(raw || "").matchAll(/\[CQ:at,([^\]]*)\]/g)) {
+    const params = String(m?.[1] || "").split(",");
+    for (const part of params) {
+      const [key, ...rest] = String(part || "").split("=");
+      if (String(key || "").trim() !== "qq") continue;
+      const qq = rest.join("=").trim();
+      if (qq) out.push(qq);
     }
   }
-  const raw = String(j?.raw_message || "");
-  return raw.includes(`[CQ:at,qq=${selfId}]`);
+  return out;
+}
+
+function stripSelfAtFromRaw(raw, selfId) {
+  const id = String(selfId || "").trim();
+  if (!id) return String(raw || "").trim();
+  return String(raw || "")
+    .replace(/\[CQ:at,([^\]]*)\]/g, (whole, paramText) => (
+      cqAtTargets(`[CQ:at,${paramText}]`).includes(id) ? "" : whole
+    ))
+    .trim();
 }
 
 function groupAtTargets(j) {
@@ -622,9 +666,7 @@ function groupAtTargets(j) {
       if (qq) out.push(qq);
     }
   }
-  const raw = String(j?.raw_message || "");
-  for (const m of raw.matchAll(/\[CQ:at,qq=([^\]]+)\]/g)) {
-    const qq = String(m?.[1] || "").trim();
+  for (const qq of cqAtTargets(j?.raw_message || "")) {
     if (qq && !out.includes(qq)) out.push(qq);
   }
   return out;
@@ -642,7 +684,7 @@ function contentWithoutSelfAt(j) {
     return extractUserContentFromMessage(filtered);
   }
   const raw = String(j?.raw_message || "");
-  const clean = selfId ? raw.replaceAll(`[CQ:at,qq=${selfId}]`, "").trim() : raw.trim();
+  const clean = stripSelfAtFromRaw(raw, selfId);
   return extractUserContentFromMessage(clean);
 }
 
@@ -699,10 +741,13 @@ async function handleGroupEvent(j) {
   const groupId = Number(j?.group_id || 0);
   if (!groupId) return;
   const content = contentWithoutSelfAt(j);
+  const atTargets = groupAtTargets(j);
+  if (logGroupEvents) {
+    console.log(`[qq-onebot] group event group=${groupId} user=${Number(j?.user_id || 0)} self_id=${eventSelfId(j) || "unknown"} at=${atTargets.join(",") || "-"} content=${userContentPreview(content, 80) || "-"}`);
+  }
   const previousRows = getGroupHistory(groupId).slice(-groupHistoryContextLimit);
   rememberGroupMessage(j, content || extractUserContentFromMessage(j?.message || j?.raw_message || ""));
   if (!messageMentionsSelf(j)) {
-    const atTargets = groupAtTargets(j);
     if (atTargets.length) {
       console.log(`[qq-onebot] 群聊 @ 未命中本机器人 group=${groupId} self_id=${eventSelfId(j) || "unknown"} at=${atTargets.join(",")}`);
     }
@@ -743,16 +788,28 @@ async function handleGroupEvent(j) {
 
 async function handleEvent(j) {
   // 过滤 self-message：NapCatQQ reportSelfMessage=true 时 bot 自己发的消息也会推回来
-  if (isSelfMessage(j)) return;
+  if (isSelfMessage(j)) {
+    logIgnoredEvent(j, "self_message");
+    return;
+  }
   if (isGroupMessageEvent(j)) {
     await handleGroupEvent(j);
     return;
   }
-  if (!isPrivateMessageEvent(j)) return;
+  if (!isPrivateMessageEvent(j)) {
+    logIgnoredEvent(j, "unsupported_event");
+    return;
+  }
   const userId = Number(j?.user_id || 0);
-  if (!userId) return;
+  if (!userId) {
+    logIgnoredEvent(j, "missing_user_id");
+    return;
+  }
   const content = extractUserContentFromMessage(j?.message || j?.raw_message || "");
-  if (!content) return;
+  if (!content) {
+    logIgnoredEvent(j, "empty_content");
+    return;
+  }
   const now = Date.now();
   const fp = `${userContentPreview(content, 200)}|${String(j?.raw_message || "")}`.slice(0, 600);
   const recent = recentInboundByUser.get(userId);
@@ -850,6 +907,7 @@ async function main() {
         return;
       }
       const body = await readJsonBody(req);
+      logIncomingEvent(body);
       void handleEvent(body);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
