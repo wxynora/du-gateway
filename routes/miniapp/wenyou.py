@@ -410,6 +410,16 @@ def register_routes(bp) -> None:
         r2_store.save_wenyou_candidates(uid, payload)
         return jsonify({"ok": True, "generated": True, **payload})
 
+    @bp.route("/wenyou/forced-instance", methods=["GET"])
+    def miniapp_wenyou_forced_instance():
+        """文游：主神空间强制副本弹窗，不生成普通候选。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        from services.wenyou_service import get_forced_instance_prompt
+
+        return jsonify({"ok": True, **get_forced_instance_prompt(uid)})
+
     @bp.route("/wenyou/story", methods=["POST"])
     def miniapp_wenyou_story():
         """文游开局：系统空间可选随机或自定义长描述（keywords）。"""

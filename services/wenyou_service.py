@@ -1856,6 +1856,21 @@ def apply_forced_instance_candidates(user_id: int, payload: Optional[dict] = Non
     return data
 
 
+def get_forced_instance_prompt(user_id: int) -> dict:
+    """Return the current forced-instance prompt without generating normal candidates."""
+    payload = apply_forced_instance_candidates(
+        int(user_id),
+        {"version": 1, "generatedAt": now_beijing_iso(), "items": []},
+    )
+    items = [x for x in (payload.get("items") or []) if isinstance(x, dict) and x.get("forced")]
+    return {
+        "forced": bool(items),
+        "item": items[0] if items else None,
+        "items": items[:2],
+        "forced_instance_queue": payload.get("forced_instance_queue") or [],
+    }
+
+
 def _normalize_settlement_result(value: Any) -> str:
     result = str(value or "").strip().lower()
     aliases = {
@@ -6044,6 +6059,7 @@ def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
     _mark_tutorial_started(uid, session, wallet)
     _sync_session_points_with_wallet(session, wallet)
     session.setdefault("stats", {})["inventory"] = _merge_inventory(wallet.get("inventory"), session.get("stats", {}).get("inventory"))
+    _attach_forced_instance_contract(session, item)
     r2_store.save_wenyou_session(uid, session)
     with _PENDING_LOCK:
         _PENDING_STORY_CONFIRM.pop(uid, None)

@@ -167,6 +167,11 @@ type InstanceCandidate = {
   twist?: string;
   tags?: string[];
   estimated_length?: string;
+  forced?: boolean;
+  locked?: boolean;
+  queue_id?: string;
+  penalty_type?: string;
+  reason?: string;
 };
 
 type FeedItem = {
@@ -446,6 +451,19 @@ type RiftPullResult = RiftItem & {
   converted?: boolean;
   converted_to?: WenyouInventoryItem;
 };
+
+type RiftIconType =
+  | "defense"
+  | "heal"
+  | "rule"
+  | "clue"
+  | "tool"
+  | "escape"
+  | "memory"
+  | "supply"
+  | "attack"
+  | "material"
+  | "special";
 
 const TYPE_FILTERS = ["全部类型", "规则怪谈", "剧情解密", "大逃杀", "对抗", "生存撤离", "潜伏调查", "限时任务"];
 const DIFFICULTY_FILTERS = ["全部难度", "D", "C", "B", "A", "S"];
@@ -904,6 +922,21 @@ function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): Rift
   };
 }
 
+function riftIconType(item: { kind?: unknown; category?: unknown; name?: unknown; desc?: unknown }): RiftIconType {
+  const raw = [item.kind, item.category, item.name, item.desc].map((it) => String(it || "")).join(" ").toLowerCase();
+  if (/防|护|盾|甲|armor|defen|guard|protect/.test(raw)) return "defense";
+  if (/治疗|治愈|恢复|药|绷带|急救|heal|hp|san|精神/.test(raw)) return "heal";
+  if (/规则|改写|橡皮|主神|凭证|判定|rule/.test(raw)) return "rule";
+  if (/线索|侦测|调查|证言|钥匙|收音机|clue|detect|search/.test(raw)) return "clue";
+  if (/工具|手电|绳|撬|粉笔|维修|扳手|tool|wrench|flashlight/.test(raw)) return "tool";
+  if (/撤离|出口|车票|门|位移|escape|door|gate/.test(raw)) return "escape";
+  if (/记忆|精神|梦|针|memory|mind/.test(raw)) return "memory";
+  if (/补给|口粮|氧气|蜡烛|supply|ration/.test(raw)) return "supply";
+  if (/攻击|武器|斧|棍|刀|weapon|attack|combat/.test(raw)) return "attack";
+  if (/材料|碎片|结晶|核心|残片|fragment|material|crystal/.test(raw)) return "material";
+  return "special";
+}
+
 let riftAudioContext: AudioContext | null = null;
 
 function playRiftShatterSound() {
@@ -1131,8 +1164,11 @@ export function WenyouTab({
   const [riftPointPreview, setRiftPointPreview] = useState<number | null>(null);
   const [riftPullCount, setRiftPullCount] = useState(0);
   const [riftLoading, setRiftLoading] = useState(false);
+  const [forcedPrompt, setForcedPrompt] = useState<InstanceCandidate | null>(null);
+  const [forcedPromptLoading, setForcedPromptLoading] = useState(false);
   const riftPullTokenRef = useRef(0);
   const settlementAutoArchiveRef = useRef("");
+  const forcedPromptCheckRef = useRef("");
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
   const [panelView, setPanelView] = useState<WenyouPanelView | null>(null);
   const [panelInitialTab, setPanelInitialTab] = useState<WenyouPanelTab>("任务");
@@ -1209,6 +1245,10 @@ export function WenyouTab({
       setRandomOpen(false);
       return true;
     }
+    if (forcedPrompt) {
+      setForcedPrompt(null);
+      return true;
+    }
 
     while (viewHistoryRef.current.length) {
       const previous = viewHistoryRef.current.pop();
@@ -1225,7 +1265,7 @@ export function WenyouTab({
       return true;
     }
     return false;
-  }, [normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen]);
+  }, [forcedPrompt, normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen]);
 
   useEffect(() => {
     viewRef.current = view;
@@ -1307,6 +1347,34 @@ export function WenyouTab({
     } finally {
       setCandidatesLoading(false);
       setCandidatesRefreshing(false);
+    }
+  }, [toast]);
+
+  const loadForcedPrompt = useCallback(async () => {
+    setForcedPromptLoading(true);
+    try {
+      const j = await apiJson<{
+        ok?: boolean;
+        forced?: boolean;
+        item?: InstanceCandidate | null;
+        items?: InstanceCandidate[];
+        error?: string;
+      }>("/miniapp-api/wenyou/forced-instance");
+      if (!j?.ok) throw new Error(j?.error || "加载失败");
+      const item = (j.item && j.item.forced ? j.item : null) || (Array.isArray(j.items) ? j.items.find((it) => it?.forced) : null) || null;
+      setForcedPrompt(item);
+      if (item) {
+        setCandidates((prev) => {
+          const rest = prev.filter((it) => it.id !== item.id);
+          return [item, ...rest].slice(0, 8);
+        });
+      }
+      return item;
+    } catch (e: any) {
+      toast(`加载强制副本失败：${e?.message || e}`);
+      return null;
+    } finally {
+      setForcedPromptLoading(false);
     }
   }, [toast]);
 
@@ -1462,7 +1530,7 @@ export function WenyouTab({
   const hasPlayerCodes = hasPlayerOneCode && hasPlayerTwoCode;
   const isEntryResolving = view === "home" && !spaceBootVisible && statusLoading && !status.entry && !hasActiveRun;
   const needsTutorialIntro = !hasActiveRun && !statusLoading && !hasPlayerCodes;
-  const hubMusicView = (view === "home" && !spaceBootVisible) || view === "archive";
+  const hubMusicView = !spaceBootVisible && ["home", "archive", "selection", "shop", "rift"].includes(view);
   const musicMode: WenyouMusicMode = hubMusicView
     ? view === "home" && (needsTutorialIntro || isEntryResolving)
       ? "intro"
@@ -1481,6 +1549,29 @@ export function WenyouTab({
         genre: undefined,
         difficulty: undefined,
       };
+
+  useEffect(() => {
+    if (view !== "home") {
+      forcedPromptCheckRef.current = "";
+      return;
+    }
+    if (spaceBootVisible || statusLoading || hasActiveRun || forcedPrompt || forcedPromptLoading) return;
+    const key = `${view}:${String(status.entry?.player_name || "")}:${String(status.entry?.player2_name || "")}`;
+    if (forcedPromptCheckRef.current === key) return;
+    forcedPromptCheckRef.current = key;
+    void loadForcedPrompt();
+  }, [
+    forcedPrompt,
+    forcedPromptLoading,
+    hasActiveRun,
+    loadForcedPrompt,
+    spaceBootVisible,
+    status.entry?.player2_name,
+    status.entry?.player_name,
+    statusLoading,
+    view,
+  ]);
+
   const gameSettlementReady = sessionPanel?.phase === "settlement" && !!sessionPanel.settlement;
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
   const playerOneName = playerDisplayName(profileStats.player1 || gameRulesState.players?.player1 || homePlayer, "玩家一");
@@ -1697,6 +1788,7 @@ export function WenyouTab({
   }
 
   function startCandidate(item: InstanceCandidate) {
+    setForcedPrompt(null);
     startStory("custom", "", { name: item.title, genre: item.instance_genre, difficulty: item.difficulty, code: item.id.toUpperCase() }, item);
   }
 
@@ -1816,7 +1908,8 @@ export function WenyouTab({
       setArchiveFilter("全部");
       await loadStatus();
       await loadArchives();
-      resetView("archive");
+      const forced = await loadForcedPrompt();
+      resetView(forced ? "home" : "archive");
     } catch (e: any) {
       toast(`结算失败：${e?.message || e}`);
     } finally {
@@ -1845,7 +1938,8 @@ export function WenyouTab({
       setArchiveFilter("全部");
       await loadStatus();
       await loadArchives();
-      resetView("archive");
+      const forced = await loadForcedPrompt();
+      resetView(forced ? "home" : "archive");
     } catch (e: any) {
       toast(`归档失败：${e?.message || e}`);
     } finally {
@@ -1883,7 +1977,8 @@ export function WenyouTab({
         setArchiveFilter("全部");
         await loadStatus();
         await loadArchives();
-        resetView("archive");
+        const forced = await loadForcedPrompt();
+        resetView(forced ? "home" : "archive");
       } catch (e: any) {
         if (!cancelled) {
           settlementAutoArchiveRef.current = "";
@@ -1897,7 +1992,7 @@ export function WenyouTab({
     return () => {
       cancelled = true;
     };
-  }, [loadArchives, loadStatus, resetView, sessionPanel?.gameId, sessionPanel?.phase, sessionPanel?.settlement, toast, view]);
+  }, [loadArchives, loadForcedPrompt, loadStatus, resetView, sessionPanel?.gameId, sessionPanel?.phase, sessionPanel?.settlement, toast, view]);
 
   function openPanel(tab: WenyouPanelTab = "任务") {
     setPanelInitialTab(tab);
@@ -2773,6 +2868,18 @@ export function WenyouTab({
         />
       ) : null}
 
+      {forcedPrompt ? (
+        <ForcedInstanceModal
+          candidate={forcedPrompt}
+          loading={starting || forcedPromptLoading}
+          onEnter={() => startCandidate(forcedPrompt)}
+          onViewHall={() => {
+            setForcedPrompt(null);
+            pushView("selection");
+          }}
+        />
+      ) : null}
+
       {riftOverlay !== "closed" ? (
         <RiftOverlay
           phase={riftOverlay}
@@ -3035,8 +3142,10 @@ function RiftOverlay({
   onRevealAll: () => void;
   onClose: () => void;
 }) {
+  const [detailItem, setDetailItem] = useState<RiftPullResult | null>(null);
   const allRevealed = results.length > 0 && results.every((item) => revealed.includes(item.pullId));
   const hasS = results.some((item) => item.rarity === "S");
+  const closeDetail = () => setDetailItem(null);
   return (
     <div className={`wenyou-rift-overlay wenyou-rift-overlay-${phase} ${hasS ? "wenyou-rift-overlay-s" : ""}`} role="dialog" aria-modal="true">
       <div className="wenyou-rift-overlay-noise" />
@@ -3052,19 +3161,20 @@ function RiftOverlay({
         ) : null}
         {phase === "results" && count === 1 ? (
           <div className="wenyou-rift-single">
-            {results[0] ? <RiftCard item={results[0]} revealed={revealed.includes(results[0].pullId)} large onReveal={onReveal} /> : null}
+            {results[0] ? <RiftCard item={results[0]} revealed={revealed.includes(results[0].pullId)} large onReveal={onReveal} onInspect={setDetailItem} /> : null}
           </div>
         ) : null}
         {phase === "results" && count !== 1 ? (
           <div className="wenyou-rift-results-scroll">
             <div className="wenyou-rift-results-grid">
               {results.map((item) => (
-                <RiftCard key={item.pullId} item={item} revealed={revealed.includes(item.pullId)} onReveal={onReveal} />
+                <RiftCard key={item.pullId} item={item} revealed={revealed.includes(item.pullId)} onReveal={onReveal} onInspect={setDetailItem} />
               ))}
             </div>
           </div>
         ) : null}
       </div>
+      {detailItem ? <RiftItemDetail item={detailItem} onClose={closeDetail} /> : null}
       <div className={`wenyou-rift-overlay-actions ${phase === "results" ? "is-visible" : ""}`}>
         {count !== 1 ? <button onClick={onRevealAll} disabled={allRevealed}>全部显影</button> : null}
         <button onClick={onClose}>收束裂隙</button>
@@ -3073,24 +3183,63 @@ function RiftOverlay({
   );
 }
 
+function RiftItemGlyph({ type }: { type: RiftIconType }) {
+  const stroke = "currentColor";
+  const common = { fill: "none", stroke, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  if (type === "defense") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="M32 8 50 15v14c0 13-7 22-18 27C21 51 14 42 14 29V15l18-7Z" /><path {...common} d="M32 15v32M22 27h20" /></svg>;
+  }
+  if (type === "heal") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="M25 10h14M28 10v9l-8 8v22c0 4 3 7 7 7h10c4 0 7-3 7-7V27l-8-8v-9" /><path {...common} d="M32 31v14M25 38h14" /></svg>;
+  }
+  if (type === "rule") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="M18 8h22l8 8v40H18V8Z" /><path {...common} d="M40 8v10h10M24 28h16M24 36h13M24 44h9" /><path {...common} d="m43 38 5 5-9 9-5 1 1-5 8-10Z" /></svg>;
+  }
+  if (type === "clue") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><circle {...common} cx="28" cy="28" r="15" /><path {...common} d="m39 39 13 13M23 28h10M28 23v10" /></svg>;
+  }
+  if (type === "tool") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="M44 10a13 13 0 0 0-15 17L12 44a6 6 0 0 0 8 8l17-17a13 13 0 0 0 17-15l-9 9-10-10 9-9Z" /></svg>;
+  }
+  if (type === "escape") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="M18 9h26v46H18V9Z" /><path {...common} d="M44 32h12M50 26l6 6-6 6M36 32h.1" /></svg>;
+  }
+  if (type === "memory") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="M8 32s9-15 24-15 24 15 24 15-9 15-24 15S8 32 8 32Z" /><circle {...common} cx="32" cy="32" r="7" /><path {...common} d="M32 9v5M18 14l3 5M46 14l-3 5" /></svg>;
+  }
+  if (type === "supply") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="M12 22 32 11l20 11v21L32 54 12 43V22Z" /><path {...common} d="M12 22 32 33l20-11M32 33v21M22 17l20 11" /></svg>;
+  }
+  if (type === "attack") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="m48 8 8 8-30 30-10 2 2-10L48 8Z" /><path {...common} d="m38 18 8 8M16 48l-8 8" /></svg>;
+  }
+  if (type === "material") {
+    return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="m32 7 16 18-16 32-16-32L32 7Z" /><path {...common} d="M16 25h32M32 7v50M23 25l9 32 9-32" /></svg>;
+  }
+  return <svg viewBox="0 0 64 64" aria-hidden="true"><path {...common} d="M32 7 52 19v26L32 57 12 45V19L32 7Z" /><path {...common} d="M32 7v18M12 19l20 12 20-12M32 31v26" /><path {...common} d="m24 20 8-5 8 5" /></svg>;
+}
+
 function RiftCard({
   item,
   revealed,
   large,
   onReveal,
+  onInspect,
 }: {
   item: RiftPullResult;
   revealed: boolean;
   large?: boolean;
   onReveal: (pullId: string) => void;
+  onInspect: (item: RiftPullResult) => void;
 }) {
   const stars = Array.from({ length: riftRarityRank(item.rarity) });
+  const iconType = item.converted && item.converted_to ? "material" : riftIconType(item);
   return (
     <button
       type="button"
       className={`wenyou-rift-card wenyou-rift-card-${item.rarity} ${large ? "wenyou-rift-card-large" : ""} ${revealed ? "is-revealed" : ""}`}
-      onClick={() => onReveal(item.pullId)}
-      aria-label={`显影 ${item.name}`}
+      onClick={() => (revealed ? onInspect(item) : onReveal(item.pullId))}
+      aria-label={revealed ? `查看 ${item.name}` : `显影 ${item.name}`}
     >
       <span className="wenyou-rift-card-inner">
         <span className="wenyou-rift-card-back">
@@ -3098,16 +3247,35 @@ function RiftCard({
           <b>{item.sigil}</b>
         </span>
         <span className="wenyou-rift-card-front">
-          <span className="wenyou-rift-card-art"><b>{item.sigil}</b></span>
+          <span className="wenyou-rift-card-art">
+            <span className={`wenyou-rift-item-icon wenyou-rift-item-icon-${iconType}`}>
+              <RiftItemGlyph type={iconType} />
+            </span>
+          </span>
           <span className="wenyou-rift-card-copy">
             <em>{item.rarity} // {item.kind}</em>
             <strong>{item.name}</strong>
-            <small>{item.converted && item.converted_to ? `重复转化：${inventoryItemLabel(item.converted_to)}` : item.sealed ? `${itemDisplayDescription(item)}（阶位不足，已封印）` : itemDisplayDescription(item)}</small>
             <span>{stars.map((_, index) => <i key={index} />)}</span>
           </span>
         </span>
       </span>
     </button>
+  );
+}
+
+function RiftItemDetail({ item, onClose }: { item: RiftPullResult; onClose: () => void }) {
+  const detail = item.converted && item.converted_to
+    ? `重复获得，已转化为：${inventoryItemLabel(item.converted_to)}。`
+    : item.sealed
+      ? `${itemDisplayDescription(item) || "道具效果待鉴定"}（阶位不足，已封印）`
+      : itemDisplayDescription(item) || "道具效果待鉴定。";
+  return (
+    <div className="wenyou-rift-detail" role="dialog" aria-modal="true">
+      <button type="button" className="wenyou-rift-detail-close" onClick={onClose} aria-label="关闭详情"><Icon name="x" /></button>
+      <span>{item.rarity} // {item.kind}</span>
+      <strong>{item.name}</strong>
+      <p>{detail}</p>
+    </div>
   );
 }
 
@@ -3152,6 +3320,58 @@ function SystemNotice({ tone, label, text }: { tone: "cyan" | "purple"; label: s
     <div className={`wenyou-notice wenyou-notice-${tone}`}>
       <strong>{label}</strong>
       <p>{text}</p>
+    </div>
+  );
+}
+
+function ForcedInstanceModal({
+  candidate,
+  loading,
+  onEnter,
+  onViewHall,
+}: {
+  candidate: InstanceCandidate;
+  loading: boolean;
+  onEnter: () => void;
+  onViewHall: () => void;
+}) {
+  const reason = candidate.reason || candidate.premise || "系统检测到未清算代价，下一次副本入口已被强制锁定。";
+  const penaltyText = candidate.penalty_type === "debt"
+    ? "债务清算"
+    : candidate.penalty_type === "pollution"
+      ? "污染清算"
+      : candidate.penalty_type === "revive"
+        ? "复活代价"
+        : candidate.penalty_type === "contract"
+          ? "契约追偿"
+          : "强制工单";
+  return (
+    <div className="wenyou-modal wenyou-forced-modal" role="dialog" aria-modal="true" aria-label="强制惩罚副本">
+      <span className="wenyou-modal-backdrop" aria-hidden="true" />
+      <div className="wenyou-forced-panel">
+        <div className="wenyou-forced-alert">
+          <span>SYSTEM</span>
+          <strong>强制接入警告</strong>
+          <b>{penaltyText}</b>
+        </div>
+        <p className="wenyou-forced-copy">
+          因多次任务失败、债务/污染/契约代价未清算，主神空间已锁定下一次副本入口。
+        </p>
+        <div className="wenyou-forced-target">
+          <span>{candidate.difficulty || "C"} 级惩罚副本</span>
+          <strong>{candidate.title}</strong>
+          <p>{reason}</p>
+        </div>
+        <div className="wenyou-forced-rules">
+          <span>不能普通刷新掉</span>
+          <span>奖励优先清算代价</span>
+          <span>失败追加债务/污染</span>
+        </div>
+        <div className="wenyou-modal-actions wenyou-forced-actions">
+          <button onClick={onViewHall} disabled={loading}>查看副本大厅</button>
+          <button onClick={onEnter} disabled={loading}>{loading ? "强制接入中..." : "进入惩罚副本"}</button>
+        </div>
+      </div>
     </div>
   );
 }
