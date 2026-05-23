@@ -1762,6 +1762,7 @@ def _forced_candidate_from_queue(item: dict) -> dict[str, Any]:
         "forced": True,
         "locked": bool(item.get("locked")),
         "queue_id": str(item.get("id") or ""),
+        "penalty_type": penalty_type,
     }
 
 
@@ -1815,7 +1816,17 @@ def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
     if not isinstance(candidate, dict) or not candidate.get("forced"):
         return
     queue_id = str(candidate.get("queue_id") or candidate.get("id") or "forced_penalty").replace("forced_", "", 1)
-    penalty_type = "revive" if queue_id == "revive_labor" else "system"
+    queue_penalty = {
+        "debt_clearance": "debt",
+        "debt_collection": "debt",
+        "pollution_clearance": "pollution",
+        "pollution_purification": "pollution",
+        "revive_labor": "revive",
+        "contract_collection": "contract",
+    }.get(queue_id, "system")
+    penalty_type = str(candidate.get("penalty_type") or queue_penalty).strip().lower()
+    if penalty_type not in {"debt", "pollution", "revive", "contract", "system"}:
+        penalty_type = queue_penalty
     for tag in candidate.get("tags") or []:
         tag_text = str(tag or "")
         if tag_text in {"debt", "pollution", "revive", "contract"}:
@@ -4900,7 +4911,7 @@ def _normalize_candidate_item(raw: Any, index: int = 0) -> Optional[dict]:
     cid = str(raw.get("id") or "").strip()
     if not cid:
         cid = f"cand-{now_beijing_iso().replace(':', '').replace('+', '-')}-{index + 1}"
-    return {
+    out = {
         "id": cid[:80],
         "title": (title or f"未命名候选 {index + 1}")[:40],
         "instance_genre": _normalize_instance_genre(raw.get("instance_genre") or raw.get("genre")),
@@ -4916,6 +4927,15 @@ def _normalize_candidate_item(raw: Any, index: int = 0) -> Optional[dict]:
         "tutorial": bool(raw.get("tutorial") or raw.get("is_tutorial") or cid == _WENYOU_TUTORIAL_INSTANCE_ID),
         "locked": bool(raw.get("locked")),
     }
+    if raw.get("forced"):
+        out["forced"] = True
+    queue_id = str(raw.get("queue_id") or "").strip()
+    if queue_id:
+        out["queue_id"] = queue_id[:80]
+    penalty_type = str(raw.get("penalty_type") or "").strip().lower()
+    if penalty_type in {"debt", "pollution", "revive", "contract", "system"}:
+        out["penalty_type"] = penalty_type
+    return out
 
 
 def _normalize_candidate_payload(raw: Any) -> list[dict]:
@@ -4988,6 +5008,22 @@ def format_candidate_expansion_prompt(candidate: Any) -> str:
 
 def _candidate_seed_block(item: dict) -> str:
     tags = "、".join(item.get("tags") or [])
+    forced_note = ""
+    if item.get("forced"):
+        penalty_labels = {
+            "debt": "债务清算",
+            "pollution": "污染清算",
+            "revive": "复活清算/临时身份",
+            "contract": "契约追偿",
+            "system": "强制清算",
+        }
+        penalty = str(item.get("penalty_type") or "system")
+        forced_note = (
+            "强制清算：是"
+            f"\n清算类型：{penalty_labels.get(penalty, '强制清算')}"
+            f"\n清算队列：{item.get('queue_id') or item.get('id') or ''}"
+        )
+    forced_lines = f"{forced_note}\n" if forced_note else ""
     return (
         f"副本名：{item.get('title') or '未命名副本'}\n"
         f"类型：{item.get('instance_genre') or '剧情解密'}\n"
@@ -4998,6 +5034,7 @@ def _candidate_seed_block(item: dict) -> str:
         f"生存钩子：{item.get('survival_hook') or ''}\n"
         f"危险方向：{item.get('risk') or ''}\n"
         f"未揭悬念：{item.get('twist') or ''}\n"
+        f"{forced_lines}"
         f"标签：{tags or '无'}\n"
         f"篇幅：{item.get('estimated_length') or '标准'}"
     )
@@ -5012,6 +5049,7 @@ def _candidate_core_prompt(item: dict) -> str:
 - 必须包含：副本内部场景、核心矛盾、玩家公开任务、隐藏悬念、危险规则方向。
 - 只写副本核心，不写长期主神空间剧情。
 - NPC 任务者只写公开态度和可见行为，不直给真实善恶；真实立场留给后端隐藏状态。
+- 如果候选写明“强制清算：是”，必须保留清算类型、身份限制、暴露后果和失败代价；不要改写成普通自愿接取副本。
 - 不要写 opening，不要写属性数值，不要替玩家行动。
 
 【候选设定】
@@ -5046,6 +5084,7 @@ def _candidate_blueprint_prompt(item: dict, core_text: str = "") -> str:
 - 额外列出：普通支线、隐藏支线、隐藏结局、威胁时钟、NPC 任务者立场边界、怪物/核心压力源简表。
 - 怪物生态只写普通怪/精英怪/Boss 或核心压力源的用途和解法；Boss 默认不可正面战胜。
 - 结算只看真实玩家角色/玩家队伍；NPC 结局只作为支线/隐藏目标证据，不自动影响评级。
+- 如果候选写明“强制清算：是”，蓝图必须列出身份边界、暴露给任务者/怪物阵营的后果，以及成功/失败如何回到后端清算；不要写成普通任务者竞赛。
 - 只给 GM/后端内部短纲，不要整段剧透给玩家。
 
 【已确定核心设定】
@@ -5063,6 +5102,7 @@ def _candidate_opening_prompt(item: dict, core_text: str = "") -> str:
 - 只写玩家可见开场，不剧透隐藏支线、隐藏结局、NPC 真实立场或威胁时钟精确值。
 - 未经玩家看见名牌、听见自我介绍或主神点名前，不要直接写 NPC 姓名；用“戴眼镜的年轻男性”“穿冲锋衣的短发女性”等可见特征称呼。
 - 不要输出任务者名单、线索列表、规则档案或情报卡。普通环境描写不是线索。
+- 如果候选写明“强制清算：是”，开场要让玩家感到入口被锁定/被迫接入，但不要把隐藏规则、清算队列或后端状态直接念成说明书。
 - 不要替玩家做行动决定。
 
 【已确定核心设定】
@@ -6048,6 +6088,9 @@ def cmd_story(user_id: int, keywords: Optional[str]) -> str:
 def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
     """处理大厅候选扩展开局；完整副本框架由并行 DS 子任务生成。"""
     uid = int(user_id)
+    item = _normalize_candidate_item(candidate, 0)
+    if not item:
+        return "文游：候选设定为空，无法扩展。"
     existing = r2_store.get_wenyou_session(uid)
 
     with _PENDING_LOCK:
@@ -6061,7 +6104,7 @@ def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
         with _PENDING_LOCK:
             _PENDING_STORY_CONFIRM.pop(uid, None)
 
-    fw, err = generate_framework_from_candidate(candidate)
+    fw, err = generate_framework_from_candidate(item)
     if err or not fw:
         return err or "文游：候选扩展开局失败。"
 
