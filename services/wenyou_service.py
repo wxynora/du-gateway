@@ -1696,21 +1696,34 @@ def _refresh_forced_instance_queue(wallet: dict, session: Optional[dict] = None)
         else:
             break
     if debts >= 3000:
-        by_id["debt_clearance"] = _forced_queue_item("debt_clearance", "债务清算：主神临时工单", _higher_rank(rank, "B"), "债务达到 3000，必须进入高压清算副本。", "debt", True)
+        by_id["debt_clearance"] = _forced_queue_item("debt_clearance", "债务清算：红门夜班", _higher_rank(rank, "B"), "债务达到 3000，系统已锁定下一次清算副本。", "debt", True)
     elif debts >= 1000:
-        by_id["debt_collection"] = _forced_queue_item("debt_collection", "债务催收：午夜客服", _higher_rank(rank, "C"), "债务达到 1000，候选池插入催收副本。", "debt", False)
+        by_id["debt_collection"] = _forced_queue_item("debt_collection", "债务催收：午夜客服", _higher_rank(rank, "C"), "债务达到 1000，系统将在候选池插入催收副本。", "debt", False)
     if pollution >= 90:
-        by_id["pollution_clearance"] = _forced_queue_item("pollution_clearance", "污染清算：白室净化班", _higher_rank(rank, "B"), "污染达到 90，必须进入污染清算副本。", "pollution", True)
+        by_id["pollution_clearance"] = _forced_queue_item("pollution_clearance", "污染清算：白室净化班", _higher_rank(rank, "B"), "污染达到 90，系统已强制安排净化副本。", "pollution", True)
     elif pollution >= 60:
-        by_id["pollution_purification"] = _forced_queue_item("pollution_purification", "污染净化：异常门诊夜班", _higher_rank(rank, "C"), "污染达到 60，候选池插入净化副本。", "pollution", False)
+        by_id["pollution_purification"] = _forced_queue_item("pollution_purification", "污染净化：异常门诊夜班", _higher_rank(rank, "C"), "污染达到 60，系统将在候选池插入净化副本。", "pollution", False)
     if recent_deaths >= 2:
-        by_id["revive_labor"] = _forced_queue_item("revive_labor", "复活代价：替系统打工", _higher_rank(rank, "C"), "连续 2 次死亡失败，需以 NPC 身份偿还复活代价。", "revive", True)
+        by_id["revive_labor"] = _forced_queue_item("revive_labor", "复活清算：临时身份", _higher_rank(rank, "C"), "连续 2 次死亡失败，需以副本 NPC 身份完成复活代价清算。", "revive", True)
     if wallet.get("contract_debt"):
-        by_id["contract_collection"] = _forced_queue_item("contract_collection", "契约追偿：坏账处理处", _higher_rank(rank, "B"), "存在未偿还的 S 级能力或契约代价。", "contract", True)
+        by_id["contract_collection"] = _forced_queue_item("contract_collection", "契约追偿：坏账处理处", _higher_rank(rank, "B"), "存在未偿还的 S 级能力或契约代价，系统已发起追偿。", "contract", True)
     priority = {"debt_clearance": 0, "pollution_clearance": 1, "revive_labor": 2, "contract_collection": 3, "debt_collection": 4, "pollution_purification": 5}
     queue = sorted(by_id.values(), key=lambda x: (priority.get(str(x.get("id") or ""), 99), str(x.get("created_at") or "")))[:8]
-    old_ids = [(x.get("id"), x.get("locked")) for x in existing]
-    new_ids = [(x.get("id"), x.get("locked")) for x in queue]
+    def _queue_fingerprint(items: list[dict]) -> list[tuple[Any, ...]]:
+        return [
+            (
+                x.get("id"),
+                x.get("locked"),
+                x.get("title"),
+                x.get("difficulty"),
+                x.get("reason"),
+                x.get("penalty_type"),
+            )
+            for x in items
+        ]
+
+    old_ids = _queue_fingerprint(existing)
+    new_ids = _queue_fingerprint(queue)
     wallet["forced_instance_queue"] = queue
     return old_ids != new_ids
 
@@ -1719,32 +1732,32 @@ def _forced_candidate_from_queue(item: dict) -> dict[str, Any]:
     penalty_type = str(item.get("penalty_type") or "system")
     if penalty_type == "debt":
         genre = "潜伏调查"
-        core_task = "以系统临时工身份完成催收工单，通关收益优先偿还债务。"
-        hook = "不能暴露自己是任务者或复活债务人；暴露会追加追偿。"
+        core_task = "以临时清算员身份进入副本，完成指定清算目标；通关收益优先抵债。"
+        hook = "不能暴露自己是外来任务者或清算员；暴露会追加追偿。"
     elif penalty_type == "pollution":
         genre = "生存撤离"
         core_task = "在净化流程失控前找到污染源并完成剥离。"
         hook = "污染会影响判断，精确污染值隐藏，只给阶段提示。"
     elif penalty_type == "revive":
         genre = "潜伏调查"
-        core_task = "被临时塞进其他副本扮演 NPC，完成主神派发的工单。"
-        hook = "必须维持 NPC 身份，不得直接泄露副本真相或系统身份。"
+        core_task = "以副本 NPC 身份进入其他副本，完成复活代价清算。"
+        hook = "必须维持 NPC 身份，不得直接泄露副本真相、任务者身份或系统身份。"
     else:
         genre = "对抗"
         core_task = "偿还契约追偿，完成系统指定的等价代价。"
         hook = "契约代价未清前，高阶能力可能被封印或追猎。"
     return {
         "id": "forced_" + str(item.get("id") or "penalty"),
-        "title": str(item.get("title") or "强制惩罚副本"),
+        "title": str(item.get("title") or "强制清算副本"),
         "instance_genre": genre,
         "difficulty": _normalize_difficulty(item.get("difficulty") or "C"),
-        "tagline": "主神空间强制插队，不能普通刷新掉。",
+        "tagline": "系统已锁定下一次副本入口。",
         "premise": str(item.get("reason") or "系统检测到未清算代价。"),
         "core_task": core_task,
         "survival_hook": hook,
         "risk": "失败会追加债务、污染、封印或追猎状态。",
-        "twist": "本局不是普通任务者身份，行动边界由系统工单约束。",
-        "tags": ["强制", "惩罚副本", "系统打工" if penalty_type == "revive" else penalty_type],
+        "twist": "本局不是普通任务者身份；身份、行动边界和暴露后果由系统清算规则限制。",
+        "tags": ["强制", "清算副本", "临时身份" if penalty_type == "revive" else penalty_type],
         "estimated_length": "短中篇",
         "forced": True,
         "locked": bool(item.get("locked")),
@@ -1802,21 +1815,21 @@ def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
     if not isinstance(candidate, dict) or not candidate.get("forced"):
         return
     queue_id = str(candidate.get("queue_id") or candidate.get("id") or "forced_penalty").replace("forced_", "", 1)
-    penalty_type = "system"
+    penalty_type = "revive" if queue_id == "revive_labor" else "system"
     for tag in candidate.get("tags") or []:
         tag_text = str(tag or "")
         if tag_text in {"debt", "pollution", "revive", "contract"}:
             penalty_type = tag_text
             break
-        if "系统打工" in tag_text:
+        if "临时身份" in tag_text:
             penalty_type = "revive"
-    work_order = str(candidate.get("core_task") or "完成系统指定工单并存活。")
+    work_order = str(candidate.get("core_task") or "完成系统指定任务并存活。")
     forced = {
         "queue_id": queue_id,
         "penalty_type": penalty_type,
         "locked": bool(candidate.get("locked")),
         "mode": "npc_labor" if penalty_type == "revive" else "penalty_instance",
-        "disguised_identity": "系统临时 NPC" if penalty_type == "revive" else "异常清算任务者",
+        "disguised_identity": "临时副本 NPC" if penalty_type == "revive" else "异常清算任务者",
         "work_order": _compact_text(work_order, 220),
         "forbidden_disclosures": ["主神系统身份", "复活债务来源", "副本结局/隐藏规则"],
         "exposure_to_taskers": 0,
@@ -1830,7 +1843,7 @@ def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
     rules["forced_instance"] = copy.deepcopy(forced)
     runtime["rules_state"] = rules
     public = runtime.get("public_state") if isinstance(runtime.get("public_state"), dict) else {}
-    public["forced_notice"] = "强制工单已接入：按当前身份完成系统任务，避免暴露。"
+    public["forced_notice"] = "强制清算副本已接入：维持当前身份，完成系统目标。"
     runtime["public_state"] = public
     session["runtime_state"] = runtime
 
@@ -2320,7 +2333,7 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
             outcome["pollution_reduced"] = reduction
             outcome["notes"].append(f"污染清算降低污染 {reduction}")
         elif penalty_type == "revive":
-            outcome["notes"].append("复活代价工单完成，NPC 身份解除")
+            outcome["notes"].append("复活代价清算完成，NPC 身份解除")
         elif penalty_type == "contract":
             wallet["contract_debt"] = False
             outcome["notes"].append("契约追偿完成")
@@ -2332,7 +2345,7 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
             debt_delta = 120 * rank_scale + exposure * 50
             wallet["debts"] = max(0, int(wallet.get("debts") or 0) + debt_delta)
             outcome["debt_added"] = debt_delta
-            outcome["notes"].append(f"工单失败追加债务 {debt_delta}")
+            outcome["notes"].append(f"清算失败追加债务 {debt_delta}")
         if penalty_type in {"pollution", "revive"}:
             st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
             pollution_delta = 4 * rank_scale + exposure * 2
@@ -2343,7 +2356,7 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
                     _add_condition_unique(player, "污染")
             session["stats"] = st
             outcome["pollution_added"] = pollution_delta
-            outcome["notes"].append(f"工单失败追加污染 {pollution_delta}")
+            outcome["notes"].append(f"清算失败追加污染 {pollution_delta}")
         forced["result"] = "failed"
     queue_id = str(forced.get("queue_id") or "")
     queue = []

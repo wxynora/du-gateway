@@ -3335,42 +3335,60 @@ function ForcedInstanceModal({
   onEnter: () => void;
   onViewHall: () => void;
 }) {
-  const reason = candidate.reason || candidate.premise || "系统检测到未清算代价，下一次副本入口已被强制锁定。";
+  const reason = candidate.reason || candidate.premise || "系统检测到未清算代价，下一次副本入口已被锁定。";
   const penaltyText = candidate.penalty_type === "debt"
     ? "债务清算"
     : candidate.penalty_type === "pollution"
-      ? "污染清算"
+      ? "污染净化"
       : candidate.penalty_type === "revive"
-        ? "复活代价"
+        ? "复活清算"
         : candidate.penalty_type === "contract"
           ? "契约追偿"
-          : "强制工单";
+          : "强制清算";
+  const streamLog = [
+    "0XFF001 CLEARANCE_REQUIRED",
+    "0XFF002 DEBT_PROTOCOL_LOCKED",
+    "0XFF003 SANITY_DRIFT_WARN",
+    "0XFF004 IDENTITY_MASK_ACTIVE",
+    "0XFF005 REWARD_ROUTE_OVRD",
+    "0XFF006 ACCESS_DENIED",
+    "0XFF007 INSTANCE_LOCKED",
+    "0XFF008 CLEARANCE_QUEUE_SYNC",
+    "0XFF009 CONTRACT_CHECK_FAIL",
+    "0XFF010 RETURN_GATE_CLOSED",
+  ].join("\n");
   return (
-    <div className="wenyou-modal wenyou-forced-modal" role="dialog" aria-modal="true" aria-label="强制惩罚副本">
+    <div className="wenyou-modal wenyou-forced-modal" role="dialog" aria-modal="true" aria-label="强制清算副本">
       <span className="wenyou-modal-backdrop" aria-hidden="true" />
       <div className="wenyou-forced-panel">
-        <div className="wenyou-forced-alert">
-          <span>SYSTEM</span>
-          <strong>强制接入警告</strong>
-          <b>{penaltyText}</b>
+        <div className="wenyou-forced-stream" aria-hidden="true">
+          <pre>{streamLog}{`\n${streamLog}\n${streamLog}`}</pre>
         </div>
-        <p className="wenyou-forced-copy">
-          因多次任务失败、债务/污染/契约代价未清算，主神空间已锁定下一次副本入口。
-        </p>
-        <div className="wenyou-forced-target">
-          <span>{candidate.difficulty || "C"} 级惩罚副本</span>
-          <strong>{candidate.title}</strong>
-          <p>{reason}</p>
+        <span className="wenyou-forced-scanline" aria-hidden="true" />
+        <div className="wenyou-forced-content">
+          <div className="wenyou-forced-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+              <path d="M12 9v4" />
+              <path d="M12 17h.01" />
+            </svg>
+          </div>
+          <h2>SYSTEM CRITICAL</h2>
+          <p>
+            {penaltyText} / {candidate.difficulty || "C"} 级：{candidate.title} 已锁定。{reason}
+          </p>
+          <div className="wenyou-forced-actions">
+            <button onClick={onEnter} disabled={loading}>{loading ? "接入中" : "立即接入"}</button>
+            <button onClick={onViewHall} disabled={loading}>查看大厅</button>
+          </div>
         </div>
-        <div className="wenyou-forced-rules">
-          <span>不能普通刷新掉</span>
-          <span>奖励优先清算代价</span>
-          <span>失败追加债务/污染</span>
-        </div>
-        <div className="wenyou-modal-actions wenyou-forced-actions">
-          <button onClick={onViewHall} disabled={loading}>查看副本大厅</button>
-          <button onClick={onEnter} disabled={loading}>{loading ? "强制接入中..." : "进入惩罚副本"}</button>
-        </div>
+        <span className="wenyou-forced-corner wenyou-forced-corner-tl" aria-hidden="true" />
+        <span className="wenyou-forced-corner wenyou-forced-corner-tr" aria-hidden="true" />
+        <span className="wenyou-forced-corner wenyou-forced-corner-bl" aria-hidden="true" />
+        <span className="wenyou-forced-corner wenyou-forced-corner-br" aria-hidden="true" />
+        <button className="wenyou-forced-close" onClick={onViewHall} disabled={loading} aria-label="关闭强制清算提示">
+          <Icon name="x" />
+        </button>
       </div>
     </div>
   );
