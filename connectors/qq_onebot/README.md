@@ -19,6 +19,7 @@ cp .env.example .env
 - `GATEWAY_BASE_URL`
 - `GATEWAY_CHAT_PATH`
 - 根目录 `.env` 里的 `TELEGRAM_PROACTIVE_TARGET_USER_ID`
+- `QQ_BOT_USER_ID`：机器人自己的 QQ 号，默认 `3195570280`
 - `QQ_OWNER_USER_ID`：本人 QQ 号，默认 `1336091712`
 - `QQ_OWNER_DISPLAY_NAME`：本人展示名，默认 `辛玥`
 

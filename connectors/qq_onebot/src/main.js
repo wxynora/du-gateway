@@ -398,6 +398,8 @@ const recentGroupMessages = new Map();
 const inboundDedupeWindowMs = Math.max(2000, envInt("QQ_INBOUND_DEDUPE_WINDOW_MS", 12000));
 const groupHistoryContextLimit = Math.max(1, envInt("QQ_GROUP_CONTEXT_MESSAGES", 10));
 const groupHistoryKeepLimit = Math.max(groupHistoryContextLimit, envInt("QQ_GROUP_HISTORY_KEEP_MESSAGES", 50));
+const configuredBotUserId = Number(envStr("QQ_BOT_USER_ID", "3195570280") || 0);
+let resolvedBotUserId = configuredBotUserId;
 const ownerQqUserId = Number(envStr("QQ_OWNER_USER_ID", "1336091712") || 0);
 const ownerQqDisplayName = envStr("QQ_OWNER_DISPLAY_NAME", "辛玥");
 
@@ -522,8 +524,31 @@ function isGroupMessageEvent(j) {
   );
 }
 
+function eventSelfId(j) {
+  return String(j?.self_id || resolvedBotUserId || configuredBotUserId || "").trim();
+}
+
+async function resolveBotUserId() {
+  if (resolvedBotUserId) return resolvedBotUserId;
+  try {
+    const data = await onebotApi("get_login_info", {});
+    const userId = Number(data?.data?.user_id || data?.user_id || 0);
+    if (userId) {
+      resolvedBotUserId = userId;
+      console.log(`[qq-onebot] resolved bot user_id=${userId}`);
+      return userId;
+    }
+    console.log("[qq-onebot] get_login_info 未返回 user_id；群聊 @ 判断将依赖事件 self_id 或 QQ_BOT_USER_ID");
+  } catch (e) {
+    console.log(`[qq-onebot] get_login_info 失败；群聊 @ 判断将依赖事件 self_id 或 QQ_BOT_USER_ID：${String(e?.message || e)}`);
+  }
+  return 0;
+}
+
 function isSelfMessage(j) {
-  return j?.sub_type === "self" || Number(j?.sender?.user_id || 0) === Number(j?.self_id || 0);
+  const selfId = Number(eventSelfId(j) || 0);
+  const senderId = Number(j?.sender?.user_id || j?.user_id || 0);
+  return j?.sub_type === "self" || (!!selfId && senderId === selfId);
 }
 
 function senderLabel(j) {
@@ -571,7 +596,7 @@ function rememberGroupMessage(j, content) {
 }
 
 function messageMentionsSelf(j) {
-  const selfId = String(j?.self_id || "").trim();
+  const selfId = eventSelfId(j);
   if (!selfId) return false;
   const msg = j?.message;
   if (Array.isArray(msg)) {
@@ -586,8 +611,27 @@ function messageMentionsSelf(j) {
   return raw.includes(`[CQ:at,qq=${selfId}]`);
 }
 
+function groupAtTargets(j) {
+  const out = [];
+  const msg = j?.message;
+  if (Array.isArray(msg)) {
+    for (const seg of msg) {
+      if (!seg || typeof seg !== "object") continue;
+      if (String(seg.type || "") !== "at") continue;
+      const qq = String(seg.data?.qq || "").trim();
+      if (qq) out.push(qq);
+    }
+  }
+  const raw = String(j?.raw_message || "");
+  for (const m of raw.matchAll(/\[CQ:at,qq=([^\]]+)\]/g)) {
+    const qq = String(m?.[1] || "").trim();
+    if (qq && !out.includes(qq)) out.push(qq);
+  }
+  return out;
+}
+
 function contentWithoutSelfAt(j) {
-  const selfId = String(j?.self_id || "").trim();
+  const selfId = eventSelfId(j);
   const msg = j?.message;
   if (Array.isArray(msg)) {
     const filtered = msg.filter((seg) => {
@@ -657,7 +701,13 @@ async function handleGroupEvent(j) {
   const content = contentWithoutSelfAt(j);
   const previousRows = getGroupHistory(groupId).slice(-groupHistoryContextLimit);
   rememberGroupMessage(j, content || extractUserContentFromMessage(j?.message || j?.raw_message || ""));
-  if (!messageMentionsSelf(j)) return;
+  if (!messageMentionsSelf(j)) {
+    const atTargets = groupAtTargets(j);
+    if (atTargets.length) {
+      console.log(`[qq-onebot] 群聊 @ 未命中本机器人 group=${groupId} self_id=${eventSelfId(j) || "unknown"} at=${atTargets.join(",")}`);
+    }
+    return;
+  }
   const now = Date.now();
   const scopeKey = `g:${groupId}`;
   const fp = `${Number(j?.user_id || 0)}|${userContentPreview(content, 200)}|${String(j?.raw_message || "")}`.slice(0, 800);
@@ -736,6 +786,7 @@ function readJsonBody(req) {
 }
 
 async function main() {
+  await resolveBotUserId();
   const port = Math.max(1, envInt("QQ_ONEBOT_PORT", 8092));
   const server = http.createServer(async (req, res) => {
     const url = String(req.url || "");
