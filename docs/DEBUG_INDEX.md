@@ -42,6 +42,29 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送 |
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js` | 自用 Claude 反代、thinking/cache/tool 格式转换 |
 
+## 主动唤醒入口风格抖动
+
+现象：
+- 随机唤醒 / 主动硬触发一会儿按 TG 风格、一会儿按 QQ 风格生成。
+- 共享 `tg_...` 窗口里，QQ 可见消息和 TG 窗口归档容易被混在一起看。
+
+入口：
+- 随机主动：`services/telegram_proactive.py::_ask_du_should_contact`
+- 主动硬触发：`services/proactive_trigger_engine.py::tick_proactive_triggers`
+- 后端事件生成/投递：`services/conversation_followup.py::_send_wakeup_event`
+- 入口风格注入：`services/entry_style_prompt.py`、`services/chat_prompt_injections.py::inject_entry_style_system`
+
+当前状态：
+- 主动唤醒生成已固定 QQ 优先，避免 `【入口风格：TG】` / `【入口风格：QQ】` 在同类唤醒里来回跳。
+- 正常 TG/QQ 入站聊天和延迟续话仍按各自真实入口风格处理。
+
+常查：
+
+```bash
+rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Channel|入口风格" services/telegram_proactive.py services/conversation_followup.py services/entry_style_prompt.py services/chat_prompt_injections.py
+.venv/bin/python -m py_compile services/telegram_proactive.py services/conversation_followup.py
+```
+
 ## 聊天失败 / 上游不可用
 
 现象：

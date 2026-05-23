@@ -11,7 +11,9 @@ from config import (
     QQ_PROACTIVE_PUSH_TOKEN,
     QQ_PROACTIVE_PUSH_URL,
     TELEGRAM_CHAT_PATH,
+    TELEGRAM_BOT_TOKEN,
     TELEGRAM_GATEWAY_URL,
+    TELEGRAM_PROACTIVE_TARGET_USER_ID,
     WECHAT_PROACTIVE_PUSH_TOKEN,
     WECHAT_PROACTIVE_PUSH_URL,
 )
@@ -500,6 +502,17 @@ def _choice_dialog_delivery_channels(preferred_channel: str, available_channels:
     return ordered
 
 
+def _stable_proactive_wakeup_channel(default: str = "") -> str:
+    """主动硬触发固定用一个入口生成，避免入口风格 system 在 TG/QQ 间抖动。"""
+    if QQ_PROACTIVE_PUSH_URL:
+        return "qq"
+    if WECHAT_PROACTIVE_PUSH_URL:
+        return "wechat"
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_PROACTIVE_TARGET_USER_ID:
+        return "tg"
+    return _normalize_reply_channel(default, default="sumitalk", allow_tg=True)
+
+
 def _dispatch_choice_dialog_reply(channel: str, target: str, text: str, created_at: str | None = None) -> bool:
     ch = _normalize_reply_channel(channel, default="", allow_tg=True)
     if ch in {"wechat", "qq"}:
@@ -519,6 +532,7 @@ def _send_wakeup_event(
     extra_instruction: str = "",
     image_url: str = "",
     archive: bool = True,
+    stable_proactive_channel: bool = False,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -536,6 +550,12 @@ def _send_wakeup_event(
     if not prompt:
         return {"ok": False, "error": "empty_event"}
     preferred_channel, preferred_target, preferred_meta = _choice_dialog_delivery_preference(target)
+    if stable_proactive_channel:
+        preferred_channel = _stable_proactive_wakeup_channel(preferred_channel)
+        if preferred_channel == "tg" and not preferred_target and context_window_id.startswith("tg_"):
+            preferred_target = context_window_id[3:]
+        elif preferred_channel == "sumitalk" and not preferred_target:
+            preferred_target = str(target or "").strip()
     generation_channel = preferred_channel or "sumitalk"
     content = prompt
     extra = str(extra_instruction or "").strip()
@@ -675,7 +695,14 @@ def send_screen_check_wakeup(window_id: str, target: str, event_text: str, image
 
 def send_proactive_trigger_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
     """立即让渡基于后端主动触发事实生成回应。event_text 只放事实，不追加回应指令。"""
-    return _send_wakeup_event(window_id=window_id, target=target, event_text=event_text, created_at=created_at, archive=True)
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        archive=True,
+        stable_proactive_channel=True,
+    )
 
 
 def tick_conversation_followups() -> dict:

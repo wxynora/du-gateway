@@ -40,6 +40,7 @@ from services.telegram_bot import (
     build_telegram_style_system,
     send_rich_message,
 )
+from services.entry_style_prompt import entry_style_for_channel
 from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversation_followups
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
 
@@ -535,6 +536,15 @@ def _available_channels() -> list[str]:
     return channels
 
 
+def _preferred_proactive_channel(channels: list[str]) -> str:
+    """主动唤醒固定用一个入口生成，避免 TG/QQ 风格 prompt 来回跳。"""
+    available = [str(ch or "").strip().lower() for ch in (channels or []) if str(ch or "").strip()]
+    for ch in ("qq", "wechat", "tg"):
+        if ch in available:
+            return ch
+    return available[0] if available else ""
+
+
 def _available_schedule_channels() -> list[str]:
     """闹钟/日历提醒投递入口：QQ 优先，微信/TG 兜底。"""
     channels = ["qq"]
@@ -591,7 +601,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     no_token = TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT"
     channels = _available_channels()
-    default_channel = channels[0] if channels else ""
+    default_channel = _preferred_proactive_channel(channels)
     channel_desc_map = {
         "wechat": "微信（国内直连，更稳定）",
         "qq": "QQ",
@@ -600,14 +610,12 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     channel_lines = "\n".join(
         f'  - "{ch}"：{channel_desc_map.get(ch, ch)}' for ch in channels
     )
-    if len(channels) > 1:
+    if channels and default_channel:
         channel_field_desc = (
-            f'- channel：字符串，从以下可用入口中选一个：{", ".join(repr(c) for c in channels)}。\n'
+            f'- channel：固定填 "{default_channel}"。本轮主动唤醒固定使用这个入口生成和发送，'
+            "不要在其它入口之间切换。\n"
             f"{channel_lines}\n"
-            f'  根据当前情况自行判断用哪个；如不确定就用 "{default_channel}"。\n'
         )
-    elif channels:
-        channel_field_desc = f'- channel：固定填 "{default_channel}"。\n'
     else:
         channel_field_desc = '- channel：当前没有可用发送入口；不要选择 "send_message"。\n'
     now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso())
@@ -630,7 +638,8 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         )
         + f"若你坚持旧习惯，也可以只输出一行 {no_token} 表示不联系（不推荐）。\n"
     )
-    sys_content = build_telegram_style_system()
+    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
+    sys_content = (sys_content or build_telegram_style_system()).strip()
     try:
         mem = _format_proactive_decision_memory_for_system()
         if mem:
@@ -655,6 +664,8 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": window_id,
+        "X-Reply-Channel": default_channel,
+        "X-Reply-Target": str(TELEGRAM_PROACTIVE_TARGET_USER_ID or "").strip(),
         "X-Force-Last4": "1",
         "X-DU-GATEWAY-WAKEUP": "1",
         "X-DU-PROACTIVE-DECISION": "1",
@@ -690,7 +701,10 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
         if not text:
             return ProactiveDecision(False, "", "empty_reply", action="empty", du_reason="模型空回复")
-        return _parse_proactive_model_reply(text, no_token, default_channel=default_channel, channels=channels)
+        decision = _parse_proactive_model_reply(text, no_token, default_channel=default_channel, channels=channels)
+        if decision.should_send and default_channel:
+            decision.channel = default_channel
+        return decision
     except Exception as e:
         return ProactiveDecision(False, "", f"exception={e}", action="error", du_reason=str(e)[:200])
 
