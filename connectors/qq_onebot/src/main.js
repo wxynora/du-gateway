@@ -396,8 +396,10 @@ const dedupeMax = 2000;
 const recentInboundByUser = new Map();
 const recentGroupMessages = new Map();
 const inboundDedupeWindowMs = Math.max(2000, envInt("QQ_INBOUND_DEDUPE_WINDOW_MS", 12000));
-const groupHistoryContextLimit = Math.max(1, envInt("QQ_GROUP_CONTEXT_MESSAGES", 5));
+const groupHistoryContextLimit = Math.max(1, envInt("QQ_GROUP_CONTEXT_MESSAGES", 10));
 const groupHistoryKeepLimit = Math.max(groupHistoryContextLimit, envInt("QQ_GROUP_HISTORY_KEEP_MESSAGES", 50));
+const ownerQqUserId = Number(envStr("QQ_OWNER_USER_ID", "1336091712") || 0);
+const ownerQqDisplayName = envStr("QQ_OWNER_DISPLAY_NAME", "辛玥");
 
 async function sendQqPrivateRichReply(userId, reply, options = {}) {
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
@@ -529,8 +531,16 @@ function senderLabel(j) {
   const sender = j?.sender && typeof j.sender === "object" ? j.sender : {};
   const card = String(sender.card || "").trim();
   const nickname = String(sender.nickname || "").trim();
-  const name = card || nickname || (userId ? `QQ${userId}` : "群成员");
-  return { userId, name };
+  const rawName = card || nickname || (userId ? `QQ${userId}` : "群成员");
+  const isOwner = !!ownerQqUserId && userId === ownerQqUserId;
+  const name = isOwner ? ownerQqDisplayName : rawName;
+  return { userId, name, rawName, isOwner };
+}
+
+function groupSpeakerPrefix(name, userId, isOwner = false) {
+  const id = Number(userId || 0);
+  const base = `${String(name || "群成员").trim() || "群成员"}${id ? `(${id})` : ""}`;
+  return isOwner ? `${base}[当前用户/辛玥]` : base;
 }
 
 function contentTextForGroupContext(content, limit = 300) {
@@ -545,12 +555,13 @@ function getGroupHistory(groupId) {
 function rememberGroupMessage(j, content) {
   const groupId = Number(j?.group_id || 0);
   if (!groupId) return;
-  const { userId, name } = senderLabel(j);
+  const { userId, name, isOwner } = senderLabel(j);
   const text = contentTextForGroupContext(content);
   const rows = getGroupHistory(groupId);
   rows.push({
     userId,
     name,
+    isOwner,
     text,
     messageId: String(j?.message_id || ""),
     ts: Number(j?.time || 0),
@@ -593,24 +604,24 @@ function contentWithoutSelfAt(j) {
 
 function buildGroupGatewayContent(j, previousRows, currentContent) {
   const groupId = Number(j?.group_id || 0);
-  const { userId, name } = senderLabel(j);
+  const { userId, name, isOwner } = senderLabel(j);
   const lines = (previousRows || []).slice(-groupHistoryContextLimit).map((row) => {
-    const rowName = String(row?.name || "群成员").trim();
-    const rowUserId = Number(row?.userId || 0);
-    const prefix = rowUserId ? `${rowName}(${rowUserId})` : rowName;
+    const prefix = groupSpeakerPrefix(row?.name || "群成员", row?.userId, !!row?.isOwner);
     return `${prefix}：${String(row?.text || "").trim() || "[非文本消息]"}`;
   });
   const currentText = contentTextForGroupContext(currentContent);
+  const currentPrefix = groupSpeakerPrefix(name, userId, isOwner);
   const headerText = [
     "【QQ 群聊】",
     `群号：${groupId}`,
-    `当前发言人：${name}${userId ? `(${userId})` : ""}`,
+    ownerQqUserId ? `身份标记：QQ ${ownerQqUserId} 是辛玥/当前用户；其他人是群友。` : "",
+    `当前发言人：${currentPrefix}`,
     "你只有在被 @ 时才回复。下面是本次 @ 前的最近群聊消息，用作公开上下文：",
     lines.length ? lines.join("\n") : "（前面没有可用群聊消息）",
     "",
     "当前 @ 你的消息：",
-    `${name}${userId ? `(${userId})` : ""}：${currentText}`,
-  ].join("\n");
+    `${currentPrefix}：${currentText}`,
+  ].filter(Boolean).join("\n");
   const parts = normalizeUserContentToParts(currentContent);
   const imageParts = parts.filter((p) => p?.type === "image_url");
   if (!imageParts.length) return headerText;
