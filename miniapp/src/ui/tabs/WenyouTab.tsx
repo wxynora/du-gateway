@@ -449,7 +449,7 @@ type RiftPullResult = RiftItem & {
 
 const TYPE_FILTERS = ["全部类型", "规则怪谈", "剧情解密", "大逃杀", "对抗", "生存撤离", "潜伏调查", "限时任务"];
 const DIFFICULTY_FILTERS = ["全部难度", "D", "C", "B", "A", "S"];
-const ARCHIVE_FILTERS = ["全部", "已完成", "死亡", "放弃", "进行中"];
+const ARCHIVE_FILTERS = ["全部", "已完成", "死亡", "进行中"];
 const PROFILE_TABS: WenyouProfileTab[] = ["副本存档", "背包", "角色面板"];
 type QuickAction = {
   label: string;
@@ -1507,7 +1507,6 @@ export function WenyouTab({
   const gamePlayerAbilities = gameCoreAbility?.id || gameCoreAbility?.name
     ? [{ id: String(gameCoreAbility.id || gameCoreAbility.name || ""), name: String(gameCoreAbility.name || gameCoreAbility.id || "核心能力") }]
     : [];
-  const homePhase = hasActiveRun ? (sessionPanel?.phase_label || status.session?.phase_label || "副本中") : "主神空间待机";
   const hasVisibleEncounter = (gamePublicState.visible_monsters || []).length > 0;
   const quickActions = useMemo(
     () => hasVisibleEncounter ? [...BASE_QUICK_ACTIONS, ...ENCOUNTER_QUICK_ACTIONS] : BASE_QUICK_ACTIONS,
@@ -1537,14 +1536,6 @@ export function WenyouTab({
   }, [musicMode]);
   const hubRank = String(homePlayer.rank || "E");
   const hubLevel = Number(homePlayer.level ?? 1);
-  const hubPointSignal = Math.max(8, Math.min(100, Math.round((hubPoints / 2000) * 100)));
-  const hubRankSignal = ({ E: 18, D: 30, C: 46, B: 64, A: 82, S: 100 } as Record<string, number>)[hubRank] || 18;
-  const hubStatusLabel = statusLoading
-    ? "同步中"
-    : hasActiveRun
-      ? (homePhase || "副本中")
-      : "待机";
-  const hubStatusSignal = statusLoading ? 32 : hasActiveRun ? 88 : 56;
   const hubMissionCta = hasActiveRun ? "继续副本" : "选择副本";
   const hubMissionSub = hasActiveRun ? "继续当前副本" : "可接入副本";
   const hubMissionDetail = hasActiveRun
@@ -2322,41 +2313,16 @@ export function WenyouTab({
           </div>
 
           <header className="wenyou-home-hud" aria-label="主神空间状态">
-            <div className="wenyou-home-hud-row">
-              <div className="wenyou-home-signal wenyou-home-signal-wide">
-                <div>
-                  <span>主神积分 / PTS</span>
-                  <strong>{shopLoading ? "SYNC" : hubPoints.toLocaleString()}</strong>
-                </div>
-                <div className="wenyou-home-signal-bar">
-                  <b style={{ width: `${hubPointSignal}%` }} />
-                  <i />
-                </div>
-              </div>
-              <div className="wenyou-home-user">
-                <span>等级阶位</span>
-                <strong>{hubRank}阶 Lv.{hubLevel}</strong>
-              </div>
+            <div className="wenyou-home-brand">
+              <span>FATE NEXUS</span>
+              <strong>主神空间</strong>
             </div>
-            <div className="wenyou-home-hud-row wenyou-home-hud-row-split">
-              <div className="wenyou-home-signal">
-                <div>
-                  <span>副本状态 / STATE</span>
-                  <strong>{hubStatusLabel}</strong>
-                </div>
-                <div className="wenyou-home-signal-bar wenyou-home-signal-bar-blue">
-                  <b style={{ width: `${hubStatusSignal}%` }} />
-                </div>
-              </div>
-              <div className="wenyou-home-signal">
-                <div>
-                  <span>债务 / DEBT</span>
-                  <strong>{hubDebts}</strong>
-                </div>
-                <div className="wenyou-home-signal-bar wenyou-home-signal-bar-purple">
-                  <b style={{ width: `${hubRankSignal}%` }} />
-                  <i />
-                </div>
+            <div className="wenyou-home-user">
+              <span>等级阶位</span>
+              <strong>{hubRank}阶 Lv.{hubLevel}</strong>
+              <div className="wenyou-home-user-stats" aria-label="主神资产">
+                <span><em>主神积分</em><b>{shopLoading ? "SYNC" : hubPoints.toLocaleString()}</b></span>
+                <span><em>债务</em><b>{hubDebts.toLocaleString()}</b></span>
               </div>
             </div>
           </header>
@@ -2521,7 +2487,6 @@ export function WenyouTab({
           </main>
 
           <footer className="wenyou-rift-footer">
-            <p>单抽 100 / 十连 1000 / 十连 C+ 保底 / 100 抽 S 保底</p>
             <div className="wenyou-rift-currency">
               <span>主神积分</span>
               <strong>{shopLoading || riftLoading ? "同步中" : riftPoints.toLocaleString()}</strong>
@@ -2547,7 +2512,7 @@ export function WenyouTab({
           <div className="wenyou-generation-status">
             <div>
               <strong>副本池</strong>
-              <span>{candidateGeneratedAt ? `上次生成：${candidateGeneratedAt.slice(0, 16).replace("T", " ")}` : "等待主神投放入口"}</span>
+              <span>{candidateGeneratedAt ? `上次生成：${candidateGeneratedAt.slice(0, 16).replace("T", " ")}` : "等待系统投放入口"}</span>
             </div>
             <button onClick={() => loadCandidates(true, search)} disabled={candidatesRefreshing || candidatesLoading}>
               {candidatesRefreshing ? "生成中..." : "换一批"}
@@ -2555,12 +2520,12 @@ export function WenyouTab({
           </div>
           <div className="wenyou-search">
             <span>⌕</span>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索副本，或写偏好让主神换一批..." />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索副本，或写偏好让系统换一批..." />
           </div>
           <FilterRow items={TYPE_FILTERS} value={typeFilter} onChange={setTypeFilter} />
           <FilterRow items={DIFFICULTY_FILTERS} value={difficultyFilter} onChange={setDifficultyFilter} />
           <div className="wenyou-instance-list">
-            {candidatesLoading ? <div className="wenyou-empty">主神正在排列副本入口...</div> : null}
+            {candidatesLoading ? <div className="wenyou-empty">系统正在排列副本入口...</div> : null}
             {filteredCandidates.map((item) => (
               <article key={item.id} className="wenyou-select-card">
                 <div className="wenyou-card-meta">
@@ -2585,7 +2550,7 @@ export function WenyouTab({
                 </button>
               </article>
             ))}
-            {!candidatesLoading && !filteredCandidates.length ? <div className="wenyou-empty">没有匹配的副本。换个筛选，或者让主神换一批。</div> : null}
+            {!candidatesLoading && !filteredCandidates.length ? <div className="wenyou-empty">没有匹配的副本。换个筛选，或者让系统换一批。</div> : null}
           </div>
         </section>
       ) : null}
@@ -2733,18 +2698,6 @@ export function WenyouTab({
               </button>
             ))}
           </div>
-          <div className="wenyou-profile-overview" aria-label="个人空间资产概览">
-            <div>
-              <i aria-hidden="true" />
-              <span>主神积分 <em>PRIMARY SCORE</em></span>
-              <strong>{hubPoints.toLocaleString()}</strong>
-            </div>
-            <div>
-              <i aria-hidden="true" />
-              <span>主神债务 <em>DEBT</em></span>
-              <strong>{hubDebts.toLocaleString()}</strong>
-            </div>
-          </div>
 
           {profileTab === "副本存档" ? (
             <>
@@ -2794,13 +2747,11 @@ export function WenyouTab({
             <div className="wenyou-profile-panel">
               <PlayerStatCard
                 title={playerOneName}
-                slot="PLAYER-01"
                 player={profileStats.player1 || gameRulesState.players?.player1}
                 growth={profileGrowthPlayers.player1}
               />
               <PlayerStatCard
                 title={`玩家二 · ${playerTwoName}`}
-                slot="PLAYER-02"
                 player={profileStats.player2 || gameRulesState.players?.player2}
                 growth={profileGrowthPlayers.player2}
               />
@@ -3497,13 +3448,11 @@ function PanelModal({
                   </div>
                   <PlayerStatCard
                     title={playerDisplayName(stats.player1, "玩家一")}
-                    slot="PLAYER-01"
                     player={stats.player1}
                     growth={growthPlayers.player1}
                   />
                   <PlayerStatCard
                     title={`玩家二 · ${playerDisplayName(stats.player2, "玩家二")}`}
-                    slot="PLAYER-02"
                     player={stats.player2}
                     growth={growthPlayers.player2}
                   />
@@ -3639,13 +3588,11 @@ function HistoryPanelRow({ item }: { item: { role?: string; content?: string; ti
 function PlayerStatCard({
   title,
   player,
-  slot = "PLAYER",
   compact = false,
   growth,
 }: {
   title: string;
   player?: WenyouPlayerStats;
-  slot?: string;
   compact?: boolean;
   growth?: WenyouGrowthPlayer;
 }) {
@@ -3685,21 +3632,15 @@ function PlayerStatCard({
   ];
   const abilitySummary = coreAbility?.name || "新手副本通关后生成";
   const conditionSummary = p.conditions?.length ? p.conditions.join("、") : "稳定";
-  const rankLabel = `${rank}级调查员`;
 
   return (
     <article className="wenyou-stat-card">
       <header className="wenyou-character-head">
         <div>
-          <span className="wenyou-character-id">[ {slot} ]<i>ONLINE</i></span>
           <h3>{title}</h3>
           <p>Lv{p.level ?? 1} · EXP {p.exp ?? 0}</p>
         </div>
-        <span className="wenyou-rank-badge">
-          <small>RANK</small>
-          <b>{rank}</b>
-          <em>{rankLabel}</em>
-        </span>
+        <span className="wenyou-rank-badge">{rank}</span>
       </header>
 
       <div className="wenyou-vital-stack" aria-label={`${title} 当前资源`}>

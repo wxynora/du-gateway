@@ -3264,21 +3264,35 @@ def _load_inventory_action_context(uid: int) -> tuple[bool, dict, dict, dict, li
     if active:
         _session_ensure_stats(session)
         st = session["stats"]
-        inventory = _merge_inventory(wallet.get("inventory"), st.get("inventory"))
+        inventory = _inventory_for_player_action(wallet, st, "player1", active=True)
         return True, session, wallet, st, inventory
     st = _wallet_stats_from_wallet(wallet)
     session_ctx = {"phase": "hub", "stats": st, "flags": {}}
     return False, session_ctx, wallet, st, list(st.get("inventory") or [])
 
 
+def _merge_inventory_preferring_runtime(wallet_inventory: Any, runtime_inventory: Any) -> list[dict]:
+    runtime = _normalize_inventory(runtime_inventory, source="session")
+    wallet_items = _normalize_inventory(wallet_inventory, source="wallet")
+    if not runtime:
+        return wallet_items[:80]
+    out = list(runtime)
+    for item in wallet_items:
+        if _inventory_has_item(out, item_id=str(item.get("id") or ""), name=_inventory_item_name(item)):
+            continue
+        out.append(item)
+    return out[:80]
+
+
 def _inventory_for_player_action(wallet: dict, st: dict, player_id: Any, active: bool) -> list[dict]:
     pid = _resolve_player_key(player_id)
-    inv = _get_player_inventory(wallet, pid)
-    if pid == "player1":
-        inv = _merge_inventory(inv, st.get("inventory"))
-    elif active:
-        inv = _merge_inventory(inv, [x for x in st.get("inventory") or [] if isinstance(x, dict) and str(x.get("holder_id") or "") == pid])
-    return inv[:80]
+    wallet_inventory = _get_player_inventory(wallet, pid)
+    if not active:
+        return wallet_inventory[:80]
+    runtime_inventory = _normalize_inventory(st.get("inventory"), source="session")
+    if pid != "player1":
+        runtime_inventory = [x for x in runtime_inventory if str(x.get("holder_id") or "") == pid]
+    return _merge_inventory_preferring_runtime(wallet_inventory, runtime_inventory)
 
 
 def _persist_player_inventory_for_action(wallet: dict, st: dict, player_id: Any, inventory: list[dict]) -> None:
@@ -3331,8 +3345,7 @@ def sell_inventory_item(user_id: int, item_ref: str, player_id: Any = "player1")
     if locked:
         return False, locked, _inventory_action_view(uid, active)
     rarity = _normalize_difficulty(item.get("rarity") or "D")
-    qty = max(1, int(item.get("quantity") or 1))
-    value = max(1, math.floor(_item_reference_price(item) * float(_WENYOU_SELL_RATIO.get(rarity, 0.25)))) * qty
+    value = max(1, math.floor(_item_reference_price(item) * float(_WENYOU_SELL_RATIO.get(rarity, 0.25))))
     inventory, consumed = _consume_inventory_item(inventory, item, force_remove=True)
     if not consumed:
         return False, f"背包里没有【{item_ref}】。", _inventory_action_view(uid, active)
