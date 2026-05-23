@@ -1948,6 +1948,48 @@ def step_inject_du_notebook(body: dict) -> dict:
     return body
 
 
+def _tool_schema_name(tool: dict) -> str:
+    if not isinstance(tool, dict):
+        return ""
+    fn = tool.get("function") or {}
+    if not isinstance(fn, dict):
+        return ""
+    return str(fn.get("name") or "").strip()
+
+
+def _append_tool_schemas(body: dict, tools: list[dict]) -> dict:
+    if not tools:
+        return body
+    body = copy.deepcopy(body)
+    existing = body.get("tools")
+    if not isinstance(existing, list):
+        existing = []
+        body["tools"] = existing
+    existing_names = {_tool_schema_name(t) for t in existing if isinstance(t, dict)}
+    for tool in tools:
+        name = _tool_schema_name(tool)
+        if not name or name in existing_names:
+            continue
+        existing.append(tool)
+        existing_names.add(name)
+    body["tool_choice"] = body.get("tool_choice") or "auto"
+    return body
+
+
+def step_inject_wenyou_player_tools(body: dict) -> dict:
+    """
+    固定注入文游玩家工具，保持 tools schema 稳定，减少 prompt cache 因工具段变化重建。
+    """
+    try:
+        from services.wenyou_service import get_player_tool_schemas
+
+        tools = get_player_tool_schemas()
+    except Exception as e:
+        logger.debug("wenyou player tools 注入跳过 error=%s", e)
+        return body
+    return _append_tool_schemas(body, tools)
+
+
 def step_inject_notion_tools(body: dict) -> dict:
     """
     当 NOTION_TOOLS_ENABLED=1 时，向 body 注入 Notion 工具。
@@ -1964,10 +2006,7 @@ def step_inject_notion_tools(body: dict) -> dict:
     tools = get_notion_tools_for_inject(mode="expanded", active_groups=active_groups)
     if not tools:
         return body
-    body = copy.deepcopy(body)
-    body["tools"] = tools
-    body["tool_choice"] = "auto"
-    return body
+    return _append_tool_schemas(body, tools)
 
 
 def step_inject_forum_tools(body: dict) -> dict:
