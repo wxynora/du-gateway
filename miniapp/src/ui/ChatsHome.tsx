@@ -315,7 +315,7 @@ function TodayNoteWidget({
         </svg>
 
         <div className="mb-2 text-center">
-          <div className="text-[30px] leading-none text-[#E75480]" style={{ fontFamily: "'TodayNoteScript', 'Brush Script MT', cursive" }}>Strawberry Day</div>
+          <div className="text-[30px] leading-none text-[#E75480]" style={{ fontFamily: "'TodayNoteScript', 'Brush Script MT', cursive" }}>Du want to say</div>
           <div className="-mt-[2px] text-[9px] uppercase tracking-[0.22em] text-[#FFB7C5]">Sweet Memories Memo</div>
         </div>
 
