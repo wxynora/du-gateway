@@ -1386,7 +1386,6 @@ export function WenyouTab({
       return true;
     }
     if (forcedPrompt) {
-      setForcedPrompt(null);
       return true;
     }
 
@@ -1479,7 +1478,7 @@ export function WenyouTab({
         init
       );
       if (!j?.ok) throw new Error(j?.error || "加载失败");
-      setCandidates(Array.isArray(j.items) ? j.items : []);
+      setCandidates(Array.isArray(j.items) ? j.items.filter((it) => !it?.forced) : []);
       setCandidateGeneratedAt(String(j.generatedAt || ""));
       if (j.warning) toast(j.warning);
     } catch (e: any) {
@@ -1503,12 +1502,6 @@ export function WenyouTab({
       if (!j?.ok) throw new Error(j?.error || "加载失败");
       const item = (j.item && j.item.forced ? j.item : null) || (Array.isArray(j.items) ? j.items.find((it) => it?.forced) : null) || null;
       setForcedPrompt(item);
-      if (item) {
-        setCandidates((prev) => {
-          const rest = prev.filter((it) => it.id !== item.id);
-          return [item, ...rest].slice(0, 8);
-        });
-      }
       return item;
     } catch (e: any) {
       toast(`加载强制副本失败：${e?.message || e}`);
@@ -1647,6 +1640,7 @@ export function WenyouTab({
   const filteredCandidates = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return candidates.filter((item) => {
+      if (item.forced) return false;
       const typeOk = typeFilter === "全部类型" || item.instance_genre === typeFilter;
       const difficultyOk = difficultyFilter === "全部难度" || item.difficulty === difficultyFilter;
       const searchOk = !needle || `${item.title} ${item.instance_genre} ${item.tagline || ""} ${item.premise || ""} ${(item.tags || []).join(" ")}`.toLowerCase().includes(needle);
@@ -3059,10 +3053,6 @@ export function WenyouTab({
           candidate={forcedPrompt}
           loading={starting || forcedPromptLoading}
           onEnter={() => startCandidate(forcedPrompt)}
-          onViewHall={() => {
-            setForcedPrompt(null);
-            pushView("selection");
-          }}
         />
       ) : null}
 
@@ -3552,12 +3542,10 @@ function ForcedInstanceModal({
   candidate,
   loading,
   onEnter,
-  onViewHall,
 }: {
   candidate: InstanceCandidate;
   loading: boolean;
   onEnter: () => void;
-  onViewHall: () => void;
 }) {
   const reason = candidate.reason || candidate.premise || "系统检测到未清算代价，下一次副本入口已被锁定。";
   const penaltyText = candidate.penalty_type === "debt"
@@ -3602,17 +3590,13 @@ function ForcedInstanceModal({
             {penaltyText} / {candidate.difficulty || "C"} 级：{candidate.title} 已锁定。{reason}
           </p>
           <div className="wenyou-forced-actions">
-            <button onClick={onEnter} disabled={loading}>{loading ? "接入中" : "立即接入"}</button>
-            <button onClick={onViewHall} disabled={loading}>查看大厅</button>
+            <button className="wenyou-forced-enter" onClick={onEnter} disabled={loading}>{loading ? "接入中" : "立即接入"}</button>
           </div>
         </div>
         <span className="wenyou-forced-corner wenyou-forced-corner-tl" aria-hidden="true" />
         <span className="wenyou-forced-corner wenyou-forced-corner-tr" aria-hidden="true" />
         <span className="wenyou-forced-corner wenyou-forced-corner-bl" aria-hidden="true" />
         <span className="wenyou-forced-corner wenyou-forced-corner-br" aria-hidden="true" />
-        <button className="wenyou-forced-close" onClick={onViewHall} disabled={loading} aria-label="关闭强制清算提示">
-          <Icon name="x" />
-        </button>
       </div>
     </div>
   );

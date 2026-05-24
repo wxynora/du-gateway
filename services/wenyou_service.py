@@ -252,6 +252,26 @@ def _format_tutorial_guides_for_gm(fw: dict) -> str:
     return "\n## 新手副本引导（本局额外规则）\n" + body
 
 
+def _format_forced_instance_guidance_for_gm(session: dict, fw: dict) -> str:
+    forced = session.get("forced_instance") if isinstance(session.get("forced_instance"), dict) else None
+    if not forced or str(forced.get("mode") or "") != "npc_labor":
+        return ""
+    player1 = str(fw.get("player1_name") or "玩家一").strip() or "玩家一"
+    player2 = str(fw.get("player2_name") or "玩家二").strip() or "玩家二"
+    return f"""
+## 惩罚副本 · 临时 NPC 模式（本局额外规则）
+- 本局仍是无限流副本：存在正常任务者队伍、规则、线索、危险、通关目标和主神结算。
+- 但玩家一「{player1}」不是正常任务者，而是被系统塞入副本世界的原住民 NPC；公开姓名必须使用「{player1}」，不得另起本名、化名、小名或真实姓名。
+- 玩家二「{player2}」不默认属于正常任务者队伍；若出场，也按本副本合理身份行动。
+- 正常任务者才是表层通关队伍，他们的任务可以围绕玩家一 NPC 的生死、秘密、病症、嫌疑、继承权、献祭或异常状态展开。
+- 玩家一的目标是演好 NPC，用符合身份的反应、关系、线索、阻碍或求助推动正常任务者进度；不要把她写成自己通关、打 Boss、找出口的普通任务者。
+- 如果玩家一代号与副本家族、时代、地域或身份结构有违和，不要改名消除；把违和写成剧情钩子，如随母姓、收养、过继、家产侵占、族谱涂改、冒名顶替或异常保留姓名。
+- NPC 身份越核心，危险越高；Boss/异常阵营必须有理由控制、利用、杀死、替换或误导玩家一 NPC。禁止把核心 NPC 写成安全旁观者。
+- 玩家一不能直接说出玩家、任务者、清算对象、外来者、系统或副本真相；不能直接剧透答案、带队通关或跳出 NPC 身份解释机制。
+- 债务、污染、复活、契约等只作为后端清算原因；叙事里不要把它们写成剧情主题或系统工单。
+""".strip()
+
+
 def _format_blueprint_for_gm(fw: dict) -> str:
     bp = _normalize_instance_blueprint(fw.get("instance_blueprint"), fw)
     secret = fw.get("gm_secret") if isinstance(fw.get("gm_secret"), dict) else {}
@@ -1731,34 +1751,21 @@ def _refresh_forced_instance_queue(wallet: dict, session: Optional[dict] = None)
 
 def _forced_candidate_from_queue(item: dict) -> dict[str, Any]:
     penalty_type = str(item.get("penalty_type") or "system")
-    if penalty_type == "debt":
-        genre = "潜伏调查"
-        core_task = "以临时清算员身份进入副本，完成指定清算目标；通关收益优先抵债。"
-        hook = "不能暴露自己是外来任务者或清算员；暴露会追加追偿。"
-    elif penalty_type == "pollution":
-        genre = "生存撤离"
-        core_task = "在净化流程失控前找到污染源并完成剥离。"
-        hook = "污染会影响判断，精确污染值隐藏，只给阶段提示。"
-    elif penalty_type == "revive":
-        genre = "潜伏调查"
-        core_task = "以副本 NPC 身份进入其他副本，完成复活代价清算。"
-        hook = "必须维持 NPC 身份，不得直接泄露副本真相、任务者身份或系统身份。"
-    else:
-        genre = "对抗"
-        core_task = "偿还契约追偿，完成系统指定的等价代价。"
-        hook = "契约代价未清前，高阶能力可能被封印或追猎。"
+    genre = "潜伏调查"
+    core_task = "以副本原住民 NPC 身份进入其他任务者正在进行的副本；演好身份，并用符合身份的方式推动正常任务者的副本进度。"
+    hook = "不能暴露自己是玩家、任务者、清算对象或外来者；NPC 身份越靠近主线核心，危险越高。"
     return {
         "id": "forced_" + str(item.get("id") or "penalty"),
         "title": str(item.get("title") or "强制清算副本"),
         "instance_genre": genre,
         "difficulty": _normalize_difficulty(item.get("difficulty") or "C"),
         "tagline": "系统已锁定下一次副本入口。",
-        "premise": str(item.get("reason") or "系统检测到未清算代价。"),
+        "premise": str(item.get("reason") or "系统检测到未清算代价。") + " 该原因只作为后端结算 metadata，不作为剧情主题。",
         "core_task": core_task,
         "survival_hook": hook,
-        "risk": "失败会追加债务、污染、封印或追猎状态。",
-        "twist": "本局不是普通任务者身份；身份、行动边界和暴露后果由系统清算规则限制。",
-        "tags": ["强制", "清算副本", "临时身份" if penalty_type == "revive" else penalty_type],
+        "risk": "演崩身份、直接剧透或破坏副本世界观会导致清算失败，后端再按原因追加债务、污染、封印或追猎状态。",
+        "twist": "正常任务者的任务可以围绕玩家扮演的 NPC 展开；玩家站在剧情中心，但不能用任务者身份行动。",
+        "tags": ["强制", "惩罚副本", "NPC扮演", "临时身份", penalty_type],
         "estimated_length": "短中篇",
         "forced": True,
         "locked": bool(item.get("locked")),
@@ -1833,17 +1840,15 @@ def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
         if tag_text in {"debt", "pollution", "revive", "contract"}:
             penalty_type = tag_text
             break
-        if "临时身份" in tag_text:
-            penalty_type = "revive"
     work_order = str(candidate.get("core_task") or "完成系统指定任务并存活。")
     forced = {
         "queue_id": queue_id,
         "penalty_type": penalty_type,
         "locked": bool(candidate.get("locked")),
-        "mode": "npc_labor" if penalty_type == "revive" else "penalty_instance",
-        "disguised_identity": "临时副本 NPC" if penalty_type == "revive" else "异常清算任务者",
+        "mode": "npc_labor",
+        "disguised_identity": "副本原住民 NPC",
         "work_order": _compact_text(work_order, 220),
-        "forbidden_disclosures": ["主神系统身份", "复活债务来源", "副本结局/隐藏规则"],
+        "forbidden_disclosures": ["玩家身份", "任务者身份", "清算对象身份", "外来者身份", "副本结局/隐藏规则"],
         "exposure_to_taskers": 0,
         "exposure_to_monsters": 0,
         "resolved": False,
@@ -5019,10 +5024,15 @@ def _candidate_seed_block(item: dict) -> str:
             "system": "强制清算",
         }
         penalty = str(item.get("penalty_type") or "system")
+        player1_code = str(item.get("player1_name_hint") or "玩家一").strip() or "玩家一"
+        player2_code = str(item.get("player2_name_hint") or "玩家二").strip() or "玩家二"
         forced_note = (
             "强制清算：是"
-            f"\n清算类型：{penalty_labels.get(penalty, '强制清算')}"
+            "\n惩罚副本模式：临时 NPC 扮演"
+            f"\n结算原因（metadata，不可写成剧情主题）：{penalty_labels.get(penalty, '强制清算')}"
             f"\n清算队列：{item.get('queue_id') or item.get('id') or ''}"
+            f"\n玩家一代号（必须作为玩家 NPC 公开姓名）：{player1_code}"
+            f"\n玩家二代号：{player2_code}"
         )
     forced_lines = f"{forced_note}\n" if forced_note else ""
     return (
@@ -5041,7 +5051,39 @@ def _candidate_seed_block(item: dict) -> str:
     )
 
 
+def _forced_candidate_core_prompt(item: dict) -> str:
+    player1_code = str(item.get("player1_name_hint") or "玩家一").strip() or "玩家一"
+    return f"""把【候选设定】扩展成「无限流 · 惩罚副本」核心设定短稿。
+
+世界观前提：
+- 这是主神空间体系下的无限流副本，不是普通角色扮演剧本。
+- 正常任务者队伍正在按普通无限流逻辑求生、解谜、验证规则、尝试通关。
+- 玩家一不是这支正常任务者队伍成员，而是被系统塞进该副本世界的原住民 NPC。
+- 玩家一的核心目标不是自己通关，而是演好 NPC，并在不暴露身份的前提下推动正常任务者副本进度。
+
+输出要求：
+- 只写自然语言，不要 JSON，不要 markdown 代码块，不要表格。
+- 5-8 行，每行尽量短。
+- 必须包含：副本时代/场景、正常任务者的公开任务、玩家一 NPC 身份、该身份如何推动进度、身份矛盾、危险牵引、暴露后果。
+- 玩家一 NPC 的公开姓名必须使用「{player1_code}」，不得另起本名、化名、小名或真实姓名；称谓可随时代变化，如“小姐/姑娘/同学/病人/夫人”。
+- 若玩家代号和家族、时代、地域或身份结构有违和，不能改名消除；必须把违和写成剧情钩子，如收养、过继、随母姓、家产侵占、族谱涂改、冒名顶替或异常刻意保留。
+- 玩家一 NPC 可以是副本核心人物：被救援对象、被调查对象、嫌疑人、继承人、祭品、病人、规则触发者、线索持有人或仪式核心。
+- NPC 身份越接近主线核心，危险越高；必须让 Boss/异常阵营有理由控制、利用、杀死、替换或误导玩家一 NPC。
+- 结算原因只作为后端 metadata；不要把债务、污染、复活、契约写成剧情主题或副本主线。
+- 不要写 opening，不要写属性数值，不要替玩家行动。
+
+严格禁止：
+- 禁止把玩家一写成普通任务者。
+- 禁止把本局写成玩家自己通关、打 Boss、找出口的普通副本。
+- 禁止让玩家一直接剧透答案、解释系统、带队通关或跳出 NPC 身份。
+
+【候选设定】
+{_candidate_seed_block(item)}"""
+
+
 def _candidate_core_prompt(item: dict) -> str:
+    if item.get("forced"):
+        return _forced_candidate_core_prompt(item)
     return f"""把【候选设定】扩展成副本核心设定短稿。
 
 输出要求：
@@ -5075,7 +5117,35 @@ def _candidate_canon_block(item: dict, core_text: str) -> str:
     ).strip()
 
 
+def _forced_candidate_blueprint_prompt(item: dict, core_text: str = "") -> str:
+    player1_code = str(item.get("player1_name_hint") or "玩家一").strip() or "玩家一"
+    return f"""基于【已确定核心设定】生成「无限流 · 惩罚副本」蓝图短稿。
+
+本局底层结构：
+- 这仍然是无限流副本：存在主神空间、正常任务者队伍、规则、线索、危险、通关目标和结算。
+- 但玩家一不是正常任务者；玩家一是被塞进副本世界的 NPC。
+- 正常任务者才是表层主角，他们的主线可以围绕玩家一 NPC 展开。
+- 玩家一的隐藏工作是演好 NPC，用符合身份的方式推动正常任务者进度，并避免暴露。
+
+输出要求：
+- 只写自然语言，不要 JSON，不要 markdown 代码块，不要表格。
+- 按三段写：入戏、推动、收束。
+- 每段都写：玩家 NPC 表演目标 / 正常任务者进度 / 可给出的线索或阻碍 / 暴露风险 / 错过时如何 fail-forward。
+- 额外列出：玩家 NPC 身份契约、正常任务者公开任务、身份违和钩子、Boss/异常对玩家 NPC 的危险牵引、暴露给任务者/怪物阵营的后果、隐藏支线/隐藏结局方向。
+- 玩家 NPC 身份可以很核心，甚至是被救援、被调查、被怀疑、被保护或被献祭的对象；越核心越危险。
+- 玩家 NPC 的公开姓名必须使用「{player1_code}」；不得另起姓名。
+- 结算原因只写成“后端清算原因”，不得让债务/污染/复活/契约成为剧情主线。
+- 怪物或 Boss 默认不可由玩家一正面解决；玩家一只能通过 NPC 身份引导任务者发现削弱、封印、规避或真相路径。
+- 只给 GM/后端内部短纲，不要整段剧透给玩家。
+
+【已确定核心设定】
+{_candidate_canon_block(item, core_text)}
+"""
+
+
 def _candidate_blueprint_prompt(item: dict, core_text: str = "") -> str:
+    if item.get("forced"):
+        return _forced_candidate_blueprint_prompt(item, core_text)
     return f"""基于【已确定核心设定】生成副本蓝图短稿。
 
 输出要求：
@@ -5093,7 +5163,31 @@ def _candidate_blueprint_prompt(item: dict, core_text: str = "") -> str:
 """
 
 
+def _forced_candidate_opening_prompt(item: dict, core_text: str = "") -> str:
+    player1_code = str(item.get("player1_name_hint") or "玩家一").strip() or "玩家一"
+    return f"""基于【已确定核心设定】生成「无限流 · 惩罚副本」开场正文。
+
+输出要求：
+- 只写开场正文，不要 JSON，不要 markdown 代码块。
+- 5-9 句，像小说正文一样续写，必须保留无限流质感：白光/传送/主神提示音/刻板广播/副本载入感至少出现一种。
+- 固定以玩家一为视角中心，用第二人称“你/你的”指代玩家一。
+- 开场要让玩家明确感到：自己被塞进了一个副本原住民 NPC 身份，而不是作为普通任务者入场。
+- 玩家 NPC 的公开姓名必须使用「{player1_code}」；可以用称谓组合，如“某家大小姐{player1_code}”“{player1_code}小姐”“{player1_code}同学”，但不得另起姓名。
+- 必须出现或暗示正常任务者队伍的存在；他们可以是被请来的医生、调查员、道士、学生、住户、警员、求生者等，正在按普通无限流逻辑接近主线。
+- 可以让正常任务者的表层任务围绕玩家 NPC 展开，例如治疗、保护、调查、看守、护送、判断其是否异常。
+- 不要把后端结算原因念给玩家；不要说“债务/污染/契约工单”等说明书词。
+- 不要输出任务者名单、线索列表、规则档案或情报卡。
+- 如果写系统/主神广播，必须独立成行：`【系统提示】广播内容`。
+- 不要替玩家做行动决定，不要写玩家主动解释系统或直接剧透。
+
+【已确定核心设定】
+{_candidate_canon_block(item, core_text)}
+"""
+
+
 def _candidate_opening_prompt(item: dict, core_text: str = "") -> str:
+    if item.get("forced"):
+        return _forced_candidate_opening_prompt(item, core_text)
     return f"""基于【已确定核心设定】生成副本开场正文。
 
 输出要求：
@@ -5246,6 +5340,68 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
         },
         "opening": opening,
     }
+    if item.get("forced"):
+        penalty_type = str(item.get("penalty_type") or "system")
+        penalty_labels = {
+            "debt": "债务",
+            "pollution": "污染",
+            "revive": "复活代价",
+            "contract": "契约",
+            "system": "系统",
+        }
+        penalty_label = penalty_labels.get(penalty_type, "系统")
+        raw["player1_role"] = "被主神临时塞入本副本的原住民 NPC；公开姓名沿用玩家代号，必须维持身份并推动正常任务者进度。"
+        raw["player2_role"] = "与玩家一同处副本世界的临时协助角色；不默认属于正常任务者队伍。"
+        raw["conflict"] = "维持当前 NPC 身份，在不暴露玩家/任务者/外来者身份的前提下，推动正常任务者完成他们的副本主线，直到主神确认清算完成。"
+        raw["failure_hint"] = "身份暴露、直接剧透、替任务者强行通关或破坏副本世界观，会导致清算失败或评级下降。"
+        raw["reward_hint"] = f"惩罚副本完成后由后端按{penalty_label}清算原因优先抵扣或解除对应代价；副本剧情不以该原因作为主线。"
+        raw["public"]["visible_rules"] = [
+            "维持当前 NPC 身份。",
+            "不能暴露玩家、任务者、清算对象或外来者身份。",
+            "用符合身份的行为推动正常任务者进度。",
+        ]
+        raw["public"]["public_task"] = raw["conflict"]
+        raw["gm_secret"]["true_rules"] = [
+            "本局是临时 NPC 惩罚副本；正常任务者才是表层通关队伍。",
+            "玩家一 NPC 的公开姓名必须沿用玩家代号，不得另起姓名。",
+            "玩家一 NPC 越接近主线核心，Boss/异常阵营越会控制、利用、杀死或替换她。",
+            "玩家一只能通过符合 NPC 身份的反应、关系、线索、阻碍或求助推动任务者，不可直接剧透。",
+        ]
+        raw["gm_secret"]["hidden_endings"] = [
+            {"name": "身份无损清算", "condition": "玩家一始终维持 NPC 身份，并让正常任务者完成主线关键进度。"},
+            {"name": "暴露清算失败", "condition": "玩家一主动说出系统/任务者/外来者真相，或被任务者与异常阵营同时识破。"},
+        ]
+        raw["instance_blueprint"]["logline"] = (blueprint_logline or "临时 NPC 在别人的副本里演好身份并推动主线。")[:240]
+        raw["instance_blueprint"]["mainline"] = [
+            {
+                "phase": "入戏",
+                "goal": "确认玩家一的 NPC 身份、社会位置、行动边界，以及正常任务者正在接近的公开任务。",
+                "required_clues": [],
+                "fail_forward": "如果玩家一暂时无法推进，由副本人物、任务者误判或异常压力迫使她做出符合身份的反应。",
+                "notes": blueprint[:500],
+            },
+            {
+                "phase": "推动",
+                "goal": "玩家一用 NPC 身份能做的事，间接给出线索、制造合理冲突或阻止错误路线。",
+                "required_clues": [],
+                "fail_forward": "线索错过时，用发病、问话、家族/组织关系、环境异变或任务者二次调查继续推进。",
+            },
+            {
+                "phase": "收束",
+                "goal": "正常任务者完成关键判断或通关节点，玩家一避免暴露并等待主神确认清算。",
+                "required_clues": [],
+                "fail_forward": "若暴露风险过高，进入强制撤离、评级下降或清算失败结算。",
+            },
+        ]
+        raw["instance_blueprint"]["hard_constraints"] = [
+            "这是无限流惩罚副本，不是普通角色扮演剧本。",
+            "玩家一不是正常任务者，不能按普通通关副本推进。",
+            "玩家一 NPC 公开姓名必须使用玩家代号，不能另起姓名。",
+            "正常任务者的任务可以围绕玩家一 NPC 展开。",
+            "NPC 身份越核心，危险越高；不能写成安全旁观者。",
+            "债务、污染、复活、契约只作为后端清算原因，不得写成剧情主线。",
+            "不要替玩家做行动决定，不要直接剧透隐藏真相。",
+        ]
     return _normalize_framework(raw)
 
 
@@ -6115,11 +6271,14 @@ def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
         with _PENDING_LOCK:
             _PENDING_STORY_CONFIRM.pop(uid, None)
 
+    wallet = _load_wenyou_wallet(uid)
+    item["player1_name_hint"] = _wallet_player_display_name(wallet, "player1", "玩家一")
+    item["player2_name_hint"] = _wallet_player_display_name(wallet, "player2", "玩家二")
+
     fw, err = generate_framework_from_candidate(item)
     if err or not fw:
         return err or "文游：候选扩展开局失败。"
 
-    wallet = _load_wenyou_wallet(uid)
     fw = _apply_wallet_player_names_to_framework(fw, wallet)
     session = _new_session(fw)
     wallet = _load_wenyou_wallet(uid, session)
@@ -7862,6 +8021,7 @@ def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
         failure_hint=fw.get("failure_hint") or "由主神规则判定。",
         reward_hint=fw.get("reward_hint") or "视表现给予风味向回报。",
         tutorial_guidance_block=_format_tutorial_guides_for_gm(fw),
+        forced_instance_guidance_block=_format_forced_instance_guidance_for_gm(session, fw),
         tasker_regiment_block=_format_tasker_regiment_for_gm(fw),
         blueprint_block=_format_blueprint_for_gm(fw),
         current_stats_block=_format_stats_for_gm_prompt(session),
