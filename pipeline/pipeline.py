@@ -199,6 +199,30 @@ def _append_to_dynamic_system(body: dict, text: str) -> dict:
     return body
 
 
+def step_inject_current_base_model(body: dict) -> dict:
+    """把当前 active model cache 写到动态 system 第一条；无缓存则跳过。"""
+    try:
+        from storage.upstream_store import get_cached_active_model
+
+        model_name = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
+    except Exception as e:
+        logger.debug("current base model 注入跳过 error=%s", e)
+        return body
+    if not model_name:
+        return body
+    line = f"当前底座为：{model_name}"
+    body = _ensure_dynamic_system(body)
+    for msg in body.get("messages") or []:
+        if not msg.get(_DYNAMIC_SYSTEM_MARKER):
+            continue
+        content = str(msg.get("content") or "")
+        if "当前底座为：" in content:
+            return body
+        msg["content"] = line if not content.strip() else f"{line}\n\n{content.lstrip()}"
+        return body
+    return body
+
+
 def _append_to_static_system(body: dict, text: str) -> dict:
     """
     向静态 system 段追加内容。

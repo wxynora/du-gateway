@@ -27,6 +27,7 @@ from pipeline.pipeline import (
     step_inject_thinking_block_rules,
     step_inject_core_behavior_rules,
     step_inject_du_non_retreat_rules,
+    step_inject_current_base_model,
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
     step_inject_sense_snapshot,
@@ -876,6 +877,7 @@ def chat_completions():
     du_daily_maintenance = _is_du_daily_maintenance_request()
     du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
     if not slim_voice_call:
+        body = step_inject_current_base_model(body)
         body = step_inject_du_thought(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
         if not skip_dynamic_memory:

@@ -999,3 +999,8 @@ npm -C miniapp run android
 - 已完成：`miniapp/src/ui/ChatsHome.tsx` 删除首页日报摘要卡，Today Note 改成 `ui合集/today note.html` 的粉色便签/贴纸风小组件；右侧新增纪念日小组件，按 `2026-03-04` 起算并显示第 N 天。`miniapp/src/ui/AppShell.tsx` 同步移除首页日报的拉取、刷新状态和传参，保留 Today Note 点击刷新行为。
 - 已验证：`npm --prefix miniapp run build` 通过；`git diff --check -- miniapp/src/ui/ChatsHome.tsx miniapp/src/ui/AppShell.tsx miniapp_static/index.html docs/DEBUG_INDEX.md` 通过；本地 Vite 预览 `http://127.0.0.1:5175/miniapp/` 已打开确认首页显示 Today Note 与纪念日，且无日报摘要入口。
 - 未完成 / 下次继续：本轮不处理已有 `miniapp_static/assets/*` 历史旧 hash 与其他脏文件；如要提交/推送，需只挑本轮源码、`miniapp_static/index.html` 和本轮构建引用的新 hash 资源。
+
+当前状态（2026-05-25 当前底座动态注入）：
+- 已完成：`pipeline/pipeline.py` 新增 `step_inject_current_base_model()`，只读 `storage.upstream_store.get_cached_active_model(refresh_if_missing=False)`，有缓存时把 `当前底座为：<model>` 写成动态 system 第一条；`routes/chat.py` 在 `step_inject_du_thought`、`step_inject_du_daily`、动态记忆、summary 和 sense 之前调用它。
+- 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py routes/chat.py`、当前底座注入 smoke test、`routes.chat` import check、`git diff --check -- pipeline/pipeline.py routes/chat.py` 均通过。
+- 未完成 / 下次继续：该注入不刷新缓存、不读取客户端传入 model、不写静态 prompt，也不改转发策略；其他文档、文游、StudyRoom、小爱、`miniapp_static/assets/*` 脏文件继续不碰。
