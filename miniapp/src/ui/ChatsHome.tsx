@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { apiJson, getOrCreatePanelDeviceId } from "./api";
 import { DEFAULT_GROUP_CHAT_TITLE, getDisplayGroupChatTitle } from "./chatAppearance";
 import {
@@ -163,13 +163,17 @@ export function ChatsHome({
     >
       <div className="px-4">
         <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">会话</h1>
-        <div className="grid max-w-[600px] grid-cols-[minmax(0,1fr)_minmax(132px,0.78fr)] gap-3">
-          <TodayNoteWidget
-            text={todayNoteRefreshing ? "正在刷新..." : dailyWhisper || "今天还没有新的 note。"}
-            refreshing={todayNoteRefreshing}
-            onClick={onRefreshTodayNote}
-          />
-          <AnniversaryWidget dayCount={anniversaryDayCount} />
+        <div className="grid w-full max-w-[600px] grid-cols-2 items-start gap-2 min-[390px]:gap-3">
+          <ScaledWidgetFrame baseWidth={320} baseHeight={320}>
+            <TodayNoteWidget
+              text={todayNoteRefreshing ? "正在刷新..." : dailyWhisper || "今天还没有新的 note。"}
+              refreshing={todayNoteRefreshing}
+              onClick={onRefreshTodayNote}
+            />
+          </ScaledWidgetFrame>
+          <ScaledWidgetFrame baseWidth={320} baseHeight={320}>
+            <AnniversaryWidget dayCount={anniversaryDayCount} />
+          </ScaledWidgetFrame>
         </div>
       </div>
 
@@ -205,6 +209,38 @@ export function ChatsHome({
   );
 }
 
+function ScaledWidgetFrame({
+  baseWidth,
+  baseHeight,
+  children,
+}: {
+  baseWidth: number;
+  baseHeight: number;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="relative w-full shrink-0 self-start overflow-visible"
+      style={{
+        aspectRatio: `${baseWidth} / ${baseHeight}`,
+        containerType: "inline-size",
+      }}
+    >
+      <div
+        className="absolute left-0 top-0"
+        style={{
+          width: baseWidth,
+          height: baseHeight,
+          transform: `scale(min(1, calc(100cqw / ${baseWidth}px)))`,
+          transformOrigin: "top left",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function TodayNoteWidget({
   text,
   refreshing,
@@ -216,7 +252,7 @@ function TodayNoteWidget({
 }) {
   return (
     <button
-      className="relative flex min-h-[172px] w-full flex-col overflow-hidden border border-[#F4B3C1]/60 bg-[#FFF0F5] p-2.5 text-left shadow-[0_10px_30px_rgba(231,84,128,0.14)] transition-transform active:scale-[0.985]"
+      className="relative flex h-full w-full flex-col overflow-hidden border border-[#F4B3C1]/60 bg-[#FFF0F5] p-2.5 text-left shadow-[0_10px_30px_rgba(231,84,128,0.14)] transition-transform active:scale-[0.985]"
       style={{
         backgroundImage: "radial-gradient(#FFB7C5 1px, transparent 1px)",
         backgroundSize: "14px 14px",
@@ -248,31 +284,17 @@ function TodayNoteWidget({
         </svg>
 
         <div className="mb-2 text-center">
-          <div className="font-serif text-[22px] leading-none text-[#E75480]">Strawberry Day</div>
-          <div className="mt-0.5 text-[8px] uppercase tracking-[0.22em] text-[#FFB7C5]">Sweet Memories Memo</div>
+          <div className="text-[24px] leading-none text-[#E75480]" style={{ fontFamily: '"Brush Script MT", cursive' }}>Strawberry Day</div>
+          <div className="-mt-[2px] text-[9px] uppercase tracking-[0.22em] text-[#FFB7C5]">Sweet Memories Memo</div>
         </div>
 
         <div className="flex min-h-0 flex-1 items-center justify-center border-y border-[#FFF0F5] py-2">
           <p className="line-clamp-4 whitespace-pre-wrap text-center text-[12px] font-medium leading-relaxed text-[#5D4037]">{text}</p>
         </div>
 
-        <div className="mt-1.5 flex items-end justify-between">
+        <div className="mt-1.5 flex items-end">
           <div className="border-t border-gray-100 pt-0.5 text-[8px] text-gray-400">TODAY</div>
-          <div className="font-serif text-[15px] italic font-bold text-[#E75480]">¥520</div>
         </div>
-
-        <svg className="absolute -bottom-1.5 -right-1.5 h-10 w-10 -rotate-[10deg]" viewBox="0 0 100 100" aria-hidden="true">
-          <rect x="25" y="40" width="50" height="45" rx="20" fill="#FFB7C5" stroke="#E75480" strokeWidth="2" />
-          <path d="M30 40 Q 20 10 40 10 Q 50 10 45 40" fill="#FFB7C5" stroke="#E75480" strokeWidth="2" />
-          <path d="M70 40 Q 80 10 60 10 Q 50 10 55 40" fill="#FFB7C5" stroke="#E75480" strokeWidth="2" />
-          <circle cx="40" cy="60" r="3" fill="#5D4037" />
-          <circle cx="60" cy="60" r="3" fill="#5D4037" />
-          <circle cx="35" cy="68" r="4" fill="#FF8DA1" opacity="0.6" />
-          <circle cx="65" cy="68" r="4" fill="#FF8DA1" opacity="0.6" />
-          <path d="M48 65 L52 65 L50 67 Z" fill="#E75480" />
-          <rect x="60" y="35" width="15" height="10" rx="4" fill="#89CFF0" stroke="#E75480" strokeWidth="1" />
-          <circle cx="67.5" cy="40" r="3" fill="#FFF" stroke="#E75480" strokeWidth="1" />
-        </svg>
       </div>
 
       <div className="absolute bottom-2 left-3 z-10 text-[7px] font-bold uppercase tracking-[0.08em] text-[#E75480]/50">
@@ -283,28 +305,92 @@ function TodayNoteWidget({
 }
 
 function AnniversaryWidget({ dayCount }: { dayCount: number }) {
+  const serialDay = String(dayCount).padStart(4, "0");
+
   return (
-    <div className="relative min-h-[172px] overflow-hidden bg-[#FBF8F6] px-3.5 py-4 text-[#3D2B29] shadow-[0_8px_24px_rgba(61,43,41,0.08)]">
-      <div className="mb-6 flex items-baseline justify-between">
-        <div className="font-serif text-[18px] italic leading-none">leaveli</div>
-        <div className="text-[8px] uppercase tracking-[0.18em] text-[#3D2B29]/55">Timeline</div>
-      </div>
+    <>
+      <div
+        className="relative flex aspect-square min-h-[172px] w-full flex-col items-center justify-between overflow-hidden rounded-[36px] border-2 border-[#8E7075] bg-[#FFF8FA] px-3.5 py-4 text-[#8E7075] shadow-[0_10px_28px_rgba(142,112,117,0.12)]"
+        style={{ filter: "url(#anniversary-pencil-texture)" }}
+      >
+        <div
+          className="absolute inset-0 opacity-30"
+          style={{
+            backgroundImage: "radial-gradient(#FFD3E0 1px, transparent 1px)",
+            backgroundSize: "16px 16px",
+          }}
+        />
+        <div className="pointer-events-none absolute inset-2 rounded-[28px] border border-dashed border-[#F4B5C6]" />
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-[1] h-[130px] w-[130px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#FFD3E0] after:absolute after:inset-[-8px] after:rounded-full after:border-[6px] after:border-dotted after:border-[#FFD3E0]" />
 
-      <div className="relative pl-5">
-        <div className="absolute bottom-0 left-[7px] top-1 w-px bg-[#3D2B29]/10" />
-        <div className="absolute left-0 top-1 h-[15px] w-[15px] rounded-full border border-[#C87D60] bg-[#FBF8F6]" />
-        <div className="mb-1 text-[9px] uppercase tracking-[0.12em] text-[#C87D60]">March 4, 2026</div>
-        <div className="font-serif text-[21px] leading-tight">纪念日</div>
-        <div className="mt-2 text-[12px] font-light leading-relaxed text-[#3D2B29]/60">从 3 月 4 日开始</div>
-      </div>
+        <div className="relative z-10 flex w-full items-center justify-between text-[8px] font-semibold uppercase tracking-[0.1em]">
+          <div className="font-serif italic">MEM-ID: {serialDay}-W/S</div>
+          <div>記念日</div>
+        </div>
 
-      <div className="absolute bottom-4 left-3.5 right-3.5 border-t border-[#3D2B29]/10 pt-3">
-        <div className="flex items-end gap-1.5">
-          <span className="font-serif text-[38px] leading-none tracking-tight">{dayCount}</span>
-          <span className="pb-1.5 text-[9px] uppercase tracking-[0.16em] text-[#3D2B29]/55">days</span>
+        <svg className="pointer-events-none absolute right-5 top-7 z-10 h-10 w-10 drop-shadow-[2px_2px_0_#FFFFFF]" viewBox="0 0 100 100" aria-hidden="true">
+          <path d="M50 95 C 20 80, 5 60, 15 30 C 20 10, 80 10, 85 30 C 95 60, 80 80, 50 95" fill="#F4B5C6" stroke="#8E7075" strokeWidth="3" />
+          <path d="M40 15 C 45 5, 55 5, 60 15 L 50 25 Z" fill="#C5E1A5" stroke="#8E7075" strokeWidth="2" />
+          <circle cx="40" cy="45" r="2" fill="#8E7075" />
+          <circle cx="60" cy="40" r="2" fill="#8E7075" />
+          <circle cx="50" cy="60" r="2" fill="#8E7075" />
+          <circle cx="35" cy="70" r="2" fill="#8E7075" />
+          <circle cx="65" cy="70" r="2" fill="#8E7075" />
+        </svg>
+
+        <div className="relative z-10 flex flex-1 flex-col items-center justify-center pt-3">
+          <div className="relative -mb-1">
+            <div className="font-serif text-[64px] font-extrabold leading-none tracking-tight">{dayCount}</div>
+            <div className="absolute bottom-2 right-[-26px] rotate-[5deg] rounded-[10px] border-[1.5px] border-[#8E7075] bg-white px-1.5 py-0.5 text-[10px] font-bold leading-none text-[#F4B5C6]">
+              days
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-1.5 text-[13px] font-semibold">
+            わたり <span className="text-[#F4B5C6]">❤︎</span> すみか
+          </div>
+        </div>
+
+        <svg
+          className="pointer-events-none absolute bottom-11 left-3 z-10 h-12 w-[76px] -rotate-[15deg] animate-[anniversary-bow-float_4s_ease-in-out_infinite]"
+          viewBox="0 0 200 100"
+          aria-hidden="true"
+        >
+          <path d="M100 50 Q 130 10, 180 30 Q 190 50, 160 70 Q 130 90, 100 50" fill="white" stroke="#8E7075" strokeWidth="3" />
+          <path d="M100 50 Q 70 10, 20 30 Q 10 50, 40 70 Q 70 90, 100 50" fill="white" stroke="#8E7075" strokeWidth="3" />
+          <circle cx="100" cy="50" r="12" fill="white" stroke="#8E7075" strokeWidth="3" />
+          <path d="M90 60 L 70 95" stroke="#8E7075" strokeWidth="3" strokeLinecap="round" />
+          <path d="M110 60 L 130 95" stroke="#8E7075" strokeWidth="3" strokeLinecap="round" />
+        </svg>
+
+        <div className="relative z-10 w-full border-t border-[#FFD3E0] pt-2.5 text-center text-[8px] uppercase tracking-[0.06em] opacity-70">
+          SINCE 2026.03.04 - ALWAYS TOGETHER
         </div>
       </div>
-    </div>
+
+      <svg className="hidden" aria-hidden="true">
+        <defs>
+          <filter id="anniversary-pencil-texture">
+            <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="3" result="noise" />
+            <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.5" />
+            <feColorMatrix
+              type="matrix"
+              values="
+                1 0 0 0 0
+                0 0.98 0 0 0
+                0 0 0.98 0 0
+                0 0 0 1 0"
+            />
+          </filter>
+        </defs>
+      </svg>
+
+      <style>
+        {`@keyframes anniversary-bow-float {
+          0%, 100% { transform: translateY(0) rotate(-15deg); }
+          50% { transform: translateY(-5px) rotate(-10deg); }
+        }`}
+      </style>
+    </>
   );
 }
 
