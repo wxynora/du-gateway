@@ -195,7 +195,7 @@ export function AppShell({
         if (!j?.ok) throw new Error(j?.error || "刷新失败");
         const text = (j?.text || "").toString().trim();
         if (text) setDailyWhisper(text);
-        if (forceRefresh) toast("Today note 已刷新");
+        if (forceRefresh) toast(text ? "Today note 已刷新" : "还没有新的 note，继续显示上一条");
       } catch (e: any) {
         if (forceRefresh) toast(`Today note 刷新失败：${e?.message || e}`);
       } finally {
