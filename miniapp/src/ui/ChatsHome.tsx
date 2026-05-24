@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiJson, getOrCreatePanelDeviceId } from "./api";
+import strawberryScriptFontUrl from "../assets/fonts/cookie-regular.ttf?url";
 import { DEFAULT_GROUP_CHAT_TITLE, getDisplayGroupChatTitle } from "./chatAppearance";
 import {
   pickBetterHistory,
@@ -226,7 +227,7 @@ function AnniversaryTopBar({ dayCount }: { dayCount: number }) {
         <div className="mt-0.5 text-[8px] font-medium uppercase tracking-[0.15em] text-[#8C8C8C]">Commemoration</div>
       </div>
 
-      <div className="pointer-events-none absolute left-1/2 flex h-full w-[100px] -translate-x-1/2 items-center justify-center">
+      <div className="pointer-events-none absolute left-[60%] flex h-full w-[100px] -translate-x-1/2 items-center justify-center">
         <svg className="h-6 w-full fill-none stroke-[#D92B2B]" viewBox="0 0 100 24" aria-hidden="true">
           <path
             className="animate-[anniversary-pulse-draw_3s_ease-in-out_infinite]"
@@ -314,7 +315,7 @@ function TodayNoteWidget({
         </svg>
 
         <div className="mb-2 text-center">
-          <div className="text-[24px] leading-none text-[#E75480]" style={{ fontFamily: '"Brush Script MT", cursive' }}>Strawberry Day</div>
+          <div className="text-[30px] leading-none text-[#E75480]" style={{ fontFamily: "'TodayNoteScript', 'Brush Script MT', cursive" }}>Strawberry Day</div>
           <div className="-mt-[2px] text-[9px] uppercase tracking-[0.22em] text-[#FFB7C5]">Sweet Memories Memo</div>
         </div>
 
@@ -330,6 +331,16 @@ function TodayNoteWidget({
       <div className="absolute bottom-2 left-3 z-10 text-[7px] font-bold uppercase tracking-[0.08em] text-[#E75480]/50">
         Zakkaya Stationery
       </div>
+
+      <style>
+        {`@font-face {
+          font-family: 'TodayNoteScript';
+          src: url("${strawberryScriptFontUrl}") format("truetype");
+          font-style: normal;
+          font-weight: 400;
+          font-display: block;
+        }`}
+      </style>
     </button>
   );
 }
