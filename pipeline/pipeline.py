@@ -1529,6 +1529,57 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str])
     return out
 
 
+def _memory_dedupe_keys(mem: dict) -> list[str]:
+    if not isinstance(mem, dict):
+        return []
+    keys: list[str] = []
+    mid = str(mem.get("id") or "").strip()
+    if mid:
+        origin_mid = mid[len("core::") :] if mid.startswith("core::") else mid
+        if origin_mid:
+            keys.append(f"id:{origin_mid}")
+    content = " ".join(str(mem.get("content") or "").split()).strip().lower()
+    if len(content) >= 20:
+        keys.append(f"content:{content}")
+    return keys
+
+
+def _prefer_recalled_memory(new_mem: dict, old_mem: dict) -> bool:
+    new_id = str((new_mem or {}).get("id") or "")
+    old_id = str((old_mem or {}).get("id") or "")
+    if new_id.startswith("core::") and not old_id.startswith("core::"):
+        return True
+    return False
+
+
+def _dedupe_recalled_memories(memories: list[dict]) -> list[dict]:
+    """
+    跨动态层与核心缓存层去重。
+    同一条动态记忆进入 core_cache 后，召回可能同时命中 `id` 与 `core::id`；
+    注入时只保留一条，优先保留核心缓存版本。
+    """
+    out: list[dict] = []
+    seen: dict[str, int] = {}
+    for mem in memories or []:
+        if not isinstance(mem, dict):
+            continue
+        keys = _memory_dedupe_keys(mem)
+        dup_indexes = [seen[k] for k in keys if k in seen]
+        if not dup_indexes:
+            out.append(mem)
+            idx = len(out) - 1
+            for k in keys:
+                seen[k] = idx
+            continue
+        idx = min(dup_indexes)
+        if _prefer_recalled_memory(mem, out[idx]):
+            old_keys = _memory_dedupe_keys(out[idx])
+            out[idx] = mem
+            for k in old_keys + keys:
+                seen[k] = idx
+    return out
+
+
 def _memory_weight(m: dict, now=None) -> float:
     """权重 = 基础重要度 + 提及加成 - 时间衰减。"""
     importance = int(m.get("importance") or 0)
@@ -1718,7 +1769,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     # 缓存命中：连续聊同一话题时复用上次检索结果，跳过向量检索和 DS 改写
     cached_results = _recall_cache_hit(window_id, keywords)
     if cached_results is not None:
-        recalled = cached_results
+        recalled = _dedupe_recalled_memories(cached_results)
         vector_error = ""
         expanded_queries = []
         logger.info("动态记忆检索缓存命中 window_id=%s keywords=%d results=%d", window_id, len(keywords), len(recalled))
@@ -1743,6 +1794,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                         or str(mem.get("id") or "").startswith("core::")
                     )
                 ]
+                recalled = _dedupe_recalled_memories(recalled)
         except Exception as e:
             vector_error = str(e)
             logger.warning("dynamic_vector_retrieve 降级为关键词匹配 error=%s", e)
