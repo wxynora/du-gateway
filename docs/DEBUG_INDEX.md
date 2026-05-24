@@ -989,3 +989,8 @@ npm -C miniapp run android
 6. `storage/r2_store.py`
    - 先建 R2 key registry
    - 再按 conversation / memory / miniapp config / schedule / stickers 分组迁移
+
+当前状态（2026-05-25 首页 Today Note / 纪念日小组件）：
+- 已完成：`miniapp/src/ui/ChatsHome.tsx` 删除首页日报摘要卡，Today Note 改成 `ui合集/today note.html` 的粉色便签/贴纸风小组件；右侧新增纪念日小组件，按 `2026-03-04` 起算并显示第 N 天。`miniapp/src/ui/AppShell.tsx` 同步移除首页日报的拉取、刷新状态和传参，保留 Today Note 点击刷新行为。
+- 已验证：`npm --prefix miniapp run build` 通过；`git diff --check -- miniapp/src/ui/ChatsHome.tsx miniapp/src/ui/AppShell.tsx miniapp_static/index.html docs/DEBUG_INDEX.md` 通过；本地 Vite 预览 `http://127.0.0.1:5175/miniapp/` 已打开确认首页显示 Today Note 与纪念日，且无日报摘要入口。
+- 未完成 / 下次继续：本轮不处理已有 `miniapp_static/assets/*` 历史旧 hash 与其他脏文件；如要提交/推送，需只挑本轮源码、`miniapp_static/index.html` 和本轮构建引用的新 hash 资源。

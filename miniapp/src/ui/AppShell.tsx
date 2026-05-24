@@ -65,14 +65,6 @@ const ListenWithDuScreen = lazy(() => import("./tabs/ListenWithDuScreen").then((
 const StudyRoomTab = lazy(() => import("./tabs/StudyRoomTab").then((m) => ({ default: m.StudyRoomTab })));
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | null;
-type DailyReport = {
-  report_date?: string;
-  rounds?: number;
-  keywords?: string[];
-  done_count?: number;
-  summary_text?: string;
-  generated_at?: string;
-};
 type SilenceModeResponse = {
   ok?: boolean;
   enabled?: boolean;
@@ -113,9 +105,7 @@ export function AppShell({
   const [silenceModeSaving, setSilenceModeSaving] = useState(false);
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
-  const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [todayNoteRefreshing, setTodayNoteRefreshing] = useState(false);
-  const [dailyRefreshing, setDailyRefreshing] = useState(false);
   const [deferHomeExtras, setDeferHomeExtras] = useState(false);
   const [floatingBallEnabled, setFloatingBallEnabled] = useState(true);
   const [transparentBubbleEnabled, setTransparentBubbleEnabled] = useState(() => readStoredBoolean("miniapp.ui.transparentBubble"));
@@ -196,12 +186,6 @@ export function AppShell({
     if (wenyouBackHandlerRef.current?.()) return;
     setActiveScreen(null);
   }, []);
-  const loadDailyReport = () =>
-    apiJson<{ ok?: boolean; report?: DailyReport }>("/miniapp-api/daily-report")
-      .then((j) => {
-        if (j?.ok && j?.report) setDailyReport(j.report);
-      })
-      .catch(() => {});
   const loadDailyWhisper = useCallback(
     async (forceRefresh = false) => {
       if (forceRefresh) setTodayNoteRefreshing(true);
@@ -240,7 +224,6 @@ export function AppShell({
   useEffect(() => {
     if (!deferHomeExtras) return;
     void loadDailyWhisper(false);
-    loadDailyReport();
   }, [deferHomeExtras, loadDailyWhisper]);
 
   useEffect(() => {
@@ -341,20 +324,6 @@ export function AppShell({
       }
     } catch (e: any) {
       toast(`图片设置失败：${e?.message || e}`);
-    }
-  }
-
-  async function refreshDailyReport() {
-    setDailyRefreshing(true);
-    try {
-      const j = await apiJson<{ ok?: boolean; report?: DailyReport; error?: string }>("/miniapp-api/daily-report/refresh", { method: "POST" });
-      if (!j?.ok) throw new Error(j?.error || "刷新失败");
-      if (j.report) setDailyReport(j.report);
-      toast("日报已刷新");
-    } catch (e: any) {
-      toast(`日报刷新失败：${e?.message || e}`);
-    } finally {
-      setDailyRefreshing(false);
     }
   }
 
@@ -576,7 +545,6 @@ export function AppShell({
     return (
       <ChatsHome
         dailyWhisper={dailyWhisper}
-        dailyReport={dailyReport}
         duAvatarImage={duAvatarImage}
         benbenAvatarImage={benbenAvatarImage}
         groupTitle={groupChatDisplayTitle}
@@ -588,9 +556,7 @@ export function AppShell({
         onRefreshTodayNote={() => {
           if (!todayNoteRefreshing) void loadDailyWhisper(true);
         }}
-        onRefreshDailyReport={refreshDailyReport}
         todayNoteRefreshing={todayNoteRefreshing}
-        dailyRefreshing={dailyRefreshing}
       />
     );
   };
