@@ -133,6 +133,10 @@ _PENDING_LOCK = threading.Lock()
 _STORY_EXPANSION_JOBS: dict[str, dict] = {}
 _STORY_EXPANSION_JOBS_LOCK = threading.Lock()
 _STORY_EXPANSION_JOB_TTL_SECONDS = 15 * 60
+_FORCED_FRAMEWORK_CACHE_TARGET = 3
+_FORCED_FRAMEWORK_CACHE_MAX = 5
+_FORCED_FRAMEWORK_PREFETCHING: set[int] = set()
+_FORCED_FRAMEWORK_PREFETCH_LOCK = threading.Lock()
 _WENYOU_MEMORY_WINDOW_ID = "wenyou"
 _WENYOU_SUMMARY_EVERY_N_ROUNDS = 4
 try:
@@ -261,13 +265,13 @@ def _format_forced_instance_guidance_for_gm(session: dict, fw: dict) -> str:
     return f"""
 ## 惩罚副本 · 临时 NPC 模式（本局额外规则）
 - 本局仍是无限流副本：存在正常任务者队伍、规则、线索、危险、通关目标和主神结算。
-- 但玩家一「{player1}」不是正常任务者，而是被系统塞入副本世界的原住民 NPC；公开姓名必须使用「{player1}」，不得另起本名、化名、小名或真实姓名。
-- 玩家二「{player2}」不默认属于正常任务者队伍；若出场，也按本副本合理身份行动。
-- 正常任务者才是表层通关队伍，他们的任务可以围绕玩家一 NPC 的生死、秘密、病症、嫌疑、继承权、献祭或异常状态展开。
-- 玩家一的目标是演好 NPC，用符合身份的反应、关系、线索、阻碍或求助推动正常任务者进度；不要把她写成自己通关、打 Boss、找出口的普通任务者。
-- 如果玩家一代号与副本家族、时代、地域或身份结构有违和，不要改名消除；把违和写成剧情钩子，如随母姓、收养、过继、家产侵占、族谱涂改、冒名顶替或异常保留姓名。
-- NPC 身份越核心，危险越高；Boss/异常阵营必须有理由控制、利用、杀死、替换或误导玩家一 NPC。禁止把核心 NPC 写成安全旁观者。
-- 玩家一不能直接说出玩家、任务者、清算对象、外来者、系统或副本真相；不能直接剧透答案、带队通关或跳出 NPC 身份解释机制。
+- 玩家一「{player1}」和玩家二「{player2}」都不是正常任务者，而是一起被系统塞入副本世界的原住民 NPC；两人的公开姓名必须分别使用「{player1}」「{player2}」，不得另起本名、化名、小名或真实姓名。
+- 正常任务者才是表层通关队伍，他们的任务可以围绕玩家一 NPC、玩家二 NPC，或两人共同牵涉的生死、秘密、病症、嫌疑、继承权、献祭、异常状态展开。
+- 玩家一与玩家二的共同目标是演好 NPC，用符合身份的反应、关系、线索、阻碍或求助推动正常任务者进度；不要把任何一人写成自己通关、打 Boss、找出口的普通任务者。
+- 如果任一玩家代号与副本家族、时代、地域或身份结构有违和，不要改名消除；把违和写成剧情钩子，如随母姓、收养、过继、家产侵占、族谱涂改、冒名顶替或异常保留姓名。
+- NPC 身份越核心，危险越高；Boss/异常阵营必须有理由控制、利用、杀死、替换或误导玩家 NPC。禁止把核心 NPC 写成安全旁观者。
+- 玩家一和玩家二都不能直接说出玩家、任务者、清算对象、外来者、系统或副本真相；不能直接剧透答案、带队通关或跳出 NPC 身份解释机制。
+- 正文仍固定玩家一视角；玩家二通过玩家一能看到、听到、交流到的方式出场，不要写成上帝视角双主角。
 - 债务、污染、复活、契约等只作为后端清算原因；叙事里不要把它们写成剧情主题或系统工单。
 """.strip()
 
@@ -1518,6 +1522,7 @@ def _normalize_wallet(raw: Any, seed_points: int = 100) -> dict:
         "clear_records": [x for x in clear_records[-30:] if isinstance(x, dict)],
         "promotion_history": [x for x in promotion_history[-20:] if isinstance(x, dict)],
         "forced_instance_queue": [x for x in forced_queue[-8:] if isinstance(x, dict)],
+        "forced_instance_framework_cache": _normalize_forced_framework_cache(data.get("forced_instance_framework_cache"), data),
         "settlement_history": [x for x in settlement_history[-12:] if isinstance(x, dict)],
         "ability_cooldowns": dict(data.get("ability_cooldowns") or {}) if isinstance(data.get("ability_cooldowns"), dict) else {},
         "shop_state": {
@@ -1746,14 +1751,15 @@ def _refresh_forced_instance_queue(wallet: dict, session: Optional[dict] = None)
     old_ids = _queue_fingerprint(existing)
     new_ids = _queue_fingerprint(queue)
     wallet["forced_instance_queue"] = queue
+    wallet["forced_instance_framework_cache"] = _normalize_forced_framework_cache(wallet.get("forced_instance_framework_cache"), wallet, session)
     return old_ids != new_ids
 
 
 def _forced_candidate_from_queue(item: dict) -> dict[str, Any]:
     penalty_type = str(item.get("penalty_type") or "system")
     genre = "潜伏调查"
-    core_task = "以副本原住民 NPC 身份进入其他任务者正在进行的副本；演好身份，并用符合身份的方式推动正常任务者的副本进度。"
-    hook = "不能暴露自己是玩家、任务者、清算对象或外来者；NPC 身份越靠近主线核心，危险越高。"
+    core_task = "玩家一和玩家二一起以副本原住民 NPC 身份进入其他任务者正在进行的副本；演好各自身份，并用符合身份的方式推动正常任务者的副本进度。"
+    hook = "两人都不能暴露自己是玩家、任务者、清算对象或外来者；NPC 身份越靠近主线核心，危险越高。"
     return {
         "id": "forced_" + str(item.get("id") or "penalty"),
         "title": str(item.get("title") or "强制清算副本"),
@@ -1764,7 +1770,7 @@ def _forced_candidate_from_queue(item: dict) -> dict[str, Any]:
         "core_task": core_task,
         "survival_hook": hook,
         "risk": "演崩身份、直接剧透或破坏副本世界观会导致清算失败，后端再按原因追加债务、污染、封印或追猎状态。",
-        "twist": "正常任务者的任务可以围绕玩家扮演的 NPC 展开；玩家站在剧情中心，但不能用任务者身份行动。",
+        "twist": "正常任务者的任务可以围绕两名玩家扮演的 NPC 展开；玩家站在剧情中心，但不能用任务者身份行动。",
         "tags": ["强制", "惩罚副本", "NPC扮演", "临时身份", penalty_type],
         "estimated_length": "短中篇",
         "forced": True,
@@ -1772,6 +1778,158 @@ def _forced_candidate_from_queue(item: dict) -> dict[str, Any]:
         "queue_id": str(item.get("id") or ""),
         "penalty_type": penalty_type,
     }
+
+
+def _forced_candidate_cache_key(candidate: dict) -> str:
+    queue_id = str(candidate.get("queue_id") or candidate.get("id") or "forced_penalty").replace("forced_", "", 1)
+    penalty = str(candidate.get("penalty_type") or "system").strip().lower() or "system"
+    difficulty = _normalize_difficulty(candidate.get("difficulty") or "C")
+    player1 = _slug_id(str(candidate.get("player1_name_hint") or "玩家一"))[:24]
+    player2 = _slug_id(str(candidate.get("player2_name_hint") or "玩家二"))[:24]
+    title = _slug_id(str(candidate.get("title") or "forced"))[:40]
+    return "|".join([queue_id, penalty, difficulty, player1, player2, title])
+
+
+def _forced_candidates_from_wallet_queue(wallet: dict, session: Optional[dict] = None) -> list[dict]:
+    queue = [x for x in (wallet.get("forced_instance_queue") or []) if isinstance(x, dict) and not x.get("resolved")]
+    player1_name = _wallet_player_display_name(wallet, "player1", "玩家一")
+    player2_name = _wallet_player_display_name(wallet, "player2", "玩家二")
+    candidates = []
+    for row in queue[:2]:
+        item = _forced_candidate_from_queue(row)
+        item["player1_name_hint"] = player1_name
+        item["player2_name_hint"] = player2_name
+        candidates.append(item)
+    return candidates
+
+
+def _normalize_forced_framework_cache(raw: Any, wallet: Optional[dict] = None, session: Optional[dict] = None) -> list[dict]:
+    current_keys: set[str] = set()
+    if isinstance(wallet, dict):
+        current_keys = {_forced_candidate_cache_key(x) for x in _forced_candidates_from_wallet_queue(wallet, session)}
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in (raw if isinstance(raw, list) else []):
+        if not isinstance(item, dict):
+            continue
+        candidate = item.get("candidate") if isinstance(item.get("candidate"), dict) else {}
+        if not candidate.get("forced"):
+            continue
+        cache_key = str(item.get("cache_key") or _forced_candidate_cache_key(candidate))
+        if current_keys and cache_key not in current_keys:
+            continue
+        framework = item.get("framework") if isinstance(item.get("framework"), dict) else None
+        if not framework:
+            continue
+        cache_id = str(item.get("cache_id") or f"forced_fw_{uuid4().hex[:10]}")
+        unique = f"{cache_key}:{cache_id}"
+        if unique in seen:
+            continue
+        seen.add(unique)
+        out.append(
+            {
+                "cache_id": cache_id,
+                "cache_key": cache_key,
+                "queue_id": str(item.get("queue_id") or candidate.get("queue_id") or ""),
+                "candidate": copy.deepcopy(candidate),
+                "framework": _normalize_framework(copy.deepcopy(framework)),
+                "created_at": str(item.get("created_at") or now_beijing_iso()),
+            }
+        )
+    return out[-_FORCED_FRAMEWORK_CACHE_MAX:]
+
+
+def _forced_framework_cache_counts(cache: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in cache:
+        key = str(item.get("cache_key") or "")
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _append_forced_framework_cache(wallet: dict, candidate: dict, framework: dict) -> None:
+    cache = _normalize_forced_framework_cache(wallet.get("forced_instance_framework_cache"), wallet)
+    cache_key = _forced_candidate_cache_key(candidate)
+    cache.append(
+        {
+            "cache_id": f"forced_fw_{uuid4().hex[:10]}",
+            "cache_key": cache_key,
+            "queue_id": str(candidate.get("queue_id") or ""),
+            "candidate": copy.deepcopy(candidate),
+            "framework": _normalize_framework(copy.deepcopy(framework)),
+            "created_at": now_beijing_iso(),
+        }
+    )
+    wallet["forced_instance_framework_cache"] = cache[-_FORCED_FRAMEWORK_CACHE_MAX:]
+
+
+def _take_cached_forced_framework(wallet: dict, candidate: dict) -> Optional[dict]:
+    cache = _normalize_forced_framework_cache(wallet.get("forced_instance_framework_cache"), wallet)
+    cache_key = _forced_candidate_cache_key(candidate)
+    for index, item in enumerate(cache):
+        if str(item.get("cache_key") or "") != cache_key:
+            continue
+        framework = copy.deepcopy(item.get("framework") or {})
+        del cache[index]
+        wallet["forced_instance_framework_cache"] = cache
+        return _normalize_framework(framework)
+    wallet["forced_instance_framework_cache"] = cache
+    return None
+
+
+def _prewarm_forced_framework_cache(user_id: int, target: int = _FORCED_FRAMEWORK_CACHE_TARGET) -> None:
+    uid = int(user_id)
+    try:
+        for _ in range(max(1, int(target or _FORCED_FRAMEWORK_CACHE_TARGET))):
+            session = r2_store.get_wenyou_session(uid)
+            wallet = _load_wenyou_wallet(uid, session if isinstance(session, dict) else None)
+            queue_changed = _refresh_forced_instance_queue(wallet, session if isinstance(session, dict) else None)
+            candidates = _forced_candidates_from_wallet_queue(wallet, session if isinstance(session, dict) else None)
+            cache = _normalize_forced_framework_cache(
+                wallet.get("forced_instance_framework_cache"),
+                wallet,
+                session if isinstance(session, dict) else None,
+            )
+            wallet["forced_instance_framework_cache"] = cache
+            if queue_changed:
+                _save_wenyou_wallet(uid, wallet)
+            if not candidates or len(cache) >= _FORCED_FRAMEWORK_CACHE_TARGET:
+                return
+            counts = _forced_framework_cache_counts(cache)
+            candidate = min(candidates, key=lambda x: (counts.get(_forced_candidate_cache_key(x), 0), _forced_candidate_cache_key(x)))
+            fw, err = generate_framework_from_candidate(candidate)
+            if err or not fw:
+                logger.warning("文游惩罚副本框架预热失败 user_id=%s candidate=%s error=%s", uid, candidate.get("id"), err)
+                return
+            latest_session = r2_store.get_wenyou_session(uid)
+            latest_wallet = _load_wenyou_wallet(uid, latest_session if isinstance(latest_session, dict) else None)
+            _refresh_forced_instance_queue(latest_wallet, latest_session if isinstance(latest_session, dict) else None)
+            current_keys = {
+                _forced_candidate_cache_key(x)
+                for x in _forced_candidates_from_wallet_queue(
+                    latest_wallet,
+                    latest_session if isinstance(latest_session, dict) else None,
+                )
+            }
+            if _forced_candidate_cache_key(candidate) not in current_keys:
+                return
+            _append_forced_framework_cache(latest_wallet, candidate, fw)
+            _save_wenyou_wallet(uid, latest_wallet)
+    except Exception as e:
+        logger.warning("文游惩罚副本框架预热线程异常 user_id=%s error=%s", uid, e, exc_info=True)
+    finally:
+        with _FORCED_FRAMEWORK_PREFETCH_LOCK:
+            _FORCED_FRAMEWORK_PREFETCHING.discard(uid)
+
+
+def _schedule_forced_framework_prewarm(user_id: int) -> None:
+    uid = int(user_id)
+    with _FORCED_FRAMEWORK_PREFETCH_LOCK:
+        if uid in _FORCED_FRAMEWORK_PREFETCHING:
+            return
+        _FORCED_FRAMEWORK_PREFETCHING.add(uid)
+    threading.Thread(target=_prewarm_forced_framework_cache, args=(uid,), name=f"wenyou-forced-prewarm-{uid}", daemon=True).start()
 
 
 def _tutorial_pack_granted(wallet: Optional[dict]) -> bool:
@@ -1846,7 +2004,10 @@ def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
         "penalty_type": penalty_type,
         "locked": bool(candidate.get("locked")),
         "mode": "npc_labor",
+        "participants": ["player1", "player2"],
+        "participant_identities": {"player1": "副本原住民 NPC", "player2": "副本原住民 NPC"},
         "disguised_identity": "副本原住民 NPC",
+        "shared_objective": True,
         "work_order": _compact_text(work_order, 220),
         "forbidden_disclosures": ["玩家身份", "任务者身份", "清算对象身份", "外来者身份", "副本结局/隐藏规则"],
         "exposure_to_taskers": 0,
@@ -1860,7 +2021,7 @@ def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
     rules["forced_instance"] = copy.deepcopy(forced)
     runtime["rules_state"] = rules
     public = runtime.get("public_state") if isinstance(runtime.get("public_state"), dict) else {}
-    public["forced_notice"] = "强制清算副本已接入：维持当前身份，完成系统目标。"
+    public["forced_notice"] = "强制清算副本已接入：维持双方 NPC 身份，完成系统目标。"
     runtime["public_state"] = public
     session["runtime_state"] = runtime
 
@@ -1893,6 +2054,8 @@ def get_forced_instance_prompt(user_id: int) -> dict:
         {"version": 1, "generatedAt": now_beijing_iso(), "items": []},
     )
     items = [x for x in (payload.get("items") or []) if isinstance(x, dict) and x.get("forced")]
+    if items:
+        _schedule_forced_framework_prewarm(int(user_id))
     return {
         "forced": bool(items),
         "item": items[0] if items else None,
@@ -2386,6 +2549,7 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
             row["resolved_at"] = now_beijing_iso()
         queue.append(row)
     wallet["forced_instance_queue"] = queue[:8]
+    wallet["forced_instance_framework_cache"] = _normalize_forced_framework_cache(wallet.get("forced_instance_framework_cache"), wallet, session)
     session["forced_instance"] = forced
     runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
     rules = runtime.get("rules_state") if isinstance(runtime.get("rules_state"), dict) else {}
@@ -5032,7 +5196,7 @@ def _candidate_seed_block(item: dict) -> str:
             f"\n结算原因（metadata，不可写成剧情主题）：{penalty_labels.get(penalty, '强制清算')}"
             f"\n清算队列：{item.get('queue_id') or item.get('id') or ''}"
             f"\n玩家一代号（必须作为玩家 NPC 公开姓名）：{player1_code}"
-            f"\n玩家二代号：{player2_code}"
+            f"\n玩家二代号（必须作为玩家 NPC 公开姓名）：{player2_code}"
         )
     forced_lines = f"{forced_note}\n" if forced_note else ""
     return (
@@ -5053,29 +5217,34 @@ def _candidate_seed_block(item: dict) -> str:
 
 def _forced_candidate_core_prompt(item: dict) -> str:
     player1_code = str(item.get("player1_name_hint") or "玩家一").strip() or "玩家一"
+    player2_code = str(item.get("player2_name_hint") or "玩家二").strip() or "玩家二"
     return f"""把【候选设定】扩展成「无限流 · 惩罚副本」核心设定短稿。
 
 世界观前提：
 - 这是主神空间体系下的无限流副本，不是普通角色扮演剧本。
 - 正常任务者队伍正在按普通无限流逻辑求生、解谜、验证规则、尝试通关。
-- 玩家一不是这支正常任务者队伍成员，而是被系统塞进该副本世界的原住民 NPC。
-- 玩家一的核心目标不是自己通关，而是演好 NPC，并在不暴露身份的前提下推动正常任务者副本进度。
+- 玩家一和玩家二都不是这支正常任务者队伍成员，而是一起被系统塞进该副本世界的原住民 NPC。
+- 玩家一和玩家二的核心目标不是自己通关，而是演好各自 NPC，并在不暴露身份的前提下推动正常任务者副本进度。
+- 正文后续仍以玩家一视角运行；玩家二是同一清算任务里的 NPC 同伴，不是旁观协助角色。
+
+{_forced_common_generation_constraints()}
 
 输出要求：
 - 只写自然语言，不要 JSON，不要 markdown 代码块，不要表格。
 - 5-8 行，每行尽量短。
-- 必须包含：副本时代/场景、正常任务者的公开任务、玩家一 NPC 身份、该身份如何推动进度、身份矛盾、危险牵引、暴露后果。
+- 必须包含：副本时代/场景、正常任务者的公开任务、玩家一 NPC 身份、玩家二 NPC 身份、两人关系或身份差异、两人的身份如何推动进度、身份矛盾、危险牵引、暴露后果。
 - 玩家一 NPC 的公开姓名必须使用「{player1_code}」，不得另起本名、化名、小名或真实姓名；称谓可随时代变化，如“小姐/姑娘/同学/病人/夫人”。
-- 若玩家代号和家族、时代、地域或身份结构有违和，不能改名消除；必须把违和写成剧情钩子，如收养、过继、随母姓、家产侵占、族谱涂改、冒名顶替或异常刻意保留。
-- 玩家一 NPC 可以是副本核心人物：被救援对象、被调查对象、嫌疑人、继承人、祭品、病人、规则触发者、线索持有人或仪式核心。
-- NPC 身份越接近主线核心，危险越高；必须让 Boss/异常阵营有理由控制、利用、杀死、替换或误导玩家一 NPC。
+- 玩家二 NPC 的公开姓名必须使用「{player2_code}」，不得另起本名、化名、小名或真实姓名；称谓可随时代和身份变化。
+- 若任一玩家代号和家族、时代、地域或身份结构有违和，不能改名消除；必须把违和写成剧情钩子，如收养、过继、随母姓、家产侵占、族谱涂改、冒名顶替或异常刻意保留。
+- 玩家 NPC 可以是副本核心人物：被救援对象、被调查对象、嫌疑人、继承人、祭品、病人、规则触发者、线索持有人或仪式核心；两人可以一主一辅，也可以共同牵住主线。
+- NPC 身份越接近主线核心，危险越高；必须让 Boss/异常阵营有理由控制、利用、杀死、替换或误导玩家 NPC。
 - 结算原因只作为后端 metadata；不要把债务、污染、复活、契约写成剧情主题或副本主线。
 - 不要写 opening，不要写属性数值，不要替玩家行动。
 
 严格禁止：
-- 禁止把玩家一写成普通任务者。
+- 禁止把玩家一或玩家二写成普通任务者。
 - 禁止把本局写成玩家自己通关、打 Boss、找出口的普通副本。
-- 禁止让玩家一直接剧透答案、解释系统、带队通关或跳出 NPC 身份。
+- 禁止让玩家一或玩家二直接剧透答案、解释系统、带队通关或跳出 NPC 身份。
 
 【候选设定】
 {_candidate_seed_block(item)}"""
@@ -5117,25 +5286,41 @@ def _candidate_canon_block(item: dict, core_text: str) -> str:
     ).strip()
 
 
+def _forced_common_generation_constraints() -> str:
+    return """普通副本底层规则也必须继承：
+- 本局仍须有普通无限流副本结构：副本类型、规则/线索/危险源、通关目标、威胁推进和主神结算；不能只写成单纯 NPC 扮演小剧场。
+- 正常任务者总人数仍遵守 2-13 的世界规则；惩罚副本里的“正常任务者队伍”可围绕玩家 NPC 展开，但不要把玩家一或玩家二写进这支正常任务者队伍。
+- 正常任务者和副本 NPC 的真实善恶、隐藏动机、怪物弱点、Boss 真相、隐藏结局都不能在开场或公开短稿里直给；只写公开态度、可见行为和可验证线索。
+- 线索必须可验证、能推进任务或规则判断；不要把氛围描写、外貌描写或世界观介绍当线索清单甩给玩家。
+- 不要写精确 HP/SAN/积分/EXP/抽卡/掉落/晋升/永久能力到账；这些由后端结算。惩罚副本成功/失败只写清算方向，不直接发奖励。
+- Boss 或核心异常默认不可被玩家一或玩家二正面解决；必须保留削弱、封印、规避、感化、揭真相或由正常任务者推进的路径。
+- 每条关键推进路径要有 fail-forward：错过线索时可通过发病、问话、误判、异常压力、二次调查或身份关系继续推进，不让剧情卡死。
+- opening 和正文固定玩家一视角，用“你/你的”；玩家二只通过玩家一可见、可听、可交流的信息呈现；不得替玩家决定行动、表情、内心独白，不得让玩家主动解释系统或跳出身份。"""
+
+
 def _forced_candidate_blueprint_prompt(item: dict, core_text: str = "") -> str:
     player1_code = str(item.get("player1_name_hint") or "玩家一").strip() or "玩家一"
+    player2_code = str(item.get("player2_name_hint") or "玩家二").strip() or "玩家二"
     return f"""基于【已确定核心设定】生成「无限流 · 惩罚副本」蓝图短稿。
 
 本局底层结构：
 - 这仍然是无限流副本：存在主神空间、正常任务者队伍、规则、线索、危险、通关目标和结算。
-- 但玩家一不是正常任务者；玩家一是被塞进副本世界的 NPC。
-- 正常任务者才是表层主角，他们的主线可以围绕玩家一 NPC 展开。
-- 玩家一的隐藏工作是演好 NPC，用符合身份的方式推动正常任务者进度，并避免暴露。
+- 但玩家一和玩家二都不是正常任务者；两人是一起被塞进副本世界的 NPC。
+- 正常任务者才是表层主角，他们的主线可以围绕玩家一 NPC、玩家二 NPC，或两人共同关系展开。
+- 玩家一和玩家二的隐藏工作是演好各自 NPC，用符合身份的方式推动正常任务者进度，并避免暴露。
+- 蓝图内部要明确两人的 NPC 身份、关系、可配合边界；正文运行时仍固定玩家一视角。
+
+{_forced_common_generation_constraints()}
 
 输出要求：
 - 只写自然语言，不要 JSON，不要 markdown 代码块，不要表格。
 - 按三段写：入戏、推动、收束。
-- 每段都写：玩家 NPC 表演目标 / 正常任务者进度 / 可给出的线索或阻碍 / 暴露风险 / 错过时如何 fail-forward。
-- 额外列出：玩家 NPC 身份契约、正常任务者公开任务、身份违和钩子、Boss/异常对玩家 NPC 的危险牵引、暴露给任务者/怪物阵营的后果、隐藏支线/隐藏结局方向。
+- 每段都写：两名玩家 NPC 的表演目标 / 正常任务者进度 / 可给出的线索或阻碍 / 任一方暴露风险 / 错过时如何 fail-forward。
+- 额外列出：玩家一 NPC 身份契约、玩家二 NPC 身份契约、两人关系或配合边界、正常任务者公开任务、身份违和钩子、Boss/异常对玩家 NPC 的危险牵引、暴露给任务者/怪物阵营的后果、隐藏支线/隐藏结局方向。
 - 玩家 NPC 身份可以很核心，甚至是被救援、被调查、被怀疑、被保护或被献祭的对象；越核心越危险。
-- 玩家 NPC 的公开姓名必须使用「{player1_code}」；不得另起姓名。
+- 玩家一 NPC 的公开姓名必须使用「{player1_code}」，玩家二 NPC 的公开姓名必须使用「{player2_code}」；不得另起姓名。
 - 结算原因只写成“后端清算原因”，不得让债务/污染/复活/契约成为剧情主线。
-- 怪物或 Boss 默认不可由玩家一正面解决；玩家一只能通过 NPC 身份引导任务者发现削弱、封印、规避或真相路径。
+- 怪物或 Boss 默认不可由玩家一或玩家二正面解决；两人只能通过 NPC 身份引导任务者发现削弱、封印、规避或真相路径。
 - 只给 GM/后端内部短纲，不要整段剧透给玩家。
 
 【已确定核心设定】
@@ -5165,16 +5350,20 @@ def _candidate_blueprint_prompt(item: dict, core_text: str = "") -> str:
 
 def _forced_candidate_opening_prompt(item: dict, core_text: str = "") -> str:
     player1_code = str(item.get("player1_name_hint") or "玩家一").strip() or "玩家一"
+    player2_code = str(item.get("player2_name_hint") or "玩家二").strip() or "玩家二"
     return f"""基于【已确定核心设定】生成「无限流 · 惩罚副本」开场正文。
+
+{_forced_common_generation_constraints()}
 
 输出要求：
 - 只写开场正文，不要 JSON，不要 markdown 代码块。
 - 5-9 句，像小说正文一样续写，必须保留无限流质感：白光/传送/主神提示音/刻板广播/副本载入感至少出现一种。
 - 固定以玩家一为视角中心，用第二人称“你/你的”指代玩家一。
-- 开场要让玩家明确感到：自己被塞进了一个副本原住民 NPC 身份，而不是作为普通任务者入场。
-- 玩家 NPC 的公开姓名必须使用「{player1_code}」；可以用称谓组合，如“某家大小姐{player1_code}”“{player1_code}小姐”“{player1_code}同学”，但不得另起姓名。
+- 开场要让玩家明确感到：自己和玩家二都被塞进了副本原住民 NPC 身份，而不是作为普通任务者入场。
+- 玩家一 NPC 的公开姓名必须使用「{player1_code}」；可以用称谓组合，如“某家大小姐{player1_code}”“{player1_code}小姐”“{player1_code}同学”，但不得另起姓名。
+- 玩家二 NPC 的公开姓名必须使用「{player2_code}」；只能通过玩家一当前能看到、听到、交流到的方式出现，不要写成普通任务者。
 - 必须出现或暗示正常任务者队伍的存在；他们可以是被请来的医生、调查员、道士、学生、住户、警员、求生者等，正在按普通无限流逻辑接近主线。
-- 可以让正常任务者的表层任务围绕玩家 NPC 展开，例如治疗、保护、调查、看守、护送、判断其是否异常。
+- 可以让正常任务者的表层任务围绕玩家 NPC 展开，例如治疗、保护、调查、看守、护送、判断两人中某一人或两人的关系是否异常。
 - 不要把后端结算原因念给玩家；不要说“债务/污染/契约工单”等说明书词。
 - 不要输出任务者名单、线索列表、规则档案或情报卡。
 - 如果写系统/主神广播，必须独立成行：`【系统提示】广播内容`。
@@ -5350,54 +5539,57 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
             "system": "系统",
         }
         penalty_label = penalty_labels.get(penalty_type, "系统")
-        raw["player1_role"] = "被主神临时塞入本副本的原住民 NPC；公开姓名沿用玩家代号，必须维持身份并推动正常任务者进度。"
-        raw["player2_role"] = "与玩家一同处副本世界的临时协助角色；不默认属于正常任务者队伍。"
-        raw["conflict"] = "维持当前 NPC 身份，在不暴露玩家/任务者/外来者身份的前提下，推动正常任务者完成他们的副本主线，直到主神确认清算完成。"
-        raw["failure_hint"] = "身份暴露、直接剧透、替任务者强行通关或破坏副本世界观，会导致清算失败或评级下降。"
+        raw["player1_role"] = "被主神临时塞入本副本的原住民 NPC；公开姓名沿用玩家代号，必须维持身份并与玩家二共同推动正常任务者进度。"
+        raw["player2_role"] = "玩家二也与玩家一一起被主神临时塞入本副本的原住民 NPC；公开姓名沿用玩家代号，必须维持身份并共同完成清算。"
+        raw["conflict"] = "维持双方 NPC 身份，在不暴露玩家/任务者/外来者身份的前提下，推动正常任务者完成他们的副本主线，直到主神确认清算完成。"
+        raw["failure_hint"] = "任一方身份暴露、直接剧透、替任务者强行通关或破坏副本世界观，会导致清算失败或评级下降。"
         raw["reward_hint"] = f"惩罚副本完成后由后端按{penalty_label}清算原因优先抵扣或解除对应代价；副本剧情不以该原因作为主线。"
         raw["public"]["visible_rules"] = [
-            "维持当前 NPC 身份。",
+            "维持双方 NPC 身份。",
             "不能暴露玩家、任务者、清算对象或外来者身份。",
             "用符合身份的行为推动正常任务者进度。",
         ]
         raw["public"]["public_task"] = raw["conflict"]
         raw["gm_secret"]["true_rules"] = [
             "本局是临时 NPC 惩罚副本；正常任务者才是表层通关队伍。",
-            "玩家一 NPC 的公开姓名必须沿用玩家代号，不得另起姓名。",
-            "玩家一 NPC 越接近主线核心，Boss/异常阵营越会控制、利用、杀死或替换她。",
-            "玩家一只能通过符合 NPC 身份的反应、关系、线索、阻碍或求助推动任务者，不可直接剧透。",
+            "玩家一与玩家二都是副本原住民 NPC，不属于正常任务者队伍。",
+            "两名玩家 NPC 的公开姓名都必须沿用玩家代号，不得另起姓名。",
+            "玩家 NPC 越接近主线核心，Boss/异常阵营越会控制、利用、杀死或替换对应角色。",
+            "玩家一和玩家二只能通过符合 NPC 身份的反应、关系、线索、阻碍或求助推动任务者，不可直接剧透。",
+            "正文仍固定玩家一视角，玩家二只能通过玩家一可见、可听、可交流的信息呈现。",
         ]
         raw["gm_secret"]["hidden_endings"] = [
-            {"name": "身份无损清算", "condition": "玩家一始终维持 NPC 身份，并让正常任务者完成主线关键进度。"},
-            {"name": "暴露清算失败", "condition": "玩家一主动说出系统/任务者/外来者真相，或被任务者与异常阵营同时识破。"},
+            {"name": "身份无损清算", "condition": "玩家一和玩家二始终维持 NPC 身份，并让正常任务者完成主线关键进度。"},
+            {"name": "暴露清算失败", "condition": "任一玩家主动说出系统/任务者/外来者真相，或两人的 NPC 身份被任务者与异常阵营同时识破。"},
         ]
         raw["instance_blueprint"]["logline"] = (blueprint_logline or "临时 NPC 在别人的副本里演好身份并推动主线。")[:240]
         raw["instance_blueprint"]["mainline"] = [
             {
                 "phase": "入戏",
-                "goal": "确认玩家一的 NPC 身份、社会位置、行动边界，以及正常任务者正在接近的公开任务。",
+                "goal": "确认玩家一和玩家二的 NPC 身份、社会位置、关系、行动边界，以及正常任务者正在接近的公开任务。",
                 "required_clues": [],
-                "fail_forward": "如果玩家一暂时无法推进，由副本人物、任务者误判或异常压力迫使她做出符合身份的反应。",
+                "fail_forward": "如果玩家暂时无法推进，由副本人物、任务者误判、两人关系牵引或异常压力迫使他们做出符合身份的反应。",
                 "notes": blueprint[:500],
             },
             {
                 "phase": "推动",
-                "goal": "玩家一用 NPC 身份能做的事，间接给出线索、制造合理冲突或阻止错误路线。",
+                "goal": "玩家一和玩家二用 NPC 身份能做的事，间接给出线索、制造合理冲突或阻止错误路线。",
                 "required_clues": [],
                 "fail_forward": "线索错过时，用发病、问话、家族/组织关系、环境异变或任务者二次调查继续推进。",
             },
             {
                 "phase": "收束",
-                "goal": "正常任务者完成关键判断或通关节点，玩家一避免暴露并等待主神确认清算。",
+                "goal": "正常任务者完成关键判断或通关节点，玩家一和玩家二避免暴露并等待主神确认清算。",
                 "required_clues": [],
                 "fail_forward": "若暴露风险过高，进入强制撤离、评级下降或清算失败结算。",
             },
         ]
         raw["instance_blueprint"]["hard_constraints"] = [
             "这是无限流惩罚副本，不是普通角色扮演剧本。",
-            "玩家一不是正常任务者，不能按普通通关副本推进。",
-            "玩家一 NPC 公开姓名必须使用玩家代号，不能另起姓名。",
-            "正常任务者的任务可以围绕玩家一 NPC 展开。",
+            "玩家一和玩家二都不是正常任务者，不能按普通通关副本推进。",
+            "两名玩家 NPC 公开姓名必须使用各自玩家代号，不能另起姓名。",
+            "正常任务者的任务可以围绕玩家一、玩家二或两人的关系展开。",
+            "正文固定玩家一视角，玩家二不写成普通任务者。",
             "NPC 身份越核心，危险越高；不能写成安全旁观者。",
             "债务、污染、复活、契约只作为后端清算原因，不得写成剧情主线。",
             "不要替玩家做行动决定，不要直接剧透隐藏真相。",
@@ -6275,9 +6467,15 @@ def cmd_story_from_candidate(user_id: int, candidate: Any) -> str:
     item["player1_name_hint"] = _wallet_player_display_name(wallet, "player1", "玩家一")
     item["player2_name_hint"] = _wallet_player_display_name(wallet, "player2", "玩家二")
 
-    fw, err = generate_framework_from_candidate(item)
-    if err or not fw:
-        return err or "文游：候选扩展开局失败。"
+    fw = _take_cached_forced_framework(wallet, item) if item.get("forced") else None
+    if fw:
+        _save_wenyou_wallet(uid, wallet)
+        err = None
+        logger.info("文游使用惩罚副本预热框架 user_id=%s candidate=%s", uid, item.get("id"))
+    else:
+        fw, err = generate_framework_from_candidate(item)
+        if err or not fw:
+            return err or "文游：候选扩展开局失败。"
 
     fw = _apply_wallet_player_names_to_framework(fw, wallet)
     session = _new_session(fw)
@@ -7040,6 +7238,14 @@ def summarize_story_for_ai_player(state: Any, actor_id: Any = "player2") -> dict
         known_risks.append("副本中不能使用系统商店或命运裂隙。")
     else:
         known_risks.append("抽卡不受幸运影响，商店和抽卡消耗各自玩家积分。")
+    forced = session.get("forced_instance") if isinstance(session.get("forced_instance"), dict) else None
+    party_notes = [
+        "玩家一与玩家二当前同队行动。",
+        "任务物品默认属于副本临时物，能否带出以规则引擎结算为准。",
+    ]
+    if forced and str(forced.get("mode") or "") == "npc_labor":
+        known_risks.append("惩罚副本：玩家一和玩家二都是副本原住民 NPC，不能暴露玩家/任务者/外来者身份。")
+        party_notes[0] = "玩家一与玩家二共同执行惩罚副本清算，双方都是副本原住民 NPC。"
     return {
         "campaign_summary": _compact_text(f"当前队伍处于{_phase_label(phase)}；副本为{_framework_instance_line(fw) or '未选择副本'}。", 180),
         "current_scene_summary": _compact_text(public.get("scene_summary") or fw.get("world") or "当前场景信息有限。", 220),
@@ -7047,10 +7253,7 @@ def summarize_story_for_ai_player(state: Any, actor_id: Any = "player2") -> dict
         "last_rules_result": _compact_text(public.get("last_rules_result") or _format_state_patch_for_display(session.get("last_state_patch")) or "上一轮暂无额外规则结算。", 260),
         "active_objectives": [x for x in active_objectives if x][:6] or [_compact_text(fw.get("conflict") or "存活并确认通关条件。", 120)],
         "known_risks": known_risks[:6],
-        "party_notes": [
-            "玩家一与玩家二当前同队行动。",
-            "任务物品默认属于副本临时物，能否带出以规则引擎结算为准。",
-        ],
+        "party_notes": party_notes,
     }
 
 
@@ -7082,6 +7285,7 @@ def compose_ai_player_context(state: Any, actor_id: Any = "player2", wallet: Opt
     elif phase == "instance_running":
         location = "副本内"
     gacha = _normalize_gacha_state(account.get("gacha"))
+    forced = session.get("forced_instance") if isinstance(session.get("forced_instance"), dict) else None
     team_states = {}
     for pid in _WENYOU_PLAYER_IDS:
         p = st.get(pid) if isinstance(st.get(pid), dict) else {}
@@ -7110,6 +7314,8 @@ def compose_ai_player_context(state: Any, actor_id: Any = "player2", wallet: Opt
                 "instance_name": _framework_instance_line(fw),
                 "current_location": location,
                 "public_task": _compact_text(fw.get("conflict") or "", 180),
+                "role_in_instance": _compact_text(fw.get(f"{actor}_role") or "", 180),
+                "forced_instance_contract": copy.deepcopy(forced) if forced and str(forced.get("mode") or "") == "npc_labor" else None,
             },
             "story_brief": summarize_story_for_ai_player(session, actor),
             "public_panel": _ai_public_panel(session),
