@@ -941,6 +941,11 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py services/wenyou/common.py services/wenyou/constants.py services/wenyou/phase.py services/wenyou/prompts.py services/wenyou/deepseek_client.py services/wenyou/runtime_state.py services/wenyou/inventory.py services/wenyou/catalog.py services/wenyou/abilities.py routes/miniapp/wenyou.py app.py` 通过；`PYTHONPATH="$PWD" .venv/bin/python` 导入 `app / routes.miniapp.wenyou / services.wenyou_service / services.wenyou.abilities / services.wenyou.catalog` 通过；`_ability_definition("core_survival")` 和固定新手副本 GM 消息 smoke 通过；`git diff --check -- services/wenyou_service.py services/wenyou/inventory.py services/wenyou/catalog.py services/wenyou/abilities.py docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 下次继续：服务主文件仍有约 7.8k 行；后续优先拆商店/抽卡流程、结算/成长流程、怪物遭遇和 AI 玩家上下文。继续不碰非文游脏文件和旧静态 hash 产物。
 
+当前状态（2026-05-24 文游对讲机第一版）：
+- 已完成：文游局内新增“对讲机”第一版。后端新增 `/miniapp-api/wenyou/team-channel`，默认只记录对讲机短讯并调用玩家二上下文生成回复；可用 `consume_turn=true` 将对讲机内容记为同步行动并进入 GM 结算。`services/wenyou_service.py` 新增 `team_channel` 会话视图、对讲机日志、玩家二对讲机提示词和同步行动落库；`get_session_view` 返回 `team_channel`。前端 `WenyouTab.tsx` 在局内输入区上方新增对讲机面板，支持频段/信号/杂音、快捷呼叫队友/报位置/交换线索/约定会合、短讯通话/同步行动模式和发送。Boss 领域、核心异常、封锁、屏蔽、禁区等公开状态会触发 `信号中断`，后端拒绝发送；规则怪谈/红蓝阵营/监听等状态会显示杂音干扰。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py` 通过；`npm --prefix miniapp run build` 通过；`git diff --check -- services/wenyou_service.py routes/miniapp/wenyou.py miniapp/src/ui/tabs/WenyouTab.tsx miniapp/src/styles.css` 通过但仍提示 `miniapp/src/styles.css` 既有 CRLF warning。构建产物会更新 `miniapp_static/index.html` 与新 hash 资源，本轮不清理历史旧 hash 产物。
+- 未完成 / 下次继续：冒名消息、第三方串台、分地点地图状态和道具/积分转交流程还没细化；当前第一版重点是“可接通、可断讯、可记录、可选择是否消耗回合”。非文游脏文件、旧静态 hash 产物继续不碰。
+
 1. `routes/miniapp_api.py`
    - 已拆：SumiTalk chat job 路由和任务状态机已移到 `routes/miniapp/sumitalk_chat_jobs.py`；`/sumitalk-chat` 与 `/sumitalk-chat-jobs*` 路径保持不变
    - 已拆：Codex group chat task 路由已移到 `routes/miniapp/codex_group_chat.py`；`/codex-group-chat-tasks*` 路径保持不变

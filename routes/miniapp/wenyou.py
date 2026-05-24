@@ -147,6 +147,72 @@ def _generate_wenyou_ai_player_action(
         return "", f"AI 玩家聊天管道异常：{e}"
 
 
+def _clean_team_channel_reply(text: str) -> str:
+    raw = _clean_ai_player_action_text(text)
+    raw = raw.replace("[WENYOU_TEAM_CHANNEL]", "").replace("[/WENYOU_TEAM_CHANNEL]", "")
+    raw = raw.replace("[WENYOU WALKIE TALKIE]", "").replace("[/WENYOU WALKIE TALKIE]", "")
+    return raw[:500].strip()
+
+
+def _generate_wenyou_team_channel_reply(
+    uid: int,
+    player_message: str,
+    *,
+    window_id: str,
+    consume_turn: bool = False,
+    actor_id: str = "player2",
+) -> tuple[str, str]:
+    clean_window_id = str(window_id or "").strip()
+    if not clean_window_id:
+        return "", "缺少 window_id，跳过对讲机回应生成"
+    try:
+        from routes.chat import chat_completions
+        from services.wenyou_service import build_ai_player_channel_messages
+
+        messages = build_ai_player_channel_messages(
+            uid,
+            player_message,
+            actor_id=actor_id,
+            consume_turn=consume_turn,
+        )
+        if not messages:
+            return "", "当前没有可注入的文游对讲机上下文"
+        model = upstream_store.get_cached_active_model(refresh_if_missing=False)
+        chat_body = {
+            "model": model,
+            "stream": False,
+            "window_id": clean_window_id,
+            "messages": messages,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": request.headers.get("User-Agent") or "SumiTalk Wenyou",
+            "X-Force-Last4": str(request.headers.get("X-Force-Last4") or "1"),
+            "X-Reply-Channel": "sumitalk",
+            "X-Reply-Target": "wenyou_walkie_talkie",
+            "X-Skip-Dynamic-Memory": "1",
+            "X-Window-Id": clean_window_id,
+        }
+        with current_app.test_request_context(
+            "/v1/chat/completions",
+            method="POST",
+            json=chat_body,
+            headers=headers,
+            environ_base={"REMOTE_ADDR": request.remote_addr or "127.0.0.1"},
+        ):
+            result = chat_completions()
+            status_code, resp_json = _extract_chat_completion_result(result)
+        if status_code >= 400:
+            err = resp_json.get("error") or resp_json.get("message") or "upstream error"
+            return "", f"对讲机聊天管道失败：{err}"
+        reply = _clean_team_channel_reply(_extract_assistant_content(resp_json))
+        if not reply:
+            return "", "对讲机没有返回清晰回应"
+        return reply, ""
+    except Exception as e:
+        return "", f"对讲机聊天管道异常：{e}"
+
+
 def _maybe_generate_ai_player_action(
     uid: int,
     *,
@@ -541,6 +607,53 @@ def register_routes(bp) -> None:
         if ai_player_error:
             payload["ai_player_error"] = ai_player_error
         return jsonify(payload), (400 if failed else 200)
+
+    @bp.route("/wenyou/team-channel", methods=["POST"])
+    def miniapp_wenyou_team_channel():
+        """文游：对讲机，默认不消耗回合；可选择同步行动。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        text = str(data.get("text") or data.get("message") or "").strip()
+        consume_turn = bool(data.get("consume_turn") or data.get("turn_consumed"))
+        if not text:
+            return jsonify({"ok": False, "error": "对讲机内容不能为空"}), 400
+        from services.wenyou_service import cmd_team_channel_message, get_session_view
+
+        view = get_session_view(uid)
+        channel = (view.get("session") or {}).get("team_channel") if isinstance(view.get("session"), dict) else {}
+        if isinstance(channel, dict) and channel.get("blocked"):
+            _ok, message, _ai_player_action = cmd_team_channel_message(uid, text, consume_turn=False)
+            return jsonify({"ok": False, "error": message or channel.get("risk") or "对讲机信号中断。", **get_session_view(uid)}), 400
+        window_id = str(data.get("window_id") or request.headers.get("X-Window-Id") or "").strip()
+        reply, reply_error = _generate_wenyou_team_channel_reply(
+            uid,
+            text,
+            window_id=window_id,
+            consume_turn=consume_turn,
+        )
+        if not reply:
+            reply = "对讲机里只有短促杂音，暂时没有收到清晰回应。"
+
+        ok, message, ai_player_action = cmd_team_channel_message(
+            uid,
+            text,
+            ai_player_reply=reply,
+            consume_turn=consume_turn,
+        )
+        payload = {
+            "ok": ok,
+            "message": reply if not consume_turn else "",
+            "text": message if consume_turn else "",
+            "reply": reply,
+            "ai_player_action": ai_player_action,
+            "turn_consumed": consume_turn,
+            **get_session_view(uid),
+        }
+        if reply_error:
+            payload["warning"] = reply_error
+        return jsonify(payload), (200 if ok else 400)
 
     @bp.route("/wenyou/go", methods=["POST"])
     def miniapp_wenyou_go():

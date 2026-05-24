@@ -182,6 +182,26 @@ type FeedItem = {
 
 type WenyouHistoryItem = { role?: string; content?: string; timestamp?: string };
 
+type WenyouTeamChannelMessage = {
+  id?: string;
+  sender?: "player1" | "player2" | "system" | string;
+  text?: string;
+  timestamp?: string;
+  consume_turn?: boolean;
+};
+
+type WenyouTeamChannel = {
+  status?: string;
+  label?: string;
+  risk?: string;
+  frequency?: string;
+  noise?: number;
+  blocked?: boolean;
+  peer_display_name?: string;
+  current_location?: string;
+  messages?: WenyouTeamChannelMessage[];
+};
+
 type WenyouCoreAbility = {
   id?: string;
   name?: string;
@@ -371,6 +391,7 @@ type WenyouSessionPanel = {
   public_state?: WenyouPublicState;
   public_view?: WenyouPublicState;
   rules_state?: WenyouRulesState;
+  team_channel?: WenyouTeamChannel;
   runtime_state?: {
     public_state?: WenyouPublicState;
     rules_state?: WenyouRulesState;
@@ -867,6 +888,9 @@ function Icon({ name }: { name: string }) {
   if (name === "list") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>;
   }
+  if (name === "channel") {
+    return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12a8 8 0 0 1 16 0" /><path d="M7 12a5 5 0 0 1 10 0" /><path d="M10 12a2 2 0 0 1 4 0" /><path d="M12 14v6" /></svg>;
+  }
   if (name === "x") {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>;
   }
@@ -883,6 +907,23 @@ function Icon({ name }: { name: string }) {
     return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4 20-7Z" /></svg>;
   }
   return <svg className={common} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></svg>;
+}
+
+function WalkieTalkieGlyph() {
+  return (
+    <span className="wenyou-walkie-glyph" aria-hidden="true">
+      <svg viewBox="0 0 64 64" fill="none">
+        <path className="walkie-antenna" d="M26 10v11" />
+        <circle className="walkie-dot" cx="26" cy="9" r="3" />
+        <rect className="walkie-body" x="17" y="21" width="27" height="34" rx="4" />
+        <path className="walkie-side" d="M44 26h4v15h-4" />
+        <path className="walkie-wave" d="M49 25c3 3 4.5 6 4.5 10S52 42 49 45" />
+        <path className="walkie-wave" d="M45 29c1.8 1.8 2.6 3.7 2.6 6S46.8 39.2 45 41" />
+        <text x="21" y="35" className="walkie-text">CH-T</text>
+        <path className="walkie-slots" d="M23 40h15M23 44h15M23 48h15" />
+      </svg>
+    </span>
+  );
 }
 
 function riftRarityRank(rarity: RiftRarity) {
@@ -1310,6 +1351,10 @@ export function WenyouTab({
   const [panelInitialTab, setPanelInitialTab] = useState<WenyouPanelTab>("任务");
   const [profileTab, setProfileTab] = useState<WenyouProfileTab>("副本存档");
   const [quickDecisionOpen, setQuickDecisionOpen] = useState(false);
+  const [teamChannelOpen, setTeamChannelOpen] = useState(false);
+  const [teamChannelText, setTeamChannelText] = useState("");
+  const [teamChannelMode, setTeamChannelMode] = useState<"talk" | "action">("talk");
+  const [teamChannelSending, setTeamChannelSending] = useState(false);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
   const [entryScenePending, setEntryScenePending] = useState(false);
   const [activeScene, setActiveScene] = useState<EntryScene | null>(null);
@@ -1712,6 +1757,8 @@ export function WenyouTab({
   const playerOneName = playerDisplayName(profileStats.player1 || gameRulesState.players?.player1 || homePlayer, String(status.entry?.player_name || "").trim() || "玩家一");
   const playerTwoName = playerDisplayName(profileStats.player2 || gameRulesState.players?.player2, String(status.entry?.player2_name || "").trim() || "玩家二");
   const aiPlayerActionLabel = `${playerTwoName}的行动`;
+  const teamChannel = sessionPanel?.team_channel || null;
+  const teamChannelLabel = teamChannel?.label || (hasActiveRun ? "信号稳定" : "未接入");
   const attributePointEntries = useMemo(() => {
     return (["player1", "player2"] as const)
       .map((player) => {
@@ -2003,6 +2050,54 @@ export function WenyouTab({
       toast(`行动失败：${e?.message || e}`);
     } finally {
       setActing(false);
+    }
+  }
+
+  async function sendTeamChannel(inputText?: string, consumeTurn = teamChannelMode === "action") {
+    const text = String(inputText ?? teamChannelText).trim();
+    if (!text || teamChannelSending || acting) return;
+    setQuickDecisionOpen(false);
+    setTeamChannelSending(true);
+    if (consumeTurn) setActing(true);
+    try {
+      const j = await apiJson<{
+        ok?: boolean;
+        message?: string;
+        reply?: string;
+        text?: string;
+        ai_player_action?: string;
+        turn_consumed?: boolean;
+        warning?: string;
+        session?: WenyouSessionPanel;
+        error?: string;
+      }>("/miniapp-api/wenyou/team-channel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, consume_turn: consumeTurn, window_id: windowId }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "对讲机发送失败");
+      const stamp = Date.now();
+      if (j.session) setSessionPanel(j.session);
+      if (j.turn_consumed) {
+        const gmText = String(j.text || "");
+        const aiPlayerAction = String(j.ai_player_action || j.reply || "").trim();
+        setFeed((prev) => [
+          ...prev,
+          { id: `team-u-${stamp}`, kind: "user", text: `对讲机：${text}` },
+          ...(aiPlayerAction ? [{ id: `team-ai-${stamp}`, kind: "ai_player" as const, text: aiPlayerAction }] : []),
+          { id: `team-gm-${stamp}`, kind: "system", text: gmText || "主神系统暂无回应。" },
+        ]);
+        setSettlementDraftOpen(false);
+        setSettlementPreview(null);
+        await loadStatus();
+      }
+      if (j.warning) toast(j.warning);
+      setTeamChannelText("");
+    } catch (e: any) {
+      toast(`对讲机失败：${e?.message || e}`);
+    } finally {
+      setTeamChannelSending(false);
+      if (consumeTurn) setActing(false);
     }
   }
 
@@ -2888,6 +2983,37 @@ export function WenyouTab({
                 onConfirm={enterSettlement}
               />
             ) : null}
+            {!gameSettlementReady && sessionPanel?.phase !== "settlement" ? (
+              <div className="wenyou-team-channel-shell">
+                <button
+                  type="button"
+                  className={`wenyou-team-channel-toggle ${teamChannelOpen ? "active" : ""}`}
+                  onClick={() => {
+                    setQuickDecisionOpen(false);
+                    setTeamChannelOpen((open) => !open);
+                  }}
+                  disabled={acting && !teamChannelOpen}
+                  aria-expanded={teamChannelOpen}
+                >
+                  <WalkieTalkieGlyph />
+                  <span>对讲机</span>
+                  <small>{teamChannelLabel}</small>
+                </button>
+                {teamChannelOpen ? (
+                  <TeamChannelPanel
+                    channel={teamChannel}
+                    peerName={playerTwoName}
+                    text={teamChannelText}
+                    mode={teamChannelMode}
+                    sending={teamChannelSending}
+                    disabled={acting}
+                    onText={setTeamChannelText}
+                    onMode={setTeamChannelMode}
+                    onSend={(value, consumeTurn) => void sendTeamChannel(value, consumeTurn)}
+                  />
+                ) : null}
+              </div>
+            ) : null}
             {!gameSettlementReady && quickDecisionOpen ? (
               <div className="wenyou-quick-decision-menu" role="menu" aria-label="快捷决策">
                 {quickActions.map((item) => (
@@ -3497,6 +3623,118 @@ function StoryFeedMessage({
           <div key={segment.id} className="wenyou-story-text">{segment.text}</div>
         )
       ))}
+    </div>
+  );
+}
+
+function TeamChannelPanel({
+  channel,
+  peerName,
+  text,
+  mode,
+  sending,
+  disabled,
+  onText,
+  onMode,
+  onSend,
+}: {
+  channel: WenyouTeamChannel | null;
+  peerName: string;
+  text: string;
+  mode: "talk" | "action";
+  sending: boolean;
+  disabled?: boolean;
+  onText: (value: string) => void;
+  onMode: (value: "talk" | "action") => void;
+  onSend: (value?: string, consumeTurn?: boolean) => void;
+}) {
+  const messages = Array.isArray(channel?.messages) ? channel?.messages || [] : [];
+  const blocked = !!channel?.blocked;
+  const frequency = channel?.frequency || "CH-02";
+  const status = String(channel?.status || "online");
+  const noise = Number(channel?.noise ?? 0);
+  const safeNoise = Number.isFinite(noise) ? Math.max(0, Math.min(100, Math.round(noise))) : 0;
+  const signalBars = blocked || status === "offline" || status === "interrupted"
+    ? 1
+    : Math.max(2, Math.min(8, 8 - Math.floor(safeNoise / 14)));
+  const quickMessages = [
+    { label: "呼叫队友", text: "收到吗？你那边现在安全吗？" },
+    { label: "报位置", text: "报一下你的位置和周围最明显的东西。" },
+    { label: "交换线索", text: "我这边有新线索，我们对一下规则。" },
+    { label: "约定会合", text: "找一个相对安全的位置会合，你能走哪条路线？" },
+  ];
+  const formatLogTime = (value?: string) => {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return "--:--:--";
+    return date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  };
+  return (
+    <div className={`wenyou-team-channel-panel wenyou-channel-state-${status}`}>
+      <span className="wenyou-team-channel-corner tl" />
+      <span className="wenyou-team-channel-corner tr" />
+      <span className="wenyou-team-channel-corner bl" />
+      <span className="wenyou-team-channel-corner br" />
+      <div className="wenyou-team-channel-head">
+        <span className="wenyou-team-channel-pill"><i />{channel?.label || "信号稳定"}</span>
+        <span>COMMS-LINK</span>
+        <span>噪声 {safeNoise}%</span>
+      </div>
+      <div className="wenyou-team-channel-frequency">
+        <span>队友频道 // {peerName}</span>
+        <strong>{frequency}</strong>
+        <span>{channel?.current_location || "位置未同步"}</span>
+        <div className="wenyou-team-channel-signal" aria-label={`信号强度 ${signalBars}/8`}>
+          {Array.from({ length: 8 }, (_, index) => <i key={index} className={index < signalBars ? "active" : ""} />)}
+        </div>
+      </div>
+      <div className="wenyou-team-channel-wave" aria-hidden="true">
+        <span>REAL-TIME_SIG_STREAM</span>
+        {Array.from({ length: 18 }, (_, index) => <i key={index} style={{ animationDelay: `${index * -0.07}s` }} />)}
+      </div>
+      {channel?.risk ? <p className="wenyou-team-channel-risk">{channel.risk}</p> : null}
+      <div className="wenyou-team-channel-log">
+        {messages.length ? messages.slice(-8).map((item, index) => (
+          <div
+            key={item.id || `${item.sender}-${index}`}
+            className={`wenyou-team-channel-msg ${item.sender === "player1" ? "from-self" : item.sender === "player2" ? "from-peer" : "from-system"}`}
+          >
+            <span className="wenyou-team-channel-time">{formatLogTime(item.timestamp)}</span>
+            <p>{String(item.text || "")}</p>
+            <em>{item.sender === "player1" ? "你" : item.sender === "player2" ? peerName : "系统"}</em>
+          </div>
+        )) : <div className="wenyou-team-channel-empty">对讲机暂无记录</div>}
+      </div>
+      <div className="wenyou-team-channel-quick">
+        {quickMessages.map((item) => (
+          <button key={item.label} type="button" disabled={disabled || sending || blocked} onClick={() => onSend(item.text, false)}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div className="wenyou-team-channel-mode" role="tablist" aria-label="对讲机模式">
+        <button type="button" className={mode === "talk" ? "active" : ""} onClick={() => onMode("talk")}>短讯通话</button>
+        <button type="button" className={mode === "action" ? "active" : ""} onClick={() => onMode("action")}>同步行动</button>
+        <button type="button" disabled={disabled || sending || blocked} onClick={() => onSend(quickMessages[0].text, false)}>呼叫队友</button>
+      </div>
+      <div className="wenyou-team-channel-input">
+        <input
+          value={text}
+          onChange={(e) => onText(e.target.value)}
+          placeholder={blocked ? "信号中断..." : sending ? "调频中..." : `按住频段发给${peerName}...`}
+          disabled={disabled || sending || blocked}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onSend(undefined, mode === "action");
+          }}
+        />
+        <button type="button" disabled={disabled || sending || blocked || !text.trim()} onClick={() => onSend(undefined, mode === "action")}>
+          <Icon name="send" />
+          <span>发送</span>
+        </button>
+      </div>
+      <div className="wenyou-team-channel-sys">
+        <span>{mode === "action" ? "同步行动会消耗回合" : "短讯通话不消耗回合"}</span>
+        <span>{blocked ? "LINK_BLOCKED" : sending ? "TRANSMITTING" : "READY"}</span>
+      </div>
     </div>
   );
 }
