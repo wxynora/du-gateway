@@ -1409,6 +1409,48 @@ def _wallet_confirmed_player_display_name(wallet: Optional[dict], player_id: str
     return _normalize_player_display_name(player.get("display_name"), "")
 
 
+def _session_player_display_name(session: Optional[dict], player_id: Any, fallback: str = "") -> str:
+    pid = _resolve_player_key(player_id)
+    default = fallback or _WENYOU_PLAYER_LABELS.get(pid, pid)
+    if not isinstance(session, dict):
+        return default
+    st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
+    player = st.get(pid) if isinstance(st.get(pid), dict) else {}
+    name = _normalize_player_display_name(player.get("display_name"), "")
+    if name:
+        return name
+    fw = session.get("framework") if isinstance(session.get("framework"), dict) else {}
+    name = _normalize_player_display_name(fw.get(f"{pid}_name"), "")
+    return name or default
+
+
+def _replace_player_aliases_for_display(text: Any, *, player1_name: str = "", player2_name: str = "") -> str:
+    out = str(text or "")
+    p1 = _normalize_player_display_name(player1_name, "")
+    p2 = _normalize_player_display_name(player2_name, "")
+    if p1 and p1 != "玩家一":
+        out = out.replace("玩家一", p1)
+    if p2 and p2 != "玩家二":
+        out = out.replace("玩家二", p2)
+    return out
+
+
+def _replace_framework_player_aliases(fw: dict, text: Any) -> str:
+    return _replace_player_aliases_for_display(
+        text,
+        player1_name=str((fw or {}).get("player1_name") or ""),
+        player2_name=str((fw or {}).get("player2_name") or ""),
+    )
+
+
+def _replace_session_player_aliases(session: Optional[dict], text: Any) -> str:
+    return _replace_player_aliases_for_display(
+        text,
+        player1_name=_session_player_display_name(session, "player1", "玩家一"),
+        player2_name=_session_player_display_name(session, "player2", "玩家二"),
+    )
+
+
 def _normalize_player_wallet(raw: Any, seed_points: int = 100, seed_debts: int = 0, seed_gacha: Any = None, seed_ledger: Any = None) -> dict:
     data = raw if isinstance(raw, dict) else {}
     points_source = data.get("points") if data.get("points") is not None else seed_points
@@ -2622,7 +2664,9 @@ def _apply_wallet_player_names_to_framework(framework: dict, wallet: dict) -> di
         fw["player1_name"] = p1
     if p2:
         fw["player2_name"] = p2
-    return _normalize_framework(fw)
+    fw = _normalize_framework(fw)
+    fw["opening"] = _replace_framework_player_aliases(fw, fw.get("opening") or "")
+    return fw
 
 
 def get_wenyou_entry_state(user_id: int) -> dict[str, Any]:
@@ -7313,6 +7357,7 @@ def _team_channel_view(session: dict) -> dict:
     elif _session_phase(session) == "instance_running":
         location = "副本内"
     signal = _team_channel_signal(session)
+    peer_display = _normalize_player_display_name((st.get("player2") or {}).get("display_name") if isinstance(st.get("player2"), dict) else "", "玩家二")
     return {
         "status": signal["status"],
         "label": signal["label"],
@@ -7320,8 +7365,8 @@ def _team_channel_view(session: dict) -> dict:
         "frequency": signal.get("frequency") or "CH-02",
         "noise": int(signal.get("noise") or 0),
         "blocked": bool(signal.get("blocked")),
-        "peer": _player_display_name("player2"),
-        "peer_display_name": _normalize_player_display_name((st.get("player2") or {}).get("display_name") if isinstance(st.get("player2"), dict) else "", "玩家二"),
+        "peer": peer_display,
+        "peer_display_name": peer_display,
         "current_location": location,
         "messages": messages[-40:],
     }
@@ -7354,14 +7399,24 @@ def summarize_story_for_ai_player(state: Any, actor_id: Any = "player2") -> dict
     fw = _framework_for_runtime(session.get("framework") or {})
     public = _public_state_from_session(session)
     phase = _session_phase(session)
+    player1_name = _session_player_display_name(session, "player1", "玩家一")
+    player2_name = _session_player_display_name(session, "player2", "玩家二")
     history_events: list[str] = []
     for item in (session.get("history") or [])[-6:]:
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "")
-        content = _compact_text(_strip_main_god_panel(str(item.get("content") or "")), 180)
+        content = _compact_text(_replace_session_player_aliases(session, _strip_main_god_panel(str(item.get("content") or ""))), 180)
         if content:
-            history_events.append(("GM：" if role == "gm" else f"{_player_display_name(role)}：") + content)
+            if role == "gm":
+                prefix = "GM："
+            elif _resolve_player_key(role) == "player2":
+                prefix = f"{player2_name}："
+            elif _resolve_player_key(role) == "player1":
+                prefix = f"{player1_name}："
+            else:
+                prefix = f"{_player_display_name(role)}："
+            history_events.append(prefix + content)
     event_notes: list[str] = []
     for patch in (session.get("event_log") or [])[-4:]:
         if not isinstance(patch, dict):
@@ -7382,12 +7437,12 @@ def summarize_story_for_ai_player(state: Any, actor_id: Any = "player2") -> dict
         known_risks.append("抽卡不受幸运影响，商店和抽卡消耗各自玩家积分。")
     forced = session.get("forced_instance") if isinstance(session.get("forced_instance"), dict) else None
     party_notes = [
-        "玩家一与玩家二当前同队行动。",
+        f"{player1_name}与{player2_name}当前同队行动。",
         "任务物品默认属于副本临时物，能否带出以规则引擎结算为准。",
     ]
     if forced and str(forced.get("mode") or "") == "npc_labor":
-        known_risks.append("惩罚副本：玩家一和玩家二都是副本原住民 NPC，不能暴露玩家/任务者/外来者身份。")
-        party_notes[0] = "玩家一与玩家二共同执行惩罚副本清算，双方都是副本原住民 NPC。"
+        known_risks.append(f"惩罚副本：{player1_name}和{player2_name}都是副本原住民 NPC，不能暴露玩家/任务者/外来者身份。")
+        party_notes[0] = f"{player1_name}与{player2_name}共同执行惩罚副本清算，双方都是副本原住民 NPC。"
     return {
         "campaign_summary": _compact_text(f"当前队伍处于{_phase_label(phase)}；副本为{_framework_instance_line(fw) or '未选择副本'}。", 180),
         "current_scene_summary": _compact_text(public.get("scene_summary") or fw.get("world") or "当前场景信息有限。", 220),
@@ -7507,29 +7562,35 @@ def get_player_tool_context(user_id: int, actor_id: Any = "player2") -> Optional
     return compose_ai_player_context(session, actor_id=actor_id, wallet=wallet, user_id=uid)
 
 
-_AI_PLAYER_CHAT_SYSTEM = """你正在控制文游里的玩家二，不是 GM，也不是规则引擎。
+def _ai_player_chat_system(actor_name: str, player1_name: str) -> str:
+    actor = _normalize_player_display_name(actor_name, "队友")
+    target = _normalize_player_display_name(player1_name, "玩家")
+    return f"""你正在控制文游里的{actor}，不是 GM，也不是规则引擎。
 你会收到一份后端裁剪过的只读文游上下文；它是事实源，只能依据它行动。
 
 边界：
-- 不替玩家一行动，不替 GM 结算，不编造隐藏线索、隐藏规则、背包、积分或判定结果。
+- 不替{target}行动，不替 GM 结算，不编造隐藏线索、隐藏规则、背包、积分或判定结果。
 - 如果要购买、抽卡、使用道具、出售或转交，必须调用可用的玩家工具，并接受工具返回结果。
 - 不能在工具确认前宣称购买、抽卡、治疗或转交已经成功。
 - 如果当前阶段不允许商店、抽卡或转交，就不要假装完成。
-- 本轮最终只输出“玩家二本轮行动文本”，30-160 字；不要 Markdown，不要解释，不要系统提示。
+- 本轮最终只输出“{actor}本轮行动文本”，30-160 字；不要 Markdown，不要解释，不要系统提示。
 """
 
 
-_AI_PLAYER_CHANNEL_SYSTEM = """你正在扮演文游里的玩家二，正在通过对讲机回复玩家一。
+def _ai_player_channel_system(actor_name: str, player1_name: str) -> str:
+    actor = _normalize_player_display_name(actor_name, "队友")
+    target = _normalize_player_display_name(player1_name, "玩家")
+    return f"""你正在扮演文游里的{actor}，正在通过对讲机回复{target}。
 你不是 GM，也不是规则引擎；后端上下文是事实源。
 
 边界：
-- 只说玩家二知道、看到、能合理推断的信息；不要编造隐藏线索、隐藏规则或判定结果。
-- 不替玩家一行动，不替 GM 结算，不宣称状态、道具、积分已经改变。
+- 只说{actor}知道、看到、能合理推断的信息；不要编造隐藏线索、隐藏规则或判定结果。
+- 不替{target}行动，不替 GM 结算，不宣称状态、道具、积分已经改变。
 - 如果对讲机模式是“短讯通话”，只回复消息，不新增现实行动。
-- 如果对讲机模式是“同步行动”，输出玩家二准备执行的本轮行动，必须具体、可被 GM 结算。
+- 如果对讲机模式是“同步行动”，输出{actor}准备执行的本轮行动，必须具体、可被 GM 结算。
 - 如果上下文显示信号弱、杂音、串台或监听风险，回复里可以短促、断续或提醒风险，但不要乱编第三方消息。
 - 惩罚副本里必须维持 NPC 身份，不要说出主神空间、任务者、清算者、系统工单等真实来源。
-- 最终只输出玩家二通过对讲机发出的正文，20-160 字；不要 Markdown，不要解释，不要系统提示。
+- 最终只输出{actor}通过对讲机发出的正文，20-160 字；不要 Markdown，不要解释，不要系统提示。
 """
 
 
@@ -7551,26 +7612,33 @@ def build_ai_player_chat_messages(
     context = get_player_tool_context(user_id, actor_id=actor_id)
     if not context:
         return None
+    ai_context = context.get("ai_player_context") if isinstance(context.get("ai_player_context"), dict) else {}
+    actor = _resolve_player_key(actor_id)
+    team_states = ai_context.get("team_public_states") if isinstance(ai_context.get("team_public_states"), dict) else {}
+    p1_state = team_states.get("player1") if isinstance(team_states.get("player1"), dict) else {}
+    actor_state = team_states.get(actor) if isinstance(team_states.get(actor), dict) else {}
+    player1_name = _normalize_player_display_name(p1_state.get("display_name"), "玩家一")
+    actor_name = _normalize_player_display_name(actor_state.get("display_name"), _player_display_name(actor))
     action = _compact_text(player_action, 900)
     intent_text = _json_for_prompt(action_intent or {}, max_chars=1800)
     user_prompt = "\n".join(
         [
             "[WENYOU AI PLAYER TURN]",
             "只读上下文 JSON：",
-            _json_for_prompt(context.get("ai_player_context") or {}, max_chars=14000),
+            _json_for_prompt(ai_context or {}, max_chars=14000),
             "",
-            "玩家一本轮行动：",
+            f"{player1_name}本轮行动：",
             action or "（无）",
             "",
             "后端行动归类：",
             intent_text,
             "",
-            "请决定玩家二本轮是否行动以及怎么行动。若需要修改状态，先调用玩家工具；最终只输出玩家二的行动文本。",
+            f"请决定{actor_name}本轮是否行动以及怎么行动。若需要修改状态，先调用玩家工具；最终只输出{actor_name}的行动文本。",
             "[/WENYOU AI PLAYER TURN]",
         ]
     )
     return [
-        {"role": "system", "content": _AI_PLAYER_CHAT_SYSTEM},
+        {"role": "system", "content": _ai_player_chat_system(actor_name, player1_name)},
         {"role": "user", "content": user_prompt},
     ]
 
@@ -7587,6 +7655,9 @@ def build_ai_player_channel_messages(
     if not session or not isinstance(session, dict) or not session.get("gameId"):
         return None
     wallet = _load_wenyou_wallet(uid, session)
+    actor = _resolve_player_key(actor_id)
+    player1_name = _wallet_player_display_name(wallet, "player1", "") or _session_player_display_name(session, "player1", "玩家一")
+    actor_name = _wallet_player_display_name(wallet, actor, "") or _session_player_display_name(session, actor, _player_display_name(actor))
     context = compose_ai_player_context(session, actor_id=actor_id, wallet=wallet, user_id=uid)
     mode = "同步行动" if consume_turn else "短讯通话"
     user_prompt = "\n".join(
@@ -7596,15 +7667,15 @@ def build_ai_player_channel_messages(
             "只读上下文 JSON：",
             _json_for_prompt(context.get("ai_player_context") or {}, max_chars=14000),
             "",
-            "玩家一通过对讲机发来的消息：",
+            f"{player1_name}通过对讲机发来的消息：",
             _compact_text(player_message, 900) or "（空）",
             "",
-            "请以玩家二身份回复。短讯通话只交换信息；同步行动要输出玩家二准备执行的本轮行动。",
+            f"请以{actor_name}身份回复。短讯通话只交换信息；同步行动要输出{actor_name}准备执行的本轮行动。",
             "[/WENYOU WALKIE TALKIE]",
         ]
     )
     return [
-        {"role": "system", "content": _AI_PLAYER_CHANNEL_SYSTEM},
+        {"role": "system", "content": _ai_player_channel_system(actor_name, player1_name)},
         {"role": "user", "content": user_prompt},
     ]
 
@@ -8514,6 +8585,7 @@ def cmd_go(user_id: int) -> str:
         _merge_panel_into_session_stats(session, parsed, include_vitals=not bool(event_intent))
     state_patch = _apply_event_intent(session, event_intent)
 
+    gm_visible = _replace_session_player_aliases(session, gm_out)
     ts = now_beijing_iso()
     for line in p1:
         if str(line or "").strip():
@@ -8521,13 +8593,13 @@ def cmd_go(user_id: int) -> str:
     for line in p2:
         if str(line or "").strip():
             session.setdefault("history", []).append({"role": "player2", "content": str(line).strip(), "timestamp": ts})
-    session.setdefault("history", []).append({"role": "gm", "content": gm_out, "timestamp": ts})
+    session.setdefault("history", []).append({"role": "gm", "content": gm_visible, "timestamp": ts})
     session["pending_round"] = {"player1_lines": [], "player2_lines": []}
     r2_store.save_wenyou_session(uid, session)
-    _update_wenyou_card_for_round(uid, session, p1_text, p2_text, gm_out)
-    _archive_wenyou_round_for_recent_memory(uid, session, p1_text, p2_text, gm_out)
+    _update_wenyou_card_for_round(uid, session, p1_text, p2_text, gm_visible)
+    _archive_wenyou_round_for_recent_memory(uid, session, p1_text, p2_text, gm_visible)
 
-    narrative = _strip_player_brief_blocks(_strip_main_god_panel(gm_out))
+    narrative = _strip_player_brief_blocks(_strip_main_god_panel(gm_visible))
     patch_text = _format_state_patch_for_display(state_patch)
     foot = _format_status_footer(session)
     if patch_text:

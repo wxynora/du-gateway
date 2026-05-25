@@ -2957,8 +2957,9 @@
     backdrop-filter: blur(12px);
   }
 
-  .wenyou-game-top > div {
+  .wenyou-game-title {
     flex: 1;
+    min-width: 0;
   }
 
   .wenyou-game-top p {
@@ -2990,12 +2991,11 @@
     box-shadow: 0 0 12px rgba(103, 232, 249, 0.5);
   }
 
-  .wenyou-game-top button:last-child {
-    width: auto;
-    min-width: 42px;
-    color: #86efac;
-    font-size: 11px;
-    font-weight: 800;
+  .wenyou-game-top-actions {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
   }
 
   .wenyou-game-top .wenyou-game-data-trigger {
@@ -3279,6 +3279,36 @@
     box-shadow: 0 0 8px rgba(103, 232, 249, 0.65);
     color: transparent;
     font-size: 0;
+  }
+
+  .wenyou-game-top .wenyou-team-channel-toggle-top {
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+    min-height: 42px;
+    flex: 0 0 42px;
+    border-radius: 8px;
+    padding: 3px;
+  }
+
+  .wenyou-game-top .wenyou-team-channel-toggle-top .wenyou-walkie-glyph {
+    width: 32px;
+    height: 32px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .wenyou-game-top .wenyou-team-channel-toggle-top .wenyou-walkie-glyph svg {
+    width: 29px;
+    height: 29px;
+  }
+
+  .wenyou-game-top .wenyou-team-channel-toggle-top small {
+    top: 4px;
+    right: 4px;
+    width: 8px;
+    height: 8px;
   }
 
   .wenyou-team-channel-modal {

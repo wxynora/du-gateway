@@ -508,14 +508,10 @@ const BASE_QUICK_ACTIONS: QuickAction[] = [
   { label: "观察", text: "观察周围环境，留意异常细节。" },
   { label: "检查", text: "检查离我最近的可疑物。" },
   { label: "交谈", text: "尝试和当前场景里的人交谈。" },
-  { label: "移动", text: "寻找可以前往的下一个地点。" },
-  { label: "背包", text: "打开背包，选择一个合适的物品使用。", panelTab: "背包" },
 ];
 
 const ENCOUNTER_QUICK_ACTIONS: QuickAction[] = [
   { label: "攻击", text: "攻击当前可见威胁。", encounterAction: "attack" as const },
-  { label: "削弱", text: "根据已知线索试探并削弱当前威胁。", encounterAction: "weaken" as const },
-  { label: "封印", text: "尝试按规则封印当前威胁。", encounterAction: "seal" as const },
   { label: "逃跑", text: "尝试脱离当前遭遇。", encounterAction: "escape" as const },
 ];
 const ATTRIBUTE_CHOICES = [
@@ -560,6 +556,15 @@ function playerDisplayName(player: WenyouPlayerStats | undefined, fallback: stri
   return name || fallback;
 }
 
+function replacePlayerAliasText(text: string, playerOneName: string, playerTwoName: string) {
+  let out = String(text || "");
+  const p1 = String(playerOneName || "").trim();
+  const p2 = String(playerTwoName || "").trim();
+  if (p1 && p1 !== "玩家一") out = out.replace(/玩家一/g, p1);
+  if (p2 && p2 !== "玩家二") out = out.replace(/玩家二/g, p2);
+  return out;
+}
+
 function extractEntryScene(text: string): EntryScene {
   const header = text.match(/【无限流\s*·\s*副本(?:\s*([^｜】\n]+))?(?:｜([^】\n]+))?】/);
   const rawCode = String(header?.[1] || "").trim();
@@ -579,6 +584,7 @@ function storySystemLabel(raw: string): string | null {
   const label = String(raw || "").trim();
   if (!label) return null;
   if (label.startsWith("无限流")) return "副本接入";
+  if (/^任务(?:\s*[:：]|$)/.test(label)) return "系统提示";
   if (label === "副本类型") return "副本类型";
   if (label === "难度") return "难度";
   if (label.startsWith("新手副本") || label.startsWith("副本 ")) return "系统提示";
@@ -599,8 +605,18 @@ function cleanStorySystemText(text: string) {
     .trim();
 }
 
+function taskSystemText(rawLabel: string, content = "") {
+  const label = String(rawLabel || "").trim();
+  if (!/^任务(?:\s*[:：]|$)/.test(label)) return "";
+  const inline = label.replace(/^任务\s*[:：]?\s*/, "").trim();
+  const body = inline || cleanStorySystemText(content);
+  return body ? `任务：${body}` : "任务已更新";
+}
+
 function formatStorySystemText(rawLabel: string, content = "") {
   const label = String(rawLabel || "").trim();
+  const taskText = taskSystemText(label, content);
+  if (taskText) return taskText;
   const text = cleanStorySystemText(content);
   if (label.startsWith("无限流")) return label.replace(/｜/g, " | ");
   if (label === "副本类型") return `副本类型：${text || "未知"}`;
@@ -628,6 +644,18 @@ function pushSystemSegment(segments: StorySegment[], label: string, text: string
   const body = cleanStorySystemText(text);
   if (!body || hiddenStorySystemLabel(label)) return false;
   segments.push({ id: `system-${segments.length}`, kind: "system", label, text: body });
+  return true;
+}
+
+function pushTaskSystemSegment(segments: StorySegment[], text: string) {
+  const body = cleanStorySystemText(text);
+  if (!body) return false;
+  const last = segments[segments.length - 1];
+  if (last?.kind === "system" && ["副本接入", "系统提示"].includes(last.label || "")) {
+    last.text = `${last.text}\n${body}`;
+    return true;
+  }
+  segments.push({ id: `system-${segments.length}`, kind: "system", label: "系统提示", text: body });
   return true;
 }
 
@@ -759,6 +787,13 @@ function splitStoryLine(segments: StorySegment[], line: string) {
     const marker = matches[i];
     const next = matches[i + 1]?.start ?? line.length;
     pushStorySegment(segments, line.slice(cursor, marker.start));
+    const taskHasInlineValue = /^任务\s*[:：]\s*\S/.test(String(marker.raw || ""));
+    const taskText = taskSystemText(marker.raw, taskHasInlineValue ? "" : line.slice(marker.end, next));
+    if (taskText) {
+      pushTaskSystemSegment(segments, taskText);
+      cursor = taskHasInlineValue ? marker.end : next;
+      continue;
+    }
     pushSystemSegment(segments, marker.label, formatStorySystemText(marker.raw, line.slice(marker.end, next)));
     cursor = next;
   }
@@ -800,6 +835,13 @@ function parseStorySegments(text: string): StorySegment[] {
     }
     const firstOnlyMarker = lines[0]?.match(/^【([^】]{1,42})】$/);
     const firstLabel = firstOnlyMarker ? storySystemLabel(firstOnlyMarker[1]) : null;
+    const firstTaskText = firstOnlyMarker ? taskSystemText(firstOnlyMarker[1], "") : "";
+    if (firstTaskText) {
+      consumedStructuredBlock = true;
+      pushTaskSystemSegment(segments, firstTaskText);
+      for (const line of lines.slice(1)) splitStoryLine(segments, line);
+      continue;
+    }
     if (firstOnlyMarker && firstLabel && lines.length > 1) {
       consumedStructuredBlock = true;
       pushSystemSegment(segments, firstLabel, lines.slice(1).join("\n"));
@@ -1418,6 +1460,10 @@ export function WenyouTab({
       setQuickDecisionOpen(false);
       return true;
     }
+    if (teamChannelOpen) {
+      setTeamChannelOpen(false);
+      return true;
+    }
     if (settlementDraftOpen) {
       setSettlementDraftOpen(false);
       return true;
@@ -1448,12 +1494,13 @@ export function WenyouTab({
       return true;
     }
     return false;
-  }, [entryScenePending, forcedPrompt, normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen]);
+  }, [entryScenePending, forcedPrompt, normalizedInitialView, panelView, quickDecisionOpen, randomOpen, riftOverlay, settlementDraftOpen, teamChannelOpen]);
 
   useEffect(() => {
     viewRef.current = view;
     if (view !== "game") {
       setQuickDecisionOpen(false);
+      setTeamChannelOpen(false);
     }
   }, [view]);
 
@@ -1755,6 +1802,7 @@ export function WenyouTab({
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
   const playerOneName = playerDisplayName(profileStats.player1 || gameRulesState.players?.player1 || homePlayer, String(status.entry?.player_name || "").trim() || "玩家一");
   const playerTwoName = playerDisplayName(profileStats.player2 || gameRulesState.players?.player2, String(status.entry?.player2_name || "").trim() || "玩家二");
+  const displayNarrativeText = useCallback((text: string) => replacePlayerAliasText(text, playerOneName, playerTwoName), [playerOneName, playerTwoName]);
   const aiPlayerActionLabel = `${playerTwoName}的行动`;
   const teamChannel = sessionPanel?.team_channel || null;
   const teamChannelLabel = teamChannel?.label || (hasActiveRun ? "信号稳定" : "未接入");
@@ -2928,31 +2976,71 @@ export function WenyouTab({
         <section className="wenyou-screen wenyou-game">
           <div className="wenyou-game-top">
             <button onClick={() => void goBackInsideWenyou()} aria-label="返回"><Icon name="back" /></button>
-            <div>
+            <div className="wenyou-game-title">
               <h2>{currentScene.name}</h2>
               <p><span />阶段: {sessionPanel?.phase_label || status.session?.phase_label || (status.active ? "进行中" : "模拟预览")}</p>
               <p className="wenyou-location-hint"><span />当前在 {currentLocation}</p>
             </div>
-            <button
-              className="wenyou-game-data-trigger"
-              onClick={() => {
-                setQuickDecisionOpen(false);
-                openPanel("任务");
-              }}
-              aria-label="打开任务与背包"
-            >
-              <Icon name="list" />
-            </button>
+            <div className="wenyou-game-top-actions">
+              {!gameSettlementReady && sessionPanel?.phase !== "settlement" ? (
+                <button
+                  type="button"
+                  className={`wenyou-team-channel-toggle wenyou-team-channel-toggle-top ${teamChannelOpen ? "active" : ""}`}
+                  onClick={() => {
+                    setQuickDecisionOpen(false);
+                    setTeamChannelOpen((open) => !open);
+                  }}
+                  disabled={acting && !teamChannelOpen}
+                  aria-expanded={teamChannelOpen}
+                  aria-label={`打开对讲机，${teamChannelLabel}`}
+                >
+                  <WalkieTalkieGlyph />
+                  <small>{teamChannelLabel}</small>
+                </button>
+              ) : null}
+              <button
+                className="wenyou-game-data-trigger"
+                onClick={() => {
+                  setQuickDecisionOpen(false);
+                  setTeamChannelOpen(false);
+                  openPanel("任务");
+                }}
+                aria-label="打开任务与背包"
+              >
+                <Icon name="list" />
+              </button>
+            </div>
           </div>
+          {!gameSettlementReady && sessionPanel?.phase !== "settlement" && teamChannelOpen ? (
+            <div className="wenyou-team-channel-modal" role="dialog" aria-modal="true" aria-label="对讲机频道">
+              <button
+                type="button"
+                className="wenyou-team-channel-scrim"
+                onClick={() => setTeamChannelOpen(false)}
+                aria-label="关闭对讲机"
+              />
+              <TeamChannelPanel
+                channel={teamChannel}
+                peerName={playerTwoName}
+                text={teamChannelText}
+                sending={teamChannelSending}
+                disabled={acting}
+                onText={setTeamChannelText}
+                onClose={() => setTeamChannelOpen(false)}
+                onSend={(value) => void sendTeamChannel(value, false)}
+              />
+            </div>
+          ) : null}
 
           <div className="wenyou-feed">
             {feed.length ? <div className="wenyou-time-chip">{feedTimeLabel}</div> : null}
             {feed.length ? feed.map((item) => {
-              if (item.kind === "user") return <div key={item.id} className="wenyou-user-bubble">{item.text}</div>;
-              if (item.kind === "notice") return <SystemNotice key={item.id} tone="cyan" label="任务更新" text={item.text} />;
-              if (item.kind === "loot") return <SystemNotice key={item.id} tone="purple" label="获得物品" text={item.text} />;
-              if (item.kind === "ai_player") return <SystemNotice key={item.id} tone="purple" label={aiPlayerActionLabel} text={item.text} />;
-              return <StoryFeedMessage key={item.id} text={item.text} disabled={acting} onAction={handleStoryActionOption} />;
+              const itemText = displayNarrativeText(item.text);
+              if (item.kind === "user") return <div key={item.id} className="wenyou-user-bubble">{itemText}</div>;
+              if (item.kind === "notice") return <SystemNotice key={item.id} tone="cyan" label="任务更新" text={itemText} />;
+              if (item.kind === "loot") return <SystemNotice key={item.id} tone="purple" label="获得物品" text={itemText} />;
+              if (item.kind === "ai_player") return <SystemNotice key={item.id} tone="purple" label={aiPlayerActionLabel} text={itemText} />;
+              return <StoryFeedMessage key={item.id} text={itemText} disabled={acting} onAction={handleStoryActionOption} />;
             }) : gameSettlementReady ? (
               <div className="wenyou-feed-empty">
                 <strong>结算完成，正在归档</strong>
@@ -2981,44 +3069,6 @@ export function WenyouTab({
                 onCancel={() => setSettlementDraftOpen(false)}
                 onConfirm={enterSettlement}
               />
-            ) : null}
-            {!gameSettlementReady && sessionPanel?.phase !== "settlement" ? (
-              <div className="wenyou-team-channel-shell">
-                <button
-                  type="button"
-                  className={`wenyou-team-channel-toggle ${teamChannelOpen ? "active" : ""}`}
-                  onClick={() => {
-                    setQuickDecisionOpen(false);
-                    setTeamChannelOpen((open) => !open);
-                  }}
-                  disabled={acting && !teamChannelOpen}
-                  aria-expanded={teamChannelOpen}
-                  aria-label={`打开对讲机，${teamChannelLabel}`}
-                >
-                  <WalkieTalkieGlyph />
-                  <small>{teamChannelLabel}</small>
-                </button>
-                {teamChannelOpen ? (
-                  <div className="wenyou-team-channel-modal" role="dialog" aria-modal="true" aria-label="对讲机频道">
-                    <button
-                      type="button"
-                      className="wenyou-team-channel-scrim"
-                      onClick={() => setTeamChannelOpen(false)}
-                      aria-label="关闭对讲机"
-                    />
-                    <TeamChannelPanel
-                      channel={teamChannel}
-                      peerName={playerTwoName}
-                      text={teamChannelText}
-                      sending={teamChannelSending}
-                      disabled={acting}
-                      onText={setTeamChannelText}
-                      onClose={() => setTeamChannelOpen(false)}
-                      onSend={(value) => void sendTeamChannel(value, false)}
-                    />
-                  </div>
-                ) : null}
-              </div>
             ) : null}
             {!gameSettlementReady && quickDecisionOpen ? (
               <div className="wenyou-quick-decision-menu" role="menu" aria-label="快捷决策">
