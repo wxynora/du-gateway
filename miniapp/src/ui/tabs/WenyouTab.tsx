@@ -1353,7 +1353,6 @@ export function WenyouTab({
   const [quickDecisionOpen, setQuickDecisionOpen] = useState(false);
   const [teamChannelOpen, setTeamChannelOpen] = useState(false);
   const [teamChannelText, setTeamChannelText] = useState("");
-  const [teamChannelMode, setTeamChannelMode] = useState<"talk" | "action">("talk");
   const [teamChannelSending, setTeamChannelSending] = useState(false);
   const [entryScene, setEntryScene] = useState<EntryScene | null>(null);
   const [entryScenePending, setEntryScenePending] = useState(false);
@@ -2053,7 +2052,7 @@ export function WenyouTab({
     }
   }
 
-  async function sendTeamChannel(inputText?: string, consumeTurn = teamChannelMode === "action") {
+  async function sendTeamChannel(inputText?: string, consumeTurn = false) {
     const text = String(inputText ?? teamChannelText).trim();
     if (!text || teamChannelSending || acting) return;
     setQuickDecisionOpen(false);
@@ -2994,23 +2993,30 @@ export function WenyouTab({
                   }}
                   disabled={acting && !teamChannelOpen}
                   aria-expanded={teamChannelOpen}
+                  aria-label={`打开对讲机，${teamChannelLabel}`}
                 >
                   <WalkieTalkieGlyph />
-                  <span>对讲机</span>
                   <small>{teamChannelLabel}</small>
                 </button>
                 {teamChannelOpen ? (
-                  <TeamChannelPanel
-                    channel={teamChannel}
-                    peerName={playerTwoName}
-                    text={teamChannelText}
-                    mode={teamChannelMode}
-                    sending={teamChannelSending}
-                    disabled={acting}
-                    onText={setTeamChannelText}
-                    onMode={setTeamChannelMode}
-                    onSend={(value, consumeTurn) => void sendTeamChannel(value, consumeTurn)}
-                  />
+                  <div className="wenyou-team-channel-modal" role="dialog" aria-modal="true" aria-label="对讲机频道">
+                    <button
+                      type="button"
+                      className="wenyou-team-channel-scrim"
+                      onClick={() => setTeamChannelOpen(false)}
+                      aria-label="关闭对讲机"
+                    />
+                    <TeamChannelPanel
+                      channel={teamChannel}
+                      peerName={playerTwoName}
+                      text={teamChannelText}
+                      sending={teamChannelSending}
+                      disabled={acting}
+                      onText={setTeamChannelText}
+                      onClose={() => setTeamChannelOpen(false)}
+                      onSend={(value) => void sendTeamChannel(value, false)}
+                    />
+                  </div>
                 ) : null}
               </div>
             ) : null}
@@ -3631,21 +3637,19 @@ function TeamChannelPanel({
   channel,
   peerName,
   text,
-  mode,
   sending,
   disabled,
   onText,
-  onMode,
+  onClose,
   onSend,
 }: {
   channel: WenyouTeamChannel | null;
   peerName: string;
   text: string;
-  mode: "talk" | "action";
   sending: boolean;
   disabled?: boolean;
   onText: (value: string) => void;
-  onMode: (value: "talk" | "action") => void;
+  onClose: () => void;
   onSend: (value?: string, consumeTurn?: boolean) => void;
 }) {
   const messages = Array.isArray(channel?.messages) ? channel?.messages || [] : [];
@@ -3677,7 +3681,7 @@ function TeamChannelPanel({
       <div className="wenyou-team-channel-head">
         <span className="wenyou-team-channel-pill"><i />{channel?.label || "信号稳定"}</span>
         <span>COMMS-LINK</span>
-        <span>噪声 {safeNoise}%</span>
+        <button type="button" onClick={onClose} aria-label="关闭对讲机">关闭</button>
       </div>
       <div className="wenyou-team-channel-frequency">
         <span>队友频道 // {peerName}</span>
@@ -3711,11 +3715,6 @@ function TeamChannelPanel({
           </button>
         ))}
       </div>
-      <div className="wenyou-team-channel-mode" role="tablist" aria-label="对讲机模式">
-        <button type="button" className={mode === "talk" ? "active" : ""} onClick={() => onMode("talk")}>短讯通话</button>
-        <button type="button" className={mode === "action" ? "active" : ""} onClick={() => onMode("action")}>同步行动</button>
-        <button type="button" disabled={disabled || sending || blocked} onClick={() => onSend(quickMessages[0].text, false)}>呼叫队友</button>
-      </div>
       <div className="wenyou-team-channel-input">
         <input
           value={text}
@@ -3723,16 +3722,16 @@ function TeamChannelPanel({
           placeholder={blocked ? "信号中断..." : sending ? "调频中..." : `按住频段发给${peerName}...`}
           disabled={disabled || sending || blocked}
           onKeyDown={(e) => {
-            if (e.key === "Enter") onSend(undefined, mode === "action");
+            if (e.key === "Enter") onSend(undefined, false);
           }}
         />
-        <button type="button" disabled={disabled || sending || blocked || !text.trim()} onClick={() => onSend(undefined, mode === "action")}>
+        <button type="button" disabled={disabled || sending || blocked || !text.trim()} onClick={() => onSend(undefined, false)}>
           <Icon name="send" />
           <span>发送</span>
         </button>
       </div>
       <div className="wenyou-team-channel-sys">
-        <span>{mode === "action" ? "同步行动会消耗回合" : "短讯通话不消耗回合"}</span>
+        <span>队友频道不消耗回合</span>
         <span>{blocked ? "LINK_BLOCKED" : sending ? "TRANSMITTING" : "READY"}</span>
       </div>
     </div>

@@ -3188,33 +3188,34 @@
   }
 
   .wenyou-team-channel-shell {
-    display: grid;
-    gap: 8px;
+    display: flex;
+    justify-content: flex-end;
   }
 
   .wenyou-team-channel-toggle {
     display: grid;
-    grid-template-columns: 44px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px;
-    min-height: 56px;
+    position: relative;
+    width: 52px;
+    height: 52px;
+    min-height: 52px;
+    place-items: center;
     border: 1px solid rgba(94, 234, 212, 0.22);
-    border-radius: 8px;
+    border-radius: 50%;
     background:
-      linear-gradient(90deg, rgba(20, 184, 166, 0.13), rgba(14, 165, 233, 0.08)),
+      radial-gradient(circle at 50% 20%, rgba(94, 234, 212, 0.18), transparent 56%),
       rgba(4, 9, 22, 0.78);
     color: rgba(222, 252, 247, 0.92);
-    padding: 8px 10px;
-    text-align: left;
+    padding: 4px;
+    box-shadow: 0 0 18px rgba(45, 212, 191, 0.1);
   }
 
   .wenyou-walkie-glyph {
     display: grid;
-    width: 42px;
-    height: 42px;
+    width: 40px;
+    height: 40px;
     place-items: center;
     border: 1px solid rgba(125, 245, 222, 0.32);
-    border-radius: 8px;
+    border-radius: 50%;
     background:
       radial-gradient(circle at 50% 20%, rgba(94, 234, 212, 0.12), transparent 48%),
       rgba(17, 20, 38, 0.92);
@@ -3256,7 +3257,7 @@
   .wenyou-team-channel-toggle.active {
     border-color: rgba(94, 234, 212, 0.42);
     background:
-      linear-gradient(90deg, rgba(20, 184, 166, 0.22), rgba(14, 165, 233, 0.12)),
+      radial-gradient(circle at 50% 20%, rgba(94, 234, 212, 0.26), transparent 58%),
       rgba(4, 9, 22, 0.9);
   }
 
@@ -3265,16 +3266,36 @@
     box-shadow: inset 0 0 16px rgba(45, 212, 191, 0.18), 0 0 24px rgba(45, 212, 191, 0.18);
   }
 
-  .wenyou-team-channel-toggle span {
-    min-width: 0;
-    font-size: 13px;
-    font-weight: 900;
+  .wenyou-team-channel-toggle small {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 10px;
+    height: 10px;
+    overflow: hidden;
+    border: 1px solid rgba(4, 9, 22, 0.9);
+    border-radius: 999px;
+    background: #67e8f9;
+    box-shadow: 0 0 8px rgba(103, 232, 249, 0.65);
+    color: transparent;
+    font-size: 0;
   }
 
-  .wenyou-team-channel-toggle small {
-    color: rgba(167, 243, 208, 0.82);
-    font-size: 11px;
-    font-weight: 800;
+  .wenyou-team-channel-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: grid;
+    align-items: end;
+    padding: 18px 12px calc(18px + env(safe-area-inset-bottom));
+  }
+
+  .wenyou-team-channel-scrim {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    background: rgba(1, 5, 12, 0.68);
+    backdrop-filter: blur(5px);
   }
 
   .wenyou-team-channel-panel {
@@ -3296,6 +3317,14 @@
     overflow: hidden;
     padding: 12px;
     clip-path: polygon(0 5%, 5% 0, 95% 0, 100% 5%, 100% 95%, 95% 100%, 5% 100%, 0 95%);
+  }
+
+  .wenyou-team-channel-modal .wenyou-team-channel-panel {
+    width: min(420px, 100%);
+    max-height: min(82vh, 720px);
+    margin: 0 auto;
+    overflow: auto;
+    animation: wenyou-channel-rise 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   .wenyou-team-channel-panel.wenyou-channel-state-weak,
@@ -3381,6 +3410,17 @@
 
   .wenyou-team-channel-head > span:last-child {
     text-align: right;
+  }
+
+  .wenyou-team-channel-head button {
+    justify-self: end;
+    border: 1px solid var(--team-channel-border);
+    background: var(--team-channel-dim);
+    color: var(--team-channel-accent);
+    font-family: var(--wenyou-mono, "SFMono-Regular", Consolas, monospace);
+    font-size: 9px;
+    font-weight: 900;
+    padding: 4px 8px;
   }
 
   .wenyou-team-channel-pill {
@@ -3554,8 +3594,7 @@
     gap: 5px;
   }
 
-  .wenyou-team-channel-quick button,
-  .wenyou-team-channel-mode button {
+  .wenyou-team-channel-quick button {
     min-height: 32px;
     border: 1px solid var(--team-channel-border);
     background: var(--team-channel-dim);
@@ -3566,19 +3605,6 @@
     padding: 7px 5px;
     text-align: center;
     text-transform: uppercase;
-  }
-
-  .wenyou-team-channel-mode {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 5px;
-  }
-
-  .wenyou-team-channel-mode button.active {
-    border-color: transparent;
-    background: var(--team-channel-accent);
-    color: #05080a;
-    box-shadow: 0 0 14px var(--team-channel-dim);
   }
 
   .wenyou-team-channel-input {
@@ -3636,7 +3662,6 @@
   }
 
   .wenyou-team-channel-quick button:disabled,
-  .wenyou-team-channel-mode button:disabled,
   .wenyou-team-channel-input button:disabled {
     cursor: not-allowed;
     opacity: 0.48;
@@ -3645,14 +3670,6 @@
   @media (max-width: 430px) {
     .wenyou-team-channel-quick {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .wenyou-team-channel-head {
-      grid-template-columns: 1fr auto;
-    }
-
-    .wenyou-team-channel-head > span:last-child {
-      display: none;
     }
 
     .wenyou-team-channel-input button {
@@ -3677,6 +3694,18 @@
     50% {
       height: 34px;
       opacity: 0.9;
+    }
+  }
+
+  @keyframes wenyou-channel-rise {
+    from {
+      opacity: 0;
+      transform: translateY(18px) scale(0.98);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
     }
   }
 
