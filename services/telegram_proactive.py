@@ -45,6 +45,7 @@ from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversat
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
 
 logger = get_logger(__name__)
+_GATEWAY_DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 
 
 def _build_du_daily_trigger_from_proactive(decision: ProactiveDecision, hours_since_last: float, sent: bool) -> Optional[dict]:
@@ -303,6 +304,13 @@ def _format_recent_self_action_context(window_id: str) -> str:
         "这些只用于判断要不要重复做同类动作，不要逐条复述给她。\n"
         + "\n".join(f"- {item}" for item in events)
     )
+
+
+def _dynamic_system_message(text: str) -> dict | None:
+    content = str(text or "").strip()
+    if not content:
+        return None
+    return {"role": "system", "content": content, _GATEWAY_DYNAMIC_SYSTEM_MARKER: True}
 
 
 def _strip_json_fence(text: str) -> str:
@@ -640,25 +648,28 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     )
     _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
     sys_content = (sys_content or build_telegram_style_system()).strip()
+    dynamic_context_parts: list[str] = []
     try:
         mem = _format_proactive_decision_memory_for_system()
         if mem:
-            sys_content = sys_content + "\n\n" + mem
+            dynamic_context_parts.append(mem)
     except Exception:
         pass
     try:
         recent_actions = _format_recent_self_action_context(window_id)
         if recent_actions:
-            sys_content = sys_content + "\n\n" + recent_actions
+            dynamic_context_parts.append(recent_actions)
     except Exception:
         pass
     # sense 由网关管道 step_inject_sense_snapshot 全局注入，此处不再拼接，避免重复。
+    messages = [{"role": "system", "content": sys_content}]
+    dynamic_msg = _dynamic_system_message("\n\n".join(dynamic_context_parts))
+    if dynamic_msg:
+        messages.append(dynamic_msg)
+    messages.append({"role": "user", "content": user_prompt})
     body = {
         "model": _get_chat_model(),
-        "messages": [
-            {"role": "system", "content": sys_content},
-            {"role": "user", "content": user_prompt},
-        ],
+        "messages": messages,
         "stream": False,
     }
     headers = {

@@ -56,6 +56,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 
 当前状态：
 - 主动唤醒生成已固定 QQ 优先，避免 `【入口风格：TG】` / `【入口风格：QQ】` 在同类唤醒里来回跳。
+- 随机主动决策的「近来主动联络记录」和「最近自发动作参考」已从入口风格 system 拆出，作为带 `__dynamic__` 标记的单独 system 进入动态区，避免 cache debug 把可变上下文算进 `QQ入口风格`。
 - 正常 TG/QQ 入站聊天和延迟续话仍按各自真实入口风格处理。
 
 常查：
@@ -1004,3 +1005,8 @@ npm -C miniapp run android
 - 已完成：`pipeline/pipeline.py` 新增 `step_inject_current_base_model()`，只读 `storage.upstream_store.get_cached_active_model(refresh_if_missing=False)`，有缓存时把 `当前底座为：<model>` 写成动态 system 第一条；`routes/chat.py` 在 `step_inject_du_thought`、`step_inject_du_daily`、动态记忆、summary 和 sense 之前调用它。
 - 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py routes/chat.py`、当前底座注入 smoke test、`routes.chat` import check、`git diff --check -- pipeline/pipeline.py routes/chat.py` 均通过。
 - 未完成 / 下次继续：该注入不刷新缓存、不读取客户端传入 model、不写静态 prompt，也不改转发策略；其他文档、文游、StudyRoom、小爱、`miniapp_static/assets/*` 脏文件继续不碰。
+
+当前状态（2026-05-25 主动唤醒动态区拆分）：
+- 已完成：`services/telegram_proactive.py::_ask_du_should_contact` 保留入口风格 system 只放 QQ/TG/微信风格本体，把 `【你近来主动联络时的自我决策记录】` 和 `【最近自发动作参考】` 打包成一条带 `__dynamic__` 标记的 system，交给网关动态区处理。
+- 已验证：`.venv/bin/python -m py_compile services/telegram_proactive.py`、主动决策 body 构造 smoke test、`git diff --check -- services/telegram_proactive.py` 均通过。
+- 未完成 / 下次继续：本轮只修随机主动决策路径；主动硬触发和闹钟/日历提醒本来没有把这两段参考拼进入口风格。其他文游、StudyRoom、小爱、`miniapp_static/assets/*` 脏文件继续不碰。
