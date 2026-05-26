@@ -26,6 +26,7 @@ from pipeline.pipeline import (
     step_replace_rikka_system,
     step_inject_thinking_block_rules,
     step_inject_core_behavior_rules,
+    step_inject_common_knowledge,
     step_inject_du_non_retreat_rules,
     step_inject_current_base_model,
     step_inject_latest_4_rounds_for_new_window,
@@ -878,6 +879,7 @@ def chat_completions():
     body = step_inject_thinking_block_rules(body)
     body = step_inject_core_behavior_rules(body)
     body = step_inject_du_non_retreat_rules(body)
+    body = step_inject_common_knowledge(body)
     body = _inject_entry_style_system(body, reply_channel=reply_channel, is_miniapp=_is_miniapp_request())
     body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
     body = _inject_followup_instruction(

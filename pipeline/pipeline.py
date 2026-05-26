@@ -391,6 +391,8 @@ def step_clean_for_forward(body: dict) -> dict:
 
 
 _CORE_PROMPT_CACHE = {"text": None, "ts": 0.0}
+_COMMON_KNOWLEDGE_MARKER = "### 常识块"
+_COMMON_KNOWLEDGE_CACHE = {"text": None, "mtime": None}
 
 
 def _load_du_core_prompt_from_file() -> str:
@@ -435,6 +437,26 @@ def _load_du_core_prompt() -> str:
     _CORE_PROMPT_CACHE["text"] = text or ""
     _CORE_PROMPT_CACHE["ts"] = now
     return _CORE_PROMPT_CACHE["text"] or ""
+
+
+def _load_du_common_knowledge() -> str:
+    """
+    读取独立常识块。它不是核心 prompt 本体，也不是动态记忆。
+    """
+    try:
+        path = Path(__file__).resolve().parent.parent / "prompts" / "du_common_knowledge.md"
+        if not path.exists():
+            return ""
+        mtime = path.stat().st_mtime
+        if _COMMON_KNOWLEDGE_CACHE["text"] is not None and _COMMON_KNOWLEDGE_CACHE.get("mtime") == mtime:
+            return _COMMON_KNOWLEDGE_CACHE["text"] or ""
+        text = path.read_text(encoding="utf-8").strip()
+        _COMMON_KNOWLEDGE_CACHE["text"] = text
+        _COMMON_KNOWLEDGE_CACHE["mtime"] = mtime
+        return text
+    except Exception:
+        logger.exception("读取渡常识块失败")
+        return ""
 
 
 def step_replace_rikka_system(body: dict) -> dict:
@@ -542,6 +564,20 @@ def step_inject_core_behavior_rules(body: dict) -> dict:
     messages.insert(insert_idx, {"role": "system", "content": rules})
     body["messages"] = messages
     return body
+
+
+def step_inject_common_knowledge(body: dict) -> dict:
+    """
+    固定注入：长期稳定常识块，放静态 system 区，不进入动态记忆。
+    """
+    block = _load_du_common_knowledge().strip()
+    if not block:
+        return body
+    messages = body.get("messages") or []
+    for msg in messages:
+        if (msg.get("role") or "").lower() == "system" and _COMMON_KNOWLEDGE_MARKER in str(msg.get("content") or ""):
+            return body
+    return _append_to_static_system(body, "\n\n" + block)
 
 
 def _messages_total_chars(messages: list) -> int:

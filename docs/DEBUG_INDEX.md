@@ -1020,3 +1020,8 @@ npm -C miniapp run android
 - 已完成：QQ 群聊 @ 归档不再完全删除前置 20 条上下文，而是在 `X-Reply-Target=qq_group_mention` 时压缩为“本次新增群聊上下文 + 当前 @ 你的消息”；连续 @ 时会参考最近归档轮次，过滤已经存过的群聊行，保留新出现的上下文给记忆总结使用。
 - 已验证：`.venv/bin/python -m py_compile routes/chat.py services/chat_archive_helpers.py` 通过；QQ 群聊归档压缩 smoke test 通过，确认旧上下文被去重、新上下文与当前 @ 内容保留。
 - 未完成 / 下次继续：当前去重依据是最近 8 轮存档里的规范化文本行，QQ 网关内容里暂时没有消息 id；如果后续要更精确去重，可让 connector 把 OneBot message_id 一并带进上下文。
+
+当前状态（2026-05-26 常识块静态注入）：
+- 已完成：新增 `prompts/du_common_knowledge.md` 作为独立常识块，首批只写人物与社交关系；`pipeline/pipeline.py` 新增 `step_inject_common_knowledge()`，从该文件读取后注入静态 system 区；`routes/chat.py` 在核心行为/不退缩规则之后、入口风格 system 之前调用。
+- 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py routes/chat.py`、`routes.chat` import check、常识块注入 smoke test（确认注入陈欣/小黛且二次调用不重复）和 `git diff --check -- pipeline/pipeline.py routes/chat.py prompts/du_common_knowledge.md docs/DEBUG_INDEX.md` 均通过。
+- 未完成 / 下次继续：常识块暂时是随代码部署的本地 markdown 文件；如果后续需要 MiniApp 在线编辑，再单独接 R2/设置页，不和动态记忆或核心 prompt 混在一起。
