@@ -8,6 +8,7 @@ import requests
 from flask import jsonify, request
 
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL, TELEGRAM_PROACTIVE_TARGET_USER_ID
+from services.chat_tool_helpers import collect_tool_trace_from_messages
 from storage import r2_store, whitelist_store
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,52 @@ def _extract_reasoning_text_from_message(msg: dict) -> tuple[str, bool]:
         seen.add(key)
         deduped.append(text)
     return "\n\n".join(deduped).strip(), omitted
+
+
+def _format_reasoning_tool_calls(messages: list) -> list[dict]:
+    """
+    思维链日志展示用：从整轮消息收集所有工具调用和结果。
+
+    旧逻辑只读倒序遇到的第一条 assistant.tool_calls；多轮工具循环时会漏掉前面的调用。
+    """
+    out: list[dict] = []
+    for tc in collect_tool_trace_from_messages(messages or []):
+        if not isinstance(tc, dict):
+            continue
+        tid = str(tc.get("id") or "").strip()
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        name = str(fn.get("name") or tc.get("name") or "").strip()
+        args = fn.get("arguments")
+        if args is None:
+            args = tc.get("arguments")
+        if args is None:
+            args_text = ""
+        elif isinstance(args, str):
+            args_text = args
+        else:
+            try:
+                args_text = json.dumps(args, ensure_ascii=False)
+            except Exception:
+                args_text = str(args)
+        result = tc.get("result")
+        if result is None:
+            result_text = ""
+        elif isinstance(result, str):
+            result_text = result
+        else:
+            try:
+                result_text = json.dumps(result, ensure_ascii=False)
+            except Exception:
+                result_text = str(result)
+        out.append(
+            {
+                "id": tid,
+                "name": name,
+                "arguments": _clip_text(args_text, _TOOL_ARGUMENTS_MAX_CHARS),
+                "result": _clip_text(result_text, _TOOL_RESULT_MAX_CHARS),
+            }
+        )
+    return out
 
 
 def _split_reasoning_translate_chunks(src: str, max_chars: int = _REASONING_TRANSLATE_CHUNK_CHARS) -> list[str]:
@@ -273,62 +320,13 @@ def register_routes(bp) -> None:
                 msgs = r.get("messages") or []
                 reasoning_text = ""
                 cache_debug_items: list[dict] = []
-                tool_calls_out = []
-                tool_results_map: dict[str, str] = {}
-                for m in msgs:
-                    if not isinstance(m, dict):
-                        continue
-                    role = (m.get("role") or "").strip().lower()
-                    if role != "tool":
-                        continue
-                    tid = (m.get("tool_call_id") or "").strip()
-                    if not tid:
-                        continue
-                    content = m.get("content")
-                    if content is None:
-                        val = ""
-                    elif isinstance(content, str):
-                        val = content
-                    else:
-                        try:
-                            val = json.dumps(content, ensure_ascii=False)
-                        except Exception:
-                            val = str(content)
-                    tool_results_map[tid] = _clip_text(val, _TOOL_RESULT_MAX_CHARS)
+                tool_calls_out = _format_reasoning_tool_calls(msgs)
                 for m in reversed(msgs):
                     role = (m.get("role") or "").strip().lower() if isinstance(m, dict) else ""
                     if role != "assistant":
                         continue
                     if not isinstance(m, dict):
                         continue
-                    if not tool_calls_out:
-                        tcs = m.get("tool_calls") or []
-                        if isinstance(tcs, list):
-                            for tc in tcs:
-                                if not isinstance(tc, dict):
-                                    continue
-                                tid = (tc.get("id") or "").strip()
-                                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
-                                name = (fn.get("name") or "").strip()
-                                args = fn.get("arguments")
-                                if args is None:
-                                    args_text = ""
-                                elif isinstance(args, str):
-                                    args_text = args
-                                else:
-                                    try:
-                                        args_text = json.dumps(args, ensure_ascii=False)
-                                    except Exception:
-                                        args_text = str(args)
-                                args_text = _clip_text(args_text, _TOOL_ARGUMENTS_MAX_CHARS)
-                                tool_calls_out.append(
-                                    {
-                                        "id": tid,
-                                        "name": name,
-                                        "arguments": args_text,
-                                        "result": tool_results_map.get(tid, str(tc.get("result") or "")),
-                                    }
-                                )
                     if not reasoning_text:
                         val, omitted = _extract_reasoning_text_from_message(m)
                         if val:

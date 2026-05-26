@@ -278,7 +278,7 @@ def collect_tool_trace_from_messages(messages: list) -> list[dict]:
                 used_tool_indices.add(result_idx)
                 row["result"] = _tool_content_to_str(messages[result_idx])
             else:
-                row["result"] = ""
+                row["result"] = row.get("result") or ""
             out.append(row)
     return out
 

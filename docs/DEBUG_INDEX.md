@@ -1040,3 +1040,8 @@ npm -C miniapp run android
 - 已完成：新增 `services/claude_thinking_carryover.py`，仅在 active upstream 是服务端回环地址 Claude OAuth proxy（`127.0.0.1:8082`/`localhost:8082`）时，从上一轮 R2 归档读取原始 `thinking_blocks`（含 Claude `signature`），随上一轮 user/assistant 消息结构化回传；新窗口非 TG 入口可从全局 latest4 的最后一轮取块，TG 仍只用本窗口历史，避免串上下文。`routes/chat.py` 在转发前注入该隐藏结构，维护任务和 slim 语音通话跳过；流式/非流式归档会保留可回传 blocks，客户端可见响应会剥离 `thinking_blocks`。
 - 已验证：`.venv/bin/python -m py_compile routes/chat.py services/reasoning_utils.py services/claude_thinking_carryover.py` 通过；carryover smoke test 通过，确认无历史时会插入上一轮 user+assistant、有现成上一轮 assistant 时只补 `thinking_blocks` 不重复插入；SSE/nonstream 剥离 smoke test 通过，确认发给客户端的 chunk/response 不含 `thinking_blocks`。
 - 未完成 / 下次继续：没有接 MiniApp 开关；当前只支持服务端回环地址 Claude OAuth proxy 入口，不扩展到 OpenRouter/CPA；旧归档如果没有 `thinking_blocks` 或没有带 signature，则不会强行伪造回传。
+
+当前状态（2026-05-27 思维链工具调用展示修复）：
+- 已完成：`routes/miniapp/reasoning.py` 的思维链最新接口不再只读取倒序遇到的第一条 `assistant.tool_calls`，改为用 `services/chat_tool_helpers.collect_tool_trace_from_messages()` 从整轮 messages 收集所有工具调用和结果，再统一格式化给前端；`services/chat_tool_helpers.py` 保留已归档 trace 自带的 `result`，避免二次收集时把结果覆盖为空。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/reasoning.py services/chat_tool_helpers.py` 通过；模拟两轮工具循环（2 次 + 1 次）和已归档 trace 的 smoke test 通过，确认 3 个工具调用和 3 个结果都会返回。
+- 未完成 / 下次继续：这次只修后端接口数据；前端 `ReasoningTab` 原有渲染逻辑不变。
