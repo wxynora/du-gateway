@@ -29,6 +29,7 @@ from pipeline.pipeline import (
     step_inject_common_knowledge,
     step_inject_du_non_retreat_rules,
     step_inject_current_base_model,
+    step_inject_humor_memes,
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
     step_inject_sense_snapshot,
@@ -905,6 +906,7 @@ def chat_completions():
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
         if not skip_dynamic_memory:
             body = step_inject_dynamic_memory(body, window_id)
+        body = step_inject_humor_memes(body)
         body = step_inject_summary(body, window_id, is_user_input=tg_user_input)
         body = step_inject_sense_snapshot(body, window_id)
         body = step_inject_latest_4_rounds_for_new_window(body, window_id, force_last4=force_last4)

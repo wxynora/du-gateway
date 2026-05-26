@@ -1025,3 +1025,8 @@ npm -C miniapp run android
 - 已完成：新增 `prompts/du_common_knowledge.md` 作为独立常识块，首批只写人物与社交关系；`pipeline/pipeline.py` 新增 `step_inject_common_knowledge()`，从该文件读取后注入静态 system 区；`routes/chat.py` 在核心行为/不退缩规则之后、入口风格 system 之前调用。
 - 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py routes/chat.py`、`routes.chat` import check、常识块注入 smoke test（确认注入陈欣/小黛且二次调用不重复）和 `git diff --check -- pipeline/pipeline.py routes/chat.py prompts/du_common_knowledge.md docs/DEBUG_INDEX.md` 均通过。
 - 未完成 / 下次继续：常识块暂时是随代码部署的本地 markdown 文件；如果后续需要 MiniApp 在线编辑，再单独接 R2/设置页，不和动态记忆或核心 prompt 混在一起。
+
+当前状态（2026-05-26 梗库 SQLite 动态注入）：
+- 已完成：新增 `services/humor_meme_bank.py`，使用 `data/humor_meme_bank.sqlite3` 存 `meme/origin/usage/enabled`，首次调用自动建表并 seed 17 条梗（小玥口癖 + 筛剩的互联网梗 + “没有XX的义务”模板）；`pipeline/pipeline.py` 新增 `step_inject_humor_memes()`，每轮随机抽 3 条写入动态 system，提示渡可完全不用、严肃/排错/身体不舒服/重情绪时不要用；`routes/chat.py` 在动态记忆召回后调用。
+- 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py routes/chat.py services/humor_meme_bank.py` 通过；梗库建表/随机抽 3 条/格式化 smoke test 通过；`step_inject_humor_memes` smoke test 与 `routes.chat` import check 通过；`git diff --check -- pipeline/pipeline.py routes/chat.py services/humor_meme_bank.py docs/DEBUG_INDEX.md prompts/du_common_knowledge.md` 通过。
+- 未完成 / 下次继续：第一版没有 MiniApp 管理页；如需增删改梗，先直接改 SQLite 或后续补轻量管理接口。

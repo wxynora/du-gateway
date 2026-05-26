@@ -223,6 +223,20 @@ def step_inject_current_base_model(body: dict) -> dict:
     return body
 
 
+def step_inject_humor_memes(body: dict) -> dict:
+    """每轮随机注入 3 个可选梗素材，是否使用交给渡自己判断。"""
+    try:
+        from services.humor_meme_bank import format_memes_for_system, pick_random_memes
+
+        inject = format_memes_for_system(pick_random_memes(3))
+    except Exception as e:
+        logger.debug("humor meme 注入跳过 error=%s", e)
+        return body
+    if not inject:
+        return body
+    return _append_to_dynamic_system(body, inject)
+
+
 def _append_to_static_system(body: dict, text: str) -> dict:
     """
     向静态 system 段追加内容。
