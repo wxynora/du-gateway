@@ -1045,3 +1045,8 @@ npm -C miniapp run android
 - 已完成：`routes/miniapp/reasoning.py` 的思维链最新接口不再只读取倒序遇到的第一条 `assistant.tool_calls`，改为用 `services/chat_tool_helpers.collect_tool_trace_from_messages()` 从整轮 messages 收集所有工具调用和结果，再统一格式化给前端；`services/chat_tool_helpers.py` 保留已归档 trace 自带的 `result`，避免二次收集时把结果覆盖为空。
 - 已验证：`.venv/bin/python -m py_compile routes/miniapp/reasoning.py services/chat_tool_helpers.py` 通过；模拟两轮工具循环（2 次 + 1 次）和已归档 trace 的 smoke test 通过，确认 3 个工具调用和 3 个结果都会返回。
 - 未完成 / 下次继续：这次只修后端接口数据；前端 `ReasoningTab` 原有渲染逻辑不变。
+
+当前状态（2026-05-27 Claude thinking signature 回传覆盖唤醒链路）：
+- 已完成：`routes/chat.py` 不再因为 `X-DU-DAILY-MAINTAIN` 或 `X-Voice-Call-Slim` 跳过 Claude thinking carryover；只要当前 active upstream 是服务端本机 Claude OAuth proxy，且请求没有显式带 `X-Skip-Claude-Thinking-Carryover: 1`，就会在进入上游前尝试把上一轮归档里的 `thinking_blocks` 回传。覆盖延迟续话、后端事件唤醒、硬触发、随机主动决策、闹钟提醒、弹窗选择回执、查岗截图回执等所有走主 `/v1/chat/completions` 的网关生成。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py services/claude_thinking_carryover.py` 通过；Flask request context smoke 确认默认不跳过、带 `X-Skip-Claude-Thinking-Carryover: 1` 时跳过。
+- 未完成 / 下次继续：绕过主 chat 路由的非 Claude direct call 不适用；生产 `du-gateway.service` 仍需要服务器 root 拉代码并重启后才生效。

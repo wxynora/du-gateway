@@ -211,6 +211,10 @@ def _should_archive_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _skip_claude_thinking_carryover_request() -> bool:
+    return (request.headers.get("X-Skip-Claude-Thinking-Carryover") or "").strip().lower() in ("1", "true", "yes")
+
+
 def _stream_forward_to_ai(body: dict, headers: dict):
     """流式转发：上游 SSE 原样逐行 yield；不再自动 fallback。"""
     request_model = (body or {}).get("model") or ""
@@ -940,7 +944,7 @@ def chat_completions():
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
-    if _is_local_claude_oauth_proxy_url(active_upstream_url) and not du_daily_maintenance and not slim_voice_call:
+    if _is_local_claude_oauth_proxy_url(active_upstream_url) and not _skip_claude_thinking_carryover_request():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
