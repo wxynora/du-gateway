@@ -94,6 +94,121 @@ def strip_co_read_section_raw_text_for_archive(msg: dict) -> dict:
     return clean
 
 
+def strip_qq_group_context_for_archive(msg: dict, window_id: str = "") -> dict:
+    return compact_qq_group_context_for_archive(msg, window_id=window_id)
+
+
+def _message_text_for_archive(msg: dict) -> str:
+    content = (msg or {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and str(part.get("type") or "") == "text":
+                parts.append(str(part.get("text") or ""))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _normalize_qq_group_line(line: str) -> str:
+    return " ".join(str(line or "").strip().split())
+
+
+_QQ_GROUP_ARCHIVE_META_PREFIXES = (
+    "群号：",
+    "当前发言人：",
+    "身份标记：",
+    "本次新增群聊上下文：",
+    "当前 @ 你的消息：",
+)
+
+
+def _qq_group_seen_lines_from_rounds(window_id: str, last_n: int = 8) -> set[str]:
+    if not window_id:
+        return set()
+    try:
+        from storage import r2_store
+
+        rounds = r2_store.get_conversation_rounds(window_id, last_n=last_n) or []
+    except Exception:
+        return set()
+
+    seen: set[str] = set()
+    for item in rounds:
+        if not isinstance(item, dict):
+            continue
+        for message in item.get("messages") or []:
+            if not isinstance(message, dict):
+                continue
+            if str(message.get("role") or "").strip().lower() != "user":
+                continue
+            text = _message_text_for_archive(message)
+            if "【QQ 群聊" not in text:
+                continue
+            for raw_line in text.splitlines():
+                line = _normalize_qq_group_line(raw_line)
+                if not line or "：" not in line:
+                    continue
+                if line.startswith(_QQ_GROUP_ARCHIVE_META_PREFIXES):
+                    continue
+                seen.add(line)
+    return seen
+
+
+def compact_qq_group_context_for_archive(msg: dict, window_id: str = "") -> dict:
+    def _strip_text(text: str) -> str:
+        raw = str(text or "")
+        marker = "当前 @ 你的消息："
+        if "【QQ 群聊】" not in raw or marker not in raw:
+            return raw
+        before, current = raw.split(marker, 1)
+        current = current.strip()
+        if not current:
+            current = "（只 @ 了你，没有附加文字）"
+
+        seen_lines = _qq_group_seen_lines_from_rounds(window_id)
+        context_lines = []
+        context_marker = "你只有在被 @ 时才回复。下面是本次 @ 前的最近群聊消息，用作公开上下文："
+        if context_marker in before:
+            context_raw = before.split(context_marker, 1)[1]
+            for raw_line in context_raw.splitlines():
+                line = _normalize_qq_group_line(raw_line)
+                if not line or line.startswith("（") or "：" not in line:
+                    continue
+                if line in seen_lines:
+                    continue
+                seen_lines.add(line)
+                context_lines.append(str(raw_line or "").strip())
+
+        meta_lines = []
+        for raw_line in before.splitlines():
+            line = str(raw_line or "").strip()
+            if line.startswith(("群号：", "当前发言人：", "身份标记：")):
+                meta_lines.append(line)
+        parts = ["【QQ 群聊 @】", *meta_lines]
+        if context_lines:
+            parts.extend(["本次新增群聊上下文：", *context_lines])
+        else:
+            parts.extend(["本次新增群聊上下文：", "（与最近存档重复，已省略）"])
+        parts.extend([marker, current])
+        return "\n".join(parts)
+
+    clean = copy.deepcopy(msg or {})
+    content = clean.get("content")
+    if isinstance(content, str):
+        clean["content"] = _strip_text(content)
+    elif isinstance(content, list):
+        next_content = []
+        for part in content:
+            if isinstance(part, dict) and str(part.get("type") or "") == "text":
+                next_content.append({**part, "text": _strip_text(str(part.get("text") or ""))})
+            else:
+                next_content.append(part)
+        clean["content"] = next_content
+    return clean
+
+
 def strip_wenyou_ai_player_context_for_archive(msg: dict) -> dict:
     def _strip_text(text: str) -> str:
         raw = str(text or "")

@@ -75,6 +75,7 @@ from services.chat_prompt_injections import (
     inject_voice_call_style_system as _inject_voice_call_style_system,
 )
 from services.chat_archive_helpers import (
+    compact_qq_group_context_for_archive as _compact_qq_group_context_for_archive,
     run_nonstream_post_archive_in_background as _run_nonstream_post_archive_in_background,
     strip_co_read_section_raw_text_for_archive as _strip_co_read_section_raw_text_for_archive,
     strip_wenyou_ai_player_context_for_archive as _strip_wenyou_ai_player_context_for_archive,
@@ -160,6 +161,22 @@ def _is_miniapp_request() -> bool:
 
 def _reply_channel() -> str:
     return str(request.headers.get("X-Reply-Channel") or "").strip().lower()
+
+
+def _reply_target() -> str:
+    return str(request.headers.get("X-Reply-Target") or "").strip()
+
+
+def _last_user_for_archive(last_user: Optional[dict], *, reply_target: str, window_id: str) -> Optional[dict]:
+    if not last_user:
+        return last_user
+    if reply_target == "co_read_section":
+        return _strip_co_read_section_raw_text_for_archive(last_user)
+    if reply_target == "wenyou_ai_player":
+        return _strip_wenyou_ai_player_context_for_archive(last_user)
+    if reply_target == "qq_group_mention":
+        return _compact_qq_group_context_for_archive(last_user, window_id=window_id)
+    return last_user
 
 
 def _is_followup_generation_request() -> bool:
@@ -403,7 +420,12 @@ def _stream_with_r2_archive(
                     msg["reasoning_details"] = reasoning_details_parts
                 if reasoning_omitted:
                     msg["reasoning_omitted"] = True
-                round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
+                archive_last_user = _last_user_for_archive(
+                    last_user,
+                    reply_target=_reply_target(),
+                    window_id=window_id,
+                )
+                round_cleaned = build_round_cleaned_for_r2(archive_last_user, msg) if archive_last_user else None
                 logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
                 step_archive_and_maybe_summary(
                     window_id,
@@ -589,7 +611,12 @@ def _stream_with_r2_archive(
             tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
             if tc_trace:
                 msg["tool_calls"] = tc_trace
-            round_cleaned = build_round_cleaned_for_r2(last_user, msg) if last_user else None
+            archive_last_user = _last_user_for_archive(
+                last_user,
+                reply_target=_reply_target(),
+                window_id=window_id,
+            )
+            round_cleaned = build_round_cleaned_for_r2(archive_last_user, msg) if archive_last_user else None
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             step_archive_and_maybe_summary(
                 window_id,
@@ -770,7 +797,7 @@ def chat_completions():
     body = _normalize_request_model(body)
     body = _apply_openrouter_request_policy(body, _get_active_upstream_url())
     reply_channel = _reply_channel()
-    reply_target = str(request.headers.get("X-Reply-Target") or "").strip()
+    reply_target = _reply_target()
     is_sumitalk_request = reply_channel == "sumitalk"
     req_model = (body.get("model") or "").strip() if isinstance(body.get("model"), str) else ""
     if not req_model:
@@ -1156,11 +1183,12 @@ def chat_completions():
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             archive_messages = _copy.deepcopy(body.get("messages") or [])
             if last_user:
-                if reply_target == "co_read_section":
-                    last_user = _strip_co_read_section_raw_text_for_archive(last_user)
-                elif reply_target == "wenyou_ai_player":
-                    last_user = _strip_wenyou_ai_player_context_for_archive(last_user)
-                round_cleaned = build_round_cleaned_for_r2(last_user, msg_for_r2)
+                archive_last_user = _last_user_for_archive(
+                    last_user,
+                    reply_target=reply_target,
+                    window_id=window_id,
+                )
+                round_cleaned = build_round_cleaned_for_r2(archive_last_user, msg_for_r2)
                 if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
                     archived = step_archive_round(
                         window_id, archive_messages, msg_for_r2, round_cleaned_for_r2=round_cleaned

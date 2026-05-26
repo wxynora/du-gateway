@@ -181,6 +181,7 @@ async function callGatewayChat(windowId, userContent, options = {}) {
     "X-Window-Id": String(windowId || "").trim(),
     "X-Reply-Channel": String(options.replyChannel || "qq").trim() || "qq",
   };
+  if (options.replyTarget) headers["X-Reply-Target"] = String(options.replyTarget).trim();
   if (envBool("GATEWAY_TG_USER_INPUT", true)) headers["X-TG-User-Input"] = "1";
   if (options.skipDynamicMemory) headers["X-Skip-Dynamic-Memory"] = "1";
   if (options.skipPostArchiveDynamicMemory) headers["X-Skip-Post-Archive-Dynamic-Memory"] = "1";
@@ -772,6 +773,7 @@ async function handleGroupEvent(j) {
   try {
     reply = await callGatewayChat(windowId, gatewayContent, {
       replyChannel: "qq",
+      replyTarget: "qq_group_mention",
       skipDynamicMemory: true,
       skipPostArchiveDynamicMemory: true,
     });

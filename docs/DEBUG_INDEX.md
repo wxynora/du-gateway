@@ -1015,3 +1015,8 @@ npm -C miniapp run android
 - 已完成：`services/upstream_policy.py` 新增 OpenAI/Anthropic 兼容错误解析，`routes/chat.py` 非流式上游失败会展示嵌套 `error.type/code/message` 和非 JSON body 预览；`routes/miniapp/sumitalk_chat_jobs.py` 后台聊天任务复用同一解析；`scripts/claude_oauth_proxy.js` 将 OAuth token 过期/等待本地同步类异常映射为 503，不再一律 500。
 - 已验证：`.venv/bin/python -m py_compile services/upstream_policy.py routes/chat.py routes/miniapp/sumitalk_chat_jobs.py`、`node --check scripts/claude_oauth_proxy.js`、嵌套错误解析 smoke test 均通过。
 - 未完成 / 下次继续：本轮不改前端样式、不清理现有脏文件、不处理其他业务接口的泛化 500；如继续排错，优先看具体入口是否还绕过 `routes/chat.py` 的错误解析。
+
+当前状态（2026-05-26 QQ 群聊 @ 存档去重）：
+- 已完成：QQ 群聊 @ 归档不再完全删除前置 20 条上下文，而是在 `X-Reply-Target=qq_group_mention` 时压缩为“本次新增群聊上下文 + 当前 @ 你的消息”；连续 @ 时会参考最近归档轮次，过滤已经存过的群聊行，保留新出现的上下文给记忆总结使用。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py services/chat_archive_helpers.py` 通过；QQ 群聊归档压缩 smoke test 通过，确认旧上下文被去重、新上下文与当前 @ 内容保留。
+- 未完成 / 下次继续：当前去重依据是最近 8 轮存档里的规范化文本行，QQ 网关内容里暂时没有消息 id；如果后续要更精确去重，可让 connector 把 OneBot message_id 一并带进上下文。
