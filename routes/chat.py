@@ -129,6 +129,7 @@ from services.upstream_policy import (
     apply_openrouter_request_policy as _apply_openrouter_request_policy,
     build_upstream_error_hint as _build_upstream_error_hint,
     chat_url_to_models_url as _chat_url_to_models_url,
+    extract_upstream_error_detail as _extract_upstream_error_detail,
     get_active_upstream_url as _get_active_upstream_url,
     get_forward_targets as _get_forward_targets,
     is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
@@ -665,7 +666,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                     target_url[:50], r.status_code, preview,
                 )
                 last_status = r.status_code
-                last_err = "上游返回非 JSON"
+                last_err = f"HTTP {r.status_code} 上游返回非 JSON：{preview}"
                 continue
             # 只有 2xx 算成功，其余（4xx/5xx/429 等）直接失败（不再自动 fallback）
             if 200 <= r.status_code < 300:
@@ -703,14 +704,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                         pass
                 return data, r.status_code, None, cache_debug
             last_status = r.status_code
-            try:
-                if isinstance(data, dict):
-                    msg = (data.get("error") or data.get("message") or "").strip()
-                    last_err = msg if msg else f"HTTP {r.status_code}"
-                else:
-                    last_err = f"HTTP {r.status_code}"
-            except Exception:
-                last_err = f"HTTP {r.status_code}"
+            last_err = _extract_upstream_error_detail(data, r.status_code) or f"HTTP {r.status_code}"
             logger.warning("转发目标 %s 失败 %s（不再自动 fallback）", target_url[:50], r.status_code)
         except Exception as e:
             last_err = str(e)

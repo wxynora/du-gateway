@@ -120,6 +120,35 @@ def build_upstream_error_hint(last_err: str) -> str:
     )
 
 
+def extract_upstream_error_detail(data, status_code: int | None = None) -> str:
+    """从 OpenAI/Anthropic 兼容错误响应里提取可读详情。"""
+    fallback = f"HTTP {status_code}" if status_code else ""
+    if not isinstance(data, dict):
+        return fallback
+    err = data.get("error")
+    parts: list[str] = []
+    if isinstance(err, dict):
+        for key in ("type", "code", "message"):
+            val = err.get(key)
+            if val is None:
+                continue
+            text = str(val).strip()
+            if text and text not in parts:
+                parts.append(text)
+    elif err is not None:
+        text = str(err).strip()
+        if text:
+            parts.append(text)
+    for key in ("message", "detail"):
+        val = data.get(key)
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text and text not in parts:
+            parts.append(text)
+    return " · ".join(parts).strip() or fallback
+
+
 def get_active_upstream_url() -> str:
     try:
         from storage.upstream_store import get_active_item

@@ -865,6 +865,14 @@ function sendOpenaiError(res, status, msg) {
   res.end(JSON.stringify({ error: { message: msg, type: "proxy_error", code: status } }));
 }
 
+function proxyExceptionStatus(err) {
+  const msg = String(err?.message || err || "");
+  if (/oauth token|oauth credentials|local token sync|synced credentials/i.test(msg)) {
+    return 503;
+  }
+  return 500;
+}
+
 function sendJson(res, status, payload) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(payload));
@@ -1151,7 +1159,8 @@ const server = http.createServer(async (req, res) => {
     }
   } catch (e) {
     log(`Error: ${e.message}`);
-    isOpenAI ? sendOpenaiError(res, 500, e.message) : sendError(res, 500, e.message);
+    const status = proxyExceptionStatus(e);
+    isOpenAI ? sendOpenaiError(res, status, e.message) : sendError(res, status, e.message);
   }
 });
 

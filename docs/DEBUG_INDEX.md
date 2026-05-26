@@ -1010,3 +1010,8 @@ npm -C miniapp run android
 - 已完成：`services/telegram_proactive.py::_ask_du_should_contact` 保留入口风格 system 只放 QQ/TG/微信风格本体，把 `【你近来主动联络时的自我决策记录】` 和 `【最近自发动作参考】` 打包成一条带 `__dynamic__` 标记的 system，交给网关动态区处理。
 - 已验证：`.venv/bin/python -m py_compile services/telegram_proactive.py`、主动决策 body 构造 smoke test、`git diff --check -- services/telegram_proactive.py` 均通过。
 - 未完成 / 下次继续：本轮只修随机主动决策路径；主动硬触发和闹钟/日历提醒本来没有把这两段参考拼进入口风格。其他文游、StudyRoom、小爱、`miniapp_static/assets/*` 脏文件继续不碰。
+
+当前状态（2026-05-26 上游错误提示细化）：
+- 已完成：`services/upstream_policy.py` 新增 OpenAI/Anthropic 兼容错误解析，`routes/chat.py` 非流式上游失败会展示嵌套 `error.type/code/message` 和非 JSON body 预览；`routes/miniapp/sumitalk_chat_jobs.py` 后台聊天任务复用同一解析；`scripts/claude_oauth_proxy.js` 将 OAuth token 过期/等待本地同步类异常映射为 503，不再一律 500。
+- 已验证：`.venv/bin/python -m py_compile services/upstream_policy.py routes/chat.py routes/miniapp/sumitalk_chat_jobs.py`、`node --check scripts/claude_oauth_proxy.js`、嵌套错误解析 smoke test 均通过。
+- 未完成 / 下次继续：本轮不改前端样式、不清理现有脏文件、不处理其他业务接口的泛化 500；如继续排错，优先看具体入口是否还绕过 `routes/chat.py` 的错误解析。

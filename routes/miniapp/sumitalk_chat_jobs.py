@@ -9,6 +9,7 @@ from uuid import uuid4
 from flask import current_app, jsonify, request
 
 from config import DATA_DIR
+from services.upstream_policy import extract_upstream_error_detail
 from utils.time_aware import now_beijing_iso
 
 
@@ -182,7 +183,7 @@ def _run_sumitalk_chat_job(app, job_id: str, chat_body: dict, headers: dict, rem
             result = chat_completions()
             status_code, data = _extract_chat_completion_result(result)
         if status_code >= 400:
-            err = data.get("error") or data.get("message") or f"HTTP {status_code}"
+            err = extract_upstream_error_detail(data, status_code) or f"HTTP {status_code}"
             _patch_sumitalk_chat_job_state(
                 job_id,
                 {
