@@ -69,6 +69,10 @@ from services.pc_command_handler import (
     transform_sse_chunk_bytes as transform_sse_chunk_bytes_pcmd,
 )
 from services.chat_content import message_content_chars as _message_content_chars
+from services.claude_thinking_carryover import (
+    extract_claude_thinking_blocks as _extract_claude_thinking_blocks,
+    inject_previous_claude_thinking_blocks as _inject_previous_claude_thinking_blocks,
+)
 from services.chat_prompt_injections import (
     inject_channel_nsfw_system as _inject_channel_nsfw_system,
     inject_entry_style_system as _inject_entry_style_system,
@@ -300,6 +304,7 @@ def _stream_with_r2_archive(
     content_parts = []
     reasoning_parts = []
     reasoning_details_parts: list[dict] = []
+    thinking_blocks_parts: list[dict] = []
     reasoning_omitted = False
     last_user = _last_user_message(body.get("messages") or [])
     du_daily_maintenance = _is_du_daily_maintenance_request()
@@ -328,6 +333,9 @@ def _stream_with_r2_archive(
                         reasoning_parts.append(text)
                     if details:
                         reasoning_details_parts.extend(details)
+                    for block in delta.get("thinking_blocks") or []:
+                        if isinstance(block, dict):
+                            thinking_blocks_parts.append(block)
                     if omitted:
                         reasoning_omitted = True
         except (json.JSONDecodeError, KeyError, TypeError):
@@ -420,6 +428,8 @@ def _stream_with_r2_archive(
                     msg["reasoning"] = full_reasoning
                 if reasoning_details_parts:
                     msg["reasoning_details"] = reasoning_details_parts
+                if thinking_blocks_parts:
+                    msg["thinking_blocks"] = thinking_blocks_parts
                 if reasoning_omitted:
                     msg["reasoning_omitted"] = True
                 archive_last_user = _last_user_for_archive(
@@ -456,6 +466,7 @@ def _stream_with_r2_archive(
     tool_empty_final_retry_used = False
     tool_midstream_retry_used = False
     tool_visible_content_parts: list[str] = []
+    final_thinking_blocks: list[dict] = []
     try:
         while True:
             chunks = []
@@ -575,6 +586,8 @@ def _stream_with_r2_archive(
                 reasoning_parts.append(parsed.get("reasoning") or "")
             if parsed.get("reasoning_details"):
                 reasoning_details_parts.extend(parsed.get("reasoning_details") or [])
+            if parsed.get("thinking_blocks"):
+                final_thinking_blocks = [b for b in (parsed.get("thinking_blocks") or []) if isinstance(b, dict)]
             if parsed.get("reasoning_omitted"):
                 reasoning_omitted = True
             break
@@ -608,6 +621,8 @@ def _stream_with_r2_archive(
                 msg["reasoning"] = full_reasoning
             if reasoning_details_parts:
                 msg["reasoning_details"] = reasoning_details_parts
+            if final_thinking_blocks:
+                msg["thinking_blocks"] = final_thinking_blocks
             if reasoning_omitted:
                 msg["reasoning_omitted"] = True
             tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
@@ -923,10 +938,12 @@ def chat_completions():
             body = step_inject_amap_mcp_tools(body)
             body = step_inject_websearch_tools(body)
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
+    active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
+    if _is_local_claude_oauth_proxy_url(active_upstream_url) and not du_daily_maintenance and not slim_voice_call:
+        body = _inject_previous_claude_thinking_blocks(body, window_id)
     body = step_trim_messages_if_over_limit(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
-    active_upstream_url = _get_active_upstream_url()
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
     # Claude OAuth 代理自己会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
     preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(active_upstream_url)
@@ -1100,6 +1117,7 @@ def chat_completions():
         )
         if not final_visible:
             logger.error("工具续轮结束但最终正文仍为空（非流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
+    archive_thinking_blocks_for_r2: list[dict] = []
     if resp_json:
         resp_json = _apply_hidden_sidecars_to_assistant_response(
             resp_json,
@@ -1110,8 +1128,13 @@ def chat_completions():
         resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
         if is_sumitalk_request:
             resp_json = _merge_sumitalk_card_into_nonstream_response(resp_json, body.get("messages") or [])
-        # 剥离 content 里的 <think>/<thinking> 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
-        # thinking 已合并入 message.reasoning，R2 存档的 msg_for_r2 独立 deepcopy，不受此影响。
+        try:
+            raw_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+            archive_thinking_blocks_for_r2 = _extract_claude_thinking_blocks(raw_msg)
+        except Exception:
+            archive_thinking_blocks_for_r2 = []
+        # 剥离 content / 结构化 delta 里的 thinking 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
+        # R2 存档会从 archive_thinking_blocks_for_r2 回填原始 thinking_blocks。
         resp_json = _strip_thinking_from_response_json(resp_json)
         try:
             msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
@@ -1156,6 +1179,8 @@ def chat_completions():
             # 构造仅用于 R2 存档的 msg 副本，不修改 resp_json（避免 reasoning 回传给客户端）
             import copy as _copy
             msg_for_r2 = _copy.deepcopy(msg)
+            if archive_thinking_blocks_for_r2 and not msg_for_r2.get("thinking_blocks"):
+                msg_for_r2["thinking_blocks"] = archive_thinking_blocks_for_r2
             # reasoning 兼容字段：优先取最终轮次自带的，再合并工具中间轮次累计的
             if not msg_for_r2.get("reasoning"):
                 for rk in ("reasoning_content", "thinking"):

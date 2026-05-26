@@ -1030,3 +1030,13 @@ npm -C miniapp run android
 - 已完成：新增 `services/humor_meme_bank.py`，使用 `data/humor_meme_bank.sqlite3` 存 `meme/origin/usage/enabled`，首次调用自动建表并 seed 17 条梗（小玥口癖 + 筛剩的互联网梗 + “没有XX的义务”模板）；`pipeline/pipeline.py` 新增 `step_inject_humor_memes()`，每轮随机抽 3 条写入动态 system，提示渡可完全不用、严肃/排错/身体不舒服/重情绪时不要用；`routes/chat.py` 在动态记忆召回后调用。
 - 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py routes/chat.py services/humor_meme_bank.py` 通过；梗库建表/随机抽 3 条/格式化 smoke test 通过；`step_inject_humor_memes` smoke test 与 `routes.chat` import check 通过；`git diff --check -- pipeline/pipeline.py routes/chat.py services/humor_meme_bank.py docs/DEBUG_INDEX.md prompts/du_common_knowledge.md` 通过。
 - 未完成 / 下次继续：第一版没有 MiniApp 管理页；如需增删改梗，先直接改 SQLite 或后续补轻量管理接口。
+
+当前状态（2026-05-27 常识独立静态 system）：
+- 已完成：`step_inject_common_knowledge()` 保持常驻静态注入，但不再追加到上一条 plain system；现在会插入独立 system，避免 prompt cache debug 把常识算进 `thinking规则`。`services/prompt_cache_debug.py` 新增 `### 常识` 标签识别。
+- 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py services/prompt_cache_debug.py routes/chat.py` 通过；常识注入/profile smoke test 通过，确认静态分段为 `核心prompt`、`thinking规则`、`常识`，且常识未拼进 thinking system；`git diff --check -- pipeline/pipeline.py services/prompt_cache_debug.py docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：常识仍为常驻静态块，不迁到动态区；后续如接 MiniApp 编辑入口再单独做。
+
+当前状态（2026-05-27 Claude thinking signature 回传）：
+- 已完成：新增 `services/claude_thinking_carryover.py`，仅在 active upstream 是服务端回环地址 Claude OAuth proxy（`127.0.0.1:8082`/`localhost:8082`）时，从上一轮 R2 归档读取原始 `thinking_blocks`（含 Claude `signature`），随上一轮 user/assistant 消息结构化回传；新窗口非 TG 入口可从全局 latest4 的最后一轮取块，TG 仍只用本窗口历史，避免串上下文。`routes/chat.py` 在转发前注入该隐藏结构，维护任务和 slim 语音通话跳过；流式/非流式归档会保留可回传 blocks，客户端可见响应会剥离 `thinking_blocks`。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py services/reasoning_utils.py services/claude_thinking_carryover.py` 通过；carryover smoke test 通过，确认无历史时会插入上一轮 user+assistant、有现成上一轮 assistant 时只补 `thinking_blocks` 不重复插入；SSE/nonstream 剥离 smoke test 通过，确认发给客户端的 chunk/response 不含 `thinking_blocks`。
+- 未完成 / 下次继续：没有接 MiniApp 开关；当前只支持服务端回环地址 Claude OAuth proxy 入口，不扩展到 OpenRouter/CPA；旧归档如果没有 `thinking_blocks` 或没有带 signature，则不会强行伪造回传。

@@ -98,6 +98,7 @@ def strip_thinking_from_response_json(resp_json: dict) -> dict:
     msg = choices[0].get("message") if isinstance(choices[0], dict) else None
     if not isinstance(msg, dict):
         return resp_json
+    msg.pop("thinking_blocks", None)
     content = msg.get("content")
     if not isinstance(content, str):
         return resp_json
@@ -128,7 +129,7 @@ def strip_reasoning_from_sse_chunk(chunk: bytes) -> bytes:
         if not isinstance(delta, dict):
             return chunk
         changed = False
-        for rk in ("reasoning", "reasoning_content", "thinking", "reasoning_details"):
+        for rk in ("reasoning", "reasoning_content", "thinking", "reasoning_details", "thinking_blocks"):
             if rk in delta:
                 del delta[rk]
                 changed = True

@@ -405,7 +405,7 @@ def step_clean_for_forward(body: dict) -> dict:
 
 
 _CORE_PROMPT_CACHE = {"text": None, "ts": 0.0}
-_COMMON_KNOWLEDGE_MARKER = "### 常识块"
+_COMMON_KNOWLEDGE_MARKER = "### 常识"
 _COMMON_KNOWLEDGE_CACHE = {"text": None, "mtime": None}
 
 
@@ -591,7 +591,18 @@ def step_inject_common_knowledge(body: dict) -> dict:
     for msg in messages:
         if (msg.get("role") or "").lower() == "system" and _COMMON_KNOWLEDGE_MARKER in str(msg.get("content") or ""):
             return body
-    return _append_to_static_system(body, "\n\n" + block)
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    insert_idx = 0
+    for i, msg in enumerate(messages):
+        if (msg.get("role") or "").lower() != "system":
+            break
+        if msg.get(_DYNAMIC_SYSTEM_MARKER) or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER) or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
+            break
+        insert_idx = i + 1
+    messages.insert(insert_idx, {"role": "system", "content": block})
+    body["messages"] = messages
+    return body
 
 
 def _messages_total_chars(messages: list) -> int:

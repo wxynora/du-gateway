@@ -21,6 +21,8 @@ def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
         return "thinking规则"
     if stripped.startswith("### 核心行为与前置判断规则"):
         return "核心行为规则"
+    if stripped.startswith("### 常识"):
+        return "常识"
     if stripped.startswith("【核心XP与互动逻辑】"):
         return "NSFW规则"
     if stripped.startswith("如果你这句话说完，心里还是惦记着她"):
