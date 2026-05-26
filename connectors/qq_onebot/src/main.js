@@ -586,15 +586,15 @@ function senderLabel(j) {
   const sender = j?.sender && typeof j.sender === "object" ? j.sender : {};
   const card = String(sender.card || "").trim();
   const nickname = String(sender.nickname || "").trim();
-  const rawName = card || nickname || (userId ? `QQ${userId}` : "群成员");
+  const rawName = card || nickname || "群成员";
   const isOwner = !!ownerQqUserId && userId === ownerQqUserId;
   const name = isOwner ? ownerQqDisplayName : rawName;
   return { userId, name, rawName, isOwner };
 }
 
 function groupSpeakerPrefix(name, userId, isOwner = false) {
-  const id = Number(userId || 0);
-  const base = `${String(name || "群成员").trim() || "群成员"}${id ? `(${id})` : ""}`;
+  void userId;
+  const base = String(name || "群成员").trim() || "群成员";
   return isOwner ? `${base}[当前用户/辛玥]` : base;
 }
 
@@ -700,7 +700,7 @@ function buildGroupGatewayContent(j, previousRows, currentContent) {
   const headerText = [
     "【QQ 群聊】",
     `群号：${groupId}`,
-    ownerQqUserId ? `身份标记：QQ ${ownerQqUserId} 是辛玥/当前用户；其他人是群友。` : "",
+    ownerQqUserId ? "身份标记：带 [当前用户/辛玥] 的发言人是辛玥/当前用户；其他人是群友。" : "",
     `当前发言人：${currentPrefix}`,
     "你只有在被 @ 时才回复。下面是本次 @ 前的最近群聊消息，用作公开上下文：",
     lines.length ? lines.join("\n") : "（前面没有可用群聊消息）",
