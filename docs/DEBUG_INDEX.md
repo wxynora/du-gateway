@@ -1068,7 +1068,7 @@ npm -C miniapp run android
 - 未完成 / 下次继续：当前 Mac shell 没有 `docker` 命令，未实际 build/run 镜像；需要用户启动或安装 Docker Desktop 后在 `connectors/xiaoai_migpt` 执行 `docker compose up -d --build`。未填真实 `.env`，也没有做小米登录和音箱实机验证。
 
 当前状态（2026-05-28 小爱音箱外放工具）：
-- 已完成：新增 `xiaoai_speak` 网关工具，作为渡可调用的“小爱音箱外放/弹窗提醒”能力；`storage/xiaoai_store.py` 在原小爱状态文件里增加短 TTL 播放队列，`routes/xiaoai_api.py` 增加 `/api/xiaoai/actions`、`/api/xiaoai/actions/claim`、`/api/xiaoai/actions/<id>/result` 和 `/api/xiaoai/speak`；`pipeline/pipeline.py` 用 `step_inject_gateway_tools()` 常驻注入，不依赖 Notion 开关；MiGPT runner 每 `XIAOAI_ACTION_POLL_MS` 轮询队列，播放 `play_url`/`speak_text` 并回报成功失败。
+- 已完成：新增 `xiaoai_speak` 网关工具，作为渡可调用的“小爱音箱外放/弹窗提醒”能力；`storage/xiaoai_store.py` 在原小爱状态文件里增加短 TTL 播放队列，`routes/xiaoai_api.py` 增加 `/api/xiaoai/actions`、`/api/xiaoai/actions/claim`、`/api/xiaoai/actions/<id>/result` 和 `/api/xiaoai/speak`；`pipeline/pipeline.py` 用 `step_inject_gateway_tools()` 常驻注入，不依赖 Notion 开关；主触发规则也明确 `xiaoai_speak` 可用于普通消息/弹窗可能被忽略时的升级提醒，例如叫看手机、催睡、喝水、洗澡后回来、起床或离开小红书，但必须短句、避开隐私社死、不要连续轰炸；MiGPT runner 每 `XIAOAI_ACTION_POLL_MS` 轮询队列，播放 `play_url`/`speak_text` 并回报成功失败。
 - 已验证：`.venv/bin/python -m py_compile storage/xiaoai_store.py routes/xiaoai_api.py services/gateway_tools.py pipeline/pipeline.py routes/chat.py services/notion_tools.py` 通过；`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过。
 - 未完成 / 下次继续：外放工具默认要求 runner 在线且 MiniMax TTS 能生成公网可访问的 mp3；若 action 卡在 pending，先查 Mac Docker runner 是否在线并确认 `/api/xiaoai/actions/claim` 是否被轮询。
 
