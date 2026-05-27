@@ -62,6 +62,13 @@ def _to_non_negative_int(value: Any, default: int = 0) -> int:
         return max(0, int(default))
 
 
+def _compact_text(value: Any, limit: int = 600) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if limit > 0 and len(text) > limit:
+        return text[:limit].rstrip() + "…"
+    return text
+
+
 def _slug_id(value: Any, fallback: str = "item") -> str:
     raw = str(value or fallback).strip().lower()
     return re.sub(r"[^a-z0-9_\u4e00-\u9fff-]+", "_", raw).strip("_")[:80] or fallback

@@ -1171,10 +1171,19 @@ npm -C miniapp run android
 - 已完成：`pipeline/pipeline.py` 的 thinking block 约束补充“脑内 OS 的碎碎念”风格，明确念头可以跳、自言自语、冒半句，但不要写成分点分析、判断清单、复盘报告或给自己的工作说明。
 - 未完成 / 下次继续：本轮只改 thinking block 风格约束；不改 Claude thinking carryover、MiniApp reasoning 展示、核心 prompt、NSFW 规则或入口正文风格。
 
+当前状态（2026-05-28 thinking block 状态感知去清单化）：
+- 已完成：`pipeline/pipeline.py` 把“她是不是焦虑/低落/不舒服”等清单式问句，改成“先感觉这句话背后的劲儿”和“自然冒出第一反应”；避免 thinking block 写成用户状态分析表。
+- 未完成 / 下次继续：本轮仍只改 thinking block 约束文案；不改正文生成、展示层、Claude thinking carryover 或 NSFW 规则。
+
 当前状态（2026-05-27 文游服务拆分：玩家命名 / 文本清洗 / GM 上下文 / 事件解析 / 规则数学）：
 - 已完成：`services/wenyou_service.py` 继续瘦身，抽出 `services/wenyou/players.py`（玩家 id、默认标签、显示名、玩家别名替换）、`services/wenyou/text_sanitize.py`（隐藏【事件意图】、去【主神面板】和玩家备忘块）、`services/wenyou/gm_context.py`（GM system 的任务者编制、新手引导、惩罚副本提示和蓝图摘要）、`services/wenyou/event_intent.py`（GM【事件意图】解析、目标/tags/state_proposals/clock_updates 标准化）、`services/wenyou/panel_parser.py`（旧兼容【主神面板】解析）、`services/wenyou/rules_math.py`（伤害、状态阈值、状态增删、威胁时钟）和 `services/wenyou/settlement_state.py`（结算 flags / reward_context 标准化），并把 `_compact_text` 下沉到 `services/wenyou/common.py`。
 - 已验证：`.venv/bin/python -m py_compile services/wenyou/common.py services/wenyou/players.py services/wenyou/text_sanitize.py services/wenyou/gm_context.py services/wenyou/event_intent.py services/wenyou/panel_parser.py services/wenyou/rules_math.py services/wenyou/settlement_state.py services/wenyou_service.py` 通过；`import app` 通过；smoke 覆盖玩家别名替换、GM 文本清洗、GM 上下文格式化、事件意图解析、旧面板解析、威胁时钟、状态阈值和结算 flags；`git diff --check` 覆盖本轮文游文件。
 - 未完成 / 下次继续：`services/wenyou_service.py` 仍约 8069 行，下一刀优先拆规则结算应用层或钱包/库存账户兼容层；不要把当前小爱、近期总结、MiniApp 静态资源和其他脏改动混进文游拆分提交。
+
+当前状态（2026-05-28 文游服务拆分：公共状态 / 候选 prompt / 抽卡 helper）：
+- 已完成：新增 `services/wenyou/public_state.py`，承接公开任务、线索、地点/NPC/怪物 marker、面板合并、rules mapping、任务/线索/marker 规则状态 entry、公开规则更新 stub、公开威胁标签和时钟状态标签；新增 `services/wenyou/candidate_prompts.py`，承接大厅候选归一化、候选扩展 prompt、候选 core/blueprint/opening prompt 和 DS 文本块清洗；新增 `services/wenyou/gacha.py`，承接抽卡池归一化、保底状态、概率 roll、保底应用/更新、按池选物和重复转碎片 helper。`services/wenyou_service.py` 保留候选 DS 调用、教程副本、framework 组装、`roll_gacha` 钱包/背包业务入口和 `_prepare_gacha_item_for_inventory` 封印逻辑，路由、前端和静态资源不改。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou/common.py services/wenyou/public_state.py services/wenyou/candidate_prompts.py services/wenyou/gacha.py services/wenyou/gm_context.py services/wenyou/event_intent.py services/wenyou/panel_parser.py services/wenyou/players.py services/wenyou/rules_math.py services/wenyou/settlement_state.py services/wenyou/text_sanitize.py services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`.venv/bin/python` 导入 `app` 和 `routes.miniapp.wenyou` 通过；smoke 覆盖 `_normalize_public_task_item`、`_rules_mapping`、`_task_progress_entry`、`_merge_panel_list`、候选归一化、候选 core/blueprint/opening prompt、`format_candidate_expansion_prompt`、`_clean_ds_block`、`_public_clock_status`、`_public_threat_label`、`generate_instance_candidates` 可导入、抽卡池归一化、保底、概率 roll、按池选物和碎片转换；`git diff --check -- services/wenyou_service.py services/wenyou/public_state.py services/wenyou/candidate_prompts.py services/wenyou/gacha.py docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：后端下一刀可优先拆 item_effects 纯规则 helper 或奖励 roll helper；前端小工建议先拆 `miniapp/src/ui/wenyou/types.ts`、`storyParser.ts`、`panelFormatters.ts`。不要把非文游脏文件、旧静态 hash 产物、QQ/小爱/共读半成品混入文游拆分提交。
 
 当前状态（2026-05-28 方案清理：白名单/黑名单取消观察期下线）：
 - 已完成：删除 `docs/白名单黑名单方案-取消观察期.md`，该“新窗口默认白名单 / 新窗测试进黑名单 / 回复追加黑名单后缀”的取消观察期方案不再作为未落地方案追踪。
