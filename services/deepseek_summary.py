@@ -1,6 +1,7 @@
 # 每 4 轮用 DeepSeek 生成/更新窗口总结
 import json
 import re
+import time
 
 import requests
 
@@ -22,9 +23,12 @@ _SUMMARY_SLIGHTLY_LEVEL = "slightly"
 _SUMMARY_OLDER_LEVEL = "older"
 _SUMMARY_LEVELS = {_SUMMARY_RECENT_LEVEL, _SUMMARY_SLIGHTLY_LEVEL, _SUMMARY_OLDER_LEVEL}
 _SUMMARY_NEW_CHUNK_PLACEHOLDER_ID = "__new_chunk__"
+_SUMMARY_PENDING_STATUS = "pending"
 _SUMMARY_RECENT_MAX_CHUNKS = 3
 _SUMMARY_SLIGHTLY_MAX_CHUNKS = 8
 _SUMMARY_OLDER_MAX_CHUNKS = 4
+_SUMMARY_DS_MAX_ATTEMPTS = 3
+_SUMMARY_DS_RETRY_SLEEP_SECONDS = 3
 
 _SUMMARY_RETRY_INSTRUCTION = """
 
@@ -43,6 +47,18 @@ _SUMMARY_JSON_RETRY_INSTRUCTION = """
 上一次输出不是合法 JSON。
 重写时必须只输出一个 JSON 对象，不要 Markdown，不要解释，不要代码块。
 字段固定为：new_chunk、compress_to_slightly、compress_to_older。
+"""
+
+_SUMMARY_RESULT_RETRY_INSTRUCTION_TEMPLATE = """
+
+【上轮输出纠错】
+上一次输出没有通过结果校验：{reason}
+重写时必须只输出一个 JSON 对象，不要 Markdown，不要解释，不要代码块。
+字段固定为：
+1. new_chunk：必须是本轮 4 轮对话的小段总结，不能为空。
+2. compress_to_slightly：如果本轮需要轻压缩，必须按输入顺序返回对应数量的非空文本；不需要则返回 null。
+3. compress_to_older：如果本轮需要重压缩，必须按输入顺序返回对应数量的非空文本；不需要则返回 null。
+同时继续遵守人称规则：“我”只能指渡，不能用“你/您”指代辛玥。
 """
 
 _QUOTE_PATTERNS = (
@@ -264,6 +280,8 @@ def _format_summary_compression_input(value: object | None) -> str:
         items = []
         for raw in value:
             if not isinstance(raw, dict):
+                continue
+            if _summary_chunk_is_pending(raw):
                 continue
             item_id = str(raw.get("id") or "").strip()
             text = str(raw.get("text") or "").strip()
@@ -518,6 +536,42 @@ def _summary_rounds_meta(recent_4_rounds: list) -> dict:
     }
 
 
+def _summary_chunk_is_pending(item: dict | None) -> bool:
+    if not isinstance(item, dict):
+        return False
+    return bool(
+        item.get("summary_pending")
+        or item.get("pending")
+        or str(item.get("status") or "").strip().lower() == _SUMMARY_PENDING_STATUS
+    )
+
+
+def _summary_items_requiring_compression(items: list[dict]) -> list[dict]:
+    return [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and not _summary_chunk_is_pending(item)
+        and str(item.get("text") or "").strip()
+    ]
+
+
+def summary_pending_round_ranges(chunks_state: dict | None) -> set[tuple[int, int]]:
+    state = _normalize_summary_chunks_state(chunks_state)
+    ranges: set[tuple[int, int]] = set()
+    for item in state.get("chunks") or []:
+        if not _summary_chunk_is_pending(item):
+            continue
+        try:
+            start = int(item.get("round_start") or 0)
+            end = int(item.get("round_end") or 0)
+        except Exception:
+            continue
+        if start > 0 and end >= start:
+            ranges.add((start, end))
+    return ranges
+
+
 def _normalize_summary_chunks_state(chunks_state: dict | None) -> dict:
     data = dict(chunks_state or {})
     raw_chunks = data.get("chunks")
@@ -528,10 +582,14 @@ def _normalize_summary_chunks_state(chunks_state: dict | None) -> dict:
         if not isinstance(raw, dict):
             continue
         text = str(raw.get("text") or "").strip()
-        if not text:
+        is_pending = _summary_chunk_is_pending(raw)
+        if not text and not is_pending:
             continue
         item = dict(raw)
         item["text"] = text
+        if is_pending:
+            item["summary_pending"] = True
+            item["status"] = _SUMMARY_PENDING_STATUS
         try:
             item["sequence"] = int(item.get("sequence"))
         except Exception:
@@ -644,14 +702,21 @@ def render_summary_from_chunks(chunks_state: dict | None) -> str:
         if not items:
             return ""
         lines = [title]
+        has_text = False
         for item in sorted(items, key=lambda x: int(x.get("sequence") or 0)):
+            if _summary_chunk_is_pending(item):
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
             bucket = str(item.get("bucket") or "").strip()
             if bucket:
                 lines.append(f"（{bucket}）")
-            text = str(item.get("text") or "").strip()
-            if text:
-                lines.append(text)
+            lines.append(text)
             lines.append("")
+            has_text = True
+        if not has_text:
+            return ""
         return "\n".join(lines).rstrip()
 
     parts = [
@@ -678,26 +743,48 @@ def _build_updated_summary_chunks(
         chunks = _normalize_summary_chunks_state({"chunks": _legacy_summary_to_chunks(current_summary)}).get("chunks") or []
 
     meta = _summary_rounds_meta(recent_4_rounds)
+    current_id = meta["id"]
     new_text = _clean_summary_chunk_text(ds_result.get("new_chunk"), 700)
     if not new_text:
         return None
 
+    existing_current = next((c for c in chunks if str(c.get("id") or "") == current_id), None)
+    if existing_current and _summary_chunk_is_pending(existing_current):
+        for item in chunks:
+            if str(item.get("id") or "") != current_id:
+                continue
+            item.update(meta)
+            item["text"] = new_text
+            item["summary_pending"] = False
+            item.pop("pending", None)
+            item.pop("status", None)
+            item["pending_filled"] = True
+            break
+        chunks.sort(key=lambda x: int(x.get("sequence") or 0))
+        chunks = _trim_summary_chunks_by_level(chunks)
+        return {
+            "version": 2,
+            "update_count": int(state.get("update_count") or 0),
+            "chunks": chunks,
+        }
+
+    light_items = _summary_items_requiring_compression(recent_to_slightly)
+    heavy_items = _summary_items_requiring_compression(slightly_to_older)
     light_texts = _clean_summary_compression_outputs(
         ds_result.get("compress_to_slightly"),
-        expected_count=len(recent_to_slightly),
+        expected_count=len(light_items),
         max_chars=420,
-        expected_ids=[str(item.get("id") or "") for item in recent_to_slightly],
+        expected_ids=[str(item.get("id") or "") for item in light_items],
     )
     heavy_texts = _clean_summary_compression_outputs(
         ds_result.get("compress_to_older"),
-        expected_count=len(slightly_to_older),
+        expected_count=len(heavy_items),
         max_chars=260,
-        expected_ids=[str(item.get("id") or "") for item in slightly_to_older],
+        expected_ids=[str(item.get("id") or "") for item in heavy_items],
     )
-    if len(light_texts) != len(recent_to_slightly) or len(heavy_texts) != len(slightly_to_older):
+    if len(light_texts) != len(light_items) or len(heavy_texts) != len(heavy_items):
         return None
 
-    current_id = meta["id"]
     chunks = [c for c in chunks if str(c.get("id") or "") != current_id]
     max_sequence = max([int(c.get("sequence") or 0) for c in chunks], default=-1)
     new_chunk = {
@@ -712,22 +799,30 @@ def _build_updated_summary_chunks(
 
     text_by_recent_id = {
         str(item.get("id") or ""): text
-        for item, text in zip(recent_to_slightly, light_texts)
+        for item, text in zip(light_items, light_texts)
     }
     text_by_slightly_id = {
         str(item.get("id") or ""): text
-        for item, text in zip(slightly_to_older, heavy_texts)
+        for item, text in zip(heavy_items, heavy_texts)
     }
+    recent_to_slightly_ids = {str(item.get("id") or "") for item in recent_to_slightly}
+    slightly_to_older_ids = {str(item.get("id") or "") for item in slightly_to_older}
     for item in chunks:
         item_id = str(item.get("id") or "")
-        if item_id in text_by_recent_id:
-            item["text"] = text_by_recent_id[item_id]
+        if item_id in recent_to_slightly_ids:
+            if item_id in text_by_recent_id:
+                item["text"] = text_by_recent_id[item_id]
+                item["compressed_to_slightly"] = True
+            elif str(item.get("text") or "").strip():
+                item["compression_pending"] = "slightly"
             item["level"] = _SUMMARY_SLIGHTLY_LEVEL
-            item["compressed_to_slightly"] = True
-        if item_id in text_by_slightly_id:
-            item["text"] = text_by_slightly_id[item_id]
+        if item_id in slightly_to_older_ids:
+            if item_id in text_by_slightly_id:
+                item["text"] = text_by_slightly_id[item_id]
+                item["compressed_to_older"] = True
+            elif str(item.get("text") or "").strip():
+                item["compression_pending"] = "older"
             item["level"] = _SUMMARY_OLDER_LEVEL
-            item["compressed_to_older"] = True
 
     new_light_text = text_by_recent_id.get(_SUMMARY_NEW_CHUNK_PLACEHOLDER_ID)
     if new_light_text:
@@ -795,6 +890,126 @@ def _summary_compression_plan(chunks: list[dict], should_compress: bool) -> tupl
     return recent_to_slightly, slightly_to_older, older_to_drop_ids
 
 
+def _summary_result_retry_instruction(reason: str) -> str:
+    clean_reason = re.sub(r"\s+", " ", str(reason or "").strip())[:240] or "输出未通过校验"
+    return _SUMMARY_RESULT_RETRY_INSTRUCTION_TEMPLATE.format(reason=clean_reason)
+
+
+def _summary_result_validation_error(
+    result: dict | None,
+    recent_to_slightly: list[dict],
+    slightly_to_older: list[dict],
+) -> str:
+    if not isinstance(result, dict):
+        return "返回不是合法 JSON 对象"
+    if _summary_json_has_forbidden_second_person(result):
+        return "输出里把辛玥写成了第二人称"
+    if not _clean_summary_chunk_text(result.get("new_chunk"), 700):
+        return "new_chunk 为空或不可用"
+
+    light_items = _summary_items_requiring_compression(recent_to_slightly)
+    heavy_items = _summary_items_requiring_compression(slightly_to_older)
+    light_texts = _clean_summary_compression_outputs(
+        result.get("compress_to_slightly"),
+        expected_count=len(light_items),
+        max_chars=420,
+        expected_ids=[str(item.get("id") or "") for item in light_items],
+    )
+    if len(light_texts) != len(light_items):
+        return f"compress_to_slightly 数量不对，期望 {len(light_items)} 条"
+
+    heavy_texts = _clean_summary_compression_outputs(
+        result.get("compress_to_older"),
+        expected_count=len(heavy_items),
+        max_chars=260,
+        expected_ids=[str(item.get("id") or "") for item in heavy_items],
+    )
+    if len(heavy_texts) != len(heavy_items):
+        return f"compress_to_older 数量不对，期望 {len(heavy_items)} 条"
+    return ""
+
+
+def build_pending_summary_update(
+    current_summary: str,
+    recent_4_rounds: list,
+    chunks_state: dict | None = None,
+) -> tuple[str | None, dict | None]:
+    """
+    DS 连续失败后的最后兜底：先创建/推进结构 slot，但不伪造总结文本。
+    pending chunk 参与计数与分层，渲染 prompt 时跳过；后续补跑同一 range 时只填原 slot。
+    """
+    state = _normalize_summary_chunks_state(chunks_state)
+    chunks = state.get("chunks") or _legacy_summary_to_chunks(current_summary)
+    state = _normalize_summary_chunks_state({"version": 2, **state, "chunks": chunks})
+    chunks = state.get("chunks") or []
+    try:
+        update_count = int(state.get("update_count") or 0)
+    except Exception:
+        update_count = 0
+
+    meta = _summary_rounds_meta(recent_4_rounds)
+    current_id = str(meta.get("id") or "")
+    try:
+        round_start = int(meta.get("round_start") or 0)
+        round_end = int(meta.get("round_end") or 0)
+    except Exception:
+        return None, None
+    if not current_id or current_id == "current:unknown" or round_start <= 0 or round_end < round_start:
+        return None, None
+
+    for item in chunks:
+        if str(item.get("id") or "") == current_id:
+            if _summary_chunk_is_pending(item):
+                summary = _trim_summary_to_budget(render_summary_from_chunks(state), memory_summary_budget())
+                return summary, state
+            return _trim_summary_to_budget(render_summary_from_chunks(state), memory_summary_budget()), state
+
+    next_update_count = update_count + 1
+    should_compress = next_update_count % _summary_compress_every_updates() == 0
+    recent_to_slightly, slightly_to_older, older_to_drop_ids = _summary_compression_plan(
+        chunks,
+        should_compress=should_compress,
+    )
+
+    if older_to_drop_ids:
+        chunks = [c for c in chunks if str(c.get("id") or "") not in older_to_drop_ids]
+
+    recent_to_slightly_ids = {str(item.get("id") or "") for item in recent_to_slightly}
+    slightly_to_older_ids = {str(item.get("id") or "") for item in slightly_to_older}
+    for item in chunks:
+        item_id = str(item.get("id") or "")
+        if item_id in recent_to_slightly_ids:
+            item["level"] = _SUMMARY_SLIGHTLY_LEVEL
+            if str(item.get("text") or "").strip():
+                item["compression_pending"] = "slightly"
+        if item_id in slightly_to_older_ids:
+            item["level"] = _SUMMARY_OLDER_LEVEL
+            if str(item.get("text") or "").strip():
+                item["compression_pending"] = "older"
+
+    max_sequence = max([int(c.get("sequence") or 0) for c in chunks], default=-1)
+    new_chunk = {
+        **meta,
+        "text": "",
+        "sequence": max_sequence + 1,
+        "level": _SUMMARY_RECENT_LEVEL,
+        "summary_pending": True,
+        "status": _SUMMARY_PENDING_STATUS,
+        "pending_reason": "deepseek_summary_failed",
+    }
+    if _SUMMARY_NEW_CHUNK_PLACEHOLDER_ID in recent_to_slightly_ids:
+        new_chunk["level"] = _SUMMARY_SLIGHTLY_LEVEL
+        new_chunk["compression_pending"] = "slightly"
+
+    chunks.append(new_chunk)
+    chunks.sort(key=lambda x: int(x.get("sequence") or 0))
+    chunks = _trim_summary_chunks_by_level(chunks)
+    next_state = {"version": 2, "update_count": next_update_count, "chunks": chunks}
+    summary = render_summary_from_chunks(next_state)
+    summary = _trim_summary_to_budget(summary, memory_summary_budget())
+    return summary, next_state
+
+
 def fetch_new_summary_update(
     current_summary: str,
     recent_4_rounds: list,
@@ -815,8 +1030,14 @@ def fetch_new_summary_update(
         update_count = int(state.get("update_count") or 0)
     except Exception:
         update_count = 0
-    next_update_count = update_count + 1
-    should_compress = next_update_count % _summary_compress_every_updates() == 0
+    current_meta = _summary_rounds_meta(recent_4_rounds)
+    pending_fill = any(
+        str(item.get("id") or "") == str(current_meta.get("id") or "")
+        and _summary_chunk_is_pending(item)
+        for item in chunks
+    )
+    next_update_count = update_count if pending_fill else update_count + 1
+    should_compress = (not pending_fill) and next_update_count % _summary_compress_every_updates() == 0
     recent_to_slightly, slightly_to_older, older_to_drop_ids = _summary_compression_plan(
         chunks,
         should_compress=should_compress,
@@ -827,54 +1048,63 @@ def fetch_new_summary_update(
         chunk_to_compress_to_older=slightly_to_older,
     )
     headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
-    try:
-        attempt_prompt = prompt
-        result: dict | None = None
-        for attempt in range(2):
-            payload = {
-                "model": DEEPSEEK_CHAT_MODEL,
-                "messages": [{"role": "user", "content": attempt_prompt}],
-                "max_tokens": 1800,
-            }
+    attempt_prompt = prompt
+    for attempt in range(1, _SUMMARY_DS_MAX_ATTEMPTS + 1):
+        payload = {
+            "model": DEEPSEEK_CHAT_MODEL,
+            "messages": [{"role": "user", "content": attempt_prompt}],
+            "max_tokens": 1800,
+        }
+        try:
             r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=60)
             r.raise_for_status()
             data = r.json()
-            content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-            result = _extract_summary_json(content or "")
-            if not result:
-                logger.warning("DeepSeek 小段总结返回非 JSON attempt=%s", attempt + 1)
-                if attempt == 0:
-                    attempt_prompt = prompt + _SUMMARY_JSON_RETRY_INSTRUCTION
-                    continue
-                return None, None
-            if _summary_json_has_forbidden_second_person(result):
-                logger.warning("DeepSeek 小段总结命中第二人称违规 attempt=%s", attempt + 1)
-                if attempt == 0:
-                    attempt_prompt = prompt + _SUMMARY_RETRY_INSTRUCTION
-                    continue
-                return None, None
-            break
-
-        if not result:
+        except Exception as e:
+            logger.warning("DeepSeek 小段总结请求失败 attempt=%s/%s error=%s", attempt, _SUMMARY_DS_MAX_ATTEMPTS, e)
+            if attempt < _SUMMARY_DS_MAX_ATTEMPTS:
+                time.sleep(_SUMMARY_DS_RETRY_SLEEP_SECONDS)
+                continue
             return None, None
+
+        content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+        result = _extract_summary_json(content or "")
+        validation_error = _summary_result_validation_error(result, recent_to_slightly, slightly_to_older)
+        if validation_error:
+            logger.warning(
+                "DeepSeek 小段总结结果校验失败 attempt=%s reason=%s",
+                attempt,
+                validation_error,
+            )
+            if attempt < _SUMMARY_DS_MAX_ATTEMPTS:
+                if not result:
+                    attempt_prompt = prompt + _SUMMARY_JSON_RETRY_INSTRUCTION
+                elif "第二人称" in validation_error:
+                    attempt_prompt = prompt + _SUMMARY_RETRY_INSTRUCTION
+                else:
+                    attempt_prompt = prompt + _summary_result_retry_instruction(validation_error)
+                continue
+            return None, None
+
         updated_state = _build_updated_summary_chunks(
             current_summary=current_summary,
             recent_4_rounds=recent_4_rounds,
             chunks_state={"version": 2, "update_count": update_count, "chunks": chunks},
-            ds_result=result,
+            ds_result=result or {},
             recent_to_slightly=recent_to_slightly,
             slightly_to_older=slightly_to_older,
             older_to_drop_ids=older_to_drop_ids,
             next_update_count=next_update_count,
         )
         if not updated_state:
+            logger.warning("DeepSeek 小段总结构建 chunks 失败 attempt=%s", attempt)
+            if attempt < _SUMMARY_DS_MAX_ATTEMPTS:
+                attempt_prompt = prompt + _summary_result_retry_instruction("结果字段通过初检，但无法构建 summary chunks")
+                continue
             return None, None
         summary = render_summary_from_chunks(updated_state)
         summary = _trim_summary_to_budget(summary, memory_summary_budget())
         return summary, updated_state
-    except Exception as e:
-        logger.error("DeepSeek 小段总结失败 error=%s", e, exc_info=True)
-        return None, None
+    return None, None
 
 
 def fetch_daily_whisper_from_summary(current_summary: str, recent_4_rounds: list) -> str | None:

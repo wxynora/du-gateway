@@ -1036,6 +1036,11 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py services/prompt_cache_debug.py routes/chat.py` 通过；常识注入/profile smoke test 通过，确认静态分段为 `核心prompt`、`thinking规则`、`常识`，且常识未拼进 thinking system；`git diff --check -- pipeline/pipeline.py services/prompt_cache_debug.py docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 下次继续：常识仍为常驻静态块，不迁到动态区；后续如接 MiniApp 编辑入口再单独做。
 
+当前状态（2026-05-27 唤醒常识与入口风格顺序固定）：
+- 已完成：`step_inject_common_knowledge()` 插入时遇到已有入口风格 system（QQ/TG/微信/SumiTalk/小爱）会停在其前面，避免“请求预带 QQ 风格”时变成 `QQ入口风格 -> 常识`，而“网关注入 QQ 风格”时是 `常识 -> QQ入口风格`，导致静态区顺序抖动。
+- 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py` 通过；smoke test 覆盖“请求不带 QQ 风格”和“请求预带 QQ 风格”，两者均为 `common -> qq`；`git diff --check -- pipeline/pipeline.py` 通过。
+- 未完成 / 下次继续：这次只固定常识与入口风格的相对顺序；未改 NSFW/followup 追加方式，也未改主动唤醒投递策略。
+
 当前状态（2026-05-27 Claude thinking signature 回传）：
 - 已完成：新增 `services/claude_thinking_carryover.py`，仅在 active upstream 是服务端回环地址 Claude OAuth proxy（`127.0.0.1:8082`/`localhost:8082`）时，从上一轮 R2 归档读取原始 `thinking_blocks`（含 Claude `signature`），随上一轮 user/assistant 消息结构化回传；新窗口非 TG 入口可从全局 latest4 的最后一轮取块，TG 仍只用本窗口历史，避免串上下文。`routes/chat.py` 在转发前注入该隐藏结构，维护任务和 slim 语音通话跳过；流式/非流式归档会保留可回传 blocks，客户端可见响应会剥离 `thinking_blocks`。
 - 已验证：`.venv/bin/python -m py_compile routes/chat.py services/reasoning_utils.py services/claude_thinking_carryover.py` 通过；carryover smoke test 通过，确认无历史时会插入上一轮 user+assistant、有现成上一轮 assistant 时只补 `thinking_blocks` 不重复插入；SSE/nonstream 剥离 smoke test 通过，确认发给客户端的 chunk/response 不含 `thinking_blocks`。
@@ -1062,3 +1067,15 @@ npm -C miniapp run android
 - 已写回：2026-05-27 已按第一次 dry-run 结果写回 R2 `global/summary.txt` 和 `global/summary_chunks.json`，实际范围为 `tg_8260066512` 的 rounds 6793-6852；落库后 `chunks=15`，分布为更早 4 / 稍早 8 / 最近 3，`update_count=626`。
 - 已验证：`.venv/bin/python -m py_compile services/deepseek_summary.py` 通过；容量 smoke 覆盖 3/8/4 上限、legacy 分层和固定 2/2/2 移位计划；R2 落库检查确认当前 `update_count=626`，下一次总结开始时读到的仍是 626，成功写完后才更新计数；按当前逻辑本次只补新总结，不压缩换位。
 - 未完成 / 下次继续：本轮不改 4/8 轮总结频率；不要改固定 2/2/2 压缩节拍，除非先重新设计计数语义。
+
+当前状态（2026-05-27 近期总结 DS 请求与结果重试）：
+- 已完成：`services/deepseek_summary.py` 的 `fetch_new_summary_update()` 增加最多 3 次尝试；HTTP/503/timeout/网络异常会重试同一 prompt，返回非 JSON、人称违规、`new_chunk` 为空、压缩字段数量不对或 chunks 构建失败时，会带具体验证原因要求 DeepSeek 重写。
+- 已完成：重试只发生在写入 summary chunks 之前；只有结果通过校验并能构建完整 chunks 后才返回 `new_summary/new_chunks`，失败仍返回 `None`，不写 R2、不推进结构、不改变 4/8 轮节奏或固定 2/2/2 移位计划。
+- 已验证：`.venv/bin/python -m py_compile services/deepseek_summary.py` 通过；mock smoke 覆盖连接错误后成功、空 `new_chunk` 后成功、压缩字段数量错误后成功，确认重试成功后才生成 chunks。
+- 未完成 / 下次继续：这不是 slot 占坑方案；如果 DS 连续 3 次仍失败，仍依赖现有缺口补跑逻辑在后续轮次补处理。
+
+当前状态（2026-05-27 近期总结 pending slot 兜底）：
+- 已完成：`services/deepseek_summary.py` 增加 pending chunk 支持；DS 连续失败后可用 `build_pending_summary_update()` 先写入对应 4 轮的 pending slot。pending slot 参与 `update_count`、recent/slightly/older 分层和固定 2/2/2 移位，但渲染近期记忆时会跳过，不把“待补写”占位暴露给模型。
+- 已完成：`pipeline/pipeline.py` 在 `fetch_new_summary_update()` 失败后写入 pending 兜底；后续触发时 `_summary_round_groups_to_process()` 会把 pending range 重新拿出来补写。补写成功时只填原 slot，不新增 chunk、不推进 `update_count`。
+- 已验证：`.venv/bin/python -m py_compile services/deepseek_summary.py pipeline/pipeline.py` 通过；smoke 覆盖 pending 创建、pending 不渲染、pending range 后续被选中、补写不改变计数、压缩点失败仍按 2/2/2 结构移动并保留 pending。
+- 未完成 / 下次继续：pending 只解决结构兜底；如果 DS 长时间连续失败，pending 文本仍需后续成功触发才能补齐。

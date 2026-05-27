@@ -392,6 +392,13 @@ def step_clean_for_forward(body: dict) -> dict:
 _CORE_PROMPT_CACHE = {"text": None, "ts": 0.0}
 _COMMON_KNOWLEDGE_MARKER = "### 常识"
 _COMMON_KNOWLEDGE_CACHE = {"text": None, "mtime": None}
+_ENTRY_STYLE_MARKERS = (
+    "【入口风格：QQ】",
+    "【入口风格：TG】",
+    "【入口风格：微信】",
+    "【入口风格：SumiTalk】",
+    "【入口风格：小爱音箱】",
+)
 
 
 def _load_du_core_prompt_from_file() -> str:
@@ -583,6 +590,9 @@ def step_inject_common_knowledge(body: dict) -> dict:
         if (msg.get("role") or "").lower() != "system":
             break
         if msg.get(_DYNAMIC_SYSTEM_MARKER) or msg.get(_SUMMARY_CACHE_SYSTEM_MARKER) or msg.get(_SUMMARY_RECENT_SYSTEM_MARKER):
+            break
+        content = str(msg.get("content") or "").lstrip()
+        if any(content.startswith(marker) for marker in _ENTRY_STYLE_MARKERS):
             break
         insert_idx = i + 1
     messages.insert(insert_idx, {"role": "system", "content": block})
@@ -2795,6 +2805,7 @@ def _summary_round_groups_to_process(
     current_start = current_round - every + 1
     current_range = (current_start, current_round)
     existing_ranges = _summary_existing_round_ranges(chunks_state)
+    pending_ranges = deepseek_summary.summary_pending_round_ranges(chunks_state)
     if not existing_ranges:
         return [r2_store.get_conversation_rounds(window_id, last_n=every)]
 
@@ -2808,6 +2819,10 @@ def _summary_round_groups_to_process(
         if span not in existing_ranges:
             ranges_to_process.append(span)
         start = end + 1
+
+    for span in sorted(pending_ranges):
+        if span[1] <= current_round and span not in ranges_to_process:
+            ranges_to_process.append(span)
 
     if current_range not in ranges_to_process and current_range not in existing_ranges:
         ranges_to_process.append(current_range)
@@ -2869,10 +2884,29 @@ def step_run_post_archive_tasks(
                         continue
                 indices = [r.get("index") for r in recent if isinstance(r, dict)]
                 logger.warning(
-                    "Pipeline 本窗口触发总结但 DeepSeek 未返回新总结 window_id=%s indices=%s，本组跳过并继续后续组",
+                    "Pipeline 本窗口触发总结但 DeepSeek 未返回新总结 window_id=%s indices=%s，准备写入 pending 兜底",
                     window_id,
                     indices,
                 )
+                fallback_summary, fallback_chunks = deepseek_summary.build_pending_summary_update(
+                    current,
+                    recent,
+                    chunks_state,
+                )
+                if fallback_chunks is not None and fallback_summary is not None:
+                    if r2_store.save_summary(window_id, fallback_summary):
+                        if not r2_store.save_summary_chunks(window_id, fallback_chunks):
+                            logger.warning("Pipeline 保存实时层 pending 小段队列失败 window_id=%s", window_id)
+                            break
+                        current = fallback_summary
+                        chunks_state = fallback_chunks
+                        logger.warning(
+                            "Pipeline 已写入实时层 pending 小段兜底 window_id=%s indices=%s",
+                            window_id,
+                            indices,
+                        )
+                        continue
+                    logger.warning("Pipeline 保存实时层 pending 总结失败 window_id=%s indices=%s", window_id, indices)
                 continue
 
         t = threading.Thread(target=_summarize)
