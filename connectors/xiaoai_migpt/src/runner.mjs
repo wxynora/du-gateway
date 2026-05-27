@@ -422,7 +422,9 @@ async function executeAction(engine, action) {
 
 async function pollActions(engine) {
   if (actionPollInFlight) return;
-  if (!engine?.MiNA && !engine?.speaker) return;
+  // Only claim actions after MiNA is initialized; otherwise the queue item gets
+  // consumed before the speaker can actually play it.
+  if (!engine?.MiNA) return;
   actionPollInFlight = true;
   try {
     const actions = await claimActions();

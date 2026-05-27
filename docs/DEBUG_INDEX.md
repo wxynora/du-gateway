@@ -1070,7 +1070,12 @@ npm -C miniapp run android
 当前状态（2026-05-28 小爱音箱外放工具）：
 - 已完成：新增 `xiaoai_speak` 网关工具，作为渡可调用的“小爱音箱外放/弹窗提醒”能力；`storage/xiaoai_store.py` 在原小爱状态文件里增加短 TTL 播放队列，`routes/xiaoai_api.py` 增加 `/api/xiaoai/actions`、`/api/xiaoai/actions/claim`、`/api/xiaoai/actions/<id>/result` 和 `/api/xiaoai/speak`；`pipeline/pipeline.py` 用 `step_inject_gateway_tools()` 常驻注入，不依赖 Notion 开关；MiGPT runner 每 `XIAOAI_ACTION_POLL_MS` 轮询队列，播放 `play_url`/`speak_text` 并回报成功失败。
 - 已验证：`.venv/bin/python -m py_compile storage/xiaoai_store.py routes/xiaoai_api.py services/gateway_tools.py pipeline/pipeline.py routes/chat.py services/notion_tools.py` 通过；`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过。
-- 未完成 / 下次继续：未做真实小爱实机播放验证；生产需要拉代码、重启 du-gateway，并重启 Mac Docker runner。外放工具默认要求 runner 在线且 MiniMax TTS 能生成公网可访问的 mp3，失败时不回退成小爱默认嗓音。
+- 未完成 / 下次继续：外放工具默认要求 runner 在线且 MiniMax TTS 能生成公网可访问的 mp3；若 action 卡在 pending，先查 Mac Docker runner 是否在线并确认 `/api/xiaoai/actions/claim` 是否被轮询。
+
+当前状态（2026-05-28 小爱外放工具实机验证）：
+- 已完成：修复 MiGPT runner 播放队列轮询的启动顺序；轮询定时器可以提前注册，但 `pollActions()` 必须等 `MiGPT.MiNA` 初始化后才领取队列，避免 `MiGPT.start()` 初始化前把 action 领走并误报播放失败。
+- 已验证：`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过；Mac Docker runner 已 `docker compose -f connectors/xiaoai_migpt/docker-compose.yml up -d --build` 重建；公网接口调用 `/api/xiaoai/tts` 生成 MiniMax mp3，再调用 `/api/xiaoai/speak` 入队，action `85dbb130eaa04b82b49b576fbbe4a5e1` 被 `mac-docker` 领取并在 `2026-05-28T04:25:33+08:00` 返回 `status=done`，runner 日志为 `播放 URL 结果：ok`。
+- 未完成 / 下次继续：如果用户实际没有听到声音，下一步查音箱网络是否能拉 `https://duxy-home.com/api/xiaoai/tts/*.mp3`、音量/播放状态以及 MiNA `player_get_play_status` 是否能返回有效媒体状态。
 
 当前状态（2026-05-28 小爱音频 URL 静默排查）：
 - 已完成：确认 runner 日志里 `播放 URL 结果：ok` 只代表 MiGPT/MiNA 接受播放命令，不代表小爱成功拉到 mp3；线上最近 `last_audio_url` 直接 GET 返回 404，根因是 `services/xiaoai_audio_store.py` 原先只把音频存在 Python 进程内存，生产多 worker、进程重启或请求落到不同进程时 `/api/xiaoai/tts/<token>.mp3` 会失效。已改为写入 `DATA_DIR/xiaoai_audio/` 并在 GET 时从落盘文件恢复，仍按 `HTML_PREVIEW_TTL_SECONDS` 和 `HTML_PREVIEW_MAX_ITEMS` 清理。
