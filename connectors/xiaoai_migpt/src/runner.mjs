@@ -19,6 +19,7 @@ const SESSION_TTL_SECONDS = positiveInt(env.XIAOAI_SESSION_TTL_SECONDS, 60, 0);
 const DEDUP_TTL_MS = positiveInt(env.XIAOAI_DEDUP_TTL_MS, 10000, 1000);
 const MUTE_RESTORE_FALLBACK_VOLUME = volumeInt(env.XIAOAI_MUTE_RESTORE_FALLBACK_VOLUME, 35);
 const MUTE_VOLUME_READ_TIMEOUT_MS = positiveInt(env.XIAOAI_MUTE_VOLUME_READ_TIMEOUT_MS, 250, 50);
+const MIN_PLAY_VOLUME = volumeInt(env.XIAOAI_MIN_PLAY_VOLUME, 20);
 
 let currentConfig = {
   enabled: true,
@@ -281,6 +282,32 @@ async function setSpeakerVolume(engine, volume) {
   return false;
 }
 
+async function ensureSpeakerAudible(engine, reason) {
+  try {
+    if (engine.MiOT?.setProperty) {
+      await engine.MiOT.setProperty(2, 2, false);
+    }
+  } catch (e) {
+    console.warn("[xiaoai] 解除音箱静音失败：", e?.message || e);
+    await postLog("warn", "解除音箱静音失败", { event: "play_unmute_failed", text: reason, error: e?.message || String(e) });
+  }
+
+  try {
+    let volume = null;
+    if (engine.MiOT?.getProperty) {
+      volume = parseVolume(await engine.MiOT.getProperty(2, 1));
+    }
+    if (volume === null) {
+      volume = await withTimeout(getSpeakerVolume(engine), MUTE_VOLUME_READ_TIMEOUT_MS, null);
+    }
+    if (volume !== null && volume < MIN_PLAY_VOLUME) {
+      await setSpeakerVolume(engine, MIN_PLAY_VOLUME);
+    }
+  } catch (e) {
+    console.warn("[xiaoai] 播放前音量检查失败：", e?.message || e);
+  }
+}
+
 async function muteNativeReplyVolume(engine, reason) {
   const originalVolume = await withTimeout(getSpeakerVolume(engine), MUTE_VOLUME_READ_TIMEOUT_MS, null);
   const restoreVolume = originalVolume ?? MUTE_RESTORE_FALLBACK_VOLUME;
@@ -333,6 +360,17 @@ async function logPlaybackStatus(engine) {
 async function safePlayText(engine, text) {
   const content = String(text || "").trim();
   if (!content) return false;
+  await ensureSpeakerAudible(engine, content);
+  if (engine.MiOT?.doAction) {
+    try {
+      console.log("[xiaoai] MIoT 播放文字：", content);
+      const ok = await engine.MiOT.doAction(5, 3, content);
+      console.log("[xiaoai] MIoT 播放文字结果：", ok ? "ok" : "false");
+      if (ok) return true;
+    } catch (e) {
+      console.warn("[xiaoai] MIoT 播放文本失败：", e?.message || e);
+    }
+  }
   try {
     console.log("[xiaoai] 播放文字：", content);
     const res = engine.MiNA?.callUbus
@@ -353,6 +391,7 @@ async function safePlayUrl(engine, url, fallbackText) {
   if (!audioUrl) {
     return safePlayText(engine, fallbackText);
   }
+  await ensureSpeakerAudible(engine, fallbackText || audioUrl);
   try {
     const res = engine.MiNA?.callUbus
       ? await engine.MiNA.callUbus("mediaplayer", "player_play_url", { url: audioUrl, type: 1 })

@@ -1077,6 +1077,11 @@ npm -C miniapp run android
 - 已验证：`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过；Mac Docker runner 已 `docker compose -f connectors/xiaoai_migpt/docker-compose.yml up -d --build` 重建；公网接口调用 `/api/xiaoai/tts` 生成 MiniMax mp3，再调用 `/api/xiaoai/speak` 入队，action `85dbb130eaa04b82b49b576fbbe4a5e1` 被 `mac-docker` 领取并在 `2026-05-28T04:25:33+08:00` 返回 `status=done`，runner 日志为 `播放 URL 结果：ok`。
 - 未完成 / 下次继续：如果用户实际没有听到声音，下一步查音箱网络是否能拉 `https://duxy-home.com/api/xiaoai/tts/*.mp3`、音量/播放状态以及 MiNA `player_get_play_status` 是否能返回有效媒体状态。
 
+当前状态（2026-05-28 小爱外放有声修复）：
+- 已完成：确认 L05C 小爱音箱的 MiNA `text_to_speech`/`player_play_url` 返回 `code=0` 不等于用户实际听到声音；runner 播放前增加 MIoT 发声准备：调用 `setProperty(2,2,false)` 尝试解除静音，读取 `volume`，低于 `XIAOAI_MIN_PLAY_VOLUME` 时拉到默认 20；文本播放优先走真实出声的 MIoT `doAction(5,3,<text>)`，失败才回退 MiNA TTS。
+- 已验证：`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过；直接调用 MIoT `play-text` 有实机声音，用户反馈“有声音”。本轮没有再发 MiniMax URL 实机测试，避免未经提醒突然播放。
+- 未完成 / 下次继续：若要确认 MiniMax 音色，需要先明确提醒用户，再发一条短的 `/api/xiaoai/tts` + `/api/xiaoai/speak` 测试；不要再把 action `status=done` 或接口 `code=0` 单独表述为“用户听到了”。
+
 当前状态（2026-05-28 小爱音频 URL 静默排查）：
 - 已完成：确认 runner 日志里 `播放 URL 结果：ok` 只代表 MiGPT/MiNA 接受播放命令，不代表小爱成功拉到 mp3；线上最近 `last_audio_url` 直接 GET 返回 404，根因是 `services/xiaoai_audio_store.py` 原先只把音频存在 Python 进程内存，生产多 worker、进程重启或请求落到不同进程时 `/api/xiaoai/tts/<token>.mp3` 会失效。已改为写入 `DATA_DIR/xiaoai_audio/` 并在 GET 时从落盘文件恢复，仍按 `HTML_PREVIEW_TTL_SECONDS` 和 `HTML_PREVIEW_MAX_ITEMS` 清理。
 - 已验证：`.venv/bin/python -m py_compile services/xiaoai_audio_store.py routes/xiaoai_api.py` 通过；临时目录 smoke 验证清空内存 `_store` 后仍能用 token 从落盘文件读回音频；非法 token 返回空。
