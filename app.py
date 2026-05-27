@@ -27,6 +27,7 @@ from routes.sense_api import bp as sense_api_bp
 from routes.time_api import bp as time_api_bp
 from routes.claude_oauth_sync import bp as claude_oauth_sync_bp
 from routes.music_melody_api import bp as music_melody_api_bp
+from routes.xiaoai_api import bp as xiaoai_api_bp
 
 # 确保数据目录存在
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -47,6 +48,7 @@ app.register_blueprint(sense_api_bp)
 app.register_blueprint(time_api_bp)
 app.register_blueprint(claude_oauth_sync_bp)
 app.register_blueprint(music_melody_api_bp)
+app.register_blueprint(xiaoai_api_bp)
 
 # Telegram Webhook 只在 web worker 内快速落持久队列；输入聚合与回复发送由
 # scripts/run_telegram_webhook_worker.py 持有。默认不在 gunicorn worker 里启动 TG runtime，

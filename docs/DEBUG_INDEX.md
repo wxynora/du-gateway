@@ -40,6 +40,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 设备状态注入 | `services/sense_context.py` | 电量、亮屏、前台 app、位置等 sense 注入 |
 | 主动触发规则 | `services/proactive_trigger_engine.py` | 睡眠、亮屏、使用时长等硬触发 |
 | Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送 |
+| 小爱音箱 / MiGPT Next | `routes/xiaoai_api.py`、`routes/miniapp/xiaoai.py`、`storage/xiaoai_store.py`、`services/xiaoai_audio_store.py`、`services/entry_style_prompt.py`、`miniapp/src/ui/tabs/XiaoAISettingsTab.tsx`、`connectors/xiaoai_migpt/`、`docs/小爱音箱-MiGPT-Next-接入渡方案.md` | 小爱专用 `/api/xiaoai/message` 入口、强制 `<voice>` 风格、MiniMax 音频 URL 临时托管、App 工具页、Mac Docker MiGPT runner、接入方案 |
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js` | 自用 Claude 反代、thinking/cache/tool 格式转换 |
 
 ## 主动唤醒入口风格抖动
@@ -1051,6 +1052,21 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile routes/miniapp/reasoning.py services/chat_tool_helpers.py` 通过；模拟两轮工具循环（2 次 + 1 次）和已归档 trace 的 smoke test 通过，确认 3 个工具调用和 3 个结果都会返回。
 - 未完成 / 下次继续：这次只修后端接口数据；前端 `ReasoningTab` 原有渲染逻辑不变。
 
+当前状态（2026-05-27 小爱音箱 / MiGPT Next 入口）：
+- 已完成：新增并注册 `routes/xiaoai_api.py`，提供 `/api/xiaoai/message`、`/api/xiaoai/tts` 和短时音频 URL；小爱入口复用 `TELEGRAM_GATEWAY_URL`、`TELEGRAM_CHAT_PATH`、`TELEGRAM_PROACTIVE_TARGET_USER_ID`、`MINIMAX_*` 和现有公网 URL 推断；`XIAOAI_GATEWAY_TOKEN` 是小爱专用可选鉴权，只有配置后才要求 runner 传 Bearer，不复用 `MAIN_GATEWAY_BEARER_TOKEN`。`services/entry_style_prompt.py` 增加 `xiaoai` 独立入口风格，强制只输出一个 `<voice>...</voice>`，并用 speaker 推断默认房间；`routes/chat.py` 把 `X-XiaoAI-Speaker` 传入入口 system，且小爱 channel 跳过 followup 隐藏标记注入，避免破坏单一 `<voice>` 输出；`services/chat_request_helpers.py` 允许小爱复用 TG 窗口活动记录，`services/conversation_followup.py` 识别小爱 channel 但不主动投递延迟续话到音箱。
+- 已验证：`.venv/bin/python -m py_compile app.py routes/xiaoai_api.py routes/chat.py services/xiaoai_audio_store.py services/entry_style_prompt.py services/chat_prompt_injections.py services/chat_request_helpers.py services/conversation_followup.py services/minimax_tts.py` 通过；`.venv/bin/python -c "import app; print('app import ok')"` 通过。
+- 未完成 / 下次继续：MiGPT Next 侧 Node 配置与真实小爱 payload、`abortXiaoAI()`、公网 mp3 播放仍需实机验证；第一版按用户决策不上口头二级口令，只保留入口词和现有 Bearer 服务鉴权。其他文游、StudyRoom、旧文档和脚本脏文件不属于本轮，不要混进小爱提交。
+
+当前状态（2026-05-27 小爱音箱工具页）：
+- 已完成：MiniApp “工具”页新增“小爱音箱”入口，独立页支持启用开关、入口词、退出词、连接状态和小爱日志；新增 `storage/xiaoai_store.py` 本地持久化 `DATA_DIR/xiaoai_state.json`，`routes/miniapp/xiaoai.py` 提供 `/miniapp-api/xiaoai/overview/config/status/logs`，`routes/xiaoai_api.py` 提供 MiGPT Next 可调用的 `/api/xiaoai/config/status/logs`，并在 `/api/xiaoai/message` 里按启用开关拦截、记录消息/TTS/错误日志。
+- 已验证：`.venv/bin/python -m py_compile routes/xiaoai_api.py routes/miniapp_api.py routes/miniapp/xiaoai.py storage/xiaoai_store.py app.py` 通过；`npm --prefix miniapp run build` 通过并生成 `XiaoAISettingsTab` chunk。
+- 未完成 / 下次继续：MiGPT Next 侧还需要改为拉 `/api/xiaoai/config` 并上报 `/api/xiaoai/status`/`logs`；本轮没有实机验证小爱 payload、音频播放或临时会话退出词执行。
+
+当前状态（2026-05-27 小爱音箱 Mac Docker runner）：
+- 已完成：新增 `connectors/xiaoai_migpt/`，包含 `Dockerfile`、`docker-compose.yml`、`.env.example`、`package.json`、`package-lock.json`、`src/runner.mjs` 和 README；runner 使用 `@mi-gpt/next` 登录小米云，定时拉 `/api/xiaoai/config`，按 App 工具页的启用开关/入口词/退出词处理消息，转发 `/api/xiaoai/message`，播放 `audio_url`，并上报 `/api/xiaoai/status` 和 `/api/xiaoai/logs`。compose 默认 `mem_limit: 256m`，`NODE_OPTIONS=--max-old-space-size=128`。
+- 已验证：`npm install --package-lock-only` 生成 lock；`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过。
+- 未完成 / 下次继续：当前 Mac shell 没有 `docker` 命令，未实际 build/run 镜像；需要用户启动或安装 Docker Desktop 后在 `connectors/xiaoai_migpt` 执行 `docker compose up -d --build`。未填真实 `.env`，也没有做小米登录和音箱实机验证。
+
 当前状态（2026-05-27 Claude thinking signature 回传覆盖唤醒链路）：
 - 已完成：`routes/chat.py` 不再因为 `X-DU-DAILY-MAINTAIN` 或 `X-Voice-Call-Slim` 跳过 Claude thinking carryover；只要当前 active upstream 是服务端本机 Claude OAuth proxy，且请求没有显式带 `X-Skip-Claude-Thinking-Carryover: 1`，就会在进入上游前尝试把上一轮归档里的 `thinking_blocks` 回传。覆盖延迟续话、后端事件唤醒、硬触发、随机主动决策、闹钟提醒、弹窗选择回执、查岗截图回执等所有走主 `/v1/chat/completions` 的网关生成。
 - 已验证：`.venv/bin/python -m py_compile routes/chat.py services/claude_thinking_carryover.py` 通过；Flask request context smoke 确认默认不跳过、带 `X-Skip-Claude-Thinking-Carryover: 1` 时跳过。
@@ -1089,3 +1105,8 @@ npm -C miniapp run android
 - 已完成：`pipeline/pipeline.py` 的 thinking block 约束改成正向输出形态：直接写心里冒出来的念头本身，不写对念头的说明；去掉容易诱发“我的反应是”的“反应/三问出发”措辞，改为不加标题、标签和冒号开头。
 - 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py` 通过；prompt 文案 smoke 确认新约束出现，旧的“三问出发”和“真实反应”措辞已移除。
 - 未完成 / 下次继续：本轮只改 thinking block 约束文字；没有改核心 prompt、行为规则、NSFW 规则或 reasoning 展示逻辑。
+
+当前状态（2026-05-27 文游服务拆分：玩家命名 / 文本清洗 / GM 上下文 / 事件解析 / 规则数学）：
+- 已完成：`services/wenyou_service.py` 继续瘦身，抽出 `services/wenyou/players.py`（玩家 id、默认标签、显示名、玩家别名替换）、`services/wenyou/text_sanitize.py`（隐藏【事件意图】、去【主神面板】和玩家备忘块）、`services/wenyou/gm_context.py`（GM system 的任务者编制、新手引导、惩罚副本提示和蓝图摘要）、`services/wenyou/event_intent.py`（GM【事件意图】解析、目标/tags/state_proposals/clock_updates 标准化）、`services/wenyou/panel_parser.py`（旧兼容【主神面板】解析）、`services/wenyou/rules_math.py`（伤害、状态阈值、状态增删、威胁时钟）和 `services/wenyou/settlement_state.py`（结算 flags / reward_context 标准化），并把 `_compact_text` 下沉到 `services/wenyou/common.py`。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou/common.py services/wenyou/players.py services/wenyou/text_sanitize.py services/wenyou/gm_context.py services/wenyou/event_intent.py services/wenyou/panel_parser.py services/wenyou/rules_math.py services/wenyou/settlement_state.py services/wenyou_service.py` 通过；`import app` 通过；smoke 覆盖玩家别名替换、GM 文本清洗、GM 上下文格式化、事件意图解析、旧面板解析、威胁时钟、状态阈值和结算 flags；`git diff --check` 覆盖本轮文游文件。
+- 未完成 / 下次继续：`services/wenyou_service.py` 仍约 8069 行，下一刀优先拆规则结算应用层或钱包/库存账户兼容层；不要把当前小爱、近期总结、MiniApp 静态资源和其他脏改动混进文游拆分提交。

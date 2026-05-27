@@ -112,7 +112,7 @@ def is_cross_platform_tg_window_user_input(
         return False
     if is_followup_generation:
         return False
-    if reply_channel not in {"sumitalk", "wechat", "qq"}:
+    if reply_channel not in {"sumitalk", "wechat", "qq", "xiaoai"}:
         return False
     last_user = last_user_message((body or {}).get("messages") or [])
     if not isinstance(last_user, dict):

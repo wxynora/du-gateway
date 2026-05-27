@@ -29,6 +29,7 @@ from routes.miniapp.sumitalk_chat_jobs import register_routes as register_sumita
 from routes.miniapp.sumitalk_history import register_routes as register_sumitalk_history_routes
 from routes.miniapp.upstreams import register_routes as register_upstreams_routes
 from routes.miniapp.wenyou import register_routes as register_wenyou_routes
+from routes.miniapp.xiaoai import register_routes as register_xiaoai_routes
 
 
 bp = Blueprint("miniapp_api", __name__, url_prefix="/miniapp-api")
@@ -52,6 +53,7 @@ register_sumitalk_chat_job_routes(bp)
 register_sumitalk_history_routes(bp)
 register_upstreams_routes(bp)
 register_wenyou_routes(bp)
+register_xiaoai_routes(bp)
 
 
 def _resolve_primary_chat_window_id() -> str:

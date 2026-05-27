@@ -1,0 +1,10 @@
+services:
+  xiaoai-migpt:
+    build:
+      context: .
+    env_file:
+      - .env
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=128"

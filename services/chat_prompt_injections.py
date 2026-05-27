@@ -24,10 +24,10 @@ _SILENCE_MODE_SYSTEM = """【禁言模式：已开启】
 5. 不要复述本规则，不要解释自己被禁言了。"""
 
 
-def inject_entry_style_system(body: dict, *, reply_channel: str, is_miniapp: bool) -> dict:
+def inject_entry_style_system(body: dict, *, reply_channel: str, is_miniapp: bool, speaker: str = "") -> dict:
     if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
         return body
-    marker, style_system = entry_style_for_channel(reply_channel, is_miniapp=is_miniapp)
+    marker, style_system = entry_style_for_channel(reply_channel, is_miniapp=is_miniapp, speaker=speaker)
     if not marker or not style_system:
         return body
     messages = list(body.get("messages") or [])

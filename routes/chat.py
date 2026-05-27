@@ -149,7 +149,7 @@ sumitalk_logger = get_logger("sumitalk")
 bp = Blueprint("chat", __name__)
 
 WINDOW_ID_DEFAULT = ""
-_NONSTREAM_FAST_RETURN_CHANNELS = {"tg", "qq", "wechat", "sumitalk"}
+_NONSTREAM_FAST_RETURN_CHANNELS = {"tg", "qq", "wechat", "sumitalk", "xiaoai"}
 
 
 def _get_window_id_from_request(body: dict) -> str:
@@ -900,13 +900,19 @@ def chat_completions():
     body = step_inject_core_behavior_rules(body)
     body = step_inject_du_non_retreat_rules(body)
     body = step_inject_common_knowledge(body)
-    body = _inject_entry_style_system(body, reply_channel=reply_channel, is_miniapp=_is_miniapp_request())
-    body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
-    body = _inject_followup_instruction(
+    body = _inject_entry_style_system(
         body,
-        is_followup_generation=_is_followup_generation_request(),
-        should_archive=_should_archive_followup_generation_request(),
+        reply_channel=reply_channel,
+        is_miniapp=_is_miniapp_request(),
+        speaker=str(request.headers.get("X-XiaoAI-Speaker") or "").strip(),
     )
+    body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
+    if reply_channel != "xiaoai":
+        body = _inject_followup_instruction(
+            body,
+            is_followup_generation=_is_followup_generation_request(),
+            should_archive=_should_archive_followup_generation_request(),
+        )
     force_last4 = (request.headers.get("X-Force-Last4") or "").strip().lower() in ("1", "true", "yes")
     tg_user_input = (request.headers.get("X-TG-User-Input") or "").strip().lower() in ("1", "true", "yes")
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")

@@ -506,6 +506,7 @@ VOICE_CALL_MAX_BYTES = int(float(os.environ.get("VOICE_CALL_MAX_BYTES", str(12 *
 VOICE_CALL_WINDOW_ID = os.environ.get("VOICE_CALL_WINDOW_ID", "miniapp_voice_call").strip() or "miniapp_voice_call"
 MAIN_GATEWAY_BASE_URL = os.environ.get("MAIN_GATEWAY_BASE_URL", "http://127.0.0.1:5000").strip()
 MAIN_GATEWAY_BEARER_TOKEN = os.environ.get("MAIN_GATEWAY_BEARER_TOKEN", "").strip()
+XIAOAI_GATEWAY_TOKEN = os.environ.get("XIAOAI_GATEWAY_TOKEN", "").strip()
 
 # 文游：App 内独立会话 ID，不再绑定 Telegram 群或 TG 用户。
 WENYOU_SESSION_ID = int(os.environ.get("WENYOU_SESSION_ID", "1") or "1")

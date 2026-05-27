@@ -68,7 +68,7 @@ def _normalize_reply_channel(value: str, default: str = "sumitalk", allow_tg: bo
         "telegram": "tg",
     }
     s = alias.get(s, s)
-    allowed = {"sumitalk", "wechat", "qq"}
+    allowed = {"sumitalk", "wechat", "qq", "xiaoai"}
     if allow_tg:
         allowed.add("tg")
     if s not in allowed:
@@ -212,6 +212,9 @@ def _dispatch_followup(channel: str, target: str, text: str, created_at: str, sp
         return _send_via_wechat(text, split=split)
     if ch == "qq":
         return _send_via_qq(text, split=split)
+    if ch == "xiaoai":
+        logger.info("延迟续话暂不支持投递到小爱音箱，跳过")
+        return False
     if ch == "tg":
         try:
             uid = int(str(target or "").strip() or "0")

@@ -38,6 +38,7 @@ import {
   LogoutIconMini,
   MuteIconMini,
   SmartphoneIconMini,
+  SpeakerIconMini,
   SunIconMini,
   ToggleRightIcon,
 } from "./icons";
@@ -63,8 +64,9 @@ const StayWithDuScreen = lazy(() => import("./tabs/StayWithDuScreen").then((m) =
 const CoReadScreen = lazy(() => import("./tabs/CoReadScreen").then((m) => ({ default: m.CoReadScreen })));
 const ListenWithDuScreen = lazy(() => import("./tabs/ListenWithDuScreen").then((m) => ({ default: m.ListenWithDuScreen })));
 const StudyRoomTab = lazy(() => import("./tabs/StudyRoomTab").then((m) => ({ default: m.StudyRoomTab })));
+const XiaoAISettingsTab = lazy(() => import("./tabs/XiaoAISettingsTab").then((m) => ({ default: m.XiaoAISettingsTab })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | "xiaoai" | null;
 type SilenceModeResponse = {
   ok?: boolean;
   enabled?: boolean;
@@ -506,6 +508,7 @@ export function AppShell({
             <ListRow icon={<CpuIcon />} label="记忆调试" onClick={() => setPanel("memory-debug")} />
             <ListRow icon={<ClockIconMini />} label="闹钟" onClick={() => setShowAlarm(true)} />
             <ListRow icon={<CalendarIconMini />} label="日历" onClick={() => setShowSchedule(true)} />
+            <ListRow icon={<SpeakerIconMini />} label="小爱音箱" onClick={() => setPanel("xiaoai")} />
             <ListRow icon={<CodeIcon />} label="核心 Prompt" onClick={() => setShowCorePrompt(true)} />
             <ListRow icon={<ToggleRightIcon />} label="上游切换" onClick={() => setShowSettings(true)} last />
           </div>
@@ -674,6 +677,11 @@ export function AppShell({
       {panel === "stickers" ? (
         <FullScreenPane title="表情包" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><StickersTab /></LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {panel === "xiaoai" ? (
+        <FullScreenPane title="小爱音箱" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>
+          <LazyPane><XiaoAISettingsTab /></LazyPane>
         </FullScreenPane>
       ) : null}
 

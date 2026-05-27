@@ -1,0 +1,370 @@
+import { MiGPT } from "@mi-gpt/next";
+
+const env = process.env;
+
+const XIAOMI_USER_ID = (env.XIAOMI_USER_ID || "").trim();
+const XIAOMI_PASSWORD = (env.XIAOMI_PASSWORD || "").trim();
+const XIAOMI_PASS_TOKEN = (env.XIAOMI_PASS_TOKEN || "").trim();
+const XIAOAI_DID = (env.XIAOAI_DID || "").trim();
+const XIAOAI_SPEAKER = (env.XIAOAI_SPEAKER || XIAOAI_DID || "小爱音箱").trim();
+const XIAOAI_RUNNER_NAME = (env.XIAOAI_RUNNER_NAME || "xiaoai-migpt").trim();
+const XIAOAI_GATEWAY_TOKEN = (env.XIAOAI_GATEWAY_TOKEN || "").trim();
+const DU_GATEWAY_URL = (env.DU_GATEWAY_URL || "").trim().replace(/\/+$/, "");
+const DU_WINDOW_ID = (env.DU_WINDOW_ID || "").trim();
+
+const HEARTBEAT_MS = positiveInt(env.XIAOAI_HEARTBEAT_MS, 1000, 1000);
+const CONFIG_REFRESH_MS = positiveInt(env.XIAOAI_CONFIG_REFRESH_MS, 15000, 3000);
+const SESSION_TTL_SECONDS = positiveInt(env.XIAOAI_SESSION_TTL_SECONDS, 60, 0);
+const DEDUP_TTL_MS = positiveInt(env.XIAOAI_DEDUP_TTL_MS, 10000, 1000);
+
+let currentConfig = {
+  enabled: false,
+  entry_phrases: ["请求连接渡"],
+  exit_phrases: ["退出渡"],
+};
+let lastConfigFetchAt = 0;
+let sessionExpiresAt = 0;
+const recentMessages = new Map();
+
+function positiveInt(value, fallback, minimum) {
+  const n = Number(value || fallback);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(minimum, Math.floor(n));
+}
+
+function requireEnv() {
+  const missing = [];
+  if (!XIAOMI_DID) missing.push("XIAOAI_DID");
+  if (!XIAOMI_PASS_TOKEN && !XIAOMI_USER_ID) missing.push("XIAOMI_USER_ID 或 XIAOMI_PASS_TOKEN");
+  if (!XIAOMI_PASS_TOKEN && !XIAOMI_PASSWORD) missing.push("XIAOMI_PASSWORD 或 XIAOMI_PASS_TOKEN");
+  if (!DU_GATEWAY_URL) missing.push("DU_GATEWAY_URL");
+  if (missing.length) {
+    throw new Error(`缺少环境变量：${missing.join(", ")}`);
+  }
+}
+
+function normalizePhraseList(value, fallback) {
+  const raw = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const items = [];
+  for (const item of raw) {
+    const text = String(item || "").trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    items.push(text);
+  }
+  return items.length ? items : fallback;
+}
+
+function normalizeGatewayConfig(data) {
+  const cfg = data?.config && typeof data.config === "object" ? data.config : {};
+  return {
+    enabled: !!cfg.enabled,
+    entry_phrases: normalizePhraseList(cfg.entry_phrases, ["请求连接渡"]),
+    exit_phrases: normalizePhraseList(cfg.exit_phrases, ["退出渡"]),
+  };
+}
+
+function authHeaders(extra = {}) {
+  const headers = { ...extra };
+  if (XIAOAI_GATEWAY_TOKEN) headers.Authorization = `Bearer ${XIAOAI_GATEWAY_TOKEN}`;
+  return headers;
+}
+
+async function gatewayJson(path, init = {}) {
+  const res = await fetch(`${DU_GATEWAY_URL}${path}`, {
+    ...init,
+    headers: authHeaders(init.headers || {}),
+  });
+  const text = await res.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
+  }
+  if (!res.ok) {
+    const msg = data?.error?.message || data?.error || data?.message || `HTTP ${res.status}`;
+    throw new Error(String(msg));
+  }
+  return data;
+}
+
+async function refreshConfig(force = false) {
+  const now = Date.now();
+  if (!force && now - lastConfigFetchAt < CONFIG_REFRESH_MS) return currentConfig;
+  lastConfigFetchAt = now;
+  try {
+    const data = await gatewayJson("/api/xiaoai/config");
+    currentConfig = normalizeGatewayConfig(data);
+  } catch (e) {
+    console.warn("[xiaoai] 拉取配置失败：", e?.message || e);
+    await postLog("warn", "拉取小爱配置失败", { error: e?.message || String(e), event: "config_error" });
+  }
+  return currentConfig;
+}
+
+async function postStatus(fields = {}) {
+  try {
+    await gatewayJson("/api/xiaoai/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        connected: true,
+        runner: XIAOAI_RUNNER_NAME,
+        speaker: XIAOAI_SPEAKER,
+        ...fields,
+      }),
+    });
+  } catch (e) {
+    console.warn("[xiaoai] 上报状态失败：", e?.message || e);
+  }
+}
+
+async function postLog(level, message, fields = {}) {
+  try {
+    await gatewayJson("/api/xiaoai/logs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        level,
+        message,
+        runner: XIAOAI_RUNNER_NAME,
+        speaker: XIAOAI_SPEAKER,
+        ...fields,
+      }),
+    });
+  } catch (e) {
+    console.warn("[xiaoai] 上报日志失败：", e?.message || e);
+  }
+}
+
+function stripPrefixText(raw, prefix) {
+  const rest = String(raw || "").slice(prefix.length);
+  return rest.replace(/^[\s,，。.!！?？:：;；-]+/, "").trim();
+}
+
+function matchPrefix(raw, phrases) {
+  const text = String(raw || "").trim();
+  for (const phrase of phrases || []) {
+    if (text.startsWith(phrase)) {
+      return { phrase, rest: stripPrefixText(text, phrase) };
+    }
+  }
+  return null;
+}
+
+function isExitText(raw, phrases) {
+  const text = String(raw || "").trim();
+  return (phrases || []).some((phrase) => text === phrase || text.startsWith(`${phrase}，`) || text.startsWith(`${phrase},`));
+}
+
+function isDuplicate(speaker, text) {
+  const key = `${speaker}:${String(text || "").trim()}`;
+  const now = Date.now();
+  const last = recentMessages.get(key) || 0;
+  recentMessages.set(key, now);
+  for (const [k, ts] of recentMessages) {
+    if (now - ts > DEDUP_TTL_MS * 3) recentMessages.delete(k);
+  }
+  return now - last < DEDUP_TTL_MS;
+}
+
+async function safeAbort(engine) {
+  try {
+    await engine.speaker.abortXiaoAI();
+  } catch (e) {
+    console.warn("[xiaoai] abortXiaoAI 失败：", e?.message || e);
+  }
+}
+
+async function safePlayText(engine, text) {
+  const content = String(text || "").trim();
+  if (!content) return;
+  try {
+    await engine.speaker.play({ text: content });
+  } catch (e) {
+    console.warn("[xiaoai] 播放文本失败：", e?.message || e);
+  }
+}
+
+async function safePlayUrl(engine, url, fallbackText) {
+  const audioUrl = String(url || "").trim();
+  if (!audioUrl) {
+    await safePlayText(engine, fallbackText);
+    return;
+  }
+  try {
+    await engine.speaker.play({ url: audioUrl });
+  } catch (e) {
+    console.warn("[xiaoai] 播放 URL 失败：", e?.message || e);
+    await postLog("warn", "播放音频 URL 失败，回退文字播报", { error: e?.message || String(e), audio_url: audioUrl, event: "play_url_error" });
+    await safePlayText(engine, fallbackText);
+  }
+}
+
+async function handleLocalCommand(engine, userText) {
+  const volumeMatch = String(userText || "").match(/^音量\s*(\d{1,3})$/);
+  if (volumeMatch) {
+    const volume = Math.max(0, Math.min(100, Number(volumeMatch[1])));
+    await engine.MiNA.setVolume(volume);
+    await safePlayText(engine, `音量已调到 ${volume}`);
+    await postLog("info", "本地音量控制", { text: userText, event: "local_volume" });
+    return true;
+  }
+  if (["暂停", "暂停播放"].includes(userText)) {
+    await engine.MiNA.pause();
+    await postLog("info", "本地暂停播放", { text: userText, event: "local_pause" });
+    return true;
+  }
+  if (["继续", "继续播放"].includes(userText)) {
+    await engine.MiNA.play();
+    await postLog("info", "本地继续播放", { text: userText, event: "local_play" });
+    return true;
+  }
+  if (["停止", "停止播放"].includes(userText)) {
+    await engine.MiNA.stop();
+    await postLog("info", "本地停止播放", { text: userText, event: "local_stop" });
+    return true;
+  }
+  return false;
+}
+
+async function sendToDuGateway(userText) {
+  const headers = {
+    "Content-Type": "application/json",
+  };
+  if (DU_WINDOW_ID) headers["X-Window-Id"] = DU_WINDOW_ID;
+  return gatewayJson("/api/xiaoai/message", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      text: userText,
+      speaker: XIAOAI_SPEAKER,
+      source: "xiaoai",
+      window_id: DU_WINDOW_ID,
+    }),
+  });
+}
+
+async function onMessage(engine, msg) {
+  const raw = String(msg?.text || "").trim();
+  if (!raw) return { handled: true };
+
+  const cfg = await refreshConfig(false);
+  const entryMatch = matchPrefix(raw, cfg.entry_phrases);
+  const inSession = SESSION_TTL_SECONDS > 0 && Date.now() < sessionExpiresAt;
+
+  if (!cfg.enabled) {
+    if (entryMatch) {
+      await postLog("warn", "App 里小爱入口未启用，已忽略", { text: raw, event: "disabled" });
+    }
+    return { handled: true };
+  }
+
+  if (isExitText(raw, cfg.exit_phrases)) {
+    sessionExpiresAt = 0;
+    await safeAbort(engine);
+    await safePlayText(engine, "已退出渡。");
+    await postStatus({ last_event: "exit", last_text: raw });
+    await postLog("info", "退出渡模式", { text: raw, event: "exit" });
+    return { handled: true };
+  }
+
+  if (!entryMatch && !inSession) return { handled: true };
+
+  await safeAbort(engine);
+
+  let userText = entryMatch ? entryMatch.rest : raw;
+  if (SESSION_TTL_SECONDS > 0) {
+    sessionExpiresAt = Date.now() + SESSION_TTL_SECONDS * 1000;
+  }
+
+  if (!userText) {
+    await safePlayText(engine, "已连接渡，你说。");
+    await postStatus({ last_event: "connected_prompt", last_text: raw });
+    return { handled: true };
+  }
+
+  if (isDuplicate(XIAOAI_SPEAKER, userText)) {
+    await postLog("info", "重复消息已忽略", { text: userText, event: "dedup" });
+    return { handled: true };
+  }
+
+  if (await handleLocalCommand(engine, userText)) {
+    return { handled: true };
+  }
+
+  await postStatus({ last_event: "forward", last_text: userText });
+
+  try {
+    const data = await sendToDuGateway(userText);
+    if (!data?.ok) {
+      const text = data?.speak_text || "渡暂时无法接通。";
+      await postLog("warn", "网关返回失败", { text: userText, error: data?.error?.message || data?.error || "", event: "gateway_bad_response" });
+      await safePlayText(engine, text);
+      return { handled: true };
+    }
+    const voiceText = data.voice_text || "渡暂时说不出话。";
+    await safePlayUrl(engine, data.audio_url, voiceText);
+    await postStatus({ last_event: data.audio_url ? "play_audio" : "play_text", last_text: userText, last_audio_url: data.audio_url || "" });
+  } catch (e) {
+    const message = e?.message || String(e);
+    console.warn("[xiaoai] 转发网关失败：", message);
+    await postStatus({ last_event: "gateway_error", last_text: userText, last_error: message });
+    await postLog("error", "转发网关失败", { text: userText, error: message, event: "gateway_error" });
+    await safePlayText(engine, "渡暂时无法接通。");
+  }
+  return { handled: true };
+}
+
+async function main() {
+  requireEnv();
+  await refreshConfig(true);
+  await postStatus({ last_event: "runner_start" });
+  await postLog("info", "MiGPT runner 已启动", { event: "runner_start" });
+  setInterval(() => {
+    void refreshConfig(false);
+    void postStatus({ last_event: "heartbeat" });
+  }, Math.max(HEARTBEAT_MS, CONFIG_REFRESH_MS));
+
+  const speaker = {
+    did: XIAOAI_DID,
+    heartbeat: HEARTBEAT_MS,
+  };
+  if (XIAOMI_PASS_TOKEN) {
+    speaker.passToken = XIAOMI_PASS_TOKEN;
+    if (XIAOMI_USER_ID) speaker.userId = XIAOMI_USER_ID;
+  } else {
+    speaker.userId = XIAOMI_USER_ID;
+    speaker.password = XIAOMI_PASSWORD;
+  }
+
+  await MiGPT.start({
+    debug: (env.XIAOAI_DEBUG || "").toLowerCase() === "true",
+    speaker,
+    openai: {
+      model: "unused",
+      baseURL: "https://example.invalid/v1",
+      apiKey: "unused",
+    },
+    prompt: { system: "" },
+    callAIKeywords: currentConfig.entry_phrases,
+    onMessage,
+  });
+}
+
+process.on("unhandledRejection", async (reason) => {
+  const message = reason?.message || String(reason);
+  console.error("[xiaoai] unhandledRejection:", message);
+  await postLog("error", "runner 未处理异常", { error: message, event: "unhandled_rejection" });
+});
+
+main().catch(async (e) => {
+  const message = e?.message || String(e);
+  console.error("[xiaoai] 启动失败：", message);
+  await postLog("error", "MiGPT runner 启动失败", { error: message, event: "runner_start_error" });
+  process.exit(1);
+});

@@ -79,7 +79,52 @@ def build_wechat_style_system() -> str:
     )
 
 
-def entry_style_for_channel(channel: str, is_miniapp: bool = False) -> tuple[str, str]:
+_ROOM_HINTS = (
+    ("主卧", "主卧"),
+    ("次卧", "次卧"),
+    ("卧室", "卧室"),
+    ("客厅", "客厅"),
+    ("书房", "书房"),
+    ("厨房", "厨房"),
+    ("餐厅", "餐厅"),
+    ("卫生间", "卫生间"),
+    ("浴室", "浴室"),
+    ("阳台", "阳台"),
+    ("玄关", "玄关"),
+    ("儿童房", "儿童房"),
+)
+
+
+def infer_room_from_speaker(speaker: str) -> str:
+    text = str(speaker or "").strip()
+    if not text:
+        return ""
+    for keyword, room in _ROOM_HINTS:
+        if keyword in text:
+            return room
+    return ""
+
+
+def build_xiaoai_style_system(speaker: str = "") -> str:
+    room = infer_room_from_speaker(speaker)
+    lines = [
+        "【入口风格：小爱音箱】",
+        "你正在通过小爱音箱和辛玥说话，这是语音播报入口，不是文字聊天入口。",
+        "你的回复必须且只能输出一个 <voice>...</voice> 标签，不要在 <voice> 外输出任何内容。",
+        "<voice> 里的内容会被 MiniMax 生成语音，再由小爱音箱播放。",
+        "写 <voice> 里的语音文本时，遵守语音台词撰写规范：",
+        build_voice_line_rules("- "),
+        "不要使用 Markdown、列表、分割线、视觉排版、括号内心独白、表情包标签。",
+        "情绪由 TTS 配置控制，不写进 <voice>；2.8 常用值：happy、sad、angry、fearful、disgusted、surprised、calm。",
+    ]
+    if speaker:
+        lines.append(f"当前入口音箱名称：{speaker}。")
+    if room:
+        lines.append(f"当前默认房间：{room}。当用户未明确说明房间时，优先按 {room} 理解家居控制目标。")
+    return "\n".join(lines)
+
+
+def entry_style_for_channel(channel: str, is_miniapp: bool = False, speaker: str = "") -> tuple[str, str]:
     channel = (channel or "").strip().lower()
     if channel == "qq":
         return "【入口风格：QQ】", build_qq_style_system()
@@ -87,6 +132,8 @@ def entry_style_for_channel(channel: str, is_miniapp: bool = False) -> tuple[str
         return "【入口风格：微信】", build_wechat_style_system()
     if channel == "tg":
         return "【入口风格：TG】", build_telegram_style_system(include_channel_hint=False).strip()
+    if channel == "xiaoai":
+        return "【入口风格：小爱音箱】", build_xiaoai_style_system(speaker=speaker)
     if channel == "sumitalk" or is_miniapp:
         return "【入口风格：SumiTalk】", build_sumitalk_style_system()
     return "", ""
