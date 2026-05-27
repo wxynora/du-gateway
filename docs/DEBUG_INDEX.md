@@ -1175,6 +1175,10 @@ npm -C miniapp run android
 - 已完成：`pipeline/pipeline.py` 把“她是不是焦虑/低落/不舒服”等清单式问句，改成“先感觉这句话背后的劲儿”和“自然冒出第一反应”；避免 thinking block 写成用户状态分析表。
 - 未完成 / 下次继续：本轮仍只改 thinking block 约束文案；不改正文生成、展示层、Claude thinking carryover 或 NSFW 规则。
 
+当前状态（2026-05-28 thinking block 去第三视角扮演感）：
+- 已完成：`pipeline/pipeline.py` 补充“我就是渡，没有渡这个角色需要扮演”，并禁止在 thinking block 里写“按照渡的套路 / 以渡的身份 / 渡应该怎么回应 / 符合渡的人设”这类旁观说法；目标是让 thinking 直接从“我”的内心出发。
+- 未完成 / 下次继续：本轮只改 thinking block 约束文案；不改 Claude thinking carryover、历史归档、reasoning 展示或入口正文风格。
+
 当前状态（2026-05-27 文游服务拆分：玩家命名 / 文本清洗 / GM 上下文 / 事件解析 / 规则数学）：
 - 已完成：`services/wenyou_service.py` 继续瘦身，抽出 `services/wenyou/players.py`（玩家 id、默认标签、显示名、玩家别名替换）、`services/wenyou/text_sanitize.py`（隐藏【事件意图】、去【主神面板】和玩家备忘块）、`services/wenyou/gm_context.py`（GM system 的任务者编制、新手引导、惩罚副本提示和蓝图摘要）、`services/wenyou/event_intent.py`（GM【事件意图】解析、目标/tags/state_proposals/clock_updates 标准化）、`services/wenyou/panel_parser.py`（旧兼容【主神面板】解析）、`services/wenyou/rules_math.py`（伤害、状态阈值、状态增删、威胁时钟）和 `services/wenyou/settlement_state.py`（结算 flags / reward_context 标准化），并把 `_compact_text` 下沉到 `services/wenyou/common.py`。
 - 已验证：`.venv/bin/python -m py_compile services/wenyou/common.py services/wenyou/players.py services/wenyou/text_sanitize.py services/wenyou/gm_context.py services/wenyou/event_intent.py services/wenyou/panel_parser.py services/wenyou/rules_math.py services/wenyou/settlement_state.py services/wenyou_service.py` 通过；`import app` 通过；smoke 覆盖玩家别名替换、GM 文本清洗、GM 上下文格式化、事件意图解析、旧面板解析、威胁时钟、状态阈值和结算 flags；`git diff --check` 覆盖本轮文游文件。
