@@ -1113,6 +1113,11 @@ npm -C miniapp run android
 - 已验证：本地用 MiGPT `.env` 的 `XIAOMI_PASS_TOKEN` 刷出 `data/mijia/auth.json` 后，`xiaoai_run_command` 对真实音箱名“小米小爱音箱Play 增强版”执行“打开台灯/关闭台灯”返回成功；`mijiaAPI get -p data/mijia/auth.json --did 2025297301 --prop_name brightness` 读到 `35`，`color-temperature` 读到 `3420`。
 - 未完成 / 下次继续：结构化 `set` 需用 `mijia_lamp_set` 或 `scripts/test_xiaoai_mijia.py --lamp-brightness ...` 验证；不要再手写错误的全局 `-p` 顺序。
 
+当前状态（2026-05-28 MiniApp 米家授权二维码）：
+- 已完成：新增 `services/mijia_auth_login.py`，复用 `mijiaAPI` 包内部二维码登录流程，按 `MIJIA_API_AUTH_PATH`（未配置则用 mijiaAPI 默认 `~/.config/mijia-api/auth.json`）写入 auth；`routes/miniapp/xiaoai.py` 增加 `/miniapp-api/xiaoai/mijia-auth` 和 `/miniapp-api/xiaoai/mijia-auth/start`，小爱音箱页新增“米家授权”区块，显示二维码图片、授权状态、有效期和错误。二维码可截图后用米家 App 相册识别；等待扫码超时或后端重启后状态会自动过期，避免按钮卡死。
+- 已验证：`.venv/bin/python -m py_compile services/mijia_auth_login.py routes/miniapp/xiaoai.py routes/miniapp_api.py` 通过；`get_mijia_auth_status()` smoke 通过；`npm --prefix miniapp run build` 通过并生成新的 `XiaoAISettingsTab` 静态 chunk。
+- 未完成 / 下次继续：未实际点“生成二维码”触发小米登录，也未扫码实测；上线后需要重新部署 MiniApp 静态包和 du-gateway 后端。
+
 当前状态（2026-05-27 Claude thinking signature 回传覆盖唤醒链路）：
 - 已完成：`routes/chat.py` 不再因为 `X-DU-DAILY-MAINTAIN` 或 `X-Voice-Call-Slim` 跳过 Claude thinking carryover；只要当前 active upstream 是服务端本机 Claude OAuth proxy，且请求没有显式带 `X-Skip-Claude-Thinking-Carryover: 1`，就会在进入上游前尝试把上一轮归档里的 `thinking_blocks` 回传。覆盖延迟续话、后端事件唤醒、硬触发、随机主动决策、闹钟提醒、弹窗选择回执、查岗截图回执等所有走主 `/v1/chat/completions` 的网关生成。
 - 已验证：`.venv/bin/python -m py_compile routes/chat.py services/claude_thinking_carryover.py` 通过；Flask request context smoke 确认默认不跳过、带 `X-Skip-Claude-Thinking-Carryover: 1` 时跳过。

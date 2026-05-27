@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from flask import jsonify, request
 
+from services.mijia_auth_login import get_mijia_auth_status, start_mijia_auth_login
 from storage.xiaoai_store import (
     get_xiaoai_config,
     get_xiaoai_status,
@@ -18,6 +19,7 @@ def register_routes(bp) -> None:
             {
                 "ok": True,
                 "config": get_xiaoai_config(),
+                "mijia_auth": get_mijia_auth_status(),
                 "status": get_xiaoai_status(),
                 "logs": list_xiaoai_logs(limit=limit),
             }
@@ -42,3 +44,11 @@ def register_routes(bp) -> None:
     def miniapp_xiaoai_logs_get():
         limit = request.args.get("limit", type=int, default=120)
         return jsonify({"ok": True, "logs": list_xiaoai_logs(limit=limit)})
+
+    @bp.route("/xiaoai/mijia-auth", methods=["GET"])
+    def miniapp_xiaoai_mijia_auth_get():
+        return jsonify({"ok": True, "mijia_auth": get_mijia_auth_status()})
+
+    @bp.route("/xiaoai/mijia-auth/start", methods=["POST"])
+    def miniapp_xiaoai_mijia_auth_start():
+        return jsonify({"ok": True, "mijia_auth": start_mijia_auth_login()})

@@ -36,11 +36,31 @@ type XiaoAILog = {
   audio_url?: string;
 };
 
+type MijiaAuthStatus = {
+  status?: string;
+  message?: string;
+  qr_url?: string;
+  login_url?: string;
+  auth_exists?: boolean;
+  auth_valid?: boolean;
+  auth_updated_at?: string;
+  auth_expires_at?: string;
+  user_id?: string;
+  error?: string;
+};
+
 type OverviewResp = {
   ok?: boolean;
   config?: XiaoAIConfig;
+  mijia_auth?: MijiaAuthStatus;
   status?: XiaoAIStatus;
   logs?: XiaoAILog[];
+  error?: string;
+};
+
+type MijiaAuthResp = {
+  ok?: boolean;
+  mijia_auth?: MijiaAuthStatus;
   error?: string;
 };
 
@@ -69,11 +89,32 @@ function formatTime(value: string | undefined) {
   return match?.[1] || raw.replace("T", " ").slice(0, 19);
 }
 
+function formatDateTime(value: string | undefined) {
+  const raw = String(value || "").trim();
+  return raw ? raw.replace("T", " ").slice(0, 19) : "暂无";
+}
+
 function levelClass(level: string | undefined) {
   const lv = String(level || "info").toLowerCase();
   if (lv === "error") return "border-red-200 bg-red-50 text-red-700";
   if (lv === "warn" || lv === "warning") return "border-amber-200 bg-amber-50 text-amber-700";
   return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function mijiaAuthLabel(auth: MijiaAuthStatus) {
+  const status = String(auth.status || "idle");
+  if (status === "waiting_scan") return "等待扫码";
+  if (status === "starting") return "生成中";
+  if (status === "expired") return "已过期";
+  if (status === "error") return "授权失败";
+  if (auth.auth_valid) return "已授权";
+  if (auth.auth_exists) return "需刷新";
+  return "未授权";
+}
+
+function isMijiaAuthBusy(auth: MijiaAuthStatus) {
+  const status = String(auth.status || "");
+  return status === "starting" || status === "waiting_scan";
 }
 
 export function XiaoAISettingsTab() {
@@ -86,6 +127,8 @@ export function XiaoAISettingsTab() {
   const [exitText, setExitText] = useState("退出渡");
   const [status, setStatus] = useState<XiaoAIStatus>({});
   const [logs, setLogs] = useState<XiaoAILog[]>([]);
+  const [mijiaAuth, setMijiaAuth] = useState<MijiaAuthStatus>({});
+  const [startingMijiaAuth, setStartingMijiaAuth] = useState(false);
   const [loadError, setLoadError] = useState("");
 
   async function loadOverview(silent = false) {
@@ -98,6 +141,7 @@ export function XiaoAISettingsTab() {
       setMuteNativeReply(!!cfg.mute_native_reply);
       setEntryText(joinPhrases(cfg.entry_phrases, "请求连接渡"));
       setExitText(joinPhrases(cfg.exit_phrases, "退出渡"));
+      setMijiaAuth(data.mijia_auth || {});
       setStatus(data.status || {});
       setLogs(Array.isArray(data.logs) ? data.logs : []);
       setLoadError("");
@@ -145,6 +189,30 @@ export function XiaoAISettingsTab() {
     }
   }
 
+  async function loadMijiaAuth(silent = false) {
+    try {
+      const data = await apiJson<MijiaAuthResp>("/miniapp-api/xiaoai/mijia-auth");
+      if (!data?.ok) throw new Error(data?.error || "加载失败");
+      setMijiaAuth(data.mijia_auth || {});
+    } catch (e: any) {
+      if (!silent) toast(`米家授权状态读取失败：${e?.message || e}`);
+    }
+  }
+
+  async function startMijiaAuth() {
+    setStartingMijiaAuth(true);
+    try {
+      const data = await apiJson<MijiaAuthResp>("/miniapp-api/xiaoai/mijia-auth/start", { method: "POST" });
+      if (!data?.ok) throw new Error(data?.error || "生成失败");
+      setMijiaAuth(data.mijia_auth || {});
+      toast("正在生成米家二维码");
+    } catch (e: any) {
+      toast(`米家授权失败：${e?.message || e}`);
+    } finally {
+      setStartingMijiaAuth(false);
+    }
+  }
+
   useEffect(() => {
     void loadOverview(true);
     const timer = window.setInterval(() => {
@@ -153,7 +221,17 @@ export function XiaoAISettingsTab() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!isMijiaAuthBusy(mijiaAuth)) return;
+    const timer = window.setInterval(() => {
+      void loadMijiaAuth(true);
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [mijiaAuth.status]);
+
   const online = !!status.online;
+  const mijiaBusy = isMijiaAuthBusy(mijiaAuth) || startingMijiaAuth;
+  const mijiaReady = !!mijiaAuth.auth_valid;
 
   return (
     <div className="min-h-full bg-[#FDFDFD] pb-8">
@@ -191,6 +269,34 @@ export function XiaoAISettingsTab() {
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="rounded-[28px] border border-gray-100 bg-white p-5 shadow-[0_12px_28px_-24px_rgba(0,0,0,0.24)]">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-[15px] font-bold text-gray-900">米家授权</h3>
+              <p className="mt-1 text-[12px] text-gray-400">{mijiaAuth.message || "截图后用米家 App 识别"}</p>
+            </div>
+            <button
+              type="button"
+              className="shrink-0 rounded-full bg-gray-900 px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50"
+              disabled={mijiaBusy}
+              onClick={() => void startMijiaAuth()}
+            >
+              {mijiaReady ? "重新授权" : mijiaBusy ? "等待" : "生成二维码"}
+            </button>
+          </div>
+          <div className="grid gap-2 text-[13px]">
+            <StatusLine label="授权状态" value={mijiaAuthLabel(mijiaAuth)} danger={String(mijiaAuth.status || "") === "error"} />
+            <StatusLine label="有效期" value={formatDateTime(mijiaAuth.auth_expires_at)} />
+            {mijiaAuth.error ? <StatusLine label="最近错误" value={mijiaAuth.error} danger /> : null}
+          </div>
+          {mijiaAuth.qr_url ? (
+            <div className="mt-4 rounded-[20px] border border-gray-100 bg-gray-50 p-4">
+              <img className="mx-auto h-56 w-56 rounded-xl bg-white object-contain p-2" src={mijiaAuth.qr_url} alt="米家授权二维码" />
+              <div className="mt-3 text-center text-[12px] font-medium text-gray-500">截图后用米家 App 扫一扫</div>
+            </div>
+          ) : null}
         </section>
 
         <section className="rounded-[28px] border border-gray-100 bg-white p-5 shadow-[0_12px_28px_-24px_rgba(0,0,0,0.24)]">
