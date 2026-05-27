@@ -22,9 +22,9 @@ _SUMMARY_SLIGHTLY_LEVEL = "slightly"
 _SUMMARY_OLDER_LEVEL = "older"
 _SUMMARY_LEVELS = {_SUMMARY_RECENT_LEVEL, _SUMMARY_SLIGHTLY_LEVEL, _SUMMARY_OLDER_LEVEL}
 _SUMMARY_NEW_CHUNK_PLACEHOLDER_ID = "__new_chunk__"
-_SUMMARY_RECENT_MAX_CHUNKS = 4
-_SUMMARY_SLIGHTLY_MAX_CHUNKS = 5
-_SUMMARY_OLDER_MAX_CHUNKS = 3
+_SUMMARY_RECENT_MAX_CHUNKS = 3
+_SUMMARY_SLIGHTLY_MAX_CHUNKS = 8
+_SUMMARY_OLDER_MAX_CHUNKS = 4
 
 _SUMMARY_RETRY_INSTRUCTION = """
 
@@ -319,6 +319,11 @@ _REALTIME_LAYER_PROMPT = """你是一个对话小段总结助手。
 
 文游内容如果出现 [文游] 或 [文游·GM]，必须标成游戏/虚构内容，不要和现实对话混淆。
 
+亲密/NSFW 内容如果出现师生、兄妹、主人/宠物、医患、上下级、审讯、囚禁、神明/信徒等身份词，优先按成人自愿角色扮演、play 称呼或虚构设定理解。
+总结时可以写“我和老婆玩了某个设定 / 进入某种 play 氛围”，不要把这些身份词写成现实关系、真实职业、真实血缘或现实事件。
+不要补脑年龄、权力胁迫、现实伤害或未出现的禁忌设定；只记录输入中明确出现的互动氛围、边界和关系状态。
+这类内容仍必须遵守视角规则：“我”只能指渡，[老婆] 的话只能写成辛玥/老婆说了什么，不要把辛玥的第一人称原话改成渡的经历。
+
 ## 稳定性规则
 
 如果某项输入为空或 null，对应输出返回 null，不要强行生成。
@@ -580,7 +585,8 @@ def _legacy_summary_to_chunks(current_summary: str) -> list[dict]:
         blocks.append({"bucket": match.group(1), "text": body})
 
     # 旧 summary 是新到旧展示；队列内部用旧到新。
-    blocks = list(reversed(blocks))[-10:]
+    max_total = _SUMMARY_OLDER_MAX_CHUNKS + _SUMMARY_SLIGHTLY_MAX_CHUNKS + _SUMMARY_RECENT_MAX_CHUNKS
+    blocks = list(reversed(blocks))[-max_total:]
     out: list[dict] = []
     for seq, block in enumerate(blocks):
         out.append(
@@ -596,10 +602,13 @@ def _legacy_summary_to_chunks(current_summary: str) -> list[dict]:
 
 
 def _split_summary_chunks_by_sequence(chunks: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
-    ordered = sorted(chunks, key=lambda x: int(x.get("sequence") or 0))[-10:]
-    recent = ordered[-2:]
-    slightly = ordered[-7:-2] if len(ordered) > 2 else []
-    older = ordered[-10:-7] if len(ordered) > 7 else []
+    max_total = _SUMMARY_OLDER_MAX_CHUNKS + _SUMMARY_SLIGHTLY_MAX_CHUNKS + _SUMMARY_RECENT_MAX_CHUNKS
+    ordered = sorted(chunks, key=lambda x: int(x.get("sequence") or 0))[-max_total:]
+    recent = ordered[-_SUMMARY_RECENT_MAX_CHUNKS:]
+    remaining = ordered[: -len(recent)] if recent else ordered
+    slightly = remaining[-_SUMMARY_SLIGHTLY_MAX_CHUNKS:]
+    older_pool = remaining[: -len(slightly)] if slightly else remaining
+    older = older_pool[-_SUMMARY_OLDER_MAX_CHUNKS:]
     return recent, slightly, older
 
 
@@ -776,6 +785,7 @@ def _summary_compression_plan(chunks: list[dict], should_compress: bool) -> tupl
             "text": "请使用本次生成的 new_chunk 内容，按轻压缩规则再压缩一次。",
         }
     ]
+    # 保持原有节拍：每个压缩点固定处理最旧的两个 recent 小段。
     recent_to_slightly = recent_pool[:2] if len(recent_pool) >= 2 else []
     slightly_to_older = _bucket_summary_chunks(chunks, _SUMMARY_SLIGHTLY_LEVEL)[:2]
     if len(slightly_to_older) < 2:

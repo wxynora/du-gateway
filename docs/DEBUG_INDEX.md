@@ -1050,3 +1050,15 @@ npm -C miniapp run android
 - 已完成：`routes/chat.py` 不再因为 `X-DU-DAILY-MAINTAIN` 或 `X-Voice-Call-Slim` 跳过 Claude thinking carryover；只要当前 active upstream 是服务端本机 Claude OAuth proxy，且请求没有显式带 `X-Skip-Claude-Thinking-Carryover: 1`，就会在进入上游前尝试把上一轮归档里的 `thinking_blocks` 回传。覆盖延迟续话、后端事件唤醒、硬触发、随机主动决策、闹钟提醒、弹窗选择回执、查岗截图回执等所有走主 `/v1/chat/completions` 的网关生成。
 - 已验证：`.venv/bin/python -m py_compile routes/chat.py services/claude_thinking_carryover.py` 通过；Flask request context smoke 确认默认不跳过、带 `X-Skip-Claude-Thinking-Carryover: 1` 时跳过。
 - 未完成 / 下次继续：绕过主 chat 路由的非 Claude direct call 不适用；生产 `du-gateway.service` 仍需要服务器 root 拉代码并重启后才生效。
+
+当前状态（2026-05-27 近期总结 DS 亲密角色扮演护栏）：
+- 已完成：`services/deepseek_summary.py` 的实时层小段总结 prompt 新增亲密/NSFW 角色扮演判断规则；师生、兄妹、主人/宠物、医患、上下级等身份词优先按成人自愿 play/虚构设定理解，不写成现实关系、真实职业、真实血缘或现实事件，也不补脑年龄、胁迫和未出现的禁忌设定。
+- 已验证：`.venv/bin/python -m py_compile services/deepseek_summary.py` 通过；`build_summary_prompt` smoke 确认新规则进入近期总结 DS prompt。
+- 未完成 / 下次继续：本轮只改近期记忆总结 DS，不改动态层 `services/dynamic_layer_ds.py`、核心 prompt、NSFW 正文回复规则或存档结构。
+
+当前状态（2026-05-27 近期总结片段容量 15）：
+- 已完成：`services/deepseek_summary.py` 的近期总结小段上限改为总计 15 个片段：最近 3、稍早 8、更早 4。新增一次性脚本 `scripts/rebuild_summary_recent60_chunks15.py`，可从指定窗口最近 60 轮原文重建 15 个 4 轮小段。
+- 已完成：压缩计划保留原来的固定传送带节拍：每个压缩点仍处理最旧的 2 个【最近】片段、最旧的 2 个【稍早】片段，并在发生【稍早】到【更早】移位时淘汰最旧的 2 个【更早】片段。容量扩大只改变最多保留多少，不改变每次移位动作。
+- 已写回：2026-05-27 已按第一次 dry-run 结果写回 R2 `global/summary.txt` 和 `global/summary_chunks.json`，实际范围为 `tg_8260066512` 的 rounds 6793-6852；落库后 `chunks=15`，分布为更早 4 / 稍早 8 / 最近 3，`update_count=626`。
+- 已验证：`.venv/bin/python -m py_compile services/deepseek_summary.py scripts/rebuild_summary_recent60_chunks15.py` 通过；容量 smoke 覆盖 3/8/4 上限、legacy 分层和固定 2/2/2 移位计划；R2 落库检查确认当前 `update_count=626`，下一次总结开始时读到的仍是 626，成功写完后才更新计数；按当前逻辑本次只补新总结，不压缩换位。
+- 未完成 / 下次继续：本轮不改 4/8 轮总结频率；不要改固定 2/2/2 压缩节拍，除非先重新设计计数语义。
