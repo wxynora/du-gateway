@@ -20,8 +20,12 @@ from services.xiaoai_audio_store import (
 )
 from storage.xiaoai_store import (
     add_xiaoai_log,
+    claim_xiaoai_actions,
+    enqueue_xiaoai_action,
+    finish_xiaoai_action,
     get_xiaoai_config,
     get_xiaoai_status,
+    list_xiaoai_actions,
     list_xiaoai_logs,
     update_xiaoai_status,
 )
@@ -318,6 +322,103 @@ def xiaoai_logs():
         return jsonify({"ok": True, "item": item})
     limit = request.args.get("limit", type=int, default=120)
     return jsonify({"ok": True, "logs": list_xiaoai_logs(limit=limit)})
+
+
+@bp.route("/actions", methods=["GET"])
+def xiaoai_actions():
+    auth_err = _require_xiaoai_auth()
+    if auth_err:
+        return auth_err
+    limit = request.args.get("limit", type=int, default=50)
+    return jsonify({"ok": True, "actions": list_xiaoai_actions(limit=limit)})
+
+
+@bp.route("/actions/claim", methods=["POST"])
+def xiaoai_claim_actions():
+    auth_err = _require_xiaoai_auth()
+    if auth_err:
+        return auth_err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    runner = str(body.get("runner") or request.args.get("runner") or "").strip()
+    try:
+        limit = int(body.get("limit") or request.args.get("limit", 3))
+    except Exception:
+        limit = 3
+    actions = claim_xiaoai_actions(runner=runner, limit=limit)
+    if actions:
+        update_xiaoai_status({"connected": True, "runner": runner, "last_event": "actions_claimed"})
+    return jsonify({"ok": True, "actions": actions})
+
+
+@bp.route("/actions/<action_id>/result", methods=["POST"])
+def xiaoai_action_result(action_id: str):
+    auth_err = _require_xiaoai_auth()
+    if auth_err:
+        return auth_err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    ok = bool(body.get("ok"))
+    runner = str(body.get("runner") or "").strip()
+    error = str(body.get("error") or "").strip()
+    item = finish_xiaoai_action(
+        action_id,
+        ok=ok,
+        runner=runner,
+        error=error,
+        detail=body.get("detail") if isinstance(body.get("detail"), dict) else None,
+    )
+    if not item:
+        return jsonify(_error_payload("NOT_FOUND", "未找到小爱动作", "渡暂时无法接通。")), 404
+    event = "action_done" if ok else "action_failed"
+    update_xiaoai_status(
+        {
+            "connected": True,
+            "runner": runner,
+            "last_event": event,
+            "last_text": item.get("text") or "",
+            "last_audio_url": item.get("audio_url") or "",
+            "last_error": error,
+        }
+    )
+    add_xiaoai_log(
+        "info" if ok else "error",
+        "小爱动作播放完成" if ok else "小爱动作播放失败",
+        event=event,
+        runner=runner,
+        text=str(item.get("text") or ""),
+        audio_url=str(item.get("audio_url") or ""),
+        error=error,
+    )
+    return jsonify({"ok": True, "action": item})
+
+
+@bp.route("/speak", methods=["POST"])
+def xiaoai_speak():
+    auth_err = _require_xiaoai_auth()
+    if auth_err:
+        return auth_err
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify(_error_payload("BAD_REQUEST", "需要 JSON 对象", "渡暂时无法接通。")), 400
+    text = _normalize_voice_text(str(body.get("text") or ""))
+    if not text:
+        return jsonify(_error_payload("BAD_REQUEST", "缺少 text", "渡暂时无法接通。")), 400
+    audio_url = str(body.get("audio_url") or "").strip()
+    audio_format = str(body.get("audio_format") or "mp3").strip().lower() or "mp3"
+    action_type = "play_url" if audio_url else "speak_text"
+    item = enqueue_xiaoai_action(
+        action_type,
+        text=text,
+        audio_url=audio_url,
+        audio_format=audio_format,
+        source=str(body.get("source") or "api"),
+        metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
+    )
+    add_xiaoai_log("info", "已加入小爱播放队列", event="action_queued", text=text, audio_url=audio_url)
+    return jsonify({"ok": True, "action": item})
 
 
 @bp.route("/tts", methods=["POST"])

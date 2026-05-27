@@ -42,6 +42,7 @@ from pipeline.pipeline import (
     step_inject_stay_with_du,
     step_inject_du_notebook,
     step_inject_wenyou_player_tools,
+    step_inject_gateway_tools,
     step_inject_notion_search,
     step_inject_notion_tools,
     step_inject_forum_tools,
@@ -952,6 +953,7 @@ def chat_completions():
         body = step_inject_stay_with_du(body)
         body = step_inject_du_notebook(body)
         body = step_inject_wenyou_player_tools(body)
+        body = step_inject_gateway_tools(body)
         if not du_daily_maintenance:
             body = step_inject_notion_search(body, window_id)
             body = step_inject_notion_tools(body)

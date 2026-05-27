@@ -6,6 +6,7 @@
 
 ```text
 小爱音箱 -> MiGPT Next -> du-gateway /api/xiaoai/message -> 小爱播放 audio_url
+渡调用 xiaoai_speak -> du-gateway 播放队列 -> MiGPT Next -> 小爱播放 audio_url
 ```
 
 控制面板在 MiniApp：
@@ -44,6 +45,7 @@ XIAOAI_SPEAKER=卧室小爱
 DU_GATEWAY_URL=https://你的网关域名
 XIAOAI_GATEWAY_TOKEN=
 DU_WINDOW_ID=
+XIAOAI_ACTION_POLL_MS=3000
 ```
 
 `XIAOAI_GATEWAY_TOKEN` 是可选项。现在网关没配就留空，不需要自己找一个“已有 token”。
@@ -89,7 +91,15 @@ docker compose down
 
 ## 使用
 
-先在 MiniApp 打开：
+### 小爱作为渡的音箱
+
+du-gateway 会给渡注入 `xiaoai_speak` 工具。渡需要像手机弹窗一样提醒你、而你没看手机时，可以把短句排到小爱播放队列；runner 默认每 3 秒拉一次队列并播放 MiniMax 生成的音频。
+
+这条链路不需要你对小爱说入口词，只要求 runner 在线、`DU_GATEWAY_URL` 是公网 HTTPS，且网关配置了可用的 MiniMax TTS。
+
+### 小爱作为语音入口
+
+如果还要让“小爱听到入口词后转发给渡”，先在 MiniApp 打开：
 
 ```text
 工具 -> 小爱音箱 -> 启用开关

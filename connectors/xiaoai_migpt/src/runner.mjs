@@ -14,6 +14,7 @@ const DU_WINDOW_ID = (env.DU_WINDOW_ID || "").trim();
 
 const HEARTBEAT_MS = positiveInt(env.XIAOAI_HEARTBEAT_MS, 1000, 1000);
 const CONFIG_REFRESH_MS = positiveInt(env.XIAOAI_CONFIG_REFRESH_MS, 15000, 3000);
+const ACTION_POLL_MS = positiveInt(env.XIAOAI_ACTION_POLL_MS, 3000, 1000);
 const SESSION_TTL_SECONDS = positiveInt(env.XIAOAI_SESSION_TTL_SECONDS, 60, 0);
 const DEDUP_TTL_MS = positiveInt(env.XIAOAI_DEDUP_TTL_MS, 10000, 1000);
 
@@ -24,6 +25,7 @@ let currentConfig = {
 };
 let lastConfigFetchAt = 0;
 let sessionExpiresAt = 0;
+let actionPollInFlight = false;
 const recentMessages = new Map();
 
 function positiveInt(value, fallback, minimum) {
@@ -188,6 +190,10 @@ function isDuplicate(speaker, text) {
   return now - last < DEDUP_TTL_MS;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function safeAbort(engine) {
   try {
     const aborted = await engine.speaker.abortXiaoAI();
@@ -199,6 +205,17 @@ async function safeAbort(engine) {
   }
 }
 
+async function preparePlayback(engine) {
+  try {
+    if (engine.MiNA?.stop) {
+      await engine.MiNA.stop();
+      await sleep(300);
+    }
+  } catch (e) {
+    console.warn("[xiaoai] 播放前停止当前声音失败：", e?.message || e);
+  }
+}
+
 function formatPlayResult(result) {
   try {
     return JSON.stringify(result).slice(0, 500);
@@ -207,40 +224,121 @@ function formatPlayResult(result) {
   }
 }
 
+async function logPlaybackStatus(engine) {
+  try {
+    if (!engine.MiNA?.getStatus) return;
+    const status = await engine.MiNA.getStatus();
+    console.log("[xiaoai] 播放后状态：", formatPlayResult(status));
+  } catch (e) {
+    console.warn("[xiaoai] 读取播放状态失败：", e?.message || e);
+  }
+}
+
 async function safePlayText(engine, text) {
   const content = String(text || "").trim();
-  if (!content) return;
+  if (!content) return false;
   try {
+    await preparePlayback(engine);
     console.log("[xiaoai] 播放文字：", content);
     const res = engine.MiNA?.callUbus
       ? await engine.MiNA.callUbus("mibrain", "text_to_speech", { text: content, save: 0 })
       : await engine.speaker.play({ text: content });
     const ok = typeof res === "boolean" ? res : res?.code === 0;
     console.log("[xiaoai] 播放文字结果：", ok ? "ok" : formatPlayResult(res));
+    await logPlaybackStatus(engine);
+    return !!ok;
   } catch (e) {
     console.warn("[xiaoai] 播放文本失败：", e?.message || e);
+    return false;
   }
 }
 
 async function safePlayUrl(engine, url, fallbackText) {
   const audioUrl = String(url || "").trim();
   if (!audioUrl) {
-    await safePlayText(engine, fallbackText);
-    return;
+    return safePlayText(engine, fallbackText);
   }
   try {
+    await preparePlayback(engine);
     const res = engine.MiNA?.callUbus
       ? await engine.MiNA.callUbus("mediaplayer", "player_play_url", { url: audioUrl, type: 1 })
       : await engine.speaker.play({ url: audioUrl });
     const ok = typeof res === "boolean" ? res : res?.code === 0;
     console.log("[xiaoai] 播放 URL 结果：", ok ? "ok" : formatPlayResult(res));
+    await logPlaybackStatus(engine);
     if (!ok) {
-      await safePlayText(engine, fallbackText);
+      return safePlayText(engine, fallbackText);
     }
+    return true;
   } catch (e) {
     console.warn("[xiaoai] 播放 URL 失败：", e?.message || e);
     await postLog("warn", "播放音频 URL 失败，回退文字播报", { error: e?.message || String(e), audio_url: audioUrl, event: "play_url_error" });
-    await safePlayText(engine, fallbackText);
+    return safePlayText(engine, fallbackText);
+  }
+}
+
+async function claimActions() {
+  const data = await gatewayJson("/api/xiaoai/actions/claim", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      runner: XIAOAI_RUNNER_NAME,
+      limit: 3,
+    }),
+  });
+  return Array.isArray(data?.actions) ? data.actions : [];
+}
+
+async function reportActionResult(action, ok, error = "", detail = {}) {
+  const actionId = String(action?.id || "").trim();
+  if (!actionId) return;
+  await gatewayJson(`/api/xiaoai/actions/${encodeURIComponent(actionId)}/result`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ok: !!ok,
+      runner: XIAOAI_RUNNER_NAME,
+      error: String(error || ""),
+      detail,
+    }),
+  });
+}
+
+async function executeAction(engine, action) {
+  const type = String(action?.type || "").trim();
+  const text = String(action?.text || "").trim();
+  const audioUrl = String(action?.audio_url || "").trim();
+  console.log("[xiaoai] 执行队列动作：", action?.id || "", type, text || audioUrl);
+  try {
+    let ok = false;
+    if (type === "play_url") {
+      ok = await safePlayUrl(engine, audioUrl, text);
+    } else if (type === "speak_text") {
+      ok = await safePlayText(engine, text);
+    } else {
+      throw new Error(`未知动作类型：${type || "<empty>"}`);
+    }
+    await reportActionResult(action, ok, ok ? "" : "播放命令返回失败", { type });
+  } catch (e) {
+    const message = e?.message || String(e);
+    console.warn("[xiaoai] 执行动作失败：", message);
+    await reportActionResult(action, false, message, { type });
+  }
+}
+
+async function pollActions(engine) {
+  if (actionPollInFlight) return;
+  if (!engine?.MiNA && !engine?.speaker) return;
+  actionPollInFlight = true;
+  try {
+    const actions = await claimActions();
+    for (const action of actions) {
+      await executeAction(engine, action);
+    }
+  } catch (e) {
+    console.warn("[xiaoai] 轮询播放队列失败：", e?.message || e);
+  } finally {
+    actionPollInFlight = false;
   }
 }
 
@@ -371,6 +469,9 @@ async function main() {
     void refreshConfig(false);
     void postStatus({ last_event: "heartbeat" });
   }, Math.max(HEARTBEAT_MS, CONFIG_REFRESH_MS));
+  setInterval(() => {
+    void pollActions(MiGPT);
+  }, ACTION_POLL_MS);
 
   const speaker = {
     did: XIAOAI_DID,

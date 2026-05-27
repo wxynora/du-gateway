@@ -550,8 +550,8 @@ def _append_content_to_page(page_id: str, content: str, add_timestamp: bool = Tr
 
 
 def execute_tool(name: str, arguments: dict) -> str:
-    """执行单个工具（Notion、网关 sync、天气、黄历），返回给模型的字符串结果。"""
-    from services.gateway_tools import SYNC_TOOL_NAMES, execute_gateway_tool
+    """执行单个工具（Notion、网关、小爱、天气、黄历等），返回给模型的字符串结果。"""
+    from services.gateway_tools import SYNC_TOOL_NAMES, XIAOAI_TOOL_NAMES, execute_gateway_tool, execute_xiaoai_tool
     if name in {"buy_item", "roll_gacha", "inventory_action", "use_item", "transfer"}:
         from config import WENYOU_SESSION_ID
         from services.wenyou_service import execute_player_tool
@@ -563,6 +563,8 @@ def execute_tool(name: str, arguments: dict) -> str:
         return execute_publish_html_preview(arguments if isinstance(arguments, dict) else {})
     if name in SYNC_TOOL_NAMES:
         return execute_gateway_tool(name, arguments)
+    if name in XIAOAI_TOOL_NAMES:
+        return execute_xiaoai_tool(name, arguments)
     if name in ("get_time_info", "get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)

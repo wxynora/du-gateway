@@ -2124,6 +2124,18 @@ def step_inject_wenyou_player_tools(body: dict) -> dict:
     return _append_tool_schemas(body, tools)
 
 
+def step_inject_gateway_tools(body: dict) -> dict:
+    """注入不依赖外部开关的网关工具，例如小爱音箱外放。"""
+    try:
+        from services.gateway_tools import get_gateway_tools_for_inject
+
+        tools = get_gateway_tools_for_inject()
+    except Exception as e:
+        logger.debug("gateway tools 注入跳过 error=%s", e)
+        return body
+    return _append_tool_schemas(body, tools)
+
+
 def step_inject_notion_tools(body: dict) -> dict:
     """
     当 NOTION_TOOLS_ENABLED=1 时，向 body 注入 Notion 工具。
