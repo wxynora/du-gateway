@@ -134,7 +134,7 @@ export function XiaoAISettingsTab() {
   async function loadOverview(silent = false) {
     try {
       if (!silent) setLoading(true);
-      const data = await apiJson<OverviewResp>("/miniapp-api/xiaoai/overview?limit=120");
+      const data = await apiJson<OverviewResp>("/miniapp-api/xiaoai/overview?limit=20");
       if (!data?.ok) throw new Error(data?.error || "加载失败");
       const cfg = data.config || {};
       setEnabled(!!cfg.enabled);

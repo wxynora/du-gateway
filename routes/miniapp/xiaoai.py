@@ -14,7 +14,7 @@ from storage.xiaoai_store import (
 def register_routes(bp) -> None:
     @bp.route("/xiaoai/overview", methods=["GET"])
     def miniapp_xiaoai_overview():
-        limit = request.args.get("limit", type=int, default=80)
+        limit = request.args.get("limit", type=int, default=20)
         return jsonify(
             {
                 "ok": True,
@@ -42,7 +42,7 @@ def register_routes(bp) -> None:
 
     @bp.route("/xiaoai/logs", methods=["GET"])
     def miniapp_xiaoai_logs_get():
-        limit = request.args.get("limit", type=int, default=120)
+        limit = request.args.get("limit", type=int, default=20)
         return jsonify({"ok": True, "logs": list_xiaoai_logs(limit=limit)})
 
     @bp.route("/xiaoai/mijia-auth", methods=["GET"])

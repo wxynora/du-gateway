@@ -1067,6 +1067,11 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile routes/xiaoai_api.py routes/miniapp_api.py routes/miniapp/xiaoai.py storage/xiaoai_store.py app.py` 通过；`npm --prefix miniapp run build` 通过并生成 `XiaoAISettingsTab` chunk。
 - 未完成 / 下次继续：MiGPT Next 侧还需要改为拉 `/api/xiaoai/config` 并上报 `/api/xiaoai/status`/`logs`；本轮没有实机验证小爱 payload、音频播放或临时会话退出词执行。
 
+当前状态（2026-05-28 小爱日志展示收束）：
+- 已完成：MiniApp 小爱页 `/miniapp-api/xiaoai/overview` 请求和后端默认日志 limit 都收束为 20 条。`storage/xiaoai_store.py` 的日志本地持久化不是时间 TTL，而是写入/读取时按 `_MAX_LOGS=300` 做条数上限裁剪；动作队列才有 `expires_epoch` TTL。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/xiaoai.py routes/miniapp_api.py storage/xiaoai_store.py` 通过；`npm --prefix miniapp run build` 通过并生成新的 `XiaoAISettingsTab` 静态 chunk；`git diff --check` 通过。
+- 未完成 / 下次继续：如需要按时间删除小爱日志，可再给日志增加独立 TTL；当前不会无限增长。
+
 当前状态（2026-05-27 小爱音箱 Mac Docker runner）：
 - 已完成：新增 `connectors/xiaoai_migpt/`，包含 `Dockerfile`、`docker-compose.yml`、`.env.example`、`package.json`、`package-lock.json`、`src/runner.mjs` 和 README；runner 使用 `@mi-gpt/next` 登录小米云，定时拉 `/api/xiaoai/config`，按 App 工具页的启用开关/入口词/退出词处理消息，转发 `/api/xiaoai/message`，播放 `audio_url`，并上报 `/api/xiaoai/status` 和 `/api/xiaoai/logs`。compose 默认 `mem_limit: 256m`，`NODE_OPTIONS=--max-old-space-size=128`。
 - 已验证：`npm install --package-lock-only` 生成 lock；`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过。
