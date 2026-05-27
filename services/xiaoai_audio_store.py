@@ -3,14 +3,44 @@ from __future__ import annotations
 import secrets
 import threading
 import time
+from pathlib import Path
 from typing import Any, Optional, Tuple, Union
 
-from config import HTML_PREVIEW_MAX_ITEMS, HTML_PREVIEW_TTL_SECONDS
+from config import DATA_DIR, HTML_PREVIEW_MAX_ITEMS, HTML_PREVIEW_TTL_SECONDS
 from services.html_preview_store import resolve_preview_base_url_for_http_request
 
 _lock = threading.Lock()
 # token -> {"audio": bytes, "exp": float, "created": float, "format": str, "mime": str}
 _store: dict[str, dict[str, Any]] = {}
+_AUDIO_DIR = DATA_DIR / "xiaoai_audio"
+_AUDIO_FORMATS = ("mp3", "wav")
+
+
+def _audio_path(token: str, audio_format: str) -> Path:
+    return _AUDIO_DIR / f"{token}.{audio_format}"
+
+
+def _safe_token(token: str) -> str:
+    raw = str(token or "").strip()
+    if not raw or len(raw) > 200:
+        return ""
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+    if any(ch not in allowed for ch in raw):
+        return ""
+    return raw
+
+
+def _iter_audio_files() -> list[Path]:
+    if not _AUDIO_DIR.exists():
+        return []
+    try:
+        return [
+            p
+            for p in _AUDIO_DIR.iterdir()
+            if p.is_file() and p.suffix.lstrip(".").lower() in _AUDIO_FORMATS
+        ]
+    except Exception:
+        return []
 
 
 def _purge_expired() -> None:
@@ -18,14 +48,25 @@ def _purge_expired() -> None:
     dead = [t for t, v in _store.items() if v["exp"] <= now]
     for t in dead:
         del _store[t]
+    for path in _iter_audio_files():
+        try:
+            if path.stat().st_mtime + HTML_PREVIEW_TTL_SECONDS <= now:
+                path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _trim_to_max() -> None:
-    if len(_store) <= HTML_PREVIEW_MAX_ITEMS:
-        return
     order = sorted(_store.keys(), key=lambda t: _store[t]["created"])
     while len(_store) > HTML_PREVIEW_MAX_ITEMS and order:
         del _store[order.pop(0)]
+    files = sorted(_iter_audio_files(), key=lambda p: p.stat().st_mtime)
+    while len(files) > HTML_PREVIEW_MAX_ITEMS:
+        path = files.pop(0)
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _mime_for_format(audio_format: str) -> str:
@@ -56,24 +97,33 @@ def create_xiaoai_audio(
     if fmt not in ("mp3", "wav"):
         return False, f"暂不支持的音频格式：{fmt}"
 
+    base = (url_base or "").strip().rstrip("/")
+    if not base:
+        return False, "未配置公网域名或当前请求 Host 不可外网访问"
+
     token = secrets.token_urlsafe(24)
     now = time.time()
     exp = now + HTML_PREVIEW_TTL_SECONDS
+    payload = bytes(audio_bytes)
+    path = _audio_path(token, fmt)
 
     with _lock:
         _purge_expired()
+        try:
+            _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{path.name}.tmp")
+            tmp.write_bytes(payload)
+            tmp.replace(path)
+        except Exception as e:
+            return False, f"音频落盘失败：{e}"
         _store[token] = {
-            "audio": bytes(audio_bytes),
+            "audio": payload,
             "exp": exp,
             "created": now,
             "format": fmt,
             "mime": _mime_for_format(fmt),
         }
         _trim_to_max()
-
-    base = (url_base or "").strip().rstrip("/")
-    if not base:
-        return False, "未配置公网域名或当前请求 Host 不可外网访问"
 
     return True, {
         "url": xiaoai_audio_url_for_token(token, audio_format=fmt, base_override=base),
@@ -84,11 +134,39 @@ def create_xiaoai_audio(
 
 
 def get_xiaoai_audio_row(token: str) -> Optional[dict[str, Any]]:
-    if not token or len(token) > 200:
+    safe = _safe_token(token)
+    if not safe:
         return None
     with _lock:
         _purge_expired()
-        row = _store.get(token)
-    if not row or row["exp"] <= time.time():
-        return None
-    return row
+        row = _store.get(safe)
+        if row and row["exp"] > time.time():
+            return row
+        for fmt in _AUDIO_FORMATS:
+            path = _audio_path(safe, fmt)
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            except Exception:
+                continue
+            if stat.st_mtime + HTML_PREVIEW_TTL_SECONDS <= time.time():
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                continue
+            try:
+                audio = path.read_bytes()
+            except Exception:
+                continue
+            if not audio:
+                continue
+            return {
+                "audio": audio,
+                "exp": stat.st_mtime + HTML_PREVIEW_TTL_SECONDS,
+                "created": stat.st_mtime,
+                "format": fmt,
+                "mime": _mime_for_format(fmt),
+            }
+    return None

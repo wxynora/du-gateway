@@ -4,6 +4,7 @@ import { useToast } from "../toast";
 
 type XiaoAIConfig = {
   enabled?: boolean;
+  mute_native_reply?: boolean;
   entry_phrases?: string[];
   exit_phrases?: string[];
   updated_at?: string;
@@ -80,6 +81,7 @@ export function XiaoAISettingsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [enabled, setEnabled] = useState(false);
+  const [muteNativeReply, setMuteNativeReply] = useState(false);
   const [entryText, setEntryText] = useState("请求连接渡");
   const [exitText, setExitText] = useState("退出渡");
   const [status, setStatus] = useState<XiaoAIStatus>({});
@@ -93,6 +95,7 @@ export function XiaoAISettingsTab() {
       if (!data?.ok) throw new Error(data?.error || "加载失败");
       const cfg = data.config || {};
       setEnabled(!!cfg.enabled);
+      setMuteNativeReply(!!cfg.mute_native_reply);
       setEntryText(joinPhrases(cfg.entry_phrases, "请求连接渡"));
       setExitText(joinPhrases(cfg.exit_phrases, "退出渡"));
       setStatus(data.status || {});
@@ -108,14 +111,17 @@ export function XiaoAISettingsTab() {
     }
   }
 
-  async function saveConfig(nextEnabled = enabled) {
+  async function saveConfig(nextEnabled = enabled, nextMuteNativeReply = muteNativeReply) {
     const payload = {
       enabled: nextEnabled,
+      mute_native_reply: nextMuteNativeReply,
       entry_phrases: splitPhrases(entryText, "请求连接渡"),
       exit_phrases: splitPhrases(exitText, "退出渡"),
     };
     const prevEnabled = enabled;
+    const prevMuteNativeReply = muteNativeReply;
     setEnabled(nextEnabled);
+    setMuteNativeReply(nextMuteNativeReply);
     setSaving(true);
     try {
       const data = await apiJson<{ ok?: boolean; config?: XiaoAIConfig; error?: string }>("/miniapp-api/xiaoai/config", {
@@ -126,11 +132,13 @@ export function XiaoAISettingsTab() {
       if (!data?.ok) throw new Error(data?.error || "保存失败");
       const cfg = data.config || {};
       setEnabled(!!cfg.enabled);
+      setMuteNativeReply(!!cfg.mute_native_reply);
       setEntryText(joinPhrases(cfg.entry_phrases, "请求连接渡"));
       setExitText(joinPhrases(cfg.exit_phrases, "退出渡"));
       toast(cfg.enabled ? "小爱入口已启用" : "小爱入口已关闭");
     } catch (e: any) {
       setEnabled(prevEnabled);
+      setMuteNativeReply(prevMuteNativeReply);
       toast(`保存失败：${e?.message || e}`);
     } finally {
       setSaving(false);
@@ -200,6 +208,22 @@ export function XiaoAISettingsTab() {
               保存
             </button>
           </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={muteNativeReply}
+            disabled={saving}
+            className="mb-4 flex w-full items-center justify-between rounded-2xl bg-gray-50 px-4 py-3 text-left disabled:opacity-60"
+            onClick={() => void saveConfig(enabled, !muteNativeReply)}
+          >
+            <span>
+              <span className="block text-[13px] font-semibold text-gray-800">入口静音</span>
+              <span className="mt-1 block text-[11px] text-gray-400">渡开口前恢复音量</span>
+            </span>
+            <span className={`relative h-7 w-[50px] shrink-0 rounded-full transition-colors ${muteNativeReply ? "bg-gray-900" : "bg-gray-200"}`}>
+              <span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${muteNativeReply ? "translate-x-[22px]" : "translate-x-0"}`} />
+            </span>
+          </button>
           <label className="block">
             <span className="mb-2 block text-[12px] font-semibold text-gray-500">入口词</span>
             <textarea

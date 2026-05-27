@@ -1077,6 +1077,11 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile services/xiaoai_audio_store.py routes/xiaoai_api.py` 通过；临时目录 smoke 验证清空内存 `_store` 后仍能用 token 从落盘文件读回音频；非法 token 返回空。
 - 未完成 / 下次继续：需要部署到生产并重启 du-gateway 后再让小爱实测；当前 Mac Docker runner 不需要为这个修复重建，除非同时改 runner 播放策略。
 
+当前状态（2026-05-28 小爱入口静音开关）：
+- 已完成：`storage/xiaoai_store.py` 的小爱配置增加 `mute_native_reply`；MiniApp 小爱工具页新增“入口静音”开关；MiGPT runner 拉到该开关后，命中入口词或临时会话时会短超时读取当前音量、直调 `player_set_volume` 到 0，普通聊天保持静音直到拿到渡的 `audio_url`/兜底文本、播放前恢复原音量；本地音量/暂停/停止命令会先恢复再执行，避免把临时静音误当成用户音量。
+- 已验证：`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过；`.venv/bin/python -m py_compile storage/xiaoai_store.py routes/xiaoai_api.py routes/miniapp/xiaoai.py` 通过；`npm --prefix miniapp run build` 通过并生成新的 `XiaoAISettingsTab` 静态 chunk。
+- 未完成 / 下次继续：需要生产部署后在 MiniApp 打开“入口静音”，重启 Mac Docker runner，再实机确认具体音箱是否接受 `volume=0`；若型号不接受 0，runner 会退化为命令失败日志或 MiGPT 内部最小音量。
+
 当前状态（2026-05-28 mijiaAPI 家居控制工具）：
 - 已完成：`services/gateway_tools.py` 新增 `xiaoai_run_command` 工具，底层调用 `mijiaAPI --run "<自然语言家居命令>"`，用于让小爱执行米家/红外设备控制；新增配置 `MIJIA_API_COMMAND`、`MIJIA_API_AUTH_PATH`、`MIJIA_WIFISPEAKER_NAME`、`MIJIA_API_QUIET`、`MIJIA_API_TIMEOUT_SECONDS`；`requirements.txt` 增加 `mijiaapi>=3.1.0`。工具常驻注入，不依赖 MiGPT runner；`speaker_name` 可由工具参数临时覆盖，默认走 `MIJIA_WIFISPEAKER_NAME`。
 - 已验证：`.venv/bin/python -m py_compile config.py services/gateway_tools.py pipeline/pipeline.py routes/chat.py services/notion_tools.py` 通过；smoke 确认 `step_inject_gateway_tools()` 同时注入 `xiaoai_speak` 与 `xiaoai_run_command`，命令构造为 `mijiaAPI --run ... --wifispeaker_name ... --quiet`。

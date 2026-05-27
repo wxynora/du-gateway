@@ -29,6 +29,7 @@ def _default_state() -> dict[str, Any]:
     return {
         "config": {
             "enabled": False,
+            "mute_native_reply": False,
             "entry_phrases": list(_DEFAULT_ENTRY_PHRASES),
             "exit_phrases": list(_DEFAULT_EXIT_PHRASES),
             "updated_at": "",
@@ -124,6 +125,7 @@ def _normalize_phrase_list(value: Any, fallback: list[str]) -> list[str]:
 def _normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "enabled": _as_bool((config or {}).get("enabled"), default=False),
+        "mute_native_reply": _as_bool((config or {}).get("mute_native_reply"), default=False),
         "entry_phrases": _normalize_phrase_list((config or {}).get("entry_phrases"), _DEFAULT_ENTRY_PHRASES),
         "exit_phrases": _normalize_phrase_list((config or {}).get("exit_phrases"), _DEFAULT_EXIT_PHRASES),
         "updated_at": _clip((config or {}).get("updated_at"), 80),
@@ -190,6 +192,8 @@ def save_xiaoai_config(data: dict[str, Any]) -> dict[str, Any]:
         current = dict(state.get("config") or {})
         if "enabled" in payload:
             current["enabled"] = _as_bool(payload.get("enabled"), default=False)
+        if "mute_native_reply" in payload:
+            current["mute_native_reply"] = _as_bool(payload.get("mute_native_reply"), default=False)
         if "entry_phrases" in payload:
             current["entry_phrases"] = _normalize_phrase_list(payload.get("entry_phrases"), _DEFAULT_ENTRY_PHRASES)
         if "exit_phrases" in payload:

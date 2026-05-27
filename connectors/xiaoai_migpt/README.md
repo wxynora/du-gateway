@@ -46,6 +46,8 @@ DU_GATEWAY_URL=https://你的网关域名
 XIAOAI_GATEWAY_TOKEN=
 DU_WINDOW_ID=
 XIAOAI_ACTION_POLL_MS=3000
+XIAOAI_MUTE_RESTORE_FALLBACK_VOLUME=35
+XIAOAI_MUTE_VOLUME_READ_TIMEOUT_MS=250
 ```
 
 `XIAOAI_GATEWAY_TOKEN` 是可选项。现在网关没配就留空，不需要自己找一个“已有 token”。
@@ -120,6 +122,8 @@ runner 会：
 4. 播放 Minimax audio_url
 5. 上报连接状态和小爱日志到 MiniApp
 ```
+
+如果在 MiniApp 打开“入口静音”，runner 会在命中入口词后立刻记录当前音量并把音量降到 0，拿到渡的 `audio_url` 或兜底文本、准备播放前再恢复。`XIAOAI_MUTE_VOLUME_READ_TIMEOUT_MS` 控制读原音量最多等多久，读不到时用 `XIAOAI_MUTE_RESTORE_FALLBACK_VOLUME` 恢复。
 
 ## 资源限制
 
