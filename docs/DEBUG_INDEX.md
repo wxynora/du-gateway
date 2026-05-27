@@ -40,7 +40,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 设备状态注入 | `services/sense_context.py` | 电量、亮屏、前台 app、位置等 sense 注入 |
 | 主动触发规则 | `services/proactive_trigger_engine.py` | 睡眠、亮屏、使用时长等硬触发 |
 | Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送 |
-| 小爱音箱 / MiGPT Next / mijiaAPI | `routes/xiaoai_api.py`、`routes/miniapp/xiaoai.py`、`storage/xiaoai_store.py`、`services/xiaoai_audio_store.py`、`services/gateway_tools.py`、`services/entry_style_prompt.py`、`scripts/test_xiaoai_mijia.py`、`miniapp/src/ui/tabs/XiaoAISettingsTab.tsx`、`connectors/xiaoai_migpt/`、`docs/小爱音箱-MiGPT-Next-接入渡方案.md` | 小爱专用 `/api/xiaoai/message` 入口、`xiaoai_speak` 外放工具、`xiaoai_run_command` mijiaAPI 家居控制工具、台灯实测脚本、播放队列、强制 `<voice>` 风格、MiniMax 音频 URL 临时托管、App 工具页、Mac Docker MiGPT runner、接入方案 |
+| 小爱音箱 / MiGPT Next / mijiaAPI | `routes/xiaoai_api.py`、`routes/miniapp/xiaoai.py`、`storage/xiaoai_store.py`、`services/xiaoai_audio_store.py`、`services/gateway_tools.py`、`services/entry_style_prompt.py`、`scripts/test_xiaoai_mijia.py`、`miniapp/src/ui/tabs/XiaoAISettingsTab.tsx`、`connectors/xiaoai_migpt/`、`docs/小爱音箱-MiGPT-Next-接入渡方案.md` | 小爱专用 `/api/xiaoai/message` 入口、`xiaoai_speak` 外放工具、`xiaoai_run_command` mijiaAPI 家居控制工具、`mijia_lamp_get/set` 台灯结构化工具、台灯实测脚本、播放队列、强制 `<voice>` 风格、MiniMax 音频 URL 临时托管、App 工具页、Mac Docker MiGPT runner、接入方案 |
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js` | 自用 Claude 反代、thinking/cache/tool 格式转换 |
 
 ## 主动唤醒入口风格抖动
@@ -1091,6 +1091,11 @@ npm -C miniapp run android
 - 已完成：新增 `scripts/test_xiaoai_mijia.py`，直接调用 `xiaoai_run_command` 执行器，不经过模型和聊天链路；默认只允许命令包含“台灯/桌灯/书桌灯”，适合第一轮只测台灯，非台灯命令必须显式加 `--allow-non-lamp`。
 - 已验证：`.venv/bin/python -m py_compile scripts/test_xiaoai_mijia.py` 通过；`--dry-run` 确认命令构造正确。未真实执行设备控制。
 - 未完成 / 下次继续：服务器需要先安装/登录 mijiaAPI 并配置 `MIJIA_WIFISPEAKER_NAME=小爱音箱Play 增强版`，再执行 `.venv/bin/python scripts/test_xiaoai_mijia.py "打开台灯"` / `"关闭台灯"`。
+
+当前状态（2026-05-28 mijiaAPI 台灯结构化属性工具）：
+- 已完成：`services/gateway_tools.py` 新增 `mijia_lamp_get` / `mijia_lamp_set`，用于读写台灯 `on`、`brightness`、`color-temperature`，避免渡自己拼 CLI；`scripts/test_xiaoai_mijia.py` 增加 `--lamp-get`、`--lamp-brightness`、`--lamp-color-temperature`。`mijiaAPI get/set` 的 `-p/--auth_path` 必须放在子命令后，代码已固定构造为 `mijiaAPI set -p <auth> ...`，不要写成 `mijiaAPI -p <auth> set ...`。
+- 已验证：本地用 MiGPT `.env` 的 `XIAOMI_PASS_TOKEN` 刷出 `data/mijia/auth.json` 后，`xiaoai_run_command` 对真实音箱名“小米小爱音箱Play 增强版”执行“打开台灯/关闭台灯”返回成功；`mijiaAPI get -p data/mijia/auth.json --did 2025297301 --prop_name brightness` 读到 `35`，`color-temperature` 读到 `3420`。
+- 未完成 / 下次继续：结构化 `set` 需用 `mijia_lamp_set` 或 `scripts/test_xiaoai_mijia.py --lamp-brightness ...` 验证；不要再手写错误的全局 `-p` 顺序。
 
 当前状态（2026-05-27 Claude thinking signature 回传覆盖唤醒链路）：
 - 已完成：`routes/chat.py` 不再因为 `X-DU-DAILY-MAINTAIN` 或 `X-Voice-Call-Slim` 跳过 Claude thinking carryover；只要当前 active upstream 是服务端本机 Claude OAuth proxy，且请求没有显式带 `X-Skip-Claude-Thinking-Carryover: 1`，就会在进入上游前尝试把上一轮归档里的 `thinking_blocks` 回传。覆盖延迟续话、后端事件唤醒、硬触发、随机主动决策、闹钟提醒、弹窗选择回执、查岗截图回执等所有走主 `/v1/chat/completions` 的网关生成。

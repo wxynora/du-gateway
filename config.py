@@ -515,6 +515,7 @@ MIJIA_WIFISPEAKER_NAME = (
     os.environ.get("MIJIA_WIFISPEAKER_NAME", os.environ.get("XIAOAI_SPEAKER", ""))
     .strip()
 )
+MIJIA_LAMP_DID = os.environ.get("MIJIA_LAMP_DID", "").strip()
 MIJIA_API_QUIET = os.environ.get("MIJIA_API_QUIET", "1").strip().lower() in ("1", "true", "yes", "on")
 MIJIA_API_TIMEOUT_SECONDS = int(float(os.environ.get("MIJIA_API_TIMEOUT_SECONDS", "45") or "45"))
 

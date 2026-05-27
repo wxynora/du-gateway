@@ -10,6 +10,7 @@ from config import (
     MIJIA_API_COMMAND,
     MIJIA_API_QUIET,
     MIJIA_API_TIMEOUT_SECONDS,
+    MIJIA_LAMP_DID,
     MIJIA_WIFISPEAKER_NAME,
     NOTION_CORE_CACHE_DATABASE_ID,
 )
@@ -18,7 +19,7 @@ from utils.log import get_logger
 logger = get_logger(__name__)
 
 SYNC_TOOL_NAMES = ("sync_core_cache_to_notion", "sync_core_cache_from_notion")
-XIAOAI_TOOL_NAMES = ("xiaoai_speak", "xiaoai_run_command")
+XIAOAI_TOOL_NAMES = ("xiaoai_speak", "xiaoai_run_command", "mijia_lamp_get", "mijia_lamp_set")
 
 # 提醒文案：老婆问「明确的指令是什么」或「我该怎么说」时，渡可直接用这句回复
 SYNC_REMINDER_FOR_WIFE = (
@@ -117,6 +118,47 @@ def get_gateway_xiaoai_tools() -> List[dict]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "mijia_lamp_get",
+                "description": (
+                    "读取台灯当前属性。用于确认台灯是否开着、当前亮度或色温。"
+                    "不要自己拼 mijiaAPI get 命令；本工具内部会处理 mijiaAPI 的 auth 参数位置。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "property": {
+                            "type": "string",
+                            "description": "可选：on / brightness / color-temperature；不传则读取三项。",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mijia_lamp_set",
+                "description": (
+                    "结构化控制台灯，支持开关、亮度和冷暖色温。"
+                    "调亮度/色温时优先用这个工具，不要让渡自己拼 mijiaAPI set 命令。"
+                    "brightness 范围 1-100；color_temperature 范围 2700-5100，数值越低越暖。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "on": {"type": "boolean", "description": "可选：打开或关闭台灯"},
+                        "brightness": {"type": "integer", "description": "可选：亮度 1-100"},
+                        "color_temperature": {"type": "integer", "description": "可选：色温 2700-5100，越低越暖"},
+                        "reason": {"type": "string", "description": "为什么这样调整，简短写给日志看"},
+                    },
+                    "required": [],
+                },
+            },
+        },
     ]
 
 
@@ -167,6 +209,48 @@ def _build_mijia_run_command(prompt: str, speaker_name: str = "") -> list[str]:
     return cmd
 
 
+def _mijia_cli_base() -> list[str]:
+    base = shlex.split(MIJIA_API_COMMAND or "mijiaAPI")
+    return base or ["mijiaAPI"]
+
+
+def _mijia_auth_args() -> list[str]:
+    if not MIJIA_API_AUTH_PATH:
+        return []
+    # mijiaAPI 的 get/set 子命令各自定义 -p；必须放在子命令后，不能放在全局位置。
+    return ["-p", MIJIA_API_AUTH_PATH]
+
+
+def _build_mijia_lamp_get_command(prop_name: str) -> list[str]:
+    did = MIJIA_LAMP_DID or "2025297301"
+    return [*_mijia_cli_base(), "get", *_mijia_auth_args(), "--did", did, "--prop_name", prop_name]
+
+
+def _build_mijia_lamp_set_command(prop_name: str, value: Any) -> list[str]:
+    did = MIJIA_LAMP_DID or "2025297301"
+    return [*_mijia_cli_base(), "set", *_mijia_auth_args(), "--did", did, "--prop_name", prop_name, "--value", str(value)]
+
+
+def _run_mijia_cli(cmd: list[str]) -> tuple[bool, int, str, str]:
+    timeout = max(5, min(180, int(MIJIA_API_TIMEOUT_SECONDS or 45)))
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    return proc.returncode == 0, int(proc.returncode), stdout, stderr
+
+
+def _coerce_int(value: Any, *, minimum: int, maximum: int, field: str) -> tuple[bool, int | None, str]:
+    if value is None:
+        return True, None, ""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return False, None, f"{field} 必须是整数"
+    if n < minimum or n > maximum:
+        return False, None, f"{field} 必须在 {minimum}-{maximum} 之间"
+    return True, n, ""
+
+
 def _execute_mijia_run_command(arguments: dict) -> str:
     args = arguments if isinstance(arguments, dict) else {}
     command = _clean_mijia_command(args.get("command"))
@@ -179,18 +263,8 @@ def _execute_mijia_run_command(arguments: dict) -> str:
         from storage.xiaoai_store import add_xiaoai_log
 
         run_cmd = _build_mijia_run_command(command, speaker_name=speaker_name)
-        timeout = max(5, min(180, int(MIJIA_API_TIMEOUT_SECONDS or 45)))
         logger.info("mijiaAPI run command=%s speaker=%s", command, speaker_name or MIJIA_WIFISPEAKER_NAME or "")
-        proc = subprocess.run(
-            run_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        stdout = (proc.stdout or "").strip()
-        stderr = (proc.stderr or "").strip()
-        ok = proc.returncode == 0
+        ok, returncode, stdout, stderr = _run_mijia_cli(run_cmd)
         add_xiaoai_log(
             "info" if ok else "error",
             "mijiaAPI 家居命令执行完成" if ok else "mijiaAPI 家居命令执行失败",
@@ -205,7 +279,7 @@ def _execute_mijia_run_command(arguments: dict) -> str:
                 "tool": "xiaoai_run_command",
                 "command": command,
                 "speaker_name": speaker_name or MIJIA_WIFISPEAKER_NAME or "",
-                "returncode": proc.returncode,
+                "returncode": returncode,
                 "stdout": stdout[-1200:],
                 "stderr": stderr[-1200:],
                 "reason": reason,
@@ -236,12 +310,80 @@ def _execute_mijia_run_command(arguments: dict) -> str:
         return json.dumps({"ok": False, "error": "EXECUTION_FAILED", "message": str(e)}, ensure_ascii=False)
 
 
+def _execute_mijia_lamp_get(arguments: dict) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    requested = str(args.get("property") or "").strip()
+    props = [requested] if requested else ["on", "brightness", "color-temperature"]
+    allowed = {"on", "brightness", "color-temperature"}
+    if any(p not in allowed for p in props):
+        return json.dumps({"ok": False, "error": "INVALID_PROPERTY", "message": "property 只能是 on / brightness / color-temperature"}, ensure_ascii=False)
+    results: dict[str, Any] = {}
+    errors: list[dict[str, Any]] = []
+    try:
+        for prop in props:
+            cmd = _build_mijia_lamp_get_command(prop)
+            ok, returncode, stdout, stderr = _run_mijia_cli(cmd)
+            if ok:
+                results[prop] = stdout
+            else:
+                errors.append({"property": prop, "returncode": returncode, "stderr": stderr[-1200:]})
+        return json.dumps({"ok": not errors, "tool": "mijia_lamp_get", "values": results, "errors": errors}, ensure_ascii=False)
+    except subprocess.TimeoutExpired:
+        return json.dumps({"ok": False, "error": "MIJIA_API_TIMEOUT", "message": f"mijiaAPI 执行超过 {MIJIA_API_TIMEOUT_SECONDS} 秒未返回。"}, ensure_ascii=False)
+    except FileNotFoundError:
+        return json.dumps({"ok": False, "error": "MIJIA_API_NOT_FOUND", "message": f"找不到 mijiaAPI 命令：{MIJIA_API_COMMAND or 'mijiaAPI'}"}, ensure_ascii=False)
+    except Exception as e:
+        logger.exception("mijia_lamp_get 执行异常")
+        return json.dumps({"ok": False, "error": "EXECUTION_FAILED", "message": str(e)}, ensure_ascii=False)
+
+
+def _execute_mijia_lamp_set(arguments: dict) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    updates: list[tuple[str, Any]] = []
+    if "on" in args and args.get("on") is not None:
+        updates.append(("on", bool(args.get("on"))))
+    ok_brightness, brightness, err = _coerce_int(args.get("brightness"), minimum=1, maximum=100, field="brightness")
+    if not ok_brightness:
+        return json.dumps({"ok": False, "error": "INVALID_BRIGHTNESS", "message": err}, ensure_ascii=False)
+    if brightness is not None:
+        updates.append(("brightness", brightness))
+    ok_ct, color_temperature, err = _coerce_int(args.get("color_temperature"), minimum=2700, maximum=5100, field="color_temperature")
+    if not ok_ct:
+        return json.dumps({"ok": False, "error": "INVALID_COLOR_TEMPERATURE", "message": err}, ensure_ascii=False)
+    if color_temperature is not None:
+        updates.append(("color-temperature", color_temperature))
+    if not updates:
+        return json.dumps({"ok": False, "error": "NO_UPDATES", "message": "至少传 on / brightness / color_temperature 之一"}, ensure_ascii=False)
+
+    results: list[dict[str, Any]] = []
+    try:
+        for prop, value in updates:
+            cmd = _build_mijia_lamp_set_command(prop, value)
+            ok, returncode, stdout, stderr = _run_mijia_cli(cmd)
+            results.append({"property": prop, "value": value, "ok": ok, "returncode": returncode, "stdout": stdout[-1200:], "stderr": stderr[-1200:]})
+            if not ok:
+                break
+        all_ok = all(item.get("ok") for item in results)
+        return json.dumps({"ok": all_ok, "tool": "mijia_lamp_set", "results": results, "reason": str(args.get("reason") or "").strip()}, ensure_ascii=False)
+    except subprocess.TimeoutExpired:
+        return json.dumps({"ok": False, "error": "MIJIA_API_TIMEOUT", "message": f"mijiaAPI 执行超过 {MIJIA_API_TIMEOUT_SECONDS} 秒未返回。"}, ensure_ascii=False)
+    except FileNotFoundError:
+        return json.dumps({"ok": False, "error": "MIJIA_API_NOT_FOUND", "message": f"找不到 mijiaAPI 命令：{MIJIA_API_COMMAND or 'mijiaAPI'}"}, ensure_ascii=False)
+    except Exception as e:
+        logger.exception("mijia_lamp_set 执行异常")
+        return json.dumps({"ok": False, "error": "EXECUTION_FAILED", "message": str(e)}, ensure_ascii=False)
+
+
 def execute_xiaoai_tool(name: str, arguments: dict) -> str:
     """执行小爱音箱工具，返回给渡的 JSON 字符串。"""
     if name not in XIAOAI_TOOL_NAMES:
         return json.dumps({"ok": False, "error": "UNKNOWN_TOOL"}, ensure_ascii=False)
     if name == "xiaoai_run_command":
         return _execute_mijia_run_command(arguments if isinstance(arguments, dict) else {})
+    if name == "mijia_lamp_get":
+        return _execute_mijia_lamp_get(arguments if isinstance(arguments, dict) else {})
+    if name == "mijia_lamp_set":
+        return _execute_mijia_lamp_set(arguments if isinstance(arguments, dict) else {})
 
     args = arguments if isinstance(arguments, dict) else {}
     text = _clean_xiaoai_speak_text(args.get("text"))
