@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import re
 
 import requests
@@ -123,6 +124,10 @@ def _error_payload(code: str, message: str, speak_text: str) -> dict:
     }
 
 
+def _header_utf8_b64(value: str) -> str:
+    return base64.urlsafe_b64encode(str(value or "").encode("utf-8")).decode("ascii")
+
+
 def _call_gateway_chat(user_text: str, speaker: str, window_id: str) -> tuple[str, dict | None, int]:
     model = _fetch_gateway_first_model()
     if not model:
@@ -134,8 +139,10 @@ def _call_gateway_chat(user_text: str, speaker: str, window_id: str) -> tuple[st
         "Content-Type": "application/json",
         "X-Window-Id": window_id,
         "X-Reply-Channel": "xiaoai",
-        "X-XiaoAI-Speaker": str(speaker or "").strip(),
     }
+    speaker_text = str(speaker or "").strip()
+    if speaker_text:
+        headers["X-XiaoAI-Speaker-B64"] = _header_utf8_b64(speaker_text)
     if XIAOAI_GATEWAY_TOKEN:
         headers["Authorization"] = f"Bearer {XIAOAI_GATEWAY_TOKEN}"
     body = {

@@ -1,5 +1,6 @@
 # 聊天代理：统一走完整管道（清洗、注入、转发、存档），无开头过滤
 # 项目约定：主聊天禁止默认兜底模型。没传 model 就直接报错，不要偷偷补 DEFAULT_CHAT_MODEL / GATEWAY_MODELS[0] / gpt-4。
+import base64
 import json
 import queue
 import threading
@@ -167,6 +168,16 @@ def _is_miniapp_request() -> bool:
 
 def _reply_channel() -> str:
     return str(request.headers.get("X-Reply-Channel") or "").strip().lower()
+
+
+def _xiaoai_speaker_from_request() -> str:
+    raw_b64 = str(request.headers.get("X-XiaoAI-Speaker-B64") or "").strip()
+    if raw_b64:
+        try:
+            return base64.urlsafe_b64decode(raw_b64.encode("ascii")).decode("utf-8").strip()
+        except Exception:
+            logger.warning("X-XiaoAI-Speaker-B64 解码失败")
+    return str(request.headers.get("X-XiaoAI-Speaker") or "").strip()
 
 
 def _reply_target() -> str:
@@ -904,7 +915,7 @@ def chat_completions():
         body,
         reply_channel=reply_channel,
         is_miniapp=_is_miniapp_request(),
-        speaker=str(request.headers.get("X-XiaoAI-Speaker") or "").strip(),
+        speaker=_xiaoai_speaker_from_request(),
     )
     body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
     if reply_channel != "xiaoai":

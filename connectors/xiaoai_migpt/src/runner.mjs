@@ -18,8 +18,8 @@ const SESSION_TTL_SECONDS = positiveInt(env.XIAOAI_SESSION_TTL_SECONDS, 60, 0);
 const DEDUP_TTL_MS = positiveInt(env.XIAOAI_DEDUP_TTL_MS, 10000, 1000);
 
 let currentConfig = {
-  enabled: false,
-  entry_phrases: ["请求连接渡"],
+  enabled: true,
+  entry_phrases: ["请求连接渡", "请求连接度"],
   exit_phrases: ["退出渡"],
 };
 let lastConfigFetchAt = 0;
@@ -34,7 +34,7 @@ function positiveInt(value, fallback, minimum) {
 
 function requireEnv() {
   const missing = [];
-  if (!XIAOMI_DID) missing.push("XIAOAI_DID");
+  if (!XIAOAI_DID) missing.push("XIAOAI_DID");
   if (!XIAOMI_PASS_TOKEN && !XIAOMI_USER_ID) missing.push("XIAOMI_USER_ID 或 XIAOMI_PASS_TOKEN");
   if (!XIAOMI_PASS_TOKEN && !XIAOMI_PASSWORD) missing.push("XIAOMI_PASSWORD 或 XIAOMI_PASS_TOKEN");
   if (!DU_GATEWAY_URL) missing.push("DU_GATEWAY_URL");
@@ -56,11 +56,26 @@ function normalizePhraseList(value, fallback) {
   return items.length ? items : fallback;
 }
 
+function addEntryPhraseAliases(phrases) {
+  const seen = new Set();
+  const items = [];
+  for (const phrase of phrases || []) {
+    const text = String(phrase || "").trim();
+    if (!text) continue;
+    for (const candidate of [text, text.replaceAll("渡", "度")]) {
+      if (!candidate || seen.has(candidate)) continue;
+      seen.add(candidate);
+      items.push(candidate);
+    }
+  }
+  return items.length ? items : ["请求连接渡", "请求连接度"];
+}
+
 function normalizeGatewayConfig(data) {
   const cfg = data?.config && typeof data.config === "object" ? data.config : {};
   return {
     enabled: !!cfg.enabled,
-    entry_phrases: normalizePhraseList(cfg.entry_phrases, ["请求连接渡"]),
+    entry_phrases: addEntryPhraseAliases(normalizePhraseList(cfg.entry_phrases, ["请求连接渡"])),
     exit_phrases: normalizePhraseList(cfg.exit_phrases, ["退出渡"]),
   };
 }
@@ -95,12 +110,13 @@ async function gatewayJson(path, init = {}) {
 async function refreshConfig(force = false) {
   const now = Date.now();
   if (!force && now - lastConfigFetchAt < CONFIG_REFRESH_MS) return currentConfig;
-  lastConfigFetchAt = now;
   try {
     const data = await gatewayJson("/api/xiaoai/config");
     currentConfig = normalizeGatewayConfig(data);
+    lastConfigFetchAt = now;
   } catch (e) {
     console.warn("[xiaoai] 拉取配置失败：", e?.message || e);
+    lastConfigFetchAt = 0;
     await postLog("warn", "拉取小爱配置失败", { error: e?.message || String(e), event: "config_error" });
   }
   return currentConfig;
@@ -174,9 +190,20 @@ function isDuplicate(speaker, text) {
 
 async function safeAbort(engine) {
   try {
-    await engine.speaker.abortXiaoAI();
+    const aborted = await engine.speaker.abortXiaoAI();
+    if (!aborted && engine.MiNA?.stop) {
+      await engine.MiNA.stop();
+    }
   } catch (e) {
     console.warn("[xiaoai] abortXiaoAI 失败：", e?.message || e);
+  }
+}
+
+function formatPlayResult(result) {
+  try {
+    return JSON.stringify(result).slice(0, 500);
+  } catch {
+    return String(result);
   }
 }
 
@@ -184,7 +211,12 @@ async function safePlayText(engine, text) {
   const content = String(text || "").trim();
   if (!content) return;
   try {
-    await engine.speaker.play({ text: content });
+    console.log("[xiaoai] 播放文字：", content);
+    const res = engine.MiNA?.callUbus
+      ? await engine.MiNA.callUbus("mibrain", "text_to_speech", { text: content, save: 0 })
+      : await engine.speaker.play({ text: content });
+    const ok = typeof res === "boolean" ? res : res?.code === 0;
+    console.log("[xiaoai] 播放文字结果：", ok ? "ok" : formatPlayResult(res));
   } catch (e) {
     console.warn("[xiaoai] 播放文本失败：", e?.message || e);
   }
@@ -197,7 +229,14 @@ async function safePlayUrl(engine, url, fallbackText) {
     return;
   }
   try {
-    await engine.speaker.play({ url: audioUrl });
+    const res = engine.MiNA?.callUbus
+      ? await engine.MiNA.callUbus("mediaplayer", "player_play_url", { url: audioUrl, type: 1 })
+      : await engine.speaker.play({ url: audioUrl });
+    const ok = typeof res === "boolean" ? res : res?.code === 0;
+    console.log("[xiaoai] 播放 URL 结果：", ok ? "ok" : formatPlayResult(res));
+    if (!ok) {
+      await safePlayText(engine, fallbackText);
+    }
   } catch (e) {
     console.warn("[xiaoai] 播放 URL 失败：", e?.message || e);
     await postLog("warn", "播放音频 URL 失败，回退文字播报", { error: e?.message || String(e), audio_url: audioUrl, event: "play_url_error" });
@@ -256,9 +295,11 @@ async function onMessage(engine, msg) {
   const cfg = await refreshConfig(false);
   const entryMatch = matchPrefix(raw, cfg.entry_phrases);
   const inSession = SESSION_TTL_SECONDS > 0 && Date.now() < sessionExpiresAt;
+  console.log("[xiaoai] 收到消息：", raw, "entry=", entryMatch ? entryMatch.phrase : "", "session=", inSession ? "yes" : "no", "enabled=", cfg.enabled ? "yes" : "no");
 
   if (!cfg.enabled) {
     if (entryMatch) {
+      console.warn("[xiaoai] 入口已关闭，忽略：", raw);
       await postLog("warn", "App 里小爱入口未启用，已忽略", { text: raw, event: "disabled" });
     }
     return { handled: true };
@@ -278,6 +319,7 @@ async function onMessage(engine, msg) {
   await safeAbort(engine);
 
   let userText = entryMatch ? entryMatch.rest : raw;
+  console.log("[xiaoai] 进入渡链路，文本：", userText || "<empty>");
   if (SESSION_TTL_SECONDS > 0) {
     sessionExpiresAt = Date.now() + SESSION_TTL_SECONDS * 1000;
   }
