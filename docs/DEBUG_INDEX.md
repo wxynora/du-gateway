@@ -363,13 +363,18 @@ rg -n "choice_dialog|screen_check|proactive_trigger|send_proactive_trigger_wakeu
 常查：
 
 ```bash
-rg -n "device-state|device-screenshots|screen_check|sense|foreground-app|usage-stats|battery" routes services miniapp/src
+rg -n "device-state|device-screenshots|screen_check|sense|foreground-app|usage-stats|battery|show_system_notification|AlarmClock|Firebase|BOOT_COMPLETED" routes services miniapp/src miniapp/android
 ```
 
 注意：
 - 截图不是偷偷读屏，必须由客户端授权/执行后回传。
 - 图片会增加大量 token，图片压缩和描述归档在聊天清洗链路里查。
 - 悬浮球旁边的旧气泡能力已移除；日志告警改投 SumiTalk 安卓壳的 `show_system_notification` 系统通知，会走顶部消息提醒通道。日志页实时错误提醒不要用 app 内 toast；通知栏提醒由后端 `log_error_alert` 投递现有 `show_system_notification` 动作给安卓壳处理。后续推送优先试 FCM，不行再接 ntfy。
+
+当前状态（2026-05-28 SumiTalk Android 壳能力核对）：
+- 已有 / 不要误判为未落地：`miniapp/android/` 已是 Capacitor Android 工程；`miniapp/src/plugins/sumi-overlay.ts` 与 `miniapp/android/app/src/main/java/com/sumitalk/app/OverlayControlPlugin.java` 提供原生桥；`FloatingBallService.java` 处理设备动作轮询、`show_system_notification`、系统闹钟动作、通知栏提醒和悬浮服务；`MainActivity.java` 会上报 usage stats；`SumiAccessibilityService.java` 会上报 `foreground-app` 并支持无障碍截图；后端入口在 `routes/miniapp/device_state.py` 和 `services/device_action_tools.py`。
+- 未闭环 / 按需再做：FCM/ntfy 真推送没有完整接入；`miniapp/android/app/build.gradle` 只在存在 `google-services.json` 时应用 Google Services 插件，未看到 `FirebaseMessagingService` 或前端 PushNotifications 注册链路。开机自启也未见 `BOOT_COMPLETED` receiver。当前系统闹钟走 Android `AlarmClock.ACTION_SET_ALARM`，不是 app 自己用 `AlarmManager.setExact` 做的本地业务闹钟。
+- 旧长文 `docs/SumiTalk-Android封装方案.md` 里仍有“后续优先级/边界”段落，盘点真实状态时优先看本索引和代码，不要只按旧方案文档判断。
 
 当前状态（2026-05-12）：
 - 已拆：根路由 `/api/sense` 和 location/health normalize helper 已从 `app.py` 移到 `routes/sense_api.py`，公开路径和 R2 写入行为不变。
@@ -1157,7 +1162,15 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py` 通过；prompt 文案 smoke 确认新约束出现，旧的“三问出发”和“真实反应”措辞已移除。
 - 未完成 / 下次继续：本轮只改 thinking block 约束文字；没有改核心 prompt、行为规则、NSFW 规则或 reasoning 展示逻辑。
 
+当前状态（2026-05-28 thinking block 内心 OS 风格）：
+- 已完成：`pipeline/pipeline.py` 的 thinking block 约束补充“脑内 OS 的碎碎念”风格，明确念头可以跳、自言自语、冒半句，但不要写成分点分析、判断清单、复盘报告或给自己的工作说明。
+- 未完成 / 下次继续：本轮只改 thinking block 风格约束；不改 Claude thinking carryover、MiniApp reasoning 展示、核心 prompt、NSFW 规则或入口正文风格。
+
 当前状态（2026-05-27 文游服务拆分：玩家命名 / 文本清洗 / GM 上下文 / 事件解析 / 规则数学）：
 - 已完成：`services/wenyou_service.py` 继续瘦身，抽出 `services/wenyou/players.py`（玩家 id、默认标签、显示名、玩家别名替换）、`services/wenyou/text_sanitize.py`（隐藏【事件意图】、去【主神面板】和玩家备忘块）、`services/wenyou/gm_context.py`（GM system 的任务者编制、新手引导、惩罚副本提示和蓝图摘要）、`services/wenyou/event_intent.py`（GM【事件意图】解析、目标/tags/state_proposals/clock_updates 标准化）、`services/wenyou/panel_parser.py`（旧兼容【主神面板】解析）、`services/wenyou/rules_math.py`（伤害、状态阈值、状态增删、威胁时钟）和 `services/wenyou/settlement_state.py`（结算 flags / reward_context 标准化），并把 `_compact_text` 下沉到 `services/wenyou/common.py`。
 - 已验证：`.venv/bin/python -m py_compile services/wenyou/common.py services/wenyou/players.py services/wenyou/text_sanitize.py services/wenyou/gm_context.py services/wenyou/event_intent.py services/wenyou/panel_parser.py services/wenyou/rules_math.py services/wenyou/settlement_state.py services/wenyou_service.py` 通过；`import app` 通过；smoke 覆盖玩家别名替换、GM 文本清洗、GM 上下文格式化、事件意图解析、旧面板解析、威胁时钟、状态阈值和结算 flags；`git diff --check` 覆盖本轮文游文件。
 - 未完成 / 下次继续：`services/wenyou_service.py` 仍约 8069 行，下一刀优先拆规则结算应用层或钱包/库存账户兼容层；不要把当前小爱、近期总结、MiniApp 静态资源和其他脏改动混进文游拆分提交。
+
+当前状态（2026-05-28 方案清理：白名单/黑名单取消观察期下线）：
+- 已完成：删除 `docs/白名单黑名单方案-取消观察期.md`，该“新窗口默认白名单 / 新窗测试进黑名单 / 回复追加黑名单后缀”的取消观察期方案不再作为未落地方案追踪。
+- 未改动：现有 `storage/whitelist_store.py`、`storage/blacklist_store.py`、`routes/admin.py`、MiniApp 状态面板里的白名单/黑名单管理能力仍保留；这次只是下线旧方案文档，不是删除运行时代码。
