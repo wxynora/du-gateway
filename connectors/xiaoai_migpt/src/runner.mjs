@@ -20,6 +20,14 @@ const DEDUP_TTL_MS = positiveInt(env.XIAOAI_DEDUP_TTL_MS, 10000, 1000);
 const MUTE_RESTORE_FALLBACK_VOLUME = volumeInt(env.XIAOAI_MUTE_RESTORE_FALLBACK_VOLUME, 35);
 const MUTE_VOLUME_READ_TIMEOUT_MS = positiveInt(env.XIAOAI_MUTE_VOLUME_READ_TIMEOUT_MS, 250, 50);
 const MIN_PLAY_VOLUME = volumeInt(env.XIAOAI_MIN_PLAY_VOLUME, 20);
+const PLAY_URL_STRATEGY = (env.XIAOAI_PLAY_URL_STRATEGY || "auto").trim().toLowerCase();
+const PLAY_MUSIC_AUDIO_ID = (env.XIAOAI_PLAY_MUSIC_AUDIO_ID || "1582971365183456177").trim();
+const PLAY_MUSIC_CP_ID = (env.XIAOAI_PLAY_MUSIC_CP_ID || "355454500").trim();
+const PLAY_LOOP_TYPE = positiveInt(env.XIAOAI_PLAY_LOOP_TYPE, 3, 0);
+const PLAY_AUTO_STOP_PADDING_MS = positiveInt(env.XIAOAI_PLAY_AUTO_STOP_PADDING_MS, 800, 0);
+const PLAY_AUTO_STOP_FALLBACK_MS = positiveInt(env.XIAOAI_PLAY_AUTO_STOP_FALLBACK_MS, 8000, 1000);
+const PLAY_AUTO_STOP_MAX_MS = positiveInt(env.XIAOAI_PLAY_AUTO_STOP_MAX_MS, 60000, 5000);
+const PLAY_MUSIC_HARDWARES = new Set(["LX04", "LX05", "L05B", "L05C", "L06", "L06A", "X08A", "X10A", "X08C", "X08E", "X8F"]);
 
 let currentConfig = {
   enabled: true,
@@ -30,6 +38,7 @@ let currentConfig = {
 let lastConfigFetchAt = 0;
 let sessionExpiresAt = 0;
 let actionPollInFlight = false;
+let playbackStopTimer = null;
 const recentMessages = new Map();
 
 function positiveInt(value, fallback, minimum) {
@@ -347,6 +356,134 @@ function formatPlayResult(result) {
   }
 }
 
+function getSpeakerHardware(engine) {
+  return String(engine?.MiNA?.account?.device?.hardware || "").trim().toUpperCase();
+}
+
+function shouldUseMusicApi(engine) {
+  if (PLAY_URL_STRATEGY === "music") return true;
+  if (PLAY_URL_STRATEGY === "url") return false;
+  return PLAY_MUSIC_HARDWARES.has(getSpeakerHardware(engine));
+}
+
+function buildMusicPayload(url) {
+  const audioId = PLAY_MUSIC_AUDIO_ID || "1582971365183456177";
+  return {
+    startaudioid: audioId,
+    music: JSON.stringify({
+      payload: {
+        audio_type: "",
+        audio_items: [
+          {
+            item_id: {
+              audio_id: audioId,
+              cp: {
+                album_id: "-1",
+                episode_index: 0,
+                id: PLAY_MUSIC_CP_ID || "355454500",
+                name: "xiaowei",
+              },
+            },
+            stream: { url },
+          },
+        ],
+        list_params: {
+          listId: "-1",
+          loadmore_offset: 0,
+          origin: "xiaowei",
+          type: "MUSIC",
+        },
+      },
+      play_behavior: "REPLACE_ALL",
+    }),
+  };
+}
+
+async function playUrlByMusicApi(engine, audioUrl, fallbackText) {
+  if (!engine.MiNA?.callUbus) return false;
+  await setPlaybackLoopMode(engine, PLAY_LOOP_TYPE);
+  const res = await engine.MiNA.callUbus("mediaplayer", "player_play_music", buildMusicPayload(audioUrl));
+  const ok = typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0;
+  console.log("[xiaoai] 播放 URL(player_play_music) 结果：", ok ? "ok" : formatPlayResult(res));
+  if (ok) schedulePlaybackStop(engine, fallbackText || audioUrl);
+  return !!ok;
+}
+
+async function playUrlByPlainUrl(engine, audioUrl) {
+  if (!engine.MiNA?.callUbus) {
+    return !!(await engine.speaker.play({ url: audioUrl }));
+  }
+  const res = await engine.MiNA.callUbus("mediaplayer", "player_play_url", { url: audioUrl, type: 1, media: "app_ios" });
+  const ok = typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0;
+  console.log("[xiaoai] 播放 URL(player_play_url) 结果：", ok ? "ok" : formatPlayResult(res));
+  return !!ok;
+}
+
+async function setPlaybackLoopMode(engine, loopType) {
+  if (!engine.MiNA?.callUbus) return false;
+  try {
+    const res = await engine.MiNA.callUbus("mediaplayer", "player_set_loop", { media: "common", type: loopType });
+    const ok = typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0;
+    console.log("[xiaoai] 设置播放循环模式：", loopType, ok ? "ok" : formatPlayResult(res));
+    return !!ok;
+  } catch (e) {
+    console.warn("[xiaoai] 设置播放循环模式失败：", e?.message || e);
+    return false;
+  }
+}
+
+async function getRawPlaybackStatus(engine) {
+  if (!engine.MiNA?.callUbus) return {};
+  try {
+    const res = await engine.MiNA.callUbus("mediaplayer", "player_get_play_status", { media: "app_ios" });
+    return parseStatusInfo(res?.info);
+  } catch (e) {
+    console.warn("[xiaoai] 读取原始播放状态失败：", e?.message || e);
+    return {};
+  }
+}
+
+function estimatePlaybackStopMs(reason) {
+  const text = String(reason || "").trim();
+  if (!text) return PLAY_AUTO_STOP_FALLBACK_MS;
+  return Math.min(PLAY_AUTO_STOP_MAX_MS, Math.max(PLAY_AUTO_STOP_FALLBACK_MS, text.length * 300 + 1500));
+}
+
+function schedulePlaybackStop(engine, reason) {
+  if (playbackStopTimer) {
+    clearTimeout(playbackStopTimer);
+    playbackStopTimer = null;
+  }
+  playbackStopTimer = setTimeout(async () => {
+    try {
+      await setPlaybackLoopMode(engine, PLAY_LOOP_TYPE);
+      const status = await getRawPlaybackStatus(engine);
+      const detail = status?.play_song_detail || {};
+      const duration = Number(detail.duration);
+      const position = Number(detail.position || 0);
+      let delay = estimatePlaybackStopMs(reason);
+      if (Number.isFinite(duration) && duration > 0) {
+        delay = Math.max(500, duration - (Number.isFinite(position) ? position : 0) + PLAY_AUTO_STOP_PADDING_MS);
+      }
+      delay = Math.min(PLAY_AUTO_STOP_MAX_MS, Math.max(500, Math.round(delay)));
+      console.log("[xiaoai] 安排播放结束自动停止：", `delay=${delay}`, `duration=${duration || ""}`, `position=${position || ""}`);
+      playbackStopTimer = setTimeout(async () => {
+        playbackStopTimer = null;
+        try {
+          const res = await engine.MiNA.callUbus("mediaplayer", "player_play_operation", { action: "stop", media: "app_ios" });
+          const ok = typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0;
+          console.log("[xiaoai] 播放结束自动停止：", ok ? "ok" : formatPlayResult(res));
+        } catch (e) {
+          console.warn("[xiaoai] 播放结束自动停止失败：", e?.message || e);
+        }
+      }, delay);
+    } catch (e) {
+      playbackStopTimer = null;
+      console.warn("[xiaoai] 安排播放结束自动停止失败：", e?.message || e);
+    }
+  }, 600);
+}
+
 async function logPlaybackStatus(engine) {
   try {
     if (!engine.MiNA?.getStatus) return;
@@ -393,11 +530,14 @@ async function safePlayUrl(engine, url, fallbackText) {
   }
   await ensureSpeakerAudible(engine, fallbackText || audioUrl);
   try {
-    const res = engine.MiNA?.callUbus
-      ? await engine.MiNA.callUbus("mediaplayer", "player_play_url", { url: audioUrl, type: 1 })
-      : await engine.speaker.play({ url: audioUrl });
-    const ok = typeof res === "boolean" ? res : res?.code === 0;
-    console.log("[xiaoai] 播放 URL 结果：", ok ? "ok" : formatPlayResult(res));
+    let ok = false;
+    if (shouldUseMusicApi(engine)) {
+      ok = await playUrlByMusicApi(engine, audioUrl, fallbackText);
+      if (!ok) ok = await playUrlByPlainUrl(engine, audioUrl);
+    } else {
+      ok = await playUrlByPlainUrl(engine, audioUrl);
+      if (!ok) ok = await playUrlByMusicApi(engine, audioUrl, fallbackText);
+    }
     await logPlaybackStatus(engine);
     if (!ok) {
       return safePlayText(engine, fallbackText);

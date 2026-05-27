@@ -457,7 +457,7 @@ def xiaoai_tts():
 
 @bp.route("/tts/<token>.<ext>", methods=["GET"])
 def get_xiaoai_tts(token: str, ext: str):
-    row = get_xiaoai_audio_row(token)
+    row = get_xiaoai_audio_row(token, consume=(request.method == "GET"))
     if not row:
         return Response(b"", status=404, mimetype="text/plain; charset=utf-8")
     audio_format = str(row.get("format") or "").strip().lower()

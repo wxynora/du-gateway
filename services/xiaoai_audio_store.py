@@ -20,6 +20,10 @@ def _audio_path(token: str, audio_format: str) -> Path:
     return _AUDIO_DIR / f"{token}.{audio_format}"
 
 
+def _used_path(token: str) -> Path:
+    return _AUDIO_DIR / f"{token}.used"
+
+
 def _safe_token(token: str) -> str:
     raw = str(token or "").strip()
     if not raw or len(raw) > 200:
@@ -52,6 +56,7 @@ def _purge_expired() -> None:
         try:
             if path.stat().st_mtime + HTML_PREVIEW_TTL_SECONDS <= now:
                 path.unlink(missing_ok=True)
+                _used_path(path.stem).unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -65,6 +70,7 @@ def _trim_to_max() -> None:
         path = files.pop(0)
         try:
             path.unlink(missing_ok=True)
+            _used_path(path.stem).unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -122,6 +128,7 @@ def create_xiaoai_audio(
             "created": now,
             "format": fmt,
             "mime": _mime_for_format(fmt),
+            "used": False,
         }
         _trim_to_max()
 
@@ -133,14 +140,24 @@ def create_xiaoai_audio(
     }
 
 
-def get_xiaoai_audio_row(token: str) -> Optional[dict[str, Any]]:
+def get_xiaoai_audio_row(token: str, consume: bool = False) -> Optional[dict[str, Any]]:
     safe = _safe_token(token)
     if not safe:
         return None
     with _lock:
         _purge_expired()
+        used_path = _used_path(safe)
+        if used_path.exists():
+            return None
         row = _store.get(safe)
         if row and row["exp"] > time.time():
+            if consume:
+                row["used"] = True
+                try:
+                    _AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+                    used_path.write_text(str(int(time.time())), encoding="utf-8")
+                except Exception:
+                    pass
             return row
         for fmt in _AUDIO_FORMATS:
             path = _audio_path(safe, fmt)
@@ -162,6 +179,11 @@ def get_xiaoai_audio_row(token: str) -> Optional[dict[str, Any]]:
                 continue
             if not audio:
                 continue
+            if consume:
+                try:
+                    used_path.write_text(str(int(time.time())), encoding="utf-8")
+                except Exception:
+                    pass
             return {
                 "audio": audio,
                 "exp": stat.st_mtime + HTML_PREVIEW_TTL_SECONDS,

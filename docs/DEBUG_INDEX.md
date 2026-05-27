@@ -1082,6 +1082,12 @@ npm -C miniapp run android
 - 已验证：`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过；直接调用 MIoT `play-text` 有实机声音，用户反馈“有声音”。本轮没有再发 MiniMax URL 实机测试，避免未经提醒突然播放。
 - 未完成 / 下次继续：若要确认 MiniMax 音色，需要先明确提醒用户，再发一条短的 `/api/xiaoai/tts` + `/api/xiaoai/speak` 测试；不要再把 action `status=done` 或接口 `code=0` 单独表述为“用户听到了”。
 
+当前状态（2026-05-28 小爱 MiniMax URL 播放兼容模式）：
+- 已完成：MiGPT runner 参考 xiaomusic / miservice-fork，对 L05C 等硬件优先走 `mediaplayer.player_play_music`，旧 `player_play_url` 只做回退；`player_play_music` payload 使用 `startaudioid=1582971365183456177` 和 `stream.url=<mp3>`，可用 `XIAOAI_PLAY_URL_STRATEGY=music|url|auto` 覆盖。
+- 已完成：为避免短 TTS 音频被播放器循环，`player_play_music` 前先调用 `player_set_loop`，默认 `XIAOAI_PLAY_LOOP_TYPE=3`（单曲播放）；但 L05C 会在 `player_play_music` 后把 `loop_type` 又重置回 1，所以 runner 又补了硬兜底：播放成功后 600ms 读取 `play_song_detail.duration/position`，按剩余时长 + `XIAOAI_PLAY_AUTO_STOP_PADDING_MS` 自动下发 `player_play_operation stop`。
+- 已完成：由于 L05C 对 stop/loop 仍可能假成功并继续重复 GET 同一 mp3，`services/xiaoai_audio_store.py` 把小爱 TTS URL 改为一次性音频：首次 GET 返回音频并写 `<token>.used`，后续 GET 同 token 直接 404，阻断播放器循环；HEAD 不消耗播放次数。
+- 已验证：公网 MiniMax mp3 测试 `46085aab04864e12afe84fa011545c98` 走 `player_play_music`，Nginx 收到音箱播放器 `Lavf/58.45.100` GET 音频，用户反馈“听到声音”；随后确认单纯设置 loop/stop 仍会循环，已改为一次性 URL 兜底。
+
 当前状态（2026-05-28 小爱音频 URL 静默排查）：
 - 已完成：确认 runner 日志里 `播放 URL 结果：ok` 只代表 MiGPT/MiNA 接受播放命令，不代表小爱成功拉到 mp3；线上最近 `last_audio_url` 直接 GET 返回 404，根因是 `services/xiaoai_audio_store.py` 原先只把音频存在 Python 进程内存，生产多 worker、进程重启或请求落到不同进程时 `/api/xiaoai/tts/<token>.mp3` 会失效。已改为写入 `DATA_DIR/xiaoai_audio/` 并在 GET 时从落盘文件恢复，仍按 `HTML_PREVIEW_TTL_SECONDS` 和 `HTML_PREVIEW_MAX_ITEMS` 清理。
 - 已验证：`.venv/bin/python -m py_compile services/xiaoai_audio_store.py routes/xiaoai_api.py` 通过；临时目录 smoke 验证清空内存 `_store` 后仍能用 token 从落盘文件读回音频；非法 token 返回空。
