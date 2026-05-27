@@ -13,3 +13,5 @@ Pillow>=10.0.0
 mcp>=1.0.0
 pypdf>=4.0.0
 python-docx>=1.1.0
+# 小爱/米家自然语言控制工具（xiaoai_run_command 调用 mijiaAPI CLI）
+mijiaapi>=3.1.0

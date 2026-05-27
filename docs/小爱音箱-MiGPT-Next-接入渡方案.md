@@ -779,6 +779,14 @@ du-gateway：
 
 mijiaAPI：
 - 小爱执行米家自然语言控制
+- `xiaoai_run_command` 工具底层调用：
+
+```bash
+mijiaAPI --run "关闭卧室空调" --wifispeaker_name "小爱音箱Play 增强版" --quiet
+```
+
+- 运行环境由 `MIJIA_API_COMMAND`、`MIJIA_API_AUTH_PATH`、`MIJIA_WIFISPEAKER_NAME`、`MIJIA_API_TIMEOUT_SECONDS` 配置。
+- 这个工具不依赖 MiGPT runner，适合“渡主动控制智能家居”；MiGPT runner 只继续负责“小爱作为语音入口/音箱外放”。
 
 HA / 巴法云：
 - 美的和非米家设备控制

@@ -508,6 +508,16 @@ MAIN_GATEWAY_BASE_URL = os.environ.get("MAIN_GATEWAY_BASE_URL", "http://127.0.0.
 MAIN_GATEWAY_BEARER_TOKEN = os.environ.get("MAIN_GATEWAY_BEARER_TOKEN", "").strip()
 XIAOAI_GATEWAY_TOKEN = os.environ.get("XIAOAI_GATEWAY_TOKEN", "").strip()
 
+# mijiaAPI CLI：用于让小爱音箱执行米家/红外自然语言控制命令。
+MIJIA_API_COMMAND = os.environ.get("MIJIA_API_COMMAND", "mijiaAPI").strip() or "mijiaAPI"
+MIJIA_API_AUTH_PATH = os.environ.get("MIJIA_API_AUTH_PATH", "").strip()
+MIJIA_WIFISPEAKER_NAME = (
+    os.environ.get("MIJIA_WIFISPEAKER_NAME", os.environ.get("XIAOAI_SPEAKER", ""))
+    .strip()
+)
+MIJIA_API_QUIET = os.environ.get("MIJIA_API_QUIET", "1").strip().lower() in ("1", "true", "yes", "on")
+MIJIA_API_TIMEOUT_SECONDS = int(float(os.environ.get("MIJIA_API_TIMEOUT_SECONDS", "45") or "45"))
+
 # 文游：App 内独立会话 ID，不再绑定 Telegram 群或 TG 用户。
 WENYOU_SESSION_ID = int(os.environ.get("WENYOU_SESSION_ID", "1") or "1")
 # 文游 GM 使用的 DeepSeek 模型名

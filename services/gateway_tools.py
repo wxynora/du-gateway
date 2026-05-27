@@ -1,15 +1,24 @@
 # 网关工具：核心缓存同步、小爱音箱外放等网关本地能力。
 import json
 import re
+import shlex
+import subprocess
 from typing import Any, List
 
-from config import NOTION_CORE_CACHE_DATABASE_ID
+from config import (
+    MIJIA_API_AUTH_PATH,
+    MIJIA_API_COMMAND,
+    MIJIA_API_QUIET,
+    MIJIA_API_TIMEOUT_SECONDS,
+    MIJIA_WIFISPEAKER_NAME,
+    NOTION_CORE_CACHE_DATABASE_ID,
+)
 from utils.log import get_logger
 
 logger = get_logger(__name__)
 
 SYNC_TOOL_NAMES = ("sync_core_cache_to_notion", "sync_core_cache_from_notion")
-XIAOAI_TOOL_NAMES = ("xiaoai_speak",)
+XIAOAI_TOOL_NAMES = ("xiaoai_speak", "xiaoai_run_command")
 
 # 提醒文案：老婆问「明确的指令是什么」或「我该怎么说」时，渡可直接用这句回复
 SYNC_REMINDER_FOR_WIFE = (
@@ -78,7 +87,36 @@ def get_gateway_xiaoai_tools() -> List[dict]:
                     "required": ["text"],
                 },
             },
-        }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "xiaoai_run_command",
+                "description": (
+                    "让小爱音箱执行一句米家/红外智能家居自然语言命令，底层调用 mijiaAPI --run。"
+                    "开灯、关灯、开关空调、调温度、控制红外设备、执行米家设备动作时优先用这个工具。"
+                    "只传明确的家居控制命令，不要用来普通聊天，也不要播报渡的声音。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "要让小爱执行的自然语言命令，如“关闭卧室空调”“打开客厅灯”。",
+                        },
+                        "speaker_name": {
+                            "type": "string",
+                            "description": "可选，小爱音箱名称。不传则使用 MIJIA_WIFISPEAKER_NAME，仍为空时让 mijiaAPI 使用默认音箱。",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "为什么要执行这个家居控制，简短写给日志看。",
+                        },
+                    },
+                    "required": ["command"],
+                },
+            },
+        },
     ]
 
 
@@ -106,10 +144,105 @@ def _clean_xiaoai_speak_text(value: Any) -> str:
     return text
 
 
+def _clean_mijia_command(value: Any) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    text = re.sub(r"\s{2,}", " ", text)
+    if len(text) > 120:
+        text = text[:120].rstrip()
+    return text
+
+
+def _build_mijia_run_command(prompt: str, speaker_name: str = "") -> list[str]:
+    base = shlex.split(MIJIA_API_COMMAND or "mijiaAPI")
+    if not base:
+        base = ["mijiaAPI"]
+    cmd = [*base, "--run", prompt]
+    name = str(speaker_name or MIJIA_WIFISPEAKER_NAME or "").strip()
+    if name:
+        cmd.extend(["--wifispeaker_name", name])
+    if MIJIA_API_AUTH_PATH:
+        cmd.extend(["--auth_path", MIJIA_API_AUTH_PATH])
+    if MIJIA_API_QUIET:
+        cmd.append("--quiet")
+    return cmd
+
+
+def _execute_mijia_run_command(arguments: dict) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    command = _clean_mijia_command(args.get("command"))
+    speaker_name = str(args.get("speaker_name") or "").strip()
+    reason = str(args.get("reason") or "").strip()
+    if not command:
+        return json.dumps({"ok": False, "error": "COMMAND_REQUIRED", "message": "command 不能为空"}, ensure_ascii=False)
+
+    try:
+        from storage.xiaoai_store import add_xiaoai_log
+
+        run_cmd = _build_mijia_run_command(command, speaker_name=speaker_name)
+        timeout = max(5, min(180, int(MIJIA_API_TIMEOUT_SECONDS or 45)))
+        logger.info("mijiaAPI run command=%s speaker=%s", command, speaker_name or MIJIA_WIFISPEAKER_NAME or "")
+        proc = subprocess.run(
+            run_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        stdout = (proc.stdout or "").strip()
+        stderr = (proc.stderr or "").strip()
+        ok = proc.returncode == 0
+        add_xiaoai_log(
+            "info" if ok else "error",
+            "mijiaAPI 家居命令执行完成" if ok else "mijiaAPI 家居命令执行失败",
+            event="mijia_run_command",
+            speaker=speaker_name or MIJIA_WIFISPEAKER_NAME or "",
+            text=command,
+            error=stderr if not ok else "",
+        )
+        return json.dumps(
+            {
+                "ok": ok,
+                "tool": "xiaoai_run_command",
+                "command": command,
+                "speaker_name": speaker_name or MIJIA_WIFISPEAKER_NAME or "",
+                "returncode": proc.returncode,
+                "stdout": stdout[-1200:],
+                "stderr": stderr[-1200:],
+                "reason": reason,
+            },
+            ensure_ascii=False,
+        )
+    except FileNotFoundError:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "MIJIA_API_NOT_FOUND",
+                "message": f"找不到 mijiaAPI 命令：{MIJIA_API_COMMAND or 'mijiaAPI'}，请先在运行 du-gateway 的环境安装并配置 MIJIA_API_COMMAND。",
+            },
+            ensure_ascii=False,
+        )
+    except subprocess.TimeoutExpired:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "MIJIA_API_TIMEOUT",
+                "message": f"mijiaAPI 执行超过 {MIJIA_API_TIMEOUT_SECONDS} 秒未返回。",
+                "command": command,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        logger.exception("mijiaAPI 工具执行异常")
+        return json.dumps({"ok": False, "error": "EXECUTION_FAILED", "message": str(e)}, ensure_ascii=False)
+
+
 def execute_xiaoai_tool(name: str, arguments: dict) -> str:
     """执行小爱音箱工具，返回给渡的 JSON 字符串。"""
     if name not in XIAOAI_TOOL_NAMES:
         return json.dumps({"ok": False, "error": "UNKNOWN_TOOL"}, ensure_ascii=False)
+    if name == "xiaoai_run_command":
+        return _execute_mijia_run_command(arguments if isinstance(arguments, dict) else {})
+
     args = arguments if isinstance(arguments, dict) else {}
     text = _clean_xiaoai_speak_text(args.get("text"))
     reason = str(args.get("reason") or "").strip()
