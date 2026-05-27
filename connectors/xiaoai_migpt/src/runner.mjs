@@ -28,6 +28,7 @@ const PLAY_AUTO_STOP_PADDING_MS = positiveInt(env.XIAOAI_PLAY_AUTO_STOP_PADDING_
 const PLAY_AUTO_STOP_FALLBACK_MS = positiveInt(env.XIAOAI_PLAY_AUTO_STOP_FALLBACK_MS, 8000, 1000);
 const PLAY_AUTO_STOP_MAX_MS = positiveInt(env.XIAOAI_PLAY_AUTO_STOP_MAX_MS, 60000, 5000);
 const PLAY_MUSIC_HARDWARES = new Set(["LX04", "LX05", "L05B", "L05C", "L06", "L06A", "X08A", "X10A", "X08C", "X08E", "X8F"]);
+const VOLUME_MEDIA_TARGETS = ["app_ios", "common", ""];
 
 let currentConfig = {
   enabled: true,
@@ -264,10 +265,13 @@ async function getSpeakerVolume(engine) {
   }
   try {
     if (engine.MiNA?.callUbus) {
-      const res = await engine.MiNA.callUbus("mediaplayer", "player_get_play_status");
-      const info = parseStatusInfo(res?.info);
-      const volume = parseVolume(info?.volume);
-      if (volume !== null) return volume;
+      for (const media of VOLUME_MEDIA_TARGETS) {
+        const payload = media ? { media } : undefined;
+        const res = await engine.MiNA.callUbus("mediaplayer", "player_get_play_status", payload);
+        const info = parseStatusInfo(res?.info);
+        const volume = parseVolume(info?.volume);
+        if (volume !== null) return volume;
+      }
     }
   } catch (e) {
     console.warn("[xiaoai] 读取播放状态音量失败：", e?.message || e);
@@ -277,17 +281,32 @@ async function getSpeakerVolume(engine) {
 
 async function setSpeakerVolume(engine, volume) {
   const nextVolume = volumeInt(volume, MUTE_RESTORE_FALLBACK_VOLUME);
+  let lastResult = null;
+  let lastError = null;
   try {
     if (engine.MiNA?.callUbus) {
-      const res = await engine.MiNA.callUbus("mediaplayer", "player_set_volume", { volume: nextVolume });
-      return (res?.code ?? -1) === 0;
+      let ok = false;
+      for (const media of VOLUME_MEDIA_TARGETS) {
+        const payload = media ? { volume: nextVolume, media } : { volume: nextVolume };
+        try {
+          const res = await engine.MiNA.callUbus("mediaplayer", "player_set_volume", payload);
+          lastResult = res;
+          if (typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0) {
+            ok = true;
+          }
+        } catch (e) {
+          lastError = e;
+        }
+      }
+      if (ok) return true;
     }
     if (engine.MiNA?.setVolume) {
       return !!(await engine.MiNA.setVolume(nextVolume));
     }
   } catch (e) {
-    console.warn(`[xiaoai] 设置音量 ${nextVolume} 失败：`, e?.message || e);
+    lastError = e;
   }
+  console.warn(`[xiaoai] 设置音量 ${nextVolume} 失败：`, lastError?.message || lastError || formatPlayResult(lastResult));
   return false;
 }
 
