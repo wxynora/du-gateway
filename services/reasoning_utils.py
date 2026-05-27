@@ -30,6 +30,32 @@ def normalize_reasoning_details(value) -> list:
     return []
 
 
+def reasoning_text_fingerprint(text: str) -> str:
+    return " ".join(str(text or "").split()).strip()
+
+
+def append_unique_reasoning_text(parts: list[str], text: str) -> None:
+    text = str(text or "").strip()
+    key = reasoning_text_fingerprint(text)
+    if not key:
+        return
+    for idx, existing in enumerate(parts):
+        existing_key = reasoning_text_fingerprint(existing)
+        if key == existing_key or key in existing_key:
+            return
+        if existing_key and existing_key in key:
+            parts[idx] = text
+            return
+    parts.append(text)
+
+
+def dedupe_reasoning_text_parts(parts: list[str]) -> list[str]:
+    out: list[str] = []
+    for part in parts or []:
+        append_unique_reasoning_text(out, str(part or ""))
+    return out
+
+
 def extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
     reasoning_parts: list[str] = []
     details = normalize_reasoning_details(obj.get("reasoning_details")) if isinstance(obj, dict) else []
@@ -71,15 +97,7 @@ def extract_reasoning_text_and_details(obj: dict) -> tuple[str, list, bool]:
                     omitted = True
             if item.get("omitted") is True:
                 omitted = True
-    deduped_parts: list[str] = []
-    seen_parts: set[str] = set()
-    for part in reasoning_parts:
-        text = str(part or "").strip()
-        key = " ".join(text.split())
-        if not key or key in seen_parts:
-            continue
-        seen_parts.add(key)
-        deduped_parts.append(text)
+    deduped_parts = dedupe_reasoning_text_parts(reasoning_parts)
     return "\n\n".join(deduped_parts).strip(), details, omitted
 
 

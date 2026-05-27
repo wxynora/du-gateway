@@ -9,6 +9,7 @@ from flask import jsonify, request
 
 from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL, TELEGRAM_PROACTIVE_TARGET_USER_ID
 from services.chat_tool_helpers import collect_tool_trace_from_messages
+from services.reasoning_utils import dedupe_reasoning_text_parts
 from storage import r2_store, whitelist_store
 
 logger = logging.getLogger(__name__)
@@ -95,15 +96,7 @@ def _extract_reasoning_text_from_message(msg: dict) -> tuple[str, bool]:
                     parts.append(val.strip())
             elif btype == "redacted_thinking":
                 omitted = True
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for part in parts:
-        text = str(part or "").strip()
-        key = " ".join(text.split())
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(text)
+    deduped = dedupe_reasoning_text_parts(parts)
     return "\n\n".join(deduped).strip(), omitted
 
 

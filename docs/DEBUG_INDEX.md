@@ -1079,3 +1079,13 @@ npm -C miniapp run android
 - 已完成：`pipeline/pipeline.py` 在 `fetch_new_summary_update()` 失败后写入 pending 兜底；后续触发时 `_summary_round_groups_to_process()` 会把 pending range 重新拿出来补写。补写成功时只填原 slot，不新增 chunk、不推进 `update_count`。
 - 已验证：`.venv/bin/python -m py_compile services/deepseek_summary.py pipeline/pipeline.py` 通过；smoke 覆盖 pending 创建、pending 不渲染、pending range 后续被选中、补写不改变计数、压缩点失败仍按 2/2/2 结构移动并保留 pending。
 - 未完成 / 下次继续：pending 只解决结构兜底；如果 DS 长时间连续失败，pending 文本仍需后续成功触发才能补齐。
+
+当前状态（2026-05-27 工具循环思维链展示去重）：
+- 已完成：`services/reasoning_utils.py` 新增 substring-aware reasoning 文本去重；当 `reasoning` 已经是“工具轮 + 最终轮”合集，而 `thinking_blocks` 又包含最终轮同一段时，不再展示重复最终思维链。`routes/miniapp/reasoning.py` 复用同一去重函数。
+- 已验证：`.venv/bin/python -m py_compile services/reasoning_utils.py routes/miniapp/reasoning.py` 通过；smoke 覆盖 `reasoning=A+B` 且 `thinking_blocks=B`、以及先短后长的反向顺序，确认最终只保留一次 B。
+- 未完成 / 下次继续：本轮只修 MiniApp reasoning 展示与通用提取函数；未改 `routes/chat.py` 当前带有其它本地脏改的工具循环主流程。
+
+当前状态（2026-05-27 thinking block 模板化收束）：
+- 已完成：`pipeline/pipeline.py` 的 thinking block 约束改成正向输出形态：直接写心里冒出来的念头本身，不写对念头的说明；去掉容易诱发“我的反应是”的“反应/三问出发”措辞，改为不加标题、标签和冒号开头。
+- 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py` 通过；prompt 文案 smoke 确认新约束出现，旧的“三问出发”和“真实反应”措辞已移除。
+- 未完成 / 下次继续：本轮只改 thinking block 约束文字；没有改核心 prompt、行为规则、NSFW 规则或 reasoning 展示逻辑。
