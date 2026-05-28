@@ -12,12 +12,23 @@ type PromptCacheBreakdownItem = {
   chars?: number;
   est_tokens?: number;
 };
+type OutputStats = {
+  source?: string;
+  output_tokens?: number;
+  usage_output_tokens?: number;
+  estimated_output_tokens?: number;
+  visible_tokens_est?: number;
+  thinking_tokens_est?: number;
+  thinking_ratio?: number;
+  reasoning_omitted?: boolean;
+};
 type ReasoningItem = {
   window_id?: string;
   index?: number;
   timestamp?: string;
   reasoning?: string;
   cache_debug?: PromptCacheDebugEntry[];
+  output_stats?: OutputStats;
   tool_calls?: ToolCallItem[];
 };
 type ReasoningResp = { ok?: boolean; window_id?: string; window_ids?: string[]; items?: ReasoningItem[]; count?: number };
@@ -31,6 +42,19 @@ function debugValue(value: unknown) {
 function tokenValue(value: unknown) {
   const raw = debugValue(value);
   return raw === "未返回" ? raw : `≈${raw}`;
+}
+
+function compactTokenValue(value: unknown) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(Math.round(n));
+}
+
+function percentValue(value: unknown) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0%";
+  return `${Math.round(n * 100)}%`;
 }
 
 function firstUsageValue(usage: Record<string, unknown>, keys: string[]) {
@@ -107,6 +131,54 @@ function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function OutputStatsCard({ stats }: { stats?: OutputStats }) {
+  if (!stats || typeof stats !== "object") return null;
+  const outputTokens = Number(stats.output_tokens || 0);
+  const thinkingTokens = Number(stats.thinking_tokens_est || 0);
+  const visibleTokens = Number(stats.visible_tokens_est || 0);
+  const estimatedTokens = Number(stats.estimated_output_tokens || 0);
+  const ratio = Math.max(0, Math.min(1, Number(stats.thinking_ratio || 0)));
+  if (!outputTokens && !thinkingTokens && !visibleTokens) return null;
+  const sourceLabel = stats.source === "usage" ? "usage" : "estimate";
+  return (
+    <div className="mb-3 rounded-lg border border-[#d7e7ff] bg-[#f4f8ff] px-3 py-2.5 text-[#24507d]">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-[11px] font-bold">Output</span>
+        <span className="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-semibold text-[#47719d]">{sourceLabel}</span>
+      </div>
+      <div className="grid grid-cols-3 gap-2 text-[11px] leading-4">
+        <div>
+          <div className="text-[10px] uppercase text-[#6f8caf]">total</div>
+          <div className="font-semibold">{sourceLabel === "usage" ? "" : "≈"}{compactTokenValue(outputTokens)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase text-[#6f8caf]">thinking</div>
+          <div className="font-semibold">≈{compactTokenValue(thinkingTokens)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase text-[#6f8caf]">visible</div>
+          <div className="font-semibold">≈{compactTokenValue(visibleTokens)}</div>
+        </div>
+      </div>
+      <div className="mt-2">
+        <div className="mb-1 flex items-center justify-between text-[10px] text-[#6f8caf]">
+          <span>思考占比</span>
+          <span>{percentValue(ratio)}</span>
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-white">
+          <div className="h-full rounded-full bg-[#5c8edc]" style={{ width: `${Math.round(ratio * 100)}%` }} />
+        </div>
+      </div>
+      {sourceLabel === "usage" && estimatedTokens ? (
+        <div className="mt-1.5 text-[10px] leading-4 text-[#6f8caf]">估算正文+思考 ≈{compactTokenValue(estimatedTokens)}，实际 output 取上游 usage。</div>
+      ) : null}
+      {stats.reasoning_omitted ? (
+        <div className="mt-1 text-[10px] leading-4 text-[#8a6b3f]">本轮存在未展示 thinking，思考占比可能偏低。</div>
+      ) : null}
     </div>
   );
 }
@@ -282,6 +354,8 @@ export function ReasoningTab() {
               ) : (
                 <div className="mb-3 text-[12px] text-gray-400">本轮未返回思维链文本</div>
               )}
+
+              <OutputStatsCard stats={r.output_stats} />
 
               {hasCacheDebug ? <PromptCacheDebugCard entries={r.cache_debug} /> : null}
 

@@ -1207,3 +1207,9 @@ npm -C miniapp run android
 当前状态（2026-05-28 方案清理：白名单/黑名单取消观察期下线）：
 - 已完成：删除 `docs/白名单黑名单方案-取消观察期.md`，该“新窗口默认白名单 / 新窗测试进黑名单 / 回复追加黑名单后缀”的取消观察期方案不再作为未落地方案追踪。
 - 未改动：现有 `storage/whitelist_store.py`、`storage/blacklist_store.py`、`routes/admin.py`、MiniApp 状态面板里的白名单/黑名单管理能力仍保留；这次只是下线旧方案文档，不是删除运行时代码。
+
+当前状态（2026-05-29 思维链页 Output token 展示）：
+- 已完成：`routes/miniapp/reasoning.py` 为 `/miniapp-api/reasoning/latest` 增加 `output_stats`，优先用 `cache_debug.usage` 汇总 actual output tokens；无 usage 时按正文和 thinking 文本粗略估算。返回 total output、visible estimate、thinking estimate、thinking ratio 和 usage/estimate 来源。
+- 已完成：`miniapp/src/ui/tabs/ReasoningTab.tsx` 在每条思维链记录中新增独立 Output 卡片，显示 total / thinking / visible 和“思考占比”进度条；存在未展示 thinking 时提示占比可能偏低。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/reasoning.py` 通过；`npx vite build --outDir /tmp/du-gateway-miniapp-output-stats-build --emptyOutDir true` 通过；`_build_output_stats` smoke 覆盖 usage 优先、thinking 估算和占比；`git diff --check -- routes/miniapp/reasoning.py miniapp/src/ui/tabs/ReasoningTab.tsx docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：本轮只改思维链面板展示，不改聊天气泡 token 小字、不改上游 usage 透传和计费逻辑。

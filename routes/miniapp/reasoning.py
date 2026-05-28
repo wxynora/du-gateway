@@ -11,6 +11,7 @@ from config import DEEPSEEK_API_KEY, DEEPSEEK_API_URL, DEEPSEEK_CHAT_MODEL, TELE
 from services.chat_tool_helpers import collect_tool_trace_from_messages
 from services.reasoning_utils import dedupe_reasoning_text_parts
 from storage import r2_store, whitelist_store
+from utils.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,73 @@ def _normalize_cache_debug_items(value) -> list[dict]:
     if isinstance(value, dict):
         return [value]
     return []
+
+
+def _content_to_text(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if str(item.get("type") or "").strip() in {"text", "output_text", "input_text"}:
+                    parts.append(str(item.get("text") or ""))
+                elif item.get("content") is not None:
+                    parts.append(_content_to_text(item.get("content")))
+        return "\n".join(x for x in parts if x)
+    return str(content or "")
+
+
+def _positive_int(value) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
+
+
+def _first_positive_usage_value(usage: dict, keys: tuple[str, ...]) -> int:
+    if not isinstance(usage, dict):
+        return 0
+    for key in keys:
+        n = _positive_int(usage.get(key))
+        if n > 0:
+            return n
+    return 0
+
+
+def _sum_usage_output_tokens(cache_debug_items: list[dict]) -> int:
+    total = 0
+    for entry in cache_debug_items or []:
+        usage = entry.get("usage") if isinstance(entry, dict) else None
+        if not isinstance(usage, dict):
+            continue
+        total += _first_positive_usage_value(usage, ("output_tokens", "completion_tokens"))
+    return total
+
+
+def _build_output_stats(msg: dict, reasoning_text: str, cache_debug_items: list[dict], reasoning_omitted: bool = False) -> dict:
+    visible_text = _content_to_text((msg or {}).get("content"))
+    visible_tokens_est = estimate_tokens(visible_text)
+    thinking_tokens_est = estimate_tokens(reasoning_text)
+    estimated_total = visible_tokens_est + thinking_tokens_est
+    usage_output_tokens = _sum_usage_output_tokens(cache_debug_items)
+    output_tokens = usage_output_tokens or estimated_total
+    thinking_ratio = (thinking_tokens_est / output_tokens) if output_tokens > 0 else 0
+    return {
+        "source": "usage" if usage_output_tokens > 0 else "estimate",
+        "output_tokens": output_tokens,
+        "usage_output_tokens": usage_output_tokens,
+        "estimated_output_tokens": estimated_total,
+        "visible_tokens_est": visible_tokens_est,
+        "thinking_tokens_est": thinking_tokens_est,
+        "thinking_ratio": round(thinking_ratio, 4),
+        "reasoning_omitted": bool(reasoning_omitted),
+    }
 
 
 def _extract_reasoning_text_from_message(msg: dict) -> tuple[str, bool]:
@@ -312,6 +380,9 @@ def register_routes(bp) -> None:
                 ts = (r.get("timestamp") or "").strip()
                 msgs = r.get("messages") or []
                 reasoning_text = ""
+                reasoning_full_text = ""
+                reasoning_omitted = False
+                selected_assistant_msg: dict | None = None
                 cache_debug_items: list[dict] = []
                 tool_calls_out = _format_reasoning_tool_calls(msgs)
                 for m in reversed(msgs):
@@ -320,17 +391,26 @@ def register_routes(bp) -> None:
                         continue
                     if not isinstance(m, dict):
                         continue
+                    if selected_assistant_msg is None:
+                        selected_assistant_msg = m
                     if not reasoning_text:
                         val, omitted = _extract_reasoning_text_from_message(m)
                         if val:
+                            reasoning_full_text = val
                             reasoning_text = _clip_text(val, _REASONING_TEXT_MAX_CHARS)
                         elif omitted:
+                            reasoning_omitted = True
                             reasoning_text = "（模型已进行 adaptive thinking，但当前上游未返回可展示的思维链正文）"
                     if not cache_debug_items:
                         cache_debug_items = _normalize_cache_debug_items(m.get("cache_debug"))
                     if (reasoning_text or cache_debug_items) and tool_calls_out:
                         break
                 if reasoning_text or cache_debug_items or tool_calls_out:
+                    output_stats = (
+                        _build_output_stats(selected_assistant_msg, reasoning_full_text, cache_debug_items, reasoning_omitted)
+                        if selected_assistant_msg
+                        else {}
+                    )
                     out.append(
                         {
                             "window_id": target,
@@ -338,6 +418,7 @@ def register_routes(bp) -> None:
                             "timestamp": ts,
                             "reasoning": reasoning_text,
                             "cache_debug": cache_debug_items,
+                            "output_stats": output_stats,
                             "tool_calls": tool_calls_out,
                         }
                     )
