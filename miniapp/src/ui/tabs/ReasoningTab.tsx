@@ -19,6 +19,7 @@ type OutputStats = {
   estimated_output_tokens?: number;
   visible_tokens_est?: number;
   thinking_tokens_est?: number;
+  thinking_tokens_source?: string;
   thinking_ratio?: number;
   reasoning_omitted?: boolean;
 };
@@ -44,17 +45,10 @@ function tokenValue(value: unknown) {
   return raw === "未返回" ? raw : `≈${raw}`;
 }
 
-function compactTokenValue(value: unknown) {
+function tokenCountValue(value: unknown) {
   const n = Number(value || 0);
   if (!Number.isFinite(n) || n <= 0) return "0";
-  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
   return String(Math.round(n));
-}
-
-function percentValue(value: unknown) {
-  const n = Number(value || 0);
-  if (!Number.isFinite(n) || n <= 0) return "0%";
-  return `${Math.round(n * 100)}%`;
 }
 
 function firstUsageValue(usage: Record<string, unknown>, keys: string[]) {
@@ -77,9 +71,19 @@ function promptCacheBreakdown(value: unknown): PromptCacheBreakdownItem[] {
     .filter((item) => item.chars || item.est_tokens);
 }
 
-function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }) {
+function outputStatsLine(stats?: OutputStats) {
+  if (!stats || typeof stats !== "object") return "";
+  const outputTokens = Number(stats.output_tokens || 0);
+  const thinkingTokens = Number(stats.thinking_tokens_est || 0);
+  if (!outputTokens && !thinkingTokens) return "";
+  const outputPrefix = stats.source === "usage" ? "=" : "≈";
+  return `output${outputPrefix}${tokenCountValue(outputTokens)}（thinking ${tokenCountValue(thinkingTokens)}）`;
+}
+
+function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheDebugEntry[]; outputStats?: OutputStats }) {
   const items = Array.isArray(entries) ? entries.filter(Boolean).slice(-4) : [];
   if (!items.length) return null;
+  const outputLine = outputStatsLine(outputStats);
   return (
     <div className="mt-3 rounded-lg border border-[#f4c7d2] bg-[#fff4f7] px-3 py-2.5 text-[#7a2d45]">
       <div className="mb-1.5 flex items-center justify-between gap-3">
@@ -104,6 +108,7 @@ function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }
                 <span>anthropic_read={debugValue(anthropicRead)}</span>
                 <span>anthropic_created={debugValue(anthropicCreated)}</span>
                 <span>input={debugValue(inputTokens)}</span>
+                {outputLine && idx === items.length - 1 ? <span>{outputLine}</span> : null}
               </div>
               <div className="grid grid-cols-2 gap-x-2.5 gap-y-1 text-[#8a4055]">
                 <span>static {tokenValue(req.static_prefix_est_tokens)}</span>
@@ -131,54 +136,6 @@ function PromptCacheDebugCard({ entries }: { entries?: PromptCacheDebugEntry[] }
           );
         })}
       </div>
-    </div>
-  );
-}
-
-function OutputStatsCard({ stats }: { stats?: OutputStats }) {
-  if (!stats || typeof stats !== "object") return null;
-  const outputTokens = Number(stats.output_tokens || 0);
-  const thinkingTokens = Number(stats.thinking_tokens_est || 0);
-  const visibleTokens = Number(stats.visible_tokens_est || 0);
-  const estimatedTokens = Number(stats.estimated_output_tokens || 0);
-  const ratio = Math.max(0, Math.min(1, Number(stats.thinking_ratio || 0)));
-  if (!outputTokens && !thinkingTokens && !visibleTokens) return null;
-  const sourceLabel = stats.source === "usage" ? "usage" : "estimate";
-  return (
-    <div className="mb-3 rounded-lg border border-[#d7e7ff] bg-[#f4f8ff] px-3 py-2.5 text-[#24507d]">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <span className="text-[11px] font-bold">Output</span>
-        <span className="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-semibold text-[#47719d]">{sourceLabel}</span>
-      </div>
-      <div className="grid grid-cols-3 gap-2 text-[11px] leading-4">
-        <div>
-          <div className="text-[10px] uppercase text-[#6f8caf]">total</div>
-          <div className="font-semibold">{sourceLabel === "usage" ? "" : "≈"}{compactTokenValue(outputTokens)}</div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase text-[#6f8caf]">thinking</div>
-          <div className="font-semibold">≈{compactTokenValue(thinkingTokens)}</div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase text-[#6f8caf]">visible</div>
-          <div className="font-semibold">≈{compactTokenValue(visibleTokens)}</div>
-        </div>
-      </div>
-      <div className="mt-2">
-        <div className="mb-1 flex items-center justify-between text-[10px] text-[#6f8caf]">
-          <span>思考占比</span>
-          <span>{percentValue(ratio)}</span>
-        </div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-white">
-          <div className="h-full rounded-full bg-[#5c8edc]" style={{ width: `${Math.round(ratio * 100)}%` }} />
-        </div>
-      </div>
-      {sourceLabel === "usage" && estimatedTokens ? (
-        <div className="mt-1.5 text-[10px] leading-4 text-[#6f8caf]">估算正文+思考 ≈{compactTokenValue(estimatedTokens)}，实际 output 取上游 usage。</div>
-      ) : null}
-      {stats.reasoning_omitted ? (
-        <div className="mt-1 text-[10px] leading-4 text-[#8a6b3f]">本轮存在未展示 thinking，思考占比可能偏低。</div>
-      ) : null}
     </div>
   );
 }
@@ -355,9 +312,7 @@ export function ReasoningTab() {
                 <div className="mb-3 text-[12px] text-gray-400">本轮未返回思维链文本</div>
               )}
 
-              <OutputStatsCard stats={r.output_stats} />
-
-              {hasCacheDebug ? <PromptCacheDebugCard entries={r.cache_debug} /> : null}
+              {hasCacheDebug ? <PromptCacheDebugCard entries={r.cache_debug} outputStats={r.output_stats} /> : null}
 
               {Array.isArray(r.tool_calls) && r.tool_calls.length ? (
                 <div className="space-y-3">
@@ -422,4 +377,3 @@ export function ReasoningTab() {
       </div>
   );
 }
-

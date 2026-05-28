@@ -1,3 +1,4 @@
+import re
 from urllib.parse import urlparse
 
 from config import (
@@ -17,6 +18,8 @@ from config import (
     OPENROUTER_CACHE_CONTROL_TYPE,
     is_openrouter_url,
 )
+
+_CLAUDE_ADAPTIVE_THINKING_RE = re.compile(r"claude-opus-4-(?:7|8)(?:\b|-|$)", re.IGNORECASE)
 
 
 def normalize_request_model(body: dict) -> dict:
@@ -179,10 +182,14 @@ def is_local_claude_oauth_proxy_url(url: str) -> bool:
     return host in ("127.0.0.1", "localhost") and parsed.port == 8082
 
 
+def _is_claude_adaptive_thinking_model(model: str) -> bool:
+    return bool(_CLAUDE_ADAPTIVE_THINKING_RE.search(str(model or "").strip()))
+
+
 def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     try:
-        from storage.upstream_store import get_active_item, get_cached_active_model
+        from storage.upstream_store import get_active_claude_thinking_effort, get_active_item, get_cached_active_model
 
         active = get_active_item() or {}
         active_url = str(active.get("url") or "").strip()
@@ -193,6 +200,12 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
             if is_local_cliproxyapi_url(upstream_url):
                 body.pop("reasoning", None)
                 body["reasoning_effort"] = "high"
+            if is_local_claude_oauth_proxy_url(upstream_url) and _is_claude_adaptive_thinking_model(model):
+                body["thinking"] = {"type": "adaptive", "display": "summarized"}
+                output_config = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}
+                output_config = dict(output_config)
+                output_config["effort"] = get_active_claude_thinking_effort()
+                body["output_config"] = output_config
     except Exception:
         pass
     return body

@@ -1208,8 +1208,19 @@ npm -C miniapp run android
 - 已完成：删除 `docs/白名单黑名单方案-取消观察期.md`，该“新窗口默认白名单 / 新窗测试进黑名单 / 回复追加黑名单后缀”的取消观察期方案不再作为未落地方案追踪。
 - 未改动：现有 `storage/whitelist_store.py`、`storage/blacklist_store.py`、`routes/admin.py`、MiniApp 状态面板里的白名单/黑名单管理能力仍保留；这次只是下线旧方案文档，不是删除运行时代码。
 
+当前状态（2026-05-29 Claude OAuth proxy 模型列表试加 4-8 / 4-1）：
+- 已完成：`scripts/claude_oauth_proxy.js` 的 `/v1/models` 硬编码列表新增 `claude-opus-4-8` 和 `claude-opus-4-1`；保留 `claude-opus-4-7` 在第一位，避免 active model 自动刷新时默认切到未验证模型。
+- 未完成 / 下次继续：这只影响模型列表展示和手动选择；实际 chat 是否可用还要由 Anthropic/OAuth 端是否接受对应 model id 决定。
+
 当前状态（2026-05-29 思维链页 Output token 展示）：
-- 已完成：`routes/miniapp/reasoning.py` 为 `/miniapp-api/reasoning/latest` 增加 `output_stats`，优先用 `cache_debug.usage` 汇总 actual output tokens；无 usage 时按正文和 thinking 文本粗略估算。返回 total output、visible estimate、thinking estimate、thinking ratio 和 usage/estimate 来源。
-- 已完成：`miniapp/src/ui/tabs/ReasoningTab.tsx` 在每条思维链记录中新增独立 Output 卡片，显示 total / thinking / visible 和“思考占比”进度条；存在未展示 thinking 时提示占比可能偏低。
+- 已完成：`routes/miniapp/reasoning.py` 为 `/miniapp-api/reasoning/latest` 增加 `output_stats`，优先用 `cache_debug.usage` 汇总 actual output tokens；有明文 thinking 时按 thinking 文本估算，CC/Claude adaptive thinking 只有 usage、没有明文时，用 `output_tokens - visible_reply_est` 估 hidden thinking，不伪造思维链正文。
+- 已完成：`miniapp/src/ui/tabs/ReasoningTab.tsx` 不再新增独立 Output 卡片；Output token 直接显示在原粉色 `Prompt Cache` 卡片的 `input=...` 后面，格式如 `output=4609（thinking 2376）`。
 - 已验证：`.venv/bin/python -m py_compile routes/miniapp/reasoning.py` 通过；`npx vite build --outDir /tmp/du-gateway-miniapp-output-stats-build --emptyOutDir true` 通过；`_build_output_stats` smoke 覆盖 usage 优先、thinking 估算和占比；`git diff --check -- routes/miniapp/reasoning.py miniapp/src/ui/tabs/ReasoningTab.tsx docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 下次继续：本轮只改思维链面板展示，不改聊天气泡 token 小字、不改上游 usage 透传和计费逻辑。
+
+当前状态（2026-05-29 Claude adaptive thinking effort 选择）：
+- 已完成：`storage/upstream_store.py` 在 active upstream/model 缓存中保存 `claude_thinking_effort`，允许值 `low/medium/high/xhigh/max`，默认 `high`；`routes/miniapp/upstreams.py` 暴露读取和 `/upstreams/claude-thinking-effort` 保存接口。
+- 已完成：`miniapp/src/ui/tabs/SettingsUpstream.tsx` 在上游调试页的当前活跃节点卡片中增加 Adaptive Thinking 选择器，只有当前/待选模型匹配 Claude 4.8/4.7 时可保存。
+- 已完成：`services/upstream_policy.py` 在 active upstream 是本机 Claude OAuth proxy 且 active model 是 Claude 4.8/4.7 时注入 `thinking={"type":"adaptive","display":"summarized"}` 和 `output_config.effort`；`scripts/claude_oauth_proxy.js` 保留并转发 OpenAI 兼容请求里的 `thinking/output_config`，4.8/4.7 默认使用 adaptive thinking，旧模型继续走固定 `budget_tokens`。
+- 已验证：`.venv/bin/python -m py_compile storage/upstream_store.py routes/miniapp/upstreams.py services/upstream_policy.py routes/chat.py` 通过；`node --check scripts/claude_oauth_proxy.js` 通过；上游策略 smoke 覆盖 4.8 注入 `max` 与 4.6 不注入 adaptive；`npx vite build --outDir /tmp/du-gateway-upstream-effort-build --emptyOutDir true` 通过；`git diff --check` 覆盖本轮文件。
+- 未完成 / 下次继续：本轮已重建 `miniapp_static`；如果要线上生效，提交推送后还需要在服务器拉代码并重启 `du-gateway.service` 和 Claude OAuth proxy。

@@ -18,6 +18,10 @@ const THINKING_BUDGET_TOKENS = parseInt(
   process.env.CLAUDE_THINKING_BUDGET_TOKENS || "32000",
   10
 );
+const CLAUDE_ADAPTIVE_THINKING_EFFORT = String(
+  process.env.CLAUDE_ADAPTIVE_THINKING_EFFORT || "high"
+).trim().toLowerCase();
+const CLAUDE_ADAPTIVE_THINKING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const CLAUDE_OAUTH_FILE = process.env.CLAUDE_OAUTH_FILE || "";
 const CLAUDE_OAUTH_JSON = process.env.CLAUDE_OAUTH_JSON || "";
 const CLAUDE_OAUTH_KEYCHAIN_SERVICE =
@@ -481,6 +485,15 @@ async function openaiToAnthropic(oai) {
   };
 
   if (systemBlocks.length) body.system = systemBlocks;
+  if (oai.thinking && typeof oai.thinking === "object" && !Array.isArray(oai.thinking)) {
+    body.thinking = { ...oai.thinking };
+  }
+  if (oai.output_config && typeof oai.output_config === "object" && !Array.isArray(oai.output_config)) {
+    body.output_config = { ...oai.output_config };
+  }
+  if (oai.reasoning_effort && !body.output_config) {
+    body.output_config = { effort: oai.reasoning_effort };
+  }
   if (oai.temperature !== undefined) body.temperature = oai.temperature;
   if (oai.top_p !== undefined) body.top_p = oai.top_p;
   if (oai.stream) body.stream = true;
@@ -497,8 +510,20 @@ async function openaiToAnthropic(oai) {
 
 function applyDefaultThinking(body) {
   if (!body || typeof body !== "object") return body;
-  if (body.thinking) return body;
   if (!modelSupportsThinking(body.model)) return body;
+
+  if (modelSupportsAdaptiveThinking(body.model)) {
+    const outputConfig = body.output_config && typeof body.output_config === "object" ? { ...body.output_config } : {};
+    outputConfig.effort = normalizeAdaptiveThinkingEffort(outputConfig.effort || body.reasoning_effort);
+    body.thinking = { type: "adaptive", display: "summarized" };
+    body.output_config = outputConfig;
+    delete body.reasoning_effort;
+    delete body.temperature;
+    delete body.top_k;
+    return body;
+  }
+
+  if (body.thinking) return body;
 
   const maxTokens = Number(body.max_tokens) || DEFAULT_MAX_TOKENS;
   const budget = Math.min(THINKING_BUDGET_TOKENS, maxTokens - 1);
@@ -510,6 +535,15 @@ function applyDefaultThinking(body) {
   delete body.temperature;
   delete body.top_k;
   return body;
+}
+
+function normalizeAdaptiveThinkingEffort(effort) {
+  const value = String(effort || CLAUDE_ADAPTIVE_THINKING_EFFORT || "high").trim().toLowerCase();
+  return CLAUDE_ADAPTIVE_THINKING_EFFORTS.has(value) ? value : "high";
+}
+
+function modelSupportsAdaptiveThinking(model) {
+  return /claude-opus-4-(7|8)(\b|-|$)/.test(String(model || ""));
 }
 
 function modelSupportsThinking(model) {
@@ -1048,7 +1082,8 @@ const server = http.createServer(async (req, res) => {
   // GET /v1/models - 返回模型列表
   if (req.method === "GET" && req.url.startsWith("/v1/models")) {
     const models = [
-      "claude-opus-4-7", "claude-opus-4-6",
+      "claude-opus-4-7", "claude-opus-4-8",
+      "claude-opus-4-6", "claude-opus-4-1",
       "claude-sonnet-4-6", "claude-sonnet-4-5-20241022",
       "claude-haiku-4-5-20251001",
     ].map((id) => ({ id, object: "model", created: 1700000000, owned_by: "anthropic" }));

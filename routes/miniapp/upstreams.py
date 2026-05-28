@@ -153,6 +153,7 @@ def register_routes(bp) -> None:
     def miniapp_get_upstreams():
         data = upstream_store.load_upstreams()
         model = upstream_store.get_cached_active_model(refresh_if_missing=False)
+        claude_thinking_effort = upstream_store.get_active_claude_thinking_effort()
         items = [
             {"name": it.get("name") or "", "url": it.get("url") or ""}
             for it in (data.get("items") or [])
@@ -161,6 +162,8 @@ def register_routes(bp) -> None:
             {
                 "active": int(data.get("active") or 0),
                 "model": model,
+                "claude_thinking_effort": claude_thinking_effort,
+                "claude_thinking_efforts": list(upstream_store.CLAUDE_THINKING_EFFORTS),
                 "items": items,
             }
         )
@@ -177,6 +180,7 @@ def register_routes(bp) -> None:
                 "ok": ok,
                 "active": int(saved.get("active") or 0),
                 "model": model,
+                "claude_thinking_effort": upstream_store.get_active_claude_thinking_effort(),
             }
         )
 
@@ -192,6 +196,7 @@ def register_routes(bp) -> None:
                 "ok": ok,
                 "active": int(saved.get("active") or 0),
                 "model": model,
+                "claude_thinking_effort": upstream_store.get_active_claude_thinking_effort(),
             }
         )
 
@@ -230,7 +235,23 @@ def register_routes(bp) -> None:
                 "ok": ok,
                 "active": int(saved.get("active") or 0),
                 "model": saved_model,
+                "claude_thinking_effort": upstream_store.get_active_claude_thinking_effort(),
                 "error": "" if ok else "model 无效",
+            }
+        )
+
+    @bp.route("/upstreams/claude-thinking-effort", methods=["PUT"])
+    def miniapp_set_claude_thinking_effort():
+        data = request.get_json(silent=True) or {}
+        effort = upstream_store.normalize_claude_thinking_effort(str(data.get("effort") or ""))
+        ok = upstream_store.set_active_claude_thinking_effort(effort)
+        saved = upstream_store.load_upstreams()
+        return jsonify(
+            {
+                "ok": ok,
+                "active": int(saved.get("active") or 0),
+                "effort": upstream_store.get_active_claude_thinking_effort(),
+                "error": "" if ok else "active upstream 无效",
             }
         )
 

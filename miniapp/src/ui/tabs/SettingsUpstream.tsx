@@ -3,7 +3,7 @@ import { apiJson } from "../api";
 import { useToast } from "../toast";
 
 type UpstreamItem = { name: string; url: string };
-type UpstreamsResp = { active: number; model?: string; items: UpstreamItem[] };
+type UpstreamsResp = { active: number; model?: string; claude_thinking_effort?: string; claude_thinking_efforts?: string[]; items: UpstreamItem[] };
 type ProbeItem = {
   index: number;
   isActive: boolean;
@@ -17,9 +17,12 @@ type ProbeItem = {
   note?: string;
 };
 type ProbeResp = { ok: boolean; status: "ok" | "degraded" | "fail"; results: ProbeItem[]; count: number };
-type ActivePutResp = { ok?: boolean; error?: string; active?: number; model?: string };
+type ActivePutResp = { ok?: boolean; error?: string; active?: number; model?: string; claude_thinking_effort?: string };
 type ModelsResp = { ok?: boolean; error?: string; active?: number; index?: number; model?: string; models?: string[] };
-type ModelPutResp = { ok?: boolean; error?: string; active?: number; model?: string };
+type ModelPutResp = { ok?: boolean; error?: string; active?: number; model?: string; claude_thinking_effort?: string };
+type ThinkingEffortPutResp = { ok?: boolean; error?: string; active?: number; effort?: string };
+
+const DEFAULT_THINKING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
 function hostFromUrl(url: string): string {
   const raw = String(url || "").trim();
@@ -57,6 +60,10 @@ function probeStatusBadgeClass(p?: ProbeItem): string {
   return "bg-red-100 text-red-700";
 }
 
+function isClaudeAdaptiveModel(model: string): boolean {
+  return /claude-opus-4-(7|8)(\b|-|$)/i.test(String(model || "").trim());
+}
+
 export function SettingsUpstream() {
   const toast = useToast();
   const [active, setActive] = useState(0);
@@ -73,6 +80,10 @@ export function SettingsUpstream() {
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
+  const [thinkingEffort, setThinkingEffort] = useState("high");
+  const [pendingThinkingEffort, setPendingThinkingEffort] = useState("high");
+  const [thinkingEffortOptions, setThinkingEffortOptions] = useState<string[]>(DEFAULT_THINKING_EFFORTS);
+  const [thinkingEffortSaving, setThinkingEffortSaving] = useState(false);
 
   const loadModels = useCallback(async (index?: number) => {
     setModelsLoading(true);
@@ -101,10 +112,14 @@ export function SettingsUpstream() {
       const nextActive = Number(j.active || 0);
       const nextModel = String(j.model || "").trim();
       const nextItems = Array.isArray(j.items) ? j.items : [];
+      const nextEffort = String(j.claude_thinking_effort || "high").trim() || "high";
       setActive(nextActive);
       setItems(nextItems);
       setCurrentModel(nextModel);
       setPendingModel(nextModel);
+      setThinkingEffort(nextEffort);
+      setPendingThinkingEffort(nextEffort);
+      setThinkingEffortOptions(Array.isArray(j.claude_thinking_efforts) && j.claude_thinking_efforts.length ? j.claude_thinking_efforts : DEFAULT_THINKING_EFFORTS);
       if (nextItems.length) {
         await loadModels(nextActive);
       } else {
@@ -174,6 +189,9 @@ export function SettingsUpstream() {
       const nextModel = String(r.model || "").trim();
       setCurrentModel(nextModel);
       setPendingModel(nextModel);
+      const nextEffort = String(r.claude_thinking_effort || thinkingEffort).trim() || thinkingEffort;
+      setThinkingEffort(nextEffort);
+      setPendingThinkingEffort(nextEffort);
       setPendingIndex(null);
       await load();
       await probeOne(Number(r.active ?? pendingIndex));
@@ -198,11 +216,36 @@ export function SettingsUpstream() {
       const nextModel = String(r.model || model).trim();
       setCurrentModel(nextModel);
       setPendingModel(nextModel);
+      const nextEffort = String(r.claude_thinking_effort || thinkingEffort).trim() || thinkingEffort;
+      setThinkingEffort(nextEffort);
+      setPendingThinkingEffort(nextEffort);
       toast(`已切换模型：${nextModel}`);
     } catch (e: any) {
       toast(`模型保存失败：${e?.message || e}`);
     } finally {
       setModelSaving(false);
+    }
+  }
+
+  async function saveThinkingEffort() {
+    const effort = String(pendingThinkingEffort || "").trim().toLowerCase();
+    if (!effort || effort === thinkingEffort) return;
+    setThinkingEffortSaving(true);
+    try {
+      const r = await apiJson<ThinkingEffortPutResp>("/miniapp-api/upstreams/claude-thinking-effort", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ effort }),
+      });
+      if (!r?.ok) throw new Error(r?.error || "保存失败");
+      const nextEffort = String(r.effort || effort).trim() || effort;
+      setThinkingEffort(nextEffort);
+      setPendingThinkingEffort(nextEffort);
+      toast(`已切换 thinking：${nextEffort}`);
+    } catch (e: any) {
+      toast(`thinking 保存失败：${e?.message || e}`);
+    } finally {
+      setThinkingEffortSaving(false);
     }
   }
 
@@ -213,6 +256,8 @@ export function SettingsUpstream() {
   const canConfirm = pendingIndex !== null && pendingIndex !== active && !submitting && !loading && items.length > 0;
   const canSaveModel = !!pendingModel && pendingModel !== currentModel && !modelSaving && !modelsLoading;
   const modelOptions = pendingModel && !models.includes(pendingModel) ? [pendingModel, ...models] : models;
+  const adaptiveThinkingActive = isClaudeAdaptiveModel(pendingModel || currentModel);
+  const canSaveThinkingEffort = adaptiveThinkingActive && !!pendingThinkingEffort && pendingThinkingEffort !== thinkingEffort && !thinkingEffortSaving;
 
   function renderProbeCodes(p?: ProbeItem) {
     if (!p) {
@@ -329,6 +374,39 @@ export function SettingsUpstream() {
                     <svg className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                       <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
+                  </div>
+                  <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50 px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Adaptive Thinking</p>
+                        <p className="mt-0.5 text-[12px] font-semibold text-gray-500">{adaptiveThinkingActive ? "Claude 4.8 / 4.7" : "仅 4.8 / 4.7 生效"}</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!canSaveThinkingEffort}
+                        onClick={() => void saveThinkingEffort()}
+                        className="h-8 shrink-0 rounded-full bg-gray-900 px-3 text-[12px] font-bold text-white active:scale-[0.98] disabled:bg-gray-100 disabled:text-gray-400"
+                      >
+                        {thinkingEffortSaving ? "保存中" : "保存"}
+                      </button>
+                    </div>
+                    <div className="relative mt-3">
+                      <select
+                        value={pendingThinkingEffort}
+                        disabled={!adaptiveThinkingActive || thinkingEffortSaving}
+                        onChange={(e) => setPendingThinkingEffort(e.target.value)}
+                        className="h-10 w-full appearance-none rounded-xl border border-gray-100 bg-white px-3 pr-9 text-[13px] font-semibold text-gray-800 outline-none disabled:text-gray-400"
+                      >
+                        {thinkingEffortOptions.map((effort) => (
+                          <option key={effort} value={effort}>
+                            {effort}
+                          </option>
+                        ))}
+                      </select>
+                      <svg className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </div>
                   </div>
                   <p className="mt-5 text-[11px] font-medium text-gray-400">探活（HTTP）</p>
                   <div className="mt-1">{renderProbeCodes(activeProbe)}</div>

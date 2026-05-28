@@ -16,6 +16,8 @@ from config import (
 
 UPSTREAMS_FILE = DATA_DIR / "upstreams.json"
 ACTIVE_MODEL_FILE = DATA_DIR / "active_upstream_model.json"
+CLAUDE_THINKING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+DEFAULT_CLAUDE_THINKING_EFFORT = "high"
 
 
 def _default_payload():
@@ -114,6 +116,47 @@ def _save_active_model_payload(payload: dict) -> bool:
         return False
 
 
+def normalize_claude_thinking_effort(value: str) -> str:
+    effort = str(value or "").strip().lower()
+    return effort if effort in CLAUDE_THINKING_EFFORTS else DEFAULT_CLAUDE_THINKING_EFFORT
+
+
+def _current_active_identity() -> tuple[int, str]:
+    data = load_upstreams()
+    items = data.get("items") or []
+    active = int(data.get("active") or 0)
+    if active < 0 or active >= len(items):
+        return active, ""
+    return active, str((items[active] or {}).get("url") or "").strip()
+
+
+def get_active_claude_thinking_effort() -> str:
+    payload = _load_active_model_payload()
+    active, url = _current_active_identity()
+    if payload.get("active") == active and str(payload.get("url") or "").strip() == url:
+        return normalize_claude_thinking_effort(payload.get("claude_thinking_effort"))
+    return DEFAULT_CLAUDE_THINKING_EFFORT
+
+
+def set_active_claude_thinking_effort(effort: str) -> bool:
+    active, url = _current_active_identity()
+    if not url:
+        return False
+    payload = _load_active_model_payload()
+    model = ""
+    if payload.get("active") == active and str(payload.get("url") or "").strip() == url:
+        model = str(payload.get("model") or "").strip()
+    return _save_active_model_payload(
+        {
+            "active": active,
+            "url": url,
+            "model": model,
+            "claude_thinking_effort": normalize_claude_thinking_effort(effort),
+            "checked_at": time.time(),
+        }
+    )
+
+
 def clear_active_model_cache() -> bool:
     return _save_active_model_payload({})
 
@@ -168,12 +211,14 @@ def refresh_active_model_cache() -> str:
         _save_active_model_payload({})
         return ""
     item = items[active] or {}
+    effort = get_active_claude_thinking_effort()
     model = _fetch_first_model_for_item(item)
     _save_active_model_payload(
         {
             "active": active,
             "url": str(item.get("url") or "").strip(),
             "model": model,
+            "claude_thinking_effort": effort,
             "checked_at": time.time(),
         }
     )
@@ -206,11 +251,13 @@ def set_active_model(model: str) -> bool:
     if active < 0 or active >= len(items):
         return False
     item = items[active] or {}
+    effort = get_active_claude_thinking_effort()
     return _save_active_model_payload(
         {
             "active": active,
             "url": str(item.get("url") or "").strip(),
             "model": model,
+            "claude_thinking_effort": effort,
             "checked_at": time.time(),
         }
     )
