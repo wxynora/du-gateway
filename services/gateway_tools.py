@@ -194,12 +194,20 @@ def _clean_mijia_command(value: Any) -> str:
     return text
 
 
+def _normalize_mijia_speaker_name(value: Any) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    text = re.sub(r"\s{2,}", " ", text)
+    # 米家里这台真实名称是“小爱音箱Play增强版”，中间不能多一个空格。
+    text = re.sub(r"(Play)\s+(增强版)", r"\1\2", text, flags=re.IGNORECASE)
+    return text
+
+
 def _build_mijia_run_command(prompt: str, speaker_name: str = "") -> list[str]:
     base = shlex.split(MIJIA_API_COMMAND or "mijiaAPI")
     if not base:
         base = ["mijiaAPI"]
     cmd = [*base, "--run", prompt]
-    name = str(speaker_name or MIJIA_WIFISPEAKER_NAME or "").strip()
+    name = _normalize_mijia_speaker_name(speaker_name or MIJIA_WIFISPEAKER_NAME)
     if name:
         cmd.extend(["--wifispeaker_name", name])
     if MIJIA_API_AUTH_PATH:

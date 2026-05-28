@@ -1116,7 +1116,7 @@ npm -C miniapp run android
 当前状态（2026-05-28 mijiaAPI 台灯实测脚本）：
 - 已完成：新增 `scripts/test_xiaoai_mijia.py`，直接调用 `xiaoai_run_command` 执行器，不经过模型和聊天链路；默认只允许命令包含“台灯/桌灯/书桌灯”，适合第一轮只测台灯，非台灯命令必须显式加 `--allow-non-lamp`。
 - 已验证：`.venv/bin/python -m py_compile scripts/test_xiaoai_mijia.py` 通过；`--dry-run` 确认命令构造正确。未真实执行设备控制。
-- 未完成 / 下次继续：服务器需要先安装/登录 mijiaAPI 并配置 `MIJIA_WIFISPEAKER_NAME=小爱音箱Play 增强版`，再执行 `.venv/bin/python scripts/test_xiaoai_mijia.py "打开台灯"` / `"关闭台灯"`。
+- 未完成 / 下次继续：服务器需要先安装/登录 mijiaAPI 并配置 `MIJIA_WIFISPEAKER_NAME=小爱音箱Play增强版`，再执行 `.venv/bin/python scripts/test_xiaoai_mijia.py "打开台灯"` / `"关闭台灯"`。
 
 当前状态（2026-05-28 mijiaAPI 台灯结构化属性工具）：
 - 已完成：`services/gateway_tools.py` 新增 `mijia_lamp_get` / `mijia_lamp_set`，用于读写台灯 `on`、`brightness`、`color-temperature`，避免渡自己拼 CLI；`scripts/test_xiaoai_mijia.py` 增加 `--lamp-get`、`--lamp-brightness`、`--lamp-color-temperature`。`mijiaAPI get/set` 的 `-p/--auth_path` 必须放在子命令后，代码已固定构造为 `mijiaAPI set -p <auth> ...`，不要写成 `mijiaAPI -p <auth> set ...`。
