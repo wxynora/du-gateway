@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { apiJson, getOrCreatePanelDeviceId, setPanelToken } from "./api";
+import { apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, setPanelToken } from "./api";
 import { AvatarBubble, ChatActionButton, ChatHeaderStatus, HtmlBlock, PlainTextBlock, RichTextBlock, copyText, formatTokenCountValue } from "./ChatPresentation";
 import {
   TRANSPARENT_BUBBLE_CLASS,
