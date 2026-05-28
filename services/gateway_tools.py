@@ -197,8 +197,13 @@ def _clean_mijia_command(value: Any) -> str:
 def _normalize_mijia_speaker_name(value: Any) -> str:
     text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
     text = re.sub(r"\s{2,}", " ", text)
-    # 米家里这台真实名称是“小爱音箱Play增强版”，中间不能多一个空格。
-    text = re.sub(r"(Play)\s+(增强版)", r"\1\2", text, flags=re.IGNORECASE)
+    # mijiaAPI 的 --wifispeaker_name 对 L05C 需要米家列表里的完整设备名。
+    aliases = {
+        "小爱音箱Play增强版": "小米小爱音箱Play 增强版",
+        "小爱音箱Play 增强版": "小米小爱音箱Play 增强版",
+        "小米小爱音箱Play增强版": "小米小爱音箱Play 增强版",
+    }
+    text = aliases.get(text, text)
     return text
 
 
