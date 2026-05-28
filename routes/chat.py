@@ -223,6 +223,15 @@ def _should_archive_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _is_delayed_followup_generation_request() -> bool:
+    if not _is_followup_generation_request():
+        return False
+    for name in ("X-DU-FOLLOWUP-COUNT", "X-DU-FOLLOWUP-CHAIN-ID", "X-DU-FOLLOWUP-ROOT-AT"):
+        if (request.headers.get(name) or "").strip():
+            return True
+    return False
+
+
 def _skip_claude_thinking_carryover_request() -> bool:
     return (request.headers.get("X-Skip-Claude-Thinking-Carryover") or "").strip().lower() in ("1", "true", "yes")
 
@@ -1194,7 +1203,11 @@ def chat_completions():
         content_text = get_assistant_content_text(msg)
         if is_failed_response(content_text):
             logger.info("R2 未存档：上游回复被判为失败（长度/关键词），跳过")
-        elif _is_followup_generation_request() and not _should_archive_followup_generation_request():
+        elif (
+            _is_followup_generation_request()
+            and not _should_archive_followup_generation_request()
+            and not _is_delayed_followup_generation_request()
+        ):
             logger.info("R2 未存档：延迟续话内部生成请求跳过存档")
         elif du_daily_maintenance:
             logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
