@@ -1220,7 +1220,7 @@ npm -C miniapp run android
 
 当前状态（2026-05-29 Claude adaptive thinking effort 选择）：
 - 已完成：`storage/upstream_store.py` 在 active upstream/model 缓存中保存 `claude_thinking_effort`，允许值 `low/medium/high/xhigh/max`，默认 `high`；`routes/miniapp/upstreams.py` 暴露读取和 `/upstreams/claude-thinking-effort` 保存接口。
-- 已完成：`miniapp/src/ui/tabs/SettingsUpstream.tsx` 在上游调试页的当前活跃节点卡片中增加 Adaptive Thinking 选择器，只有当前/待选模型匹配 Claude 4.8/4.7 时可保存。
-- 已完成：`services/upstream_policy.py` 在 active upstream 是本机 Claude OAuth proxy 且 active model 是 Claude 4.8/4.7 时注入 `thinking={"type":"adaptive","display":"summarized"}` 和 `output_config.effort`；`scripts/claude_oauth_proxy.js` 保留并转发 OpenAI 兼容请求里的 `thinking/output_config`，4.8/4.7 默认使用 adaptive thinking，旧模型继续走固定 `budget_tokens`。
-- 已验证：`.venv/bin/python -m py_compile storage/upstream_store.py routes/miniapp/upstreams.py services/upstream_policy.py routes/chat.py` 通过；`node --check scripts/claude_oauth_proxy.js` 通过；上游策略 smoke 覆盖 4.8 注入 `max` 与 4.6 不注入 adaptive；`npx vite build --outDir /tmp/du-gateway-upstream-effort-build --emptyOutDir true` 通过；`git diff --check` 覆盖本轮文件。
+- 已完成：`miniapp/src/ui/tabs/SettingsUpstream.tsx` 在上游调试页的当前活跃节点卡片中增加 Adaptive Thinking 选择器，当前/待选模型匹配 Claude 4.8/4.7/4.6 时可保存；4.6 不展示 `xhigh`。
+- 已完成：`services/upstream_policy.py` 在 active upstream 是本机 Claude OAuth proxy 且 active model 是 Claude 4.8/4.7/4.6 时注入 `thinking={"type":"adaptive","display":"summarized"}` 和 `output_config.effort`；`scripts/claude_oauth_proxy.js` 保留并转发 OpenAI 兼容请求里的 `thinking/output_config`，4.8/4.7/4.6 默认使用 adaptive thinking，旧模型继续走固定 `budget_tokens`。4.6 收到 `xhigh` 时降为 `high`，避免无效 effort。
+- 已验证：`.venv/bin/python -m py_compile storage/upstream_store.py routes/miniapp/upstreams.py services/upstream_policy.py routes/chat.py` 通过；`node --check scripts/claude_oauth_proxy.js` 通过；上游策略 smoke 覆盖 4.8 注入 `max`、4.6 注入 adaptive 且 `xhigh` 降为 `high`、4.1 不注入 adaptive；`npx vite build --outDir /tmp/du-gateway-upstream-effort-build --emptyOutDir true` 通过；`git diff --check` 覆盖本轮文件。
 - 未完成 / 下次继续：本轮已重建 `miniapp_static`；如果要线上生效，提交推送后还需要在服务器拉代码并重启 `du-gateway.service` 和 Claude OAuth proxy。

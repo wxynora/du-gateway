@@ -19,7 +19,8 @@ from config import (
     is_openrouter_url,
 )
 
-_CLAUDE_ADAPTIVE_THINKING_RE = re.compile(r"claude-opus-4-(?:7|8)(?:\b|-|$)", re.IGNORECASE)
+_CLAUDE_ADAPTIVE_THINKING_RE = re.compile(r"claude-opus-4-(?:6|7|8)(?:\b|-|$)", re.IGNORECASE)
+_CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
 
 
 def normalize_request_model(body: dict) -> dict:
@@ -186,6 +187,13 @@ def _is_claude_adaptive_thinking_model(model: str) -> bool:
     return bool(_CLAUDE_ADAPTIVE_THINKING_RE.search(str(model or "").strip()))
 
 
+def _normalize_claude_adaptive_effort(model: str, effort: str) -> str:
+    value = str(effort or "").strip().lower() or "high"
+    if value == "xhigh" and _CLAUDE_OPUS_46_RE.search(str(model or "").strip()):
+        return "high"
+    return value
+
+
 def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     try:
@@ -204,7 +212,7 @@ def apply_active_model_request_policy(body: dict, upstream_url: str) -> dict:
                 body["thinking"] = {"type": "adaptive", "display": "summarized"}
                 output_config = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}
                 output_config = dict(output_config)
-                output_config["effort"] = get_active_claude_thinking_effort()
+                output_config["effort"] = _normalize_claude_adaptive_effort(model, get_active_claude_thinking_effort())
                 body["output_config"] = output_config
     except Exception:
         pass

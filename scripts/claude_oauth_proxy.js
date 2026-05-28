@@ -514,7 +514,7 @@ function applyDefaultThinking(body) {
 
   if (modelSupportsAdaptiveThinking(body.model)) {
     const outputConfig = body.output_config && typeof body.output_config === "object" ? { ...body.output_config } : {};
-    outputConfig.effort = normalizeAdaptiveThinkingEffort(outputConfig.effort || body.reasoning_effort);
+    outputConfig.effort = normalizeAdaptiveThinkingEffort(outputConfig.effort || body.reasoning_effort, body.model);
     body.thinking = { type: "adaptive", display: "summarized" };
     body.output_config = outputConfig;
     delete body.reasoning_effort;
@@ -537,13 +537,18 @@ function applyDefaultThinking(body) {
   return body;
 }
 
-function normalizeAdaptiveThinkingEffort(effort) {
+function normalizeAdaptiveThinkingEffort(effort, model) {
   const value = String(effort || CLAUDE_ADAPTIVE_THINKING_EFFORT || "high").trim().toLowerCase();
+  if (value === "xhigh" && modelIsClaudeOpus46(model)) return "high";
   return CLAUDE_ADAPTIVE_THINKING_EFFORTS.has(value) ? value : "high";
 }
 
 function modelSupportsAdaptiveThinking(model) {
-  return /claude-opus-4-(7|8)(\b|-|$)/.test(String(model || ""));
+  return /claude-opus-4-(6|7|8)(\b|-|$)/.test(String(model || ""));
+}
+
+function modelIsClaudeOpus46(model) {
+  return /claude-opus-4-6(\b|-|$)/.test(String(model || ""));
 }
 
 function modelSupportsThinking(model) {

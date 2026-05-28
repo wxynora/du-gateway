@@ -61,7 +61,23 @@ function probeStatusBadgeClass(p?: ProbeItem): string {
 }
 
 function isClaudeAdaptiveModel(model: string): boolean {
-  return /claude-opus-4-(7|8)(\b|-|$)/i.test(String(model || "").trim());
+  return /claude-opus-4-(6|7|8)(\b|-|$)/i.test(String(model || "").trim());
+}
+
+function isClaudeOpus46(model: string): boolean {
+  return /claude-opus-4-6(\b|-|$)/i.test(String(model || "").trim());
+}
+
+function thinkingEffortForModel(effort: string, model: string): string {
+  const value = String(effort || "high").trim().toLowerCase() || "high";
+  if (value === "xhigh" && isClaudeOpus46(model)) return "high";
+  return value;
+}
+
+function thinkingEffortOptionsForModel(options: string[], model: string): string[] {
+  const base = options.length ? options : DEFAULT_THINKING_EFFORTS;
+  if (!isClaudeOpus46(model)) return base;
+  return base.filter((effort) => effort !== "xhigh");
 }
 
 export function SettingsUpstream() {
@@ -228,7 +244,7 @@ export function SettingsUpstream() {
   }
 
   async function saveThinkingEffort() {
-    const effort = String(pendingThinkingEffort || "").trim().toLowerCase();
+    const effort = thinkingEffortForModel(pendingThinkingEffort, pendingModel || currentModel);
     if (!effort || effort === thinkingEffort) return;
     setThinkingEffortSaving(true);
     try {
@@ -256,8 +272,11 @@ export function SettingsUpstream() {
   const canConfirm = pendingIndex !== null && pendingIndex !== active && !submitting && !loading && items.length > 0;
   const canSaveModel = !!pendingModel && pendingModel !== currentModel && !modelSaving && !modelsLoading;
   const modelOptions = pendingModel && !models.includes(pendingModel) ? [pendingModel, ...models] : models;
-  const adaptiveThinkingActive = isClaudeAdaptiveModel(pendingModel || currentModel);
-  const canSaveThinkingEffort = adaptiveThinkingActive && !!pendingThinkingEffort && pendingThinkingEffort !== thinkingEffort && !thinkingEffortSaving;
+  const selectedThinkingModel = pendingModel || currentModel;
+  const adaptiveThinkingActive = isClaudeAdaptiveModel(selectedThinkingModel);
+  const adaptiveThinkingEffortOptions = thinkingEffortOptionsForModel(thinkingEffortOptions, selectedThinkingModel);
+  const pendingThinkingEffortForModel = thinkingEffortForModel(pendingThinkingEffort, selectedThinkingModel);
+  const canSaveThinkingEffort = adaptiveThinkingActive && !!pendingThinkingEffortForModel && pendingThinkingEffortForModel !== thinkingEffort && !thinkingEffortSaving;
 
   function renderProbeCodes(p?: ProbeItem) {
     if (!p) {
@@ -379,7 +398,7 @@ export function SettingsUpstream() {
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Adaptive Thinking</p>
-                        <p className="mt-0.5 text-[12px] font-semibold text-gray-500">{adaptiveThinkingActive ? "Claude 4.8 / 4.7" : "仅 4.8 / 4.7 生效"}</p>
+                        <p className="mt-0.5 text-[12px] font-semibold text-gray-500">{adaptiveThinkingActive ? "Claude 4.8 / 4.7 / 4.6" : "仅 4.8 / 4.7 / 4.6 生效"}</p>
                       </div>
                       <button
                         type="button"
@@ -392,12 +411,12 @@ export function SettingsUpstream() {
                     </div>
                     <div className="relative mt-3">
                       <select
-                        value={pendingThinkingEffort}
+                        value={pendingThinkingEffortForModel}
                         disabled={!adaptiveThinkingActive || thinkingEffortSaving}
                         onChange={(e) => setPendingThinkingEffort(e.target.value)}
                         className="h-10 w-full appearance-none rounded-xl border border-gray-100 bg-white px-3 pr-9 text-[13px] font-semibold text-gray-800 outline-none disabled:text-gray-400"
                       >
-                        {thinkingEffortOptions.map((effort) => (
+                        {adaptiveThinkingEffortOptions.map((effort) => (
                           <option key={effort} value={effort}>
                             {effort}
                           </option>
