@@ -1,6 +1,47 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiJson } from "../api";
 import { useToast } from "../toast";
+import {
+  clueText,
+  clueTitle,
+  compactPanelText,
+  currentLocationName,
+  getSessionPublicState,
+  getSessionRulesState,
+  inventoryActionKey,
+  inventoryItemKey,
+  inventoryItemLabel,
+  inventoryItemName,
+  itemDisplayDescription,
+  markerMeta,
+  markerText,
+  markerTitle,
+  panelListText,
+  playerDisplayName,
+  replacePlayerAliasText,
+  taskMeta,
+  taskTitle,
+} from "../wenyou/panelFormatters";
+import { extractEntryScene, feedFromSessionHistory, parseStorySegments } from "../wenyou/storyParser";
+import type {
+  EntryScene,
+  FeedItem,
+  StoryActionOption,
+  WenyouCluePanelItem,
+  WenyouGrowthPlayer,
+  WenyouGrowthView,
+  WenyouHistoryItem,
+  WenyouInventoryItem,
+  WenyouPlayerStats,
+  WenyouPublicMarker,
+  WenyouPublicState,
+  WenyouRulesState,
+  WenyouSessionPanel,
+  WenyouShopItem,
+  WenyouShopView,
+  WenyouTaskPanelItem,
+  WenyouTeamChannel,
+} from "../wenyou/types";
 import wenyouCardRevealUrl from "../../assets/sfx/wenyou_card_reveal.flac";
 import wenyouHubLoopUrl from "../../assets/sfx/wenyou_hub_loop.mp3";
 import wenyouIntroLoopUrl from "../../assets/sfx/wenyou_intro_loop.mp3";
@@ -81,79 +122,6 @@ function isPlayableWenyouPanel(session?: WenyouSessionPanel | null): boolean {
   return !!session?.gameId && isPlayableWenyouPhase(session.phase);
 }
 
-type WenyouShopItem = {
-  id: string;
-  name: string;
-  kind: string;
-  category?: string;
-  item_type?: string;
-  rarity: string;
-  price: number;
-  desc: string;
-  sealed?: boolean;
-  sealed_reason?: string;
-};
-
-type WenyouInventoryItem = {
-  uid?: string;
-  id?: string;
-  name: string;
-  kind?: string;
-  category?: string;
-  rarity?: string;
-  effect?: string;
-  desc?: string;
-  quantity?: number;
-  uses_left?: number;
-  durability?: number;
-  durability_max?: number;
-  item_type?: string;
-  broken?: boolean;
-  temporary?: boolean;
-  quest_item?: boolean;
-  carry_out?: boolean;
-  sigil?: string;
-  sealed?: boolean;
-  sealed_reason?: string;
-  source?: string;
-};
-
-type WenyouShopView = {
-  active?: boolean;
-  can_buy?: boolean;
-  phase?: string;
-  phaseLabel?: string;
-  points?: number;
-  debts?: number;
-  inventory?: WenyouInventoryItem[];
-  stats?: {
-    phase?: string;
-    points?: number;
-    player1?: WenyouPlayerStats;
-    player2?: WenyouPlayerStats;
-    inventory?: WenyouInventoryItem[];
-  };
-  growth?: WenyouGrowthView | null;
-  generatedAt?: string;
-  items?: WenyouShopItem[];
-  shop_state?: {
-    regular?: {
-      rotation_id?: string;
-      refresh_count?: number;
-      refresh_limit?: number;
-      refresh_cost?: number;
-      items?: WenyouShopItem[];
-    };
-  };
-};
-
-type EntryScene = {
-  name: string;
-  code?: string;
-  genre?: string;
-  difficulty?: string;
-};
-
 type InstanceCandidate = {
   id: string;
   title: string;
@@ -172,234 +140,6 @@ type InstanceCandidate = {
   queue_id?: string;
   penalty_type?: string;
   reason?: string;
-};
-
-type FeedItem = {
-  id: string;
-  kind: "user" | "system" | "notice" | "loot" | "ai_player";
-  text: string;
-};
-
-type WenyouHistoryItem = { role?: string; content?: string; timestamp?: string };
-
-type WenyouTeamChannelMessage = {
-  id?: string;
-  sender?: "player1" | "player2" | "system" | string;
-  text?: string;
-  timestamp?: string;
-  consume_turn?: boolean;
-};
-
-type WenyouTeamChannel = {
-  status?: string;
-  label?: string;
-  risk?: string;
-  frequency?: string;
-  noise?: number;
-  blocked?: boolean;
-  peer_display_name?: string;
-  current_location?: string;
-  messages?: WenyouTeamChannelMessage[];
-};
-
-type WenyouCoreAbility = {
-  id?: string;
-  name?: string;
-  desc?: string;
-  rarity?: string;
-  uses_per_instance?: number;
-  tags?: string[];
-  source_tags?: string[];
-};
-
-type StorySegment = {
-  id: string;
-  kind: "story" | "system" | "actions";
-  label?: string;
-  text: string;
-  options?: StoryActionOption[];
-};
-
-type StoryActionOption = {
-  key: string;
-  text: string;
-  free?: boolean;
-};
-
-type WenyouPlayerStats = {
-  display_name?: string;
-  hp?: number;
-  hp_max?: number;
-  san?: number;
-  san_max?: number;
-  spi_current?: number;
-  spi_max?: number;
-  level?: number;
-  rank?: string;
-  exp?: number;
-  str?: number;
-  con?: number;
-  agi?: number;
-  int?: number;
-  spi?: number;
-  luk?: number;
-  vit?: number;
-  wis?: number;
-  core_ability?: WenyouCoreAbility | null;
-  conditions?: string[];
-  unspent_attribute_points?: number;
-  physical_attack?: number;
-  ranged_attack?: number;
-  defense?: number;
-  mental_resist?: number;
-};
-
-type WenyouPromotionPreview = {
-  available?: boolean;
-  current_rank?: string;
-  target_rank?: string;
-  required_level?: number;
-  cost?: number;
-  attribute_bonus?: number;
-  reasons?: string[];
-};
-
-type WenyouGrowthPlayer = {
-  attributes?: Record<string, number>;
-  soft_cap?: number;
-  unspent_attribute_points?: number;
-  core_ability?: WenyouCoreAbility | null;
-  next_level_exp?: number;
-  spi_current?: number;
-  spi_max?: number;
-  promotion?: WenyouPromotionPreview;
-};
-
-type WenyouGrowthView = {
-  attribute_keys?: string[];
-  rank_soft_caps?: Record<string, number>;
-  players?: Record<string, WenyouGrowthPlayer>;
-};
-
-type WenyouTaskPanelItem = string | {
-  id?: string;
-  title?: string;
-  current?: string;
-  goal?: string;
-  type?: string;
-  status?: string;
-  progress?: { current?: number; target?: number; mode?: string; text?: string } | string;
-  required_clues?: string[];
-  related_clues?: string[];
-  fail_forward?: string;
-  reward_tags?: string[];
-};
-
-type WenyouCluePanelItem = string | {
-  id?: string;
-  title?: string;
-  status?: string;
-  verified?: boolean;
-  source?: string;
-  public_text?: string;
-  text?: string;
-  related_tasks?: string[];
-  leads_to?: string[];
-  tags?: string[];
-};
-
-type WenyouPublicMarker = string | {
-  id?: string;
-  name?: string;
-  title?: string;
-  status?: string;
-  public_status?: string;
-  public_text?: string;
-  desc?: string;
-  blurb?: string;
-  danger?: string;
-  last_location?: string;
-  attitude?: string;
-  weakness?: string;
-  type?: string;
-  tier?: string;
-  rank?: string;
-  stability?: number;
-  stability_max?: number;
-  seal_progress?: number;
-  seal_target?: number;
-  weaknesses?: string[];
-  counterplay?: string[];
-};
-
-type WenyouPublicState = {
-  scene_summary?: string;
-  visible_rules?: string[];
-  public_tasks?: WenyouTaskPanelItem[];
-  discovered_clues?: WenyouCluePanelItem[];
-  known_locations?: WenyouPublicMarker[];
-  visible_npcs?: WenyouPublicMarker[];
-  visible_monsters?: WenyouPublicMarker[];
-  public_threat?: string;
-  last_rules_result?: string;
-  forced_notice?: string;
-};
-
-type WenyouRulesState = {
-  players?: Record<string, WenyouPlayerStats>;
-  inventory?: WenyouInventoryItem[];
-  threat_clocks?: Array<Record<string, unknown>>;
-  last_state_patch?: Record<string, unknown> | null;
-};
-
-type WenyouSessionPanel = {
-  gameId?: string;
-  phase?: string;
-  phase_label?: string;
-  framework?: {
-    instance_code?: string;
-    instance_name?: string;
-    instance_genre?: string;
-    genre_note?: string;
-    difficulty?: string;
-    world?: string;
-    conflict?: string;
-    failure_hint?: string;
-    reward_hint?: string;
-    tasker_total?: number;
-    player_count?: number;
-    npc_taskers?: Array<Record<string, unknown>>;
-  };
-  task?: {
-    current?: string;
-    failure_hint?: string;
-    reward_hint?: string;
-    phase?: string;
-  };
-  stats?: {
-    phase?: string;
-    points?: number;
-    player1?: WenyouPlayerStats;
-    player2?: WenyouPlayerStats;
-    inventory?: WenyouInventoryItem[];
-  };
-  wallet?: { points?: number; debts?: number; total_exp?: number } | null;
-  growth?: WenyouGrowthView | null;
-  settlement?: Record<string, unknown> | null;
-  inventory?: WenyouInventoryItem[];
-  clues?: string[];
-  public_state?: WenyouPublicState;
-  public_view?: WenyouPublicState;
-  rules_state?: WenyouRulesState;
-  team_channel?: WenyouTeamChannel;
-  runtime_state?: {
-    public_state?: WenyouPublicState;
-    rules_state?: WenyouRulesState;
-    last_state_patch?: Record<string, unknown> | null;
-  };
-  clocks?: Array<Record<string, unknown>>;
-  last_state_patch?: Record<string, unknown> | null;
-  history?: WenyouHistoryItem[];
 };
 
 type WenyouSettlementOption = {
@@ -551,327 +291,6 @@ function SignalText({
   );
 }
 
-function playerDisplayName(player: WenyouPlayerStats | undefined, fallback: string) {
-  const name = String(player?.display_name || "").trim();
-  return name || fallback;
-}
-
-function replacePlayerAliasText(text: string, playerOneName: string, playerTwoName: string) {
-  let out = String(text || "");
-  const p1 = String(playerOneName || "").trim();
-  const p2 = String(playerTwoName || "").trim();
-  if (p1 && p1 !== "玩家一") out = out.replace(/玩家一/g, p1);
-  if (p2 && p2 !== "玩家二") out = out.replace(/玩家二/g, p2);
-  return out;
-}
-
-function extractEntryScene(text: string): EntryScene {
-  const header = text.match(/【无限流\s*·\s*副本(?:\s*([^｜】\n]+))?(?:｜([^】\n]+))?】/);
-  const rawCode = String(header?.[1] || "").trim();
-  const rawName = String(header?.[2] || "").trim();
-  const name = rawName || rawCode || "未知副本";
-  const genre = String(text.match(/【副本类型】([^｜\n]+)/)?.[1] || "").trim();
-  const difficulty = String(text.match(/【难度】([DCBAS]|新手|普通|困难|噩梦)/)?.[1] || "").trim();
-  return {
-    name,
-    code: rawName && rawCode ? rawCode : undefined,
-    genre: genre || undefined,
-    difficulty: difficulty || undefined,
-  };
-}
-
-function storySystemLabel(raw: string): string | null {
-  const label = String(raw || "").trim();
-  if (!label) return null;
-  if (label.startsWith("无限流")) return "副本接入";
-  if (/^任务(?:\s*[:：]|$)/.test(label)) return "系统提示";
-  if (label === "副本类型") return "副本类型";
-  if (label === "难度") return "难度";
-  if (label.startsWith("新手副本") || label.startsWith("副本 ")) return "系统提示";
-  if (label === "主神提示") return "主神提示";
-  if (label === "规则结算") return "规则结算";
-  if (label === "状态") return "状态";
-  if (label === "状态更新") return "状态更新";
-  if (label === "遭遇结算") return "遭遇结算";
-  if (label === "道具结算" || label === "系统判定") return "系统判定";
-  if (label === "任务更新" || label === "获得物品") return label;
-  return null;
-}
-
-function cleanStorySystemText(text: string) {
-  return String(text || "")
-    .replace(/^[\s｜|:：。]+/, "")
-    .replace(/[\s｜|]+$/, "")
-    .trim();
-}
-
-function taskSystemText(rawLabel: string, content = "") {
-  const label = String(rawLabel || "").trim();
-  if (!/^任务(?:\s*[:：]|$)/.test(label)) return "";
-  const inline = label.replace(/^任务\s*[:：]?\s*/, "").trim();
-  const body = inline || cleanStorySystemText(content);
-  return body ? `任务：${body}` : "任务已更新";
-}
-
-function formatStorySystemText(rawLabel: string, content = "") {
-  const label = String(rawLabel || "").trim();
-  const taskText = taskSystemText(label, content);
-  if (taskText) return taskText;
-  const text = cleanStorySystemText(content);
-  if (label.startsWith("无限流")) return label.replace(/｜/g, " | ");
-  if (label === "副本类型") return `副本类型：${text || "未知"}`;
-  if (label === "难度") return `难度：${text || "-"}`;
-  if (label === "状态") return text ? `状态：${text}` : "状态更新";
-  return text || label;
-}
-
-function hiddenStorySystemLabel(label: string) {
-  return ["规则结算", "状态"].includes(String(label || "").trim());
-}
-
-function pushStorySegment(segments: StorySegment[], text: string) {
-  const t = String(text || "").trim();
-  if (!t || t === "—— 主神系统 ——" || /^━+$/.test(t)) return;
-  const last = segments[segments.length - 1];
-  if (last?.kind === "story") {
-    last.text = `${last.text}\n${t}`;
-    return;
-  }
-  segments.push({ id: `story-${segments.length}`, kind: "story", text: t });
-}
-
-function pushSystemSegment(segments: StorySegment[], label: string, text: string) {
-  const body = cleanStorySystemText(text);
-  if (!body || hiddenStorySystemLabel(label)) return false;
-  segments.push({ id: `system-${segments.length}`, kind: "system", label, text: body });
-  return true;
-}
-
-function pushTaskSystemSegment(segments: StorySegment[], text: string) {
-  const body = cleanStorySystemText(text);
-  if (!body) return false;
-  const last = segments[segments.length - 1];
-  if (last?.kind === "system" && ["副本接入", "系统提示"].includes(last.label || "")) {
-    last.text = `${last.text}\n${body}`;
-    return true;
-  }
-  segments.push({ id: `system-${segments.length}`, kind: "system", label: "系统提示", text: body });
-  return true;
-}
-
-function cleanActionOptionText(text: string) {
-  return String(text || "")
-    .replace(/\*\*/g, "")
-    .replace(/^[-*·]\s*/, "")
-    .replace(/[“”]/g, "\"")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function actionOptionLine(line: string) {
-  return cleanActionOptionText(line).match(/^([A-Ha-hＡ-Ｈａ-ｈ])\s*[.．、:：]\s*(.+)$/);
-}
-
-function isStandaloneStorySystemLine(line: string) {
-  const match = cleanActionOptionText(line).match(/^【([^】]{1,42})】$/);
-  return match ? storySystemLabel(match[1]) : null;
-}
-
-function extractActionOptions(lines: string[]) {
-  const headingIndex = lines.findIndex((line) => /【\s*行动选项\s*】|^行动选项[:：]?$/.test(cleanActionOptionText(line)));
-  let startIndex = headingIndex >= 0 ? headingIndex + 1 : -1;
-  if (startIndex < 0) {
-    const firstOptionIndex = lines.findIndex((line, index) => {
-      const current = actionOptionLine(line);
-      const next = lines.slice(index + 1).some((it) => actionOptionLine(it));
-      return !!current && next;
-    });
-    if (firstOptionIndex >= 0) startIndex = firstOptionIndex;
-  }
-  if (startIndex < 0) return null;
-  const options: StoryActionOption[] = [];
-  let current: StoryActionOption | null = null;
-  let stopIndex = lines.length;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const rawLine = lines[index];
-    const line = cleanActionOptionText(rawLine);
-    if (!line) continue;
-    if (options.length && isStandaloneStorySystemLine(line)) {
-      stopIndex = index;
-      break;
-    }
-    const match = actionOptionLine(line);
-    if (match) {
-      const key = match[1].normalize("NFKC").toUpperCase();
-      const text = cleanActionOptionText(match[2]);
-      current = {
-        key,
-        text,
-        free: /^自由行动[。.!！?？]*$/.test(text),
-      };
-      options.push(current);
-      continue;
-    }
-    if (current) {
-      current.text = cleanActionOptionText(`${current.text} ${line}`);
-      current.free = /^自由行动[。.!！?？]*$/.test(current.text);
-    }
-  }
-  if (!options.length) return null;
-  return {
-    before: lines.slice(0, headingIndex >= 0 ? headingIndex : startIndex),
-    options,
-    after: lines.slice(stopIndex),
-  };
-}
-
-function pushActionSegment(segments: StorySegment[], options: StoryActionOption[]) {
-  if (!options.length) return;
-  segments.push({ id: `actions-${segments.length}`, kind: "actions", text: "", options });
-}
-
-function appendStorySegments(segments: StorySegment[], nextSegments: StorySegment[]) {
-  for (const segment of nextSegments) {
-    segments.push({ ...segment, id: `${segment.id}-${segments.length}` });
-  }
-}
-
-function splitInlineSystemPrompt(segments: StorySegment[], line: string): boolean {
-  const text = String(line || "").trim();
-  if (!text) return false;
-  const re = /(.*?(?:机械女声|冰冷女声|电子音|提示音|系统(?:提示|广播|音)?|主神(?:提示|广播|音)?)[^“”"「」]{0,36}(?:响起|传来|播报|宣告|提示|开口|说道|说|道)?\s*[：:]\s*)[“"「]([^”"」]{6,360}(?:系统|副本|任务|清算|载入|锁定|提示|规则|编号)[^”"」]{0,360})[”"」](.*)/;
-  const match = text.match(re);
-  if (!match) return false;
-  pushStorySegment(segments, match[1].replace(/[：:]\s*$/, "。"));
-  pushSystemSegment(segments, "系统提示", match[2]);
-  const rest = String(match[3] || "").trim();
-  if (rest) splitStoryLine(segments, rest);
-  return true;
-}
-
-function knownMarkers(line: string) {
-  const matches: Array<{ start: number; end: number; raw: string; label: string }> = [];
-  const re = /【([^】]{1,42})】/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(line))) {
-    const label = storySystemLabel(match[1]);
-    if (label) {
-      matches.push({ start: match.index, end: match.index + match[0].length, raw: match[1], label });
-    }
-  }
-  return matches;
-}
-
-function formatEntryMetadataBlock(block: string) {
-  const lines: string[] = [];
-  for (const line of block.split("\n").map((it) => it.trim()).filter(Boolean)) {
-    const matches = knownMarkers(line);
-    for (let i = 0; i < matches.length; i += 1) {
-      const marker = matches[i];
-      const next = matches[i + 1]?.start ?? line.length;
-      lines.push(formatStorySystemText(marker.raw, line.slice(marker.end, next)));
-    }
-  }
-  return lines.filter(Boolean).join("\n");
-}
-
-function splitStoryLine(segments: StorySegment[], line: string) {
-  if (splitInlineSystemPrompt(segments, line)) return;
-  const matches = knownMarkers(line);
-  if (!matches.length) {
-    pushStorySegment(segments, line);
-    return;
-  }
-  let cursor = 0;
-  for (let i = 0; i < matches.length; i += 1) {
-    const marker = matches[i];
-    const next = matches[i + 1]?.start ?? line.length;
-    pushStorySegment(segments, line.slice(cursor, marker.start));
-    const taskHasInlineValue = /^任务\s*[:：]\s*\S/.test(String(marker.raw || ""));
-    const taskText = taskSystemText(marker.raw, taskHasInlineValue ? "" : line.slice(marker.end, next));
-    if (taskText) {
-      pushTaskSystemSegment(segments, taskText);
-      cursor = taskHasInlineValue ? marker.end : next;
-      continue;
-    }
-    pushSystemSegment(segments, marker.label, formatStorySystemText(marker.raw, line.slice(marker.end, next)));
-    cursor = next;
-  }
-  pushStorySegment(segments, line.slice(cursor));
-}
-
-function parseStorySegments(text: string): StorySegment[] {
-  const clean = String(text || "").replace(/\r/g, "").trim();
-  if (!clean) return [];
-  const segments: StorySegment[] = [];
-  let consumedStructuredBlock = false;
-  for (const rawBlock of clean.split(/\n{2,}/)) {
-    const block = rawBlock.trim();
-    if (!block || block === "—— 主神系统 ——") continue;
-    if (/^━+\n?/.test(block) && block.includes("【状态】")) {
-      consumedStructuredBlock = true;
-      pushSystemSegment(segments, "状态", block.replace(/^━+\n?/, "").replace(/\n?━+$/, ""));
-      continue;
-    }
-    if (block.startsWith("【无限流") || (block.includes("【副本类型】") && block.includes("【难度】"))) {
-      consumedStructuredBlock = true;
-      pushSystemSegment(segments, "副本接入", formatEntryMetadataBlock(block));
-      continue;
-    }
-    const lines = block.split("\n").map((it) => it.trim()).filter(Boolean);
-    const firstInlineMarker = lines[0]?.match(/^【([^】]{1,42})】/);
-    const firstInlineLabel = firstInlineMarker ? storySystemLabel(firstInlineMarker[1]) : null;
-    if (firstInlineLabel && hiddenStorySystemLabel(firstInlineLabel)) {
-      consumedStructuredBlock = true;
-      continue;
-    }
-    const actionOptions = extractActionOptions(lines);
-    if (actionOptions) {
-      consumedStructuredBlock = true;
-      for (const line of actionOptions.before) splitStoryLine(segments, line);
-      pushActionSegment(segments, actionOptions.options);
-      appendStorySegments(segments, parseStorySegments(actionOptions.after.join("\n")));
-      continue;
-    }
-    const firstOnlyMarker = lines[0]?.match(/^【([^】]{1,42})】$/);
-    const firstLabel = firstOnlyMarker ? storySystemLabel(firstOnlyMarker[1]) : null;
-    const firstTaskText = firstOnlyMarker ? taskSystemText(firstOnlyMarker[1], "") : "";
-    if (firstTaskText) {
-      consumedStructuredBlock = true;
-      pushTaskSystemSegment(segments, firstTaskText);
-      for (const line of lines.slice(1)) splitStoryLine(segments, line);
-      continue;
-    }
-    if (firstOnlyMarker && firstLabel && lines.length > 1) {
-      consumedStructuredBlock = true;
-      pushSystemSegment(segments, firstLabel, lines.slice(1).join("\n"));
-      continue;
-    }
-    for (const line of lines) splitStoryLine(segments, line);
-  }
-  return segments.length || consumedStructuredBlock ? segments : [{ id: "story-0", kind: "story", text: clean }];
-}
-
-function feedFromSessionHistory(history?: WenyouHistoryItem[]): FeedItem[] {
-  if (!Array.isArray(history)) return [];
-  return history
-    .map<FeedItem | null>((item, index) => {
-      const text = String(item?.content || "").trim();
-      if (!text) return null;
-      const role = String(item?.role || "").trim().toLowerCase();
-      const stamp = String(item?.timestamp || index || "");
-      const id = `history-${role || "row"}-${index}-${stamp}`;
-      if (role === "player1" || role === "user") {
-        return { id, kind: "user" as const, text };
-      }
-      if (role === "player2" || role === "ai_player") {
-        return { id, kind: "ai_player" as const, text };
-      }
-      return { id, kind: "system" as const, text };
-    })
-    .filter((item): item is FeedItem => !!item);
-}
-
 function formatWenyouArchiveTime(value?: string) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -972,27 +391,6 @@ function riftRarityRank(rarity: RiftRarity) {
   return { D: 1, C: 2, B: 3, A: 4, S: 5 }[rarity];
 }
 
-function inventoryItemName(item: WenyouInventoryItem | string | undefined): string {
-  if (!item) return "";
-  return typeof item === "string" ? item : String(item.name || "");
-}
-
-function inventoryItemLabel(item: WenyouInventoryItem | string): string {
-  if (typeof item === "string") return item;
-  const qty = Number(item.quantity || 1);
-  return `${item.name || "未知物品"}${qty > 1 ? ` x${qty}` : ""}${item.sealed ? "（封印）" : ""}`;
-}
-
-function inventoryItemKey(item: WenyouInventoryItem | string, index: number): string {
-  if (typeof item === "string") return `${item}-${index}`;
-  return String(item.uid || item.id || item.name || index);
-}
-
-function inventoryActionKey(item: WenyouInventoryItem | string): string {
-  if (typeof item === "string") return item;
-  return String(item.uid || item.id || item.name || "");
-}
-
 function normalizeShopView(j: Partial<WenyouShopView>): WenyouShopView {
   return {
     active: !!j.active,
@@ -1008,118 +406,6 @@ function normalizeShopView(j: Partial<WenyouShopView>): WenyouShopView {
     items: Array.isArray(j.items) ? j.items : [],
     shop_state: j.shop_state || undefined,
   };
-}
-
-function compactPanelText(value: unknown, fallback = ""): string {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value).trim() || fallback;
-  }
-  return fallback;
-}
-
-function panelObjectStringField(value: unknown, keys: string[]): string {
-  const text = typeof value === "string" ? value.trim() : "";
-  if (!text.startsWith("{") || !text.endsWith("}")) return "";
-  for (const key of keys) {
-    const match = text.match(new RegExp(`['"]${key}['"]\\s*:\\s*(['"])([\\s\\S]*?)\\1`));
-    if (match?.[2]) return match[2].trim();
-  }
-  return "";
-}
-
-function itemDisplayDescription(item: { desc?: unknown; effect?: unknown } | unknown): string {
-  const source = typeof item === "object" && item !== null
-    ? ((item as { desc?: unknown; effect?: unknown }).desc || (item as { desc?: unknown; effect?: unknown }).effect)
-    : item;
-  const text = compactPanelText(source);
-  if (!text) return "";
-  const hidden = [
-    /^物品形态[:：]/,
-    /^时代标签[:：]/,
-    /^[a-z_]+_min\s+\d+/i,
-    /^rank_min\s+/i,
-    /^seal_rank\s+/i,
-  ];
-  return text
-    .split(/[；;]/)
-    .map((part) => part.trim())
-    .filter((part) => part && !hidden.some((rule) => rule.test(part)))
-    .join("；");
-}
-
-function panelListText(items?: unknown[], fallback = "无"): string {
-  if (!Array.isArray(items) || !items.length) return fallback;
-  const out = items.map((item) => compactPanelText(item)).filter(Boolean);
-  return out.length ? out.join("、") : fallback;
-}
-
-function getSessionPublicState(session: WenyouSessionPanel | null): WenyouPublicState {
-  return session?.public_state || session?.public_view || session?.runtime_state?.public_state || {};
-}
-
-function getSessionRulesState(session: WenyouSessionPanel | null): WenyouRulesState {
-  return session?.rules_state || session?.runtime_state?.rules_state || {};
-}
-
-function taskTitle(item: WenyouTaskPanelItem): string {
-  if (typeof item === "string") return item;
-  return compactPanelText(item.title || item.current || item.goal || item.id, "未命名任务");
-}
-
-function taskMeta(item: WenyouTaskPanelItem): string {
-  if (typeof item === "string") return "active";
-  const chunks = [item.type, item.status].map((it) => compactPanelText(it)).filter(Boolean);
-  const progress = item.progress;
-  if (typeof progress === "string" && progress.trim()) chunks.push(progress.trim());
-  if (progress && typeof progress === "object") {
-    if (progress.text) chunks.push(compactPanelText(progress.text));
-    else if (progress.target) chunks.push(`${progress.current ?? 0}/${progress.target}${progress.mode ? ` ${progress.mode}` : ""}`);
-  }
-  return chunks.join(" · ") || "active";
-}
-
-function clueTitle(item: WenyouCluePanelItem): string {
-  if (typeof item === "string") {
-    const parsed = panelObjectStringField(item, ["title", "name", "public_text", "text", "id"]);
-    return (parsed || item).slice(0, 42);
-  }
-  return compactPanelText(item.title || item.public_text || item.text || item.id, "未命名线索");
-}
-
-function clueText(item: WenyouCluePanelItem): string {
-  if (typeof item === "string") return panelObjectStringField(item, ["public_text", "text", "reason", "title", "id"]) || item;
-  return compactPanelText(item.public_text || item.text || item.source || item.id, "");
-}
-
-function markerTitle(item: WenyouPublicMarker): string {
-  if (typeof item === "string") return item.slice(0, 42);
-  return compactPanelText(item.name || item.title || item.id, "未命名记录");
-}
-
-function markerText(item: WenyouPublicMarker): string {
-  if (typeof item === "string") return item;
-  return compactPanelText(item.public_text || item.desc || item.blurb || item.status || item.public_status, "");
-}
-
-function markerMeta(item: WenyouPublicMarker): string {
-  if (typeof item === "string") return "";
-  return [item.type || item.tier, item.rank || item.danger, item.status || item.public_status, item.last_location, item.attitude, item.weakness]
-    .map((it) => compactPanelText(it))
-    .filter(Boolean)
-    .join(" · ");
-}
-
-function currentLocationName(publicState: WenyouPublicState, fallback = "未知区域"): string {
-  const first = publicState.known_locations?.[0];
-  const cleanFallback = compactPanelText(fallback, "未知区域");
-  const genericTitles = new Set(["当前场景", "当前区域", "未命名记录", "未知区域", "current_location"]);
-  const title = first ? markerTitle(first) : "";
-  const text = first && !genericTitles.has(title) ? markerText(first) : "";
-  const raw = title && !genericTitles.has(title)
-    ? title
-    : text || cleanFallback;
-  return raw.replace(/^当前在[:：]?\s*/, "").trim().slice(0, 34) || cleanFallback;
 }
 
 function normalizeRiftResult(item: Partial<RiftPullResult>, index: number): RiftPullResult {
@@ -3111,7 +2397,7 @@ export function WenyouTab({
                     <Icon name="plus" />
                   </button>
                   <input ref={actionInputRef} value={actionText} onChange={(e) => setActionText(e.target.value)} placeholder={acting ? "主神演算中..." : "输入你的行动..."} disabled={acting} onKeyDown={(e) => { if (e.key === "Enter") submitAction(); }} />
-                  <button type="button" onClick={submitAction} aria-label="发送行动" disabled={acting}><Icon name="send" /></button>
+                  <button type="button" onClick={() => submitAction()} aria-label="发送行动" disabled={acting}><Icon name="send" /></button>
                 </div>
                 {sessionPanel?.phase !== "settlement" ? (
                   <button type="button" className="wenyou-settlement-link" onClick={openSettlementDraft} disabled={acting || settlementLoading}>

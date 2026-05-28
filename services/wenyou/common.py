@@ -1,4 +1,5 @@
 import json
+import random
 import re
 from typing import Any, Optional
 
@@ -77,6 +78,30 @@ def _slug_id(value: Any, fallback: str = "item") -> str:
 def _rarity_rank(value: Any) -> int:
     rank = str(value or "D").strip().upper()
     return _WENYOU_RANK_ORDER.index(rank) + 1 if rank in _WENYOU_RANK_ORDER else 1
+
+
+def _weighted_pick(options: list[tuple[str, float]], rng: random.Random, fallback: str = "D") -> str:
+    if not options:
+        return fallback
+    total = sum(max(0.0, float(weight or 0.0)) for _, weight in options)
+    if total <= 0:
+        return options[0][0]
+    roll = rng.random() * total
+    acc = 0.0
+    for value, weight in options:
+        acc += max(0.0, float(weight or 0.0))
+        if roll <= acc:
+            return value
+    return options[-1][0]
+
+
+def _shift_rarity(rarity: str, delta: int) -> str:
+    ranks = list(_WENYOU_RANK_ORDER)
+    try:
+        idx = ranks.index(_normalize_difficulty(rarity))
+    except ValueError:
+        idx = 0
+    return ranks[max(0, min(len(ranks) - 1, idx + int(delta or 0)))]
 
 
 def _normalize_difficulty(value: Any) -> str:
