@@ -1123,6 +1123,11 @@ npm -C miniapp run android
 - 已验证：本地用 MiGPT `.env` 的 `XIAOMI_PASS_TOKEN` 刷出 `data/mijia/auth.json` 后，`xiaoai_run_command` 对真实音箱名“小米小爱音箱Play 增强版”执行“打开台灯/关闭台灯”返回成功；`mijiaAPI get -p data/mijia/auth.json --did 2025297301 --prop_name brightness` 读到 `35`，`color-temperature` 读到 `3420`。
 - 未完成 / 下次继续：结构化 `set` 需用 `mijia_lamp_set` 或 `scripts/test_xiaoai_mijia.py --lamp-brightness ...` 验证；不要再手写错误的全局 `-p` 顺序。
 
+当前状态（2026-05-29 小爱音箱自身音量结构化控制）：
+- 已完成：`xiaoai_run_command` 遇到“小爱/音箱 + 音量 + 数字”时不再走 `mijiaAPI --run` 自然语言链路，而是自动改为 `mijiaAPI set -p <auth> --did <MIJIA_SPEAKER_DID> --prop_name volume --value <N>`；新增配置 `MIJIA_SPEAKER_DID`，未配置时默认使用已实测的 L05C did `2037350052`。工具说明要求音量使用阿拉伯数字，例如“把小爱音箱音量调到50”。
+- 已验证：服务器 `mijiaAPI -l` 确认真实设备名为“小米小爱音箱Play 增强版”，did 为 `2037350052`；`mijiaAPI get/set --did 2037350052 --prop_name volume` 能读写音量。`mijiaAPI --run "把小爱音箱音量调到50"` 的 `returncode=0` 只能证明 CLI 没报错，不能证明音箱实际执行。
+- 未完成 / 下次继续：部署后需要通过渡实际调用 `xiaoai_run_command` 再测一轮，返回 JSON 应包含 `mode: "speaker_volume_set"`，否则说明还在走旧自然语言路径。
+
 当前状态（2026-05-28 MiniApp 米家授权二维码）：
 - 已完成：新增 `services/mijia_auth_login.py`，复用 `mijiaAPI` 包内部二维码登录流程，按 `MIJIA_API_AUTH_PATH`（未配置则用 mijiaAPI 默认 `~/.config/mijia-api/auth.json`）写入 auth；`routes/miniapp/xiaoai.py` 增加 `/miniapp-api/xiaoai/mijia-auth` 和 `/miniapp-api/xiaoai/mijia-auth/start`，小爱音箱页新增“米家授权”区块，显示二维码图片、授权状态、有效期和错误。二维码可截图后用米家 App 相册识别；等待扫码超时或后端重启后状态会自动过期，避免按钮卡死。
 - 已验证：`.venv/bin/python -m py_compile services/mijia_auth_login.py routes/miniapp/xiaoai.py routes/miniapp_api.py` 通过；`get_mijia_auth_status()` smoke 通过；`npm --prefix miniapp run build` 通过并生成新的 `XiaoAISettingsTab` 静态 chunk。

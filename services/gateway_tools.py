@@ -11,6 +11,7 @@ from config import (
     MIJIA_API_QUIET,
     MIJIA_API_TIMEOUT_SECONDS,
     MIJIA_LAMP_DID,
+    MIJIA_SPEAKER_DID,
     MIJIA_WIFISPEAKER_NAME,
     NOTION_CORE_CACHE_DATABASE_ID,
 )
@@ -96,6 +97,7 @@ def get_gateway_xiaoai_tools() -> List[dict]:
                 "description": (
                     "让小爱音箱执行一句米家/红外智能家居自然语言命令，底层调用 mijiaAPI --run。"
                     "开灯、关灯、开关空调、调温度、控制红外设备、执行米家设备动作时优先用这个工具。"
+                    "如果命令是在调小爱音箱自身音量，会自动改走 MIoT 结构化 volume 属性，不赌自然语言理解。"
                     "只传明确的家居控制命令，不要用来普通聊天，也不要播报渡的声音。"
                 ),
                 "parameters": {
@@ -103,7 +105,7 @@ def get_gateway_xiaoai_tools() -> List[dict]:
                     "properties": {
                         "command": {
                             "type": "string",
-                            "description": "要让小爱执行的自然语言命令，如“关闭卧室空调”“打开客厅灯”。",
+                            "description": "要让小爱执行的自然语言命令，如“关闭卧室空调”“打开客厅灯”。小爱音箱自身音量请用阿拉伯数字，例如“把小爱音箱音量调到50”。",
                         },
                         "speaker_name": {
                             "type": "string",
@@ -244,6 +246,29 @@ def _build_mijia_lamp_set_command(prop_name: str, value: Any) -> list[str]:
     return [*_mijia_cli_base(), "set", *_mijia_auth_args(), "--did", did, "--prop_name", prop_name, "--value", str(value)]
 
 
+def _mijia_speaker_did() -> str:
+    return MIJIA_SPEAKER_DID or "2037350052"
+
+
+def _build_mijia_speaker_volume_set_command(volume: int) -> list[str]:
+    return [*_mijia_cli_base(), "set", *_mijia_auth_args(), "--did", _mijia_speaker_did(), "--prop_name", "volume", "--value", str(volume)]
+
+
+def _extract_speaker_volume(command: str) -> int | None:
+    text = str(command or "").strip()
+    if "音量" not in text:
+        return None
+    if not any(word in text for word in ("小爱", "音箱", "speaker")):
+        return None
+    match = re.search(r"(\d{1,3})", text)
+    if not match:
+        return None
+    volume = int(match.group(1))
+    if volume < 0 or volume > 100:
+        return None
+    return volume
+
+
 def _run_mijia_cli(cmd: list[str]) -> tuple[bool, int, str, str]:
     timeout = max(5, min(180, int(MIJIA_API_TIMEOUT_SECONDS or 45)))
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
@@ -274,6 +299,34 @@ def _execute_mijia_run_command(arguments: dict) -> str:
 
     try:
         from storage.xiaoai_store import add_xiaoai_log
+
+        speaker_volume = _extract_speaker_volume(command)
+        if speaker_volume is not None:
+            run_cmd = _build_mijia_speaker_volume_set_command(speaker_volume)
+            ok, returncode, stdout, stderr = _run_mijia_cli(run_cmd)
+            add_xiaoai_log(
+                "info" if ok else "error",
+                "小爱音箱音量设置完成" if ok else "小爱音箱音量设置失败",
+                event="mijia_speaker_volume_set",
+                speaker=_normalize_mijia_speaker_name(speaker_name or MIJIA_WIFISPEAKER_NAME or ""),
+                text=command,
+                error=stderr if not ok else "",
+            )
+            return json.dumps(
+                {
+                    "ok": ok,
+                    "tool": "xiaoai_run_command",
+                    "mode": "speaker_volume_set",
+                    "command": command,
+                    "speaker_did": _mijia_speaker_did(),
+                    "volume": speaker_volume,
+                    "returncode": returncode,
+                    "stdout": stdout[-1200:],
+                    "stderr": stderr[-1200:],
+                    "reason": reason,
+                },
+                ensure_ascii=False,
+            )
 
         run_cmd = _build_mijia_run_command(command, speaker_name=speaker_name)
         logger.info("mijiaAPI run command=%s speaker=%s", command, speaker_name or MIJIA_WIFISPEAKER_NAME or "")
