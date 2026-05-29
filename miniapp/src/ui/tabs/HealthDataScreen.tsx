@@ -319,7 +319,7 @@ function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
   const max = values.length ? Math.max(...values) : 0;
   const width = 400;
   const height = 80;
-  const path = values.length >= 2 ? buildSmoothCurvePath(values, min, max, width, height) : BIOMETRIC_WAVE_PATH;
+  const path = buildStraightLinePath(values, min, max, width, height);
 
   return (
     <div className="mt-5">
@@ -346,31 +346,7 @@ function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
   );
 }
 
-const BIOMETRIC_WAVE_PATH = `
-  M 0,40
-  C 10,40 15,10 20,40
-  C 25,70 35,70 40,40
-  C 45,10 55,10 60,40
-  C 65,70 75,70 80,40
-  C 85,10 95,10 100,40
-  C 105,70 115,70 120,40
-  C 125,10 135,10 140,40
-  C 145,70 155,70 160,40
-  C 165,10 175,10 180,40
-  C 185,70 195,70 200,40
-  C 205,10 215,10 220,40
-  C 225,70 235,70 240,40
-  C 245,10 255,10 260,40
-  C 265,70 275,70 280,40
-  C 285,10 295,10 300,40
-  C 305,70 315,70 320,40
-  C 325,10 335,10 340,40
-  C 345,70 355,70 360,40
-  C 365,10 375,10 380,40
-  C 385,70 395,70 400,40
-`;
-
-function buildSmoothCurvePath(values: number[], min: number, max: number, width: number, height: number) {
+function buildStraightLinePath(values: number[], min: number, max: number, width: number, height: number) {
   const padY = 10;
   const span = Math.max(1, max - min);
   const coords = values.map((value, index) => {
@@ -378,15 +354,12 @@ function buildSmoothCurvePath(values: number[], min: number, max: number, width:
     const y = padY + ((max - value) * (height - padY * 2)) / span;
     return { x, y };
   });
-  if (!coords.length) return BIOMETRIC_WAVE_PATH;
-  if (coords.length === 1) return `M 0,${coords[0].y.toFixed(1)} C 120,${coords[0].y.toFixed(1)} 280,${coords[0].y.toFixed(1)} ${width},${coords[0].y.toFixed(1)}`;
+  if (!coords.length) return `M 0,${height / 2} L ${width},${height / 2}`;
+  if (coords.length === 1) return `M 0,${coords[0].y.toFixed(1)} L ${width},${coords[0].y.toFixed(1)}`;
   return coords
     .map((point, index) => {
       if (index === 0) return `M ${point.x.toFixed(1)},${point.y.toFixed(1)}`;
-      const prev = coords[index - 1];
-      const cp1x = prev.x + (point.x - prev.x) / 2;
-      const cp2x = point.x - (point.x - prev.x) / 2;
-      return `C ${cp1x.toFixed(1)},${prev.y.toFixed(1)} ${cp2x.toFixed(1)},${point.y.toFixed(1)} ${point.x.toFixed(1)},${point.y.toFixed(1)}`;
+      return `L ${point.x.toFixed(1)},${point.y.toFixed(1)}`;
     })
     .join(" ");
 }
