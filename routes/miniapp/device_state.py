@@ -278,6 +278,7 @@ def register_routes(bp) -> None:
                     "latest": latest,
                     "history": _health_history_for_device(device_id, limit=20),
                     "du_vitals": r2_store.get_du_vitals_latest() or {},
+                    "du_vitals_history": r2_store.get_du_vitals_history(limit=10) or [],
                 }
             )
         body = request.get_json(silent=True) or {}

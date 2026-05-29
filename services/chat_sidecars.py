@@ -131,6 +131,7 @@ def extract_and_store_hidden_sidecars(
             payload = normalize_vitals_payload(vitals, previous=r2_store.get_du_vitals_latest())
             if payload:
                 r2_store.save_du_vitals_latest(payload)
+                r2_store.append_du_vitals_history(payload, limit=10)
         except Exception as e:
             logger.warning("save_du_vitals_latest 失败 error=%s", e)
     if interaction:

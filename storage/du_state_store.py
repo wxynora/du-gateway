@@ -8,6 +8,7 @@ from utils.time_aware import now_beijing_iso
 
 R2_KEY_DU_THOUGHT_LATEST = "global/du_thought_latest.json"
 R2_KEY_DU_VITALS_LATEST = "global/du_vitals_latest.json"
+R2_KEY_DU_VITALS_HISTORY = "global/du_vitals_history.json"
 R2_KEY_DU_DAILY_STATE = "global/du_daily_state.json"
 R2_KEY_DU_DAILY_ARCHIVE = "global/du_daily_archive.json"
 R2_KEY_XINYUE_PORTRAIT_CANDIDATES = "portrait_memory/xinyue_candidates.json"
@@ -90,6 +91,50 @@ def get_du_vitals_latest() -> Optional[dict]:
     if not isinstance(data, dict):
         return None
     return data
+
+
+def get_du_vitals_history(limit: int = 10) -> list[dict]:
+    """读取渡的拟态心跳/呼吸最近历史，默认最近 10 条。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_DU_VITALS_HISTORY)
+    rows = data.get("items") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        return []
+    out = [dict(item) for item in rows if isinstance(item, dict)]
+    try:
+        n = int(limit or 10)
+    except Exception:
+        n = 10
+    return out[-max(1, min(50, n)) :]
+
+
+def append_du_vitals_history(payload: dict, limit: int = 10) -> bool:
+    """追加一条渡的拟态心跳/呼吸历史，并只保留最近 limit 条。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(payload, dict) or not payload:
+        return False
+    try:
+        n = int(limit or 10)
+    except Exception:
+        n = 10
+    n = max(1, min(50, n))
+    with _du_state_write_lock:
+        try:
+            data = _read_json(client, R2_KEY_DU_VITALS_HISTORY)
+            rows = data.get("items") if isinstance(data, dict) else data
+            if not isinstance(rows, list):
+                rows = []
+            rows = [dict(item) for item in rows if isinstance(item, dict)]
+            rows.append(dict(payload))
+            _write_json(client, R2_KEY_DU_VITALS_HISTORY, {"items": rows[-n:], "updated_at": now_beijing_iso()})
+            return True
+        except Exception as e:
+            logger.error("append_du_vitals_history 失败 error=%s", e, exc_info=True)
+            return False
 
 
 def save_du_daily_state(data: dict) -> bool:

@@ -53,6 +53,7 @@ from storage.app_action_store import (
     report_app_actions,
 )
 from storage.du_state_store import (
+    append_du_vitals_history,
     append_interaction_candidate,
     delete_du_portrait_candidate,
     delete_interaction_candidate,
@@ -60,6 +61,7 @@ from storage.du_state_store import (
     get_du_daily_state,
     get_du_portrait_candidates,
     get_du_thought_latest,
+    get_du_vitals_history,
     get_du_vitals_latest,
     get_interaction_candidates,
     get_xinyue_portrait_candidates,
