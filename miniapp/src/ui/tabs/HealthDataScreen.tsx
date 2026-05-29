@@ -48,17 +48,17 @@ export function HealthDataScreen() {
     };
   }, [latestCloud, latestLocal]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       const [nativeStatus, cloudStatus] = await Promise.all([
         SumiOverlay.getHealthReportingStatus().catch(() => null),
-        apiJson<HealthCloudResponse>("/miniapp-api/device-state/health").catch((e) => ({ ok: false, error: e?.message || String(e) })),
+        apiJson<HealthCloudResponse>(`/miniapp-api/device-state/health?t=${Date.now()}`, { cache: "no-store" }).catch((e) => ({ ok: false, error: e?.message || String(e) })),
       ]);
       setStatus(nativeStatus);
       setCloud(cloudStatus);
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, []);
 
@@ -88,7 +88,9 @@ export function HealthDataScreen() {
       if (!r?.requested) {
         toast("通知监听还没连上");
       }
-      window.setTimeout(() => void load(), 700);
+      await load();
+      window.setTimeout(() => void load({ silent: true }), 900);
+      window.setTimeout(() => void load({ silent: true }), 2200);
     } catch (e: any) {
       toast(`刷新失败：${e?.message || e}`);
     }
@@ -257,13 +259,13 @@ function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; histor
           {String(vitals?.status || (hasVitals ? "平稳" : "未同步"))}
         </span>
       </div>
-      <div className="flex items-center gap-5">
-        <div className="relative flex h-[96px] w-[96px] shrink-0 items-center justify-center">
+      <div className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-3">
+        <div className="relative flex h-[88px] w-[88px] shrink-0 items-center justify-center">
           <span
-            className="absolute h-[84px] w-[84px] rounded-full bg-rose-200/50"
+            className="absolute h-[78px] w-[78px] rounded-full bg-rose-200/50"
             style={{ animation: `du-breathe ${breathSeconds}s ease-in-out infinite` }}
           />
-          <span className="absolute h-[58px] w-[58px] rounded-full bg-white/85 shadow-[0_12px_30px_-18px_rgba(190,55,105,0.8)]" />
+          <span className="absolute h-[54px] w-[54px] rounded-full bg-white/85 shadow-[0_12px_30px_-18px_rgba(190,55,105,0.8)]" />
           <span
             className="relative flex h-[34px] w-[34px] items-center justify-center rounded-full bg-rose-500 text-white shadow-[0_12px_26px_-14px_rgba(190,55,105,0.9)]"
             style={{ animation: `du-heartbeat ${heartMs}ms ease-in-out infinite` }}
@@ -271,9 +273,9 @@ function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; histor
             <HeartIconMini />
           </span>
         </div>
-        <div className="grid flex-1 grid-cols-2 gap-3">
-          <Metric label="渡心率" value={heart || "-"} unit={heart ? "bpm" : ""} />
-          <Metric label="渡呼吸" value={breath || "-"} unit={breath ? "/min" : ""} />
+        <div className="grid min-w-0 grid-cols-2 gap-2">
+          <Metric label="渡心率" value={heart || "-"} unit={heart ? "bpm" : ""} compact />
+          <Metric label="渡呼吸" value={breath || "-"} unit={breath ? "/min" : ""} compact />
         </div>
       </div>
       <div className="mt-4 grid grid-cols-3 gap-2 text-center text-[11px] text-gray-500">
@@ -396,13 +398,13 @@ function CloudRow({ row }: { row: { at?: string; data?: Record<string, any> } })
   );
 }
 
-function Metric({ label, value, unit }: { label: string; value: React.ReactNode; unit?: string }) {
+function Metric({ label, value, unit, compact = false }: { label: string; value: React.ReactNode; unit?: string; compact?: boolean }) {
   return (
-    <div className="rounded-[20px] bg-white px-4 py-4">
+    <div className={`min-w-0 rounded-[20px] bg-white ${compact ? "px-3 py-3" : "px-4 py-4"}`}>
       <div className="text-[12px] font-medium text-gray-400">{label}</div>
-      <div className="mt-2 flex min-h-[34px] items-end gap-1">
-        <span className="text-[28px] font-semibold leading-none tracking-tight text-gray-950">{value}</span>
-        {unit ? <span className="pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">{unit}</span> : null}
+      <div className={`${compact ? "mt-2 min-h-[38px]" : "mt-2 min-h-[40px]"} flex min-w-0 items-end gap-1 overflow-hidden`}>
+        <span className={`${compact ? "text-[clamp(24px,7vw,32px)]" : "text-[28px]"} min-w-0 shrink leading-[1.08] font-semibold tracking-tight text-gray-950`}>{value}</span>
+        {unit ? <span className="shrink-0 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">{unit}</span> : null}
       </div>
     </div>
   );
