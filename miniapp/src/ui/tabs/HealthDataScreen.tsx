@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Capacitor } from "@capacitor/core";
 import { apiJson } from "../api";
 import { useToast } from "../toast";
@@ -30,6 +31,7 @@ export function HealthDataScreen() {
   const [status, setStatus] = useState<HealthReportingStatus | null>(null);
   const [cloud, setCloud] = useState<HealthCloudResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [headerActionsEl, setHeaderActionsEl] = useState<HTMLElement | null>(null);
   const [savingSeconds, setSavingSeconds] = useState<number | null>(null);
   const isAndroid = Capacitor.getPlatform() === "android";
 
@@ -64,6 +66,10 @@ export function HealthDataScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setHeaderActionsEl(document.getElementById("health-data-header-actions"));
+  }, []);
 
   async function saveInterval(seconds: number) {
     const prev = status;
@@ -117,16 +123,19 @@ export function HealthDataScreen() {
 
   return (
     <div className="space-y-4 px-4 py-5">
-      <button
-        type="button"
-        disabled={loading}
-        aria-label={loading ? "健康数据刷新中" : "刷新健康数据"}
-        title={loading ? "刷新中" : "刷新"}
-        className="fixed right-4 top-[calc(env(safe-area-inset-top,0px)+10px)] z-40 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-gray-700 shadow-[0_10px_28px_-18px_rgba(0,0,0,0.45)] active:bg-gray-50 disabled:opacity-60"
-        onClick={() => void requestSnapshot()}
-      >
-        <RefreshIconMini className={loading ? "animate-spin" : ""} />
-      </button>
+      {headerActionsEl ? createPortal(
+        <button
+          type="button"
+          disabled={loading}
+          aria-label={loading ? "健康数据刷新中" : "刷新健康数据"}
+          title={loading ? "刷新中" : "刷新"}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors active:bg-gray-100 disabled:opacity-60"
+          onClick={() => void requestSnapshot()}
+        >
+          <RefreshIconMini className={loading ? "animate-spin" : ""} />
+        </button>,
+        headerActionsEl,
+      ) : null}
       <section className="relative overflow-hidden rounded-[32px] border border-black/5 bg-white p-6 text-[#111111] shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]">
         <div className="flex items-start justify-between gap-4 border-b border-black/10 pb-4">
           <div>
@@ -257,12 +266,10 @@ function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; histor
         <BiometricMetric label="Du Breath / 渡呼吸" value={breath || "-"} unit={breath ? "brpm" : ""} tone="dark" />
       </div>
       <DuHeartCurve points={heartHistory} />
-      <div className="mt-5 grid grid-cols-3 gap-3 border-t border-white/12 pt-4 text-[11px] text-white/48">
-        <ParamPill label="专注" value={params.focus} tone="dark" />
-        <ParamPill label="靠近" value={params.intimacy_heat} tone="dark" />
-        <ParamPill label="绷紧" value={params.tension} tone="dark" />
+      <div className="mt-4 text-[10px] uppercase tracking-[0.08em] text-white/42">
+        Focus {formatParamPercent(params.focus)} · Close {formatParamPercent(params.intimacy_heat)} · Tension {formatParamPercent(params.tension)}
       </div>
-      <div className="mt-4 border-t border-white/12 pt-3 text-[10px] uppercase tracking-[0.08em] text-white/42">Sync {formatTime(vitals?.updatedAt || vitals?.at) || "-"}</div>
+      <div className="mt-1 text-[10px] uppercase tracking-[0.08em] text-white/42">Sync {formatTime(vitals?.updatedAt || vitals?.at) || "-"}</div>
     </section>
   );
 }
@@ -376,15 +383,9 @@ function buildSmoothCurvePath(values: number[], min: number, max: number, width:
     .join(" ");
 }
 
-function ParamPill({ label, value, tone = "light" }: { label: string; value: unknown; tone?: "light" | "dark" }) {
+function formatParamPercent(value: unknown) {
   const n = Number(value);
-  const text = Number.isFinite(n) ? `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%` : "-";
-  return (
-    <div>
-      <div className={tone === "dark" ? "font-medium text-white/40" : "font-medium text-gray-400"}>{label}</div>
-      <div className={tone === "dark" ? "mt-1 font-semibold text-white" : "mt-1 font-semibold text-gray-800"}>{text}</div>
-    </div>
-  );
+  return Number.isFinite(n) ? `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%` : "-";
 }
 
 function CloudRow({ row }: { row: { at?: string; data?: Record<string, any> } }) {

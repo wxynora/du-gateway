@@ -6,6 +6,7 @@ export function FullScreenPane({
   accent,
   onBack,
   headerMode = "default",
+  headerRightPortalId,
   edgeSwipeBack = false,
   children,
 }: {
@@ -13,6 +14,7 @@ export function FullScreenPane({
   accent: "du" | "wenyou" | "neutral";
   onBack: () => void;
   headerMode?: "default" | "simple";
+  headerRightPortalId?: string;
   edgeSwipeBack?: boolean;
   children: React.ReactNode;
 }) {
@@ -65,10 +67,13 @@ export function FullScreenPane({
     >
       {headerMode === "simple" ? (
         <div className="border-b border-gray-100/50 bg-white px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)]">
-          <button className="flex items-center gap-2 text-gray-900" onClick={onBack}>
-            <ChevronLeftIcon />
-            <span className="text-[15px] font-medium">{title}</span>
-          </button>
+          <div className="flex items-center justify-between gap-3">
+            <button className="flex min-w-0 items-center gap-2 text-gray-900" onClick={onBack}>
+              <ChevronLeftIcon />
+              <span className="truncate text-[15px] font-medium">{title}</span>
+            </button>
+            {headerRightPortalId ? <div id={headerRightPortalId} className="flex h-8 min-w-8 shrink-0 items-center justify-end" /> : null}
+          </div>
         </div>
       ) : (
         <div className="absolute top-0 z-20 flex w-full items-center border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">

@@ -687,7 +687,7 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {panel === "health-data" ? (
-        <FullScreenPane title="健康数据" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>
+        <FullScreenPane title="健康数据" accent="neutral" headerMode="simple" headerRightPortalId="health-data-header-actions" onBack={() => setPanel(null)}>
           <LazyPane><HealthDataScreen /></LazyPane>
         </FullScreenPane>
       ) : null}
