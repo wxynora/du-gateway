@@ -136,7 +136,7 @@ export function HealthDataScreen() {
         </button>,
         headerActionsEl,
       ) : null}
-      <section className="relative flex min-h-[286px] flex-col justify-between overflow-hidden rounded-[32px] border border-black/5 bg-white p-6 text-[#111111] shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]" style={{ fontFamily: "'Inter', sans-serif" }}>
+      <section className="relative overflow-hidden rounded-[32px] border border-black/5 bg-white p-6 text-[#111111] shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]" style={{ fontFamily: "'Inter', sans-serif" }}>
         <div className="flex items-start justify-between gap-4 border-b border-black/10 pb-4">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-black/45">Sumika Heartbeat</div>
@@ -147,17 +147,13 @@ export function HealthDataScreen() {
           </span>
         </div>
 
-        <div className="relative my-5 min-h-[112px]">
+        <div className="grid grid-cols-2 gap-5 py-8">
           <BiometricMetric
-            className="absolute left-0 top-0 w-[58%]"
             label="Heart Rate / 心率"
             value={displayHealth.heartRate || "-"}
             unit={displayHealth.heartRate ? "bpm" : ""}
           />
           <BiometricMetric
-            align="right"
-            className="absolute bottom-0 right-0 w-[54%]"
-            scale="secondary"
             label="Steps / 步数"
             value={displayHealth.steps || "-"}
             unit={displayHealth.steps ? "steps" : ""}
@@ -255,7 +251,7 @@ function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; histor
   const heartHistory = useMemo(() => normalizeDuHeartHistory(history, vitals), [history, vitals]);
   const hasVitals = heart > 0 || breath > 0;
   return (
-    <section className="relative flex min-h-[340px] flex-col justify-between overflow-hidden rounded-[32px] bg-[#111111] p-6 text-white shadow-[0_34px_80px_-48px_rgba(0,0,0,0.85)]" style={{ fontFamily: "'Inter', sans-serif" }}>
+    <section className="relative overflow-hidden rounded-[32px] bg-[#111111] p-6 text-white shadow-[0_34px_80px_-48px_rgba(0,0,0,0.85)]" style={{ fontFamily: "'Inter', sans-serif" }}>
       <style>
         {`
           @keyframes biometric-line-draw {
@@ -273,18 +269,14 @@ function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; histor
           {String(vitals?.status || (hasVitals ? "平稳" : "未同步"))}
         </span>
       </div>
-      <div className="relative my-5 min-h-[112px]">
+      <div className="grid grid-cols-2 gap-5 py-8">
         <BiometricMetric
-          className="absolute left-0 top-0 w-[58%]"
           label="Du Heart / 渡心率"
           value={heart || "-"}
           unit={heart ? "bpm" : ""}
           tone="dark"
         />
         <BiometricMetric
-          align="right"
-          className="absolute bottom-0 right-0 w-[54%]"
-          scale="secondary"
           label="Du Breath / 渡呼吸"
           value={breath || "-"}
           unit={breath ? "brpm" : ""}
@@ -425,37 +417,27 @@ function BiometricMetric({
   unit,
   compact = false,
   tone = "light",
-  align = "left",
-  scale = "primary",
-  className = "",
 }: {
   label: string;
   value: React.ReactNode;
   unit?: string;
   compact?: boolean;
   tone?: "light" | "dark";
-  align?: "left" | "right";
-  scale?: "primary" | "secondary";
-  className?: string;
 }) {
-  const valueSize = compact
-    ? "text-[clamp(32px,9vw,48px)]"
-    : scale === "secondary"
-      ? "text-[clamp(30px,10vw,46px)]"
-      : "text-[clamp(46px,15vw,68px)]";
+  const valueSize = compact ? "text-[40px]" : "text-[58px]";
   return (
-    <div className={`min-w-0 ${align === "right" ? "text-right" : ""} ${className}`}>
-      <div className={`text-[9px] font-semibold uppercase tracking-[0.16em] ${tone === "dark" ? "text-white/38" : "text-black/42"}`}>{label}</div>
-      <div className={`${compact ? "mt-2 min-h-[42px]" : "mt-3 min-h-[56px]"} flex min-w-0 items-end gap-1 overflow-hidden ${align === "right" ? "justify-end" : ""}`}>
+    <div className="min-w-0">
+      <div className={`truncate text-[9px] font-semibold uppercase tracking-[0.22em] ${tone === "dark" ? "text-white/38" : "text-black/42"}`}>{label}</div>
+      <div className={`${compact ? "mt-2 min-h-[42px]" : "mt-4 min-h-[64px]"} flex min-w-0 items-start gap-1.5 overflow-hidden`}>
         <span
-          className={`${valueSize} min-w-0 shrink leading-none tracking-tight ${tone === "dark" ? "text-white" : "text-black"}`}
+          className={`${valueSize} min-w-0 shrink leading-none tracking-normal ${tone === "dark" ? "text-white" : "text-black"}`}
           style={{ fontFamily: "'Playfair Display', 'Times New Roman', 'Noto Serif', serif", fontWeight: 500 }}
         >
           {value}
         </span>
         {unit ? (
           <span
-            className={`shrink-0 pb-1 text-[12px] italic tracking-wide ${tone === "dark" ? "text-white/42" : "text-black/42"}`}
+            className={`shrink-0 translate-y-[33px] text-[13px] italic tracking-normal ${tone === "dark" ? "text-white/46" : "text-black/46"}`}
             style={{ fontFamily: "'Playfair Display', 'Times New Roman', 'Noto Serif', serif" }}
           >
             {unit}
