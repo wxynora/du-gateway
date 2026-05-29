@@ -11,7 +11,12 @@ import {
   inventoryActionKey,
   inventoryItemKey,
   inventoryItemLabel,
+  inventoryMetaText,
+  inventoryRequirementText,
+  inventorySellBlockLabel,
+  inventoryStatusBadges,
   inventoryItemName,
+  inventoryUseBlockLabel,
   itemDisplayDescription,
   markerMeta,
   markerText,
@@ -271,6 +276,16 @@ function normalizeInitialView(view: WenyouInitialView): WenyouView {
   if (view === "archives") return "archive";
   if (view === "hub") return "home";
   return view;
+}
+
+function teammateDisplayName(name?: string) {
+  const clean = String(name || "").trim();
+  return clean && clean !== "玩家二" ? clean : "队友";
+}
+
+function selfDisplayName(name?: string) {
+  const clean = String(name || "").trim();
+  return clean && clean !== "玩家一" ? clean : "你";
 }
 
 function SignalText({
@@ -1088,8 +1103,10 @@ export function WenyouTab({
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
   const playerOneName = playerDisplayName(profileStats.player1 || gameRulesState.players?.player1 || homePlayer, String(status.entry?.player_name || "").trim() || "玩家一");
   const playerTwoName = playerDisplayName(profileStats.player2 || gameRulesState.players?.player2, String(status.entry?.player2_name || "").trim() || "玩家二");
+  const playerOneTitle = selfDisplayName(playerOneName);
+  const playerTwoTitle = teammateDisplayName(playerTwoName);
   const displayNarrativeText = useCallback((text: string) => replacePlayerAliasText(text, playerOneName, playerTwoName), [playerOneName, playerTwoName]);
-  const aiPlayerActionLabel = `${playerTwoName}的行动`;
+  const aiPlayerActionLabel = `${playerTwoTitle}的行动`;
   const teamChannel = sessionPanel?.team_channel || null;
   const teamChannelLabel = teamChannel?.label || (hasActiveRun ? "信号稳定" : "未接入");
   const attributePointEntries = useMemo(() => {
@@ -1102,13 +1119,13 @@ export function WenyouTab({
         const rank = String(statPlayer?.rank || "D");
         return {
           player,
-          title: player === "player1" ? playerDisplayName(statPlayer, "玩家一") : `玩家二 · ${playerDisplayName(statPlayer, "玩家二")}`,
+          title: player === "player1" ? selfDisplayName(playerDisplayName(statPlayer, playerOneName)) : teammateDisplayName(playerDisplayName(statPlayer, playerTwoName)),
           points: Number.isFinite(points) ? points : 0,
           key: `${player}:${rank}:${level}:${points}`,
         };
       })
       .filter((entry) => entry.points > 0);
-  }, [profileGrowthPlayers, profileStats]);
+  }, [playerOneName, playerTwoName, profileGrowthPlayers, profileStats]);
   const activeAttributePrompt = attributePointEntries.find((entry) => entry.player === attributePromptPlayer) || null;
   const gameCoreAbility = sessionPanel?.growth?.players?.player1?.core_ability || sessionPanel?.stats?.player1?.core_ability || null;
   const gamePlayerAbilities = gameCoreAbility?.id || gameCoreAbility?.name
@@ -2307,7 +2324,7 @@ export function WenyouTab({
               />
               <TeamChannelPanel
                 channel={teamChannel}
-                peerName={playerTwoName}
+                peerName={playerTwoTitle}
                 text={teamChannelText}
                 sending={teamChannelSending}
                 disabled={acting}
@@ -2489,12 +2506,12 @@ export function WenyouTab({
           {profileTab === "角色面板" ? (
             <div className="wenyou-profile-panel">
               <PlayerStatCard
-                title={playerOneName}
+                title={playerOneTitle}
                 player={profileStats.player1 || gameRulesState.players?.player1}
                 growth={profileGrowthPlayers.player1}
               />
               <PlayerStatCard
-                title={`玩家二 · ${playerTwoName}`}
+                title={playerTwoTitle}
                 player={profileStats.player2 || gameRulesState.players?.player2}
                 growth={profileGrowthPlayers.player2}
               />
@@ -2559,6 +2576,8 @@ export function WenyouTab({
           session={sessionPanel}
           initialTab={panelInitialTab}
           acting={acting}
+          playerOneName={playerOneName}
+          playerTwoName={playerTwoName}
           onClose={() => setPanelView(null)}
           onUseItem={useInventoryItem}
           onInventoryCommand={runInventoryCommand}
@@ -3008,6 +3027,9 @@ function TeamChannelPanel({
     if (!date || Number.isNaN(date.getTime())) return "--:--:--";
     return date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
   };
+  const formatChannelText = (value?: string) => String(value || "")
+    .replace(/玩家一/g, "你")
+    .replace(/玩家二/g, peerName);
   return (
     <div className={`wenyou-team-channel-panel wenyou-channel-state-${status}`}>
       <span className="wenyou-team-channel-corner tl" />
@@ -3031,7 +3053,7 @@ function TeamChannelPanel({
         <span>REAL-TIME_SIG_STREAM</span>
         {Array.from({ length: 18 }, (_, index) => <i key={index} style={{ animationDelay: `${index * -0.07}s` }} />)}
       </div>
-      {channel?.risk ? <p className="wenyou-team-channel-risk">{channel.risk}</p> : null}
+      {channel?.risk ? <p className="wenyou-team-channel-risk">{formatChannelText(channel.risk)}</p> : null}
       <div className="wenyou-team-channel-log">
         {messages.length ? messages.slice(-8).map((item, index) => (
           <div
@@ -3039,7 +3061,7 @@ function TeamChannelPanel({
             className={`wenyou-team-channel-msg ${item.sender === "player1" ? "from-self" : item.sender === "player2" ? "from-peer" : "from-system"}`}
           >
             <span className="wenyou-team-channel-time">{formatLogTime(item.timestamp)}</span>
-            <p>{String(item.text || "")}</p>
+            <p>{formatChannelText(item.text)}</p>
             <em>{item.sender === "player1" ? "你" : item.sender === "player2" ? peerName : "系统"}</em>
           </div>
         )) : <div className="wenyou-team-channel-empty">对讲机暂无记录</div>}
@@ -3120,30 +3142,22 @@ function ForcedInstanceModal({
   loading: boolean;
   onEnter: () => void;
 }) {
-  const reason = candidate.reason || candidate.premise || "系统检测到未清算代价，下一次副本入口已被锁定。";
-  const penaltyText = candidate.penalty_type === "debt"
-    ? "债务清算"
-    : candidate.penalty_type === "pollution"
-      ? "污染净化"
-      : candidate.penalty_type === "revive"
-        ? "复活清算"
-        : candidate.penalty_type === "contract"
-          ? "契约追偿"
-          : "强制清算";
+  const title = candidate.title || "强制扮演副本";
+  const reason = candidate.core_task || candidate.premise || "你和队友将以副本原住民身份接入，维持身份，并推动正常任务者接近主线。";
   const streamLog = [
-    "0XFF001 CLEARANCE_REQUIRED",
-    "0XFF002 DEBT_PROTOCOL_LOCKED",
-    "0XFF003 SANITY_DRIFT_WARN",
-    "0XFF004 IDENTITY_MASK_ACTIVE",
-    "0XFF005 REWARD_ROUTE_OVRD",
-    "0XFF006 ACCESS_DENIED",
-    "0XFF007 INSTANCE_LOCKED",
-    "0XFF008 CLEARANCE_QUEUE_SYNC",
-    "0XFF009 CONTRACT_CHECK_FAIL",
+    "0XFF001 IDENTITY_MASK_REQUIRED",
+    "0XFF002 NPC_ROLE_BOUND",
+    "0XFF003 TASKER_ROUTE_OBSERVED",
+    "0XFF004 SPOILER_CHANNEL_BLOCKED",
+    "0XFF005 SCENE_LOGIC_LOCKED",
+    "0XFF006 DIRECT_EXIT_DENIED",
+    "0XFF007 COMMS_MONITORED",
+    "0XFF008 ROLE_EXPOSURE_WARN",
+    "0XFF009 INSTANCE_LOCKED",
     "0XFF010 RETURN_GATE_CLOSED",
   ].join("\n");
   return (
-    <div className="wenyou-modal wenyou-forced-modal" role="dialog" aria-modal="true" aria-label="强制清算副本">
+    <div className="wenyou-modal wenyou-forced-modal" role="dialog" aria-modal="true" aria-label="强制惩罚副本">
       <span className="wenyou-modal-backdrop" aria-hidden="true" />
       <div className="wenyou-forced-panel">
         <div className="wenyou-forced-stream" aria-hidden="true">
@@ -3158,12 +3172,12 @@ function ForcedInstanceModal({
               <path d="M12 17h.01" />
             </svg>
           </div>
-          <h2>SYSTEM CRITICAL</h2>
+          <h2>IDENTITY LOCKED</h2>
           <p>
-            {penaltyText} / {candidate.difficulty || "C"} 级：{candidate.title} 已锁定。{reason}
+            强制扮演 / {candidate.difficulty || "C"} 级：{title} 已锁定。{reason}
           </p>
           <div className="wenyou-forced-actions">
-            <button className="wenyou-forced-enter" onClick={onEnter} disabled={loading}>{loading ? "接入中" : "立即接入"}</button>
+            <button className="wenyou-forced-enter" onClick={onEnter} disabled={loading}>{loading ? "接入中" : "进入副本"}</button>
           </div>
         </div>
         <span className="wenyou-forced-corner wenyou-forced-corner-tl" aria-hidden="true" />
@@ -3202,7 +3216,7 @@ function SettlementDraft({
     <div className="wenyou-settlement-draft">
       <div className="wenyou-settlement-head">
         <div>
-          <span>结算预览</span>
+          <span>副本报告预览</span>
           <strong>{preview?.result_label || "结算校准"}</strong>
         </div>
         <b>{preview?.rating_label || rating || "-"}</b>
@@ -3211,15 +3225,15 @@ function SettlementDraft({
         <span style={{ width: `${Math.max(0, Math.min(100, score))}%` }} />
       </div>
       <div className="wenyou-settlement-meta">
-        <span>完成度 {score}</span>
-        <span>事件 {preview?.history_rounds ?? 0}</span>
-        <span>{preview?.confidence === "manual" ? "手动核准" : "系统建议"}</span>
+        <span>评级分 {score}</span>
+        <span>回合 {preview?.history_rounds ?? 0}</span>
+        <span>{preview?.confidence === "manual" ? "手动确认" : "规则预估"}</span>
       </div>
-      {preview?.reason ? <p className="wenyou-settlement-reason">{preview.reason}</p> : null}
+      {preview?.reason ? <p className="wenyou-settlement-reason"><b>评级依据</b>{preview.reason}</p> : null}
       <div className="wenyou-settlement-reward">
-        <div><span>积分</span><strong>+{reward.gross_points ?? reward.points_delta ?? 0}</strong></div>
-        <div><span>EXP</span><strong>+{reward.gross_exp ?? reward.exp_delta ?? 0}</strong></div>
-        <div><span>奖励</span><strong>{reward.reward_rolls ?? 0} 次</strong></div>
+        <div><span>积分入账</span><strong>+{reward.gross_points ?? reward.points_delta ?? 0}</strong></div>
+        <div><span>经验</span><strong>+{reward.gross_exp ?? reward.exp_delta ?? 0}</strong></div>
+        <div><span>掉落机会</span><strong>{reward.reward_rolls ?? 0} 次</strong></div>
       </div>
       <div className="wenyou-settlement-breakdown">
         {(preview?.score_breakdown || []).map((item) => (
@@ -3250,19 +3264,24 @@ function SettlementGranted({
 }) {
   const rating = String(settlement.rating_label || settlement.rating || "-");
   const result = String(settlement.result_label || settlement.result || "已结算");
+  const rewardRolls = Number(settlement.reward_rolls || 0);
   return (
     <div className="wenyou-settlement-draft wenyou-settlement-granted">
       <div className="wenyou-settlement-head">
         <div>
-          <span>SETTLEMENT READY</span>
+          <span>副本报告已归档</span>
           <strong>{result}</strong>
         </div>
         <b>{rating}</b>
       </div>
       <div className="wenyou-settlement-reward">
         <div><span>入账积分</span><strong>+{Number(settlement.points_delta || 0)}</strong></div>
-        <div><span>EXP</span><strong>+{Number(settlement.exp_delta || 0)}</strong></div>
-        <div><span>钱包</span><strong>{Number(settlement.wallet_points || 0)}</strong></div>
+        <div><span>经验</span><strong>+{Number(settlement.exp_delta || 0)}</strong></div>
+        <div><span>掉落机会</span><strong>{rewardRolls} 次</strong></div>
+      </div>
+      <div className="wenyou-settlement-meta">
+        <span>当前积分 {Number(settlement.wallet_points || 0)}</span>
+        {settlement.debt_delta ? <span>债务变化 {Number(settlement.debt_delta || 0)}</span> : null}
       </div>
       {onArchive ? (
         <div className="wenyou-settlement-confirm">
@@ -3365,6 +3384,8 @@ function PanelModal({
   session,
   initialTab,
   acting,
+  playerOneName,
+  playerTwoName,
   onClose,
   onUseItem,
   onInventoryCommand,
@@ -3373,6 +3394,8 @@ function PanelModal({
   session: WenyouSessionPanel | null;
   initialTab: WenyouPanelTab;
   acting: boolean;
+  playerOneName: string;
+  playerTwoName: string;
   onClose: () => void;
   onUseItem: (item: WenyouInventoryItem | string) => void;
   onInventoryCommand: (
@@ -3466,12 +3489,12 @@ function PanelModal({
                     <PanelRow label="主神债务" value={String(session.wallet?.debts ?? 0)} />
                   </div>
                   <PlayerStatCard
-                    title={playerDisplayName(stats.player1, "玩家一")}
+                    title={selfDisplayName(playerDisplayName(stats.player1, playerOneName))}
                     player={stats.player1}
                     growth={growthPlayers.player1}
                   />
                   <PlayerStatCard
-                    title={`玩家二 · ${playerDisplayName(stats.player2, "玩家二")}`}
+                    title={teammateDisplayName(playerDisplayName(stats.player2, playerTwoName))}
                     player={stats.player2}
                     growth={growthPlayers.player2}
                   />
@@ -3511,21 +3534,29 @@ function InventoryList({
       {inventory.map((item, index) => {
         const detail = typeof item === "string" ? "" : itemDisplayDescription(item);
         const sealed = typeof item !== "string" && !!item.sealed;
-        const lockedForSale = typeof item !== "string" && (!!item.quest_item || item.carry_out === false);
+        const broken = typeof item !== "string" && !!item.broken;
+        const lockedForSale = typeof item !== "string" && (!!item.quest_item || item.carry_out === false || !!item.temporary || !!item.unique || !!item.bound);
+        const requirements = typeof item === "string" ? "" : inventoryRequirementText(item);
+        const badges = typeof item === "string" ? [] : inventoryStatusBadges(item);
+        const meta = typeof item === "string" ? "" : inventoryMetaText(item);
         return (
-          <div className="wenyou-inventory-row" key={inventoryItemKey(item, index)}>
-            <span>
-              {inventoryItemLabel(item)}
+          <div className={`wenyou-inventory-row ${sealed ? "sealed" : ""} ${broken ? "broken" : ""}`} key={inventoryItemKey(item, index)}>
+            <span className="wenyou-inventory-main">
+              <strong>{inventoryItemLabel(item)}</strong>
               {typeof item !== "string" ? (
-                <small>
-                  {[item.rarity, item.category || item.kind, item.uses_left !== undefined ? `次数 ${item.uses_left}` : "", item.durability !== undefined ? `耐久 ${item.durability}/${item.durability_max ?? "?"}` : ""].filter(Boolean).join(" · ")}
-                  {detail ? `｜${detail}` : ""}
-                </small>
+                <>
+                  <em className="wenyou-inventory-badges">
+                    {badges.map((badge) => <b key={badge}>{badge}</b>)}
+                  </em>
+                  {meta ? <small>{meta}</small> : null}
+                  {detail ? <small>{detail}</small> : null}
+                  {item.sealed_reason || requirements ? <small className="wenyou-inventory-warning">{item.sealed_reason || `解封条件：${requirements}`}</small> : null}
+                </>
               ) : null}
             </span>
             <div className="wenyou-inventory-actions">
-              <button type="button" onClick={() => onUseItem(item)} disabled={acting || sealed || (typeof item !== "string" && !!item.broken)}>{acting ? "演算中" : "使用"}</button>
-              <button type="button" onClick={() => onInventoryCommand(item, "sell", "出售")} disabled={acting || lockedForSale}>出售</button>
+              <button type="button" onClick={() => onUseItem(item)} disabled={acting || sealed || broken}>{typeof item === "string" ? (acting ? "演算中" : "使用") : inventoryUseBlockLabel(item, acting)}</button>
+              <button type="button" onClick={() => onInventoryCommand(item, "sell", "出售")} disabled={acting || lockedForSale}>{typeof item === "string" ? "出售" : inventorySellBlockLabel(item)}</button>
             </div>
           </div>
         );
@@ -3594,7 +3625,7 @@ function MarkerPanelCard({ item }: { item: WenyouPublicMarker }) {
 }
 
 function HistoryPanelRow({ item }: { item: { role?: string; content?: string; timestamp?: string } }) {
-  const roleMap: Record<string, string> = { gm: "GM", player1: "玩家一", player2: "玩家二", system: "系统" };
+  const roleMap: Record<string, string> = { gm: "GM", player1: "你", player2: "队友", system: "系统" };
   const role = roleMap[String(item.role || "")] || String(item.role || "记录");
   return (
     <div className="wenyou-history-row">

@@ -1125,17 +1125,17 @@ def _refresh_forced_instance_queue(wallet: dict, session: Optional[dict] = None)
         else:
             break
     if debts >= 3000:
-        by_id["debt_clearance"] = _forced_queue_item("debt_clearance", "债务清算：红门夜班", _higher_rank(rank, "B"), "债务达到 3000，系统已锁定下一次清算副本。", "debt", True)
+        by_id["debt_clearance"] = _forced_queue_item("debt_clearance", "强制扮演：红门夜班", _higher_rank(rank, "B"), "系统已锁定下一次强制扮演副本；副本内目标是演好 NPC 身份并推动任务者进度。", "debt", True)
     elif debts >= 1000:
-        by_id["debt_collection"] = _forced_queue_item("debt_collection", "债务催收：午夜客服", _higher_rank(rank, "C"), "债务达到 1000，系统将在候选池插入催收副本。", "debt", False)
+        by_id["debt_collection"] = _forced_queue_item("debt_collection", "强制扮演：午夜客服", _higher_rank(rank, "C"), "系统将在候选池插入一次强制扮演副本；通关收益优先抵扣未清代价。", "debt", False)
     if pollution >= 90:
-        by_id["pollution_clearance"] = _forced_queue_item("pollution_clearance", "污染清算：白室净化班", _higher_rank(rank, "B"), "污染达到 90，系统已强制安排净化副本。", "pollution", True)
+        by_id["pollution_clearance"] = _forced_queue_item("pollution_clearance", "强制扮演：白室值守", _higher_rank(rank, "B"), "系统已强制安排 NPC 身份接入；副本内禁止把污染来源当成主线目标。", "pollution", True)
     elif pollution >= 60:
-        by_id["pollution_purification"] = _forced_queue_item("pollution_purification", "污染净化：异常门诊夜班", _higher_rank(rank, "C"), "污染达到 60，系统将在候选池插入净化副本。", "pollution", False)
+        by_id["pollution_purification"] = _forced_queue_item("pollution_purification", "强制扮演：异常门诊", _higher_rank(rank, "C"), "系统将在候选池插入一次 NPC 身份接入副本；通关收益优先处理未清代价。", "pollution", False)
     if recent_deaths >= 2:
-        by_id["revive_labor"] = _forced_queue_item("revive_labor", "复活清算：临时身份", _higher_rank(rank, "C"), "连续 2 次死亡失败，需以副本 NPC 身份完成复活代价清算。", "revive", True)
+        by_id["revive_labor"] = _forced_queue_item("revive_labor", "强制扮演：临时身份", _higher_rank(rank, "C"), "连续死亡失败后，系统锁定一次 NPC 身份接入；副本内只表现为临时身份任务。", "revive", True)
     if wallet.get("contract_debt"):
-        by_id["contract_collection"] = _forced_queue_item("contract_collection", "契约追偿：坏账处理处", _higher_rank(rank, "B"), "存在未偿还的 S 级能力或契约代价，系统已发起追偿。", "contract", True)
+        by_id["contract_collection"] = _forced_queue_item("contract_collection", "强制扮演：坏账处理处", _higher_rank(rank, "B"), "系统锁定一次强制扮演副本；副本内不得暴露真实触发原因。", "contract", True)
     priority = {"debt_clearance": 0, "pollution_clearance": 1, "revive_labor": 2, "contract_collection": 3, "debt_collection": 4, "pollution_purification": 5}
     queue = sorted(by_id.values(), key=lambda x: (priority.get(str(x.get("id") or ""), 99), str(x.get("created_at") or "")))[:8]
     def _queue_fingerprint(items: list[dict]) -> list[tuple[Any, ...]]:
@@ -1162,17 +1162,17 @@ def _forced_candidate_from_queue(item: dict) -> dict[str, Any]:
     penalty_type = str(item.get("penalty_type") or "system")
     genre = "潜伏调查"
     core_task = "玩家一和玩家二一起以副本原住民 NPC 身份进入其他任务者正在进行的副本；演好各自身份，并用符合身份的方式推动正常任务者的副本进度。"
-    hook = "两人都不能暴露自己是玩家、任务者、清算对象或外来者；NPC 身份越靠近主线核心，危险越高。"
+    hook = "两人都不能暴露自己是玩家、任务者、外来者或真实来源；NPC 身份越靠近主线核心，危险越高。"
     return {
         "id": "forced_" + str(item.get("id") or "penalty"),
-        "title": str(item.get("title") or "强制清算副本"),
+        "title": str(item.get("title") or "强制扮演副本"),
         "instance_genre": genre,
         "difficulty": _normalize_difficulty(item.get("difficulty") or "C"),
-        "tagline": "系统已锁定下一次副本入口。",
-        "premise": str(item.get("reason") or "系统检测到未清算代价。") + " 该原因只作为后端结算 metadata，不作为剧情主题。",
+        "tagline": "系统已锁定下一次 NPC 身份接入。",
+        "premise": str(item.get("reason") or "系统检测到未清代价。") + " 触发原因只作为后端结算 metadata，不作为剧情主题。",
         "core_task": core_task,
         "survival_hook": hook,
-        "risk": "演崩身份、直接剧透或破坏副本世界观会导致清算失败，后端再按原因追加债务、污染、封印或追猎状态。",
+        "risk": "演崩身份、直接剧透或破坏副本世界观会导致任务失败，后端再按触发原因追加债务、污染、封印或追猎状态。",
         "twist": "正常任务者的任务可以围绕两名玩家扮演的 NPC 展开；玩家站在剧情中心，但不能用任务者身份行动。",
         "tags": ["强制", "惩罚副本", "NPC扮演", "临时身份", penalty_type],
         "estimated_length": "短中篇",
@@ -1412,7 +1412,7 @@ def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
         "disguised_identity": "副本原住民 NPC",
         "shared_objective": True,
         "work_order": _compact_text(work_order, 220),
-        "forbidden_disclosures": ["玩家身份", "任务者身份", "清算对象身份", "外来者身份", "副本结局/隐藏规则"],
+        "forbidden_disclosures": ["玩家身份", "任务者身份", "外来者身份", "真实来源", "副本结局/隐藏规则"],
         "exposure_to_taskers": 0,
         "exposure_to_monsters": 0,
         "resolved": False,
@@ -1424,7 +1424,7 @@ def _attach_forced_instance_contract(session: dict, candidate: Any) -> None:
     rules["forced_instance"] = copy.deepcopy(forced)
     runtime["rules_state"] = rules
     public = runtime.get("public_state") if isinstance(runtime.get("public_state"), dict) else {}
-    public["forced_notice"] = "强制清算副本已接入：维持双方 NPC 身份，完成系统目标。"
+    public["forced_notice"] = "强制惩罚副本已接入：维持双方 NPC 身份，推动正常任务者接近主线。"
     runtime["public_state"] = public
     session["runtime_state"] = runtime
 
@@ -1904,7 +1904,7 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
             repay = min(max(0, int(wallet.get("debts") or 0)), 350 * rank_scale)
             wallet["debts"] = max(0, int(wallet.get("debts") or 0) - repay)
             outcome["debt_repaid_extra"] = repay
-            outcome["notes"].append(f"强制清算额外偿还债务 {repay}")
+            outcome["notes"].append(f"惩罚副本额外偿还债务 {repay}")
         elif penalty_type == "pollution":
             st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
             reduction = 10 * rank_scale
@@ -1914,12 +1914,12 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
                     player["pollution"] = max(0, int(player.get("pollution") or 0) - reduction)
             session["stats"] = st
             outcome["pollution_reduced"] = reduction
-            outcome["notes"].append(f"污染清算降低污染 {reduction}")
+            outcome["notes"].append(f"惩罚副本降低污染 {reduction}")
         elif penalty_type == "revive":
-            outcome["notes"].append("复活代价清算完成，NPC 身份解除")
+            outcome["notes"].append("复活代价处理完成，NPC 身份解除")
         elif penalty_type == "contract":
             wallet["contract_debt"] = False
-            outcome["notes"].append("契约追偿完成")
+            outcome["notes"].append("契约代价处理完成")
         forced["resolved"] = True
         forced["resolved_at"] = now_beijing_iso()
         forced["result"] = "success"
@@ -1928,7 +1928,7 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
             debt_delta = 120 * rank_scale + exposure * 50
             wallet["debts"] = max(0, int(wallet.get("debts") or 0) + debt_delta)
             outcome["debt_added"] = debt_delta
-            outcome["notes"].append(f"清算失败追加债务 {debt_delta}")
+            outcome["notes"].append(f"惩罚失败追加债务 {debt_delta}")
         if penalty_type in {"pollution", "revive"}:
             st = session.get("stats") if isinstance(session.get("stats"), dict) else {}
             pollution_delta = 4 * rank_scale + exposure * 2
@@ -1939,7 +1939,7 @@ def _apply_forced_instance_settlement(wallet: dict, session: dict, settlement: d
                     _add_condition_unique(player, "污染")
             session["stats"] = st
             outcome["pollution_added"] = pollution_delta
-            outcome["notes"].append(f"清算失败追加污染 {pollution_delta}")
+            outcome["notes"].append(f"惩罚失败追加污染 {pollution_delta}")
         forced["result"] = "failed"
     queue_id = str(forced.get("queue_id") or "")
     queue = []
@@ -4020,13 +4020,13 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
         }
         penalty_label = penalty_labels.get(penalty_type, "系统")
         raw["player1_role"] = "被主神临时塞入本副本的原住民 NPC；公开姓名沿用玩家代号，必须维持身份并与玩家二共同推动正常任务者进度。"
-        raw["player2_role"] = "玩家二也与玩家一一起被主神临时塞入本副本的原住民 NPC；公开姓名沿用玩家代号，必须维持身份并共同完成清算。"
-        raw["conflict"] = "维持双方 NPC 身份，在不暴露玩家/任务者/外来者身份的前提下，推动正常任务者完成他们的副本主线，直到主神确认清算完成。"
-        raw["failure_hint"] = "任一方身份暴露、直接剧透、替任务者强行通关或破坏副本世界观，会导致清算失败或评级下降。"
-        raw["reward_hint"] = f"惩罚副本完成后由后端按{penalty_label}清算原因优先抵扣或解除对应代价；副本剧情不以该原因作为主线。"
+        raw["player2_role"] = "玩家二也与玩家一一起被主神临时塞入本副本的原住民 NPC；公开姓名沿用玩家代号，必须维持身份并共同推动任务者进度。"
+        raw["conflict"] = "维持双方 NPC 身份，在不暴露玩家/任务者/外来者身份的前提下，用符合身份的方式推动正常任务者完成他们的副本主线。"
+        raw["failure_hint"] = "任一方身份暴露、直接剧透、替任务者强行通关或破坏副本世界观，会导致惩罚副本失败或评级下降。"
+        raw["reward_hint"] = f"惩罚副本完成后由后端按{penalty_label}触发原因优先抵扣或解除对应代价；副本剧情不以该原因作为主线。"
         raw["public"]["visible_rules"] = [
             "维持双方 NPC 身份。",
-            "不能暴露玩家、任务者、清算对象或外来者身份。",
+            "不能暴露玩家、任务者或外来者身份。",
             "用符合身份的行为推动正常任务者进度。",
         ]
         raw["public"]["public_task"] = raw["conflict"]
@@ -4042,8 +4042,8 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
             "正文仍固定玩家一视角，玩家二只能通过玩家一可见、可听、可交流的信息呈现。",
         ]
         raw["gm_secret"]["hidden_endings"] = [
-            {"name": "身份无损清算", "condition": "玩家一和玩家二始终维持 NPC 身份，并让正常任务者完成主线关键进度。"},
-            {"name": "暴露清算失败", "condition": "任一玩家主动说出系统/任务者/外来者真相，或两人的 NPC 身份被任务者与异常阵营同时识破。"},
+            {"name": "身份无损", "condition": "玩家一和玩家二始终维持 NPC 身份，并让正常任务者完成主线关键进度。"},
+            {"name": "暴露失败", "condition": "任一玩家主动说出系统/任务者/外来者真相，或两人的 NPC 身份被任务者与异常阵营同时识破。"},
         ]
         raw["instance_blueprint"]["logline"] = (blueprint_logline or "临时 NPC 在别人的副本里演好身份并推动主线。")[:240]
         raw["instance_blueprint"]["mainline"] = [
@@ -4062,9 +4062,9 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
             },
             {
                 "phase": "收束",
-                "goal": "正常任务者完成关键判断或通关节点，玩家一和玩家二避免暴露并等待主神确认清算。",
+                "goal": "正常任务者完成关键判断或通关节点，玩家一和玩家二避免暴露并等待系统确认归档。",
                 "required_clues": [],
-                "fail_forward": "若暴露风险过高，进入强制撤离、评级下降或清算失败结算。",
+                "fail_forward": "若暴露风险过高，进入强制撤离、评级下降或惩罚失败结算。",
             },
         ]
         raw["instance_blueprint"]["hard_constraints"] = [
@@ -4077,7 +4077,7 @@ def _framework_from_candidate_text(item: dict, core_text: str, blueprint_text: s
             "失败要以暴露风险、威胁推进、任务者伤亡或异常加压继续剧情，不让剧情卡死。",
             "正文固定玩家一视角，玩家二不写成普通任务者。",
             "NPC 身份越核心，危险越高；不能写成安全旁观者。",
-            "债务、污染、复活、契约只作为后端清算原因，不得写成剧情主线。",
+            "债务、污染、复活、契约只作为后端触发原因，不得写成剧情主线。",
             "不要替玩家做行动决定，不要直接剧透隐藏真相。",
         ]
     return _normalize_framework(raw)
@@ -5653,7 +5653,7 @@ def summarize_story_for_ai_player(state: Any, actor_id: Any = "player2") -> dict
     ]
     if forced and str(forced.get("mode") or "") == "npc_labor":
         known_risks.append(f"惩罚副本：{player1_name}和{player2_name}都是副本原住民 NPC，不能暴露玩家/任务者/外来者身份。")
-        party_notes[0] = f"{player1_name}与{player2_name}共同执行惩罚副本清算，双方都是副本原住民 NPC。"
+        party_notes[0] = f"{player1_name}与{player2_name}共同执行惩罚副本扮演，双方都是副本原住民 NPC。"
     return {
         "campaign_summary": _compact_text(f"当前队伍处于{_phase_label(phase)}；副本为{_framework_instance_line(fw) or '未选择副本'}。", 180),
         "current_scene_summary": _compact_text(public.get("scene_summary") or fw.get("world") or "当前场景信息有限。", 220),
@@ -5800,7 +5800,7 @@ def _ai_player_channel_system(actor_name: str, player1_name: str) -> str:
 - 如果对讲机模式是“短讯通话”，只回复消息，不新增现实行动。
 - 如果对讲机模式是“同步行动”，输出{actor}准备执行的本轮行动，必须具体、可被 GM 结算。
 - 如果上下文显示信号弱、杂音、串台或监听风险，回复里可以短促、断续或提醒风险，但不要乱编第三方消息。
-- 惩罚副本里必须维持 NPC 身份，不要说出主神空间、任务者、清算者、系统工单等真实来源。
+- 惩罚副本里必须维持 NPC 身份，不要说出主神空间、任务者身份或其他真实来源。
 - 最终只输出{actor}通过对讲机发出的正文，20-160 字；不要 Markdown，不要解释，不要系统提示。
 """
 
@@ -6748,6 +6748,8 @@ def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
         current_stats_block=_format_stats_for_gm_prompt(session),
     )
     msgs: list[dict] = []
+    player1_name = _session_player_display_name(session, "player1", "玩家一")
+    player2_name = _session_player_display_name(session, "player2", "玩家二")
     for h in session.get("history") or []:
         role = (h.get("role") or "").lower()
         content = (h.get("content") or "").strip()
@@ -6756,7 +6758,7 @@ def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
         if role == "gm":
             msgs.append({"role": "assistant", "content": content})
         elif role in ("player1", "player2"):
-            who = "玩家一" if role == "player1" else "玩家二"
+            who = player1_name if role == "player1" else player2_name
             msgs.append({"role": "user", "content": f"{who}：{content}"})
     return system, msgs
 
@@ -6777,10 +6779,12 @@ def cmd_go(user_id: int) -> str:
     pr = session.get("pending_round") or {}
     p1 = pr.get("player1_lines") or []
     p2 = pr.get("player2_lines") or []
-    p1_text = "\n".join(p1).strip() or "（玩家一暂无行动描述）"
-    p2_text = "\n".join(p2).strip() or "（玩家二本轮暂无行动描述）"
+    player1_name = _session_player_display_name(session, "player1", "玩家一")
+    player2_name = _session_player_display_name(session, "player2", "玩家二")
+    p1_text = "\n".join(p1).strip() or f"（{player1_name}暂无行动描述）"
+    p2_text = "\n".join(p2).strip() or f"（{player2_name}本轮暂无行动描述）"
 
-    user_blob = f"玩家一本轮行动：\n{p1_text}\n\n玩家二本轮行动：\n{p2_text}\n"
+    user_blob = f"{player1_name}本轮行动：\n{p1_text}\n\n{player2_name}本轮行动：\n{p2_text}\n"
 
     system, gm_msgs = _build_gm_messages(session)
     # 追加本轮结算 user 消息（作为对 GM 的输入）

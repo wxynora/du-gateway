@@ -3963,6 +3963,14 @@
     line-height: 1.5;
   }
 
+  .wenyou-settlement-reason b {
+    display: block;
+    margin-bottom: 3px;
+    color: #a5f3fc;
+    font-size: 10px;
+    font-weight: 900;
+  }
+
   .wenyou-settlement-reward {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5183,6 +5191,12 @@
     gap: 10px;
   }
 
+  .wenyou-inventory-row.sealed,
+  .wenyou-inventory-row.broken {
+    border-color: rgba(251, 191, 36, 0.22);
+    background: rgba(39, 27, 8, 0.3);
+  }
+
   .wenyou-inventory-row span {
     display: grid;
     gap: 4px;
@@ -5192,11 +5206,39 @@
     overflow-wrap: anywhere;
   }
 
+  .wenyou-inventory-main strong {
+    color: #f8fbff;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .wenyou-inventory-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    font-style: normal;
+  }
+
+  .wenyou-inventory-badges b {
+    border: 1px solid rgba(34, 211, 238, 0.24);
+    border-radius: 999px;
+    background: rgba(34, 211, 238, 0.08);
+    color: rgba(165, 243, 252, 0.92);
+    font-size: 10px;
+    font-weight: 900;
+    line-height: 1;
+    padding: 4px 7px;
+  }
+
   .wenyou-inventory-row small {
     color: rgba(180, 216, 230, 0.72);
     font-size: 11px;
     font-weight: 700;
     line-height: 1.4;
+  }
+
+  .wenyou-inventory-row .wenyou-inventory-warning {
+    color: #fde68a;
   }
 
   .wenyou-inventory-row button {

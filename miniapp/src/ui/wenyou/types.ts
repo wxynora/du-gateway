@@ -44,9 +44,14 @@ export type WenyouInventoryItem = {
   temporary?: boolean;
   quest_item?: boolean;
   carry_out?: boolean;
+  unique?: boolean;
+  bound?: boolean;
   sigil?: string;
   sealed?: boolean;
   sealed_reason?: string;
+  seal_rank?: string | null;
+  requirements?: Record<string, unknown>;
+  use_phase?: string[];
   source?: string;
 };
 
