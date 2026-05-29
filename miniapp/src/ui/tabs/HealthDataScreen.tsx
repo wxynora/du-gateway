@@ -124,9 +124,19 @@ export function HealthDataScreen() {
             <div className="text-[12px] font-bold uppercase tracking-[0.18em] text-rose-300">Notify for Xiaomi</div>
             <div className="mt-1 text-[18px] font-semibold tracking-tight text-gray-950">健康数据</div>
           </div>
-          <span className={`rounded-full px-3 py-1 text-[12px] font-semibold ${status?.listenerEnabled ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-            {status?.listenerEnabled ? "已授权" : "未授权"}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              disabled={loading}
+              className="rounded-full bg-white/80 px-3 py-1 text-[12px] font-semibold text-gray-700 shadow-[0_8px_22px_-18px_rgba(0,0,0,0.4)] active:bg-white disabled:opacity-60"
+              onClick={() => void requestSnapshot()}
+            >
+              {loading ? "刷新中" : "刷新"}
+            </button>
+            <span className={`rounded-full px-3 py-1 text-[12px] font-semibold ${status?.listenerEnabled ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+              {status?.listenerEnabled ? "已授权" : "未授权"}
+            </span>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -173,11 +183,8 @@ export function HealthDataScreen() {
         <div className="mt-3 text-[12px] leading-5 text-gray-500">同一条通知内容在间隔内不会重复上传。</div>
       </section>
 
-      <div className="grid grid-cols-2 gap-2">
-        <button type="button" className="h-11 rounded-[16px] bg-gray-900 text-[13px] font-semibold text-white active:scale-[0.98]" onClick={() => void requestSnapshot()}>
-          重新读取
-        </button>
-        <button type="button" className="h-11 rounded-[16px] bg-gray-100 text-[13px] font-semibold text-gray-800 active:scale-[0.98]" onClick={() => void SumiOverlay.openNotificationListenerSettings()}>
+      <div>
+        <button type="button" className="h-11 w-full rounded-[16px] bg-gray-100 text-[13px] font-semibold text-gray-800 active:scale-[0.98]" onClick={() => void SumiOverlay.openNotificationListenerSettings()}>
           通知权限
         </button>
       </div>
@@ -188,9 +195,6 @@ export function HealthDataScreen() {
             <div className="text-[13px] font-semibold tracking-wide text-gray-900">云端记录</div>
             <div className="mt-1 text-[12px] text-gray-400">最新 {cloudHealthRows.length || 0} 条</div>
           </div>
-          <button type="button" className="rounded-full bg-gray-50 px-3 py-1.5 text-[12px] font-semibold text-gray-600 active:bg-gray-100" onClick={() => void load()}>
-            刷新
-          </button>
         </div>
         <div className="space-y-2">
           {cloudHealthRows.map((row, idx) => (
