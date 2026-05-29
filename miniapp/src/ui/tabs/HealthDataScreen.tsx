@@ -136,7 +136,7 @@ export function HealthDataScreen() {
         </button>,
         headerActionsEl,
       ) : null}
-      <section className="relative overflow-hidden rounded-[32px] border border-black/5 bg-white p-6 text-[#111111] shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]">
+      <section className="relative overflow-hidden rounded-[32px] border border-black/5 bg-white p-6 text-[#111111] shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]" style={{ fontFamily: "'Inter', sans-serif" }}>
         <div className="flex items-start justify-between gap-4 border-b border-black/10 pb-4">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-black/45">Sumika Heartbeat</div>
@@ -412,7 +412,7 @@ function BiometricMetric({
       <div className={`${compact ? "mt-2 min-h-[42px]" : "mt-3 min-h-[56px]"} flex min-w-0 items-end gap-1 overflow-hidden`}>
         <span
           className={`${compact ? "text-[clamp(32px,9vw,48px)]" : "text-[clamp(42px,14vw,64px)]"} min-w-0 shrink leading-none tracking-tight ${tone === "dark" ? "text-white" : "text-black"}`}
-          style={{ fontFamily: "'Playfair Display', Georgia, 'Times New Roman', serif" }}
+          style={{ fontFamily: "'Playfair Display', Georgia, 'Times New Roman', serif", fontWeight: 500 }}
         >
           {value}
         </span>
