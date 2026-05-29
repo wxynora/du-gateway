@@ -305,10 +305,6 @@ function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
 
   return (
     <div className="mt-5">
-      <div className="mb-3 flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.12em] text-white/38">
-        <span>HRV Stream</span>
-        <span>01-{String(Math.max(1, values.length || 10)).padStart(2, "0")}</span>
-      </div>
       <div className="relative h-[92px] overflow-hidden">
         <svg className="h-full w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
           <g>
@@ -328,12 +324,6 @@ function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
           />
         </svg>
       </div>
-      {values.length ? (
-        <div className="mt-2 flex justify-between text-[10px] font-medium text-white/38">
-          <span>低 {min}</span>
-          <span>高 {max}</span>
-        </div>
-      ) : null}
     </div>
   );
 }
