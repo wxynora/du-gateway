@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { apiJson } from "../api";
 import { useToast } from "../toast";
-import { HeartIconMini } from "../icons";
 import { SumiOverlay, type HealthReportingLog, type HealthReportingStatus } from "../../plugins/sumi-overlay";
 
 type HealthCloudResponse = {
@@ -109,7 +108,7 @@ export function HealthDataScreen() {
     return (
       <div className="px-4 py-5">
         <div className="rounded-[24px] border border-gray-100 bg-white px-5 py-8 text-center shadow-[0_8px_30px_-18px_rgba(0,0,0,0.2)]">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 text-rose-500"><HeartIconMini /></div>
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-50 text-gray-700"><BiometricSignalIcon /></div>
           <div className="text-[15px] font-semibold text-gray-900">健康数据只在 Android 端工作</div>
         </div>
       </div>
@@ -131,8 +130,8 @@ export function HealthDataScreen() {
       <section className="relative overflow-hidden rounded-[32px] border border-black/5 bg-white p-6 text-[#111111] shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]">
         <div className="flex items-start justify-between gap-4 border-b border-black/10 pb-4">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-black/45">Notify for Xiaomi</div>
-            <div className="mt-2 text-[22px] font-semibold tracking-tight text-black">我的健康数据</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-black/45">My Health Data</div>
+            <div className="mt-1 text-[13px] font-medium text-black/55">Notify for Xiaomi</div>
           </div>
           <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold ${status?.listenerEnabled ? "bg-black text-white" : "bg-black/8 text-black/60"}`}>
             {status?.listenerEnabled ? "已授权" : "未授权"}
@@ -231,62 +230,38 @@ export function HealthDataScreen() {
 function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; history: Array<Record<string, any>> }) {
   const heart = Number(vitals?.heart_bpm || 0);
   const breath = Number(vitals?.breath_rpm || 0);
-  const heartMs = heart > 0 ? Math.max(420, Math.round(60000 / heart)) : 840;
-  const breathSeconds = breath > 0 ? Math.max(2.5, 60 / breath) : 5;
   const params = typeof vitals?.parameters === "object" && vitals.parameters ? vitals.parameters : {};
   const heartHistory = useMemo(() => normalizeDuHeartHistory(history, vitals), [history, vitals]);
   const hasVitals = heart > 0 || breath > 0;
   return (
-    <section className="relative overflow-hidden rounded-[32px] bg-[#111111] p-6 text-white shadow-[0_34px_80px_-48px_rgba(0,0,0,0.85)]">
+    <section className="relative overflow-hidden rounded-[32px] bg-[#111111] p-6 text-white shadow-[0_34px_80px_-48px_rgba(0,0,0,0.85)]" style={{ fontFamily: "'Inter', sans-serif" }}>
       <style>
         {`
-          @keyframes du-heartbeat {
-            0%, 100% { transform: scale(1); }
-            14% { transform: scale(1.16); }
-            24% { transform: scale(0.96); }
-            34% { transform: scale(1.08); }
-            52% { transform: scale(1); }
-          }
-          @keyframes du-breathe {
-            0%, 100% { transform: scale(0.92); opacity: 0.42; }
-            48% { transform: scale(1.12); opacity: 0.78; }
+          @keyframes biometric-line-draw {
+            from { stroke-dashoffset: 1000; }
+            to { stroke-dashoffset: 0; }
           }
         `}
       </style>
       <div className="mb-6 flex items-start justify-between gap-4 border-b border-white/15 pb-4">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/42">Du rhythm / 拟态节律</div>
-          <div className="mt-2 text-[22px] font-semibold tracking-tight text-white">渡的节律</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/42">Du Heartbeat</div>
+          <div className="mt-1 text-[13px] font-medium text-white/42">Biometric stream</div>
         </div>
         <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-black">
           {String(vitals?.status || (hasVitals ? "平稳" : "未同步"))}
         </span>
       </div>
-      <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-4">
-        <div className="relative flex h-[86px] w-[86px] shrink-0 items-center justify-center">
-          <span
-            className="absolute h-[76px] w-[76px] rounded-full bg-white/12"
-            style={{ animation: `du-breathe ${breathSeconds}s ease-in-out infinite` }}
-          />
-          <span className="absolute h-[54px] w-[54px] rounded-full bg-white/8 shadow-[0_0_32px_-10px_rgba(255,255,255,0.42)]" />
-          <span
-            className="relative flex h-[34px] w-[34px] items-center justify-center rounded-full bg-white text-black shadow-[0_0_24px_-8px_rgba(255,255,255,0.75)]"
-            style={{ animation: `du-heartbeat ${heartMs}ms ease-in-out infinite` }}
-          >
-            <HeartIconMini />
-          </span>
-        </div>
-        <div className="grid min-w-0 grid-cols-2 gap-3">
-          <BiometricMetric label="Du Heart / 渡心率" value={heart || "-"} unit={heart ? "bpm" : ""} tone="dark" compact />
-          <BiometricMetric label="Du Breath / 渡呼吸" value={breath || "-"} unit={breath ? "/min" : ""} tone="dark" compact />
-        </div>
+      <div className="grid grid-cols-2 gap-4 py-7">
+        <BiometricMetric label="Du Heart / 渡心率" value={heart || "-"} unit={heart ? "bpm" : ""} tone="dark" />
+        <BiometricMetric label="Du Breath / 渡呼吸" value={breath || "-"} unit={breath ? "brpm" : ""} tone="dark" />
       </div>
-      <div className="mt-5 grid grid-cols-3 gap-3 border-y border-white/12 py-4 text-[11px] text-white/48">
+      <DuHeartCurve points={heartHistory} />
+      <div className="mt-5 grid grid-cols-3 gap-3 border-t border-white/12 pt-4 text-[11px] text-white/48">
         <ParamPill label="专注" value={params.focus} tone="dark" />
         <ParamPill label="靠近" value={params.intimacy_heat} tone="dark" />
         <ParamPill label="绷紧" value={params.tension} tone="dark" />
       </div>
-      <DuHeartCurve points={heartHistory} />
       <div className="mt-4 border-t border-white/12 pt-3 text-[10px] uppercase tracking-[0.08em] text-white/42">Sync {formatTime(vitals?.updatedAt || vitals?.at) || "-"}</div>
     </section>
   );
@@ -315,55 +290,36 @@ function normalizeDuHeartHistory(history: Array<Record<string, any>>, latest: Re
 
 function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
   const values = points.map((point) => point.value);
-  const latest = values.length ? values[values.length - 1] : 0;
   const min = values.length ? Math.min(...values) : 0;
   const max = values.length ? Math.max(...values) : 0;
-  const width = 240;
-  const height = 78;
-  const padX = 10;
-  const padY = 12;
-  const span = Math.max(1, max - min);
-  const coords = values.map((value, index) => {
-    const x = values.length === 1 ? width / 2 : padX + (index * (width - padX * 2)) / (values.length - 1);
-    const y = padY + ((max - value) * (height - padY * 2)) / span;
-    return { x, y, value };
-  });
-  const path = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
+  const width = 400;
+  const height = 80;
+  const path = values.length >= 2 ? buildSmoothCurvePath(values, min, max, width, height) : BIOMETRIC_WAVE_PATH;
 
   return (
     <div className="mt-5">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[12px] font-semibold text-white">心率波动</div>
-          <div className="mt-0.5 text-[10px] font-medium text-white/38">最近 {points.length || 0} 次</div>
-        </div>
-        <div className="text-right">
-          <div className="text-[18px] font-semibold leading-none text-white">{latest || "-"}</div>
-          <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/38">bpm</div>
-        </div>
+      <div className="mb-3 flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.12em] text-white/38">
+        <span>HRV Stream</span>
+        <span>01-{String(Math.max(1, values.length || 10)).padStart(2, "0")}</span>
       </div>
-      <div className="relative h-[86px] overflow-hidden">
-        {values.length ? (
-          <svg className="h-full w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
-            <line x1={padX} y1={padY} x2={width - padX} y2={padY} stroke="rgba(255, 255, 255, 0.12)" strokeWidth="0.8" />
-            <line x1={padX} y1={height / 2} x2={width - padX} y2={height / 2} stroke="rgba(255, 255, 255, 0.1)" strokeWidth="0.8" />
-            <line x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} stroke="rgba(255, 255, 255, 0.12)" strokeWidth="0.8" />
-            {path ? <path d={path} fill="none" stroke="#F5F5F5" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.4" /> : null}
-            {coords.map((point, index) => (
-              <circle
-                key={`${point.x}-${index}`}
-                cx={point.x}
-                cy={point.y}
-                r={index === coords.length - 1 ? 3.2 : 2.2}
-                fill={index === coords.length - 1 ? "#FFFFFF" : "rgba(255,255,255,0.62)"}
-                stroke="#111111"
-                strokeWidth="1.2"
-              />
-            ))}
-          </svg>
-        ) : (
-          <div className="flex h-full items-center justify-center text-[12px] font-medium text-white/28">还没有节律记录</div>
-        )}
+      <div className="relative h-[92px] overflow-hidden">
+        <svg className="h-full w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+          <g>
+            <line x1="0" y1="20" x2={width} y2="20" stroke="rgba(245,245,245,0.15)" strokeWidth="0.5" />
+            <line x1="0" y1="40" x2={width} y2="40" stroke="rgba(245,245,245,0.15)" strokeWidth="0.5" />
+            <line x1="0" y1="60" x2={width} y2="60" stroke="rgba(245,245,245,0.15)" strokeWidth="0.5" />
+          </g>
+          <path
+            d={path}
+            fill="none"
+            stroke="#F5F5F5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.25"
+            strokeDasharray="1000"
+            style={{ animation: "biometric-line-draw 4s cubic-bezier(0.4,0,0.2,1) forwards" }}
+          />
+        </svg>
       </div>
       {values.length ? (
         <div className="mt-2 flex justify-between text-[10px] font-medium text-white/38">
@@ -373,6 +329,51 @@ function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
       ) : null}
     </div>
   );
+}
+
+const BIOMETRIC_WAVE_PATH = `
+  M 0,40
+  C 10,40 15,10 20,40
+  C 25,70 35,70 40,40
+  C 45,10 55,10 60,40
+  C 65,70 75,70 80,40
+  C 85,10 95,10 100,40
+  C 105,70 115,70 120,40
+  C 125,10 135,10 140,40
+  C 145,70 155,70 160,40
+  C 165,10 175,10 180,40
+  C 185,70 195,70 200,40
+  C 205,10 215,10 220,40
+  C 225,70 235,70 240,40
+  C 245,10 255,10 260,40
+  C 265,70 275,70 280,40
+  C 285,10 295,10 300,40
+  C 305,70 315,70 320,40
+  C 325,10 335,10 340,40
+  C 345,70 355,70 360,40
+  C 365,10 375,10 380,40
+  C 385,70 395,70 400,40
+`;
+
+function buildSmoothCurvePath(values: number[], min: number, max: number, width: number, height: number) {
+  const padY = 10;
+  const span = Math.max(1, max - min);
+  const coords = values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : (index * width) / (values.length - 1);
+    const y = padY + ((max - value) * (height - padY * 2)) / span;
+    return { x, y };
+  });
+  if (!coords.length) return BIOMETRIC_WAVE_PATH;
+  if (coords.length === 1) return `M 0,${coords[0].y.toFixed(1)} C 120,${coords[0].y.toFixed(1)} 280,${coords[0].y.toFixed(1)} ${width},${coords[0].y.toFixed(1)}`;
+  return coords
+    .map((point, index) => {
+      if (index === 0) return `M ${point.x.toFixed(1)},${point.y.toFixed(1)}`;
+      const prev = coords[index - 1];
+      const cp1x = prev.x + (point.x - prev.x) / 2;
+      const cp2x = point.x - (point.x - prev.x) / 2;
+      return `C ${cp1x.toFixed(1)},${prev.y.toFixed(1)} ${cp2x.toFixed(1)},${point.y.toFixed(1)} ${point.x.toFixed(1)},${point.y.toFixed(1)}`;
+    })
+    .join(" ");
 }
 
 function ParamPill({ label, value, tone = "light" }: { label: string; value: unknown; tone?: "light" | "dark" }) {
@@ -420,14 +421,14 @@ function BiometricMetric({
       <div className={`${compact ? "mt-2 min-h-[42px]" : "mt-3 min-h-[56px]"} flex min-w-0 items-end gap-1 overflow-hidden`}>
         <span
           className={`${compact ? "text-[clamp(32px,9vw,48px)]" : "text-[clamp(42px,14vw,64px)]"} min-w-0 shrink leading-none tracking-tight ${tone === "dark" ? "text-white" : "text-black"}`}
-          style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+          style={{ fontFamily: "'Playfair Display', Georgia, 'Times New Roman', serif" }}
         >
           {value}
         </span>
         {unit ? (
           <span
             className={`shrink-0 pb-1 text-[12px] italic tracking-wide ${tone === "dark" ? "text-white/42" : "text-black/42"}`}
-            style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+            style={{ fontFamily: "'Playfair Display', Georgia, 'Times New Roman', serif" }}
           >
             {unit}
           </span>
@@ -444,6 +445,14 @@ function RefreshIconMini({ className = "" }: { className?: string }) {
       <path d="M3 12A9 9 0 0 1 18.1 5.4" />
       <path d="M18 2v4h-4" />
       <path d="M6 22v-4h4" />
+    </svg>
+  );
+}
+
+function BiometricSignalIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 12h3l2.4-6 4.2 12 2.2-6H21" />
     </svg>
   );
 }
