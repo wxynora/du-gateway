@@ -128,35 +128,34 @@ export function HealthDataScreen() {
       >
         <RefreshIconMini className={loading ? "animate-spin" : ""} />
       </button>
-      <section className="rounded-[26px] border border-rose-100 bg-[#FFF9F8] p-5 shadow-[0_10px_34px_-22px_rgba(190,55,72,0.45)]">
-        <div className="mb-5 flex items-start justify-between gap-3">
+      <section className="relative overflow-hidden rounded-[32px] border border-black/5 bg-white p-6 text-[#111111] shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]">
+        <div className="flex items-start justify-between gap-4 border-b border-black/10 pb-4">
           <div>
-            <div className="text-[12px] font-bold uppercase tracking-[0.18em] text-rose-300">Notify for Xiaomi</div>
-            <div className="mt-1 text-[18px] font-semibold tracking-tight text-gray-950">健康数据</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-black/45">Notify for Xiaomi</div>
+            <div className="mt-2 text-[22px] font-semibold tracking-tight text-black">我的健康数据</div>
           </div>
-          <span className={`shrink-0 rounded-full px-3 py-1 text-[12px] font-semibold ${status?.listenerEnabled ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+          <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold ${status?.listenerEnabled ? "bg-black text-white" : "bg-black/8 text-black/60"}`}>
             {status?.listenerEnabled ? "已授权" : "未授权"}
           </span>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Metric label="心率" value={displayHealth.heartRate || "-"} unit={displayHealth.heartRate ? "bpm" : ""} />
-          <Metric label="步数" value={displayHealth.steps || "-"} unit={displayHealth.steps ? "steps" : ""} />
+        <div className="grid grid-cols-2 gap-4 py-7">
+          <BiometricMetric label="Heart Rate / 心率" value={displayHealth.heartRate || "-"} unit={displayHealth.heartRate ? "bpm" : ""} />
+          <BiometricMetric label="Steps / 步数" value={displayHealth.steps || "-"} unit={displayHealth.steps ? "steps" : ""} />
         </div>
 
-        <div className="mt-4 rounded-[18px] bg-white/70 px-4 py-3 text-[12px] text-gray-500">
-          <div className="flex justify-between gap-3">
-            <span>最近同步</span>
-            <span className="text-right font-medium text-gray-800">{formatTime(displayHealth.at) || "-"}</span>
+        <div className="flex items-end justify-between gap-4 border-t border-black/10 pt-4">
+          <div className="min-w-0 space-y-1 text-[10px] uppercase tracking-[0.08em] text-black/45">
+            <div className="flex gap-2">
+              <span>Sync</span>
+              <span className="font-medium text-black/70">{formatTime(displayHealth.at) || "-"}</span>
+            </div>
+            <div className="flex gap-2">
+              <span>Source</span>
+              <span className="font-medium text-black/70">{displayHealth.source}</span>
+            </div>
           </div>
-          <div className="mt-2 flex justify-between gap-3">
-            <span>数据来源</span>
-            <span className="text-right font-medium text-gray-800">{displayHealth.source}</span>
-          </div>
-          <div className="mt-2 flex justify-between gap-3">
-            <span>包名</span>
-            <span className="break-all text-right font-medium text-gray-800">{status?.packageName || "com.mc.xiaomi1"}</span>
-          </div>
+          <div className="h-8 w-8 shrink-0 opacity-70 [background-image:radial-gradient(#111_1px,transparent_1px)] [background-size:4px_4px]" aria-hidden="true" />
         </div>
       </section>
 
@@ -238,7 +237,7 @@ function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; histor
   const heartHistory = useMemo(() => normalizeDuHeartHistory(history, vitals), [history, vitals]);
   const hasVitals = heart > 0 || breath > 0;
   return (
-    <section className="relative overflow-hidden rounded-[26px] border border-rose-100 bg-[#FFF7FA] p-5 shadow-[0_10px_34px_-22px_rgba(190,55,105,0.42)]">
+    <section className="relative overflow-hidden rounded-[32px] bg-[#111111] p-6 text-white shadow-[0_34px_80px_-48px_rgba(0,0,0,0.85)]">
       <style>
         {`
           @keyframes du-heartbeat {
@@ -254,41 +253,41 @@ function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; histor
           }
         `}
       </style>
-      <div className="mb-5 flex items-start justify-between gap-4">
+      <div className="mb-6 flex items-start justify-between gap-4 border-b border-white/15 pb-4">
         <div>
-          <div className="text-[12px] font-bold uppercase tracking-[0.18em] text-rose-300">Du rhythm</div>
-          <div className="mt-1 text-[18px] font-semibold tracking-tight text-gray-950">渡的节律</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/42">Du rhythm / 拟态节律</div>
+          <div className="mt-2 text-[22px] font-semibold tracking-tight text-white">渡的节律</div>
         </div>
-        <span className="rounded-full bg-white/75 px-3 py-1 text-[12px] font-semibold text-rose-600">
+        <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-black">
           {String(vitals?.status || (hasVitals ? "平稳" : "未同步"))}
         </span>
       </div>
-      <div className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-3">
-        <div className="relative flex h-[88px] w-[88px] shrink-0 items-center justify-center">
+      <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-4">
+        <div className="relative flex h-[86px] w-[86px] shrink-0 items-center justify-center">
           <span
-            className="absolute h-[78px] w-[78px] rounded-full bg-rose-200/50"
+            className="absolute h-[76px] w-[76px] rounded-full bg-white/12"
             style={{ animation: `du-breathe ${breathSeconds}s ease-in-out infinite` }}
           />
-          <span className="absolute h-[54px] w-[54px] rounded-full bg-white/85 shadow-[0_12px_30px_-18px_rgba(190,55,105,0.8)]" />
+          <span className="absolute h-[54px] w-[54px] rounded-full bg-white/8 shadow-[0_0_32px_-10px_rgba(255,255,255,0.42)]" />
           <span
-            className="relative flex h-[34px] w-[34px] items-center justify-center rounded-full bg-rose-500 text-white shadow-[0_12px_26px_-14px_rgba(190,55,105,0.9)]"
+            className="relative flex h-[34px] w-[34px] items-center justify-center rounded-full bg-white text-black shadow-[0_0_24px_-8px_rgba(255,255,255,0.75)]"
             style={{ animation: `du-heartbeat ${heartMs}ms ease-in-out infinite` }}
           >
             <HeartIconMini />
           </span>
         </div>
-        <div className="grid min-w-0 grid-cols-2 gap-2">
-          <Metric label="渡心率" value={heart || "-"} unit={heart ? "bpm" : ""} compact />
-          <Metric label="渡呼吸" value={breath || "-"} unit={breath ? "/min" : ""} compact />
+        <div className="grid min-w-0 grid-cols-2 gap-3">
+          <BiometricMetric label="Du Heart / 渡心率" value={heart || "-"} unit={heart ? "bpm" : ""} tone="dark" compact />
+          <BiometricMetric label="Du Breath / 渡呼吸" value={breath || "-"} unit={breath ? "/min" : ""} tone="dark" compact />
         </div>
       </div>
-      <div className="mt-4 grid grid-cols-3 gap-2 text-center text-[11px] text-gray-500">
-        <ParamPill label="专注" value={params.focus} />
-        <ParamPill label="靠近" value={params.intimacy_heat} />
-        <ParamPill label="绷紧" value={params.tension} />
+      <div className="mt-5 grid grid-cols-3 gap-3 border-y border-white/12 py-4 text-[11px] text-white/48">
+        <ParamPill label="专注" value={params.focus} tone="dark" />
+        <ParamPill label="靠近" value={params.intimacy_heat} tone="dark" />
+        <ParamPill label="绷紧" value={params.tension} tone="dark" />
       </div>
       <DuHeartCurve points={heartHistory} />
-      <div className="mt-3 text-[12px] text-gray-400">最近同步：{formatTime(vitals?.updatedAt || vitals?.at) || "-"}</div>
+      <div className="mt-4 border-t border-white/12 pt-3 text-[10px] uppercase tracking-[0.08em] text-white/42">Sync {formatTime(vitals?.updatedAt || vitals?.at) || "-"}</div>
     </section>
   );
 }
@@ -332,42 +331,42 @@ function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
   const path = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
 
   return (
-    <div className="mt-4 rounded-[18px] bg-white/75 px-3 py-3">
+    <div className="mt-5">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <div className="text-[12px] font-semibold text-gray-800">心率波动</div>
-          <div className="mt-0.5 text-[10px] font-medium text-gray-400">最近 {points.length || 0} 次</div>
+          <div className="text-[12px] font-semibold text-white">心率波动</div>
+          <div className="mt-0.5 text-[10px] font-medium text-white/38">最近 {points.length || 0} 次</div>
         </div>
         <div className="text-right">
-          <div className="text-[18px] font-semibold leading-none text-rose-600">{latest || "-"}</div>
-          <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">bpm</div>
+          <div className="text-[18px] font-semibold leading-none text-white">{latest || "-"}</div>
+          <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/38">bpm</div>
         </div>
       </div>
-      <div className="relative h-[86px] overflow-hidden rounded-[14px] bg-[#FFF7FA]">
+      <div className="relative h-[86px] overflow-hidden">
         {values.length ? (
           <svg className="h-full w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
-            <line x1={padX} y1={padY} x2={width - padX} y2={padY} stroke="rgba(244, 114, 182, 0.14)" strokeWidth="1" />
-            <line x1={padX} y1={height / 2} x2={width - padX} y2={height / 2} stroke="rgba(244, 114, 182, 0.12)" strokeWidth="1" />
-            <line x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} stroke="rgba(244, 114, 182, 0.14)" strokeWidth="1" />
-            {path ? <path d={path} fill="none" stroke="#E84B77" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" /> : null}
+            <line x1={padX} y1={padY} x2={width - padX} y2={padY} stroke="rgba(255, 255, 255, 0.12)" strokeWidth="0.8" />
+            <line x1={padX} y1={height / 2} x2={width - padX} y2={height / 2} stroke="rgba(255, 255, 255, 0.1)" strokeWidth="0.8" />
+            <line x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} stroke="rgba(255, 255, 255, 0.12)" strokeWidth="0.8" />
+            {path ? <path d={path} fill="none" stroke="#F5F5F5" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.4" /> : null}
             {coords.map((point, index) => (
               <circle
                 key={`${point.x}-${index}`}
                 cx={point.x}
                 cy={point.y}
-                r={index === coords.length - 1 ? 3.6 : 2.6}
-                fill={index === coords.length - 1 ? "#E84B77" : "#FDB6CB"}
-                stroke="white"
-                strokeWidth="1.4"
+                r={index === coords.length - 1 ? 3.2 : 2.2}
+                fill={index === coords.length - 1 ? "#FFFFFF" : "rgba(255,255,255,0.62)"}
+                stroke="#111111"
+                strokeWidth="1.2"
               />
             ))}
           </svg>
         ) : (
-          <div className="flex h-full items-center justify-center text-[12px] font-medium text-rose-200">还没有节律记录</div>
+          <div className="flex h-full items-center justify-center text-[12px] font-medium text-white/28">还没有节律记录</div>
         )}
       </div>
       {values.length ? (
-        <div className="mt-2 flex justify-between text-[10px] font-medium text-gray-400">
+        <div className="mt-2 flex justify-between text-[10px] font-medium text-white/38">
           <span>低 {min}</span>
           <span>高 {max}</span>
         </div>
@@ -376,13 +375,13 @@ function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
   );
 }
 
-function ParamPill({ label, value }: { label: string; value: unknown }) {
+function ParamPill({ label, value, tone = "light" }: { label: string; value: unknown; tone?: "light" | "dark" }) {
   const n = Number(value);
   const text = Number.isFinite(n) ? `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%` : "-";
   return (
-    <div className="rounded-[14px] bg-white/70 px-2 py-2">
-      <div className="font-medium text-gray-400">{label}</div>
-      <div className="mt-1 font-semibold text-gray-800">{text}</div>
+    <div>
+      <div className={tone === "dark" ? "font-medium text-white/40" : "font-medium text-gray-400"}>{label}</div>
+      <div className={tone === "dark" ? "mt-1 font-semibold text-white" : "mt-1 font-semibold text-gray-800"}>{text}</div>
     </div>
   );
 }
@@ -402,13 +401,37 @@ function CloudRow({ row }: { row: { at?: string; data?: Record<string, any> } })
   );
 }
 
-function Metric({ label, value, unit, compact = false }: { label: string; value: React.ReactNode; unit?: string; compact?: boolean }) {
+function BiometricMetric({
+  label,
+  value,
+  unit,
+  compact = false,
+  tone = "light",
+}: {
+  label: string;
+  value: React.ReactNode;
+  unit?: string;
+  compact?: boolean;
+  tone?: "light" | "dark";
+}) {
   return (
-    <div className={`min-w-0 rounded-[20px] bg-white ${compact ? "px-3 py-3" : "px-4 py-4"}`}>
-      <div className="text-[12px] font-medium text-gray-400">{label}</div>
-      <div className={`${compact ? "mt-2 min-h-[38px]" : "mt-2 min-h-[40px]"} flex min-w-0 items-end gap-1 overflow-hidden`}>
-        <span className={`${compact ? "text-[clamp(24px,7vw,32px)]" : "text-[28px]"} min-w-0 shrink leading-[1.08] font-semibold tracking-tight text-gray-950`}>{value}</span>
-        {unit ? <span className="shrink-0 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">{unit}</span> : null}
+    <div className="min-w-0">
+      <div className={`text-[9px] font-semibold uppercase tracking-[0.16em] ${tone === "dark" ? "text-white/38" : "text-black/42"}`}>{label}</div>
+      <div className={`${compact ? "mt-2 min-h-[42px]" : "mt-3 min-h-[56px]"} flex min-w-0 items-end gap-1 overflow-hidden`}>
+        <span
+          className={`${compact ? "text-[clamp(32px,9vw,48px)]" : "text-[clamp(42px,14vw,64px)]"} min-w-0 shrink leading-none tracking-tight ${tone === "dark" ? "text-white" : "text-black"}`}
+          style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+        >
+          {value}
+        </span>
+        {unit ? (
+          <span
+            className={`shrink-0 pb-1 text-[12px] italic tracking-wide ${tone === "dark" ? "text-white/42" : "text-black/42"}`}
+            style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+          >
+            {unit}
+          </span>
+        ) : null}
       </div>
     </div>
   );
