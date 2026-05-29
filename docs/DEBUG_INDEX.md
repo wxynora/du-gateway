@@ -1129,8 +1129,8 @@ npm -C miniapp run android
 - 未完成 / 下次继续：部署后需要通过渡实际调用 `xiaoai_run_command` 再测一轮，返回 JSON 应包含 `mode: "speaker_volume_set"`，否则说明还在走旧自然语言路径。
 
 当前状态（2026-05-29 xiaoai_run_command 音箱 did 误传修复）：
-- 已完成：`mijiaAPI --run` 的 `--wifispeaker_name` 实际只接受米家设备列表里的音箱名称，不接受 did；且 CLI `-l` 会合并 `get_devices_list()+get_shared_devices_list()`，但 `--run` 内部重新创建 `mijiaDevice(dev_name=...)` 时只查 `get_devices_list()`，所以服务器会出现列表里有音箱、`--run` 却报“未找到 did 为 '小米小爱音箱Play 增强版' 的设备”。`xiaoai_run_command` 已绕过 CLI `--run`，改为网关内直接合并自有/共享设备解析音箱 did，并调用小爱 `execute-text-directive`（`siid=5, aiid=4, value=[command, quiet]`）。
-- 已验证：`.venv/bin/python -m py_compile services/gateway_tools.py config.py` 通过；mock smoke 覆盖“音箱只在 shared 设备列表”时仍解析 did `2037350052`，并直接调用 `run_action({"did":"2037350052","siid":5,"aiid":4,"value":["打开卧室空调",1]})`，返回 JSON 含 `mode: "speaker_text_directive"`。
+- 已完成：`mijiaAPI --run` 的 `--wifispeaker_name` 实际只接受米家设备列表里的音箱名称，不接受 did；且 CLI `-l` 会合并 `get_devices_list()+get_shared_devices_list()`，但 `--run` 内部重新创建 `mijiaDevice(dev_name=...)` 时只查 `get_devices_list()`，所以服务器会出现列表里有音箱、`--run` 却报“未找到 did 为 '小米小爱音箱Play 增强版' 的设备”。`xiaoai_run_command` 已绕过 CLI `--run`，改为网关内直接合并自有/共享设备解析音箱 did，并调用小爱 `execute-text-directive`（`siid=5, aiid=4, in=[command, quiet]`）。
+- 已验证：`.venv/bin/python -m py_compile services/gateway_tools.py config.py` 通过；mock smoke 覆盖“音箱只在 shared 设备列表”时仍解析 did `2037350052`，并直接调用 `run_action({"did":"2037350052","siid":5,"aiid":4,"in":["打开卧室空调",1]})`，返回 JSON 含 `mode: "speaker_text_directive"`。注意：底层 `api.run_action()` 必须传 `"in"`；传 `"value"` 会返回 `-704220025 Action参数个数不匹配`。
 
 当前状态（2026-05-28 MiniApp 米家授权二维码）：
 - 已完成：新增 `services/mijia_auth_login.py`，复用 `mijiaAPI` 包内部二维码登录流程，按 `MIJIA_API_AUTH_PATH`（未配置则用 mijiaAPI 默认 `~/.config/mijia-api/auth.json`）写入 auth；`routes/miniapp/xiaoai.py` 增加 `/miniapp-api/xiaoai/mijia-auth` 和 `/miniapp-api/xiaoai/mijia-auth/start`，小爱音箱页新增“米家授权”区块，显示二维码图片、授权状态、有效期和错误。二维码可截图后用米家 App 相册识别；等待扫码超时或后端重启后状态会自动过期，避免按钮卡死。

@@ -293,7 +293,7 @@ def _run_mijia_text_directive(command: str, speaker_name: str = "") -> tuple[boo
         "did": speaker_did,
         "siid": 5,
         "aiid": 4,
-        "value": [command, 1 if MIJIA_API_QUIET else 0],
+        "in": [command, 1 if MIJIA_API_QUIET else 0],
     }
     result = api.run_action(payload)
     code = int((result or {}).get("code", -1))
