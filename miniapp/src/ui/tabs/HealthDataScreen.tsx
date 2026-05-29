@@ -10,8 +10,11 @@ type HealthCloudResponse = {
   latest?: Record<string, any>;
   history?: Array<{ at?: string; data?: Record<string, any> }>;
   du_vitals?: Record<string, any>;
+  du_vitals_history?: Array<Record<string, any>>;
   error?: string;
 };
+
+type DuHeartPoint = { at?: string; value: number };
 
 const FREQUENCY_OPTIONS = [
   { label: "30 秒", seconds: 30 },
@@ -140,7 +143,7 @@ export function HealthDataScreen() {
         </div>
       </section>
 
-      <DuVitalsCard vitals={cloud?.du_vitals || {}} />
+      <DuVitalsCard vitals={cloud?.du_vitals || {}} history={cloud?.du_vitals_history || []} />
 
       <section className="rounded-[26px] border border-gray-100 bg-white p-5 shadow-[0_8px_28px_-22px_rgba(0,0,0,0.2)]">
         <div className="mb-3 text-[13px] font-semibold tracking-wide text-gray-900">上报频率</div>
@@ -215,12 +218,13 @@ export function HealthDataScreen() {
   );
 }
 
-function DuVitalsCard({ vitals }: { vitals: Record<string, any> }) {
+function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; history: Array<Record<string, any>> }) {
   const heart = Number(vitals?.heart_bpm || 0);
   const breath = Number(vitals?.breath_rpm || 0);
   const heartMs = heart > 0 ? Math.max(420, Math.round(60000 / heart)) : 840;
   const breathSeconds = breath > 0 ? Math.max(2.5, 60 / breath) : 5;
   const params = typeof vitals?.parameters === "object" && vitals.parameters ? vitals.parameters : {};
+  const heartHistory = useMemo(() => normalizeDuHeartHistory(history, vitals), [history, vitals]);
   const hasVitals = heart > 0 || breath > 0;
   return (
     <section className="relative overflow-hidden rounded-[26px] border border-rose-100 bg-[#FFF7FA] p-5 shadow-[0_10px_34px_-22px_rgba(190,55,105,0.42)]">
@@ -272,8 +276,92 @@ function DuVitalsCard({ vitals }: { vitals: Record<string, any> }) {
         <ParamPill label="靠近" value={params.intimacy_heat} />
         <ParamPill label="绷紧" value={params.tension} />
       </div>
+      <DuHeartCurve points={heartHistory} />
       <div className="mt-3 text-[12px] text-gray-400">最近同步：{formatTime(vitals?.updatedAt || vitals?.at) || "-"}</div>
     </section>
+  );
+}
+
+function normalizeDuHeartHistory(history: Array<Record<string, any>>, latest: Record<string, any>): DuHeartPoint[] {
+  const rows = (Array.isArray(history) ? history : [])
+    .map((item) => ({
+      at: String(item?.updatedAt || item?.at || "").trim(),
+      value: Number(item?.heart_bpm || item?.heartBpm || 0),
+    }))
+    .filter((item) => Number.isFinite(item.value) && item.value > 0);
+
+  const latestAt = String(latest?.updatedAt || latest?.at || "").trim();
+  const latestValue = Number(latest?.heart_bpm || latest?.heartBpm || 0);
+  if (
+    Number.isFinite(latestValue) &&
+    latestValue > 0 &&
+    !rows.some((item) => item.at === latestAt && item.value === latestValue)
+  ) {
+    rows.push({ at: latestAt, value: latestValue });
+  }
+
+  return rows.slice(-10);
+}
+
+function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
+  const values = points.map((point) => point.value);
+  const latest = values.length ? values[values.length - 1] : 0;
+  const min = values.length ? Math.min(...values) : 0;
+  const max = values.length ? Math.max(...values) : 0;
+  const width = 240;
+  const height = 78;
+  const padX = 10;
+  const padY = 12;
+  const span = Math.max(1, max - min);
+  const coords = values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : padX + (index * (width - padX * 2)) / (values.length - 1);
+    const y = padY + ((max - value) * (height - padY * 2)) / span;
+    return { x, y, value };
+  });
+  const path = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
+
+  return (
+    <div className="mt-4 rounded-[18px] bg-white/75 px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[12px] font-semibold text-gray-800">心率波动</div>
+          <div className="mt-0.5 text-[10px] font-medium text-gray-400">最近 {points.length || 0} 次</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[18px] font-semibold leading-none text-rose-600">{latest || "-"}</div>
+          <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">bpm</div>
+        </div>
+      </div>
+      <div className="relative h-[86px] overflow-hidden rounded-[14px] bg-[#FFF7FA]">
+        {values.length ? (
+          <svg className="h-full w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+            <line x1={padX} y1={padY} x2={width - padX} y2={padY} stroke="rgba(244, 114, 182, 0.14)" strokeWidth="1" />
+            <line x1={padX} y1={height / 2} x2={width - padX} y2={height / 2} stroke="rgba(244, 114, 182, 0.12)" strokeWidth="1" />
+            <line x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} stroke="rgba(244, 114, 182, 0.14)" strokeWidth="1" />
+            {path ? <path d={path} fill="none" stroke="#E84B77" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" /> : null}
+            {coords.map((point, index) => (
+              <circle
+                key={`${point.x}-${index}`}
+                cx={point.x}
+                cy={point.y}
+                r={index === coords.length - 1 ? 3.6 : 2.6}
+                fill={index === coords.length - 1 ? "#E84B77" : "#FDB6CB"}
+                stroke="white"
+                strokeWidth="1.4"
+              />
+            ))}
+          </svg>
+        ) : (
+          <div className="flex h-full items-center justify-center text-[12px] font-medium text-rose-200">还没有节律记录</div>
+        )}
+      </div>
+      {values.length ? (
+        <div className="mt-2 flex justify-between text-[10px] font-medium text-gray-400">
+          <span>低 {min}</span>
+          <span>高 {max}</span>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
