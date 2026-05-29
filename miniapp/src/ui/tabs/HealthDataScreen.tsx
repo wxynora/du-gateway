@@ -118,25 +118,25 @@ export function HealthDataScreen() {
 
   return (
     <div className="space-y-4 px-4 py-5">
+      <button
+        type="button"
+        disabled={loading}
+        aria-label={loading ? "健康数据刷新中" : "刷新健康数据"}
+        title={loading ? "刷新中" : "刷新"}
+        className="fixed right-4 top-[calc(env(safe-area-inset-top,0px)+10px)] z-40 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-gray-700 shadow-[0_10px_28px_-18px_rgba(0,0,0,0.45)] active:bg-gray-50 disabled:opacity-60"
+        onClick={() => void requestSnapshot()}
+      >
+        <RefreshIconMini className={loading ? "animate-spin" : ""} />
+      </button>
       <section className="rounded-[26px] border border-rose-100 bg-[#FFF9F8] p-5 shadow-[0_10px_34px_-22px_rgba(190,55,72,0.45)]">
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
             <div className="text-[12px] font-bold uppercase tracking-[0.18em] text-rose-300">Notify for Xiaomi</div>
             <div className="mt-1 text-[18px] font-semibold tracking-tight text-gray-950">健康数据</div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              disabled={loading}
-              className="rounded-full bg-white/80 px-3 py-1 text-[12px] font-semibold text-gray-700 shadow-[0_8px_22px_-18px_rgba(0,0,0,0.4)] active:bg-white disabled:opacity-60"
-              onClick={() => void requestSnapshot()}
-            >
-              {loading ? "刷新中" : "刷新"}
-            </button>
-            <span className={`rounded-full px-3 py-1 text-[12px] font-semibold ${status?.listenerEnabled ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-              {status?.listenerEnabled ? "已授权" : "未授权"}
-            </span>
-          </div>
+          <span className={`shrink-0 rounded-full px-3 py-1 text-[12px] font-semibold ${status?.listenerEnabled ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+            {status?.listenerEnabled ? "已授权" : "未授权"}
+          </span>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -411,6 +411,17 @@ function Metric({ label, value, unit, compact = false }: { label: string; value:
         {unit ? <span className="shrink-0 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">{unit}</span> : null}
       </div>
     </div>
+  );
+}
+
+function RefreshIconMini({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 12a9 9 0 0 1-15.1 6.6" />
+      <path d="M3 12A9 9 0 0 1 18.1 5.4" />
+      <path d="M18 2v4h-4" />
+      <path d="M6 22v-4h4" />
+    </svg>
   );
 }
 
