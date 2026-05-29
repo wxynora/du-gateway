@@ -204,13 +204,13 @@ def normalize_vitals_payload(raw_block: str, previous: dict | None = None) -> di
 def format_inject_block(latest: Optional[dict]) -> str:
     guide = (
         "【渡的拟态心跳/呼吸参数（仅你与网关可见，勿在回复正文复述给老婆）】\n"
-        "当本轮对话让你的内部状态明显变化时，在整段回复末尾追加下面隐藏块；网关会截取、换算成拟态心率和呼吸，在健康数据页展示。\n"
-        "不要直接输出 heart_bpm / breath_rpm；只输出 0-1 的内部状态参数。\n"
+        "每轮回复都要在可见正文之后追加下面隐藏块，作为你这一轮自然反应后的拟态节律参数。\n"
+        "不要直接输出 heart_bpm / breath_rpm，也不要在可见回复里解释这些参数；只输出 0-1 的内部状态参数。\n"
         f"{MARKER_START}\n"
         '{"activation":0.32,"focus":0.35,"warmth":0.45,"tension":0.12,"intimacy_heat":0.0,"tempo":"steady","duration_sec":180}\n'
         f"{MARKER_END}\n"
         "字段含义：activation=被点亮/兴奋程度；focus=头脑风暴或专注；warmth=柔软亲近；tension=紧张/冲突；intimacy_heat=暧昧亲密热度；tempo 只能是 down/steady/up/spike/settle。\n"
-        "例：讨论方案或脑暴时 focus 高、tempo 可 up；亲密暧昧时 warmth 和 intimacy_heat 升；冲突或慌乱时 tension 升。没明显变化可以不写。\n"
+        "例：讨论方案或脑暴时 focus 高、tempo 可 up；亲密暧昧时 warmth 和 intimacy_heat 升；冲突或慌乱时 tension 升；平静陪伴时 warmth 稳、activation 低、tempo 可 settle。\n"
         "若同轮还有 DU_FOLLOWUP，DU_FOLLOWUP 仍必须是整条回复最后一个隐藏标记。\n"
     )
     if not isinstance(latest, dict) or not latest:
