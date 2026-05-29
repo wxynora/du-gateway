@@ -95,7 +95,7 @@ def get_gateway_xiaoai_tools() -> List[dict]:
             "function": {
                 "name": "xiaoai_run_command",
                 "description": (
-                    "让小爱音箱执行一句米家/红外智能家居自然语言命令，底层调用 mijiaAPI --run。"
+                    "让小爱音箱执行一句米家/红外智能家居自然语言命令，底层直接调用小爱音箱 execute-text-directive。"
                     "开灯、关灯、开关空调、调温度、控制红外设备、执行米家设备动作时优先用这个工具。"
                     "如果命令是在调小爱音箱自身音量，会自动改走 MIoT 结构化 volume 属性，不赌自然语言理解。"
                     "只传明确的家居控制命令，不要用来普通聊天，也不要播报渡的声音。"
@@ -109,7 +109,7 @@ def get_gateway_xiaoai_tools() -> List[dict]:
                         },
                         "speaker_name": {
                             "type": "string",
-                            "description": "可选，小爱音箱名称。不传则使用 MIJIA_WIFISPEAKER_NAME，仍为空时让 mijiaAPI 使用默认音箱。",
+                            "description": "可选，小爱音箱在米家设备列表里的完整名称，不是 did；通常不要传，不传会使用 MIJIA_WIFISPEAKER_NAME。",
                         },
                         "reason": {
                             "type": "string",
@@ -200,6 +200,8 @@ def _normalize_mijia_speaker_name(value: Any) -> str:
     text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
     text = re.sub(r"\s{2,}", " ", text)
     # mijiaAPI 的 --wifispeaker_name 对 L05C 需要米家列表里的完整设备名。
+    if text and text in {MIJIA_SPEAKER_DID, "2037350052"}:
+        return MIJIA_WIFISPEAKER_NAME or "小米小爱音箱Play 增强版"
     aliases = {
         "小爱音箱Play增强版": "小米小爱音箱Play 增强版",
         "小爱音箱Play 增强版": "小米小爱音箱Play 增强版",
@@ -252,6 +254,51 @@ def _mijia_speaker_did() -> str:
 
 def _build_mijia_speaker_volume_set_command(volume: int) -> list[str]:
     return [*_mijia_cli_base(), "set", *_mijia_auth_args(), "--did", _mijia_speaker_did(), "--prop_name", "volume", "--value", str(volume)]
+
+
+def _run_mijia_text_directive(command: str, speaker_name: str = "") -> tuple[bool, int, str, str, str, str]:
+    from mijiaAPI.apis import mijiaAPI
+
+    api = mijiaAPI(auth_data_path=MIJIA_API_AUTH_PATH or None)
+    target_name = _normalize_mijia_speaker_name(speaker_name or MIJIA_WIFISPEAKER_NAME or "")
+    target_did = _mijia_speaker_did()
+
+    devices: list[dict[str, Any]] = []
+    for getter_name in ("get_devices_list", "get_shared_devices_list"):
+        getter = getattr(api, getter_name, None)
+        if getter is None:
+            continue
+        try:
+            got = getter()
+            if isinstance(got, list):
+                devices.extend([d for d in got if isinstance(d, dict)])
+        except Exception:
+            logger.warning("mijiaAPI %s failed while resolving speaker", getter_name, exc_info=True)
+
+    matched: dict[str, Any] | None = None
+    if target_did:
+        matched = next((d for d in devices if str(d.get("did") or "") == target_did), None)
+    if matched is None and target_name:
+        matched = next((d for d in devices if str(d.get("name") or "") == target_name), None)
+    if matched is None:
+        matched = next((d for d in devices if "xiaomi.wifispeaker" in str(d.get("model") or "")), None)
+
+    speaker_did = str((matched or {}).get("did") or target_did).strip()
+    resolved_name = str((matched or {}).get("name") or target_name or speaker_did).strip()
+    if not speaker_did:
+        names = [str(d.get("name") or d.get("did") or "") for d in devices[:12]]
+        raise ValueError(f"未找到可用小爱音箱设备。可见设备：{', '.join([n for n in names if n])}")
+
+    payload = {
+        "did": speaker_did,
+        "siid": 5,
+        "aiid": 4,
+        "value": [command, 1 if MIJIA_API_QUIET else 0],
+    }
+    result = api.run_action(payload)
+    code = int((result or {}).get("code", -1))
+    ok = code in (0, 1)
+    return ok, code, json.dumps(result, ensure_ascii=False), "", resolved_name, speaker_did
 
 
 def _extract_speaker_volume(command: str) -> int | None:
@@ -328,14 +375,14 @@ def _execute_mijia_run_command(arguments: dict) -> str:
                 ensure_ascii=False,
             )
 
-        run_cmd = _build_mijia_run_command(command, speaker_name=speaker_name)
-        logger.info("mijiaAPI run command=%s speaker=%s", command, speaker_name or MIJIA_WIFISPEAKER_NAME or "")
-        ok, returncode, stdout, stderr = _run_mijia_cli(run_cmd)
+        resolved_speaker_name = _normalize_mijia_speaker_name(speaker_name or MIJIA_WIFISPEAKER_NAME or "")
+        logger.info("mijiaAPI text directive command=%s speaker=%s", command, resolved_speaker_name)
+        ok, returncode, stdout, stderr, resolved_speaker_name, speaker_did = _run_mijia_text_directive(command, speaker_name=speaker_name)
         add_xiaoai_log(
             "info" if ok else "error",
-            "mijiaAPI 家居命令执行完成" if ok else "mijiaAPI 家居命令执行失败",
-            event="mijia_run_command",
-            speaker=speaker_name or MIJIA_WIFISPEAKER_NAME or "",
+            "小爱自然语言家居命令执行完成" if ok else "小爱自然语言家居命令执行失败",
+            event="mijia_text_directive",
+            speaker=resolved_speaker_name,
             text=command,
             error=stderr if not ok else "",
         )
@@ -343,8 +390,10 @@ def _execute_mijia_run_command(arguments: dict) -> str:
             {
                 "ok": ok,
                 "tool": "xiaoai_run_command",
+                "mode": "speaker_text_directive",
                 "command": command,
-                "speaker_name": speaker_name or MIJIA_WIFISPEAKER_NAME or "",
+                "speaker_name": resolved_speaker_name,
+                "speaker_did": speaker_did,
                 "returncode": returncode,
                 "stdout": stdout[-1200:],
                 "stderr": stderr[-1200:],
