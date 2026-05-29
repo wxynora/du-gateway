@@ -5,6 +5,7 @@ import android.app.AppOpsManager;
 import android.app.AlarmManager;
 import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -190,6 +191,14 @@ public class MainActivity extends BridgeActivity {
             return;
         }
 
+        // Notification access is a special settings permission, not a runtime permission.
+        if (!isNotificationListenerEnabled()) {
+            specialPermissionFlowStarted = true;
+            Intent i = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+            startActivity(i);
+            return;
+        }
+
         if (!isAccessibilityServiceEnabled()) {
             specialPermissionFlowStarted = true;
             Intent i = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
@@ -210,6 +219,28 @@ public class MainActivity extends BridgeActivity {
             mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), getPackageName());
         }
         return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private boolean isNotificationListenerEnabled() {
+        try {
+            String enabled = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+            if (enabled == null || enabled.trim().isEmpty()) return false;
+            ComponentName target = new ComponentName(this, SumiNotificationListenerService.class);
+            String targetPackage = getPackageName();
+            String targetClass = target.getClassName();
+            for (String item : enabled.split(":")) {
+                ComponentName component = ComponentName.unflattenFromString(item);
+                if (component == null) continue;
+                if (targetPackage.equals(component.getPackageName()) && targetClass.equals(component.getClassName())) {
+                    return true;
+                }
+            }
+            String lower = enabled.toLowerCase(Locale.US);
+            return lower.contains(target.flattenToString().toLowerCase(Locale.US))
+                    || lower.contains(target.flattenToShortString().toLowerCase(Locale.US));
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private boolean isAccessibilityServiceEnabled() {
@@ -257,6 +288,7 @@ public class MainActivity extends BridgeActivity {
                                                             panelDeviceId = stableDeviceId;
                                                         }
                                                         savePanelState();
+                                                        SumiNotificationListenerService.requestActiveNotificationSnapshot();
                                                         startOrUpdateForegroundOverlayService();
                                                         if (!panelStateSynced && !panelToken.isEmpty()) {
                                                             panelStateSynced = true;

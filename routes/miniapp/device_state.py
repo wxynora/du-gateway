@@ -1,12 +1,13 @@
 import base64
 import logging
 import math
+import re
 from urllib.parse import quote
 
 from flask import Response, jsonify, request
 
 from storage import r2_store
-from utils.time_aware import now_beijing_iso
+from utils.time_aware import now_beijing_iso, today_beijing
 
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,90 @@ def _sanitize_location_patch(body: dict, device_id: str) -> tuple[dict | None, s
     return patch, None
 
 
+def _int_from_body(body: dict, *names: str) -> int | None:
+    for name in names:
+        value = body.get(name)
+        if value in (None, ""):
+            continue
+        try:
+            return int(value)
+        except Exception:
+            continue
+    return None
+
+
+def _int_from_text(text: str, *patterns: str) -> int | None:
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if not m:
+            continue
+        try:
+            return int(m.group(1).replace(",", ""))
+        except Exception:
+            return None
+    return None
+
+
+def _sanitize_health_patch(body: dict, device_id: str) -> tuple[dict | None, str | None]:
+    raw_text = " ".join(str(body.get("raw_text") or body.get("rawText") or body.get("text") or "").split()).strip()
+    heart_rate = _int_from_body(body, "heart_rate", "heartRate", "hr")
+    steps = _int_from_body(body, "steps", "step_count", "stepCount")
+    if raw_text:
+        if heart_rate is None:
+            heart_rate = _int_from_text(
+                raw_text,
+                r"(\d{2,3})\s*(?:脉搏/分|心率|次/分|bpm|pulse|heart\s*rate|hr\b)",
+                r"(?:脉搏/分|心率|pulse|heart\s*rate|hr\b|bpm)\D{0,12}(\d{2,3})",
+            )
+        if steps is None:
+            steps = _int_from_text(
+                raw_text,
+                r"([0-9][0-9,]{0,7})\s*(?:步数|步|steps?|step\s*count)",
+                r"(?:步数|steps?|step\s*count)\D{0,16}([0-9][0-9,]{0,7})",
+            )
+    patch: dict = {
+        "deviceId": device_id,
+        "capturedAt": str(body.get("captured_at") or body.get("capturedAt") or "").strip() or now_beijing_iso(),
+        "source": str(body.get("source") or "sumitalk_notify_for_xiaomi").strip()[:40] or "sumitalk_notify_for_xiaomi",
+        "updatedAt": now_beijing_iso(),
+    }
+    if raw_text:
+        patch["raw_text"] = raw_text[:500]
+    if heart_rate is not None:
+        if heart_rate < 25 or heart_rate > 240:
+            return None, "heart_rate 范围无效"
+        patch["heart_rate"] = heart_rate
+    if steps is not None:
+        if steps < 0 or steps > 300000:
+            return None, "steps 范围无效"
+        patch["steps"] = steps
+    if "heart_rate" not in patch and "steps" not in patch:
+        return None, "缺少 heart_rate 或 steps"
+    app_name = str(body.get("appName") or body.get("app_name") or "").strip()
+    if app_name:
+        patch["appName"] = app_name[:80]
+    package_name = str(body.get("packageName") or body.get("package_name") or "").strip()
+    if package_name:
+        patch["packageName"] = package_name[:160]
+    return patch, None
+
+
+def _health_history_for_device(device_id: str, limit: int = 20) -> list[dict]:
+    rows = r2_store.get_sense_history_for_date(today_beijing(), limit=120) or []
+    out: list[dict] = []
+    for row in reversed(rows):
+        if not isinstance(row, dict) or str(row.get("type") or "").strip() != "health":
+            continue
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        did = str(data.get("deviceId") or data.get("device_id") or "").strip()
+        if device_id and did and did != device_id:
+            continue
+        out.append({"at": str(row.get("at") or "").strip(), "data": data})
+        if len(out) >= max(1, int(limit or 20)):
+            break
+    return out
+
+
 def register_routes(bp) -> None:
     @bp.route("/device-state/screen", methods=["POST"])
     def miniapp_device_screen_state():
@@ -174,6 +259,33 @@ def register_routes(bp) -> None:
         }
         ok = r2_store.merge_and_save_sense_bucket("battery", patch)
         return jsonify({"ok": bool(ok), "bucket": "battery", "device_id": device_id})
+
+    @bp.route("/device-state/health", methods=["GET", "POST"])
+    def miniapp_device_health_state():
+        device_id = _get_panel_device_id()
+        if not device_id:
+            return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+        if request.method == "GET":
+            latest_doc = r2_store.get_sense_latest() or {}
+            latest = latest_doc.get("health") if isinstance(latest_doc.get("health"), dict) else {}
+            latest_did = str((latest or {}).get("deviceId") or (latest or {}).get("device_id") or "").strip()
+            if latest_did and latest_did != device_id:
+                latest = {}
+            return jsonify(
+                {
+                    "ok": True,
+                    "device_id": device_id,
+                    "latest": latest,
+                    "history": _health_history_for_device(device_id, limit=20),
+                    "du_vitals": r2_store.get_du_vitals_latest() or {},
+                }
+            )
+        body = request.get_json(silent=True) or {}
+        patch, err = _sanitize_health_patch(body, device_id)
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        ok = r2_store.merge_and_save_sense_bucket("health", patch or {})
+        return jsonify({"ok": bool(ok), "bucket": "health", "device_id": device_id})
 
     @bp.route("/device-state/usage-stats", methods=["POST"])
     def miniapp_device_usage_stats():

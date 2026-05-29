@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from config import PC_OPEN_APP_ALLOWLIST, PC_URL_DOMAIN_ALLOWLIST
 from services.du_thought import compute_visible_streaming
 from services.du_daily import compute_visible_streaming as compute_daily_visible_streaming
+from services.du_vitals import compute_visible_streaming as compute_vitals_visible_streaming
 from services.dynamic_memory_citation import compute_visible_streaming as compute_memory_citation_visible_streaming
 from services.interaction_memory import compute_visible_streaming as compute_interaction_visible_streaming
 from storage import r2_store
@@ -222,6 +223,7 @@ class PcmdDuThoughtStreamState:
         self.raw_acc += delta_piece
         after_pcmd = visible_prefix_pcmd(self.raw_acc)
         visible = compute_visible_streaming(after_pcmd)
+        visible = compute_vitals_visible_streaming(visible)
         visible = compute_interaction_visible_streaming(visible)
         visible = compute_daily_visible_streaming(visible)
         try:

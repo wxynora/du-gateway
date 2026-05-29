@@ -7,6 +7,7 @@ from services.du_daily import (
     split_assistant_for_daily,
 )
 from services.du_thought import split_assistant_for_thought
+from services.du_vitals import normalize_vitals_payload, split_assistant_for_vitals
 from services.dynamic_memory_citation import strip_assistant_memory_citations
 from services.interaction_memory import split_assistant_for_interaction
 from services.pc_command_handler import process_pcmd_in_assistant_text
@@ -116,6 +117,7 @@ def extract_and_store_hidden_sidecars(
 ) -> str:
     visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_text or "")
     visible, thought = split_assistant_for_thought(visible_after_pcmd)
+    visible, vitals = split_assistant_for_vitals(visible)
     visible, interaction = split_assistant_for_interaction(visible)
     visible, du_daily = split_assistant_for_daily(visible)
     visible, referenced_memory_ids = strip_assistant_memory_citations(visible, dynamic_memory_citation_map)
@@ -124,6 +126,13 @@ def extract_and_store_hidden_sidecars(
             r2_store.save_du_thought_latest(now_beijing_iso(), thought)
         except Exception as e:
             logger.warning("save_du_thought_latest 失败 error=%s", e)
+    if vitals:
+        try:
+            payload = normalize_vitals_payload(vitals, previous=r2_store.get_du_vitals_latest())
+            if payload:
+                r2_store.save_du_vitals_latest(payload)
+        except Exception as e:
+            logger.warning("save_du_vitals_latest 失败 error=%s", e)
     if interaction:
         try:
             r2_store.append_interaction_candidate(interaction)

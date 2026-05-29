@@ -35,6 +35,7 @@ from pipeline.pipeline import (
     step_inject_summary,
     step_inject_sense_snapshot,
     step_inject_du_thought,
+    step_inject_du_vitals,
     step_inject_du_daily,
     step_inject_interaction_candidate,
     step_inject_rikkahub_reminder,
@@ -949,6 +950,7 @@ def chat_completions():
     if not slim_voice_call:
         body = step_inject_current_base_model(body)
         body = step_inject_du_thought(body, window_id)
+        body = step_inject_du_vitals(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
         if not skip_dynamic_memory:
             body = step_inject_dynamic_memory(body, window_id)

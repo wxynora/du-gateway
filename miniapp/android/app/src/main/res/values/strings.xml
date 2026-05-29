@@ -5,4 +5,5 @@
     <string name="package_name">com.sumitalk.app</string>
     <string name="custom_url_scheme">com.sumitalk.app</string>
     <string name="accessibility_service_description">用于识别当前前台应用并上报给 SumiTalk。</string>
+    <string name="notification_listener_service_label">SumiTalk 健康感知</string>
 </resources>

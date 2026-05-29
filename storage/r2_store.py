@@ -60,11 +60,13 @@ from storage.du_state_store import (
     get_du_daily_state,
     get_du_portrait_candidates,
     get_du_thought_latest,
+    get_du_vitals_latest,
     get_interaction_candidates,
     get_xinyue_portrait_candidates,
     save_du_daily_state,
     save_du_portrait_candidates,
     save_du_thought_latest,
+    save_du_vitals_latest,
     save_interaction_candidates,
     save_xinyue_portrait_candidates,
 )

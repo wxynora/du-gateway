@@ -65,8 +65,9 @@ const CoReadScreen = lazy(() => import("./tabs/CoReadScreen").then((m) => ({ def
 const ListenWithDuScreen = lazy(() => import("./tabs/ListenWithDuScreen").then((m) => ({ default: m.ListenWithDuScreen })));
 const StudyRoomTab = lazy(() => import("./tabs/StudyRoomTab").then((m) => ({ default: m.StudyRoomTab })));
 const XiaoAISettingsTab = lazy(() => import("./tabs/XiaoAISettingsTab").then((m) => ({ default: m.XiaoAISettingsTab })));
+const HealthDataScreen = lazy(() => import("./tabs/HealthDataScreen").then((m) => ({ default: m.HealthDataScreen })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | "xiaoai" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | "xiaoai" | "health-data" | null;
 type SilenceModeResponse = {
   ok?: boolean;
   enabled?: boolean;
@@ -506,6 +507,7 @@ export function AppShell({
             <ListRow icon={<FileTextIcon />} label="日志" onClick={() => setPanel("logs")} />
             <ListRow icon={<GitMergeIcon />} label="思维链" onClick={() => setPanel("reasoning")} />
             <ListRow icon={<CpuIcon />} label="记忆调试" onClick={() => setPanel("memory-debug")} />
+            <ListRow icon={<HeartIconMini />} label="健康数据" onClick={() => setPanel("health-data")} />
             <ListRow icon={<ClockIconMini />} label="闹钟" onClick={() => setShowAlarm(true)} />
             <ListRow icon={<CalendarIconMini />} label="日历" onClick={() => setShowSchedule(true)} />
             <ListRow icon={<SpeakerIconMini />} label="小爱音箱" onClick={() => setPanel("xiaoai")} />
@@ -682,6 +684,11 @@ export function AppShell({
       {panel === "xiaoai" ? (
         <FullScreenPane title="小爱音箱" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>
           <LazyPane><XiaoAISettingsTab /></LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {panel === "health-data" ? (
+        <FullScreenPane title="健康数据" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>
+          <LazyPane><HealthDataScreen /></LazyPane>
         </FullScreenPane>
       ) : null}
 

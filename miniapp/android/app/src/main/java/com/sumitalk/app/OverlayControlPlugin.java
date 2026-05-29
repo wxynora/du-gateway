@@ -6,6 +6,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.ContentUris;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -23,6 +24,8 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import java.util.UUID;
 
 @CapacitorPlugin(name = "SumiOverlay")
@@ -61,6 +64,80 @@ public class OverlayControlPlugin extends Plugin {
         JSObject o = new JSObject();
         o.put("enabled", enabled);
         call.resolve(o);
+    }
+
+    @PluginMethod
+    public void getHealthReportingStatus(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        JSObject o = new JSObject();
+        o.put("intervalSeconds", SumiNotificationListenerService.getHealthReportIntervalSeconds(ctx));
+        o.put("packageName", SumiNotificationListenerService.NOTIFY_FOR_XIAOMI_PACKAGE);
+        o.put("listenerEnabled", isNotificationListenerEnabled(ctx));
+        o.put("listenerConnected", SumiNotificationListenerService.isListenerConnected());
+        JSONObject last = SumiNotificationListenerService.getLastHealthPayload(ctx);
+        JSONArray logs = SumiNotificationListenerService.getHealthReportLogs(ctx);
+        o.put("last", last);
+        o.put("logs", logs);
+        call.resolve(o);
+    }
+
+    @PluginMethod
+    public void setHealthReportingConfig(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        Integer intervalSeconds = call.getInt("intervalSeconds");
+        if (intervalSeconds == null) {
+            call.reject("invalid_interval");
+            return;
+        }
+        SumiNotificationListenerService.setHealthReportIntervalSeconds(ctx, intervalSeconds);
+        JSObject o = new JSObject();
+        o.put("intervalSeconds", SumiNotificationListenerService.getHealthReportIntervalSeconds(ctx));
+        call.resolve(o);
+    }
+
+    @PluginMethod
+    public void requestHealthReportingSnapshot(PluginCall call) {
+        SumiNotificationListenerService.requestActiveNotificationSnapshot();
+        JSObject o = new JSObject();
+        o.put("requested", SumiNotificationListenerService.isListenerConnected());
+        call.resolve(o);
+    }
+
+    @PluginMethod
+    public void clearHealthReportingLogs(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        ctx.getSharedPreferences(FloatingBallService.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(SumiNotificationListenerService.PREF_HEALTH_REPORT_LOGS_JSON, "[]")
+                .apply();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void openNotificationListenerSettings(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        try {
+            ctx.startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("open_notification_listener_settings_failed", e);
+        }
     }
 
     @PluginMethod
@@ -168,6 +245,28 @@ public class OverlayControlPlugin extends Plugin {
             return ctx.getSharedPreferences(FloatingBallService.PREFS_NAME, Context.MODE_PRIVATE)
                     .getBoolean(FloatingBallService.PREF_APP_VISIBLE, false);
         } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean isNotificationListenerEnabled(Context ctx) {
+        try {
+            String enabled = Settings.Secure.getString(ctx.getContentResolver(), "enabled_notification_listeners");
+            if (enabled == null || enabled.trim().isEmpty()) return false;
+            ComponentName target = new ComponentName(ctx, SumiNotificationListenerService.class);
+            String targetPackage = ctx.getPackageName();
+            String targetClass = target.getClassName();
+            for (String item : enabled.split(":")) {
+                ComponentName component = ComponentName.unflattenFromString(item);
+                if (component == null) continue;
+                if (targetPackage.equals(component.getPackageName()) && targetClass.equals(component.getClassName())) {
+                    return true;
+                }
+            }
+            String lower = enabled.toLowerCase(java.util.Locale.US);
+            return lower.contains(target.flattenToString().toLowerCase(java.util.Locale.US))
+                    || lower.contains(target.flattenToShortString().toLowerCase(java.util.Locale.US));
+        } catch (Exception e) {
             return false;
         }
     }

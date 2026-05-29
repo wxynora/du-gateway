@@ -7,6 +7,7 @@ from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
 
 R2_KEY_DU_THOUGHT_LATEST = "global/du_thought_latest.json"
+R2_KEY_DU_VITALS_LATEST = "global/du_vitals_latest.json"
 R2_KEY_DU_DAILY_STATE = "global/du_daily_state.json"
 R2_KEY_DU_DAILY_ARCHIVE = "global/du_daily_archive.json"
 R2_KEY_XINYUE_PORTRAIT_CANDIDATES = "portrait_memory/xinyue_candidates.json"
@@ -59,6 +60,33 @@ def get_du_thought_latest() -> Optional[dict]:
     if not client:
         return None
     data = _read_json(client, R2_KEY_DU_THOUGHT_LATEST)
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def save_du_vitals_latest(payload: dict) -> bool:
+    """写入 global/du_vitals_latest.json（渡的拟态心跳/呼吸状态）。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(payload, dict) or not payload:
+        return False
+    with _du_state_write_lock:
+        try:
+            _write_json(client, R2_KEY_DU_VITALS_LATEST, payload)
+            return True
+        except Exception as e:
+            logger.error("save_du_vitals_latest 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_du_vitals_latest() -> Optional[dict]:
+    """读取 global/du_vitals_latest.json。"""
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_DU_VITALS_LATEST)
     if not isinstance(data, dict):
         return None
     return data
