@@ -305,9 +305,9 @@ export function ReasoningTab() {
             </div>
             <div className="content-box shadow-sm">
               {hasReasoning ? (
-              <p className="mb-4 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-gray-700">
-                {String(r.reasoning || "")}
-              </p>
+                <p className="mb-4 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-gray-700">
+                  {String(r.reasoning || "")}
+                </p>
               ) : (
                 <div className="mb-3 text-[12px] text-gray-400">本轮未返回思维链文本</div>
               )}
