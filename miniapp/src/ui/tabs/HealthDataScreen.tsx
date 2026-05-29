@@ -16,6 +16,9 @@ type HealthCloudResponse = {
 
 type DuHeartPoint = { at?: string; value: number };
 
+const CLOUD_HEALTH_RECORD_DISPLAY_LIMIT = 1;
+const HEALTH_REPORT_LOG_DISPLAY_LIMIT = 10;
+
 const FREQUENCY_OPTIONS = [
   { label: "30 秒", seconds: 30 },
   { label: "1 分钟", seconds: 60 },
@@ -33,6 +36,8 @@ export function HealthDataScreen() {
 
   const latestLocal = status?.last || {};
   const latestCloud = cloud?.latest || {};
+  const cloudHealthRows = useMemo(() => (cloud?.history || []).slice(0, CLOUD_HEALTH_RECORD_DISPLAY_LIMIT), [cloud?.history]);
+  const reportLogs = useMemo(() => (status?.logs || []).slice(-HEALTH_REPORT_LOG_DISPLAY_LIMIT).reverse(), [status?.logs]);
   const displayHealth = useMemo(() => {
     const src = Object.keys(latestCloud).length ? latestCloud : latestLocal;
     return {
@@ -179,17 +184,17 @@ export function HealthDataScreen() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <div className="text-[13px] font-semibold tracking-wide text-gray-900">云端记录</div>
-            <div className="mt-1 text-[12px] text-gray-400">{cloud?.history?.length || 0} 条</div>
+            <div className="mt-1 text-[12px] text-gray-400">最新 {cloudHealthRows.length || 0} 条</div>
           </div>
           <button type="button" className="rounded-full bg-gray-50 px-3 py-1.5 text-[12px] font-semibold text-gray-600 active:bg-gray-100" onClick={() => void load()}>
             刷新
           </button>
         </div>
         <div className="space-y-2">
-          {(cloud?.history || []).map((row, idx) => (
+          {cloudHealthRows.map((row, idx) => (
             <CloudRow key={`${row.at || ""}-${idx}`} row={row} />
           ))}
-          {!(cloud?.history || []).length ? (
+          {!cloudHealthRows.length ? (
             <div className="rounded-[18px] bg-gray-50 px-4 py-6 text-center text-[13px] text-gray-400">云端还没有健康记录</div>
           ) : null}
         </div>
@@ -198,18 +203,18 @@ export function HealthDataScreen() {
       <section className="rounded-[26px] border border-gray-100 bg-white p-5 shadow-[0_8px_28px_-22px_rgba(0,0,0,0.2)]">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <div className="text-[13px] font-semibold tracking-wide text-gray-900">本机日志</div>
-            <div className="mt-1 text-[12px] text-gray-400">{loading ? "刷新中" : `${status?.logs?.length || 0} 条`}</div>
+            <div className="text-[13px] font-semibold tracking-wide text-gray-900">上报日志</div>
+            <div className="mt-1 text-[12px] text-gray-400">{loading ? "刷新中" : `最近 ${reportLogs.length || 0} 条`}</div>
           </div>
           <button type="button" className="rounded-full bg-gray-50 px-3 py-1.5 text-[12px] font-semibold text-gray-600 active:bg-gray-100" onClick={() => void clearLogs()}>
             清空
           </button>
         </div>
         <div className="space-y-2">
-          {(status?.logs || []).slice().reverse().map((row, idx) => (
+          {reportLogs.map((row, idx) => (
             <LogRow key={`${row.at || ""}-${idx}`} row={row} />
           ))}
-          {!(status?.logs || []).length ? (
+          {!reportLogs.length ? (
             <div className="rounded-[18px] bg-gray-50 px-4 py-6 text-center text-[13px] text-gray-400">还没有健康数据日志</div>
           ) : null}
         </div>
