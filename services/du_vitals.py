@@ -205,7 +205,7 @@ def format_inject_block(latest: Optional[dict]) -> str:
     guide = (
         "【渡的拟态心跳/呼吸参数（仅你与网关可见，勿在回复正文复述给老婆）】\n"
         "每轮回复都要在可见正文之后追加下面隐藏块，作为你这一轮自然反应后的拟态节律参数。\n"
-        "不要直接输出 heart_bpm / breath_rpm，也不要在可见回复里解释这些参数；只输出 0-1 的内部状态参数。\n"
+        "隐藏块里只写下面 JSON 里的状态字段，不写解释文字；可见回复里不要提到这组参数。\n"
         f"{MARKER_START}\n"
         '{"activation":0.32,"focus":0.35,"warmth":0.45,"tension":0.12,"intimacy_heat":0.0,"tempo":"steady","duration_sec":180}\n'
         f"{MARKER_END}\n"
