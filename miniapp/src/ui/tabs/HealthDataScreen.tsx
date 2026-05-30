@@ -472,10 +472,13 @@ function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
 
 function buildStraightLinePath(values: number[], min: number, max: number, width: number, height: number) {
   const padY = 10;
-  const span = Math.max(1, max - min);
+  const visualSpan = Math.max(40, max - min, 1);
+  const center = values.length ? (min + max) / 2 : 0;
+  const domainMax = center + visualSpan / 2;
   const coords = values.map((value, index) => {
     const x = values.length === 1 ? width / 2 : (index * width) / (values.length - 1);
-    const y = padY + ((max - value) * (height - padY * 2)) / span;
+    const ratio = Math.max(0, Math.min(1, (domainMax - value) / visualSpan));
+    const y = padY + ratio * (height - padY * 2);
     return { x, y };
   });
   if (!coords.length) return `M 0,${height / 2} L ${width},${height / 2}`;
