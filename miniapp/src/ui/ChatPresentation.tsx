@@ -172,42 +172,40 @@ export function ChatBubbleFrame({
   }
   const coreStyle = { ...SUMIKA_BUBBLE_CORE_STYLE, ...style };
   return (
-    <div className={`relative inline-block max-w-full overflow-visible px-[26px] py-[26px] align-top ${align === "right" ? "self-end" : ""}`}>
-      <div className="relative inline-block max-w-full overflow-visible align-top">
-        <div className={`relative z-10 ${className}`} style={coreStyle}>
-          {children}
-        </div>
-        <span className="pointer-events-none absolute inset-0 z-20 overflow-visible" aria-hidden="true">
-          {SUMIKA_BUBBLE_STICKERS.map((sticker) => (
-            <span
-              key={sticker.id}
-              className="absolute grid select-none place-items-center leading-none"
-              style={resolveSumikaStickerStyle(sticker)}
-            >
-              {sticker.type === "image" ? (
-                <img
-                  src={sticker.src}
-                  alt=""
-                  className="h-full w-full object-contain"
-                  draggable={false}
-                />
-              ) : (
-                <span
-                  className="whitespace-pre"
-                  style={{
-                    color: "rgba(107,107,107,1)",
-                    fontSize: `${sticker.size}px`,
-                    fontWeight: 800,
-                    textShadow: "0 1px 8px rgba(70,63,54,0.08)",
-                  }}
-                >
-                  {sticker.text}
-                </span>
-              )}
-            </span>
-          ))}
-        </span>
+    <div className={`relative inline-block max-w-full overflow-visible align-top ${align === "right" ? "self-end" : ""}`}>
+      <div className={`relative z-10 ${className}`} style={coreStyle}>
+        {children}
       </div>
+      <span className="pointer-events-none absolute inset-0 z-20 overflow-visible" aria-hidden="true">
+        {SUMIKA_BUBBLE_STICKERS.map((sticker) => (
+          <span
+            key={sticker.id}
+            className="absolute grid select-none place-items-center leading-none"
+            style={resolveSumikaStickerStyle(sticker)}
+          >
+            {sticker.type === "image" ? (
+              <img
+                src={sticker.src}
+                alt=""
+                className="h-full w-full object-contain"
+                draggable={false}
+              />
+            ) : (
+              <span
+                className="whitespace-pre"
+                style={{
+                  color: "rgba(107,107,107,1)",
+                  fontSize: `${sticker.size}px`,
+                  fontWeight: 800,
+                  textShadow: "0 1px 8px rgba(70,63,54,0.08)",
+                }}
+              >
+                {sticker.text}
+              </span>
+            )}
+          </span>
+        ))}
+      </span>
     </div>
   );
 }
