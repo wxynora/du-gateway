@@ -12,6 +12,12 @@
       --line: rgba(65, 58, 48, 0.1);
       --panel: rgba(255, 255, 255, 0.78);
       --bubble-bg: #fffdf9;
+      --bubble-border-color: rgba(236, 230, 220, 0.82);
+      --bubble-border-width: 1px;
+      --bubble-glow-color: rgba(244, 184, 207, 0);
+      --bubble-glow-blur: 18px;
+      --bubble-glow-outer-blur: 18px;
+      --bubble-glow-spread: 0px;
       --bubble-width: 260px;
       --bubble-render-width: fit-content;
       --bubble-height: 0px;
@@ -23,6 +29,7 @@
       --bubble-shadow-y: 1px;
       --bubble-shadow-blur: 2px;
       --bubble-shadow-opacity: 0.05;
+      --sticker-color: rgba(135, 131, 124, 0.58);
       --sticker-opacity: 0.58;
       --text-size: 13px;
     }
@@ -151,15 +158,17 @@
       z-index: 2;
       display: inline-flex;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
       width: var(--bubble-render-width);
       max-width: min(100%, var(--bubble-width));
       min-height: var(--bubble-height);
       margin: 0 auto;
       border-radius: var(--bubble-radius);
+      border: var(--bubble-border-width) solid var(--bubble-border-color);
       background: var(--bubble-bg);
       box-shadow:
         0 var(--bubble-shadow-y) var(--bubble-shadow-blur) rgba(70, 63, 54, var(--bubble-shadow-opacity)),
+        0 0 var(--bubble-glow-blur) var(--bubble-glow-spread) var(--bubble-glow-color),
         inset 0 1px 0 rgba(255,255,255,0.72);
       padding: var(--bubble-pad-y) var(--bubble-pad-x);
       color: #56524d;
@@ -192,6 +201,7 @@
       box-shadow:
         inset 8px 8px 18px rgba(167, 158, 144, 0.2),
         inset -10px -10px 22px rgba(255, 255, 255, 0.92),
+        0 0 var(--bubble-glow-blur) var(--bubble-glow-spread) var(--bubble-glow-color),
         0 var(--bubble-shadow-y) var(--bubble-shadow-blur) rgba(70, 63, 54, var(--bubble-shadow-opacity));
     }
 
@@ -200,6 +210,7 @@
       box-shadow:
         inset 0 2px 0 rgba(255, 255, 255, 0.86),
         inset 0 -16px 28px rgba(208, 200, 188, 0.18),
+        0 0 var(--bubble-glow-blur) var(--bubble-glow-spread) var(--bubble-glow-color),
         0 var(--bubble-shadow-y) var(--bubble-shadow-blur) rgba(70, 63, 54, var(--bubble-shadow-opacity));
     }
 
@@ -208,85 +219,94 @@
     }
 
     .bubble-core[data-material="frosted"] {
-      border: 1px solid rgba(255, 255, 255, 0.54);
+      border: var(--bubble-border-width) solid var(--bubble-border-color);
       backdrop-filter: blur(18px);
       box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.62),
+        0 0 var(--bubble-glow-blur) var(--bubble-glow-spread) var(--bubble-glow-color),
         0 var(--bubble-shadow-y) var(--bubble-shadow-blur) rgba(70, 63, 54, var(--bubble-shadow-opacity));
     }
 
-    .bubble-core[data-material="pixel"] {
-      --pixel-step: 12px;
-      border-radius: 0;
-      clip-path: polygon(
-        0 var(--pixel-step),
-        var(--pixel-step) var(--pixel-step),
-        var(--pixel-step) 0,
-        calc(100% - var(--pixel-step)) 0,
-        calc(100% - var(--pixel-step)) var(--pixel-step),
-        100% var(--pixel-step),
-        100% calc(100% - var(--pixel-step)),
-        calc(100% - var(--pixel-step)) calc(100% - var(--pixel-step)),
-        calc(100% - var(--pixel-step)) 100%,
-        var(--pixel-step) 100%,
-        var(--pixel-step) calc(100% - var(--pixel-step)),
-        0 calc(100% - var(--pixel-step))
+    .bubble-core[data-border-style="pixel"] {
+      --pixel-outline: max(2px, var(--bubble-border-width));
+      --pixel-shape: polygon(
+        8px 0,
+        calc(100% - 8px) 0,
+        calc(100% - 8px) 4px,
+        calc(100% - 4px) 4px,
+        calc(100% - 4px) 8px,
+        100% 8px,
+        100% calc(100% - 8px),
+        calc(100% - 4px) calc(100% - 8px),
+        calc(100% - 4px) calc(100% - 4px),
+        calc(100% - 8px) calc(100% - 4px),
+        calc(100% - 8px) 100%,
+        8px 100%,
+        8px calc(100% - 4px),
+        4px calc(100% - 4px),
+        4px calc(100% - 8px),
+        0 calc(100% - 8px),
+        0 8px,
+        4px 8px,
+        4px 4px,
+        8px 4px
       );
+      border: 0;
+      border-radius: 0;
+      clip-path: none;
       image-rendering: pixelated;
       filter:
-        drop-shadow(5px 5px 0 rgba(112, 105, 94, 0.16))
-        drop-shadow(10px 10px 0 rgba(112, 105, 94, 0.08));
-      box-shadow:
-        inset 0 0 0 4px rgba(119, 112, 101, 0.18),
-        inset 4px 4px 0 rgba(255, 255, 255, 0.72),
-        inset -4px -4px 0 rgba(119, 112, 101, 0.12);
+        drop-shadow(0 0 var(--bubble-glow-spread) var(--bubble-glow-color))
+        drop-shadow(0 0 var(--bubble-glow-outer-blur) var(--bubble-glow-color));
+      background: transparent;
+      box-shadow: none;
+      overflow: visible;
+      padding: var(--bubble-pad-y) var(--bubble-pad-x);
     }
 
-    .bubble-core[data-material="pixel"]::before {
-      inset: -4px;
+    .bubble-core[data-border-style="pixel"]::before {
+      inset: calc(-1 * var(--pixel-outline));
+      z-index: 0;
       border-radius: 0;
-      background: #8e8679;
-      filter: none;
-      opacity: 0.16;
-      clip-path: inherit;
-      transform: translate(4px, 4px);
+      background: var(--bubble-border-color);
+      filter:
+        drop-shadow(0 0 var(--bubble-glow-spread) var(--bubble-glow-color))
+        drop-shadow(0 0 var(--bubble-glow-outer-blur) var(--bubble-glow-color))
+        drop-shadow(0 0 var(--bubble-glow-blur) var(--bubble-glow-color))
+        drop-shadow(0 var(--bubble-shadow-y) var(--bubble-shadow-blur) rgba(70, 63, 54, var(--bubble-shadow-opacity)));
+      opacity: 1;
+      clip-path: var(--pixel-shape);
+      transform: none;
+      box-shadow: none;
     }
 
-    .bubble-core[data-material="pixel"]::after {
-      inset: auto;
-      top: 15px;
-      right: 22px;
-      width: 7px;
-      height: 7px;
+    .bubble-core[data-border-style="pixel"]::after {
+      inset: 0;
+      z-index: 1;
       border-radius: 0;
-      opacity: 0.34;
-      background: #7f786d;
-      box-shadow:
-        -18px 10px 0 #7f786d,
-        16px 18px 0 #7f786d,
-        -236px 68px 0 #7f786d,
-        -216px 82px 0 #7f786d,
-        -198px 64px 0 #7f786d;
-      mix-blend-mode: multiply;
+      opacity: 1;
+      background: var(--bubble-bg);
+      clip-path: var(--pixel-shape);
+      mix-blend-mode: normal;
     }
 
-    .bubble-core[data-material="pixel"] .bubble-text {
+    .bubble-core[data-border-style="pixel"] .bubble-text {
+      z-index: 2;
+      color: color-mix(in srgb, var(--bubble-border-color) 64%, #3e3838);
       font-family: "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
       font-weight: 700;
-      text-shadow: 2px 2px 0 rgba(126, 119, 108, 0.16);
+      text-shadow: none;
     }
 
     .bubble-text {
       position: relative;
       z-index: 1;
-      display: flex;
+      display: block;
       width: 100%;
       min-height: 0;
-      align-items: center;
-      justify-content: center;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-      text-align: center;
+      text-align: left;
       font-size: var(--text-size);
       font-weight: 520;
       line-height: var(--bubble-line);
@@ -305,7 +325,7 @@
       place-items: center;
       min-width: 24px;
       min-height: 24px;
-      color: rgba(135, 131, 124, var(--sticker-opacity));
+      color: var(--sticker-color);
       font-weight: 800;
       line-height: 1;
       white-space: pre;
@@ -380,6 +400,16 @@
       width: 100%;
       height: 100%;
       overflow: visible;
+    }
+
+    .sticker img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      pointer-events: none;
+      user-select: none;
+      -webkit-user-drag: none;
     }
 
     .control-pane {
@@ -500,6 +530,16 @@
       accent-color: #6f6a63;
     }
 
+    input[type="color"] {
+      width: 100%;
+      height: 38px;
+      border: 1px solid rgba(65,58,48,0.1);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.74);
+      padding: 4px;
+      cursor: pointer;
+    }
+
     .switch {
       display: inline-flex;
       align-items: center;
@@ -556,6 +596,11 @@
       color: #a43b3b;
     }
 
+    .btn.is-active {
+      background: #5f5850;
+      color: #fff;
+    }
+
     .sticker-btn {
       display: grid;
       place-items: center;
@@ -566,6 +611,61 @@
       color: #77716a;
       font-size: 19px;
       box-shadow: inset 0 0 0 1px rgba(65,58,48,0.08);
+    }
+
+    .sticker-library {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-height: 42px;
+    }
+
+    .library-item {
+      position: relative;
+      width: 48px;
+      height: 42px;
+    }
+
+    .library-item .sticker-btn {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .library-item img {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+    }
+
+    .library-remove {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      display: grid;
+      place-items: center;
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      background: #fff4f4;
+      color: #9f3737;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1;
+      opacity: 0.72;
+      box-shadow: 0 3px 8px rgba(85, 55, 42, 0.12);
+      touch-action: manipulation;
+    }
+
+    .library-remove:hover,
+    .library-remove:focus-visible {
+      opacity: 1;
+    }
+
+    .library-empty {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 42px;
     }
 
     .selected-empty {
@@ -583,6 +683,18 @@
       padding: 13px;
       font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       white-space: pre;
+    }
+
+    .config-help {
+      margin: 9px 0 14px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .config-help strong {
+      color: #5b554e;
+      font-weight: 760;
     }
 
     @media (max-width: 940px) {
@@ -671,8 +783,35 @@
             <option value="soft">白软</option>
             <option value="emboss">浮雕</option>
             <option value="jelly">果冻</option>
-            <option value="pixel">像素</option>
             <option value="frosted">雾面</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="bubbleColor">内部颜色 <small>气泡主体填充色</small></label>
+          <input id="bubbleColor" type="color" />
+        </div>
+
+        <div class="field">
+          <label for="bubbleOpacity">气泡透明度 <small><span id="bubbleOpacityValue"></span>%</small></label>
+          <input id="bubbleOpacity" type="range" min="10" max="100" step="1" />
+        </div>
+
+        <div class="field">
+          <label for="borderColor">外框颜色 <small>气泡边框颜色</small></label>
+          <input id="borderColor" type="color" />
+        </div>
+
+        <div class="field">
+          <label for="borderWidth">外框粗细 <small><span id="borderWidthValue"></span>px</small></label>
+          <input id="borderWidth" type="range" min="0" max="6" step="1" />
+        </div>
+
+        <div class="field">
+          <label for="borderStyle">外框风格</label>
+          <select id="borderStyle">
+            <option value="plain">普通</option>
+            <option value="pixel">像素对话框</option>
           </select>
         </div>
 
@@ -747,6 +886,26 @@
           <label for="shadowOpacity">阴影浓度 <small><span id="shadowOpacityValue"></span>%</small></label>
           <input id="shadowOpacity" type="range" min="0" max="42" step="1" />
         </div>
+
+        <div class="field">
+          <label for="glowColor">外发光颜色</label>
+          <input id="glowColor" type="color" />
+        </div>
+
+        <div class="field">
+          <label for="glowBlur">外发光扩散 <small><span id="glowBlurValue"></span>px</small></label>
+          <input id="glowBlur" type="range" min="0" max="80" step="1" />
+        </div>
+
+        <div class="field">
+          <label for="glowSpread">外发光厚度 <small><span id="glowSpreadValue"></span>px</small></label>
+          <input id="glowSpread" type="range" min="0" max="28" step="1" />
+        </div>
+
+        <div class="field">
+          <label for="glowOpacity">外发光透明度 <small><span id="glowOpacityValue"></span>%</small></label>
+          <input id="glowOpacity" type="range" min="0" max="100" step="1" />
+        </div>
       </section>
 
       <section class="panel">
@@ -760,9 +919,12 @@
           <div class="sticker-palette">
             <button class="sticker-btn" type="button" data-add="star">✦</button>
             <button class="sticker-btn" type="button" data-add="spark">✧</button>
-            <button class="sticker-btn" type="button" data-add="wing">翼</button>
-            <button class="sticker-btn" type="button" data-add="dots">...</button>
+            <button class="sticker-btn" type="button" data-add="dots">❅</button>
             <button class="sticker-btn" type="button" data-add="face">&gt;^&lt;</button>
+            <button class="sticker-btn" type="button" data-add="glint">⊹</button>
+            <button class="sticker-btn" type="button" data-add="solidStar">★</button>
+            <button class="sticker-btn" type="button" data-add="cross">✟</button>
+            <button class="sticker-btn" type="button" data-add="outlineStar">☆</button>
           </div>
         </div>
 
@@ -775,8 +937,18 @@
         </div>
 
         <div class="field">
-          <div class="field-name">图片贴纸 <small>透明 PNG 最好</small></div>
-          <input id="imageSticker" type="file" accept="image/*" />
+          <div class="field-name">上传贴纸库 <small>透明 PNG 最好，上传后可反复添加</small></div>
+          <input id="imageSticker" type="file" accept="image/*" multiple />
+        </div>
+
+        <div class="field">
+          <div class="field-name">贴纸库 <small>点图片添加，右上角删除</small></div>
+          <div class="sticker-library" id="stickerLibrary"></div>
+        </div>
+
+        <div class="field">
+          <label for="stickerColor">贴纸颜色 <small>文字/图形贴纸，不影响 PNG</small></label>
+          <input id="stickerColor" type="color" />
         </div>
 
         <div class="field">
@@ -793,19 +965,30 @@
       <section class="panel">
         <div class="panel-title">
           <h2>配置</h2>
-          <span>Config</span>
+          <span>Export</span>
+        </div>
+        <div class="field">
+          <div class="field-name">导出代码 <small>复制/下载 CSS，用来接到 app 里</small></div>
         </div>
         <div class="button-row">
           <button class="btn" type="button" id="copyCss">复制 CSS</button>
           <button class="btn secondary" type="button" id="downloadCss">下载 CSS</button>
-          <button class="btn secondary" type="button" id="copyJson">复制 JSON</button>
-          <button class="btn secondary" type="button" id="downloadJson">下载配置</button>
           <button class="btn secondary" type="button" id="exportSvg">下载 SVG</button>
-          <button class="btn danger" type="button" id="resetAll">重置</button>
+        </div>
+        <p class="config-help">
+          <strong>CSS</strong> 是接进 SumiTalk/app 的样式代码；<strong>工程配置</strong> 是这个页面自己的存档，用来下次导入后继续调贴纸、颜色和尺寸。
+        </p>
+        <div class="field">
+          <div class="field-name">工程配置 <small>JSON 用来备份/恢复这套编辑状态，不是 CSS</small></div>
+        </div>
+        <div class="button-row">
+          <button class="btn secondary" type="button" id="copyJson">复制配置 JSON</button>
+          <button class="btn secondary" type="button" id="downloadJson">下载工程配置</button>
           <label class="btn secondary" style="display:inline-flex;align-items:center;">
-            导入配置
+            导入工程配置
             <input id="importJson" type="file" accept="application/json,.json" style="display:none;" />
           </label>
+          <button class="btn danger" type="button" id="resetAll">重置</button>
         </div>
         <div class="code-box" id="codeBox" aria-live="polite"></div>
       </section>
@@ -814,6 +997,14 @@
 
   <script>
     const STORAGE_KEY = "sumitalk.local.bubble-customizer.v1";
+    const STICKER_ANCHORS = ["top-left", "top-right", "bottom-left", "bottom-right"];
+    const BORDER_STYLES = ["plain", "pixel"];
+    const STICKER_ANCHOR_LABELS = {
+      "top-left": "左上",
+      "top-right": "右上",
+      "bottom-left": "左下",
+      "bottom-right": "右下",
+    };
     const materials = {
       soft: {
         label: "白软",
@@ -833,12 +1024,6 @@
         texture: "radial-gradient(ellipse at 32% 18%, rgba(255,255,255,.9) 0 18%, transparent 42%), linear-gradient(180deg, rgba(255,255,255,.24), rgba(190,179,163,.12))",
         textureOpacity: 0.8,
       },
-      pixel: {
-        label: "像素",
-        bg: "#fffdf7",
-        texture: "none",
-        textureOpacity: 0,
-      },
       frosted: {
         label: "雾面",
         bg: "rgba(255,255,255,.72)",
@@ -850,22 +1035,28 @@
     const stickerTemplates = {
       star: { type: "text", value: "✦", x: 74, y: 18, size: 21, rotate: -12 },
       spark: { type: "text", value: "✧", x: 206, y: 12, size: 22, rotate: 14 },
-      dots: { type: "text", value: "· · ·", x: 196, y: 66, size: 16, rotate: 8 },
+      dots: { type: "text", value: "❅", x: 196, y: 66, size: 18, rotate: 8 },
       face: { type: "text", value: ">^<", x: 132, y: 72, size: 16, rotate: 0 },
-      wing: {
-        type: "svg",
-        value: "<svg viewBox='0 0 64 48'><path d='M7 31c11-17 23-23 33-16 6 4 8 11 5 19-8-4-15-4-24 0 7 0 13 3 18 8-13 1-24-2-32-11Z' fill='currentColor' opacity='.52'/><path d='M19 28c8-8 16-11 24-8M19 35c8-4 15-5 22-2' stroke='currentColor' stroke-width='3' stroke-linecap='round' opacity='.45'/></svg>",
-        x: 78,
-        y: 38,
-        size: 34,
-        rotate: -18,
-      },
+      glint: { type: "text", value: "⊹", x: 206, y: 20, size: 20, rotate: 0 },
+      solidStar: { type: "text", value: "★", x: 206, y: 20, size: 20, rotate: -8 },
+      cross: { type: "text", value: "✟", x: 206, y: 20, size: 20, rotate: 0 },
+      outlineStar: { type: "text", value: "☆", x: 206, y: 20, size: 20, rotate: 8 },
     };
 
     const defaults = {
       layoutVersion: 7,
       message: "大家好！\n>> - <<",
       material: "soft",
+      bubbleColor: "#fffdf9",
+      bubbleOpacity: 100,
+      borderColor: "#ece6dc",
+      borderWidth: 1,
+      borderStyle: "plain",
+      glowColor: "#f4b8cf",
+      glowBlur: 18,
+      glowSpread: 0,
+      glowOpacity: 0,
+      pixelGlowSeeded: false,
       fixedWidth: false,
       bubbleWidth: 260,
       bubbleHeight: 0,
@@ -879,10 +1070,12 @@
       shadowY: 1,
       shadowBlur: 2,
       shadowOpacity: 5,
+      stickerColor: "#87837c",
       stickerOpacity: 58,
+      stickerLibrary: [],
       stickers: [
-        { id: cryptoId(), ...stickerTemplates.wing },
         { id: cryptoId(), ...stickerTemplates.star, x: 205, y: 16 },
+        { id: cryptoId(), ...stickerTemplates.spark, x: 250, y: 10 },
         { id: cryptoId(), ...stickerTemplates.face, x: 132, y: 72 },
       ],
     };
@@ -902,11 +1095,17 @@
       codeBox: document.getElementById("codeBox"),
       selectedControls: document.getElementById("selectedControls"),
       selectedHint: document.getElementById("selectedHint"),
+      stickerLibrary: document.getElementById("stickerLibrary"),
     };
 
     const inputs = {
       message: document.getElementById("message"),
       material: document.getElementById("material"),
+      bubbleColor: document.getElementById("bubbleColor"),
+      bubbleOpacity: document.getElementById("bubbleOpacity"),
+      borderColor: document.getElementById("borderColor"),
+      borderWidth: document.getElementById("borderWidth"),
+      borderStyle: document.getElementById("borderStyle"),
       bubbleWidth: document.getElementById("bubbleWidth"),
       bubbleHeight: document.getElementById("bubbleHeight"),
       radius: document.getElementById("radius"),
@@ -918,6 +1117,11 @@
       shadowY: document.getElementById("shadowY"),
       shadowBlur: document.getElementById("shadowBlur"),
       shadowOpacity: document.getElementById("shadowOpacity"),
+      glowColor: document.getElementById("glowColor"),
+      glowBlur: document.getElementById("glowBlur"),
+      glowSpread: document.getElementById("glowSpread"),
+      glowOpacity: document.getElementById("glowOpacity"),
+      stickerColor: document.getElementById("stickerColor"),
       stickerOpacity: document.getElementById("stickerOpacity"),
       customSticker: document.getElementById("customSticker"),
       imageSticker: document.getElementById("imageSticker"),
@@ -966,6 +1170,127 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }
 
+    function getStickerFrame() {
+      const wrapRect = el.bubbleWrap.getBoundingClientRect();
+      const coreRect = el.bubbleCore.getBoundingClientRect();
+      const fallbackWidth = Math.max(1, Number(state.bubbleWidth) || defaults.bubbleWidth);
+      const fallbackHeight = Math.max(1, el.bubbleCore.offsetHeight || 72);
+      return {
+        x: Math.round((coreRect.left || 0) - (wrapRect.left || 0)),
+        y: Math.round((coreRect.top || 0) - (wrapRect.top || 0)),
+        width: Math.max(1, coreRect.width || fallbackWidth),
+        height: Math.max(1, coreRect.height || fallbackHeight),
+      };
+    }
+
+    function hasFiniteNumber(value) {
+      return Number.isFinite(Number(value));
+    }
+
+    function normalizeHexColor(value, fallback) {
+      const raw = String(value || "").trim();
+      return /^#[0-9a-f]{6}$/i.test(raw) ? raw.toLowerCase() : fallback;
+    }
+
+    function hexToRgba(hex, opacity) {
+      const color = normalizeHexColor(hex, "#ffffff").slice(1);
+      const r = parseInt(color.slice(0, 2), 16);
+      const g = parseInt(color.slice(2, 4), 16);
+      const b = parseInt(color.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${clampNumber(opacity, 0, 1, 1)})`;
+    }
+
+    function isLegacyWingSticker(item) {
+      return item && item.type === "svg" && String(item.value || "").includes("M7 31c11-17");
+    }
+
+    function isStickerAnchor(value) {
+      return STICKER_ANCHORS.includes(value);
+    }
+
+    function isBorderStyle(value) {
+      return BORDER_STYLES.includes(value);
+    }
+
+    function getAnchorPoint(anchor, frame) {
+      if (anchor === "top-right") return { x: frame.x + frame.width, y: frame.y };
+      if (anchor === "bottom-left") return { x: frame.x, y: frame.y + frame.height };
+      if (anchor === "bottom-right") return { x: frame.x + frame.width, y: frame.y + frame.height };
+      return { x: frame.x, y: frame.y };
+    }
+
+    function nearestAnchorForPosition(x, y, frame) {
+      let bestAnchor = "top-left";
+      let bestDistance = Number.POSITIVE_INFINITY;
+      for (const anchor of STICKER_ANCHORS) {
+        const point = getAnchorPoint(anchor, frame);
+        const distance = (x - point.x) ** 2 + (y - point.y) ** 2;
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestAnchor = anchor;
+        }
+      }
+      return bestAnchor;
+    }
+
+    function setStickerPositionFromPixels(sticker, x, y, frame = getStickerFrame(), anchor = "") {
+      sticker.x = Math.round(x);
+      sticker.y = Math.round(y);
+      sticker.anchor = isStickerAnchor(anchor)
+        ? anchor
+        : isStickerAnchor(sticker.anchor)
+          ? sticker.anchor
+          : nearestAnchorForPosition(sticker.x, sticker.y, frame);
+      const point = getAnchorPoint(sticker.anchor, frame);
+      sticker.offsetX = Math.round(sticker.x - point.x);
+      sticker.offsetY = Math.round(sticker.y - point.y);
+      delete sticker.xRatio;
+      delete sticker.yRatio;
+    }
+
+    function ensureStickerAnchor(sticker, frame = getStickerFrame()) {
+      if (isStickerAnchor(sticker.anchor) && hasFiniteNumber(sticker.offsetX) && hasFiniteNumber(sticker.offsetY)) return;
+      const x = clampNumber(sticker.x, -240, 720, frame.x + frame.width / 2);
+      const y = clampNumber(sticker.y, -240, 520, frame.y + frame.height / 2);
+      setStickerPositionFromPixels(sticker, x, y, frame);
+    }
+
+    function setStickerAnchor(sticker, anchor, frame = getStickerFrame()) {
+      if (!isStickerAnchor(anchor)) return;
+      const position = getStickerPosition(sticker, frame);
+      sticker.anchor = anchor;
+      const point = getAnchorPoint(anchor, frame);
+      sticker.offsetX = Math.round(position.x - point.x);
+      sticker.offsetY = Math.round(position.y - point.y);
+    }
+
+    function stickerPositionForFrame(sticker, frame) {
+      const point = getAnchorPoint(sticker.anchor, frame);
+      const x = Math.round(point.x + Number(sticker.offsetX || 0));
+      const y = Math.round(point.y + Number(sticker.offsetY || 0));
+      return { x, y };
+    }
+
+    function getStickerPosition(sticker, frame = getStickerFrame()) {
+      ensureStickerAnchor(sticker, frame);
+      const { x, y } = stickerPositionForFrame(sticker, frame);
+      sticker.x = x;
+      sticker.y = y;
+      return { x, y };
+    }
+
+    function syncStickerPositions(frame = getStickerFrame()) {
+      for (const sticker of state.stickers) {
+        getStickerPosition(sticker, frame);
+      }
+    }
+
+    function setSelectedStickerAnchor(sticker, anchor, frame = getStickerFrame()) {
+      if (!isStickerAnchor(anchor)) return;
+      delete sticker.groupId;
+      setStickerAnchor(sticker, anchor, frame);
+    }
+
     function setRootVar(name, value) {
       el.root.style.setProperty(name, value);
     }
@@ -980,6 +1305,21 @@
 
     bindInput("message");
     bindInput("material");
+    bindInput("bubbleColor", (value) => normalizeHexColor(value, defaults.bubbleColor));
+    bindInput("bubbleOpacity", Number);
+    bindInput("borderColor", (value) => normalizeHexColor(value, defaults.borderColor));
+    bindInput("borderWidth", Number);
+    inputs.borderStyle.addEventListener("input", () => {
+      const nextStyle = isBorderStyle(inputs.borderStyle.value) ? inputs.borderStyle.value : defaults.borderStyle;
+      const changed = state.borderStyle !== nextStyle;
+      state.borderStyle = nextStyle;
+      if (changed && nextStyle === "pixel") {
+        if (state.borderColor === defaults.borderColor) state.borderColor = "#e78ab5";
+        state.borderWidth = Math.max(2, Number(state.borderWidth) || 0);
+        seedPixelGlowIfNeeded(state);
+      }
+      render();
+    });
     bindInput("bubbleWidth", Number);
     bindInput("bubbleHeight", Number);
     bindInput("radius", Number);
@@ -991,6 +1331,11 @@
     bindInput("shadowY", Number);
     bindInput("shadowBlur", Number);
     bindInput("shadowOpacity", Number);
+    bindInput("glowColor", (value) => normalizeHexColor(value, defaults.glowColor));
+    bindInput("glowBlur", Number);
+    bindInput("glowSpread", Number);
+    bindInput("glowOpacity", Number);
+    bindInput("stickerColor", (value) => normalizeHexColor(value, defaults.stickerColor));
     bindInput("stickerOpacity", Number);
 
     document.getElementById("edgeBlurToggle").addEventListener("click", () => {
@@ -1022,17 +1367,17 @@
       render();
     });
 
-    inputs.imageSticker.addEventListener("change", () => {
-      const file = inputs.imageSticker.files && inputs.imageSticker.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        state.stickers.push({ id: cryptoId(), type: "image", value: String(reader.result || ""), x: 278, y: 24, size: 48, rotate: 0 });
-        selectedStickerId = state.stickers.at(-1).id;
-        inputs.imageSticker.value = "";
-        render();
-      };
-      reader.readAsDataURL(file);
+    inputs.imageSticker.addEventListener("change", async () => {
+      const files = Array.from(inputs.imageSticker.files || []).filter((file) => file.type.startsWith("image/"));
+      if (!files.length) return;
+      const items = await Promise.all(files.map(async (file) => ({
+        id: cryptoId(),
+        name: file.name || "uploaded-sticker",
+        value: await readFileAsDataUrl(file),
+      })));
+      state.stickerLibrary.push(...items);
+      inputs.imageSticker.value = "";
+      render();
     });
 
     document.querySelector(".preview-pane").addEventListener("pointerdown", (event) => {
@@ -1108,10 +1453,44 @@
       render();
     }
 
+    function addLibrarySticker(item) {
+      if (!item?.value) return;
+      state.stickers.push({
+        id: cryptoId(),
+        type: "image",
+        value: item.value,
+        x: 278,
+        y: 24,
+        size: 48,
+        rotate: 0,
+      });
+      selectedStickerId = state.stickers.at(-1).id;
+      render();
+    }
+
+    function removeLibrarySticker(id) {
+      state.stickerLibrary = state.stickerLibrary.filter((item) => item.id !== id);
+      render();
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(reader.error || new Error("贴纸读取失败"));
+        reader.readAsDataURL(file);
+      });
+    }
+
     function render() {
       const material = materials[state.material] || materials.soft;
       inputs.message.value = state.message;
       inputs.material.value = state.material;
+      inputs.bubbleColor.value = state.bubbleColor;
+      inputs.bubbleOpacity.value = state.bubbleOpacity;
+      inputs.borderColor.value = state.borderColor;
+      inputs.borderWidth.value = state.borderWidth;
+      inputs.borderStyle.value = state.borderStyle;
       inputs.bubbleWidth.value = state.bubbleWidth;
       inputs.bubbleHeight.value = state.bubbleHeight;
       inputs.radius.value = state.radius;
@@ -1123,8 +1502,15 @@
       inputs.shadowY.value = state.shadowY;
       inputs.shadowBlur.value = state.shadowBlur;
       inputs.shadowOpacity.value = state.shadowOpacity;
+      inputs.glowColor.value = state.glowColor;
+      inputs.glowBlur.value = state.glowBlur;
+      inputs.glowSpread.value = state.glowSpread;
+      inputs.glowOpacity.value = state.glowOpacity;
+      inputs.stickerColor.value = state.stickerColor;
       inputs.stickerOpacity.value = state.stickerOpacity;
 
+      setText("bubbleOpacityValue", state.bubbleOpacity);
+      setText("borderWidthValue", state.borderWidth);
       setText("bubbleWidthValue", state.bubbleWidth);
       setText("bubbleHeightValue", state.bubbleHeight);
       setText("radiusValue", state.radius);
@@ -1136,9 +1522,18 @@
       setText("shadowYValue", state.shadowY);
       setText("shadowBlurValue", state.shadowBlur);
       setText("shadowOpacityValue", state.shadowOpacity);
+      setText("glowBlurValue", state.glowBlur);
+      setText("glowSpreadValue", state.glowSpread);
+      setText("glowOpacityValue", state.glowOpacity);
       setText("stickerOpacityValue", state.stickerOpacity);
 
-      setRootVar("--bubble-bg", material.bg);
+      setRootVar("--bubble-bg", hexToRgba(state.bubbleColor, state.bubbleOpacity / 100));
+      setRootVar("--bubble-border-color", state.borderWidth ? state.borderColor : "transparent");
+      setRootVar("--bubble-border-width", `${state.borderWidth}px`);
+      setRootVar("--bubble-glow-color", hexToRgba(state.glowColor, state.glowOpacity / 100));
+      setRootVar("--bubble-glow-blur", `${state.glowBlur}px`);
+      setRootVar("--bubble-glow-outer-blur", `${Number(state.glowBlur || 0) + Number(state.glowSpread || 0)}px`);
+      setRootVar("--bubble-glow-spread", `${state.glowSpread}px`);
       setRootVar("--material-texture", material.texture);
       setRootVar("--material-texture-opacity", material.textureOpacity);
       setRootVar("--bubble-width", `${state.bubbleWidth}px`);
@@ -1154,14 +1549,18 @@
       setRootVar("--bubble-shadow-y", `${state.shadowY}px`);
       setRootVar("--bubble-shadow-blur", `${state.shadowBlur}px`);
       setRootVar("--bubble-shadow-opacity", state.shadowOpacity / 100);
+      setRootVar("--sticker-color", hexToRgba(state.stickerColor, state.stickerOpacity / 100));
       setRootVar("--sticker-opacity", state.stickerOpacity / 100);
 
       el.materialLabel.textContent = material.label;
       el.bubbleCore.dataset.material = state.material;
+      el.bubbleCore.dataset.borderStyle = state.borderStyle;
       el.bubbleText.textContent = state.message || " ";
       document.getElementById("edgeBlurToggle").classList.toggle("on", !!state.edgeBlurEnabled);
       document.getElementById("fixedWidthToggle").classList.toggle("on", !!state.fixedWidth);
+      syncStickerPositions();
       renderStickers();
+      renderStickerLibrary();
       renderSelectedControls();
       el.codeBox.textContent = buildCssSnippet();
       saveState();
@@ -1171,28 +1570,74 @@
       document.getElementById(id).textContent = String(value);
     }
 
+    function renderStickerLibrary() {
+      el.stickerLibrary.innerHTML = "";
+      if (!state.stickerLibrary.length) {
+        const empty = document.createElement("div");
+        empty.className = "library-empty";
+        empty.textContent = "还没有上传贴纸";
+        el.stickerLibrary.appendChild(empty);
+        return;
+      }
+      for (const item of state.stickerLibrary) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "library-item";
+
+        const addButton = document.createElement("button");
+        addButton.type = "button";
+        addButton.className = "sticker-btn";
+        addButton.title = item.name || "上传贴纸";
+        addButton.setAttribute("aria-label", `添加 ${item.name || "上传贴纸"}`);
+        const img = document.createElement("img");
+        img.src = item.value;
+        img.alt = "";
+        addButton.appendChild(img);
+        addButton.addEventListener("click", () => addLibrarySticker(item));
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "library-remove";
+        removeButton.textContent = "×";
+        removeButton.title = "从贴纸库删除";
+        removeButton.setAttribute("aria-label", `删除 ${item.name || "上传贴纸"}`);
+        removeButton.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          removeLibrarySticker(item.id);
+        });
+
+        wrapper.append(addButton, removeButton);
+        el.stickerLibrary.appendChild(wrapper);
+      }
+    }
+
+    function getStickerTransform(sticker) {
+      const flip = sticker.flipX ? -1 : 1;
+      return `rotate(${sticker.rotate || 0}deg) scaleX(${flip})`;
+    }
+
     function renderStickers() {
       el.stickerLayer.innerHTML = "";
+      const frame = getStickerFrame();
       for (const sticker of state.stickers) {
         const node = document.createElement("div");
         const isTextSticker = sticker.type !== "svg" && sticker.type !== "image";
+        const position = getStickerPosition(sticker, frame);
         node.className = `sticker ${isTextSticker ? "text-sticker" : ""} ${sticker.id === selectedStickerId ? "selected" : ""}`;
         node.dataset.id = sticker.id;
-        node.style.left = `${sticker.x}px`;
-        node.style.top = `${sticker.y}px`;
+        node.style.left = `${position.x}px`;
+        node.style.top = `${position.y}px`;
         node.style.width = isTextSticker ? "max-content" : `${sticker.size}px`;
         node.style.height = isTextSticker ? "auto" : `${sticker.size}px`;
         node.style.fontSize = `${sticker.size}px`;
-        node.style.transform = `rotate(${sticker.rotate || 0}deg)`;
+        node.style.transform = getStickerTransform(sticker);
         if (sticker.type === "svg") {
           node.innerHTML = sticker.value;
         } else if (sticker.type === "image") {
           const img = document.createElement("img");
           img.src = sticker.value;
           img.alt = "";
-          img.style.width = "100%";
-          img.style.height = "100%";
-          img.style.objectFit = "contain";
+          img.draggable = false;
           node.appendChild(img);
         } else {
           node.textContent = sticker.value;
@@ -1249,6 +1694,8 @@
           node.appendChild(resizeHandle);
         }
         node.addEventListener("pointerdown", onStickerPointerDown);
+        node.addEventListener("click", onStickerClick);
+        node.addEventListener("dragstart", (event) => event.preventDefault());
         el.stickerLayer.appendChild(node);
       }
     }
@@ -1271,20 +1718,35 @@
       if (!sticker) return;
       selectedStickerId = id;
       resize = null;
-      const rect = el.bubbleWrap.getBoundingClientRect();
+      const frame = getStickerFrame();
+      const position = getStickerPosition(sticker, frame);
       drag = {
         id,
         startX: event.clientX,
         startY: event.clientY,
-        originX: sticker.x,
-        originY: sticker.y,
-        rect,
+        frame,
+        items: [{
+          id: sticker.id,
+          anchor: sticker.anchor,
+          originX: position.x,
+          originY: position.y,
+        }],
       };
       try {
         event.currentTarget.setPointerCapture(event.pointerId);
       } catch {
         // Synthetic pointer events used by local verification may not be capturable.
       }
+      render();
+    }
+
+    function onStickerClick(event) {
+      event.stopPropagation();
+      const id = event.currentTarget.dataset.id;
+      if (!state.stickers.some((item) => item.id === id)) return;
+      selectedStickerId = id;
+      drag = null;
+      resize = null;
       render();
     }
 
@@ -1300,15 +1762,30 @@
         return;
       }
       if (!drag) return;
-      const sticker = state.stickers.find((item) => item.id === drag.id);
-      if (!sticker) return;
-      sticker.x = Math.round(drag.originX + event.clientX - drag.startX);
-      sticker.y = Math.round(drag.originY + event.clientY - drag.startY);
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      const frame = drag.frame || getStickerFrame();
+      const primary = (drag.items || []).find((item) => item.id === drag.id) || (drag.items || [])[0];
+      const dragAnchor = primary
+        ? nearestAnchorForPosition(primary.originX + dx, primary.originY + dy, frame)
+        : "";
+      for (const origin of drag.items || []) {
+        const sticker = state.stickers.find((item) => item.id === origin.id);
+        if (!sticker) continue;
+        setStickerPositionFromPixels(
+          sticker,
+          origin.originX + dx,
+          origin.originY + dy,
+          frame,
+          dragAnchor,
+        );
+      }
       renderStickers();
       saveState();
     });
 
     window.addEventListener("pointerup", () => {
+      if (!drag && !resize) return;
       drag = null;
       resize = null;
       render();
@@ -1328,14 +1805,27 @@
           ? "图形贴纸"
           : sticker.value.slice(0, 12);
       el.selectedControls.className = "";
+      const anchorOptions = STICKER_ANCHORS.map((anchor) => (
+        `<option value="${anchor}" ${sticker.anchor === anchor ? "selected" : ""}>${STICKER_ANCHOR_LABELS[anchor]}</option>`
+      )).join("");
       el.selectedControls.innerHTML = `
         <div class="field" style="grid-template-columns: 72px 1fr; padding-top:0;">
           <label for="selectedSize">大小</label>
           <input id="selectedSize" type="range" min="10" max="180" step="1" value="${sticker.size}">
         </div>
         <div class="field" style="grid-template-columns: 72px 1fr;">
+          <label for="selectedAnchor">锚点</label>
+          <select id="selectedAnchor">${anchorOptions}</select>
+        </div>
+        <div class="field" style="grid-template-columns: 72px 1fr;">
           <label for="selectedRotate">旋转</label>
-          <input id="selectedRotate" type="range" min="-45" max="45" step="1" value="${sticker.rotate || 0}">
+          <input id="selectedRotate" type="range" min="-180" max="180" step="1" value="${sticker.rotate || 0}">
+        </div>
+        <div class="field" style="grid-template-columns: 72px 1fr;">
+          <div class="field-name">翻转</div>
+          <button class="btn secondary ${sticker.flipX ? "is-active" : ""}" type="button" id="selectedFlipX">
+            左右翻转${sticker.flipX ? "：开" : "：关"}
+          </button>
         </div>
         <div class="button-row" style="margin-top:10px;">
           <button class="btn secondary" type="button" id="duplicateSticker">复制</button>
@@ -1346,12 +1836,24 @@
         sticker.size = Number(event.target.value);
         render();
       });
+      document.getElementById("selectedAnchor").addEventListener("change", (event) => {
+        setSelectedStickerAnchor(sticker, event.target.value);
+        render();
+      });
       document.getElementById("selectedRotate").addEventListener("input", (event) => {
         sticker.rotate = Number(event.target.value);
         render();
       });
+      document.getElementById("selectedFlipX").addEventListener("click", () => {
+        sticker.flipX = !sticker.flipX;
+        render();
+      });
       document.getElementById("duplicateSticker").addEventListener("click", () => {
-        const copy = { ...structuredClone(sticker), id: cryptoId(), x: sticker.x + 18, y: sticker.y + 18 };
+        const frame = getStickerFrame();
+        const position = getStickerPosition(sticker, frame);
+        const copy = { ...structuredClone(sticker), id: cryptoId() };
+        delete copy.groupId;
+        setStickerPositionFromPixels(copy, position.x + 18, position.y + 18, frame, sticker.anchor);
         state.stickers.push(copy);
         selectedStickerId = copy.id;
         render();
@@ -1377,16 +1879,54 @@
 
     function buildCssSnippet() {
       const material = materials[state.material] || materials.soft;
-      const isPixel = state.material === "pixel";
-      const pixelClip = "polygon(0 12px, 12px 12px, 12px 0, calc(100% - 12px) 0, calc(100% - 12px) 12px, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 12px calc(100% - 12px), 0 calc(100% - 12px))";
+      const isPixel = state.borderStyle === "pixel";
+      const bubbleBg = hexToRgba(state.bubbleColor, state.bubbleOpacity / 100);
+      const borderColor = state.borderWidth ? state.borderColor : "transparent";
+      const glowColor = hexToRgba(state.glowColor, state.glowOpacity / 100);
+      const glowShadow = `0 0 ${state.glowBlur}px ${state.glowSpread}px ${hexToRgba(state.glowColor, state.glowOpacity / 100)}`;
+      const baseShadow = `0 ${state.shadowY}px ${state.shadowBlur}px rgba(70, 63, 54, ${state.shadowOpacity / 100})`;
+      const pixelShape = "polygon(8px 0, calc(100% - 8px) 0, calc(100% - 8px) 4px, calc(100% - 4px) 4px, calc(100% - 4px) 8px, 100% 8px, 100% calc(100% - 8px), calc(100% - 4px) calc(100% - 8px), calc(100% - 4px) calc(100% - 4px), calc(100% - 8px) calc(100% - 4px), calc(100% - 8px) 100%, 8px 100%, 8px calc(100% - 4px), 4px calc(100% - 4px), 4px calc(100% - 8px), 0 calc(100% - 8px), 0 8px, 4px 8px, 4px 4px, 8px 4px)";
+      const pixelVars = isPixel
+        ? `\n  --pixel-outline: max(2px, ${state.borderWidth}px);\n  --pixel-shape: ${pixelShape};`
+        : "";
+      const pixelBeforeCss = isPixel
+        ? `inset: calc(-1 * var(--pixel-outline));
+  z-index: 0;
+  border-radius: 0;
+  background: ${borderColor};
+  filter: drop-shadow(0 0 ${state.glowSpread}px ${glowColor}) drop-shadow(0 0 ${state.glowBlur + state.glowSpread}px ${glowColor}) drop-shadow(0 0 ${state.glowBlur}px ${glowColor}) drop-shadow(${baseShadow});
+  opacity: 1;
+  clip-path: var(--pixel-shape);`
+        : `inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+  background: ${bubbleBg};
+  filter: blur(${state.edgeBlurEnabled ? state.edgeBlur : 0}px);
+  opacity: ${state.edgeBlurEnabled ? 0.55 : 0};
+  clip-path: none;`;
+      const pixelAfterCss = isPixel
+        ? `inset: 0;
+  z-index: 1;
+  border-radius: 0;
+  opacity: 1;
+  background: ${bubbleBg};
+  clip-path: var(--pixel-shape);
+  mix-blend-mode: normal;`
+        : `inset: 0;
+  border-radius: inherit;
+  opacity: ${material.textureOpacity};
+  background: ${material.texture};
+  clip-path: none;
+  mix-blend-mode: multiply;`;
       const imageStickerNote = state.stickers.some((item) => item.type === "image")
         ? "\n * 注意：当前配置包含上传图片贴纸。图片贴纸已保存在上方 JSON 的 dataURL 中，真正接入 app 时请使用 JSON 或把图片转成资源 URL。"
         : "";
+      const positionNote = "\n * 贴纸位置用 anchor + offsetX/offsetY 固定在气泡框边角；x/y 只是当前预览像素。";
       return `/* SumiTalk bubble config
 ${JSON.stringify(state, null, 2)
   .split("\n")
   .map((line) => ` * ${line}`)
-  .join("\n")}${imageStickerNote}
+  .join("\n")}${positionNote}${imageStickerNote}
  */
 
 .sumitalk-custom-bubble-wrap {
@@ -1400,33 +1940,34 @@ ${JSON.stringify(state, null, 2)
   z-index: 2;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  ${pixelVars}
   width: ${state.fixedWidth ? `${state.bubbleWidth}px` : "fit-content"};
   max-width: ${state.bubbleWidth}px;
   min-height: ${state.bubbleHeight}px;
+  border: ${isPixel ? "0" : `${state.borderWidth}px solid ${borderColor}`};
   border-radius: ${isPixel ? 0 : state.radius}px;
-  clip-path: ${isPixel ? pixelClip : "none"};
-  filter: ${isPixel ? "drop-shadow(5px 5px 0 rgba(112, 105, 94, 0.16)) drop-shadow(10px 10px 0 rgba(112, 105, 94, 0.08))" : "none"};
-  background: ${material.bg};
+  clip-path: none;
+  filter: ${isPixel
+    ? `drop-shadow(0 0 ${state.glowSpread}px ${glowColor}) drop-shadow(0 0 ${state.glowBlur + state.glowSpread}px ${glowColor})`
+    : "none"};
+  background: ${isPixel ? "transparent" : bubbleBg};
   padding: ${state.paddingY}px ${state.paddingX}px;
   line-height: ${state.lineHeight};
   font-size: ${state.textSize}px;
   box-shadow: ${isPixel
-    ? "inset 0 0 0 4px rgba(119, 112, 101, 0.18), inset 4px 4px 0 rgba(255, 255, 255, 0.72), inset -4px -4px 0 rgba(119, 112, 101, 0.12)"
-    : `0 ${state.shadowY}px ${state.shadowBlur}px rgba(70, 63, 54, ${state.shadowOpacity / 100})`};
+    ? "none"
+    : `${baseShadow}, ${glowShadow}, inset 0 1px 0 rgba(255,255,255,0.72)`};
+  overflow: ${isPixel ? "visible" : "hidden"};
+  image-rendering: ${isPixel ? "pixelated" : "auto"};
 }
 
 .sumitalk-custom-bubble::before {
   content: "";
   position: absolute;
-  inset: ${isPixel ? "-4px" : "-2px"};
-  z-index: -1;
-  border-radius: ${isPixel ? 0 : "inherit"};
-  background: ${isPixel ? "#8e8679" : "inherit"};
-  filter: ${isPixel ? "none" : `blur(${state.edgeBlurEnabled ? state.edgeBlur : 0}px)`};
-  opacity: ${isPixel ? 0.16 : state.edgeBlurEnabled ? 0.55 : 0};
-  clip-path: ${isPixel ? "inherit" : "none"};
-  transform: ${isPixel ? "translate(4px, 4px)" : "none"};
+  ${pixelBeforeCss}
+  transform: none;
+  box-shadow: none;
 }
 
 .sumitalk-custom-bubble::after {
@@ -1434,26 +1975,17 @@ ${JSON.stringify(state, null, 2)
   position: absolute;
   z-index: 0;
   pointer-events: none;
-  ${isPixel ? `inset: auto;
-  top: 15px;
-  right: 22px;
-  width: 7px;
-  height: 7px;
-  border-radius: 0;
-  opacity: 0.34;
-  background: #7f786d;
-  box-shadow: -18px 10px 0 #7f786d, 16px 18px 0 #7f786d, -236px 68px 0 #7f786d, -216px 82px 0 #7f786d, -198px 64px 0 #7f786d;` : `inset: 0;
-  border-radius: inherit;
-  opacity: ${material.textureOpacity};
-  background: ${material.texture};`}
-  mix-blend-mode: multiply;
+  ${pixelAfterCss}
 }
 
 .sumitalk-custom-bubble-content {
   position: relative;
-  z-index: 1;
+  z-index: ${isPixel ? 2 : 1};
+  display: block;
+  width: 100%;
   white-space: pre-wrap;
-  ${isPixel ? "font-family: \"Courier New\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"PingFang SC\", \"Microsoft YaHei\", monospace; font-weight: 700; text-shadow: 2px 2px 0 rgba(126, 119, 108, 0.16);" : ""}
+  text-align: left;
+  ${isPixel ? `color: color-mix(in srgb, ${borderColor} 64%, #3e3838); font-family: "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "PingFang SC", "Microsoft YaHei", monospace; font-weight: 700; text-shadow: none;` : ""}
 }
 
 .sumitalk-custom-sticker-layer {
@@ -1467,7 +1999,7 @@ ${JSON.stringify(state, null, 2)
   position: absolute;
   display: grid;
   place-items: center;
-  color: rgba(135, 131, 124, ${state.stickerOpacity / 100});
+  color: ${hexToRgba(state.stickerColor, state.stickerOpacity / 100)};
   font-weight: 800;
   line-height: 1;
   text-shadow: 0 1px 8px rgba(70, 63, 54, 0.08);
@@ -1506,9 +2038,30 @@ ${JSON.stringify(state, null, 2)
 
     function normalizeImportedState(value) {
       const next = { ...structuredClone(defaults), ...(value || {}) };
+      const legacyPixelMaterial = next.material === "pixel";
       next.layoutVersion = defaults.layoutVersion;
       next.message = String(next.message || defaults.message);
+      if (legacyPixelMaterial) {
+        next.material = defaults.material;
+        next.borderStyle = "pixel";
+        if (!value?.bubbleColor || value.bubbleColor === "#fff8fc") next.bubbleColor = defaults.bubbleColor;
+        if (!value?.borderColor || value.borderColor === defaults.borderColor) next.borderColor = "#e78ab5";
+      }
       next.material = materials[next.material] ? next.material : defaults.material;
+      next.borderStyle = isBorderStyle(next.borderStyle) ? next.borderStyle : defaults.borderStyle;
+      if (next.borderStyle === "pixel" && next.bubbleColor === "#fff8fc" && next.borderColor === "#e78ab5") {
+        next.bubbleColor = defaults.bubbleColor;
+      }
+      next.bubbleColor = normalizeHexColor(next.bubbleColor, defaults.bubbleColor);
+      next.bubbleOpacity = clampNumber(next.bubbleOpacity, 10, 100, defaults.bubbleOpacity);
+      next.borderColor = normalizeHexColor(next.borderColor, defaults.borderColor);
+      next.borderWidth = clampNumber(next.borderWidth, 0, 6, defaults.borderWidth);
+      next.glowColor = normalizeHexColor(next.glowColor, defaults.glowColor);
+      next.glowBlur = clampNumber(next.glowBlur, 0, 80, defaults.glowBlur);
+      next.glowSpread = clampNumber(next.glowSpread, 0, 28, defaults.glowSpread);
+      next.glowOpacity = clampNumber(next.glowOpacity, 0, 100, defaults.glowOpacity);
+      next.pixelGlowSeeded = !!next.pixelGlowSeeded;
+      seedPixelGlowIfNeeded(next);
       next.fixedWidth = !!next.fixedWidth;
       next.bubbleWidth = clampNumber(next.bubbleWidth, 96, 360, defaults.bubbleWidth);
       next.bubbleHeight = clampNumber(next.bubbleHeight, 0, 180, defaults.bubbleHeight);
@@ -1522,17 +2075,36 @@ ${JSON.stringify(state, null, 2)
       next.shadowY = clampNumber(next.shadowY, 0, 36, defaults.shadowY);
       next.shadowBlur = clampNumber(next.shadowBlur, 0, 64, defaults.shadowBlur);
       next.shadowOpacity = clampNumber(next.shadowOpacity, 0, 42, defaults.shadowOpacity);
+      next.stickerColor = normalizeHexColor(next.stickerColor, defaults.stickerColor);
       next.stickerOpacity = clampNumber(next.stickerOpacity, 10, 100, defaults.stickerOpacity);
-      next.stickers = Array.isArray(next.stickers) ? next.stickers.map((item) => ({
+      next.stickerLibrary = Array.isArray(next.stickerLibrary) ? next.stickerLibrary.map((item) => ({
+        id: String(item.id || cryptoId()),
+        name: String(item.name || "uploaded-sticker").slice(0, 80),
+        value: String(item.value || ""),
+      })).filter((item) => item.value.startsWith("data:image/")) : [];
+      next.stickers = Array.isArray(next.stickers) ? next.stickers.filter((item) => !isLegacyWingSticker(item)).map((item) => ({
         id: String(item.id || cryptoId()),
         type: ["text", "svg", "image"].includes(item.type) ? item.type : "text",
         value: String(item.value || "✦"),
-        x: clampNumber(item.x, -80, 420, 120),
-        y: clampNumber(item.y, -80, 260, 40),
+        x: clampNumber(item.x, -240, 720, 120),
+        y: clampNumber(item.y, -240, 520, 40),
+        anchor: isStickerAnchor(item.anchor) ? item.anchor : undefined,
+        offsetX: hasFiniteNumber(item.offsetX) ? clampNumber(item.offsetX, -320, 320, 0) : undefined,
+        offsetY: hasFiniteNumber(item.offsetY) ? clampNumber(item.offsetY, -260, 260, 0) : undefined,
         size: clampNumber(item.size, 10, 180, 28),
-        rotate: clampNumber(item.rotate, -45, 45, 0),
+        rotate: clampNumber(item.rotate, -180, 180, 0),
+        flipX: !!item.flipX,
       })) : [];
       return next;
+    }
+
+    function seedPixelGlowIfNeeded(target) {
+      if (!target || target.borderStyle !== "pixel") return;
+      if (target.pixelGlowSeeded && Number(target.glowOpacity) > 0) return;
+      if (Number(target.glowOpacity) <= 0) target.glowOpacity = 42;
+      if (Number(target.glowSpread) <= 0) target.glowSpread = 5;
+      if (Number(target.glowBlur) <= 0) target.glowBlur = 24;
+      target.pixelGlowSeeded = true;
     }
 
     function clampNumber(value, min, max, fallback) {
@@ -1550,7 +2122,6 @@ ${JSON.stringify(state, null, 2)
     }
 
     function buildSvgExport() {
-      const material = materials[state.material] || materials.soft;
       const lines = String(state.message || "").split("\n");
       const estimatedTextWidth = Math.max(...lines.map((line) => estimateTextWidth(line, state.textSize)), 1);
       const renderedBubbleWidth = state.fixedWidth
@@ -1562,29 +2133,44 @@ ${JSON.stringify(state, null, 2)
       const canvasHeight = Math.max(150, renderedBubbleHeight + 100);
       const bubbleX = 54;
       const bubbleY = 42;
-      const textX = bubbleX + renderedBubbleWidth / 2;
+      const stickerFrame = { x: bubbleX, y: bubbleY, width: renderedBubbleWidth, height: renderedBubbleHeight };
+      const textX = bubbleX + state.paddingX;
       const textY = bubbleY + renderedBubbleHeight / 2 - ((lines.length - 1) * lineStep) / 2 + state.textSize * 0.35;
+      const borderColor = state.borderWidth ? state.borderColor : "transparent";
+      const stickerColor = state.stickerColor || defaults.stickerColor;
       const stickerSvg = state.stickers.map((sticker) => {
-        const transform = `translate(${sticker.x} ${sticker.y}) rotate(${sticker.rotate || 0} ${sticker.size / 2} ${sticker.size / 2})`;
+        ensureStickerAnchor(sticker);
+        const position = stickerPositionForFrame(sticker, stickerFrame);
+        const stickerWidth = sticker.type === "text"
+          ? Math.max(1, estimateTextWidth(sticker.value, sticker.size))
+          : sticker.size;
+        const stickerHeight = sticker.size;
+        const flip = sticker.flipX ? -1 : 1;
+        const transform = `translate(${position.x} ${position.y}) translate(${stickerWidth / 2} ${stickerHeight / 2}) rotate(${sticker.rotate || 0}) scale(${flip} 1) translate(${-stickerWidth / 2} ${-stickerHeight / 2})`;
         if (sticker.type === "svg") {
-          return `<g transform="${transform}" opacity="${state.stickerOpacity / 100}" color="#8f8980" width="${sticker.size}" height="${sticker.size}">${sticker.value}</g>`;
+          return `<g transform="${transform}" opacity="${state.stickerOpacity / 100}" color="${stickerColor}" width="${sticker.size}" height="${sticker.size}">${sticker.value}</g>`;
         }
-        if (sticker.type === "image") return "";
-        return `<text x="${sticker.x}" y="${sticker.y + sticker.size}" opacity="${state.stickerOpacity / 100}" fill="#8f8980" font-size="${sticker.size}" font-weight="800" transform="rotate(${sticker.rotate || 0} ${sticker.x} ${sticker.y})">${escapeXml(sticker.value)}</text>`;
+        if (sticker.type === "image") {
+          return `<image transform="${transform}" href="${escapeXml(sticker.value)}" width="${sticker.size}" height="${sticker.size}" opacity="${state.stickerOpacity / 100}" preserveAspectRatio="xMidYMid meet"/>`;
+        }
+        return `<text transform="${transform}" x="0" y="${sticker.size}" opacity="${state.stickerOpacity / 100}" fill="${stickerColor}" font-size="${sticker.size}" font-weight="800">${escapeXml(sticker.value)}</text>`;
       }).join("\n");
       const textSvg = lines.map((line, index) => (
         `<tspan x="${textX}" y="${textY + index * lineStep}">${escapeXml(line)}</tspan>`
       )).join("");
       return `<svg width="${canvasWidth}" height="${canvasHeight}" viewBox="0 0 ${canvasWidth} ${canvasHeight}" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <filter id="shadow"><feDropShadow dx="0" dy="${state.shadowY}" stdDeviation="${state.shadowBlur / 2}" flood-color="#463f36" flood-opacity="${state.shadowOpacity / 100}"/></filter>
+    <filter id="shadowGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="${state.shadowY}" stdDeviation="${state.shadowBlur / 2}" flood-color="#463f36" flood-opacity="${state.shadowOpacity / 100}"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="${state.glowBlur / 2}" flood-color="${state.glowColor}" flood-opacity="${state.glowOpacity / 100}"/>
+    </filter>
     <filter id="edge"><feGaussianBlur stdDeviation="${state.edgeBlurEnabled ? state.edgeBlur : 0}"/></filter>
   </defs>
   <rect width="${canvasWidth}" height="${canvasHeight}" fill="#f5f3ef"/>
-  <rect x="${bubbleX}" y="${bubbleY}" width="${renderedBubbleWidth}" height="${renderedBubbleHeight}" rx="${state.radius}" fill="${material.bg.startsWith("#") ? material.bg : "#fffdf9"}" filter="url(#edge)" opacity="${state.edgeBlurEnabled ? 0.55 : 0}"/>
-  <rect x="${bubbleX}" y="${bubbleY}" width="${renderedBubbleWidth}" height="${renderedBubbleHeight}" rx="${state.radius}" fill="${material.bg.startsWith("#") ? material.bg : "#fffdf9"}" filter="url(#shadow)"/>
+  <rect x="${bubbleX}" y="${bubbleY}" width="${renderedBubbleWidth}" height="${renderedBubbleHeight}" rx="${state.radius}" fill="${state.bubbleColor}" fill-opacity="${state.bubbleOpacity / 100}" filter="url(#edge)" opacity="${state.edgeBlurEnabled ? 0.55 : 0}"/>
+  <rect x="${bubbleX}" y="${bubbleY}" width="${renderedBubbleWidth}" height="${renderedBubbleHeight}" rx="${state.radius}" fill="${state.bubbleColor}" fill-opacity="${state.bubbleOpacity / 100}" stroke="${borderColor}" stroke-width="${state.borderWidth}" filter="url(#shadowGlow)"/>
   ${stickerSvg}
-  <text text-anchor="middle" fill="#56524d" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Microsoft YaHei, sans-serif" font-size="${state.textSize}" font-weight="520">${textSvg}</text>
+  <text text-anchor="start" fill="#56524d" font-family="-apple-system, BlinkMacSystemFont, PingFang SC, Microsoft YaHei, sans-serif" font-size="${state.textSize}" font-weight="520">${textSvg}</text>
 </svg>`;
     }
 

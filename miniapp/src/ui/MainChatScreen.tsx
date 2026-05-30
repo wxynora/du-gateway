@@ -1424,24 +1424,20 @@ export function MainChatScreen({
                       const isActiveSearchPart = activeSearchMatchId === matchId;
                       const decorated = !transparentBubbleEnabled && userBubbleStyle === "decor";
                       return (
-                        <div
+                        <ChatBubbleFrame
                           key={`${group.id}-${index}`}
                           ref={(el) => {
                             searchResultRefs.current[matchId] = el;
                           }}
-                          className={`w-fit max-w-full rounded-[20px] ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+                          decorated={decorated}
+                          align="right"
+                          className={`block max-w-full rounded-[18px] px-3 py-2 text-left font-medium leading-relaxed shadow-sm ${
+                            transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
+                          } ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+                          style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                         >
-                          <ChatBubbleFrame
-                            decorated={decorated}
-                            align="right"
-                            className={`block max-w-full rounded-[18px] px-3 py-1.5 text-left font-medium leading-[1.45] shadow-sm ${
-                              transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
-                            }`}
-                            style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
-                          >
-                            <PlainTextBlock content={part.content || (sending ? "…" : "")} />
-                          </ChatBubbleFrame>
-                        </div>
+                          <PlainTextBlock content={part.content || (sending ? "…" : "")} />
+                        </ChatBubbleFrame>
                       );
                     })}
                   </div>
@@ -1524,7 +1520,7 @@ export function MainChatScreen({
                             <>
                               <ChatBubbleFrame
                                 decorated={decorated}
-                                className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-1.5 font-medium leading-[1.45] shadow-sm ${
+                                className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
                                   transparentBubbleEnabled
                                     ? TRANSPARENT_BUBBLE_CLASS
                                     : group.role === "benben"

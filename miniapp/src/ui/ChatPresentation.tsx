@@ -10,9 +10,9 @@ const SUMIKA_BUBBLE_STICKERS = [
     id: "sumika-image",
     type: "image",
     src: sumikaBubbleStickerUrl,
-    anchor: "top-left",
+    anchor: "bottom-left",
     offsetX: -21,
-    offsetY: -56,
+    offsetY: -78,
     size: 86,
     rotate: 0,
   },
@@ -137,31 +137,35 @@ export function PlainTextBlock({ content }: { content: string }) {
   return <span className="whitespace-pre-wrap">{content}</span>;
 }
 
-export function ChatBubbleFrame({
-  children,
-  className,
-  style,
-  decorated = false,
-  align = "left",
-}: {
+type ChatBubbleFrameProps = {
   children: React.ReactNode;
   className: string;
   style?: React.CSSProperties;
   decorated?: boolean;
   align?: "left" | "right";
-}) {
+};
+
+export const ChatBubbleFrame = React.forwardRef<HTMLDivElement, ChatBubbleFrameProps>(function ChatBubbleFrame({
+  children,
+  className,
+  style,
+  decorated = false,
+  align = "left",
+}, ref) {
   if (!decorated) {
     return (
-      <div className={className} style={style}>
+      <div ref={ref} className={className} style={style}>
         {children}
       </div>
     );
   }
   return (
-    <div className={`relative inline-block max-w-full overflow-visible align-top ${align === "right" ? "self-end" : ""}`}>
-      <div className={`relative z-10 ${className}`} style={style}>
-        {children}
-      </div>
+    <div
+      ref={ref}
+      className={`relative overflow-visible ${className} ${align === "right" ? "self-end" : ""}`}
+      style={style}
+    >
+      {children}
       <span className="pointer-events-none absolute inset-0 z-20 overflow-visible" aria-hidden="true">
         {SUMIKA_BUBBLE_STICKERS.map((sticker) => (
           <span
@@ -194,7 +198,7 @@ export function ChatBubbleFrame({
       </span>
     </div>
   );
-}
+});
 
 export function copyText(text: string, toast: (msg: string) => void) {
   const value = String(text || "").trim();

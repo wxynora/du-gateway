@@ -26,7 +26,7 @@ export function resolveChatFontFamily(fontKey: ChatFontKey): string {
 export function getBubbleStyleLabel(style: BubbleStyleKey, role: "user" | "assistant"): string {
   if (style === "soft") return role === "user" ? "柔和填充" : "浅灰填充";
   if (style === "outline") return "描边";
-  if (style === "decor") return "装饰气泡";
+  if (style === "decor") return "得意kaomoji";
   return "默认";
 }
 
