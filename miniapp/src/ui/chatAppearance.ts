@@ -1,6 +1,7 @@
 import type { ChatFontKey } from "./chatMessages";
 
-export type BubbleStyleKey = "default" | "soft" | "outline";
+export const BUBBLE_STYLE_KEYS = ["default", "soft", "outline", "decor"] as const;
+export type BubbleStyleKey = typeof BUBBLE_STYLE_KEYS[number];
 
 export const TRANSPARENT_BUBBLE_CLASS =
   "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
@@ -25,6 +26,7 @@ export function resolveChatFontFamily(fontKey: ChatFontKey): string {
 export function getBubbleStyleLabel(style: BubbleStyleKey, role: "user" | "assistant"): string {
   if (style === "soft") return role === "user" ? "柔和填充" : "浅灰填充";
   if (style === "outline") return "描边";
+  if (style === "decor") return "装饰气泡";
   return "默认";
 }
 
@@ -32,9 +34,11 @@ export function resolveBubbleClass(role: "user" | "assistant", style: BubbleStyl
   if (role === "user") {
     if (style === "soft") return "bg-[#475569] text-white";
     if (style === "outline") return "border border-[#CBD5E1] bg-white text-gray-900";
+    if (style === "decor") return "border border-[#D8D2C7] bg-[#FFFCF6] text-[#3D3934] shadow-[0_1px_2px_rgba(70,63,54,0.06),inset_0_1px_0_rgba(255,255,255,0.72)]";
     return "bg-[#2D3748] text-white";
   }
   if (style === "soft") return "bg-[#F4F5F7] text-gray-800";
   if (style === "outline") return "border border-[#CBD5E1] bg-white text-gray-800";
+  if (style === "decor") return "border border-[#ECE6DC] bg-[#FFFDF9] text-[#56524D] shadow-[0_1px_2px_rgba(70,63,54,0.05),inset_0_1px_0_rgba(255,255,255,0.72)]";
   return "border border-gray-100/50 bg-white text-gray-800";
 }

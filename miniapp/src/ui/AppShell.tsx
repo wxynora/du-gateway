@@ -13,6 +13,7 @@ import { MainChatScreen } from "./MainChatScreen";
 import { PersonalizationScreen } from "./PersonalizationScreen";
 import { FloatingBallSettingRow, ListRow, PageCardRow, SwitchSettingRow } from "./SettingsRows";
 import {
+  BUBBLE_STYLE_KEYS,
   DEFAULT_GROUP_CHAT_TITLE,
   getDisplayGroupChatTitle,
   limitGroupChatTitle,
@@ -47,6 +48,11 @@ import { buildAvatarDataUrl, buildBackgroundDataUrl } from "./imageDataUrl";
 import { clampStoredNumber, readStoredBoolean, readStoredNumber, readStoredString } from "./uiStorage";
 
 const LISTEN_BACKGROUND_STORAGE_KEY = "miniapp.listenWithDu.backgroundImage";
+
+function nextBubbleStyle(style: BubbleStyleKey): BubbleStyleKey {
+  const index = BUBBLE_STYLE_KEYS.indexOf(style);
+  return BUBBLE_STYLE_KEYS[(index + 1) % BUBBLE_STYLE_KEYS.length] || "default";
+}
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
 const SettingsUpstream = lazy(() => import("./tabs/SettingsUpstream").then((m) => ({ default: m.SettingsUpstream })));
@@ -132,10 +138,10 @@ export function AppShell({
     clampStoredNumber(readStoredNumber("miniapp.ui.chatBackgroundOpacity", 100), 20, 100, 100),
   );
   const [userBubbleStyle, setUserBubbleStyle] = useState<BubbleStyleKey>(() =>
-    readStoredString("miniapp.ui.userBubbleStyle", "default", ["default", "soft", "outline"] as const),
+    readStoredString("miniapp.ui.userBubbleStyle", "default", BUBBLE_STYLE_KEYS),
   );
   const [assistantBubbleStyle, setAssistantBubbleStyle] = useState<BubbleStyleKey>(() =>
-    readStoredString("miniapp.ui.assistantBubbleStyle", "default", ["default", "soft", "outline"] as const),
+    readStoredString("miniapp.ui.assistantBubbleStyle", "default", BUBBLE_STYLE_KEYS),
   );
   const [myAvatarImage, setMyAvatarImage] = useState(() => {
     try {
@@ -732,9 +738,9 @@ export function AppShell({
             chatBackgroundOpacity={chatBackgroundOpacity}
             onChangeChatBackgroundOpacity={setChatBackgroundOpacity}
             userBubbleStyle={userBubbleStyle}
-            onCycleUserBubbleStyle={() => setUserBubbleStyle((prev) => (prev === "default" ? "soft" : prev === "soft" ? "outline" : "default"))}
+            onCycleUserBubbleStyle={() => setUserBubbleStyle(nextBubbleStyle)}
             assistantBubbleStyle={assistantBubbleStyle}
-            onCycleAssistantBubbleStyle={() => setAssistantBubbleStyle((prev) => (prev === "default" ? "soft" : prev === "soft" ? "outline" : "default"))}
+            onCycleAssistantBubbleStyle={() => setAssistantBubbleStyle(nextBubbleStyle)}
             myAvatarImage={myAvatarImage}
             duAvatarImage={duAvatarImage}
             benbenAvatarImage={benbenAvatarImage}
