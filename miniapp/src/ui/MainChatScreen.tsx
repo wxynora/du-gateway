@@ -35,6 +35,7 @@ import {
   extractTokenCount,
   formatClockTime,
   getChatSearchMatchId,
+  groupRoleLabel,
   groupChatMessages,
   pickBetterHistory,
   sanitizeHistoryMessages,
@@ -95,6 +96,9 @@ const SUMITALK_CHAT_JOB_POLL_MS = 1000;
 const SUMITALK_CHAT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_POLL_MS = 1000;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
+const GROUP_DISCUSSION_MAX_FOLLOWUPS = 3;
+const GROUP_DISCUSSION_TRIGGER_RE = /(?:讨论|商量|你俩|你们俩|自由聊|一起聊|一起看看|聊两句|聊几句|互相|碰一下|合计|对一下|头脑风暴)/i;
+const GROUP_DISCUSSION_STOP_RE = /(?:先这样|先到这|就先这样|差不多(?:了|就行|可以)|可以收尾|不用继续|别聊了|到这里|我来改|我去改|先按这个)/i;
 
 function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -153,7 +157,9 @@ type GroupReplyTargets = {
   mentions: string[];
   benbenMode: "daily_chat" | "coding_task";
   codingThreadKey: string;
+  freeDiscussion: boolean;
 };
+type GroupDiscussionSpeaker = "du" | "benben";
 
 function resolveCodingThreadKey(content: string): string {
   const text = String(content || "").toLowerCase();
@@ -170,7 +176,8 @@ function resolveGroupReplyTargets(content: string): GroupReplyTargets {
   const text = String(content || "");
   const hasDuMention = /[@＠]\s*(?:渡|du)(?![a-z0-9_])/i.test(text);
   const hasBenbenMention = /[@＠]\s*(?:笨笨机|笨笨|benben|codex)(?![a-z0-9_])/i.test(text);
-  const hasCodingCommand = hasBenbenMention && /(?:改代码|开工|施工|debug|调试|修\s*bug|修一下|实现|落地|加上|做一下)/i.test(text);
+  const hasFreeDiscussion = hasDuMention && hasBenbenMention && GROUP_DISCUSSION_TRIGGER_RE.test(text);
+  const hasCodingCommand = hasBenbenMention && !hasFreeDiscussion && /(?:改代码|开工|施工|debug|调试|修\s*bug|修一下|实现|落地|加上|做一下)/i.test(text);
   const mentions = uniqueNonEmptyStrings([
     hasDuMention ? "du" : "",
     hasBenbenMention ? "benben" : "",
@@ -182,9 +189,10 @@ function resolveGroupReplyTargets(content: string): GroupReplyTargets {
       mentions,
       benbenMode: hasCodingCommand ? "coding_task" : "daily_chat",
       codingThreadKey: hasCodingCommand ? resolveCodingThreadKey(text) : "",
+      freeDiscussion: hasFreeDiscussion,
     };
   }
-  return { du: true, benben: false, mentions: [], benbenMode: "daily_chat", codingThreadKey: "" };
+  return { du: true, benben: false, mentions: [], benbenMode: "daily_chat", codingThreadKey: "", freeDiscussion: false };
 }
 
 function isBenbenCancelCommand(content: string): boolean {
@@ -207,6 +215,47 @@ function codexGroupTaskStatusText(task: Pick<CodexGroupChatTask, "mode" | "statu
   if (status === "running") return "笨笨正在看群聊...";
   if (status === "queued") return "笨笨任务已创建，等我一下...";
   return "笨笨正在看群聊...";
+}
+
+function groupDiscussionShouldStop(content: string): boolean {
+  return GROUP_DISCUSSION_STOP_RE.test(String(content || ""));
+}
+
+function mentionedGroupSpeaker(content: string, speaker: GroupDiscussionSpeaker): boolean {
+  const text = String(content || "");
+  if (speaker === "du") return /[@＠]\s*(?:渡|du)(?![a-z0-9_])/i.test(text);
+  return /[@＠]\s*(?:笨笨机|笨笨|benben|codex)(?![a-z0-9_])/i.test(text);
+}
+
+function resolveNextGroupDiscussionSpeaker(lastSpeaker: GroupDiscussionSpeaker, lastContent: string): GroupDiscussionSpeaker {
+  const mentionsDu = mentionedGroupSpeaker(lastContent, "du");
+  const mentionsBenben = mentionedGroupSpeaker(lastContent, "benben");
+  if (mentionsDu && !mentionsBenben) return "du";
+  if (mentionsBenben && !mentionsDu) return "benben";
+  return lastSpeaker === "du" ? "benben" : "du";
+}
+
+function buildGroupDiscussionUserContent(
+  messages: ChatDraftMessage[],
+  topic: string,
+  turnIndex: number,
+  maxTurns: number,
+): string {
+  const lines = (Array.isArray(messages) ? messages : [])
+    .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .filter((msg) => String(msg.content || "").trim())
+    .slice(-12)
+    .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`);
+  const fallbackTopic = String(topic || "").trim();
+  if (!lines.length && fallbackTopic) lines.push(`辛玥：${fallbackTopic}`);
+  return [
+    "【三人群聊自由讨论接力】",
+    `原话题：${fallbackTopic || "（无）"}`,
+    `这是自动接力第 ${turnIndex}/${maxTurns} 条。你是渡，接着最近一条自然回复一小段。`,
+    "规则：只发群聊正文，不要写“渡：”前缀；不要替辛玥决定；不要进入施工、调工具或汇报流程；如果结论已经差不多，就自然收尾。",
+    "最近群聊：",
+    ...lines,
+  ].join("\n");
 }
 
 async function waitForCodexGroupChatTask(taskId: string): Promise<CodexGroupChatTask> {
@@ -306,6 +355,7 @@ export function MainChatScreen({
   const messagesRef = useRef<ChatDraftMessage[]>(seedMessages);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
   const [travelFormCard, setTravelFormCard] = useState<TravelPlanFormCard | null>(null);
   const [travelResultCard, setTravelResultCard] = useState<TravelPlanResultCard | null>(null);
@@ -326,6 +376,7 @@ export function MainChatScreen({
   });
   const benbenTaskRecoveringRef = useRef<Set<string>>(new Set());
   const benbenTaskFinalizedRef = useRef<Set<string>>(new Set());
+  const groupDiscussionRunRef = useRef(0);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -767,6 +818,189 @@ export function MainChatScreen({
     saveDisplayHistoryInBackground(messagesRef.current, { localDeviceId });
   }
 
+  async function waitForBenbenTaskId(messageId: string, runId: number): Promise<string> {
+    for (let i = 0; i < 20; i += 1) {
+      if (groupDiscussionRunRef.current !== runId) return "";
+      const taskId = String(messagesRef.current.find((msg) => msg.id === messageId)?.jobId || "").trim();
+      if (taskId) return taskId;
+      await waitMs(250);
+    }
+    return "";
+  }
+
+  async function requestDuGroupDiscussionReply(params: {
+    runId: number;
+    topic: string;
+    replyTarget: string;
+    turnIndex: number;
+  }): Promise<string> {
+    if (groupDiscussionRunRef.current !== params.runId) return "";
+    if (!activeModel) throw new Error("当前还没拿到可用模型");
+    const createdAtMs = Date.now();
+    const clientRequestId = `group-discussion-du-${createdAtMs}-${Math.random().toString(36).slice(2, 10)}`;
+    const assistantId = `assistant-discussion-${createdAtMs}`;
+    const assistantCreatedAt = new Date(createdAtMs).toISOString();
+    const placeholder: ChatDraftMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      createdAt: assistantCreatedAt,
+      status: "pending",
+      clientRequestId,
+    };
+    const pendingMessages = [...messagesRef.current, placeholder];
+    messagesRef.current = pendingMessages;
+    setMessages(pendingMessages);
+    await saveDisplayHistory(pendingMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+    try {
+      const started = await apiJson<SumiTalkChatJobCreateResponse>("/miniapp-api/sumitalk-chat-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: activeModel,
+          messages: [{
+            role: "user",
+            content: buildGroupDiscussionUserContent(
+              messagesRef.current,
+              params.topic,
+              params.turnIndex,
+              GROUP_DISCUSSION_MAX_FOLLOWUPS,
+            ),
+          }],
+          stream: false,
+          window_id: windowId,
+          reply_target: params.replyTarget,
+          client_request_id: clientRequestId,
+        }),
+      });
+      if (started?.status === "error") {
+        const upstreamError = started.response?.error || started.response?.message || "";
+        throw new Error(String(started.error || upstreamError || "渡回复失败"));
+      }
+      const jobId = String(started?.job_id || "").trim();
+      const startedStatus = String(started?.status || "").trim();
+      const data = startedStatus === "done"
+        ? started?.response || started
+        : jobId
+        ? await waitForSumiTalkChatJob(jobId)
+        : started?.response || started;
+      if (data?.error) {
+        const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
+        throw new Error(err || "上游返回错误");
+      }
+      const reply = extractAssistantReplyText(data);
+      if (!reply) throw new Error("上游没有返回内容");
+      const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
+        id: assistantId,
+        role: "assistant",
+        content: reply,
+        createdAt: assistantCreatedAt,
+        status: "sent",
+        clientRequestId,
+        jobId: jobId || undefined,
+        reasoning: extractAssistantReasoning(data) || undefined,
+        tokenCount: extractTokenCount(data),
+      });
+      messagesRef.current = finalMessages;
+      setMessages(finalMessages);
+      await saveDisplayHistory(finalMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+      saveDisplayHistoryInBackground(finalMessages, { localDeviceId: params.replyTarget });
+      return reply;
+    } catch (e: any) {
+      const failedMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
+        id: assistantId,
+        role: "assistant",
+        content: `（渡接力失败：${e?.message || e}）`,
+        createdAt: assistantCreatedAt,
+        status: "failed",
+        clientRequestId,
+      });
+      messagesRef.current = failedMessages;
+      setMessages(failedMessages);
+      await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+      throw e;
+    }
+  }
+
+  async function requestBenbenGroupDiscussionReply(params: {
+    runId: number;
+    topic: string;
+    replyTarget: string;
+    turnIndex: number;
+    duReply?: string;
+  }): Promise<string> {
+    if (groupDiscussionRunRef.current !== params.runId) return "";
+    const createdAtMs = Date.now();
+    const messageId = `benben-discussion-${createdAtMs}`;
+    const clientRequestId = `group-discussion-benben-${createdAtMs}-${Math.random().toString(36).slice(2, 10)}`;
+    await requestBenbenGroupReply({
+      baseMessages: messagesRef.current,
+      userContent: params.topic,
+      duReply: params.duReply || "",
+      replyTarget: params.replyTarget,
+      clientRequestId,
+      mode: "daily_chat",
+      targetMentions: ["benben"],
+      placeholderId: messageId,
+      placeholderCreatedAt: new Date(createdAtMs).toISOString(),
+    });
+    if (groupDiscussionRunRef.current !== params.runId) return "";
+    const taskId = await waitForBenbenTaskId(messageId, params.runId);
+    if (!taskId) return "";
+    const task = await waitForCodexGroupChatTask(taskId);
+    if (groupDiscussionRunRef.current !== params.runId) return String(task.response || "").trim();
+    await applyBenbenTaskUpdate(task, { messageId, localDeviceId: params.replyTarget });
+    return String(task.response || "").trim();
+  }
+
+  async function runGroupFreeDiscussion(params: {
+    runId: number;
+    topic: string;
+    replyTarget: string;
+    initialBenbenMessageId: string;
+    initialDuReply: string;
+  }) {
+    setGroupDiscussionRunning(true);
+    try {
+      if (groupDiscussionRunRef.current !== params.runId) return;
+      const initialTaskId = await waitForBenbenTaskId(params.initialBenbenMessageId, params.runId);
+      if (!initialTaskId || groupDiscussionRunRef.current !== params.runId) return;
+      const initialBenbenTask = await waitForCodexGroupChatTask(initialTaskId);
+      if (groupDiscussionRunRef.current !== params.runId) return;
+      await applyBenbenTaskUpdate(initialBenbenTask, {
+        messageId: params.initialBenbenMessageId,
+        localDeviceId: params.replyTarget,
+      });
+      let lastSpeaker: GroupDiscussionSpeaker = "benben";
+      let lastContent = String(initialBenbenTask.response || params.initialDuReply || "").trim();
+      for (let turnIndex = 1; turnIndex <= GROUP_DISCUSSION_MAX_FOLLOWUPS; turnIndex += 1) {
+        if (groupDiscussionRunRef.current !== params.runId || !lastContent || groupDiscussionShouldStop(lastContent)) break;
+        const nextSpeaker = resolveNextGroupDiscussionSpeaker(lastSpeaker, lastContent);
+        const reply = nextSpeaker === "du"
+          ? await requestDuGroupDiscussionReply({
+              runId: params.runId,
+              topic: params.topic,
+              replyTarget: params.replyTarget,
+              turnIndex,
+            })
+          : await requestBenbenGroupDiscussionReply({
+              runId: params.runId,
+              topic: params.topic,
+              replyTarget: params.replyTarget,
+              turnIndex,
+              duReply: lastSpeaker === "du" ? lastContent : "",
+            });
+        if (groupDiscussionRunRef.current !== params.runId || !reply.trim()) break;
+        lastSpeaker = nextSpeaker;
+        lastContent = reply.trim();
+      }
+    } catch (e: any) {
+      if (groupDiscussionRunRef.current === params.runId) toast(`自由讨论中断：${e?.message || e}`);
+    } finally {
+      if (groupDiscussionRunRef.current === params.runId) setGroupDiscussionRunning(false);
+    }
+  }
+
   useEffect(() => {
     if (!groupChatMode) return;
     const pendingBenbenTasks = messagesRef.current
@@ -812,9 +1046,14 @@ export function MainChatScreen({
       toast("当前还没拿到聊天窗口 ID，不能接入共享上下文");
       return;
     }
+    const discussionRunId = groupChatMode ? groupDiscussionRunRef.current + 1 : groupDiscussionRunRef.current;
+    if (groupChatMode) {
+      groupDiscussionRunRef.current = discussionRunId;
+      setGroupDiscussionRunning(false);
+    }
     const groupTargets = groupChatMode
       ? resolveGroupReplyTargets(content)
-      : { du: true, benben: false, mentions: [], benbenMode: "daily_chat" as const, codingThreadKey: "" };
+      : { du: true, benben: false, mentions: [], benbenMode: "daily_chat" as const, codingThreadKey: "", freeDiscussion: false };
     const shouldRequestDu = !groupChatMode || groupTargets.du;
     const shouldRequestBenben = groupChatMode && groupTargets.benben;
     const resolvedDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
@@ -898,6 +1137,7 @@ export function MainChatScreen({
     messagesRef.current = draftMessages;
     await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
     let benbenCreatePromise: Promise<ChatDraftMessage[]> | null = null;
+    let initialDuReply = "";
     try {
       if (shouldRequestBenben) {
         benbenCreatePromise = requestBenbenGroupReply({
@@ -951,6 +1191,7 @@ export function MainChatScreen({
         }
         const reply = extractAssistantReplyText(data);
         if (!reply) throw new Error("上游没有返回内容");
+        initialDuReply = reply;
         const reasoning = extractAssistantReasoning(data);
         const tokenCount = extractTokenCount(data);
         const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
@@ -974,6 +1215,21 @@ export function MainChatScreen({
       }
       if (benbenCreatePromise) {
         await benbenCreatePromise;
+      }
+      if (
+        groupTargets.freeDiscussion
+        && shouldRequestDu
+        && shouldRequestBenben
+        && benbenPlaceholderId
+        && groupTargets.benbenMode === "daily_chat"
+      ) {
+        void runGroupFreeDiscussion({
+          runId: discussionRunId,
+          topic: content,
+          replyTarget,
+          initialBenbenMessageId: benbenPlaceholderId,
+          initialDuReply,
+        });
       }
     } catch (e: any) {
       if (benbenCreatePromise) {
@@ -1010,7 +1266,7 @@ export function MainChatScreen({
     : "bg-[#F0F4F8] text-[#4A5568]";
   const benbenGroupActive = groupChatMode;
   const groupedMessages = groupChatMessages(messages);
-  const assistantTyping = sending && messages.some(
+  const assistantTyping = (sending || groupDiscussionRunning) && messages.some(
     (msg) => (msg.role === "assistant" || msg.role === "benben") && String(msg.status || "").trim().toLowerCase() === "pending",
   );
   const searchMatches = useMemo<ChatSearchMatch[]>(() => {

@@ -1249,3 +1249,10 @@ npm -C miniapp run android
 - 已完成：MiniApp 通过 `/miniapp-api/codex-group-chat-tasks/<id>/cancel` 调后端取消；后端 `cancel_task` 会把任务标成 `cancelled` 并发布 realtime，`finish_task` 收到 bridge 迟到结果时保持 `cancelled`，不覆盖成完成。
 - 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`npx vite build --outDir /tmp/du-gateway-miniapp-cancel-task-build --emptyOutDir true` 通过；`.venv/bin/python -m py_compile services/codex_group_chat.py routes/miniapp/codex_group_chat.py routes/pc_command.py scripts/codex_group_chat_bridge.py` 通过；smoke 覆盖 coding task 创建、claim、cancel、cancel 后不可再 claim、迟到 finish 不覆盖 cancelled；`git diff --check` 覆盖本轮相关文件。
 - 未完成 / 下次继续：施工任务取消会由 bridge 轮询状态并终止本地 Codex 子进程；普通 daily_chat 取消只做任务状态取消和迟到回写阻断。本轮没有重建 `miniapp_static`，上线前要重新构建静态产物并重启后端/bridge。
+
+当前状态（2026-05-31 三人群聊有限自由讨论）：
+- 已完成：MiniApp 三人群聊在 `@渡 @笨笨` 且带 `讨论/商量/你俩/自由聊/一起看看/聊几句` 等触发词时，会开启有限自由讨论接力；初始渡和笨笨仍按原来的双目标链路独立创建，笨笨首条完成后最多再自动追加 3 条接力回复。
+- 已完成：接力期间上一条内容显式 `@渡` 或 `@笨笨` 时优先按 @ 指向下一位，否则渡/笨笨交替；出现“先这样 / 差不多了 / 不用继续 / 我来改 / 先按这个”等收尾语会停止，用户再发新消息也会让旧接力自然停下。
+- 已完成：自由讨论不会自动进入 `coding_task`；即使话题里出现 `改代码/debug/实现`，只要是 `@渡 @笨笨` 讨论触发，笨笨仍按 `daily_chat` 参与，真施工仍必须显式 `@笨笨 改代码/开工/debug...`。
+- 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`npx vite build --outDir /tmp/du-gateway-miniapp-free-discussion-build --emptyOutDir true` 通过，只有既有 chunk size warning；`git diff --check -- miniapp/src/ui/MainChatScreen.tsx docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：本轮不改 QQ 群聊 @ 存档链路，不做 @all/选择器 UI，也没有重建 `miniapp_static`；上线前需要重建静态产物并重启后端/bridge。
