@@ -15,6 +15,17 @@ type HealthCloudResponse = {
 };
 
 type DuHeartPoint = { at?: string; value: number };
+type HealthHistoryRow = { at?: string; heartRate?: string | number; steps?: string | number; source: string };
+type DuVitalsHistoryRow = {
+  at?: string;
+  heart?: number;
+  breath?: number;
+  focus?: unknown;
+  close?: unknown;
+  tension?: unknown;
+  status?: string;
+};
+type FlippedCardKind = "sumika" | "du";
 
 const CLOUD_HEALTH_RECORD_DISPLAY_LIMIT = 1;
 const HEALTH_REPORT_LOG_DISPLAY_LIMIT = 10;
@@ -34,12 +45,21 @@ export function HealthDataScreen() {
   const [loading, setLoading] = useState(false);
   const [headerActionsEl, setHeaderActionsEl] = useState<HTMLElement | null>(null);
   const [savingSeconds, setSavingSeconds] = useState<number | null>(null);
+  const [flippedCard, setFlippedCard] = useState<FlippedCardKind | null>(null);
   const isAndroid = Capacitor.getPlatform() === "android";
 
   const latestLocal = status?.last || {};
   const latestCloud = cloud?.latest || {};
   const cloudHealthRows = useMemo(() => (cloud?.history || []).slice(0, CLOUD_HEALTH_RECORD_DISPLAY_LIMIT), [cloud?.history]);
   const reportLogs = useMemo(() => (status?.logs || []).slice(-HEALTH_REPORT_LOG_DISPLAY_LIMIT).reverse(), [status?.logs]);
+  const sumikaHistoryRows = useMemo(
+    () => normalizeHealthHistory(cloud?.history || [], latestCloud, latestLocal),
+    [cloud?.history, latestCloud, latestLocal],
+  );
+  const duVitalsHistoryRows = useMemo(
+    () => normalizeDuVitalsHistory(cloud?.du_vitals_history || [], cloud?.du_vitals || {}),
+    [cloud?.du_vitals_history, cloud?.du_vitals],
+  );
   const displayHealth = useMemo(() => {
     const src = Object.keys(latestCloud).length ? latestCloud : latestLocal;
     return {
@@ -137,46 +157,66 @@ export function HealthDataScreen() {
         </button>,
         headerActionsEl,
       ) : null}
-      <section className="relative overflow-hidden rounded-[32px] border border-black/5 bg-white p-6 text-[#111111] shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]" style={{ fontFamily: "'Inter', sans-serif" }}>
-        <div className="flex items-start justify-between gap-4 border-b border-black/10 pb-4">
-          <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-black/45">Sumika Heartbeat</div>
-            <div className="mt-1 text-[13px] font-medium text-black/55">Notify for Xiaomi</div>
-          </div>
-          <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold ${status?.listenerEnabled ? "bg-black text-white" : "bg-black/8 text-black/60"}`}>
-            {status?.listenerEnabled ? "已授权" : "未授权"}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 gap-5 py-8">
-          <BiometricMetric
-            label="Heart Rate / 心率"
-            value={displayHealth.heartRate || "-"}
-            unit={displayHealth.heartRate ? "bpm" : ""}
-          />
-          <BiometricMetric
-            label="Steps / 步数"
-            value={displayHealth.steps || "-"}
-            unit={displayHealth.steps ? "steps" : ""}
-          />
-        </div>
-
-        <div className="flex items-end justify-between gap-4 border-t border-black/10 pt-4">
-          <div className="min-w-0 space-y-1 text-[10px] uppercase tracking-[0.08em] text-black/45">
-            <div className="flex gap-2">
-              <span>Sync</span>
-              <span className="font-medium text-black/70">{formatTime(displayHealth.at) || "-"}</span>
+      <FlipCard
+        flipped={flippedCard === "sumika"}
+        front={(
+          <section
+            role="button"
+            tabIndex={0}
+            aria-label="查看 Sumika 心跳最近十次记录"
+            className="relative min-h-[248px] cursor-pointer overflow-hidden rounded-[32px] border border-black/5 bg-white p-6 text-[#111111] shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)] outline-none transition-transform active:scale-[0.995] focus-visible:ring-2 focus-visible:ring-black/20"
+            style={{ fontFamily: "'Inter', sans-serif" }}
+            onClick={() => setFlippedCard("sumika")}
+            onKeyDown={(e) => handleCardKeyDown(e, () => setFlippedCard("sumika"))}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-black/10 pb-4">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-black/45">Sumika Heartbeat</div>
+                <div className="mt-1 text-[13px] font-medium text-black/55">Notify for Xiaomi</div>
+              </div>
+              <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold ${status?.listenerEnabled ? "bg-black text-white" : "bg-black/8 text-black/60"}`}>
+                {status?.listenerEnabled ? "已授权" : "未授权"}
+              </span>
             </div>
-            <div className="flex gap-2">
-              <span>Source</span>
-              <span className="font-medium text-black/70">{displayHealth.source}</span>
-            </div>
-          </div>
-          <div className="h-8 w-8 shrink-0 opacity-70 [background-image:radial-gradient(#111_1px,transparent_1px)] [background-size:4px_4px]" aria-hidden="true" />
-        </div>
-      </section>
 
-      <DuVitalsCard vitals={cloud?.du_vitals || {}} history={cloud?.du_vitals_history || []} />
+            <div className="grid grid-cols-2 gap-5 py-8">
+              <BiometricMetric
+                label="Heart Rate / 心率"
+                value={displayHealth.heartRate || "-"}
+                unit={displayHealth.heartRate ? "bpm" : ""}
+              />
+              <BiometricMetric
+                label="Steps / 步数"
+                value={displayHealth.steps || "-"}
+                unit={displayHealth.steps ? "steps" : ""}
+              />
+            </div>
+
+            <div className="flex items-end justify-between gap-4 border-t border-black/10 pt-4">
+              <div className="min-w-0 space-y-1 text-[10px] uppercase tracking-[0.08em] text-black/45">
+                <div className="flex gap-2">
+                  <span>Sync</span>
+                  <span className="font-medium text-black/70">{formatTime(displayHealth.at) || "-"}</span>
+                </div>
+                <div className="flex gap-2">
+                  <span>Source</span>
+                  <span className="font-medium text-black/70">{displayHealth.source}</span>
+                </div>
+              </div>
+              <div className="h-8 w-8 shrink-0 opacity-70 [background-image:radial-gradient(#111_1px,transparent_1px)] [background-size:4px_4px]" aria-hidden="true" />
+            </div>
+          </section>
+        )}
+        back={<SumikaHistoryCardBack rows={sumikaHistoryRows} onClose={() => setFlippedCard(null)} />}
+      />
+
+      <DuVitalsCard
+        vitals={cloud?.du_vitals || {}}
+        historyRows={duVitalsHistoryRows}
+        flipped={flippedCard === "du"}
+        onFlip={() => setFlippedCard("du")}
+        onClose={() => setFlippedCard(null)}
+      />
 
       <section className="rounded-[26px] border border-gray-100 bg-white p-5 shadow-[0_8px_28px_-22px_rgba(0,0,0,0.2)]">
         <div className="mb-3 text-[13px] font-semibold tracking-wide text-gray-900">上报频率</div>
@@ -241,77 +281,160 @@ export function HealthDataScreen() {
           ) : null}
         </div>
       </section>
+
     </div>
   );
 }
 
-function DuVitalsCard({ vitals, history }: { vitals: Record<string, any>; history: Array<Record<string, any>> }) {
+function DuVitalsCard({
+  vitals,
+  historyRows,
+  flipped,
+  onFlip,
+  onClose,
+}: {
+  vitals: Record<string, any>;
+  historyRows: DuVitalsHistoryRow[];
+  flipped: boolean;
+  onFlip: () => void;
+  onClose: () => void;
+}) {
   const heart = Number(vitals?.heart_bpm || 0);
   const breath = Number(vitals?.breath_rpm || 0);
   const params = typeof vitals?.parameters === "object" && vitals.parameters ? vitals.parameters : {};
-  const heartHistory = useMemo(() => normalizeDuHeartHistory(history, vitals), [history, vitals]);
+  const heartHistory = useMemo(
+    () => historyRows
+      .slice()
+      .reverse()
+      .map((item) => ({ at: item.at, value: Number(item.heart || 0) }))
+      .filter((item) => Number.isFinite(item.value) && item.value > 0),
+    [historyRows],
+  );
   const hasVitals = heart > 0 || breath > 0;
   return (
-    <section className="relative overflow-hidden rounded-[32px] bg-[#111111] p-6 text-white shadow-[0_34px_80px_-48px_rgba(0,0,0,0.85)]" style={{ fontFamily: "'Inter', sans-serif" }}>
-      <style>
-        {`
-          @keyframes biometric-line-draw {
-            from { stroke-dashoffset: 1000; }
-            to { stroke-dashoffset: 0; }
-          }
-        `}
-      </style>
-      <div className="mb-6 flex items-start justify-between gap-4 border-b border-white/15 pb-4">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/42">Du Heartbeat</div>
-          <div className="mt-1 text-[13px] font-medium text-white/42">Biometric stream</div>
-        </div>
-        <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-black">
-          {String(vitals?.status || (hasVitals ? "平稳" : "未同步"))}
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-5 py-8">
-        <BiometricMetric
-          label="Du Heart / 渡心率"
-          value={heart || "-"}
-          unit={heart ? "bpm" : ""}
-          tone="dark"
-        />
-        <BiometricMetric
-          label="Du Breath / 渡呼吸"
-          value={breath || "-"}
-          unit={breath ? "brpm" : ""}
-          tone="dark"
-        />
-      </div>
-      <DuHeartCurve points={heartHistory} />
-      <div className="mt-4 text-[10px] uppercase tracking-[0.08em] text-white/42">
-        Focus {formatParamPercent(params.focus)} · Close {formatParamPercent(params.intimacy_heat)} · Tension {formatParamPercent(params.tension)}
-      </div>
-      <div className="mt-1 text-[10px] uppercase tracking-[0.08em] text-white/42">Sync {formatTime(vitals?.updatedAt || vitals?.at) || "-"}</div>
-    </section>
+    <FlipCard
+      flipped={flipped}
+      front={(
+        <section
+          role="button"
+          tabIndex={0}
+          aria-label="查看渡心跳最近十次记录"
+          className="relative min-h-[360px] cursor-pointer overflow-hidden rounded-[32px] bg-[#111111] p-6 text-white shadow-[0_34px_80px_-48px_rgba(0,0,0,0.85)] outline-none transition-transform active:scale-[0.995] focus-visible:ring-2 focus-visible:ring-white/30"
+          style={{ fontFamily: "'Inter', sans-serif" }}
+          onClick={onFlip}
+          onKeyDown={(e) => handleCardKeyDown(e, onFlip)}
+        >
+          <style>
+            {`
+              @keyframes biometric-line-draw {
+                from { stroke-dashoffset: 1000; }
+                to { stroke-dashoffset: 0; }
+              }
+            `}
+          </style>
+          <div className="mb-6 flex items-start justify-between gap-4 border-b border-white/15 pb-4">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/42">Du Heartbeat</div>
+              <div className="mt-1 text-[13px] font-medium text-white/42">Biometric stream</div>
+            </div>
+            <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-black">
+              {String(vitals?.status || (hasVitals ? "平稳" : "未同步"))}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-5 py-8">
+            <BiometricMetric
+              label="Du Heart / 渡心率"
+              value={heart || "-"}
+              unit={heart ? "bpm" : ""}
+              tone="dark"
+            />
+            <BiometricMetric
+              label="Du Breath / 渡呼吸"
+              value={breath || "-"}
+              unit={breath ? "brpm" : ""}
+              tone="dark"
+            />
+          </div>
+          <DuHeartCurve points={heartHistory} />
+          <div className="mt-4 text-[10px] uppercase tracking-[0.08em] text-white/42">
+            Focus {formatParamPercent(params.focus)} · Close {formatParamPercent(params.intimacy_heat)} · Tension {formatParamPercent(params.tension)}
+          </div>
+          <div className="mt-1 text-[10px] uppercase tracking-[0.08em] text-white/42">Sync {formatTime(vitals?.updatedAt || vitals?.at) || "-"}</div>
+        </section>
+      )}
+      back={<DuHistoryCardBack rows={historyRows} onClose={onClose} />}
+    />
   );
 }
 
-function normalizeDuHeartHistory(history: Array<Record<string, any>>, latest: Record<string, any>): DuHeartPoint[] {
-  const rows = (Array.isArray(history) ? history : [])
-    .map((item) => ({
-      at: String(item?.updatedAt || item?.at || "").trim(),
-      value: Number(item?.heart_bpm || item?.heartBpm || 0),
-    }))
-    .filter((item) => Number.isFinite(item.value) && item.value > 0);
+function handleCardKeyDown(event: React.KeyboardEvent<HTMLElement>, action: () => void) {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  action();
+}
 
-  const latestAt = String(latest?.updatedAt || latest?.at || "").trim();
-  const latestValue = Number(latest?.heart_bpm || latest?.heartBpm || 0);
-  if (
-    Number.isFinite(latestValue) &&
-    latestValue > 0 &&
-    !rows.some((item) => item.at === latestAt && item.value === latestValue)
-  ) {
-    rows.push({ at: latestAt, value: latestValue });
+function normalizeHealthHistory(
+  history: Array<{ at?: string; data?: Record<string, any> }>,
+  latestCloud: Record<string, any>,
+  latestLocal: Record<string, any>,
+): HealthHistoryRow[] {
+  const rows: HealthHistoryRow[] = [];
+  const add = (data: Record<string, any>, at: string | undefined, source: string) => {
+    const heartRate = data?.heart_rate ?? data?.heartRate ?? "";
+    const steps = data?.steps ?? data?.step_count ?? data?.stepCount ?? "";
+    const rowAt = at || data?.updatedAt || data?.status_at || data?.capturedAt || data?.captured_at || data?.at || "";
+    if (!hasHistoryValue(heartRate) && !hasHistoryValue(steps)) return;
+    const key = `${rowAt}|${heartRate}|${steps}`;
+    if (rows.some((item) => `${item.at || ""}|${item.heartRate || ""}|${item.steps || ""}` === key)) return;
+    rows.push({ at: String(rowAt || "").trim(), heartRate, steps, source });
+  };
+
+  for (const row of Array.isArray(history) ? history : []) {
+    add(row.data || {}, row.at, "云端");
   }
+  if (Object.keys(latestCloud || {}).length) add(latestCloud, undefined, "云端");
+  if (Object.keys(latestLocal || {}).length && !rows.length) add(latestLocal, undefined, "本机");
 
-  return rows.slice(-10);
+  return rows.sort((a, b) => recordTime(b.at) - recordTime(a.at)).slice(0, 10);
+}
+
+function normalizeDuVitalsHistory(history: Array<Record<string, any>>, latest: Record<string, any>): DuVitalsHistoryRow[] {
+  const rows: DuVitalsHistoryRow[] = [];
+  const add = (item: Record<string, any>) => {
+    const params = typeof item?.parameters === "object" && item.parameters ? item.parameters : {};
+    const heart = Number(item?.heart_bpm || item?.heartBpm || 0);
+    const breath = Number(item?.breath_rpm || item?.breathRpm || 0);
+    const at = String(item?.updatedAt || item?.at || "").trim();
+    if (!(heart > 0) && !(breath > 0)) return;
+    const key = `${at}|${heart}|${breath}`;
+    if (rows.some((row) => `${row.at || ""}|${row.heart || 0}|${row.breath || 0}` === key)) return;
+    rows.push({
+      at,
+      heart: Number.isFinite(heart) && heart > 0 ? heart : undefined,
+      breath: Number.isFinite(breath) && breath > 0 ? breath : undefined,
+      focus: params.focus ?? item?.focus,
+      close: params.intimacy_heat ?? item?.intimacy_heat,
+      tension: params.tension ?? item?.tension,
+      status: item?.status ? String(item.status) : undefined,
+    });
+  };
+
+  for (const item of Array.isArray(history) ? history : []) {
+    add(item);
+  }
+  if (Object.keys(latest || {}).length) add(latest);
+
+  return rows.sort((a, b) => recordTime(b.at) - recordTime(a.at)).slice(0, 10);
+}
+
+function recordTime(value?: string) {
+  const dt = new Date(String(value || ""));
+  const time = dt.getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function hasHistoryValue(value: unknown) {
+  return value !== undefined && value !== null && value !== "";
 }
 
 function DuHeartCurve({ points }: { points: DuHeartPoint[] }) {
@@ -381,6 +504,139 @@ function CloudRow({ row }: { row: { at?: string; data?: Record<string, any> } })
         <div className="mt-1 truncate text-[11px] text-gray-400">{formatTime(row.at || data.updatedAt || data.capturedAt)}</div>
       </div>
       <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-500">R2</span>
+    </div>
+  );
+}
+
+function FlipCard({ flipped, front, back }: { flipped: boolean; front: React.ReactNode; back: React.ReactNode }) {
+  return (
+    <div style={{ perspective: "1200px" }}>
+      <div
+        className="relative transition-transform duration-500"
+        style={{
+          transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)",
+          transformStyle: "preserve-3d",
+        }}
+      >
+        <div style={{ backfaceVisibility: "hidden" }}>{front}</div>
+        <div className="absolute inset-0" style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>{back}</div>
+      </div>
+    </div>
+  );
+}
+
+function SumikaHistoryCardBack({ rows, onClose }: { rows: HealthHistoryRow[]; onClose: () => void }) {
+  return (
+    <section className="relative min-h-[248px] overflow-hidden rounded-[32px] border border-black/5 bg-[#FBFAF8] p-5 text-black shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]" style={{ fontFamily: "'Inter', sans-serif" }}>
+      <HistoryBackHeader title="Sumika Heartbeat" subtitle={`最近 ${rows.length || 0} 次记录`} tone="light" onClose={onClose} />
+      <div className="mt-3 max-h-[164px] space-y-2 overflow-y-auto pr-1">
+        {rows.map((row, index) => (
+          <div key={`${row.at || ""}-${index}`} className="rounded-[16px] border border-black/5 bg-black/[0.035] px-3 py-2.5">
+            <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.1em] text-black/42">
+              <span>{formatTime(row.at) || "-"}</span>
+              <span>{row.source}</span>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-3">
+              <HistoryMetric label="Heart" value={hasHistoryValue(row.heartRate) ? row.heartRate : "-"} unit={hasHistoryValue(row.heartRate) ? "bpm" : ""} />
+              <HistoryMetric label="Steps" value={hasHistoryValue(row.steps) ? row.steps : "-"} unit={hasHistoryValue(row.steps) ? "steps" : ""} />
+            </div>
+          </div>
+        ))}
+        {!rows.length ? <HistoryEmpty tone="light" /> : null}
+      </div>
+    </section>
+  );
+}
+
+function DuHistoryCardBack({ rows, onClose }: { rows: DuVitalsHistoryRow[]; onClose: () => void }) {
+  return (
+    <section className="relative min-h-[360px] overflow-hidden rounded-[32px] bg-[#111111] p-5 text-white shadow-[0_34px_80px_-48px_rgba(0,0,0,0.85)]" style={{ fontFamily: "'Inter', sans-serif" }}>
+      <HistoryBackHeader title="Du Heartbeat" subtitle={`最近 ${rows.length || 0} 次记录`} tone="dark" onClose={onClose} />
+      <div className="mt-3 max-h-[276px] space-y-2 overflow-y-auto pr-1">
+        {rows.map((row, index) => (
+          <div key={`${row.at || ""}-${index}`} className="rounded-[16px] border border-white/10 bg-white/[0.08] px-3 py-2.5">
+            <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.1em] text-white/42">
+              <span>{formatTime(row.at) || "-"}</span>
+              <span>{row.status || "stream"}</span>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-3">
+              <HistoryMetric label="Heart" value={row.heart || "-"} unit={row.heart ? "bpm" : ""} tone="dark" />
+              <HistoryMetric label="Breath" value={row.breath || "-"} unit={row.breath ? "brpm" : ""} tone="dark" />
+            </div>
+            <div className="mt-2 truncate text-[9px] uppercase tracking-[0.08em] text-white/42">
+              Focus {formatParamPercent(row.focus)} · Close {formatParamPercent(row.close)} · Tension {formatParamPercent(row.tension)}
+            </div>
+          </div>
+        ))}
+        {!rows.length ? <HistoryEmpty tone="dark" /> : null}
+      </div>
+    </section>
+  );
+}
+
+function HistoryBackHeader({
+  title,
+  subtitle,
+  tone,
+  onClose,
+}: {
+  title: string;
+  subtitle: string;
+  tone: "light" | "dark";
+  onClose: () => void;
+}) {
+  const dark = tone === "dark";
+  return (
+    <div className={`flex items-start justify-between gap-4 border-b pb-3 ${dark ? "border-white/10" : "border-black/10"}`}>
+      <div>
+        <div className={`text-[10px] font-semibold uppercase tracking-[0.22em] ${dark ? "text-white/42" : "text-black/42"}`}>{title}</div>
+        <div className={`mt-1 text-[13px] font-medium ${dark ? "text-white/58" : "text-black/55"}`}>{subtitle}</div>
+      </div>
+      <button
+        type="button"
+        aria-label="返回"
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[17px] leading-none ${dark ? "bg-white/10 text-white/70 active:bg-white/15" : "bg-black/[0.06] text-black/55 active:bg-black/[0.1]"}`}
+        onClick={onClose}
+      >
+        ↩
+      </button>
+    </div>
+  );
+}
+
+function HistoryMetric({
+  label,
+  value,
+  unit,
+  tone = "light",
+}: {
+  label: string;
+  value: React.ReactNode;
+  unit?: string;
+  tone?: "light" | "dark";
+}) {
+  const dark = tone === "dark";
+  return (
+    <div className="min-w-0">
+      <div className={`truncate text-[9px] uppercase tracking-[0.18em] ${dark ? "text-white/38" : "text-black/42"}`}>{label}</div>
+      <div className="mt-1 flex min-w-0 items-start gap-1 overflow-hidden">
+        <span className={`min-w-0 shrink text-[30px] leading-none ${dark ? "text-white" : "text-black"}`} style={{ fontFamily: ANNIVERSARY_NUMBER_FONT, fontWeight: 500 }}>
+          {value}
+        </span>
+        {unit ? (
+          <span className={`shrink-0 translate-y-[16px] text-[10px] italic ${dark ? "text-white/45" : "text-black/45"}`} style={{ fontFamily: ANNIVERSARY_NUMBER_FONT }}>
+            {unit}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function HistoryEmpty({ tone }: { tone: "light" | "dark" }) {
+  return (
+    <div className={`rounded-[18px] px-4 py-8 text-center text-[13px] ${tone === "dark" ? "bg-white/[0.08] text-white/42" : "bg-black/[0.035] text-black/42"}`}>
+      还没有最近记录
     </div>
   );
 }
