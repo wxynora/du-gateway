@@ -5,19 +5,6 @@ import remarkGfm from "remark-gfm";
 import sumikaBubbleStickerUrl from "../assets/sumika-bubble-sticker.png?url";
 import { PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
 
-const SUMIKA_BUBBLE_CORE_STYLE: React.CSSProperties = {
-  maxWidth: "min(100%, 160px)",
-  border: "0 solid transparent",
-  borderRadius: "18px",
-  background: "#ffffff",
-  boxShadow: "0 2px 2px rgba(70, 63, 54, 0.05), 0 0 15px 6px rgba(209, 209, 209, 0.28), inset 0 1px 0 rgba(255,255,255,0.72)",
-  color: "#56524D",
-  padding: "4px 8px",
-  lineHeight: 1.3,
-  textAlign: "left",
-  overflowWrap: "anywhere",
-};
-
 const SUMIKA_BUBBLE_STICKERS = [
   {
     id: "sumika-image",
@@ -170,10 +157,9 @@ export function ChatBubbleFrame({
       </div>
     );
   }
-  const coreStyle = { ...SUMIKA_BUBBLE_CORE_STYLE, ...style };
   return (
     <div className={`relative inline-block max-w-full overflow-visible align-top ${align === "right" ? "self-end" : ""}`}>
-      <div className={`relative z-10 ${className}`} style={coreStyle}>
+      <div className={`relative z-10 ${className}`} style={style}>
         {children}
       </div>
       <span className="pointer-events-none absolute inset-0 z-20 overflow-visible" aria-hidden="true">
