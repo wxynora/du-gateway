@@ -48,6 +48,7 @@ DU_WINDOW_ID=
 XIAOAI_ACTION_POLL_MS=3000
 XIAOAI_MUTE_RESTORE_FALLBACK_VOLUME=35
 XIAOAI_MUTE_VOLUME_READ_TIMEOUT_MS=250
+XIAOAI_PLAY_URL_STRATEGY=auto
 ```
 
 `XIAOAI_GATEWAY_TOKEN` 是可选项。现在网关没配就留空，不需要自己找一个“已有 token”。
@@ -126,6 +127,8 @@ runner 会：
 如果在 MiniApp 打开“入口静音”，runner 会在命中入口词后立刻记录当前音量，并同时尝试把 `app_ios`、`common` 和默认播放通道音量降到 0；拿到渡的 `audio_url` 或兜底文本、准备播放前再按同样通道恢复。这样旧 `player_play_url` 和新 `player_play_music` 都能走同一个静音/恢复逻辑。`XIAOAI_MUTE_VOLUME_READ_TIMEOUT_MS` 控制读原音量最多等多久，读不到时用 `XIAOAI_MUTE_RESTORE_FALLBACK_VOLUME` 恢复。
 
 MiniMax 音频只临时保存最新一条：后端固定覆盖 `DATA_DIR/xiaoai_audio/latest.mp3`，返回的播放 URL 会带 `?v=...` 版本号。小爱第一次 GET 会成功，后续循环 GET 同版本会返回 404；下一条新语音会覆盖文件并生成新版本号。
+
+URL 播放默认 `auto`：L05C 等已知直 URL 假成功/无声的型号走 `player_play_music`，其他型号先试 `player_play_url`。`player_play_music` 不再使用固定 `audio_id=1582971365183456177`，runner 会按每条 `audio_url` 生成临时 `audio_id`，并在播放后校验小爱返回的 `play_song_detail.audio_id`；如果小爱仍切到别的曲目，会立刻停止播放并回退文字播报。不要手动固定 `XIAOAI_PLAY_MUSIC_AUDIO_ID`，除非只是临时排查。
 
 ## 资源限制
 

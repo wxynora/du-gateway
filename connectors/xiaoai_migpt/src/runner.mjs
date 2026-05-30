@@ -21,7 +21,7 @@ const MUTE_RESTORE_FALLBACK_VOLUME = volumeInt(env.XIAOAI_MUTE_RESTORE_FALLBACK_
 const MUTE_VOLUME_READ_TIMEOUT_MS = positiveInt(env.XIAOAI_MUTE_VOLUME_READ_TIMEOUT_MS, 250, 50);
 const MIN_PLAY_VOLUME = volumeInt(env.XIAOAI_MIN_PLAY_VOLUME, 20);
 const PLAY_URL_STRATEGY = (env.XIAOAI_PLAY_URL_STRATEGY || "auto").trim().toLowerCase();
-const PLAY_MUSIC_AUDIO_ID = (env.XIAOAI_PLAY_MUSIC_AUDIO_ID || "1582971365183456177").trim();
+const PLAY_MUSIC_AUDIO_ID = (env.XIAOAI_PLAY_MUSIC_AUDIO_ID || "").trim();
 const PLAY_MUSIC_CP_ID = (env.XIAOAI_PLAY_MUSIC_CP_ID || "355454500").trim();
 const PLAY_LOOP_TYPE = positiveInt(env.XIAOAI_PLAY_LOOP_TYPE, 3, 0);
 const PLAY_AUTO_STOP_PADDING_MS = positiveInt(env.XIAOAI_PLAY_AUTO_STOP_PADDING_MS, 800, 0);
@@ -62,6 +62,10 @@ function asBool(value, fallback = false) {
   }
   if (value === undefined || value === null) return fallback;
   return !!value;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function requireEnv() {
@@ -219,10 +223,6 @@ function isDuplicate(speaker, text) {
     if (now - ts > DEDUP_TTL_MS * 3) recentMessages.delete(k);
   }
   return now - last < DEDUP_TTL_MS;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function withTimeout(promise, ms, fallback) {
@@ -385,9 +385,55 @@ function shouldUseMusicApi(engine) {
   return PLAY_MUSIC_HARDWARES.has(getSpeakerHardware(engine));
 }
 
+function musicAudioIdForUrl(url) {
+  if (PLAY_MUSIC_AUDIO_ID) return PLAY_MUSIC_AUDIO_ID;
+  let h = 1469598103934665603n;
+  for (const ch of String(url || "")) {
+    h ^= BigInt(ch.charCodeAt(0));
+    h = BigInt.asUintN(64, h * 1099511628211n);
+  }
+  return String((h % 9000000000000000n) + 1000000000000000n);
+}
+
+async function stopPlayback(engine, reason = "") {
+  if (!engine.MiNA?.callUbus) return false;
+  try {
+    const res = await engine.MiNA.callUbus("mediaplayer", "player_play_operation", { action: "stop", media: "app_ios" });
+    const ok = typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0;
+    console.log("[xiaoai] 停止播放：", ok ? "ok" : formatPlayResult(res), reason ? `reason=${reason}` : "");
+    return !!ok;
+  } catch (e) {
+    console.warn("[xiaoai] 停止播放失败：", e?.message || e);
+    return false;
+  }
+}
+
+async function verifyMusicPlayback(engine, expectedAudioId) {
+  await sleep(500);
+  const status = await getRawPlaybackStatus(engine);
+  const actualAudioId = String(status?.play_song_detail?.audio_id || "").trim();
+  if (actualAudioId && actualAudioId !== String(expectedAudioId || "")) {
+    console.warn("[xiaoai] player_play_music audio_id 不匹配：", `expected=${expectedAudioId}`, `actual=${actualAudioId}`);
+    await stopPlayback(engine, "music_audio_id_mismatch");
+    await postLog("warn", "小爱可能误播小米音乐，已停止", {
+      event: "music_audio_id_mismatch",
+      error: `expected=${expectedAudioId} actual=${actualAudioId}`,
+    });
+    return false;
+  }
+  return true;
+}
+
+function shouldFallbackToTextForAudioUrl() {
+  if (PLAY_URL_STRATEGY === "music") return true;
+  if (PLAY_URL_STRATEGY === "auto") return true;
+  return false;
+}
+
 function buildMusicPayload(url) {
-  const audioId = PLAY_MUSIC_AUDIO_ID || "1582971365183456177";
+  const audioId = musicAudioIdForUrl(url);
   return {
+    audioId,
     startaudioid: audioId,
     music: JSON.stringify({
       payload: {
@@ -421,9 +467,13 @@ function buildMusicPayload(url) {
 async function playUrlByMusicApi(engine, audioUrl, fallbackText) {
   if (!engine.MiNA?.callUbus) return false;
   await setPlaybackLoopMode(engine, PLAY_LOOP_TYPE);
-  const res = await engine.MiNA.callUbus("mediaplayer", "player_play_music", buildMusicPayload(audioUrl));
+  const payload = buildMusicPayload(audioUrl);
+  const audioId = payload.audioId;
+  delete payload.audioId;
+  const res = await engine.MiNA.callUbus("mediaplayer", "player_play_music", payload);
   const ok = typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0;
-  console.log("[xiaoai] 播放 URL(player_play_music) 结果：", ok ? "ok" : formatPlayResult(res));
+  console.log("[xiaoai] 播放 URL(player_play_music) 结果：", ok ? "ok" : formatPlayResult(res), `audio_id=${audioId}`);
+  if (ok && !(await verifyMusicPlayback(engine, audioId))) return false;
   if (ok) schedulePlaybackStop(engine, fallbackText || audioUrl);
   return !!ok;
 }
@@ -432,10 +482,20 @@ async function playUrlByPlainUrl(engine, audioUrl) {
   if (!engine.MiNA?.callUbus) {
     return !!(await engine.speaker.play({ url: audioUrl }));
   }
-  const res = await engine.MiNA.callUbus("mediaplayer", "player_play_url", { url: audioUrl, type: 1, media: "app_ios" });
-  const ok = typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0;
-  console.log("[xiaoai] 播放 URL(player_play_url) 结果：", ok ? "ok" : formatPlayResult(res));
-  return !!ok;
+  const payloads = [
+    { url: audioUrl, type: 1, media: "app_ios" },
+    { url: audioUrl, type: 1, media: "common" },
+    { url: audioUrl, type: 1 },
+  ];
+  for (const payload of payloads) {
+    const res = await engine.MiNA.callUbus("mediaplayer", "player_play_url", payload);
+    const ok = typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0;
+    console.log("[xiaoai] 播放 URL(player_play_url) 结果：", ok ? "ok" : formatPlayResult(res), `media=${payload.media || "default"}`);
+    if (ok) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function setPlaybackLoopMode(engine, loopType) {
@@ -489,9 +549,7 @@ function schedulePlaybackStop(engine, reason) {
       playbackStopTimer = setTimeout(async () => {
         playbackStopTimer = null;
         try {
-          const res = await engine.MiNA.callUbus("mediaplayer", "player_play_operation", { action: "stop", media: "app_ios" });
-          const ok = typeof res === "boolean" ? res : res?.code === 0 || res?.data?.code === 0;
-          console.log("[xiaoai] 播放结束自动停止：", ok ? "ok" : formatPlayResult(res));
+          await stopPlayback(engine, "auto_stop");
         } catch (e) {
           console.warn("[xiaoai] 播放结束自动停止失败：", e?.message || e);
         }
@@ -552,14 +610,13 @@ async function safePlayUrl(engine, url, fallbackText) {
     let ok = false;
     if (shouldUseMusicApi(engine)) {
       ok = await playUrlByMusicApi(engine, audioUrl, fallbackText);
-      if (!ok) ok = await playUrlByPlainUrl(engine, audioUrl);
     } else {
       ok = await playUrlByPlainUrl(engine, audioUrl);
       if (!ok) ok = await playUrlByMusicApi(engine, audioUrl, fallbackText);
     }
     await logPlaybackStatus(engine);
     if (!ok) {
-      return safePlayText(engine, fallbackText);
+      return shouldFallbackToTextForAudioUrl() ? safePlayText(engine, fallbackText) : false;
     }
     return true;
   } catch (e) {

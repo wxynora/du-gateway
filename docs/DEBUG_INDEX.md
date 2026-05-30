@@ -1122,6 +1122,14 @@ npm -C miniapp run android
 - 已完成：由于 L05C 对 stop/loop 仍可能假成功并继续重复 GET 同一 mp3，`services/xiaoai_audio_store.py` 把小爱 TTS URL 改为一次性音频：首次 GET 返回音频并写 `<token>.used`，后续 GET 同 token 直接 404，阻断播放器循环；HEAD 不消耗播放次数。
 - 已验证：公网 MiniMax mp3 测试 `46085aab04864e12afe84fa011545c98` 走 `player_play_music`，Nginx 收到音箱播放器 `Lavf/58.45.100` GET 音频，用户反馈“听到声音”；随后确认单纯设置 loop/stop 仍会循环。部署一次性 URL 后，测试 `bd657cfe5a344ca0b242c04143218bc9` 的 token `6gCl1bMImmMGMBliFUNgwhuy0qw35eGt` 第一次 GET 返回 200，第二次循环 GET 返回 404。
 
+当前状态（2026-05-31 小爱误播音乐修复）：
+- 现场证据：2026-05-31 03:46:54 `xiaoai_speak` 入队文本是“三点半过了哦，该躺下了，手机放远一点。”；03:47:10 音箱播放器 `Lavf/58.45.100` 成功 GET `/api/xiaoai/tts/latest.mp3?v=-MefGNV0FE1apwj_`，该 mp3 实际时长 5.472 秒、大小 89268 字节；但 Mac runner 随后 `player_get_play_status` 返回固定 `audio_id=1582971365183456177`、`duration=201432`，用户听到喜庆音乐。根因判断：`player_play_music` 里的固定 `audio_id` 撞到了小米曲库曲目，不能再固定使用这个 ID。
+- 已完成：`connectors/xiaoai_migpt/src/runner.mjs` 保留默认 `XIAOAI_PLAY_URL_STRATEGY=auto`；L05C 等硬件继续走 `player_play_music`，不再回退到已知假成功/无声的 `player_play_url`。`player_play_music` 默认按每条 URL 生成临时 16 位 `audio_id`，并在播放后读取 `player_get_play_status.play_song_detail.audio_id` 校验；若返回的 ID 与本次临时 ID 不一致，会立刻 `player_play_operation stop`，上报 `music_audio_id_mismatch`，再回退文字播报。
+- 已完成：`.env.example` 和 README 已改回 `XIAOAI_PLAY_URL_STRATEGY=auto`，并标明不要固定 `XIAOAI_PLAY_MUSIC_AUDIO_ID`，除非临时排查。
+- 已验证：`node --check connectors/xiaoai_migpt/src/runner.mjs` 通过；`git diff --check -- connectors/xiaoai_migpt/src/runner.mjs connectors/xiaoai_migpt/.env.example connectors/xiaoai_migpt/README.md docs/DEBUG_INDEX.md` 通过；Mac Docker runner 已 `docker compose -f connectors/xiaoai_migpt/docker-compose.yml up -d --build` 重建，容器内确认默认 `PLAY_URL_STRATEGY=auto`、`PLAY_MUSIC_AUDIO_ID` 默认空、存在 `musicAudioIdForUrl()` 和 `verifyMusicPlayback()`；debug 初始化确认目标设备 `miotDID=2037350052` / `hardware=L05C`，正式容器启动后日志出现 `✅ 服务已启动...`，公网 `/api/xiaoai/status` 显示 `runner=mac-docker`、`last_event=heartbeat`、`online=true`。
+- 已验证：用户允许后，2026-05-31 04:05:26 发真实测试语音“测试一下小爱播放渡的语音。”，action `6ac77ddcf7be4926b94c6d21df9f1604` 走 `player_play_music`；runner 生成 `audio_id=9645551171453281`，播放后状态返回 `play_song_detail.audio_id=9645551171453281`、`duration=2880`、`status=playing`，没有切到固定小米曲库曲目；随后按剩余时长自动 stop 成功，公网 action 状态为 `done`。
+- 未完成 / 下次继续：需要用户主观确认听到的是渡语音内容；若后续再次出现音乐，优先看 runner 日志是否有 `music_audio_id_mismatch` 和实际 `play_song_detail.audio_id`。
+
 当前状态（2026-05-28 小爱音频 URL 静默排查）：
 - 已完成：确认 runner 日志里 `播放 URL 结果：ok` 只代表 MiGPT/MiNA 接受播放命令，不代表小爱成功拉到 mp3；线上最近 `last_audio_url` 直接 GET 返回 404，根因是 `services/xiaoai_audio_store.py` 原先只把音频存在 Python 进程内存，生产多 worker、进程重启或请求落到不同进程时 `/api/xiaoai/tts/<token>.mp3` 会失效。已改为写入 `DATA_DIR/xiaoai_audio/` 并在 GET 时从落盘文件恢复，仍按 `HTML_PREVIEW_TTL_SECONDS` 和 `HTML_PREVIEW_MAX_ITEMS` 清理。
 - 已验证：`.venv/bin/python -m py_compile services/xiaoai_audio_store.py routes/xiaoai_api.py` 通过；临时目录 smoke 验证清空内存 `_store` 后仍能用 token 从落盘文件读回音频；非法 token 返回空。
