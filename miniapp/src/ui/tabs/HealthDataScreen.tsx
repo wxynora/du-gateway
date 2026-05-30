@@ -50,6 +50,11 @@ export function HealthDataScreen() {
 
   const latestLocal = status?.last || {};
   const latestCloud = cloud?.latest || {};
+  const duVitals = cloud?.du_vitals || {};
+  const duHeartBpm = Number(duVitals?.heart_bpm || duVitals?.heartBpm || 0);
+  const duBreathRpm = Number(duVitals?.breath_rpm || duVitals?.breathRpm || 0);
+  const duVitalsStatus = String(duVitals?.status || "");
+  const duVitalsUpdatedAt = String(duVitals?.updatedAt || duVitals?.updated_at || duVitals?.at || "");
   const cloudHealthRows = useMemo(() => (cloud?.history || []).slice(0, CLOUD_HEALTH_RECORD_DISPLAY_LIMIT), [cloud?.history]);
   const reportLogs = useMemo(() => (status?.logs || []).slice(-HEALTH_REPORT_LOG_DISPLAY_LIMIT).reverse(), [status?.logs]);
   const sumikaHistoryRows = useMemo(
@@ -91,6 +96,17 @@ export function HealthDataScreen() {
   useEffect(() => {
     setHeaderActionsEl(document.getElementById("health-data-header-actions"));
   }, []);
+
+  useEffect(() => {
+    if (!isAndroid) return;
+    if (!(duHeartBpm > 0) && !(duBreathRpm > 0)) return;
+    void SumiOverlay.showDuVitalsNotification({
+      heartBpm: duHeartBpm > 0 ? duHeartBpm : undefined,
+      breathRpm: duBreathRpm > 0 ? duBreathRpm : undefined,
+      status: duVitalsStatus,
+      updatedAt: duVitalsUpdatedAt,
+    }).catch(() => {});
+  }, [duBreathRpm, duHeartBpm, duVitalsStatus, duVitalsUpdatedAt, isAndroid]);
 
   async function saveInterval(seconds: number) {
     const prev = status;
@@ -211,7 +227,7 @@ export function HealthDataScreen() {
       />
 
       <DuVitalsCard
-        vitals={cloud?.du_vitals || {}}
+        vitals={duVitals}
         historyRows={duVitalsHistoryRows}
         flipped={flippedCard === "du"}
         onFlip={() => setFlippedCard("du")}

@@ -126,6 +126,34 @@ public class OverlayControlPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void showDuVitalsNotification(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        int heartBpm = positiveIntFromCall(call, "heartBpm", "heart_bpm");
+        int breathRpm = positiveIntFromCall(call, "breathRpm", "breath_rpm");
+        String status = String.valueOf(call.getString("status", "")).trim();
+        String updatedAt = String.valueOf(call.getString("updatedAt", call.getString("updated_at", ""))).trim();
+        boolean shown = DuVitalsNotification.show(ctx, heartBpm, breathRpm, status, updatedAt);
+        JSObject o = new JSObject();
+        o.put("shown", shown);
+        call.resolve(o);
+    }
+
+    @PluginMethod
+    public void clearDuVitalsNotification(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        DuVitalsNotification.cancel(ctx);
+        call.resolve();
+    }
+
+    @PluginMethod
     public void openNotificationListenerSettings(PluginCall call) {
         Context ctx = getContext();
         if (ctx == null) {
@@ -269,6 +297,24 @@ public class OverlayControlPlugin extends Plugin {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private int positiveIntFromCall(PluginCall call, String... keys) {
+        if (call == null || call.getData() == null) return 0;
+        for (String key : keys) {
+            try {
+                Object raw = call.getData().opt(key);
+                int value = 0;
+                if (raw instanceof Number) {
+                    value = ((Number) raw).intValue();
+                } else if (raw != null) {
+                    value = Integer.parseInt(String.valueOf(raw).trim());
+                }
+                if (value > 0) return value;
+            } catch (Exception ignored) {
+            }
+        }
+        return 0;
     }
 
     private Intent buildOpenSystemAlarmsIntent() {

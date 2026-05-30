@@ -8,6 +8,8 @@ export interface SumiOverlayPlugin {
   setHealthReportingConfig(options: { intervalSeconds: number }): Promise<{ intervalSeconds: number }>;
   requestHealthReportingSnapshot(): Promise<{ requested?: boolean }>;
   clearHealthReportingLogs(): Promise<void>;
+  showDuVitalsNotification(options: DuVitalsNotificationOptions): Promise<{ shown?: boolean }>;
+  clearDuVitalsNotification(): Promise<void>;
   openNotificationListenerSettings(): Promise<void>;
   createSystemAlarm(options: { hour: number; minute: number; title?: string; skipUi?: boolean; notify?: boolean }): Promise<{
     ok?: boolean;
@@ -37,6 +39,13 @@ export type HealthReportingStatus = {
   listenerConnected?: boolean;
   last?: Record<string, any>;
   logs?: HealthReportingLog[];
+};
+
+export type DuVitalsNotificationOptions = {
+  heartBpm?: number;
+  breathRpm?: number;
+  status?: string;
+  updatedAt?: string;
 };
 
 const native = registerPlugin<SumiOverlayPlugin>("SumiOverlay");
@@ -77,6 +86,16 @@ export const SumiOverlay = {
   async clearHealthReportingLogs(): Promise<void> {
     if (Capacitor.getPlatform() !== "android") return;
     return native.clearHealthReportingLogs();
+  },
+
+  async showDuVitalsNotification(options: DuVitalsNotificationOptions): Promise<{ shown?: boolean }> {
+    if (Capacitor.getPlatform() !== "android") return { shown: false };
+    return native.showDuVitalsNotification(options);
+  },
+
+  async clearDuVitalsNotification(): Promise<void> {
+    if (Capacitor.getPlatform() !== "android") return;
+    return native.clearDuVitalsNotification();
   },
 
   async openNotificationListenerSettings(): Promise<void> {

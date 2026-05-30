@@ -107,6 +107,7 @@ public class FloatingBallService extends Service {
     private static final long REALTIME_RECONNECT_BASE_MS = 3000L;
     private static final long REALTIME_RECONNECT_MAX_MS = 60000L;
     private static final long BATTERY_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
+    private static final long DU_VITALS_POLL_INTERVAL_MS = 60L * 1000L;
     private static final long LOCATION_REPORT_INTERVAL_MS = 15L * 60L * 1000L;
     private static final long SCREEN_STATE_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long LOCATION_MAX_STALE_MS = 2L * 60L * 1000L;
@@ -123,6 +124,7 @@ public class FloatingBallService extends Service {
     private String panelToken = "";
     private String panelDeviceId = "";
     private long lastBatteryReportMs = 0L;
+    private long lastDuVitalsPollMs = 0L;
     private OkHttpClient realtimeClient;
     private WebSocket realtimeSocket;
     private volatile boolean realtimeConnected = false;
@@ -140,6 +142,7 @@ public class FloatingBallService extends Service {
                         pollPendingDeviceActions();
                     }
                     reportBatterySnapshotIfDue();
+                    pollDuVitalsIfDue();
                     mainHandler.postDelayed(this, HISTORY_POLL_INTERVAL_MS);
                 }
             };
@@ -253,6 +256,7 @@ public class FloatingBallService extends Service {
         }
         prefs.edit().putString(PREF_PANEL_TOKEN, panelToken).putString(PREF_DEVICE_ID, panelDeviceId).apply();
         if (changed) {
+            lastDuVitalsPollMs = 0L;
             closeRealtimeWebSocket(false);
         }
     }
@@ -779,6 +783,58 @@ public class FloatingBallService extends Service {
         }
         lastBatteryReportMs = now;
         reportBatterySnapshot();
+    }
+
+    private void pollDuVitalsIfDue() {
+        long now = System.currentTimeMillis();
+        if (lastDuVitalsPollMs > 0 && now - lastDuVitalsPollMs < DU_VITALS_POLL_INTERVAL_MS) {
+            return;
+        }
+        lastDuVitalsPollMs = now;
+        pollDuVitals();
+    }
+
+    private void pollDuVitals() {
+        if (panelToken.isEmpty()) return;
+        ioExecutor.execute(
+                () -> {
+                    HttpURLConnection conn = null;
+                    try {
+                        URL url = new URL(API_BASE + "/miniapp-api/device-state/health");
+                        conn = (HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("GET");
+                        conn.setConnectTimeout(10000);
+                        conn.setReadTimeout(10000);
+                        conn.setRequestProperty("Authorization", "Bearer " + panelToken);
+                        int code = conn.getResponseCode();
+                        if (code < 200 || code >= 300) {
+                            Log.w(TAG, "pollDuVitals non-2xx code=" + code);
+                            return;
+                        }
+                        JSONObject root = new JSONObject(readAllText(conn.getInputStream()));
+                        JSONObject vitals = root.optJSONObject("du_vitals");
+                        if (vitals == null) return;
+                        int heartBpm = vitals.optInt("heart_bpm", vitals.optInt("heartBpm", 0));
+                        int breathRpm = vitals.optInt("breath_rpm", vitals.optInt("breathRpm", 0));
+                        if (heartBpm <= 0 && breathRpm <= 0) return;
+                        String updatedAt =
+                                String.valueOf(
+                                                vitals.optString(
+                                                        "updatedAt",
+                                                        vitals.optString("updated_at", vitals.optString("at", ""))))
+                                        .trim();
+                        DuVitalsNotification.show(
+                                this,
+                                heartBpm,
+                                breathRpm,
+                                vitals.optString("status", ""),
+                                updatedAt);
+                    } catch (Exception e) {
+                        Log.w(TAG, "pollDuVitals failed", e);
+                    } finally {
+                        if (conn != null) conn.disconnect();
+                    }
+                });
     }
 
     private void pollLatestAssistantMessage() {
