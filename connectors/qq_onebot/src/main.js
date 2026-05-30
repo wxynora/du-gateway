@@ -1,6 +1,8 @@
 import http from "node:http";
+import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { Blob } from "node:buffer";
 import dotenv from "dotenv";
 import { fileURLToPath } from "node:url";
 
@@ -77,6 +79,213 @@ function extractUserContentFromMessage(message) {
   const hasText = parts.some((p) => p?.type === "text" && String(p.text || "").trim());
   if (!hasText) return [{ type: "text", text: "[图片]" }, ...parts];
   return parts.length === 1 && parts[0]?.type === "text" ? String(parts[0].text || "") : parts;
+}
+
+function isRecordSegmentType(type) {
+  return ["record", "voice", "audio"].includes(String(type || "").trim().toLowerCase());
+}
+
+function cqDecode(value) {
+  return String(value || "")
+    .replace(/&#44;/g, ",")
+    .replace(/&#91;/g, "[")
+    .replace(/&#93;/g, "]")
+    .replace(/&amp;/g, "&");
+}
+
+function parseCqParams(paramText) {
+  const out = {};
+  for (const part of String(paramText || "").split(",")) {
+    const [key, ...rest] = String(part || "").split("=");
+    const k = String(key || "").trim();
+    if (!k) continue;
+    out[k] = cqDecode(rest.join("=")).trim();
+  }
+  return out;
+}
+
+function parseRawRecordSegments(raw) {
+  const out = [];
+  for (const m of String(raw || "").matchAll(/\[CQ:(record|voice|audio),([^\]]*)\]/gi)) {
+    out.push({ type: String(m?.[1] || "record").toLowerCase(), data: parseCqParams(m?.[2] || "") });
+  }
+  return out;
+}
+
+function filenameFromUrl(rawUrl, fallback = "voice") {
+  try {
+    const u = new URL(String(rawUrl || ""));
+    const name = path.basename(decodeURIComponent(u.pathname || ""));
+    return name || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeAudioFilename(raw, fallback = "voice") {
+  const name = path.basename(String(raw || "").trim() || fallback).replace(/[^\w.\-]+/g, "_");
+  return name || fallback;
+}
+
+function mimeTypeFromName(name, fallback = "application/octet-stream") {
+  const clean = String(name || "").split("?")[0].split("#")[0];
+  const ext = clean.includes(".") ? clean.split(".").pop().toLowerCase() : "";
+  const byExt = {
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    mp4: "audio/mp4",
+    wav: "audio/wav",
+    wave: "audio/wav",
+    ogg: "audio/ogg",
+    opus: "audio/ogg",
+    webm: "audio/webm",
+    flac: "audio/flac",
+    aac: "audio/aac",
+    amr: "audio/amr",
+    silk: "audio/silk",
+    slk: "audio/silk",
+  };
+  return byExt[ext] || fallback || "application/octet-stream";
+}
+
+function assertAudioSize(bytes, label = "audio") {
+  const max = Math.max(128 * 1024, envInt("QQ_INBOUND_VOICE_MAX_BYTES", 12 * 1024 * 1024));
+  if (!bytes?.length) throw new Error(`${label} 为空`);
+  if (bytes.length > max) throw new Error(`${label} 过大：${bytes.length} > ${max}`);
+}
+
+async function fetchAudioBytes(url) {
+  const r = await fetch(url, { method: "GET" });
+  const contentType = String(r.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
+  const raw = await r.arrayBuffer();
+  const bytes = Buffer.from(raw);
+  if (!r.ok) throw new Error(`下载语音失败 ${r.status}`);
+  assertAudioSize(bytes, "remote audio");
+  const filename = safeAudioFilename(filenameFromUrl(url, "voice"));
+  return { bytes, filename, mimeType: contentType || mimeTypeFromName(filename) };
+}
+
+async function readAudioFile(filePath) {
+  const rawPath = String(filePath || "").trim();
+  const localPath = rawPath.startsWith("file://") ? fileURLToPath(rawPath) : rawPath;
+  const bytes = await fs.readFile(localPath);
+  assertAudioSize(bytes, "local audio");
+  const filename = safeAudioFilename(localPath, "voice");
+  return { bytes, filename, mimeType: mimeTypeFromName(filename) };
+}
+
+function decodeBase64Audio(raw, filename = "voice") {
+  const b64 = String(raw || "").replace(/^base64:\/\//i, "").trim();
+  const bytes = Buffer.from(b64, "base64");
+  assertAudioSize(bytes, "base64 audio");
+  const safeName = safeAudioFilename(filename, "voice");
+  return { bytes, filename: safeName, mimeType: mimeTypeFromName(safeName) };
+}
+
+async function resolveRecordAudio(data, options = {}) {
+  const d = data && typeof data === "object" ? data : {};
+  const rawFile = String(d.file || "").trim();
+  const rawBase64 = String(d.base64 || d.audio_b64 || "").trim();
+  if (rawBase64) return decodeBase64Audio(rawBase64, rawFile || d.file_name || "voice.wav");
+
+  if (
+    rawFile
+    && options.allowGetRecord !== false
+    && !/^base64:\/\//i.test(rawFile)
+    && !/^https?:\/\//i.test(rawFile)
+    && !rawFile.startsWith("/")
+    && !rawFile.startsWith("file://")
+  ) {
+    const outFormat = envStr("QQ_INBOUND_RECORD_OUT_FORMAT", "wav") || "wav";
+    const record = await onebotApi("get_record", { file: rawFile, out_format: outFormat });
+    const rd = record?.data && typeof record.data === "object" ? record.data : record;
+    return resolveRecordAudio({ ...rd, file: rd?.file || rawFile }, { allowGetRecord: false });
+  }
+
+  const rawPath = String(d.path || d.file_path || d.local_path || "").trim();
+  if (rawPath) return readAudioFile(rawPath);
+
+  const rawUrl = String(d.url || d.file_url || "").trim();
+  if (/^https?:\/\//i.test(rawUrl)) return fetchAudioBytes(rawUrl);
+
+  if (/^base64:\/\//i.test(rawFile)) return decodeBase64Audio(rawFile, "voice");
+  if (/^https?:\/\//i.test(rawFile)) return fetchAudioBytes(rawFile);
+  if (rawFile.startsWith("/") || rawFile.startsWith("file://")) return readAudioFile(rawFile);
+
+  throw new Error("record 缺少可读取的 url/path/file");
+}
+
+function formatVoiceTranscript(result) {
+  const text = String(result?.text || "").trim();
+  if (!text) return "";
+  const observations = String(result?.audio_observations || "").trim();
+  const lines = [`（QQ语音转写）${text}`];
+  if (observations) lines.push(`（声音观察：${observations}）`);
+  return lines.join("\n");
+}
+
+async function transcribeRecordData(data) {
+  if (!envBool("QQ_INBOUND_VOICE_ENABLED", true)) return "";
+  const audio = await resolveRecordAudio(data);
+  const result = await callGatewayStt(audio.bytes, audio.filename, audio.mimeType);
+  return formatVoiceTranscript(result);
+}
+
+function contentFromParts(parts) {
+  if (!parts.length) return "";
+  const hasText = parts.some((p) => p?.type === "text" && String(p.text || "").trim());
+  if (!hasText) return [{ type: "text", text: "[图片]" }, ...parts];
+  return parts.length === 1 && parts[0]?.type === "text" ? String(parts[0].text || "") : parts;
+}
+
+async function extractUserContentFromMessageWithVoice(message, rawMessage = "") {
+  if (typeof message === "string") {
+    const raw = String(message || "").trim();
+    if (!raw) return "";
+    const records = parseRawRecordSegments(raw);
+    if (!records.length) return raw;
+    const cleanText = raw.replace(/\[CQ:(record|voice|audio),[^\]]*\]/gi, "").trim();
+    const parts = [];
+    if (cleanText) parts.push({ type: "text", text: cleanText });
+    for (const rec of records) {
+      try {
+        const text = await transcribeRecordData(rec.data || {});
+        parts.push({ type: "text", text: text || "（收到一条 QQ 语音，但转写为空）" });
+      } catch (e) {
+        console.log(`[qq-onebot] 语音转写失败(raw)：${String(e?.message || e)}`);
+        parts.push({ type: "text", text: "（收到一条 QQ 语音，但转写失败）" });
+      }
+    }
+    return contentFromParts(parts);
+  }
+  if (!Array.isArray(message)) return "";
+  const parts = [];
+  for (const seg of message) {
+    if (!seg || typeof seg !== "object") continue;
+    const type = String(seg.type || "").trim();
+    if (type === "text") {
+      const text = String(seg.data?.text || "").trim();
+      if (text) parts.push({ type: "text", text });
+      continue;
+    }
+    if (type === "image") {
+      const url = String(seg.data?.url || seg.data?.file || "").trim();
+      if (/^https?:\/\//i.test(url)) {
+        parts.push({ type: "image_url", image_url: { url } });
+      }
+      continue;
+    }
+    if (isRecordSegmentType(type)) {
+      try {
+        const text = await transcribeRecordData(seg.data || {});
+        parts.push({ type: "text", text: text || "（收到一条 QQ 语音，但转写为空）" });
+      } catch (e) {
+        console.log(`[qq-onebot] 语音转写失败 message_id=${String(rawMessage || "").slice(0, 80)} err=${String(e?.message || e)}`);
+        parts.push({ type: "text", text: "（收到一条 QQ 语音，但转写失败）" });
+      }
+    }
+  }
+  return contentFromParts(parts);
 }
 
 function normalizeUserContentToParts(content) {
@@ -217,6 +426,35 @@ async function callGatewayTts(text) {
   const audioB64 = String(data?.audio_b64 || "").trim();
   if (!audioB64) return null;
   return Buffer.from(audioB64, "base64");
+}
+
+async function callGatewayStt(audioBytes, filename, mimeType) {
+  const base = gatewayBaseUrl();
+  const sttPath = envStr("GATEWAY_STT_PATH", "/api/internal/stt");
+  const url = base + (sttPath.startsWith("/") ? sttPath : `/${sttPath}`);
+  const safeName = safeAudioFilename(filename, "qq-voice");
+  const contentType = String(mimeType || mimeTypeFromName(safeName)).trim() || "application/octet-stream";
+  const form = new FormData();
+  form.append("audio", new Blob([Buffer.from(audioBytes || [])], { type: contentType }), safeName);
+  form.append("mime_type", contentType);
+  form.append("filename", safeName);
+  const headers = {};
+  const token = envStr("GATEWAY_INTERNAL_STT_TOKEN", "")
+    || envStr("MAIN_GATEWAY_BEARER_TOKEN", "")
+    || envStr("XIAOAI_GATEWAY_TOKEN", "");
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const r = await fetch(url, { method: "POST", headers, body: form });
+  const raw = await r.text();
+  let data = null;
+  try {
+    data = raw ? JSON.parse(raw) : null;
+  } catch {
+    data = null;
+  }
+  if (!r.ok || !data?.ok) {
+    throw new Error(`STT 返回 ${r.status}: ${(raw || "").slice(0, 200)}`);
+  }
+  return data;
 }
 
 function extractVoiceTag(text) {
@@ -673,7 +911,7 @@ function groupAtTargets(j) {
   return out;
 }
 
-function contentWithoutSelfAt(j) {
+async function contentWithoutSelfAt(j) {
   const selfId = eventSelfId(j);
   const msg = j?.message;
   if (Array.isArray(msg)) {
@@ -682,11 +920,11 @@ function contentWithoutSelfAt(j) {
       if (String(seg.type || "") !== "at") return true;
       return String(seg.data?.qq || "").trim() !== selfId;
     });
-    return extractUserContentFromMessage(filtered);
+    return extractUserContentFromMessageWithVoice(filtered, j?.raw_message || "");
   }
   const raw = String(j?.raw_message || "");
   const clean = stripSelfAtFromRaw(raw, selfId);
-  return extractUserContentFromMessage(clean);
+  return extractUserContentFromMessageWithVoice(clean, j?.raw_message || "");
 }
 
 function buildGroupGatewayContent(j, previousRows, currentContent) {
@@ -741,14 +979,17 @@ async function sendQqReplyToGroup(groupId, reply) {
 async function handleGroupEvent(j) {
   const groupId = Number(j?.group_id || 0);
   if (!groupId) return;
-  const content = contentWithoutSelfAt(j);
   const atTargets = groupAtTargets(j);
+  const mentionsSelf = messageMentionsSelf(j);
+  const content = mentionsSelf
+    ? await contentWithoutSelfAt(j)
+    : extractUserContentFromMessage(j?.message || j?.raw_message || "");
   if (logGroupEvents) {
     console.log(`[qq-onebot] group event group=${groupId} user=${Number(j?.user_id || 0)} self_id=${eventSelfId(j) || "unknown"} at=${atTargets.join(",") || "-"} content=${userContentPreview(content, 80) || "-"}`);
   }
   const previousRows = getGroupHistory(groupId).slice(-groupHistoryContextLimit);
   rememberGroupMessage(j, content || extractUserContentFromMessage(j?.message || j?.raw_message || ""));
-  if (!messageMentionsSelf(j)) {
+  if (!mentionsSelf) {
     if (atTargets.length) {
       console.log(`[qq-onebot] 群聊 @ 未命中本机器人 group=${groupId} self_id=${eventSelfId(j) || "unknown"} at=${atTargets.join(",")}`);
     }
@@ -807,7 +1048,7 @@ async function handleEvent(j) {
     logIgnoredEvent(j, "missing_user_id");
     return;
   }
-  const content = extractUserContentFromMessage(j?.message || j?.raw_message || "");
+  const content = await extractUserContentFromMessageWithVoice(j?.message || j?.raw_message || "", j?.raw_message || "");
   if (!content) {
     logIgnoredEvent(j, "empty_content");
     return;

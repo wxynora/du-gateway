@@ -54,14 +54,33 @@ def _resolve_voice_model():
     return str(model or "").strip()
 
 
-def call_voice_chat_pipeline(user_text, window_id=""):
+def _build_voice_user_messages(user_text, audio_observations=""):
+    text = str(user_text or "").strip()
+    observations = str(audio_observations or "").strip()
+    messages = []
+    if observations:
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "【用户语音的客观声音旁白】\n"
+                    f"{observations}\n"
+                    "这只是可听见的声学线索，不是情绪或意图判断。回复时自然参考，不要复述这段旁白。"
+                ),
+            }
+        )
+    messages.append({"role": "user", "content": text})
+    return messages
+
+
+def call_voice_chat_pipeline(user_text, window_id="", audio_observations=""):
     text = str(user_text or "").strip()
     if not text:
         return "", "语音识别结果为空"
     model = _resolve_voice_model()
     if not model:
         return "", "当前没有可用模型"
-    body = {"messages": [{"role": "user", "content": text}], "model": model, "stream": False}
+    body = {"messages": _build_voice_user_messages(text, audio_observations), "model": model, "stream": False}
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": resolve_voice_call_window_id(window_id),
@@ -107,7 +126,7 @@ def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=Non
     if not audio_bytes:
         return {"ok": False, "error": "音频为空"}, 400
     try:
-        from services.stt import speech_to_text
+        from services.stt import transcribe_speech
         from services.minimax_tts import tts_to_audio_bytes
     except Exception as e:
         logger.warning("voice-call 依赖加载失败 err=%s", e)
@@ -120,8 +139,12 @@ def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=Non
             pass
 
     user_text = str(user_text_override or "").strip()
+    audio_observations = ""
+    stt_result = None
     if not user_text:
-        user_text = speech_to_text(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename)
+        stt_result = transcribe_speech(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename)
+        user_text = str((stt_result or {}).get("text") or "").strip()
+        audio_observations = str((stt_result or {}).get("audio_observations") or "").strip()
     if not user_text:
         return {"ok": False, "error": "没识别出内容，再说一遍试试"}, 422
 
@@ -131,7 +154,11 @@ def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=Non
         except Exception:
             pass
 
-    reply_text, reply_err = call_voice_chat_pipeline(user_text=user_text, window_id=window_id)
+    reply_text, reply_err = call_voice_chat_pipeline(
+        user_text=user_text,
+        window_id=window_id,
+        audio_observations=audio_observations,
+    )
     if reply_err:
         return {"ok": False, "error": reply_err, "user_text": user_text}, 502
 
@@ -149,6 +176,8 @@ def run_voice_call(audio_bytes, mime_type, filename, window_id="", status_cb=Non
     return {
         "ok": True,
         "user_text": user_text,
+        "audio_observations": audio_observations,
+        "stt_provider": str((stt_result or {}).get("provider") or "").strip(),
         "reply_text": reply_text,
         "audio_b64": audio_b64,
         "audio_format": "mp3" if audio_b64 else "",

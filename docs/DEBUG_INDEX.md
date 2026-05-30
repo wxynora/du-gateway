@@ -561,6 +561,27 @@ rg -n "core-prompt|核心|入口风格|SumiTalk|禁言|silence" routes services 
 - 已完成：语音台词撰写规范已抽到 `services/voice_line_prompt.py`，并注入 QQ/TG 的 `<voice>` 规则与 `X-Voice-Call-Slim` 语音通话回复；只约束会被朗读的语音文本，不改普通文字聊天、核心 prompt 或 DS 总结提示词。
 - 未完成 / 不要碰：这次不处理 voice prompt 之外的风格规则；不要把这份规范做成 Codex skill，也不要塞进全局普通聊天 prompt。
 
+## MiniApp 语音转写 / 声音事件
+
+入口：
+- MiniApp 语音通话：`routes/miniapp/media.py` 的 `/miniapp-api/voice-call`
+- 预览转写：`routes/miniapp/media.py` 的 `/miniapp-api/voice-call-preview`
+- STT provider：`services/stt.py`
+- 语音通话转发：`services/voice_call_pipeline.py`
+- 配置：`config.py` 的 `VOICE_STT_*`，OpenRouter key 可复用 `OPENROUTER_API_KEY` 或 `TARGET_AI_URLS/TARGET_AI_API_KEYS` 里指向 `openrouter.ai` 的条目
+
+注意：
+- Gemini/OpenRouter 转写返回正文 `text` 和客观声音旁白 `audio_observations`；正文可包含明显声音事件，如（哈哈大笑）（大笑）（哼唱）（唱着说）。
+- 超过约 1 秒的停顿要直接写进正文发生位置，并按音频估算实际时长，例如 `我就是……（停顿了约3秒）哎呀我反正有事！`；短犹豫用省略号即可。
+- 声音旁白只能写听得见的声学线索，如笑声、气声、语速、音高起伏、音量、停顿；不要写“像是在逗你”、撒娇、生气、意图判断或心理分析。
+- `speech_to_text()` 仍保留旧兼容返回纯文本；新链路优先用 `transcribe_speech()`。
+
+当前状态（2026-05-31）：
+- 已完成：新增 `VOICE_STT_PROVIDER=openrouter` 路径，默认模型 `google/gemini-2.5-flash`，失败可回退 `deepgram`；`voice-call` 会把客观声音旁白作为隐藏 system 线索发给渡，用户正文和通话记录仍用转写正文。
+- 已部署：生产 `/root/du-gateway/.env` 已设置 `VOICE_STT_PROVIDER=openrouter`、`VOICE_STT_FALLBACK_PROVIDER=deepgram`、`VOICE_STT_OPENROUTER_API_URL=https://openrouter.ai/api/v1/chat/completions`、`VOICE_STT_OPENROUTER_MODEL=google/gemini-2.5-flash`，原 env 备份为 `/root/du-gateway/.env.bak.voice-stt-20260531031529`。
+- 已验证：本地 `.venv/bin/python -m py_compile config.py services/stt.py services/voice_call_pipeline.py routes/miniapp/media.py` 通过；生产同四文件 py_compile 通过；生产 `du-gateway` 已重启且 `systemctl is-active du-gateway` 为 active、`https://duxy-home.com/health` 返回 ok；用本机生成的短 wav 在生产直调 `transcribe_speech()`，返回 provider=openrouter、model=google/gemini-2.5-flash、text=`Hello this is a voice test.`、audio_observations=`语速偏快。`
+- 未完成 / 下次继续：未用辛玥真实中文语音样本做笑声/唱歌/气声效果验收；服务器 tracked 文件目前是直接应用 patch 后的本地修改，若要长期留存需要后续提交/推送。
+
 ## Claude OAuth proxy / token sync
 
 现象：
@@ -1256,3 +1277,9 @@ npm -C miniapp run android
 - 已完成：自由讨论不会自动进入 `coding_task`；即使话题里出现 `改代码/debug/实现`，只要是 `@渡 @笨笨` 讨论触发，笨笨仍按 `daily_chat` 参与，真施工仍必须显式 `@笨笨 改代码/开工/debug...`。
 - 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`npx vite build --outDir /tmp/du-gateway-miniapp-free-discussion-build --emptyOutDir true` 通过，只有既有 chunk size warning；`git diff --check -- miniapp/src/ui/MainChatScreen.tsx docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 下次继续：本轮不改 QQ 群聊 @ 存档链路，不做 @all/选择器 UI，也没有重建 `miniapp_static`；上线前需要重建静态产物并重启后端/bridge。
+
+当前状态（2026-05-31 QQ 入站语音转写）：
+- 已完成：`connectors/qq_onebot/src/main.js` 支持私聊和被 @ 的群聊 `record/voice/audio` 段；入站 QQ 语音会优先通过 NapCat/OneBot `get_record(out_format=wav)` 取可识别音频，再调用网关内部 `/api/internal/stt`，把结果以 `（QQ语音转写）...` 和可选 `（声音观察：...）` 注入原 QQ 聊天链路。非 @ 群聊语音不主动转写，避免无谓消耗。
+- 已完成：新增 `routes/internal_stt_api.py`，用 `GATEWAY_INTERNAL_STT_TOKEN` / `MAIN_GATEWAY_BEARER_TOKEN` / `XIAOAI_GATEWAY_TOKEN` 鉴权，或仅允许无转发头的本机直连兜底；`services/stt.py` 对 QQ/NapCat 常见假 `.amr` / SILK 音频保留 ffmpeg 转 wav fallback。
+- 已验证：本地 `.venv/bin/python -m py_compile config.py services/stt.py routes/internal_stt_api.py app.py`、`node --check connectors/qq_onebot/src/main.js`、内部 STT test_client smoke 和 `git diff --check` 通过；服务器已同步运行时代码，`du-gateway` / `qq-connector` 重启后 active，`/health` 和 `/health`(8092) 正常；用真实 QQ `record` 经 `get_record` 转 `.wav` 后调用 `/api/internal/stt` 返回 200，provider=`openrouter`，model=`google/gemini-2.5-flash`。
+- 未完成 / 下次继续：未做公开 MiniApp UI 开关；没有对所有 QQ 语音格式做离线样本库，只按真实 NapCat 事件验证了 `file+path` 形态。若后续出现只有 URL 或只有 file id 的事件，connector 已按 URL / `get_record` 分支兼容，先看日志再扩。

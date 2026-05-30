@@ -362,12 +362,19 @@ def register_routes(bp) -> None:
             return jsonify({"ok": False, "error": "音频为空"}), 400
         filename = (f.filename or "voice.webm").strip() or "voice.webm"
         try:
-            from services.stt import speech_to_text
+            from services.stt import transcribe_speech
         except Exception as e:
             logger.warning("voice-call-preview 依赖加载失败 err=%s", e)
             return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
-        text = speech_to_text(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename) or ""
-        return jsonify({"ok": True, "text": text})
+        result = transcribe_speech(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename) or {}
+        return jsonify(
+            {
+                "ok": True,
+                "text": str(result.get("text") or ""),
+                "audio_observations": str(result.get("audio_observations") or ""),
+                "stt_provider": str(result.get("provider") or ""),
+            }
+        )
 
     @bp.route("/tts-preview", methods=["POST"])
     def miniapp_tts_preview():

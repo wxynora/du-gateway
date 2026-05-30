@@ -95,6 +95,20 @@ def is_openrouter_url(url: str) -> bool:
     return bool(host) and (host == OPENROUTER_BASE_HOST or host.endswith("." + OPENROUTER_BASE_HOST))
 
 
+def resolve_openrouter_api_key() -> str:
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if openrouter_key:
+        return openrouter_key
+    if TARGET_AI_URL and TARGET_AI_API_KEY and is_openrouter_url(TARGET_AI_URL):
+        return TARGET_AI_API_KEY.strip()
+    for idx, url in enumerate(TARGET_AI_URLS):
+        if not is_openrouter_url(url):
+            continue
+        if idx < len(TARGET_AI_API_KEYS):
+            return TARGET_AI_API_KEYS[idx].strip()
+    return ""
+
+
 def openrouter_models_response() -> dict | None:
     if not OPENROUTER_FIXED_MODEL:
         return None
@@ -127,7 +141,7 @@ def _resolve_music_analysis_api_key() -> str:
     explicit = os.environ.get("MUSIC_ANALYSIS_API_KEY", "").strip()
     if explicit:
         return explicit
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    openrouter_key = resolve_openrouter_api_key()
     if openrouter_key:
         return openrouter_key
 
@@ -137,13 +151,6 @@ def _resolve_music_analysis_api_key() -> str:
     ).strip()
     if not is_openrouter_url(analysis_url):
         return ""
-    if TARGET_AI_URL and TARGET_AI_API_KEY and is_openrouter_url(TARGET_AI_URL):
-        return TARGET_AI_API_KEY.strip()
-    for idx, url in enumerate(TARGET_AI_URLS):
-        if not is_openrouter_url(url):
-            continue
-        if idx < len(TARGET_AI_API_KEYS):
-            return TARGET_AI_API_KEYS[idx].strip()
     return ""
 
 
@@ -494,6 +501,16 @@ MINIMAX_AUDIO_CHANNEL = int(os.environ.get("MINIMAX_AUDIO_CHANNEL", "1"))
 TELEGRAM_VOICE_REPLY_ENABLED = os.environ.get("TELEGRAM_VOICE_REPLY_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 
 # MiniApp 语音通话（STT）
+VOICE_STT_PROVIDER = os.environ.get("VOICE_STT_PROVIDER", "deepgram").strip().lower() or "deepgram"
+VOICE_STT_FALLBACK_PROVIDER = os.environ.get("VOICE_STT_FALLBACK_PROVIDER", "deepgram").strip().lower() or "deepgram"
+VOICE_STT_OPENROUTER_API_URL = os.environ.get(
+    "VOICE_STT_OPENROUTER_API_URL",
+    "https://openrouter.ai/api/v1/chat/completions",
+).strip()
+VOICE_STT_OPENROUTER_API_KEY = os.environ.get("VOICE_STT_OPENROUTER_API_KEY", "").strip() or resolve_openrouter_api_key()
+VOICE_STT_OPENROUTER_MODEL = os.environ.get("VOICE_STT_OPENROUTER_MODEL", "google/gemini-2.5-flash").strip()
+VOICE_STT_OPENROUTER_FALLBACK_MODEL = os.environ.get("VOICE_STT_OPENROUTER_FALLBACK_MODEL", "").strip()
+VOICE_STT_TIMEOUT_SECONDS = int(float(os.environ.get("VOICE_STT_TIMEOUT_SECONDS", "120") or "120"))
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_STT_URL = os.environ.get("DEEPGRAM_STT_URL", "https://api.deepgram.com/v1/listen").strip()
 DEEPGRAM_STT_WS_URL = os.environ.get("DEEPGRAM_STT_WS_URL", "wss://api.deepgram.com/v1/listen").strip()
@@ -507,6 +524,7 @@ VOICE_CALL_WINDOW_ID = os.environ.get("VOICE_CALL_WINDOW_ID", "miniapp_voice_cal
 MAIN_GATEWAY_BASE_URL = os.environ.get("MAIN_GATEWAY_BASE_URL", "http://127.0.0.1:5000").strip()
 MAIN_GATEWAY_BEARER_TOKEN = os.environ.get("MAIN_GATEWAY_BEARER_TOKEN", "").strip()
 XIAOAI_GATEWAY_TOKEN = os.environ.get("XIAOAI_GATEWAY_TOKEN", "").strip()
+GATEWAY_INTERNAL_STT_TOKEN = os.environ.get("GATEWAY_INTERNAL_STT_TOKEN", "").strip()
 
 # mijiaAPI CLI：用于让小爱音箱执行米家/红外自然语言控制命令。
 MIJIA_API_COMMAND = os.environ.get("MIJIA_API_COMMAND", "mijiaAPI").strip() or "mijiaAPI"
