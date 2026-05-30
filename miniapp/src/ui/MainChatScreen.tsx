@@ -79,9 +79,12 @@ type SumiTalkChatJobStatusResponse = {
 };
 type CodexGroupChatTask = {
   id?: string;
+  mode?: string;
   status?: "queued" | "running" | "done" | "error" | "cancelled";
   response?: string;
   error?: string;
+  client_request_id?: string;
+  coding_thread_key?: string;
 };
 type CodexGroupChatTaskResponse = {
   ok?: boolean;
@@ -142,6 +145,68 @@ function uniqueNonEmptyStrings(values: string[]): string[] {
     out.push(item);
   }
   return out;
+}
+
+type GroupReplyTargets = {
+  du: boolean;
+  benben: boolean;
+  mentions: string[];
+  benbenMode: "daily_chat" | "coding_task";
+  codingThreadKey: string;
+};
+
+function resolveCodingThreadKey(content: string): string {
+  const text = String(content || "").toLowerCase();
+  if (/文游|主神|副本|玩家|道具|抽卡|结算|怪物|npc|wenyou/.test(text)) return "wenyou";
+  if (/miniapp|小程序|前端|页面|界面|按钮|气泡|样式|ui|tsx|react/.test(text)) return "miniapp";
+  if (/studyroom|学习|题库|错题|资料整理/.test(text)) return "studyroom";
+  if (/小爱|音箱|migpt|xiaoai/.test(text)) return "xiaoai";
+  if (/后端|接口|路由|网关|存储|r2|api|service|route/.test(text)) return "backend";
+  if (/文档|方案|markdown|debug_index|索引/.test(text)) return "docs";
+  return "general";
+}
+
+function resolveGroupReplyTargets(content: string): GroupReplyTargets {
+  const text = String(content || "");
+  const hasDuMention = /[@＠]\s*(?:渡|du)(?![a-z0-9_])/i.test(text);
+  const hasBenbenMention = /[@＠]\s*(?:笨笨机|笨笨|benben|codex)(?![a-z0-9_])/i.test(text);
+  const hasCodingCommand = hasBenbenMention && /(?:改代码|开工|施工|debug|调试|修\s*bug|修一下|实现|落地|加上|做一下)/i.test(text);
+  const mentions = uniqueNonEmptyStrings([
+    hasDuMention ? "du" : "",
+    hasBenbenMention ? "benben" : "",
+  ]);
+  if (mentions.length) {
+    return {
+      du: hasDuMention,
+      benben: hasBenbenMention,
+      mentions,
+      benbenMode: hasCodingCommand ? "coding_task" : "daily_chat",
+      codingThreadKey: hasCodingCommand ? resolveCodingThreadKey(text) : "",
+    };
+  }
+  return { du: true, benben: false, mentions: [], benbenMode: "daily_chat", codingThreadKey: "" };
+}
+
+function isBenbenCancelCommand(content: string): boolean {
+  const text = String(content || "");
+  const hasBenbenMention = /[@＠]\s*(?:笨笨机|笨笨|benben|codex)(?![a-z0-9_])/i.test(text);
+  return hasBenbenMention && /(?:停一下|停止|取消|中断|打断|别改了|别施工|别做了|暂停|kill|算了)/i.test(text);
+}
+
+function codexGroupTaskStatusText(task: Pick<CodexGroupChatTask, "mode" | "status">): string {
+  const mode = String(task.mode || "").trim();
+  const status = String(task.status || "").trim();
+  const isCoding = mode === "coding_task";
+  if (isCoding) {
+    if (status === "running") return "笨笨施工中，正在改代码 / debug...";
+    if (status === "queued") return "笨笨已接单，等待施工...";
+    if (status === "cancelled") return "笨笨施工已取消。";
+    return "笨笨收到开工指令，正在接单...";
+  }
+  if (status === "cancelled") return "笨笨任务已取消。";
+  if (status === "running") return "笨笨正在看群聊...";
+  if (status === "queued") return "笨笨任务已创建，等我一下...";
+  return "笨笨正在看群聊...";
 }
 
 async function waitForCodexGroupChatTask(taskId: string): Promise<CodexGroupChatTask> {
@@ -445,22 +510,40 @@ export function MainChatScreen({
     }).catch(() => {});
   }
 
-  async function applyBenbenTaskTerminal(
+  async function applyBenbenTaskUpdate(
     task: CodexGroupTaskRealtimeTask,
     options: { messageId?: string; localDeviceId?: string } = {},
   ): Promise<boolean> {
     const taskId = String(task?.id || "").trim();
     const statusValue = String(task?.status || "").trim();
-    if (!taskId || !["done", "error", "cancelled"].includes(statusValue)) return false;
-    if (benbenTaskFinalizedRef.current.has(taskId)) return true;
+    if (!taskId || !["queued", "running", "done", "error", "cancelled"].includes(statusValue)) return false;
+    if (["done", "error", "cancelled"].includes(statusValue) && benbenTaskFinalizedRef.current.has(taskId)) return true;
 
     const currentMessages = messagesRef.current;
+    const clientRequestId = String(task?.client_request_id || "").trim();
     const targetMessageId = String(options.messageId || "").trim()
-      || String(currentMessages.find((msg) => msg.role === "benben" && String(msg.jobId || "").trim() === taskId)?.id || "").trim();
+      || String(currentMessages.find((msg) => msg.role === "benben" && String(msg.jobId || "").trim() === taskId)?.id || "").trim()
+      || String(currentMessages.find((msg) => msg.role === "benben" && clientRequestId && String(msg.clientRequestId || "").trim() === clientRequestId)?.id || "").trim();
     if (!targetMessageId) return false;
 
     const currentMessage = currentMessages.find((msg) => msg.id === targetMessageId);
     const createdAt = currentMessage?.createdAt || new Date().toISOString();
+    if (statusValue === "queued" || statusValue === "running") {
+      const pendingMessage: ChatDraftMessage = {
+        id: targetMessageId,
+        role: "benben",
+        content: codexGroupTaskStatusText(task),
+        createdAt,
+        status: "pending",
+        jobId: taskId,
+        clientRequestId: currentMessage?.clientRequestId || clientRequestId || undefined,
+      };
+      const nextMessages = applyMessageById(currentMessages, targetMessageId, pendingMessage);
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+      await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId: options.localDeviceId || deviceId });
+      return true;
+    }
     const terminalMessage: ChatDraftMessage = statusValue === "done"
       ? {
           id: targetMessageId,
@@ -468,6 +551,15 @@ export function MainChatScreen({
           content: String(task.response || "").trim() || "（笨笨没有返回内容）",
           createdAt,
           status: "sent",
+          jobId: taskId,
+        }
+      : statusValue === "cancelled"
+      ? {
+          id: targetMessageId,
+          role: "benben",
+          content: codexGroupTaskStatusText(task),
+          createdAt,
+          status: "failed",
           jobId: taskId,
         }
       : {
@@ -490,7 +582,7 @@ export function MainChatScreen({
     enabled: groupChatMode,
     deviceId,
     onTask: (task) => {
-      void applyBenbenTaskTerminal(task, { localDeviceId: deviceId });
+      void applyBenbenTaskUpdate(task, { localDeviceId: deviceId });
     },
   });
 
@@ -528,19 +620,23 @@ export function MainChatScreen({
   async function requestBenbenGroupReply(params: {
     baseMessages: ChatDraftMessage[];
     userContent: string;
-    duReply: string;
+    duReply?: string;
     replyTarget: string;
     clientRequestId: string;
+    mode?: "daily_chat" | "coding_task";
+    targetMentions?: string[];
+    codingThreadKey?: string;
     placeholderId?: string;
     placeholderCreatedAt?: string;
   }): Promise<ChatDraftMessage[]> {
     const createdAtMs = Date.now();
     const benbenId = params.placeholderId || `benben-${createdAtMs}`;
     const benbenCreatedAt = params.placeholderCreatedAt || new Date(createdAtMs).toISOString();
+    const mode = params.mode || "daily_chat";
     const pendingMsg: ChatDraftMessage = {
       id: benbenId,
       role: "benben",
-      content: "笨笨正在看群聊...",
+      content: codexGroupTaskStatusText({ mode }),
       createdAt: benbenCreatedAt,
       status: "pending",
       clientRequestId: `${params.clientRequestId}-benben`,
@@ -557,19 +653,22 @@ export function MainChatScreen({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode,
           window_id: windowId,
           reply_target: params.replyTarget,
           user_message: params.userContent,
-          du_reply: params.duReply,
+          du_reply: params.duReply || "",
           recent_messages: buildCodexGroupRecentMessages(params.baseMessages),
           client_request_id: `${params.clientRequestId}-benben`,
+          target_mentions: params.targetMentions || [],
+          coding_thread_key: params.codingThreadKey || "",
         }),
       });
       taskId = String(created.task?.id || "").trim();
       if (!taskId) throw new Error(created.error || "笨笨任务没有返回 ID");
       const queuedMessages = applyMessageById(messagesRef.current, benbenId, {
         ...pendingMsg,
-        content: "笨笨任务已创建，等我一下...",
+        content: codexGroupTaskStatusText(created.task || { mode, status: "queued" }),
         status: "pending",
         jobId: taskId,
       });
@@ -596,6 +695,78 @@ export function MainChatScreen({
     }
   }
 
+  async function cancelPendingBenbenGroupTasks(cancelContent: string, localDeviceId: string) {
+    const pendingTasks = messagesRef.current
+      .filter((msg) => msg.role === "benben" && msg.status === "pending" && String(msg.jobId || "").trim())
+      .map((msg) => ({
+        messageId: msg.id,
+        taskId: String(msg.jobId || "").trim(),
+        createdAt: msg.createdAt,
+        clientRequestId: msg.clientRequestId,
+      }));
+    if (!pendingTasks.length) {
+      const now = Date.now();
+      const idleMessage: ChatDraftMessage = {
+        id: `benben-cancel-idle-${now}`,
+        role: "benben",
+        content: "没有正在施工或等待的笨笨任务。",
+        createdAt: new Date(now).toISOString(),
+        status: "sent",
+      };
+      const idleMessages = [...messagesRef.current, idleMessage];
+      messagesRef.current = idleMessages;
+      setMessages(idleMessages);
+      await saveDisplayHistory(idleMessages, { syncRemote: false, localDeviceId });
+      saveDisplayHistoryInBackground(idleMessages, { localDeviceId });
+      return;
+    }
+
+    const markedMessages = pendingTasks.reduce((list, item) => (
+      applyMessageById(list, item.messageId, {
+        id: item.messageId,
+        role: "benben",
+        content: "笨笨收到取消指令，正在停一下...",
+        createdAt: item.createdAt,
+        status: "pending",
+        jobId: item.taskId,
+        clientRequestId: item.clientRequestId,
+      })
+    ), messagesRef.current);
+    messagesRef.current = markedMessages;
+    setMessages(markedMessages);
+    await saveDisplayHistory(markedMessages, { syncRemote: false, localDeviceId });
+
+    for (const item of pendingTasks) {
+      try {
+        const cancelled = await apiJsonWithTimeout<CodexGroupChatTaskResponse>(
+          `/miniapp-api/codex-group-chat-tasks/${encodeURIComponent(item.taskId)}/cancel`,
+          15000,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: cancelContent || "user_cancelled" }),
+          },
+        );
+        if (!cancelled?.task) throw new Error(cancelled?.error || "取消失败");
+        await applyBenbenTaskUpdate(cancelled.task, { messageId: item.messageId, localDeviceId });
+      } catch (e: any) {
+        const failedMessages = applyMessageById(messagesRef.current, item.messageId, {
+          id: item.messageId,
+          role: "benben",
+          content: `（取消笨笨任务失败：${e?.message || e}）`,
+          createdAt: item.createdAt,
+          status: "failed",
+          jobId: item.taskId,
+          clientRequestId: item.clientRequestId,
+        });
+        messagesRef.current = failedMessages;
+        setMessages(failedMessages);
+        await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId });
+      }
+    }
+    saveDisplayHistoryInBackground(messagesRef.current, { localDeviceId });
+  }
+
   useEffect(() => {
     if (!groupChatMode) return;
     const pendingBenbenTasks = messagesRef.current
@@ -610,7 +781,7 @@ export function MainChatScreen({
       void (async () => {
         try {
           const task = await waitForCodexGroupChatTask(item.taskId);
-          const applied = await applyBenbenTaskTerminal(task, { messageId: item.messageId, localDeviceId: deviceId });
+          const applied = await applyBenbenTaskUpdate(task, { messageId: item.messageId, localDeviceId: deviceId });
           if (!applied) throw new Error("笨笨没有返回内容");
         } catch (e: any) {
           if (benbenTaskFinalizedRef.current.has(item.taskId)) return;
@@ -641,13 +812,43 @@ export function MainChatScreen({
       toast("当前还没拿到聊天窗口 ID，不能接入共享上下文");
       return;
     }
-    if (!activeModel) {
-      toast("当前还没拿到可用模型，稍后再试");
-      return;
-    }
+    const groupTargets = groupChatMode
+      ? resolveGroupReplyTargets(content)
+      : { du: true, benben: false, mentions: [], benbenMode: "daily_chat" as const, codingThreadKey: "" };
+    const shouldRequestDu = !groupChatMode || groupTargets.du;
+    const shouldRequestBenben = groupChatMode && groupTargets.benben;
     const resolvedDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
     if (resolvedDeviceId && resolvedDeviceId !== deviceId) {
       setDeviceId((prev) => (prev === resolvedDeviceId ? prev : resolvedDeviceId));
+    }
+    if (groupChatMode && isBenbenCancelCommand(content)) {
+      const now = Date.now();
+      const userMsg: ChatDraftMessage = {
+        id: `user-${now}`,
+        role: "user",
+        content: displayContent,
+        createdAt: new Date(now).toISOString(),
+        status: "sent",
+      };
+      const nextMessages = [...messagesRef.current, userMsg];
+      messagesRef.current = nextMessages;
+      setInput("");
+      setPlusOpen(false);
+      setSending(true);
+      setMessages(nextMessages);
+      await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
+      try {
+        await cancelPendingBenbenGroupTasks(content, resolvedDeviceId);
+      } catch (e: any) {
+        toast(`取消失败：${e?.message || e}`);
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+    if (shouldRequestDu && !activeModel) {
+      toast("当前还没拿到可用模型，稍后再试");
+      return;
     }
     const baseTimestamp = Date.now();
     const clientRequestId = `sumitalk-${baseTimestamp}-${Math.random().toString(36).slice(2, 10)}`;
@@ -659,15 +860,25 @@ export function MainChatScreen({
       status: "sent",
       clientRequestId,
     };
-    const assistantId = `assistant-${baseTimestamp + 1}`;
-    const assistantCreatedAt = new Date(baseTimestamp + 1).toISOString();
-    const benbenPlaceholderId = groupChatMode ? `benben-${baseTimestamp + 2}` : "";
-    const benbenPlaceholderCreatedAt = groupChatMode ? new Date(baseTimestamp + 2).toISOString() : "";
-    const benbenPlaceholder: ChatDraftMessage | null = groupChatMode
+    const assistantId = shouldRequestDu ? `assistant-${baseTimestamp + 1}` : "";
+    const assistantCreatedAt = shouldRequestDu ? new Date(baseTimestamp + 1).toISOString() : "";
+    const assistantPlaceholder: ChatDraftMessage | null = shouldRequestDu
+      ? {
+          id: assistantId,
+          role: "assistant" as const,
+          content: "",
+          createdAt: assistantCreatedAt,
+          status: "pending" as const,
+          clientRequestId,
+        }
+      : null;
+    const benbenPlaceholderId = shouldRequestBenben ? `benben-${baseTimestamp + 2}` : "";
+    const benbenPlaceholderCreatedAt = shouldRequestBenben ? new Date(baseTimestamp + 2).toISOString() : "";
+    const benbenPlaceholder: ChatDraftMessage | null = shouldRequestBenben
       ? {
           id: benbenPlaceholderId,
           role: "benben",
-          content: "笨笨蹲在旁边等渡说完...",
+          content: codexGroupTaskStatusText({ mode: groupTargets.benbenMode }),
           createdAt: benbenPlaceholderCreatedAt,
           status: "pending",
           clientRequestId: `${clientRequestId}-benben`,
@@ -676,7 +887,7 @@ export function MainChatScreen({
     const nextMessages = [...messagesRef.current, userMsg];
     const draftMessages = [
       ...nextMessages,
-      { id: assistantId, role: "assistant" as const, content: "", createdAt: assistantCreatedAt, status: "pending" as const, clientRequestId },
+      ...(assistantPlaceholder ? [assistantPlaceholder] : []),
       ...(benbenPlaceholder ? [benbenPlaceholder] : []),
     ];
     const replyTarget = resolvedDeviceId;
@@ -686,88 +897,98 @@ export function MainChatScreen({
     setMessages(draftMessages);
     messagesRef.current = draftMessages;
     await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
+    let benbenCreatePromise: Promise<ChatDraftMessage[]> | null = null;
     try {
-      const requestUserContent = groupChatMode ? buildGroupTurnUserContent(nextMessages, content) : content;
-      const requestWindowId = windowId;
-      const requestBody = {
-        model: activeModel,
-        messages: [{ role: "user", content: requestUserContent }],
-        stream: false,
-        window_id: requestWindowId,
-      };
-      const started = await apiJson<SumiTalkChatJobCreateResponse>(groupChatMode ? "/miniapp-api/sumitalk-chat-jobs" : "/miniapp-api/sumitalk-chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          ...requestBody,
-          reply_target: replyTarget,
-          client_request_id: clientRequestId,
-        }),
-      });
-      if (started?.status === "error") {
-        const upstreamError = started.response?.error || started.response?.message || "";
-        throw new Error(String(started.error || upstreamError || "渡回复失败"));
-      }
-      const jobId = String(started?.job_id || "").trim();
-      const startedStatus = String(started?.status || "").trim();
-      const data = startedStatus === "done"
-        ? started?.response || started
-        : jobId
-        ? await waitForSumiTalkChatJob(jobId)
-        : started?.response || started;
-      if (data?.error) {
-        const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
-        throw new Error(err || "上游返回错误");
-      }
-      const reply = extractAssistantReplyText(data);
-      if (!reply) throw new Error("上游没有返回内容");
-      const reasoning = extractAssistantReasoning(data);
-      const tokenCount = extractTokenCount(data);
-      const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
-        id: assistantId,
-        role: "assistant" as const,
-        content: reply,
-        createdAt: assistantCreatedAt,
-        status: "sent" as const,
-        clientRequestId,
-        jobId: jobId || undefined,
-        reasoning: reasoning || undefined,
-        tokenCount,
-      });
-      messagesRef.current = finalMessages;
-      setMessages(finalMessages);
-      if (groupChatMode) {
-        await saveDisplayHistory(finalMessages, { syncRemote: false, localDeviceId: replyTarget });
-        await requestBenbenGroupReply({
-          baseMessages: finalMessages,
+      if (shouldRequestBenben) {
+        benbenCreatePromise = requestBenbenGroupReply({
+          baseMessages: messagesRef.current,
           userContent: content,
-          duReply: reply,
+          duReply: "",
           replyTarget,
           clientRequestId,
+          mode: groupTargets.benbenMode,
+          targetMentions: groupTargets.mentions,
+          codingThreadKey: groupTargets.codingThreadKey,
           placeholderId: benbenPlaceholderId,
           placeholderCreatedAt: benbenPlaceholderCreatedAt,
         });
-      } else {
-        await saveDisplayHistory(finalMessages);
+      }
+
+      if (shouldRequestDu) {
+        const requestUserContent = groupChatMode ? buildGroupTurnUserContent(nextMessages, content) : content;
+        const requestWindowId = windowId;
+        const requestBody = {
+          model: activeModel,
+          messages: [{ role: "user", content: requestUserContent }],
+          stream: false,
+          window_id: requestWindowId,
+        };
+        const started = await apiJson<SumiTalkChatJobCreateResponse>(groupChatMode ? "/miniapp-api/sumitalk-chat-jobs" : "/miniapp-api/sumitalk-chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            ...requestBody,
+            reply_target: replyTarget,
+            client_request_id: clientRequestId,
+          }),
+        });
+        if (started?.status === "error") {
+          const upstreamError = started.response?.error || started.response?.message || "";
+          throw new Error(String(started.error || upstreamError || "渡回复失败"));
+        }
+        const jobId = String(started?.job_id || "").trim();
+        const startedStatus = String(started?.status || "").trim();
+        const data = startedStatus === "done"
+          ? started?.response || started
+          : jobId
+          ? await waitForSumiTalkChatJob(jobId)
+          : started?.response || started;
+        if (data?.error) {
+          const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
+          throw new Error(err || "上游返回错误");
+        }
+        const reply = extractAssistantReplyText(data);
+        if (!reply) throw new Error("上游没有返回内容");
+        const reasoning = extractAssistantReasoning(data);
+        const tokenCount = extractTokenCount(data);
+        const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
+          id: assistantId,
+          role: "assistant" as const,
+          content: reply,
+          createdAt: assistantCreatedAt,
+          status: "sent" as const,
+          clientRequestId,
+          jobId: jobId || undefined,
+          reasoning: reasoning || undefined,
+          tokenCount,
+        });
+        messagesRef.current = finalMessages;
+        setMessages(finalMessages);
+        if (groupChatMode) {
+          await saveDisplayHistory(finalMessages, { syncRemote: false, localDeviceId: replyTarget });
+        } else {
+          await saveDisplayHistory(finalMessages);
+        }
+      }
+      if (benbenCreatePromise) {
+        await benbenCreatePromise;
       }
     } catch (e: any) {
-      let failedMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
-        id: assistantId,
-        role: "assistant" as const,
-        content: `（发送失败：${e?.message || e}）`,
-        createdAt: assistantCreatedAt,
-        status: "failed" as const,
-        clientRequestId,
-      });
-      if (groupChatMode && benbenPlaceholder) {
-        failedMessages = applyMessageById(failedMessages, benbenPlaceholderId, {
-          ...benbenPlaceholder,
-          content: `（渡这条没发出去，笨笨也没法接上：${e?.message || e}）`,
-          status: "failed",
-        });
+      if (benbenCreatePromise) {
+        await benbenCreatePromise.catch(() => messagesRef.current);
       }
+      const failedMessages = shouldRequestDu
+        ? applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
+            id: assistantId,
+            role: "assistant" as const,
+            content: `（发送失败：${e?.message || e}）`,
+            createdAt: assistantCreatedAt,
+            status: "failed" as const,
+            clientRequestId,
+          })
+        : messagesRef.current;
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
       await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: replyTarget });

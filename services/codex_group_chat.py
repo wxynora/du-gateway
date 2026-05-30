@@ -68,6 +68,13 @@ def _safe_role(value) -> str:
     return "assistant"
 
 
+def _safe_mode(value) -> str:
+    mode = str(value or "").strip()
+    if mode in {"daily_chat", "studyroom", "coding_task"}:
+        return mode
+    return "daily_chat"
+
+
 def _normalize_recent_messages(items) -> list[dict]:
     out: list[dict] = []
     if not isinstance(items, list):
@@ -89,6 +96,39 @@ def _normalize_recent_messages(items) -> list[dict]:
     return out
 
 
+def _normalize_target_mentions(items) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    out: list[str] = []
+    for item in items:
+        value = str(item or "").strip().lower()
+        if value not in {"du", "benben"} or value in out:
+            continue
+        out.append(value)
+    return out
+
+
+def _safe_coding_thread_key(value, user_message: str = "") -> str:
+    raw = str(value or "").strip().lower()
+    raw = re.sub(r"[^a-z0-9_.:-]", "_", raw)[:80].strip("_")
+    if raw:
+        return raw
+    text = str(user_message or "").lower()
+    if re.search(r"文游|主神|副本|玩家|道具|抽卡|结算|怪物|npc|wenyou", text):
+        return "wenyou"
+    if re.search(r"miniapp|小程序|前端|页面|界面|按钮|气泡|样式|ui|tsx|react", text):
+        return "miniapp"
+    if re.search(r"studyroom|学习|题库|错题|资料整理", text):
+        return "studyroom"
+    if re.search(r"小爱|音箱|migpt|xiaoai", text):
+        return "xiaoai"
+    if re.search(r"后端|接口|路由|网关|存储|r2|api|service|route", text):
+        return "backend"
+    if re.search(r"文档|方案|markdown|debug_index|索引", text):
+        return "docs"
+    return "general"
+
+
 def _public_task(task: dict | None) -> dict | None:
     if not isinstance(task, dict):
         return None
@@ -106,6 +146,11 @@ def _public_task(task: dict | None) -> dict | None:
         "worker_id",
         "response",
         "error",
+        "target_mentions",
+        "client_request_id",
+        "coding_thread_key",
+        "cancel_reason",
+        "cancelled_at",
     }
     return {k: task.get(k) for k in keep if k in task}
 
@@ -172,8 +217,8 @@ def _cleanup_tasks(tasks: list[dict]) -> list[dict]:
 
 def create_task(body: dict, device_id: str = "") -> dict | None:
     now_ts = _now_ts()
-    mode = str((body or {}).get("mode") or "daily_chat").strip() or "daily_chat"
-    user_message_limit = 20000 if mode == "studyroom" else 6000
+    mode = _safe_mode((body or {}).get("mode") or "daily_chat")
+    user_message_limit = 20000 if mode == "studyroom" else 12000 if mode == "coding_task" else 6000
     task = {
         "id": uuid4().hex,
         "ok": True,
@@ -188,8 +233,11 @@ def create_task(body: dict, device_id: str = "") -> dict | None:
         "user_message": _safe_text((body or {}).get("user_message"), user_message_limit),
         "du_reply": _safe_text((body or {}).get("du_reply"), 12000),
         "recent_messages": _normalize_recent_messages((body or {}).get("recent_messages")),
+        "target_mentions": _normalize_target_mentions((body or {}).get("target_mentions")),
         "client_request_id": re.sub(r"[^a-zA-Z0-9_.:-]", "", str((body or {}).get("client_request_id") or "").strip())[:120],
     }
+    if mode == "coding_task":
+        task["coding_thread_key"] = _safe_coding_thread_key((body or {}).get("coding_thread_key"), task["user_message"])
     if mode == "studyroom":
         task["study_item_id"] = re.sub(r"[^a-zA-Z0-9_.:-]", "", str((body or {}).get("study_item_id") or (body or {}).get("exam_item_id") or "").strip())[:120]
         task["study_title"] = _safe_text((body or {}).get("study_title") or (body or {}).get("exam_title"), 240)
@@ -200,7 +248,7 @@ def create_task(body: dict, device_id: str = "") -> dict | None:
             task["window_id"] = "studyroom"
         if not task["user_message"]:
             return None
-    elif not task["window_id"] or not task["user_message"] or not task["du_reply"]:
+    elif not task["window_id"] or not task["user_message"]:
         return None
     with _LOCK:
         state = _load_state()
@@ -266,9 +314,42 @@ def claim_next(worker_id: str = "") -> dict | None:
         state["tasks"] = tasks
         if not _save_state(state):
             return None
-        public = dict(selected)
+        public = _public_task(selected)
         _publish_task(public)
         return public
+
+
+def cancel_task(task_id: str, reason: str = "") -> dict | None:
+    task_id = str(task_id or "").strip()
+    if not re.fullmatch(r"[a-f0-9]{32}", task_id):
+        return None
+    now_ts = _now_ts()
+    cancel_reason = _safe_text(reason or "user_cancelled", 1000)
+    with _LOCK:
+        state = _load_state()
+        tasks = _cleanup_tasks(state.get("tasks") or [])
+        found = None
+        for task in tasks:
+            if str(task.get("id") or "") != task_id:
+                continue
+            found = task
+            task["status"] = "cancelled"
+            task["cancel_reason"] = cancel_reason
+            task["cancelled_ts"] = now_ts
+            task["updated_ts"] = now_ts
+            task["cancelled_at"] = now_beijing_iso()
+            task["updated_at"] = now_beijing_iso()
+            task.pop("response", None)
+            task["error"] = cancel_reason
+            break
+        if found is None:
+            return None
+        state["tasks"] = tasks
+        if not _save_state(state):
+            return None
+        public = _public_task(found)
+    _publish_task(public)
+    return public
 
 
 def finish_task(task_id: str, response: str = "", error: str = "") -> dict | None:
@@ -285,6 +366,9 @@ def finish_task(task_id: str, response: str = "", error: str = "") -> dict | Non
             if str(task.get("id") or "") != task_id:
                 continue
             found = task
+            if str(task.get("status") or "") == "cancelled":
+                sync_task = dict(task)
+                break
             if str(error or "").strip():
                 task["status"] = "error"
                 task["error"] = _safe_text(error, 4000)

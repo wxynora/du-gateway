@@ -3,9 +3,12 @@ import { buildRealtimeWebSocketUrl } from "../api";
 
 export type CodexGroupTaskRealtimeTask = {
   id?: string;
+  mode?: string;
   status?: "queued" | "running" | "done" | "error" | "cancelled";
   response?: string;
   error?: string;
+  client_request_id?: string;
+  coding_thread_key?: string;
 };
 
 type Options = {

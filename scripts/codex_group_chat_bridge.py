@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
+import signal
 import socket
 import subprocess
 import tempfile
@@ -64,6 +66,8 @@ POST_RETRY_SLEEP_SECONDS = max(0.0, float(_env("CODEX_GROUP_CHAT_POST_RETRY_SLEE
 PROJECT_RULES_MAX_CHARS = int(float(_env("CODEX_GROUP_CHAT_RULES_MAX_CHARS", "10000") or "10000"))
 STATE_PATH = Path(_env("CODEX_GROUP_CHAT_STATE_PATH", str(REPO_ROOT / ".codex_group_chat_bridge_state.json"))).expanduser()
 RESUME_ENABLED = _env_bool("CODEX_GROUP_CHAT_RESUME_ENABLED", True)
+CODING_RESUME_ENABLED = _env_bool("CODEX_GROUP_CHAT_CODING_RESUME_ENABLED", True)
+CODING_SANDBOX = _env("CODEX_GROUP_CHAT_CODING_SANDBOX", "workspace-write") or "workspace-write"
 RESET_AFTER_TASKS = max(1, int(float(_env("CODEX_GROUP_CHAT_RESET_AFTER_TASKS", "40") or "40")))
 RESET_AFTER_SECONDS = max(0, int(float(_env("CODEX_GROUP_CHAT_RESET_AFTER_SECONDS", "21600") or "21600")))
 IGNORE_USER_CONFIG = _env_bool("CODEX_GROUP_CHAT_IGNORE_USER_CONFIG", False)
@@ -94,6 +98,10 @@ def _new_http_session() -> requests.Session:
 
 
 HTTP = _new_http_session()
+
+
+class TaskCancelled(RuntimeError):
+    pass
 
 
 def _headers() -> dict[str, str]:
@@ -152,6 +160,44 @@ def _reset_state(reason: str) -> dict[str, Any]:
     return state
 
 
+def _coding_thread_key(task: dict[str, Any]) -> str:
+    key = str(task.get("coding_thread_key") or "").strip().lower()
+    key = re.sub(r"[^a-z0-9_.:-]", "_", key)[:80].strip("_")
+    return key or "general"
+
+
+def _coding_bucket(state: dict[str, Any], key: str) -> dict[str, Any]:
+    threads = state.setdefault("coding_threads", {})
+    if not isinstance(threads, dict):
+        threads = {}
+        state["coding_threads"] = threads
+    bucket = threads.setdefault(key, {})
+    if not isinstance(bucket, dict):
+        bucket = {}
+        threads[key] = bucket
+    if key == "general" and not bucket.get("thread_id") and state.get("coding_thread_id"):
+        bucket["thread_id"] = state.get("coding_thread_id")
+        bucket["tasks_done"] = state.get("coding_tasks_done", 0)
+        bucket["created_ts"] = state.get("coding_created_ts") or state.get("created_ts") or time.time()
+        bucket["updated_ts"] = state.get("coding_updated_ts") or state.get("updated_ts") or time.time()
+    return bucket
+
+
+def _reset_coding_state(state: dict[str, Any], key: str, reason: str) -> dict[str, Any]:
+    state = dict(state or {})
+    now = time.time()
+    bucket = _coding_bucket(state, key)
+    bucket.update({
+        "thread_id": "",
+        "tasks_done": 0,
+        "created_ts": now,
+        "updated_ts": now,
+        "reset_reason": reason,
+    })
+    _save_state(state)
+    return state
+
+
 def _state_should_reset(state: dict[str, Any]) -> bool:
     if not str(state.get("thread_id") or "").strip():
         return False
@@ -159,6 +205,19 @@ def _state_should_reset(state: dict[str, Any]) -> bool:
     if tasks_done >= RESET_AFTER_TASKS:
         return True
     created_ts = float(state.get("created_ts") or 0)
+    if RESET_AFTER_SECONDS > 0 and created_ts and time.time() - created_ts > RESET_AFTER_SECONDS:
+        return True
+    return False
+
+
+def _coding_state_should_reset(state: dict[str, Any], key: str) -> bool:
+    bucket = _coding_bucket(state, key)
+    if not str(bucket.get("thread_id") or "").strip():
+        return False
+    tasks_done = int(float(bucket.get("tasks_done") or 0))
+    if tasks_done >= RESET_AFTER_TASKS:
+        return True
+    created_ts = float(bucket.get("created_ts") or 0)
     if RESET_AFTER_SECONDS > 0 and created_ts and time.time() - created_ts > RESET_AFTER_SECONDS:
         return True
     return False
@@ -189,6 +248,24 @@ def _post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
     if last_error:
         raise last_error
     raise RuntimeError("request failed")
+
+
+def _get_json(path: str) -> dict[str, Any]:
+    global HTTP
+    url = f"{GATEWAY_URL}{path}"
+    try:
+        r = HTTP.get(url, headers=_headers(), timeout=CLAIM_TIMEOUT_SECONDS)
+        try:
+            data = r.json()
+        except Exception:
+            data = {"raw": r.text}
+        if not r.ok:
+            raise RuntimeError(data.get("error") or data.get("message") or f"HTTP {r.status_code}")
+        return data if isinstance(data, dict) else {"data": data}
+    except requests.RequestException:
+        HTTP.close()
+        HTTP = _new_http_session()
+        raise
 
 
 def _role_label(role: str) -> str:
@@ -224,10 +301,24 @@ def _build_transcript(task: dict[str, Any], max_items: int = 16) -> str:
     return "\n\n".join(lines[-max_items:]).strip()
 
 
+def _build_group_trigger_note(task: dict[str, Any]) -> str:
+    mentions = {
+        str(item or "").strip().lower()
+        for item in (task.get("target_mentions") or [])
+        if str(item or "").strip()
+    }
+    if "benben" not in mentions:
+        return ""
+    if str(task.get("du_reply") or "").strip():
+        return "本轮触发：辛玥明确 @ 了你；渡这轮已有回复，你可以看见但不用固定接在渡后面。"
+    return "本轮触发：辛玥明确 @ 了你；你可以直接回应辛玥和已有群聊，不要说等渡先回复。"
+
+
 def _build_initial_prompt(task: dict[str, Any]) -> str:
     if str(task.get("mode") or "") == "studyroom":
         return _build_studyroom_prompt(task)
     transcript = _build_transcript(task)
+    trigger_note = _build_group_trigger_note(task)
     rules_block = f"\n项目人格与协作规则（来自 AGENTS.md）：\n{PROJECT_RULES}\n" if PROJECT_RULES else ""
     return f"""你是笨笨机，正在辛玥和渡的日常三人群聊里。
 {rules_block}
@@ -240,6 +331,7 @@ def _build_initial_prompt(task: dict[str, Any]) -> str:
 
 群聊口吻：
 - 你不是任务机器人，也不是旁观记录员；你是在群里一起聊天的笨笨机。
+- 你不是固定第三棒；被 @ 到就可以直接回应，不要默认必须等渡先说完。
 - 少汇报、少解释、少总结。先接住当下这句话，再自然补一句自己的反应。
 - 除非辛玥明确让你查代码、看日志、做方案，否则不要进入工作汇报模式。
 - 可以轻松、亲近、吐槽、接梗；不要端着，不要像客服，不要每次都给结论和步骤。
@@ -259,6 +351,8 @@ def _build_initial_prompt(task: dict[str, Any]) -> str:
 最近群聊：
 {transcript}
 
+{trigger_note}
+
 现在轮到你发一条群聊回复。"""
 
 
@@ -266,14 +360,46 @@ def _build_resume_prompt(task: dict[str, Any]) -> str:
     if str(task.get("mode") or "") == "studyroom":
         return _build_studyroom_prompt(task)
     transcript = _build_transcript(task, max_items=10)
+    trigger_note = _build_group_trigger_note(task)
     return f"""继续作为三人群聊里的笨笨机，只发一条自然短回复，不要输出“笨笨：”前缀。
-保持群聊口吻：少汇报、少解释、少总结；先接住当下这句话，再自然补一句自己的反应。除非辛玥明确让你查代码、看日志、做方案，否则不要进入工作汇报模式。
+保持群聊口吻：你不是固定第三棒；被 @ 到就可以直接回应，不要默认必须等渡先说完。少汇报、少解释、少总结；先接住当下这句话，再自然补一句自己的反应。除非辛玥明确让你查代码、看日志、做方案，否则不要进入工作汇报模式。
 如果辛玥在玩梗、调侃、发怪话、用奇怪称呼或小表情逗你，先接梗，不要解释梗；可以轻轻贫嘴、装无辜或回怼一句。她认真追问时再认真。
 
 最新群聊：
 {transcript}
 
+{trigger_note}
+
 现在轮到你插一句。"""
+
+
+def _build_coding_prompt(task: dict[str, Any]) -> str:
+    transcript = _build_transcript(task, max_items=12)
+    user_message = str(task.get("user_message") or "").strip()
+    coding_key = _coding_thread_key(task)
+    rules_block = f"\n项目人格与协作规则（来自 AGENTS.md）：\n{PROJECT_RULES}\n" if PROJECT_RULES else ""
+    return f"""你是笨笨机的施工模式。这个任务来自辛玥的三人群聊 @，她明确让你改代码 / debug / 开工。
+{rules_block}
+
+施工边界：
+- 你现在可以在仓库里读写文件、运行必要的本地验证命令，并真正完成这次代码修改。
+- 只处理本次群聊里明确要求的改动；不要扩大范围，不要顺手清理无关脏改。
+- 开工先看必要上下文和 `git status --short`，遇到已有脏改要保护它们，不要 revert、reset、checkout 或覆盖无关文件。
+- 不要 stage、commit、push、部署或重启服务，除非辛玥在本次任务里明确要求。
+- 需要改前端时优先改源文件；除非本次任务明确要求上线静态产物，否则不要重建 `miniapp_static`。
+- 改完必须做和改动风险相称的验证；没跑的验证要如实说没跑。
+- 最终只输出一条可贴回群聊的施工报告：改了什么文件、验证了什么、还有什么没做或风险。不要输出“笨笨：”前缀。
+
+最近群聊：
+{transcript}
+
+本次施工指令：
+{user_message}
+
+施工线程：
+{coding_key}
+
+现在开始在仓库里完成这次修改。"""
 
 
 def _build_studyroom_prompt(task: dict[str, Any]) -> str:
@@ -398,48 +524,121 @@ def _codex_base_args() -> list[str]:
     return args
 
 
-def _run_codex(task: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    if _state_should_reset(state):
-        state = _reset_state("scheduled_reset")
+def _task_cancel_requested(task_id: str) -> bool:
+    if not task_id:
+        return False
+    try:
+        data = _get_json(f"/api/codex_group_chat/tasks/{task_id}/finish")
+        task = data.get("task") if isinstance(data, dict) else None
+        return str((task or {}).get("status") or "") == "cancelled"
+    except Exception as e:
+        _log(f"取消状态查询失败 task={task_id} error={e}")
+        return False
 
+
+def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 5.0) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            proc.terminate()
+        else:
+            os.killpg(proc.pid, signal.SIGTERM)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    deadline = time.time() + max(0.2, grace_seconds)
+    while proc.poll() is None and time.time() < deadline:
+        time.sleep(0.1)
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            proc.kill()
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _run_codex(task: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     mode = str(task.get("mode") or "daily_chat").strip()
-    thread_id = str(state.get("thread_id") or "").strip()
-    use_resume = bool(mode == "daily_chat" and RESUME_ENABLED and thread_id)
-    prompt = _build_resume_prompt(task) if use_resume else _build_initial_prompt(task)
+    task_id = str(task.get("id") or "").strip()
+    coding_key = _coding_thread_key(task) if mode == "coding_task" else ""
+    if mode == "coding_task":
+        if _coding_state_should_reset(state, coding_key):
+            state = _reset_coding_state(state, coding_key, "scheduled_reset")
+        bucket = _coding_bucket(state, coding_key)
+        thread_id = str(bucket.get("thread_id") or "").strip()
+        use_resume = bool(CODING_RESUME_ENABLED and thread_id)
+        prompt = _build_coding_prompt(task)
+    else:
+        if mode == "daily_chat" and _state_should_reset(state):
+            state = _reset_state("scheduled_reset")
+        thread_id = str(state.get("thread_id") or "").strip()
+        use_resume = bool(mode == "daily_chat" and RESUME_ENABLED and thread_id)
+        prompt = _build_resume_prompt(task) if use_resume else _build_initial_prompt(task)
     with tempfile.TemporaryDirectory(prefix="codex-group-bridge-") as td:
         tmp_dir = Path(td)
         out_path = tmp_dir / "last_message.txt"
         events_path = tmp_dir / "events.jsonl"
         if use_resume:
-            cmd = _codex_base_args() + [
-                "resume",
+            cmd = _codex_base_args() + ["resume"]
+            if mode == "coding_task":
+                cmd.extend(["-c", f'sandbox_mode="{CODING_SANDBOX}"'])
+            cmd.extend([
                 thread_id,
                 "--json",
                 "--output-last-message",
                 str(out_path),
                 "-",
-            ]
+            ])
         else:
+            sandbox = CODING_SANDBOX if mode == "coding_task" else "read-only"
             cmd = _codex_base_args() + [
                 "--json",
                 "--sandbox",
-                "read-only",
+                sandbox,
                 "-C",
                 str(REPO_ROOT),
                 "--output-last-message",
                 str(out_path),
                 "-",
             ]
-        with events_path.open("w", encoding="utf-8") as events_file:
-            res = subprocess.run(
+        stderr_path = tmp_dir / "stderr.txt"
+        returncode = 0
+        with events_path.open("w", encoding="utf-8") as events_file, stderr_path.open("w", encoding="utf-8") as stderr_file:
+            proc = subprocess.Popen(
                 cmd,
-                input=prompt,
-                text=True,
+                stdin=subprocess.PIPE,
                 stdout=events_file,
-                stderr=subprocess.PIPE,
-                timeout=CODEX_TIMEOUT_SECONDS,
-                check=False,
+                stderr=stderr_file,
+                text=True,
+                start_new_session=(os.name != "nt"),
             )
+            try:
+                assert proc.stdin is not None
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            except Exception:
+                pass
+            started_at = time.time()
+            while True:
+                returncode = proc.poll()
+                if returncode is not None:
+                    break
+                if mode == "coding_task" and _task_cancel_requested(task_id):
+                    _terminate_process_tree(proc)
+                    raise TaskCancelled("笨笨施工已取消")
+                if time.time() - started_at > CODEX_TIMEOUT_SECONDS:
+                    _terminate_process_tree(proc)
+                    raise TimeoutError(f"codex timed out after {CODEX_TIMEOUT_SECONDS}s")
+                time.sleep(0.5)
         text = ""
         try:
             if out_path.exists():
@@ -459,13 +658,33 @@ def _run_codex(task: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[s
         next_thread_id = _extract_thread_id(events_path) or thread_id
         if mode == "daily_chat" and next_thread_id:
             state["thread_id"] = next_thread_id
-        state["tasks_done"] = int(float(state.get("tasks_done") or 0)) + 1
-        state["updated_ts"] = time.time()
-        state["last_task_id"] = str(task.get("id") or "")
+            state["tasks_done"] = int(float(state.get("tasks_done") or 0)) + 1
+            state["updated_ts"] = time.time()
+            state["last_task_id"] = str(task.get("id") or "")
+        elif mode == "coding_task":
+            bucket = _coding_bucket(state, coding_key)
+            if next_thread_id:
+                bucket["thread_id"] = next_thread_id
+            bucket["tasks_done"] = int(float(bucket.get("tasks_done") or 0)) + 1
+            bucket.setdefault("created_ts", time.time())
+            bucket["updated_ts"] = time.time()
+            bucket["last_task_id"] = str(task.get("id") or "")
+            state["last_coding_thread_key"] = coding_key
+            state["coding_thread_id"] = bucket.get("thread_id", "")
+            state["coding_tasks_done"] = bucket.get("tasks_done", 0)
+            state["coding_created_ts"] = bucket.get("created_ts")
+            state["coding_updated_ts"] = bucket.get("updated_ts")
+            state["last_coding_task_id"] = str(task.get("id") or "")
+        else:
+            state["last_task_id"] = str(task.get("id") or "")
+            state["updated_ts"] = time.time()
         _save_state(state)
-        if res.returncode != 0 and not text:
-            err = (res.stderr or "").strip()
-            raise RuntimeError(err[-2000:] or f"codex exited {res.returncode}")
+        if returncode != 0 and not text:
+            try:
+                err = stderr_path.read_text(encoding="utf-8", errors="ignore").strip()
+            except Exception:
+                err = ""
+            raise RuntimeError(err[-2000:] or f"codex exited {returncode}")
         if mode == "studyroom":
             validation_error = _studyroom_validation_error(text)
             if validation_error:
@@ -511,6 +730,8 @@ def main() -> int:
                 response, state = _run_codex(task, state)
                 _post_json(f"/api/codex_group_chat/tasks/{task_id}/finish", {"response": response})
                 _log(f"done task={task_id} chars={len(response)} thread={str(state.get('thread_id') or '')[:8] or '-'}")
+            except TaskCancelled as e:
+                _log(f"cancelled task={task_id} {e}")
             except Exception as e:
                 try:
                     _post_json(f"/api/codex_group_chat/tasks/{task_id}/finish", {"error": str(e)})

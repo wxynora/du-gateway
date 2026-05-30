@@ -131,3 +131,18 @@ def finish_codex_group_chat_task(task_id: str):
     if not task:
         return jsonify({"ok": False, "error": "任务不存在"}), 404
     return jsonify({"ok": True, "task": task})
+
+
+@bp.route("/api/codex_group_chat/tasks/<task_id>/cancel", methods=["POST", "OPTIONS"])
+def cancel_codex_group_chat_task(task_id: str):
+    if request.method == "OPTIONS":
+        return "", 204
+    token_err = _require_pc_token()
+    if token_err:
+        return token_err
+    body = request.get_json(silent=True) or {}
+    reason = str((body or {}).get("reason") or "user_cancelled").strip()
+    task = codex_group_chat.cancel_task(task_id, reason=reason)
+    if not task:
+        return jsonify({"ok": False, "error": "任务不存在"}), 404
+    return jsonify({"ok": True, "task": task})

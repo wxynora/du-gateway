@@ -166,6 +166,9 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - Today note 刷新失败时不应该覆盖旧内容。
 - 群聊链路慢先拆三段看：渡回复前端等待、笨笨任务创建、Codex bridge 认领/回写。前端不应为了远端历史保存或笨笨最终回复阻塞发送链路。
 - 笨笨任务已创建后，应靠 realtime 或 `codex-group-chat-tasks/<id>` fallback 轮询贴回最终回复；不要在发送函数里一直等到 Codex 完成。
+- 三人群聊发言顺序按 `@` 拆目标：不带 `@` 默认只触发渡；`@笨笨` 可独立创建 Codex group task，不再要求先拿到 `du_reply`；`@渡 @笨笨` 两边独立跑，谁断了不应把另一边一起判失败。
+- 三人群聊真施工必须显式触发：`@笨笨 改代码...`、`@笨笨 开工...`、`@笨笨 debug...` 等会创建 `mode=coding_task`，bridge 使用单独 `coding_thread_id` 和 `workspace-write` sandbox；普通 `@笨笨` 仍是日常群聊，不改代码。
+- 三人群聊取消笨笨任务走显式指令：`@笨笨 停一下`、`@笨笨 取消施工`、`@笨笨 别改了` 等会取消当前 pending/running 的 Codex group task；前端先把用户取消消息落到群聊，再 POST `/miniapp-api/codex-group-chat-tasks/<id>/cancel`，后端标记 `cancelled` 后不会被 bridge 的迟到 finish 覆盖。
 - 本机 Codex bridge 默认参数应偏快：`CODEX_GROUP_CHAT_POLL_SECONDS=0.5`、`CODEX_GROUP_CHAT_IDLE_POLL_SECONDS=1`、`CODEX_GROUP_CHAT_CLAIM_TIMEOUT_SECONDS=3`，并用短重试降低 `SSL EOF`/超时导致的随机拖延。
 - VPS 系统盘读数突然抬高时，先查是否有高频整读本地状态文件：SumiTalk 安卓壳 realtime 断开后会每 20 秒 fallback 轮询 `/sumitalk-history/latest`，realtime 服务也会每 60 秒兜底读最新消息；`data/sumitalk_display_histories.json` 必须走缓存和行数/TTL 收口。
 - `<voice>`/TTS 事故先查 `services/minimax_tts.py`：超长 voice 文本会被截断到 `MINIMAX_TTS_MAX_CHARS`，MiniMax 返回音频也受 `MINIMAX_TTS_MAX_AUDIO_BYTES` 限制，避免几千字语音把 CPU/内存/网络一起拖爆。
@@ -1228,3 +1231,21 @@ npm -C miniapp run android
 - 已完成：`services/upstream_policy.py` 在 active upstream 是本机 Claude OAuth proxy 且 active model 是 Claude 4.8/4.7/4.6 时注入 `thinking={"type":"adaptive","display":"summarized"}` 和 `output_config.effort`；`scripts/claude_oauth_proxy.js` 保留并转发 OpenAI 兼容请求里的 `thinking/output_config`，4.8/4.7/4.6 默认使用 adaptive thinking，旧模型继续走固定 `budget_tokens`。4.6 收到 `xhigh` 时降为 `high`，避免无效 effort。
 - 已验证：`.venv/bin/python -m py_compile storage/upstream_store.py routes/miniapp/upstreams.py services/upstream_policy.py routes/chat.py` 通过；`node --check scripts/claude_oauth_proxy.js` 通过；上游策略 smoke 覆盖 4.8 注入 `max`、4.6 注入 adaptive 且 `xhigh` 降为 `high`、4.1 不注入 adaptive；`npx vite build --outDir /tmp/du-gateway-upstream-effort-build --emptyOutDir true` 通过；`git diff --check` 覆盖本轮文件。
 - 未完成 / 下次继续：本轮已重建 `miniapp_static`；如果要线上生效，提交推送后还需要在服务器拉代码并重启 `du-gateway.service` 和 Claude OAuth proxy。
+
+当前状态（2026-05-30 三人群聊 @ 触发顺序）：
+- 已完成：MiniApp 三人群聊改为按 `@` 解析发言目标：不带 `@` 默认只触发渡；`@笨笨` / `@笨笨机` / `@benben` / `@codex` 只创建笨笨任务；`@渡 @笨笨` 会同时放置渡和笨笨 pending 气泡，并独立发起两条链路。笨笨任务创建不再依赖渡先回复，`du_reply` 对 daily_chat 变为可选；渡失败时不再把笨笨 pending 一起改成失败。
+- 已完成：Codex group bridge 会读取 `target_mentions`，在 `@笨笨` 且没有 `du_reply` 时提示“直接回应辛玥和已有群聊，不要说等渡先回复”，避免恢复旧的固定第三棒口吻。
+- 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`.venv/bin/python -m py_compile services/codex_group_chat.py routes/miniapp/codex_group_chat.py scripts/codex_group_chat_bridge.py` 通过；smoke 覆盖无 `du_reply` 创建/claim 笨笨任务与 bridge prompt 触发说明；`git diff --check -- miniapp/src/ui/MainChatScreen.tsx services/codex_group_chat.py routes/miniapp/codex_group_chat.py scripts/codex_group_chat_bridge.py docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：本轮没有重建 `miniapp_static`，没有改 QQ 群聊 @ 存档链路，也没有处理 `@all`、选择器 UI 或“笨笨可沉默”策略。当前仓库仍有大量非本轮脏改和静态资源 hash 变更，提交时不要混入。
+
+当前状态（2026-05-30 三人群聊笨笨施工模式）：
+- 已完成：`@笨笨` 消息里出现 `改代码/开工/施工/debug/调试/修 bug/实现/落地/加上/做一下` 等显式施工词时，MiniApp 会创建 `mode=coding_task`；普通 `@笨笨` 仍走 `daily_chat`。前端现在吃 `queued/running/done/error/cancelled` 全状态，pending 气泡会显示“已接单 / 施工中，正在改代码 / debug / 完成或失败”，并可用 `client_request_id` 在任务 id 回来前匹配 realtime 事件。
+- 已完成：`services/codex_group_chat.py` 允许 `coding_task`，公开 `mode/client_request_id/target_mentions` 给 realtime；`scripts/codex_group_chat_bridge.py` 为施工任务使用单独 `coding_thread_id`，默认 `CODEX_GROUP_CHAT_CODING_SANDBOX=workspace-write`，并在 prompt 中要求保护脏改、不 stage/commit/push/部署、不重建 `miniapp_static`，最终只回一条施工报告。
+- 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`.venv/bin/python -m py_compile services/codex_group_chat.py routes/miniapp/codex_group_chat.py scripts/codex_group_chat_bridge.py` 通过；smoke 覆盖 `coding_task` 创建/claim、施工 prompt、首次 `--sandbox workspace-write` 命令和 resume 时 `sandbox_mode="workspace-write"`；`git diff --check -- miniapp/src/ui/MainChatScreen.tsx miniapp/src/ui/hooks/useCodexGroupTaskRealtime.ts services/codex_group_chat.py routes/miniapp/codex_group_chat.py scripts/codex_group_chat_bridge.py docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：本轮没有实际从群聊触发一次真实 Codex 施工任务，没有重建 `miniapp_static`，也没有做 `@all`、详情面板或更细的“验证中/等待确认”阶段。上线前仍需确保 bridge 进程重启后加载新代码。
+
+当前状态（2026-05-31 三人群聊取消施工）：
+- 已完成：前端识别 `@笨笨 停一下/停止/取消/中断/打断/别改了/别施工/别做了/暂停/kill/算了`，先把用户取消消息写入群聊，再取消当前 pending 的笨笨任务；没有 pending 任务时会回“没有正在施工或等待的笨笨任务。”。
+- 已完成：MiniApp 通过 `/miniapp-api/codex-group-chat-tasks/<id>/cancel` 调后端取消；后端 `cancel_task` 会把任务标成 `cancelled` 并发布 realtime，`finish_task` 收到 bridge 迟到结果时保持 `cancelled`，不覆盖成完成。
+- 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`npx vite build --outDir /tmp/du-gateway-miniapp-cancel-task-build --emptyOutDir true` 通过；`.venv/bin/python -m py_compile services/codex_group_chat.py routes/miniapp/codex_group_chat.py routes/pc_command.py scripts/codex_group_chat_bridge.py` 通过；smoke 覆盖 coding task 创建、claim、cancel、cancel 后不可再 claim、迟到 finish 不覆盖 cancelled；`git diff --check` 覆盖本轮相关文件。
+- 未完成 / 下次继续：施工任务取消会由 bridge 轮询状态并终止本地 Codex 子进程；普通 daily_chat 取消只做任务状态取消和迟到回写阻断。本轮没有重建 `miniapp_static`，上线前要重新构建静态产物并重启后端/bridge。
