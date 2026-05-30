@@ -545,6 +545,15 @@ def _apply_rules_state_updates(session: dict, event_intent: dict) -> dict:
     settlement_updates: list[dict] = []
     reward_updates: list[dict] = []
 
+    def _mainline_completion_signal(text: Any) -> bool:
+        body = str(text or "")
+        return bool(
+            re.search(
+                r"(主线完成|主线已完成|任务完成|任务已完成|通关|副本结束|回归主神空间|返回主神空间|进入结算|完成返回)",
+                body,
+            )
+        )
+
     if event_intent.get("task_update"):
         entry = _task_progress_entry(
             {
@@ -558,6 +567,8 @@ def _apply_rules_state_updates(session: dict, event_intent: dict) -> dict:
             "main",
         )
         if entry:
+            if entry.get("type") == "main" and entry.get("status") == "completed" and not _mainline_completion_signal(entry.get("title") or entry.get("progress")):
+                entry["status"] = "active"
             task_progress[str(entry["id"])] = {**task_progress.get(str(entry["id"]), {}), **entry}
             task_updates.append(entry)
             if entry.get("type") == "main" and entry.get("status") == "completed":
