@@ -548,18 +548,20 @@ function SumikaHistoryCardBack({ rows, onClose }: { rows: HealthHistoryRow[]; on
   return (
     <section className="relative min-h-[248px] overflow-hidden rounded-[32px] border border-black/5 bg-[#FBFAF8] p-5 text-black shadow-[0_28px_70px_-46px_rgba(0,0,0,0.42)]" style={{ fontFamily: "'Inter', sans-serif" }}>
       <HistoryBackHeader title="Sumika Heartbeat" subtitle={`最近 ${rows.length || 0} 次记录`} tone="light" onClose={onClose} />
-      <div className="mt-3 max-h-[164px] space-y-2 overflow-y-auto pr-1">
+      <div className="mt-3 max-h-[164px] overflow-y-auto pr-1">
         {rows.map((row, index) => (
-          <div key={`${row.at || ""}-${index}`} className="rounded-[16px] border border-black/5 bg-black/[0.035] px-3 py-2.5">
-            <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.1em] text-black/42">
-              <span>{formatTime(row.at) || "-"}</span>
-              <span>{row.source}</span>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-3">
-              <HistoryMetric label="Heart" value={hasHistoryValue(row.heartRate) ? row.heartRate : "-"} unit={hasHistoryValue(row.heartRate) ? "bpm" : ""} />
-              <HistoryMetric label="Steps" value={hasHistoryValue(row.steps) ? row.steps : "-"} unit={hasHistoryValue(row.steps) ? "steps" : ""} />
-            </div>
-          </div>
+          <HistoryTraceRow
+            key={`${row.at || ""}-${index}`}
+            tone="light"
+            index={index}
+            total={rows.length}
+            time={formatTime(row.at) || "-"}
+            tag={row.source}
+            metrics={[
+              { label: "Heart", value: hasHistoryValue(row.heartRate) ? row.heartRate : "-", unit: hasHistoryValue(row.heartRate) ? "bpm" : "" },
+              { label: "Steps", value: hasHistoryValue(row.steps) ? row.steps : "-", unit: hasHistoryValue(row.steps) ? "steps" : "" },
+            ]}
+          />
         ))}
         {!rows.length ? <HistoryEmpty tone="light" /> : null}
       </div>
@@ -571,21 +573,21 @@ function DuHistoryCardBack({ rows, onClose }: { rows: DuVitalsHistoryRow[]; onCl
   return (
     <section className="relative min-h-[360px] overflow-hidden rounded-[32px] bg-[#111111] p-5 text-white shadow-[0_34px_80px_-48px_rgba(0,0,0,0.85)]" style={{ fontFamily: "'Inter', sans-serif" }}>
       <HistoryBackHeader title="Du Heartbeat" subtitle={`最近 ${rows.length || 0} 次记录`} tone="dark" onClose={onClose} />
-      <div className="mt-3 max-h-[276px] space-y-2 overflow-y-auto pr-1">
+      <div className="mt-3 max-h-[276px] overflow-y-auto pr-1">
         {rows.map((row, index) => (
-          <div key={`${row.at || ""}-${index}`} className="rounded-[16px] border border-white/10 bg-white/[0.08] px-3 py-2.5">
-            <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.1em] text-white/42">
-              <span>{formatTime(row.at) || "-"}</span>
-              <span>{row.status || "stream"}</span>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-3">
-              <HistoryMetric label="Heart" value={row.heart || "-"} unit={row.heart ? "bpm" : ""} tone="dark" />
-              <HistoryMetric label="Breath" value={row.breath || "-"} unit={row.breath ? "brpm" : ""} tone="dark" />
-            </div>
-            <div className="mt-2 truncate text-[9px] uppercase tracking-[0.08em] text-white/42">
-              Focus {formatParamPercent(row.focus)} · Close {formatParamPercent(row.close)} · Tension {formatParamPercent(row.tension)}
-            </div>
-          </div>
+          <HistoryTraceRow
+            key={`${row.at || ""}-${index}`}
+            tone="dark"
+            index={index}
+            total={rows.length}
+            time={formatTime(row.at) || "-"}
+            tag={row.status || "stream"}
+            metrics={[
+              { label: "Heart", value: row.heart || "-", unit: row.heart ? "bpm" : "" },
+              { label: "Breath", value: row.breath || "-", unit: row.breath ? "brpm" : "" },
+            ]}
+            detail={`Focus ${formatParamPercent(row.focus)} · Close ${formatParamPercent(row.close)} · Tension ${formatParamPercent(row.tension)}`}
+          />
         ))}
         {!rows.length ? <HistoryEmpty tone="dark" /> : null}
       </div>
@@ -623,30 +625,55 @@ function HistoryBackHeader({
   );
 }
 
-function HistoryMetric({
-  label,
-  value,
-  unit,
-  tone = "light",
+function HistoryTraceRow({
+  tone,
+  index,
+  total,
+  time,
+  tag,
+  metrics,
+  detail,
 }: {
-  label: string;
-  value: React.ReactNode;
-  unit?: string;
-  tone?: "light" | "dark";
+  tone: "light" | "dark";
+  index: number;
+  total: number;
+  time: string;
+  tag: string;
+  metrics: Array<{ label: string; value: React.ReactNode; unit?: string }>;
+  detail?: string;
 }) {
   const dark = tone === "dark";
+  const muted = dark ? "text-white/42" : "text-black/42";
+  const border = dark ? "border-white/10" : "border-black/10";
   return (
-    <div className="min-w-0">
-      <div className={`truncate text-[9px] uppercase tracking-[0.18em] ${dark ? "text-white/38" : "text-black/42"}`}>{label}</div>
-      <div className="mt-1 flex min-w-0 items-start gap-1 overflow-hidden">
-        <span className={`min-w-0 shrink text-[30px] leading-none ${dark ? "text-white" : "text-black"}`} style={{ fontFamily: ANNIVERSARY_NUMBER_FONT, fontWeight: 500 }}>
-          {value}
-        </span>
-        {unit ? (
-          <span className={`shrink-0 translate-y-[16px] text-[10px] italic ${dark ? "text-white/45" : "text-black/45"}`} style={{ fontFamily: ANNIVERSARY_NUMBER_FONT }}>
-            {unit}
-          </span>
-        ) : null}
+    <div className={`grid grid-cols-[18px_minmax(0,1fr)] gap-3 border-b py-3 last:border-b-0 ${border}`}>
+      <div className="relative flex justify-center">
+        <span className={`mt-[5px] h-1.5 w-1.5 rounded-full ${dark ? "bg-white/70" : "bg-black/65"}`} />
+        {index < total - 1 ? <span className={`absolute top-[16px] bottom-[-12px] w-px ${dark ? "bg-white/12" : "bg-black/12"}`} /> : null}
+      </div>
+      <div className="min-w-0">
+        <div className={`flex items-center justify-between gap-3 text-[8px] uppercase tracking-[0.11em] ${muted}`}>
+          <span className="truncate">{time}</span>
+          <span className="shrink-0">{tag}</span>
+        </div>
+        <div className="mt-1.5 grid grid-cols-2 gap-4">
+          {metrics.map((metric) => (
+            <div key={metric.label} className="min-w-0">
+              <div className={`truncate text-[7px] uppercase tracking-[0.16em] ${dark ? "text-white/34" : "text-black/38"}`}>{metric.label}</div>
+              <div className="mt-0.5 flex min-w-0 items-start gap-1 overflow-hidden">
+                <span className={`min-w-0 shrink text-[18px] leading-none ${dark ? "text-white" : "text-black"}`} style={{ fontFamily: ANNIVERSARY_NUMBER_FONT, fontWeight: 500 }}>
+                  {metric.value}
+                </span>
+                {metric.unit ? (
+                  <span className={`shrink-0 translate-y-[8px] text-[8px] italic ${dark ? "text-white/45" : "text-black/45"}`} style={{ fontFamily: ANNIVERSARY_NUMBER_FONT }}>
+                    {metric.unit}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+        {detail ? <div className={`mt-1 truncate text-[7px] uppercase tracking-[0.08em] ${muted}`}>{detail}</div> : null}
       </div>
     </div>
   );
@@ -654,7 +681,7 @@ function HistoryMetric({
 
 function HistoryEmpty({ tone }: { tone: "light" | "dark" }) {
   return (
-    <div className={`rounded-[18px] px-4 py-8 text-center text-[13px] ${tone === "dark" ? "bg-white/[0.08] text-white/42" : "bg-black/[0.035] text-black/42"}`}>
+    <div className={`border-y px-4 py-8 text-center text-[13px] ${tone === "dark" ? "border-white/10 text-white/42" : "border-black/10 text-black/42"}`}>
       还没有最近记录
     </div>
   );
@@ -673,11 +700,11 @@ function BiometricMetric({
   compact?: boolean;
   tone?: "light" | "dark";
 }) {
-  const valueSize = compact ? "text-[34px]" : "text-[48px]";
+  const valueSize = compact ? "text-[28px]" : "text-[36px]";
   return (
     <div className="min-w-0">
-      <div className={`truncate text-[9px] font-semibold uppercase tracking-[0.22em] ${tone === "dark" ? "text-white/38" : "text-black/42"}`}>{label}</div>
-      <div className={`${compact ? "mt-2 min-h-[38px]" : "mt-4 min-h-[54px]"} flex min-w-0 items-start gap-1.5 overflow-hidden`}>
+      <div className={`truncate text-[8px] font-semibold uppercase tracking-[0.18em] ${tone === "dark" ? "text-white/38" : "text-black/42"}`}>{label}</div>
+      <div className={`${compact ? "mt-1.5 min-h-[32px]" : "mt-3 min-h-[42px]"} flex min-w-0 items-start gap-1.5 overflow-hidden`}>
         <span
           className={`${valueSize} min-w-0 shrink leading-none tracking-normal ${tone === "dark" ? "text-white" : "text-black"}`}
           style={{ fontFamily: ANNIVERSARY_NUMBER_FONT, fontWeight: 500 }}
@@ -686,7 +713,7 @@ function BiometricMetric({
         </span>
         {unit ? (
           <span
-            className={`shrink-0 translate-y-[27px] text-[12px] italic tracking-normal ${tone === "dark" ? "text-white/46" : "text-black/46"}`}
+            className={`shrink-0 translate-y-[19px] text-[10px] italic tracking-normal ${tone === "dark" ? "text-white/46" : "text-black/46"}`}
             style={{ fontFamily: ANNIVERSARY_NUMBER_FONT }}
           >
             {unit}
