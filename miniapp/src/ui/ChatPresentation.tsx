@@ -2,7 +2,81 @@ import React from "react";
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import sumikaBubbleStickerUrl from "../assets/sumika-bubble-sticker.png?url";
 import { PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
+
+const SUMIKA_BUBBLE_CORE_STYLE: React.CSSProperties = {
+  maxWidth: "min(100%, 160px)",
+  border: "0 solid transparent",
+  borderRadius: "18px",
+  background: "#ffffff",
+  boxShadow: "0 2px 2px rgba(70, 63, 54, 0.05), 0 0 15px 6px rgba(209, 209, 209, 0.28), inset 0 1px 0 rgba(255,255,255,0.72)",
+  color: "#56524D",
+  padding: "4px 8px",
+  lineHeight: 1.3,
+  textAlign: "left",
+  overflowWrap: "anywhere",
+};
+
+const SUMIKA_BUBBLE_STICKERS = [
+  {
+    id: "sumika-image",
+    type: "image",
+    src: sumikaBubbleStickerUrl,
+    anchor: "top-left",
+    offsetX: -21,
+    offsetY: -56,
+    size: 86,
+    rotate: 0,
+  },
+  {
+    id: "sumika-glint",
+    type: "text",
+    text: "⊹",
+    anchor: "top-right",
+    offsetX: -7,
+    offsetY: -2,
+    size: 14,
+    rotate: 0,
+  },
+  {
+    id: "sumika-star",
+    type: "text",
+    text: "★",
+    anchor: "top-right",
+    offsetX: -16,
+    offsetY: -9,
+    size: 14,
+    rotate: -8,
+  },
+  {
+    id: "sumika-spark",
+    type: "text",
+    text: "✧",
+    anchor: "bottom-right",
+    offsetX: -13,
+    offsetY: -11,
+    size: 14,
+    rotate: 14,
+  },
+] as const;
+
+type SumikaBubbleSticker = (typeof SUMIKA_BUBBLE_STICKERS)[number];
+
+function resolveSumikaStickerStyle(sticker: SumikaBubbleSticker): React.CSSProperties {
+  return {
+    ...(sticker.anchor.endsWith("left")
+      ? { left: `${sticker.offsetX}px` }
+      : { left: `calc(100% + ${sticker.offsetX}px)` }),
+    ...(sticker.anchor.startsWith("top")
+      ? { top: `${sticker.offsetY}px` }
+      : { top: `calc(100% + ${sticker.offsetY}px)` }),
+    width: `${sticker.size}px`,
+    height: `${sticker.size}px`,
+    transform: `rotate(${sticker.rotate}deg)`,
+    transformOrigin: "50% 50%",
+  };
+}
 
 export function formatTokenCountValue(value?: number): string {
   return value ? `${value}tokens` : "";
@@ -74,6 +148,68 @@ export function HtmlBlock({ content }: { content: string }) {
 
 export function PlainTextBlock({ content }: { content: string }) {
   return <span className="whitespace-pre-wrap">{content}</span>;
+}
+
+export function ChatBubbleFrame({
+  children,
+  className,
+  style,
+  decorated = false,
+  align = "left",
+}: {
+  children: React.ReactNode;
+  className: string;
+  style?: React.CSSProperties;
+  decorated?: boolean;
+  align?: "left" | "right";
+}) {
+  if (!decorated) {
+    return (
+      <div className={className} style={style}>
+        {children}
+      </div>
+    );
+  }
+  const coreStyle = { ...SUMIKA_BUBBLE_CORE_STYLE, ...style };
+  return (
+    <div className={`relative inline-block max-w-full overflow-visible px-[26px] py-[26px] align-top ${align === "right" ? "self-end" : ""}`}>
+      <div className="relative inline-block max-w-full overflow-visible align-top">
+        <div className={`relative z-10 ${className}`} style={coreStyle}>
+          {children}
+        </div>
+        <span className="pointer-events-none absolute inset-0 z-20 overflow-visible" aria-hidden="true">
+          {SUMIKA_BUBBLE_STICKERS.map((sticker) => (
+            <span
+              key={sticker.id}
+              className="absolute grid select-none place-items-center leading-none"
+              style={resolveSumikaStickerStyle(sticker)}
+            >
+              {sticker.type === "image" ? (
+                <img
+                  src={sticker.src}
+                  alt=""
+                  className="h-full w-full object-contain"
+                  draggable={false}
+                />
+              ) : (
+                <span
+                  className="whitespace-pre"
+                  style={{
+                    color: "rgba(107,107,107,1)",
+                    fontSize: `${sticker.size}px`,
+                    fontWeight: 800,
+                    textShadow: "0 1px 8px rgba(70,63,54,0.08)",
+                  }}
+                >
+                  {sticker.text}
+                </span>
+              )}
+            </span>
+          ))}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 export function copyText(text: string, toast: (msg: string) => void) {

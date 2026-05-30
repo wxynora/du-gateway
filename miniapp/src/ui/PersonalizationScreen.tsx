@@ -10,6 +10,7 @@ import {
   type BubbleStyleKey,
 } from "./chatAppearance";
 import { getChatFontLabel, type ChatFontKey, type ChatTimeFormat } from "./chatMessages";
+import { ChatBubbleFrame } from "./ChatPresentation";
 import { ChevronRightIcon } from "./icons";
 import { useToast } from "./toast";
 
@@ -453,14 +454,23 @@ export function PersonalizationScreen({
               <div className="space-y-3">
                 <div className="flex items-start gap-3">
                   {showChatAvatars ? <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#EEF2FF] text-[13px] font-medium text-gray-700">渡</div> : null}
-                  <div className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)}`} style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
+                  <ChatBubbleFrame
+                    decorated={!transparentBubbleEnabled && assistantBubbleStyle === "decor"}
+                    className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)}`}
+                    style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}
+                  >
                     这里是助手气泡预览
-                  </div>
+                  </ChatBubbleFrame>
                 </div>
                 <div className="flex justify-end gap-3">
-                  <div className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)}`} style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>
+                  <ChatBubbleFrame
+                    decorated={!transparentBubbleEnabled && userBubbleStyle === "decor"}
+                    align="right"
+                    className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)}`}
+                    style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}
+                  >
                     这里是用户气泡预览
-                  </div>
+                  </ChatBubbleFrame>
                   {showChatAvatars ? <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#E5E7EB] text-[13px] font-medium text-gray-700">我</div> : null}
                 </div>
               </div>
