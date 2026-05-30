@@ -18,6 +18,7 @@ type DuHeartPoint = { at?: string; value: number };
 
 const CLOUD_HEALTH_RECORD_DISPLAY_LIMIT = 1;
 const HEALTH_REPORT_LOG_DISPLAY_LIMIT = 10;
+const ANNIVERSARY_NUMBER_FONT = "'Playfair Display', Georgia, serif";
 
 const FREQUENCY_OPTIONS = [
   { label: "30 秒", seconds: 30 },
@@ -404,14 +405,14 @@ function BiometricMetric({
       <div className={`${compact ? "mt-2 min-h-[42px]" : "mt-4 min-h-[64px]"} flex min-w-0 items-start gap-1.5 overflow-hidden`}>
         <span
           className={`${valueSize} min-w-0 shrink leading-none tracking-normal ${tone === "dark" ? "text-white" : "text-black"}`}
-          style={{ fontFamily: "'Playfair Display', 'Times New Roman', 'Noto Serif', serif", fontWeight: 500 }}
+          style={{ fontFamily: ANNIVERSARY_NUMBER_FONT, fontWeight: 500 }}
         >
           {value}
         </span>
         {unit ? (
           <span
             className={`shrink-0 translate-y-[33px] text-[13px] italic tracking-normal ${tone === "dark" ? "text-white/46" : "text-black/46"}`}
-            style={{ fontFamily: "'Playfair Display', 'Times New Roman', 'Noto Serif', serif" }}
+            style={{ fontFamily: ANNIVERSARY_NUMBER_FONT }}
           >
             {unit}
           </span>
