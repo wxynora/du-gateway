@@ -1291,3 +1291,8 @@ npm -C miniapp run android
 - 已完成：新增 `routes/internal_stt_api.py`，用 `GATEWAY_INTERNAL_STT_TOKEN` / `MAIN_GATEWAY_BEARER_TOKEN` / `XIAOAI_GATEWAY_TOKEN` 鉴权，或仅允许无转发头的本机直连兜底；`services/stt.py` 对 QQ/NapCat 常见假 `.amr` / SILK 音频保留 ffmpeg 转 wav fallback。
 - 已验证：本地 `.venv/bin/python -m py_compile config.py services/stt.py routes/internal_stt_api.py app.py`、`node --check connectors/qq_onebot/src/main.js`、内部 STT test_client smoke 和 `git diff --check` 通过；服务器已同步运行时代码，`du-gateway` / `qq-connector` 重启后 active，`/health` 和 `/health`(8092) 正常；用真实 QQ `record` 经 `get_record` 转 `.wav` 后调用 `/api/internal/stt` 返回 200，provider=`openrouter`，model=`google/gemini-2.5-flash`。
 - 未完成 / 下次继续：未做公开 MiniApp UI 开关；没有对所有 QQ 语音格式做离线样本库，只按真实 NapCat 事件验证了 `file+path` 形态。若后续出现只有 URL 或只有 file id 的事件，connector 已按 URL / `get_record` 分支兼容，先看日志再扩。
+
+当前状态（2026-05-31 心动兔兔气泡皮肤层）：
+- 已完成：`miniapp/src/ui/chatAppearance.ts` 将装饰气泡展示名改为“心动兔兔”，并把 decor 基础气泡收敛为原气泡背景/文字色；`miniapp/src/ui/ChatPresentation.tsx` 新增 `HeartRabbitBubbleSkin`，把外发光、边缘虚化和叠加高光放到不占布局的皮肤层，贴纸层继续绝对定位贴合气泡边缘，不再改 `max-width`、`padding` 或 `line-height`。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过；`npm --prefix miniapp run build` 通过并同步 `miniapp_static` 新 hash 产物，只有既有 chunk size warning。
+- 未完成 / 下次继续：本轮没有把 `tools/bubble-customizer.html` 的全部材质/像素边框编辑器配置迁入 App，也没有清理主工作区已有旧 `miniapp_static` 构建残留；后续如继续迁移皮肤参数，仍需保持皮肤层不影响原气泡布局参数。

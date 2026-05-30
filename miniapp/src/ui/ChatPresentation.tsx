@@ -65,6 +65,27 @@ function resolveSumikaStickerStyle(sticker: SumikaBubbleSticker): React.CSSPrope
   };
 }
 
+function HeartRabbitBubbleSkin() {
+  return (
+    <>
+      <span
+        className="pointer-events-none absolute -inset-[2px] z-0 rounded-[inherit] bg-[#fffdf9]/70 opacity-55 blur-[2px]"
+        aria-hidden="true"
+      />
+      <span
+        className="pointer-events-none absolute inset-0 z-0 rounded-[inherit]"
+        style={{
+          background:
+            "linear-gradient(145deg, rgba(255,255,255,0.34), rgba(255,250,246,0.08) 48%, rgba(244,184,207,0.12))",
+          boxShadow:
+            "0 2px 2px rgba(70,63,54,0.05), 0 0 18px 0 rgba(244,184,207,0.16), 0 0 32px 2px rgba(209,209,209,0.22), inset 0 1px 0 rgba(255,255,255,0.72)",
+        }}
+        aria-hidden="true"
+      />
+    </>
+  );
+}
+
 export function formatTokenCountValue(value?: number): string {
   return value ? `${value}tokens` : "";
 }
@@ -162,10 +183,13 @@ export const ChatBubbleFrame = React.forwardRef<HTMLDivElement, ChatBubbleFrameP
   return (
     <div
       ref={ref}
-      className={`relative overflow-visible ${className} ${align === "right" ? "self-end" : ""}`}
+      className={`relative isolate overflow-visible ${className} ${align === "right" ? "self-end" : ""}`}
       style={style}
     >
-      {children}
+      <HeartRabbitBubbleSkin />
+      <div className="relative z-10">
+        {children}
+      </div>
       <span className="pointer-events-none absolute inset-0 z-20 overflow-visible" aria-hidden="true">
         {SUMIKA_BUBBLE_STICKERS.map((sticker) => (
           <span

@@ -26,7 +26,7 @@ export function resolveChatFontFamily(fontKey: ChatFontKey): string {
 export function getBubbleStyleLabel(style: BubbleStyleKey, role: "user" | "assistant"): string {
   if (style === "soft") return role === "user" ? "柔和填充" : "浅灰填充";
   if (style === "outline") return "描边";
-  if (style === "decor") return "得意kaomoji";
+  if (style === "decor") return "心动兔兔";
   return "默认";
 }
 
@@ -34,11 +34,11 @@ export function resolveBubbleClass(role: "user" | "assistant", style: BubbleStyl
   if (role === "user") {
     if (style === "soft") return "bg-[#475569] text-white";
     if (style === "outline") return "border border-[#CBD5E1] bg-white text-gray-900";
-    if (style === "decor") return "border-0 bg-white text-[#56524D] shadow-[0_2px_2px_rgba(70,63,54,0.05),0_0_15px_6px_rgba(209,209,209,0.28),inset_0_1px_0_rgba(255,255,255,0.72)]";
+    if (style === "decor") return "border-0 bg-[#fffdf9] text-[#56524D] !shadow-none";
     return "bg-[#2D3748] text-white";
   }
   if (style === "soft") return "bg-[#F4F5F7] text-gray-800";
   if (style === "outline") return "border border-[#CBD5E1] bg-white text-gray-800";
-  if (style === "decor") return "border-0 bg-white text-[#56524D] shadow-[0_2px_2px_rgba(70,63,54,0.05),0_0_15px_6px_rgba(209,209,209,0.28),inset_0_1px_0_rgba(255,255,255,0.72)]";
+  if (style === "decor") return "border-0 bg-[#fffdf9] text-[#56524D] !shadow-none";
   return "border border-gray-100/50 bg-white text-gray-800";
 }
