@@ -159,7 +159,6 @@ def _generate_wenyou_team_channel_reply(
     player_message: str,
     *,
     window_id: str,
-    consume_turn: bool = False,
     actor_id: str = "player2",
 ) -> tuple[str, str]:
     clean_window_id = str(window_id or "").strip()
@@ -173,7 +172,6 @@ def _generate_wenyou_team_channel_reply(
             uid,
             player_message,
             actor_id=actor_id,
-            consume_turn=consume_turn,
         )
         if not messages:
             return "", "当前没有可注入的文游对讲机上下文"
@@ -610,13 +608,12 @@ def register_routes(bp) -> None:
 
     @bp.route("/wenyou/team-channel", methods=["POST"])
     def miniapp_wenyou_team_channel():
-        """文游：对讲机，默认不消耗回合；可选择同步行动。"""
+        """文游：对讲机频道，只交流信息，不消耗回合。"""
         uid = _wenyou_session_id()
         if uid == 0:
             return _missing_wenyou_session_response()
         data = request.get_json(silent=True) or {}
         text = str(data.get("text") or data.get("message") or "").strip()
-        consume_turn = bool(data.get("consume_turn") or data.get("turn_consumed"))
         if not text:
             return jsonify({"ok": False, "error": "对讲机内容不能为空"}), 400
         from services.wenyou_service import cmd_team_channel_message, get_session_view
@@ -631,7 +628,6 @@ def register_routes(bp) -> None:
             uid,
             text,
             window_id=window_id,
-            consume_turn=consume_turn,
         )
         if not reply:
             reply = "对讲机里只有短促杂音，暂时没有收到清晰回应。"
@@ -640,15 +636,14 @@ def register_routes(bp) -> None:
             uid,
             text,
             ai_player_reply=reply,
-            consume_turn=consume_turn,
         )
         payload = {
             "ok": ok,
-            "message": reply if not consume_turn else "",
-            "text": message if consume_turn else "",
+            "message": message,
+            "text": "",
             "reply": reply,
             "ai_player_action": ai_player_action,
-            "turn_consumed": consume_turn,
+            "turn_consumed": False,
             **get_session_view(uid),
         }
         if reply_error:

@@ -75,7 +75,7 @@ export function looksLikeInternalPayload(text: string) {
   const value = String(text || "").trim();
   if (!value) return false;
   const compact = value.replace(/\s+/g, " ");
-  const hasInternalKey = /['"]?(?:id|public_text|leads_to|is_required_for_mainline|runtime_state|rules_state|last_state_patch|threat_clocks|settlement_flags|event_intent|state_patch|gm_state|private_state|npc_private_state|forced_instance|reward_hint)['"]?\s*:/i.test(compact);
+  const hasInternalKey = /['"]?(?:event|risk|targets|tags|action_state|conditions_add|conditions_remove|clock_updates|rule_updates|clue_updates|task_update|state_proposals|id|public_text|leads_to|is_required_for_mainline|runtime_state|rules_state|last_state_patch|threat_clocks|settlement_flags|event_intent|state_patch|gm_state|private_state|npc_private_state|forced_instance|reward_hint)['"]?\s*:/i.test(compact);
   const wrapped = /^[{[]/.test(compact) || /[}\]]$/.test(compact);
   const keyPairs = compact.match(/['"]?[a-zA-Z_][\w-]*['"]?\s*:/g) || [];
   return hasInternalKey && (wrapped || keyPairs.length >= 3);

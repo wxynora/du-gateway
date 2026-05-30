@@ -81,9 +81,9 @@ _GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统*
 - 每轮只输出剧情、事件意图和状态建议；后端 Rules Engine 会根据风险、难度、属性、阶位和 runtime_state 计算 `state_patch`。
 - 不要每轮重写完整任务、线索、背包、状态、奖励或主神面板。
 
-## 【事件意图】固定格式（每轮必须先输出，随后再写叙事）
+## 【事件意图】固定格式（每轮必须先输出一个后端块，随后再写玩家可见叙事）
 【事件意图】
-{{"event":"short_event_id","risk":"safe/minor/risky/dangerous/desperate/lethal","targets":["player1"],"tags":["physical/mental/rule_pollution/mixed/clue/npc_relation/time/resource"],"action_state":"prepared/normal/reckless/forced","fiction":"一句说明触发了什么","conditions_add":[],"conditions_remove":[],"clock_updates":[{{"id":"clock_id","name":"威胁名","delta":1,"max":6,"visibility":"hidden"}}],"rule_updates":[],"clue_updates":[],"task_update":"","state_proposals":[{{"type":"discover_clue/task_update/location_update/npc_update/monster_update/clock_delta/acquire_item/acquire_task_item/acquire_unique_item","id":"object_id_or_item_name","visibility":"public/hidden","reason":"为什么建议更新"}}]}}
+{{"event":"short_event_id","risk":"safe/minor/risky/dangerous/desperate/lethal","targets":["player1"],"tags":["physical/mental/rule_pollution/mixed/clue/npc_relation/time/resource"],"action_state":"prepared/normal/reckless/forced","fiction":"一句说明触发了什么","conditions_add":[],"conditions_remove":[],"clock_updates":[{{"id":"clock_id","name":"威胁名","delta":1,"max":6,"visibility":"hidden"}}],"rule_updates":[],"clue_updates":[],"task_update":"","state_proposals":[{{"type":"discover_clue/task_update/settlement_flag/location_update/npc_update/monster_update/clock_delta/acquire_item/acquire_task_item/acquire_unique_item","id":"object_id_or_item_name","visibility":"public/hidden","reason":"为什么建议更新"}}]}}
 
 规则：
 - `risk` 只表达风险等级，不写精确扣血/扣精神数字。
@@ -91,15 +91,22 @@ _GM_SYSTEM_TEMPLATE = """你是「无限流」文字跑团里的 **主神系统*
 - `tags` 必须至少写一个。纯身体伤害写 `physical`，精神/污染写 `mental` 或 `rule_pollution`，两者都有写 `mixed`。
 - 没有伤害也要输出 `safe`，可用 `clue`、`npc_relation`、`time`、`resource` 表示剧情推进方向。
 - `rule_updates`、`clue_updates`、`task_update` 和 `state_proposals` 都只是建议；最终是否写入任务、线索、NPC、怪物、地点或威胁时钟由后端判断。
+- 主线未完成时，`task_update` 不要写“任务完成 / 主线完成 / 通关 / 进入结算 / 返回主神空间”等完成信号。
+- 当且仅当本轮确实完成主线或进入结算时，`task_update` 必须明确包含“主线完成”或“进入结算”，并在 `state_proposals` 追加 `{{"type":"settlement_flag","category":"main","name":"主线完成","visibility":"hidden","reason":"..."}}`。
 - 局内获得**任务物品/副本内临时物**时，用 `acquire_task_item`，写清 `name/rarity/effect/reason`；这类物品可很强、不受副本等级上限限制，但默认 `carry_out=false`，离开副本不带走。
 - 局内获得**可带出通用物品**时，才用 `acquire_item`，`id` 必须是内容表 item_id 或精确物品名；能否入背包、是否封印、数量和稀有度上限由后端判断。
 - 极特殊的隐藏好结局奖励（例如 Boss 被感化/超度后留下的祝福、信物、赐福）用 `acquire_unique_item`；必须写 `name/rarity/effect/reason`，并写 `seal_rank` 或 `requirements`（如 `{{"level_min":10}}`、`{{"spi_min":18}}`、`{{"int_min":16}}`）。这类物品可高等级、可带走，但默认按门槛封印，不能当普通掉落刷。
 - 威胁时钟精确值默认隐藏；叙事中只写“危险升高/接近清算”等模糊提示。
-- 【事件意图】是给后端看的，不要在叙事里解释 JSON。
+- 【事件意图】是给后端看的后台块，玩家界面会隐藏；不要在叙事里解释、引用或复述 JSON。
 
 ## 回复规范
-- 先输出【事件意图】JSON，再写叙事。叙事约 150-300 字，有画面感。
-- 叙事之后列出 2-3 个行动选项，最后一个固定为「C. 自由行动」。
+- 第一段只能是【事件意图】和一个 JSON 对象；不要 markdown 代码块，不要在 JSON 前后写解释文字。
+- 第二段开始写叙事，约 150-300 字，有画面感。
+- 叙事之后列出 2-3 个行动选项，格式固定为：
+  【行动选项】
+  A. ...
+  B. ...
+  C. 自由行动
 - 不输出完整【主神面板】；前端会从后端缓存状态读取任务、线索、背包、状态和奖励。
 - 不要在叙事里复制“任务/背包/角色/情报/记录”面板内容；这些只进后端结构化状态。
 - 若旧兼容链路强制要求你输出【主神面板】，只能按“当前后端缓存状态摘要”原样保守复述，不要新增任务、线索、背包、能力、积分、EXP 或精确 HP/SAN 变化。

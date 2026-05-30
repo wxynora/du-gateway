@@ -688,6 +688,7 @@ export function WenyouTab({
   const [forcedPromptLoading, setForcedPromptLoading] = useState(false);
   const riftPullTokenRef = useRef(0);
   const settlementAutoArchiveRef = useRef("");
+  const settlementAutoPreviewRef = useRef("");
   const forcedPromptCheckRef = useRef("");
   const [sessionPanel, setSessionPanel] = useState<WenyouSessionPanel | null>(null);
   const [panelView, setPanelView] = useState<WenyouPanelView | null>(null);
@@ -1100,6 +1101,7 @@ export function WenyouTab({
   ]);
 
   const gameSettlementReady = sessionPanel?.phase === "settlement" && !!sessionPanel.settlement;
+  const gameAwaitingSettlement = sessionPanel?.phase === "settlement" && !sessionPanel.settlement;
   const homePlayer = sessionPanel?.stats?.player1 || gameRulesState.players?.player1 || {};
   const playerOneName = playerDisplayName(profileStats.player1 || gameRulesState.players?.player1 || homePlayer, String(status.entry?.player_name || "").trim() || "玩家一");
   const playerTwoName = playerDisplayName(profileStats.player2 || gameRulesState.players?.player2, String(status.entry?.player2_name || "").trim() || "玩家二");
@@ -1403,51 +1405,32 @@ export function WenyouTab({
     }
   }
 
-  async function sendTeamChannel(inputText?: string, consumeTurn = false) {
+  async function sendTeamChannel(inputText?: string) {
     const text = String(inputText ?? teamChannelText).trim();
-    if (!text || teamChannelSending || acting) return;
+    if (!text || teamChannelSending) return;
     setQuickDecisionOpen(false);
     setTeamChannelSending(true);
-    if (consumeTurn) setActing(true);
     try {
       const j = await apiJson<{
         ok?: boolean;
         message?: string;
         reply?: string;
-        text?: string;
-        ai_player_action?: string;
-        turn_consumed?: boolean;
         warning?: string;
         session?: WenyouSessionPanel;
         error?: string;
       }>("/miniapp-api/wenyou/team-channel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, consume_turn: consumeTurn, window_id: windowId }),
+        body: JSON.stringify({ text, window_id: windowId }),
       });
       if (!j?.ok) throw new Error(j?.error || "对讲机发送失败");
-      const stamp = Date.now();
       if (j.session) setSessionPanel(j.session);
-      if (j.turn_consumed) {
-        const gmText = String(j.text || "");
-        const aiPlayerAction = String(j.ai_player_action || j.reply || "").trim();
-        setFeed((prev) => [
-          ...prev,
-          { id: `team-u-${stamp}`, kind: "user", text: `对讲机：${text}` },
-          ...(aiPlayerAction ? [{ id: `team-ai-${stamp}`, kind: "ai_player" as const, text: aiPlayerAction }] : []),
-          { id: `team-gm-${stamp}`, kind: "system", text: gmText || "主神系统暂无回应。" },
-        ]);
-        setSettlementDraftOpen(false);
-        setSettlementPreview(null);
-        await loadStatus();
-      }
       if (j.warning) toast(j.warning);
       setTeamChannelText("");
     } catch (e: any) {
       toast(`对讲机失败：${e?.message || e}`);
     } finally {
       setTeamChannelSending(false);
-      if (consumeTurn) setActing(false);
     }
   }
 
@@ -1506,6 +1489,15 @@ export function WenyouTab({
     setQuickDecisionOpen(false);
     await loadSettlementPreview();
   }
+
+  useEffect(() => {
+    if (view !== "game" || !gameAwaitingSettlement || settlementDraftOpen || settlementLoading || settlementPreview) return;
+    const key = `${sessionPanel?.gameId || ""}:${sessionPanel?.phase || ""}`;
+    if (settlementAutoPreviewRef.current === key) return;
+    settlementAutoPreviewRef.current = key;
+    setSettlementDraftOpen(true);
+    void loadSettlementPreview();
+  }, [gameAwaitingSettlement, settlementDraftOpen, settlementLoading, settlementPreview, sessionPanel?.gameId, view]);
 
   async function enterSettlement() {
     if (settlementLoading) return;
@@ -2285,7 +2277,7 @@ export function WenyouTab({
               <p className="wenyou-location-hint"><span />当前在 {currentLocation}</p>
             </div>
             <div className="wenyou-game-top-actions">
-              {!gameSettlementReady && sessionPanel?.phase !== "settlement" ? (
+              {!gameSettlementReady && !gameAwaitingSettlement ? (
                 <button
                   type="button"
                   className={`wenyou-team-channel-toggle wenyou-team-channel-toggle-top ${teamChannelOpen ? "active" : ""}`}
@@ -2293,7 +2285,6 @@ export function WenyouTab({
                     setQuickDecisionOpen(false);
                     setTeamChannelOpen((open) => !open);
                   }}
-                  disabled={acting && !teamChannelOpen}
                   aria-expanded={teamChannelOpen}
                   aria-label={`打开对讲机，${teamChannelLabel}`}
                 >
@@ -2314,7 +2305,7 @@ export function WenyouTab({
               </button>
             </div>
           </div>
-          {!gameSettlementReady && sessionPanel?.phase !== "settlement" && teamChannelOpen ? (
+          {!gameSettlementReady && !gameAwaitingSettlement && teamChannelOpen ? (
             <div className="wenyou-team-channel-modal" role="dialog" aria-modal="true" aria-label="对讲机频道">
               <button
                 type="button"
@@ -2327,10 +2318,10 @@ export function WenyouTab({
                 peerName={playerTwoTitle}
                 text={teamChannelText}
                 sending={teamChannelSending}
-                disabled={acting}
+                disabled={false}
                 onText={setTeamChannelText}
                 onClose={() => setTeamChannelOpen(false)}
-                onSend={(value) => void sendTeamChannel(value, false)}
+                onSend={(value) => void sendTeamChannel(value)}
               />
             </div>
           ) : null}
@@ -2343,7 +2334,7 @@ export function WenyouTab({
               if (item.kind === "notice") return <SystemNotice key={item.id} tone="cyan" label="任务更新" text={itemText} />;
               if (item.kind === "loot") return <SystemNotice key={item.id} tone="purple" label="获得物品" text={itemText} />;
               if (item.kind === "ai_player") return <SystemNotice key={item.id} tone="purple" label={aiPlayerActionLabel} text={itemText} />;
-              return <StoryFeedMessage key={item.id} text={itemText} disabled={acting} onAction={handleStoryActionOption} />;
+              return <StoryFeedMessage key={item.id} text={itemText} disabled={acting || gameAwaitingSettlement} onAction={handleStoryActionOption} />;
             }) : gameSettlementReady ? (
               <div className="wenyou-feed-empty">
                 <strong>结算完成，正在归档</strong>
@@ -2361,7 +2352,7 @@ export function WenyouTab({
             {gameSettlementReady && sessionPanel?.settlement ? (
               <SettlementGranted settlement={sessionPanel.settlement} loading={settlementLoading} onArchive={archiveSettlement} />
             ) : null}
-            {!gameSettlementReady && sessionPanel?.phase !== "settlement" && settlementDraftOpen ? (
+            {!gameSettlementReady && (settlementDraftOpen || gameAwaitingSettlement) ? (
               <SettlementDraft
                 preview={settlementPreview}
                 result={settlementResult}
@@ -2373,7 +2364,7 @@ export function WenyouTab({
                 onConfirm={enterSettlement}
               />
             ) : null}
-            {!gameSettlementReady && quickDecisionOpen ? (
+            {!gameSettlementReady && !gameAwaitingSettlement && quickDecisionOpen ? (
               <div className="wenyou-quick-decision-menu" role="menu" aria-label="快捷决策">
                 {quickActions.map((item) => (
                   <button key={item.label} type="button" onClick={() => handleQuickAction(item)}>
@@ -2398,7 +2389,7 @@ export function WenyouTab({
               </div>
             ) : null}
             {acting || settlementLoading ? <div className="wenyou-action-progress"><span /></div> : null}
-            {!gameSettlementReady ? (
+            {!gameSettlementReady && !gameAwaitingSettlement ? (
               <>
                 <div className="wenyou-input-row">
                   <button
@@ -3005,7 +2996,7 @@ function TeamChannelPanel({
   disabled?: boolean;
   onText: (value: string) => void;
   onClose: () => void;
-  onSend: (value?: string, consumeTurn?: boolean) => void;
+  onSend: (value?: string) => void;
 }) {
   const messages = Array.isArray(channel?.messages) ? channel?.messages || [] : [];
   const blocked = !!channel?.blocked;
@@ -3068,7 +3059,7 @@ function TeamChannelPanel({
       </div>
       <div className="wenyou-team-channel-quick">
         {quickMessages.map((item) => (
-          <button key={item.label} type="button" disabled={disabled || sending || blocked} onClick={() => onSend(item.text, false)}>
+          <button key={item.label} type="button" disabled={disabled || sending || blocked} onClick={() => onSend(item.text)}>
             {item.label}
           </button>
         ))}
@@ -3080,10 +3071,10 @@ function TeamChannelPanel({
           placeholder={blocked ? "信号中断..." : sending ? "调频中..." : `按住频段发给${peerName}...`}
           disabled={disabled || sending || blocked}
           onKeyDown={(e) => {
-            if (e.key === "Enter") onSend(undefined, false);
+            if (e.key === "Enter") onSend();
           }}
         />
-        <button type="button" disabled={disabled || sending || blocked || !text.trim()} onClick={() => onSend(undefined, false)}>
+        <button type="button" disabled={disabled || sending || blocked || !text.trim()} onClick={() => onSend()}>
           <Icon name="send" />
           <span>发送</span>
         </button>

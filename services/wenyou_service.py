@@ -523,6 +523,16 @@ def _merge_panel_into_session_stats(session: dict, parsed: dict, include_vitals:
         st["inventory"] = list(parsed["inventory"])
 
 
+def _mainline_completion_signal(text: Any) -> bool:
+    body = str(text or "")
+    return bool(
+        re.search(
+            r"(主线完成|主线已完成|任务完成|任务已完成|通关|副本结束|回归主神空间|返回主神空间|进入结算|完成返回)",
+            body,
+        )
+    )
+
+
 def _apply_rules_state_updates(session: dict, event_intent: dict) -> dict:
     if not isinstance(event_intent, dict):
         return {}
@@ -544,15 +554,6 @@ def _apply_rules_state_updates(session: dict, event_intent: dict) -> dict:
     violation_updates: list[dict] = []
     settlement_updates: list[dict] = []
     reward_updates: list[dict] = []
-
-    def _mainline_completion_signal(text: Any) -> bool:
-        body = str(text or "")
-        return bool(
-            re.search(
-                r"(主线完成|主线已完成|任务完成|任务已完成|通关|副本结束|回归主神空间|返回主神空间|进入结算|完成返回)",
-                body,
-            )
-        )
 
     if event_intent.get("task_update"):
         entry = _task_progress_entry(
@@ -777,6 +778,36 @@ def _apply_event_intent(session: dict, event_intent: Optional[dict]) -> Optional
     session["last_state_patch"] = state_patch
     session["stats"] = st
     return state_patch
+
+
+def _session_mainline_completed(session: dict) -> bool:
+    rules = _rules_state_from_session(session)
+    flags = _settlement_flags_from_raw(rules.get("settlement_flags"))
+    if flags.get("mainline_status") == "completed":
+        return True
+    tasks = _rules_mapping(rules.get("task_progress"), "task")
+    return any(
+        str(task.get("type") or "main") == "main" and str(task.get("status") or "") == "completed"
+        for task in tasks.values()
+        if isinstance(task, dict)
+    )
+
+
+def _maybe_enter_settlement_phase(session: dict) -> bool:
+    if _session_phase(session) != "instance_running":
+        return False
+    if not _session_mainline_completed(session):
+        return False
+    _session_ensure_stats(session)
+    session["phase"] = "settlement"
+    session.setdefault("stats", {})["phase"] = "settlement"
+    runtime = session.get("runtime_state") if isinstance(session.get("runtime_state"), dict) else {}
+    public = runtime.get("public_state") if isinstance(runtime.get("public_state"), dict) else {}
+    public["last_rules_result"] = "主线完成，已进入结算。"
+    runtime["public_state"] = public
+    session["runtime_state"] = runtime
+    session["runtime_state"] = _runtime_state_view(session)
+    return True
 
 
 def _format_state_patch_for_display(state_patch: Optional[dict]) -> str:
@@ -5808,8 +5839,7 @@ def _ai_player_channel_system(actor_name: str, player1_name: str) -> str:
 边界：
 - 只说{actor}知道、看到、能合理推断的信息；不要编造隐藏线索、隐藏规则或判定结果。
 - 不替{target}行动，不替 GM 结算，不宣称状态、道具、积分已经改变。
-- 如果对讲机模式是“短讯通话”，只回复消息，不新增现实行动。
-- 如果对讲机模式是“同步行动”，输出{actor}准备执行的本轮行动，必须具体、可被 GM 结算。
+- 对讲机只是局内交流频道，只回复消息，不新增现实行动，不消耗回合。
 - 如果上下文显示信号弱、杂音、串台或监听风险，回复里可以短促、断续或提醒风险，但不要乱编第三方消息。
 - 惩罚副本里必须维持 NPC 身份，不要说出主神空间、任务者身份或其他真实来源。
 - 最终只输出{actor}通过对讲机发出的正文，20-160 字；不要 Markdown，不要解释，不要系统提示。
@@ -5870,7 +5900,6 @@ def build_ai_player_channel_messages(
     player_message: str,
     *,
     actor_id: Any = "player2",
-    consume_turn: bool = False,
 ) -> Optional[list[dict]]:
     uid = int(user_id)
     session = r2_store.get_wenyou_session(uid)
@@ -5881,18 +5910,17 @@ def build_ai_player_channel_messages(
     player1_name = _wallet_player_display_name(wallet, "player1", "") or _session_player_display_name(session, "player1", "玩家一")
     actor_name = _wallet_player_display_name(wallet, actor, "") or _session_player_display_name(session, actor, _player_display_name(actor))
     context = compose_ai_player_context(session, actor_id=actor_id, wallet=wallet, user_id=uid)
-    mode = "同步行动" if consume_turn else "短讯通话"
     user_prompt = "\n".join(
         [
             "[WENYOU WALKIE TALKIE]",
-            f"对讲机模式：{mode}",
+            "对讲机模式：频道交流；不消耗回合；不产生现实行动。",
             "只读上下文 JSON：",
             _json_for_prompt(context.get("ai_player_context") or {}, max_chars=14000),
             "",
             f"{player1_name}通过对讲机发来的消息：",
             _compact_text(player_message, 900) or "（空）",
             "",
-            f"请以{actor_name}身份回复。短讯通话只交换信息；同步行动要输出{actor_name}准备执行的本轮行动。",
+            f"请以{actor_name}身份回复，只交换信息，不要输出本轮行动。",
             "[/WENYOU WALKIE TALKIE]",
         ]
     )
@@ -5925,23 +5953,13 @@ def cmd_team_channel_message(
         r2_store.save_wenyou_session(uid, session)
         return False, str(signal.get("risk") or "对讲机信号中断。"), ""
 
+    consume_turn = False
     reply = _compact_text(ai_player_reply, 500)
-    _append_team_channel_log(session, "player1", text, consume_turn=consume_turn)
+    _append_team_channel_log(session, "player1", text, consume_turn=False)
     if reply:
-        _append_team_channel_log(session, "player2", reply, consume_turn=consume_turn)
+        _append_team_channel_log(session, "player2", reply, consume_turn=False)
     r2_store.save_wenyou_session(uid, session)
-
-    if not consume_turn:
-        return True, reply or "对讲机里只有短促杂音，暂时没有收到清晰回应。", ""
-
-    p2_stats = (session.get("stats") or {}).get("player2") if isinstance(session.get("stats"), dict) else {}
-    p2_name = _normalize_player_display_name((p2_stats or {}).get("display_name") if isinstance(p2_stats, dict) else "", "玩家二")
-    player_action = f"通过对讲机联系{p2_name}：{text}"
-    gm_text, ai_action = cmd_action_with_ai_player(uid, player_action, ai_player_action=reply)
-    failed = gm_text.startswith("文游：")
-    if failed:
-        return False, gm_text, reply
-    return True, gm_text, ai_action or reply
+    return True, reply or "对讲机里只有短促杂音，暂时没有收到清晰回应。", ""
 
 
 def get_player_tool_schemas() -> list[dict]:
@@ -6810,8 +6828,9 @@ def cmd_go(user_id: int) -> str:
     if parsed:
         _merge_panel_into_session_stats(session, parsed, include_vitals=not bool(event_intent))
     state_patch = _apply_event_intent(session, event_intent)
+    _maybe_enter_settlement_phase(session)
 
-    gm_visible = _replace_session_player_aliases(session, gm_out)
+    gm_visible = _strip_event_intent_block(_replace_session_player_aliases(session, gm_out))
     ts = now_beijing_iso()
     for line in p1:
         if str(line or "").strip():
