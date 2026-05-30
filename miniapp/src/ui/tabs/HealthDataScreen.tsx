@@ -398,11 +398,11 @@ function BiometricMetric({
   compact?: boolean;
   tone?: "light" | "dark";
 }) {
-  const valueSize = compact ? "text-[40px]" : "text-[58px]";
+  const valueSize = compact ? "text-[34px]" : "text-[48px]";
   return (
     <div className="min-w-0">
       <div className={`truncate text-[9px] font-semibold uppercase tracking-[0.22em] ${tone === "dark" ? "text-white/38" : "text-black/42"}`}>{label}</div>
-      <div className={`${compact ? "mt-2 min-h-[42px]" : "mt-4 min-h-[64px]"} flex min-w-0 items-start gap-1.5 overflow-hidden`}>
+      <div className={`${compact ? "mt-2 min-h-[38px]" : "mt-4 min-h-[54px]"} flex min-w-0 items-start gap-1.5 overflow-hidden`}>
         <span
           className={`${valueSize} min-w-0 shrink leading-none tracking-normal ${tone === "dark" ? "text-white" : "text-black"}`}
           style={{ fontFamily: ANNIVERSARY_NUMBER_FONT, fontWeight: 500 }}
@@ -411,7 +411,7 @@ function BiometricMetric({
         </span>
         {unit ? (
           <span
-            className={`shrink-0 translate-y-[33px] text-[13px] italic tracking-normal ${tone === "dark" ? "text-white/46" : "text-black/46"}`}
+            className={`shrink-0 translate-y-[27px] text-[12px] italic tracking-normal ${tone === "dark" ? "text-white/46" : "text-black/46"}`}
             style={{ fontFamily: ANNIVERSARY_NUMBER_FONT }}
           >
             {unit}
