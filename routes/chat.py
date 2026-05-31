@@ -198,6 +198,82 @@ def _last_user_for_archive(last_user: Optional[dict], *, reply_target: str, wind
     return last_user
 
 
+def _plain_message_text(msg: Optional[dict]) -> str:
+    content = (msg or {}).get("content")
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("content") or ""))
+            else:
+                parts.append(str(item))
+        return " ".join(p for p in parts if p).strip()
+    return str(content or "").strip()
+
+
+def _clip_archive_text(text: str, limit: int = 180) -> str:
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _compact_gateway_reminder_for_archive(user_msg: dict) -> dict:
+    text = _plain_message_text(user_msg)
+    if "闹钟" in text and ("到点" in text or "提醒" in text):
+        content = "这是一次闹钟提醒。"
+    elif text.startswith("这是一次随机唤醒"):
+        content = "这是一次随机唤醒提醒。"
+    elif "[Proactive trigger fact]" in text:
+        content = "这是一次后端触发提醒。"
+    else:
+        content = "这是一次网关唤醒提醒。"
+    return {"role": "user", "content": content}
+
+
+def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
+    raw = _plain_message_text(assistant_msg)
+    decision: dict = {}
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            decision = parsed
+    except Exception:
+        decision = {}
+
+    action = str(decision.get("action") or "").strip()
+    action_label = {
+        "send_message": "主动发消息",
+        "no_contact": "暂时不打扰",
+        "diary": "去写日记/记事",
+        "other": "先做其它动作",
+    }.get(action, action or "记录判断")
+    lines = [f"渡的决策：{action_label}。"]
+
+    reason = _clip_archive_text(str(decision.get("reason") or decision.get("du_reason") or "").strip(), 180)
+    if reason:
+        lines.append(f"理由：{reason}")
+    message = _clip_archive_text(str(decision.get("message") or "").strip(), 160)
+    if message:
+        lines.append(f"要发的话：{message}")
+    channel = _clip_archive_text(str(decision.get("channel") or "").strip(), 40)
+    if channel and action == "send_message":
+        lines.append(f"渠道：{channel}")
+
+    if len(lines) == 1 and raw:
+        lines.append(_clip_archive_text(raw, 220))
+    return {"role": "assistant", "content": "\n".join(lines)}
+
+
+def _build_round_cleaned_for_archive(user_msg: dict, assistant_msg: dict, *, reply_target: str, window_id: str) -> list:
+    archive_user = _last_user_for_archive(user_msg, reply_target=reply_target, window_id=window_id)
+    archive_assistant = assistant_msg
+    if _is_proactive_decision_request():
+        archive_user = _compact_gateway_reminder_for_archive(archive_user or user_msg)
+        archive_assistant = _compact_proactive_decision_for_archive(assistant_msg)
+    return build_round_cleaned_for_r2(archive_user, archive_assistant)
+
+
 def _is_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-GEN") or "").strip().lower() in ("1", "true", "yes")
 
@@ -446,9 +522,7 @@ def _stream_with_r2_archive(
             stream_sec = time.time() - stream_start
             # 若「流式持续时长」总是差不多（如 10–20s）而字数越来越短，可能是上游按时长限流
             logger.debug("本轮流式回复收集长度约 %s 字符，共转发 %s 个 data 块，流式持续约 %.1f 秒", len(full_content), data_chunk_count, stream_sec)
-            if _is_proactive_decision_request():
-                logger.info("R2 未存档：主动决策内部请求跳过会话存档")
-            elif du_daily_maintenance:
+            if du_daily_maintenance:
                 logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
             elif not is_failed_response(visible) and visible.strip():
                 msg = {"role": "assistant", "content": visible}
@@ -460,12 +534,11 @@ def _stream_with_r2_archive(
                     msg["thinking_blocks"] = thinking_blocks_parts
                 if reasoning_omitted:
                     msg["reasoning_omitted"] = True
-                archive_last_user = _last_user_for_archive(
-                    last_user,
-                    reply_target=_reply_target(),
-                    window_id=window_id,
+                round_cleaned = (
+                    _build_round_cleaned_for_archive(last_user, msg, reply_target=_reply_target(), window_id=window_id)
+                    if last_user
+                    else None
                 )
-                round_cleaned = build_round_cleaned_for_r2(archive_last_user, msg) if archive_last_user else None
                 logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
                 step_archive_and_maybe_summary(
                     window_id,
@@ -637,9 +710,7 @@ def _stream_with_r2_archive(
             logger.error("工具续轮结束但最终正文仍为空（流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
         full_reasoning = "".join(reasoning_parts).strip()
         logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
-        if _is_proactive_decision_request():
-            logger.info("R2 未存档：主动决策内部请求跳过会话存档")
-        elif du_daily_maintenance:
+        if du_daily_maintenance:
             logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
         elif is_failed_response(visible):
             logger.info("R2 未存档：流式回复被判为失败，跳过")
@@ -658,12 +729,11 @@ def _stream_with_r2_archive(
             tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
             if tc_trace:
                 msg["tool_calls"] = tc_trace
-            archive_last_user = _last_user_for_archive(
-                last_user,
-                reply_target=_reply_target(),
-                window_id=window_id,
+            round_cleaned = (
+                _build_round_cleaned_for_archive(last_user, msg, reply_target=_reply_target(), window_id=window_id)
+                if last_user
+                else None
             )
-            round_cleaned = build_round_cleaned_for_r2(archive_last_user, msg) if archive_last_user else None
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             step_archive_and_maybe_summary(
                 window_id,
@@ -1225,8 +1295,6 @@ def chat_completions():
             and not _is_delayed_followup_generation_request()
         ):
             logger.info("R2 未存档：延迟续话内部生成请求跳过存档")
-        elif _is_proactive_decision_request():
-            logger.info("R2 未存档：主动决策内部请求跳过会话存档")
         elif du_daily_maintenance:
             logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
         else:
@@ -1266,12 +1334,12 @@ def chat_completions():
             logger.info("存档/动态层触发 remote=%s ua=%s", request.remote_addr, (request.headers.get("User-Agent") or "")[:80])
             archive_messages = _copy.deepcopy(body.get("messages") or [])
             if last_user:
-                archive_last_user = _last_user_for_archive(
+                round_cleaned = _build_round_cleaned_for_archive(
                     last_user,
+                    msg_for_r2,
                     reply_target=reply_target,
                     window_id=window_id,
                 )
-                round_cleaned = build_round_cleaned_for_r2(archive_last_user, msg_for_r2)
                 if reply_channel in _NONSTREAM_FAST_RETURN_CHANNELS:
                     archived = step_archive_round(
                         window_id, archive_messages, msg_for_r2, round_cleaned_for_r2=round_cleaned
