@@ -216,7 +216,7 @@ def step_inject_current_base_model(body: dict) -> dict:
 
 
 def step_inject_humor_memes(body: dict) -> dict:
-    """每轮随机注入 3 个可选梗素材，是否使用交给渡自己判断。"""
+    """每轮随机注入 3 个梗素材，引导轻松场景优先挑贴合的一条化用。"""
     try:
         from services.humor_meme_bank import format_memes_for_system, pick_random_memes
 
