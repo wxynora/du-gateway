@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api";
-import { Btn } from "../components";
 import { tgReady } from "../tg";
 import { useToast } from "../toast";
 
@@ -53,10 +52,6 @@ export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => voi
   const [callStartedAt] = useState(() => Date.now());
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [draftName, setDraftName] = useState(DEFAULT_CONFIG.displayName);
-  const [draftSubtitle, setDraftSubtitle] = useState(DEFAULT_CONFIG.subtitle);
-  const [savingConfig, setSavingConfig] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
   const [callId, setCallId] = useState(() => `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const [callStartedAtIso] = useState(() => new Date().toISOString());
@@ -87,8 +82,6 @@ export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => voi
           ...(data.config || {}),
         };
         setConfig(next);
-        setDraftName(next.displayName || DEFAULT_CONFIG.displayName);
-        setDraftSubtitle(next.subtitle || DEFAULT_CONFIG.subtitle);
         setStatus("ready");
         setStatusText("已接通，点一下录音");
       } catch (e: any) {
@@ -291,33 +284,6 @@ export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => voi
     });
   }
 
-  async function saveVoiceConfig() {
-    setSavingConfig(true);
-    try {
-      const body = {
-        displayName: draftName,
-        subtitle: draftSubtitle,
-      };
-      const resp = await apiFetch("/miniapp-api/voice-config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
-      const next: VoiceConfig = { ...DEFAULT_CONFIG, ...(data.config || {}) };
-      setConfig(next);
-      setDraftName(next.displayName);
-      setDraftSubtitle(next.subtitle);
-      setSettingsOpen(false);
-      toast("通话设置已保存");
-    } catch (e: any) {
-      toast(e?.message || "保存失败");
-    } finally {
-      setSavingConfig(false);
-    }
-  }
-
   function endCall() {
     isClosingRef.current = true;
     cleanupMedia();
@@ -328,12 +294,7 @@ export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => voi
     <div className="overflow-hidden text-white voice-call-screen">
       <div className="relative z-10 flex min-h-[calc(100dvh-14rem)] flex-col bg-[#111214] px-5 pb-8 pt-5">
         <div className="flex items-center justify-end">
-          <div className="mr-3 text-[13px] text-white/72">{formatSeconds(elapsedSeconds)}</div>
-          <button className="voice-call-top-btn bg-white/10" onClick={() => setSettingsOpen(true)} type="button">
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1" />
-            </svg>
-          </button>
+          <div className="text-[13px] text-white/72">{formatSeconds(elapsedSeconds)}</div>
         </div>
 
         <div className="flex flex-1 flex-col items-center justify-center pt-8">
@@ -416,33 +377,6 @@ export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => voi
           </div>
         </div>
       </div>
-
-      {settingsOpen ? (
-        <div className="absolute inset-0 z-30 bg-black/35 backdrop-blur-[2px]">
-          <div className="absolute inset-x-0 bottom-0 rounded-t-[32px] bg-[rgba(13,20,31,0.98)] px-5 pb-8 pt-5">
-            <div className="flex items-center justify-between">
-              <div className="text-base font-medium text-white">通话设置</div>
-              <button className="voice-call-top-btn" type="button" onClick={() => setSettingsOpen(false)}>
-                <span className="text-lg leading-none">×</span>
-              </button>
-            </div>
-            <div className="mt-5 space-y-4">
-              <label className="block">
-                <div className="mb-2 text-xs text-white/55">显示名字</div>
-                <input className="voice-call-input" value={draftName} onChange={(e) => setDraftName(e.target.value)} maxLength={24} />
-              </label>
-              <label className="block">
-                <div className="mb-2 text-xs text-white/55">副标题</div>
-                <input className="voice-call-input" value={draftSubtitle} onChange={(e) => setDraftSubtitle(e.target.value)} maxLength={40} />
-              </label>
-              <div className="flex items-center gap-2 pt-1">
-                <Btn kind="blue" onClick={() => setSettingsOpen(false)} disabled={savingConfig}>取消</Btn>
-                <Btn kind="green" onClick={saveVoiceConfig} disabled={savingConfig}>{savingConfig ? "保存中..." : "保存"}</Btn>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
