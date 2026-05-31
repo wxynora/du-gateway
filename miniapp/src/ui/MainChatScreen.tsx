@@ -1473,9 +1473,14 @@ export function MainChatScreen({
                           className={`space-y-2 rounded-[20px] ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
                         >
                           {part.reasoning ? (
-                            <details open={expandReasoningByDefault} className="max-w-full rounded-[14px] border border-gray-100 bg-[#F7F7F7] px-3 py-2 text-[12px] text-gray-700">
-                              <summary className="cursor-pointer list-none text-[12px] font-medium text-gray-600">思维链</summary>
-                              <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words leading-6">{part.reasoning}</div>
+                            <details className="group max-w-full text-[12px] text-gray-500">
+                              <summary className="flex cursor-pointer list-none items-center gap-1 px-1 text-[12px] font-medium leading-5 text-gray-400 [&::-webkit-details-marker]:hidden">
+                                <span className="transition-transform group-open:rotate-90">&gt;</span>
+                                <span>碎碎念</span>
+                              </summary>
+                              <div className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap break-words px-1 pl-4 text-[12px] leading-5 text-gray-500">
+                                {part.reasoning}
+                              </div>
                             </details>
                           ) : null}
                           {part.systemCard?.type === "system_alarm_created" ? (
