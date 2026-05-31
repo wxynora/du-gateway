@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiFetch, buildApiAssetUrl } from "../api";
-import { Btn } from "../components";
 import { VoiceCallScreen } from "./VoiceCallScreen";
 import { useToast } from "../toast";
 
@@ -42,6 +41,15 @@ const DEFAULT_CONFIG: VoiceConfig = {
   useAvatarImage: false,
 };
 
+const surfaceCard =
+  "rounded-[28px] border border-gray-100/80 bg-white shadow-[0_8px_30px_-18px_rgba(15,23,42,0.28)]";
+const iconButton =
+  "flex h-10 w-10 items-center justify-center rounded-full border border-gray-100/80 bg-white text-gray-700 shadow-[0_4px_18px_-12px_rgba(15,23,42,0.35)] transition active:scale-[0.98]";
+const softButton =
+  "rounded-[16px] border border-gray-100/80 bg-white px-3 py-2 text-[12px] font-medium text-gray-700 shadow-[0_4px_18px_-12px_rgba(15,23,42,0.35)] transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
+const dangerButton =
+  "rounded-full bg-rose-50 px-3 py-1.5 text-[11px] font-medium text-rose-600 transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
+
 function formatDateTime(value: string): string {
   const raw = String(value || "").trim();
   if (!raw) return "-";
@@ -60,7 +68,7 @@ function groupByDate(items: CallRecordSummary[]): Array<{ date: string; items: C
 
 function RowArrow() {
   return (
-    <svg className="h-4 w-4 text-cream-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+    <svg className="h-4 w-4 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <path d="m9 6 6 6-6 6" />
     </svg>
   );
@@ -239,25 +247,29 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
   const isVoiceView = view === "voice";
 
   return (
-    <div className={isVoiceView ? "fixed inset-0 z-[80] overflow-auto bg-[#111214] text-white" : "fixed inset-0 z-[80] overflow-auto bg-[rgba(238,241,245,0.96)] text-cream-text backdrop-blur-xl"}>
-      <div className={isVoiceView ? "mx-auto min-h-dvh max-w-xl px-0 pb-0 pt-0 safe-bottom" : "mx-auto min-h-dvh max-w-xl px-4 pb-8 pt-4 safe-bottom"}>
+    <div className={isVoiceView ? "fixed inset-0 z-[80] overflow-auto bg-[#111214] text-white" : "fixed inset-0 z-[80] overflow-auto bg-[#FDFDFD] text-gray-900"}>
+      <div
+        className={isVoiceView ? "mx-auto min-h-dvh max-w-xl px-0 pb-0 pt-0 safe-bottom" : "mx-auto min-h-dvh w-full max-w-[620px] px-4 pb-8 pt-0 safe-bottom"}
+        style={isVoiceView ? undefined : { fontFamily: "'Microsoft YaHei', sans-serif" }}
+      >
         {!isVoiceView ? (
-        <div className="flex items-center justify-between">
-          <button className="neo-icon-btn h-10 w-10 text-sm" onClick={view === "home" ? onClose : () => setView("home")} type="button">
+        <div className="sticky top-0 z-10 -mx-4 mb-4 flex items-center justify-between border-b border-gray-100/70 bg-[#FDFDFD]/95 px-4 py-3 backdrop-blur">
+          <button className={iconButton} onClick={view === "home" ? onClose : () => setView("home")} type="button" aria-label={view === "home" ? "关闭" : "返回"}>
             {view === "home" ? (
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 6l12 12M18 6 6 18" /></svg>
             ) : (
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m15 6-6 6 6 6" /></svg>
             )}
           </button>
-          <div className="neo-chip">{view === "home" ? "通话" : view === "records" ? "通话记录" : "通话详情"}</div>
+          <div className="text-[16px] font-medium leading-6 tracking-normal text-gray-900">{view === "home" ? "通话" : view === "records" ? "通话记录" : "通话详情"}</div>
           <div className="w-10" />
         </div>
         ) : null}
 
         {view === "home" ? (
-          <div className="pt-4">
-            <div className="neo-panel-soft flex items-center gap-4 px-4 py-4">
+          <div className="flex flex-col gap-4 pb-8">
+            <section className={`${surfaceCard} p-4`}>
+              <div className="flex items-center gap-4">
               <label className="relative block cursor-pointer">
                 <input
                   type="file"
@@ -266,49 +278,47 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
                   onChange={(e) => uploadAvatar(e.target.files?.[0] || null)}
                   disabled={uploadingAvatar}
                 />
-                <div className="h-16 w-16 overflow-hidden rounded-full bg-[rgba(255,255,255,0.52)] shadow-[4px_4px_9px_rgba(173,182,196,0.18),-2px_-2px_4px_rgba(255,255,255,0.5)]">
+                <div className="h-16 w-16 overflow-hidden rounded-full border border-gray-100 bg-gray-50">
                   {avatarSrc ? (
                     <img src={avatarSrc} alt={config.displayName} className="h-full w-full object-cover" />
                   ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-[#D6E4F2] text-2xl font-semibold text-cream-text">
+                    <div className="flex h-full w-full items-center justify-center bg-gray-100 text-2xl font-semibold text-gray-700">
                       {(config.displayName || "渡").slice(0, 1)}
                     </div>
                   )}
                 </div>
-                <span className="absolute -bottom-1 -right-1 rounded-full bg-[#EFD5E1] px-2 py-0.5 text-[10px] text-cream-text shadow-[3px_3px_8px_rgba(173,182,196,0.2),-1px_-1px_3px_rgba(255,255,255,0.5)]">
+                <span className="absolute -bottom-1 -right-1 rounded-full bg-gray-900 px-2 py-0.5 text-[10px] font-medium text-white shadow-[0_8px_18px_-14px_rgba(15,23,42,0.7)]">
                   {uploadingAvatar ? "上传中" : "换头像"}
                 </span>
               </label>
-              <div className="min-w-0">
-                <div className="rounded-[22px] bg-[rgba(255,255,255,0.38)] px-3 py-2 text-[12px] leading-5 text-cream-text shadow-[inset_2px_2px_5px_rgba(173,182,196,0.18),inset_-1px_-1px_3px_rgba(255,255,255,0.55)]">
-                  {dailyWhisper || "今天也可以来和渡说说话。"}
-                </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[18px] font-medium leading-6 text-gray-900">{config.displayName || "渡"}</div>
+                <div className="mt-1 text-[12px] leading-5 text-gray-400">{config.subtitle || "语音通话中"}</div>
+                {dailyWhisper ? (
+                  <div className="mt-3 rounded-[18px] bg-gray-50 px-3 py-2 text-[12px] leading-5 text-gray-500">
+                    {dailyWhisper}
+                  </div>
+                ) : null}
               </div>
-            </div>
+              </div>
+            </section>
 
-            <div className="mt-4 overflow-hidden rounded-[28px] bg-[rgba(244,247,251,0.74)] shadow-[6px_6px_13px_rgba(170,180,194,0.22),-3px_-3px_7px_rgba(255,255,255,0.5)] backdrop-blur-xl">
+            <section className={`${surfaceCard} overflow-hidden`}>
               <button type="button" className={rowBase} onClick={() => setView("voice")}>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-medium">语音通话</span>
-                  <span className="mt-1 block text-xs text-cream-muted">点进去就是通话界面</span>
+                  <span className="block text-[15px] font-medium text-gray-900">语音通话</span>
+                  <span className="mt-1 block text-xs text-gray-400">进入语音通话界面</span>
                 </span>
                 <RowArrow />
               </button>
-              <button type="button" className={rowBase + " border-t border-white/40"} onClick={() => toast("视频通话先占位，后面再接")}>
+              <button type="button" className={rowBase + " border-t border-gray-50"} onClick={openRecords}>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-medium">视频通话</span>
-                  <span className="mt-1 block text-xs text-cream-muted">先占位，后面再做</span>
-                </span>
-                <span className="neo-tag-yellow">占位</span>
-              </button>
-              <button type="button" className={rowBase + " border-t border-white/40"} onClick={openRecords}>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-medium">通话记录</span>
-                  <span className="mt-1 block text-xs text-cream-muted">按日期时间查看每次通话</span>
+                  <span className="block text-[15px] font-medium text-gray-900">通话记录</span>
+                  <span className="mt-1 block text-xs text-gray-400">查看历史通话文字记录</span>
                 </span>
                 <RowArrow />
               </button>
-            </div>
+            </section>
           </div>
         ) : null}
 
@@ -319,30 +329,32 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
         ) : null}
 
         {view === "records" ? (
-          <div className="pt-4">
+          <div className="pb-8">
             <div className="mb-3 flex items-center justify-between">
-              <div className="text-sm font-medium text-cream-text">最近通话</div>
-              <Btn kind="blue" onClick={loadRecords} disabled={recordsLoading}>{recordsLoading ? "刷新中..." : "刷新"}</Btn>
+              <div className="text-sm font-medium text-gray-800">最近通话</div>
+              <button type="button" className={softButton} onClick={loadRecords} disabled={recordsLoading}>
+                {recordsLoading ? "刷新中..." : "刷新"}
+              </button>
             </div>
             <div className="space-y-4">
               {grouped.length ? (
                 grouped.map((group) => (
                   <div key={group.date}>
-                    <div className="mb-2 px-1 text-[11px] uppercase tracking-[0.18em] text-cream-muted">{group.date}</div>
-                    <div className="overflow-hidden rounded-[26px] bg-[rgba(244,247,251,0.72)] shadow-[6px_6px_13px_rgba(170,180,194,0.22),-3px_-3px_7px_rgba(255,255,255,0.48)] backdrop-blur-xl">
+                    <div className="mb-2 px-1 text-[11px] uppercase tracking-[0.12em] text-gray-400">{group.date}</div>
+                    <div className={`${surfaceCard} overflow-hidden`}>
                       {group.items.map((item, idx) => (
-                        <div key={item.id} className={idx > 0 ? "border-t border-white/40" : ""}>
+                        <div key={item.id} className={idx > 0 ? "border-t border-gray-50" : ""}>
                           <div className="flex items-center gap-3 px-4 py-3">
                             <button type="button" className="min-w-0 flex-1 text-left" onClick={() => openRecordDetail(item.id)}>
-                              <div className="truncate text-sm font-medium text-cream-text">{item.title || "语音通话"}</div>
-                              <div className="mt-1 text-[11px] text-cream-muted">
+                              <div className="truncate text-sm font-medium text-gray-900">{item.title || "语音通话"}</div>
+                              <div className="mt-1 text-[11px] text-gray-400">
                                 {formatDateTime(item.started_at)} · {item.turn_count} 条
                               </div>
-                              <div className="mt-2 truncate text-xs text-cream-muted">{item.preview || "暂无文字记录"}</div>
+                              <div className="mt-2 truncate text-xs text-gray-400">{item.preview || "暂无文字记录"}</div>
                             </button>
                             <button
                               type="button"
-                              className="rounded-full bg-[rgba(232,185,179,0.42)] px-3 py-1.5 text-[11px] text-[#8a4a43]"
+                              className={dangerButton}
                               onClick={() => deleteRecord(item.id)}
                               disabled={deletingId === item.id}
                             >
@@ -356,7 +368,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
                   </div>
                 ))
               ) : (
-                <div className="neo-panel-soft px-4 py-8 text-center text-sm text-cream-muted">
+                <div className={`${surfaceCard} px-4 py-8 text-center text-sm text-gray-400`}>
                   {recordsLoading ? "加载中..." : "还没有通话记录"}
                 </div>
               )}
@@ -365,17 +377,17 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
         ) : null}
 
         {view === "record-detail" ? (
-          <div className="pt-4">
-            <div className="neo-panel-soft px-4 py-4">
+          <div className="pb-8">
+            <div className={`${surfaceCard} px-4 py-4`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-[16px] font-semibold tracking-tight">{activeRecord?.title || "通话详情"}</div>
-                  <div className="mt-1 text-xs text-cream-muted">{formatDateTime(activeRecord?.started_at || "")}</div>
+                  <div className="text-[16px] font-semibold tracking-tight text-gray-900">{activeRecord?.title || "通话详情"}</div>
+                  <div className="mt-1 text-xs text-gray-400">{formatDateTime(activeRecord?.started_at || "")}</div>
                 </div>
                 {activeRecord?.id ? (
                   <button
                     type="button"
-                    className="rounded-full bg-[rgba(232,185,179,0.42)] px-3 py-1.5 text-[11px] text-[#8a4a43]"
+                    className={dangerButton}
                     onClick={() => deleteRecord(activeRecord.id)}
                     disabled={deletingId === activeRecord.id}
                   >
@@ -391,19 +403,19 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
                   <div
                     key={turn.id}
                     className={
-                      "neo-panel-soft px-4 py-3 " +
+                      `${surfaceCard} px-4 py-3 ` +
                       (turn.role === "user" ? "ml-10" : "mr-10")
                     }
                   >
-                    <div className="mb-1 text-[11px] uppercase tracking-[0.16em] text-cream-muted">
+                    <div className="mb-1 text-[11px] uppercase tracking-[0.12em] text-gray-400">
                       {turn.role === "user" ? "我的语音" : "他的语音"}
                     </div>
-                    <div className="text-sm leading-6 text-cream-text">{turn.text}</div>
-                    <div className="mt-2 text-[11px] text-cream-muted">{formatDateTime(turn.timestamp)}</div>
+                    <div className="text-sm leading-6 text-gray-700">{turn.text}</div>
+                    <div className="mt-2 text-[11px] text-gray-400">{formatDateTime(turn.timestamp)}</div>
                   </div>
                 ))
               ) : (
-                <div className="neo-panel-soft px-4 py-8 text-center text-sm text-cream-muted">这条通话还没有内容</div>
+                <div className={`${surfaceCard} px-4 py-8 text-center text-sm text-gray-400`}>这条通话还没有内容</div>
               )}
             </div>
           </div>
