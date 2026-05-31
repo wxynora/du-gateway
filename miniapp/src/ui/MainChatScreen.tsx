@@ -4,6 +4,7 @@ import { AvatarBubble, ChatActionButton, ChatBubbleFrame, ChatHeaderStatus, Html
 import {
   TRANSPARENT_BUBBLE_CLASS,
   resolveBubbleClass,
+  resolveBubbleSkin,
   type BubbleStyleKey,
 } from "./chatAppearance";
 import {
@@ -1422,14 +1423,14 @@ export function MainChatScreen({
                     {group.parts.map((part, index) => {
                       const matchId = getChatSearchMatchId(group.id, index);
                       const isActiveSearchPart = activeSearchMatchId === matchId;
-                      const decorated = !transparentBubbleEnabled && userBubbleStyle === "decor";
+                      const bubbleSkin = transparentBubbleEnabled ? undefined : resolveBubbleSkin(userBubbleStyle);
                       return (
                         <ChatBubbleFrame
                           key={`${group.id}-${index}`}
                           ref={(el) => {
                             searchResultRefs.current[matchId] = el;
                           }}
-                          decorated={decorated}
+                          skin={bubbleSkin}
                           align="right"
                           className={`block max-w-full rounded-[18px] px-3 py-2 text-left font-medium leading-relaxed shadow-sm ${
                             transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
@@ -1463,7 +1464,7 @@ export function MainChatScreen({
                     {group.parts.map((part, index) => {
                       const matchId = getChatSearchMatchId(group.id, index);
                       const isActiveSearchPart = activeSearchMatchId === matchId;
-                      const decorated = !transparentBubbleEnabled && group.role !== "benben" && assistantBubbleStyle === "decor";
+                      const bubbleSkin = transparentBubbleEnabled || group.role === "benben" ? undefined : resolveBubbleSkin(assistantBubbleStyle);
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -1524,7 +1525,7 @@ export function MainChatScreen({
                           ) : (
                             <>
                               <ChatBubbleFrame
-                                decorated={decorated}
+                                skin={bubbleSkin}
                                 className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
                                   transparentBubbleEnabled
                                     ? TRANSPARENT_BUBBLE_CLASS

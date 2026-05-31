@@ -6,6 +6,7 @@ import {
   TRANSPARENT_BUBBLE_CLASS,
   getBubbleStyleLabel,
   resolveBubbleClass,
+  resolveBubbleSkin,
   resolveChatFontFamily,
   type BubbleStyleKey,
 } from "./chatAppearance";
@@ -455,7 +456,7 @@ export function PersonalizationScreen({
                 <div className="flex items-start gap-3">
                   {showChatAvatars ? <div className="flex h-[32px] w-[32px] items-center justify-center rounded-full bg-[#EEF2FF] text-[13px] font-medium text-gray-700">渡</div> : null}
                   <ChatBubbleFrame
-                    decorated={!transparentBubbleEnabled && assistantBubbleStyle === "decor"}
+                    skin={transparentBubbleEnabled ? undefined : resolveBubbleSkin(assistantBubbleStyle)}
                     className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("assistant", assistantBubbleStyle)}`}
                     style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}
                   >
@@ -464,7 +465,7 @@ export function PersonalizationScreen({
                 </div>
                 <div className="flex justify-end gap-3">
                   <ChatBubbleFrame
-                    decorated={!transparentBubbleEnabled && userBubbleStyle === "decor"}
+                    skin={transparentBubbleEnabled ? undefined : resolveBubbleSkin(userBubbleStyle)}
                     align="right"
                     className={`inline-block w-fit rounded-[16px] px-3 py-2 font-medium leading-normal ${transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)}`}
                     style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}

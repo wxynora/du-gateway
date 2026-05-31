@@ -1296,3 +1296,8 @@ npm -C miniapp run android
 - 已完成：`miniapp/src/ui/chatAppearance.ts` 将装饰气泡展示名改为“心动兔兔”，并把 decor 基础气泡收敛为原气泡背景/文字色；`miniapp/src/ui/ChatPresentation.tsx` 新增 `HeartRabbitBubbleSkin`，把外发光、边缘虚化和叠加高光放到不占布局的皮肤层，贴纸层继续绝对定位贴合气泡边缘，不再改 `max-width`、`padding` 或 `line-height`。
 - 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过；`npm --prefix miniapp run build` 通过并同步 `miniapp_static` 新 hash 产物，只有既有 chunk size warning。
 - 未完成 / 下次继续：本轮没有把 `tools/bubble-customizer.html` 的全部材质/像素边框编辑器配置迁入 App，也没有清理主工作区已有旧 `miniapp_static` 构建残留；后续如继续迁移皮肤参数，仍需保持皮肤层不影响原气泡布局参数。
+
+当前状态（2026-05-31 生气emoji气泡皮肤）：
+- 已完成：新增 `生气emoji` 气泡样式，基于 `/Users/doraemon/Downloads/生气emoji.css` 提取两个图片贴纸到 `miniapp/src/assets/angry-emoji-*.png`；`chatAppearance.ts` 增加 `angry` 选项与 `resolveBubbleSkin`；`ChatPresentation.tsx` 支持 `heart-rabbit` / `angry-emoji` 两套皮肤层与贴纸层；聊天页和个性化预览都通过 `skin` 传入，不改变原气泡 `max-width/padding/line-height`。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过；`npm --prefix miniapp run build` 通过并同步 `miniapp_static`，仅有既有 chunk size warning。
+- 未完成 / 下次继续：未把 standalone `tools/bubble-customizer.html` 的完整编辑器控制面板迁入 App；主工作区旧 `miniapp_static` 构建残留仍未清理，继续不要混入提交。

@@ -2,10 +2,27 @@ import React from "react";
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import angryEmojiFaceUrl from "../assets/angry-emoji-face.png?url";
+import angryEmojiMarkUrl from "../assets/angry-emoji-mark.png?url";
 import sumikaBubbleStickerUrl from "../assets/sumika-bubble-sticker.png?url";
+import type { BubbleSkinKey } from "./chatAppearance";
 import { PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
 
-const SUMIKA_BUBBLE_STICKERS = [
+type BubbleStickerAnchor = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+type BubbleSticker = {
+  id: string;
+  anchor: BubbleStickerAnchor;
+  offsetX: number;
+  offsetY: number;
+  size: number;
+  rotate: number;
+  flipX?: boolean;
+} & (
+  | { type: "image"; src: string }
+  | { type: "text"; text: string }
+);
+
+const HEART_RABBIT_BUBBLE_STICKERS = [
   {
     id: "sumika-image",
     type: "image",
@@ -46,11 +63,37 @@ const SUMIKA_BUBBLE_STICKERS = [
     size: 14,
     rotate: 14,
   },
-] as const;
+] satisfies BubbleSticker[];
 
-type SumikaBubbleSticker = (typeof SUMIKA_BUBBLE_STICKERS)[number];
+const ANGRY_EMOJI_BUBBLE_STICKERS = [
+  {
+    id: "angry-emoji-face",
+    type: "image",
+    src: angryEmojiFaceUrl,
+    anchor: "bottom-right",
+    offsetX: -28,
+    offsetY: -17,
+    size: 36,
+    rotate: 0,
+  },
+  {
+    id: "angry-emoji-mark",
+    type: "image",
+    src: angryEmojiMarkUrl,
+    anchor: "top-left",
+    offsetX: -11,
+    offsetY: -5,
+    size: 24,
+    rotate: 0,
+  },
+] satisfies BubbleSticker[];
 
-function resolveSumikaStickerStyle(sticker: SumikaBubbleSticker): React.CSSProperties {
+function getBubbleStickers(skin: BubbleSkinKey): BubbleSticker[] {
+  if (skin === "angry-emoji") return ANGRY_EMOJI_BUBBLE_STICKERS;
+  return HEART_RABBIT_BUBBLE_STICKERS;
+}
+
+function resolveBubbleStickerStyle(sticker: BubbleSticker): React.CSSProperties {
   return {
     ...(sticker.anchor.endsWith("left")
       ? { left: `${sticker.offsetX}px` }
@@ -60,7 +103,7 @@ function resolveSumikaStickerStyle(sticker: SumikaBubbleSticker): React.CSSPrope
       : { top: `calc(100% + ${sticker.offsetY}px)` }),
     width: `${sticker.size}px`,
     height: `${sticker.size}px`,
-    transform: `rotate(${sticker.rotate}deg)`,
+    transform: `rotate(${sticker.rotate}deg)${sticker.flipX ? " scaleX(-1)" : ""}`,
     transformOrigin: "50% 50%",
   };
 }
@@ -84,6 +127,30 @@ function HeartRabbitBubbleSkin() {
       />
     </>
   );
+}
+
+function AngryEmojiBubbleSkin() {
+  return (
+    <>
+      <span
+        className="pointer-events-none absolute -inset-[2px] z-0 rounded-[inherit] bg-white/80 opacity-55"
+        aria-hidden="true"
+      />
+      <span
+        className="pointer-events-none absolute inset-0 z-0 rounded-[inherit] bg-white/80"
+        style={{
+          boxShadow:
+            "0 2px 2px rgba(70,63,54,0.05), 0 0 15px 6px rgba(209,209,209,0.28), inset 0 1px 0 rgba(255,255,255,0.72)",
+        }}
+        aria-hidden="true"
+      />
+    </>
+  );
+}
+
+function BubbleSkinLayer({ skin }: { skin: BubbleSkinKey }) {
+  if (skin === "angry-emoji") return <AngryEmojiBubbleSkin />;
+  return <HeartRabbitBubbleSkin />;
 }
 
 export function formatTokenCountValue(value?: number): string {
@@ -163,6 +230,7 @@ type ChatBubbleFrameProps = {
   className: string;
   style?: React.CSSProperties;
   decorated?: boolean;
+  skin?: BubbleSkinKey;
   align?: "left" | "right";
 };
 
@@ -171,9 +239,11 @@ export const ChatBubbleFrame = React.forwardRef<HTMLDivElement, ChatBubbleFrameP
   className,
   style,
   decorated = false,
+  skin,
   align = "left",
 }, ref) {
-  if (!decorated) {
+  const resolvedSkin = skin || (decorated ? "heart-rabbit" : undefined);
+  if (!resolvedSkin) {
     return (
       <div ref={ref} className={className} style={style}>
         {children}
@@ -186,16 +256,16 @@ export const ChatBubbleFrame = React.forwardRef<HTMLDivElement, ChatBubbleFrameP
       className={`relative isolate overflow-visible ${className} ${align === "right" ? "self-end" : ""}`}
       style={style}
     >
-      <HeartRabbitBubbleSkin />
+      <BubbleSkinLayer skin={resolvedSkin} />
       <div className="relative z-10">
         {children}
       </div>
       <span className="pointer-events-none absolute inset-0 z-20 overflow-visible" aria-hidden="true">
-        {SUMIKA_BUBBLE_STICKERS.map((sticker) => (
+        {getBubbleStickers(resolvedSkin).map((sticker) => (
           <span
             key={sticker.id}
             className="absolute grid select-none place-items-center leading-none"
-            style={resolveSumikaStickerStyle(sticker)}
+            style={resolveBubbleStickerStyle(sticker)}
           >
             {sticker.type === "image" ? (
               <img
