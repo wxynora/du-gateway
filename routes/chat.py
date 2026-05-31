@@ -221,14 +221,18 @@ def _clip_archive_text(text: str, limit: int = 180) -> str:
 def _compact_gateway_reminder_for_archive(user_msg: dict) -> dict:
     text = _plain_message_text(user_msg)
     if "闹钟" in text and ("到点" in text or "提醒" in text):
+        label = "闹钟提醒"
         content = "这是一次闹钟提醒。"
     elif text.startswith("这是一次随机唤醒"):
+        label = "随机唤醒"
         content = "这是一次随机唤醒提醒。"
     elif "[Proactive trigger fact]" in text:
+        label = "后端触发"
         content = "这是一次后端触发提醒。"
     else:
+        label = "网关提醒"
         content = "这是一次网关唤醒提醒。"
-    return {"role": "user", "content": content}
+    return {"role": "event", "archive_label": label, "content": content}
 
 
 def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:

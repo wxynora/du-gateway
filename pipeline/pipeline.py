@@ -670,12 +670,7 @@ def _rounds_to_context_text(rounds: list) -> str:
     for r in rounds:
         for m in r.get("messages", []):
             role = str(m.get("role", "") or "").strip().lower()
-            if role == "user":
-                role_label = "辛玥"
-            elif role == "assistant":
-                role_label = "我"
-            else:
-                role_label = role or "unknown"
+            role_label = _recent_context_role_label(m, role)
             content = m.get("content", "")
             if isinstance(content, list):
                 content = " ".join(
@@ -686,6 +681,17 @@ def _rounds_to_context_text(rounds: list) -> str:
         if action_note:
             lines.append(f"[action_note]: {action_note}")
     return "\n".join(lines) if lines else ""
+
+
+def _recent_context_role_label(msg: dict, role: str) -> str:
+    if role == "user":
+        return "辛玥"
+    if role == "assistant":
+        return "我"
+    if role == "event":
+        label = str((msg or {}).get("archive_label") or "").strip()
+        return label or "网关提醒"
+    return role or "unknown"
 
 
 def _build_action_note_from_tool_calls(tool_calls: list) -> str:
@@ -846,12 +852,7 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
             src_tag = f"【{src}】" if src else ""
             for m in (r.get("messages") or []):
                 role = str(m.get("role", "") or "").strip().lower()
-                if role == "user":
-                    role_label = "辛玥"
-                elif role == "assistant":
-                    role_label = "我"
-                else:
-                    role_label = role or "unknown"
+                role_label = _recent_context_role_label(m, role)
                 content = m.get("content", "")
                 if isinstance(content, list):
                     content = " ".join(
