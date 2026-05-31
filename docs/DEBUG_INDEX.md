@@ -1353,3 +1353,9 @@ npm -C miniapp run android
 - 已完成：`miniapp/src/ui/icons.tsx` 给 `BottomNavIcon` 增加可选 `className`，去掉 Dock 场景下旧图标自带的 `mb-1` 偏移；`miniapp/src/ui/AppShell.tsx` 将主页面底部留白从 `76px` 增到 `104px`，避免悬浮 Dock 压住列表底部内容。
 - 已验证：在干净 worktree 基于 `origin/main` 提交本轮改动，`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`npm run build` 通过并重建 `miniapp_static`，只有既有 chunk size warning。
 - 未完成 / 下次继续：本轮只改主底部导航样式，不改聊天页输入栏、二级页底部控件或导航结构。
+
+当前状态（2026-06-01 主动决策污染最近对话修复）：
+- 已查明：`tg_8260066512` 的 R2 tail4 里混入了两轮 `X-DU-PROACTIVE-DECISION` 内部主动决策请求，内容是“这是一次随机唤醒...”和 `{"action":...}` JSON；因此 `Prompt Cache` 的“最近对话”从约 553 跳到约 929，不是用户一句“我洗完了”撑大的。
+- 已完成：`routes/chat.py` 在流式/非流式存档路径都跳过 `X-DU-PROACTIVE-DECISION` 内部请求；`pipeline/pipeline.py::step_inject_latest_4_rounds_for_new_window` 会从最近 12 轮中筛掉历史主动决策污染轮次再补足 last4，避免旧 R2 数据继续进入“最近对话”。
+- 已验证：干净 worktree 基于 `origin/main` 运行 `.venv/bin/python -m py_compile routes/chat.py pipeline/pipeline.py`、last4 filter smoke、`git diff --check` 通过；服务器已 fast-forward 到 `603ad99` 并重启 `du-gateway`，线上模拟当前 `tg_8260066512` 注入确认不含“这是一次随机唤醒”和 `{"action"}`，最近对话估算约 284 tokens。
+- 未完成 / 下次继续：没有删除线上 R2 里已有的污染轮次；它们只是被注入过滤跳过。后续如果需要彻底清理历史，再单独做带备份的数据修剪。
