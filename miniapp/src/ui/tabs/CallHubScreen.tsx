@@ -1,13 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiFetch, buildApiAssetUrl } from "../api";
+import { apiFetch } from "../api";
 import { VoiceCallScreen } from "./VoiceCallScreen";
 import { useToast } from "../toast";
 
 type VoiceConfig = {
   displayName: string;
   subtitle: string;
-  avatarVersion: number;
-  useAvatarImage: boolean;
 };
 
 type CallRecordSummary = {
@@ -37,8 +35,6 @@ type ViewMode = "home" | "voice" | "records" | "record-detail";
 const DEFAULT_CONFIG: VoiceConfig = {
   displayName: "渡",
   subtitle: "语音通话中",
-  avatarVersion: 0,
-  useAvatarImage: false,
 };
 
 const surfaceCard =
@@ -74,14 +70,12 @@ function RowArrow() {
   );
 }
 
-export function CallHubScreen({ onClose }: { onClose: () => void }) {
+export function CallHubScreen({ onClose, duAvatarImage }: { onClose: () => void; duAvatarImage: string }) {
   const toast = useToast();
   const [view, setView] = useState<ViewMode>("home");
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [recordsLoading, setRecordsLoading] = useState(false);
-  const [uploadingAvatar, setUploadingAvatar] = useState(false);
-  const [avatarStamp, setAvatarStamp] = useState(0);
   const [deletingId, setDeletingId] = useState("");
   const [records, setRecords] = useState<CallRecordSummary[]>([]);
   const [activeRecord, setActiveRecord] = useState<CallRecordDetail | null>(null);
@@ -98,7 +92,6 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
           ...prev,
           ...DEFAULT_CONFIG,
           ...(data.config || {}),
-          avatarVersion: Math.max(Number(prev.avatarVersion || 0), Number(data?.config?.avatarVersion || 0)),
         }));
       })
       .catch(() => {});
@@ -167,80 +160,6 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
     }
   }
 
-  async function uploadAvatar(file: File | null) {
-    if (!file || uploadingAvatar) return;
-    setUploadingAvatar(true);
-    try {
-      const toDataUrl = (blob: Blob) =>
-        new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = () => reject(new Error("读取图片失败"));
-          reader.readAsDataURL(blob);
-        });
-      const loadImage = (src: string) =>
-        new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve(img);
-          img.onerror = () => reject(new Error("图片解码失败"));
-          img.src = src;
-        });
-      const canvasToBlob = (canvas: HTMLCanvasElement, quality: number) =>
-        new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob(
-            (blob) => {
-              if (blob) resolve(blob);
-              else reject(new Error("图片编码失败"));
-            },
-            "image/jpeg",
-            quality,
-          );
-        });
-      const maxUploadBytes = 1200 * 1024;
-      const maxSide = 1200;
-      let uploadBlob: Blob = file;
-      if (file.size > maxUploadBytes || file.type !== "image/jpeg") {
-        const src = await toDataUrl(file);
-        const img = await loadImage(src);
-        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) throw new Error("浏览器不支持图片处理");
-        ctx.drawImage(img, 0, 0, w, h);
-        let q = 0.9;
-        let out = await canvasToBlob(canvas, q);
-        while (out.size > maxUploadBytes && q > 0.55) {
-          q -= 0.08;
-          out = await canvasToBlob(canvas, q);
-        }
-        uploadBlob = out;
-      }
-      const form = new FormData();
-      form.append("file", uploadBlob, "voice-avatar.jpg");
-      const resp = await apiFetch("/miniapp-api/voice-avatar", { method: "POST", body: form });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
-      setConfig((prev) => ({
-        ...prev,
-        avatarVersion: Number(data.avatarVersion || prev.avatarVersion || 0),
-        useAvatarImage: true,
-      }));
-      setAvatarStamp(Date.now());
-      toast("头像已更新");
-    } catch (e: any) {
-      toast(e?.message || "头像上传失败");
-    } finally {
-      setUploadingAvatar(false);
-    }
-  }
-
-  const avatarSrc = config.useAvatarImage && config.avatarVersion > 0
-    ? buildApiAssetUrl(`/miniapp-api/voice-avatar/${config.avatarVersion}?s=${avatarStamp || 0}`)
-    : "";
   const rowBase =
     "flex w-full items-center gap-3 px-4 py-4 text-left transition active:scale-[0.995]";
 
@@ -270,36 +189,24 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
           <div className="flex flex-col gap-4 pb-8">
             <section className={`${surfaceCard} p-4`}>
               <div className="flex items-center gap-4">
-              <label className="relative block cursor-pointer">
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif"
-                  className="hidden"
-                  onChange={(e) => uploadAvatar(e.target.files?.[0] || null)}
-                  disabled={uploadingAvatar}
-                />
                 <div className="h-16 w-16 overflow-hidden rounded-full border border-gray-100 bg-gray-50">
-                  {avatarSrc ? (
-                    <img src={avatarSrc} alt={config.displayName} className="h-full w-full object-cover" />
+                  {duAvatarImage ? (
+                    <img src={duAvatarImage} alt={config.displayName} className="h-full w-full object-cover" />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center bg-gray-100 text-2xl font-semibold text-gray-700">
                       {(config.displayName || "渡").slice(0, 1)}
                     </div>
                   )}
                 </div>
-                <span className="absolute -bottom-1 -right-1 rounded-full bg-gray-900 px-2 py-0.5 text-[10px] font-medium text-white shadow-[0_8px_18px_-14px_rgba(15,23,42,0.7)]">
-                  {uploadingAvatar ? "上传中" : "换头像"}
-                </span>
-              </label>
-              <div className="min-w-0 flex-1">
-                <div className="text-[18px] font-medium leading-6 text-gray-900">{config.displayName || "渡"}</div>
-                <div className="mt-1 text-[12px] leading-5 text-gray-400">{config.subtitle || "语音通话中"}</div>
-                {dailyWhisper ? (
-                  <div className="mt-3 rounded-[18px] bg-gray-50 px-3 py-2 text-[12px] leading-5 text-gray-500">
-                    {dailyWhisper}
-                  </div>
-                ) : null}
-              </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[18px] font-medium leading-6 text-gray-900">{config.displayName || "渡"}</div>
+                  <div className="mt-1 text-[12px] leading-5 text-gray-400">{config.subtitle || "语音通话中"}</div>
+                  {dailyWhisper ? (
+                    <div className="mt-3 rounded-[18px] bg-gray-50 px-3 py-2 text-[12px] leading-5 text-gray-500">
+                      {dailyWhisper}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </section>
 
@@ -324,7 +231,7 @@ export function CallHubScreen({ onClose }: { onClose: () => void }) {
 
         {view === "voice" ? (
           <div className="pt-0">
-            <VoiceCallScreen onClose={() => setView("home")} />
+            <VoiceCallScreen onClose={() => setView("home")} duAvatarImage={duAvatarImage} />
           </div>
         ) : null}
 

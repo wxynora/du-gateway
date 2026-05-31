@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, buildApiAssetUrl } from "../api";
+import React, { useEffect, useRef, useState } from "react";
+import { apiFetch } from "../api";
 import { Btn } from "../components";
 import { tgReady } from "../tg";
 import { useToast } from "../toast";
@@ -7,8 +7,6 @@ import { useToast } from "../toast";
 type VoiceConfig = {
   displayName: string;
   subtitle: string;
-  avatarVersion: number;
-  useAvatarImage: boolean;
   theme?: string;
 };
 
@@ -17,8 +15,6 @@ type CallStatus = "connecting" | "ready" | "recording" | "recognizing" | "speaki
 const DEFAULT_CONFIG: VoiceConfig = {
   displayName: "渡",
   subtitle: "语音通话中",
-  avatarVersion: 0,
-  useAvatarImage: false,
   theme: "night",
 };
 
@@ -50,7 +46,7 @@ function resolveRecorderMimeType(): string {
   return supported || "";
 }
 
-export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
+export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => void; duAvatarImage: string }) {
   const toast = useToast();
   const [status, setStatus] = useState<CallStatus>("connecting");
   const [statusText, setStatusText] = useState("正在接通...");
@@ -60,10 +56,7 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [draftName, setDraftName] = useState(DEFAULT_CONFIG.displayName);
   const [draftSubtitle, setDraftSubtitle] = useState(DEFAULT_CONFIG.subtitle);
-  const [useAvatarImage, setUseAvatarImage] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
-  const [uploadingAvatar, setUploadingAvatar] = useState(false);
-  const [avatarStamp, setAvatarStamp] = useState(0);
   const [speakerOn, setSpeakerOn] = useState(true);
   const [callId, setCallId] = useState(() => `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const [callStartedAtIso] = useState(() => new Date().toISOString());
@@ -79,11 +72,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
   const previewTextRef = useRef("");
   const previewStampRef = useRef(0);
 
-  const avatarSrc = useMemo(() => {
-    if (!config.useAvatarImage || config.avatarVersion <= 0) return "";
-    return buildApiAssetUrl(`/miniapp-api/voice-avatar/${config.avatarVersion}?s=${avatarStamp || 0}`);
-  }, [avatarStamp, config.avatarVersion, config.useAvatarImage]);
-
   useEffect(() => {
     tgReady(false);
     let cancelled = false;
@@ -97,12 +85,10 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
         const next: VoiceConfig = {
           ...DEFAULT_CONFIG,
           ...(data.config || {}),
-          avatarVersion: Math.max(0, Number(data?.config?.avatarVersion || 0)),
         };
         setConfig(next);
         setDraftName(next.displayName || DEFAULT_CONFIG.displayName);
         setDraftSubtitle(next.subtitle || DEFAULT_CONFIG.subtitle);
-        setUseAvatarImage(!!next.useAvatarImage);
         setStatus("ready");
         setStatusText("已接通，点一下录音");
       } catch (e: any) {
@@ -311,8 +297,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       const body = {
         displayName: draftName,
         subtitle: draftSubtitle,
-        useAvatarImage,
-        avatarVersion: config.avatarVersion,
       };
       const resp = await apiFetch("/miniapp-api/voice-config", {
         method: "PUT",
@@ -325,77 +309,12 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
       setConfig(next);
       setDraftName(next.displayName);
       setDraftSubtitle(next.subtitle);
-      setUseAvatarImage(!!next.useAvatarImage);
       setSettingsOpen(false);
-      toast("通话头像已保存");
+      toast("通话设置已保存");
     } catch (e: any) {
       toast(e?.message || "保存失败");
     } finally {
       setSavingConfig(false);
-    }
-  }
-
-  async function uploadAvatar(file: File | null) {
-    if (!file) return;
-    setUploadingAvatar(true);
-    try {
-      const toDataUrl = (blob: Blob) =>
-        new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = () => reject(new Error("读取图片失败"));
-          reader.readAsDataURL(blob);
-        });
-      const loadImage = (src: string) =>
-        new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve(img);
-          img.onerror = () => reject(new Error("图片解码失败"));
-          img.src = src;
-        });
-      const canvasToBlob = (canvas: HTMLCanvasElement, quality: number) =>
-        new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("图片编码失败"))), "image/jpeg", quality);
-        });
-      const maxUploadBytes = 1200 * 1024;
-      let uploadBlob: Blob = file;
-      if (file.size > maxUploadBytes || file.type !== "image/jpeg") {
-        const src = await toDataUrl(file);
-        const img = await loadImage(src);
-        const scale = Math.min(1, 1200 / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) throw new Error("浏览器不支持图片处理");
-        ctx.drawImage(img, 0, 0, w, h);
-        let quality = 0.9;
-        let out = await canvasToBlob(canvas, quality);
-        while (out.size > maxUploadBytes && quality > 0.55) {
-          quality -= 0.08;
-          out = await canvasToBlob(canvas, quality);
-        }
-        uploadBlob = out;
-      }
-      const form = new FormData();
-      form.append("file", uploadBlob, "voice-avatar.jpg");
-      const resp = await apiFetch("/miniapp-api/voice-avatar", { method: "POST", body: form });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
-      setConfig((prev) => ({
-        ...prev,
-        avatarVersion: Number(data.avatarVersion || prev.avatarVersion || 0),
-        useAvatarImage: true,
-      }));
-      setAvatarStamp(Date.now());
-      setUseAvatarImage(true);
-      toast("头像已上传");
-    } catch (e: any) {
-      toast(e?.message || "头像上传失败");
-    } finally {
-      setUploadingAvatar(false);
     }
   }
 
@@ -419,8 +338,8 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
 
         <div className="flex flex-1 flex-col items-center justify-center pt-8">
           <div className="voice-call-avatar-wrap">
-            {avatarSrc ? (
-              <img src={avatarSrc} alt={config.displayName} className="h-full w-full object-cover" />
+            {duAvatarImage ? (
+              <img src={duAvatarImage} alt={config.displayName} className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full w-full items-center justify-center bg-[#2b2d31] text-[64px] font-semibold text-white">
                 {(config.displayName || "渡").slice(0, 1)}
@@ -515,15 +434,6 @@ export function VoiceCallScreen({ onClose }: { onClose: () => void }) {
               <label className="block">
                 <div className="mb-2 text-xs text-white/55">副标题</div>
                 <input className="voice-call-input" value={draftSubtitle} onChange={(e) => setDraftSubtitle(e.target.value)} maxLength={40} />
-              </label>
-              <label className="flex items-center justify-between rounded-[22px] bg-white/6 px-4 py-3 text-sm text-white/85">
-                <span>使用自定义头像</span>
-                <input type="checkbox" checked={useAvatarImage} onChange={(e) => setUseAvatarImage(e.target.checked)} />
-              </label>
-              <label className="block rounded-[22px] bg-white/6 px-4 py-3 text-sm text-white/82">
-                <div className="mb-2">上传头像</div>
-                <input type="file" accept="image/jpeg,image/png,image/webp,image/gif" disabled={uploadingAvatar} onChange={(e) => uploadAvatar(e.target.files?.[0] || null)} />
-                <div className="mt-2 text-xs text-white/42">{uploadingAvatar ? "上传中..." : "支持 jpg/png/webp/gif，最大 8MB"}</div>
               </label>
               <div className="flex items-center gap-2 pt-1">
                 <Btn kind="blue" onClick={() => setSettingsOpen(false)} disabled={savingConfig}>取消</Btn>

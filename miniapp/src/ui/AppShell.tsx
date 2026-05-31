@@ -778,7 +778,7 @@ export function AppShell({
           <DiagnosticsScreen />
         </FullScreenPane>
       ) : null}
-      {showCallHub ? <LazyPane><CallHubScreen onClose={() => setShowCallHub(false)} /></LazyPane> : null}
+      {showCallHub ? <LazyPane><CallHubScreen onClose={() => setShowCallHub(false)} duAvatarImage={duAvatarImage} /></LazyPane> : null}
       <input
         ref={myAvatarInputRef}
         type="file"
