@@ -81,6 +81,7 @@ type SilenceModeResponse = {
   error?: string;
 };
 type ChatScreenId = "du" | "group" | "wenyou" | null;
+type BackHandler = () => boolean;
 
 export function AppShell({
   onLogout,
@@ -110,6 +111,7 @@ export function AppShell({
   const [mainTab, setMainTab] = useState<MainTab>("chats");
   const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
   const wenyouBackHandlerRef = useRef<(() => boolean) | null>(null);
+  const callHubBackHandlerRef = useRef<BackHandler | null>(null);
   const [silenceModeEnabled, setSilenceModeEnabled] = useState(false);
   const [silenceModeSaving, setSilenceModeSaving] = useState(false);
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
@@ -373,6 +375,7 @@ export function AppShell({
     const removePromise = CapacitorApp.addListener("backButton", async () => {
       if (disposed) return;
       if (showCallHub) {
+        if (callHubBackHandlerRef.current?.()) return;
         setShowCallHub(false);
         return;
       }
@@ -778,7 +781,15 @@ export function AppShell({
           <DiagnosticsScreen />
         </FullScreenPane>
       ) : null}
-      {showCallHub ? <LazyPane><CallHubScreen onClose={() => setShowCallHub(false)} duAvatarImage={duAvatarImage} /></LazyPane> : null}
+      {showCallHub ? (
+        <LazyPane>
+          <CallHubScreen
+            onClose={() => setShowCallHub(false)}
+            duAvatarImage={duAvatarImage}
+            backHandlerRef={callHubBackHandlerRef}
+          />
+        </LazyPane>
+      ) : null}
       <input
         ref={myAvatarInputRef}
         type="file"

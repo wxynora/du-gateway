@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api";
 import { VoiceCallScreen } from "./VoiceCallScreen";
 import { useToast } from "../toast";
@@ -31,6 +31,7 @@ type CallRecordDetail = CallRecordSummary & {
 };
 
 type ViewMode = "home" | "voice" | "records" | "record-detail";
+type BackHandler = () => boolean;
 
 const DEFAULT_CONFIG: VoiceConfig = {
   displayName: "渡",
@@ -70,7 +71,15 @@ function RowArrow() {
   );
 }
 
-export function CallHubScreen({ onClose, duAvatarImage }: { onClose: () => void; duAvatarImage: string }) {
+export function CallHubScreen({
+  onClose,
+  duAvatarImage,
+  backHandlerRef,
+}: {
+  onClose: () => void;
+  duAvatarImage: string;
+  backHandlerRef?: React.MutableRefObject<BackHandler | null>;
+}) {
   const toast = useToast();
   const [view, setView] = useState<ViewMode>("home");
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
@@ -80,6 +89,22 @@ export function CallHubScreen({ onClose, duAvatarImage }: { onClose: () => void;
   const [records, setRecords] = useState<CallRecordSummary[]>([]);
   const [activeRecord, setActiveRecord] = useState<CallRecordDetail | null>(null);
   const grouped = useMemo(() => groupByDate(records), [records]);
+
+  const handleBackIntent = useCallback(() => {
+    if (view === "home") return false;
+    setView("home");
+    return true;
+  }, [view]);
+
+  useEffect(() => {
+    if (!backHandlerRef) return;
+    backHandlerRef.current = handleBackIntent;
+    return () => {
+      if (backHandlerRef.current === handleBackIntent) {
+        backHandlerRef.current = null;
+      }
+    };
+  }, [backHandlerRef, handleBackIntent]);
 
   useEffect(() => {
     let cancelled = false;
