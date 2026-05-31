@@ -1330,3 +1330,8 @@ npm -C miniapp run android
 - 已完成：自由聊模式不再按固定交替顺序接力；系统只根据模型正文里的 `@渡` / `@笨笨` 决定下一棒，没 @ 就自然停。渡和笨笨的提示词都明确“这是公共群聊广播”，避免把上一条第三方发言误读成私聊。
 - 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`python3 -m py_compile scripts/codex_group_chat_bridge.py services/codex_group_chat.py routes/miniapp/codex_group_chat.py` 通过；`npx vite build --outDir /tmp/du-gateway-miniapp-free-chat-broadcast-build --emptyOutDir true` 通过，只有既有 chunk size warning；`git diff --check -- miniapp/src/ui/MainChatScreen.tsx scripts/codex_group_chat_bridge.py docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 下次继续：本轮未重建 `miniapp_static`、未 push/重启；当前仓库仍有大量非本轮脏改和静态 hash 产物，提交时需要 partial stage，别混入小家、StudyRoom、微博热搜等半成品。
+
+当前状态（2026-06-01 兔兔探头气泡皮肤）：
+- 已完成：新增 `兔兔探头` 气泡样式，基于 `/Users/doraemon/Downloads/兔兔探头.css` 提取探头图片贴纸到 `miniapp/src/assets/peek-rabbit-sticker.png`；`chatAppearance.ts` 增加 `peek` 选项与 `peek-rabbit` 皮肤 key；`ChatPresentation.tsx` 增加 `PeekRabbitBubbleSkin` 和 `top-right` 贴纸层，继续不改原气泡 `max-width/padding/line-height`。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过；`npm --prefix miniapp run build` 通过并同步 `miniapp_static`，仅有既有 chunk size warning。
+- 未完成 / 下次继续：未把 standalone `tools/bubble-customizer.html` 的完整编辑器控制面板迁入 App；主工作区旧 `miniapp_static` 构建残留和其他半成品仍未清理，继续不要混入提交。
