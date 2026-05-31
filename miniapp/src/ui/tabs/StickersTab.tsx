@@ -1,9 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, apiJson, fetchWithInitDataHeaderOnly } from "../api";
-import { Btn } from "../components";
 import { useToast } from "../toast";
 
 type TagRow = { key: string; label_zh: string };
+
+const surfaceCard =
+  "rounded-[28px] border border-gray-100/80 bg-white shadow-[0_8px_30px_-18px_rgba(15,23,42,0.28)]";
+const softButton =
+  "rounded-[16px] border border-gray-100/80 bg-white px-3 py-2 text-[12px] font-medium text-gray-700 shadow-[0_4px_18px_-12px_rgba(15,23,42,0.35)] transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
+const darkButton =
+  "rounded-[16px] bg-gray-900 px-3 py-2 text-[12px] font-medium text-white shadow-[0_8px_20px_-14px_rgba(15,23,42,0.5)] transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45";
+const fieldClass =
+  "h-11 w-full rounded-[18px] border border-gray-100/90 bg-[#FAFAFA] px-3 text-[13px] text-gray-800 outline-none transition placeholder:text-gray-300 focus:border-gray-200 focus:bg-white";
 
 /**
  * 表情包预览：公网 R2 直链可直接 <img>。
@@ -72,20 +80,20 @@ function StickerPreviewImg({ objectKey, publicBase }: { objectKey: string; publi
 
   if (failed) {
     return (
-      <div className="w-full h-full flex items-center justify-center text-[10px] text-cream-muted px-1 text-center leading-tight" title={failed}>
+      <div className="flex h-full w-full items-center justify-center bg-gray-50 px-2 text-center text-[11px] leading-tight text-gray-400" title={failed}>
         预览失败
       </div>
     );
   }
   if (!src) {
-    return <div className="w-full h-full bg-[linear-gradient(145deg,rgba(255,255,255,0.64),rgba(236,241,247,0.52))] animate-pulse" aria-hidden />;
+    return <div className="h-full w-full animate-pulse bg-gray-50" aria-hidden />;
   }
 
   return (
     <img
       src={src}
       alt=""
-      className="w-full h-full object-cover"
+      className="h-full w-full object-contain p-2"
       loading="lazy"
       onError={() => {
         const pb = (publicBase || "").trim().replace(/\/$/, "");
@@ -174,6 +182,8 @@ export function StickersTab() {
     const arr = mapping[k];
     return Array.isArray(arr) ? arr : [];
   }, [activeTag, mapping, tagRows]);
+  const activeRow = tagRows.find((row) => row.key === (activeTag || tagRows[0]?.key || ""));
+  const previewStatus = publicBase ? "公网直链预览" : "网关代理预览";
 
   async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -255,89 +265,122 @@ export function StickersTab() {
   }
 
   return (
-    <div className="space-y-3 pb-24">
-      <div className="text-xs text-cream-muted leading-relaxed">
-        渡在 Telegram 回复句末可加 <code className="text-cream-text">[shy]</code> 等<strong>英文</strong>标签，网关会随机发一张该分类下的图。未配置公网时预览走网关代理。
-      </div>
-      <div className="neo-panel p-3 space-y-2">
-        <div className="text-[11px] text-cream-muted">新增分类（网关目录与 [tag] 均为英文代号；下方可填中文仅作本页展示名）</div>
-        <div className="flex flex-col gap-1.5">
-          <input
-            className="neo-input text-xs"
-            placeholder="英文代号，如 smug"
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value)}
-          />
-          <input
-            className="neo-input text-xs"
-            placeholder="展示名（可选，如 得意）"
-            value={newLabelZh}
-            onChange={(e) => setNewLabelZh(e.target.value)}
-          />
-          <Btn kind="pink" onClick={addCategory} disabled={adding}>
-            {adding ? "添加中…" : "添加分类"}
-          </Btn>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {tagRows.map((row) => (
-          <button
-            key={row.key}
-            type="button"
-            className={
-              "neo-segment px-2.5 py-1 text-[11px] " +
-              (activeTag === row.key ? "neo-segment-active" : "")
-            }
-            onClick={() => setActiveTag(row.key)}
-            title={row.key}
-          >
-            {row.label_zh || row.key}
-          </button>
-        ))}
-      </div>
-      <div className="flex items-center gap-2">
-        <Btn kind="blue" onClick={load} disabled={loading}>
-          {loading ? "刷新中..." : "刷新"}
-        </Btn>
-        <Btn kind="yellow" onClick={rebuild}>
-          重建映射
-        </Btn>
-      </div>
-      {publicBase ? (
-        <div className="text-[11px] text-cream-muted">公网预览基址：{publicBase}</div>
-      ) : (
-        <div className="text-[11px] text-cream-muted">未配置 R2_PUBLIC_URL，预览使用网关 /stickers/raw</div>
-      )}
+    <div
+      className="min-h-full bg-[#FDFDFD] px-4 pb-28 pt-4 text-gray-900"
+      style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}
+    >
+      <div className="mx-auto flex w-full max-w-[620px] flex-col gap-4">
+        <section className={`${surfaceCard} p-4`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[18px] font-medium leading-6 tracking-normal text-gray-900">表情包</div>
+              <div className="mt-1 truncate text-[12px] leading-5 text-gray-400">
+                {activeRow ? `${activeRow.label_zh || activeRow.key} · ${keysForTab.length} 张` : loading ? "加载中" : "暂无分类"}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <button type="button" className={softButton} onClick={load} disabled={loading || uploading}>
+                {loading ? "刷新中" : "刷新"}
+              </button>
+              <button type="button" className={softButton} onClick={rebuild} disabled={uploading}>
+                重建映射
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-3 border-t border-gray-50 pt-3">
+            <span className="text-[12px] text-gray-400">{previewStatus}</span>
+            {activeRow?.key ? (
+              <span className="rounded-full bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-500">
+                {activeRow.key}
+              </span>
+            ) : null}
+          </div>
+        </section>
 
-      <div className="grid grid-cols-3 gap-2">
-        {keysForTab.map((k) => (
-          <div key={k} className="relative aspect-square overflow-hidden neo-panel-soft">
-            <StickerPreviewImg objectKey={k} publicBase={publicBase} />
-            <button
-              type="button"
-              className="absolute top-1 right-1 neo-icon-btn h-6 w-6 text-xs leading-6"
-              onClick={() => removeKey(k)}
-              aria-label="删除"
-            >
-              ×
+        {tagRows.length ? (
+          <div className="-mx-4 overflow-x-auto px-4">
+            <div className="flex min-w-max gap-2 pb-1">
+              {tagRows.map((row) => {
+                const isActive = row.key === activeTag;
+                return (
+                  <button
+                    key={row.key}
+                    type="button"
+                    className={[
+                      "rounded-full border px-3.5 py-2 text-[12px] font-medium transition active:scale-[0.98]",
+                      isActive
+                        ? "border-gray-900 bg-gray-900 text-white shadow-[0_10px_22px_-18px_rgba(15,23,42,0.75)]"
+                        : "border-gray-100/90 bg-white text-gray-500 shadow-[0_4px_18px_-14px_rgba(15,23,42,0.3)]",
+                    ].join(" ")}
+                    onClick={() => setActiveTag(row.key)}
+                    title={row.key}
+                  >
+                    {row.label_zh || row.key}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        <section className={`${surfaceCard} p-4`}>
+          <div className="mb-3 text-[13px] font-medium text-gray-800">新增分类</div>
+          <div className="flex flex-col gap-2">
+            <input
+              className={fieldClass}
+              placeholder="英文代号，如 smug"
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value.toLowerCase())}
+              inputMode="latin"
+            />
+            <input
+              className={fieldClass}
+              placeholder="展示名，如 得意"
+              value={newLabelZh}
+              onChange={(e) => setNewLabelZh(e.target.value)}
+            />
+            <button type="button" className={`${darkButton} h-11`} onClick={addCategory} disabled={adding}>
+              {adding ? "添加中..." : "添加分类"}
             </button>
           </div>
-        ))}
-      </div>
-      {!keysForTab.length && !loading ? (
-        <div className="text-xs text-cream-muted">当前分类暂无图片，点右下角 + 上传。</div>
-      ) : null}
+        </section>
 
-      <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={onPickFile} />
-      <button
-        type="button"
-        className="fixed bottom-24 right-5 z-30 h-12 w-12 rounded-full border border-white/85 text-[28px] leading-[46px] text-cream-text shadow-soft2 bg-[linear-gradient(145deg,rgba(255,248,251,0.96),rgba(236,206,221,0.82))]"
-        disabled={uploading || !activeTag}
-        onClick={() => fileRef.current?.click()}
-        aria-label="上传"
-      >
-        {uploading ? "…" : "+"}
-      </button>
+        {keysForTab.length ? (
+          <div className="grid grid-cols-3 gap-2.5">
+            {keysForTab.map((k) => (
+              <div
+                key={k}
+                className="relative aspect-square overflow-hidden rounded-[24px] border border-gray-100/80 bg-white shadow-[0_4px_18px_-14px_rgba(15,23,42,0.24)]"
+              >
+                <StickerPreviewImg objectKey={k} publicBase={publicBase} />
+                <button
+                  type="button"
+                  className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full border border-white/80 bg-white/90 text-[15px] leading-none text-gray-400 shadow-[0_4px_12px_-8px_rgba(15,23,42,0.45)] backdrop-blur transition active:scale-95"
+                  onClick={() => removeKey(k)}
+                  aria-label="删除"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className={`${surfaceCard} flex min-h-32 items-center justify-center px-6 py-8 text-center text-[13px] text-gray-400`}>
+            当前分类暂无图片
+          </div>
+        )}
+
+        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={onPickFile} />
+        <button
+          type="button"
+          className="fixed bottom-24 right-5 z-30 flex h-[52px] w-[52px] items-center justify-center rounded-full border border-gray-100 bg-white text-[28px] font-light leading-none text-gray-800 shadow-[0_16px_30px_-18px_rgba(15,23,42,0.55)] transition active:scale-95 disabled:opacity-45"
+          disabled={uploading || !activeTag}
+          onClick={() => fileRef.current?.click()}
+          aria-label="上传"
+        >
+          {uploading ? "…" : "+"}
+        </button>
+      </div>
     </div>
   );
 }
