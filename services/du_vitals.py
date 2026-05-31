@@ -201,8 +201,9 @@ def normalize_vitals_payload(raw_block: str, previous: dict | None = None) -> di
     }
 
 
-def format_inject_block(latest: Optional[dict]) -> str:
-    guide = (
+def format_inject_block(_latest: Optional[dict] = None) -> str:
+    """拼成稳定的拟态节律隐藏块规则；不把上一组心率/呼吸回灌给模型。"""
+    return (
         "【渡的拟态心跳/呼吸参数（仅你与网关可见，勿在回复正文复述给老婆）】\n"
         "每轮回复都要在可见正文之后追加下面隐藏块，作为你这一轮自然反应后的拟态节律参数。\n"
         "隐藏块里只写下面 JSON 里的状态字段，不写解释文字；可见回复里不要提到这组参数。\n"
@@ -213,11 +214,3 @@ def format_inject_block(latest: Optional[dict]) -> str:
         "例：讨论方案或脑暴时 focus 高、tempo 可 up；亲密暧昧时 warmth 和 intimacy_heat 升；冲突或慌乱时 tension 升；平静陪伴时 warmth 稳、activation 低、tempo 可 settle。\n"
         "若同轮还有 DU_FOLLOWUP，DU_FOLLOWUP 仍必须是整条回复最后一个隐藏标记。\n"
     )
-    if not isinstance(latest, dict) or not latest:
-        return guide + "上一组状态：暂无。"
-    status = str(latest.get("status") or "").strip()
-    heart = str(latest.get("heart_bpm") or "").strip()
-    breath = str(latest.get("breath_rpm") or "").strip()
-    at = str(latest.get("at") or latest.get("updatedAt") or "").strip()
-    parts = [x for x in [status, f"{heart} bpm" if heart else "", f"{breath}/min" if breath else ""] if x]
-    return guide + f"上一组状态（{at or '未知时间'}）：{' · '.join(parts) or '暂无'}。"

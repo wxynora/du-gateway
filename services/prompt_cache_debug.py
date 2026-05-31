@@ -25,6 +25,8 @@ def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
         return "常识"
     if stripped.startswith("【核心XP与互动逻辑】"):
         return "NSFW规则"
+    if stripped.startswith("【渡的拟态心跳"):
+        return "拟态心跳规则"
     if stripped.startswith("如果你这句话说完，心里还是惦记着她"):
         return "followup规则"
     if idx == 0:
@@ -38,6 +40,7 @@ def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
         return []
     marker_labels = [
         ("【核心XP与互动逻辑】", "NSFW规则"),
+        ("【渡的拟态心跳", "拟态心跳规则"),
         ("如果你这句话说完，心里还是惦记着她", "followup规则"),
     ]
     markers: dict[int, str] = {}
@@ -80,7 +83,6 @@ def _dynamic_system_label_for_marker(marker: str) -> str:
         "今日：": "时间/日期",
         "老婆当前状态": "感知快照",
         "【渡的心事": "渡的心事",
-        "【渡的拟态心跳": "拟态心跳",
         "【渡的日常": "渡的日常",
         "【当前是在 RikkaHub": "RikkaHub提醒",
         "听了老婆的话，我想起来了一些之前的事": "可召回记忆",
@@ -104,7 +106,6 @@ def _dynamic_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
         "今日：",
         "老婆当前状态",
         "【渡的心事",
-        "【渡的拟态心跳",
         "【渡的日常",
         "【当前是在 RikkaHub",
         "听了老婆的话，我想起来了一些之前的事",

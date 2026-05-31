@@ -996,22 +996,21 @@ def step_inject_du_thought(body: dict, window_id: str) -> dict:
 
 def step_inject_du_vitals(body: dict, window_id: str) -> dict:
     """
-    全局注入：在 system 末尾追加「渡的拟态心跳/呼吸参数」隐藏块说明。
+    全局注入：在静态 system 段追加「渡的拟态心跳/呼吸参数」隐藏块说明。
     渡输出内部状态参数，网关截取后换算为心率/呼吸，老婆侧正文不可见。
     """
     _ = window_id
     try:
         from services.du_vitals import format_inject_block
 
-        latest = r2_store.get_du_vitals_latest()
-        block = format_inject_block(latest)
+        block = format_inject_block()
     except Exception as e:
         logger.debug("du_vitals 注入跳过 error=%s", e)
         return body
     if not (block or "").strip():
         return body
     inject = "\n\n" + block.strip()
-    body = _append_to_dynamic_system(body, inject)
+    body = _append_to_static_system(body, inject)
     return body
 
 

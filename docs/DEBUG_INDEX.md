@@ -1337,10 +1337,16 @@ npm -C miniapp run android
 - 未完成 / 下次继续：未把 standalone `tools/bubble-customizer.html` 的完整编辑器控制面板迁入 App；主工作区旧 `miniapp_static` 构建残留和其他半成品仍未清理，继续不要混入提交。
 
 当前状态（2026-06-01 动态区 prompt cache 构成监控）：
-- 已完成：`services/prompt_cache_debug.py` 在原有 `static_breakdown` 外新增 `dynamic_breakdown`，按动态 system 里的 marker 粗分为当前底座、时间/日期、感知快照、渡的心事、拟态心跳、渡的日常、热梗素材、最近对话、可召回记忆、RikkaHub 提醒、Notion 检索等块，并记录 `chars` / `est_tokens`。
+- 已完成：`services/prompt_cache_debug.py` 在原有 `static_breakdown` 外新增 `dynamic_breakdown`，按动态 system 里的 marker 粗分为当前底座、时间/日期、感知快照、渡的心事、渡的日常、热梗素材、最近对话、可召回记忆、RikkaHub 提醒、Notion 检索等块，并记录 `chars` / `est_tokens`；`static_breakdown` 会单独识别拟态心跳规则。
 - 已完成：`routes/chat.py` 的 `prompt_cache_debug` 日志新增 `dynamic_breakdown=标签≈tokens,...`，MiniApp 思维链页粉色 `Prompt Cache` 卡片新增 `dynamic breakdown`，方便直接看动态区从约 1000 涨到 2000 时是哪块撑大。
 - 已验证：`.venv/bin/python -m py_compile services/prompt_cache_debug.py routes/chat.py` 通过；后端 smoke 覆盖动态区拆分；基于当前 `origin/main` 重新执行 `npm -C miniapp run build -- --emptyOutDir=false` 并生成本轮静态产物；`git diff --check` 通过。
 - 未完成 / 下次继续：本轮只做监控展示和日志，不改任何注入预算/裁剪策略；仓库仍有大量既有脏改和旧静态 hash 产物，提交时需要只挑本轮文件/产物。
+
+当前状态（2026-06-01 拟态心跳静态化）：
+- 已完成：`pipeline/pipeline.py` 把 `step_inject_du_vitals` 从动态 system 改到静态 system 注入；`services/du_vitals.py` 不再读取或回灌上一组心率/呼吸状态，只保留稳定的隐藏块输出规则。
+- 已完成：`services/prompt_cache_debug.py` 将拟态心跳计入 `static_breakdown` 的“拟态心跳规则”，并从 `dynamic_breakdown` marker 中移除，避免动态区体积监控误把稳定规则算进去。
+- 已验证：`.venv/bin/python -m py_compile services/du_vitals.py pipeline/pipeline.py services/prompt_cache_debug.py` 通过；smoke 覆盖注入后 static breakdown 出现“拟态心跳规则”、dynamic breakdown 不再出现拟态心跳，且隐藏块文本不再包含“上一组状态”。
+- 未完成 / 下次继续：本轮只改提示词注入位置和 breakdown 归类，不改心率/呼吸参数的截取、存储、MiniApp 展示或通知逻辑。
 
 当前状态（2026-06-01 SumiTalk 底部 Dock 导航）：
 - 已完成：`miniapp/src/ui/BottomNav.tsx` 从满宽贴底 tab bar 改为 iOS Dock 风格的居中悬浮导航；Dock 使用半透明背景、圆角胶囊、内阴影/投影和 backdrop blur，当前 tab 轻微上浮并使用白色图标位。
