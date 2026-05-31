@@ -655,7 +655,7 @@ export function AppShell({
       ) : null}
       {!activeScreen ? (
         <>
-          <div className="relative min-h-dvh overflow-y-auto pb-[76px]">
+          <div className="relative min-h-dvh overflow-y-auto pb-[104px]">
             {renderMainTab()}
           </div>
           {!hasSecondaryPageOpen ? <BottomNav current={mainTab} onChange={setMainTab} /> : null}

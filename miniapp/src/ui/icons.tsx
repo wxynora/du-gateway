@@ -1,7 +1,7 @@
 export type BottomNavId = "chats" | "daily" | "study" | "tools" | "settings";
 
-export function BottomNavIcon({ id }: { id: BottomNavId }) {
-  const cls = "mb-1 h-[22px] w-[22px]";
+export function BottomNavIcon({ id, className = "mb-1 h-[22px] w-[22px]" }: { id: BottomNavId; className?: string }) {
+  const cls = className;
   if (id === "chats") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8A8.5 8.5 0 0 1 12.5 3h.5a8.48 8.48 0 0 1 8 8z" /></svg>;
   if (id === "daily") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>;
   if (id === "study") return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H21" /><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H21v20H6.5A2.5 2.5 0 0 1 4 19.5z" /><path d="M8 6h8M8 10h7" /></svg>;

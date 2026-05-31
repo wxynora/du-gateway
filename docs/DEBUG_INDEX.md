@@ -1341,3 +1341,9 @@ npm -C miniapp run android
 - 已完成：`routes/chat.py` 的 `prompt_cache_debug` 日志新增 `dynamic_breakdown=标签≈tokens,...`，MiniApp 思维链页粉色 `Prompt Cache` 卡片新增 `dynamic breakdown`，方便直接看动态区从约 1000 涨到 2000 时是哪块撑大。
 - 已验证：`.venv/bin/python -m py_compile services/prompt_cache_debug.py routes/chat.py` 通过；后端 smoke 覆盖动态区拆分；基于当前 `origin/main` 重新执行 `npm -C miniapp run build -- --emptyOutDir=false` 并生成本轮静态产物；`git diff --check` 通过。
 - 未完成 / 下次继续：本轮只做监控展示和日志，不改任何注入预算/裁剪策略；仓库仍有大量既有脏改和旧静态 hash 产物，提交时需要只挑本轮文件/产物。
+
+当前状态（2026-06-01 SumiTalk 底部 Dock 导航）：
+- 已完成：`miniapp/src/ui/BottomNav.tsx` 从满宽贴底 tab bar 改为 iOS Dock 风格的居中悬浮导航；Dock 使用半透明背景、圆角胶囊、内阴影/投影和 backdrop blur，当前 tab 轻微上浮并使用白色图标位。
+- 已完成：`miniapp/src/ui/icons.tsx` 给 `BottomNavIcon` 增加可选 `className`，去掉 Dock 场景下旧图标自带的 `mb-1` 偏移；`miniapp/src/ui/AppShell.tsx` 将主页面底部留白从 `76px` 增到 `104px`，避免悬浮 Dock 压住列表底部内容。
+- 已验证：在干净 worktree 基于 `origin/main` 提交本轮改动，`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`npm run build` 通过并重建 `miniapp_static`，只有既有 chunk size warning。
+- 未完成 / 下次继续：本轮只改主底部导航样式，不改聊天页输入栏、二级页底部控件或导航结构。
