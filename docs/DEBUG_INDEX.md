@@ -1335,3 +1335,9 @@ npm -C miniapp run android
 - 已完成：新增 `兔兔探头` 气泡样式，基于 `/Users/doraemon/Downloads/兔兔探头.css` 提取探头图片贴纸到 `miniapp/src/assets/peek-rabbit-sticker.png`；`chatAppearance.ts` 增加 `peek` 选项与 `peek-rabbit` 皮肤 key；`ChatPresentation.tsx` 增加 `PeekRabbitBubbleSkin` 和 `top-right` 贴纸层，继续不改原气泡 `max-width/padding/line-height`。
 - 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过；`npm --prefix miniapp run build` 通过并同步 `miniapp_static`，仅有既有 chunk size warning。
 - 未完成 / 下次继续：未把 standalone `tools/bubble-customizer.html` 的完整编辑器控制面板迁入 App；主工作区旧 `miniapp_static` 构建残留和其他半成品仍未清理，继续不要混入提交。
+
+当前状态（2026-06-01 动态区 prompt cache 构成监控）：
+- 已完成：`services/prompt_cache_debug.py` 在原有 `static_breakdown` 外新增 `dynamic_breakdown`，按动态 system 里的 marker 粗分为当前底座、时间/日期、感知快照、渡的心事、拟态心跳、渡的日常、热梗素材、最近对话、可召回记忆、RikkaHub 提醒、Notion 检索等块，并记录 `chars` / `est_tokens`。
+- 已完成：`routes/chat.py` 的 `prompt_cache_debug` 日志新增 `dynamic_breakdown=标签≈tokens,...`，MiniApp 思维链页粉色 `Prompt Cache` 卡片新增 `dynamic breakdown`，方便直接看动态区从约 1000 涨到 2000 时是哪块撑大。
+- 已验证：`.venv/bin/python -m py_compile services/prompt_cache_debug.py routes/chat.py` 通过；后端 smoke 覆盖动态区拆分；基于当前 `origin/main` 重新执行 `npm -C miniapp run build -- --emptyOutDir=false` 并生成本轮静态产物；`git diff --check` 通过。
+- 未完成 / 下次继续：本轮只做监控展示和日志，不改任何注入预算/裁剪策略；仓库仍有大量既有脏改和旧静态 hash 产物，提交时需要只挑本轮文件/产物。

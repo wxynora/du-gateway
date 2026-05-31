@@ -743,8 +743,13 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                 cache_debug = _build_cache_debug_entry(body_send, target_url, prompt_cache_profile, data or {})
                 usage_debug = cache_debug.get("usage") or {}
                 profile_debug = cache_debug.get("request") or {}
+                dynamic_breakdown_debug = ",".join(
+                    f"{part.get('label') or '动态区'}≈{part.get('est_tokens')}"
+                    for part in (profile_debug.get("dynamic_breakdown") or [])[:10]
+                    if isinstance(part, dict)
+                )
                 logger.info(
-                    "prompt_cache_debug host=%s model=%s static_est_tokens=%s dynamic_est_tokens=%s leading_est_tokens=%s cached_tokens=%s usage_returned=%s prompt_cache_key=%s",
+                    "prompt_cache_debug host=%s model=%s static_est_tokens=%s dynamic_est_tokens=%s leading_est_tokens=%s cached_tokens=%s usage_returned=%s prompt_cache_key=%s dynamic_breakdown=%s",
                     profile_debug.get("upstream_host") or "",
                     profile_debug.get("model") or "",
                     profile_debug.get("static_prefix_est_tokens"),
@@ -753,6 +758,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
                     usage_debug.get("cached_tokens"),
                     usage_debug.get("usage_returned"),
                     bool(profile_debug.get("prompt_cache_key")),
+                    dynamic_breakdown_debug,
                 )
                 # DEBUG 时打出上游原始响应的结构与内容摘要，便于核对格式
                 if data is not None and logger.isEnabledFor(10):  # DEBUG=10

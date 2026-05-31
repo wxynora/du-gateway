@@ -71,6 +71,90 @@ def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
     return out
 
 
+def _dynamic_system_label_for_marker(marker: str) -> str:
+    if marker.startswith("当前底座为："):
+        return "当前底座"
+    marker_map = {
+        "【本轮可选梗素材】": "热梗素材",
+        "【指代提醒】": "最近对话",
+        "今日：": "时间/日期",
+        "老婆当前状态": "感知快照",
+        "【渡的心事": "渡的心事",
+        "【渡的拟态心跳": "拟态心跳",
+        "【渡的日常": "渡的日常",
+        "【当前是在 RikkaHub": "RikkaHub提醒",
+        "听了老婆的话，我想起来了一些之前的事": "可召回记忆",
+        "【Notion 相关】": "Notion检索",
+    }
+    for prefix, label in marker_map.items():
+        if marker.startswith(prefix):
+            return label
+    return "动态区"
+
+
+def _dynamic_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
+    content = str(msg.get("content") or "")
+    if not content:
+        return []
+
+    markers = [
+        "当前底座为：",
+        "【本轮可选梗素材】",
+        "【指代提醒】",
+        "今日：",
+        "老婆当前状态",
+        "【渡的心事",
+        "【渡的拟态心跳",
+        "【渡的日常",
+        "【当前是在 RikkaHub",
+        "听了老婆的话，我想起来了一些之前的事",
+        "【Notion 相关】",
+    ]
+    boundaries: list[tuple[int, str]] = []
+    for marker in markers:
+        start = 0
+        while True:
+            pos = content.find(marker, start)
+            if pos < 0:
+                break
+            boundaries.append((pos, _dynamic_system_label_for_marker(marker)))
+            start = pos + max(1, len(marker))
+    boundaries.sort(key=lambda x: x[0])
+
+    out: list[dict] = []
+    if not boundaries:
+        chars = len(content)
+        return [
+            {
+                "index": idx,
+                "label": "动态区未识别",
+                "chars": chars,
+                "est_tokens": estimate_tokens("x" * chars),
+            }
+        ] if content.strip() else []
+
+    if boundaries[0][0] > 0 and content[: boundaries[0][0]].strip():
+        boundaries.insert(0, (0, "动态区未识别"))
+
+    for i, (start, label) in enumerate(boundaries):
+        end = boundaries[i + 1][0] if i + 1 < len(boundaries) else len(content)
+        piece = content[start:end]
+        if not piece.strip():
+            continue
+        chars = max(0, end - start)
+        if chars <= 0:
+            continue
+        out.append(
+            {
+                "index": idx,
+                "label": label,
+                "chars": chars,
+                "est_tokens": estimate_tokens("x" * chars),
+            }
+        )
+    return out
+
+
 def build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
     messages = (body or {}).get("messages") or []
     tools = (body or {}).get("tools") or []
@@ -80,6 +164,7 @@ def build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
     total_message_chars = 0
     dynamic_marker_seen = False
     static_breakdown: list[dict] = []
+    dynamic_breakdown: list[dict] = []
     for m in messages:
         if not isinstance(m, dict):
             continue
@@ -95,8 +180,10 @@ def build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
         if m.get("__dynamic__"):
             dynamic_marker_seen = True
             dynamic_chars += chars
+            dynamic_breakdown.extend(_dynamic_system_breakdown_parts(m, msg_idx))
         elif dynamic_marker_seen:
             dynamic_chars += chars
+            dynamic_breakdown.extend(_dynamic_system_breakdown_parts(m, msg_idx))
         else:
             static_chars += chars
             static_breakdown.extend(_static_system_breakdown_parts(m, msg_idx))
@@ -122,6 +209,7 @@ def build_prompt_cache_profile(body: dict, upstream_url: str = "") -> dict:
         "tools_chars": tools_chars,
         "tools_est_tokens": estimate_tokens("x" * tools_chars),
         "static_breakdown": static_breakdown,
+        "dynamic_breakdown": dynamic_breakdown,
         "dynamic_marker_seen": dynamic_marker_seen,
         "prompt_cache_key": str((body or {}).get("prompt_cache_key") or ""),
         "prompt_cache_retention": str((body or {}).get("prompt_cache_retention") or ""),

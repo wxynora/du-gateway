@@ -100,6 +100,7 @@ function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheD
           const inputTokens = firstUsageValue(usage, ["input_tokens", "prompt_tokens"]);
           const cacheKey = req.prompt_cache_key ? "已设置" : "未设置";
           const staticBreakdown = promptCacheBreakdown(req.static_breakdown);
+          const dynamicBreakdown = promptCacheBreakdown(req.dynamic_breakdown);
           return (
             <div key={idx} className="space-y-1.5 text-[11px] leading-4">
               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
@@ -121,6 +122,18 @@ function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheD
                     {staticBreakdown.map((part, partIdx) => (
                       <span key={`${part.label || "system"}-${partIdx}`} className="min-w-0 truncate">
                         {part.label || "system"} {tokenValue(part.est_tokens)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {dynamicBreakdown.length ? (
+                <div className="rounded-md border border-[#f6d7df] bg-white/45 px-2 py-1.5 text-[10px] leading-4 text-[#8a4055]">
+                  <div className="mb-0.5 font-semibold text-[#7a2d45]">dynamic breakdown</div>
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                    {dynamicBreakdown.map((part, partIdx) => (
+                      <span key={`${part.label || "dynamic"}-${partIdx}`} className="min-w-0 truncate">
+                        {part.label || "dynamic"} {tokenValue(part.est_tokens)}
                       </span>
                     ))}
                   </div>
