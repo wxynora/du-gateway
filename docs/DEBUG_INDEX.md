@@ -71,7 +71,7 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 ## MiniApp 小家 / 生活互动
 
 当前状态（2026-06-01）：
-- 已完成：`miniapp/src/ui/tabs/PixelHomeTab.tsx` 从旧像素地图、方向键、跟随/布置按键，改成拐角沙发版 2.5D 小家图片热区；三种透明图资产为 `miniapp/src/assets/life-home-day.png`、`life-home-night-on.png`、`life-home-night-off.png`。入口标题从「像素小家」改为「小家」。
+- 已完成：`miniapp/src/ui/tabs/PixelHomeTab.tsx` 从旧像素地图、方向键、跟随/布置按键，改成拐角沙发版 2.5D 小家图片热区；三种透明图资产为 `miniapp/src/assets/life-home-day.png`、`life-home-night-on.png`、`life-home-night-off.png`，已压到 900x720 量化 PNG，三张合计约 868KB。入口标题从「像素小家」改为「小家」。
 - 已完成：图片内热区包括床、浴室、书房、客厅沙发；床提供「睡觉 / 色色」，浴室提供「洗澡 / 色色」，书房提供「写日记 / 看书」，沙发提供「一起看电视」，每个选项只更新本地文字互动，不调用后端。
 - 已完成：床和客厅沙发不再使用宽泛大矩形热区；床改成贴床面的多边形，沙发拆成多段拐角形多边形热区，家具外但旧大框内的位置不会误触。
 - 已验证：干净临时 worktree 套用小家相关改动后，`npx tsc --noEmit`（`miniapp/`）和 `npm run build` 通过并重建 `miniapp_static`；本地 `http://127.0.0.1:5173/miniapp/` 实测小家页加载、床/沙发热区命中与旧大框外侧不误触可用。
