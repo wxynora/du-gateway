@@ -125,10 +125,9 @@ function readSavedMode(): HomeMode {
 
 export function PixelHomeTab() {
   const [mode, setMode] = useState<HomeMode>(() => readSavedMode());
-  const [selectedSpot, setSelectedSpot] = useState<SpotKey>("sofa");
-  const [hoveredSpot, setHoveredSpot] = useState<SpotKey | null>(null);
-  const selected = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpot) || HOTSPOTS[0], [selectedSpot]);
-  const [line, setLine] = useState(() => selected.line);
+  const [selectedSpot, setSelectedSpot] = useState<SpotKey | null>(null);
+  const selected = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpot) || null, [selectedSpot]);
+  const [line, setLine] = useState(() => HOME_MODES[readSavedMode()].line);
   const modeMeta = HOME_MODES[mode];
 
   useEffect(() => {
@@ -139,6 +138,7 @@ export function PixelHomeTab() {
 
   function changeMode(nextMode: HomeMode) {
     setMode(nextMode);
+    setSelectedSpot(null);
     setLine(HOME_MODES[nextMode].line);
   }
 
@@ -188,7 +188,6 @@ export function PixelHomeTab() {
           />
           {HOTSPOTS.map((spot) => {
             const active = selectedSpot === spot.key;
-            const preview = active || hoveredSpot === spot.key;
             return (
               <React.Fragment key={spot.key}>
                 {spot.parts.map((part, index) => {
@@ -215,23 +214,23 @@ export function PixelHomeTab() {
                       }`}
                       style={hotspotStyle}
                       onClick={() => selectSpot(spot)}
-                      onFocus={() => setHoveredSpot(spot.key)}
-                      onBlur={() => setHoveredSpot((current) => (current === spot.key ? null : current))}
-                      onMouseEnter={() => setHoveredSpot(spot.key)}
-                      onMouseLeave={() => setHoveredSpot((current) => (current === spot.key ? null : current))}
                     />
                   );
                 })}
-                <span
-                  className={`pointer-events-none absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/80 bg-[#FFE2A0] shadow-[0_0_12px_rgba(255,209,128,0.85)] transition ${preview ? "opacity-100" : "opacity-70"}`}
-                  style={{ left: `${spot.marker.left}%`, top: `${spot.marker.top}%` }}
-                />
-                <span
-                  className={`pointer-events-none absolute -translate-x-1/2 rounded-full bg-[#2F251D]/78 px-2 py-0.5 text-[10px] font-semibold text-[#FFF6DD] shadow-[0_4px_10px_rgba(38,28,20,0.22)] transition ${preview ? "opacity-100" : "opacity-0"}`}
-                  style={{ left: `${spot.marker.left}%`, top: `${spot.marker.labelTop ?? spot.marker.top + 2.2}%` }}
-                >
-                  {spot.label}
-                </span>
+                {active ? (
+                  <>
+                    <span
+                      className="pointer-events-none absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/80 bg-[#FFE2A0] shadow-[0_0_10px_rgba(255,209,128,0.78)]"
+                      style={{ left: `${spot.marker.left}%`, top: `${spot.marker.top}%` }}
+                    />
+                    <span
+                      className="pointer-events-none absolute -translate-x-1/2 rounded-full bg-[#2F251D]/78 px-2 py-0.5 text-[10px] font-semibold text-[#FFF6DD] shadow-[0_4px_10px_rgba(38,28,20,0.22)]"
+                      style={{ left: `${spot.marker.left}%`, top: `${spot.marker.labelTop ?? spot.marker.top + 2.2}%` }}
+                    >
+                      {spot.label}
+                    </span>
+                  </>
+                ) : null}
               </React.Fragment>
             );
           })}
@@ -241,23 +240,25 @@ export function PixelHomeTab() {
           <div className="mb-2 flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold tracking-[0.16em] text-[#9C7354]">DU</div>
-              <div className="mt-0.5 text-[15px] font-semibold text-[#3C352B]">{selected.title}</div>
+              <div className="mt-0.5 text-[15px] font-semibold text-[#3C352B]">{selected?.title || "小家"}</div>
             </div>
             <div className="rounded-full bg-[#EFE0CB] px-3 py-1 text-[11px] font-semibold text-[#725F4A]">{modeMeta.label}</div>
           </div>
           <div className="min-h-[44px] text-[14px] leading-relaxed text-[#3C352B]">{line}</div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {selected.actions.map((action) => (
-              <button
-                key={action.label}
-                type="button"
-                className="rounded-full border border-[#D5BA96] bg-[#F7E6C8] px-3 py-2 text-[13px] font-semibold text-[#5F4B37] shadow-[0_3px_8px_rgba(96,72,43,0.08)] active:translate-y-px"
-                onClick={() => setLine(action.line)}
-              >
-                {action.label}
-              </button>
-            ))}
-          </div>
+          {selected ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {selected.actions.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  className="rounded-full border border-[#D5BA96] bg-[#F7E6C8] px-3 py-2 text-[13px] font-semibold text-[#5F4B37] shadow-[0_3px_8px_rgba(96,72,43,0.08)] active:translate-y-px"
+                  onClick={() => setLine(action.line)}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
