@@ -1356,7 +1356,7 @@ npm -C miniapp run android
 
 当前状态（2026-06-01 主动决策污染最近对话修复）：
 - 已查明：`tg_8260066512` 的 R2 tail4 里混入了两轮 `X-DU-PROACTIVE-DECISION` 内部主动决策请求，内容是“这是一次随机唤醒...”和 `{"action":...}` JSON；因此 `Prompt Cache` 的“最近对话”从约 553 跳到约 929，不是用户一句“我洗完了”撑大的。
-- 已完成：`routes/chat.py` 对 `X-DU-PROACTIVE-DECISION` 内部请求继续存档，但存档前会把长网关提示压成 `role=event` 的“随机唤醒/闹钟提醒/后端触发”事件，不再顶着 `role=user` 或“辛玥”的名字；assistant 侧 JSON 压成“渡的决策：主动发消息/暂时不打扰 + 简短理由/要发的话”，不再把整段系统说明和原始 JSON 塞进 R2 last4。
+- 已完成：`routes/chat.py` 对 `X-DU-PROACTIVE-DECISION` 内部请求继续存档，但存档前会把长网关提示压成 `role=event` 的“随机唤醒/闹钟提醒/后端触发”事件，不再顶着 `role=user` 或“辛玥”的名字；assistant 侧 JSON 压成带 `archive_label=渡` 的“决策：主动发消息/暂时不打扰 + 简短理由/要发的话”，不再把整段系统说明和原始 JSON 塞进 R2 last4。
 - 已完成：`pipeline/pipeline.py::step_inject_latest_4_rounds_for_new_window` 会从最近 12 轮中筛掉历史主动决策污染轮次再补足 last4，避免旧 R2 数据继续进入“最近对话”；新存档的短版主动决策轮次可以正常作为短程连续性被注入，并显示成 `[随机唤醒]` / `[闹钟提醒]`，不显示 `[辛玥]`。
 - 已验证：干净 worktree 基于 `origin/main` 运行 `.venv/bin/python -m py_compile routes/chat.py pipeline/pipeline.py`、compact proactive archive smoke、last4 event rendering smoke、last4 filter smoke、`git diff --check` 通过；服务器已 fast-forward 并重启 `du-gateway`，线上模拟当前 `tg_8260066512` 注入确认不含历史“这是一次随机唤醒”和 `{"action"}`，最近对话估算约 284 tokens。
 - 未完成 / 下次继续：没有删除线上 R2 里已有的污染轮次；它们只是被注入过滤跳过。后续如果需要彻底清理历史，再单独做带备份的数据修剪。

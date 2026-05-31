@@ -687,6 +687,9 @@ def _recent_context_role_label(msg: dict, role: str) -> str:
     if role == "user":
         return "辛玥"
     if role == "assistant":
+        label = str((msg or {}).get("archive_label") or "").strip()
+        if label:
+            return label
         return "我"
     if role == "event":
         label = str((msg or {}).get("archive_label") or "").strip()

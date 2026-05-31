@@ -252,7 +252,7 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
         "diary": "去写日记/记事",
         "other": "先做其它动作",
     }.get(action, action or "记录判断")
-    lines = [f"渡的决策：{action_label}。"]
+    lines = [f"决策：{action_label}。"]
 
     reason = _clip_archive_text(str(decision.get("reason") or decision.get("du_reason") or "").strip(), 180)
     if reason:
@@ -266,7 +266,7 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
 
     if len(lines) == 1 and raw:
         lines.append(_clip_archive_text(raw, 220))
-    return {"role": "assistant", "content": "\n".join(lines)}
+    return {"role": "assistant", "archive_label": "渡", "content": "\n".join(lines)}
 
 
 def _build_round_cleaned_for_archive(user_msg: dict, assistant_msg: dict, *, reply_target: str, window_id: str) -> list:
