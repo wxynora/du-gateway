@@ -253,6 +253,11 @@ def create_task(body: dict, device_id: str = "") -> dict | None:
     with _LOCK:
         state = _load_state()
         state["tasks"] = _cleanup_tasks(state.get("tasks") or [])
+        client_request_id = str(task.get("client_request_id") or "").strip()
+        if client_request_id:
+            for existing in reversed(state["tasks"]):
+                if str((existing or {}).get("client_request_id") or "").strip() == client_request_id:
+                    return _public_task(existing)
         state["tasks"].append(task)
         if not _save_state(state):
             return None

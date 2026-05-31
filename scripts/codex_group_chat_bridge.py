@@ -310,7 +310,7 @@ def _build_group_trigger_note(task: dict[str, Any]) -> str:
     if "benben" not in mentions:
         return ""
     if str(task.get("du_reply") or "").strip():
-        return "本轮触发：辛玥明确 @ 了你；渡这轮已有回复，你可以看见但不用固定接在渡后面。"
+        return "本轮触发：这是自由讨论接力；辛玥的发言是同时发给渡和你的群聊广播，渡上一条是在公共群聊里抛出的发言。你可以直接接渡这句，也可以转向辛玥；如果想让渡继续，就在正文里明确 @渡，不 @ 就自然停。"
     return "本轮触发：辛玥明确 @ 了你；你可以直接回应辛玥和已有群聊，不要说等渡先回复。"
 
 

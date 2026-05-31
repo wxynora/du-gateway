@@ -1286,6 +1286,13 @@ npm -C miniapp run android
 - 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`npx vite build --outDir /tmp/du-gateway-miniapp-free-discussion-build --emptyOutDir true` 通过，只有既有 chunk size warning；`git diff --check -- miniapp/src/ui/MainChatScreen.tsx docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 下次继续：本轮不改 QQ 群聊 @ 存档链路，不做 @all/选择器 UI，也没有重建 `miniapp_static`；上线前需要重建静态产物并重启后端/bridge。
 
+当前状态（2026-05-31 三人群聊自由讨论控制升级）：
+- 已完成：自由讨论接力会在群聊标题下显示状态，如“群聊接力中，等笨笨首条回复”和“群聊接力中 1/3，轮到渡/笨笨”，避免用户看不出后台是否还在讨论。
+- 已完成：接力中发送“停一下 / 别聊了 / 先这样 / 收尾”等会立即递增 run id，让旧接力停止继续贴消息；如果有 pending 的笨笨任务，会沿用取消任务链路，否则群里补一条“群聊接力已停下。”。
+- 已完成：发送“继续聊 / 再聊 / 继续讨论 / 你俩继续 / 再聊两轮”等会基于上一条讨论快照继续接力，默认再聊 2 条，可识别“一/三/1/3”调整到 1 或 3 条，仍受最多 3 条限制。
+- 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`npx vite build --outDir /tmp/du-gateway-miniapp-group-control-build --emptyOutDir true` 通过，只有既有 chunk size warning；`git diff --check -- miniapp/src/ui/MainChatScreen.tsx docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：本轮仍不改后端 bridge、不改 QQ 群聊 @ 存档，也不做 @all/选择器 UI；如果要 push，需要像上轮一样 partial stage，避免混入小家、微博热搜、思维链样式和静态 hash 脏改。
+
 当前状态（2026-05-31 QQ 入站语音转写）：
 - 已完成：`connectors/qq_onebot/src/main.js` 支持私聊和被 @ 的群聊 `record/voice/audio` 段；入站 QQ 语音会优先通过 NapCat/OneBot `get_record(out_format=wav)` 取可识别音频，再调用网关内部 `/api/internal/stt`，把结果以 `（QQ语音转写）...` 和可选 `（声音观察：...）` 注入原 QQ 聊天链路。非 @ 群聊语音不主动转写，避免无谓消耗。
 - 已完成：新增 `routes/internal_stt_api.py`，用 `GATEWAY_INTERNAL_STT_TOKEN` / `MAIN_GATEWAY_BEARER_TOKEN` / `XIAOAI_GATEWAY_TOKEN` 鉴权，或仅允许无转发头的本机直连兜底；`services/stt.py` 对 QQ/NapCat 常见假 `.amr` / SILK 音频保留 ffmpeg 转 wav fallback。
@@ -1301,3 +1308,15 @@ npm -C miniapp run android
 - 已完成：新增 `生气emoji` 气泡样式，基于 `/Users/doraemon/Downloads/生气emoji.css` 提取两个图片贴纸到 `miniapp/src/assets/angry-emoji-*.png`；`chatAppearance.ts` 增加 `angry` 选项与 `resolveBubbleSkin`；`ChatPresentation.tsx` 支持 `heart-rabbit` / `angry-emoji` 两套皮肤层与贴纸层；聊天页和个性化预览都通过 `skin` 传入，不改变原气泡 `max-width/padding/line-height`。
 - 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过；`npm --prefix miniapp run build` 通过并同步 `miniapp_static`，仅有既有 chunk size warning。
 - 未完成 / 下次继续：未把 standalone `tools/bubble-customizer.html` 的完整编辑器控制面板迁入 App；主工作区旧 `miniapp_static` 构建残留仍未清理，继续不要混入提交。
+
+当前状态（2026-05-31 三人群聊笨笨入群 abort 修复）：
+- 已查明：服务器 `codex_group_chat_tasks.json` 中最近 3 个笨笨任务均为 `done`；群聊历史末尾的“笨笨入群失败：signal is aborted without reason”发生在自由讨论第二轮 `@笨笨` 接力创建任务阶段，服务器未收到对应 POST，属于前端创建请求被 WebView/fetch abort 后直接写失败。
+- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 把笨笨任务创建超时从 15 秒改为首试 30 秒、abort/timeout 时提示“笨笨入群有点慢，正在重试...”并重试一次；`services/codex_group_chat.py` 按 `client_request_id` 幂等返回已有任务，避免重试导致一个 @ 造出两个笨笨任务。
+- 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`npx vite build --outDir /tmp/du-gateway-miniapp-benben-retry-build --emptyOutDir true` 通过，只有既有 chunk size warning；`.venv/bin/python -m py_compile services/codex_group_chat.py routes/miniapp/codex_group_chat.py` 通过；临时 `_TASK_FILE` smoke 覆盖同一 `client_request_id` 重试只保留 1 个任务；`git diff --check -- miniapp/src/ui/MainChatScreen.tsx services/codex_group_chat.py docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：本轮未清理线上历史里已有的失败气泡，未重建 `miniapp_static`，未 push/重启；上线时仍需只挑本轮相关 hunk/文件，避免混入当前仓库里的小家、StudyRoom、微博热搜、静态 hash 等脏改。
+
+当前状态（2026-05-31 三人群聊自由聊开关 / 广播语义）：
+- 已完成：三人群聊标题栏新增“自由聊”开关，状态写入 `localStorage`；开关关闭时仍保持精确 `@渡` / `@笨笨` 触发，开关开启时，用户在群聊里发普通消息也按同时发给渡和笨笨的群聊广播处理，不再要求用户写 `@渡 @笨笨`。
+- 已完成：自由聊模式不再按固定交替顺序接力；系统只根据模型正文里的 `@渡` / `@笨笨` 决定下一棒，没 @ 就自然停。渡和笨笨的提示词都明确“这是公共群聊广播”，避免把上一条第三方发言误读成私聊。
+- 已验证：`./node_modules/.bin/tsc --noEmit`（在 `miniapp/`）通过；`python3 -m py_compile scripts/codex_group_chat_bridge.py services/codex_group_chat.py routes/miniapp/codex_group_chat.py` 通过；`npx vite build --outDir /tmp/du-gateway-miniapp-free-chat-broadcast-build --emptyOutDir true` 通过，只有既有 chunk size warning；`git diff --check -- miniapp/src/ui/MainChatScreen.tsx scripts/codex_group_chat_bridge.py docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：本轮未重建 `miniapp_static`、未 push/重启；当前仓库仍有大量非本轮脏改和静态 hash 产物，提交时需要 partial stage，别混入小家、StudyRoom、微博热搜等半成品。

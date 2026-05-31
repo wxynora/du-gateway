@@ -97,9 +97,14 @@ const SUMITALK_CHAT_JOB_POLL_MS = 1000;
 const SUMITALK_CHAT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_POLL_MS = 1000;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
+const CODEX_GROUP_CHAT_CREATE_TIMEOUT_MS = 30000;
+const CODEX_GROUP_CHAT_CREATE_RETRY_TIMEOUT_MS = 45000;
 const GROUP_DISCUSSION_MAX_FOLLOWUPS = 3;
+const GROUP_FREE_CHAT_STORAGE_KEY = "miniapp.groupChat.freeChatEnabled";
 const GROUP_DISCUSSION_TRIGGER_RE = /(?:讨论|商量|你俩|你们俩|自由聊|一起聊|一起看看|聊两句|聊几句|互相|碰一下|合计|对一下|头脑风暴)/i;
 const GROUP_DISCUSSION_STOP_RE = /(?:先这样|先到这|就先这样|差不多(?:了|就行|可以)|可以收尾|不用继续|别聊了|到这里|我来改|我去改|先按这个)/i;
+const GROUP_DISCUSSION_MANUAL_STOP_RE = /(?:停一下|停止|暂停|打断|中断|别聊了|不用继续|先这样|收尾|到这里|算了)/i;
+const GROUP_DISCUSSION_CONTINUE_RE = /(?:继续聊|接着聊|再聊|继续讨论|再讨论|你俩继续|你们俩继续|让(?:他们|你俩|你们俩)继续)/i;
 
 function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -140,6 +145,12 @@ async function apiJsonWithTimeout<T>(path: string, timeoutMs: number, init?: Req
   }
 }
 
+function isAbortLikeError(error: any): boolean {
+  const name = String(error?.name || "").trim();
+  const message = String(error?.message || error || "").toLowerCase();
+  return name === "AbortError" || /abort|aborted|signal is aborted|timeout|timed out/.test(message);
+}
+
 function uniqueNonEmptyStrings(values: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -161,6 +172,14 @@ type GroupReplyTargets = {
   freeDiscussion: boolean;
 };
 type GroupDiscussionSpeaker = "du" | "benben";
+type GroupDiscussionSnapshot = {
+  topic: string;
+  replyTarget: string;
+  lastSpeaker: GroupDiscussionSpeaker;
+  lastContent: string;
+  freeRoute: boolean;
+  updatedAt: number;
+};
 
 function resolveCodingThreadKey(content: string): string {
   const text = String(content || "").toLowerCase();
@@ -202,6 +221,21 @@ function isBenbenCancelCommand(content: string): boolean {
   return hasBenbenMention && /(?:停一下|停止|取消|中断|打断|别改了|别施工|别做了|暂停|kill|算了)/i.test(text);
 }
 
+function isGroupDiscussionStopCommand(content: string): boolean {
+  return GROUP_DISCUSSION_MANUAL_STOP_RE.test(String(content || ""));
+}
+
+function isGroupDiscussionContinueCommand(content: string): boolean {
+  return GROUP_DISCUSSION_CONTINUE_RE.test(String(content || ""));
+}
+
+function parseGroupDiscussionContinueTurns(content: string): number {
+  const text = String(content || "");
+  if (/[一1]/.test(text)) return 1;
+  if (/[三3]/.test(text)) return 3;
+  return 2;
+}
+
 function codexGroupTaskStatusText(task: Pick<CodexGroupChatTask, "mode" | "status">): string {
   const mode = String(task.mode || "").trim();
   const status = String(task.status || "").trim();
@@ -236,6 +270,34 @@ function resolveNextGroupDiscussionSpeaker(lastSpeaker: GroupDiscussionSpeaker, 
   return lastSpeaker === "du" ? "benben" : "du";
 }
 
+function resolveNextFreeDiscussionSpeaker(lastSpeaker: GroupDiscussionSpeaker, lastContent: string): GroupDiscussionSpeaker | null {
+  const mentionsDu = mentionedGroupSpeaker(lastContent, "du");
+  const mentionsBenben = mentionedGroupSpeaker(lastContent, "benben");
+  if (mentionsDu && !mentionsBenben) return "du";
+  if (mentionsBenben && !mentionsDu) return "benben";
+  if (mentionsDu && mentionsBenben) return lastSpeaker === "du" ? "benben" : "du";
+  return null;
+}
+
+function buildGroupFreeDiscussionOpeningContent(messages: ChatDraftMessage[], topic: string): string {
+  const lines = (Array.isArray(messages) ? messages : [])
+    .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
+    .filter((msg) => String(msg.content || "").trim())
+    .slice(-10)
+    .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`);
+  const fallbackTopic = String(topic || "").trim();
+  if (!lines.length && fallbackTopic) lines.push(`辛玥：${fallbackTopic}`);
+  return [
+    "【三人群聊自由讨论开场】",
+    "辛玥在自由聊模式里发了一条群聊广播，这句话同时发给你和笨笨，是想让你们俩围绕这个话题自由聊几句。",
+    "你先发一条自然的群聊开场；想让笨笨接，就在正文里明确 @笨笨，不 @ 就自然停。不要把历史里笨笨之前对辛玥的回复当成对你的私聊。",
+    "只输出渡要发到群里的正文，不要写“渡：”前缀，不要解释规则。",
+    `原话题：${fallbackTopic || "（无）"}`,
+    "最近群聊：",
+    ...lines,
+  ].join("\n");
+}
+
 function buildGroupDiscussionUserContent(
   messages: ChatDraftMessage[],
   topic: string,
@@ -253,7 +315,7 @@ function buildGroupDiscussionUserContent(
     "【三人群聊自由讨论接力】",
     `原话题：${fallbackTopic || "（无）"}`,
     `这是自动接力第 ${turnIndex}/${maxTurns} 条。你是渡，接着最近一条自然回复一小段。`,
-    "规则：只发群聊正文，不要写“渡：”前缀；不要替辛玥决定；不要进入施工、调工具或汇报流程；如果结论已经差不多，就自然收尾。",
+    "规则：这是辛玥、渡、笨笨都能看见的公共群聊；辛玥在自由聊模式里的发言默认同时发给你和笨笨。不要把笨笨上一句默认理解成对你的私聊，除非它明确 @ 了你。想让笨笨继续就明确 @笨笨，不 @ 就自然停。只发群聊正文，不要写“渡：”前缀；不要替辛玥决定；不要进入施工、调工具或汇报流程；如果结论已经差不多，就自然收尾。",
     "最近群聊：",
     ...lines,
   ].join("\n");
@@ -357,6 +419,15 @@ export function MainChatScreen({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
+  const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
+  const [groupFreeChatEnabled, setGroupFreeChatEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(GROUP_FREE_CHAT_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [plusOpen, setPlusOpen] = useState(false);
   const [travelFormCard, setTravelFormCard] = useState<TravelPlanFormCard | null>(null);
   const [travelResultCard, setTravelResultCard] = useState<TravelPlanResultCard | null>(null);
@@ -378,10 +449,18 @@ export function MainChatScreen({
   const benbenTaskRecoveringRef = useRef<Set<string>>(new Set());
   const benbenTaskFinalizedRef = useRef<Set<string>>(new Set());
   const groupDiscussionRunRef = useRef(0);
+  const groupDiscussionSnapshotRef = useRef<GroupDiscussionSnapshot | null>(null);
 
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(GROUP_FREE_CHAT_STORAGE_KEY, groupFreeChatEnabled ? "1" : "0");
+    } catch {}
+  }, [groupFreeChatEnabled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -701,21 +780,46 @@ export function MainChatScreen({
     await saveDisplayHistory(pendingMessages, { syncRemote: false, localDeviceId: params.replyTarget });
     let taskId = "";
     try {
-      const created = await apiJsonWithTimeout<CodexGroupChatTaskResponse>("/miniapp-api/codex-group-chat-tasks", 15000, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          window_id: windowId,
-          reply_target: params.replyTarget,
-          user_message: params.userContent,
-          du_reply: params.duReply || "",
-          recent_messages: buildCodexGroupRecentMessages(params.baseMessages),
-          client_request_id: `${params.clientRequestId}-benben`,
-          target_mentions: params.targetMentions || [],
-          coding_thread_key: params.codingThreadKey || "",
-        }),
-      });
+      let created: CodexGroupChatTaskResponse | null = null;
+      let lastCreateError: any = null;
+      const createBody = {
+        mode,
+        window_id: windowId,
+        reply_target: params.replyTarget,
+        user_message: params.userContent,
+        du_reply: params.duReply || "",
+        recent_messages: buildCodexGroupRecentMessages(params.baseMessages),
+        client_request_id: `${params.clientRequestId}-benben`,
+        target_mentions: params.targetMentions || [],
+        coding_thread_key: params.codingThreadKey || "",
+      };
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          created = await apiJsonWithTimeout<CodexGroupChatTaskResponse>(
+            "/miniapp-api/codex-group-chat-tasks",
+            attempt === 0 ? CODEX_GROUP_CHAT_CREATE_TIMEOUT_MS : CODEX_GROUP_CHAT_CREATE_RETRY_TIMEOUT_MS,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(createBody),
+            },
+          );
+          break;
+        } catch (e: any) {
+          lastCreateError = e;
+          if (!isAbortLikeError(e) || attempt >= 1) throw e;
+          const retryMessages = applyMessageById(messagesRef.current, benbenId, {
+            ...pendingMsg,
+            content: "笨笨入群有点慢，正在重试...",
+            status: "pending",
+          });
+          messagesRef.current = retryMessages;
+          setMessages(retryMessages);
+          await saveDisplayHistory(retryMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+          await waitMs(600);
+        }
+      }
+      if (!created) throw lastCreateError || new Error("笨笨任务创建失败");
       taskId = String(created.task?.id || "").trim();
       if (!taskId) throw new Error(created.error || "笨笨任务没有返回 ID");
       const queuedMessages = applyMessageById(messagesRef.current, benbenId, {
@@ -834,6 +938,7 @@ export function MainChatScreen({
     topic: string;
     replyTarget: string;
     turnIndex: number;
+    maxTurns: number;
   }): Promise<string> {
     if (groupDiscussionRunRef.current !== params.runId) return "";
     if (!activeModel) throw new Error("当前还没拿到可用模型");
@@ -865,7 +970,7 @@ export function MainChatScreen({
               messagesRef.current,
               params.topic,
               params.turnIndex,
-              GROUP_DISCUSSION_MAX_FOLLOWUPS,
+              params.maxTurns,
             ),
           }],
           stream: false,
@@ -954,35 +1059,41 @@ export function MainChatScreen({
     return String(task.response || "").trim();
   }
 
-  async function runGroupFreeDiscussion(params: {
+  function rememberGroupDiscussionSnapshot(snapshot: Omit<GroupDiscussionSnapshot, "updatedAt">) {
+    groupDiscussionSnapshotRef.current = {
+      ...snapshot,
+      updatedAt: Date.now(),
+    };
+  }
+
+  async function runGroupDiscussionFollowups(params: {
     runId: number;
     topic: string;
     replyTarget: string;
-    initialBenbenMessageId: string;
-    initialDuReply: string;
+    lastSpeaker: GroupDiscussionSpeaker;
+    lastContent: string;
+    maxFollowups: number;
+    freeRoute?: boolean;
   }) {
+    const maxFollowups = Math.max(1, Math.min(GROUP_DISCUSSION_MAX_FOLLOWUPS, params.maxFollowups || 1));
     setGroupDiscussionRunning(true);
     try {
-      if (groupDiscussionRunRef.current !== params.runId) return;
-      const initialTaskId = await waitForBenbenTaskId(params.initialBenbenMessageId, params.runId);
-      if (!initialTaskId || groupDiscussionRunRef.current !== params.runId) return;
-      const initialBenbenTask = await waitForCodexGroupChatTask(initialTaskId);
-      if (groupDiscussionRunRef.current !== params.runId) return;
-      await applyBenbenTaskUpdate(initialBenbenTask, {
-        messageId: params.initialBenbenMessageId,
-        localDeviceId: params.replyTarget,
-      });
-      let lastSpeaker: GroupDiscussionSpeaker = "benben";
-      let lastContent = String(initialBenbenTask.response || params.initialDuReply || "").trim();
-      for (let turnIndex = 1; turnIndex <= GROUP_DISCUSSION_MAX_FOLLOWUPS; turnIndex += 1) {
+      let lastSpeaker = params.lastSpeaker;
+      let lastContent = String(params.lastContent || "").trim();
+      for (let turnIndex = 1; turnIndex <= maxFollowups; turnIndex += 1) {
         if (groupDiscussionRunRef.current !== params.runId || !lastContent || groupDiscussionShouldStop(lastContent)) break;
-        const nextSpeaker = resolveNextGroupDiscussionSpeaker(lastSpeaker, lastContent);
+        const nextSpeaker = params.freeRoute
+          ? resolveNextFreeDiscussionSpeaker(lastSpeaker, lastContent)
+          : resolveNextGroupDiscussionSpeaker(lastSpeaker, lastContent);
+        if (!nextSpeaker) break;
+        setGroupDiscussionStatus(`群聊接力中 ${turnIndex}/${maxFollowups}，轮到${nextSpeaker === "du" ? "渡" : "笨笨"}`);
         const reply = nextSpeaker === "du"
           ? await requestDuGroupDiscussionReply({
               runId: params.runId,
               topic: params.topic,
               replyTarget: params.replyTarget,
               turnIndex,
+              maxTurns: maxFollowups,
             })
           : await requestBenbenGroupDiscussionReply({
               runId: params.runId,
@@ -994,11 +1105,60 @@ export function MainChatScreen({
         if (groupDiscussionRunRef.current !== params.runId || !reply.trim()) break;
         lastSpeaker = nextSpeaker;
         lastContent = reply.trim();
+        rememberGroupDiscussionSnapshot({
+          topic: params.topic,
+          replyTarget: params.replyTarget,
+          lastSpeaker,
+          lastContent,
+          freeRoute: Boolean(params.freeRoute),
+        });
       }
     } catch (e: any) {
       if (groupDiscussionRunRef.current === params.runId) toast(`自由讨论中断：${e?.message || e}`);
     } finally {
-      if (groupDiscussionRunRef.current === params.runId) setGroupDiscussionRunning(false);
+      if (groupDiscussionRunRef.current === params.runId) {
+        setGroupDiscussionRunning(false);
+        setGroupDiscussionStatus("");
+      }
+    }
+  }
+
+  async function runGroupFreeDiscussion(params: {
+    runId: number;
+    topic: string;
+    replyTarget: string;
+    initialDuReply: string;
+  }) {
+    setGroupDiscussionRunning(true);
+    setGroupDiscussionStatus("群聊接力中，等笨笨接渡这句");
+    try {
+      if (groupDiscussionRunRef.current !== params.runId) return;
+      let lastSpeaker: GroupDiscussionSpeaker = "du";
+      let lastContent = String(params.initialDuReply || "").trim();
+      if (!lastContent) return;
+      rememberGroupDiscussionSnapshot({
+        topic: params.topic,
+        replyTarget: params.replyTarget,
+        lastSpeaker,
+        lastContent,
+        freeRoute: true,
+      });
+      await runGroupDiscussionFollowups({
+        runId: params.runId,
+        topic: params.topic,
+        replyTarget: params.replyTarget,
+        lastSpeaker,
+        lastContent,
+        maxFollowups: GROUP_DISCUSSION_MAX_FOLLOWUPS,
+        freeRoute: true,
+      });
+    } catch (e: any) {
+      if (groupDiscussionRunRef.current === params.runId) toast(`自由讨论中断：${e?.message || e}`);
+    } finally {
+      if (groupDiscussionRunRef.current === params.runId) {
+        setGroupDiscussionRunning(false);
+        setGroupDiscussionStatus("");
+      }
     }
   }
 
@@ -1039,9 +1199,48 @@ export function MainChatScreen({
     }
   }, [messages, groupChatMode, deviceId]);
 
+  async function appendGroupUserMessage(displayContent: string, localDeviceId: string): Promise<ChatDraftMessage[]> {
+    const now = Date.now();
+    const userMsg: ChatDraftMessage = {
+      id: `user-${now}`,
+      role: "user",
+      content: displayContent,
+      createdAt: new Date(now).toISOString(),
+      status: "sent",
+    };
+    const nextMessages = [...messagesRef.current, userMsg];
+    messagesRef.current = nextMessages;
+    setInput("");
+    setPlusOpen(false);
+    setMessages(nextMessages);
+    await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId });
+    return nextMessages;
+  }
+
+  async function appendBenbenGroupNotice(content: string, localDeviceId: string): Promise<void> {
+    const now = Date.now();
+    const notice: ChatDraftMessage = {
+      id: `benben-notice-${now}`,
+      role: "benben",
+      content,
+      createdAt: new Date(now).toISOString(),
+      status: "sent",
+    };
+    const nextMessages = [...messagesRef.current, notice];
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId });
+    saveDisplayHistoryInBackground(nextMessages, { localDeviceId });
+  }
+
   async function sendChatContent(rawContent: string, options: { displayContent?: string } = {}) {
     const content = String(rawContent || "").trim();
-    if (!content || sending) return;
+    const canSendWhileBusy = groupChatMode && (
+      isBenbenCancelCommand(content)
+      || (groupDiscussionRunning && isGroupDiscussionStopCommand(content))
+      || isGroupDiscussionContinueCommand(content)
+    );
+    if (!content || (sending && !canSendWhileBusy)) return;
     const displayContent = String(options.displayContent || content).trim() || content;
     if (!windowId) {
       toast("当前还没拿到聊天窗口 ID，不能接入共享上下文");
@@ -1051,34 +1250,25 @@ export function MainChatScreen({
     if (groupChatMode) {
       groupDiscussionRunRef.current = discussionRunId;
       setGroupDiscussionRunning(false);
+      setGroupDiscussionStatus("");
     }
-    const groupTargets = groupChatMode
-      ? resolveGroupReplyTargets(content)
-      : { du: true, benben: false, mentions: [], benbenMode: "daily_chat" as const, codingThreadKey: "", freeDiscussion: false };
-    const shouldRequestDu = !groupChatMode || groupTargets.du;
-    const shouldRequestBenben = groupChatMode && groupTargets.benben;
     const resolvedDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
     if (resolvedDeviceId && resolvedDeviceId !== deviceId) {
       setDeviceId((prev) => (prev === resolvedDeviceId ? prev : resolvedDeviceId));
     }
-    if (groupChatMode && isBenbenCancelCommand(content)) {
-      const now = Date.now();
-      const userMsg: ChatDraftMessage = {
-        id: `user-${now}`,
-        role: "user",
-        content: displayContent,
-        createdAt: new Date(now).toISOString(),
-        status: "sent",
-      };
-      const nextMessages = [...messagesRef.current, userMsg];
-      messagesRef.current = nextMessages;
-      setInput("");
-      setPlusOpen(false);
+    if (groupChatMode && (isBenbenCancelCommand(content) || (groupDiscussionRunning && isGroupDiscussionStopCommand(content)))) {
       setSending(true);
-      setMessages(nextMessages);
-      await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
+      await appendGroupUserMessage(displayContent, resolvedDeviceId);
       try {
-        await cancelPendingBenbenGroupTasks(content, resolvedDeviceId);
+        const hasPendingBenbenTask = messagesRef.current.some(
+          (msg) => msg.role === "benben" && msg.status === "pending" && String(msg.jobId || "").trim(),
+        );
+        if (isBenbenCancelCommand(content) || hasPendingBenbenTask) {
+          await cancelPendingBenbenGroupTasks(content, resolvedDeviceId);
+        } else {
+          await appendBenbenGroupNotice("群聊接力已停下。", resolvedDeviceId);
+        }
+        setGroupDiscussionStatus("");
       } catch (e: any) {
         toast(`取消失败：${e?.message || e}`);
       } finally {
@@ -1086,6 +1276,51 @@ export function MainChatScreen({
       }
       return;
     }
+    if (groupChatMode && isGroupDiscussionContinueCommand(content)) {
+      await appendGroupUserMessage(displayContent, resolvedDeviceId);
+      const snapshot = groupDiscussionSnapshotRef.current;
+      if (!snapshot?.lastContent) {
+        toast("还没有可继续的群聊讨论");
+        return;
+      }
+      void runGroupDiscussionFollowups({
+        runId: discussionRunId,
+        topic: snapshot.topic || content,
+        replyTarget: resolvedDeviceId || snapshot.replyTarget,
+        lastSpeaker: snapshot.lastSpeaker,
+        lastContent: snapshot.lastContent,
+        maxFollowups: parseGroupDiscussionContinueTurns(content),
+        freeRoute: snapshot.freeRoute || groupFreeChatEnabled,
+      });
+      return;
+    }
+    let groupTargets = groupChatMode
+      ? resolveGroupReplyTargets(content)
+      : { du: true, benben: false, mentions: [], benbenMode: "daily_chat" as const, codingThreadKey: "", freeDiscussion: false };
+    if (groupChatMode && groupFreeChatEnabled) {
+      if (!groupTargets.mentions.length) {
+        groupTargets = {
+          du: true,
+          benben: true,
+          mentions: ["du", "benben"],
+          benbenMode: "daily_chat",
+          codingThreadKey: "",
+          freeDiscussion: true,
+        };
+      } else if (groupTargets.du && groupTargets.benben && groupTargets.benbenMode === "daily_chat") {
+        groupTargets = { ...groupTargets, freeDiscussion: true };
+      }
+    }
+    const shouldRequestDu = !groupChatMode || groupTargets.du;
+    const isGroupFreeDiscussion = Boolean(
+      groupChatMode
+      && groupFreeChatEnabled
+      && groupTargets.freeDiscussion
+      && groupTargets.du
+      && groupTargets.benben
+      && groupTargets.benbenMode === "daily_chat",
+    );
+    const shouldRequestBenben = groupChatMode && groupTargets.benben && !isGroupFreeDiscussion;
     if (shouldRequestDu && !activeModel) {
       toast("当前还没拿到可用模型，稍后再试");
       return;
@@ -1156,7 +1391,11 @@ export function MainChatScreen({
       }
 
       if (shouldRequestDu) {
-        const requestUserContent = groupChatMode ? buildGroupTurnUserContent(nextMessages, content) : content;
+        const requestUserContent = isGroupFreeDiscussion
+          ? buildGroupFreeDiscussionOpeningContent(nextMessages, content)
+          : groupChatMode
+          ? buildGroupTurnUserContent(nextMessages, content)
+          : content;
         const requestWindowId = windowId;
         const requestBody = {
           model: activeModel,
@@ -1218,17 +1457,14 @@ export function MainChatScreen({
         await benbenCreatePromise;
       }
       if (
-        groupTargets.freeDiscussion
+        isGroupFreeDiscussion
         && shouldRequestDu
-        && shouldRequestBenben
-        && benbenPlaceholderId
-        && groupTargets.benbenMode === "daily_chat"
+        && initialDuReply.trim()
       ) {
         void runGroupFreeDiscussion({
           runId: discussionRunId,
           topic: content,
           replyTarget,
-          initialBenbenMessageId: benbenPlaceholderId,
           initialDuReply,
         });
       }
@@ -1269,6 +1505,12 @@ export function MainChatScreen({
   const groupedMessages = groupChatMessages(messages);
   const assistantTyping = (sending || groupDiscussionRunning) && messages.some(
     (msg) => (msg.role === "assistant" || msg.role === "benben") && String(msg.status || "").trim().toLowerCase() === "pending",
+  );
+  const trimmedInput = input.trim();
+  const canSubmitWhileBusy = groupChatMode && (
+    isBenbenCancelCommand(trimmedInput)
+    || (groupDiscussionRunning && isGroupDiscussionStopCommand(trimmedInput))
+    || isGroupDiscussionContinueCommand(trimmedInput)
   );
   const searchMatches = useMemo<ChatSearchMatch[]>(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -1350,7 +1592,32 @@ export function MainChatScreen({
           <div className="ml-2 flex-1">
             <div className="font-medium text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
             <ChatHeaderStatus sending={assistantTyping} />
+            {groupDiscussionStatus ? (
+              <div className="text-[11px] font-medium text-amber-700">{groupDiscussionStatus}</div>
+            ) : null}
           </div>
+          {groupChatMode ? (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={groupFreeChatEnabled}
+              aria-label="自由聊"
+              title="自由聊"
+              className={`mr-1 flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-semibold transition-colors ${
+                groupFreeChatEnabled
+                  ? "bg-amber-100 text-amber-800"
+                  : "bg-gray-100 text-gray-500"
+              }`}
+              onClick={() => setGroupFreeChatEnabled((prev) => !prev)}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  groupFreeChatEnabled ? "bg-amber-500" : "bg-gray-300"
+                }`}
+              />
+              自由聊
+            </button>
+          ) : null}
           <button
             className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100"
             onClick={() => {
@@ -1614,7 +1881,7 @@ export function MainChatScreen({
           <button
             className="p-2.5 text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
             onClick={() => void sendMessage()}
-            disabled={sending || !input.trim()}
+            disabled={!trimmedInput || (sending && !canSubmitWhileBusy)}
           >
             <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gray-900">
               <ArrowUpIcon />
