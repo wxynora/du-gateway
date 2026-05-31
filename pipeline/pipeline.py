@@ -755,6 +755,38 @@ def _build_action_note_from_tool_calls(tool_calls: list) -> str:
     return f"上一轮工具记录：{'、'.join(parts)}；若还是同一目标，先基于上面结果继续，不要立刻原样重调。"
 
 
+_PROACTIVE_DECISION_PROMPT_PREFIX = "这是一次随机唤醒，你现在正常带着上下文醒来"
+
+
+def _message_plain_text_for_context(msg: dict) -> str:
+    content = (msg or {}).get("content", "")
+    if isinstance(content, list):
+        return " ".join(c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content)
+    return str(content or "")
+
+
+def _is_internal_proactive_decision_round(round_obj: dict) -> bool:
+    if not isinstance(round_obj, dict):
+        return False
+    user_text = ""
+    assistant_text = ""
+    for msg in round_obj.get("messages") or []:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").strip().lower()
+        if role == "user" and not user_text:
+            user_text = _message_plain_text_for_context(msg).strip()
+        elif role == "assistant" and not assistant_text:
+            assistant_text = _message_plain_text_for_context(msg).strip()
+    if not user_text.startswith(_PROACTIVE_DECISION_PROMPT_PREFIX):
+        return False
+    return '"action"' in assistant_text or "'action'" in assistant_text
+
+
+def _filter_rounds_for_recent_context(rounds: list) -> list[dict]:
+    return [r for r in (rounds or []) if isinstance(r, dict) and not _is_internal_proactive_decision_round(r)]
+
+
 def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force_last4: bool = False) -> dict:
     """
     新窗口：从 R2 读取全局「最新四轮」注入。
@@ -772,7 +804,9 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
     if is_telegram_window:
         # Telegram 只按“本窗口 Last4”注入；文游已迁出 TG，不再混入群窗口上下文。
         if force_last4 or len(messages) <= 2 or r2_store.has_window_history(window_id):
-            private_rounds = r2_store.get_conversation_rounds(window_id, last_n=4) or []
+            private_rounds = _filter_rounds_for_recent_context(
+                r2_store.get_conversation_rounds(window_id, last_n=12) or []
+            )
             merged = []
 
             def _with_src(arr: list, src: str) -> list:
@@ -791,13 +825,15 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
             inject_label = "最近的对话"
     else:
         if not r2_store.has_window_history(window_id):
-            rounds = r2_store.get_latest_4_rounds_global()
+            rounds = _filter_rounds_for_recent_context(r2_store.get_latest_4_rounds_global() or [])[-4:]
             inject_label = "最近的对话"
         else:
             # 已有历史且当前请求消息很少（如 proactive 只发 1 条 user）→ 注入本窗口最近 4 轮
             # force_last4=True 时即使 messages 较多也强制注入。
             if force_last4 or len(messages) <= 2:
-                rounds = r2_store.get_conversation_rounds(window_id, last_n=4)
+                rounds = _filter_rounds_for_recent_context(
+                    r2_store.get_conversation_rounds(window_id, last_n=12) or []
+                )[-4:]
                 inject_label = "最近的对话"
 
     if not rounds:

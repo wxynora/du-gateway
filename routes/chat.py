@@ -446,7 +446,9 @@ def _stream_with_r2_archive(
             stream_sec = time.time() - stream_start
             # 若「流式持续时长」总是差不多（如 10–20s）而字数越来越短，可能是上游按时长限流
             logger.debug("本轮流式回复收集长度约 %s 字符，共转发 %s 个 data 块，流式持续约 %.1f 秒", len(full_content), data_chunk_count, stream_sec)
-            if du_daily_maintenance:
+            if _is_proactive_decision_request():
+                logger.info("R2 未存档：主动决策内部请求跳过会话存档")
+            elif du_daily_maintenance:
                 logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
             elif not is_failed_response(visible) and visible.strip():
                 msg = {"role": "assistant", "content": visible}
@@ -635,7 +637,9 @@ def _stream_with_r2_archive(
             logger.error("工具续轮结束但最终正文仍为空（流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
         full_reasoning = "".join(reasoning_parts).strip()
         logger.info("本轮流式回复收集长度约 %s 字符", len(full_content))
-        if du_daily_maintenance:
+        if _is_proactive_decision_request():
+            logger.info("R2 未存档：主动决策内部请求跳过会话存档")
+        elif du_daily_maintenance:
             logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
         elif is_failed_response(visible):
             logger.info("R2 未存档：流式回复被判为失败，跳过")
@@ -790,6 +794,10 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
 
 def _is_du_daily_maintenance_request() -> bool:
     return str(request.headers.get("X-DU-DAILY-MAINTAIN") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _is_proactive_decision_request() -> bool:
+    return str(request.headers.get("X-DU-PROACTIVE-DECISION") or "").strip().lower() in ("1", "true", "yes")
 
 
 def _static_models_response():
@@ -1217,6 +1225,8 @@ def chat_completions():
             and not _is_delayed_followup_generation_request()
         ):
             logger.info("R2 未存档：延迟续话内部生成请求跳过存档")
+        elif _is_proactive_decision_request():
+            logger.info("R2 未存档：主动决策内部请求跳过会话存档")
         elif du_daily_maintenance:
             logger.info("R2 未存档：du_daily 内部维护请求跳过会话存档")
         else:
