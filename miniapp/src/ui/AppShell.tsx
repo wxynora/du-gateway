@@ -483,7 +483,7 @@ export function AppShell({
             />
             <PageCardRow
               icon={<HomeIconMini />}
-              label="像素小家"
+              label="小家"
               onClick={() => setShowPixelHome(true)}
             />
             <PageCardRow
@@ -767,7 +767,7 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {showPixelHome ? (
-        <FullScreenPane title="像素小家" accent="neutral" headerMode="simple" edgeSwipeBack onBack={() => setShowPixelHome(false)}>
+        <FullScreenPane title="小家" accent="neutral" headerMode="simple" edgeSwipeBack onBack={() => setShowPixelHome(false)}>
           <LazyPane><PixelHomeTab /></LazyPane>
         </FullScreenPane>
       ) : null}

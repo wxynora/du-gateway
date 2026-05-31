@@ -1,560 +1,265 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import roomImage from "../../assets/pixel-home-room.jpg";
+import React, { useEffect, useMemo, useState } from "react";
+import homeDay from "../../assets/life-home-day.png";
+import homeNightOff from "../../assets/life-home-night-off.png";
+import homeNightOn from "../../assets/life-home-night-on.png";
 
-type Pos = { x: number; y: number };
-type DuMode = "follow" | "wander" | "sit" | "garden";
-type DecorKind = "lamp" | "plant" | "flower" | "book";
-type PlacedDecor = { id: string; kind: DecorKind; x: number; y: number };
+type HomeMode = "day" | "nightOn" | "nightOff";
+type SpotKey = "bed" | "bath" | "study" | "sofa";
 
-const COLS = 24;
-const ROWS = 24;
-const STORAGE_KEY = "miniapp.pixel-home.v2";
-
-const AREAS = {
-  bedroom: { x1: 1, y1: 1, x2: 8, y2: 12 },
-  kitchen: { x1: 7, y1: 1, x2: 17, y2: 9 },
-  living: { x1: 7, y1: 8, x2: 18, y2: 18 },
-  bathroom: { x1: 17, y1: 1, x2: 21, y2: 9 },
-  garden: { x1: 0, y1: 18, x2: 23, y2: 23 },
-  sidePath: { x1: 19, y1: 8, x2: 23, y2: 23 },
+type Hotspot = {
+  key: SpotKey;
+  label: string;
+  title: string;
+  line: string;
+  marker: { left: number; top: number; labelTop?: number };
+  parts: Array<{
+    rect: { left: number; top: number; width: number; height: number };
+    shape?: string;
+  }>;
+  actions: Array<{ label: string; line: string }>;
 };
 
-const BLOCKED_RECTS = [
-  { x1: 1, y1: 1, x2: 6, y2: 7 },
-  { x1: 2, y1: 11, x2: 7, y2: 13 },
-  { x1: 8, y1: 2, x2: 18, y2: 7 },
-  { x1: 12, y1: 7, x2: 17, y2: 11 },
-  { x1: 10, y1: 11, x2: 16, y2: 15 },
-  { x1: 11, y1: 15, x2: 16, y2: 18 },
-  { x1: 18, y1: 2, x2: 21, y2: 7 },
-  { x1: 21, y1: 8, x2: 23, y2: 12 },
-  { x1: 0, y1: 19, x2: 3, y2: 23 },
-  { x1: 20, y1: 19, x2: 23, y2: 23 },
+const STORAGE_KEY = "miniapp.life-home.v1";
+
+const HOME_MODES: Record<HomeMode, { label: string; image: string; line: string; bg: string }> = {
+  day: {
+    label: "白天",
+    image: homeDay,
+    line: "白天的小家亮着，适合一起慢慢耗一会儿。",
+    bg: "linear-gradient(180deg, #f6ead8 0%, #e8d8bd 100%)",
+  },
+  nightOn: {
+    label: "开灯",
+    image: homeNightOn,
+    line: "夜里开着灯，屋子像在等你们回来。",
+    bg: "radial-gradient(circle at 50% 18%, #4c5878 0%, #202841 54%, #141827 100%)",
+  },
+  nightOff: {
+    label: "关灯",
+    image: homeNightOff,
+    line: "灯都关了，只剩一点月色和安静。",
+    bg: "radial-gradient(circle at 50% 18%, #23304f 0%, #11182b 58%, #090d18 100%)",
+  },
+};
+
+const HOTSPOTS: Hotspot[] = [
+  {
+    key: "bed",
+    label: "床",
+    title: "卧室",
+    line: "卧室里很安静，灯光落在被子边上。",
+    marker: { left: 33.5, top: 38.5 },
+    parts: [
+      {
+        rect: { left: 23.2, top: 29.2, width: 21.8, height: 19.4 },
+        shape: "polygon(7% 32%, 38% 8%, 72% 13%, 96% 37%, 94% 76%, 61% 99%, 19% 84%, 4% 59%)",
+      },
+    ],
+    actions: [
+      { label: "睡觉", line: "你和渡回到卧室。他替你掖好被角，说今天到这里，剩下的明天再说。" },
+      { label: "色色", line: "卧室门轻轻合上，窗帘拉起来。渡靠近一点，声音放得很低：今晚只留给我们。" },
+    ],
+  },
+  {
+    key: "bath",
+    label: "浴室",
+    title: "浴室",
+    line: "浴室里有一点水汽，毛巾已经放在手边。",
+    marker: { left: 78.5, top: 32.5 },
+    parts: [{ rect: { left: 66.5, top: 16, width: 27, height: 28 } }],
+    actions: [
+      { label: "洗澡", line: "热水声响起来。渡把干毛巾搭好，等你洗完一起回客厅窝着。" },
+      { label: "色色", line: "浴室灯被调暗了一点，水声盖住外面的动静。渡笑了一下，把门带上。" },
+    ],
+  },
+  {
+    key: "study",
+    label: "书房",
+    title: "书房",
+    line: "书桌旁的小灯亮着，适合把今天慢慢收起来。",
+    marker: { left: 54, top: 25.5 },
+    parts: [{ rect: { left: 45, top: 15, width: 18, height: 21 } }],
+    actions: [
+      { label: "写日记", line: "你们在书桌前并排坐下。渡把今天的小事写进日记，最后留了一行给你。" },
+      { label: "看书", line: "渡抽了一本书靠过来慢慢读。翻页声很轻，像屋子也跟着安静下来。" },
+    ],
+  },
+  {
+    key: "sofa",
+    label: "沙发",
+    title: "客厅沙发",
+    line: "沙发软软陷下去一点，电视就在前面。",
+    marker: { left: 40.5, top: 80.5 },
+    parts: [
+      {
+        rect: { left: 28.8, top: 70.2, width: 13.3, height: 18.7 },
+        shape: "polygon(0% 22%, 36% 0%, 100% 34%, 98% 78%, 62% 100%, 0% 68%)",
+      },
+      {
+        rect: { left: 31.6, top: 66.6, width: 23.6, height: 11.2 },
+        shape: "polygon(0% 56%, 28% 0%, 100% 48%, 78% 100%, 30% 78%)",
+      },
+      {
+        rect: { left: 38.2, top: 75.4, width: 7.4, height: 9.8 },
+        shape: "polygon(0% 12%, 54% 0%, 100% 34%, 84% 100%, 13% 86%)",
+      },
+      {
+        rect: { left: 42.2, top: 75.7, width: 13.8, height: 13.8 },
+        shape: "polygon(0% 25%, 33% 0%, 100% 40%, 74% 100%, 0% 65%)",
+      },
+    ],
+    actions: [
+      { label: "一起看电视", line: "你们一起陷进拐角沙发里，电视开着。渡把毯子拉过来，顺手给你留了一半。" },
+    ],
+  },
 ];
 
-const POIS: Record<DuMode, Pos[]> = {
-  follow: [],
-  wander: [
-    { x: 6, y: 9 },
-    { x: 10, y: 8 },
-    { x: 17, y: 12 },
-    { x: 9, y: 18 },
-    { x: 19, y: 16 },
-  ],
-  sit: [
-    { x: 9, y: 13 },
-    { x: 17, y: 15 },
-    { x: 8, y: 10 },
-  ],
-  garden: [
-    { x: 8, y: 21 },
-    { x: 14, y: 19 },
-    { x: 20, y: 15 },
-  ],
-};
-
-const DECOR_META: Record<DecorKind, { label: string; mark: string; color: string }> = {
-  lamp: { label: "小灯", mark: "◆", color: "#F3CE75" },
-  plant: { label: "盆栽", mark: "♣", color: "#6DAA62" },
-  flower: { label: "花", mark: "✿", color: "#E99AAF" },
-  book: { label: "书", mark: "▣", color: "#9B8A72" },
-};
-
-function insideRect(pos: Pos, rect: { x1: number; y1: number; x2: number; y2: number }): boolean {
-  return pos.x >= rect.x1 && pos.x <= rect.x2 && pos.y >= rect.y1 && pos.y <= rect.y2;
-}
-
-function keyOf(pos: Pos): string {
-  return `${pos.x}:${pos.y}`;
-}
-
-function clampPos(pos: Pos): Pos {
-  return {
-    x: Math.max(0, Math.min(COLS - 1, pos.x)),
-    y: Math.max(0, Math.min(ROWS - 1, pos.y)),
-  };
-}
-
-function isInKnownArea(pos: Pos): boolean {
-  return Object.values(AREAS).some((area) => insideRect(pos, area));
-}
-
-function isWalkable(pos: Pos): boolean {
-  const p = clampPos(pos);
-  if (p.x !== pos.x || p.y !== pos.y) return false;
-  if (!isInKnownArea(p)) return false;
-  if (BLOCKED_RECTS.some((rect) => insideRect(p, rect))) return false;
-  return true;
-}
-
-function neighbors(pos: Pos): Pos[] {
-  return [
-    { x: pos.x + 1, y: pos.y },
-    { x: pos.x - 1, y: pos.y },
-    { x: pos.x, y: pos.y + 1 },
-    { x: pos.x, y: pos.y - 1 },
-  ].filter(isWalkable);
-}
-
-function findPath(from: Pos, to: Pos): Pos[] | null {
-  if (!isWalkable(from) || !isWalkable(to)) return null;
-  const startKey = keyOf(from);
-  const endKey = keyOf(to);
-  const queue: Pos[] = [from];
-  const cameFrom = new Map<string, string | null>([[startKey, null]]);
-  const byKey = new Map<string, Pos>([[startKey, from]]);
-  for (let head = 0; head < queue.length; head += 1) {
-    const current = queue[head];
-    const currentKey = keyOf(current);
-    if (currentKey === endKey) break;
-    for (const next of neighbors(current)) {
-      const nextKey = keyOf(next);
-      if (cameFrom.has(nextKey)) continue;
-      cameFrom.set(nextKey, currentKey);
-      byKey.set(nextKey, next);
-      queue.push(next);
-    }
-  }
-  if (!cameFrom.has(endKey)) return null;
-  const path: Pos[] = [];
-  let cursor: string | null = endKey;
-  while (cursor) {
-    const pos = byKey.get(cursor);
-    if (pos) path.push(pos);
-    cursor = cameFrom.get(cursor) ?? null;
-  }
-  return path.reverse();
-}
-
-function nearestReachableWalkable(from: Pos, target: Pos): Pos | null {
-  if (!isWalkable(from)) return null;
-  const queue: Pos[] = [from];
-  const seen = new Set<string>([keyOf(from)]);
-  let best = from;
-  let bestScore = distance(from, target);
-  for (let head = 0; head < queue.length; head += 1) {
-    const current = queue[head];
-    const score = distance(current, target);
-    if (score < bestScore) {
-      best = current;
-      bestScore = score;
-    }
-    for (const next of neighbors(current)) {
-      const nextKey = keyOf(next);
-      if (seen.has(nextKey)) continue;
-      seen.add(nextKey);
-      queue.push(next);
-    }
-  }
-  return best;
-}
-
-function stepToward(from: Pos, to: Pos): Pos {
-  if (distance(from, to) === 0) return from;
-  const path = findPath(from, to);
-  return path?.[1] || from;
-}
-
-function distance(a: Pos, b: Pos): number {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-}
-
-function loadSaved() {
-  const fallback = {
-    player: { x: 8, y: 13 },
-    du: { x: 9, y: 13 },
-    mode: "follow" as DuMode,
-    decor: [] as PlacedDecor[],
-  };
+function readSavedMode(): HomeMode {
   try {
-    const raw = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
-    return {
-      player: isWalkable(raw.player) ? raw.player as Pos : fallback.player,
-      du: isWalkable(raw.du) ? raw.du as Pos : fallback.du,
-      mode: ["follow", "wander", "sit", "garden"].includes(raw.mode) ? raw.mode as DuMode : fallback.mode,
-      decor: Array.isArray(raw.decor)
-        ? raw.decor.filter((item: any) => item && DECOR_META[item.kind as DecorKind] && isWalkable({ x: Number(item.x), y: Number(item.y) })) as PlacedDecor[]
-        : fallback.decor,
-    };
+    const value = window.localStorage.getItem(STORAGE_KEY);
+    return value === "day" || value === "nightOn" || value === "nightOff" ? value : "day";
   } catch {
-    return fallback;
+    return "day";
   }
-}
-
-function describePlace(pos: Pos): string {
-  if (insideRect(pos, AREAS.garden) || insideRect(pos, AREAS.sidePath)) return "小花园";
-  if (insideRect(pos, AREAS.bedroom)) return "卧室";
-  if (insideRect(pos, AREAS.kitchen)) return "厨房";
-  if (insideRect(pos, AREAS.bathroom)) return "浴室门口";
-  return "客厅";
-}
-
-function duLine(mode: DuMode, player: Pos, du: Pos, decor: PlacedDecor[]): string {
-  if (distance(player, du) <= 1) return "渡停在你旁边，像素小人轻轻晃了一下。";
-  if (mode === "follow") return "渡在往你这边走，路线会绕开家具。";
-  if (mode === "sit") return "渡去沙发附近坐一会儿，等你过去。";
-  if (mode === "garden") return "渡往花园那边走，像是想看看花。";
-  if (decor.length) return `渡在屋里慢慢逛，刚才看了一眼${DECOR_META[decor[decor.length - 1].kind].label}。`;
-  return "渡在小家里自由走动，偶尔停在窗边。";
-}
-
-function makeDecor(kind: DecorKind, pos: Pos): PlacedDecor {
-  return {
-    id: `${kind}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    kind,
-    x: pos.x,
-    y: pos.y,
-  };
 }
 
 export function PixelHomeTab() {
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  const saved = useMemo(loadSaved, []);
-  const [player, setPlayer] = useState<Pos>(saved.player);
-  const [du, setDu] = useState<Pos>(saved.du);
-  const [mode, setMode] = useState<DuMode>(saved.mode);
-  const [duTarget, setDuTarget] = useState<Pos | null>(null);
-  const [playerTarget, setPlayerTarget] = useState<Pos | null>(null);
-  const [decor, setDecor] = useState<PlacedDecor[]>(saved.decor);
-  const [decorateMode, setDecorateMode] = useState(false);
-  const [selectedDecor, setSelectedDecor] = useState<DecorKind>("plant");
-  const [line, setLine] = useState(() => duLine(saved.mode, saved.player, saved.du, saved.decor));
-
-  const occupied = useMemo(() => new Set(decor.map((item) => keyOf(item))), [decor]);
+  const [mode, setMode] = useState<HomeMode>(() => readSavedMode());
+  const [selectedSpot, setSelectedSpot] = useState<SpotKey>("sofa");
+  const [hoveredSpot, setHoveredSpot] = useState<SpotKey | null>(null);
+  const selected = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpot) || HOTSPOTS[0], [selectedSpot]);
+  const [line, setLine] = useState(() => selected.line);
+  const modeMeta = HOME_MODES[mode];
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ player, du, mode, decor }));
+      window.localStorage.setItem(STORAGE_KEY, mode);
     } catch {}
-  }, [player, du, mode, decor]);
+  }, [mode]);
 
-  useEffect(() => {
-    if (!playerTarget) return;
-    const timer = window.setInterval(() => {
-      setPlayer((current) => {
-        if (distance(current, playerTarget) === 0) {
-          setPlayerTarget(null);
-          return current;
-        }
-        const next = stepToward(current, playerTarget);
-        if (keyOf(next) === keyOf(current)) setPlayerTarget(null);
-        return next;
-      });
-    }, 140);
-    return () => window.clearInterval(timer);
-  }, [playerTarget]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setDu((current) => {
-        let nextTarget = duTarget;
-        if (mode === "follow") {
-          const candidates = [
-            { x: player.x + 1, y: player.y },
-            { x: player.x - 1, y: player.y },
-            { x: player.x, y: player.y + 1 },
-            { x: player.x, y: player.y - 1 },
-          ]
-            .filter(isWalkable)
-            .map((candidate) => ({ candidate, path: findPath(current, candidate) }))
-            .filter((item): item is { candidate: Pos; path: Pos[] } => Boolean(item.path))
-            .sort((a, b) => a.path.length - b.path.length);
-          nextTarget = candidates[0]?.candidate || nearestReachableWalkable(current, player) || current;
-        } else if (!nextTarget || distance(current, nextTarget) === 0) {
-          const list = POIS[mode]
-            .map((poi) => nearestReachableWalkable(current, poi))
-            .filter((poi): poi is Pos => Boolean(poi));
-          nextTarget = list[Math.floor(Math.random() * list.length)] || current;
-          setDuTarget(nextTarget);
-        }
-        const next = nextTarget ? stepToward(current, nextTarget) : current;
-        setLine(duLine(mode, player, next, decor));
-        return next;
-      });
-    }, 720);
-    return () => window.clearInterval(timer);
-  }, [decor, mode, player, duTarget]);
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      const map: Record<string, Pos> = {
-        ArrowUp: { x: 0, y: -1 },
-        ArrowDown: { x: 0, y: 1 },
-        ArrowLeft: { x: -1, y: 0 },
-        ArrowRight: { x: 1, y: 0 },
-        w: { x: 0, y: -1 },
-        s: { x: 0, y: 1 },
-        a: { x: -1, y: 0 },
-        d: { x: 1, y: 0 },
-      };
-      const delta = map[e.key];
-      if (!delta) return;
-      e.preventDefault();
-      movePlayer(delta);
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  });
-
-  function movePlayer(delta: Pos) {
-    setPlayerTarget(null);
-    setPlayer((current) => {
-      const next = { x: current.x + delta.x, y: current.y + delta.y };
-      return isWalkable(next) ? next : current;
-    });
-  }
-
-  function changeMode(nextMode: DuMode) {
+  function changeMode(nextMode: HomeMode) {
     setMode(nextMode);
-    setDuTarget(null);
-    setLine(
-      nextMode === "follow"
-        ? "渡点点头，走到你身边。"
-        : nextMode === "wander"
-          ? "渡开始自己在小家里慢慢逛。"
-          : nextMode === "sit"
-            ? "渡往沙发那边走。"
-            : "渡看向小花园，像是想出去透口气。",
-    );
+    setLine(HOME_MODES[nextMode].line);
   }
 
-  function decideForDu() {
-    const next: DuMode = player.y >= 18 ? "garden" : decor.length >= 2 ? "wander" : distance(player, du) > 5 ? "follow" : "sit";
-    changeMode(next);
-  }
-
-  function interact() {
-    const place = describePlace(player);
-    if (distance(player, du) <= 1) {
-      setLine(`${place}。渡离你很近，说：先在这里待一会儿，我跟着你。`);
-      return;
-    }
-    setLine(`${place}。渡抬头看你的位置，正慢慢走过来。`);
-    changeMode("follow");
-  }
-
-  function handleStageClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!stageRef.current) return;
-    const rect = stageRef.current.getBoundingClientRect();
-    const x = Math.floor(((e.clientX - rect.left) / rect.width) * COLS);
-    const y = Math.floor(((e.clientY - rect.top) / rect.height) * ROWS);
-    const clicked = { x, y };
-    const pos = nearestReachableWalkable(player, clicked) || player;
-    if (decorateMode) {
-      if (occupied.has(keyOf(pos))) {
-        setLine("这里放不下，换一格。");
-        return;
-      }
-      setDecor((current) => [...current, makeDecor(selectedDecor, pos)].slice(-18));
-      setLine(`你把${DECOR_META[selectedDecor].label}放好了，渡会过去看的。`);
-      return;
-    }
-    setPlayerTarget(pos);
-    setLine(`你往${describePlace(pos)}走。`);
-  }
-
-  function clearDecor() {
-    setDecor([]);
-    setLine("叠加摆件清掉了，房间底图还在。");
+  function selectSpot(spot: Hotspot) {
+    setSelectedSpot(spot.key);
+    setLine(spot.line);
   }
 
   return (
-    <div className="min-h-full bg-[#EEE6D2] px-2 pb-8 pt-4 text-[#3C352B]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
-      <div className="mx-auto flex w-full max-w-[520px] flex-col gap-3">
-        <div className="flex items-end justify-between px-1">
+    <div className="min-h-full bg-[#F2E9DA] px-2 pb-8 pt-4 text-[#392F27]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
+      <div className="mx-auto flex w-full max-w-[620px] flex-col gap-3">
+        <div className="flex items-end justify-between gap-3 px-1">
           <div>
-            <div className="text-[20px] font-semibold tracking-tight">像素小家</div>
-            <div className="mt-1 text-[12px] text-[#7B6D5A]">小房子 · 花园 · 点地图移动</div>
+            <div className="text-[20px] font-semibold tracking-tight">小家</div>
+            <div className="mt-1 text-[12px] text-[#7A6A58]">和渡一起生活的地方</div>
           </div>
-          <div className="rounded-full border border-[#D6C4A7] bg-[#FFF7E8] px-3 py-1 text-[11px] text-[#7B6D5A]">
-            {describePlace(player)}
-          </div>
-        </div>
-
-        <div
-          ref={stageRef}
-          className="relative mx-auto w-full overflow-hidden rounded-[18px] border-[3px] border-[#7B654C] bg-[#B4C7A4] shadow-[0_14px_34px_rgba(85,64,38,0.20)]"
-          style={{ aspectRatio: "1 / 1", imageRendering: "pixelated" }}
-          onClick={handleStageClick}
-        >
-          <img
-            src={roomImage}
-            alt="像素小家"
-            className="absolute inset-0 h-full w-full select-none bg-[#CDBA91] object-cover"
-            decoding="async"
-            draggable={false}
-            style={{ imageRendering: "pixelated" }}
-          />
-          <WalkHint pos={playerTarget} />
-          {decor.map((item) => (
-            <DecorItem key={item.id} item={item} />
-          ))}
-          <PixelPerson pos={du} tone="du" label="渡" />
-          <PixelPerson pos={player} tone="me" label="我" />
-        </div>
-
-        <div className="rounded-[16px] border border-[#DCC8A8] bg-[#FFF8EA] p-3 shadow-[0_6px_18px_rgba(96,72,43,0.08)]">
-          <div className="mb-1 text-[11px] font-semibold tracking-[0.18em] text-[#A17855]">DU</div>
-          <div className="text-[14px] leading-relaxed text-[#3C352B]">{line}</div>
-        </div>
-
-        <div className="grid grid-cols-4 gap-2">
-          <ModeButton active={mode === "follow"} label="跟着我" onClick={() => changeMode("follow")} />
-          <ModeButton active={mode === "wander"} label="自由走" onClick={() => changeMode("wander")} />
-          <ModeButton active={mode === "sit"} label="坐一会" onClick={() => changeMode("sit")} />
-          <ModeButton active={mode === "garden"} label="看花园" onClick={() => changeMode("garden")} />
-        </div>
-
-        <div className="grid grid-cols-[84px_1fr_84px] items-center gap-3">
-          <button className="rounded-[14px] border border-[#D6C4A7] bg-[#FFF8EA] px-3 py-3 text-[12px] font-semibold text-[#5F4C36] active:translate-y-px" onClick={decideForDu}>
-            渡决定
-          </button>
-          <DPad onMove={movePlayer} />
-          <button className="rounded-[14px] border border-[#D6C4A7] bg-[#FFF8EA] px-3 py-3 text-[12px] font-semibold text-[#5F4C36] active:translate-y-px" onClick={interact}>
-            互动
-          </button>
-        </div>
-
-        <div className="rounded-[16px] border border-[#DCC8A8] bg-[#FFF8EA] p-3">
-          <div className="mb-3 flex items-center justify-between">
-            <button
-              className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${decorateMode ? "bg-[#6C5942] text-white" : "bg-[#EFE0CB] text-[#5F4C36]"}`}
-              onClick={() => setDecorateMode((v) => !v)}
-            >
-              {decorateMode ? "布置中" : "布置"}
-            </button>
-            <button className="text-[12px] text-[#9A6B52]" onClick={clearDecor}>清空摆件</button>
-          </div>
-          <div className="grid grid-cols-4 gap-2">
-            {(Object.keys(DECOR_META) as DecorKind[]).map((kind) => {
-              const meta = DECOR_META[kind];
-              const active = selectedDecor === kind;
+          <div className="flex shrink-0 rounded-full border border-[#D8C2A3] bg-[#FFF8EA]/92 p-1 shadow-[0_6px_18px_rgba(96,72,43,0.08)]">
+            {(Object.keys(HOME_MODES) as HomeMode[]).map((key) => {
+              const active = key === mode;
               return (
                 <button
-                  key={kind}
-                  className={`rounded-[12px] border px-2 py-2 text-[11px] ${active ? "border-[#6C5942] bg-[#F4E0B8]" : "border-[#E4D2BA] bg-[#FFFDF8]"}`}
-                  onClick={() => {
-                    setSelectedDecor(kind);
-                    setDecorateMode(true);
-                  }}
+                  key={key}
+                  type="button"
+                  aria-pressed={active}
+                  className={`rounded-full px-3 py-1.5 text-[12px] font-semibold transition ${
+                    active ? "bg-[#5F4B37] text-[#FFF8EA] shadow-[0_3px_8px_rgba(70,48,29,0.22)]" : "text-[#725F4A]"
+                  }`}
+                  onClick={() => changeMode(key)}
                 >
-                  <span className="mr-1 font-black" style={{ color: meta.color }}>{meta.mark}</span>
-                  {meta.label}
+                  {HOME_MODES[key].label}
                 </button>
               );
             })}
           </div>
-          <div className="mt-2 text-[11px] leading-relaxed text-[#8B7B65]">
-            普通模式点地图移动；布置模式点地图叠加小摆件。
+        </div>
+
+        <div
+          className="relative overflow-hidden rounded-[22px] border border-[#D4B994] shadow-[0_18px_42px_rgba(76,56,36,0.22)]"
+          style={{ aspectRatio: "1402 / 1122", background: modeMeta.bg }}
+        >
+          <img
+            src={modeMeta.image}
+            alt="小家"
+            className="absolute inset-0 h-full w-full select-none object-contain drop-shadow-[0_18px_22px_rgba(45,35,28,0.18)]"
+            decoding="async"
+            draggable={false}
+          />
+          {HOTSPOTS.map((spot) => {
+            const active = selectedSpot === spot.key;
+            const preview = active || hoveredSpot === spot.key;
+            return (
+              <React.Fragment key={spot.key}>
+                {spot.parts.map((part, index) => {
+                  const hotspotStyle: React.CSSProperties = {
+                    left: `${part.rect.left}%`,
+                    top: `${part.rect.top}%`,
+                    width: `${part.rect.width}%`,
+                    height: `${part.rect.height}%`,
+                    clipPath: part.shape,
+                    WebkitClipPath: part.shape,
+                    filter: active ? "drop-shadow(0 0 12px rgba(255,214,132,0.58))" : undefined,
+                  };
+                  return (
+                    <button
+                      key={`${spot.key}-${index}`}
+                      type="button"
+                      aria-hidden={index === 0 ? undefined : true}
+                      aria-label={index === 0 ? spot.title : undefined}
+                      tabIndex={index === 0 ? undefined : -1}
+                      className={`absolute border-0 transition duration-150 active:scale-[0.985] ${
+                        active
+                          ? "bg-[#FFE7A6]/24"
+                          : "bg-transparent hover:bg-[#FFE7A6]/16 focus-visible:bg-[#FFE7A6]/20 focus-visible:outline-none"
+                      }`}
+                      style={hotspotStyle}
+                      onClick={() => selectSpot(spot)}
+                      onFocus={() => setHoveredSpot(spot.key)}
+                      onBlur={() => setHoveredSpot((current) => (current === spot.key ? null : current))}
+                      onMouseEnter={() => setHoveredSpot(spot.key)}
+                      onMouseLeave={() => setHoveredSpot((current) => (current === spot.key ? null : current))}
+                    />
+                  );
+                })}
+                <span
+                  className={`pointer-events-none absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/80 bg-[#FFE2A0] shadow-[0_0_12px_rgba(255,209,128,0.85)] transition ${preview ? "opacity-100" : "opacity-70"}`}
+                  style={{ left: `${spot.marker.left}%`, top: `${spot.marker.top}%` }}
+                />
+                <span
+                  className={`pointer-events-none absolute -translate-x-1/2 rounded-full bg-[#2F251D]/78 px-2 py-0.5 text-[10px] font-semibold text-[#FFF6DD] shadow-[0_4px_10px_rgba(38,28,20,0.22)] transition ${preview ? "opacity-100" : "opacity-0"}`}
+                  style={{ left: `${spot.marker.left}%`, top: `${spot.marker.labelTop ?? spot.marker.top + 2.2}%` }}
+                >
+                  {spot.label}
+                </span>
+              </React.Fragment>
+            );
+          })}
+        </div>
+
+        <div className="rounded-[18px] border border-[#DCC8A8] bg-[#FFF8EA] p-3 shadow-[0_8px_20px_rgba(96,72,43,0.08)]">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold tracking-[0.16em] text-[#9C7354]">DU</div>
+              <div className="mt-0.5 text-[15px] font-semibold text-[#3C352B]">{selected.title}</div>
+            </div>
+            <div className="rounded-full bg-[#EFE0CB] px-3 py-1 text-[11px] font-semibold text-[#725F4A]">{modeMeta.label}</div>
+          </div>
+          <div className="min-h-[44px] text-[14px] leading-relaxed text-[#3C352B]">{line}</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {selected.actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                className="rounded-full border border-[#D5BA96] bg-[#F7E6C8] px-3 py-2 text-[13px] font-semibold text-[#5F4B37] shadow-[0_3px_8px_rgba(96,72,43,0.08)] active:translate-y-px"
+                onClick={() => setLine(action.line)}
+              >
+                {action.label}
+              </button>
+            ))}
           </div>
         </div>
       </div>
     </div>
-  );
-}
-
-function DecorItem({ item }: { item: PlacedDecor }) {
-  const meta = DECOR_META[item.kind];
-  return (
-    <div
-      className="absolute z-10 flex items-center justify-center rounded-[4px] border border-[#6B563D] bg-[#FFF8EA] text-[13px] font-black leading-none shadow-[0_2px_0_rgba(80,55,28,0.22)]"
-      style={{
-        left: `${(item.x / COLS) * 100}%`,
-        top: `${(item.y / ROWS) * 100}%`,
-        width: `${(1 / COLS) * 100}%`,
-        height: `${(1 / ROWS) * 100}%`,
-        color: meta.color,
-      }}
-      title={meta.label}
-    >
-      {meta.mark}
-    </div>
-  );
-}
-
-function WalkHint({ pos }: { pos: Pos | null }) {
-  if (!pos) return null;
-  return (
-    <div
-      className="absolute z-10 rounded-full border-2 border-[#FFF4BE] bg-[#F5CE69]/70 shadow-[0_0_0_2px_rgba(99,73,38,0.28)]"
-      style={{
-        left: `${((pos.x + 0.22) / COLS) * 100}%`,
-        top: `${((pos.y + 0.22) / ROWS) * 100}%`,
-        width: `${(0.56 / COLS) * 100}%`,
-        height: `${(0.56 / ROWS) * 100}%`,
-      }}
-    />
-  );
-}
-
-function PixelPerson({ pos, tone, label }: { pos: Pos; tone: "me" | "du"; label: string }) {
-  const colors = tone === "du"
-    ? { skin: "#F0C98F", hair: "#5A3E2D", shirt: "#F6D17C", pants: "#6E563A", accent: "#FFF0BD", outline: "#4D3526" }
-    : { skin: "#F1B9A7", hair: "#2D2430", shirt: "#F3A7B6", pants: "#8B5F5A", accent: "#F86F8C", outline: "#4D3526" };
-  return (
-    <div
-      className="absolute z-20"
-      style={{
-        left: `${((pos.x + 0.02) / COLS) * 100}%`,
-        top: `${((pos.y - 0.08) / ROWS) * 100}%`,
-        width: `${(0.78 / COLS) * 100}%`,
-        height: `${(1.08 / ROWS) * 100}%`,
-        transition: "left 180ms linear, top 180ms linear",
-        filter: "drop-shadow(0 2px 0 rgba(83,58,32,0.26))",
-      }}
-      aria-label={label}
-    >
-      <div className="relative h-full w-full">
-        <div className="absolute bottom-0 left-[18%] h-[12%] w-[64%] rounded-full bg-black/20" />
-        <div className="absolute left-[18%] top-[6%] h-[45%] w-[64%] border-2" style={{ background: colors.skin, borderColor: colors.outline }} />
-        <div className="absolute left-[10%] top-[2%] h-[22%] w-[80%] border-2" style={{ background: colors.hair, borderColor: colors.outline }} />
-        <div className="absolute left-[13%] top-[23%] h-[18%] w-[13%]" style={{ background: colors.hair }} />
-        <div className="absolute right-[13%] top-[23%] h-[18%] w-[13%]" style={{ background: colors.hair }} />
-        {tone === "me" ? (
-          <>
-            <div className="absolute left-[5%] top-[4%] h-[12%] w-[14%]" style={{ background: colors.accent }} />
-            <div className="absolute right-[5%] top-[4%] h-[12%] w-[14%]" style={{ background: colors.accent }} />
-          </>
-        ) : null}
-        <div className="absolute left-[32%] top-[28%] h-[8%] w-[8%] bg-[#1F1A18]" />
-        <div className="absolute right-[32%] top-[28%] h-[8%] w-[8%] bg-[#1F1A18]" />
-        <div className="absolute left-[29%] top-[43%] h-[7%] w-[42%]" style={{ background: colors.accent }} />
-        <div className="absolute left-[22%] top-[50%] h-[30%] w-[56%] border-2" style={{ background: colors.shirt, borderColor: colors.outline }} />
-        <div className="absolute left-[4%] top-[54%] h-[24%] w-[18%] border-2" style={{ background: colors.skin, borderColor: colors.outline }} />
-        <div className="absolute right-[4%] top-[54%] h-[24%] w-[18%] border-2" style={{ background: colors.skin, borderColor: colors.outline }} />
-        <div className="absolute left-[27%] bottom-[7%] h-[18%] w-[18%] border-2" style={{ background: colors.pants, borderColor: colors.outline }} />
-        <div className="absolute right-[27%] bottom-[7%] h-[18%] w-[18%] border-2" style={{ background: colors.pants, borderColor: colors.outline }} />
-      </div>
-    </div>
-  );
-}
-
-function DPad({ onMove }: { onMove: (delta: Pos) => void }) {
-  const btn = "flex h-10 w-10 items-center justify-center rounded-[12px] border border-[#D6C4A7] bg-[#FFF8EA] text-[16px] font-black text-[#5F4C36] active:translate-y-px";
-  return (
-    <div className="mx-auto grid w-[124px] grid-cols-3 gap-1">
-      <div />
-      <button className={btn} onClick={() => onMove({ x: 0, y: -1 })}>↑</button>
-      <div />
-      <button className={btn} onClick={() => onMove({ x: -1, y: 0 })}>←</button>
-      <div className="h-10 w-10 rounded-[12px] border border-[#EADDC9] bg-[#EFE0CB]" />
-      <button className={btn} onClick={() => onMove({ x: 1, y: 0 })}>→</button>
-      <div />
-      <button className={btn} onClick={() => onMove({ x: 0, y: 1 })}>↓</button>
-      <div />
-    </div>
-  );
-}
-
-function ModeButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
-  return (
-    <button
-      className={`rounded-[14px] border px-2 py-2 text-[12px] font-semibold active:translate-y-px ${
-        active ? "border-[#6C5942] bg-[#6C5942] text-white" : "border-[#D6C4A7] bg-[#FFF8EA] text-[#5F4C36]"
-      }`}
-      onClick={onClick}
-    >
-      {label}
-    </button>
   );
 }

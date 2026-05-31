@@ -29,6 +29,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
 | MiniApp 分页 | `miniapp/src/ui/tabs/*` | 日志、思维链、上游、日历、贴纸、记忆调试等子页 |
+| MiniApp 小家 | `miniapp/src/ui/tabs/PixelHomeTab.tsx`、`miniapp/src/assets/life-home-*.png` | 「小家」生活感页面：三种光照小屋图、床/浴室/书房/沙发图片热区与文字互动 |
 | 文游规则入口 | `docs/wenyou_rules.md`、`docs/wenyou/*.md` | 开源版文游规则入口与拆分文档：核心循环、运行时状态缓存、副本生成、怪物系统、数值成长、奖励经济、后端契约 |
 | 文游物品/核心能力系统 | `docs/wenyou/item_ability_system.md`、`docs/wenyou/item_catalog_draft_d.md`、`docs/wenyou/item_catalog_draft_c.md`、`docs/wenyou/item_catalog_draft_b.md`、`docs/wenyou/item_catalog_draft_a.md`、`docs/wenyou/item_catalog_draft_s.md`、`content/default/items.json`、`content/default/item_catalog.sql`、`content/default/abilities.json`、`schemas/item.schema.json`、`schemas/ability.schema.json`、`content/default/reward_tables.json` | 通用商店/抽卡/奖励道具目录、用途分类、物品形态、时代标签、耐久/次数、背包使用/出售、商店、抽卡、核心能力原型和奖励表；不再保留独立高阶兑换入口、装备栏、穿戴、锻造、拆解、多能力槽或复杂身体路线；D/C/B/A/S 道具已从 Markdown 审校源表生成结构化内容表和 SQL seed；副本专属可带出物先归内容包/副本奖励表，不默认进通用目录；D 级副本常规产出最多 C 级 |
 | R2 存储 | `storage/r2_store.py` | 会话、summary、动态记忆、设置、贴纸、设备状态、日程等 R2 key |
@@ -66,6 +67,15 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Channel|入口风格" services/telegram_proactive.py services/conversation_followup.py services/entry_style_prompt.py services/chat_prompt_injections.py
 .venv/bin/python -m py_compile services/telegram_proactive.py services/conversation_followup.py
 ```
+
+## MiniApp 小家 / 生活互动
+
+当前状态（2026-06-01）：
+- 已完成：`miniapp/src/ui/tabs/PixelHomeTab.tsx` 从旧像素地图、方向键、跟随/布置按键，改成拐角沙发版 2.5D 小家图片热区；三种透明图资产为 `miniapp/src/assets/life-home-day.png`、`life-home-night-on.png`、`life-home-night-off.png`。入口标题从「像素小家」改为「小家」。
+- 已完成：图片内热区包括床、浴室、书房、客厅沙发；床提供「睡觉 / 色色」，浴室提供「洗澡 / 色色」，书房提供「写日记 / 看书」，沙发提供「一起看电视」，每个选项只更新本地文字互动，不调用后端。
+- 已完成：床和客厅沙发不再使用宽泛大矩形热区；床改成贴床面的多边形，沙发拆成多段拐角形多边形热区，家具外但旧大框内的位置不会误触。
+- 已验证：干净临时 worktree 套用小家相关改动后，`npx tsc --noEmit`（`miniapp/`）和 `npm run build` 通过并重建 `miniapp_static`；本地 `http://127.0.0.1:5173/miniapp/` 实测小家页加载、床/沙发热区命中与旧大框外侧不误触可用。
+- 未完成 / 下次继续：当前是前端本地文字互动，还没有接真实聊天上下文、日志/日记写入或后端动作；不要把这轮小家静态 hash 产物和仓库里既有的其它半成品脏改混在一起提交。
 
 ## 聊天失败 / 上游不可用
 
