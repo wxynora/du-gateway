@@ -1360,3 +1360,9 @@ npm -C miniapp run android
 - 已完成：`pipeline/pipeline.py::step_inject_latest_4_rounds_for_new_window` 会从最近 12 轮中筛掉历史主动决策污染轮次再补足 last4，避免旧 R2 数据继续进入“最近对话”；新存档的短版主动决策轮次可以正常作为短程连续性被注入，并显示成 `[随机唤醒]` / `[闹钟提醒]`，不显示 `[辛玥]`。
 - 已验证：干净 worktree 基于 `origin/main` 运行 `.venv/bin/python -m py_compile routes/chat.py pipeline/pipeline.py`、compact proactive archive smoke、last4 event rendering smoke、last4 filter smoke、`git diff --check` 通过；服务器已 fast-forward 并重启 `du-gateway`，线上模拟当前 `tg_8260066512` 注入确认不含历史“这是一次随机唤醒”和 `{"action"}`，最近对话估算约 284 tokens。
 - 未完成 / 下次继续：没有删除线上 R2 里已有的污染轮次；它们只是被注入过滤跳过。后续如果需要彻底清理历史，再单独做带备份的数据修剪。
+
+当前状态（2026-06-01 中期记忆独立层）：
+- 已完成：新增 `services/du_midterm_memory.py`，按最近 14 天 `du_daily_archive` + 当前 `du_daily_state` + 规则筛后的画像候选生成中期连续感；使用动态层的人格口吻，但不复用 `new/merge/skip` 动态记忆规则。生成规则包含三天刷新、时间衰减（近 1-3 天更具体、4-7 天代表事件、8-14 天背景）、第一人称硬约束、高密度亲密短锚点保留和画像候选规则句清洗。
+- 已完成：`storage/du_state_store.py` 新增 R2 key `global/du_midterm_memory.json` 读写；payload 保存 `latest` 与最近 3 版 `previous`。`pipeline/pipeline.py` 新增 `step_inject_du_midterm_memory()`，放在「渡的日常」之后、动态记忆召回之前注入 `latest.content`；到期刷新走后台线程，不阻塞当前聊天。`routes/miniapp/midterm_memory.py` 新增 GET、preview、refresh 接口并接入 `/miniapp-api`。
+- 已验证：`.venv/bin/python -m py_compile services/du_midterm_memory.py storage/du_state_store.py pipeline/pipeline.py routes/chat.py routes/miniapp/midterm_memory.py routes/miniapp_api.py services/prompt_cache_debug.py` 通过；路由表确认 `/miniapp-api/midterm-memory`、`/preview`、`/refresh` 已注册；手动 `generate_midterm_memory(save=True, force=True)` 已写入首版 `latest`，`should_refresh=False`，注入预览包含 `【最近一段时间（2026-05-19 至 2026-06-01）】`；`git diff --check` 覆盖本轮文件通过。
+- 未完成 / 下次继续：本轮没有做 MiniApp 前端按钮、没有重建 `miniapp_static`、没有 push/重启；仓库仍有大量非本轮脏改和静态 hash 产物，提交时只挑 `services/du_midterm_memory.py`、`routes/miniapp/midterm_memory.py`、`storage/du_state_store.py`、`routes/miniapp_api.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/prompt_cache_debug.py` 和本索引段的相关 hunk。

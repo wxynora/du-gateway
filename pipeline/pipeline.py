@@ -1080,6 +1080,27 @@ def step_inject_du_daily(
     return body
 
 
+def step_inject_du_midterm_memory(body: dict, window_id: str) -> dict:
+    """
+    全局注入：最近 14 天滑窗的中期连续感。
+    这层独立于 dynamic_memory/current.json，只注入 latest；到期刷新走后台线程，不阻塞当前聊天。
+    """
+    _ = window_id
+    try:
+        from services.du_midterm_memory import format_inject_block, refresh_if_due_background
+
+        refresh_if_due_background()
+        block = format_inject_block()
+    except Exception as e:
+        logger.debug("du_midterm 注入跳过 error=%s", e)
+        return body
+    if not (block or "").strip():
+        return body
+    inject = "\n\n" + block.strip()
+    body = _append_to_dynamic_system(body, inject)
+    return body
+
+
 def step_inject_interaction_candidate(body: dict, window_id: str) -> dict:
     """
     全局注入：在静态 system 段追加「相处模式候选写法说明」。

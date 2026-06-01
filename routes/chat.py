@@ -37,6 +37,7 @@ from pipeline.pipeline import (
     step_inject_du_thought,
     step_inject_du_vitals,
     step_inject_du_daily,
+    step_inject_du_midterm_memory,
     step_inject_interaction_candidate,
     step_inject_rikkahub_reminder,
     step_inject_dynamic_memory,
@@ -1040,6 +1041,7 @@ def chat_completions():
         body = step_inject_du_thought(body, window_id)
         body = step_inject_du_vitals(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
+        body = step_inject_du_midterm_memory(body, window_id)
         if not skip_dynamic_memory:
             body = step_inject_dynamic_memory(body, window_id)
         body = step_inject_humor_memes(body)

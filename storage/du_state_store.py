@@ -11,6 +11,7 @@ R2_KEY_DU_VITALS_LATEST = "global/du_vitals_latest.json"
 R2_KEY_DU_VITALS_HISTORY = "global/du_vitals_history.json"
 R2_KEY_DU_DAILY_STATE = "global/du_daily_state.json"
 R2_KEY_DU_DAILY_ARCHIVE = "global/du_daily_archive.json"
+R2_KEY_DU_MIDTERM_MEMORY = "global/du_midterm_memory.json"
 R2_KEY_XINYUE_PORTRAIT_CANDIDATES = "portrait_memory/xinyue_candidates.json"
 R2_KEY_DU_PORTRAIT_CANDIDATES = "portrait_memory/du_candidates.json"
 R2_KEY_INTERACTION_CANDIDATES = "portrait_memory/interaction_candidates.json"
@@ -209,6 +210,31 @@ def upsert_du_daily_archive_entry(entry: dict, limit: int = 45) -> bool:
         out.append(payload)
     out = sorted(out, key=lambda x: str((x or {}).get("day") or ""))[-max(1, int(limit or 45)) :]
     return save_du_daily_archive(out)
+
+
+def get_du_midterm_memory() -> Optional[dict]:
+    client = _s3_client()
+    if not client:
+        return None
+    data = _read_json(client, R2_KEY_DU_MIDTERM_MEMORY)
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def save_du_midterm_memory(data: dict) -> bool:
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(data, dict):
+        return False
+    with _du_state_write_lock:
+        try:
+            _write_json(client, R2_KEY_DU_MIDTERM_MEMORY, data)
+            return True
+        except Exception as e:
+            logger.error("save_du_midterm_memory 失败 error=%s", e, exc_info=True)
+            return False
 
 
 def _get_items_json(key: str) -> list[dict]:
