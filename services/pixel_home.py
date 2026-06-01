@@ -64,6 +64,9 @@ DU_DYNAMICS_LIMIT = 5
 EVENT_AUTO_END_MINUTES = 120
 DU_EVENT_SOURCES = {"du_marker"}
 XINYUE_EVENT_SOURCES = {"chat_infer", "miniapp_event"}
+_SPOT_WORD_PATTERN = "|".join(sorted((re.escape(key) for key in SPOT_ALIASES if key and not key.isascii()), key=len, reverse=True))
+_MOVE_TO_RE = re.compile(rf"(?:到|去|回到|走到|来到|坐到|躺到)({_SPOT_WORD_PATTERN})")
+_MOVE_FROM_RE = re.compile(rf"^从({_SPOT_WORD_PATTERN})(?:走出|出来|离开|出去)")
 
 
 def normalize_spot(value: Any, default: str = "home") -> str:
@@ -84,6 +87,17 @@ def _clean_activity(value: Any, default: str = "待着") -> str:
     if not text:
         text = default
     return text[:48].strip()
+
+
+def _resolve_spot_from_activity(spot: str, activity: str) -> str:
+    text = _clean_activity(activity, "待着")
+    to_match = _MOVE_TO_RE.search(text)
+    if to_match:
+        return normalize_spot(to_match.group(1), spot)
+    from_match = _MOVE_FROM_RE.search(text)
+    if from_match and normalize_spot(from_match.group(1), "") == spot:
+        return "home"
+    return spot
 
 
 def _now_dt() -> datetime:
@@ -210,6 +224,7 @@ def _normalize_actor(raw: Any, default: dict, *, force_source: str = "") -> dict
     now_iso = now_beijing_iso()
     spot = normalize_spot(data.get("spot") or data.get("location"), str(default.get("spot") or "home"))
     activity = _clean_activity(data.get("activity") or data.get("doing") or data.get("status"), str(default.get("activity") or "待着"))
+    spot = _resolve_spot_from_activity(spot, activity)
     source = str(force_source or data.get("source") or default.get("source") or "manual").strip() or "manual"
     updated_at = str(data.get("updated_at") or data.get("updatedAt") or "").strip() or now_iso
     return {"spot": spot, "spot_label": spot_label(spot), "activity": activity, "source": source, "updated_at": updated_at}
@@ -226,7 +241,7 @@ def _format_actor_text(actor: dict) -> str:
     spot = normalize_spot((actor or {}).get("spot"))
     label = spot_label(spot)
     activity = _clean_activity((actor or {}).get("activity"), "待着")
-    if activity.startswith("在"):
+    if activity.startswith(("在", "从", "去", "回到", "走到", "来到", "离开")):
         return activity
     if activity.startswith("正在"):
         activity = activity[2:].strip() or "待着"
@@ -260,6 +275,7 @@ def _normalize_du_dynamics(raw: Any) -> list[dict]:
             continue
         spot = normalize_spot(item.get("spot"), "home")
         activity = _clean_activity(item.get("activity"), "待着")
+        spot = _resolve_spot_from_activity(spot, activity)
         at = str(item.get("at") or item.get("updated_at") or item.get("updatedAt") or "").strip()
         if not at:
             continue
@@ -400,6 +416,7 @@ def format_inject_block() -> str:
         f"小玥的位置：{xinyue_label}，{_format_activity_for_prompt(str(xinyue.get('activity') or '待着'))}。\n"
         "小家事件超过 2 小时没有更新会自动结束；其他移动和状态变化由你在对话里自然决定。\n"
         "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加 PIXEL_HOME 隐藏标记：\n"
+        "写 PIXEL_HOME 时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅”，不要继续写 study，要写最终到达的房间，没有明确房间就写 home。\n"
         "<<<PIXEL_HOME>>>\n"
         '{"spot":"study","activity":"写日记"}\n'
         "<<<END_PIXEL_HOME>>>\n"

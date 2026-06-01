@@ -42,6 +42,7 @@ type Hotspot = {
     rect: { left: number; top: number; width: number; height: number };
     shape?: string;
   }>;
+  actions: Array<{ label: string }>;
 };
 
 const HOME_MODES: Record<HomeMode, { image: string; alt: string }> = {
@@ -79,18 +80,21 @@ const HOTSPOTS: Hotspot[] = [
         shape: "polygon(7% 32%, 38% 8%, 72% 13%, 96% 37%, 94% 76%, 61% 99%, 19% 84%, 4% 59%)",
       },
     ],
+    actions: [{ label: "睡觉" }, { label: "色色" }],
   },
   {
     key: "bath",
     label: "浴室",
     marker: { left: 78.5, top: 32.5 },
     parts: [{ rect: { left: 66.5, top: 16, width: 27, height: 28 } }],
+    actions: [{ label: "洗澡" }, { label: "色色" }],
   },
   {
     key: "study",
     label: "书房",
     marker: { left: 54, top: 25.5 },
     parts: [{ rect: { left: 45, top: 15, width: 18, height: 21 } }],
+    actions: [{ label: "写日记" }, { label: "看书" }],
   },
   {
     key: "sofa",
@@ -114,6 +118,7 @@ const HOTSPOTS: Hotspot[] = [
         shape: "polygon(0% 25%, 33% 0%, 100% 40%, 74% 100%, 0% 65%)",
       },
     ],
+    actions: [{ label: "一起看电视" }],
   },
 ];
 
@@ -170,10 +175,12 @@ export function PixelHomeTab() {
   const [mode, setMode] = useState<HomeMode>(() => resolveLocalMode());
   const [homeState, setHomeState] = useState<PixelHomeStateResp | null>(null);
   const [pulseSpot, setPulseSpot] = useState<HotspotKey | null>(null);
+  const [selectedSpotKey, setSelectedSpotKey] = useState<HotspotKey | null>(null);
   const [mySpot, setMySpot] = useState<HomeSpotKey>("sofa");
   const [myActivity, setMyActivity] = useState("休息");
   const [myDirty, setMyDirty] = useState(false);
   const [savingMyState, setSavingMyState] = useState(false);
+  const [sendingAction, setSendingAction] = useState("");
   const [statusEditorOpen, setStatusEditorOpen] = useState(false);
   const pulseTimerRef = useRef<number | null>(null);
 
@@ -183,6 +190,7 @@ export function PixelHomeTab() {
   const mySpotLabel = spots.find((spot) => spot.key === mySpot)?.label || "小家里";
   const myStatus = myDirty ? statusText(mySpotLabel, myActivity) : actorText(homeState?.xinyue, "在客厅沙发休息");
   const activePulse = useMemo(() => HOTSPOTS.find((spot) => spot.key === pulseSpot) || null, [pulseSpot]);
+  const selectedSpot = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpotKey) || null, [selectedSpotKey]);
   const feedItems = useMemo(() => {
     const dynamics = (homeState?.du_dynamics || []).slice(-5).reverse();
     if (dynamics.length) return dynamics;
@@ -231,6 +239,7 @@ export function PixelHomeTab() {
   }, []);
 
   function showPulse(spot: Hotspot) {
+    setSelectedSpotKey(spot.key);
     setPulseSpot(spot.key);
     if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
     pulseTimerRef.current = window.setTimeout(() => {
@@ -254,6 +263,22 @@ export function PixelHomeTab() {
       setStatusEditorOpen(false);
     } finally {
       setSavingMyState(false);
+    }
+  }
+
+  async function sendHomeEvent(action: { label: string }) {
+    if (!selectedSpot || sendingAction) return;
+    setSendingAction(action.label);
+    try {
+      const data = await apiJson<PixelHomeStateResp>("/miniapp-api/pixel-home-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spot: selectedSpot.key, action: action.label }),
+      });
+      if (data?.state) setHomeState(data.state);
+      else await refreshHomeState();
+    } finally {
+      setSendingAction("");
     }
   }
 
@@ -330,6 +355,25 @@ export function PixelHomeTab() {
             </svg>
           </button>
         </section>
+
+        {selectedSpot ? (
+          <section className="pixel-home-ref-actions" aria-label={`${selectedSpot.label}事件`}>
+            <div className="pixel-home-ref-actions-room">{selectedSpot.label}</div>
+            <div className="pixel-home-ref-action-list">
+              {selectedSpot.actions.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  className="pixel-home-ref-action-chip"
+                  disabled={!!sendingAction}
+                  onClick={() => void sendHomeEvent(action)}
+                >
+                  {sendingAction === action.label ? "发送中" : action.label}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <section className="pixel-home-ref-feed">
           <span className="pixel-home-ref-section-label">渡的动态</span>
