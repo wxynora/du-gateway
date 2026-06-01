@@ -563,7 +563,13 @@ def _available_schedule_channels() -> list[str]:
     return channels
 
 
-def _generate_schedule_reply(window_id: str, user_id: int, prompt: str, preferred_channel: str = "qq") -> Optional[str]:
+def _generate_schedule_reply(
+    window_id: str,
+    user_id: int,
+    prompt: str,
+    preferred_channel: str = "qq",
+    wakeup_kind: str = "system_alarm",
+) -> Optional[str]:
     """用主上下文窗口生成闹钟提醒文案，但不直接发 Telegram。"""
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     model = _get_chat_model()
@@ -583,7 +589,9 @@ def _generate_schedule_reply(window_id: str, user_id: int, prompt: str, preferre
         "X-Reply-Target": str(user_id or "").strip(),
         "X-Force-Last4": "1",
         "X-DU-GATEWAY-WAKEUP": "1",
+        "X-DU-WAKEUP-KIND": str(wakeup_kind or "system_alarm").strip() or "system_alarm",
         "X-Skip-Dynamic-Memory": "1",
+        "X-Skip-Post-Archive-Dynamic-Memory": "1",
     }
     try:
         logger.info("闹钟提醒生成请求 window_id=%s channel=%s model=%s chars=%s", headers["X-Window-Id"], channel, model, len(prompt))
@@ -854,6 +862,9 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         created_by = str(it.get("created_by") or "wife").strip().lower() or "wife"
         target_role = str(it.get("target_role") or "wife").strip().lower() or "wife"
         rep_label = {"once": "一次性", "daily": "每天", "weekly": "每周"}.get(rep, rep)
+        is_calendar_event = note.startswith("由渡创建系统行程")
+        wakeup_kind = "calendar_event" if is_calendar_event else "system_alarm"
+        reminder_name = "日历提醒" if is_calendar_event else "闹钟"
         # 走和正常对话同一条链路：让“渡”结合上下文自然提醒，而非发送系统模板文案。
         if target_role == "du":
             owner_prefix = "你给自己定的"
@@ -862,7 +873,7 @@ def schedule_tick(target_user_id: int = 0) -> dict:
         else:
             owner_prefix = "老婆之前设的"
         reminder_prompt = (
-            f"{owner_prefix}「{title}」闹钟，现在到点了。"
+            f"{owner_prefix}「{title}」{reminder_name}，现在到点了。"
             f"类型：{rep_label}；时间：{now_dt.strftime('%Y-%m-%d %H:%M')}。"
             f"{('备注：' + note + '。') if note else ''}"
             "请像平时聊天那样自然回复；如果有多句，请用换行分段。"
@@ -880,7 +891,13 @@ def schedule_tick(target_user_id: int = 0) -> dict:
             channels,
         )
         window_id = f"tg_{uid}"
-        reply_text = _generate_schedule_reply(window_id=window_id, user_id=uid, prompt=reminder_prompt, preferred_channel=generation_channel)
+        reply_text = _generate_schedule_reply(
+            window_id=window_id,
+            user_id=uid,
+            prompt=reminder_prompt,
+            preferred_channel=generation_channel,
+            wakeup_kind=wakeup_kind,
+        )
         if not reply_text:
             logger.warning("闹钟提醒生成空回复 uid=%s item_id=%s", uid, str(it.get("id") or ""))
             continue

@@ -544,6 +544,7 @@ def _send_wakeup_event(
     image_url: str = "",
     archive: bool = True,
     stable_proactive_channel: bool = False,
+    wakeup_kind: str = "",
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -600,8 +601,12 @@ def _send_wakeup_event(
         "X-DU-GATEWAY-WAKEUP": "1",
         "X-DU-FOLLOWUP-GEN": "1",
         "X-Skip-Dynamic-Memory": "1",
+        "X-Skip-Post-Archive-Dynamic-Memory": "1",
         "X-Force-Last4": "1",
     }
+    kind = str(wakeup_kind or "").strip()
+    if kind:
+        headers["X-DU-WAKEUP-KIND"] = kind
     if archive:
         headers["X-DU-FOLLOWUP-ARCHIVE"] = "1"
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
@@ -680,6 +685,7 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
             "请你现在直接对她回应一两句。不要解释工具、回执或系统流程；"
             "不要把这当成普通任务总结，要像刚收到她这个动作一样自然接住。"
         ),
+        wakeup_kind="choice_dialog",
     )
 
 
@@ -700,6 +706,7 @@ def send_screen_check_wakeup(window_id: str, target: str, event_text: str, image
         image_url=image_url,
         archive=True,
         extra_instruction=instruction,
+        wakeup_kind="screen_check",
     )
 
 
@@ -712,6 +719,7 @@ def send_proactive_trigger_wakeup(window_id: str, target: str, event_text: str, 
         created_at=created_at,
         archive=True,
         stable_proactive_channel=True,
+        wakeup_kind="proactive_trigger",
     )
 
 

@@ -3,6 +3,7 @@
 import base64
 import json
 import queue
+import re
 import threading
 import time
 from typing import Optional
@@ -222,11 +223,98 @@ def _clip_archive_text(text: str, limit: int = 180) -> str:
     return text[: max(0, limit - 1)].rstrip() + "..."
 
 
+def _compact_archive_line(text: str, limit: int = 120) -> str:
+    text = _clip_archive_text(str(text or "").replace("\r", "\n"), limit)
+    return text.strip(" 。；;\n\t")
+
+
+def _regex_group(pattern: str, text: str, default: str = "") -> str:
+    try:
+        m = re.search(pattern, text, flags=re.S)
+        if not m:
+            return default
+        return str(m.group(1) or "").strip()
+    except Exception:
+        return default
+
+
+def _compact_schedule_event_text(text: str, *, label: str) -> str:
+    title = _regex_group(r"「([^」]{1,80})」", text)
+    when = _regex_group(r"时间[:：]([^。；\n]{1,60})", text)
+    if title:
+        content = f"{label}：「{_compact_archive_line(title, 80)}」到点了。"
+    else:
+        content = f"这是一次{label}。"
+    if when:
+        content += f"时间：{_compact_archive_line(when, 60)}。"
+    return content
+
+
+def _compact_choice_dialog_event_text(text: str) -> str:
+    title = _regex_group(r"弹窗标题[:：]([^\n。]{1,100})", text)
+    result = _regex_group(r"弹窗结果[:：]([^\n]{1,160})", text)
+    result = _compact_archive_line(result, 120)
+    if title and result:
+        return f"弹窗回执：「{_compact_archive_line(title, 80)}」{result}。"
+    if result:
+        return f"弹窗回执：{result}。"
+    return "这是一次弹窗回执。"
+
+
+def _compact_screen_check_event_text(text: str) -> str:
+    title = _regex_group(r"查岗申请标题[:：]([^\n。]{1,100})", text)
+    result = _regex_group(r"结果[:：]([^\n]{1,180})", text)
+    captured_at = _regex_group(r"截图时间[:：]([^\n。]{1,80})", text)
+    if not result:
+        if "同意了，这是" in text:
+            result = "她同意了，并回传了截图"
+        elif "没有可用图片链接" in text:
+            result = "她同意了，但截图链接不可用"
+    result = _compact_archive_line(result, 140)
+    if title and result:
+        content = f"截图回执：「{_compact_archive_line(title, 80)}」{result}。"
+    elif result:
+        content = f"截图回执：{result}。"
+    else:
+        content = "这是一次截图回执。"
+    if captured_at:
+        content += f"截图时间：{_compact_archive_line(captured_at, 60)}。"
+    return content
+
+
+def _wakeup_kind_for_archive() -> str:
+    return str(request.headers.get("X-DU-WAKEUP-KIND") or "").strip().lower()
+
+
+def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "") -> dict:
+    kind = str(wakeup_kind or "").strip().lower()
+    text = _plain_message_text(user_msg)
+    if kind in {"system_alarm", "alarm", "schedule_alarm"}:
+        label = "闹钟提醒"
+        content = _compact_schedule_event_text(text, label=label)
+    elif kind in {"calendar_event", "calendar", "schedule_calendar"}:
+        label = "日历提醒"
+        content = _compact_schedule_event_text(text, label=label)
+    elif kind in {"choice_dialog", "choice_dialog_result", "dialog_result"}:
+        label = "弹窗回执"
+        content = _compact_choice_dialog_event_text(text)
+    elif kind in {"screen_check", "screen_check_result", "screenshot_result"}:
+        label = "截图回执"
+        content = _compact_screen_check_event_text(text)
+    elif kind in {"proactive_trigger", "pixel_home"} or "[Proactive trigger fact]" in text:
+        label = "后端触发"
+        content = "这是一次后端触发提醒。"
+    else:
+        label = "网关提醒"
+        content = "这是一次网关唤醒提醒。"
+    return {"role": "event", "archive_label": label, "content": content}
+
+
 def _compact_gateway_reminder_for_archive(user_msg: dict) -> dict:
     text = _plain_message_text(user_msg)
     if "闹钟" in text and ("到点" in text or "提醒" in text):
         label = "闹钟提醒"
-        content = "这是一次闹钟提醒。"
+        content = _compact_schedule_event_text(text, label=label)
     elif text.startswith("这是一次随机唤醒"):
         label = "随机唤醒"
         content = "这是一次随机唤醒提醒。"
@@ -279,6 +367,10 @@ def _build_round_cleaned_for_archive(user_msg: dict, assistant_msg: dict, *, rep
     if _is_proactive_decision_request():
         archive_user = _compact_gateway_reminder_for_archive(archive_user or user_msg)
         archive_assistant = _compact_proactive_decision_for_archive(assistant_msg)
+    elif _is_gateway_wakeup_request():
+        wakeup_kind = _wakeup_kind_for_archive()
+        if wakeup_kind:
+            archive_user = _compact_gateway_event_for_archive(archive_user or user_msg, wakeup_kind=wakeup_kind)
     return build_round_cleaned_for_r2(archive_user, archive_assistant)
 
 
