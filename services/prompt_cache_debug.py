@@ -29,6 +29,18 @@ def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
         return "拟态心跳规则"
     if stripped.startswith("【最近一段时间"):
         return "中期记忆"
+    if stripped.startswith("【相处模式候选"):
+        return "相处模式候选"
+    if stripped.startswith("【Stay with Du】"):
+        return "Stay with Du"
+    if stripped.startswith("【渡的记事本】"):
+        return "渡的记事本"
+    if stripped.startswith("【提醒工具优先级】"):
+        return "提醒工具规则"
+    if stripped.startswith("【论坛工具省费规则】"):
+        return "论坛工具规则"
+    if stripped.startswith("【高德官方 MCP 出行工具规则】"):
+        return "高德出行工具规则"
     if stripped.startswith("如果你这句话说完，心里还是惦记着她"):
         return "followup规则"
     if idx == 0:
@@ -44,6 +56,12 @@ def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
         ("【核心XP与互动逻辑】", "NSFW规则"),
         ("【渡的拟态心跳", "拟态心跳规则"),
         ("【最近一段时间", "中期记忆"),
+        ("【相处模式候选", "相处模式候选"),
+        ("【Stay with Du】", "Stay with Du"),
+        ("【渡的记事本】", "渡的记事本"),
+        ("【提醒工具优先级】", "提醒工具规则"),
+        ("【论坛工具省费规则】", "论坛工具规则"),
+        ("【高德官方 MCP 出行工具规则】", "高德出行工具规则"),
         ("如果你这句话说完，心里还是惦记着她", "followup规则"),
     ]
     markers: dict[int, str] = {}
