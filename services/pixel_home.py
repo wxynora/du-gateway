@@ -429,9 +429,29 @@ def build_pixel_home_event(spot: Any, action: Any) -> str:
 
 
 _CODE_CONTEXT_RE = re.compile(r"(debug|bug|代码|功能|需求|前端|后端|接口|组件|样式|测试|部署|push|commit|文档|界面|按钮|交互|热区|提示词|prompt)")
+_SLEEP_AMOUNT_PATTERN = r"(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百半]+)"
+_SLEEP_RECAP_RE = re.compile(
+    rf"(?:昨晚|昨天|前天|刚才|刚刚|之前|前面|早上|中午|下午|今天)?(?:我)?(?:已经|一共|才|只)?"
+    rf"睡了{_SLEEP_AMOUNT_PATTERN}?(?:个)?(?:小时|钟头|h|分钟|晚|觉)"
+    r"|睡得|睡醒|睡眠|睡不着|没睡|没怎么睡|没睡好|睡太久|睡过"
+)
+_SLEEP_NEGATION_RE = re.compile(r"(?:不是|没说|没有说|不想|不准备|不要|别).{0,8}(?:睡了|睡觉|去睡|上床|躺床)")
+_SLEEP_INTENT_RE = re.compile(
+    r"(?:我要|我去|我准备|我先|我打算|我该|该|准备|先|马上|现在|差不多该)(?:睡了|睡觉|去睡|上床|躺床)"
+    r"|(?:去睡|去睡觉|睡觉去了|上床睡觉|躺床睡)"
+    r"|^(?:我)?睡了(?:[。.!！~～啦咯喽]*)$"
+)
+_TEXT_SPOT_ALIASES = sorted(
+    ((alias, spot) for alias, spot in SPOT_ALIASES.items() if alias and not alias.isascii() and spot != "home"),
+    key=lambda item: len(item[0]),
+    reverse=True,
+)
 
 
 def _infer_phone_spot(text: str) -> str:
+    for alias, spot in _TEXT_SPOT_ALIASES:
+        if alias in text:
+            return spot
     options = ["sofa", "study", "bed", "kitchen"]
     now_dt = _now_dt()
     bucket = now_dt.strftime("%Y-%m-%d-%H")
@@ -450,7 +470,7 @@ def infer_xinyue_state_from_text(text: str) -> dict | None:
         return {"spot": "bath", "activity": "洗澡", "source": "chat_infer"}
     if re.search(r"(我要|我去|我准备|我先|我打算|去)?(吃饭|做饭|点外卖|拿外卖|干饭)", compact):
         return {"spot": "kitchen", "activity": "吃饭", "source": "chat_infer"}
-    if re.search(r"(我要|我去|我准备|我先|我打算|该)?(睡了|睡觉|去睡|上床|躺床)", compact):
+    if _SLEEP_INTENT_RE.search(compact) and not _SLEEP_RECAP_RE.search(compact) and not _SLEEP_NEGATION_RE.search(compact):
         return {"spot": "bed", "activity": "睡觉", "source": "chat_infer"}
     if re.search(r"(玩手机|刷手机|看手机|刷小红书|刷抖音|刷视频)", compact):
         return {"spot": _infer_phone_spot(compact), "activity": "玩手机", "source": "chat_infer"}
