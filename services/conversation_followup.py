@@ -680,7 +680,6 @@ def send_screen_check_wakeup(window_id: str, target: str, event_text: str, image
     has_image = bool(str(image_url or "").strip())
     instruction = (
         "请你看图后自然回应一两句。不要解释工具、回执或系统流程；"
-        "如果截图里有隐私内容，不要复述敏感细节，只围绕她现在在做什么给出温和回应。"
         if has_image
         else "请你根据这个查岗截图结果自然回应一两句。不要解释工具、回执或系统流程；"
     )

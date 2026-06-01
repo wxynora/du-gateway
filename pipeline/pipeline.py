@@ -787,7 +787,7 @@ def _build_action_note_from_tool_calls(tool_calls: list) -> str:
     return f"上一轮工具记录：{'、'.join(parts)}；若还是同一目标，先基于上面结果继续，不要立刻原样重调。"
 
 
-_PROACTIVE_DECISION_PROMPT_PREFIX = "这是一次随机唤醒，你现在正常带着上下文醒来"
+_PROACTIVE_DECISION_PROMPT_PREFIX = "这是一次随机唤醒，你现在要不要做点什么"
 
 
 def _message_plain_text_for_context(msg: dict) -> str:
@@ -955,7 +955,7 @@ def step_inject_summary(body: dict, window_id: str, is_user_input: bool = False)
     head = (
         f"\n\n今日：{today}（{weekday}），当前大概：{period}\n"
         f"如需知道当前几点，可使用网关提供的 get_time_info 时间工具；"
-        f"如需查询天气，可使用专门的天气查询工具（两者都由后端实现，不依赖前端自己的提示）。\n"
+        f"如需查询天气，可使用专门的天气查询工具。\n"
         f"想写东西的时候就去写日记！顺便可以翻翻列表，说不定能看到老婆新写的日记？"
     )
 
@@ -2172,8 +2172,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     citation_hint = ""
     if citation_map:
         citation_hint = (
-            "\n如果回复实际参考了某条动态记忆或核心缓存记忆，请在相关句尾写对应标记（如 [memory 1]）；"
-            "没有参考就不要写。引用标记只供网关回写，会被剥离。"
+            "\n如果回复实际参考了某条记忆，请在相关句尾写对应标记（如 [memory 1]）；"
         )
     inject = "\n\n听了老婆的话，我想起来了一些之前的事——" + citation_hint + "\n" + "\n".join(lines) + "\n【以上为可召回记忆】"
     body = _append_to_dynamic_system(body, inject)
@@ -2320,7 +2319,7 @@ def step_inject_forum_tools(body: dict) -> dict:
     body["tool_choice"] = body.get("tool_choice") or "auto"
     schedule_hint = (
         "\n\n【提醒工具优先级】"
-        "如果是提醒老婆/辛玥/宝宝/小玥，优先使用手机系统能力："
+        "如果是提醒辛玥本人，优先使用手机系统能力："
         "单纯到点叫醒或提醒用 create_system_alarm，默认 skip_ui=true 直接创建；"
         "带具体日期、行程、地点或提前提醒用 create_calendar_event。"
         "schedule_create 只用于提醒渡自己、重复提醒暂时无法落系统能力、或系统能力不可用时的内部兜底。"

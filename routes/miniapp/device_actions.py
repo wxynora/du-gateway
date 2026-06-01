@@ -98,7 +98,7 @@ def _screen_check_wakeup_event(item: dict) -> dict:
     text = "你刚刚向她手机发起的查岗截图申请有结果了：她同意了，这是她刚才的手机截图。"
     if captured_at:
         text += f"\n截图时间：{captured_at}"
-    text += "\n请根据截图自然回应，不要说成监控或系统流程；如果看不清，就直接说看不清。"
+    text += "\n请根据截图自然回应，如果看不清，就直接说看不清。"
     return {"text": text, "image_url": image_url}
 
 

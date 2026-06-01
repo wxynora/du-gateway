@@ -630,7 +630,7 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
     if not now_ref:
         now_ref = datetime.now()
     user_prompt = (
-        f"这是一次随机唤醒，你现在正常带着上下文醒来，自己判断要不要做点什么。{_describe_recent_exchange(now_ref)}\n"
+        f"这是一次随机唤醒，你现在要不要做点什么。{_describe_recent_exchange(now_ref)}\n"
         f"从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
         "可以选：给她发消息、暂时不打扰、去写日记/记事、逛论坛，或其它你认为合适的动作。\n"
         "如果当前状态显示她可能睡着、在忙，或不适合被打扰，可以选择不发消息，转而写日记、逛论坛，或者什么都不做。\n"

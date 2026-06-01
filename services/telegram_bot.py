@@ -146,7 +146,6 @@ def build_telegram_style_system(include_channel_hint: bool = True) -> str:
         "   - 你可以同时输出文字正文；Bot 会额外发送一条语音。\n"
         "   - 写 <voice> 里的语音文本时，遵守语音台词撰写规范：\n"
         f"{build_voice_line_rules('     - ')}\n"
-        "   - 如果你不想发语音，就不要输出 <voice> 标签。\n"
     )
 
 
