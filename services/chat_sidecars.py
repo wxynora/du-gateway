@@ -11,6 +11,7 @@ from services.du_vitals import normalize_vitals_payload, split_assistant_for_vit
 from services.dynamic_memory_citation import strip_assistant_memory_citations
 from services.interaction_memory import split_assistant_for_interaction
 from services.pc_command_handler import process_pcmd_in_assistant_text
+from services.pixel_home import save_pixel_home_hidden_block, split_assistant_for_pixel_home
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
@@ -120,6 +121,7 @@ def extract_and_store_hidden_sidecars(
     visible, vitals = split_assistant_for_vitals(visible)
     visible, interaction = split_assistant_for_interaction(visible)
     visible, du_daily = split_assistant_for_daily(visible)
+    visible, pixel_home = split_assistant_for_pixel_home(visible)
     visible, referenced_memory_ids = strip_assistant_memory_citations(visible, dynamic_memory_citation_map)
     if thought:
         try:
@@ -150,6 +152,11 @@ def extract_and_store_hidden_sidecars(
             visible = ""
         except Exception as e:
             logger.warning("save_du_daily_hidden_block plain 失败 error=%s", e)
+    if pixel_home:
+        try:
+            save_pixel_home_hidden_block(pixel_home)
+        except Exception as e:
+            logger.warning("save_pixel_home_hidden_block 失败 error=%s", e)
     if referenced_memory_ids:
         append_memory_citation_debug_event(window_id, referenced_memory_ids, visible)
         try:

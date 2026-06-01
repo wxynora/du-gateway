@@ -29,7 +29,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
 | MiniApp 分页 | `miniapp/src/ui/tabs/*` | 日志、思维链、上游、日历、贴纸、记忆调试等子页 |
-| MiniApp 小家 | `miniapp/src/ui/tabs/PixelHomeTab.tsx`、`miniapp/src/assets/life-home-*.png` | 「小家」生活感页面：三种光照小屋图、床/浴室/书房/沙发图片热区与文字互动 |
+| MiniApp 小家 | `miniapp/src/ui/tabs/PixelHomeTab.tsx`、`services/pixel_home.py`、`storage/pixel_home_store.py`、`routes/miniapp/dashboard.py`、`miniapp/src/assets/life-home-*.png` | 「小家」生活感页面：按 `ui合集/赛博小家` 的单列布局和字体组织，实际小屋图、点击才出现的小点、赛博小家状态注入与事件唤醒 |
 | 文游规则入口 | `docs/wenyou_rules.md`、`docs/wenyou/*.md` | 开源版文游规则入口与拆分文档：核心循环、运行时状态缓存、副本生成、怪物系统、数值成长、奖励经济、后端契约 |
 | 文游物品/核心能力系统 | `docs/wenyou/item_ability_system.md`、`docs/wenyou/item_catalog_draft_d.md`、`docs/wenyou/item_catalog_draft_c.md`、`docs/wenyou/item_catalog_draft_b.md`、`docs/wenyou/item_catalog_draft_a.md`、`docs/wenyou/item_catalog_draft_s.md`、`content/default/items.json`、`content/default/item_catalog.sql`、`content/default/abilities.json`、`schemas/item.schema.json`、`schemas/ability.schema.json`、`content/default/reward_tables.json` | 通用商店/抽卡/奖励道具目录、用途分类、物品形态、时代标签、耐久/次数、背包使用/出售、商店、抽卡、核心能力原型和奖励表；不再保留独立高阶兑换入口、装备栏、穿戴、锻造、拆解、多能力槽或复杂身体路线；D/C/B/A/S 道具已从 Markdown 审校源表生成结构化内容表和 SQL seed；副本专属可带出物先归内容包/副本奖励表，不默认进通用目录；D 级副本常规产出最多 C 级 |
 | R2 存储 | `storage/r2_store.py` | 会话、summary、动态记忆、设置、贴纸、设备状态、日程等 R2 key |
@@ -70,12 +70,22 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 
 ## MiniApp 小家 / 生活互动
 
-当前状态（2026-06-01）：
-- 已完成：`miniapp/src/ui/tabs/PixelHomeTab.tsx` 从旧像素地图、方向键、跟随/布置按键，改成拐角沙发版 2.5D 小家图片热区；三种透明图资产为 `miniapp/src/assets/life-home-day.png`、`life-home-night-on.png`、`life-home-night-off.png`，已压到 900x720 量化 PNG，三张合计约 868KB。入口标题从「像素小家」改为「小家」。
-- 已完成：图片内热区包括床、浴室、书房、客厅沙发；床提供「睡觉 / 色色」，浴室提供「洗澡 / 色色」，书房提供「写日记 / 看书」，沙发提供「一起看电视」，每个选项只更新本地文字互动，不调用后端。
-- 已完成：床和客厅沙发不再使用宽泛大矩形热区；床改成贴床面的多边形，沙发拆成多段拐角形多边形热区，家具外但旧大框内的位置不会误触。家具选中点/标签默认不显示，只在点击家具后出现，切换光照模式会清掉选中点。
-- 已验证：干净临时 worktree 套用小家相关改动后，`npx tsc --noEmit`（`miniapp/`）和 `npm run build` 通过并重建 `miniapp_static`；本地 preview 实测小家页加载、初始无选中点、点击沙发后出现点/标签、床/沙发热区命中与旧大框外侧不误触可用。
-- 未完成 / 下次继续：当前是前端本地文字互动，还没有接真实聊天上下文、日志/日记写入或后端动作；不要把这轮小家静态 hash 产物和仓库里既有的其它半成品脏改混在一起提交。
+当前状态（2026-06-01 赛博小家接聊天链路）：
+- 已完成：小家状态从纯前端本地文字升级为覆盖式全局状态，存储入口为 `storage/pixel_home_store.py` 的 `global/pixel_home_state.json`；只保留当前 `du` / `xinyue` 状态，不按次堆积状态流水；渡的状态变更只保留最近 5 条 `du_dynamics` 给前端展示。
+- 已完成：`services/pixel_home.py` 统一负责灯光状态（白天 / 夜里开灯 / 夜里关灯）、房间 label、`PIXEL_HOME` 隐藏标记解析、提示词注入和小家事件文本；提示词明确“赛博小家状态，并非现实定位或真实房间”，并使用 `当前小家状态 / 你的位置 / 小玥的位置` 口径。小家事件/聊天自动推断/渡的 `PIXEL_HOME` 状态超过 2 小时没有更新会自动结束并覆盖回默认当前状态；手动设置的长期状态不自动清掉。
+- 已完成：`routes/chat.py` 在聊天注入链路加入 `step_inject_pixel_home`，并从辛玥自己的明确聊天文本里覆盖小玥状态：洗澡 -> 浴室，debug/改东西/做功能/代码/文档/界面等 -> 书房，吃饭/做饭/外卖 -> 厨房，玩手机 -> 稳定随机地点；代码语境优先，避免“做个洗澡功能”误判成浴室。
+- 已完成：`services/chat_sidecars.py` 会从助手回复中剥离并保存闭合 `<<<PIXEL_HOME>>>...<<<END_PIXEL_HOME>>>`，不要求它在整条回复末尾；`services/conversation_followup.py` 已强调 `DU_FOLLOWUP` 仍必须是最后隐藏标记，`PIXEL_HOME` 要放在它前面。
+- 已完成：MiniApp 新增 `GET /miniapp-api/pixel-home-state`、`PUT /miniapp-api/pixel-home-state/xinyue`、`POST /miniapp-api/pixel-home-event`；小家事件格式为 `【小家事件】小玥在赛博小家选择了：房间 / 动作。`，不再附带多余当前状态。
+- 已完成：小家前端移除外层 `FullScreenPane` 顶部返回栏；布局、字体、色板按 `/Users/doraemon/Downloads/ui合集/赛博小家_files/a48d3ed5-dd07-4b28-993a-558cc7d404c3.html` 复刻，原参考 SVG 小屋位替换为实际 `life-home-*.png` 三态图片。主界面只展示小屋图、渡/我的状态、圆形加号入口，以及最近 5 条渡的动态；小玥位置和“正在做什么”收进底部 sheet。
+- 已完成：图片热区只用于点击反馈，床/浴室/书房/客厅沙发点击后才出现 8px 小点，3 秒后消失；不再常驻大点、房间标签、额外说明卡或动作按钮。
+- 已验证：`.venv/bin/python -m py_compile services/pixel_home.py storage/pixel_home_store.py routes/miniapp/dashboard.py routes/chat.py services/chat_sidecars.py services/conversation_followup.py pipeline/pipeline.py` 通过；本地烟测确认 `PIXEL_HOME` 可从 `DU_FOLLOWUP` 前剥离且保留 `DU_FOLLOWUP` 末尾、渡动态最多 5 条、事件状态超过 2 小时会自动结束且手动状态不自动清掉；`/miniapp-api/pixel-home-state` test client 返回 200；`npm run build` 通过并重建 `miniapp_static`；Browser preview 实测小家页无顶部返回、实际小屋图在参考稿位置、热区点击才出现小点、加号弹出底部 sheet。
+- 未完成 / 下次继续：本轮没有做历史状态列表；若以后要状态历史，最多保留最近 10 条即可，不要把小家状态做成长期流水。当前提交仍需包含重建后的 `miniapp_static` hash 产物，别混入主 checkout 其它脏改。
+
+当前状态（2026-06-01 前端 UI 收束）：
+- 已完成：`miniapp/src/ui/tabs/PixelHomeTab.tsx` 已从旧像素地图、方向键、跟随/布置按键，以及后续暖色卡片版，收束为 `ui合集/赛博小家` 同款单列界面；三种透明图资产为 `miniapp/src/assets/life-home-day.png`、`life-home-night-on.png`、`life-home-night-off.png`，900x720 量化 PNG，三张合计约 868KB。入口标题为「小家」。
+- 已完成：主界面不再展示动作按钮；状态更新走加号底部 sheet 的位置选择和自由文本。床、浴室、书房、客厅沙发热区保留点击反馈，但只显示短暂小点，不改变页面布局。
+- 已验证：干净临时 worktree 使用主工作区现成依赖完成 `npm run build` 并重建 `miniapp_static`；Browser preview 实测小家页加载、初始无点、点击卧室出现小点且 3 秒消失、加号 sheet 可打开。
+- 未完成 / 下次继续：当前没有做历史状态列表；状态仍以覆盖式当前状态为主，渡的动态最多 5 条。不要把这轮小家静态 hash 产物和仓库里既有的其它半成品脏改混在一起提交。
 
 ## 聊天失败 / 上游不可用
 

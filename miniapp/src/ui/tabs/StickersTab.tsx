@@ -331,7 +331,7 @@ export function StickersTab() {
               placeholder="英文代号，如 smug"
               value={newKey}
               onChange={(e) => setNewKey(e.target.value.toLowerCase())}
-              inputMode="latin"
+              inputMode="text"
             />
             <input
               className={fieldClass}

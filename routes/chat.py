@@ -37,6 +37,7 @@ from pipeline.pipeline import (
     step_inject_du_thought,
     step_inject_du_vitals,
     step_inject_du_daily,
+    step_inject_pixel_home,
     step_inject_du_midterm_memory,
     step_inject_interaction_candidate,
     step_inject_rikkahub_reminder,
@@ -61,6 +62,7 @@ from storage import r2_store, whitelist_store
 from services.du_daily import (
     build_chat_trigger as build_du_daily_trigger,
 )
+from services.pixel_home import maybe_update_xinyue_state_from_user_text
 from services.dynamic_memory_citation import (
     DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY,
     normalize_citation_map,
@@ -1036,11 +1038,18 @@ def chat_completions():
     skip_post_archive_dynamic_memory = _skip_post_archive_dynamic_memory_request()
     du_daily_maintenance = _is_du_daily_maintenance_request()
     du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
+    if not du_daily_maintenance and not _is_gateway_wakeup_request():
+        try:
+            last_user_for_home = _last_user_message(body.get("messages") or [])
+            maybe_update_xinyue_state_from_user_text(_plain_message_text(last_user_for_home))
+        except Exception as e:
+            logger.debug("pixel_home user state inference skipped error=%s", e)
     if not slim_voice_call:
         body = step_inject_current_base_model(body)
         body = step_inject_du_thought(body, window_id)
         body = step_inject_du_vitals(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
+        body = step_inject_pixel_home(body, window_id)
         body = step_inject_du_midterm_memory(body, window_id)
         if not skip_dynamic_memory:
             body = step_inject_dynamic_memory(body, window_id)

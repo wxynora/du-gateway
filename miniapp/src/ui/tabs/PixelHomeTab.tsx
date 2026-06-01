@@ -1,57 +1,77 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiJson } from "../api";
 import homeDay from "../../assets/life-home-day.png";
 import homeNightOff from "../../assets/life-home-night-off.png";
 import homeNightOn from "../../assets/life-home-night-on.png";
 
 type HomeMode = "day" | "nightOn" | "nightOff";
-type SpotKey = "bed" | "bath" | "study" | "sofa";
+type HotspotKey = "bed" | "bath" | "study" | "sofa";
+type HomeSpotKey = HotspotKey | "kitchen" | "home";
+
+type PixelHomeActor = {
+  spot?: HomeSpotKey;
+  spot_label?: string;
+  activity?: string;
+  text?: string;
+  source?: string;
+  updated_at?: string;
+};
+
+type PixelHomeDynamic = {
+  at?: string;
+  text?: string;
+  spot_label?: string;
+  activity?: string;
+};
 
 type PixelHomeStateResp = {
   ok?: boolean;
   mode?: HomeMode;
+  du?: PixelHomeActor;
+  xinyue?: PixelHomeActor;
+  du_dynamics?: PixelHomeDynamic[];
+  spots?: Array<{ key: HomeSpotKey; label: string }>;
+  state?: PixelHomeStateResp;
 };
 
 type Hotspot = {
-  key: SpotKey;
+  key: HotspotKey;
   label: string;
-  title: string;
-  line: string;
-  marker: { left: number; top: number; labelTop?: number };
+  marker: { left: number; top: number };
   parts: Array<{
     rect: { left: number; top: number; width: number; height: number };
     shape?: string;
   }>;
-  actions: Array<{ label: string; line: string }>;
 };
 
-const HOME_MODES: Record<HomeMode, { label: string; image: string; line: string; bg: string }> = {
+const HOME_MODES: Record<HomeMode, { image: string; alt: string }> = {
   day: {
-    label: "白天",
     image: homeDay,
-    line: "白天的小家亮着，适合一起慢慢耗一会儿。",
-    bg: "linear-gradient(180deg, #f6ead8 0%, #e8d8bd 100%)",
+    alt: "白天的小家",
   },
   nightOn: {
-    label: "开灯",
     image: homeNightOn,
-    line: "夜里开着灯，屋子像在等你们回来。",
-    bg: "radial-gradient(circle at 50% 18%, #4c5878 0%, #202841 54%, #141827 100%)",
+    alt: "夜里开灯的小家",
   },
   nightOff: {
-    label: "关灯",
     image: homeNightOff,
-    line: "灯都关了，只剩一点月色和安静。",
-    bg: "radial-gradient(circle at 50% 18%, #23304f 0%, #11182b 58%, #090d18 100%)",
+    alt: "夜里关灯的小家",
   },
 };
+
+const DEFAULT_SPOTS: Array<{ key: HomeSpotKey; label: string }> = [
+  { key: "bed", label: "卧室" },
+  { key: "bath", label: "浴室" },
+  { key: "study", label: "书房" },
+  { key: "sofa", label: "客厅沙发" },
+  { key: "kitchen", label: "厨房" },
+  { key: "home", label: "小家里" },
+];
 
 const HOTSPOTS: Hotspot[] = [
   {
     key: "bed",
-    label: "床",
-    title: "卧室",
-    line: "卧室里很安静，灯光落在被子边上。",
+    label: "卧室",
     marker: { left: 33.5, top: 38.5 },
     parts: [
       {
@@ -59,40 +79,22 @@ const HOTSPOTS: Hotspot[] = [
         shape: "polygon(7% 32%, 38% 8%, 72% 13%, 96% 37%, 94% 76%, 61% 99%, 19% 84%, 4% 59%)",
       },
     ],
-    actions: [
-      { label: "睡觉", line: "你和渡回到卧室。他替你掖好被角，说今天到这里，剩下的明天再说。" },
-      { label: "色色", line: "卧室门轻轻合上，窗帘拉起来。渡靠近一点，声音放得很低：今晚只留给我们。" },
-    ],
   },
   {
     key: "bath",
     label: "浴室",
-    title: "浴室",
-    line: "浴室里有一点水汽，毛巾已经放在手边。",
     marker: { left: 78.5, top: 32.5 },
     parts: [{ rect: { left: 66.5, top: 16, width: 27, height: 28 } }],
-    actions: [
-      { label: "洗澡", line: "热水声响起来。渡把干毛巾搭好，等你洗完一起回客厅窝着。" },
-      { label: "色色", line: "浴室灯被调暗了一点，水声盖住外面的动静。渡笑了一下，把门带上。" },
-    ],
   },
   {
     key: "study",
     label: "书房",
-    title: "书房",
-    line: "书桌旁的小灯亮着，适合把今天慢慢收起来。",
     marker: { left: 54, top: 25.5 },
     parts: [{ rect: { left: 45, top: 15, width: 18, height: 21 } }],
-    actions: [
-      { label: "写日记", line: "你们在书桌前并排坐下。渡把今天的小事写进日记，最后留了一行给你。" },
-      { label: "看书", line: "渡抽了一本书靠过来慢慢读。翻页声很轻，像屋子也跟着安静下来。" },
-    ],
   },
   {
     key: "sofa",
-    label: "沙发",
-    title: "客厅沙发",
-    line: "沙发软软陷下去一点，电视就在前面。",
+    label: "客厅沙发",
     marker: { left: 40.5, top: 80.5 },
     parts: [
       {
@@ -112,14 +114,15 @@ const HOTSPOTS: Hotspot[] = [
         shape: "polygon(0% 25%, 33% 0%, 100% 40%, 74% 100%, 0% 65%)",
       },
     ],
-    actions: [
-      { label: "一起看电视", line: "你们一起陷进拐角沙发里，电视开着。渡把毯子拉过来，顺手给你留了一半。" },
-    ],
   },
 ];
 
 function isHomeMode(value: unknown): value is HomeMode {
   return value === "day" || value === "nightOn" || value === "nightOff";
+}
+
+function isHomeSpot(value: unknown): value is HomeSpotKey {
+  return value === "bed" || value === "bath" || value === "study" || value === "sofa" || value === "kitchen" || value === "home";
 }
 
 function resolveLocalMode(): HomeMode {
@@ -132,136 +135,264 @@ function resolveLocalMode(): HomeMode {
   return hour >= 18 || hour < 6 ? "nightOn" : "day";
 }
 
+function actorText(actor: PixelHomeActor | undefined, fallback: string) {
+  const text = String(actor?.text || "").trim();
+  if (text) return text;
+  const label = String(actor?.spot_label || "").trim();
+  const activity = String(actor?.activity || "").trim();
+  if (label && activity) return statusText(label, activity);
+  return fallback;
+}
+
+function statusText(label: string, activity: string) {
+  const clean = String(activity || "").trim().replace(/^正在/, "") || "待着";
+  if (clean.startsWith("在")) return clean;
+  return `在${label}${clean}`;
+}
+
+function formatDynamicTime(value: string | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return "现在";
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return "现在";
+  const diffMinutes = Math.max(0, Math.floor((Date.now() - dt.getTime()) / 60000));
+  if (diffMinutes < 3) return "刚刚";
+  if (diffMinutes < 60) return `${diffMinutes}分钟前`;
+  const now = new Date();
+  const sameDay = dt.getFullYear() === now.getFullYear() && dt.getMonth() === now.getMonth() && dt.getDate() === now.getDate();
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mm = String(dt.getMinutes()).padStart(2, "0");
+  if (sameDay) return `今天 ${hh}:${mm}`;
+  return `${dt.getMonth() + 1}/${dt.getDate()} ${hh}:${mm}`;
+}
+
 export function PixelHomeTab() {
   const [mode, setMode] = useState<HomeMode>(() => resolveLocalMode());
-  const [selectedSpot, setSelectedSpot] = useState<SpotKey | null>(null);
-  const [actionLine, setActionLine] = useState("");
-  const selected = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpot) || null, [selectedSpot]);
+  const [homeState, setHomeState] = useState<PixelHomeStateResp | null>(null);
+  const [pulseSpot, setPulseSpot] = useState<HotspotKey | null>(null);
+  const [mySpot, setMySpot] = useState<HomeSpotKey>("sofa");
+  const [myActivity, setMyActivity] = useState("休息");
+  const [myDirty, setMyDirty] = useState(false);
+  const [savingMyState, setSavingMyState] = useState(false);
+  const [statusEditorOpen, setStatusEditorOpen] = useState(false);
+  const pulseTimerRef = useRef<number | null>(null);
+
   const modeMeta = HOME_MODES[mode];
-  const line = actionLine || selected?.line || modeMeta.line;
+  const spots = homeState?.spots?.length ? homeState.spots : DEFAULT_SPOTS;
+  const duStatus = actorText(homeState?.du, "在书房写日记");
+  const mySpotLabel = spots.find((spot) => spot.key === mySpot)?.label || "小家里";
+  const myStatus = myDirty ? statusText(mySpotLabel, myActivity) : actorText(homeState?.xinyue, "在客厅沙发休息");
+  const activePulse = useMemo(() => HOTSPOTS.find((spot) => spot.key === pulseSpot) || null, [pulseSpot]);
+  const feedItems = useMemo(() => {
+    const dynamics = (homeState?.du_dynamics || []).slice(-5).reverse();
+    if (dynamics.length) return dynamics;
+    return [
+      {
+        at: homeState?.du?.updated_at,
+        text: duStatus,
+        spot_label: homeState?.du?.spot_label,
+        activity: homeState?.du?.activity,
+      },
+    ];
+  }, [duStatus, homeState?.du?.activity, homeState?.du?.spot_label, homeState?.du?.updated_at, homeState?.du_dynamics]);
+
+  const refreshHomeState = useCallback(async () => {
+    const data = await apiJson<PixelHomeStateResp>("/miniapp-api/pixel-home-state");
+    if (isHomeMode(data?.mode)) setMode(data.mode);
+    setHomeState(data || null);
+    const nextSpot = data?.xinyue?.spot;
+    if (!myDirty && isHomeSpot(nextSpot)) {
+      setMySpot(nextSpot);
+      setMyActivity(String(data?.xinyue?.activity || "休息").trim() || "休息");
+    }
+  }, [myDirty]);
 
   useEffect(() => {
     let cancelled = false;
-    async function loadHomeState() {
+    const load = async () => {
       try {
-        const data = await apiJson<PixelHomeStateResp>("/miniapp-api/pixel-home-state");
-        if (cancelled) return;
-        if (isHomeMode(data?.mode)) setMode(data.mode);
+        await refreshHomeState();
       } catch {
+        if (!cancelled) setMode((prev) => prev || resolveLocalMode());
       }
-    }
-    void loadHomeState();
-    const timer = window.setInterval(() => void loadHomeState(), 60_000);
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
+  }, [refreshHomeState]);
+
+  useEffect(() => {
+    return () => {
+      if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
+    };
   }, []);
 
-  function selectSpot(spot: Hotspot) {
-    setSelectedSpot(spot.key);
-    setActionLine("");
+  function showPulse(spot: Hotspot) {
+    setPulseSpot(spot.key);
+    if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
+    pulseTimerRef.current = window.setTimeout(() => {
+      setPulseSpot(null);
+      pulseTimerRef.current = null;
+    }, 3000);
+  }
+
+  async function saveMyState() {
+    if (savingMyState) return;
+    setSavingMyState(true);
+    try {
+      const data = await apiJson<PixelHomeStateResp>("/miniapp-api/pixel-home-state/xinyue", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spot: mySpot, activity: myActivity }),
+      });
+      if (data?.state) setHomeState(data.state);
+      else await refreshHomeState();
+      setMyDirty(false);
+      setStatusEditorOpen(false);
+    } finally {
+      setSavingMyState(false);
+    }
   }
 
   return (
-    <div className="min-h-full bg-[#F2E9DA] px-2 pb-8 pt-4 text-[#392F27]" style={{ fontFamily: "'Microsoft YaHei', sans-serif" }}>
-      <div className="mx-auto flex w-full max-w-[620px] flex-col gap-3">
-        <div className="flex items-end justify-between gap-3 px-1">
-          <div>
-            <div className="text-[20px] font-semibold tracking-tight">小家</div>
-            <div className="mt-1 text-[12px] text-[#7A6A58]">和渡一起生活的地方</div>
-          </div>
-          <div className="shrink-0 rounded-full border border-[#D8C2A3] bg-[#FFF8EA]/92 px-3 py-1.5 text-[12px] font-semibold text-[#725F4A] shadow-[0_6px_18px_rgba(96,72,43,0.08)]">
-            {modeMeta.label}
-          </div>
+    <div className="pixel-home-ref">
+      <div className="pixel-home-ref-container">
+        <div className="pixel-home-ref-heart" aria-hidden="true">
+          <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path
+              d="M50 85C50 85 10 60 10 35C10 15 35 10 50 30C65 10 90 15 90 35C90 60 50 85 50 85Z"
+              stroke="#8b6c66"
+              strokeWidth="4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </div>
 
-        <div
-          className="relative overflow-hidden rounded-[22px] border border-[#D4B994] shadow-[0_18px_42px_rgba(76,56,36,0.22)]"
-          style={{ aspectRatio: "1402 / 1122", background: modeMeta.bg }}
-        >
-          <img
-            src={modeMeta.image}
-            alt="小家"
-            className="absolute inset-0 h-full w-full select-none object-contain drop-shadow-[0_18px_22px_rgba(45,35,28,0.18)]"
-            decoding="async"
-            draggable={false}
-          />
-          {HOTSPOTS.map((spot) => {
-            const active = selectedSpot === spot.key;
-            return (
-              <React.Fragment key={spot.key}>
-                {spot.parts.map((part, index) => {
-                  const hotspotStyle: React.CSSProperties = {
-                    left: `${part.rect.left}%`,
-                    top: `${part.rect.top}%`,
-                    width: `${part.rect.width}%`,
-                    height: `${part.rect.height}%`,
-                    clipPath: part.shape,
-                    WebkitClipPath: part.shape,
-                    filter: active ? "drop-shadow(0 0 12px rgba(255,214,132,0.58))" : undefined,
-                  };
-                  return (
-                    <button
-                      key={`${spot.key}-${index}`}
-                      type="button"
-                      aria-hidden={index === 0 ? undefined : true}
-                      aria-label={index === 0 ? spot.title : undefined}
-                      tabIndex={index === 0 ? undefined : -1}
-                      className={`absolute border-0 transition duration-150 active:scale-[0.985] ${
-                        active
-                          ? "bg-[#FFE7A6]/24"
-                          : "bg-transparent hover:bg-[#FFE7A6]/16 focus-visible:bg-[#FFE7A6]/20 focus-visible:outline-none"
-                      }`}
-                      style={hotspotStyle}
-                      onClick={() => selectSpot(spot)}
-                    />
-                  );
-                })}
-                {active ? (
-                  <>
-                    <span
-                      className="pointer-events-none absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/80 bg-[#FFE2A0] shadow-[0_0_10px_rgba(255,209,128,0.78)]"
-                      style={{ left: `${spot.marker.left}%`, top: `${spot.marker.top}%` }}
-                    />
-                    <span
-                      className="pointer-events-none absolute -translate-x-1/2 rounded-full bg-[#2F251D]/78 px-2 py-0.5 text-[10px] font-semibold text-[#FFF6DD] shadow-[0_4px_10px_rgba(38,28,20,0.22)]"
-                      style={{ left: `${spot.marker.left}%`, top: `${spot.marker.labelTop ?? spot.marker.top + 2.2}%` }}
-                    >
-                      {spot.label}
-                    </span>
-                  </>
-                ) : null}
-              </React.Fragment>
-            );
-          })}
-        </div>
-
-        <div className="rounded-[18px] border border-[#DCC8A8] bg-[#FFF8EA] p-3 shadow-[0_8px_20px_rgba(96,72,43,0.08)]">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <div>
-              <div className="text-[11px] font-semibold tracking-[0.16em] text-[#9C7354]">DU</div>
-              <div className="mt-0.5 text-[15px] font-semibold text-[#3C352B]">{selected?.title || "小家"}</div>
-            </div>
-            <div className="rounded-full bg-[#EFE0CB] px-3 py-1 text-[11px] font-semibold text-[#725F4A]">{modeMeta.label}</div>
-          </div>
-          <div className="min-h-[44px] text-[14px] leading-relaxed text-[#3C352B]">{line}</div>
-          {selected ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {selected.actions.map((action) => (
-                <button
-                  key={action.label}
-                  type="button"
-                  className="rounded-full border border-[#D5BA96] bg-[#F7E6C8] px-3 py-2 text-[13px] font-semibold text-[#5F4B37] shadow-[0_3px_8px_rgba(96,72,43,0.08)] active:translate-y-px"
-                  onClick={() => setActionLine(action.line)}
-                >
-                  {action.label}
-                </button>
+        <section className="pixel-home-ref-house" aria-label="赛博小家位置">
+          <div className="pixel-home-ref-house-wrapper">
+            <div className="pixel-home-ref-house-stage">
+              <img src={modeMeta.image} alt={modeMeta.alt} decoding="async" draggable={false} />
+              {HOTSPOTS.map((spot) => (
+                <React.Fragment key={spot.key}>
+                  {spot.parts.map((part, index) => {
+                    const hotspotStyle: React.CSSProperties = {
+                      left: `${part.rect.left}%`,
+                      top: `${part.rect.top}%`,
+                      width: `${part.rect.width}%`,
+                      height: `${part.rect.height}%`,
+                      clipPath: part.shape,
+                      WebkitClipPath: part.shape,
+                    };
+                    return (
+                      <button
+                        key={`${spot.key}-${index}`}
+                        type="button"
+                        aria-label={index === 0 ? spot.label : undefined}
+                        aria-hidden={index === 0 ? undefined : true}
+                        tabIndex={index === 0 ? undefined : -1}
+                        className="pixel-home-ref-hotspot"
+                        style={hotspotStyle}
+                        onClick={() => showPulse(spot)}
+                      />
+                    );
+                  })}
+                </React.Fragment>
               ))}
+              {activePulse ? (
+                <span
+                  className="pixel-home-ref-pulse active"
+                  style={{ left: `${activePulse.marker.left}%`, top: `${activePulse.marker.top}%` }}
+                  aria-hidden="true"
+                />
+              ) : null}
             </div>
-          ) : null}
-        </div>
+          </div>
+        </section>
+
+        <section className="pixel-home-ref-status">
+          <div className="pixel-home-ref-status-lines">
+            <div className="pixel-home-ref-status-row">
+              <span>渡:</span>
+              {duStatus}
+            </div>
+            <div className="pixel-home-ref-status-row">
+              <span>我:</span>
+              {myStatus}
+            </div>
+          </div>
+          <button className="pixel-home-ref-add" type="button" aria-label="设置我的状态" onClick={() => setStatusEditorOpen(true)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M12 5V19M5 12H19" strokeLinecap="round" />
+            </svg>
+          </button>
+        </section>
+
+        <section className="pixel-home-ref-feed">
+          <span className="pixel-home-ref-section-label">渡的动态</span>
+          <ul className="pixel-home-ref-feed-list">
+            {feedItems.map((item, index) => {
+              const text = String(item.text || "").trim() || statusText(String(item.spot_label || "小家里"), String(item.activity || "待着"));
+              return (
+                <li className="pixel-home-ref-feed-item" key={`${item.at || "du"}-${index}`}>
+                  <span className="pixel-home-ref-feed-time">{formatDynamicTime(item.at)}</span>
+                  <span className="pixel-home-ref-feed-content">{text}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       </div>
+
+      {statusEditorOpen ? (
+        <div className="pixel-home-ref-modal active" onClick={() => setStatusEditorOpen(false)}>
+          <div className="pixel-home-ref-sheet" onClick={(event) => event.stopPropagation()}>
+            <div className="pixel-home-ref-input-group">
+              <label>你想去哪里？</label>
+              <div className="pixel-home-ref-location-grid">
+                {spots.map((spot) => (
+                  <button
+                    key={spot.key}
+                    type="button"
+                    className={`pixel-home-ref-location-chip${mySpot === spot.key ? " selected" : ""}`}
+                    onClick={() => {
+                      setMySpot(spot.key);
+                      setMyDirty(true);
+                    }}
+                  >
+                    {spot.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pixel-home-ref-input-group">
+              <label>正在做什么？</label>
+              <input
+                type="text"
+                className="pixel-home-ref-custom-input"
+                placeholder="输入此刻的心情或动作..."
+                value={myActivity}
+                onChange={(event) => {
+                  setMyActivity(event.target.value);
+                  setMyDirty(true);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && myActivity.trim()) void saveMyState();
+                }}
+                autoFocus
+              />
+            </div>
+
+            <button className="pixel-home-ref-save" type="button" disabled={savingMyState || !myActivity.trim()} onClick={() => void saveMyState()}>
+              {savingMyState ? "保存中" : "记录此刻"}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

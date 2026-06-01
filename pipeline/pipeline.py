@@ -1080,6 +1080,22 @@ def step_inject_du_daily(
     return body
 
 
+def step_inject_pixel_home(body: dict, window_id: str) -> dict:
+    """Inject shared cyber home state and the PIXEL_HOME hidden marker contract."""
+    _ = window_id
+    try:
+        from services.pixel_home import format_inject_block
+
+        block = format_inject_block()
+    except Exception as e:
+        logger.debug("pixel_home 注入跳过 error=%s", e)
+        return body
+    if not (block or "").strip():
+        return body
+    body = _append_to_dynamic_system(body, "\n\n" + block.strip())
+    return body
+
+
 def step_inject_du_midterm_memory(body: dict, window_id: str) -> dict:
     """
     全局注入：最近 14 天滑窗的中期连续感，三天才刷新，放静态 system 段。

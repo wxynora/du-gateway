@@ -770,9 +770,7 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {showPixelHome ? (
-        <FullScreenPane title="小家" accent="neutral" headerMode="simple" edgeSwipeBack onBack={() => setShowPixelHome(false)}>
-          <LazyPane><PixelHomeTab /></LazyPane>
-        </FullScreenPane>
+        <LazyPane><PixelHomeTab /></LazyPane>
       ) : null}
       {showCoRead ? <LazyPane><CoReadScreen onBack={() => setShowCoRead(false)} windowId={sharedChatWindowId} /></LazyPane> : null}
       {showListenWithDu ? <LazyPane><ListenWithDuScreen onBack={() => setShowListenWithDu(false)} backgroundImage={listenBackgroundImage} /></LazyPane> : null}
