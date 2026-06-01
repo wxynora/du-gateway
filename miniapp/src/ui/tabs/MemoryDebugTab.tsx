@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { apiJson } from "../api";
+import { HeaderPortal, HeaderStatusPill } from "../components";
 import { useToast } from "../toast";
 
 type RecallScore = {
@@ -251,12 +252,9 @@ export function MemoryDebugTab() {
         .tab-active::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; background:#111827; border-radius:2px; }
       `}</style>
 
-      <div className="sticky top-0 z-20 flex items-center border-b border-gray-50 bg-white/90 px-4 pb-4 pt-3 backdrop-blur-md">
-        <div className="ml-auto flex items-center rounded-full border border-gray-100 bg-gray-50 px-3 py-1">
-          <span className="mr-2 h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />
-          <span className="text-[11px] font-medium text-gray-500">实时</span>
-        </div>
-      </div>
+      <HeaderPortal targetId="memory-debug-header-status">
+        <HeaderStatusPill text="实时" dotClassName="bg-green-400" pulse />
+      </HeaderPortal>
 
       <div className="space-y-4 px-5 pb-2 pt-4">
         <div className="flex items-center justify-between">
@@ -649,4 +647,3 @@ export function MemoryDebugTab() {
     </div>
   );
 }
-

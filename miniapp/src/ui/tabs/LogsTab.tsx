@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { apiJson, buildLogStreamUrl } from "../api";
+import { HeaderPortal, HeaderStatusPill } from "../components";
 import { useToast } from "../toast";
 
 type LogsResp = { ok?: boolean; lines?: string[]; error?: string };
@@ -218,12 +219,9 @@ export function LogsTab() {
 
   return (
     <div className="flex min-h-full flex-col overflow-hidden bg-[#FDFDFD]" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
-      <div className="flex items-center border-b border-gray-50 bg-white/90 px-4 pb-4 pt-[calc(env(safe-area-inset-top,0px)+14px)] backdrop-blur-md">
-        <div className="ml-auto flex items-center rounded-full border border-gray-100 bg-gray-50 px-3 py-1">
-          <span className={`mr-2 h-1.5 w-1.5 rounded-full ${connected ? "animate-pulse bg-green-400" : "bg-gray-300"}`} />
-          <span className="text-[11px] font-medium text-gray-500">{connected ? "实时连接中" : "未连接"}</span>
-        </div>
-      </div>
+      <HeaderPortal targetId="logs-header-status">
+        <HeaderStatusPill text={connected ? "实时连接中" : "未连接"} dotClassName={connected ? "bg-green-400" : "bg-gray-300"} pulse={connected} />
+      </HeaderPortal>
 
       <div className="flex-1 overflow-y-auto pb-8">
         <div className="px-5 pt-6">

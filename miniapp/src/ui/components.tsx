@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 export function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -24,6 +25,34 @@ export function Pill({ ok, text }: { ok: boolean; text: string }) {
       {text}
     </span>
   );
+}
+
+export function HeaderStatusPill({
+  text,
+  dotClassName,
+  pulse = false,
+}: {
+  text: string;
+  dotClassName: string;
+  pulse?: boolean;
+}) {
+  return (
+    <div className="inline-flex h-8 items-center whitespace-nowrap rounded-full border border-gray-100 bg-gray-50 px-3 text-[11px] font-medium text-gray-500 shadow-[0_4px_14px_rgba(15,23,42,0.04)]">
+      <span className={`mr-2 h-1.5 w-1.5 rounded-full ${pulse ? "animate-pulse " : ""}${dotClassName}`} />
+      <span>{text}</span>
+    </div>
+  );
+}
+
+export function HeaderPortal({ targetId, children }: { targetId: string; children: React.ReactNode }) {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setTarget(document.getElementById(targetId));
+  }, [targetId]);
+
+  if (!target) return null;
+  return createPortal(children, target);
 }
 
 export function Btn({
@@ -84,4 +113,3 @@ export function Modal({
     </>
   );
 }
-

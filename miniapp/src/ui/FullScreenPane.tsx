@@ -76,11 +76,12 @@ export function FullScreenPane({
           </div>
         </div>
       ) : (
-        <div className="absolute top-0 z-20 flex w-full items-center border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
-          <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
+        <div className="absolute top-0 z-20 flex w-full items-center gap-2 border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] backdrop-blur-md">
+          <button className="shrink-0 rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
             <ChevronLeftIcon />
           </button>
-          <div className="ml-2 text-[15px] font-medium text-gray-900">{title}</div>
+          <div className="min-w-0 flex-1 truncate text-[15px] font-medium text-gray-900">{title}</div>
+          {headerRightPortalId ? <div id={headerRightPortalId} className="flex h-8 min-w-8 shrink-0 items-center justify-end" /> : null}
         </div>
       )}
       <div className={`min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto px-3.5 pb-4 ${headerMode === "simple" ? "pt-0" : "pt-[82px]"}`}>{children}</div>

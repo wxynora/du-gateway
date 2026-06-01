@@ -666,7 +666,7 @@ export function AppShell({
       ) : null}
 
       {panel === "logs" ? (
-        <FullScreenPane title="日志" accent="neutral" onBack={() => setPanel(null)}>
+        <FullScreenPane title="日志" accent="neutral" headerRightPortalId="logs-header-status" onBack={() => setPanel(null)}>
           <LazyPane><LogsTab /></LazyPane>
         </FullScreenPane>
       ) : null}
@@ -676,7 +676,7 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {panel === "memory-debug" ? (
-        <FullScreenPane title="记忆调试" accent="neutral" onBack={() => setPanel(null)}>
+        <FullScreenPane title="记忆调试" accent="neutral" headerRightPortalId="memory-debug-header-status" onBack={() => setPanel(null)}>
           <LazyPane><MemoryDebugTab /></LazyPane>
         </FullScreenPane>
       ) : null}
@@ -713,7 +713,7 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {showAlarm ? (
-        <FullScreenPane title="闹钟" accent="neutral" headerMode="simple" onBack={() => setShowAlarm(false)}>
+        <FullScreenPane title="闹钟" accent="neutral" headerMode="simple" headerRightPortalId="alarm-header-status" onBack={() => setShowAlarm(false)}>
           <LazyPane><AlarmTab /></LazyPane>
         </FullScreenPane>
       ) : null}

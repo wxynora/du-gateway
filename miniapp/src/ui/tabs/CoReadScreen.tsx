@@ -1366,7 +1366,7 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
         <button type="button" className="flex h-11 w-11 items-center justify-center rounded-full transition-colors active:bg-gray-50" onClick={closeCurrentLevel} aria-label="返回">
           <ChevronLeftIcon />
         </button>
-        <div className="flex-1 text-[22px] font-bold">和渡一起读</div>
+        <div className="min-w-0 flex-1 truncate text-[15px] font-medium">和渡一起读</div>
         <button
           type="button"
           className="flex h-10 w-10 items-center justify-center rounded-full bg-[#111111] text-white transition-transform active:scale-95 disabled:opacity-40"
@@ -1391,18 +1391,18 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
                 onClick={() => void openBook(book.book_key)}
               >
                 <div className="mb-5 flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1 text-[18px] font-semibold leading-6">{book.book_title}</div>
+                  <div className="min-w-0 flex-1 text-[15px] font-semibold leading-5">{book.book_title}</div>
                   <div className="font-mono text-[11px] lowercase text-[#AAAAAA]">txt</div>
                 </div>
                 <div className="mb-5 flex items-center gap-6">
                   <div>
                     <div className="mb-1 font-mono text-[11px] lowercase tracking-[0.05em] text-[#AAAAAA]">sections</div>
-                    <div className="font-mono text-[16px] font-medium">{book.done_count}/{book.section_count}</div>
+                    <div className="font-mono text-[14px] font-medium">{book.done_count}/{book.section_count}</div>
                   </div>
                   <div className="h-8 w-px bg-black/10" />
                   <div>
                     <div className="mb-1 font-mono text-[11px] lowercase tracking-[0.05em] text-[#AAAAAA]">progress</div>
-                    <div className="font-mono text-[16px] font-medium">{formatCoReadProgress(coReadBookProgress(book))}</div>
+                    <div className="font-mono text-[14px] font-medium">{formatCoReadProgress(coReadBookProgress(book))}</div>
                   </div>
                   <button
                     type="button"

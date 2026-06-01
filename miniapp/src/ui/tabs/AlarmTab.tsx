@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { apiJson } from "../api";
+import { HeaderPortal, HeaderStatusPill } from "../components";
 import { useToast } from "../toast";
 
 type ScheduleItem = {
@@ -135,12 +136,9 @@ export function AlarmTab() {
         .switch input:checked + .slider:before { transform: translateX(18px); }
         .modal-overlay { background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); }
       `}</style>
-      <div className="mb-4 flex items-center justify-end px-1">
-        <div className="flex items-center rounded-full border border-gray-100 bg-gray-50 px-3 py-1">
-          <span className={`mr-2 h-1.5 w-1.5 rounded-full ${loadError ? "bg-red-400" : "bg-green-400"}`} />
-          <span className="text-[11px] font-medium text-gray-500">{loadError ? "同步异常" : "渡 已同步"}</span>
-        </div>
-      </div>
+      <HeaderPortal targetId="alarm-header-status">
+        <HeaderStatusPill text={loadError ? "同步异常" : "渡 已同步"} dotClassName={loadError ? "bg-red-400" : "bg-green-400"} />
+      </HeaderPortal>
 
       {loadError ? (
         <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-500">
@@ -302,4 +300,3 @@ export function AlarmTab() {
     </div>
   );
 }
-
