@@ -77,16 +77,16 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：`services/chat_sidecars.py` 会从助手回复中剥离并保存闭合 `<<<PIXEL_HOME>>>...<<<END_PIXEL_HOME>>>`，不要求它在整条回复末尾；`services/conversation_followup.py` 已强调 `DU_FOLLOWUP` 仍必须是最后隐藏标记，`PIXEL_HOME` 要放在它前面。
 - 已完成：MiniApp 新增 `GET /miniapp-api/pixel-home-state`、`PUT /miniapp-api/pixel-home-state/xinyue`、`POST /miniapp-api/pixel-home-event`；小家事件格式为 `【小家事件】小玥在赛博小家选择了：房间 / 动作。`，不再附带多余当前状态。
 - 已完成：小家前端移除外层 `FullScreenPane` 顶部返回栏；布局、字体、色板按 `/Users/doraemon/Downloads/ui合集/赛博小家_files/a48d3ed5-dd07-4b28-993a-558cc7d404c3.html` 复刻，原参考 SVG 小屋位替换为实际 `life-home-*.png` 三态图片。主界面只展示小屋图、渡/我的状态、圆形加号入口，以及最近 5 条渡的动态；小玥位置和“正在做什么”收进底部 sheet。
-- 已完成：图片热区用于选择房间和点击反馈，床/浴室/书房/客厅沙发点击后才出现 8px 小点，3 秒后消失；房间选择会保留，并在被点击房间旁边展示小型半透明事件浮层，点击按钮走 `/miniapp-api/pixel-home-event` 发小家事件。
+- 已完成：图片热区用于选择房间和点击反馈，床/浴室/书房/客厅沙发点击后才出现 8px 小点；圆点和房间选择会常驻，点小家图以外区域才清掉；被点击房间旁边展示小型半透明事件按钮，点击按钮走 `/miniapp-api/pixel-home-event` 发小家事件。
 - 已完成：渡/我的状态行字号调小并允许多行换行，不再用省略号截断长状态；`PIXEL_HOME` 提示词明确要求 `spot` 写动作结束后的最终位置，正文出现“从书房走出来/走到客厅”时不能继续把 `spot` 留在旧房间。
 - 已验证：`.venv/bin/python -m py_compile services/pixel_home.py storage/pixel_home_store.py routes/miniapp/dashboard.py routes/chat.py services/chat_sidecars.py services/conversation_followup.py pipeline/pipeline.py` 通过；本地烟测确认 `PIXEL_HOME` 可从 `DU_FOLLOWUP` 前剥离且保留 `DU_FOLLOWUP` 末尾、渡动态最多 5 条、事件状态超过 2 小时会自动结束且手动状态不自动清掉；`/miniapp-api/pixel-home-state` test client 返回 200；`npm run build` 通过并重建 `miniapp_static`；Browser preview 实测小家页无顶部返回、实际小屋图在参考稿位置、热区点击才出现小点、加号弹出底部 sheet。
 - 未完成 / 下次继续：本轮没有做历史状态列表；若以后要状态历史，最多保留最近 10 条即可，不要把小家状态做成长期流水。当前提交仍需包含重建后的 `miniapp_static` hash 产物，别混入主 checkout 其它脏改。
 
 当前状态（2026-06-01 前端 UI 收束）：
 - 已完成：`miniapp/src/ui/tabs/PixelHomeTab.tsx` 已从旧像素地图、方向键、跟随/布置按键，以及后续暖色卡片版，收束为 `ui合集/赛博小家` 同款单列界面；三种透明图资产为 `miniapp/src/assets/life-home-day.png`、`life-home-night-on.png`、`life-home-night-off.png`，900x720 量化 PNG，三张合计约 868KB。入口标题为「小家」。
-- 已完成：小屋图在参考稿版式里放大显示；状态更新走加号底部 sheet 的位置选择和自由文本。床、浴室、书房、客厅沙发热区保留点击反馈，点击房间后在房间旁边出现小型半透明事件选择，事件按钮发送后端小家事件。
+- 已完成：小屋图在参考稿版式里放大显示；状态更新走加号底部 sheet 的位置选择和自由文本。床、浴室、书房、客厅沙发热区保留点击反馈，点击房间后在房间旁边出现独立小半透明事件按钮，事件按钮发送后端小家事件；沙发事件为「看电视 / 色色」，书房事件为「写日记 / 看书 / 色色」。
 - 已完成：状态文字允许多行完整显示；后端保存渡状态时会对“从旧房间走出来”做兜底，不再显示成“在书房从书房走出来...”。
-- 已验证：干净临时 worktree 使用主工作区现成依赖完成 `npm run build` 并重建 `miniapp_static`；Browser preview 实测小家页加载、初始无点、点击卧室出现小点且 3 秒消失、房间事件按钮可见、加号 sheet 可打开。
+- 已验证：干净临时 worktree 使用主工作区现成依赖完成 `npm run build` 并重建 `miniapp_static`；Browser preview 实测小家页加载、初始无点、点击卧室出现小点、事件按钮可见、点小家图以外区域清掉选中态、加号 sheet 可打开。
 - 未完成 / 下次继续：当前没有做历史状态列表；状态仍以覆盖式当前状态为主，渡的动态最多 5 条。不要把这轮小家静态 hash 产物和仓库里既有的其它半成品脏改混在一起提交。
 
 ## 聊天失败 / 上游不可用

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { apiJson } from "../api";
 import homeDay from "../../assets/life-home-day.png";
 import homeNightOff from "../../assets/life-home-night-off.png";
@@ -38,7 +38,7 @@ type Hotspot = {
   key: HotspotKey;
   label: string;
   marker: { left: number; top: number };
-  menu: { left: number; top: number; align?: "left" | "right" | "center" };
+  menu: { left: number; top: number; align?: "left" | "right" | "top" };
   parts: Array<{
     rect: { left: number; top: number; width: number; height: number };
     shape?: string;
@@ -75,7 +75,7 @@ const HOTSPOTS: Hotspot[] = [
     key: "bed",
     label: "卧室",
     marker: { left: 33.5, top: 38.5 },
-    menu: { left: 37.5, top: 42, align: "left" },
+    menu: { left: 44.5, top: 39, align: "left" },
     parts: [
       {
         rect: { left: 23.2, top: 29.2, width: 21.8, height: 19.4 },
@@ -88,7 +88,7 @@ const HOTSPOTS: Hotspot[] = [
     key: "bath",
     label: "浴室",
     marker: { left: 78.5, top: 32.5 },
-    menu: { left: 76, top: 42, align: "right" },
+    menu: { left: 84.5, top: 35.5, align: "right" },
     parts: [{ rect: { left: 66.5, top: 16, width: 27, height: 28 } }],
     actions: [{ label: "洗澡" }, { label: "色色" }],
   },
@@ -96,15 +96,15 @@ const HOTSPOTS: Hotspot[] = [
     key: "study",
     label: "书房",
     marker: { left: 54, top: 25.5 },
-    menu: { left: 57, top: 31, align: "left" },
+    menu: { left: 60, top: 26.5, align: "left" },
     parts: [{ rect: { left: 45, top: 15, width: 18, height: 21 } }],
-    actions: [{ label: "写日记" }, { label: "看书" }],
+    actions: [{ label: "写日记" }, { label: "看书" }, { label: "色色" }],
   },
   {
     key: "sofa",
     label: "客厅沙发",
     marker: { left: 40.5, top: 80.5 },
-    menu: { left: 45, top: 70.5, align: "center" },
+    menu: { left: 41, top: 69, align: "top" },
     parts: [
       {
         rect: { left: 28.8, top: 70.2, width: 13.3, height: 18.7 },
@@ -123,7 +123,7 @@ const HOTSPOTS: Hotspot[] = [
         shape: "polygon(0% 25%, 33% 0%, 100% 40%, 74% 100%, 0% 65%)",
       },
     ],
-    actions: [{ label: "一起看电视" }],
+    actions: [{ label: "看电视" }, { label: "色色" }],
   },
 ];
 
@@ -179,7 +179,6 @@ function formatDynamicTime(value: string | undefined) {
 export function PixelHomeTab() {
   const [mode, setMode] = useState<HomeMode>(() => resolveLocalMode());
   const [homeState, setHomeState] = useState<PixelHomeStateResp | null>(null);
-  const [pulseSpot, setPulseSpot] = useState<HotspotKey | null>(null);
   const [selectedSpotKey, setSelectedSpotKey] = useState<HotspotKey | null>(null);
   const [mySpot, setMySpot] = useState<HomeSpotKey>("sofa");
   const [myActivity, setMyActivity] = useState("休息");
@@ -187,14 +186,12 @@ export function PixelHomeTab() {
   const [savingMyState, setSavingMyState] = useState(false);
   const [sendingAction, setSendingAction] = useState("");
   const [statusEditorOpen, setStatusEditorOpen] = useState(false);
-  const pulseTimerRef = useRef<number | null>(null);
 
   const modeMeta = HOME_MODES[mode];
   const spots = homeState?.spots?.length ? homeState.spots : DEFAULT_SPOTS;
   const duStatus = actorText(homeState?.du, "在书房写日记");
   const mySpotLabel = spots.find((spot) => spot.key === mySpot)?.label || "小家里";
   const myStatus = myDirty ? statusText(mySpotLabel, myActivity) : actorText(homeState?.xinyue, "在客厅沙发休息");
-  const activePulse = useMemo(() => HOTSPOTS.find((spot) => spot.key === pulseSpot) || null, [pulseSpot]);
   const selectedSpot = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpotKey) || null, [selectedSpotKey]);
   const feedItems = useMemo(() => {
     const dynamics = (homeState?.du_dynamics || []).slice(-5).reverse();
@@ -237,20 +234,12 @@ export function PixelHomeTab() {
     };
   }, [refreshHomeState]);
 
-  useEffect(() => {
-    return () => {
-      if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
-    };
-  }, []);
-
-  function showPulse(spot: Hotspot) {
+  function selectSpot(spot: Hotspot) {
     setSelectedSpotKey(spot.key);
-    setPulseSpot(spot.key);
-    if (pulseTimerRef.current) window.clearTimeout(pulseTimerRef.current);
-    pulseTimerRef.current = window.setTimeout(() => {
-      setPulseSpot(null);
-      pulseTimerRef.current = null;
-    }, 3000);
+  }
+
+  function clearSelectedSpot() {
+    setSelectedSpotKey(null);
   }
 
   async function saveMyState() {
@@ -288,7 +277,7 @@ export function PixelHomeTab() {
   }
 
   return (
-    <div className="pixel-home-ref">
+    <div className="pixel-home-ref" onClick={clearSelectedSpot}>
       <div className="pixel-home-ref-container">
         <div className="pixel-home-ref-heart" aria-hidden="true">
           <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -304,7 +293,7 @@ export function PixelHomeTab() {
 
         <section className="pixel-home-ref-house" aria-label="赛博小家位置">
           <div className="pixel-home-ref-house-wrapper">
-            <div className="pixel-home-ref-house-stage">
+            <div className="pixel-home-ref-house-stage" onClick={(event) => event.stopPropagation()}>
               <img src={modeMeta.image} alt={modeMeta.alt} decoding="async" draggable={false} />
               {HOTSPOTS.map((spot) => (
                 <React.Fragment key={spot.key}>
@@ -326,22 +315,22 @@ export function PixelHomeTab() {
                         tabIndex={index === 0 ? undefined : -1}
                         className="pixel-home-ref-hotspot"
                         style={hotspotStyle}
-                        onClick={() => showPulse(spot)}
+                        onClick={() => selectSpot(spot)}
                       />
                     );
                   })}
                 </React.Fragment>
               ))}
-              {activePulse ? (
+              {selectedSpot ? (
                 <span
                   className="pixel-home-ref-pulse active"
-                  style={{ left: `${activePulse.marker.left}%`, top: `${activePulse.marker.top}%` }}
+                  style={{ left: `${selectedSpot.marker.left}%`, top: `${selectedSpot.marker.top}%` }}
                   aria-hidden="true"
                 />
               ) : null}
               {selectedSpot ? (
                 <div
-                  className={`pixel-home-ref-room-menu pixel-home-ref-room-menu-${selectedSpot.menu.align || "center"}`}
+                  className={`pixel-home-ref-room-menu pixel-home-ref-room-menu-${selectedSpot.menu.align || "top"}`}
                   style={{ left: `${selectedSpot.menu.left}%`, top: `${selectedSpot.menu.top}%` }}
                   aria-label={`${selectedSpot.label}事件`}
                 >

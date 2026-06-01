@@ -5899,15 +5899,10 @@
   position: absolute;
   z-index: 3;
   display: flex;
-  max-width: min(168px, 42%);
+  max-width: min(128px, 34%);
   flex-wrap: wrap;
-  gap: 5px;
-  padding: 5px;
-  border: 1px solid rgba(113, 95, 86, 0.08);
-  border-radius: 999px;
-  background: rgba(252, 250, 248, 0.58);
-  box-shadow: 0 8px 24px rgba(113, 95, 86, 0.1);
-  backdrop-filter: blur(10px);
+  gap: 4px;
+  pointer-events: none;
 }
 
 .pixel-home-ref-room-menu-left {
@@ -5918,20 +5913,23 @@
   transform: translate(-100%, -50%);
 }
 
-.pixel-home-ref-room-menu-center {
+.pixel-home-ref-room-menu-top {
   transform: translate(-50%, -50%);
 }
 
 .pixel-home-ref-room-action {
-  min-height: 25px;
-  padding: 4px 9px;
-  border: 0.5px solid rgba(113, 95, 86, 0.08);
+  min-height: 23px;
+  padding: 3px 8px;
+  border: 0.5px solid rgba(113, 95, 86, 0.1);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.46);
+  background: rgba(252, 250, 248, 0.64);
+  box-shadow: 0 6px 16px rgba(113, 95, 86, 0.12);
+  backdrop-filter: blur(8px);
   color: rgba(113, 95, 86, 0.9);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10.5px;
   line-height: 1;
+  pointer-events: auto;
   white-space: nowrap;
   transition: all 0.2s ease;
 }
