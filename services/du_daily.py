@@ -561,8 +561,8 @@ def format_inject_block(state: dict, trigger: Optional[dict] = None, maintenance
     if maintenance_mode:
         lines.append("本轮是内部维护任务：不要写任何给老婆看的正文，只输出完整 marker 隐藏块。")
     elif trigger:
-        lines.append("本轮已经命中硬触发：正常回复正文后，末尾追加完整 marker 隐藏块。")
-        lines.append("若同一轮还要追加 DU_FOLLOWUP，DU_DAILY 隐藏块必须放在 DU_FOLLOWUP 前面；DU_FOLLOWUP 永远是整条回复最后一个隐藏标记。")
+        lines.append("本轮已经命中硬触发：正常回复正文后追加完整 marker 隐藏块。")
+        lines.append("隐藏标记统一追加在正文后，不要写进正文里。")
     else:
         lines.append("本轮没有网关硬触发，不要输出 DU_DAILY marker。")
     if trigger:

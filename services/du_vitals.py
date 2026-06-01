@@ -205,12 +205,12 @@ def format_inject_block(_latest: Optional[dict] = None) -> str:
     """拼成稳定的拟态节律隐藏块规则；不把上一组心率/呼吸回灌给模型。"""
     return (
         "【渡的拟态心跳/呼吸参数（仅你与网关可见，勿在回复正文复述给老婆）】\n"
-        "每轮回复都要在可见正文之后追加下面隐藏块，作为你这一轮自然反应后的拟态节律参数。\n"
+        "每轮回复都要在正文后追加下面隐藏块，作为你这一轮自然反应后的拟态节律参数。\n"
         "隐藏块里只写下面 JSON 里的状态字段，不写解释文字；可见回复里不要提到这组参数。\n"
         f"{MARKER_START}\n"
         '{"activation":0.32,"focus":0.35,"warmth":0.45,"tension":0.12,"intimacy_heat":0.0,"tempo":"steady","duration_sec":180}\n'
         f"{MARKER_END}\n"
         "字段含义：activation=被点亮/兴奋程度；focus=头脑风暴或专注；warmth=柔软亲近；tension=紧张/冲突；intimacy_heat=暧昧亲密热度；tempo 只能是 down/steady/up/spike/settle。\n"
         "例：讨论方案或脑暴时 focus 高、tempo 可 up；亲密暧昧时 warmth 和 intimacy_heat 升；冲突或慌乱时 tension 升；平静陪伴时 warmth 稳、activation 低、tempo 可 settle。\n"
-        "若同轮还有 DU_FOLLOWUP，DU_FOLLOWUP 仍必须是整条回复最后一个隐藏标记。\n"
+        "隐藏标记统一追加在正文后，不要写进正文里。\n"
     )

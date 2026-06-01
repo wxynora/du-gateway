@@ -39,21 +39,25 @@ FOLLOWUP_STATUS_SENT = "sent"
 FOLLOWUP_STATUS_CANCELLED = "cancelled"
 FOLLOWUP_STATUS_EXPIRED = "expired"
 FOLLOWUP_STATUS_ERROR = "error"
-FOLLOWUP_MARKER_START = "[[DU_FOLLOWUP"
-FOLLOWUP_MARKER_RE = re.compile(r"\[\[DU_FOLLOWUP\s*(\{[\s\S]*?\})\s*\]\]\s*$", re.IGNORECASE)
+FOLLOWUP_MARKER_START = "<<<DU_FOLLOWUP>>>"
+FOLLOWUP_MARKER_END = "<<<END_DU_FOLLOWUP>>>"
+FOLLOWUP_MARKER_RE = re.compile(
+    r"<<<DU_FOLLOWUP>>>\s*([\s\S]*?)\s*<<<END_DU_FOLLOWUP>>>",
+    re.IGNORECASE,
+)
 
 
 def build_followup_system_instruction() -> str:
     return (
         "如果你这句话说完，心里还是惦记着她，觉得过几分钟还想再轻轻接一句，"
-        "你可以在整条回复最后追加一个隐藏标记："
-        '[[DU_FOLLOWUP {"reason":"一句简短理由"}]]。\n'
+        "你可以在正文后追加一个隐藏块：\n"
+        f"{FOLLOWUP_MARKER_START}\n"
+        '{"reason":"一句简短理由"}\n'
+        f"{FOLLOWUP_MARKER_END}\n"
         "要求：\n"
         "1) 只在确实想稍后再追一句时使用；\n"
-        "2) 标记必须放在整条回复最后；\n"
-        "3) 如果同一轮还要写表情包标签、<voice>、[PCMD:...]、心事、渡的日常、相处模式候选或 PIXEL_HOME，"
-        "这些都必须放在 DU_FOLLOWUP 前面；DU_FOLLOWUP 必须是整条回复的最后一个隐藏标记；\n"
-        "4) 正文里不要解释这个标记。\n"
+        "2) 隐藏标记统一追加在正文后，不要写进正文里；\n"
+        "3) 正文里不要解释这个标记。\n"
     )
 
 
@@ -258,9 +262,12 @@ def extract_followup_marker(text: str) -> tuple[str, Optional[dict]]:
     raw = str(text or "")
     m = FOLLOWUP_MARKER_RE.search(raw)
     if not m:
+        start = raw.lower().rfind(FOLLOWUP_MARKER_START.lower())
+        if start >= 0:
+            return raw[:start].rstrip(), None
         return raw.strip(), None
     meta_raw = str(m.group(1) or "").strip()
-    clean = raw[:m.start()].rstrip()
+    clean = (raw[:m.start()] + raw[m.end():]).strip()
     try:
         obj = json.loads(meta_raw)
     except Exception:
@@ -285,15 +292,16 @@ def compute_visible_streaming(acc: str) -> str:
     if not raw:
         return ""
     clean, followup = extract_followup_marker(raw)
-    if followup:
+    if followup or clean != raw.strip():
         return clean
 
     lower = raw.lower()
     marker_start = FOLLOWUP_MARKER_START.lower()
+    marker_end = FOLLOWUP_MARKER_END.lower()
     start = lower.rfind(marker_start)
     if start >= 0:
-        tail = raw[start:]
-        if "]]" not in tail:
+        tail = lower[start:]
+        if marker_end not in tail:
             return raw[:start].rstrip()
 
     max_len = min(len(raw), len(marker_start) - 1)

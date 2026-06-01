@@ -42,9 +42,15 @@ _DYNAMIC_SYSTEM_MARKER = "__dynamic__"
 _SUMMARY_CACHE_SYSTEM_MARKER = "__summary_cache__"
 _SUMMARY_RECENT_SYSTEM_MARKER = "__summary_recent__"
 _LAST4_REFERENCE_NOTE = (
-    "【指代提醒】上述记忆和摘要中的“她”均指辛玥。回复辛玥时不要用“她”代称她；"
-    "需要指代时用“你”或“辛玥”，按语境自然表达。"
+    "【人称指代提醒】记忆和摘要中的“她”均指辛玥。回复小玥时不要用“她”代称；"
+    "尤其是动作描写，必须用“你”指代。日常对话时用“你”“小玥”“老婆”或“宝宝”，按语境自然表达。"
 )
+
+
+def step_inject_reference_note(body: dict) -> dict:
+    return _append_to_static_system(body, "\n\n" + _LAST4_REFERENCE_NOTE)
+
+
 _THINKING_BLOCK_RULES = """### thinking block 约束
 使用中文。
 
@@ -893,7 +899,7 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
         context = _rounds_to_context_text(rounds)
     if not context:
         return body
-    inject = f"\n\n{_LAST4_REFERENCE_NOTE}\n【{inject_label}】\n{context}\n【以上为最近的对话】"
+    inject = f"\n\n【{inject_label}】\n{context}\n【以上为最近的对话】"
     return _append_to_dynamic_system(body, inject)
 
 

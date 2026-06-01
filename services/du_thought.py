@@ -105,11 +105,11 @@ def format_inject_block(latest: Optional[dict]) -> str:
     """拼成注入 system 的说明 + 上一则心事。"""
     guide = (
         "【渡的心事（仅你与网关可见，勿在回复正文复述给老婆）】\n"
-        "若本轮有值得记录的情感状态，请在整段回复的**末尾**追加下面格式（单独成块；网关会截取并存 R2，老婆侧不可见）：\n"
+        "若本轮有值得记录的情感状态，请在正文后追加下面隐藏块（单独成块；网关会截取并存 R2，老婆侧不可见）：\n"
         f"{MARKER_START}\n"
         "（此处写心理独白，可多行）\n"
         f"{MARKER_END}\n"
-        "若同一轮还要追加 DU_FOLLOWUP，心事块必须放在 DU_FOLLOWUP 前面；DU_FOLLOWUP 永远是整条回复最后一个隐藏标记。\n"
+        "隐藏标记统一追加在正文后，不要写进正文里。\n"
     )
     if not latest or not isinstance(latest, dict):
         return guide + "（尚无上一则心事）"

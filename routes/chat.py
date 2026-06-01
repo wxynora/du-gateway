@@ -29,6 +29,7 @@ from pipeline.pipeline import (
     step_inject_core_behavior_rules,
     step_inject_common_knowledge,
     step_inject_du_non_retreat_rules,
+    step_inject_reference_note,
     step_inject_current_base_model,
     step_inject_humor_memes,
     step_inject_latest_4_rounds_for_new_window,
@@ -1070,6 +1071,7 @@ def chat_completions():
             body = step_inject_amap_mcp_tools(body)
             body = step_inject_websearch_tools(body)
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
+        body = step_inject_reference_note(body)
         body = step_inject_du_midterm_memory(body, window_id)
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
