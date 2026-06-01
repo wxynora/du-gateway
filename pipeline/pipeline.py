@@ -1082,7 +1082,7 @@ def step_inject_du_daily(
 
 def step_inject_du_midterm_memory(body: dict, window_id: str) -> dict:
     """
-    全局注入：最近 14 天滑窗的中期连续感。
+    全局注入：最近 14 天滑窗的中期连续感，三天才刷新，放静态 system 段。
     这层独立于 dynamic_memory/current.json，只注入 latest；到期刷新走后台线程，不阻塞当前聊天。
     """
     _ = window_id
@@ -1097,7 +1097,7 @@ def step_inject_du_midterm_memory(body: dict, window_id: str) -> dict:
     if not (block or "").strip():
         return body
     inject = "\n\n" + block.strip()
-    body = _append_to_dynamic_system(body, inject)
+    body = _append_to_static_system(body, inject)
     return body
 
 
