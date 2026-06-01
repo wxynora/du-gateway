@@ -215,12 +215,35 @@ def step_inject_current_base_model(body: dict) -> dict:
     return body
 
 
-def step_inject_humor_memes(body: dict) -> dict:
-    """每轮随机注入 3 个梗素材，引导轻松场景优先挑贴合的一条化用。"""
-    try:
-        from services.humor_meme_bank import format_memes_for_system, pick_random_memes
+def _last_user_text_for_humor_memes(body: dict) -> str:
+    for msg in reversed(body.get("messages") or []):
+        if (msg.get("role") or "").lower() != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts)
+        return str(content or "")
+    return ""
 
-        inject = format_memes_for_system(pick_random_memes(3))
+
+def step_inject_humor_memes(body: dict) -> dict:
+    """按用户最后一句关键词召回梗素材，不足时随机补位。"""
+    try:
+        from services.humor_meme_bank import format_memes_for_system, pick_context_memes
+
+        inject = format_memes_for_system(
+            pick_context_memes(_last_user_text_for_humor_memes(body), total_limit=3, keyword_limit=2)
+        )
     except Exception as e:
         logger.debug("humor meme 注入跳过 error=%s", e)
         return body

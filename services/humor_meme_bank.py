@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 import time
@@ -14,6 +15,12 @@ logger = get_logger(__name__)
 DB_PATH = DATA_DIR / "humor_meme_bank.sqlite3"
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY = False
+
+MEME_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "蒜鸟蒜鸟": ("蒜鸟",),
+    "绷住的奖励特朗普的内裤": ("绷不住", "绷住", "特朗普的内裤"),
+    "随橙想 / 反耳": ("随橙想", "反耳"),
+}
 
 
 @dataclass(frozen=True)
@@ -111,6 +118,11 @@ DEFAULT_MEMES: tuple[tuple[str, str, str], ...] = (
         "劝自己或别人别继续纠结、小事翻篇时使用，带一点可爱摆手感，比如“蒜鸟蒜鸟，都不容易”。",
     ),
     (
+        "绷住的奖励特朗普的内裤",
+        "抽象评论区式发疯热梗，意思是本来想绷住，但实在绷不住了。",
+        "形容自己被离谱东西击中、笑崩、破防或绷不住时使用。只用于轻松玩笑，不要用于认真政治讨论或严肃评价真人。",
+    ),
+    (
         "外耗文学",
         "从“内耗”的反向表达扩展出的轻微发疯句式。",
         "把本来要往自己身上拧的锅荒谬地甩给外界：不内耗了，今天外耗一下这个 bug；我不焦虑了，把焦虑平均分给闹钟、键盘和网速。重点是轻轻护住自己，不是真的攻击别人。",
@@ -204,16 +216,95 @@ def pick_random_memes(limit: int = 3) -> list[HumorMeme]:
             """,
             (n,),
         ).fetchall()
-    return [
-        HumorMeme(
-            id=int(row["id"]),
-            meme=str(row["meme"] or ""),
-            origin=str(row["origin"] or ""),
-            usage=str(row["usage"] or ""),
-        )
-        for row in rows
-        if str(row["meme"] or "").strip()
-    ]
+    return [_row_to_meme(row) for row in rows if str(row["meme"] or "").strip()]
+
+
+def _row_to_meme(row: sqlite3.Row) -> HumorMeme:
+    return HumorMeme(
+        id=int(row["id"]),
+        meme=str(row["meme"] or ""),
+        origin=str(row["origin"] or ""),
+        usage=str(row["usage"] or ""),
+    )
+
+
+def _keywords_for_meme(meme: str) -> list[str]:
+    value = str(meme or "").strip()
+    if not value:
+        return []
+    out: list[str] = [value]
+    out.extend(MEME_KEYWORDS.get(value, ()))
+    if len(value) % 2 == 0:
+        half = value[: len(value) // 2]
+        if half and half == value[len(value) // 2 :]:
+            out.append(half)
+    for part in re.split(r"[\s/｜=,，、；;：:（）()【】\[\]\"“”'‘’]+", value):
+        part = part.strip()
+        if len(part) >= 2:
+            out.append(part)
+    seen = set()
+    deduped: list[str] = []
+    for item in out:
+        item = str(item or "").strip()
+        if len(item) < 2 or item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def pick_keyword_memes(text: str, limit: int = 2) -> list[HumorMeme]:
+    ensure_schema()
+    query = str(text or "").strip()
+    n = max(0, int(limit or 0))
+    if not query or n <= 0:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, meme, origin, usage
+            FROM meme_items
+            WHERE enabled = 1
+            ORDER BY updated_at DESC, id ASC
+            """
+        ).fetchall()
+    hits: list[tuple[int, int, int, HumorMeme]] = []
+    for row in rows:
+        item = _row_to_meme(row)
+        best_keyword = ""
+        best_pos = 10**9
+        for keyword in _keywords_for_meme(item.meme):
+            pos = query.find(keyword)
+            if pos < 0:
+                continue
+            if (
+                not best_keyword
+                or len(keyword) > len(best_keyword)
+                or (len(keyword) == len(best_keyword) and pos < best_pos)
+            ):
+                best_keyword = keyword
+                best_pos = pos
+        if best_keyword:
+            hits.append((best_pos, -len(best_keyword), item.id, item))
+    hits.sort(key=lambda x: (x[0], x[1], x[2]))
+    return [item for _, _, _, item in hits[:n]]
+
+
+def pick_context_memes(text: str, total_limit: int = 3, keyword_limit: int = 2) -> list[HumorMeme]:
+    total = max(0, int(total_limit or 0))
+    if total <= 0:
+        return []
+    matched = pick_keyword_memes(text, limit=min(keyword_limit, total))
+    selected: list[HumorMeme] = list(matched)
+    seen = {item.id for item in selected}
+    for item in pick_random_memes(total * 2):
+        if item.id in seen:
+            continue
+        selected.append(item)
+        seen.add(item.id)
+        if len(selected) >= total:
+            break
+    return selected[:total]
 
 
 def format_memes_for_system(memes: list[HumorMeme]) -> str:
