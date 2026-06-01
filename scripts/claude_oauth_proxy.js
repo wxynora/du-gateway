@@ -963,11 +963,69 @@ function proxyToAnthropic(token, path, payload) {
   });
 }
 
+function proxyGetAnthropic(token, path) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: TARGET_HOST,
+        port: 443,
+        path,
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "anthropic-version": ANTHROPIC_VERSION,
+          "anthropic-beta": BETA_HEADER,
+        },
+      },
+      (proxyRes) => resolve(proxyRes)
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 function makeJsonProxyResponse(statusCode, payload) {
   const stream = Readable.from([JSON.stringify(payload)]);
   stream.statusCode = statusCode;
   stream.headers = { "content-type": "application/json" };
   return stream;
+}
+
+async function retryGetAfterUnauthorized(proxyRes, path, routeLabel) {
+  const errData = await readStreamText(proxyRes).catch((e) => `read error: ${e.message}`);
+  const hint = errData ? `: ${errData.slice(0, 500)}` : "";
+  lastUnauthorizedAt = Date.now();
+  lastUnauthorizedRoute = routeLabel || path || "";
+  const staleAccessToken = cachedOAuth?.accessToken || "";
+  log(`Got 401 from Anthropic for ${routeLabel}; re-reading synced credentials only${hint}`);
+
+  try {
+    loadOAuthCredentials("re-read after 401");
+  } catch (e) {
+    log(`OAuth credential re-read failed after 401: ${e.message}`);
+    return makeJsonProxyResponse(401, {
+      error: {
+        type: "authentication_error",
+        message:
+          "Claude OAuth token was rejected; proxy-side refresh is disabled and synced credentials could not be re-read",
+      },
+    });
+  }
+
+  if (!cachedOAuth.accessToken || cachedOAuth.accessToken === staleAccessToken) {
+    log("OAuth credentials unchanged after 401; proxy-side refresh is disabled");
+    return makeJsonProxyResponse(401, {
+      error: {
+        type: "authentication_error",
+        message:
+          "Claude OAuth token was rejected; proxy-side refresh is disabled, waiting for local token sync",
+      },
+    });
+  }
+
+  const retryRes = await proxyGetAnthropic(cachedOAuth.accessToken, path);
+  log(`<= ${retryRes.statusCode} ${routeLabel} (retry after synced token re-read)`);
+  return retryRes;
 }
 
 async function retryAfterUnauthorized(proxyRes, path, payload, routeLabel) {
@@ -1084,16 +1142,26 @@ const server = http.createServer(async (req, res) => {
     return sendError(res, 401, "Invalid proxy key");
   }
 
-  // GET /v1/models - 返回模型列表
+  // GET /v1/models - 转发真实可用模型列表
   if (req.method === "GET" && req.url.startsWith("/v1/models")) {
-    const models = [
-      "claude-opus-4-7", "claude-opus-4-8",
-      "claude-opus-4-6", "claude-opus-4-1",
-      "claude-sonnet-4-6", "claude-sonnet-4-5-20241022",
-      "claude-haiku-4-5-20251001",
-    ].map((id) => ({ id, object: "model", created: 1700000000, owned_by: "anthropic" }));
-    res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ object: "list", data: models }));
+    log(`=> ${req.method} ${req.url}`);
+    try {
+      const token = await getAccessToken();
+      let proxyRes = await proxyGetAnthropic(token, req.url);
+      log(`<= ${proxyRes.statusCode} ${req.url}`);
+
+      if (proxyRes.statusCode === 401) {
+        proxyRes = await retryGetAfterUnauthorized(proxyRes, req.url, req.url);
+      }
+
+      const responseHeaders = { ...proxyRes.headers, "access-control-allow-origin": "*" };
+      res.writeHead(proxyRes.statusCode || 502, responseHeaders);
+      proxyRes.pipe(res);
+      return;
+    } catch (e) {
+      log(`Error: ${e.message}`);
+      return sendError(res, proxyExceptionStatus(e), e.message);
+    }
   }
 
   log(`=> ${req.method} ${req.url}`);

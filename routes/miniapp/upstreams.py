@@ -211,17 +211,23 @@ def register_routes(bp) -> None:
             idx = active
         if idx < 0 or idx >= len(items):
             return jsonify({"ok": False, "error": "index 无效"}), 400
-        models = upstream_store.list_models_for_item(items[idx])
+        detail = upstream_store.list_models_for_item_detail(items[idx])
+        models = detail.get("models") or []
         model = upstream_store.get_cached_active_model(refresh_if_missing=False) if idx == active else ""
+        ok = bool(detail.get("ok"))
         return jsonify(
             {
-                "ok": True,
+                "ok": ok,
                 "active": active,
                 "index": idx,
                 "model": model,
                 "models": models,
+                "model_count": len(models),
+                "status": int(detail.get("status") or 0),
+                "source": detail.get("source") or "",
+                "error": "" if ok else (detail.get("error") or "模型列表不可用"),
             }
-        )
+        ), 200 if ok else 502
 
     @bp.route("/upstreams/model", methods=["PUT"])
     def miniapp_set_active_upstream_model():

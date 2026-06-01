@@ -18,7 +18,17 @@ type ProbeItem = {
 };
 type ProbeResp = { ok: boolean; status: "ok" | "degraded" | "fail"; results: ProbeItem[]; count: number };
 type ActivePutResp = { ok?: boolean; error?: string; active?: number; model?: string; claude_thinking_effort?: string };
-type ModelsResp = { ok?: boolean; error?: string; active?: number; index?: number; model?: string; models?: string[] };
+type ModelsResp = {
+  ok?: boolean;
+  error?: string;
+  active?: number;
+  index?: number;
+  model?: string;
+  models?: string[];
+  model_count?: number;
+  status?: number;
+  source?: string;
+};
 type ModelPutResp = { ok?: boolean; error?: string; active?: number; model?: string; claude_thinking_effort?: string };
 type ThinkingEffortPutResp = { ok?: boolean; error?: string; active?: number; effort?: string };
 
@@ -80,6 +90,13 @@ function thinkingEffortOptionsForModel(options: string[], model: string): string
   return base.filter((effort) => effort !== "xhigh");
 }
 
+function modelSourceLabel(source: string): string {
+  if (source === "upstream_v1_models") return "实时";
+  if (source === "openrouter_fixed_model") return "固定";
+  if (source === "siliconflow_default_model") return "默认";
+  return "";
+}
+
 export function SettingsUpstream() {
   const toast = useToast();
   const [active, setActive] = useState(0);
@@ -95,6 +112,9 @@ export function SettingsUpstream() {
   const [pendingModel, setPendingModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
+  const [modelsSource, setModelsSource] = useState("");
+  const [modelsStatus, setModelsStatus] = useState(0);
   const [modelSaving, setModelSaving] = useState(false);
   const [thinkingEffort, setThinkingEffort] = useState("high");
   const [pendingThinkingEffort, setPendingThinkingEffort] = useState("high");
@@ -103,6 +123,9 @@ export function SettingsUpstream() {
 
   const loadModels = useCallback(async (index?: number) => {
     setModelsLoading(true);
+    setModelsError("");
+    setModelsSource("");
+    setModelsStatus(0);
     try {
       const q = typeof index === "number" ? `?index=${index}` : "";
       const j = await apiJson<ModelsResp>(`/miniapp-api/upstreams/models${q}`);
@@ -110,11 +133,18 @@ export function SettingsUpstream() {
       const nextModels = Array.isArray(j.models) ? j.models.filter(Boolean) : [];
       const selected = String(j.model || "").trim();
       setModels(nextModels);
+      setModelsSource(String(j.source || "").trim());
+      setModelsStatus(Number(j.status || 0));
       setCurrentModel(selected);
       setPendingModel(selected || nextModels[0] || "");
     } catch (e: any) {
       setModels([]);
-      toast(`模型列表加载失败：${e?.message || e}`);
+      const payload = e?.payload || {};
+      const msg = payload?.error || e?.message || String(e);
+      setModelsError(msg);
+      setModelsSource(String(payload?.source || "").trim());
+      setModelsStatus(Number(payload?.status || e?.status || 0));
+      toast(`模型列表加载失败：${msg}`);
     } finally {
       setModelsLoading(false);
     }
@@ -376,23 +406,78 @@ export function SettingsUpstream() {
                       {modelSaving ? "保存中" : "保存"}
                     </button>
                   </div>
-                  <div className="relative mt-3">
-                    <select
-                      value={pendingModel}
-                      disabled={modelsLoading || modelSaving || !models.length}
-                      onChange={(e) => setPendingModel(e.target.value)}
-                      className="h-11 w-full appearance-none rounded-2xl border border-gray-100 bg-gray-50 px-3 pr-9 text-[13px] font-semibold text-gray-800 outline-none disabled:text-gray-400"
-                    >
-                      {!modelOptions.length ? <option value="">{modelsLoading ? "加载中…" : "未拉到模型"}</option> : null}
-                      {modelOptions.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                    <svg className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
+                  <div className="mt-3 rounded-2xl border border-gray-100 bg-gray-50 p-2">
+                    <div className="flex items-center justify-between gap-3 px-2 py-1">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">可用模型</p>
+                          {modelsSource ? (
+                            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500">
+                              {modelSourceLabel(modelsSource) || modelsSource}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-0.5 text-[11px] font-semibold text-gray-400">
+                          {modelsStatus ? `HTTP ${modelsStatus}` : modelsLoading ? "拉取中" : `${modelOptions.length} 个`}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={modelsLoading || modelSaving}
+                        onClick={() => void loadModels(active)}
+                        className="h-8 shrink-0 rounded-full bg-white px-3 text-[12px] font-bold text-gray-700 shadow-sm active:scale-[0.98] disabled:text-gray-300 disabled:shadow-none"
+                      >
+                        {modelsLoading ? "刷新中" : "刷新"}
+                      </button>
+                    </div>
+                    {modelsError ? (
+                      <div className="mx-1 mt-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800">
+                        <span className="break-words">{modelsError}</span>
+                      </div>
+                    ) : null}
+                    {modelsLoading ? (
+                      <div className="mt-2 space-y-2 rounded-xl bg-white p-2">
+                        {[0, 1, 2].map((i) => (
+                          <div key={i} className="h-12 animate-pulse rounded-xl bg-gray-100" />
+                        ))}
+                      </div>
+                    ) : modelOptions.length ? (
+                      <div className="mt-2 max-h-72 overflow-y-auto rounded-xl bg-white">
+                        {modelOptions.map((m) => {
+                          const selected = m === pendingModel;
+                          const current = m === currentModel;
+                          return (
+                            <button
+                              key={m}
+                              type="button"
+                              disabled={modelSaving}
+                              onClick={() => setPendingModel(m)}
+                              className={
+                                "flex min-h-[52px] w-full items-center gap-3 border-b border-gray-100 px-3 py-3 text-left last:border-b-0 active:bg-gray-50 disabled:opacity-60 " +
+                                (selected ? "bg-teal-50/70" : "bg-white")
+                              }
+                            >
+                              <span className="min-w-0 flex-1 break-all text-[13px] font-semibold leading-snug text-gray-900">{m}</span>
+                              {current ? <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">当前</span> : null}
+                              <span
+                                className={
+                                  "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 " +
+                                  (selected ? "border-teal-600 bg-teal-600" : "border-gray-300 bg-white")
+                                }
+                              >
+                                {selected ? (
+                                  <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                    <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                                  </svg>
+                                ) : null}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-2 rounded-xl bg-white px-3 py-5 text-center text-[12px] font-medium text-gray-400">未拉到模型</div>
+                    )}
                   </div>
                   <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50 px-3 py-3">
                     <div className="flex items-center justify-between gap-3">
@@ -409,22 +494,24 @@ export function SettingsUpstream() {
                         {thinkingEffortSaving ? "保存中" : "保存"}
                       </button>
                     </div>
-                    <div className="relative mt-3">
-                      <select
-                        value={pendingThinkingEffortForModel}
-                        disabled={!adaptiveThinkingActive || thinkingEffortSaving}
-                        onChange={(e) => setPendingThinkingEffort(e.target.value)}
-                        className="h-10 w-full appearance-none rounded-xl border border-gray-100 bg-white px-3 pr-9 text-[13px] font-semibold text-gray-800 outline-none disabled:text-gray-400"
-                      >
-                        {adaptiveThinkingEffortOptions.map((effort) => (
-                          <option key={effort} value={effort}>
+                    <div className="mt-3 grid grid-cols-5 gap-1.5">
+                      {adaptiveThinkingEffortOptions.map((effort) => {
+                        const selected = effort === pendingThinkingEffortForModel;
+                        return (
+                          <button
+                            key={effort}
+                            type="button"
+                            disabled={!adaptiveThinkingActive || thinkingEffortSaving}
+                            onClick={() => setPendingThinkingEffort(effort)}
+                            className={
+                              "h-9 rounded-xl text-[12px] font-bold active:scale-[0.98] disabled:bg-white disabled:text-gray-300 " +
+                              (selected ? "bg-gray-900 text-white" : "bg-white text-gray-600")
+                            }
+                          >
                             {effort}
-                          </option>
-                        ))}
-                      </select>
-                      <svg className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                        <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                   <p className="mt-5 text-[11px] font-medium text-gray-400">探活（HTTP）</p>

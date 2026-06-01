@@ -166,36 +166,78 @@ def _is_siliconflow_url(url: str) -> bool:
     return bool(host and SILICONFLOW_BASE_HOST and host.endswith(SILICONFLOW_BASE_HOST))
 
 
-def list_models_for_item(it: dict) -> list[str]:
+def list_models_for_item_detail(it: dict) -> dict:
     url = str((it or {}).get("url") or "").strip()
     api_key = str((it or {}).get("api_key") or "").strip()
     if not url:
-        return []
+        return {"ok": False, "models": [], "status": 0, "source": "", "error": "URL 为空"}
     if is_openrouter_url(url):
         model = str(OPENROUTER_FIXED_MODEL or "").strip()
-        return [model] if model else []
+        return {
+            "ok": bool(model),
+            "models": [model] if model else [],
+            "status": 200 if model else 0,
+            "source": "openrouter_fixed_model",
+            "error": "" if model else "OPENROUTER_FIXED_MODEL 未配置",
+        }
     if _is_siliconflow_url(url) and SILICONFLOW_DEFAULT_MODEL:
-        return [str(SILICONFLOW_DEFAULT_MODEL or "").strip()]
+        return {
+            "ok": True,
+            "models": [str(SILICONFLOW_DEFAULT_MODEL or "").strip()],
+            "status": 200,
+            "source": "siliconflow_default_model",
+            "error": "",
+        }
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    models_url = _chat_url_to_models_url(url)
     try:
-        resp = requests.get(_chat_url_to_models_url(url), headers=headers, timeout=20)
+        resp = requests.get(models_url, headers=headers, timeout=20)
         if resp.status_code != 200:
-            return []
+            return {
+                "ok": False,
+                "models": [],
+                "status": int(resp.status_code or 0),
+                "source": "upstream_v1_models",
+                "error": (resp.text or "")[:300] or f"HTTP {resp.status_code}",
+            }
         data = resp.json() if resp.content else {}
         items = data.get("data") if isinstance(data, dict) else None
         if not isinstance(items, list):
-            return []
+            return {
+                "ok": False,
+                "models": [],
+                "status": int(resp.status_code or 0),
+                "source": "upstream_v1_models",
+                "error": "上游 /v1/models 未返回 data 列表",
+            }
         out = []
         for item in items:
             if isinstance(item, dict) and str(item.get("id") or "").strip():
                 out.append(str(item.get("id") or "").strip())
             elif isinstance(item, str) and item.strip():
                 out.append(item.strip())
-        return out
-    except Exception:
-        return []
+        return {
+            "ok": bool(out),
+            "models": out,
+            "status": int(resp.status_code or 0),
+            "source": "upstream_v1_models",
+            "error": "" if out else "上游 /v1/models 返回空列表",
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "models": [],
+            "status": 0,
+            "source": "upstream_v1_models",
+            "error": str(e),
+        }
+
+
+def list_models_for_item(it: dict) -> list[str]:
+    detail = list_models_for_item_detail(it)
+    return list(detail.get("models") or []) if isinstance(detail, dict) else []
 
 
 def _fetch_first_model_for_item(it: dict) -> str:
@@ -282,4 +324,3 @@ def get_active_item() -> dict | None:
     if not items or idx < 0 or idx >= len(items):
         return None
     return items[idx]
-
