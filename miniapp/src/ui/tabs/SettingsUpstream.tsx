@@ -377,10 +377,30 @@ export function SettingsUpstream() {
                 </div>
                 <div className="mt-5 border-t border-gray-50 pt-5">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
+                    <button
+                      type="button"
+                      aria-expanded={modelListOpen}
+                      aria-controls="upstream-model-list"
+                      disabled={modelsLoading || modelSaving}
+                      onClick={() => setModelListOpen((v) => !v)}
+                      className="min-w-0 flex-1 text-left active:opacity-70 disabled:opacity-50"
+                    >
                       <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">运行模型</p>
-                      <p className="mt-1 truncate text-[13px] font-semibold text-gray-700">{currentModel || "—"}</p>
-                    </div>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-gray-700">
+                          {pendingModel || currentModel || (modelsLoading ? "拉取中…" : modelsError ? "加载失败" : "—")}
+                        </span>
+                        <svg
+                          className={"h-4 w-4 shrink-0 text-gray-400 transition-transform " + (modelListOpen ? "rotate-180" : "")}
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                        >
+                          <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </div>
+                    </button>
                     <button
                       type="button"
                       disabled={!canSaveModel}
@@ -390,86 +410,61 @@ export function SettingsUpstream() {
                       {modelSaving ? "保存中" : "保存"}
                     </button>
                   </div>
-                  <div className="mt-3 border-t border-gray-100 pt-3">
-                    <button
-                      type="button"
-                      aria-expanded={modelListOpen}
-                      aria-controls="upstream-model-list"
-                      disabled={modelsLoading || modelSaving}
-                      onClick={() => setModelListOpen((v) => !v)}
-                      className="flex w-full items-center gap-3 py-1.5 text-left active:opacity-70 disabled:opacity-50"
-                    >
-                      <span className="w-16 shrink-0 text-[12px] font-semibold text-gray-400">可用模型</span>
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-gray-900">
-                        {pendingModel || (modelsLoading ? "拉取中…" : modelsError ? "加载失败" : "未拉到模型")}
-                      </span>
-                      <span className="shrink-0 text-[11px] font-semibold text-gray-400">{modelOptions.length ? `${modelOptions.length} 个` : ""}</span>
-                      <svg
-                        className={"h-4 w-4 shrink-0 text-gray-400 transition-transform " + (modelListOpen ? "rotate-180" : "")}
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                      >
-                        <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-                    {modelListOpen ? (
-                      <div id="upstream-model-list" className="mt-2 overflow-hidden rounded-xl border border-gray-100">
-                        {modelsError ? (
-                          <div className="bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800">
-                            <span className="break-words">{modelsError}</span>
-                          </div>
-                        ) : null}
-                        {modelsLoading ? (
-                          <div className="space-y-2 bg-white p-2">
-                            {[0, 1, 2].map((i) => (
-                              <div key={i} className="h-11 animate-pulse rounded-lg bg-gray-100" />
-                            ))}
-                          </div>
-                        ) : modelOptions.length ? (
-                          <div className="max-h-64 overflow-y-auto bg-white">
-                            {modelOptions.map((m) => {
-                              const selected = m === pendingModel;
-                              const current = m === currentModel;
-                              return (
-                                <button
-                                  key={m}
-                                  type="button"
-                                  disabled={modelSaving}
-                                  onClick={() => {
-                                    setPendingModel(m);
-                                    setModelListOpen(false);
-                                  }}
+                  {modelListOpen ? (
+                    <div id="upstream-model-list" className="mt-3 overflow-hidden rounded-xl border border-gray-100">
+                      {modelsError ? (
+                        <div className="bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800">
+                          <span className="break-words">{modelsError}</span>
+                        </div>
+                      ) : null}
+                      {modelsLoading ? (
+                        <div className="space-y-2 bg-white p-2">
+                          {[0, 1, 2].map((i) => (
+                            <div key={i} className="h-11 animate-pulse rounded-lg bg-gray-100" />
+                          ))}
+                        </div>
+                      ) : modelOptions.length ? (
+                        <div className="max-h-64 overflow-y-auto bg-white">
+                          {modelOptions.map((m) => {
+                            const selected = m === pendingModel;
+                            const current = m === currentModel;
+                            return (
+                              <button
+                                key={m}
+                                type="button"
+                                disabled={modelSaving}
+                                onClick={() => {
+                                  setPendingModel(m);
+                                  setModelListOpen(false);
+                                }}
+                                className={
+                                  "flex min-h-[46px] w-full items-center gap-3 border-b border-gray-100 px-3 py-2.5 text-left last:border-b-0 active:bg-gray-50 disabled:opacity-60 " +
+                                  (selected ? "bg-gray-50" : "bg-white")
+                                }
+                              >
+                                <span className="min-w-0 flex-1 break-all text-[13px] font-semibold leading-snug text-gray-900">{m}</span>
+                                {current ? <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">当前</span> : null}
+                                <span
                                   className={
-                                    "flex min-h-[46px] w-full items-center gap-3 border-b border-gray-100 px-3 py-2.5 text-left last:border-b-0 active:bg-gray-50 disabled:opacity-60 " +
-                                    (selected ? "bg-gray-50" : "bg-white")
+                                    "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 " +
+                                    (selected ? "border-gray-900 bg-gray-900" : "border-gray-300 bg-white")
                                   }
                                 >
-                                  <span className="min-w-0 flex-1 break-all text-[13px] font-semibold leading-snug text-gray-900">{m}</span>
-                                  {current ? <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">当前</span> : null}
-                                  <span
-                                    className={
-                                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 " +
-                                      (selected ? "border-gray-900 bg-gray-900" : "border-gray-300 bg-white")
-                                    }
-                                  >
-                                    {selected ? (
-                                      <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                                        <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-                                      </svg>
-                                    ) : null}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="bg-white px-3 py-4 text-center text-[12px] font-medium text-gray-400">未拉到模型</div>
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
+                                  {selected ? (
+                                    <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                      <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                  ) : null}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="bg-white px-3 py-4 text-center text-[12px] font-medium text-gray-400">未拉到模型</div>
+                      )}
+                    </div>
+                  ) : null}
                   <div className="mt-2 border-t border-gray-100 pt-3">
                     <div className="flex items-center gap-3">
                       <button
