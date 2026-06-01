@@ -1050,7 +1050,6 @@ def chat_completions():
         body = step_inject_du_vitals(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
         body = step_inject_pixel_home(body, window_id)
-        body = step_inject_du_midterm_memory(body, window_id)
         if not skip_dynamic_memory:
             body = step_inject_dynamic_memory(body, window_id)
         body = step_inject_humor_memes(body)
@@ -1071,6 +1070,7 @@ def chat_completions():
             body = step_inject_amap_mcp_tools(body)
             body = step_inject_websearch_tools(body)
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
+        body = step_inject_du_midterm_memory(body, window_id)
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     if _is_local_claude_oauth_proxy_url(active_upstream_url) and not _skip_claude_thinking_carryover_request():
