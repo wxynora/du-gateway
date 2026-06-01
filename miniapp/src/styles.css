@@ -5895,6 +5895,57 @@
   outline-offset: 2px;
 }
 
+.pixel-home-ref-room-menu {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  max-width: min(168px, 42%);
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid rgba(113, 95, 86, 0.08);
+  border-radius: 999px;
+  background: rgba(252, 250, 248, 0.58);
+  box-shadow: 0 8px 24px rgba(113, 95, 86, 0.1);
+  backdrop-filter: blur(10px);
+}
+
+.pixel-home-ref-room-menu-left {
+  transform: translate(0, -50%);
+}
+
+.pixel-home-ref-room-menu-right {
+  transform: translate(-100%, -50%);
+}
+
+.pixel-home-ref-room-menu-center {
+  transform: translate(-50%, -50%);
+}
+
+.pixel-home-ref-room-action {
+  min-height: 25px;
+  padding: 4px 9px;
+  border: 0.5px solid rgba(113, 95, 86, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.46);
+  color: rgba(113, 95, 86, 0.9);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.pixel-home-ref-room-action:active {
+  transform: scale(0.94);
+  background: rgba(232, 196, 184, 0.42);
+}
+
+.pixel-home-ref-room-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .pixel-home-ref-pulse {
   position: absolute;
   width: 8px;
@@ -5980,53 +6031,6 @@
   width: 16px;
   height: 16px;
   stroke: currentColor;
-}
-
-.pixel-home-ref-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 8px;
-}
-
-.pixel-home-ref-actions-room {
-  flex: 0 0 auto;
-  color: var(--pixel-home-text-muted);
-  font-family: "Lora", "Noto Serif SC", serif;
-  font-size: 14px;
-}
-
-.pixel-home-ref-action-list {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.pixel-home-ref-action-chip {
-  min-height: 34px;
-  padding: 7px 13px;
-  border: 1px solid var(--pixel-home-border);
-  border-radius: 999px;
-  background: var(--pixel-home-surface);
-  box-shadow: var(--pixel-home-shadow-soft);
-  color: var(--pixel-home-text-main);
-  cursor: pointer;
-  font-size: 12px;
-  transition: all 0.3s ease;
-}
-
-.pixel-home-ref-action-chip:active {
-  transform: scale(0.96);
-  background: var(--pixel-home-bg);
-}
-
-.pixel-home-ref-action-chip:disabled {
-  cursor: default;
-  opacity: 0.55;
 }
 
 .pixel-home-ref-feed {
@@ -6210,7 +6214,7 @@
   .pixel-home-ref-house-wrapper,
   .pixel-home-ref-pulse,
   .pixel-home-ref-add,
-  .pixel-home-ref-action-chip,
+  .pixel-home-ref-room-action,
   .pixel-home-ref-modal,
   .pixel-home-ref-sheet,
   .pixel-home-ref-location-chip,

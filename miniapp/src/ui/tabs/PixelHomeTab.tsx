@@ -38,6 +38,7 @@ type Hotspot = {
   key: HotspotKey;
   label: string;
   marker: { left: number; top: number };
+  menu: { left: number; top: number; align?: "left" | "right" | "center" };
   parts: Array<{
     rect: { left: number; top: number; width: number; height: number };
     shape?: string;
@@ -74,6 +75,7 @@ const HOTSPOTS: Hotspot[] = [
     key: "bed",
     label: "卧室",
     marker: { left: 33.5, top: 38.5 },
+    menu: { left: 37.5, top: 42, align: "left" },
     parts: [
       {
         rect: { left: 23.2, top: 29.2, width: 21.8, height: 19.4 },
@@ -86,6 +88,7 @@ const HOTSPOTS: Hotspot[] = [
     key: "bath",
     label: "浴室",
     marker: { left: 78.5, top: 32.5 },
+    menu: { left: 76, top: 42, align: "right" },
     parts: [{ rect: { left: 66.5, top: 16, width: 27, height: 28 } }],
     actions: [{ label: "洗澡" }, { label: "色色" }],
   },
@@ -93,6 +96,7 @@ const HOTSPOTS: Hotspot[] = [
     key: "study",
     label: "书房",
     marker: { left: 54, top: 25.5 },
+    menu: { left: 57, top: 31, align: "left" },
     parts: [{ rect: { left: 45, top: 15, width: 18, height: 21 } }],
     actions: [{ label: "写日记" }, { label: "看书" }],
   },
@@ -100,6 +104,7 @@ const HOTSPOTS: Hotspot[] = [
     key: "sofa",
     label: "客厅沙发",
     marker: { left: 40.5, top: 80.5 },
+    menu: { left: 45, top: 70.5, align: "center" },
     parts: [
       {
         rect: { left: 28.8, top: 70.2, width: 13.3, height: 18.7 },
@@ -334,6 +339,25 @@ export function PixelHomeTab() {
                   aria-hidden="true"
                 />
               ) : null}
+              {selectedSpot ? (
+                <div
+                  className={`pixel-home-ref-room-menu pixel-home-ref-room-menu-${selectedSpot.menu.align || "center"}`}
+                  style={{ left: `${selectedSpot.menu.left}%`, top: `${selectedSpot.menu.top}%` }}
+                  aria-label={`${selectedSpot.label}事件`}
+                >
+                  {selectedSpot.actions.map((action) => (
+                    <button
+                      key={action.label}
+                      type="button"
+                      className="pixel-home-ref-room-action"
+                      disabled={!!sendingAction}
+                      onClick={() => void sendHomeEvent(action)}
+                    >
+                      {sendingAction === action.label ? "发送中" : action.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
         </section>
@@ -355,25 +379,6 @@ export function PixelHomeTab() {
             </svg>
           </button>
         </section>
-
-        {selectedSpot ? (
-          <section className="pixel-home-ref-actions" aria-label={`${selectedSpot.label}事件`}>
-            <div className="pixel-home-ref-actions-room">{selectedSpot.label}</div>
-            <div className="pixel-home-ref-action-list">
-              {selectedSpot.actions.map((action) => (
-                <button
-                  key={action.label}
-                  type="button"
-                  className="pixel-home-ref-action-chip"
-                  disabled={!!sendingAction}
-                  onClick={() => void sendHomeEvent(action)}
-                >
-                  {sendingAction === action.label ? "发送中" : action.label}
-                </button>
-              ))}
-            </div>
-          </section>
-        ) : null}
 
         <section className="pixel-home-ref-feed">
           <span className="pixel-home-ref-section-label">渡的动态</span>
