@@ -115,10 +115,12 @@ export function SettingsUpstream() {
   const [modelsError, setModelsError] = useState("");
   const [modelsSource, setModelsSource] = useState("");
   const [modelsStatus, setModelsStatus] = useState(0);
+  const [modelListOpen, setModelListOpen] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
   const [thinkingEffort, setThinkingEffort] = useState("high");
   const [pendingThinkingEffort, setPendingThinkingEffort] = useState("high");
   const [thinkingEffortOptions, setThinkingEffortOptions] = useState<string[]>(DEFAULT_THINKING_EFFORTS);
+  const [thinkingListOpen, setThinkingListOpen] = useState(false);
   const [thinkingEffortSaving, setThinkingEffortSaving] = useState(false);
 
   const loadModels = useCallback(async (index?: number) => {
@@ -407,112 +409,182 @@ export function SettingsUpstream() {
                     </button>
                   </div>
                   <div className="mt-3 rounded-2xl border border-gray-100 bg-gray-50 p-2">
-                    <div className="flex items-center justify-between gap-3 px-2 py-1">
-                      <div className="min-w-0">
+                    <div className="flex items-stretch gap-2">
+                      <button
+                        type="button"
+                        aria-expanded={modelListOpen}
+                        aria-controls="upstream-model-list"
+                        onClick={() => setModelListOpen((v) => !v)}
+                        className="min-w-0 flex-1 rounded-xl bg-white px-3 py-2 text-left shadow-sm active:scale-[0.99]"
+                      >
                         <div className="flex items-center gap-2">
                           <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">可用模型</p>
                           {modelsSource ? (
-                            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500">
+                            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">
                               {modelSourceLabel(modelsSource) || modelsSource}
                             </span>
                           ) : null}
                         </div>
-                        <p className="mt-0.5 text-[11px] font-semibold text-gray-400">
-                          {modelsStatus ? `HTTP ${modelsStatus}` : modelsLoading ? "拉取中" : `${modelOptions.length} 个`}
-                        </p>
-                      </div>
+                        <div className="mt-1 flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-gray-900">
+                            {pendingModel || (modelsLoading ? "拉取中…" : modelsError ? "加载失败" : "未拉到模型")}
+                          </span>
+                          <span className="shrink-0 text-[11px] font-semibold text-gray-400">
+                            {modelsStatus ? `HTTP ${modelsStatus}` : `${modelOptions.length} 个`}
+                          </span>
+                          <svg
+                            className={"h-4 w-4 shrink-0 text-gray-400 transition-transform " + (modelListOpen ? "rotate-180" : "")}
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                          >
+                            <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </div>
+                      </button>
                       <button
                         type="button"
                         disabled={modelsLoading || modelSaving}
-                        onClick={() => void loadModels(active)}
-                        className="h-8 shrink-0 rounded-full bg-white px-3 text-[12px] font-bold text-gray-700 shadow-sm active:scale-[0.98] disabled:text-gray-300 disabled:shadow-none"
+                        onClick={() => {
+                          setModelListOpen(true);
+                          void loadModels(active);
+                        }}
+                        className="w-14 shrink-0 rounded-xl bg-white text-[12px] font-bold text-gray-700 shadow-sm active:scale-[0.98] disabled:text-gray-300 disabled:shadow-none"
                       >
                         {modelsLoading ? "刷新中" : "刷新"}
                       </button>
                     </div>
-                    {modelsError ? (
-                      <div className="mx-1 mt-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800">
-                        <span className="break-words">{modelsError}</span>
+                    {modelListOpen ? (
+                      <div id="upstream-model-list" className="mt-2">
+                        {modelsError ? (
+                          <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800">
+                            <span className="break-words">{modelsError}</span>
+                          </div>
+                        ) : null}
+                        {modelsLoading ? (
+                          <div className="space-y-2 rounded-xl bg-white p-2">
+                            {[0, 1, 2].map((i) => (
+                              <div key={i} className="h-11 animate-pulse rounded-lg bg-gray-100" />
+                            ))}
+                          </div>
+                        ) : modelOptions.length ? (
+                          <div className="max-h-64 overflow-y-auto rounded-xl bg-white">
+                            {modelOptions.map((m) => {
+                              const selected = m === pendingModel;
+                              const current = m === currentModel;
+                              return (
+                                <button
+                                  key={m}
+                                  type="button"
+                                  disabled={modelSaving}
+                                  onClick={() => {
+                                    setPendingModel(m);
+                                    setModelListOpen(false);
+                                  }}
+                                  className={
+                                    "flex min-h-[46px] w-full items-center gap-3 border-b border-gray-100 px-3 py-2.5 text-left last:border-b-0 active:bg-gray-50 disabled:opacity-60 " +
+                                    (selected ? "bg-teal-50/70" : "bg-white")
+                                  }
+                                >
+                                  <span className="min-w-0 flex-1 break-all text-[13px] font-semibold leading-snug text-gray-900">{m}</span>
+                                  {current ? <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">当前</span> : null}
+                                  <span
+                                    className={
+                                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 " +
+                                      (selected ? "border-teal-600 bg-teal-600" : "border-gray-300 bg-white")
+                                    }
+                                  >
+                                    {selected ? (
+                                      <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                        <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                                      </svg>
+                                    ) : null}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="rounded-xl bg-white px-3 py-4 text-center text-[12px] font-medium text-gray-400">未拉到模型</div>
+                        )}
                       </div>
                     ) : null}
-                    {modelsLoading ? (
-                      <div className="mt-2 space-y-2 rounded-xl bg-white p-2">
-                        {[0, 1, 2].map((i) => (
-                          <div key={i} className="h-12 animate-pulse rounded-xl bg-gray-100" />
-                        ))}
-                      </div>
-                    ) : modelOptions.length ? (
-                      <div className="mt-2 max-h-72 overflow-y-auto rounded-xl bg-white">
-                        {modelOptions.map((m) => {
-                          const selected = m === pendingModel;
-                          const current = m === currentModel;
+                  </div>
+                  <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50 p-2">
+                    <div className="flex items-stretch gap-2">
+                      <button
+                        type="button"
+                        aria-expanded={thinkingListOpen}
+                        aria-controls="upstream-thinking-list"
+                        disabled={!adaptiveThinkingActive}
+                        onClick={() => setThinkingListOpen((v) => !v)}
+                        className="min-w-0 flex-1 rounded-xl bg-white px-3 py-2 text-left shadow-sm active:scale-[0.99] disabled:text-gray-400 disabled:shadow-none"
+                      >
+                        <div className="flex items-center gap-2">
+                          <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Adaptive Thinking</p>
+                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">
+                            {adaptiveThinkingActive ? "可用" : "不生效"}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-gray-900">
+                            {adaptiveThinkingActive ? pendingThinkingEffortForModel : "仅 4.8 / 4.7 / 4.6 生效"}
+                          </span>
+                          <svg
+                            className={"h-4 w-4 shrink-0 text-gray-400 transition-transform " + (thinkingListOpen ? "rotate-180" : "")}
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                          >
+                            <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canSaveThinkingEffort}
+                        onClick={() => void saveThinkingEffort()}
+                        className="w-14 shrink-0 rounded-xl bg-gray-900 text-[12px] font-bold text-white active:scale-[0.98] disabled:bg-white disabled:text-gray-300"
+                      >
+                        {thinkingEffortSaving ? "保存中" : "保存"}
+                      </button>
+                    </div>
+                    {thinkingListOpen && adaptiveThinkingActive ? (
+                      <div id="upstream-thinking-list" className="mt-2 overflow-hidden rounded-xl bg-white">
+                        {adaptiveThinkingEffortOptions.map((effort) => {
+                          const selected = effort === pendingThinkingEffortForModel;
                           return (
                             <button
-                              key={m}
+                              key={effort}
                               type="button"
-                              disabled={modelSaving}
-                              onClick={() => setPendingModel(m)}
+                              disabled={thinkingEffortSaving}
+                              onClick={() => {
+                                setPendingThinkingEffort(effort);
+                                setThinkingListOpen(false);
+                              }}
                               className={
-                                "flex min-h-[52px] w-full items-center gap-3 border-b border-gray-100 px-3 py-3 text-left last:border-b-0 active:bg-gray-50 disabled:opacity-60 " +
-                                (selected ? "bg-teal-50/70" : "bg-white")
+                                "flex h-11 w-full items-center gap-3 border-b border-gray-100 px-3 text-left text-[13px] font-semibold last:border-b-0 disabled:opacity-60 " +
+                                (selected ? "bg-gray-900 text-white" : "bg-white text-gray-700 active:bg-gray-50")
                               }
                             >
-                              <span className="min-w-0 flex-1 break-all text-[13px] font-semibold leading-snug text-gray-900">{m}</span>
-                              {current ? <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">当前</span> : null}
+                              <span className="min-w-0 flex-1">{effort}</span>
                               <span
                                 className={
                                   "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 " +
-                                  (selected ? "border-teal-600 bg-teal-600" : "border-gray-300 bg-white")
+                                  (selected ? "border-white bg-white text-gray-900" : "border-gray-300 text-transparent")
                                 }
                               >
-                                {selected ? (
-                                  <svg className="h-3 w-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                                    <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-                                  </svg>
-                                ) : null}
+                                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                  <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
                               </span>
                             </button>
                           );
                         })}
                       </div>
-                    ) : (
-                      <div className="mt-2 rounded-xl bg-white px-3 py-5 text-center text-[12px] font-medium text-gray-400">未拉到模型</div>
-                    )}
-                  </div>
-                  <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50 px-3 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Adaptive Thinking</p>
-                        <p className="mt-0.5 text-[12px] font-semibold text-gray-500">{adaptiveThinkingActive ? "Claude 4.8 / 4.7 / 4.6" : "仅 4.8 / 4.7 / 4.6 生效"}</p>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={!canSaveThinkingEffort}
-                        onClick={() => void saveThinkingEffort()}
-                        className="h-8 shrink-0 rounded-full bg-gray-900 px-3 text-[12px] font-bold text-white active:scale-[0.98] disabled:bg-gray-100 disabled:text-gray-400"
-                      >
-                        {thinkingEffortSaving ? "保存中" : "保存"}
-                      </button>
-                    </div>
-                    <div className="mt-3 grid grid-cols-5 gap-1.5">
-                      {adaptiveThinkingEffortOptions.map((effort) => {
-                        const selected = effort === pendingThinkingEffortForModel;
-                        return (
-                          <button
-                            key={effort}
-                            type="button"
-                            disabled={!adaptiveThinkingActive || thinkingEffortSaving}
-                            onClick={() => setPendingThinkingEffort(effort)}
-                            className={
-                              "h-9 rounded-xl text-[12px] font-bold active:scale-[0.98] disabled:bg-white disabled:text-gray-300 " +
-                              (selected ? "bg-gray-900 text-white" : "bg-white text-gray-600")
-                            }
-                          >
-                            {effort}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    ) : null}
                   </div>
                   <p className="mt-5 text-[11px] font-medium text-gray-400">探活（HTTP）</p>
                   <div className="mt-1">{renderProbeCodes(activeProbe)}</div>
