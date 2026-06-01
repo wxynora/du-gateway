@@ -1,10 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { apiJson } from "../api";
 import homeDay from "../../assets/life-home-day.png";
 import homeNightOff from "../../assets/life-home-night-off.png";
 import homeNightOn from "../../assets/life-home-night-on.png";
 
 type HomeMode = "day" | "nightOn" | "nightOff";
 type SpotKey = "bed" | "bath" | "study" | "sofa";
+
+type PixelHomeStateResp = {
+  ok?: boolean;
+  mode?: HomeMode;
+};
 
 type Hotspot = {
   key: SpotKey;
@@ -18,8 +24,6 @@ type Hotspot = {
   }>;
   actions: Array<{ label: string; line: string }>;
 };
-
-const STORAGE_KEY = "miniapp.life-home.v1";
 
 const HOME_MODES: Record<HomeMode, { label: string; image: string; line: string; bg: string }> = {
   day: {
@@ -114,37 +118,49 @@ const HOTSPOTS: Hotspot[] = [
   },
 ];
 
-function readSavedMode(): HomeMode {
-  try {
-    const value = window.localStorage.getItem(STORAGE_KEY);
-    return value === "day" || value === "nightOn" || value === "nightOff" ? value : "day";
-  } catch {
-    return "day";
-  }
+function isHomeMode(value: unknown): value is HomeMode {
+  return value === "day" || value === "nightOn" || value === "nightOff";
+}
+
+function resolveLocalMode(): HomeMode {
+  const hourText = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    hour12: false,
+  }).format(new Date());
+  const hour = Number(hourText);
+  return hour >= 18 || hour < 6 ? "nightOn" : "day";
 }
 
 export function PixelHomeTab() {
-  const [mode, setMode] = useState<HomeMode>(() => readSavedMode());
+  const [mode, setMode] = useState<HomeMode>(() => resolveLocalMode());
   const [selectedSpot, setSelectedSpot] = useState<SpotKey | null>(null);
+  const [actionLine, setActionLine] = useState("");
   const selected = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpot) || null, [selectedSpot]);
-  const [line, setLine] = useState(() => HOME_MODES[readSavedMode()].line);
   const modeMeta = HOME_MODES[mode];
+  const line = actionLine || selected?.line || modeMeta.line;
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, mode);
-    } catch {}
-  }, [mode]);
-
-  function changeMode(nextMode: HomeMode) {
-    setMode(nextMode);
-    setSelectedSpot(null);
-    setLine(HOME_MODES[nextMode].line);
-  }
+    let cancelled = false;
+    async function loadHomeState() {
+      try {
+        const data = await apiJson<PixelHomeStateResp>("/miniapp-api/pixel-home-state");
+        if (cancelled) return;
+        if (isHomeMode(data?.mode)) setMode(data.mode);
+      } catch {
+      }
+    }
+    void loadHomeState();
+    const timer = window.setInterval(() => void loadHomeState(), 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   function selectSpot(spot: Hotspot) {
     setSelectedSpot(spot.key);
-    setLine(spot.line);
+    setActionLine("");
   }
 
   return (
@@ -155,23 +171,8 @@ export function PixelHomeTab() {
             <div className="text-[20px] font-semibold tracking-tight">小家</div>
             <div className="mt-1 text-[12px] text-[#7A6A58]">和渡一起生活的地方</div>
           </div>
-          <div className="flex shrink-0 rounded-full border border-[#D8C2A3] bg-[#FFF8EA]/92 p-1 shadow-[0_6px_18px_rgba(96,72,43,0.08)]">
-            {(Object.keys(HOME_MODES) as HomeMode[]).map((key) => {
-              const active = key === mode;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  aria-pressed={active}
-                  className={`rounded-full px-3 py-1.5 text-[12px] font-semibold transition ${
-                    active ? "bg-[#5F4B37] text-[#FFF8EA] shadow-[0_3px_8px_rgba(70,48,29,0.22)]" : "text-[#725F4A]"
-                  }`}
-                  onClick={() => changeMode(key)}
-                >
-                  {HOME_MODES[key].label}
-                </button>
-              );
-            })}
+          <div className="shrink-0 rounded-full border border-[#D8C2A3] bg-[#FFF8EA]/92 px-3 py-1.5 text-[12px] font-semibold text-[#725F4A] shadow-[0_6px_18px_rgba(96,72,43,0.08)]">
+            {modeMeta.label}
           </div>
         </div>
 
@@ -252,7 +253,7 @@ export function PixelHomeTab() {
                   key={action.label}
                   type="button"
                   className="rounded-full border border-[#D5BA96] bg-[#F7E6C8] px-3 py-2 text-[13px] font-semibold text-[#5F4B37] shadow-[0_3px_8px_rgba(96,72,43,0.08)] active:translate-y-px"
-                  onClick={() => setLine(action.line)}
+                  onClick={() => setActionLine(action.line)}
                 >
                   {action.label}
                 </button>

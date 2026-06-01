@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import jsonify
 
 from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
 from storage import r2_store
-from utils.time_aware import now_beijing_iso, today_beijing
+from utils.time_aware import now_beijing_iso, parse_iso_to_beijing, today_beijing
 
 
 _DAILY_KW_STOPWORDS = {
@@ -44,6 +44,12 @@ _DAILY_KW_STOPWORDS = {
     "然后呢",
     "知道了",
 }
+
+_PIXEL_HOME_DAY_START_HOUR = 6
+_PIXEL_HOME_NIGHT_START_HOUR = 18
+_PIXEL_HOME_SLEEP_SCREEN_OFF_MINUTES = 45
+_PIXEL_HOME_SCREEN_LOOKBACK_MINUTES = 12 * 60
+_PIXEL_HOME_AWAKE_SCREEN_LOOKBACK_MINUTES = 30
 
 
 def _message_text(content) -> str:
@@ -93,6 +99,119 @@ def _parse_beijing_dt(value: str) -> datetime | None:
     if dt.tzinfo is None:
         return dt
     return dt.astimezone(tz=None).astimezone()
+
+
+def _pixel_home_relevant_sleep_dates(now_dt: datetime) -> set[str]:
+    today = now_dt.strftime("%Y-%m-%d")
+    if now_dt.hour < _PIXEL_HOME_DAY_START_HOUR:
+        return {today, (now_dt.date() - timedelta(days=1)).isoformat()}
+    return {today}
+
+
+def _pixel_home_date_hit(value: object, candidates: set[str]) -> bool:
+    raw = str(value or "").strip()
+    return bool(raw and raw in candidates)
+
+
+def _pixel_home_minutes_since(value: object, now_dt: datetime) -> float | None:
+    dt = parse_iso_to_beijing(str(value or "").strip())
+    if not dt:
+        return None
+    delta = (now_dt - dt).total_seconds() / 60.0
+    if delta < 0:
+        return None
+    return delta
+
+
+def _pixel_home_recent_awake_signal(screen: dict, now_dt: datetime) -> bool:
+    event = str((screen or {}).get("event") or "").strip().lower()
+    interactive = (screen or {}).get("interactive") is True or str((screen or {}).get("interactive") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if event not in {"screen_on", "user_present"} and not (event == "app_active" and interactive):
+        return False
+    minutes = _pixel_home_minutes_since(
+        (screen or {}).get("observedAt") or (screen or {}).get("occurredAt") or (screen or {}).get("lastSeen") or (screen or {}).get("updatedAt"),
+        now_dt,
+    )
+    return minutes is not None and minutes <= _PIXEL_HOME_AWAKE_SCREEN_LOOKBACK_MINUTES
+
+
+def _pixel_home_screen_off_minutes(screen: dict, now_dt: datetime) -> float | None:
+    if str((screen or {}).get("event") or "").strip().lower() != "screen_off":
+        return None
+    since = (screen or {}).get("screenOffSince") or (screen or {}).get("lastScreenOffAt") or (screen or {}).get("occurredAt")
+    minutes = _pixel_home_minutes_since(since, now_dt)
+    if minutes is not None:
+        return minutes if minutes <= _PIXEL_HOME_SCREEN_LOOKBACK_MINUTES else None
+    try:
+        duration_minutes = int((screen or {}).get("screenOffDurationMs") or 0) / 60000
+    except Exception:
+        duration_minutes = 0
+    seen_minutes = _pixel_home_minutes_since(
+        (screen or {}).get("observedAt") or (screen or {}).get("lastSeen") or (screen or {}).get("updatedAt"),
+        now_dt,
+    )
+    if duration_minutes > 0 and seen_minutes is not None and seen_minutes <= _PIXEL_HOME_SCREEN_LOOKBACK_MINUTES:
+        return duration_minutes
+    return None
+
+
+def _pixel_home_user_after(value: object) -> bool:
+    marker_dt = parse_iso_to_beijing(str(value or "").strip())
+    last_user_dt = parse_iso_to_beijing(r2_store.get_last_telegram_user_activity_at() or "")
+    if not marker_dt or not last_user_dt:
+        return False
+    return last_user_dt > marker_dt + timedelta(seconds=30)
+
+
+def _pixel_home_sleeping_state(now_dt: datetime, is_night: bool) -> tuple[bool, str]:
+    if not is_night:
+        return False, "daytime"
+    sense = r2_store.get_sense_latest() or {}
+    screen = sense.get("screen") if isinstance(sense.get("screen"), dict) else {}
+    if _pixel_home_recent_awake_signal(screen, now_dt):
+        return False, "awake_screen"
+
+    candidates = _pixel_home_relevant_sleep_dates(now_dt)
+    daily = r2_store.get_du_daily_state() or {}
+    trigger_at = str(daily.get("last_trigger_at") or "").strip()
+    for key in ("sleep_closed_for_date", "today_finalized_for_date"):
+        if _pixel_home_date_hit(daily.get(key), candidates):
+            if trigger_at and _pixel_home_user_after(trigger_at):
+                return False, "awake_after_sleep"
+            return True, key
+
+    candidate_at = str(daily.get("sleep_candidate_at") or "").strip()
+    if _pixel_home_date_hit(daily.get("sleep_candidate_day"), candidates) and candidate_at:
+        if not _pixel_home_user_after(candidate_at):
+            return True, "sleep_candidate"
+
+    screen_off_minutes = _pixel_home_screen_off_minutes(screen, now_dt)
+    if screen_off_minutes is not None and screen_off_minutes >= _PIXEL_HOME_SLEEP_SCREEN_OFF_MINUTES:
+        return True, "screen_off"
+    return False, "night_awake"
+
+
+def _build_pixel_home_state() -> dict:
+    now_iso = now_beijing_iso()
+    now_dt = parse_iso_to_beijing(now_iso) or datetime.now()
+    is_night = now_dt.hour >= _PIXEL_HOME_NIGHT_START_HOUR or now_dt.hour < _PIXEL_HOME_DAY_START_HOUR
+    sleeping, source = _pixel_home_sleeping_state(now_dt, is_night)
+    mode = "day"
+    if is_night:
+        mode = "nightOff" if sleeping else "nightOn"
+    return {
+        "ok": True,
+        "mode": mode,
+        "is_night": is_night,
+        "is_sleeping": sleeping,
+        "source": source,
+        "updated_at": now_iso,
+    }
 
 
 def _generate_daily_report(today: str) -> dict:
@@ -378,6 +497,10 @@ def register_routes(bp) -> None:
         today = today_beijing()
         items = _build_du_day_events(today)
         return jsonify({"ok": True, "date": today, "items": items, "count": len(items)})
+
+    @bp.route("/pixel-home-state", methods=["GET"])
+    def miniapp_pixel_home_state():
+        return jsonify(_build_pixel_home_state())
 
     # 兼容旧前端路径：与 daily-report 行为一致
     @bp.route("/weekly-report", methods=["GET"])
