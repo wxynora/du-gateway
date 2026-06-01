@@ -59,6 +59,16 @@ function firstUsageValue(usage: Record<string, unknown>, keys: string[]) {
   return undefined;
 }
 
+function tokenNumber(value: unknown) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function formatTokenNumber(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  return Math.round(value).toLocaleString("en-US");
+}
+
 function promptCacheBreakdown(value: unknown): PromptCacheBreakdownItem[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -84,13 +94,36 @@ function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheD
   const items = Array.isArray(entries) ? entries.filter(Boolean).slice(-4) : [];
   if (!items.length) return null;
   const outputLine = outputStatsLine(outputStats);
+  const latestUsage = items[items.length - 1]?.usage || {};
+  const totalInputTokens = tokenNumber(firstUsageValue(latestUsage, ["input_tokens", "prompt_tokens"]));
+  const cacheReadTokens =
+    tokenNumber(latestUsage.cache_read_input_tokens) ||
+    tokenNumber(firstUsageValue(latestUsage, ["cached_tokens", "prompt_cached_tokens", "input_cached_tokens"]));
+  const cacheCreateTokens = tokenNumber(latestUsage.cache_creation_input_tokens);
+  const outputTokens =
+    tokenNumber(outputStats?.output_tokens) ||
+    tokenNumber(outputStats?.usage_output_tokens) ||
+    tokenNumber(outputStats?.estimated_output_tokens) ||
+    tokenNumber(firstUsageValue(latestUsage, ["output_tokens", "completion_tokens"]));
+
   return (
-    <div className="mt-3 rounded-lg border border-[#f4c7d2] bg-[#fff4f7] px-3 py-2.5 text-[#7a2d45]">
-      <div className="mb-1.5 flex items-center justify-between gap-3">
-        <span className="text-[11px] font-bold">Prompt Cache</span>
-        <span className="shrink-0 text-[10px] text-[#a05a70]">调试</span>
-      </div>
-      <div className="space-y-2.5">
+    <details className="group mt-3 rounded-lg border border-[#f4c7d2] bg-[#fff4f7] px-3 py-2.5 text-[#7a2d45]">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+        <div className="min-w-0">
+          <div className="mb-1 text-[11px] font-bold">Prompt Cache</div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] leading-4 text-[#8a4055]">
+            <span>input={formatTokenNumber(totalInputTokens)}</span>
+            <span>read={formatTokenNumber(cacheReadTokens)}</span>
+            <span>create={formatTokenNumber(cacheCreateTokens)}</span>
+            <span>output={formatTokenNumber(outputTokens)}</span>
+          </div>
+        </div>
+        <span className="shrink-0 text-[10px] text-[#a05a70]">
+          <span className="group-open:hidden">展开</span>
+          <span className="hidden group-open:inline">收起</span>
+        </span>
+      </summary>
+      <div className="mt-2.5 space-y-2.5 border-t border-[#f6d7df] pt-2.5">
         {items.map((entry, idx) => {
           const req = entry?.request || {};
           const usage = entry?.usage || {};
@@ -149,7 +182,7 @@ function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheD
           );
         })}
       </div>
-    </div>
+    </details>
   );
 }
 
