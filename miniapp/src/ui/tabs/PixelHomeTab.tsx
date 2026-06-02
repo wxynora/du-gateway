@@ -6,7 +6,7 @@ import homeNightOn from "../../assets/life-home-night-on.png";
 
 type HomeMode = "day" | "nightOn" | "nightOff";
 type HotspotKey = "bed" | "bath" | "study" | "sofa";
-type HomeSpotKey = HotspotKey | "kitchen" | "home";
+type HomeSpotKey = HotspotKey | "kitchen" | "away";
 
 type PixelHomeActor = {
   spot?: HomeSpotKey;
@@ -67,7 +67,7 @@ const DEFAULT_SPOTS: Array<{ key: HomeSpotKey; label: string }> = [
   { key: "study", label: "书房" },
   { key: "sofa", label: "客厅沙发" },
   { key: "kitchen", label: "厨房" },
-  { key: "home", label: "小家里" },
+  { key: "away", label: "离家出走" },
 ];
 
 const HOTSPOTS: Hotspot[] = [
@@ -132,7 +132,7 @@ function isHomeMode(value: unknown): value is HomeMode {
 }
 
 function isHomeSpot(value: unknown): value is HomeSpotKey {
-  return value === "bed" || value === "bath" || value === "study" || value === "sofa" || value === "kitchen" || value === "home";
+  return value === "bed" || value === "bath" || value === "study" || value === "sofa" || value === "kitchen" || value === "away";
 }
 
 function resolveLocalMode(): HomeMode {
@@ -157,6 +157,10 @@ function actorText(actor: PixelHomeActor | undefined, fallback: string) {
 function statusText(label: string, activity: string) {
   const clean = String(activity || "").trim().replace(/^正在/, "") || "待着";
   if (clean.startsWith("在")) return clean;
+  if (label === "离家出走") {
+    if (clean === "待着" || clean === "休息") return label;
+    return `${label}，${clean}`;
+  }
   return `在${label}${clean}`;
 }
 
@@ -190,7 +194,7 @@ export function PixelHomeTab() {
   const modeMeta = HOME_MODES[mode];
   const spots = homeState?.spots?.length ? homeState.spots : DEFAULT_SPOTS;
   const duStatus = actorText(homeState?.du, "在书房写日记");
-  const mySpotLabel = spots.find((spot) => spot.key === mySpot)?.label || "小家里";
+  const mySpotLabel = spots.find((spot) => spot.key === mySpot)?.label || "离家出走";
   const myStatus = myDirty ? statusText(mySpotLabel, myActivity) : actorText(homeState?.xinyue, "在客厅沙发休息");
   const selectedSpot = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpotKey) || null, [selectedSpotKey]);
   const feedItems = useMemo(() => {
@@ -373,7 +377,7 @@ export function PixelHomeTab() {
           <span className="pixel-home-ref-section-label">渡的动态</span>
           <ul className="pixel-home-ref-feed-list">
             {feedItems.map((item, index) => {
-              const text = String(item.text || "").trim() || statusText(String(item.spot_label || "小家里"), String(item.activity || "待着"));
+              const text = String(item.text || "").trim() || statusText(String(item.spot_label || "离家出走"), String(item.activity || "待着"));
               return (
                 <li className="pixel-home-ref-feed-item" key={`${item.at || "du"}-${index}`}>
                   <span className="pixel-home-ref-feed-time">{formatDynamicTime(item.at)}</span>
