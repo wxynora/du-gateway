@@ -65,8 +65,14 @@ EVENT_AUTO_END_MINUTES = 120
 DU_EVENT_SOURCES = {"du_marker"}
 XINYUE_EVENT_SOURCES = {"chat_infer", "miniapp_event"}
 _SPOT_WORD_PATTERN = "|".join(sorted((re.escape(key) for key in SPOT_ALIASES if key and not key.isascii()), key=len, reverse=True))
-_MOVE_TO_RE = re.compile(rf"(?:到|去|回到|走到|来到|坐到|躺到)({_SPOT_WORD_PATTERN})")
+_MOVE_TO_RE = re.compile(rf"(?:回到|走到|走回|来到|坐到|躺到|站到|到|去|回)({_SPOT_WORD_PATTERN})")
 _MOVE_FROM_RE = re.compile(rf"^从({_SPOT_WORD_PATTERN})(?:走出|出来|离开|出去)")
+_SPOT_CONTEXT_RE = re.compile(
+    rf"(?:在|留在|待在|站在|坐在|躺在|靠在|靠着|窝在|蹲在|趴在)({_SPOT_WORD_PATTERN})"
+    rf"|({_SPOT_WORD_PATTERN})(?:里|上|边|旁边|旁|附近|门口|那边)"
+)
+_PERSON_CONTEXT_RE = re.compile(r"(?:她|小玥|老婆|辛玥)(?:面前|身边|旁边|身旁|旁|这边)")
+_STALE_SPOT_PREFIX_RE = re.compile(rf"^在({_SPOT_WORD_PATTERN})(.+)$")
 
 
 def normalize_spot(value: Any, default: str = "home") -> str:
@@ -89,15 +95,52 @@ def _clean_activity(value: Any, default: str = "待着") -> str:
     return text[:48].strip()
 
 
-def _resolve_spot_from_activity(spot: str, activity: str) -> str:
+def _resolve_spot_from_activity(spot: str, activity: str, *, reference_spot: str = "") -> str:
     text = _clean_activity(activity, "待着")
     to_match = _MOVE_TO_RE.search(text)
     if to_match:
         return normalize_spot(to_match.group(1), spot)
+    stale_prefix = _STALE_SPOT_PREFIX_RE.match(text)
+    if reference_spot and stale_prefix and _PERSON_CONTEXT_RE.search(text):
+        prefix_spot = normalize_spot(stale_prefix.group(1), "")
+        normalized_reference = normalize_spot(reference_spot, "")
+        if normalized_reference and prefix_spot != normalized_reference:
+            return normalized_reference
+    context_spot = _resolve_spot_from_context(text)
+    if context_spot:
+        return context_spot
+    if reference_spot and _PERSON_CONTEXT_RE.search(text):
+        return normalize_spot(reference_spot, spot)
     from_match = _MOVE_FROM_RE.search(text)
     if from_match and normalize_spot(from_match.group(1), "") == spot:
         return "home"
     return spot
+
+
+def _resolve_spot_from_context(text: str) -> str:
+    resolved = ""
+    for match in _SPOT_CONTEXT_RE.finditer(text):
+        word = match.group(1) or match.group(2)
+        spot = normalize_spot(word, "")
+        if spot:
+            resolved = spot
+    return resolved
+
+
+def _strip_stale_spot_prefix(activity: str, spot: str) -> str:
+    text = _clean_activity(activity, "待着")
+    match = _STALE_SPOT_PREFIX_RE.match(text)
+    if not match:
+        return text
+    prefix_spot = normalize_spot(match.group(1), "")
+    if not prefix_spot or prefix_spot == spot:
+        return text
+    rest = match.group(2).lstrip("，,、。 ：:;；")
+    return rest or text
+
+
+def _activity_has_current_spot_context(activity: str, spot: str) -> bool:
+    return bool(spot and (_resolve_spot_from_context(activity) == spot or _PERSON_CONTEXT_RE.search(activity)))
 
 
 def _now_dt() -> datetime:
@@ -219,12 +262,12 @@ def mode_label(mode: Any) -> str:
     return {"day": "白天", "nightOn": "夜里开灯", "nightOff": "夜里关灯"}.get(str(mode or ""), "白天")
 
 
-def _normalize_actor(raw: Any, default: dict, *, force_source: str = "") -> dict:
+def _normalize_actor(raw: Any, default: dict, *, force_source: str = "", reference_spot: str = "") -> dict:
     data = raw if isinstance(raw, dict) else {}
     now_iso = now_beijing_iso()
     spot = normalize_spot(data.get("spot") or data.get("location"), str(default.get("spot") or "home"))
     activity = _clean_activity(data.get("activity") or data.get("doing") or data.get("status"), str(default.get("activity") or "待着"))
-    spot = _resolve_spot_from_activity(spot, activity)
+    spot = _resolve_spot_from_activity(spot, activity, reference_spot=reference_spot)
     source = str(force_source or data.get("source") or default.get("source") or "manual").strip() or "manual"
     updated_at = str(data.get("updated_at") or data.get("updatedAt") or "").strip() or now_iso
     return {"spot": spot, "spot_label": spot_label(spot), "activity": activity, "source": source, "updated_at": updated_at}
@@ -240,16 +283,18 @@ def _format_activity_for_prompt(activity: str) -> str:
 def _format_actor_text(actor: dict) -> str:
     spot = normalize_spot((actor or {}).get("spot"))
     label = spot_label(spot)
-    activity = _clean_activity((actor or {}).get("activity"), "待着")
-    if activity.startswith(("在", "从", "去", "回到", "走到", "来到", "离开")):
+    activity = _strip_stale_spot_prefix(_clean_activity((actor or {}).get("activity"), "待着"), spot)
+    if activity.startswith(("在", "从", "去", "回到", "走到", "走回", "来到", "离开")):
+        return activity
+    if _activity_has_current_spot_context(activity, spot):
         return activity
     if activity.startswith("正在"):
         activity = activity[2:].strip() or "待着"
     return f"在{label}{activity}"
 
 
-def _actor_public(actor: dict) -> dict:
-    normalized = _normalize_actor(actor, DEFAULT_DU_STATE)
+def _actor_public(actor: dict, *, reference_spot: str = "") -> dict:
+    normalized = _normalize_actor(actor, DEFAULT_DU_STATE, reference_spot=reference_spot)
     normalized["text"] = _format_actor_text(normalized)
     return normalized
 
@@ -267,7 +312,7 @@ def _stored_state() -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _normalize_du_dynamics(raw: Any) -> list[dict]:
+def _normalize_du_dynamics(raw: Any, *, reference_spot: str = "") -> list[dict]:
     rows = raw if isinstance(raw, list) else []
     out: list[dict] = []
     for item in rows:
@@ -275,7 +320,7 @@ def _normalize_du_dynamics(raw: Any) -> list[dict]:
             continue
         spot = normalize_spot(item.get("spot"), "home")
         activity = _clean_activity(item.get("activity"), "待着")
-        spot = _resolve_spot_from_activity(spot, activity)
+        spot = _resolve_spot_from_activity(spot, activity, reference_spot=reference_spot)
         at = str(item.get("at") or item.get("updated_at") or item.get("updatedAt") or "").strip()
         if not at:
             continue
@@ -291,8 +336,8 @@ def _normalize_du_dynamics(raw: Any) -> list[dict]:
     return out[-DU_DYNAMICS_LIMIT:]
 
 
-def _append_du_dynamic(current: dict, actor: dict) -> list[dict]:
-    rows = _normalize_du_dynamics((current or {}).get("du_dynamics"))
+def _append_du_dynamic(current: dict, actor: dict, *, reference_spot: str = "") -> list[dict]:
+    rows = _normalize_du_dynamics((current or {}).get("du_dynamics"), reference_spot=reference_spot)
     latest = rows[-1] if rows else None
     if latest and latest.get("spot") == actor.get("spot") and latest.get("activity") == actor.get("activity"):
         return rows
@@ -349,11 +394,11 @@ def build_pixel_home_state() -> dict:
     stored, changed = _auto_end_stale_events(_stored_state())
     if changed:
         save_pixel_home_state(stored)
-    du = _normalize_actor(stored.get("du"), DEFAULT_DU_STATE)
     xinyue = _normalize_actor(stored.get("xinyue"), DEFAULT_XINYUE_STATE)
-    mode_state["du"] = _actor_public(du)
+    du = _normalize_actor(stored.get("du"), DEFAULT_DU_STATE, reference_spot=str(xinyue.get("spot") or ""))
+    mode_state["du"] = _actor_public(du, reference_spot=str(xinyue.get("spot") or ""))
     mode_state["xinyue"] = _actor_public(xinyue)
-    mode_state["du_dynamics"] = _normalize_du_dynamics(stored.get("du_dynamics"))
+    mode_state["du_dynamics"] = _normalize_du_dynamics(stored.get("du_dynamics"), reference_spot=str(xinyue.get("spot") or ""))
     mode_state["spots"] = SPOT_OPTIONS
     return mode_state
 
@@ -361,10 +406,18 @@ def build_pixel_home_state() -> dict:
 def save_actor_state(actor_key: str, spot: Any, activity: Any, *, source: str = "manual") -> dict:
     key = "du" if str(actor_key or "").strip().lower() == "du" else "xinyue"
     current = _stored_state()
-    actor = _normalize_actor({"spot": spot, "activity": activity, "source": source, "updated_at": now_beijing_iso()}, DEFAULT_DU_STATE if key == "du" else DEFAULT_XINYUE_STATE)
+    reference_spot = ""
+    if key == "du":
+        reference = _normalize_actor(current.get("xinyue"), DEFAULT_XINYUE_STATE)
+        reference_spot = str(reference.get("spot") or "")
+    actor = _normalize_actor(
+        {"spot": spot, "activity": activity, "source": source, "updated_at": now_beijing_iso()},
+        DEFAULT_DU_STATE if key == "du" else DEFAULT_XINYUE_STATE,
+        reference_spot=reference_spot,
+    )
     current[key] = actor
     if key == "du":
-        current["du_dynamics"] = _append_du_dynamic(current, actor)
+        current["du_dynamics"] = _append_du_dynamic(current, actor, reference_spot=reference_spot)
     current["updated_at"] = now_beijing_iso()
     ok = save_pixel_home_state(current)
     actor["text"] = _format_actor_text(actor)
@@ -416,7 +469,7 @@ def format_inject_block() -> str:
         f"小玥的位置：{xinyue_label}，{_format_activity_for_prompt(str(xinyue.get('activity') or '待着'))}。\n"
         "小家事件超过 2 小时没有更新会自动结束；其他移动和状态变化由你在对话里自然决定。\n"
         "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加 PIXEL_HOME 隐藏标记：\n"
-        "写 PIXEL_HOME 时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅”，不要继续写 study，要写最终到达的房间，没有明确房间就写 home。\n"
+        "写 PIXEL_HOME 时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 home。\n"
         "<<<PIXEL_HOME>>>\n"
         '{"spot":"study","activity":"写日记"}\n'
         "<<<END_PIXEL_HOME>>>\n"
