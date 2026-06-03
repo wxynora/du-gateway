@@ -113,7 +113,7 @@ public class FloatingBallService extends Service {
     private static final long LOCATION_REPORT_INTERVAL_MS = 15L * 60L * 1000L;
     private static final long SCREEN_STATE_REPORT_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long LOCATION_MAX_STALE_MS = 2L * 60L * 1000L;
-    private static final float LOCATION_REPORT_MIN_DISTANCE_M = 5000f;
+    private static final float LOCATION_REPORT_MIN_DISTANCE_M = 3000f;
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
