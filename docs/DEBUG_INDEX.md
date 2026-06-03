@@ -783,6 +783,7 @@ npm -C miniapp run android
 - `npm -C miniapp run build` 会更新 `miniapp_static` 的 hash 资源。
 - 前端静态产物要随源码一起提交，否则服务器页面不会变。
 - APK 打包统一通过 Android Studio；命令行验证也要用 Android Studio 自带 JBR，在 `miniapp/android` 下跑 `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" sh ./gradlew :app:assembleDebug`。
+- 每次对外重新打 APK，尤其是 Android native 层变更或大版本功能变化，必须先提升 `miniapp/android/app/build.gradle` 里的 `versionCode` 和 `versionName`，再打包；打完用 `aapt dump badging app-debug.apk` 确认版本号确实变了。
 - APK 产物固定是 `miniapp/android/app/build/outputs/apk/debug/app-debug.apk`；上线下载包时覆盖 `/miniapp/assets/app-debug.apk`，不要另建 `latest`、commit 后缀或版本号后缀 APK 文件。
 - 只有 Android native 层变更才需要重新打 APK；只改远程 MiniApp 页面时，通常只需要重建 `miniapp_static` 并部署服务端静态资源。
 
