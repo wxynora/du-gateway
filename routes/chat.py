@@ -879,7 +879,7 @@ def _forward_to_ai(body: dict, headers: dict, prompt_cache_profile: Optional[dic
             body_send = _apply_active_model_request_policy(body_send, url)
             target_url = url
             body_send = _apply_openrouter_request_policy(body_send, url)
-            r = requests.post(target_url, headers=req_headers, json=body_send, timeout=120)
+            r = requests.post(target_url, headers=req_headers, json=body_send, timeout=STREAM_TIMEOUT_SECONDS)
             # 为排查上游 403：记录鉴权是否携带（不泄露 key），以及响应正文前缀
             try:
                 api_key_len = len(api_key or "")

@@ -33,7 +33,7 @@ from services.voice_line_prompt import build_voice_line_rules
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
-TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS = 180
+TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS = 300
 TELEGRAM_TEXT_DOCUMENT_EXTS = {".md", ".markdown", ".txt"}
 TELEGRAM_TEXT_DOCUMENT_MIME_TYPES = {"text/markdown", "text/plain"}
 TELEGRAM_TEXT_DOCUMENT_MAX_BYTES = 1024 * 1024

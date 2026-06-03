@@ -1412,3 +1412,8 @@ npm -C miniapp run android
 - 已完成：文档附件限制为 1MB，送入模型前最多保留前 60000 字，超出会在输入里追加截断说明；非文本附件继续忽略，避免 PDF/二进制误进 prompt。`services/telegram_update_queue.py` 的 update 摘要新增 `has_document`，方便从队列日志判断 TG 是否收到文档。
 - 已验证：`.venv/bin/python -m py_compile services/telegram_bot.py services/telegram_update_queue.py` 通过；本地 monkeypatch smoke 模拟 `notes.md` 附件，确认输入缓冲包含文件名、caption 和 Markdown 原文；`git diff --check -- services/telegram_bot.py services/telegram_update_queue.py docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 下次继续：本轮未支持 PDF/DOCX/OCR，也未把附件原文件持久化；如需更长文档，应改成先入文件缓存/R2，再只把摘要或链接注入。
+
+当前状态（2026-06-03 TG 长任务超时放宽）：
+- 已完成：`services/telegram_bot.py` 将 TG worker 调网关等待时间从 180 秒提高到 300 秒，避免渡做测试题、长文档题目或较长推理时被 TG 侧提前判定失败。
+- 已完成：`routes/chat.py` 的非流式上游转发不再写死 120 秒，改用 `config.py::STREAM_TIMEOUT_SECONDS`，与流式请求一致，默认 300 秒。`scripts/start_gateway_prod.sh` 将 gunicorn 默认 `GATEWAY_TIMEOUT` 从 240 秒提高到 360 秒，给 5 分钟上游请求留出外层余量。
+- 已验证：`.venv/bin/python -m py_compile services/telegram_bot.py routes/chat.py` 通过；`rg` 确认主 chat 流式/非流式均使用 `STREAM_TIMEOUT_SECONDS=300`，TG worker 使用 `TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS=300`，gunicorn 默认 360 秒。
