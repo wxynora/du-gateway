@@ -1,4 +1,6 @@
 import logging
+import os
+from urllib.parse import urlparse
 
 import requests
 from flask import jsonify, request
@@ -16,6 +18,105 @@ from storage import upstream_store
 
 
 logger = logging.getLogger(__name__)
+
+
+def _parsed_url(raw_url: str):
+    raw = str(raw_url or "").strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "http://" + raw
+    try:
+        return urlparse(raw)
+    except Exception:
+        return None
+
+
+def _is_local_oauth_url(raw_url: str) -> bool:
+    parsed = _parsed_url(raw_url)
+    host = (parsed.hostname if parsed else "") or ""
+    return host.lower() in {"127.0.0.1", "localhost", "::1"}
+
+
+def _oauth_label_for_item(it: dict) -> str:
+    name = str(it.get("name") or "").lower()
+    url = str(it.get("url") or "").lower()
+    parsed = _parsed_url(url)
+    port = parsed.port if parsed else None
+    joined = f"{name} {url}"
+    if "claude" in joined or port == 8082:
+        return "Claude Code"
+    if "codex" in joined or "cpa" in joined or port == 8317:
+        return "Codex"
+    return "OAuth"
+
+
+def _oauth_status_key(label: str) -> str:
+    label_lower = label.lower()
+    if "claude" in label_lower:
+        names = ("CLAUDE_OAUTH_SYNC_KEY", "CLAUDE_PROXY_SYNC_KEY", "OAUTH_SYNC_KEY")
+    elif "codex" in label_lower:
+        names = ("CODEX_OAUTH_SYNC_KEY", "CODEX_PROXY_SYNC_KEY", "CODEX_TOKEN_SYNC_KEY", "OAUTH_SYNC_KEY")
+    else:
+        names = ("OAUTH_SYNC_KEY",)
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return ""
+
+
+def _sanitize_oauth_status(data) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    out: dict = {}
+    if "ok" in data:
+        out["ok"] = bool(data.get("ok"))
+    if "stale" in data:
+        out["stale"] = bool(data.get("stale"))
+    expires_at = data.get("expiresAt", data.get("expires_at"))
+    expires_in = data.get("expiresInSeconds", data.get("expires_in_seconds"))
+    if expires_at is not None:
+        out["expiresAt"] = expires_at
+    if expires_in is not None:
+        out["expiresInSeconds"] = expires_in
+    source = str(data.get("source") or "").strip()
+    if source:
+        out["source"] = source
+    return out or None
+
+
+def _oauth_status_for_item(it: dict, label: str) -> dict | None:
+    parsed = _parsed_url(str(it.get("url") or ""))
+    if not parsed or not parsed.scheme or not parsed.netloc:
+        return None
+    headers: dict[str, str] = {}
+    key = _oauth_status_key(label)
+    if key:
+        headers["X-OAuth-Sync-Key"] = key
+    base = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    try:
+        resp = requests.get(f"{base}/internal/oauth-status", headers=headers, timeout=1.0)
+        if not (200 <= resp.status_code < 300):
+            return None
+        return _sanitize_oauth_status(resp.json() if resp.content else {})
+    except Exception as e:
+        logger.debug("oauth status unavailable label=%s url=%s err=%s", label, base, e)
+        return None
+
+
+def _public_upstream_item(it: dict) -> dict:
+    item = {"name": it.get("name") or "", "url": it.get("url") or ""}
+    if _is_local_oauth_url(item["url"]):
+        label = _oauth_label_for_item(it)
+        status = _oauth_status_for_item(it, label)
+        item["category"] = "oauth"
+        item["oauth_label"] = label
+        if status:
+            item["oauth_status"] = status
+    else:
+        item["category"] = "openai"
+    return item
 
 
 def _chat_url_to_models_url(chat_url: str) -> str:
@@ -154,10 +255,7 @@ def register_routes(bp) -> None:
         data = upstream_store.load_upstreams()
         model = upstream_store.get_cached_active_model(refresh_if_missing=False)
         claude_thinking_effort = upstream_store.get_active_claude_thinking_effort()
-        items = [
-            {"name": it.get("name") or "", "url": it.get("url") or ""}
-            for it in (data.get("items") or [])
-        ]
+        items = [_public_upstream_item(it) for it in (data.get("items") or []) if isinstance(it, dict)]
         return jsonify(
             {
                 "active": int(data.get("active") or 0),

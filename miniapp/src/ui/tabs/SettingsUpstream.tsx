@@ -2,7 +2,21 @@ import React, { useCallback, useEffect, useState } from "react";
 import { apiJson } from "../api";
 import { useToast } from "../toast";
 
-type UpstreamItem = { name: string; url: string };
+type NodeCategory = "openai" | "oauth";
+type OAuthStatus = {
+  ok?: boolean;
+  stale?: boolean;
+  expiresAt?: number | string;
+  expiresInSeconds?: number | string;
+  source?: string;
+};
+type UpstreamItem = {
+  name: string;
+  url: string;
+  category?: NodeCategory | string;
+  oauth_label?: string;
+  oauth_status?: OAuthStatus;
+};
 type UpstreamsResp = { active: number; model?: string; claude_thinking_effort?: string; claude_thinking_efforts?: string[]; items: UpstreamItem[] };
 type ProbeItem = {
   index: number;
@@ -51,6 +65,81 @@ function pathHint(url: string): string {
   } catch {
     return "";
   }
+}
+
+function categoryForItem(item?: UpstreamItem): NodeCategory {
+  if (!item) return "openai";
+  if (item.category === "oauth") return "oauth";
+  const raw = String(item.url || "").trim();
+  if (!raw) return "openai";
+  try {
+    const u = new URL(raw.includes("://") ? raw : `http://${raw}`);
+    const host = u.hostname.toLowerCase();
+    if (host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]") return "oauth";
+  } catch {
+    if (/^(?:https?:\/\/)?(?:127\.0\.0\.1|localhost)(?::|\/|$)/i.test(raw)) return "oauth";
+  }
+  return "openai";
+}
+
+function oauthLabelForItem(item: UpstreamItem): string {
+  const provided = String(item.oauth_label || "").trim();
+  if (provided) return provided;
+  const joined = `${item.name || ""} ${item.url || ""}`.toLowerCase();
+  if (joined.includes("claude") || joined.includes(":8082")) return "Claude Code";
+  if (joined.includes("codex") || joined.includes("cpa") || joined.includes(":8317")) return "Codex";
+  return "OAuth";
+}
+
+function expiryDateFromValue(value?: number | string): Date | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "number" || /^\d+(\.\d+)?$/.test(String(value))) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return new Date(n < 1_000_000_000_000 ? n * 1000 : n);
+  }
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatExpiryDate(value?: number | string): string {
+  const d = expiryDateFromValue(value);
+  if (!d) return "";
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${mm}/${dd} ${hh}:${mi}`;
+}
+
+function formatExpiresIn(value?: number | string): string {
+  if (value === undefined || value === null || value === "") return "";
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return "";
+  if (seconds <= 0) return "已过期";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 1) return "不足 1 分钟";
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+  if (days > 0) return `剩余 ${days}天${hours ? `${hours}小时` : ""}`;
+  if (hours > 0) return `剩余 ${hours}小时${mins ? `${mins}分` : ""}`;
+  return `剩余 ${mins}分钟`;
+}
+
+function oauthExpiryLine(item: UpstreamItem): string {
+  const status = item.oauth_status;
+  const label = oauthLabelForItem(item);
+  if (!status?.expiresAt && !status?.expiresInSeconds) {
+    return label === "Claude Code" ? "过期时间未取到" : "";
+  }
+  const parts: string[] = [];
+  const expiresAt = formatExpiryDate(status.expiresAt);
+  const expiresIn = formatExpiresIn(status.expiresInSeconds);
+  if (expiresAt) parts.push(`过期 ${expiresAt}`);
+  if (expiresIn) parts.push(expiresIn);
+  if (status.stale) parts.push("状态可能过期");
+  return parts.join(" · ");
 }
 
 function probeStatusLabel(p?: ProbeItem): string {
@@ -110,6 +199,7 @@ export function SettingsUpstream() {
   const [thinkingEffortOptions, setThinkingEffortOptions] = useState<string[]>(DEFAULT_THINKING_EFFORTS);
   const [thinkingListOpen, setThinkingListOpen] = useState(false);
   const [thinkingEffortSaving, setThinkingEffortSaving] = useState(false);
+  const [nodeCategory, setNodeCategory] = useState<NodeCategory>("openai");
 
   const loadModels = useCallback(async (index?: number) => {
     setModelsLoading(true);
@@ -145,6 +235,7 @@ export function SettingsUpstream() {
       const nextEffort = String(j.claude_thinking_effort || "high").trim() || "high";
       setActive(nextActive);
       setItems(nextItems);
+      setNodeCategory((prev) => (nextItems.some((item) => categoryForItem(item) === prev) ? prev : categoryForItem(nextItems[nextActive])));
       setCurrentModel(nextModel);
       setPendingModel(nextModel);
       setThinkingEffort(nextEffort);
@@ -291,6 +382,13 @@ export function SettingsUpstream() {
   const adaptiveThinkingEffortOptions = thinkingEffortOptionsForModel(thinkingEffortOptions, selectedThinkingModel);
   const pendingThinkingEffortForModel = thinkingEffortForModel(pendingThinkingEffort, selectedThinkingModel);
   const canSaveThinkingEffort = adaptiveThinkingActive && !!pendingThinkingEffortForModel && pendingThinkingEffortForModel !== thinkingEffort && !thinkingEffortSaving;
+  const nodeCategoryTabs: { key: NodeCategory; label: string; count: number }[] = [
+    { key: "openai", label: "OpenAI", count: items.filter((item) => categoryForItem(item) === "openai").length },
+    { key: "oauth", label: "OAuth", count: items.filter((item) => categoryForItem(item) === "oauth").length },
+  ];
+  const visibleItems = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => categoryForItem(item) === nodeCategory);
 
   function renderProbeCodes(p?: ProbeItem) {
     if (!p) {
@@ -555,16 +653,39 @@ export function SettingsUpstream() {
                   >
                     {probingAll ? "探活中…" : "一键探活"}
                   </button>
-                  <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-bold text-gray-600">{items.length} 个</span>
+                  <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-bold text-gray-600">{visibleItems.length} 个</span>
                 </div>
               </div>
 
+              <div className="mb-4 grid grid-cols-2 rounded-2xl border border-gray-100 bg-white p-1 shadow-sm">
+                {nodeCategoryTabs.map((tab) => {
+                  const selected = tab.key === nodeCategory;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setNodeCategory(tab.key)}
+                      className={
+                        "flex h-10 items-center justify-center gap-2 rounded-xl text-[13px] font-extrabold transition-colors " +
+                        (selected ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 active:bg-gray-50")
+                      }
+                    >
+                      <span>{tab.label}</span>
+                      <span className={"rounded-full px-1.5 py-0.5 text-[10px] font-bold " + (selected ? "bg-white/15 text-white" : "bg-gray-100 text-gray-500")}>{tab.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
               <div className="space-y-4">
-                {items.map((it, idx) => {
+                {visibleItems.map(({ item: it, index: idx }) => {
                   const host = hostFromUrl(it.url);
                   const p = probes[idx];
                   const isCurrent = idx === active;
                   const isSelected = pendingIndex === idx;
+                  const isOAuth = categoryForItem(it) === "oauth";
+                  const oauthLabel = isOAuth ? oauthLabelForItem(it) : "";
+                  const expiryLine = isOAuth ? oauthExpiryLine(it) : "";
                   return (
                     <button
                       key={idx}
@@ -582,11 +703,15 @@ export function SettingsUpstream() {
                         <div className="min-w-0 flex-1">
                           <div className="mb-2 flex flex-wrap items-center gap-2">
                             <h4 className="text-lg font-bold text-gray-900">{host}</h4>
+                            {isOAuth ? (
+                              <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-indigo-700">{oauthLabel}</span>
+                            ) : null}
                             {isCurrent ? (
                               <span className="rounded-md bg-gray-900 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">当前</span>
                             ) : null}
                           </div>
                           {it.name && it.name !== host ? <p className="mb-2 text-[12px] text-gray-500">{it.name}</p> : null}
+                          {expiryLine ? <p className="mb-3 text-[12px] font-semibold text-indigo-700">{expiryLine}</p> : null}
                           <div className="mb-3">{renderProbeCodes(p)}</div>
                           {p?.note ? <p className="mb-2 break-words text-[12px] text-gray-600">{p.note}</p> : null}
                           {p?.error ? (
@@ -608,6 +733,11 @@ export function SettingsUpstream() {
                     </button>
                   );
                 })}
+                {!visibleItems.length ? (
+                  <div className="rounded-2xl border border-dashed border-gray-200 bg-white/70 px-4 py-8 text-center text-[13px] font-medium text-gray-400">
+                    这个分类暂时没有节点
+                  </div>
+                ) : null}
               </div>
             </section>
           </>
