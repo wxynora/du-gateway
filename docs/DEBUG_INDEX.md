@@ -218,13 +218,17 @@ GET  /api/music/listen/cache?title=歌名&artist=歌手
 POST /api/music/listen/analyze
 POST /api/music/listen/result
 GET  /api/music/listen/recent
+POST /api/music/listen/audio
+GET  /api/music/listen/audio/<entry_id>.<ext>
+POST /api/music/listen/chat
 ```
 
 注意：
-- 音频只在请求内读取并发给模型，不落库；缓存只存 `artist + title + provider + model + prompt_version` 对应的文字和结构化结果。
+- 分析缓存按 `artist + title + provider + model + prompt_version` 存文字和结构化结果；手机一起听可额外把音频存到 R2/local，并通过 Range 播放接口供 `<audio>` 使用。
 - 默认模型为 `google/gemini-3-flash-preview`，备用 `google/gemini-2.5-flash`；Lite 下架时不要再作为默认。
 - 未命中缓存且没有上传普通音频文件时，接口会返回错误，不会自动扫描网易云/手机沙盒缓存。
-- 这条通道是工具结果，不写入聊天记忆、不走普通对话归档；MiniApp “和渡一起听”界面目前只展示一起听 UI，不直接暴露给渡看的分析条目。一起听背景图在「个性化」里选择，图片压缩后只存本机 `localStorage`，不上传网关。
+- `/api/music/listen/analyze` 是工具分析结果，不写普通聊天归档；`/api/music/listen/chat` 会复用普通 `chat_completions` 管道，把当前歌曲/秒数/段落听感作为临时 system 上下文，最后 user 仍只存她实际输入的话，并默认跳过 post-archive 动态记忆，避免把整段音乐分析写入长期记忆。
+- 一起听背景图在「个性化」里选择，图片压缩后只存本机 `localStorage`，不上传网关。
 - 本地脚本模式用 `scripts/analyze_music_file.py --title "歌名" --artist "歌手" song.mp3`；脚本本地调 OpenRouter/Gemini，只把分析后的 JSON 发到 `/api/music/listen/result`。
 
 当前状态（2026-05-16）：
@@ -235,9 +239,9 @@ GET  /api/music/listen/recent
 当前状态（2026-06-03）：
 - 已完成：一起听分析 prompt 改为按歌曲结构切分（前奏/主歌/副歌/桥段/尾奏等），脚本支持自动读取同名 `.lrc` 和 ffprobe 真实时长；正文时间由 `segments.start/end` 重建，避免模型把秒数和 `mm:ss` 搞混；`Valence/Arousal` 只留在结构字段。
 - 已完成：新增 `storage/music_audio_store.py` 和 `/api/music/listen/audio` 上传/播放接口；音频优先写 R2 `music_listen/audio/<cache_id>.<ext>`，无 R2 时落本地 `data/music_listen_audio`；播放接口支持 Range，MiniApp 手机端可用 `<audio>` 播放并拖动进度。
-- 已完成：`ListenWithDuScreen` 改为拉 `/api/music/listen/recent` 真缓存，展示真实歌单、播放真实 `audio_url`、按 `currentTime` 匹配当前结构段落；当前发送按钮仍是本地上下文假回复，真实渡回复注入还未接。
+- 已完成：`ListenWithDuScreen` 改为拉 `/api/music/listen/recent` 真缓存，展示真实歌单、播放真实 `audio_url`、按 `currentTime` 匹配当前结构段落；发送按钮已接 `/api/music/listen/chat`，会把当前歌曲、播放秒数、当前段落和最近几句一起听对话注入给渡，前端显示“渡在听...”等待态后替换成真实回复。
 - 已验证：`.venv/bin/python -m py_compile` 覆盖 `storage/music_melody_store.py`、`storage/music_audio_store.py`、`routes/music_melody_api.py`、`services/music_melody_analyzer.py`、`scripts/analyze_music_file.py`、`app.py`；`npm -C miniapp run build` 通过并生成 `ListenWithDuScreen-D1NZpgBz.js`。
-- 未完成 / 下次继续：把一起听发送按钮接到真实聊天链路，在请求里临时注入当前歌曲、整体趋势、当前播放段落和结构摘要；不要把一起听分析写入长期记忆。
+- 未完成 / 下次继续：当前先做文字聊天随歌走；若要做“语音外放/一起听时渡开口说话”，再接 MiniMax TTS 或小爱外放链路。
 
 当前状态（2026-05-12）：
 - 已完成并推送：`d6ca54a Stop log page error toasts` 已到 `main`；日志页不再弹应用内 `日志报错` toast，系统通知继续走后端 `log_error_alert` -> `show_system_notification` -> 安卓壳 `FloatingBallService` 的现有通知栏链路。

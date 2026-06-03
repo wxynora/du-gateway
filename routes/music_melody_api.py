@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
 from urllib.parse import quote
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request
 
 from services.music_melody_analyzer import MusicMelodyError, analyze_music_melody
+from storage import upstream_store
 from storage.music_audio_store import get_music_audio, music_audio_content_type, save_music_audio
 from storage.music_melody_store import (
     get_music_melody_entry,
@@ -70,6 +72,11 @@ def _duration_from_entry(entry: dict) -> float:
     return max_end
 
 
+def _format_clock(seconds: float) -> str:
+    total = max(0, int(round(float(seconds or 0))))
+    return f"{total // 60}:{str(total % 60).zfill(2)}"
+
+
 def _cache_query_params() -> tuple[str, str, str, str, str]:
     title = str(request.args.get("title") or "").strip()
     artist = str(request.args.get("artist") or "").strip()
@@ -77,6 +84,131 @@ def _cache_query_params() -> tuple[str, str, str, str, str]:
     model = str(request.args.get("model") or MUSIC_ANALYSIS_MODEL).strip() or MUSIC_ANALYSIS_MODEL
     prompt_version = str(request.args.get("prompt_version") or MUSIC_PROMPT_VERSION).strip() or MUSIC_PROMPT_VERSION
     return title, artist, provider, model, prompt_version
+
+
+def _extract_chat_completion_result(result) -> tuple[int, dict]:
+    response = result
+    status = 200
+    if isinstance(result, tuple):
+        response = result[0] if result else None
+        for item in result[1:]:
+            if isinstance(item, int):
+                status = item
+                break
+    if hasattr(response, "status_code"):
+        try:
+            status = int(response.status_code)
+        except Exception:
+            pass
+    data = None
+    if hasattr(response, "get_json"):
+        try:
+            data = response.get_json(silent=True)
+        except Exception:
+            data = None
+    if data is None and hasattr(response, "get_data"):
+        try:
+            text = response.get_data(as_text=True)
+            data = json.loads(text) if text else {}
+        except Exception:
+            data = {"raw": response.get_data(as_text=True) if hasattr(response, "get_data") else ""}
+    if not isinstance(data, dict):
+        data = {"content": data}
+    return status, data
+
+
+def _extract_assistant_content(resp_json: dict) -> str:
+    choices = resp_json.get("choices") if isinstance(resp_json, dict) else None
+    if not (isinstance(choices, list) and choices and isinstance(choices[0], dict)):
+        return ""
+    msg = ((choices[0] or {}).get("message") or {})
+    if isinstance(msg, dict):
+        return str(msg.get("content") or "")
+    return ""
+
+
+def _clip_text(value: object, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _segment_for_time(entry: dict, current_time: float) -> dict:
+    structured = entry.get("structured") if isinstance(entry.get("structured"), dict) else {}
+    segments = structured.get("segments") if isinstance(structured, dict) else []
+    if not isinstance(segments, list):
+        return {}
+    current = max(0.0, float(current_time or 0))
+    fallback = {}
+    for item in segments:
+        if not isinstance(item, dict):
+            continue
+        start = _float_value(item.get("start"))
+        end = _float_value(item.get("end"))
+        if end > start:
+            fallback = item
+            if start <= current < end:
+                return item
+    return fallback
+
+
+def _sanitize_recent_listen_messages(items: object) -> list[dict]:
+    out = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role == "du":
+            role = "assistant"
+        if role not in {"user", "assistant"}:
+            continue
+        content = _clip_text(item.get("content") or item.get("text"), 1000)
+        if not content:
+            continue
+        out.append({"role": role, "content": content})
+    return out[-8:]
+
+
+def _build_listen_context_system(entry: dict, segment: dict, current_time: float, duration: float) -> str:
+    title = _clip_text(entry.get("title"), 80)
+    artist = _clip_text(entry.get("artist"), 80)
+    structured = entry.get("structured") if isinstance(entry.get("structured"), dict) else {}
+    overall = _clip_text(entry.get("overall_trend") or structured.get("overall_trend"), 700)
+    section = _clip_text(segment.get("section") if isinstance(segment, dict) else "", 80)
+    plain = _clip_text(segment.get("plain") if isinstance(segment, dict) else "", 600)
+    melody = _clip_text(segment.get("melody_motion") if isinstance(segment, dict) else "", 420)
+    sonic = _clip_text(segment.get("sonic_detail") if isinstance(segment, dict) else "", 420)
+    intensity = _clip_text(segment.get("intensity") if isinstance(segment, dict) else "", 300)
+    seg_start = _float_value(segment.get("start")) if isinstance(segment, dict) else 0.0
+    seg_end = _float_value(segment.get("end")) if isinstance(segment, dict) else 0.0
+    lines = [
+        "你是渡，正在和小玥一起听歌。",
+        "你要直接接她的话，像边听边轻声回应；不要写成音乐分析报告、数据报告或列表。",
+        "可以自然提到此刻歌里听到的旋律、音色、起伏、停顿或歌词感，但不要输出 Valence/Arousal 这类指标。",
+        "不要称呼她为“用户”。需要指代时用“小玥”或“她”。",
+        "回复短一点，有呼吸感，像真实对话，不要过度阐释。",
+        "",
+        f"歌曲：{title or '未知歌曲'}" + (f" / {artist}" if artist else ""),
+        f"当前播放：{_format_clock(current_time)}" + (f" / {_format_clock(duration)}" if duration > 0 else ""),
+    ]
+    if section or seg_end > seg_start:
+        lines.append(
+            "当前段落："
+            + (section or "这一段")
+            + (f"（{_format_clock(seg_start)}-{_format_clock(seg_end)}）" if seg_end > seg_start else "")
+        )
+    if plain:
+        lines.append(f"段落听感：{plain}")
+    if melody:
+        lines.append(f"旋律/走向：{melody}")
+    if sonic:
+        lines.append(f"声音细节：{sonic}")
+    if intensity:
+        lines.append(f"强度/情绪推进：{intensity}")
+    if overall:
+        lines.append(f"整首歌的走向：{overall}")
+    return "\n".join(lines).strip()
 
 
 @bp.route("/api/music-melody/cache", methods=["GET"])
@@ -217,6 +349,87 @@ def music_melody_audio_upload():
     if not updated:
         return jsonify({"ok": False, "error": "音频已保存，但缓存元信息更新失败"}), 500
     return jsonify({"ok": True, "entry": updated, "audio": saved})
+
+
+@bp.route("/api/music/listen/chat", methods=["POST"])
+def music_listen_chat():
+    if not request.is_json:
+        return jsonify({"ok": False, "error": "需要 application/json"}), 400
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "JSON 无效"}), 400
+
+    text = _clip_text(body.get("message") or body.get("text"), 2000)
+    if not text:
+        return jsonify({"ok": False, "error": "缺少 message"}), 400
+
+    entry_id = str(body.get("entry_id") or body.get("id") or "").strip()
+    entry = get_music_melody_entry_by_id(entry_id) if entry_id else None
+    if not entry:
+        title = str(body.get("title") or "").strip()
+        artist = str(body.get("artist") or "").strip()
+        provider = str(body.get("provider") or MUSIC_ANALYSIS_PROVIDER).strip() or MUSIC_ANALYSIS_PROVIDER
+        model_key = str(body.get("analysis_model") or MUSIC_ANALYSIS_MODEL).strip() or MUSIC_ANALYSIS_MODEL
+        prompt_version = str(body.get("prompt_version") or MUSIC_PROMPT_VERSION).strip() or MUSIC_PROMPT_VERSION
+        entry = get_music_melody_entry(title, artist, provider, model_key, prompt_version) if title else None
+    if not entry:
+        return jsonify({"ok": False, "error": "未找到这首歌的分析缓存"}), 404
+
+    model = str(body.get("model") or "").strip() or upstream_store.get_cached_active_model(refresh_if_missing=True)
+    if not model:
+        return jsonify({"ok": False, "error": "当前未设置全局模型"}), 502
+
+    current_time = _float_value(body.get("current_time") or body.get("currentTime"))
+    duration = _float_value(body.get("duration_seconds")) or _duration_from_entry(entry)
+    client_segment = body.get("segment") if isinstance(body.get("segment"), dict) else {}
+    segment = client_segment or _segment_for_time(entry, current_time)
+    panel_payload = request.environ.get("miniapp_panel_payload") if isinstance(request.environ.get("miniapp_panel_payload"), dict) else {}
+    panel_device_id = str((panel_payload or {}).get("device_id") or "").strip()
+    window_id = str(body.get("window_id") or request.headers.get("X-Window-Id") or "").strip()
+    if not window_id:
+        window_id = f"music_listen_{panel_device_id}" if panel_device_id else "music_listen"
+
+    messages = [{"role": "system", "content": _build_listen_context_system(entry, segment, current_time, duration)}]
+    messages.extend(_sanitize_recent_listen_messages(body.get("recent_messages")))
+    messages.append({"role": "user", "content": text})
+    chat_body = {
+        "model": model,
+        "stream": False,
+        "window_id": window_id,
+        "messages": messages,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": request.headers.get("User-Agent") or "SumiTalk Music Listen",
+        "X-Force-Last4": str(request.headers.get("X-Force-Last4") or body.get("force_last4") or "1"),
+        "X-Reply-Channel": "sumitalk",
+        "X-Reply-Target": "music_listen",
+        "X-Window-Id": window_id,
+        "X-Skip-Post-Archive-Dynamic-Memory": str(body.get("skip_post_archive_dynamic_memory") or "1"),
+    }
+    try:
+        from routes.chat import chat_completions
+
+        with current_app.test_request_context(
+            "/v1/chat/completions",
+            method="POST",
+            json=chat_body,
+            headers=headers,
+            environ_base={"REMOTE_ADDR": request.remote_addr or "127.0.0.1"},
+        ):
+            result = chat_completions()
+            status_code, resp_json = _extract_chat_completion_result(result)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"调用聊天管道失败: {e}"}), 502
+
+    if status_code >= 400:
+        err = resp_json.get("error") or resp_json.get("message") or "upstream error"
+        return jsonify({"ok": False, "error": str(err), "status_code": status_code, "resp": resp_json}), status_code
+
+    du_reply = _extract_assistant_content(resp_json).strip()
+    if not du_reply:
+        return jsonify({"ok": False, "error": "上游没有返回内容", "resp": resp_json}), 502
+    return jsonify({"ok": True, "du_reply": du_reply, "window_id": window_id, "entry_id": entry.get("id")})
 
 
 def _audio_response(data: bytes, content_type: str, filename: str) -> Response:

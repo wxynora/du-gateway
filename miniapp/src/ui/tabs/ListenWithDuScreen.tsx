@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiJson, buildApiAssetUrl } from "../api";
+import { apiJson, buildApiAssetUrl, getOrCreatePanelDeviceId } from "../api";
 import { ChevronLeftIcon, ClockIconMini, SendIconMini } from "../icons";
 
 type ListenMessage = {
   id: number;
   role: "du" | "user";
   text: string;
+  pending?: boolean;
 };
 
 type MusicSegment = {
@@ -38,6 +39,13 @@ type MusicEntry = {
 type RecentResp = {
   ok?: boolean;
   items?: MusicEntry[];
+};
+
+type ListenChatResp = {
+  ok?: boolean;
+  du_reply?: string;
+  error?: string;
+  window_id?: string;
 };
 
 function asSeconds(value: unknown): number {
@@ -84,18 +92,9 @@ function buildSeedReply(entry?: MusicEntry): string {
   return "我在这首歌里等你。";
 }
 
-function buildListenReply(entry: MusicEntry | undefined, segment: MusicSegment | null): string {
-  if (!entry) return "我在听。你刚刚说的那点，我想顺着歌再听一会儿。";
-  if (segment?.plain) {
-    const section = String(segment.section || "这一段").trim();
-    return `嗯，我现在听到的是${section}：${segment.plain} 你刚才那句话放在这里，会更像是被歌轻轻托住。`;
-  }
-  const trend = String(entry.overall_trend || "").trim();
-  return trend || "嗯，我跟着你一起听。你说的那点感觉，先放在这首歌里慢慢看。";
-}
-
 export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => void; backgroundImage?: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const sendSeqRef = useRef(0);
   const [songs, setSongs] = useState<MusicEntry[]>([]);
   const [songIndex, setSongIndex] = useState(0);
   const [messages, setMessages] = useState<ListenMessage[]>([]);
@@ -106,6 +105,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [sending, setSending] = useState(false);
 
   const song = songs[songIndex];
   const songDuration = duration || durationFor(song);
@@ -157,9 +157,11 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
 
   function switchSong(nextIndex = songs.length ? (songIndex + 1) % songs.length : 0) {
     if (!songs.length) return;
+    sendSeqRef.current += 1;
     const nextSong = songs[nextIndex];
     setSongIndex(nextIndex);
     setShowHistory(false);
+    setSending(false);
     setMessages([
       {
         id: Date.now(),
@@ -185,20 +187,57 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
     }
   }
 
-  function sendMessage() {
+  async function sendMessage() {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || !song || sending) return;
     const now = Date.now();
-    setMessages((prev) => [
-      ...prev,
-      { id: now, role: "user", text },
-      {
-        id: now + 1,
-        role: "du",
-        text: buildListenReply(song, currentSegment),
-      },
-    ]);
+    const requestSeq = sendSeqRef.current + 1;
+    const placeholderId = now + 1;
+    const recentMessages = messages.slice(-8).map((message) => ({
+      role: message.role === "du" ? "assistant" : "user",
+      content: message.text,
+    }));
+    sendSeqRef.current = requestSeq;
+    setMessages((prev) => [...prev, { id: now, role: "user", text }, { id: placeholderId, role: "du", text: "……", pending: true }]);
     setDraft("");
+    setSending(true);
+    try {
+      const deviceId = await getOrCreatePanelDeviceId().catch(() => "");
+      const data = await apiJson<ListenChatResp>("/api/music/listen/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          entry_id: song.id,
+          title: song.title,
+          artist: song.artist,
+          current_time: currentTime,
+          duration_seconds: songDuration,
+          segment: currentSegment,
+          message: text,
+          recent_messages: recentMessages,
+          window_id: deviceId ? `music_listen_${deviceId}` : "music_listen",
+        }),
+      });
+      const reply = String(data?.du_reply || "").trim();
+      if (!reply) throw new Error(data?.error || "渡没有返回内容");
+      setMessages((prev) => prev.map((item) => (item.id === placeholderId ? { ...item, text: reply, pending: false } : item)));
+    } catch {
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.id === placeholderId
+            ? {
+                ...item,
+                text: "我刚刚没接上这一句，再发我一次。",
+                pending: false,
+              }
+            : item,
+        ),
+      );
+    } finally {
+      if (sendSeqRef.current === requestSeq) setSending(false);
+    }
   }
 
   return (
@@ -348,7 +387,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
             return (
               <div key={message.id} className="max-w-[86%] pt-3 text-left">
                 <div className="mb-4 h-[2px] w-6 rounded-full bg-white/80" />
-                <p className="text-[17px] leading-[1.65] tracking-normal text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.14)]">
+                <p className={`text-[17px] leading-[1.65] tracking-normal text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.14)] ${message.pending ? "animate-pulse text-white/70" : ""}`}>
                   {message.text}
                 </p>
               </div>
@@ -369,12 +408,13 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             className="min-w-0 flex-1 bg-transparent text-[15px] text-[#4b5563] outline-none placeholder:text-[#9ca3af]"
-            placeholder="聊聊你的感受..."
+            placeholder={sending ? "渡在听..." : "聊聊你的感受..."}
+            disabled={sending}
           />
           <button
             type="submit"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#9ebadc] text-white shadow-[0_4px_12px_rgba(100,129,164,0.28)] transition active:scale-95 disabled:opacity-45"
-            disabled={!draft.trim() || !song}
+            disabled={sending || !draft.trim() || !song}
             aria-label="发送"
           >
             <SendIconMini />
