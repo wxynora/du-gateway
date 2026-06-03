@@ -104,7 +104,8 @@ def summarize_update(update: dict) -> str:
         f"chat_id={chat.get('id')} chat_type={chat.get('type')} "
         f"user_id={from_user.get('id')} "
         f"has_message={bool(msg)} has_text={bool(text)} text_len={len(text)} "
-        f"has_photo={bool(msg.get('photo'))} has_callback={bool(update.get('callback_query'))}"
+        f"has_photo={bool(msg.get('photo'))} has_document={bool(msg.get('document'))} "
+        f"has_callback={bool(update.get('callback_query'))}"
     )
 
 

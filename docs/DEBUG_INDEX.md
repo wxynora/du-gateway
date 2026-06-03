@@ -40,7 +40,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 论坛 MCP 工具 | `services/mcp_forum_tools.py`、`services/forum_mcp_client.py` | 论坛高层工具、`cli/get_guide` 映射、外部 SSE MCP 调用 |
 | 设备状态注入 | `services/sense_context.py` | 电量、亮屏、前台 app、位置等 sense 注入 |
 | 主动触发规则 | `services/proactive_trigger_engine.py` | 睡眠、亮屏、使用时长等硬触发 |
-| Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送 |
+| Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送，图片与 md/txt 文档附件处理 |
 | 小爱音箱 / MiGPT Next / mijiaAPI | `routes/xiaoai_api.py`、`routes/miniapp/xiaoai.py`、`storage/xiaoai_store.py`、`services/xiaoai_audio_store.py`、`services/gateway_tools.py`、`services/entry_style_prompt.py`、`scripts/test_xiaoai_mijia.py`、`miniapp/src/ui/tabs/XiaoAISettingsTab.tsx`、`connectors/xiaoai_migpt/`、`docs/小爱音箱-MiGPT-Next-接入渡方案.md` | 小爱专用 `/api/xiaoai/message` 入口、`xiaoai_speak` 外放工具、`xiaoai_run_command` mijiaAPI 家居控制工具、`mijia_lamp_get/set` 台灯结构化工具、台灯实测脚本、播放队列、强制 `<voice>` 风格、MiniMax 音频 URL 临时托管、App 工具页、Mac Docker MiGPT runner、接入方案 |
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js` | 自用 Claude 反代、thinking/cache/tool 格式转换 |
 
@@ -1406,3 +1406,9 @@ npm -C miniapp run android
 - 已完成：Android `SumiOverlay` 插件已有 `getSenseReportingStatus`、`setSenseReportingConfig`、`requestSenseReportingSnapshot`；前端不再依赖 `setSenseReportingConfig` 保存上报开关，旧 APK 缺 native 方法时也会兜底刷新服务器状态。
 - 已验证：干净 worktree 基于最新 `origin/main` 摘本轮改动，`.venv/bin/python -m py_compile routes/miniapp/device_state.py storage/r2_store.py`、`./node_modules/.bin/tsc --noEmit`、`npm run build`、`git diff --check` 通过；已重建并提交 `miniapp_static`，静态产物包含 `ReportingManagementScreen-*.js` 和 `/device-state/reporting/config`。
 - 已打包：Android 版本号已升到 `versionCode=6` / `versionName=1.1.4`；打包统一通过 Android Studio，实际验证使用 Android Studio 自带 JBR (`/Applications/Android Studio.app/Contents/jbr/Contents/Home`) 跑 `JAVA_HOME=... sh ./gradlew :app:assembleDebug`，`compileDebugJavaWithJavac` 和 `assembleDebug` 均通过。APK 下载包已覆盖原入口 `/miniapp/assets/app-debug.apk`，不再保留 `latest`、commit 后缀或版本号后缀 APK。
+
+当前状态（2026-06-03 Telegram md/txt 文档附件）：
+- 已完成：`services/telegram_bot.py` 新增 Telegram `document` 分支；当私聊发来 `.md` / `.markdown` / `.txt` 或 `text/markdown` / `text/plain` 附件时，Bot 通过 Telegram `getFile` 下载原文，按 UTF-8 文本直接放入输入聚合缓冲，并保留文件名和 caption，不解析 Markdown、不转 HTML。
+- 已完成：文档附件限制为 1MB，送入模型前最多保留前 60000 字，超出会在输入里追加截断说明；非文本附件继续忽略，避免 PDF/二进制误进 prompt。`services/telegram_update_queue.py` 的 update 摘要新增 `has_document`，方便从队列日志判断 TG 是否收到文档。
+- 已验证：`.venv/bin/python -m py_compile services/telegram_bot.py services/telegram_update_queue.py` 通过；本地 monkeypatch smoke 模拟 `notes.md` 附件，确认输入缓冲包含文件名、caption 和 Markdown 原文；`git diff --check -- services/telegram_bot.py services/telegram_update_queue.py docs/DEBUG_INDEX.md` 通过。
+- 未完成 / 下次继续：本轮未支持 PDF/DOCX/OCR，也未把附件原文件持久化；如需更长文档，应改成先入文件缓存/R2，再只把摘要或链接注入。

@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS = 180
+TELEGRAM_TEXT_DOCUMENT_EXTS = {".md", ".markdown", ".txt"}
+TELEGRAM_TEXT_DOCUMENT_MIME_TYPES = {"text/markdown", "text/plain"}
+TELEGRAM_TEXT_DOCUMENT_MAX_BYTES = 1024 * 1024
+TELEGRAM_TEXT_DOCUMENT_MAX_CHARS = 60000
 TelegramParseMode = Literal["HTML", "MarkdownV2"]
 
 
@@ -588,6 +592,39 @@ def _get_telegram_file_bytes(file_id: str, bot_token: Optional[str] = None) -> O
         return None
 
 
+def _document_file_ext(file_name: str) -> str:
+    name = (file_name or "").strip().lower()
+    if "." not in name:
+        return ""
+    return "." + name.rsplit(".", 1)[-1]
+
+
+def _is_supported_text_document(doc: dict) -> bool:
+    if not isinstance(doc, dict):
+        return False
+    file_name = str(doc.get("file_name") or "").strip()
+    mime_type = str(doc.get("mime_type") or "").strip().lower()
+    return _document_file_ext(file_name) in TELEGRAM_TEXT_DOCUMENT_EXTS or mime_type in TELEGRAM_TEXT_DOCUMENT_MIME_TYPES
+
+
+def _decode_text_document_for_prompt(file_name: str, data: bytes, caption: str = "") -> str:
+    raw = data or b""
+    text = raw.decode("utf-8-sig", errors="replace").replace("\r\n", "\n").replace("\r", "\n").strip()
+    truncated = False
+    if len(text) > TELEGRAM_TEXT_DOCUMENT_MAX_CHARS:
+        text = text[:TELEGRAM_TEXT_DOCUMENT_MAX_CHARS].rstrip()
+        truncated = True
+    display_name = (file_name or "document.md").strip()
+    parts = [f"用户发来了一个 Markdown/文本附件：{display_name}"]
+    if caption.strip():
+        parts.append(f"用户附言：{caption.strip()}")
+    parts.append("以下是文档原文：")
+    parts.append(text or "[空文档]")
+    if truncated:
+        parts.append(f"[文档过长，已截断到前 {TELEGRAM_TEXT_DOCUMENT_MAX_CHARS} 字]")
+    return "\n\n".join(parts).strip()
+
+
 def _delete_my_commands_default() -> bool:
     """
     清空 Bot 默认命令列表（输入框旁 / 菜单）。
@@ -1103,7 +1140,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     text = (msg.get("text") or "").strip()
     caption = (msg.get("caption") or "").strip()
     logger.info(
-        "TG update 进入处理 update_id=%s bot=main chat_id=%s chat_type=%s user_id=%s text_len=%s caption_len=%s has_photo=%s",
+        "TG update 进入处理 update_id=%s bot=main chat_id=%s chat_type=%s user_id=%s text_len=%s caption_len=%s has_photo=%s has_document=%s",
         update_id,
         chat_id,
         chat_type,
@@ -1111,6 +1148,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         len(text),
         len(caption),
         bool(msg.get("photo")),
+        bool(msg.get("document")),
     )
 
     # 图片（带或不带 caption）→ 追加到聚合缓冲（仅主 Bot）
@@ -1141,8 +1179,74 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
             _schedule_flush_locked(user_id)
         return
 
+    # Markdown / 纯文本 document 附件 → 下载原文后作为文本输入给渡。
+    if (not text) and msg.get("document"):
+        doc = msg.get("document") or {}
+        file_name = str(doc.get("file_name") or "document.md").strip()
+        file_id = str(doc.get("file_id") or "").strip()
+        file_size_raw = doc.get("file_size")
+        try:
+            file_size = int(file_size_raw or 0)
+        except (TypeError, ValueError):
+            file_size = 0
+        if not file_id:
+            logger.warning("TG 文档忽略：缺 file_id update_id=%s chat_id=%s file_name=%s", update_id, chat_id, file_name)
+            return
+        if not _is_supported_text_document(doc):
+            logger.info(
+                "TG 文档忽略：暂只支持 md/txt update_id=%s chat_id=%s file_name=%s mime=%s",
+                update_id,
+                chat_id,
+                file_name,
+                doc.get("mime_type"),
+            )
+            return
+        if file_size > TELEGRAM_TEXT_DOCUMENT_MAX_BYTES:
+            logger.warning(
+                "TG 文档过大：update_id=%s chat_id=%s file_name=%s size=%s",
+                update_id,
+                chat_id,
+                file_name,
+                file_size,
+            )
+            send_message(chat_id, "这个文档有点大，先发小一点的 md/txt，或者把关键段落直接贴给我。", bot_token=token)
+            return
+        file_result = _get_telegram_file_bytes(file_id, bot_token=token)
+        if not file_result:
+            send_message(chat_id, "文档下载失败，稍后再试哦～", bot_token=token)
+            return
+        file_bytes, _mime = file_result
+        if len(file_bytes) > TELEGRAM_TEXT_DOCUMENT_MAX_BYTES:
+            logger.warning(
+                "TG 文档下载后过大：update_id=%s chat_id=%s file_name=%s size=%s",
+                update_id,
+                chat_id,
+                file_name,
+                len(file_bytes),
+            )
+            send_message(chat_id, "这个文档有点大，先发小一点的 md/txt，或者把关键段落直接贴给我。", bot_token=token)
+            return
+        if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
+            from utils.time_aware import now_beijing_iso
+
+            r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+        prompt_text = _decode_text_document_for_prompt(file_name, file_bytes, caption=caption)
+        logger.info(
+            "收到 TG 文档(聚合) user_id=%s chat_id=%s file_name=%s bytes=%s chars=%s caption_len=%d",
+            user_id,
+            chat_id,
+            file_name,
+            len(file_bytes),
+            len(prompt_text),
+            len(caption),
+        )
+        with _BUF_LOCK:
+            _append_user_part_locked(chat_id, user_id, {"type": "text", "text": prompt_text})
+            _schedule_flush_locked(user_id)
+        return
+
     if not text:
-        logger.info("TG update 忽略：无文本且非图片 update_id=%s chat_id=%s", update_id, chat_id)
+        logger.info("TG update 忽略：无文本且非图片/可读文档 update_id=%s chat_id=%s", update_id, chat_id)
         return
 
     cmd0 = (text.strip().split()[0] if text else "").split("@", 1)[0].lower()
