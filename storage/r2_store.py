@@ -126,6 +126,8 @@ R2_KEY_MINIAPP_DAILY_WHISPER = "global/miniapp_daily_whisper.json"
 R2_KEY_MINIAPP_DAILY_REPORT = "global/miniapp_daily_report.json"
 # MiniApp 心情温度计（今日 + 历史）
 R2_KEY_MINIAPP_MOOD_METER = "global/miniapp_mood_meter.json"
+# MiniApp 非健康数据上报开关（按设备、按类别）
+R2_KEY_DEVICE_REPORTING_CONFIG = "global/device_reporting_config.json"
 # 渡的记事本：固定注入记忆（按条目维护）
 R2_KEY_DU_NOTEBOOK = "global/du_notebook.json"
 # StudyRoom：资料 Inbox、模块归档和学习记录
@@ -1853,6 +1855,103 @@ def save_miniapp_voice_config(data: dict) -> bool:
     except Exception as e:
         logger.error("save_miniapp_voice_config 失败 error=%s", e, exc_info=True)
         return False
+
+
+DEVICE_REPORTING_BUCKETS = ("battery", "screen", "foreground", "location", "usage")
+DEFAULT_DEVICE_REPORTING_CONFIG = {key: True for key in DEVICE_REPORTING_BUCKETS}
+
+
+def _normalize_device_reporting_config(config: dict | None) -> dict:
+    out = dict(DEFAULT_DEVICE_REPORTING_CONFIG)
+    if isinstance(config, dict):
+        for key in DEVICE_REPORTING_BUCKETS:
+            if key in config:
+                out[key] = bool(config.get(key))
+    return out
+
+
+def _device_reporting_config_doc() -> dict:
+    client = _s3_client()
+    if not client:
+        return {"devices": {}}
+    data = _read_json(client, R2_KEY_DEVICE_REPORTING_CONFIG)
+    return data if isinstance(data, dict) else {"devices": {}}
+
+
+def get_device_reporting_config(device_id: str) -> dict:
+    """读取单台设备的非健康数据上报开关；默认每类开启。"""
+    did = str(device_id or "").strip()
+    if not did:
+        return dict(DEFAULT_DEVICE_REPORTING_CONFIG)
+    doc = _device_reporting_config_doc()
+    devices = doc.get("devices") if isinstance(doc.get("devices"), dict) else {}
+    return _normalize_device_reporting_config(devices.get(did) if isinstance(devices.get(did), dict) else None)
+
+
+def save_device_reporting_config(device_id: str, config: dict) -> dict | None:
+    """保存单台设备的非健康数据上报开关。"""
+    did = str(device_id or "").strip()
+    if not did:
+        return None
+    client = _s3_client()
+    if not client:
+        return None
+    next_config = _normalize_device_reporting_config(config)
+    try:
+        with _global_write_lock:
+            doc = _read_json(client, R2_KEY_DEVICE_REPORTING_CONFIG)
+            if not isinstance(doc, dict):
+                doc = {}
+            devices = doc.get("devices") if isinstance(doc.get("devices"), dict) else {}
+            devices[did] = {
+                **next_config,
+                "updatedAt": now_beijing_iso(),
+            }
+            doc["devices"] = devices
+            doc["updatedAt"] = now_beijing_iso()
+            _write_json(client, R2_KEY_DEVICE_REPORTING_CONFIG, doc)
+        return next_config
+    except Exception as e:
+        logger.error("save_device_reporting_config 失败 device_id=%s error=%s", did, e, exc_info=True)
+        return None
+
+
+def update_device_reporting_bucket_config(device_id: str, bucket: str, enabled: bool) -> dict | None:
+    """更新单个非健康数据类别的上报开关。"""
+    did = str(device_id or "").strip()
+    key = str(bucket or "").strip()
+    if not did or key not in DEVICE_REPORTING_BUCKETS:
+        return None
+    client = _s3_client()
+    if not client:
+        return None
+    try:
+        with _global_write_lock:
+            doc = _read_json(client, R2_KEY_DEVICE_REPORTING_CONFIG)
+            if not isinstance(doc, dict):
+                doc = {}
+            devices = doc.get("devices") if isinstance(doc.get("devices"), dict) else {}
+            current = _normalize_device_reporting_config(devices.get(did) if isinstance(devices.get(did), dict) else None)
+            current[key] = bool(enabled)
+            devices[did] = {
+                **current,
+                "updatedAt": now_beijing_iso(),
+            }
+            doc["devices"] = devices
+            doc["updatedAt"] = now_beijing_iso()
+            _write_json(client, R2_KEY_DEVICE_REPORTING_CONFIG, doc)
+        return current
+    except Exception as e:
+        logger.error("update_device_reporting_bucket_config 失败 device_id=%s bucket=%s error=%s", did, key, e, exc_info=True)
+        return None
+
+
+def is_device_reporting_bucket_enabled(device_id: str, bucket: str) -> bool:
+    """判断某台设备某个非健康数据类别是否允许入库。"""
+    key = str(bucket or "").strip()
+    if key not in DEVICE_REPORTING_BUCKETS:
+        return True
+    return bool(get_device_reporting_config(device_id).get(key, True))
 
 
 def _miniapp_voice_avatar_versioned_key(image_version: int) -> str:

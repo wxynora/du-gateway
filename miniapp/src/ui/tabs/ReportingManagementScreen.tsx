@@ -8,12 +8,14 @@ import { SumiOverlay, type SenseReportingStatus } from "../../plugins/sumi-overl
 type ReportingBucketKey = "battery" | "screen" | "foreground" | "location" | "usage";
 type ReportingTypeMeta = { key: ReportingBucketKey | string; label: string };
 type ReportingHistoryRow = { type?: string; label?: string; at?: string; data?: Record<string, any> };
+type ReportingConfig = Partial<Record<ReportingBucketKey | string, boolean>>;
 type ReportingCloudResponse = {
   ok?: boolean;
   device_id?: string;
   latest?: Record<string, Record<string, any>>;
   history?: ReportingHistoryRow[];
   types?: ReportingTypeMeta[];
+  config?: ReportingConfig;
   error?: string;
 };
 
@@ -31,7 +33,7 @@ export function ReportingManagementScreen() {
   const [cloud, setCloud] = useState<ReportingCloudResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [savingBucket, setSavingBucket] = useState<string | null>(null);
   const [headerActionsEl, setHeaderActionsEl] = useState<HTMLElement | null>(null);
   const isAndroid = Capacitor.getPlatform() === "android";
 
@@ -68,20 +70,32 @@ export function ReportingManagementScreen() {
     setHeaderActionsEl(document.getElementById("reporting-header-actions"));
   }, []);
 
-  async function toggleEnabled(next: boolean) {
-    const prev = nativeStatus;
-    setNativeStatus((s) => ({ ...(s || {}), enabled: next }));
-    setSaving(true);
+  async function toggleBucket(key: ReportingBucketKey, label: string, next: boolean) {
+    const prev = cloud;
+    setCloud((current) => ({
+      ...(current || {}),
+      ok: current?.ok ?? true,
+      config: { ...(current?.config || {}), [key]: next },
+    }));
+    setSavingBucket(key);
     try {
-      const r = await SumiOverlay.setSenseReportingConfig({ enabled: next });
-      setNativeStatus((s) => ({ ...(s || {}), enabled: !!r.enabled }));
-      toast(r.enabled ? "上报已开启" : "上报已关闭");
-      if (r.enabled) void requestSnapshot({ silentToast: true });
+      const r = await apiJson<ReportingCloudResponse>("/miniapp-api/device-state/reporting/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, enabled: next }),
+      });
+      setCloud((current) => ({
+        ...(current || {}),
+        ok: current?.ok ?? true,
+        config: r.config || { ...(current?.config || {}), [key]: next },
+      }));
+      toast(`${label}上报已${next ? "开启" : "关闭"}`);
+      if (next) void requestSnapshot({ silentToast: true });
     } catch (e: any) {
-      setNativeStatus(prev);
-      toast(`上报开关保存失败：${e?.message || e}`);
+      setCloud(prev);
+      toast(`${label}开关保存失败：${e?.message || e}`);
     } finally {
-      setSaving(false);
+      setSavingBucket(null);
     }
   }
 
@@ -89,7 +103,9 @@ export function ReportingManagementScreen() {
     setRefreshing(true);
     try {
       const r = await SumiOverlay.requestSenseReportingSnapshot();
-      if (!r?.requested && !opts?.silentToast) {
+      if (r?.nativeUnavailable && !opts?.silentToast) {
+        toast("当前安装包还不支持立刻采集，已刷新服务器状态");
+      } else if (!r?.requested && !opts?.silentToast) {
         toast("安卓后台还没接上");
       } else if (!opts?.silentToast) {
         toast("已请求立刻上报");
@@ -98,7 +114,13 @@ export function ReportingManagementScreen() {
       window.setTimeout(() => void load({ silent: true }), 900);
       window.setTimeout(() => void load({ silent: true }), 2200);
     } catch (e: any) {
-      toast(`刷新失败：${e?.message || e}`);
+      const msg = String(e?.message || e || "");
+      if (/not implemented/i.test(msg)) {
+        if (!opts?.silentToast) toast("当前安装包还不支持立刻采集，已刷新服务器状态");
+        await load({ silent: true });
+      } else {
+        toast(`刷新失败：${msg}`);
+      }
     } finally {
       setRefreshing(false);
     }
@@ -117,14 +139,12 @@ export function ReportingManagementScreen() {
     );
   }
 
-  const enabled = !!nativeStatus?.enabled;
-
   return (
     <div className="space-y-4 px-4 py-5">
       {headerActionsEl ? createPortal(
         <button
           type="button"
-          disabled={loading || refreshing || saving || !enabled}
+          disabled={loading || refreshing}
           aria-label={refreshing ? "正在请求上报" : "立刻上报"}
           title={refreshing ? "上报中" : "立刻上报"}
           className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 transition-colors active:bg-gray-100 disabled:opacity-40"
@@ -144,16 +164,7 @@ export function ReportingManagementScreen() {
             <div className="text-[15px] font-semibold text-gray-900">非健康数据上报</div>
             <div className="mt-1 truncate text-[12px] text-gray-400">{nativeStatus?.deviceId || cloud?.device_id || "未识别设备"}</div>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            disabled={saving}
-            className={`relative h-8 w-[54px] shrink-0 rounded-full transition-colors ${enabled ? "bg-gray-900" : "bg-gray-200"} ${saving ? "opacity-60" : ""}`}
-            onClick={() => void toggleEnabled(!enabled)}
-          >
-            <span className={`absolute left-1 top-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-[22px]" : "translate-x-0"}`} />
-          </button>
+          <div className="shrink-0 rounded-full bg-gray-100 px-3 py-1.5 text-[11px] font-semibold text-gray-500">分类控制</div>
         </div>
         <div className="mt-4 grid grid-cols-3 gap-2">
           <CapabilityBadge label="前台应用" active={!!nativeStatus?.accessibilityEnabled} />
@@ -170,7 +181,7 @@ export function ReportingManagementScreen() {
           </div>
           <button
             type="button"
-            disabled={refreshing || !enabled}
+            disabled={refreshing}
             className="h-9 rounded-full bg-gray-100 px-4 text-[12px] font-semibold text-gray-700 active:bg-gray-200 disabled:opacity-40"
             onClick={() => void requestSnapshot()}
           >
@@ -181,8 +192,17 @@ export function ReportingManagementScreen() {
           {types.map((item) => {
             const key = String(item.key || "") as ReportingBucketKey;
             const data = cloud?.latest?.[key] || {};
+            const enabled = cloud?.config?.[key] !== false;
             return (
-              <ReportCurrentCard key={key} label={item.label || key} type={key} data={data} />
+              <ReportCurrentCard
+                key={key}
+                label={item.label || key}
+                type={key}
+                data={data}
+                enabled={enabled}
+                saving={savingBucket === key}
+                onToggle={() => void toggleBucket(key, item.label || key, !enabled)}
+              />
             );
           })}
         </div>
@@ -219,17 +239,46 @@ function CapabilityBadge({ label, active }: { label: string; active: boolean }) 
   );
 }
 
-function ReportCurrentCard({ label, type, data }: { label: string; type: string; data: Record<string, any> }) {
+function ReportCurrentCard({
+  label,
+  type,
+  data,
+  enabled,
+  saving,
+  onToggle,
+}: {
+  label: string;
+  type: string;
+  data: Record<string, any>;
+  enabled: boolean;
+  saving: boolean;
+  onToggle: () => void;
+}) {
   const hasData = data && Object.keys(data).length > 0;
   return (
-    <div className="rounded-[20px] bg-gray-50 px-4 py-3">
+    <div className={`rounded-[20px] px-4 py-3 ${enabled ? "bg-gray-50" : "bg-gray-50/70"}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold text-gray-900">{label}</div>
+          <div className="flex items-center gap-2">
+            <div className="text-[13px] font-semibold text-gray-900">{label}</div>
+            {!enabled ? <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-semibold text-gray-500">已关闭</span> : null}
+          </div>
           <div className="mt-1 break-words text-[12px] leading-5 text-gray-600">{hasData ? summarizeBucket(type, data) : "暂无数据"}</div>
         </div>
-        <div className="shrink-0 text-right text-[11px] leading-5 text-gray-400">
-          {formatTime(data?.updatedAt || data?.capturedAt || data?.observedAt || data?.reported_at)}
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            disabled={saving}
+            className={`relative h-7 w-[48px] rounded-full transition-colors ${enabled ? "bg-gray-900" : "bg-gray-200"} ${saving ? "opacity-60" : ""}`}
+            onClick={onToggle}
+          >
+            <span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-[20px]" : "translate-x-0"}`} />
+          </button>
+          <div className="text-right text-[11px] leading-5 text-gray-400">
+            {formatTime(data?.updatedAt || data?.capturedAt || data?.observedAt || data?.reported_at)}
+          </div>
         </div>
       </div>
     </div>

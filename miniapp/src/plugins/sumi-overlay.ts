@@ -56,6 +56,7 @@ export type SenseReportingSnapshotResult = {
   requested?: boolean;
   foregroundRequested?: boolean;
   usageRequested?: boolean;
+  nativeUnavailable?: boolean;
 };
 
 export type DuVitalsNotificationOptions = {
@@ -85,17 +86,17 @@ export const SumiOverlay = {
 
   async getSenseReportingStatus(): Promise<SenseReportingStatus> {
     if (Capacitor.getPlatform() !== "android") return { enabled: false, deviceId: "" };
-    return native.getSenseReportingStatus();
+    return native.getSenseReportingStatus().catch(() => ({ enabled: true, deviceId: "" }));
   },
 
   async setSenseReportingConfig(options: { enabled: boolean }): Promise<{ enabled: boolean }> {
     if (Capacitor.getPlatform() !== "android") return { enabled: false };
-    return native.setSenseReportingConfig(options);
+    return native.setSenseReportingConfig(options).catch(() => ({ enabled: options.enabled }));
   },
 
   async requestSenseReportingSnapshot(): Promise<SenseReportingSnapshotResult> {
     if (Capacitor.getPlatform() !== "android") return { requested: false };
-    return native.requestSenseReportingSnapshot();
+    return native.requestSenseReportingSnapshot().catch(() => ({ requested: false, nativeUnavailable: true }));
   },
 
   async getHealthReportingStatus(): Promise<HealthReportingStatus> {

@@ -253,6 +253,10 @@ def _reporting_history_for_device(device_id: str, limit: int = 60) -> list[dict]
     return out
 
 
+def _reporting_skip_response(bucket: str, device_id: str):
+    return jsonify({"ok": True, "bucket": bucket, "device_id": device_id, "skipped": True, "reason": "disabled"})
+
+
 def register_routes(bp) -> None:
     @bp.route("/device-state/reporting", methods=["GET"])
     def miniapp_device_reporting_state():
@@ -266,14 +270,37 @@ def register_routes(bp) -> None:
                 "latest": _reporting_latest_for_device(device_id),
                 "history": _reporting_history_for_device(device_id, limit=60),
                 "types": [{"key": key, "label": REPORTING_BUCKET_LABELS.get(key, key)} for key in REPORTING_BUCKETS],
+                "config": r2_store.get_device_reporting_config(device_id),
             }
         )
+
+    @bp.route("/device-state/reporting/config", methods=["PUT", "POST"])
+    def miniapp_device_reporting_config():
+        device_id = _get_panel_device_id()
+        if not device_id:
+            return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+        body = request.get_json(silent=True) or {}
+        key = str(body.get("key") or "").strip()
+        if key:
+            if key not in REPORTING_BUCKETS:
+                return jsonify({"ok": False, "error": "上报类别无效"}), 400
+            enabled_raw = body.get("enabled")
+            enabled = enabled_raw is True or str(enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
+            config = r2_store.update_device_reporting_bucket_config(device_id, key, enabled)
+        else:
+            incoming = body.get("config") if isinstance(body.get("config"), dict) else {}
+            config = r2_store.save_device_reporting_config(device_id, incoming)
+        if config is None:
+            return jsonify({"ok": False, "error": "保存失败"}), 500
+        return jsonify({"ok": True, "device_id": device_id, "config": config})
 
     @bp.route("/device-state/screen", methods=["POST"])
     def miniapp_device_screen_state():
         device_id = _get_panel_device_id()
         if not device_id:
             return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+        if not r2_store.is_device_reporting_bucket_enabled(device_id, "screen"):
+            return _reporting_skip_response("screen", device_id)
         body = request.get_json(silent=True) or {}
         event = str(body.get("event") or "").strip().lower()
         if event not in {"screen_on", "screen_off", "user_present", "app_active"}:
@@ -315,6 +342,8 @@ def register_routes(bp) -> None:
         device_id = _get_panel_device_id()
         if not device_id:
             return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+        if not r2_store.is_device_reporting_bucket_enabled(device_id, "battery"):
+            return _reporting_skip_response("battery", device_id)
         body = request.get_json(silent=True) or {}
         try:
             level = int(body.get("level"))
@@ -365,6 +394,8 @@ def register_routes(bp) -> None:
         device_id = _get_panel_device_id()
         if not device_id:
             return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+        if not r2_store.is_device_reporting_bucket_enabled(device_id, "usage"):
+            return _reporting_skip_response("usage", device_id)
         body = request.get_json(silent=True) or {}
         apps = _sanitize_usage_apps(body.get("apps") or [], limit=20)
         patch = {
@@ -382,6 +413,8 @@ def register_routes(bp) -> None:
         device_id = _get_panel_device_id()
         if not device_id:
             return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+        if not r2_store.is_device_reporting_bucket_enabled(device_id, "foreground"):
+            return _reporting_skip_response("foreground", device_id)
         body = request.get_json(silent=True) or {}
         patch, err = _sanitize_foreground_app_patch(body, device_id)
         if err:
@@ -395,6 +428,8 @@ def register_routes(bp) -> None:
         device_id = _get_panel_device_id()
         if not device_id:
             return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+        if not r2_store.is_device_reporting_bucket_enabled(device_id, "location"):
+            return _reporting_skip_response("location", device_id)
         body = request.get_json(silent=True) or {}
         patch, err = _sanitize_location_patch(body, device_id)
         if err:

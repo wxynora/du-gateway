@@ -396,6 +396,11 @@ rg -n "device-state|device-screenshots|screen_check|sense|foreground-app|usage-s
 - 图片会增加大量 token，图片压缩和描述归档在聊天清洗链路里查。
 - 悬浮球旁边的旧气泡能力已移除；日志告警改投 SumiTalk 安卓壳的 `show_system_notification` 系统通知，会走顶部消息提醒通道。日志页实时错误提醒不要用 app 内 toast；通知栏提醒由后端 `log_error_alert` 投递现有 `show_system_notification` 动作给安卓壳处理。后续推送优先试 FCM，不行再接 ntfy。
 
+当前状态（2026-06-03 MiniApp 上报管理分类开关）：
+- 已完成：设置页「上报管理」只管理非健康数据，当前数据卡按类别展示电量、屏幕、前台应用、位置和使用统计；每个类别有独立上报开关，配置存到 R2 `global/device_reporting_config.json`，后端 `/miniapp-api/device-state/reporting/config` 负责保存，`/device-state/*` 各上报入口按类别决定是否入库。关掉某类时接口返回 `skipped`，不再刷新该类最新快照。
+- 兼容旧包：前端不再用 `SumiOverlay.setSenseReportingConfig()` 做总开关；当前安装包没有 `requestSenseReportingSnapshot()` 时，只提示“不支持立刻采集”并刷新服务器已有状态，不再把 `not implemented on android` 当作开关保存失败弹出。
+- 验证：本轮已跑 `py_compile routes/miniapp/device_state.py storage/r2_store.py`、`miniapp` 的 `tsc --noEmit`、`npm run build`，并确认 `miniapp_static/assets/ReportingManagementScreen-*.js` 包含 `/device-state/reporting/config`。
+
 当前状态（2026-05-28 SumiTalk Android 壳能力核对）：
 - 已有 / 不要误判为未落地：`miniapp/android/` 已是 Capacitor Android 工程；`miniapp/src/plugins/sumi-overlay.ts` 与 `miniapp/android/app/src/main/java/com/sumitalk/app/OverlayControlPlugin.java` 提供原生桥；`FloatingBallService.java` 处理设备动作轮询、`show_system_notification`、系统闹钟动作、通知栏提醒和悬浮服务；`MainActivity.java` 会上报 usage stats；`SumiAccessibilityService.java` 会上报 `foreground-app` 并支持无障碍截图；后端入口在 `routes/miniapp/device_state.py` 和 `services/device_action_tools.py`。
 - 未闭环 / 按需再做：FCM/ntfy 真推送没有完整接入；`miniapp/android/app/build.gradle` 只在存在 `google-services.json` 时应用 Google Services 插件，未看到 `FirebaseMessagingService` 或前端 PushNotifications 注册链路。开机自启也未见 `BOOT_COMPLETED` receiver。当前系统闹钟走 Android `AlarmClock.ACTION_SET_ALARM`，不是 app 自己用 `AlarmManager.setExact` 做的本地业务闹钟。
