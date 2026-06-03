@@ -1385,8 +1385,8 @@ npm -C miniapp run android
 - 未完成 / 下次继续：本轮没有做 MiniApp 前端按钮、没有重建 `miniapp_static`、没有 push/重启；仓库仍有大量非本轮脏改和静态 hash 产物，提交时只挑 `services/du_midterm_memory.py`、`routes/miniapp/midterm_memory.py`、`storage/du_state_store.py`、`routes/miniapp_api.py`、`routes/chat.py`、`pipeline/pipeline.py`、`services/prompt_cache_debug.py` 和本索引段的相关 hunk。
 
 当前状态（2026-06-03 MiniApp 上报管理）：
-- 已完成：MiniApp 设置页新增“上报管理”入口，页面为 `miniapp/src/ui/tabs/ReportingManagementScreen.tsx`；显示非健康上报数据的当前快照、更新时间、最近日志、能力状态、总开关和“立刻上报”按钮。健康数据仍留在原“健康数据”页。
-- 已完成：`routes/miniapp/device_state.py` 新增 `GET /miniapp-api/device-state/reporting`，只返回当前 panel 设备的 `battery/screen/foreground/location/usage`，过滤健康数据和无设备号旧记录。
-- 已完成：Android `SumiOverlay` 插件新增 `getSenseReportingStatus`、`setSenseReportingConfig`、`requestSenseReportingSnapshot`；`FloatingBallService`、`SumiAccessibilityService`、`MainActivity` 的电量/屏幕/位置/前台应用/使用统计上报统一受 `sense_reporting_enabled` 控制，手动刷新会请求当前快照。
-- 已验证：干净 worktree 基于最新 `origin/main` 摘本轮改动，`.venv/bin/python -m py_compile routes/miniapp/device_state.py`、`./node_modules/.bin/tsc --noEmit`、`npm run build`、`git diff --check` 通过；已重建并提交 `miniapp_static`，静态产物包含 `ReportingManagementScreen-*.js`。
-- 未完成 / 下次继续：本机没有 Java Runtime，Android `compileDebugJavaWithJavac` 未能本地验证；上线 APK/Capacitor 同步前需要在有 JDK 的环境跑一次 Android 编译。
+- 已完成：MiniApp 设置页新增“上报管理”入口，页面为 `miniapp/src/ui/tabs/ReportingManagementScreen.tsx`；显示非健康上报数据的当前快照、更新时间、最近日志、能力状态和“立刻上报”按钮。健康数据仍留在原“健康数据”页。
+- 已完成：`routes/miniapp/device_state.py` 新增 `GET /miniapp-api/device-state/reporting` 和 `/reporting/config`；只返回当前 panel 设备的 `battery/screen/foreground/location/usage`，过滤健康数据和无设备号旧记录。上报开关已从旧“总开关”改为按电量、屏幕、前台应用、位置、使用统计分别保存，R2 配置为 `global/device_reporting_config.json`。
+- 已完成：Android `SumiOverlay` 插件已有 `getSenseReportingStatus`、`setSenseReportingConfig`、`requestSenseReportingSnapshot`；前端不再依赖 `setSenseReportingConfig` 保存上报开关，旧 APK 缺 native 方法时也会兜底刷新服务器状态。
+- 已验证：干净 worktree 基于最新 `origin/main` 摘本轮改动，`.venv/bin/python -m py_compile routes/miniapp/device_state.py storage/r2_store.py`、`./node_modules/.bin/tsc --noEmit`、`npm run build`、`git diff --check` 通过；已重建并提交 `miniapp_static`，静态产物包含 `ReportingManagementScreen-*.js` 和 `/device-state/reporting/config`。
+- 已打包：使用 Android Studio 自带 JBR (`/Applications/Android Studio.app/Contents/jbr/Contents/Home`) 跑 `JAVA_HOME=... sh ./gradlew :app:assembleDebug`，`compileDebugJavaWithJavac` 和 `assembleDebug` 均通过；APK 为 `SumiTalk-1.1.3-22a2e2c-debug.apk`，已上传到 `/miniapp/assets/SumiTalk-1.1.3-22a2e2c-debug.apk`。
