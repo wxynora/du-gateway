@@ -383,10 +383,10 @@ export function AvatarBubble({
 }) {
   if (image) {
     return (
-      <div className="h-[38px] w-[38px] shrink-0 overflow-hidden rounded-full shadow-sm">
+      <div className="h-[32px] w-[32px] shrink-0 overflow-hidden rounded-full shadow-sm">
         <img src={image} alt={label} className="h-full w-full object-cover" />
       </div>
     );
   }
-  return <div className={`flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-medium shadow-sm ${className}`}>{label}</div>;
+  return <div className={`flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full text-[12px] font-medium shadow-sm ${className}`}>{label}</div>;
 }
