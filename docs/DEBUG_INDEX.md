@@ -400,6 +400,7 @@ rg -n "device-state|device-screenshots|screen_check|sense|foreground-app|usage-s
 - 已完成：设置页「上报管理」只管理非健康数据，当前数据卡按类别展示电量、屏幕、前台应用、位置和使用统计；每个类别有独立上报开关，配置存到 R2 `global/device_reporting_config.json`，后端 `/miniapp-api/device-state/reporting/config` 负责保存，`/device-state/*` 各上报入口按类别决定是否入库。关掉某类时接口返回 `skipped`，不再刷新该类最新快照。
 - 兼容旧包：前端不再用 `SumiOverlay.setSenseReportingConfig()` 做总开关；当前安装包没有 `requestSenseReportingSnapshot()` 时，只提示“不支持立刻采集”并刷新服务器已有状态，不再把 `not implemented on android` 当作开关保存失败弹出。
 - 验证：本轮已跑 `py_compile routes/miniapp/device_state.py storage/r2_store.py`、`miniapp` 的 `tsc --noEmit`、`npm run build`，并确认 `miniapp_static/assets/ReportingManagementScreen-*.js` 包含 `/device-state/reporting/config`。
+- APK：使用 Android Studio/JBR 打包，`versionCode=6` / `versionName=1.1.4`；下载包已按原固定入口覆盖为 `/miniapp/assets/app-debug.apk`，不要保留或新增 `latest`、commit 后缀 APK。
 
 当前状态（2026-05-28 SumiTalk Android 壳能力核对）：
 - 已有 / 不要误判为未落地：`miniapp/android/` 已是 Capacitor Android 工程；`miniapp/src/plugins/sumi-overlay.ts` 与 `miniapp/android/app/src/main/java/com/sumitalk/app/OverlayControlPlugin.java` 提供原生桥；`FloatingBallService.java` 处理设备动作轮询、`show_system_notification`、系统闹钟动作、通知栏提醒和悬浮服务；`MainActivity.java` 会上报 usage stats；`SumiAccessibilityService.java` 会上报 `foreground-app` 并支持无障碍截图；后端入口在 `routes/miniapp/device_state.py` 和 `services/device_action_tools.py`。
@@ -781,6 +782,9 @@ npm -C miniapp run android
 注意：
 - `npm -C miniapp run build` 会更新 `miniapp_static` 的 hash 资源。
 - 前端静态产物要随源码一起提交，否则服务器页面不会变。
+- APK 打包统一通过 Android Studio；命令行验证也要用 Android Studio 自带 JBR，在 `miniapp/android` 下跑 `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" sh ./gradlew :app:assembleDebug`。
+- APK 产物固定是 `miniapp/android/app/build/outputs/apk/debug/app-debug.apk`；上线下载包时覆盖 `/miniapp/assets/app-debug.apk`，不要另建 `latest`、commit 后缀或版本号后缀 APK 文件。
+- 只有 Android native 层变更才需要重新打 APK；只改远程 MiniApp 页面时，通常只需要重建 `miniapp_static` 并部署服务端静态资源。
 
 ## 日志关键词
 
@@ -1389,4 +1393,4 @@ npm -C miniapp run android
 - 已完成：`routes/miniapp/device_state.py` 新增 `GET /miniapp-api/device-state/reporting` 和 `/reporting/config`；只返回当前 panel 设备的 `battery/screen/foreground/location/usage`，过滤健康数据和无设备号旧记录。上报开关已从旧“总开关”改为按电量、屏幕、前台应用、位置、使用统计分别保存，R2 配置为 `global/device_reporting_config.json`。
 - 已完成：Android `SumiOverlay` 插件已有 `getSenseReportingStatus`、`setSenseReportingConfig`、`requestSenseReportingSnapshot`；前端不再依赖 `setSenseReportingConfig` 保存上报开关，旧 APK 缺 native 方法时也会兜底刷新服务器状态。
 - 已验证：干净 worktree 基于最新 `origin/main` 摘本轮改动，`.venv/bin/python -m py_compile routes/miniapp/device_state.py storage/r2_store.py`、`./node_modules/.bin/tsc --noEmit`、`npm run build`、`git diff --check` 通过；已重建并提交 `miniapp_static`，静态产物包含 `ReportingManagementScreen-*.js` 和 `/device-state/reporting/config`。
-- 已打包：Android 版本号已升到 `versionCode=6` / `versionName=1.1.4`；使用 Android Studio 自带 JBR (`/Applications/Android Studio.app/Contents/jbr/Contents/Home`) 跑 `JAVA_HOME=... sh ./gradlew :app:assembleDebug`，`compileDebugJavaWithJavac` 和 `assembleDebug` 均通过。APK 已上传到 `/miniapp/assets/SumiTalk-latest-debug.apk`，同时保留 `/miniapp/assets/SumiTalk-1.1.4-cfe4913-debug.apk`。
+- 已打包：Android 版本号已升到 `versionCode=6` / `versionName=1.1.4`；打包统一通过 Android Studio，实际验证使用 Android Studio 自带 JBR (`/Applications/Android Studio.app/Contents/jbr/Contents/Home`) 跑 `JAVA_HOME=... sh ./gradlew :app:assembleDebug`，`compileDebugJavaWithJavac` 和 `assembleDebug` 均通过。APK 下载包已覆盖原入口 `/miniapp/assets/app-debug.apk`，不再保留 `latest`、commit 后缀或版本号后缀 APK。
