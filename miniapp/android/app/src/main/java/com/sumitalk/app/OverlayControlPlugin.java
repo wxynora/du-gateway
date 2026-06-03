@@ -1,6 +1,7 @@
 package com.sumitalk.app;
 
 import android.Manifest;
+import android.app.AppOpsManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -181,6 +182,76 @@ public class OverlayControlPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getSenseReportingStatus(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        JSObject o = new JSObject();
+        o.put("enabled", FloatingBallService.isSenseReportingEnabled(ctx));
+        o.put("deviceId", resolveStableDeviceId(ctx));
+        o.put("accessibilityEnabled", isSumiAccessibilityEnabled(ctx));
+        o.put("locationPermission", hasLocationPermission(ctx));
+        o.put("usageStatsAvailable", hasUsageStatsPermission(ctx));
+        call.resolve(o);
+    }
+
+    @PluginMethod
+    public void setSenseReportingConfig(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        boolean enabled = call.getBoolean("enabled", true);
+        FloatingBallService.setSenseReportingEnabled(ctx, enabled);
+        if (enabled) {
+            Intent intent = new Intent(ctx, FloatingBallService.class);
+            intent.setAction(FloatingBallService.ACTION_REQUEST_SENSE_SNAPSHOT);
+            ContextCompat.startForegroundService(ctx, intent);
+        }
+        JSObject o = new JSObject();
+        o.put("enabled", FloatingBallService.isSenseReportingEnabled(ctx));
+        call.resolve(o);
+    }
+
+    @PluginMethod
+    public void requestSenseReportingSnapshot(PluginCall call) {
+        Context ctx = getContext();
+        if (ctx == null) {
+            call.reject("no_context");
+            return;
+        }
+        boolean enabled = FloatingBallService.isSenseReportingEnabled(ctx);
+        if (!enabled) {
+            JSObject o = new JSObject();
+            o.put("requested", false);
+            o.put("foregroundRequested", false);
+            o.put("usageRequested", false);
+            call.resolve(o);
+            return;
+        }
+        Intent intent = new Intent(ctx, FloatingBallService.class);
+        intent.setAction(FloatingBallService.ACTION_REQUEST_SENSE_SNAPSHOT);
+        ContextCompat.startForegroundService(ctx, intent);
+        boolean foregroundRequested = SumiAccessibilityService.requestForegroundSnapshot();
+        boolean usageRequested = false;
+        try {
+            if (getActivity() instanceof MainActivity) {
+                ((MainActivity) getActivity()).requestUsageStatsSnapshot();
+                usageRequested = true;
+            }
+        } catch (Exception ignored) {
+        }
+        JSObject o = new JSObject();
+        o.put("requested", true);
+        o.put("foregroundRequested", foregroundRequested);
+        o.put("usageRequested", usageRequested);
+        call.resolve(o);
+    }
+
+    @PluginMethod
     public void createSystemAlarm(PluginCall call) {
         Context ctx = getContext();
         if (ctx == null) {
@@ -295,6 +366,44 @@ public class OverlayControlPlugin extends Plugin {
             return lower.contains(target.flattenToString().toLowerCase(java.util.Locale.US))
                     || lower.contains(target.flattenToShortString().toLowerCase(java.util.Locale.US));
         } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean isSumiAccessibilityEnabled(Context ctx) {
+        try {
+            String enabled = Settings.Secure.getString(ctx.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (enabled == null || enabled.trim().isEmpty()) return false;
+            ComponentName target = new ComponentName(ctx, SumiAccessibilityService.class);
+            String targetPackage = ctx.getPackageName();
+            String targetClass = target.getClassName();
+            for (String item : enabled.split(":")) {
+                ComponentName component = ComponentName.unflattenFromString(item);
+                if (component == null) continue;
+                if (targetPackage.equals(component.getPackageName()) && targetClass.equals(component.getClassName())) {
+                    return true;
+                }
+            }
+            String lower = enabled.toLowerCase(java.util.Locale.US);
+            return lower.contains(target.flattenToString().toLowerCase(java.util.Locale.US))
+                    || lower.contains(target.flattenToShortString().toLowerCase(java.util.Locale.US));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean hasLocationPermission(Context ctx) {
+        return ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasUsageStatsPermission(Context ctx) {
+        try {
+            AppOpsManager appOps = (AppOpsManager) ctx.getSystemService(Context.APP_OPS_SERVICE);
+            if (appOps == null) return false;
+            int mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), ctx.getPackageName());
+            return mode == AppOpsManager.MODE_ALLOWED;
+        } catch (Exception ignored) {
             return false;
         }
     }

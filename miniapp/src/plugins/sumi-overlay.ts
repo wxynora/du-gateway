@@ -4,6 +4,9 @@ export interface SumiOverlayPlugin {
   setFloatingBallEnabled(options: { enabled: boolean }): Promise<void>;
   getFloatingBallEnabled(): Promise<{ enabled: boolean }>;
   getStableDeviceId(): Promise<{ deviceId: string }>;
+  getSenseReportingStatus(): Promise<SenseReportingStatus>;
+  setSenseReportingConfig(options: { enabled: boolean }): Promise<{ enabled: boolean }>;
+  requestSenseReportingSnapshot(): Promise<SenseReportingSnapshotResult>;
   getHealthReportingStatus(): Promise<HealthReportingStatus>;
   setHealthReportingConfig(options: { intervalSeconds: number }): Promise<{ intervalSeconds: number }>;
   requestHealthReportingSnapshot(): Promise<{ requested?: boolean }>;
@@ -41,6 +44,20 @@ export type HealthReportingStatus = {
   logs?: HealthReportingLog[];
 };
 
+export type SenseReportingStatus = {
+  enabled?: boolean;
+  deviceId?: string;
+  accessibilityEnabled?: boolean;
+  locationPermission?: boolean;
+  usageStatsAvailable?: boolean;
+};
+
+export type SenseReportingSnapshotResult = {
+  requested?: boolean;
+  foregroundRequested?: boolean;
+  usageRequested?: boolean;
+};
+
 export type DuVitalsNotificationOptions = {
   heartBpm?: number;
   breathRpm?: number;
@@ -64,6 +81,21 @@ export const SumiOverlay = {
   async getStableDeviceId(): Promise<{ deviceId: string }> {
     if (Capacitor.getPlatform() !== "android") return { deviceId: "" };
     return native.getStableDeviceId();
+  },
+
+  async getSenseReportingStatus(): Promise<SenseReportingStatus> {
+    if (Capacitor.getPlatform() !== "android") return { enabled: false, deviceId: "" };
+    return native.getSenseReportingStatus();
+  },
+
+  async setSenseReportingConfig(options: { enabled: boolean }): Promise<{ enabled: boolean }> {
+    if (Capacitor.getPlatform() !== "android") return { enabled: false };
+    return native.setSenseReportingConfig(options);
+  },
+
+  async requestSenseReportingSnapshot(): Promise<SenseReportingSnapshotResult> {
+    if (Capacitor.getPlatform() !== "android") return { requested: false };
+    return native.requestSenseReportingSnapshot();
   },
 
   async getHealthReportingStatus(): Promise<HealthReportingStatus> {

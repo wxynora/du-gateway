@@ -82,6 +82,7 @@ public class FloatingBallService extends Service {
     public static final String ACTION_STOP = "com.sumitalk.app.action.STOP";
     public static final String ACTION_ENABLE_MEDIA_PROJECTION_FG = "com.sumitalk.app.action.ENABLE_MEDIA_PROJECTION_FG";
     public static final String ACTION_DISABLE_MEDIA_PROJECTION_FG = "com.sumitalk.app.action.DISABLE_MEDIA_PROJECTION_FG";
+    public static final String ACTION_REQUEST_SENSE_SNAPSHOT = "com.sumitalk.app.action.REQUEST_SENSE_SNAPSHOT";
     public static final String EXTRA_PANEL_TOKEN = "panel_token";
     public static final String EXTRA_DEVICE_ID = "device_id";
     public static final String PREFS_NAME = "sumitalk_native_state";
@@ -91,6 +92,7 @@ public class FloatingBallService extends Service {
     public static final String PREF_OVERLAY_Y = "overlay_y";
     /** User preference: show floating ball (does not revoke overlay permission). */
     public static final String PREF_OVERLAY_VISIBLE = "overlay_visible";
+    public static final String PREF_SENSE_REPORTING_ENABLED = "sense_reporting_enabled";
     public static final String PREF_APP_VISIBLE = "app_visible";
     public static final String PREF_LAST_HISTORY_MESSAGE_KEY = "last_history_message_key";
     private static final String PREF_LAST_REPORTED_LOCATION_LAT = "last_reported_location_lat";
@@ -196,6 +198,12 @@ public class FloatingBallService extends Service {
             startForegroundNotification(false, false);
             return START_STICKY;
         }
+        if (ACTION_REQUEST_SENSE_SNAPSHOT.equals(action)) {
+            serviceStopping = false;
+            updatePanelState(intent);
+            requestSenseSnapshot();
+            return START_STICKY;
+        }
         serviceStopping = false;
         updatePanelState(intent);
         applyOverlayVisibility();
@@ -205,6 +213,44 @@ public class FloatingBallService extends Service {
         scheduleScreenStateReporting();
         reportBatterySnapshot();
         return START_STICKY;
+    }
+
+    public static boolean isSenseReportingEnabled(Context context) {
+        if (context == null) return true;
+        try {
+            return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(PREF_SENSE_REPORTING_ENABLED, true);
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    public static void setSenseReportingEnabled(Context context, boolean enabled) {
+        if (context == null) return;
+        try {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(PREF_SENSE_REPORTING_ENABLED, enabled)
+                    .apply();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean isSenseReportingEnabled() {
+        return isSenseReportingEnabled(this);
+    }
+
+    private void requestSenseSnapshot() {
+        if (!isSenseReportingEnabled()) return;
+        reportBatterySnapshot();
+        reportLocationSnapshot();
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        boolean interactive = pm != null && pm.isInteractive();
+        if (interactive) {
+            reportScreenState("app_active");
+        } else {
+            reportScreenOffSnapshotIfNeeded();
+        }
     }
 
     @Override
@@ -587,7 +633,7 @@ public class FloatingBallService extends Service {
     }
 
     private void reportLocationSnapshot() {
-        if (panelToken.isEmpty() || !hasLocationPermission()) return;
+        if (!isSenseReportingEnabled() || panelToken.isEmpty() || !hasLocationPermission()) return;
         startForegroundNotification(true);
         LocationManager lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
         if (lm == null) return;
@@ -628,7 +674,7 @@ public class FloatingBallService extends Service {
     }
 
     private void postLocation(Location location, String source) {
-        if (location == null || panelToken.isEmpty()) return;
+        if (!isSenseReportingEnabled() || location == null || panelToken.isEmpty()) return;
         long locationAgeMs = location.getTime() > 0L ? Math.max(0L, System.currentTimeMillis() - location.getTime()) : 0L;
         if (location.getTime() > 0L && locationAgeMs > LOCATION_MAX_STALE_MS) return;
         if (!shouldReportLocation(location)) return;
@@ -680,7 +726,7 @@ public class FloatingBallService extends Service {
     }
 
     private void reportScreenState(String eventType) {
-        if (panelToken.isEmpty()) return;
+        if (!isSenseReportingEnabled() || panelToken.isEmpty()) return;
         long observedAtMs = System.currentTimeMillis();
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         boolean interactive = pm != null && pm.isInteractive();
@@ -696,7 +742,7 @@ public class FloatingBallService extends Service {
     }
 
     private void reportScreenOffSnapshotIfNeeded() {
-        if (panelToken.isEmpty()) return;
+        if (!isSenseReportingEnabled() || panelToken.isEmpty()) return;
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         boolean interactive = pm != null && pm.isInteractive();
         if (interactive) return;
@@ -751,7 +797,7 @@ public class FloatingBallService extends Service {
     }
 
     private void reportBatterySnapshot() {
-        if (panelToken.isEmpty()) return;
+        if (!isSenseReportingEnabled() || panelToken.isEmpty()) return;
         ioExecutor.execute(
                 () -> {
                     try {
@@ -777,6 +823,7 @@ public class FloatingBallService extends Service {
     }
 
     private void reportBatterySnapshotIfDue() {
+        if (!isSenseReportingEnabled()) return;
         long now = System.currentTimeMillis();
         if (lastBatteryReportMs > 0 && now - lastBatteryReportMs < BATTERY_REPORT_INTERVAL_MS) {
             return;

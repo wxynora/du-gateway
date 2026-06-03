@@ -45,6 +45,7 @@ public class SumiAccessibilityService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null) return;
+        if (!FloatingBallService.isSenseReportingEnabled(this)) return;
         int type = event.getEventType();
         boolean windowEvent = type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
                 || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED;
@@ -106,11 +107,21 @@ public class SumiAccessibilityService extends AccessibilityService {
         return true;
     }
 
+    public static boolean requestForegroundSnapshot() {
+        SumiAccessibilityService svc = activeInstance;
+        if (svc == null) return false;
+        String pkg = String.valueOf(svc.lastPackageName == null ? "" : svc.lastPackageName).trim();
+        if (pkg.isEmpty()) return false;
+        svc.reportForegroundApp(pkg, "", "accessibility_snapshot");
+        return true;
+    }
+
     private void reportForegroundApp(String packageName, String className, String source) {
         ioExecutor.execute(() -> doReportForegroundApp(packageName, className, source));
     }
 
     private void doReportForegroundApp(String packageName, String className, String source) {
+        if (!FloatingBallService.isSenseReportingEnabled(this)) return;
         SharedPreferences sp = getSharedPreferences(FloatingBallService.PREFS_NAME, MODE_PRIVATE);
         String panelToken = String.valueOf(sp.getString(FloatingBallService.PREF_PANEL_TOKEN, "")).trim();
         String deviceId = String.valueOf(sp.getString(FloatingBallService.PREF_DEVICE_ID, "")).trim();

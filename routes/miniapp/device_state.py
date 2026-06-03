@@ -12,6 +12,15 @@ from utils.time_aware import now_beijing_iso, today_beijing
 
 logger = logging.getLogger(__name__)
 
+REPORTING_BUCKETS = ("battery", "screen", "foreground", "location", "usage")
+REPORTING_BUCKET_LABELS = {
+    "battery": "电量",
+    "screen": "屏幕",
+    "foreground": "前台应用",
+    "location": "位置",
+    "usage": "使用统计",
+}
+
 
 def _get_panel_device_id() -> str:
     payload = request.environ.get("miniapp_panel_payload") or {}
@@ -196,7 +205,70 @@ def _health_history_for_device(device_id: str, limit: int = 20) -> list[dict]:
     return out
 
 
+def _sense_payload_device_id(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("deviceId") or data.get("device_id") or "").strip()
+
+
+def _sense_payload_matches_device(data: dict, device_id: str) -> bool:
+    did = _sense_payload_device_id(data)
+    return bool(device_id and did and did == device_id)
+
+
+def _reporting_latest_for_device(device_id: str) -> dict:
+    latest_doc = r2_store.get_sense_latest() or {}
+    out: dict = {}
+    for key in REPORTING_BUCKETS:
+        data = latest_doc.get(key) if isinstance(latest_doc.get(key), dict) else {}
+        if not data or not _sense_payload_matches_device(data, device_id):
+            out[key] = {}
+            continue
+        out[key] = data
+    return out
+
+
+def _reporting_history_for_device(device_id: str, limit: int = 60) -> list[dict]:
+    rows = r2_store.get_sense_history_for_date(today_beijing(), limit=240) or []
+    out: list[dict] = []
+    for row in reversed(rows):
+        if not isinstance(row, dict):
+            continue
+        typ = str(row.get("type") or "").strip()
+        if typ not in REPORTING_BUCKETS:
+            continue
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        if not _sense_payload_matches_device(data, device_id):
+            continue
+        out.append(
+            {
+                "type": typ,
+                "label": REPORTING_BUCKET_LABELS.get(typ, typ),
+                "at": str(row.get("at") or "").strip(),
+                "data": data,
+            }
+        )
+        if len(out) >= max(1, int(limit or 60)):
+            break
+    return out
+
+
 def register_routes(bp) -> None:
+    @bp.route("/device-state/reporting", methods=["GET"])
+    def miniapp_device_reporting_state():
+        device_id = _get_panel_device_id()
+        if not device_id:
+            return jsonify({"ok": False, "error": "缺少设备标识"}), 400
+        return jsonify(
+            {
+                "ok": True,
+                "device_id": device_id,
+                "latest": _reporting_latest_for_device(device_id),
+                "history": _reporting_history_for_device(device_id, limit=60),
+                "types": [{"key": key, "label": REPORTING_BUCKET_LABELS.get(key, key)} for key in REPORTING_BUCKETS],
+            }
+        )
+
     @bp.route("/device-state/screen", methods=["POST"])
     def miniapp_device_screen_state():
         device_id = _get_panel_device_id()

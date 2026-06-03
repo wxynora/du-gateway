@@ -72,8 +72,9 @@ const ListenWithDuScreen = lazy(() => import("./tabs/ListenWithDuScreen").then((
 const StudyRoomTab = lazy(() => import("./tabs/StudyRoomTab").then((m) => ({ default: m.StudyRoomTab })));
 const XiaoAISettingsTab = lazy(() => import("./tabs/XiaoAISettingsTab").then((m) => ({ default: m.XiaoAISettingsTab })));
 const HealthDataScreen = lazy(() => import("./tabs/HealthDataScreen").then((m) => ({ default: m.HealthDataScreen })));
+const ReportingManagementScreen = lazy(() => import("./tabs/ReportingManagementScreen").then((m) => ({ default: m.ReportingManagementScreen })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | "xiaoai" | "health-data" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | "xiaoai" | "health-data" | "reporting" | null;
 type SilenceModeResponse = {
   ok?: boolean;
   enabled?: boolean;
@@ -550,6 +551,7 @@ export function AppShell({
             />
             <ListRow icon={<FeatherIcon />} label="个性化" onClick={() => setShowPersonalization(true)} />
             <ListRow icon={<CpuIcon />} label="系统诊断" onClick={() => setShowDiagnostics(true)} />
+            <ListRow icon={<SmartphoneIconMini />} label="上报管理" onClick={() => setPanel("reporting")} />
             <ListRow icon={<SmartphoneIconMini />} label="设备管理" onClick={() => onOpenDevices?.()} />
             {onLogout ? <ListRow icon={<LogoutIconMini />} label="退出登录" onClick={onLogout} last /> : null}
           </div>
@@ -698,6 +700,11 @@ export function AppShell({
       {panel === "health-data" ? (
         <FullScreenPane title="健康数据" accent="neutral" headerMode="simple" headerRightPortalId="health-data-header-actions" onBack={() => setPanel(null)}>
           <LazyPane><HealthDataScreen /></LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {panel === "reporting" ? (
+        <FullScreenPane title="上报管理" accent="neutral" headerMode="simple" headerRightPortalId="reporting-header-actions" onBack={() => setPanel(null)}>
+          <LazyPane><ReportingManagementScreen /></LazyPane>
         </FullScreenPane>
       ) : null}
 

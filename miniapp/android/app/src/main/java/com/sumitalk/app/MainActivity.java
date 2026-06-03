@@ -301,7 +301,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void reportUsageStatsSnapshot() {
-        if (panelToken.isEmpty() || !hasUsageStatsPermission()) return;
+        if (!FloatingBallService.isSenseReportingEnabled(this) || panelToken.isEmpty() || !hasUsageStatsPermission()) return;
         ioExecutor.execute(
                 () -> {
                     try {
@@ -338,6 +338,10 @@ public class MainActivity extends BridgeActivity {
                         Log.w(TAG, "reportUsageStatsSnapshot failed", e);
                     }
                 });
+    }
+
+    public void requestUsageStatsSnapshot() {
+        reportUsageStatsSnapshot();
     }
 
     private void postJson(String path, JSONObject payload) throws Exception {
