@@ -62,25 +62,116 @@ def _audio_format(filename: str = "", mime_type: str = "") -> str:
     return ""
 
 
-def build_music_melody_prompt(title: str, artist: str) -> str:
+def _format_duration(seconds: float) -> str:
+    if seconds <= 0:
+        return ""
+    total = int(round(seconds))
+    minutes, secs = divmod(total, 60)
+    return f"{minutes}:{secs:02d}"
+
+
+def _format_timestamp(value: Any) -> str:
+    try:
+        seconds = max(0, int(round(float(value or 0))))
+    except (TypeError, ValueError):
+        seconds = 0
+    minutes, secs = divmod(seconds, 60)
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _clean_lyrics_text(value: Any, limit: int = 4000) -> str:
+    raw = str(value or "").replace("\u00a0", " ")
+    lines: list[str] = []
+    for line in raw.splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        if item.startswith("{"):
+            tx_parts = re.findall(r'"tx"\s*:\s*"([^"]*)"', item)
+            item = "".join(tx_parts).strip()
+            if not item or item in {"作词:", "作曲:", "编曲:"}:
+                continue
+        item = re.sub(r"^\[\d{2}:\d{2}(?:\.\d+)?\]", "", item).strip()
+        if item:
+            lines.append(item)
+    return "\n".join(lines)[:limit]
+
+
+def _max_segment_end_seconds(structured: dict) -> float:
+    segments = structured.get("segments") if isinstance(structured, dict) else None
+    if not isinstance(segments, list):
+        return 0
+    max_end = 0.0
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        try:
+            max_end = max(max_end, float(segment.get("end") or 0))
+        except (TypeError, ValueError):
+            continue
+    return max_end
+
+
+def _display_text_from_segments(data: dict) -> str:
+    segments = data.get("segments") if isinstance(data, dict) else None
+    if not isinstance(segments, list):
+        return ""
+    lines: list[str] = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        plain = str(segment.get("plain") or "").strip()
+        if not plain:
+            continue
+        start = _format_timestamp(segment.get("start"))
+        end = _format_timestamp(segment.get("end"))
+        section = _clean_text(segment.get("section") or "段落", 30)
+        lines.append(f"{start}-{end} {section}：{plain}")
+    trend = str(data.get("overall_trend") or "").strip()
+    if lines and trend:
+        lines.append(f"整体趋势：{trend}")
+    return "\n".join(lines)
+
+
+def build_music_melody_prompt(
+    title: str,
+    artist: str,
+    duration_seconds: float = 0,
+    lyrics_text: str = "",
+) -> str:
     song_name = _clean_text(title, 160)
     artist_name = _clean_text(artist, 160)
-    identity = f"歌名：{song_name}\n歌手：{artist_name or '未知'}"
+    duration = float(duration_seconds or 0)
+    duration_line = ""
+    if duration > 0:
+        duration_line = (
+            f"\n音频总时长：{duration:.1f} 秒（约 {_format_duration(duration)}）。"
+            "所有 start/end 都必须落在这个范围内，不能超过歌曲总时长；最后一段的 end 必须等于这个总时长。"
+        )
+    lyrics = _clean_lyrics_text(lyrics_text)
+    lyrics_block = f"\n\n歌词/文本线索（可能不是逐字逐秒对齐，只作为理解意象参考）：\n{lyrics}" if lyrics else ""
+    identity = f"歌名：{song_name}\n歌手：{artist_name or '未知'}{duration_line}"
     return (
-        "你在为一个“和渡一起听”的功能分析歌曲。请听完整音频，把它转成 LLM 和普通人都能理解的旋律/情绪描述。\n"
-        f"{identity}\n\n"
+        "你在为“和渡一起听”的功能分析歌曲。请先听完整音频，再把它转成渡可以拿来陪小玥一起聊歌的听感素材。\n"
+        f"{identity}"
+        f"{lyrics_block}\n\n"
         "要求：\n"
-        "1. 按 10-25 秒左右切段；如果歌曲结构明显变化，可以自然调整切点。\n"
-        "2. 每段用中文人话描述听感，不要堆乐理术语；可以写“慢慢铺开”“被提起来”“回落”“更亮”“更闷”。\n"
-        "3. 每段都给 Valence（-5 到 +5，负数偏低落，正数偏明亮）和 Arousal（1 到 5，越高越激动）。\n"
-        "4. 重点描述主旋律/人声旋律的走势、力度变化和情绪变化；听不准时要保守，不要装作精确扒谱。\n"
-        "5. 只返回一个 JSON 对象，不要 Markdown，不要代码块。\n\n"
+        "1. 不要按固定秒数平均切分。先判断歌曲结构，再按结构段落输出。\n"
+        "2. 优先识别：前奏、主歌、预副歌、副歌、副歌后段、间奏、桥段、breakdown、最后副歌、尾奏。听不准就写“过渡段/情绪抬升段/收束段”，不要硬编专业名词。\n"
+        "3. 每段可以 10-70 秒不等，切点要跟着人声进入、鼓点/低音加入、旋律重复、能量抬升或回落、编曲抽空这些真实变化走；必须覆盖整首歌。\n"
+        "4. display_text 是给渡看的自然听感素材：不要对渡说话，不要写“渡，你听”；不要像音乐赏析模板，也不要把 Valence/Arousal 写进正文。\n"
+        "5. 每段 plain 写 1-2 句，避免反复复读“人声清晰、鼓点压进来”。重复副歌也要指出这次和上一次有什么不同，或者说明“几乎复现上一轮”。\n"
+        "6. 每段重点写听见的变化：人声远近和质感、混响/空间、鼓点和低音什么时候压进来、主旋律怎么抬起/回落、歌词意象怎样被编曲托住。听不准时要保守。\n"
+        "7. segments 里的 start/end 是秒数数字，不是 mm:ss；例如 110 秒要写成 110，不要写成 70 或 01:10。\n"
+        "8. 输出前自查：第一段 start 必须是 0；后一段 start 应该等于前一段 end；最后一段 end 必须等于音频总时长；任何 start/end 都不能超过总时长。不要根据歌词行数或想象补出音频里不存在的后半段。\n"
+        "9. segments 里保留 valence（-5 到 +5）和 arousal（1 到 5）给后台用；正文里不用出现这些数字。\n"
+        "10. 只返回一个 JSON 对象，不要 Markdown，不要代码块，不要把 JSON 包成字符串。\n\n"
         "JSON 格式：\n"
         "{\n"
-        '  "display_text": "0-18s：像是在慢慢铺开，情绪偏安静，力度轻，Valence:-1，Arousal:2\\n...\\n整体趋势：...",\n'
-        '  "overall_trend": "从平静铺垫到情绪上扬，再慢慢回落。",\n'
+        '  "display_text": "00:00-00:18 前奏：空间先慢慢铺开，人声还在远处，鼓点很克制。\\n00:18-00:52 主歌：...\\n整体趋势：...",\n'
+        '  "overall_trend": "从克制的前奏，到副歌被鼓点和人声抬起来，最后慢慢收回。",\n'
         '  "segments": [\n'
-        '    {"start":0,"end":18,"plain":"像是在慢慢铺开，情绪偏安静，力度轻。","melody_motion":"平稳","intensity":"偏轻","valence":-1,"arousal":2}\n'
+        '    {"start":0,"end":18,"section":"前奏","plain":"空间先慢慢铺开，人声还在远处，鼓点很克制。","melody_motion":"缓慢展开","sonic_detail":"人声有距离感，混响明显","intensity":"偏轻","valence":-1,"arousal":2}\n'
         "  ]\n"
         "}"
     )
@@ -111,8 +202,11 @@ def _extract_json_object(text: str) -> Optional[dict]:
 
 def _display_text_from_structured(data: Optional[dict], fallback: str) -> tuple[str, str]:
     if isinstance(data, dict):
-        display = str(data.get("display_text") or "").strip()
         trend = str(data.get("overall_trend") or "").strip()
+        display = _display_text_from_segments(data)
+        if display:
+            return display, trend
+        display = str(data.get("display_text") or "").strip()
         if display:
             return display, trend
     return str(fallback or "").strip(), ""
@@ -124,17 +218,34 @@ def parse_music_melody_model_text(text: str) -> tuple[dict, str, str]:
     return structured, melody_text, overall_trend
 
 
-def _openrouter_payload(model: str, title: str, artist: str, audio_bytes: bytes, audio_format: str) -> dict:
+def _openrouter_payload(
+    model: str,
+    title: str,
+    artist: str,
+    audio_bytes: bytes,
+    audio_format: str,
+    duration_seconds: float = 0,
+    lyrics_text: str = "",
+) -> dict:
     return {
         "model": model,
         "stream": False,
         "temperature": 0.2,
-        "max_tokens": 1800,
+        "max_tokens": 2600,
+        "response_format": {"type": "json_object"},
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": build_music_melody_prompt(title, artist)},
+                    {
+                        "type": "text",
+                        "text": build_music_melody_prompt(
+                            title,
+                            artist,
+                            duration_seconds=duration_seconds,
+                            lyrics_text=lyrics_text,
+                        ),
+                    },
                     {
                         "type": "input_audio",
                         "input_audio": {
@@ -148,14 +259,30 @@ def _openrouter_payload(model: str, title: str, artist: str, audio_bytes: bytes,
     }
 
 
-def _call_music_model(model: str, title: str, artist: str, audio_bytes: bytes, audio_format: str) -> tuple[str, dict]:
+def _call_music_model(
+    model: str,
+    title: str,
+    artist: str,
+    audio_bytes: bytes,
+    audio_format: str,
+    duration_seconds: float = 0,
+    lyrics_text: str = "",
+) -> tuple[str, dict]:
     if not MUSIC_ANALYSIS_API_KEY:
         raise MusicMelodyError("MUSIC_ANALYSIS_API_KEY/OPENROUTER_API_KEY 未配置")
     headers = {
         "Authorization": f"Bearer {MUSIC_ANALYSIS_API_KEY}",
         "Content-Type": "application/json",
     }
-    payload = _openrouter_payload(model, title, artist, audio_bytes, audio_format)
+    payload = _openrouter_payload(
+        model,
+        title,
+        artist,
+        audio_bytes,
+        audio_format,
+        duration_seconds=duration_seconds,
+        lyrics_text=lyrics_text,
+    )
     try:
         resp = requests.post(
             MUSIC_ANALYSIS_API_URL,
@@ -187,6 +314,8 @@ def analyze_music_melody(
     force: bool = False,
     model: str = "",
     prompt_version: str = "",
+    duration_seconds: float = 0,
+    lyrics_text: str = "",
 ) -> dict:
     clean_title = _clean_text(title, 200)
     clean_artist = _clean_text(artist, 200)
@@ -218,8 +347,19 @@ def analyze_music_melody(
     last_error = ""
     for idx, candidate_model in enumerate(models):
         try:
-            raw_content, raw_response = _call_music_model(candidate_model, clean_title, clean_artist, audio_bytes, fmt)
+            raw_content, raw_response = _call_music_model(
+                candidate_model,
+                clean_title,
+                clean_artist,
+                audio_bytes,
+                fmt,
+                duration_seconds=duration_seconds,
+                lyrics_text=lyrics_text,
+            )
             structured, melody_text, overall_trend = parse_music_melody_model_text(raw_content)
+            max_end = _max_segment_end_seconds(structured)
+            if duration_seconds and max_end > float(duration_seconds) + 2:
+                raise MusicMelodyError(f"音乐分析时间段超出音频时长 end={max_end:g}s duration={float(duration_seconds):g}s")
             entry = save_music_melody_entry(
                 clean_title,
                 clean_artist,

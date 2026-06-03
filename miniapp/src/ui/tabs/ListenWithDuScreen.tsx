@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { apiJson, buildApiAssetUrl } from "../api";
 import { ChevronLeftIcon, ClockIconMini, SendIconMini } from "../icons";
 
 type ListenMessage = {
@@ -7,87 +8,181 @@ type ListenMessage = {
   text: string;
 };
 
-type ListenSong = {
-  title: string;
-  artist: string;
-  album: string;
-  current: string;
-  duration: string;
-  progress: number;
-  seedReply: string;
+type MusicSegment = {
+  start?: number;
+  end?: number;
+  section?: string;
+  plain?: string;
+  melody_motion?: string;
+  sonic_detail?: string;
+  intensity?: string;
+  valence?: number;
+  arousal?: number;
 };
 
-const SONGS: ListenSong[] = [
-  {
-    title: "遥远的歌",
-    artist: "刘惜君",
-    album: "即使是爱也无所谓",
-    current: "1:52",
-    duration: "4:23",
-    progress: 42,
-    seedReply: "这首歌的情绪起得很轻，像是把话放在喉咙口，又慢慢咽回去。",
-  },
-  {
-    title: "慢慢喜欢你",
-    artist: "莫文蔚",
-    album: "我们在中场相遇",
-    current: "0:58",
-    duration: "3:42",
-    progress: 26,
-    seedReply: "它不是一下子亮起来的那种甜，是一点点把灯拧亮。",
-  },
-  {
-    title: "若月亮没来",
-    artist: "王宇宙Leto / 乔浚丞",
-    album: "若月亮没来",
-    current: "2:08",
-    duration: "3:18",
-    progress: 65,
-    seedReply: "这一段像夜里突然有人陪你走了一小截路，不吵，但很近。",
-  },
-];
+type MusicEntry = {
+  id?: string;
+  title?: string;
+  artist?: string;
+  audio_url?: string;
+  audio_format?: string;
+  duration_seconds?: number;
+  melody_text?: string;
+  overall_trend?: string;
+  updated_at?: string;
+  structured?: {
+    segments?: MusicSegment[];
+  };
+};
 
-const INITIAL_MESSAGES: ListenMessage[] = [
-  {
-    id: 1,
-    role: "du",
-    text: "你好，我是渡。听着这首歌，我想到了一些关于告别的瞬间。你最喜欢哪一段歌词？",
-  },
-  {
-    id: 2,
-    role: "user",
-    text: "前奏响起来的时候，感觉有点难过。",
-  },
-  {
-    id: 3,
-    role: "du",
-    text: "那是大提琴的音色，带着一种沉重却温柔的质感。这首歌在 2:14 秒处的转调很有意思，像是一场不忍离去的告白。",
-  },
-];
+type RecentResp = {
+  ok?: boolean;
+  items?: MusicEntry[];
+};
+
+function asSeconds(value: unknown): number {
+  const n = Number(value || 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function formatClock(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds || 0));
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function segmentsFor(entry?: MusicEntry): MusicSegment[] {
+  const list = entry?.structured?.segments;
+  return Array.isArray(list) ? list.filter((item) => asSeconds(item?.end) > asSeconds(item?.start)) : [];
+}
+
+function durationFor(entry?: MusicEntry): number {
+  const explicit = asSeconds(entry?.duration_seconds);
+  if (explicit > 0) return explicit;
+  return segmentsFor(entry).reduce((max, item) => Math.max(max, asSeconds(item.end)), 0);
+}
+
+function currentSegmentFor(entry: MusicEntry | undefined, currentTime: number): MusicSegment | null {
+  const segments = segmentsFor(entry);
+  if (!segments.length) return null;
+  const t = Math.max(0, currentTime || 0);
+  return (
+    segments.find((item) => {
+      const start = asSeconds(item.start);
+      const end = asSeconds(item.end);
+      return t >= start && t < end;
+    }) || segments[segments.length - 1] || null
+  );
+}
+
+function buildSeedReply(entry?: MusicEntry): string {
+  const firstSegment = segmentsFor(entry)[0];
+  const trend = String(entry?.overall_trend || "").trim();
+  if (firstSegment?.plain) return firstSegment.plain;
+  if (trend) return trend;
+  return "我在这首歌里等你。";
+}
+
+function buildListenReply(entry: MusicEntry | undefined, segment: MusicSegment | null): string {
+  if (!entry) return "我在听。你刚刚说的那点，我想顺着歌再听一会儿。";
+  if (segment?.plain) {
+    const section = String(segment.section || "这一段").trim();
+    return `嗯，我现在听到的是${section}：${segment.plain} 你刚才那句话放在这里，会更像是被歌轻轻托住。`;
+  }
+  const trend = String(entry.overall_trend || "").trim();
+  return trend || "嗯，我跟着你一起听。你说的那点感觉，先放在这首歌里慢慢看。";
+}
 
 export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => void; backgroundImage?: string }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [songs, setSongs] = useState<MusicEntry[]>([]);
   const [songIndex, setSongIndex] = useState(0);
-  const [messages, setMessages] = useState<ListenMessage[]>(INITIAL_MESSAGES);
+  const [messages, setMessages] = useState<ListenMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [showHistory, setShowHistory] = useState(false);
-  const song = SONGS[songIndex];
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  const song = songs[songIndex];
+  const songDuration = duration || durationFor(song);
+  const progress = songDuration > 0 ? Math.min(100, Math.max(0, (currentTime / songDuration) * 100)) : 0;
+  const currentSegment = useMemo(() => currentSegmentFor(song, currentTime), [song, currentTime]);
+  const audioSrc = song?.audio_url ? buildApiAssetUrl(song.audio_url) : "";
 
   const historyItems = useMemo(
-    () => SONGS.map((item, index) => ({ ...item, active: index === songIndex })),
-    [songIndex],
+    () => songs.map((item, index) => ({ ...item, active: index === songIndex, durationLabel: formatClock(durationFor(item)) })),
+    [songs, songIndex],
   );
 
-  function switchSong(nextIndex = (songIndex + 1) % SONGS.length) {
-    const nextSong = SONGS[nextIndex];
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError("");
+    apiJson<RecentResp>("/api/music/listen/recent?limit=50")
+      .then((data) => {
+        if (!alive) return;
+        const items = (Array.isArray(data?.items) ? data.items : [])
+          .filter((item) => String(item?.title || "").trim())
+          .sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""), "zh-Hans"));
+        setSongs(items);
+        setSongIndex(0);
+        setMessages(items[0] ? [{ id: Date.now(), role: "du", text: buildSeedReply(items[0]) }] : []);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setError(`加载失败：${String(e?.message || e || "")}`);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    setCurrentTime(0);
+    setDuration(durationFor(song));
+    setIsPlaying(false);
+    if (audio) {
+      audio.pause();
+      audio.load();
+    }
+  }, [song?.id]);
+
+  function switchSong(nextIndex = songs.length ? (songIndex + 1) % songs.length : 0) {
+    if (!songs.length) return;
+    const nextSong = songs[nextIndex];
     setSongIndex(nextIndex);
     setShowHistory(false);
     setMessages([
       {
         id: Date.now(),
         role: "du",
-        text: nextSong.seedReply,
+        text: buildSeedReply(nextSong),
       },
     ]);
+  }
+
+  async function togglePlay() {
+    const audio = audioRef.current;
+    if (!audio || !audioSrc) return;
+    if (!audio.paused) {
+      audio.pause();
+      setIsPlaying(false);
+      return;
+    }
+    try {
+      await audio.play();
+      setIsPlaying(true);
+    } catch {
+      setIsPlaying(false);
+    }
   }
 
   function sendMessage() {
@@ -100,7 +195,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
       {
         id: now + 1,
         role: "du",
-        text: "嗯，我听见的是同一种感觉：旋律没有急着解释，只是把情绪托住。你可以继续说，我会跟着这首歌慢慢听。",
+        text: buildListenReply(song, currentSegment),
       },
     ]);
     setDraft("");
@@ -119,6 +214,19 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(37,58,85,0.18)_0%,rgba(62,78,108,0.10)_42%,rgba(232,215,225,0.58)_100%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.45),transparent_30%),radial-gradient(circle_at_82%_74%,rgba(255,210,226,0.46),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0))] mix-blend-overlay" />
 
+      {audioSrc ? (
+        <audio
+          ref={audioRef}
+          src={audioSrc}
+          preload="metadata"
+          onLoadedMetadata={(e) => setDuration(asSeconds(e.currentTarget.duration) || durationFor(song))}
+          onTimeUpdate={(e) => setCurrentTime(asSeconds(e.currentTarget.currentTime))}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
+        />
+      ) : null}
+
       <header className="relative z-10 border-b border-white/35 px-6 pb-8 pt-[calc(env(safe-area-inset-top,0px)+18px)]">
         <div className="mb-7 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -131,8 +239,8 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
               <ChevronLeftIcon />
             </button>
             <div className="flex h-8 items-center gap-2 rounded-full border border-white/20 bg-white/18 px-3 text-[12px] font-medium shadow-[0_6px_20px_rgba(255,255,255,0.08)] backdrop-blur-md">
-              <span className="h-2 w-2 rounded-full bg-[#a8ff78] shadow-[0_0_10px_rgba(168,255,120,0.85)]" />
-              <span>渡 准备就绪</span>
+              <span className={`h-2 w-2 rounded-full ${audioSrc ? "bg-[#a8ff78]" : "bg-white/55"} shadow-[0_0_10px_rgba(168,255,120,0.75)]`} />
+              <span>{audioSrc ? "渡 正在听" : "渡 准备就绪"}</span>
             </div>
           </div>
           <button
@@ -146,40 +254,49 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
         </div>
 
         <h1 className="font-['Playfair_Display','Noto_Serif_SC',serif] text-[36px] font-medium leading-tight tracking-normal drop-shadow-sm">
-          {song.title}
+          {loading ? "加载中" : song?.title || "一起听"}
         </h1>
         <p className="mt-3 text-[15px] italic tracking-normal text-white/80">
-          {song.artist} · {song.album}
+          {song?.artist || (error || "还没有可播放的歌")}
         </p>
 
         <div className="mt-8">
           <div className="relative h-[3px] overflow-visible rounded-full bg-white/25">
-            <div className="h-full rounded-full bg-white shadow-[0_0_12px_rgba(255,255,255,0.45)]" style={{ width: `${song.progress}%` }} />
+            <div className="h-full rounded-full bg-white shadow-[0_0_12px_rgba(255,255,255,0.45)]" style={{ width: `${progress}%` }} />
             <div
               className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border border-white/60 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.14)]"
-              style={{ left: `calc(${song.progress}% - 6px)` }}
+              style={{ left: `calc(${progress}% - 6px)` }}
             />
           </div>
           <div className="mt-2 flex justify-between text-[11px] text-white/70">
-            <span>{song.current}</span>
-            <span>{song.duration}</span>
+            <span>{formatClock(currentTime)}</span>
+            <span>{formatClock(songDuration)}</span>
           </div>
         </div>
 
         <div className="mt-6 flex items-center gap-4">
           <button
             type="button"
-            className="flex h-[54px] w-[54px] items-center justify-center rounded-full bg-white text-[#6a9bd1] shadow-[0_10px_30px_rgba(70,108,150,0.25)] transition active:scale-95"
-            aria-label="播放"
+            className="flex h-[54px] w-[54px] items-center justify-center rounded-full bg-white text-[#6a9bd1] shadow-[0_10px_30px_rgba(70,108,150,0.25)] transition active:scale-95 disabled:opacity-45"
+            aria-label={isPlaying ? "暂停" : "播放"}
+            onClick={togglePlay}
+            disabled={!audioSrc}
           >
-            <svg className="ml-1 h-6 w-6" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M8 5.3v13.4a1 1 0 0 0 1.52.85l10.1-6.7a1 1 0 0 0 0-1.7L9.52 4.45A1 1 0 0 0 8 5.3Z" />
-            </svg>
+            {isPlaying ? (
+              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M7 5.5A1.5 1.5 0 0 1 8.5 4h1A1.5 1.5 0 0 1 11 5.5v13A1.5 1.5 0 0 1 9.5 20h-1A1.5 1.5 0 0 1 7 18.5v-13Zm6 0A1.5 1.5 0 0 1 14.5 4h1A1.5 1.5 0 0 1 17 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-1a1.5 1.5 0 0 1-1.5-1.5v-13Z" />
+              </svg>
+            ) : (
+              <svg className="ml-1 h-6 w-6" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M8 5.3v13.4a1 1 0 0 0 1.52.85l10.1-6.7a1 1 0 0 0 0-1.7L9.52 4.45A1 1 0 0 0 8 5.3Z" />
+              </svg>
+            )}
           </button>
           <button
             type="button"
-            className="h-11 rounded-full border border-white/18 bg-white/16 px-5 text-[14px] font-medium text-white shadow-[0_8px_22px_rgba(255,255,255,0.08)] backdrop-blur-md transition active:bg-white/25"
+            className="h-11 rounded-full border border-white/18 bg-white/16 px-5 text-[14px] font-medium text-white shadow-[0_8px_22px_rgba(255,255,255,0.08)] backdrop-blur-md transition active:bg-white/25 disabled:opacity-45"
             onClick={() => switchSong()}
+            disabled={!songs.length}
           >
             切换歌曲
           </button>
@@ -191,7 +308,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           <div className="mb-6 rounded-[24px] border border-white/16 bg-white/14 p-3 backdrop-blur-xl">
             {historyItems.map((item, index) => (
               <button
-                key={item.title}
+                key={item.id || `${item.title}-${item.artist}`}
                 type="button"
                 className={`flex w-full items-center justify-between rounded-[18px] px-3 py-3 text-left transition ${
                   item.active ? "bg-white/20" : "active:bg-white/14"
@@ -202,9 +319,18 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
                   <span className="block truncate text-[14px] font-medium">{item.title}</span>
                   <span className="mt-0.5 block truncate text-[12px] text-white/62">{item.artist}</span>
                 </span>
-                <span className="ml-4 text-[11px] text-white/62">{item.duration}</span>
+                <span className="ml-4 text-[11px] text-white/62">{item.durationLabel}</span>
               </button>
             ))}
+          </div>
+        ) : null}
+
+        {currentSegment ? (
+          <div className="mb-7 border-l-2 border-white/70 pl-4">
+            <div className="text-[12px] font-medium uppercase tracking-[0.16em] text-white/70">
+              {formatClock(asSeconds(currentSegment.start))}-{formatClock(asSeconds(currentSegment.end))} {currentSegment.section || "当前段落"}
+            </div>
+            <p className="mt-2 text-[15px] leading-7 text-white/90">{currentSegment.plain}</p>
           </div>
         ) : null}
 
@@ -248,7 +374,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           <button
             type="submit"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#9ebadc] text-white shadow-[0_4px_12px_rgba(100,129,164,0.28)] transition active:scale-95 disabled:opacity-45"
-            disabled={!draft.trim()}
+            disabled={!draft.trim() || !song}
             aria-label="发送"
           >
             <SendIconMini />

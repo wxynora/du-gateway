@@ -232,6 +232,13 @@ GET  /api/music/listen/recent
 - 已验证：`python3 -m py_compile` 覆盖 `storage/music_melody_store.py`、`services/music_melody_analyzer.py`、`routes/music_melody_api.py`、`scripts/analyze_music_file.py`、`app.py`；Flask `url_map` 确认 `/api/music/listen/*` 和 `/api/music-melody/*` 已注册；`scripts/analyze_music_file.py --help` 正常；`npm -C miniapp run build` 通过并生成 `ListenWithDuScreen` 前端 chunk。
 - 未完成 / 不要碰：界面暂未接真实歌曲选择和真实聊天上下文注入；本轮没有触碰 QQ connector、小爱音箱文件和既有半成品。
 
+当前状态（2026-06-03）：
+- 已完成：一起听分析 prompt 改为按歌曲结构切分（前奏/主歌/副歌/桥段/尾奏等），脚本支持自动读取同名 `.lrc` 和 ffprobe 真实时长；正文时间由 `segments.start/end` 重建，避免模型把秒数和 `mm:ss` 搞混；`Valence/Arousal` 只留在结构字段。
+- 已完成：新增 `storage/music_audio_store.py` 和 `/api/music/listen/audio` 上传/播放接口；音频优先写 R2 `music_listen/audio/<cache_id>.<ext>`，无 R2 时落本地 `data/music_listen_audio`；播放接口支持 Range，MiniApp 手机端可用 `<audio>` 播放并拖动进度。
+- 已完成：`ListenWithDuScreen` 改为拉 `/api/music/listen/recent` 真缓存，展示真实歌单、播放真实 `audio_url`、按 `currentTime` 匹配当前结构段落；当前发送按钮仍是本地上下文假回复，真实渡回复注入还未接。
+- 已验证：`.venv/bin/python -m py_compile` 覆盖 `storage/music_melody_store.py`、`storage/music_audio_store.py`、`routes/music_melody_api.py`、`services/music_melody_analyzer.py`、`scripts/analyze_music_file.py`、`app.py`；`npm -C miniapp run build` 通过并生成 `ListenWithDuScreen-D1NZpgBz.js`。
+- 未完成 / 下次继续：把一起听发送按钮接到真实聊天链路，在请求里临时注入当前歌曲、整体趋势、当前播放段落和结构摘要；不要把一起听分析写入长期记忆。
+
 当前状态（2026-05-12）：
 - 已完成并推送：`d6ca54a Stop log page error toasts` 已到 `main`；日志页不再弹应用内 `日志报错` toast，系统通知继续走后端 `log_error_alert` -> `show_system_notification` -> 安卓壳 `FloatingBallService` 的现有通知栏链路。
 - 已验证：前端 `npm run build` 通过；Android `:app:compileDebugJavaWithJavac` 通过；远端 `main` 已确认到 `d6ca54a128d84d292be33367563c48036ef77a78`。

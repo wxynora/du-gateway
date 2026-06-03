@@ -5,6 +5,7 @@ import argparse
 import base64
 import json
 import mimetypes
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -59,6 +60,53 @@ def _audio_format(path: Path, mime_type: str = "") -> str:
     return suffix if suffix in SUPPORTED_AUDIO_FORMATS else ""
 
 
+def _probe_duration_seconds(path: Path) -> float:
+    try:
+        output = subprocess.check_output(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                str(path),
+            ],
+            text=True,
+            timeout=20,
+        ).strip()
+        return float(output or 0)
+    except Exception:
+        return 0
+
+
+def _guess_lyrics_path(audio_path: Path) -> Optional[Path]:
+    exact = audio_path.with_suffix(".lrc")
+    if exact.exists():
+        return exact
+    prefix = audio_path.stem
+    candidates = sorted(audio_path.parent.glob("*.lrc"))
+    for candidate in candidates:
+        if candidate.stem == prefix:
+            return candidate
+    normalized_prefix = prefix.replace(";", ",").replace("_", "").replace(" ", "")
+    for candidate in candidates:
+        normalized_candidate = candidate.stem.replace(";", ",").replace("_", "").replace(" ", "")
+        if normalized_candidate == normalized_prefix:
+            return candidate
+    return None
+
+
+def _read_text_file(path: Optional[Path]) -> str:
+    if not path:
+        return ""
+    expanded = path.expanduser().resolve()
+    if not expanded.exists():
+        raise RuntimeError(f"歌词文件不存在: {expanded}")
+    return expanded.read_text(encoding="utf-8", errors="replace")
+
+
 def _post_json(url: str, payload: dict, token: str = "", timeout: int = 60) -> dict:
     headers = {"Content-Type": "application/json"}
     if token:
@@ -93,6 +141,8 @@ def _analyze_with_openrouter(
     api_url: str,
     api_key: str,
     mime_type: str = "",
+    lyrics_text: str = "",
+    duration_seconds: float = 0,
 ) -> tuple[dict, dict]:
     if not api_key:
         raise RuntimeError("MUSIC_ANALYSIS_API_KEY 或 OPENROUTER_API_KEY 未配置")
@@ -110,12 +160,21 @@ def _analyze_with_openrouter(
         "model": model,
         "stream": False,
         "temperature": 0.2,
-        "max_tokens": 1800,
+        "max_tokens": 2600,
+        "response_format": {"type": "json_object"},
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": build_music_melody_prompt(title, artist)},
+                    {
+                        "type": "text",
+                        "text": build_music_melody_prompt(
+                            title,
+                            artist,
+                            duration_seconds=duration_seconds,
+                            lyrics_text=lyrics_text,
+                        ),
+                    },
                     {
                         "type": "input_audio",
                         "input_audio": {
@@ -146,6 +205,18 @@ def _analyze_with_openrouter(
     structured, melody_text, overall_trend = parse_music_melody_model_text(content)
     if not melody_text:
         raise RuntimeError("music model result has no display text")
+    max_end = 0.0
+    segments = structured.get("segments") if isinstance(structured, dict) else None
+    if isinstance(segments, list):
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            try:
+                max_end = max(max_end, float(segment.get("end") or 0))
+            except (TypeError, ValueError):
+                continue
+    if duration_seconds and max_end > float(duration_seconds) + 2:
+        raise RuntimeError(f"music model segment end exceeds duration: end={max_end:g}s duration={duration_seconds:g}s")
     result = {
         "title": title,
         "artist": artist,
@@ -175,6 +246,9 @@ def main() -> int:
     parser.add_argument("--api-url", default=MUSIC_ANALYSIS_API_URL, help="OpenRouter chat completions URL")
     parser.add_argument("--api-key", default=MUSIC_ANALYSIS_API_KEY, help="OpenRouter API key")
     parser.add_argument("--mime-type", default="", help="手动指定音频 MIME type")
+    parser.add_argument("--lyrics", type=Path, default=None, help="歌词文件；不传时自动尝试同名 .lrc")
+    parser.add_argument("--no-auto-lyrics", action="store_true", help="不自动读取同名 .lrc")
+    parser.add_argument("--duration-seconds", type=float, default=0, help="手动指定音频总时长；默认用 ffprobe")
     parser.add_argument("--gateway-url", default=MAIN_GATEWAY_BASE_URL, help="网关 base URL")
     parser.add_argument("--gateway-token", default=MAIN_GATEWAY_BEARER_TOKEN, help="网关 Bearer token，可空")
     parser.add_argument("--provider", default=MUSIC_ANALYSIS_PROVIDER, help="缓存 provider 字段")
@@ -194,6 +268,9 @@ def main() -> int:
     model = str(args.model or MUSIC_ANALYSIS_MODEL).strip()
     provider = str(args.provider or MUSIC_ANALYSIS_PROVIDER or "openrouter").strip()
     prompt_version = str(args.prompt_version or MUSIC_PROMPT_VERSION).strip()
+    lyrics_path = args.lyrics or (None if args.no_auto_lyrics else _guess_lyrics_path(audio_path))
+    lyrics_text = _read_text_file(lyrics_path)
+    duration_seconds = float(args.duration_seconds or 0) or _probe_duration_seconds(audio_path)
 
     if gateway_base and not args.no_upload and not args.force:
         from urllib.parse import urlencode
@@ -220,6 +297,8 @@ def main() -> int:
         api_url=str(args.api_url or MUSIC_ANALYSIS_API_URL).strip(),
         api_key=str(args.api_key or "").strip(),
         mime_type=str(args.mime_type or "").strip(),
+        lyrics_text=lyrics_text,
+        duration_seconds=duration_seconds,
     )
     result["provider"] = provider
     result["prompt_version"] = prompt_version
