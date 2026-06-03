@@ -84,14 +84,6 @@ function currentSegmentFor(entry: MusicEntry | undefined, currentTime: number): 
   );
 }
 
-function buildSeedReply(entry?: MusicEntry): string {
-  const firstSegment = segmentsFor(entry)[0];
-  const trend = String(entry?.overall_trend || "").trim();
-  if (firstSegment?.plain) return firstSegment.plain;
-  if (trend) return trend;
-  return "我在这首歌里等你。";
-}
-
 export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => void; backgroundImage?: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const sendSeqRef = useRef(0);
@@ -130,7 +122,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           .sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""), "zh-Hans"));
         setSongs(items);
         setSongIndex(0);
-        setMessages(items[0] ? [{ id: Date.now(), role: "du", text: buildSeedReply(items[0]) }] : []);
+        setMessages([]);
       })
       .catch((e) => {
         if (!alive) return;
@@ -158,17 +150,10 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
   function switchSong(nextIndex = songs.length ? (songIndex + 1) % songs.length : 0) {
     if (!songs.length) return;
     sendSeqRef.current += 1;
-    const nextSong = songs[nextIndex];
     setSongIndex(nextIndex);
     setShowHistory(false);
     setSending(false);
-    setMessages([
-      {
-        id: Date.now(),
-        role: "du",
-        text: buildSeedReply(nextSong),
-      },
-    ]);
+    setMessages([]);
   }
 
   async function togglePlay() {
@@ -361,15 +346,6 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
                 <span className="ml-4 text-[11px] text-white/62">{item.durationLabel}</span>
               </button>
             ))}
-          </div>
-        ) : null}
-
-        {currentSegment ? (
-          <div className="mb-7 border-l-2 border-white/70 pl-4">
-            <div className="text-[12px] font-medium uppercase tracking-[0.16em] text-white/70">
-              {formatClock(asSeconds(currentSegment.start))}-{formatClock(asSeconds(currentSegment.end))} {currentSegment.section || "当前段落"}
-            </div>
-            <p className="mt-2 text-[15px] leading-7 text-white/90">{currentSegment.plain}</p>
           </div>
         ) : null}
 
