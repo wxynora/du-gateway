@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services import wenyou_service as w
+from services.wenyou.settlement_rewards import _apply_reward_category_boosts
 
 
 def _framework() -> dict:
@@ -84,9 +85,9 @@ def main() -> None:
     )
     assert grants and grants[0].get("category") == "fragment", grants
 
-    death_denial = w._ability_definition("death_denial")
-    assert death_denial and int(death_denial.get("cooldown_instances") or 0) == 3, death_denial
-    boosted = dict(w._apply_reward_category_boosts([("material", 1.0)], {"special": 8.0}))
+    core_survival = w._ability_definition("core_survival")
+    assert core_survival and int(core_survival.get("uses_per_instance") or 0) == 1, core_survival
+    boosted = dict(_apply_reward_category_boosts([("material", 1.0)], {"special": 8.0}))
     assert boosted.get("special") == 8.0, boosted
 
     print("wenyou rules smoke ok")

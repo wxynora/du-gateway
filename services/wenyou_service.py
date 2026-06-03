@@ -5049,8 +5049,8 @@ def _normalize_wenyou_card(raw: Any) -> dict:
             {
                 "at": _compact_text(item.get("at"), 40),
                 "instance": _compact_text(item.get("instance"), 120),
-                "xinyue_action": _compact_text(item.get("xinyue_action"), 260),
-                "ai_player_action": _compact_text(item.get("ai_player_action"), 260),
+                "player1_action": _compact_text(item.get("player1_action") or item.get("xinyue_action"), 260),
+                "player2_action": _compact_text(item.get("player2_action") or item.get("ai_player_action"), 260),
                 "gm_result": gm_result,
                 "clues": _list_text(item.get("clues"), 160, 8),
                 "inventory": _list_text(item.get("inventory"), 40, 20),
@@ -5066,6 +5066,7 @@ def _normalize_wenyou_card(raw: Any) -> dict:
         "story_milestones": _list_text(data.get("story_milestones"), 260, 12),
         "open_questions": _list_text(data.get("open_questions"), 180, 8),
         "updated_at": _compact_text(data.get("updated_at"), 40) or now,
+        "updated_by": _compact_text(data.get("updated_by"), 40),
     }
 
 
@@ -5109,7 +5110,7 @@ def _build_wenyou_card_context(card: Any) -> str:
 
 
 def _update_wenyou_card_for_round(user_id: int, session: dict, p1_text: str, p2_text: str, gm_out: str) -> None:
-    """像共读卡片一样维护文游连续性，但只作为文游上下文，不参与召回。"""
+    """复用共读卡片模型配置维护文游连续性；失败时退回本地规则兜底。"""
     try:
         uid = int(user_id)
         old = _normalize_wenyou_card(r2_store.get_wenyou_card(uid))
@@ -5124,6 +5125,23 @@ def _update_wenyou_card_for_round(user_id: int, session: dict, p1_text: str, p2_
             "clues": cur.get("clues") or [],
             "inventory": cur.get("inventory") or [],
         }
+        try:
+            from services.wenyou.card_qwen import build_wenyou_card_update
+
+            next_card, update_error = build_wenyou_card_update(
+                old_card=old,
+                current_instance=cur,
+                round_entry=entry,
+            )
+        except Exception as e:
+            next_card, update_error = None, str(e)
+            logger.warning("文游连续性卡片模型更新失败 user_id=%s error=%s", user_id, e, exc_info=True)
+        if next_card:
+            r2_store.save_wenyou_card(uid, _normalize_wenyou_card(next_card))
+            return
+        if update_error:
+            logger.warning("文游连续性卡片模型未更新，使用本地兜底 user_id=%s error=%s", user_id, update_error)
+
         recent = [entry] + [x for x in (old.get("recent_rounds") or []) if isinstance(x, dict)]
         milestones = list(old.get("story_milestones") or [])
         if gm_brief and any(k in gm_brief for k in ("通关", "副本结束", "主神空间", "获得", "发现", "规则", "线索", "死亡")):
@@ -5143,6 +5161,7 @@ def _update_wenyou_card_for_round(user_id: int, session: dict, p1_text: str, p2_
             "story_milestones": milestones[:12],
             "open_questions": questions[:8],
             "updated_at": now_beijing_iso(),
+            "updated_by": "local_fallback",
         }
         r2_store.save_wenyou_card(uid, _normalize_wenyou_card(card))
     except Exception as e:

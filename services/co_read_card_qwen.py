@@ -121,6 +121,59 @@ def _extract_json_object(text: str) -> Optional[dict]:
     return None
 
 
+def call_card_json_update(
+    *,
+    system_prompt: str,
+    payload: dict,
+    instruction: str,
+    task_name: str = "卡片",
+    temperature: float = 0.2,
+) -> tuple[Optional[dict], str]:
+    """Call the configured card-maintenance model and parse a JSON object."""
+    if not (CO_READ_CARD_API_KEY and CO_READ_CARD_API_URL and CO_READ_CARD_MODEL):
+        return None, "未配置 CO_READ_CARD_API_KEY / CO_READ_CARD_API_URL / CO_READ_CARD_MODEL"
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": instruction + "\n" + json.dumps(payload, ensure_ascii=False),
+        },
+    ]
+    body = {
+        "model": CO_READ_CARD_MODEL,
+        "stream": False,
+        "temperature": temperature,
+        "messages": messages,
+    }
+    headers = {
+        "Authorization": f"Bearer {CO_READ_CARD_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.post(
+            CO_READ_CARD_API_URL,
+            headers=headers,
+            json=body,
+            timeout=max(10, int(CO_READ_CARD_TIMEOUT_SECONDS or 120)),
+        )
+    except Exception as e:
+        logger.warning("%s模型调用失败 error=%s", task_name, e)
+        return None, str(e)
+    if resp.status_code >= 400:
+        logger.warning("%s模型非 2xx status=%s body=%s", task_name, resp.status_code, resp.text[:500])
+        return None, f"status={resp.status_code}"
+    try:
+        data = resp.json()
+    except Exception as e:
+        return None, f"响应不是 JSON: {e}"
+    content = str((((data.get("choices") or [{}])[0].get("message") or {}).get("content")) or "").strip()
+    card = _extract_json_object(content)
+    if not card:
+        logger.warning("%s模型未返回可解析 JSON preview=%s", task_name, content[:500])
+        return None, f"{task_name}模型未返回可解析 JSON"
+    return card, ""
+
+
 def build_co_read_card_update(
     *,
     old_card: dict,
@@ -128,9 +181,6 @@ def build_co_read_card_update(
     section: dict,
     section_text: str,
 ) -> tuple[Optional[dict], str]:
-    if not (CO_READ_CARD_API_KEY and CO_READ_CARD_API_URL and CO_READ_CARD_MODEL):
-        return None, "未配置 CO_READ_CARD_API_KEY / CO_READ_CARD_API_URL / CO_READ_CARD_MODEL"
-
     user_marks = section.get("user_marks") if isinstance(section.get("user_marks"), list) else []
     du_marks = section.get("du_marks") if isinstance(section.get("du_marks"), list) else []
     payload = {
@@ -153,46 +203,15 @@ def build_co_read_card_update(
             "du_section_note": _clip_text(section.get("du_section_note"), 2400),
         },
     }
-    messages = [
-        {"role": "system", "content": CO_READ_CARD_SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": "请根据下面 JSON 更新读书卡片，只返回新版读书卡片 JSON：\n"
-            + json.dumps(payload, ensure_ascii=False),
-        },
-    ]
-    body = {
-        "model": CO_READ_CARD_MODEL,
-        "stream": False,
-        "temperature": 0.2,
-        "messages": messages,
-    }
-    headers = {
-        "Authorization": f"Bearer {CO_READ_CARD_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    try:
-        resp = requests.post(
-            CO_READ_CARD_API_URL,
-            headers=headers,
-            json=body,
-            timeout=max(10, int(CO_READ_CARD_TIMEOUT_SECONDS or 120)),
-        )
-    except Exception as e:
-        logger.warning("共读卡片千问调用失败 error=%s", e)
-        return None, str(e)
-    if resp.status_code >= 400:
-        logger.warning("共读卡片千问非 2xx status=%s body=%s", resp.status_code, resp.text[:500])
-        return None, f"status={resp.status_code}"
-    try:
-        data = resp.json()
-    except Exception as e:
-        return None, f"响应不是 JSON: {e}"
-    content = str((((data.get("choices") or [{}])[0].get("message") or {}).get("content")) or "").strip()
-    card = _extract_json_object(content)
+    card, err = call_card_json_update(
+        system_prompt=CO_READ_CARD_SYSTEM_PROMPT,
+        payload=payload,
+        instruction="请根据下面 JSON 更新读书卡片，只返回新版读书卡片 JSON：",
+        task_name="共读卡片千问",
+        temperature=0.2,
+    )
     if not card:
-        logger.warning("共读卡片千问未返回可解析 JSON preview=%s", content[:500])
-        return None, "千问未返回可解析 JSON"
+        return None, err
     card["book_key"] = str(book.get("book_key") or card.get("book_key") or "")
     card["book_title"] = str(book.get("book_title") or card.get("book_title") or "")
     return card, ""
