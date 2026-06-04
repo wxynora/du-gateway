@@ -489,7 +489,7 @@ export function ListenWithDuScreen({
         />
       ) : null}
 
-      <header className="relative z-10 px-6 pb-8 pt-[calc(env(safe-area-inset-top,0px)+18px)]">
+      <header className="relative z-10 px-6 pb-4 pt-[calc(env(safe-area-inset-top,0px)+18px)]">
         <div className="mb-7 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <button
@@ -545,7 +545,7 @@ export function ListenWithDuScreen({
           </button>
           <button
             type="button"
-            className="flex h-11 w-11 items-center justify-center text-white drop-shadow-[0_3px_10px_rgba(70,90,120,0.24)] transition active:scale-95 disabled:cursor-default"
+            className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.24)] backdrop-blur-[2px] drop-shadow-[0_3px_10px_rgba(70,90,120,0.24)] transition active:scale-95 disabled:cursor-default"
             aria-label={isPlaying ? "暂停" : "播放"}
             onClick={togglePlay}
             disabled={!audioSrc}
