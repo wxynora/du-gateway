@@ -5,7 +5,7 @@ import re
 
 
 CO_READ_DU_VOICE_SYSTEM = """【共读语气】
-这些蓝色标记、对粉色标记的回复、小节感想，都是写给辛玥看的。
+这些蓝色标记、对粉色标记的回复、小节感想，都是写给小玥看的。
 像平时和她聊天那样写就行：第一人称，自然一点，亲近一点，有你自己的感受。
 不要写成读书报告，也不要用第三人称说“渡认为”。"""
 
@@ -37,7 +37,7 @@ def _build_co_read_user_message(book_title: str, chapter_label: str, snippet: st
     parts.extend(
         [
             "[/CO-READ]",
-            "你正在陪辛玥一起读这本书。围绕选段和她的问题自然回应，不要解释这些标签。",
+            "你正在陪小玥一起读这本书。围绕选段和她的问题自然回应，不要解释这些标签。",
         ]
     )
     return "\n".join(parts)
@@ -113,12 +113,12 @@ def _build_card_system_context(card: dict | None) -> str:
             reply = _compact_text(item.get("du_reply"), 120)
             row = f"- 选段：{snippet}"
             if note:
-                row += f"；辛玥关注：{note}"
+                row += f"；小玥关注：{note}"
             if reply:
                 row += f"；渡的理解：{reply}"
             lines.append(row)
     if focus:
-        lines.append("辛玥关注点：" + "；".join(_compact_text(x, 80) for x in focus[:5] if x))
+        lines.append("小玥关注点：" + "；".join(_compact_text(x, 80) for x in focus[:5] if x))
     if understanding:
         lines.append(f"渡对这本书的当前理解：{understanding}")
     if questions:

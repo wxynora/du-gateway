@@ -157,13 +157,14 @@ def _sanitize_co_read_section_for_summary(text: str) -> str:
         elif s.startswith("位置：") and not position:
             position = s
 
-    user_note = _extract_between(block, "辛玥的小节感想：", "") or "无"
+    user_note = _extract_between(block, "小玥的小节感想：", "") or _extract_between(block, "辛玥的小节感想：", "") or "无"
     # 如果 _extract_between 因空 end_marker 取不到，退回手动切尾部。
     if user_note == "无":
-        marker = "辛玥的小节感想："
-        idx = block.find(marker)
-        if idx >= 0:
-            user_note = block[idx + len(marker):].strip() or "无"
+        for marker in ("小玥的小节感想：", "辛玥的小节感想："):
+            idx = block.find(marker)
+            if idx >= 0:
+                user_note = block[idx + len(marker):].strip() or "无"
+                break
 
     lines = ["[CO-READ SECTION 摘要]"]
     if title:
@@ -173,8 +174,8 @@ def _sanitize_co_read_section_for_summary(text: str) -> str:
     lines.extend(
         [
             "本小节原文：（已省略，窗口总结不读取书籍正文）",
-            "辛玥的粉色标记：（已省略原文摘录，窗口总结不读取书籍正文）",
-            "辛玥的小节感想：",
+            "小玥的粉色标记：（已省略原文摘录，窗口总结不读取书籍正文）",
+            "小玥的小节感想：",
             user_note.strip() or "无",
             "[/CO-READ SECTION 摘要]",
         ]
