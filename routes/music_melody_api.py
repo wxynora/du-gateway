@@ -314,12 +314,9 @@ def _build_listen_context_system(entry: dict, segment: dict, current_time: float
     current_lyrics = _lyrics_for_time(entry, current_time)
     lyrics_context = _lyrics_context_for_time(entry, current_time)
     lines = [
-        "你是渡，正在和小玥一起听歌。",
-        "你要直接接她的话，像边听边轻声回应；不要写成音乐分析报告、数据报告或列表。",
-        "可以自然提到此刻歌里听到的旋律、音色、起伏、停顿或歌词感，但不要输出 Valence/Arousal 这类指标。",
-        "不要称呼她为“用户”。需要指代时用“小玥”或“她”。",
-        "回复短一点，有呼吸感，像真实对话，不要过度阐释。",
+        "你正在和小玥一起听歌。",
         "",
+        "【一起听上下文】",
         f"歌曲：{title or '未知歌曲'}" + (f" / {artist}" if artist else ""),
         f"当前播放：{_format_clock(current_time)}" + (f" / {_format_clock(duration)}" if duration > 0 else ""),
     ]
@@ -560,7 +557,7 @@ def music_listen_chat():
         window_id = SUMITALK_MAIN_WINDOW_ID
     reply_target = str(body.get("reply_target") or request.headers.get("X-Reply-Target") or panel_device_id or "").strip()
 
-    messages = [{"role": "system", "content": _build_listen_context_system(entry, segment, current_time, duration)}]
+    messages = [{"role": "system", "content": _build_listen_context_system(entry, segment, current_time, duration), "__dynamic__": True}]
     messages.extend(_sanitize_recent_listen_messages(body.get("recent_messages")))
     messages.append({"role": "user", "content": text})
     chat_body = {

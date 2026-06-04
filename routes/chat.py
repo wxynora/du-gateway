@@ -169,6 +169,34 @@ def _get_window_id_from_request(body: dict) -> str:
     return WINDOW_ID_DEFAULT
 
 
+def _move_dynamic_systems_after_static_prefix(body: dict) -> dict:
+    """Keep cache-stable leading system messages before gateway dynamic system blocks."""
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    messages = list(body.get("messages") or [])
+    prefix = []
+    rest_start = 0
+    for idx, msg in enumerate(messages):
+        if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "system":
+            rest_start = idx
+            break
+        prefix.append(msg)
+    else:
+        rest_start = len(messages)
+    if not prefix:
+        return body
+    static_systems = [msg for msg in prefix if not msg.get("__dynamic__")]
+    dynamic_systems = [msg for msg in prefix if msg.get("__dynamic__")]
+    if not dynamic_systems:
+        return body
+    reordered = static_systems + dynamic_systems + messages[rest_start:]
+    if reordered == messages:
+        return body
+    body = dict(body)
+    body["messages"] = reordered
+    return body
+
+
 def _is_miniapp_request() -> bool:
     return bool((request.headers.get("X-Telegram-Init-Data") or "").strip())
 
@@ -1170,6 +1198,7 @@ def chat_completions():
     if _is_local_claude_oauth_proxy_url(active_upstream_url) and not _skip_claude_thinking_carryover_request():
         body = _inject_previous_claude_thinking_blocks(body, window_id)
     body = step_trim_messages_if_over_limit(body)
+    body = _move_dynamic_systems_after_static_prefix(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
     # Claude OAuth 代理自己会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
