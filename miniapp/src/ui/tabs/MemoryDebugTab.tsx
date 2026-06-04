@@ -233,7 +233,6 @@ export function MemoryDebugTab() {
   const dsAuditEvents = Array.isArray(data?.ds_audit?.events) ? data!.ds_audit!.events! : [];
   const dsActionCounts = data?.ds_audit?.action_counts || {};
   const coreItems = Array.isArray(data?.core_cache?.items) ? data!.core_cache!.items! : [];
-  const maintenance = data?.dynamic_stats?.maintenance_report;
 
   async function runMaintenance() {
     setMaintenanceLoading(true);
@@ -432,29 +431,6 @@ export function MemoryDebugTab() {
                 </div>
               </div>
             </details>
-
-            <div className="space-y-3">
-              <div className="flex items-center justify-between px-1">
-                <h2 className="text-[11px] font-bold uppercase tracking-widest text-gray-400">maintenance</h2>
-                <span className="text-[10px] text-gray-400">{String(maintenance?.timestamp || "(暂无)")}</span>
-              </div>
-              <div className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft">
-                <div className="grid grid-cols-3 text-center">
-                  <div>
-                    <p className="text-[16px] font-bold text-gray-800">{String(maintenance?.backfilled_count ?? 0)}</p>
-                    <p className="text-[10px] font-medium text-gray-400">Backfill</p>
-                  </div>
-                  <div>
-                    <p className="text-[16px] font-bold text-gray-800">{String(maintenance?.pruned_count ?? 0)}</p>
-                    <p className="text-[10px] font-medium text-gray-400">Pruned</p>
-                  </div>
-                  <div>
-                    <p className="text-[16px] font-bold text-gray-800">{String(maintenance?.duplicate_candidate_count ?? 0)}</p>
-                    <p className="text-[10px] font-medium text-gray-400">Duplicate</p>
-                  </div>
-                </div>
-              </div>
-            </div>
 
             <div className="space-y-4">
               <div className="flex items-center justify-between px-1">
