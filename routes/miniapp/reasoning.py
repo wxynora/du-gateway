@@ -21,6 +21,7 @@ _REASONING_TARGETS_DEFAULT = 6
 _REASONING_TEXT_MAX_CHARS = 60000
 _TOOL_ARGUMENTS_MAX_CHARS = 8000
 _TOOL_RESULT_MAX_CHARS = 12000
+_SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
 
 
 def _clip_text(value, max_chars: int) -> str:
@@ -361,7 +362,7 @@ def register_routes(bp) -> None:
             wid = (w.get("id") or "").strip()
             if not wid:
                 continue
-            if wid.startswith("tg_") or wid.startswith("wechat_") or wid.startswith("wx_"):
+            if wid.startswith("tg_") or wid.startswith("wechat_") or wid.startswith("wx_") or wid == _SUMITALK_MAIN_WINDOW_ID:
                 if wid not in target_candidates:
                     target_candidates.append(wid)
         if not target_candidates and recent:
@@ -370,7 +371,7 @@ def register_routes(bp) -> None:
                 target_candidates = [wid0]
 
         primary_wid = _resolve_primary_chat_window_id()
-        if primary_wid and (primary_wid.startswith("tg_") or primary_wid.startswith("wechat_") or primary_wid.startswith("wx_")):
+        if primary_wid and (primary_wid.startswith("tg_") or primary_wid.startswith("wechat_") or primary_wid.startswith("wx_") or primary_wid == _SUMITALK_MAIN_WINDOW_ID):
             if primary_wid in target_candidates:
                 target_candidates.remove(primary_wid)
             target_candidates.insert(0, primary_wid)
