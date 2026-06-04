@@ -22,6 +22,7 @@ from storage.music_melody_store import (
 from config import MUSIC_ANALYSIS_MODEL, MUSIC_ANALYSIS_PROVIDER, MUSIC_PROMPT_VERSION, MUSIC_AUDIO_MAX_BYTES
 
 bp = Blueprint("music_melody_api", __name__)
+SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
 
 
 def _bool_arg(value: object) -> bool:
@@ -500,8 +501,9 @@ def music_listen_chat():
     panel_payload = request.environ.get("miniapp_panel_payload") if isinstance(request.environ.get("miniapp_panel_payload"), dict) else {}
     panel_device_id = str((panel_payload or {}).get("device_id") or "").strip()
     window_id = str(body.get("window_id") or request.headers.get("X-Window-Id") or "").strip()
-    if not window_id:
-        window_id = f"music_listen_{panel_device_id}" if panel_device_id else "music_listen"
+    if not window_id or window_id.startswith("music_listen"):
+        window_id = SUMITALK_MAIN_WINDOW_ID
+    reply_target = str(body.get("reply_target") or request.headers.get("X-Reply-Target") or panel_device_id or "").strip()
 
     messages = [{"role": "system", "content": _build_listen_context_system(entry, segment, current_time, duration)}]
     messages.extend(_sanitize_recent_listen_messages(body.get("recent_messages")))
@@ -517,7 +519,7 @@ def music_listen_chat():
         "User-Agent": request.headers.get("User-Agent") or "SumiTalk Music Listen",
         "X-Force-Last4": str(request.headers.get("X-Force-Last4") or body.get("force_last4") or "1"),
         "X-Reply-Channel": "sumitalk",
-        "X-Reply-Target": "music_listen",
+        "X-Reply-Target": reply_target,
         "X-Window-Id": window_id,
         "X-Skip-Post-Archive-Dynamic-Memory": str(body.get("skip_post_archive_dynamic_memory") or "1"),
     }
