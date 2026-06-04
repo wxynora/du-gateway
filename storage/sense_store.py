@@ -1,6 +1,6 @@
 """R2 storage helpers for device sense snapshots and short-tail history."""
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from utils.log import get_logger
@@ -16,6 +16,9 @@ _SENSE_HISTORY_MIN_INTERVAL_SECONDS = {
     "health": 5 * 60,
     "location": 30 * 60,
 }
+_SLEEP_BLOCK_MIN_MINUTES = 20
+_SLEEP_BLOCK_MERGE_GAP_MINUTES = 180
+_SLEEP_SEGMENT_KEEP = 8
 
 _sense_write_lock = threading.Lock()
 
@@ -57,6 +60,111 @@ def _duration_ms_between(started_at: str, ended_at: str) -> int:
     if not start or not end:
         return 0
     return max(0, int((end - start).total_seconds() * 1000))
+
+
+def _dt(raw: Any) -> Optional[datetime]:
+    return parse_iso_to_beijing(str(raw or "").strip())
+
+
+def _sleep_night_date(start_dt: datetime, end_dt: datetime) -> str:
+    if end_dt.hour < 12:
+        return end_dt.strftime("%Y-%m-%d")
+    if start_dt.hour >= 18:
+        return (start_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    return start_dt.strftime("%Y-%m-%d")
+
+
+def _is_sleep_like_screen_off_block(start_dt: datetime, end_dt: datetime, duration_ms: int) -> bool:
+    minutes = max(0, duration_ms // 60000)
+    if minutes < _SLEEP_BLOCK_MIN_MINUTES:
+        return False
+    if minutes >= 4 * 60:
+        return True
+    return start_dt.hour >= 18 or start_dt.hour < 11 or end_dt.hour < 12
+
+
+def _compact_sleep_segments(items: list, device_id: str) -> list[dict]:
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        start_at = str(item.get("startAt") or "").strip()
+        end_at = str(item.get("endAt") or "").strip()
+        if not start_at or not end_at:
+            continue
+        try:
+            duration_ms = int(item.get("durationMs") or 0)
+        except Exception:
+            duration_ms = 0
+        if duration_ms <= 0:
+            duration_ms = _duration_ms_between(start_at, end_at)
+        if duration_ms <= 0:
+            continue
+        dedupe_key = (start_at, end_at)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        out.append(
+            {
+                "deviceId": str(item.get("deviceId") or device_id or "").strip(),
+                "startAt": start_at,
+                "endAt": end_at,
+                "durationMs": duration_ms,
+                "minutes": max(0, duration_ms // 60000),
+            }
+        )
+    out.sort(key=lambda x: str(x.get("startAt") or ""))
+    return out[-_SLEEP_SEGMENT_KEEP:]
+
+
+def _sleep_summary_from_segments(device_id: str, night_date: str, segments: list[dict]) -> dict:
+    rows = _compact_sleep_segments(segments, device_id)
+    total_ms = sum(max(0, int(item.get("durationMs") or 0)) for item in rows)
+    gap_ms = 0
+    prev_end = None
+    for item in rows:
+        start_dt = _dt(item.get("startAt"))
+        if prev_end and start_dt:
+            gap_ms += max(0, int((start_dt - prev_end).total_seconds() * 1000))
+        prev_end = _dt(item.get("endAt")) or prev_end
+    return {
+        "deviceId": device_id,
+        "nightDate": night_date,
+        "startAt": rows[0].get("startAt") if rows else "",
+        "endAt": rows[-1].get("endAt") if rows else "",
+        "totalDurationMs": total_ms,
+        "totalMinutes": max(0, total_ms // 60000),
+        "awakeGapMs": gap_ms,
+        "awakeGapMinutes": max(0, gap_ms // 60000),
+        "segmentCount": len(rows),
+        "segments": rows,
+    }
+
+
+def _merge_sleep_summary(previous: dict, block: dict) -> dict | None:
+    start_dt = _dt(block.get("startAt"))
+    end_dt = _dt(block.get("endAt"))
+    try:
+        duration_ms = int(block.get("durationMs") or 0)
+    except Exception:
+        duration_ms = 0
+    if not start_dt or not end_dt or duration_ms <= 0:
+        return None
+    if not _is_sleep_like_screen_off_block(start_dt, end_dt, duration_ms):
+        return None
+
+    device_id = str(block.get("deviceId") or previous.get("deviceId") or "").strip()
+    night_date = _sleep_night_date(start_dt, end_dt)
+    current = previous.get("sleepSummary") if isinstance(previous.get("sleepSummary"), dict) else {}
+    segments = []
+    if current.get("nightDate") == night_date:
+        prev_segments = current.get("segments") if isinstance(current.get("segments"), list) else []
+        last_end = _dt((prev_segments[-1] if prev_segments else {}).get("endAt"))
+        if not last_end or (start_dt - last_end).total_seconds() / 60.0 <= _SLEEP_BLOCK_MERGE_GAP_MINUTES:
+            segments = list(prev_segments)
+    segments.append(block)
+    return _sleep_summary_from_segments(device_id, night_date, segments)
 
 
 def _screen_event_time(data: dict, fallback: str = "") -> str:
@@ -114,12 +222,17 @@ def _prepare_screen_bucket_snapshot(previous: dict, patch: dict) -> dict:
         prev_since = str(prev.get("screenOffSince") or "").strip()
         if prev_state == "off" and prev_since:
             duration_ms = _duration_ms_between(prev_since, event_at)
-            merged["lastSleepBlock"] = {
+            block = {
+                "deviceId": str(merged.get("deviceId") or prev.get("deviceId") or "").strip(),
                 "startAt": prev_since,
                 "endAt": event_at,
                 "durationMs": duration_ms,
                 "minutes": max(0, duration_ms // 60000),
             }
+            merged["lastSleepBlock"] = block
+            summary = _merge_sleep_summary(prev, block)
+            if summary:
+                merged["sleepSummary"] = summary
             merged["lastScreenOffAt"] = prev_since
         merged["lastScreenOnAt"] = event_at
         merged["screenOffSince"] = ""

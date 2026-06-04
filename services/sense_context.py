@@ -144,6 +144,41 @@ def _format_sleep_guess_line(screen: dict) -> str | None:
     return f"她可能睡着了：手机已连续熄屏 {duration}，期间没有明显手机操作。"
 
 
+def _format_last_sleep_summary_line(screen: dict) -> str | None:
+    summary = screen.get("sleepSummary")
+    if not isinstance(summary, dict):
+        return None
+    try:
+        total_minutes = int(summary.get("totalMinutes") or 0)
+    except Exception:
+        total_minutes = 0
+    if total_minutes < _SLEEP_GUESS_MIN_SCREEN_OFF_MINUTES:
+        return None
+    start_dt = parse_iso_to_beijing(str(summary.get("startAt") or "").strip())
+    end_dt = parse_iso_to_beijing(str(summary.get("endAt") or "").strip())
+    now_dt = parse_iso_to_beijing(now_beijing_iso())
+    if end_dt and now_dt and (now_dt - end_dt).total_seconds() > 24 * 3600:
+        return None
+    duration = _format_duration_minutes(total_minutes)
+    try:
+        segment_count = int(summary.get("segmentCount") or 0)
+    except Exception:
+        segment_count = 0
+    try:
+        awake_gap_minutes = int(summary.get("awakeGapMinutes") or 0)
+    except Exception:
+        awake_gap_minutes = 0
+    time_range = ""
+    if start_dt and end_dt:
+        time_range = f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')} "
+    parts = [f"最近睡眠推断：{time_range}累计熄屏睡眠 {duration}"]
+    if segment_count > 1:
+        parts.append(f"分 {segment_count} 段")
+    if awake_gap_minutes > 0:
+        parts.append(f"中间醒着约 {_format_duration_minutes(awake_gap_minutes)}")
+    return "，".join(parts) + "。"
+
+
 def _format_screen_line(screen: dict) -> str | None:
     event = str(screen.get("event") or "").strip().lower()
     if not event:
@@ -292,10 +327,11 @@ def format_sense_snapshot_for_system() -> str:
     health_line = _format_health_line(health)
     screen_line = _format_screen_line(screen)
     sleep_guess_line = _format_sleep_guess_line(screen)
+    sleep_summary_line = None if sleep_guess_line else _format_last_sleep_summary_line(screen)
     foreground_line = _format_foreground_line(foreground)
     app_sessions_line = _format_app_sessions_line(app_sessions)
     usage_line = _format_usage_line(usage)
-    if not has_battery and not loc_line and not health_line and not screen_line and not sleep_guess_line and not foreground_line and not app_sessions_line and not usage_line:
+    if not has_battery and not loc_line and not health_line and not screen_line and not sleep_guess_line and not sleep_summary_line and not foreground_line and not app_sessions_line and not usage_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -313,6 +349,8 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(health_line)
     if sleep_guess_line:
         lines.append(sleep_guess_line)
+    elif sleep_summary_line:
+        lines.append(sleep_summary_line)
     elif screen_line:
         lines.append(screen_line)
     if foreground_line:

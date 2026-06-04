@@ -38,7 +38,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 唤醒/续话 | `services/conversation_followup.py` | 事件唤醒、弹窗回执、查岗回应、延迟续话 |
 | 设备工具 | `services/device_action_tools.py` | 弹窗、截图、系统闹钟等工具执行和卡片 |
 | 论坛 MCP 工具 | `services/mcp_forum_tools.py`、`services/forum_mcp_client.py` | 论坛高层工具、`cli/get_guide` 映射、外部 SSE MCP 调用 |
-| 设备状态注入 | `services/sense_context.py` | 电量、亮屏、前台 app、位置等 sense 注入 |
+| 设备状态注入 | `storage/sense_store.py`、`services/sense_context.py` | 电量、亮屏、前台 app、位置、睡眠分段累计等 sense 存储与注入 |
 | 主动触发规则 | `services/proactive_trigger_engine.py` | 睡眠、亮屏、使用时长等硬触发 |
 | Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送，图片与 md/txt 文档附件处理 |
 | 小爱音箱 / MiGPT Next / mijiaAPI | `routes/xiaoai_api.py`、`routes/miniapp/xiaoai.py`、`storage/xiaoai_store.py`、`services/xiaoai_audio_store.py`、`services/gateway_tools.py`、`services/entry_style_prompt.py`、`scripts/test_xiaoai_mijia.py`、`miniapp/src/ui/tabs/XiaoAISettingsTab.tsx`、`connectors/xiaoai_migpt/`、`docs/小爱音箱-MiGPT-Next-接入渡方案.md` | 小爱专用 `/api/xiaoai/message` 入口、`xiaoai_speak` 外放工具、`xiaoai_run_command` mijiaAPI 家居控制工具、`mijia_lamp_get/set` 台灯结构化工具、台灯实测脚本、播放队列、强制 `<voice>` 风格、MiniMax 音频 URL 临时托管、App 工具页、Mac Docker MiGPT runner、接入方案 |
@@ -1419,3 +1419,8 @@ npm -C miniapp run android
 - 已完成：`services/telegram_bot.py` 将 TG worker 调网关等待时间从 180 秒提高到 300 秒，避免渡做测试题、长文档题目或较长推理时被 TG 侧提前判定失败。
 - 已完成：`routes/chat.py` 的非流式上游转发不再写死 120 秒，改用 `config.py::STREAM_TIMEOUT_SECONDS`，与流式请求一致，默认 300 秒。`scripts/start_gateway_prod.sh` 将 gunicorn 默认 `GATEWAY_TIMEOUT` 从 240 秒提高到 360 秒，给 5 分钟上游请求留出外层余量。
 - 已验证：`.venv/bin/python -m py_compile services/telegram_bot.py routes/chat.py` 通过；`rg` 确认主 chat 流式/非流式均使用 `STREAM_TIMEOUT_SECONDS=300`，TG worker 使用 `TELEGRAM_GATEWAY_CHAT_TIMEOUT_SECONDS=300`，gunicorn 默认 360 秒。
+
+当前状态（2026-06-04 睡眠分段累计）：
+- 已完成：`storage/sense_store.py` 在屏幕从熄屏转亮屏/解锁时继续保留 `lastSleepBlock`，并新增 `sleepSummary`；同一夜多个睡眠段会按最大 3 小时醒来间隔合并，累计 `totalMinutes`、`awakeGapMinutes`、`segmentCount` 和最近分段，避免 20:00-01:00、02:00-04:30 这类分段睡眠只算最后一段。
+- 已完成：`services/proactive_trigger_engine.py` 的亮屏/醒来触发读取 `sleepSummary.totalMinutes`，没有累计摘要时才回退到单段 `lastSleepBlock` 或上一条熄屏事件；`services/sense_context.py` 在最近 24 小时内把累计睡眠摘要注入给渡参考。
+- 已验证：`.venv/bin/python -m py_compile storage/sense_store.py services/proactive_trigger_engine.py services/sense_context.py` 通过；本地 smoke 覆盖 20:00-01:00 + 02:00-04:30，确认 `sleepSummary.totalMinutes=450`、`segmentCount=2`、`awakeGapMinutes=60`。

@@ -203,7 +203,28 @@ def _latest_screen_on(events: list[dict]) -> dict | None:
     return None
 
 
+def _sleep_summary_minutes(on_data: dict | None, on_at: datetime) -> int:
+    summary = (on_data or {}).get("sleepSummary")
+    if not isinstance(summary, dict):
+        return 0
+    end_at = _dt(summary.get("endAt"))
+    if end_at and abs((on_at - end_at).total_seconds()) > 10 * 60:
+        return 0
+    try:
+        total_ms = int(summary.get("totalDurationMs") or 0)
+    except Exception:
+        total_ms = 0
+    if total_ms > 0:
+        return max(0, int(total_ms // 60000))
+    try:
+        return max(0, int(summary.get("totalMinutes") or 0))
+    except Exception:
+        return 0
+
+
 def _screen_off_minutes(prev_off: dict | None, on_at: datetime, on_data: dict | None = None) -> int:
+    summary_minutes = _sleep_summary_minutes(on_data, on_at)
+    block_minutes = 0
     if not prev_off:
         block = (on_data or {}).get("lastSleepBlock")
         if isinstance(block, dict):
@@ -212,20 +233,24 @@ def _screen_off_minutes(prev_off: dict | None, on_at: datetime, on_data: dict | 
             except Exception:
                 duration_ms = 0
             if duration_ms > 0:
-                return max(0, int(duration_ms // 60000))
+                block_minutes = max(0, int(duration_ms // 60000))
+                return max(block_minutes, summary_minutes)
             start_at = _dt(block.get("startAt"))
             end_at = _dt(block.get("endAt")) or on_at
-            return _minutes_between(start_at, end_at)
-        return 0
+            block_minutes = _minutes_between(start_at, end_at)
+            return max(block_minutes, summary_minutes)
+        return summary_minutes
     data = prev_off.get("data") if isinstance(prev_off.get("data"), dict) else {}
     try:
         duration_ms = int(data.get("screenOffDurationMs") or 0)
     except Exception:
         duration_ms = 0
     if duration_ms > 0:
-        return max(0, int(duration_ms // 60000))
+        block_minutes = max(0, int(duration_ms // 60000))
+        return max(block_minutes, summary_minutes)
     off_at = _dt(data.get("screenOffSince") or data.get("occurredAt") or prev_off.get("at"))
-    return _minutes_between(off_at, on_at)
+    block_minutes = _minutes_between(off_at, on_at)
+    return max(block_minutes, summary_minutes)
 
 
 def _message_text(content: Any) -> str:
