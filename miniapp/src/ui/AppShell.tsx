@@ -107,6 +107,7 @@ export function AppShell({
   const [showPixelHome, setShowPixelHome] = useState(false);
   const [showCoRead, setShowCoRead] = useState(false);
   const [showListenWithDu, setShowListenWithDu] = useState(false);
+  const [listenWithDuMounted, setListenWithDuMounted] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
@@ -498,7 +499,10 @@ export function AppShell({
             <PageCardRow
               icon={<HeartIconMini />}
               label="和渡一起听"
-              onClick={() => setShowListenWithDu(true)}
+              onClick={() => {
+                setListenWithDuMounted(true);
+                setShowListenWithDu(true);
+              }}
             />
             <PageCardRow
               icon={<BookOpenIcon />}
@@ -780,10 +784,11 @@ export function AppShell({
         <LazyPane><PixelHomeTab /></LazyPane>
       ) : null}
       {showCoRead ? <LazyPane><CoReadScreen onBack={() => setShowCoRead(false)} windowId={sharedChatWindowId} /></LazyPane> : null}
-      {showListenWithDu ? (
+      {listenWithDuMounted ? (
         <LazyPane>
           <ListenWithDuScreen
             onBack={() => setShowListenWithDu(false)}
+            isActive={showListenWithDu}
             backgroundImage={listenBackgroundImage}
             myAvatarImage={myAvatarImage}
             duAvatarImage={duAvatarImage}

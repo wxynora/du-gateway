@@ -237,17 +237,20 @@ export function ListenWithDuScreen({
   backgroundImage,
   myAvatarImage,
   duAvatarImage,
+  isActive = true,
 }: {
   onBack: () => void;
   backgroundImage?: string;
   myAvatarImage?: string;
   duAvatarImage?: string;
+  isActive?: boolean;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lyricViewportRef = useRef<HTMLDivElement | null>(null);
   const lyricRowRefs = useRef<(HTMLDivElement | null)[]>([]);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const sendSeqRef = useRef(0);
+  const playAfterSwitchRef = useRef(false);
   const [songs, setSongs] = useState<MusicEntry[]>([]);
   const [songIndex, setSongIndex] = useState(0);
   const [messages, setMessages] = useState<ListenMessage[]>([]);
@@ -262,6 +265,7 @@ export function ListenWithDuScreen({
   const [keyboardOffset, setKeyboardOffset] = useState(0);
 
   useEffect(() => {
+    if (!isActive) return;
     const body = document.body;
     const html = document.documentElement;
     const previousBodyOverflow = body.style.overflow;
@@ -280,9 +284,13 @@ export function ListenWithDuScreen({
       html.style.overflow = previousHtmlOverflow;
       html.style.overscrollBehavior = previousHtmlOverscroll;
     };
-  }, []);
+  }, [isActive]);
 
   useEffect(() => {
+    if (!isActive) {
+      setKeyboardOffset(0);
+      return;
+    }
     const viewport = window.visualViewport;
     if (!viewport) return;
 
@@ -301,7 +309,7 @@ export function ListenWithDuScreen({
       viewport.removeEventListener("scroll", updateKeyboardOffset);
       window.removeEventListener("resize", updateKeyboardOffset);
     };
-  }, []);
+  }, [isActive]);
 
   const song = songs[songIndex];
   const songDuration = duration || durationFor(song);
@@ -347,14 +355,25 @@ export function ListenWithDuScreen({
 
   useEffect(() => {
     const audio = audioRef.current;
+    const shouldPlay = playAfterSwitchRef.current;
+    playAfterSwitchRef.current = false;
     setCurrentTime(0);
     setDuration(durationFor(song));
-    setIsPlaying(false);
     if (audio) {
       audio.pause();
       audio.load();
+      if (shouldPlay && audioSrc) {
+        void audio
+          .play()
+          .then(() => setIsPlaying(true))
+          .catch(() => setIsPlaying(false));
+      } else {
+        setIsPlaying(false);
+      }
+    } else {
+      setIsPlaying(false);
     }
-  }, [song?.id]);
+  }, [audioSrc, song?.id]);
 
   useLayoutEffect(() => {
     if (!lyricLines.length) return;
@@ -390,6 +409,28 @@ export function ListenWithDuScreen({
   function switchPreviousSong() {
     if (!songs.length) return;
     switchSong((songIndex - 1 + songs.length) % songs.length);
+  }
+
+  function handleAudioEnded() {
+    if (!songs.length) {
+      setIsPlaying(false);
+      return;
+    }
+    if (songs.length === 1) {
+      const audio = audioRef.current;
+      if (!audio || !audioSrc) {
+        setIsPlaying(false);
+        return;
+      }
+      audio.currentTime = 0;
+      void audio
+        .play()
+        .then(() => setIsPlaying(true))
+        .catch(() => setIsPlaying(false));
+      return;
+    }
+    playAfterSwitchRef.current = true;
+    switchSong((songIndex + 1) % songs.length);
   }
 
   async function togglePlay() {
@@ -464,7 +505,12 @@ export function ListenWithDuScreen({
   }
 
   return (
-    <div className="fixed inset-0 z-30 flex h-[100lvh] min-h-screen w-full flex-col overflow-hidden overscroll-none bg-transparent text-white">
+    <div
+      className={`fixed inset-0 z-30 flex h-[100lvh] min-h-screen w-full flex-col overflow-hidden overscroll-none bg-transparent text-white transition-opacity duration-150 ${
+        isActive ? "opacity-100" : "pointer-events-none invisible opacity-0"
+      }`}
+      aria-hidden={!isActive}
+    >
       {backgroundImage ? (
         <div
           className="fixed inset-0 bg-cover bg-center"
@@ -485,7 +531,7 @@ export function ListenWithDuScreen({
           onTimeUpdate={(e) => setCurrentTime(asSeconds(e.currentTarget.currentTime))}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
+          onEnded={handleAudioEnded}
         />
       ) : null}
 
