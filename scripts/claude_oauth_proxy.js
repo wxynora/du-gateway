@@ -28,7 +28,7 @@ const CLAUDE_OAUTH_KEYCHAIN_SERVICE =
   process.env.CLAUDE_OAUTH_KEYCHAIN_SERVICE || "Claude Code-credentials";
 const REFRESH_SKEW_MS = Math.max(
   60,
-  parseInt(process.env.CLAUDE_REFRESH_SKEW_SECONDS || "300", 10)
+  parseInt(process.env.CLAUDE_REFRESH_SKEW_SECONDS || "60", 10)
 ) * 1000;
 const CLAUDE_PROMPT_CACHE_TTL = String(process.env.CLAUDE_PROMPT_CACHE_TTL || "1h").trim();
 const TARGET_HOST = "api.anthropic.com";

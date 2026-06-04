@@ -86,34 +86,39 @@ def _sanitize_oauth_status(data) -> dict | None:
     return out or None
 
 
-def _oauth_status_for_item(it: dict, label: str) -> dict | None:
+def _oauth_status_for_item(it: dict, label: str) -> tuple[dict | None, str]:
     parsed = _parsed_url(str(it.get("url") or ""))
     if not parsed or not parsed.scheme or not parsed.netloc:
-        return None
+        return None, "url_invalid"
     headers: dict[str, str] = {}
     key = _oauth_status_key(label)
     if key:
         headers["X-OAuth-Sync-Key"] = key
+    else:
+        return None, "sync_key_missing"
     base = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
     try:
         resp = requests.get(f"{base}/internal/oauth-status", headers=headers, timeout=1.0)
         if not (200 <= resp.status_code < 300):
-            return None
-        return _sanitize_oauth_status(resp.json() if resp.content else {})
+            return None, f"http_{resp.status_code}"
+        status = _sanitize_oauth_status(resp.json() if resp.content else {})
+        return status, "" if status else "status_empty"
     except Exception as e:
         logger.debug("oauth status unavailable label=%s url=%s err=%s", label, base, e)
-        return None
+        return None, "request_failed"
 
 
 def _public_upstream_item(it: dict) -> dict:
     item = {"name": it.get("name") or "", "url": it.get("url") or ""}
     if _is_local_oauth_url(item["url"]):
         label = _oauth_label_for_item(it)
-        status = _oauth_status_for_item(it, label)
+        status, status_error = _oauth_status_for_item(it, label)
         item["category"] = "oauth"
         item["oauth_label"] = label
         if status:
             item["oauth_status"] = status
+        elif status_error:
+            item["oauth_status_error"] = status_error
     else:
         item["category"] = "openai"
     return item

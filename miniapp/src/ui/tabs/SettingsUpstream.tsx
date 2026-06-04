@@ -16,6 +16,7 @@ type UpstreamItem = {
   category?: NodeCategory | string;
   oauth_label?: string;
   oauth_status?: OAuthStatus;
+  oauth_status_error?: string;
 };
 type UpstreamsResp = { active: number; model?: string; claude_thinking_effort?: string; claude_thinking_efforts?: string[]; items: UpstreamItem[] };
 type ProbeItem = {
@@ -127,11 +128,23 @@ function formatExpiresIn(value?: number | string): string {
   return `剩余 ${mins}分钟`;
 }
 
+function oauthStatusErrorText(value?: string): string {
+  const error = String(value || "").trim();
+  if (!error) return "过期时间未返回";
+  if (error === "sync_key_missing") return "状态密钥未配置";
+  if (error === "request_failed") return "状态查询失败";
+  if (error === "status_empty") return "状态为空";
+  if (error === "url_invalid") return "地址无效";
+  const httpMatch = error.match(/^http_(\d+)$/);
+  if (httpMatch) return `状态查询 ${httpMatch[1]}`;
+  return "过期时间未返回";
+}
+
 function oauthExpiryLine(item: UpstreamItem): string {
   const status = item.oauth_status;
   const label = oauthLabelForItem(item);
   if (!status?.expiresAt && !status?.expiresInSeconds) {
-    return label === "Claude Code" ? "过期时间未取到" : "";
+    return label === "Claude Code" ? oauthStatusErrorText(item.oauth_status_error) : "";
   }
   const parts: string[] = [];
   const expiresAt = formatExpiryDate(status.expiresAt);
