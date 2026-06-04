@@ -134,7 +134,7 @@ function currentLyricIndex(lines: LyricLine[], currentTime: number): number {
   return current;
 }
 
-const LYRIC_VIEWPORT_HEIGHT = 192;
+const LYRIC_VIEWPORT_HEIGHT = 168;
 
 function QueueIcon() {
   return (
@@ -415,7 +415,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           </div>
         </div>
 
-        <div className="mt-6 flex items-center justify-center gap-5">
+        <div className="mt-6 flex items-center justify-center gap-9">
           <button
             type="button"
             className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white shadow-[0_8px_22px_rgba(255,255,255,0.06)] backdrop-blur-md transition active:scale-95 active:bg-white/20 disabled:opacity-45"
@@ -437,7 +437,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
                 <path d="M7 5.5A1.5 1.5 0 0 1 8.5 4h1A1.5 1.5 0 0 1 11 5.5v13A1.5 1.5 0 0 1 9.5 20h-1A1.5 1.5 0 0 1 7 18.5v-13Zm6 0A1.5 1.5 0 0 1 14.5 4h1A1.5 1.5 0 0 1 17 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-1a1.5 1.5 0 0 1-1.5-1.5v-13Z" />
               </svg>
             ) : (
-              <svg className="ml-1 h-6 w-6" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M8 5.3v13.4a1 1 0 0 0 1.52.85l10.1-6.7a1 1 0 0 0 0-1.7L9.52 4.45A1 1 0 0 0 8 5.3Z" />
               </svg>
             )}
@@ -483,11 +483,11 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
         </>
       ) : null}
 
-      <section className="relative z-10 shrink-0 px-6 pt-6">
+      <section className="relative z-10 shrink-0 px-6 pt-1">
         {lyricLines.length ? (
           <div
             ref={lyricViewportRef}
-            className="relative h-[192px] overflow-hidden text-center"
+            className="relative h-[168px] overflow-hidden text-center"
             style={{
               WebkitMaskImage: "linear-gradient(180deg, transparent 0%, #000 20%, #000 80%, transparent 100%)",
               maskImage: "linear-gradient(180deg, transparent 0%, #000 20%, #000 80%, transparent 100%)",
@@ -590,7 +590,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           />
           <button
             type="submit"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/20 text-white shadow-[0_4px_12px_rgba(70,90,120,0.18)] backdrop-blur-md transition active:scale-95 disabled:opacity-45"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#9ebadc] shadow-[0_4px_12px_rgba(70,90,120,0.18)] transition active:scale-95 disabled:opacity-45"
             disabled={sending || !draft.trim() || !song}
             aria-label="发送"
           >
