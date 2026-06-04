@@ -545,17 +545,17 @@ export function ListenWithDuScreen({
           </button>
           <button
             type="button"
-            className="flex h-10 w-10 items-center justify-center text-white drop-shadow-[0_3px_10px_rgba(70,90,120,0.22)] transition active:scale-95 disabled:cursor-default"
+            className="flex h-11 w-11 items-center justify-center text-white drop-shadow-[0_3px_10px_rgba(70,90,120,0.24)] transition active:scale-95 disabled:cursor-default"
             aria-label={isPlaying ? "暂停" : "播放"}
             onClick={togglePlay}
             disabled={!audioSrc}
           >
             {isPlaying ? (
-              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <svg className="h-[22px] w-[22px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M7 5.5A1.5 1.5 0 0 1 8.5 4h1A1.5 1.5 0 0 1 11 5.5v13A1.5 1.5 0 0 1 9.5 20h-1A1.5 1.5 0 0 1 7 18.5v-13Zm6 0A1.5 1.5 0 0 1 14.5 4h1A1.5 1.5 0 0 1 17 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-1a1.5 1.5 0 0 1-1.5-1.5v-13Z" />
               </svg>
             ) : (
-              <svg className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <svg className="h-[22px] w-[22px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M8 5.3v13.4a1 1 0 0 0 1.52.85l10.1-6.7a1 1 0 0 0 0-1.7L9.52 4.45A1 1 0 0 0 8 5.3Z" />
               </svg>
             )}
