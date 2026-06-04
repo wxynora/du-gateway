@@ -216,6 +216,13 @@ WEBSEARCH_FETCH_ENABLED = os.environ.get("WEBSEARCH_FETCH_ENABLED", "1").strip()
 WEBSEARCH_FETCH_TOP_K = int(os.environ.get("WEBSEARCH_FETCH_TOP_K", "2"))
 WEBSEARCH_MAX_PAGE_CHARS = int(os.environ.get("WEBSEARCH_MAX_PAGE_CHARS", "12000"))
 
+# Du Surf：和 web_search 区分开的随机冲浪素材工具。
+# 不用于精确查资料；只抽话题、轻搜摘要、清洗成可聊卡片。
+DU_SURF_ENABLED = os.environ.get("DU_SURF_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+DU_SURF_TIMEOUT_SECONDS = int(os.environ.get("DU_SURF_TIMEOUT_SECONDS", "8"))
+DU_SURF_MAX_CARDS = int(os.environ.get("DU_SURF_MAX_CARDS", "3"))
+DU_SURF_CACHE_TTL_SECONDS = int(os.environ.get("DU_SURF_CACHE_TTL_SECONDS", "300"))
+
 # 高德 Web 服务 Key（逆地理：经纬度→地址）；不配则只存经纬度、注入时只显示坐标
 AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "").strip()
 # 高德官方 MCP Server；留空时用 AMAP_API_KEY 自动拼官方 Streamable HTTP 地址。

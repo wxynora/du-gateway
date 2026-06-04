@@ -6,6 +6,7 @@ import subprocess
 from typing import Any, List
 
 from config import (
+    DU_SURF_ENABLED,
     MIJIA_API_AUTH_PATH,
     MIJIA_API_COMMAND,
     MIJIA_API_QUIET,
@@ -21,6 +22,7 @@ logger = get_logger(__name__)
 
 SYNC_TOOL_NAMES = ("sync_core_cache_to_notion", "sync_core_cache_from_notion")
 XIAOAI_TOOL_NAMES = ("xiaoai_speak", "xiaoai_run_command", "mijia_lamp_get", "mijia_lamp_set")
+DU_SURF_TOOL_NAMES = ("du_surf",)
 
 # 提醒文案：老婆问「明确的指令是什么」或「我该怎么说」时，渡可直接用这句回复
 SYNC_REMINDER_FOR_WIFE = (
@@ -162,9 +164,63 @@ def get_gateway_xiaoai_tools() -> List[dict]:
     ]
 
 
+def get_gateway_du_surf_tools() -> List[dict]:
+    """返回随机冲浪素材工具定义，和 web_search 精确搜索区分开。"""
+    if not DU_SURF_ENABLED:
+        return []
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "du_surf",
+                "description": (
+                    "随机冲浪工具：从固定兴趣池或用户给的话题里抽一个话题，轻量搜索公开网页摘要，"
+                    "返回 1-5 张可聊素材卡片。它不是 web_search，不用于精确事实核验；"
+                    "只有想找点有意思的东西、冷场开话题、模拟随便上网冲浪时才调用。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {
+                            "type": "string",
+                            "description": "可选：指定一个想冲浪的话题；不传则按兴趣池和当前时间段随机抽。",
+                        },
+                        "groups": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "可选兴趣组。可用：ai_relationship, ai_tools, switch, humor, digital, cooking。"
+                                "不传则按权重混合抽取。"
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "返回卡片数，默认 3，范围 1-5。",
+                        },
+                        "force_refresh": {
+                            "type": "boolean",
+                            "description": "可选：忽略短缓存重新抽/搜；通常不要传。",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+        }
+    ]
+
+
+def execute_du_surf_tool(name: str, arguments: dict) -> str:
+    """执行随机冲浪素材工具，返回给渡的 JSON 字符串。"""
+    if name not in DU_SURF_TOOL_NAMES:
+        return json.dumps({"ok": False, "error": "UNKNOWN_TOOL"}, ensure_ascii=False)
+    from services.du_surf import execute_du_surf
+
+    return execute_du_surf(arguments if isinstance(arguments, dict) else {})
+
+
 def get_gateway_tools_for_inject() -> List[dict]:
     """返回不依赖 Notion 开关的网关工具。"""
-    return get_gateway_xiaoai_tools()
+    return [*get_gateway_xiaoai_tools(), *get_gateway_du_surf_tools()]
 
 
 _VOICE_TAG_RE = re.compile(r"</?voice>", flags=re.IGNORECASE)

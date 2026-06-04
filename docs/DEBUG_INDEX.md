@@ -38,11 +38,18 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 唤醒/续话 | `services/conversation_followup.py` | 事件唤醒、弹窗回执、查岗回应、延迟续话 |
 | 设备工具 | `services/device_action_tools.py` | 弹窗、截图、系统闹钟等工具执行和卡片 |
 | 论坛 MCP 工具 | `services/mcp_forum_tools.py`、`services/forum_mcp_client.py` | 论坛高层工具、`cli/get_guide` 映射、外部 SSE MCP 调用 |
+| 随机冲浪工具 | `services/du_surf.py`、`services/gateway_tools.py`、`services/notion_tools.py` | `du_surf` 网关工具，按兴趣池/时间段抽话题，复用 Tavily 轻搜摘要，清洗成可聊卡片；不作为 `web_search` 精确事实查询 |
 | 设备状态注入 | `storage/sense_store.py`、`services/sense_context.py` | 电量、亮屏、前台 app、位置、睡眠分段累计等 sense 存储与注入 |
 | 主动触发规则 | `services/proactive_trigger_engine.py` | 睡眠、亮屏、使用时长等硬触发 |
 | Telegram Bot | `routes/telegram_webhook.py`、`services/telegram_update_queue.py`、`scripts/run_telegram_webhook_worker.py`、`services/telegram_bot.py` | Webhook 入队、持久队列、独立 worker 消费、TG 风格 system/上下文/发送，图片与 md/txt 文档附件处理 |
 | 小爱音箱 / MiGPT Next / mijiaAPI | `routes/xiaoai_api.py`、`routes/miniapp/xiaoai.py`、`storage/xiaoai_store.py`、`services/xiaoai_audio_store.py`、`services/gateway_tools.py`、`services/entry_style_prompt.py`、`scripts/test_xiaoai_mijia.py`、`miniapp/src/ui/tabs/XiaoAISettingsTab.tsx`、`connectors/xiaoai_migpt/`、`docs/小爱音箱-MiGPT-Next-接入渡方案.md` | 小爱专用 `/api/xiaoai/message` 入口、`xiaoai_speak` 外放工具、`xiaoai_run_command` mijiaAPI 家居控制工具、`mijia_lamp_get/set` 台灯结构化工具、台灯实测脚本、播放队列、强制 `<voice>` 风格、MiniMax 音频 URL 临时托管、App 工具页、Mac Docker MiGPT runner、接入方案 |
 | Claude OAuth proxy | `scripts/claude_oauth_proxy.js` | 自用 Claude 反代、thinking/cache/tool 格式转换 |
+
+当前状态（2026-06-04 du_surf 随机冲浪工具）：
+- 已完成：新增 `services/du_surf.py` 和 `du_surf` 网关常驻工具；工具独立于 `web_search/read_url`，用于“随机话题抽取 + 轻量搜索 + 可聊卡片”的上网冲浪体验，不用于精确事实核验。
+- 已完成：兴趣组为 `ai_relationship`、`ai_tools`、`switch`、`humor`、`digital`、`cooking`；默认按北京时间时间段加权随机抽 topic，也支持显式传 `topic`，输出 `topic/query/group/time_period/cards/skipped/usage_note`。
+- 已完成：配置项为 `DU_SURF_ENABLED`、`DU_SURF_TIMEOUT_SECONDS`、`DU_SURF_MAX_CARDS`、`DU_SURF_CACHE_TTL_SECONDS`；缺 `TAVILY_API_KEY` 时返回 `TAVILY_API_KEY_MISSING`，不会假装有内容。
+- 已验证：`.venv/bin/python -m py_compile config.py services/du_surf.py services/gateway_tools.py services/notion_tools.py pipeline/pipeline.py routes/chat.py` 通过；离线 monkeypatch smoke 覆盖缺 key、正常卡片、硬噪音过滤、网关注入和 `execute_tool("du_surf")` 分发。
 
 ## 主动唤醒入口风格抖动
 
