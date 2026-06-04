@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from flask import current_app, jsonify, request
+from flask import Response, current_app, jsonify, request, stream_with_context
 
 from config import WENYOU_SESSION_ID
 from storage import r2_store, upstream_store
@@ -15,6 +15,11 @@ def _wenyou_session_id() -> int:
 
 def _missing_wenyou_session_response():
     return jsonify({"ok": False, "error": "未配置 WENYOU_SESSION_ID"}), 400
+
+
+def _wenyou_sse_event(event: str, data: dict[str, Any]) -> str:
+    payload = json.dumps(data if isinstance(data, dict) else {}, ensure_ascii=False, default=str)
+    return f"event: {event}\ndata: {payload}\n\n"
 
 
 def _extract_chat_completion_result(result) -> tuple[int, dict[str, Any]]:
@@ -662,6 +667,19 @@ def register_routes(bp) -> None:
         failed = out.startswith("文游：当前没有") or out.startswith("文游：GM 调用失败") or out.startswith("文游：当前处于")
         return jsonify({"ok": not failed, "text": out, **get_session_view(uid)}), (400 if failed else 200)
 
+    @bp.route("/wenyou/debug/gm-context", methods=["GET"])
+    def miniapp_wenyou_debug_gm_context():
+        """文游：预览下一轮 GM 会收到的压缩上下文。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        from services.wenyou_service import build_gm_context_preview
+
+        preview = build_gm_context_preview(uid)
+        if not preview:
+            return jsonify({"ok": False, "error": "当前没有进行中的文游存档"}), 400
+        return jsonify({"ok": True, **preview})
+
     @bp.route("/wenyou/item/use", methods=["POST"])
     def miniapp_wenyou_use_item():
         """文游：使用背包道具，系统判定效果/消耗后交给 GM 叙事。"""
@@ -806,6 +824,89 @@ def register_routes(bp) -> None:
             message=str(data.get("message") or ""),
         )
         return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
+
+    @bp.route("/wenyou/mcp/tools", methods=["GET"])
+    def miniapp_wenyou_mcp_tools():
+        """文游：外部 AI 玩家后端可读取的工具清单和只读上下文。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        actor_id = str(request.args.get("actor_id") or "player2").strip()
+        from services.wenyou_service import get_player_tool_context, get_player_tool_schemas
+
+        context = get_player_tool_context(uid, actor_id=actor_id)
+        if not context:
+            return jsonify({"ok": False, "error": "当前没有进行中的文游存档"}), 400
+        return jsonify(
+            {
+                "ok": True,
+                "protocol": "wenyou-ai-player-tools-v1",
+                "transport": ["http-json", "sse-init"],
+                "actor_id": actor_id,
+                "tools": get_player_tool_schemas(),
+                "context": context,
+                "tool_call_url": "/miniapp-api/wenyou/mcp/tool-call",
+                "sse_url": "/miniapp-api/wenyou/mcp/sse",
+            }
+        )
+
+    @bp.route("/wenyou/mcp/tool-call", methods=["POST"])
+    def miniapp_wenyou_mcp_tool_call():
+        """文游：外部 AI 玩家后端执行状态修改工具。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name") or data.get("tool") or data.get("tool_name") or "").strip()
+        arguments = data.get("arguments") if isinstance(data.get("arguments"), dict) else {}
+        if not name:
+            return jsonify({"ok": False, "error": "缺少工具名 name"}), 400
+        from services.wenyou_service import execute_player_tool
+
+        raw = execute_player_tool(uid, name, arguments)
+        try:
+            result = json.loads(raw) if raw else {}
+        except Exception:
+            result = {"ok": False, "error_code": "BAD_TOOL_RESULT", "message": raw}
+        ok = bool(result.get("ok")) if isinstance(result, dict) else False
+        return jsonify({"ok": ok, "protocol": "wenyou-ai-player-tools-v1", "tool": name, "result": result}), (200 if ok else 400)
+
+    @bp.route("/wenyou/mcp/sse", methods=["GET"])
+    def miniapp_wenyou_mcp_sse():
+        """文游：SSE 初始化流，发送工具清单和 AI 玩家只读上下文。"""
+        uid = _wenyou_session_id()
+        if uid == 0:
+            return _missing_wenyou_session_response()
+        actor_id = str(request.args.get("actor_id") or "player2").strip()
+        from services.wenyou_service import get_player_tool_context, get_player_tool_schemas
+
+        context = get_player_tool_context(uid, actor_id=actor_id)
+        if not context:
+            return jsonify({"ok": False, "error": "当前没有进行中的文游存档"}), 400
+
+        @stream_with_context
+        def _events():
+            yield _wenyou_sse_event(
+                "hello",
+                {
+                    "ok": True,
+                    "protocol": "wenyou-ai-player-tools-v1",
+                    "actor_id": actor_id,
+                    "tool_call_url": "/miniapp-api/wenyou/mcp/tool-call",
+                },
+            )
+            yield _wenyou_sse_event("tools", {"tools": get_player_tool_schemas()})
+            yield _wenyou_sse_event("context", context)
+            yield _wenyou_sse_event("done", {"ok": True})
+
+        return Response(
+            _events(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @bp.route("/wenyou/encounter/action", methods=["POST"])
     def miniapp_wenyou_encounter_action():

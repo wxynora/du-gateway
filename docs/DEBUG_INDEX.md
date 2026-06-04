@@ -952,6 +952,13 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py` 通过；`import services.wenyou_service / routes.miniapp.wenyou / app` 通过；mock 烟测覆盖 AI 玩家上下文、`player2` 用独立积分买商店、抽卡不扣 `player1`、转交积分给 `player1`、使用 `player2` 背包里的精神药剂并写入 `player2` ledger；`git diff --check -- services/wenyou_service.py routes/miniapp/wenyou.py` 通过。
 - 未完成 / 不要碰：这次只对齐后端账户、工具和上下文；没有改文游前端 UI 去展示 AI 玩家消费明细/双背包切换，也没有把真实模型工具调用 loop 接成自动买卖抽卡执行器。用户新加的 `docs/wenyou/ai_player_integration.md` 等文档保持原样，不擅自纳入提交范围；非文游脏文件和旧静态 hash 产物继续不碰。
 
+当前状态（2026-06-04 文游 GM 上下文压缩接入）：
+- 已完成：文游连续性卡片不再只是回合后维护；`services.wenyou.gm_context.compose_gm_context(...)` 现在会把 runtime public/rules state、当前任务/地点/线索/规则/玩家状态、对讲机信号、惩罚副本状态、文游连续性卡片和最近少量 history 组装为 `[WENYOU_GM_CONTEXT]`，`services.wenyou_service._build_gm_messages(...)` 会在每轮最新玩家行动前把该块塞给 GM。空卡片不触发 history 缩窗；有卡片时只保留最近 8 条原始 history，无卡片时保留最近 14 条。旧的未引用 `_build_wenyou_card_context` 已移除。
+- 已完成：新增只读调试接口 `GET /miniapp-api/wenyou/debug/gm-context`，用于查看下一轮 GM 会收到的压缩上下文、卡片更新时间、history 总数和实际 GM message 角色列表；`docs/wenyou/backend_contracts.md`、`docs/wenyou/runtime_state.md` 已同步真实入口。
+- 已完成：新增外部 AI 玩家工具桥：`GET /miniapp-api/wenyou/mcp/tools` 返回工具 schema 与只读上下文，`POST /miniapp-api/wenyou/mcp/tool-call` 执行 `buy_item/roll_gacha/inventory_action/use_item/transfer`，`GET /miniapp-api/wenyou/mcp/sse` 以 SSE 初始化流发送 hello/tools/context/done；仍由 Rules Engine 写 `state_patch/ledger`，不自动推进回合。
+- 已验证：`.venv/bin/python -m py_compile services/wenyou/gm_context.py services/wenyou_service.py routes/miniapp/wenyou.py app.py scripts/wenyou_rules_smoke.py` 通过；`.venv/bin/python scripts/wenyou_rules_smoke.py` 通过，覆盖 Boss 不可硬杀、削弱/封印、强制惩罚队列、NPC 惩罚契约、暴露计数、无怪物生态兜底怪物与逃跑 patch；本地 monkeypatch 烟测覆盖有卡片/无卡片两种 `_build_gm_messages` 窗口行为；`import app` 确认 `/debug/gm-context` 与 `/mcp/*` 路由存在；工具 manifest/未知工具 smoke 通过；`git diff --check` 通过。
+- 未完成 / 不要碰：这次不改前端 UI、不改存档数据、不把文游卡片混入普通聊天动态召回；卡片更新仍在 GM 返回后同步执行，后续若模型慢再单独改后台队列。
+
 当前状态（2026-05-22 文游装备栏移除）：
 - 已完成：按用户决定删除默认装备养成链路，背包物品统一走“使用 / 出售 / 转交”；后端移除穿戴、维修、锻造、拆解入口和装备加成计算，`/wenyou/item/equip`、`/wenyou/item/repair` 不再注册；AI 玩家 `inventory_action` 只保留 `use/sell`；内容表 `item_type` 收敛为 `consumable/tool/material/special`，奖励表 `gear` 分类改为 `tool_item`；前端个人空间背包不再显示装备/维修动作，角色面板不再展示装备摘要；相关 wenyou 文档和本索引已同步到无装备栏版本。
 - 已验证：`.venv/bin/python -m py_compile services/wenyou_service.py routes/miniapp/wenyou.py app.py services/notion_tools.py routes/chat.py` 通过；`import app / services.wenyou_service / routes.miniapp.wenyou` 通过；mock 烟测覆盖装备/维修路由不存在、出售路由存在、工具道具按背包使用扣耐久、不写入 `equipment/gear`、AI 工具 schema 无 `slot`；`npm --prefix miniapp run build` 通过；`git diff --check` 针对本轮文游文件通过。

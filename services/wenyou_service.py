@@ -78,6 +78,7 @@ from services.wenyou.candidate_prompts import (
 )
 from services.wenyou.deepseek_client import _load_templates, call_wenyou_deepseek
 from services.wenyou.gm_context import (
+    compose_gm_context,
     _format_blueprint_for_gm,
     _format_forced_instance_guidance_for_gm,
     _format_tasker_regiment_for_gm,
@@ -5070,43 +5071,10 @@ def _normalize_wenyou_card(raw: Any) -> dict:
     }
 
 
-def _build_wenyou_card_context(card: Any) -> str:
-    clean = _normalize_wenyou_card(card)
-    cur = clean.get("current_instance") if isinstance(clean.get("current_instance"), dict) else {}
-    recent = clean.get("recent_rounds") or []
-    milestones = clean.get("story_milestones") or []
-    questions = clean.get("open_questions") or []
-    if not cur and not recent and not milestones and not questions:
-        return ""
-    lines = [
-        "【文游连续性卡片】",
-        "以下只记录 App 文游/无限流跑团的虚构游戏进度；不是现实经历，不参与动态召回，只供 AI 玩家本轮行动参考。",
-    ]
-    if cur:
-        inv = "、".join(cur.get("inventory") or []) or "无"
-        clues = "；".join(cur.get("clues") or []) or "无"
-        lines.extend(
-            [
-                f"- 当前副本：{cur.get('instance') or '未知'}｜{cur.get('genre') or '未知'}｜难度 {cur.get('difficulty') or '-'}｜阶段：{cur.get('phase') or '副本'}",
-                f"- 当前任务：{cur.get('task') or '暂无'}",
-                f"- 玩家一状态：{cur.get('player1') or '未知'}",
-                f"- 玩家二状态：{cur.get('player2') or '未知'}",
-                f"- 背包：{inv}",
-                f"- 已知备忘：{clues}",
-            ]
-        )
-    if recent:
-        lines.append("最近文游回合：")
-        for item in recent[:4]:
-            lines.append(
-                f"- {item.get('instance') or '当前副本'}：玩家一行动「{item.get('player1_action') or item.get('xinyue_action') or '无'}」；"
-                f"玩家二行动「{item.get('player2_action') or item.get('ai_player_action') or '无'}」；GM 结算「{item.get('gm_result') or '无'}」"
-            )
-    if milestones:
-        lines.append("长期剧情节点：" + "；".join(milestones[:6]))
-    if questions:
-        lines.append("待验证问题：" + "；".join(questions[:6]))
-    return "\n".join(lines)
+def _wenyou_card_has_context(card: Any) -> bool:
+    data = card if isinstance(card, dict) else {}
+    cur = data.get("current_instance") if isinstance(data.get("current_instance"), dict) else {}
+    return bool(cur or data.get("recent_rounds") or data.get("story_milestones") or data.get("open_questions"))
 
 
 def _update_wenyou_card_for_round(user_id: int, session: dict, p1_text: str, p2_text: str, gm_out: str) -> None:
@@ -6772,10 +6740,33 @@ def cmd_encounter_action_with_ai_player(
     return f"【遭遇结算】{result_text}\n\n{out}", ai_player_action
 
 
-def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
+def _build_gm_messages(
+    session: dict,
+    *,
+    user_id: Optional[int] = None,
+    current_round: Optional[dict] = None,
+) -> tuple[str, list[dict]]:
     """把 session 转成 GM API：system 文本 + 多轮 messages（仅 user/assistant 角色给模型）。"""
     _session_ensure_stats(session)
     fw = _framework_for_runtime(session.get("framework") or {})
+    runtime_state = _runtime_state_view(session)
+    public_state = runtime_state.get("public_state") if isinstance(runtime_state.get("public_state"), dict) else {}
+    rules_state = runtime_state.get("rules_state") if isinstance(runtime_state.get("rules_state"), dict) else {}
+    wenyou_card = None
+    if user_id is not None:
+        try:
+            wenyou_card = _normalize_wenyou_card(r2_store.get_wenyou_card(int(user_id)))
+        except Exception as e:
+            logger.warning("读取文游连续性卡片失败 user_id=%s error=%s", user_id, e, exc_info=True)
+            wenyou_card = None
+    gm_context = compose_gm_context(
+        session,
+        wenyou_card=wenyou_card,
+        public_state=public_state,
+        rules_state=rules_state,
+        current_round=current_round,
+        history_limit=6,
+    )
     system = _GM_SYSTEM_TEMPLATE.format(
         instance_line=_framework_instance_line(fw),
         instance_genre=_normalize_instance_genre(fw.get("instance_genre")),
@@ -6796,9 +6787,12 @@ def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
         current_stats_block=_format_stats_for_gm_prompt(session),
     )
     msgs: list[dict] = []
+    if gm_context:
+        msgs.append({"role": "user", "content": gm_context})
     player1_name = _session_player_display_name(session, "player1", "玩家一")
     player2_name = _session_player_display_name(session, "player2", "玩家二")
-    for h in session.get("history") or []:
+    history_limit = 8 if _wenyou_card_has_context(wenyou_card) else 14
+    for h in (session.get("history") or [])[-history_limit:]:
         role = (h.get("role") or "").lower()
         content = (h.get("content") or "").strip()
         if not content:
@@ -6809,6 +6803,44 @@ def _build_gm_messages(session: dict) -> tuple[str, list[dict]]:
             who = player1_name if role == "player1" else player2_name
             msgs.append({"role": "user", "content": f"{who}：{content}"})
     return system, msgs
+
+
+def build_gm_context_preview(user_id: int) -> Optional[dict]:
+    """Debug helper: show the compact GM context that will be prepended next turn."""
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not session.get("gameId"):
+        return None
+    _session_ensure_stats(session)
+    pr = session.get("pending_round") if isinstance(session.get("pending_round"), dict) else {}
+    p1 = "\n".join(str(x).strip() for x in (pr.get("player1_lines") or []) if str(x).strip())
+    p2 = "\n".join(str(x).strip() for x in (pr.get("player2_lines") or []) if str(x).strip())
+    runtime_state = _runtime_state_view(session)
+    card = _normalize_wenyou_card(r2_store.get_wenyou_card(uid))
+    context = compose_gm_context(
+        session,
+        wenyou_card=card,
+        public_state=runtime_state.get("public_state") if isinstance(runtime_state.get("public_state"), dict) else {},
+        rules_state=runtime_state.get("rules_state") if isinstance(runtime_state.get("rules_state"), dict) else {},
+        current_round={"player1": p1, "player2": p2},
+        history_limit=6,
+    )
+    _system, msgs = _build_gm_messages(
+        session,
+        user_id=uid,
+        current_round={"player1": p1, "player2": p2},
+    )
+    return {
+        "gameId": str(session.get("gameId") or ""),
+        "phase": _session_phase(session),
+        "context": context,
+        "context_chars": len(context),
+        "card_updated_at": str(card.get("updated_at") or ""),
+        "card_recent_rounds": len(card.get("recent_rounds") or []),
+        "history_total": len(session.get("history") or []),
+        "gm_message_count_before_current_turn": len(msgs),
+        "gm_message_roles_before_current_turn": [str(x.get("role") or "") for x in msgs],
+    }
 
 
 def cmd_go(user_id: int) -> str:
@@ -6834,7 +6866,11 @@ def cmd_go(user_id: int) -> str:
 
     user_blob = f"{player1_name}本轮行动：\n{p1_text}\n\n{player2_name}本轮行动：\n{p2_text}\n"
 
-    system, gm_msgs = _build_gm_messages(session)
+    system, gm_msgs = _build_gm_messages(
+        session,
+        user_id=uid,
+        current_round={"player1": p1_text, "player2": p2_text},
+    )
     # 追加本轮结算 user 消息（作为对 GM 的输入）
     gm_msgs = gm_msgs + [{"role": "user", "content": f"请根据以下本轮行动结算并推进剧情（给出 GM 叙述与选项）：\n{user_blob}"}]
 

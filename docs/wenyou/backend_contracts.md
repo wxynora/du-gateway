@@ -107,7 +107,9 @@ settle_instance(state, result) -> archive
 - 所有数值变化都写入 `event_log`，方便回放和 debug。
 - GM 输出不能直接覆盖 `hp/san/points/level/rank`。
 - 任务、线索、位置、NPC、怪物、威胁时钟和背包都从 runtime state 派生；GM 不能每轮重写这些面板。
-- GM 每轮输入由 `compose_gm_context` 从 runtime state 裁剪生成，不发送全量隐藏状态和全量内容表。
+- GM 每轮输入由 `services.wenyou.gm_context.compose_gm_context(...)` 从 runtime state + 文游连续性卡片裁剪生成，不发送全量隐藏状态和全量内容表。
+- 当前实现会在 GM messages 开头追加 `[WENYOU_GM_CONTEXT]` 压缩块，随后只保留最近少量原始 history；每回合结束后再复用共读总结模型更新文游连续性卡片。
+- 调试预览接口：`GET /miniapp-api/wenyou/debug/gm-context`，返回下一轮 GM 会收到的压缩上下文、卡片更新时间和消息数量。
 - 最小实现必须支持 `public_state/gm_state/rules_state/state_patch`；更复杂的数据库表、索引和缓存策略可以后续替换。
 - 结算评级只读取当前玩家角色/玩家队伍的主线、普通支线、隐藏支线、隐藏结局、特殊成就和损耗记录，不按“线索数量”或 NPC 自身结局单独评分。
 - NPC 任务者不参与玩家评级；只有 NPC 相关目标被写入当前玩家的支线、隐藏支线、隐藏结局或特殊成就时，才影响该玩家结算。
@@ -186,6 +188,7 @@ schemas/ability.schema.json
 | runtime state 三层缓存 | `runtime_state.md` | 已接：`public_state/gm_state/rules_state` 随 session 生成和 state patch 更新，前端面板读结构化 view | `_runtime_state_view`、`_apply_public_state_updates`、`_apply_rules_state_updates`、`get_session_view` |
 | 自由文本行动归类 | `runtime_state.md` | 已接：固定 `action_type`，系统操作/道具/遭遇动作不交给 GM 自判 | `classify_wenyou_action_text`、`cmd_record_action` |
 | AI 玩家行动接入 | `ai_player_integration.md` | 已接：后端只接受外部 AI 玩家已经决定好的 `ai_player_action`，不再由 GM/DS 代生成玩家行动 | `compose_ai_player_context`、`cmd_action_with_ai_player`、`cmd_use_item_with_ai_player`、`cmd_encounter_action_with_ai_player` |
+| 外部 AI 工具桥 | `ai_player_integration.md` | 已接：HTTP JSON + SSE 初始化流暴露 AI 玩家工具 schema、只读上下文和工具执行入口，方便外部 LLM 后端/MCP 风格客户端接入 | `/miniapp-api/wenyou/mcp/tools`、`/mcp/tool-call`、`/mcp/sse`、`get_player_tool_schemas`、`execute_player_tool` |
 | 战斗/逃跑/怪物 | `monster_system.md` | 已接：怪物实例、逃跑/规避、攻击、削弱、封印、Boss 默认不可硬杀与 reward tag | `_ensure_monster_instances`、`_resolve_encounter_action`、`cmd_encounter_action_with_ai_player` |
 | 属性加点和派生面板 | `numeric_growth.md` | 已接：六属性、软上限、当前精神力、升级经验、新手属性点和前端成长入口 | `allocate_attribute_points`、`_grant_player_exp`、`_growth_view` |
 | 阶位晋升 | `numeric_growth.md` | 已接：晋升条件、扣积分和封印重扫；晋升不再额外发属性点 | `promote_player_rank`、`_unlock_items_for_player_progress` |

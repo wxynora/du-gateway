@@ -612,5 +612,8 @@ archive_instance(runtime_state, settlement_result) -> archive
 
 - 读写同一份 runtime state。
 - 面板数据来自 `get_public_view`。
-- GM context 来自 `compose_gm_context`。
+- GM context 来自 `services.wenyou.gm_context.compose_gm_context(...)`。
+- 实际运行链路：`services.wenyou_service._build_gm_messages(...)` 读取当前 session、runtime_state 和 `r2_store.get_wenyou_card(user_id)`，在最新本轮行动前插入 `[WENYOU_GM_CONTEXT]` 压缩块。
+- 文游连续性卡片在每轮 GM 完成后由 `services.wenyou.card_qwen.build_wenyou_card_update(...)` 复用共读总结模型更新；如果模型失败，则使用本地兜底摘要。
+- 调试预览接口：`GET /miniapp-api/wenyou/debug/gm-context`。
 - 所有变更通过 patch。

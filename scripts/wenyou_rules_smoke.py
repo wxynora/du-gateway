@@ -73,6 +73,29 @@ def main() -> None:
     assert forced.get("success") is True, forced
     assert session2["forced_instance"]["resolved"] is True
 
+    debt_wallet = {"points": 0, "debts": 3200, "forced_instance_queue": []}
+    session_forced = w._new_session(_framework())
+    changed = w._refresh_forced_instance_queue(debt_wallet, session_forced)
+    assert changed is True, debt_wallet
+    queue = debt_wallet.get("forced_instance_queue") or []
+    assert queue and queue[0].get("id") == "debt_clearance" and queue[0].get("locked") is True, queue
+    forced_candidate = w._forced_candidate_from_queue(queue[0])
+    assert forced_candidate.get("forced") is True and "NPC" in forced_candidate.get("core_task", ""), forced_candidate
+    w._attach_forced_instance_contract(session_forced, forced_candidate)
+    assert session_forced["forced_instance"]["mode"] == "npc_labor", session_forced.get("forced_instance")
+    assert "forced_notice" in session_forced["runtime_state"]["public_state"], session_forced["runtime_state"]["public_state"]
+    w._bump_forced_instance_exposure(session_forced, "taskers", 1, "烟测暴露")
+    assert int(session_forced["forced_instance"].get("exposure_to_taskers") or 0) == 1, session_forced["forced_instance"]
+
+    session_fallback = w._new_session({**_framework(), "encounter_profile": {}})
+    fallback_monsters = w._ensure_monster_instances(session_fallback)
+    assert fallback_monsters and fallback_monsters[0]["id"] == "ambient_threat", fallback_monsters
+    ok, text, patch = w._resolve_encounter_action(session_fallback, "flee", detail="观察路线后从楼梯撤离")
+    assert ok, text
+    assert patch.get("source") == "rules_engine.encounter", patch
+    assert "roll_log" in (patch.get("changes") or {}), patch
+    assert session_fallback["runtime_state"]["public_state"].get("visible_monsters"), session_fallback["runtime_state"]["public_state"]
+
     session3 = w._new_session(_framework())
     unique = w._unique_item_for_proposal(
         {"type": "acquire_unique_item", "visibility": "public", "id": "mirror_blessing", "name": "镜中祝福", "rarity": "B", "effect": "隐藏结局纪念物", "seal_rank": "B"},
