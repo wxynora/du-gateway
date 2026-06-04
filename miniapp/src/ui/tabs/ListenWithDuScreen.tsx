@@ -354,7 +354,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
             if (message.role === "user") {
               return (
                 <div key={message.id} className="flex justify-end">
-                  <div className="max-w-[78%] rounded-[20px_20px_4px_20px] border border-white/16 bg-white/18 px-5 py-3 text-[15px] leading-relaxed text-white shadow-[0_8px_24px_rgba(255,255,255,0.08)] backdrop-blur-md">
+                  <div className="max-w-[78%] rounded-[20px_20px_4px_20px] border border-white/16 bg-white/18 px-5 py-3 text-[14px] leading-relaxed text-white shadow-[0_8px_24px_rgba(255,255,255,0.08)] backdrop-blur-md">
                     {message.text}
                   </div>
                 </div>
@@ -363,7 +363,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
             return (
               <div key={message.id} className="max-w-[86%] pt-3 text-left">
                 <div className="mb-4 h-[2px] w-6 rounded-full bg-white/80" />
-                <p className={`text-[17px] leading-[1.65] tracking-normal text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.14)] ${message.pending ? "animate-pulse text-white/70" : ""}`}>
+                <p className={`text-[15px] leading-[1.65] tracking-normal text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.14)] ${message.pending ? "animate-pulse text-white/70" : ""}`}>
                   {message.text}
                 </p>
               </div>
@@ -383,7 +383,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            className="min-w-0 flex-1 bg-transparent text-[15px] text-[#4b5563] outline-none placeholder:text-[#9ca3af]"
+            className="min-w-0 flex-1 bg-transparent text-[14px] text-[#4b5563] outline-none placeholder:text-[#9ca3af]"
             placeholder={sending ? "渡在听..." : "聊聊你的感受..."}
             disabled={sending}
           />
