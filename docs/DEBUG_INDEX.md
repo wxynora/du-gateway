@@ -48,8 +48,9 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 当前状态（2026-06-04 du_surf 随机冲浪工具）：
 - 已完成：新增 `services/du_surf.py` 和 `du_surf` 网关常驻工具；工具独立于 `web_search/read_url`，用于“随机话题抽取 + 轻量搜索 + 可聊卡片”的上网冲浪体验，不用于精确事实核验。
 - 已完成：兴趣组为 `ai_relationship`、`ai_tools`、`switch`、`humor`、`digital`、`cooking`；默认按北京时间时间段加权随机抽 topic，也支持显式传 `topic`，输出 `topic/query/group/time_period/cards/skipped/usage_note`。
+- 已完成：随机唤醒决策文案已把“上网冲浪找点可聊话题”列为可选动作；渡可以先调用 `du_surf` 看卡片，再决定 `send_message/no_contact/diary/other`，如果只是自己冲浪不打扰则填 `other` 或 `no_contact`。
 - 已完成：配置项为 `DU_SURF_ENABLED`、`DU_SURF_TIMEOUT_SECONDS`、`DU_SURF_MAX_CARDS`、`DU_SURF_CACHE_TTL_SECONDS`；缺 `TAVILY_API_KEY` 时返回 `TAVILY_API_KEY_MISSING`，不会假装有内容。
-- 已验证：`.venv/bin/python -m py_compile config.py services/du_surf.py services/gateway_tools.py services/notion_tools.py pipeline/pipeline.py routes/chat.py` 通过；离线 monkeypatch smoke 覆盖缺 key、正常卡片、硬噪音过滤、网关注入和 `execute_tool("du_surf")` 分发。
+- 已验证：`.venv/bin/python -m py_compile config.py services/du_surf.py services/gateway_tools.py services/notion_tools.py services/telegram_proactive.py pipeline/pipeline.py routes/chat.py` 通过；离线 monkeypatch smoke 覆盖缺 key、正常卡片、硬噪音过滤、网关注入和 `execute_tool("du_surf")` 分发。
 
 ## 主动唤醒入口风格抖动
 
@@ -569,11 +570,12 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 普通聊天归档后才会触发后续总结/动态层。
 - 内部维护请求和部分 followup 请求可能跳过归档。
 - `X-Force-Last4` 会强制带最近 4 轮。
-- 动态层 DS 现在优先要求固定标签格式（`ACTION:` / `CONTENT:` 等），旧 JSON 只作为兼容解析；`new/merge` 的 `content` 如果太短、像半句话或标题词，会重试一次，仍不完整则 skip，不写入 R2。
+- 动态层 DS 现在优先要求固定标签格式（`ACTION:` / `CONTENT:` 等），旧 JSON 只作为兼容解析；`new/merge` 的 `content` 如果太短、像半句话、标题词、没闭合引号或停在“然后/但是/——”这类没说完的位置，会最多重写 5 次，最后仍只是明显尾巴残缺时会做保守尾巴修复，确保落库的是完整句子。
 
-当前状态（2026-05-15）：
-- 已完成：`services/dynamic_layer_ds.py` 单轮/批量解析都兼容固定标签格式，`scripts/archive_ds_prompt.txt` 已从 JSON 数组改成每轮固定标签块；残缺便签会被质量门槛拦住。
-- 已验证：`.venv/bin/python -m py_compile services/dynamic_layer_ds.py scripts/test_dynamic_layer_ds_parser.py`、`.venv/bin/python scripts/test_dynamic_layer_ds_parser.py`。
+当前状态（2026-06-04 动态层残缺便签重写与审计）：
+- 已完成：`services/dynamic_layer_ds.py` 单轮、批量和归档批处理都会对 `new/merge` 内容做完整性校验；实时单轮最多重写 5 次，最后仍只是“然后/——”这类尾巴残缺时会保守修成完整句子；归档批处理若 5 次和尾巴修复后仍有残缺则抛错不写断点，下一次从本批重跑。
+- 已完成：新增 R2 `dynamic_memory/ds_audit.json` 审计，MiniApp「记忆调试 -> 动态记忆」可直接查看最近 DS 写入的 `new/merge/skip` 计数、重试次数、失败原因和最终 content。
+- 已验证：`.venv/bin/python -m py_compile services/dynamic_layer_ds.py storage/r2_store.py routes/miniapp/memory_panel.py pipeline/pipeline.py scripts/test_dynamic_layer_ds_parser.py`、`.venv/bin/python scripts/test_dynamic_layer_ds_parser.py`、`npm -C miniapp run build`、`import app` 和相关 `git diff --check` 通过。
 - 未完成 / 下次先查：历史 R2 里已经写进去的残缺动态记忆不会自动清理；如果要修旧数据，先走 MiniApp memory debug 或维护脚本，别直接手删 R2。
 
 ## 核心 Prompt / 风格规则 / 禁言模式

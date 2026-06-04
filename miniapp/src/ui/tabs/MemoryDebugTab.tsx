@@ -66,6 +66,36 @@ type RecallEvent = {
   citation_timestamp?: string;
 };
 
+type DsAuditAttempt = {
+  attempt?: number;
+  parsed?: boolean;
+  action?: string;
+  tag?: string;
+  issue?: string;
+  content?: string;
+  raw_preview?: string;
+  action_counts?: Record<string, number>;
+};
+
+type DsAuditEvent = {
+  timestamp?: string;
+  source?: string;
+  window_id?: string;
+  round_index?: number | string;
+  batch_size?: number;
+  final_status?: string;
+  final_action?: string;
+  final_tag?: string;
+  final_importance?: number;
+  final_content?: string;
+  final_issue?: string;
+  final_fused_with_id?: string;
+  attempt_count?: number;
+  retry_count?: number;
+  action_counts?: Record<string, number>;
+  attempts?: DsAuditAttempt[];
+};
+
 type CoreCacheEntry = {
   id?: string;
   memory_id?: string;
@@ -95,6 +125,13 @@ type MemoryDebugResp = {
   search_total_count?: number;
   citation_count?: number;
   citation_total_count?: number;
+  ds_audit?: {
+    events?: DsAuditEvent[];
+    total_count?: number;
+    action_counts?: Record<string, number>;
+    retry_events?: number;
+    failed_events?: number;
+  };
   core_cache?: {
     count?: number;
     visible_count?: number;
@@ -193,6 +230,8 @@ export function MemoryDebugTab() {
 
   const recalls = Array.isArray(data?.recalls) ? data!.recalls! : [];
   const searchEvents = Array.isArray(data?.search_memory_events) ? data!.search_memory_events! : [];
+  const dsAuditEvents = Array.isArray(data?.ds_audit?.events) ? data!.ds_audit!.events! : [];
+  const dsActionCounts = data?.ds_audit?.action_counts || {};
   const coreItems = Array.isArray(data?.core_cache?.items) ? data!.core_cache!.items! : [];
   const maintenance = data?.dynamic_stats?.maintenance_report;
 
@@ -415,6 +454,94 @@ export function MemoryDebugTab() {
                   </div>
                 </div>
               </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-baseline space-x-2">
+                  <h2 className="text-[11px] font-bold uppercase tracking-widest text-gray-400">DS 写入审计</h2>
+                  <span className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-bold text-violet-500">
+                    {String(dsAuditEvents.length)} / {String(data?.ds_audit?.total_count ?? dsAuditEvents.length)}
+                  </span>
+                </div>
+              </div>
+              <div className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft">
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  <div className="rounded-2xl bg-emerald-50 p-3">
+                    <p className="text-[16px] font-bold text-emerald-600">{String(dsActionCounts.new ?? 0)}</p>
+                    <p className="mt-1 text-[10px] font-medium text-emerald-500">New</p>
+                  </div>
+                  <div className="rounded-2xl bg-blue-50 p-3">
+                    <p className="text-[16px] font-bold text-blue-600">{String(dsActionCounts.merge ?? 0)}</p>
+                    <p className="mt-1 text-[10px] font-medium text-blue-500">Merge</p>
+                  </div>
+                  <div className="rounded-2xl bg-gray-50 p-3">
+                    <p className="text-[16px] font-bold text-gray-700">{String(dsActionCounts.skip ?? 0)}</p>
+                    <p className="mt-1 text-[10px] font-medium text-gray-400">Skip</p>
+                  </div>
+                  <div className="rounded-2xl bg-amber-50 p-3">
+                    <p className="text-[16px] font-bold text-amber-600">{String(data?.ds_audit?.retry_events ?? 0)}</p>
+                    <p className="mt-1 text-[10px] font-medium text-amber-500">Retry</p>
+                  </div>
+                </div>
+              </div>
+              {dsAuditEvents.map((it, idx) => {
+                const counts = it.action_counts || {};
+                const attempts = Array.isArray(it.attempts) ? it.attempts : [];
+                const action = String(it.final_action || "");
+                const status = String(it.final_status || "");
+                const actionTone =
+                  action === "new" ? "bg-emerald-50 text-emerald-500" :
+                  action === "merge" ? "bg-blue-50 text-blue-500" :
+                  status === "ok" ? "bg-violet-50 text-violet-500" :
+                  status === "skip" || action === "skip" ? "bg-gray-50 text-gray-400" :
+                  "bg-red-50 text-red-500";
+                return (
+                  <details key={`${String(it.timestamp || "")}-ds-${idx}`} className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft" open={idx === 0}>
+                    <summary className="cursor-pointer list-none">
+                      <div className="mb-2 flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 flex-wrap gap-1.5">
+                          <span className={`status-badge ${actionTone}`}>{action || status || "unknown"}</span>
+                          <span className="status-badge bg-gray-50 text-gray-400">{String(it.source || "-")}</span>
+                          {Number(it.retry_count || 0) > 0 ? <span className="status-badge bg-amber-50 text-amber-500">retry {String(it.retry_count)}</span> : null}
+                          {it.batch_size ? <span className="status-badge bg-violet-50 text-violet-500">batch {String(it.batch_size)}</span> : null}
+                        </div>
+                        <span className="shrink-0 text-[11px] text-gray-300">{String(it.timestamp || "")}</span>
+                      </div>
+                      <h3 className="text-[14px] font-bold leading-snug text-gray-800 break-words">
+                        {String(it.final_content || it.final_issue || JSON.stringify(counts) || "（空）")}
+                      </h3>
+                    </summary>
+                    <div className="mt-4 space-y-3 border-t border-gray-50 pt-4">
+                      <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-400">
+                        <div className="rounded-2xl bg-gray-50 p-3">window: {String(it.window_id || "-")}</div>
+                        <div className="rounded-2xl bg-gray-50 p-3">round: {String(it.round_index || "-")}</div>
+                        <div className="rounded-2xl bg-gray-50 p-3">status: {status || "-"}</div>
+                        <div className="rounded-2xl bg-gray-50 p-3">attempts: {String(it.attempt_count ?? attempts.length)}</div>
+                      </div>
+                      {it.final_issue ? <div className="rounded-2xl bg-red-50 p-3 text-[12px] text-red-500">issue: {String(it.final_issue)}</div> : null}
+                      {attempts.length ? (
+                        <div className="space-y-2">
+                          {attempts.map((attempt, ai) => (
+                            <div key={`${String(attempt.attempt || ai)}-${ai}`} className="rounded-2xl bg-gray-50 p-3 text-[11px] leading-relaxed text-gray-500">
+                              <div className="mb-1 flex items-center justify-between">
+                                <span className="font-bold text-gray-700">attempt {String(attempt.attempt ?? ai + 1)}</span>
+                                <span>{attempt.parsed ? "parsed" : "unparsed"}</span>
+                              </div>
+                              <div>action: {String(attempt.action || JSON.stringify(attempt.action_counts || {}) || "-")}</div>
+                              <div>issue: {String(attempt.issue || "(无)")}</div>
+                              {attempt.content || attempt.raw_preview ? (
+                                <div className="mt-1 break-words">content: {firstLinePreview(String(attempt.content || attempt.raw_preview || ""), 120)}</div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </details>
+                );
+              })}
+              {!dsAuditEvents.length ? <div className="px-1 py-4 text-[12px] text-gray-300">（暂无 DS 写入审计）</div> : null}
             </div>
 
             <div className="space-y-4">

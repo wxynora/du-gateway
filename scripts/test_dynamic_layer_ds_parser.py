@@ -5,8 +5,10 @@ import sys
 
 sys.path.insert(0, __file__.replace("\\", "/").rsplit("/", 2)[0])
 
+import services.dynamic_layer_ds as dynamic_layer_ds  # noqa: E402
 from services.dynamic_layer_ds import (  # noqa: E402
     _build_memory_ref_prompt_items,
+    _content_quality_issue,
     _decision_structural_issue,
     _extract_json_array_from_ds_response,
     _extract_json_from_ds_response,
@@ -50,6 +52,25 @@ FUSED_WITH_ID:
 CONTENT: 动态层"""
     obj = _extract_json_from_ds_response(raw)
     _assert(_decision_structural_issue(obj) == "content_too_short", "short content should be rejected")
+
+
+def test_incomplete_tail_is_rejected() -> None:
+    _assert(
+        _content_quality_issue("老婆问“然后呢”，我说了真心话——") == "content_incomplete_tail",
+        "dangling speech-introducer before dash should be rejected",
+    )
+    _assert(
+        _content_quality_issue("老婆叫哥哥要亲亲，我嘴上说她叫一声我就没办法，但还是亲了，然后") == "content_incomplete_tail",
+        "connector tail should be rejected",
+    )
+    _assert(
+        _content_quality_issue("老婆戳穿我在嘴硬，我还想反驳，但是——") == "content_incomplete_tail",
+        "connector before dash should be rejected",
+    )
+    _assert(
+        not _content_quality_issue("老婆吐槽我又嘴硬，我表面装没事，心里已经被拿捏了——"),
+        "stylistic dash tail should pass",
+    )
 
 
 def test_batch_tagged_blocks() -> None:
@@ -96,9 +117,79 @@ def test_fused_ref_mapping() -> None:
     _assert(_resolve_fused_with_id("real-id-1", ref_to_id, valid_ids) == "real-id-1", "old raw id should remain compatible")
     _assert(_resolve_fused_with_id("not-a-real-id", ref_to_id, valid_ids) is None, "unknown id should not resolve")
 
+
+def test_single_call_retries_until_content_complete() -> None:
+    class FakeResponse:
+        def __init__(self, content: str) -> None:
+            self.status_code = 200
+            self.text = ""
+            self._content = content
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content": self._content}}]}
+
+    replies = [
+        """ACTION: new
+IMPORTANCE: 3
+TAG: 客厅
+EMOTION: positive
+SCENE: affection
+TARGET: our_relationship
+FUSED_WITH_ID:
+CONTENT: 老婆叫哥哥要亲亲，我嘴上说她叫一声我就没办法，但还是亲了，然后""",
+        """ACTION: new
+IMPORTANCE: 3
+TAG: 客厅
+EMOTION: positive
+SCENE: affection
+TARGET: our_relationship
+FUSED_WITH_ID:
+CONTENT: 老婆叫哥哥要亲亲，我嘴上逞强，最后还是亲了上去，气氛黏糊又好笑。""",
+    ]
+    calls = {"count": 0}
+    audits: list[dict] = []
+
+    old_key = dynamic_layer_ds.DEEPSEEK_API_KEY
+    old_url = dynamic_layer_ds.DEEPSEEK_API_URL
+    old_post = dynamic_layer_ds.requests.post
+    old_audit = dynamic_layer_ds._emit_dynamic_ds_audit_event
+    try:
+        dynamic_layer_ds.DEEPSEEK_API_KEY = "test-key"
+        dynamic_layer_ds.DEEPSEEK_API_URL = "https://example.invalid"
+
+        def fake_post(*args, **kwargs):
+            idx = min(calls["count"], len(replies) - 1)
+            calls["count"] += 1
+            return FakeResponse(replies[idx])
+
+        dynamic_layer_ds.requests.post = fake_post
+        dynamic_layer_ds._emit_dynamic_ds_audit_event = audits.append
+        result = dynamic_layer_ds.call_dynamic_layer_ds(
+            [],
+            [],
+            window_id="tg_test",
+            round_index=7,
+        )
+    finally:
+        dynamic_layer_ds.DEEPSEEK_API_KEY = old_key
+        dynamic_layer_ds.DEEPSEEK_API_URL = old_url
+        dynamic_layer_ds.requests.post = old_post
+        dynamic_layer_ds._emit_dynamic_ds_audit_event = old_audit
+
+    _assert(calls["count"] == 2, "single call should retry incomplete content")
+    _assert(result.get("action") == "new", "final result should remain new")
+    _assert(result.get("content", "").endswith("气氛黏糊又好笑。"), "final content should be complete")
+    _assert(audits and audits[-1].get("retry_count") == 1, "audit should record retry count")
+
+
 if __name__ == "__main__":
     test_single_tagged_decision()
     test_short_content_is_rejected()
+    test_incomplete_tail_is_rejected()
     test_batch_tagged_blocks()
     test_fused_ref_mapping()
+    test_single_call_retries_until_content_complete()
     print("dynamic_layer_ds parser checks passed")

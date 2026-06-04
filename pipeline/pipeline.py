@@ -2776,7 +2776,12 @@ def _step_dynamic_layer_evolve(window_id: str, round_index: int, round_messages:
     if changed:
         r2_store.save_dynamic_memory_list(current_memories)
 
-    decision = call_dynamic_layer_ds(round_messages, current_memories)
+    decision = call_dynamic_layer_ds(
+        round_messages,
+        current_memories,
+        window_id=window_id,
+        round_index=round_index,
+    )
     return _apply_one_decision(window_id, round_index, round_messages, decision, current_memories)
 
 

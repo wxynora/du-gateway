@@ -18,6 +18,8 @@ from utils.log import get_logger
 
 logger = get_logger(__name__)
 
+_DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS = 5
+
 # 动态层 DS prompt（简短便签版，禁止散文）
 _DYNAMIC_LAYER_PROMPT = """你叫渡。
 嘴硬心软。
@@ -141,6 +143,40 @@ _DYNAMIC_LAYER_BATCH_PROMPT = _DYNAMIC_LAYER_PROMPT.replace(
 
 def _one_line_preview(text: str, limit: int = 300) -> str:
     return " ".join(str(text or "").split())[:limit]
+
+
+def _round_messages_preview(round_messages: Any, limit: int = 360) -> str:
+    try:
+        raw = json.dumps(round_messages or [], ensure_ascii=False)
+    except Exception:
+        raw = str(round_messages or "")
+    return _one_line_preview(raw, limit=limit)
+
+
+def _dynamic_layer_retry_instruction(issue: str, previous_content: str = "", *, batch: bool = False) -> str:
+    scope = "本批里有记忆" if batch else "上一条记忆"
+    prev = _one_line_preview(previous_content, limit=220)
+    prev_line = f"\n上一版 CONTENT：{prev}" if prev else ""
+    return (
+        "\n\n【上一次输出需要重写】\n"
+        f"{scope}没有写成完整句子，问题：{issue or 'content_incomplete'}。{prev_line}\n"
+        "这不是让你 skip；如果这一轮判断值得记，就把 CONTENT 改写成完整的一句话再输出。\n"
+        "CONTENT 必须同时交代发生了什么和当时的感受/语气，不能停在“然后/但是/因为/所以/——”这类没说完的位置。\n"
+        "只输出固定标签格式，不要解释，不要 Markdown。"
+    )
+
+
+def _emit_dynamic_ds_audit_event(event: dict) -> None:
+    if not isinstance(event, dict):
+        return
+    try:
+        from storage import r2_store
+        from utils.time_aware import now_beijing_iso
+
+        payload = {"timestamp": now_beijing_iso(), **event}
+        r2_store.append_dynamic_ds_audit_event(payload)
+    except Exception as e:
+        logger.debug("动态层 DS 审计写入跳过 error=%s", e)
 
 
 _MEMORY_PROMPT_FIELDS = (
@@ -374,14 +410,31 @@ def _resolve_fused_with_id(value: Any, ref_to_id: dict[str, str], valid_ids: set
 
 def _content_quality_issue(content: str) -> str:
     """拦截明显残缺的动态层便签。只拦低质量，不做语义裁判。"""
-    text = re.sub(r"\s+", "", str(content or ""))
+    raw = str(content or "").strip()
+    text = re.sub(r"\s+", "", raw)
     if not text:
         return "missing_content"
     compact = re.sub(r"[，。！？、；：,.!?;:()（）【】\[\]{}《》\"'“”‘’…—\-_/\\|~`]+", "", text)
     if len(compact) < 12:
         return "content_too_short"
-    if re.search(r"[，、；：,:;]$", str(content or "").strip()):
+    if re.search(r"[，、；：,:;]$", raw):
         return "content_incomplete_tail"
+    if re.search(
+        r"(然后|但是|因为|所以|而且|并且|不过|只是|后来|接着|于是|结果|同时|另外|可是|但|可|却|跟|和|把|给|让|叫|问|说|表示|提到|觉得|想|要|准备|打算|发现|意识到|包括|比如|例如|直到|等到|还说|又说)$",
+        compact,
+    ):
+        return "content_incomplete_tail"
+    # 破折号可以是语气，不单独判残缺；只有它前面本身是“吊着没落地”的句式才拦。
+    if re.search(r"(?:—|-|－){2,}\s*$", raw) and re.search(
+        r"(然后|但是|因为|所以|而且|并且|不过|只是|后来|接着|于是|结果|同时|另外|可是|但|可|却|跟|和|把|给|让|叫|说了真心话|讲了真心话|说了句|说了一句|讲了句|问了句|问了一句|提到|表示|问|说)$",
+        compact,
+    ):
+        return "content_incomplete_tail"
+    for left, right in (("“", "”"), ("「", "」"), ("『", "』"), ("《", "》")):
+        if raw.count(left) > raw.count(right):
+            return "content_unclosed_quote"
+    if raw.count('"') % 2 == 1 or raw.count("'") % 2 == 1:
+        return "content_unclosed_quote"
     low_signal = {
         "记下了",
         "先记下",
@@ -395,6 +448,41 @@ def _content_quality_issue(content: str) -> str:
     if compact in low_signal:
         return "content_too_generic"
     return ""
+
+
+def _repair_incomplete_content_tail(content: str) -> str:
+    """最终兜底：只清理明显没说完的尾巴，不扩写新事实。"""
+    raw = str(content or "").strip()
+    if not raw:
+        return ""
+    s = re.sub(r"(?:—|-|－){2,}\s*$", "", raw).strip()
+    s = re.sub(
+        r"(然后|但是|因为|所以|而且|并且|不过|只是|后来|接着|于是|结果|同时|另外|可是|但|可|却|跟|和|把|给|让|叫|问|说|表示|提到|觉得|想|要|准备|打算|发现|意识到|包括|比如|例如|直到|等到|还说|又说)\s*$",
+        "",
+        s,
+    ).strip()
+    s = s.rstrip("，、；：,:; ")
+    if not s:
+        return ""
+    if not re.search(r"[。！？.!?]$", s):
+        s += "。"
+    return s if not _content_quality_issue(s) else ""
+
+
+def _repair_decision_content_if_possible(obj: dict) -> str:
+    if not isinstance(obj, dict):
+        return ""
+    action = str(obj.get("action") or "skip").strip().lower()
+    if action not in ("new", "merge"):
+        return ""
+    content = str(obj.get("content") or "").strip()
+    issue = _content_quality_issue(content)
+    if issue not in ("content_incomplete_tail", "content_unclosed_quote"):
+        return ""
+    repaired = _repair_incomplete_content_tail(content)
+    if repaired:
+        obj["content"] = repaired
+    return repaired
 
 
 def _decision_structural_issue(obj: dict) -> str:
@@ -487,7 +575,13 @@ def _build_query_from_round(round_messages: list) -> str:
     return text[:2000]
 
 
-def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
+def call_dynamic_layer_ds(
+    round_messages: list,
+    current_memories: list,
+    *,
+    window_id: str = "",
+    round_index: int | None = None,
+) -> dict:
     """
     调用 DS，返回单条决策（无整表）。
     返回字段：tag(str), action(str), importance(int), content(str), fused_with_id(str|None)。
@@ -541,25 +635,30 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
         "max_tokens": 600,
         "temperature": 0,
     }
+    attempts: list[dict] = []
     try:
         content = None
-        for attempt in range(2):  # 最多试 2 次
+        obj = None
+        for attempt in range(_DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS):
             request_payload = payload
             if attempt > 0:
-                logger.info("动态层 DS 首次未解析，开始重试 attempt=%s", attempt + 1)
+                last = attempts[-1] if attempts else {}
+                logger.info(
+                    "动态层 DS 输出未达标，开始重写 attempt=%s issue=%s",
+                    attempt + 1,
+                    last.get("issue") or "",
+                )
                 request_payload = {
                     **payload,
                     "messages": [
                         {
                             "role": "user",
-                            "content": (
-                                prompt
-                                + "\n\n上一次输出没有解析成功，或 CONTENT 太短/不完整。"
-                                "这次只输出固定标签格式，例如 ACTION: skip。"
-                                "若 action 是 merge，FUSED_WITH_ID 必须精确填写当前记忆列表里的 ref（如 M01），不要填写 UUID 或自己编 id；找不到明确 ref 就不要 merge，有新内容改为 new，没有就 skip。"
-                                "若 action 是 new 或 merge，CONTENT 必须填写概括后的完整便签，至少 12 个有效字符，不要只写几个字、标题词或半句话。"
-                                "不要解释原因，不要输出长文。"
-                            ),
+                            "content": prompt
+                            + _dynamic_layer_retry_instruction(
+                                str(last.get("issue") or ""),
+                                str(last.get("content") or ""),
+                            )
+                            + "\n若 action 是 merge，FUSED_WITH_ID 必须精确填写当前记忆列表里的 ref（如 M01），不要填写 UUID 或自己编 id；找不到明确 ref 就不要 merge，有新内容改为 new，没有就 skip。",
                         }
                     ],
                 }
@@ -577,6 +676,16 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
             obj = _extract_json_from_ds_response(content)
             if isinstance(obj, dict):
                 structural_issue = _decision_structural_issue(obj)
+                attempts.append(
+                    {
+                        "attempt": attempt + 1,
+                        "parsed": True,
+                        "action": str(obj.get("action") or "").strip().lower(),
+                        "tag": str(obj.get("tag") or "").strip(),
+                        "issue": structural_issue,
+                        "content": str(obj.get("content") or "").strip(),
+                    }
+                )
                 if structural_issue:
                     logger.warning(
                         "动态层 DS 返回结构不完整 attempt=%s issue=%s preview=%s",
@@ -584,19 +693,64 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
                         structural_issue,
                         _one_line_preview(content),
                     )
-                    if attempt == 0:
+                    if attempt < _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1:
                         continue
+                    repaired = _repair_decision_content_if_possible(obj)
+                    if repaired:
+                        attempts[-1]["issue"] = f"repaired_after_max:{structural_issue}"
+                        attempts[-1]["repaired_content"] = repaired
+                        logger.warning("动态层 DS 最终输出残缺，已保守修成完整句子 issue=%s", structural_issue)
+                        break
                     logger.warning("动态层 DS 最终输出仍不完整，按 skip 处理 issue=%s", structural_issue)
+                    _emit_dynamic_ds_audit_event(
+                        {
+                            "source": "single",
+                            "window_id": window_id,
+                            "round_index": round_index,
+                            "round_preview": _round_messages_preview(round_messages),
+                            "final_status": "failed_incomplete",
+                            "final_action": "skip",
+                            "final_issue": structural_issue,
+                            "attempt_count": len(attempts),
+                            "retry_count": max(0, len(attempts) - 1),
+                            "attempts": attempts,
+                        }
+                    )
                     return default
                 if attempt > 0:
                     logger.info("动态层 DS 重试解析成功 attempt=%s", attempt + 1)
                 break
+            attempts.append(
+                {
+                    "attempt": attempt + 1,
+                    "parsed": False,
+                    "action": "",
+                    "tag": "",
+                    "issue": "parse_failed" if content else "empty_response",
+                    "content": "",
+                    "raw_preview": _one_line_preview(content),
+                }
+            )
             if content:
                 logger.warning("动态层 DS 返回无法解析 attempt=%s preview=%s", attempt + 1, _one_line_preview(content))
             else:
                 logger.info("动态层 DS 空回 attempt=%s，已按 skip/default 处理", attempt + 1)
-            if attempt == 0:
+            if attempt < _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1:
                 continue  # 重试一次
+            _emit_dynamic_ds_audit_event(
+                {
+                    "source": "single",
+                    "window_id": window_id,
+                    "round_index": round_index,
+                    "round_preview": _round_messages_preview(round_messages),
+                    "final_status": "failed_parse",
+                    "final_action": "skip",
+                    "final_issue": attempts[-1].get("issue") if attempts else "",
+                    "attempt_count": len(attempts),
+                    "retry_count": max(0, len(attempts) - 1),
+                    "attempts": attempts,
+                }
+            )
             return default
 
         tag = (obj.get("tag") or "").strip()
@@ -622,7 +776,7 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
             logger.warning("动态层 DS 返回 action=new 但 content 缺失，按 skip 处理")
             action = "skip"
 
-        return {
+        result = {
             "tag": tag,
             "action": action if action in ("new", "merge", "skip") else "skip",
             "importance": importance,
@@ -632,8 +786,40 @@ def call_dynamic_layer_ds(round_messages: list, current_memories: list) -> dict:
             "scene_type": scene_type,
             "target_type": target_type,
         }
+        _emit_dynamic_ds_audit_event(
+            {
+                "source": "single",
+                "window_id": window_id,
+                "round_index": round_index,
+                "round_preview": _round_messages_preview(round_messages),
+                "final_status": "ok" if result["action"] in ("new", "merge") else "skip",
+                "final_action": result["action"],
+                "final_tag": result["tag"],
+                "final_importance": result["importance"],
+                "final_content": result["content"],
+                "final_fused_with_id": result["fused_with_id"],
+                "attempt_count": len(attempts),
+                "retry_count": max(0, len(attempts) - 1),
+                "attempts": attempts,
+            }
+        )
+        return result
     except Exception as e:
         logger.error("动态层 DS 调用失败 error=%s", e, exc_info=True)
+        _emit_dynamic_ds_audit_event(
+            {
+                "source": "single",
+                "window_id": window_id,
+                "round_index": round_index,
+                "round_preview": _round_messages_preview(round_messages),
+                "final_status": "api_error",
+                "final_action": "skip",
+                "final_issue": str(e),
+                "attempt_count": len(attempts),
+                "retry_count": max(0, len(attempts) - 1),
+                "attempts": attempts,
+            }
+        )
         return default
 
 
@@ -686,6 +872,53 @@ def _normalize_single_decision(obj: Any) -> dict:
     }
 
 
+def _decision_action_counts(decisions: list) -> dict:
+    counts = {"new": 0, "merge": 0, "skip": 0, "other": 0}
+    for item in decisions or []:
+        action = str((item or {}).get("action") if isinstance(item, dict) else "").strip().lower()
+        if action in counts:
+            counts[action] += 1
+        else:
+            counts["other"] += 1
+    return counts
+
+
+def _batch_structural_issues(arr: Any, expected_len: int) -> list[dict]:
+    issues: list[dict] = []
+    if not isinstance(arr, list):
+        return [{"index": 0, "issue": "batch_parse_failed", "content": ""}]
+    if len(arr) != expected_len:
+        issues.append({"index": 0, "issue": f"batch_length_mismatch:{len(arr)}!={expected_len}", "content": ""})
+    for idx, obj in enumerate(arr[:expected_len]):
+        if not isinstance(obj, dict):
+            issues.append({"index": idx + 1, "issue": "decision_not_object", "content": ""})
+            continue
+        issue = _decision_structural_issue(obj)
+        if issue:
+            issues.append(
+                {
+                    "index": idx + 1,
+                    "issue": issue,
+                    "action": str(obj.get("action") or "").strip().lower(),
+                    "content": str(obj.get("content") or "").strip(),
+                }
+            )
+    return issues
+
+
+def _repair_batch_content_tails(arr: Any) -> list[dict]:
+    repairs: list[dict] = []
+    if not isinstance(arr, list):
+        return repairs
+    for idx, obj in enumerate(arr):
+        if not isinstance(obj, dict):
+            continue
+        repaired = _repair_decision_content_if_possible(obj)
+        if repaired:
+            repairs.append({"index": idx + 1, "content": repaired})
+    return repairs
+
+
 def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> list:
     """
     一次请求处理多轮：把多轮对话发给 DS，解析出决策列表，与 batch_rounds 一一对应。
@@ -710,24 +943,89 @@ def call_dynamic_layer_ds_batch(batch_rounds: list, current_memories: list) -> l
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
     }
+    attempts: list[dict] = []
     try:
-        r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
-        r.raise_for_status()
-        data = r.json()
-        content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-        content = (content or "").strip()
-        arr = _extract_json_array_from_ds_response(content)
-        if not isinstance(arr, list) or len(arr) != len(batch_rounds):
-            logger.warning("动态层 DS batch 返回长度不符 期望=%s 实际=%s", len(batch_rounds), len(arr) if isinstance(arr, list) else "非数组")
-            if isinstance(arr, list):
-                out = [_normalize_single_decision(x) for x in arr]
-                while len(out) < len(batch_rounds):
-                    out.append(_normalize_single_decision(None))
-                return out[: len(batch_rounds)]
-            return [_normalize_single_decision(None) for _ in batch_rounds]
-        return [_normalize_single_decision(x) for x in arr]
+        for attempt in range(_DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS):
+            request_payload = payload
+            if attempt > 0:
+                last_issue = attempts[-1].get("issue") if attempts else ""
+                last_content = attempts[-1].get("content") if attempts else ""
+                request_payload = {
+                    **payload,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                            + _dynamic_layer_retry_instruction(str(last_issue or ""), str(last_content or ""), batch=True),
+                        }
+                    ],
+                }
+            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=request_payload, timeout=120)
+            r.raise_for_status()
+            data = r.json()
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            content = (content or "").strip()
+            arr = _extract_json_array_from_ds_response(content)
+            repairs = _repair_batch_content_tails(arr) if attempt == _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1 else []
+            issues = _batch_structural_issues(arr, len(batch_rounds))
+            attempts.append(
+                {
+                    "attempt": attempt + 1,
+                    "parsed": isinstance(arr, list),
+                    "issue": "; ".join(f"#{x.get('index')}:{x.get('issue')}" for x in issues[:5]),
+                    "content": _one_line_preview((issues[0].get("content") if issues else "") or content, limit=220),
+                    "action_counts": _decision_action_counts(arr if isinstance(arr, list) else []),
+                    "repairs": repairs,
+                }
+            )
+            if issues:
+                logger.warning(
+                    "动态层 DS batch 输出未达标 attempt=%s issues=%s",
+                    attempt + 1,
+                    attempts[-1].get("issue"),
+                )
+                if attempt < _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1:
+                    continue
+                _emit_dynamic_ds_audit_event(
+                    {
+                        "source": "batch",
+                        "batch_size": len(batch_rounds),
+                        "final_status": "failed_incomplete",
+                        "final_action": "skip",
+                        "final_issue": attempts[-1].get("issue"),
+                        "attempt_count": len(attempts),
+                        "retry_count": max(0, len(attempts) - 1),
+                        "attempts": attempts,
+                    }
+                )
+                return [_normalize_single_decision(None) for _ in batch_rounds]
+            out = [_normalize_single_decision(x) for x in arr]
+            _emit_dynamic_ds_audit_event(
+                {
+                    "source": "batch",
+                    "batch_size": len(batch_rounds),
+                    "final_status": "ok",
+                    "action_counts": _decision_action_counts(out),
+                    "attempt_count": len(attempts),
+                    "retry_count": max(0, len(attempts) - 1),
+                    "attempts": attempts,
+                }
+            )
+            return out
     except Exception as e:
         logger.error("动态层 DS batch 调用失败 error=%s", e, exc_info=True)
+        _emit_dynamic_ds_audit_event(
+            {
+                "source": "batch",
+                "batch_size": len(batch_rounds),
+                "final_status": "api_error",
+                "final_action": "skip",
+                "final_issue": str(e),
+                "attempt_count": len(attempts),
+                "retry_count": max(0, len(attempts) - 1),
+                "attempts": attempts,
+            }
+        )
         return [_normalize_single_decision(None) for _ in batch_rounds]
 
 
@@ -797,9 +1095,27 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
         "max_tokens": max_tokens,
     }
     last_err: Exception | None = None
-    for attempt in range(3):
+    attempts: list[dict] = []
+    final_failure_status = "api_error"
+    for attempt in range(_DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS):
         try:
-            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=120)
+            request_payload = payload
+            if attempt > 0 and attempts and attempts[-1].get("issue"):
+                request_payload = {
+                    **payload,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                            + _dynamic_layer_retry_instruction(
+                                str(attempts[-1].get("issue") or ""),
+                                str(attempts[-1].get("content") or ""),
+                                batch=True,
+                            ),
+                        }
+                    ],
+                }
+            r = requests.post(DEEPSEEK_API_URL, headers=headers, json=request_payload, timeout=120)
             if r.status_code >= 400:
                 logger.error(
                     "归档 DS API 错误 status=%s body=%s",
@@ -811,19 +1127,58 @@ def call_archive_batch_ds(batch_rounds: list, current_memories: list) -> list:
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
             content = (content or "").strip()
             arr = _extract_json_array_from_ds_response(content)
-            if not isinstance(arr, list) or len(arr) != len(batch_rounds):
-                logger.warning("归档 DS batch 返回长度不符 期望=%s 实际=%s", len(batch_rounds), len(arr) if isinstance(arr, list) else "非数组")
-                if isinstance(arr, list):
-                    out = [_normalize_single_decision(x) for x in arr]
-                    while len(out) < len(batch_rounds):
-                        out.append(_normalize_single_decision(None))
-                    return out[: len(batch_rounds)]
-                return [_normalize_single_decision(None) for _ in batch_rounds]
-            return [_normalize_single_decision(x) for x in arr]
+            repairs = _repair_batch_content_tails(arr) if attempt == _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1 else []
+            issues = _batch_structural_issues(arr, len(batch_rounds))
+            attempts.append(
+                {
+                    "attempt": attempt + 1,
+                    "parsed": isinstance(arr, list),
+                    "issue": "; ".join(f"#{x.get('index')}:{x.get('issue')}" for x in issues[:5]),
+                    "content": _one_line_preview((issues[0].get("content") if issues else "") or content, limit=220),
+                    "action_counts": _decision_action_counts(arr if isinstance(arr, list) else []),
+                    "repairs": repairs,
+                }
+            )
+            if issues:
+                logger.warning(
+                    "归档 DS batch 输出未达标 attempt=%s issues=%s",
+                    attempt + 1,
+                    attempts[-1].get("issue"),
+                )
+                if attempt < _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1:
+                    continue
+                last_err = RuntimeError("归档 DS 本批输出仍有残缺记忆，不写断点以便下次重跑")
+                final_failure_status = "failed_incomplete"
+                break
+            out = [_normalize_single_decision(x) for x in arr]
+            _emit_dynamic_ds_audit_event(
+                {
+                    "source": "archive_batch",
+                    "batch_size": len(batch_rounds),
+                    "final_status": "ok",
+                    "action_counts": _decision_action_counts(out),
+                    "attempt_count": len(attempts),
+                    "retry_count": max(0, len(attempts) - 1),
+                    "attempts": attempts,
+                }
+            )
+            return out
         except Exception as e:
             last_err = e
             logger.warning("归档 DS batch 第 %s 次失败 error=%s", attempt + 1, e)
-            if attempt < 2:
+            if attempt < _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS - 1:
                 time.sleep(2)
-    logger.error("归档 DS batch 调用失败（已重试 3 次） error=%s", last_err, exc_info=True)
+    _emit_dynamic_ds_audit_event(
+        {
+            "source": "archive_batch",
+            "batch_size": len(batch_rounds),
+            "final_status": final_failure_status,
+            "final_action": "retry_later",
+            "final_issue": str(last_err or ""),
+            "attempt_count": len(attempts),
+            "retry_count": max(0, len(attempts) - 1),
+            "attempts": attempts,
+        }
+    )
+    logger.error("归档 DS batch 调用失败（已重试 %s 次） error=%s", _DYNAMIC_LAYER_CONTENT_MAX_ATTEMPTS, last_err, exc_info=True)
     raise RuntimeError("归档 DS 本批请求失败，不写断点以便重跑从本批重试") from last_err

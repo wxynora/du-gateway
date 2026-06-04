@@ -147,6 +147,8 @@ R2_KEY_CONVERSATION_FOLLOWUPS = "global/conversation_followups.json"
 R2_KEY_TG_TODOS = "tg/todos.json"
 # 动态记忆召回调试记录（用于 MiniApp 可视化排查）
 R2_KEY_DYNAMIC_RECALL_DEBUG = "dynamic_memory/recall_debug.json"
+# 动态记忆 DS 写入决策审计（用于确认 new/merge/skip 与重试）
+R2_KEY_DYNAMIC_DS_AUDIT = "dynamic_memory/ds_audit.json"
 # 动态记忆离线慢整理最近一次结果
 R2_KEY_DYNAMIC_MAINTENANCE_REPORT = "dynamic_memory/maintenance_report.json"
 # Telegram 表情包：映射表（各 tag 下对象 key 列表）+ 分类元数据（中文名等）
@@ -1390,6 +1392,65 @@ def append_dynamic_recall_debug_event(event: dict, max_keep: int = 200) -> bool:
             return True
         except Exception as e:
             logger.error("append_dynamic_recall_debug_event 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def get_dynamic_ds_audit_events(limit: int = 30) -> list[dict]:
+    """读取动态记忆 DS 写入决策审计事件（按时间倒序取最近 N 条）。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_DYNAMIC_DS_AUDIT)
+    if not isinstance(data, dict):
+        return []
+    events = data.get("events")
+    if not isinstance(events, list):
+        return []
+    out = [x for x in events if isinstance(x, dict)]
+    out.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+    try:
+        n = int(limit or 30)
+    except Exception:
+        n = 30
+    if n < 1:
+        n = 1
+    if n > 300:
+        n = 300
+    return out[:n]
+
+
+def append_dynamic_ds_audit_event(event: dict, max_keep: int = 300) -> bool:
+    """追加一条动态记忆 DS 写入决策审计事件。"""
+    if not isinstance(event, dict):
+        return False
+    client = _s3_client()
+    if not client:
+        return False
+    try:
+        keep = int(max_keep or 300)
+    except Exception:
+        keep = 300
+    if keep < 30:
+        keep = 30
+    if keep > 1000:
+        keep = 1000
+    with _global_write_lock:
+        try:
+            data = _read_json(client, R2_KEY_DYNAMIC_DS_AUDIT)
+            events = []
+            if isinstance(data, dict) and isinstance(data.get("events"), list):
+                events = [x for x in data.get("events") if isinstance(x, dict)]
+            events.append(event)
+            if len(events) > keep:
+                events = events[-keep:]
+            _write_json(
+                client,
+                R2_KEY_DYNAMIC_DS_AUDIT,
+                {"events": events, "updated_at": now_beijing_iso()},
+            )
+            return True
+        except Exception as e:
+            logger.error("append_dynamic_ds_audit_event 失败 error=%s", e, exc_info=True)
             return False
 
 

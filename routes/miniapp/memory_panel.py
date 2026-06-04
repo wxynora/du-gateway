@@ -379,6 +379,29 @@ def register_routes(bp) -> None:
             ]
             recall_events = _merge_citation_events_into_recalls(recall_events, citation_events)
             search_events = [e for e in events if str((e or {}).get("source") or "").strip() == "search_memory"]
+            ds_audit_events = r2_store.get_dynamic_ds_audit_events(limit=100) or []
+            ds_action_counts = {"new": 0, "merge": 0, "skip": 0, "other": 0}
+            retry_events = 0
+            failed_events = 0
+            for event in ds_audit_events:
+                if int((event or {}).get("retry_count") or 0) > 0:
+                    retry_events += 1
+                status = str((event or {}).get("final_status") or "").strip()
+                if status and status not in ("ok", "skip"):
+                    failed_events += 1
+                action_counts = (event or {}).get("action_counts")
+                if isinstance(action_counts, dict):
+                    for key in ds_action_counts:
+                        try:
+                            ds_action_counts[key] += int(action_counts.get(key) or 0)
+                        except Exception:
+                            pass
+                    continue
+                action = str((event or {}).get("final_action") or "").strip().lower()
+                if action in ds_action_counts:
+                    ds_action_counts[action] += 1
+                else:
+                    ds_action_counts["other"] += 1
             maintenance_report = r2_store.get_dynamic_memory_maintenance_report() or {}
             core_cache = _core_cache_items_for_debug(core_limit)
             dynamic_stats = {"maintenance_report": maintenance_report}
@@ -470,6 +493,13 @@ def register_routes(bp) -> None:
                     "citation_count": len(citation_events[:limit]),
                     "citation_total_count": len(citation_events),
                     "core_cache": core_cache,
+                    "ds_audit": {
+                        "events": ds_audit_events[:limit],
+                        "total_count": len(ds_audit_events),
+                        "action_counts": ds_action_counts,
+                        "retry_events": retry_events,
+                        "failed_events": failed_events,
+                    },
                     "dynamic_stats": dynamic_stats,
                 }
             )
