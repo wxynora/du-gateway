@@ -24,6 +24,7 @@ type MusicSegment = {
 type LyricLine = {
   time?: number;
   text?: string;
+  translation?: string;
 };
 
 type LyricsPayload = {
@@ -107,7 +108,11 @@ function lyricLinesFor(entry?: MusicEntry): LyricLine[] {
   const lines = lyricsPayloadFor(entry).lines;
   if (!Array.isArray(lines)) return [];
   return lines
-    .map((item) => ({ time: asSeconds(item?.time), text: String(item?.text || "").trim() }))
+    .map((item) => ({
+      time: asSeconds(item?.time),
+      text: String(item?.text || "").trim(),
+      translation: String(item?.translation || "").trim(),
+    }))
     .filter((item) => item.text)
     .sort((a, b) => asSeconds(a.time) - asSeconds(b.time));
 }
@@ -127,6 +132,9 @@ function currentLyricIndex(lines: LyricLine[], currentTime: number): number {
   }
   return current;
 }
+
+const LYRIC_ROW_HEIGHT = 64;
+const LYRIC_VIEWPORT_HEIGHT = 192;
 
 export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => void; backgroundImage?: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -151,14 +159,8 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
   const lyricLines = useMemo(() => lyricLinesFor(song), [song]);
   const plainLyrics = useMemo(() => plainLyricsFor(song), [song]);
   const activeLyricIndex = useMemo(() => currentLyricIndex(lyricLines, currentTime), [lyricLines, currentTime]);
-  const visibleLyrics = useMemo(() => {
-    if (lyricLines.length) {
-      const active = activeLyricIndex >= 0 ? activeLyricIndex : 0;
-      const start = Math.max(0, active - 2);
-      return lyricLines.slice(start, start + 5).map((line, offset) => ({ text: line.text || "", active: start + offset === active }));
-    }
-    return plainLyrics.slice(0, 5).map((text, index) => ({ text, active: index === 0 }));
-  }, [activeLyricIndex, lyricLines, plainLyrics]);
+  const lyricActiveIndex = activeLyricIndex >= 0 ? activeLyricIndex : 0;
+  const lyricTrackOffset = LYRIC_VIEWPORT_HEIGHT / 2 - LYRIC_ROW_HEIGHT / 2 - lyricActiveIndex * LYRIC_ROW_HEIGHT;
 
   const historyItems = useMemo(
     () => songs.map((item, index) => ({ ...item, active: index === songIndex, durationLabel: formatClock(durationFor(item)) })),
@@ -404,18 +406,61 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           </div>
         ) : null}
 
-        {visibleLyrics.length ? (
+        {lyricLines.length ? (
+          <div
+            className="relative mb-8 h-[192px] overflow-hidden text-center"
+            style={{
+              WebkitMaskImage: "linear-gradient(180deg, transparent 0%, #000 20%, #000 80%, transparent 100%)",
+              maskImage: "linear-gradient(180deg, transparent 0%, #000 20%, #000 80%, transparent 100%)",
+            }}
+          >
+            <div
+              className="will-change-transform"
+              style={{
+                transform: `translate3d(0, ${lyricTrackOffset}px, 0)`,
+                transition: "transform 680ms cubic-bezier(0.22, 1, 0.36, 1)",
+              }}
+            >
+              {lyricLines.map((line, index) => {
+                const active = index === lyricActiveIndex;
+                return (
+                  <div
+                    key={`${asSeconds(line.time)}-${line.text}-${index}`}
+                    className={`flex h-16 flex-col items-center justify-center transition duration-500 ${
+                      active ? "scale-100 opacity-100" : "scale-[0.96] opacity-55"
+                    }`}
+                  >
+                    <p
+                      className={`mx-auto max-w-[94%] truncate transition duration-500 ${
+                        active
+                          ? "text-[16px] font-medium leading-7 text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.2)]"
+                          : "text-[13px] leading-6 text-white/62"
+                      }`}
+                    >
+                      {line.text}
+                    </p>
+                    {line.translation ? (
+                      <p className={`mx-auto mt-0.5 max-w-[92%] truncate text-[12px] leading-5 transition duration-500 ${active ? "text-white/78" : "text-white/42"}`}>
+                        {line.translation}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : plainLyrics.length ? (
           <div className="mb-8 space-y-2 text-center">
-            {visibleLyrics.map((line, index) => (
+            {plainLyrics.slice(0, 5).map((text, index) => (
               <p
-                key={`${line.text}-${index}`}
+                key={`${text}-${index}`}
                 className={`mx-auto max-w-[92%] transition ${
-                  line.active
+                  index === 0
                     ? "text-[16px] font-medium leading-7 text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.18)]"
                     : "text-[13px] leading-6 text-white/56"
                 }`}
               >
-                {line.text}
+                {text}
               </p>
             ))}
           </div>

@@ -167,7 +167,13 @@ def _lyrics_for_time(entry: dict, current_time: float) -> list[str]:
         text = _clip_text(item.get("text"), 180)
         if not text:
             continue
-        clean_lines.append({"time": _float_value(item.get("time")), "text": text})
+        translation = _clip_text(item.get("translation"), 180)
+        clean_lines.append(
+            {
+                "time": _float_value(item.get("time")),
+                "text": text + (f"（{translation}）" if translation else ""),
+            }
+        )
     if not clean_lines:
         return []
     clean_lines.sort(key=lambda item: item["time"])

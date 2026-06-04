@@ -241,8 +241,8 @@ POST /api/music/listen/chat
 - 已完成：一起听分析 prompt 改为按歌曲结构切分（前奏/主歌/副歌/桥段/尾奏等），脚本支持自动读取同名 `.lrc` 和 ffprobe 真实时长；正文时间由 `segments.start/end` 重建，避免模型把秒数和 `mm:ss` 搞混；`Valence/Arousal` 只留在结构字段。
 - 已完成：新增 `storage/music_audio_store.py` 和 `/api/music/listen/audio` 上传/播放接口；音频优先写 R2 `music_listen/audio/<cache_id>.<ext>`，无 R2 时落本地 `data/music_listen_audio`；播放接口支持 Range，MiniApp 手机端可用 `<audio>` 播放并拖动进度。
 - 已完成：`ListenWithDuScreen` 改为拉 `/api/music/listen/recent` 真缓存，展示真实歌单、播放真实 `audio_url`、按 `currentTime` 匹配当前结构段落；发送按钮已接 `/api/music/listen/chat`，会把当前歌曲、播放秒数、当前段落和最近几句一起听对话注入给渡，前端显示“渡在听...”等待态后替换成真实回复；段落分析只做隐藏上下文，不再渲染成页面文字或初始渡气泡。
-- 已完成：新增 `services/music_lyrics.py` 和 `/api/music/listen/lyrics`，支持普通 LRC `[mm:ss]` 行与网易云逐行 JSON 歌词；`ListenWithDuScreen` 按播放时间显示当前歌词和前后几句，无时间轴歌词会按时长做近似分布后显示。
-- 已验证：`.venv/bin/python -m py_compile` 覆盖 `storage/music_melody_store.py`、`storage/music_audio_store.py`、`routes/music_melody_api.py`、`services/music_melody_analyzer.py`、`scripts/analyze_music_file.py`、`app.py`；`npm -C miniapp run build` 通过并生成 `ListenWithDuScreen-D1NZpgBz.js`。
+- 已完成：新增 `services/music_lyrics.py` 和 `/api/music/listen/lyrics`，支持普通 LRC `[mm:ss]` 行与网易云逐行 JSON 歌词；`ListenWithDuScreen` 使用固定高度歌词轨道按播放时间平滑滚动，高亮当前歌词块；无时间轴歌词会按时长做近似分布后显示。原文/译文相邻的歌词会合并为同一块，`text` 存原文，`translation` 存译文，避免日语和译文被算作两句滚动。
+- 已验证：`.venv/bin/python -m py_compile` 覆盖 `storage/music_melody_store.py`、`storage/music_audio_store.py`、`routes/music_melody_api.py`、`services/music_melody_analyzer.py`、`scripts/analyze_music_file.py`、`app.py`；`npm -C miniapp run build` 通过并生成 `ListenWithDuScreen-CABRJoPO.js`。
 - 未完成 / 下次继续：当前先做文字聊天随歌走；若要做“语音外放/一起听时渡开口说话”，再接 MiniMax TTS 或小爱外放链路。
 
 当前状态（2026-05-12）：

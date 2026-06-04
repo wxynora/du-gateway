@@ -7,6 +7,9 @@ from typing import Any
 
 _LRC_TIME_RE = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 _CREDIT_PREFIX_RE = re.compile(r"^(作词|作曲|编曲|歌词|翻译|监制|制作|混音|母带|和声|吉他|贝斯|录音|发行)\s*[:：]", re.IGNORECASE)
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_KANA_RE = re.compile(r"[\u3040-\u30ff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
 
 
 def _clean_lyric_text(value: Any, limit: int = 240) -> str:
@@ -38,6 +41,64 @@ def _netease_json_text(parts: Any) -> str:
     if not isinstance(parts, list):
         return ""
     return _clean_lyric_text("".join(str((part or {}).get("tx") or "") for part in parts if isinstance(part, dict)))
+
+
+def _language_hint(text: str) -> str:
+    if _KANA_RE.search(text):
+        return "ja"
+    if _LATIN_RE.search(text) and not _CJK_RE.search(text):
+        return "latin"
+    if _CJK_RE.search(text):
+        return "zh"
+    return "other"
+
+
+def _looks_like_translation_pair(original: str, candidate: str) -> bool:
+    if _language_hint(candidate) != "zh":
+        return False
+    return _language_hint(original) in {"ja", "latin"} and original != candidate
+
+
+def _merge_translation_lines(raw_lines: list[dict]) -> list[dict]:
+    items: list[dict] = []
+    for item in raw_lines:
+        text = _clean_lyric_text(item.get("text"))
+        if not text:
+            continue
+        try:
+            time_value = max(0.0, float(item.get("time") or 0))
+        except Exception:
+            time_value = 0.0
+        line = {"time": round(time_value, 3), "text": text}
+        translation = _clean_lyric_text(item.get("translation"))
+        if translation and translation != text:
+            line["translation"] = translation
+        items.append(line)
+
+    items.sort(key=lambda item: (float(item.get("time") or 0), str(item.get("text") or "")))
+    merged: list[dict] = []
+    i = 0
+    while i < len(items):
+        current = dict(items[i])
+        nxt = items[i + 1] if i + 1 < len(items) else None
+        if (
+            nxt
+            and not current.get("translation")
+            and _looks_like_translation_pair(str(current.get("text") or ""), str(nxt.get("text") or ""))
+        ):
+            gap = float(nxt.get("time") or 0) - float(current.get("time") or 0)
+            following = items[i + 2] if i + 2 < len(items) else None
+            alternating = bool(following and _language_hint(str(following.get("text") or "")) in {"ja", "latin"})
+            if gap <= 6.0 or alternating:
+                current["translation"] = str(nxt.get("text") or "")
+                if gap > 8.0:
+                    current["time"] = nxt.get("time") or current.get("time") or 0
+                merged.append(current)
+                i += 2
+                continue
+        merged.append(current)
+        i += 1
+    return merged
 
 
 def parse_lyrics_text(raw: str, *, duration_seconds: float = 0) -> dict:
@@ -76,22 +137,20 @@ def parse_lyrics_text(raw: str, *, duration_seconds: float = 0) -> dict:
         else:
             plain_lines.append(text)
 
-    lines.sort(key=lambda item: (float(item.get("time") or 0), str(item.get("text") or "")))
     deduped: list[dict] = []
     seen = set()
-    for item in lines:
-        text = _clean_lyric_text(item.get("text"))
-        if not text:
-            continue
-        try:
-            time_value = max(0.0, float(item.get("time") or 0))
-        except Exception:
-            time_value = 0.0
+    for item in _merge_translation_lines(lines):
+        text = str(item.get("text") or "")
+        time_value = float(item.get("time") or 0)
+        translation = str(item.get("translation") or "")
         key = (round(time_value, 3), text)
         if key in seen:
             continue
         seen.add(key)
-        deduped.append({"time": round(time_value, 3), "text": text})
+        line = {"time": round(time_value, 3), "text": text}
+        if translation:
+            line["translation"] = translation
+        deduped.append(line)
 
     clean_plain: list[str] = []
     plain_seen = set()
@@ -103,10 +162,15 @@ def parse_lyrics_text(raw: str, *, duration_seconds: float = 0) -> dict:
 
     estimated = False
     if not deduped and clean_plain and duration_seconds > 0:
-        step = max(2.0, float(duration_seconds) / max(1, len(clean_plain) + 1))
+        plain_blocks = _merge_translation_lines([{"time": idx, "text": text} for idx, text in enumerate(clean_plain)])
+        step = max(2.0, float(duration_seconds) / max(1, len(plain_blocks) + 1))
         deduped = [
-            {"time": round((idx + 1) * step, 3), "text": text}
-            for idx, text in enumerate(clean_plain[:240])
+            {
+                **({"translation": str(item.get("translation"))} if item.get("translation") else {}),
+                "time": round((idx + 1) * step, 3),
+                "text": str(item.get("text") or ""),
+            }
+            for idx, item in enumerate(plain_blocks[:240])
         ]
         estimated = True
 
@@ -128,22 +192,19 @@ def normalize_lyrics_payload(value: Any) -> dict:
     raw_lines = value.get("lines") if isinstance(value.get("lines"), list) else []
     lines: list[dict] = []
     seen = set()
-    for item in raw_lines:
-        if not isinstance(item, dict):
-            continue
-        text = _clean_lyric_text(item.get("text"))
-        if not text:
-            continue
-        try:
-            time_value = max(0.0, float(item.get("time") or 0))
-        except Exception:
-            time_value = 0.0
-        key = (round(time_value, 3), text)
+    mergeable_lines = [item for item in raw_lines if isinstance(item, dict)]
+    for item in _merge_translation_lines(mergeable_lines):
+        text = str(item.get("text") or "")
+        time_value = float(item.get("time") or 0)
+        translation = str(item.get("translation") or "")
+        key = (round(time_value, 3), text, translation)
         if key in seen:
             continue
         seen.add(key)
-        lines.append({"time": round(time_value, 3), "text": text})
-    lines.sort(key=lambda item: (float(item.get("time") or 0), str(item.get("text") or "")))
+        line = {"time": round(time_value, 3), "text": text}
+        if translation:
+            line["translation"] = translation
+        lines.append(line)
 
     raw_plain = value.get("plain_lines") if isinstance(value.get("plain_lines"), list) else []
     plain_lines = []
