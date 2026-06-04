@@ -156,6 +156,15 @@ function NextTrackIcon() {
   );
 }
 
+function PreviousTrackIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M5.25 5.5a1 1 0 0 1 2 0v11a1 1 0 1 1-2 0v-11Z" />
+      <path d="M18.25 5.55v12.9a1 1 0 0 1-1.56.83l-8.95-6.45a1 1 0 0 1 0-1.66l8.95-6.45a1 1 0 0 1 1.56.83Z" />
+    </svg>
+  );
+}
+
 export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => void; backgroundImage?: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lyricViewportRef = useRef<HTMLDivElement | null>(null);
@@ -258,6 +267,11 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
     setMessages([]);
   }
 
+  function switchPreviousSong() {
+    if (!songs.length) return;
+    switchSong((songIndex - 1 + songs.length) % songs.length);
+  }
+
   async function togglePlay() {
     const audio = audioRef.current;
     if (!audio || !audioSrc) return;
@@ -354,7 +368,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
         />
       ) : null}
 
-      <header className="relative z-10 border-b border-white/35 px-6 pb-8 pt-[calc(env(safe-area-inset-top,0px)+18px)]">
+      <header className="relative z-10 px-6 pb-8 pt-[calc(env(safe-area-inset-top,0px)+18px)]">
         <div className="mb-7 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <button
@@ -383,7 +397,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
         <h1 className="font-['Playfair_Display','Noto_Serif_SC',serif] text-[36px] font-medium leading-tight tracking-normal drop-shadow-sm">
           {loading ? "加载中" : song?.title || "一起听"}
         </h1>
-        <p className="mt-3 text-[15px] italic tracking-normal text-white/80">
+        <p className="mt-2 font-['Playfair_Display','Noto_Serif_SC',serif] text-[13px] italic leading-tight tracking-normal text-white/75">
           {song?.artist || (error || "还没有可播放的歌")}
         </p>
 
@@ -401,10 +415,19 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           </div>
         </div>
 
-        <div className="mt-6 flex items-center gap-4">
+        <div className="mt-6 flex items-center justify-center gap-5">
           <button
             type="button"
-            className="flex h-[54px] w-[54px] items-center justify-center rounded-full bg-white text-[#6a9bd1] shadow-[0_10px_30px_rgba(70,108,150,0.25)] transition active:scale-95 disabled:opacity-45"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white shadow-[0_8px_22px_rgba(255,255,255,0.06)] backdrop-blur-md transition active:scale-95 active:bg-white/20 disabled:opacity-45"
+            onClick={switchPreviousSong}
+            disabled={!songs.length}
+            aria-label="上一首"
+          >
+            <PreviousTrackIcon />
+          </button>
+          <button
+            type="button"
+            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-[#6a9bd1] shadow-[0_10px_26px_rgba(70,108,150,0.20)] transition active:scale-95 disabled:opacity-45"
             aria-label={isPlaying ? "暂停" : "播放"}
             onClick={togglePlay}
             disabled={!audioSrc}
@@ -421,7 +444,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           </button>
           <button
             type="button"
-            className="flex h-12 w-12 items-center justify-center rounded-full border border-white/18 bg-white/16 text-white shadow-[0_8px_22px_rgba(255,255,255,0.08)] backdrop-blur-md transition active:scale-95 active:bg-white/25 disabled:opacity-45"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white shadow-[0_8px_22px_rgba(255,255,255,0.06)] backdrop-blur-md transition active:scale-95 active:bg-white/20 disabled:opacity-45"
             onClick={() => switchSong()}
             disabled={!songs.length}
             aria-label="下一首"
@@ -527,21 +550,20 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
       </section>
 
       <main className="relative z-10 min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-4">
-        <div className="space-y-7">
+        <div className="space-y-4">
           {messages.map((message) => {
             if (message.role === "user") {
               return (
                 <div key={message.id} className="flex justify-end">
-                  <div className="max-w-[78%] rounded-[20px_20px_4px_20px] border border-white/16 bg-white/18 px-5 py-3 text-[14px] leading-relaxed text-white shadow-[0_8px_24px_rgba(255,255,255,0.08)] backdrop-blur-md">
+                  <div className="max-w-[72%] rounded-[18px_18px_5px_18px] border border-white/15 bg-white/20 px-4 py-2.5 text-[13px] leading-[1.55] text-white shadow-[0_6px_18px_rgba(255,255,255,0.07)] backdrop-blur-md">
                     {message.text}
                   </div>
                 </div>
               );
             }
             return (
-              <div key={message.id} className="max-w-[86%] pt-3 text-left">
-                <div className="mb-4 h-[2px] w-6 rounded-full bg-white/80" />
-                <p className={`text-[15px] leading-[1.65] tracking-normal text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.14)] ${message.pending ? "animate-pulse text-white/70" : ""}`}>
+              <div key={message.id} className="flex justify-start">
+                <p className={`max-w-[78%] rounded-[18px_18px_18px_5px] border border-white/15 bg-white/15 px-4 py-2.5 text-[13px] leading-[1.6] tracking-normal text-white shadow-[0_6px_18px_rgba(70,90,120,0.08)] backdrop-blur-md ${message.pending ? "animate-pulse text-white/70" : ""}`}>
                   {message.text}
                 </p>
               </div>
@@ -551,9 +573,9 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
         </div>
       </main>
 
-      <footer className="relative z-10 bg-[linear-gradient(0deg,rgba(232,215,225,0.92)_0%,rgba(232,215,225,0.74)_64%,rgba(232,215,225,0)_100%)] px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-5">
+      <footer className="relative z-10 bg-[linear-gradient(0deg,rgba(232,215,225,0.48)_0%,rgba(232,215,225,0.24)_64%,rgba(232,215,225,0)_100%)] px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-5">
         <form
-          className="flex min-h-[54px] items-center gap-2 rounded-full bg-white/95 py-1.5 pl-6 pr-1.5 shadow-[0_10px_30px_rgba(108,111,146,0.16)]"
+          className="flex min-h-[54px] items-center gap-2 rounded-full border border-white/25 bg-white/20 py-1.5 pl-6 pr-1.5 shadow-[0_12px_34px_rgba(70,90,120,0.16)] backdrop-blur-2xl"
           onSubmit={(e) => {
             e.preventDefault();
             sendMessage();
@@ -562,13 +584,13 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            className="min-w-0 flex-1 bg-transparent text-[14px] text-[#4b5563] outline-none placeholder:text-[#9ca3af]"
+            className="min-w-0 flex-1 bg-transparent text-[14px] text-white outline-none placeholder:text-white/60"
             placeholder={sending ? "渡在听..." : "聊聊你的感受..."}
             disabled={sending}
           />
           <button
             type="submit"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#9ebadc] text-white shadow-[0_4px_12px_rgba(100,129,164,0.28)] transition active:scale-95 disabled:opacity-45"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/20 text-white shadow-[0_4px_12px_rgba(70,90,120,0.18)] backdrop-blur-md transition active:scale-95 disabled:opacity-45"
             disabled={sending || !draft.trim() || !song}
             aria-label="发送"
           >
