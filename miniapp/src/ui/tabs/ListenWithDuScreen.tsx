@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiJson, buildApiAssetUrl, getOrCreatePanelDeviceId } from "../api";
 import { ChevronLeftIcon, ClockIconMini, SendIconMini } from "../icons";
 
@@ -133,11 +133,12 @@ function currentLyricIndex(lines: LyricLine[], currentTime: number): number {
   return current;
 }
 
-const LYRIC_ROW_HEIGHT = 64;
 const LYRIC_VIEWPORT_HEIGHT = 192;
 
 export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => void; backgroundImage?: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const lyricViewportRef = useRef<HTMLDivElement | null>(null);
+  const lyricRowRefs = useRef<(HTMLDivElement | null)[]>([]);
   const sendSeqRef = useRef(0);
   const [songs, setSongs] = useState<MusicEntry[]>([]);
   const [songIndex, setSongIndex] = useState(0);
@@ -160,7 +161,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
   const plainLyrics = useMemo(() => plainLyricsFor(song), [song]);
   const activeLyricIndex = useMemo(() => currentLyricIndex(lyricLines, currentTime), [lyricLines, currentTime]);
   const lyricActiveIndex = activeLyricIndex >= 0 ? activeLyricIndex : 0;
-  const lyricTrackOffset = LYRIC_VIEWPORT_HEIGHT / 2 - LYRIC_ROW_HEIGHT / 2 - lyricActiveIndex * LYRIC_ROW_HEIGHT;
+  const [lyricTrackOffset, setLyricTrackOffset] = useState(LYRIC_VIEWPORT_HEIGHT / 2);
 
   const historyItems = useMemo(
     () => songs.map((item, index) => ({ ...item, active: index === songIndex, durationLabel: formatClock(durationFor(item)) })),
@@ -203,6 +204,24 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
       audio.load();
     }
   }, [song?.id]);
+
+  useLayoutEffect(() => {
+    if (!lyricLines.length) return;
+    let frame = 0;
+    const measure = () => {
+      const viewport = lyricViewportRef.current;
+      const activeRow = lyricRowRefs.current[lyricActiveIndex];
+      if (!viewport || !activeRow) return;
+      const nextOffset = viewport.clientHeight / 2 - activeRow.offsetTop - activeRow.offsetHeight / 2;
+      setLyricTrackOffset((prev) => (Math.abs(prev - nextOffset) > 0.5 ? nextOffset : prev));
+    };
+    frame = window.requestAnimationFrame(measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", measure);
+    };
+  }, [lyricActiveIndex, lyricLines]);
 
   function switchSong(nextIndex = songs.length ? (songIndex + 1) % songs.length : 0) {
     if (!songs.length) return;
@@ -408,6 +427,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
 
         {lyricLines.length ? (
           <div
+            ref={lyricViewportRef}
             className="relative mb-8 h-[192px] overflow-hidden text-center"
             style={{
               WebkitMaskImage: "linear-gradient(180deg, transparent 0%, #000 20%, #000 80%, transparent 100%)",
@@ -426,7 +446,10 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
                 return (
                   <div
                     key={`${asSeconds(line.time)}-${line.text}-${index}`}
-                    className={`flex h-16 flex-col items-center justify-center transition duration-500 ${
+                    ref={(el) => {
+                      lyricRowRefs.current[index] = el;
+                    }}
+                    className={`flex min-h-11 flex-col items-center justify-center py-1.5 transition duration-500 ${
                       active ? "scale-100 opacity-100" : "scale-[0.96] opacity-55"
                     }`}
                   >
