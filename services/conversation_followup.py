@@ -682,8 +682,7 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
         event_text=event_text,
         created_at=created_at,
         extra_instruction=(
-            "请你现在直接对她回应一两句。不要解释工具、回执或系统流程；"
-            "不要把这当成普通任务总结，要像刚收到她这个动作一样自然接住。"
+            "请你现在直接对她回应一两句。不要解释工具、回执或系统流程。"
         ),
         wakeup_kind="choice_dialog",
     )
