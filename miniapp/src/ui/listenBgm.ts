@@ -1,3 +1,5 @@
+import { apiFetch } from "./api";
+
 export type MusicBgmContext = {
   active?: boolean;
   is_playing?: boolean;
@@ -14,6 +16,12 @@ export type MusicBgmContext = {
 const MUSIC_BGM_STORAGE_KEY = "miniapp.listenWithDu.bgmContext.v1";
 const MUSIC_BGM_EVENT = "miniapp-listen-bgm-context";
 const MUSIC_BGM_MAX_AGE_MS = 2 * 60 * 1000;
+const MUSIC_BGM_REMOTE_MIN_INTERVAL_MS = 5000;
+
+let pendingRemoteContext: MusicBgmContext | null = null;
+let lastRemoteContext: MusicBgmContext | null = null;
+let lastRemoteSentAt = 0;
+let remoteSyncTimer = 0;
 
 function asFiniteNumber(value: unknown): number {
   const n = Number(value || 0);
@@ -45,6 +53,57 @@ function cleanContext(raw: MusicBgmContext | null | undefined): MusicBgmContext 
   };
 }
 
+function remoteStateKey(context: MusicBgmContext | null): string {
+  if (!context) return "";
+  return [
+    context.active ? "1" : "0",
+    context.is_playing ? "1" : "0",
+    context.entry_id || "",
+    context.title || "",
+    context.artist || "",
+  ].join("|");
+}
+
+function sendPendingRemoteContext() {
+  if (typeof window === "undefined") return;
+  if (remoteSyncTimer) {
+    window.clearTimeout(remoteSyncTimer);
+    remoteSyncTimer = 0;
+  }
+  const payload = pendingRemoteContext;
+  if (!payload) return;
+  pendingRemoteContext = null;
+  lastRemoteContext = payload;
+  lastRemoteSentAt = Date.now();
+  void apiFetch("/miniapp-api/music/listen/bgm-context", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    keepalive: !payload.is_playing,
+  }).catch(() => {});
+}
+
+function syncRemoteContext(context: MusicBgmContext) {
+  if (typeof window === "undefined") return;
+  pendingRemoteContext = context;
+  const now = Date.now();
+  const stateChanged = remoteStateKey(context) !== remoteStateKey(lastRemoteContext);
+  const shouldSendNow =
+    stateChanged ||
+    !context.active ||
+    !context.is_playing ||
+    !lastRemoteContext ||
+    now - lastRemoteSentAt >= MUSIC_BGM_REMOTE_MIN_INTERVAL_MS;
+  if (shouldSendNow) {
+    sendPendingRemoteContext();
+    return;
+  }
+  if (!remoteSyncTimer) {
+    const delay = Math.max(250, MUSIC_BGM_REMOTE_MIN_INTERVAL_MS - (now - lastRemoteSentAt));
+    remoteSyncTimer = window.setTimeout(sendPendingRemoteContext, delay);
+  }
+}
+
 export function writeMusicBgmContext(raw: MusicBgmContext) {
   if (typeof window === "undefined") return;
   const context = cleanContext({ ...raw, updated_at: Date.now() });
@@ -55,6 +114,7 @@ export function writeMusicBgmContext(raw: MusicBgmContext) {
     // BGM context is best-effort; playback must keep working if storage is unavailable.
   }
   window.dispatchEvent(new CustomEvent(MUSIC_BGM_EVENT, { detail: context }));
+  syncRemoteContext(context);
 }
 
 export function readMusicBgmContext(maxAgeMs = MUSIC_BGM_MAX_AGE_MS): MusicBgmContext | null {

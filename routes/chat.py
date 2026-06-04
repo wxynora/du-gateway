@@ -61,6 +61,7 @@ from pipeline.pipeline import (
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import r2_store, whitelist_store
+from storage.music_bgm_state import get_active_music_bgm_context
 from storage.music_melody_store import get_music_melody_entry_by_id
 from services.music_lyrics import normalize_lyrics_payload
 from services.du_daily import (
@@ -397,16 +398,27 @@ def _build_music_bgm_context_system(context: dict) -> str:
     return "\n".join(line for line in lines if str(line or "").strip()).strip()
 
 
-def _inject_music_bgm_context(body: dict) -> dict:
+def _inject_music_bgm_context(body: dict, *, reply_channel: str = "") -> dict:
     if not isinstance(body, dict):
         return body
+    has_explicit_context = "music_bgm_context" in body or "listen_bgm_context" in body
     raw_context = body.get("music_bgm_context") or body.get("listen_bgm_context")
+    if not has_explicit_context and str(reply_channel or "").strip().lower() == "qq":
+        raw_context = get_active_music_bgm_context()
     body = dict(body)
     body.pop("music_bgm_context", None)
     body.pop("listen_bgm_context", None)
     system_text = _build_music_bgm_context_system(raw_context) if isinstance(raw_context, dict) else ""
     if not system_text:
         return body
+    if not has_explicit_context:
+        logger.info(
+            "music_bgm_context_injected channel=%s entry_id=%s title=%s current_time=%.2f",
+            reply_channel,
+            str((raw_context or {}).get("entry_id") or ""),
+            str((raw_context or {}).get("title") or "")[:80],
+            _music_bgm_float((raw_context or {}).get("current_time")),
+        )
     messages = body.get("messages") if isinstance(body.get("messages"), list) else []
     body["messages"] = [{"role": "system", "content": system_text, "__dynamic__": True}] + list(messages)
     return body
@@ -1386,7 +1398,7 @@ def chat_completions():
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
         body = step_inject_reference_note(body)
         body = step_inject_du_midterm_memory(body, window_id)
-    body = _inject_music_bgm_context(body)
+    body = _inject_music_bgm_context(body, reply_channel=reply_channel)
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     if _is_local_claude_oauth_proxy_url(active_upstream_url) and not _skip_claude_thinking_carryover_request():
