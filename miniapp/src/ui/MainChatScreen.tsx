@@ -62,6 +62,7 @@ import {
 import { SumiOverlay } from "../plugins/sumi-overlay";
 import { migrateLocalChatHistoriesToDevice, migrateLocalChatHistoryDevice, readLocalChatHistory, readLocalChatHistoryRows, writeLocalChatHistory } from "./storage/chatHistoryDb";
 import { useCodexGroupTaskRealtime, type CodexGroupTaskRealtimeTask } from "./hooks/useCodexGroupTaskRealtime";
+import { readMusicBgmContext } from "./listenBgm";
 import { useToast } from "./toast";
 
 type SumiTalkChatJobCreateResponse = {
@@ -1396,12 +1397,14 @@ export function MainChatScreen({
           : groupChatMode
           ? buildGroupTurnUserContent(nextMessages, content)
           : content;
+        const musicBgmContext = !groupChatMode ? readMusicBgmContext() : null;
         const requestWindowId = windowId;
         const requestBody = {
           model: activeModel,
           messages: [{ role: "user", content: requestUserContent }],
           stream: false,
           window_id: requestWindowId,
+          ...(musicBgmContext ? { music_bgm_context: musicBgmContext } : {}),
         };
         const started = await apiJson<SumiTalkChatJobCreateResponse>(groupChatMode ? "/miniapp-api/sumitalk-chat-jobs" : "/miniapp-api/sumitalk-chat", {
           method: "POST",

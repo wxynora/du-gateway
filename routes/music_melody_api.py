@@ -314,9 +314,10 @@ def _build_listen_context_system(entry: dict, segment: dict, current_time: float
     current_lyrics = _lyrics_for_time(entry, current_time)
     lyrics_context = _lyrics_context_for_time(entry, current_time)
     lines = [
-        "你正在和小玥一起听歌。",
+        "你正在和小玥日常聊天，当前这首歌作为背景音乐在播放。",
+        "把歌当成当下环境和情绪底色，像平时那样自然聊天；不要把回复写成乐评、歌词赏析或报告。",
         "",
-        "【一起听上下文】",
+        "【当前背景音乐】",
         f"歌曲：{title or '未知歌曲'}" + (f" / {artist}" if artist else ""),
         f"当前播放：{_format_clock(current_time)}" + (f" / {_format_clock(duration)}" if duration > 0 else ""),
     ]

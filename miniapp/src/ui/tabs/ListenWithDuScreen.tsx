@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiJson, buildApiAssetUrl, getOrCreatePanelDeviceId } from "../api";
 import { MAIN_SUMITALK_DISPLAY_WINDOW_ID } from "../chatWindowIds";
 import { ChevronLeftIcon, SendIconMini } from "../icons";
+import { writeMusicBgmContext } from "../listenBgm";
 
 type ListenMessage = {
   id: number;
@@ -374,6 +375,26 @@ export function ListenWithDuScreen({
       setIsPlaying(false);
     }
   }, [audioSrc, song?.id]);
+
+  useEffect(() => {
+    writeMusicBgmContext({
+      active: Boolean(song && audioSrc),
+      is_playing: Boolean(song && audioSrc && isPlaying),
+      entry_id: song?.id,
+      title: song?.title,
+      artist: song?.artist,
+      current_time: currentTime,
+      duration_seconds: songDuration,
+      segment: currentSegment,
+      source: "listen-with-du",
+    });
+  }, [audioSrc, currentSegment, currentTime, isPlaying, song?.artist, song?.id, song?.title, songDuration]);
+
+  useEffect(() => {
+    return () => {
+      writeMusicBgmContext({ active: false, is_playing: false, source: "listen-with-du" });
+    };
+  }, []);
 
   useLayoutEffect(() => {
     if (!lyricLines.length) return;

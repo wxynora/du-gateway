@@ -61,6 +61,8 @@ from pipeline.pipeline import (
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
 from storage import r2_store, whitelist_store
+from storage.music_melody_store import get_music_melody_entry_by_id
+from services.music_lyrics import normalize_lyrics_payload
 from services.du_daily import (
     build_chat_trigger as build_du_daily_trigger,
 )
@@ -217,6 +219,197 @@ def _xiaoai_speaker_from_request() -> str:
 
 def _reply_target() -> str:
     return str(request.headers.get("X-Reply-Target") or "").strip()
+
+
+def _music_bgm_float(value: object) -> float:
+    try:
+        return float(value or 0)
+    except Exception:
+        return 0.0
+
+
+def _music_bgm_clip(value: object, limit: int = 240) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _music_bgm_clock(seconds: float) -> str:
+    total = max(0, int(round(float(seconds or 0))))
+    return f"{total // 60}:{str(total % 60).zfill(2)}"
+
+
+def _music_bgm_duration(entry: dict, context: dict) -> float:
+    duration = _music_bgm_float(context.get("duration_seconds") or (entry or {}).get("duration_seconds"))
+    if duration > 0:
+        return duration
+    structured = (entry or {}).get("structured") if isinstance((entry or {}).get("structured"), dict) else {}
+    segments = structured.get("segments") if isinstance(structured, dict) else []
+    return max([_music_bgm_float(item.get("end")) for item in segments if isinstance(item, dict)] or [0.0])
+
+
+def _music_bgm_segment_for_time(entry: dict, context: dict, current_time: float) -> dict:
+    client_segment = context.get("segment") if isinstance(context.get("segment"), dict) else {}
+    structured = (entry or {}).get("structured") if isinstance((entry or {}).get("structured"), dict) else {}
+    segments = structured.get("segments") if isinstance(structured, dict) else []
+    current = max(0.0, float(current_time or 0))
+    fallback = client_segment if isinstance(client_segment, dict) else {}
+    for item in segments if isinstance(segments, list) else []:
+        if not isinstance(item, dict):
+            continue
+        start = _music_bgm_float(item.get("start"))
+        end = _music_bgm_float(item.get("end"))
+        if end > start:
+            fallback = item
+            if start <= current < end:
+                return item
+    return fallback or {}
+
+
+def _music_bgm_format_segment(segment: dict, current_time: float) -> str:
+    start = _music_bgm_float(segment.get("start"))
+    end = _music_bgm_float(segment.get("end"))
+    section = _music_bgm_clip(segment.get("section"), 60) or "这一段"
+    current = start <= max(0.0, float(current_time or 0)) < end if end > start else False
+    head = f"- {_music_bgm_clock(start)}-{_music_bgm_clock(end)} {section}" + ("（当前）" if current else "")
+    details = []
+    plain = _music_bgm_clip(segment.get("plain"), 260)
+    melody = _music_bgm_clip(segment.get("melody_motion"), 180)
+    sonic = _music_bgm_clip(segment.get("sonic_detail"), 180)
+    intensity = _music_bgm_clip(segment.get("intensity"), 160)
+    if plain:
+        details.append(f"听感：{plain}")
+    if melody:
+        details.append(f"走向：{melody}")
+    if sonic:
+        details.append(f"声音：{sonic}")
+    if intensity:
+        details.append(f"推进：{intensity}")
+    return head + ("：" + "；".join(details) if details else "")
+
+
+def _music_bgm_segments_until_time(entry: dict, current_time: float, current_segment: dict) -> list[dict]:
+    structured = (entry or {}).get("structured") if isinstance((entry or {}).get("structured"), dict) else {}
+    segments = structured.get("segments") if isinstance(structured, dict) else []
+    current = max(0.0, float(current_time or 0))
+    out: list[dict] = []
+    seen = set()
+    for item in segments if isinstance(segments, list) else []:
+        if not isinstance(item, dict):
+            continue
+        start = _music_bgm_float(item.get("start"))
+        end = _music_bgm_float(item.get("end"))
+        if end <= start or start > current + 0.15:
+            continue
+        key = (round(start, 2), round(end, 2), str(item.get("section") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    if isinstance(current_segment, dict) and current_segment:
+        start = _music_bgm_float(current_segment.get("start"))
+        end = _music_bgm_float(current_segment.get("end"))
+        key = (round(start, 2), round(end, 2), str(current_segment.get("section") or ""))
+        if end > start and start <= current + 0.15 and key not in seen:
+            out.append(current_segment)
+    out.sort(key=lambda item: (_music_bgm_float(item.get("start")), _music_bgm_float(item.get("end"))))
+    while len("\n".join(_music_bgm_format_segment(item, current_time) for item in out)) > 2600 and len(out) > 8:
+        out.pop(0)
+    return out
+
+
+def _music_bgm_lyrics_context(entry: dict, current_time: float) -> str:
+    lyrics = normalize_lyrics_payload((entry or {}).get("lyrics")) if (entry or {}).get("lyrics") else {}
+    raw_lines = lyrics.get("lines") if isinstance(lyrics, dict) else []
+    plain_lines = lyrics.get("plain_lines") if isinstance(lyrics, dict) else []
+    raw_lines = raw_lines if isinstance(raw_lines, list) else []
+    plain_lines = plain_lines if isinstance(plain_lines, list) else []
+    clean_lines = []
+    for item in raw_lines:
+        if not isinstance(item, dict):
+            continue
+        text = _music_bgm_clip(item.get("text"), 160)
+        if not text:
+            continue
+        translation = _music_bgm_clip(item.get("translation"), 160)
+        clean_lines.append({
+            "time": _music_bgm_float(item.get("time")),
+            "text": text + (f"（{translation}）" if translation else ""),
+        })
+    if clean_lines:
+        clean_lines.sort(key=lambda item: item["time"])
+        active = 0
+        t = max(0.0, float(current_time or 0))
+        for idx, item in enumerate(clean_lines):
+            if item["time"] <= t + 0.15:
+                active = idx
+            else:
+                break
+        past = [f"- {_music_bgm_clock(item['time'])} {item['text']}" for item in clean_lines[: active + 1]]
+        while len("\n".join(past)) > 2200 and len(past) > 10:
+            past.pop(0)
+        if past and past[0] != f"- {_music_bgm_clock(clean_lines[0]['time'])} {clean_lines[0]['text']}":
+            past.insert(0, "- ...")
+        upcoming = [f"- {_music_bgm_clock(item['time'])} {item['text']}" for item in clean_lines[active + 1 : active + 3]]
+        parts = []
+        if past:
+            parts.append("从开头到当前已唱到的歌词：\n" + "\n".join(past))
+        if upcoming:
+            parts.append("接下来几句歌词：\n" + "\n".join(upcoming))
+        return "\n".join(parts).strip()
+    clean_plain = [_music_bgm_clip(item, 160) for item in plain_lines if _music_bgm_clip(item, 160)]
+    if not clean_plain:
+        return ""
+    return "歌词文本：\n" + _music_bgm_clip("\n".join(f"- {line}" for line in clean_plain[:60]), 2600)
+
+
+def _build_music_bgm_context_system(context: dict) -> str:
+    if not isinstance(context, dict) or not context.get("active") or not context.get("is_playing"):
+        return ""
+    entry_id = str(context.get("entry_id") or context.get("id") or "").strip()
+    entry = get_music_melody_entry_by_id(entry_id) if entry_id else None
+    entry = entry if isinstance(entry, dict) else {}
+    current_time = _music_bgm_float(context.get("current_time") or context.get("currentTime"))
+    duration = _music_bgm_duration(entry, context)
+    segment = _music_bgm_segment_for_time(entry, context, current_time)
+    heard_segments = _music_bgm_segments_until_time(entry, current_time, segment)
+    title = _music_bgm_clip((entry or {}).get("title") or context.get("title"), 80)
+    artist = _music_bgm_clip((entry or {}).get("artist") or context.get("artist"), 80)
+    structured = (entry or {}).get("structured") if isinstance((entry or {}).get("structured"), dict) else {}
+    overall = _music_bgm_clip((entry or {}).get("overall_trend") or structured.get("overall_trend"), 500)
+    lyrics_context = _music_bgm_lyrics_context(entry, current_time)
+
+    lines = [
+        "【当前背景音乐】",
+        "你正在和小玥日常聊天。现在有一首歌作为背景音乐在播放；把它当成当下环境和情绪底色，像平时那样自然聊天。",
+        "不要把回复写成乐评、歌词赏析或报告。除非她主动聊这首歌，否则只在合适时轻轻接住音乐、歌词或氛围。",
+        f"背景音乐：{title or '未知歌曲'}" + (f" / {artist}" if artist else ""),
+        f"播放位置：{_music_bgm_clock(current_time)}" + (f" / {_music_bgm_clock(duration)}" if duration > 0 else ""),
+    ]
+    if heard_segments:
+        lines.append("从开头到当前已听到的音乐变化：")
+        lines.extend(_music_bgm_format_segment(item, current_time) for item in heard_segments)
+    if lyrics_context:
+        lines.append(lyrics_context)
+    if overall:
+        lines.append(f"整首歌的大致走向：{overall}")
+    return "\n".join(line for line in lines if str(line or "").strip()).strip()
+
+
+def _inject_music_bgm_context(body: dict) -> dict:
+    if not isinstance(body, dict):
+        return body
+    raw_context = body.get("music_bgm_context") or body.get("listen_bgm_context")
+    body = dict(body)
+    body.pop("music_bgm_context", None)
+    body.pop("listen_bgm_context", None)
+    system_text = _build_music_bgm_context_system(raw_context) if isinstance(raw_context, dict) else ""
+    if not system_text:
+        return body
+    messages = body.get("messages") if isinstance(body.get("messages"), list) else []
+    body["messages"] = [{"role": "system", "content": system_text, "__dynamic__": True}] + list(messages)
+    return body
 
 
 def _last_user_for_archive(last_user: Optional[dict], *, reply_target: str, window_id: str) -> Optional[dict]:
@@ -1193,6 +1386,7 @@ def chat_completions():
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
         body = step_inject_reference_note(body)
         body = step_inject_du_midterm_memory(body, window_id)
+    body = _inject_music_bgm_context(body)
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     if _is_local_claude_oauth_proxy_url(active_upstream_url) and not _skip_claude_thinking_carryover_request():
