@@ -436,6 +436,7 @@ export function ListenWithDuScreen({
           current_time: currentTime,
           duration_seconds: songDuration,
           segment: currentSegment,
+          lyrics: lyricsPayloadFor(song),
           message: text,
           recent_messages: recentMessages,
           window_id: MAIN_SUMITALK_DISPLAY_WINDOW_ID,
@@ -463,17 +464,17 @@ export function ListenWithDuScreen({
   }
 
   return (
-    <div className="fixed inset-0 z-30 flex h-screen w-full flex-col overflow-hidden overscroll-none bg-transparent text-white">
+    <div className="fixed inset-0 z-30 flex h-[100lvh] min-h-screen w-full flex-col overflow-hidden overscroll-none bg-transparent text-white">
       {backgroundImage ? (
         <div
-          className="absolute inset-0 bg-cover bg-center"
+          className="fixed inset-0 bg-cover bg-center"
           style={{ backgroundImage: `url(${backgroundImage})` }}
         />
       ) : (
-        <div className="absolute inset-0 bg-[linear-gradient(180deg,#6a9bd1_0%,#9ebadc_48%,#e8d7e1_100%)]" />
+        <div className="fixed inset-0 bg-[linear-gradient(180deg,#6a9bd1_0%,#9ebadc_48%,#e8d7e1_100%)]" />
       )}
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(37,58,85,0.18)_0%,rgba(62,78,108,0.10)_42%,rgba(232,215,225,0.58)_100%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.45),transparent_30%),radial-gradient(circle_at_82%_74%,rgba(255,210,226,0.46),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0))] mix-blend-overlay" />
+      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,rgba(37,58,85,0.18)_0%,rgba(62,78,108,0.10)_42%,rgba(232,215,225,0.58)_100%)]" />
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.45),transparent_30%),radial-gradient(circle_at_82%_74%,rgba(255,210,226,0.46),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0))] mix-blend-overlay" />
 
       {audioSrc ? (
         <audio
@@ -532,7 +533,7 @@ export function ListenWithDuScreen({
           </div>
         </div>
 
-        <div className="mt-2 flex items-center justify-center gap-12">
+        <div className="mt-2 flex items-center justify-center gap-16">
           <button
             type="button"
             className="flex h-10 w-10 items-center justify-center text-white drop-shadow-[0_3px_10px_rgba(70,90,120,0.22)] transition active:scale-95 disabled:cursor-default"
@@ -544,7 +545,7 @@ export function ListenWithDuScreen({
           </button>
           <button
             type="button"
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#6a9bd1] shadow-[0_10px_24px_rgba(70,108,150,0.18)] transition active:scale-95 disabled:cursor-default"
+            className="flex h-10 w-10 items-center justify-center text-white drop-shadow-[0_3px_10px_rgba(70,90,120,0.22)] transition active:scale-95 disabled:cursor-default"
             aria-label={isPlaying ? "暂停" : "播放"}
             onClick={togglePlay}
             disabled={!audioSrc}

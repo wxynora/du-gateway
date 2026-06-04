@@ -209,7 +209,7 @@ def _format_segment_context_line(segment: dict, current_time: float) -> str:
 
 
 def _lyrics_for_time(entry: dict, current_time: float) -> list[str]:
-    lyrics = entry.get("lyrics") if isinstance(entry.get("lyrics"), dict) else {}
+    lyrics = normalize_lyrics_payload(entry.get("lyrics")) if entry.get("lyrics") else {}
     raw_lines = lyrics.get("lines") if isinstance(lyrics, dict) else []
     if not isinstance(raw_lines, list):
         return []
@@ -241,6 +241,53 @@ def _lyrics_for_time(entry: dict, current_time: float) -> list[str]:
     return [item["text"] for item in clean_lines[start : active + 2]]
 
 
+def _lyrics_context_for_time(entry: dict, current_time: float) -> str:
+    lyrics = normalize_lyrics_payload(entry.get("lyrics")) if entry.get("lyrics") else {}
+    raw_lines = lyrics.get("lines") if isinstance(lyrics, dict) else []
+    plain_lines = lyrics.get("plain_lines") if isinstance(lyrics, dict) else []
+    clean_lines = []
+    for item in raw_lines if isinstance(raw_lines, list) else []:
+        if not isinstance(item, dict):
+            continue
+        text = _clip_text(item.get("text"), 180)
+        if not text:
+            continue
+        translation = _clip_text(item.get("translation"), 180)
+        clean_lines.append(
+            {
+                "time": _float_value(item.get("time")),
+                "text": text + (f"（{translation}）" if translation else ""),
+            }
+        )
+    if clean_lines:
+        clean_lines.sort(key=lambda item: item["time"])
+        active = 0
+        t = max(0.0, float(current_time or 0))
+        for idx, item in enumerate(clean_lines):
+            if item["time"] <= t + 0.15:
+                active = idx
+            else:
+                break
+        past = [f"- {_format_clock(item['time'])} {item['text']}" for item in clean_lines[: active + 1]]
+        while len("\n".join(past)) > 4200 and len(past) > 14:
+            past.pop(0)
+        if past and past[0] != f"- {_format_clock(clean_lines[0]['time'])} {clean_lines[0]['text']}":
+            past.insert(0, "- ...")
+        upcoming = [f"- {_format_clock(item['time'])} {item['text']}" for item in clean_lines[active + 1 : active + 4]]
+        parts = []
+        if past:
+            parts.append("从开头到当前已唱到的歌词：\n" + "\n".join(past))
+        if upcoming:
+            parts.append("接下来几句歌词：\n" + "\n".join(upcoming))
+        return "\n".join(parts).strip()
+
+    clean_plain = [_clip_text(item, 180) for item in plain_lines if _clip_text(item, 180)]
+    if not clean_plain:
+        return ""
+    text = "\n".join(f"- {line}" for line in clean_plain[:80])
+    return "歌词文本：\n" + _clip_text(text, 5200)
+
+
 def _sanitize_recent_listen_messages(items: object) -> list[dict]:
     out = []
     for item in items if isinstance(items, list) else []:
@@ -265,6 +312,7 @@ def _build_listen_context_system(entry: dict, segment: dict, current_time: float
     overall = _clip_text(entry.get("overall_trend") or structured.get("overall_trend"), 700)
     heard_segments = _segments_until_time(entry, current_time, segment if isinstance(segment, dict) else None)
     current_lyrics = _lyrics_for_time(entry, current_time)
+    lyrics_context = _lyrics_context_for_time(entry, current_time)
     lines = [
         "你是渡，正在和小玥一起听歌。",
         "你要直接接她的话，像边听边轻声回应；不要写成音乐分析报告、数据报告或列表。",
@@ -278,7 +326,9 @@ def _build_listen_context_system(entry: dict, segment: dict, current_time: float
     if heard_segments:
         lines.append("从开头到当前已听到的音乐文字：")
         lines.extend(_format_segment_context_line(item, current_time) for item in heard_segments)
-    if current_lyrics:
+    if lyrics_context:
+        lines.append(lyrics_context)
+    elif current_lyrics:
         lines.append("当前歌词：" + " / ".join(current_lyrics))
     if overall:
         lines.append(f"整首歌的走向：{overall}")
@@ -489,6 +539,11 @@ def music_listen_chat():
         entry = get_music_melody_entry(title, artist, provider, model_key, prompt_version) if title else None
     if not entry:
         return jsonify({"ok": False, "error": "未找到这首歌的分析缓存"}), 404
+
+    if "lyrics" in body:
+        client_lyrics = normalize_lyrics_payload(body.get("lyrics"))
+        if client_lyrics.get("lines") or client_lyrics.get("plain_lines"):
+            entry = {**entry, "lyrics": client_lyrics}
 
     model = str(body.get("model") or "").strip() or upstream_store.get_cached_active_model(refresh_if_missing=True)
     if not model:
