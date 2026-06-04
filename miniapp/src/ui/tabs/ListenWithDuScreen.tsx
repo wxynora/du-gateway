@@ -176,13 +176,13 @@ function ListenAvatar({
 }) {
   if (image) {
     return (
-      <span className="block h-[34px] w-[34px] overflow-hidden rounded-full bg-white/25 shadow-[0_5px_14px_rgba(70,90,120,0.18)]">
+      <span className="block h-9 w-9 overflow-hidden rounded-full bg-white/25 shadow-[0_5px_14px_rgba(70,90,120,0.18)]">
         <img src={image} alt={label} className="h-full w-full object-cover" />
       </span>
     );
   }
   return (
-    <span className={`flex h-[34px] w-[34px] items-center justify-center rounded-full text-[12px] font-medium shadow-[0_5px_14px_rgba(70,90,120,0.18)] ${className}`}>
+    <span className={`flex h-9 w-9 items-center justify-center rounded-full text-[12px] font-medium shadow-[0_5px_14px_rgba(70,90,120,0.18)] ${className}`}>
       {label}
     </span>
   );
@@ -194,7 +194,7 @@ function ListenAvatarPair({ myAvatarImage, duAvatarImage }: { myAvatarImage?: st
       <span className="relative z-0">
         <ListenAvatar image={myAvatarImage} label="我" className="bg-[#eef2f7] text-[#67748a]" />
       </span>
-      <span className="relative z-10 -ml-1.5">
+      <span className="relative z-10 -ml-1">
         <ListenAvatar image={duAvatarImage} label="渡" className="bg-[#fff7df] text-[#8b6a34]" />
       </span>
       <HeartbeatWave />
@@ -205,7 +205,7 @@ function ListenAvatarPair({ myAvatarImage, duAvatarImage }: { myAvatarImage?: st
 function HeartbeatWave() {
   const path = "M0,12 L14,12 L18,4 L22,20 L26,8 L30,12 L52,12";
   return (
-    <span className="ml-2 flex h-6 w-[48px] items-center overflow-hidden text-white/78 drop-shadow-[0_2px_8px_rgba(70,90,120,0.18)]" aria-hidden="true">
+    <span className="ml-3 flex h-6 w-[48px] items-center overflow-hidden text-white/78 drop-shadow-[0_2px_8px_rgba(70,90,120,0.18)]" aria-hidden="true">
       <svg className="h-6 w-full fill-none stroke-current" viewBox="0 0 52 24">
         <path
           className="listen-heartbeat-draw"
@@ -259,6 +259,7 @@ export function ListenWithDuScreen({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [sending, setSending] = useState(false);
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
 
   useEffect(() => {
     const body = document.body;
@@ -278,6 +279,27 @@ export function ListenWithDuScreen({
       body.style.overscrollBehavior = previousBodyOverscroll;
       html.style.overflow = previousHtmlOverflow;
       html.style.overscrollBehavior = previousHtmlOverscroll;
+    };
+  }, []);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+
+    const updateKeyboardOffset = () => {
+      const offset = Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop));
+      setKeyboardOffset(offset > 24 ? offset : 0);
+    };
+
+    updateKeyboardOffset();
+    viewport.addEventListener("resize", updateKeyboardOffset);
+    viewport.addEventListener("scroll", updateKeyboardOffset);
+    window.addEventListener("resize", updateKeyboardOffset);
+
+    return () => {
+      viewport.removeEventListener("resize", updateKeyboardOffset);
+      viewport.removeEventListener("scroll", updateKeyboardOffset);
+      window.removeEventListener("resize", updateKeyboardOffset);
     };
   }, []);
 
@@ -441,7 +463,7 @@ export function ListenWithDuScreen({
   }
 
   return (
-    <div className="fixed inset-0 z-30 flex h-dvh w-full flex-col overflow-hidden overscroll-none bg-transparent text-white">
+    <div className="fixed inset-0 z-30 flex h-screen w-full flex-col overflow-hidden overscroll-none bg-transparent text-white">
       {backgroundImage ? (
         <div
           className="absolute inset-0 bg-cover bg-center"
@@ -471,7 +493,7 @@ export function ListenWithDuScreen({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/16 text-white backdrop-blur-md transition active:bg-white/25"
+              className="flex h-9 w-9 items-center justify-center text-white drop-shadow-[0_2px_8px_rgba(70,90,120,0.28)] transition active:scale-95 active:text-white/80"
               onClick={onBack}
               aria-label="返回"
             >
@@ -597,21 +619,22 @@ export function ListenWithDuScreen({
             >
               {lyricLines.map((line, index) => {
                 const active = index === lyricActiveIndex;
+                const hasTranslation = Boolean(line.translation);
                 return (
                   <div
                     key={`${asSeconds(line.time)}-${line.text}-${index}`}
                     ref={(el) => {
                       lyricRowRefs.current[index] = el;
                     }}
-                    className={`flex min-h-11 flex-col items-center justify-center py-1.5 transition duration-500 ${
+                    className={`flex flex-col items-center justify-center transition duration-500 ${hasTranslation ? "min-h-11 py-1.5" : "min-h-8 py-0.5"} ${
                       active ? "scale-100 opacity-100" : "scale-[0.96] opacity-55"
                     }`}
                   >
                     <p
                       className={`mx-auto max-w-[94%] truncate transition duration-500 ${
                         active
-                          ? "text-[16px] font-medium leading-7 text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.2)]"
-                          : "text-[13px] leading-6 text-white/62"
+                          ? `text-[16px] font-medium ${hasTranslation ? "leading-7" : "leading-6"} text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.2)]`
+                          : `text-[13px] ${hasTranslation ? "leading-6" : "leading-5"} text-white/62`
                       }`}
                     >
                       {line.text}
@@ -627,14 +650,14 @@ export function ListenWithDuScreen({
             </div>
           </div>
         ) : plainLyrics.length ? (
-          <div className="space-y-2 text-center font-['Songti_SC','STSong','Noto_Serif_SC','SimSun',serif]">
+          <div className="space-y-1 text-center font-['Songti_SC','STSong','Noto_Serif_SC','SimSun',serif]">
             {plainLyrics.slice(0, 5).map((text, index) => (
               <p
                 key={`${text}-${index}`}
                 className={`mx-auto max-w-[92%] transition ${
                   index === 0
-                    ? "text-[16px] font-medium leading-7 text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.18)]"
-                    : "text-[13px] leading-6 text-white/56"
+                    ? "text-[16px] font-medium leading-6 text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.18)]"
+                    : "text-[13px] leading-5 text-white/56"
                 }`}
               >
                 {text}
@@ -668,7 +691,10 @@ export function ListenWithDuScreen({
         </div>
       </main>
 
-      <footer className="relative z-10 px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-5">
+      <footer
+        className="relative z-10 px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-5 transition-transform duration-200 ease-out will-change-transform"
+        style={{ transform: keyboardOffset ? `translate3d(0, -${keyboardOffset}px, 0)` : undefined }}
+      >
         <form
           className="flex min-h-[46px] items-center gap-2 rounded-full border border-white/25 bg-white/20 py-1 pl-5 pr-1 shadow-[0_12px_34px_rgba(70,90,120,0.16)] backdrop-blur-2xl"
           onSubmit={(e) => {
