@@ -780,7 +780,16 @@ export function AppShell({
         <LazyPane><PixelHomeTab /></LazyPane>
       ) : null}
       {showCoRead ? <LazyPane><CoReadScreen onBack={() => setShowCoRead(false)} windowId={sharedChatWindowId} /></LazyPane> : null}
-      {showListenWithDu ? <LazyPane><ListenWithDuScreen onBack={() => setShowListenWithDu(false)} backgroundImage={listenBackgroundImage} /></LazyPane> : null}
+      {showListenWithDu ? (
+        <LazyPane>
+          <ListenWithDuScreen
+            onBack={() => setShowListenWithDu(false)}
+            backgroundImage={listenBackgroundImage}
+            myAvatarImage={myAvatarImage}
+            duAvatarImage={duAvatarImage}
+          />
+        </LazyPane>
+      ) : null}
       {showDiagnostics ? (
         <FullScreenPane title="系统诊断" accent="neutral" headerMode="simple" onBack={() => setShowDiagnostics(false)}>
           <DiagnosticsScreen />

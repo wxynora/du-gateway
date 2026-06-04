@@ -165,7 +165,84 @@ function PreviousTrackIcon() {
   );
 }
 
-export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => void; backgroundImage?: string }) {
+function ListenAvatar({
+  image,
+  label,
+  className,
+}: {
+  image?: string;
+  label: string;
+  className: string;
+}) {
+  if (image) {
+    return (
+      <span className="block h-[34px] w-[34px] overflow-hidden rounded-full bg-white/25 shadow-[0_5px_14px_rgba(70,90,120,0.18)]">
+        <img src={image} alt={label} className="h-full w-full object-cover" />
+      </span>
+    );
+  }
+  return (
+    <span className={`flex h-[34px] w-[34px] items-center justify-center rounded-full text-[12px] font-medium shadow-[0_5px_14px_rgba(70,90,120,0.18)] ${className}`}>
+      {label}
+    </span>
+  );
+}
+
+function ListenAvatarPair({ myAvatarImage, duAvatarImage }: { myAvatarImage?: string; duAvatarImage?: string }) {
+  return (
+    <div className="relative flex h-9 items-center pl-1" aria-label="我和渡一起听">
+      <span className="relative z-0">
+        <ListenAvatar image={myAvatarImage} label="我" className="bg-[#eef2f7] text-[#67748a]" />
+      </span>
+      <span className="relative z-10 -ml-1.5">
+        <ListenAvatar image={duAvatarImage} label="渡" className="bg-[#fff7df] text-[#8b6a34]" />
+      </span>
+      <HeartbeatWave />
+    </div>
+  );
+}
+
+function HeartbeatWave() {
+  const path = "M0,12 L14,12 L18,4 L22,20 L26,8 L30,12 L52,12";
+  return (
+    <span className="ml-2 flex h-6 w-[48px] items-center overflow-hidden text-white/78 drop-shadow-[0_2px_8px_rgba(70,90,120,0.18)]" aria-hidden="true">
+      <svg className="h-6 w-full fill-none stroke-current" viewBox="0 0 52 24">
+        <path
+          className="listen-heartbeat-draw"
+          d={path}
+          strokeWidth="0.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray="200"
+          strokeDashoffset="200"
+        />
+      </svg>
+      <style>
+        {`@keyframes listen-heartbeat-draw {
+          0% { stroke-dashoffset: 200; opacity: 0; }
+          30% { opacity: 0.6; }
+          70% { opacity: 0.6; }
+          100% { stroke-dashoffset: 0; opacity: 0; }
+        }
+        .listen-heartbeat-draw {
+          animation: listen-heartbeat-draw 3s ease-in-out infinite;
+        }`}
+      </style>
+    </span>
+  );
+}
+
+export function ListenWithDuScreen({
+  onBack,
+  backgroundImage,
+  myAvatarImage,
+  duAvatarImage,
+}: {
+  onBack: () => void;
+  backgroundImage?: string;
+  myAvatarImage?: string;
+  duAvatarImage?: string;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lyricViewportRef = useRef<HTMLDivElement | null>(null);
   const lyricRowRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -182,6 +259,27 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    const body = document.body;
+    const html = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousHtmlOverflow = html.style.overflow;
+    const previousHtmlOverscroll = html.style.overscrollBehavior;
+
+    body.style.overflow = "hidden";
+    body.style.overscrollBehavior = "none";
+    html.style.overflow = "hidden";
+    html.style.overscrollBehavior = "none";
+
+    return () => {
+      body.style.overflow = previousBodyOverflow;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      html.style.overflow = previousHtmlOverflow;
+      html.style.overscrollBehavior = previousHtmlOverscroll;
+    };
+  }, []);
 
   const song = songs[songIndex];
   const songDuration = duration || durationFor(song);
@@ -343,7 +441,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
   }
 
   return (
-    <div className="absolute inset-0 z-30 flex h-dvh w-full flex-col overflow-hidden bg-[#9ebadc] text-white">
+    <div className="fixed inset-0 z-30 flex h-dvh w-full flex-col overflow-hidden overscroll-none bg-transparent text-white">
       {backgroundImage ? (
         <div
           className="absolute inset-0 bg-cover bg-center"
@@ -379,10 +477,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
             >
               <ChevronLeftIcon />
             </button>
-            <div className="flex h-8 items-center gap-2 rounded-full border border-white/20 bg-white/18 px-3 text-[12px] font-medium shadow-[0_6px_20px_rgba(255,255,255,0.08)] backdrop-blur-md">
-              <span className={`h-2 w-2 rounded-full ${audioSrc ? "bg-[#a8ff78]" : "bg-white/55"} shadow-[0_0_10px_rgba(168,255,120,0.75)]`} />
-              <span>{audioSrc ? "渡 正在听" : "渡 准备就绪"}</span>
-            </div>
+            <ListenAvatarPair myAvatarImage={myAvatarImage} duAvatarImage={duAvatarImage} />
           </div>
           <button
             type="button"
@@ -394,10 +489,10 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           </button>
         </div>
 
-        <h1 className="font-['Playfair_Display','Noto_Serif_SC',serif] text-[36px] font-medium leading-tight tracking-normal drop-shadow-sm">
+        <h1 className="font-['Playfair_Display','Noto_Serif_SC',serif] text-[26px] font-medium leading-tight tracking-normal drop-shadow-sm">
           {loading ? "加载中" : song?.title || "一起听"}
         </h1>
-        <p className="mt-2 font-['Playfair_Display','Noto_Serif_SC',serif] text-[13px] italic leading-tight tracking-normal text-white/75">
+        <p className="mt-1.5 font-['Playfair_Display','Noto_Serif_SC',serif] text-[11px] italic leading-tight tracking-normal text-white/70">
           {song?.artist || (error || "还没有可播放的歌")}
         </p>
 
@@ -415,10 +510,10 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           </div>
         </div>
 
-        <div className="mt-6 flex items-center justify-center gap-9">
+        <div className="mt-2 flex items-center justify-center gap-12">
           <button
             type="button"
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white shadow-[0_8px_22px_rgba(255,255,255,0.06)] backdrop-blur-md transition active:scale-95 active:bg-white/20 disabled:opacity-45"
+            className="flex h-10 w-10 items-center justify-center text-white drop-shadow-[0_3px_10px_rgba(70,90,120,0.22)] transition active:scale-95 disabled:cursor-default"
             onClick={switchPreviousSong}
             disabled={!songs.length}
             aria-label="上一首"
@@ -427,24 +522,24 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           </button>
           <button
             type="button"
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-[#6a9bd1] shadow-[0_10px_26px_rgba(70,108,150,0.20)] transition active:scale-95 disabled:opacity-45"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#6a9bd1] shadow-[0_10px_24px_rgba(70,108,150,0.18)] transition active:scale-95 disabled:cursor-default"
             aria-label={isPlaying ? "暂停" : "播放"}
             onClick={togglePlay}
             disabled={!audioSrc}
           >
             {isPlaying ? (
-              <svg className="h-6 w-6" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M7 5.5A1.5 1.5 0 0 1 8.5 4h1A1.5 1.5 0 0 1 11 5.5v13A1.5 1.5 0 0 1 9.5 20h-1A1.5 1.5 0 0 1 7 18.5v-13Zm6 0A1.5 1.5 0 0 1 14.5 4h1A1.5 1.5 0 0 1 17 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-1a1.5 1.5 0 0 1-1.5-1.5v-13Z" />
               </svg>
             ) : (
-              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <svg className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M8 5.3v13.4a1 1 0 0 0 1.52.85l10.1-6.7a1 1 0 0 0 0-1.7L9.52 4.45A1 1 0 0 0 8 5.3Z" />
               </svg>
             )}
           </button>
           <button
             type="button"
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white shadow-[0_8px_22px_rgba(255,255,255,0.06)] backdrop-blur-md transition active:scale-95 active:bg-white/20 disabled:opacity-45"
+            className="flex h-10 w-10 items-center justify-center text-white drop-shadow-[0_3px_10px_rgba(70,90,120,0.22)] transition active:scale-95 disabled:cursor-default"
             onClick={() => switchSong()}
             disabled={!songs.length}
             aria-label="下一首"
@@ -487,7 +582,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
         {lyricLines.length ? (
           <div
             ref={lyricViewportRef}
-            className="relative h-[168px] overflow-hidden text-center"
+            className="relative h-[168px] overflow-hidden text-center font-['Songti_SC','STSong','Noto_Serif_SC','SimSun',serif]"
             style={{
               WebkitMaskImage: "linear-gradient(180deg, transparent 0%, #000 20%, #000 80%, transparent 100%)",
               maskImage: "linear-gradient(180deg, transparent 0%, #000 20%, #000 80%, transparent 100%)",
@@ -532,7 +627,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
             </div>
           </div>
         ) : plainLyrics.length ? (
-          <div className="space-y-2 text-center">
+          <div className="space-y-2 text-center font-['Songti_SC','STSong','Noto_Serif_SC','SimSun',serif]">
             {plainLyrics.slice(0, 5).map((text, index) => (
               <p
                 key={`${text}-${index}`}
@@ -549,7 +644,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
         ) : null}
       </section>
 
-      <main className="relative z-10 min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-4">
+      <main className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-4">
         <div className="space-y-4">
           {messages.map((message) => {
             if (message.role === "user") {
@@ -573,9 +668,9 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
         </div>
       </main>
 
-      <footer className="relative z-10 bg-[linear-gradient(0deg,rgba(232,215,225,0.48)_0%,rgba(232,215,225,0.24)_64%,rgba(232,215,225,0)_100%)] px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-5">
+      <footer className="relative z-10 px-5 pb-[calc(env(safe-area-inset-bottom,0px)+18px)] pt-5">
         <form
-          className="flex min-h-[54px] items-center gap-2 rounded-full border border-white/25 bg-white/20 py-1.5 pl-6 pr-1.5 shadow-[0_12px_34px_rgba(70,90,120,0.16)] backdrop-blur-2xl"
+          className="flex min-h-[46px] items-center gap-2 rounded-full border border-white/25 bg-white/20 py-1 pl-5 pr-1 shadow-[0_12px_34px_rgba(70,90,120,0.16)] backdrop-blur-2xl"
           onSubmit={(e) => {
             e.preventDefault();
             sendMessage();
@@ -590,7 +685,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           />
           <button
             type="submit"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#9ebadc] shadow-[0_4px_12px_rgba(70,90,120,0.18)] transition active:scale-95 disabled:opacity-45"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-[#9ebadc] shadow-[0_4px_12px_rgba(70,90,120,0.18)] transition active:scale-95 disabled:cursor-default"
             disabled={sending || !draft.trim() || !song}
             aria-label="发送"
           >
