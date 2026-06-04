@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiJson, buildApiAssetUrl, getOrCreatePanelDeviceId } from "../api";
 import { MAIN_SUMITALK_DISPLAY_WINDOW_ID } from "../chatWindowIds";
-import { ChevronLeftIcon, ClockIconMini, SendIconMini } from "../icons";
+import { ChevronLeftIcon, SendIconMini } from "../icons";
 
 type ListenMessage = {
   id: number;
@@ -136,10 +136,31 @@ function currentLyricIndex(lines: LyricLine[], currentTime: number): number {
 
 const LYRIC_VIEWPORT_HEIGHT = 192;
 
+function QueueIcon() {
+  return (
+    <svg className="h-5 w-5 stroke-[1.6]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 7h10" />
+      <path d="M4 12h10" />
+      <path d="M4 17h7" />
+      <path d="M17 6v10.5a2.5 2.5 0 1 0 1.7 2.35V9h2.3" />
+    </svg>
+  );
+}
+
+function NextTrackIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M5.75 5.55v12.9a1 1 0 0 0 1.56.83l8.95-6.45a1 1 0 0 0 0-1.66L7.31 4.72a1 1 0 0 0-1.56.83Z" />
+      <path d="M18.75 5.5a1 1 0 0 1 1 1v11a1 1 0 1 1-2 0v-11a1 1 0 0 1 1-1Z" />
+    </svg>
+  );
+}
+
 export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => void; backgroundImage?: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lyricViewportRef = useRef<HTMLDivElement | null>(null);
   const lyricRowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
   const sendSeqRef = useRef(0);
   const [songs, setSongs] = useState<MusicEntry[]>([]);
   const [songIndex, setSongIndex] = useState(0);
@@ -223,6 +244,10 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
       window.removeEventListener("resize", measure);
     };
   }, [lyricActiveIndex, lyricLines]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [messages.length]);
 
   function switchSong(nextIndex = songs.length ? (songIndex + 1) % songs.length : 0) {
     if (!songs.length) return;
@@ -349,9 +374,9 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
             type="button"
             className="flex h-9 w-9 items-center justify-center rounded-full bg-white/12 text-white backdrop-blur-md transition active:bg-white/25"
             onClick={() => setShowHistory((prev) => !prev)}
-            aria-label="听歌记录"
+            aria-label="播放列表"
           >
-            <ClockIconMini />
+            <QueueIcon />
           </button>
         </div>
 
@@ -396,18 +421,25 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           </button>
           <button
             type="button"
-            className="h-11 rounded-full border border-white/18 bg-white/16 px-5 text-[14px] font-medium text-white shadow-[0_8px_22px_rgba(255,255,255,0.08)] backdrop-blur-md transition active:bg-white/25 disabled:opacity-45"
+            className="flex h-12 w-12 items-center justify-center rounded-full border border-white/18 bg-white/16 text-white shadow-[0_8px_22px_rgba(255,255,255,0.08)] backdrop-blur-md transition active:scale-95 active:bg-white/25 disabled:opacity-45"
             onClick={() => switchSong()}
             disabled={!songs.length}
+            aria-label="下一首"
           >
-            切换歌曲
+            <NextTrackIcon />
           </button>
         </div>
       </header>
 
-      <main className="relative z-10 min-h-0 flex-1 overflow-y-auto px-6 py-8">
-        {showHistory ? (
-          <div className="mb-6 rounded-[24px] border border-white/16 bg-white/14 p-3 backdrop-blur-xl">
+      {showHistory ? (
+        <>
+          <button
+            type="button"
+            className="absolute inset-0 z-20 cursor-default bg-transparent"
+            onClick={() => setShowHistory(false)}
+            aria-label="关闭播放列表"
+          />
+          <div className="absolute left-5 right-5 top-[calc(env(safe-area-inset-top,0px)+70px)] z-30 max-h-[52dvh] overflow-y-auto rounded-[24px] border border-white/18 bg-white/18 p-3 shadow-[0_18px_50px_rgba(55,76,105,0.18)] backdrop-blur-2xl">
             {historyItems.map((item, index) => (
               <button
                 key={item.id || `${item.title}-${item.artist}`}
@@ -425,12 +457,14 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
               </button>
             ))}
           </div>
-        ) : null}
+        </>
+      ) : null}
 
+      <section className="relative z-10 shrink-0 px-6 pt-6">
         {lyricLines.length ? (
           <div
             ref={lyricViewportRef}
-            className="relative mb-8 h-[192px] overflow-hidden text-center"
+            className="relative h-[192px] overflow-hidden text-center"
             style={{
               WebkitMaskImage: "linear-gradient(180deg, transparent 0%, #000 20%, #000 80%, transparent 100%)",
               maskImage: "linear-gradient(180deg, transparent 0%, #000 20%, #000 80%, transparent 100%)",
@@ -475,7 +509,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
             </div>
           </div>
         ) : plainLyrics.length ? (
-          <div className="mb-8 space-y-2 text-center">
+          <div className="space-y-2 text-center">
             {plainLyrics.slice(0, 5).map((text, index) => (
               <p
                 key={`${text}-${index}`}
@@ -490,7 +524,9 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
             ))}
           </div>
         ) : null}
+      </section>
 
+      <main className="relative z-10 min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-4">
         <div className="space-y-7">
           {messages.map((message) => {
             if (message.role === "user") {
@@ -511,6 +547,7 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
               </div>
             );
           })}
+          <div ref={chatEndRef} />
         </div>
       </main>
 
