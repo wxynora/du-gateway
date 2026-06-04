@@ -155,6 +155,58 @@ def _segment_for_time(entry: dict, current_time: float) -> dict:
     return fallback
 
 
+def _segments_until_time(entry: dict, current_time: float, current_segment: dict | None = None) -> list[dict]:
+    structured = entry.get("structured") if isinstance(entry.get("structured"), dict) else {}
+    segments = structured.get("segments") if isinstance(structured, dict) else []
+    current = max(0.0, float(current_time or 0))
+    out: list[dict] = []
+    seen = set()
+    for item in segments if isinstance(segments, list) else []:
+        if not isinstance(item, dict):
+            continue
+        start = _float_value(item.get("start"))
+        end = _float_value(item.get("end"))
+        if end <= start or start > current + 0.15:
+            continue
+        key = (round(start, 3), round(end, 3), str(item.get("section") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    if isinstance(current_segment, dict) and current_segment:
+        start = _float_value(current_segment.get("start"))
+        end = _float_value(current_segment.get("end"))
+        key = (round(start, 3), round(end, 3), str(current_segment.get("section") or ""))
+        if end > start and start <= current + 0.15 and key not in seen:
+            out.append(current_segment)
+    out.sort(key=lambda item: (_float_value(item.get("start")), _float_value(item.get("end"))))
+    return out
+
+
+def _format_segment_context_line(segment: dict, current_time: float) -> str:
+    start = _float_value(segment.get("start"))
+    end = _float_value(segment.get("end"))
+    section = _clip_text(segment.get("section"), 60) or "这一段"
+    current = start <= max(0.0, float(current_time or 0)) < end if end > start else False
+    head = f"- {_format_clock(start)}-{_format_clock(end)} {section}" + ("（当前）" if current else "")
+    details = []
+    plain = _clip_text(segment.get("plain"), 360)
+    melody = _clip_text(segment.get("melody_motion"), 260)
+    sonic = _clip_text(segment.get("sonic_detail"), 260)
+    intensity = _clip_text(segment.get("intensity"), 220)
+    if plain:
+        details.append(f"听感：{plain}")
+    if melody:
+        details.append(f"旋律/走向：{melody}")
+    if sonic:
+        details.append(f"声音细节：{sonic}")
+    if intensity:
+        details.append(f"强度/情绪推进：{intensity}")
+    if not details:
+        return head
+    return head + "：" + "；".join(details)
+
+
 def _lyrics_for_time(entry: dict, current_time: float) -> list[str]:
     lyrics = entry.get("lyrics") if isinstance(entry.get("lyrics"), dict) else {}
     raw_lines = lyrics.get("lines") if isinstance(lyrics, dict) else []
@@ -210,14 +262,8 @@ def _build_listen_context_system(entry: dict, segment: dict, current_time: float
     artist = _clip_text(entry.get("artist"), 80)
     structured = entry.get("structured") if isinstance(entry.get("structured"), dict) else {}
     overall = _clip_text(entry.get("overall_trend") or structured.get("overall_trend"), 700)
-    section = _clip_text(segment.get("section") if isinstance(segment, dict) else "", 80)
-    plain = _clip_text(segment.get("plain") if isinstance(segment, dict) else "", 600)
-    melody = _clip_text(segment.get("melody_motion") if isinstance(segment, dict) else "", 420)
-    sonic = _clip_text(segment.get("sonic_detail") if isinstance(segment, dict) else "", 420)
-    intensity = _clip_text(segment.get("intensity") if isinstance(segment, dict) else "", 300)
+    heard_segments = _segments_until_time(entry, current_time, segment if isinstance(segment, dict) else None)
     current_lyrics = _lyrics_for_time(entry, current_time)
-    seg_start = _float_value(segment.get("start")) if isinstance(segment, dict) else 0.0
-    seg_end = _float_value(segment.get("end")) if isinstance(segment, dict) else 0.0
     lines = [
         "你是渡，正在和小玥一起听歌。",
         "你要直接接她的话，像边听边轻声回应；不要写成音乐分析报告、数据报告或列表。",
@@ -228,20 +274,9 @@ def _build_listen_context_system(entry: dict, segment: dict, current_time: float
         f"歌曲：{title or '未知歌曲'}" + (f" / {artist}" if artist else ""),
         f"当前播放：{_format_clock(current_time)}" + (f" / {_format_clock(duration)}" if duration > 0 else ""),
     ]
-    if section or seg_end > seg_start:
-        lines.append(
-            "当前段落："
-            + (section or "这一段")
-            + (f"（{_format_clock(seg_start)}-{_format_clock(seg_end)}）" if seg_end > seg_start else "")
-        )
-    if plain:
-        lines.append(f"段落听感：{plain}")
-    if melody:
-        lines.append(f"旋律/走向：{melody}")
-    if sonic:
-        lines.append(f"声音细节：{sonic}")
-    if intensity:
-        lines.append(f"强度/情绪推进：{intensity}")
+    if heard_segments:
+        lines.append("从开头到当前已听到的音乐文字：")
+        lines.extend(_format_segment_context_line(item, current_time) for item in heard_segments)
     if current_lyrics:
         lines.append("当前歌词：" + " / ".join(current_lyrics))
     if overall:
