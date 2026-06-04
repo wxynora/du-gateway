@@ -286,7 +286,19 @@ def main() -> int:
         )
         cache = _get_json(f"{gateway_base}/api/music/listen/cache?{query}", token=gateway_token)
         if cache.get("hit") and cache.get("entry"):
-            print(json.dumps({"ok": True, "cached": True, "entry": cache["entry"]}, ensure_ascii=False, indent=2))
+            entry = cache["entry"]
+            if lyrics_text:
+                uploaded_lyrics = _post_json(
+                    f"{gateway_base}/api/music/listen/lyrics",
+                    {
+                        "entry_id": entry.get("id") or entry.get("cache_key"),
+                        "lyrics_text": lyrics_text,
+                        "duration_seconds": duration_seconds,
+                    },
+                    token=gateway_token,
+                )
+                entry = uploaded_lyrics.get("entry") or entry
+            print(json.dumps({"ok": True, "cached": True, "entry": entry}, ensure_ascii=False, indent=2))
             return 0
 
     result, raw_response = _analyze_with_openrouter(
@@ -302,6 +314,8 @@ def main() -> int:
     )
     result["provider"] = provider
     result["prompt_version"] = prompt_version
+    result["lyrics_text"] = lyrics_text
+    result["duration_seconds"] = duration_seconds
     payload: dict[str, Any] = {"ok": True, "cached": False, "result": result, "usage": raw_response.get("usage")}
 
     if not args.no_upload:

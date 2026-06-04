@@ -8,6 +8,7 @@ from urllib.parse import quote
 from flask import Blueprint, Response, current_app, jsonify, request
 
 from services.music_melody_analyzer import MusicMelodyError, analyze_music_melody
+from services.music_lyrics import normalize_lyrics_payload, parse_lyrics_text
 from storage import upstream_store
 from storage.music_audio_store import get_music_audio, music_audio_content_type, save_music_audio
 from storage.music_melody_store import (
@@ -16,6 +17,7 @@ from storage.music_melody_store import (
     list_music_melody_entries,
     save_music_melody_entry,
     update_music_melody_audio,
+    update_music_melody_lyrics_by_id,
 )
 from config import MUSIC_ANALYSIS_MODEL, MUSIC_ANALYSIS_PROVIDER, MUSIC_PROMPT_VERSION, MUSIC_AUDIO_MAX_BYTES
 
@@ -153,6 +155,33 @@ def _segment_for_time(entry: dict, current_time: float) -> dict:
     return fallback
 
 
+def _lyrics_for_time(entry: dict, current_time: float) -> list[str]:
+    lyrics = entry.get("lyrics") if isinstance(entry.get("lyrics"), dict) else {}
+    raw_lines = lyrics.get("lines") if isinstance(lyrics, dict) else []
+    if not isinstance(raw_lines, list):
+        return []
+    clean_lines = []
+    for item in raw_lines:
+        if not isinstance(item, dict):
+            continue
+        text = _clip_text(item.get("text"), 180)
+        if not text:
+            continue
+        clean_lines.append({"time": _float_value(item.get("time")), "text": text})
+    if not clean_lines:
+        return []
+    clean_lines.sort(key=lambda item: item["time"])
+    active = 0
+    t = max(0.0, float(current_time or 0))
+    for idx, item in enumerate(clean_lines):
+        if item["time"] <= t + 0.15:
+            active = idx
+        else:
+            break
+    start = max(0, active - 1)
+    return [item["text"] for item in clean_lines[start : active + 2]]
+
+
 def _sanitize_recent_listen_messages(items: object) -> list[dict]:
     out = []
     for item in items if isinstance(items, list) else []:
@@ -180,6 +209,7 @@ def _build_listen_context_system(entry: dict, segment: dict, current_time: float
     melody = _clip_text(segment.get("melody_motion") if isinstance(segment, dict) else "", 420)
     sonic = _clip_text(segment.get("sonic_detail") if isinstance(segment, dict) else "", 420)
     intensity = _clip_text(segment.get("intensity") if isinstance(segment, dict) else "", 300)
+    current_lyrics = _lyrics_for_time(entry, current_time)
     seg_start = _float_value(segment.get("start")) if isinstance(segment, dict) else 0.0
     seg_end = _float_value(segment.get("end")) if isinstance(segment, dict) else 0.0
     lines = [
@@ -206,6 +236,8 @@ def _build_listen_context_system(entry: dict, segment: dict, current_time: float
         lines.append(f"声音细节：{sonic}")
     if intensity:
         lines.append(f"强度/情绪推进：{intensity}")
+    if current_lyrics:
+        lines.append("当前歌词：" + " / ".join(current_lyrics))
     if overall:
         lines.append(f"整首歌的走向：{overall}")
     return "\n".join(lines).strip()
@@ -237,7 +269,8 @@ def music_melody_analyze():
     model = str(data.get("model") or "").strip()
     prompt_version = str(data.get("prompt_version") or "").strip()
     duration_seconds = _float_value(data.get("duration_seconds"))
-    lyrics_text = str(data.get("lyrics_text") or data.get("lyrics") or "").strip()
+    lyrics_raw = data.get("lyrics_text") or data.get("lyrics_raw")
+    lyrics_text = lyrics_raw.strip() if isinstance(lyrics_raw, str) else ""
     force = _bool_arg(data.get("force"))
     try:
         audio_bytes, filename, mime_type = _read_audio_from_request(data)
@@ -272,6 +305,13 @@ def music_melody_result():
     structured = data.get("structured") if isinstance(data.get("structured"), dict) else {}
     melody_text = str(data.get("melody_text") or data.get("display_text") or structured.get("display_text") or "").strip()
     overall_trend = str(data.get("overall_trend") or structured.get("overall_trend") or "").strip()
+    duration_seconds = _float_value(data.get("duration_seconds"))
+    lyrics_raw = data.get("lyrics_text") or data.get("lyrics_raw")
+    lyrics = None
+    if isinstance(lyrics_raw, str) and lyrics_raw.strip():
+        lyrics = parse_lyrics_text(lyrics_raw, duration_seconds=duration_seconds)
+    elif "lyrics" in data:
+        lyrics = normalize_lyrics_payload(data.get("lyrics"))
     if not title:
         return jsonify({"ok": False, "error": "缺少 title"}), 400
     if not melody_text:
@@ -285,12 +325,13 @@ def music_melody_result():
         melody_text=melody_text,
         overall_trend=overall_trend,
         structured=structured,
+        lyrics=lyrics,
         audio_key=str(data.get("audio_key") or "").strip(),
         audio_url=str(data.get("audio_url") or "").strip(),
         audio_format=str(data.get("audio_format") or "").strip(),
         audio_content_type=str(data.get("audio_content_type") or "").strip(),
         audio_size=int(_float_value(data.get("audio_size"))),
-        duration_seconds=_float_value(data.get("duration_seconds")),
+        duration_seconds=duration_seconds,
     )
     if not entry:
         return jsonify({"ok": False, "error": "音乐分析结果保存失败"}), 500
@@ -349,6 +390,38 @@ def music_melody_audio_upload():
     if not updated:
         return jsonify({"ok": False, "error": "音频已保存，但缓存元信息更新失败"}), 500
     return jsonify({"ok": True, "entry": updated, "audio": saved})
+
+
+@bp.route("/api/music-melody/lyrics", methods=["POST"])
+@bp.route("/api/music/listen/lyrics", methods=["POST"])
+def music_melody_lyrics_upload():
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "JSON 无效"}), 400
+    entry_id = str(data.get("entry_id") or data.get("id") or "").strip()
+    if not entry_id:
+        title = str(data.get("title") or "").strip()
+        artist = str(data.get("artist") or "").strip()
+        provider = str(data.get("provider") or MUSIC_ANALYSIS_PROVIDER).strip() or MUSIC_ANALYSIS_PROVIDER
+        model = str(data.get("model") or MUSIC_ANALYSIS_MODEL).strip() or MUSIC_ANALYSIS_MODEL
+        prompt_version = str(data.get("prompt_version") or MUSIC_PROMPT_VERSION).strip() or MUSIC_PROMPT_VERSION
+        entry = get_music_melody_entry(title, artist, provider, model, prompt_version) if title else None
+        entry_id = str((entry or {}).get("id") or "").strip()
+    if not entry_id:
+        return jsonify({"ok": False, "error": "未找到这首歌的分析缓存"}), 404
+
+    duration_seconds = _float_value(data.get("duration_seconds"))
+    lyrics_raw = data.get("lyrics_text") or data.get("lyrics_raw")
+    if isinstance(lyrics_raw, str) and lyrics_raw.strip():
+        lyrics = parse_lyrics_text(lyrics_raw, duration_seconds=duration_seconds)
+    else:
+        lyrics = normalize_lyrics_payload(data.get("lyrics"))
+    if not lyrics.get("lines") and not lyrics.get("plain_lines"):
+        return jsonify({"ok": False, "error": "缺少歌词内容"}), 400
+    entry = update_music_melody_lyrics_by_id(entry_id, lyrics)
+    if not entry:
+        return jsonify({"ok": False, "error": "歌词保存失败"}), 500
+    return jsonify({"ok": True, "entry": entry, "lyrics": entry.get("lyrics") or {}})
 
 
 @bp.route("/api/music/listen/chat", methods=["POST"])

@@ -19,6 +19,7 @@ from config import (
     MUSIC_PROMPT_VERSION,
 )
 from storage.music_melody_store import get_music_melody_entry, save_music_melody_entry
+from services.music_lyrics import parse_lyrics_text
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -369,6 +370,7 @@ def analyze_music_melody(
                 melody_text,
                 overall_trend=overall_trend,
                 structured=structured,
+                lyrics=parse_lyrics_text(lyrics_text, duration_seconds=duration_seconds) if lyrics_text else None,
             )
             if not entry:
                 raise MusicMelodyError("音乐分析结果保存失败")

@@ -11,6 +11,7 @@ from typing import Any, Optional
 from config import DATA_DIR
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
+from services.music_lyrics import normalize_lyrics_payload
 
 R2_KEY_MUSIC_MELODY_CACHE = "global/music_melody_cache.json"
 LOCAL_MUSIC_MELODY_CACHE_FILE = DATA_DIR / "music_melody_cache.json"
@@ -105,6 +106,7 @@ def _normalize_payload(data: Any) -> dict:
             "melody_text": str(item.get("melody_text") or "").strip(),
             "overall_trend": str(item.get("overall_trend") or "").strip(),
             "structured": item.get("structured") if isinstance(item.get("structured"), dict) else {},
+            "lyrics": normalize_lyrics_payload(item.get("lyrics")),
             "audio_key": _normalize_text(item.get("audio_key"), 240),
             "audio_url": _normalize_text(item.get("audio_url"), 500),
             "audio_format": _normalize_text(item.get("audio_format"), 32),
@@ -204,6 +206,7 @@ def save_music_melody_entry(
     melody_text: str,
     overall_trend: str = "",
     structured: Optional[dict] = None,
+    lyrics: Optional[dict] = None,
     audio_key: str = "",
     audio_url: str = "",
     audio_format: str = "",
@@ -232,6 +235,7 @@ def save_music_melody_entry(
             "melody_text": clean_text,
             "overall_trend": str(overall_trend or "").strip(),
             "structured": structured if isinstance(structured, dict) else {},
+            "lyrics": normalize_lyrics_payload(lyrics if lyrics is not None else old.get("lyrics")),
             "audio_key": _normalize_text(audio_key or old.get("audio_key"), 240),
             "audio_url": _normalize_text(audio_url or old.get("audio_url"), 500),
             "audio_format": _normalize_text(audio_format or old.get("audio_format"), 32),
@@ -283,6 +287,32 @@ def update_music_melody_audio(
                 "updated_at": now_ts,
             }
         )
+        items[cache_key] = entry
+        ok = _write_payload(payload, use_r2)
+    return entry if ok else None
+
+
+def update_music_melody_lyrics_by_id(entry_id: str, lyrics: dict) -> Optional[dict]:
+    eid = str(entry_id or "").strip()
+    if not eid:
+        return None
+    now_ts = now_beijing_iso()
+    with _write_lock:
+        payload, use_r2 = _read_payload()
+        items = payload.setdefault("items", {})
+        cache_key = ""
+        for key, item in items.items():
+            if isinstance(item, dict) and (str(item.get("id") or "").strip() == eid or str(key or "").strip() == eid):
+                cache_key = str(key or "").strip()
+                break
+        if not cache_key:
+            return None
+        old = items.get(cache_key) if isinstance(items.get(cache_key), dict) else {}
+        if not old:
+            return None
+        entry = dict(old)
+        entry["lyrics"] = normalize_lyrics_payload(lyrics)
+        entry["updated_at"] = now_ts
         items[cache_key] = entry
         ok = _write_payload(payload, use_r2)
     return entry if ok else None

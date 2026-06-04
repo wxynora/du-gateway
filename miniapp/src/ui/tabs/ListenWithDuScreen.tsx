@@ -21,6 +21,18 @@ type MusicSegment = {
   arousal?: number;
 };
 
+type LyricLine = {
+  time?: number;
+  text?: string;
+};
+
+type LyricsPayload = {
+  lines?: LyricLine[];
+  plain_lines?: string[];
+  synced?: boolean;
+  estimated?: boolean;
+};
+
 type MusicEntry = {
   id?: string;
   title?: string;
@@ -30,6 +42,7 @@ type MusicEntry = {
   duration_seconds?: number;
   melody_text?: string;
   overall_trend?: string;
+  lyrics?: LyricsPayload | LyricLine[];
   updated_at?: string;
   structured?: {
     segments?: MusicSegment[];
@@ -84,6 +97,37 @@ function currentSegmentFor(entry: MusicEntry | undefined, currentTime: number): 
   );
 }
 
+function lyricsPayloadFor(entry?: MusicEntry): LyricsPayload {
+  const raw = entry?.lyrics;
+  if (Array.isArray(raw)) return { lines: raw, plain_lines: [], synced: raw.length > 0 };
+  return raw && typeof raw === "object" ? raw : {};
+}
+
+function lyricLinesFor(entry?: MusicEntry): LyricLine[] {
+  const lines = lyricsPayloadFor(entry).lines;
+  if (!Array.isArray(lines)) return [];
+  return lines
+    .map((item) => ({ time: asSeconds(item?.time), text: String(item?.text || "").trim() }))
+    .filter((item) => item.text)
+    .sort((a, b) => asSeconds(a.time) - asSeconds(b.time));
+}
+
+function plainLyricsFor(entry?: MusicEntry): string[] {
+  const lines = lyricsPayloadFor(entry).plain_lines;
+  return Array.isArray(lines) ? lines.map((item) => String(item || "").trim()).filter(Boolean) : [];
+}
+
+function currentLyricIndex(lines: LyricLine[], currentTime: number): number {
+  if (!lines.length) return -1;
+  const t = Math.max(0, currentTime || 0);
+  let current = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (asSeconds(lines[i]?.time) <= t + 0.15) current = i;
+    else break;
+  }
+  return current;
+}
+
 export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => void; backgroundImage?: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const sendSeqRef = useRef(0);
@@ -104,6 +148,17 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
   const progress = songDuration > 0 ? Math.min(100, Math.max(0, (currentTime / songDuration) * 100)) : 0;
   const currentSegment = useMemo(() => currentSegmentFor(song, currentTime), [song, currentTime]);
   const audioSrc = song?.audio_url ? buildApiAssetUrl(song.audio_url) : "";
+  const lyricLines = useMemo(() => lyricLinesFor(song), [song]);
+  const plainLyrics = useMemo(() => plainLyricsFor(song), [song]);
+  const activeLyricIndex = useMemo(() => currentLyricIndex(lyricLines, currentTime), [lyricLines, currentTime]);
+  const visibleLyrics = useMemo(() => {
+    if (lyricLines.length) {
+      const active = activeLyricIndex >= 0 ? activeLyricIndex : 0;
+      const start = Math.max(0, active - 2);
+      return lyricLines.slice(start, start + 5).map((line, offset) => ({ text: line.text || "", active: start + offset === active }));
+    }
+    return plainLyrics.slice(0, 5).map((text, index) => ({ text, active: index === 0 }));
+  }, [activeLyricIndex, lyricLines, plainLyrics]);
 
   const historyItems = useMemo(
     () => songs.map((item, index) => ({ ...item, active: index === songIndex, durationLabel: formatClock(durationFor(item)) })),
@@ -345,6 +400,23 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
                 </span>
                 <span className="ml-4 text-[11px] text-white/62">{item.durationLabel}</span>
               </button>
+            ))}
+          </div>
+        ) : null}
+
+        {visibleLyrics.length ? (
+          <div className="mb-8 space-y-2 text-center">
+            {visibleLyrics.map((line, index) => (
+              <p
+                key={`${line.text}-${index}`}
+                className={`mx-auto max-w-[92%] transition ${
+                  line.active
+                    ? "text-[16px] font-medium leading-7 text-white drop-shadow-[0_1px_2px_rgba(65,86,114,0.18)]"
+                    : "text-[13px] leading-6 text-white/56"
+                }`}
+              >
+                {line.text}
+              </p>
             ))}
           </div>
         ) : null}
