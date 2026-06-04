@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { apiJson, buildApiAssetUrl, getOrCreatePanelDeviceId } from "../api";
+import { MAIN_SUMITALK_DISPLAY_WINDOW_ID } from "../chatWindowIds";
 import { ChevronLeftIcon, ClockIconMini, SendIconMini } from "../icons";
 
 type ListenMessage = {
@@ -278,7 +279,8 @@ export function ListenWithDuScreen({ onBack, backgroundImage }: { onBack: () => 
           segment: currentSegment,
           message: text,
           recent_messages: recentMessages,
-          window_id: deviceId ? `music_listen_${deviceId}` : "music_listen",
+          window_id: MAIN_SUMITALK_DISPLAY_WINDOW_ID,
+          reply_target: deviceId,
         }),
       });
       const reply = String(data?.du_reply || "").trim();
