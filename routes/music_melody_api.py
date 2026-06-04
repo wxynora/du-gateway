@@ -607,7 +607,7 @@ def _audio_response(data: bytes, content_type: str, filename: str) -> Response:
     safe_filename = quote(filename or "music.mp3")
     headers = {
         "Accept-Ranges": "bytes",
-        "Cache-Control": "private, max-age=3600",
+        "Cache-Control": "private, max-age=604800",
         "Content-Disposition": f'inline; filename="{safe_filename}"',
     }
     range_header = str(request.headers.get("Range") or "").strip()
@@ -622,6 +622,8 @@ def _audio_response(data: bytes, content_type: str, filename: str) -> Response:
             else:
                 start = int(start_raw or 0)
                 end = int(end_raw) if end_raw else size - 1
+                if not end_raw:
+                    end = min(start + 1024 * 1024 - 1, size - 1)
             if start >= size or end < start:
                 return Response(
                     b"",

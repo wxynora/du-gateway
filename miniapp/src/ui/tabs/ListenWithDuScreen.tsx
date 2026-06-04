@@ -3,6 +3,7 @@ import { apiJson, buildApiAssetUrl, getOrCreatePanelDeviceId } from "../api";
 import { MAIN_SUMITALK_DISPLAY_WINDOW_ID } from "../chatWindowIds";
 import { ChevronLeftIcon, SendIconMini } from "../icons";
 import { writeMusicBgmContext } from "../listenBgm";
+import { useToast } from "../toast";
 
 type ListenMessage = {
   id: number;
@@ -246,6 +247,7 @@ export function ListenWithDuScreen({
   duAvatarImage?: string;
   isActive?: boolean;
 }) {
+  const toast = useToast();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lyricViewportRef = useRef<HTMLDivElement | null>(null);
   const lyricRowRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -260,6 +262,7 @@ export function ListenWithDuScreen({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackStarting, setPlaybackStarting] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [sending, setSending] = useState(false);
@@ -290,6 +293,7 @@ export function ListenWithDuScreen({
   useEffect(() => {
     if (!isActive) {
       setKeyboardOffset(0);
+      setShowHistory(false);
       return;
     }
     const viewport = window.visualViewport;
@@ -322,11 +326,31 @@ export function ListenWithDuScreen({
   const activeLyricIndex = useMemo(() => currentLyricIndex(lyricLines, currentTime), [lyricLines, currentTime]);
   const lyricActiveIndex = activeLyricIndex >= 0 ? activeLyricIndex : 0;
   const [lyricTrackOffset, setLyricTrackOffset] = useState(LYRIC_VIEWPORT_HEIGHT / 2);
+  const playbackActive = isPlaying || playbackStarting;
 
   const historyItems = useMemo(
     () => songs.map((item, index) => ({ ...item, active: index === songIndex, durationLabel: formatClock(durationFor(item)) })),
     [songs, songIndex],
   );
+
+  async function startPlayback(): Promise<boolean> {
+    const audio = audioRef.current;
+    if (!audio || !audioSrc) return false;
+    setError("");
+    setPlaybackStarting(true);
+    try {
+      if (audio.ended) audio.currentTime = 0;
+      await audio.play();
+      setIsPlaying(true);
+      return true;
+    } catch (e) {
+      setIsPlaying(false);
+      toast(`播放没接上：${String((e as any)?.message || e || "再点一下")}`);
+      return false;
+    } finally {
+      setPlaybackStarting(false);
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -364,15 +388,14 @@ export function ListenWithDuScreen({
       audio.pause();
       audio.load();
       if (shouldPlay && audioSrc) {
-        void audio
-          .play()
-          .then(() => setIsPlaying(true))
-          .catch(() => setIsPlaying(false));
+        void startPlayback();
       } else {
         setIsPlaying(false);
+        setPlaybackStarting(false);
       }
     } else {
       setIsPlaying(false);
+      setPlaybackStarting(false);
     }
   }, [audioSrc, song?.id]);
 
@@ -444,10 +467,7 @@ export function ListenWithDuScreen({
         return;
       }
       audio.currentTime = 0;
-      void audio
-        .play()
-        .then(() => setIsPlaying(true))
-        .catch(() => setIsPlaying(false));
+      void startPlayback();
       return;
     }
     playAfterSwitchRef.current = true;
@@ -457,17 +477,13 @@ export function ListenWithDuScreen({
   async function togglePlay() {
     const audio = audioRef.current;
     if (!audio || !audioSrc) return;
-    if (!audio.paused) {
+    if (!audio.paused || playbackStarting) {
       audio.pause();
       setIsPlaying(false);
+      setPlaybackStarting(false);
       return;
     }
-    try {
-      await audio.play();
-      setIsPlaying(true);
-    } catch {
-      setIsPlaying(false);
-    }
+    await startPlayback();
   }
 
   async function sendMessage() {
@@ -534,11 +550,11 @@ export function ListenWithDuScreen({
     >
       {backgroundImage ? (
         <div
-          className="fixed inset-0 bg-cover bg-center"
+          className="pointer-events-none fixed inset-0 bg-cover bg-center"
           style={{ backgroundImage: `url(${backgroundImage})` }}
         />
       ) : (
-        <div className="fixed inset-0 bg-[linear-gradient(180deg,#6a9bd1_0%,#9ebadc_48%,#e8d7e1_100%)]" />
+        <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,#6a9bd1_0%,#9ebadc_48%,#e8d7e1_100%)]" />
       )}
       <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,rgba(37,58,85,0.18)_0%,rgba(62,78,108,0.10)_42%,rgba(232,215,225,0.58)_100%)]" />
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.45),transparent_30%),radial-gradient(circle_at_82%_74%,rgba(255,210,226,0.46),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0))] mix-blend-overlay" />
@@ -547,11 +563,31 @@ export function ListenWithDuScreen({
         <audio
           ref={audioRef}
           src={audioSrc}
-          preload="metadata"
+          preload="auto"
           onLoadedMetadata={(e) => setDuration(asSeconds(e.currentTarget.duration) || durationFor(song))}
           onTimeUpdate={(e) => setCurrentTime(asSeconds(e.currentTarget.currentTime))}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
+          onPlay={() => {
+            setIsPlaying(true);
+            setPlaybackStarting(false);
+          }}
+          onPlaying={() => {
+            setIsPlaying(true);
+            setPlaybackStarting(false);
+          }}
+          onWaiting={() => {
+            if (!audioRef.current?.paused) setPlaybackStarting(true);
+          }}
+          onCanPlay={() => setPlaybackStarting(false)}
+          onPause={() => {
+            setIsPlaying(false);
+            setPlaybackStarting(false);
+          }}
+          onError={(e) => {
+            setIsPlaying(false);
+            setPlaybackStarting(false);
+            setError("音频加载失败");
+            toast(`音频加载失败：${e.currentTarget.error?.message || "再试一下"}`);
+          }}
           onEnded={handleAudioEnded}
         />
       ) : null}
@@ -613,11 +649,11 @@ export function ListenWithDuScreen({
           <button
             type="button"
             className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.24)] backdrop-blur-[2px] drop-shadow-[0_3px_10px_rgba(70,90,120,0.24)] transition active:scale-95 disabled:cursor-default"
-            aria-label={isPlaying ? "暂停" : "播放"}
+            aria-label={playbackActive ? "暂停" : "播放"}
             onClick={togglePlay}
             disabled={!audioSrc}
           >
-            {isPlaying ? (
+            {playbackActive ? (
               <svg className="h-[22px] w-[22px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M7 5.5A1.5 1.5 0 0 1 8.5 4h1A1.5 1.5 0 0 1 11 5.5v13A1.5 1.5 0 0 1 9.5 20h-1A1.5 1.5 0 0 1 7 18.5v-13Zm6 0A1.5 1.5 0 0 1 14.5 4h1A1.5 1.5 0 0 1 17 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-1a1.5 1.5 0 0 1-1.5-1.5v-13Z" />
               </svg>
