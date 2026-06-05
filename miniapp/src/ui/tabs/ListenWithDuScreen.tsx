@@ -333,6 +333,20 @@ export function ListenWithDuScreen({
     [songs, songIndex],
   );
 
+  function writeStoppedBgmContext(atSeconds = currentTime) {
+    writeMusicBgmContext({
+      active: Boolean(song && audioSrc),
+      is_playing: false,
+      entry_id: song?.id,
+      title: song?.title,
+      artist: song?.artist,
+      current_time: atSeconds,
+      duration_seconds: songDuration,
+      segment: currentSegment,
+      source: "listen-with-du",
+    });
+  }
+
   async function startPlayback(): Promise<boolean> {
     const audio = audioRef.current;
     if (!audio || !audioSrc) return false;
@@ -419,6 +433,23 @@ export function ListenWithDuScreen({
     };
   }, []);
 
+  useEffect(() => {
+    const syncStoppedIfHidden = () => {
+      const audio = audioRef.current;
+      if (!audio || (!audio.paused && !audio.ended)) return;
+      writeStoppedBgmContext(asSeconds(audio.currentTime));
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") syncStoppedIfHidden();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", syncStoppedIfHidden);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", syncStoppedIfHidden);
+    };
+  }, [audioSrc, currentSegment, currentTime, song?.artist, song?.id, song?.title, songDuration]);
+
   useLayoutEffect(() => {
     if (!lyricLines.length) return;
     let frame = 0;
@@ -444,6 +475,9 @@ export function ListenWithDuScreen({
   function switchSong(nextIndex = songs.length ? (songIndex + 1) % songs.length : 0) {
     if (!songs.length) return;
     sendSeqRef.current += 1;
+    writeStoppedBgmContext(audioRef.current ? asSeconds(audioRef.current.currentTime) : currentTime);
+    setIsPlaying(false);
+    setPlaybackStarting(false);
     setSongIndex(nextIndex);
     setShowHistory(false);
     setSending(false);
@@ -456,6 +490,7 @@ export function ListenWithDuScreen({
   }
 
   function handleAudioEnded() {
+    writeStoppedBgmContext(songDuration || currentTime);
     if (!songs.length) {
       setIsPlaying(false);
       return;
@@ -578,9 +613,12 @@ export function ListenWithDuScreen({
             if (!audioRef.current?.paused) setPlaybackStarting(true);
           }}
           onCanPlay={() => setPlaybackStarting(false)}
-          onPause={() => {
+          onPause={(e) => {
+            const pausedAt = asSeconds(e.currentTarget.currentTime);
+            setCurrentTime(pausedAt);
             setIsPlaying(false);
             setPlaybackStarting(false);
+            writeStoppedBgmContext(pausedAt);
           }}
           onError={(e) => {
             setIsPlaying(false);

@@ -13,7 +13,6 @@ from utils.time_aware import now_beijing_iso
 R2_KEY_MUSIC_BGM_CONTEXT = "global/music_bgm_context.json"
 LOCAL_MUSIC_BGM_CONTEXT_FILE = DATA_DIR / "music_bgm_context.json"
 MUSIC_BGM_CONTEXT_TTL_SECONDS = 15 * 60
-MUSIC_BGM_ENDED_GRACE_SECONDS = 120
 
 _write_lock = threading.Lock()
 logger = get_logger(__name__)
@@ -159,7 +158,7 @@ def get_active_music_bgm_context(ttl_seconds: int = MUSIC_BGM_CONTEXT_TTL_SECOND
         return None
     current_time = _float_value(payload.get("current_time"))
     duration = _float_value(payload.get("duration_seconds"))
-    if duration > 0 and elapsed > max(0.0, duration - current_time) + MUSIC_BGM_ENDED_GRACE_SECONDS:
+    if duration > 0 and current_time + elapsed >= duration - 0.25:
         return None
     payload["current_time"] = min(duration, current_time + elapsed) if duration > 0 else current_time + elapsed
     return payload
