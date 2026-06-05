@@ -71,6 +71,9 @@ _OUTPUT_DISALLOWED_RULE_TONE = (
     "记住:",
     "别嘴硬",
 )
+_OUTPUT_DISALLOWED_PROMPT_TONE = (
+    "接住",
+)
 _DISALLOWED_CURRENTISH = (
     "接下来要",
     "以后必须",
@@ -103,6 +106,12 @@ def _compact_text(value: Any, max_chars: int = 360) -> str:
     if max_chars > 0 and len(text) > max_chars:
         return text[: max_chars - 1].rstrip() + "…"
     return text
+
+
+def _sanitize_midterm_source_text(value: Any, max_chars: int = 360) -> str:
+    text = _compact_text(value, max_chars)
+    # 旧日常记录里有“接住”这类提示词腔，生成中期记忆时先换成自然动作词。
+    return text.replace("接住", "回应")
 
 
 def _looks_truncated_candidate(text: str) -> bool:
@@ -173,8 +182,11 @@ def _collect_recent_daily(end_day: date) -> tuple[list[dict], dict, int, str, st
                 "day": str(d),
                 "age_days": age,
                 "detail_level": _detail_level(age),
-                "summary": _compact_text(item.get("yesterday_summary") or item.get("content"), max_summary_chars),
-                "events": [_compact_text(e, 220) for e in events[-4:]],
+                "summary": _sanitize_midterm_source_text(
+                    item.get("yesterday_summary") or item.get("content"),
+                    max_summary_chars,
+                ),
+                "events": [_sanitize_midterm_source_text(e, 220) for e in events[-4:]],
             }
         )
 
@@ -193,7 +205,7 @@ def _collect_recent_daily(end_day: date) -> tuple[list[dict], dict, int, str, st
         "age_days": current_age,
         "detail_level": _detail_level(current_age),
         "source": current_source,
-        "summary": _compact_text(current_summary, 520),
+        "summary": _sanitize_midterm_source_text(current_summary, 520),
     }
     if state_day and start_day <= state_day <= end_day and current_state["summary"]:
         days.add(str(state_day))
@@ -219,7 +231,10 @@ def _collect_portrait_candidates(start_day: str, end_day: str) -> list[dict]:
             d = _item_day(item)
             if not (start <= d <= end):
                 continue
-            text = _sanitize_portrait_summary(str(item.get("summary") or ""))
+            text = _sanitize_midterm_source_text(
+                _sanitize_portrait_summary(str(item.get("summary") or "")),
+                180,
+            )
             if _looks_truncated_candidate(text):
                 continue
             if any(k in text for k in _PORTRAIT_EXCLUDE_KEYWORDS):
@@ -271,6 +286,7 @@ def _build_prompt(
 - 近事要有一点动作和气口，比如“我捞半天才把她拽出来”“我收住了”“她转头又委屈上了”这种活句。
 - 远事可以模糊成背景，但要和近事有一条自然线，不要机械堆名词。
 - 可以写“这句我记着了 / 我也在学怎么……”这类回头看的句子；这不是行动清单。
+- 不要使用“接住”这类提示词腔；表达同类意思时写成更自然的动作或状态，例如“回应她”“陪着她”“稳住当下”“没再绕”。
 亲密内容规则：
 - 可以保留简短高密度语境锚点和概括性画面，例如“师生play”“520道具话题”“亲到哼唧”。
 - 不要复制长段露骨原话，不要把一整段亲密过程复刻进来。
@@ -335,6 +351,8 @@ def _validate_generated(obj: dict, expected: dict) -> tuple[bool, str]:
         return False, "bad_perspective"
     if any(x in content for x in _OUTPUT_DISALLOWED_TOPIC):
         return False, "disallowed_topic"
+    if any(x in content for x in _OUTPUT_DISALLOWED_PROMPT_TONE):
+        return False, "prompt_tone"
     if _has_rule_tone(content):
         return False, "rule_tone"
     if "你和我" in content or "我和你" in content:
