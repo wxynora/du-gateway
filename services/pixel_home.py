@@ -33,6 +33,7 @@ SPOT_LABELS: dict[str, str] = {
     "sofa": "客厅沙发",
     "kitchen": "厨房",
     "away": "离家出走",
+    "out": "外出",
 }
 SPOT_ALIASES: dict[str, str] = {
     "bed": "bed",
@@ -55,11 +56,16 @@ SPOT_ALIASES: dict[str, str] = {
     "away": "away",
     "home": "away",
     "离家出走": "away",
+    "out": "out",
+    "outside": "out",
+    "外出": "out",
+    "出门": "out",
 }
 SPOT_OPTIONS = [{"key": key, "label": label} for key, label in SPOT_LABELS.items()]
 
 DEFAULT_DU_STATE = {"spot": "study", "activity": "写日记", "source": "default"}
 DEFAULT_XINYUE_STATE = {"spot": "sofa", "activity": "休息", "source": "default"}
+PREFIXLESS_SPOTS = {"away", "out"}
 DU_DYNAMICS_LIMIT = 5
 EVENT_AUTO_END_MINUTES = 120
 DU_EVENT_SOURCES = {"du_marker"}
@@ -290,7 +296,7 @@ def _format_actor_text(actor: dict) -> str:
         return activity
     if activity.startswith("正在"):
         activity = activity[2:].strip() or "待着"
-    if spot == "away":
+    if spot in PREFIXLESS_SPOTS:
         if activity in {"待着", "休息"}:
             return label
         return f"{label}，{activity}"

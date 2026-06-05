@@ -6,7 +6,7 @@ import homeNightOn from "../../assets/life-home-night-on.png";
 
 type HomeMode = "day" | "nightOn" | "nightOff";
 type HotspotKey = "bed" | "bath" | "study" | "sofa";
-type HomeSpotKey = HotspotKey | "kitchen" | "away";
+type HomeSpotKey = HotspotKey | "kitchen" | "away" | "out";
 
 type PixelHomeActor = {
   spot?: HomeSpotKey;
@@ -68,6 +68,7 @@ const DEFAULT_SPOTS: Array<{ key: HomeSpotKey; label: string }> = [
   { key: "sofa", label: "客厅沙发" },
   { key: "kitchen", label: "厨房" },
   { key: "away", label: "离家出走" },
+  { key: "out", label: "外出" },
 ];
 
 const HOTSPOTS: Hotspot[] = [
@@ -132,7 +133,7 @@ function isHomeMode(value: unknown): value is HomeMode {
 }
 
 function isHomeSpot(value: unknown): value is HomeSpotKey {
-  return value === "bed" || value === "bath" || value === "study" || value === "sofa" || value === "kitchen" || value === "away";
+  return value === "bed" || value === "bath" || value === "study" || value === "sofa" || value === "kitchen" || value === "away" || value === "out";
 }
 
 function resolveLocalMode(): HomeMode {
@@ -157,7 +158,7 @@ function actorText(actor: PixelHomeActor | undefined, fallback: string) {
 function statusText(label: string, activity: string) {
   const clean = String(activity || "").trim().replace(/^正在/, "") || "待着";
   if (clean.startsWith("在")) return clean;
-  if (label === "离家出走") {
+  if (label === "离家出走" || label === "外出") {
     if (clean === "待着" || clean === "休息") return label;
     return `${label}，${clean}`;
   }
