@@ -79,6 +79,7 @@ export function VoiceCallScreen({
   const previewTextRef = useRef("");
   const previewStampRef = useRef(0);
   const playedIncomingInviteRef = useRef("");
+  const autoStartedInviteRef = useRef("");
 
   useEffect(() => {
     tgReady(false);
@@ -137,6 +138,12 @@ export function VoiceCallScreen({
     } else {
       setStatus("ready");
       setStatusText("已接通，点一下录音");
+      if (invite.autoStartRecording && autoStartedInviteRef.current !== invite.callId) {
+        autoStartedInviteRef.current = invite.callId;
+        window.setTimeout(() => {
+          void beginRecording();
+        }, 180);
+      }
     }
     onIncomingInviteConsumed?.();
   }, [configReady, incomingInvite?.callId, onIncomingInviteConsumed]);

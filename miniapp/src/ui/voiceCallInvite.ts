@@ -8,6 +8,8 @@ export type IncomingVoiceCallInvite = {
   reason: string;
   urgency: "normal" | "important" | "urgent";
   timeoutSeconds: number;
+  autoStartRecording: boolean;
+  source: string;
 };
 
 function cleanText(value: unknown, fallback = ""): string {
@@ -26,6 +28,12 @@ function cleanTimeoutSeconds(value: unknown): number {
   return Math.max(30, Math.min(900, Math.floor(n)));
 }
 
+function cleanBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  const raw = String(value ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "y";
+}
+
 export function normalizeVoiceCallInvite(raw: unknown): IncomingVoiceCallInvite | null {
   const src = typeof raw === "string" ? parseInviteJson(raw) : raw;
   if (!src || typeof src !== "object") return null;
@@ -40,6 +48,8 @@ export function normalizeVoiceCallInvite(raw: unknown): IncomingVoiceCallInvite 
     reason: cleanText(item.reason).slice(0, 240),
     urgency: cleanUrgency(item.urgency),
     timeoutSeconds: cleanTimeoutSeconds(item.timeoutSeconds ?? item.timeout_seconds),
+    autoStartRecording: cleanBoolean(item.autoStartRecording ?? item.auto_start_recording ?? item.autoStart),
+    source: cleanText(item.source).slice(0, 60),
   };
 }
 
