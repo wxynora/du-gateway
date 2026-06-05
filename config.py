@@ -533,6 +533,7 @@ MAIN_GATEWAY_BASE_URL = os.environ.get("MAIN_GATEWAY_BASE_URL", "http://127.0.0.
 MAIN_GATEWAY_BEARER_TOKEN = os.environ.get("MAIN_GATEWAY_BEARER_TOKEN", "").strip()
 XIAOAI_GATEWAY_TOKEN = os.environ.get("XIAOAI_GATEWAY_TOKEN", "").strip()
 GATEWAY_INTERNAL_STT_TOKEN = os.environ.get("GATEWAY_INTERNAL_STT_TOKEN", "").strip()
+QQ_GROUP_ACTIVITY_REPORT_TOKEN = os.environ.get("QQ_GROUP_ACTIVITY_REPORT_TOKEN", "").strip()
 
 # mijiaAPI CLI：用于让小爱音箱执行米家/红外自然语言控制命令。
 MIJIA_API_COMMAND = os.environ.get("MIJIA_API_COMMAND", "mijiaAPI").strip() or "mijiaAPI"

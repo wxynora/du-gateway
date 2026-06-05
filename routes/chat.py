@@ -19,6 +19,9 @@ from config import (
     STREAM_SSE_FLUSH_MAX_MS,
     TOOL_MAX_ROUNDS,
     DATA_DIR,
+    MAIN_GATEWAY_BEARER_TOKEN,
+    QQ_GROUP_ACTIVITY_REPORT_TOKEN,
+    QQ_PROACTIVE_PUSH_TOKEN,
     is_openrouter_url,
     openrouter_models_response,
 )
@@ -64,6 +67,11 @@ from storage import r2_store, whitelist_store
 from storage.music_bgm_state import get_active_music_bgm_context
 from storage.music_melody_store import get_music_melody_entry_by_id
 from services.music_lyrics import normalize_lyrics_payload
+from services.qq_activity_context import (
+    build_group_activity_context_for_wakeup as _build_qq_group_activity_context_for_wakeup,
+    clear_group_activity_context as _clear_qq_group_activity_context,
+    record_group_activity as _record_qq_group_activity,
+)
 from services.du_daily import (
     build_chat_trigger as build_du_daily_trigger,
 )
@@ -220,6 +228,38 @@ def _xiaoai_speaker_from_request() -> str:
 
 def _reply_target() -> str:
     return str(request.headers.get("X-Reply-Target") or "").strip()
+
+
+def _bearer_token_from_request() -> str:
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return ""
+
+
+def _verify_qq_group_activity_report() -> bool:
+    allowed = {
+        x.strip()
+        for x in (
+            QQ_GROUP_ACTIVITY_REPORT_TOKEN,
+            QQ_PROACTIVE_PUSH_TOKEN,
+            MAIN_GATEWAY_BEARER_TOKEN,
+        )
+        if x and x.strip()
+    }
+    if allowed:
+        provided = _bearer_token_from_request() or (request.headers.get("X-QQ-Activity-Token") or "").strip()
+        return provided in allowed
+    return (request.remote_addr or "") in {"127.0.0.1", "::1", "localhost"}
+
+
+@bp.route("/api/internal/qq-group-activity", methods=["POST"])
+def qq_group_activity_report():
+    if not _verify_qq_group_activity_report():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    ok = _record_qq_group_activity(body if isinstance(body, dict) else {})
+    return jsonify({"ok": bool(ok)}), 200 if ok else 400
 
 
 def _music_bgm_float(value: object) -> float:
@@ -640,6 +680,38 @@ def _is_delayed_followup_generation_request() -> bool:
         if (request.headers.get(name) or "").strip():
             return True
     return False
+
+
+def _inject_qq_group_activity_context(body: dict) -> dict:
+    if _is_du_daily_maintenance_request() or not _is_gateway_wakeup_request():
+        return body
+    system_text = _build_qq_group_activity_context_for_wakeup()
+    if not system_text:
+        return body
+    body = dict(body)
+    messages = body.get("messages") if isinstance(body.get("messages"), list) else []
+    body["messages"] = [{"role": "system", "content": system_text, "__dynamic__": True}] + list(messages)
+    logger.info("qq_group_activity_context_injected chars=%s", len(system_text))
+    return body
+
+
+def _maybe_clear_qq_group_activity_context_for_private_reply(
+    body: dict,
+    *,
+    reply_channel: str,
+    reply_target: str,
+) -> None:
+    if _is_gateway_wakeup_request() or _is_du_daily_maintenance_request() or _is_followup_generation_request():
+        return
+    if str(reply_target or "").strip() == "qq_group_mention":
+        return
+    if str(reply_channel or "").strip().lower() not in {"tg", "qq", "wechat", "sumitalk"}:
+        return
+    last_user = _last_user_message((body or {}).get("messages") or [])
+    if not isinstance(last_user, dict) or _message_content_chars(last_user.get("content")) <= 0:
+        return
+    if _clear_qq_group_activity_context("user_private_reply"):
+        logger.info("qq_group_activity_context_cleared channel=%s target=%s", reply_channel, reply_target)
 
 
 def _skip_claude_thinking_carryover_request() -> bool:
@@ -1330,6 +1402,11 @@ def chat_completions():
             is_followup_generation=_is_followup_generation_request(),
             is_du_daily_maintenance=_is_du_daily_maintenance_request(),
         )
+        _maybe_clear_qq_group_activity_context_for_private_reply(
+            body,
+            reply_channel=reply_channel,
+            reply_target=reply_target,
+        )
 
     # 走完整管道（清洗、注入记忆/总结、转发、存档）
     body = step_clean_images_and_save_desc(body, window_id)
@@ -1399,6 +1476,7 @@ def chat_completions():
         body = step_inject_reference_note(body)
         body = step_inject_du_midterm_memory(body, window_id)
     body = _inject_music_bgm_context(body, reply_channel=reply_channel)
+    body = _inject_qq_group_activity_context(body)
     active_upstream_url = _get_active_upstream_url()
     body = _inject_silence_mode_system(body, is_du_daily_maintenance=du_daily_maintenance)
     if _is_local_claude_oauth_proxy_url(active_upstream_url) and not _skip_claude_thinking_carryover_request():

@@ -643,6 +643,8 @@ const logInboundEvents = envBool("QQ_INBOUND_EVENT_LOG", true);
 const logGroupEvents = envBool("QQ_GROUP_EVENT_LOG", true);
 const ownerQqUserId = Number(envStr("QQ_OWNER_USER_ID", "1336091712") || 0);
 const ownerQqDisplayName = envStr("QQ_OWNER_DISPLAY_NAME", "辛玥");
+const reportGroupActivityEnabled = envBool("QQ_GROUP_ACTIVITY_REPORT_ENABLED", true);
+const groupActivityContextLimit = Math.max(1, envInt("QQ_GROUP_ACTIVITY_CONTEXT_MESSAGES", 6));
 
 async function sendQqPrivateRichReply(userId, reply, options = {}) {
   const outChunkChars = Math.max(20, envInt("QQ_OUTPUT_CHUNK_CHARS", 200));
@@ -848,20 +850,82 @@ function getGroupHistory(groupId) {
 
 function rememberGroupMessage(j, content) {
   const groupId = Number(j?.group_id || 0);
-  if (!groupId) return;
+  if (!groupId) return null;
   const { userId, name, isOwner } = senderLabel(j);
   const text = contentTextForGroupContext(content);
   const rows = getGroupHistory(groupId);
-  rows.push({
+  const row = {
     userId,
     name,
     isOwner,
     text,
     messageId: String(j?.message_id || ""),
     ts: Number(j?.time || 0),
-  });
+  };
+  rows.push(row);
   if (rows.length > groupHistoryKeepLimit) rows.splice(0, rows.length - groupHistoryKeepLimit);
   recentGroupMessages.set(String(groupId), rows);
+  return row;
+}
+
+function groupActivityReportToken() {
+  return envStr("QQ_GROUP_ACTIVITY_REPORT_TOKEN", "")
+    || envStr("MAIN_GATEWAY_BEARER_TOKEN", "")
+    || envStr("QQ_PROACTIVE_PUSH_TOKEN", "");
+}
+
+function rowForActivityReport(row, groupId) {
+  return {
+    group_id: Number(groupId || 0),
+    user_id: Number(row?.userId || 0),
+    sender_name: String(row?.name || "").trim(),
+    is_owner: !!row?.isOwner,
+    text: String(row?.text || "").trim(),
+    message_id: String(row?.messageId || "").trim(),
+    timestamp: Number(row?.ts || 0),
+  };
+}
+
+async function reportQqGroupActivity(j, previousRows, content) {
+  if (!reportGroupActivityEnabled) return;
+  const groupId = Number(j?.group_id || 0);
+  if (!groupId || !ownerQqUserId) return;
+  const { userId, name, isOwner } = senderLabel(j);
+  if (!isOwner) return;
+  const text = contentTextForGroupContext(content);
+  if (!text) return;
+  const reportPath = envStr("QQ_GROUP_ACTIVITY_REPORT_PATH", "/api/internal/qq-group-activity");
+  const url = absolutizeGatewayUrl(reportPath);
+  const context = (previousRows || [])
+    .slice(-groupActivityContextLimit)
+    .map((row) => rowForActivityReport(row, groupId));
+  const body = {
+    source: "qq_onebot",
+    group_id: groupId,
+    user_id: userId,
+    sender_name: name,
+    is_owner: true,
+    text,
+    message_id: String(j?.message_id || ""),
+    timestamp: Number(j?.time || 0),
+    context,
+  };
+  const headers = { "Content-Type": "application/json" };
+  const token = groupActivityReportToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  try {
+    const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    if (!r.ok) {
+      const raw = await r.text().catch(() => "");
+      console.log(`[qq-onebot] 群活动上报失败 status=${r.status} body=${raw.slice(0, 160)}`);
+      return;
+    }
+    if (logGroupEvents) {
+      console.log(`[qq-onebot] 群活动已上报 group=${groupId} message_id=${String(j?.message_id || "")} text=${text.slice(0, 60)}`);
+    }
+  } catch (e) {
+    console.log(`[qq-onebot] 群活动上报异常：${String(e?.message || e)}`);
+  }
 }
 
 function messageMentionsSelf(j) {
@@ -988,6 +1052,7 @@ async function handleGroupEvent(j) {
     console.log(`[qq-onebot] group event group=${groupId} user=${Number(j?.user_id || 0)} self_id=${eventSelfId(j) || "unknown"} at=${atTargets.join(",") || "-"} content=${userContentPreview(content, 80) || "-"}`);
   }
   const previousRows = getGroupHistory(groupId).slice(-groupHistoryContextLimit);
+  void reportQqGroupActivity(j, previousRows, content || extractUserContentFromMessage(j?.message || j?.raw_message || ""));
   rememberGroupMessage(j, content || extractUserContentFromMessage(j?.message || j?.raw_message || ""));
   if (!mentionsSelf) {
     if (atTargets.length) {
