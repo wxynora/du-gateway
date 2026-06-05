@@ -1676,7 +1676,7 @@ export function MainChatScreen({
         ref={messagesScrollRef}
         className={`min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto px-3.5 pb-5 ${searchOpen ? "pt-[156px]" : "pt-[104px]"}`}
       >
-        <div className="space-y-5">
+        <div className="space-y-4">
           {groupedMessages.map((group, index) => (
             <React.Fragment key={group.id}>
               {showChatTimestamps && shouldShowGroupTime(group.createdAt, groupedMessages[index - 1]?.lastCreatedAt) ? (
@@ -1702,7 +1702,7 @@ export function MainChatScreen({
                           }}
                           skin={bubbleSkin}
                           align="right"
-                          className={`block max-w-full rounded-[18px] px-3 py-2 text-left font-medium leading-relaxed shadow-sm ${
+                          className={`block max-w-full rounded-[18px] px-2.5 py-[5px] text-left font-medium leading-[1.42] shadow-sm ${
                             transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
                           } ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
                           style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
@@ -1796,7 +1796,7 @@ export function MainChatScreen({
                             <>
                               <ChatBubbleFrame
                                 skin={bubbleSkin}
-                                className={`inline-block w-fit max-w-full rounded-[18px] px-3 py-2 font-medium leading-relaxed shadow-sm ${
+                                className={`inline-block w-fit max-w-full rounded-[18px] px-2.5 py-[5px] font-medium leading-[1.42] shadow-sm ${
                                   transparentBubbleEnabled
                                     ? TRANSPARENT_BUBBLE_CLASS
                                     : group.role === "benben"
