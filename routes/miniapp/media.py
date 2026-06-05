@@ -393,6 +393,17 @@ def register_routes(bp) -> None:
         audio_bytes = tts_to_audio_bytes(text, audio_format=audio_format)
         if not audio_bytes:
             return jsonify({"ok": False, "error": "语音生成失败"}), 502
+        call_id = str(body.get("call_id") or body.get("callId") or "").strip()
+        if call_id:
+            try:
+                _append_call_record_turns(
+                    call_id,
+                    str(body.get("call_started_at") or body.get("callStartedAt") or now_beijing_iso()),
+                    [{"role": "assistant", "text": text, "kind": "voice_opening"}],
+                    mode="voice",
+                )
+            except Exception:
+                logger.warning("tts-preview call record append failed call_id=%s", call_id, exc_info=True)
         return jsonify(
             {
                 "ok": True,

@@ -40,6 +40,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
+    public static final String ACTION_OPEN_VOICE_CALL = "com.sumitalk.app.action.OPEN_VOICE_CALL";
+    public static final String EXTRA_VOICE_CALL_INVITE_JSON = "voice_call_invite_json";
     private static final int REQ_RUNTIME_PERMS = 1201;
     private static final String TAG = "SumiTalkMain";
     private static final String API_BASE = "https://duxy-home.com";
@@ -82,6 +84,14 @@ public class MainActivity extends BridgeActivity {
         }
         schedulePanelStateSyncRetries();
         syncPanelStateFromWebView();
+        handleVoiceCallIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleVoiceCallIntent(intent);
     }
 
     private static class ClientLogBridge {
@@ -120,6 +130,43 @@ public class MainActivity extends BridgeActivity {
         super.onDestroy();
         mainHandler.removeCallbacksAndMessages(null);
         ioExecutor.shutdownNow();
+    }
+
+    private void handleVoiceCallIntent(Intent intent) {
+        if (intent == null) return;
+        String inviteJson = String.valueOf(intent.getStringExtra(EXTRA_VOICE_CALL_INVITE_JSON) == null ? "" : intent.getStringExtra(EXTRA_VOICE_CALL_INVITE_JSON)).trim();
+        if (inviteJson.isEmpty() && ACTION_OPEN_VOICE_CALL.equals(intent.getAction())) {
+            try {
+                JSONObject fallback = new JSONObject();
+                fallback.put("callId", "call_" + System.currentTimeMillis());
+                fallback.put("callerName", "渡");
+                fallback.put("title", "渡来电");
+                fallback.put("openingLine", "");
+                inviteJson = fallback.toString();
+            } catch (Exception ignored) {
+            }
+        }
+        if (inviteJson.isEmpty()) return;
+        final String payload = inviteJson;
+        mainHandler.postDelayed(() -> dispatchVoiceCallInviteToWebView(payload), 260);
+        mainHandler.postDelayed(() -> dispatchVoiceCallInviteToWebView(payload), 1200);
+    }
+
+    private void dispatchVoiceCallInviteToWebView(String inviteJson) {
+        if (getBridge() == null || getBridge().getWebView() == null) {
+            return;
+        }
+        WebView webView = getBridge().getWebView();
+        String quoted = JSONObject.quote(inviteJson == null ? "" : inviteJson);
+        String script =
+                "(function(){"
+                        + "try{"
+                        + "var detail=JSON.parse(" + quoted + ");"
+                        + "localStorage.setItem('miniapp.voiceCall.pendingInvite', JSON.stringify(detail));"
+                        + "window.dispatchEvent(new CustomEvent('sumitalk-voice-call-invite',{detail:detail}));"
+                        + "}catch(e){console.error('voice call invite dispatch failed',e);}"
+                        + "})();";
+        webView.evaluateJavascript(script, null);
     }
 
     private void requestRuntimePermissionsIfNeeded() {

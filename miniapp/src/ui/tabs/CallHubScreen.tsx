@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api";
 import { VoiceCallScreen } from "./VoiceCallScreen";
 import { useToast } from "../toast";
+import type { IncomingVoiceCallInvite } from "../voiceCallInvite";
 
 type VoiceConfig = {
   displayName: string;
@@ -75,10 +76,14 @@ export function CallHubScreen({
   onClose,
   duAvatarImage,
   backHandlerRef,
+  incomingInvite,
+  onIncomingInviteConsumed,
 }: {
   onClose: () => void;
   duAvatarImage: string;
   backHandlerRef?: React.MutableRefObject<BackHandler | null>;
+  incomingInvite?: IncomingVoiceCallInvite | null;
+  onIncomingInviteConsumed?: () => void;
 }) {
   const toast = useToast();
   const [view, setView] = useState<ViewMode>("home");
@@ -132,6 +137,11 @@ export function CallHubScreen({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!incomingInvite?.callId) return;
+    setView("voice");
+  }, [incomingInvite?.callId]);
 
   async function loadRecords() {
     setRecordsLoading(true);
@@ -256,7 +266,12 @@ export function CallHubScreen({
 
         {view === "voice" ? (
           <div className="pt-0">
-            <VoiceCallScreen onClose={() => setView("home")} duAvatarImage={duAvatarImage} />
+            <VoiceCallScreen
+              onClose={() => setView("home")}
+              duAvatarImage={duAvatarImage}
+              incomingInvite={incomingInvite}
+              onIncomingInviteConsumed={onIncomingInviteConsumed}
+            />
           </div>
         ) : null}
 

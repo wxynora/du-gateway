@@ -103,6 +103,7 @@ public class FloatingBallService extends Service {
     private static final String API_BASE = "https://duxy-home.com";
     private static final String CHANNEL_ID = "sumitalk_overlay";
     private static final String MESSAGE_CHANNEL_ID = "sumitalk_message";
+    private static final String VOICE_CALL_CHANNEL_ID = "sumitalk_voice_call";
     private static final String SUMITALK_MAIN_WINDOW_ID = "sumitalk-main";
     private static final int NOTIFICATION_ID = 2001;
     private static final long HISTORY_POLL_INTERVAL_MS = 20000L;
@@ -380,10 +381,16 @@ public class FloatingBallService extends Service {
         messageChannel.setDescription("用于助手新消息弹出提醒");
         messageChannel.enableVibration(true);
         messageChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+        NotificationChannel voiceCallChannel =
+                new NotificationChannel(VOICE_CALL_CHANNEL_ID, "渡来电", NotificationManager.IMPORTANCE_HIGH);
+        voiceCallChannel.setDescription("用于渡主动发起的 SumiTalk 语音来电邀请");
+        voiceCallChannel.enableVibration(true);
+        voiceCallChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) {
             nm.createNotificationChannel(channel);
             nm.createNotificationChannel(messageChannel);
+            nm.createNotificationChannel(voiceCallChannel);
         }
     }
 
@@ -1202,6 +1209,13 @@ public class FloatingBallService extends Service {
                 Log.i(TAG, "device_action done id=" + id + " type=" + type + " " + summarizeDeviceActionResult(result));
                 return result;
             }
+            if ("voice_call_invite".equals(type)) {
+                JSONObject detail = showVoiceCallInviteFromAction(payload == null ? new JSONObject() : payload);
+                result.put("status", "done");
+                result.put("detail", detail);
+                Log.i(TAG, "device_action done id=" + id + " type=" + type + " " + summarizeDeviceActionResult(result));
+                return result;
+            }
             if ("request_screen_check".equals(type)) {
                 JSONObject detail = requestScreenCheckFromAction(payload == null ? new JSONObject() : payload);
                 result.put("status", "done");
@@ -1811,6 +1825,73 @@ public class FloatingBallService extends Service {
         return detail;
     }
 
+    private JSONObject showVoiceCallInviteFromAction(JSONObject payload) throws Exception {
+        String title = String.valueOf(payload.optString("title", "渡来电")).trim();
+        String callerName = String.valueOf(payload.optString("callerName", "渡")).trim();
+        String openingLine = String.valueOf(payload.optString("openingLine", "")).trim();
+        String urgency = String.valueOf(payload.optString("urgency", "normal")).trim().toLowerCase(Locale.US);
+        String callId = String.valueOf(payload.optString("callId", "")).trim();
+        int timeoutSeconds = payload.optInt("timeoutSeconds", 180);
+        if (title.isEmpty()) title = "渡来电";
+        if (callerName.isEmpty()) callerName = "渡";
+        if (openingLine.isEmpty()) throw new IllegalArgumentException("opening_line_empty");
+        if (!"important".equals(urgency) && !"urgent".equals(urgency)) urgency = "normal";
+        if (callId.isEmpty()) callId = "call_" + System.currentTimeMillis();
+        timeoutSeconds = Math.max(30, Math.min(900, timeoutSeconds));
+
+        JSONObject detail = new JSONObject();
+        detail.put("callId", callId);
+        detail.put("urgency", urgency);
+        detail.put("timeoutSeconds", timeoutSeconds);
+        if (!canPostNotifications()) {
+            detail.put("notified", false);
+            detail.put("error", "notification_permission_denied");
+            Log.w(TAG, "voice call invite skipped: notification permission denied callId=" + callId);
+            return detail;
+        }
+
+        JSONObject invite = new JSONObject(payload.toString());
+        invite.put("title", title);
+        invite.put("callerName", callerName);
+        invite.put("openingLine", openingLine);
+        invite.put("urgency", urgency);
+        invite.put("callId", callId);
+        invite.put("timeoutSeconds", timeoutSeconds);
+
+        Intent openIntent = buildOpenVoiceCallIntent(invite);
+        int requestCode = callId.hashCode() & 0x7fffffff;
+        PendingIntent openPendingIntent =
+                PendingIntent.getActivity(
+                        this,
+                        requestCode,
+                        openIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        NotificationCompat.Builder builder =
+                new NotificationCompat.Builder(this, VOICE_CALL_CHANNEL_ID)
+                        .setSmallIcon(R.mipmap.ic_launcher_round)
+                        .setContentTitle(title)
+                        .setContentText(callerName + "想和你语音")
+                        .setStyle(new NotificationCompat.BigTextStyle().bigText(openingLine))
+                        .setContentIntent(openPendingIntent)
+                        .addAction(R.mipmap.ic_launcher_round, "接听", openPendingIntent)
+                        .setAutoCancel(true)
+                        .setPriority(NotificationCompat.PRIORITY_MAX)
+                        .setDefaults(Notification.DEFAULT_ALL)
+                        .setCategory(NotificationCompat.CATEGORY_CALL)
+                        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                        .setWhen(System.currentTimeMillis())
+                        .setShowWhen(true)
+                        .setTimeoutAfter(timeoutSeconds * 1000L);
+        if ("important".equals(urgency) || "urgent".equals(urgency)) {
+            builder.setFullScreenIntent(openPendingIntent, true);
+        }
+
+        NotificationManagerCompat.from(this).notify(requestCode, builder.build());
+        detail.put("notified", true);
+        return detail;
+    }
+
     private boolean hasCalendarPermission() {
         return ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
                 && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED;
@@ -1908,6 +1989,13 @@ public class FloatingBallService extends Service {
             openIntent = new Intent(this, MainActivity.class);
         }
         return openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+    }
+
+    private Intent buildOpenVoiceCallIntent(JSONObject invite) {
+        Intent openIntent = new Intent(this, MainActivity.class);
+        openIntent.setAction(MainActivity.ACTION_OPEN_VOICE_CALL);
+        openIntent.putExtra(MainActivity.EXTRA_VOICE_CALL_INVITE_JSON, invite.toString());
+        return openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
     }
 
     private String resolveNotificationCategory(String category, String level) {

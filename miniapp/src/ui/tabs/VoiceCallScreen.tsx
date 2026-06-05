@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api";
 import { tgReady } from "../tg";
 import { useToast } from "../toast";
+import type { IncomingVoiceCallInvite } from "../voiceCallInvite";
 
 type VoiceConfig = {
   displayName: string;
@@ -45,15 +46,26 @@ function resolveRecorderMimeType(): string {
   return supported || "";
 }
 
-export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => void; duAvatarImage: string }) {
+export function VoiceCallScreen({
+  onClose,
+  duAvatarImage,
+  incomingInvite,
+  onIncomingInviteConsumed,
+}: {
+  onClose: () => void;
+  duAvatarImage: string;
+  incomingInvite?: IncomingVoiceCallInvite | null;
+  onIncomingInviteConsumed?: () => void;
+}) {
   const toast = useToast();
   const [status, setStatus] = useState<CallStatus>("connecting");
   const [statusText, setStatusText] = useState("正在接通...");
   const [callStartedAt] = useState(() => Date.now());
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
+  const [configReady, setConfigReady] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
-  const [callId, setCallId] = useState(() => `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+  const [callId, setCallId] = useState(() => incomingInvite?.callId || `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const [callStartedAtIso] = useState(() => new Date().toISOString());
 
   const streamRef = useRef<MediaStream | null>(null);
@@ -66,6 +78,7 @@ export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => voi
   const previewBusyRef = useRef(false);
   const previewTextRef = useRef("");
   const previewStampRef = useRef(0);
+  const playedIncomingInviteRef = useRef("");
 
   useEffect(() => {
     tgReady(false);
@@ -87,6 +100,8 @@ export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => voi
       } catch (e: any) {
         setStatus("error");
         setStatusText(e?.message || "语音配置加载失败");
+      } finally {
+        if (!cancelled) setConfigReady(true);
       }
     }
 
@@ -107,6 +122,24 @@ export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => voi
   useEffect(() => {
     if (audioRef.current) audioRef.current.muted = !speakerOn;
   }, [speakerOn]);
+
+  useEffect(() => {
+    const invite = incomingInvite;
+    if (!configReady || !invite?.callId) return;
+    if (playedIncomingInviteRef.current === invite.callId) {
+      onIncomingInviteConsumed?.();
+      return;
+    }
+    playedIncomingInviteRef.current = invite.callId;
+    setCallId(invite.callId);
+    if (invite.openingLine.trim()) {
+      void playIncomingOpeningLine(invite.openingLine, invite.callId);
+    } else {
+      setStatus("ready");
+      setStatusText("已接通，点一下录音");
+    }
+    onIncomingInviteConsumed?.();
+  }, [configReady, incomingInvite?.callId, onIncomingInviteConsumed]);
 
   function cleanupMedia() {
     try {
@@ -255,6 +288,32 @@ export function VoiceCallScreen({ onClose, duAvatarImage }: { onClose: () => voi
     } catch {
     } finally {
       previewBusyRef.current = false;
+    }
+  }
+
+  async function playIncomingOpeningLine(text: string, activeCallId: string) {
+    const openingLine = String(text || "").trim();
+    if (!openingLine) return;
+    try {
+      setStatus("speaking");
+      setStatusText("渡正在讲话...");
+      const resp = await apiFetch("/miniapp-api/tts-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: openingLine,
+          audio_format: "mp3",
+          call_id: activeCallId || callId,
+          call_started_at: callStartedAtIso,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+      await playReplyAudio(String(data.audio_b64 || ""), String(data.audio_format || "mp3"));
+    } catch (e: any) {
+      setStatus("ready");
+      setStatusText("已接通，点一下录音");
+      toast(e?.message || "开场白播放失败");
     }
   }
 

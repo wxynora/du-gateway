@@ -554,9 +554,11 @@ def execute_tool(name: str, arguments: dict) -> str:
     from services.gateway_tools import (
         DU_SURF_TOOL_NAMES,
         SYNC_TOOL_NAMES,
+        VOICE_CALL_TOOL_NAMES,
         XIAOAI_TOOL_NAMES,
         execute_du_surf_tool,
         execute_gateway_tool,
+        execute_voice_call_tool,
         execute_xiaoai_tool,
     )
     if name in {"buy_item", "roll_gacha", "inventory_action", "use_item", "transfer"}:
@@ -572,6 +574,8 @@ def execute_tool(name: str, arguments: dict) -> str:
         return execute_gateway_tool(name, arguments)
     if name in XIAOAI_TOOL_NAMES:
         return execute_xiaoai_tool(name, arguments)
+    if name in VOICE_CALL_TOOL_NAMES:
+        return execute_voice_call_tool(name, arguments)
     if name in DU_SURF_TOOL_NAMES:
         return execute_du_surf_tool(name, arguments)
     if name in ("get_time_info", "get_weather", "get_almanac"):

@@ -1,4 +1,5 @@
 """R2 storage helpers for SumiTalk native app actions."""
+import re
 import threading
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
@@ -15,6 +16,7 @@ _APP_ACTION_ALLOWLIST = {
     "show_choice_dialog",
     "show_system_notification",
     "request_screen_check",
+    "voice_call_invite",
 }
 _APP_ACTION_HISTORY_MAX = 100
 _APP_ACTION_EXPIRES_DEFAULT = 900
@@ -22,6 +24,7 @@ _APP_ACTION_EXPIRES_MIN = 30
 _APP_ACTION_EXPIRES_MAX = 3600
 _APP_ACTION_LEASE_SECONDS = 90
 _APP_ACTION_MAX_RETRY = 3
+_APP_ACTION_VOICE_TAG_RE = re.compile(r"</?voice>", flags=re.IGNORECASE)
 
 _app_action_write_lock = threading.Lock()
 
@@ -184,6 +187,8 @@ def _normalize_app_action_payload(action_type: str, payload: dict) -> tuple[Opti
         return _normalize_system_notification_payload(payload)
     if action_type == "request_screen_check":
         return _normalize_screen_check_payload(payload)
+    if action_type == "voice_call_invite":
+        return _normalize_voice_call_invite_payload(payload)
     if action_type != "create_system_alarm":
         return None, f"不支持的 app action: {action_type}"
     src = payload if isinstance(payload, dict) else {}
@@ -312,6 +317,51 @@ def _normalize_screen_check_payload(payload: dict) -> tuple[Optional[dict], Opti
     return {
         "title": title,
         "message": message,
+        "timeoutSeconds": timeout_seconds,
+    }, None
+
+
+def _normalize_voice_call_invite_payload(payload: dict) -> tuple[Optional[dict], Optional[str]]:
+    src = payload if isinstance(payload, dict) else {}
+    title = str(src.get("title") or "渡来电").strip() or "渡来电"
+    if len(title) > 60:
+        title = title[:60]
+    caller_name = str(src.get("callerName") or src.get("caller_name") or "渡").strip() or "渡"
+    if len(caller_name) > 24:
+        caller_name = caller_name[:24]
+    opening_line = str(
+        src.get("openingLine")
+        or src.get("opening_line")
+        or src.get("voice")
+        or src.get("message")
+        or ""
+    ).strip()
+    opening_line = _APP_ACTION_VOICE_TAG_RE.sub("", opening_line).strip()
+    if not opening_line:
+        return None, "opening_line 不能为空"
+    if len(opening_line) > 240:
+        opening_line = opening_line[:240].rstrip() + "。"
+    reason = str(src.get("reason") or "").strip()
+    if len(reason) > 200:
+        reason = reason[:200]
+    urgency = str(src.get("urgency") or "normal").strip().lower()
+    if urgency not in {"normal", "important", "urgent"}:
+        urgency = "normal"
+    call_id = str(src.get("callId") or src.get("call_id") or "").strip()
+    if not call_id:
+        call_id = "call_" + str(uuid4()).replace("-", "")
+    try:
+        timeout_seconds = int(src.get("timeout_seconds") if "timeout_seconds" in src else src.get("timeoutSeconds", 180))
+    except Exception:
+        timeout_seconds = 180
+    timeout_seconds = max(30, min(900, timeout_seconds))
+    return {
+        "title": title,
+        "callerName": caller_name,
+        "openingLine": opening_line,
+        "reason": reason,
+        "urgency": urgency,
+        "callId": call_id,
         "timeoutSeconds": timeout_seconds,
     }, None
 

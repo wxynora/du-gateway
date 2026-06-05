@@ -46,6 +46,11 @@ import {
 import { SumiOverlay } from "../plugins/sumi-overlay";
 import { buildAvatarDataUrl, buildBackgroundDataUrl } from "./imageDataUrl";
 import { clampStoredNumber, readStoredBoolean, readStoredNumber, readStoredString } from "./uiStorage";
+import {
+  VOICE_CALL_PENDING_INVITE_KEY,
+  normalizeVoiceCallInvite,
+  type IncomingVoiceCallInvite,
+} from "./voiceCallInvite";
 
 const LISTEN_BACKGROUND_STORAGE_KEY = "miniapp.listenWithDu.backgroundImage";
 
@@ -109,6 +114,7 @@ export function AppShell({
   const [showListenWithDu, setShowListenWithDu] = useState(false);
   const [listenWithDuMounted, setListenWithDuMounted] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
+  const [incomingVoiceCallInvite, setIncomingVoiceCallInvite] = useState<IncomingVoiceCallInvite | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
   const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
@@ -218,6 +224,14 @@ export function AppShell({
     [toast],
   );
 
+  const handleIncomingVoiceCallInvite = useCallback((raw: unknown) => {
+    const invite = normalizeVoiceCallInvite(raw);
+    if (!invite) return;
+    setIncomingVoiceCallInvite((prev) => (prev?.callId === invite.callId ? prev : invite));
+    setMainTab("chats");
+    setShowCallHub(true);
+  }, []);
+
   useEffect(() => {
     // 不强制全屏，保持 Telegram 默认的半屏/弹层体验。
     tgReady(false);
@@ -233,6 +247,21 @@ export function AppShell({
     }, 320);
     return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    try {
+      const pending = localStorage.getItem(VOICE_CALL_PENDING_INVITE_KEY);
+      if (pending) {
+        localStorage.removeItem(VOICE_CALL_PENDING_INVITE_KEY);
+        handleIncomingVoiceCallInvite(pending);
+      }
+    } catch {}
+    const listener = (event: Event) => {
+      handleIncomingVoiceCallInvite((event as CustomEvent).detail);
+    };
+    window.addEventListener("sumitalk-voice-call-invite", listener);
+    return () => window.removeEventListener("sumitalk-voice-call-invite", listener);
+  }, [handleIncomingVoiceCallInvite]);
 
   useEffect(() => {
     if (!deferHomeExtras) return;
@@ -806,6 +835,8 @@ export function AppShell({
             onClose={() => setShowCallHub(false)}
             duAvatarImage={duAvatarImage}
             backHandlerRef={callHubBackHandlerRef}
+            incomingInvite={incomingVoiceCallInvite}
+            onIncomingInviteConsumed={() => setIncomingVoiceCallInvite(null)}
           />
         </LazyPane>
       ) : null}

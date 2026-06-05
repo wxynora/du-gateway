@@ -22,6 +22,7 @@ logger = get_logger(__name__)
 
 SYNC_TOOL_NAMES = ("sync_core_cache_to_notion", "sync_core_cache_from_notion")
 XIAOAI_TOOL_NAMES = ("xiaoai_speak", "xiaoai_run_command", "mijia_lamp_get", "mijia_lamp_set")
+VOICE_CALL_TOOL_NAMES = ("start_voice_call",)
 DU_SURF_TOOL_NAMES = ("du_surf",)
 
 # 提醒文案：老婆问「明确的指令是什么」或「我该怎么说」时，渡可直接用这句回复
@@ -164,6 +165,47 @@ def get_gateway_xiaoai_tools() -> List[dict]:
     ]
 
 
+def get_gateway_voice_call_tools() -> List[dict]:
+    """返回 SumiTalk 语音来电工具定义，供 chat 常驻注入。"""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "start_voice_call",
+                "description": (
+                    "向 SumiTalk 手机端发起一通由渡主动打来的语音电话邀请。"
+                    "适合你明确想听她声音、需要比普通消息更靠近一点地叫她、或她允许你主动打语音时调用。"
+                    "这不是普通语音消息；调用后手机端会显示“渡来电”，她接听后才进入语音通话。"
+                    "不要连续轰炸；不要在她明显忙、睡觉或不适合出声的场景频繁调用。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "opening_line": {
+                            "type": "string",
+                            "description": "她接听后先听到的一句开场白，可以写成 <voice>...</voice> 里的内容；口语化，建议 80 字以内。",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "为什么想打这通语音，简短写给系统日志看。",
+                        },
+                        "urgency": {
+                            "type": "string",
+                            "enum": ["normal", "important", "urgent"],
+                            "description": "普通/重要/紧急。默认 normal；不要随便用 urgent。",
+                        },
+                        "expires_in": {
+                            "type": "integer",
+                            "description": "邀请有效秒数，默认 180，范围 30-900。",
+                        },
+                    },
+                    "required": ["opening_line"],
+                },
+            },
+        }
+    ]
+
+
 def get_gateway_du_surf_tools() -> List[dict]:
     """返回随机冲浪素材工具定义，和 web_search 精确搜索区分开。"""
     if not DU_SURF_ENABLED:
@@ -220,7 +262,7 @@ def execute_du_surf_tool(name: str, arguments: dict) -> str:
 
 def get_gateway_tools_for_inject() -> List[dict]:
     """返回不依赖 Notion 开关的网关工具。"""
-    return [*get_gateway_xiaoai_tools(), *get_gateway_du_surf_tools()]
+    return [*get_gateway_xiaoai_tools(), *get_gateway_voice_call_tools(), *get_gateway_du_surf_tools()]
 
 
 _VOICE_TAG_RE = re.compile(r"</?voice>", flags=re.IGNORECASE)
@@ -239,6 +281,13 @@ def _clean_xiaoai_speak_text(value: Any) -> str:
     text = text.strip()
     if len(text) > 240:
         text = text[:240].rstrip() + "。"
+    return text
+
+
+def _clean_voice_call_opening_line(value: Any) -> str:
+    text = _clean_xiaoai_speak_text(value)
+    if len(text) > 180:
+        text = text[:180].rstrip() + "。"
     return text
 
 
@@ -616,6 +665,64 @@ def execute_xiaoai_tool(name: str, arguments: dict) -> str:
         )
     except Exception as e:
         logger.exception("xiaoai_speak 工具执行异常")
+        return json.dumps({"ok": False, "error": "EXECUTION_FAILED", "message": str(e)}, ensure_ascii=False)
+
+
+def execute_voice_call_tool(name: str, arguments: dict) -> str:
+    """执行 SumiTalk 语音来电工具，返回给渡的 JSON 字符串。"""
+    if name not in VOICE_CALL_TOOL_NAMES:
+        return json.dumps({"ok": False, "error": "UNKNOWN_TOOL"}, ensure_ascii=False)
+    args = arguments if isinstance(arguments, dict) else {}
+    opening_line = _clean_voice_call_opening_line(args.get("opening_line") or args.get("openingLine"))
+    reason = str(args.get("reason") or "").strip()
+    urgency = str(args.get("urgency") or "normal").strip().lower()
+    if urgency not in {"normal", "important", "urgent"}:
+        urgency = "normal"
+    try:
+        expires_in = int(args.get("expires_in") if "expires_in" in args else args.get("expiresIn", 180))
+    except Exception:
+        expires_in = 180
+    expires_in = max(30, min(900, expires_in))
+    if not opening_line:
+        return json.dumps({"ok": False, "error": "OPENING_LINE_REQUIRED", "message": "opening_line 不能为空"}, ensure_ascii=False)
+    try:
+        from storage.app_action_store import append_app_action
+
+        action, err = append_app_action(
+            "voice_call_invite",
+            {
+                "title": "渡来电",
+                "callerName": "渡",
+                "openingLine": opening_line,
+                "reason": reason,
+                "urgency": urgency,
+                "timeoutSeconds": expires_in,
+            },
+            expires_in_sec=expires_in,
+            source="tool:start_voice_call",
+        )
+        if err or not action:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": "INVITE_QUEUE_FAILED",
+                    "message": err or "语音来电邀请入队失败。",
+                },
+                ensure_ascii=False,
+            )
+        payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+        return json.dumps(
+            {
+                "ok": True,
+                "message": "已向 SumiTalk 发起语音来电邀请；她接听后会听到开场白并进入语音通话。",
+                "action_id": action.get("id"),
+                "call_id": payload.get("callId"),
+                "expires_in": expires_in,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        logger.exception("start_voice_call 工具执行异常")
         return json.dumps({"ok": False, "error": "EXECUTION_FAILED", "message": str(e)}, ensure_ascii=False)
 
 
