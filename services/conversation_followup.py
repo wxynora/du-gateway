@@ -545,6 +545,7 @@ def _send_wakeup_event(
     archive: bool = True,
     stable_proactive_channel: bool = False,
     wakeup_kind: str = "",
+    system_event: bool = False,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -584,15 +585,16 @@ def _send_wakeup_event(
     body = {
         "model": model,
         "stream": False,
-        "messages": [
-            {
-                "role": "user",
-                "content": message_content,
-            }
-        ],
+        "messages": [],
     }
     if generation_channel == "tg":
         body["messages"].insert(0, {"role": "system", "content": build_telegram_style_system(include_channel_hint=False)})
+    body["messages"].append(
+        {
+            "role": "system" if system_event and not image else "user",
+            "content": message_content,
+        }
+    )
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": context_window_id,
@@ -697,10 +699,11 @@ def send_private_draw_wakeup(window_id: str, target: str, event_text: str, creat
         created_at=created_at,
         archive=True,
         extra_instruction=(
-            "这是她主动发来的情侣私密抽签结果。请按最近聊天入口的语气自然接一两句；"
-            "不要写开场白，不要写旁白，不要扩成角色扮演剧情，也不要解释工具或系统流程。"
+            "这是小家私密抽签页触发的情侣抽签结果。请按最近聊天入口的语气自然接一两句；"
+            "不要代替她说话，不要写开场白，不要写旁白，不要扩成角色扮演剧情，也不要解释工具或系统流程。"
         ),
         wakeup_kind="private_draw",
+        system_event=True,
     )
 
 

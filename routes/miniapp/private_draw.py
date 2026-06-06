@@ -36,12 +36,52 @@ def _last_reply_meta() -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
+def _private_draw_system_prompt(body: dict) -> str:
+    entry = str(body.get("entry_number") or body.get("entry") or "").strip()
+    result = body.get("result") if isinstance(body.get("result"), list) else body.get("rows")
+    lines: list[str] = []
+    if isinstance(result, list):
+        for item in result:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or item.get("key") or "").strip()
+            value = str(item.get("value") or "").strip()
+            if label and value:
+                lines.append(f"{label}：{value}")
+    elif isinstance(result, dict):
+        for key, value in result.items():
+            label = str(key or "").strip()
+            text = str(value or "").strip()
+            if label and text:
+                lines.append(f"{label}：{text}")
+
+    if not lines:
+        legacy_text = str(body.get("event_text") or body.get("text") or "").strip()
+        if legacy_text:
+            lines.append(legacy_text)
+    if not lines:
+        return ""
+
+    header = "小家私密抽签页刚抽出一张情侣情趣小纸条。"
+    if entry:
+        header += f"\nEntry #{entry}"
+    return (
+        f"{header}\n"
+        + "\n".join(lines)
+        + "\n\n"
+        "系统提示：以上只是给你看的抽签结果，不是她发出的聊天文本。"
+        "不要代替她说话，不要写成「我抽到了/发你看看」之类的用户口吻。"
+        "你只需要按最近聊天入口的语气，以渡自己的口吻自然回应一两句；"
+        "不要写开场白，不要旁白，不要扩成角色扮演剧情，也不要解释工具或系统流程。"
+    )
+
+
 def register_routes(bp) -> None:
     @bp.route("/private-draw/send", methods=["POST"])
     def miniapp_private_draw_send():
         body = request.get_json(silent=True) or {}
-        event_text = str(body.get("event_text") or body.get("text") or "").strip()
-        if not event_text:
+        system_prompt = _private_draw_system_prompt(body)
+        if not system_prompt:
             return jsonify({"ok": False, "error": "缺少抽签内容"}), 400
 
         panel_target = str(body.get("reply_target") or _get_panel_device_id()).strip()
@@ -63,7 +103,7 @@ def register_routes(bp) -> None:
         result = send_private_draw_wakeup(
             window_id=window_id,
             target=target,
-            event_text=event_text,
+            event_text=system_prompt,
         )
         ok = bool((result or {}).get("ok"))
         logger.info(

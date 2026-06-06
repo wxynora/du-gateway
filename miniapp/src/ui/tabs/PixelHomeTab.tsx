@@ -422,11 +422,6 @@ function createPrivateDraw(): PrivateDrawResult {
   });
 }
 
-function formatPrivateDrawMessage(result: PrivateDrawResult, entryNumber: number): string {
-  const rows = result.map((item) => `${item.label}：${item.value}`).join("\n");
-  return `我刚在小家抽到一张私密小纸条，发你看看：\nEntry #${entryNumber}\n${rows}\n\n这是情侣抽签结果，不是开场白，也不用扩成角色扮演剧情。按我们刚才聊天的语气接就行。`;
-}
-
 async function sendPrivateDrawToDu(result: PrivateDrawResult, entryNumber: number) {
   const replyTarget = await getOrCreatePanelDeviceId();
   const sent = await apiJson<PrivateDrawSendResponse>("/miniapp-api/private-draw/send", {
@@ -434,7 +429,8 @@ async function sendPrivateDrawToDu(result: PrivateDrawResult, entryNumber: numbe
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       reply_target: replyTarget,
-      event_text: formatPrivateDrawMessage(result, entryNumber),
+      entry_number: entryNumber,
+      result,
     }),
   });
   if (!sent?.ok) {
