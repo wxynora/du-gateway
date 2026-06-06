@@ -322,6 +322,80 @@ def _stored_state() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _normalize_private_draw_rows(raw: Any) -> list[dict]:
+    rows = raw if isinstance(raw, list) else []
+    out: list[dict] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or item.get("key") or "").strip()
+        value = str(item.get("value") or "").strip()
+        key = str(item.get("key") or label).strip()
+        if not label or not value:
+            continue
+        out.append({"key": key, "label": label[:24], "value": value[:80]})
+    return out
+
+
+def _normalize_active_private_draw(raw: Any) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    rows = _normalize_private_draw_rows(raw.get("result") or raw.get("rows"))
+    if not rows:
+        return None
+    created_at = str(raw.get("created_at") or raw.get("createdAt") or raw.get("at") or "").strip() or now_beijing_iso()
+    return {
+        "entry_number": str(raw.get("entry_number") or raw.get("entry") or "").strip(),
+        "created_at": created_at,
+        "result": rows,
+        "source": "private_draw",
+    }
+
+
+def save_active_private_draw(payload: dict) -> dict:
+    current = _stored_state()
+    active = _normalize_active_private_draw(payload)
+    if not active:
+        return {"ok": False, "error": "empty_private_draw"}
+    current["active_private_draw"] = active
+    current["updated_at"] = now_beijing_iso()
+    ok = save_pixel_home_state(current)
+    return {"ok": bool(ok), "active_private_draw": active}
+
+
+def get_active_private_draw() -> dict:
+    current = _stored_state()
+    active = _normalize_active_private_draw(current.get("active_private_draw"))
+    return {"ok": True, "active_private_draw": active}
+
+
+def clear_active_private_draw() -> dict:
+    current = _stored_state()
+    current.pop("active_private_draw", None)
+    current["updated_at"] = now_beijing_iso()
+    ok = save_pixel_home_state(current)
+    return {"ok": bool(ok)}
+
+
+def _active_private_draw_inject_text(state: dict) -> str:
+    active = _normalize_active_private_draw((state or {}).get("active_private_draw"))
+    if not active:
+        return ""
+    lines = [f"{item.get('label')}：{item.get('value')}" for item in active.get("result") or [] if item.get("label") and item.get("value")]
+    if not lines:
+        return ""
+    entry = str(active.get("entry_number") or "").strip()
+    header = "【当前私密纸条】\n"
+    if entry:
+        header += f"Entry #{entry}\n"
+    return (
+        header
+        + "\n".join(lines)
+        + "\n说明：这是小家私密抽签页当前有效的情侣纸条，完成或作废前都作为当前约定参考。"
+        "它不是她发出的聊天文本；不要复述成工具通知，不要代替她说话。完成或作废后后端会清掉。"
+    )
+
+
 def _normalize_du_dynamics(raw: Any, *, reference_spot: str = "") -> list[dict]:
     rows = raw if isinstance(raw, list) else []
     out: list[dict] = []
@@ -471,7 +545,7 @@ def format_inject_block() -> str:
     xinyue = state.get("xinyue") if isinstance(state.get("xinyue"), dict) else {}
     du_label = spot_label(du.get("spot"))
     xinyue_label = spot_label(xinyue.get("spot"))
-    return (
+    block = (
         "【小家状态】\n"
         "这是你和小玥的赛博小家状态，并非现实定位或真实房间。\n"
         f"当前小家状态：{mode_label(state.get('mode'))}。\n"
@@ -485,6 +559,10 @@ def format_inject_block() -> str:
         "<<<END_PIXEL_HOME>>>\n"
         "不需要移动或更新时不要写 PIXEL_HOME。"
     )
+    active_private_draw = _active_private_draw_inject_text(_stored_state())
+    if active_private_draw:
+        block += "\n\n" + active_private_draw
+    return block
 
 
 def build_pixel_home_event(spot: Any, action: Any) -> str:

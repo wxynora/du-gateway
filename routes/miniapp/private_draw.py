@@ -77,12 +77,32 @@ def _private_draw_system_prompt(body: dict) -> str:
 
 
 def register_routes(bp) -> None:
+    @bp.route("/private-draw/active", methods=["GET", "DELETE"])
+    def miniapp_private_draw_active():
+        from services.pixel_home import clear_active_private_draw, get_active_private_draw
+
+        if request.method == "GET":
+            return jsonify(get_active_private_draw())
+
+        if request.method == "DELETE":
+            result = clear_active_private_draw()
+            status = 200 if result.get("ok") else 502
+            return jsonify(result), status
+
     @bp.route("/private-draw/send", methods=["POST"])
     def miniapp_private_draw_send():
         body = request.get_json(silent=True) or {}
         system_prompt = _private_draw_system_prompt(body)
         if not system_prompt:
             return jsonify({"ok": False, "error": "缺少抽签内容"}), 400
+
+        active_saved = False
+        try:
+            from services.pixel_home import save_active_private_draw
+
+            active_saved = bool((save_active_private_draw(body) or {}).get("ok"))
+        except Exception as e:
+            logger.warning("private_draw_active_save_failed error=%s", e)
 
         panel_target = str(body.get("reply_target") or _get_panel_device_id()).strip()
         meta = _last_reply_meta()
@@ -107,8 +127,9 @@ def register_routes(bp) -> None:
         )
         ok = bool((result or {}).get("ok"))
         logger.info(
-            "private_draw_send_done ok=%s window_id=%s channel=%s preferred=%s target=%s error=%s",
+            "private_draw_send_done ok=%s active_saved=%s window_id=%s channel=%s preferred=%s target=%s error=%s",
             ok,
+            active_saved,
             window_id,
             str((result or {}).get("channel") or ""),
             str((result or {}).get("preferred_channel") or channel),

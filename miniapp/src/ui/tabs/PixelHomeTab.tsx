@@ -61,6 +61,22 @@ type PrivateDrawSendResponse = {
   error?: string;
 };
 
+type ActivePrivateDrawResponse = {
+  ok?: boolean;
+  active_private_draw?: {
+    entry_number?: string | number;
+    result?: PrivateDrawResult;
+  } | null;
+  error?: string;
+};
+
+type LocalPrivateDrawTicket = {
+  entryNumber: number;
+  result: PrivateDrawResult;
+};
+
+const LOCAL_PRIVATE_DRAW_STORAGE_KEY = "pixel-home-local-private-draw";
+
 const HOME_MODES: Record<HomeMode, { image: string; alt: string }> = {
   day: {
     image: homeDay,
@@ -468,6 +484,72 @@ function createPrivateDraw(): PrivateDrawResult {
   });
 }
 
+function createPrivateDrawEntryNumber() {
+  return Math.floor(100 + Math.random() * 900);
+}
+
+function normalizePrivateDrawResult(value: unknown): PrivateDrawResult | null {
+  if (!Array.isArray(value) || !value.length) return null;
+  const rows = value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as Record<string, unknown>;
+      const key = String(row.key || row.label || "").trim();
+      const label = String(row.label || row.key || "").trim();
+      const text = String(row.value || "").trim();
+      if (!key || !label || !text) return null;
+      return { key, label, value: text };
+    })
+    .filter(Boolean) as PrivateDrawResult;
+  return rows.length ? rows : null;
+}
+
+async function loadActivePrivateDraw() {
+  const data = await apiJson<ActivePrivateDrawResponse>("/miniapp-api/private-draw/active");
+  const active = data?.active_private_draw;
+  const result = normalizePrivateDrawResult(active?.result);
+  if (!result) return null;
+  const entryNumber = Number(active?.entry_number) || createPrivateDrawEntryNumber();
+  return { entryNumber, result };
+}
+
+function readLocalPrivateDraw(): LocalPrivateDrawTicket | null {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_PRIVATE_DRAW_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<LocalPrivateDrawTicket>;
+    const result = normalizePrivateDrawResult(parsed.result);
+    if (!result) return null;
+    return {
+      entryNumber: Number(parsed.entryNumber) || createPrivateDrawEntryNumber(),
+      result,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalPrivateDraw(ticket: LocalPrivateDrawTicket | null) {
+  try {
+    if (!ticket) {
+      window.localStorage.removeItem(LOCAL_PRIVATE_DRAW_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(LOCAL_PRIVATE_DRAW_STORAGE_KEY, JSON.stringify(ticket));
+  } catch {
+    // UI-only persistence; backend active draw is saved separately on send.
+  }
+}
+
+async function clearActivePrivateDraw() {
+  const cleared = await apiJson<ActivePrivateDrawResponse>("/miniapp-api/private-draw/active", {
+    method: "DELETE",
+  });
+  if (!cleared?.ok) {
+    throw new Error(String(cleared?.error || "纸条清理失败"));
+  }
+}
+
 async function sendPrivateDrawToDu(result: PrivateDrawResult, entryNumber: number) {
   const replyTarget = await getOrCreatePanelDeviceId();
   const sent = await apiJson<PrivateDrawSendResponse>("/miniapp-api/private-draw/send", {
@@ -485,15 +567,61 @@ async function sendPrivateDrawToDu(result: PrivateDrawResult, entryNumber: numbe
 }
 
 function PrivateDrawPage({ onClose }: { onClose: () => void }) {
-  const [result, setResult] = useState<PrivateDrawResult | null>(null);
+  const initialTicket = useMemo(() => readLocalPrivateDraw(), []);
+  const [result, setResult] = useState<PrivateDrawResult | null>(() => initialTicket?.result || null);
+  const [entryNumber, setEntryNumber] = useState(() => initialTicket?.entryNumber || createPrivateDrawEntryNumber());
+  const [loadingActive, setLoadingActive] = useState(true);
+  const [savingDraw, setSavingDraw] = useState(false);
   const [settled, setSettled] = useState<"done" | "void" | null>(null);
   const [sendStatus, setSendStatus] = useState<PrivateDrawSendStatus>("idle");
   const [sendError, setSendError] = useState("");
-  const entryNumber = useMemo(() => Math.floor(100 + Math.random() * 900), [result]);
 
-  function drawOnce() {
-    if (result) return;
-    setResult(createPrivateDraw());
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const active = await loadActivePrivateDraw();
+        if (!cancelled && active) {
+          setEntryNumber(active.entryNumber);
+          setResult(active.result);
+          setSettled(null);
+          setSendStatus("sent");
+        }
+      } catch (error: any) {
+        if (!cancelled) setSendError(String(error?.message || error || "读取纸条失败"));
+      } finally {
+        if (!cancelled) setLoadingActive(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function drawOnce() {
+    if (result || loadingActive || savingDraw) return;
+    const nextEntryNumber = createPrivateDrawEntryNumber();
+    const nextResult = createPrivateDraw();
+    setSavingDraw(true);
+    setSendError("");
+    setEntryNumber(nextEntryNumber);
+    setResult(nextResult);
+    setSettled(null);
+    writeLocalPrivateDraw({ entryNumber: nextEntryNumber, result: nextResult });
+    setSavingDraw(false);
+  }
+
+  async function settle(next: "done" | "void") {
+    if (!result) return;
+    setSendError("");
+    try {
+      await clearActivePrivateDraw();
+      writeLocalPrivateDraw(null);
+      setSettled(next);
+    } catch (error: any) {
+      setSendError(String(error?.message || error || "纸条清理失败"));
+    }
   }
 
   async function sendToDu() {
@@ -542,15 +670,32 @@ function PrivateDrawPage({ onClose }: { onClose: () => void }) {
         ) : (
           <div className="private-draw-drawer">
             <span className="private-draw-drawer-slit" aria-hidden="true" />
-            <button className="private-draw-main-button" type="button" aria-label="抽一张" onClick={drawOnce}>
+            <button
+              className="private-draw-main-button"
+              type="button"
+              aria-label={loadingActive ? "读取中" : "抽一张"}
+              disabled={loadingActive || savingDraw}
+              onClick={() => void drawOnce()}
+            >
               <span className="private-draw-main-label" aria-hidden="true">
-                <span>抽</span>
-                <span>一</span>
-                <span>张</span>
+                {loadingActive ? (
+                  <>
+                    <span>读</span>
+                    <span>取</span>
+                    <span>中</span>
+                  </>
+                ) : (
+                  <>
+                    <span>抽</span>
+                    <span>一</span>
+                    <span>张</span>
+                  </>
+                )}
               </span>
             </button>
             <span className="private-draw-paper-shadow" aria-hidden="true" />
             <p>Private &amp; Confidential</p>
+            {sendError ? <span className="private-draw-send-error">{sendError}</span> : null}
           </div>
         )}
 
@@ -567,10 +712,10 @@ function PrivateDrawPage({ onClose }: { onClose: () => void }) {
                 >
                   {sendStatus === "sending" ? "发送中" : sendStatus === "sent" ? "已发到聊天" : "发给渡"}
                 </button>
-                <button className="private-draw-action-muted" type="button" onClick={() => setSettled("void")}>
+                <button className="private-draw-action-muted" type="button" onClick={() => void settle("void")}>
                   作废
                 </button>
-                <button className="private-draw-action-muted" type="button" onClick={() => setSettled("done")}>
+                <button className="private-draw-action-muted" type="button" onClick={() => void settle("done")}>
                   完成
                 </button>
               </>
