@@ -688,6 +688,22 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
     )
 
 
+def send_private_draw_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
+    """立即让渡基于情侣私密抽签结果生成回应，并投递到最近聊天入口。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        archive=True,
+        extra_instruction=(
+            "这是她主动发来的情侣私密抽签结果。请按最近聊天入口的语气自然接一两句；"
+            "不要写开场白，不要写旁白，不要扩成角色扮演剧情，也不要解释工具或系统流程。"
+        ),
+        wakeup_kind="private_draw",
+    )
+
+
 def send_screen_check_wakeup(window_id: str, target: str, event_text: str, image_url: str, created_at: str | None = None) -> dict:
     """立即让渡看一张经老婆同意的手机截图，再自然回应。"""
     has_image = bool(str(image_url or "").strip())

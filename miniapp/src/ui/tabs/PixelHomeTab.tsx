@@ -54,6 +54,13 @@ type PrivateDrawResult = Array<{
 
 type PrivateDrawSendStatus = "idle" | "sending" | "sent" | "error";
 
+type PrivateDrawSendResponse = {
+  ok?: boolean;
+  channel?: string;
+  preferred_channel?: string;
+  error?: string;
+};
+
 const HOME_MODES: Record<HomeMode, { image: string; alt: string }> = {
   day: {
     image: homeDay,
@@ -417,53 +424,21 @@ function createPrivateDraw(): PrivateDrawResult {
 
 function formatPrivateDrawMessage(result: PrivateDrawResult, entryNumber: number): string {
   const rows = result.map((item) => `${item.label}：${item.value}`).join("\n");
-  return `今晚抽到这张小纸条：\nEntry #${entryNumber}\n${rows}\n\n直接按这张来。`;
-}
-
-async function resolvePrivateDrawModel(windowId: string): Promise<string> {
-  const modelKey = `miniapp.chat.${windowId}.model.v1`;
-  try {
-    const stored = (window.localStorage.getItem(modelKey) || "").trim();
-    if (stored) return stored;
-  } catch {}
-
-  const models = await apiJson<{ data?: Array<{ id?: string }> }>("/v1/models");
-  const model = Array.isArray(models?.data)
-    ? String(models.data.find((item) => String(item?.id || "").trim())?.id || "").trim()
-    : "";
-  if (model) {
-    try {
-      window.localStorage.setItem(modelKey, model);
-    } catch {}
-    return model;
-  }
-  throw new Error("当前还没拿到可用模型");
+  return `我刚在小家抽到一张私密小纸条，发你看看：\nEntry #${entryNumber}\n${rows}\n\n这是情侣抽签结果，不是开场白，也不用扩成角色扮演剧情。按我们刚才聊天的语气接就行。`;
 }
 
 async function sendPrivateDrawToDu(result: PrivateDrawResult, entryNumber: number) {
-  const chatWindow = await apiJson<{ ok?: boolean; window_id?: string }>("/miniapp-api/chat-window");
-  const windowId = String(chatWindow?.window_id || "").trim();
-  if (!windowId) throw new Error("缺少聊天窗口");
-  const model = await resolvePrivateDrawModel(windowId);
   const replyTarget = await getOrCreatePanelDeviceId();
-  const clientRequestId = `private-draw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const sent = await apiJson<{ ok?: boolean; status?: string; error?: string; response?: any }>("/miniapp-api/sumitalk-chat", {
+  const sent = await apiJson<PrivateDrawSendResponse>("/miniapp-api/private-draw/send", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Force-Last4": "1" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model,
-      messages: [{ role: "user", content: formatPrivateDrawMessage(result, entryNumber) }],
-      stream: false,
-      window_id: windowId,
       reply_target: replyTarget,
-      client_request_id: clientRequestId,
-      force_last4: "1",
-      wait_ms: 500,
+      event_text: formatPrivateDrawMessage(result, entryNumber),
     }),
   });
-  if (sent?.status === "error" || sent?.ok === false) {
-    const upstreamError = sent.response?.error || sent.response?.message || "";
-    throw new Error(String(sent.error || upstreamError || "发送失败"));
+  if (!sent?.ok) {
+    throw new Error(String(sent?.error || "发送失败"));
   }
 }
 
@@ -548,7 +523,7 @@ function PrivateDrawPage({ onClose }: { onClose: () => void }) {
                   disabled={sendStatus === "sending" || sendStatus === "sent"}
                   onClick={sendToDu}
                 >
-                  {sendStatus === "sending" ? "发送中" : sendStatus === "sent" ? "已发给渡" : "发给渡"}
+                  {sendStatus === "sending" ? "发送中" : sendStatus === "sent" ? "已发到聊天" : "发给渡"}
                 </button>
                 <button className="private-draw-action-muted" type="button" onClick={() => setSettled("void")}>
                   作废
