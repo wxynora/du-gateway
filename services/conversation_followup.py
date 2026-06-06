@@ -589,12 +589,16 @@ def _send_wakeup_event(
     }
     if generation_channel == "tg":
         body["messages"].insert(0, {"role": "system", "content": build_telegram_style_system(include_channel_hint=False)})
-    body["messages"].append(
-        {
-            "role": "system" if system_event and not image else "user",
-            "content": message_content,
-        }
-    )
+    if system_event and not image:
+        body["messages"].append({"role": "system", "content": message_content})
+        body["messages"].append(
+            {
+                "role": "user",
+                "content": "请根据上面的系统提示生成要发送给她的回复。这是一条后端技术触发，不是她说的话。",
+            }
+        )
+    else:
+        body["messages"].append({"role": "user", "content": message_content})
     headers = {
         "Content-Type": "application/json",
         "X-Window-Id": context_window_id,
