@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { apiJson } from "../api";
+import { apiJson, getOrCreatePanelDeviceId } from "../api";
 import homeDay from "../../assets/life-home-day.png";
 import homeNightOff from "../../assets/life-home-night-off.png";
 import homeNightOn from "../../assets/life-home-night-on.png";
@@ -45,6 +45,14 @@ type Hotspot = {
   }>;
   actions: Array<{ label: string }>;
 };
+
+type PrivateDrawResult = Array<{
+  key: string;
+  label: string;
+  value: string;
+}>;
+
+type PrivateDrawSendStatus = "idle" | "sending" | "sent" | "error";
 
 const HOME_MODES: Record<HomeMode, { image: string; alt: string }> = {
   day: {
@@ -128,6 +136,225 @@ const HOTSPOTS: Hotspot[] = [
   },
 ];
 
+const PRIVATE_DRAW_SLOTS = [
+  {
+    key: "theme",
+    label: "玩法",
+    options: [
+      "给小玥口交",
+      "手交挑逗",
+      "乳交play",
+      "素股play",
+      "寸止play",
+      "高潮控制",
+      "玩具调教",
+      "轻度调教",
+      "轻度束缚",
+      "蒙眼调教",
+      "手铐束缚",
+      "项圈牵引",
+      "支配臣服",
+      "命令羞耻",
+      "打屁股惩罚",
+      "罚跪调教",
+      "制服诱惑",
+      "中出幻想",
+      "颜射幻想",
+      "潮吹挑战",
+      "露出边缘",
+      "NTR幻想",
+      "偷情play",
+      "办公室偷情",
+      "成人师生play",
+      "上司下属play",
+      "女仆主人play",
+      "医生检查play",
+    ],
+  },
+  {
+    key: "place",
+    label: "地点",
+    options: [
+      "酒店床上",
+      "浴室墙边",
+      "车后座",
+      "试衣间隔间",
+      "办公桌边",
+      "教室讲台边",
+      "厨房台面",
+      "沙发上",
+      "落地镜前",
+      "阳台门边",
+      "玄关地垫",
+      "洗手台前",
+      "会议桌上",
+      "图书馆角落",
+      "楼梯间转角",
+      "床尾",
+      "门后",
+      "落地窗前",
+    ],
+  },
+  {
+    key: "pose",
+    label: "姿势",
+    options: [
+      "后入式",
+      "站立后入",
+      "跪趴",
+      "正常位",
+      "传教士位",
+      "屈膝后入",
+      "抱起插入",
+      "女上位",
+      "反骑乘",
+      "背对骑乘",
+      "面对坐姿",
+      "背坐式",
+      "腿架肩",
+      "双腿高抬",
+      "抱腿位",
+      "站立位",
+      "坐莲式",
+      "对坐位",
+      "跪姿位",
+      "趴跪位",
+      "侧卧位",
+      "侧卧后入",
+      "俯卧后入",
+      "跪姿给小玥口交",
+      "素股",
+      "侧入式",
+      "膝上骑乘",
+      "M字开腿",
+    ],
+  },
+  {
+    key: "prop",
+    label: "道具",
+    options: [
+      "领带",
+      "眼罩",
+      "皮带",
+      "丝袜",
+      "黑丝袜",
+      "白衬衫",
+      "制服外套",
+      "情趣内衣",
+      "束缚带",
+      "束腕带",
+      "丝带",
+      "缎带",
+      "项圈",
+      "牵引绳",
+      "冰块",
+      "润滑液",
+      "避孕套",
+      "震动棒",
+      "跳蛋",
+      "跳蛋遥控器",
+      "手铐",
+      "口球",
+      "乳夹",
+      "小皮拍",
+      "戒尺",
+      "铃铛项圈",
+      "按摩棒",
+      "口红",
+      "发绳",
+      "腿环",
+      "吊袜带",
+      "透明胶带",
+      "低温蜡烛",
+      "羽毛棒",
+    ],
+  },
+  {
+    key: "task",
+    label: "任务",
+    options: [
+      "穿裸身围裙伺候小玥",
+      "戴项圈听小玥命令",
+      "跪着亲小玥大腿内侧",
+      "被小玥蒙眼调戏十分钟",
+      "被小玥用领带牵着亲",
+      "被小玥手交到快射再停",
+      "被小玥素股磨到快射",
+      "给小玥口交到她高潮",
+      "用手把小玥弄到腿软",
+      "用玩具让小玥高潮一次",
+      "只准用嘴取悦小玥",
+      "让小玥坐在身上控制节奏",
+      "让小玥骑到满意才准动",
+      "被小玥要求自己摆好姿势",
+      "被小玥用口红写上标记",
+      "把跳蛋遥控器交给小玥",
+      "穿吊袜带给小玥看",
+      "戴铃铛项圈亲小玥",
+      "把内裤交给小玥保管",
+      "被小玥命令说想要",
+      "被小玥寸止到发抖",
+      "被小玥允许后才能射",
+      "先让小玥舒服到发软",
+      "把小玥亲到主动求继续",
+      "让小玥半穿衣被亲到脸红",
+      "让小玥蒙眼被舔到高潮",
+      "让小玥被抱着做到高潮",
+      "让小玥高潮后继续抱着亲",
+      "让小玥说出最想被怎么弄",
+      "让小玥高潮前必须说想要",
+      "最后由小玥决定射在哪里",
+      "收尾必须先把小玥哄舒服",
+    ],
+  },
+  {
+    key: "limit",
+    label: "限制",
+    options: [
+      "小玥没允许不准亲嘴",
+      "小玥没允许不准换姿势",
+      "小玥没允许不准插入",
+      "小玥没允许不准加速",
+      "小玥没允许不准射",
+      "小玥没允许不准中出",
+      "一小时内不准中出",
+      "中出前只能学狗叫",
+      "想中出必须先求小玥三次",
+      "想射前必须说自己忍不住了",
+      "射之前必须等小玥点头",
+      "中出前必须戴着项圈求允许",
+      "想中出必须先被寸止一次",
+      "没学会求饶不准射",
+      "小玥第一次高潮前不准中出",
+      "小玥没高潮前不准射",
+      "小玥说停必须立刻停",
+      "不准只顾自己爽",
+      "不准弄疼小玥",
+      "不准跳过前戏",
+      "不准直接插入",
+      "不准提前摘掉眼罩",
+      "不准提前解开束缚",
+      "不准摘掉自己的项圈",
+      "不准把节奏交给小玥前先射",
+      "不准让小玥自己动手",
+      "不准偷懒少亲",
+      "不准少于十分钟给小玥口交",
+      "不准少于三次夸小玥",
+      "不准在小玥脸红前停手",
+      "不准在小玥说可以前收尾",
+      "不准提前擦掉体液",
+      "不准关灯逃避被看",
+      "不准遮住自己的表情",
+      "不准把羞耻任务推给小玥",
+      "不准拒绝小玥的命令",
+      "不准提前脱掉裸身围裙",
+      "不准提前摘掉铃铛项圈",
+      "不准少于一次被寸止",
+      "不准在小玥满意前结束",
+    ],
+  },
+] as const;
+
 function isHomeMode(value: unknown): value is HomeMode {
   return value === "day" || value === "nightOn" || value === "nightOff";
 }
@@ -181,6 +408,167 @@ function formatDynamicTime(value: string | undefined) {
   return `${dt.getMonth() + 1}/${dt.getDate()} ${hh}:${mm}`;
 }
 
+function createPrivateDraw(): PrivateDrawResult {
+  return PRIVATE_DRAW_SLOTS.map((slot) => {
+    const value = slot.options[Math.floor(Math.random() * slot.options.length)] || slot.options[0];
+    return { key: slot.key, label: slot.label, value };
+  });
+}
+
+function formatPrivateDrawMessage(result: PrivateDrawResult, entryNumber: number): string {
+  const rows = result.map((item) => `${item.label}：${item.value}`).join("\n");
+  return `今晚抽到这张小纸条：\nEntry #${entryNumber}\n${rows}\n\n直接按这张来。`;
+}
+
+async function resolvePrivateDrawModel(windowId: string): Promise<string> {
+  const modelKey = `miniapp.chat.${windowId}.model.v1`;
+  try {
+    const stored = (window.localStorage.getItem(modelKey) || "").trim();
+    if (stored) return stored;
+  } catch {}
+
+  const models = await apiJson<{ data?: Array<{ id?: string }> }>("/v1/models");
+  const model = Array.isArray(models?.data)
+    ? String(models.data.find((item) => String(item?.id || "").trim())?.id || "").trim()
+    : "";
+  if (model) {
+    try {
+      window.localStorage.setItem(modelKey, model);
+    } catch {}
+    return model;
+  }
+  throw new Error("当前还没拿到可用模型");
+}
+
+async function sendPrivateDrawToDu(result: PrivateDrawResult, entryNumber: number) {
+  const chatWindow = await apiJson<{ ok?: boolean; window_id?: string }>("/miniapp-api/chat-window");
+  const windowId = String(chatWindow?.window_id || "").trim();
+  if (!windowId) throw new Error("缺少聊天窗口");
+  const model = await resolvePrivateDrawModel(windowId);
+  const replyTarget = await getOrCreatePanelDeviceId();
+  const clientRequestId = `private-draw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const sent = await apiJson<{ ok?: boolean; status?: string; error?: string; response?: any }>("/miniapp-api/sumitalk-chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Force-Last4": "1" },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: formatPrivateDrawMessage(result, entryNumber) }],
+      stream: false,
+      window_id: windowId,
+      reply_target: replyTarget,
+      client_request_id: clientRequestId,
+      force_last4: "1",
+      wait_ms: 500,
+    }),
+  });
+  if (sent?.status === "error" || sent?.ok === false) {
+    const upstreamError = sent.response?.error || sent.response?.message || "";
+    throw new Error(String(sent.error || upstreamError || "发送失败"));
+  }
+}
+
+function PrivateDrawPage({ onClose }: { onClose: () => void }) {
+  const [result, setResult] = useState<PrivateDrawResult | null>(null);
+  const [settled, setSettled] = useState<"done" | "void" | null>(null);
+  const [sendStatus, setSendStatus] = useState<PrivateDrawSendStatus>("idle");
+  const [sendError, setSendError] = useState("");
+  const entryNumber = useMemo(() => Math.floor(100 + Math.random() * 900), [result]);
+
+  function drawOnce() {
+    if (result) return;
+    setResult(createPrivateDraw());
+  }
+
+  async function sendToDu() {
+    if (!result || sendStatus === "sending" || sendStatus === "sent") return;
+    setSendStatus("sending");
+    setSendError("");
+    try {
+      await sendPrivateDrawToDu(result, entryNumber);
+      setSendStatus("sent");
+    } catch (error: any) {
+      setSendStatus("error");
+      setSendError(String(error?.message || error || "发送失败"));
+    }
+  }
+
+  return (
+    <div className={result ? "private-draw-page private-draw-page-result" : "private-draw-page"}>
+      <header className="private-draw-header">
+        <button className="private-draw-back" type="button" aria-label="返回小家" onClick={onClose}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+            <path d="M15 6L9 12L15 18" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        <div>
+          <span>私密抽屉</span>
+          <h1>小纸条</h1>
+        </div>
+      </header>
+
+      <main className="private-draw-stage">
+        {result ? (
+          <section className="private-draw-ticket" aria-label="今晚抽签结果">
+            <span className="private-draw-ticket-mark" aria-hidden="true" />
+            <h2>Entry #{entryNumber}</h2>
+            {result.map((item) => (
+              <div className="private-draw-row" key={item.key}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+            <footer className="private-draw-ticket-footer">
+              <span>Tonight only.</span>
+              <i aria-hidden="true" />
+            </footer>
+          </section>
+        ) : (
+          <div className="private-draw-drawer">
+            <span className="private-draw-drawer-slit" aria-hidden="true" />
+            <button className="private-draw-main-button" type="button" aria-label="抽一张" onClick={drawOnce}>
+              <span className="private-draw-main-label" aria-hidden="true">
+                <span>抽</span>
+                <span>一</span>
+                <span>张</span>
+              </span>
+            </button>
+            <span className="private-draw-paper-shadow" aria-hidden="true" />
+            <p>Private &amp; Confidential</p>
+          </div>
+        )}
+
+        {result ? (
+          <div className="private-draw-actions">
+            {settled ? <span className="private-draw-state">{settled === "done" ? "已完成" : "已作废"}</span> : null}
+            {!settled ? (
+              <>
+                <button
+                  className="private-draw-action-primary private-draw-action-send"
+                  type="button"
+                  disabled={sendStatus === "sending" || sendStatus === "sent"}
+                  onClick={sendToDu}
+                >
+                  {sendStatus === "sending" ? "发送中" : sendStatus === "sent" ? "已发给渡" : "发给渡"}
+                </button>
+                <button className="private-draw-action-muted" type="button" onClick={() => setSettled("void")}>
+                  作废
+                </button>
+                <button className="private-draw-action-muted" type="button" onClick={() => setSettled("done")}>
+                  完成
+                </button>
+              </>
+            ) : null}
+            <button className="private-draw-action-muted" type="button" onClick={onClose}>
+              收起
+            </button>
+            {sendError ? <span className="private-draw-send-error">{sendError}</span> : null}
+          </div>
+        ) : null}
+      </main>
+    </div>
+  );
+}
+
 export function PixelHomeTab() {
   const [mode, setMode] = useState<HomeMode>(() => resolveLocalMode());
   const [homeState, setHomeState] = useState<PixelHomeStateResp | null>(null);
@@ -191,6 +579,7 @@ export function PixelHomeTab() {
   const [savingMyState, setSavingMyState] = useState(false);
   const [sendingAction, setSendingAction] = useState("");
   const [statusEditorOpen, setStatusEditorOpen] = useState(false);
+  const [privateDrawOpen, setPrivateDrawOpen] = useState(false);
 
   const modeMeta = HOME_MODES[mode];
   const spots = homeState?.spots?.length ? homeState.spots : DEFAULT_SPOTS;
@@ -281,20 +670,30 @@ export function PixelHomeTab() {
     }
   }
 
+  if (privateDrawOpen) {
+    return <PrivateDrawPage onClose={() => setPrivateDrawOpen(false)} />;
+  }
+
   return (
     <div className="pixel-home-ref" onClick={clearSelectedSpot}>
       <div className="pixel-home-ref-container">
-        <div className="pixel-home-ref-heart" aria-hidden="true">
+        <button
+          className="pixel-home-ref-heart"
+          type="button"
+          aria-label="打开私密抽签"
+          onClick={(event) => {
+            event.stopPropagation();
+            clearSelectedSpot();
+            setPrivateDrawOpen(true);
+          }}
+        >
           <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path
               d="M50 85C50 85 10 60 10 35C10 15 35 10 50 30C65 10 90 15 90 35C90 60 50 85 50 85Z"
-              stroke="#8b6c66"
-              strokeWidth="4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+              fill="currentColor"
             />
           </svg>
-        </div>
+        </button>
 
         <section className="pixel-home-ref-house" aria-label="赛博小家位置">
           <div className="pixel-home-ref-house-wrapper">
