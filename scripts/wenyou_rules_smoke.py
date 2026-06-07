@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services import wenyou_service as w
 from services.wenyou.settlement_rewards import _apply_reward_category_boosts
+from services.wenyou.text_sanitize import _strip_gm_context_blocks, _strip_main_god_panel
 
 
 def _framework() -> dict:
@@ -112,6 +113,42 @@ def main() -> None:
     assert core_survival and int(core_survival.get("uses_per_instance") or 0) == 1, core_survival
     boosted = dict(_apply_reward_category_boosts([("material", 1.0)], {"special": 8.0}))
     assert boosted.get("special") == 8.0, boosted
+
+    context_session = w._new_session(_framework())
+    context_session["phase"] = "instance_running"
+    context_wallet = w._normalize_wallet(
+        {
+            "points": 300,
+            "wallets": {"player1": {"points": 300}, "player2": {"points": 300, "ledger": [{"type": "test"}]}},
+            "inventories": {"player1": [], "player2": [], "task_items": []},
+        },
+        seed_points=300,
+    )
+    tool_context = w.compose_ai_player_context(context_session, wallet=context_wallet, context_mode="tool")["ai_player_context"]
+    assert "shop_view" in tool_context and "gacha_pools" in tool_context and "recent_ledger" in tool_context, tool_context
+    turn_context = w.compose_ai_player_context(context_session, wallet=context_wallet, context_mode="turn")["ai_player_context"]
+    for hidden_key in ("shop_view", "gacha_pools", "recent_ledger", "wallet"):
+        assert hidden_key not in turn_context, turn_context
+    assert set(turn_context.get("available_services") or {}) == {"use_item", "transfer"}, turn_context
+    channel_context = w.compose_ai_player_context(context_session, wallet=context_wallet, context_mode="channel")["ai_player_context"]
+    for hidden_key in ("shop_view", "gacha_pools", "recent_ledger", "wallet", "inventory", "available_services"):
+        assert hidden_key not in channel_context, channel_context
+
+    leaked = """剧情正常开头。
+[WENYOU_GM_CONTEXT]
+用途：这是后端每轮生成的压缩上下文。GM 只用它维持连续性。
+## 当前副本状态
+- game_id：secret
+## 后端规则态摘要（内部，不要直接剧透）
+- 怪物实例：hidden
+[/WENYOU_GM_CONTEXT]
+剧情正常结尾。"""
+    cleaned = _strip_gm_context_blocks(leaked)
+    assert "WENYOU_GM_CONTEXT" not in cleaned, cleaned
+    assert "后端规则态摘要" not in cleaned, cleaned
+    assert "secret" not in cleaned, cleaned
+    assert "剧情正常开头" in cleaned and "剧情正常结尾" in cleaned, cleaned
+    assert "后端规则态摘要" not in _strip_main_god_panel(leaked), leaked
 
     print("wenyou rules smoke ok")
 

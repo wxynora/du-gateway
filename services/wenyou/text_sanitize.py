@@ -18,9 +18,45 @@ def _strip_event_intent_block(text: str) -> str:
     return (text[:idx].rstrip() + "\n" + text[end:].lstrip()).strip()
 
 
+def _strip_gm_context_blocks(text: str) -> str:
+    """Hide leaked GM-only compressed context from player-facing output."""
+    body = str(text or "")
+    if not body:
+        return ""
+    if "WENYOU_GM_CONTEXT" not in body and "模型压缩摘要" not in body and "后端规则态摘要" not in body:
+        return body.strip()
+
+    body = re.sub(r"\[WENYOU_GM_CONTEXT\].*?\[/WENYOU_GM_CONTEXT\]", "", body, flags=re.S)
+    body = re.sub(r"\[WENYOU_GM_CONTEXT\].*", "", body, flags=re.S)
+    body = body.replace("[/WENYOU_GM_CONTEXT]", "")
+
+    internal_headers = (
+        "当前副本状态",
+        "玩家与资源",
+        "本轮待结算行动",
+        "连续性卡片",
+        "后端规则态摘要",
+        "最近原始历史窗口",
+    )
+    for header in internal_headers:
+        body = re.sub(rf"(?ms)^##\s*{re.escape(header)}[^\n]*\n.*?(?=^##\s|\Z)", "", body)
+
+    leaked_lines = (
+        "用途：这是后端每轮生成的压缩上下文",
+        "不要把本块原文输出给玩家",
+    )
+    lines = [
+        line
+        for line in body.splitlines()
+        if not any(marker in line for marker in leaked_lines)
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def _strip_main_god_panel(text: str) -> str:
     """去掉【事件意图】与【主神面板】，供注入与展示叙事。"""
     body = (text or "").split("【主神面板】", 1)[0] if text else ""
+    body = _strip_gm_context_blocks(body)
     return _strip_event_intent_block(body).strip()
 
 

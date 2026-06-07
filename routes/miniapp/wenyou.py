@@ -825,8 +825,9 @@ def register_routes(bp) -> None:
         )
         return jsonify({"ok": ok, "message": message, **view}), (200 if ok else 400)
 
+    @bp.route("/wenyou/ai-player/tools", methods=["GET"])
     @bp.route("/wenyou/mcp/tools", methods=["GET"])
-    def miniapp_wenyou_mcp_tools():
+    def miniapp_wenyou_ai_player_tools():
         """文游：外部 AI 玩家后端可读取的工具清单和只读上下文。"""
         uid = _wenyou_session_id()
         if uid == 0:
@@ -845,13 +846,14 @@ def register_routes(bp) -> None:
                 "actor_id": actor_id,
                 "tools": get_player_tool_schemas(),
                 "context": context,
-                "tool_call_url": "/miniapp-api/wenyou/mcp/tool-call",
-                "sse_url": "/miniapp-api/wenyou/mcp/sse",
+                "tool_call_url": "/miniapp-api/wenyou/ai-player/tool-call",
+                "sse_url": "/miniapp-api/wenyou/ai-player/sse",
             }
         )
 
+    @bp.route("/wenyou/ai-player/tool-call", methods=["POST"])
     @bp.route("/wenyou/mcp/tool-call", methods=["POST"])
-    def miniapp_wenyou_mcp_tool_call():
+    def miniapp_wenyou_ai_player_tool_call():
         """文游：外部 AI 玩家后端执行状态修改工具。"""
         uid = _wenyou_session_id()
         if uid == 0:
@@ -871,8 +873,9 @@ def register_routes(bp) -> None:
         ok = bool(result.get("ok")) if isinstance(result, dict) else False
         return jsonify({"ok": ok, "protocol": "wenyou-ai-player-tools-v1", "tool": name, "result": result}), (200 if ok else 400)
 
+    @bp.route("/wenyou/ai-player/sse", methods=["GET"])
     @bp.route("/wenyou/mcp/sse", methods=["GET"])
-    def miniapp_wenyou_mcp_sse():
+    def miniapp_wenyou_ai_player_sse():
         """文游：SSE 初始化流，发送工具清单和 AI 玩家只读上下文。"""
         uid = _wenyou_session_id()
         if uid == 0:
@@ -892,7 +895,7 @@ def register_routes(bp) -> None:
                     "ok": True,
                     "protocol": "wenyou-ai-player-tools-v1",
                     "actor_id": actor_id,
-                    "tool_call_url": "/miniapp-api/wenyou/mcp/tool-call",
+                    "tool_call_url": "/miniapp-api/wenyou/ai-player/tool-call",
                 },
             )
             yield _wenyou_sse_event("tools", {"tools": get_player_tool_schemas()})

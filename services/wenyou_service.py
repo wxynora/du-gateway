@@ -196,6 +196,7 @@ from services.wenyou.settlement_state import (
 from services.wenyou.settlement_rewards import _roll_settlement_rewards
 from services.wenyou.text_sanitize import (
     _strip_event_intent_block,
+    _strip_gm_context_blocks,
     _strip_main_god_panel,
     _strip_player_brief_blocks,
 )
@@ -5694,10 +5695,19 @@ def summarize_story_for_ai_player(state: Any, actor_id: Any = "player2") -> dict
     }
 
 
-def compose_ai_player_context(state: Any, actor_id: Any = "player2", wallet: Optional[dict] = None, user_id: Optional[int] = None) -> dict:
+def compose_ai_player_context(
+    state: Any,
+    actor_id: Any = "player2",
+    wallet: Optional[dict] = None,
+    user_id: Optional[int] = None,
+    context_mode: str = "tool",
+) -> dict:
     session = state if isinstance(state, dict) else {}
     _session_ensure_stats(session)
     actor = _resolve_player_key(actor_id)
+    mode = str(context_mode or "tool").strip().lower()
+    if mode not in {"tool", "turn", "channel"}:
+        mode = "tool"
     fw = _framework_for_runtime(session.get("framework") or {})
     phase = _session_phase(session)
     wallet_data = _ensure_wallet_player_maps(wallet if isinstance(wallet, dict) else {})
@@ -5736,60 +5746,72 @@ def compose_ai_player_context(state: Any, actor_id: Any = "player2", wallet: Opt
             "level": int(p.get("level") or 1),
             "conditions": list(p.get("conditions") or [])[:8],
         }
-    return {
-        "ai_player_context": {
-            "actor_id": actor,
-            "phase": phase,
-            "scene_header": {
-                "phase_label": _phase_label(phase),
-                "current_task": _compact_text(fw.get("conflict") or "等待选择副本", 140),
-                "current_location": location,
-                "time_state": "整备阶段 / 无倒计时" if phase in {"hub", "settlement"} else "副本推进中 / 公开倒计时以面板为准",
-                "status_label": public.get("public_threat") or _public_threat_label(session),
-            },
-            "scene": {
-                "instance_name": _framework_instance_line(fw),
-                "current_location": location,
-                "public_task": _compact_text(fw.get("conflict") or "", 180),
-                "role_in_instance": _compact_text(fw.get(f"{actor}_role") or "", 180),
-                "forced_instance_contract": copy.deepcopy(forced) if forced and str(forced.get("mode") or "") == "npc_labor" else None,
-            },
-            "story_brief": summarize_story_for_ai_player(session, actor),
-            "public_panel": _ai_public_panel(session),
-            "team_channel": _team_channel_view(session),
-            "player_panel": {
-                "display_name": player.get("display_name") or _player_display_name(actor),
-                "level": int(player.get("level") or 1),
-                "rank": player.get("rank") or "D",
-                "hp": int(player.get("hp") or 0),
-                "hp_max": int(player.get("hp_max") or 0),
-                "san": int(player.get("san") or 0),
-                "san_max": int(player.get("san_max") or 0),
-                "spi_current": int(player.get("spi_current") or 0),
-                "spi_max": int(player.get("spi_max") or 0),
-                "attributes": {key: int(player.get(key) or 0) for key in _WENYOU_ATTRIBUTE_KEYS},
-                "conditions": list(player.get("conditions") or [])[:12],
-            },
-            "wallet": {
-                "points": int(account.get("points") or 0),
-                "debts": int(account.get("debts") or 0),
-                "gacha_pity": copy.deepcopy((gacha.get("pools") or {})),
-            },
-            "inventory": inventory,
-            "team_public_states": team_states,
-            "available_services": {
-                "shop": _shop_open_for_phase(phase),
-                "gacha": phase in {"hub", "settlement"},
-                "use_item": phase in {"hub", "candidate_selection", "instance_running", "settlement"},
-                "transfer": phase in {"hub", "candidate_selection", "instance_running", "settlement"},
-            },
-            "shop_view": {
-                "regular": copy.deepcopy(((shop_state.get("regular") or {}).get("items") or []) if isinstance(shop_state, dict) else []),
-                "special": copy.deepcopy(((shop_state.get("special") or {}).get("items") or []) if isinstance(shop_state, dict) else []),
-            },
-            "gacha_pools": [{"pool_id": pool, "single_cost": _GACHA_SINGLE_COST, "ten_pull_cost": _GACHA_SINGLE_COST * 10} for pool in _GACHA_POOL_RATES],
-            "recent_ledger": [x for x in (account.get("ledger") or [])[-12:] if isinstance(x, dict)],
+    ai_context = {
+        "actor_id": actor,
+        "context_mode": mode,
+        "phase": phase,
+        "scene_header": {
+            "phase_label": _phase_label(phase),
+            "current_task": _compact_text(fw.get("conflict") or "等待选择副本", 140),
+            "current_location": location,
+            "time_state": "整备阶段 / 无倒计时" if phase in {"hub", "settlement"} else "副本推进中 / 公开倒计时以面板为准",
+            "status_label": public.get("public_threat") or _public_threat_label(session),
+        },
+        "scene": {
+            "instance_name": _framework_instance_line(fw),
+            "current_location": location,
+            "public_task": _compact_text(fw.get("conflict") or "", 180),
+            "role_in_instance": _compact_text(fw.get(f"{actor}_role") or "", 180),
+            "forced_instance_contract": copy.deepcopy(forced) if forced and str(forced.get("mode") or "") == "npc_labor" else None,
+        },
+        "story_brief": summarize_story_for_ai_player(session, actor),
+        "public_panel": _ai_public_panel(session),
+        "team_channel": _team_channel_view(session),
+        "player_panel": {
+            "display_name": player.get("display_name") or _player_display_name(actor),
+            "level": int(player.get("level") or 1),
+            "rank": player.get("rank") or "D",
+            "hp": int(player.get("hp") or 0),
+            "hp_max": int(player.get("hp_max") or 0),
+            "san": int(player.get("san") or 0),
+            "san_max": int(player.get("san_max") or 0),
+            "spi_current": int(player.get("spi_current") or 0),
+            "spi_max": int(player.get("spi_max") or 0),
+            "attributes": {key: int(player.get(key) or 0) for key in _WENYOU_ATTRIBUTE_KEYS},
+            "conditions": list(player.get("conditions") or [])[:12],
+        },
+        "team_public_states": team_states,
+    }
+    if mode in {"tool", "turn"}:
+        ai_context["inventory"] = inventory
+        ai_context["available_services"] = {
+            "use_item": phase in {"hub", "candidate_selection", "instance_running", "settlement"},
+            "transfer": phase in {"hub", "candidate_selection", "instance_running", "settlement"},
         }
+    if mode == "tool":
+        ai_context.update(
+            {
+                "wallet": {
+                    "points": int(account.get("points") or 0),
+                    "debts": int(account.get("debts") or 0),
+                    "gacha_pity": copy.deepcopy((gacha.get("pools") or {})),
+                },
+                "available_services": {
+                    "shop": _shop_open_for_phase(phase),
+                    "gacha": phase in {"hub", "settlement"},
+                    "use_item": phase in {"hub", "candidate_selection", "instance_running", "settlement"},
+                    "transfer": phase in {"hub", "candidate_selection", "instance_running", "settlement"},
+                },
+                "shop_view": {
+                    "regular": copy.deepcopy(((shop_state.get("regular") or {}).get("items") or []) if isinstance(shop_state, dict) else []),
+                    "special": copy.deepcopy(((shop_state.get("special") or {}).get("items") or []) if isinstance(shop_state, dict) else []),
+                },
+                "gacha_pools": [{"pool_id": pool, "single_cost": _GACHA_SINGLE_COST, "ten_pull_cost": _GACHA_SINGLE_COST * 10} for pool in _GACHA_POOL_RATES],
+                "recent_ledger": [x for x in (account.get("ledger") or [])[-12:] if isinstance(x, dict)],
+            }
+        )
+    return {
+        "ai_player_context": ai_context
     }
 
 
@@ -5805,27 +5827,28 @@ def get_player_tool_context(user_id: int, actor_id: Any = "player2") -> Optional
 def _ai_player_chat_system(actor_name: str, player1_name: str) -> str:
     actor = _normalize_player_display_name(actor_name, "队友")
     target = _normalize_player_display_name(player1_name, "玩家")
-    return f"""你正在控制文游里的{actor}，不是 GM，也不是规则引擎。
-你会收到一份后端裁剪过的只读文游上下文；它是事实源，只能依据它行动。
+    return f"""你正在和{target}一起玩 App 文游。{target}是玩家一，你是玩家二，代号是{actor}。
+你只决定玩家二这一轮自己的行动；当前局面以系统给出的面板和上下文为准。
 
 边界：
-- 不替{target}行动，不替 GM 结算，不编造隐藏线索、隐藏规则、背包、积分或判定结果。
-- 如果要购买、抽卡、使用道具、出售或转交，必须调用可用的玩家工具，并接受工具返回结果。
-- 不能在工具确认前宣称购买、抽卡、治疗或转交已经成功。
-- 如果当前阶段不允许商店、抽卡或转交，就不要假装完成。
-- 本轮最终只输出“{actor}本轮行动文本”，30-160 字；不要 Markdown，不要解释，不要系统提示。
+- 不替{target}行动，不替系统结算，不编造隐藏线索、隐藏规则、背包、积分或判定结果。
+- 局内行动不要考虑系统商店、命运裂隙抽卡或消费流水；这些只在主神空间或工具面板处理。
+- 如果本轮要使用道具或转交资源，必须调用可用的玩家工具，并接受工具返回结果。
+- 不能在工具确认前宣称治疗、使用道具或转交已经成功。
+- 最终只输出{actor}这一轮会做什么，30-160 字；不要 Markdown，不要解释，不要系统提示。
 """
 
 
 def _ai_player_channel_system(actor_name: str, player1_name: str) -> str:
     actor = _normalize_player_display_name(actor_name, "队友")
     target = _normalize_player_display_name(player1_name, "玩家")
-    return f"""你正在扮演文游里的{actor}，正在通过对讲机回复{target}。
-你不是 GM，也不是规则引擎；后端上下文是事实源。
+    return f"""你正在和{target}一起玩 App 文游。{target}是玩家一，你是玩家二，代号是{actor}。
+现在是局内对讲机频道，你正在通过对讲机回复{target}。
+当前局面以系统给出的面板和上下文为准。
 
 边界：
 - 只说{actor}知道、看到、能合理推断的信息；不要编造隐藏线索、隐藏规则或判定结果。
-- 不替{target}行动，不替 GM 结算，不宣称状态、道具、积分已经改变。
+- 不替{target}行动，不替系统结算，不宣称状态、道具、积分已经改变。
 - 对讲机只是局内交流频道，只回复消息，不新增现实行动，不消耗回合。
 - 如果上下文显示信号弱、杂音、串台或监听风险，回复里可以短促、断续或提醒风险，但不要乱编第三方消息。
 - 惩罚副本里必须维持 NPC 身份，不要说出主神空间、任务者身份或其他真实来源。
@@ -5848,7 +5871,12 @@ def build_ai_player_chat_messages(
     actor_id: Any = "player2",
     action_intent: Optional[dict] = None,
 ) -> Optional[list[dict]]:
-    context = get_player_tool_context(user_id, actor_id=actor_id)
+    uid = int(user_id)
+    session = r2_store.get_wenyou_session(uid)
+    if not session or not isinstance(session, dict) or not session.get("gameId"):
+        return None
+    wallet = _load_wenyou_wallet(uid, session)
+    context = compose_ai_player_context(session, actor_id=actor_id, wallet=wallet, user_id=uid, context_mode="turn")
     if not context:
         return None
     ai_context = context.get("ai_player_context") if isinstance(context.get("ai_player_context"), dict) else {}
@@ -5863,16 +5891,16 @@ def build_ai_player_chat_messages(
     user_prompt = "\n".join(
         [
             "[WENYOU AI PLAYER TURN]",
-            "只读上下文 JSON：",
+            "当前局面 JSON：",
             _json_for_prompt(ai_context or {}, max_chars=14000),
             "",
             f"{player1_name}本轮行动：",
             action or "（无）",
             "",
-            "后端行动归类：",
+            "系统识别的行动类型：",
             intent_text,
             "",
-            f"请决定{actor_name}本轮是否行动以及怎么行动。若需要修改状态，先调用玩家工具；最终只输出{actor_name}的行动文本。",
+            f"请决定{actor_name}本轮是否行动以及怎么行动。若要使用道具或转交资源，先调用玩家工具；最终只输出{actor_name}的行动文本。",
             "[/WENYOU AI PLAYER TURN]",
         ]
     )
@@ -5896,12 +5924,12 @@ def build_ai_player_channel_messages(
     actor = _resolve_player_key(actor_id)
     player1_name = _wallet_player_display_name(wallet, "player1", "") or _session_player_display_name(session, "player1", "玩家一")
     actor_name = _wallet_player_display_name(wallet, actor, "") or _session_player_display_name(session, actor, _player_display_name(actor))
-    context = compose_ai_player_context(session, actor_id=actor_id, wallet=wallet, user_id=uid)
+    context = compose_ai_player_context(session, actor_id=actor_id, wallet=wallet, user_id=uid, context_mode="channel")
     user_prompt = "\n".join(
         [
             "[WENYOU WALKIE TALKIE]",
             "对讲机模式：频道交流；不消耗回合；不产生现实行动。",
-            "只读上下文 JSON：",
+            "当前局面 JSON：",
             _json_for_prompt(context.get("ai_player_context") or {}, max_chars=14000),
             "",
             f"{player1_name}通过对讲机发来的消息：",
@@ -6885,7 +6913,7 @@ def cmd_go(user_id: int) -> str:
     state_patch = _apply_event_intent(session, event_intent)
     _maybe_enter_settlement_phase(session)
 
-    gm_visible = _strip_event_intent_block(_replace_session_player_aliases(session, gm_out))
+    gm_visible = _strip_gm_context_blocks(_strip_event_intent_block(_replace_session_player_aliases(session, gm_out)))
     ts = now_beijing_iso()
     for line in p1:
         if str(line or "").strip():
