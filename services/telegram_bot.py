@@ -3,6 +3,7 @@
 import base64
 import json
 import logging
+import mimetypes
 import random
 import re
 import threading
@@ -38,6 +39,7 @@ TELEGRAM_TEXT_DOCUMENT_EXTS = {".md", ".markdown", ".txt"}
 TELEGRAM_TEXT_DOCUMENT_MIME_TYPES = {"text/markdown", "text/plain"}
 TELEGRAM_TEXT_DOCUMENT_MAX_BYTES = 1024 * 1024
 TELEGRAM_TEXT_DOCUMENT_MAX_CHARS = 60000
+TELEGRAM_INBOUND_AUDIO_MAX_BYTES = 12 * 1024 * 1024
 TelegramParseMode = Literal["HTML", "MarkdownV2"]
 
 
@@ -553,10 +555,40 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         return None
 
 
-def _get_telegram_file_bytes(file_id: str, bot_token: Optional[str] = None) -> Optional[tuple[bytes, str]]:
+def _guess_mime_from_telegram_path(path: str, fallback: str = "application/octet-stream") -> str:
+    lower = (path or "").strip().lower().split("?", 1)[0]
+    by_ext = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".ogg": "audio/ogg",
+        ".oga": "audio/ogg",
+        ".opus": "audio/ogg",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".mp4": "audio/mp4",
+        ".wav": "audio/wav",
+        ".webm": "audio/webm",
+        ".aac": "audio/aac",
+        ".flac": "audio/flac",
+    }
+    for ext, mime in by_ext.items():
+        if lower.endswith(ext):
+            return mime
+    guessed = mimetypes.guess_type(path or "")[0]
+    return (guessed or fallback or "application/octet-stream").strip().lower()
+
+
+def _get_telegram_file(
+    file_id: str,
+    bot_token: Optional[str] = None,
+    fallback_mime: str = "application/octet-stream",
+) -> Optional[tuple[bytes, str, str]]:
     """
-    通过 Telegram getFile 下载文件，返回 (bytes, mime_type)。
-    用于图片等，mime 根据 file_path 后缀猜测，默认 image/jpeg。
+    通过 Telegram getFile 下载文件，返回 (bytes, mime_type, filename)。
+    mime 根据 file_path 后缀猜测，调用方可传 fallback_mime。
     """
     tok = _effective_tg_token(bot_token)
     if not tok:
@@ -579,17 +611,24 @@ def _get_telegram_file_bytes(file_id: str, bot_token: Optional[str] = None) -> O
         if r2.status_code != 200:
             logger.warning("下载 Telegram 文件失败 path=%s status=%s body=%s", path, r2.status_code, (r2.text or "")[:200])
             return None
-        mime = "image/jpeg"
-        if path.lower().endswith(".png"):
-            mime = "image/png"
-        elif path.lower().endswith(".gif"):
-            mime = "image/gif"
-        elif path.lower().endswith(".webp"):
-            mime = "image/webp"
-        return (r2.content, mime)
+        mime = _guess_mime_from_telegram_path(path, fallback=fallback_mime)
+        filename = (path.rsplit("/", 1)[-1] or "telegram-file").strip()
+        return (r2.content, mime, filename)
     except requests.RequestException as e:
         logger.warning("Telegram 获取文件异常 file_id=%s: %s", file_id[:20], e)
         return None
+
+
+def _get_telegram_file_bytes(file_id: str, bot_token: Optional[str] = None) -> Optional[tuple[bytes, str]]:
+    """
+    兼容旧调用点：下载 Telegram 文件，返回 (bytes, mime_type)。
+    图片路径默认按 image/jpeg 兜底。
+    """
+    result = _get_telegram_file(file_id, bot_token=bot_token, fallback_mime="image/jpeg")
+    if not result:
+        return None
+    data, mime, _filename = result
+    return data, mime
 
 
 def _document_file_ext(file_name: str) -> str:
@@ -623,6 +662,52 @@ def _decode_text_document_for_prompt(file_name: str, data: bytes, caption: str =
     if truncated:
         parts.append(f"[文档过长，已截断到前 {TELEGRAM_TEXT_DOCUMENT_MAX_CHARS} 字]")
     return "\n\n".join(parts).strip()
+
+
+def _transcribe_telegram_audio_for_prompt(media: dict, kind: str, bot_token: Optional[str] = None, caption: str = "") -> Optional[str]:
+    item = media if isinstance(media, dict) else {}
+    file_id = str(item.get("file_id") or "").strip()
+    if not file_id:
+        return None
+    file_size_raw = item.get("file_size")
+    try:
+        file_size = int(file_size_raw or 0)
+    except (TypeError, ValueError):
+        file_size = 0
+    if file_size > TELEGRAM_INBOUND_AUDIO_MAX_BYTES:
+        logger.warning("TG 语音过大 kind=%s file_id=%s size=%s", kind, file_id[:20], file_size)
+        return None
+
+    declared_mime = str(item.get("mime_type") or "").strip().lower()
+    fallback_mime = declared_mime if declared_mime.startswith("audio/") else "audio/ogg"
+    file_result = _get_telegram_file(file_id, bot_token=bot_token, fallback_mime=fallback_mime)
+    if not file_result:
+        return None
+    audio_bytes, mime_type, downloaded_name = file_result
+    if not audio_bytes or len(audio_bytes) > TELEGRAM_INBOUND_AUDIO_MAX_BYTES:
+        logger.warning("TG 语音下载后大小异常 kind=%s file_id=%s bytes=%s", kind, file_id[:20], len(audio_bytes or b""))
+        return None
+
+    filename = str(item.get("file_name") or downloaded_name or "telegram-voice.ogg").strip()
+    try:
+        from services.stt import transcribe_speech
+
+        result = transcribe_speech(audio_bytes=audio_bytes, mime_type=mime_type or fallback_mime, filename=filename) or {}
+    except Exception as e:
+        logger.warning("TG 语音转写异常 kind=%s filename=%s mime=%s err=%s", kind, filename, mime_type, e)
+        return None
+
+    text = str(result.get("text") or "").strip()
+    if not text:
+        return None
+    observations = str(result.get("audio_observations") or "").strip()
+    label = "TG语音转写" if kind == "voice" else "TG音频转写"
+    parts = [f"（{label}）{text}"]
+    if observations:
+        parts.append(f"（声音观察：{observations}）")
+    if caption.strip():
+        parts.append(f"（用户附言：{caption.strip()}）")
+    return "\n".join(parts)
 
 
 def _delete_my_commands_default() -> bool:
@@ -1140,7 +1225,7 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
     text = (msg.get("text") or "").strip()
     caption = (msg.get("caption") or "").strip()
     logger.info(
-        "TG update 进入处理 update_id=%s bot=main chat_id=%s chat_type=%s user_id=%s text_len=%s caption_len=%s has_photo=%s has_document=%s",
+        "TG update 进入处理 update_id=%s bot=main chat_id=%s chat_type=%s user_id=%s text_len=%s caption_len=%s has_photo=%s has_voice=%s has_audio=%s has_document=%s",
         update_id,
         chat_id,
         chat_type,
@@ -1148,6 +1233,8 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         len(text),
         len(caption),
         bool(msg.get("photo")),
+        bool(msg.get("voice")),
+        bool(msg.get("audio")),
         bool(msg.get("document")),
     )
 
@@ -1176,6 +1263,24 @@ def handle_telegram_update(upd: dict, bot_token: Optional[str] = None):
         with _BUF_LOCK:
             _append_user_part_locked(chat_id, user_id, {"type": "text", "text": caption or "[图片]"})
             _append_user_part_locked(chat_id, user_id, {"type": "image_url", "image_url": {"url": data_url}})
+            _schedule_flush_locked(user_id)
+        return
+
+    # Telegram 语音 / 音频 → STT 转写后追加到聚合缓冲。
+    if (not text) and (msg.get("voice") or msg.get("audio")):
+        kind = "voice" if msg.get("voice") else "audio"
+        media = msg.get(kind) or {}
+        prompt_text = _transcribe_telegram_audio_for_prompt(media, kind=kind, bot_token=token, caption=caption)
+        if not prompt_text:
+            send_message(chat_id, "这条语音没听清，换个短一点的再发我试试。", bot_token=token)
+            return
+        if TELEGRAM_PROACTIVE_TARGET_USER_ID and user_id == TELEGRAM_PROACTIVE_TARGET_USER_ID:
+            from utils.time_aware import now_beijing_iso
+
+            r2_store.save_last_telegram_user_activity_at(now_beijing_iso())
+        logger.info("收到 TG 语音(聚合) user_id=%s chat_id=%s kind=%s chars=%s caption_len=%d", user_id, chat_id, kind, len(prompt_text), len(caption))
+        with _BUF_LOCK:
+            _append_user_part_locked(chat_id, user_id, {"type": "text", "text": prompt_text})
             _schedule_flush_locked(user_id)
         return
 
