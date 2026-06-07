@@ -55,7 +55,7 @@ function resolveSharedWindowId() {
 
 function extractUserContentFromMessage(message) {
   if (typeof message === "string") {
-    const t = String(message || "").trim();
+    const t = stripRawReplySegments(message);
     return t || "";
   }
   if (!Array.isArray(message)) return "";
@@ -110,6 +110,20 @@ function parseRawRecordSegments(raw) {
     out.push({ type: String(m?.[1] || "record").toLowerCase(), data: parseCqParams(m?.[2] || "") });
   }
   return out;
+}
+
+function parseRawReplyMessageIds(raw) {
+  const out = [];
+  for (const m of String(raw || "").matchAll(/\[CQ:(reply|quote),([^\]]*)\]/gi)) {
+    const params = parseCqParams(m?.[2] || "");
+    const id = String(params.id || params.message_id || "").trim();
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+function stripRawReplySegments(raw) {
+  return String(raw || "").replace(/\[CQ:(reply|quote),[^\]]*\]/gi, "").trim();
 }
 
 function filenameFromUrl(rawUrl, fallback = "voice") {
@@ -240,7 +254,7 @@ function contentFromParts(parts) {
 
 async function extractUserContentFromMessageWithVoice(message, rawMessage = "") {
   if (typeof message === "string") {
-    const raw = String(message || "").trim();
+    const raw = stripRawReplySegments(message);
     if (!raw) return "";
     const records = parseRawRecordSegments(raw);
     if (!records.length) return raw;
@@ -263,6 +277,9 @@ async function extractUserContentFromMessageWithVoice(message, rawMessage = "") 
   for (const seg of message) {
     if (!seg || typeof seg !== "object") continue;
     const type = String(seg.type || "").trim();
+    if (type === "reply" || type === "quote") {
+      continue;
+    }
     if (type === "text") {
       const text = String(seg.data?.text || "").trim();
       if (text) parts.push({ type: "text", text });
@@ -286,6 +303,94 @@ async function extractUserContentFromMessageWithVoice(message, rawMessage = "") 
     }
   }
   return contentFromParts(parts);
+}
+
+function replyMessageIdsFromMessage(message, rawMessage = "") {
+  const out = [];
+  if (Array.isArray(message)) {
+    for (const seg of message) {
+      if (!seg || typeof seg !== "object") continue;
+      const type = String(seg.type || "").trim();
+      if (type !== "reply" && type !== "quote") continue;
+      const id = String(seg.data?.id || seg.data?.message_id || "").trim();
+      if (id && !out.includes(id)) out.push(id);
+    }
+  }
+  for (const id of parseRawReplyMessageIds(rawMessage || (typeof message === "string" ? message : ""))) {
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+function onebotMessageIdParam(messageId) {
+  const raw = String(messageId || "").trim();
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : raw;
+}
+
+function quotedSenderLabel(event, row) {
+  const sender = row?.sender && typeof row.sender === "object" ? row.sender : {};
+  const userId = Number(row?.user_id || sender.user_id || 0);
+  const selfId = Number(eventSelfId(event) || 0);
+  if (ownerQqUserId && userId === ownerQqUserId) return ownerQqDisplayName;
+  if (selfId && userId === selfId) return "渡";
+  const card = String(sender.card || "").trim();
+  const nickname = String(sender.nickname || "").trim();
+  return card || nickname || (userId ? `QQ ${userId}` : "");
+}
+
+async function fetchQuotedMessage(rowEvent, messageId) {
+  const response = await onebotApi("get_msg", { message_id: onebotMessageIdParam(messageId) });
+  const row = response?.data && typeof response.data === "object" ? response.data : response;
+  const content = await extractUserContentFromMessageWithVoice(row?.message || row?.raw_message || "", row?.raw_message || "");
+  const text = contentTextForGroupContext(content, 500);
+  if (!text) return null;
+  const speaker = quotedSenderLabel(rowEvent, row);
+  return {
+    messageId: String(messageId || "").trim(),
+    text: speaker ? `${speaker}：${text}` : text,
+  };
+}
+
+async function resolveQuotedMessageContext(event) {
+  const ids = replyMessageIdsFromMessage(event?.message || "", event?.raw_message || "");
+  if (!ids.length) return "";
+  const lines = [];
+  for (const id of ids.slice(0, 3)) {
+    try {
+      const quoted = await fetchQuotedMessage(event, id);
+      if (quoted?.text) {
+        lines.push(quoted.text);
+      } else {
+        lines.push(`（引用了一条 QQ 消息，但没有可读文本：message_id=${id}）`);
+      }
+    } catch (e) {
+      console.log(`[qq-onebot] 引用消息拉取失败 message_id=${id}: ${String(e?.message || e)}`);
+      lines.push(`（引用了一条 QQ 消息，但拉取失败：message_id=${id}）`);
+    }
+  }
+  if (!lines.length) return "";
+  return ["【QQ 引用的消息】", ...lines].join("\n");
+}
+
+function mergeQuoteContextIntoContent(content, quoteContext) {
+  const quote = String(quoteContext || "").trim();
+  if (!quote) return content;
+  const fallback = "（只引用了这条消息，没有附加文字）";
+  if (typeof content === "string") {
+    const current = String(content || "").trim() || fallback;
+    return `${quote}\n\n【当前消息】\n${current}`;
+  }
+  const parts = normalizeUserContentToParts(content);
+  if (!parts.length) {
+    return `${quote}\n\n【当前消息】\n${fallback}`;
+  }
+  return [{ type: "text", text: `${quote}\n\n【当前消息】` }, ...parts];
+}
+
+async function enrichContentWithQuotedMessage(event, content) {
+  const quoteContext = await resolveQuotedMessageContext(event);
+  return mergeQuoteContextIntoContent(content, quoteContext);
 }
 
 function normalizeUserContentToParts(content) {
@@ -1045,9 +1150,10 @@ async function handleGroupEvent(j) {
   if (!groupId) return;
   const atTargets = groupAtTargets(j);
   const mentionsSelf = messageMentionsSelf(j);
-  const content = mentionsSelf
+  const baseContent = mentionsSelf
     ? await contentWithoutSelfAt(j)
     : extractUserContentFromMessage(j?.message || j?.raw_message || "");
+  const content = await enrichContentWithQuotedMessage(j, baseContent);
   if (logGroupEvents) {
     console.log(`[qq-onebot] group event group=${groupId} user=${Number(j?.user_id || 0)} self_id=${eventSelfId(j) || "unknown"} at=${atTargets.join(",") || "-"} content=${userContentPreview(content, 80) || "-"}`);
   }
@@ -1113,7 +1219,8 @@ async function handleEvent(j) {
     logIgnoredEvent(j, "missing_user_id");
     return;
   }
-  const content = await extractUserContentFromMessageWithVoice(j?.message || j?.raw_message || "", j?.raw_message || "");
+  const baseContent = await extractUserContentFromMessageWithVoice(j?.message || j?.raw_message || "", j?.raw_message || "");
+  const content = await enrichContentWithQuotedMessage(j, baseContent);
   if (!content) {
     logIgnoredEvent(j, "empty_content");
     return;
