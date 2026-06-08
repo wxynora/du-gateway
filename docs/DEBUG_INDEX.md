@@ -1486,3 +1486,11 @@ npm -C miniapp run android
 - 已完成：`miniapp/src/ui/ChatPresentation.tsx` 将 `ChatHeaderStatus` 字号从 11px 压到 10px，并把静态“在线”颜色降为灰色，适配中间小胶囊。
 - 已验证：`npm -C miniapp run build` 通过；`npm -C miniapp run build:android` 通过并同步 `miniapp_static` 相对路径 bundle；`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过，只有既有 Vite chunk size warning。
 - 未完成 / 下次继续：本轮只改聊天顶部视觉，不改聊天发送、群聊逻辑、ChatStore 或 Android 原生通知；当前工作区仍有既有 Android 通知/悬浮球和 `tools/` 脏文件，提交时不要混入。
+
+当前状态（2026-06-08 Tailscale 内网桥接与本地 token sync）：
+- 已完成：Mac 和 VPS 加入同一 tailnet；Mac 为 `100.105.159.127`，VPS `ali-du` 为 `100.92.76.117`。VPS 与 Mac 均已关闭 Tailscale DNS 接管（`CorpDNS=false`），VPS 持久 DNS 改为 `223.5.5.5` / `1.1.1.1`，配置在 `/etc/systemd/network/10-netplan-eth0.network.d/du-gateway-dns.conf`，避免阿里云 `100.100.2.136/138` 与 Tailscale 网段冲突后导致 R2/Cloudflare 解析超时。
+- 已完成：VPS 新增只监听 Tailscale IP 的 Nginx 内网入口 `/etc/nginx/conf.d/du-gateway-tailscale.conf`，监听 `100.92.76.117:8080` 并反代到 `127.0.0.1:5000`；公网 `https://duxy-home.com` 保持不变，手机/自用前端未切内网。
+- 已完成：本机 `~/.ssh/config` 中 `ali-du` 已切到 `100.92.76.117`，新增 `ali-du-public` 保留旧公网 `47.250.162.10` 备用；Codex 群聊桥接 `/Users/doraemon/.du-gateway-codex-bridge/.env` 的 `GATEWAY_URL` 已切到 `http://100.92.76.117:8080` 并重启 LaunchAgent。
+- 已完成：本地 Claude token sync 的 `/Users/doraemon/.claude-token-sync.env` 已把 `CLAUDE_PROXY_SYNC_URL` / `CLAUDE_PROXY_STATUS_URL` 切到 `http://100.92.76.117:8080/internal/claude-oauth-*`；`com.doraemon.claude-token-sync` LaunchAgent 已重新加载，配置来源仍是 `.env`，没有把 token 写入 plist。
+- 已验证：`https://duxy-home.com/health` 和 `/miniapp/` 为 200；`http://100.92.76.117:8080/health` 为 200；带 `X-PC-Token` 调内网 `/api/codex_group_chat/tasks/recent` 为 200；桥接新启动日志显示 `gateway_host=100.92.76.117:8080`；`/Users/doraemon/claude-token-sync.sh --mark` 成功写出 `marked http status has_status=1`；`ssh ali-du` 与 `ssh ali-du-public` 均可用。
+- 未完成 / 下次继续：手机和自用前端仍走公网，不要误以为已切 Tailscale。当前 `8080` 内网入口反代整个网关；在 tailnet 只有自用 Mac/VPS 时风险较低，若后续加入手机、临时设备或他人账号，应收窄为只允许 `100.105.159.127` 且只放行 `/health`、`/api/codex_group_chat/`、`/internal/claude-oauth-*`。生产机后续使用 Tailscale 默认先加 `--accept-dns=false`，不要再让它接管 DNS。
