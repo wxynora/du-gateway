@@ -25,7 +25,9 @@ PORT="${GATEWAY_BIND_PORT:-5000}"
 WORKERS="${GATEWAY_WORKERS:-1}"
 THREADS="${GATEWAY_THREADS:-4}"
 TIMEOUT="${GATEWAY_TIMEOUT:-360}"
-GRACEFUL_TIMEOUT="${GATEWAY_GRACEFUL_TIMEOUT:-30}"
+# Let non-daemon post-archive threads finish during gunicorn worker recycle,
+# but keep restart/recycle delays bounded on the small VPS.
+GRACEFUL_TIMEOUT="${GATEWAY_GRACEFUL_TIMEOUT:-120}"
 KEEP_ALIVE="${GATEWAY_KEEP_ALIVE:-5}"
 MAX_REQUESTS="${GATEWAY_MAX_REQUESTS:-240}"
 MAX_REQUESTS_JITTER="${GATEWAY_MAX_REQUESTS_JITTER:-40}"
@@ -52,7 +54,7 @@ fi
 export GATEWAY_EMBEDDED_SCHEDULE_RUNTIME_ENABLED="${GATEWAY_EMBEDDED_SCHEDULE_RUNTIME_ENABLED:-0}"
 
 echo "Starting du-gateway via gunicorn on ${HOST}:${PORT}"
-echo "workers=${WORKERS} threads=${THREADS} timeout=${TIMEOUT}s max_requests=${MAX_REQUESTS}+${MAX_REQUESTS_JITTER}"
+echo "workers=${WORKERS} threads=${THREADS} timeout=${TIMEOUT}s graceful_timeout=${GRACEFUL_TIMEOUT}s max_requests=${MAX_REQUESTS}+${MAX_REQUESTS_JITTER}"
 
 exec "$PYTHON_BIN" -m gunicorn app:app \
   --bind "${HOST}:${PORT}" \

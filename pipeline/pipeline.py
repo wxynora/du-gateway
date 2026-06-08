@@ -3200,8 +3200,11 @@ def step_run_post_archive_tasks(
                     logger.warning("Pipeline 保存实时层 pending 总结失败 window_id=%s indices=%s", window_id, indices)
                 continue
 
-        t = threading.Thread(target=_summarize)
-        t.daemon = True
+        t = threading.Thread(
+            target=_summarize,
+            name=f"summary-window-{window_id}-{round_index}",
+            daemon=False,
+        )
         t.start()
     if skip_dynamic_layer:
         logger.info("动态层跳过：请求要求跳过归档后动态层 window_id=%s round_index=%s", window_id, round_index)

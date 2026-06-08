@@ -41,7 +41,11 @@ def run_nonstream_post_archive_in_background(
                 exc_info=True,
             )
 
-    threading.Thread(target=_runner, name=f"nonstream-post-archive-{window_id}", daemon=True).start()
+    threading.Thread(
+        target=_runner,
+        name=f"nonstream-post-archive-{window_id}",
+        daemon=False,
+    ).start()
 
 
 def strip_co_read_section_raw_text_for_archive(msg: dict) -> dict:

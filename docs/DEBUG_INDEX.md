@@ -634,6 +634,11 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 已验证：`.venv/bin/python -m py_compile config.py pipeline/pipeline.py services/dynamic_memory_provenance.py services/memory_maintenance.py scripts/test_dynamic_memory_provenance.py` 和 `.venv/bin/python scripts/test_dynamic_memory_provenance.py` 通过。
 - 未完成 / 下次继续：历史已有动态记忆未回填血缘；MiniApp 查询入口和“按 provenance 拉原始 round 重新写这条记忆”的重写流程还未接。
 
+当前状态（2026-06-09 实时层总结 worker 回收保护）：
+- 已完成：`pipeline/pipeline.py::step_run_post_archive_tasks` 继续保持实时层 DS 总结异步，不把聊天响应拖到等 DS；总结线程从 daemon 改为非 daemon，并命名为 `summary-window-{window_id}-{round_index}`，避免 worker 正常回收时直接丢掉已开始的 DS 总结。
+- 已完成：`services/chat_archive_helpers.py` 的非流式归档后慢任务线程改为非 daemon；`scripts/start_gateway_prod.sh` 默认 `GATEWAY_GRACEFUL_TIMEOUT` 从 30 秒提高到 120 秒，并在启动日志打印 `graceful_timeout`，给已经进入慢任务链路的 DS 总结留出有限收尾窗口，同时避免重启/回收拖太久。
+- 未完成 / 下次继续：这次没有新增 worker，没有把总结改同步，也没有改总结频率/补缺口逻辑；如果再查总结缺失，先看 gunicorn recycle 时间点、`graceful_timeout` 和实时层总结线程日志。
+
 ## 核心 Prompt / 风格规则 / 禁言模式
 
 现象：
