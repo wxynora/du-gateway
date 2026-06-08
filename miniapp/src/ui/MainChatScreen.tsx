@@ -1724,17 +1724,26 @@ export function MainChatScreen({
   const chatBackgroundAlpha = Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100));
   const chatBackgroundOverlayAlpha = 1 - chatBackgroundAlpha;
   const chatChromeClass = hasCustomChatBackground
-    ? "border-white/25 bg-white/60 shadow-[0_10px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl"
+    ? "border-transparent bg-transparent"
     : "border-gray-100/50 bg-white/80 backdrop-blur-md";
+  const chatHeaderPillClass = hasCustomChatBackground
+    ? "flex items-center rounded-full border border-white/25 bg-white/25 px-1.5 py-1 shadow-[0_10px_30px_rgba(15,23,42,0.12)] backdrop-blur-2xl"
+    : "flex items-center";
+  const chatHeaderButtonClass = hasCustomChatBackground
+    ? "rounded-full p-2 text-gray-800/80 transition-colors active:bg-white/35"
+    : "rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100";
   const chatFooterClass = hasCustomChatBackground
-    ? "border-white/25 bg-white/60 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl"
+    ? "border-white/20 bg-white/25 shadow-[0_-10px_30px_rgba(15,23,42,0.10)] backdrop-blur-xl"
     : "border-gray-100 bg-white";
   const chatInputShellClass = hasCustomChatBackground
-    ? "bg-white/70 shadow-sm backdrop-blur-md"
+    ? "border border-white/25 bg-white/45 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl"
     : "bg-[#F4F5F7]";
   const chatSearchShellClass = hasCustomChatBackground
-    ? "bg-white/70 shadow-sm backdrop-blur-md"
+    ? "border border-white/25 bg-white/45 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl"
     : "bg-[#F4F5F7]";
+  const messagesTopPaddingClass = searchOpen
+    ? hasCustomChatBackground ? "pt-[148px]" : "pt-[156px]"
+    : hasCustomChatBackground ? "pt-[96px]" : "pt-[104px]";
 
   useEffect(() => {
     if (searchOpen) return;
@@ -1782,8 +1791,8 @@ export function MainChatScreen({
         </>
       ) : null}
       <div className={`absolute top-0 z-20 w-full border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] ${chatChromeClass}`}>
-        <div className="flex items-center">
-          <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
+        <div className={chatHeaderPillClass}>
+          <button className={chatHeaderButtonClass} onClick={onBack}>
             <ChevronLeftIcon />
           </button>
           <div className="ml-2 flex-1">
@@ -1816,7 +1825,7 @@ export function MainChatScreen({
             </button>
           ) : null}
           <button
-            className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100"
+            className={chatHeaderButtonClass}
             onClick={() => {
               setSearchOpen((prev) => {
                 const next = !prev;
@@ -1868,7 +1877,7 @@ export function MainChatScreen({
 
       <div
         ref={messagesScrollRef}
-        className={`relative z-10 min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-3.5 pb-5 ${searchOpen ? "pt-[156px]" : "pt-[104px]"}`}
+        className={`relative z-10 min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-3.5 pb-5 ${messagesTopPaddingClass}`}
       >
         <div className="space-y-4">
           {groupedMessages.map((group, index) => (
@@ -2046,7 +2055,7 @@ export function MainChatScreen({
       </div>
 
       <div className={`relative z-20 border-t pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
-        <div className={`overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/35 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
+        <div className={`overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
           <div className="flex space-x-5 px-6 pb-2 pt-5">
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />

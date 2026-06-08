@@ -216,9 +216,14 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 未完成 / 下次继续：还没做服务端消息级增量同步、长历史分页、Room/Compose 重写或多端冲突合并；本轮默认不重建正式 `miniapp_static`，临时 Vite 产物放 `/tmp`。
 
 当前状态（2026-06-08 聊天自定义背景全屏）：
-- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 参考一起听页面，把聊天页根容器改为 `fixed inset-0 h-[100lvh]`，自定义背景图拆成独立 `fixed inset-0` 背景层，不再受父容器或底部导航布局限制；顶部栏、搜索框、底部输入区和加号工具栏保持半透明磨砂层，未设置背景图时保留原白底样式。
-- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npx vite build --outDir /tmp/du-gateway-miniapp-chat-bg-fullscreen-build --emptyOutDir true`、`npm run build:android` 通过；已确认新样式进入 `miniapp_static` bundle。
+- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 参考一起听页面，把聊天页根容器改为 `fixed inset-0 h-[100lvh]`，自定义背景图拆成独立 `fixed inset-0` 背景层，不再受父容器或底部导航布局限制；有背景图时顶部不再是一整条白栏，改成 iOS 风格悬浮透明小胶囊，搜索框、底部输入区和加号工具栏降低白色遮罩，未设置背景图时保留原白底样式。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npx vite build --outDir /tmp/du-gateway-miniapp-storage-bg-pill-build --emptyOutDir true`、`npm run build:android` 通过；已确认新样式进入 `miniapp_static` bundle。
 - 未完成 / 下次继续：本轮只改聊天页背景视觉层，不改聊天发送、群聊、ChatStore/outbox 或 Android 原生壳逻辑；如果手机端加载远端 `https://duxy-home.com/miniapp/`，还需要部署更新后的 `miniapp_static` 才能看到这版前端。
+
+当前状态（2026-06-08 记忆存储管理）：
+- 已完成：设置页新增「记忆存储管理」，入口在 `miniapp/src/ui/AppShell.tsx`；页面 `miniapp/src/ui/tabs/ChatStorageManagementScreen.tsx` 显示当前聊天存储后端（SQLite / Dexie fallback）、本机 device id、SQLite/Dexie 各自窗口数和消息数、活跃 outbox 数，并提供“重新检查 / 迁移”按钮。
+- 已完成：`miniapp/src/ui/storage/chatHistoryDb.ts` 新增 `inspectChatStorageOverview()`，直接汇总 Android 原生 `SumiChatStore` 状态、SQLite 行统计、Dexie 旧备份统计和当前后端活跃 operation，不再让用户只能猜迁移状态。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npx vite build --outDir /tmp/du-gateway-miniapp-storage-bg-pill-build --emptyOutDir true`、`npm run build:android` 通过；已确认 `ChatStorageManagementScreen` 进入 `miniapp_static` bundle。
 
 ## 和渡一起听 / 音乐旋律分析
 

@@ -78,8 +78,9 @@ const StudyRoomTab = lazy(() => import("./tabs/StudyRoomTab").then((m) => ({ def
 const XiaoAISettingsTab = lazy(() => import("./tabs/XiaoAISettingsTab").then((m) => ({ default: m.XiaoAISettingsTab })));
 const HealthDataScreen = lazy(() => import("./tabs/HealthDataScreen").then((m) => ({ default: m.HealthDataScreen })));
 const ReportingManagementScreen = lazy(() => import("./tabs/ReportingManagementScreen").then((m) => ({ default: m.ReportingManagementScreen })));
+const ChatStorageManagementScreen = lazy(() => import("./tabs/ChatStorageManagementScreen").then((m) => ({ default: m.ChatStorageManagementScreen })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | "xiaoai" | "health-data" | "reporting" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
 type SilenceModeResponse = {
   ok?: boolean;
   enabled?: boolean;
@@ -585,6 +586,7 @@ export function AppShell({
             <ListRow icon={<FeatherIcon />} label="个性化" onClick={() => setShowPersonalization(true)} />
             <ListRow icon={<CpuIcon />} label="系统诊断" onClick={() => setShowDiagnostics(true)} />
             <ListRow icon={<SmartphoneIconMini />} label="上报管理" onClick={() => setPanel("reporting")} />
+            <ListRow icon={<FileTextIcon />} label="记忆存储管理" onClick={() => setPanel("chat-storage")} />
             <ListRow icon={<SmartphoneIconMini />} label="设备管理" onClick={() => onOpenDevices?.()} />
             {onLogout ? <ListRow icon={<LogoutIconMini />} label="退出登录" onClick={onLogout} last /> : null}
           </div>
@@ -738,6 +740,11 @@ export function AppShell({
       {panel === "reporting" ? (
         <FullScreenPane title="上报管理" accent="neutral" headerMode="simple" headerRightPortalId="reporting-header-actions" onBack={() => setPanel(null)}>
           <LazyPane><ReportingManagementScreen /></LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {panel === "chat-storage" ? (
+        <FullScreenPane title="记忆存储管理" accent="neutral" headerMode="simple" headerRightPortalId="chat-storage-header-actions" onBack={() => setPanel(null)}>
+          <LazyPane><ChatStorageManagementScreen /></LazyPane>
         </FullScreenPane>
       ) : null}
 

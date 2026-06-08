@@ -1,5 +1,6 @@
 import { dexieChatStoreFallback } from "../chat/dexieChatStoreFallback";
 import { nativeChatStore, isNativeChatStoreAvailable } from "../chat/nativeChatStore";
+import { SumiChatStore } from "../../plugins/sumi-chat-store";
 import {
   canonicalHistoryWindowId,
   mergeHistoryMessages,
@@ -12,6 +13,18 @@ import {
 } from "../chat/chatStore";
 
 export type { ChatOperation, ChatHistoryLocalStatRow, ChatHistoryMessage, ChatHistoryRow };
+
+export type ChatStorageOverview = {
+  deviceId: string;
+  backend: "sqlite" | "dexie";
+  nativeAvailable: boolean;
+  nativeSchemaVersion?: number;
+  nativeError?: string;
+  nativeRows: ChatHistoryLocalStatRow[];
+  dexieRows: ChatHistoryLocalStatRow[];
+  activeOperations: ChatOperation[];
+  updatedAt: string;
+};
 
 const migratedNativeDeviceIds = new Set<string>();
 
@@ -82,6 +95,43 @@ export async function inspectLocalChatHistoryRows(): Promise<ChatHistoryLocalSta
     () => nativeChatStore.inspectLocalChatHistoryRows(),
     () => dexieChatStoreFallback.inspectLocalChatHistoryRows(),
   );
+}
+
+export async function inspectChatStorageOverview(deviceId: string): Promise<ChatStorageOverview> {
+  const did = String(deviceId || "").trim();
+  let nativeError = "";
+  let nativeSchemaVersion: number | undefined;
+  let nativeAvailable = false;
+  try {
+    if (SumiChatStore.isAndroid()) {
+      const status = await SumiChatStore.getStatus();
+      nativeAvailable = Boolean(status?.ok);
+      nativeSchemaVersion = Number(status?.schemaVersion || 0) || undefined;
+    }
+  } catch (e: any) {
+    nativeError = String(e?.message || e || "");
+  }
+  if (!nativeAvailable) {
+    nativeAvailable = await isNativeChatStoreAvailable();
+  }
+  const [nativeRows, dexieRows, activeOperations] = await Promise.all([
+    nativeAvailable ? nativeChatStore.inspectLocalChatHistoryRows().catch(() => []) : Promise.resolve([]),
+    dexieChatStoreFallback.inspectLocalChatHistoryRows().catch(() => []),
+    (nativeAvailable ? nativeChatStore : dexieChatStoreFallback)
+      .listActiveOperations(did)
+      .catch(() => []),
+  ]);
+  return {
+    deviceId: did,
+    backend: nativeAvailable ? "sqlite" : "dexie",
+    nativeAvailable,
+    nativeSchemaVersion,
+    nativeError,
+    nativeRows,
+    dexieRows,
+    activeOperations,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export async function writeLocalChatHistory(deviceId: string, windowId: string, messages: ChatHistoryMessage[]): Promise<void> {
