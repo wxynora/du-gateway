@@ -53,6 +53,7 @@ import {
 } from "./voiceCallInvite";
 
 const LISTEN_BACKGROUND_STORAGE_KEY = "miniapp.listenWithDu.backgroundImage";
+const GROUP_FREE_CHAT_MODE_STORAGE_KEY = "miniapp.ui.groupFreeChatMode";
 
 function nextBubbleStyle(style: BubbleStyleKey): BubbleStyleKey {
   const index = BUBBLE_STYLE_KEYS.indexOf(style);
@@ -123,6 +124,7 @@ export function AppShell({
   const callHubBackHandlerRef = useRef<BackHandler | null>(null);
   const [silenceModeEnabled, setSilenceModeEnabled] = useState(false);
   const [silenceModeSaving, setSilenceModeSaving] = useState(false);
+  const [groupFreeChatEnabled, setGroupFreeChatEnabled] = useState(() => readStoredBoolean(GROUP_FREE_CHAT_MODE_STORAGE_KEY, true));
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [todayNoteRefreshing, setTodayNoteRefreshing] = useState(false);
@@ -310,6 +312,7 @@ export function AppShell({
       localStorage.setItem("miniapp.ui.chatBackgroundOpacity", String(chatBackgroundOpacity));
       localStorage.setItem("miniapp.ui.userBubbleStyle", userBubbleStyle);
       localStorage.setItem("miniapp.ui.assistantBubbleStyle", assistantBubbleStyle);
+      localStorage.setItem(GROUP_FREE_CHAT_MODE_STORAGE_KEY, groupFreeChatEnabled ? "1" : "0");
       localStorage.setItem("miniapp.ui.myAvatar", myAvatarImage);
       localStorage.setItem("miniapp.ui.duAvatar", duAvatarImage);
       localStorage.setItem("miniapp.ui.benbenAvatar", benbenAvatarImage);
@@ -330,6 +333,7 @@ export function AppShell({
     chatBackgroundOpacity,
     userBubbleStyle,
     assistantBubbleStyle,
+    groupFreeChatEnabled,
     myAvatarImage,
     duAvatarImage,
     benbenAvatarImage,
@@ -400,6 +404,11 @@ export function AppShell({
     } finally {
       setSilenceModeSaving(false);
     }
+  }
+
+  function saveGroupFreeChatMode(next: boolean) {
+    setGroupFreeChatEnabled(next);
+    toast(next ? "自由聊模式已开启" : "自由聊模式已关闭");
   }
 
   useEffect(() => {
@@ -583,6 +592,12 @@ export function AppShell({
               disabled={silenceModeSaving}
               onToggle={(v) => void saveSilenceMode(v)}
             />
+            <SwitchSettingRow
+              icon={<GitMergeIcon />}
+              label="自由聊模式"
+              enabled={groupFreeChatEnabled}
+              onToggle={saveGroupFreeChatMode}
+            />
             <ListRow icon={<FeatherIcon />} label="个性化" onClick={() => setShowPersonalization(true)} />
             <ListRow icon={<CpuIcon />} label="系统诊断" onClick={() => setShowDiagnostics(true)} />
             <ListRow icon={<SmartphoneIconMini />} label="上报管理" onClick={() => setPanel("reporting")} />
@@ -683,6 +698,7 @@ export function AppShell({
           duAvatarImage={duAvatarImage}
           benbenAvatarImage={benbenAvatarImage}
           chatBackgroundImage={chatBackgroundImage}
+          groupFreeChatEnabled={groupFreeChatEnabled}
           onBack={() => setActiveScreen(null)}
           onOpenStickers={() => setPanel("stickers")}
           onOpenCall={() => setShowCallHub(true)}

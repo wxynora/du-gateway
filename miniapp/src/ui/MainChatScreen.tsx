@@ -103,7 +103,6 @@ const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_CREATE_TIMEOUT_MS = 30000;
 const CODEX_GROUP_CHAT_CREATE_RETRY_TIMEOUT_MS = 45000;
 const GROUP_DISCUSSION_MAX_FOLLOWUPS = 3;
-const GROUP_FREE_CHAT_STORAGE_KEY = "miniapp.groupChat.freeChatEnabled";
 const GROUP_DISCUSSION_TRIGGER_RE = /(?:讨论|商量|你俩|你们俩|自由聊|一起聊|一起看看|聊两句|聊几句|互相|碰一下|合计|对一下|头脑风暴)/i;
 const GROUP_DISCUSSION_STOP_RE = /(?:先这样|先到这|就先这样|差不多(?:了|就行|可以)|可以收尾|不用继续|别聊了|到这里|我来改|我去改|先按这个)/i;
 const GROUP_DISCUSSION_MANUAL_STOP_RE = /(?:停一下|停止|暂停|打断|中断|别聊了|不用继续|先这样|收尾|到这里|算了)/i;
@@ -326,6 +325,7 @@ export function MainChatScreen({
   duAvatarImage,
   benbenAvatarImage,
   chatBackgroundImage,
+  groupFreeChatEnabled = true,
   onBack,
   onOpenStickers,
   onOpenCall,
@@ -352,6 +352,7 @@ export function MainChatScreen({
   duAvatarImage: string;
   benbenAvatarImage: string;
   chatBackgroundImage: string;
+  groupFreeChatEnabled?: boolean;
   onBack: () => void;
   onOpenStickers: () => void;
   onOpenCall: () => void;
@@ -378,14 +379,6 @@ export function MainChatScreen({
   const [sending, setSending] = useState(false);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
-  const [groupFreeChatEnabled, setGroupFreeChatEnabled] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return window.localStorage.getItem(GROUP_FREE_CHAT_STORAGE_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
   const [plusOpen, setPlusOpen] = useState(false);
   const [travelFormCard, setTravelFormCard] = useState<TravelPlanFormCard | null>(null);
   const [travelResultCard, setTravelResultCard] = useState<TravelPlanResultCard | null>(null);
@@ -413,13 +406,6 @@ export function MainChatScreen({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(GROUP_FREE_CHAT_STORAGE_KEY, groupFreeChatEnabled ? "1" : "0");
-    } catch {}
-  }, [groupFreeChatEnabled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1726,11 +1712,8 @@ export function MainChatScreen({
   const chatChromeClass = hasCustomChatBackground
     ? "border-transparent bg-transparent"
     : "border-gray-100/50 bg-white/80 backdrop-blur-md";
-  const chatHeaderPillClass = hasCustomChatBackground
-    ? "flex items-center rounded-full border border-white/25 bg-white/25 px-1.5 py-1 shadow-[0_10px_30px_rgba(15,23,42,0.12)] backdrop-blur-2xl"
-    : "flex items-center";
   const chatHeaderButtonClass = hasCustomChatBackground
-    ? "rounded-full p-2 text-gray-800/80 transition-colors active:bg-white/35"
+    ? "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/25 text-gray-800/85 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur-2xl transition-colors active:bg-white/40"
     : "rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100";
   const chatFooterClass = hasCustomChatBackground
     ? "border-white/20 bg-white/25 shadow-[0_-10px_30px_rgba(15,23,42,0.10)] backdrop-blur-xl"
@@ -1741,9 +1724,12 @@ export function MainChatScreen({
   const chatSearchShellClass = hasCustomChatBackground
     ? "border border-white/25 bg-white/45 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl"
     : "bg-[#F4F5F7]";
+  const chatHeaderWrapClass = hasCustomChatBackground
+    ? "absolute top-0 z-20 w-full border-b px-3 pb-2 pt-[calc(env(safe-area-inset-top,0px)+10px)]"
+    : "absolute top-0 z-20 w-full border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)]";
   const messagesTopPaddingClass = searchOpen
-    ? hasCustomChatBackground ? "pt-[148px]" : "pt-[156px]"
-    : hasCustomChatBackground ? "pt-[96px]" : "pt-[104px]";
+    ? hasCustomChatBackground ? "pt-[140px]" : "pt-[156px]"
+    : hasCustomChatBackground ? "pt-[88px]" : "pt-[104px]";
 
   useEffect(() => {
     if (searchOpen) return;
@@ -1790,55 +1776,64 @@ export function MainChatScreen({
           />
         </>
       ) : null}
-      <div className={`absolute top-0 z-20 w-full border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] ${chatChromeClass}`}>
-        <div className={chatHeaderPillClass}>
-          <button className={chatHeaderButtonClass} onClick={onBack}>
-            <ChevronLeftIcon />
-          </button>
-          <div className="ml-2 flex-1">
-            <div className="font-medium text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
-            <ChatHeaderStatus sending={assistantTyping} />
-            {groupDiscussionStatus ? (
-              <div className="text-[11px] font-medium text-amber-700">{groupDiscussionStatus}</div>
-            ) : null}
-          </div>
-          {groupChatMode ? (
-            <button
-              type="button"
-              role="switch"
-              aria-checked={groupFreeChatEnabled}
-              aria-label="自由聊"
-              title="自由聊"
-              className={`mr-1 flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-semibold transition-colors ${
-                groupFreeChatEnabled
-                  ? "bg-amber-100 text-amber-800"
-                  : "bg-gray-100 text-gray-500"
-              }`}
-              onClick={() => setGroupFreeChatEnabled((prev) => !prev)}
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  groupFreeChatEnabled ? "bg-amber-500" : "bg-gray-300"
-                }`}
-              />
-              自由聊
+      <div className={`${chatHeaderWrapClass} ${chatChromeClass}`}>
+        {hasCustomChatBackground ? (
+          <div className="flex items-start justify-between gap-3">
+            <button className={chatHeaderButtonClass} onClick={onBack} aria-label="返回">
+              <ChevronLeftIcon />
             </button>
-          ) : null}
-          <button
-            className={chatHeaderButtonClass}
-            onClick={() => {
-              setSearchOpen((prev) => {
-                const next = !prev;
-                if (!next) setSearchQuery("");
-                return next;
-              });
-            }}
-            aria-label="搜索"
-            title="搜索"
-          >
-            <SearchIconMini />
-          </button>
-        </div>
+            <div className="min-w-0 flex-1 px-1 pt-0.5 text-center drop-shadow-[0_1px_8px_rgba(255,255,255,0.55)]">
+              <div className="truncate font-semibold text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
+              <div className="mt-0.5 flex justify-center">
+                <ChatHeaderStatus sending={assistantTyping} />
+              </div>
+              {groupDiscussionStatus ? (
+                <div className="mt-0.5 truncate text-[11px] font-medium text-amber-700">{groupDiscussionStatus}</div>
+              ) : null}
+            </div>
+            <button
+              className={chatHeaderButtonClass}
+              onClick={() => {
+                setSearchOpen((prev) => {
+                  const next = !prev;
+                  if (!next) setSearchQuery("");
+                  return next;
+                });
+              }}
+              aria-label="搜索"
+              title="搜索"
+            >
+              <SearchIconMini />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center">
+            <button className={chatHeaderButtonClass} onClick={onBack} aria-label="返回">
+              <ChevronLeftIcon />
+            </button>
+            <div className="ml-2 flex-1">
+              <div className="font-medium text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
+              <ChatHeaderStatus sending={assistantTyping} />
+              {groupDiscussionStatus ? (
+                <div className="text-[11px] font-medium text-amber-700">{groupDiscussionStatus}</div>
+              ) : null}
+            </div>
+            <button
+              className={chatHeaderButtonClass}
+              onClick={() => {
+                setSearchOpen((prev) => {
+                  const next = !prev;
+                  if (!next) setSearchQuery("");
+                  return next;
+                });
+              }}
+              aria-label="搜索"
+              title="搜索"
+            >
+              <SearchIconMini />
+            </button>
+          </div>
+        )}
         {searchOpen ? (
           <div className={`mt-3 flex items-center gap-2 rounded-[18px] px-3 py-2 ${chatSearchShellClass}`}>
             <SearchIconMini />
