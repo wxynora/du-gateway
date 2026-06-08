@@ -1468,3 +1468,9 @@ npm -C miniapp run android
 - 已完成：`storage/sense_store.py` 在屏幕从熄屏转亮屏/解锁时继续保留 `lastSleepBlock`，并新增 `sleepSummary`；同一夜多个睡眠段会按最大 3 小时醒来间隔合并，累计 `totalMinutes`、`awakeGapMinutes`、`segmentCount` 和最近分段，避免 20:00-01:00、02:00-04:30 这类分段睡眠只算最后一段。
 - 已完成：`services/proactive_trigger_engine.py` 的亮屏/醒来触发读取 `sleepSummary.totalMinutes`，没有累计摘要时才回退到单段 `lastSleepBlock` 或上一条熄屏事件；`services/sense_context.py` 在最近 24 小时内把累计睡眠摘要注入给渡参考。
 - 已验证：`.venv/bin/python -m py_compile storage/sense_store.py services/proactive_trigger_engine.py services/sense_context.py` 通过；本地 smoke 覆盖 20:00-01:00 + 02:00-04:30，确认 `sleepSummary.totalMinutes=450`、`segmentCount=2`、`awakeGapMinutes=60`。
+
+当前状态（2026-06-08 聊天顶部中间胶囊）：
+- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 把聊天页顶部改为左右 40px 圆形按钮 + 中间独立胶囊布局；胶囊内包含会话名和在线/输入状态，标题字号在用户设置值基础上压小并限制在 12-15px，避免顶栏像裸文字漂在背景上。群聊接力状态单独显示为小号 amber 胶囊，不再挤在名字/在线里。
+- 已完成：`miniapp/src/ui/ChatPresentation.tsx` 将 `ChatHeaderStatus` 字号从 11px 压到 10px，并把静态“在线”颜色降为灰色，适配中间小胶囊。
+- 已验证：`npm -C miniapp run build` 通过；`npm -C miniapp run build:android` 通过并同步 `miniapp_static` 相对路径 bundle；`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过，只有既有 Vite chunk size warning。
+- 未完成 / 下次继续：本轮只改聊天顶部视觉，不改聊天发送、群聊逻辑、ChatStore/Dexie 或 Android 原生通知；当前工作区仍有既有 Android 通知/悬浮球和 `tools/` 脏文件，提交时不要混入。

@@ -194,10 +194,10 @@ export function formatTokenCountValue(value?: number): string {
 
 export function ChatHeaderStatus({ sending }: { sending: boolean }) {
   if (!sending) {
-    return <div className="text-[11px] font-medium text-gray-900">在线</div>;
+    return <div className="text-[10px] font-medium text-gray-600">在线</div>;
   }
   return (
-    <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#5F6C7B]" aria-label="正在输入中">
+    <div className="flex items-center gap-1.5 text-[10px] font-medium text-[#5F6C7B]" aria-label="正在输入中">
       <span>正在输入中</span>
       <span className="inline-flex items-end gap-1">
         {[0, 1, 2].map((index) => (

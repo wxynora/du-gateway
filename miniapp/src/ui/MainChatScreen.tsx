@@ -1714,7 +1714,11 @@ export function MainChatScreen({
     : "border-gray-100/50 bg-white/80 backdrop-blur-md";
   const chatHeaderButtonClass = hasCustomChatBackground
     ? "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/25 text-gray-800/85 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur-2xl transition-colors active:bg-white/40"
-    : "rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100";
+    : "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors active:bg-gray-100";
+  const chatHeaderCenterPillClass = hasCustomChatBackground
+    ? "flex max-w-[54vw] min-w-0 flex-col items-center rounded-full border border-white/35 bg-white/45 px-4 py-1.5 text-center shadow-[0_8px_24px_rgba(15,23,42,0.10)] backdrop-blur-2xl"
+    : "flex max-w-[54vw] min-w-0 flex-col items-center rounded-full border border-gray-100/80 bg-white/85 px-4 py-1.5 text-center shadow-[0_8px_20px_rgba(15,23,42,0.06)] backdrop-blur-xl";
+  const chatHeaderTitleFontSize = Math.max(12, Math.min(15, chatTitleFontSize - 2));
   const chatFooterClass = hasCustomChatBackground
     ? "border-white/20 bg-white/25 shadow-[0_-10px_30px_rgba(15,23,42,0.10)] backdrop-blur-xl"
     : "border-gray-100 bg-white";
@@ -1777,63 +1781,45 @@ export function MainChatScreen({
         </>
       ) : null}
       <div className={`${chatHeaderWrapClass} ${chatChromeClass}`}>
-        {hasCustomChatBackground ? (
-          <div className="flex items-start justify-between gap-3">
-            <button className={chatHeaderButtonClass} onClick={onBack} aria-label="返回">
-              <ChevronLeftIcon />
-            </button>
-            <div className="min-w-0 flex-1 px-1 pt-0.5 text-center drop-shadow-[0_1px_8px_rgba(255,255,255,0.55)]">
-              <div className="truncate font-semibold text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
+        <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem] items-start gap-2">
+          <button className={chatHeaderButtonClass} onClick={onBack} aria-label="返回">
+            <ChevronLeftIcon />
+          </button>
+          <div className="flex min-w-0 justify-center">
+            <div className={chatHeaderCenterPillClass}>
+              <div
+                className="max-w-full truncate font-semibold text-gray-900"
+                style={{ fontSize: `${chatHeaderTitleFontSize}px` }}
+              >
+                {title}
+              </div>
               <div className="mt-0.5 flex justify-center">
                 <ChatHeaderStatus sending={assistantTyping} />
               </div>
-              {groupDiscussionStatus ? (
-                <div className="mt-0.5 truncate text-[11px] font-medium text-amber-700">{groupDiscussionStatus}</div>
-              ) : null}
             </div>
-            <button
-              className={chatHeaderButtonClass}
-              onClick={() => {
-                setSearchOpen((prev) => {
-                  const next = !prev;
-                  if (!next) setSearchQuery("");
-                  return next;
-                });
-              }}
-              aria-label="搜索"
-              title="搜索"
-            >
-              <SearchIconMini />
-            </button>
           </div>
-        ) : (
-          <div className="flex items-center">
-            <button className={chatHeaderButtonClass} onClick={onBack} aria-label="返回">
-              <ChevronLeftIcon />
-            </button>
-            <div className="ml-2 flex-1">
-              <div className="font-medium text-gray-900" style={{ fontSize: `${chatTitleFontSize}px` }}>{title}</div>
-              <ChatHeaderStatus sending={assistantTyping} />
-              {groupDiscussionStatus ? (
-                <div className="text-[11px] font-medium text-amber-700">{groupDiscussionStatus}</div>
-              ) : null}
+          <button
+            className={`${chatHeaderButtonClass} justify-self-end`}
+            onClick={() => {
+              setSearchOpen((prev) => {
+                const next = !prev;
+                if (!next) setSearchQuery("");
+                return next;
+              });
+            }}
+            aria-label="搜索"
+            title="搜索"
+          >
+            <SearchIconMini />
+          </button>
+        </div>
+        {groupDiscussionStatus ? (
+          <div className="mt-1 flex justify-center">
+            <div className="max-w-[72vw] truncate rounded-full bg-amber-50/80 px-3 py-1 text-[10px] font-medium text-amber-700 backdrop-blur">
+              {groupDiscussionStatus}
             </div>
-            <button
-              className={chatHeaderButtonClass}
-              onClick={() => {
-                setSearchOpen((prev) => {
-                  const next = !prev;
-                  if (!next) setSearchQuery("");
-                  return next;
-                });
-              }}
-              aria-label="搜索"
-              title="搜索"
-            >
-              <SearchIconMini />
-            </button>
           </div>
-        )}
+        ) : null}
         {searchOpen ? (
           <div className={`mt-3 flex items-center gap-2 rounded-[18px] px-3 py-2 ${chatSearchShellClass}`}>
             <SearchIconMini />
