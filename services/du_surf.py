@@ -11,7 +11,11 @@ import requests
 
 from config import (
     DU_SURF_CACHE_TTL_SECONDS,
+    DU_SURF_FETCH_TOP_K,
+    DU_SURF_INCLUDE_RAW_CONTENT,
     DU_SURF_MAX_CARDS,
+    DU_SURF_MAX_CARD_CONTENT_CHARS,
+    DU_SURF_TAVILY_SEARCH_DEPTH,
     DU_SURF_TIMEOUT_SECONDS,
     TAVILY_API_KEY,
     TAVILY_SEARCH_ENDPOINT,
@@ -282,12 +286,175 @@ def _search_tavily(query: str, *, max_results: int, timeout_seconds: int) -> lis
         "query": query,
         "max_results": max(1, min(max_results, 8)),
     }
+    search_depth = str(DU_SURF_TAVILY_SEARCH_DEPTH or "").strip()
+    if search_depth:
+        payload["search_depth"] = search_depth
+    if DU_SURF_INCLUDE_RAW_CONTENT:
+        payload["include_raw_content"] = True
     resp = requests.post(TAVILY_SEARCH_ENDPOINT, json=payload, timeout=timeout_seconds)
     if resp.status_code >= 400:
         raise RuntimeError(f"tavily http {resp.status_code}")
     data = resp.json() if resp.content else {}
     rows = data.get("results") or []
     return rows if isinstance(rows, list) else []
+
+
+def _strip_surf_noise(text: str) -> str:
+    s = str(text or "")
+    if not s:
+        return ""
+    # Tavily raw_content 常带 Markdown 图片、登录入口、推荐视频等页面壳。
+    s = re.sub(r"!\[[^\]]*]\([^)]*\)", " ", s)
+    s = re.sub(r"\[\]\([^)]*\)", " ", s)
+    s = re.sub(r"\[([^\]]{1,120})]\((?:https?://|/)[^)]+\)", r"\1", s)
+    s = re.sub(r"\[\]", " ", s)
+    s = re.sub(r"https?://\S+", " ", s)
+    s = re.sub(r"data:image/[^)\s]+", " ", s)
+    s = re.sub(r"(?:^|\s)(?:Image|图片)\s*\d+", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"(?:^|\s)Video thumbnail\s*\d*:?\d*", " ", s, flags=re.IGNORECASE)
+    s = re.sub(
+        r"(?:Related videos?|Log In|Sign Up|See more|View more|Facebook Watch|Share|Like|Comment|Comments)(?:\s|$)",
+        " ",
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(r"\b\d+(?:\.\d+)?[KkMm]?\s*(?:views?|reactions?|comments?|shares?)\b", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\d+(?:\.\d+)?\s*万\s*(?:浏览|播放|点赞|评论|转发)", " ", s)
+    s = re.sub(r"^\s*[A-Za-z][A-Za-z0-9 ._&'’/\-]{2,50}\s+\d+(?:\.\d+)?[KkMm]\s*:?\s*", " ", s)
+    s = re.sub(
+        r"\b[A-Za-z][A-Za-z0-9 ._&'’/\-]{2,50}\s*[·|｜]\s*"
+        r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"\s+\d{1,2},?\s*\d{0,4}.*$",
+        " ",
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(r"关注(?:小红书|微信|公众号|微博)?[:：]\s*\S{1,32}", " ", s)
+    s = re.sub(r"(?:搜索词|热门搜索|相关搜索)\s+(?:\*\s*)?[^。！？]{0,160}", " ", s)
+    s = re.sub(r"#{1,6}\s*", " ", s)
+    s = re.sub(r"^\s*(?:[:：·|｜()\[\]\-–—]\s*)+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _clean_title_text(value: Any) -> str:
+    text = _strip_surf_noise(str(value or ""))
+    text = re.sub(r"^[\s·|｜:：,，\-–—]+", " ", text)
+    text = re.sub(r"[\s·|｜:：,，\-–—]+$", " ", text)
+    return _clean_text(text, max_len=120)
+
+
+def _clean_search_content(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        from services.web_search_tools import _post_clean_text
+
+        text = _post_clean_text(text)
+    except Exception:
+        text = re.sub(r"\s+", " ", text).strip()
+    text = _strip_surf_noise(text)
+    return _clean_text(text, max_len=int(DU_SURF_MAX_CARD_CONTENT_CHARS))
+
+
+def _search_result_content(row: dict, snippet: str) -> tuple[str, str]:
+    content = _clean_search_content(row.get("content"))
+    if len(re.sub(r"\s+", "", content)) >= 80:
+        return content, "tavily_content"
+    raw = _clean_search_content(row.get("raw_content"))
+    if len(re.sub(r"\s+", "", raw)) >= 80:
+        return raw, "tavily_raw_content"
+    return snippet, "snippet_only"
+
+
+def _normalize_fetch_top_k(card_count: int) -> int:
+    try:
+        value = int(DU_SURF_FETCH_TOP_K)
+    except (TypeError, ValueError):
+        value = 0
+    return max(0, min(value, max(0, int(card_count or 0)), 5))
+
+
+def _fetch_page_content(url: str, *, timeout_seconds: int) -> dict:
+    result = {"status": "skipped", "title": "", "content": "", "content_chars": 0}
+    url = str(url or "").strip()
+    if not url:
+        return result
+    try:
+        resp = requests.get(
+            url,
+            timeout=timeout_seconds,
+            headers={"User-Agent": "du-gateway-surf/1.0"},
+        )
+        if resp.status_code in (401, 403, 429):
+            result["status"] = "blocked"
+            return result
+        if resp.status_code >= 400:
+            result["status"] = "error"
+            return result
+        content_type = (resp.headers.get("Content-Type") or "").lower()
+        if content_type and not any(x in content_type for x in ("text/html", "application/xhtml", "text/plain")):
+            result["status"] = "unsupported_content_type"
+            return result
+
+        from services.web_search_tools import _SimpleTextExtractor
+
+        parser = _SimpleTextExtractor()
+        parser.feed(resp.text or "")
+        result["title"] = _clean_title_text(parser.title())
+        text = _clean_search_content(parser.text())
+        result["content"] = text
+        result["content_chars"] = len(text)
+        result["status"] = "ok" if result["content"] else "empty"
+        return result
+    except requests.Timeout:
+        result["status"] = "timeout"
+        return result
+    except Exception as e:
+        logger.debug("du_surf page fetch failed url=%s err=%s", url[:120], e)
+        result["status"] = "error"
+        return result
+
+
+def _enrich_cards_with_page_content(cards: list[dict], *, timeout_seconds: int) -> dict:
+    stats = {"fetch_enabled": DU_SURF_FETCH_TOP_K > 0, "attempted": 0, "ok": 0}
+    fetch_top_k = _normalize_fetch_top_k(len(cards))
+    for idx, card in enumerate(cards or []):
+        snippet = _clean_text(card.get("snippet"), max_len=260)
+        current_content = _clean_text(card.get("content"), max_len=int(DU_SURF_MAX_CARD_CONTENT_CHARS))
+        if len(re.sub(r"\s+", "", current_content)) >= 80:
+            card["content"] = current_content
+            card["content_chars"] = len(current_content)
+            continue
+        if idx >= fetch_top_k:
+            card["content"] = current_content or snippet
+            card["content_status"] = card.get("content_status") or "snippet_only"
+            card["content_chars"] = len(str(card.get("content") or ""))
+            continue
+
+        stats["attempted"] += 1
+        page = _fetch_page_content(str(card.get("url") or ""), timeout_seconds=timeout_seconds)
+        status = str(page.get("status") or "error")
+        content = _clean_text(page.get("content"), max_len=int(DU_SURF_MAX_CARD_CONTENT_CHARS))
+        if content and len(re.sub(r"\s+", "", content)) >= 40:
+            card["content"] = content
+            card["content_status"] = "page_ok"
+            card["content_chars"] = int(page.get("content_chars") or len(content))
+            stats["ok"] += 1
+            if not card.get("title") and page.get("title"):
+                card["title"] = _clean_text(page.get("title"), max_len=120)
+            if len(re.sub(r"\s+", "", snippet)) < 40:
+                card["snippet"] = _clean_text(content, max_len=260)
+            flags = list(card.get("quality_flags") or [])
+            if len(re.sub(r"\s+", "", content)) >= 80 and "low_context" in flags:
+                card["quality_flags"] = [flag for flag in flags if flag != "low_context"]
+                card["score"] = _score_card(card)
+        else:
+            card["content"] = snippet
+            card["content_status"] = status or "snippet_only"
+            card["content_chars"] = len(snippet)
+    return stats
 
 
 def _build_cards(rows: list[dict], *, topic_info: dict, limit: int) -> tuple[list[dict], dict]:
@@ -298,9 +465,10 @@ def _build_cards(rows: list[dict], *, topic_info: dict, limit: int) -> tuple[lis
     for row in rows:
         if not isinstance(row, dict):
             continue
-        title = _clean_text(row.get("title"), max_len=120)
+        title = _clean_title_text(row.get("title"))
         url = str(row.get("url") or "").strip()
         snippet = _clean_text(row.get("content") or row.get("snippet"), max_len=260)
+        content, content_status = _search_result_content(row, snippet)
         key = (url.split("?")[0].rstrip("/") if url else re.sub(r"\W+", "", title.lower()))[:220]
         if not key:
             continue
@@ -319,6 +487,9 @@ def _build_cards(rows: list[dict], *, topic_info: dict, limit: int) -> tuple[lis
             "title": title,
             "url": url,
             "snippet": snippet,
+            "content": content,
+            "content_status": content_status,
+            "content_chars": len(content),
             "source": "tavily_public_search",
             "domain": _domain(url),
             "published_at": str(row.get("published_date") or "").strip(),
@@ -394,12 +565,18 @@ def du_surf(
         return payload
 
     cards, skipped = _build_cards(rows, topic_info=topic_info, limit=max_cards)
+    fetch_stats = _enrich_cards_with_page_content(cards, timeout_seconds=timeout_seconds) if cards else {
+        "fetch_enabled": DU_SURF_FETCH_TOP_K > 0,
+        "attempted": 0,
+        "ok": 0,
+    }
     payload.update(
         {
             "ok": bool(cards),
             "count": len(cards),
             "cards": cards,
             "skipped": skipped,
+            "content_fetch": fetch_stats,
         }
     )
     if not cards:

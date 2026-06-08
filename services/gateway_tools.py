@@ -217,7 +217,8 @@ def get_gateway_du_surf_tools() -> List[dict]:
                 "name": "du_surf",
                 "description": (
                     "随机冲浪工具：从固定兴趣池或用户给的话题里抽一个话题，轻量搜索公开网页摘要，"
-                    "返回 1-5 张可聊素材卡片。它不是 web_search，不用于精确事实核验；"
+                    "返回 1-5 张可聊素材卡片，每张卡片包含 title/url/snippet/content/why_fun；"
+                    "content 是抓取清洗后的网页正文片段，抓不到时回退为搜索摘要。它不是 web_search，不用于精确事实核验；"
                     "只有想找点有意思的东西、冷场开话题、模拟随便上网冲浪时才调用。"
                 ),
                 "parameters": {

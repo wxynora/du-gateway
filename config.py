@@ -222,6 +222,10 @@ DU_SURF_ENABLED = os.environ.get("DU_SURF_ENABLED", "1").strip().lower() in ("1"
 DU_SURF_TIMEOUT_SECONDS = int(os.environ.get("DU_SURF_TIMEOUT_SECONDS", "8"))
 DU_SURF_MAX_CARDS = int(os.environ.get("DU_SURF_MAX_CARDS", "3"))
 DU_SURF_CACHE_TTL_SECONDS = int(os.environ.get("DU_SURF_CACHE_TTL_SECONDS", "300"))
+DU_SURF_FETCH_TOP_K = int(os.environ.get("DU_SURF_FETCH_TOP_K", "2"))
+DU_SURF_MAX_CARD_CONTENT_CHARS = int(os.environ.get("DU_SURF_MAX_CARD_CONTENT_CHARS", "700"))
+DU_SURF_TAVILY_SEARCH_DEPTH = os.environ.get("DU_SURF_TAVILY_SEARCH_DEPTH", "advanced").strip()
+DU_SURF_INCLUDE_RAW_CONTENT = os.environ.get("DU_SURF_INCLUDE_RAW_CONTENT", "1").strip().lower() in ("1", "true", "yes")
 
 # 高德 Web 服务 Key（逆地理：经纬度→地址）；不配则只存经纬度、注入时只显示坐标
 AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "").strip()
