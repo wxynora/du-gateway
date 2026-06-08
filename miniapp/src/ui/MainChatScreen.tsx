@@ -1679,11 +1679,11 @@ export function MainChatScreen({
     : "flex h-10 w-[10.5rem] max-w-full min-w-0 flex-col items-center justify-center rounded-full border border-gray-100/80 bg-white/85 px-3 text-center shadow-[0_8px_20px_rgba(15,23,42,0.06)] backdrop-blur-xl";
   const chatHeaderTitleFontSize = Math.max(14, Math.min(16, chatTitleFontSize - 2));
   const chatFooterClass = hasCustomChatBackground
-    ? "bg-white/25 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl"
-    : "bg-white";
+    ? "overflow-hidden backdrop-blur-xl"
+    : "overflow-hidden";
   const chatFooterFeatherClass = hasCustomChatBackground
-    ? "bg-gradient-to-b from-transparent via-white/10 to-white/25 backdrop-blur-[1px]"
-    : "bg-gradient-to-b from-transparent via-white/75 to-white";
+    ? "inset-0 bg-[linear-gradient(to_bottom,rgba(255,255,255,0)_0%,rgba(255,255,255,0.16)_26%,rgba(255,255,255,0.30)_58%,rgba(255,255,255,0.30)_100%)] backdrop-blur-[3px]"
+    : "inset-0 bg-[linear-gradient(to_bottom,rgba(248,249,250,0)_0%,rgba(255,255,255,0.86)_28%,rgba(255,255,255,1)_62%,rgba(255,255,255,1)_100%)]";
   const chatInputShellClass = hasCustomChatBackground
     ? "border border-white/25 bg-white/45 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl"
     : "bg-[#F4F5F7]";
@@ -1998,8 +1998,8 @@ export function MainChatScreen({
       </div>
 
       <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
-        <div className={`pointer-events-none absolute -top-9 left-0 right-0 h-9 ${chatFooterFeatherClass}`} aria-hidden="true" />
-        <div className={`overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
+        <div className={`pointer-events-none absolute ${chatFooterFeatherClass}`} aria-hidden="true" />
+        <div className={`relative z-10 overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
           <div className="flex space-x-5 px-6 pb-2 pt-5">
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
@@ -2019,7 +2019,7 @@ export function MainChatScreen({
               />
           </div>
         </div>
-        <div className="flex items-end space-x-2 px-3 py-2.5">
+        <div className="relative z-10 flex items-end space-x-2 px-3 py-2.5">
           <button
             className={`rounded-full p-2.5 text-gray-500 transition-colors ${plusOpen ? "bg-gray-100 text-gray-800" : "active:bg-gray-50"}`}
             onClick={() => setPlusOpen((v) => !v)}

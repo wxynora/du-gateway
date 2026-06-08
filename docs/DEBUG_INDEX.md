@@ -218,7 +218,7 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 当前状态（2026-06-08 聊天自定义背景全屏）：
 - 已完成：`miniapp/src/ui/MainChatScreen.tsx` 参考一起听页面，把聊天页根容器改为 `fixed inset-0 h-[100lvh]`，自定义背景图拆成独立 `fixed inset-0` 背景层，不再受父容器或底部导航布局限制；有背景图时顶部不再是一整条白栏，也不再是大块胶囊，改成左返回圆球、右搜索圆球、中间居中标题和在线状态，顶部位置上移到 `safe-area + 10px`；搜索框、底部输入区和加号工具栏降低白色遮罩，未设置背景图时保留原白底样式。
 - 已完成：顶部中间胶囊的视觉层级调整为“名字大、在线/正在输入中小”，避免状态文字抢过会话名。
-- 已完成：底部输入区去掉硬边框，改为顶部渐隐羽化层；自定义背景和普通白底分别使用不同透明度，避免输入框边缘像硬切一刀。
+- 已完成：底部输入区去掉硬边框，改为 footer 内部从顶部向下的渐隐羽化层；自定义背景和普通白底分别使用不同透明度，避免输入框上边缘像硬切一刀。
 - 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npx vite build --outDir /tmp/du-gateway-miniapp-chat-header-split-build --emptyOutDir true`、`npm run build:android` 通过；已确认新样式进入 `miniapp_static` bundle。
 - 未完成 / 下次继续：本轮只改聊天页背景视觉层，不改聊天发送、群聊、ChatStore/outbox 或 Android 原生壳逻辑；如果手机端加载远端 `https://duxy-home.com/miniapp/`，还需要部署更新后的 `miniapp_static` 才能看到这版前端。
 
