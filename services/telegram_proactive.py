@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
@@ -43,7 +44,7 @@ from services.telegram_bot import (
 from services.entry_style_prompt import entry_style_for_channel
 from services import conversation_followup as followup_service
 from services import wakeup_queue
-from services.conversation_followup import FOLLOWUP_TICK_SECONDS
+from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversation_followups
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
 
 logger = get_logger(__name__)
@@ -1678,5 +1679,68 @@ async def run_scheduler_loop_async():
 
 
 def run_scheduler_loop():
-    """常驻循环：asyncio 协程调度，统一通过 wakeup_queue 执行唤醒。"""
-    asyncio.run(run_scheduler_loop_async())
+    """常驻循环：按各自旧逻辑直接执行；wakeup_queue 只保留为观测/管理表。"""
+    schedule_enabled = bool(MINIAPP_SCHEDULE_RUNTIME_ENABLED)
+    proactive_enabled = bool(TELEGRAM_PROACTIVE_ENABLED)
+    if not proactive_enabled and not schedule_enabled:
+        logger.warning("主动发消息和日历闹钟调度均未开启，直接退出")
+        return
+    interval_min = max(1, int(TELEGRAM_PROACTIVE_INTERVAL_MINUTES or 30))
+    random_min = max(1, int(TELEGRAM_PROACTIVE_RANDOM_MIN_MINUTES or 35))
+    random_max = max(random_min, int(TELEGRAM_PROACTIVE_RANDOM_MAX_MINUTES or random_min))
+    schedule_interval_s = max(30, int(MINIAPP_SCHEDULE_RUNTIME_INTERVAL_SECONDS or 60))
+    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    logger.info(
+        "主动调度进程启动 proactive_enabled=%s legacy_interval_min=%s random_window=%s-%smin schedule_enabled=%s schedule_interval_s=%s target_user_id=%s queue_execution=disabled",
+        proactive_enabled,
+        interval_min,
+        random_min,
+        random_max,
+        schedule_enabled,
+        schedule_interval_s,
+        uid,
+    )
+    first_delay = _next_proactive_delay_seconds()
+    next_main_at = time.time() + first_delay
+    logger.info("下一次随机主动唤醒 scheduled_in=%.1fmin", first_delay / 60.0)
+    next_schedule_at = 0.0
+    next_followup_at = 0.0
+    next_du_daily_at = 0.0
+    next_hard_trigger_at = 0.0
+    while True:
+        now_ts = time.time()
+        try:
+            if schedule_enabled and now_ts >= next_schedule_at:
+                sched = schedule_tick(uid)
+                logger.info("日历闹钟 tick result=%s", sched)
+                next_schedule_at = now_ts + schedule_interval_s
+            if proactive_enabled and now_ts >= next_followup_at:
+                followup = tick_conversation_followups()
+                logger.info("延迟续话 tick result=%s", followup)
+                next_followup_at = now_ts + max(15, int(FOLLOWUP_TICK_SECONDS or 60))
+            if proactive_enabled and now_ts >= next_hard_trigger_at:
+                from services.proactive_trigger_engine import tick_proactive_triggers
+
+                hard_trigger = tick_proactive_triggers(uid)
+                logger.info("主动硬触发 tick result=%s", hard_trigger)
+                if hard_trigger.get("sent"):
+                    post_delay = _next_post_hard_trigger_delay_seconds()
+                    next_main_at = now_ts + post_delay
+                    logger.info(
+                        "硬触发已发出，下一次随机主动唤醒重排 scheduled_in=%.1fmin",
+                        post_delay / 60.0,
+                    )
+                next_hard_trigger_at = now_ts + 60
+            if proactive_enabled and now_ts >= next_du_daily_at:
+                daily = du_daily_sleep_tick(uid)
+                logger.info("渡的日常入睡收口 tick result=%s", daily)
+                next_du_daily_at = now_ts + 300
+            if proactive_enabled and now_ts >= next_main_at:
+                result = proactive_tick(uid)
+                logger.info("主动发消息 tick result=%s", result)
+                next_delay = _next_proactive_delay_seconds()
+                next_main_at = now_ts + next_delay
+                logger.info("下一次随机主动唤醒 scheduled_in=%.1fmin", next_delay / 60.0)
+        except Exception as e:
+            logger.exception("主动发消息 tick 异常: %s", e)
+        time.sleep(15)
