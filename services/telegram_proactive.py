@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import random
 import re
-import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
@@ -41,7 +41,9 @@ from services.telegram_bot import (
     send_rich_message,
 )
 from services.entry_style_prompt import entry_style_for_channel
-from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversation_followups
+from services import conversation_followup as followup_service
+from services import wakeup_queue
+from services.conversation_followup import FOLLOWUP_TICK_SECONDS
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
 
 logger = get_logger(__name__)
@@ -942,6 +944,473 @@ def schedule_tick(target_user_id: int = 0) -> dict:
     }
 
 
+def _iso_after_seconds(seconds: int) -> str:
+    now_dt = parse_iso_to_beijing(now_beijing_iso())
+    if not now_dt:
+        return now_beijing_iso()
+    return (now_dt + timedelta(seconds=max(0, int(seconds or 0)))).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+
+
+def enqueue_due_schedule_wakeups(target_user_id: int = 0) -> dict:
+    uid = int(target_user_id or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if uid <= 0:
+        return {"ok": False, "error": "missing_target_user_id", "enqueued": 0}
+    now_iso = now_beijing_iso()
+    now_dt = parse_iso_to_beijing(now_iso)
+    if not now_dt:
+        return {"ok": False, "error": "time_parse_failed", "enqueued": 0}
+
+    items = r2_store.get_schedule_items() or []
+    fired = r2_store.get_schedule_fired_keys()
+    changed = False
+    disabled_once = 0
+    deleted_once_expired = 0
+    enqueued = 0
+
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        rep0 = str(it.get("repeat") or "once").strip().lower() or "once"
+        if rep0 == "once" and not bool(it.get("enabled", True)):
+            disabled_at = parse_iso_to_beijing(str(it.get("disabled_at") or "").strip())
+            if disabled_at and (now_dt - disabled_at).total_seconds() >= 3600:
+                it["_deleted"] = True
+                changed = True
+                deleted_once_expired += 1
+                continue
+        if rep0 == "once" and bool(it.get("enabled", True)):
+            target_dt = _schedule_target_dt_for_now(it, now_dt)
+            grace = _schedule_due_grace_seconds()
+            if target_dt and (now_dt - target_dt).total_seconds() > grace:
+                logger.info(
+                    "一次性闹钟已错过触发窗口，自动禁用 id=%s title=%s target=%s now=%s grace_s=%s",
+                    str(it.get("id") or ""),
+                    str(it.get("title") or ""),
+                    target_dt.isoformat(),
+                    now_iso,
+                    grace,
+                )
+                it["enabled"] = False
+                it["disabled_at"] = now_iso
+                changed = True
+                disabled_once += 1
+                continue
+        if not _is_schedule_due_now(it, now_dt):
+            continue
+        occ_key = _schedule_due_occurrence_key(it, now_dt)
+        if occ_key in fired or _item_already_fired_for_occurrence(it, occ_key):
+            continue
+
+        title = str(it.get("title") or "提醒").strip() or "提醒"
+        note = str(it.get("note") or "").strip()
+        rep = str(it.get("repeat") or "once").strip().lower() or "once"
+        created_by = str(it.get("created_by") or "wife").strip().lower() or "wife"
+        target_role = str(it.get("target_role") or "wife").strip().lower() or "wife"
+        rep_label = {"once": "一次性", "daily": "每天", "weekly": "每周"}.get(rep, rep)
+        is_calendar_event = note.startswith("由渡创建系统行程")
+        wakeup_kind = "calendar_event" if is_calendar_event else "system_alarm"
+        reminder_name = "日历提醒" if is_calendar_event else "闹钟"
+        if target_role == "du":
+            owner_prefix = "你给自己定的"
+        elif created_by == "du":
+            owner_prefix = "你给老婆定的"
+        else:
+            owner_prefix = "老婆之前设的"
+        reminder_prompt = (
+            f"{owner_prefix}「{title}」{reminder_name}，现在到点了。"
+            f"类型：{rep_label}；时间：{now_dt.strftime('%Y-%m-%d %H:%M')}。"
+            f"{('备注：' + note + '。') if note else ''}"
+            "请像平时聊天那样自然回复；如果有多句，请用换行分段。"
+        )
+        channels = _available_schedule_channels()
+        generation_channel = channels[0] if channels else "qq"
+        payload = {
+            "item_id": str(it.get("id") or "").strip(),
+            "occurrence_key": occ_key,
+            "repeat": rep,
+            "title": title,
+            "prompt": reminder_prompt,
+            "channels": channels,
+            "generation_channel": generation_channel,
+            "wakeup_kind": wakeup_kind,
+            "target_user_id": uid,
+        }
+        item = wakeup_queue.make_item(
+            kind=wakeup_queue.TYPE_SCHEDULE,
+            due_at=now_iso,
+            dedupe_key=f"schedule:{occ_key}",
+            payload=payload,
+            priority=20,
+            window_id=f"tg_{uid}",
+            channel=generation_channel,
+            target=str(uid),
+        )
+        inserted, _item_id = wakeup_queue.upsert_pending(item)
+        if inserted:
+            enqueued += 1
+            logger.info("闹钟已入唤醒队列 uid=%s item_id=%s occ_key=%s", uid, payload["item_id"], occ_key)
+
+    if changed:
+        kept = [x for x in items if isinstance(x, dict) and not bool(x.get("_deleted"))]
+        r2_store.save_schedule_items(kept)
+    return {
+        "ok": True,
+        "checked": len(items),
+        "enqueued": enqueued,
+        "disabled_once": disabled_once,
+        "deleted_once_expired": deleted_once_expired,
+        "now": now_iso,
+    }
+
+
+def enqueue_due_followup_wakeups() -> dict:
+    now_iso = now_beijing_iso()
+    now_dt = parse_iso_to_beijing(now_iso)
+    if not now_dt:
+        return {"ok": False, "error": "time_parse_failed", "enqueued": 0}
+    items = r2_store.get_conversation_followups() or []
+    if not items:
+        return {"ok": True, "checked": 0, "enqueued": 0, "pending": 0, "cancelled": 0, "now": now_iso}
+    changed = False
+    enqueued = 0
+    cancelled = 0
+    pending = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status not in ("", followup_service.FOLLOWUP_STATUS_PENDING):
+            continue
+        trigger_dt = parse_iso_to_beijing(str(item.get("trigger_at") or "").strip())
+        if not trigger_dt:
+            item["status"] = followup_service.FOLLOWUP_STATUS_ERROR
+            item["last_error"] = "invalid_trigger_at"
+            changed = True
+            continue
+        if trigger_dt > now_dt:
+            pending += 1
+            continue
+        window_id = str(item.get("context_window_id") or "").strip()
+        created_at = str(item.get("created_at") or "").strip()
+        if not window_id or not created_at:
+            item["status"] = followup_service.FOLLOWUP_STATUS_ERROR
+            item["last_error"] = "missing_context"
+            changed = True
+            continue
+        if followup_service._has_new_user_activity(window_id, created_at):
+            item["status"] = followup_service.FOLLOWUP_STATUS_CANCELLED
+            item["cancelled_at"] = now_iso
+            item["cancel_reason"] = "user_replied"
+            cancelled += 1
+            changed = True
+            continue
+        if int(item.get("attempts") or 0) >= 3:
+            item["status"] = followup_service.FOLLOWUP_STATUS_EXPIRED
+            item["expired_at"] = now_iso
+            item["last_error"] = str(item.get("last_error") or "max_attempts_reached")
+            changed = True
+            continue
+        followup_id = str(item.get("id") or "").strip()
+        if not followup_id:
+            item["status"] = followup_service.FOLLOWUP_STATUS_ERROR
+            item["last_error"] = "missing_id"
+            changed = True
+            continue
+        queue_item = wakeup_queue.make_item(
+            kind=wakeup_queue.TYPE_FOLLOWUP,
+            due_at=str(item.get("trigger_at") or now_iso),
+            dedupe_key=f"followup:{followup_id}",
+            payload={"followup_id": followup_id},
+            priority=10,
+            window_id=window_id,
+            channel=str(item.get("reply_channel") or "sumitalk"),
+            target=str(item.get("reply_target") or "").strip(),
+        )
+        inserted, _item_id = wakeup_queue.upsert_pending(queue_item)
+        if inserted:
+            enqueued += 1
+            logger.info("延迟续话已入唤醒队列 followup_id=%s window_id=%s", followup_id, window_id)
+    if changed:
+        keep = []
+        cutoff = now_dt - timedelta(days=3)
+        for item in items:
+            ts = parse_iso_to_beijing(str(item.get("created_at") or "").strip())
+            if ts and ts < cutoff and str(item.get("status") or "").strip().lower() in {
+                followup_service.FOLLOWUP_STATUS_SENT,
+                followup_service.FOLLOWUP_STATUS_CANCELLED,
+                followup_service.FOLLOWUP_STATUS_EXPIRED,
+            }:
+                continue
+            keep.append(item)
+        r2_store.save_conversation_followups(keep)
+    return {"ok": True, "checked": len(items), "enqueued": enqueued, "pending": pending, "cancelled": cancelled, "now": now_iso}
+
+
+def enqueue_due_hard_trigger_wakeups(target_user_id: int = 0) -> dict:
+    uid = int(target_user_id or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if uid <= 0:
+        return {"ok": False, "error": "missing_target_user_id", "enqueued": 0}
+    try:
+        from services.proactive_trigger_engine import collect_due_proactive_trigger_events
+
+        result = collect_due_proactive_trigger_events(uid)
+    except Exception as e:
+        logger.warning("主动硬触发收集异常 error=%s", e, exc_info=True)
+        return {"ok": False, "error": str(e), "enqueued": 0}
+    events = [x for x in (result.get("events") or []) if isinstance(x, dict)] if isinstance(result, dict) else []
+    enqueued = 0
+    for event in events[:1]:
+        due_at = str(event.get("event_at") or now_beijing_iso()).strip() or now_beijing_iso()
+        queue_item = wakeup_queue.make_item(
+            kind=wakeup_queue.TYPE_HARD_TRIGGER,
+            due_at=due_at,
+            dedupe_key=f"hard_trigger:{str(event.get('dedupe_key') or '').strip()}",
+            payload=event,
+            priority=15,
+            window_id=str(event.get("window_id") or f"tg_{uid}"),
+            channel="qq",
+            target=str(event.get("device_id") or "").strip(),
+        )
+        inserted, _item_id = wakeup_queue.upsert_pending(queue_item)
+        if inserted:
+            enqueued += 1
+            logger.info("主动硬触发已入唤醒队列 type=%s dedupe=%s", event.get("trigger_type"), event.get("dedupe_key"))
+    return {"ok": bool(result.get("ok", True)) if isinstance(result, dict) else True, "enqueued": enqueued, "events": len(events), "skip_reason": (result or {}).get("skip_reason") if isinstance(result, dict) else ""}
+
+
+def enqueue_next_random_proactive_wakeup(target_user_id: int = 0, delay_seconds: int | None = None, reason: str = "") -> dict:
+    uid = int(target_user_id or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    if uid <= 0:
+        return {"ok": False, "error": "missing_target_user_id", "enqueued": 0}
+    if wakeup_queue.has_active_kind(wakeup_queue.TYPE_RANDOM_PROACTIVE):
+        return {"ok": True, "enqueued": 0, "skip_reason": "already_active"}
+    delay = int(delay_seconds if delay_seconds is not None else _next_proactive_delay_seconds())
+    due_at = _iso_after_seconds(delay)
+    queue_item = wakeup_queue.make_item(
+        kind=wakeup_queue.TYPE_RANDOM_PROACTIVE,
+        due_at=due_at,
+        dedupe_key=f"random_proactive:{uid}:{due_at}",
+        payload={"target_user_id": uid, "reason": str(reason or "").strip()},
+        priority=50,
+        window_id=f"tg_{uid}",
+        channel=_preferred_proactive_channel(_available_channels()),
+        target=str(uid),
+    )
+    inserted, _item_id = wakeup_queue.upsert_pending(queue_item)
+    if inserted:
+        logger.info("下一次随机主动唤醒已入队 scheduled_in=%.1fmin due_at=%s", delay / 60.0, due_at)
+    return {"ok": True, "enqueued": 1 if inserted else 0, "due_at": due_at, "delay_seconds": delay}
+
+
+def _update_schedule_after_sent(item_id: str, occurrence_key: str, repeat: str, now_iso: str) -> dict:
+    items = r2_store.get_schedule_items() or []
+    changed = False
+    disabled_once = False
+    for it in items:
+        if str(it.get("id") or "").strip() != str(item_id or "").strip():
+            continue
+        it["last_fired_at"] = now_iso
+        it["last_fired_occurrence_key"] = occurrence_key
+        changed = True
+        if str(repeat or "").strip().lower() == "once" and bool(it.get("enabled", True)):
+            it["enabled"] = False
+            it["disabled_at"] = now_iso
+            disabled_once = True
+        break
+    if changed:
+        r2_store.save_schedule_items(items)
+    return {"changed": changed, "disabled_once": disabled_once}
+
+
+def _dispatch_schedule_wakeup(item: dict, target_user_id: int) -> dict:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    occ_key = str(payload.get("occurrence_key") or "").strip()
+    if not occ_key:
+        return {"ok": False, "error": "missing_occurrence_key"}
+    if occ_key in r2_store.get_schedule_fired_keys():
+        return {"ok": True, "cancelled": True, "reason": "already_fired"}
+    uid = int(payload.get("target_user_id") or target_user_id or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    prompt = str(payload.get("prompt") or "").strip()
+    channels = [str(x or "").strip() for x in (payload.get("channels") or []) if str(x or "").strip()] or _available_schedule_channels()
+    generation_channel = str(payload.get("generation_channel") or (channels[0] if channels else "qq")).strip() or "qq"
+    wakeup_kind = str(payload.get("wakeup_kind") or "system_alarm").strip() or "system_alarm"
+    reply_text = _generate_schedule_reply(
+        window_id=str(item.get("window_id") or f"tg_{uid}"),
+        user_id=uid,
+        prompt=prompt,
+        preferred_channel=generation_channel,
+        wakeup_kind=wakeup_kind,
+    )
+    if not reply_text:
+        return {"ok": False, "error": "empty_gateway_reply"}
+    text_to_send = _sanitize_reply_for_telegram(reply_text).strip()
+    if not text_to_send:
+        return {"ok": False, "error": "empty_after_sanitize"}
+    sent_channel = ""
+    for channel in channels:
+        if _dispatch_send(channel, text_to_send, target_user_id=uid):
+            sent_channel = channel
+            break
+    if not sent_channel:
+        return {"ok": False, "error": "dispatch_failed", "preview": text_to_send[:120]}
+    r2_store.add_schedule_fired_key(occ_key)
+    update = _update_schedule_after_sent(
+        item_id=str(payload.get("item_id") or ""),
+        occurrence_key=occ_key,
+        repeat=str(payload.get("repeat") or ""),
+        now_iso=now_beijing_iso(),
+    )
+    return {"ok": True, "sent": True, "channel": sent_channel, "preview": text_to_send[:120], **update}
+
+
+def _dispatch_followup_wakeup(item: dict) -> dict:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    followup_id = str(payload.get("followup_id") or "").strip()
+    if not followup_id:
+        return {"ok": False, "error": "missing_followup_id"}
+    now_iso = now_beijing_iso()
+    now_dt = parse_iso_to_beijing(now_iso)
+    items = r2_store.get_conversation_followups() or []
+    target = None
+    for row in items:
+        if isinstance(row, dict) and str(row.get("id") or "").strip() == followup_id:
+            target = row
+            break
+    if not isinstance(target, dict):
+        return {"ok": True, "cancelled": True, "reason": "followup_missing"}
+    status = str(target.get("status") or "").strip().lower()
+    if status not in ("", followup_service.FOLLOWUP_STATUS_PENDING):
+        return {"ok": True, "cancelled": True, "reason": f"followup_status_{status or 'unknown'}"}
+    window_id = str(target.get("context_window_id") or "").strip()
+    created_at = str(target.get("created_at") or "").strip()
+    if not window_id or not created_at:
+        target["status"] = followup_service.FOLLOWUP_STATUS_ERROR
+        target["last_error"] = "missing_context"
+        r2_store.save_conversation_followups(items)
+        return {"ok": False, "error": "missing_context"}
+    if followup_service._has_new_user_activity(window_id, created_at):
+        target["status"] = followup_service.FOLLOWUP_STATUS_CANCELLED
+        target["cancelled_at"] = now_iso
+        target["cancel_reason"] = "user_replied"
+        r2_store.save_conversation_followups(items)
+        return {"ok": True, "cancelled": True, "reason": "user_replied"}
+    attempts = int(target.get("attempts") or 0)
+    if attempts >= 3:
+        target["status"] = followup_service.FOLLOWUP_STATUS_EXPIRED
+        target["expired_at"] = now_iso
+        target["last_error"] = str(target.get("last_error") or "max_attempts_reached")
+        r2_store.save_conversation_followups(items)
+        return {"ok": False, "error": "max_attempts_reached", "cancelled": True}
+    text = followup_service._call_gateway_followup(
+        window_id=window_id,
+        channel=str(target.get("reply_channel") or "sumitalk"),
+        reason=str(target.get("reason") or "").strip(),
+        chain_id=str(target.get("chain_id") or "").strip(),
+        followup_index=int(target.get("followup_index") or 1),
+        root_created_at=str(target.get("root_created_at") or target.get("created_at") or "").strip(),
+    )
+    target["attempts"] = attempts + 1
+    target["last_attempt_at"] = now_iso
+    if not text:
+        target["last_error"] = "empty_gateway_reply"
+        r2_store.save_conversation_followups(items)
+        return {"ok": False, "error": "empty_gateway_reply"}
+    ok = followup_service._dispatch_followup(
+        channel=str(target.get("reply_channel") or "sumitalk"),
+        target=str(target.get("reply_target") or "").strip(),
+        text=text,
+        created_at=now_iso,
+    )
+    if ok:
+        target["status"] = followup_service.FOLLOWUP_STATUS_SENT
+        target["sent_at"] = now_iso
+        target["sent_preview"] = text[:120]
+    else:
+        target["last_error"] = "dispatch_failed"
+    if now_dt:
+        cutoff = now_dt - timedelta(days=3)
+        keep = []
+        for row in items:
+            ts = parse_iso_to_beijing(str((row or {}).get("created_at") or "").strip()) if isinstance(row, dict) else None
+            if ts and ts < cutoff and str((row or {}).get("status") or "").strip().lower() in {
+                followup_service.FOLLOWUP_STATUS_SENT,
+                followup_service.FOLLOWUP_STATUS_CANCELLED,
+                followup_service.FOLLOWUP_STATUS_EXPIRED,
+            }:
+                continue
+            keep.append(row)
+        items = keep
+    r2_store.save_conversation_followups(items)
+    return {"ok": bool(ok), "sent": bool(ok), "error": "" if ok else "dispatch_failed", "preview": (text or "")[:120]}
+
+
+def _dispatch_hard_trigger_wakeup(item: dict, target_user_id: int) -> dict:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    try:
+        from services.conversation_followup import send_proactive_trigger_wakeup
+        from services.proactive_trigger_engine import mark_proactive_trigger_event_fired
+    except Exception as e:
+        logger.warning("队列主动硬触发导入异常 error=%s", e, exc_info=True)
+        return {"ok": False, "error": str(e)}
+    try:
+        result = send_proactive_trigger_wakeup(
+            window_id=str(payload.get("window_id") or item.get("window_id") or f"tg_{int(target_user_id or 0)}"),
+            target=str(payload.get("device_id") or item.get("target") or "").strip(),
+            event_text=str(payload.get("event_text") or "").strip(),
+            created_at=str(payload.get("event_at") or now_beijing_iso()).strip(),
+        )
+    except Exception as e:
+        logger.warning("队列主动硬触发执行异常 error=%s", e, exc_info=True)
+        result = {"ok": False, "error": str(e)}
+    if not isinstance(result, dict):
+        result = {"ok": False, "error": "invalid_result"}
+    fired_marked = mark_proactive_trigger_event_fired(payload, result)
+    return {"ok": bool(result.get("ok")), "sent": bool(result.get("ok")), "fired_marked": fired_marked, "no_retry": fired_marked, **result}
+
+
+def _dispatch_random_proactive_wakeup(item: dict, target_user_id: int) -> dict:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    uid = int(payload.get("target_user_id") or target_user_id or TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
+    return proactive_tick(uid)
+
+
+def _dispatch_wakeup_queue_item(item: dict, target_user_id: int = 0) -> dict:
+    kind = str((item or {}).get("kind") or "").strip()
+    if kind == wakeup_queue.TYPE_SCHEDULE:
+        return _dispatch_schedule_wakeup(item, target_user_id)
+    if kind == wakeup_queue.TYPE_FOLLOWUP:
+        return _dispatch_followup_wakeup(item)
+    if kind == wakeup_queue.TYPE_HARD_TRIGGER:
+        return _dispatch_hard_trigger_wakeup(item, target_user_id)
+    if kind == wakeup_queue.TYPE_RANDOM_PROACTIVE:
+        return _dispatch_random_proactive_wakeup(item, target_user_id)
+    return {"ok": False, "error": f"unknown_wakeup_kind:{kind}"}
+
+
+def _finish_wakeup_queue_item(item: dict, result: dict, target_user_id: int = 0) -> None:
+    item_id = str((item or {}).get("id") or "").strip()
+    kind = str((item or {}).get("kind") or "").strip()
+    if not item_id:
+        return
+    if result.get("cancelled"):
+        wakeup_queue.mark_cancelled(item_id, str(result.get("reason") or result.get("error") or "cancelled"), result=result)
+    elif result.get("ok"):
+        wakeup_queue.mark_sent(item_id, result=result)
+    elif result.get("no_retry"):
+        wakeup_queue.mark_failed_or_retry(item_id, str(result.get("error") or "dispatch_failed"), retry_after_seconds=60, max_attempts=0, result=result)
+    else:
+        wakeup_queue.mark_failed_or_retry(item_id, str(result.get("error") or "dispatch_failed"), retry_after_seconds=60, max_attempts=3, result=result)
+    if kind == wakeup_queue.TYPE_RANDOM_PROACTIVE:
+        enqueue_next_random_proactive_wakeup(target_user_id, reason="after_random_tick")
+    elif kind == wakeup_queue.TYPE_HARD_TRIGGER and result.get("sent"):
+        wakeup_queue.cancel_active_kind(wakeup_queue.TYPE_RANDOM_PROACTIVE, reason="hard_trigger_sent")
+        enqueue_next_random_proactive_wakeup(
+            target_user_id,
+            delay_seconds=_next_post_hard_trigger_delay_seconds(),
+            reason="after_hard_trigger",
+        )
+
+
 def _send_via_wechat(text: str, split: bool = True) -> bool:
     """通过微信 connector 的 /push 端点主动发消息。"""
     url = WECHAT_PROACTIVE_PUSH_URL
@@ -1131,8 +1600,45 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     return out
 
 
-def run_scheduler_loop():
-    """常驻循环：统一跑主动消息、延迟续话、硬触发和日历闹钟。"""
+async def _periodic_to_thread(name: str, interval_seconds: int, func, *args):
+    interval = max(5, int(interval_seconds or 60))
+    while True:
+        try:
+            result = await asyncio.to_thread(func, *args)
+            logger.info("%s result=%s", name, result)
+        except Exception as e:
+            logger.exception("%s 异常: %s", name, e)
+        await asyncio.sleep(interval)
+
+
+async def _du_daily_sleep_loop(uid: int):
+    while True:
+        try:
+            result = await asyncio.to_thread(du_daily_sleep_tick, uid)
+            logger.info("渡的日常入睡收口 tick result=%s", result)
+        except Exception as e:
+            logger.exception("渡的日常入睡收口 tick 异常: %s", e)
+        await asyncio.sleep(300)
+
+
+async def _wakeup_queue_dispatch_loop(uid: int):
+    while True:
+        try:
+            claimed = await asyncio.to_thread(wakeup_queue.claim_due, 1, "telegram_proactive_async")
+            if not claimed:
+                await asyncio.sleep(5)
+                continue
+            for item in claimed:
+                result = await asyncio.to_thread(_dispatch_wakeup_queue_item, item, uid)
+                logger.info("唤醒队列执行 kind=%s id=%s result=%s", item.get("kind"), item.get("id"), result)
+                await asyncio.to_thread(_finish_wakeup_queue_item, item, result if isinstance(result, dict) else {"ok": False, "error": "invalid_result"}, uid)
+        except Exception as e:
+            logger.exception("唤醒队列 dispatcher 异常: %s", e)
+            await asyncio.sleep(5)
+
+
+async def run_scheduler_loop_async():
+    """Async coordinator: producers fill wakeup_queue; dispatcher only consumes due queue items."""
     schedule_enabled = bool(MINIAPP_SCHEDULE_RUNTIME_ENABLED)
     proactive_enabled = bool(TELEGRAM_PROACTIVE_ENABLED)
     if not proactive_enabled and not schedule_enabled:
@@ -1153,47 +1659,24 @@ def run_scheduler_loop():
         schedule_interval_s,
         uid,
     )
-    first_delay = _next_proactive_delay_seconds()
-    next_main_at = time.time() + first_delay
-    logger.info("下一次随机主动唤醒 scheduled_in=%.1fmin", first_delay / 60.0)
-    next_schedule_at = 0.0
-    next_followup_at = 0.0
-    next_du_daily_at = 0.0
-    next_hard_trigger_at = 0.0
-    while True:
-        now_ts = time.time()
-        try:
-            if schedule_enabled and now_ts >= next_schedule_at:
-                sched = schedule_tick(uid)
-                logger.info("日历闹钟 tick result=%s", sched)
-                next_schedule_at = now_ts + schedule_interval_s
-            if proactive_enabled and now_ts >= next_followup_at:
-                followup = tick_conversation_followups()
-                logger.info("延迟续话 tick result=%s", followup)
-                next_followup_at = now_ts + max(15, int(FOLLOWUP_TICK_SECONDS or 60))
-            if proactive_enabled and now_ts >= next_hard_trigger_at:
-                from services.proactive_trigger_engine import tick_proactive_triggers
+    if proactive_enabled:
+        await asyncio.to_thread(enqueue_next_random_proactive_wakeup, uid, None, "startup")
 
-                hard_trigger = tick_proactive_triggers(uid)
-                logger.info("主动硬触发 tick result=%s", hard_trigger)
-                if hard_trigger.get("sent"):
-                    post_delay = _next_post_hard_trigger_delay_seconds()
-                    next_main_at = now_ts + post_delay
-                    logger.info(
-                        "硬触发已发出，下一次随机主动唤醒重排 scheduled_in=%.1fmin",
-                        post_delay / 60.0,
-                    )
-                next_hard_trigger_at = now_ts + 60
-            if proactive_enabled and now_ts >= next_du_daily_at:
-                daily = du_daily_sleep_tick(uid)
-                logger.info("渡的日常入睡收口 tick result=%s", daily)
-                next_du_daily_at = now_ts + 300
-            if proactive_enabled and now_ts >= next_main_at:
-                result = proactive_tick(uid)
-                logger.info("主动发消息 tick result=%s", result)
-                next_delay = _next_proactive_delay_seconds()
-                next_main_at = now_ts + next_delay
-                logger.info("下一次随机主动唤醒 scheduled_in=%.1fmin", next_delay / 60.0)
-        except Exception as e:
-            logger.exception("主动发消息 tick 异常: %s", e)
-        time.sleep(15)
+    tasks = [asyncio.create_task(_wakeup_queue_dispatch_loop(uid))]
+    if schedule_enabled:
+        tasks.append(asyncio.create_task(_periodic_to_thread("日历闹钟入队 tick", schedule_interval_s, enqueue_due_schedule_wakeups, uid)))
+    if proactive_enabled:
+        tasks.extend(
+            [
+                asyncio.create_task(_periodic_to_thread("延迟续话入队 tick", max(15, int(FOLLOWUP_TICK_SECONDS or 60)), enqueue_due_followup_wakeups)),
+                asyncio.create_task(_periodic_to_thread("主动硬触发入队 tick", 60, enqueue_due_hard_trigger_wakeups, uid)),
+                asyncio.create_task(_periodic_to_thread("随机主动唤醒排程 tick", 60, enqueue_next_random_proactive_wakeup, uid)),
+                asyncio.create_task(_du_daily_sleep_loop(uid)),
+            ]
+        )
+    await asyncio.gather(*tasks)
+
+
+def run_scheduler_loop():
+    """常驻循环：asyncio 协程调度，统一通过 wakeup_queue 执行唤醒。"""
+    asyncio.run(run_scheduler_loop_async())
