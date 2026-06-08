@@ -32,6 +32,7 @@ from utils.tokens import estimate_tokens, memory_summary_budget, memory_dynamic_
 logger = get_logger(__name__)
 from services import image_desc, deepseek_summary
 from services.dynamic_memory_citation import DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY
+from services.memory_bm25 import BM25QueryTerm, bm25_score_documents
 
 # ---------------------------------------------------------------------------
 # Prompt-cache 友好：静态 system 在前（可被缓存），动态 system 在后（每轮变化）。
@@ -1491,11 +1492,11 @@ def _is_trivial_user_message(text: str) -> bool:
 # ---------------------------------------------------------------------------
 # 检索结果缓存：连续聊同一话题时复用上次结果，避免重复向量检索
 # ---------------------------------------------------------------------------
-_RECALL_CACHE: dict[str, dict] = {}  # {window_id: {"keywords": [...], "results": [...], "ts": float}}
+_RECALL_CACHE: dict[str, dict] = {}  # {window_id: {"keywords": [...], "results": [...], "source": "...", "ts": float}}
 _RECALL_CACHE_TTL = 120  # 秒
 
 
-def _recall_cache_hit(window_id: str, keywords: list[str]) -> list[dict] | None:
+def _recall_cache_hit(window_id: str, keywords: list[str]) -> dict | None:
     """关键词重叠 >= 70% 且未过期则命中缓存。"""
     import time as _time
     cache = _RECALL_CACHE.get(window_id)
@@ -1510,13 +1511,13 @@ def _recall_cache_hit(window_id: str, keywords: list[str]) -> list[dict] | None:
         return None
     overlap = len(old_kw & new_kw) / max(len(old_kw), len(new_kw))
     if overlap >= 0.7:
-        return cache.get("results")
+        return cache
     return None
 
 
-def _recall_cache_set(window_id: str, keywords: list[str], results: list[dict]) -> None:
+def _recall_cache_set(window_id: str, keywords: list[str], results: list[dict], source: str = "") -> None:
     import time as _time
-    _RECALL_CACHE[window_id] = {"keywords": keywords, "results": results, "ts": _time.time()}
+    _RECALL_CACHE[window_id] = {"keywords": keywords, "results": results, "source": source, "ts": _time.time()}
 
 
 def _is_memory_meta_query(text: str) -> bool:
@@ -1716,6 +1717,115 @@ def _multi_query_recall_and_rerank(base_query: str, expanded_queries: list[str])
     return out
 
 
+def _bm25_query_terms(keyword_candidates: list[dict]) -> list[BM25QueryTerm]:
+    return [
+        BM25QueryTerm(
+            text=str((item or {}).get("text") or "").strip(),
+            weight=2.0 if bool((item or {}).get("is_phrase")) else 1.0,
+        )
+        for item in keyword_candidates or []
+        if str((item or {}).get("text") or "").strip()
+    ]
+
+
+def _bm25_recall_scores(
+    query: str,
+    keyword_candidates: list[dict],
+    memories: list[dict],
+) -> dict[str, dict]:
+    ranked = bm25_score_documents(
+        query,
+        memories,
+        lambda mem: _memory_retrieval_text(mem),
+        query_terms=_bm25_query_terms(keyword_candidates),
+    )
+    by_id: dict[str, dict] = {}
+    for raw_score, mem in ranked:
+        mid = str((mem or {}).get("id") or "").strip()
+        if not mid or raw_score <= 0:
+            continue
+        old = by_id.get(mid)
+        if old and float(old.get("raw") or 0.0) >= raw_score:
+            continue
+        by_id[mid] = {"raw": float(raw_score), "mem": mem}
+    max_score = max((float(item.get("raw") or 0.0) for item in by_id.values()), default=0.0)
+    if max_score <= 0:
+        return {}
+    for item in by_id.values():
+        item["norm"] = float(item.get("raw") or 0.0) / max_score
+    return by_id
+
+
+def _merge_vector_and_bm25_recall(
+    vector_recalled: list[dict],
+    bm25_scores: dict[str, dict],
+) -> list[dict]:
+    """
+    向量召回和 BM25 同时进入候选池，最后按一个融合分统一排序。
+    BM25 只覆盖动态层；向量侧仍可带入 core:: pending。
+    """
+    from memory_vector.config import RERANK_MIN_SCORE
+
+    by_id: dict[str, dict] = {}
+    for mem in vector_recalled or []:
+        mid = str((mem or {}).get("id") or "").strip()
+        if not mid:
+            continue
+        score = mem.get("_recall_score") if isinstance(mem.get("_recall_score"), dict) else {}
+        by_id[mid] = {
+            "mem": mem,
+            "sem_user": float(score.get("sem_user") or mem.get("_semantic_score") or 0.0),
+            "sem_ctx": float(score.get("sem_ctx") or mem.get("_semantic_score") or 0.0),
+            "vector_total": float(score.get("total") or mem.get("_final_score") or 0.0),
+            "vector_hit": True,
+            "bm25_raw": 0.0,
+            "bm25_norm": 0.0,
+        }
+
+    for mid, item in (bm25_scores or {}).items():
+        mem = item.get("mem") if isinstance(item, dict) else None
+        if not isinstance(mem, dict):
+            continue
+        row = by_id.setdefault(
+            mid,
+            {
+                "mem": mem,
+                "sem_user": 0.0,
+                "sem_ctx": 0.0,
+                "vector_total": 0.0,
+                "vector_hit": False,
+                "bm25_raw": 0.0,
+                "bm25_norm": 0.0,
+            },
+        )
+        row["bm25_raw"] = max(float(row.get("bm25_raw") or 0.0), float(item.get("raw") or 0.0))
+        row["bm25_norm"] = max(float(row.get("bm25_norm") or 0.0), float(item.get("norm") or 0.0))
+
+    scored: list[tuple[float, float, dict]] = []
+    for mid, row in by_id.items():
+        mem = row["mem"]
+        weight = _memory_weight(mem)
+        sem_user = float(row.get("sem_user") or 0.0)
+        sem_ctx = float(row.get("sem_ctx") or 0.0)
+        bm25_norm = float(row.get("bm25_norm") or 0.0)
+        both_bonus = 0.02 if row.get("vector_hit") and bm25_norm > 0 else 0.0
+        final_score = sem_user * 0.42 + sem_ctx * 0.18 + bm25_norm * 0.30 + weight * 0.08 + both_bonus
+        if final_score < RERANK_MIN_SCORE:
+            continue
+        mem["_recall_score"] = {
+            "total": round(float(final_score), 4),
+            "sem_user": round(float(sem_user), 4),
+            "sem_ctx": round(float(sem_ctx), 4),
+            "bm25": round(float(bm25_norm), 4),
+            "bm25_raw": round(float(row.get("bm25_raw") or 0.0), 4),
+            "weight": round(float(weight), 4),
+            "vector_total": round(float(row.get("vector_total") or 0.0), 4),
+        }
+        scored.append((final_score, weight, mem))
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    return [mem for _, _, mem in scored]
+
+
 def _memory_dedupe_keys(mem: dict) -> list[str]:
     if not isinstance(mem, dict):
         return []
@@ -1881,8 +1991,7 @@ def _append_dynamic_recall_debug_event_safe(event: dict) -> None:
 
 def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     """
-    每轮对话开始前：从 R2 读动态层，按关键词匹配 + 权重取 Top N 注入 system 末尾。
-    匹配方式：当前为关键词匹配；以后可升级向量检索。
+    每轮对话开始前：从 R2 读动态层，用向量召回 + BM25 关键词召回融合排序后注入 system 末尾。
     DYNAMIC_MEMORY_TOP_N<=0 时不注入、不调向量检索，便于测试延迟。
     """
     if DYNAMIC_MEMORY_TOP_N <= 0:
@@ -1953,27 +2062,27 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     if not memories:
         return body
 
-    # 缓存命中：连续聊同一话题时复用上次检索结果，跳过向量检索和 DS 改写
-    cached_results = _recall_cache_hit(window_id, keywords)
-    if cached_results is not None:
-        recalled = _dedupe_recalled_memories(cached_results)
+    # 缓存命中：连续聊同一话题时复用上次融合后的最终检索结果，跳过向量检索和 DS 改写
+    cached = _recall_cache_hit(window_id, keywords)
+    if cached is not None:
+        recalled = _dedupe_recalled_memories(cached.get("results") or [])
+        recall_source = str(cached.get("source") or "hybrid")
         vector_error = ""
         expanded_queries = []
         logger.info("动态记忆检索缓存命中 window_id=%s keywords=%d results=%d", window_id, len(keywords), len(recalled))
     else:
-        # 优先：多查询向量召回（原始 query 保底 + DS 查询改写增广）
-        # 改写失败或召回失败都必须降级，避免因改写走偏导致”源头漏召回”。
-        recalled: list[dict] = []
+        # 向量召回 + BM25 关键词召回同时进行，最后进入同一候选池融合排序。
+        vector_recalled: list[dict] = []
         vector_error = ""
         expanded_queries: list[str] = []
         try:
             turns_text = _last_4_turns_text_for_rewrite(messages)
             expanded_queries = _rewrite_memory_queries_with_ds(turns_text, last_user_text)
-            recalled = _multi_query_recall_and_rerank(last_user_text, expanded_queries)
-            if recalled:
+            vector_recalled = _multi_query_recall_and_rerank(last_user_text, expanded_queries)
+            if vector_recalled:
                 valid_ids = {str(mem.get("id")) for mem in memories if mem.get("id")}
-                recalled = [
-                    mem for mem in recalled
+                vector_recalled = [
+                    mem for mem in vector_recalled
                     if (
                         # 动态层：保留原有效期过滤
                         (str(mem.get("id") or "") in valid_ids and _is_dynamic_memory_valid(mem, now))
@@ -1981,53 +2090,51 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                         or str(mem.get("id") or "").startswith("core::")
                     )
                 ]
-                recalled = _dedupe_recalled_memories(recalled)
+                vector_recalled = _dedupe_recalled_memories(vector_recalled)
         except Exception as e:
             vector_error = str(e)
-            logger.warning("dynamic_vector_retrieve 降级为关键词匹配 error=%s", e)
-        # 写入缓存
-        _recall_cache_set(window_id, keywords, recalled)
+            logger.warning("dynamic_vector_retrieve 失败，仍保留 BM25 召回 error=%s", e)
 
-    scored = []
-    if recalled:
-        # 只注入召回到的（已按最终排序）
-        for mem in recalled:
-            scored.append((0, _memory_weight(mem), mem))
-    else:
-        if not keywords:
-            # 长句、口语句在上面的分词里可能提不出词，这里再做一次宽松拆片。
-            keywords = _extract_keywords(re.sub(r"[\s,，。！？、；：]+", "", last_user_text or ""))
-        if not keywords:
-            # 无关键词且向量未命中：也写一条调试事件，便于 MiniApp 排查“为什么没触发”
+        bm25_scores = _bm25_recall_scores(last_user_text, keyword_candidates, memories)
+        recalled = _dedupe_recalled_memories(_merge_vector_and_bm25_recall(vector_recalled, bm25_scores))
+        has_vector = any(float(((m.get("_recall_score") or {}).get("sem_user") or 0.0)) > 0 for m in recalled)
+        has_bm25 = any(float(((m.get("_recall_score") or {}).get("bm25") or 0.0)) > 0 for m in recalled)
+        if has_vector and has_bm25:
+            recall_source = "hybrid"
+        elif has_vector:
+            recall_source = "vector"
+        elif has_bm25:
+            recall_source = "keyword"
+        else:
+            recall_source = "keyword" if vector_error else "hybrid"
+
+        _recall_cache_set(window_id, keywords, recalled, source=recall_source)
+
+        if not recalled:
             _append_dynamic_recall_debug_event_safe(
                 {
                     "timestamp": now_beijing_iso(),
                     "window_id": (window_id or "").strip() or "__default__",
                     "query": (last_user_text or "").strip(),
-                    "keywords": [],
+                    "keywords": keywords,
                     "keyword_debug": keyword_debug,
                     "retrieval_query": retrieval_query,
-                    "source": "vector" if not vector_error else "keyword",
+                    "source": recall_source,
                     "expanded_queries": expanded_queries,
                     "recalled_lines": [],
                     "recalled_count": 0,
-                    "reason": "no_keywords_and_no_vector_hit",
+                    "reason": "no_hybrid_recall_hit",
                     "vector_error": vector_error,
                 }
             )
             return body
-        # 相关性：关键词/短语在 retrieval_text 中的命中强度，长短语更高权重。
-        for mem in memories:
-            retrieval_text = _memory_retrieval_text(mem).lower()
-            relevance = 0.0
-            for item in keyword_candidates or []:
-                kw_lower = str((item or {}).get("text") or "").strip().lower()
-                if kw_lower and kw_lower in retrieval_text:
-                    relevance += 2.0 if bool((item or {}).get("is_phrase")) else 1.0
-            weight = _memory_weight(mem)
-            scored.append((relevance, weight, mem))
-        # 按「话题匹配度 + 权重」排序；按 token 上限分配（不固定条数，在预算内尽量多塞）
-        scored.sort(key=lambda x: (-x[0], -x[1]))
+
+    scored = [(
+        float(((mem.get("_recall_score") or {}).get("total") or 0.0)),
+        _memory_weight(mem),
+        mem,
+    ) for mem in recalled]
+    scored.sort(key=lambda x: (-x[0], -x[1]))
 
     budget = memory_dynamic_budget()
     def _fuzzy_time_label(mem: dict) -> str:
@@ -2109,7 +2216,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                     "keywords": keywords,
                     "keyword_debug": keyword_debug,
                     "retrieval_query": retrieval_query,
-                    "source": "vector" if recalled else "keyword",
+                    "source": recall_source,
                     "expanded_queries": expanded_queries,
                     "recalled_lines": [],
                 "recalled_count": 0,
@@ -2140,7 +2247,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             "keywords": keywords,
             "keyword_debug": keyword_debug,
             "retrieval_query": retrieval_query,
-            "source": "vector" if recalled else "keyword",
+            "source": recall_source,
             "expanded_queries": expanded_queries,
             "recalled_lines": lines,
             "recalled_items": recalled_items,

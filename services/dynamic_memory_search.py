@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 from typing import Optional
 
 from memory_vector.dynamic_vector_retriever import dynamic_vector_retrieve
+from services.memory_bm25 import bm25_score_documents
 from storage import r2_store
 from utils.time_aware import now_beijing_iso
 from utils.time_aware import BEIJING_TZ, _now_beijing, parse_iso_to_beijing
@@ -120,34 +121,11 @@ def memory_matches_time_range(mem: dict, time_range: str) -> bool:
     return True
 
 
-def _extract_query_terms(query: str) -> list[str]:
-    text = str(query or "").strip()
-    if not text:
-        return []
-    parts = re.split(r"[\s,，。！？、；：/\\|]+", text)
-    out: list[str] = []
-    seen: set[str] = set()
-    for token in [text, *parts]:
-        s = str(token or "").strip().lower()
-        if len(s) < 2 or s in seen:
-            continue
-        seen.add(s)
-        out.append(s)
-    return out[:8]
-
-
-def _keyword_hit_score(query: str, mem: dict) -> float:
-    hay = "\n".join([
+def _memory_search_text(mem: dict) -> str:
+    return "\n".join([
         str(mem.get("retrieval_text") or "").strip(),
         str(mem.get("content") or "").strip(),
-    ]).lower()
-    if not hay:
-        return 0.0
-    score = 0.0
-    for term in _extract_query_terms(query):
-        if term in hay:
-            score += 1.0 + min(len(term), 10) * 0.05
-    return score
+    ])
 
 
 def _freshness_score(mem: dict) -> float:
@@ -195,6 +173,10 @@ def search_dynamic_memories(
         time_range=time_range or None,
         return_scores=True,
     )
+    bm25_by_key: dict[str, float] = {}
+    for bm25_score, mem in bm25_score_documents(query, candidates or [], _memory_search_text):
+        key = str(mem.get("id") or id(mem))
+        bm25_by_key[key] = float(bm25_score)
 
     results: list[dict] = []
     for mem in candidates or []:
@@ -203,7 +185,7 @@ def search_dynamic_memories(
             continue
         if time_range and not memory_matches_time_range(mem, time_range):
             continue
-        keyword_score = _keyword_hit_score(query, mem)
+        keyword_score = bm25_by_key.get(str(mem.get("id") or id(mem)), 0.0)
         if keyword_score <= 0:
             continue
         final_score = semantic_score * 0.7 + min(keyword_score, 3.0) * 0.15 + _freshness_score(mem) * 0.1 + _weight_score(mem) * 0.05
