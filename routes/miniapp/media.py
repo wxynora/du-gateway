@@ -485,27 +485,65 @@ def register_routes(bp) -> None:
     def miniapp_chat_media_transcribe():
         f = request.files.get("audio") or request.files.get("file")
         if not f:
+            logger.warning("[SumiTalk] chat_media_transcribe_reject reason=missing_audio")
             return jsonify({"ok": False, "error": "缺少 audio"}), 400
         mime_type = (f.mimetype or request.form.get("mime_type") or "application/octet-stream").strip().lower()
         if mime_type not in CHAT_MEDIA_AUDIO_TYPES:
+            logger.warning("[SumiTalk] chat_media_transcribe_reject reason=unsupported_mime mime=%s", mime_type or "unknown")
             return jsonify({"ok": False, "error": f"暂不支持的音频格式：{mime_type or 'unknown'}"}), 400
         audio_bytes = f.read()
         if not audio_bytes:
+            logger.warning("[SumiTalk] chat_media_transcribe_reject reason=empty_audio mime=%s", mime_type)
             return jsonify({"ok": False, "error": "音频为空"}), 400
         if len(audio_bytes) > CHAT_MEDIA_AUDIO_MAX_BYTES:
+            logger.warning("[SumiTalk] chat_media_transcribe_reject reason=too_large mime=%s bytes=%s max_bytes=%s", mime_type, len(audio_bytes), CHAT_MEDIA_AUDIO_MAX_BYTES)
             return jsonify({"ok": False, "error": "语音太长了，缩短一点再试"}), 400
         filename = (f.filename or "voice.webm").strip() or "voice.webm"
+        logger.info(
+            "[SumiTalk] chat_media_transcribe_start mime=%s bytes=%s filename=%s",
+            mime_type,
+            len(audio_bytes),
+            filename[:120],
+        )
+        stt_started = time.time()
         try:
             from services.stt import transcribe_speech
         except Exception as e:
-            logger.warning("chat-media transcribe 依赖加载失败 err=%s", e)
+            logger.warning("[SumiTalk] chat_media_transcribe_error stage=load_stt_dependency err=%s", e)
             return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
-        result = transcribe_speech(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename) or {}
+        try:
+            result = transcribe_speech(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename) or {}
+        except Exception as e:
+            logger.warning(
+                "[SumiTalk] chat_media_transcribe_error stage=stt_call mime=%s bytes=%s elapsed_ms=%s err=%s",
+                mime_type,
+                len(audio_bytes),
+                int((time.time() - stt_started) * 1000),
+                e,
+                exc_info=True,
+            )
+            return jsonify({"ok": False, "error": "语音转写失败"}), 500
         text = str(result.get("text") or "").strip()
         row = r2_store.upload_sumitalk_chat_media_file("audio", filename, audio_bytes, mime_type)
         if not row:
+            logger.warning(
+                "[SumiTalk] chat_media_transcribe_error stage=save_audio mime=%s bytes=%s elapsed_ms=%s text_len=%s",
+                mime_type,
+                len(audio_bytes),
+                int((time.time() - stt_started) * 1000),
+                len(text),
+            )
             return jsonify({"ok": False, "error": "语音保存失败"}), 500
         attachment = _chat_media_attachment(row, transcript=text)
+        logger.info(
+            "[SumiTalk] chat_media_transcribe_ok mime=%s bytes=%s elapsed_ms=%s text_len=%s provider=%s saved=%s",
+            mime_type,
+            len(audio_bytes),
+            int((time.time() - stt_started) * 1000),
+            len(text),
+            str(result.get("provider") or "")[:80],
+            bool(row),
+        )
         return jsonify(
             {
                 "ok": True,
@@ -523,22 +561,42 @@ def register_routes(bp) -> None:
         text = str(body.get("text") or "").strip()
         audio_format = str(body.get("audio_format") or "mp3").strip().lower() or "mp3"
         if not text:
+            logger.warning("[SumiTalk] chat_media_tts_reject reason=empty_text")
             return jsonify({"ok": False, "error": "缺少 text"}), 400
         if audio_format not in ("mp3", "wav"):
+            logger.warning("[SumiTalk] chat_media_tts_reject reason=unsupported_format format=%s", audio_format)
             return jsonify({"ok": False, "error": f"暂不支持的 audio_format：{audio_format}"}), 400
+        logger.info("[SumiTalk] chat_media_tts_start text_len=%s format=%s", len(text), audio_format)
+        tts_started = time.time()
         try:
             from services.minimax_tts import tts_to_audio_bytes
         except Exception as e:
-            logger.warning("chat-media tts 依赖加载失败 err=%s", e)
+            logger.warning("[SumiTalk] chat_media_tts_error stage=load_tts_dependency err=%s", e)
             return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
         audio_bytes = tts_to_audio_bytes(text, audio_format=audio_format)
         if not audio_bytes:
+            logger.warning(
+                "[SumiTalk] chat_media_tts_error stage=tts_call text_len=%s elapsed_ms=%s",
+                len(text),
+                int((time.time() - tts_started) * 1000),
+            )
             return jsonify({"ok": False, "error": "语音生成失败"}), 502
         mime_type = "audio/wav" if audio_format == "wav" else "audio/mpeg"
         row = r2_store.upload_sumitalk_chat_media_file("audio", f"du-reply.{audio_format}", audio_bytes, mime_type)
         if not row:
+            logger.warning(
+                "[SumiTalk] chat_media_tts_error stage=save_audio bytes=%s elapsed_ms=%s",
+                len(audio_bytes),
+                int((time.time() - tts_started) * 1000),
+            )
             return jsonify({"ok": False, "error": "语音保存失败"}), 500
         attachment = _chat_media_attachment(row, transcript=text)
+        logger.info(
+            "[SumiTalk] chat_media_tts_ok bytes=%s elapsed_ms=%s mime=%s",
+            len(audio_bytes),
+            int((time.time() - tts_started) * 1000),
+            mime_type,
+        )
         return jsonify({"ok": True, "media": attachment, "attachment": attachment})
 
     @bp.route("/chat-media/raw-public", methods=["GET"])

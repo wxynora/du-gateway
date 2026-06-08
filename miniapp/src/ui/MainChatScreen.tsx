@@ -82,6 +82,7 @@ import { readMusicBgmContext } from "./listenBgm";
 import { useToast } from "./toast";
 import {
   apiJsonWithTimeout,
+  cancelSumiTalkChatJob,
   createSumiTalkChatJob,
   isAbortLikeError,
   waitForSumiTalkChatJob,
@@ -106,6 +107,15 @@ type CodexGroupChatTaskResponse = {
   ok?: boolean;
   task?: CodexGroupChatTask | null;
   error?: string;
+};
+type ChatSendSource = "text" | "image" | "voice" | "travel_form" | "group_command";
+type ActiveChatRequest = {
+  clientRequestId: string;
+  operationId: string;
+  assistantId: string;
+  jobId: string;
+  source: ChatSendSource;
+  abortController: AbortController;
 };
 const CODEX_GROUP_CHAT_POLL_MS = 1000;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -245,6 +255,26 @@ function extractAssistantAttachments(data: any): ChatAttachment[] {
     }
   }
   return normalizeChatAttachments(out);
+}
+
+function isVoiceTranscriptEcho(content: string, attachments: ChatAttachment[]): boolean {
+  const text = String(content || "").trim().replace(/\s+/g, " ");
+  if (!text) return false;
+  return attachments.some((item) => {
+    const transcript = String(item.transcript || "").trim().replace(/\s+/g, " ");
+    return transcript && transcript === text;
+  });
+}
+
+function extractSumiTalkVoiceOutput(content: string): { displayText: string; voiceText: string } {
+  const raw = String(content || "");
+  const voiceTexts: string[] = [];
+  const displayText = raw.replace(/<voice>([\s\S]*?)<\/voice>/gi, (_all, inner) => {
+    const item = String(inner || "").trim();
+    if (item) voiceTexts.push(item);
+    return "";
+  }).trim();
+  return { displayText, voiceText: voiceTexts.join("\n").trim() };
 }
 
 function parseGroupDiscussionContinueTurns(content: string): number {
@@ -437,6 +467,8 @@ export function MainChatScreen({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [mediaBusy, setMediaBusy] = useState(false);
+  const [cancellingSend, setCancellingSend] = useState(false);
+  const [activeSendRequestId, setActiveSendRequestId] = useState("");
   const [recordingChatVoice, setRecordingChatVoice] = useState(false);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
@@ -457,6 +489,7 @@ export function MainChatScreen({
   const chatVoiceMimeRef = useRef("");
   const chatVoicePressingRef = useRef(false);
   const chatVoiceStartPromiseRef = useRef<Promise<boolean> | null>(null);
+  const activeChatRequestRef = useRef<ActiveChatRequest | null>(null);
 
   const [activeModel, setActiveModel] = useState(() => {
     try {
@@ -633,6 +666,26 @@ export function MainChatScreen({
     void saveDisplayHistory(nextMessages, { localDeviceId: options.localDeviceId }).catch(() => {});
   }
 
+  function logSumiTalkClientEvent(
+    event: string,
+    fields: Record<string, string | number | boolean | undefined | null> = {},
+    level: "info" | "warning" | "error" = "info",
+  ) {
+    const safeFields = {
+      windowId,
+      displayWindowId: remoteHistoryWindowId,
+      historyWindowId,
+      groupChatMode,
+      deviceId,
+      ...fields,
+    };
+    void apiJson("/miniapp-api/logs/client", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level, event, fields: safeFields }),
+    }).catch(() => {});
+  }
+
   async function persistSumiTalkOperationMessages(nextMessages: ChatDraftMessage[], localDeviceId: string) {
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
@@ -701,8 +754,10 @@ export function MainChatScreen({
         const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
         throw new Error(err || "上游返回错误");
       }
-      const reply = extractAssistantReplyText(data);
-      if (!reply) throw new Error("上游没有返回内容");
+      const rawReply = extractAssistantReplyText(data);
+      const voiceOutput = extractSumiTalkVoiceOutput(rawReply);
+      const reply = voiceOutput.displayText || (voiceOutput.voiceText ? "" : rawReply);
+      if (!reply && !voiceOutput.voiceText) throw new Error("上游没有返回内容");
       const existing = messagesRef.current.find((msg) => msg.id === assistantId);
       const assistantMessage: ChatDraftMessage = {
         id: assistantId,
@@ -719,6 +774,16 @@ export function MainChatScreen({
       await completeChatOperation(opId, assistantMessage);
       const finalMessages = applyAssistantTerminalMessage(messagesRef.current, operation.clientRequestId, assistantMessage);
       await persistSumiTalkOperationMessages(finalMessages, localDeviceId);
+      if (voiceOutput.voiceText) {
+        void appendAssistantVoiceOutputAudio({
+          assistantId,
+          clientRequestId: operation.clientRequestId,
+          operationId: opId,
+          jobId,
+          voiceText: voiceOutput.voiceText,
+          localDeviceId,
+        });
+      }
     } catch (e: any) {
       const assistantId = String(operation.assistantMessageId || "").trim();
       const existing = messagesRef.current.find((msg) => msg.id === assistantId);
@@ -1127,8 +1192,10 @@ export function MainChatScreen({
         const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
         throw new Error(err || "上游返回错误");
       }
-      const reply = extractAssistantReplyText(data);
-      if (!reply) throw new Error("上游没有返回内容");
+      const rawReply = extractAssistantReplyText(data);
+      const voiceOutput = extractSumiTalkVoiceOutput(rawReply);
+      const reply = voiceOutput.displayText || (voiceOutput.voiceText ? "" : rawReply);
+      if (!reply && !voiceOutput.voiceText) throw new Error("上游没有返回内容");
       const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
         id: assistantId,
         role: "assistant",
@@ -1144,7 +1211,17 @@ export function MainChatScreen({
       setMessages(finalMessages);
       await saveDisplayHistory(finalMessages, { localDeviceId: params.replyTarget });
       saveDisplayHistoryInBackground(finalMessages, { localDeviceId: params.replyTarget });
-      return reply;
+      if (voiceOutput.voiceText) {
+        void appendAssistantVoiceOutputAudio({
+          assistantId,
+          clientRequestId,
+          operationId: "",
+          jobId,
+          voiceText: voiceOutput.voiceText,
+          localDeviceId: params.replyTarget,
+        });
+      }
+      return reply || voiceOutput.voiceText;
     } catch (e: any) {
       const failedMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
         id: assistantId,
@@ -1366,20 +1443,85 @@ export function MainChatScreen({
     saveDisplayHistoryInBackground(nextMessages, { localDeviceId });
   }
 
-  async function sendChatContent(rawContent: string, options: { displayContent?: string; attachments?: ChatAttachment[]; voiceReply?: boolean } = {}) {
+  async function appendAssistantVoiceOutputAudio(args: {
+    assistantId: string;
+    clientRequestId: string;
+    operationId: string;
+    jobId: string;
+    voiceText: string;
+    localDeviceId: string;
+  }) {
+    const voiceText = String(args.voiceText || "").trim();
+    if (!voiceText) return;
+    logSumiTalkClientEvent("assistant_voice_tts_start", {
+      clientRequestId: args.clientRequestId,
+      operationId: args.operationId,
+      jobId: args.jobId,
+      voiceChars: voiceText.length,
+    });
+    try {
+      const attachment = await createDuReplyAudio(voiceText);
+      if (!attachment) return;
+      const current = messagesRef.current.find((msg) => msg.id === args.assistantId);
+      if (!current) return;
+      const nextMessage: ChatDraftMessage = {
+        ...current,
+        attachments: normalizeChatAttachments([
+          ...(current.attachments || []),
+          { ...attachment, transcript: voiceText },
+        ]),
+      };
+      const nextMessages = applyMessageById(messagesRef.current, args.assistantId, nextMessage);
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+      await saveDisplayHistory(nextMessages, { localDeviceId: args.localDeviceId });
+      if (args.operationId) {
+        await completeChatOperation(args.operationId, nextMessage);
+      }
+      logSumiTalkClientEvent("assistant_voice_tts_ok", {
+        clientRequestId: args.clientRequestId,
+        operationId: args.operationId,
+        jobId: args.jobId,
+        bytes: attachment.size || 0,
+        mime: attachment.mime || "",
+      });
+    } catch (e: any) {
+      logSumiTalkClientEvent("assistant_voice_tts_error", {
+        clientRequestId: args.clientRequestId,
+        operationId: args.operationId,
+        jobId: args.jobId,
+        error: String(e?.message || e),
+      }, "warning");
+    }
+  }
+
+  async function sendChatContent(
+    rawContent: string,
+    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource } = {},
+  ): Promise<boolean> {
     const content = String(rawContent || "").trim();
     const attachments = normalizeChatAttachments(options.attachments);
+    const source: ChatSendSource = options.source
+      || (attachments.some((item) => item.kind === "audio") ? "voice" : attachments.some((item) => item.kind === "image") ? "image" : "text");
     const effectiveContent = contentWithAttachmentHint(content, attachments);
     const canSendWhileBusy = groupChatMode && (
       isBenbenCancelCommand(content)
       || (groupDiscussionRunning && isGroupDiscussionStopCommand(content))
       || isGroupDiscussionContinueCommand(content)
     );
-    if ((!content && !attachments.length) || (sending && !canSendWhileBusy)) return;
+    if (!content && !attachments.length) {
+      logSumiTalkClientEvent("chat_send_skipped", { source, reason: "empty" }, "warning");
+      return false;
+    }
+    if (sending && !canSendWhileBusy) {
+      logSumiTalkClientEvent("chat_send_skipped", { source, reason: "busy" }, "warning");
+      return false;
+    }
     const displayContent = String(options.displayContent ?? content).trim();
     if (!windowId) {
+      logSumiTalkClientEvent("chat_send_skipped", { source, reason: "missing_window_id" }, "warning");
       toast("当前还没拿到聊天窗口 ID，不能接入共享上下文");
-      return;
+      return false;
     }
     const discussionRunId = groupChatMode ? groupDiscussionRunRef.current + 1 : groupDiscussionRunRef.current;
     if (groupChatMode) {
@@ -1409,14 +1551,14 @@ export function MainChatScreen({
       } finally {
         setSending(false);
       }
-      return;
+      return true;
     }
     if (groupChatMode && isGroupDiscussionContinueCommand(content)) {
       await appendGroupUserMessage(displayContent, resolvedDeviceId);
       const snapshot = groupDiscussionSnapshotRef.current;
       if (!snapshot?.lastContent) {
         toast("还没有可继续的群聊讨论");
-        return;
+        return false;
       }
       void runGroupDiscussionFollowups({
         runId: discussionRunId,
@@ -1427,7 +1569,7 @@ export function MainChatScreen({
         maxFollowups: parseGroupDiscussionContinueTurns(content),
         freeRoute: snapshot.freeRoute || groupFreeChatEnabled,
       });
-      return;
+      return true;
     }
     let groupTargets = groupChatMode
       ? resolveGroupReplyTargets(content)
@@ -1457,8 +1599,9 @@ export function MainChatScreen({
     );
     const shouldRequestBenben = groupChatMode && groupTargets.benben && !isGroupFreeDiscussion;
     if (shouldRequestDu && !activeModel) {
+      logSumiTalkClientEvent("chat_send_skipped", { source, reason: "missing_model" }, "warning");
       toast("当前还没拿到可用模型，稍后再试");
-      return;
+      return false;
     }
     const baseTimestamp = Date.now();
     const clientRequestId = `sumitalk-${baseTimestamp}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1561,8 +1704,32 @@ export function MainChatScreen({
     } else {
       await saveDisplayHistory(draftMessages, { localDeviceId: resolvedDeviceId });
     }
+    const abortController = shouldRequestDu ? new AbortController() : null;
+    if (shouldRequestDu && abortController) {
+      activeChatRequestRef.current = {
+        clientRequestId,
+        operationId,
+        assistantId,
+        jobId: "",
+        source,
+        abortController,
+      };
+      setActiveSendRequestId(clientRequestId);
+      logSumiTalkClientEvent("chat_send_start", {
+        source,
+        requestPath,
+        clientRequestId,
+        operationId,
+        contentChars: effectiveContent.length,
+        attachments: attachments.length,
+        audioAttachments: attachments.filter((item) => item.kind === "audio").length,
+        imageAttachments: attachments.filter((item) => item.kind === "image").length,
+        model: activeModel,
+      });
+    }
     let benbenCreatePromise: Promise<ChatDraftMessage[]> | null = null;
     let initialDuReply = "";
+    let lastJobStatusKey = "";
     try {
       if (shouldRequestBenben) {
         benbenCreatePromise = requestBenbenGroupReply({
@@ -1581,12 +1748,25 @@ export function MainChatScreen({
 
       if (shouldRequestDu) {
         if (!requestBody) throw new Error("缺少发送请求");
-        const started = await createSumiTalkChatJob(requestPath, requestBody);
+        logSumiTalkClientEvent("chat_job_create_start", { source, requestPath, clientRequestId, operationId });
+        const started = await createSumiTalkChatJob(requestPath, requestBody, { signal: abortController?.signal });
         if (started?.status === "error") {
           const upstreamError = started.response?.error || started.response?.message || "";
           throw new Error(String(started.error || upstreamError || "渡回复失败"));
         }
         const jobId = String(started?.job_id || "").trim();
+        if (activeChatRequestRef.current?.clientRequestId === clientRequestId) {
+          activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
+        }
+        logSumiTalkClientEvent("chat_job_create_ok", {
+          source,
+          requestPath,
+          clientRequestId,
+          operationId,
+          jobId,
+          status: String(started?.status || ""),
+          mode: String((started as any)?.mode || ""),
+        });
         if (jobId && operationId) {
           await attachChatJobToOperation(operationId, jobId);
           const pendingWithJob = applyMessageById(messagesRef.current, assistantId, {
@@ -1607,26 +1787,49 @@ export function MainChatScreen({
         const data = startedStatus === "done"
           ? started?.response || started
           : jobId
-          ? await waitForSumiTalkChatJob(jobId)
+          ? await waitForSumiTalkChatJob(jobId, {
+              signal: abortController?.signal,
+              onStatus: (job) => {
+                const statusKey = `${job.status || ""}:${job.stage || ""}`;
+                if (statusKey === lastJobStatusKey) return;
+                lastJobStatusKey = statusKey;
+                logSumiTalkClientEvent("chat_job_status", {
+                  source,
+                  clientRequestId,
+                  operationId,
+                  jobId,
+                  status: String(job.status || ""),
+                  stage: String(job.stage || ""),
+                  stageElapsedMs: Number(job.stage_elapsed_ms || 0),
+                  statusCode: Number(job.status_code || 0),
+                });
+              },
+            })
           : started?.response || started;
         if (data?.error) {
           const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
           throw new Error(err || "上游返回错误");
         }
-        const reply = extractAssistantReplyText(data);
-        if (!reply) throw new Error("上游没有返回内容");
-        initialDuReply = reply;
+        const rawReply = extractAssistantReplyText(data);
+        const voiceOutput = extractSumiTalkVoiceOutput(rawReply);
+        const reply = voiceOutput.displayText || (voiceOutput.voiceText ? "" : rawReply);
+        if (!reply && !voiceOutput.voiceText) throw new Error("上游没有返回内容");
+        initialDuReply = reply || voiceOutput.voiceText;
         const reasoning = extractAssistantReasoning(data);
         const tokenCount = extractTokenCount(data);
         const assistantAttachments = extractAssistantAttachments(data);
-        if (options.voiceReply) {
-          try {
-            const audio = await createDuReplyAudio(reply);
-            if (audio) assistantAttachments.push(audio);
-          } catch (e: any) {
-            toast(`回复语音生成失败：${e?.message || e}`);
-          }
-        }
+        logSumiTalkClientEvent("chat_reply_ready", {
+          source,
+          clientRequestId,
+          operationId,
+          jobId,
+          replyChars: reply.length,
+          voiceChars: voiceOutput.voiceText.length,
+          reasoningChars: reasoning.length,
+          inputTokens: tokenCount?.input || 0,
+          outputTokens: tokenCount?.output || 0,
+          assistantAttachments: assistantAttachments.length,
+        });
         const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
           id: assistantId,
           role: "assistant" as const,
@@ -1660,6 +1863,16 @@ export function MainChatScreen({
         } else {
           await saveDisplayHistory(finalMessages);
         }
+        if (voiceOutput.voiceText) {
+          void appendAssistantVoiceOutputAudio({
+            assistantId,
+            clientRequestId,
+            operationId,
+            jobId,
+            voiceText: voiceOutput.voiceText,
+            localDeviceId: replyTarget,
+          });
+        }
       }
       if (benbenCreatePromise) {
         await benbenCreatePromise;
@@ -1676,7 +1889,19 @@ export function MainChatScreen({
           initialDuReply,
         });
       }
+      return true;
     } catch (e: any) {
+      const rawErrorMessage = String(e?.message || e);
+      const cancelled = Boolean(abortController?.signal.aborted)
+        || String(e?.name || "") === "AbortError"
+        || /cancel|cancelled|取消/i.test(rawErrorMessage);
+      const errorMessage = cancelled ? "已取消发送" : rawErrorMessage;
+      logSumiTalkClientEvent(cancelled ? "chat_send_cancelled" : "chat_send_error", {
+        source,
+        clientRequestId,
+        operationId,
+        error: errorMessage,
+      }, cancelled ? "warning" : "error");
       if (benbenCreatePromise) {
         await benbenCreatePromise.catch(() => messagesRef.current);
       }
@@ -1684,7 +1909,7 @@ export function MainChatScreen({
         ? applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
             id: assistantId,
             role: "assistant" as const,
-            content: `（发送失败：${e?.message || e}）`,
+            content: cancelled ? "（已取消发送）" : `（发送失败：${e?.message || e}）`,
             createdAt: assistantCreatedAt,
             status: "failed" as const,
             clientRequestId,
@@ -1692,10 +1917,10 @@ export function MainChatScreen({
           })
         : messagesRef.current;
       if (shouldRequestDu && operationId) {
-        await failChatOperation(operationId, String(e?.message || e), {
+        await failChatOperation(operationId, errorMessage, {
           id: assistantId,
           role: "assistant",
-          content: `（发送失败：${e?.message || e}）`,
+          content: cancelled ? "（已取消发送）" : `（发送失败：${e?.message || e}）`,
           createdAt: assistantCreatedAt,
           status: "failed",
           clientRequestId,
@@ -1708,14 +1933,54 @@ export function MainChatScreen({
       if (groupChatMode) {
         saveDisplayHistoryInBackground(failedMessages, { localDeviceId: replyTarget });
       }
-      toast(`发送失败：${e?.message || e}`);
+      toast(cancelled ? "已取消发送" : `发送失败：${e?.message || e}`);
+      return false;
     } finally {
+      if (activeChatRequestRef.current?.clientRequestId === clientRequestId) {
+        activeChatRequestRef.current = null;
+      }
+      setActiveSendRequestId((prev) => (prev === clientRequestId ? "" : prev));
+      setCancellingSend(false);
       setSending(false);
     }
   }
 
   async function sendMessage() {
     await sendChatContent(input);
+  }
+
+  async function cancelActiveSumiTalkSend() {
+    const active = activeChatRequestRef.current;
+    if (!active || cancellingSend) return;
+    setCancellingSend(true);
+    logSumiTalkClientEvent("chat_cancel_click", {
+      source: active.source,
+      clientRequestId: active.clientRequestId,
+      operationId: active.operationId,
+      jobId: active.jobId,
+    }, "warning");
+    try {
+      active.abortController.abort();
+    } catch {}
+    if (active.jobId) {
+      try {
+        await cancelSumiTalkChatJob(active.jobId, "client_cancelled");
+        logSumiTalkClientEvent("chat_cancel_post_ok", {
+          source: active.source,
+          clientRequestId: active.clientRequestId,
+          operationId: active.operationId,
+          jobId: active.jobId,
+        }, "warning");
+      } catch (e: any) {
+        logSumiTalkClientEvent("chat_cancel_post_error", {
+          source: active.source,
+          clientRequestId: active.clientRequestId,
+          operationId: active.operationId,
+          jobId: active.jobId,
+          error: String(e?.message || e),
+        }, "warning");
+      }
+    }
   }
 
   function openImagePicker() {
@@ -1730,9 +1995,17 @@ export function MainChatScreen({
     if (!file || sending || mediaBusy) return;
     setMediaBusy(true);
     try {
+      logSumiTalkClientEvent("image_upload_start", { name: file.name, mime: file.type, bytes: file.size });
       const attachment = await uploadChatImage(file);
-      await sendChatContent(input, { attachments: [attachment] });
+      logSumiTalkClientEvent("image_upload_ok", {
+        mime: attachment.mime || file.type,
+        bytes: attachment.size || file.size,
+        hasRemoteUrl: Boolean(attachment.remoteUrl),
+        hasRemoteKey: Boolean(attachment.remoteKey),
+      });
+      await sendChatContent(input, { attachments: [attachment], source: "image" });
     } catch (e: any) {
+      logSumiTalkClientEvent("image_upload_error", { error: String(e?.message || e) }, "error");
       toast(`图片发送失败：${e?.message || e}`);
     } finally {
       setMediaBusy(false);
@@ -1757,6 +2030,7 @@ export function MainChatScreen({
     if (sending || mediaBusy || recordingChatVoice) return false;
     setMediaBusy(true);
     try {
+      logSumiTalkClientEvent("voice_record_start");
       const stream = await ensureChatVoiceStream();
       chatVoiceChunksRef.current = [];
       chatVoiceMimeRef.current = resolveRecorderMimeType();
@@ -1767,8 +2041,10 @@ export function MainChatScreen({
       };
       recorder.start(1000);
       setRecordingChatVoice(true);
+      logSumiTalkClientEvent("voice_record_started", { mime: chatVoiceMimeRef.current || recorder.mimeType || "" });
       return true;
     } catch (e: any) {
+      logSumiTalkClientEvent("voice_record_error", { error: String(e?.message || e) }, "error");
       toast(`录音失败：${e?.message || e}`);
       return false;
     } finally {
@@ -1793,15 +2069,25 @@ export function MainChatScreen({
       setRecordingChatVoice(false);
       chatVoiceChunksRef.current = [];
       if (blob.size <= 0) throw new Error("录音为空");
+      logSumiTalkClientEvent("voice_record_stop", { mime: mimeType, bytes: blob.size });
+      logSumiTalkClientEvent("voice_stt_start", { mime: mimeType, bytes: blob.size });
       const result = await transcribeChatAudio(blob, mimeType);
       const transcript = String(result.text || "").trim();
+      logSumiTalkClientEvent("voice_stt_ok", {
+        mime: mimeType,
+        bytes: blob.size,
+        textChars: transcript.length,
+        provider: result.sttProvider || "",
+        hasAttachment: Boolean(result.attachment?.remoteKey || result.attachment?.remoteUrl),
+      });
       if (!transcript) throw new Error("没识别出内容，再说一遍试试");
       await sendChatContent(transcript, {
         attachments: [{ ...result.attachment, transcript }],
-        voiceReply: true,
+        source: "voice",
       });
     } catch (e: any) {
       setRecordingChatVoice(false);
+      logSumiTalkClientEvent("voice_send_error", { error: String(e?.message || e) }, "error");
       toast(`语音发送失败：${e?.message || e}`);
     } finally {
       setMediaBusy(false);
@@ -1855,6 +2141,7 @@ export function MainChatScreen({
     || (groupDiscussionRunning && isGroupDiscussionStopCommand(trimmedInput))
     || isGroupDiscussionContinueCommand(trimmedInput)
   );
+  const canCancelSend = sending && Boolean(activeSendRequestId) && !canSubmitWhileBusy;
   const searchMatches = useMemo<ChatSearchMatch[]>(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return [];
@@ -2066,7 +2353,8 @@ export function MainChatScreen({
                       const bubbleSkin = transparentBubbleEnabled ? undefined : resolveBubbleSkin(userBubbleStyle);
                       const hasText = Boolean(String(part.content || "").trim());
                       const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
-                      const hasBubble = hasText || audioAttachments.length > 0;
+                      const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
+                      const hasBubble = showText || audioAttachments.length > 0;
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -2087,7 +2375,7 @@ export function MainChatScreen({
                             >
                               <div className="space-y-1.5">
                                 <ChatAttachmentBlock attachments={audioAttachments} align="right" />
-                                {hasText ? <PlainTextBlock content={part.content} /> : null}
+                                {showText ? <PlainTextBlock content={part.content} /> : null}
                               </div>
                             </ChatBubbleFrame>
                           ) : null}
@@ -2120,7 +2408,8 @@ export function MainChatScreen({
                       const bubbleSkin = transparentBubbleEnabled || group.role === "benben" ? undefined : resolveBubbleSkin(assistantBubbleStyle);
                       const hasText = Boolean(String(part.content || "").trim());
                       const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
-                      const hasBubble = hasText || audioAttachments.length > 0;
+                      const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
+                      const hasBubble = showText || audioAttachments.length > 0;
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -2195,7 +2484,7 @@ export function MainChatScreen({
                                 >
                                   <div className="space-y-1.5">
                                     <ChatAttachmentBlock attachments={audioAttachments} align="left" />
-                                    {hasText ? (
+                                    {showText ? (
                                       part.render === "html" ? (
                                         <HtmlBlock content={part.content} />
                                       ) : part.render === "plain" ? (
@@ -2308,15 +2597,31 @@ export function MainChatScreen({
               <MicIconMini className="h-[19px] w-[19px] stroke-[2]" />
             </button>
           </div>
-          <button
-            className="p-2.5 text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
-            onClick={() => void sendMessage()}
-            disabled={!trimmedInput || (sending && !canSubmitWhileBusy)}
-          >
-            <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gray-900">
-              <ArrowUpIcon />
-            </div>
-          </button>
+          {canCancelSend ? (
+            <button
+              className="p-2.5 text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
+              onClick={() => void cancelActiveSumiTalkSend()}
+              disabled={cancellingSend}
+              aria-label="取消发送"
+              title="取消发送"
+            >
+              <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gray-500">
+                <span className="block h-[12px] w-[12px] rounded-[2px] bg-white" />
+              </div>
+            </button>
+          ) : (
+            <button
+              className="p-2.5 text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
+              onClick={() => void sendMessage()}
+              disabled={!trimmedInput || (sending && !canSubmitWhileBusy)}
+              aria-label="发送"
+              title="发送"
+            >
+              <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gray-900">
+                <ArrowUpIcon />
+              </div>
+            </button>
+          )}
         </div>
       </div>
       {travelFormCard ? (
@@ -2326,7 +2631,7 @@ export function MainChatScreen({
           onClose={() => setTravelFormCard(null)}
           onSubmit={(content) => {
             setTravelFormCard(null);
-            void sendChatContent(content, { displayContent: "已提交，渡在安排" });
+            void sendChatContent(content, { displayContent: "已提交，渡在安排", source: "travel_form" });
           }}
         />
       ) : null}

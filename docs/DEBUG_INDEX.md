@@ -245,11 +245,14 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 
 当前状态（2026-06-08 SumiTalk 图片/语音聊天附件）：
 - 已完成：SumiTalk 私聊消息结构新增 `attachments`；Android 原生 `SumiChatStore` 升到 schema v2，`chat_messages` 增加 `attachments_json`，图片/语音附件重启后不会从本地 SQLite 丢失。
-- 已完成：新增 `miniapp/src/ui/chat/chatMedia.ts`，图片走 `/miniapp-api/chat-media/upload` 上传后作为 `image_url` 参与本轮模型输入；语音走 `/miniapp-api/chat-media/transcribe` 转写后发送，原音频作为语音附件显示；语音发送触发渡回复后会调用 `/miniapp-api/chat-media/tts` 生成可播放的回复语音附件。
-- 已完成：`routes/miniapp/media.py` 新增 `/chat-media/upload`、`/chat-media/transcribe`、`/chat-media/tts`、`/chat-media/raw-public`；文件本体存 R2 `sumitalk/chat_media/`，聊天历史和 operation 只存轻量附件元数据，不存 base64/blob。
-- 已完成：聊天页加号面板保留“图片”；语音入口挪到输入框内侧，只显示麦克风 SVG，按住录音、松开发送。图片作为独立图片消息直接贴出，不塞进文字气泡；语音仍显示为可播放音频条，转写文本作为正文。
-- 已完成：Android 版本升到 `versionName 1.1.8` / `versionCode 10`；Manifest 补 `android.permission.MODIFY_AUDIO_SETTINGS`，匹配 Capacitor WebView 麦克风 `PermissionRequest` 同时检查 `RECORD_AUDIO` 和 `MODIFY_AUDIO_SETTINGS` 的行为，避免按住说话时 `getUserMedia` 直接 `Permission denied`。上一轮 `npm -C miniapp run cap:sync` 已把聊天附件 bundle 同步进 Android assets。
-- 未完成 / 下次继续：本轮只接用户发图、用户发语音、渡回复语音和助手图片附件展示；渡主动生成图片还需要单独接图像生成/图片工具链。
+- 已完成：新增 `miniapp/src/ui/chat/chatMedia.ts`，图片走 `/miniapp-api/chat-media/upload` 上传后作为 `image_url` 参与本轮模型输入；语音走 `/miniapp-api/chat-media/transcribe` 转写成文本后进入普通聊天链路，原音频作为语音附件显示。语音输入只是输入方式，不强制渡用语音回复，也不等待 TTS 后处理。
+- 已完成：`routes/miniapp/media.py` 新增 `/chat-media/upload`、`/chat-media/transcribe`、`/chat-media/tts`、`/chat-media/raw-public`；文件本体存 R2 `sumitalk/chat_media/`，聊天历史和 operation 只存轻量附件元数据，不存 base64/blob。STT/TTS 均打 `[SumiTalk] chat_media_*` 分段日志，只记录 mime、bytes、耗时、文本长度等元数据，不记录正文或音频。
+- 已完成：聊天页加号面板保留“图片”；语音入口挪到输入框内侧，只显示麦克风 SVG，按住录音、松开发送。图片作为独立图片消息直接贴出，不塞进文字气泡；语音显示为 QQ 风格短语音条，不再使用 Android WebView 原生 `<audio controls>` 大播放器；正文等于语音转写时默认只展示语音条，转写仍保留在消息数据里给模型/搜索用。
+- 已完成：SumiTalk 入口规则允许渡在想发语音时输出 `<voice>...</voice>`；前端会剥掉控制标签，先展示文字回复，再异步调用 `/chat-media/tts` 把语音挂成附件。用户发语音仍只是输入方式，不会强制渡用语音回复。
+- 已完成：SumiTalk 发送链路新增客户端日志 `/miniapp-api/logs/client`、后端 job 阶段日志和取消发送按钮；日志能看到 `chat_send_start`、`chat_job_create_ok`、`chat_job_status stage=gateway_call_start`、`upstream_post_start/returned`、`chat_media_transcribe_*`、`assistant_voice_tts_*` 等阶段，用于判断卡在前端、STT、job、上游非流式调用、轮询还是 TTS。
+- 已完成：Android 版本升到 `versionName 1.1.9` / `versionCode 11`；Manifest 补 `android.permission.MODIFY_AUDIO_SETTINGS`，匹配 Capacitor WebView 麦克风 `PermissionRequest` 同时检查 `RECORD_AUDIO` 和 `MODIFY_AUDIO_SETTINGS` 的行为，避免按住说话时 `getUserMedia` 直接 `Permission denied`。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/logs.py routes/miniapp/media.py routes/miniapp/sumitalk_chat_jobs.py routes/chat.py services/entry_style_prompt.py`、`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npm -C miniapp run build`、`npm -C miniapp run cap:sync`、`JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew -q :app:assembleDebug` 通过；`aapt dump badging` 确认 debug APK 为 `versionCode=11` / `versionName=1.1.9`。
+- 未完成 / 下次继续：当前 app 聊天仍是非流式 job + 轮询，不能精确观测“上游首 token”；若要继续提速，应把 SumiTalk 聊天升级成 SSE/流式。渡主动生成图片还需要单独接图像生成/图片工具链。
 
 ## 和渡一起听 / 音乐旋律分析
 

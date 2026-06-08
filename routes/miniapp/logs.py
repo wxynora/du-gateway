@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -11,6 +12,9 @@ from utils.log_reader import resolve_log_path, stream_logs_sse, tail_logs
 sumitalk_logger = logging.getLogger("sumitalk")
 _LOG_CATEGORIES = {"all", "proactive", "sumitalk", "wechat", "tgbot", "qq"}
 _LOG_LINE_MAX_CHARS = 6000
+_CLIENT_LOG_FIELD_MAX_CHARS = 180
+_CLIENT_LOG_FIELD_MAX_COUNT = 24
+_CLIENT_LOG_SENSITIVE_RE = re.compile(r"(token|secret|key|authorization|password|cookie)", re.I)
 
 
 def _clip_log_line(line: str) -> str:
@@ -67,6 +71,30 @@ def _miniapp_log_source(category: str) -> tuple[str, str]:
     return str(MINIAPP_LOG_FILE or "").strip(), "gateway"
 
 
+def _safe_client_log_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (bool, int, float)):
+        return str(value)
+    text = str(value).replace("\n", " ").replace("\r", " ").strip()
+    return text[:_CLIENT_LOG_FIELD_MAX_CHARS]
+
+
+def _safe_client_log_fields(fields: dict) -> str:
+    if not isinstance(fields, dict):
+        return ""
+    parts = []
+    for key, value in list(fields.items())[:_CLIENT_LOG_FIELD_MAX_COUNT]:
+        k = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(key or "").strip())[:50]
+        if not k:
+            continue
+        if _CLIENT_LOG_SENSITIVE_RE.search(k):
+            parts.append(f"{k}=<redacted>")
+            continue
+        parts.append(f"{k}={_safe_client_log_value(value)}")
+    return " ".join(parts)
+
+
 def register_routes(bp) -> None:
     @bp.route("/client-error", methods=["POST"])
     def miniapp_client_error():
@@ -92,6 +120,21 @@ def register_routes(bp) -> None:
             stack,
             component_stack,
         )
+        return jsonify({"ok": True})
+
+    @bp.route("/logs/client", methods=["POST"])
+    def miniapp_client_log():
+        body = request.get_json(silent=True) or {}
+        event = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(body.get("event") or "client_event").strip())[:80] or "client_event"
+        level = str(body.get("level") or "info").strip().lower()
+        fields = _safe_client_log_fields(body.get("fields") or {})
+        message = "[SumiTalk] client_event event=%s %s"
+        if level in {"error", "err"}:
+            sumitalk_logger.error(message, event, fields)
+        elif level in {"warning", "warn"}:
+            sumitalk_logger.warning(message, event, fields)
+        else:
+            sumitalk_logger.info(message, event, fields)
         return jsonify({"ok": True})
 
     @bp.route("/logs", methods=["GET"])

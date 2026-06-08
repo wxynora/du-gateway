@@ -136,6 +136,54 @@ def _cleanup_sumitalk_chat_jobs() -> None:
         pass
 
 
+def _safe_job_log_value(value) -> str:
+    text = str(value if value is not None else "").replace("\n", " ").replace("\r", " ").strip()
+    return text[:160]
+
+
+def _format_job_log_fields(fields: dict) -> str:
+    parts = []
+    for key, value in (fields or {}).items():
+        k = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(key or "").strip())[:50]
+        if not k:
+            continue
+        parts.append(f"{k}={_safe_job_log_value(value)}")
+    return " ".join(parts)
+
+
+def _sumitalk_chat_job_elapsed_ms(state: dict | None) -> int:
+    try:
+        created_ts = float((state or {}).get("created_ts") or time.time())
+        return max(0, int((time.time() - created_ts) * 1000))
+    except Exception:
+        return 0
+
+
+def _is_sumitalk_chat_job_cancelled(job_id: str) -> bool:
+    state = _read_sumitalk_chat_job_state(job_id) or {}
+    return str(state.get("status") or "").strip().lower() == "cancelled"
+
+
+def _set_sumitalk_chat_job_stage(job_id: str, stage: str, **fields) -> None:
+    stage_text = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(stage or "").strip())[:80] or "unknown"
+    state = _read_sumitalk_chat_job_state(job_id) or {}
+    elapsed_ms = _sumitalk_chat_job_elapsed_ms(state)
+    patch = {
+        "stage": stage_text,
+        "stage_elapsed_ms": elapsed_ms,
+        "stage_updated_at": now_beijing_iso(),
+    }
+    _patch_sumitalk_chat_job_state(job_id, patch)
+    sumitalk_logger.info(
+        "[SumiTalk] chat_job_stage job_id=%s status=%s stage=%s elapsed_ms=%s %s",
+        job_id,
+        str(state.get("status") or "").strip() or "unknown",
+        stage_text,
+        elapsed_ms,
+        _format_job_log_fields(fields),
+    )
+
+
 def _extract_chat_completion_result(result) -> tuple[int, dict]:
     response = result
     status = 200
@@ -169,10 +217,22 @@ def _extract_chat_completion_result(result) -> tuple[int, dict]:
 
 def _run_sumitalk_chat_job(app, job_id: str, chat_body: dict, headers: dict, remote_addr: str) -> None:
     _patch_sumitalk_chat_job_state(job_id, {"status": "running"})
+    _set_sumitalk_chat_job_stage(
+        job_id,
+        "worker_started",
+        model=chat_body.get("model") or "",
+        messages=len(chat_body.get("messages") or []) if isinstance(chat_body.get("messages"), list) else 0,
+        window_id=chat_body.get("window_id") or "",
+    )
     try:
+        if _is_sumitalk_chat_job_cancelled(job_id):
+            _set_sumitalk_chat_job_stage(job_id, "cancelled_before_gateway_call")
+            return
         from routes.chat import chat_completions
 
         environ_base = {"REMOTE_ADDR": remote_addr or "127.0.0.1"}
+        _set_sumitalk_chat_job_stage(job_id, "gateway_call_start")
+        call_started = time.time()
         with app.test_request_context(
             "/v1/chat/completions",
             method="POST",
@@ -182,8 +242,20 @@ def _run_sumitalk_chat_job(app, job_id: str, chat_body: dict, headers: dict, rem
         ):
             result = chat_completions()
             status_code, data = _extract_chat_completion_result(result)
+        gateway_ms = int((time.time() - call_started) * 1000)
+        _set_sumitalk_chat_job_stage(
+            job_id,
+            "gateway_call_returned",
+            status_code=status_code,
+            gateway_ms=gateway_ms,
+            response_keys=",".join(list(data.keys())[:8]) if isinstance(data, dict) else "",
+        )
+        if _is_sumitalk_chat_job_cancelled(job_id):
+            _set_sumitalk_chat_job_stage(job_id, "cancelled_after_gateway_return")
+            return
         if status_code >= 400:
             err = extract_upstream_error_detail(data, status_code) or f"HTTP {status_code}"
+            _set_sumitalk_chat_job_stage(job_id, "gateway_call_error", status_code=status_code, error=err)
             _patch_sumitalk_chat_job_state(
                 job_id,
                 {
@@ -194,6 +266,7 @@ def _run_sumitalk_chat_job(app, job_id: str, chat_body: dict, headers: dict, rem
                 },
             )
             return
+        _set_sumitalk_chat_job_stage(job_id, "reply_ready", status_code=status_code)
         _patch_sumitalk_chat_job_state(
             job_id,
             {
@@ -203,7 +276,11 @@ def _run_sumitalk_chat_job(app, job_id: str, chat_body: dict, headers: dict, rem
             },
         )
     except Exception as e:
-        sumitalk_logger.exception("chat_job_failed job_id=%s", job_id)
+        sumitalk_logger.exception("[SumiTalk] chat_job_failed job_id=%s", job_id)
+        try:
+            _set_sumitalk_chat_job_stage(job_id, "worker_exception", error=e)
+        except Exception:
+            pass
         _patch_sumitalk_chat_job_state(
             job_id,
             {
@@ -262,6 +339,8 @@ def _start_sumitalk_chat_job_from_request(body: dict, waitable: bool = False):
         "id": job_id,
         "ok": True,
         "status": "running",
+        "stage": "created",
+        "stage_elapsed_ms": 0,
         "created_ts": time.time(),
         "updated_ts": time.time(),
         "created_at": now_beijing_iso(),
@@ -295,7 +374,14 @@ def _start_sumitalk_chat_job_from_request(body: dict, waitable: bool = False):
         args=(app, job_id, chat_body, headers, remote_addr),
         daemon=True,
     ).start()
-    sumitalk_logger.info("chat_job_created job_id=%s window_id=%s target=%s messages=%s", job_id, window_id, reply_target, len(messages))
+    sumitalk_logger.info(
+        "[SumiTalk] chat_job_created job_id=%s window_id=%s target=%s messages=%s client_request_id=%s",
+        job_id,
+        window_id,
+        reply_target,
+        len(messages),
+        client_request_id,
+    )
     return job_id, event, None
 
 
@@ -332,6 +418,15 @@ def register_routes(bp) -> None:
                 "error": str(job.get("error") or "渡回复失败"),
                 "response": job.get("response") or {},
             })
+        if status == "cancelled":
+            return jsonify({
+                "ok": False,
+                "status": "cancelled",
+                "mode": "direct",
+                "job_id": job_id,
+                "status_code": int(job.get("status_code") or 499),
+                "error": str(job.get("error") or "已取消发送"),
+            }), 499
         if event is not None and event.wait(wait_s):
             job = _read_sumitalk_chat_job_state(job_id) or {}
             status = str(job.get("status") or "").strip()
@@ -344,6 +439,15 @@ def register_routes(bp) -> None:
                     "status_code": int(job.get("status_code") or 200),
                     "response": job.get("response") or {},
                 })
+            if status == "cancelled":
+                return jsonify({
+                    "ok": False,
+                    "status": "cancelled",
+                    "mode": "direct",
+                    "job_id": job_id,
+                    "status_code": int(job.get("status_code") or 499),
+                    "error": str(job.get("error") or "已取消发送"),
+                }), 499
             if status == "error":
                 return jsonify({
                     "ok": False,
@@ -372,3 +476,37 @@ def register_routes(bp) -> None:
         public_job = {k: v for k, v in job.items() if k not in {"created_ts", "updated_ts"}}
         public_job["ok"] = public_job.get("status") != "error"
         return jsonify(public_job)
+
+    @bp.route("/sumitalk-chat-jobs/<job_id>/cancel", methods=["POST"])
+    def miniapp_sumitalk_chat_job_cancel(job_id: str):
+        if not _valid_sumitalk_chat_job_id(job_id):
+            return jsonify({"ok": False, "error": "任务不存在或已过期"}), 404
+        job = _read_sumitalk_chat_job_state(job_id)
+        if not job:
+            return jsonify({"ok": False, "error": "任务不存在或已过期"}), 404
+        status = str(job.get("status") or "").strip().lower()
+        if status == "done":
+            return jsonify({"ok": True, "status": "done", "job_id": job_id})
+        body = request.get_json(silent=True) or {}
+        reason = str(body.get("reason") or "client_cancelled").strip()[:160] or "client_cancelled"
+        elapsed_ms = _sumitalk_chat_job_elapsed_ms(job)
+        _patch_sumitalk_chat_job_state(
+            job_id,
+            {
+                "status": "cancelled",
+                "stage": "client_cancelled",
+                "stage_elapsed_ms": elapsed_ms,
+                "stage_updated_at": now_beijing_iso(),
+                "error": reason,
+                "cancelled_at": now_beijing_iso(),
+            },
+        )
+        _signal_sumitalk_chat_job(job_id)
+        sumitalk_logger.warning(
+            "[SumiTalk] chat_job_cancelled job_id=%s previous_status=%s elapsed_ms=%s reason=%s",
+            job_id,
+            status or "unknown",
+            elapsed_ms,
+            reason,
+        )
+        return jsonify({"ok": True, "status": "cancelled", "job_id": job_id})

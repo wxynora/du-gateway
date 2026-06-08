@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -268,9 +268,92 @@ function attachmentSrc(item: ChatAttachment): string {
 function formatAudioDuration(ms?: number): string {
   const total = Math.max(0, Math.round(Number(ms || 0) / 1000));
   if (!total) return "";
-  const mm = String(Math.floor(total / 60)).padStart(2, "0");
+  if (total < 60) return `${total}"`;
+  const mm = Math.floor(total / 60);
   const ss = String(total % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
+  return `${mm}'${ss}"`;
+}
+
+function audioBarWidth(durationMs?: number): number {
+  const seconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
+  if (!seconds) return 112;
+  return Math.max(104, Math.min(188, 92 + seconds * 4));
+}
+
+function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string; align: "left" | "right" }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [durationMs, setDurationMs] = useState(item.durationMs || 0);
+  const duration = formatAudioDuration(durationMs);
+  const width = audioBarWidth(durationMs);
+  const isRight = align === "right";
+
+  function syncMetadata() {
+    const durationSeconds = audioRef.current?.duration || 0;
+    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+      setDurationMs(Math.round(durationSeconds * 1000));
+    }
+  }
+
+  async function togglePlayback() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (!audio.paused) {
+      audio.pause();
+      setPlaying(false);
+      return;
+    }
+    try {
+      await audio.play();
+      setPlaying(true);
+    } catch {
+      setPlaying(false);
+    }
+  }
+
+  return (
+    <div className={`max-w-full ${isRight ? "self-end" : "self-start"}`}>
+      <button
+        type="button"
+        className={`flex h-[28px] max-w-full items-center gap-2 text-current transition-opacity active:opacity-65 ${isRight ? "flex-row-reverse" : ""}`}
+        style={{ width }}
+        onClick={() => void togglePlayback()}
+        aria-label={playing ? "暂停语音" : "播放语音"}
+      >
+        <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center" aria-hidden="true">
+          {playing ? (
+            <span className="flex h-[12px] items-center gap-[3px]">
+              <span className="h-full w-[3px] rounded-full bg-current" />
+              <span className="h-full w-[3px] rounded-full bg-current" />
+            </span>
+          ) : (
+            <span
+              className="block h-0 w-0 border-y-[6px] border-l-[9px] border-y-transparent border-l-current"
+              style={isRight ? { transform: "scaleX(-1)" } : undefined}
+            />
+          )}
+        </span>
+        <span className={`flex flex-1 items-center gap-[3px] ${isRight ? "justify-end" : "justify-start"}`} aria-hidden="true">
+          <span className={`w-[2px] rounded-full bg-current/55 ${playing ? "h-[13px]" : "h-[7px]"}`} />
+          <span className={`w-[2px] rounded-full bg-current/70 ${playing ? "h-[17px]" : "h-[12px]"}`} />
+          <span className={`w-[2px] rounded-full bg-current/50 ${playing ? "h-[10px]" : "h-[8px]"}`} />
+        </span>
+        <span className="shrink-0 text-[12px] font-semibold leading-none tabular-nums opacity-75">
+          {duration || "语音"}
+        </span>
+      </button>
+      <audio
+        ref={audioRef}
+        className="hidden"
+        preload="metadata"
+        src={src}
+        onLoadedMetadata={syncMetadata}
+        onEnded={() => setPlaying(false)}
+        onPause={() => setPlaying(false)}
+        onPlay={() => setPlaying(true)}
+      />
+    </div>
+  );
 }
 
 export function ChatAttachmentBlock({
@@ -288,7 +371,7 @@ export function ChatAttachmentBlock({
     : [];
   if (!items.length) return null;
   return (
-    <div className={`flex w-full flex-col gap-1.5 ${align === "right" ? "items-end" : "items-start"}`}>
+    <div className={`flex max-w-full flex-col gap-1.5 ${align === "right" ? "items-end" : "items-start"}`}>
       {items.map((item) => {
         const src = attachmentSrc(item);
         if (item.kind === "image") {
@@ -303,17 +386,7 @@ export function ChatAttachmentBlock({
             </a>
           );
         }
-        const duration = formatAudioDuration(item.durationMs);
-        return (
-          <div key={item.id} className="w-[220px] max-w-full rounded-[14px] bg-black/5 px-2.5 py-2">
-            <div className="mb-1 flex items-center justify-between text-[11px] font-medium text-gray-500">
-              <span>语音</span>
-              {duration ? <span>{duration}</span> : null}
-            </div>
-            <audio className="h-8 w-full" controls preload="metadata" src={src} />
-            {item.transcript ? <div className="mt-1.5 max-h-8 overflow-hidden text-[11px] leading-4 text-gray-500">{item.transcript}</div> : null}
-          </div>
-        );
+        return <ChatVoiceBar key={item.id} item={item} src={src} align={align} />;
       })}
     </div>
   );
