@@ -255,11 +255,11 @@ export function MemoryDebugTab() {
   async function deleteCoreCacheItem(item: CoreCacheEntry) {
     const entryId = String(item.id || "").trim();
     if (!entryId) {
-      toast("这条核心缓存没有可删除的 id");
+      toast("这条核心记忆没有可删除的 id");
       return;
     }
     if (deletingCoreId) return;
-    const ok = window.confirm("删除这条核心缓存待审记忆？");
+    const ok = window.confirm("删除这条核心记忆？");
     if (!ok) return;
     setDeletingCoreId(entryId);
     try {
@@ -267,7 +267,7 @@ export function MemoryDebugTab() {
         method: "DELETE",
       });
       if (!j?.ok) throw new Error(j?.error || "删除失败");
-      toast("已删除核心缓存");
+      toast("已删除核心记忆");
       await reload();
     } catch (e: any) {
       toast(`删除失败：${e?.message || e}`);
@@ -352,7 +352,7 @@ export function MemoryDebugTab() {
             className={`pb-2 text-[15px] font-bold transition-all ${tab === "core" ? "tab-active" : "text-gray-300"}`}
             onClick={() => setTab("core")}
           >
-            核心缓存
+            核心记忆
           </button>
         </div>
       </div>
@@ -667,7 +667,7 @@ export function MemoryDebugTab() {
             <div className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft">
               <div className="mb-4 flex items-start justify-between">
                 <div>
-                  <h3 className="text-[14px] font-bold text-gray-800">核心缓存待审</h3>
+                  <h3 className="text-[14px] font-bold text-gray-800">核心记忆</h3>
                   <p className="mt-1 text-[12px] text-gray-400">按提拔时间倒序显示</p>
                 </div>
                 <span className="status-badge bg-purple-50 text-purple-500">
@@ -728,8 +728,8 @@ export function MemoryDebugTab() {
                         deleteCoreCacheItem(item);
                       }}
                       disabled={deletingCoreId === String(item.id || "")}
-                      title="删除核心缓存"
-                      aria-label="删除核心缓存"
+                      title="删除核心记忆"
+                      aria-label="删除核心记忆"
                     >
                       <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M3 6h18" />
@@ -743,7 +743,7 @@ export function MemoryDebugTab() {
                 </div>
               </details>
             ))}
-            {!coreItems.length ? <div className="px-1 py-10 text-center text-[12px] text-gray-300">（暂无核心缓存条目）</div> : null}
+            {!coreItems.length ? <div className="px-1 py-10 text-center text-[12px] text-gray-300">（暂无核心记忆条目）</div> : null}
           </div>
         )}
       </div>

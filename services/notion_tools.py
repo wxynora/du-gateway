@@ -1,4 +1,4 @@
-# 渡通过工具调用 Notion API：检索、读正文、待审表编辑、交换日记、日程本（NOTION_TOOLS_ENABLED=1）
+# 渡通过工具调用 Notion API：检索、读正文、交换日记、日程本（NOTION_TOOLS_ENABLED=1）
 import json
 from typing import Any, Dict, FrozenSet, List, Optional, Set
 
@@ -8,17 +8,9 @@ NOTION_EXTENDED_GROUPS: Dict[str, Dict] = {
         "keywords": ("日程", "待办", "约会", "纪念日", "schedule", "安排", "行程"),
         "names": frozenset({"notion_schedule_list", "notion_schedule_create", "notion_schedule_update"}),
     },
-    "sync": {
-        "keywords": ("同步", "待审表", "推到notion", "推到 notion", "同步回", "待审"),
-        "names": frozenset({"sync_core_cache_to_notion", "sync_core_cache_from_notion"}),
-    },
     "notion_read": {
         "keywords": ("搜索", "检索", "查一下", "找一下", "notion里", "notion 里", "页面", "正文", "read_page", "追加到"),
         "names": frozenset({"notion_search", "notion_read_page_body", "notion_append_to_page"}),
-    },
-    "core_cache": {
-        "keywords": ("核心缓存", "缓存层", "整理缓存", "缓存表", "core cache"),
-        "names": frozenset({"notion_core_cache_list", "notion_core_cache_update"}),
     },
 }
 
@@ -28,7 +20,6 @@ _ALL_EXTENDED_NAMES: FrozenSet[str] = frozenset(
 )
 
 from config import (
-    NOTION_CORE_CACHE_DATABASE_ID,
     NOTION_EXCHANGE_DIARY_DATABASE_ID,
     NOTION_NOTEBOOK_DATABASE_ID,
     NOTION_NOTEBOOK_PAGE_ID,
@@ -257,42 +248,6 @@ def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[
             },
         },
     ]
-    if NOTION_CORE_CACHE_DATABASE_ID:
-        tools.extend([
-            {
-                "type": "function",
-                "function": {
-                    "name": "notion_core_cache_list",
-                    "description": "列出核心缓存待审表当前条目（id、content、tag、importance、mention_count、promoted_at、page_id）。用于查看待审内容，后续可用 page_id 调用 notion_core_cache_update 编辑。不包含读后感列。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "limit": {"type": "integer", "description": "最多返回条数，默认 30", "default": 30},
-                        },
-                        "required": [],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "notion_core_cache_update",
-                    "description": "按 page_id 更新待审表中一条的字段（只更新传入的字段，不碰读后感）。page_id 从 notion_core_cache_list 得到。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "page_id": {"type": "string", "description": "待审表条目的页面 ID"},
-                            "content": {"type": "string", "description": "内容（可选）"},
-                            "tag": {"type": "string", "description": "分类：图书馆 / 书房 / 客厅（可选）"},
-                            "importance": {"type": "integer", "description": "1-4（可选）"},
-                            "mention_count": {"type": "integer", "description": "提及次数（可选）"},
-                            "promoted_by": {"type": "string", "description": "importance 或 mention_count（可选）"},
-                        },
-                        "required": ["page_id"],
-                    },
-                },
-            },
-        ])
     if NOTION_EXCHANGE_DIARY_DATABASE_ID:
         tools.extend([
             {
@@ -493,9 +448,6 @@ def get_notion_tools_for_inject(mode: str = "expanded", active_groups: Optional[
             },
         },
     })
-    if NOTION_CORE_CACHE_DATABASE_ID:
-        from services.gateway_tools import get_gateway_sync_tools
-        tools.extend(get_gateway_sync_tools())
     from services.weather_almanac import get_weather_almanac_tools
     tools.extend(get_weather_almanac_tools())
 
@@ -553,11 +505,9 @@ def execute_tool(name: str, arguments: dict) -> str:
     """执行单个工具（Notion、网关、小爱、天气、黄历等），返回给模型的字符串结果。"""
     from services.gateway_tools import (
         DU_SURF_TOOL_NAMES,
-        SYNC_TOOL_NAMES,
         VOICE_CALL_TOOL_NAMES,
         XIAOAI_TOOL_NAMES,
         execute_du_surf_tool,
-        execute_gateway_tool,
         execute_voice_call_tool,
         execute_xiaoai_tool,
     )
@@ -570,8 +520,6 @@ def execute_tool(name: str, arguments: dict) -> str:
         from services.html_preview_tools import execute_publish_html_preview
 
         return execute_publish_html_preview(arguments if isinstance(arguments, dict) else {})
-    if name in SYNC_TOOL_NAMES:
-        return execute_gateway_tool(name, arguments)
     if name in XIAOAI_TOOL_NAMES:
         return execute_xiaoai_tool(name, arguments)
     if name in VOICE_CALL_TOOL_NAMES:
@@ -660,54 +608,6 @@ def execute_tool(name: str, arguments: dict) -> str:
             content = (arguments.get("content") or "").strip()
             ok, msg = _append_content_to_page(page_id, content)
             return msg
-
-        if name == "notion_core_cache_list":
-            from services.core_cache_notion_sync import list_pending_entries_for_tools
-            limit = int(arguments.get("limit") or 30)
-            entries, err = list_pending_entries_for_tools(limit=limit)
-            if err:
-                return json.dumps({"error": err}, ensure_ascii=False)
-            if not entries:
-                return "待审表当前无条目。"
-            lines = []
-            for e in entries:
-                lines.append(
-                    f"page_id={e['page_id']} | id={e['id']} | tag={e.get('tag')} | importance={e.get('importance')} | "
-                    f"content={(e.get('content') or '')[:80]}..."
-                )
-            return "\n".join(lines)
-
-        if name == "notion_core_cache_update":
-            from services.core_cache_notion_sync import update_pending_entry_by_page_id
-            page_id = (arguments.get("page_id") or "").strip().replace("-", "")
-            if not page_id:
-                return "page_id 不能为空"
-            content = arguments.get("content")
-            if content is not None:
-                content = str(content).strip()
-            tag = arguments.get("tag")
-            if tag is not None:
-                tag = str(tag).strip()
-            importance = arguments.get("importance")
-            if importance is not None:
-                try:
-                    importance = int(importance)
-                except (TypeError, ValueError):
-                    importance = None
-            mention_count = arguments.get("mention_count")
-            if mention_count is not None:
-                try:
-                    mention_count = int(mention_count)
-                except (TypeError, ValueError):
-                    mention_count = None
-            promoted_by = arguments.get("promoted_by")
-            if promoted_by is not None:
-                promoted_by = str(promoted_by).strip()
-            ok, msg = update_pending_entry_by_page_id(
-                page_id, content=content, tag=tag, importance=importance,
-                mention_count=mention_count, promoted_by=promoted_by,
-            )
-            return msg if ok else json.dumps({"error": msg}, ensure_ascii=False)
 
         if name == "notion_diary_list":
             if not NOTION_EXCHANGE_DIARY_DATABASE_ID:

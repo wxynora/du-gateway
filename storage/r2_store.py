@@ -103,7 +103,7 @@ R2_KEY_GLOBAL_SUMMARY = "global/summary.txt"
 R2_KEY_GLOBAL_SUMMARY_CHUNKS = "global/summary_chunks.json"
 # 动态层：重要记忆，7 天有效，权重机制，融合/褪色/保鲜
 R2_KEY_DYNAMIC_MEMORY = "dynamic_memory/current.json"
-# 核心缓存层：动态层里「更重要」的，待每周筛选进长期层
+# 核心记忆层：动态层里「更重要」的长期记忆卡片
 R2_KEY_CORE_CACHE = "core_cache/pending.json"
 # 小本本：网关拎出后按时间先后排序存储
 R2_KEY_NOTEBOOK = "notebook/entries.json"
@@ -1481,11 +1481,11 @@ def save_dynamic_memory_maintenance_report(report: dict) -> bool:
             return False
 
 
-# ---------- 核心缓存层 pending.json（待审；importance>=4 存当轮原文，mention_count>=5 存融合版） ----------
+# ---------- 核心记忆层 pending.json（兼容旧 key；importance>=4 存当轮原文，mention_count>=5 存融合版） ----------
 
 
 def get_core_cache_pending() -> list:
-    """读取待审列表。每项含 id, promoted_by, content, importance, mention_count, promoted_at。"""
+    """读取核心记忆列表。每项含 id, promoted_by, content, importance, mention_count, promoted_at。"""
     client = _s3_client()
     if not client:
         return []
@@ -1496,7 +1496,7 @@ def get_core_cache_pending() -> list:
 
 
 def save_core_cache_pending(pending: list) -> bool:
-    """写回待审列表。多窗口写时加锁。"""
+    """写回核心记忆列表。多窗口写时加锁。"""
     client = _s3_client()
     if not client:
         return False
@@ -1535,7 +1535,7 @@ def promote_to_core_cache(
     touched_mem_id: Optional[str] = None,
 ) -> None:
     """
-    动态层写入/更新后调用：满足条件则加入 pending，去重（已存在 id 不重复加）。
+    动态层写入/更新后调用：满足条件则加入核心记忆列表，去重（已存在 id 不重复加）。
     只存“动态层总结后的记忆内容”，不存 user/assistant 原始对话。
     - 条件A：本轮触及的记忆 importance>=4 → 存该记忆的 summary content，id=imp_{window_id}_{round_index}，promoted_by=importance
     - 条件B：任一条记忆 mention_count>=5 → 存该条融合版 content，id=记忆 id，promoted_by=mention_count
@@ -1607,7 +1607,7 @@ def promote_to_core_cache(
 
 
 def delete_core_cache_by_id(entry_id: str) -> bool:
-    """从 pending 中删除指定 id 的条目（人工审完后调用）。"""
+    """从核心记忆列表中删除指定 id 的条目。"""
     pending = get_core_cache_pending()
     new_pending = [p for p in pending if p.get("id") != entry_id]
     if len(new_pending) == len(pending):

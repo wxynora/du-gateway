@@ -240,7 +240,7 @@ def register_routes(bp) -> None:
         except Exception as e:
             out["dynamic_memory"] = {"ok": False, "error": str(e)}
 
-        # 核心缓存待审
+        # 核心记忆
         try:
             pending = r2_store.get_core_cache_pending() or []
             out["core_cache"] = {"ok": True, "pending_count": len(pending)}

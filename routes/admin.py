@@ -147,7 +147,7 @@ def get_status():
     except Exception as e:
         out["dynamic_memory"] = {"ok": False, "error": str(e)}
 
-    # 核心缓存待审
+    # 核心记忆
     try:
         pending = r2_store.get_core_cache_pending() or []
         out["core_cache"] = {"ok": True, "pending_count": len(pending)}
@@ -235,14 +235,14 @@ def list_rounds(window_id):
 
 @bp.route("/core_cache", methods=["GET"])
 def get_core_cache():
-    """返回 core_cache pending 里所有待审条目。"""
+    """返回 core_cache 里所有核心记忆条目。"""
     pending = r2_store.get_core_cache_pending()
     return jsonify({"pending": pending, "count": len(pending)})
 
 
 @bp.route("/core_cache/<entry_id>", methods=["DELETE"])
 def delete_core_cache_entry(entry_id):
-    """删除指定待审条目（人工审完后调用）。entry_id 为 pending 项的 id。"""
+    """删除指定核心记忆条目。entry_id 为 core_cache 项的 id。"""
     if not entry_id:
         return jsonify({"error": "缺少 entry_id"}), 400
     ok = r2_store.delete_core_cache_by_id(entry_id)
@@ -251,7 +251,7 @@ def delete_core_cache_entry(entry_id):
 
 @bp.route("/core_cache/sync_to_notion", methods=["POST"])
 def core_cache_sync_to_notion():
-    """把当前 pending 全量推到 Notion 核心缓存 database；审阅前调用。"""
+    """把当前核心记忆条目全量推到 Notion 核心缓存 database。"""
     from services.core_cache_notion_sync import sync_to_notion
     ok, err = sync_to_notion()
     if not ok:
@@ -261,7 +261,7 @@ def core_cache_sync_to_notion():
 
 @bp.route("/core_cache/sync_from_notion", methods=["POST"])
 def core_cache_sync_from_notion():
-    """从 Notion 核心缓存 database 读回当前所有条目，完全覆盖 R2 pending；审阅/删减后调用。"""
+    """从 Notion 核心缓存 database 读回当前所有条目，追加到 R2 核心记忆。"""
     from services.core_cache_notion_sync import sync_from_notion
     ok, err = sync_from_notion()
     if not ok:

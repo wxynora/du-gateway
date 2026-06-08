@@ -2363,7 +2363,7 @@ def step_inject_notion_tools(body: dict) -> dict:
     """
     当 NOTION_TOOLS_ENABLED=1 时，向 body 注入 Notion 工具。
     基础工具（日记、小本本、记事本、气泡、天气黄历等）常驻注入；
-    扩展工具（日程、同步、核心缓存、notion 检索/读页/追加页面）暂不注入。
+    扩展工具（日程、notion 检索/读页/追加页面）暂不注入。
     """
     from config import NOTION_TOOLS_ENABLED
 

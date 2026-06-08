@@ -1,22 +1,22 @@
 # 历史记录归档流程说明
 
-## 核心缓存层处理方案（实时 + 人工筛选）
+## 核心记忆层处理方案（实时 + 人工整理）
 
 实时对话里**不写记忆库 Notion**（只写卧室 Notion 房间、小本本工具）。流程如下：
 
 ```
 动态层（R2 current.json）
        ↓ new/merge 时
-核心缓存层（R2 core_cache/pending.json）
+核心记忆层（R2 core_cache/pending.json，沿用旧 key）
        ↓ 管理端 sync_to_notion（可选）
-核心缓存待审（Notion 表 NOTION_CORE_CACHE_DATABASE_ID）
-       ↓ 人工在 Notion 里筛选
+核心记忆（Notion 表 NOTION_CORE_CACHE_DATABASE_ID）
+       ↓ 人工在 Notion 里整理
 长期层 / 记忆库（Notion 记忆库 或 四房间）
 ```
 
-- **实时**：每轮 DS 决策后只更新动态层 R2 + promote 到核心缓存 R2；不写记忆库。卧室仍写 Notion 卧室页面，小本本仍可用工具写。
-- **人工**：在 Notion「核心缓存待审」表里筛选，选中的再手动或后续脚本进长期层/记忆库。
-- **批处理归档**：跑 `feed_conversation_for_memory.py` 时，动态层 + 核心缓存照常更新 R2，**同时**把卧室/new/merge 写入记忆库 Notion（由脚本在应用决策后调 `write_archive_entry`）。
+- **实时**：每轮 DS 决策后只更新动态层 R2 + promote 到核心记忆 R2；不写记忆库。卧室仍写 Notion 卧室页面，小本本仍可用工具写。
+- **人工**：在 Notion「核心记忆」表里整理，需要时再手动或后续脚本进长期层/记忆库。
+- **批处理归档**：跑 `feed_conversation_for_memory.py` 时，动态层 + 核心记忆照常更新 R2，**同时**把卧室/new/merge 写入记忆库 Notion（由脚本在应用决策后调 `write_archive_entry`）。
 
 ---
 

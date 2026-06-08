@@ -1,4 +1,4 @@
-# 核心缓存与 Notion 剪切/粘贴：sync_to 清空 R2 并推到 Notion，sync_from 从 Notion 读回并追加到 R2
+# 核心记忆与 Notion 剪切/粘贴：sync_to 清空 R2 并推到 Notion，sync_from 从 Notion 读回并追加到 R2
 # Notion 里列名与下面一致即可直接匹配；可只建部分列，只同步存在的字段。
 from typing import Any, Optional
 
@@ -10,7 +10,7 @@ from utils.time_aware import display_time_to_iso, iso_to_display_time
 
 logger = get_logger(__name__)
 
-# 核心缓存 pending 一条的字段（与 R2 / Notion 列名一致即可匹配）
+# 核心记忆条目的字段（与 R2 / Notion 列名一致即可匹配）
 # 列名           Notion 属性类型   说明
 # id             Title            唯一标识（imp_xxx_1 或记忆 id）
 # content        Text (Rich text) 内容（当轮原文或融合版）
@@ -109,8 +109,8 @@ def _extract_prop(page: dict, prop_id: str, kind: str) -> Any:
 
 def sync_to_notion() -> tuple[bool, str]:
     """
-    剪切：把当前 R2 pending 全量推到 Notion，然后清空 R2 pending。
-    已存在同 id（标题）的页面则更新，否则创建；完成后 R2 pending 必为空。
+    剪切：把当前 R2 核心记忆全量推到 Notion，然后清空 R2 里的兼容旧 key。
+    已存在同 id（标题）的页面则更新，否则创建；完成后 R2 核心记忆列表必为空。
     返回 (成功与否, 错误信息)。
     """
     if not NOTION_CORE_CACHE_DATABASE_ID:
@@ -128,7 +128,7 @@ def sync_to_notion() -> tuple[bool, str]:
             clear_core_pending_index()
         except Exception as e:
             logger.warning("sync_to_notion 清空核心缓存索引失败 err=%s", e)
-        logger.info("sync_to_notion: pending 已空，仅清空 R2")
+        logger.info("sync_to_notion: 核心记忆已空，仅清空 R2")
         return True, ""
 
     pid_title = name_to_id.get("id")  # 用于匹配「已存在」的页面，没有 id 列则全部当新建
@@ -173,13 +173,13 @@ def sync_to_notion() -> tuple[bool, str]:
         clear_core_pending_index()
     except Exception as e:
         logger.warning("sync_to_notion 清空核心缓存索引失败 err=%s", e)
-    logger.info("sync_to_notion 完成 已推条数=%s，R2 pending 已清空", len(pending))
+    logger.info("sync_to_notion 完成 已推条数=%s，R2 核心记忆已清空", len(pending))
     return True, ""
 
 
 def sync_from_notion() -> tuple[bool, str]:
     """
-    粘贴：从 Notion 读回当前所有条目，追加到 R2 pending（不覆盖）。
+    粘贴：从 Notion 读回当前所有条目，追加到 R2 核心记忆（不覆盖）。
     返回 (成功与否, 错误信息)。
     """
     if not NOTION_CORE_CACHE_DATABASE_ID:
@@ -230,7 +230,7 @@ def sync_from_notion() -> tuple[bool, str]:
     current = r2_store.get_core_cache_pending()
     new_pending = current + pending
     if not r2_store.save_core_cache_pending(new_pending):
-        return False, "写回 R2 pending 失败"
+        return False, "写回 R2 核心记忆失败"
     try:
         from memory_vector.core_pending_index import upsert_core_pending_items
 
@@ -238,89 +238,4 @@ def sync_from_notion() -> tuple[bool, str]:
     except Exception as e:
         logger.warning("sync_from_notion 同步核心缓存索引失败 err=%s", e)
     logger.info("sync_from_notion 完成 从 Notion 读回条数=%s，追加后 R2 总条数=%s", len(pending), len(new_pending))
-    return True, ""
-
-
-def list_pending_entries_for_tools(limit: int = 50) -> tuple[list, Optional[str]]:
-    """
-    供渡工具用：列出待审表条目（含 page_id），不包含读后感。
-    返回 ([{ page_id, id, content, promoted_by, importance, mention_count, promoted_at, tag }], error)。
-    """
-    if not NOTION_CORE_CACHE_DATABASE_ID:
-        return [], "NOTION_CORE_CACHE_DATABASE_ID 未配置"
-    name_to_id, err = _get_property_ids()
-    if err or not name_to_id:
-        return [], (err or "无 properties")
-    kid = name_to_id.get("id")
-    kcontent = name_to_id.get("content")
-    kpromoted_by = name_to_id.get("promoted_by")
-    kimportance = name_to_id.get("importance")
-    kmention_count = name_to_id.get("mention_count")
-    kpromoted_at = name_to_id.get("promoted_at")
-    ktag = name_to_id.get("tag")
-    out = []
-    cursor = None
-    while len(out) < limit:
-        data, err = notion_client.query_database(
-            NOTION_CORE_CACHE_DATABASE_ID, start_cursor=cursor, page_size=min(limit - len(out), 100)
-        )
-        if err:
-            return [], str(err)
-        for page in (data or {}).get("results") or []:
-            page_id = page.get("id")
-            entry_id = _extract_prop(page, kid, "title") if kid else None
-            if not entry_id:
-                continue
-            out.append({
-                "page_id": page_id,
-                "id": entry_id,
-                "content": _extract_prop(page, kcontent, "rich_text") if kcontent else "",
-                "promoted_by": _extract_prop(page, kpromoted_by, "select") if kpromoted_by else "importance",
-                "importance": _extract_prop(page, kimportance, "number") if kimportance else 0,
-                "mention_count": _extract_prop(page, kmention_count, "number") if kmention_count else 0,
-                "promoted_at": _extract_prop(page, kpromoted_at, "rich_text") if kpromoted_at else "",
-                "tag": _extract_prop(page, ktag, "select") if ktag else "",
-            })
-        cursor = (data or {}).get("next_cursor")
-        if not cursor or not (data or {}).get("has_more"):
-            break
-    return out, None
-
-
-def update_pending_entry_by_page_id(
-    page_id: str,
-    content: Optional[str] = None,
-    promoted_by: Optional[str] = None,
-    importance: Optional[int] = None,
-    mention_count: Optional[int] = None,
-    promoted_at: Optional[str] = None,
-    tag: Optional[str] = None,
-) -> tuple[bool, str]:
-    """
-    按 page_id 更新待审表一条；只更新传入的字段，不碰读后感等其它列。
-    """
-    if not NOTION_CORE_CACHE_DATABASE_ID:
-        return False, "NOTION_CORE_CACHE_DATABASE_ID 未配置"
-    name_to_id, err = _get_property_ids()
-    if err or not name_to_id:
-        return False, (err or "无 properties")
-    props = {}
-    if content is not None and "content" in name_to_id:
-        props[name_to_id["content"]] = _prop_rich_text(content)
-    if promoted_by is not None and "promoted_by" in name_to_id:
-        props[name_to_id["promoted_by"]] = _prop_select(promoted_by)
-    if importance is not None and "importance" in name_to_id:
-        props[name_to_id["importance"]] = _prop_number(importance)
-    if mention_count is not None and "mention_count" in name_to_id:
-        props[name_to_id["mention_count"]] = _prop_number(mention_count)
-    if promoted_at is not None and "promoted_at" in name_to_id:
-        display = iso_to_display_time(promoted_at) or promoted_at
-        props[name_to_id["promoted_at"]] = _prop_rich_text(display)
-    if tag is not None and "tag" in name_to_id:
-        props[name_to_id["tag"]] = _prop_select(tag)
-    if not props:
-        return True, "无字段需要更新"
-    _, err = notion_client.update_page(page_id, props)
-    if err:
-        return False, str(err)
     return True, ""
