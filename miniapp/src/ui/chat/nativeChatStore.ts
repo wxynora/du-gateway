@@ -68,7 +68,7 @@ export const nativeChatStore: ChatHistoryStore = {
   },
 
   async migrateLocalChatHistoriesToDevice(_deviceId: string): Promise<void> {
-    // Native rows are already keyed by device. Dexie migration is orchestrated in chatHistoryDb.
+    // Native rows are already keyed by device.
   },
 
   async createDraftTurn(args): Promise<ChatOperation | null> {

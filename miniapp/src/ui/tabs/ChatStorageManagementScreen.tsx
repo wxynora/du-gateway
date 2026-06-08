@@ -23,7 +23,6 @@ export function ChatStorageManagementScreen() {
   const [headerActionsEl, setHeaderActionsEl] = useState<HTMLElement | null>(null);
 
   const sqliteSummary = useMemo(() => summarizeRows(overview?.nativeRows || []), [overview?.nativeRows]);
-  const dexieSummary = useMemo(() => summarizeRows(overview?.dexieRows || []), [overview?.dexieRows]);
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
@@ -52,15 +51,15 @@ export function ChatStorageManagementScreen() {
       const deviceId = await getOrCreatePanelDeviceId();
       await migrateLocalChatHistoriesToDevice(deviceId);
       await load({ silent: true });
-      toast("已重新检查并迁移本机聊天记录");
+      toast("已重新检查本机聊天记录");
     } catch (e: any) {
-      toast(`迁移检查失败：${e?.message || e}`);
+      toast(`检查失败：${e?.message || e}`);
     } finally {
       setMigrating(false);
     }
   }
 
-  const backendLabel = overview?.backend === "sqlite" ? "SQLite" : "Dexie fallback";
+  const backendLabel = overview?.backend === "sqlite" ? "SQLite" : "不可用";
   const activeCount = overview?.activeOperations?.length || 0;
 
   return (
@@ -94,7 +93,7 @@ export function ChatStorageManagementScreen() {
         </div>
         <div className="mt-4 grid grid-cols-3 gap-2">
           <SummaryPill label="当前后端" value={backendLabel} />
-          <SummaryPill label="消息数" value={String(activeSummaryMessages(sqliteSummary, dexieSummary, overview?.backend))} />
+          <SummaryPill label="消息数" value={String(sqliteSummary.messages)} />
           <SummaryPill label="待恢复" value={`${activeCount}`} />
         </div>
         <button
@@ -103,7 +102,7 @@ export function ChatStorageManagementScreen() {
           className="mt-4 h-10 w-full rounded-full bg-gray-900 text-[13px] font-semibold text-white active:bg-gray-700 disabled:opacity-40"
           onClick={() => void runMigrationCheck()}
         >
-          {migrating ? "检查中..." : "重新检查 / 迁移"}
+          {migrating ? "检查中..." : "重新检查"}
         </button>
       </section>
 
@@ -115,13 +114,6 @@ export function ChatStorageManagementScreen() {
           summary={sqliteSummary}
           rows={overview?.nativeRows || []}
           error={overview?.nativeError}
-        />
-        <BackendCard
-          title="Dexie"
-          subtitle="旧本地 IndexedDB，迁移后仍保留作备份"
-          active={overview?.backend === "dexie"}
-          summary={dexieSummary}
-          rows={overview?.dexieRows || []}
         />
       </section>
 
@@ -151,7 +143,7 @@ export function ChatStorageManagementScreen() {
       </section>
 
       <div className="px-1 pb-2 text-[11px] leading-5 text-gray-400">
-        这里显示的是本机聊天记忆存储。SQLite 是新版 Android 原生存储；Dexie 是旧本地备份，不会因为迁移成功立刻删除。
+        这里显示的是本机聊天记忆存储。聊天历史和待恢复发送任务现在都走 Android 原生 SQLite。
       </div>
     </div>
   );
@@ -167,10 +159,6 @@ function summarizeRows(rows: ChatHistoryLocalStatRow[]): RowSummary {
       latestAt: !acc.latestAt || updatedAt > acc.latestAt ? updatedAt : acc.latestAt,
     };
   }, { windows: 0, messages: 0, latestAt: "" });
-}
-
-function activeSummaryMessages(sqlite: RowSummary, dexie: RowSummary, backend?: "sqlite" | "dexie") {
-  return backend === "sqlite" ? sqlite.messages : dexie.messages;
 }
 
 function BackendCard({
