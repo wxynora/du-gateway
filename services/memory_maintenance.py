@@ -341,6 +341,7 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
             if not keep_mem:
                 continue
             merged_content = str(result.get("content") or "").strip() or str(keep_mem.get("content") or "").strip()
+            content_before = str(keep_mem.get("content") or "").strip()
             keep_mem["content"] = merged_content
             keep_mem["retrieval_text"] = _build_retrieval_text(merged_content)
             keep_mem["last_mentioned"] = now_beijing_iso()
@@ -353,6 +354,26 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
             retained = [m for m in retained if str((m or {}).get("id") or "") not in drop_ids]
             backfilled_ids.append(keep_id)
             changed = True
+            try:
+                from services.dynamic_memory_provenance import record_event
+
+                record_event(
+                    memory_id=keep_id,
+                    action="maintenance_merge",
+                    event_time=str(keep_mem.get("last_mentioned") or ""),
+                    content_before=content_before,
+                    content_after=merged_content,
+                    related_memory_ids=sorted(drop_ids),
+                    tag=str(keep_mem.get("tag") or ""),
+                    importance=int(keep_mem.get("importance") or 0),
+                    emotion_label=str(keep_mem.get("emotion_label") or ""),
+                    scene_type=str(keep_mem.get("scene_type") or ""),
+                    target_type=str(keep_mem.get("target_type") or ""),
+                    source="memory_maintenance",
+                    decision=result,
+                )
+            except Exception as e:
+                logger.warning("memory maintenance provenance record failed keep_id=%s error=%s", keep_id, e)
 
     report = {
         "timestamp": now_beijing_iso(),
@@ -383,6 +404,13 @@ def run_memory_maintenance(limit_candidates: int = 20, dry_run: bool = False) ->
                 remove_memory_ids_from_all_indices(removed_ids)
             except Exception as e:
                 logger.warning("memory maintenance remove indices failed: %s", e, exc_info=True)
+            try:
+                from services.dynamic_memory_provenance import delete_events_for_memories
+
+                deleted = delete_events_for_memories(removed_ids)
+                report["provenance_deleted_count"] = deleted
+            except Exception as e:
+                logger.warning("memory maintenance provenance cleanup failed: %s", e, exc_info=True)
         updated_ids = set(backfilled_ids)
         upserted_count = 0
         if embed_ok:

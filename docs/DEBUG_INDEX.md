@@ -617,6 +617,12 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 已验证：`.venv/bin/python -m py_compile services/dynamic_layer_ds.py storage/r2_store.py routes/miniapp/memory_panel.py pipeline/pipeline.py scripts/test_dynamic_layer_ds_parser.py`、`.venv/bin/python scripts/test_dynamic_layer_ds_parser.py`、`npm -C miniapp run build`、`import app` 和相关 `git diff --check` 通过。
 - 未完成 / 下次先查：历史 R2 里已经写进去的残缺动态记忆不会自动清理；如果要修旧数据，先走 MiniApp memory debug 或维护脚本，别直接手删 R2。
 
+当前状态（2026-06-08 动态记忆血缘 SQL 表）：
+- 已完成：新增本地 SQLite `data/dynamic_memory_provenance.sqlite3`（可用 `DYNAMIC_MEMORY_PROVENANCE_DB` 改路径），表 `dynamic_memory_provenance_events` 按 `memory_id`、`window_id + round_index`、`action` 建索引；`services/dynamic_memory_provenance.py` 提供 `record_event()`、`list_events_for_memory()`、`list_events_for_round()`。
+- 已完成：动态层 `new` / `merge` 成功落库后记录血缘事件；离线 `memory_maintenance` 合并重复动态记忆时记录 `maintenance_merge`，包含保留记忆 id、被合并的 related memory ids、merge 前后 content、标签和 DS 决策。动态记忆被边缘淘汰或在离线维护中被删除/并入其它记忆时，会同步从 SQL 血缘表删除该 `memory_id` 的事件。
+- 已验证：`.venv/bin/python -m py_compile config.py pipeline/pipeline.py services/dynamic_memory_provenance.py services/memory_maintenance.py scripts/test_dynamic_memory_provenance.py` 和 `.venv/bin/python scripts/test_dynamic_memory_provenance.py` 通过。
+- 未完成 / 下次继续：历史已有动态记忆未回填血缘；MiniApp 查询入口和“按 provenance 拉原始 round 重新写这条记忆”的重写流程还未接。
+
 ## 核心 Prompt / 风格规则 / 禁言模式
 
 现象：
@@ -721,7 +727,7 @@ ssh -o ControlMaster=no ali-du 'systemctl --user list-units --type=service --all
 - 网关转发状态接口：`GET /internal/claude-oauth-status`
 - 本机私有配置：`/Users/doraemon/.claude-token-sync.env`
 
-LaunchAgent 默认 `StartInterval=300`，也就是约 5 分钟跑一次。脚本先查本机 Keychain token 是否接近过期，必要时本机刷新后 POST；远端状态接口若报告新 401 或远端 token 比本机旧，也会触发 POST。远端 401 只是补救信号，不再是主链路。
+LaunchAgent 默认 `StartInterval=300`，也就是约 5 分钟跑一次。脚本先查本机 Keychain token 是否接近过期，必要时本机刷新后 POST；远端状态接口若报告新 401 或远端 token 比本机旧，也会触发 POST。远端 401 只是补救信号，不再是主链路。脚本不再临时改写 Keychain 的过期时间；只以 Claude Code 真实写回的新 `expiresAt` 为准。
 
 本机配置示例（不要提交，不要贴密钥）：
 
@@ -761,7 +767,7 @@ ssh -o ControlMaster=no ali-du 'journalctl --user -u claude-oauth-proxy.service 
 ```
 
 确认 token 是否已同步成功：
-- 本机日志应出现类似：`synced oauth via_http reason=... oauth_ready refreshed=...`
+- 本机日志应出现类似：`synced oauth via_http reason=... oauth_ready refresh_attempted=... expiresAt=...`
 - 远端 Claude OAuth proxy 日志应出现 `OAuth synced by HTTP`，或状态接口返回新的 `expiresAt`。
 - `launchctl print ...` 里 `last exit code` 应为 `0`
 
@@ -794,7 +800,9 @@ PY
 - 已改动：token sync 主链路改为 HTTP POST；新增 Claude proxy 内部同步/状态接口，网关新增 `/internal/claude-oauth-sync` 和 `/internal/claude-oauth-status` 转发。
 - 已部署：`/home/nora/claude-proxy/proxy.js` 已更新并重启 `claude-oauth-proxy.service`；服务器本机 `GET /internal/oauth-status`、`POST /internal/oauth-sync` 已验证通过。
 - 已配置：`/Users/doraemon/.claude-token-sync.env` 已创建；本地 `CLAUDE_PROXY_SYNC_KEY` 已同步到服务器 `/home/nora/claude-proxy/.env` 的 `CLAUDE_OAUTH_SYNC_KEY`，不要打印或提交该 key。
-- 未完成 / 下次先查：线上网关实际目录在 `/root/du-gateway`，当前 `nora` 用户无 sudo、无 `/root/du-gateway` 写权限，网关转发路由尚未部署到线上；`https://duxy-home.com/internal/claude-oauth-status` 当前仍是 404。启用 Mac 端公网 POST 前，需要部署网关 route 或配置一个可达的内网/VPN 同步 URL。
+当前状态（2026-06-08）：
+- 已删除：`/Users/doraemon/claude-token-sync.sh` 里的 Keychain `expiresAt` 临时改小/恢复逻辑，以及 `CLAUDE_KEYCHAIN_EXPIRES_SPOOF`、`CLAUDE_KEYCHAIN_SPOOF_EXPIRES_SECONDS` 配置说明。
+- 已调整：同步日志从 `refreshed=...` 改成 `refresh_attempted=...`，避免误解为“脚本已强制刷新出新 token”。后续判断是否真的刷新，只看 Keychain/远端状态接口里的 `expiresAt` 是否变新、`stale=false`。
 
 ## CPA / Codex 反代
 
@@ -1492,6 +1500,7 @@ npm -C miniapp run android
 - 已完成：Mac 和 VPS 加入同一 tailnet；Mac 为 `100.105.159.127`，VPS `ali-du` 为 `100.92.76.117`。VPS 与 Mac 均已关闭 Tailscale DNS 接管（`CorpDNS=false`），VPS 持久 DNS 改为 `223.5.5.5` / `1.1.1.1`，配置在 `/etc/systemd/network/10-netplan-eth0.network.d/du-gateway-dns.conf`，避免阿里云 `100.100.2.136/138` 与 Tailscale 网段冲突后导致 R2/Cloudflare 解析超时。
 - 已完成：VPS 新增只监听 Tailscale IP 的 Nginx 内网入口 `/etc/nginx/conf.d/du-gateway-tailscale.conf`，监听 `100.92.76.117:8080` 并反代到 `127.0.0.1:5000`；公网 `https://duxy-home.com` 保持不变，手机/自用前端未切内网。
 - 已完成：本机 `~/.ssh/config` 中 `ali-du` 已切到 `100.92.76.117`，新增 `ali-du-public` 保留旧公网 `47.250.162.10` 备用；Codex 群聊桥接 `/Users/doraemon/.du-gateway-codex-bridge/.env` 的 `GATEWAY_URL` 已切到 `http://100.92.76.117:8080` 并重启 LaunchAgent。
+- 已确认：`ssh ali-du` 当前登录用户为 `nora`，具备免密 sudo（`sudo -n true` 通过）；需要操作 `/root/du-gateway` 或重启 `du-gateway` 时，用 `sudo -n bash -lc 'cd /root/du-gateway && ...'`，不要误判为“没有 root 目录权限就不能部署”。
 - 已完成：本地 Claude token sync 的 `/Users/doraemon/.claude-token-sync.env` 已把 `CLAUDE_PROXY_SYNC_URL` / `CLAUDE_PROXY_STATUS_URL` 切到 `http://100.92.76.117:8080/internal/claude-oauth-*`；`com.doraemon.claude-token-sync` LaunchAgent 已重新加载，配置来源仍是 `.env`，没有把 token 写入 plist。
 - 已验证：`https://duxy-home.com/health` 和 `/miniapp/` 为 200；`http://100.92.76.117:8080/health` 为 200；带 `X-PC-Token` 调内网 `/api/codex_group_chat/tasks/recent` 为 200；桥接新启动日志显示 `gateway_host=100.92.76.117:8080`；`/Users/doraemon/claude-token-sync.sh --mark` 成功写出 `marked http status has_status=1`；`ssh ali-du` 与 `ssh ali-du-public` 均可用。
 - 未完成 / 下次继续：手机和自用前端仍走公网，不要误以为已切 Tailscale。当前 `8080` 内网入口反代整个网关；在 tailnet 只有自用 Mac/VPS 时风险较低，若后续加入手机、临时设备或他人账号，应收窄为只允许 `100.105.159.127` 且只放行 `/health`、`/api/codex_group_chat/`、`/internal/claude-oauth-*`。生产机后续使用 Tailscale 默认先加 `--accept-dns=false`，不要再让它接管 DNS。

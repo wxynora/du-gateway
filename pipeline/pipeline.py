@@ -2012,20 +2012,32 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             if m.get("id") and _is_marginal_dynamic_memory_for_prune(m, now)
         }
         if r2_store.save_dynamic_memory_list(pruned):
+            provenance_deleted = 0
             try:
                 from memory_vector.vector_index_store import remove_memory_ids_from_all_indices
 
                 n_rm = remove_memory_ids_from_all_indices(removed_ids)
+            except Exception as e:
+                n_rm = 0
+                logger.warning("动态层边缘淘汰后索引清理失败 error=%s", e, exc_info=True)
+            try:
+                from services.dynamic_memory_provenance import delete_events_for_memories
+
+                provenance_deleted = delete_events_for_memories(removed_ids)
+            except Exception as e:
+                logger.warning("动态层边缘淘汰后血缘表清理失败 error=%s", e, exc_info=True)
+            try:
                 logger.info(
-                    "动态层边缘淘汰：条数 %s -> %s，索引删除记录数=%s（max_weight=%s min_days=%s）",
+                    "动态层边缘淘汰：条数 %s -> %s，索引删除记录数=%s，血缘删除记录数=%s（max_weight=%s min_days=%s）",
                     before_n,
                     len(pruned),
                     n_rm,
+                    provenance_deleted,
                     DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT,
                     DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS,
                 )
             except Exception as e:
-                logger.warning("动态层边缘淘汰后索引清理失败 error=%s", e, exc_info=True)
+                logger.debug("动态层边缘淘汰日志失败 error=%s", e)
     memories = pruned
     # 注入侧仍只使用「7 天内」记忆，与落盘淘汰规则独立
     memories = [mem for mem in memories if _is_dynamic_memory_valid(mem, now)]
@@ -2754,6 +2766,40 @@ def _apply_one_decision(
     else:
         mention_init = 0
 
+    def _record_provenance_safe(
+        *,
+        memory_id: str,
+        action_name: str,
+        content_before: str = "",
+        content_after: str = "",
+        fused_id: str = "",
+        mem_for_labels: dict | None = None,
+    ) -> None:
+        try:
+            from services.dynamic_memory_provenance import record_event
+
+            labels = mem_for_labels if isinstance(mem_for_labels, dict) else {}
+            record_event(
+                memory_id=memory_id,
+                action=action_name,
+                window_id=window_id,
+                round_index=round_index,
+                event_time=now_iso,
+                content_before=content_before,
+                content_after=content_after,
+                fused_with_id=fused_id,
+                tag=str(labels.get("tag") or tag or ""),
+                importance=int(labels.get("importance") or importance or 0),
+                emotion_label=str(labels.get("emotion_label") or emotion_label or ""),
+                scene_type=str(labels.get("scene_type") or scene_type or ""),
+                target_type=str(labels.get("target_type") or target_type or ""),
+                source="dynamic_layer_ds",
+                round_preview=_round_messages_to_raw_text(round_messages),
+                decision=decision,
+            )
+        except Exception as e:
+            logger.warning("动态记忆血缘记录失败 memory_id=%s action=%s error=%s", memory_id, action_name, e)
+
     # 兜底：DS 标成 new 但给了客厅/书房等，若原文有私密/亲密/性相关关键词则改标卧室
     if (tag != "卧室" and "卧室" not in tag) and (action == "new" or content):
         raw_check = _round_messages_to_raw_text(round_messages)
@@ -2797,6 +2843,12 @@ def _apply_one_decision(
             window_id, round_index, _round_messages_to_raw_text(round_messages),
             current_memories, touched_mem_id=new_mem["id"],
         )
+        _record_provenance_safe(
+            memory_id=new_mem["id"],
+            action_name="new",
+            content_after=content,
+            mem_for_labels=new_mem,
+        )
         logger.debug("动态层 new window_id=%s", window_id)
         return {"tag": tag, "entry_id": new_mem["id"], "content": content, "promoted_at": new_mem["created_at"]}
 
@@ -2810,6 +2862,7 @@ def _apply_one_decision(
         merged_mem = None
         for mem in current_memories:
             if mem.get("id") == fused_with_id:
+                content_before = str(mem.get("content") or "")
                 mem["content"] = content if content else mem.get("content", "")
                 mem["retrieval_text"] = _build_retrieval_text(mem["content"])
                 mem["importance"] = importance
@@ -2836,6 +2889,14 @@ def _apply_one_decision(
         r2_store.promote_to_core_cache(
             window_id, round_index, _round_messages_to_raw_text(round_messages),
             current_memories, touched_mem_id=fused_with_id,
+        )
+        _record_provenance_safe(
+            memory_id=fused_with_id,
+            action_name="merge",
+            content_before=content_before,
+            content_after=str(merged_mem.get("content") or ""),
+            fused_id=fused_with_id,
+            mem_for_labels=merged_mem,
         )
         mem_time = merged_mem.get("created_at") or merged_mem.get("last_mentioned") or now_iso
         logger.debug("动态层 merge window_id=%s fused_with_id=%s", window_id, fused_with_id)
