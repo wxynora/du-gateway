@@ -1716,9 +1716,9 @@ export function MainChatScreen({
     ? "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/25 bg-white/25 text-gray-800/85 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur-2xl transition-colors active:bg-white/40"
     : "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors active:bg-gray-100";
   const chatHeaderCenterPillClass = hasCustomChatBackground
-    ? "flex max-w-[54vw] min-w-0 flex-col items-center rounded-full border border-white/35 bg-white/45 px-4 py-1.5 text-center shadow-[0_8px_24px_rgba(15,23,42,0.10)] backdrop-blur-2xl"
-    : "flex max-w-[54vw] min-w-0 flex-col items-center rounded-full border border-gray-100/80 bg-white/85 px-4 py-1.5 text-center shadow-[0_8px_20px_rgba(15,23,42,0.06)] backdrop-blur-xl";
-  const chatHeaderTitleFontSize = Math.max(12, Math.min(15, chatTitleFontSize - 2));
+    ? "flex h-10 w-[10.5rem] max-w-full min-w-0 flex-col items-center justify-center rounded-full border border-white/35 bg-white/45 px-3 text-center shadow-[0_8px_24px_rgba(15,23,42,0.10)] backdrop-blur-2xl"
+    : "flex h-10 w-[10.5rem] max-w-full min-w-0 flex-col items-center justify-center rounded-full border border-gray-100/80 bg-white/85 px-3 text-center shadow-[0_8px_20px_rgba(15,23,42,0.06)] backdrop-blur-xl";
+  const chatHeaderTitleFontSize = Math.max(11, Math.min(13, chatTitleFontSize - 4));
   const chatFooterClass = hasCustomChatBackground
     ? "border-white/20 bg-white/25 shadow-[0_-10px_30px_rgba(15,23,42,0.10)] backdrop-blur-xl"
     : "border-gray-100 bg-white";
@@ -1788,12 +1788,12 @@ export function MainChatScreen({
           <div className="flex min-w-0 justify-center">
             <div className={chatHeaderCenterPillClass}>
               <div
-                className="max-w-full truncate font-semibold text-gray-900"
+                className="max-w-full truncate font-semibold leading-[1.05] text-gray-900"
                 style={{ fontSize: `${chatHeaderTitleFontSize}px` }}
               >
                 {title}
               </div>
-              <div className="mt-0.5 flex justify-center">
+              <div className="mt-[2px] flex w-full min-w-0 justify-center">
                 <ChatHeaderStatus sending={assistantTyping} />
               </div>
             </div>
