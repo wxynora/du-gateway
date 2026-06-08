@@ -1722,6 +1722,7 @@ export function MainChatScreen({
   const transparentBubbleClass = TRANSPARENT_BUBBLE_CLASS;
   const hasCustomChatBackground = Boolean(String(chatBackgroundImage || "").trim());
   const chatBackgroundAlpha = Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100));
+  const chatBackgroundOverlayAlpha = 1 - chatBackgroundAlpha;
   const chatChromeClass = hasCustomChatBackground
     ? "border-white/25 bg-white/60 shadow-[0_10px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl"
     : "border-gray-100/50 bg-white/80 backdrop-blur-md";
@@ -1763,15 +1764,23 @@ export function MainChatScreen({
 
   return (
     <div
-      className="absolute inset-0 z-30 flex w-full max-w-full flex-col overflow-x-hidden"
+      className="fixed inset-0 z-30 flex h-[100lvh] min-h-screen w-full max-w-full flex-col overflow-hidden overscroll-none bg-[#F8F9FA]"
       style={{
         fontFamily: chatFontFamily,
-        backgroundColor: `rgba(248, 249, 250, ${chatBackgroundAlpha})`,
-        backgroundImage: chatBackgroundImage ? `linear-gradient(rgba(248,249,250,${1 - chatBackgroundAlpha}), rgba(248,249,250,${1 - chatBackgroundAlpha})), url(${chatBackgroundImage})` : undefined,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
       }}
     >
+      {hasCustomChatBackground ? (
+        <>
+          <div
+            className="pointer-events-none fixed inset-0 z-0 bg-cover bg-center"
+            style={{ backgroundImage: `url(${chatBackgroundImage})` }}
+          />
+          <div
+            className="pointer-events-none fixed inset-0 z-0"
+            style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})` }}
+          />
+        </>
+      ) : null}
       <div className={`absolute top-0 z-20 w-full border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] ${chatChromeClass}`}>
         <div className="flex items-center">
           <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
@@ -1859,7 +1868,7 @@ export function MainChatScreen({
 
       <div
         ref={messagesScrollRef}
-        className={`min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto px-3.5 pb-5 ${searchOpen ? "pt-[156px]" : "pt-[104px]"}`}
+        className={`relative z-10 min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-3.5 pb-5 ${searchOpen ? "pt-[156px]" : "pt-[104px]"}`}
       >
         <div className="space-y-4">
           {groupedMessages.map((group, index) => (
@@ -2036,7 +2045,7 @@ export function MainChatScreen({
         </div>
       </div>
 
-      <div className={`z-20 border-t pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
+      <div className={`relative z-20 border-t pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
         <div className={`overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/35 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
           <div className="flex space-x-5 px-6 pb-2 pt-5">
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />

@@ -216,8 +216,8 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 未完成 / 下次继续：还没做服务端消息级增量同步、长历史分页、Room/Compose 重写或多端冲突合并；本轮默认不重建正式 `miniapp_static`，临时 Vite 产物放 `/tmp`。
 
 当前状态（2026-06-08 聊天自定义背景全屏）：
-- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 在设置聊天背景图时，让背景从最外层铺满整个聊天界面；顶部栏、搜索框、底部输入区和加号工具栏改为半透明磨砂层，未设置背景图时保留原白底样式。
-- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npx vite build --outDir /tmp/du-gateway-miniapp-bg-build --emptyOutDir true`、`npm run build:android` 通过；已确认新样式进入 `miniapp_static` bundle。
+- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 参考一起听页面，把聊天页根容器改为 `fixed inset-0 h-[100lvh]`，自定义背景图拆成独立 `fixed inset-0` 背景层，不再受父容器或底部导航布局限制；顶部栏、搜索框、底部输入区和加号工具栏保持半透明磨砂层，未设置背景图时保留原白底样式。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npx vite build --outDir /tmp/du-gateway-miniapp-chat-bg-fullscreen-build --emptyOutDir true`、`npm run build:android` 通过；已确认新样式进入 `miniapp_static` bundle。
 - 未完成 / 下次继续：本轮只改聊天页背景视觉层，不改聊天发送、群聊、ChatStore/outbox 或 Android 原生壳逻辑；如果手机端加载远端 `https://duxy-home.com/miniapp/`，还需要部署更新后的 `miniapp_static` 才能看到这版前端。
 
 ## 和渡一起听 / 音乐旋律分析
