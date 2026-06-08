@@ -3,17 +3,23 @@ from __future__ import annotations
 import base64
 import logging
 import time
+from urllib.parse import quote
 from uuid import uuid4
 
 from flask import Response, jsonify, request
 
-from config import TELEGRAM_PROACTIVE_TARGET_USER_ID, VOICE_CALL_MAX_BYTES, VOICE_CALL_WINDOW_ID
+from config import R2_PUBLIC_URL, TELEGRAM_PROACTIVE_TARGET_USER_ID, VOICE_CALL_MAX_BYTES, VOICE_CALL_WINDOW_ID
 from storage import r2_store
+from services.html_preview_store import resolve_preview_base_url_for_http_request
 from utils.time_aware import now_beijing_iso
 
 logger = logging.getLogger(__name__)
 
 TTS_EMOTION_VALUES = {"", "happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whisper"}
+CHAT_MEDIA_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"}
+CHAT_MEDIA_AUDIO_TYPES = {"audio/webm", "audio/mp4", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg"}
+CHAT_MEDIA_IMAGE_MAX_BYTES = 12 * 1024 * 1024
+CHAT_MEDIA_AUDIO_MAX_BYTES = max(1024, int(VOICE_CALL_MAX_BYTES or (12 * 1024 * 1024)))
 
 
 def _voice_call_default_config() -> dict:
@@ -37,6 +43,47 @@ def _miniapp_voice_avatar_url(avatar_version: int) -> str:
     if v > 0:
         return f"/miniapp-api/voice-avatar/{v}"
     return "/miniapp-api/voice-avatar"
+
+
+def _chat_media_public_url(key: str) -> str:
+    media_key = str(key or "").strip()
+    public_base = (R2_PUBLIC_URL or "").strip().rstrip("/")
+    if public_base:
+        return f"{public_base}/{media_key.lstrip('/')}"
+    base = resolve_preview_base_url_for_http_request(request.url_root or "").strip().rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/miniapp-api/chat-media/raw-public?key={quote(media_key, safe='/')}"
+
+
+def _chat_media_attachment(row: dict, *, duration_ms: int = 0, transcript: str = "") -> dict:
+    key = str((row or {}).get("key") or "").strip()
+    kind = str((row or {}).get("kind") or "").strip().lower()
+    ctype = str((row or {}).get("contentType") or "").strip().lower()
+    item = {
+        "id": key.rsplit("/", 1)[-1] if key else uuid4().hex,
+        "kind": kind,
+        "mime": ctype,
+        "remoteKey": key,
+        "remoteUrl": _chat_media_public_url(key),
+        "size": int((row or {}).get("size") or 0),
+        "createdAt": str((row or {}).get("createdAt") or now_beijing_iso()),
+    }
+    if duration_ms > 0:
+        item["durationMs"] = int(duration_ms)
+    if transcript:
+        item["transcript"] = transcript
+    return item
+
+
+def _chat_media_kind_for_mime(mime_type: str, explicit_kind: str = "") -> str:
+    kind = str(explicit_kind or "").strip().lower()
+    mt = str(mime_type or "").strip().lower()
+    if kind in {"image", "audio"}:
+        return kind
+    if mt in CHAT_MEDIA_AUDIO_TYPES or mt.startswith("audio/"):
+        return "audio"
+    return "image"
 
 
 def _resolve_voice_call_window_id(explicit_window_id: str = "") -> str:
@@ -411,6 +458,96 @@ def register_routes(bp) -> None:
                 "audio_format": audio_format,
             }
         )
+
+    @bp.route("/chat-media/upload", methods=["POST"])
+    def miniapp_chat_media_upload():
+        f = request.files.get("file")
+        if not f:
+            return jsonify({"ok": False, "error": "缺少 file"}), 400
+        mime_type = (f.mimetype or request.form.get("mime_type") or "application/octet-stream").strip().lower()
+        kind = _chat_media_kind_for_mime(mime_type, request.form.get("kind") or "")
+        allowed = CHAT_MEDIA_AUDIO_TYPES if kind == "audio" else CHAT_MEDIA_IMAGE_TYPES
+        max_bytes = CHAT_MEDIA_AUDIO_MAX_BYTES if kind == "audio" else CHAT_MEDIA_IMAGE_MAX_BYTES
+        if mime_type not in allowed:
+            return jsonify({"ok": False, "error": f"暂不支持的文件格式：{mime_type or 'unknown'}"}), 400
+        content = f.read()
+        if not content:
+            return jsonify({"ok": False, "error": "文件为空"}), 400
+        if len(content) > max_bytes:
+            return jsonify({"ok": False, "error": "文件太大了，换小一点再试"}), 400
+        row = r2_store.upload_sumitalk_chat_media_file(kind, f.filename or f"chat-media", content, mime_type)
+        if not row:
+            return jsonify({"ok": False, "error": "上传失败"}), 500
+        attachment = _chat_media_attachment(row)
+        return jsonify({"ok": True, "media": attachment, "attachment": attachment})
+
+    @bp.route("/chat-media/transcribe", methods=["POST"])
+    def miniapp_chat_media_transcribe():
+        f = request.files.get("audio") or request.files.get("file")
+        if not f:
+            return jsonify({"ok": False, "error": "缺少 audio"}), 400
+        mime_type = (f.mimetype or request.form.get("mime_type") or "application/octet-stream").strip().lower()
+        if mime_type not in CHAT_MEDIA_AUDIO_TYPES:
+            return jsonify({"ok": False, "error": f"暂不支持的音频格式：{mime_type or 'unknown'}"}), 400
+        audio_bytes = f.read()
+        if not audio_bytes:
+            return jsonify({"ok": False, "error": "音频为空"}), 400
+        if len(audio_bytes) > CHAT_MEDIA_AUDIO_MAX_BYTES:
+            return jsonify({"ok": False, "error": "语音太长了，缩短一点再试"}), 400
+        filename = (f.filename or "voice.webm").strip() or "voice.webm"
+        try:
+            from services.stt import transcribe_speech
+        except Exception as e:
+            logger.warning("chat-media transcribe 依赖加载失败 err=%s", e)
+            return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
+        result = transcribe_speech(audio_bytes=audio_bytes, mime_type=mime_type, filename=filename) or {}
+        text = str(result.get("text") or "").strip()
+        row = r2_store.upload_sumitalk_chat_media_file("audio", filename, audio_bytes, mime_type)
+        if not row:
+            return jsonify({"ok": False, "error": "语音保存失败"}), 500
+        attachment = _chat_media_attachment(row, transcript=text)
+        return jsonify(
+            {
+                "ok": True,
+                "text": text,
+                "audio_observations": str(result.get("audio_observations") or ""),
+                "stt_provider": str(result.get("provider") or ""),
+                "media": attachment,
+                "attachment": attachment,
+            }
+        )
+
+    @bp.route("/chat-media/tts", methods=["POST"])
+    def miniapp_chat_media_tts():
+        body = request.get_json(silent=True) or {}
+        text = str(body.get("text") or "").strip()
+        audio_format = str(body.get("audio_format") or "mp3").strip().lower() or "mp3"
+        if not text:
+            return jsonify({"ok": False, "error": "缺少 text"}), 400
+        if audio_format not in ("mp3", "wav"):
+            return jsonify({"ok": False, "error": f"暂不支持的 audio_format：{audio_format}"}), 400
+        try:
+            from services.minimax_tts import tts_to_audio_bytes
+        except Exception as e:
+            logger.warning("chat-media tts 依赖加载失败 err=%s", e)
+            return jsonify({"ok": False, "error": "语音服务初始化失败"}), 500
+        audio_bytes = tts_to_audio_bytes(text, audio_format=audio_format)
+        if not audio_bytes:
+            return jsonify({"ok": False, "error": "语音生成失败"}), 502
+        mime_type = "audio/wav" if audio_format == "wav" else "audio/mpeg"
+        row = r2_store.upload_sumitalk_chat_media_file("audio", f"du-reply.{audio_format}", audio_bytes, mime_type)
+        if not row:
+            return jsonify({"ok": False, "error": "语音保存失败"}), 500
+        attachment = _chat_media_attachment(row, transcript=text)
+        return jsonify({"ok": True, "media": attachment, "attachment": attachment})
+
+    @bp.route("/chat-media/raw-public", methods=["GET"])
+    def miniapp_chat_media_raw_public():
+        key = (request.args.get("key") or "").strip()
+        data, ctype = r2_store.get_sumitalk_chat_media_file(key)
+        if not data:
+            return jsonify({"ok": False, "error": "未找到"}), 404
+        return Response(data, mimetype=ctype or "application/octet-stream", headers={"Cache-Control": "public, max-age=86400"})
 
     @bp.route("/call-records", methods=["GET"])
     def miniapp_get_call_records():

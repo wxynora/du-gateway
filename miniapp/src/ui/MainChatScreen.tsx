@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, setPanelToken } from "./api";
-import { AvatarBubble, ChatActionButton, ChatBubbleFrame, ChatHeaderStatus, HtmlBlock, PlainTextBlock, RichTextBlock, copyText, formatTokenCountValue } from "./ChatPresentation";
+import { AvatarBubble, ChatActionButton, ChatAttachmentBlock, ChatBubbleFrame, ChatHeaderStatus, HtmlBlock, PlainTextBlock, RichTextBlock, copyText, formatTokenCountValue } from "./ChatPresentation";
 import {
   TRANSPARENT_BUBBLE_CLASS,
   resolveBubbleClass,
@@ -38,9 +38,12 @@ import {
   getChatSearchMatchId,
   groupRoleLabel,
   groupChatMessages,
+  chatAttachmentPreviewLabel,
+  normalizeChatAttachments,
   pickBetterHistory,
   sanitizeHistoryMessages,
   shouldShowGroupTime,
+  type ChatAttachment,
   type ChatDraftMessage,
   type ChatSearchMatch,
   type ChatTimeFormat,
@@ -55,6 +58,7 @@ import {
   ChevronLeftIcon,
   ChevronUpMini,
   CopyIconMini,
+  MicIconMini,
   PlusIcon,
   SearchIconMini,
 } from "./icons";
@@ -83,6 +87,12 @@ import {
   waitForSumiTalkChatJob,
   waitMs,
 } from "./chat/sumitalkChatClient";
+import {
+  createDuReplyAudio,
+  resolveRecorderMimeType,
+  transcribeChatAudio,
+  uploadChatImage,
+} from "./chat/chatMedia";
 type CodexGroupChatTask = {
   id?: string;
   mode?: string;
@@ -183,6 +193,58 @@ function isGroupDiscussionStopCommand(content: string): boolean {
 
 function isGroupDiscussionContinueCommand(content: string): boolean {
   return GROUP_DISCUSSION_CONTINUE_RE.test(String(content || ""));
+}
+
+function contentWithAttachmentHint(content: string, attachments: ChatAttachment[]): string {
+  const text = String(content || "").trim();
+  const labels = attachments
+    .map((item) => {
+      if (item.kind === "image") return "[图片]";
+      if (item.kind === "audio") {
+        const transcript = String(item.transcript || "").trim();
+        if (transcript && transcript !== text) return `[语音转写] ${transcript}`;
+        return "[语音]";
+      }
+      return "[附件]";
+    })
+    .filter(Boolean);
+  return [text, ...labels].filter(Boolean).join("\n").trim();
+}
+
+function buildPrivateUserContent(content: string, attachments: ChatAttachment[]): string | Array<Record<string, any>> {
+  const text = String(content || "").trim();
+  const imageParts = attachments
+    .filter((item) => item.kind === "image" && String(item.remoteUrl || "").trim())
+    .map((item) => ({
+      type: "image_url",
+      image_url: { url: String(item.remoteUrl || "").trim() },
+    }));
+  if (!imageParts.length) return contentWithAttachmentHint(text, attachments);
+  const parts: Array<Record<string, any>> = [];
+  if (text) parts.push({ type: "text", text });
+  parts.push(...imageParts);
+  return parts;
+}
+
+function extractAssistantAttachments(data: any): ChatAttachment[] {
+  const content = data?.choices?.[0]?.message?.content || data?.message?.content || data?.content;
+  if (!Array.isArray(content)) return [];
+  const out: ChatAttachment[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    if (part.type === "image_url") {
+      const url = String(part.image_url?.url || "").trim();
+      if (!url || /^data:/i.test(url)) continue;
+      out.push({
+        id: String(part.id || url || `assistant-image-${out.length}`),
+        kind: "image",
+        remoteUrl: url,
+        mime: String(part.mime || ""),
+        alt: String(part.alt || "图片"),
+      });
+    }
+  }
+  return normalizeChatAttachments(out);
 }
 
 function parseGroupDiscussionContinueTurns(content: string): number {
@@ -374,6 +436,8 @@ export function MainChatScreen({
   const messagesRef = useRef<ChatDraftMessage[]>(seedMessages);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [mediaBusy, setMediaBusy] = useState(false);
+  const [recordingChatVoice, setRecordingChatVoice] = useState(false);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
   const [plusOpen, setPlusOpen] = useState(false);
@@ -386,6 +450,13 @@ export function MainChatScreen({
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const chatVoiceStreamRef = useRef<MediaStream | null>(null);
+  const chatVoiceRecorderRef = useRef<MediaRecorder | null>(null);
+  const chatVoiceChunksRef = useRef<Blob[]>([]);
+  const chatVoiceMimeRef = useRef("");
+  const chatVoicePressingRef = useRef(false);
+  const chatVoiceStartPromiseRef = useRef<Promise<boolean> | null>(null);
 
   const [activeModel, setActiveModel] = useState(() => {
     try {
@@ -403,6 +474,22 @@ export function MainChatScreen({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        if (chatVoiceRecorderRef.current && chatVoiceRecorderRef.current.state !== "inactive") {
+          chatVoiceRecorderRef.current.stop();
+        }
+      } catch {}
+      chatVoiceRecorderRef.current = null;
+      chatVoiceChunksRef.current = [];
+      if (chatVoiceStreamRef.current) {
+        chatVoiceStreamRef.current.getTracks().forEach((track) => track.stop());
+        chatVoiceStreamRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1279,15 +1366,17 @@ export function MainChatScreen({
     saveDisplayHistoryInBackground(nextMessages, { localDeviceId });
   }
 
-  async function sendChatContent(rawContent: string, options: { displayContent?: string } = {}) {
+  async function sendChatContent(rawContent: string, options: { displayContent?: string; attachments?: ChatAttachment[]; voiceReply?: boolean } = {}) {
     const content = String(rawContent || "").trim();
+    const attachments = normalizeChatAttachments(options.attachments);
+    const effectiveContent = contentWithAttachmentHint(content, attachments);
     const canSendWhileBusy = groupChatMode && (
       isBenbenCancelCommand(content)
       || (groupDiscussionRunning && isGroupDiscussionStopCommand(content))
       || isGroupDiscussionContinueCommand(content)
     );
-    if (!content || (sending && !canSendWhileBusy)) return;
-    const displayContent = String(options.displayContent || content).trim() || content;
+    if ((!content && !attachments.length) || (sending && !canSendWhileBusy)) return;
+    const displayContent = String(options.displayContent ?? content).trim();
     if (!windowId) {
       toast("当前还没拿到聊天窗口 ID，不能接入共享上下文");
       return;
@@ -1382,6 +1471,7 @@ export function MainChatScreen({
       status: "sent",
       clientRequestId,
       operationId: operationId || undefined,
+      ...(attachments.length ? { attachments } : {}),
     };
     const assistantId = shouldRequestDu ? `assistant-${baseTimestamp + 1}` : "";
     const assistantCreatedAt = shouldRequestDu ? new Date(baseTimestamp + 1).toISOString() : "";
@@ -1411,10 +1501,10 @@ export function MainChatScreen({
     const nextMessages = [...messagesRef.current, userMsg];
     const requestUserContent = shouldRequestDu
       ? isGroupFreeDiscussion
-        ? buildGroupFreeDiscussionOpeningContent(nextMessages, content)
+        ? buildGroupFreeDiscussionOpeningContent(nextMessages, effectiveContent)
         : groupChatMode
-        ? buildGroupTurnUserContent(nextMessages, content)
-        : content
+        ? buildGroupTurnUserContent(nextMessages, effectiveContent)
+        : buildPrivateUserContent(content, attachments)
       : "";
     const musicBgmContext = shouldRequestDu && !groupChatMode ? readMusicBgmContext() : null;
     const requestPath = shouldRequestDu ? (groupChatMode ? "/miniapp-api/sumitalk-chat-jobs" : "/miniapp-api/sumitalk-chat") : "";
@@ -1477,7 +1567,7 @@ export function MainChatScreen({
       if (shouldRequestBenben) {
         benbenCreatePromise = requestBenbenGroupReply({
           baseMessages: messagesRef.current,
-          userContent: content,
+          userContent: effectiveContent,
           duReply: "",
           replyTarget,
           clientRequestId,
@@ -1528,6 +1618,15 @@ export function MainChatScreen({
         initialDuReply = reply;
         const reasoning = extractAssistantReasoning(data);
         const tokenCount = extractTokenCount(data);
+        const assistantAttachments = extractAssistantAttachments(data);
+        if (options.voiceReply) {
+          try {
+            const audio = await createDuReplyAudio(reply);
+            if (audio) assistantAttachments.push(audio);
+          } catch (e: any) {
+            toast(`回复语音生成失败：${e?.message || e}`);
+          }
+        }
         const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
           id: assistantId,
           role: "assistant" as const,
@@ -1539,6 +1638,7 @@ export function MainChatScreen({
           jobId: jobId || undefined,
           reasoning: reasoning || undefined,
           tokenCount,
+          ...(assistantAttachments.length ? { attachments: assistantAttachments } : {}),
         });
         await completeChatOperation(operationId, {
           id: assistantId,
@@ -1551,6 +1651,7 @@ export function MainChatScreen({
           jobId: jobId || undefined,
           reasoning: reasoning || undefined,
           tokenCount,
+          ...(assistantAttachments.length ? { attachments: assistantAttachments } : {}),
         });
         messagesRef.current = finalMessages;
         setMessages(finalMessages);
@@ -1570,7 +1671,7 @@ export function MainChatScreen({
       ) {
         void runGroupFreeDiscussion({
           runId: discussionRunId,
-          topic: content,
+          topic: effectiveContent,
           replyTarget,
           initialDuReply,
         });
@@ -1617,6 +1718,129 @@ export function MainChatScreen({
     await sendChatContent(input);
   }
 
+  function openImagePicker() {
+    if (sending || mediaBusy) return;
+    setPlusOpen(false);
+    imageInputRef.current?.click();
+  }
+
+  async function handleImageInputChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+    if (!file || sending || mediaBusy) return;
+    setMediaBusy(true);
+    try {
+      const attachment = await uploadChatImage(file);
+      await sendChatContent(input, { attachments: [attachment] });
+    } catch (e: any) {
+      toast(`图片发送失败：${e?.message || e}`);
+    } finally {
+      setMediaBusy(false);
+    }
+  }
+
+  async function ensureChatVoiceStream(): Promise<MediaStream> {
+    if (chatVoiceStreamRef.current) return chatVoiceStreamRef.current;
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前环境不支持麦克风录音");
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    chatVoiceStreamRef.current = stream;
+    return stream;
+  }
+
+  async function beginChatVoiceRecording(): Promise<boolean> {
+    if (sending || mediaBusy || recordingChatVoice) return false;
+    setMediaBusy(true);
+    try {
+      const stream = await ensureChatVoiceStream();
+      chatVoiceChunksRef.current = [];
+      chatVoiceMimeRef.current = resolveRecorderMimeType();
+      const recorder = chatVoiceMimeRef.current ? new MediaRecorder(stream, { mimeType: chatVoiceMimeRef.current }) : new MediaRecorder(stream);
+      chatVoiceRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) chatVoiceChunksRef.current.push(event.data);
+      };
+      recorder.start(1000);
+      setRecordingChatVoice(true);
+      return true;
+    } catch (e: any) {
+      toast(`录音失败：${e?.message || e}`);
+      return false;
+    } finally {
+      setMediaBusy(false);
+    }
+  }
+
+  async function stopChatVoiceRecording() {
+    const recorder = chatVoiceRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+    setMediaBusy(true);
+    try {
+      const mimeType = chatVoiceMimeRef.current || recorder.mimeType || "audio/webm";
+      const blob = await new Promise<Blob>((resolve) => {
+        const finalize = () => {
+          recorder.removeEventListener("stop", finalize);
+          resolve(new Blob(chatVoiceChunksRef.current, { type: mimeType }));
+        };
+        recorder.addEventListener("stop", finalize);
+        recorder.stop();
+      });
+      setRecordingChatVoice(false);
+      chatVoiceChunksRef.current = [];
+      if (blob.size <= 0) throw new Error("录音为空");
+      const result = await transcribeChatAudio(blob, mimeType);
+      const transcript = String(result.text || "").trim();
+      if (!transcript) throw new Error("没识别出内容，再说一遍试试");
+      await sendChatContent(transcript, {
+        attachments: [{ ...result.attachment, transcript }],
+        voiceReply: true,
+      });
+    } catch (e: any) {
+      setRecordingChatVoice(false);
+      toast(`语音发送失败：${e?.message || e}`);
+    } finally {
+      setMediaBusy(false);
+    }
+  }
+
+  function handleChatVoicePressStart(event: React.PointerEvent<HTMLButtonElement>) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    if (sending || mediaBusy || chatVoicePressingRef.current) return;
+    chatVoicePressingRef.current = true;
+    setPlusOpen(false);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Some embedded WebViews do not expose pointer capture.
+    }
+    chatVoiceStartPromiseRef.current = beginChatVoiceRecording();
+  }
+
+  function handleChatVoicePressEnd(event: React.PointerEvent<HTMLButtonElement>) {
+    if (!chatVoicePressingRef.current && !chatVoiceStartPromiseRef.current) return;
+    event.preventDefault();
+    chatVoicePressingRef.current = false;
+    try {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // Ignore WebView pointer-capture quirks.
+    }
+    void (async () => {
+      const startPromise = chatVoiceStartPromiseRef.current;
+      chatVoiceStartPromiseRef.current = null;
+      if (startPromise) await startPromise.catch(() => false);
+      await stopChatVoiceRecording();
+    })();
+  }
+
   const avatarClass = accent === "wenyou"
     ? "bg-[#F8F0F4] text-[#704A5D]"
     : "bg-[#F0F4F8] text-[#4A5568]";
@@ -1647,9 +1871,9 @@ export function MainChatScreen({
                 ? `路线安排 ${part.systemCard.title} ${part.systemCard.origin || ""} ${(part.systemCard.destinations || []).join(" ")}`
                 : part.systemCard?.type === "travel_transport_detail"
                   ? `交通路线 ${part.systemCard.title} ${part.systemCard.from} ${part.systemCard.to}`
-                  : part.systemCard?.type === "travel_food_detail"
-                    ? `吃喝推荐 ${part.systemCard.title} ${part.systemCard.placeName || ""} ${part.systemCard.keywords || ""} ${(part.systemCard.items || []).map((item) => item.name).join(" ")}`
-                    : String(part.content || "");
+                : part.systemCard?.type === "travel_food_detail"
+                  ? `吃喝推荐 ${part.systemCard.title} ${part.systemCard.placeName || ""} ${part.systemCard.keywords || ""} ${(part.systemCard.items || []).map((item) => item.name).join(" ")}`
+                  : `${String(part.content || "")} ${chatAttachmentPreviewLabel(part.attachments)}`;
         if (!searchable.toLowerCase().includes(query)) return;
         matches.push({
           id: getChatSearchMatchId(group.id, partIndex),
@@ -1840,21 +2064,34 @@ export function MainChatScreen({
                       const matchId = getChatSearchMatchId(group.id, index);
                       const isActiveSearchPart = activeSearchMatchId === matchId;
                       const bubbleSkin = transparentBubbleEnabled ? undefined : resolveBubbleSkin(userBubbleStyle);
+                      const hasText = Boolean(String(part.content || "").trim());
+                      const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
+                      const hasBubble = hasText || audioAttachments.length > 0;
                       return (
-                        <ChatBubbleFrame
+                        <div
                           key={`${group.id}-${index}`}
                           ref={(el) => {
                             searchResultRefs.current[matchId] = el;
                           }}
-                          skin={bubbleSkin}
-                          align="right"
-                          className={`block max-w-full rounded-[18px] px-2.5 py-[5px] text-left font-medium leading-[1.42] shadow-sm ${
-                            transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
-                          } ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
-                          style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
+                          className={`flex max-w-full flex-col items-end gap-1.5 ${isActiveSearchPart ? "rounded-[20px] ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
                         >
-                          <PlainTextBlock content={part.content || (sending ? "…" : "")} />
-                        </ChatBubbleFrame>
+                          <ChatAttachmentBlock attachments={part.attachments} align="right" kinds={["image"]} />
+                          {hasBubble ? (
+                            <ChatBubbleFrame
+                              skin={bubbleSkin}
+                              align="right"
+                              className={`block max-w-full rounded-[18px] px-2.5 py-[5px] text-left font-medium leading-[1.42] shadow-sm ${
+                                transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
+                              }`}
+                              style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
+                            >
+                              <div className="space-y-1.5">
+                                <ChatAttachmentBlock attachments={audioAttachments} align="right" />
+                                {hasText ? <PlainTextBlock content={part.content} /> : null}
+                              </div>
+                            </ChatBubbleFrame>
+                          ) : null}
+                        </div>
                       );
                     })}
                   </div>
@@ -1881,6 +2118,9 @@ export function MainChatScreen({
                       const matchId = getChatSearchMatchId(group.id, index);
                       const isActiveSearchPart = activeSearchMatchId === matchId;
                       const bubbleSkin = transparentBubbleEnabled || group.role === "benben" ? undefined : resolveBubbleSkin(assistantBubbleStyle);
+                      const hasText = Boolean(String(part.content || "").trim());
+                      const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
+                      const hasBubble = hasText || audioAttachments.length > 0;
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -1900,6 +2140,7 @@ export function MainChatScreen({
                               </div>
                             </details>
                           ) : null}
+                          <ChatAttachmentBlock attachments={part.attachments} align="left" kinds={["image"]} />
                           {part.systemCard?.type === "system_alarm_created" ? (
                             <SystemAlarmCreatedBubble
                               card={part.systemCard}
@@ -1940,50 +2181,61 @@ export function MainChatScreen({
                             />
                           ) : (
                             <>
-                              <ChatBubbleFrame
-                                skin={bubbleSkin}
-                                className={`inline-block w-fit max-w-full rounded-[18px] px-2.5 py-[5px] font-medium leading-[1.42] shadow-sm ${
-                                  transparentBubbleEnabled
-                                    ? TRANSPARENT_BUBBLE_CLASS
-                                    : group.role === "benben"
-                                      ? "border border-amber-100 bg-[#FFF7E6] text-[#3F2A11]"
-                                      : resolveBubbleClass("assistant", assistantBubbleStyle)
-                                }`}
-                                style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
-                              >
-                                {part.render === "html" ? (
-                                  <HtmlBlock content={part.content || (sending ? "…" : "")} />
-                                ) : part.render === "plain" ? (
-                                  <PlainTextBlock content={part.content || (sending ? "…" : "")} />
-                                ) : (
-                                  <RichTextBlock content={part.content || (sending ? "…" : "")} />
-                                )}
-                              </ChatBubbleFrame>
-                              <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
-                                <button
-                                  className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-100 active:opacity-70"
-                                  onClick={() => copyText(part.content, toast)}
-                                  aria-label="复制"
-                                  title="复制"
+                              {hasBubble ? (
+                                <ChatBubbleFrame
+                                  skin={bubbleSkin}
+                                  className={`inline-block w-fit max-w-full rounded-[18px] px-2.5 py-[5px] font-medium leading-[1.42] shadow-sm ${
+                                    transparentBubbleEnabled
+                                      ? TRANSPARENT_BUBBLE_CLASS
+                                      : group.role === "benben"
+                                        ? "border border-amber-100 bg-[#FFF7E6] text-[#3F2A11]"
+                                        : resolveBubbleClass("assistant", assistantBubbleStyle)
+                                  }`}
+                                  style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                                 >
-                                  <CopyIconMini />
-                                </button>
-                                {group.role === "assistant" && part.status === "failed" && part.operationId ? (
-                                  <button
-                                    className="rounded-full px-2 py-1 text-[11px] font-medium text-rose-500 transition-colors active:bg-rose-50"
-                                    onClick={() => void retrySumiTalkOperation(part.operationId || "")}
-                                  >
-                                    重试
-                                  </button>
-                                ) : null}
-                                {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
-                                  <span>
-                                    {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
-                                    {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
-                                    {part.tokenCount?.output ? `↓${formatTokenCountValue(part.tokenCount.output)}` : ""}
-                                  </span>
-                                ) : null}
-                              </div>
+                                  <div className="space-y-1.5">
+                                    <ChatAttachmentBlock attachments={audioAttachments} align="left" />
+                                    {hasText ? (
+                                      part.render === "html" ? (
+                                        <HtmlBlock content={part.content} />
+                                      ) : part.render === "plain" ? (
+                                        <PlainTextBlock content={part.content} />
+                                      ) : (
+                                        <RichTextBlock content={part.content} />
+                                      )
+                                    ) : null}
+                                  </div>
+                                </ChatBubbleFrame>
+                              ) : null}
+                              {hasBubble || (group.role === "assistant" && part.status === "failed" && part.operationId) || (showTokenCount && (part.tokenCount?.input || part.tokenCount?.output)) ? (
+                                <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
+                                  {part.content ? (
+                                    <button
+                                      className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-100 active:opacity-70"
+                                      onClick={() => copyText(part.content, toast)}
+                                      aria-label="复制"
+                                      title="复制"
+                                    >
+                                      <CopyIconMini />
+                                    </button>
+                                  ) : null}
+                                  {group.role === "assistant" && part.status === "failed" && part.operationId ? (
+                                    <button
+                                      className="rounded-full px-2 py-1 text-[11px] font-medium text-rose-500 transition-colors active:bg-rose-50"
+                                      onClick={() => void retrySumiTalkOperation(part.operationId || "")}
+                                    >
+                                      重试
+                                    </button>
+                                  ) : null}
+                                  {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
+                                    <span>
+                                      {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
+                                      {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
+                                      {part.tokenCount?.output ? `↓${formatTokenCountValue(part.tokenCount.output)}` : ""}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ) : null}
                             </>
                           )}
                         </div>
@@ -1997,10 +2249,18 @@ export function MainChatScreen({
         </div>
       </div>
 
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif"
+        className="hidden"
+        onChange={handleImageInputChange}
+      />
       <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
         <div className={`pointer-events-none absolute ${chatFooterFeatherClass}`} aria-hidden="true" />
-        <div className={`relative z-10 overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
-          <div className="flex space-x-5 px-6 pb-2 pt-5">
+        <div className={`relative z-10 overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[142px] opacity-100" : "h-0 opacity-0"}`}>
+          <div className="grid grid-cols-4 gap-x-2 px-4 pb-2 pt-5">
+              <ChatActionButton label="图片" onClick={openImagePicker} />
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
               <ChatActionButton
@@ -2035,6 +2295,18 @@ export function MainChatScreen({
               rows={1}
               style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
             />
+            <button
+              type="button"
+              className={`ml-2 shrink-0 p-1 text-gray-400 transition-colors active:text-gray-900 ${recordingChatVoice ? "text-rose-500" : ""}`}
+              aria-label={recordingChatVoice ? "松开发送语音" : "按住说话"}
+              title={recordingChatVoice ? "松开发送语音" : "按住说话"}
+              onPointerDown={handleChatVoicePressStart}
+              onPointerUp={handleChatVoicePressEnd}
+              onPointerCancel={handleChatVoicePressEnd}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <MicIconMini className="h-[19px] w-[19px] stroke-[2]" />
+            </button>
           </div>
           <button
             className="p-2.5 text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"

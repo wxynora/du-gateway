@@ -4,6 +4,23 @@ export type ChatFontKey = "yahei" | "system" | "pingfang";
 export type ChatTimeFormat = "hhmm" | "ampm";
 
 export type ChatRole = "user" | "assistant" | "benben";
+export type ChatAttachmentKind = "image" | "audio";
+export type ChatAttachment = {
+  id: string;
+  kind: ChatAttachmentKind;
+  mime?: string;
+  remoteKey?: string;
+  remoteUrl?: string;
+  localUrl?: string;
+  thumbUrl?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  size?: number;
+  transcript?: string;
+  alt?: string;
+  createdAt?: string;
+};
 export type ChatDraftMessage = {
   id: string;
   role: ChatRole;
@@ -18,6 +35,7 @@ export type ChatDraftMessage = {
     input?: number;
     output?: number;
   };
+  attachments?: ChatAttachment[];
 };
 
 export function applyAssistantTerminalMessage(
@@ -75,6 +93,7 @@ export function contentToPlainText(content: any): string {
         }
         if (typeof part.content === "string") return String(part.content || "").trim();
         if (part.type === "image_url") return "[图片]";
+        if (part.type === "input_audio" || part.type === "audio") return "[语音]";
         return "";
       })
       .filter(Boolean)
@@ -90,6 +109,57 @@ export function contentToPlainText(content: any): string {
     if (Array.isArray(content.content)) return contentToPlainText(content.content);
   }
   return "";
+}
+
+function sanitizeAttachmentUrl(value: any): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^data:/i.test(raw) || /^blob:/i.test(raw)) return "";
+  return raw;
+}
+
+export function normalizeChatAttachments(value: any): ChatAttachment[] {
+  const list = Array.isArray(value) ? value : [];
+  const out: ChatAttachment[] = [];
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const kind = String(raw.kind || raw.type || "").trim().toLowerCase();
+    if (kind !== "image" && kind !== "audio") continue;
+    const remoteUrl = sanitizeAttachmentUrl(raw.remoteUrl || raw.url || raw.src);
+    const localUrl = sanitizeAttachmentUrl(raw.localUrl || raw.localUri);
+    const thumbUrl = sanitizeAttachmentUrl(raw.thumbUrl || raw.thumbUri);
+    const remoteKey = String(raw.remoteKey || raw.key || "").trim();
+    if (!remoteUrl && !localUrl && !remoteKey && !thumbUrl && !String(raw.transcript || "").trim()) continue;
+    const id = String(raw.id || remoteKey || remoteUrl || localUrl || `${kind}-${out.length}`).trim();
+    out.push({
+      id,
+      kind,
+      ...(raw.mime ? { mime: String(raw.mime || "").trim() } : {}),
+      ...(remoteKey ? { remoteKey } : {}),
+      ...(remoteUrl ? { remoteUrl } : {}),
+      ...(localUrl ? { localUrl } : {}),
+      ...(thumbUrl ? { thumbUrl } : {}),
+      ...(Number.isFinite(Number(raw.width)) && Number(raw.width) > 0 ? { width: Number(raw.width) } : {}),
+      ...(Number.isFinite(Number(raw.height)) && Number(raw.height) > 0 ? { height: Number(raw.height) } : {}),
+      ...(Number.isFinite(Number(raw.durationMs)) && Number(raw.durationMs) > 0 ? { durationMs: Number(raw.durationMs) } : {}),
+      ...(Number.isFinite(Number(raw.size)) && Number(raw.size) > 0 ? { size: Number(raw.size) } : {}),
+      ...(String(raw.transcript || "").trim() ? { transcript: String(raw.transcript || "").trim() } : {}),
+      ...(String(raw.alt || "").trim() ? { alt: String(raw.alt || "").trim() } : {}),
+      ...(String(raw.createdAt || "").trim() ? { createdAt: String(raw.createdAt || "").trim() } : {}),
+    });
+  }
+  return out;
+}
+
+export function chatAttachmentPreviewLabel(attachments?: ChatAttachment[]): string {
+  const list = Array.isArray(attachments) ? attachments : [];
+  if (!list.length) return "";
+  const images = list.filter((item) => item.kind === "image").length;
+  const audios = list.filter((item) => item.kind === "audio").length;
+  if (images && audios) return `[图片${images > 1 ? images : ""} + 语音${audios > 1 ? audios : ""}]`;
+  if (images) return images > 1 ? `[${images}张图片]` : "[图片]";
+  if (audios) return audios > 1 ? `[${audios}条语音]` : "[语音]";
+  return "[附件]";
 }
 
 export function extractLegacyMessageField(msg: any, keys: string[]): any {
@@ -191,6 +261,7 @@ export type ChatMessageGroup = {
     reasoning?: string;
     tokenCount?: { input?: number; output?: number };
     systemCard?: SumiTalkSystemCard | null;
+    attachments?: ChatAttachment[];
   }>;
 };
 
@@ -255,7 +326,8 @@ export function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview:
     const msg = list[i];
     if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") continue;
     const text = String(msg?.content || "").trim();
-    if (!text) continue;
+    const attachmentPreview = chatAttachmentPreviewLabel(normalizeChatAttachments(msg?.attachments));
+    if (!text && !attachmentPreview) continue;
     const systemCard = firstSystemCard(text);
     if (systemCard?.type === "system_alarm_created") {
       return {
@@ -294,7 +366,7 @@ export function pickLatestDraftPreview(messages: ChatDraftMessage[]): { preview:
       };
     }
     return {
-      preview: text,
+      preview: text || attachmentPreview,
       time: formatClockTime(String(msg?.createdAt || "").trim()),
     };
   }
@@ -341,7 +413,9 @@ export function historyRenderableScore(messages: ChatDraftMessage[]): number {
   return list.reduce((score, msg) => {
     const content = String(msg?.content || "").trim();
     const reasoning = String(msg?.reasoning || "").trim();
+    const attachments = normalizeChatAttachments(msg?.attachments);
     if (content) return score + 2;
+    if (attachments.length) return score + 2;
     if (reasoning) return score + 1;
     return score;
   }, 0);
@@ -404,12 +478,13 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
       const id = String((msg as any)?.id || "").trim();
       const role = String((msg as any)?.role || "").trim().toLowerCase();
       const content = contentToPlainText(extractMessageContentSource(msg)) || fallbackRawContentText(extractMessageContentSource(msg));
+      const attachments = normalizeChatAttachments((msg as any)?.attachments);
       const isSeedId = id.startsWith("seed-");
       const isDefaultGreeting = role === "assistant" && (
         content === "我在。你直接说就好。" ||
         /开着。你直接说就好。$/.test(content)
       );
-      return !(isSeedId || isDefaultGreeting);
+      return attachments.length || !(isSeedId || isDefaultGreeting);
     }).map((msg) => {
       const rawContent = extractMessageContentSource(msg);
       const rawReasoning = extractMessageReasoningSource(msg);
@@ -425,6 +500,7 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
       const content = status === "pending" && role === "assistant"
         ? ""
         : stripInlineBase64Images(contentToPlainText(rawContent) || fallbackRawContentText(rawContent));
+      const attachments = normalizeChatAttachments((msg as any)?.attachments);
       let tokenCount: { input?: number; output?: number } | undefined;
       if (msg?.tokenCount && typeof msg.tokenCount === "object") {
         const input = Number(msg.tokenCount.input || 0);
@@ -449,6 +525,7 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
         jobId: String((msg as any)?.jobId || "").trim() || undefined,
         reasoning: reasoning || undefined,
         tokenCount,
+        ...(attachments.length ? { attachments } : {}),
       };
     }));
 }
@@ -459,12 +536,13 @@ export function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGrou
     if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") continue;
     const normalizedContent = String(msg?.content || "").trim();
     const normalizedReasoning = String(msg?.reasoning || "").trim();
-    if (!normalizedContent && !normalizedReasoning) continue;
+    const attachments = normalizeChatAttachments(msg?.attachments);
+    if (!normalizedContent && !normalizedReasoning && !attachments.length) continue;
     const segments = msg.role === "assistant"
       ? splitSystemCardSegments(normalizedContent)
       : [{ content: normalizedContent, systemCard: null }];
     const safeParts = (segments.length ? segments : [{ content: normalizedContent, systemCard: null }])
-      .filter((segment) => String(segment.content || "").trim() || segment.systemCard || normalizedReasoning)
+      .filter((segment, index) => String(segment.content || "").trim() || segment.systemCard || normalizedReasoning || (index === 0 && attachments.length))
       .map((segment, index) => ({
         messageId: msg.id,
         status: msg.status,
@@ -476,6 +554,7 @@ export function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGrou
         reasoning: index === 0 ? normalizedReasoning || undefined : undefined,
         tokenCount: index === 0 ? msg.tokenCount : undefined,
         systemCard: segment.systemCard,
+        attachments: index === 0 ? attachments : undefined,
       }));
     const last = groups[groups.length - 1];
     if (last && last.role === msg.role && !shouldShowGroupTime(msg.createdAt, last.lastCreatedAt)) {

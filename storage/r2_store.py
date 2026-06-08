@@ -118,6 +118,8 @@ R2_KEY_MINIAPP_BG_IMAGE_PREFIX = "global/miniapp_bg_image_v"
 R2_KEY_MINIAPP_VOICE_CONFIG = "global/miniapp_voice_config.json"
 R2_KEY_MINIAPP_VOICE_AVATAR = "global/miniapp_voice_avatar"
 R2_KEY_MINIAPP_VOICE_AVATAR_PREFIX = "global/miniapp_voice_avatar_v"
+# SumiTalk 聊天附件：图片/语音文件本体，不进入聊天 JSON 正文
+R2_KEY_SUMITALK_CHAT_MEDIA_PREFIX = "sumitalk/chat_media"
 # MiniApp 通话记录
 R2_KEY_MINIAPP_CALL_RECORDS = "global/miniapp_call_records.json"
 # MiniApp 首页「渡今天想说的话」（按日缓存）
@@ -3001,6 +3003,77 @@ def upload_sticker_file(tag: str, filename: str, content: bytes, content_type: s
         return None
 
 
+def _sumitalk_chat_media_ext(filename: str, content_type: str, kind: str) -> tuple[str, str]:
+    ctype = (content_type or "").strip().lower()
+    ext = Path(filename or "").suffix.lower()
+    if kind == "audio":
+        if "mpeg" in ctype or "mp3" in ctype:
+            return ".mp3", "audio/mpeg"
+        if "mp4" in ctype or ext in (".m4a", ".mp4"):
+            return ".m4a", "audio/mp4"
+        if "wav" in ctype or ext == ".wav":
+            return ".wav", "audio/wav"
+        if "ogg" in ctype or ext == ".ogg":
+            return ".ogg", "audio/ogg"
+        return ".webm", "audio/webm"
+    if "jpeg" in ctype or "jpg" in ctype or ext in (".jpg", ".jpeg"):
+        return ".jpg", "image/jpeg"
+    if "png" in ctype or ext == ".png":
+        return ".png", "image/png"
+    if "webp" in ctype or ext == ".webp":
+        return ".webp", "image/webp"
+    if "gif" in ctype or ext == ".gif":
+        return ".gif", "image/gif"
+    return ".jpg", "image/jpeg"
+
+
+def upload_sumitalk_chat_media_file(kind: str, filename: str, content: bytes, content_type: str) -> Optional[dict]:
+    """上传 SumiTalk 聊天附件文件，返回可写入消息 attachments 的轻量元数据。"""
+    media_kind = (kind or "").strip().lower()
+    if media_kind not in {"image", "audio"} or not content:
+        return None
+    ext, ctype = _sumitalk_chat_media_ext(filename, content_type, media_kind)
+    today = today_beijing()
+    key = f"{R2_KEY_SUMITALK_CHAT_MEDIA_PREFIX}/{media_kind}/{today}/{uuid4().hex}{ext}"
+    client = _s3_client()
+    if not client:
+        return None
+    try:
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=key,
+            Body=content,
+            ContentType=ctype,
+        )
+        return {
+            "key": key,
+            "kind": media_kind,
+            "contentType": ctype,
+            "size": len(content),
+            "createdAt": now_beijing_iso(),
+        }
+    except Exception as e:
+        logger.error("upload_sumitalk_chat_media_file 失败 key=%s error=%s", key, e, exc_info=True)
+        return None
+
+
+def get_sumitalk_chat_media_file(key: str) -> tuple[Optional[bytes], str]:
+    k = str(key or "").strip()
+    if not k.startswith(f"{R2_KEY_SUMITALK_CHAT_MEDIA_PREFIX}/") or ".." in k:
+        return None, ""
+    client = _s3_client()
+    if not client:
+        return None, ""
+    try:
+        resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=k)
+        data = resp["Body"].read()
+        ctype = (resp.get("ContentType") or "application/octet-stream").strip()
+        return data, ctype
+    except Exception as e:
+        logger.error("get_sumitalk_chat_media_file 失败 key=%s error=%s", k, e, exc_info=True)
+        return None, ""
+
+
 def save_device_screenshot(content: bytes, content_type: str, meta: dict | None = None) -> Optional[dict]:
     """保存一次经用户同意的手机截图，并为临时读取生成 token。"""
     if not content:
@@ -3104,6 +3177,7 @@ _R2_WIPE_PREFIXES = (
     "sense/",
     "stickers/",
     "device_screenshots/",
+    "sumitalk/chat_media/",
 )
 
 

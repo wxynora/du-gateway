@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteOpenHelper;
 
 public class SumiChatDatabase extends SQLiteOpenHelper {
     private static final String DB_NAME = "sumitalk_chat_store.db";
-    private static final int DB_VERSION = 1;
+    private static final int DB_VERSION = 2;
 
     public SumiChatDatabase(Context context) {
         super(context, DB_NAME, null, DB_VERSION);
@@ -31,6 +31,7 @@ public class SumiChatDatabase extends SQLiteOpenHelper {
                         + "job_id TEXT,"
                         + "reasoning TEXT,"
                         + "token_count_json TEXT,"
+                        + "attachments_json TEXT,"
                         + "remote_key TEXT,"
                         + "local_revision INTEGER DEFAULT 0,"
                         + "deleted_at TEXT"
@@ -73,6 +74,12 @@ public class SumiChatDatabase extends SQLiteOpenHelper {
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         onCreate(db);
+        if (oldVersion < 2) {
+            try {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT");
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private void createIndexes(SQLiteDatabase db) {

@@ -1,3 +1,5 @@
+import { normalizeChatAttachments, type ChatAttachment } from "../chatMessages";
+
 export type ChatHistoryMessage = {
   id: string;
   role: "user" | "assistant" | "benben";
@@ -13,6 +15,7 @@ export type ChatHistoryMessage = {
     output?: number;
     thinking?: number;
   };
+  attachments?: ChatAttachment[];
 };
 
 export type ChatHistoryRow = {
@@ -127,6 +130,7 @@ export function normalizeHistoryMessages(messages: ChatHistoryMessage[]): ChatHi
       const role = message.role;
       const rawStatus = String(message.status || "").trim().toLowerCase();
       const status = rawStatus === "pending" || rawStatus === "sent" || rawStatus === "failed" ? rawStatus as ChatHistoryMessage["status"] : undefined;
+      const attachments = normalizeChatAttachments((message as any).attachments);
       return {
         id: String(message.id || "").trim(),
         role,
@@ -138,11 +142,12 @@ export function normalizeHistoryMessages(messages: ChatHistoryMessage[]): ChatHi
         ...(message.jobId ? { jobId: String(message.jobId || "").trim() } : {}),
         ...(message.reasoning ? { reasoning: String(message.reasoning || "") } : {}),
         ...(message.tokenCount ? { tokenCount: message.tokenCount } : {}),
+        ...(attachments.length ? { attachments } : {}),
       };
     })
     .filter((message) => (
       message.id
       && ["user", "assistant", "benben"].includes(message.role)
-      && (message.content.trim() || (message.role === "assistant" && message.status === "pending"))
+      && (message.content.trim() || (message.attachments?.length || 0) > 0 || (message.role === "assistant" && message.status === "pending"))
     ));
 }

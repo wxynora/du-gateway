@@ -7,7 +7,8 @@ import angryEmojiMarkUrl from "../assets/angry-emoji-mark.png?url";
 import peekRabbitStickerUrl from "../assets/peek-rabbit-sticker.png?url";
 import sumikaBubbleStickerUrl from "../assets/sumika-bubble-sticker.png?url";
 import type { BubbleSkinKey } from "./chatAppearance";
-import { PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
+import { ImageIconMini, MicIconMini, PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
+import type { ChatAttachment, ChatAttachmentKind } from "./chatMessages";
 
 type BubbleStickerAnchor = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 type BubbleSticker = {
@@ -260,6 +261,64 @@ export function PlainTextBlock({ content }: { content: string }) {
   return <span className="whitespace-pre-wrap">{content}</span>;
 }
 
+function attachmentSrc(item: ChatAttachment): string {
+  return String(item.remoteUrl || item.localUrl || item.thumbUrl || "").trim();
+}
+
+function formatAudioDuration(ms?: number): string {
+  const total = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  if (!total) return "";
+  const mm = String(Math.floor(total / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+export function ChatAttachmentBlock({
+  attachments,
+  align = "left",
+  kinds,
+}: {
+  attachments?: ChatAttachment[];
+  align?: "left" | "right";
+  kinds?: ChatAttachmentKind[];
+}) {
+  const allowed = kinds?.length ? new Set(kinds) : null;
+  const items = Array.isArray(attachments)
+    ? attachments.filter((item) => attachmentSrc(item) && (!allowed || allowed.has(item.kind)))
+    : [];
+  if (!items.length) return null;
+  return (
+    <div className={`flex w-full flex-col gap-1.5 ${align === "right" ? "items-end" : "items-start"}`}>
+      {items.map((item) => {
+        const src = attachmentSrc(item);
+        if (item.kind === "image") {
+          return (
+            <a key={item.id} href={src} target="_blank" rel="noreferrer" className="block max-w-full overflow-hidden rounded-[14px] active:opacity-80">
+              <img
+                src={src}
+                alt={item.alt || "图片"}
+                className="max-h-[260px] max-w-full rounded-[14px] object-cover"
+                loading="lazy"
+              />
+            </a>
+          );
+        }
+        const duration = formatAudioDuration(item.durationMs);
+        return (
+          <div key={item.id} className="w-[220px] max-w-full rounded-[14px] bg-black/5 px-2.5 py-2">
+            <div className="mb-1 flex items-center justify-between text-[11px] font-medium text-gray-500">
+              <span>语音</span>
+              {duration ? <span>{duration}</span> : null}
+            </div>
+            <audio className="h-8 w-full" controls preload="metadata" src={src} />
+            {item.transcript ? <div className="mt-1.5 max-h-8 overflow-hidden text-[11px] leading-4 text-gray-500">{item.transcript}</div> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 type ChatBubbleFrameProps = {
   children: React.ReactNode;
   className: string;
@@ -362,10 +421,19 @@ export function SummaryBlock({
 }
 
 export function ChatActionButton({ label, onClick }: { label: string; onClick: () => void }) {
+  const icon = label === "表情包"
+    ? <SmileIconMini />
+    : label === "出行规划"
+      ? <RouteIconMini />
+      : label === "图片"
+        ? <ImageIconMini />
+        : label === "语音" || label === "发送" || label === "停止"
+          ? <MicIconMini />
+          : <PhoneIconLarge />;
   return (
     <button className="group flex flex-col items-center" onClick={onClick}>
       <div className="mb-2.5 flex h-[60px] w-[60px] items-center justify-center rounded-[20px] bg-[#F8F9FA] text-gray-600 transition-transform active:scale-95">
-        {label === "表情包" ? <SmileIconMini /> : label === "出行规划" ? <RouteIconMini /> : <PhoneIconLarge />}
+        {icon}
       </div>
       <span className="text-[11px] font-medium tracking-wide text-gray-500">{label}</span>
     </button>

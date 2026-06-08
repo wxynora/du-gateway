@@ -243,6 +243,14 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已完成：清理聊天页旧的 `syncRemote/remoteTimeoutMs` 参数，避免以后误以为发送链路还会自动上传远端历史。
 - 未完成 / 不要碰：本轮不做自动定时同步、多端冲突选择弹窗、消息级增量同步或长历史分页；云端历史仍只保留后端既有 80 条窗口上限。
 
+当前状态（2026-06-08 SumiTalk 图片/语音聊天附件）：
+- 已完成：SumiTalk 私聊消息结构新增 `attachments`；Android 原生 `SumiChatStore` 升到 schema v2，`chat_messages` 增加 `attachments_json`，图片/语音附件重启后不会从本地 SQLite 丢失。
+- 已完成：新增 `miniapp/src/ui/chat/chatMedia.ts`，图片走 `/miniapp-api/chat-media/upload` 上传后作为 `image_url` 参与本轮模型输入；语音走 `/miniapp-api/chat-media/transcribe` 转写后发送，原音频作为语音附件显示；语音发送触发渡回复后会调用 `/miniapp-api/chat-media/tts` 生成可播放的回复语音附件。
+- 已完成：`routes/miniapp/media.py` 新增 `/chat-media/upload`、`/chat-media/transcribe`、`/chat-media/tts`、`/chat-media/raw-public`；文件本体存 R2 `sumitalk/chat_media/`，聊天历史和 operation 只存轻量附件元数据，不存 base64/blob。
+- 已完成：聊天页加号面板保留“图片”；语音入口挪到输入框内侧，只显示麦克风 SVG，按住录音、松开发送。图片作为独立图片消息直接贴出，不塞进文字气泡；语音仍显示为可播放音频条，转写文本作为正文。
+- 已完成：Android 版本升到 `versionName 1.1.7` / `versionCode 9`；`npm -C miniapp run cap:sync` 已把新 bundle 同步进 Android assets。
+- 未完成 / 下次继续：本轮只接用户发图、用户发语音、渡回复语音和助手图片附件展示；渡主动生成图片还需要单独接图像生成/图片工具链。
+
 ## 和渡一起听 / 音乐旋律分析
 
 现象：

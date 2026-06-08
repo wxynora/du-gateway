@@ -88,6 +88,7 @@ def _miniapp_auth():
         or request.path.rstrip("/").endswith("/stickers/tags-public")
         or request.path.rstrip("/").endswith("/stickers/resolve")
         or request.path.rstrip("/").endswith("/stickers/raw-public")
+        or request.path.rstrip("/").endswith("/chat-media/raw-public")
         or request.path.rstrip("/").endswith("/device-screenshots/raw-public")
     ):
         enforce_ip_allowlist()
