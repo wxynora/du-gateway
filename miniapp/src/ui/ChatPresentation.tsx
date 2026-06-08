@@ -194,16 +194,16 @@ export function formatTokenCountValue(value?: number): string {
 
 export function ChatHeaderStatus({ sending }: { sending: boolean }) {
   if (!sending) {
-    return <div className="max-w-full truncate text-[9px] font-medium leading-[1.05] text-gray-600">在线</div>;
+    return <div className="max-w-full truncate text-[8px] font-medium leading-[1.05] text-gray-500">在线</div>;
   }
   return (
-    <div className="flex max-w-full min-w-0 items-center justify-center gap-1 text-[9px] font-medium leading-[1.05] text-[#5F6C7B]" aria-label="正在输入中">
+    <div className="flex max-w-full min-w-0 items-center justify-center gap-1 text-[8px] font-medium leading-[1.05] text-[#5F6C7B]" aria-label="正在输入中">
       <span className="min-w-0 truncate">正在输入中</span>
       <span className="inline-flex shrink-0 items-end gap-0.5">
         {[0, 1, 2].map((index) => (
           <span
             key={index}
-            className="inline-block h-[3px] w-[3px] rounded-full bg-[#5F6C7B] animate-pulse"
+            className="inline-block h-[2.5px] w-[2.5px] rounded-full bg-[#5F6C7B] animate-pulse"
             style={{
               animationDelay: `${index * 0.18}s`,
               animationDuration: "1s",

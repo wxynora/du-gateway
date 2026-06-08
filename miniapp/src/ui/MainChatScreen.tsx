@@ -48,7 +48,6 @@ import {
 import {
   MAIN_SUMITALK_DISPLAY_WINDOW_ID,
   sumitalkHistoryPath,
-  sumitalkHistoryPayload,
 } from "./chatWindowIds";
 import {
   ArrowUpIcon,
@@ -363,8 +362,6 @@ export function MainChatScreen({
   const historyWindowId = String(displayHistoryWindowId || windowId || "").trim();
   const remoteHistoryWindowId = displayHistoryWindowId;
   const [deviceId, setDeviceId] = useState("");
-  const remoteHistoryReadyRef = useRef(false);
-  const remoteHistoryWarningShownRef = useRef(false);
   const seedMessages: ChatDraftMessage[] = [
     {
       id: "seed-1",
@@ -480,8 +477,6 @@ export function MainChatScreen({
           setDeviceId(resolvedDeviceId);
         }
         await migrateLocalChatHistoriesToDevice(resolvedDeviceId);
-        remoteHistoryReadyRef.current = false;
-        remoteHistoryWarningShownRef.current = false;
         const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(resolvedDeviceId, historyWindowId));
         const localRecoveryWindowIds = groupChatMode
           ? uniqueNonEmptyStrings([historyWindowId, displayHistoryWindowId, windowId])
@@ -514,24 +509,12 @@ export function MainChatScreen({
         }
         const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
         if (cancelled) return;
-        if (j?.ok) {
-          remoteHistoryReadyRef.current = true;
-        }
         const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
         const next = pickBetterHistory(remoteMessages, fallbackLocalMessages, seedMessages);
         messagesRef.current = next;
         setMessages(next);
         if (next !== seedMessages && next.length) {
           await writeLocalChatHistory(resolvedDeviceId, historyWindowId, next);
-          if (remoteHistoryReadyRef.current && next !== remoteMessages) {
-            try {
-              await apiJson("/miniapp-api/sumitalk-history", {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(sumitalkHistoryPayload(next, remoteHistoryWindowId)),
-              });
-            } catch {}
-          }
         }
         void recoverActiveSumiTalkOperations(resolvedDeviceId);
       } catch (e: any) {
@@ -547,51 +530,27 @@ export function MainChatScreen({
 
   async function saveDisplayHistory(
     nextMessages: ChatDraftMessage[],
-    options: { syncRemote?: boolean; localDeviceId?: string; remoteTimeoutMs?: number } = {},
+    options: { localDeviceId?: string } = {},
   ) {
     const sanitizedMessages = sanitizeHistoryMessages(nextMessages);
     const resolvedDeviceId = String(options.localDeviceId || deviceId || "").trim();
-    const syncRemote = options.syncRemote !== false;
     if (resolvedDeviceId && historyWindowId) {
       await writeLocalChatHistory(resolvedDeviceId, historyWindowId, sanitizedMessages);
     }
-    if (!syncRemote) return;
-    if (!remoteHistoryReadyRef.current) {
-      if (!remoteHistoryWarningShownRef.current) {
-        remoteHistoryWarningShownRef.current = true;
-        toast("当前未拉到服务器历史，已仅保存到本地，避免覆盖云端记录");
-      }
-      return;
-    }
-    try {
-      const init = {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sumitalkHistoryPayload(sanitizedMessages, remoteHistoryWindowId)),
-      };
-      if (options.remoteTimeoutMs && options.remoteTimeoutMs > 0) {
-        await apiJsonWithTimeout("/miniapp-api/sumitalk-history", options.remoteTimeoutMs, init);
-      } else {
-        await apiJson("/miniapp-api/sumitalk-history", init);
-      }
-    } catch {}
   }
 
   function saveDisplayHistoryInBackground(
     nextMessages: ChatDraftMessage[],
     options: { localDeviceId?: string } = {},
   ) {
-    void saveDisplayHistory(nextMessages, {
-      localDeviceId: options.localDeviceId,
-      remoteTimeoutMs: 8000,
-    }).catch(() => {});
+    void saveDisplayHistory(nextMessages, { localDeviceId: options.localDeviceId }).catch(() => {});
   }
 
   async function persistSumiTalkOperationMessages(nextMessages: ChatDraftMessage[], localDeviceId: string) {
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
     if (groupChatMode) {
-      await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId });
+      await saveDisplayHistory(nextMessages, { localDeviceId });
       saveDisplayHistoryInBackground(nextMessages, { localDeviceId });
     } else {
       await saveDisplayHistory(nextMessages, { localDeviceId });
@@ -727,7 +686,7 @@ export function MainChatScreen({
       });
       messagesRef.current = pending;
       setMessages(pending);
-      await saveDisplayHistory(pending, { syncRemote: false, localDeviceId });
+      await saveDisplayHistory(pending, { localDeviceId });
     }
     void recoverSumiTalkOperation(operation, localDeviceId);
   }
@@ -763,7 +722,7 @@ export function MainChatScreen({
       const nextMessages = applyMessageById(currentMessages, targetMessageId, pendingMessage);
       messagesRef.current = nextMessages;
       setMessages(nextMessages);
-      await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId: options.localDeviceId || deviceId });
+      await saveDisplayHistory(nextMessages, { localDeviceId: options.localDeviceId || deviceId });
       return true;
     }
     const terminalMessage: ChatDraftMessage = statusValue === "done"
@@ -868,7 +827,7 @@ export function MainChatScreen({
       : [...params.baseMessages, pendingMsg];
     messagesRef.current = pendingMessages;
     setMessages(pendingMessages);
-    await saveDisplayHistory(pendingMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+    await saveDisplayHistory(pendingMessages, { localDeviceId: params.replyTarget });
     let taskId = "";
     try {
       let created: CodexGroupChatTaskResponse | null = null;
@@ -906,7 +865,7 @@ export function MainChatScreen({
           });
           messagesRef.current = retryMessages;
           setMessages(retryMessages);
-          await saveDisplayHistory(retryMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+          await saveDisplayHistory(retryMessages, { localDeviceId: params.replyTarget });
           await waitMs(600);
         }
       }
@@ -921,7 +880,7 @@ export function MainChatScreen({
       });
       messagesRef.current = queuedMessages;
       setMessages(queuedMessages);
-      await saveDisplayHistory(queuedMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+      await saveDisplayHistory(queuedMessages, { localDeviceId: params.replyTarget });
       saveDisplayHistoryInBackground(queuedMessages, { localDeviceId: params.replyTarget });
       return queuedMessages;
     } catch (e: any) {
@@ -935,7 +894,7 @@ export function MainChatScreen({
       });
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
-      await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+      await saveDisplayHistory(failedMessages, { localDeviceId: params.replyTarget });
       saveDisplayHistoryInBackground(failedMessages, { localDeviceId: params.replyTarget });
       toast(`笨笨入群失败：${e?.message || e}`);
       return failedMessages;
@@ -963,7 +922,7 @@ export function MainChatScreen({
       const idleMessages = [...messagesRef.current, idleMessage];
       messagesRef.current = idleMessages;
       setMessages(idleMessages);
-      await saveDisplayHistory(idleMessages, { syncRemote: false, localDeviceId });
+      await saveDisplayHistory(idleMessages, { localDeviceId });
       saveDisplayHistoryInBackground(idleMessages, { localDeviceId });
       return;
     }
@@ -981,7 +940,7 @@ export function MainChatScreen({
     ), messagesRef.current);
     messagesRef.current = markedMessages;
     setMessages(markedMessages);
-    await saveDisplayHistory(markedMessages, { syncRemote: false, localDeviceId });
+    await saveDisplayHistory(markedMessages, { localDeviceId });
 
     for (const item of pendingTasks) {
       try {
@@ -1008,7 +967,7 @@ export function MainChatScreen({
         });
         messagesRef.current = failedMessages;
         setMessages(failedMessages);
-        await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId });
+        await saveDisplayHistory(failedMessages, { localDeviceId });
       }
     }
     saveDisplayHistoryInBackground(messagesRef.current, { localDeviceId });
@@ -1048,7 +1007,7 @@ export function MainChatScreen({
     const pendingMessages = [...messagesRef.current, placeholder];
     messagesRef.current = pendingMessages;
     setMessages(pendingMessages);
-    await saveDisplayHistory(pendingMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+    await saveDisplayHistory(pendingMessages, { localDeviceId: params.replyTarget });
     try {
       const started = await createSumiTalkChatJob("/miniapp-api/sumitalk-chat-jobs", {
         model: activeModel,
@@ -1096,7 +1055,7 @@ export function MainChatScreen({
       });
       messagesRef.current = finalMessages;
       setMessages(finalMessages);
-      await saveDisplayHistory(finalMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+      await saveDisplayHistory(finalMessages, { localDeviceId: params.replyTarget });
       saveDisplayHistoryInBackground(finalMessages, { localDeviceId: params.replyTarget });
       return reply;
     } catch (e: any) {
@@ -1110,7 +1069,7 @@ export function MainChatScreen({
       });
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
-      await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: params.replyTarget });
+      await saveDisplayHistory(failedMessages, { localDeviceId: params.replyTarget });
       throw e;
     }
   }
@@ -1277,7 +1236,7 @@ export function MainChatScreen({
           });
           messagesRef.current = failedMessages;
           setMessages(failedMessages);
-          await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: deviceId });
+          await saveDisplayHistory(failedMessages, { localDeviceId: deviceId });
           saveDisplayHistoryInBackground(failedMessages, { localDeviceId: deviceId });
         } finally {
           benbenTaskRecoveringRef.current.delete(item.taskId);
@@ -1300,7 +1259,7 @@ export function MainChatScreen({
     setInput("");
     setPlusOpen(false);
     setMessages(nextMessages);
-    await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId });
+    await saveDisplayHistory(nextMessages, { localDeviceId });
     return nextMessages;
   }
 
@@ -1316,7 +1275,7 @@ export function MainChatScreen({
     const nextMessages = [...messagesRef.current, notice];
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
-    await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId });
+    await saveDisplayHistory(nextMessages, { localDeviceId });
     saveDisplayHistoryInBackground(nextMessages, { localDeviceId });
   }
 
@@ -1510,7 +1469,7 @@ export function MainChatScreen({
         },
       });
     } else {
-      await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
+      await saveDisplayHistory(draftMessages, { localDeviceId: resolvedDeviceId });
     }
     let benbenCreatePromise: Promise<ChatDraftMessage[]> | null = null;
     let initialDuReply = "";
@@ -1552,7 +1511,7 @@ export function MainChatScreen({
           });
           messagesRef.current = pendingWithJob;
           setMessages(pendingWithJob);
-          await saveDisplayHistory(pendingWithJob, { syncRemote: false, localDeviceId: replyTarget });
+          await saveDisplayHistory(pendingWithJob, { localDeviceId: replyTarget });
         }
         const startedStatus = String(started?.status || "").trim();
         const data = startedStatus === "done"
@@ -1596,7 +1555,7 @@ export function MainChatScreen({
         messagesRef.current = finalMessages;
         setMessages(finalMessages);
         if (groupChatMode) {
-          await saveDisplayHistory(finalMessages, { syncRemote: false, localDeviceId: replyTarget });
+          await saveDisplayHistory(finalMessages, { localDeviceId: replyTarget });
         } else {
           await saveDisplayHistory(finalMessages);
         }
@@ -1644,7 +1603,7 @@ export function MainChatScreen({
       }
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
-      await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: replyTarget });
+      await saveDisplayHistory(failedMessages, { localDeviceId: replyTarget });
       if (groupChatMode) {
         saveDisplayHistoryInBackground(failedMessages, { localDeviceId: replyTarget });
       }
@@ -1718,7 +1677,7 @@ export function MainChatScreen({
   const chatHeaderCenterPillClass = hasCustomChatBackground
     ? "flex h-10 w-[10.5rem] max-w-full min-w-0 flex-col items-center justify-center rounded-full border border-white/35 bg-white/45 px-3 text-center shadow-[0_8px_24px_rgba(15,23,42,0.10)] backdrop-blur-2xl"
     : "flex h-10 w-[10.5rem] max-w-full min-w-0 flex-col items-center justify-center rounded-full border border-gray-100/80 bg-white/85 px-3 text-center shadow-[0_8px_20px_rgba(15,23,42,0.06)] backdrop-blur-xl";
-  const chatHeaderTitleFontSize = Math.max(11, Math.min(13, chatTitleFontSize - 4));
+  const chatHeaderTitleFontSize = Math.max(14, Math.min(16, chatTitleFontSize - 2));
   const chatFooterClass = hasCustomChatBackground
     ? "border-white/20 bg-white/25 shadow-[0_-10px_30px_rgba(15,23,42,0.10)] backdrop-blur-xl"
     : "border-gray-100 bg-white";

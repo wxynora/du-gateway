@@ -217,6 +217,7 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 
 当前状态（2026-06-08 聊天自定义背景全屏）：
 - 已完成：`miniapp/src/ui/MainChatScreen.tsx` 参考一起听页面，把聊天页根容器改为 `fixed inset-0 h-[100lvh]`，自定义背景图拆成独立 `fixed inset-0` 背景层，不再受父容器或底部导航布局限制；有背景图时顶部不再是一整条白栏，也不再是大块胶囊，改成左返回圆球、右搜索圆球、中间居中标题和在线状态，顶部位置上移到 `safe-area + 10px`；搜索框、底部输入区和加号工具栏降低白色遮罩，未设置背景图时保留原白底样式。
+- 已完成：顶部中间胶囊的视觉层级调整为“名字大、在线/正在输入中小”，避免状态文字抢过会话名。
 - 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npx vite build --outDir /tmp/du-gateway-miniapp-chat-header-split-build --emptyOutDir true`、`npm run build:android` 通过；已确认新样式进入 `miniapp_static` bundle。
 - 未完成 / 下次继续：本轮只改聊天页背景视觉层，不改聊天发送、群聊、ChatStore/outbox 或 Android 原生壳逻辑；如果手机端加载远端 `https://duxy-home.com/miniapp/`，还需要部署更新后的 `miniapp_static` 才能看到这版前端。
 
@@ -234,6 +235,12 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已完成：删除 `miniapp/src/ui/chat/dexieChatStoreFallback.ts`，从 `miniapp/package.json` / `package-lock.json` 移除 `dexie` 依赖；`chatHistoryDb.ts` 保持原导出 API，但底层只走 Android 原生 SQLite，原生不可用时返回空值/不阻塞发送。
 - 已完成：设置页「记忆存储管理」和设备管理的聊天记录诊断文案改为 SQLite-only，不再展示 Dexie/IndexedDB 卡片或“迁移”按钮。
 - 已验证：`npm -C miniapp run build:android` 通过，主 bundle 从上一版约 704k 降到约 594k；只保留既有 Vite chunk size warning。
+
+当前状态（2026-06-08 手动云端历史同步）：
+- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 不再自动 `PUT /miniapp-api/sumitalk-history`；聊天历史保存只写 Android 原生 SQLite，页面启动时仍允许从云端 `GET` 作为空本机或旧设备迁移后的恢复来源。
+- 已完成：`miniapp/src/ui/tabs/ChatStorageManagementScreen.tsx` 新增“同步到云端”按钮；只有用户手点时才把本机 SQLite 中各窗口聊天记录逐个上传到既有 `/sumitalk-history` 合并接口。
+- 已完成：清理聊天页旧的 `syncRemote/remoteTimeoutMs` 参数，避免以后误以为发送链路还会自动上传远端历史。
+- 未完成 / 不要碰：本轮不做自动定时同步、多端冲突选择弹窗、消息级增量同步或长历史分页；云端历史仍只保留后端既有 80 条窗口上限。
 
 ## 和渡一起听 / 音乐旋律分析
 

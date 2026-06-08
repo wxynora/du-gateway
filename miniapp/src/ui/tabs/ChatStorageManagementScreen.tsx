@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { getOrCreatePanelDeviceId } from "../api";
+import { apiJson, getOrCreatePanelDeviceId } from "../api";
+import type { ChatDraftMessage } from "../chatMessages";
+import { sumitalkHistoryPayload } from "../chatWindowIds";
 import { useToast } from "../toast";
 import {
   inspectChatStorageOverview,
   migrateLocalChatHistoriesToDevice,
+  readLocalChatHistoryRows,
   type ChatHistoryLocalStatRow,
   type ChatStorageOverview,
 } from "../storage/chatHistoryDb";
@@ -20,6 +23,7 @@ export function ChatStorageManagementScreen() {
   const [overview, setOverview] = useState<ChatStorageOverview | null>(null);
   const [loading, setLoading] = useState(false);
   const [migrating, setMigrating] = useState(false);
+  const [syncingRemote, setSyncingRemote] = useState(false);
   const [headerActionsEl, setHeaderActionsEl] = useState<HTMLElement | null>(null);
 
   const sqliteSummary = useMemo(() => summarizeRows(overview?.nativeRows || []), [overview?.nativeRows]);
@@ -56,6 +60,40 @@ export function ChatStorageManagementScreen() {
       toast(`检查失败：${e?.message || e}`);
     } finally {
       setMigrating(false);
+    }
+  }
+
+  async function syncLocalHistoryToRemote() {
+    setSyncingRemote(true);
+    try {
+      const deviceId = await getOrCreatePanelDeviceId();
+      const current = overview || await inspectChatStorageOverview(deviceId);
+      const windowIds = uniqueNonEmptyStrings((current.nativeRows || []).map((row) => row.windowId));
+      if (!windowIds.length) {
+        toast("本地没有可同步的聊天记录");
+        return;
+      }
+      const rows = await readLocalChatHistoryRows(windowIds);
+      let syncedWindows = 0;
+      let syncedMessages = 0;
+      for (const row of rows) {
+        const windowId = String(row?.windowId || "").trim();
+        const messages = Array.isArray(row?.messages) ? row.messages : [];
+        if (!windowId || !messages.length) continue;
+        await apiJson("/miniapp-api/sumitalk-history", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sumitalkHistoryPayload(messages as ChatDraftMessage[], windowId)),
+        });
+        syncedWindows += 1;
+        syncedMessages += messages.length;
+      }
+      await load({ silent: true });
+      toast(syncedWindows ? `已同步 ${syncedWindows} 个窗口，${syncedMessages} 条` : "本地没有可同步的聊天记录");
+    } catch (e: any) {
+      toast(`同步失败：${e?.message || e}`);
+    } finally {
+      setSyncingRemote(false);
     }
   }
 
@@ -96,14 +134,24 @@ export function ChatStorageManagementScreen() {
           <SummaryPill label="消息数" value={String(sqliteSummary.messages)} />
           <SummaryPill label="待恢复" value={`${activeCount}`} />
         </div>
-        <button
-          type="button"
-          disabled={loading || migrating}
-          className="mt-4 h-10 w-full rounded-full bg-gray-900 text-[13px] font-semibold text-white active:bg-gray-700 disabled:opacity-40"
-          onClick={() => void runMigrationCheck()}
-        >
-          {migrating ? "检查中..." : "重新检查"}
-        </button>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            disabled={loading || migrating || syncingRemote}
+            className="h-10 rounded-full bg-gray-900 text-[13px] font-semibold text-white active:bg-gray-700 disabled:opacity-40"
+            onClick={() => void runMigrationCheck()}
+          >
+            {migrating ? "检查中..." : "重新检查"}
+          </button>
+          <button
+            type="button"
+            disabled={loading || migrating || syncingRemote || !sqliteSummary.messages}
+            className="h-10 rounded-full bg-blue-500 text-[13px] font-semibold text-white active:bg-blue-600 disabled:opacity-40"
+            onClick={() => void syncLocalHistoryToRemote()}
+          >
+            {syncingRemote ? "同步中..." : "同步到云端"}
+          </button>
+        </div>
       </section>
 
       <section className="grid grid-cols-1 gap-3">
@@ -143,10 +191,22 @@ export function ChatStorageManagementScreen() {
       </section>
 
       <div className="px-1 pb-2 text-[11px] leading-5 text-gray-400">
-        这里显示的是本机聊天记忆存储。聊天历史和待恢复发送任务现在都走 Android 原生 SQLite。
+        这里显示的是本机聊天记忆存储。聊天历史和待恢复发送任务现在都走 Android 原生 SQLite，云端历史只在点击同步时更新。
       </div>
     </div>
   );
+}
+
+function uniqueNonEmptyStrings(values: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const item = String(value || "").trim();
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
 }
 
 function summarizeRows(rows: ChatHistoryLocalStatRow[]): RowSummary {
