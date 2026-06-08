@@ -1679,8 +1679,11 @@ export function MainChatScreen({
     : "flex h-10 w-[10.5rem] max-w-full min-w-0 flex-col items-center justify-center rounded-full border border-gray-100/80 bg-white/85 px-3 text-center shadow-[0_8px_20px_rgba(15,23,42,0.06)] backdrop-blur-xl";
   const chatHeaderTitleFontSize = Math.max(14, Math.min(16, chatTitleFontSize - 2));
   const chatFooterClass = hasCustomChatBackground
-    ? "border-white/20 bg-white/25 shadow-[0_-10px_30px_rgba(15,23,42,0.10)] backdrop-blur-xl"
-    : "border-gray-100 bg-white";
+    ? "bg-white/25 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl"
+    : "bg-white";
+  const chatFooterFeatherClass = hasCustomChatBackground
+    ? "bg-gradient-to-b from-transparent via-white/10 to-white/25 backdrop-blur-[1px]"
+    : "bg-gradient-to-b from-transparent via-white/75 to-white";
   const chatInputShellClass = hasCustomChatBackground
     ? "border border-white/25 bg-white/45 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl"
     : "bg-[#F4F5F7]";
@@ -1994,7 +1997,8 @@ export function MainChatScreen({
         </div>
       </div>
 
-      <div className={`relative z-20 border-t pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
+      <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
+        <div className={`pointer-events-none absolute -top-9 left-0 right-0 h-9 ${chatFooterFeatherClass}`} aria-hidden="true" />
         <div className={`overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
           <div className="flex space-x-5 px-6 pb-2 pt-5">
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
