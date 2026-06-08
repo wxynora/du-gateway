@@ -60,6 +60,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(OverlayControlPlugin.class);
+        registerPlugin(SumiChatStorePlugin.class);
         super.onCreate(savedInstanceState);
         applyLockScreenPresentation(getIntent());
         requestRuntimePermissionsIfNeeded();

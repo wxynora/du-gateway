@@ -28,6 +28,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | 注入管道 | `pipeline/pipeline.py` | core prompt、summary、last4、sense、dynamic memory、tools 注入 |
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
+| SumiTalk 本地聊天存储 | `miniapp/src/ui/storage/chatHistoryDb.ts`、`miniapp/src/ui/chat/*`、`miniapp/src/plugins/sumi-chat-store.ts`、`miniapp/android/app/src/main/java/com/sumitalk/app/SumiChatStorePlugin.java`、`miniapp/android/app/src/main/java/com/sumitalk/app/chat/*` | Android 原生 SQLite ChatStore、Dexie fallback、旧历史迁移和本地历史读写抽象 |
 | MiniApp 分页 | `miniapp/src/ui/tabs/*` | 日志、思维链、上游、日历、贴纸、记忆调试等子页 |
 | MiniApp 小家 | `miniapp/src/ui/tabs/PixelHomeTab.tsx`、`services/pixel_home.py`、`storage/pixel_home_store.py`、`routes/miniapp/dashboard.py`、`miniapp/src/assets/life-home-*.png` | 「小家」生活感页面：按 `ui合集/赛博小家` 的单列布局和字体组织，实际小屋图、点击才出现的小点、赛博小家状态注入与事件唤醒 |
 | 文游规则入口 | `docs/wenyou_rules.md`、`docs/wenyou/*.md` | 开源版文游规则入口与拆分文档：核心循环、运行时状态缓存、副本生成、怪物系统、数值成长、奖励经济、后端契约 |
@@ -203,6 +204,21 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - VPS 系统盘读数突然抬高时，先查是否有高频整读本地状态文件：SumiTalk 安卓壳 realtime 断开后会每 20 秒 fallback 轮询 `/sumitalk-history/latest`，realtime 服务也会每 60 秒兜底读最新消息；`data/sumitalk_display_histories.json` 必须走缓存和行数/TTL 收口。
 - `<voice>`/TTS 事故先查 `services/minimax_tts.py`：超长 voice 文本会被截断到 `MINIMAX_TTS_MAX_CHARS`，MiniMax 返回音频也受 `MINIMAX_TTS_MAX_AUDIO_BYTES` 限制，避免几千字语音把 CPU/内存/网络一起拖爆。
 - QQ/SumiTalk/触发唤醒里看到 `{"action":"...","message":"...","channel":"..."}` 原样正文时，先查 `services/telegram_proactive.py::_parse_proactive_model_reply`、`_sanitize_control_reply_for_delivery` 和 `services/conversation_followup.py` 的外发清洗；这类 JSON 是主动决策控制格式，不应该作为用户可见正文发出。
+
+当前状态（2026-06-07 SumiTalk ChatStore + outbox）：
+- 已完成：新增 Android 原生 `SumiChatStore` Capacitor 插件，使用 SQLite 保存 `chat_messages`、`chat_operations`、`chat_meta`；`MainActivity` 已注册 `SumiChatStorePlugin`。
+- 已完成：前端新增 `chatStore.ts`、`nativeChatStore.ts`、`dexieChatStoreFallback.ts` 和 `sumi-chat-store.ts`；既有 `chatHistoryDb.ts` API 保持不变，Android 优先走原生 SQLite，非 Android 或插件不可用时走 Dexie fallback。
+- 已完成：首次读取/迁移时会把旧 Dexie 历史合并进原生 ChatStore；pending assistant 空正文允许保留，设备 ID 迁移按新 key 写入再删除旧 key，避免直接更新主键撞唯一约束。
+- 已完成：`chat_operations` outbox 接入事务方法：`createDraftTurn / attachJob / completeOperation / failOperation / listActiveOperations`；发送前先落 user + assistant pending + operation，拿到 `job_id` 后立刻回写 pending 和 operation。
+- 已完成：`sumitalkChatClient.ts` 收口 SumiTalk job 创建、轮询、超时和 job 过期处理；页面加载历史后会扫描 active operation，有 job 就继续 poll，没 job 但有 retryPayload 就用原 `client_request_id` 重新创建并复用后端 job。
+- 已完成：失败的渡回复保留 `operationId/clientRequestId`，气泡下显示「重试」；群聊里渡的 pending/job 也接入恢复，但自由讨论接力不会因恢复自动重跑，避免重复续聊。笨笨仍走现有 Codex task/realtime 恢复。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew :app:compileDebugJavaWithJavac`、`npx vite build --outDir /tmp/du-gateway-miniapp-chatstore-build --emptyOutDir true`、`git diff --check` 均通过。
+- 未完成 / 下次继续：还没做服务端消息级增量同步、长历史分页、Room/Compose 重写或多端冲突合并；本轮默认不重建正式 `miniapp_static`，临时 Vite 产物放 `/tmp`。
+
+当前状态（2026-06-08 聊天自定义背景全屏）：
+- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 在设置聊天背景图时，让背景从最外层铺满整个聊天界面；顶部栏、搜索框、底部输入区和加号工具栏改为半透明磨砂层，未设置背景图时保留原白底样式。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npx vite build --outDir /tmp/du-gateway-miniapp-bg-build --emptyOutDir true`、`npm run build:android` 通过；已确认新样式进入 `miniapp_static` bundle。
+- 未完成 / 下次继续：本轮只改聊天页背景视觉层，不改聊天发送、群聊、ChatStore/outbox 或 Android 原生壳逻辑；如果手机端加载远端 `https://duxy-home.com/miniapp/`，还需要部署更新后的 `miniapp_static` 才能看到这版前端。
 
 ## 和渡一起听 / 音乐旋律分析
 

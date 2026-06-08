@@ -11,6 +11,7 @@ export type ChatDraftMessage = {
   createdAt: string;
   status?: "pending" | "sent" | "failed";
   clientRequestId?: string;
+  operationId?: string;
   jobId?: string;
   reasoning?: string;
   tokenCount?: {
@@ -179,7 +180,18 @@ export type ChatMessageGroup = {
   role: ChatRole;
   createdAt: string;
   lastCreatedAt: string;
-  parts: Array<{ content: string; render: "plain" | "rich" | "html"; reasoning?: string; tokenCount?: { input?: number; output?: number }; systemCard?: SumiTalkSystemCard | null }>;
+  parts: Array<{
+    messageId: string;
+    status?: ChatDraftMessage["status"];
+    operationId?: string;
+    clientRequestId?: string;
+    jobId?: string;
+    content: string;
+    render: "plain" | "rich" | "html";
+    reasoning?: string;
+    tokenCount?: { input?: number; output?: number };
+    systemCard?: SumiTalkSystemCard | null;
+  }>;
 };
 
 export type ChatSearchMatch = {
@@ -433,6 +445,7 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
         content,
         status,
         clientRequestId: String((msg as any)?.clientRequestId || "").trim() || undefined,
+        operationId: String((msg as any)?.operationId || "").trim() || undefined,
         jobId: String((msg as any)?.jobId || "").trim() || undefined,
         reasoning: reasoning || undefined,
         tokenCount,
@@ -453,6 +466,11 @@ export function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGrou
     const safeParts = (segments.length ? segments : [{ content: normalizedContent, systemCard: null }])
       .filter((segment) => String(segment.content || "").trim() || segment.systemCard || normalizedReasoning)
       .map((segment, index) => ({
+        messageId: msg.id,
+        status: msg.status,
+        operationId: msg.operationId,
+        clientRequestId: msg.clientRequestId,
+        jobId: msg.jobId,
         content: String(segment.content || "").trim(),
         render: segment.systemCard ? "plain" as const : detectMessageRender(msg.role, String(segment.content || "").trim()),
         reasoning: index === 0 ? normalizedReasoning || undefined : undefined,

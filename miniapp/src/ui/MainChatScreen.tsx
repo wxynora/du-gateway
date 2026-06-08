@@ -60,26 +60,30 @@ import {
   SearchIconMini,
 } from "./icons";
 import { SumiOverlay } from "../plugins/sumi-overlay";
-import { migrateLocalChatHistoriesToDevice, migrateLocalChatHistoryDevice, readLocalChatHistory, readLocalChatHistoryRows, writeLocalChatHistory } from "./storage/chatHistoryDb";
+import {
+  attachChatJobToOperation,
+  completeChatOperation,
+  createChatDraftTurn,
+  failChatOperation,
+  getChatOperation,
+  listActiveChatOperations,
+  migrateLocalChatHistoriesToDevice,
+  migrateLocalChatHistoryDevice,
+  readLocalChatHistory,
+  readLocalChatHistoryRows,
+  writeLocalChatHistory,
+  type ChatOperation,
+} from "./storage/chatHistoryDb";
 import { useCodexGroupTaskRealtime, type CodexGroupTaskRealtimeTask } from "./hooks/useCodexGroupTaskRealtime";
 import { readMusicBgmContext } from "./listenBgm";
 import { useToast } from "./toast";
-
-type SumiTalkChatJobCreateResponse = {
-  ok?: boolean;
-  job_id?: string;
-  status?: string;
-  response?: any;
-  status_code?: number;
-  error?: string;
-};
-type SumiTalkChatJobStatusResponse = {
-  ok?: boolean;
-  status?: "running" | "done" | "error";
-  status_code?: number;
-  response?: any;
-  error?: string;
-};
+import {
+  apiJsonWithTimeout,
+  createSumiTalkChatJob,
+  isAbortLikeError,
+  waitForSumiTalkChatJob,
+  waitMs,
+} from "./chat/sumitalkChatClient";
 type CodexGroupChatTask = {
   id?: string;
   mode?: string;
@@ -94,8 +98,6 @@ type CodexGroupChatTaskResponse = {
   task?: CodexGroupChatTask | null;
   error?: string;
 };
-const SUMITALK_CHAT_JOB_POLL_MS = 1000;
-const SUMITALK_CHAT_JOB_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_POLL_MS = 1000;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_CREATE_TIMEOUT_MS = 30000;
@@ -106,51 +108,6 @@ const GROUP_DISCUSSION_TRIGGER_RE = /(?:讨论|商量|你俩|你们俩|自由聊
 const GROUP_DISCUSSION_STOP_RE = /(?:先这样|先到这|就先这样|差不多(?:了|就行|可以)|可以收尾|不用继续|别聊了|到这里|我来改|我去改|先按这个)/i;
 const GROUP_DISCUSSION_MANUAL_STOP_RE = /(?:停一下|停止|暂停|打断|中断|别聊了|不用继续|先这样|收尾|到这里|算了)/i;
 const GROUP_DISCUSSION_CONTINUE_RE = /(?:继续聊|接着聊|再聊|继续讨论|再讨论|你俩继续|你们俩继续|让(?:他们|你俩|你们俩)继续)/i;
-
-function waitMs(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-async function waitForSumiTalkChatJob(jobId: string): Promise<any> {
-  const startedAt = Date.now();
-  let lastError = "";
-  while (Date.now() - startedAt < SUMITALK_CHAT_JOB_TIMEOUT_MS) {
-    await waitMs(SUMITALK_CHAT_JOB_POLL_MS);
-    let job: SumiTalkChatJobStatusResponse;
-    try {
-      job = await apiJson<SumiTalkChatJobStatusResponse>(`/miniapp-api/sumitalk-chat-jobs/${encodeURIComponent(jobId)}`);
-    } catch (e: any) {
-      lastError = String(e?.message || e);
-      continue;
-    }
-    if (job.status === "done") return job.response || {};
-    if (job.status === "error") {
-      const upstreamError = job.response?.error || job.response?.message || "";
-      throw new Error(String(job.error || upstreamError || "渡回复失败"));
-    }
-    if (job.response?.choices) return job.response;
-    if (job.status && !["running", "queued", "pending"].includes(job.status)) {
-      throw new Error("任务状态异常");
-    }
-  }
-  throw new Error(lastError ? `等待渡回复超时：${lastError}` : "等待渡回复超时");
-}
-
-async function apiJsonWithTimeout<T>(path: string, timeoutMs: number, init?: RequestInit): Promise<T> {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await apiJson<T>(path, { ...init, signal: controller.signal });
-  } finally {
-    window.clearTimeout(timer);
-  }
-}
-
-function isAbortLikeError(error: any): boolean {
-  const name = String(error?.name || "").trim();
-  const message = String(error?.message || error || "").toLowerCase();
-  return name === "AbortError" || /abort|aborted|signal is aborted|timeout|timed out/.test(message);
-}
 
 function uniqueNonEmptyStrings(values: string[]): string[] {
   const out: string[] = [];
@@ -449,6 +406,7 @@ export function MainChatScreen({
   });
   const benbenTaskRecoveringRef = useRef<Set<string>>(new Set());
   const benbenTaskFinalizedRef = useRef<Set<string>>(new Set());
+  const sumitalkOperationRecoveringRef = useRef<Set<string>>(new Set());
   const groupDiscussionRunRef = useRef(0);
   const groupDiscussionSnapshotRef = useRef<GroupDiscussionSnapshot | null>(null);
 
@@ -589,6 +547,7 @@ export function MainChatScreen({
             } catch {}
           }
         }
+        void recoverActiveSumiTalkOperations(resolvedDeviceId);
       } catch (e: any) {
         if (!cancelled) {
           toast(`聊天记录拉取失败：${e?.message || e}`);
@@ -640,6 +599,151 @@ export function MainChatScreen({
       localDeviceId: options.localDeviceId,
       remoteTimeoutMs: 8000,
     }).catch(() => {});
+  }
+
+  async function persistSumiTalkOperationMessages(nextMessages: ChatDraftMessage[], localDeviceId: string) {
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    if (groupChatMode) {
+      await saveDisplayHistory(nextMessages, { syncRemote: false, localDeviceId });
+      saveDisplayHistoryInBackground(nextMessages, { localDeviceId });
+    } else {
+      await saveDisplayHistory(nextMessages, { localDeviceId });
+    }
+  }
+
+  async function recoverSumiTalkOperation(operation: ChatOperation, localDeviceId: string) {
+    const opId = String(operation?.id || "").trim();
+    if (!opId || sumitalkOperationRecoveringRef.current.has(opId)) return;
+    sumitalkOperationRecoveringRef.current.add(opId);
+    try {
+      let jobId = String(operation.jobId || "").trim();
+      let completedData: any = null;
+      const assistantId = String(operation.assistantMessageId || "").trim();
+      if (!assistantId) throw new Error("缺少 pending 回复 ID");
+      const createOrReuseJob = async () => {
+        const retryPayload = operation.retryPayload && typeof operation.retryPayload === "object" ? operation.retryPayload : {};
+        const path = String(retryPayload.path || "").trim();
+        const body = retryPayload.body && typeof retryPayload.body === "object" ? retryPayload.body : null;
+        if (!path || !body) throw new Error("缺少可恢复请求");
+        const started = await createSumiTalkChatJob(path, body);
+        if (started?.status === "error") {
+          const upstreamError = started.response?.error || started.response?.message || "";
+          throw new Error(String(started.error || upstreamError || "渡回复失败"));
+        }
+        jobId = String(started?.job_id || "").trim();
+        if (jobId) {
+          await attachChatJobToOperation(opId, jobId);
+          const current = messagesRef.current.find((msg) => msg.id === assistantId);
+          if (current) {
+            const next = applyMessageById(messagesRef.current, assistantId, {
+              ...current,
+              role: "assistant",
+              status: "pending",
+              clientRequestId: operation.clientRequestId,
+              operationId: opId,
+              jobId,
+            });
+            await persistSumiTalkOperationMessages(next, localDeviceId);
+          }
+        }
+        if (String(started?.status || "").trim() === "done") {
+          completedData = started?.response || started;
+        }
+      };
+      if (jobId) {
+        try {
+          completedData = await waitForSumiTalkChatJob(jobId);
+        } catch (e: any) {
+          const message = String(e?.message || e);
+          if (!/不存在|过期|404/.test(message)) throw e;
+          jobId = "";
+        }
+      }
+      if (!completedData && !jobId) {
+        await createOrReuseJob();
+      }
+      const data = completedData || (jobId ? await waitForSumiTalkChatJob(jobId) : null);
+      if (!data) throw new Error("任务没有返回内容");
+      if (data?.error) {
+        const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
+        throw new Error(err || "上游返回错误");
+      }
+      const reply = extractAssistantReplyText(data);
+      if (!reply) throw new Error("上游没有返回内容");
+      const existing = messagesRef.current.find((msg) => msg.id === assistantId);
+      const assistantMessage: ChatDraftMessage = {
+        id: assistantId,
+        role: "assistant",
+        content: reply,
+        createdAt: existing?.createdAt || operation.createdAt || new Date().toISOString(),
+        status: "sent",
+        clientRequestId: operation.clientRequestId,
+        operationId: opId,
+        jobId: jobId || undefined,
+        reasoning: extractAssistantReasoning(data) || undefined,
+        tokenCount: extractTokenCount(data),
+      };
+      await completeChatOperation(opId, assistantMessage);
+      const finalMessages = applyAssistantTerminalMessage(messagesRef.current, operation.clientRequestId, assistantMessage);
+      await persistSumiTalkOperationMessages(finalMessages, localDeviceId);
+    } catch (e: any) {
+      const assistantId = String(operation.assistantMessageId || "").trim();
+      const existing = messagesRef.current.find((msg) => msg.id === assistantId);
+      const failedMessage: ChatDraftMessage = {
+        id: assistantId || `assistant-failed-${Date.now()}`,
+        role: "assistant",
+        content: `（发送失败：${e?.message || e}）`,
+        createdAt: existing?.createdAt || operation.createdAt || new Date().toISOString(),
+        status: "failed",
+        clientRequestId: operation.clientRequestId,
+        operationId: opId,
+        jobId: operation.jobId,
+      };
+      await failChatOperation(opId, String(e?.message || e), failedMessage);
+      const failedMessages = applyAssistantTerminalMessage(messagesRef.current, operation.clientRequestId, failedMessage);
+      await persistSumiTalkOperationMessages(failedMessages, localDeviceId);
+    } finally {
+      sumitalkOperationRecoveringRef.current.delete(opId);
+    }
+  }
+
+  async function recoverActiveSumiTalkOperations(localDeviceId: string) {
+    const did = String(localDeviceId || "").trim();
+    if (!did || !historyWindowId) return;
+    const operations = await listActiveChatOperations(did, historyWindowId);
+    for (const operation of operations) {
+      if (!operation.assistantMessageId || !operation.clientRequestId) continue;
+      void recoverSumiTalkOperation(operation, did);
+    }
+  }
+
+  async function retrySumiTalkOperation(operationId: string) {
+    const opId = String(operationId || "").trim();
+    const localDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
+    if (!opId || !localDeviceId) return;
+    const operation = await getChatOperation(opId);
+    if (!operation) {
+      toast("这条失败消息没有找到可重试任务");
+      return;
+    }
+    const assistantId = String(operation.assistantMessageId || "").trim();
+    const current = messagesRef.current.find((msg) => msg.id === assistantId);
+    if (current) {
+      const pending = applyMessageById(messagesRef.current, assistantId, {
+        ...current,
+        role: "assistant",
+        content: "",
+        status: "pending",
+        clientRequestId: operation.clientRequestId,
+        operationId: opId,
+        jobId: operation.jobId,
+      });
+      messagesRef.current = pending;
+      setMessages(pending);
+      await saveDisplayHistory(pending, { syncRemote: false, localDeviceId });
+    }
+    void recoverSumiTalkOperation(operation, localDeviceId);
   }
 
   async function applyBenbenTaskUpdate(
@@ -960,25 +1064,21 @@ export function MainChatScreen({
     setMessages(pendingMessages);
     await saveDisplayHistory(pendingMessages, { syncRemote: false, localDeviceId: params.replyTarget });
     try {
-      const started = await apiJson<SumiTalkChatJobCreateResponse>("/miniapp-api/sumitalk-chat-jobs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: activeModel,
-          messages: [{
-            role: "user",
-            content: buildGroupDiscussionUserContent(
-              messagesRef.current,
-              params.topic,
-              params.turnIndex,
-              params.maxTurns,
-            ),
-          }],
-          stream: false,
-          window_id: windowId,
-          reply_target: params.replyTarget,
-          client_request_id: clientRequestId,
-        }),
+      const started = await createSumiTalkChatJob("/miniapp-api/sumitalk-chat-jobs", {
+        model: activeModel,
+        messages: [{
+          role: "user",
+          content: buildGroupDiscussionUserContent(
+            messagesRef.current,
+            params.topic,
+            params.turnIndex,
+            params.maxTurns,
+          ),
+        }],
+        stream: false,
+        window_id: windowId,
+        reply_target: params.replyTarget,
+        client_request_id: clientRequestId,
       });
       if (started?.status === "error") {
         const upstreamError = started.response?.error || started.response?.message || "";
@@ -1328,6 +1428,7 @@ export function MainChatScreen({
     }
     const baseTimestamp = Date.now();
     const clientRequestId = `sumitalk-${baseTimestamp}-${Math.random().toString(36).slice(2, 10)}`;
+    const operationId = shouldRequestDu ? `op-${clientRequestId}` : "";
     const userMsg: ChatDraftMessage = {
       id: `user-${baseTimestamp}`,
       role: "user",
@@ -1335,6 +1436,7 @@ export function MainChatScreen({
       createdAt: new Date(baseTimestamp).toISOString(),
       status: "sent",
       clientRequestId,
+      operationId: operationId || undefined,
     };
     const assistantId = shouldRequestDu ? `assistant-${baseTimestamp + 1}` : "";
     const assistantCreatedAt = shouldRequestDu ? new Date(baseTimestamp + 1).toISOString() : "";
@@ -1346,6 +1448,7 @@ export function MainChatScreen({
           createdAt: assistantCreatedAt,
           status: "pending" as const,
           clientRequestId,
+          operationId,
         }
       : null;
     const benbenPlaceholderId = shouldRequestBenben ? `benben-${baseTimestamp + 2}` : "";
@@ -1361,6 +1464,26 @@ export function MainChatScreen({
         }
       : null;
     const nextMessages = [...messagesRef.current, userMsg];
+    const requestUserContent = shouldRequestDu
+      ? isGroupFreeDiscussion
+        ? buildGroupFreeDiscussionOpeningContent(nextMessages, content)
+        : groupChatMode
+        ? buildGroupTurnUserContent(nextMessages, content)
+        : content
+      : "";
+    const musicBgmContext = shouldRequestDu && !groupChatMode ? readMusicBgmContext() : null;
+    const requestPath = shouldRequestDu ? (groupChatMode ? "/miniapp-api/sumitalk-chat-jobs" : "/miniapp-api/sumitalk-chat") : "";
+    const requestBody = shouldRequestDu
+      ? {
+          model: activeModel,
+          messages: [{ role: "user", content: requestUserContent }],
+          stream: false,
+          window_id: windowId,
+          ...(musicBgmContext ? { music_bgm_context: musicBgmContext } : {}),
+          reply_target: resolvedDeviceId,
+          client_request_id: clientRequestId,
+        }
+      : null;
     const draftMessages = [
       ...nextMessages,
       ...(assistantPlaceholder ? [assistantPlaceholder] : []),
@@ -1372,7 +1495,37 @@ export function MainChatScreen({
     setSending(true);
     setMessages(draftMessages);
     messagesRef.current = draftMessages;
-    await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
+    if (shouldRequestDu && assistantPlaceholder && requestBody) {
+      await createChatDraftTurn({
+        deviceId: resolvedDeviceId,
+        windowId: historyWindowId,
+        userMessage: userMsg,
+        assistantMessage: assistantPlaceholder,
+        operation: {
+          id: operationId,
+          clientRequestId,
+          deviceId: resolvedDeviceId,
+          windowId: historyWindowId,
+          displayWindowId: remoteHistoryWindowId,
+          replyTarget,
+          model: activeModel,
+          retryPayload: {
+            path: requestPath,
+            body: requestBody,
+          },
+          retryPayloadSize: JSON.stringify(requestBody).length,
+          userMessageId: userMsg.id,
+          assistantMessageId: assistantId,
+          status: "draft",
+          createdAt: new Date(baseTimestamp).toISOString(),
+          updatedAt: new Date(baseTimestamp).toISOString(),
+          retryCount: 0,
+          schemaVersion: 1,
+        },
+      });
+    } else {
+      await saveDisplayHistory(draftMessages, { syncRemote: false, localDeviceId: resolvedDeviceId });
+    }
     let benbenCreatePromise: Promise<ChatDraftMessage[]> | null = null;
     let initialDuReply = "";
     try {
@@ -1392,36 +1545,29 @@ export function MainChatScreen({
       }
 
       if (shouldRequestDu) {
-        const requestUserContent = isGroupFreeDiscussion
-          ? buildGroupFreeDiscussionOpeningContent(nextMessages, content)
-          : groupChatMode
-          ? buildGroupTurnUserContent(nextMessages, content)
-          : content;
-        const musicBgmContext = !groupChatMode ? readMusicBgmContext() : null;
-        const requestWindowId = windowId;
-        const requestBody = {
-          model: activeModel,
-          messages: [{ role: "user", content: requestUserContent }],
-          stream: false,
-          window_id: requestWindowId,
-          ...(musicBgmContext ? { music_bgm_context: musicBgmContext } : {}),
-        };
-        const started = await apiJson<SumiTalkChatJobCreateResponse>(groupChatMode ? "/miniapp-api/sumitalk-chat-jobs" : "/miniapp-api/sumitalk-chat", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            ...requestBody,
-            reply_target: replyTarget,
-            client_request_id: clientRequestId,
-          }),
-        });
+        if (!requestBody) throw new Error("缺少发送请求");
+        const started = await createSumiTalkChatJob(requestPath, requestBody);
         if (started?.status === "error") {
           const upstreamError = started.response?.error || started.response?.message || "";
           throw new Error(String(started.error || upstreamError || "渡回复失败"));
         }
         const jobId = String(started?.job_id || "").trim();
+        if (jobId && operationId) {
+          await attachChatJobToOperation(operationId, jobId);
+          const pendingWithJob = applyMessageById(messagesRef.current, assistantId, {
+            id: assistantId,
+            role: "assistant",
+            content: "",
+            createdAt: assistantCreatedAt,
+            status: "pending",
+            clientRequestId,
+            operationId,
+            jobId,
+          });
+          messagesRef.current = pendingWithJob;
+          setMessages(pendingWithJob);
+          await saveDisplayHistory(pendingWithJob, { syncRemote: false, localDeviceId: replyTarget });
+        }
         const startedStatus = String(started?.status || "").trim();
         const data = startedStatus === "done"
           ? started?.response || started
@@ -1444,6 +1590,19 @@ export function MainChatScreen({
           createdAt: assistantCreatedAt,
           status: "sent" as const,
           clientRequestId,
+          operationId,
+          jobId: jobId || undefined,
+          reasoning: reasoning || undefined,
+          tokenCount,
+        });
+        await completeChatOperation(operationId, {
+          id: assistantId,
+          role: "assistant",
+          content: reply,
+          createdAt: assistantCreatedAt,
+          status: "sent",
+          clientRequestId,
+          operationId,
           jobId: jobId || undefined,
           reasoning: reasoning || undefined,
           tokenCount,
@@ -1483,8 +1642,20 @@ export function MainChatScreen({
             createdAt: assistantCreatedAt,
             status: "failed" as const,
             clientRequestId,
+            operationId,
           })
         : messagesRef.current;
+      if (shouldRequestDu && operationId) {
+        await failChatOperation(operationId, String(e?.message || e), {
+          id: assistantId,
+          role: "assistant",
+          content: `（发送失败：${e?.message || e}）`,
+          createdAt: assistantCreatedAt,
+          status: "failed",
+          clientRequestId,
+          operationId,
+        });
+      }
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
       await saveDisplayHistory(failedMessages, { syncRemote: false, localDeviceId: replyTarget });
@@ -1549,6 +1720,20 @@ export function MainChatScreen({
     : null;
   const activeSearchMatchId = activeSearchMatch?.id || "";
   const transparentBubbleClass = TRANSPARENT_BUBBLE_CLASS;
+  const hasCustomChatBackground = Boolean(String(chatBackgroundImage || "").trim());
+  const chatBackgroundAlpha = Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100));
+  const chatChromeClass = hasCustomChatBackground
+    ? "border-white/25 bg-white/60 shadow-[0_10px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl"
+    : "border-gray-100/50 bg-white/80 backdrop-blur-md";
+  const chatFooterClass = hasCustomChatBackground
+    ? "border-white/25 bg-white/60 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl"
+    : "border-gray-100 bg-white";
+  const chatInputShellClass = hasCustomChatBackground
+    ? "bg-white/70 shadow-sm backdrop-blur-md"
+    : "bg-[#F4F5F7]";
+  const chatSearchShellClass = hasCustomChatBackground
+    ? "bg-white/70 shadow-sm backdrop-blur-md"
+    : "bg-[#F4F5F7]";
 
   useEffect(() => {
     if (searchOpen) return;
@@ -1581,13 +1766,13 @@ export function MainChatScreen({
       className="absolute inset-0 z-30 flex w-full max-w-full flex-col overflow-x-hidden"
       style={{
         fontFamily: chatFontFamily,
-        backgroundColor: `rgba(248, 249, 250, ${Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100))})`,
-        backgroundImage: chatBackgroundImage ? `linear-gradient(rgba(248,249,250,${1 - Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100))}), rgba(248,249,250,${1 - Math.max(0.2, Math.min(1, chatBackgroundOpacity / 100))})), url(${chatBackgroundImage})` : undefined,
+        backgroundColor: `rgba(248, 249, 250, ${chatBackgroundAlpha})`,
+        backgroundImage: chatBackgroundImage ? `linear-gradient(rgba(248,249,250,${1 - chatBackgroundAlpha}), rgba(248,249,250,${1 - chatBackgroundAlpha})), url(${chatBackgroundImage})` : undefined,
         backgroundSize: "cover",
         backgroundPosition: "center",
       }}
     >
-      <div className="absolute top-0 z-20 w-full border-b border-gray-100/50 bg-white/80 px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] backdrop-blur-md">
+      <div className={`absolute top-0 z-20 w-full border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)] ${chatChromeClass}`}>
         <div className="flex items-center">
           <button className="rounded-full p-2 text-gray-500 transition-colors active:bg-gray-100" onClick={onBack}>
             <ChevronLeftIcon />
@@ -1637,7 +1822,7 @@ export function MainChatScreen({
           </button>
         </div>
         {searchOpen ? (
-          <div className="mt-3 flex items-center gap-2 rounded-[18px] bg-[#F4F5F7] px-3 py-2">
+          <div className={`mt-3 flex items-center gap-2 rounded-[18px] px-3 py-2 ${chatSearchShellClass}`}>
             <SearchIconMini />
             <input
               className="flex-1 bg-transparent text-[14px] font-medium text-gray-900 outline-none placeholder:text-gray-400"
@@ -1822,6 +2007,14 @@ export function MainChatScreen({
                                 >
                                   <CopyIconMini />
                                 </button>
+                                {group.role === "assistant" && part.status === "failed" && part.operationId ? (
+                                  <button
+                                    className="rounded-full px-2 py-1 text-[11px] font-medium text-rose-500 transition-colors active:bg-rose-50"
+                                    onClick={() => void retrySumiTalkOperation(part.operationId || "")}
+                                  >
+                                    重试
+                                  </button>
+                                ) : null}
                                 {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
                                   <span>
                                     {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
@@ -1843,8 +2036,8 @@ export function MainChatScreen({
         </div>
       </div>
 
-      <div className="z-20 border-t border-gray-100 bg-white pb-[calc(env(safe-area-inset-bottom,24px))]">
-        <div className={`overflow-hidden bg-white transition-all duration-300 ease-in-out ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
+      <div className={`z-20 border-t pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
+        <div className={`overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/35 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[140px] opacity-100" : "h-0 opacity-0"}`}>
           <div className="flex space-x-5 px-6 pb-2 pt-5">
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
@@ -1871,7 +2064,7 @@ export function MainChatScreen({
           >
             <PlusIcon open={plusOpen} />
           </button>
-          <div className="flex min-h-[42px] flex-1 items-center rounded-[20px] bg-[#F4F5F7] px-4 py-2.5">
+          <div className={`flex min-h-[42px] flex-1 items-center rounded-[20px] px-4 py-2.5 ${chatInputShellClass}`}>
             <textarea
               className="max-h-28 min-h-[22px] w-full resize-none bg-transparent font-medium leading-6 text-gray-900 outline-none placeholder:text-gray-400"
               value={input}

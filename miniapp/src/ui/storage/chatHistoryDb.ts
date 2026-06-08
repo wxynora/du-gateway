@@ -1,218 +1,153 @@
-import Dexie, { type Table } from "dexie";
+import { dexieChatStoreFallback } from "../chat/dexieChatStoreFallback";
+import { nativeChatStore, isNativeChatStoreAvailable } from "../chat/nativeChatStore";
+import {
+  canonicalHistoryWindowId,
+  mergeHistoryMessages,
+  normalizeHistoryMessages,
+  type ChatOperation,
+  type ChatHistoryLocalStatRow,
+  type ChatHistoryMessage,
+  type ChatHistoryRow,
+  type ChatHistoryStore,
+} from "../chat/chatStore";
 
-export type ChatHistoryMessage = {
-  id: string;
-  role: "user" | "assistant" | "benben";
-  content: string;
-  createdAt: string;
-  status?: "pending" | "sent" | "failed";
-  reasoning?: string;
-  tokenCount?: {
-    input?: number;
-    output?: number;
-  };
-};
+export type { ChatOperation, ChatHistoryLocalStatRow, ChatHistoryMessage, ChatHistoryRow };
 
-export type ChatHistoryRow = {
-  key: string;
-  deviceId: string;
-  windowId: string;
-  updatedAt: string;
-  messages: ChatHistoryMessage[];
-};
+const migratedNativeDeviceIds = new Set<string>();
 
-export type ChatHistoryLocalStatRow = {
-  key: string;
-  deviceId: string;
-  windowId: string;
-  updatedAt: string;
-  count: number;
-};
-
-class MiniappChatHistoryDb extends Dexie {
-  histories!: Table<ChatHistoryRow, string>;
-
-  constructor() {
-    super("miniapp_chat_history_db");
-    this.version(1).stores({
-      histories: "&key, deviceId, windowId, updatedAt",
-    });
-  }
+async function preferredStore(): Promise<ChatHistoryStore> {
+  return await isNativeChatStoreAvailable() ? nativeChatStore : dexieChatStoreFallback;
 }
 
-const db = new MiniappChatHistoryDb();
-
-function historyKey(deviceId: string, windowId: string): string {
-  return `${deviceId}::${windowId || "default"}`;
-}
-
-function canonicalHistoryWindowId(windowId: string): string {
-  const wid = String(windowId || "").trim();
-  if (!wid) return "sumitalk-main";
-  if (wid.startsWith("tg_")) return "sumitalk-main";
-  return wid;
-}
-
-function messageKey(message: ChatHistoryMessage): string {
-  const id = String(message?.id || "").trim();
-  if (id) return `id:${id}`;
-  return [
-    String(message?.role || "").trim(),
-    String(message?.createdAt || "").trim(),
-    String(message?.content || "").trim(),
-  ].join("|");
-}
-
-function mergeHistoryMessages(...groups: Array<ChatHistoryMessage[] | undefined>): ChatHistoryMessage[] {
-  const out: ChatHistoryMessage[] = [];
-  const seen = new Set<string>();
-  for (const group of groups) {
-    for (const message of Array.isArray(group) ? group : []) {
-      if (!message || typeof message !== "object") continue;
-      const key = messageKey(message);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(message);
+async function migrateDexieRowsToNative(deviceId: string): Promise<void> {
+  const did = String(deviceId || "").trim();
+  if (!did || migratedNativeDeviceIds.has(did) || !(await isNativeChatStoreAvailable())) return;
+  migratedNativeDeviceIds.add(did);
+  try {
+    const rows = await dexieChatStoreFallback.readAllRows();
+    if (!rows.length) return;
+    for (const row of rows) {
+      const rowDeviceId = String(row?.deviceId || did).trim() || did;
+      const windowId = canonicalHistoryWindowId(row?.windowId || "");
+      const messages = normalizeHistoryMessages(row?.messages || []);
+      if (!rowDeviceId || !windowId || !messages.length) continue;
+      const existing = await nativeChatStore.readLocalChatHistory(rowDeviceId, windowId);
+      await nativeChatStore.writeLocalChatHistory(
+        rowDeviceId,
+        windowId,
+        mergeHistoryMessages(existing, messages),
+      );
     }
+  } catch {
+    migratedNativeDeviceIds.delete(did);
   }
-  out.sort((a, b) => {
-    const at = Date.parse(String(a?.createdAt || ""));
-    const bt = Date.parse(String(b?.createdAt || ""));
-    const diff = (Number.isFinite(at) ? at : 0) - (Number.isFinite(bt) ? bt : 0);
-    return diff || String(a?.id || "").localeCompare(String(b?.id || ""));
-  });
-  return out;
+}
+
+async function withFallback<T>(nativeAction: () => Promise<T>, fallbackAction: () => Promise<T>): Promise<T> {
+  if (!(await isNativeChatStoreAvailable())) return fallbackAction();
+  try {
+    return await nativeAction();
+  } catch {
+    return fallbackAction();
+  }
 }
 
 export async function readLocalChatHistory(deviceId: string, windowId: string): Promise<ChatHistoryMessage[]> {
   const did = String(deviceId || "").trim();
-  const wid = String(windowId || "").trim();
-  if (!did || !wid) return [];
-  try {
-    const row = await db.histories.get(historyKey(did, wid));
-    return Array.isArray(row?.messages) ? row.messages : [];
-  } catch {
-    return [];
-  }
+  if (did) await migrateDexieRowsToNative(did);
+  return withFallback(
+    () => nativeChatStore.readLocalChatHistory(deviceId, windowId),
+    () => dexieChatStoreFallback.readLocalChatHistory(deviceId, windowId),
+  );
 }
 
 export async function readLocalChatHistoryRows(windowIds: string[]): Promise<ChatHistoryRow[]> {
-  const wanted = new Set(
-    (Array.isArray(windowIds) ? windowIds : [])
-      .map((item) => String(item || "").trim())
-      .filter(Boolean),
+  return withFallback(
+    () => nativeChatStore.readLocalChatHistoryRows(windowIds),
+    () => dexieChatStoreFallback.readLocalChatHistoryRows(windowIds),
   );
-  if (!wanted.size) return [];
-  try {
-    const rows = await db.histories.toArray();
-    return rows.filter((row) => wanted.has(String(row?.windowId || "").trim()));
-  } catch {
-    return [];
-  }
 }
 
 export async function readLatestLocalChatHistory(deviceId: string): Promise<ChatHistoryMessage[]> {
   const did = String(deviceId || "").trim();
-  if (!did) return [];
-  try {
-    const rows = await db.histories.where("deviceId").equals(did).sortBy("updatedAt");
-    const latest = rows.length ? rows[rows.length - 1] : null;
-    return Array.isArray(latest?.messages) ? latest.messages : [];
-  } catch {
-    return [];
-  }
+  if (did) await migrateDexieRowsToNative(did);
+  return withFallback(
+    () => nativeChatStore.readLatestLocalChatHistory(deviceId),
+    () => dexieChatStoreFallback.readLatestLocalChatHistory(deviceId),
+  );
 }
 
 export async function inspectLocalChatHistoryRows(): Promise<ChatHistoryLocalStatRow[]> {
-  try {
-    const rows = await db.histories.toArray();
-    return rows
-      .map((row) => ({
-        key: String(row?.key || ""),
-        deviceId: String(row?.deviceId || ""),
-        windowId: String(row?.windowId || ""),
-        updatedAt: String(row?.updatedAt || ""),
-        count: Array.isArray(row?.messages) ? row.messages.length : 0,
-      }))
-      .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-  } catch {
-    return [];
-  }
+  return withFallback(
+    () => nativeChatStore.inspectLocalChatHistoryRows(),
+    () => dexieChatStoreFallback.inspectLocalChatHistoryRows(),
+  );
 }
 
 export async function writeLocalChatHistory(deviceId: string, windowId: string, messages: ChatHistoryMessage[]): Promise<void> {
-  const did = String(deviceId || "").trim();
-  const wid = String(windowId || "").trim();
-  if (!did || !wid) return;
-  const safeMessages = Array.isArray(messages) ? messages : [];
-  try {
-    await db.histories.put({
-      key: historyKey(did, wid),
-      deviceId: did,
-      windowId: wid,
-      updatedAt: new Date().toISOString(),
-      messages: safeMessages,
-    });
-  } catch {
-    // Ignore storage errors to avoid blocking chat flow.
-  }
+  const store = await preferredStore();
+  await store.writeLocalChatHistory(deviceId, windowId, messages);
 }
 
 export async function migrateLocalChatHistoryDevice(oldDeviceId: string, newDeviceId: string): Promise<void> {
-  const oldId = String(oldDeviceId || "").trim();
-  const newId = String(newDeviceId || "").trim();
-  if (!oldId || !newId || oldId === newId) return;
-  try {
-    const rows = await db.histories.where("deviceId").equals(oldId).toArray();
-    if (!rows.length) return;
-    await db.transaction("rw", db.histories, async () => {
-      for (const row of rows) {
-        const targetWindowId = canonicalHistoryWindowId(row.windowId);
-        const key = historyKey(newId, targetWindowId);
-        const existing = await db.histories.get(key);
-        await db.histories.put({
-          ...row,
-          key,
-          deviceId: newId,
-          windowId: targetWindowId,
-          updatedAt: new Date().toISOString(),
-          messages: mergeHistoryMessages(existing?.messages, row.messages),
-        });
-        await db.histories.delete(row.key);
-      }
-    });
-  } catch {
-    // Ignore migration errors to avoid blocking chat flow.
+  await dexieChatStoreFallback.migrateLocalChatHistoryDevice(oldDeviceId, newDeviceId);
+  if (await isNativeChatStoreAvailable()) {
+    await nativeChatStore.migrateLocalChatHistoryDevice(oldDeviceId, newDeviceId).catch(() => {});
+    migratedNativeDeviceIds.delete(String(oldDeviceId || "").trim());
+    migratedNativeDeviceIds.delete(String(newDeviceId || "").trim());
+    await migrateDexieRowsToNative(newDeviceId);
   }
 }
 
 export async function migrateLocalChatHistoriesToDevice(deviceId: string): Promise<void> {
-  const did = String(deviceId || "").trim();
-  if (!did) return;
-  try {
-    const rows = await db.histories.toArray();
-    if (!rows.length) return;
-    await db.transaction("rw", db.histories, async () => {
-      for (const row of rows) {
-        const sourceKey = String(row?.key || "").trim();
-        const targetWindowId = canonicalHistoryWindowId(row.windowId);
-        const key = historyKey(did, targetWindowId);
-        if (!key) continue;
-        const existing = await db.histories.get(key);
-        await db.histories.put({
-          ...row,
-          key,
-          deviceId: did,
-          windowId: targetWindowId,
-          updatedAt: new Date().toISOString(),
-          messages: mergeHistoryMessages(existing?.messages, row.messages),
-        });
-        if (sourceKey && sourceKey !== key) {
-          await db.histories.delete(sourceKey);
-        }
-      }
-    });
-  } catch {
-    // Ignore migration errors to avoid blocking chat flow.
-  }
+  await dexieChatStoreFallback.migrateLocalChatHistoriesToDevice(deviceId);
+  await migrateDexieRowsToNative(deviceId);
+}
+
+export async function createChatDraftTurn(args: {
+  deviceId: string;
+  windowId: string;
+  userMessage: ChatHistoryMessage;
+  assistantMessage: ChatHistoryMessage;
+  operation: ChatOperation;
+}): Promise<ChatOperation | null> {
+  return withFallback(
+    () => nativeChatStore.createDraftTurn(args),
+    () => dexieChatStoreFallback.createDraftTurn(args),
+  );
+}
+
+export async function attachChatJobToOperation(operationId: string, jobId: string): Promise<void> {
+  await withFallback(
+    () => nativeChatStore.attachJob(operationId, jobId),
+    () => dexieChatStoreFallback.attachJob(operationId, jobId),
+  );
+}
+
+export async function completeChatOperation(operationId: string, assistantMessage: ChatHistoryMessage): Promise<void> {
+  await withFallback(
+    () => nativeChatStore.completeOperation(operationId, assistantMessage),
+    () => dexieChatStoreFallback.completeOperation(operationId, assistantMessage),
+  );
+}
+
+export async function failChatOperation(operationId: string, error: string, assistantMessage?: ChatHistoryMessage): Promise<void> {
+  await withFallback(
+    () => nativeChatStore.failOperation(operationId, error, assistantMessage),
+    () => dexieChatStoreFallback.failOperation(operationId, error, assistantMessage),
+  );
+}
+
+export async function getChatOperation(operationId: string): Promise<ChatOperation | null> {
+  return withFallback(
+    () => nativeChatStore.getOperation(operationId),
+    () => dexieChatStoreFallback.getOperation(operationId),
+  );
+}
+
+export async function listActiveChatOperations(deviceId: string, windowId?: string): Promise<ChatOperation[]> {
+  return withFallback(
+    () => nativeChatStore.listActiveOperations(deviceId, windowId),
+    () => dexieChatStoreFallback.listActiveOperations(deviceId, windowId),
+  );
 }
