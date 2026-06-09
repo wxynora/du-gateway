@@ -12,6 +12,20 @@ type CoreMemory = {
   emotion_label?: string;
 };
 
+type DynamicMemory = {
+  id?: string;
+  memory_id?: string;
+  content?: string;
+  tag?: string;
+  importance?: number;
+  mention_count?: number;
+  emotion_label?: string;
+  scene_type?: string;
+  target_type?: string;
+  created_at?: string;
+  last_mentioned?: string;
+};
+
 type RecalledLine =
   | string
   | {
@@ -53,6 +67,13 @@ type MemoryDebugResp = {
   core_cache?: {
     items?: CoreMemory[];
   };
+};
+
+type DynamicMemoryResp = {
+  ok?: boolean;
+  error?: string;
+  count?: number;
+  memories?: DynamicMemory[];
 };
 
 type MemoryNode = {
@@ -157,9 +178,23 @@ function pickTitle(content: string, tag?: string) {
   return clean.length > 18 ? `${clean.slice(0, 18)}...` : clean;
 }
 
+function contentKey(content: string) {
+  return String(content || "").replace(/\s+/g, "").trim();
+}
+
 function normalizeEmotion(raw?: string): MemoryNode["emotion"] {
   if (raw === "positive" || raw === "negative") return raw;
   return "neutral";
+}
+
+function memoryId(item: { id?: string; memory_id?: string } | null | undefined, fallback: string) {
+  return String(item?.memory_id || item?.id || fallback).trim();
+}
+
+function memoryDate(item: DynamicMemory) {
+  const raw = String(item.last_mentioned || item.created_at || "").trim();
+  if (!raw) return "DYNAMIC MEMORY";
+  return raw.length > 10 ? raw.slice(0, 10) : raw;
 }
 
 function nodePosition(seed: string, index: number, type: MemoryNode["type"]) {
@@ -184,16 +219,58 @@ function nodePosition(seed: string, index: number, type: MemoryNode["type"]) {
   };
 }
 
-function collectNodes(data: MemoryDebugResp | null): MemoryNode[] {
+function eventMemoryIds(event: RecallEvent, eventIndex: number) {
+  const ids: string[] = [];
+  (event.recalled_items || []).forEach((item, itemIndex) => {
+    const id = memoryId(item, `item-${eventIndex}-${itemIndex}`);
+    if (id) ids.push(id);
+  });
+  (event.referenced_memories || []).forEach((item, itemIndex) => {
+    const id = memoryId(item, `ref-${eventIndex}-${itemIndex}`);
+    if (id) ids.push(id);
+  });
+  (event.recalled_lines || []).forEach((line, lineIndex) => {
+    if (typeof line === "string") return;
+    const id = memoryId(line, `line-${eventIndex}-${lineIndex}`);
+    if (id) ids.push(id);
+  });
+  return Array.from(new Set(ids));
+}
+
+function buildEventConnections(data: MemoryDebugResp | null) {
+  const connections = new Map<string, Set<string>>();
+  const events = [
+    ...(data?.recalls || []),
+    ...(data?.search_memory_events || []),
+    ...(data?.citation_events || []),
+  ];
+  events.forEach((event, eventIndex) => {
+    const ids = eventMemoryIds(event, eventIndex).slice(0, 8);
+    ids.forEach((id, index) => {
+      const related = connections.get(id) || new Set<string>();
+      ids.forEach((other, otherIndex) => {
+        if (other !== id && Math.abs(otherIndex - index) <= 2) related.add(other);
+      });
+      connections.set(id, related);
+    });
+  });
+  return connections;
+}
+
+function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryResp | null): MemoryNode[] {
   const nodes: MemoryNode[] = [];
   const seen = new Set<string>();
+  const seenContents = new Set<string>();
+  const eventConnections = buildEventConnections(data);
 
   const coreItems = data?.core_cache?.items || [];
   coreItems.slice(0, 12).forEach((item, index) => {
-    const id = String(item.memory_id || item.id || `core-${index}`).trim();
+    const id = memoryId(item, `core-${index}`);
     const content = String(item.content || "").trim();
     if (!id || !content || seen.has(id)) return;
+    const key = contentKey(content);
     seen.add(id);
+    if (key) seenContents.add(key);
     const pos = nodePosition(id, index, "core");
     nodes.push({
       id,
@@ -211,52 +288,26 @@ function collectNodes(data: MemoryDebugResp | null): MemoryNode[] {
     });
   });
 
-  const events = [
-    ...(data?.recalls || []),
-    ...(data?.search_memory_events || []),
-    ...(data?.citation_events || []),
-  ];
-  const candidates: Array<{ id: string; content: string; tag?: string; emotion?: string; importance?: number; mention?: number }> = [];
-  events.forEach((event, eventIndex) => {
-    (event.recalled_items || []).forEach((item, itemIndex) => {
-      const content = String(item.content || "").trim();
-      const id = String(item.memory_id || item.id || `item-${eventIndex}-${itemIndex}`).trim();
-      if (content) candidates.push({ id, content, tag: item.tag, importance: item.importance, mention: item.mention_count });
-    });
-    (event.referenced_memories || []).forEach((item, itemIndex) => {
-      const content = String(item.content || "").trim();
-      const id = String(item.memory_id || item.id || `ref-${eventIndex}-${itemIndex}`).trim();
-      if (content) candidates.push({ id, content, tag: item.tag, importance: item.importance, mention: item.mention_count });
-    });
-    (event.recalled_lines || []).forEach((line, lineIndex) => {
-      if (typeof line === "string") {
-        const content = line.trim();
-        if (content) candidates.push({ id: `line-${hashText(content)}`, content });
-      } else {
-        const content = String(line.content || "").trim();
-        const id = String(line.memory_id || line.id || `line-${eventIndex}-${lineIndex}`).trim();
-        if (content) candidates.push({ id, content, emotion: line.emotion_label });
-      }
-    });
-  });
-
-  candidates.slice(0, 28).forEach((item, index) => {
-    if (!item.id || seen.has(item.id)) return;
-    seen.add(item.id);
-    const pos = nodePosition(item.id || item.content, index, "dynamic");
-    const firstCore = nodes.find((node) => node.type === "core");
-    const nearestCore = nodes.filter((node) => node.type === "core")[index % Math.max(1, nodes.filter((node) => node.type === "core").length)];
-    const connections = nearestCore ? [nearestCore.id] : firstCore ? [firstCore.id] : [];
+  const dynamicMemories = dynamicData?.memories || [];
+  dynamicMemories.forEach((item, index) => {
+    const id = memoryId(item, `dynamic-${index}`);
+    const content = String(item.content || "").trim();
+    if (!id || !content || seen.has(id)) return;
+    const key = contentKey(content);
+    if (key && seenContents.has(key)) return;
+    seen.add(id);
+    if (key) seenContents.add(key);
+    const pos = nodePosition(id || content, index, "dynamic");
     nodes.push({
-      id: item.id,
+      id,
       ...pos,
-      title: pickTitle(item.content, item.tag),
+      title: pickTitle(content, item.tag),
       type: "dynamic",
-      emotion: normalizeEmotion(item.emotion),
-      date: "DYNAMIC MEMORY",
-      desc: item.content,
-      coord: `imp ${item.importance ?? "-"} | mention ${item.mention ?? 0}`,
-      connections,
+      emotion: normalizeEmotion(item.emotion_label),
+      date: memoryDate(item),
+      desc: content,
+      coord: `imp ${item.importance ?? "-"} | mention ${item.mention_count ?? 0}`,
+      connections: Array.from(eventConnections.get(id) || []),
       importance: item.importance,
     });
   });
@@ -286,6 +337,7 @@ export function MemoryNebulaTab() {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useMeasuredSize(rootRef);
   const [data, setData] = useState<MemoryDebugResp | null>(null);
+  const [dynamicData, setDynamicData] = useState<DynamicMemoryResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [activeId, setActiveId] = useState("");
@@ -297,15 +349,34 @@ export function MemoryNebulaTab() {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await apiJson<MemoryDebugResp>("/miniapp-api/memory-debug?limit=16&core_limit=48&scope=all");
-      if (!resp?.ok) throw new Error(resp?.error || "加载失败");
+      const [debugResult, dynamicResult] = await Promise.allSettled([
+        apiJson<MemoryDebugResp>("/miniapp-api/memory-debug?limit=16&core_limit=48&scope=all"),
+        apiJson<DynamicMemoryResp>("/miniapp-api/dynamic-memory"),
+      ]);
+      const errors: string[] = [];
+      if (debugResult.status === "fulfilled" && debugResult.value?.ok) {
+        setData(debugResult.value);
+      } else {
+        const reason = debugResult.status === "rejected" ? debugResult.reason : debugResult.value?.error;
+        errors.push(`核心记忆 ${reason?.message || reason || "加载失败"}`);
+        setData(null);
+      }
+      if (dynamicResult.status === "fulfilled" && dynamicResult.value?.ok) {
+        setDynamicData(dynamicResult.value);
+      } else {
+        const reason = dynamicResult.status === "rejected" ? dynamicResult.reason : dynamicResult.value?.error;
+        errors.push(`动态记忆 ${reason?.message || reason || "加载失败"}`);
+        setDynamicData(null);
+      }
       setLoadError("");
-      setData(resp);
+      if (errors.length === 2) throw new Error(errors.join("；"));
+      if (errors.length === 1) toast(`记忆星云部分加载失败：${errors[0]}`);
     } catch (e: any) {
       const message = e?.message || String(e);
       setLoadError(message);
       toast(`记忆星云加载失败：${message}`);
       setData(null);
+      setDynamicData(null);
     } finally {
       setLoading(false);
     }
@@ -315,7 +386,7 @@ export function MemoryNebulaTab() {
     void reload();
   }, [reload]);
 
-  const nodes = useMemo(() => collectNodes(data), [data]);
+  const nodes = useMemo(() => collectNodes(data, dynamicData), [data, dynamicData]);
   const coreNodes = useMemo(() => nodes.filter((node) => node.type === "core"), [nodes]);
   const activeNode = nodes.find((node) => node.id === activeId) || null;
 
