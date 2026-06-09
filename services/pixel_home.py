@@ -483,6 +483,7 @@ def build_pixel_home_state() -> dict:
     mode_state["du"] = _actor_public(du, reference_spot=str(xinyue.get("spot") or ""))
     mode_state["xinyue"] = _actor_public(xinyue)
     mode_state["du_dynamics"] = _normalize_du_dynamics(stored.get("du_dynamics"), reference_spot=str(xinyue.get("spot") or ""))
+    mode_state["du_vitals"] = r2_store.get_du_vitals_latest() or {}
     mode_state["spots"] = SPOT_OPTIONS
     return mode_state
 

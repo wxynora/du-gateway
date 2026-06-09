@@ -30,6 +30,7 @@ type PixelHomeStateResp = {
   du?: PixelHomeActor;
   xinyue?: PixelHomeActor;
   du_dynamics?: PixelHomeDynamic[];
+  du_vitals?: Record<string, any>;
   spots?: Array<{ key: HomeSpotKey; label: string }>;
   state?: PixelHomeStateResp;
 };
@@ -451,6 +452,12 @@ function actorText(actor: PixelHomeActor | undefined, fallback: string) {
   return fallback;
 }
 
+function duMoodLabel(vitals: Record<string, any> | undefined) {
+  const tempo = String(vitals?.tempo || "").trim().toLowerCase();
+  if (tempo === "down" || tempo === "steady" || tempo === "up" || tempo === "spike" || tempo === "settle") return tempo;
+  return "未同步";
+}
+
 function statusText(label: string, activity: string) {
   const clean = String(activity || "").trim().replace(/^正在/, "") || "待着";
   if (clean.startsWith("在")) return clean;
@@ -746,6 +753,7 @@ export function PixelHomeTab() {
   const modeMeta = HOME_MODES[mode];
   const spots = homeState?.spots?.length ? homeState.spots : DEFAULT_SPOTS;
   const duStatus = actorText(homeState?.du, "在书房写日记");
+  const duMood = duMoodLabel(homeState?.du_vitals);
   const mySpotLabel = spots.find((spot) => spot.key === mySpot)?.label || "离家出走";
   const myStatus = myDirty ? statusText(mySpotLabel, myActivity) : actorText(homeState?.xinyue, "在客厅沙发休息");
   const selectedSpot = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpotKey) || null, [selectedSpotKey]);
@@ -936,7 +944,10 @@ export function PixelHomeTab() {
         </section>
 
         <section className="pixel-home-ref-feed">
-          <span className="pixel-home-ref-section-label">渡的动态</span>
+          <div className="pixel-home-ref-feed-head">
+            <span className="pixel-home-ref-section-label">渡的动态</span>
+            <span className="pixel-home-ref-mood">当前心情：{duMood}</span>
+          </div>
           <ul className="pixel-home-ref-feed-list">
             {feedItems.map((item, index) => {
               const text = String(item.text || "").trim() || statusText(String(item.spot_label || "离家出走"), String(item.activity || "待着"));

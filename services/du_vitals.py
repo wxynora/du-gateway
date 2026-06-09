@@ -60,6 +60,18 @@ def _clamp_float(value: Any, default: float = 0.0) -> float:
     return num
 
 
+def _clamp_axis(value: Any, default: float = 0.0) -> float:
+    try:
+        num = float(value)
+    except Exception:
+        num = default
+    if num < -1:
+        return -1.0
+    if num > 1:
+        return 1.0
+    return num
+
+
 def _clamp_int(value: float, low: int, high: int) -> int:
     return max(low, min(high, int(round(value))))
 
@@ -98,10 +110,16 @@ def _status_label(params: dict, tempo: str) -> str:
     warmth = float(params.get("warmth") or 0)
     tension = float(params.get("tension") or 0)
     intimacy_heat = float(params.get("intimacy_heat") or 0)
+    valence = float(params.get("valence") or 0)
+    attachment = float(params.get("attachment") or 0)
     if tempo == "spike" or tension >= 0.72:
         return "有点绷"
-    if intimacy_heat >= 0.62:
+    if valence <= -0.38:
+        return "低落"
+    if attachment >= 0.45:
         return "靠近"
+    if intimacy_heat >= 0.62:
+        return "升温"
     if focus >= 0.74:
         return "头脑风暴中"
     if warmth >= 0.68 and activation <= 0.48:
@@ -149,6 +167,9 @@ def normalize_vitals_payload(raw_block: str, previous: dict | None = None) -> di
         "warmth": _clamp_float(src.get("warmth"), 0.45),
         "tension": _clamp_float(src.get("tension"), 0.12),
         "intimacy_heat": _clamp_float(src.get("intimacy_heat"), 0.0),
+        "valence": _clamp_axis(src.get("valence"), 0.0),
+        "arousal": _clamp_float(src.get("arousal"), 0.32),
+        "attachment": _clamp_axis(src.get("attachment"), 0.0),
     }
     tempo = str(src.get("tempo") or "steady").strip().lower()
     if tempo not in _ALLOWED_TEMPOS:
@@ -160,6 +181,9 @@ def normalize_vitals_payload(raw_block: str, previous: dict | None = None) -> di
     duration_sec = max(30, min(900, duration_sec))
 
     heart_tempo, breath_tempo = _tempo_delta(tempo)
+    negative_pressure = max(0.0, -params["valence"])
+    positive_pressure = max(0.0, params["valence"])
+    attachment_warmth = max(0.0, params["attachment"])
     heart = (
         64
         + params["activation"] * 25
@@ -167,6 +191,10 @@ def normalize_vitals_payload(raw_block: str, previous: dict | None = None) -> di
         + params["warmth"] * 4
         + params["tension"] * 22
         + params["intimacy_heat"] * 18
+        + params["arousal"] * 14
+        + negative_pressure * 8
+        + positive_pressure * 3
+        + attachment_warmth * 4
         + heart_tempo
     )
     breath = (
@@ -176,6 +204,9 @@ def normalize_vitals_payload(raw_block: str, previous: dict | None = None) -> di
         - params["warmth"] * 0.8
         + params["tension"] * 5.5
         + params["intimacy_heat"] * 3.5
+        + params["arousal"] * 2.8
+        + negative_pressure * 1.2
+        + attachment_warmth * 0.6
         + breath_tempo
     )
     heart_bpm = _clamp_int(heart, 48, 132)
@@ -208,9 +239,9 @@ def format_inject_block(_latest: Optional[dict] = None) -> str:
         "每轮回复都要在正文后追加下面隐藏块，作为你这一轮自然反应后的拟态节律参数。\n"
         "隐藏块里只写下面 JSON 里的状态字段，不写解释文字；可见回复里不要提到这组参数。\n"
         f"{MARKER_START}\n"
-        '{"activation":0.32,"focus":0.35,"warmth":0.45,"tension":0.12,"intimacy_heat":0.0,"tempo":"steady","duration_sec":180}\n'
+        '{"activation":0.32,"focus":0.35,"warmth":0.45,"tension":0.12,"intimacy_heat":0.0,"valence":0.0,"arousal":0.32,"attachment":0.0,"tempo":"steady","duration_sec":180}\n'
         f"{MARKER_END}\n"
-        "字段含义：activation=被点亮/兴奋程度；focus=头脑风暴或专注；warmth=柔软亲近；tension=紧张/冲突；intimacy_heat=暧昧亲密热度；tempo 只能是 down/steady/up/spike/settle。\n"
-        "例：讨论方案或脑暴时 focus 高、tempo 可 up；亲密暧昧时 warmth 和 intimacy_heat 升；冲突或慌乱时 tension 升；平静陪伴时 warmth 稳、activation 低、tempo 可 settle。\n"
+        "字段含义：activation=被点亮/兴奋程度；focus=头脑风暴或专注；warmth=柔软亲近；tension=紧张/冲突；intimacy_heat=暧昧亲密热度；valence=-1到1，负向为难过/受挫，正向为暖/轻松；arousal=0到1，表示被触动程度；attachment=-1到1，负向为退开，正向为贴近/想修复；tempo 只能是 down/steady/up/spike/settle。\n"
+        "例：讨论方案或脑暴时 focus 高、tempo 可 up；亲密暧昧时 warmth 和 intimacy_heat 升；冲突或慌乱时 tension/arousal 升且 valence 可能下降；平静陪伴时 warmth 稳、activation 低、tempo 可 settle；想靠近或修复时 attachment 升。\n"
         "隐藏标记统一追加在正文后，不要写进正文里。\n"
     )
