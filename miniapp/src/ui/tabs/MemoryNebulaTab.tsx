@@ -422,7 +422,7 @@ function useMeasuredSize(ref: React.RefObject<HTMLDivElement | null>) {
   return size;
 }
 
-export function MemoryNebulaTab({ onBack }: { onBack?: () => void }) {
+export function MemoryNebulaTab() {
   const toast = useToast();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useMeasuredSize(rootRef);
@@ -614,7 +614,7 @@ export function MemoryNebulaTab({ onBack }: { onBack?: () => void }) {
 
       <div className="hud">
         <div className="hud-top">
-          <button type="button" className="crescent-btn" onClick={(e) => { e.stopPropagation(); if (onBack) onBack(); else void reload(); }} aria-label="返回日常">
+          <button type="button" className="crescent-btn" onClick={(e) => { e.stopPropagation(); void reload(); }} aria-label="刷新记忆星云">
             <svg className="crescent-svg" width="24" height="24" viewBox="0 0 24 24">
               <path d="M12 3a9 9 0 1 0 9 9 9.011 9.011 0 0 1-9-9Z" />
             </svg>
