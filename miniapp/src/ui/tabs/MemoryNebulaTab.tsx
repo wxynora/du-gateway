@@ -186,27 +186,17 @@ function buildMemoryVerse(content: string) {
   const clean = String(content || "").replace(/\s+/g, " ").trim();
   if (!clean) return ["Memory"];
 
-  const pieces: string[] = [];
-  clean
-    .split(/[，。！？；：、\n]+/)
+  const pieces = (clean.match(/[^，。！？；：\n]+[，。！？；：]?/g) || [clean])
     .map((part) => part.trim())
-    .filter(Boolean)
-    .forEach((part) => {
-      if (part.length <= 18) {
-        pieces.push(part);
-        return;
-      }
-      for (let index = 0; index < part.length; index += 18) {
-        pieces.push(part.slice(index, index + 18));
-      }
-    });
+    .filter(Boolean);
 
-  return (pieces.length ? pieces : [clean]).slice(0, 5);
+  if (pieces.length <= 5) return pieces.length ? pieces : [clean];
+  return [...pieces.slice(0, 4), pieces.slice(4).join("")];
 }
 
 function memoryVerseClass(line: string, index: number, total: number) {
   if (index === 0 && line.length <= 8) return "memory-phrase-title";
-  if (line.length >= 12 || index === Math.floor(total / 2)) return "memory-phrase-loud";
+  if (index === Math.floor(total / 2) || (total <= 2 && index === 0)) return "memory-phrase-loud";
   if (index === total - 1) return "memory-phrase-soft";
   return "memory-phrase-mid";
 }
@@ -263,16 +253,16 @@ function memoryId(item: { id?: string; memory_id?: string } | null | undefined, 
 }
 
 function nodePosition(seed: string, index: number, type: MemoryNode["type"]) {
-  if (type === "core") {
-    const corePositions = [
-      { x: -72, y: -32, z: 138 },
-      { x: 74, y: 42, z: 124 },
-      { x: -18, y: 8, z: 190 },
-      { x: 46, y: -76, z: 96 },
-    ];
-    return corePositions[index % corePositions.length];
-  }
   const h = hashText(seed);
+  if (type === "core") {
+    const angle = ((h % 6283) / 1000) + index * 0.42;
+    const radius = 34 + Math.sqrt(index + 1) * 9 + ((h >>> 7) % 34);
+    return {
+      x: Math.cos(angle) * radius + (((h >>> 17) % 34) - 17),
+      y: Math.sin(angle) * radius * 0.74 + (((h >>> 22) % 46) - 23),
+      z: 86 + ((h >>> 12) % 210) - 105,
+    };
+  }
   const angle = ((h % 6283) / 1000) + index * 0.55;
   const radius = 170 + ((h >>> 7) % 260);
   const vertical = -230 + ((h >>> 14) % 470);
@@ -350,7 +340,7 @@ function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryRe
   const eventIndex = buildEventIndex(data);
 
   const coreItems = data?.core_cache?.items || [];
-  coreItems.slice(0, 12).forEach((item, index) => {
+  coreItems.forEach((item, index) => {
     const id = memoryId(item, `core-${index}`);
     const content = String(item.content || "").trim();
     if (!id || !content || seen.has(id)) return;
@@ -442,7 +432,7 @@ export function MemoryNebulaTab() {
     setLoading(true);
     try {
       const [debugResult, dynamicResult] = await Promise.allSettled([
-        apiJson<MemoryDebugResp>("/miniapp-api/memory-debug?limit=16&core_limit=48&scope=all"),
+        apiJson<MemoryDebugResp>("/miniapp-api/memory-debug?limit=16&core_limit=240&scope=all"),
         apiJson<DynamicMemoryResp>("/miniapp-api/dynamic-memory"),
       ]);
       const errors: string[] = [];
@@ -524,6 +514,11 @@ export function MemoryNebulaTab() {
     });
     return related;
   }, [activeNode, nodes]);
+
+  const activeLineTargets = useMemo(() => {
+    if (!activeNode) return [];
+    return Array.from(relatedIds).filter((id) => projected.has(id));
+  }, [activeNode, projected, relatedIds]);
 
   function pointerStart(clientX: number, clientY: number) {
     dragRef.current = { active: true, moved: false, sx: clientX, sy: clientY, lx: clientX, ly: clientY };
@@ -637,19 +632,22 @@ export function MemoryNebulaTab() {
           const related = relatedIds.has(node.id);
           const base = node.type === "core" ? 1.08 : 0.92;
           const focus = active ? 1.72 : related ? 1.18 : 1;
+          const starScale = base * focus * p.depth;
+          const starStyle = {
+            left: p.x,
+            top: p.y,
+            opacity: Math.max(0.22, Math.min(1, 0.42 + p.depth * 0.42)),
+            transform: `translate(-50%, -50%) scale(${starScale})`,
+            zIndex: Math.round(50 + p.z),
+            "--label-scale": String(1 / Math.max(0.72, starScale)),
+          } as React.CSSProperties & { "--label-scale": string };
           return (
             <button
               key={node.id}
               type="button"
               className={`star star-${node.type} ${active ? "active" : ""} ${related ? "related" : ""}`}
               data-emotion={node.emotion}
-              style={{
-                left: p.x,
-                top: p.y,
-                opacity: Math.max(0.22, Math.min(1, 0.42 + p.depth * 0.42)),
-                transform: `translate(-50%, -50%) scale(${base * focus * p.depth})`,
-                zIndex: Math.round(50 + p.z),
-              }}
+              style={starStyle}
               onClick={(e) => {
                 e.stopPropagation();
                 selectNode(node);
@@ -661,7 +659,7 @@ export function MemoryNebulaTab() {
           );
         })}
         {activeNode
-          ? activeNode.connections.map((toId) => {
+          ? activeLineTargets.map((toId) => {
               const from = projected.get(activeNode.id);
               const to = projected.get(toId);
               if (!from || !to) return null;
@@ -833,7 +831,7 @@ const memoryNebulaCss = `
   text-shadow: 0 0 12px rgba(242, 227, 182, 0.32);
   transform: translateX(-4px);
 }
-.constellation-canvas { position: absolute; inset: 0; z-index: 5; }
+.constellation-canvas { position: absolute; inset: 0; z-index: 24; }
 .star {
   position: absolute;
   border: 0;
@@ -852,67 +850,78 @@ const memoryNebulaCss = `
   height: 300%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
+  background: radial-gradient(circle, rgba(242, 227, 182, 0.82) 0%, rgba(142, 186, 255, 0.26) 42%, transparent 72%);
   filter: blur(4px);
-  opacity: 0.34;
+  opacity: 0;
+  transition: opacity 0.28s ease, transform 0.28s ease;
 }
 .star-core::before,
-.star.active::before {
+.star.active::before,
+.star.related::before {
   animation: nebulaPulse 4s infinite ease-in-out;
 }
 .star-core {
   width: 8px;
   height: 8px;
   background: #f2e3b6;
-  box-shadow: 0 0 15px rgba(242, 227, 182, 0.8), 0 0 30px rgba(242, 227, 182, 0.8);
+  box-shadow: 0 0 7px rgba(242, 227, 182, 0.66), 0 0 16px rgba(242, 227, 182, 0.22);
 }
 .star-dynamic {
   width: 4px;
   height: 4px;
   background: #fff;
-  box-shadow: 0 0 7px rgba(255, 255, 255, 0.46);
+  box-shadow: 0 0 5px rgba(255, 255, 255, 0.48);
+}
+.star-dynamic::before {
+  background: radial-gradient(circle, rgba(223, 231, 255, 0.66) 0%, rgba(126, 183, 255, 0.18) 44%, transparent 74%);
 }
 .star-label {
   position: absolute;
-  top: 13px;
+  top: 10px;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) scale(var(--label-scale, 1));
+  transform-origin: top center;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  color: rgba(232, 236, 255, 0.62);
+  color: rgba(213, 221, 248, 0.42);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
-  letter-spacing: 0.08em;
+  font-size: 5.5px;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   text-shadow: 0 0 14px rgba(4, 5, 26, 0.9);
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
 .constellation-line {
   position: absolute;
-  height: 0.5px;
+  z-index: 18;
+  height: 1px;
   transform-origin: 0 50%;
   pointer-events: none;
-  background: linear-gradient(90deg, transparent, rgba(242, 227, 182, 0.8), transparent);
-  opacity: 0.78;
-  filter: drop-shadow(0 0 10px rgba(242, 227, 182, 0.35));
+  background: linear-gradient(90deg, transparent, rgba(157, 211, 255, 0.8), rgba(242, 227, 182, 0.68), transparent);
+  opacity: 0.86;
+  filter: drop-shadow(0 0 8px rgba(126, 183, 255, 0.5)) drop-shadow(0 0 18px rgba(242, 227, 182, 0.22));
 }
 .is-focused .star:not(.active):not(.related) { opacity: 0.15 !important; filter: grayscale(1); }
 .mode-anchor .sky-atlas { opacity: 0.18; }
 .mode-anchor .star-dynamic { opacity: 0.12 !important; filter: grayscale(1); }
 .mode-anchor .star-core { filter: brightness(1.18) drop-shadow(0 0 16px rgba(242, 227, 182, 0.55)); }
-.mode-anchor .star-core .star-label { opacity: 0.92; transform: translateX(-50%) translateY(2px); }
+.mode-anchor .star-core .star-label { opacity: 0.58; transform: translateX(-50%) translateY(1px) scale(var(--label-scale, 1)); }
 .mode-mood .star-core { opacity: 0.38 !important; filter: grayscale(0.7); }
 .mode-mood .star-dynamic { width: 6px; height: 6px; }
 .mode-mood .star-dynamic[data-emotion="positive"] { background: #f2e3b6; box-shadow: 0 0 14px rgba(242, 227, 182, 0.72), 0 0 28px rgba(242, 227, 182, 0.28); }
 .mode-mood .star-dynamic[data-emotion="negative"] { background: #c5a3ff; box-shadow: 0 0 14px rgba(197, 163, 255, 0.72), 0 0 28px rgba(98, 76, 170, 0.34); }
 .mode-mood .star-dynamic[data-emotion="neutral"] { background: #dfe7ff; box-shadow: 0 0 12px rgba(223, 231, 255, 0.56); }
-.star.active { filter: none; }
+.star.related::before { opacity: 0.28; }
+.star.active::before { opacity: 0.78; }
+.star.related { filter: brightness(1.08) drop-shadow(0 0 10px rgba(157, 211, 255, 0.28)); }
+.star.active { filter: brightness(1.22) drop-shadow(0 0 18px rgba(157, 211, 255, 0.52)) drop-shadow(0 0 32px rgba(242, 227, 182, 0.24)); }
 .star.active .star-label,
-.star.related .star-label { opacity: 0.82; transform: translateX(-50%) translateY(2px); }
+.star.related .star-label { opacity: 0.58; transform: translateX(-50%) translateY(1px) scale(var(--label-scale, 1)); }
 .memory-verse-layer {
   position: absolute;
   inset: 0;
-  z-index: 32;
+  z-index: 30;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -926,34 +935,36 @@ const memoryNebulaCss = `
   animation: memoryVerseIn 0.48s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .memory-phrase {
-  margin: 8px 0;
+  margin: 5px 0;
   color: rgba(238, 244, 255, 0.78);
-  font-family: "Inter", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  font-family: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
   letter-spacing: 0;
-  line-height: 1.25;
+  line-height: 1.34;
   text-shadow: 0 0 18px rgba(126, 183, 255, 0.28), 0 0 34px rgba(41, 96, 176, 0.24);
 }
 .memory-phrase-title {
   color: #9fdcff;
-  font-size: clamp(28px, 8.5vw, 52px);
-  font-weight: 800;
+  font-family: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
+  font-size: clamp(22px, 6.2vw, 36px);
+  font-weight: 900;
   line-height: 1.05;
   text-shadow: 0 0 16px rgba(95, 190, 255, 0.68), 0 0 42px rgba(38, 104, 190, 0.48);
 }
 .memory-phrase-loud {
   color: rgba(245, 249, 255, 0.96);
-  font-size: clamp(22px, 6vw, 34px);
+  font-family: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
+  font-size: clamp(17px, 4.8vw, 27px);
   font-weight: 800;
   text-shadow: 0 0 16px rgba(196, 224, 255, 0.72), 0 0 40px rgba(73, 129, 216, 0.4);
 }
 .memory-phrase-mid {
   color: rgba(226, 234, 250, 0.78);
-  font-size: clamp(16px, 4.3vw, 23px);
-  font-weight: 650;
+  font-size: clamp(13px, 3.6vw, 19px);
+  font-weight: 500;
 }
 .memory-phrase-soft {
   color: rgba(209, 217, 236, 0.54);
-  font-size: clamp(13px, 3.4vw, 18px);
+  font-size: clamp(11px, 3vw, 15px);
   font-weight: 500;
   font-style: italic;
 }
