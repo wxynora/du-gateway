@@ -95,6 +95,7 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：`miniapp/src/ui/tabs/PixelHomeTab.tsx` 已从旧像素地图、方向键、跟随/布置按键，以及后续暖色卡片版，收束为 `ui合集/赛博小家` 同款单列界面；三种透明图资产为 `miniapp/src/assets/life-home-day.png`、`life-home-night-on.png`、`life-home-night-off.png`，900x720 量化 PNG，三张合计约 868KB。入口标题为「小家」。
 - 已完成：小屋图在参考稿版式里放大显示；状态更新走加号底部 sheet 的位置选择和自由文本。床、浴室、书房、客厅沙发热区保留点击反馈，点击房间后在房间旁边出现独立小半透明事件按钮，事件按钮发送后端小家事件；沙发事件为「看电视 / 色色」，书房事件为「写日记 / 看书 / 色色」。
 - 已完成：状态文字允许多行完整显示；后端保存渡状态时会对“从旧房间走出来”做兜底，不再显示成“在书房从书房走出来...”。
+- 已完成：小家「渡的动态」右侧当前心情不再展示英文 tempo，前端按 `du_vitals.tempo` 映射为 emoji：`up/settle -> 😄`、`steady/未同步 -> 😐`、`down -> 😭`、`spike -> 😠`。
 - 已验证：干净临时 worktree 使用主工作区现成依赖完成 `npm run build` 并重建 `miniapp_static`；Browser preview 实测小家页加载、初始无点、点击卧室出现小点、事件按钮可见、点小家图以外区域清掉选中态、加号 sheet 可打开。
 - 未完成 / 下次继续：当前没有做历史状态列表；状态仍以覆盖式当前状态为主，渡的动态最多 5 条。不要把这轮小家静态 hash 产物和仓库里既有的其它半成品脏改混在一起提交。
 
@@ -264,8 +265,9 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已完成：Phase 1C 新增 `miniapp/src/ui/chat/privateChatSendFlow.ts`，私聊 Du 的 request body、`/sumitalk-chat` create/poll、direct done、assistant terminal/failed message 构造已从主页面拆出；页面仍保留 `createDraftTurn` / `attachJob` / `completeOperation` / `failOperation` 调用，避免绕开 Android SQLite operation 原子语义。
 - 已完成：Phase 2 新增 `miniapp/src/ui/chat/groupChatRouting.ts` 和 `miniapp/src/ui/chat/groupChatSendFlow.ts`；群聊 @目标解析、自由聊/停止/继续/接力判断、群聊 Du reply request body、`/sumitalk-chat-jobs` create/poll、direct done、assistant terminal/failed message 构造已从主页面拆出。普通群聊 @渡 / 自由聊开场里的 Du 回复和自由讨论接力里的 Du 回复都复用 `runGroupDuReplyFlow`。
 - 已完成：Phase 3 新增 `miniapp/src/ui/chat/chatSendStage.ts`，把发送/job 日志事件映射成前端短阶段文案；`MainChatScreen.tsx` 新增 `activeSendStageLabel`，发送中会在顶部显示“准备发送 / 提交给后端 / 任务已创建，等渡回复 / 正在请求上游 / 正在写入回复 / 正在取消”等小胶囊状态。未改后端协议。
-- 已验证：临时隔离无关 `MemoryNebulaTab` 改动后，`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npm -C miniapp run build:android`、`git diff --check` 通过；新 bundle 已进入 `miniapp_static/assets/index-*.js`，并确认包含“准备发送 / 任务已创建，等渡回复 / 正在请求上游”等阶段文案。
-- 未完成 / 下次继续：retry/recovery 仍走旧 `recoverSumiTalkOperation`；笨笨 task 创建/取消/realtime fallback 仍保留在 `MainChatScreen.tsx`；群聊整体入口还在 `sendChatContent` 中分流。SSE/流式、连续发送队列、页面级 reducer、持久化 `cancelled`、Android SQLite schema、独立 outbox/队列都没动，仍延后到后续阶段。
+- 已完成：Phase 4 新增 `miniapp/src/ui/chat/chatRecoveryFlow.ts`，把 operation recovery / manual retry 的 post、poll、direct done、terminal / failed message、voice sidecar 触发从主页面拆出；后台恢复优先接回已有 `jobId`，job 不存在或过期才按 `retryPayload` 重建；手动“重试”传 `forceCreateJob=true`，复用原 `operationId/clientRequestId/retryPayload` 重新 post，不再死等旧失败 job。
+- 已验证：临时隔离无关 `MemoryNebulaTab` 改动后，Phase 3 的 `npm -C miniapp run build:android` 已生成并提交 `miniapp_static`；Phase 4 当前已跑 `npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过，尚未重建静态包。
+- 未完成 / 下次继续：笨笨 task 创建/取消/realtime fallback 仍保留在 `MainChatScreen.tsx`；群聊整体入口还在 `sendChatContent` 中分流。SSE/流式、连续发送队列、页面级 reducer、持久化 `cancelled`、Android SQLite schema、独立 outbox/队列都没动，仍延后到后续阶段。
 
 ## 和渡一起听 / 音乐旋律分析
 

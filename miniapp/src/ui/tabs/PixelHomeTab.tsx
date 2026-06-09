@@ -454,8 +454,10 @@ function actorText(actor: PixelHomeActor | undefined, fallback: string) {
 
 function duMoodLabel(vitals: Record<string, any> | undefined) {
   const tempo = String(vitals?.tempo || "").trim().toLowerCase();
-  if (tempo === "down" || tempo === "steady" || tempo === "up" || tempo === "spike" || tempo === "settle") return tempo;
-  return "未同步";
+  if (tempo === "up" || tempo === "settle") return "😄";
+  if (tempo === "down") return "😭";
+  if (tempo === "spike") return "😠";
+  return "😐";
 }
 
 function statusText(label: string, activity: string) {

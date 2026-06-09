@@ -31,9 +31,6 @@ import {
   applyMessageById,
   buildCodexGroupRecentMessages,
   buildGroupTurnUserContent,
-  extractAssistantReasoning,
-  extractAssistantReplyText,
-  extractTokenCount,
   formatClockTime,
   getChatSearchMatchId,
   groupChatMessages,
@@ -82,9 +79,7 @@ import { useToast } from "./toast";
 import {
   apiJsonWithTimeout,
   cancelSumiTalkChatJob,
-  createSumiTalkChatJob,
   isAbortLikeError,
-  waitForSumiTalkChatJob,
   waitMs,
 } from "./chat/sumitalkChatClient";
 import {
@@ -102,7 +97,6 @@ import {
 import {
   buildPrivateUserContent,
   contentWithAttachmentHint,
-  extractSumiTalkVoiceOutput,
   isVoiceTranscriptEcho,
 } from "./chat/privateChatHelpers";
 import {
@@ -111,6 +105,7 @@ import {
   runPrivateChatSendFlow,
 } from "./chat/privateChatSendFlow";
 import { resolveChatSendStageLabel } from "./chat/chatSendStage";
+import { recoverSumiTalkOperationFlow } from "./chat/chatRecoveryFlow";
 import {
   GROUP_DISCUSSION_MAX_FOLLOWUPS,
   buildGroupDiscussionUserContent,
@@ -516,109 +511,29 @@ export function MainChatScreen({
     }
   }
 
-  async function recoverSumiTalkOperation(operation: ChatOperation, localDeviceId: string) {
+  async function recoverSumiTalkOperation(
+    operation: ChatOperation,
+    localDeviceId: string,
+    options: { forceCreateJob?: boolean } = {},
+  ) {
     const opId = String(operation?.id || "").trim();
     if (!opId || sumitalkOperationRecoveringRef.current.has(opId)) return;
     sumitalkOperationRecoveringRef.current.add(opId);
     try {
-      let jobId = String(operation.jobId || "").trim();
-      let completedData: any = null;
-      const assistantId = String(operation.assistantMessageId || "").trim();
-      if (!assistantId) throw new Error("缺少 pending 回复 ID");
-      const createOrReuseJob = async () => {
-        const retryPayload = operation.retryPayload && typeof operation.retryPayload === "object" ? operation.retryPayload : {};
-        const path = String(retryPayload.path || "").trim();
-        const body = retryPayload.body && typeof retryPayload.body === "object" ? retryPayload.body : null;
-        if (!path || !body) throw new Error("缺少可恢复请求");
-        const started = await createSumiTalkChatJob(path, body);
-        if (started?.status === "error") {
-          const upstreamError = started.response?.error || started.response?.message || "";
-          throw new Error(String(started.error || upstreamError || "渡回复失败"));
-        }
-        jobId = String(started?.job_id || "").trim();
-        if (jobId) {
-          await attachChatJobToOperation(opId, jobId);
-          const current = messagesRef.current.find((msg) => msg.id === assistantId);
-          if (current) {
-            const next = applyMessageById(messagesRef.current, assistantId, {
-              ...current,
-              role: "assistant",
-              status: "pending",
-              clientRequestId: operation.clientRequestId,
-              operationId: opId,
-              jobId,
-            });
-            await persistSumiTalkOperationMessages(next, localDeviceId);
-          }
-        }
-        if (String(started?.status || "").trim() === "done") {
-          completedData = started?.response || started;
-        }
-      };
-      if (jobId) {
-        try {
-          completedData = await waitForSumiTalkChatJob(jobId);
-        } catch (e: any) {
-          const message = String(e?.message || e);
-          if (!/不存在|过期|404/.test(message)) throw e;
-          jobId = "";
-        }
-      }
-      if (!completedData && !jobId) {
-        await createOrReuseJob();
-      }
-      const data = completedData || (jobId ? await waitForSumiTalkChatJob(jobId) : null);
-      if (!data) throw new Error("任务没有返回内容");
-      if (data?.error) {
-        const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
-        throw new Error(err || "上游返回错误");
-      }
-      const rawReply = extractAssistantReplyText(data);
-      const voiceOutput = extractSumiTalkVoiceOutput(rawReply);
-      const reply = voiceOutput.displayText || (voiceOutput.voiceText ? "" : rawReply);
-      if (!reply && !voiceOutput.voiceText) throw new Error("上游没有返回内容");
-      const existing = messagesRef.current.find((msg) => msg.id === assistantId);
-      const assistantMessage: ChatDraftMessage = {
-        id: assistantId,
-        role: "assistant",
-        content: reply,
-        createdAt: existing?.createdAt || operation.createdAt || new Date().toISOString(),
-        status: "sent",
-        clientRequestId: operation.clientRequestId,
-        operationId: opId,
-        jobId: jobId || undefined,
-        reasoning: extractAssistantReasoning(data) || undefined,
-        tokenCount: extractTokenCount(data),
-      };
-      await completeChatOperation(opId, assistantMessage);
-      const finalMessages = applyAssistantTerminalMessage(messagesRef.current, operation.clientRequestId, assistantMessage);
-      await persistSumiTalkOperationMessages(finalMessages, localDeviceId);
-      if (voiceOutput.voiceText) {
-        void appendAssistantVoiceOutputAudio({
-          assistantId,
-          clientRequestId: operation.clientRequestId,
-          operationId: opId,
-          jobId,
-          voiceText: voiceOutput.voiceText,
-          localDeviceId,
-        });
-      }
-    } catch (e: any) {
-      const assistantId = String(operation.assistantMessageId || "").trim();
-      const existing = messagesRef.current.find((msg) => msg.id === assistantId);
-      const failedMessage: ChatDraftMessage = {
-        id: assistantId || `assistant-failed-${Date.now()}`,
-        role: "assistant",
-        content: `（发送失败：${e?.message || e}）`,
-        createdAt: existing?.createdAt || operation.createdAt || new Date().toISOString(),
-        status: "failed",
-        clientRequestId: operation.clientRequestId,
-        operationId: opId,
-        jobId: operation.jobId,
-      };
-      await failChatOperation(opId, String(e?.message || e), failedMessage);
-      const failedMessages = applyAssistantTerminalMessage(messagesRef.current, operation.clientRequestId, failedMessage);
-      await persistSumiTalkOperationMessages(failedMessages, localDeviceId);
+      await recoverSumiTalkOperationFlow({
+        operation,
+        localDeviceId,
+        forceCreateJob: Boolean(options.forceCreateJob),
+        getMessages: () => messagesRef.current,
+        persistMessages: persistSumiTalkOperationMessages,
+        attachJob: attachChatJobToOperation,
+        completeOperation: completeChatOperation,
+        failOperation: failChatOperation,
+        appendVoiceOutputAudio: (voiceOutput) => {
+          void appendAssistantVoiceOutputAudio(voiceOutput);
+        },
+        logEvent: logSumiTalkSendStage,
+      });
     } finally {
       sumitalkOperationRecoveringRef.current.delete(opId);
     }
@@ -655,13 +570,13 @@ export function MainChatScreen({
         status: "pending",
         clientRequestId: operation.clientRequestId,
         operationId: opId,
-        jobId: operation.jobId,
+        jobId: undefined,
       });
       messagesRef.current = pending;
       setMessages(pending);
       await saveDisplayHistory(pending, { localDeviceId });
     }
-    void recoverSumiTalkOperation(operation, localDeviceId);
+    void recoverSumiTalkOperation(operation, localDeviceId, { forceCreateJob: true });
   }
 
   async function applyBenbenTaskUpdate(
