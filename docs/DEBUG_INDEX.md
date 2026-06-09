@@ -254,6 +254,17 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已验证：`.venv/bin/python -m py_compile routes/miniapp/logs.py routes/miniapp/media.py routes/miniapp/sumitalk_chat_jobs.py routes/chat.py services/entry_style_prompt.py`、`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npm -C miniapp run build`、`npm -C miniapp run cap:sync`、`JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew -q :app:assembleDebug` 通过；`aapt dump badging` 确认 debug APK 为 `versionCode=11` / `versionName=1.1.9`。
 - 未完成 / 下次继续：当前 app 聊天仍是非流式 job + 轮询，不能精确观测“上游首 token”；若要继续提速，应把 SumiTalk 聊天升级成 SSE/流式。渡主动生成图片还需要单独接图像生成/图片工具链。
 
+当前状态（2026-06-09 SumiTalk 前端发送层重构方案）：
+- 已完成：新增并重写 `docs/SumiTalk前端发送层重构方案.md`；经两个只读小工自检后，方案从“controller/reducer 全量拆分”收敛为“先治理私聊 Du 发送乱线”。不重写原生、不改后端 job、不新增 outbox、不改 Android SQLite schema，不把 `cancelled` 当成持久化消息状态。
+- 已完成：方案明确当前真实底座是 Android SQLite `chat_messages` / `chat_operations` / `chat_meta`；`clientRequestId` 是稳定幂等键，retry 不能换；新增的应是前台 `attemptId`，只用于防止迟到异步结果覆盖当前 UI。`createDraftTurn` / `attachJob` / `completeOperation` / `failOperation` 的原子语义不能被泛化的 `commitMessages` 绕开。
+- 已完成：`miniapp/src/ui/MainChatScreen.tsx` 落地 Phase 0：`ActiveChatRequest` 增加 `attemptId`；私聊 Du 前台发送分支在 create job 返回、job done、catch 写失败、finally 清 active request 前做 `isCurrentAttempt` 防迟到；取消仍走现有 `failOperation("已取消发送")` 持久化语义。
+- 已完成：TTS sidecar 增加 per-message guard，开始前和 TTS 返回后都校验目标 assistant message 仍匹配 `assistantId/clientRequestId/operationId/status=sent`；迟到只记 `assistant_voice_tts_skip`，不追加附件、不改主消息。`listActiveOperations -> recoverSumiTalkOperation` 恢复路径保留按 `operationId/clientRequestId` 授权更新 pending，并加注释说明不能被 `isCurrentAttempt` 拦掉。
+- 已完成：Phase 1A 第一刀新增 `miniapp/src/ui/chat/privateChatHelpers.ts`，从 `MainChatScreen.tsx` 抽出 `contentWithAttachmentHint`、`buildPrivateUserContent`、`extractAssistantAttachments`、`isVoiceTranscriptEcho`、`extractSumiTalkVoiceOutput`；图片私聊仍保留 `image_url` parts，未改发送顺序、operation、retry、recovery 或群聊分流。
+- 已完成：Phase 1B 新增 `miniapp/src/ui/chat/privateChatInput.ts`，文本、图片、语音、travel form 统一生成 `PreparedPrivateChatInput`；`sendChatContent` 增加 `modelContent` 入参，私聊 Du 请求优先使用准备层结果，因此图片仍保留 `image_url` parts。图片上传和语音 STT 仍在创建 pending 前完成，失败不落 pending。
+- 已完成：Phase 1C 新增 `miniapp/src/ui/chat/privateChatSendFlow.ts`，私聊 Du 的 request body、`/sumitalk-chat` create/poll、direct done、assistant terminal/failed message 构造已从主页面拆出；页面仍保留 `createDraftTurn` / `attachJob` / `completeOperation` / `failOperation` 调用，避免绕开 Android SQLite operation 原子语义。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npm -C miniapp run build:android`、`git diff --check` 通过；新 bundle 已进入 `miniapp_static/assets/index-*.js`，并确认包含 `chat_attempt_stale_skip` / `assistant_voice_tts_skip`。
+- 未完成 / 下次继续：retry/recovery 仍走旧 `recoverSumiTalkOperation`；群聊、笨笨 task、自由讨论、页面级 reducer、持久化 `cancelled`、Android SQLite schema、独立 outbox/队列都没动，仍延后到后续阶段。
+
 ## 和渡一起听 / 音乐旋律分析
 
 现象：

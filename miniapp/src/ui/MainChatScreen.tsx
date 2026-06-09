@@ -91,9 +91,27 @@ import {
 import {
   createDuReplyAudio,
   resolveRecorderMimeType,
-  transcribeChatAudio,
-  uploadChatImage,
 } from "./chat/chatMedia";
+import {
+  prepareImagePrivateChatInput,
+  prepareTextPrivateChatInput,
+  prepareTravelFormPrivateChatInput,
+  prepareVoicePrivateChatInput,
+  type PreparedPrivateChatInput,
+  type PrivateModelContent,
+} from "./chat/privateChatInput";
+import {
+  buildPrivateUserContent,
+  contentWithAttachmentHint,
+  extractAssistantAttachments,
+  extractSumiTalkVoiceOutput,
+  isVoiceTranscriptEcho,
+} from "./chat/privateChatHelpers";
+import {
+  buildPrivateAssistantFailureMessage,
+  buildPrivateChatRequestBody,
+  runPrivateChatSendFlow,
+} from "./chat/privateChatSendFlow";
 type CodexGroupChatTask = {
   id?: string;
   mode?: string;
@@ -108,8 +126,9 @@ type CodexGroupChatTaskResponse = {
   task?: CodexGroupChatTask | null;
   error?: string;
 };
-type ChatSendSource = "text" | "image" | "voice" | "travel_form" | "group_command";
+type ChatSendSource = "text" | "image" | "voice" | "travel_form" | "group_command" | "retry";
 type ActiveChatRequest = {
+  attemptId: string;
   clientRequestId: string;
   operationId: string;
   assistantId: string;
@@ -126,6 +145,10 @@ const GROUP_DISCUSSION_TRIGGER_RE = /(?:讨论|商量|你俩|你们俩|自由聊
 const GROUP_DISCUSSION_STOP_RE = /(?:先这样|先到这|就先这样|差不多(?:了|就行|可以)|可以收尾|不用继续|别聊了|到这里|我来改|我去改|先按这个)/i;
 const GROUP_DISCUSSION_MANUAL_STOP_RE = /(?:停一下|停止|暂停|打断|中断|别聊了|不用继续|先这样|收尾|到这里|算了)/i;
 const GROUP_DISCUSSION_CONTINUE_RE = /(?:继续聊|接着聊|再聊|继续讨论|再讨论|你俩继续|你们俩继续|让(?:他们|你俩|你们俩)继续)/i;
+
+function makeChatAttemptId(clientRequestId: string): string {
+  return `attempt-${clientRequestId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function uniqueNonEmptyStrings(values: string[]): string[] {
   const out: string[] = [];
@@ -203,78 +226,6 @@ function isGroupDiscussionStopCommand(content: string): boolean {
 
 function isGroupDiscussionContinueCommand(content: string): boolean {
   return GROUP_DISCUSSION_CONTINUE_RE.test(String(content || ""));
-}
-
-function contentWithAttachmentHint(content: string, attachments: ChatAttachment[]): string {
-  const text = String(content || "").trim();
-  const labels = attachments
-    .map((item) => {
-      if (item.kind === "image") return "[图片]";
-      if (item.kind === "audio") {
-        const transcript = String(item.transcript || "").trim();
-        if (transcript && transcript !== text) return `[语音转写] ${transcript}`;
-        return "[语音]";
-      }
-      return "[附件]";
-    })
-    .filter(Boolean);
-  return [text, ...labels].filter(Boolean).join("\n").trim();
-}
-
-function buildPrivateUserContent(content: string, attachments: ChatAttachment[]): string | Array<Record<string, any>> {
-  const text = String(content || "").trim();
-  const imageParts = attachments
-    .filter((item) => item.kind === "image" && String(item.remoteUrl || "").trim())
-    .map((item) => ({
-      type: "image_url",
-      image_url: { url: String(item.remoteUrl || "").trim() },
-    }));
-  if (!imageParts.length) return contentWithAttachmentHint(text, attachments);
-  const parts: Array<Record<string, any>> = [];
-  if (text) parts.push({ type: "text", text });
-  parts.push(...imageParts);
-  return parts;
-}
-
-function extractAssistantAttachments(data: any): ChatAttachment[] {
-  const content = data?.choices?.[0]?.message?.content || data?.message?.content || data?.content;
-  if (!Array.isArray(content)) return [];
-  const out: ChatAttachment[] = [];
-  for (const part of content) {
-    if (!part || typeof part !== "object") continue;
-    if (part.type === "image_url") {
-      const url = String(part.image_url?.url || "").trim();
-      if (!url || /^data:/i.test(url)) continue;
-      out.push({
-        id: String(part.id || url || `assistant-image-${out.length}`),
-        kind: "image",
-        remoteUrl: url,
-        mime: String(part.mime || ""),
-        alt: String(part.alt || "图片"),
-      });
-    }
-  }
-  return normalizeChatAttachments(out);
-}
-
-function isVoiceTranscriptEcho(content: string, attachments: ChatAttachment[]): boolean {
-  const text = String(content || "").trim().replace(/\s+/g, " ");
-  if (!text) return false;
-  return attachments.some((item) => {
-    const transcript = String(item.transcript || "").trim().replace(/\s+/g, " ");
-    return transcript && transcript === text;
-  });
-}
-
-function extractSumiTalkVoiceOutput(content: string): { displayText: string; voiceText: string } {
-  const raw = String(content || "");
-  const voiceTexts: string[] = [];
-  const displayText = raw.replace(/<voice>([\s\S]*?)<\/voice>/gi, (_all, inner) => {
-    const item = String(inner || "").trim();
-    if (item) voiceTexts.push(item);
-    return "";
-  }).trim();
-  return { displayText, voiceText: voiceTexts.join("\n").trim() };
 }
 
 function parseGroupDiscussionContinueTurns(content: string): number {
@@ -811,6 +762,8 @@ export function MainChatScreen({
     const operations = await listActiveChatOperations(did, historyWindowId);
     for (const operation of operations) {
       if (!operation.assistantMessageId || !operation.clientRequestId) continue;
+      // Recovery is authorized by operationId/clientRequestId, not by a foreground attempt.
+      // Do not gate this path with isCurrentAttempt; there may be no active UI send after reload/background.
       void recoverSumiTalkOperation(operation, did);
     }
   }
@@ -1453,6 +1406,24 @@ export function MainChatScreen({
   }) {
     const voiceText = String(args.voiceText || "").trim();
     if (!voiceText) return;
+    const isCurrentAssistantTarget = (message: ChatDraftMessage | undefined): message is ChatDraftMessage => Boolean(
+      message
+      && message.role === "assistant"
+      && message.id === args.assistantId
+      && message.clientRequestId === args.clientRequestId
+      && (!args.operationId || message.operationId === args.operationId)
+      && message.status === "sent",
+    );
+    const initialTarget = messagesRef.current.find((msg) => msg.id === args.assistantId);
+    if (!isCurrentAssistantTarget(initialTarget)) {
+      logSumiTalkClientEvent("assistant_voice_tts_skip", {
+        clientRequestId: args.clientRequestId,
+        operationId: args.operationId,
+        jobId: args.jobId,
+        reason: "stale_target_before_tts",
+      }, "warning");
+      return;
+    }
     logSumiTalkClientEvent("assistant_voice_tts_start", {
       clientRequestId: args.clientRequestId,
       operationId: args.operationId,
@@ -1463,7 +1434,15 @@ export function MainChatScreen({
       const attachment = await createDuReplyAudio(voiceText);
       if (!attachment) return;
       const current = messagesRef.current.find((msg) => msg.id === args.assistantId);
-      if (!current) return;
+      if (!isCurrentAssistantTarget(current)) {
+        logSumiTalkClientEvent("assistant_voice_tts_skip", {
+          clientRequestId: args.clientRequestId,
+          operationId: args.operationId,
+          jobId: args.jobId,
+          reason: "stale_target_after_tts",
+        }, "warning");
+        return;
+      }
       const nextMessage: ChatDraftMessage = {
         ...current,
         attachments: normalizeChatAttachments([
@@ -1497,7 +1476,7 @@ export function MainChatScreen({
 
   async function sendChatContent(
     rawContent: string,
-    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource } = {},
+    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent } = {},
   ): Promise<boolean> {
     const content = String(rawContent || "").trim();
     const attachments = normalizeChatAttachments(options.attachments);
@@ -1606,6 +1585,23 @@ export function MainChatScreen({
     const baseTimestamp = Date.now();
     const clientRequestId = `sumitalk-${baseTimestamp}-${Math.random().toString(36).slice(2, 10)}`;
     const operationId = shouldRequestDu ? `op-${clientRequestId}` : "";
+    const isPrivateDuAttempt = shouldRequestDu && !groupChatMode;
+    const attemptId = shouldRequestDu ? makeChatAttemptId(clientRequestId) : "";
+    const isCurrentAttempt = () => !isPrivateDuAttempt || (
+      activeChatRequestRef.current?.clientRequestId === clientRequestId
+      && activeChatRequestRef.current?.attemptId === attemptId
+    );
+    const skipStaleAttemptUpdate = (stage: string) => {
+      if (isCurrentAttempt()) return false;
+      logSumiTalkClientEvent("chat_attempt_stale_skip", {
+        source,
+        stage,
+        attemptId,
+        clientRequestId,
+        operationId,
+      }, "warning");
+      return true;
+    };
     const userMsg: ChatDraftMessage = {
       id: `user-${baseTimestamp}`,
       role: "user",
@@ -1642,25 +1638,36 @@ export function MainChatScreen({
         }
       : null;
     const nextMessages = [...messagesRef.current, userMsg];
+    const privateModelContent = !groupChatMode
+      ? options.modelContent ?? buildPrivateUserContent(content, attachments)
+      : null;
     const requestUserContent = shouldRequestDu
       ? isGroupFreeDiscussion
         ? buildGroupFreeDiscussionOpeningContent(nextMessages, effectiveContent)
         : groupChatMode
         ? buildGroupTurnUserContent(nextMessages, effectiveContent)
-        : buildPrivateUserContent(content, attachments)
+        : privateModelContent
       : "";
     const musicBgmContext = shouldRequestDu && !groupChatMode ? readMusicBgmContext() : null;
     const requestPath = shouldRequestDu ? (groupChatMode ? "/miniapp-api/sumitalk-chat-jobs" : "/miniapp-api/sumitalk-chat") : "";
     const requestBody = shouldRequestDu
-      ? {
-          model: activeModel,
-          messages: [{ role: "user", content: requestUserContent }],
-          stream: false,
-          window_id: windowId,
-          ...(musicBgmContext ? { music_bgm_context: musicBgmContext } : {}),
-          reply_target: resolvedDeviceId,
-          client_request_id: clientRequestId,
-        }
+      ? groupChatMode
+        ? {
+            model: activeModel,
+            messages: [{ role: "user", content: requestUserContent }],
+            stream: false,
+            window_id: windowId,
+            reply_target: resolvedDeviceId,
+            client_request_id: clientRequestId,
+          }
+        : buildPrivateChatRequestBody({
+            model: activeModel,
+            modelContent: privateModelContent ?? buildPrivateUserContent(content, attachments),
+            windowId,
+            musicBgmContext,
+            replyTarget: resolvedDeviceId,
+            clientRequestId,
+          })
       : null;
     const draftMessages = [
       ...nextMessages,
@@ -1707,6 +1714,7 @@ export function MainChatScreen({
     const abortController = shouldRequestDu ? new AbortController() : null;
     if (shouldRequestDu && abortController) {
       activeChatRequestRef.current = {
+        attemptId,
         clientRequestId,
         operationId,
         assistantId,
@@ -1718,6 +1726,7 @@ export function MainChatScreen({
       logSumiTalkClientEvent("chat_send_start", {
         source,
         requestPath,
+        attemptId,
         clientRequestId,
         operationId,
         contentChars: effectiveContent.length,
@@ -1729,7 +1738,6 @@ export function MainChatScreen({
     }
     let benbenCreatePromise: Promise<ChatDraftMessage[]> | null = null;
     let initialDuReply = "";
-    let lastJobStatusKey = "";
     try {
       if (shouldRequestBenben) {
         benbenCreatePromise = requestBenbenGroupReply({
@@ -1748,130 +1756,173 @@ export function MainChatScreen({
 
       if (shouldRequestDu) {
         if (!requestBody) throw new Error("缺少发送请求");
-        logSumiTalkClientEvent("chat_job_create_start", { source, requestPath, clientRequestId, operationId });
-        const started = await createSumiTalkChatJob(requestPath, requestBody, { signal: abortController?.signal });
-        if (started?.status === "error") {
-          const upstreamError = started.response?.error || started.response?.message || "";
-          throw new Error(String(started.error || upstreamError || "渡回复失败"));
-        }
-        const jobId = String(started?.job_id || "").trim();
-        if (activeChatRequestRef.current?.clientRequestId === clientRequestId) {
-          activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
-        }
-        logSumiTalkClientEvent("chat_job_create_ok", {
-          source,
-          requestPath,
-          clientRequestId,
-          operationId,
-          jobId,
-          status: String(started?.status || ""),
-          mode: String((started as any)?.mode || ""),
-        });
-        if (jobId && operationId) {
-          await attachChatJobToOperation(operationId, jobId);
-          const pendingWithJob = applyMessageById(messagesRef.current, assistantId, {
+        if (isPrivateDuAttempt) {
+          const result = await runPrivateChatSendFlow({
+            source,
+            requestPath,
+            requestBody,
+            attemptId,
+            clientRequestId,
+            operationId,
+            assistantId,
+            assistantCreatedAt,
+            abortSignal: abortController?.signal,
+            logEvent: logSumiTalkClientEvent,
+            skipStaleAttemptUpdate,
+            onJobId: async (jobId) => {
+              if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
+                activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
+              }
+              await attachChatJobToOperation(operationId, jobId);
+              const pendingWithJob = applyMessageById(messagesRef.current, assistantId, {
+                id: assistantId,
+                role: "assistant",
+                content: "",
+                createdAt: assistantCreatedAt,
+                status: "pending",
+                clientRequestId,
+                operationId,
+                jobId,
+              });
+              messagesRef.current = pendingWithJob;
+              setMessages(pendingWithJob);
+              await saveDisplayHistory(pendingWithJob, { localDeviceId: replyTarget });
+            },
+          });
+          if (!result) return false;
+          initialDuReply = result.reply || result.voiceText;
+          const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, result.assistantMessage);
+          await completeChatOperation(operationId, result.assistantMessage);
+          messagesRef.current = finalMessages;
+          setMessages(finalMessages);
+          await saveDisplayHistory(finalMessages);
+          if (result.voiceText) {
+            void appendAssistantVoiceOutputAudio({
+              assistantId,
+              clientRequestId,
+              operationId,
+              jobId: result.jobId,
+              voiceText: result.voiceText,
+              localDeviceId: replyTarget,
+            });
+          }
+        } else {
+          let lastJobStatusKey = "";
+          logSumiTalkClientEvent("chat_job_create_start", { source, requestPath, attemptId, clientRequestId, operationId });
+          const started = await createSumiTalkChatJob(requestPath, requestBody, { signal: abortController?.signal });
+          if (skipStaleAttemptUpdate("job_create_return")) return false;
+          if (started?.status === "error") {
+            const upstreamError = started.response?.error || started.response?.message || "";
+            throw new Error(String(started.error || upstreamError || "渡回复失败"));
+          }
+          const jobId = String(started?.job_id || "").trim();
+          if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
+            activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
+          }
+          logSumiTalkClientEvent("chat_job_create_ok", {
+            source,
+            requestPath,
+            attemptId,
+            clientRequestId,
+            operationId,
+            jobId,
+            status: String(started?.status || ""),
+            mode: String((started as any)?.mode || ""),
+          });
+          if (jobId && operationId) {
+            await attachChatJobToOperation(operationId, jobId);
+            const pendingWithJob = applyMessageById(messagesRef.current, assistantId, {
+              id: assistantId,
+              role: "assistant",
+              content: "",
+              createdAt: assistantCreatedAt,
+              status: "pending",
+              clientRequestId,
+              operationId,
+              jobId,
+            });
+            messagesRef.current = pendingWithJob;
+            setMessages(pendingWithJob);
+            await saveDisplayHistory(pendingWithJob, { localDeviceId: replyTarget });
+          }
+          const startedStatus = String(started?.status || "").trim();
+          const data = startedStatus === "done"
+            ? started?.response || started
+            : jobId
+            ? await waitForSumiTalkChatJob(jobId, {
+                signal: abortController?.signal,
+                onStatus: (job) => {
+                  const statusKey = `${job.status || ""}:${job.stage || ""}`;
+                  if (statusKey === lastJobStatusKey) return;
+                  lastJobStatusKey = statusKey;
+                  logSumiTalkClientEvent("chat_job_status", {
+                    source,
+                    attemptId,
+                    clientRequestId,
+                    operationId,
+                    jobId,
+                    status: String(job.status || ""),
+                    stage: String(job.stage || ""),
+                    stageElapsedMs: Number(job.stage_elapsed_ms || 0),
+                    statusCode: Number(job.status_code || 0),
+                  });
+                },
+              })
+            : started?.response || started;
+          if (data?.error) {
+            const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
+            throw new Error(err || "上游返回错误");
+          }
+          if (skipStaleAttemptUpdate("job_done")) return false;
+          const rawReply = extractAssistantReplyText(data);
+          const voiceOutput = extractSumiTalkVoiceOutput(rawReply);
+          const reply = voiceOutput.displayText || (voiceOutput.voiceText ? "" : rawReply);
+          if (!reply && !voiceOutput.voiceText) throw new Error("上游没有返回内容");
+          initialDuReply = reply || voiceOutput.voiceText;
+          const reasoning = extractAssistantReasoning(data);
+          const tokenCount = extractTokenCount(data);
+          const assistantAttachments = extractAssistantAttachments(data);
+          logSumiTalkClientEvent("chat_reply_ready", {
+            source,
+            attemptId,
+            clientRequestId,
+            operationId,
+            jobId,
+            replyChars: reply.length,
+            voiceChars: voiceOutput.voiceText.length,
+            reasoningChars: reasoning.length,
+            inputTokens: tokenCount?.input || 0,
+            outputTokens: tokenCount?.output || 0,
+            assistantAttachments: assistantAttachments.length,
+          });
+          const assistantMessage: ChatDraftMessage = {
             id: assistantId,
             role: "assistant",
-            content: "",
+            content: reply,
             createdAt: assistantCreatedAt,
-            status: "pending",
+            status: "sent",
             clientRequestId,
             operationId,
-            jobId,
-          });
-          messagesRef.current = pendingWithJob;
-          setMessages(pendingWithJob);
-          await saveDisplayHistory(pendingWithJob, { localDeviceId: replyTarget });
-        }
-        const startedStatus = String(started?.status || "").trim();
-        const data = startedStatus === "done"
-          ? started?.response || started
-          : jobId
-          ? await waitForSumiTalkChatJob(jobId, {
-              signal: abortController?.signal,
-              onStatus: (job) => {
-                const statusKey = `${job.status || ""}:${job.stage || ""}`;
-                if (statusKey === lastJobStatusKey) return;
-                lastJobStatusKey = statusKey;
-                logSumiTalkClientEvent("chat_job_status", {
-                  source,
-                  clientRequestId,
-                  operationId,
-                  jobId,
-                  status: String(job.status || ""),
-                  stage: String(job.stage || ""),
-                  stageElapsedMs: Number(job.stage_elapsed_ms || 0),
-                  statusCode: Number(job.status_code || 0),
-                });
-              },
-            })
-          : started?.response || started;
-        if (data?.error) {
-          const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
-          throw new Error(err || "上游返回错误");
-        }
-        const rawReply = extractAssistantReplyText(data);
-        const voiceOutput = extractSumiTalkVoiceOutput(rawReply);
-        const reply = voiceOutput.displayText || (voiceOutput.voiceText ? "" : rawReply);
-        if (!reply && !voiceOutput.voiceText) throw new Error("上游没有返回内容");
-        initialDuReply = reply || voiceOutput.voiceText;
-        const reasoning = extractAssistantReasoning(data);
-        const tokenCount = extractTokenCount(data);
-        const assistantAttachments = extractAssistantAttachments(data);
-        logSumiTalkClientEvent("chat_reply_ready", {
-          source,
-          clientRequestId,
-          operationId,
-          jobId,
-          replyChars: reply.length,
-          voiceChars: voiceOutput.voiceText.length,
-          reasoningChars: reasoning.length,
-          inputTokens: tokenCount?.input || 0,
-          outputTokens: tokenCount?.output || 0,
-          assistantAttachments: assistantAttachments.length,
-        });
-        const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
-          id: assistantId,
-          role: "assistant" as const,
-          content: reply,
-          createdAt: assistantCreatedAt,
-          status: "sent" as const,
-          clientRequestId,
-          operationId,
-          jobId: jobId || undefined,
-          reasoning: reasoning || undefined,
-          tokenCount,
-          ...(assistantAttachments.length ? { attachments: assistantAttachments } : {}),
-        });
-        await completeChatOperation(operationId, {
-          id: assistantId,
-          role: "assistant",
-          content: reply,
-          createdAt: assistantCreatedAt,
-          status: "sent",
-          clientRequestId,
-          operationId,
-          jobId: jobId || undefined,
-          reasoning: reasoning || undefined,
-          tokenCount,
-          ...(assistantAttachments.length ? { attachments: assistantAttachments } : {}),
-        });
-        messagesRef.current = finalMessages;
-        setMessages(finalMessages);
-        if (groupChatMode) {
+            jobId: jobId || undefined,
+            reasoning: reasoning || undefined,
+            tokenCount,
+            ...(assistantAttachments.length ? { attachments: assistantAttachments } : {}),
+          };
+          const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, assistantMessage);
+          await completeChatOperation(operationId, assistantMessage);
+          messagesRef.current = finalMessages;
+          setMessages(finalMessages);
           await saveDisplayHistory(finalMessages, { localDeviceId: replyTarget });
-        } else {
-          await saveDisplayHistory(finalMessages);
-        }
-        if (voiceOutput.voiceText) {
-          void appendAssistantVoiceOutputAudio({
-            assistantId,
-            clientRequestId,
-            operationId,
-            jobId,
-            voiceText: voiceOutput.voiceText,
-            localDeviceId: replyTarget,
-          });
+          if (voiceOutput.voiceText) {
+            void appendAssistantVoiceOutputAudio({
+              assistantId,
+              clientRequestId,
+              operationId,
+              jobId,
+              voiceText: voiceOutput.voiceText,
+              localDeviceId: replyTarget,
+            });
+          }
         }
       }
       if (benbenCreatePromise) {
@@ -1896,8 +1947,10 @@ export function MainChatScreen({
         || String(e?.name || "") === "AbortError"
         || /cancel|cancelled|取消/i.test(rawErrorMessage);
       const errorMessage = cancelled ? "已取消发送" : rawErrorMessage;
+      if (skipStaleAttemptUpdate(cancelled ? "catch_cancelled" : "catch_failed")) return false;
       logSumiTalkClientEvent(cancelled ? "chat_send_cancelled" : "chat_send_error", {
         source,
+        attemptId,
         clientRequestId,
         operationId,
         error: errorMessage,
@@ -1905,27 +1958,21 @@ export function MainChatScreen({
       if (benbenCreatePromise) {
         await benbenCreatePromise.catch(() => messagesRef.current);
       }
-      const failedMessages = shouldRequestDu
-        ? applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
-            id: assistantId,
-            role: "assistant" as const,
-            content: cancelled ? "（已取消发送）" : `（发送失败：${e?.message || e}）`,
-            createdAt: assistantCreatedAt,
-            status: "failed" as const,
+      const failedAssistantMessage = shouldRequestDu
+        ? buildPrivateAssistantFailureMessage({
+            assistantId,
+            assistantCreatedAt,
             clientRequestId,
             operationId,
+            cancelled,
+            error: e,
           })
+        : null;
+      const failedMessages = failedAssistantMessage
+        ? applyAssistantTerminalMessage(messagesRef.current, clientRequestId, failedAssistantMessage)
         : messagesRef.current;
       if (shouldRequestDu && operationId) {
-        await failChatOperation(operationId, errorMessage, {
-          id: assistantId,
-          role: "assistant",
-          content: cancelled ? "（已取消发送）" : `（发送失败：${e?.message || e}）`,
-          createdAt: assistantCreatedAt,
-          status: "failed",
-          clientRequestId,
-          operationId,
-        });
+        await failChatOperation(operationId, errorMessage, failedAssistantMessage || undefined);
       }
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
@@ -1936,17 +1983,28 @@ export function MainChatScreen({
       toast(cancelled ? "已取消发送" : `发送失败：${e?.message || e}`);
       return false;
     } finally {
-      if (activeChatRequestRef.current?.clientRequestId === clientRequestId) {
-        activeChatRequestRef.current = null;
+      if (isCurrentAttempt()) {
+        if (activeChatRequestRef.current?.clientRequestId === clientRequestId) {
+          activeChatRequestRef.current = null;
+        }
+        setActiveSendRequestId((prev) => (prev === clientRequestId ? "" : prev));
+        setCancellingSend(false);
+        setSending(false);
       }
-      setActiveSendRequestId((prev) => (prev === clientRequestId ? "" : prev));
-      setCancellingSend(false);
-      setSending(false);
     }
   }
 
   async function sendMessage() {
-    await sendChatContent(input);
+    await sendPreparedPrivateChatInput(prepareTextPrivateChatInput(input));
+  }
+
+  async function sendPreparedPrivateChatInput(prepared: PreparedPrivateChatInput): Promise<boolean> {
+    return sendChatContent(prepared.content, {
+      displayContent: prepared.displayContent,
+      attachments: prepared.attachments,
+      source: prepared.source,
+      modelContent: prepared.modelContent,
+    });
   }
 
   async function cancelActiveSumiTalkSend() {
@@ -1955,6 +2013,7 @@ export function MainChatScreen({
     setCancellingSend(true);
     logSumiTalkClientEvent("chat_cancel_click", {
       source: active.source,
+      attemptId: active.attemptId,
       clientRequestId: active.clientRequestId,
       operationId: active.operationId,
       jobId: active.jobId,
@@ -1967,6 +2026,7 @@ export function MainChatScreen({
         await cancelSumiTalkChatJob(active.jobId, "client_cancelled");
         logSumiTalkClientEvent("chat_cancel_post_ok", {
           source: active.source,
+          attemptId: active.attemptId,
           clientRequestId: active.clientRequestId,
           operationId: active.operationId,
           jobId: active.jobId,
@@ -1974,6 +2034,7 @@ export function MainChatScreen({
       } catch (e: any) {
         logSumiTalkClientEvent("chat_cancel_post_error", {
           source: active.source,
+          attemptId: active.attemptId,
           clientRequestId: active.clientRequestId,
           operationId: active.operationId,
           jobId: active.jobId,
@@ -1996,14 +2057,15 @@ export function MainChatScreen({
     setMediaBusy(true);
     try {
       logSumiTalkClientEvent("image_upload_start", { name: file.name, mime: file.type, bytes: file.size });
-      const attachment = await uploadChatImage(file);
+      const prepared = await prepareImagePrivateChatInput(file, input);
+      const attachment = prepared.attachments[0];
       logSumiTalkClientEvent("image_upload_ok", {
         mime: attachment.mime || file.type,
         bytes: attachment.size || file.size,
         hasRemoteUrl: Boolean(attachment.remoteUrl),
         hasRemoteKey: Boolean(attachment.remoteKey),
       });
-      await sendChatContent(input, { attachments: [attachment], source: "image" });
+      await sendPreparedPrivateChatInput(prepared);
     } catch (e: any) {
       logSumiTalkClientEvent("image_upload_error", { error: String(e?.message || e) }, "error");
       toast(`图片发送失败：${e?.message || e}`);
@@ -2071,20 +2133,17 @@ export function MainChatScreen({
       if (blob.size <= 0) throw new Error("录音为空");
       logSumiTalkClientEvent("voice_record_stop", { mime: mimeType, bytes: blob.size });
       logSumiTalkClientEvent("voice_stt_start", { mime: mimeType, bytes: blob.size });
-      const result = await transcribeChatAudio(blob, mimeType);
-      const transcript = String(result.text || "").trim();
+      const prepared = await prepareVoicePrivateChatInput(blob, mimeType);
+      const transcript = prepared.content;
+      const attachment = prepared.attachments[0];
       logSumiTalkClientEvent("voice_stt_ok", {
         mime: mimeType,
         bytes: blob.size,
         textChars: transcript.length,
-        provider: result.sttProvider || "",
-        hasAttachment: Boolean(result.attachment?.remoteKey || result.attachment?.remoteUrl),
+        provider: prepared.sttProvider || "",
+        hasAttachment: Boolean(attachment?.remoteKey || attachment?.remoteUrl),
       });
-      if (!transcript) throw new Error("没识别出内容，再说一遍试试");
-      await sendChatContent(transcript, {
-        attachments: [{ ...result.attachment, transcript }],
-        source: "voice",
-      });
+      await sendPreparedPrivateChatInput(prepared);
     } catch (e: any) {
       setRecordingChatVoice(false);
       logSumiTalkClientEvent("voice_send_error", { error: String(e?.message || e) }, "error");
@@ -2631,7 +2690,7 @@ export function MainChatScreen({
           onClose={() => setTravelFormCard(null)}
           onSubmit={(content) => {
             setTravelFormCard(null);
-            void sendChatContent(content, { displayContent: "已提交，渡在安排", source: "travel_form" });
+            void sendPreparedPrivateChatInput(prepareTravelFormPrivateChatInput(content));
           }}
         />
       ) : null}
