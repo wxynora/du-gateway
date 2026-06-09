@@ -766,7 +766,7 @@ const memoryNebulaCss = `
   text-transform: uppercase;
 }
 .sky-atlas-star-label { fill: rgba(242, 227, 182, 0.4); font-size: 7px; letter-spacing: 0.22em; }
-.hud { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+.hud { position: absolute; inset: 0; z-index: 42; pointer-events: none; }
 .hud-top {
   position: absolute;
   top: calc(18px + env(safe-area-inset-top, 0px));
