@@ -412,7 +412,11 @@ function useMeasuredSize(ref: React.RefObject<HTMLDivElement | null>) {
   return size;
 }
 
-export function MemoryNebulaTab() {
+type MemoryNebulaTabProps = {
+  onBack?: () => void;
+};
+
+export function MemoryNebulaTab({ onBack }: MemoryNebulaTabProps) {
   const toast = useToast();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useMeasuredSize(rootRef);
@@ -609,7 +613,7 @@ export function MemoryNebulaTab() {
 
       <div className="hud">
         <div className="hud-top">
-          <button type="button" className="crescent-btn" onClick={(e) => { e.stopPropagation(); void reload(); }} aria-label="刷新记忆星云">
+          <button type="button" className="crescent-btn" onClick={(e) => { e.stopPropagation(); onBack?.(); }} aria-label="返回日常">
             <svg className="crescent-svg" width="24" height="24" viewBox="0 0 24 24">
               <path d="M12 3a9 9 0 1 0 9 9 9.011 9.011 0 0 1-9-9Z" />
             </svg>
@@ -630,8 +634,8 @@ export function MemoryNebulaTab() {
           if (!p) return null;
           const active = activeNode?.id === node.id;
           const related = relatedIds.has(node.id);
-          const base = node.type === "core" ? 1.08 : 0.92;
-          const focus = active ? 1.72 : related ? 1.18 : 1;
+          const base = node.type === "core" ? 0.82 : 0.86;
+          const focus = active ? 1.84 : related ? 1.12 : 1;
           const starScale = base * focus * p.depth;
           const starStyle = {
             left: p.x,
@@ -716,8 +720,12 @@ export function MemoryNebulaTab() {
 
 const memoryNebulaCss = `
 .memory-nebula-root {
-  position: relative;
+  position: fixed;
+  inset: 0;
+  z-index: 80;
   width: 100%;
+  height: 100dvh;
+  min-height: 100dvh;
   background: radial-gradient(circle at 50% 50%, #101435 0%, #04051a 100%);
   color: #f0f0d0;
   cursor: grab;
@@ -761,7 +769,7 @@ const memoryNebulaCss = `
 .hud { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
 .hud-top {
   position: absolute;
-  top: 18px;
+  top: calc(18px + env(safe-area-inset-top, 0px));
   left: 18px;
   right: 18px;
   display: flex;
@@ -855,22 +863,21 @@ const memoryNebulaCss = `
   opacity: 0;
   transition: opacity 0.28s ease, transform 0.28s ease;
 }
-.star-core::before,
 .star.active::before,
 .star.related::before {
   animation: nebulaPulse 4s infinite ease-in-out;
 }
 .star-core {
-  width: 8px;
-  height: 8px;
+  width: 5.5px;
+  height: 5.5px;
   background: #f2e3b6;
-  box-shadow: 0 0 7px rgba(242, 227, 182, 0.66), 0 0 16px rgba(242, 227, 182, 0.22);
+  box-shadow: 0 0 3px rgba(242, 227, 182, 0.32);
 }
 .star-dynamic {
-  width: 4px;
-  height: 4px;
+  width: 3.5px;
+  height: 3.5px;
   background: #fff;
-  box-shadow: 0 0 5px rgba(255, 255, 255, 0.48);
+  box-shadow: 0 0 2px rgba(255, 255, 255, 0.32);
 }
 .star-dynamic::before {
   background: radial-gradient(circle, rgba(223, 231, 255, 0.66) 0%, rgba(126, 183, 255, 0.18) 44%, transparent 74%);
@@ -905,17 +912,17 @@ const memoryNebulaCss = `
 .is-focused .star:not(.active):not(.related) { opacity: 0.15 !important; filter: grayscale(1); }
 .mode-anchor .sky-atlas { opacity: 0.18; }
 .mode-anchor .star-dynamic { opacity: 0.12 !important; filter: grayscale(1); }
-.mode-anchor .star-core { filter: brightness(1.18) drop-shadow(0 0 16px rgba(242, 227, 182, 0.55)); }
+.mode-anchor .star-core { filter: brightness(1.06); }
 .mode-anchor .star-core .star-label { opacity: 0.58; transform: translateX(-50%) translateY(1px) scale(var(--label-scale, 1)); }
 .mode-mood .star-core { opacity: 0.38 !important; filter: grayscale(0.7); }
 .mode-mood .star-dynamic { width: 6px; height: 6px; }
 .mode-mood .star-dynamic[data-emotion="positive"] { background: #f2e3b6; box-shadow: 0 0 14px rgba(242, 227, 182, 0.72), 0 0 28px rgba(242, 227, 182, 0.28); }
 .mode-mood .star-dynamic[data-emotion="negative"] { background: #c5a3ff; box-shadow: 0 0 14px rgba(197, 163, 255, 0.72), 0 0 28px rgba(98, 76, 170, 0.34); }
 .mode-mood .star-dynamic[data-emotion="neutral"] { background: #dfe7ff; box-shadow: 0 0 12px rgba(223, 231, 255, 0.56); }
-.star.related::before { opacity: 0.28; }
-.star.active::before { opacity: 0.78; }
-.star.related { filter: brightness(1.08) drop-shadow(0 0 10px rgba(157, 211, 255, 0.28)); }
-.star.active { filter: brightness(1.22) drop-shadow(0 0 18px rgba(157, 211, 255, 0.52)) drop-shadow(0 0 32px rgba(242, 227, 182, 0.24)); }
+.star.related::before { opacity: 0.22; }
+.star.active::before { opacity: 0.74; }
+.star.related { filter: brightness(1.08) drop-shadow(0 0 7px rgba(157, 211, 255, 0.22)); }
+.star.active { filter: brightness(1.24) drop-shadow(0 0 16px rgba(157, 211, 255, 0.48)) drop-shadow(0 0 28px rgba(242, 227, 182, 0.2)); }
 .star.active .star-label,
 .star.related .star-label { opacity: 0.58; transform: translateX(-50%) translateY(1px) scale(var(--label-scale, 1)); }
 .memory-verse-layer {

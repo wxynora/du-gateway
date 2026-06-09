@@ -849,9 +849,7 @@ export function AppShell({
         <LazyPane><PixelHomeTab /></LazyPane>
       ) : null}
       {showMemoryNebula ? (
-        <FullScreenPane title="记忆星云" accent="neutral" headerMode="simple" headerTone="dark" contentMode="bleed" onBack={() => setShowMemoryNebula(false)}>
-          <LazyPane><MemoryNebulaTab /></LazyPane>
-        </FullScreenPane>
+        <LazyPane><MemoryNebulaTab onBack={() => setShowMemoryNebula(false)} /></LazyPane>
       ) : null}
       {showCoRead ? <LazyPane><CoReadScreen onBack={() => setShowCoRead(false)} windowId={sharedChatWindowId} /></LazyPane> : null}
       {listenWithDuMounted ? (
