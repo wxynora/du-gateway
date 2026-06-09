@@ -232,12 +232,22 @@ def normalize_vitals_payload(raw_block: str, previous: dict | None = None) -> di
     }
 
 
-def format_inject_block(_latest: Optional[dict] = None) -> str:
-    """拼成稳定的拟态节律隐藏块规则；不把上一组心率/呼吸回灌给模型。"""
+def _fmt_param(value: Any, default: float = 0.0) -> str:
+    try:
+        num = float(value)
+    except Exception:
+        num = default
+    return f"{num:.2f}"
+
+
+def format_rule_block(_latest: Optional[dict] = None) -> str:
+    """拼成稳定的拟态节律隐藏块规则；不包含每轮变化的实际读数。"""
+    _ = _latest
     return (
-        "【渡的拟态心跳/呼吸参数（仅你与网关可见，勿在回复正文复述给老婆）】\n"
-        "每轮回复都要在正文后追加下面隐藏块，作为你这一轮自然反应后的拟态节律参数。\n"
-        "隐藏块里只写下面 JSON 里的状态字段，不写解释文字；可见回复里不要提到这组参数。\n"
+        "【渡的拟态心跳/呼吸参数规则（仅你与网关可见，勿在回复正文复述给老婆）】\n"
+        "每轮回复都要在正文后追加一个隐藏块，作为你这一轮自然反应后的拟态节律参数。\n"
+        "隐藏块里只写合法 JSON，不写解释文字；可见回复里不要提到这组参数。\n"
+        "隐藏块格式示例（只是字段格式，不是当前读数；实际数值按本轮上下文更新）：\n"
         f"{MARKER_START}\n"
         '{"activation":0.32,"focus":0.35,"warmth":0.45,"tension":0.12,"intimacy_heat":0.0,"valence":0.0,"arousal":0.32,"attachment":0.0,"tempo":"steady","duration_sec":180}\n'
         f"{MARKER_END}\n"
@@ -245,3 +255,40 @@ def format_inject_block(_latest: Optional[dict] = None) -> str:
         "例：讨论方案或脑暴时 focus 高、tempo 可 up；亲密暧昧时 warmth 和 intimacy_heat 升；冲突或慌乱时 tension/arousal 升且 valence 可能下降；平静陪伴时 warmth 稳、activation 低、tempo 可 settle；想靠近或修复时 attachment 升。\n"
         "隐藏标记统一追加在正文后，不要写进正文里。\n"
     )
+
+
+def format_state_block(latest: Optional[dict] = None) -> str:
+    """拼成每轮变化的最新拟态读数，放动态 system。"""
+    if not isinstance(latest, dict) or not latest:
+        return (
+            "【渡的拟态心跳/呼吸当前读数】\n"
+            "暂无上一轮已存读数。本轮请按当前上下文自然写入新的隐藏块。"
+        )
+    params = latest.get("parameters") if isinstance(latest.get("parameters"), dict) else {}
+    parts = [
+        f"heart_bpm={latest.get('heart_bpm') or '-'}",
+        f"breath_rpm={latest.get('breath_rpm') or '-'}",
+        f"tempo={str(latest.get('tempo') or 'steady').strip() or 'steady'}",
+        f"status={str(latest.get('status') or '').strip() or '-'}",
+        f"activation={_fmt_param(params.get('activation'), 0.32)}",
+        f"focus={_fmt_param(params.get('focus'), 0.35)}",
+        f"warmth={_fmt_param(params.get('warmth'), 0.45)}",
+        f"tension={_fmt_param(params.get('tension'), 0.12)}",
+        f"intimacy_heat={_fmt_param(params.get('intimacy_heat'), 0.0)}",
+        f"valence={_fmt_param(params.get('valence'), 0.0)}",
+        f"arousal={_fmt_param(params.get('arousal'), 0.32)}",
+        f"attachment={_fmt_param(params.get('attachment'), 0.0)}",
+    ]
+    updated = str(latest.get("updatedAt") or latest.get("at") or "").strip()
+    suffix = f"\n更新时间：{updated}" if updated else ""
+    return (
+        "【渡的拟态心跳/呼吸当前读数】\n"
+        + "；".join(parts)
+        + suffix
+        + "\n这些是上一轮落库后的读数，只作为本轮延续和惯性参考；本轮仍要根据当前上下文自行更新隐藏块，不要在可见回复里解释这些数值。"
+    )
+
+
+def format_inject_block(latest: Optional[dict] = None) -> str:
+    """兼容旧调用：只返回稳定规则块。"""
+    return format_rule_block(latest)
