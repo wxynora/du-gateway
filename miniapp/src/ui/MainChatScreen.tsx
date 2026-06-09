@@ -36,7 +36,6 @@ import {
   extractTokenCount,
   formatClockTime,
   getChatSearchMatchId,
-  groupRoleLabel,
   groupChatMessages,
   chatAttachmentPreviewLabel,
   normalizeChatAttachments,
@@ -103,7 +102,6 @@ import {
 import {
   buildPrivateUserContent,
   contentWithAttachmentHint,
-  extractAssistantAttachments,
   extractSumiTalkVoiceOutput,
   isVoiceTranscriptEcho,
 } from "./chat/privateChatHelpers";
@@ -112,6 +110,27 @@ import {
   buildPrivateChatRequestBody,
   runPrivateChatSendFlow,
 } from "./chat/privateChatSendFlow";
+import {
+  GROUP_DISCUSSION_MAX_FOLLOWUPS,
+  buildGroupDiscussionUserContent,
+  buildGroupFreeDiscussionOpeningContent,
+  codexGroupTaskStatusText,
+  groupDiscussionShouldStop,
+  isBenbenCancelCommand,
+  isGroupDiscussionContinueCommand,
+  isGroupDiscussionStopCommand,
+  parseGroupDiscussionContinueTurns,
+  resolveEffectiveGroupReplyTargets,
+  resolveNextFreeDiscussionSpeaker,
+  resolveNextGroupDiscussionSpeaker,
+  type GroupDiscussionSnapshot,
+  type GroupDiscussionSpeaker,
+} from "./chat/groupChatRouting";
+import {
+  buildGroupAssistantFailureMessage,
+  buildGroupChatRequestBody,
+  runGroupDuReplyFlow,
+} from "./chat/groupChatSendFlow";
 type CodexGroupChatTask = {
   id?: string;
   mode?: string;
@@ -140,11 +159,6 @@ const CODEX_GROUP_CHAT_POLL_MS = 1000;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_CREATE_TIMEOUT_MS = 30000;
 const CODEX_GROUP_CHAT_CREATE_RETRY_TIMEOUT_MS = 45000;
-const GROUP_DISCUSSION_MAX_FOLLOWUPS = 3;
-const GROUP_DISCUSSION_TRIGGER_RE = /(?:讨论|商量|你俩|你们俩|自由聊|一起聊|一起看看|聊两句|聊几句|互相|碰一下|合计|对一下|头脑风暴)/i;
-const GROUP_DISCUSSION_STOP_RE = /(?:先这样|先到这|就先这样|差不多(?:了|就行|可以)|可以收尾|不用继续|别聊了|到这里|我来改|我去改|先按这个)/i;
-const GROUP_DISCUSSION_MANUAL_STOP_RE = /(?:停一下|停止|暂停|打断|中断|别聊了|不用继续|先这样|收尾|到这里|算了)/i;
-const GROUP_DISCUSSION_CONTINUE_RE = /(?:继续聊|接着聊|再聊|继续讨论|再讨论|你俩继续|你们俩继续|让(?:他们|你俩|你们俩)继续)/i;
 
 function makeChatAttemptId(clientRequestId: string): string {
   return `attempt-${clientRequestId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -160,164 +174,6 @@ function uniqueNonEmptyStrings(values: string[]): string[] {
     out.push(item);
   }
   return out;
-}
-
-type GroupReplyTargets = {
-  du: boolean;
-  benben: boolean;
-  mentions: string[];
-  benbenMode: "daily_chat" | "coding_task";
-  codingThreadKey: string;
-  freeDiscussion: boolean;
-};
-type GroupDiscussionSpeaker = "du" | "benben";
-type GroupDiscussionSnapshot = {
-  topic: string;
-  replyTarget: string;
-  lastSpeaker: GroupDiscussionSpeaker;
-  lastContent: string;
-  freeRoute: boolean;
-  updatedAt: number;
-};
-
-function resolveCodingThreadKey(content: string): string {
-  const text = String(content || "").toLowerCase();
-  if (/文游|主神|副本|玩家|道具|抽卡|结算|怪物|npc|wenyou/.test(text)) return "wenyou";
-  if (/miniapp|小程序|前端|页面|界面|按钮|气泡|样式|ui|tsx|react/.test(text)) return "miniapp";
-  if (/studyroom|学习|题库|错题|资料整理/.test(text)) return "studyroom";
-  if (/小爱|音箱|migpt|xiaoai/.test(text)) return "xiaoai";
-  if (/后端|接口|路由|网关|存储|r2|api|service|route/.test(text)) return "backend";
-  if (/文档|方案|markdown|debug_index|索引/.test(text)) return "docs";
-  return "general";
-}
-
-function resolveGroupReplyTargets(content: string): GroupReplyTargets {
-  const text = String(content || "");
-  const hasDuMention = /[@＠]\s*(?:渡|du)(?![a-z0-9_])/i.test(text);
-  const hasBenbenMention = /[@＠]\s*(?:笨笨机|笨笨|benben|codex)(?![a-z0-9_])/i.test(text);
-  const hasFreeDiscussion = hasDuMention && hasBenbenMention && GROUP_DISCUSSION_TRIGGER_RE.test(text);
-  const hasCodingCommand = hasBenbenMention && !hasFreeDiscussion && /(?:改代码|开工|施工|debug|调试|修\s*bug|修一下|实现|落地|加上|做一下)/i.test(text);
-  const mentions = uniqueNonEmptyStrings([
-    hasDuMention ? "du" : "",
-    hasBenbenMention ? "benben" : "",
-  ]);
-  if (mentions.length) {
-    return {
-      du: hasDuMention,
-      benben: hasBenbenMention,
-      mentions,
-      benbenMode: hasCodingCommand ? "coding_task" : "daily_chat",
-      codingThreadKey: hasCodingCommand ? resolveCodingThreadKey(text) : "",
-      freeDiscussion: hasFreeDiscussion,
-    };
-  }
-  return { du: true, benben: false, mentions: [], benbenMode: "daily_chat", codingThreadKey: "", freeDiscussion: false };
-}
-
-function isBenbenCancelCommand(content: string): boolean {
-  const text = String(content || "");
-  const hasBenbenMention = /[@＠]\s*(?:笨笨机|笨笨|benben|codex)(?![a-z0-9_])/i.test(text);
-  return hasBenbenMention && /(?:停一下|停止|取消|中断|打断|别改了|别施工|别做了|暂停|kill|算了)/i.test(text);
-}
-
-function isGroupDiscussionStopCommand(content: string): boolean {
-  return GROUP_DISCUSSION_MANUAL_STOP_RE.test(String(content || ""));
-}
-
-function isGroupDiscussionContinueCommand(content: string): boolean {
-  return GROUP_DISCUSSION_CONTINUE_RE.test(String(content || ""));
-}
-
-function parseGroupDiscussionContinueTurns(content: string): number {
-  const text = String(content || "");
-  if (/[一1]/.test(text)) return 1;
-  if (/[三3]/.test(text)) return 3;
-  return 2;
-}
-
-function codexGroupTaskStatusText(task: Pick<CodexGroupChatTask, "mode" | "status">): string {
-  const mode = String(task.mode || "").trim();
-  const status = String(task.status || "").trim();
-  const isCoding = mode === "coding_task";
-  if (isCoding) {
-    if (status === "running") return "笨笨施工中，正在改代码 / debug...";
-    if (status === "queued") return "笨笨已接单，等待施工...";
-    if (status === "cancelled") return "笨笨施工已取消。";
-    return "笨笨收到开工指令，正在接单...";
-  }
-  if (status === "cancelled") return "笨笨任务已取消。";
-  if (status === "running") return "笨笨正在看群聊...";
-  if (status === "queued") return "笨笨任务已创建，等我一下...";
-  return "笨笨正在看群聊...";
-}
-
-function groupDiscussionShouldStop(content: string): boolean {
-  return GROUP_DISCUSSION_STOP_RE.test(String(content || ""));
-}
-
-function mentionedGroupSpeaker(content: string, speaker: GroupDiscussionSpeaker): boolean {
-  const text = String(content || "");
-  if (speaker === "du") return /[@＠]\s*(?:渡|du)(?![a-z0-9_])/i.test(text);
-  return /[@＠]\s*(?:笨笨机|笨笨|benben|codex)(?![a-z0-9_])/i.test(text);
-}
-
-function resolveNextGroupDiscussionSpeaker(lastSpeaker: GroupDiscussionSpeaker, lastContent: string): GroupDiscussionSpeaker {
-  const mentionsDu = mentionedGroupSpeaker(lastContent, "du");
-  const mentionsBenben = mentionedGroupSpeaker(lastContent, "benben");
-  if (mentionsDu && !mentionsBenben) return "du";
-  if (mentionsBenben && !mentionsDu) return "benben";
-  return lastSpeaker === "du" ? "benben" : "du";
-}
-
-function resolveNextFreeDiscussionSpeaker(lastSpeaker: GroupDiscussionSpeaker, lastContent: string): GroupDiscussionSpeaker | null {
-  const mentionsDu = mentionedGroupSpeaker(lastContent, "du");
-  const mentionsBenben = mentionedGroupSpeaker(lastContent, "benben");
-  if (mentionsDu && !mentionsBenben) return "du";
-  if (mentionsBenben && !mentionsDu) return "benben";
-  if (mentionsDu && mentionsBenben) return lastSpeaker === "du" ? "benben" : "du";
-  return null;
-}
-
-function buildGroupFreeDiscussionOpeningContent(messages: ChatDraftMessage[], topic: string): string {
-  const lines = (Array.isArray(messages) ? messages : [])
-    .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
-    .filter((msg) => String(msg.content || "").trim())
-    .slice(-10)
-    .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`);
-  const fallbackTopic = String(topic || "").trim();
-  if (!lines.length && fallbackTopic) lines.push(`辛玥：${fallbackTopic}`);
-  return [
-    "【三人群聊自由讨论开场】",
-    "辛玥在自由聊模式里发了一条群聊广播，这句话同时发给你和笨笨，是想让你们俩围绕这个话题自由聊几句。",
-    "你先发一条自然的群聊开场；想让笨笨接，就在正文里明确 @笨笨，不 @ 就自然停。不要把历史里笨笨之前对辛玥的回复当成对你的私聊。",
-    "只输出渡要发到群里的正文，不要写“渡：”前缀，不要解释规则。",
-    `原话题：${fallbackTopic || "（无）"}`,
-    "最近群聊：",
-    ...lines,
-  ].join("\n");
-}
-
-function buildGroupDiscussionUserContent(
-  messages: ChatDraftMessage[],
-  topic: string,
-  turnIndex: number,
-  maxTurns: number,
-): string {
-  const lines = (Array.isArray(messages) ? messages : [])
-    .filter((msg) => msg.status !== "pending" && msg.status !== "failed")
-    .filter((msg) => String(msg.content || "").trim())
-    .slice(-12)
-    .map((msg) => `${groupRoleLabel(msg.role)}：${String(msg.content || "").trim()}`);
-  const fallbackTopic = String(topic || "").trim();
-  if (!lines.length && fallbackTopic) lines.push(`辛玥：${fallbackTopic}`);
-  return [
-    "【三人群聊自由讨论接力】",
-    `原话题：${fallbackTopic || "（无）"}`,
-    `这是自动接力第 ${turnIndex}/${maxTurns} 条。你是渡，接着最近一条自然回复一小段。`,
-    "规则：这是辛玥、渡、笨笨都能看见的公共群聊；辛玥在自由聊模式里的发言默认同时发给你和笨笨。不要把笨笨上一句默认理解成对你的私聊，除非它明确 @ 了你。想让笨笨继续就明确 @笨笨，不 @ 就自然停。只发群聊正文，不要写“渡：”前缀；不要替辛玥决定；不要进入施工、调工具或汇报流程；如果结论已经差不多，就自然收尾。",
-    "最近群聊：",
-    ...lines,
-  ].join("\n");
 }
 
 async function waitForCodexGroupChatTask(taskId: string): Promise<CodexGroupChatTask> {
@@ -1114,76 +970,55 @@ export function MainChatScreen({
     setMessages(pendingMessages);
     await saveDisplayHistory(pendingMessages, { localDeviceId: params.replyTarget });
     try {
-      const started = await createSumiTalkChatJob("/miniapp-api/sumitalk-chat-jobs", {
-        model: activeModel,
-        messages: [{
-          role: "user",
-          content: buildGroupDiscussionUserContent(
+      const result = await runGroupDuReplyFlow({
+        source: "group_discussion",
+        requestPath: "/miniapp-api/sumitalk-chat-jobs",
+        requestBody: buildGroupChatRequestBody({
+          model: activeModel,
+          userContent: buildGroupDiscussionUserContent(
             messagesRef.current,
             params.topic,
             params.turnIndex,
             params.maxTurns,
           ),
-        }],
-        stream: false,
-        window_id: windowId,
-        reply_target: params.replyTarget,
-        client_request_id: clientRequestId,
-      });
-      if (started?.status === "error") {
-        const upstreamError = started.response?.error || started.response?.message || "";
-        throw new Error(String(started.error || upstreamError || "渡回复失败"));
-      }
-      const jobId = String(started?.job_id || "").trim();
-      const startedStatus = String(started?.status || "").trim();
-      const data = startedStatus === "done"
-        ? started?.response || started
-        : jobId
-        ? await waitForSumiTalkChatJob(jobId)
-        : started?.response || started;
-      if (data?.error) {
-        const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
-        throw new Error(err || "上游返回错误");
-      }
-      const rawReply = extractAssistantReplyText(data);
-      const voiceOutput = extractSumiTalkVoiceOutput(rawReply);
-      const reply = voiceOutput.displayText || (voiceOutput.voiceText ? "" : rawReply);
-      if (!reply && !voiceOutput.voiceText) throw new Error("上游没有返回内容");
-      const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
-        id: assistantId,
-        role: "assistant",
-        content: reply,
-        createdAt: assistantCreatedAt,
-        status: "sent",
+          windowId,
+          replyTarget: params.replyTarget,
+          clientRequestId,
+        }),
         clientRequestId,
-        jobId: jobId || undefined,
-        reasoning: extractAssistantReasoning(data) || undefined,
-        tokenCount: extractTokenCount(data),
+        assistantId,
+        assistantCreatedAt,
+        logEvent: logSumiTalkClientEvent,
       });
+      if (!result) return "";
+      const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, result.assistantMessage);
       messagesRef.current = finalMessages;
       setMessages(finalMessages);
       await saveDisplayHistory(finalMessages, { localDeviceId: params.replyTarget });
       saveDisplayHistoryInBackground(finalMessages, { localDeviceId: params.replyTarget });
-      if (voiceOutput.voiceText) {
+      if (result.voiceText) {
         void appendAssistantVoiceOutputAudio({
           assistantId,
           clientRequestId,
           operationId: "",
-          jobId,
-          voiceText: voiceOutput.voiceText,
+          jobId: result.jobId,
+          voiceText: result.voiceText,
           localDeviceId: params.replyTarget,
         });
       }
-      return reply || voiceOutput.voiceText;
+      return result.reply || result.voiceText;
     } catch (e: any) {
-      const failedMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, {
-        id: assistantId,
-        role: "assistant",
-        content: `（渡接力失败：${e?.message || e}）`,
-        createdAt: assistantCreatedAt,
-        status: "failed",
+      const failedMessages = applyAssistantTerminalMessage(
+        messagesRef.current,
         clientRequestId,
-      });
+        buildGroupAssistantFailureMessage({
+          assistantId,
+          assistantCreatedAt,
+          clientRequestId,
+          error: e,
+          prefix: "渡接力失败",
+        }),
+      );
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
       await saveDisplayHistory(failedMessages, { localDeviceId: params.replyTarget });
@@ -1550,23 +1385,9 @@ export function MainChatScreen({
       });
       return true;
     }
-    let groupTargets = groupChatMode
-      ? resolveGroupReplyTargets(content)
+    const groupTargets = groupChatMode
+      ? resolveEffectiveGroupReplyTargets(content, groupFreeChatEnabled)
       : { du: true, benben: false, mentions: [], benbenMode: "daily_chat" as const, codingThreadKey: "", freeDiscussion: false };
-    if (groupChatMode && groupFreeChatEnabled) {
-      if (!groupTargets.mentions.length) {
-        groupTargets = {
-          du: true,
-          benben: true,
-          mentions: ["du", "benben"],
-          benbenMode: "daily_chat",
-          codingThreadKey: "",
-          freeDiscussion: true,
-        };
-      } else if (groupTargets.du && groupTargets.benben && groupTargets.benbenMode === "daily_chat") {
-        groupTargets = { ...groupTargets, freeDiscussion: true };
-      }
-    }
     const shouldRequestDu = !groupChatMode || groupTargets.du;
     const isGroupFreeDiscussion = Boolean(
       groupChatMode
@@ -1652,14 +1473,13 @@ export function MainChatScreen({
     const requestPath = shouldRequestDu ? (groupChatMode ? "/miniapp-api/sumitalk-chat-jobs" : "/miniapp-api/sumitalk-chat") : "";
     const requestBody = shouldRequestDu
       ? groupChatMode
-        ? {
+        ? buildGroupChatRequestBody({
             model: activeModel,
-            messages: [{ role: "user", content: requestUserContent }],
-            stream: false,
-            window_id: windowId,
-            reply_target: resolvedDeviceId,
-            client_request_id: clientRequestId,
-          }
+            userContent: String(requestUserContent || ""),
+            windowId,
+            replyTarget: resolvedDeviceId,
+            clientRequestId,
+          })
         : buildPrivateChatRequestBody({
             model: activeModel,
             modelContent: privateModelContent ?? buildPrivateUserContent(content, attachments),
@@ -1807,119 +1627,52 @@ export function MainChatScreen({
             });
           }
         } else {
-          let lastJobStatusKey = "";
-          logSumiTalkClientEvent("chat_job_create_start", { source, requestPath, attemptId, clientRequestId, operationId });
-          const started = await createSumiTalkChatJob(requestPath, requestBody, { signal: abortController?.signal });
-          if (skipStaleAttemptUpdate("job_create_return")) return false;
-          if (started?.status === "error") {
-            const upstreamError = started.response?.error || started.response?.message || "";
-            throw new Error(String(started.error || upstreamError || "渡回复失败"));
-          }
-          const jobId = String(started?.job_id || "").trim();
-          if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
-            activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
-          }
-          logSumiTalkClientEvent("chat_job_create_ok", {
+          const result = await runGroupDuReplyFlow({
             source,
             requestPath,
+            requestBody,
             attemptId,
             clientRequestId,
             operationId,
-            jobId,
-            status: String(started?.status || ""),
-            mode: String((started as any)?.mode || ""),
+            assistantId,
+            assistantCreatedAt,
+            abortSignal: abortController?.signal,
+            logEvent: logSumiTalkClientEvent,
+            skipStaleAttemptUpdate,
+            onJobId: async (jobId) => {
+              if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
+                activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
+              }
+              await attachChatJobToOperation(operationId, jobId);
+              const pendingWithJob = applyMessageById(messagesRef.current, assistantId, {
+                id: assistantId,
+                role: "assistant",
+                content: "",
+                createdAt: assistantCreatedAt,
+                status: "pending",
+                clientRequestId,
+                operationId,
+                jobId,
+              });
+              messagesRef.current = pendingWithJob;
+              setMessages(pendingWithJob);
+              await saveDisplayHistory(pendingWithJob, { localDeviceId: replyTarget });
+            },
           });
-          if (jobId && operationId) {
-            await attachChatJobToOperation(operationId, jobId);
-            const pendingWithJob = applyMessageById(messagesRef.current, assistantId, {
-              id: assistantId,
-              role: "assistant",
-              content: "",
-              createdAt: assistantCreatedAt,
-              status: "pending",
-              clientRequestId,
-              operationId,
-              jobId,
-            });
-            messagesRef.current = pendingWithJob;
-            setMessages(pendingWithJob);
-            await saveDisplayHistory(pendingWithJob, { localDeviceId: replyTarget });
-          }
-          const startedStatus = String(started?.status || "").trim();
-          const data = startedStatus === "done"
-            ? started?.response || started
-            : jobId
-            ? await waitForSumiTalkChatJob(jobId, {
-                signal: abortController?.signal,
-                onStatus: (job) => {
-                  const statusKey = `${job.status || ""}:${job.stage || ""}`;
-                  if (statusKey === lastJobStatusKey) return;
-                  lastJobStatusKey = statusKey;
-                  logSumiTalkClientEvent("chat_job_status", {
-                    source,
-                    attemptId,
-                    clientRequestId,
-                    operationId,
-                    jobId,
-                    status: String(job.status || ""),
-                    stage: String(job.stage || ""),
-                    stageElapsedMs: Number(job.stage_elapsed_ms || 0),
-                    statusCode: Number(job.status_code || 0),
-                  });
-                },
-              })
-            : started?.response || started;
-          if (data?.error) {
-            const err = typeof data.error === "string" ? data.error : data.error?.message || JSON.stringify(data.error);
-            throw new Error(err || "上游返回错误");
-          }
-          if (skipStaleAttemptUpdate("job_done")) return false;
-          const rawReply = extractAssistantReplyText(data);
-          const voiceOutput = extractSumiTalkVoiceOutput(rawReply);
-          const reply = voiceOutput.displayText || (voiceOutput.voiceText ? "" : rawReply);
-          if (!reply && !voiceOutput.voiceText) throw new Error("上游没有返回内容");
-          initialDuReply = reply || voiceOutput.voiceText;
-          const reasoning = extractAssistantReasoning(data);
-          const tokenCount = extractTokenCount(data);
-          const assistantAttachments = extractAssistantAttachments(data);
-          logSumiTalkClientEvent("chat_reply_ready", {
-            source,
-            attemptId,
-            clientRequestId,
-            operationId,
-            jobId,
-            replyChars: reply.length,
-            voiceChars: voiceOutput.voiceText.length,
-            reasoningChars: reasoning.length,
-            inputTokens: tokenCount?.input || 0,
-            outputTokens: tokenCount?.output || 0,
-            assistantAttachments: assistantAttachments.length,
-          });
-          const assistantMessage: ChatDraftMessage = {
-            id: assistantId,
-            role: "assistant",
-            content: reply,
-            createdAt: assistantCreatedAt,
-            status: "sent",
-            clientRequestId,
-            operationId,
-            jobId: jobId || undefined,
-            reasoning: reasoning || undefined,
-            tokenCount,
-            ...(assistantAttachments.length ? { attachments: assistantAttachments } : {}),
-          };
-          const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, assistantMessage);
-          await completeChatOperation(operationId, assistantMessage);
+          if (!result) return false;
+          initialDuReply = result.reply || result.voiceText;
+          const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, result.assistantMessage);
+          await completeChatOperation(operationId, result.assistantMessage);
           messagesRef.current = finalMessages;
           setMessages(finalMessages);
           await saveDisplayHistory(finalMessages, { localDeviceId: replyTarget });
-          if (voiceOutput.voiceText) {
+          if (result.voiceText) {
             void appendAssistantVoiceOutputAudio({
               assistantId,
               clientRequestId,
               operationId,
-              jobId,
-              voiceText: voiceOutput.voiceText,
+              jobId: result.jobId,
+              voiceText: result.voiceText,
               localDeviceId: replyTarget,
             });
           }
@@ -1959,14 +1712,23 @@ export function MainChatScreen({
         await benbenCreatePromise.catch(() => messagesRef.current);
       }
       const failedAssistantMessage = shouldRequestDu
-        ? buildPrivateAssistantFailureMessage({
-            assistantId,
-            assistantCreatedAt,
-            clientRequestId,
-            operationId,
-            cancelled,
-            error: e,
-          })
+        ? groupChatMode
+          ? buildGroupAssistantFailureMessage({
+              assistantId,
+              assistantCreatedAt,
+              clientRequestId,
+              operationId,
+              cancelled,
+              error: e,
+            })
+          : buildPrivateAssistantFailureMessage({
+              assistantId,
+              assistantCreatedAt,
+              clientRequestId,
+              operationId,
+              cancelled,
+              error: e,
+            })
         : null;
       const failedMessages = failedAssistantMessage
         ? applyAssistantTerminalMessage(messagesRef.current, clientRequestId, failedAssistantMessage)

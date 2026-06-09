@@ -435,6 +435,23 @@ recovery：
 
 Phase 2 的目标是把群聊从 `sendChatContent` 里剥出来，而不是让私聊 controller 兼容所有群聊特殊情况。
 
+### Phase 2 当前落地（2026-06-09）
+
+已落地：
+
+- 新增 `miniapp/src/ui/chat/groupChatRouting.ts`。
+- 群聊 @ 渡 / @ 笨笨、自由聊、停止/继续、接力轮次、下一位说话者、自由讨论 prompt 构造都从 `MainChatScreen.tsx` 抽出为纯函数。
+- 新增 `miniapp/src/ui/chat/groupChatSendFlow.ts`。
+- 群聊 Du reply 的 request body、`/miniapp-api/sumitalk-chat-jobs` create/poll、direct done、assistant terminal/failed message 构造已从主页面拆出。
+- 普通群聊 @渡 / 自由聊开场里的 Du 回复，以及自由讨论接力里的 Du 回复，都复用 `runGroupDuReplyFlow`。
+- 群聊 Du reply 仍由页面调用 `createDraftTurn`、`attachJob`、`completeOperation`、`failOperation`，没有绕开 Android SQLite operation 原子语义。
+
+未做：
+
+- 笨笨 task 创建、取消、realtime/fallback 更新仍保留在 `MainChatScreen.tsx`，因为它们直接依赖当前页面消息列表和 task recovery refs。
+- 群聊整体发送入口还在 `sendChatContent` 里分流；后续如继续拆，应先把笨笨 task side-effect 封成单独 controller，再把 `sendGroupChatContent` 独立出去。
+- 未改后端 job、Android SQLite schema、retry/recovery、独立 outbox/队列。
+
 ## Phase 3：体验升级
 
 只有前面边界清楚后，才考虑体验层升级。
