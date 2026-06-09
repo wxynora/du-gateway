@@ -263,8 +263,9 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已完成：Phase 1B 新增 `miniapp/src/ui/chat/privateChatInput.ts`，文本、图片、语音、travel form 统一生成 `PreparedPrivateChatInput`；`sendChatContent` 增加 `modelContent` 入参，私聊 Du 请求优先使用准备层结果，因此图片仍保留 `image_url` parts。图片上传和语音 STT 仍在创建 pending 前完成，失败不落 pending。
 - 已完成：Phase 1C 新增 `miniapp/src/ui/chat/privateChatSendFlow.ts`，私聊 Du 的 request body、`/sumitalk-chat` create/poll、direct done、assistant terminal/failed message 构造已从主页面拆出；页面仍保留 `createDraftTurn` / `attachJob` / `completeOperation` / `failOperation` 调用，避免绕开 Android SQLite operation 原子语义。
 - 已完成：Phase 2 新增 `miniapp/src/ui/chat/groupChatRouting.ts` 和 `miniapp/src/ui/chat/groupChatSendFlow.ts`；群聊 @目标解析、自由聊/停止/继续/接力判断、群聊 Du reply request body、`/sumitalk-chat-jobs` create/poll、direct done、assistant terminal/failed message 构造已从主页面拆出。普通群聊 @渡 / 自由聊开场里的 Du 回复和自由讨论接力里的 Du 回复都复用 `runGroupDuReplyFlow`。
-- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npm -C miniapp run build:android`、`git diff --check` 通过；新 bundle 已进入 `miniapp_static/assets/index-*.js`，并确认包含 `chat_attempt_stale_skip` / `assistant_voice_tts_skip`。
-- 未完成 / 下次继续：retry/recovery 仍走旧 `recoverSumiTalkOperation`；笨笨 task 创建/取消/realtime fallback 仍保留在 `MainChatScreen.tsx`；群聊整体入口还在 `sendChatContent` 中分流。页面级 reducer、持久化 `cancelled`、Android SQLite schema、独立 outbox/队列都没动，仍延后到后续阶段。
+- 已完成：Phase 3 新增 `miniapp/src/ui/chat/chatSendStage.ts`，把发送/job 日志事件映射成前端短阶段文案；`MainChatScreen.tsx` 新增 `activeSendStageLabel`，发送中会在顶部显示“准备发送 / 提交给后端 / 任务已创建，等渡回复 / 正在请求上游 / 正在写入回复 / 正在取消”等小胶囊状态。未改后端协议。
+- 已验证：临时隔离无关 `MemoryNebulaTab` 改动后，`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json`、`npm -C miniapp run build:android`、`git diff --check` 通过；新 bundle 已进入 `miniapp_static/assets/index-*.js`，并确认包含“准备发送 / 任务已创建，等渡回复 / 正在请求上游”等阶段文案。
+- 未完成 / 下次继续：retry/recovery 仍走旧 `recoverSumiTalkOperation`；笨笨 task 创建/取消/realtime fallback 仍保留在 `MainChatScreen.tsx`；群聊整体入口还在 `sendChatContent` 中分流。SSE/流式、连续发送队列、页面级 reducer、持久化 `cancelled`、Android SQLite schema、独立 outbox/队列都没动，仍延后到后续阶段。
 
 ## 和渡一起听 / 音乐旋律分析
 

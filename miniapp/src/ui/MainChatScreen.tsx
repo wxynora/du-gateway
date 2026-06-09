@@ -110,6 +110,7 @@ import {
   buildPrivateChatRequestBody,
   runPrivateChatSendFlow,
 } from "./chat/privateChatSendFlow";
+import { resolveChatSendStageLabel } from "./chat/chatSendStage";
 import {
   GROUP_DISCUSSION_MAX_FOLLOWUPS,
   buildGroupDiscussionUserContent,
@@ -276,6 +277,7 @@ export function MainChatScreen({
   const [mediaBusy, setMediaBusy] = useState(false);
   const [cancellingSend, setCancellingSend] = useState(false);
   const [activeSendRequestId, setActiveSendRequestId] = useState("");
+  const [activeSendStageLabel, setActiveSendStageLabel] = useState("");
   const [recordingChatVoice, setRecordingChatVoice] = useState(false);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
@@ -491,6 +493,16 @@ export function MainChatScreen({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ level, event, fields: safeFields }),
     }).catch(() => {});
+  }
+
+  function logSumiTalkSendStage(
+    event: string,
+    fields: Record<string, string | number | boolean | undefined | null> = {},
+    level: "info" | "warning" | "error" = "info",
+  ) {
+    const label = resolveChatSendStageLabel(event, fields);
+    if (label) setActiveSendStageLabel(label);
+    logSumiTalkClientEvent(event, fields, level);
   }
 
   async function persistSumiTalkOperationMessages(nextMessages: ChatDraftMessage[], localDeviceId: string) {
@@ -988,7 +1000,7 @@ export function MainChatScreen({
         clientRequestId,
         assistantId,
         assistantCreatedAt,
-        logEvent: logSumiTalkClientEvent,
+        logEvent: logSumiTalkSendStage,
       });
       if (!result) return "";
       const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, result.assistantMessage);
@@ -1117,6 +1129,7 @@ export function MainChatScreen({
       if (groupDiscussionRunRef.current === params.runId) {
         setGroupDiscussionRunning(false);
         setGroupDiscussionStatus("");
+        setActiveSendStageLabel("");
       }
     }
   }
@@ -1156,6 +1169,7 @@ export function MainChatScreen({
       if (groupDiscussionRunRef.current === params.runId) {
         setGroupDiscussionRunning(false);
         setGroupDiscussionStatus("");
+        setActiveSendStageLabel("");
       }
     }
   }
@@ -1497,6 +1511,7 @@ export function MainChatScreen({
     const replyTarget = resolvedDeviceId;
     setInput("");
     setPlusOpen(false);
+    setActiveSendStageLabel("准备发送");
     setSending(true);
     setMessages(draftMessages);
     messagesRef.current = draftMessages;
@@ -1543,7 +1558,7 @@ export function MainChatScreen({
         abortController,
       };
       setActiveSendRequestId(clientRequestId);
-      logSumiTalkClientEvent("chat_send_start", {
+      logSumiTalkSendStage("chat_send_start", {
         source,
         requestPath,
         attemptId,
@@ -1587,7 +1602,7 @@ export function MainChatScreen({
             assistantId,
             assistantCreatedAt,
             abortSignal: abortController?.signal,
-            logEvent: logSumiTalkClientEvent,
+            logEvent: logSumiTalkSendStage,
             skipStaleAttemptUpdate,
             onJobId: async (jobId) => {
               if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
@@ -1637,7 +1652,7 @@ export function MainChatScreen({
             assistantId,
             assistantCreatedAt,
             abortSignal: abortController?.signal,
-            logEvent: logSumiTalkClientEvent,
+            logEvent: logSumiTalkSendStage,
             skipStaleAttemptUpdate,
             onJobId: async (jobId) => {
               if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
@@ -1701,7 +1716,7 @@ export function MainChatScreen({
         || /cancel|cancelled|取消/i.test(rawErrorMessage);
       const errorMessage = cancelled ? "已取消发送" : rawErrorMessage;
       if (skipStaleAttemptUpdate(cancelled ? "catch_cancelled" : "catch_failed")) return false;
-      logSumiTalkClientEvent(cancelled ? "chat_send_cancelled" : "chat_send_error", {
+      logSumiTalkSendStage(cancelled ? "chat_send_cancelled" : "chat_send_error", {
         source,
         attemptId,
         clientRequestId,
@@ -1751,6 +1766,7 @@ export function MainChatScreen({
         }
         setActiveSendRequestId((prev) => (prev === clientRequestId ? "" : prev));
         setCancellingSend(false);
+        setActiveSendStageLabel("");
         setSending(false);
       }
     }
@@ -1773,7 +1789,7 @@ export function MainChatScreen({
     const active = activeChatRequestRef.current;
     if (!active || cancellingSend) return;
     setCancellingSend(true);
-    logSumiTalkClientEvent("chat_cancel_click", {
+    logSumiTalkSendStage("chat_cancel_click", {
       source: active.source,
       attemptId: active.attemptId,
       clientRequestId: active.clientRequestId,
@@ -1786,7 +1802,7 @@ export function MainChatScreen({
     if (active.jobId) {
       try {
         await cancelSumiTalkChatJob(active.jobId, "client_cancelled");
-        logSumiTalkClientEvent("chat_cancel_post_ok", {
+        logSumiTalkSendStage("chat_cancel_post_ok", {
           source: active.source,
           attemptId: active.attemptId,
           clientRequestId: active.clientRequestId,
@@ -1963,6 +1979,7 @@ export function MainChatScreen({
     || isGroupDiscussionContinueCommand(trimmedInput)
   );
   const canCancelSend = sending && Boolean(activeSendRequestId) && !canSubmitWhileBusy;
+  const activeSendStatusLabel = (sending || cancellingSend || groupDiscussionRunning) ? activeSendStageLabel : "";
   const searchMatches = useMemo<ChatSearchMatch[]>(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return [];
@@ -2111,6 +2128,13 @@ export function MainChatScreen({
           <div className="mt-1 flex justify-center">
             <div className="max-w-[72vw] truncate rounded-full bg-amber-50/80 px-3 py-1 text-[10px] font-medium text-amber-700 backdrop-blur">
               {groupDiscussionStatus}
+            </div>
+          </div>
+        ) : null}
+        {activeSendStatusLabel ? (
+          <div className="mt-1 flex justify-center">
+            <div className="max-w-[72vw] truncate rounded-full bg-sky-50/85 px-3 py-1 text-[10px] font-medium text-sky-700 backdrop-blur">
+              {activeSendStatusLabel}
             </div>
           </div>
         ) : null}
