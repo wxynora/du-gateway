@@ -66,6 +66,7 @@ const ReasoningTab = lazy(() => import("./tabs/ReasoningTab").then((m) => ({ def
 const ScheduleTab = lazy(() => import("./tabs/ScheduleTab").then((m) => ({ default: m.ScheduleTab })));
 const AlarmTab = lazy(() => import("./tabs/AlarmTab").then((m) => ({ default: m.AlarmTab })));
 const MemoryDebugTab = lazy(() => import("./tabs/MemoryDebugTab").then((m) => ({ default: m.MemoryDebugTab })));
+const MemoryNebulaTab = lazy(() => import("./tabs/MemoryNebulaTab").then((m) => ({ default: m.MemoryNebulaTab })));
 const DuDayTab = lazy(() => import("./tabs/DuDayTab").then((m) => ({ default: m.DuDayTab })));
 const DuNotebookTab = lazy(() => import("./tabs/DuNotebookTab").then((m) => ({ default: m.DuNotebookTab })));
 const WenyouTab = lazy(() => import("./tabs/WenyouTab").then((m) => ({ default: m.WenyouTab })));
@@ -112,6 +113,7 @@ export function AppShell({
   const [showDuDay, setShowDuDay] = useState(false);
   const [showStayWithDu, setShowStayWithDu] = useState(false);
   const [showPixelHome, setShowPixelHome] = useState(false);
+  const [showMemoryNebula, setShowMemoryNebula] = useState(false);
   const [showCoRead, setShowCoRead] = useState(false);
   const [showListenWithDu, setShowListenWithDu] = useState(false);
   const [listenWithDuMounted, setListenWithDuMounted] = useState(false);
@@ -460,6 +462,10 @@ export function AppShell({
         setShowPixelHome(false);
         return;
       }
+      if (showMemoryNebula) {
+        setShowMemoryNebula(false);
+        return;
+      }
       if (showCoRead) {
         setShowCoRead(false);
         return;
@@ -501,6 +507,7 @@ export function AppShell({
     showCoRead,
     showListenWithDu,
     showDuDay,
+    showMemoryNebula,
     showPixelHome,
     showPersonalization,
     showSchedule,
@@ -529,6 +536,11 @@ export function AppShell({
               icon={<HomeIconMini />}
               label="小家"
               onClick={() => setShowPixelHome(true)}
+            />
+            <PageCardRow
+              icon={<CpuIcon />}
+              label="记忆星云"
+              onClick={() => setShowMemoryNebula(true)}
             />
             <PageCardRow
               icon={<BookOpenIcon />}
@@ -639,6 +651,7 @@ export function AppShell({
     showDuDay ||
     showStayWithDu ||
     showPixelHome ||
+    showMemoryNebula ||
     showCoRead ||
     showListenWithDu ||
     showDiagnostics ||
@@ -834,6 +847,11 @@ export function AppShell({
       ) : null}
       {showPixelHome ? (
         <LazyPane><PixelHomeTab /></LazyPane>
+      ) : null}
+      {showMemoryNebula ? (
+        <FullScreenPane title="记忆星云" accent="neutral" headerMode="simple" onBack={() => setShowMemoryNebula(false)}>
+          <LazyPane><MemoryNebulaTab /></LazyPane>
+        </FullScreenPane>
       ) : null}
       {showCoRead ? <LazyPane><CoReadScreen onBack={() => setShowCoRead(false)} windowId={sharedChatWindowId} /></LazyPane> : null}
       {listenWithDuMounted ? (
