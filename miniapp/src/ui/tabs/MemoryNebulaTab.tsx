@@ -88,6 +88,8 @@ type MemoryNode = {
   title: string;
   contentTitle: string;
   type: "core" | "dynamic";
+  importance?: number;
+  coreGlow?: boolean;
   emotion: "positive" | "negative" | "neutral";
   desc: string;
   connections: string[];
@@ -239,6 +241,22 @@ function formatMemoryCoord({
   return `${formatTimeCoord(time)} / W${weight} / ${formatScoreCoord(score ?? null, mentionCount)}`;
 }
 
+function memoryWeightOpacity(importance: unknown, type: MemoryNode["type"]) {
+  const fallback = type === "core" ? 4 : 2;
+  const numeric = Number.isFinite(Number(importance)) ? Number(importance) : fallback;
+  const weight = Math.max(0, Math.min(4, numeric));
+  if (weight <= 0) return 0.22;
+  if (weight <= 1) return 0.3;
+  if (weight <= 2) return 0.48;
+  if (weight <= 3) return 0.72;
+  return 1;
+}
+
+function memoryRankWeight(importance: unknown) {
+  const numeric = Number(importance);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
 function contentKey(content: string) {
   return String(content || "").replace(/\s+/g, "").trim();
 }
@@ -359,6 +377,7 @@ function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryRe
       }),
       contentTitle: pickTitle(content),
       type: "core",
+      importance: item.importance,
       emotion: normalizeEmotion(item.emotion_label),
       desc: content,
       connections: [],
@@ -386,13 +405,27 @@ function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryRe
       }),
       contentTitle: pickTitle(content),
       type: "dynamic",
+      importance: item.importance,
       emotion: normalizeEmotion(item.emotion_label),
       desc: content,
       connections: Array.from(eventIndex.connections.get(id) || []),
     });
   });
 
-  return nodes;
+  const glowingCoreIds = new Set(
+    nodes
+      .filter((node) => node.type === "core")
+      .slice()
+      .sort((a, b) => memoryRankWeight(b.importance) - memoryRankWeight(a.importance))
+      .slice(0, 20)
+      .map((node) => node.id),
+  );
+
+  return nodes.map((node) => (
+    node.type === "core" && glowingCoreIds.has(node.id)
+      ? { ...node, coreGlow: true }
+      : node
+  ));
 }
 
 function useMeasuredSize(ref: React.RefObject<HTMLDivElement | null>) {
@@ -634,13 +667,20 @@ export function MemoryNebulaTab({ onBack }: MemoryNebulaTabProps) {
           if (!p) return null;
           const active = activeNode?.id === node.id;
           const related = relatedIds.has(node.id);
-          const base = node.type === "core" ? 0.82 : 0.86;
+          const base = node.type === "core" ? 0.7 : 0.74;
           const focus = active ? 1.84 : related ? 1.12 : 1;
           const starScale = base * focus * p.depth;
+          const depthOpacity = Math.max(0.22, Math.min(1, 0.42 + p.depth * 0.42));
+          const weightedOpacity = depthOpacity * memoryWeightOpacity(node.importance, node.type);
+          const starOpacity = active
+            ? Math.max(weightedOpacity, 0.86)
+            : related
+              ? Math.max(weightedOpacity, 0.58)
+              : weightedOpacity;
           const starStyle = {
             left: p.x,
             top: p.y,
-            opacity: Math.max(0.22, Math.min(1, 0.42 + p.depth * 0.42)),
+            opacity: starOpacity,
             transform: `translate(-50%, -50%) scale(${starScale})`,
             zIndex: Math.round(50 + p.z),
             "--label-scale": String(1 / Math.max(0.72, starScale)),
@@ -649,7 +689,7 @@ export function MemoryNebulaTab({ onBack }: MemoryNebulaTabProps) {
             <button
               key={node.id}
               type="button"
-              className={`star star-${node.type} ${active ? "active" : ""} ${related ? "related" : ""}`}
+              className={`star star-${node.type} ${node.coreGlow ? "core-glow" : ""} ${active ? "active" : ""} ${related ? "related" : ""}`}
               data-emotion={node.emotion}
               style={starStyle}
               onClick={(e) => {
@@ -868,14 +908,14 @@ const memoryNebulaCss = `
   animation: nebulaPulse 4s infinite ease-in-out;
 }
 .star-core {
-  width: 5.5px;
-  height: 5.5px;
+  width: 4.6px;
+  height: 4.6px;
   background: #f2e3b6;
   box-shadow: 0 0 3px rgba(242, 227, 182, 0.32);
 }
 .star-dynamic {
-  width: 3.5px;
-  height: 3.5px;
+  width: 2.8px;
+  height: 2.8px;
   background: #fff;
   box-shadow: 0 0 2px rgba(255, 255, 255, 0.32);
 }
@@ -921,6 +961,12 @@ const memoryNebulaCss = `
 .mode-mood .star-dynamic[data-emotion="neutral"] { background: #dfe7ff; box-shadow: 0 0 12px rgba(223, 231, 255, 0.56); }
 .star.related::before { opacity: 0.22; }
 .star.active::before { opacity: 0.74; }
+.star-core.core-glow {
+  box-shadow: 0 0 5px rgba(242, 227, 182, 0.54), 0 0 14px rgba(242, 227, 182, 0.2);
+}
+.star-core.core-glow::before {
+  opacity: 0.2;
+}
 .star.related { filter: brightness(1.08) drop-shadow(0 0 7px rgba(157, 211, 255, 0.22)); }
 .star.active { filter: brightness(1.24) drop-shadow(0 0 16px rgba(157, 211, 255, 0.48)) drop-shadow(0 0 28px rgba(242, 227, 182, 0.2)); }
 .star.active .star-label,
