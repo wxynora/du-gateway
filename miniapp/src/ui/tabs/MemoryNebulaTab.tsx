@@ -85,12 +85,8 @@ type MemoryNode = {
   type: "core" | "dynamic";
   emotion: "positive" | "negative" | "neutral";
   anchor?: string;
-  asterism?: string;
-  date: string;
   desc: string;
-  coord: string;
   connections: string[];
-  importance?: number;
 };
 
 type ProjectedPoint = {
@@ -170,10 +166,8 @@ function hashText(text: string) {
   return h >>> 0;
 }
 
-function pickTitle(content: string, tag?: string) {
+function pickTitle(content: string) {
   const clean = String(content || "").replace(/\s+/g, " ").trim();
-  const label = String(tag || "").trim();
-  if (label && label !== "default") return label;
   if (!clean) return "Memory";
   return clean.length > 18 ? `${clean.slice(0, 18)}...` : clean;
 }
@@ -189,12 +183,6 @@ function normalizeEmotion(raw?: string): MemoryNode["emotion"] {
 
 function memoryId(item: { id?: string; memory_id?: string } | null | undefined, fallback: string) {
   return String(item?.memory_id || item?.id || fallback).trim();
-}
-
-function memoryDate(item: DynamicMemory) {
-  const raw = String(item.last_mentioned || item.created_at || "").trim();
-  if (!raw) return "DYNAMIC MEMORY";
-  return raw.length > 10 ? raw.slice(0, 10) : raw;
 }
 
 function nodePosition(seed: string, index: number, type: MemoryNode["type"]) {
@@ -275,16 +263,12 @@ function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryRe
     nodes.push({
       id,
       ...pos,
-      title: pickTitle(content, item.tag),
+      title: pickTitle(content),
       type: "core",
       emotion: normalizeEmotion(item.emotion_label),
-      anchor: index === 0 ? "Polaris" : index === 1 ? "Vega" : "Anchor",
-      asterism: `${pickTitle(content, item.tag)} Asterism`,
-      date: "CORE MEMORY",
+      anchor: "核心",
       desc: content,
-      coord: `imp ${item.importance ?? "-"} | mention ${item.mention_count ?? 0}`,
       connections: [],
-      importance: item.importance,
     });
   });
 
@@ -301,14 +285,11 @@ function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryRe
     nodes.push({
       id,
       ...pos,
-      title: pickTitle(content, item.tag),
+      title: pickTitle(content),
       type: "dynamic",
       emotion: normalizeEmotion(item.emotion_label),
-      date: memoryDate(item),
       desc: content,
-      coord: `imp ${item.importance ?? "-"} | mention ${item.mention_count ?? 0}`,
       connections: Array.from(eventConnections.get(id) || []),
-      importance: item.importance,
     });
   });
 
@@ -345,6 +326,8 @@ export function MemoryNebulaTab() {
   const [atlasVisible, setAtlasVisible] = useState(true);
   const [rotation, setRotation] = useState({ x: 0.18, y: -0.16 });
   const dragRef = useRef({ active: false, moved: false, sx: 0, sy: 0, lx: 0, ly: 0 });
+  const rotationRef = useRef(rotation);
+  const frameRef = useRef<number | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -386,8 +369,17 @@ export function MemoryNebulaTab() {
     void reload();
   }, [reload]);
 
+  useEffect(() => {
+    rotationRef.current = rotation;
+  }, [rotation]);
+
+  useEffect(() => {
+    return () => {
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+    };
+  }, []);
+
   const nodes = useMemo(() => collectNodes(data, dynamicData), [data, dynamicData]);
-  const coreNodes = useMemo(() => nodes.filter((node) => node.type === "core"), [nodes]);
   const activeNode = nodes.find((node) => node.id === activeId) || null;
 
   const projected = useMemo(() => {
@@ -435,10 +427,15 @@ export function MemoryNebulaTab() {
     if (Math.abs(clientX - drag.sx) + Math.abs(clientY - drag.sy) > 4) drag.moved = true;
     drag.lx = clientX;
     drag.ly = clientY;
-    setRotation((prev) => ({
-      x: Math.max(-1.15, Math.min(1.15, prev.x - dy * 0.004)),
-      y: prev.y + dx * 0.006,
-    }));
+    rotationRef.current = {
+      x: Math.max(-1.15, Math.min(1.15, rotationRef.current.x - dy * 0.004)),
+      y: rotationRef.current.y + dx * 0.006,
+    };
+    if (frameRef.current !== null) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      setRotation(rotationRef.current);
+    });
   }
 
   function pointerEnd() {
@@ -464,7 +461,7 @@ export function MemoryNebulaTab() {
   return (
     <div
       ref={rootRef}
-      className={`memory-nebula-root -mx-3.5 min-h-[calc(100dvh-74px)] overflow-hidden ${activeNode ? "is-focused" : ""} ${viewMode === "anchor" ? "mode-anchor" : ""} ${viewMode === "mood" ? "mode-mood" : ""} ${atlasVisible ? "" : "atlas-off"}`}
+      className={`memory-nebula-root h-full min-h-full overflow-hidden ${activeNode ? "is-focused" : ""} ${viewMode === "anchor" ? "mode-anchor" : ""} ${viewMode === "mood" ? "mode-mood" : ""} ${atlasVisible ? "" : "atlas-off"}`}
       onMouseDown={(e) => pointerStart(e.clientX, e.clientY)}
       onMouseMove={(e) => pointerMove(e.clientX, e.clientY)}
       onMouseUp={pointerEnd}
@@ -590,37 +587,11 @@ export function MemoryNebulaTab() {
       ) : null}
 
       {activeNode ? (
-        <div
-          className="private-asterism active"
-          style={{
-            left: projected.get(activeNode.id)?.x || size.width / 2,
-            top: Math.max(64, (projected.get(activeNode.id)?.y || size.height / 2) - 54),
-          }}
-        >
-          {activeNode.asterism || `${activeNode.title} Asterism`}
-        </div>
-      ) : null}
-
-      {activeNode ? (
         <div className="logbook active" onClick={(e) => e.stopPropagation()}>
           <div className="logbook-header">
-            <div>
-              <p className="memory-date">{activeNode.date}</p>
-              <h2 className="memory-title">{activeNode.title}</h2>
-            </div>
             <button type="button" className="close-btn" onClick={() => setActiveId("")} aria-label="关闭记忆卡片">×</button>
           </div>
           <div className="memory-body">{activeNode.desc}</div>
-          <div className="metadata-grid">
-            <div className="meta-item">
-              <label>Coordinates</label>
-              <span>{activeNode.coord}</span>
-            </div>
-            <div className="meta-item">
-              <label>Intensity</label>
-              <span>{activeNode.anchor ? `${activeNode.anchor} Anchor` : "Temporal Flicker"}</span>
-            </div>
-          </div>
         </div>
       ) : null}
     </div>
@@ -684,7 +655,7 @@ const memoryNebulaCss = `
   pointer-events: auto;
 }
 .app-title {
-  font-family: "Times New Roman", Georgia, serif;
+  font-family: "Playfair Display", Georgia, "Times New Roman", serif;
   font-size: 18px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
@@ -751,6 +722,7 @@ const memoryNebulaCss = `
   border-radius: 50%;
   padding: 0;
   cursor: pointer;
+  will-change: transform, opacity;
   transition: opacity 0.26s ease, filter 0.26s ease, box-shadow 0.3s ease;
 }
 .star::before {
@@ -763,7 +735,10 @@ const memoryNebulaCss = `
   transform: translate(-50%, -50%);
   border-radius: 50%;
   filter: blur(4px);
-  opacity: 0.6;
+  opacity: 0.34;
+}
+.star-core::before,
+.star.active::before {
   animation: nebulaPulse 4s infinite ease-in-out;
 }
 .star-core {
@@ -776,7 +751,7 @@ const memoryNebulaCss = `
   width: 4px;
   height: 4px;
   background: #fff;
-  box-shadow: 0 0 10px rgba(255, 255, 255, 0.6);
+  box-shadow: 0 0 7px rgba(255, 255, 255, 0.46);
 }
 .star-label {
   position: absolute;
@@ -786,7 +761,7 @@ const memoryNebulaCss = `
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  font-family: Georgia, "Songti SC", serif;
+  font-family: "Playfair Display", Georgia, "Times New Roman", serif;
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -833,56 +808,37 @@ const memoryNebulaCss = `
 .star.related .star-label { opacity: 0.82; transform: translateX(-50%) translateY(2px); }
 .star.active .anchor-name,
 .star.related .anchor-name { opacity: 0.86; transform: translateX(-50%) translateY(-2px); }
-.private-asterism {
-  position: absolute;
-  z-index: 16;
-  transform: translate(-50%, -50%);
-  color: rgba(242, 227, 182, 0.42);
-  font-size: 8px;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  pointer-events: none;
-  opacity: 0;
-  text-shadow: 0 0 18px rgba(4, 5, 26, 0.96);
-}
-.private-asterism.active { opacity: 0.72; }
 .logbook {
   position: absolute;
   left: 50%;
   bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
   z-index: 30;
-  width: min(292px, calc(100% - 44px));
+  width: min(314px, calc(100% - 48px));
   transform: translateX(-50%);
-  border: 1px solid rgba(242, 227, 182, 0.045);
-  border-radius: 18px;
-  background: rgba(6, 8, 30, 0.34);
-  padding: 14px 15px 13px;
-  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.035);
-  backdrop-filter: blur(18px) saturate(1.18);
+  border: 1px solid rgba(242, 227, 182, 0.06);
+  border-radius: 16px;
+  background: rgba(7, 9, 30, 0.22);
+  padding: 10px 13px 13px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(16px) saturate(1.08);
 }
-.logbook-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
-.memory-date { margin-bottom: 4px; color: #8e94af; opacity: 0.76; font-size: 8px; letter-spacing: 0.16em; text-transform: uppercase; }
-.memory-title { color: #f0f0d0; font-family: Georgia, "Songti SC", serif; font-size: 18px; font-style: italic; line-height: 1.04; }
-.close-btn { border: 0; background: transparent; color: rgba(142, 148, 175, 0.9); font-size: 22px; line-height: 1; }
+.logbook-header { display: flex; justify-content: flex-end; margin-bottom: 2px; }
+.close-btn {
+  border: 0;
+  background: transparent;
+  color: rgba(223, 231, 255, 0.52);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 0 2px 8px;
+}
 .memory-body {
-  max-height: 78px;
+  max-height: 116px;
   overflow-y: auto;
-  color: #8e94af;
+  color: rgba(232, 236, 255, 0.76);
   font-size: 12px;
-  line-height: 1.45;
-  -webkit-mask-image: linear-gradient(to bottom, black 86%, transparent 100%);
-  mask-image: linear-gradient(to bottom, black 86%, transparent 100%);
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
-.metadata-grid {
-  margin-top: 13px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  border-top: 0.5px solid rgba(142, 148, 175, 0.14);
-  padding-top: 10px;
-}
-.meta-item label { display: block; margin-bottom: 3px; color: #f2e3b6; opacity: 0.72; font-size: 7px; letter-spacing: 0.18em; text-transform: uppercase; }
-.meta-item span { color: rgba(240, 240, 208, 0.68); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
 .memory-empty-state {
   position: absolute;
   left: 50%;
@@ -904,7 +860,7 @@ const memoryNebulaCss = `
 .memory-empty-state h2 {
   margin-bottom: 9px;
   color: #f0f0d0;
-  font-family: Georgia, "Songti SC", serif;
+  font-family: "Playfair Display", Georgia, "Times New Roman", serif;
   font-size: 20px;
   font-style: italic;
   line-height: 1.15;

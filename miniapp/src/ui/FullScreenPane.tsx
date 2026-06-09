@@ -6,6 +6,8 @@ export function FullScreenPane({
   accent,
   onBack,
   headerMode = "default",
+  headerTone = "light",
+  contentMode = "default",
   headerRightPortalId,
   edgeSwipeBack = false,
   children,
@@ -14,6 +16,8 @@ export function FullScreenPane({
   accent: "du" | "wenyou" | "neutral";
   onBack: () => void;
   headerMode?: "default" | "simple";
+  headerTone?: "light" | "dark";
+  contentMode?: "default" | "bleed";
   headerRightPortalId?: string;
   edgeSwipeBack?: boolean;
   children: React.ReactNode;
@@ -57,7 +61,7 @@ export function FullScreenPane({
 
   return (
     <div
-      className="absolute inset-0 z-30 flex w-full max-w-full flex-col overflow-x-hidden bg-[#FDFDFD]"
+      className={`absolute inset-0 z-30 flex w-full max-w-full flex-col overflow-x-hidden ${headerTone === "dark" ? "bg-[#04051a]" : "bg-[#FDFDFD]"}`}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -66,9 +70,9 @@ export function FullScreenPane({
       }}
     >
       {headerMode === "simple" ? (
-        <div className="border-b border-gray-100/50 bg-white px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)]">
+        <div className={`px-4 pb-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] ${headerTone === "dark" ? "border-b border-white/10 bg-[#050720] text-[#f0f0d0]" : "border-b border-gray-100/50 bg-white"}`}>
           <div className="flex items-center justify-between gap-3">
-            <button className="flex min-w-0 items-center gap-2 text-gray-900" onClick={onBack}>
+            <button className={`flex min-w-0 items-center gap-2 ${headerTone === "dark" ? "text-[#f0f0d0]" : "text-gray-900"}`} onClick={onBack}>
               <ChevronLeftIcon />
               <span className="truncate text-[15px] font-medium">{title}</span>
             </button>
@@ -84,7 +88,7 @@ export function FullScreenPane({
           {headerRightPortalId ? <div id={headerRightPortalId} className="flex h-8 min-w-8 shrink-0 items-center justify-end" /> : null}
         </div>
       )}
-      <div className={`min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto px-3.5 pb-4 ${headerMode === "simple" ? "pt-0" : "pt-[82px]"}`}>{children}</div>
+      <div className={contentMode === "bleed" ? "min-h-0 w-full max-w-full flex-1 overflow-hidden p-0" : `min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto px-3.5 pb-4 ${headerMode === "simple" ? "pt-0" : "pt-[82px]"}`}>{children}</div>
     </div>
   );
 }

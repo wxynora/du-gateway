@@ -849,7 +849,7 @@ export function AppShell({
         <LazyPane><PixelHomeTab /></LazyPane>
       ) : null}
       {showMemoryNebula ? (
-        <FullScreenPane title="记忆星云" accent="neutral" headerMode="simple" onBack={() => setShowMemoryNebula(false)}>
+        <FullScreenPane title="记忆星云" accent="neutral" headerMode="simple" headerTone="dark" contentMode="bleed" onBack={() => setShowMemoryNebula(false)}>
           <LazyPane><MemoryNebulaTab /></LazyPane>
         </FullScreenPane>
       ) : null}
