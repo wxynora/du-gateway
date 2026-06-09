@@ -7,6 +7,7 @@ type CoreMemory = {
   memory_id?: string;
   content?: string;
   tag?: string;
+  promoted_at?: string;
   importance?: number;
   mention_count?: number;
   emotion_label?: string;
@@ -47,6 +48,7 @@ type RecallEvent = {
     tag?: string;
     importance?: number;
     mention_count?: number;
+    final_score?: number;
   }>;
   referenced_memories?: Array<{
     id?: string;
@@ -55,7 +57,9 @@ type RecallEvent = {
     tag?: string;
     importance?: number;
     mention_count?: number;
+    final_score?: number;
   }>;
+  timestamp?: string;
 };
 
 type MemoryDebugResp = {
@@ -82,11 +86,17 @@ type MemoryNode = {
   y: number;
   z: number;
   title: string;
+  contentTitle: string;
   type: "core" | "dynamic";
   emotion: "positive" | "negative" | "neutral";
-  anchor?: string;
   desc: string;
   connections: string[];
+};
+
+type EventMemoryIndex = {
+  connections: Map<string, Set<string>>;
+  scores: Map<string, number>;
+  timestamps: Map<string, string>;
 };
 
 type ProjectedPoint = {
@@ -172,6 +182,73 @@ function pickTitle(content: string) {
   return clean.length > 18 ? `${clean.slice(0, 18)}...` : clean;
 }
 
+function buildMemoryVerse(content: string) {
+  const clean = String(content || "").replace(/\s+/g, " ").trim();
+  if (!clean) return ["Memory"];
+
+  const pieces: string[] = [];
+  clean
+    .split(/[，。！？；：、\n]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((part) => {
+      if (part.length <= 18) {
+        pieces.push(part);
+        return;
+      }
+      for (let index = 0; index < part.length; index += 18) {
+        pieces.push(part.slice(index, index + 18));
+      }
+    });
+
+  return (pieces.length ? pieces : [clean]).slice(0, 5);
+}
+
+function memoryVerseClass(line: string, index: number, total: number) {
+  if (index === 0 && line.length <= 8) return "memory-phrase-title";
+  if (line.length >= 12 || index === Math.floor(total / 2)) return "memory-phrase-loud";
+  if (index === total - 1) return "memory-phrase-soft";
+  return "memory-phrase-mid";
+}
+
+function asNumber(value: unknown): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatTimeCoord(raw?: string) {
+  const text = String(raw || "").trim();
+  if (!text) return "T--";
+  const date = new Date(text);
+  if (!Number.isFinite(date.getTime())) return "T--";
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `T${month}.${day}`;
+}
+
+function formatScoreCoord(score: number | null, mentionCount?: number) {
+  if (score !== null) {
+    return score <= 1 ? `S${score.toFixed(2)}` : `S${Math.round(score)}`;
+  }
+  const mentions = Math.max(0, Math.min(99, Math.round(Number(mentionCount) || 0)));
+  return `S${String(mentions).padStart(2, "0")}`;
+}
+
+function formatMemoryCoord({
+  time,
+  importance,
+  score,
+  mentionCount,
+}: {
+  time?: string;
+  importance?: number;
+  score?: number | null;
+  mentionCount?: number;
+}) {
+  const weight = Math.max(0, Math.min(9, Math.round(Number(importance) || 0)));
+  return `${formatTimeCoord(time)} / W${weight} / ${formatScoreCoord(score ?? null, mentionCount)}`;
+}
+
 function contentKey(content: string) {
   return String(content || "").replace(/\s+/g, "").trim();
 }
@@ -225,13 +302,23 @@ function eventMemoryIds(event: RecallEvent, eventIndex: number) {
   return Array.from(new Set(ids));
 }
 
-function buildEventConnections(data: MemoryDebugResp | null) {
+function buildEventIndex(data: MemoryDebugResp | null): EventMemoryIndex {
   const connections = new Map<string, Set<string>>();
+  const scores = new Map<string, number>();
+  const timestamps = new Map<string, string>();
   const events = [
     ...(data?.recalls || []),
     ...(data?.search_memory_events || []),
     ...(data?.citation_events || []),
   ];
+  const rememberMeta = (id: string, score?: number, timestamp?: string) => {
+    if (!id) return;
+    const numericScore = asNumber(score);
+    if (numericScore !== null && numericScore > (scores.get(id) ?? -Infinity)) {
+      scores.set(id, numericScore);
+    }
+    if (timestamp && !timestamps.has(id)) timestamps.set(id, timestamp);
+  };
   events.forEach((event, eventIndex) => {
     const ids = eventMemoryIds(event, eventIndex).slice(0, 8);
     ids.forEach((id, index) => {
@@ -240,16 +327,27 @@ function buildEventConnections(data: MemoryDebugResp | null) {
         if (other !== id && Math.abs(otherIndex - index) <= 2) related.add(other);
       });
       connections.set(id, related);
+      rememberMeta(id, undefined, event.timestamp);
+    });
+    (event.recalled_lines || []).forEach((line, lineIndex) => {
+      if (typeof line === "string") return;
+      rememberMeta(memoryId(line, `line-${eventIndex}-${lineIndex}`), line.final_score, event.timestamp);
+    });
+    (event.recalled_items || []).forEach((item, itemIndex) => {
+      rememberMeta(memoryId(item, `item-${eventIndex}-${itemIndex}`), item.final_score, event.timestamp);
+    });
+    (event.referenced_memories || []).forEach((item, itemIndex) => {
+      rememberMeta(memoryId(item, `ref-${eventIndex}-${itemIndex}`), item.final_score, event.timestamp);
     });
   });
-  return connections;
+  return { connections, scores, timestamps };
 }
 
 function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryResp | null): MemoryNode[] {
   const nodes: MemoryNode[] = [];
   const seen = new Set<string>();
   const seenContents = new Set<string>();
-  const eventConnections = buildEventConnections(data);
+  const eventIndex = buildEventIndex(data);
 
   const coreItems = data?.core_cache?.items || [];
   coreItems.slice(0, 12).forEach((item, index) => {
@@ -263,10 +361,15 @@ function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryRe
     nodes.push({
       id,
       ...pos,
-      title: pickTitle(content),
+      title: formatMemoryCoord({
+        time: item.promoted_at || eventIndex.timestamps.get(id),
+        importance: item.importance,
+        score: eventIndex.scores.get(id) ?? null,
+        mentionCount: item.mention_count,
+      }),
+      contentTitle: pickTitle(content),
       type: "core",
       emotion: normalizeEmotion(item.emotion_label),
-      anchor: "核心",
       desc: content,
       connections: [],
     });
@@ -285,11 +388,17 @@ function collectNodes(data: MemoryDebugResp | null, dynamicData: DynamicMemoryRe
     nodes.push({
       id,
       ...pos,
-      title: pickTitle(content),
+      title: formatMemoryCoord({
+        time: item.last_mentioned || item.created_at || eventIndex.timestamps.get(id),
+        importance: item.importance,
+        score: eventIndex.scores.get(id) ?? null,
+        mentionCount: item.mention_count,
+      }),
+      contentTitle: pickTitle(content),
       type: "dynamic",
       emotion: normalizeEmotion(item.emotion_label),
       desc: content,
-      connections: Array.from(eventConnections.get(id) || []),
+      connections: Array.from(eventIndex.connections.get(id) || []),
     });
   });
 
@@ -313,7 +422,7 @@ function useMeasuredSize(ref: React.RefObject<HTMLDivElement | null>) {
   return size;
 }
 
-export function MemoryNebulaTab() {
+export function MemoryNebulaTab({ onBack }: { onBack?: () => void }) {
   const toast = useToast();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useMeasuredSize(rootRef);
@@ -381,6 +490,7 @@ export function MemoryNebulaTab() {
 
   const nodes = useMemo(() => collectNodes(data, dynamicData), [data, dynamicData]);
   const activeNode = nodes.find((node) => node.id === activeId) || null;
+  const activeVerse = useMemo(() => (activeNode ? buildMemoryVerse(activeNode.desc) : []), [activeNode]);
 
   const projected = useMemo(() => {
     const points = new Map<string, ProjectedPoint>();
@@ -504,7 +614,7 @@ export function MemoryNebulaTab() {
 
       <div className="hud">
         <div className="hud-top">
-          <button type="button" className="crescent-btn" onClick={(e) => { e.stopPropagation(); void reload(); }} aria-label="刷新记忆星云">
+          <button type="button" className="crescent-btn" onClick={(e) => { e.stopPropagation(); if (onBack) onBack(); else void reload(); }} aria-label="返回日常">
             <svg className="crescent-svg" width="24" height="24" viewBox="0 0 24 24">
               <path d="M12 3a9 9 0 1 0 9 9 9.011 9.011 0 0 1-9-9Z" />
             </svg>
@@ -544,10 +654,9 @@ export function MemoryNebulaTab() {
                 e.stopPropagation();
                 selectNode(node);
               }}
-              aria-label={node.title}
+              aria-label={`${node.title} ${node.contentTitle}`}
             >
               <span className="star-label">{node.title}</span>
-              {node.anchor ? <span className="anchor-name">{node.anchor}</span> : null}
             </button>
           );
         })}
@@ -587,11 +696,20 @@ export function MemoryNebulaTab() {
       ) : null}
 
       {activeNode ? (
-        <div className="logbook active" onClick={(e) => e.stopPropagation()}>
-          <div className="logbook-header">
-            <button type="button" className="close-btn" onClick={() => setActiveId("")} aria-label="关闭记忆卡片">×</button>
+        <div className="memory-verse-layer" aria-live="polite">
+          <div className="memory-observation memory-observation-left">
+            MEMORY {activeNode.type.toUpperCase()} // {activeNode.title}
           </div>
-          <div className="memory-body">{activeNode.desc}</div>
+          <div className="memory-observation memory-observation-right">
+            EMOTION: {activeNode.emotion.toUpperCase()} // INDEX: {activeNode.id.slice(0, 8)}
+          </div>
+          <div className="memory-verse" aria-label={activeNode.desc}>
+            {activeVerse.map((line, index) => (
+              <div key={`${activeNode.id}-${index}`} className={`memory-phrase ${memoryVerseClass(line, index, activeVerse.length)}`}>
+                {line}
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
     </div>
@@ -755,32 +873,18 @@ const memoryNebulaCss = `
 }
 .star-label {
   position: absolute;
-  top: 15px;
+  top: 13px;
   left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  font-family: "Playfair Display", Georgia, "Times New Roman", serif;
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  color: rgba(232, 236, 255, 0.62);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   text-shadow: 0 0 14px rgba(4, 5, 26, 0.9);
-  transition: opacity 0.25s ease, transform 0.25s ease;
-}
-.anchor-name {
-  position: absolute;
-  bottom: 15px;
-  left: 50%;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  color: rgba(242, 227, 182, 0.46);
-  opacity: 0.52;
-  pointer-events: none;
-  font-size: 7px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  text-shadow: 0 0 12px rgba(4, 5, 26, 0.95);
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
 .constellation-line {
@@ -796,8 +900,7 @@ const memoryNebulaCss = `
 .mode-anchor .sky-atlas { opacity: 0.18; }
 .mode-anchor .star-dynamic { opacity: 0.12 !important; filter: grayscale(1); }
 .mode-anchor .star-core { filter: brightness(1.18) drop-shadow(0 0 16px rgba(242, 227, 182, 0.55)); }
-.mode-anchor .star-core .star-label,
-.mode-anchor .star-core .anchor-name { opacity: 0.92; transform: translateX(-50%) translateY(2px); }
+.mode-anchor .star-core .star-label { opacity: 0.92; transform: translateX(-50%) translateY(2px); }
 .mode-mood .star-core { opacity: 0.38 !important; filter: grayscale(0.7); }
 .mode-mood .star-dynamic { width: 6px; height: 6px; }
 .mode-mood .star-dynamic[data-emotion="positive"] { background: #f2e3b6; box-shadow: 0 0 14px rgba(242, 227, 182, 0.72), 0 0 28px rgba(242, 227, 182, 0.28); }
@@ -806,38 +909,76 @@ const memoryNebulaCss = `
 .star.active { filter: none; }
 .star.active .star-label,
 .star.related .star-label { opacity: 0.82; transform: translateX(-50%) translateY(2px); }
-.star.active .anchor-name,
-.star.related .anchor-name { opacity: 0.86; transform: translateX(-50%) translateY(-2px); }
-.logbook {
+.memory-verse-layer {
   position: absolute;
-  left: 50%;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
-  z-index: 30;
-  width: min(314px, calc(100% - 48px));
-  transform: translateX(-50%);
-  border: 1px solid rgba(242, 227, 182, 0.06);
-  border-radius: 16px;
-  background: rgba(7, 9, 30, 0.22);
-  padding: 10px 13px 13px;
-  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(16px) saturate(1.08);
+  inset: 0;
+  z-index: 32;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 88px 48px 92px;
+  pointer-events: none;
 }
-.logbook-header { display: flex; justify-content: flex-end; margin-bottom: 2px; }
-.close-btn {
-  border: 0;
-  background: transparent;
-  color: rgba(223, 231, 255, 0.52);
-  font-size: 18px;
-  line-height: 1;
-  padding: 0 0 2px 8px;
+.memory-verse {
+  width: min(560px, calc(100vw - 96px));
+  transform: translateY(-2vh);
+  text-align: center;
+  animation: memoryVerseIn 0.48s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.memory-body {
-  max-height: 116px;
-  overflow-y: auto;
-  color: rgba(232, 236, 255, 0.76);
-  font-size: 12px;
-  line-height: 1.55;
-  white-space: pre-wrap;
+.memory-phrase {
+  margin: 8px 0;
+  color: rgba(238, 244, 255, 0.78);
+  font-family: "Inter", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-shadow: 0 0 18px rgba(126, 183, 255, 0.28), 0 0 34px rgba(41, 96, 176, 0.24);
+}
+.memory-phrase-title {
+  color: #9fdcff;
+  font-size: clamp(28px, 8.5vw, 52px);
+  font-weight: 800;
+  line-height: 1.05;
+  text-shadow: 0 0 16px rgba(95, 190, 255, 0.68), 0 0 42px rgba(38, 104, 190, 0.48);
+}
+.memory-phrase-loud {
+  color: rgba(245, 249, 255, 0.96);
+  font-size: clamp(22px, 6vw, 34px);
+  font-weight: 800;
+  text-shadow: 0 0 16px rgba(196, 224, 255, 0.72), 0 0 40px rgba(73, 129, 216, 0.4);
+}
+.memory-phrase-mid {
+  color: rgba(226, 234, 250, 0.78);
+  font-size: clamp(16px, 4.3vw, 23px);
+  font-weight: 650;
+}
+.memory-phrase-soft {
+  color: rgba(209, 217, 236, 0.54);
+  font-size: clamp(13px, 3.4vw, 18px);
+  font-weight: 500;
+  font-style: italic;
+}
+.memory-observation {
+  position: absolute;
+  max-height: min(72vh, 520px);
+  overflow: hidden;
+  color: rgba(168, 178, 210, 0.58);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  line-height: 1.6;
+  text-transform: uppercase;
+  text-shadow: 0 0 18px rgba(4, 5, 26, 0.95);
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+}
+.memory-observation-left {
+  left: 20px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  transform: rotate(180deg);
+}
+.memory-observation-right {
+  right: 18px;
+  top: calc(env(safe-area-inset-top, 0px) + 24px);
 }
 .memory-empty-state {
   position: absolute;
@@ -880,6 +1021,21 @@ const memoryNebulaCss = `
   font: inherit;
   font-size: 11px;
   letter-spacing: 0.08em;
+}
+@media (max-width: 460px) {
+  .memory-verse-layer { padding-left: 34px; padding-right: 34px; }
+  .memory-verse { width: min(330px, calc(100vw - 84px)); }
+  .memory-observation {
+    font-size: 8px;
+    letter-spacing: 0.14em;
+    opacity: 0.72;
+  }
+  .memory-observation-left { left: 10px; }
+  .memory-observation-right { right: 9px; }
+}
+@keyframes memoryVerseIn {
+  0% { opacity: 0; transform: translateY(1vh) scale(0.98); filter: blur(6px); }
+  100% { opacity: 1; transform: translateY(-2vh) scale(1); filter: blur(0); }
 }
 @keyframes nebulaPulse {
   0%, 100% { opacity: 0.4; transform: translate(-50%, -50%) scale(1); }
