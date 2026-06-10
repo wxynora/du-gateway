@@ -544,7 +544,7 @@ function normalizeAdaptiveThinkingEffort(effort, model) {
 }
 
 function modelSupportsAdaptiveThinking(model) {
-  return /claude-opus-4-(6|7|8)(\b|-|$)/.test(String(model || ""));
+  return /claude-(opus-4-(6|7|8)|fable-5)(\b|-|$)/.test(String(model || ""));
 }
 
 function modelIsClaudeOpus46(model) {
@@ -552,7 +552,7 @@ function modelIsClaudeOpus46(model) {
 }
 
 function modelSupportsThinking(model) {
-  return /claude-(opus|sonnet)-4|claude-3-7-sonnet/.test(String(model || ""));
+  return /claude-(opus|sonnet)-4|claude-3-7-sonnet|claude-fable/.test(String(model || ""));
 }
 
 function convertUsage(usage = {}) {
