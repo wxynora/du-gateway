@@ -367,17 +367,32 @@ def step_clean_images_and_save_desc(body: dict, window_id: str) -> dict:
     messages = body.get("messages") or []
     images = image_desc.extract_images_from_messages(messages)
     for mi, ci, b64, mime in images:
-        msg_id = f"{window_id}_{mi}_{ci}_{hash(b64) % 10**8}"
+        image_id = image_desc.image_description_id(b64, mime)
+        msg_id = f"{window_id}_{mi}_{ci}_{image_id}"
         image_desc.mark_image_description_pending(b64, mime)
         # 异步：转描述并存 R2，不阻塞
-        def _do(img_b64, mid, wid, img_mime):
-            desc = image_desc.image_to_description(img_b64, img_mime)
-            image_desc.finish_image_description(img_b64, img_mime, desc)
+        def _do(img_b64, mid, wid, img_mime, img_id):
+            desc = None
+            try:
+                desc = image_desc.image_to_description(img_b64, img_mime)
+            finally:
+                image_desc.finish_image_description(img_b64, img_mime, desc)
             if desc:
-                r2_store.save_image_description(wid, mid, desc)
+                r2_store.save_recent_image_description(
+                    wid,
+                    img_id,
+                    desc,
+                    mime_type=img_mime,
+                    message_id=mid,
+                )
+            else:
+                logger.warning("image_desc 未生成描述 window_id=%s image_id=%s mime=%s", wid, img_id, img_mime)
 
-        t = threading.Thread(target=_do, args=(b64, msg_id, window_id, mime))
-        t.daemon = True
+        t = threading.Thread(
+            target=_do,
+            args=(b64, msg_id, window_id, mime, image_id),
+            name=f"image-desc-{image_id}",
+        )
         t.start()
     return body
 
@@ -812,6 +827,7 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
     messages = body.get("messages") or []
     inject_label = ""
     rounds = []
+    desc_scope_window_id: str | None = None
     is_telegram_window = window_id.startswith("tg_")
 
     if is_telegram_window:
@@ -836,10 +852,12 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
             merged.sort(key=lambda x: str(x.get("timestamp") or ""))
             rounds = merged[-4:]
             inject_label = "最近的对话"
+            desc_scope_window_id = window_id
     else:
         if not r2_store.has_window_history(window_id):
             rounds = _filter_rounds_for_recent_context(r2_store.get_latest_4_rounds_global() or [])[-4:]
             inject_label = "最近的对话"
+            desc_scope_window_id = None
         else:
             # 已有历史且当前请求消息很少（如 proactive 只发 1 条 user）→ 注入本窗口最近 4 轮
             # force_last4=True 时即使 messages 较多也强制注入。
@@ -848,9 +866,12 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
                     r2_store.get_conversation_rounds(window_id, last_n=12) or []
                 )[-4:]
                 inject_label = "最近的对话"
+                desc_scope_window_id = window_id
 
     if not rounds:
         return body
+    desc_map = r2_store.get_recent_image_description_map(desc_scope_window_id)
+    rounds = image_desc.replace_image_placeholders_in_obj(rounds, desc_map)
     # Telegram 注入时保留来源标签，便于后续扩展其它入口时区分上下文。
     if is_telegram_window:
         lines = []

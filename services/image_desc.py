@@ -4,7 +4,9 @@ import copy
 import hashlib
 import io
 import math
+import re
 import threading
+import time
 import uuid
 from typing import Optional
 
@@ -17,14 +19,17 @@ except Exception:
     ImageOps = None
 
 from config import IMAGE_DESC_API_URL, IMAGE_DESC_API_KEY, IMAGE_DESC_MODEL
+from utils.log import get_logger
 
 
 ANTHROPIC_IMAGE_MAX_LONG_EDGE = 1568
 ANTHROPIC_IMAGE_MAX_PIXELS = 1_150_000
 _RESIZABLE_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
+_IMAGE_PLACEHOLDER_RE = re.compile(r"\[\[DU_IMAGE_DESC:(img_[0-9a-f]{16})\]\]")
 _DESC_CACHE: dict[str, str] = {}
 _DESC_PENDING: dict[str, threading.Event] = {}
 _DESC_LOCK = threading.Lock()
+logger = get_logger(__name__)
 
 
 def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Optional[str]:
@@ -33,6 +38,7 @@ def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Op
     若未配置 API 或调用失败，返回 None（不阻塞主流程）。
     """
     if not IMAGE_DESC_API_URL or not IMAGE_DESC_API_KEY:
+        logger.info("image_desc 跳过：未配置 IMAGE_DESC_API_URL/API_KEY")
         return None
     # 通用格式：带 data URL 的 messages，与 OpenAI 格式兼容
     url = IMAGE_DESC_API_URL.strip().rstrip("/")
@@ -53,6 +59,13 @@ def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Op
                 "content": [
                     {"type": "text", "text": "用一两句话描述这张图片的内容，用于存档检索。"},
                     {
+                        "type": "text",
+                        "text": (
+                            "如果这是表情包、贴纸、梗图或聊天截图，要明确写出“表情包/贴纸/梗图/聊天截图”，"
+                            "并概括画面文字、人物动作和表达的情绪。不要编造看不见的细节。"
+                        ),
+                    },
+                    {
                         "type": "image_url",
                         "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
                     },
@@ -61,13 +74,33 @@ def image_to_description(image_base64: str, mime_type: str = "image/jpeg") -> Op
         ],
         "max_tokens": 200,
     }
+    started = time.perf_counter()
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=15)
         r.raise_for_status()
         data = r.json()
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
-        return content.strip() if content else None
-    except Exception:
+        desc = content.strip() if content else ""
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "image_desc 调用完成 model=%s mime=%s elapsed_ms=%s desc_len=%s",
+            IMAGE_DESC_MODEL,
+            mime_type,
+            elapsed_ms,
+            len(desc),
+        )
+        return desc or None
+    except Exception as e:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        logger.warning(
+            "image_desc 调用失败 model=%s mime=%s elapsed_ms=%s status=%s error=%s",
+            IMAGE_DESC_MODEL,
+            mime_type,
+            elapsed_ms,
+            status,
+            e,
+        )
         return None
 
 
@@ -130,6 +163,17 @@ def image_description_key(image_base64: str, mime_type: str = "image/jpeg") -> s
             mime_type, payload = parsed
     mt = str(mime_type or "image/jpeg").strip().lower()
     return f"{mt}:{hashlib.sha256(payload.encode('utf-8', errors='ignore')).hexdigest()}"
+
+
+def image_description_id(image_base64: str, mime_type: str = "image/jpeg") -> str:
+    key = image_description_key(image_base64, mime_type)
+    digest = key.rsplit(":", 1)[-1]
+    return f"img_{digest[:16]}"
+
+
+def image_placeholder_text(image_id: str) -> str:
+    ident = str(image_id or "").strip()
+    return f"[[DU_IMAGE_DESC:{ident}]]" if ident else "[图片]"
 
 
 def mark_image_description_pending(image_base64: str, mime_type: str = "image/jpeg") -> str:
@@ -202,6 +246,40 @@ def image_part_archive_description(part: dict, wait_seconds: float = 3.0) -> Opt
     desc = image_to_description(payload, mime_type)
     finish_image_description(payload, mime_type, desc)
     return desc
+
+
+def image_part_archive_text(part: dict) -> str:
+    parsed = extract_image_payload_from_part(part)
+    if not parsed:
+        return "[图片]"
+    payload, mime_type = parsed
+    desc = get_cached_image_description(payload, mime_type, wait_seconds=0.0)
+    if desc:
+        return f"[图片：{desc}]"
+    return image_placeholder_text(image_description_id(payload, mime_type))
+
+
+def replace_image_placeholders_in_text(text: str, desc_map: dict[str, str] | None) -> str:
+    if not text or not isinstance(text, str):
+        return text
+    mapping = desc_map or {}
+
+    def _repl(match: re.Match) -> str:
+        image_id = match.group(1)
+        desc = str(mapping.get(image_id) or "").strip()
+        return f"[图片：{desc}]" if desc else "[图片]"
+
+    return _IMAGE_PLACEHOLDER_RE.sub(_repl, text)
+
+
+def replace_image_placeholders_in_obj(obj, desc_map: dict[str, str] | None):
+    if isinstance(obj, str):
+        return replace_image_placeholders_in_text(obj, desc_map)
+    if isinstance(obj, list):
+        return [replace_image_placeholders_in_obj(item, desc_map) for item in obj]
+    if isinstance(obj, dict):
+        return {k: replace_image_placeholders_in_obj(v, desc_map) for k, v in obj.items()}
+    return obj
 
 
 def _encode_resized_image(img) -> tuple[str, str]:

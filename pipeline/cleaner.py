@@ -1,6 +1,6 @@
 # 两条数据流用的清洗逻辑
 # 发给渡：只清 Rikka 预设，不替换表情包（让渡看到 (表情包:名字) 格式并按此输出）
-# 存 R2：完整清洗 = 清 Rikka + 表情包→文字 + 图片→描述/占位符（描述另存 images/）
+# 存 R2：完整清洗 = 清 Rikka + 表情包→文字 + 图片→描述占位符（描述进最近图片表）
 import copy
 import json
 import re
@@ -203,8 +203,7 @@ def clean_message_for_r2(msg: dict) -> dict:
                     raw = _normalize_rikkahub_time_tool_result(raw)
                 out.append({"type": "text", "text": apply_text_cleaning_for_r2(raw, strip_rikkahub_time=strip_time)})
             elif part.get("type") in ("image_url", "image"):
-                desc = image_desc.image_part_archive_description(part)
-                out.append({"type": "text", "text": f"[图片：{desc}]" if desc else "[图片]"})
+                out.append({"type": "text", "text": image_desc.image_part_archive_text(part)})
             else:
                 out.append(part)
         msg["content"] = out

@@ -519,6 +519,13 @@ rg -n "image|image_url|图片|desc|last4|step_clean_images" pipeline routes mini
 - 上游 usage 的 input 可能包含缓存读入部分，Anthropic/OpenAI 字段口径不同。
 - MiniApp 显示的 token 来自模型返回的 usage，不一定等于网关估算。
 - 图片应尽量转描述后归档，避免后续 last4 持续带图。
+- 图片描述是异步链路：归档先写内部占位符 `[[DU_IMAGE_DESC:img_xxxxxxxxxxxxxxxx]]`，描述完成后写入最近图片描述表；注入 last4 时再把占位符替成 `[图片：描述]`，没有描述时降级 `[图片]`。
+- 最近图片描述表只保留最近 4 张：全局表 `global/image_descriptions_recent.json`，窗口表 `windows/<window_id>/image_descriptions_recent.json`。排查时先看 `image_desc 调用完成/失败` 和 `image_desc 最近表已更新` 日志。
+
+当前状态（2026-06-10 图片描述进 last4）：
+- 已改：图片归档不再等待 3 秒后永久写死 `[图片]`，而是写稳定内部占位符；异步图片描述成功后更新最近图片描述表；latest4/窗口最近对话注入前会替换占位符。
+- 已验证：本地 venv 模拟中，占位符可被描述表替换成 `[图片：描述]`，无描述时降级 `[图片]`，内部标记不会露给模型。
+- 未完成 / 下次继续：部署后用真实图片发一轮，检查服务日志里是否出现 `image_desc 调用完成` 和 `image_desc 最近表已更新`，再看下一轮 last4 注入是否带图片描述。
 
 ## 工具调用结果错位
 
