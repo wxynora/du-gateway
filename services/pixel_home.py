@@ -590,7 +590,7 @@ def save_pixel_home_hidden_block(payload: dict | None) -> bool:
     return bool(actor.get("ok"))
 
 
-def format_inject_block() -> str:
+def format_state_block() -> str:
     state = build_pixel_home_state()
     du = state.get("du") if isinstance(state.get("du"), dict) else {}
     xinyue = state.get("xinyue") if isinstance(state.get("xinyue"), dict) else {}
@@ -598,11 +598,20 @@ def format_inject_block() -> str:
     xinyue_label = spot_label(xinyue.get("spot"))
     block = (
         "【小家状态】\n"
-        "这是你和小玥的赛博小家状态，并非现实定位或真实房间。\n"
         f"当前小家状态：{mode_label(state.get('mode'))}。\n"
         f"你的位置：{du_label}，{_format_activity_for_prompt(str(du.get('activity') or '待着'))}。\n"
-        f"小玥的位置：{xinyue_label}，{_format_activity_for_prompt(str(xinyue.get('activity') or '待着'))}。\n"
-        "小家事件超过 2 小时没有更新会自动结束；其他移动和状态变化由你在对话里自然决定。\n"
+        f"小玥的位置：{xinyue_label}，{_format_activity_for_prompt(str(xinyue.get('activity') or '待着'))}。"
+    )
+    active_private_draw = _active_private_draw_inject_text(_stored_state())
+    if active_private_draw:
+        block += "\n\n" + active_private_draw
+    return block
+
+
+def format_rule_block() -> str:
+    return (
+        "【小家状态写入规则】\n"
+        "这是你和小玥的赛博小家状态，并非现实定位或真实房间。\n"
         "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加 PIXEL_HOME 隐藏标记：\n"
         "写 PIXEL_HOME 时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"
         "如果正文描述你抱着/牵着/带着/陪着小玥一起移动，activity 里也要明确写出这个共同动作，例如“抱着小玥回卧室”；网关会据此同步小玥的小家位置。\n"
@@ -611,10 +620,10 @@ def format_inject_block() -> str:
         "<<<END_PIXEL_HOME>>>\n"
         "不需要移动或更新时不要写 PIXEL_HOME。"
     )
-    active_private_draw = _active_private_draw_inject_text(_stored_state())
-    if active_private_draw:
-        block += "\n\n" + active_private_draw
-    return block
+
+
+def format_inject_block() -> str:
+    return format_state_block() + "\n\n" + format_rule_block()
 
 
 def build_pixel_home_event(spot: Any, action: Any) -> str:

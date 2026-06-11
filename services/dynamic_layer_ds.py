@@ -2,7 +2,7 @@
 动态层 DS 调用（与「终稿」prompt 对接）：
 - DS 每轮返回单条固定标签决策：ACTION(new/merge/skip)、IMPORTANCE(1-4)、TAG(单值)、CONTENT、FUSED_WITH_ID(merge 时)。
 - 同时返回 emotion_label / scene_type / target_type 三个稳定标签。
-- 网关按 tag 判定卧室（tag === "卧室"）；按 action 单条应用：new 追加、merge 按 id 更新+mention_count+1、skip 不写。
+- 网关按 tag 判定房间；按 action 单条应用：new 追加、merge 按 id 更新+mention_count+1、skip 不写。卧室内容不自动 skip。
 """
 
 import json
@@ -79,7 +79,7 @@ tag：
 - 书房：技术 / debug
 - 客厅：日常 / 玩梗
 - 图书馆：重要时刻
-- 卧室：涉及私密/亲密/性行为/性暗示/露骨言语的内容；tag 为卧室时 action 必为 skip，不写 content
+- 卧室：涉及私密/亲密/性行为/性暗示/露骨言语的内容；不要为了保存改标客厅，值得记时按正常规则 new/merge，并写概括后的便签
 
 importance：1 闲聊 2 有点意思 3 值得记 4 重要
 
@@ -88,6 +88,7 @@ importance：1 闲聊 2 有点意思 3 值得记 4 重要
 - importance 3-4 → 记
 - 不确定几分 → 当 1 处理 → skip
 
+卧室内容不因为私密/亲密/NSFW 自动 skip；只按信息增量和重要性判断。该记就标卧室正常写，没新信息再 skip。
 没有新信息、没有值得记的点就 skip；不确定就 skip。
 但如果本轮出现关键事实锚点（时间/地点/明确决定/待办结论）或明显情绪起伏，不要因为“太短”而 skip。
 健康数据默认不记；只有出现生病/不适/就医相关情境时才记。
@@ -585,7 +586,7 @@ def call_dynamic_layer_ds(
     """
     调用 DS，返回单条决策（无整表）。
     返回字段：tag(str), action(str), importance(int), content(str), fused_with_id(str|None)。
-    网关据此做单条应用；卧室只看 tag === "卧室"。
+    网关据此做单条应用；卧室仍按 action 正常应用，tag 只负责房间归类。
     """
     default = {
         "tag": "",

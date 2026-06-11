@@ -1115,22 +1115,19 @@ def step_inject_du_thought(body: dict, window_id: str) -> dict:
 
 def step_inject_du_vitals(body: dict, window_id: str) -> dict:
     """
-    全局注入：静态 system 放稳定规则，动态 system 放上一轮实际读数。
+    全局注入：静态 system 放稳定规则，不把上一轮实际读数注入给渡。
     渡输出内部状态参数，网关截取后换算为心率/呼吸，老婆侧正文不可见。
     """
     _ = window_id
     try:
-        from services.du_vitals import format_rule_block, format_state_block
+        from services.du_vitals import format_rule_block
 
         rule_block = format_rule_block()
-        state_block = format_state_block(r2_store.get_du_vitals_latest())
     except Exception as e:
         logger.debug("du_vitals 注入跳过 error=%s", e)
         return body
     if (rule_block or "").strip():
         body = _append_to_static_system(body, "\n\n" + rule_block.strip())
-    if (state_block or "").strip():
-        body = _append_to_dynamic_system(body, "\n\n" + state_block.strip())
     return body
 
 
@@ -1161,18 +1158,20 @@ def step_inject_du_daily(
 
 
 def step_inject_pixel_home(body: dict, window_id: str) -> dict:
-    """Inject shared cyber home state and the PIXEL_HOME hidden marker contract."""
+    """Inject shared cyber home state dynamically and the PIXEL_HOME hidden marker contract statically."""
     _ = window_id
     try:
-        from services.pixel_home import format_inject_block
+        from services.pixel_home import format_rule_block, format_state_block
 
-        block = format_inject_block()
+        rule_block = format_rule_block()
+        state_block = format_state_block()
     except Exception as e:
         logger.debug("pixel_home 注入跳过 error=%s", e)
         return body
-    if not (block or "").strip():
-        return body
-    body = _append_to_dynamic_system(body, "\n\n" + block.strip())
+    if (rule_block or "").strip():
+        body = _append_to_static_system(body, "\n\n" + rule_block.strip())
+    if (state_block or "").strip():
+        body = _append_to_dynamic_system(body, "\n\n" + state_block.strip())
     return body
 
 
@@ -2820,9 +2819,9 @@ def _apply_one_decision(
     current_memories: list,
 ) -> Optional[dict]:
     """
-    对单条 DS 决策做应用：卧室写 Notion 卧室房间（不写记忆库）；new/merge 更新 current_memories 并写 R2、promote。
+    对单条 DS 决策做应用：卧室额外写 Notion 卧室房间；new/merge 更新 current_memories 并写 R2、promote。
     不写记忆库 Notion；若调用方是批处理归档脚本，可根据返回值再写记忆库。
-    返回：若本条应写入记忆库（卧室/new/merge），返回 {"tag", "entry_id", "content", "promoted_at"}，否则 None。
+    返回：若本条应写入记忆库（new/merge），返回 {"tag", "entry_id", "content", "promoted_at"}，否则 None。
     """
     from uuid import uuid4
 
@@ -2876,7 +2875,9 @@ def _apply_one_decision(
         except Exception as e:
             logger.warning("动态记忆血缘记录失败 memory_id=%s action=%s error=%s", memory_id, action_name, e)
 
-    # 兜底：DS 标成 new 但给了客厅/书房等，若原文有私密/亲密/性相关关键词则改标卧室
+    raw_check = ""
+
+    # 兜底：DS 标成 new/merge 但给了客厅/书房等，若原文有私密/亲密/性相关关键词则改标卧室
     if (tag != "卧室" and "卧室" not in tag) and (action == "new" or content):
         raw_check = _round_messages_to_raw_text(round_messages)
         if any(kw in raw_check for kw in ("私密", "亲密", "性行为", "性暗示", "露骨", "露骨言语")):
@@ -2885,10 +2886,15 @@ def _apply_one_decision(
     if tag == "卧室" or "卧室" in tag:
         from services.bedroom_gateway import append_bedroom_raw
 
-        raw_text = _round_messages_to_raw_text(round_messages)
+        tag = "卧室"
+        raw_text = raw_check or _round_messages_to_raw_text(round_messages)
         append_bedroom_raw(window_id, round_index, raw_text)
-        logger.info("卧室通道触发 window_id=%s round_index=%s（已写 Notion 卧室，跳过动态层）", window_id, round_index)
-        return {"tag": "卧室", "entry_id": f"{window_id}_{round_index}", "content": raw_text, "promoted_at": now_iso}
+        logger.info(
+            "卧室通道触发 window_id=%s round_index=%s（已写 Notion 卧室，继续按动态层 action=%s 应用）",
+            window_id,
+            round_index,
+            action,
+        )
 
     if action == "new" and content:
         if _looks_like_raw_copy(content, round_messages):
@@ -2915,10 +2921,14 @@ def _apply_one_decision(
             sync_portrait_candidate_from_memory(new_mem)
         except Exception as e:
             logger.warning("sync_portrait_candidate_from_memory(new) 失败 error=%s", e)
-        r2_store.promote_to_core_cache(
-            window_id, round_index, _round_messages_to_raw_text(round_messages),
-            current_memories, touched_mem_id=new_mem["id"],
-        )
+        if tag != "卧室":
+            r2_store.promote_to_core_cache(
+                window_id,
+                round_index,
+                _round_messages_to_raw_text(round_messages),
+                current_memories,
+                touched_mem_id=new_mem["id"],
+            )
         _record_provenance_safe(
             memory_id=new_mem["id"],
             action_name="new",
@@ -2962,10 +2972,14 @@ def _apply_one_decision(
             sync_portrait_candidate_from_memory(merged_mem)
         except Exception as e:
             logger.warning("sync_portrait_candidate_from_memory(merge) 失败 error=%s", e)
-        r2_store.promote_to_core_cache(
-            window_id, round_index, _round_messages_to_raw_text(round_messages),
-            current_memories, touched_mem_id=fused_with_id,
-        )
+        if tag != "卧室":
+            r2_store.promote_to_core_cache(
+                window_id,
+                round_index,
+                _round_messages_to_raw_text(round_messages),
+                current_memories,
+                touched_mem_id=fused_with_id,
+            )
         _record_provenance_safe(
             memory_id=fused_with_id,
             action_name="merge",
@@ -3285,5 +3299,5 @@ def step_run_post_archive_tasks(
     if skip_dynamic_layer:
         logger.info("动态层跳过：请求要求跳过归档后动态层 window_id=%s round_index=%s", window_id, round_index)
         return None
-    # 动态层演化：调用 DS 产出 tag/融合等结果；网关决定是否写入动态层；卧室通道短路写 Notion
+    # 动态层演化：调用 DS 产出 tag/融合等结果；网关决定是否写入动态层；卧室通道额外写 Notion
     _step_dynamic_layer_evolve(window_id, round_index, round_messages)

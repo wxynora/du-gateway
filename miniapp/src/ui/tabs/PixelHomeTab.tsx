@@ -452,7 +452,14 @@ function actorText(actor: PixelHomeActor | undefined, fallback: string) {
   return fallback;
 }
 
+function vitalsNumber(vitals: Record<string, any> | undefined, key: string) {
+  const raw = vitals?.parameters?.[key] ?? vitals?.[key];
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function duMoodLabel(vitals: Record<string, any> | undefined) {
+  if (vitalsNumber(vitals, "intimacy_heat") >= 0.6) return "🥵";
   const tempo = String(vitals?.tempo || "").trim().toLowerCase();
   if (tempo === "up" || tempo === "settle") return "😄";
   if (tempo === "down") return "😭";

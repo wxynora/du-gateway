@@ -95,7 +95,7 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：`miniapp/src/ui/tabs/PixelHomeTab.tsx` 已从旧像素地图、方向键、跟随/布置按键，以及后续暖色卡片版，收束为 `ui合集/赛博小家` 同款单列界面；三种透明图资产为 `miniapp/src/assets/life-home-day.png`、`life-home-night-on.png`、`life-home-night-off.png`，900x720 量化 PNG，三张合计约 868KB。入口标题为「小家」。
 - 已完成：小屋图在参考稿版式里放大显示；状态更新走加号底部 sheet 的位置选择和自由文本。床、浴室、书房、客厅沙发热区保留点击反馈，点击房间后在房间旁边出现独立小半透明事件按钮，事件按钮发送后端小家事件；沙发事件为「看电视 / 色色」，书房事件为「写日记 / 看书 / 色色」。
 - 已完成：状态文字允许多行完整显示；后端保存渡状态时会对“从旧房间走出来”做兜底，不再显示成“在书房从书房走出来...”。
-- 已完成：小家「渡的动态」右侧当前心情不再展示英文 tempo，前端按 `du_vitals.tempo` 映射为 emoji：`up/settle -> 😄`、`steady/未同步 -> 😐`、`down -> 😭`、`spike -> 😠`。
+- 已完成：小家「渡的动态」右侧当前心情不再展示英文 tempo，前端按 `du_vitals` 映射为 emoji：`parameters.intimacy_heat >= 0.6 -> 🥵` 优先，其余按 `tempo` 映射：`up/settle -> 😄`、`steady/未同步 -> 😐`、`down -> 😭`、`spike -> 😠`。
 - 已验证：干净临时 worktree 使用主工作区现成依赖完成 `npm run build` 并重建 `miniapp_static`；Browser preview 实测小家页加载、初始无点、点击卧室出现小点、事件按钮可见、点小家图以外区域清掉选中态、加号 sheet 可打开。
 - 未完成 / 下次继续：当前没有做历史状态列表；状态仍以覆盖式当前状态为主，渡的动态最多 5 条。不要把这轮小家静态 hash 产物和仓库里既有的其它半成品脏改混在一起提交。
 
@@ -104,6 +104,12 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：小家注入规则补充要求：正文描述共同移动时，`PIXEL_HOME.activity` 要写明共同动作，例如“抱着小玥回卧室”，方便网关同步小玥位置。
 - 已验证：`.venv/bin/python -m py_compile services/pixel_home.py` 通过；mock 存储烟测确认“抱着小玥回卧室”同步小玥到卧室、“牵着老婆走到客厅沙发”同步到客厅沙发，“在卧室想小玥”不误同步。
 - 未完成 / 下次继续：本轮未改前端和 `miniapp_static`；只处理明确共同移动，不把普通想念、站在身边、单人移动误判成小玥跟随。
+
+当前状态（2026-06-11 小家状态动态区瘦身）：
+- 已完成：`services/pixel_home.py` 拆出 `format_state_block()` 和 `format_rule_block()`；`pipeline/pipeline.py::step_inject_pixel_home` 只把当前小家状态放进动态 system，把 `PIXEL_HOME` 写法规则放进静态 system。
+- 已完成：动态小家状态只保留当前小家状态、渡的位置、小玥的位置，以及当前有效私密抽签；“小家事件超过 2 小时没有更新会自动结束”不再写进提示词给渡看。
+- 已完成：`services/prompt_cache_debug.py` 新增 `【小家状态】 -> 小家状态` 和 `【小家状态写入规则】 -> 小家规则` 的拆分识别，后续 dynamic/static breakdown 不再把小家混进其它块。
+- 未完成 / 下次继续：本轮不改小家自动结束行为本身，只改提示词注入位置和动态区体积。
 
 ## 聊天失败 / 上游不可用
 
@@ -649,6 +655,7 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 内部维护请求和部分 followup 请求可能跳过归档。
 - `X-Force-Last4` 会强制带最近 4 轮。
 - 动态层 DS 现在优先要求固定标签格式（`ACTION:` / `CONTENT:` 等），旧 JSON 只作为兼容解析；`new/merge` 的 `content` 如果太短、像半句话、标题词、没闭合引号或停在“然后/但是/——”这类没说完的位置，会最多重写 5 次，最后仍只是明显尾巴残缺时会做保守尾巴修复，确保落库的是完整句子。
+- 亲密 / NSFW 内容不要为了保存混进 `客厅`；该记就标 `卧室` 并按动态层 `new/merge` 正常存。卧室原文仍额外侧写 Notion 卧室页，画像与核心缓存不吃卧室动态记忆。
 
 当前状态（2026-06-04 动态层残缺便签重写与审计）：
 - 已完成：`services/dynamic_layer_ds.py` 单轮、批量和归档批处理都会对 `new/merge` 内容做完整性校验；实时单轮最多重写 5 次，最后仍只是“然后/——”这类尾巴残缺时会保守修成完整句子；归档批处理若 5 次和尾巴修复后仍有残缺则抛错不写断点，下一次从本批重跑。
@@ -666,6 +673,11 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 已完成：`pipeline/pipeline.py::step_run_post_archive_tasks` 继续保持实时层 DS 总结异步，不把聊天响应拖到等 DS；总结线程从 daemon 改为非 daemon，并命名为 `summary-window-{window_id}-{round_index}`，避免 worker 正常回收时直接丢掉已开始的 DS 总结。
 - 已完成：`services/chat_archive_helpers.py` 的非流式归档后慢任务线程改为非 daemon；`scripts/start_gateway_prod.sh` 默认 `GATEWAY_GRACEFUL_TIMEOUT` 从 30 秒提高到 120 秒，并在启动日志打印 `graceful_timeout`，给已经进入慢任务链路的 DS 总结留出有限收尾窗口，同时避免重启/回收拖太久。
 - 未完成 / 下次继续：这次没有新增 worker，没有把总结改同步，也没有改总结频率/补缺口逻辑；如果再查总结缺失，先看 gunicorn recycle 时间点、`graceful_timeout` 和实时层总结线程日志。
+
+当前状态（2026-06-11 卧室动态记忆正常落库）：
+- 已完成：`services/dynamic_layer_ds.py` 去掉“卧室必 skip”规则，要求亲密 / NSFW 内容值得记时标 `卧室` 并正常 `new/merge`，不要为了保存错标 `客厅`。
+- 已完成：`pipeline/pipeline.py::_apply_one_decision` 不再在卧室通道 early return；卧室原文仍写 Notion 备份，但动态层继续按 action 落库或融合。new/merge 的卧室动态记忆不提进 core cache，画像候选仍沿用 `services/portrait_memory.py` 的卧室排除。
+- 未完成 / 下次继续：历史已经混进 `客厅` 的 NSFW 动态记忆不会自动迁移；如要清旧数据，先从 MiniApp 记忆调试或 R2 当前动态记忆列表里定位，再做迁移/重标脚本。
 
 ## 核心 Prompt / 风格规则 / 禁言模式
 
@@ -756,7 +768,7 @@ ssh -o ControlMaster=no ali-du 'systemctl --user list-units --type=service --all
 
 ### Claude token sync 快查
 
-这套脚本是为了修 Claude OAuth proxy 401：从 Mac 本机 Claude Code Keychain 取 OAuth JSON，必要时本地刷新，然后通过 HTTP POST 同步到 VPS 的 Claude OAuth proxy。不要再把“同步 token”做成 SSH 写文件 + 重启服务的主链路。
+这套脚本是为了修 Claude OAuth proxy 401：从 Mac 本机 Claude Code Keychain 取 OAuth JSON，必要时本地刷新，然后通过 HTTP POST 同步到 VPS 的 Claude OAuth proxy。HTTP POST 是主链路；只有 POST 最终失败时，才允许 SSH fallback 把 OAuth JSON 写到远端 auth 文件并重启 Claude OAuth proxy。不要再把“同步 token”做成 SSH 写文件 + 重启服务的主链路。
 
 关键路径：
 - 脚本：`/Users/doraemon/claude-token-sync.sh`
@@ -779,12 +791,17 @@ LaunchAgent 默认 `StartInterval=300`，也就是约 5 分钟跑一次。脚本
 CLAUDE_PROXY_SYNC_URL=https://duxy-home.com/internal/claude-oauth-sync
 CLAUDE_PROXY_STATUS_URL=https://duxy-home.com/internal/claude-oauth-status
 CLAUDE_PROXY_SYNC_KEY=...
+CLAUDE_PROXY_SSH_FALLBACK=1
+CLAUDE_PROXY_SSH_HOST=ali-du
+CLAUDE_PROXY_SSH_AUTH_FILE=/home/nora/.cli-proxy-api/claude-sumikamiss@gmail.com.json
+CLAUDE_PROXY_SSH_SERVICE=claude-oauth-proxy.service
 ```
 
 服务端约束：
 - `scripts/claude_oauth_proxy.js` 的同步接口用 `CLAUDE_OAUTH_SYNC_KEY` 校验；未配置时默认复用 `PROXY_KEY`。
 - Claude OAuth proxy 应继续只监听服务器本机或内网；公网只暴露网关转发接口或受控内网入口。
 - 同步接口只接收完整 OAuth JSON，验证 `accessToken/refreshToken/expiresAt`，原子写入 `CLAUDE_OAUTH_FILE`，并热更新内存 token，不需要 `systemctl restart`。
+- SSH fallback 只在 HTTP POST 失败后触发；它会先本地校验 OAuth JSON，再通过 `ssh ali-du` 写远端 auth 文件，最后 `systemctl --user restart claude-oauth-proxy.service` 让进程重新加载文件。不要打印 token 或 sync key。
 
 先查本机脚本有没有跑：
 
@@ -811,7 +828,7 @@ ssh -o ControlMaster=no ali-du 'journalctl --user -u claude-oauth-proxy.service 
 ```
 
 确认 token 是否已同步成功：
-- 本机日志应出现类似：`synced oauth via_http reason=... oauth_ready refresh_attempted=... expiresAt=...`
+- 本机日志应出现类似：`synced oauth via_http reason=... oauth_ready refresh_attempted=... expiresAt=...`；若 HTTP 失败后保底成功，会出现 `synced oauth via_ssh_fallback ...`
 - 远端 Claude OAuth proxy 日志应出现 `OAuth synced by HTTP`，或状态接口返回新的 `expiresAt`。
 - `launchctl print ...` 里 `last exit code` 应为 `0`
 
@@ -847,6 +864,10 @@ PY
 当前状态（2026-06-08）：
 - 已删除：`/Users/doraemon/claude-token-sync.sh` 里的 Keychain `expiresAt` 临时改小/恢复逻辑，以及 `CLAUDE_KEYCHAIN_EXPIRES_SPOOF`、`CLAUDE_KEYCHAIN_SPOOF_EXPIRES_SECONDS` 配置说明。
 - 已调整：同步日志从 `refreshed=...` 改成 `refresh_attempted=...`，避免误解为“脚本已强制刷新出新 token”。后续判断是否真的刷新，只看 Keychain/远端状态接口里的 `expiresAt` 是否变新、`stale=false`。
+当前状态（2026-06-10 SSH fallback）：
+- 已改动：`/Users/doraemon/claude-token-sync.sh` 保持 HTTP POST 为主链路；`sync_oauth_to_server` 在 HTTP POST 最终失败后会走 SSH fallback，默认 `ali-du`、远端 auth 文件 `/home/nora/.cli-proxy-api/claude-sumikamiss@gmail.com.json`、服务 `claude-oauth-proxy.service`。
+- 已验证：`bash -n /Users/doraemon/claude-token-sync.sh` 通过；正常 `/Users/doraemon/claude-token-sync.sh --force` 仍输出 `synced oauth via_http`；用 `CLAUDE_TOKEN_SYNC_ENV=/dev/null` 故意去掉 HTTP sync key 后，日志出现 `http sync unavailable missing CLAUDE_PROXY_SYNC_KEY`、`ssh fallback synced oauth`、`synced oauth via_ssh_fallback`，远端服务保持 active。
+- 已收尾：再次正常 `--force` 后 `.claude-token-sync.state` 恢复 `REMOTE_EXPIRES_AT_MS`、`LAST_UNAUTHORIZED_AT=0`、`LAST_SYNCED_EXPIRES_AT_MS`。
 
 ## CPA / Codex 反代
 
@@ -1491,6 +1512,10 @@ npm -C miniapp run android
 - 已完成：`services/prompt_cache_debug.py` 将拟态心跳计入 `static_breakdown` 的“拟态心跳规则”，并从 `dynamic_breakdown` marker 中移除，避免动态区体积监控误把稳定规则算进去。
 - 已验证：`.venv/bin/python -m py_compile services/du_vitals.py pipeline/pipeline.py services/prompt_cache_debug.py` 通过；smoke 覆盖注入后 static breakdown 出现“拟态心跳规则”、dynamic breakdown 不再出现拟态心跳，且隐藏块文本不再包含“上一组状态”。
 - 未完成 / 下次继续：本轮只改提示词注入位置和 breakdown 归类，不改心率/呼吸参数的截取、存储、MiniApp 展示或通知逻辑。
+
+当前状态（2026-06-11 拟态心跳读数不进动态区）：
+- 已完成：代码回正为只注入 `format_rule_block()` 到静态 system，不再调用 `format_state_block(r2_store.get_du_vitals_latest())`，所以 `heart_bpm/breath_rpm/intimacy_heat` 这类上一轮实际读数不会再给渡看。
+- 未完成 / 下次继续：`services/du_vitals.py::format_state_block` 暂时保留，作为调试/兼容函数；当前聊天注入链路不再使用它。
 
 当前状态（2026-06-01 SumiTalk 底部 Dock 导航）：
 - 已完成：`miniapp/src/ui/BottomNav.tsx` 从满宽贴底 tab bar 改为 iOS Dock 风格的居中悬浮导航；Dock 使用半透明背景、圆角胶囊、内阴影/投影和 backdrop blur，当前 tab 轻微上浮并使用白色图标位。

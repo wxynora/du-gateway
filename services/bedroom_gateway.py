@@ -1,4 +1,4 @@
-# 卧室特殊通道：识别 bedroom tag 后，原文照常存 R2；不写动态层/核心缓存；额外写 Notion 卧室房间
+# 卧室侧写通道：识别 bedroom tag 后，动态层仍按 action 正常存；这里额外写 Notion 卧室原文备份
 from utils.time_aware import now_beijing_iso
 
 from config import NOTION_BEDROOM_PAGE_ID
