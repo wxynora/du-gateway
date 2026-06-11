@@ -1594,3 +1594,9 @@ npm -C miniapp run android
 - 已完成：`/miniapp-api/chat-media/upload` 新增 `document` kind，按 MIME 或文件后缀兜底识别文本附件；文件限制 10MB，送入模型前最多保留前 60000 字，PDF 最多读取前 120 页，DOCX 会读取段落和表格；原文件仍写入 SumiTalk chat media R2，消息历史只保留文件名、链接、大小等轻量元数据，不把正文塞进聊天气泡。
 - 已验证：`.venv/bin/python -m py_compile routes/miniapp/media.py storage/r2_store.py app.py` 通过；`npm -C miniapp run build` 通过并重建 `miniapp_static`，只有既有 Vite chunk size warning；本地 Flask test client monkeypatch R2 上传 `note.md` 和 `brief.docx`，确认返回 `kind=document`、文件名、remoteKey/remoteUrl 和 `textPreview`；空白 PDF 会明确返回“没有读到可用文字”。
 - 未完成 / 下次继续：本轮不做 OCR，不做多文档批量，也未把群聊附件路由单独扩展；扫描版 PDF 要先 OCR，超长 PDF/DOCX 后续应走文件缓存/摘要管道，避免把全文直接塞进一次聊天请求。
+
+当前状态（2026-06-11 MiniApp 语音气泡与转文字）：
+- 已完成：`ChatPresentation.tsx` 将语音附件改为独立白色胶囊气泡，结构为播放按钮、波形、时长和右侧小圆点，不再塞进文字气泡复用外层 padding；`MainChatScreen.tsx` 把音频附件从文字 `ChatBubbleFrame` 里移到气泡外单独渲染，解决语音气泡比文字气泡肥一圈的问题。
+- 已完成：语音附件有 `transcript` 时，右侧小圆点可点击展开/收起转文字内容；用户语音使用 STT transcript，渡的 `<voice>...</voice>` TTS 附件使用已有 `voiceText` transcript，不重新调用识别。
+- 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过；`npm -C miniapp run build` 通过并重建 `miniapp_static`；`npm -C miniapp run cap:copy` 已同步 Android web assets（该目录被 gitignore），最终又恢复普通 Web build 静态包。
+- 未完成 / 下次继续：本轮只改聊天内语音附件展示，不改录音上传、TTS 生成、语音识别服务或历史数据结构。

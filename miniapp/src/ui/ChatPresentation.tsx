@@ -276,8 +276,8 @@ function formatAudioDuration(ms?: number): string {
 
 function audioBarWidth(durationMs?: number): number {
   const seconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
-  if (!seconds) return 112;
-  return Math.max(104, Math.min(188, 92 + seconds * 4));
+  if (!seconds) return 132;
+  return Math.max(124, Math.min(188, 112 + seconds * 4));
 }
 
 function formatAttachmentSize(bytes?: number): string {
@@ -292,9 +292,12 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [durationMs, setDurationMs] = useState(item.durationMs || 0);
+  const [textOpen, setTextOpen] = useState(false);
   const duration = formatAudioDuration(durationMs);
   const width = audioBarWidth(durationMs);
   const isRight = align === "right";
+  const transcript = String(item.transcript || "").trim();
+  const bars = [5, 7, 4, 8, 10, 6, 13, 17, 9, 12, 7, 11, 6, 8, 5];
 
   function syncMetadata() {
     const durationSeconds = audioRef.current?.duration || 0;
@@ -320,36 +323,62 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
   }
 
   return (
-    <div className={`max-w-full ${isRight ? "self-end" : "self-start"}`}>
-      <button
-        type="button"
-        className={`flex h-[28px] max-w-full items-center gap-2 text-current transition-opacity active:opacity-65 ${isRight ? "flex-row-reverse" : ""}`}
-        style={{ width }}
-        onClick={() => void togglePlayback()}
-        aria-label={playing ? "暂停语音" : "播放语音"}
-      >
-        <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center" aria-hidden="true">
-          {playing ? (
-            <span className="flex h-[12px] items-center gap-[3px]">
-              <span className="h-full w-[3px] rounded-full bg-current" />
-              <span className="h-full w-[3px] rounded-full bg-current" />
-            </span>
-          ) : (
-            <span
-              className="block h-0 w-0 border-y-[6px] border-l-[9px] border-y-transparent border-l-current"
-              style={isRight ? { transform: "scaleX(-1)" } : undefined}
-            />
-          )}
-        </span>
-        <span className={`flex flex-1 items-center gap-[3px] ${isRight ? "justify-end" : "justify-start"}`} aria-hidden="true">
-          <span className={`w-[2px] rounded-full bg-current/55 ${playing ? "h-[13px]" : "h-[7px]"}`} />
-          <span className={`w-[2px] rounded-full bg-current/70 ${playing ? "h-[17px]" : "h-[12px]"}`} />
-          <span className={`w-[2px] rounded-full bg-current/50 ${playing ? "h-[10px]" : "h-[8px]"}`} />
-        </span>
-        <span className="shrink-0 text-[12px] font-semibold leading-none tabular-nums opacity-75">
-          {duration || "语音"}
-        </span>
-      </button>
+    <div className={`flex max-w-full flex-col gap-1 ${isRight ? "items-end self-end" : "items-start self-start"}`}>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className={`flex h-[52px] max-w-full items-center gap-3 rounded-[20px] bg-white px-4 text-[#111827] shadow-sm ring-1 ring-gray-200/70 transition-opacity active:opacity-70 ${
+            isRight ? "flex-row-reverse" : ""
+          }`}
+          style={{ width }}
+          onClick={() => void togglePlayback()}
+          aria-label={playing ? "暂停语音" : "播放语音"}
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100" aria-hidden="true">
+            {playing ? (
+              <span className="flex h-[14px] items-center gap-[4px]">
+                <span className="h-full w-[4px] rounded-full bg-current" />
+                <span className="h-full w-[4px] rounded-full bg-current" />
+              </span>
+            ) : (
+              <span
+                className="ml-[2px] block h-0 w-0 border-y-[8px] border-l-[12px] border-y-transparent border-l-current"
+                style={isRight ? { transform: "scaleX(-1)" } : undefined}
+              />
+            )}
+          </span>
+          <span className="flex flex-1 items-end justify-center gap-[3px]" aria-hidden="true">
+            {bars.map((height, index) => (
+              <span
+                key={index}
+                className={`w-[3px] rounded-full bg-current ${playing ? "opacity-90" : "opacity-75"}`}
+                style={{ height: `${playing && index % 3 === 1 ? Math.min(18, height + 3) : height}px` }}
+              />
+            ))}
+          </span>
+          <span className="shrink-0 text-[20px] font-semibold leading-none tabular-nums">
+            {duration || "语音"}
+          </span>
+        </button>
+        {transcript ? (
+          <button
+            type="button"
+            className={`h-4 w-4 shrink-0 rounded-full transition-transform active:scale-90 ${
+              textOpen ? "bg-gray-900" : "bg-[#FF4B38]"
+            }`}
+            onClick={() => setTextOpen((prev) => !prev)}
+            aria-label={textOpen ? "收起转文字" : "转文字"}
+            title={textOpen ? "收起文字" : "转文字"}
+          />
+        ) : null}
+      </div>
+      {textOpen && transcript ? (
+        <div className={`max-w-[236px] whitespace-pre-wrap rounded-[14px] bg-white/92 px-3 py-2 text-[13px] font-medium leading-5 text-gray-700 shadow-sm ring-1 ring-gray-200/70 ${
+          isRight ? "mr-6 text-left" : "ml-6"
+        }`}>
+          {transcript}
+        </div>
+      ) : null}
       <audio
         ref={audioRef}
         className="hidden"
