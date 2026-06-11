@@ -6,6 +6,7 @@ type ToolCallItem = { id?: string; name?: string; arguments?: string; result?: s
 type PromptCacheDebugEntry = {
   request?: Record<string, unknown>;
   usage?: Record<string, unknown>;
+  response?: Record<string, unknown>;
 };
 type PromptCacheBreakdownItem = {
   label?: string;
@@ -57,6 +58,14 @@ function firstUsageValue(usage: Record<string, unknown>, keys: string[]) {
     if (value !== null && value !== undefined && value !== "") return value;
   }
   return undefined;
+}
+
+function stringValue(value: unknown) {
+  return value === null || value === undefined ? "" : String(value).trim();
+}
+
+function truthyDebugFlag(value: unknown) {
+  return value === true || value === "true" || value === 1 || value === "1";
 }
 
 function tokenNumber(value: unknown) {
@@ -127,10 +136,22 @@ function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheD
         {items.map((entry, idx) => {
           const req = entry?.request || {};
           const usage = entry?.usage || {};
+          const resp = entry?.response || {};
           const openaiCached = firstUsageValue(usage, ["cached_tokens", "prompt_cached_tokens", "input_cached_tokens"]);
           const anthropicRead = usage.cache_read_input_tokens;
           const anthropicCreated = usage.cache_creation_input_tokens;
           const inputTokens = firstUsageValue(usage, ["input_tokens", "prompt_tokens"]);
+          const thinkingTokens = firstUsageValue(usage, ["thinking_tokens"]);
+          const fallbackCount = tokenNumber(usage.fallback_message_count);
+          const fallbackModel = stringValue(usage.fallback_model);
+          const iterations = Array.isArray(usage.iterations) ? usage.iterations.length : 0;
+          const requestedModel = stringValue(resp.requested_model) || stringValue(req.model);
+          const actualModel = stringValue(resp.actual_model);
+          const modelRoute =
+            requestedModel && actualModel && requestedModel !== actualModel
+              ? `${requestedModel} -> ${actualModel}`
+              : actualModel || requestedModel;
+          const servedByFallback = truthyDebugFlag(resp.served_by_fallback) || fallbackCount > 0 || !!fallbackModel;
           const cacheKey = req.prompt_cache_key ? "已设置" : "未设置";
           const staticBreakdown = promptCacheBreakdown(req.static_breakdown);
           const dynamicBreakdown = promptCacheBreakdown(req.dynamic_breakdown);
@@ -143,6 +164,9 @@ function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheD
                 <span>anthropic_created={debugValue(anthropicCreated)}</span>
                 <span>input={debugValue(inputTokens)}</span>
                 {outputLine && idx === items.length - 1 ? <span>{outputLine}</span> : null}
+                {thinkingTokens !== undefined ? <span>thinking_exact={debugValue(thinkingTokens)}</span> : null}
+                {servedByFallback ? <span>fallback=是</span> : null}
+                {iterations ? <span>attempts={iterations}</span> : null}
               </div>
               <div className="grid grid-cols-2 gap-x-2.5 gap-y-1 text-[#8a4055]">
                 <span>static {tokenValue(req.static_prefix_est_tokens)}</span>
@@ -173,7 +197,8 @@ function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheD
                 </div>
               ) : null}
               <div className="break-words text-[#9b5368]">
-                model={debugValue(req.model)} · host={debugValue(req.upstream_host)} · prompt_cache_key={cacheKey}
+                model={debugValue(modelRoute)} · host={debugValue(req.upstream_host)} · prompt_cache_key={cacheKey}
+                {fallbackModel ? ` · fallback_model=${fallbackModel}` : ""}
               </div>
               {usage.usage_returned === false ? (
                 <div className="text-[#9b5368]">usage 未返回，需要看本地代理/上游是否透传。</div>

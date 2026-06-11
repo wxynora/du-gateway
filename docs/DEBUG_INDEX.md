@@ -184,6 +184,13 @@ rg -n "reasoning|thinking|cache_debug|prompt_cache|X-DU-FOLLOWUP-ARCHIVE" routes
 - 事件唤醒默认应该归档，避免后面对话断层。
 - `reasoning_details` 可能只有结构化块，没有可展示正文，面板会显示“adaptive thinking 但未返回正文”。
 
+当前状态（2026-06-11 Claude Fable fallback 观测）：
+- 已完成：`scripts/claude_oauth_proxy.js` 在 Anthropic -> OpenAI 兼容转换时保留真实服务模型、请求模型、`fallback` content block、`usage.iterations` 和 `usage.output_tokens_details`，用于判断 Fable 5 是否被路由到 Opus 4.8 等 fallback 模型。
+- 已完成：`services/prompt_cache_debug.py` 把上游响应观测字段写入 `cache_debug.response`，并把 `output_tokens_details.thinking_tokens`、fallback attempts 和 fallback model 写入 `cache_debug.usage`。
+- 已完成：`routes/miniapp/reasoning.py` 优先使用上游精确 `thinking_tokens` 计算思维链卡片里的 thinking 占比；没有精确字段时才退回原有估算。
+- 已完成：`miniapp/src/ui/tabs/ReasoningTab.tsx` 展开 Prompt Cache 卡片时显示 `model=请求模型 -> 实际模型`、`fallback=是`、`fallback_model=...`、`attempts=...` 和 `thinking_exact=...`。
+- 已验证：`.venv/bin/python -m py_compile services/prompt_cache_debug.py routes/miniapp/reasoning.py`、`node --check scripts/claude_oauth_proxy.js`、`npm --prefix miniapp run build` 通过；合成 Fable -> Opus fallback 响应可提取 `actual_model`、`served_by_fallback`、`thinking_tokens`、`fallback_model` 和 `fallback_message_count`；`miniapp_static` 已随前端重建。
+
 ## SumiTalk 聊天 / 本地历史
 
 现象：

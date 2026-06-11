@@ -258,22 +258,64 @@ def extract_prompt_cache_usage(data: dict) -> dict:
         return {"usage_returned": False}
     prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
     input_details = usage.get("input_tokens_details") if isinstance(usage.get("input_tokens_details"), dict) else {}
+    output_details = usage.get("output_tokens_details") if isinstance(usage.get("output_tokens_details"), dict) else {}
+    iterations = usage.get("iterations")
+    if not isinstance(iterations, list):
+        iterations = usage.get("anthropic_iterations")
+    if not isinstance(iterations, list):
+        iterations = []
+    fallback_iterations = [
+        item for item in iterations if isinstance(item, dict) and str(item.get("type") or "") == "fallback_message"
+    ]
     cached_tokens = prompt_details.get("cached_tokens")
     if cached_tokens is None:
         cached_tokens = input_details.get("cached_tokens")
-    return {
+    out = {
         "usage_returned": True,
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
         "total_tokens": usage.get("total_tokens"),
         "input_tokens": usage.get("input_tokens"),
         "output_tokens": usage.get("output_tokens"),
+        "output_tokens_details": output_details or None,
+        "thinking_tokens": output_details.get("thinking_tokens"),
         "cached_tokens": cached_tokens,
         "prompt_cached_tokens": prompt_details.get("cached_tokens"),
         "input_cached_tokens": input_details.get("cached_tokens"),
         "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
         "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
     }
+    if iterations:
+        out["iterations"] = iterations
+        out["fallback_message_count"] = len(fallback_iterations)
+        if fallback_iterations:
+            out["fallback_model"] = str(fallback_iterations[-1].get("model") or "")
+    return out
+
+
+def extract_upstream_response_debug(data: dict, request_model: str = "") -> dict:
+    if not isinstance(data, dict):
+        return {}
+    choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+    first_choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    msg = first_choice.get("message") if isinstance(first_choice.get("message"), dict) else {}
+    actual_model = str(data.get("anthropic_model") or data.get("model") or "").strip()
+    requested_model = str(data.get("requested_model") or request_model or "").strip()
+    fallback_blocks = data.get("anthropic_fallback_blocks")
+    if not isinstance(fallback_blocks, list):
+        fallback_blocks = msg.get("anthropic_fallback_blocks")
+    if not isinstance(fallback_blocks, list):
+        fallback_blocks = []
+    out = {
+        "requested_model": requested_model,
+        "actual_model": actual_model,
+        "model_changed": bool(requested_model and actual_model and requested_model != actual_model),
+        "finish_reason": str(first_choice.get("finish_reason") or "").strip(),
+    }
+    if fallback_blocks:
+        out["fallback_blocks"] = fallback_blocks
+        out["served_by_fallback"] = True
+    return out
 
 
 def build_cache_debug_entry(body_send: dict, upstream_url: str, prompt_cache_profile: dict | None, data: dict) -> dict:
@@ -287,4 +329,5 @@ def build_cache_debug_entry(body_send: dict, upstream_url: str, prompt_cache_pro
     return {
         "request": profile,
         "usage": extract_prompt_cache_usage(data),
+        "response": extract_upstream_response_debug(data, profile.get("model") or ""),
     }

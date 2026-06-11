@@ -561,7 +561,7 @@ function convertUsage(usage = {}) {
   const outputTokens = usage.output_tokens || 0;
   const cacheCreationInputTokens = usage.cache_creation_input_tokens || 0;
   const cacheReadInputTokens = usage.cache_read_input_tokens || 0;
-  return {
+  const out = {
     prompt_tokens: inputTokens,
     completion_tokens: outputTokens,
     total_tokens: inputTokens + outputTokens,
@@ -573,14 +573,24 @@ function convertUsage(usage = {}) {
       cached_tokens: cacheReadInputTokens,
     },
   };
+  if (usage.output_tokens_details && typeof usage.output_tokens_details === "object") {
+    out.output_tokens_details = usage.output_tokens_details;
+  }
+  if (Array.isArray(usage.iterations)) {
+    out.iterations = usage.iterations;
+    out.anthropic_iterations = usage.iterations;
+  }
+  return out;
 }
 
 function anthropicToOpenai(ant, model, isStream) {
   if (isStream) return createOpenaiStreamConverter(model)(ant);
 
+  const actualModel = String(ant.model || "").trim() || model;
   const textParts = [];
   const reasoningParts = [];
   const thinkingBlocks = [];
+  const fallbackBlocks = [];
   const toolCalls = [];
   for (const part of ant.content || []) {
     if (part.type === "text") {
@@ -591,6 +601,8 @@ function anthropicToOpenai(ant, model, isStream) {
       if (thinkingText) reasoningParts.push(thinkingText);
     } else if (part.type === "redacted_thinking") {
       thinkingBlocks.push(part);
+    } else if (part.type === "fallback") {
+      fallbackBlocks.push(part);
     } else if (part.type === "tool_use") {
       toolCalls.push({
         id: part.id,
@@ -609,13 +621,14 @@ function anthropicToOpenai(ant, model, isStream) {
   };
   if (reasoningParts.length) message.reasoning_content = reasoningParts.join("\n\n");
   if (thinkingBlocks.length) message.thinking_blocks = thinkingBlocks;
+  if (fallbackBlocks.length) message.anthropic_fallback_blocks = fallbackBlocks;
   if (toolCalls.length) message.tool_calls = toolCalls;
 
-  return {
+  const resp = {
     id: "chatcmpl-" + ant.id,
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
-    model,
+    model: actualModel,
     choices: [
       {
         index: 0,
@@ -630,41 +643,62 @@ function anthropicToOpenai(ant, model, isStream) {
     ],
     usage: convertUsage(ant.usage),
   };
+  if (actualModel !== model) resp.requested_model = model;
+  resp.anthropic_model = actualModel;
+  if (fallbackBlocks.length) resp.anthropic_fallback_blocks = fallbackBlocks;
+  return resp;
 }
 
 function createOpenaiStreamConverter(model) {
   let messageId = "stream";
   let created = Math.floor(Date.now() / 1000);
+  let servingModel = model;
   let nextToolIndex = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheCreationInputTokens = 0;
   let cacheReadInputTokens = 0;
+  let outputTokensDetails = null;
+  let usageIterations = null;
   const blocks = new Map();
   const thinkingBlocks = [];
+  const fallbackBlocks = [];
 
-  const chunk = (delta, finish_reason = null, extra = {}) => ({
-    id: "chatcmpl-" + messageId,
-    object: "chat.completion.chunk",
-    created,
-    model,
-    choices: [{ index: 0, delta, finish_reason }],
-    ...extra,
-  });
+  const chunk = (delta, finish_reason = null, extra = {}) => {
+    const out = {
+      id: "chatcmpl-" + messageId,
+      object: "chat.completion.chunk",
+      created,
+      model: servingModel,
+      choices: [{ index: 0, delta, finish_reason }],
+      ...extra,
+    };
+    if (servingModel !== model) out.requested_model = model;
+    out.anthropic_model = servingModel;
+    return out;
+  };
 
   return (event) => {
     if (event.type === "message_start") {
       messageId = event.message?.id || messageId;
+      servingModel = String(event.message?.model || "").trim() || servingModel;
       inputTokens = event.message?.usage?.input_tokens || 0;
       outputTokens = event.message?.usage?.output_tokens || 0;
       cacheCreationInputTokens = event.message?.usage?.cache_creation_input_tokens || 0;
       cacheReadInputTokens = event.message?.usage?.cache_read_input_tokens || 0;
+      outputTokensDetails = event.message?.usage?.output_tokens_details || outputTokensDetails;
+      usageIterations = Array.isArray(event.message?.usage?.iterations) ? event.message.usage.iterations : usageIterations;
       return chunk({ role: "assistant", content: "" });
     }
 
     if (event.type === "content_block_start") {
       const index = event.index ?? 0;
       const block = event.content_block || {};
+      if (block.type === "fallback") {
+        fallbackBlocks.push(block);
+        servingModel = String(block.to?.model || "").trim() || servingModel;
+        return null;
+      }
       const state = { type: block.type, block: { ...block } };
       if (block.type === "tool_use") {
         state.toolIndex = nextToolIndex++;
@@ -722,6 +756,8 @@ function createOpenaiStreamConverter(model) {
       outputTokens = event.usage?.output_tokens || outputTokens;
       cacheCreationInputTokens = event.usage?.cache_creation_input_tokens || cacheCreationInputTokens;
       cacheReadInputTokens = event.usage?.cache_read_input_tokens || cacheReadInputTokens;
+      outputTokensDetails = event.usage?.output_tokens_details || outputTokensDetails;
+      usageIterations = Array.isArray(event.usage?.iterations) ? event.usage.iterations : usageIterations;
       const fullThinkingBlocks = [
         ...thinkingBlocks,
         ...Array.from(blocks.values())
@@ -737,7 +773,10 @@ function createOpenaiStreamConverter(model) {
             output_tokens: outputTokens,
             cache_creation_input_tokens: cacheCreationInputTokens,
             cache_read_input_tokens: cacheReadInputTokens,
+            output_tokens_details: outputTokensDetails,
+            iterations: usageIterations,
           }),
+          ...(fallbackBlocks.length ? { anthropic_fallback_blocks: fallbackBlocks } : {}),
         }
       );
     }
