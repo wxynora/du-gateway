@@ -43,6 +43,7 @@ TELEGRAM_TEXT_DOCUMENT_MAX_CHARS = 60000
 TELEGRAM_INBOUND_AUDIO_MAX_BYTES = 12 * 1024 * 1024
 TelegramParseMode = Literal["HTML", "MarkdownV2"]
 TELEGRAM_THINKING_LABEL = "渡的碎碎念🔖"
+TELEGRAM_MESSAGE_MAX_CHARS = 4096
 TELEGRAM_THINKING_MAX_CHARS = 3600
 
 
@@ -274,35 +275,30 @@ def _should_send_thinking_block(chat_id: int, user_id: int) -> bool:
     return True
 
 
-def _build_thinking_block_message(thinking_text: str) -> Optional[tuple[str, list[dict]]]:
+def _build_reply_with_thinking_block(reply_text: str, thinking_text: str) -> tuple[str, Optional[list[dict]]]:
+    reply = str(reply_text or "").strip()
     body = _compact_thinking_text(thinking_text)
     if not body:
-        return None
+        return reply, None
     prefix = f"{TELEGRAM_THINKING_LABEL}\n"
-    text = f"{prefix}{body}"
+    separator = "\n\n" if reply else ""
+    max_body_chars = TELEGRAM_MESSAGE_MAX_CHARS - len(reply) - len(separator) - len(prefix)
+    if max_body_chars <= 0:
+        return reply, None
+    if len(body) > max_body_chars:
+        suffix = "\n…"
+        keep = max(1, max_body_chars - len(suffix))
+        body = body[:keep].rstrip() + suffix
+    block = f"{prefix}{body}"
+    text = f"{block}{separator}{reply}"
     entities = [
         {
             "type": "expandable_blockquote",
-            "offset": _telegram_utf16_len(prefix),
-            "length": _telegram_utf16_len(body),
+            "offset": 0,
+            "length": _telegram_utf16_len(block),
         }
     ]
     return text, entities
-
-
-def send_thinking_block_message(
-    chat_id: int,
-    thinking_text: str,
-    user_id: int,
-    bot_token: Optional[str] = None,
-) -> bool:
-    if not _should_send_thinking_block(chat_id=chat_id, user_id=user_id):
-        return False
-    built = _build_thinking_block_message(thinking_text)
-    if not built:
-        return False
-    text, entities = built
-    return send_message(chat_id=chat_id, text=text, bot_token=bot_token, entities=entities)
 
 
 # 表情包：[tag] 与 R2 meta ∪ 映射表中的英文代号一致，长名优先匹配；缓存避免每次请求扫桶
@@ -1063,24 +1059,24 @@ def process_message(
         reply_clean = "我刚刚处理完了，这轮先记上了。你戳我一下，我接着说。"
     # 先发文字；TG 主回复不再拆条。
     outbound = reply_clean or ""
-    ok_text = send_message_segmented(chat_id=chat_id, text=outbound, bot_token=bot_token) if outbound else True
-    ok_thinking = False
-    if thinking_text:
-        _sleep_between_sends()
-        ok_thinking = send_thinking_block_message(
-            chat_id=int(chat_id),
-            thinking_text=thinking_text,
-            user_id=int(user_id),
-            bot_token=bot_token,
-        )
+    outbound_entities = None
+    thinking_embedded = False
+    if thinking_text and _should_send_thinking_block(chat_id=int(chat_id), user_id=int(user_id)):
+        outbound, outbound_entities = _build_reply_with_thinking_block(outbound, thinking_text)
+        thinking_embedded = outbound_entities is not None
+    ok_text = (
+        send_message_segmented(chat_id=chat_id, text=outbound, bot_token=bot_token, entities=outbound_entities)
+        if outbound
+        else True
+    )
     logger.info(
-        "process_message 发送完成 chat_id=%s user_id=%s window_id=%s force_last4=%s ok_text=%s ok_thinking=%s outbound_chars=%s thinking_chars=%s",
+        "process_message 发送完成 chat_id=%s user_id=%s window_id=%s force_last4=%s ok_text=%s thinking_embedded=%s outbound_chars=%s thinking_chars=%s",
         chat_id,
         user_id,
         window_id,
         force_last4,
         ok_text,
-        ok_thinking,
+        thinking_embedded,
         len(outbound),
         len(thinking_text or ""),
     )
