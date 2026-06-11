@@ -683,19 +683,70 @@ def step_trim_messages_if_over_limit(body: dict) -> dict:
     return body
 
 
+def _message_content_text_for_recent_context(msg: dict) -> str:
+    content = (msg or {}).get("content", "")
+    if isinstance(content, list):
+        return " ".join(
+            c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
+        )
+    return str(content or "")
+
+
+def _recent_context_round_time_label(round_obj: dict) -> str:
+    raw = str((round_obj or {}).get("timestamp") or "").strip()
+    if not raw:
+        return ""
+    try:
+        from utils.time_aware import parse_iso_to_beijing
+
+        dt = parse_iso_to_beijing(raw)
+        return dt.strftime("%H:%M") if dt else ""
+    except Exception:
+        return ""
+
+
+def _last_recent_context_message_position(rounds: list) -> tuple[int, int] | None:
+    last_pos = None
+    for ri, r in enumerate(rounds or []):
+        for mi, m in enumerate((r or {}).get("messages") or []):
+            if isinstance(m, dict):
+                last_pos = (ri, mi)
+    return last_pos
+
+
+def _format_recent_context_message_line(
+    round_obj: dict,
+    msg: dict,
+    role: str,
+    *,
+    is_last_message: bool = False,
+    src_tag: str = "",
+) -> str:
+    content = _message_content_text_for_recent_context(msg)
+    if is_last_message:
+        time_label = _recent_context_round_time_label(round_obj)
+        if time_label:
+            role_label = _recent_context_role_label(msg, role)
+            return f"{src_tag}[{time_label}][{role_label}]: {content}"
+    role_label = _recent_context_role_label(msg, role)
+    return f"{src_tag}[{role_label}]: {content}"
+
+
 def _rounds_to_context_text(rounds: list) -> str:
     """把 rounds（含 messages 的列表）拼成一段可读的上下文文本。"""
     lines = []
-    for r in rounds:
-        for m in r.get("messages", []):
+    last_pos = _last_recent_context_message_position(rounds)
+    for ri, r in enumerate(rounds):
+        for mi, m in enumerate(r.get("messages", [])):
             role = str(m.get("role", "") or "").strip().lower()
-            role_label = _recent_context_role_label(m, role)
-            content = m.get("content", "")
-            if isinstance(content, list):
-                content = " ".join(
-                    c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
+            lines.append(
+                _format_recent_context_message_line(
+                    r,
+                    m,
+                    role,
+                    is_last_message=last_pos == (ri, mi),
                 )
-            lines.append(f"[{role_label}]: {content}")
+            )
         action_note = str((r or {}).get("action_note") or "").strip()
         if action_note:
             lines.append(f"[action_note]: {action_note}")
@@ -875,18 +926,21 @@ def step_inject_latest_4_rounds_for_new_window(body: dict, window_id: str, force
     # Telegram 注入时保留来源标签，便于后续扩展其它入口时区分上下文。
     if is_telegram_window:
         lines = []
-        for r in rounds:
+        last_pos = _last_recent_context_message_position(rounds)
+        for ri, r in enumerate(rounds):
             src = str((r or {}).get("_inject_src") or "").strip()
             src_tag = f"【{src}】" if src else ""
-            for m in (r.get("messages") or []):
+            for mi, m in enumerate(r.get("messages") or []):
                 role = str(m.get("role", "") or "").strip().lower()
-                role_label = _recent_context_role_label(m, role)
-                content = m.get("content", "")
-                if isinstance(content, list):
-                    content = " ".join(
-                        c.get("text", str(c)) if isinstance(c, dict) else str(c) for c in content
+                lines.append(
+                    _format_recent_context_message_line(
+                        r,
+                        m,
+                        role,
+                        is_last_message=last_pos == (ri, mi),
+                        src_tag=src_tag,
                     )
-                lines.append(f"{src_tag}[{role_label}]: {content}")
+                )
             action_note = str((r or {}).get("action_note") or "").strip()
             if action_note:
                 lines.append(f"{src_tag}[action_note]: {action_note}")
