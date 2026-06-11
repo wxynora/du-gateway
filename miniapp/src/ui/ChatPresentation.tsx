@@ -276,8 +276,8 @@ function formatAudioDuration(ms?: number): string {
 
 function audioBarWidth(durationMs?: number): number {
   const seconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
-  if (!seconds) return 116;
-  return Math.max(112, Math.min(160, 102 + seconds * 3));
+  if (!seconds) return 108;
+  return Math.max(106, Math.min(148, 96 + seconds * 3));
 }
 
 function formatAttachmentSize(bytes?: number): string {
@@ -328,20 +328,20 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
       <div className="flex items-center gap-2">
         <button
           type="button"
-          className="flex h-[42px] max-w-full items-center gap-2.5 rounded-[18px] bg-white px-3 text-[#111827] shadow-sm ring-1 ring-gray-200/70 transition-opacity active:opacity-70"
+          className="flex h-[28px] max-w-full items-center gap-2 text-current transition-opacity active:opacity-70"
           style={{ width }}
           onClick={() => void togglePlayback()}
           aria-label={playing ? "暂停语音" : "播放语音"}
         >
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-100" aria-hidden="true">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-current/10" aria-hidden="true">
             {playing ? (
-              <span className="flex h-[11px] items-center gap-[3px]">
-                <span className="h-full w-[3px] rounded-full bg-current" />
-                <span className="h-full w-[3px] rounded-full bg-current" />
+              <span className="flex h-[10px] items-center gap-[3px]">
+                <span className="h-full w-[2.5px] rounded-full bg-current" />
+                <span className="h-full w-[2.5px] rounded-full bg-current" />
               </span>
             ) : (
               <span
-                className="ml-[2px] block h-0 w-0 border-y-[6px] border-l-[9px] border-y-transparent border-l-current"
+                className="ml-[2px] block h-0 w-0 border-y-[5px] border-l-[8px] border-y-transparent border-l-current"
               />
             )}
           </span>
@@ -354,14 +354,14 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
               />
             ))}
           </span>
-          <span className="shrink-0 text-[14px] font-semibold leading-none tabular-nums">
+          <span className="shrink-0 text-[13px] font-semibold leading-none tabular-nums">
             {durationLabel}
           </span>
         </button>
         {transcript ? (
           <button
             type="button"
-            className={`h-3.5 w-3.5 shrink-0 rounded-full transition-transform active:scale-90 ${
+            className={`h-3 w-3 shrink-0 rounded-full transition-transform active:scale-90 ${
               textOpen ? "bg-gray-900" : "bg-[#FF4B38]"
             }`}
             onClick={() => setTextOpen((prev) => !prev)}
@@ -371,8 +371,8 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
         ) : null}
       </div>
       {textOpen && transcript ? (
-        <div className={`max-w-[220px] whitespace-pre-wrap rounded-[14px] bg-white/92 px-3 py-2 text-[12px] font-medium leading-5 text-gray-700 shadow-sm ring-1 ring-gray-200/70 ${
-          isRight ? "mr-6 text-left" : "ml-6"
+        <div className={`max-w-[220px] whitespace-pre-wrap pt-1 text-left text-[12px] font-medium leading-5 opacity-80 ${
+          isRight ? "mr-5" : "ml-5"
         }`}>
           {transcript}
         </div>

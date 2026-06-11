@@ -2148,7 +2148,7 @@ export function MainChatScreen({
                       const hasText = Boolean(String(part.content || "").trim());
                       const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
                       const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
-                      const hasBubble = showText;
+                      const hasBubble = showText || audioAttachments.length > 0;
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -2158,7 +2158,6 @@ export function MainChatScreen({
                           className={`flex max-w-full flex-col items-end gap-1.5 ${isActiveSearchPart ? "rounded-[20px] ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
                         >
                           <ChatAttachmentBlock attachments={part.attachments} align="right" kinds={["image"]} />
-                          <ChatAttachmentBlock attachments={audioAttachments} align="right" />
                           {hasBubble ? (
                             <ChatBubbleFrame
                               skin={bubbleSkin}
@@ -2169,6 +2168,7 @@ export function MainChatScreen({
                               style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                             >
                               <div className="space-y-1.5">
+                                <ChatAttachmentBlock attachments={audioAttachments} align="right" />
                                 {showText ? <PlainTextBlock content={part.content} /> : null}
                               </div>
                             </ChatBubbleFrame>
@@ -2203,7 +2203,7 @@ export function MainChatScreen({
                       const hasText = Boolean(String(part.content || "").trim());
                       const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
                       const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
-                      const hasBubble = showText;
+                      const hasBubble = showText || audioAttachments.length > 0;
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -2264,7 +2264,6 @@ export function MainChatScreen({
                             />
                           ) : (
                             <>
-                              <ChatAttachmentBlock attachments={audioAttachments} align="left" />
                               {hasBubble ? (
                                 <ChatBubbleFrame
                                   skin={bubbleSkin}
@@ -2278,6 +2277,7 @@ export function MainChatScreen({
                                   style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                                 >
                                   <div className="space-y-1.5">
+                                    <ChatAttachmentBlock attachments={audioAttachments} align="left" />
                                     {showText ? (
                                       part.render === "html" ? (
                                         <HtmlBlock content={part.content} />
