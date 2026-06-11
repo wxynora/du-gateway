@@ -276,8 +276,8 @@ function formatAudioDuration(ms?: number): string {
 
 function audioBarWidth(durationMs?: number): number {
   const seconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
-  if (!seconds) return 108;
-  return Math.max(106, Math.min(148, 96 + seconds * 3));
+  if (!seconds) return 96;
+  return Math.max(94, Math.min(132, 86 + seconds * 3));
 }
 
 function formatAttachmentSize(bytes?: number): string {
@@ -292,13 +292,11 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [durationMs, setDurationMs] = useState(item.durationMs || 0);
-  const [textOpen, setTextOpen] = useState(false);
   const duration = formatAudioDuration(durationMs);
   const durationLabel = duration || "0\"";
   const width = audioBarWidth(durationMs);
   const isRight = align === "right";
-  const transcript = String(item.transcript || "").trim();
-  const bars = [3, 4, 5, 4, 6, 8, 10, 7, 6, 8, 5, 4, 3];
+  const bars = [2, 3, 4, 3, 5, 7, 8, 6, 5, 7, 4, 3, 2];
 
   function syncMetadata() {
     const durationSeconds = audioRef.current?.duration || 0;
@@ -325,58 +323,38 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
 
   return (
     <div className={`flex max-w-full flex-col gap-1 ${isRight ? "items-end self-end" : "items-start self-start"}`}>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          className="flex h-[28px] max-w-full items-center gap-2 text-current transition-opacity active:opacity-70"
-          style={{ width }}
-          onClick={() => void togglePlayback()}
-          aria-label={playing ? "暂停语音" : "播放语音"}
-        >
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-current/10" aria-hidden="true">
-            {playing ? (
-              <span className="flex h-[10px] items-center gap-[3px]">
-                <span className="h-full w-[2.5px] rounded-full bg-current" />
-                <span className="h-full w-[2.5px] rounded-full bg-current" />
-              </span>
-            ) : (
-              <span
-                className="ml-[2px] block h-0 w-0 border-y-[5px] border-l-[8px] border-y-transparent border-l-current"
-              />
-            )}
-          </span>
-          <span className="flex flex-1 items-end justify-center gap-[2px]" aria-hidden="true">
-            {bars.map((height, index) => (
-              <span
-                key={index}
-                className={`w-[2px] rounded-full bg-current ${playing ? "opacity-90" : "opacity-75"}`}
-                style={{ height: `${playing && index % 3 === 1 ? Math.min(13, height + 2) : height}px` }}
-              />
-            ))}
-          </span>
-          <span className="shrink-0 text-[13px] font-semibold leading-none tabular-nums">
-            {durationLabel}
-          </span>
-        </button>
-        {transcript ? (
-          <button
-            type="button"
-            className={`h-3 w-3 shrink-0 rounded-full transition-transform active:scale-90 ${
-              textOpen ? "bg-gray-900" : "bg-[#FF4B38]"
-            }`}
-            onClick={() => setTextOpen((prev) => !prev)}
-            aria-label={textOpen ? "收起转文字" : "转文字"}
-            title={textOpen ? "收起文字" : "转文字"}
-          />
-        ) : null}
-      </div>
-      {textOpen && transcript ? (
-        <div className={`max-w-[220px] whitespace-pre-wrap pt-1 text-left text-[12px] font-medium leading-5 opacity-80 ${
-          isRight ? "mr-5" : "ml-5"
-        }`}>
-          {transcript}
-        </div>
-      ) : null}
+      <button
+        type="button"
+        className="flex h-[22px] max-w-full items-center gap-1.5 text-current transition-opacity active:opacity-70"
+        style={{ width }}
+        onClick={() => void togglePlayback()}
+        aria-label={playing ? "暂停语音" : "播放语音"}
+      >
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-current/10" aria-hidden="true">
+          {playing ? (
+            <span className="flex h-[8px] items-center gap-[2px]">
+              <span className="h-full w-[2px] rounded-full bg-current" />
+              <span className="h-full w-[2px] rounded-full bg-current" />
+            </span>
+          ) : (
+            <span
+              className="ml-[1px] block h-0 w-0 border-y-[4px] border-l-[7px] border-y-transparent border-l-current"
+            />
+          )}
+        </span>
+        <span className="flex flex-1 items-end justify-center gap-[2px]" aria-hidden="true">
+          {bars.map((height, index) => (
+            <span
+              key={index}
+              className={`w-[2px] rounded-full bg-current ${playing ? "opacity-90" : "opacity-75"}`}
+              style={{ height: `${playing && index % 3 === 1 ? Math.min(10, height + 2) : height}px` }}
+            />
+          ))}
+        </span>
+        <span className="shrink-0 text-[12px] font-semibold leading-none tabular-nums">
+          {durationLabel}
+        </span>
+      </button>
       <audio
         ref={audioRef}
         className="hidden"
@@ -387,6 +365,51 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
         onPause={() => setPlaying(false)}
         onPlay={() => setPlaying(true)}
       />
+    </div>
+  );
+}
+
+export function ChatVoiceTranscriptBlock({
+  attachments,
+  align = "left",
+  openTranscriptId,
+  onTranscriptToggle,
+}: {
+  attachments?: ChatAttachment[];
+  align?: "left" | "right";
+  openTranscriptId?: string;
+  onTranscriptToggle: (item: ChatAttachment) => void;
+}) {
+  const items = Array.isArray(attachments)
+    ? attachments.filter((item) => item.kind === "audio" && String(item.transcript || "").trim())
+    : [];
+  if (!items.length) return null;
+  const isRight = align === "right";
+  return (
+    <div className={`flex max-w-full flex-col gap-1 px-1 ${isRight ? "items-end self-end" : "items-start self-start"}`}>
+      {items.map((item) => {
+        const id = String(item.id || item.remoteKey || item.remoteUrl || "").trim();
+        const open = Boolean(id && openTranscriptId === id);
+        const transcript = String(item.transcript || "").trim();
+        return (
+          <div key={id || item.remoteUrl || transcript} className={`flex max-w-[260px] flex-col gap-0.5 ${isRight ? "items-end" : "items-start"}`}>
+            <button
+              type="button"
+              className={`text-[10px] font-medium leading-4 transition-colors active:opacity-70 ${
+                open ? "text-gray-700" : "text-gray-400"
+              }`}
+              onClick={() => onTranscriptToggle(item)}
+            >
+              {open ? "收起文字" : "转文字"}
+            </button>
+            {open ? (
+              <div className="whitespace-pre-wrap text-left text-[12px] font-medium leading-5 text-gray-500">
+                {transcript}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

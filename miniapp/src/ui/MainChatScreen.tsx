@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, setPanelToken } from "./api";
-import { AvatarBubble, ChatActionButton, ChatAttachmentBlock, ChatBubbleFrame, ChatHeaderStatus, HtmlBlock, PlainTextBlock, RichTextBlock, copyText, formatTokenCountValue } from "./ChatPresentation";
+import { AvatarBubble, ChatActionButton, ChatAttachmentBlock, ChatBubbleFrame, ChatHeaderStatus, ChatVoiceTranscriptBlock, HtmlBlock, PlainTextBlock, RichTextBlock, copyText, formatTokenCountValue } from "./ChatPresentation";
 import {
   TRANSPARENT_BUBBLE_CLASS,
   resolveBubbleClass,
@@ -285,6 +285,7 @@ export function MainChatScreen({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [openVoiceTranscriptId, setOpenVoiceTranscriptId] = useState("");
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -309,6 +310,12 @@ export function MainChatScreen({
   const sumitalkOperationRecoveringRef = useRef<Set<string>>(new Set());
   const groupDiscussionRunRef = useRef(0);
   const groupDiscussionSnapshotRef = useRef<GroupDiscussionSnapshot | null>(null);
+
+  function toggleVoiceTranscript(item: ChatAttachment) {
+    const id = String(item.id || item.remoteKey || item.remoteUrl || "").trim();
+    if (!id) return;
+    setOpenVoiceTranscriptId((current) => (current === id ? "" : id));
+  }
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -2173,6 +2180,12 @@ export function MainChatScreen({
                               </div>
                             </ChatBubbleFrame>
                           ) : null}
+                          <ChatVoiceTranscriptBlock
+                            attachments={audioAttachments}
+                            align="right"
+                            openTranscriptId={openVoiceTranscriptId}
+                            onTranscriptToggle={toggleVoiceTranscript}
+                          />
                         </div>
                       );
                     })}
@@ -2290,6 +2303,12 @@ export function MainChatScreen({
                                   </div>
                                 </ChatBubbleFrame>
                               ) : null}
+                              <ChatVoiceTranscriptBlock
+                                attachments={audioAttachments}
+                                align="left"
+                                openTranscriptId={openVoiceTranscriptId}
+                                onTranscriptToggle={toggleVoiceTranscript}
+                              />
                               {hasBubble || (group.role === "assistant" && part.status === "failed" && part.operationId) || (showTokenCount && (part.tokenCount?.input || part.tokenCount?.output)) ? (
                                 <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
                                   {part.content ? (
