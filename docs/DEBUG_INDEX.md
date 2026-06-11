@@ -873,6 +873,9 @@ PY
 - 已改动：`scripts/claude_oauth_proxy.js` 在正常转发上游响应时顺手解析并保存结构化 `rateLimitSnapshot`；`/internal/oauth-status` 会随 token 状态返回最新快照，不额外发探测请求，不记录 token、请求正文或完整响应体。
 - 已改动：`routes/miniapp/upstreams.py` 放行清洗后的 `rateLimitSnapshot`；`miniapp/src/ui/tabs/SettingsUpstream.tsx` 可在 OAuth 节点显示 `5h` / `周` 用量和 reset 时间。
 - 部署注意：`claude-oauth-proxy.service` 实际运行 `/home/nora/claude-proxy/proxy.js`，不是直接运行仓库里的 `scripts/claude_oauth_proxy.js`。线上生效需要服务器拉代码后，把仓库脚本同步到该实际服务文件，再重启 `du-gateway.service` 和 `claude-oauth-proxy.service`；MiniApp 若要显示最新前端，需要重新构建/同步静态资源。
+当前状态（2026-06-11 查岗截图主动性）：
+- 已调整：`request_screen_check` 工具说明不再写成只有“她很久没回/她主动说可以看”才适合使用，改为经她确认的查岗申请；渡惦记她、想知道她现在在忙什么、她突然安静，或想带一点玩笑地查岗时都可以主动用。
+- 已调整：`pipeline.py` 静态工具提示增加【查岗截图工具】，明确不必等她先说“你可以看”，因为工具本身会让她选择同意或拒绝；仍保留“不要短时间连续发起，拒绝或没理时先停一停”。
 
 ## CPA / Codex 反代
 

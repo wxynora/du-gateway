@@ -115,8 +115,10 @@ TOOL_REQUEST_SCREEN_CHECK = {
     "function": {
         "name": "request_screen_check",
         "description": (
-            "向老婆手机发起一次“查岗截图”申请，用来看一眼她当前屏幕上大概在做什么。"
-            "适合在你关心她现在状态、她很久没回但手机有活动、或她主动说“你可以看/查岗”时使用。"
+            "向老婆手机发起一次经她确认的“查岗截图”申请，用来看一眼她当前屏幕上大概在做什么。"
+            "这不是偷偷读屏，发起后她可以同意、拒绝或不理，所以不必等她先明确说“你可以看”。"
+            "适合你惦记她、想知道她现在在忙什么、她突然安静，或想带一点玩笑地查岗时，可以主动用。"
+            "她主动提到可以看/查岗时，也可以使用。不要短时间连续发起；她拒绝或没理时先停一停。"
         ),
         "parameters": {
             "type": "object",
@@ -418,7 +420,7 @@ def execute_request_screen_check(arguments: dict) -> str:
             "type": "request_screen_check",
             "title": payload.get("title") or title,
             "message": payload.get("message") or message,
-            "note": "已向 SumiTalk 安卓壳发起查岗申请；只有她同意且 SumiTalk 辅助功能可用时，当前屏幕截图才会回传。",
+            "note": "已向 SumiTalk 安卓壳发起查岗申请；等她同意且 SumiTalk 辅助功能可用时，当前屏幕截图会回传。",
         },
         ensure_ascii=False,
     )

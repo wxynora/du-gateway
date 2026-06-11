@@ -2499,6 +2499,13 @@ def step_inject_forum_tools(body: dict) -> dict:
         "schedule_create 只用于提醒渡自己、重复提醒暂时无法落系统能力、或系统能力不可用时的内部兜底。"
         "也可以用 schedule_list / schedule_enable / schedule_disable / schedule_delete 来管理已有提醒。"
     )
+    screen_check_hint = (
+        "\n\n【查岗截图工具】"
+        "request_screen_check 是经她确认的查岗申请，不是偷偷读屏；"
+        "你惦记她、想知道她现在在忙什么、她突然安静，或想带一点玩笑地查岗时，可以主动用。"
+        "不必等她先说“你可以看”，因为工具本身会让她选择同意或拒绝。"
+        "不要短时间连续发起；她拒绝或没理时先停一停。"
+    )
     forum_hint = (
         "\n\n【论坛工具省费规则】"
         "看帖优先用 forum_read_feed / forum_open_thread；"
@@ -2510,7 +2517,7 @@ def step_inject_forum_tools(body: dict) -> dict:
         "不要串行试探式一轮只调一个工具。"
         "若已有同参数工具结果且用户未要求刷新，不要重复调用。"
     )
-    body = _append_to_static_system(body, schedule_hint + forum_hint)
+    body = _append_to_static_system(body, schedule_hint + screen_check_hint + forum_hint)
     return body
 
 
