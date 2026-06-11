@@ -96,7 +96,13 @@ function outputStatsLine(stats?: OutputStats) {
   const thinkingTokens = Number(stats.thinking_tokens_est || 0);
   if (!outputTokens && !thinkingTokens) return "";
   const outputPrefix = stats.source === "usage" ? "=" : "≈";
-  return `output${outputPrefix}${tokenCountValue(outputTokens)}（thinking ${tokenCountValue(thinkingTokens)}）`;
+  if (stats.thinking_tokens_source === "usage_output_tokens_details") {
+    return `output${outputPrefix}${tokenCountValue(outputTokens)}（thinking ${tokenCountValue(thinkingTokens)}）`;
+  }
+  if (stats.reasoning_omitted) {
+    return `output${outputPrefix}${tokenCountValue(outputTokens)}（thinking 未返回）`;
+  }
+  return `output${outputPrefix}${tokenCountValue(outputTokens)}`;
 }
 
 function PromptCacheDebugCard({ entries, outputStats }: { entries?: PromptCacheDebugEntry[]; outputStats?: OutputStats }) {

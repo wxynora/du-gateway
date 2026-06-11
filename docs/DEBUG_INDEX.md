@@ -183,13 +183,21 @@ rg -n "reasoning|thinking|cache_debug|prompt_cache|X-DU-FOLLOWUP-ARCHIVE" routes
 - 如果请求被判定为内部生成且没带 `X-DU-FOLLOWUP-ARCHIVE: 1`，就不会出现在面板。
 - 事件唤醒默认应该归档，避免后面对话断层。
 - `reasoning_details` 可能只有结构化块，没有可展示正文，面板会显示“adaptive thinking 但未返回正文”。
+- thinking token 数字只认上游/代理实际返回的 `usage.output_tokens_details.thinking_tokens`（归档里会摊平成 `cache_debug.usage.thinking_tokens`）；字段缺失时不再用 `output_tokens - visible_reply_est` 猜，字段返回 0 就按 0 展示。
 
 当前状态（2026-06-11 Claude Fable fallback 观测）：
 - 已完成：`scripts/claude_oauth_proxy.js` 在 Anthropic -> OpenAI 兼容转换时保留真实服务模型、请求模型、`fallback` content block、`usage.iterations` 和 `usage.output_tokens_details`，用于判断 Fable 5 是否被路由到 Opus 4.8 等 fallback 模型。
 - 已完成：`services/prompt_cache_debug.py` 把上游响应观测字段写入 `cache_debug.response`，并把 `output_tokens_details.thinking_tokens`、fallback attempts 和 fallback model 写入 `cache_debug.usage`。
-- 已完成：`routes/miniapp/reasoning.py` 优先使用上游精确 `thinking_tokens` 计算思维链卡片里的 thinking 占比；没有精确字段时才退回原有估算。
+- 已完成：`routes/miniapp/reasoning.py` 使用上游精确 `thinking_tokens` 计算思维链卡片里的 thinking 占比；没有精确字段时不再估算 hidden thinking。
 - 已完成：`miniapp/src/ui/tabs/ReasoningTab.tsx` 展开 Prompt Cache 卡片时显示 `model=请求模型 -> 实际模型`、`fallback=是`、`fallback_model=...`、`attempts=...` 和 `thinking_exact=...`。
 - 已验证：`.venv/bin/python -m py_compile services/prompt_cache_debug.py routes/miniapp/reasoning.py`、`node --check scripts/claude_oauth_proxy.js`、`npm --prefix miniapp run build` 通过；合成 Fable -> Opus fallback 响应可提取 `actual_model`、`served_by_fallback`、`thinking_tokens`、`fallback_model` 和 `fallback_message_count`；`miniapp_static` 已随前端重建。
+
+当前状态（2026-06-11 thinking token 实际字段校准）：
+- 已完成：`routes/miniapp/reasoning.py` 删除 `adaptive_output_delta` 推算路径，`thinking_tokens_est` 只在 `cache_debug.usage` 实际包含 `thinking_tokens` 字段时填真实值；字段值为 `0` 也保留为真实值。仍保留 `reasoning_text_tokens_est` 只用于明文 reasoning 的总输出估算。
+- 已完成：`miniapp/src/ui/tabs/ReasoningTab.tsx` 的 Prompt Cache 小字只有实际来源为 `usage_output_tokens_details` 时显示 `thinking N`，包括 `thinking 0`；归档标记 `reasoning_omitted=true` 但没有实际 thinking token 字段时显示 `thinking 未返回`。
+- 现场实测：远端 `/home/nora/claude-proxy` 直打 `127.0.0.1:8082/v1/chat/completions`，`claude-fable-5` 简单回复返回 `output_tokens_details.thinking_tokens=0`；短推理题返回 `thinking_tokens=58`，同时有 `reasoning_content/thinking_blocks`。结论：正常链路会返回字段，但具体请求可能为 0；旧归档缺字段时不能倒推出真实思考消耗。
+- 旧案定位：`2026-06-10T22:02:19+08:00`、`tg_8260066512`、R2 index `8839` 的归档只有 `completion_tokens=535`、空 thinking block + signature、`reasoning_omitted=true`，没有 `output_tokens_details`；这条只能显示 `output=535（thinking 未返回）`，不能说 thinking 为 0，也不能估成 366。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/reasoning.py` 通过；`_build_output_stats` smoke 覆盖“缺实际字段不估算”和“实际 thinking_tokens=123 时显示真实来源”；`npm -C miniapp run build:android` 已重建 `miniapp_static`。
 
 ## SumiTalk 聊天 / 本地历史
 
@@ -834,6 +842,28 @@ ssh -o ControlMaster=no ali-du 'ss -ltnp 2>/dev/null | grep -E "(:8082|:8317)"'
 ssh -o ControlMaster=no ali-du 'journalctl --user -u claude-oauth-proxy.service -n 120 --no-pager -o cat | grep -Ei "401|refresh|auth file|cloudflare|error|model"'
 ```
 
+干净重启 Claude OAuth proxy 时，不要手动 `cd /home/nora/claude-proxy && node proxy.js`，也不要只按某个旧 PID kill。必须让 user systemd 接管；如果 8082 已被脱管 node 占用，按 cwd/cmdline 校验后先清掉脱管进程：
+
+```bash
+ssh -o ControlMaster=no ali-du 'set -e
+systemctl --user stop --no-block claude-oauth-proxy.service || true
+for pid in $(pgrep -u nora -f "node proxy.js|/home/nora/claude-proxy/proxy.js" || true); do
+  cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
+  cmd=$(tr "\0" " " <"/proc/$pid/cmdline" 2>/dev/null || true)
+  cg=$(cat "/proc/$pid/cgroup" 2>/dev/null || true)
+  if [ "$cwd" = "/home/nora/claude-proxy" ] && printf "%s" "$cg" | grep -q "session-"; then
+    echo "kill orphan claude proxy pid=$pid cmd=$cmd"
+    kill "$pid" || true
+  fi
+done
+sleep 1
+systemctl --user reset-failed claude-oauth-proxy.service || true
+systemctl --user start claude-oauth-proxy.service
+systemctl --user status claude-oauth-proxy.service --no-pager -l | sed -n "1,45p"
+ss -ltnp 2>/dev/null | grep ":8082"
+'
+```
+
 确认 token 是否已同步成功：
 - 本机日志应出现类似：`synced oauth via_http reason=... oauth_ready refresh_attempted=... expiresAt=...`；若 HTTP 失败后保底成功，会出现 `synced oauth via_ssh_fallback ...`
 - 远端 Claude OAuth proxy 日志应出现 `OAuth synced by HTTP`，或状态接口返回新的 `expiresAt`。
@@ -880,6 +910,10 @@ PY
 - 已改动：`scripts/claude_oauth_proxy.js` 在正常转发上游响应时顺手解析并保存结构化 `rateLimitSnapshot`；`/internal/oauth-status` 会随 token 状态返回最新快照，不额外发探测请求，不记录 token、请求正文或完整响应体。
 - 已改动：`routes/miniapp/upstreams.py` 放行清洗后的 `rateLimitSnapshot`；`miniapp/src/ui/tabs/SettingsUpstream.tsx` 可在 OAuth 节点显示 `5h` / `周` 用量和 reset 时间。
 - 部署注意：`claude-oauth-proxy.service` 实际运行 `/home/nora/claude-proxy/proxy.js`，不是直接运行仓库里的 `scripts/claude_oauth_proxy.js`。线上生效需要服务器拉代码后，把仓库脚本同步到该实际服务文件，再重启 `du-gateway.service` 和 `claude-oauth-proxy.service`；MiniApp 若要显示最新前端，需要重新构建/同步静态资源。
+当前状态（2026-06-11 Claude proxy 脱管 node 清理）：
+- 已查明：`127.0.0.1:8082` 被 `session-41335.scope` 里的脱管 `node proxy.js` 占用，session 来源是 `2026-06-11 16:01:51` 从 `100.105.159.127` SSH 登录；它不在 `claude-oauth-proxy.service` cgroup 内，导致 user systemd 后续每 3 秒拉起新进程时都报 `EADDRINUSE`。
+- 已处理：先 `systemctl --user stop --no-block claude-oauth-proxy.service`，再校验 `/proc/757708/cwd=/home/nora/claude-proxy` 且 cmdline 为 `node proxy.js` 后杀掉脱管进程，最后 `reset-failed` 并 `start claude-oauth-proxy.service`。
+- 已验证：`claude-oauth-proxy.service` 当前 `active (running)`，Main PID `802552` 位于 `/user.slice/user-1001.slice/user@1001.service/app.slice/claude-oauth-proxy.service`，`GET /v1/models` 返回 `200`。
 当前状态（2026-06-11 查岗截图主动性）：
 - 已调整：`request_screen_check` 工具说明不再写成只有“她很久没回/她主动说可以看”才适合使用，改为经她确认的查岗申请；渡惦记她、想知道她现在在忙什么、她突然安静，或想带一点玩笑地查岗时都可以主动用。
 - 已调整：`pipeline.py` 静态工具提示增加【查岗截图工具】，明确不必等她先说“你可以看”，因为工具本身会让她选择同意或拒绝；仍保留“不要短时间连续发起，拒绝或没理时先停一停”。
@@ -1439,7 +1473,7 @@ npm -C miniapp run android
 - 未完成 / 下次继续：这只影响模型列表展示和手动选择；实际 chat 是否可用还要由 Anthropic/OAuth 端是否接受对应 model id 决定。
 
 当前状态（2026-05-29 思维链页 Output token 展示）：
-- 已完成：`routes/miniapp/reasoning.py` 为 `/miniapp-api/reasoning/latest` 增加 `output_stats`，优先用 `cache_debug.usage` 汇总 actual output tokens；有明文 thinking 时按 thinking 文本估算，CC/Claude adaptive thinking 只有 usage、没有明文时，用 `output_tokens - visible_reply_est` 估 hidden thinking，不伪造思维链正文。
+- 已完成：`routes/miniapp/reasoning.py` 为 `/miniapp-api/reasoning/latest` 增加 `output_stats`，优先用 `cache_debug.usage` 汇总 actual output tokens；当时曾对 CC/Claude adaptive thinking 的 hidden thinking 做差值估算，后续 2026-06-11 已改为只认上游实际 `thinking_tokens` 字段。
 - 已完成：`miniapp/src/ui/tabs/ReasoningTab.tsx` 不再新增独立 Output 卡片；Output token 直接显示在原粉色 `Prompt Cache` 卡片的 `input=...` 后面，格式如 `output=4609（thinking 2376）`。
 - 已验证：`.venv/bin/python -m py_compile routes/miniapp/reasoning.py` 通过；`npx vite build --outDir /tmp/du-gateway-miniapp-output-stats-build --emptyOutDir true` 通过；`_build_output_stats` smoke 覆盖 usage 优先、thinking 估算和占比；`git diff --check -- routes/miniapp/reasoning.py miniapp/src/ui/tabs/ReasoningTab.tsx docs/DEBUG_INDEX.md` 通过。
 - 未完成 / 下次继续：本轮只改思维链面板展示，不改聊天气泡 token 小字、不改上游 usage 透传和计费逻辑。

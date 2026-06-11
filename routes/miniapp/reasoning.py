@@ -114,33 +114,36 @@ def _sum_usage_output_tokens(cache_debug_items: list[dict]) -> int:
     return total
 
 
-def _sum_usage_thinking_tokens(cache_debug_items: list[dict]) -> int:
+def _sum_usage_thinking_tokens(cache_debug_items: list[dict]) -> tuple[int, bool]:
     total = 0
+    has_value = False
     for entry in cache_debug_items or []:
         usage = entry.get("usage") if isinstance(entry, dict) else None
         if not isinstance(usage, dict):
             continue
-        total += _first_positive_usage_value(usage, ("thinking_tokens",))
-    return total
+        if "thinking_tokens" not in usage:
+            continue
+        try:
+            total += max(0, int(float(usage.get("thinking_tokens") or 0)))
+            has_value = True
+        except Exception:
+            continue
+    return total, has_value
 
 
 def _build_output_stats(msg: dict, reasoning_text: str, cache_debug_items: list[dict], reasoning_omitted: bool = False) -> dict:
     visible_text = _content_to_text((msg or {}).get("content"))
     visible_tokens_est = estimate_tokens(visible_text)
-    thinking_tokens_est = estimate_tokens(reasoning_text)
+    reasoning_text_tokens_est = estimate_tokens(reasoning_text)
     usage_output_tokens = _sum_usage_output_tokens(cache_debug_items)
-    usage_thinking_tokens = _sum_usage_thinking_tokens(cache_debug_items)
-    thinking_tokens_source = "reasoning_text" if thinking_tokens_est > 0 else ""
-    if usage_thinking_tokens > 0:
-        thinking_tokens_est = usage_thinking_tokens
+    usage_thinking_tokens, has_usage_thinking_tokens = _sum_usage_thinking_tokens(cache_debug_items)
+    if has_usage_thinking_tokens:
         thinking_tokens_source = "usage_output_tokens_details"
-    elif usage_output_tokens > 0 and reasoning_omitted and thinking_tokens_est <= 0:
-        # CC/Claude adaptive thinking may only be visible in usage.output_tokens.
-        # No plaintext thinking is recoverable, but output minus visible reply is the useful accounting estimate.
-        thinking_tokens_est = max(0, usage_output_tokens - visible_tokens_est)
-        if thinking_tokens_est > 0:
-            thinking_tokens_source = "adaptive_output_delta"
-    estimated_total = visible_tokens_est + thinking_tokens_est
+        thinking_tokens_est = usage_thinking_tokens
+    else:
+        thinking_tokens_source = ""
+        thinking_tokens_est = 0
+    estimated_total = visible_tokens_est + reasoning_text_tokens_est
     output_tokens = usage_output_tokens or estimated_total
     thinking_ratio = (thinking_tokens_est / output_tokens) if output_tokens > 0 else 0
     return {
@@ -149,8 +152,10 @@ def _build_output_stats(msg: dict, reasoning_text: str, cache_debug_items: list[
         "usage_output_tokens": usage_output_tokens,
         "estimated_output_tokens": estimated_total,
         "visible_tokens_est": visible_tokens_est,
+        "reasoning_text_tokens_est": reasoning_text_tokens_est,
         "thinking_tokens_est": thinking_tokens_est,
         "usage_thinking_tokens": usage_thinking_tokens,
+        "has_usage_thinking_tokens": has_usage_thinking_tokens,
         "thinking_tokens_source": thinking_tokens_source,
         "thinking_ratio": round(thinking_ratio, 4),
         "reasoning_omitted": bool(reasoning_omitted),
