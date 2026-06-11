@@ -2156,6 +2156,7 @@ export function MainChatScreen({
                       const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
                       const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
                       const hasBubble = showText || audioAttachments.length > 0;
+                      const voiceOnly = audioAttachments.length > 0 && !showText;
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -2169,12 +2170,14 @@ export function MainChatScreen({
                             <ChatBubbleFrame
                               skin={bubbleSkin}
                               align="right"
-                              className={`block max-w-full rounded-[18px] px-2.5 py-[5px] text-left font-medium leading-[1.42] shadow-sm ${
+                              className={`block max-w-full rounded-[18px] text-left font-medium leading-[1.42] shadow-sm ${
+                                voiceOnly ? "px-2 py-[2px]" : "px-2.5 py-[5px]"
+                              } ${
                                 transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
                               }`}
                               style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                             >
-                              <div className="space-y-1.5">
+                              <div className={voiceOnly ? "" : "space-y-1.5"}>
                                 <ChatAttachmentBlock attachments={audioAttachments} align="right" />
                                 {showText ? <PlainTextBlock content={part.content} /> : null}
                               </div>
@@ -2217,6 +2220,7 @@ export function MainChatScreen({
                       const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
                       const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
                       const hasBubble = showText || audioAttachments.length > 0;
+                      const voiceOnly = audioAttachments.length > 0 && !showText;
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -2280,7 +2284,9 @@ export function MainChatScreen({
                               {hasBubble ? (
                                 <ChatBubbleFrame
                                   skin={bubbleSkin}
-                                  className={`inline-block w-fit max-w-full rounded-[18px] px-2.5 py-[5px] font-medium leading-[1.42] shadow-sm ${
+                                  className={`inline-block w-fit max-w-full rounded-[18px] font-medium leading-[1.42] shadow-sm ${
+                                    voiceOnly ? "px-2 py-[2px]" : "px-2.5 py-[5px]"
+                                  } ${
                                     transparentBubbleEnabled
                                       ? TRANSPARENT_BUBBLE_CLASS
                                       : group.role === "benben"
@@ -2289,7 +2295,7 @@ export function MainChatScreen({
                                   }`}
                                   style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                                 >
-                                  <div className="space-y-1.5">
+                                  <div className={voiceOnly ? "" : "space-y-1.5"}>
                                     <ChatAttachmentBlock attachments={audioAttachments} align="left" />
                                     {showText ? (
                                       part.render === "html" ? (

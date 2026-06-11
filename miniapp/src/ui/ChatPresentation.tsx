@@ -276,8 +276,8 @@ function formatAudioDuration(ms?: number): string {
 
 function audioBarWidth(durationMs?: number): number {
   const seconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
-  if (!seconds) return 96;
-  return Math.max(94, Math.min(132, 86 + seconds * 3));
+  if (!seconds) return 92;
+  return Math.max(90, Math.min(126, 82 + seconds * 3));
 }
 
 function formatAttachmentSize(bytes?: number): string {
@@ -322,23 +322,23 @@ function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string;
   }
 
   return (
-    <div className={`flex max-w-full flex-col gap-1 ${isRight ? "items-end self-end" : "items-start self-start"}`}>
+    <div className={`flex max-w-full flex-col ${isRight ? "items-end self-end" : "items-start self-start"}`}>
       <button
         type="button"
-        className="flex h-[22px] max-w-full items-center gap-1.5 text-current transition-opacity active:opacity-70"
+        className="flex h-5 max-w-full items-center gap-1.5 text-current transition-opacity active:opacity-70"
         style={{ width }}
         onClick={() => void togglePlayback()}
         aria-label={playing ? "暂停语音" : "播放语音"}
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-current/10" aria-hidden="true">
+        <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-current/10" aria-hidden="true">
           {playing ? (
-            <span className="flex h-[8px] items-center gap-[2px]">
+            <span className="flex h-[7px] items-center gap-[2px]">
               <span className="h-full w-[2px] rounded-full bg-current" />
               <span className="h-full w-[2px] rounded-full bg-current" />
             </span>
           ) : (
             <span
-              className="ml-[1px] block h-0 w-0 border-y-[4px] border-l-[7px] border-y-transparent border-l-current"
+              className="ml-[1px] block h-0 w-0 border-y-[4px] border-l-[6px] border-y-transparent border-l-current"
             />
           )}
         </span>
