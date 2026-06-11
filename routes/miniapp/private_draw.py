@@ -62,15 +62,15 @@ def _private_draw_system_prompt(body: dict) -> str:
     if not lines:
         return ""
 
-    header = "小家私密抽签页刚抽出一张情侣情趣小纸条。"
+    header = "小玥刚在 sex play 抽签页抽出一张小纸条发给你。"
     if entry:
         header += f"\nEntry #{entry}"
     return (
         f"{header}\n"
         + "\n".join(lines)
         + "\n\n"
-        "系统提示：以上只是给你看的抽签结果，不是她发出的聊天文本。"
-        "不要代替她说话，不要写成「我抽到了/发你看看」之类的用户口吻。"
+        "系统提示：以上是小玥抽出来发给你看的结果，不是小玥的聊天正文。"
+        "不要代替小玥说话，不要写成「我抽到了/发你看看」之类的用户口吻。"
         "你只需要按最近聊天入口的语气，以渡自己的口吻自然回应一两句；"
         "不要写开场白，不要旁白，不要扩成角色扮演剧情，也不要解释工具或系统流程。"
     )
@@ -100,7 +100,8 @@ def register_routes(bp) -> None:
         try:
             from services.pixel_home import save_active_private_draw
 
-            active_saved = bool((save_active_private_draw(body) or {}).get("ok"))
+            active_payload = {**body, "source": "private_draw_page", "drawn_by": "xinyue"}
+            active_saved = bool((save_active_private_draw(active_payload) or {}).get("ok"))
         except Exception as e:
             logger.warning("private_draw_active_save_failed error=%s", e)
 

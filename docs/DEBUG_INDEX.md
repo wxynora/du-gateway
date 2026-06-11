@@ -112,9 +112,10 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 未完成 / 下次继续：本轮不改小家自动结束行为本身，只改提示词注入位置和动态区体积。
 
 当前状态（2026-06-11 sex play 抽签工具）：
-- 已完成：新增渡可调用的网关工具 `sex_play_draw`，不依赖 Notion 开关；`action=draw` 抽一张并保存为当前有效私密纸条，已有有效纸条时不覆盖；`action=void_redraw` 作废当前纸条并重抽；`action=done` 完成并清掉当前纸条。
+- 已完成：新增渡可调用的网关工具 `sex_play_draw`，不依赖 Notion 开关；可见 `action` 为 `draw` / `redraw` / `done`：`draw` 抽一张临时纸条，已有纸条时不覆盖；`redraw` 不采用当前这张并重抽；`done` 结束本轮并清掉当前纸条。旧 `void_redraw` 仍作为兼容别名处理，但不再展示给渡，避免“作废/有效/完成”让渡误以为一抽定终身。
 - 已完成：后端抽签池与 `miniapp/src/ui/tabs/PixelHomeTab.tsx` 的小家私密抽屉玩法池保持同一套口径；抽出的纸条仍写入 `services/pixel_home.py` 的 `active_private_draw`，后续动态小家状态会自然注入当前有效纸条。
-- 已验证：`.venv/bin/python -m py_compile services/pixel_home.py services/gateway_tools.py services/notion_tools.py pipeline/pipeline.py routes/chat.py` 通过；mock 小家存储烟测确认 draw / repeated draw / void_redraw / done 行为正确，且 `get_gateway_tools_for_inject()` 与 `execute_tool()` 都能看到并执行 `sex_play_draw`。
+- 已完成：当前纸条会区分来源：小玥从页面抽出并发给渡时保存 `drawn_by=xinyue` / `source=private_draw_page`；渡用 `sex_play_draw` 抽出时保存 `drawn_by=du` / `source=sex_play_draw`。动态区会写明来源，避免把渡抽的说成小玥抽的，或把小玥发来的说成渡自己抽的。
+- 已验证：`.venv/bin/python -m py_compile services/pixel_home.py routes/miniapp/private_draw.py services/conversation_followup.py routes/chat.py services/gateway_tools.py services/notion_tools.py pipeline/pipeline.py` 通过；mock 小家存储烟测确认 `drawn_by=xinyue` 和 `drawn_by=du` 会注入不同来源说明，`redraw` 可重抽、`void_redraw` 仍兼容、`done` 后清掉当前纸条；前端发送唤醒文案确认是“小玥抽出来发给你看的结果”；`rg` 确认旧工具名和旧“她/小家私密抽签页刚抽出”文案无残留。
 - 未完成 / 下次继续：本轮不改前端私密抽屉 UI，不改真实 R2 里的当前纸条，也不处理 APK/Android 入口。
 
 ## 聊天失败 / 上游不可用

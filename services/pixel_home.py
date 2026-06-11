@@ -650,6 +650,25 @@ def _normalize_private_draw_rows(raw: Any) -> list[dict]:
     return out
 
 
+def _normalize_private_draw_drawn_by(raw: Any, source: str = "") -> str:
+    text = str(raw or "").strip().lower()
+    src = str(source or "").strip().lower()
+    if text in {"du", "渡", "assistant", "bot"} or src in {"sex_play_draw", "du_tool"}:
+        return "du"
+    if text in {"xinyue", "小玥", "user", "wife", "miniapp"} or src in {"private_draw_page", "miniapp_private_draw"}:
+        return "xinyue"
+    return ""
+
+
+def _private_draw_origin_text(active: dict | None) -> str:
+    drawn_by = str((active or {}).get("drawn_by") or "").strip()
+    if drawn_by == "du":
+        return "你用 sex_play_draw 抽出的"
+    if drawn_by == "xinyue":
+        return "小玥在 sex play 抽签页抽出并发给你看的"
+    return "旧版纸条，未记录是谁抽的"
+
+
 def _normalize_active_private_draw(raw: Any) -> dict | None:
     if not isinstance(raw, dict):
         return None
@@ -657,11 +676,14 @@ def _normalize_active_private_draw(raw: Any) -> dict | None:
     if not rows:
         return None
     created_at = str(raw.get("created_at") or raw.get("createdAt") or raw.get("at") or "").strip() or now_beijing_iso()
+    source = str(raw.get("source") or "private_draw").strip() or "private_draw"
+    drawn_by = _normalize_private_draw_drawn_by(raw.get("drawn_by") or raw.get("drawnBy") or raw.get("actor") or raw.get("by"), source)
     return {
         "entry_number": str(raw.get("entry_number") or raw.get("entry") or "").strip(),
         "created_at": created_at,
         "result": rows,
-        "source": "private_draw",
+        "source": source,
+        "drawn_by": drawn_by,
     }
 
 
@@ -716,7 +738,8 @@ def _new_private_draw_payload() -> dict:
         "entry_number": _private_draw_entry_number(),
         "created_at": now_beijing_iso(),
         "result": _private_draw_pick_rows(),
-        "source": "private_draw",
+        "source": "sex_play_draw",
+        "drawn_by": "du",
     }
 
 
@@ -733,7 +756,7 @@ def _private_draw_summary(active: dict | None) -> list[str]:
 def execute_private_draw_action(action: str) -> dict:
     """
     给渡用的 sex play 抽签工具。
-    draw 保留现有有效纸条；void_redraw 作废当前纸条并立刻重抽；done 完成并清掉当前纸条。
+    draw 保留当前临时纸条；redraw 不采用当前纸条并立刻重抽；done 结束本轮并清掉当前纸条。
     """
     raw_action = str(action or "").strip().lower()
     aliases = {
@@ -741,21 +764,22 @@ def execute_private_draw_action(action: str) -> dict:
         "roll": "draw",
         "create": "draw",
         "start": "draw",
-        "作废重抽": "void_redraw",
-        "重抽": "void_redraw",
-        "redraw": "void_redraw",
-        "reroll": "void_redraw",
-        "void": "void_redraw",
+        "作废重抽": "redraw",
+        "重抽": "redraw",
+        "redraw": "redraw",
+        "reroll": "redraw",
+        "void": "redraw",
+        "void_redraw": "redraw",
         "完成": "done",
         "complete": "done",
         "finish": "done",
     }
     action_name = aliases.get(raw_action, raw_action)
-    if action_name not in {"draw", "void_redraw", "done"}:
+    if action_name not in {"draw", "redraw", "done"}:
         return {
             "ok": False,
             "error": "INVALID_ACTION",
-            "message": "action 只能是 draw / void_redraw / done",
+            "message": "action 只能是 draw / redraw / done",
         }
 
     current = _stored_state()
@@ -779,7 +803,7 @@ def execute_private_draw_action(action: str) -> dict:
             "ok": True,
             "action": action_name,
             "status": "existing",
-            "message": "已有当前有效纸条，未重复抽；如果想废掉这张再抽，请调用 void_redraw。",
+            "message": f"现在已经有一张临时纸条（{_private_draw_origin_text(existing)}），未重复抽；这不是定终身，想换就用 redraw 再抽一张。",
             "active_private_draw": existing,
             "summary": _private_draw_summary(existing),
         }
@@ -793,9 +817,9 @@ def execute_private_draw_action(action: str) -> dict:
     return {
         "ok": bool(ok),
         "action": action_name,
-        "status": "redrawn" if action_name == "void_redraw" else "drawn",
-        "message": "已作废当前纸条并重抽。" if action_name == "void_redraw" else "已抽出新的当前纸条。",
-        "discarded_private_draw": existing if action_name == "void_redraw" else None,
+        "status": "redrawn" if action_name == "redraw" else "drawn",
+        "message": "没采用上一张，你重新抽了一张。" if action_name == "redraw" else "你抽出了一张新的 sex play 临时纸条。",
+        "discarded_private_draw": existing if action_name == "redraw" else None,
         "active_private_draw": active,
         "summary": _private_draw_summary(active),
     }
@@ -812,11 +836,19 @@ def _active_private_draw_inject_text(state: dict) -> str:
     header = "【当前私密纸条】\n"
     if entry:
         header += f"Entry #{entry}\n"
+    header += f"来源：{_private_draw_origin_text(active)}\n"
+    drawn_by = str(active.get("drawn_by") or "").strip()
+    if drawn_by == "du":
+        note = "说明：这是你自己抽出的当前临时 sex play 纸条，不是定终身；想换可以重抽，结束本轮后会清掉。不要说成小玥抽到了。"
+    elif drawn_by == "xinyue":
+        note = "说明：这是小玥抽出并发给你看的当前临时 sex play 纸条，后续也可以换；它不是小玥的聊天正文，不要代替小玥说话。"
+    else:
+        note = "说明：这是当前临时 sex play 纸条，但旧版记录没有保存是谁抽的；回应时不要擅自归因，想换可以重抽。"
     return (
         header
         + "\n".join(lines)
-        + "\n说明：这是小家私密抽签页当前有效的情侣纸条，完成或作废前都作为当前约定参考。"
-        "它不是她发出的聊天文本；不要复述成工具通知，不要代替她说话。完成或作废后后端会清掉。"
+        + "\n"
+        + note
     )
 
 

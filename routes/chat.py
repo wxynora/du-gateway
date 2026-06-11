@@ -576,7 +576,7 @@ def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "")
         content = _compact_screen_check_event_text(text)
     elif kind in {"private_draw", "private_slip"}:
         label = "私密抽签"
-        content = "小家私密抽签页触发了一次情侣抽签结果。"
+        content = "小玥发来一次 sex play 抽签结果。"
     elif kind in {"proactive_trigger", "pixel_home"} or "[Proactive trigger fact]" in text:
         label = "后端触发"
         content = "这是一次后端触发提醒。"

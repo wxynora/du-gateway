@@ -220,17 +220,17 @@ def get_gateway_sex_play_draw_tools() -> List[dict]:
             "function": {
                 "name": "sex_play_draw",
                 "description": (
-                    "管理 sex play 抽签纸条。"
-                    "draw=抽一张 sex play；void_redraw=作废当前纸条并重抽；done=完成当前纸条并清掉。"
-                    "draw 遇到已有有效纸条时不会覆盖，想换一张必须用 void_redraw。"
+                    "抽、换或收起 sex play 小纸条。"
+                    "draw=没有纸条时抽一张；redraw=不采用当前这张，随手再抽一张；done=本轮结束并收起纸条。"
+                    "抽签不是定终身，不满意或想换氛围可以直接 redraw。"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["draw", "void_redraw", "done"],
-                            "description": "draw 抽签；void_redraw 作废重抽；done 完成并清掉当前纸条。",
+                            "enum": ["draw", "redraw", "done"],
+                            "description": "draw 抽签；redraw 不采用当前这张并重抽；done 结束本轮并收起纸条。",
                         },
                     },
                     "required": ["action"],

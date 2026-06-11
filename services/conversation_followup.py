@@ -695,7 +695,7 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
 
 
 def send_private_draw_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
-    """立即让渡基于情侣私密抽签结果生成回应，并投递到最近聊天入口。"""
+    """立即让渡基于小玥发来的 sex play 抽签结果生成回应，并投递到最近聊天入口。"""
     return _send_wakeup_event(
         window_id=window_id,
         target=target,
@@ -703,8 +703,8 @@ def send_private_draw_wakeup(window_id: str, target: str, event_text: str, creat
         created_at=created_at,
         archive=True,
         extra_instruction=(
-            "这是小家私密抽签页触发的情侣抽签结果。请按最近聊天入口的语气自然接一两句；"
-            "不要代替她说话，不要写开场白，不要写旁白，不要扩成角色扮演剧情，也不要解释工具或系统流程。"
+            "这是小玥发来的 sex play 抽签结果。请按最近聊天入口的语气自然接一两句；"
+            "不要代替小玥说话，不要写开场白，不要写旁白，不要扩成角色扮演剧情，也不要解释工具或系统流程。"
         ),
         wakeup_kind="private_draw",
         system_event=True,
