@@ -77,6 +77,7 @@ let cachedOAuthRaw = null;
 let cachedOAuthSource = "";
 let lastUnauthorizedAt = 0;
 let lastUnauthorizedRoute = "";
+let lastRateLimitSnapshot = null;
 
 function log(msg) {
   console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
@@ -935,7 +936,85 @@ function oauthStatusPayload() {
     stale: expiresInSeconds <= Math.ceil(REFRESH_SKEW_MS / 1000),
     lastUnauthorizedAt,
     lastUnauthorizedRoute,
+    rateLimitSnapshot: lastRateLimitSnapshot,
   };
+}
+
+function firstHeaderValue(headers, name) {
+  const value = headers?.[name];
+  if (Array.isArray(value)) return value[0] || "";
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function numericHeader(headers, name) {
+  const raw = firstHeaderValue(headers, name);
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : raw;
+}
+
+function rateLimitWindow(headers, prefix) {
+  const status = firstHeaderValue(headers, `${prefix}-status`);
+  const resetAt = numericHeader(headers, `${prefix}-reset`);
+  const utilization = numericHeader(headers, `${prefix}-utilization`);
+  if (!status && resetAt === undefined && utilization === undefined) return undefined;
+  const out = {};
+  if (status) out.status = status;
+  if (resetAt !== undefined) out.resetAt = resetAt;
+  if (utilization !== undefined) out.utilization = utilization;
+  return out;
+}
+
+function updateRateLimitSnapshot(proxyRes, routeLabel) {
+  const headers = proxyRes?.headers || {};
+  const fiveHour = rateLimitWindow(headers, "anthropic-ratelimit-unified-5h");
+  const sevenDay = rateLimitWindow(headers, "anthropic-ratelimit-unified-7d");
+  const unifiedStatus = firstHeaderValue(headers, "anthropic-ratelimit-unified-status");
+  const resetAt = numericHeader(headers, "anthropic-ratelimit-unified-reset");
+  const representativeClaim = firstHeaderValue(
+    headers,
+    "anthropic-ratelimit-unified-representative-claim"
+  );
+  const fallbackPercentage = numericHeader(
+    headers,
+    "anthropic-ratelimit-unified-fallback-percentage"
+  );
+  const overageStatus = firstHeaderValue(headers, "anthropic-ratelimit-unified-overage-status");
+  const overageDisabledReason = firstHeaderValue(
+    headers,
+    "anthropic-ratelimit-unified-overage-disabled-reason"
+  );
+  const retryAfter = numericHeader(headers, "retry-after");
+
+  if (
+    !fiveHour &&
+    !sevenDay &&
+    !unifiedStatus &&
+    resetAt === undefined &&
+    !representativeClaim &&
+    fallbackPercentage === undefined &&
+    !overageStatus &&
+    !overageDisabledReason &&
+    retryAfter === undefined
+  ) {
+    return;
+  }
+
+  const snapshot = {
+    updatedAt: Date.now(),
+    route: routeLabel || "",
+    statusCode: proxyRes.statusCode || 0,
+  };
+  if (unifiedStatus) snapshot.status = unifiedStatus;
+  if (resetAt !== undefined) snapshot.resetAt = resetAt;
+  if (representativeClaim) snapshot.representativeClaim = representativeClaim;
+  if (fallbackPercentage !== undefined) snapshot.fallbackPercentage = fallbackPercentage;
+  if (overageStatus) snapshot.overageStatus = overageStatus;
+  if (overageDisabledReason) snapshot.overageDisabledReason = overageDisabledReason;
+  if (retryAfter !== undefined) snapshot.retryAfter = retryAfter;
+  if (fiveHour) snapshot.fiveHour = fiveHour;
+  if (sevenDay) snapshot.sevenDay = sevenDay;
+  lastRateLimitSnapshot = snapshot;
 }
 
 function proxyToAnthropic(token, path, payload) {
@@ -1153,6 +1232,7 @@ const server = http.createServer(async (req, res) => {
       if (proxyRes.statusCode === 401) {
         proxyRes = await retryGetAfterUnauthorized(proxyRes, req.url, req.url);
       }
+      updateRateLimitSnapshot(proxyRes, req.url);
 
       const responseHeaders = { ...proxyRes.headers, "access-control-allow-origin": "*" };
       res.writeHead(proxyRes.statusCode || 502, responseHeaders);
@@ -1191,6 +1271,7 @@ const server = http.createServer(async (req, res) => {
       if (proxyRes.statusCode === 401) {
         proxyRes = await retryAfterUnauthorized(proxyRes, "/v1/messages", anthropicBody, req.url);
       }
+      updateRateLimitSnapshot(proxyRes, req.url);
 
       if (proxyRes.statusCode !== 200) {
         const errData = await readStreamText(proxyRes);
@@ -1260,6 +1341,7 @@ const server = http.createServer(async (req, res) => {
       if (proxyRes.statusCode === 401) {
         proxyRes = await retryAfterUnauthorized(proxyRes, req.url, body, req.url);
       }
+      updateRateLimitSnapshot(proxyRes, req.url);
 
       const responseHeaders = { ...proxyRes.headers, "access-control-allow-origin": "*" };
       res.writeHead(proxyRes.statusCode, responseHeaders);

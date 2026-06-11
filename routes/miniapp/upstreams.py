@@ -83,6 +83,50 @@ def _sanitize_oauth_status(data) -> dict | None:
     source = str(data.get("source") or "").strip()
     if source:
         out["source"] = source
+    rate_limit_snapshot = _sanitize_rate_limit_snapshot(data.get("rateLimitSnapshot"))
+    if rate_limit_snapshot:
+        out["rateLimitSnapshot"] = rate_limit_snapshot
+    return out or None
+
+
+def _sanitize_rate_limit_window(data) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    out: dict = {}
+    status = str(data.get("status") or "").strip()
+    if status:
+        out["status"] = status
+    for source_key, target_key in (("resetAt", "resetAt"), ("utilization", "utilization")):
+        value = data.get(source_key)
+        if value is not None:
+            out[target_key] = value
+    return out or None
+
+
+def _sanitize_rate_limit_snapshot(data) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    out: dict = {}
+    for key in (
+        "updatedAt",
+        "statusCode",
+        "status",
+        "resetAt",
+        "representativeClaim",
+        "fallbackPercentage",
+        "overageStatus",
+        "overageDisabledReason",
+        "retryAfter",
+    ):
+        value = data.get(key)
+        if value not in (None, ""):
+            out[key] = value
+    five_hour = _sanitize_rate_limit_window(data.get("fiveHour"))
+    if five_hour:
+        out["fiveHour"] = five_hour
+    seven_day = _sanitize_rate_limit_window(data.get("sevenDay"))
+    if seven_day:
+        out["sevenDay"] = seven_day
     return out or None
 
 

@@ -3,12 +3,30 @@ import { apiJson } from "../api";
 import { useToast } from "../toast";
 
 type NodeCategory = "openai" | "oauth";
+type RateLimitWindow = {
+  status?: string;
+  resetAt?: number | string;
+  utilization?: number | string;
+};
+type RateLimitSnapshot = {
+  updatedAt?: number | string;
+  statusCode?: number | string;
+  status?: string;
+  resetAt?: number | string;
+  representativeClaim?: string;
+  fallbackPercentage?: number | string;
+  overageStatus?: string;
+  retryAfter?: number | string;
+  fiveHour?: RateLimitWindow;
+  sevenDay?: RateLimitWindow;
+};
 type OAuthStatus = {
   ok?: boolean;
   stale?: boolean;
   expiresAt?: number | string;
   expiresInSeconds?: number | string;
   source?: string;
+  rateLimitSnapshot?: RateLimitSnapshot;
 };
 type UpstreamItem = {
   name: string;
@@ -152,6 +170,31 @@ function oauthExpiryLine(item: UpstreamItem): string {
   if (expiresAt) parts.push(`过期 ${expiresAt}`);
   if (expiresIn) parts.push(expiresIn);
   if (status.stale) parts.push("状态可能过期");
+  return parts.join(" · ");
+}
+
+function formatUtilization(value?: number | string): string {
+  if (value === undefined || value === null || value === "") return "";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "";
+  const pct = n <= 1 ? n * 100 : n;
+  return `${Math.round(pct * 10) / 10}%`;
+}
+
+function oauthRateLimitLine(item: UpstreamItem): string {
+  const snapshot = item.oauth_status?.rateLimitSnapshot;
+  if (!snapshot) return "";
+  const parts: string[] = [];
+  const five = formatUtilization(snapshot.fiveHour?.utilization);
+  const seven = formatUtilization(snapshot.sevenDay?.utilization);
+  if (five) parts.push(`5h ${five}`);
+  if (seven) parts.push(`周 ${seven}`);
+  const claim = String(snapshot.representativeClaim || "").trim();
+  const resetAt = formatExpiryDate(snapshot.fiveHour?.resetAt || snapshot.resetAt);
+  if (claim === "five_hour" && resetAt) parts.push(`5h 重置 ${resetAt}`);
+  else if (resetAt) parts.push(`重置 ${resetAt}`);
+  const status = String(snapshot.status || snapshot.fiveHour?.status || "").trim();
+  if (status && status !== "allowed") parts.push(status);
   return parts.join(" · ");
 }
 
@@ -699,6 +742,7 @@ export function SettingsUpstream() {
                   const isOAuth = categoryForItem(it) === "oauth";
                   const oauthLabel = isOAuth ? oauthLabelForItem(it) : "";
                   const expiryLine = isOAuth ? oauthExpiryLine(it) : "";
+                  const rateLimitLine = isOAuth ? oauthRateLimitLine(it) : "";
                   return (
                     <button
                       key={idx}
@@ -725,6 +769,7 @@ export function SettingsUpstream() {
                           </div>
                           {it.name && it.name !== host ? <p className="mb-2 text-[12px] text-gray-500">{it.name}</p> : null}
                           {expiryLine ? <p className="mb-3 text-[12px] font-semibold text-indigo-700">{expiryLine}</p> : null}
+                          {rateLimitLine ? <p className="mb-3 text-[12px] font-semibold text-emerald-700">{rateLimitLine}</p> : null}
                           <div className="mb-3">{renderProbeCodes(p)}</div>
                           {p?.note ? <p className="mb-2 break-words text-[12px] text-gray-600">{p.note}</p> : null}
                           {p?.error ? (
