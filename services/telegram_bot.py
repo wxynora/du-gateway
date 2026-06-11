@@ -8,12 +8,13 @@ import random
 import re
 import threading
 import time
-from typing import Literal, Optional, Union
+from typing import Literal, NamedTuple, Optional, Union
 from uuid import uuid4
 
 import requests
 
 from services.pc_command_handler import process_pcmd_in_assistant_text
+from services.reasoning_utils import extract_reasoning_text_and_details, extract_thinking_from_content
 
 from config import (
     TELEGRAM_BOT_TOKEN,
@@ -41,6 +42,13 @@ TELEGRAM_TEXT_DOCUMENT_MAX_BYTES = 1024 * 1024
 TELEGRAM_TEXT_DOCUMENT_MAX_CHARS = 60000
 TELEGRAM_INBOUND_AUDIO_MAX_BYTES = 12 * 1024 * 1024
 TelegramParseMode = Literal["HTML", "MarkdownV2"]
+TELEGRAM_THINKING_LABEL = "渡的碎碎念🔖"
+TELEGRAM_THINKING_MAX_CHARS = 3600
+
+
+class TelegramChatReply(NamedTuple):
+    text: str
+    thinking: str = ""
 
 
 def _telegram_webapp_url() -> str:
@@ -240,6 +248,63 @@ def _sanitize_reply_for_telegram(text: str) -> str:
     return t
 
 
+def _telegram_utf16_len(text: str) -> int:
+    return len(str(text or "").encode("utf-16-le")) // 2
+
+
+def _compact_thinking_text(text: str) -> str:
+    t = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    if len(t) > TELEGRAM_THINKING_MAX_CHARS:
+        t = t[:TELEGRAM_THINKING_MAX_CHARS].rstrip() + "\n…"
+    return t
+
+
+def _should_send_thinking_block(chat_id: int, user_id: int) -> bool:
+    try:
+        if int(chat_id) != int(user_id):
+            return False
+    except (TypeError, ValueError):
+        return False
+    if TELEGRAM_PROACTIVE_TARGET_USER_ID:
+        try:
+            return int(user_id) == int(TELEGRAM_PROACTIVE_TARGET_USER_ID)
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _build_thinking_block_message(thinking_text: str) -> Optional[tuple[str, list[dict]]]:
+    body = _compact_thinking_text(thinking_text)
+    if not body:
+        return None
+    prefix = f"{TELEGRAM_THINKING_LABEL}\n"
+    text = f"{prefix}{body}"
+    entities = [
+        {
+            "type": "expandable_blockquote",
+            "offset": _telegram_utf16_len(prefix),
+            "length": _telegram_utf16_len(body),
+        }
+    ]
+    return text, entities
+
+
+def send_thinking_block_message(
+    chat_id: int,
+    thinking_text: str,
+    user_id: int,
+    bot_token: Optional[str] = None,
+) -> bool:
+    if not _should_send_thinking_block(chat_id=chat_id, user_id=user_id):
+        return False
+    built = _build_thinking_block_message(thinking_text)
+    if not built:
+        return False
+    text, entities = built
+    return send_message(chat_id=chat_id, text=text, bot_token=bot_token, entities=entities)
+
+
 # 表情包：[tag] 与 R2 meta ∪ 映射表中的英文代号一致，长名优先匹配；缓存避免每次请求扫桶
 _STICKER_BRACKET_REGEX_AT: float = 0.0
 _STICKER_BRACKET_REGEX: Optional[re.Pattern] = None
@@ -434,9 +499,9 @@ def _message_content_len(content) -> int:
     return len(str(content or ""))
 
 
-def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, list], force_last4: bool = False) -> Optional[str]:
+def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, list], force_last4: bool = False) -> Optional[TelegramChatReply]:
     """
-    调网关 /v1/chat/completions（非流式），返回 assistant 文本。
+    调网关 /v1/chat/completions（非流式），返回 assistant 文本与可选 thinking。
     user_content 可为 str（纯文字）或 list（多模态，如 [{"type":"text","text":"..."},{"type":"image_url",...}]），与 RikkaHub 一致。
     """
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
@@ -530,19 +595,25 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
                 _PENDING_USER_CONTENTS.setdefault(user_id, []).append(user_content)
             return None
         msg = (data["choices"][0] or {}).get("message") or {}
+        reasoning_text, _, _ = extract_reasoning_text_and_details(msg)
         content = msg.get("content")
         if content is None:
             return None
         reply_text = content.strip() if isinstance(content, str) else str(content).strip()
-        # 兜底：去掉 <think>/<thinking> 块（网关层已处理，此处双重保险）
-        import re as _re
-        reply_text = _re.sub(r"<(think|thinking)>.*?</\1>", "", reply_text, flags=_re.DOTALL | _re.IGNORECASE).strip()
+        # 兜底：提取并去掉 <think>/<thinking> 块（网关层已处理，此处双重保险）。
+        reply_text, inline_thinking = extract_thinking_from_content(reply_text)
         reply_text = _sanitize_reply_for_telegram(reply_text)
         # 电脑控制标签：入队并从可见正文移除（与手机/Tasker 隔离）
         reply_text, _ = process_pcmd_in_assistant_text(reply_text)
+        thinking_parts: list[str] = []
+        for part in (reasoning_text, inline_thinking):
+            compact = _compact_thinking_text(part)
+            if compact and compact not in thinking_parts:
+                thinking_parts.append(compact)
+        thinking_text = "\n\n".join(thinking_parts).strip()
         with _PENDING_LOCK:
             _PENDING_USER_CONTENTS[user_id] = []
-        return reply_text
+        return TelegramChatReply(text=reply_text, thinking=thinking_text)
     except requests.RequestException as e:
         logger.exception("请求网关失败: %s", e)
         with _PENDING_LOCK:
@@ -960,10 +1031,10 @@ def process_message(
     t = threading.Thread(target=_start_typing_indicator, args=(int(chat_id), stop, 4.0, bot_token), daemon=True)
     t.start()
     try:
-        reply = _call_gateway_chat(window_id=window_id, user_id=user_id, user_content=content, force_last4=force_last4)
+        gateway_reply = _call_gateway_chat(window_id=window_id, user_id=user_id, user_content=content, force_last4=force_last4)
     finally:
         stop.set()
-    if reply is None:
+    if gateway_reply is None:
         logger.warning(
             "process_message 网关无回复，发送兜底文案 chat_id=%s user_id=%s window_id=%s force_last4=%s",
             chat_id,
@@ -972,6 +1043,10 @@ def process_message(
             force_last4,
         )
         reply = "暂时没连上渡，稍后再试哦～"
+        thinking_text = ""
+    else:
+        reply = gateway_reply.text
+        thinking_text = gateway_reply.thinking
     # 解析语音标签
     reply_clean, voice_text = _extract_voice_tag(reply)
     reply_clean = _sanitize_reply_for_telegram(reply_clean)
@@ -989,14 +1064,25 @@ def process_message(
     # 先发文字；TG 主回复不再拆条。
     outbound = reply_clean or ""
     ok_text = send_message_segmented(chat_id=chat_id, text=outbound, bot_token=bot_token) if outbound else True
+    ok_thinking = False
+    if thinking_text:
+        _sleep_between_sends()
+        ok_thinking = send_thinking_block_message(
+            chat_id=int(chat_id),
+            thinking_text=thinking_text,
+            user_id=int(user_id),
+            bot_token=bot_token,
+        )
     logger.info(
-        "process_message 发送完成 chat_id=%s user_id=%s window_id=%s force_last4=%s ok_text=%s outbound_chars=%s",
+        "process_message 发送完成 chat_id=%s user_id=%s window_id=%s force_last4=%s ok_text=%s ok_thinking=%s outbound_chars=%s thinking_chars=%s",
         chat_id,
         user_id,
         window_id,
         force_last4,
         ok_text,
+        ok_thinking,
         len(outbound),
+        len(thinking_text or ""),
     )
 
     # 再发表情包图片（随机一张）
