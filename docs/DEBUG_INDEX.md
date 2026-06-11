@@ -1574,6 +1574,12 @@ npm -C miniapp run android
 - 已完成：`services/proactive_trigger_engine.py` 的亮屏/醒来触发读取 `sleepSummary.totalMinutes`，没有累计摘要时才回退到单段 `lastSleepBlock` 或上一条熄屏事件；`services/sense_context.py` 在最近 24 小时内把累计睡眠摘要注入给渡参考。
 - 已验证：`.venv/bin/python -m py_compile storage/sense_store.py services/proactive_trigger_engine.py services/sense_context.py` 通过；本地 smoke 覆盖 20:00-01:00 + 02:00-04:30，确认 `sleepSummary.totalMinutes=450`、`segmentCount=2`、`awakeGapMinutes=60`。
 
+当前状态（2026-06-11 睡眠短段误判收束）：
+- 已完成：`storage/sense_store.py` 将可独立计入 `sleepSummary` 的熄屏睡眠段从 20 分钟提高到 45 分钟；20-44 分钟短熄屏只会在已经有同夜睡眠、且距上一睡眠段结束不超过 30 分钟时作为短补觉接上。洗澡、上班路上放歌这类短熄屏不会再把一晚睡眠开头或结尾拉长。
+- 已完成：`lastSleepBlock` 增加 `summaryIncluded` 和 `summaryReason`，被排除的短段会标出 `short_without_prior_sleep`、`short_after_awake_gap` 或 `outside_sleep_window`，方便下次从快照判断为什么没算进睡眠。
+- 已验证：`.venv/bin/python -m py_compile storage/sense_store.py` 通过；本地 smoke 复现 20:40-21:01 洗澡、23:17-06:01 主睡眠、07:28-07:55 上班路上放歌，确认最终 `sleepSummary.totalMinutes=403`、`segmentCount=1`，07:28-07:55 被标记为 `short_after_awake_gap`；另测 06:20-06:45 这种 30 分钟内短补觉仍会并入。
+- 未完成 / 下次继续：当前 Android 侧没有通用“系统闹钟实际响起”上报，SumiTalk 只能从既有 schedule/fired、亮屏/解锁、前台应用和使用统计推断；如果要严格按“最后一次闹钟响起”算醒来时间，需要新增闹钟触发事件或本地计划闹钟回执。
+
 当前状态（2026-06-08 聊天顶部中间胶囊）：
 - 已完成：`miniapp/src/ui/MainChatScreen.tsx` 把聊天页顶部改为左右 40px 圆形按钮 + 中间独立胶囊布局；胶囊内包含会话名和在线/输入状态，标题字号在用户设置值基础上压小并限制在 12-15px，避免顶栏像裸文字漂在背景上。群聊接力状态单独显示为小号 amber 胶囊，不再挤在名字/在线里。
 - 已完成：`miniapp/src/ui/ChatPresentation.tsx` 将 `ChatHeaderStatus` 字号从 11px 压到 10px，并把静态“在线”颜色降为灰色，适配中间小胶囊。

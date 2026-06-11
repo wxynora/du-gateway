@@ -17,7 +17,9 @@ _SENSE_HISTORY_MIN_INTERVAL_SECONDS = {
     "location": 30 * 60,
 }
 _SLEEP_BLOCK_MIN_MINUTES = 20
+_SLEEP_CORE_BLOCK_MIN_MINUTES = 45
 _SLEEP_BLOCK_MERGE_GAP_MINUTES = 180
+_SLEEP_SHORT_EXTENSION_GAP_MINUTES = 30
 _SLEEP_SEGMENT_KEEP = 8
 
 _sense_write_lock = threading.Lock()
@@ -74,13 +76,21 @@ def _sleep_night_date(start_dt: datetime, end_dt: datetime) -> str:
     return start_dt.strftime("%Y-%m-%d")
 
 
+def _sleep_block_minutes(duration_ms: int) -> int:
+    return max(0, int(duration_ms or 0) // 60000)
+
+
+def _is_sleep_window(start_dt: datetime, end_dt: datetime) -> bool:
+    return start_dt.hour >= 18 or start_dt.hour < 11 or end_dt.hour < 12
+
+
 def _is_sleep_like_screen_off_block(start_dt: datetime, end_dt: datetime, duration_ms: int) -> bool:
-    minutes = max(0, duration_ms // 60000)
+    minutes = _sleep_block_minutes(duration_ms)
     if minutes < _SLEEP_BLOCK_MIN_MINUTES:
         return False
     if minutes >= 4 * 60:
         return True
-    return start_dt.hour >= 18 or start_dt.hour < 11 or end_dt.hour < 12
+    return minutes >= _SLEEP_CORE_BLOCK_MIN_MINUTES and _is_sleep_window(start_dt, end_dt)
 
 
 def _compact_sleep_segments(items: list, device_id: str) -> list[dict]:
@@ -142,7 +152,7 @@ def _sleep_summary_from_segments(device_id: str, night_date: str, segments: list
     }
 
 
-def _merge_sleep_summary(previous: dict, block: dict) -> dict | None:
+def _merge_sleep_summary(previous: dict, block: dict) -> tuple[dict | None, str]:
     start_dt = _dt(block.get("startAt"))
     end_dt = _dt(block.get("endAt"))
     try:
@@ -150,21 +160,38 @@ def _merge_sleep_summary(previous: dict, block: dict) -> dict | None:
     except Exception:
         duration_ms = 0
     if not start_dt or not end_dt or duration_ms <= 0:
-        return None
-    if not _is_sleep_like_screen_off_block(start_dt, end_dt, duration_ms):
-        return None
+        return None, "invalid_block"
+    minutes = _sleep_block_minutes(duration_ms)
+    if minutes < _SLEEP_BLOCK_MIN_MINUTES:
+        return None, "too_short"
 
     device_id = str(block.get("deviceId") or previous.get("deviceId") or "").strip()
     night_date = _sleep_night_date(start_dt, end_dt)
     current = previous.get("sleepSummary") if isinstance(previous.get("sleepSummary"), dict) else {}
     segments = []
+    last_end = None
+    gap_minutes = None
     if current.get("nightDate") == night_date:
         prev_segments = current.get("segments") if isinstance(current.get("segments"), list) else []
         last_end = _dt((prev_segments[-1] if prev_segments else {}).get("endAt"))
-        if not last_end or (start_dt - last_end).total_seconds() / 60.0 <= _SLEEP_BLOCK_MERGE_GAP_MINUTES:
+        if last_end:
+            gap_minutes = (start_dt - last_end).total_seconds() / 60.0
+        if not last_end or (gap_minutes is not None and gap_minutes <= _SLEEP_BLOCK_MERGE_GAP_MINUTES):
             segments = list(prev_segments)
+
+    if _is_sleep_like_screen_off_block(start_dt, end_dt, duration_ms):
+        segments.append(block)
+        return _sleep_summary_from_segments(device_id, night_date, segments), "core_sleep"
+
+    if not _is_sleep_window(start_dt, end_dt):
+        return None, "outside_sleep_window"
+    if not segments or not last_end:
+        return None, "short_without_prior_sleep"
+    if gap_minutes is None or gap_minutes > _SLEEP_SHORT_EXTENSION_GAP_MINUTES:
+        return None, "short_after_awake_gap"
+
     segments.append(block)
-    return _sleep_summary_from_segments(device_id, night_date, segments)
+    return _sleep_summary_from_segments(device_id, night_date, segments), "short_extension"
 
 
 def _screen_event_time(data: dict, fallback: str = "") -> str:
@@ -229,8 +256,10 @@ def _prepare_screen_bucket_snapshot(previous: dict, patch: dict) -> dict:
                 "durationMs": duration_ms,
                 "minutes": max(0, duration_ms // 60000),
             }
+            summary, summary_reason = _merge_sleep_summary(prev, block)
+            block["summaryIncluded"] = bool(summary)
+            block["summaryReason"] = summary_reason
             merged["lastSleepBlock"] = block
-            summary = _merge_sleep_summary(prev, block)
             if summary:
                 merged["sleepSummary"] = summary
             merged["lastScreenOffAt"] = prev_since
