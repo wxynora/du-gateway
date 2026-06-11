@@ -22,6 +22,7 @@ logger = get_logger(__name__)
 XIAOAI_TOOL_NAMES = ("xiaoai_speak", "xiaoai_run_command", "mijia_lamp_get", "mijia_lamp_set")
 VOICE_CALL_TOOL_NAMES = ("start_voice_call",)
 DU_SURF_TOOL_NAMES = ("du_surf",)
+PRIVATE_DRAW_TOOL_NAMES = ("pixel_home_private_draw",)
 
 
 def get_gateway_xiaoai_tools() -> List[dict]:
@@ -211,6 +212,50 @@ def get_gateway_du_surf_tools() -> List[dict]:
     ]
 
 
+def get_gateway_private_draw_tools() -> List[dict]:
+    """返回小家 play 抽签工具定义，供渡主动抽签/重抽/完成。"""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "pixel_home_private_draw",
+                "description": (
+                    "管理小家私密抽签页的当前有效 play 纸条。"
+                    "draw=抽一张；void_redraw=作废当前纸条并重抽；done=完成当前纸条并清掉。"
+                    "draw 遇到已有有效纸条时不会覆盖，想换一张必须用 void_redraw。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["draw", "void_redraw", "done"],
+                            "description": "draw 抽签；void_redraw 作废重抽；done 完成并清掉当前纸条。",
+                        },
+                    },
+                    "required": ["action"],
+                },
+            },
+        }
+    ]
+
+
+def execute_private_draw_tool(name: str, arguments: dict) -> str:
+    """执行小家 play 抽签工具，返回给渡的 JSON 字符串。"""
+    if name not in PRIVATE_DRAW_TOOL_NAMES:
+        return json.dumps({"ok": False, "error": "UNKNOWN_TOOL"}, ensure_ascii=False)
+    args = arguments if isinstance(arguments, dict) else {}
+    action = str(args.get("action") or "").strip()
+    try:
+        from services.pixel_home import execute_private_draw_action
+
+        result = execute_private_draw_action(action)
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        logger.exception("pixel_home_private_draw 工具执行异常")
+        return json.dumps({"ok": False, "error": "EXECUTION_FAILED", "message": str(e)}, ensure_ascii=False)
+
+
 def execute_du_surf_tool(name: str, arguments: dict) -> str:
     """执行随机冲浪素材工具，返回给渡的 JSON 字符串。"""
     if name not in DU_SURF_TOOL_NAMES:
@@ -222,7 +267,12 @@ def execute_du_surf_tool(name: str, arguments: dict) -> str:
 
 def get_gateway_tools_for_inject() -> List[dict]:
     """返回不依赖 Notion 开关的网关工具。"""
-    return [*get_gateway_xiaoai_tools(), *get_gateway_voice_call_tools(), *get_gateway_du_surf_tools()]
+    return [
+        *get_gateway_xiaoai_tools(),
+        *get_gateway_voice_call_tools(),
+        *get_gateway_private_draw_tools(),
+        *get_gateway_du_surf_tools(),
+    ]
 
 
 _VOICE_TAG_RE = re.compile(r"</?voice>", flags=re.IGNORECASE)

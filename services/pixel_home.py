@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -68,6 +69,271 @@ DEFAULT_XINYUE_STATE = {"spot": "sofa", "activity": "休息", "source": "default
 PREFIXLESS_SPOTS = {"away", "out"}
 DU_DYNAMICS_LIMIT = 5
 EVENT_AUTO_END_MINUTES = 120
+
+PRIVATE_DRAW_SLOTS: list[dict[str, Any]] = [
+    {
+        "key": "theme",
+        "label": "玩法",
+        "options": [
+            "制服诱惑",
+            "成人师生play",
+            "上司下属play",
+            "女仆主人play",
+            "医生检查play",
+            "大小姐管家play",
+            "秘书老板play",
+            "房东房客play",
+            "成人补课play",
+            "陌生恋人play",
+            "办公室偷情",
+            "NTR幻想",
+            "偷情play",
+            "主人宠物play",
+            "身份倒置",
+            "反差诱惑",
+            "秘密恋人",
+            "支配臣服",
+            "轻度调教",
+            "轻度束缚",
+            "蒙眼调教",
+            "手铐束缚",
+            "项圈牵引",
+            "玩具遥控",
+            "高潮控制",
+            "寸止调教",
+            "射精管理",
+            "中出许可",
+            "颜射许可",
+            "体液标记",
+            "玩具失控",
+            "淫语调教",
+            "湿身调教",
+            "羞耻侍奉",
+            "乳首调教",
+            "禁语调教",
+            "命令羞耻",
+            "言语羞耻",
+            "罚跪调教",
+            "打屁股惩罚",
+            "露出边缘",
+            "服从训练",
+            "奖惩调教",
+            "禁射调教",
+            "标记占有",
+            "求饶许可",
+            "羞耻展示",
+            "强势命令",
+            "吃醋惩罚",
+        ],
+    },
+    {
+        "key": "place",
+        "label": "地点",
+        "options": [
+            "酒店床上",
+            "浴室墙边",
+            "车后座",
+            "试衣间隔间",
+            "办公桌边",
+            "教室讲台边",
+            "厨房台面",
+            "沙发上",
+            "落地镜前",
+            "阳台门边",
+            "玄关地垫",
+            "洗手台前",
+            "会议桌上",
+            "图书馆角落",
+            "楼梯间转角",
+            "床尾",
+            "门后",
+            "落地窗前",
+        ],
+    },
+    {
+        "key": "pose",
+        "label": "姿势",
+        "options": [
+            "后入式",
+            "站立后入",
+            "跪趴",
+            "正常位",
+            "传教士位",
+            "屈膝后入",
+            "抱起插入",
+            "女上位",
+            "反骑乘",
+            "背对骑乘",
+            "面对坐姿",
+            "背坐式",
+            "腿架肩",
+            "双腿高抬",
+            "抱腿位",
+            "站立位",
+            "坐莲式",
+            "对坐位",
+            "跪姿位",
+            "趴跪位",
+            "侧卧位",
+            "侧卧后入",
+            "俯卧后入",
+            "跪坐位",
+            "并腿位",
+            "侧入式",
+            "膝上骑乘",
+            "M字开腿",
+        ],
+    },
+    {
+        "key": "prop",
+        "label": "道具",
+        "options": [
+            "领带",
+            "眼罩",
+            "皮带",
+            "丝袜",
+            "黑丝袜",
+            "白衬衫",
+            "制服外套",
+            "情趣内衣",
+            "束缚带",
+            "束腕带",
+            "丝带",
+            "缎带",
+            "项圈",
+            "牵引绳",
+            "冰块",
+            "润滑液",
+            "避孕套",
+            "震动棒",
+            "跳蛋",
+            "跳蛋遥控器",
+            "手铐",
+            "口球",
+            "乳夹",
+            "小皮拍",
+            "戒尺",
+            "铃铛项圈",
+            "按摩棒",
+            "口红",
+            "发绳",
+            "腿环",
+            "吊袜带",
+            "透明胶带",
+            "低温蜡烛",
+            "羽毛棒",
+        ],
+    },
+    {
+        "key": "task",
+        "label": "任务",
+        "options": [
+            "穿裸身围裙伺候小玥",
+            "戴项圈听小玥命令",
+            "被小玥蒙眼调戏十分钟",
+            "被小玥用领带牵着亲",
+            "被小玥手交到快射再停",
+            "被小玥素股磨到快射",
+            "给小玥舔到高潮",
+            "用手把小玥弄到腿软",
+            "用玩具让小玥高潮一次",
+            "只准用嘴取悦小玥",
+            "先让小玥高潮一次",
+            "让小玥决定今天的称呼",
+            "让小玥决定最后射在哪里",
+            "被小玥用口红写上标记",
+            "把跳蛋遥控器交给小玥",
+            "穿吊袜带给小玥看",
+            "戴铃铛项圈亲小玥",
+            "把内裤交给小玥保管",
+            "被小玥命令说想要",
+            "被小玥寸止到发抖",
+            "被小玥允许后才能射",
+            "先让小玥舒服到发软",
+            "把小玥亲到主动求继续",
+            "让小玥半穿衣被亲到脸红",
+            "给蒙眼的小玥舔到高潮",
+            "把小玥伺候到腿软",
+            "让小玥高潮后继续抱着亲",
+            "让小玥说出最想被怎么弄",
+            "哄到小玥自己说想要",
+            "射在哪里必须听小玥决定",
+            "收尾必须先把小玥哄舒服",
+            "念一句羞耻台词给小玥听",
+            "被小玥检查有没有真的忍住",
+            "结束前必须把小玥哄到满意",
+            "犯规一次就接受小玥追加惩罚",
+            "让小玥用一句话决定惩罚内容",
+            "射前必须向小玥完整报备",
+            "被小玥寸止一次再继续",
+            "把最想要的事说给小玥听",
+            "让小玥验收今天有没有乖",
+            "穿裸身围裙给小玥做夜宵",
+            "戴着项圈等小玥发令",
+            "把手腕交给小玥绑住",
+            "让小玥检查今天有没有偷爽",
+            "被小玥夸乖以后才能继续",
+            "用淫语把想要的事说清楚",
+        ],
+    },
+    {
+        "key": "limit",
+        "label": "限制",
+        "options": [
+            "小玥没允许不准亲嘴",
+            "小玥没允许不准换姿势",
+            "小玥没允许不准插入",
+            "小玥没允许不准加速",
+            "小玥没允许不准射",
+            "小玥没允许不准中出",
+            "一小时内不准中出",
+            "中出前只能学狗叫",
+            "想中出必须先求小玥三次",
+            "想射前必须说自己忍不住了",
+            "射之前必须等小玥点头",
+            "中出前必须戴着项圈求允许",
+            "想中出必须先被寸止一次",
+            "没学会求饶不准射",
+            "小玥第一次高潮前不准中出",
+            "小玥没高潮前不准射",
+            "小玥说停必须立刻停",
+            "不准只顾自己爽",
+            "不准弄疼小玥",
+            "不准跳过前戏",
+            "不准直接插入",
+            "不准提前摘掉眼罩",
+            "不准提前解开束缚",
+            "不准摘掉自己的项圈",
+            "不准把节奏交给小玥前先射",
+            "不准让小玥自己动手",
+            "不准在小玥脸红前停手",
+            "不准在小玥说可以前收尾",
+            "不准提前擦掉体液",
+            "不准关灯逃避被看",
+            "不准遮住自己的表情",
+            "不准把羞耻任务推给小玥",
+            "不准拒绝小玥的命令",
+            "不准提前脱掉裸身围裙",
+            "不准提前摘掉铃铛项圈",
+            "没被小玥寸止过不准射",
+            "不准在小玥满意前结束",
+            "不准在小玥满意前讨价还价",
+            "不准没有被小玥验收就收尾",
+            "不准没有申请就换玩法",
+            "不准在被允许前摘下道具",
+            "不准把高潮留给自己先爽",
+            "不准在小玥命令外擅自加速",
+            "不准用沉默糊弄小玥",
+            "不准提前结束惩罚",
+            "没有报备不准射",
+            "没有求许可不准中出",
+            "小玥没说停之前不准偷懒",
+            "小玥没说够了不准离开",
+            "小玥没验收不准摘项圈",
+            "想换动作必须先申请",
+        ],
+    },
+]
 DU_EVENT_SOURCES = {"du_marker"}
 XINYUE_EVENT_SOURCES = {"chat_infer", "miniapp_event", "du_marker_follow"}
 _SPOT_WORD_PATTERN = "|".join(sorted((re.escape(key) for key in SPOT_ALIASES if key and not key.isascii()), key=len, reverse=True))
@@ -422,6 +688,117 @@ def clear_active_private_draw() -> dict:
     current["updated_at"] = now_beijing_iso()
     ok = save_pixel_home_state(current)
     return {"ok": bool(ok)}
+
+
+def _private_draw_entry_number() -> str:
+    return str(100 + secrets.randbelow(900))
+
+
+def _private_draw_pick_rows() -> list[dict]:
+    rows: list[dict] = []
+    for slot in PRIVATE_DRAW_SLOTS:
+        options = slot.get("options") if isinstance(slot.get("options"), list) else []
+        options = [str(item).strip() for item in options if str(item).strip()]
+        if not options:
+            continue
+        rows.append(
+            {
+                "key": str(slot.get("key") or slot.get("label") or "").strip(),
+                "label": str(slot.get("label") or slot.get("key") or "").strip(),
+                "value": options[secrets.randbelow(len(options))],
+            }
+        )
+    return rows
+
+
+def _new_private_draw_payload() -> dict:
+    return {
+        "entry_number": _private_draw_entry_number(),
+        "created_at": now_beijing_iso(),
+        "result": _private_draw_pick_rows(),
+        "source": "private_draw",
+    }
+
+
+def _private_draw_summary(active: dict | None) -> list[str]:
+    if not active:
+        return []
+    return [
+        f"{item.get('label')}：{item.get('value')}"
+        for item in active.get("result") or []
+        if item.get("label") and item.get("value")
+    ]
+
+
+def execute_private_draw_action(action: str) -> dict:
+    """
+    给渡用的小家 play 抽签工具。
+    draw 保留现有有效纸条；void_redraw 作废当前纸条并立刻重抽；done 完成并清掉当前纸条。
+    """
+    raw_action = str(action or "").strip().lower()
+    aliases = {
+        "抽签": "draw",
+        "roll": "draw",
+        "create": "draw",
+        "start": "draw",
+        "作废重抽": "void_redraw",
+        "重抽": "void_redraw",
+        "redraw": "void_redraw",
+        "reroll": "void_redraw",
+        "void": "void_redraw",
+        "完成": "done",
+        "complete": "done",
+        "finish": "done",
+    }
+    action_name = aliases.get(raw_action, raw_action)
+    if action_name not in {"draw", "void_redraw", "done"}:
+        return {
+            "ok": False,
+            "error": "INVALID_ACTION",
+            "message": "action 只能是 draw / void_redraw / done",
+        }
+
+    current = _stored_state()
+    existing = _normalize_active_private_draw(current.get("active_private_draw"))
+
+    if action_name == "done":
+        current.pop("active_private_draw", None)
+        current["updated_at"] = now_beijing_iso()
+        ok = save_pixel_home_state(current)
+        return {
+            "ok": bool(ok),
+            "action": action_name,
+            "status": "completed" if existing else "empty",
+            "message": "已完成并清掉当前纸条。" if existing else "当前没有有效纸条可完成。",
+            "completed_private_draw": existing,
+            "summary": _private_draw_summary(existing),
+        }
+
+    if action_name == "draw" and existing:
+        return {
+            "ok": True,
+            "action": action_name,
+            "status": "existing",
+            "message": "已有当前有效纸条，未重复抽；如果想废掉这张再抽，请调用 void_redraw。",
+            "active_private_draw": existing,
+            "summary": _private_draw_summary(existing),
+        }
+
+    active = _normalize_active_private_draw(_new_private_draw_payload())
+    if not active:
+        return {"ok": False, "error": "EMPTY_PRIVATE_DRAW", "message": "抽签池为空。"}
+    current["active_private_draw"] = active
+    current["updated_at"] = now_beijing_iso()
+    ok = save_pixel_home_state(current)
+    return {
+        "ok": bool(ok),
+        "action": action_name,
+        "status": "redrawn" if action_name == "void_redraw" else "drawn",
+        "message": "已作废当前纸条并重抽。" if action_name == "void_redraw" else "已抽出新的当前纸条。",
+        "discarded_private_draw": existing if action_name == "void_redraw" else None,
+        "active_private_draw": active,
+        "summary": _private_draw_summary(active),
+    }
 
 
 def _active_private_draw_inject_text(state: dict) -> str:

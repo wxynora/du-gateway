@@ -111,6 +111,12 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：`services/prompt_cache_debug.py` 新增 `【小家状态】 -> 小家状态` 和 `【小家状态写入规则】 -> 小家规则` 的拆分识别，后续 dynamic/static breakdown 不再把小家混进其它块。
 - 未完成 / 下次继续：本轮不改小家自动结束行为本身，只改提示词注入位置和动态区体积。
 
+当前状态（2026-06-11 小家 play 抽签工具）：
+- 已完成：新增渡可调用的网关工具 `pixel_home_private_draw`，不依赖 Notion 开关；`action=draw` 抽一张并保存为当前有效私密纸条，已有有效纸条时不覆盖；`action=void_redraw` 作废当前纸条并重抽；`action=done` 完成并清掉当前纸条。
+- 已完成：后端抽签池与 `miniapp/src/ui/tabs/PixelHomeTab.tsx` 的小家私密抽屉玩法池保持同一套口径；抽出的纸条仍写入 `services/pixel_home.py` 的 `active_private_draw`，后续动态小家状态会自然注入当前有效纸条。
+- 已验证：`.venv/bin/python -m py_compile services/pixel_home.py services/gateway_tools.py services/notion_tools.py pipeline/pipeline.py routes/chat.py` 通过；mock 小家存储烟测确认 draw / repeated draw / void_redraw / done 行为正确，且 `get_gateway_tools_for_inject()` 与 `execute_tool()` 都能看到并执行 `pixel_home_private_draw`。
+- 未完成 / 下次继续：本轮不改前端私密抽屉 UI，不改真实 R2 里的当前纸条，也不处理 APK/Android 入口。
+
 ## 聊天失败 / 上游不可用
 
 现象：
