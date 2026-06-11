@@ -69,7 +69,7 @@ PREFIXLESS_SPOTS = {"away", "out"}
 DU_DYNAMICS_LIMIT = 5
 EVENT_AUTO_END_MINUTES = 120
 DU_EVENT_SOURCES = {"du_marker"}
-XINYUE_EVENT_SOURCES = {"chat_infer", "miniapp_event"}
+XINYUE_EVENT_SOURCES = {"chat_infer", "miniapp_event", "du_marker_follow"}
 _SPOT_WORD_PATTERN = "|".join(sorted((re.escape(key) for key in SPOT_ALIASES if key and not key.isascii()), key=len, reverse=True))
 _MOVE_TO_RE = re.compile(rf"(?:回到|走到|走回|来到|坐到|躺到|站到|到|去|回)({_SPOT_WORD_PATTERN})")
 _MOVE_FROM_RE = re.compile(rf"^从({_SPOT_WORD_PATTERN})(?:走出|出来|离开|出去)")
@@ -79,6 +79,15 @@ _SPOT_CONTEXT_RE = re.compile(
 )
 _PERSON_CONTEXT_RE = re.compile(r"(?:她|小玥|老婆|辛玥)(?:面前|身边|旁边|身旁|旁|这边)")
 _STALE_SPOT_PREFIX_RE = re.compile(rf"^在({_SPOT_WORD_PATTERN})(.+)$")
+_XINYUE_COMPANION_OBJECT_RE = re.compile(
+    r"(?:抱着|抱起|搂着|牵着|拉着|拽着|带着|领着|背着|抱住|搂住|牵住|拉住|陪着).{0,12}"
+    r"(?:你|小玥|老婆|辛玥|她|我)"
+    r"|(?:你|小玥|老婆|辛玥|她).{0,12}(?:被|让|给)?"
+    r"(?:抱着|抱起|搂着|牵着|拉着|拽着|带着|领着|背着|抱住|搂住|牵住|拉住|陪着)"
+)
+_XINYUE_TOGETHER_MOVE_RE = re.compile(
+    rf"(?:我们|咱们|一起).{{0,12}}(?:回到|走到|走回|来到|坐到|躺到|站到|到|去|回)({_SPOT_WORD_PATTERN})"
+)
 
 
 def normalize_spot(value: Any, default: str = "away") -> str:
@@ -277,6 +286,44 @@ def _normalize_actor(raw: Any, default: dict, *, force_source: str = "", referen
     source = str(force_source or data.get("source") or default.get("source") or "manual").strip() or "manual"
     updated_at = str(data.get("updated_at") or data.get("updatedAt") or "").strip() or now_iso
     return {"spot": spot, "spot_label": spot_label(spot), "activity": activity, "source": source, "updated_at": updated_at}
+
+
+def _xinyue_follow_activity_from_du_activity(activity: str) -> str:
+    text = _clean_activity(activity, "")
+    if re.search(r"(抱着|抱起|抱住|搂着|搂住|背着)", text):
+        return "被渡抱着"
+    if re.search(r"(牵着|牵住|拉着|拉住|拽着|带着|领着|陪着)", text):
+        return "和渡在一起"
+    return "和渡在一起"
+
+
+def _infer_xinyue_follow_state_from_du(actor: dict) -> dict | None:
+    """
+    渡的 PIXEL_HOME 状态若明确写出“带着小玥一起移动”，同步小玥的小家位置。
+    只吃明确共同动作，避免普通“在她旁边/想她”误改小玥状态。
+    """
+    if not isinstance(actor, dict):
+        return None
+    spot = normalize_spot(actor.get("spot"), "")
+    if not spot:
+        return None
+    activity = _clean_activity(actor.get("activity"), "")
+    if not activity:
+        return None
+    has_companion_object = bool(_XINYUE_COMPANION_OBJECT_RE.search(activity))
+    has_together_move = bool(_XINYUE_TOGETHER_MOVE_RE.search(activity))
+    if not has_companion_object and not has_together_move:
+        return None
+    updated_at = str(actor.get("updated_at") or "").strip() or now_beijing_iso()
+    return _normalize_actor(
+        {
+            "spot": spot,
+            "activity": _xinyue_follow_activity_from_du_activity(activity),
+            "source": "du_marker_follow",
+            "updated_at": updated_at,
+        },
+        DEFAULT_XINYUE_STATE,
+    )
 
 
 def _format_activity_for_prompt(activity: str) -> str:
@@ -503,6 +550,9 @@ def save_actor_state(actor_key: str, spot: Any, activity: Any, *, source: str = 
     current[key] = actor
     if key == "du":
         current["du_dynamics"] = _append_du_dynamic(current, actor, reference_spot=reference_spot)
+        xinyue_follow = _infer_xinyue_follow_state_from_du(actor)
+        if xinyue_follow:
+            current["xinyue"] = xinyue_follow
     current["updated_at"] = now_beijing_iso()
     ok = save_pixel_home_state(current)
     actor["text"] = _format_actor_text(actor)
@@ -555,6 +605,7 @@ def format_inject_block() -> str:
         "小家事件超过 2 小时没有更新会自动结束；其他移动和状态变化由你在对话里自然决定。\n"
         "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加 PIXEL_HOME 隐藏标记：\n"
         "写 PIXEL_HOME 时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"
+        "如果正文描述你抱着/牵着/带着/陪着小玥一起移动，activity 里也要明确写出这个共同动作，例如“抱着小玥回卧室”；网关会据此同步小玥的小家位置。\n"
         "<<<PIXEL_HOME>>>\n"
         '{"spot":"study","activity":"写日记"}\n'
         "<<<END_PIXEL_HOME>>>\n"

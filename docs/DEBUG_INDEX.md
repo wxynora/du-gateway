@@ -99,6 +99,12 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已验证：干净临时 worktree 使用主工作区现成依赖完成 `npm run build` 并重建 `miniapp_static`；Browser preview 实测小家页加载、初始无点、点击卧室出现小点、事件按钮可见、点小家图以外区域清掉选中态、加号 sheet 可打开。
 - 未完成 / 下次继续：当前没有做历史状态列表；状态仍以覆盖式当前状态为主，渡的动态最多 5 条。不要把这轮小家静态 hash 产物和仓库里既有的其它半成品脏改混在一起提交。
 
+当前状态（2026-06-11 小家共同移动联动）：
+- 已完成：`services/pixel_home.py` 在保存渡的 `PIXEL_HOME` 隐藏状态时，若 `activity` 明确写出“抱着/牵着/带着/陪着小玥一起移动”，会同步小玥状态到渡的最终 `spot`，source 为 `du_marker_follow`，仍按短期事件 2 小时自动结束。
+- 已完成：小家注入规则补充要求：正文描述共同移动时，`PIXEL_HOME.activity` 要写明共同动作，例如“抱着小玥回卧室”，方便网关同步小玥位置。
+- 已验证：`.venv/bin/python -m py_compile services/pixel_home.py` 通过；mock 存储烟测确认“抱着小玥回卧室”同步小玥到卧室、“牵着老婆走到客厅沙发”同步到客厅沙发，“在卧室想小玥”不误同步。
+- 未完成 / 下次继续：本轮未改前端和 `miniapp_static`；只处理明确共同移动，不把普通想念、站在身边、单人移动误判成小玥跟随。
+
 ## 聊天失败 / 上游不可用
 
 现象：
