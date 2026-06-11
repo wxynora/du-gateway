@@ -2342,7 +2342,7 @@ export function MainChatScreen({
       <input
         ref={documentInputRef}
         type="file"
-        accept=".txt,.md,.markdown,text/plain,text/markdown"
+        accept=".txt,.md,.markdown,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         className="hidden"
         onChange={handleDocumentInputChange}
       />

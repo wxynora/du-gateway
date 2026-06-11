@@ -3109,6 +3109,10 @@ def _sumitalk_chat_media_ext(filename: str, content_type: str, kind: str) -> tup
     ctype = (content_type or "").strip().lower()
     ext = Path(filename or "").suffix.lower()
     if kind == "document":
+        if ext == ".pdf" or "pdf" in ctype:
+            return ".pdf", "application/pdf"
+        if ext == ".docx" or "wordprocessingml" in ctype:
+            return ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         if ext == ".md" or ext == ".markdown" or "markdown" in ctype:
             return ".md", "text/markdown"
         return ".txt", "text/plain"

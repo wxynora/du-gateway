@@ -1590,7 +1590,7 @@ npm -C miniapp run android
 - 未完成 / 下次继续：手机和自用前端仍走公网，不要误以为已切 Tailscale。当前 `8080` 内网入口反代整个网关；在 tailnet 只有自用 Mac/VPS 时风险较低，若后续加入手机、临时设备或他人账号，应收窄为只允许 `100.105.159.127` 且只放行 `/health`、`/api/codex_group_chat/`、`/internal/claude-oauth-*`。生产机后续使用 Tailscale 默认先加 `--accept-dns=false`，不要再让它接管 DNS。
 
 当前状态（2026-06-11 MiniApp 主聊天文本附件）：
-- 已完成：主聊天 `+` 面板新增“文档”入口，支持从 App 选择 `.txt` / `.md` / `.markdown` 文本附件；选择后与图片一样自动发送，可附带输入框里的文字。图片、语音、表情包、通话和出行规划入口保持原有链路。
-- 已完成：`/miniapp-api/chat-media/upload` 新增 `document` kind，按 MIME 或文件后缀兜底识别文本附件；文件限制 1MB，送入模型前最多保留前 60000 字，原文件仍写入 SumiTalk chat media R2，消息历史只保留文件名、链接、大小等轻量元数据，不把正文塞进聊天气泡。
-- 已验证：`.venv/bin/python -m py_compile routes/miniapp/media.py storage/r2_store.py app.py` 通过；`npm -C miniapp run build` 通过并重建 `miniapp_static`，只有既有 Vite chunk size warning；本地 Flask test client monkeypatch R2 上传 `note.md`，确认返回 `kind=document`、文件名、remoteKey/remoteUrl 和 `textPreview`。
-- 未完成 / 下次继续：本轮急用版不支持 PDF/DOCX/OCR，不做多文档批量，也未把群聊附件路由单独扩展；如果后续要支持长 PDF，应先走文件缓存/摘要管道，避免把全文直接塞进一次聊天请求。
+- 已完成：主聊天 `+` 面板新增“文档”入口，支持从 App 选择 `.txt` / `.md` / `.markdown` / `.pdf` / `.docx` 附件；选择后与图片一样自动发送，可附带输入框里的文字。图片、语音、表情包、通话和出行规划入口保持原有链路。
+- 已完成：`/miniapp-api/chat-media/upload` 新增 `document` kind，按 MIME 或文件后缀兜底识别文本附件；文件限制 10MB，送入模型前最多保留前 60000 字，PDF 最多读取前 120 页，DOCX 会读取段落和表格；原文件仍写入 SumiTalk chat media R2，消息历史只保留文件名、链接、大小等轻量元数据，不把正文塞进聊天气泡。
+- 已验证：`.venv/bin/python -m py_compile routes/miniapp/media.py storage/r2_store.py app.py` 通过；`npm -C miniapp run build` 通过并重建 `miniapp_static`，只有既有 Vite chunk size warning；本地 Flask test client monkeypatch R2 上传 `note.md` 和 `brief.docx`，确认返回 `kind=document`、文件名、remoteKey/remoteUrl 和 `textPreview`；空白 PDF 会明确返回“没有读到可用文字”。
+- 未完成 / 下次继续：本轮不做 OCR，不做多文档批量，也未把群聊附件路由单独扩展；扫描版 PDF 要先 OCR，超长 PDF/DOCX 后续应走文件缓存/摘要管道，避免把全文直接塞进一次聊天请求。

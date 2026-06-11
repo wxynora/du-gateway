@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import io
 import logging
 import time
+from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -18,12 +20,19 @@ logger = logging.getLogger(__name__)
 TTS_EMOTION_VALUES = {"", "happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whisper"}
 CHAT_MEDIA_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"}
 CHAT_MEDIA_AUDIO_TYPES = {"audio/webm", "audio/mp4", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg"}
-CHAT_MEDIA_DOCUMENT_TYPES = {"text/plain", "text/markdown", "text/x-markdown"}
-CHAT_MEDIA_DOCUMENT_EXTS = {".txt", ".md", ".markdown"}
+CHAT_MEDIA_DOCUMENT_TYPES = {
+    "text/plain",
+    "text/markdown",
+    "text/x-markdown",
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+CHAT_MEDIA_DOCUMENT_EXTS = {".txt", ".md", ".markdown", ".pdf", ".docx"}
 CHAT_MEDIA_IMAGE_MAX_BYTES = 12 * 1024 * 1024
 CHAT_MEDIA_AUDIO_MAX_BYTES = max(1024, int(VOICE_CALL_MAX_BYTES or (12 * 1024 * 1024)))
-CHAT_MEDIA_DOCUMENT_MAX_BYTES = 1024 * 1024
+CHAT_MEDIA_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024
 CHAT_MEDIA_DOCUMENT_MAX_CHARS = 60000
+CHAT_MEDIA_DOCUMENT_MAX_PDF_PAGES = 120
 
 
 def _voice_call_default_config() -> dict:
@@ -113,10 +122,87 @@ def _chat_media_document_supported(mime_type: str, filename: str) -> bool:
 
 
 def _decode_chat_text_document(content: bytes) -> str:
-    text = (content or b"").decode("utf-8-sig", errors="replace").strip()
+    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            text = (content or b"").decode(encoding).strip()
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = (content or b"").decode("utf-8", errors="replace").strip()
     if len(text) > CHAT_MEDIA_DOCUMENT_MAX_CHARS:
         return text[:CHAT_MEDIA_DOCUMENT_MAX_CHARS].rstrip() + f"\n\n[文档过长，已截断到前 {CHAT_MEDIA_DOCUMENT_MAX_CHARS} 字]"
     return text
+
+
+def _clip_chat_document_text(text: str) -> str:
+    clean = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(clean) > CHAT_MEDIA_DOCUMENT_MAX_CHARS:
+        return clean[:CHAT_MEDIA_DOCUMENT_MAX_CHARS].rstrip() + f"\n\n[文档过长，已截断到前 {CHAT_MEDIA_DOCUMENT_MAX_CHARS} 字]"
+    return clean
+
+
+def _extract_chat_pdf_document(content: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+    except Exception as exc:
+        raise RuntimeError("服务器缺少 pypdf，暂时不能读取 PDF") from exc
+
+    reader = PdfReader(io.BytesIO(content or b""))
+    parts: list[str] = []
+    total = 0
+    for index, page in enumerate(reader.pages[:CHAT_MEDIA_DOCUMENT_MAX_PDF_PAGES], start=1):
+        try:
+            page_text = (page.extract_text() or "").strip()
+        except Exception:
+            page_text = ""
+        if not page_text:
+            continue
+        block = f"--- 第 {index} 页 ---\n{page_text}"
+        parts.append(block)
+        total += len(block)
+        if total >= CHAT_MEDIA_DOCUMENT_MAX_CHARS:
+            break
+    return _clip_chat_document_text("\n\n".join(parts))
+
+
+def _extract_chat_docx_document(content: bytes) -> str:
+    try:
+        from docx import Document
+    except Exception as exc:
+        raise RuntimeError("服务器缺少 python-docx，暂时不能读取 DOCX") from exc
+
+    doc = Document(io.BytesIO(content or b""))
+    parts: list[str] = []
+    total = 0
+    for paragraph in doc.paragraphs:
+        text = (paragraph.text or "").strip()
+        if text:
+            parts.append(text)
+            total += len(text)
+        if total >= CHAT_MEDIA_DOCUMENT_MAX_CHARS:
+            return _clip_chat_document_text("\n".join(parts))
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text and cell.text.strip()]
+            if cells:
+                line = " | ".join(cells)
+                parts.append(line)
+                total += len(line)
+            if total >= CHAT_MEDIA_DOCUMENT_MAX_CHARS:
+                return _clip_chat_document_text("\n".join(parts))
+    return _clip_chat_document_text("\n".join(parts))
+
+
+def _extract_chat_document_text(filename: str, content: bytes) -> str:
+    ext = _chat_media_filename_ext(filename)
+    if ext in {".txt", ".md", ".markdown"}:
+        return _decode_chat_text_document(content)
+    if ext == ".pdf":
+        return _extract_chat_pdf_document(content)
+    if ext == ".docx":
+        return _extract_chat_docx_document(content)
+    raise ValueError("暂只支持 txt、md、pdf、docx")
 
 
 def _resolve_voice_call_window_id(explicit_window_id: str = "") -> str:
@@ -521,9 +607,15 @@ def register_routes(bp) -> None:
             return jsonify({"ok": False, "error": "文件太大了，换小一点再试"}), 400
         text_preview = ""
         if kind == "document":
-            text_preview = _decode_chat_text_document(content)
+            try:
+                text_preview = _extract_chat_document_text(filename, content)
+            except RuntimeError as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+            except Exception as e:
+                logger.warning("[SumiTalk] chat_media_upload_document_extract_failed filename=%s mime=%s err=%s", filename[:120], mime_type, e)
+                return jsonify({"ok": False, "error": f"文档读取失败：{e}"}), 400
             if not text_preview:
-                return jsonify({"ok": False, "error": "文档内容为空"}), 400
+                return jsonify({"ok": False, "error": "文档里没有读到可用文字；如果是扫描版 PDF，需要先 OCR"}), 400
         row = r2_store.upload_sumitalk_chat_media_file(kind, filename, content, mime_type)
         if not row:
             return jsonify({"ok": False, "error": "上传失败"}), 500
