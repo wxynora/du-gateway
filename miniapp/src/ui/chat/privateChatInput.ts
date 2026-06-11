@@ -1,6 +1,7 @@
 import type { ChatAttachment } from "../chatMessages";
 import {
   transcribeChatAudio,
+  uploadChatDocument,
   uploadChatImage,
 } from "./chatMedia";
 import {
@@ -8,7 +9,7 @@ import {
   type PrivateModelContent,
 } from "./privateChatHelpers";
 
-export type PrivateChatSource = "text" | "image" | "voice" | "travel_form" | "retry";
+export type PrivateChatSource = "text" | "image" | "document" | "voice" | "travel_form" | "retry";
 
 export type PreparedPrivateChatInput = {
   source: PrivateChatSource;
@@ -40,6 +41,24 @@ export async function prepareImagePrivateChatInput(file: File, content: string):
     displayContent: text,
     attachments,
     modelContent: buildPrivateUserContent(text, attachments),
+  };
+}
+
+export async function prepareDocumentPrivateChatInput(file: File, content: string): Promise<PreparedPrivateChatInput> {
+  const text = String(content || "").trim();
+  const attachmentWithText = await uploadChatDocument(file);
+  const attachment: ChatAttachment = {
+    ...attachmentWithText,
+    textPreview: undefined,
+  };
+  const modelAttachments = [attachmentWithText];
+  const attachments = [attachment];
+  return {
+    source: "document",
+    content: text,
+    displayContent: text,
+    attachments,
+    modelContent: buildPrivateUserContent(text, modelAttachments),
   };
 }
 

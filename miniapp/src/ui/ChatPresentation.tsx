@@ -7,7 +7,7 @@ import angryEmojiMarkUrl from "../assets/angry-emoji-mark.png?url";
 import peekRabbitStickerUrl from "../assets/peek-rabbit-sticker.png?url";
 import sumikaBubbleStickerUrl from "../assets/sumika-bubble-sticker.png?url";
 import type { BubbleSkinKey } from "./chatAppearance";
-import { ImageIconMini, MicIconMini, PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
+import { FileTextIcon, ImageIconMini, MicIconMini, PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
 import type { ChatAttachment, ChatAttachmentKind } from "./chatMessages";
 
 type BubbleStickerAnchor = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -280,6 +280,14 @@ function audioBarWidth(durationMs?: number): number {
   return Math.max(104, Math.min(188, 92 + seconds * 4));
 }
 
+function formatAttachmentSize(bytes?: number): string {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value < 1024) return `${Math.round(value)}B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)}KB`;
+  return `${(value / 1024 / 1024).toFixed(1)}MB`;
+}
+
 function ChatVoiceBar({ item, src, align }: { item: ChatAttachment; src: string; align: "left" | "right" }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -383,6 +391,29 @@ export function ChatAttachmentBlock({
                 className="max-h-[260px] max-w-full rounded-[14px] object-cover"
                 loading="lazy"
               />
+            </a>
+          );
+        }
+        if (item.kind === "document") {
+          const size = formatAttachmentSize(item.size);
+          const name = String(item.name || item.alt || "文档").trim();
+          return (
+            <a
+              key={item.id}
+              href={src}
+              target="_blank"
+              rel="noreferrer"
+              className={`flex max-w-[236px] items-center gap-2 rounded-[14px] border border-gray-200/80 bg-white/88 px-3 py-2 text-gray-700 shadow-sm backdrop-blur active:opacity-80 ${
+                align === "right" ? "self-end" : "self-start"
+              }`}
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-gray-100 text-gray-500">
+                <FileTextIcon />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-[13px] font-semibold leading-4">{name}</span>
+                <span className="block truncate text-[11px] font-medium leading-4 text-gray-400">{size || item.mime || "文本附件"}</span>
+              </span>
             </a>
           );
         }
@@ -500,6 +531,8 @@ export function ChatActionButton({ label, onClick }: { label: string; onClick: (
       ? <RouteIconMini />
       : label === "图片"
         ? <ImageIconMini />
+        : label === "文档"
+          ? <FileTextIcon />
         : label === "语音" || label === "发送" || label === "停止"
           ? <MicIconMini />
           : <PhoneIconLarge />;

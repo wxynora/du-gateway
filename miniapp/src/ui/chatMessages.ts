@@ -4,10 +4,11 @@ export type ChatFontKey = "yahei" | "system" | "pingfang";
 export type ChatTimeFormat = "hhmm" | "ampm";
 
 export type ChatRole = "user" | "assistant" | "benben";
-export type ChatAttachmentKind = "image" | "audio";
+export type ChatAttachmentKind = "image" | "audio" | "document";
 export type ChatAttachment = {
   id: string;
   kind: ChatAttachmentKind;
+  name?: string;
   mime?: string;
   remoteKey?: string;
   remoteUrl?: string;
@@ -18,6 +19,7 @@ export type ChatAttachment = {
   durationMs?: number;
   size?: number;
   transcript?: string;
+  textPreview?: string;
   alt?: string;
   createdAt?: string;
 };
@@ -94,6 +96,7 @@ export function contentToPlainText(content: any): string {
         if (typeof part.content === "string") return String(part.content || "").trim();
         if (part.type === "image_url") return "[图片]";
         if (part.type === "input_audio" || part.type === "audio") return "[语音]";
+        if (part.type === "file" || part.type === "document") return "[文档]";
         return "";
       })
       .filter(Boolean)
@@ -124,16 +127,24 @@ export function normalizeChatAttachments(value: any): ChatAttachment[] {
   for (const raw of list) {
     if (!raw || typeof raw !== "object") continue;
     const kind = String(raw.kind || raw.type || "").trim().toLowerCase();
-    if (kind !== "image" && kind !== "audio") continue;
+    if (kind !== "image" && kind !== "audio" && kind !== "document") continue;
     const remoteUrl = sanitizeAttachmentUrl(raw.remoteUrl || raw.url || raw.src);
     const localUrl = sanitizeAttachmentUrl(raw.localUrl || raw.localUri);
     const thumbUrl = sanitizeAttachmentUrl(raw.thumbUrl || raw.thumbUri);
     const remoteKey = String(raw.remoteKey || raw.key || "").trim();
-    if (!remoteUrl && !localUrl && !remoteKey && !thumbUrl && !String(raw.transcript || "").trim()) continue;
+    if (
+      !remoteUrl
+      && !localUrl
+      && !remoteKey
+      && !thumbUrl
+      && !String(raw.transcript || "").trim()
+      && !String(raw.textPreview || raw.text || "").trim()
+    ) continue;
     const id = String(raw.id || remoteKey || remoteUrl || localUrl || `${kind}-${out.length}`).trim();
     out.push({
       id,
       kind,
+      ...(String(raw.name || raw.filename || raw.fileName || "").trim() ? { name: String(raw.name || raw.filename || raw.fileName || "").trim() } : {}),
       ...(raw.mime ? { mime: String(raw.mime || "").trim() } : {}),
       ...(remoteKey ? { remoteKey } : {}),
       ...(remoteUrl ? { remoteUrl } : {}),
@@ -144,6 +155,7 @@ export function normalizeChatAttachments(value: any): ChatAttachment[] {
       ...(Number.isFinite(Number(raw.durationMs)) && Number(raw.durationMs) > 0 ? { durationMs: Number(raw.durationMs) } : {}),
       ...(Number.isFinite(Number(raw.size)) && Number(raw.size) > 0 ? { size: Number(raw.size) } : {}),
       ...(String(raw.transcript || "").trim() ? { transcript: String(raw.transcript || "").trim() } : {}),
+      ...(String(raw.textPreview || raw.text || "").trim() ? { textPreview: String(raw.textPreview || raw.text || "").trim() } : {}),
       ...(String(raw.alt || "").trim() ? { alt: String(raw.alt || "").trim() } : {}),
       ...(String(raw.createdAt || "").trim() ? { createdAt: String(raw.createdAt || "").trim() } : {}),
     });
@@ -156,9 +168,16 @@ export function chatAttachmentPreviewLabel(attachments?: ChatAttachment[]): stri
   if (!list.length) return "";
   const images = list.filter((item) => item.kind === "image").length;
   const audios = list.filter((item) => item.kind === "audio").length;
-  if (images && audios) return `[图片${images > 1 ? images : ""} + 语音${audios > 1 ? audios : ""}]`;
+  const documents = list.filter((item) => item.kind === "document").length;
+  const parts = [
+    images ? `图片${images > 1 ? images : ""}` : "",
+    audios ? `语音${audios > 1 ? audios : ""}` : "",
+    documents ? `文档${documents > 1 ? documents : ""}` : "",
+  ].filter(Boolean);
+  if (parts.length > 1) return `[${parts.join(" + ")}]`;
   if (images) return images > 1 ? `[${images}张图片]` : "[图片]";
   if (audios) return audios > 1 ? `[${audios}条语音]` : "[语音]";
+  if (documents) return documents > 1 ? `[${documents}个文档]` : "[文档]";
   return "[附件]";
 }
 

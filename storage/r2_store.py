@@ -3108,6 +3108,10 @@ def upload_sticker_file(tag: str, filename: str, content: bytes, content_type: s
 def _sumitalk_chat_media_ext(filename: str, content_type: str, kind: str) -> tuple[str, str]:
     ctype = (content_type or "").strip().lower()
     ext = Path(filename or "").suffix.lower()
+    if kind == "document":
+        if ext == ".md" or ext == ".markdown" or "markdown" in ctype:
+            return ".md", "text/markdown"
+        return ".txt", "text/plain"
     if kind == "audio":
         if "mpeg" in ctype or "mp3" in ctype:
             return ".mp3", "audio/mpeg"
@@ -3132,7 +3136,7 @@ def _sumitalk_chat_media_ext(filename: str, content_type: str, kind: str) -> tup
 def upload_sumitalk_chat_media_file(kind: str, filename: str, content: bytes, content_type: str) -> Optional[dict]:
     """上传 SumiTalk 聊天附件文件，返回可写入消息 attachments 的轻量元数据。"""
     media_kind = (kind or "").strip().lower()
-    if media_kind not in {"image", "audio"} or not content:
+    if media_kind not in {"image", "audio", "document"} or not content:
         return None
     ext, ctype = _sumitalk_chat_media_ext(filename, content_type, media_kind)
     today = today_beijing()
@@ -3150,6 +3154,7 @@ def upload_sumitalk_chat_media_file(kind: str, filename: str, content: bytes, co
         return {
             "key": key,
             "kind": media_kind,
+            "name": Path(filename or key).name,
             "contentType": ctype,
             "size": len(content),
             "createdAt": now_beijing_iso(),

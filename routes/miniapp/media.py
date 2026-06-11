@@ -18,8 +18,12 @@ logger = logging.getLogger(__name__)
 TTS_EMOTION_VALUES = {"", "happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whisper"}
 CHAT_MEDIA_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"}
 CHAT_MEDIA_AUDIO_TYPES = {"audio/webm", "audio/mp4", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg"}
+CHAT_MEDIA_DOCUMENT_TYPES = {"text/plain", "text/markdown", "text/x-markdown"}
+CHAT_MEDIA_DOCUMENT_EXTS = {".txt", ".md", ".markdown"}
 CHAT_MEDIA_IMAGE_MAX_BYTES = 12 * 1024 * 1024
 CHAT_MEDIA_AUDIO_MAX_BYTES = max(1024, int(VOICE_CALL_MAX_BYTES or (12 * 1024 * 1024)))
+CHAT_MEDIA_DOCUMENT_MAX_BYTES = 1024 * 1024
+CHAT_MEDIA_DOCUMENT_MAX_CHARS = 60000
 
 
 def _voice_call_default_config() -> dict:
@@ -56,13 +60,15 @@ def _chat_media_public_url(key: str) -> str:
     return f"{base}/miniapp-api/chat-media/raw-public?key={quote(media_key, safe='/')}"
 
 
-def _chat_media_attachment(row: dict, *, duration_ms: int = 0, transcript: str = "") -> dict:
+def _chat_media_attachment(row: dict, *, duration_ms: int = 0, transcript: str = "", text_preview: str = "") -> dict:
     key = str((row or {}).get("key") or "").strip()
     kind = str((row or {}).get("kind") or "").strip().lower()
     ctype = str((row or {}).get("contentType") or "").strip().lower()
+    name = str((row or {}).get("name") or "").strip()
     item = {
         "id": key.rsplit("/", 1)[-1] if key else uuid4().hex,
         "kind": kind,
+        "name": name,
         "mime": ctype,
         "remoteKey": key,
         "remoteUrl": _chat_media_public_url(key),
@@ -73,17 +79,44 @@ def _chat_media_attachment(row: dict, *, duration_ms: int = 0, transcript: str =
         item["durationMs"] = int(duration_ms)
     if transcript:
         item["transcript"] = transcript
+    if text_preview:
+        item["textPreview"] = text_preview
     return item
 
 
-def _chat_media_kind_for_mime(mime_type: str, explicit_kind: str = "") -> str:
+def _chat_media_filename_ext(filename: str) -> str:
+    name = str(filename or "").strip().lower()
+    if "." not in name:
+        return ""
+    return "." + name.rsplit(".", 1)[-1]
+
+
+def _chat_media_kind_for_mime(mime_type: str, explicit_kind: str = "", filename: str = "") -> str:
     kind = str(explicit_kind or "").strip().lower()
     mt = str(mime_type or "").strip().lower()
+    ext = _chat_media_filename_ext(filename)
+    if kind == "document":
+        return "document"
     if kind in {"image", "audio"}:
         return kind
     if mt in CHAT_MEDIA_AUDIO_TYPES or mt.startswith("audio/"):
         return "audio"
+    if mt in CHAT_MEDIA_DOCUMENT_TYPES or ext in CHAT_MEDIA_DOCUMENT_EXTS:
+        return "document"
     return "image"
+
+
+def _chat_media_document_supported(mime_type: str, filename: str) -> bool:
+    mt = str(mime_type or "").strip().lower()
+    ext = _chat_media_filename_ext(filename)
+    return mt in CHAT_MEDIA_DOCUMENT_TYPES or ext in CHAT_MEDIA_DOCUMENT_EXTS
+
+
+def _decode_chat_text_document(content: bytes) -> str:
+    text = (content or b"").decode("utf-8-sig", errors="replace").strip()
+    if len(text) > CHAT_MEDIA_DOCUMENT_MAX_CHARS:
+        return text[:CHAT_MEDIA_DOCUMENT_MAX_CHARS].rstrip() + f"\n\n[文档过长，已截断到前 {CHAT_MEDIA_DOCUMENT_MAX_CHARS} 字]"
+    return text
 
 
 def _resolve_voice_call_window_id(explicit_window_id: str = "") -> str:
@@ -465,20 +498,36 @@ def register_routes(bp) -> None:
         if not f:
             return jsonify({"ok": False, "error": "缺少 file"}), 400
         mime_type = (f.mimetype or request.form.get("mime_type") or "application/octet-stream").strip().lower()
-        kind = _chat_media_kind_for_mime(mime_type, request.form.get("kind") or "")
-        allowed = CHAT_MEDIA_AUDIO_TYPES if kind == "audio" else CHAT_MEDIA_IMAGE_TYPES
-        max_bytes = CHAT_MEDIA_AUDIO_MAX_BYTES if kind == "audio" else CHAT_MEDIA_IMAGE_MAX_BYTES
-        if mime_type not in allowed:
+        filename = (f.filename or "chat-media").strip() or "chat-media"
+        kind = _chat_media_kind_for_mime(mime_type, request.form.get("kind") or "", filename)
+        if kind == "audio":
+            allowed = CHAT_MEDIA_AUDIO_TYPES
+            max_bytes = CHAT_MEDIA_AUDIO_MAX_BYTES
+            supported = mime_type in allowed
+        elif kind == "document":
+            allowed = CHAT_MEDIA_DOCUMENT_TYPES
+            max_bytes = CHAT_MEDIA_DOCUMENT_MAX_BYTES
+            supported = _chat_media_document_supported(mime_type, filename)
+        else:
+            allowed = CHAT_MEDIA_IMAGE_TYPES
+            max_bytes = CHAT_MEDIA_IMAGE_MAX_BYTES
+            supported = mime_type in allowed
+        if not supported:
             return jsonify({"ok": False, "error": f"暂不支持的文件格式：{mime_type or 'unknown'}"}), 400
         content = f.read()
         if not content:
             return jsonify({"ok": False, "error": "文件为空"}), 400
         if len(content) > max_bytes:
             return jsonify({"ok": False, "error": "文件太大了，换小一点再试"}), 400
-        row = r2_store.upload_sumitalk_chat_media_file(kind, f.filename or f"chat-media", content, mime_type)
+        text_preview = ""
+        if kind == "document":
+            text_preview = _decode_chat_text_document(content)
+            if not text_preview:
+                return jsonify({"ok": False, "error": "文档内容为空"}), 400
+        row = r2_store.upload_sumitalk_chat_media_file(kind, filename, content, mime_type)
         if not row:
             return jsonify({"ok": False, "error": "上传失败"}), 500
-        attachment = _chat_media_attachment(row)
+        attachment = _chat_media_attachment(row, text_preview=text_preview)
         return jsonify({"ok": True, "media": attachment, "attachment": attachment})
 
     @bp.route("/chat-media/transcribe", methods=["POST"])

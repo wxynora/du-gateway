@@ -31,17 +31,19 @@ function audioExt(mimeType: string): string {
   return "webm";
 }
 
-function normalizeAttachment(value: any, fallbackKind: "image" | "audio"): ChatAttachment {
+function normalizeAttachment(value: any, fallbackKind: "image" | "audio" | "document"): ChatAttachment {
   const raw = value && typeof value === "object" ? value : {};
   return {
     id: String(raw.id || raw.remoteKey || raw.remoteUrl || `${fallbackKind}-${Date.now()}`),
-    kind: raw.kind === "audio" || raw.kind === "image" ? raw.kind : fallbackKind,
+    kind: raw.kind === "audio" || raw.kind === "image" || raw.kind === "document" ? raw.kind : fallbackKind,
+    name: String(raw.name || raw.filename || raw.fileName || "").trim() || undefined,
     mime: String(raw.mime || ""),
     remoteKey: String(raw.remoteKey || ""),
     remoteUrl: String(raw.remoteUrl || ""),
     size: Number(raw.size || 0) || undefined,
     durationMs: Number(raw.durationMs || 0) || undefined,
     transcript: String(raw.transcript || "").trim() || undefined,
+    textPreview: String(raw.textPreview || raw.text || "").trim() || undefined,
     createdAt: String(raw.createdAt || "").trim() || undefined,
   };
 }
@@ -55,6 +57,17 @@ export async function uploadChatImage(file: File): Promise<ChatAttachment> {
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
   return normalizeAttachment(data.attachment || data.media, "image");
+}
+
+export async function uploadChatDocument(file: File): Promise<ChatAttachment> {
+  const form = new FormData();
+  form.append("file", file, file.name || "document.txt");
+  form.append("kind", "document");
+  form.append("mime_type", file.type || "text/plain");
+  const resp = await apiFetch("/miniapp-api/chat-media/upload", { method: "POST", body: form });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
+  return normalizeAttachment(data.attachment || data.media, "document");
 }
 
 export async function transcribeChatAudio(blob: Blob, mimeType: string): Promise<{

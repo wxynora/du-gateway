@@ -87,6 +87,7 @@ import {
   resolveRecorderMimeType,
 } from "./chat/chatMedia";
 import {
+  prepareDocumentPrivateChatInput,
   prepareImagePrivateChatInput,
   prepareTextPrivateChatInput,
   prepareTravelFormPrivateChatInput,
@@ -141,7 +142,7 @@ type CodexGroupChatTaskResponse = {
   task?: CodexGroupChatTask | null;
   error?: string;
 };
-type ChatSendSource = "text" | "image" | "voice" | "travel_form" | "group_command" | "retry";
+type ChatSendSource = "text" | "image" | "document" | "voice" | "travel_form" | "group_command" | "retry";
 type ActiveChatRequest = {
   attemptId: string;
   clientRequestId: string;
@@ -287,6 +288,7 @@ export function MainChatScreen({
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const documentInputRef = useRef<HTMLInputElement | null>(null);
   const chatVoiceStreamRef = useRef<MediaStream | null>(null);
   const chatVoiceRecorderRef = useRef<MediaRecorder | null>(null);
   const chatVoiceChunksRef = useRef<Blob[]>([]);
@@ -1245,7 +1247,7 @@ export function MainChatScreen({
     const content = String(rawContent || "").trim();
     const attachments = normalizeChatAttachments(options.attachments);
     const source: ChatSendSource = options.source
-      || (attachments.some((item) => item.kind === "audio") ? "voice" : attachments.some((item) => item.kind === "image") ? "image" : "text");
+      || (attachments.some((item) => item.kind === "audio") ? "voice" : attachments.some((item) => item.kind === "image") ? "image" : attachments.some((item) => item.kind === "document") ? "document" : "text");
     const effectiveContent = contentWithAttachmentHint(content, attachments);
     const canSendWhileBusy = groupChatMode && (
       isBenbenCancelCommand(content)
@@ -1483,6 +1485,7 @@ export function MainChatScreen({
         attachments: attachments.length,
         audioAttachments: attachments.filter((item) => item.kind === "audio").length,
         imageAttachments: attachments.filter((item) => item.kind === "image").length,
+        documentAttachments: attachments.filter((item) => item.kind === "document").length,
         model: activeModel,
       });
     }
@@ -1743,6 +1746,12 @@ export function MainChatScreen({
     imageInputRef.current?.click();
   }
 
+  function openDocumentPicker() {
+    if (sending || mediaBusy) return;
+    setPlusOpen(false);
+    documentInputRef.current?.click();
+  }
+
   async function handleImageInputChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] || null;
     event.target.value = "";
@@ -1762,6 +1771,31 @@ export function MainChatScreen({
     } catch (e: any) {
       logSumiTalkClientEvent("image_upload_error", { error: String(e?.message || e) }, "error");
       toast(`图片发送失败：${e?.message || e}`);
+    } finally {
+      setMediaBusy(false);
+    }
+  }
+
+  async function handleDocumentInputChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+    if (!file || sending || mediaBusy) return;
+    setMediaBusy(true);
+    try {
+      logSumiTalkClientEvent("document_upload_start", { name: file.name, mime: file.type, bytes: file.size });
+      const prepared = await prepareDocumentPrivateChatInput(file, input);
+      const attachment = prepared.attachments[0];
+      logSumiTalkClientEvent("document_upload_ok", {
+        name: attachment.name || file.name,
+        mime: attachment.mime || file.type,
+        bytes: attachment.size || file.size,
+        hasRemoteUrl: Boolean(attachment.remoteUrl),
+        hasRemoteKey: Boolean(attachment.remoteKey),
+      });
+      await sendPreparedPrivateChatInput(prepared);
+    } catch (e: any) {
+      logSumiTalkClientEvent("document_upload_error", { error: String(e?.message || e) }, "error");
+      toast(`文档发送失败：${e?.message || e}`);
     } finally {
       setMediaBusy(false);
     }
@@ -2305,11 +2339,19 @@ export function MainChatScreen({
         className="hidden"
         onChange={handleImageInputChange}
       />
+      <input
+        ref={documentInputRef}
+        type="file"
+        accept=".txt,.md,.markdown,text/plain,text/markdown"
+        className="hidden"
+        onChange={handleDocumentInputChange}
+      />
       <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
         <div className={`pointer-events-none absolute ${chatFooterFeatherClass}`} aria-hidden="true" />
         <div className={`relative z-10 overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[142px] opacity-100" : "h-0 opacity-0"}`}>
-          <div className="grid grid-cols-4 gap-x-2 px-4 pb-2 pt-5">
+          <div className="grid grid-cols-5 gap-x-2 px-4 pb-2 pt-5">
               <ChatActionButton label="图片" onClick={openImagePicker} />
+              <ChatActionButton label="文档" onClick={openDocumentPicker} />
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
               <ChatActionButton

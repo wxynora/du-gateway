@@ -15,6 +15,10 @@ export function contentWithAttachmentHint(content: string, attachments: ChatAtta
         if (transcript && transcript !== text) return `[语音转写] ${transcript}`;
         return "[语音]";
       }
+      if (item.kind === "document") {
+        const name = String(item.name || "").trim();
+        return name ? `[文档] ${name}` : "[文档]";
+      }
       return "[附件]";
     })
     .filter(Boolean);
@@ -23,15 +27,28 @@ export function contentWithAttachmentHint(content: string, attachments: ChatAtta
 
 export function buildPrivateUserContent(content: string, attachments: ChatAttachment[]): PrivateModelContent {
   const text = String(content || "").trim();
+  const documentTexts = attachments
+    .filter((item) => item.kind === "document" && String(item.textPreview || "").trim())
+    .map((item) => {
+      const name = String(item.name || "document.txt").trim();
+      const mime = String(item.mime || "").trim();
+      const body = String(item.textPreview || "").trim();
+      return [
+        `用户上传了一个文本附件：${name}${mime ? ` (${mime})` : ""}`,
+        "附件内容：",
+        body,
+      ].join("\n");
+    });
+  const combinedText = [text, ...documentTexts].filter(Boolean).join("\n\n").trim();
   const imageParts = attachments
     .filter((item) => item.kind === "image" && String(item.remoteUrl || "").trim())
     .map((item) => ({
       type: "image_url",
       image_url: { url: String(item.remoteUrl || "").trim() },
     }));
-  if (!imageParts.length) return contentWithAttachmentHint(text, attachments);
+  if (!imageParts.length) return combinedText || contentWithAttachmentHint(text, attachments);
   const parts: Array<Record<string, any>> = [];
-  if (text) parts.push({ type: "text", text });
+  if (combinedText) parts.push({ type: "text", text: combinedText });
   parts.push(...imageParts);
   return parts;
 }
