@@ -732,7 +732,7 @@ def _private_draw_summary(active: dict | None) -> list[str]:
 
 def execute_private_draw_action(action: str) -> dict:
     """
-    给渡用的小家 play 抽签工具。
+    给渡用的 sex play 抽签工具。
     draw 保留现有有效纸条；void_redraw 作废当前纸条并立刻重抽；done 完成并清掉当前纸条。
     """
     raw_action = str(action or "").strip().lower()
