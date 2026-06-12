@@ -53,6 +53,12 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：配置项为 `DU_SURF_ENABLED`、`DU_SURF_TIMEOUT_SECONDS`、`DU_SURF_MAX_CARDS`、`DU_SURF_CACHE_TTL_SECONDS`；缺 `TAVILY_API_KEY` 时返回 `TAVILY_API_KEY_MISSING`，不会假装有内容。
 - 已验证：`.venv/bin/python -m py_compile config.py services/du_surf.py services/gateway_tools.py services/notion_tools.py services/telegram_proactive.py pipeline/pipeline.py routes/chat.py` 通过；离线 monkeypatch smoke 覆盖缺 key、正常卡片、硬噪音过滤、网关注入和 `execute_tool("du_surf")` 分发。
 
+当前状态（2026-06-11 R2 TTL 清理入口）：
+- 已完成：新增 `scripts/prune_r2_ttl.py` 作为统一 R2 清理入口，默认 dry-run；对话原文/思维链归档复用 `scripts/prune_r2_conversation_originals.py` 的月度规则（当前北京时间月份减 3 个月，例如 6 月清 3 月），不改变热路径存档逻辑。
+- 已完成：`sense/history/YYYY-MM-DD.json` 按事件上传时间 `at` 清理超过 24h 的记录；同一文件内仍有新事件则重写，清空后才删除整个 key。`global/summary_backups/summary_YYYYMMDD_HHMMSS.txt` 按文件名里的北京时间超过 24h 删除，不读取总结正文。
+- 已完成：新增 `scripts/install_r2_ttl_launchagent.sh` 安装 Mac 本地 LaunchAgent，不需要部署到 VPS：`com.dugateway.r2-ttl.daily` 每天 04:35 只清 24h TTL（sense/history、summary_backups）；`com.dugateway.r2-ttl.monthly` 每月 1 日 04:55 清对话原文/思维链归档，避免每天扫全量 R2 归档。
+- 安装命令：`bash scripts/install_r2_ttl_launchagent.sh`。日志目录：`~/Library/Logs/du-gateway-r2-ttl/`，清单目录：`~/Library/Application Support/DuGatewayR2TTL/`。手动排查命令：`.venv/bin/python scripts/prune_r2_ttl.py --manifest debug-evidence/r2-ttl-dry-run.json` 先看清单；只想试 24h 两项可加 `--skip-conversations`。
+
 ## 主动唤醒入口风格抖动
 
 现象：

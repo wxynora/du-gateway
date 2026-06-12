@@ -409,16 +409,17 @@ def send_sticker_photo(chat_id: int, r2_key: str, bot_token: Optional[str] = Non
 
 def _extract_voice_tag(text: str) -> tuple[str, str]:
     """
-    提取 <voice>...</voice>。
+    提取所有 <voice>...</voice>，合并成一条语音。
     返回 (clean_text, voice_text)。若没有则 voice_text=""。
     """
     if not text:
         return "", ""
-    m = re.search(r"<voice>([\s\S]*?)</voice>", text, flags=re.IGNORECASE)
-    if not m:
+    matches = list(re.finditer(r"<voice>([\s\S]*?)</voice>", text, flags=re.IGNORECASE))
+    if not matches:
         return text, ""
-    voice_text = (m.group(1) or "").strip()
-    clean = (text[: m.start()] + text[m.end() :]).strip()
+    voice_parts = [(m.group(1) or "").strip() for m in matches]
+    voice_text = "\n".join(part for part in voice_parts if part).strip()
+    clean = re.sub(r"<voice>[\s\S]*?</voice>", "", text, flags=re.IGNORECASE).strip()
     # 收敛多空行
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
     return clean, voice_text

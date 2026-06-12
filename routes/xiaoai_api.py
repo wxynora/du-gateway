@@ -75,11 +75,11 @@ def _extract_voice_tag(text: str) -> tuple[str, str]:
     raw = str(text or "")
     if not raw:
         return "", ""
-    m = _VOICE_TAG_RE.search(raw)
-    if not m:
+    matches = list(_VOICE_TAG_RE.finditer(raw))
+    if not matches:
         return _normalize_voice_text(raw), ""
-    voice_text = _normalize_voice_text(m.group(1) or "")
-    clean = _normalize_voice_text(raw[: m.start()] + raw[m.end() :])
+    voice_text = _normalize_voice_text("\n".join(str(m.group(1) or "").strip() for m in matches if str(m.group(1) or "").strip()))
+    clean = _normalize_voice_text(_VOICE_TAG_RE.sub("", raw))
     return clean, voice_text
 
 
