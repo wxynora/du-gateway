@@ -10,6 +10,7 @@ from typing import Any, Callable, Optional
 
 from config import (
     SUMMARY_EVERY_N_ROUNDS,
+    DYNAMIC_MEMORY_BEDROOM_DAYS_VALID,
     DYNAMIC_MEMORY_DAYS_VALID,
     DYNAMIC_MEMORY_TOP_N,
     DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED,
@@ -1970,22 +1971,57 @@ def _memory_weight(m: dict, now=None) -> float:
     return float(importance + mention_count - time_decay)
 
 
-def _is_marginal_dynamic_memory_for_prune(mem: dict, now) -> bool:
-    """
-    边缘化记忆：综合权重已很低且距上次提及已久，可从动态层落盘删除（不碰 core_cache）。
-    与「7 天内仍允许注入」的 _is_dynamic_memory_valid 无关。
-    """
-    if not DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED:
-        return False
+def _dynamic_memory_tag(mem: dict) -> str:
+    return str((mem or {}).get("tag") or "").strip()
+
+
+def _dynamic_memory_valid_days(mem: dict) -> int:
+    if _dynamic_memory_tag(mem) == "卧室":
+        return max(0, int(DYNAMIC_MEMORY_BEDROOM_DAYS_VALID))
+    return max(0, int(DYNAMIC_MEMORY_DAYS_VALID))
+
+
+def _dynamic_memory_days_since_last_mentioned(mem: dict, now) -> Optional[int]:
     from utils.time_aware import parse_iso_to_beijing
 
     last_mentioned = mem.get("last_mentioned") or mem.get("created_at") or ""
     dt = parse_iso_to_beijing(last_mentioned)
     if dt is None:
-        return False
+        return None
     days_since = (now - dt).days
     if days_since < 0:
         days_since = 0
+    return days_since
+
+
+def _is_tag_expired_dynamic_memory_for_prune(mem: dict, now) -> bool:
+    """
+    部分 tag 可以走更短落盘生命周期。
+    卧室动态记忆只保留短期余味；超过卧室有效期还没被再次提到，就从动态层退场。
+    """
+    if _dynamic_memory_tag(mem) != "卧室":
+        return False
+    days_since = _dynamic_memory_days_since_last_mentioned(mem, now)
+    if days_since is None:
+        return False
+    return days_since > _dynamic_memory_valid_days(mem)
+
+
+def _is_marginal_dynamic_memory_for_prune(mem: dict, now) -> bool:
+    """
+    可从动态层落盘删除的记忆（不碰 core_cache）：
+    - 卧室 tag 走短有效期，超过后直接退场；
+    - 其它 tag 仍沿用综合权重低且距上次提及已久的边缘化规则。
+    与注入侧 _is_dynamic_memory_valid 独立。
+    """
+    if _is_tag_expired_dynamic_memory_for_prune(mem, now):
+        return True
+    if not DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED:
+        return False
+
+    days_since = _dynamic_memory_days_since_last_mentioned(mem, now)
+    if days_since is None:
+        return False
     if days_since < DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS:
         return False
     return _memory_weight(mem, now) <= DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT
@@ -2000,7 +2036,7 @@ def _is_dynamic_memory_valid(mem: dict, now=None) -> bool:
     dt = parse_iso_to_beijing(last_mentioned)
     if dt is None:
         return True
-    return (now - dt).days <= DYNAMIC_MEMORY_DAYS_VALID
+    return (now - dt).days <= _dynamic_memory_valid_days(mem)
 
 
 def _upsert_dynamic_memory_index(mem: dict) -> None:

@@ -678,6 +678,7 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - `X-Force-Last4` 会强制带最近 4 轮。
 - 动态层 DS 现在优先要求固定标签格式（`ACTION:` / `CONTENT:` 等），旧 JSON 只作为兼容解析；`new/merge` 的 `content` 如果太短、像半句话、标题词、没闭合引号或停在“然后/但是/——”这类没说完的位置，会最多重写 5 次，最后仍只是明显尾巴残缺时会做保守尾巴修复，确保落库的是完整句子。
 - 亲密 / NSFW 内容不要为了保存混进 `客厅`；该记就标 `卧室` 并按动态层 `new/merge` 正常存。卧室原文仍额外侧写 Notion 卧室页，画像与核心缓存不吃卧室动态记忆。
+- 卧室 tag 不和普通动态记忆共用完整生命周期：普通 tag 仍按 `DYNAMIC_MEMORY_DAYS_VALID=10` 参与注入有效期；卧室 tag 用 `DYNAMIC_MEMORY_BEDROOM_DAYS_VALID=3`，超过后不再注入，并会在动态层清理时从 R2/向量索引/血缘表退场。卧室连续 play 或同类偏好/边界延续时，优先 `merge`，不要因为小纸条玩法不同反复 `new`。
 
 当前状态（2026-06-04 动态层残缺便签重写与审计）：
 - 已完成：`services/dynamic_layer_ds.py` 单轮、批量和归档批处理都会对 `new/merge` 内容做完整性校验；实时单轮最多重写 5 次，最后仍只是“然后/——”这类尾巴残缺时会保守修成完整句子；归档批处理若 5 次和尾巴修复后仍有残缺则抛错不写断点，下一次从本批重跑。
@@ -700,6 +701,12 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 已完成：`services/dynamic_layer_ds.py` 去掉“卧室必 skip”规则，要求亲密 / NSFW 内容值得记时标 `卧室` 并正常 `new/merge`，不要为了保存错标 `客厅`。
 - 已完成：`pipeline/pipeline.py::_apply_one_decision` 不再在卧室通道 early return；卧室原文仍写 Notion 备份，但动态层继续按 action 落库或融合。new/merge 的卧室动态记忆不提进 core cache，画像候选仍沿用 `services/portrait_memory.py` 的卧室排除。
 - 未完成 / 下次继续：历史已经混进 `客厅` 的 NSFW 动态记忆不会自动迁移；如要清旧数据，先从 MiniApp 记忆调试或 R2 当前动态记忆列表里定位，再做迁移/重标脚本。
+
+当前状态（2026-06-12 卧室动态记忆短生命周期）：
+- 已完成：`config.py` 新增 `DYNAMIC_MEMORY_BEDROOM_DAYS_VALID=3`；`pipeline/pipeline.py` 的动态记忆注入有效期按 tag 判断，卧室 tag 超过 3 天未再提到就不再注入。
+- 已完成：动态层落盘清理复用现有边缘淘汰通道，卧室 tag 超过 3 天未再提到可直接从 R2 current、向量索引和血缘表退场；普通 tag 仍保留原本 10 天注入有效期与低权重边缘淘汰规则。
+- 已完成：`services/dynamic_layer_ds.py` 只补 merge 倾向：卧室连续 play、同一氛围或同类偏好/边界延续时优先合并，不新增“新花样门槛”或“play 小纸条默认 skip”规则。
+- 未完成 / 下次继续：历史卧室记忆不会在提交瞬间批量清理，等下一次动态记忆注入或离线维护触发；如果要立刻清，先在 MiniApp 记忆调试确认将被删的 id。
 
 ## 核心 Prompt / 风格规则 / 禁言模式
 
