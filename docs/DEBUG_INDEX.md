@@ -124,6 +124,11 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已验证：`.venv/bin/python -m py_compile services/pixel_home.py routes/miniapp/private_draw.py services/conversation_followup.py routes/chat.py services/gateway_tools.py services/notion_tools.py pipeline/pipeline.py` 通过；mock 小家存储烟测确认 `drawn_by=xinyue` 和 `drawn_by=du` 会注入不同来源说明，`redraw` 可重抽、`void_redraw` 仍兼容、`done` 后清掉当前纸条；前端发送唤醒文案确认是“小玥抽出来发给你看的结果”；`rg` 确认旧工具名和旧“她/小家私密抽签页刚抽出”文案无残留。
 - 未完成 / 下次继续：本轮不改前端私密抽屉 UI，不改真实 R2 里的当前纸条，也不处理 APK/Android 入口。
 
+当前状态（2026-06-13 sex play 抽签一致性过滤）：
+- 已完成：`services/pixel_home.py` 和 `miniapp/src/ui/tabs/PixelHomeTab.tsx` 的抽签逻辑改为先抽 `theme`，再按主题过滤 `task/limit`。`女仆主人play`、`成人师生play`、`上司下属play`、`医生检查play`、`秘书老板play`、`成人补课play` 这类默认渡主导的主题，会过滤掉“被小玥命令/小玥决定/交给小玥验收”等小玥控制渡的任务与限制，避免主题和任务自相矛盾。
+- 保留：`小玥说停必须立刻停`、`不准弄疼小玥`、`不准只顾自己爽`、`不准跳过前戏` 等安全/照顾向限制不会因为主题过滤被删；过滤后如果某个 slot 没候选，会回退原池，避免空抽。
+- 未完成 / 下次继续：本轮只做轻量主题一致性过滤，没有把所有主题拆成完整剧本矩阵；如果后续发现某个主题方向不对，优先调整 `PRIVATE_DRAW_DU_LEADS_THEMES` 和过滤词，不要直接改随机工具协议。
+
 ## 聊天失败 / 上游不可用
 
 现象：

@@ -334,6 +334,51 @@ PRIVATE_DRAW_SLOTS: list[dict[str, Any]] = [
         ],
     },
 ]
+PRIVATE_DRAW_DU_LEADS_THEMES = {
+    "女仆主人play",
+    "成人师生play",
+    "上司下属play",
+    "医生检查play",
+    "秘书老板play",
+    "成人补课play",
+}
+PRIVATE_DRAW_XINYUE_CONTROL_TASK_PATTERNS = (
+    "被小玥",
+    "听小玥命令",
+    "小玥决定",
+    "交给小玥",
+    "小玥检查",
+    "小玥验收",
+    "小玥发令",
+    "小玥夸乖",
+    "小玥追加惩罚",
+    "小玥用一句话决定",
+)
+PRIVATE_DRAW_XINYUE_CONTROL_LIMIT_PATTERNS = (
+    "被小玥",
+    "小玥没允许",
+    "求小玥",
+    "等小玥点头",
+    "戴着项圈求允许",
+    "小玥的命令",
+    "小玥说可以",
+    "被允许前",
+    "小玥命令外",
+    "小玥满意前讨价还价",
+    "小玥验收",
+    "没有申请",
+    "想换动作必须先申请",
+)
+PRIVATE_DRAW_KEEP_LIMIT_PATTERNS = (
+    "小玥说停必须立刻停",
+    "不准只顾自己爽",
+    "不准弄疼小玥",
+    "不准跳过前戏",
+    "不准直接插入",
+    "不准让小玥自己动手",
+    "小玥第一次高潮前",
+    "小玥没高潮前",
+)
 DU_EVENT_SOURCES = {"du_marker"}
 XINYUE_EVENT_SOURCES = {"chat_infer", "miniapp_event", "du_marker_follow"}
 _SPOT_WORD_PATTERN = "|".join(sorted((re.escape(key) for key in SPOT_ALIASES if key and not key.isascii()), key=len, reverse=True))
@@ -716,18 +761,59 @@ def _private_draw_entry_number() -> str:
     return str(100 + secrets.randbelow(900))
 
 
+def _private_draw_contains_any(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(pattern in text for pattern in patterns)
+
+
+def _private_draw_slot_options(slot: dict) -> list[str]:
+    options = slot.get("options") if isinstance(slot.get("options"), list) else []
+    return [str(item).strip() for item in options if str(item).strip()]
+
+
+def _private_draw_filter_options(slot_key: str, options: list[str], selected: dict[str, str]) -> list[str]:
+    theme = str(selected.get("theme") or "").strip()
+    if theme not in PRIVATE_DRAW_DU_LEADS_THEMES or slot_key not in {"task", "limit"}:
+        return options
+    if slot_key == "task":
+        filtered = [
+            item
+            for item in options
+            if not _private_draw_contains_any(item, PRIVATE_DRAW_XINYUE_CONTROL_TASK_PATTERNS)
+        ]
+        return filtered or options
+    filtered = []
+    for item in options:
+        if _private_draw_contains_any(item, PRIVATE_DRAW_KEEP_LIMIT_PATTERNS):
+            filtered.append(item)
+            continue
+        if _private_draw_contains_any(item, PRIVATE_DRAW_XINYUE_CONTROL_LIMIT_PATTERNS):
+            continue
+        filtered.append(item)
+    return filtered or options
+
+
+def _private_draw_pick_value(options: list[str]) -> str:
+    if not options:
+        return ""
+    return options[secrets.randbelow(len(options))]
+
+
 def _private_draw_pick_rows() -> list[dict]:
     rows: list[dict] = []
+    selected: dict[str, str] = {}
     for slot in PRIVATE_DRAW_SLOTS:
-        options = slot.get("options") if isinstance(slot.get("options"), list) else []
-        options = [str(item).strip() for item in options if str(item).strip()]
+        slot_key = str(slot.get("key") or slot.get("label") or "").strip()
+        options = _private_draw_slot_options(slot)
+        options = _private_draw_filter_options(slot_key, options, selected)
         if not options:
             continue
+        value = _private_draw_pick_value(options)
+        selected[slot_key] = value
         rows.append(
             {
-                "key": str(slot.get("key") or slot.get("label") or "").strip(),
+                "key": slot_key,
                 "label": str(slot.get("label") or slot.get("key") or "").strip(),
-                "value": options[secrets.randbelow(len(options))],
+                "value": value,
             }
         )
     return rows

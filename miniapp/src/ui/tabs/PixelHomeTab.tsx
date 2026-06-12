@@ -425,6 +425,55 @@ const PRIVATE_DRAW_SLOTS = [
   },
 ] as const;
 
+const PRIVATE_DRAW_DU_LEADS_THEMES = new Set([
+  "女仆主人play",
+  "成人师生play",
+  "上司下属play",
+  "医生检查play",
+  "秘书老板play",
+  "成人补课play",
+]);
+
+const PRIVATE_DRAW_XINYUE_CONTROL_TASK_PATTERNS = [
+  "被小玥",
+  "听小玥命令",
+  "小玥决定",
+  "交给小玥",
+  "小玥检查",
+  "小玥验收",
+  "小玥发令",
+  "小玥夸乖",
+  "小玥追加惩罚",
+  "小玥用一句话决定",
+];
+
+const PRIVATE_DRAW_XINYUE_CONTROL_LIMIT_PATTERNS = [
+  "被小玥",
+  "小玥没允许",
+  "求小玥",
+  "等小玥点头",
+  "戴着项圈求允许",
+  "小玥的命令",
+  "小玥说可以",
+  "被允许前",
+  "小玥命令外",
+  "小玥满意前讨价还价",
+  "小玥验收",
+  "没有申请",
+  "想换动作必须先申请",
+];
+
+const PRIVATE_DRAW_KEEP_LIMIT_PATTERNS = [
+  "小玥说停必须立刻停",
+  "不准只顾自己爽",
+  "不准弄疼小玥",
+  "不准跳过前戏",
+  "不准直接插入",
+  "不准让小玥自己动手",
+  "小玥第一次高潮前",
+  "小玥没高潮前",
+];
+
 function isHomeMode(value: unknown): value is HomeMode {
   return value === "day" || value === "nightOn" || value === "nightOff";
 }
@@ -493,9 +542,36 @@ function formatDynamicTime(value: string | undefined) {
   return `${dt.getMonth() + 1}/${dt.getDate()} ${hh}:${mm}`;
 }
 
+function privateDrawContainsAny(text: string, patterns: readonly string[]) {
+  return patterns.some((pattern) => text.includes(pattern));
+}
+
+function privateDrawFilteredOptions(slotKey: string, options: readonly string[], selected: Record<string, string>) {
+  const theme = String(selected.theme || "").trim();
+  if (!PRIVATE_DRAW_DU_LEADS_THEMES.has(theme) || (slotKey !== "task" && slotKey !== "limit")) {
+    return [...options];
+  }
+  if (slotKey === "task") {
+    const filtered = options.filter((item) => !privateDrawContainsAny(item, PRIVATE_DRAW_XINYUE_CONTROL_TASK_PATTERNS));
+    return filtered.length ? filtered : [...options];
+  }
+  const filtered = options.filter((item) => {
+    if (privateDrawContainsAny(item, PRIVATE_DRAW_KEEP_LIMIT_PATTERNS)) return true;
+    return !privateDrawContainsAny(item, PRIVATE_DRAW_XINYUE_CONTROL_LIMIT_PATTERNS);
+  });
+  return filtered.length ? filtered : [...options];
+}
+
+function privateDrawPick(options: readonly string[]) {
+  return options[Math.floor(Math.random() * options.length)] || options[0] || "";
+}
+
 function createPrivateDraw(): PrivateDrawResult {
+  const selected: Record<string, string> = {};
   return PRIVATE_DRAW_SLOTS.map((slot) => {
-    const value = slot.options[Math.floor(Math.random() * slot.options.length)] || slot.options[0];
+    const options = privateDrawFilteredOptions(slot.key, slot.options, selected);
+    const value = privateDrawPick(options);
+    selected[slot.key] = value;
     return { key: slot.key, label: slot.label, value };
   });
 }
