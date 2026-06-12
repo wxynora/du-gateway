@@ -533,6 +533,10 @@ rg -n "device-state|device-screenshots|screen_check|sense|foreground-app|usage-s
 - 未闭环 / 按需再做：FCM/ntfy 真推送没有完整接入；`miniapp/android/app/build.gradle` 只在存在 `google-services.json` 时应用 Google Services 插件，未看到 `FirebaseMessagingService` 或前端 PushNotifications 注册链路。开机自启也未见 `BOOT_COMPLETED` receiver。当前系统闹钟走 Android `AlarmClock.ACTION_SET_ALARM`，不是 app 自己用 `AlarmManager.setExact` 做的本地业务闹钟。
 - 旧长文 `docs/SumiTalk-Android封装方案.md` 里仍有“后续优先级/边界”段落，盘点真实状态时优先看本索引和代码，不要只按旧方案文档判断。
 
+当前状态（2026-06-12 App 页面缩放锁定）：
+- 已完成：`miniapp/index.html` 的 viewport 增加 `minimum-scale=1`、`maximum-scale=1`、`user-scalable=no`；`miniapp/android/app/src/main/java/com/sumitalk/app/MainActivity.java` 在 WebView 初始化时关闭 `setSupportZoom`、内置缩放控件和显示缩放控件，并固定 `textZoom=100`。
+- 生效边界：线上远端页面需要重建并部署 `miniapp_static`；Android WebView 原生缩放设置需要重新打包安装 APK 后才会进入手机壳。
+
 当前状态（2026-05-12）：
 - 已拆：根路由 `/api/sense` 和 location/health normalize helper 已从 `app.py` 移到 `routes/sense_api.py`，公开路径和 R2 写入行为不变。
 - 未完成 / 不要碰：MiniApp device-state、截图、原生动作队列仍维持现有文件边界；不要把 QQ connector、小爱文件、共读文档或旧 `miniapp_static/assets/*` hash 资源混进这轮拆分。
