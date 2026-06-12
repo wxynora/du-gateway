@@ -4,6 +4,7 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { applyTelegramThemeToHtmlClass, tgReady } from "./tg";
 import { useToast } from "./toast";
 import { apiJson } from "./api";
+import { AvatarCropModal } from "./AvatarCropModal";
 import { ChatsHome } from "./ChatsHome";
 import { BottomNav, type MainTab } from "./BottomNav";
 import { CorePromptEditor } from "./CorePromptEditor";
@@ -44,7 +45,7 @@ import {
   ToggleRightIcon,
 } from "./icons";
 import { SumiOverlay } from "../plugins/sumi-overlay";
-import { buildAvatarDataUrl, buildBackgroundDataUrl } from "./imageDataUrl";
+import { buildBackgroundDataUrl, fileToDataUrl } from "./imageDataUrl";
 import { clampStoredNumber, readStoredBoolean, readStoredNumber, readStoredString } from "./uiStorage";
 import {
   VOICE_CALL_PENDING_INVITE_KEY,
@@ -83,6 +84,7 @@ const ReportingManagementScreen = lazy(() => import("./tabs/ReportingManagementS
 const ChatStorageManagementScreen = lazy(() => import("./tabs/ChatStorageManagementScreen").then((m) => ({ default: m.ChatStorageManagementScreen })));
 
 type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
+type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
 type SilenceModeResponse = {
   ok?: boolean;
   enabled?: boolean;
@@ -205,6 +207,11 @@ export function AppShell({
   const benbenAvatarInputRef = useRef<HTMLInputElement | null>(null);
   const backgroundInputRef = useRef<HTMLInputElement | null>(null);
   const listenBackgroundInputRef = useRef<HTMLInputElement | null>(null);
+  const [avatarCropDraft, setAvatarCropDraft] = useState<{
+    kind: AvatarImageKind;
+    src: string;
+    title: string;
+  } | null>(null);
   const groupChatDisplayTitle = getDisplayGroupChatTitle(groupChatTitle);
   const handleWenyouBack = useCallback(() => {
     if (wenyouBackHandlerRef.current?.()) return;
@@ -344,10 +351,20 @@ export function AppShell({
     listenBackgroundImage,
   ]);
 
-  async function handleImageSelection(
-    file: File | undefined,
-    kind: "myAvatar" | "duAvatar" | "benbenAvatar" | "background" | "listenBackground",
-  ) {
+  function applyAvatarImage(kind: AvatarImageKind, dataUrl: string) {
+    if (kind === "myAvatar") {
+      setMyAvatarImage(dataUrl);
+      toast("我的头像已更新");
+    } else if (kind === "duAvatar") {
+      setDuAvatarImage(dataUrl);
+      toast("渡的头像已更新");
+    } else {
+      setBenbenAvatarImage(dataUrl);
+      toast("笨笨头像已更新");
+    }
+  }
+
+  async function handleImageSelection(file: File | undefined, kind: AvatarImageKind | "background" | "listenBackground") {
     if (!file) return;
     try {
       if (kind === "background") {
@@ -360,17 +377,12 @@ export function AppShell({
         toast("一起听背景已更新");
         return;
       }
-      const next = await buildAvatarDataUrl(file);
-      if (kind === "myAvatar") {
-        setMyAvatarImage(next);
-        toast("我的头像已更新");
-      } else if (kind === "duAvatar") {
-        setDuAvatarImage(next);
-        toast("渡的头像已更新");
-      } else {
-        setBenbenAvatarImage(next);
-        toast("笨笨头像已更新");
-      }
+      const src = await fileToDataUrl(file);
+      setAvatarCropDraft({
+        kind,
+        src,
+        title: kind === "myAvatar" ? "我的头像" : kind === "duAvatar" ? "渡的头像" : "笨笨头像",
+      });
     } catch (e: any) {
       toast(`图片设置失败：${e?.message || e}`);
     }
@@ -878,6 +890,17 @@ export function AppShell({
             onIncomingInviteConsumed={() => setIncomingVoiceCallInvite(null)}
           />
         </LazyPane>
+      ) : null}
+      {avatarCropDraft ? (
+        <AvatarCropModal
+          src={avatarCropDraft.src}
+          title={avatarCropDraft.title}
+          onCancel={() => setAvatarCropDraft(null)}
+          onConfirm={(dataUrl) => {
+            applyAvatarImage(avatarCropDraft.kind, dataUrl);
+            setAvatarCropDraft(null);
+          }}
+        />
       ) : null}
       <input
         ref={myAvatarInputRef}

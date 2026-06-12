@@ -1,4 +1,10 @@
-async function fileToDataUrl(file: File): Promise<string> {
+export type AvatarCropRect = {
+  sx: number;
+  sy: number;
+  size: number;
+};
+
+export async function fileToDataUrl(file: File): Promise<string> {
   return await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
@@ -7,7 +13,7 @@ async function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-async function loadImageElement(src: string): Promise<HTMLImageElement> {
+export async function loadImageElement(src: string): Promise<HTMLImageElement> {
   return await new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
@@ -19,16 +25,27 @@ async function loadImageElement(src: string): Promise<HTMLImageElement> {
 export async function buildAvatarDataUrl(file: File): Promise<string> {
   const src = await fileToDataUrl(file);
   const img = await loadImageElement(src);
+  const minSide = Math.min(img.width, img.height);
+  return buildAvatarDataUrlFromCrop(src, {
+    sx: (img.width - minSide) / 2,
+    sy: (img.height - minSide) / 2,
+    size: minSide,
+  });
+}
+
+export async function buildAvatarDataUrlFromCrop(src: string, crop: AvatarCropRect): Promise<string> {
+  const img = await loadImageElement(src);
   const size = 256;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("图片处理失败");
-  const minSide = Math.min(img.width, img.height);
-  const sx = (img.width - minSide) / 2;
-  const sy = (img.height - minSide) / 2;
-  ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, size, size);
+  const maxSize = Math.min(img.width, img.height);
+  const cropSize = Math.max(1, Math.min(Number(crop.size) || maxSize, maxSize));
+  const sx = Math.max(0, Math.min(Number(crop.sx) || 0, img.width - cropSize));
+  const sy = Math.max(0, Math.min(Number(crop.sy) || 0, img.height - cropSize));
+  ctx.drawImage(img, sx, sy, cropSize, cropSize, 0, 0, size, size);
   return canvas.toDataURL("image/jpeg", 0.9);
 }
 
