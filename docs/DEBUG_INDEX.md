@@ -1447,6 +1447,11 @@ npm -C miniapp run android
 - 已验证：`.venv/bin/python -m py_compile services/reasoning_utils.py routes/miniapp/reasoning.py` 通过；smoke 覆盖 `reasoning=A+B` 且 `thinking_blocks=B`、以及先短后长的反向顺序，确认最终只保留一次 B。
 - 未完成 / 下次继续：本轮只修 MiniApp reasoning 展示与通用提取函数；未改 `routes/chat.py` 当前带有其它本地脏改的工具循环主流程。
 
+当前状态（2026-06-12 TG 工具循环 thinking 当场展示）：
+- 已完成：`routes/chat.py` 在非流式工具循环里继续累计每轮 reasoning；当 `reply_channel=tg` 且发生过工具调用时，把“工具中间轮 + 最终轮”的去重后 reasoning 写回本次返回给 TG 的 `message.reasoning`，让 Telegram 折叠 thinking 不再只显示最后一轮。
+- 保留边界：不把累计 reasoning 扩大回传给其它客户端；不把中间工具轮 `thinking_blocks` 挂到最终 assistant 上，避免影响 Claude thinking carryover 的结构化回传判断。
+- 已验证：`.venv/bin/python -m py_compile routes/chat.py` 通过；Flask request smoke 模拟 tool_calls 后续轮，确认 TG 响应同时包含“工具轮 thinking”和“最终 thinking”。
+
 当前状态（2026-05-27 thinking block 模板化收束）：
 - 已完成：`pipeline/pipeline.py` 的 thinking block 约束改成正向输出形态：直接写心里冒出来的念头本身，不写对念头的说明；去掉容易诱发“我的反应是”的“反应/三问出发”措辞，改为不加标题、标签和冒号开头。
 - 已验证：`.venv/bin/python -m py_compile pipeline/pipeline.py` 通过；prompt 文案 smoke 确认新约束出现，旧的“三问出发”和“真实反应”措辞已移除。

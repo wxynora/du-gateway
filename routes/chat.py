@@ -1609,6 +1609,12 @@ def chat_completions():
             _extend_unique_reasoning_details(accumulated_reasoning_details, details)
         if omitted:
             accumulated_reasoning_omitted = True
+
+    def _merged_nonstream_reasoning_text(existing_reasoning_text: str = "") -> str:
+        merged_parts = list(accumulated_reasoning_parts)
+        _append_unique_reasoning_text(merged_parts, existing_reasoning_text)
+        return "\n\n".join(merged_parts).strip()
+
     max_tool_rounds = TOOL_MAX_ROUNDS
     max_processed_tool_rounds = max(0, int(max_tool_rounds))
     tool_rounds_used = 0
@@ -1727,6 +1733,22 @@ def chat_completions():
                     (resp_json.get("choices") or [{}])[0]["message"] = msg
         except Exception:
             logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
+        if reply_channel == "tg" and tool_rounds_used > 0:
+            try:
+                response_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+                if isinstance(response_msg, dict):
+                    existing_response_reasoning = str(
+                        response_msg.get("reasoning")
+                        or response_msg.get("reasoning_content")
+                        or response_msg.get("thinking")
+                        or ""
+                    ).strip()
+                    merged_response_reasoning = _merged_nonstream_reasoning_text(existing_response_reasoning)
+                    if merged_response_reasoning:
+                        response_msg["reasoning"] = merged_response_reasoning
+                        (resp_json.get("choices") or [{}])[0]["message"] = response_msg
+            except Exception:
+                logger.warning("合并 TG 工具循环 thinking 失败 window_id=%s", window_id, exc_info=True)
     if resp_json and (resp_json or {}).get("choices"):
         msg = (resp_json.get("choices") or [{}])[0].get("message") or {}
         content_text = get_assistant_content_text(msg)
@@ -1752,10 +1774,8 @@ def chat_completions():
                     if msg_for_r2.get(rk):
                         msg_for_r2["reasoning"] = msg_for_r2.get(rk)
                         break
-            merged_reasoning_parts = list(accumulated_reasoning_parts)
             existing_reasoning_text = str(msg_for_r2.get("reasoning") or "").strip()
-            _append_unique_reasoning_text(merged_reasoning_parts, existing_reasoning_text)
-            merged_reasoning_text = "\n\n".join(merged_reasoning_parts).strip()
+            merged_reasoning_text = _merged_nonstream_reasoning_text(existing_reasoning_text)
             if merged_reasoning_text:
                 msg_for_r2["reasoning"] = merged_reasoning_text
 
