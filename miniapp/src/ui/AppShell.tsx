@@ -48,6 +48,7 @@ import {
 import { SumiOverlay } from "../plugins/sumi-overlay";
 import { buildBackgroundDataUrl, fileToDataUrl } from "./imageDataUrl";
 import chatScriptFontUrl from "../assets/fonts/cookie-regular.ttf?url";
+import openHuninnFontUrl from "../assets/fonts/jf-openhuninn-2.1.ttf?url";
 import { clampStoredNumber, readStoredBoolean, readStoredNumber, readStoredString } from "./uiStorage";
 import {
   VOICE_CALL_PENDING_INVITE_KEY,
@@ -680,6 +681,14 @@ export function AppShell({
     <div className="relative min-h-dvh safe-bottom overflow-hidden bg-[#FDFDFD] text-gray-900">
       <style>
         {`@font-face {
+          font-family: 'OpenHuninn';
+          src: url("${openHuninnFontUrl}") format("truetype");
+          font-style: normal;
+          font-weight: 400;
+          font-display: swap;
+        }
+
+        @font-face {
           font-family: 'SumiChatScript';
           src: url("${chatScriptFontUrl}") format("truetype");
           font-style: normal;

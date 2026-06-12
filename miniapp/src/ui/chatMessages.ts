@@ -1,6 +1,6 @@
 import { firstSystemCard, formatAlarmTime, splitSystemCardSegments, type SumiTalkSystemCard } from "./sumitalkSystemCards";
 
-export const CHAT_FONT_KEYS = ["system", "pingfang", "yahei", "serif", "script"] as const;
+export const CHAT_FONT_KEYS = ["system", "huninn", "pingfang", "yahei", "serif", "script"] as const;
 export type ChatFontKey = typeof CHAT_FONT_KEYS[number];
 export type ChatTimeFormat = "hhmm" | "ampm";
 
@@ -322,6 +322,7 @@ export function formatClockTime(value: string, timeFormat: ChatTimeFormat = "hhm
 
 export function getChatFontLabel(fontKey: ChatFontKey): string {
   if (fontKey === "system") return "系统默认";
+  if (fontKey === "huninn") return "粉圆";
   if (fontKey === "pingfang") return "苹方";
   if (fontKey === "serif") return "宋体";
   if (fontKey === "script") return "手写感";

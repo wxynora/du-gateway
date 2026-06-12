@@ -20,6 +20,7 @@ export function getDisplayGroupChatTitle(value?: string): string {
 
 export function resolveChatFontFamily(fontKey: ChatFontKey): string {
   if (fontKey === "system") return "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif";
+  if (fontKey === "huninn") return "'OpenHuninn', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif";
   if (fontKey === "pingfang") return "'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif";
   if (fontKey === "serif") return "'Noto Serif SC', 'Songti SC', STSong, SimSun, serif";
   if (fontKey === "script") return "'SumiChatScript', 'Noto Serif SC', 'Songti SC', 'Microsoft YaHei', cursive";
