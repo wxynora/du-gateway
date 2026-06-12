@@ -492,7 +492,7 @@ export function PersonalizationScreen({
           <h2 className="mb-3 ml-5 text-[11px] font-extrabold uppercase tracking-[0.15em] text-[#94A3B8]">字体与字号</h2>
           <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
             <div className="mb-5 rounded-[20px] bg-[#F8FAFC] p-4">
-              <p className="font-medium text-gray-800" style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>这里是聊天文字的预览效果</p>
+              <p className="font-medium text-gray-800" style={{ fontSize: `${chatContentFontSize}px`, fontFamily: resolveChatFontFamily(chatFontKey) }}>这里是聊天文字的预览效果 Aa 123</p>
             </div>
             <PersonalizationSliderRow title="聊天内容字号" value={`${chatContentFontSize}px`} min={12} max={18} step={1} currentValue={chatContentFontSize} onChange={onChangeChatContentFontSize} />
             <PersonalizationSliderRow title="界面标题字号" value={`${chatTitleFontSize}px`} min={14} max={20} step={1} currentValue={chatTitleFontSize} onChange={onChangeChatTitleFontSize} />

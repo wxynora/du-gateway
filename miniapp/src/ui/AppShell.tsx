@@ -22,6 +22,7 @@ import {
   type BubbleStyleKey,
 } from "./chatAppearance";
 import {
+  CHAT_FONT_KEYS,
   type ChatFontKey,
   type ChatTimeFormat,
 } from "./chatMessages";
@@ -46,6 +47,7 @@ import {
 } from "./icons";
 import { SumiOverlay } from "../plugins/sumi-overlay";
 import { buildBackgroundDataUrl, fileToDataUrl } from "./imageDataUrl";
+import chatScriptFontUrl from "../assets/fonts/cookie-regular.ttf?url";
 import { clampStoredNumber, readStoredBoolean, readStoredNumber, readStoredString } from "./uiStorage";
 import {
   VOICE_CALL_PENDING_INVITE_KEY,
@@ -59,6 +61,11 @@ const GROUP_FREE_CHAT_MODE_STORAGE_KEY = "miniapp.ui.groupFreeChatMode";
 function nextBubbleStyle(style: BubbleStyleKey): BubbleStyleKey {
   const index = BUBBLE_STYLE_KEYS.indexOf(style);
   return BUBBLE_STYLE_KEYS[(index + 1) % BUBBLE_STYLE_KEYS.length] || "default";
+}
+
+function nextChatFont(font: ChatFontKey): ChatFontKey {
+  const index = CHAT_FONT_KEYS.indexOf(font);
+  return CHAT_FONT_KEYS[(index + 1) % CHAT_FONT_KEYS.length] || "system";
 }
 
 const LogsTab = lazy(() => import("./tabs/LogsTab").then((m) => ({ default: m.LogsTab })));
@@ -143,7 +150,7 @@ export function AppShell({
     clampStoredNumber(readStoredNumber("miniapp.ui.chatTitleFontSize", 15), 14, 20, 15),
   );
   const [chatFontKey, setChatFontKey] = useState<ChatFontKey>(() =>
-    readStoredString("miniapp.ui.chatFont", "yahei", ["yahei", "system", "pingfang"] as const),
+    readStoredString("miniapp.ui.chatFont", "system", CHAT_FONT_KEYS),
   );
   const [showChatTimestamps, setShowChatTimestamps] = useState(() => readStoredBoolean("miniapp.ui.showTimestamps", true));
   const [chatTimeFormat, setChatTimeFormat] = useState<ChatTimeFormat>(() =>
@@ -671,6 +678,15 @@ export function AppShell({
 
   return (
     <div className="relative min-h-dvh safe-bottom overflow-hidden bg-[#FDFDFD] text-gray-900">
+      <style>
+        {`@font-face {
+          font-family: 'SumiChatScript';
+          src: url("${chatScriptFontUrl}") format("truetype");
+          font-style: normal;
+          font-weight: 400;
+          font-display: swap;
+        }`}
+      </style>
       {activeScreen === "du" ? (
         <MainChatScreen
           title="渡"
@@ -817,7 +833,7 @@ export function AppShell({
             chatTitleFontSize={chatTitleFontSize}
             onChangeChatTitleFontSize={setChatTitleFontSize}
             chatFontKey={chatFontKey}
-            onCycleChatFont={() => setChatFontKey((prev) => (prev === "yahei" ? "system" : prev === "system" ? "pingfang" : "yahei"))}
+            onCycleChatFont={() => setChatFontKey(nextChatFont)}
             showChatTimestamps={showChatTimestamps}
             onToggleShowChatTimestamps={setShowChatTimestamps}
             chatTimeFormat={chatTimeFormat}

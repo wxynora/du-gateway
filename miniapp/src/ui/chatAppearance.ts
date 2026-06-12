@@ -19,9 +19,11 @@ export function getDisplayGroupChatTitle(value?: string): string {
 }
 
 export function resolveChatFontFamily(fontKey: ChatFontKey): string {
-  if (fontKey === "system") return "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  if (fontKey === "pingfang") return "'PingFang SC', 'Hiragino Sans GB', sans-serif";
-  return "'Microsoft YaHei', sans-serif";
+  if (fontKey === "system") return "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif";
+  if (fontKey === "pingfang") return "'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', sans-serif";
+  if (fontKey === "serif") return "'Noto Serif SC', 'Songti SC', STSong, SimSun, serif";
+  if (fontKey === "script") return "'SumiChatScript', 'Noto Serif SC', 'Songti SC', 'Microsoft YaHei', cursive";
+  return "'Microsoft YaHei', 'Noto Sans SC', sans-serif";
 }
 
 export function getBubbleStyleLabel(style: BubbleStyleKey, role: "user" | "assistant"): string {
