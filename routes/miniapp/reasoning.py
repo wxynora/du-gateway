@@ -307,6 +307,7 @@ def _translate_reasoning_chunk(src: str, url: str, api_key: str, model: str, ind
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        "thinking": {"type": "disabled"},
         "stream": False,
         "temperature": 0,
         "max_tokens": max(1024, min(8192, len(src) * 3)),
