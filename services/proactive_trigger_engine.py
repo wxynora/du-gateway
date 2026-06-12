@@ -606,7 +606,7 @@ def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> lis
                 TriggerEvent(
                     "morning_first_screen_on",
                     f"morning_first_screen_on:{on_at.strftime('%Y-%m-%d')}",
-                    "她刚刚醒来，第一次打开手机。",
+                    "小玥刚刚屏幕亮了一下，可能是睡醒了。",
                     device_id=device_id,
                     event_at=event_at,
                 )
@@ -616,7 +616,7 @@ def _build_events(doc: dict, history: list[dict], window_id: str, now_dt) -> lis
                 TriggerEvent(
                     "night_reawake_screen_on",
                     f"night_reawake_screen_on:{event_at}",
-                    "她熄屏很久后半夜又点亮了手机。",
+                    "小玥刚刚屏幕亮了一下，可能是半夜醒了。",
                     device_id=device_id,
                     event_at=event_at,
                 )
