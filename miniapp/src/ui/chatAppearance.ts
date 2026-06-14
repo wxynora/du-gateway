@@ -44,7 +44,7 @@ export function resolveBubbleClass(role: "user" | "assistant", style: BubbleStyl
     if (style === "decor") return "border-0 bg-[#fffdf9] text-[#56524D] !shadow-none";
     if (style === "angry") return "border-0 bg-white/80 text-[#56524D] !shadow-none";
     if (style === "peek") return "border border-white bg-white text-[#56524D] !shadow-none";
-    if (style === "jelly-yellow") return "border border-[#ebeaea] bg-[#fff8d6]/65 text-[#423500] !shadow-none";
+    if (style === "jelly-yellow") return "border border-[#ebeaea] bg-[rgba(255,250,226,0.46)] text-[#423500] !shadow-none";
     return "bg-[#2D3748] text-white";
   }
   if (style === "soft") return "bg-[#F4F5F7] text-gray-800";
@@ -52,7 +52,7 @@ export function resolveBubbleClass(role: "user" | "assistant", style: BubbleStyl
   if (style === "decor") return "border-0 bg-[#fffdf9] text-[#56524D] !shadow-none";
   if (style === "angry") return "border-0 bg-white/80 text-[#56524D] !shadow-none";
   if (style === "peek") return "border border-white bg-white text-[#56524D] !shadow-none";
-  if (style === "jelly-yellow") return "border border-[#ebeaea] bg-[#fff8d6]/65 text-[#423500] !shadow-none";
+  if (style === "jelly-yellow") return "border border-[#ebeaea] bg-[rgba(255,250,226,0.46)] text-[#423500] !shadow-none";
   return "border border-gray-100/50 bg-white text-gray-800";
 }
 

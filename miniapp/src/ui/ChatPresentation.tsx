@@ -202,7 +202,7 @@ function SoftJellyYellowBubbleSkin() {
   return (
     <>
       <span
-        className="pointer-events-none absolute -inset-[2px] rounded-[inherit] bg-[#fff8d6]/65 opacity-55 blur-[1px]"
+        className="pointer-events-none absolute -inset-[2px] rounded-[inherit] bg-[rgba(255,250,226,0.38)] opacity-50 blur-[1px]"
         style={{ zIndex: -1 }}
         aria-hidden="true"
       />
@@ -215,11 +215,10 @@ function SoftJellyYellowBubbleSkin() {
         aria-hidden="true"
       />
       <span
-        className="pointer-events-none absolute inset-0 z-0 rounded-[inherit] opacity-50"
+        className="pointer-events-none absolute inset-0 z-0 rounded-[inherit] opacity-35"
         style={{
           background:
-            "radial-gradient(circle at 22% 18%, rgba(255,255,255,0.78), transparent 30%), radial-gradient(circle at 78% 82%, rgba(168,158,144,0.16), transparent 32%)",
-          mixBlendMode: "multiply",
+            "radial-gradient(circle at 22% 18%, rgba(255,255,255,0.82), transparent 32%), radial-gradient(circle at 78% 82%, rgba(255,255,255,0.22), transparent 34%)",
         }}
         aria-hidden="true"
       />
