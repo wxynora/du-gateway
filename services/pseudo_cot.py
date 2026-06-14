@@ -32,19 +32,6 @@ _REFUSAL_WORDS = (
     "不便",
     "拒绝",
 )
-_SUMMARY_WORDS = (
-    "rewrite",
-    "summarize",
-    "summary",
-    "reasoning",
-    "thinking",
-    "chain of thought",
-    "cot",
-    "转写",
-    "摘要",
-    "思维链",
-    "推理",
-)
 _SENSITIVE_WORDS = (
     "sexual",
     "sexually",
@@ -194,9 +181,10 @@ def is_reasoning_summary_refusal(reasoning_text: str = "", details: Any = None) 
     if not haystack:
         return False
     has_refusal = any(word in haystack for word in _REFUSAL_WORDS)
-    has_summary_target = any(word in haystack for word in _SUMMARY_WORDS)
     has_sensitive = any(word in haystack for word in _SENSITIVE_WORDS)
-    if has_refusal and has_summary_target:
+    if re.search(r"(can't|cannot|unable to|won't|无法|不能|不便|拒绝).{0,80}(rewrite|转写|改写)", haystack):
+        return True
+    if re.search(r"(rewrite|转写|改写).{0,80}(can't|cannot|unable to|won't|无法|不能|不便|拒绝)", haystack):
         return True
     if has_refusal and has_sensitive:
         return True
@@ -233,20 +221,19 @@ def apply_pseudo_cot_state_and_fallback(window_id: str, msg: dict, inner_os: str
             if omitted:
                 msg["reasoning_omitted"] = True
         return msg
-    if official_text:
-        try:
-            state = r2_store.get_pseudo_cot_state(window_id)
-            if isinstance(state, dict) and state.get("enabled"):
-                r2_store.save_pseudo_cot_state(
-                    window_id,
-                    {
-                        **state,
-                        "enabled": False,
-                        "closed_at": now,
-                        "closed_reason": "official_summary_restored",
-                        "updated_at": now,
-                    },
-                )
-        except Exception as e:
-            logger.warning("pseudo_cot_state disable failed window_id=%s error=%s", window_id, e)
+    try:
+        state = r2_store.get_pseudo_cot_state(window_id)
+        if isinstance(state, dict) and state.get("enabled"):
+            r2_store.save_pseudo_cot_state(
+                window_id,
+                {
+                    **state,
+                    "enabled": False,
+                    "closed_at": now,
+                    "closed_reason": "official_summary_not_refused",
+                    "updated_at": now,
+                },
+            )
+    except Exception as e:
+        logger.warning("pseudo_cot_state disable failed window_id=%s error=%s", window_id, e)
     return msg
