@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import angryEmojiFaceUrl from "../assets/angry-emoji-face.png?url";
 import angryEmojiMarkUrl from "../assets/angry-emoji-mark.png?url";
 import peekRabbitStickerUrl from "../assets/peek-rabbit-sticker.png?url";
+import softJellyYellowStickerUrl from "../assets/soft-jelly-yellow-sticker.png?url";
 import sumikaBubbleStickerUrl from "../assets/sumika-bubble-sticker.png?url";
 import type { BubbleSkinKey } from "./chatAppearance";
 import { FileTextIcon, ImageIconMini, MicIconMini, PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
@@ -103,9 +104,23 @@ const PEEK_RABBIT_BUBBLE_STICKERS = [
   },
 ] satisfies BubbleSticker[];
 
+const SOFT_JELLY_YELLOW_BUBBLE_STICKERS = [
+  {
+    id: "soft-jelly-yellow-sticker",
+    type: "image",
+    src: softJellyYellowStickerUrl,
+    anchor: "bottom-left",
+    offsetX: -17,
+    offsetY: -13,
+    size: 35,
+    rotate: 0,
+  },
+] satisfies BubbleSticker[];
+
 function getBubbleStickers(skin: BubbleSkinKey): BubbleSticker[] {
   if (skin === "angry-emoji") return ANGRY_EMOJI_BUBBLE_STICKERS;
   if (skin === "peek-rabbit") return PEEK_RABBIT_BUBBLE_STICKERS;
+  if (skin === "soft-jelly-yellow") return SOFT_JELLY_YELLOW_BUBBLE_STICKERS;
   return HEART_RABBIT_BUBBLE_STICKERS;
 }
 
@@ -183,9 +198,32 @@ function PeekRabbitBubbleSkin() {
   );
 }
 
+function SoftJellyYellowBubbleSkin() {
+  return (
+    <>
+      <span
+        className="pointer-events-none absolute -inset-[2px] z-0 rounded-[inherit] bg-[#fff8d6]/65 opacity-55 blur-[1px]"
+        aria-hidden="true"
+      />
+      <span
+        className="pointer-events-none absolute inset-0 z-0 rounded-[inherit]"
+        style={{
+          background:
+            "radial-gradient(circle at 22% 18%, rgba(255,255,255,0.78), transparent 30%), radial-gradient(circle at 78% 82%, rgba(168,158,144,0.16), transparent 32%)",
+          boxShadow:
+            "0 1px 2px rgba(70,63,54,0.08), inset 0 1px 0 rgba(255,255,255,0.72)",
+          mixBlendMode: "multiply",
+        }}
+        aria-hidden="true"
+      />
+    </>
+  );
+}
+
 function BubbleSkinLayer({ skin }: { skin: BubbleSkinKey }) {
   if (skin === "angry-emoji") return <AngryEmojiBubbleSkin />;
   if (skin === "peek-rabbit") return <PeekRabbitBubbleSkin />;
+  if (skin === "soft-jelly-yellow") return <SoftJellyYellowBubbleSkin />;
   return <HeartRabbitBubbleSkin />;
 }
 
