@@ -35,6 +35,7 @@ from pipeline.pipeline import (
     step_inject_du_non_retreat_rules,
     step_inject_reference_note,
     step_inject_current_base_model,
+    step_inject_pseudo_cot_inner_os,
     step_inject_humor_memes,
     step_inject_latest_4_rounds_for_new_window,
     step_inject_summary,
@@ -122,6 +123,14 @@ from services.chat_response_enrichers import (
 from services.chat_sidecars import (
     apply_hidden_sidecars_to_assistant_response as _apply_hidden_sidecars_to_assistant_response,
     extract_and_store_hidden_sidecars as _extract_and_store_hidden_sidecars,
+)
+from services.pseudo_cot import (
+    PseudoCotStreamState as _PseudoCotStreamState,
+    apply_pseudo_cot_state_and_fallback as _apply_pseudo_cot_state_and_fallback,
+    extract_inner_os_from_response_json as _extract_inner_os_from_response_json,
+    pseudo_cot_instruction_enabled as _pseudo_cot_instruction_enabled,
+    split_inner_os_from_text as _split_inner_os_from_text,
+    transform_sse_chunk_bytes as _transform_pseudo_cot_sse_chunk_bytes,
 )
 from services.chat_tool_helpers import (
     append_visible_tool_round_content as _append_visible_tool_round_content,
@@ -818,6 +827,7 @@ def _stream_with_r2_archive(
     reasoning_omitted = False
     last_user = _last_user_message(body.get("messages") or [])
     du_daily_maintenance = _is_du_daily_maintenance_request()
+    pseudo_cot_stream_enabled = _pseudo_cot_instruction_enabled(body)
 
     def _collect_content_from_chunk(chunk):
         try:
@@ -875,6 +885,7 @@ def _stream_with_r2_archive(
         flush_window_s = flush_ms / 1000.0
         last_send_ts = time.time()
         du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
+        pseudo_cot_state = _PseudoCotStreamState() if pseudo_cot_stream_enabled else None
         try:
             while True:
                 buf = []
@@ -913,15 +924,20 @@ def _stream_with_r2_archive(
                             data_chunk_count += 1
                     if chunk is None:
                         # 先把缓冲发完再结束
+                        if pseudo_cot_state:
+                            buf = [_transform_pseudo_cot_sse_chunk_bytes(c, pseudo_cot_state) for c in buf]
                         yield b"".join([transform_sse_chunk_bytes_pcmd(c, du_state) for c in buf])
                         break
 
+                if pseudo_cot_state:
+                    buf = [_transform_pseudo_cot_sse_chunk_bytes(c, pseudo_cot_state) for c in buf]
                 yield b"".join([transform_sse_chunk_bytes_pcmd(c, du_state) for c in buf])
                 last_send_ts = time.time()
         finally:
             full_content = "".join(content_parts)
+            visible_source, inner_os = _split_inner_os_from_text(full_content)
             visible = _extract_and_store_hidden_sidecars(
-                full_content,
+                visible_source,
                 window_id=window_id,
                 du_daily_trigger=du_daily_trigger,
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
@@ -942,6 +958,7 @@ def _stream_with_r2_archive(
                     msg["thinking_blocks"] = thinking_blocks_parts
                 if reasoning_omitted:
                     msg["reasoning_omitted"] = True
+                _apply_pseudo_cot_state_and_fallback(window_id, msg, inner_os)
                 round_cleaned = (
                     _build_round_cleaned_for_archive(last_user, msg, reply_target=_reply_target(), window_id=window_id)
                     if last_user
@@ -976,6 +993,7 @@ def _stream_with_r2_archive(
     tool_midstream_retry_used = False
     tool_visible_content_parts: list[str] = []
     final_thinking_blocks: list[dict] = []
+    stream_inner_os_parts: list[str] = []
     try:
         while True:
             chunks = []
@@ -1057,12 +1075,16 @@ def _stream_with_r2_archive(
                 tool_midstream_retry_used = True
                 continue
             du_state = PcmdDuThoughtStreamState(dynamic_memory_citation_map)
+            pseudo_cot_state = _PseudoCotStreamState() if pseudo_cot_stream_enabled else None
             done_chunks = []
             raw_parsed_content = parsed.get("content") or ""
             parsed_content = dedupe_stream_sumitalk_cards(raw_parsed_content)
             merged_parsed_content = _merge_visible_tool_round_content(tool_visible_content_parts, parsed_content)
             if merged_parsed_content != raw_parsed_content:
                 parsed_content = merged_parsed_content
+                parsed_content, parsed_inner_os = _split_inner_os_from_text(parsed_content)
+                if parsed_inner_os:
+                    stream_inner_os_parts.append(parsed_inner_os)
                 visible_content = du_state.feed_delta(parsed_content)
                 if visible_content:
                     yield _sse_delta_chunk_bytes(visible_content)
@@ -1071,7 +1093,10 @@ def _stream_with_r2_archive(
                     if _is_sse_done_chunk(ch):
                         done_chunks.append(ch)
                         continue
-                    yield transform_sse_chunk_bytes_pcmd(_strip_reasoning_from_sse_chunk(ch), du_state)
+                    safe_chunk = _strip_reasoning_from_sse_chunk(ch)
+                    if pseudo_cot_state:
+                        safe_chunk = _transform_pseudo_cot_sse_chunk_bytes(safe_chunk, pseudo_cot_state)
+                    yield transform_sse_chunk_bytes_pcmd(safe_chunk, du_state)
             content_parts.append(parsed_content)
             # 模型常不在正文复述预览链接：从 tool 结果补发 SSE + 存档拼接
             suf = html_preview_suffix_for_stream(
@@ -1102,8 +1127,11 @@ def _stream_with_r2_archive(
             break
     finally:
         full_content = "".join(content_parts)
+        visible_source, inner_os = _split_inner_os_from_text(full_content)
+        if not inner_os and stream_inner_os_parts:
+            inner_os = "\n\n".join(part for part in stream_inner_os_parts if part).strip()
         visible = _extract_and_store_hidden_sidecars(
-            full_content,
+            visible_source,
             window_id=window_id,
             du_daily_trigger=du_daily_trigger,
             dynamic_memory_citation_map=dynamic_memory_citation_map,
@@ -1134,6 +1162,7 @@ def _stream_with_r2_archive(
                 msg["thinking_blocks"] = final_thinking_blocks
             if reasoning_omitted:
                 msg["reasoning_omitted"] = True
+            _apply_pseudo_cot_state_and_fallback(window_id, msg, inner_os)
             tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
             if tc_trace:
                 msg["tool_calls"] = tc_trace
@@ -1470,6 +1499,7 @@ def chat_completions():
             logger.debug("pixel_home user state inference skipped error=%s", e)
     if not slim_voice_call:
         body = step_inject_current_base_model(body)
+        body = step_inject_pseudo_cot_inner_os(body, window_id)
         body = step_inject_du_thought(body, window_id)
         body = step_inject_du_vitals(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
@@ -1686,6 +1716,7 @@ def chat_completions():
             logger.error("工具续轮结束但最终正文仍为空（非流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
     archive_thinking_blocks_for_r2: list[dict] = []
     if resp_json:
+        resp_json, inner_os = _extract_inner_os_from_response_json(resp_json)
         resp_json = _apply_hidden_sidecars_to_assistant_response(
             resp_json,
             window_id=window_id,
@@ -1790,6 +1821,7 @@ def chat_completions():
                 msg_for_r2["reasoning_omitted"] = True
             if cache_debug_entries:
                 msg_for_r2["cache_debug"] = cache_debug_entries
+            _apply_pseudo_cot_state_and_fallback(window_id, msg_for_r2, inner_os)
             tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
             if tc_trace and not msg_for_r2.get("tool_calls"):
                 msg_for_r2["tool_calls"] = tc_trace
