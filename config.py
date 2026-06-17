@@ -645,7 +645,7 @@ MCP_TRUST_PROXY = os.environ.get("MCP_TRUST_PROXY", "").strip().lower() in ("1",
 # -------------------- 硅基流动（SiliconFlow）专用模型列表 --------------------
 # 仅用于硅基流动上游的本地模型列表展示/探活；聊天入口不做硅基专属 model 兜底或覆盖。
 SILICONFLOW_BASE_HOST = os.environ.get("SILICONFLOW_BASE_HOST", "api.siliconflow.cn").strip().lower()
-_SILICONFLOW_MODELS_STR = os.environ.get("SILICONFLOW_MODELS", "zai-org/GLM-5.2").strip()
+_SILICONFLOW_MODELS_STR = os.environ.get("SILICONFLOW_MODELS", "Pro/zai-org/GLM-5.1,zai-org/GLM-5.2").strip()
 SILICONFLOW_MODELS = [
     m.strip() for m in _SILICONFLOW_MODELS_STR.split(",") if m.strip()
 ] if _SILICONFLOW_MODELS_STR else []
