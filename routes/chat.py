@@ -1427,6 +1427,17 @@ def chat_completions():
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    def _sse_from_nonstream_response(resp: dict):
+        msg = (((resp or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+        content_text = get_assistant_content_text(msg) if isinstance(msg, dict) else ""
+        if content_text:
+            yield _sse_delta_chunk_bytes(content_text)
+        yield b"data: [DONE]\n\n"
+
+    def _sse_error(message: str):
+        yield ("data: " + json.dumps({"error": message or "upstream error"}, ensure_ascii=False) + "\n\n").encode("utf-8")
+        yield b"data: [DONE]\n\n"
+
     if _is_suspected_rikkahub_phantom_one(body, window_id, headers):
         logger.warning("命中 RikkaHub 幽灵1保护：window_id=%s ua=%s", window_id, (headers.get("User-Agent") or "")[:80])
         if body.get("stream"):
@@ -1536,6 +1547,15 @@ def chat_completions():
     body = _move_dynamic_systems_after_static_prefix(body)
     dynamic_memory_citation_map = normalize_citation_map(body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None))
     prompt_cache_profile = _build_prompt_cache_profile(body, active_upstream_url)
+    client_requested_stream = bool(body.get("stream"))
+    openrouter_forced_nonstream = client_requested_stream and is_openrouter_url(active_upstream_url)
+    if openrouter_forced_nonstream:
+        body["stream"] = False
+        logger.info(
+            "OpenRouter 上游强制非流式转发，稍后按 SSE 回给客户端 window_id=%s model=%s",
+            window_id,
+            body.get("model") or "",
+        )
     # Claude OAuth 代理自己会处理缓存断点；普通 OpenAI 上游继续清掉网关内部标记。
     preserve_dynamic_marker = _is_local_claude_oauth_proxy_url(active_upstream_url)
     for msg in body.get("messages") or []:
@@ -1574,6 +1594,8 @@ def chat_completions():
                 err,
             )
         logger.error("Chat 转发失败 error=%s", err, exc_info=True)
+        if openrouter_forced_nonstream:
+            return _stream_response(_sse_error(err))
         return jsonify({"error": err}), status
     if status >= 400:
         if is_sumitalk_request:
@@ -1585,6 +1607,8 @@ def chat_completions():
                 list(resp_json.keys()) if isinstance(resp_json, dict) else [],
             )
         logger.warning("Chat 上游返回异常 status=%s", status)
+        if openrouter_forced_nonstream:
+            return _stream_response(_sse_error(_extract_upstream_error_detail(resp_json, status) or "upstream error"))
         return jsonify(resp_json or {"error": "upstream error"}), status
     # 非流式 + 有 Notion 工具时：若上游返回 tool_calls，执行工具并继续请求，直到无 tool_calls 或达到最大轮数
     # 收集中间轮次 reasoning 供 MiniApp 思维链面板使用，但不回填到返回给客户端的 resp_json，
@@ -1896,4 +1920,6 @@ def chat_completions():
             finish_reason,
             tool_rounds_used,
         )
+    if openrouter_forced_nonstream:
+        return _stream_response(_sse_from_nonstream_response(resp_json))
     return jsonify(resp_json), 200
