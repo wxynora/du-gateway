@@ -11,9 +11,7 @@ from config import (
     OPENROUTER_ULTRA_THINK_ENABLED,
     OPENROUTER_ULTRA_THINK_PROMPT,
     OPENROUTER_CACHE_CONTROL_TYPE,
-    is_siliconflow_url,
     is_openrouter_url,
-    siliconflow_model_options,
 )
 
 _CLAUDE_ADAPTIVE_THINKING_RE = re.compile(r"claude-opus-4-(?:6|7|8)(?:\b|-|$)", re.IGNORECASE)
@@ -22,46 +20,10 @@ _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
 
 def normalize_request_model(body: dict) -> dict:
     """
-    特例处理：
-    - 若当前 active 上游已有后端缓存模型，优先使用缓存模型，避免客户端旧 model 污染动态注入。
-    - 若当前 active 上游指向硅基流动且没有缓存模型，则补 SILICONFLOW_DEFAULT_MODEL/候选首项。
-    - 其他上游保持项目约定：未传 model 且没有缓存模型时直接报错，不做默认兜底。
+    主聊天入口不做任何上游专属 model 兜底或覆盖。
+    缺 model 时由入口直接报错；最终转发前的 active model 覆盖由 apply_active_model_request_policy 统一处理。
     """
-    body = dict(body or {})
-
-    # 获取当前 active 上游 URL；失败时退回环境变量中的首个 URL
-    url = ""
-    active_model = ""
-    try:
-        from storage.upstream_store import get_active_item, get_cached_active_model
-
-        active = get_active_item() or {}
-        url = (active.get("url") or "").strip()
-        active_model = str(get_cached_active_model(refresh_if_missing=False) or "").strip()
-    except Exception:
-        url = ""
-    if not url:
-        if TARGET_AI_URL and TARGET_AI_URL.strip():
-            url = TARGET_AI_URL.strip()
-        elif TARGET_AI_URLS:
-            url = (TARGET_AI_URLS[0] or "").strip()
-
-    if active_model:
-        body["model"] = active_model
-        return body
-
-    m = body.get("model")
-    if isinstance(m, str) and m.strip():
-        return body
-
-    # 仅当当前上游指向硅基流动且请求没传 model 时，才补当前已选模型。
-    if is_siliconflow_url(url):
-        options = siliconflow_model_options()
-        model = options[0] if options else ""
-        if model:
-            body["model"] = model
-
-    return body
+    return dict(body or {})
 
 
 def get_forward_targets(request_model: str = None):

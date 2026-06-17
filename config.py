@@ -643,8 +643,7 @@ MCP_IP_ALLOWLIST = [x.strip() for x in os.environ.get("MCP_IP_ALLOWLIST", "").sp
 MCP_TRUST_PROXY = os.environ.get("MCP_TRUST_PROXY", "").strip().lower() in ("1", "true", "yes")
 
 # -------------------- 硅基流动（SiliconFlow）专用模型列表 --------------------
-# 仅当当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST）且请求未显式传 model 时，
-# 才会在聊天入口补上当前已选模型或 SILICONFLOW_DEFAULT_MODEL。
+# 仅用于硅基流动上游的本地模型列表展示/探活；聊天入口不做硅基专属 model 兜底或覆盖。
 SILICONFLOW_BASE_HOST = os.environ.get("SILICONFLOW_BASE_HOST", "api.siliconflow.cn").strip().lower()
 SILICONFLOW_DEFAULT_MODEL = os.environ.get("SILICONFLOW_DEFAULT_MODEL", "").strip()
 _SILICONFLOW_EXTRA_MODELS_STR = os.environ.get("SILICONFLOW_EXTRA_MODELS", "zai-org/GLM-5.2").strip()
