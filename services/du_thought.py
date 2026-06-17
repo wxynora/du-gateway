@@ -13,6 +13,21 @@ MARKER_START = "<<<DU_THOUGHT>>>"
 MARKER_END = "<<<END_DU_THOUGHT>>>"
 
 
+def _strip_partial_marker_prefix(text: str) -> str:
+    """
+    流式 chunk 可能把起始标记拆成 "<<<" / "DU_TH..." 几段。
+    在确认它不是隐藏标记前，先扣住尾部可疑前缀，避免半个标记先露给客户端。
+    """
+    if not text:
+        return ""
+    max_len = min(len(text), len(MARKER_START) - 1)
+    for size in range(max_len, 0, -1):
+        suffix = text[-size:]
+        if MARKER_START.startswith(suffix):
+            return text[:-size].rstrip()
+    return text
+
+
 def compute_visible_streaming(acc: str) -> str:
     """
     流式拼接过程中的「当前应对外展示的文本」。
@@ -21,7 +36,7 @@ def compute_visible_streaming(acc: str) -> str:
     if not acc:
         return ""
     if MARKER_START not in acc:
-        return acc
+        return _strip_partial_marker_prefix(acc)
     i = acc.find(MARKER_START)
     if MARKER_END not in acc:
         return acc[:i].rstrip()
@@ -30,7 +45,11 @@ def compute_visible_streaming(acc: str) -> str:
     if j < 0:
         return acc[:i].rstrip()
     after = rest[j + len(MARKER_END) :]
-    return acc[:i] + after
+    before = acc[:i].rstrip()
+    after = after.lstrip()
+    if before and after:
+        return before + after
+    return before or after
 
 
 def split_assistant_for_thought(full_text: str) -> tuple[str, Optional[str]]:
