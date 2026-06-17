@@ -6,8 +6,6 @@ from config import (
     TARGET_AI_API_KEY,
     TARGET_AI_URLS,
     TARGET_AI_API_KEYS,
-    SILICONFLOW_BASE_HOST,
-    SILICONFLOW_DEFAULT_MODEL,
     OPENROUTER_REASONING_MAX_TOKENS,
     OPENROUTER_VERBOSITY,
     OPENROUTER_ULTRA_THINK_ENABLED,
@@ -18,46 +16,6 @@ from config import (
 
 _CLAUDE_ADAPTIVE_THINKING_RE = re.compile(r"claude-opus-4-(?:6|7|8)(?:\b|-|$)", re.IGNORECASE)
 _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
-
-
-def normalize_request_model(body: dict) -> dict:
-    """
-    特例处理：
-    - 若当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST），
-      则无条件固定为 SILICONFLOW_DEFAULT_MODEL（忽略客户端传入 model）。
-    - 其他上游保持项目约定：未传 model 时直接报错，不做默认兜底。
-    """
-    body = dict(body or {})
-
-    # 若未配置硅基流动默认模型，保持原行为
-    if not (SILICONFLOW_BASE_HOST and SILICONFLOW_DEFAULT_MODEL):
-        # 非硅基路径：已显式传 model 则不改
-        m = body.get("model")
-        if isinstance(m, str) and m.strip():
-            return body
-        return body
-
-    # 获取当前 active 上游 URL；失败时退回环境变量中的首个 URL
-    url = ""
-    try:
-        from storage.upstream_store import get_active_item
-
-        active = get_active_item() or {}
-        url = (active.get("url") or "").strip()
-    except Exception:
-        url = ""
-    if not url:
-        if TARGET_AI_URL and TARGET_AI_URL.strip():
-            url = TARGET_AI_URL.strip()
-        elif TARGET_AI_URLS:
-            url = (TARGET_AI_URLS[0] or "").strip()
-
-    host = (urlparse(url).hostname or "").lower()
-    # 仅当当前上游指向硅基流动时，无条件固定 model 为默认 GLM
-    if host and host.endswith(SILICONFLOW_BASE_HOST):
-        body["model"] = SILICONFLOW_DEFAULT_MODEL
-
-    return body
 
 
 def get_forward_targets(request_model: str = None):

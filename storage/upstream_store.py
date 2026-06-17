@@ -1,16 +1,15 @@
 import json
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 import requests
 
 from config import DATA_DIR, TARGET_AI_URL, TARGET_AI_API_KEY, TARGET_AI_URLS, TARGET_AI_API_KEYS
 from config import (
-    SILICONFLOW_BASE_HOST,
-    SILICONFLOW_DEFAULT_MODEL,
+    is_siliconflow_url,
     is_openrouter_url,
     openrouter_model_options,
+    siliconflow_model_options,
 )
 
 
@@ -161,11 +160,6 @@ def clear_active_model_cache() -> bool:
     return _save_active_model_payload({})
 
 
-def _is_siliconflow_url(url: str) -> bool:
-    host = (urlparse(str(url or "").strip()).hostname or "").lower()
-    return bool(host and SILICONFLOW_BASE_HOST and host.endswith(SILICONFLOW_BASE_HOST))
-
-
 def list_models_for_item_detail(it: dict) -> dict:
     url = str((it or {}).get("url") or "").strip()
     api_key = str((it or {}).get("api_key") or "").strip()
@@ -180,12 +174,21 @@ def list_models_for_item_detail(it: dict) -> dict:
             "source": "openrouter_model_options",
             "error": "" if models else "OPENROUTER_FIXED_MODEL/OPENROUTER_EXTRA_MODELS 未配置",
         }
-    if _is_siliconflow_url(url) and SILICONFLOW_DEFAULT_MODEL:
+    if is_siliconflow_url(url):
+        models = siliconflow_model_options()
+        if not models:
+            return {
+                "ok": False,
+                "models": [],
+                "status": 0,
+                "source": "siliconflow_model_options",
+                "error": "SILICONFLOW_MODELS 未配置",
+            }
         return {
             "ok": True,
-            "models": [str(SILICONFLOW_DEFAULT_MODEL or "").strip()],
+            "models": models,
             "status": 200,
-            "source": "siliconflow_default_model",
+            "source": "siliconflow_model_options",
             "error": "",
         }
     headers = {"Content-Type": "application/json"}
