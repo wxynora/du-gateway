@@ -18,14 +18,6 @@ _CLAUDE_ADAPTIVE_THINKING_RE = re.compile(r"claude-opus-4-(?:6|7|8)(?:\b|-|$)", 
 _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
 
 
-def normalize_request_model(body: dict) -> dict:
-    """
-    主聊天入口不做任何上游专属 model 兜底或覆盖。
-    缺 model 时由入口直接报错；最终转发前的 active model 覆盖由 apply_active_model_request_policy 统一处理。
-    """
-    return dict(body or {})
-
-
 def get_forward_targets(request_model: str = None):
     """
     仅返回一个转发目标：当前 active 上游。

@@ -170,7 +170,6 @@ from services.upstream_policy import (
     get_active_upstream_url as _get_active_upstream_url,
     get_forward_targets as _get_forward_targets,
     is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
-    normalize_request_model as _normalize_request_model,
 )
 from utils.log import get_logger
 
@@ -1382,7 +1381,6 @@ def chat_completions():
     """统一入口：所有请求走完整管道（清洗、注入、转发、存档），无开头过滤。支持 X-Window-Id / body.window_id（如 Telegram 用 tg_{user_id}）。"""
     body = request.get_json(silent=True) or {}
     body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None)
-    body = _normalize_request_model(body)
     body = _apply_openrouter_request_policy(body, _get_active_upstream_url())
     reply_channel = _reply_channel()
     reply_target = _reply_target()
