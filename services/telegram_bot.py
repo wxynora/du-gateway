@@ -14,6 +14,7 @@ from uuid import uuid4
 import requests
 
 from services.pc_command_handler import process_pcmd_in_assistant_text
+from services.du_thought import split_assistant_for_thought
 from services.reasoning_utils import extract_reasoning_text_and_details, extract_thinking_from_content
 
 from config import (
@@ -599,6 +600,7 @@ def _call_gateway_chat(window_id: str, user_id: int, user_content: Union[str, li
         reply_text = content.strip() if isinstance(content, str) else str(content).strip()
         # 兜底：提取并去掉 <think>/<thinking> 块（网关层已处理，此处双重保险）。
         reply_text, inline_thinking = extract_thinking_from_content(reply_text)
+        reply_text, _du_thought = split_assistant_for_thought(reply_text)
         reply_text = _sanitize_reply_for_telegram(reply_text)
         # 电脑控制标签：入队并从可见正文移除（与手机/Tasker 隔离）
         reply_text, _ = process_pcmd_in_assistant_text(reply_text)

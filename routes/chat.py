@@ -1431,7 +1431,14 @@ def chat_completions():
         msg = (((resp or {}).get("choices") or [{}])[0] or {}).get("message") or {}
         content_text = get_assistant_content_text(msg) if isinstance(msg, dict) else ""
         if content_text:
-            yield _sse_delta_chunk_bytes(content_text)
+            visible_text = _extract_and_store_hidden_sidecars(
+                content_text,
+                window_id=window_id,
+                du_daily_trigger=du_daily_trigger,
+                dynamic_memory_citation_map=dynamic_memory_citation_map,
+            )
+            if visible_text:
+                yield _sse_delta_chunk_bytes(visible_text)
         yield b"data: [DONE]\n\n"
 
     def _sse_error(message: str):
