@@ -8,11 +8,11 @@ from flask import jsonify, request
 from config import (
     OPENROUTER_ALLOW_FALLBACKS,
     OPENROUTER_CACHE_CONTROL_TYPE,
-    OPENROUTER_FIXED_MODEL,
     OPENROUTER_PROVIDER_ORDER,
     OPENROUTER_REASONING_MAX_TOKENS,
     OPENROUTER_VERBOSITY,
     is_openrouter_url,
+    openrouter_model_options,
 )
 from storage import upstream_store
 
@@ -205,10 +205,11 @@ def _probe_upstream_item(it: dict) -> dict:
 
     model_name = ""
     if is_openrouter_url(url):
-        model_name = OPENROUTER_FIXED_MODEL
+        models = openrouter_model_options()
+        model_name = models[0] if models else ""
         out["models_ok"] = True
         out["models_status"] = 200
-        out["model_count"] = 1 if model_name else 0
+        out["model_count"] = len(models)
         out["note"] = "OpenRouter 已固定模型，跳过 /v1/models 探测"
 
     try:

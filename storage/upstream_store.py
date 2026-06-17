@@ -7,10 +7,10 @@ import requests
 
 from config import DATA_DIR, TARGET_AI_URL, TARGET_AI_API_KEY, TARGET_AI_URLS, TARGET_AI_API_KEYS
 from config import (
-    OPENROUTER_FIXED_MODEL,
     SILICONFLOW_BASE_HOST,
     SILICONFLOW_DEFAULT_MODEL,
     is_openrouter_url,
+    openrouter_model_options,
 )
 
 
@@ -172,13 +172,13 @@ def list_models_for_item_detail(it: dict) -> dict:
     if not url:
         return {"ok": False, "models": [], "status": 0, "source": "", "error": "URL 为空"}
     if is_openrouter_url(url):
-        model = str(OPENROUTER_FIXED_MODEL or "").strip()
+        models = openrouter_model_options()
         return {
-            "ok": bool(model),
-            "models": [model] if model else [],
-            "status": 200 if model else 0,
-            "source": "openrouter_fixed_model",
-            "error": "" if model else "OPENROUTER_FIXED_MODEL 未配置",
+            "ok": bool(models),
+            "models": models,
+            "status": 200 if models else 0,
+            "source": "openrouter_model_options",
+            "error": "" if models else "OPENROUTER_FIXED_MODEL/OPENROUTER_EXTRA_MODELS 未配置",
         }
     if _is_siliconflow_url(url) and SILICONFLOW_DEFAULT_MODEL:
         return {

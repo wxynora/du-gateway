@@ -65,9 +65,13 @@ DEFAULT_CHAT_MODEL = os.environ.get("DEFAULT_CHAT_MODEL", "").strip()
 # 网关侧模型强制覆盖：开启后无论请求传什么 model 都改成 DEFAULT_CHAT_MODEL（或回退值）
 FORCE_CHAT_MODEL_ENABLED = os.environ.get("FORCE_CHAT_MODEL_ENABLED", "").strip().lower() in ("1", "true", "yes")
 
-# OpenRouter 特例：若当前 active 上游是 OpenRouter，则固定用该模型，不再拉 /v1/models。
+# OpenRouter 特例：若当前 active 上游是 OpenRouter，则使用本地候选列表，不再拉 /v1/models。
 OPENROUTER_BASE_HOST = os.environ.get("OPENROUTER_BASE_HOST", "openrouter.ai").strip().lower()
 OPENROUTER_FIXED_MODEL = os.environ.get("OPENROUTER_FIXED_MODEL", "anthropic/claude-4.7-opus-20260416").strip()
+_OPENROUTER_EXTRA_MODELS_STR = os.environ.get("OPENROUTER_EXTRA_MODELS", "z-ai/glm-5.2").strip()
+OPENROUTER_EXTRA_MODELS = [
+    m.strip() for m in _OPENROUTER_EXTRA_MODELS_STR.split(",") if m.strip()
+] if _OPENROUTER_EXTRA_MODELS_STR else []
 OPENROUTER_REASONING_MAX_TOKENS = int(os.environ.get("OPENROUTER_REASONING_MAX_TOKENS", "32000"))
 OPENROUTER_VERBOSITY = os.environ.get("OPENROUTER_VERBOSITY", "max").strip().lower()
 OPENROUTER_ULTRA_THINK_ENABLED = os.environ.get("OPENROUTER_ULTRA_THINK_ENABLED", "1").strip().lower() in ("1", "true", "yes")
@@ -109,17 +113,28 @@ def resolve_openrouter_api_key() -> str:
     return ""
 
 
+def openrouter_model_options() -> list[str]:
+    out = []
+    for model in [OPENROUTER_FIXED_MODEL, *OPENROUTER_EXTRA_MODELS]:
+        model = str(model or "").strip()
+        if model and model not in out:
+            out.append(model)
+    return out
+
+
 def openrouter_models_response() -> dict | None:
-    if not OPENROUTER_FIXED_MODEL:
+    models = openrouter_model_options()
+    if not models:
         return None
     return {
         "object": "list",
         "data": [
             {
-                "id": OPENROUTER_FIXED_MODEL,
+                "id": model,
                 "object": "model",
                 "created": 0,
             }
+            for model in models
         ],
     }
 
