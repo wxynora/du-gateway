@@ -8,7 +8,6 @@ from config import (
     TARGET_AI_API_KEYS,
     SILICONFLOW_BASE_HOST,
     SILICONFLOW_DEFAULT_MODEL,
-    OPENROUTER_FIXED_MODEL,
     OPENROUTER_REASONING_MAX_TOKENS,
     OPENROUTER_VERBOSITY,
     OPENROUTER_ULTRA_THINK_ENABLED,
@@ -223,8 +222,6 @@ def apply_openrouter_request_policy(body: dict, upstream_url: str) -> dict:
     body = dict(body or {})
     if not is_openrouter_url(upstream_url):
         return body
-    if OPENROUTER_FIXED_MODEL:
-        body["model"] = OPENROUTER_FIXED_MODEL
     reasoning = body.get("reasoning")
     if not isinstance(reasoning, dict):
         reasoning = {}
