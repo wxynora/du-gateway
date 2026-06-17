@@ -11,6 +11,12 @@ _MAX_INJECT_PREV_CHARS = 2000
 # 与渡约定：整段放在回复末尾，便于网关正则截取；勿在正文其它位置出现这两行字面量。
 MARKER_START = "<<<DU_THOUGHT>>>"
 MARKER_END = "<<<END_DU_THOUGHT>>>"
+_START_MARKER_RE = re.compile(r"<<<\s*DU_THOUGHT\s*>{2,3}", flags=re.IGNORECASE)
+_END_MARKER_RE = re.compile(r"<<<\s*END_DU_THOUGHT\s*>{2,3}", flags=re.IGNORECASE)
+_BLOCK_RE = re.compile(
+    r"<<<\s*DU_THOUGHT\s*>{2,3}\s*(.*?)\s*<<<\s*END_DU_THOUGHT\s*>{2,3}",
+    flags=re.DOTALL | re.IGNORECASE,
+)
 
 
 def _strip_partial_marker_prefix(text: str) -> str:
@@ -35,17 +41,14 @@ def compute_visible_streaming(acc: str) -> str:
     """
     if not acc:
         return ""
-    if MARKER_START not in acc:
+    start = _START_MARKER_RE.search(acc)
+    if not start:
         return _strip_partial_marker_prefix(acc)
-    i = acc.find(MARKER_START)
-    if MARKER_END not in acc:
-        return acc[:i].rstrip()
-    rest = acc[i + len(MARKER_START) :]
-    j = rest.find(MARKER_END)
-    if j < 0:
-        return acc[:i].rstrip()
-    after = rest[j + len(MARKER_END) :]
-    before = acc[:i].rstrip()
+    end = _END_MARKER_RE.search(acc, start.end())
+    if not end:
+        return acc[: start.start()].rstrip()
+    after = acc[end.end() :]
+    before = acc[: start.start()].rstrip()
     after = after.lstrip()
     if before and after:
         return before + after
@@ -59,16 +62,12 @@ def split_assistant_for_thought(full_text: str) -> tuple[str, Optional[str]]:
     """
     if not full_text or not isinstance(full_text, str):
         return full_text or "", None
-    if MARKER_START not in full_text:
+    start = _START_MARKER_RE.search(full_text)
+    if not start:
         return full_text, None
-    if MARKER_END not in full_text:
-        i = full_text.find(MARKER_START)
-        return full_text[:i].rstrip(), None
-    pattern = re.escape(MARKER_START) + r"\s*(.*?)\s*" + re.escape(MARKER_END)
-    m = re.search(pattern, full_text, flags=re.DOTALL)
+    m = _BLOCK_RE.search(full_text)
     if not m:
-        i = full_text.find(MARKER_START)
-        return full_text[:i].rstrip(), None
+        return full_text[: start.start()].rstrip(), None
     thought = (m.group(1) or "").strip()
     visible = full_text[: m.start()] + full_text[m.end() :]
     return visible.strip(), thought if thought else None
