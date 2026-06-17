@@ -24,8 +24,6 @@ from config import (
     QQ_PROACTIVE_PUSH_TOKEN,
     is_openrouter_url,
     openrouter_models_response,
-    is_siliconflow_url,
-    siliconflow_models_response,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -170,6 +168,7 @@ from services.upstream_policy import (
     get_active_upstream_url as _get_active_upstream_url,
     get_forward_targets as _get_forward_targets,
     is_local_claude_oauth_proxy_url as _is_local_claude_oauth_proxy_url,
+    normalize_request_model as _normalize_request_model,
 )
 from utils.log import get_logger
 
@@ -1353,10 +1352,6 @@ def list_models():
         if data:
             return jsonify(data), 200
         return jsonify({"error": "OPENROUTER_FIXED_MODEL 未配置"}), 502
-    if is_siliconflow_url(url):
-        data = siliconflow_models_response()
-        if data:
-            return jsonify(data), 200
     models_url = _chat_url_to_models_url(url)
     if not models_url:
         return jsonify({"error": "无法解析模型列表地址"}), 502
@@ -1381,6 +1376,7 @@ def chat_completions():
     """统一入口：所有请求走完整管道（清洗、注入、转发、存档），无开头过滤。支持 X-Window-Id / body.window_id（如 Telegram 用 tg_{user_id}）。"""
     body = request.get_json(silent=True) or {}
     body.pop(DYNAMIC_MEMORY_CITATION_MAP_BODY_KEY, None)
+    body = _normalize_request_model(body)
     body = _apply_openrouter_request_policy(body, _get_active_upstream_url())
     reply_channel = _reply_channel()
     reply_target = _reply_target()

@@ -10,9 +10,7 @@ from config import (
     OPENROUTER_REASONING_MAX_TOKENS,
     OPENROUTER_VERBOSITY,
     is_openrouter_url,
-    is_siliconflow_url,
     openrouter_model_options,
-    siliconflow_model_options,
 )
 from storage import upstream_store
 
@@ -211,13 +209,6 @@ def _probe_upstream_item(it: dict) -> dict:
         out["models_status"] = 200
         out["model_count"] = len(models)
         out["note"] = "OpenRouter 已固定模型，跳过 /v1/models 探测"
-    elif is_siliconflow_url(url):
-        models = siliconflow_model_options()
-        model_name = models[0] if models else ""
-        out["models_ok"] = bool(models)
-        out["models_status"] = 200 if models else 0
-        out["model_count"] = len(models)
-        out["note"] = "SiliconFlow 已使用本地模型候选，跳过 /v1/models 探测" if models else "SiliconFlow 模型候选未配置"
 
     try:
         if not model_name:
