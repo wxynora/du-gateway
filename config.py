@@ -645,11 +645,10 @@ MCP_TRUST_PROXY = os.environ.get("MCP_TRUST_PROXY", "").strip().lower() in ("1",
 # -------------------- 硅基流动（SiliconFlow）专用模型列表 --------------------
 # 仅用于硅基流动上游的本地模型列表展示/探活；聊天入口不做硅基专属 model 兜底或覆盖。
 SILICONFLOW_BASE_HOST = os.environ.get("SILICONFLOW_BASE_HOST", "api.siliconflow.cn").strip().lower()
-SILICONFLOW_DEFAULT_MODEL = os.environ.get("SILICONFLOW_DEFAULT_MODEL", "").strip()
-_SILICONFLOW_EXTRA_MODELS_STR = os.environ.get("SILICONFLOW_EXTRA_MODELS", "zai-org/GLM-5.2").strip()
-SILICONFLOW_EXTRA_MODELS = [
-    m.strip() for m in _SILICONFLOW_EXTRA_MODELS_STR.split(",") if m.strip()
-] if _SILICONFLOW_EXTRA_MODELS_STR else []
+_SILICONFLOW_MODELS_STR = os.environ.get("SILICONFLOW_MODELS", "zai-org/GLM-5.2").strip()
+SILICONFLOW_MODELS = [
+    m.strip() for m in _SILICONFLOW_MODELS_STR.split(",") if m.strip()
+] if _SILICONFLOW_MODELS_STR else []
 
 
 def is_siliconflow_url(url: str) -> bool:
@@ -664,7 +663,7 @@ def is_siliconflow_url(url: str) -> bool:
 
 def siliconflow_model_options() -> list[str]:
     out: list[str] = []
-    for model in [SILICONFLOW_DEFAULT_MODEL, *SILICONFLOW_EXTRA_MODELS]:
+    for model in SILICONFLOW_MODELS:
         model = str(model or "").strip()
         if model and model not in out:
             out.append(model)

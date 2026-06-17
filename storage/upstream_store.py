@@ -182,7 +182,7 @@ def list_models_for_item_detail(it: dict) -> dict:
                 "models": [],
                 "status": 0,
                 "source": "siliconflow_model_options",
-                "error": "SILICONFLOW_DEFAULT_MODEL/SILICONFLOW_EXTRA_MODELS 未配置",
+                "error": "SILICONFLOW_MODELS 未配置",
             }
         return {
             "ok": True,
