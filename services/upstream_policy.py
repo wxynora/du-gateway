@@ -23,15 +23,11 @@ _CLAUDE_OPUS_46_RE = re.compile(r"claude-opus-4-6(?:\b|-|$)", re.IGNORECASE)
 def normalize_request_model(body: dict) -> dict:
     """
     特例处理：
-    - 若当前 active 上游指向硅基流动（hostname 匹配 SILICONFLOW_BASE_HOST），
-      且请求未显式传 model，则补当前已选模型或 SILICONFLOW_DEFAULT_MODEL。
-    - 其他上游保持项目约定：未传 model 时直接报错，不做默认兜底。
+    - 若当前 active 上游已有后端缓存模型，优先使用缓存模型，避免客户端旧 model 污染动态注入。
+    - 若当前 active 上游指向硅基流动且没有缓存模型，则补 SILICONFLOW_DEFAULT_MODEL/候选首项。
+    - 其他上游保持项目约定：未传 model 且没有缓存模型时直接报错，不做默认兜底。
     """
     body = dict(body or {})
-
-    m = body.get("model")
-    if isinstance(m, str) and m.strip():
-        return body
 
     # 获取当前 active 上游 URL；失败时退回环境变量中的首个 URL
     url = ""
@@ -50,12 +46,18 @@ def normalize_request_model(body: dict) -> dict:
         elif TARGET_AI_URLS:
             url = (TARGET_AI_URLS[0] or "").strip()
 
+    if active_model:
+        body["model"] = active_model
+        return body
+
+    m = body.get("model")
+    if isinstance(m, str) and m.strip():
+        return body
+
     # 仅当当前上游指向硅基流动且请求没传 model 时，才补当前已选模型。
     if is_siliconflow_url(url):
-        model = active_model
-        if not model:
-            options = siliconflow_model_options()
-            model = options[0] if options else ""
+        options = siliconflow_model_options()
+        model = options[0] if options else ""
         if model:
             body["model"] = model
 
