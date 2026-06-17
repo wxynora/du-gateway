@@ -1,5 +1,4 @@
 import json
-import re
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -23,6 +22,7 @@ from services.telegram_bot import (
     send_rich_message,
     send_message_segmented,
 )
+from services.hidden_blocks import HiddenBlockParser
 from storage import r2_store
 from storage.miniapp_panel_store import list_trusted_devices
 from utils.log import get_logger
@@ -41,10 +41,7 @@ FOLLOWUP_STATUS_EXPIRED = "expired"
 FOLLOWUP_STATUS_ERROR = "error"
 FOLLOWUP_MARKER_START = "<<<DU_FOLLOWUP>>>"
 FOLLOWUP_MARKER_END = "<<<END_DU_FOLLOWUP>>>"
-FOLLOWUP_MARKER_RE = re.compile(
-    r"<<<DU_FOLLOWUP>>>\s*([\s\S]*?)\s*<<<END_DU_FOLLOWUP>>>",
-    re.IGNORECASE,
-)
+_FOLLOWUP_BLOCK = HiddenBlockParser.for_markers("DU_FOLLOWUP", FOLLOWUP_MARKER_START, FOLLOWUP_MARKER_END)
 
 
 def build_followup_system_instruction() -> str:
@@ -260,14 +257,9 @@ def _build_thread_key(window_id: str, channel: str, target: str) -> str:
 
 def extract_followup_marker(text: str) -> tuple[str, Optional[dict]]:
     raw = str(text or "")
-    m = FOLLOWUP_MARKER_RE.search(raw)
-    if not m:
-        start = raw.lower().rfind(FOLLOWUP_MARKER_START.lower())
-        if start >= 0:
-            return raw[:start].rstrip(), None
-        return raw.strip(), None
-    meta_raw = str(m.group(1) or "").strip()
-    clean = (raw[:m.start()] + raw[m.end():]).strip()
+    clean, meta_raw = _FOLLOWUP_BLOCK.split(raw)
+    if not meta_raw:
+        return clean.strip(), None
     try:
         obj = json.loads(meta_raw)
     except Exception:
@@ -289,26 +281,7 @@ def extract_followup_marker(text: str) -> tuple[str, Optional[dict]]:
 
 def compute_visible_streaming(acc: str) -> str:
     raw = str(acc or "")
-    if not raw:
-        return ""
-    clean, followup = extract_followup_marker(raw)
-    if followup or clean != raw.strip():
-        return clean
-
-    lower = raw.lower()
-    marker_start = FOLLOWUP_MARKER_START.lower()
-    marker_end = FOLLOWUP_MARKER_END.lower()
-    start = lower.rfind(marker_start)
-    if start >= 0:
-        tail = lower[start:]
-        if marker_end not in tail:
-            return raw[:start].rstrip()
-
-    max_len = min(len(raw), len(marker_start) - 1)
-    for size in range(max_len, 0, -1):
-        if marker_start.startswith(lower[-size:]):
-            return raw[:-size].rstrip()
-    return raw
+    return _FOLLOWUP_BLOCK.compute_visible_streaming(raw)
 
 
 def queue_followup(window_id: str, headers: dict, assistant_text: str, created_at: str | None = None) -> tuple[str, bool]:

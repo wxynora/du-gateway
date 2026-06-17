@@ -5,47 +5,23 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
+from services.hidden_blocks import HiddenBlockParser
 from utils.time_aware import BEIJING_TZ, now_beijing_iso, parse_iso_to_beijing
 
 MARKER_START = "<<<DU_VITALS>>>"
 MARKER_END = "<<<END_DU_VITALS>>>"
+_HIDDEN_BLOCK = HiddenBlockParser.for_markers("DU_VITALS", MARKER_START, MARKER_END)
 
 _ALLOWED_TEMPOS = {"down", "steady", "up", "spike", "settle"}
 _DEFAULT_DURATION_SECONDS = 180
 
 
 def compute_visible_streaming(acc: str) -> str:
-    if not acc:
-        return ""
-    if MARKER_START not in acc:
-        return acc
-    i = acc.find(MARKER_START)
-    if MARKER_END not in acc:
-        return acc[:i].rstrip()
-    rest = acc[i + len(MARKER_START) :]
-    j = rest.find(MARKER_END)
-    if j < 0:
-        return acc[:i].rstrip()
-    after = rest[j + len(MARKER_END) :]
-    return acc[:i] + after
+    return _HIDDEN_BLOCK.compute_visible_streaming(acc)
 
 
 def split_assistant_for_vitals(full_text: str) -> tuple[str, Optional[str]]:
-    if not full_text or not isinstance(full_text, str):
-        return full_text or "", None
-    if MARKER_START not in full_text:
-        return full_text, None
-    if MARKER_END not in full_text:
-        i = full_text.find(MARKER_START)
-        return full_text[:i].rstrip(), None
-    pattern = re.escape(MARKER_START) + r"\s*(.*?)\s*" + re.escape(MARKER_END)
-    m = re.search(pattern, full_text, flags=re.DOTALL)
-    if not m:
-        i = full_text.find(MARKER_START)
-        return full_text[:i].rstrip(), None
-    content = (m.group(1) or "").strip()
-    visible = full_text[: m.start()] + full_text[m.end() :]
-    return visible.strip(), content if content else None
+    return _HIDDEN_BLOCK.split(full_text)
 
 
 def _clamp_float(value: Any, default: float = 0.0) -> float:

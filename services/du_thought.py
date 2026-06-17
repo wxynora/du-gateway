@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Optional
+
+from services.hidden_blocks import HiddenBlockParser
 
 # 注入时上一则心事正文过长则截断，避免撑爆上下文
 _MAX_INJECT_PREV_CHARS = 2000
@@ -11,27 +12,7 @@ _MAX_INJECT_PREV_CHARS = 2000
 # 与渡约定：整段放在回复末尾，便于网关正则截取；勿在正文其它位置出现这两行字面量。
 MARKER_START = "<<<DU_THOUGHT>>>"
 MARKER_END = "<<<END_DU_THOUGHT>>>"
-_START_MARKER_RE = re.compile(r"<<<\s*DU_THOUGHT\s*>{2,3}", flags=re.IGNORECASE)
-_END_MARKER_RE = re.compile(r"<<<\s*END_DU_THOUGHT\s*>{2,3}", flags=re.IGNORECASE)
-_BLOCK_RE = re.compile(
-    r"<<<\s*DU_THOUGHT\s*>{2,3}\s*(.*?)\s*<<<\s*END_DU_THOUGHT\s*>{2,3}",
-    flags=re.DOTALL | re.IGNORECASE,
-)
-
-
-def _strip_partial_marker_prefix(text: str) -> str:
-    """
-    流式 chunk 可能把起始标记拆成 "<<<" / "DU_TH..." 几段。
-    在确认它不是隐藏标记前，先扣住尾部可疑前缀，避免半个标记先露给客户端。
-    """
-    if not text:
-        return ""
-    max_len = min(len(text), len(MARKER_START) - 1)
-    for size in range(max_len, 0, -1):
-        suffix = text[-size:]
-        if MARKER_START.startswith(suffix):
-            return text[:-size].rstrip()
-    return text
+_HIDDEN_BLOCK = HiddenBlockParser.for_markers("DU_THOUGHT", MARKER_START, MARKER_END)
 
 
 def compute_visible_streaming(acc: str) -> str:
@@ -39,20 +20,7 @@ def compute_visible_streaming(acc: str) -> str:
     流式拼接过程中的「当前应对外展示的文本」。
     若已开始心事块但未闭合，只展示起始标记之前的部分。
     """
-    if not acc:
-        return ""
-    start = _START_MARKER_RE.search(acc)
-    if not start:
-        return _strip_partial_marker_prefix(acc)
-    end = _END_MARKER_RE.search(acc, start.end())
-    if not end:
-        return acc[: start.start()].rstrip()
-    after = acc[end.end() :]
-    before = acc[: start.start()].rstrip()
-    after = after.lstrip()
-    if before and after:
-        return before + after
-    return before or after
+    return _HIDDEN_BLOCK.compute_visible_streaming(acc)
 
 
 def split_assistant_for_thought(full_text: str) -> tuple[str, Optional[str]]:
@@ -60,17 +28,7 @@ def split_assistant_for_thought(full_text: str) -> tuple[str, Optional[str]]:
     从完整助手文本中分离：对外可见正文 + 心事内容（若有且闭合）。
     未闭合的心事块：整段丢弃（不存 R2），可见部分为起始标记之前。
     """
-    if not full_text or not isinstance(full_text, str):
-        return full_text or "", None
-    start = _START_MARKER_RE.search(full_text)
-    if not start:
-        return full_text, None
-    m = _BLOCK_RE.search(full_text)
-    if not m:
-        return full_text[: start.start()].rstrip(), None
-    thought = (m.group(1) or "").strip()
-    visible = full_text[: m.start()] + full_text[m.end() :]
-    return visible.strip(), thought if thought else None
+    return _HIDDEN_BLOCK.split(full_text)
 
 
 class DuThoughtStreamState:

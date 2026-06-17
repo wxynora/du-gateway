@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import re
 from typing import Optional
+
+from services.hidden_blocks import HiddenBlockParser
 
 MARKER_START = "<<<DU_INTERACTION>>>"
 MARKER_END = "<<<END_DU_INTERACTION>>>"
+_HIDDEN_BLOCK = HiddenBlockParser.for_markers("DU_INTERACTION", MARKER_START, MARKER_END)
 
 
 def compute_visible_streaming(acc: str) -> str:
@@ -12,19 +14,7 @@ def compute_visible_streaming(acc: str) -> str:
     流式拼接过程中的「当前应对外展示的文本」。
     若已开始相处模式块但未闭合，只展示起始标记之前的部分。
     """
-    if not acc:
-        return ""
-    if MARKER_START not in acc:
-        return acc
-    i = acc.find(MARKER_START)
-    if MARKER_END not in acc:
-        return acc[:i].rstrip()
-    rest = acc[i + len(MARKER_START) :]
-    j = rest.find(MARKER_END)
-    if j < 0:
-        return acc[:i].rstrip()
-    after = rest[j + len(MARKER_END) :]
-    return acc[:i] + after
+    return _HIDDEN_BLOCK.compute_visible_streaming(acc)
 
 
 def split_assistant_for_interaction(full_text: str) -> tuple[str, Optional[str]]:
@@ -32,21 +22,7 @@ def split_assistant_for_interaction(full_text: str) -> tuple[str, Optional[str]]
     从完整助手文本中分离：对外可见正文 + 相处模式候选内容（若有且闭合）。
     未闭合块：整段丢弃（不存），可见部分为起始标记之前。
     """
-    if not full_text or not isinstance(full_text, str):
-        return full_text or "", None
-    if MARKER_START not in full_text:
-        return full_text, None
-    if MARKER_END not in full_text:
-        i = full_text.find(MARKER_START)
-        return full_text[:i].rstrip(), None
-    pattern = re.escape(MARKER_START) + r"\s*(.*?)\s*" + re.escape(MARKER_END)
-    m = re.search(pattern, full_text, flags=re.DOTALL)
-    if not m:
-        i = full_text.find(MARKER_START)
-        return full_text[:i].rstrip(), None
-    content = (m.group(1) or "").strip()
-    visible = full_text[: m.start()] + full_text[m.end() :]
-    return visible.strip(), content if content else None
+    return _HIDDEN_BLOCK.split(full_text)
 
 
 def format_inject_block() -> str:
