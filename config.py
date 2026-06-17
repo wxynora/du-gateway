@@ -80,12 +80,6 @@ OPENROUTER_ULTRA_THINK_PROMPT = os.environ.get(
     "ultra think. This request needs deep, careful adaptive reasoning. "
     "Think fully before answering, and when the provider allows it, return thinking summaries instead of omitting them.",
 ).strip()
-OPENROUTER_PROVIDER_ORDER = [
-    x.strip().lower()
-    for x in os.environ.get("OPENROUTER_PROVIDER_ORDER", "anthropic").split(",")
-    if x.strip()
-]
-OPENROUTER_ALLOW_FALLBACKS = os.environ.get("OPENROUTER_ALLOW_FALLBACKS", "0").strip().lower() in ("1", "true", "yes")
 OPENROUTER_CACHE_CONTROL_TYPE = os.environ.get("OPENROUTER_CACHE_CONTROL_TYPE", "ephemeral").strip().lower()
 
 

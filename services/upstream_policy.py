@@ -12,8 +12,6 @@ from config import (
     OPENROUTER_VERBOSITY,
     OPENROUTER_ULTRA_THINK_ENABLED,
     OPENROUTER_ULTRA_THINK_PROMPT,
-    OPENROUTER_PROVIDER_ORDER,
-    OPENROUTER_ALLOW_FALLBACKS,
     OPENROUTER_CACHE_CONTROL_TYPE,
     is_openrouter_url,
 )
@@ -231,11 +229,6 @@ def apply_openrouter_request_policy(body: dict, upstream_url: str) -> dict:
     body["reasoning"] = reasoning
     if OPENROUTER_VERBOSITY:
         body["verbosity"] = OPENROUTER_VERBOSITY
-    if OPENROUTER_PROVIDER_ORDER:
-        body["provider"] = {
-            "order": OPENROUTER_PROVIDER_ORDER,
-            "allow_fallbacks": OPENROUTER_ALLOW_FALLBACKS,
-        }
     if OPENROUTER_CACHE_CONTROL_TYPE:
         body["cache_control"] = {"type": OPENROUTER_CACHE_CONTROL_TYPE}
     if OPENROUTER_ULTRA_THINK_ENABLED and OPENROUTER_ULTRA_THINK_PROMPT:

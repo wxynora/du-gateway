@@ -6,9 +6,7 @@ import requests
 from flask import jsonify, request
 
 from config import (
-    OPENROUTER_ALLOW_FALLBACKS,
     OPENROUTER_CACHE_CONTROL_TYPE,
-    OPENROUTER_PROVIDER_ORDER,
     OPENROUTER_REASONING_MAX_TOKENS,
     OPENROUTER_VERBOSITY,
     is_openrouter_url,
@@ -260,11 +258,6 @@ def _probe_upstream_item(it: dict) -> dict:
             }
             if OPENROUTER_VERBOSITY:
                 body["verbosity"] = OPENROUTER_VERBOSITY
-            if OPENROUTER_PROVIDER_ORDER:
-                body["provider"] = {
-                    "order": OPENROUTER_PROVIDER_ORDER,
-                    "allow_fallbacks": OPENROUTER_ALLOW_FALLBACKS,
-                }
             if OPENROUTER_CACHE_CONTROL_TYPE:
                 body["cache_control"] = {"type": OPENROUTER_CACHE_CONTROL_TYPE}
         chat_url = url
