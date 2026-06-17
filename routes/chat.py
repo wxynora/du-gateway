@@ -24,6 +24,8 @@ from config import (
     QQ_PROACTIVE_PUSH_TOKEN,
     is_openrouter_url,
     openrouter_models_response,
+    is_siliconflow_url,
+    siliconflow_models_response,
 )
 from pipeline.pipeline import (
     step_clean_images_and_save_desc,
@@ -1352,6 +1354,10 @@ def list_models():
         if data:
             return jsonify(data), 200
         return jsonify({"error": "OPENROUTER_FIXED_MODEL 未配置"}), 502
+    if is_siliconflow_url(url):
+        data = siliconflow_models_response()
+        if data:
+            return jsonify(data), 200
     models_url = _chat_url_to_models_url(url)
     if not models_url:
         return jsonify({"error": "无法解析模型列表地址"}), 502
