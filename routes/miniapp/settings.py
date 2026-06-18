@@ -4,7 +4,7 @@ from pathlib import Path
 
 from flask import jsonify, request
 
-from storage import r2_store, silence_mode_store
+from storage import million_plan_mode_store, r2_store, silence_mode_store
 from utils.time_aware import now_beijing_iso
 
 
@@ -115,4 +115,20 @@ def register_routes(bp) -> None:
         else:
             enabled = bool(raw)
         state = silence_mode_store.set_enabled(enabled, updated_at=now_beijing_iso())
+        return jsonify({"ok": True, **state})
+
+    @bp.route("/million-plan-mode", methods=["GET"])
+    def miniapp_get_million_plan_mode():
+        state = million_plan_mode_store.get_state()
+        return jsonify({"ok": True, **state})
+
+    @bp.route("/million-plan-mode", methods=["PUT"])
+    def miniapp_put_million_plan_mode():
+        data = request.get_json(silent=True) or {}
+        raw = data.get("enabled")
+        if isinstance(raw, str):
+            enabled = raw.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            enabled = bool(raw)
+        state = million_plan_mode_store.set_enabled(enabled, updated_at=now_beijing_iso())
         return jsonify({"ok": True, **state})

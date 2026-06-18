@@ -66,7 +66,7 @@ from pipeline.pipeline import (
 )
 from pipeline.cleaner import build_round_cleaned_for_r2
 from pipeline.failed_response import get_assistant_content_text, is_failed_response
-from storage import r2_store, whitelist_store
+from storage import million_plan_mode_store, r2_store, whitelist_store
 from storage.music_bgm_state import get_active_music_bgm_context
 from storage.music_melody_store import get_music_melody_entry_by_id
 from services.music_lyrics import normalize_lyrics_payload
@@ -99,6 +99,7 @@ from services.chat_prompt_injections import (
     inject_channel_nsfw_system as _inject_channel_nsfw_system,
     inject_entry_style_system as _inject_entry_style_system,
     inject_followup_instruction as _inject_followup_instruction,
+    inject_million_plan_player_static_system as _inject_million_plan_player_static_system,
     inject_silence_mode_system as _inject_silence_mode_system,
     inject_voice_call_style_system as _inject_voice_call_style_system,
 )
@@ -238,6 +239,17 @@ def _xiaoai_speaker_from_request() -> str:
 
 def _reply_target() -> str:
     return str(request.headers.get("X-Reply-Target") or "").strip()
+
+
+def _inject_million_plan_prompt_if_enabled(body: dict) -> dict:
+    try:
+        if not million_plan_mode_store.is_enabled():
+            return body
+    except Exception as e:
+        logger.warning("million_plan_mode_check_failed error=%s", e)
+        return body
+    logger.info("million_plan_static_prompt_injected")
+    return _inject_million_plan_player_static_system(body)
 
 
 def _bearer_token_from_request() -> str:
@@ -1494,6 +1506,7 @@ def chat_completions():
         is_miniapp=_is_miniapp_request(),
         speaker=_xiaoai_speaker_from_request(),
     )
+    body = _inject_million_plan_prompt_if_enabled(body)
     body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
     if reply_channel != "xiaoai":
         body = _inject_followup_instruction(

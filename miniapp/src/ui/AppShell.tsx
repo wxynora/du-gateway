@@ -99,6 +99,7 @@ type SilenceModeResponse = {
   updated_at?: string;
   error?: string;
 };
+type MillionPlanModeResponse = SilenceModeResponse;
 type ChatScreenId = "du" | "group" | "wenyou" | null;
 type BackHandler = () => boolean;
 
@@ -136,6 +137,8 @@ export function AppShell({
   const callHubBackHandlerRef = useRef<BackHandler | null>(null);
   const [silenceModeEnabled, setSilenceModeEnabled] = useState(false);
   const [silenceModeSaving, setSilenceModeSaving] = useState(false);
+  const [millionPlanModeEnabled, setMillionPlanModeEnabled] = useState(false);
+  const [millionPlanModeSaving, setMillionPlanModeSaving] = useState(false);
   const [groupFreeChatEnabled, setGroupFreeChatEnabled] = useState(() => readStoredBoolean(GROUP_FREE_CHAT_MODE_STORAGE_KEY, true));
   const [sharedChatWindowId, setSharedChatWindowId] = useState("");
   const [dailyWhisper, setDailyWhisper] = useState("");
@@ -296,6 +299,11 @@ export function AppShell({
         if (!cancelled && j?.ok) setSilenceModeEnabled(!!j.enabled);
       })
       .catch(() => {});
+    void apiJson<MillionPlanModeResponse>("/miniapp-api/million-plan-mode")
+      .then((j) => {
+        if (!cancelled && j?.ok) setMillionPlanModeEnabled(!!j.enabled);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -425,6 +433,27 @@ export function AppShell({
       toast(`禁言模式设置失败：${e?.message || e}`);
     } finally {
       setSilenceModeSaving(false);
+    }
+  }
+
+  async function saveMillionPlanMode(next: boolean) {
+    const prev = millionPlanModeEnabled;
+    setMillionPlanModeEnabled(next);
+    setMillionPlanModeSaving(true);
+    try {
+      const j = await apiJson<MillionPlanModeResponse>("/miniapp-api/million-plan-mode", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "保存失败");
+      setMillionPlanModeEnabled(!!j.enabled);
+      toast(j.enabled ? "百万计划游戏模式已开启" : "百万计划游戏模式已关闭");
+    } catch (e: any) {
+      setMillionPlanModeEnabled(prev);
+      toast(`百万计划游戏模式设置失败：${e?.message || e}`);
+    } finally {
+      setMillionPlanModeSaving(false);
     }
   }
 
@@ -629,6 +658,13 @@ export function AppShell({
               label="自由聊模式"
               enabled={groupFreeChatEnabled}
               onToggle={saveGroupFreeChatMode}
+            />
+            <SwitchSettingRow
+              icon={<CodeIcon />}
+              label="百万计划游戏模式"
+              enabled={millionPlanModeEnabled}
+              disabled={millionPlanModeSaving}
+              onToggle={(v) => void saveMillionPlanMode(v)}
             />
             <ListRow icon={<FeatherIcon />} label="个性化" onClick={() => setShowPersonalization(true)} />
             <ListRow icon={<CpuIcon />} label="系统诊断" onClick={() => setShowDiagnostics(true)} />

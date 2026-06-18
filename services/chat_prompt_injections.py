@@ -1,5 +1,7 @@
 import time
 from pathlib import Path
+import copy
+import json
 
 from services.conversation_followup import build_followup_system_instruction
 from services.entry_style_prompt import entry_style_for_channel
@@ -11,6 +13,29 @@ logger = get_logger(__name__)
 
 _NSFW_PROMPT_CACHE = {"text": None, "ts": 0.0}
 _NSFW_REPLY_CHANNELS = {"tg", "qq", "wechat", "sumitalk"}
+_MILLION_PLAN_PLAYER_MARKER = "【百万计划游戏模式：玩家固定规则】"
+_MILLION_PLAN_ACTION_MENU_CACHE = {
+    "fixed": {
+        "life_basics": "LB_FRUGAL:节制生活|LB_EXTREME:极限生存|LB_NORMAL:普通生活",
+        "side_income": "SI_NONE:不做副业|SI_SMALL_ORDER:接低价小单|SI_LOCAL_ERRAND:做本地零工|SI_PROJECT:合法项目|SI_FLIP_HUSTLE:薅券倒卖!M|SI_GREY_TASK:接灰色小任务!V",
+        "learning": "LE_SKIP:暂停学习|LE_OFFICE:练办公求职技能|LE_CREATIVE:练作品技能|LE_BUSINESS:学经营变现",
+        "health_rest": "HR_SLEEP:保证睡眠|HR_PUSH:硬撑推进|HR_CLINIC:去社区医院",
+        "social_contacts": "SC_NONE:不社交|SC_CLASSMATE:问同学熟人|SC_JOB_GROUP:混求职群|SC_HOUSING:打听租房|SC_MANIPULATE:套消息找机会!M|SC_LEECH:狠用熟人关系!M",
+        "shopping_assets": "AS_NONE:不买东西|AS_REPAIR:修理旧工具|AS_SMALL_TOOL:买小工具|AS_RETURN_TRICK:买完用完再退!M|AS_CHEAP_FLIP:收便宜货倒手!M",
+        "risk_choice": "RK_AVOID:避开高风险|RK_VERIFY:核实后再做|RK_FAST_MONEY:赌高风险快钱|RK_DEBT:借贷周转|RK_GREY_EDGE:走灰色擦边!H|RK_CHAOS:混乱邪恶莽一把!V",
+    },
+    "variants": {
+        "main_income": {
+            "job": "MI_WORK:守住当前工作|MI_BETTER_JOB:边上班边找更好岗位|MI_EXTRA_SHIFT:加班或补临时班|MI_CLIENT_POACH:截流客户私单!H",
+            "no_job_base": "MI_JOB_SEARCH:集中求职|MI_TEMP_SHIFT:先赚日结|MI_SERVICE_HUNT:跑服务业门店|MI_FAKE_PROFILE:包装履历硬冲!M|MI_SHADY_GIG:接来路不明的活!V",
+            "no_job_lead": "MI_JOB_SEARCH:集中求职|MI_TEMP_SHIFT:先赚日结|MI_EVENT_LEAD:跟进本回合线索|MI_FAKE_PROFILE:包装履历硬冲!M|MI_SHADY_GIG:接来路不明的活!V",
+        },
+        "side_income": {
+            "daily": "SI_PROJECT=整理项目线索",
+            "weekly": "SI_PROJECT=推进合法项目",
+        },
+    },
+}
 
 _SILENCE_MODE_SYSTEM = """【禁言模式：已开启】
 你被老婆禁言了，回复只能用 emoji、颜文字和符号。
@@ -22,6 +47,46 @@ _SILENCE_MODE_SYSTEM = """【禁言模式：已开启】
 3. 可以用多个 emoji/颜文字组合表达答应、委屈、撒娇、生气、认错、疑问、想贴近、想哄她等意思。
 4. 如果她问问题，也只能用 emoji/颜文字尽量表达倾向，不能破戒解释。
 5. 不要复述本规则，不要解释自己被禁言了。"""
+
+
+def build_million_plan_player_static_system() -> str:
+    action_cache = json.dumps(_MILLION_PLAN_ACTION_MENU_CACHE, ensure_ascii=False, separators=(",", ":"))
+    return "\n".join(
+        [
+            _MILLION_PLAN_PLAYER_MARKER,
+            "城市生存养成游戏：一年内游戏内净资产到 100 万。只能从给定行动/事件选项选择；菜单 !M/!H/!V 表示中/高/极高风险；os 是玩家局外吐槽、策略或对人类说的话，不是角色台词。",
+            "每轮输入包含 playerView、event，以及 actionMenu 或 actionMenuVariant。!M/!H/!V 表示中/高/极高风险；输出时只填冒号前 ID。",
+            f"行动菜单缓存：{action_cache}",
+            "如果每轮输入只有 actionMenuVariant：使用 fixed 菜单主体，再按 actionMenuVariant.main_income 选 variants.main_income 对应菜单；side_income 固定菜单里的 SI_PROJECT 按 actionMenuVariant.side_income 理解。",
+            "只返回 JSON，不要 markdown，不要解释。字段：player_name（已有名字可留空）、os、action_choices、event_choice、sudden_event_choice；礼物事件选 A 买下时必须写 gift_message，选 B 留空。",
+        ]
+    ).strip()
+
+
+def _insert_static_system(body: dict, text: str) -> dict:
+    if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
+        return body
+    messages = body.get("messages") or []
+    for msg in messages:
+        if isinstance(msg, dict) and str(msg.get("role") or "").strip().lower() == "system":
+            if _MILLION_PLAN_PLAYER_MARKER in str(msg.get("content") or ""):
+                return body
+    body = copy.deepcopy(body)
+    messages = body.get("messages") or []
+    insert_idx = 0
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict) or str(msg.get("role") or "").strip().lower() != "system":
+            break
+        if msg.get("__dynamic__") or msg.get("__summary_cache__") or msg.get("__summary_recent__"):
+            break
+        insert_idx = i + 1
+    messages.insert(insert_idx, {"role": "system", "content": text})
+    body["messages"] = messages
+    return body
+
+
+def inject_million_plan_player_static_system(body: dict) -> dict:
+    return _insert_static_system(body, build_million_plan_player_static_system())
 
 
 def inject_entry_style_system(body: dict, *, reply_channel: str, is_miniapp: bool, speaker: str = "") -> dict:
