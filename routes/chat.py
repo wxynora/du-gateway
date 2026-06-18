@@ -1593,6 +1593,9 @@ def chat_completions():
 
                 return _stream_response(_million_plan_replay_stream())
             return jsonify(_million_plan_replay_response(archived_content, model=req_model)), 200
+        if _truthy_header("X-Million-Plan-Replay-Only"):
+            logger.info("million_plan_replay_pending window_id=%s turn_id=%s", window_id, million_plan_turn_id)
+            return jsonify({"million_plan_replay_pending": True, "turn_id": million_plan_turn_id}), 202
 
     if _is_suspected_rikkahub_phantom_one(body, window_id, headers):
         logger.warning("命中 RikkaHub 幽灵1保护：window_id=%s ua=%s", window_id, (headers.get("User-Agent") or "")[:80])
