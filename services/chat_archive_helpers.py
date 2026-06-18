@@ -664,7 +664,7 @@ def _compact_million_plan_player_result(source: dict, raw: str, user_payload: di
     return "\n".join(parts)
 
 
-def _compact_million_plan_assistant_for_archive(assistant_msg: dict, user_payload: dict) -> dict:
+def _compact_million_plan_assistant_for_archive(assistant_msg: dict, user_payload: dict, turn_id: str = "") -> dict:
     raw = _message_text_for_archive(assistant_msg)
     source = _first_json_object(raw)
     if source and (
@@ -675,13 +675,19 @@ def _compact_million_plan_assistant_for_archive(assistant_msg: dict, user_payloa
         or isinstance(source.get("result"), dict)
     ):
         _, content = _compact_million_plan_gm_result(source, raw)
-        return {"role": "assistant", "archive_label": "我", "content": content}
+        compacted = {"role": "assistant", "archive_label": "我", "content": content}
     else:
         content = _compact_million_plan_player_result(source, raw, user_payload)
-        return {"role": "assistant", "archive_label": "我", "content": content}
+        compacted = {"role": "assistant", "archive_label": "我", "content": content}
+    if turn_id:
+        compacted["million_plan_turn_id"] = turn_id
+        compacted["million_plan_raw_content"] = raw
+    return compacted
 
 
-def compact_million_plan_round_for_archive(user_msg: dict, assistant_msg: dict) -> tuple[dict, dict]:
+def compact_million_plan_round_for_archive(user_msg: dict, assistant_msg: dict, turn_id: str = "") -> tuple[dict, dict]:
     archive_user, user_payload = _compact_million_plan_user_for_archive(user_msg or {})
-    archive_assistant = _compact_million_plan_assistant_for_archive(assistant_msg or {}, user_payload or {})
+    if turn_id:
+        archive_user["million_plan_turn_id"] = turn_id
+    archive_assistant = _compact_million_plan_assistant_for_archive(assistant_msg or {}, user_payload or {}, turn_id=turn_id)
     return archive_user, archive_assistant

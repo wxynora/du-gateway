@@ -721,7 +721,11 @@ def _build_round_cleaned_for_archive(user_msg: dict, assistant_msg: dict, *, rep
     archive_user = _last_user_for_archive(user_msg, reply_target=reply_target, window_id=window_id)
     archive_assistant = assistant_msg
     if _is_million_plan_request():
-        archive_user, archive_assistant = _compact_million_plan_round_for_archive(user_msg, assistant_msg)
+        archive_user, archive_assistant = _compact_million_plan_round_for_archive(
+            user_msg,
+            assistant_msg,
+            turn_id=_million_plan_turn_id_from_request(),
+        )
     elif _is_proactive_decision_request():
         archive_user = _compact_gateway_reminder_for_archive(archive_user or user_msg)
         archive_assistant = _compact_proactive_decision_for_archive(assistant_msg)
@@ -752,6 +756,57 @@ def _is_gateway_wakeup_request() -> bool:
 
 def _skip_post_archive_dynamic_memory_request() -> bool:
     return _truthy_header("X-Skip-Post-Archive-Dynamic-Memory") or _is_million_plan_request()
+
+
+def _million_plan_turn_id_from_request() -> str:
+    raw = str(request.headers.get("X-Million-Plan-Turn-Id") or "").strip()
+    if not raw:
+        return ""
+    return re.sub(r"[^A-Za-z0-9_.:-]", "_", raw)[:160]
+
+
+def _million_plan_replay_response(content: str, *, model: str = "") -> dict:
+    now = int(time.time())
+    return {
+        "id": f"chatcmpl-million-plan-replay-{now}",
+        "object": "chat.completion",
+        "created": now,
+        "model": model or "million-plan-replay",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "million_plan_replay": True,
+    }
+
+
+def _million_plan_archived_content(window_id: str, turn_id: str) -> str:
+    if not turn_id:
+        return ""
+    try:
+        rounds = r2_store.get_conversation_rounds(window_id, last_n=24) or []
+    except Exception:
+        logger.warning("million_plan_replay_lookup_failed window_id=%s turn_id=%s", window_id, turn_id, exc_info=True)
+        return ""
+    for round_obj in reversed(rounds):
+        for msg in reversed((round_obj or {}).get("messages") or []):
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("million_plan_turn_id") or "") != turn_id:
+                continue
+            if str(msg.get("role") or "").strip().lower() != "assistant":
+                continue
+            raw = str(msg.get("million_plan_raw_content") or "").strip()
+            if raw:
+                return raw
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content
+    return ""
 
 
 def _should_archive_followup_generation_request() -> bool:
@@ -1520,6 +1575,24 @@ def chat_completions():
     def _sse_error(message: str):
         yield ("data: " + json.dumps({"error": message or "upstream error"}, ensure_ascii=False) + "\n\n").encode("utf-8")
         yield b"data: [DONE]\n\n"
+
+    million_plan_turn_id = _million_plan_turn_id_from_request() if _is_million_plan_request() else ""
+    if million_plan_turn_id:
+        archived_content = _million_plan_archived_content(window_id, million_plan_turn_id)
+        if archived_content:
+            logger.info(
+                "million_plan_replay_hit window_id=%s turn_id=%s chars=%s",
+                window_id,
+                million_plan_turn_id,
+                len(archived_content),
+            )
+            if body.get("stream"):
+                def _million_plan_replay_stream():
+                    yield _sse_delta_chunk_bytes(archived_content)
+                    yield b"data: [DONE]\n\n"
+
+                return _stream_response(_million_plan_replay_stream())
+            return jsonify(_million_plan_replay_response(archived_content, model=req_model)), 200
 
     if _is_suspected_rikkahub_phantom_one(body, window_id, headers):
         logger.warning("命中 RikkaHub 幽灵1保护：window_id=%s ua=%s", window_id, (headers.get("User-Agent") or "")[:80])
