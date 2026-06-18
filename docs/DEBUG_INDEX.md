@@ -49,9 +49,14 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 当前状态（2026-06-04 du_surf 随机冲浪工具）：
 - 已完成：新增 `services/du_surf.py` 和 `du_surf` 网关常驻工具；工具独立于 `web_search/read_url`，用于“随机话题抽取 + 轻量搜索 + 可聊卡片”的上网冲浪体验，不用于精确事实核验。
 - 已完成：兴趣组为 `ai_relationship`、`ai_tools`、`switch`、`humor`、`digital`、`cooking`；默认按北京时间时间段加权随机抽 topic，也支持显式传 `topic`，输出 `topic/query/group/time_period/cards/skipped/usage_note`。
-- 已完成：随机唤醒决策文案已把“上网冲浪找点可聊话题”列为可选动作；渡可以先调用 `du_surf` 看卡片，再决定 `send_message/no_contact/diary/other`，如果只是自己冲浪不打扰则填 `other` 或 `no_contact`。
+- 已完成：随机唤醒决策文案已把“上网冲浪找点可聊话题”列为可选动作；渡可以先调用 `du_surf` 看卡片，再决定 `send_message/no_contact/diary/surf/other`，如果只是自己冲浪不打扰则填 `surf`。
 - 已完成：配置项为 `DU_SURF_ENABLED`、`DU_SURF_TIMEOUT_SECONDS`、`DU_SURF_MAX_CARDS`、`DU_SURF_CACHE_TTL_SECONDS`；缺 `TAVILY_API_KEY` 时返回 `TAVILY_API_KEY_MISSING`，不会假装有内容。
 - 已验证：`.venv/bin/python -m py_compile config.py services/du_surf.py services/gateway_tools.py services/notion_tools.py services/telegram_proactive.py pipeline/pipeline.py routes/chat.py` 通过；离线 monkeypatch smoke 覆盖缺 key、正常卡片、硬噪音过滤、网关注入和 `execute_tool("du_surf")` 分发。
+
+当前状态（2026-06-18 随机唤醒 surf 动作落地）：
+- 已完成：`services/telegram_proactive.py` 的随机主动决策新增 `surf` 动作；提示词要求只想冲浪不外发时填 `action=surf`，不要只在 reason 里写“去冲浪”。`proactive_tick()` 解析到 `surf` 后会由后端实际执行一次 `du_surf`，再把 topic、卡片标题、摘要、正文片段和可聊点回喂给渡，让渡基于素材输出最终 `send_message/no_contact/diary/other` 决策；如果最终发消息，仍走既有主动投递链路，否则不打扰。
+- 已完成：`routes/chat.py::_compact_proactive_decision_for_archive()` 在压缩随机唤醒决策 JSON 时保留 `cache_debug`、`reasoning`、`reasoning_details`、`thinking_blocks` 和 `tool_calls` 等调试字段，避免随机唤醒轮次因为清洗存档而从 MiniApp 思维链页消失。
+- 未完成 / 下次继续：本轮只修随机主动决策和存档调试字段；没有改 `du_surf` 的话题池、Tavily 搜索实现、普通聊天工具注入、QQ/TG 入站消息或两个 proxy。
 
 当前状态（2026-06-11 R2 TTL 清理入口）：
 - 已完成：新增 `scripts/prune_r2_ttl.py` 作为统一 R2 清理入口，默认 dry-run；对话原文/思维链归档复用 `scripts/prune_r2_conversation_originals.py` 的月度规则（当前北京时间月份减 3 个月，例如 6 月清 3 月），不改变热路径存档逻辑。

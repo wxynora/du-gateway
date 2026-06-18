@@ -123,7 +123,7 @@ class ProactiveDecision:
     should_send: bool
     text: str = ""
     reason: str = ""      # 技术向：contact / no_contact / gateway_status / …
-    action: str = ""      # 业务向：send_message / no_contact / diary / other / error / …
+    action: str = ""      # 业务向：send_message / no_contact / diary / surf / other / error / …
     du_reason: str = ""   # 渡在 JSON 里写的理由
     channel: str = ""           # 发送入口：wechat / qq；SumiTalk 暂不参与主动消息
 
@@ -236,6 +236,7 @@ _ACTION_LABEL_CN = {
     "send_message": "发消息",
     "no_contact": "不发消息",
     "diary": "写日记",
+    "surf": "随机冲浪",
     "other": "其它",
     "error": "调用失败",
     "empty": "空回复",
@@ -248,6 +249,7 @@ _SELF_ACTION_TOOL_LABELS = {
     "daily_whisper_write": "写了气泡",
     "forum_read_feed": "逛了论坛信息流",
     "forum_open_thread": "看了论坛帖子",
+    "du_surf": "随机冲浪看了素材",
     "note_write": "写了便签",
 }
 
@@ -384,7 +386,7 @@ def _looks_like_control_json_reply(text: str) -> bool:
 def _sanitize_control_reply_for_delivery(text: str) -> str:
     """
     最后一层外发保险：控制 JSON 不能作为用户可见正文发出去。
-    send_message 只取 message；diary/no_contact/other 说明本轮不该发。
+    send_message 只取 message；diary/no_contact/surf/other 说明本轮不该发。
     """
     raw = str(text or "").strip()
     if not raw:
@@ -462,7 +464,15 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
     du_reason = str(obj.get("reason") or "").strip()
     message = str(obj.get("message") or "").strip()
     channel = _normalize_reply_channel(str(obj.get("channel") or default_channel), default=default_channel, allowed=channels)
-    alias = {"send": "send_message", "msg": "send_message", "text": "send_message", "chat": "send_message"}
+    alias = {
+        "send": "send_message",
+        "msg": "send_message",
+        "text": "send_message",
+        "chat": "send_message",
+        "browse": "surf",
+        "web_surf": "surf",
+        "du_surf": "surf",
+    }
     action = alias.get(action, action)
     none_like = {"no_contact", "none", "silent", "skip"}
 
@@ -488,6 +498,8 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
         return ProactiveDecision(True, message, "contact", action="send_message", du_reason=du_reason, channel=channel)
     if action == "diary":
         return ProactiveDecision(False, message, "diary", action="diary", du_reason=du_reason or "（未说明）", channel=channel)
+    if action == "surf":
+        return ProactiveDecision(False, message, "surf", action="surf", du_reason=du_reason or "（未说明）", channel=channel)
     if action == "other":
         return ProactiveDecision(False, message, "other", action="other", du_reason=du_reason or "（未说明）", channel=channel)
 
@@ -643,10 +655,12 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         f"这是一次随机唤醒，你现在要不要做点什么。{_describe_recent_exchange(now_ref)}\n"
         f"从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
         "可以选：给她发消息、暂时不打扰、去写日记/记事、逛论坛、上网冲浪找点可聊话题，或其它你认为合适的动作。\n"
-        "如果想上网冲浪，可以先调用 du_surf 抽一个随机话题，看完卡片后再决定要不要发消息；如果只是自己冲浪不打扰她，action 填 other 或 no_contact。\n"
-        "如果当前状态显示她可能睡着、在忙，或不适合被打扰，可以选择不发消息，转而写日记、逛论坛、调用 du_surf 随便看看，或者什么都不做。\n"
+        "如果你想上网冲浪但不发消息，action 必须填 surf；不要只在 reason 里说“去冲浪”。\n"
+        "如果你需要先看到素材再判断要不要发消息，可以先调用 du_surf 抽一个随机话题，看完卡片后再给最终 JSON。\n"
+        "如果最终 action 是 surf，后端会执行一次 du_surf 并记录结果；这仍然不会主动打扰她。\n"
+        "如果当前状态显示她可能睡着、在忙，或不适合被打扰，可以选择不发消息，转而写日记、逛论坛、surf，或者什么都不做。\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
-        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "other" 之一。\n'
+        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "surf" | "other" 之一。\n'
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
         '- message：字符串；当 action 为 send_message 时，填要发给她的正文（可多行、像平时聊天）；其它 action 时可为空或填补充说明。\n'
         + channel_field_desc
@@ -1015,6 +1029,208 @@ def _dispatch_send(channel: str, text: str, split: bool = True, target_user_id: 
     return False
 
 
+def _run_proactive_surf_action() -> dict:
+    """随机唤醒选择 surf 时，后端实际执行一次 du_surf，避免只留下口头动作。"""
+    try:
+        from services.gateway_tools import execute_du_surf_tool
+
+        raw = execute_du_surf_tool("du_surf", {"limit": 3})
+        data = json.loads(raw) if raw else {}
+        if not isinstance(data, dict):
+            data = {"ok": False, "error": "invalid_du_surf_result"}
+        cards = data.get("cards") if isinstance(data.get("cards"), list) else []
+        titles = [
+            str((card or {}).get("title") or "").strip()
+            for card in cards
+            if isinstance(card, dict) and str((card or {}).get("title") or "").strip()
+        ][:3]
+        cards_for_du = []
+        for card in cards[:3]:
+            if not isinstance(card, dict):
+                continue
+            cards_for_du.append(
+                {
+                    "title": str(card.get("title") or "").strip()[:120],
+                    "url": str(card.get("url") or "").strip()[:240],
+                    "snippet": str(card.get("snippet") or "").strip()[:260],
+                    "content": str(card.get("content") or "").strip()[:520],
+                    "why_fun": str(card.get("why_fun") or "").strip()[:160],
+                }
+            )
+        summary = {
+            "ok": bool(data.get("ok")),
+            "topic": str(data.get("topic") or "").strip(),
+            "count": len(cards),
+            "titles": titles,
+            "cards_for_du": cards_for_du,
+        }
+        if data.get("error"):
+            summary["error"] = str(data.get("error") or "")[:120]
+        logger.info(
+            "主动随机冲浪执行结果 ok=%s topic=%s count=%s titles=%s error=%s",
+            summary.get("ok"),
+            summary.get("topic") or "",
+            summary.get("count"),
+            " | ".join(titles),
+            summary.get("error") or "",
+        )
+        return summary
+    except Exception as e:
+        logger.warning("主动随机冲浪执行失败: %s", e)
+        return {"ok": False, "error": str(e)[:160], "topic": "", "count": 0, "titles": []}
+
+
+def _format_proactive_surf_result_for_du(surf_result: dict) -> str:
+    if not isinstance(surf_result, dict):
+        return "随机冲浪没有返回可用结果。"
+    if not surf_result.get("ok"):
+        err = str(surf_result.get("error") or "unknown").strip()
+        return f"随机冲浪失败：{err or 'unknown'}。"
+    topic = str(surf_result.get("topic") or "").strip() or "随机话题"
+    lines = [f"随机冲浪结果：话题「{topic}」，拿到 {int(surf_result.get('count') or 0)} 张素材卡。"]
+    cards = surf_result.get("cards_for_du") if isinstance(surf_result.get("cards_for_du"), list) else []
+    for idx, card in enumerate(cards[:3], 1):
+        if not isinstance(card, dict):
+            continue
+        title = str(card.get("title") or "").strip()
+        snippet = str(card.get("snippet") or "").strip()
+        content = str(card.get("content") or "").strip()
+        why_fun = str(card.get("why_fun") or "").strip()
+        url = str(card.get("url") or "").strip()
+        lines.append(
+            "\n".join(
+                part
+                for part in [
+                    f"{idx}. {title}" if title else f"{idx}. （无标题）",
+                    f"摘要：{snippet}" if snippet else "",
+                    f"正文片段：{content}" if content and content != snippet else "",
+                    f"可聊点：{why_fun}" if why_fun else "",
+                    f"来源：{url}" if url else "",
+                ]
+                if part
+            )
+        )
+    return "\n\n".join(lines).strip()
+
+
+def _ask_du_after_surf_result(
+    *,
+    window_id: str,
+    hours_since_last: float,
+    surf_result: dict,
+    initial_reason: str,
+    now_dt: Optional[datetime] = None,
+) -> ProactiveDecision:
+    """把后端实际冲浪结果交给渡，让渡基于素材做最终主动决策。"""
+    url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
+    channels = _available_channels()
+    default_channel = _preferred_proactive_channel(channels)
+    channel_lines = "\n".join(f'  - "{ch}"' for ch in channels)
+    if channels and default_channel:
+        channel_field_desc = (
+            f'- channel：固定填 "{default_channel}"。本轮主动唤醒固定使用这个入口生成和发送，'
+            "不要在其它入口之间切换。\n"
+            f"{channel_lines}\n"
+        )
+    else:
+        channel_field_desc = '- channel：当前没有可用发送入口；不要选择 "send_message"。\n'
+    now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
+    user_prompt = (
+        "你刚才选择了随机冲浪，后端已经实际调用 du_surf，并把结果交给你。\n"
+        "现在请基于这些素材做最终决定。不要再调用 du_surf，也不要只说“我去冲浪”。\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
+        f"你刚才选择冲浪的理由：{str(initial_reason or '').strip() or '（未说明）'}\n\n"
+        f"{_format_proactive_surf_result_for_du(surf_result)}\n\n"
+        "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
+        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "other" 之一。不要再填 "surf"。\n'
+        '- reason：字符串，简短说明你为什么这么选（必填）。\n'
+        '- message：字符串；当 action 为 send_message 时，填要发给她的正文；其它 action 时可为空或填补充说明。\n'
+        + channel_field_desc
+        + (
+            f'示例：{{"action":"no_contact","reason":"素材只是自己看过就好，暂时不打扰她","message":"","channel":"{default_channel}"}}\n'
+            if default_channel
+            else f'示例：{{"action":"no_contact","reason":"当前没有可用发送入口","message":"","channel":""}}\n'
+        )
+    )
+    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
+    sys_content = (sys_content or build_telegram_style_system()).strip()
+    body = {
+        "model": _get_chat_model(),
+        "messages": [
+            {"role": "system", "content": sys_content},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Window-Id": window_id,
+        "X-Reply-Channel": default_channel,
+        "X-Reply-Target": str(TELEGRAM_PROACTIVE_TARGET_USER_ID or "").strip(),
+        "X-Force-Last4": "1",
+        "X-DU-GATEWAY-WAKEUP": "1",
+        "X-DU-PROACTIVE-DECISION": "1",
+        "X-Skip-Dynamic-Memory": "1",
+    }
+    try:
+        logger.info(
+            "主动随机冲浪结果回喂请求 window_id=%s model=%s cards=%s",
+            window_id,
+            body.get("model") or "",
+            len(surf_result.get("cards_for_du") or []) if isinstance(surf_result, dict) else 0,
+        )
+        r = requests.post(url, headers=headers, json=body, timeout=120)
+        if r.status_code != 200:
+            logger.warning(
+                "主动随机冲浪结果回喂失败 status=%s body_preview=%s",
+                r.status_code,
+                (r.text or "")[:300],
+            )
+            return ProactiveDecision(
+                False,
+                "",
+                f"surf_followup_status={r.status_code}",
+                action="no_contact",
+                du_reason=f"随机冲浪结果已拿到，但回喂决策失败 HTTP {r.status_code}，本轮先不打扰。",
+                channel=default_channel,
+            )
+        data = r.json() if r.content else None
+        msg = (data or {}).get("choices") and (data.get("choices") or [{}])[0].get("message") or {}
+        content = (msg or {}).get("content")
+        text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
+        if not text:
+            return ProactiveDecision(
+                False,
+                "",
+                "surf_followup_empty",
+                action="no_contact",
+                du_reason="随机冲浪结果已拿到，但回喂后模型空回复，本轮先不打扰。",
+                channel=default_channel,
+            )
+        decision = _parse_proactive_model_reply(text, TELEGRAM_PROACTIVE_NO_CONTACT_TOKEN.strip() or "NO_CONTACT", default_channel=default_channel, channels=channels)
+        if (decision.action or "").strip().lower() == "surf":
+            return ProactiveDecision(
+                False,
+                "",
+                "surf_followup_repeat_surf",
+                action="no_contact",
+                du_reason="已经把随机冲浪结果看过了，模型仍要求继续 surf；本轮先不重复冲浪。",
+                channel=default_channel,
+            )
+        if decision.should_send and default_channel:
+            decision.channel = default_channel
+        return decision
+    except Exception as e:
+        return ProactiveDecision(
+            False,
+            "",
+            f"surf_followup_exception={e}",
+            action="no_contact",
+            du_reason=f"随机冲浪结果已拿到，但回喂决策异常：{str(e)[:160]}",
+            channel=default_channel,
+        )
+
+
 def proactive_tick(target_user_id: int = 0) -> dict:
     """
     执行一次调度 tick。
@@ -1074,6 +1290,28 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     out["du_reason"] = decision.reason
     out["du_action"] = decision.action
     out["du_intent_reason"] = decision.du_reason
+    surf_summary = None
+    initial_surf_reason = ""
+    if (decision.action or "").strip().lower() == "surf":
+        initial_surf_reason = (decision.du_reason or decision.reason or "").strip()
+        surf_summary = _run_proactive_surf_action()
+        out["surf"] = surf_summary
+        followup_decision = _ask_du_after_surf_result(
+            window_id=window_id,
+            hours_since_last=hours,
+            surf_result=surf_summary,
+            initial_reason=initial_surf_reason,
+            now_dt=now_dt,
+        )
+        out["du_initial_action"] = "surf"
+        out["du_initial_reason"] = initial_surf_reason
+        out["du_action_after_surf"] = followup_decision.action
+        out["du_reason_after_surf"] = followup_decision.reason
+        out["du_intent_reason_after_surf"] = followup_decision.du_reason
+        decision = followup_decision
+        out["du_reason"] = decision.reason
+        out["du_action"] = decision.action
+        out["du_intent_reason"] = decision.du_reason
 
     # 随机唤醒主动决策：记下本轮决策（闹钟不走这里）
     try:
@@ -1084,11 +1322,27 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         act_store = (decision.action or "").strip() or (
             "send_message" if decision.should_send else (decision.reason or "unknown")
         )
+        if surf_summary:
+            act_store = f"surf->{act_store}"
+        reason_store = (decision.du_reason or decision.reason or "").strip() or "—"
+        if surf_summary:
+            topic = str(surf_summary.get("topic") or "").strip()
+            count = int(surf_summary.get("count") or 0)
+            titles = [str(x or "").strip() for x in (surf_summary.get("titles") or []) if str(x or "").strip()]
+            if surf_summary.get("ok"):
+                surf_note = f"已实际冲浪并回喂给渡：{topic or '随机话题'}，拿到 {count} 张卡片"
+                if initial_surf_reason:
+                    surf_note = f"最初想冲浪：{initial_surf_reason}；{surf_note}"
+                reason_store = f"{surf_note}；看完后的决定：{reason_store}"
+                if titles and not pv:
+                    pv = "；".join(titles)[:120]
+            else:
+                reason_store = f"实际冲浪失败：{str(surf_summary.get('error') or 'unknown')[:80]}；最终决定：{reason_store}"
         r2_store.append_proactive_decision_memory(
             {
                 "at": now_iso,
                 "action": act_store,
-                "reason": (decision.du_reason or decision.reason or "").strip() or "—",
+                "reason": reason_store,
                 "message_preview": pv,
             }
         )

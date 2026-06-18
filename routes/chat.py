@@ -640,6 +640,7 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
         "send_message": "主动发消息",
         "no_contact": "暂时不打扰",
         "diary": "去写日记/记事",
+        "surf": "随机冲浪",
         "other": "先做其它动作",
     }.get(action, action or "记录判断")
     lines = [f"决策：{action_label}。"]
@@ -656,7 +657,20 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
 
     if len(lines) == 1 and raw:
         lines.append(_clip_archive_text(raw, 220))
-    return {"role": "assistant", "archive_label": "渡", "content": "\n".join(lines)}
+    compacted = {"role": "assistant", "archive_label": "渡", "content": "\n".join(lines)}
+    for key in (
+        "cache_debug",
+        "reasoning",
+        "reasoning_content",
+        "thinking",
+        "reasoning_details",
+        "reasoning_omitted",
+        "thinking_blocks",
+        "tool_calls",
+    ):
+        if key in assistant_msg:
+            compacted[key] = assistant_msg[key]
+    return compacted
 
 
 def _build_round_cleaned_for_archive(user_msg: dict, assistant_msg: dict, *, reply_target: str, window_id: str) -> list:
