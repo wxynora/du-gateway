@@ -104,6 +104,7 @@ from services.chat_prompt_injections import (
     inject_voice_call_style_system as _inject_voice_call_style_system,
 )
 from services.chat_archive_helpers import (
+    compact_million_plan_round_for_archive as _compact_million_plan_round_for_archive,
     compact_qq_group_context_for_archive as _compact_qq_group_context_for_archive,
     run_nonstream_post_archive_in_background as _run_nonstream_post_archive_in_background,
     strip_co_read_section_raw_text_for_archive as _strip_co_read_section_raw_text_for_archive,
@@ -241,15 +242,58 @@ def _reply_target() -> str:
     return str(request.headers.get("X-Reply-Target") or "").strip()
 
 
-def _inject_million_plan_prompt_if_enabled(body: dict) -> dict:
+def _truthy_header(name: str) -> bool:
+    return (request.headers.get(name) or "").strip().lower() in ("1", "true", "yes")
+
+
+def _is_million_plan_request() -> bool:
+    """百万计划是外部游戏流量，不参与动态记忆召回或动态层沉淀。"""
+    if _truthy_header("X-Million-Plan"):
+        return True
+    reply_target = _reply_target().lower().replace("_", "-")
+    if reply_target.startswith("million-plan"):
+        return True
+    window_id = str(request.headers.get("X-Window-Id") or "").strip().lower().replace("_", "-")
+    if window_id.startswith("million-plan"):
+        return True
+    referer = str(request.headers.get("Referer") or request.headers.get("Referrer") or "").lower()
+    return "/million-plan" in referer
+
+
+def _inject_million_plan_player_prompt_if_enabled(body: dict) -> dict:
     try:
         if not million_plan_mode_store.is_enabled():
             return body
     except Exception as e:
         logger.warning("million_plan_mode_check_failed error=%s", e)
         return body
-    logger.info("million_plan_static_prompt_injected")
+    logger.info("million_plan_player_static_prompt_injected")
     return _inject_million_plan_player_static_system(body)
+
+
+def _skip_dynamic_memory_request() -> bool:
+    return _truthy_header("X-Skip-Dynamic-Memory") or _is_gateway_wakeup_request() or _is_million_plan_request()
+
+
+def _tool_name(tool: dict) -> str:
+    if not isinstance(tool, dict):
+        return ""
+    fn = tool.get("function") or {}
+    return str(fn.get("name") or tool.get("name") or "").strip()
+
+
+def _strip_dynamic_memory_recall_tools(body: dict) -> dict:
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return body
+    filtered = [tool for tool in tools if _tool_name(tool) != "search_memory"]
+    if len(filtered) == len(tools):
+        return body
+    body = dict(body)
+    body["tools"] = filtered
+    if not filtered and body.get("tool_choice") == "auto":
+        body.pop("tool_choice", None)
+    return body
 
 
 def _bearer_token_from_request() -> str:
@@ -676,7 +720,9 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
 def _build_round_cleaned_for_archive(user_msg: dict, assistant_msg: dict, *, reply_target: str, window_id: str) -> list:
     archive_user = _last_user_for_archive(user_msg, reply_target=reply_target, window_id=window_id)
     archive_assistant = assistant_msg
-    if _is_proactive_decision_request():
+    if _is_million_plan_request():
+        archive_user, archive_assistant = _compact_million_plan_round_for_archive(user_msg, assistant_msg)
+    elif _is_proactive_decision_request():
         archive_user = _compact_gateway_reminder_for_archive(archive_user or user_msg)
         archive_assistant = _compact_proactive_decision_for_archive(assistant_msg)
     elif _is_gateway_wakeup_request():
@@ -705,7 +751,7 @@ def _is_gateway_wakeup_request() -> bool:
 
 
 def _skip_post_archive_dynamic_memory_request() -> bool:
-    return (request.headers.get("X-Skip-Post-Archive-Dynamic-Memory") or "").strip().lower() in ("1", "true", "yes")
+    return _truthy_header("X-Skip-Post-Archive-Dynamic-Memory") or _is_million_plan_request()
 
 
 def _should_archive_followup_generation_request() -> bool:
@@ -1520,7 +1566,7 @@ def chat_completions():
         is_miniapp=_is_miniapp_request(),
         speaker=_xiaoai_speaker_from_request(),
     )
-    body = _inject_million_plan_prompt_if_enabled(body)
+    body = _inject_million_plan_player_prompt_if_enabled(body)
     body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
     if reply_channel != "xiaoai":
         body = _inject_followup_instruction(
@@ -1533,10 +1579,7 @@ def chat_completions():
     slim_voice_call = (request.headers.get("X-Voice-Call-Slim") or "").strip().lower() in ("1", "true", "yes")
     if slim_voice_call:
         body = _inject_voice_call_style_system(body)
-    skip_dynamic_memory = (
-        (request.headers.get("X-Skip-Dynamic-Memory") or "").strip().lower() in ("1", "true", "yes")
-        or _is_gateway_wakeup_request()
-    )
+    skip_dynamic_memory = _skip_dynamic_memory_request()
     skip_post_archive_dynamic_memory = _skip_post_archive_dynamic_memory_request()
     du_daily_maintenance = _is_du_daily_maintenance_request()
     du_daily_trigger = build_du_daily_trigger(window_id, body, headers)
@@ -1573,6 +1616,8 @@ def chat_completions():
             body = step_inject_amap_mcp_tools(body)
             body = step_inject_websearch_tools(body)
             body = step_inject_html_preview_tool(body, request.headers.get("User-Agent") or "")
+        if skip_dynamic_memory:
+            body = _strip_dynamic_memory_recall_tools(body)
         body = step_inject_reference_note(body)
         body = step_inject_du_midterm_memory(body, window_id)
     body = _inject_music_bgm_context(body, reply_channel=reply_channel)
