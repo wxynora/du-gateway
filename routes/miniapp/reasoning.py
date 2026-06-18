@@ -435,7 +435,7 @@ def register_routes(bp) -> None:
                         cache_debug_items = _normalize_cache_debug_items(m.get("cache_debug"))
                     if (reasoning_text or cache_debug_items) and tool_calls_out:
                         break
-                if reasoning_text or cache_debug_items or tool_calls_out:
+                if selected_assistant_msg is not None:
                     output_stats = (
                         _build_output_stats(selected_assistant_msg, reasoning_full_text, cache_debug_items, reasoning_omitted)
                         if selected_assistant_msg

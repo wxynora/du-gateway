@@ -664,6 +664,28 @@ def _compact_million_plan_player_result(source: dict, raw: str, user_payload: di
     return "\n".join(parts)
 
 
+_MILLION_PLAN_ASSISTANT_SIDECAR_KEYS = (
+    "cache_debug",
+    "reasoning",
+    "reasoning_content",
+    "thinking",
+    "reasoning_details",
+    "reasoning_omitted",
+    "thinking_blocks",
+    "tool_calls",
+    "reasoning_source",
+    "official_reasoning_refused",
+    "official_reasoning_refusal_text",
+)
+
+
+def _copy_million_plan_assistant_sidecars(compacted: dict, assistant_msg: dict) -> dict:
+    for key in _MILLION_PLAN_ASSISTANT_SIDECAR_KEYS:
+        if key in assistant_msg:
+            compacted[key] = copy.deepcopy(assistant_msg[key])
+    return compacted
+
+
 def _compact_million_plan_assistant_for_archive(assistant_msg: dict, user_payload: dict, turn_id: str = "") -> dict:
     raw = _message_text_for_archive(assistant_msg)
     source = _first_json_object(raw)
@@ -682,7 +704,7 @@ def _compact_million_plan_assistant_for_archive(assistant_msg: dict, user_payloa
     if turn_id:
         compacted["million_plan_turn_id"] = turn_id
         compacted["million_plan_raw_content"] = raw
-    return compacted
+    return _copy_million_plan_assistant_sidecars(compacted, assistant_msg)
 
 
 def compact_million_plan_round_for_archive(user_msg: dict, assistant_msg: dict, turn_id: str = "") -> tuple[dict, dict]:
