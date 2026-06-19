@@ -2155,8 +2155,7 @@ export function MainChatScreen({
                       const hasText = Boolean(String(part.content || "").trim());
                       const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
                       const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
-                      const hasBubble = showText || audioAttachments.length > 0;
-                      const voiceOnly = audioAttachments.length > 0 && !showText;
+                      const hasVoice = audioAttachments.length > 0;
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -2166,21 +2165,28 @@ export function MainChatScreen({
                           className={`flex max-w-full flex-col items-end gap-1.5 ${isActiveSearchPart ? "rounded-[20px] ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
                         >
                           <ChatAttachmentBlock attachments={part.attachments} align="right" kinds={["image"]} />
-                          {hasBubble ? (
+                          {showText ? (
                             <ChatBubbleFrame
                               skin={bubbleSkin}
                               align="right"
-                              className={`block max-w-full rounded-[18px] text-left font-medium leading-[1.42] shadow-sm ${
-                                voiceOnly ? "px-2 py-[2px]" : "px-2.5 py-[5px]"
-                              } ${
+                              className={`block max-w-full rounded-[18px] px-2.5 py-[5px] text-left font-medium leading-[1.42] shadow-sm ${
                                 transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
                               }`}
                               style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                             >
-                              <div className={voiceOnly ? "" : "space-y-1.5"}>
-                                <ChatAttachmentBlock attachments={audioAttachments} align="right" />
-                                {showText ? <PlainTextBlock content={part.content} /> : null}
-                              </div>
+                              <PlainTextBlock content={part.content} />
+                            </ChatBubbleFrame>
+                          ) : null}
+                          {hasVoice ? (
+                            <ChatBubbleFrame
+                              skin={bubbleSkin}
+                              align="right"
+                              className={`block max-w-full rounded-[18px] px-2 py-[2px] text-left font-medium leading-[1.42] shadow-sm ${
+                                transparentBubbleEnabled ? TRANSPARENT_BUBBLE_CLASS : resolveBubbleClass("user", userBubbleStyle)
+                              }`}
+                              style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
+                            >
+                              <ChatAttachmentBlock attachments={audioAttachments} align="right" />
                             </ChatBubbleFrame>
                           ) : null}
                           <ChatVoiceTranscriptBlock
@@ -2219,8 +2225,7 @@ export function MainChatScreen({
                       const hasText = Boolean(String(part.content || "").trim());
                       const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
                       const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
-                      const hasBubble = showText || audioAttachments.length > 0;
-                      const voiceOnly = audioAttachments.length > 0 && !showText;
+                      const hasVoice = audioAttachments.length > 0;
                       return (
                         <div
                           key={`${group.id}-${index}`}
@@ -2281,12 +2286,10 @@ export function MainChatScreen({
                             />
                           ) : (
                             <>
-                              {hasBubble ? (
+                              {showText ? (
                                 <ChatBubbleFrame
                                   skin={bubbleSkin}
-                                  className={`inline-block w-fit max-w-full rounded-[18px] font-medium leading-[1.42] shadow-sm ${
-                                    voiceOnly ? "px-2 py-[2px]" : "px-2.5 py-[5px]"
-                                  } ${
+                                  className={`inline-block w-fit max-w-full rounded-[18px] px-2.5 py-[5px] font-medium leading-[1.42] shadow-sm ${
                                     transparentBubbleEnabled
                                       ? TRANSPARENT_BUBBLE_CLASS
                                       : group.role === "benben"
@@ -2295,18 +2298,28 @@ export function MainChatScreen({
                                   }`}
                                   style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
                                 >
-                                  <div className={voiceOnly ? "" : "space-y-1.5"}>
-                                    <ChatAttachmentBlock attachments={audioAttachments} align="left" />
-                                    {showText ? (
-                                      part.render === "html" ? (
-                                        <HtmlBlock content={part.content} />
-                                      ) : part.render === "plain" ? (
-                                        <PlainTextBlock content={part.content} />
-                                      ) : (
-                                        <RichTextBlock content={part.content} />
-                                      )
-                                    ) : null}
-                                  </div>
+                                  {part.render === "html" ? (
+                                    <HtmlBlock content={part.content} />
+                                  ) : part.render === "plain" ? (
+                                    <PlainTextBlock content={part.content} />
+                                  ) : (
+                                    <RichTextBlock content={part.content} />
+                                  )}
+                                </ChatBubbleFrame>
+                              ) : null}
+                              {hasVoice ? (
+                                <ChatBubbleFrame
+                                  skin={bubbleSkin}
+                                  className={`inline-block w-fit max-w-full rounded-[18px] px-2 py-[2px] font-medium leading-[1.42] shadow-sm ${
+                                    transparentBubbleEnabled
+                                      ? TRANSPARENT_BUBBLE_CLASS
+                                      : group.role === "benben"
+                                        ? "border border-amber-100 bg-[#FFF7E6] text-[#3F2A11]"
+                                        : resolveBubbleClass("assistant", assistantBubbleStyle)
+                                  }`}
+                                  style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
+                                >
+                                  <ChatAttachmentBlock attachments={audioAttachments} align="left" />
                                 </ChatBubbleFrame>
                               ) : null}
                               <ChatVoiceTranscriptBlock
@@ -2315,7 +2328,7 @@ export function MainChatScreen({
                                 openTranscriptId={openVoiceTranscriptId}
                                 onTranscriptToggle={toggleVoiceTranscript}
                               />
-                              {hasBubble || (group.role === "assistant" && part.status === "failed" && part.operationId) || (showTokenCount && (part.tokenCount?.input || part.tokenCount?.output)) ? (
+                              {showText || hasVoice || (group.role === "assistant" && part.status === "failed" && part.operationId) || (showTokenCount && (part.tokenCount?.input || part.tokenCount?.output)) ? (
                                 <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
                                   {part.content ? (
                                     <button
