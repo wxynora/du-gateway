@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -8,7 +9,7 @@ from uuid import uuid4
 
 from flask import current_app, jsonify, request
 
-from config import DATA_DIR
+from config import DATA_DIR, STREAM_TIMEOUT_SECONDS
 from services.upstream_policy import extract_upstream_error_detail
 from utils.time_aware import now_beijing_iso
 
@@ -19,6 +20,7 @@ _SUMITALK_CHAT_JOB_LOCK = threading.Lock()
 _SUMITALK_CHAT_JOB_EVENTS: dict[str, threading.Event] = {}
 _SUMITALK_CHAT_JOB_TTL_SECONDS = 30 * 60
 _SUMITALK_CHAT_DIRECT_WAIT_MS = 2500
+_SUMITALK_CHAT_JOB_STALE_SECONDS = max(60, int(STREAM_TIMEOUT_SECONDS or 300) + 60)
 
 
 def _get_panel_device_id() -> str:
@@ -159,8 +161,77 @@ def _sumitalk_chat_job_elapsed_ms(state: dict | None) -> int:
         return 0
 
 
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return True
+
+
+def _maybe_mark_sumitalk_chat_job_stale(job_id: str, state: dict | None = None) -> dict | None:
+    state = state if isinstance(state, dict) else _read_sumitalk_chat_job_state(job_id)
+    if not isinstance(state, dict):
+        return state
+    status = str(state.get("status") or "").strip().lower()
+    if status not in {"running", "queued", "pending"}:
+        return state
+
+    worker_pid = 0
+    try:
+        worker_pid = int(state.get("worker_pid") or 0)
+    except Exception:
+        worker_pid = 0
+    updated_ts = 0.0
+    try:
+        updated_ts = float(state.get("updated_ts") or state.get("created_ts") or 0)
+    except Exception:
+        updated_ts = 0.0
+
+    reason = ""
+    stage = "job_stale"
+    if worker_pid and not _pid_exists(worker_pid):
+        reason = f"任务所在 worker 已结束，请重发（pid={worker_pid}）"
+        stage = "worker_lost"
+    elif updated_ts and time.time() - updated_ts > _SUMITALK_CHAT_JOB_STALE_SECONDS:
+        reason = "任务长时间没有更新，请重发"
+    if not reason:
+        return state
+
+    elapsed_ms = _sumitalk_chat_job_elapsed_ms(state)
+    _patch_sumitalk_chat_job_state(
+        job_id,
+        {
+            "status": "error",
+            "status_code": 504,
+            "stage": stage,
+            "stage_elapsed_ms": elapsed_ms,
+            "stage_updated_at": now_beijing_iso(),
+            "error": reason,
+            "stale_detected_at": now_beijing_iso(),
+        },
+    )
+    _signal_sumitalk_chat_job(job_id)
+    sumitalk_logger.warning(
+        "[SumiTalk] chat_job_marked_stale job_id=%s status=%s stage=%s elapsed_ms=%s worker_pid=%s reason=%s",
+        job_id,
+        status,
+        stage,
+        elapsed_ms,
+        worker_pid,
+        reason,
+    )
+    return _read_sumitalk_chat_job_state(job_id)
+
+
 def _is_sumitalk_chat_job_cancelled(job_id: str) -> bool:
-    state = _read_sumitalk_chat_job_state(job_id) or {}
+    state = _maybe_mark_sumitalk_chat_job_stale(job_id) or {}
     return str(state.get("status") or "").strip().lower() == "cancelled"
 
 
@@ -216,7 +287,14 @@ def _extract_chat_completion_result(result) -> tuple[int, dict]:
 
 
 def _run_sumitalk_chat_job(app, job_id: str, chat_body: dict, headers: dict, remote_addr: str) -> None:
-    _patch_sumitalk_chat_job_state(job_id, {"status": "running"})
+    _patch_sumitalk_chat_job_state(
+        job_id,
+        {
+            "status": "running",
+            "worker_pid": os.getpid(),
+            "worker_started_at": now_beijing_iso(),
+        },
+    )
     _set_sumitalk_chat_job_stage(
         job_id,
         "worker_started",
@@ -306,6 +384,23 @@ def _start_sumitalk_chat_job_from_request(body: dict, waitable: bool = False):
     if not window_id:
         return "", None, (jsonify({"ok": False, "error": "缺少 window_id"}), 400)
     _cleanup_sumitalk_chat_jobs()
+    existing = _find_sumitalk_chat_job_by_client_request_id(client_request_id, window_id, reply_target)
+    if existing:
+        existing_job_id = str(existing.get("id") or "").strip()
+        existing = _maybe_mark_sumitalk_chat_job_stale(existing_job_id, existing) or existing
+        event = None
+        if waitable:
+            with _SUMITALK_CHAT_JOB_LOCK:
+                event = _SUMITALK_CHAT_JOB_EVENTS.get(existing_job_id)
+        sumitalk_logger.info(
+            "chat_job_reused job_id=%s client_request_id=%s window_id=%s target=%s status=%s",
+            existing_job_id,
+            client_request_id,
+            window_id,
+            reply_target,
+            str(existing.get("status") or ""),
+        )
+        return existing_job_id, event, None
     with _SUMITALK_CHAT_JOB_LOCK:
         existing = _find_sumitalk_chat_job_by_client_request_id(client_request_id, window_id, reply_target)
         if existing:
@@ -372,7 +467,8 @@ def _start_sumitalk_chat_job_from_request(body: dict, waitable: bool = False):
     threading.Thread(
         target=_run_sumitalk_chat_job,
         args=(app, job_id, chat_body, headers, remote_addr),
-        daemon=True,
+        name=f"sumitalk-chat-job-{job_id[:8]}",
+        daemon=False,
     ).start()
     sumitalk_logger.info(
         "[SumiTalk] chat_job_created job_id=%s window_id=%s target=%s messages=%s client_request_id=%s",
@@ -466,13 +562,24 @@ def register_routes(bp) -> None:
         job_id, _event, error_response = _start_sumitalk_chat_job_from_request(body, waitable=False)
         if error_response is not None:
             return error_response
-        return jsonify({"ok": True, "job_id": job_id, "status": "running"})
+        job = _maybe_mark_sumitalk_chat_job_stale(job_id) or {}
+        status = str(job.get("status") or "running").strip() or "running"
+        payload = {"ok": status != "error", "job_id": job_id, "status": status}
+        if status == "done":
+            payload["response"] = job.get("response") or {}
+            payload["status_code"] = int(job.get("status_code") or 200)
+        elif status == "error":
+            payload["error"] = str(job.get("error") or "渡回复失败")
+            payload["status_code"] = int(job.get("status_code") or 500)
+            payload["response"] = job.get("response") or {}
+        return jsonify(payload)
 
     @bp.route("/sumitalk-chat-jobs/<job_id>", methods=["GET"])
     def miniapp_sumitalk_chat_job_get(job_id: str):
         job = _read_sumitalk_chat_job_state(job_id)
         if not job:
             return jsonify({"ok": False, "error": "任务不存在或已过期"}), 404
+        job = _maybe_mark_sumitalk_chat_job_stale(job_id, job) or job
         public_job = {k: v for k, v in job.items() if k not in {"created_ts", "updated_ts"}}
         public_job["ok"] = public_job.get("status") != "error"
         return jsonify(public_job)

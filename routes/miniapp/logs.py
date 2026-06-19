@@ -15,6 +15,8 @@ _LOG_LINE_MAX_CHARS = 6000
 _CLIENT_LOG_FIELD_MAX_CHARS = 180
 _CLIENT_LOG_FIELD_MAX_COUNT = 24
 _CLIENT_LOG_SENSITIVE_RE = re.compile(r"(token|secret|key|authorization|password|cookie)", re.I)
+_CLIENT_LOG_DEDUPE_TTL_SECONDS = 30
+_CLIENT_LOG_DEDUPE: dict[str, float] = {}
 
 
 def _clip_log_line(line: str) -> str:
@@ -95,6 +97,32 @@ def _safe_client_log_fields(fields: dict) -> str:
     return " ".join(parts)
 
 
+def _should_skip_client_log(event: str, fields: dict) -> bool:
+    if event != "chat_job_status" or not isinstance(fields, dict):
+        return False
+    key_parts = [
+        event,
+        str(fields.get("operationId") or ""),
+        str(fields.get("clientRequestId") or ""),
+        str(fields.get("jobId") or ""),
+        str(fields.get("status") or ""),
+        str(fields.get("stage") or ""),
+        str(fields.get("statusCode") or ""),
+    ]
+    key = "|".join(key_parts)
+    now = time.time()
+    if len(_CLIENT_LOG_DEDUPE) > 512:
+        cutoff = now - _CLIENT_LOG_DEDUPE_TTL_SECONDS
+        for old_key, ts in list(_CLIENT_LOG_DEDUPE.items()):
+            if ts < cutoff:
+                _CLIENT_LOG_DEDUPE.pop(old_key, None)
+    last = _CLIENT_LOG_DEDUPE.get(key)
+    if last and now - last < _CLIENT_LOG_DEDUPE_TTL_SECONDS:
+        return True
+    _CLIENT_LOG_DEDUPE[key] = now
+    return False
+
+
 def register_routes(bp) -> None:
     @bp.route("/client-error", methods=["POST"])
     def miniapp_client_error():
@@ -127,7 +155,10 @@ def register_routes(bp) -> None:
         body = request.get_json(silent=True) or {}
         event = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(body.get("event") or "client_event").strip())[:80] or "client_event"
         level = str(body.get("level") or "info").strip().lower()
-        fields = _safe_client_log_fields(body.get("fields") or {})
+        raw_fields = body.get("fields") or {}
+        if _should_skip_client_log(event, raw_fields):
+            return jsonify({"ok": True, "deduped": True})
+        fields = _safe_client_log_fields(raw_fields)
         message = "[SumiTalk] client_event event=%s %s"
         if level in {"error", "err"}:
             sumitalk_logger.error(message, event, fields)

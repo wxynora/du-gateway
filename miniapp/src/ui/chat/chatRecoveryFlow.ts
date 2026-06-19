@@ -83,6 +83,18 @@ export async function recoverSumiTalkOperationFlow(args: {
     jobId,
     ...fields,
   });
+  let lastLoggedJobStatusKey = "";
+  const logJobStatus = (job: SumiTalkChatJobStatusResponse) => {
+    const statusKey = `${job.status || ""}:${job.stage || ""}:${job.status_code || 0}`;
+    if (statusKey === lastLoggedJobStatusKey) return;
+    lastLoggedJobStatusKey = statusKey;
+    args.logEvent?.("chat_job_status", logFields({
+      status: String(job.status || ""),
+      stage: String(job.stage || ""),
+      stageElapsedMs: Number(job.stage_elapsed_ms || 0),
+      statusCode: Number(job.status_code || 0),
+    }));
+  };
 
   try {
     if (!assistantId) throw new Error("缺少 pending 回复 ID");
@@ -133,14 +145,7 @@ export async function recoverSumiTalkOperationFlow(args: {
     if (jobId) {
       try {
         completedData = await waitForSumiTalkChatJob(jobId, {
-          onStatus: (job: SumiTalkChatJobStatusResponse) => {
-            args.logEvent?.("chat_job_status", logFields({
-              status: String(job.status || ""),
-              stage: String(job.stage || ""),
-              stageElapsedMs: Number(job.stage_elapsed_ms || 0),
-              statusCode: Number(job.status_code || 0),
-            }));
-          },
+          onStatus: logJobStatus,
         });
       } catch (e: any) {
         if (!isMissingJobError(e)) throw e;
@@ -156,14 +161,7 @@ export async function recoverSumiTalkOperationFlow(args: {
     }
 
     const data = completedData || (jobId ? await waitForSumiTalkChatJob(jobId, {
-      onStatus: (job: SumiTalkChatJobStatusResponse) => {
-        args.logEvent?.("chat_job_status", logFields({
-          status: String(job.status || ""),
-          stage: String(job.stage || ""),
-          stageElapsedMs: Number(job.stage_elapsed_ms || 0),
-          statusCode: Number(job.status_code || 0),
-        }));
-      },
+      onStatus: logJobStatus,
     }) : null);
     if (!data) throw new Error("任务没有返回内容");
     if (data?.error) {
