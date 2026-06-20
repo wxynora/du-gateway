@@ -2169,6 +2169,7 @@ def _build_sqlite_shadow_compare(
                     "content": str(item.get("content") or "")[:120],
                     "tag": str(item.get("tag") or ""),
                     "score": float(item.get("score") or 0.0),
+                    "high_signal_count": int(item.get("high_signal_count") or 0),
                     "reasons": item.get("reasons") or [],
                     "matched_terms": item.get("matched_terms") or [],
                     "in_actual": mid in actual_set,

@@ -761,6 +761,7 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 已完成：`storage/dynamic_memory_mirror_store.py::shadow_candidates()` 使用关键词表和 content/retrieval_text/tag 的轻量 LIKE 查候选 id；如果 mirror DB 不存在，返回 `mirror_db_missing`，不会在聊天热路径自动创建空库。
 - 已完成：`pipeline/pipeline.py::step_inject_dynamic_memory` 在 recall debug 事件中附加 `sqlite_shadow`，记录 SQLite 候选 id、真实注入 id、overlap/miss/stale 和候选命中词。真实召回仍由原来的 R2 + 向量 + BM25 决定；SQLite shadow 不进 prompt、不改 `lines`、不改 `citation_map`。
 - 已完成：`miniapp/src/ui/tabs/MemoryDebugTab.tsx` 的自动召回卡片显示 SQLite shadow 的 hit/miss/stale、query terms 和前 5 个候选；只用于排查关键词索引效果。
+- 已完成：shadow 候选质量优化：`tag/emotion_label/scene_type/target_type` 等低信号标签降权，`拒绝/不行/老婆说` 等泛词停用；候选至少需要高信号词命中或足够高综合分，避免只靠“拒绝”这类泛词捞出无关亲密记忆。
 - 未完成 / 下次继续：第四阶段仍未做。不要让 SQLite mirror 参与真实召回排序或注入；如果以后要试，只允许先返回 candidate id，再从同一份 R2 current snapshot 取正文。
 
 ## 核心 Prompt / 风格规则 / 禁言模式

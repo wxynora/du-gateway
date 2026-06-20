@@ -81,6 +81,10 @@ def test_mirror_sync_is_idempotent_and_rebuildable() -> None:
                 any(item.get("memory_id") == "mem_1" for item in shadow.get("candidates") or []),
                 "shadow candidates should include mem_1",
             )
+            tag_only = mirror.shadow_candidates("开发", keywords=["开发"], limit=5)
+            _assert(tag_only["candidate_count"] == 0, "tag-only low-signal query should not produce candidates")
+            generic = mirror.shadow_candidates("拒绝", keywords=["拒绝"], limit=5)
+            _assert(generic["candidate_count"] == 0, "generic stop term should not produce candidates")
 
             second = mirror.sync_memories(memories, terms_by_id=terms, source="test", dry_run=False)
             _assert(second["unchanged_count"] == 2, "second identical sync should be unchanged")

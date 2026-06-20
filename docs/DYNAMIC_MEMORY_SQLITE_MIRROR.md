@@ -95,6 +95,7 @@ MiniApp 入口在 `miniapp/src/ui/tabs/MemoryDebugTab.tsx` 的“动态记忆”
   - `candidates`：候选预览、分数、命中词。
 - 如果 mirror DB 不存在，shadow 不会自动创建空库，只记录 `mirror_db_missing`。
 - `DYNAMIC_MEMORY_MIRROR_SHADOW_ENABLED=0` 可关闭 shadow compare。
+- Shadow 过滤会把 `tag/emotion_label/scene_type/target_type` 这类低信号标签降权；`拒绝/不行/老婆说` 等泛词不作为候选依据；最终候选至少需要高信号词命中，或足够高的综合分。
 
 MiniApp 的自动召回卡片会显示 SQLite shadow 的 hit/miss/stale 和候选关键词。
 

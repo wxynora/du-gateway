@@ -26,6 +26,55 @@ _SCHEMA_READY = False
 _FTS_AVAILABLE = False
 _ASCII_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:/+-]{1,}")
 _CJK_CHUNK_RE = re.compile(r"[\u4e00-\u9fff]{2,18}")
+_LOW_SIGNAL_SOURCES = {"tag", "emotion_label", "scene_type", "target_type", "label"}
+_HIGH_SIGNAL_SOURCES = {"domain_phrase", "ascii_token"}
+_SHADOW_STOP_TERMS = {
+    "这个",
+    "那个",
+    "就是",
+    "然后",
+    "但是",
+    "所以",
+    "因为",
+    "如果",
+    "不是",
+    "什么",
+    "怎么",
+    "现在",
+    "时候",
+    "可以",
+    "一个",
+    "一下",
+    "没有",
+    "还是",
+    "应该",
+    "感觉",
+    "拒绝",
+    "不行",
+    "老婆说",
+    "老婆问",
+    "我说",
+    "她说",
+    "他说",
+    "问我",
+    "说我",
+}
+_SHORT_HIGH_SIGNAL_TERMS = {
+    "心率",
+    "文游",
+    "情绪",
+    "群聊",
+    "卧室",
+    "书房",
+    "r2",
+    "qq",
+    "tg",
+    "ds",
+    "os",
+    "cot",
+    "401",
+    "503",
+}
 
 
 def db_path() -> Path:
@@ -571,7 +620,7 @@ def _query_terms(query: str, keywords: list[str] | None) -> list[str]:
     def add(value: str) -> None:
         raw = str(value or "").strip()
         norm = normalize_term(raw)
-        if not norm or norm in seen or len(norm) < 2:
+        if not norm or norm in seen or len(norm) < 2 or norm in _SHADOW_STOP_TERMS:
             return
         seen.add(norm)
         out.append(raw)
@@ -585,6 +634,40 @@ def _query_terms(query: str, keywords: list[str] | None) -> list[str]:
     for chunk in _CJK_CHUNK_RE.findall(text):
         add(chunk)
     return out[:16]
+
+
+def _is_high_signal_term(term: str, source: str = "") -> bool:
+    norm = normalize_term(term)
+    if not norm or norm in _SHADOW_STOP_TERMS:
+        return False
+    source = str(source or "").strip()
+    if source in _LOW_SIGNAL_SOURCES:
+        return False
+    if source in _HIGH_SIGNAL_SOURCES:
+        return True
+    if norm in _SHORT_HIGH_SIGNAL_TERMS:
+        return True
+    if norm.isascii():
+        return len(norm) >= 3 and norm not in {"the", "and", "api", "app"}
+    return len(norm) >= 3
+
+
+def _term_score(source: str, term: str, row_weight: float) -> float:
+    source = str(source or "").strip()
+    weight = float(row_weight or 1.0)
+    if source == "domain_phrase":
+        return max(4.8, weight * 2.2)
+    if source == "ascii_token":
+        return max(2.6, weight * 1.8)
+    if source == "cjk_phrase":
+        return max(1.6, weight * (1.7 if _is_high_signal_term(term, source) else 0.7))
+    if source in _LOW_SIGNAL_SOURCES:
+        return 0.25
+    return max(0.8, weight)
+
+
+def _like_score(term: str) -> float:
+    return 1.25 if _is_high_signal_term(term) else 0.15
 
 
 def shadow_candidates(
@@ -612,7 +695,7 @@ def shadow_candidates(
 
     by_id: dict[str, dict[str, Any]] = {}
 
-    def remember(row: sqlite3.Row, score: float, reason: str, term: str) -> None:
+    def remember(row: sqlite3.Row, score: float, reason: str, term: str, *, high_signal: bool = False) -> None:
         item = by_id.setdefault(
             str(row["memory_id"] or ""),
             {
@@ -620,9 +703,12 @@ def shadow_candidates(
                 "score": 0.0,
                 "reasons": [],
                 "matched_terms": [],
+                "high_signal_count": 0,
             },
         )
         item["score"] = round(float(item.get("score") or 0.0) + float(score or 0.0), 4)
+        if high_signal:
+            item["high_signal_count"] = int(item.get("high_signal_count") or 0) + 1
         if reason not in item["reasons"]:
             item["reasons"].append(reason)
         if term and term not in item["matched_terms"]:
@@ -645,9 +731,22 @@ def shadow_candidates(
                 (norm, lim),
             ).fetchall()
             for row in rows:
-                remember(row, float(row["term_weight"] or 1.0) * 2.0, "term", str(row["matched_term"] or term))
+                matched_term = str(row["matched_term"] or term)
+                source = str(row["term_source"] or "")
+                score = _term_score(source, matched_term, float(row["term_weight"] or 1.0))
+                remember(
+                    row,
+                    score,
+                    f"term:{source or 'auto'}",
+                    matched_term,
+                    high_signal=_is_high_signal_term(matched_term, source),
+                )
 
             like = f"%{str(term).strip()}%"
+            like_signal = _is_high_signal_term(term)
+            like_score = _like_score(term)
+            if like_score <= 0:
+                continue
             rows = conn.execute(
                 """
                 SELECT *
@@ -660,12 +759,18 @@ def shadow_candidates(
                 (like, like, like, lim),
             ).fetchall()
             for row in rows:
-                remember(row, 1.0, "like", str(term))
+                remember(row, like_score, "like", str(term), high_signal=like_signal)
 
+    filtered = [
+        item
+        for item in by_id.values()
+        if int(item.get("high_signal_count") or 0) > 0 or float(item.get("score") or 0.0) >= 4.0
+    ]
     candidates = sorted(
-        by_id.values(),
+        filtered,
         key=lambda item: (
             -float(item.get("score") or 0.0),
+            -int(item.get("high_signal_count") or 0),
             -float(item.get("importance") or 0.0),
             -float(item.get("mention_count") or 0.0),
             str(item.get("last_mentioned") or ""),
@@ -675,6 +780,7 @@ def shadow_candidates(
         "ok": True,
         "query_terms": terms,
         "candidate_count": len(candidates),
+        "raw_candidate_count": len(by_id),
         "candidates": candidates,
     }
 

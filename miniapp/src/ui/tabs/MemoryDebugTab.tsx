@@ -18,6 +18,7 @@ type SQLiteShadowCandidate = {
   content?: string;
   tag?: string;
   score?: number;
+  high_signal_count?: number;
   reasons?: string[];
   matched_terms?: string[];
   in_actual?: boolean;
@@ -798,6 +799,7 @@ export function MemoryDebugTab() {
                                   </div>
                                   <div className="flex flex-wrap gap-1 text-[10px] text-gray-400">
                                     {c.tag ? <span className="rounded bg-white px-1.5 py-0.5">{c.tag}</span> : null}
+                                    {Number(c.high_signal_count || 0) > 0 ? <span className="rounded bg-white px-1.5 py-0.5">signal {String(c.high_signal_count)}</span> : null}
                                     {(c.matched_terms || []).slice(0, 4).map((term, ti) => (
                                       <span key={`${term}-${ti}`} className="rounded bg-white px-1.5 py-0.5">{term}</span>
                                     ))}
