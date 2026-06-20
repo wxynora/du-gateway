@@ -64,6 +64,17 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：Mac 本地已安装 LaunchAgent，但安装器是本机私有文件，不纳入仓库：`com.dugateway.r2-ttl.daily` 每天 04:35 只清 24h TTL（sense/history、summary_backups）；`com.dugateway.r2-ttl.monthly` 每月 1 日 04:55 清对话原文/思维链归档，避免每天扫全量 R2 归档。
 - 本地日志目录：`~/Library/Logs/du-gateway-r2-ttl/`，清单目录：`~/Library/Application Support/DuGatewayR2TTL/`。手动排查命令：`.venv/bin/python scripts/prune_r2_ttl.py --manifest debug-evidence/r2-ttl-dry-run.json` 先看清单；只想试 24h 两项可加 `--skip-conversations`。
 
+当前状态（2026-06-20 runtime SQLite 热路径）：
+- 已完成：新增 `storage/runtime_sqlite.py` 和 `config.RUNTIME_STATE_DB`（默认 `data/runtime_state.sqlite3`）；`storage/app_action_store.py` 的 app actions 队列改走 SQLite，保留每条动作的 `expiresAt`、lease/retry、idempotency key 过期和 history 100 条上限。R2 `sumitalk/app_actions.json` 只在本地库为空时尝试一次旧队列导入。
+- 已完成：`storage/sense_store.py` 的 sense latest/history 改走同一个 SQLite；latest 按 bucket 分行存储，history 按事件 `at + 24h` 写 `expires_at`，读写时清理过期记录，并继续保留单日最多 200 条。R2 `sense/latest.json` 和当天 `sense/history/YYYY-MM-DD.json` 只在本地库为空时尝试一次导入。
+- 已完成：`storage/conversation_sqlite_store.py` 作为 conversation compact 热镜像；`storage/r2_store.py` 的 `get_conversation_rounds()`、按 index 读取、预览列表和 append/overwrite/delete 同步 SQLite。`get_next_round_index()` 仍以 R2 compact/meta 为准并顺手回填 SQLite，避免热缓存落后时影响真实轮次编号。R2 单轮、recent、meta 和 `conversations/YYYY-MM-DD/` 日备份仍保留为原路径；SQLite 缺窗口时只从 compact recent + guard backup 导入，不回退旧整包 `conversation.json`。SQLite 每个窗口默认只保留最近 250 轮，可用 `CONVERSATION_SQLITE_MAX_ROUNDS_PER_WINDOW` 调整，只清热镜像不动 R2 存档。
+- 已完成：`storage/device_reporting_store.py` 作为非健康数据上报开关热层；`get_device_reporting_config()` 读 SQLite，保存/单 bucket 更新仍先写 R2 `global/device_reporting_config.json`，再同步 SQLite，外部 API 和上报判断不变。
+- 已完成：`storage/schedule_sqlite_store.py` 作为 schedule items / fired keys 的 SQLite 镜像；`storage/schedule_store.py` 的公开函数名和返回结构不变，读取和保存仍以 R2 `schedule/items.json` / `schedule/fired.json` 为主源，读写后同步 SQLite。`schedule/fired.json` 只保留可解析时间戳最近 48h 的去重 key，识别不了时间的旧格式保留，避免误删；未改闹钟文案、repeat 规则、trigger 判断、app action payload 或任何唤醒语义。
+- 已完成：`storage/conversation_followup_store.py` 作为延迟续话队列镜像；`storage/r2_store.py` 的 `get/save/append_conversation_followups()` 仍读取/保存原 R2 item JSON 列表，SQLite 只按 `status/trigger_at/thread_key` 建索引并保留 position 顺序。未改 followup 文案、是否外发、内部 followup 含义、tick 决策或 3 天完成态清理逻辑；`append_conversation_followup()` 保持锁内读改写。
+- 已完成：`storage/runtime_sqlite.py::clear_all_tables()` 接入 `storage/wipe_local.py::wipe_local_data()`；admin 一键清空 R2 后会同步清 runtime SQLite 镜像表，避免旧镜像被后续读取或回写。
+- 已验证：`.venv/bin/python -m py_compile storage/runtime_sqlite.py storage/conversation_sqlite_store.py storage/device_reporting_store.py storage/schedule_sqlite_store.py storage/conversation_followup_store.py storage/schedule_store.py storage/r2_store.py routes/miniapp/device_state.py`、`git diff --check -- storage/runtime_sqlite.py storage/conversation_sqlite_store.py storage/device_reporting_store.py storage/schedule_sqlite_store.py storage/conversation_followup_store.py storage/schedule_store.py storage/r2_store.py` 通过；临时 `RUNTIME_STATE_DB` smoke 覆盖 conversation 导入/next index/追加/删除/窗口裁剪、r2_store SQLite 读路径、device reporting 导入/保存/单项更新、schedule items/fired keys 镜像、conversation followup 队列顺序与覆盖保存。
+- 未完成 / 下次继续：本轮不迁移 summary、动态记忆、QQ group activity 等其它 R2 key；不改唤醒/调度文案、不改前端展示、不改既有 MiniApp Android SQLite 聊天存储。
+
 ## 主动唤醒入口风格抖动
 
 现象：
@@ -191,7 +202,7 @@ rg -n "upstreams|probe|models|Access-Control-Allow-Methods" routes/miniapp_api.p
 
 入口：
 - 前端：`miniapp/src/ui/tabs/ReasoningTab.tsx`
-- 后端：`routes/miniapp_api.py::miniapp_reasoning_latest`
+- 后端：`routes/miniapp/reasoning.py::miniapp_reasoning_latest`
 - 收集：`routes/chat.py` reasoning/cache_debug 相关逻辑
 - 存储：R2 conversation rounds，`storage/r2_store.py`
 
@@ -489,7 +500,7 @@ rg -n "TGHook|TGQueue|TGWorker|TGBot|webhook 已落持久队列|queue worker 消
 - 触发后思维链没有记录
 
 入口：
-- 设备动作完成：`routes/miniapp_api.py::_wake_du_for_device_action_results`
+- 设备动作完成：`routes/miniapp/device_actions.py::_wake_du_for_device_action_results`
 - 唤醒发送：`services/conversation_followup.py::_send_wakeup_event`
 - 主动触发：`services/proactive_trigger_engine.py`
 - 调度入口：`services/telegram_proactive.py::schedule_tick`
@@ -536,12 +547,18 @@ rg -n "device-state|device-screenshots|screen_check|sense|foreground-app|usage-s
 - 已完成：设置页「上报管理」只管理非健康数据，当前数据卡按类别展示电量、屏幕、前台应用、位置和使用统计；每个类别有独立上报开关，配置存到 R2 `global/device_reporting_config.json`，后端 `/miniapp-api/device-state/reporting/config` 负责保存，`/device-state/*` 各上报入口按类别决定是否入库。关掉某类时接口返回 `skipped`，不再刷新该类最新快照。
 - 兼容旧包：前端不再用 `SumiOverlay.setSenseReportingConfig()` 做总开关；当前安装包没有 `requestSenseReportingSnapshot()` 时，只提示“不支持立刻采集”并刷新服务器已有状态，不再把 `not implemented on android` 当作开关保存失败弹出。
 - 验证：本轮已跑 `py_compile routes/miniapp/device_state.py storage/r2_store.py`、`miniapp` 的 `tsc --noEmit`、`npm run build`，并确认 `miniapp_static/assets/ReportingManagementScreen-*.js` 包含 `/device-state/reporting/config`。
-- APK：使用 Android Studio/JBR 打包，`versionCode=6` / `versionName=1.1.4`；下载包已按原固定入口覆盖为 `/miniapp/assets/app-debug.apk`，不要保留或新增 `latest`、commit 后缀 APK。
+- APK：当前 Android 版本以 `miniapp/android/app/build.gradle` 为准（现为 `versionCode=12` / `versionName=1.1.10`）；下载包仍按原固定入口覆盖为 `/miniapp/assets/app-debug.apk`，不要保留或新增 `latest`、commit 后缀 APK。
 
 当前状态（2026-05-28 SumiTalk Android 壳能力核对）：
 - 已有 / 不要误判为未落地：`miniapp/android/` 已是 Capacitor Android 工程；`miniapp/src/plugins/sumi-overlay.ts` 与 `miniapp/android/app/src/main/java/com/sumitalk/app/OverlayControlPlugin.java` 提供原生桥；`FloatingBallService.java` 处理设备动作轮询、`show_system_notification`、系统闹钟动作、通知栏提醒和悬浮服务；`MainActivity.java` 会上报 usage stats；`SumiAccessibilityService.java` 会上报 `foreground-app` 并支持无障碍截图；后端入口在 `routes/miniapp/device_state.py` 和 `services/device_action_tools.py`。
 - 未闭环 / 按需再做：FCM/ntfy 真推送没有完整接入；`miniapp/android/app/build.gradle` 只在存在 `google-services.json` 时应用 Google Services 插件，未看到 `FirebaseMessagingService` 或前端 PushNotifications 注册链路。开机自启也未见 `BOOT_COMPLETED` receiver。当前系统闹钟走 Android `AlarmClock.ACTION_SET_ALARM`，不是 app 自己用 `AlarmManager.setExact` 做的本地业务闹钟。
 - 旧长文 `docs/SumiTalk-Android封装方案.md` 里仍有“后续优先级/边界”段落，盘点真实状态时优先看本索引和代码，不要只按旧方案文档判断。
+
+当前状态（2026-06-11 Android 常驻通知叫渡入口删除）：
+- 已删除：常驻通知里的「叫渡」action、`FloatingBallService.buildOpenVoiceWakeIntent()` 和 `MainActivity.ACTION_OPEN_VOICE_WAKE` 分支；`DuVoiceWakeNotification.java` 这个未跟踪孤儿类也已删除。
+- 保留：渡来电 / 语音通话邀请仍走 `ACTION_OPEN_VOICE_CALL` 和 `EXTRA_VOICE_CALL_INVITE_JSON`；本轮不改通话通知、不改 TTS/STT、不改聊天语音附件。
+- 已打包：`miniapp/android/app/build.gradle` 已升到 `versionCode=12` / `versionName=1.1.10`；使用 Android Studio JBR 跑 `JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home ./gradlew :app:assembleDebug`。固定取包位置是 Gradle 输出 `miniapp/android/app/build/outputs/apk/debug/app-debug.apk`，不要再复制到 `miniapp_static/assets/` 当线上下载入口。
+- 已验证：`rg "叫渡|voice_wake|VOICE_WAKE|ACTION_OPEN_VOICE_WAKE|buildOpenVoiceWakeIntent|DuVoiceWakeNotification|persistent_notification|lockscreen_voice_wake" miniapp/android/app/src/main/java/com/sumitalk/app miniapp/src` 无运行时代码命中；`aapt dump badging miniapp/android/app/build/outputs/apk/debug/app-debug.apk` 确认 `versionCode=12` / `versionName=1.1.10`。
 
 当前状态（2026-06-12 App 页面缩放锁定）：
 - 已完成：`miniapp/index.html` 的 viewport 增加 `minimum-scale=1`、`maximum-scale=1`、`user-scalable=no`；`miniapp/android/app/src/main/java/com/sumitalk/app/MainActivity.java` 在 WebView 初始化时关闭 `setSupportZoom`、内置缩放控件和显示缩放控件，并固定 `textZoom=100`。
@@ -590,7 +607,7 @@ rg -n "image|image_url|图片|desc|last4|step_clean_images" pipeline routes mini
 入口：
 - `routes/chat.py::_collect_tool_trace_from_messages`
 - `services/device_action_tools.py`
-- 思维链面板：`routes/miniapp_api.py::miniapp_reasoning_latest`
+- 思维链面板：`routes/miniapp/reasoning.py::miniapp_reasoning_latest`
 
 常查：
 
@@ -738,7 +755,7 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 入口：
 - 核心 prompt：`routes/miniapp_api.py` 的 `/core-prompt`
 - 核心行为注入：`pipeline/pipeline.py::step_inject_core_behavior_rules`
-- SumiTalk 风格：`routes/chat.py::_inject_miniapp_style_system`
+- SumiTalk 风格：`services/chat_prompt_injections.py::inject_entry_style_system` 调用 `services/entry_style_prompt.py::build_sumitalk_style_system`
 - TG 风格：`services/telegram_bot.py::build_telegram_style_system`
 - 禁言模式：`storage/silence_mode_store.py`、`routes/chat.py::_inject_silence_mode_system`
 
@@ -1629,7 +1646,7 @@ npm -C miniapp run android
 - 已完成：`routes/miniapp/device_state.py` 新增 `GET /miniapp-api/device-state/reporting` 和 `/reporting/config`；只返回当前 panel 设备的 `battery/screen/foreground/location/usage`，过滤健康数据和无设备号旧记录。上报开关已从旧“总开关”改为按电量、屏幕、前台应用、位置、使用统计分别保存，R2 配置为 `global/device_reporting_config.json`。
 - 已完成：Android `SumiOverlay` 插件已有 `getSenseReportingStatus`、`setSenseReportingConfig`、`requestSenseReportingSnapshot`；前端不再依赖 `setSenseReportingConfig` 保存上报开关，旧 APK 缺 native 方法时也会兜底刷新服务器状态。
 - 已验证：干净 worktree 基于最新 `origin/main` 摘本轮改动，`.venv/bin/python -m py_compile routes/miniapp/device_state.py storage/r2_store.py`、`./node_modules/.bin/tsc --noEmit`、`npm run build`、`git diff --check` 通过；已重建并提交 `miniapp_static`，静态产物包含 `ReportingManagementScreen-*.js` 和 `/device-state/reporting/config`。
-- 已打包：Android 版本号已升到 `versionCode=6` / `versionName=1.1.4`；打包统一通过 Android Studio，实际验证使用 Android Studio 自带 JBR (`/Applications/Android Studio.app/Contents/jbr/Contents/Home`) 跑 `JAVA_HOME=... sh ./gradlew :app:assembleDebug`，`compileDebugJavaWithJavac` 和 `assembleDebug` 均通过。APK 下载包已覆盖原入口 `/miniapp/assets/app-debug.apk`，不再保留 `latest`、commit 后缀或版本号后缀 APK。
+- 已打包：当前 Android 版本以 `miniapp/android/app/build.gradle` 为准（现为 `versionCode=12` / `versionName=1.1.10`）。打包统一通过 Android Studio，实际验证使用 Android Studio 自带 JBR (`/Applications/Android Studio.app/Contents/jbr/Contents/Home`) 跑 `JAVA_HOME=... sh ./gradlew :app:assembleDebug`。APK 下载包固定覆盖原入口 `/miniapp/assets/app-debug.apk`，不再保留 `latest`、commit 后缀或版本号后缀 APK。
 
 当前状态（2026-06-03 Telegram md/txt 文档附件）：
 - 已完成：`services/telegram_bot.py` 新增 Telegram `document` 分支；当私聊发来 `.md` / `.markdown` / `.txt` 或 `text/markdown` / `text/plain` 附件时，Bot 通过 Telegram `getFile` 下载原文，按 UTF-8 文本直接放入输入聚合缓冲，并保留文件名和 caption，不解析 Markdown、不转 HTML。
@@ -1679,3 +1696,20 @@ npm -C miniapp run android
 - 已完成：语音附件有 `transcript` 时，右侧小圆点可点击展开/收起转文字内容；用户语音使用 STT transcript，渡的 `<voice>...</voice>` TTS 附件使用已有 `voiceText` transcript，不重新调用识别。
 - 已验证：`npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过；`npm -C miniapp run build` 通过并重建 `miniapp_static`；`npm -C miniapp run cap:copy` 已同步 Android web assets（该目录被 gitignore），最终又恢复普通 Web build 静态包。
 - 未完成 / 下次继续：本轮只改聊天内语音附件展示，不改录音上传、TTS 生成、语音识别服务或历史数据结构。
+
+当前状态（2026-06-16 MiniApp 存钱打卡）：
+- 已完成：MiniApp「日常」页新增「存钱打卡」入口，页面为 `miniapp/src/ui/tabs/BudgetCheckInTab.tsx`，通过 localStorage 本地记录三年还款计划、每月打卡、实际存下、是否新增花呗、备注、绩效后还爸妈金额和备用金。
+- 已完成：计划按辛玥当前口径写死在前端：6-8 月到手 2000，9 月后 1900；固定支出按 170 + 机动 100 + 油费（6-8 月 200，之后 100）；花呗前五个月递减后按 300/月；第一年还爸妈 5000，第二年 20000，第三年 23000；第一年备用金目标 3000，后两年 5000；二手收入不计入计划。
+- 已完成：`miniapp/src/ui/AppShell.tsx` 接入懒加载面板并使用「存钱打卡」标题；`npm run build` 已重建 `miniapp_static`，静态产物包含 `BudgetCheckInTab-*.js`。
+- 未完成 / 下次继续：本轮没有做后端同步、云备份、提醒推送或 Android 原生通知；记录只保存在当前 WebView/浏览器本地存储。提交时只挑 `BudgetCheckInTab.tsx`、`AppShell.tsx`、`miniapp_static` 本轮构建产物和本索引段，别混入当前工作区其它脏改。
+
+当前状态（2026-06-17 AI 城市生存养成小游戏方案）：
+- 已完成：新增方案文档 `docs/ai-city-survival-game-plan.md`，记录独立可分享移动网页小游戏方向：AI 作为玩家操控虚构角色，从 5000 元启动资金开始，在现实向偏惨的 H 市一年内尝试赚到 100 万；前期无稳定收入按日推进，获得稳定现金流后按周推进，危机期可回到日推进。
+- 已完成：方案明确第一版只做单玩家普通移动网页，不做 PWA、原生 App、MCP server、真人联机或多玩家；玩家 AI 和 GM AI 均由用户配置连接器，前端规则引擎作为金钱与状态事实源。
+- 已完成：方案收束了产品边界：UI 使用「角色面板 / 城市动态 / 本日计划 / 本周计划」等游戏化命名，不把内部注入结构叫成玩家可见的“游戏卡片”；帮助说明只做表层操作说明，不写成攻略或隐藏公式。
+- 已更新：HTML 页面定位从“人类操作角色”改为“人类观战 AI 玩游戏”；人类每回合可选择候选事件、手写事件或无事件，默认点“下一回合”才推进，设置里可连续推进 N 回合；单回合生成要按 AI 行动、GM 结果、规则落账和面板刷新分阶段更新，不做一整串后台循环后一次性刷新。
+- 已更新：补充“自由度设计”原则，并修正为“固定分类计划 + 分类内容自由”：AI 玩家每回合必须按日/周计划分类输出，分类里的职业、赚钱方式和应对策略可以自由；系统通过行动标签、技能、状态、风险和兜底规则结算，未知职业/未知安排不应报错，也不能变成无成本许愿成功。
+- 已更新：补充 H 市成本锚点，物价按上海类一线城市高成本参考；租房结算要考虑房租/押金、通勤远近、交通费、环境、安全、室友/房东/中介风险，以及对健康、疲劳、压力和机会响应的影响。
+- 已更新：补充“现实参照原则”，明确能参考现实的物价、薪资、求职、租房、通勤、医疗、债务、合同、平台、小生意和诈骗/灰色风险都优先用现实锚点做规则与事件平衡，后续实现时数据应可配置更新。
+- 已更新：补充“不含 UI 的功能框架”，拆出 `GameRuntime`、`TurnOrchestrator`、AI 连接器、固定计划 schema、规则引擎、事件系统、经济/住房/技能/风险模型、流水、日志、存档和进度事件；单回合链路明确按人类事件 -> 玩家 AI 计划 -> GM 建议 -> 规则落账 -> 分阶段进度更新推进。
+- 未完成 / 下次继续：这只是方案文档，未创建独立仓库、未写前端代码、未接 AI 连接器、未实现规则引擎或事件池；当前工作区仍有大量既有 MiniApp/静态产物脏改，本轮不要混入。

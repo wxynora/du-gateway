@@ -4,11 +4,13 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 from uuid import uuid4
 
+from storage import schedule_sqlite_store
 from utils.log import get_logger
 from utils.time_aware import BEIJING_TZ, now_beijing_iso
 
 R2_KEY_SCHEDULE_ITEMS = "schedule/items.json"
 R2_KEY_SCHEDULE_FIRED = "schedule/fired.json"
+SCHEDULE_FIRED_RETENTION_HOURS = 48
 
 _schedule_write_lock = threading.Lock()
 
@@ -33,8 +35,39 @@ def _write_json(client, key: str, data: Any):
     return _r2_store()._write_json(client, key, data)
 
 
-def get_schedule_items() -> list[dict]:
-    """读取日历/提醒条目列表。"""
+def _parse_fired_key_at(occurrence_key: str) -> Optional[datetime]:
+    raw = str(occurrence_key or "").strip()
+    if not raw:
+        return None
+    stamp = raw.rsplit("|", 1)[-1].strip()
+    if not stamp:
+        return None
+    try:
+        if len(stamp) == 10 and stamp[4] == "-" and stamp[7] == "-":
+            return datetime.strptime(stamp, "%Y-%m-%d").replace(tzinfo=BEIJING_TZ)
+        dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BEIJING_TZ)
+        return dt.astimezone(BEIJING_TZ)
+    except Exception:
+        return None
+
+
+def _prune_schedule_fired_keys(keys: set[str]) -> set[str]:
+    now = datetime.now(BEIJING_TZ)
+    cutoff = now - timedelta(hours=SCHEDULE_FIRED_RETENTION_HOURS)
+    out: set[str] = set()
+    for key in keys or set():
+        clean = str(key or "").strip()
+        if not clean:
+            continue
+        fired_at = _parse_fired_key_at(clean)
+        if fired_at is None or fired_at >= cutoff:
+            out.add(clean)
+    return out
+
+
+def _read_schedule_items_from_r2() -> list[dict]:
     client = _s3_client()
     if not client:
         return []
@@ -53,6 +86,13 @@ def get_schedule_items() -> list[dict]:
     return out
 
 
+def get_schedule_items() -> list[dict]:
+    """读取日历/提醒条目列表。"""
+    items = _read_schedule_items_from_r2()
+    schedule_sqlite_store.replace_items(items)
+    return items
+
+
 def save_schedule_items(items: list[dict]) -> bool:
     """保存日历/提醒条目列表（覆盖）。"""
     client = _s3_client()
@@ -62,6 +102,7 @@ def save_schedule_items(items: list[dict]) -> bool:
     with _schedule_write_lock:
         try:
             _write_json(client, R2_KEY_SCHEDULE_ITEMS, payload)
+            schedule_sqlite_store.replace_items(payload["items"])
             return True
         except Exception as e:
             logger.error("save_schedule_items 失败 error=%s", e, exc_info=True)
@@ -236,8 +277,7 @@ def delete_schedule_item(item_id: str) -> bool:
     return save_schedule_items(new_items)
 
 
-def get_schedule_fired_keys() -> set[str]:
-    """读取已触发 occurrence_key 集合。"""
+def _read_schedule_fired_keys_from_r2() -> set[str]:
     client = _s3_client()
     if not client:
         return set()
@@ -255,6 +295,26 @@ def get_schedule_fired_keys() -> set[str]:
     return out
 
 
+def get_schedule_fired_keys() -> set[str]:
+    """读取已触发 occurrence_key 集合。"""
+    raw_keys = _read_schedule_fired_keys_from_r2()
+    keys = _prune_schedule_fired_keys(raw_keys)
+    if keys != raw_keys:
+        client = _s3_client()
+        if client:
+            payload = {
+                "keys": sorted(keys),
+                "updated_at": now_beijing_iso(),
+            }
+            with _schedule_write_lock:
+                try:
+                    _write_json(client, R2_KEY_SCHEDULE_FIRED, payload)
+                except Exception as e:
+                    logger.warning("schedule fired keys TTL 回写失败 error=%s", e)
+    schedule_sqlite_store.replace_fired_keys(keys)
+    return keys
+
+
 def add_schedule_fired_key(occurrence_key: str) -> bool:
     """写入一条已触发 occurrence_key（幂等）。"""
     k = (occurrence_key or "").strip()
@@ -264,6 +324,7 @@ def add_schedule_fired_key(occurrence_key: str) -> bool:
     if k in keys:
         return True
     keys.add(k)
+    keys = _prune_schedule_fired_keys(keys)
     payload = {
         "keys": sorted(keys),
         "updated_at": now_beijing_iso(),
@@ -274,6 +335,7 @@ def add_schedule_fired_key(occurrence_key: str) -> bool:
     with _schedule_write_lock:
         try:
             _write_json(client, R2_KEY_SCHEDULE_FIRED, payload)
+            schedule_sqlite_store.add_fired_key(k)
             return True
         except Exception as e:
             logger.error("add_schedule_fired_key 失败 key=%s error=%s", k, e, exc_info=True)

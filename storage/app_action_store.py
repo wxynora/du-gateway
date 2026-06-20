@@ -1,10 +1,11 @@
-"""R2 storage helpers for SumiTalk native app actions."""
+"""SQLite storage helpers for SumiTalk native app actions."""
 import re
 import threading
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 from uuid import uuid4
 
+from storage import runtime_sqlite
 from utils.log import get_logger
 from utils.time_aware import BEIJING_TZ
 
@@ -27,6 +28,8 @@ _APP_ACTION_MAX_RETRY = 3
 _APP_ACTION_VOICE_TAG_RE = re.compile(r"</?voice>", flags=re.IGNORECASE)
 
 _app_action_write_lock = threading.Lock()
+_app_action_bootstrap_lock = threading.Lock()
+_APP_ACTION_BOOTSTRAPPED = False
 
 logger = get_logger(__name__)
 
@@ -112,6 +115,162 @@ def _trim_app_action_history(history: list) -> list:
     rows = [x for x in (history or []) if isinstance(x, dict)]
     rows.sort(key=lambda x: str(x.get("finishedAt") or x.get("createdAt") or ""), reverse=True)
     return rows[:_APP_ACTION_HISTORY_MAX]
+
+
+def _json_dict(raw: str | None) -> dict:
+    data = runtime_sqlite.json_loads(raw, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _row_to_app_action(row) -> dict:
+    status = str(row["status"] or "pending").strip() or "pending"
+    item = {
+        "id": str(row["id"] or ""),
+        "type": str(row["type"] or ""),
+        "payload": _json_dict(row["payload_json"]),
+        "deviceId": str(row["device_id"] or ""),
+        "source": str(row["source"] or "tool"),
+        "createdAt": str(row["created_at"] or ""),
+        "expiresAt": str(row["expires_at"] or ""),
+        "leasedUntil": str(row["leased_until"] or ""),
+        "leasedAt": str(row["leased_at"] or ""),
+        "leasedByDeviceId": str(row["leased_by_device_id"] or ""),
+        "retryCount": int(row["retry_count"] or 0),
+    }
+    if status != "pending":
+        item["status"] = status
+        item["finishedAt"] = str(row["finished_at"] or "")
+        item["result"] = _json_dict(row["result_json"])
+        item["error"] = str(row["error"] or "")
+    return item
+
+
+def _insert_app_action_row(conn, item: dict, status: str = "pending", *, ignore: bool = False) -> None:
+    verb = "INSERT OR IGNORE" if ignore else "INSERT"
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    conn.execute(
+        f"""
+        {verb} INTO app_actions (
+            id, type, payload_json, device_id, source, created_at, expires_at,
+            leased_until, leased_at, leased_by_device_id, retry_count,
+            status, finished_at, result_json, error
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(item.get("id") or ""),
+            str(item.get("type") or ""),
+            runtime_sqlite.json_dumps(payload),
+            str(item.get("deviceId") or ""),
+            str(item.get("source") or "tool").strip()[:40] or "tool",
+            str(item.get("createdAt") or ""),
+            str(item.get("expiresAt") or ""),
+            str(item.get("leasedUntil") or ""),
+            str(item.get("leasedAt") or ""),
+            str(item.get("leasedByDeviceId") or ""),
+            int(item.get("retryCount") or 0),
+            str(status or "pending").strip() or "pending",
+            str(item.get("finishedAt") or ""),
+            runtime_sqlite.json_dumps(result),
+            str(item.get("error") or ""),
+        ),
+    )
+
+
+def _prune_app_action_state(conn, now_iso: str) -> None:
+    conn.execute("DELETE FROM app_action_idempotency WHERE expires_at <= ?", (now_iso,))
+    conn.execute(
+        """
+        DELETE FROM app_actions
+        WHERE status <> 'pending'
+          AND id NOT IN (
+            SELECT id
+            FROM app_actions
+            WHERE status <> 'pending'
+            ORDER BY COALESCE(NULLIF(finished_at, ''), created_at) DESC
+            LIMIT ?
+          )
+        """,
+        (_APP_ACTION_HISTORY_MAX,),
+    )
+
+
+def _import_r2_app_action_queue(data: dict) -> None:
+    if not isinstance(data, dict):
+        return
+    now_iso = _utc_now_iso()
+    with runtime_sqlite.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for item in data.get("pending") or []:
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get("id") or "").strip()
+                action_type = str(item.get("type") or "").strip()
+                if not item_id or not action_type:
+                    continue
+                _insert_app_action_row(conn, item, "pending", ignore=True)
+            for item in _trim_app_action_history(data.get("history") or []):
+                item_id = str(item.get("id") or "").strip()
+                action_type = str(item.get("type") or "").strip()
+                if not item_id or not action_type:
+                    continue
+                status = str(item.get("status") or "done").strip() or "done"
+                if status == "pending":
+                    status = "done"
+                _insert_app_action_row(conn, item, status, ignore=True)
+            idem_keys = data.get("idempotencyKeys") if isinstance(data.get("idempotencyKeys"), dict) else {}
+            for key, value in idem_keys.items():
+                if not isinstance(value, dict):
+                    continue
+                idem = str(key or "").strip()
+                action_id = str(value.get("id") or "").strip()
+                expires_at = str(value.get("expiresAt") or "").strip()
+                exp = _parse_utc_iso(expires_at)
+                if not idem or not action_id or not exp or exp <= datetime.now(timezone.utc):
+                    continue
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO app_action_idempotency
+                        (idem_key, action_id, expires_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (idem, action_id, expires_at),
+                )
+            _prune_app_action_state(conn, now_iso)
+            conn.execute("COMMIT")
+            logger.info("app_action_sqlite_bootstrap imported_from_r2=True")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def _ensure_app_actions_bootstrapped() -> None:
+    global _APP_ACTION_BOOTSTRAPPED
+    if _APP_ACTION_BOOTSTRAPPED:
+        return
+    with _app_action_bootstrap_lock:
+        if _APP_ACTION_BOOTSTRAPPED:
+            return
+        try:
+            with runtime_sqlite.connect() as conn:
+                row = conn.execute("SELECT 1 FROM app_actions LIMIT 1").fetchone()
+                idem = conn.execute("SELECT 1 FROM app_action_idempotency LIMIT 1").fetchone()
+                if row is not None or idem is not None:
+                    _APP_ACTION_BOOTSTRAPPED = True
+                    return
+        except Exception as e:
+            logger.warning("app_action_sqlite_bootstrap check failed error=%s", e)
+            return
+
+        client = _s3_client()
+        if client:
+            try:
+                _import_r2_app_action_queue(_app_action_queue_raw(client))
+            except Exception as e:
+                logger.warning("app_action_sqlite_bootstrap import r2 failed error=%s", e)
+        _APP_ACTION_BOOTSTRAPPED = True
 
 
 def _parse_app_action_datetime(value) -> Optional[datetime]:
@@ -411,10 +570,6 @@ def append_app_action(
     except Exception:
         ttl = _APP_ACTION_EXPIRES_DEFAULT
     ttl = max(_APP_ACTION_EXPIRES_MIN, min(_APP_ACTION_EXPIRES_MAX, ttl))
-    client = _s3_client()
-    if not client:
-        return None, "R2 不可用"
-
     now = datetime.now(timezone.utc)
     now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     expires_at = (now + timedelta(seconds=ttl)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -432,37 +587,53 @@ def append_app_action(
         "leasedByDeviceId": "",
         "retryCount": 0,
     }
+    _ensure_app_actions_bootstrapped()
     with _app_action_write_lock:
         try:
-            data = _app_action_queue_raw(client)
-            idem_keys = data.get("idempotencyKeys") or {}
-            if isinstance(idem_keys, dict):
-                idem_keys = {
-                    k: v for k, v in idem_keys.items()
-                    if isinstance(v, dict) and _parse_utc_iso(str(v.get("expiresAt") or "")) and _parse_utc_iso(str(v.get("expiresAt") or "")) > now
-                }
-                data["idempotencyKeys"] = idem_keys
-            if idem and isinstance(idem_keys, dict):
-                existing_id = str((idem_keys.get(idem) or {}).get("id") or "").strip()
-                if existing_id:
-                    for old in data.get("pending") or []:
-                        if isinstance(old, dict) and str(old.get("id") or "") == existing_id:
+            with runtime_sqlite.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    _prune_app_action_state(conn, now_iso)
+                    if idem:
+                        row = conn.execute(
+                            """
+                            SELECT a.*
+                            FROM app_action_idempotency AS i
+                            JOIN app_actions AS a ON a.id = i.action_id
+                            WHERE i.idem_key = ?
+                              AND i.expires_at > ?
+                              AND a.status = 'pending'
+                            LIMIT 1
+                            """,
+                            (idem, now_iso),
+                        ).fetchone()
+                        if row is not None:
+                            old = _row_to_app_action(row)
                             logger.info(
                                 "app_action_enqueue_duplicate type=%s id=%s target_device=%s source=%s expires_at=%s",
                                 action,
-                                existing_id,
-                                str(old.get("deviceId") or ""),
+                                old["id"],
+                                old["deviceId"],
                                 item["source"],
-                                str(old.get("expiresAt") or ""),
+                                old["expiresAt"],
                             )
+                            conn.execute("COMMIT")
                             return {**old, "duplicate": True}, None
-            pending = data.get("pending") if isinstance(data.get("pending"), list) else []
-            pending.append(item)
-            data["pending"] = pending
-            if idem:
-                idem_keys[idem] = {"id": item["id"], "expiresAt": expires_at}
-                data["idempotencyKeys"] = idem_keys
-            _write_json(client, R2_KEY_APP_ACTION_QUEUE, data)
+                        conn.execute("DELETE FROM app_action_idempotency WHERE idem_key=?", (idem,))
+                    _insert_app_action_row(conn, item, "pending")
+                    if idem:
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO app_action_idempotency
+                                (idem_key, action_id, expires_at)
+                            VALUES (?, ?, ?)
+                            """,
+                            (idem, item["id"], expires_at),
+                        )
+                    conn.execute("COMMIT")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
             logger.info(
                 "app_action_enqueued id=%s type=%s target_device=%s source=%s ttl=%s expires_at=%s payload=%s",
                 item["id"],
@@ -483,9 +654,6 @@ def append_app_action(
 def poll_app_actions(device_id: str = "", limit: int = 10) -> dict:
     """安卓壳轮询待执行 app 原生命令。"""
     device = str(device_id or "").strip()
-    client = _s3_client()
-    if not client:
-        return {"ok": False, "actions": [], "pollAfterSec": 20, "error": "R2 不可用"}
     try:
         max_items = max(1, min(20, int(limit or 10)))
     except Exception:
@@ -494,90 +662,117 @@ def poll_app_actions(device_id: str = "", limit: int = 10) -> dict:
     lease_until = (now + timedelta(seconds=_APP_ACTION_LEASE_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    _ensure_app_actions_bootstrapped()
     with _app_action_write_lock:
         try:
-            data = _app_action_queue_raw(client)
-            pending = data.get("pending") if isinstance(data.get("pending"), list) else []
-            history = data.get("history") if isinstance(data.get("history"), list) else []
             out = []
-            next_pending = []
-            changed = False
-            for item in pending:
-                if not isinstance(item, dict):
-                    changed = True
-                    continue
-                exp = _parse_utc_iso(str(item.get("expiresAt") or ""))
-                if exp and exp <= now:
-                    logger.info(
-                        "app_action_expired id=%s type=%s target_device=%s leased_by=%s retry=%s expires_at=%s",
-                        str(item.get("id") or ""),
-                        str(item.get("type") or ""),
-                        str(item.get("deviceId") or ""),
-                        str(item.get("leasedByDeviceId") or ""),
-                        int(item.get("retryCount") or 0),
-                        str(item.get("expiresAt") or ""),
-                    )
-                    history.append({**item, "status": "expired", "finishedAt": now_iso})
-                    changed = True
-                    continue
-                target_device = str(item.get("deviceId") or "").strip()
-                if target_device and device and target_device != device:
-                    next_pending.append(item)
-                    continue
-                leased = _parse_utc_iso(str(item.get("leasedUntil") or ""))
-                if leased and leased > now:
-                    next_pending.append(item)
-                    continue
-                retry_count = int(item.get("retryCount") or 0)
-                if leased and leased <= now:
-                    retry_count += 1
-                    item["retryCount"] = retry_count
-                    changed = True
-                    logger.info(
-                        "app_action_lease_retry id=%s type=%s device_id=%s previous_leased_by=%s retry=%s previous_leased_until=%s",
-                        str(item.get("id") or ""),
-                        str(item.get("type") or ""),
-                        device,
-                        str(item.get("leasedByDeviceId") or ""),
-                        retry_count,
-                        str(item.get("leasedUntil") or ""),
-                    )
-                if retry_count >= _APP_ACTION_MAX_RETRY:
-                    logger.warning(
-                        "app_action_abandoned id=%s type=%s device_id=%s target_device=%s leased_by=%s retry=%s payload=%s",
-                        str(item.get("id") or ""),
-                        str(item.get("type") or ""),
-                        device,
-                        str(item.get("deviceId") or ""),
-                        str(item.get("leasedByDeviceId") or ""),
-                        retry_count,
-                        _payload_log_summary(item.get("payload")),
-                    )
-                    history.append({**item, "status": "abandoned", "finishedAt": now_iso})
-                    changed = True
-                    continue
-                if len(out) < max_items:
-                    target_device = str(item.get("deviceId") or "").strip()
-                    item["leasedUntil"] = lease_until
-                    item["leasedAt"] = now_iso
-                    item["leasedByDeviceId"] = device
-                    item["retryCount"] = retry_count
-                    out.append(_public_app_action(item))
-                    changed = True
-                    logger.info(
-                        "app_action_leased id=%s type=%s device_id=%s target_device=%s retry=%s leased_until=%s via=poll",
-                        str(item.get("id") or ""),
-                        str(item.get("type") or ""),
-                        device,
-                        target_device,
-                        retry_count,
-                        lease_until,
-                    )
-                next_pending.append(item)
-            if changed:
-                data["pending"] = next_pending
-                data["history"] = _trim_app_action_history(history)
-                _write_json(client, R2_KEY_APP_ACTION_QUEUE, data)
+            with runtime_sqlite.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    _prune_app_action_state(conn, now_iso)
+                    rows = conn.execute(
+                        """
+                        SELECT *
+                        FROM app_actions
+                        WHERE status = 'pending'
+                        ORDER BY created_at ASC
+                        """
+                    ).fetchall()
+                    for row in rows:
+                        item = _row_to_app_action(row)
+                        item_id = item["id"]
+                        exp = _parse_utc_iso(item["expiresAt"])
+                        if exp and exp <= now:
+                            logger.info(
+                                "app_action_expired id=%s type=%s target_device=%s leased_by=%s retry=%s expires_at=%s",
+                                item_id,
+                                item["type"],
+                                item["deviceId"],
+                                item["leasedByDeviceId"],
+                                item["retryCount"],
+                                item["expiresAt"],
+                            )
+                            conn.execute(
+                                """
+                                UPDATE app_actions
+                                SET status='expired', finished_at=?
+                                WHERE id=? AND status='pending'
+                                """,
+                                (now_iso, item_id),
+                            )
+                            continue
+                        target_device = item["deviceId"].strip()
+                        if target_device and device and target_device != device:
+                            continue
+                        leased = _parse_utc_iso(item["leasedUntil"])
+                        if leased and leased > now:
+                            continue
+                        original_retry = int(item.get("retryCount") or 0)
+                        retry_count = original_retry
+                        if leased and leased <= now:
+                            retry_count += 1
+                            logger.info(
+                                "app_action_lease_retry id=%s type=%s device_id=%s previous_leased_by=%s retry=%s previous_leased_until=%s",
+                                item_id,
+                                item["type"],
+                                device,
+                                item["leasedByDeviceId"],
+                                retry_count,
+                                item["leasedUntil"],
+                            )
+                        if retry_count >= _APP_ACTION_MAX_RETRY:
+                            logger.warning(
+                                "app_action_abandoned id=%s type=%s device_id=%s target_device=%s leased_by=%s retry=%s payload=%s",
+                                item_id,
+                                item["type"],
+                                device,
+                                item["deviceId"],
+                                item["leasedByDeviceId"],
+                                retry_count,
+                                _payload_log_summary(item.get("payload")),
+                            )
+                            conn.execute(
+                                """
+                                UPDATE app_actions
+                                SET status='abandoned', finished_at=?, retry_count=?
+                                WHERE id=? AND status='pending'
+                                """,
+                                (now_iso, retry_count, item_id),
+                            )
+                            continue
+                        if len(out) < max_items:
+                            conn.execute(
+                                """
+                                UPDATE app_actions
+                                SET leased_until=?, leased_at=?, leased_by_device_id=?, retry_count=?
+                                WHERE id=? AND status='pending'
+                                """,
+                                (lease_until, now_iso, device, retry_count, item_id),
+                            )
+                            item["leasedUntil"] = lease_until
+                            item["leasedAt"] = now_iso
+                            item["leasedByDeviceId"] = device
+                            item["retryCount"] = retry_count
+                            out.append(_public_app_action(item))
+                            logger.info(
+                                "app_action_leased id=%s type=%s device_id=%s target_device=%s retry=%s leased_until=%s via=poll",
+                                item_id,
+                                item["type"],
+                                device,
+                                target_device,
+                                retry_count,
+                                lease_until,
+                            )
+                        elif retry_count != original_retry:
+                            conn.execute(
+                                "UPDATE app_actions SET retry_count=? WHERE id=? AND status='pending'",
+                                (retry_count, item_id),
+                            )
+                    _prune_app_action_state(conn, now_iso)
+                    conn.execute("COMMIT")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
             return {"ok": True, "actions": out, "pollAfterSec": 20}
         except Exception as e:
             logger.error("poll_app_actions 失败 device_id=%s error=%s", device, e, exc_info=True)
@@ -589,9 +784,6 @@ def report_app_actions(results: list, device_id: str = "") -> dict:
     if not isinstance(results, list):
         return {"ok": False, "error": "results 必须是数组", "processed": 0}
     device = str(device_id or "").strip()
-    client = _s3_client()
-    if not client:
-        return {"ok": False, "error": "R2 不可用", "processed": 0}
     now_iso = _utc_now_iso()
     result_map = {}
     for row in results:
@@ -603,62 +795,79 @@ def report_app_actions(results: list, device_id: str = "") -> dict:
     if not result_map:
         return {"ok": True, "processed": 0, "items": []}
 
+    _ensure_app_actions_bootstrapped()
     with _app_action_write_lock:
         try:
-            data = _app_action_queue_raw(client)
-            pending = data.get("pending") if isinstance(data.get("pending"), list) else []
-            history = data.get("history") if isinstance(data.get("history"), list) else []
-            next_pending = []
             processed_items = []
             processed_ids = set()
-            for item in pending:
-                if not isinstance(item, dict):
-                    continue
-                item_id = str(item.get("id") or "").strip()
-                result = result_map.get(item_id)
-                if not result:
-                    next_pending.append(item)
-                    continue
-                target_device = str(item.get("deviceId") or "").strip()
-                if target_device and device and target_device != device:
-                    logger.warning(
-                        "app_action_result_device_mismatch id=%s type=%s device_id=%s target_device=%s",
-                        item_id,
-                        str(item.get("type") or ""),
-                        device,
-                        target_device,
-                    )
-                    next_pending.append(item)
-                    continue
-                status = str(result.get("status") or "").strip().lower()
-                if status not in {"done", "failed"}:
-                    status = "failed"
-                logger.info(
-                    "app_action_result id=%s type=%s device_id=%s target_device=%s status=%s summary=%s",
-                    item_id,
-                    str(item.get("type") or ""),
-                    device,
-                    target_device,
-                    status,
-                    _result_log_summary(result),
-                )
-                finished = {
-                    **item,
-                    "status": status,
-                    "finishedAt": now_iso,
-                    "deviceId": device or target_device,
-                    "result": result.get("detail") if isinstance(result.get("detail"), dict) else {},
-                    "error": str(result.get("error") or "").strip(),
-                }
-                history.append(finished)
-                processed_items.append(finished)
-                processed_ids.add(item_id)
-            unmatched_ids = [item_id for item_id in result_map.keys() if item_id not in processed_ids]
-            if unmatched_ids:
-                logger.warning("app_action_result_unmatched device_id=%s ids=%s", device, unmatched_ids)
-            data["pending"] = next_pending
-            data["history"] = _trim_app_action_history(history)
-            _write_json(client, R2_KEY_APP_ACTION_QUEUE, data)
+            with runtime_sqlite.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    for item_id, result in result_map.items():
+                        row = conn.execute(
+                            "SELECT * FROM app_actions WHERE id=? AND status='pending'",
+                            (item_id,),
+                        ).fetchone()
+                        if row is None:
+                            continue
+                        item = _row_to_app_action(row)
+                        target_device = item["deviceId"].strip()
+                        if target_device and device and target_device != device:
+                            logger.warning(
+                                "app_action_result_device_mismatch id=%s type=%s device_id=%s target_device=%s",
+                                item_id,
+                                item["type"],
+                                device,
+                                target_device,
+                            )
+                            continue
+                        status = str(result.get("status") or "").strip().lower()
+                        if status not in {"done", "failed"}:
+                            status = "failed"
+                        logger.info(
+                            "app_action_result id=%s type=%s device_id=%s target_device=%s status=%s summary=%s",
+                            item_id,
+                            item["type"],
+                            device,
+                            target_device,
+                            status,
+                            _result_log_summary(result),
+                        )
+                        detail = result.get("detail") if isinstance(result.get("detail"), dict) else {}
+                        error = str(result.get("error") or "").strip()
+                        conn.execute(
+                            """
+                            UPDATE app_actions
+                            SET status=?, finished_at=?, device_id=?, result_json=?, error=?
+                            WHERE id=? AND status='pending'
+                            """,
+                            (
+                                status,
+                                now_iso,
+                                device or target_device,
+                                runtime_sqlite.json_dumps(detail),
+                                error,
+                                item_id,
+                            ),
+                        )
+                        finished = {
+                            **item,
+                            "status": status,
+                            "finishedAt": now_iso,
+                            "deviceId": device or target_device,
+                            "result": detail,
+                            "error": error,
+                        }
+                        processed_items.append(finished)
+                        processed_ids.add(item_id)
+                    unmatched_ids = [item_id for item_id in result_map.keys() if item_id not in processed_ids]
+                    if unmatched_ids:
+                        logger.warning("app_action_result_unmatched device_id=%s ids=%s", device, unmatched_ids)
+                    _prune_app_action_state(conn, now_iso)
+                    conn.execute("COMMIT")
+                except Exception:
+                    conn.execute("ROLLBACK")
+                    raise
             return {"ok": True, "processed": len(processed_items), "items": processed_items}
         except Exception as e:
             logger.error("report_app_actions 失败 device_id=%s error=%s", device, e, exc_info=True)

@@ -10,6 +10,7 @@ from config import (
     LAST_USER_REPLY_FILE,
 )
 
+from storage import runtime_sqlite
 from utils.log import get_logger
 
 logger = get_logger(__name__)
@@ -35,6 +36,7 @@ def wipe_local_data() -> tuple[bool, int, Optional[str]]:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(default, f, ensure_ascii=False, indent=2)
             cleared += 1
+        cleared += runtime_sqlite.clear_all_tables()
         logger.info("wipe_local_data 已清空 %s 个本地文件", cleared)
         return True, cleared, None
     except Exception as e:

@@ -52,6 +52,7 @@ from storage.app_action_store import (
     poll_app_actions,
     report_app_actions,
 )
+from storage import conversation_followup_store, conversation_sqlite_store, device_reporting_store
 from storage.du_state_store import (
     append_du_vitals_history,
     append_interaction_candidate,
@@ -164,6 +165,10 @@ R2_KEY_TRIP_PLANS_PREFIX = "travel_plans"
 _global_write_lock = threading.Lock()
 _notebook_write_lock = threading.Lock()
 _trip_plan_write_lock = threading.Lock()
+_device_reporting_config_bootstrap_lock = threading.Lock()
+_DEVICE_REPORTING_CONFIG_BOOTSTRAPPED = False
+_conversation_followups_bootstrap_lock = threading.Lock()
+_CONVERSATION_FOLLOWUPS_BOOTSTRAPPED = False
 
 # 日志
 from utils.log import get_logger
@@ -558,6 +563,16 @@ def append_conversation_round(window_id: str, round_index: int, messages: list, 
                     round_index,
                     guard_max,
                 )
+            if not conversation_sqlite_store.has_window(window_id):
+                try:
+                    conversation_sqlite_store.import_window_state(
+                        wid_norm,
+                        guard_rounds,
+                        meta,
+                        recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+                    )
+                except Exception as e:
+                    logger.warning("append_conversation_round sqlite bootstrap 失败 window_id=%s error=%s", window_id, e)
             round_key = _conversation_round_key(window_id, round_index)
             _write_json(client, round_key, round_entry)
 
@@ -602,6 +617,14 @@ def append_conversation_round(window_id: str, round_index: int, messages: list, 
                 conv_existing = {"window_id": wid_norm, "date": today, "rounds": []}
             conv_existing.setdefault("rounds", []).append(round_entry)
             _write_json(client, conv_key, conv_existing)
+            try:
+                conversation_sqlite_store.upsert_round(
+                    wid_norm,
+                    round_entry,
+                    recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+                )
+            except Exception as e:
+                logger.warning("append_conversation_round sqlite 同步失败 window_id=%s round_index=%s error=%s", window_id, round_index, e)
         logger.info("R2 已写入 对话轮次 window_id=%s round_index=%s key=%s", window_id, round_index, round_key)
         return True
     except Exception as e:
@@ -630,6 +653,14 @@ def overwrite_conversation_rounds(window_id: str, rounds: list[dict]) -> bool:
             client.delete_object(Bucket=R2_BUCKET_NAME, Key=_get_key(_prefix(window_id), "conversation.json"))
         except Exception as e:
             logger.warning("overwrite_conversation_rounds 删除 legacy conversation.json 失败 window_id=%s error=%s", window_id, e)
+        try:
+            conversation_sqlite_store.replace_window_rounds(
+                normalize_window_id(window_id),
+                rounds or [],
+                recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+            )
+        except Exception as e:
+            logger.warning("overwrite_conversation_rounds sqlite 同步失败 window_id=%s error=%s", window_id, e)
         logger.info(
             "overwrite_conversation_rounds 完成 window_id=%s rounds=%s compact_only=True",
             window_id,
@@ -758,6 +789,15 @@ def get_next_round_index(window_id: str) -> int:
             )
         except Exception as e:
             logger.warning("get_next_round_index 修正 meta 失败 window_id=%s error=%s", window_id, e)
+    try:
+        conversation_sqlite_store.import_window_state(
+            normalize_window_id(window_id),
+            _merge_rounds_by_index([recent, backup_rounds]),
+            {**(meta or {}), "last_round_index": max_idx, "next_round_index": max_idx + 1},
+            recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+        )
+    except Exception as e:
+        logger.warning("get_next_round_index sqlite bootstrap 失败 window_id=%s error=%s", window_id, e)
     return max(next_idx, max_idx + 1, 1)
 
 
@@ -769,13 +809,37 @@ def get_conversation_rounds(window_id: str, last_n: int = 4) -> list:
         n = 0
     if n <= 0:
         return []
+    sqlite_meta = conversation_sqlite_store.get_window_meta(window_id)
+    sqlite_rounds = conversation_sqlite_store.get_rounds(window_id, last_n=n)
+    if sqlite_rounds:
+        try:
+            sqlite_round_count = int((sqlite_meta or {}).get("round_count") or len(sqlite_rounds))
+        except Exception:
+            sqlite_round_count = len(sqlite_rounds)
+        try:
+            sqlite_recent_keep = int((sqlite_meta or {}).get("recent_keep") or 0)
+        except Exception:
+            sqlite_recent_keep = 0
+        sqlite_retention_limit = conversation_sqlite_store.max_rounds_per_window(sqlite_recent_keep)
+        expected = min(n, max(0, sqlite_round_count), max(1, sqlite_retention_limit))
+        if len(sqlite_rounds) >= max(1, expected):
+            return sqlite_rounds
     client = _s3_client()
     if not client:
         return []
-    _ensure_compact_conversation_state(client, window_id)
+    meta = _ensure_compact_conversation_state(client, window_id)
     recent = _read_recent_rounds(client, window_id)
     backup_rounds = _read_conversation_backup_rounds_for_dates(client, window_id, _conversation_guard_dates())
     merged_recent = _merge_rounds_by_index([recent, backup_rounds])
+    try:
+        conversation_sqlite_store.import_window_state(
+            normalize_window_id(window_id),
+            merged_recent,
+            meta,
+            recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+        )
+    except Exception as e:
+        logger.warning("get_conversation_rounds sqlite bootstrap 失败 window_id=%s error=%s", window_id, e)
     if merged_recent and n <= CONVERSATION_RECENT_MAX_ROUNDS:
         return _latest_rounds(merged_recent, n)
     if recent and n <= CONVERSATION_RECENT_MAX_ROUNDS:
@@ -797,12 +861,39 @@ def get_conversation_round_by_index(window_id: str, round_index: int) -> Optiona
         return None
     compact_round = _read_json(client, _conversation_round_key(window_id, round_index))
     if isinstance(compact_round, dict) and _round_index_value(compact_round) == round_index:
+        if conversation_sqlite_store.has_window(window_id):
+            try:
+                conversation_sqlite_store.upsert_round(
+                    normalize_window_id(window_id),
+                    compact_round,
+                    recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+                )
+            except Exception as e:
+                logger.warning("get_conversation_round_by_index sqlite 同步失败 window_id=%s index=%s error=%s", window_id, round_index, e)
         return compact_round
     for r in _read_recent_rounds(client, window_id):
         if _round_index_value(r) == round_index:
+            if conversation_sqlite_store.has_window(window_id):
+                try:
+                    conversation_sqlite_store.upsert_round(
+                        normalize_window_id(window_id),
+                        r,
+                        recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+                    )
+                except Exception as e:
+                    logger.warning("get_conversation_round_by_index recent sqlite 同步失败 window_id=%s index=%s error=%s", window_id, round_index, e)
             return r
     for r in _read_conversation_backup_rounds_for_dates(client, window_id, _conversation_guard_dates(14)):
         if _round_index_value(r) == round_index:
+            if conversation_sqlite_store.has_window(window_id):
+                try:
+                    conversation_sqlite_store.upsert_round(
+                        normalize_window_id(window_id),
+                        r,
+                        recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+                    )
+                except Exception as e:
+                    logger.warning("get_conversation_round_by_index backup sqlite 同步失败 window_id=%s index=%s error=%s", window_id, round_index, e)
             return r
     return None
 
@@ -859,12 +950,18 @@ def list_conversation_rounds_preview(window_id: str, preview_chars: int = 24) ->
         return []
     recent = _read_recent_rounds(client, window_id)
     backup_rounds = _read_conversation_backup_rounds_for_dates(client, window_id, _conversation_guard_dates(14))
+    merged = _merge_rounds_by_index([recent, backup_rounds])
+    try:
+        conversation_sqlite_store.import_window_state(
+            normalize_window_id(window_id),
+            merged,
+            _ensure_compact_conversation_state(client, window_id),
+            recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+        )
+    except Exception as e:
+        logger.warning("list_conversation_rounds_preview sqlite bootstrap 失败 window_id=%s error=%s", window_id, e)
     by_idx: dict[int, dict] = {}
-    for r in backup_rounds:
-        idx = _round_index_value(r)
-        if idx > 0:
-            by_idx[idx] = r
-    for r in recent:
+    for r in merged:
         idx = _round_index_value(r)
         if idx > 0:
             by_idx[idx] = r
@@ -968,8 +1065,24 @@ def delete_conversation_round(window_id: str, round_index: int) -> bool:
                 merged,
                 write_recent_round_files=False,
             )
+            try:
+                conversation_sqlite_store.replace_window_rounds(
+                    normalize_window_id(window_id),
+                    merged,
+                    recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+                )
+            except Exception as e:
+                logger.warning("delete_conversation_round sqlite replace 失败 window_id=%s round_index=%s error=%s", window_id, round_index, e)
         else:
             _write_json(client, _conversation_meta_key(window_id), _empty_conversation_meta(window_id))
+            try:
+                conversation_sqlite_store.replace_window_rounds(
+                    normalize_window_id(window_id),
+                    [],
+                    recent_keep=CONVERSATION_RECENT_MAX_ROUNDS,
+                )
+            except Exception as e:
+                logger.warning("delete_conversation_round sqlite clear 失败 window_id=%s round_index=%s error=%s", window_id, round_index, e)
         logger.info(
             "delete_conversation_round 已删除 window_id=%s round_index=%s backup_files=%s",
             window_id,
@@ -1341,8 +1454,7 @@ def append_proactive_decision_memory(entry: dict) -> bool:
             return False
 
 
-def get_conversation_followups() -> list[dict]:
-    """读取会话级延迟续话任务。"""
+def _read_conversation_followups_from_r2() -> list[dict]:
     client = _s3_client()
     if not client:
         return []
@@ -1355,6 +1467,32 @@ def get_conversation_followups() -> list[dict]:
     return [dict(x) for x in items if isinstance(x, dict)]
 
 
+def _ensure_conversation_followups_bootstrapped() -> None:
+    global _CONVERSATION_FOLLOWUPS_BOOTSTRAPPED
+    if _CONVERSATION_FOLLOWUPS_BOOTSTRAPPED:
+        return
+    with _conversation_followups_bootstrap_lock:
+        if _CONVERSATION_FOLLOWUPS_BOOTSTRAPPED:
+            return
+        try:
+            if conversation_followup_store.has_items():
+                _CONVERSATION_FOLLOWUPS_BOOTSTRAPPED = True
+                return
+            conversation_followup_store.replace_items(_read_conversation_followups_from_r2())
+        except Exception as e:
+            logger.warning("conversation followups sqlite bootstrap 失败 error=%s", e)
+        _CONVERSATION_FOLLOWUPS_BOOTSTRAPPED = True
+
+
+def get_conversation_followups() -> list[dict]:
+    """读取会话级延迟续话任务。"""
+    _ensure_conversation_followups_bootstrapped()
+    items = conversation_followup_store.get_items()
+    if items or conversation_followup_store.has_items():
+        return items
+    return _read_conversation_followups_from_r2()
+
+
 def save_conversation_followups(items: list[dict]) -> bool:
     """保存会话级延迟续话任务（覆盖）。"""
     client = _s3_client()
@@ -1364,6 +1502,7 @@ def save_conversation_followups(items: list[dict]) -> bool:
     with _global_write_lock:
         try:
             _write_json(client, R2_KEY_CONVERSATION_FOLLOWUPS, payload)
+            conversation_followup_store.replace_items(payload["items"])
             return True
         except Exception as e:
             logger.error("save_conversation_followups 失败 error=%s", e, exc_info=True)
@@ -1390,6 +1529,7 @@ def append_conversation_followup(item: dict) -> bool:
                 items = items[:200]
             data["items"] = items
             _write_json(client, R2_KEY_CONVERSATION_FOLLOWUPS, data)
+            conversation_followup_store.replace_items([dict(x) for x in items if isinstance(x, dict)])
             return True
         except Exception as e:
             logger.error("append_conversation_followup 失败 error=%s", e, exc_info=True)
@@ -2175,17 +2315,12 @@ def save_miniapp_voice_config(data: dict) -> bool:
         return False
 
 
-DEVICE_REPORTING_BUCKETS = ("battery", "screen", "foreground", "location", "usage")
-DEFAULT_DEVICE_REPORTING_CONFIG = {key: True for key in DEVICE_REPORTING_BUCKETS}
+DEVICE_REPORTING_BUCKETS = device_reporting_store.DEVICE_REPORTING_BUCKETS
+DEFAULT_DEVICE_REPORTING_CONFIG = device_reporting_store.DEFAULT_DEVICE_REPORTING_CONFIG
 
 
 def _normalize_device_reporting_config(config: dict | None) -> dict:
-    out = dict(DEFAULT_DEVICE_REPORTING_CONFIG)
-    if isinstance(config, dict):
-        for key in DEVICE_REPORTING_BUCKETS:
-            if key in config:
-                out[key] = bool(config.get(key))
-    return out
+    return device_reporting_store.normalize_device_reporting_config(config)
 
 
 def _device_reporting_config_doc() -> dict:
@@ -2196,14 +2331,41 @@ def _device_reporting_config_doc() -> dict:
     return data if isinstance(data, dict) else {"devices": {}}
 
 
+def _ensure_device_reporting_config_bootstrapped() -> None:
+    global _DEVICE_REPORTING_CONFIG_BOOTSTRAPPED
+    if _DEVICE_REPORTING_CONFIG_BOOTSTRAPPED:
+        return
+    with _device_reporting_config_bootstrap_lock:
+        if _DEVICE_REPORTING_CONFIG_BOOTSTRAPPED:
+            return
+        try:
+            if device_reporting_store.has_any_config():
+                _DEVICE_REPORTING_CONFIG_BOOTSTRAPPED = True
+                return
+            device_reporting_store.import_config_doc(_device_reporting_config_doc())
+        except Exception as e:
+            logger.warning("device_reporting_config sqlite bootstrap 失败 error=%s", e)
+        _DEVICE_REPORTING_CONFIG_BOOTSTRAPPED = True
+
+
 def get_device_reporting_config(device_id: str) -> dict:
     """读取单台设备的非健康数据上报开关；默认每类开启。"""
     did = str(device_id or "").strip()
     if not did:
         return dict(DEFAULT_DEVICE_REPORTING_CONFIG)
+    _ensure_device_reporting_config_bootstrapped()
+    sqlite_config = device_reporting_store.get_config(did)
+    if sqlite_config is not None:
+        return sqlite_config
     doc = _device_reporting_config_doc()
     devices = doc.get("devices") if isinstance(doc.get("devices"), dict) else {}
-    return _normalize_device_reporting_config(devices.get(did) if isinstance(devices.get(did), dict) else None)
+    config = _normalize_device_reporting_config(devices.get(did) if isinstance(devices.get(did), dict) else None)
+    if did in devices:
+        try:
+            device_reporting_store.save_config(did, config)
+        except Exception as e:
+            logger.warning("get_device_reporting_config sqlite 回填失败 device_id=%s error=%s", did, e)
+    return config
 
 
 def save_device_reporting_config(device_id: str, config: dict) -> dict | None:
@@ -2228,6 +2390,10 @@ def save_device_reporting_config(device_id: str, config: dict) -> dict | None:
             doc["devices"] = devices
             doc["updatedAt"] = now_beijing_iso()
             _write_json(client, R2_KEY_DEVICE_REPORTING_CONFIG, doc)
+            try:
+                device_reporting_store.save_config(did, next_config)
+            except Exception as e:
+                logger.warning("save_device_reporting_config sqlite 同步失败 device_id=%s error=%s", did, e)
         return next_config
     except Exception as e:
         logger.error("save_device_reporting_config 失败 device_id=%s error=%s", did, e, exc_info=True)
@@ -2258,6 +2424,10 @@ def update_device_reporting_bucket_config(device_id: str, bucket: str, enabled: 
             doc["devices"] = devices
             doc["updatedAt"] = now_beijing_iso()
             _write_json(client, R2_KEY_DEVICE_REPORTING_CONFIG, doc)
+            try:
+                device_reporting_store.save_config(did, current)
+            except Exception as e:
+                logger.warning("update_device_reporting_bucket_config sqlite 同步失败 device_id=%s bucket=%s error=%s", did, key, e)
         return current
     except Exception as e:
         logger.error("update_device_reporting_bucket_config 失败 device_id=%s bucket=%s error=%s", did, key, e, exc_info=True)
