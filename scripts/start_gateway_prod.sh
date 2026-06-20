@@ -29,9 +29,7 @@ TIMEOUT="${GATEWAY_TIMEOUT:-360}"
 # but keep restart/recycle delays bounded on the small VPS.
 GRACEFUL_TIMEOUT="${GATEWAY_GRACEFUL_TIMEOUT:-120}"
 KEEP_ALIVE="${GATEWAY_KEEP_ALIVE:-5}"
-# SumiTalk chat jobs can live longer than one HTTP request. Default worker
-# recycling can orphan those in-process jobs, so leave recycle opt-in.
-MAX_REQUESTS="${GATEWAY_MAX_REQUESTS:-0}"
+MAX_REQUESTS="${GATEWAY_MAX_REQUESTS:-240}"
 MAX_REQUESTS_JITTER="${GATEWAY_MAX_REQUESTS_JITTER:-40}"
 LOG_LEVEL="${GATEWAY_LOG_LEVEL:-info}"
 
