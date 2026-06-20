@@ -16,6 +16,12 @@ _CLIENT_LOG_FIELD_MAX_CHARS = 180
 _CLIENT_LOG_FIELD_MAX_COUNT = 24
 _CLIENT_LOG_SENSITIVE_RE = re.compile(r"(token|secret|key|authorization|password|cookie)", re.I)
 _CLIENT_LOG_DEDUPE_TTL_SECONDS = 30
+_CLIENT_LOG_DEDUPE_EVENT_FIELDS = {
+    "chat_job_status": ("operationId", "clientRequestId", "jobId", "status", "stage", "statusCode"),
+    "chat_send_skipped": ("windowId", "deviceId", "source", "reason"),
+    "chat_attempt_stale_skip": ("windowId", "deviceId", "operationId", "clientRequestId", "source"),
+    "assistant_voice_tts_skip": ("windowId", "deviceId", "messageId", "reason"),
+}
 _CLIENT_LOG_DEDUPE: dict[str, float] = {}
 
 
@@ -98,17 +104,12 @@ def _safe_client_log_fields(fields: dict) -> str:
 
 
 def _should_skip_client_log(event: str, fields: dict) -> bool:
-    if event != "chat_job_status" or not isinstance(fields, dict):
+    if not isinstance(fields, dict):
         return False
-    key_parts = [
-        event,
-        str(fields.get("operationId") or ""),
-        str(fields.get("clientRequestId") or ""),
-        str(fields.get("jobId") or ""),
-        str(fields.get("status") or ""),
-        str(fields.get("stage") or ""),
-        str(fields.get("statusCode") or ""),
-    ]
+    field_names = _CLIENT_LOG_DEDUPE_EVENT_FIELDS.get(event)
+    if not field_names:
+        return False
+    key_parts = [event, *[str(fields.get(name) or "") for name in field_names]]
     key = "|".join(key_parts)
     now = time.time()
     if len(_CLIENT_LOG_DEDUPE) > 512:

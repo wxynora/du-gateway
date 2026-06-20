@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import threading
+import time
 
 from flask import jsonify, request
 
@@ -19,6 +20,8 @@ sumitalk_logger = logging.getLogger("sumitalk")
 _SUMITALK_HISTORY_LOCK = threading.Lock()
 _SUMITALK_HISTORY_MAX_MESSAGES = 80
 _SUMITALK_MAIN_WINDOW_ID = "sumitalk-main"
+_HISTORY_LATEST_NOOP_LOG_TTL_SECONDS = 60
+_HISTORY_LATEST_NOOP_LOG_CACHE: dict[str, float] = {}
 
 
 def _load_sumitalk_histories() -> dict:
@@ -47,6 +50,30 @@ def _get_sumitalk_history_window_id_from_args() -> str:
     return _normalize_sumitalk_history_window_id(
         request.args.get("window_id") or request.args.get("history_window_id") or ""
     )
+
+
+def _should_log_history_latest(device_id: str, window_id: str, has_new: bool, latest_key: str, after_key: str) -> bool:
+    if has_new:
+        return True
+    now = time.time()
+    if len(_HISTORY_LATEST_NOOP_LOG_CACHE) > 512:
+        cutoff = now - _HISTORY_LATEST_NOOP_LOG_TTL_SECONDS
+        for key, ts in list(_HISTORY_LATEST_NOOP_LOG_CACHE.items()):
+            if ts < cutoff:
+                _HISTORY_LATEST_NOOP_LOG_CACHE.pop(key, None)
+    cache_key = "|".join(
+        [
+            str(device_id or "").strip(),
+            str(window_id or "").strip(),
+            str(latest_key or "").strip()[:64],
+            str(after_key or "").strip()[:64],
+        ]
+    )
+    last = _HISTORY_LATEST_NOOP_LOG_CACHE.get(cache_key)
+    if last and now - last < _HISTORY_LATEST_NOOP_LOG_TTL_SECONDS:
+        return False
+    _HISTORY_LATEST_NOOP_LOG_CACHE[cache_key] = now
+    return True
 
 
 def _get_sumitalk_history_window_id_from_body(body: dict) -> str:
@@ -293,18 +320,19 @@ def register_routes(bp) -> None:
         latest_key = _sumitalk_message_poll_key(latest or {}) if latest else ""
         has_new = bool(latest_key and latest_key != after_key)
         meta = _sumitalk_request_brief()
-        sumitalk_logger.info(
-            "history_latest_ok device_id=%s window_id=%s count=%s has_new=%s latest_key=%s after_key=%s updated_at=%s remote=%s ua=%s",
-            device_id,
-            window_id,
-            len(messages),
-            has_new,
-            latest_key[:32],
-            after_key[:32],
-            str((row or {}).get("updated_at") or "").strip(),
-            meta["remote"],
-            meta["ua"],
-        )
+        if _should_log_history_latest(device_id, window_id, has_new, latest_key, after_key):
+            sumitalk_logger.info(
+                "history_latest_ok device_id=%s window_id=%s count=%s has_new=%s latest_key=%s after_key=%s updated_at=%s remote=%s ua=%s",
+                device_id,
+                window_id,
+                len(messages),
+                has_new,
+                latest_key[:32],
+                after_key[:32],
+                str((row or {}).get("updated_at") or "").strip(),
+                meta["remote"],
+                meta["ua"],
+            )
         return jsonify({
             "ok": True,
             "device_id": device_id,

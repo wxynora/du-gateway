@@ -1,7 +1,9 @@
 import base64
+import json
 import logging
 import math
 import re
+import time
 from urllib.parse import quote
 
 from flask import Response, jsonify, request
@@ -20,11 +22,134 @@ REPORTING_BUCKET_LABELS = {
     "location": "位置",
     "usage": "使用统计",
 }
+_REPORT_DEDUPE_TTL_SECONDS = {
+    "battery": 10 * 60,
+    "screen": 30,
+    "foreground": 30,
+    "location": 10 * 60,
+    "usage": 30 * 60,
+    "health": 60,
+}
+_REPORT_DEDUPE_CACHE: dict[str, tuple[str, float]] = {}
 
 
 def _get_panel_device_id() -> str:
     payload = request.environ.get("miniapp_panel_payload") or {}
     return str(payload.get("device_id") or "").strip()
+
+
+def _compact_report_payload(bucket: str, patch: dict) -> dict:
+    data = patch if isinstance(patch, dict) else {}
+    if bucket == "battery":
+        return {
+            "level": data.get("level"),
+            "charging": bool(data.get("charging")),
+        }
+    if bucket == "screen":
+        out = {
+            "event": str(data.get("event") or "").strip().lower(),
+            "interactive": bool(data.get("interactive")),
+            "snapshot": bool(data.get("snapshot")),
+        }
+        if out["event"] == "screen_off":
+            try:
+                out["durationMinute"] = int(data.get("screenOffDurationMs") or 0) // 60000
+            except Exception:
+                out["durationMinute"] = 0
+        return out
+    if bucket == "foreground":
+        return {
+            "packageName": str(data.get("packageName") or "").strip(),
+            "className": str(data.get("className") or "").strip(),
+            "source": str(data.get("source") or "").strip(),
+        }
+    if bucket == "location":
+        try:
+            lat = round(float(data.get("lat")), 3)
+            lng = round(float(data.get("lng")), 3)
+        except Exception:
+            lat = data.get("lat")
+            lng = data.get("lng")
+        return {
+            "lat": lat,
+            "lng": lng,
+            "provider": str(data.get("provider") or "").strip(),
+            "source": str(data.get("source") or "").strip(),
+        }
+    if bucket == "usage":
+        apps = []
+        for item in data.get("apps") or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                foreground_bucket = int(item.get("foregroundMs") or 0) // (5 * 60 * 1000)
+            except Exception:
+                foreground_bucket = 0
+            try:
+                last_used_bucket = int(item.get("lastTimeUsed") or 0) // (5 * 60 * 1000)
+            except Exception:
+                last_used_bucket = 0
+            apps.append(
+                [
+                    str(item.get("packageName") or "").strip(),
+                    foreground_bucket,
+                    last_used_bucket,
+                ]
+            )
+        return {
+            "range": str(data.get("range") or "").strip(),
+            "apps": apps,
+        }
+    if bucket == "health":
+        return {
+            "heart_rate": data.get("heart_rate"),
+            "steps": data.get("steps"),
+            "source": str(data.get("source") or "").strip(),
+        }
+    return data
+
+
+def _report_payload_fingerprint(bucket: str, patch: dict) -> str:
+    compact = _compact_report_payload(bucket, patch)
+    return json.dumps(compact, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _prune_report_dedupe_cache(now: float) -> None:
+    if len(_REPORT_DEDUPE_CACHE) <= 512:
+        return
+    cutoff = now - max(_REPORT_DEDUPE_TTL_SECONDS.values())
+    for key, (_, ts) in list(_REPORT_DEDUPE_CACHE.items()):
+        if ts < cutoff:
+            _REPORT_DEDUPE_CACHE.pop(key, None)
+
+
+def _report_dedupe_cache_key(bucket: str, device_id: str) -> str:
+    return f"{bucket}|{device_id}"
+
+
+def _is_duplicate_report_write(bucket: str, device_id: str, patch: dict) -> bool:
+    ttl = int(_REPORT_DEDUPE_TTL_SECONDS.get(bucket, 0) or 0)
+    if ttl <= 0:
+        return False
+    fp = _report_payload_fingerprint(bucket, patch)
+    now = time.time()
+    _prune_report_dedupe_cache(now)
+    key = _report_dedupe_cache_key(bucket, device_id)
+    last = _REPORT_DEDUPE_CACHE.get(key)
+    return bool(last and last[0] == fp and now - last[1] < ttl)
+
+
+def _remember_report_write(bucket: str, device_id: str, patch: dict) -> None:
+    now = time.time()
+    _prune_report_dedupe_cache(now)
+    _REPORT_DEDUPE_CACHE[_report_dedupe_cache_key(bucket, device_id)] = (
+        _report_payload_fingerprint(bucket, patch),
+        now,
+    )
+
+
+def _reporting_deduped_response(bucket: str, device_id: str):
+    return jsonify({"ok": True, "bucket": bucket, "device_id": device_id, "skipped": True, "reason": "deduped"})
 
 
 def _sanitize_usage_apps(items: list[dict], limit: int = 20) -> list[dict]:
@@ -331,10 +456,14 @@ def register_routes(bp) -> None:
         elif event in {"screen_on", "user_present"} or (event == "app_active" and interactive):
             patch["screenOffSince"] = ""
             patch["screenOffDurationMs"] = 0
+        if _is_duplicate_report_write("screen", device_id, patch):
+            return _reporting_deduped_response("screen", device_id)
         ok = r2_store.merge_and_save_sense_bucket("screen", patch)
         sessions_ok = True
         if event == "screen_off":
             sessions_ok = r2_store.close_app_session_for_device(device_id, patch.get("occurredAt") or patch.get("observedAt") or "", reason="screen_off")
+        if ok and sessions_ok:
+            _remember_report_write("screen", device_id, patch)
         return jsonify({"ok": bool(ok and sessions_ok), "bucket": "screen", "device_id": device_id, "event": event})
 
     @bp.route("/device-state/battery", methods=["POST"])
@@ -358,7 +487,11 @@ def register_routes(bp) -> None:
             "capturedAt": str(body.get("captured_at") or body.get("capturedAt") or "").strip() or now_beijing_iso(),
             "updatedAt": now_beijing_iso(),
         }
+        if _is_duplicate_report_write("battery", device_id, patch):
+            return _reporting_deduped_response("battery", device_id)
         ok = r2_store.merge_and_save_sense_bucket("battery", patch)
+        if ok:
+            _remember_report_write("battery", device_id, patch)
         return jsonify({"ok": bool(ok), "bucket": "battery", "device_id": device_id})
 
     @bp.route("/device-state/health", methods=["GET", "POST"])
@@ -386,7 +519,11 @@ def register_routes(bp) -> None:
         patch, err = _sanitize_health_patch(body, device_id)
         if err:
             return jsonify({"ok": False, "error": err}), 400
+        if _is_duplicate_report_write("health", device_id, patch or {}):
+            return _reporting_deduped_response("health", device_id)
         ok = r2_store.merge_and_save_sense_bucket("health", patch or {})
+        if ok:
+            _remember_report_write("health", device_id, patch or {})
         return jsonify({"ok": bool(ok), "bucket": "health", "device_id": device_id})
 
     @bp.route("/device-state/usage-stats", methods=["POST"])
@@ -405,7 +542,11 @@ def register_routes(bp) -> None:
             "apps": apps,
             "updatedAt": now_beijing_iso(),
         }
+        if _is_duplicate_report_write("usage", device_id, patch):
+            return _reporting_deduped_response("usage", device_id)
         ok = r2_store.merge_and_save_sense_bucket("usage", patch)
+        if ok:
+            _remember_report_write("usage", device_id, patch)
         return jsonify({"ok": bool(ok), "bucket": "usage", "device_id": device_id, "count": len(apps)})
 
     @bp.route("/device-state/foreground-app", methods=["POST"])
@@ -419,8 +560,12 @@ def register_routes(bp) -> None:
         patch, err = _sanitize_foreground_app_patch(body, device_id)
         if err:
             return jsonify({"ok": False, "error": err}), 400
+        if _is_duplicate_report_write("foreground", device_id, patch or {}):
+            return _reporting_deduped_response("foreground", device_id)
         ok = r2_store.merge_and_save_sense_bucket("foreground", patch or {})
         sessions_ok = r2_store.update_app_sessions_from_foreground(patch or {})
+        if ok and sessions_ok:
+            _remember_report_write("foreground", device_id, patch or {})
         return jsonify({"ok": bool(ok and sessions_ok), "bucket": "foreground", "device_id": device_id})
 
     @bp.route("/device-state/location", methods=["POST"])
@@ -434,6 +579,8 @@ def register_routes(bp) -> None:
         patch, err = _sanitize_location_patch(body, device_id)
         if err:
             return jsonify({"ok": False, "error": err}), 400
+        if _is_duplicate_report_write("location", device_id, patch or {}):
+            return _reporting_deduped_response("location", device_id)
         try:
             from services.amap_geocode import enrich_location_patch_with_amap_address
 
@@ -441,6 +588,8 @@ def register_routes(bp) -> None:
         except Exception:
             logger.exception("miniapp location reverse geocode failed")
         ok = r2_store.merge_and_save_sense_bucket("location", patch or {})
+        if ok:
+            _remember_report_write("location", device_id, patch or {})
         return jsonify({"ok": bool(ok), "bucket": "location", "device_id": device_id})
 
     @bp.route("/device-screenshots", methods=["POST"])
