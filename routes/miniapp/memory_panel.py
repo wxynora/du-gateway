@@ -139,6 +139,43 @@ def _core_cache_items_for_debug(limit: int) -> dict:
     return {"count": len(rows), "visible_count": len(out), "items": out}
 
 
+def _dynamic_memory_mirror_status(limit: int = 20) -> dict:
+    try:
+        lim = max(1, min(100, int(limit or 20)))
+    except Exception:
+        lim = 20
+    try:
+        from storage import dynamic_memory_mirror_store
+
+        status = dynamic_memory_mirror_store.get_status()
+        raw_items = dynamic_memory_mirror_store.list_items(limit=lim) if status.get("ok") else []
+        items = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            slim = dict(item)
+            slim.pop("raw_json", None)
+            items.append(slim)
+        keyword_missing_count = len([item for item in items if not item.get("keywords")])
+        return {
+            "ok": bool(status.get("ok")),
+            "status": status,
+            "items": items,
+            "visible_count": len(items),
+            "keyword_missing_visible_count": keyword_missing_count,
+            "error": str(status.get("error") or ""),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "status": {},
+            "items": [],
+            "visible_count": 0,
+            "keyword_missing_visible_count": 0,
+            "error": str(e),
+        }
+
+
 def _event_window_id(event: dict) -> str:
     return str((event or {}).get("window_id") or "").strip() or "__default__"
 
@@ -326,6 +363,44 @@ def register_routes(bp) -> None:
             return jsonify({"ok": True, "count": len(lst), "memories": lst})
         except Exception as e:
             return jsonify({"ok": False, "error": str(e), "memories": []}), 500
+
+    @bp.route("/dynamic-memory-mirror", methods=["GET"])
+    def miniapp_dynamic_memory_mirror():
+        try:
+            limit = request.args.get("limit", type=int, default=20)
+            payload = _dynamic_memory_mirror_status(limit=limit)
+            return jsonify(payload), 200 if payload.get("ok") else 500
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e), "items": []}), 500
+
+    @bp.route("/dynamic-memory-mirror/backfill", methods=["POST"])
+    def miniapp_dynamic_memory_mirror_backfill():
+        try:
+            body = request.get_json(silent=True) or {}
+            write = bool(body.get("write"))
+            max_terms = int(body.get("max_terms") or 32)
+            if max_terms < 1:
+                max_terms = 1
+            if max_terms > 80:
+                max_terms = 80
+
+            from services.dynamic_memory_keywords import extract_keywords_for_memories
+            from storage import dynamic_memory_mirror_store
+
+            memories = r2_store.get_dynamic_memory_list() or []
+            terms_by_id = extract_keywords_for_memories(memories, max_terms=max_terms)
+            result = dynamic_memory_mirror_store.sync_memories(
+                memories,
+                terms_by_id=terms_by_id,
+                source="miniapp_dynamic_memory_mirror_backfill",
+                dry_run=not write,
+            )
+            result["r2_write"] = False
+            result["sqlite_write"] = bool(write)
+            result["note"] = "R2 current.json is read only; SQLite mirror is rebuildable."
+            return jsonify({"ok": True, "result": result})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
 
     @bp.route("/memory-debug", methods=["GET"])
     def miniapp_memory_debug():

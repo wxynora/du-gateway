@@ -16,6 +16,7 @@ from config import (
     DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED,
     DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT,
     DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS,
+    DYNAMIC_MEMORY_MIRROR_SHADOW_ENABLED,
     ASSISTANT_TIME_KEYWORDS,
     ASSISTANT_LUNAR_KEYWORDS,
     REPLY_GAP_THRESHOLD_MINUTES,
@@ -2110,6 +2111,89 @@ def _append_dynamic_recall_debug_event_safe(event: dict) -> None:
         )
 
 
+def _canonical_memory_id(memory_id: str) -> str:
+    mid = str(memory_id or "").strip()
+    return mid[len("core::") :] if mid.startswith("core::") else mid
+
+
+def _build_sqlite_shadow_compare(
+    *,
+    query: str,
+    retrieval_query: str,
+    keywords: list[str],
+    actual_ids: list[str],
+    valid_memory_ids: set[str],
+) -> dict:
+    if not DYNAMIC_MEMORY_MIRROR_SHADOW_ENABLED:
+        return {"enabled": False, "reason": "disabled"}
+    try:
+        from storage import dynamic_memory_mirror_store
+
+        shadow_query = " ".join(
+            x
+            for x in [
+                str(query or "").strip(),
+                str(retrieval_query or "").strip(),
+            ]
+            if x
+        ).strip()
+        result = dynamic_memory_mirror_store.shadow_candidates(
+            shadow_query,
+            keywords=keywords,
+            limit=max(10, DYNAMIC_MEMORY_TOP_N * 4),
+        )
+        candidates = result.get("candidates") if isinstance(result, dict) else []
+        candidates = [c for c in (candidates or []) if isinstance(c, dict)]
+        candidate_ids = [
+            _canonical_memory_id(str((item or {}).get("memory_id") or ""))
+            for item in candidates
+            if str((item or {}).get("memory_id") or "").strip()
+        ]
+        actual_canonical = [
+            _canonical_memory_id(x)
+            for x in actual_ids or []
+            if _canonical_memory_id(x)
+        ]
+        actual_set = set(actual_canonical)
+        candidate_set = set(candidate_ids)
+        valid_set = {_canonical_memory_id(x) for x in (valid_memory_ids or set()) if _canonical_memory_id(x)}
+        stale_ids = [mid for mid in candidate_ids if mid and mid not in valid_set]
+        overlap_ids = [mid for mid in candidate_ids if mid and mid in actual_set]
+        missed_actual_ids = [mid for mid in actual_canonical if mid and mid not in candidate_set]
+        clean_candidates = []
+        for item in candidates[:20]:
+            mid = _canonical_memory_id(str(item.get("memory_id") or ""))
+            clean_candidates.append(
+                {
+                    "memory_id": mid,
+                    "content": str(item.get("content") or "")[:120],
+                    "tag": str(item.get("tag") or ""),
+                    "score": float(item.get("score") or 0.0),
+                    "reasons": item.get("reasons") or [],
+                    "matched_terms": item.get("matched_terms") or [],
+                    "in_actual": mid in actual_set,
+                    "in_r2_valid": mid in valid_set,
+                }
+            )
+        return {
+            "enabled": True,
+            "ok": bool(result.get("ok")) if isinstance(result, dict) else False,
+            "query_terms": (result or {}).get("query_terms") or [],
+            "candidate_count": len(candidate_ids),
+            "candidate_ids": candidate_ids[:20],
+            "actual_ids": actual_canonical[:20],
+            "overlap_ids": overlap_ids[:20],
+            "missed_actual_ids": missed_actual_ids[:20],
+            "stale_candidate_ids": stale_ids[:20],
+            "overlap_count": len(overlap_ids),
+            "missed_actual_count": len(missed_actual_ids),
+            "stale_candidate_count": len(stale_ids),
+            "candidates": clean_candidates,
+        }
+    except Exception as e:
+        return {"enabled": True, "ok": False, "error": str(e)}
+
+
 def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     """
     每轮对话开始前：从 R2 读动态层，用向量召回 + BM25 关键词召回融合排序后注入 system 末尾。
@@ -2194,6 +2278,7 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
     retrieval_query = _build_retrieval_text(last_user_text)
     if not memories:
         return body
+    valid_memory_ids = {str(mem.get("id") or "").strip() for mem in memories if str(mem.get("id") or "").strip()}
 
     # 缓存命中：连续聊同一话题时复用上次融合后的最终检索结果，跳过向量检索和 DS 改写
     cached = _recall_cache_hit(window_id, keywords)
@@ -2258,6 +2343,13 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                     "recalled_count": 0,
                     "reason": "no_hybrid_recall_hit",
                     "vector_error": vector_error,
+                    "sqlite_shadow": _build_sqlite_shadow_compare(
+                        query=last_user_text,
+                        retrieval_query=retrieval_query,
+                        keywords=keywords,
+                        actual_ids=[],
+                        valid_memory_ids=valid_memory_ids,
+                    ),
                 }
             )
             return body
@@ -2355,6 +2447,13 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
                 "recalled_count": 0,
                 "reason": "empty_after_budget_or_filter",
                 "vector_error": vector_error,
+                "sqlite_shadow": _build_sqlite_shadow_compare(
+                    query=last_user_text,
+                    retrieval_query=retrieval_query,
+                    keywords=keywords,
+                    actual_ids=[],
+                    valid_memory_ids=valid_memory_ids,
+                ),
             }
         )
         return body
@@ -2387,6 +2486,13 @@ def step_inject_dynamic_memory(body: dict, window_id: str) -> dict:
             "recalled_count": len(lines),
             "scores": injected_scores,
             "citation_map": citation_map,
+            "sqlite_shadow": _build_sqlite_shadow_compare(
+                query=last_user_text,
+                retrieval_query=retrieval_query,
+                keywords=keywords,
+                actual_ids=[str((item or {}).get("memory_id") or "") for item in recalled_items],
+                valid_memory_ids=valid_memory_ids,
+            ),
         }
     )
     citation_hint = ""

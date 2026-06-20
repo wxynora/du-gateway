@@ -745,6 +745,24 @@ rg -n "dynamic_memory|summary|latest_4|core_cache|portrait|maintenance|recall_de
 - 已完成：`services/dynamic_layer_ds.py` 只补 merge 倾向：卧室连续 play、同一氛围或同类偏好/边界延续时优先合并，不新增“新花样门槛”或“play 小纸条默认 skip”规则。
 - 未完成 / 下次继续：历史卧室记忆不会在提交瞬间批量清理，等下一次动态记忆注入或离线维护触发；如果要立刻清，先在 MiniApp 记忆调试确认将被删的 id。
 
+当前状态（2026-06-20 动态记忆 SQLite mirror 与关键词索引第一阶段）：
+- 已完成：新增 `storage/dynamic_memory_mirror_store.py`，使用 `data/dynamic_memory_mirror.sqlite3` 存 R2 `dynamic_memory/current.json` 的可重建副本、关键词表、FTS5 辅助索引、`mirror_meta` 和 `sync_runs`。同步方向只允许 R2 -> SQLite，不提供 SQLite -> R2 反写函数。
+- 已完成：新增 `services/dynamic_memory_keywords.py`，从 `content/retrieval_text/tag/labels/emotion_label/scene_type/target_type` 规则抽取关键词；不调用 DS，不重写动态记忆正文，不改 `id/mention_count/retrieval_text`。
+- 已完成：新增 `scripts/backfill_dynamic_memory_keywords.py`，默认 dry-run；加 `--write` 才写 SQLite mirror。脚本只读 R2 current，不写回 R2。新增 `docs/DYNAMIC_MEMORY_SQLITE_MIRROR.md` 记录边界、回滚和验证命令。
+- 已完成：`config.py` 新增 `DYNAMIC_MEMORY_MIRROR_DB`、`DYNAMIC_MEMORY_MIRROR_ENABLED`、`DYNAMIC_MEMORY_MIRROR_READ_FOR_CHAT`、`DYNAMIC_MEMORY_KEYWORD_BACKFILL_DRY_RUN`、`DYNAMIC_MEMORY_KEYWORD_MAX_TERMS`；聊天读 SQLite 的开关默认关闭。
+- 第一阶段边界：当时没有接 `pipeline/pipeline.py`、`services/dynamic_layer_ds.py`、`save_dynamic_memory_list()` 或 MiniApp 面板；聊天注入、DS `new/merge/skip`、citation 回写、core cache 提拔仍全部走原链路。后续接 UI 也只能读 SQLite 展示关键词覆盖率和 R2/mirror diff，不能让 SQLite 独有内容进入 prompt。
+
+当前状态（2026-06-20 动态记忆 SQLite mirror MiniApp 排查第二阶段）：
+- 已完成：`routes/miniapp/memory_panel.py` 新增 `GET /miniapp-api/dynamic-memory-mirror` 和 `POST /miniapp-api/dynamic-memory-mirror/backfill`。GET 只返回 mirror 状态与瘦身后的最近条目；POST 从 R2 current 读动态记忆，抽关键词后写 SQLite mirror，并明确返回 `r2_write=false`。
+- 已完成：`miniapp/src/ui/tabs/MemoryDebugTab.tsx` 的“动态记忆”tab 新增 SQLite mirror 卡片，显示 mirror/R2 条数、关键词数、last_sync、snapshot hash、最近条目的关键词，并提供“同步关键词 mirror”按钮。
+- 未完成 / 下次继续：第二阶段仍没有接 `pipeline/pipeline.py`、`services/dynamic_layer_ds.py`、`save_dynamic_memory_list()` 或 `search_memory`；SQLite mirror 不参与实际召回、DS 写入、citation 回写或 core cache 提拔。下一步如果要 shadow compare，只记录 SQLite 候选 id 与真实召回差异，不能让 SQLite 独有内容进入 prompt。
+
+当前状态（2026-06-20 动态记忆 SQLite shadow compare 第三阶段）：
+- 已完成：`storage/dynamic_memory_mirror_store.py::shadow_candidates()` 使用关键词表和 content/retrieval_text/tag 的轻量 LIKE 查候选 id；如果 mirror DB 不存在，返回 `mirror_db_missing`，不会在聊天热路径自动创建空库。
+- 已完成：`pipeline/pipeline.py::step_inject_dynamic_memory` 在 recall debug 事件中附加 `sqlite_shadow`，记录 SQLite 候选 id、真实注入 id、overlap/miss/stale 和候选命中词。真实召回仍由原来的 R2 + 向量 + BM25 决定；SQLite shadow 不进 prompt、不改 `lines`、不改 `citation_map`。
+- 已完成：`miniapp/src/ui/tabs/MemoryDebugTab.tsx` 的自动召回卡片显示 SQLite shadow 的 hit/miss/stale、query terms 和前 5 个候选；只用于排查关键词索引效果。
+- 未完成 / 下次继续：第四阶段仍未做。不要让 SQLite mirror 参与真实召回排序或注入；如果以后要试，只允许先返回 candidate id，再从同一份 R2 current snapshot 取正文。
+
 ## 核心 Prompt / 风格规则 / 禁言模式
 
 现象：

@@ -321,6 +321,15 @@ _marg_prune_en = os.environ.get("DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED", "1").st
 DYNAMIC_MEMORY_MARGINAL_PRUNE_ENABLED = _marg_prune_en in ("1", "true", "yes", "on")
 DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT = float(os.environ.get("DYNAMIC_MEMORY_MARGINAL_PRUNE_MAX_WEIGHT", "2"))
 DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS = int(os.environ.get("DYNAMIC_MEMORY_MARGINAL_PRUNE_MIN_DAYS", "15"))
+_dyn_mem_mirror_en = os.environ.get("DYNAMIC_MEMORY_MIRROR_ENABLED", "0").strip().lower()
+DYNAMIC_MEMORY_MIRROR_ENABLED = _dyn_mem_mirror_en in ("1", "true", "yes", "on")
+_dyn_mem_mirror_chat_en = os.environ.get("DYNAMIC_MEMORY_MIRROR_READ_FOR_CHAT", "0").strip().lower()
+DYNAMIC_MEMORY_MIRROR_READ_FOR_CHAT = _dyn_mem_mirror_chat_en in ("1", "true", "yes", "on")
+_dyn_mem_mirror_shadow_en = os.environ.get("DYNAMIC_MEMORY_MIRROR_SHADOW_ENABLED", "1").strip().lower()
+DYNAMIC_MEMORY_MIRROR_SHADOW_ENABLED = _dyn_mem_mirror_shadow_en not in ("0", "false", "no", "off")
+_dyn_mem_keyword_dry_run = os.environ.get("DYNAMIC_MEMORY_KEYWORD_BACKFILL_DRY_RUN", "1").strip().lower()
+DYNAMIC_MEMORY_KEYWORD_BACKFILL_DRY_RUN = _dyn_mem_keyword_dry_run not in ("0", "false", "no", "off")
+DYNAMIC_MEMORY_KEYWORD_MAX_TERMS = int(os.environ.get("DYNAMIC_MEMORY_KEYWORD_MAX_TERMS", "32"))
 
 # 记忆注入上限（总结+动态层合计）。
 # 默认按“字符数”控制：窗口记忆总结注入量与 R2 中 summary 上限是一套（约 8000 字符）。
@@ -444,6 +453,14 @@ DYNAMIC_MEMORY_PROVENANCE_DB = (
 )
 if not DYNAMIC_MEMORY_PROVENANCE_DB.is_absolute():
     DYNAMIC_MEMORY_PROVENANCE_DB = BASE_DIR / DYNAMIC_MEMORY_PROVENANCE_DB
+_DYNAMIC_MEMORY_MIRROR_DB_STR = os.environ.get("DYNAMIC_MEMORY_MIRROR_DB", "").strip()
+DYNAMIC_MEMORY_MIRROR_DB = (
+    Path(_DYNAMIC_MEMORY_MIRROR_DB_STR)
+    if _DYNAMIC_MEMORY_MIRROR_DB_STR
+    else DATA_DIR / "dynamic_memory_mirror.sqlite3"
+)
+if not DYNAMIC_MEMORY_MIRROR_DB.is_absolute():
+    DYNAMIC_MEMORY_MIRROR_DB = BASE_DIR / DYNAMIC_MEMORY_MIRROR_DB
 _RUNTIME_STATE_DB_STR = os.environ.get("RUNTIME_STATE_DB", "").strip()
 RUNTIME_STATE_DB = (
     Path(_RUNTIME_STATE_DB_STR)

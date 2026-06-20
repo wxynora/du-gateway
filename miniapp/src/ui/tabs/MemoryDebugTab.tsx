@@ -13,6 +13,34 @@ type RecallScore = {
   sem_ctx?: number;
 };
 
+type SQLiteShadowCandidate = {
+  memory_id?: string;
+  content?: string;
+  tag?: string;
+  score?: number;
+  reasons?: string[];
+  matched_terms?: string[];
+  in_actual?: boolean;
+  in_r2_valid?: boolean;
+};
+
+type SQLiteShadowCompare = {
+  enabled?: boolean;
+  ok?: boolean;
+  error?: string;
+  query_terms?: string[];
+  candidate_count?: number;
+  candidate_ids?: string[];
+  actual_ids?: string[];
+  overlap_ids?: string[];
+  missed_actual_ids?: string[];
+  stale_candidate_ids?: string[];
+  overlap_count?: number;
+  missed_actual_count?: number;
+  stale_candidate_count?: number;
+  candidates?: SQLiteShadowCandidate[];
+};
+
 type ReferencedMemory = {
   id?: string;
   entry_id?: string;
@@ -64,6 +92,7 @@ type RecallEvent = {
   referenced_memories?: ReferencedMemory[];
   assistant_preview?: string;
   citation_timestamp?: string;
+  sqlite_shadow?: SQLiteShadowCompare;
 };
 
 type DsAuditAttempt = {
@@ -108,6 +137,76 @@ type CoreCacheEntry = {
   emotion_label?: string;
   scene_type?: string;
   target_type?: string;
+};
+
+type DynamicMemoryMirrorKeyword = {
+  term?: string;
+  normalized_term?: string;
+  source?: string;
+  weight?: number;
+  confidence?: number;
+};
+
+type DynamicMemoryMirrorItem = {
+  memory_id?: string;
+  content?: string;
+  retrieval_text?: string;
+  tag?: string;
+  importance?: number;
+  mention_count?: number;
+  last_mentioned?: string;
+  created_at?: string;
+  content_hash?: string;
+  keywords?: DynamicMemoryMirrorKeyword[];
+};
+
+type DynamicMemoryMirrorStatus = {
+  ok?: boolean;
+  db_path?: string;
+  active_count?: number;
+  inactive_count?: number;
+  term_count?: number;
+  meta?: Record<string, string>;
+  last_run?: {
+    finished_at?: string;
+    memory_count?: number;
+    inserted_count?: number;
+    updated_count?: number;
+    unchanged_count?: number;
+    inactive_count?: number;
+    keyword_count?: number;
+    status?: string;
+    error?: string;
+  } | null;
+  error?: string;
+};
+
+type DynamicMemoryMirrorResp = {
+  ok?: boolean;
+  status?: DynamicMemoryMirrorStatus;
+  items?: DynamicMemoryMirrorItem[];
+  visible_count?: number;
+  keyword_missing_visible_count?: number;
+  error?: string;
+};
+
+type DynamicMemoryMirrorBackfillResp = {
+  ok?: boolean;
+  error?: string;
+  result?: {
+    dry_run?: boolean;
+    memory_count?: number;
+    inserted_count?: number;
+    updated_count?: number;
+    unchanged_count?: number;
+    inactive_count?: number;
+    keyword_count?: number;
+    sqlite_write?: boolean;
+    r2_write?: boolean;
+    source_snapshot_hash?: string;
+    ids_hash?: string;
+    db_path?: string;
+  };
 };
 
 type MemoryDebugResp = {
@@ -189,7 +288,9 @@ export function MemoryDebugTab() {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
+  const [mirrorSyncLoading, setMirrorSyncLoading] = useState(false);
   const [data, setData] = useState<MemoryDebugResp | null>(null);
+  const [mirrorData, setMirrorData] = useState<DynamicMemoryMirrorResp | null>(null);
   const [scope, setScope] = useState<"all" | "target">("all");
   const [tab, setTab] = useState<"summary" | "dynamic" | "core">("summary");
   const [deletingCoreId, setDeletingCoreId] = useState("");
@@ -197,9 +298,17 @@ export function MemoryDebugTab() {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const j = await apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=10&core_limit=180&scope=${scope}`);
+      const [j, mirror] = await Promise.all([
+        apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=10&core_limit=180&scope=${scope}`),
+        apiJson<DynamicMemoryMirrorResp>(`/miniapp-api/dynamic-memory-mirror?limit=8`).catch((e: any) => ({
+          ok: false,
+          error: String(e?.message || e),
+          items: [],
+        })),
+      ]);
       if (!j?.ok) throw new Error(j?.error || "加载失败");
       setData(j);
+      setMirrorData(mirror);
     } catch (e: any) {
       toast(`加载失败：${e?.message || e}`);
     } finally {
@@ -233,6 +342,10 @@ export function MemoryDebugTab() {
   const dsAuditEvents = Array.isArray(data?.ds_audit?.events) ? data!.ds_audit!.events! : [];
   const dsActionCounts = data?.ds_audit?.action_counts || {};
   const coreItems = Array.isArray(data?.core_cache?.items) ? data!.core_cache!.items! : [];
+  const mirrorStatus = mirrorData?.status || {};
+  const mirrorMeta = mirrorStatus.meta || {};
+  const mirrorItems = Array.isArray(mirrorData?.items) ? mirrorData!.items! : [];
+  const mirrorConsistent = Number(mirrorStatus.active_count ?? 0) === Number(data?.dynamic_stats?.memory_count ?? -1);
 
   async function runMaintenance() {
     setMaintenanceLoading(true);
@@ -249,6 +362,25 @@ export function MemoryDebugTab() {
       toast(`整理失败：${e?.message || e}`);
     } finally {
       setMaintenanceLoading(false);
+    }
+  }
+
+  async function syncMirrorKeywords() {
+    setMirrorSyncLoading(true);
+    try {
+      const j = await apiJson<DynamicMemoryMirrorBackfillResp>(`/miniapp-api/dynamic-memory-mirror/backfill`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ write: true, max_terms: 32 }),
+      });
+      if (!j?.ok) throw new Error(j?.error || "同步失败");
+      const result = j.result || {};
+      toast(`关键词已同步：${String(result.memory_count ?? 0)} 条 / ${String(result.keyword_count ?? 0)} 词`);
+      await reload();
+    } catch (e: any) {
+      toast(`同步失败：${e?.message || e}`);
+    } finally {
+      setMirrorSyncLoading(false);
     }
   }
 
@@ -432,6 +564,83 @@ export function MemoryDebugTab() {
               </div>
             </details>
 
+            <details className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft" open>
+              <summary className="flex cursor-pointer list-none items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <h3 className="text-[14px] font-bold text-gray-800">SQLite mirror</h3>
+                  <span className={`status-badge ${mirrorData?.ok && mirrorConsistent ? "bg-emerald-50 text-emerald-500" : "bg-amber-50 text-amber-500"}`}>
+                    {mirrorData?.ok ? (mirrorConsistent ? "synced" : "diff") : "offline"}
+                  </span>
+                </div>
+                <svg className="h-4 w-4 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </summary>
+              <div className="mt-4 space-y-4 border-t border-gray-100 pt-4">
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-2xl bg-gray-50 p-3">
+                    <p className="text-[16px] font-bold text-gray-800">{String(mirrorStatus.active_count ?? 0)}</p>
+                    <p className="mt-1 text-[10px] text-gray-400">Mirror</p>
+                  </div>
+                  <div className="rounded-2xl bg-gray-50 p-3">
+                    <p className="text-[16px] font-bold text-gray-800">{String(data?.dynamic_stats?.memory_count ?? 0)}</p>
+                    <p className="mt-1 text-[10px] text-gray-400">R2</p>
+                  </div>
+                  <div className="rounded-2xl bg-gray-50 p-3">
+                    <p className="text-[16px] font-bold text-gray-800">{String(mirrorStatus.term_count ?? 0)}</p>
+                    <p className="mt-1 text-[10px] text-gray-400">Terms</p>
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-gray-50 p-3 text-[11px] leading-relaxed text-gray-500">
+                  <div className="flex items-center justify-between gap-3">
+                    <span>last_sync</span>
+                    <span className="truncate font-medium text-gray-700">{String(mirrorMeta.last_synced_at || mirrorStatus.last_run?.finished_at || "-")}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <span>snapshot</span>
+                    <span className="truncate font-mono text-gray-400">{String(mirrorMeta.source_snapshot_hash || "").slice(0, 12) || "-"}</span>
+                  </div>
+                  {mirrorData?.error ? <div className="mt-2 break-words text-amber-500">{mirrorData.error}</div> : null}
+                </div>
+                <button
+                  className="w-full rounded-2xl bg-[#111827] px-4 py-3 text-[13px] font-bold text-white transition active:scale-[.99] disabled:opacity-50"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    syncMirrorKeywords();
+                  }}
+                  disabled={loading || mirrorSyncLoading}
+                >
+                  {mirrorSyncLoading ? "同步中..." : "同步关键词 mirror"}
+                </button>
+                {mirrorItems.length ? (
+                  <div className="space-y-2">
+                    {mirrorItems.slice(0, 5).map((item, idx) => {
+                      const keywords = Array.isArray(item.keywords) ? item.keywords : [];
+                      return (
+                        <div key={`${String(item.memory_id || "")}-${idx}`} className="rounded-2xl bg-gray-50 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="truncate text-[11px] font-bold text-gray-700">{firstLinePreview(String(item.content || ""), 42)}</span>
+                            <span className="shrink-0 rounded bg-white px-2 py-1 text-[10px] text-gray-400">{String(item.tag || "-")}</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {keywords.slice(0, 8).map((kw, ki) => (
+                              <span key={`${String(kw.normalized_term || kw.term || "")}-${ki}`} className="rounded bg-white px-2 py-1 text-[10px] font-medium text-gray-500">
+                                {String(kw.term || kw.normalized_term || "")}
+                              </span>
+                            ))}
+                            {!keywords.length ? <span className="rounded bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-500">缺关键词</span> : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl bg-gray-50 p-4 text-center text-[12px] text-gray-400">mirror 还没有同步内容</div>
+                )}
+              </div>
+            </details>
+
             <div className="space-y-4">
               <div className="flex items-center justify-between px-1">
                 <div className="flex items-baseline space-x-2">
@@ -557,6 +766,49 @@ export function MemoryDebugTab() {
                       <div className="text-[12px] text-gray-500 break-words">
                         keywords: {Array.isArray(it.keywords) && it.keywords.length ? it.keywords.join(" / ") : "(空)"}
                       </div>
+                      {it.sqlite_shadow?.enabled ? (
+                        <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
+                          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                            <span className={`status-badge ${it.sqlite_shadow.ok ? "bg-emerald-50 text-emerald-500" : "bg-amber-50 text-amber-500"}`}>
+                              sqlite shadow
+                            </span>
+                            <span className="status-badge bg-white text-gray-400">
+                              hit {String(it.sqlite_shadow.overlap_count ?? 0)} / {String(it.sqlite_shadow.candidate_count ?? 0)}
+                            </span>
+                            {Number(it.sqlite_shadow.missed_actual_count || 0) > 0 ? (
+                              <span className="status-badge bg-amber-50 text-amber-500">miss {String(it.sqlite_shadow.missed_actual_count)}</span>
+                            ) : null}
+                            {Number(it.sqlite_shadow.stale_candidate_count || 0) > 0 ? (
+                              <span className="status-badge bg-red-50 text-red-500">stale {String(it.sqlite_shadow.stale_candidate_count)}</span>
+                            ) : null}
+                          </div>
+                          {it.sqlite_shadow.error ? (
+                            <div className="mb-2 break-words text-[11px] text-amber-500">{it.sqlite_shadow.error}</div>
+                          ) : null}
+                          <div className="mb-2 break-words text-[11px] text-gray-400">
+                            terms: {Array.isArray(it.sqlite_shadow.query_terms) && it.sqlite_shadow.query_terms.length ? it.sqlite_shadow.query_terms.slice(0, 10).join(" / ") : "(空)"}
+                          </div>
+                          {Array.isArray(it.sqlite_shadow.candidates) && it.sqlite_shadow.candidates.length ? (
+                            <div className="space-y-1.5">
+                              {it.sqlite_shadow.candidates.slice(0, 5).map((c, ci) => (
+                                <div key={`${String(c.memory_id || "")}-${ci}`} className={`rounded-xl p-2 ${c.in_actual ? "bg-emerald-50 text-emerald-700" : "bg-white text-gray-500"}`}>
+                                  <div className="mb-1 flex items-center justify-between gap-2">
+                                    <span className="truncate text-[11px] font-bold">{firstLinePreview(String(c.content || c.memory_id || ""), 48)}</span>
+                                    <span className="shrink-0 text-[10px] font-bold">{String(c.score ?? "-")}</span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1 text-[10px] text-gray-400">
+                                    {c.tag ? <span className="rounded bg-white px-1.5 py-0.5">{c.tag}</span> : null}
+                                    {(c.matched_terms || []).slice(0, 4).map((term, ti) => (
+                                      <span key={`${term}-${ti}`} className="rounded bg-white px-1.5 py-0.5">{term}</span>
+                                    ))}
+                                    {c.in_actual ? <span className="rounded bg-emerald-500 px-1.5 py-0.5 text-white">actual</span> : null}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {it.assistant_preview ? (
                         <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-3 text-[12px] leading-relaxed text-emerald-700">
                           渡回复：{firstLinePreview(String(it.assistant_preview || ""), 88)}
