@@ -1253,12 +1253,20 @@ def get_recent_image_description_map(window_id: str | None = None) -> dict[str, 
 
 
 def has_window_history(window_id: str) -> bool:
-    """该窗口是否已有过存档（有则不是新窗口）。空 window_id 等价于默认窗口。"""
-    if not _s3_client():
+    """该窗口是否已有过 compact 存档（有则不是新窗口）。空 window_id 等价于默认窗口。"""
+    client = _s3_client()
+    if not client:
         return False
-    data = _read_conversation_data_with_legacy_migrate(window_id)
-    rounds = data.get("rounds") if isinstance(data, dict) else None
-    return isinstance(rounds, list) and len(rounds) > 0
+    meta, read_ok, _ = _read_conversation_meta_status(client, window_id)
+    if read_ok and isinstance(meta, dict):
+        try:
+            if int(meta.get("last_round_index") or 0) > 0 or int(meta.get("round_count") or 0) > 0:
+                return True
+        except Exception:
+            pass
+    if _read_recent_rounds(client, window_id):
+        return True
+    return bool(_read_conversation_backup_rounds_for_dates(client, window_id, _conversation_guard_dates(14)))
 
 
 def get_last_proactive_contact_at() -> Optional[str]:
