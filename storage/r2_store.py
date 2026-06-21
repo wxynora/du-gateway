@@ -625,6 +625,12 @@ def append_conversation_round(window_id: str, round_index: int, messages: list, 
                 )
             except Exception as e:
                 logger.warning("append_conversation_round sqlite 同步失败 window_id=%s round_index=%s error=%s", window_id, round_index, e)
+        try:
+            from storage import chat_activity_store
+
+            chat_activity_store.append_chat_activity_round(wid_norm, ts, round_entry.get("messages") or [])
+        except Exception as e:
+            logger.warning("chat_activity_context 增量统计失败 window_id=%s round_index=%s error=%s", window_id, round_index, e)
         logger.info("R2 已写入 对话轮次 window_id=%s round_index=%s key=%s", window_id, round_index, round_key)
         return True
     except Exception as e:

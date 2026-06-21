@@ -13,12 +13,13 @@ logger = get_logger(__name__)
 
 _LOOKBACK_DAYS = 4
 _KEEP_RECORDS = 3
-_MAX_ROUNDS_SCAN = 700
+_MAX_ROUNDS_SCAN = 300
 _CACHE_TTL_SECONDS = 5 * 60
 _DROP_RATIO = 0.68
 _DROP_MIN_DIFF = 12
 _RISE_RATIO = 1.35
 _RISE_MIN_DIFF = 12
+_SCHEMA_VERSION = chat_activity_store.CHAT_ACTIVITY_SCHEMA_VERSION
 
 
 def _primary_window_id() -> str:
@@ -138,6 +139,24 @@ def _count_rounds_between(rounds: list[dict], start: datetime, end: datetime) ->
     return count
 
 
+def _event_datetimes_from_days(days: Any) -> list[datetime]:
+    if not isinstance(days, dict):
+        return []
+    out: list[datetime] = []
+    for values in days.values():
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            dt = _dt(value)
+            if dt:
+                out.append(dt)
+    return sorted(out)
+
+
+def _count_events_between(events: list[datetime], start: datetime, end: datetime) -> int:
+    return sum(1 for dt in events if start <= dt < end)
+
+
 def _cycle_bounds(day: str, today: str, summaries: dict[str, dict], now_dt: datetime) -> tuple[datetime, datetime, str]:
     day_start = _date_start(day)
     if not day_start:
@@ -197,6 +216,24 @@ def _build_records(rounds: list[dict], summaries: dict[str, dict], today: str, n
     return records[-_KEEP_RECORDS:]
 
 
+def _build_records_from_events(events: list[datetime], summaries: dict[str, dict], today: str, now_dt: datetime) -> list[dict]:
+    records: list[dict] = []
+    for offset in range(_KEEP_RECORDS - 1, -1, -1):
+        day = _date_after(today, -offset)
+        start, end, source = _cycle_bounds(day, today, summaries, now_dt)
+        records.append(
+            {
+                "date": day,
+                "label": _record_label(day, today),
+                "start_at": start.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+                "end_at": end.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+                "rounds": _count_events_between(events, start, end),
+                "source": source,
+            }
+        )
+    return records[-_KEEP_RECORDS:]
+
+
 def _format_change(today_count: int, previous_count: int) -> str:
     if previous_count <= 0:
         return ""
@@ -205,7 +242,23 @@ def _format_change(today_count: int, previous_count: int) -> str:
         return "今天明显少一些"
     if diff >= _RISE_MIN_DIFF and today_count >= int(previous_count * _RISE_RATIO):
         return "今天明显多一些"
-    return "今天和昨天差不多"
+    return ""
+
+
+def _current_record_text(record: dict) -> str:
+    label = str(record.get("label") or "今天")
+    count = int(record.get("rounds") or 0)
+    if str(record.get("source") or "") == "sleep_cycle":
+        return f"{label}从醒来到现在对话约 {count} 轮"
+    return f"{label}到现在对话约 {count} 轮"
+
+
+def _previous_record_text(record: dict) -> str:
+    label = str(record.get("label") or "昨天")
+    count = int(record.get("rounds") or 0)
+    if str(record.get("source") or "") == "sleep_cycle":
+        return f"{label}醒来到睡前对话约 {count} 轮"
+    return f"{label}全天对话约 {count} 轮"
 
 
 def _format_line(records: list[dict]) -> str:
@@ -214,13 +267,12 @@ def _format_line(records: list[dict]) -> str:
     current = records[-1]
     previous = records[-2] if len(records) >= 2 else None
     current_count = int(current.get("rounds") or 0)
-    current_label = str(current.get("label") or "今天")
-    parts = [f"{current_label}从醒来到现在对话约 {current_count} 轮"]
+    parts = [_current_record_text(current)]
     if previous:
         previous_count = int(previous.get("rounds") or 0)
-        parts.append(f"{previous.get('label') or '昨天'}醒来到睡前对话约 {previous_count} 轮")
         change = _format_change(current_count, previous_count)
         if change:
+            parts.append(_previous_record_text(previous))
             parts.append(change)
     return "对话节律：" + "；".join(parts) + "。"
 
@@ -232,6 +284,8 @@ def _cached_line_if_fresh(window_id: str, today: str, now_dt: datetime) -> str:
         logger.debug("chat_activity cache read skipped error=%s", e)
         return ""
     if not isinstance(cached, dict):
+        return ""
+    if int(cached.get("schema_version") or 0) != _SCHEMA_VERSION:
         return ""
     if str(cached.get("window_id") or "").strip() != window_id:
         return ""
@@ -253,6 +307,36 @@ def _cached_line_if_fresh(window_id: str, today: str, now_dt: datetime) -> str:
     return ""
 
 
+def _required_recent_days(today: str) -> set[str]:
+    # Keep one extra calendar day because sleep-cycle days can cross midnight.
+    return {_date_after(today, -i) for i in range(_KEEP_RECORDS + 1)}
+
+
+def _days_cover_recent_window(days: Any, today: str) -> bool:
+    if not isinstance(days, dict):
+        return False
+    return _required_recent_days(today).issubset({str(k or "").strip() for k in days.keys()})
+
+
+def _days_from_rounds(rounds: list[dict], today: str) -> dict[str, list[str]]:
+    required = _required_recent_days(today)
+    days: dict[str, list[str]] = {day: [] for day in required}
+    for row in rounds or []:
+        if not isinstance(row, dict) or not _has_human_user_turn(row):
+            continue
+        ts = _round_timestamp(row)
+        if not ts:
+            continue
+        day = ts.strftime("%Y-%m-%d")
+        if day not in required:
+            continue
+        days.setdefault(day, [])
+        iso = ts.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        if iso not in days[day]:
+            days[day].append(iso)
+    return {day: sorted(values) for day, values in days.items()}
+
+
 def build_chat_activity_context_line(latest_sense: dict | None = None) -> str:
     """Build and cache a concise objective chat-rhythm line for sense context."""
     window_id = _primary_window_id()
@@ -266,16 +350,28 @@ def build_chat_activity_context_line(latest_sense: dict | None = None) -> str:
     if cached_line:
         return cached_line
     try:
-        rounds = r2_store.get_conversation_rounds(window_id, last_n=_MAX_ROUNDS_SCAN) or []
+        cached = chat_activity_store.get_chat_activity_context()
     except Exception as e:
-        logger.debug("chat_activity rounds skipped window_id=%s error=%s", window_id, e)
-        rounds = []
+        logger.debug("chat_activity cache load skipped error=%s", e)
+        cached = {}
+    days = cached.get("days") if isinstance(cached, dict) else {}
+    if int((cached or {}).get("schema_version") or 0) != _SCHEMA_VERSION or str((cached or {}).get("window_id") or "").strip() != window_id:
+        days = {}
+    try:
+        if not _days_cover_recent_window(days, today):
+            rounds = r2_store.get_conversation_rounds(window_id, last_n=_MAX_ROUNDS_SCAN) or []
+            days = _days_from_rounds(rounds, today)
+    except Exception as e:
+        logger.debug("chat_activity bootstrap rounds skipped window_id=%s error=%s", window_id, e)
     summaries = _collect_sleep_summaries(latest_sense, today)
-    records = _build_records(rounds, summaries, today, now_dt)
+    events = _event_datetimes_from_days(days)
+    records = _build_records_from_events(events, summaries, today, now_dt)
     line = _format_line(records)
     payload = {
+        "schema_version": _SCHEMA_VERSION,
         "window_id": window_id,
         "updated_at": now_beijing_iso(),
+        "days": days,
         "records": records[-_KEEP_RECORDS:],
         "line": line,
     }
