@@ -331,7 +331,14 @@ def format_sense_snapshot_for_system() -> str:
     foreground_line = _format_foreground_line(foreground)
     app_sessions_line = _format_app_sessions_line(app_sessions)
     usage_line = _format_usage_line(usage)
-    if not has_battery and not loc_line and not health_line and not screen_line and not sleep_guess_line and not sleep_summary_line and not foreground_line and not app_sessions_line and not usage_line:
+    try:
+        from services.chat_activity_context import build_chat_activity_context_line
+
+        chat_activity_line = build_chat_activity_context_line(doc)
+    except Exception as e:
+        logger.debug("chat_activity_context 注入跳过 error=%s", e)
+        chat_activity_line = ""
+    if not has_battery and not loc_line and not health_line and not screen_line and not sleep_guess_line and not sleep_summary_line and not foreground_line and not app_sessions_line and not usage_line and not chat_activity_line:
         return ""
 
     lines: list[str] = ["老婆当前状态"]
@@ -353,6 +360,8 @@ def format_sense_snapshot_for_system() -> str:
         lines.append(sleep_summary_line)
     elif screen_line:
         lines.append(screen_line)
+    if chat_activity_line:
+        lines.append(chat_activity_line)
     if foreground_line:
         lines.append(foreground_line)
     if app_sessions_line:
