@@ -24,7 +24,9 @@ _REFUSAL_WORDS = (
     "sorry",
     "can't",
     "cannot",
+    "can not",
     "unable",
+    "not able",
     "won't",
     "refuse",
     "无法",
@@ -37,11 +39,26 @@ _SENSITIVE_WORDS = (
     "sexually",
     "explicit",
     "erotic",
+    "intimate",
     "nsfw",
     "色情",
     "性内容",
     "露骨",
 )
+_THINKING_REWRITE_TARGET_WORDS = (
+    "thinking",
+    "next_thinking",
+    "rewrite",
+    "rewriting",
+    "compress",
+    "process this request",
+    "转写",
+    "改写",
+    "压缩",
+    "思维链",
+    "脑内",
+)
+_PSEUDO_COT_CONTEXT_WORDS = ("thinking", "content")
 
 
 def pseudo_cot_instruction_enabled(body: dict) -> bool:
@@ -182,6 +199,16 @@ def is_reasoning_summary_refusal(reasoning_text: str = "", details: Any = None) 
         return False
     has_refusal = any(word in haystack for word in _REFUSAL_WORDS)
     has_sensitive = any(word in haystack for word in _SENSITIVE_WORDS)
+    has_thinking_target = any(word in haystack for word in _THINKING_REWRITE_TARGET_WORDS)
+    has_pseudo_cot_context = any(word in haystack for word in _PSEUDO_COT_CONTEXT_WORDS)
+    if not has_pseudo_cot_context:
+        return False
+    if re.search(r"\bi\s+(?:can(?:not|'t)|am\s+not\s+able|won't|refuse)\b", haystack) and (
+        has_thinking_target or has_sensitive
+    ):
+        return True
+    if re.search(r"\b(?:i'm|im|i am)\s+not\s+able\b", haystack) and (has_thinking_target or has_sensitive):
+        return True
     if re.search(r"(can't|cannot|unable to|won't|无法|不能|不便|拒绝).{0,80}(rewrite|转写|改写)", haystack):
         return True
     if re.search(r"(rewrite|转写|改写).{0,80}(can't|cannot|unable to|won't|无法|不能|不便|拒绝)", haystack):
