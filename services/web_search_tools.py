@@ -27,6 +27,8 @@ _WEBSEARCH_COMPRESS_MODEL = DEEPSEEK_CHAT_MODEL
 _WEBSEARCH_COMPRESS_MAX_INPUT_CHARS = 6000
 _WEBSEARCH_COMPRESS_MAX_TOKENS = 900
 _WEBSEARCH_COMPRESS_TIMEOUT_SECONDS = 25
+_MOJIBAKE_CHARS = set("ÃÂâæåäçèéêëìíîïðñòóôõöøùúûüýÿ¼½¾¿©®¥¶§¤¢£�□")
+_MOJIBAKE_MARKERS_RE = re.compile(r"(?:Ã.|Â.|â..|æ|å|ç|è|é|ï|¼|½|¾|¿|�|□)")
 
 _NOISE_PATTERNS = (
     r"(?:个性化推荐算法备案编号|推荐算法备案编号)[\s\S]{0,160}(?:\||$)",
@@ -67,8 +69,70 @@ def _dedup_sentences(text: str) -> str:
     return " ".join(out).strip()
 
 
+def _bad_encoding_chars(text: str) -> int:
+    return sum(1 for ch in str(text or "") if ch in _MOJIBAKE_CHARS)
+
+
+def _readable_chars(text: str) -> int:
+    return sum(1 for ch in str(text or "") if "\u4e00" <= ch <= "\u9fff" or ch.isascii() and (ch.isalnum() or ch.isspace()))
+
+
+def _text_quality_score(text: str) -> int:
+    s = str(text or "")
+    return _readable_chars(s) - _bad_encoding_chars(s) * 3 - s.count("\ufffd") * 6
+
+
+def _decode_response_text(resp: requests.Response) -> str:
+    raw = resp.content or b""
+    if not raw:
+        return ""
+    encodings = [
+        resp.encoding,
+        getattr(resp, "apparent_encoding", None),
+        "utf-8",
+        "gb18030",
+    ]
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for enc in encodings:
+        enc = str(enc or "").strip()
+        if not enc or enc.lower() in seen:
+            continue
+        seen.add(enc.lower())
+        try:
+            candidates.append(raw.decode(enc, errors="replace"))
+        except Exception:
+            continue
+    return max(candidates or [resp.text or ""], key=_text_quality_score)
+
+
+def _looks_like_mojibake_fragment(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s:
+        return False
+    bad = _bad_encoding_chars(s)
+    if "�" in s or "\ufffd" in s:
+        return True
+    if bad < 4:
+        return False
+    compact_len = max(1, len(re.sub(r"\s+", "", s)))
+    if bad / compact_len >= 0.08:
+        return True
+    return len(_MOJIBAKE_MARKERS_RE.findall(s)) >= 4
+
+
+def _clean_search_fragment(text: str) -> str:
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not s:
+        return ""
+    if not _looks_like_mojibake_fragment(s):
+        return s
+    return ""
+
+
 def _post_clean_text(text: str) -> str:
-    s = text or ""
+    fragments = [_clean_search_fragment(part) for part in re.split(r"[\r\n]+", str(text or ""))]
+    s = " ".join(part for part in fragments if part)
     s = re.sub(r"(?:原标题[:：].{0,80}?)(?=(?:\s|$))", " ", s)
     s = re.sub(r"(?:编辑[:：]|责编[:：]|记者[:：]|作者[:：]).{0,40}(?=(?:\s|$))", " ", s)
     s = re.sub(r"(?:本文来源|文章来源|本文地址)[:：].{0,80}(?=(?:\s|$))", " ", s)
@@ -139,9 +203,9 @@ def _search_tavily(query: str, max_results: int, timeout_seconds: int) -> tuple[
     for it in rows[:max_results]:
         items.append(
             {
-                "title": str(it.get("title") or "").strip(),
+                "title": _post_clean_text(str(it.get("title") or "").strip()),
                 "url": str(it.get("url") or "").strip(),
-                "snippet": str(it.get("content") or it.get("snippet") or "").strip(),
+                "snippet": _post_clean_text(str(it.get("content") or it.get("snippet") or "").strip()),
                 "source": "tavily",
                 "published_at": str(it.get("published_date") or "").strip(),
             }
@@ -210,7 +274,7 @@ class _SimpleTextExtractor(HTMLParser):
         return out[:self._MAX_IMAGES]
 
     def text(self) -> str:
-        merged = " ".join(self._parts).strip()
+        merged = " ".join(part for part in (_clean_search_fragment(p) for p in self._parts) if part).strip()
         merged = re.sub(r"\s+", " ", merged)
         # 去除常见页脚噪音（备案号、营业执照等）
         merged = re.sub(r"[\s\S]{0,20}(?:ICP备|网安备|营业执照|经营许可证|违法不良信息举报|互联网举报中心)[\s\S]{0,60}(?:\||$)", " ", merged)
@@ -267,18 +331,19 @@ def _fetch_page(url: str, timeout_seconds: int) -> dict:
             page["status"] = "error"
             return page
 
-        html = resp.text or ""
+        html = _decode_response_text(resp)
         parser = _SimpleTextExtractor()
         parser.feed(html)
-        title = parser.title()
-        text = parser.text()
+        title = _post_clean_text(parser.title())
+        text = _post_clean_text(parser.text())
 
         # 提取页面图片并生成描述
         img_urls = parser.image_urls()
-        img_descs = _describe_image_urls(img_urls, timeout=timeout_seconds) if img_urls else []
+        img_descs = [_post_clean_text(d) for d in (_describe_image_urls(img_urls, timeout=timeout_seconds) if img_urls else [])]
+        img_descs = [d for d in img_descs if d]
         if img_descs:
             img_block = "\n".join(f"[图片：{d}]" for d in img_descs)
-            text = img_block + "\n\n" + text
+            text = _post_clean_text(img_block + "\n\n" + text)
 
         max_chars = max(1000, int(WEBSEARCH_MAX_PAGE_CHARS))
         original_chars = len(text)
