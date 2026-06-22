@@ -273,7 +273,10 @@ def execute_create_system_alarm(arguments: dict) -> str:
         return json.dumps({"ok": False, "error": err or "入队失败"}, ensure_ascii=False)
     schedule_item, schedule_err = _sync_system_alarm_to_sumitalk(item, hour, minute, title)
     card = build_system_alarm_card(hour, minute, title)
-    note = "已交给 SumiTalk 安卓壳创建系统闹钟；手机在线时通常会在几十秒内执行。"
+    note = (
+        "已交给 SumiTalk 安卓壳创建系统闹钟；手机在线时通常会在几十秒内执行。"
+        "这是异步动作，下一轮若 App 已回传结果，网关会把成功或失败写进动态上下文。"
+    )
     if schedule_item:
         note += "已同步写入 SumiTalk 闹钟。"
     elif schedule_err and schedule_err != "duplicate_action":

@@ -245,6 +245,65 @@ def step_inject_humor_memes(body: dict) -> dict:
     return _append_to_dynamic_system(body, inject)
 
 
+def _format_system_alarm_action_result(item: dict) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    try:
+        hour = int(result.get("hour", payload.get("hour")))
+        minute = int(result.get("minute", payload.get("minute")))
+        time_text = f"{hour:02d}:{minute:02d}"
+    except Exception:
+        time_text = "目标时间"
+    title = str(result.get("title") or payload.get("title") or "渡的提醒").strip() or "渡的提醒"
+    status = str(item.get("status") or "").strip().lower()
+    if status == "done":
+        return f"- 系统闹钟 {time_text}「{title}」：手机 App 已回传创建成功。"
+    if status in {"failed", "expired", "abandoned"}:
+        error = str(item.get("error") or "").strip()
+        if not error and isinstance(result, dict):
+            error = str(result.get("error") or result.get("message") or "").strip()
+        suffix = f"原因：{error[:120]}" if error else "没有拿到成功回执。"
+        return f"- 系统闹钟 {time_text}「{title}」：创建没有成功。{suffix}"
+    return f"- 系统闹钟 {time_text}「{title}」：已发送到手机，仍在等待 App 回执。"
+
+
+def step_inject_system_alarm_action_result(body: dict, window_id: str) -> dict:
+    """
+    只在上一轮刚调用 create_system_alarm 后，下一轮注入一次安卓壳回执。
+    平时不扫描其它 App action，避免动态区变重。
+    """
+    try:
+        from storage import app_action_store, conversation_sqlite_store
+
+        last_rounds = conversation_sqlite_store.get_rounds(window_id, last_n=1)
+        last_round = last_rounds[-1] if last_rounds else {}
+        action_note = str((last_round or {}).get("action_note") or "")
+        if "create_system_alarm" not in action_note:
+            return body
+        since_iso = str((last_round or {}).get("timestamp") or "").strip()
+        alarm_action_id = ""
+        m = re.search(r"create_system_alarm:id=([0-9a-fA-F-]{8,})", action_note)
+        if m:
+            alarm_action_id = m.group(1)
+        item = app_action_store.get_system_alarm_action(alarm_action_id) if alarm_action_id else None
+        items = [item] if item else app_action_store.list_system_alarm_actions_since(since_iso, limit=1)
+    except Exception as e:
+        logger.debug("system alarm action result 注入跳过 error=%s", e)
+        return body
+    if not items:
+        return body
+    lines = [_format_system_alarm_action_result(item) for item in items if isinstance(item, dict)]
+    lines = [line for line in lines if line]
+    if not lines:
+        return body
+    inject = (
+        "\n\n【手机系统闹钟回执】\n"
+        + "\n".join(lines)
+        + "\n如果显示成功，就按已经创建成功来回应；如果显示失败，可以告诉小玥失败了，并按她的意思决定要不要重新创建。"
+    )
+    return _append_to_dynamic_system(body, inject)
+
+
 def _append_to_static_system(body: dict, text: str) -> dict:
     """
     向静态 system 段追加内容。
@@ -799,6 +858,26 @@ def _build_action_note_from_tool_calls(tool_calls: list) -> str:
         except Exception:
             args = {}
         result_text = str(tc.get("result") or "").strip()
+        if name == "create_system_alarm":
+            result_obj = {}
+            try:
+                parsed = json.loads(result_text or "{}")
+                if isinstance(parsed, dict):
+                    result_obj = parsed
+            except Exception:
+                result_obj = {}
+            ok = bool(result_obj.get("ok")) if result_obj else bool(result_text)
+            try:
+                hour = int(result_obj.get("hour", args.get("hour")))
+                minute = int(result_obj.get("minute", args.get("minute")))
+                alarm_time = f"{hour:02d}:{minute:02d}"
+            except Exception:
+                alarm_time = "目标时间"
+            if ok:
+                action_id = str(result_obj.get("id") or "").strip()
+                id_part = f":id={action_id}" if action_id else ""
+                return f"create_system_alarm{id_part}（{alarm_time} 系统闹钟已发送到手机，等待 App 回执）"
+            return f"create_system_alarm（{alarm_time} 调用未成功）"
         target = ""
         for key in ("url", "query", "keyword", "page_id", "title", "content", "window_id"):
             val = args.get(key)

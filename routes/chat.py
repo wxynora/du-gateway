@@ -37,6 +37,7 @@ from pipeline.pipeline import (
     step_inject_du_non_retreat_rules,
     step_inject_reference_note,
     step_inject_current_base_model,
+    step_inject_system_alarm_action_result,
     step_inject_pseudo_cot_inner_os,
     step_inject_humor_memes,
     step_inject_latest_4_rounds_for_new_window,
@@ -1681,6 +1682,7 @@ def chat_completions():
             logger.debug("pixel_home user state inference skipped error=%s", e)
     if not slim_voice_call:
         body = step_inject_current_base_model(body)
+        body = step_inject_system_alarm_action_result(body, window_id)
         body = step_inject_pseudo_cot_inner_os(body, window_id)
         body = step_inject_du_thought(body, window_id)
         body = step_inject_du_vitals(body, window_id)

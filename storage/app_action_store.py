@@ -98,6 +98,19 @@ def _parse_utc_iso(value: str) -> Optional[datetime]:
         return None
 
 
+def _parse_any_iso_to_utc(value: str) -> Optional[datetime]:
+    try:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=BEIJING_TZ)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
 def _app_action_queue_raw(client) -> dict:
     data = _read_json(client, R2_KEY_APP_ACTION_QUEUE)
     if not isinstance(data, dict):
@@ -872,3 +885,82 @@ def report_app_actions(results: list, device_id: str = "") -> dict:
         except Exception as e:
             logger.error("report_app_actions 失败 device_id=%s error=%s", device, e, exc_info=True)
             return {"ok": False, "error": str(e), "processed": 0}
+
+
+def list_system_alarm_actions_since(since_iso: str, limit: int = 3) -> list[dict]:
+    """只供下一轮动态 system 注入：读取上一轮之后的系统闹钟动作状态。"""
+    since_dt = _parse_any_iso_to_utc(since_iso)
+    if since_dt is None:
+        return []
+    window_start = since_dt - timedelta(minutes=5)
+    try:
+        max_items = max(1, min(int(limit or 3), 5))
+    except Exception:
+        max_items = 3
+    _ensure_app_actions_bootstrapped()
+    try:
+        with runtime_sqlite.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM app_actions
+                WHERE type = 'create_system_alarm'
+                ORDER BY created_at DESC
+                LIMIT 20
+                """
+            ).fetchall()
+    except Exception as e:
+        logger.warning("list_system_alarm_actions_since failed since=%s error=%s", since_iso, e)
+        return []
+
+    out: list[dict] = []
+    for row in rows:
+        item = _row_to_app_action(row)
+        status = str(row["status"] or "pending").strip() or "pending"
+        created_dt = _parse_any_iso_to_utc(str(row["created_at"] or ""))
+        finished_dt = _parse_any_iso_to_utc(str(row["finished_at"] or ""))
+        marker_dt = finished_dt or created_dt
+        if marker_dt is None or marker_dt <= window_start:
+            continue
+        item["status"] = status
+        if status == "pending":
+            item["finishedAt"] = ""
+            item["result"] = {}
+            item["error"] = ""
+        out.append(item)
+        if len(out) >= max_items:
+            break
+    return list(reversed(out))
+
+
+def get_system_alarm_action(action_id: str) -> Optional[dict]:
+    """按动作 id 读取单条系统闹钟动作状态，用于下一轮回执注入。"""
+    aid = str(action_id or "").strip()
+    if not aid:
+        return None
+    _ensure_app_actions_bootstrapped()
+    try:
+        with runtime_sqlite.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM app_actions
+                WHERE id = ?
+                  AND type = 'create_system_alarm'
+                LIMIT 1
+                """,
+                (aid,),
+            ).fetchone()
+    except Exception as e:
+        logger.warning("get_system_alarm_action failed id=%s error=%s", aid, e)
+        return None
+    if row is None:
+        return None
+    item = _row_to_app_action(row)
+    status = str(row["status"] or "pending").strip() or "pending"
+    item["status"] = status
+    if status == "pending":
+        item["finishedAt"] = ""
+        item["result"] = {}
+        item["error"] = ""
+    return item
