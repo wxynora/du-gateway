@@ -433,6 +433,22 @@ def _compact_action_choices(source: dict) -> str:
     return "；".join(pieces)
 
 
+def _million_plan_human_os_line(payload: dict) -> str:
+    text = str(
+        payload.get("humanOs")
+        or payload.get("humanOS")
+        or payload.get("human_os")
+        or payload.get("human_os_text")
+        or ""
+    ).strip()
+    if not text:
+        return ""
+    compact = text.replace("HumanOS", "人类os").replace("humanOS", "人类os")
+    if compact.startswith(("你的人类os：", "你的人类os:", "人类os：", "人类os:")):
+        return compact
+    return f"你的人类os：{compact}"
+
+
 def _compact_million_plan_player_prompt(payload: dict, raw: str) -> str:
     view = payload.get("playerView") if isinstance(payload.get("playerView"), dict) else {}
     event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
@@ -472,6 +488,9 @@ def _compact_million_plan_player_prompt(payload: dict, raw: str) -> str:
     last_event = view.get("lastEventResult")
     if isinstance(last_event, list) and last_event:
         parts.append(f"上轮结果：{_clip_compact_text('；'.join(str(x) for x in last_event), 120)}")
+    human_os = _million_plan_human_os_line(payload)
+    if human_os:
+        parts.append(human_os)
 
     title = str(mandatory.get("title") or "").strip()
     text = str(mandatory.get("text") or "").strip()
