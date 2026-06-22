@@ -33,6 +33,7 @@ function audioExt(mimeType: string): string {
 
 function normalizeAttachment(value: any, fallbackKind: "image" | "audio" | "document"): ChatAttachment {
   const raw = value && typeof value === "object" ? value : {};
+  const durationMs = Number(raw.durationMs ?? raw.duration_ms ?? 0) || 0;
   return {
     id: String(raw.id || raw.remoteKey || raw.remoteUrl || `${fallbackKind}-${Date.now()}`),
     kind: raw.kind === "audio" || raw.kind === "image" || raw.kind === "document" ? raw.kind : fallbackKind,
@@ -41,7 +42,7 @@ function normalizeAttachment(value: any, fallbackKind: "image" | "audio" | "docu
     remoteKey: String(raw.remoteKey || ""),
     remoteUrl: String(raw.remoteUrl || ""),
     size: Number(raw.size || 0) || undefined,
-    durationMs: Number(raw.durationMs || 0) || undefined,
+    durationMs: durationMs > 0 ? durationMs : undefined,
     transcript: String(raw.transcript || "").trim() || undefined,
     textPreview: String(raw.textPreview || raw.text || "").trim() || undefined,
     createdAt: String(raw.createdAt || "").trim() || undefined,
@@ -70,7 +71,7 @@ export async function uploadChatDocument(file: File): Promise<ChatAttachment> {
   return normalizeAttachment(data.attachment || data.media, "document");
 }
 
-export async function transcribeChatAudio(blob: Blob, mimeType: string): Promise<{
+export async function transcribeChatAudio(blob: Blob, mimeType: string, durationMs = 0): Promise<{
   text: string;
   attachment: ChatAttachment;
   audioObservations?: string;
@@ -80,6 +81,7 @@ export async function transcribeChatAudio(blob: Blob, mimeType: string): Promise
   const form = new FormData();
   form.append("audio", blob, `voice.${audioExt(mime)}`);
   form.append("mime_type", mime);
+  if (durationMs > 0) form.append("duration_ms", String(Math.round(durationMs)));
   const resp = await apiFetch("/miniapp-api/chat-media/transcribe", { method: "POST", body: form });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok || !data?.ok) throw new Error(data?.error || `HTTP ${resp.status}`);

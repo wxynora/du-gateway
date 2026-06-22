@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import re
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -60,13 +61,13 @@ def _miniapp_voice_avatar_url(avatar_version: int) -> str:
 
 def _chat_media_public_url(key: str) -> str:
     media_key = str(key or "").strip()
+    base = resolve_preview_base_url_for_http_request(request.url_root or "").strip().rstrip("/")
+    if base:
+        return f"{base}/miniapp-api/chat-media/raw-public?key={quote(media_key, safe='/')}"
     public_base = (R2_PUBLIC_URL or "").strip().rstrip("/")
     if public_base:
         return f"{public_base}/{media_key.lstrip('/')}"
-    base = resolve_preview_base_url_for_http_request(request.url_root or "").strip().rstrip("/")
-    if not base:
-        return ""
-    return f"{base}/miniapp-api/chat-media/raw-public?key={quote(media_key, safe='/')}"
+    return ""
 
 
 def _chat_media_attachment(row: dict, *, duration_ms: int = 0, transcript: str = "", text_preview: str = "") -> dict:
@@ -91,6 +92,56 @@ def _chat_media_attachment(row: dict, *, duration_ms: int = 0, transcript: str =
     if text_preview:
         item["textPreview"] = text_preview
     return item
+
+
+def _safe_duration_ms(value: object) -> int:
+    try:
+        duration = int(float(str(value or "0").strip()))
+    except Exception:
+        return 0
+    return max(0, min(duration, 60 * 60 * 1000))
+
+
+def _media_range_response(data: bytes, ctype: str) -> Response:
+    content = data or b""
+    total = len(content)
+    mime = ctype or "application/octet-stream"
+    base_headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=86400",
+    }
+    range_header = str(request.headers.get("Range") or "").strip()
+    m = re.match(r"^bytes=(\d*)-(\d*)$", range_header)
+    if not m or total <= 0:
+        headers = {**base_headers, "Content-Length": str(total)}
+        return Response(content, status=200, mimetype=mime, headers=headers)
+
+    start_raw, end_raw = m.group(1), m.group(2)
+    try:
+        if start_raw:
+            start = int(start_raw)
+            end = int(end_raw) if end_raw else total - 1
+        else:
+            suffix = int(end_raw) if end_raw else 0
+            start = max(0, total - suffix)
+            end = total - 1
+    except Exception:
+        start, end = 0, total - 1
+    if start < 0 or start >= total or end < start:
+        return Response(
+            b"",
+            status=416,
+            mimetype=mime,
+            headers={**base_headers, "Content-Range": f"bytes */{total}", "Content-Length": "0"},
+        )
+    end = min(end, total - 1)
+    chunk = content[start : end + 1]
+    headers = {
+        **base_headers,
+        "Content-Range": f"bytes {start}-{end}/{total}",
+        "Content-Length": str(len(chunk)),
+    }
+    return Response(chunk, status=206, mimetype=mime, headers=headers)
 
 
 def _chat_media_filename_ext(filename: str) -> str:
@@ -665,6 +716,7 @@ def register_routes(bp) -> None:
             )
             return jsonify({"ok": False, "error": "语音转写失败"}), 500
         text = str(result.get("text") or "").strip()
+        duration_ms = _safe_duration_ms(request.form.get("duration_ms") or request.form.get("durationMs"))
         row = r2_store.upload_sumitalk_chat_media_file("audio", filename, audio_bytes, mime_type)
         if not row:
             logger.warning(
@@ -675,7 +727,7 @@ def register_routes(bp) -> None:
                 len(text),
             )
             return jsonify({"ok": False, "error": "语音保存失败"}), 500
-        attachment = _chat_media_attachment(row, transcript=text)
+        attachment = _chat_media_attachment(row, duration_ms=duration_ms, transcript=text)
         logger.info(
             "[SumiTalk] chat_media_transcribe_ok mime=%s bytes=%s elapsed_ms=%s text_len=%s provider=%s saved=%s",
             mime_type,
@@ -746,7 +798,7 @@ def register_routes(bp) -> None:
         data, ctype = r2_store.get_sumitalk_chat_media_file(key)
         if not data:
             return jsonify({"ok": False, "error": "未找到"}), 404
-        return Response(data, mimetype=ctype or "application/octet-stream", headers={"Cache-Control": "public, max-age=86400"})
+        return _media_range_response(data, ctype or "application/octet-stream")
 
     @bp.route("/call-records", methods=["GET"])
     def miniapp_get_call_records():

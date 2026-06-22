@@ -294,6 +294,7 @@ export function MainChatScreen({
   const chatVoiceRecorderRef = useRef<MediaRecorder | null>(null);
   const chatVoiceChunksRef = useRef<Blob[]>([]);
   const chatVoiceMimeRef = useRef("");
+  const chatVoiceStartedAtRef = useRef(0);
   const chatVoicePressingRef = useRef(false);
   const chatVoiceStartPromiseRef = useRef<Promise<boolean> | null>(null);
   const activeChatRequestRef = useRef<ActiveChatRequest | null>(null);
@@ -1836,6 +1837,7 @@ export function MainChatScreen({
         if (event.data && event.data.size > 0) chatVoiceChunksRef.current.push(event.data);
       };
       recorder.start(1000);
+      chatVoiceStartedAtRef.current = Date.now();
       setRecordingChatVoice(true);
       logSumiTalkClientEvent("voice_record_started", { mime: chatVoiceMimeRef.current || recorder.mimeType || "" });
       return true;
@@ -1854,6 +1856,7 @@ export function MainChatScreen({
     setMediaBusy(true);
     try {
       const mimeType = chatVoiceMimeRef.current || recorder.mimeType || "audio/webm";
+      const recordedDurationMs = chatVoiceStartedAtRef.current ? Math.max(0, Date.now() - chatVoiceStartedAtRef.current) : 0;
       const blob = await new Promise<Blob>((resolve) => {
         const finalize = () => {
           recorder.removeEventListener("stop", finalize);
@@ -1862,12 +1865,13 @@ export function MainChatScreen({
         recorder.addEventListener("stop", finalize);
         recorder.stop();
       });
+      chatVoiceStartedAtRef.current = 0;
       setRecordingChatVoice(false);
       chatVoiceChunksRef.current = [];
       if (blob.size <= 0) throw new Error("录音为空");
       logSumiTalkClientEvent("voice_record_stop", { mime: mimeType, bytes: blob.size });
       logSumiTalkClientEvent("voice_stt_start", { mime: mimeType, bytes: blob.size });
-      const prepared = await prepareVoicePrivateChatInput(blob, mimeType);
+      const prepared = await prepareVoicePrivateChatInput(blob, mimeType, recordedDurationMs);
       const transcript = prepared.content;
       const attachment = prepared.attachments[0];
       logSumiTalkClientEvent("voice_stt_ok", {

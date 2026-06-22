@@ -62,8 +62,8 @@ export async function prepareDocumentPrivateChatInput(file: File, content: strin
   };
 }
 
-export async function prepareVoicePrivateChatInput(blob: Blob, mimeType: string): Promise<PreparedPrivateChatInput> {
-  const result = await transcribeChatAudio(blob, mimeType);
+export async function prepareVoicePrivateChatInput(blob: Blob, mimeType: string, durationMs = 0): Promise<PreparedPrivateChatInput> {
+  const result = await transcribeChatAudio(blob, mimeType, durationMs);
   const transcript = String(result.text || "").trim();
   if (!transcript) throw new Error("没识别出内容，再说一遍试试");
   const attachments = [{ ...result.attachment, transcript }];
