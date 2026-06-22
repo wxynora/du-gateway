@@ -133,6 +133,7 @@ from services.pseudo_cot import (
     apply_pseudo_cot_state_and_fallback as _apply_pseudo_cot_state_and_fallback,
     extract_inner_os_from_response_json as _extract_inner_os_from_response_json,
     pseudo_cot_instruction_enabled as _pseudo_cot_instruction_enabled,
+    replace_response_reasoning_with_inner_os as _replace_response_reasoning_with_inner_os,
     split_inner_os_from_text as _split_inner_os_from_text,
     transform_sse_chunk_bytes as _transform_pseudo_cot_sse_chunk_bytes,
 )
@@ -1089,7 +1090,12 @@ def _stream_with_r2_archive(
                     msg["thinking_blocks"] = thinking_blocks_parts
                 if reasoning_omitted:
                     msg["reasoning_omitted"] = True
-                _apply_pseudo_cot_state_and_fallback(window_id, msg, inner_os)
+                _apply_pseudo_cot_state_and_fallback(
+                    window_id,
+                    msg,
+                    inner_os,
+                    force_inner_os=pseudo_cot_stream_enabled,
+                )
                 round_cleaned = (
                     _build_round_cleaned_for_archive(last_user, msg, reply_target=_reply_target(), window_id=window_id)
                     if last_user
@@ -1293,7 +1299,12 @@ def _stream_with_r2_archive(
                 msg["thinking_blocks"] = final_thinking_blocks
             if reasoning_omitted:
                 msg["reasoning_omitted"] = True
-            _apply_pseudo_cot_state_and_fallback(window_id, msg, inner_os)
+            _apply_pseudo_cot_state_and_fallback(
+                window_id,
+                msg,
+                inner_os,
+                force_inner_os=pseudo_cot_stream_enabled,
+            )
             tc_trace = _collect_tool_trace_from_messages(current_body.get("messages") or [])
             if tc_trace:
                 msg["tool_calls"] = tc_trace
@@ -1903,6 +1914,9 @@ def chat_completions():
     archive_thinking_blocks_for_r2: list[dict] = []
     if resp_json:
         resp_json, inner_os = _extract_inner_os_from_response_json(resp_json)
+        pseudo_cot_response_enabled = _pseudo_cot_instruction_enabled(body)
+        if pseudo_cot_response_enabled and inner_os:
+            resp_json = _replace_response_reasoning_with_inner_os(resp_json, inner_os)
         resp_json = _apply_hidden_sidecars_to_assistant_response(
             resp_json,
             window_id=window_id,
@@ -2007,7 +2021,12 @@ def chat_completions():
                 msg_for_r2["reasoning_omitted"] = True
             if cache_debug_entries:
                 msg_for_r2["cache_debug"] = cache_debug_entries
-            _apply_pseudo_cot_state_and_fallback(window_id, msg_for_r2, inner_os)
+            _apply_pseudo_cot_state_and_fallback(
+                window_id,
+                msg_for_r2,
+                inner_os,
+                force_inner_os=pseudo_cot_response_enabled,
+            )
             tc_trace = _collect_tool_trace_from_messages(body.get("messages") or [])
             if tc_trace and not msg_for_r2.get("tool_calls"):
                 msg_for_r2["tool_calls"] = tc_trace

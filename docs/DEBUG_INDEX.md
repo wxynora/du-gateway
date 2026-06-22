@@ -1737,3 +1737,13 @@ npm -C miniapp run android
 - 已更新：补充“现实参照原则”，明确能参考现实的物价、薪资、求职、租房、通勤、医疗、债务、合同、平台、小生意和诈骗/灰色风险都优先用现实锚点做规则与事件平衡，后续实现时数据应可配置更新。
 - 已更新：补充“不含 UI 的功能框架”，拆出 `GameRuntime`、`TurnOrchestrator`、AI 连接器、固定计划 schema、规则引擎、事件系统、经济/住房/技能/风险模型、流水、日志、存档和进度事件；单回合链路明确按人类事件 -> 玩家 AI 计划 -> GM 建议 -> 规则落账 -> 分阶段进度更新推进。
 - 未完成 / 下次继续：这只是方案文档，未创建独立仓库、未写前端代码、未接 AI 连接器、未实现规则引擎或事件池；当前工作区仍有大量既有 MiniApp/静态产物脏改，本轮不要混入。
+
+当前状态（2026-06-22 伪 COT 脑内 OS 展示与归档）：
+- 已确认：服务器日志里 2026-06-22 01:16-01:45 多轮上游正文已经输出 `<DU_INNER_OS>`，说明伪 COT 不是没写；旧轮次的 `reasoning/thinking summary` 里确实有 `I cannot rewrite/process...` 拒绝文本，当前筛选拿这些原文测试会命中。
+- 已确认：旧问题不是 content 路径，而是伪 COT 只在归档副本上兜底，网关返回给 TG / App 当前请求的 `resp_json.message.reasoning` 没有当场替换；App 思维链历史接口也会把旧拒绝 summary 当普通 reasoning 展示，所以看起来“从头到尾都是 i cannot”。
+- 已完成：`services/pseudo_cot.py` 新增 `replace_response_reasoning_with_inner_os()`；非流式响应在剥出 `<DU_INNER_OS>` 后，会立刻把返回体里的 `reasoning` 替换为脑内 OS，并把官方拒绝文本保留到 `official_reasoning_refusal_text`，来源标为 `du_inner_os`。
+- 已完成：`services/pseudo_cot.py::apply_pseudo_cot_state_and_fallback()` 在拒绝命中时始终写入 `official_reasoning_refused` / `official_reasoning_refusal_text`；有 `inner_os` 时写为 `du_inner_os_fallback`，无 `inner_os` 时标 `official_reasoning_refused`，方便后续排查。
+- 已完成：`routes/chat.py` 的流式无工具、流式工具循环、非流式归档路径都把“本轮是否启用伪 COT 指令”传给归档修复函数；非流式返回体也会当场替换 reasoning，TG 当场 COT 展示和 App 后续读取不会再只看到 `I cannot rewrite...`。
+- 已完成：`routes/miniapp/reasoning.py` 对历史脏数据做兜底：如果 reasoning 文本本身命中伪 COT 拒绝模式，就不再原样展示，改走“adaptive thinking 未返回可展示正文”的 omitted 提示；已有 `du_inner_os` 的轮次仍展示脑内 OS。
+- 已验证：`python3 -m py_compile services/pseudo_cot.py routes/chat.py routes/miniapp/reasoning.py` 和 `git diff --check -- services/pseudo_cot.py routes/chat.py routes/miniapp/reasoning.py docs/DEBUG_INDEX.md` 通过；本地 smoke 确认 `summary=I cannot... + <DU_INNER_OS>` 时返回体 `reasoning` 会被替换为脑内 OS，App 历史接口会隐藏旧拒绝 summary。
+- 未完成 / 下次继续：本轮未回写修复历史 R2 旧轮次本体；历史接口只是展示层兜底。如果要把旧 R2 对象里的拒绝文本批量替换/清理，需要单独做带备份的数据修正。
