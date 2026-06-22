@@ -58,6 +58,11 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 已完成：`routes/chat.py::_compact_proactive_decision_for_archive()` 在压缩随机唤醒决策 JSON 时保留 `cache_debug`、`reasoning`、`reasoning_details`、`thinking_blocks` 和 `tool_calls` 等调试字段，避免随机唤醒轮次因为清洗存档而从 MiniApp 思维链页消失。
 - 未完成 / 下次继续：本轮只修随机主动决策和存档调试字段；没有改 `du_surf` 的话题池、Tavily 搜索实现、普通聊天工具注入、QQ/TG 入站消息或两个 proxy。
 
+当前状态（2026-06-22 随机唤醒 diary 执行轮）：
+- 已完成：`services/telegram_proactive.py::proactive_tick()` 在随机主动决策最终选择 `diary` 时会追加一轮 `_run_proactive_diary_action()`，用主网关提醒渡“刚才选择了写日记，现在直接去写”，不再只存一条 `{"action":"diary"}` 决策就结束；如果先 `surf`、看完素材后最终又选 `diary`，也会触发同一执行轮。
+- 已完成：diary 执行轮不要求 JSON、不外发给辛玥，走 `X-DU-GATEWAY-WAKEUP=1` 和 `X-DU-WAKEUP-KIND=proactive_diary`，让正常工具注入链路可用，优先由渡调用 `notion_diary_create`，必要时用 `note_write`；`routes/chat.py::_compact_gateway_event_for_archive()` 将该内部提醒压成“随机唤醒执行：你刚才选择了写日记，现在去写”，避免整段内部 prompt 污染 last4。
+- 已验证：`python3 -m py_compile services/telegram_proactive.py routes/chat.py`、`git diff --check -- services/telegram_proactive.py routes/chat.py` 通过。本轮未实测线上 Notion 写入，部署后看 `主动写日记执行轮请求/完成` 日志和 `notion_diary_create` 工具调用确认。
+
 当前状态（2026-06-11 R2 TTL 清理入口）：
 - 已完成：新增 `scripts/prune_r2_ttl.py` 作为统一 R2 清理入口，默认 dry-run；对话原文/思维链归档复用 `scripts/prune_r2_conversation_originals.py` 的月度规则（当前北京时间月份减 3 个月，例如 6 月清 3 月），不改变热路径存档逻辑。
 - 已完成：`sense/history/YYYY-MM-DD.json` 按事件上传时间 `at` 清理超过 24h 的记录；同一文件内仍有新事件则重写，清空后才删除整个 key。`global/summary_backups/summary_YYYYMMDD_HHMMSS.txt` 按文件名里的北京时间超过 24h 删除，不读取总结正文。

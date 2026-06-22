@@ -1113,6 +1113,77 @@ def _format_proactive_surf_result_for_du(surf_result: dict) -> str:
     return "\n\n".join(lines).strip()
 
 
+def _run_proactive_diary_action(
+    *,
+    window_id: str,
+    hours_since_last: float,
+    initial_reason: str,
+    now_dt: Optional[datetime] = None,
+) -> dict:
+    """随机唤醒选择 diary 时，再走一轮主网关，提醒渡直接去写日记。"""
+    url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
+    channels = _available_channels()
+    default_channel = _preferred_proactive_channel(channels)
+    now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
+    user_prompt = (
+        "你刚才在随机唤醒里选择了写日记/记事。\n"
+        "现在不是重新做选择，也不要输出 JSON；请直接去写。\n"
+        "优先调用 notion_diary_create 写一条交换日记；如果你觉得更适合短记事，再用 note_write。\n"
+        "写完后用一句很短的话说明已经写好；如果工具失败，也用一句话说明失败原因。\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
+        f"你刚才选择写日记的理由：{str(initial_reason or '').strip() or '（未说明）'}"
+    )
+    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
+    sys_content = (sys_content or build_telegram_style_system()).strip()
+    body = {
+        "model": _get_chat_model(),
+        "messages": [
+            {"role": "system", "content": sys_content},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Window-Id": window_id,
+        "X-Reply-Channel": default_channel,
+        "X-Reply-Target": str(TELEGRAM_PROACTIVE_TARGET_USER_ID or "").strip(),
+        "X-Force-Last4": "1",
+        "X-DU-GATEWAY-WAKEUP": "1",
+        "X-DU-WAKEUP-KIND": "proactive_diary",
+        "X-Skip-Dynamic-Memory": "1",
+        "X-Skip-Post-Archive-Dynamic-Memory": "1",
+    }
+    try:
+        logger.info(
+            "主动写日记执行轮请求 window_id=%s model=%s reason_chars=%s",
+            window_id,
+            body.get("model") or "",
+            len(str(initial_reason or "")),
+        )
+        r = requests.post(url, headers=headers, json=body, timeout=180)
+        if r.status_code != 200:
+            logger.warning(
+                "主动写日记执行轮失败 status=%s body_preview=%s",
+                r.status_code,
+                (r.text or "")[:300],
+            )
+            return {
+                "ok": False,
+                "error": f"http_{r.status_code}",
+                "reply_preview": (r.text or "")[:160],
+            }
+        data = r.json() if r.content else None
+        msg = (data or {}).get("choices") and (data.get("choices") or [{}])[0].get("message") or {}
+        content = (msg or {}).get("content")
+        text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
+        logger.info("主动写日记执行轮完成 window_id=%s reply_preview=%s", window_id, text[:120])
+        return {"ok": bool(text), "reply_preview": text[:240], "error": "" if text else "empty_reply"}
+    except Exception as e:
+        logger.warning("主动写日记执行轮异常: %s", e)
+        return {"ok": False, "error": str(e)[:160], "reply_preview": ""}
+
+
 def _ask_du_after_surf_result(
     *,
     window_id: str,
@@ -1292,6 +1363,8 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     out["du_intent_reason"] = decision.du_reason
     surf_summary = None
     initial_surf_reason = ""
+    diary_summary = None
+    initial_diary_reason = ""
     if (decision.action or "").strip().lower() == "surf":
         initial_surf_reason = (decision.du_reason or decision.reason or "").strip()
         surf_summary = _run_proactive_surf_action()
@@ -1312,6 +1385,18 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         out["du_reason"] = decision.reason
         out["du_action"] = decision.action
         out["du_intent_reason"] = decision.du_reason
+    if (decision.action or "").strip().lower() == "diary" and not diary_summary:
+        initial_diary_reason = (decision.du_reason or decision.reason or "").strip()
+        diary_summary = _run_proactive_diary_action(
+            window_id=window_id,
+            hours_since_last=hours,
+            initial_reason=initial_diary_reason,
+            now_dt=now_dt,
+        )
+        out["diary"] = diary_summary
+        out["du_initial_action"] = "diary"
+        out["du_initial_reason"] = initial_diary_reason
+        out["diary_execution_ok"] = bool((diary_summary or {}).get("ok"))
 
     # 随机唤醒主动决策：记下本轮决策（闹钟不走这里）
     try:
@@ -1324,6 +1409,8 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         )
         if surf_summary:
             act_store = f"surf->{act_store}"
+        if diary_summary:
+            act_store = "diary->executed" if diary_summary.get("ok") else "diary->failed"
         reason_store = (decision.du_reason or decision.reason or "").strip() or "—"
         if surf_summary:
             topic = str(surf_summary.get("topic") or "").strip()
@@ -1338,6 +1425,22 @@ def proactive_tick(target_user_id: int = 0) -> dict:
                     pv = "；".join(titles)[:120]
             else:
                 reason_store = f"实际冲浪失败：{str(surf_summary.get('error') or 'unknown')[:80]}；最终决定：{reason_store}"
+        if diary_summary:
+            reply_preview = str(diary_summary.get("reply_preview") or "").strip()
+            if diary_summary.get("ok"):
+                reason_store = (
+                    f"最初想写日记：{initial_diary_reason or '（未说明）'}；"
+                    f"已追加执行轮提醒渡去写。"
+                )
+                if reply_preview:
+                    pv = reply_preview[:120]
+            else:
+                reason_store = (
+                    f"最初想写日记：{initial_diary_reason or '（未说明）'}；"
+                    f"追加执行轮失败：{str(diary_summary.get('error') or 'unknown')[:80]}"
+                )
+                if reply_preview and not pv:
+                    pv = reply_preview[:120]
         r2_store.append_proactive_decision_memory(
             {
                 "at": now_iso,
