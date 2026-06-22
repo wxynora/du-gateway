@@ -477,6 +477,16 @@ async function fetchGatewayFirstModel(base) {
   }
 }
 
+async function readCachedActiveModel() {
+  try {
+    const raw = await fs.readFile(path.join(REPO_ROOT, "data", "active_upstream_model.json"), "utf8");
+    const data = JSON.parse(raw || "{}");
+    return String(data?.model || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 async function callGatewayChat(windowId, userContent, options = {}) {
   const base = gatewayBaseUrl();
   const chatPath = envStr("GATEWAY_CHAT_PATH", "/v1/chat/completions");
@@ -488,7 +498,7 @@ async function callGatewayChat(windowId, userContent, options = {}) {
     ],
     stream: false,
   };
-  const model = configuredModel || (await fetchGatewayFirstModel(base));
+  const model = configuredModel || (await readCachedActiveModel()) || (await fetchGatewayFirstModel(base));
   if (model) body.model = model;
   const headers = {
     "Content-Type": "application/json",
