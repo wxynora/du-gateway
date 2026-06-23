@@ -147,6 +147,7 @@ R2_KEY_LAST_REPLY_CHANNEL = "global/last_reply_channel.json"
 R2_KEY_IMAGE_DESC_RECENT = "global/image_descriptions_recent.json"
 # 主动联络「抽中后问渡」的决策记忆，新在前，最多 5 条（闹钟不参与）
 R2_KEY_PROACTIVE_DECISION_MEMORY = "global/proactive_decision_memory.json"
+R2_KEY_DU_PENDING_THOUGHTS = "global/du_pending_thoughts.json"
 R2_KEY_CONVERSATION_FOLLOWUPS = "global/conversation_followups.json"
 # Telegram：TodoList（每个 tg 窗口一份 JSON）
 R2_KEY_TG_TODOS = "tg/todos.json"
@@ -1457,6 +1458,83 @@ def append_proactive_decision_memory(entry: dict) -> bool:
             return True
         except Exception as e:
             logger.error("append_proactive_decision_memory 失败 error=%s", e, exc_info=True)
+            return False
+
+
+def _normalize_du_pending_thought_item(item: dict) -> Optional[dict]:
+    if not isinstance(item, dict):
+        return None
+    text = str(item.get("text") or "").strip()
+    if not text:
+        return None
+    status = str(item.get("status") or "pending").strip().lower() or "pending"
+    if status not in {"pending", "done", "dismissed"}:
+        status = "pending"
+    out = {
+        "id": str(item.get("id") or uuid4()).strip(),
+        "text": text[:160],
+        "status": status,
+        "created_at": str(item.get("created_at") or now_beijing_iso()).strip(),
+        "updated_at": str(item.get("updated_at") or item.get("created_at") or now_beijing_iso()).strip(),
+    }
+    for key in ("done_at", "dismissed_at"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            out[key] = value
+    return out
+
+
+def get_du_pending_thoughts(include_inactive: bool = False) -> list[dict]:
+    """读取渡自己的待续念头；默认只返回 pending 项。"""
+    client = _s3_client()
+    if not client:
+        return []
+    data = _read_json(client, R2_KEY_DU_PENDING_THOUGHTS)
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    out = []
+    for raw in items:
+        item = _normalize_du_pending_thought_item(raw)
+        if not item:
+            continue
+        if include_inactive or item.get("status") == "pending":
+            out.append(item)
+    return out
+
+
+def save_du_pending_thoughts(items: list[dict]) -> bool:
+    """保存渡自己的待续念头小列表；活跃项在前，已处理项只保留少量审计尾巴。"""
+    client = _s3_client()
+    if not client:
+        return False
+    if not isinstance(items, list):
+        return False
+    normalized = []
+    seen: set[str] = set()
+    for raw in items:
+        item = _normalize_du_pending_thought_item(raw)
+        if not item:
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        normalized.append(item)
+    pending = [x for x in normalized if x.get("status") == "pending"][:20]
+    inactive = [x for x in normalized if x.get("status") != "pending"][-30:]
+    payload = {
+        "updated_at": now_beijing_iso(),
+        "items": pending + inactive,
+    }
+    with _global_write_lock:
+        try:
+            _write_json(client, R2_KEY_DU_PENDING_THOUGHTS, payload)
+            return True
+        except Exception as e:
+            logger.error("save_du_pending_thoughts 失败 error=%s", e, exc_info=True)
             return False
 
 

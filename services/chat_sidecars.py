@@ -10,6 +10,7 @@ from services.du_thought import split_assistant_for_thought
 from services.du_vitals import normalize_vitals_payload, split_assistant_for_vitals
 from services.dynamic_memory_citation import strip_assistant_memory_citations
 from services.interaction_memory import split_assistant_for_interaction
+from services.pending_thoughts import split_and_apply_tags as split_pending_thought_tags
 from services.pc_command_handler import process_pcmd_in_assistant_text
 from services.pixel_home import save_pixel_home_hidden_block, split_assistant_for_pixel_home
 from storage import r2_store
@@ -122,6 +123,7 @@ def extract_and_store_hidden_sidecars(
     visible, interaction = split_assistant_for_interaction(visible)
     visible, du_daily = split_assistant_for_daily(visible)
     visible, pixel_home = split_assistant_for_pixel_home(visible)
+    visible, _pending_ops = split_pending_thought_tags(visible)
     visible, referenced_memory_ids = strip_assistant_memory_citations(visible, dynamic_memory_citation_map)
     if thought:
         try:

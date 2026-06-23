@@ -34,6 +34,7 @@ from pipeline.pipeline import (
     step_inject_thinking_block_rules,
     step_inject_core_behavior_rules,
     step_inject_common_knowledge,
+    step_inject_pending_thought_rules,
     step_inject_du_non_retreat_rules,
     step_inject_reference_note,
     step_inject_current_base_model,
@@ -44,6 +45,8 @@ from pipeline.pipeline import (
     step_inject_summary,
     step_inject_sense_snapshot,
     step_inject_du_thought,
+    step_inject_pending_thoughts,
+    step_inject_wakeup_frame,
     step_inject_du_vitals,
     step_inject_du_daily,
     step_inject_pixel_home,
@@ -1655,6 +1658,7 @@ def chat_completions():
     body = step_inject_core_behavior_rules(body)
     body = step_inject_du_non_retreat_rules(body)
     body = step_inject_common_knowledge(body)
+    body = step_inject_pending_thought_rules(body)
     body = _inject_entry_style_system(
         body,
         reply_channel=reply_channel,
@@ -1689,6 +1693,8 @@ def chat_completions():
         body = step_inject_system_alarm_action_result(body, window_id)
         body = step_inject_pseudo_cot_inner_os(body, window_id)
         body = step_inject_du_thought(body, window_id)
+        body = step_inject_pending_thoughts(body, window_id)
+        body = step_inject_wakeup_frame(body, window_id)
         body = step_inject_du_vitals(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
         body = step_inject_pixel_home(body, window_id)

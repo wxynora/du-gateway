@@ -13,6 +13,7 @@ from services.du_daily import compute_visible_streaming as compute_daily_visible
 from services.du_vitals import compute_visible_streaming as compute_vitals_visible_streaming
 from services.dynamic_memory_citation import compute_visible_streaming as compute_memory_citation_visible_streaming
 from services.interaction_memory import compute_visible_streaming as compute_interaction_visible_streaming
+from services.pending_thoughts import compute_visible_streaming as compute_pending_visible_streaming
 from storage import r2_store
 from utils.log import get_logger
 
@@ -231,6 +232,7 @@ class PcmdDuThoughtStreamState:
             visible = compute_followup_visible_streaming(visible)
         except Exception:
             pass
+        visible = compute_pending_visible_streaming(visible)
         visible = compute_memory_citation_visible_streaming(visible, self.dynamic_memory_citation_map)
         out = visible[self._last_visible_len :]
         self._last_visible_len = len(visible)

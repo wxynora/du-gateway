@@ -697,6 +697,19 @@ def step_inject_common_knowledge(body: dict) -> dict:
     return body
 
 
+def step_inject_pending_thought_rules(body: dict) -> dict:
+    """固定注入：待续念头的隐藏标记维护规则，放静态 system 区。"""
+    try:
+        from services.pending_thoughts import STATIC_RULES
+    except Exception as e:
+        logger.debug("pending_thought rules 注入跳过 error=%s", e)
+        return body
+    rules = (STATIC_RULES or "").strip()
+    if not rules:
+        return body
+    return _append_to_static_system(body, "\n\n" + rules)
+
+
 def _messages_total_chars(messages: list) -> int:
     """估算 messages 总字符数（content 转为字符串长度）。"""
     total = 0
@@ -1202,6 +1215,35 @@ def step_inject_du_thought(body: dict, window_id: str) -> dict:
     inject = "\n\n" + block.strip()
     body = _append_to_dynamic_system(body, inject)
     return body
+
+
+def step_inject_pending_thoughts(body: dict, window_id: str) -> dict:
+    """动态注入：渡自己留下的待续念头，紧跟心事之后。"""
+    _ = window_id
+    try:
+        from services.pending_thoughts import format_inject_block
+
+        block = format_inject_block()
+    except Exception as e:
+        logger.debug("pending_thought 注入跳过 error=%s", e)
+        return body
+    if not (block or "").strip():
+        return body
+    return _append_to_dynamic_system(body, "\n\n" + block.strip())
+
+
+def step_inject_wakeup_frame(body: dict, window_id: str) -> dict:
+    """动态注入：距离上次醒来后，设备感知数据发生的短变化。"""
+    try:
+        from services.wakeup_frame import format_wakeup_frame_for_system
+
+        block = format_wakeup_frame_for_system(window_id)
+    except Exception as e:
+        logger.debug("wakeup_frame 注入跳过 error=%s", e)
+        return body
+    if not (block or "").strip():
+        return body
+    return _append_to_dynamic_system(body, "\n\n" + block.strip())
 
 
 def step_inject_du_vitals(body: dict, window_id: str) -> dict:

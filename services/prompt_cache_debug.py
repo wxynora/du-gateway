@@ -23,6 +23,8 @@ def _static_system_base_label(msg: dict, idx: int, content: str) -> str:
         return "核心行为规则"
     if stripped.startswith("### 常识"):
         return "常识"
+    if stripped.startswith("### 待续念头维护"):
+        return "待续念头规则"
     if stripped.startswith("【核心XP与互动逻辑】"):
         return "NSFW规则"
     if stripped.startswith("【渡的拟态心跳"):
@@ -65,6 +67,7 @@ def _static_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
         ("【提醒工具优先级】", "提醒工具规则"),
         ("【论坛工具省费规则】", "论坛工具规则"),
         ("【高德官方 MCP 出行工具规则】", "高德出行工具规则"),
+        ("### 待续念头维护", "待续念头规则"),
         ("如果你这句话说完，心里还是惦记着她", "followup规则"),
     ]
     markers: dict[int, str] = {}
@@ -108,6 +111,8 @@ def _dynamic_system_label_for_marker(marker: str) -> str:
         "老婆当前状态": "感知快照",
         "【小家状态】": "小家状态",
         "【渡的心事": "渡的心事",
+        "【你的待续念头": "待续念头",
+        "【醒来补帧": "醒来补帧",
         "【渡的拟态心跳/呼吸当前读数】": "拟态心跳读数",
         "【渡的拟态心跳": "拟态心跳规则",
         "【渡的日常": "渡的日常",
@@ -137,6 +142,8 @@ def _dynamic_system_breakdown_parts(msg: dict, idx: int) -> list[dict]:
         "老婆当前状态",
         "【小家状态】",
         "【渡的心事",
+        "【你的待续念头",
+        "【醒来补帧",
         "【渡的拟态心跳/呼吸当前读数】",
         "【渡的日常",
         "你正在和小玥一起听歌。",

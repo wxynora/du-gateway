@@ -164,23 +164,18 @@ def _pick_latest_iso(candidates: list[Optional[str]]) -> Optional[str]:
 
 def _get_last_message_activity_iso(uid: int) -> Optional[str]:
     """
-    统一“最近消息活动”时间：
-    - 正常聊天/闹钟：取 tg 窗口最近一轮 conversation timestamp
-    - 用户主动发来消息：last_telegram_user_activity_at
-    - 主动消息：last_proactive_contact_at
-    三者取最近一个。
+    统一“最近真实互动节流”时间。
+
+    注意不要取 conversation_rounds 的最新 timestamp：
+    后端闹钟、随机唤醒执行轮、弹窗回执等都会归档成轮次，
+    但这些不代表小玥真的回来了，不能拿来计算“她多久没说话”。
+
+    这里只看用户主动发来消息：last_telegram_user_activity_at。
+    渡主动外发成功的 last_proactive_contact_at 只作为历史记录，不参与这里的时间感计算；
+    如果他连续醒来都想找她，就让模型自己判断要不要连发，而不是后端先压住。
     """
-    window_id = f"tg_{int(uid or 0)}"
-    last_round_iso = None
-    try:
-        rounds = r2_store.get_conversation_rounds(window_id, last_n=1) or []
-        if rounds and isinstance(rounds[0], dict):
-            last_round_iso = str(rounds[0].get("timestamp") or "").strip() or None
-    except Exception:
-        last_round_iso = None
     last_user_iso = r2_store.get_last_telegram_user_activity_at()
-    last_proactive_iso = r2_store.get_last_proactive_contact_at()
-    return _pick_latest_iso([last_round_iso, last_user_iso, last_proactive_iso])
+    return _pick_latest_iso([last_user_iso])
 
 
 def _describe_recent_exchange(now_dt: datetime) -> str:
