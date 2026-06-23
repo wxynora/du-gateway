@@ -320,18 +320,11 @@ public class FloatingBallService extends Service {
                         100,
                         openIntent,
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        PendingIntent voiceWakePi =
-                PendingIntent.getActivity(
-                        this,
-                        101,
-                        buildOpenVoiceWakeIntent(),
-                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.mipmap.ic_launcher_round)
                 .setContentTitle("SumiTalk 正在运行")
                 .setContentText("悬浮球与后台感知已启用")
                 .setContentIntent(pi)
-                .addAction(R.mipmap.ic_launcher_round, "叫渡", voiceWakePi)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -2004,26 +1997,6 @@ public class FloatingBallService extends Service {
         Intent openIntent = new Intent(this, MainActivity.class);
         openIntent.setAction(MainActivity.ACTION_OPEN_VOICE_CALL);
         openIntent.putExtra(MainActivity.EXTRA_VOICE_CALL_INVITE_JSON, invite.toString());
-        return openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-    }
-
-    private Intent buildOpenVoiceWakeIntent() {
-        Intent openIntent = new Intent(this, MainActivity.class);
-        openIntent.setAction(MainActivity.ACTION_OPEN_VOICE_WAKE);
-        try {
-            JSONObject invite = new JSONObject();
-            invite.put("callId", "wake_" + System.currentTimeMillis());
-            invite.put("title", "叫渡");
-            invite.put("callerName", "渡");
-            invite.put("openingLine", "");
-            invite.put("reason", "lockscreen_voice_wake");
-            invite.put("urgency", "normal");
-            invite.put("timeoutSeconds", 180);
-            invite.put("autoStartRecording", true);
-            invite.put("source", "persistent_notification");
-            openIntent.putExtra(MainActivity.EXTRA_VOICE_CALL_INVITE_JSON, invite.toString());
-        } catch (Exception ignored) {
-        }
         return openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
     }
 

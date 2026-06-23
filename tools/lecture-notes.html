@@ -1,0 +1,1568 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>听课笔记</title>
+  <style>
+    :root {
+      --paper: #f5efe4;
+      --paper-2: #e9dcc8;
+      --ink: #30271d;
+      --muted: #8f806e;
+      --soft: #6d604f;
+      --line: rgba(79, 58, 32, 0.14);
+      --panel: rgba(255, 251, 242, 0.84);
+      --panel-strong: #fffaf0;
+      --shadow: 0 24px 72px rgba(73, 50, 23, 0.16);
+      --point: #f1c447;
+      --confuse: #ee7564;
+      --example: #76bd88;
+      --todo: #77a7db;
+      --thought: #aa91d6;
+      color-scheme: light;
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+    }
+
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 8% 12%, rgba(255, 255, 255, 0.78), transparent 28%),
+        radial-gradient(circle at 92% 4%, rgba(224, 170, 87, 0.22), transparent 32%),
+        linear-gradient(135deg, #f8f1e7 0%, #efe1ce 48%, #e7d5bd 100%);
+      color: var(--ink);
+      font-family: "Iowan Old Style", "Songti SC", "Noto Serif SC", "Microsoft YaHei", serif;
+      letter-spacing: 0.01em;
+    }
+
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    .app {
+      min-height: 100vh;
+      padding: clamp(16px, 2.6vw, 30px);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(300px, 370px) minmax(0, 1fr) minmax(310px, 410px);
+      gap: clamp(14px, 1.8vw, 22px);
+      max-width: 1580px;
+      margin: 0 auto;
+    }
+
+    .top {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 4px 4px 10px;
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 5px 0 0;
+      font-size: clamp(32px, 5vw, 60px);
+      line-height: 0.95;
+      font-weight: 900;
+      letter-spacing: -0.07em;
+    }
+
+    .top p {
+      max-width: 540px;
+      margin: 0;
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.7;
+      text-align: right;
+    }
+
+    .panel {
+      min-width: 0;
+      border: 1px solid rgba(255, 255, 255, 0.72);
+      border-radius: 28px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 249, 238, 0.74)),
+        var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+    }
+
+    .panel-inner {
+      padding: 18px;
+    }
+
+    .sticky {
+      position: sticky;
+      top: 18px;
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      scrollbar-width: thin;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .section-title h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+    }
+
+    .section-title small {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .field { margin-top: 13px; }
+
+    .field label {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--soft);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      border: 1px solid rgba(82, 62, 39, 0.14);
+      border-radius: 15px;
+      outline: none;
+      background: rgba(255, 252, 246, 0.86);
+      color: var(--ink);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+      transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+    }
+
+    input {
+      height: 42px;
+      padding: 0 13px;
+    }
+
+    textarea {
+      min-height: 96px;
+      padding: 11px 12px;
+      line-height: 1.6;
+      resize: vertical;
+    }
+
+    input:focus,
+    textarea:focus {
+      border-color: rgba(126, 85, 42, 0.34);
+      background: rgba(255, 253, 249, 0.96);
+      box-shadow: 0 0 0 4px rgba(197, 147, 74, 0.13);
+    }
+
+    input[type="file"] {
+      height: auto;
+      padding: 11px;
+      font-size: 12px;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .row > * { min-width: 0; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 110px;
+      gap: 9px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 39px;
+      border-radius: 999px;
+      padding: 0 14px;
+      background: #30271f;
+      color: #fff4df;
+      font-size: 13px;
+      font-weight: 900;
+      box-shadow: 0 12px 26px rgba(62, 43, 22, 0.2);
+      transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+      white-space: nowrap;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 15px 32px rgba(62, 43, 22, 0.25);
+    }
+
+    .button.secondary {
+      background: rgba(255, 252, 244, 0.78);
+      color: var(--ink);
+      box-shadow: inset 0 0 0 1px rgba(76, 56, 31, 0.14);
+    }
+
+    .button.ghost {
+      min-height: 34px;
+      background: transparent;
+      color: var(--soft);
+      box-shadow: none;
+      padding: 0 8px;
+    }
+
+    .button.danger {
+      background: rgba(238, 117, 100, 0.16);
+      color: #98382d;
+      box-shadow: none;
+    }
+
+    .button:disabled {
+      cursor: not-allowed;
+      opacity: 0.48;
+      transform: none;
+    }
+
+    .chips {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+      margin-top: 12px;
+    }
+
+    .chip {
+      min-height: 42px;
+      border-radius: 15px;
+      background: rgba(255, 252, 244, 0.74);
+      box-shadow: inset 0 0 0 1px rgba(76, 56, 31, 0.12);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 900;
+      text-align: left;
+      padding: 9px 11px;
+      transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+    }
+
+    .chip span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .chip[data-active="true"] {
+      background: var(--chip-bg);
+      box-shadow: inset 0 0 0 1px rgba(60, 43, 22, 0.08), 0 10px 24px rgba(72, 51, 27, 0.13);
+      transform: translateY(-1px);
+    }
+
+    .pdf-panel {
+      overflow: hidden;
+      min-height: 76vh;
+    }
+
+    .pdf-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      padding: 16px 18px;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.52), transparent),
+        rgba(255, 248, 235, 0.7);
+    }
+
+    .pdf-title {
+      min-width: 0;
+    }
+
+    .pdf-title strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 16px;
+      font-weight: 900;
+    }
+
+    .pdf-title span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .pdf-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .viewer {
+      position: relative;
+      height: calc(100vh - 172px);
+      min-height: 620px;
+      overflow: auto;
+      padding: 22px;
+      background:
+        linear-gradient(90deg, rgba(80, 62, 38, 0.045) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(80, 62, 38, 0.045) 1px, transparent 1px),
+        rgba(255, 251, 242, 0.68);
+      background-size: 30px 30px;
+    }
+
+    .empty {
+      display: grid;
+      place-items: center;
+      min-height: 520px;
+      color: rgba(70, 55, 37, 0.48);
+      text-align: center;
+      line-height: 1.8;
+      font-weight: 800;
+    }
+
+    .pdf-pages {
+      display: grid;
+      gap: 18px;
+      justify-items: center;
+    }
+
+    .page {
+      position: relative;
+      overflow: hidden;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 16px 42px rgba(60, 42, 22, 0.18);
+    }
+
+    .page canvas {
+      display: block;
+      width: var(--page-width);
+      height: var(--page-height);
+    }
+
+    .mark-layer {
+      position: absolute;
+      inset: 0;
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    .rect {
+      position: absolute;
+      border: 2px solid color-mix(in srgb, var(--mark-color), #5f4429 22%);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--mark-color), transparent 62%);
+      box-shadow: inset 0 -14px 0 color-mix(in srgb, var(--mark-color), transparent 54%);
+      pointer-events: auto;
+    }
+
+    .rect.active {
+      outline: 3px solid rgba(49, 37, 23, 0.18);
+    }
+
+    .selection-box {
+      position: absolute;
+      z-index: 4;
+      border: 2px dashed rgba(48, 37, 23, 0.62);
+      border-radius: 7px;
+      background: rgba(255, 232, 157, 0.22);
+      pointer-events: none;
+    }
+
+    .page-badge {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      border-radius: 999px;
+      background: rgba(48, 39, 31, 0.76);
+      color: #fff4df;
+      font-size: 11px;
+      font-weight: 900;
+      padding: 5px 8px;
+      pointer-events: none;
+    }
+
+    .note-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 13px;
+    }
+
+    .note-card {
+      border: 1px solid rgba(72, 52, 29, 0.1);
+      border-radius: 18px;
+      background: rgba(255, 251, 242, 0.82);
+      padding: 12px;
+    }
+
+    .note-card[data-active="true"] {
+      box-shadow: 0 0 0 3px rgba(193, 147, 76, 0.18);
+    }
+
+    .note-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .note-type {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--soft);
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--dot);
+    }
+
+    .quote {
+      margin: 0 0 8px;
+      color: #3b3127;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.55;
+    }
+
+    .note-card textarea {
+      min-height: 58px;
+      border-radius: 13px;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .tiny {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.65;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      background: rgba(255, 252, 244, 0.72);
+      box-shadow: inset 0 0 0 1px rgba(76, 58, 35, 0.1);
+      color: var(--soft);
+      font-size: 11px;
+      font-weight: 900;
+      padding: 6px 9px;
+    }
+
+    .divider {
+      height: 1px;
+      margin: 17px 0;
+      background: var(--line);
+    }
+
+    .history-list {
+      display: grid;
+      gap: 9px;
+      margin-top: 12px;
+    }
+
+    .history-item {
+      width: 100%;
+      border-radius: 16px;
+      background: rgba(255, 251, 242, 0.76);
+      box-shadow: inset 0 0 0 1px rgba(79, 58, 31, 0.1);
+      padding: 11px;
+      text-align: left;
+    }
+
+    .history-item strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .history-item span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .output {
+      min-height: 220px;
+      font-family: "Menlo", "Consolas", "SFMono-Regular", monospace;
+      font-size: 12px;
+      line-height: 1.62;
+    }
+
+    .hidden { display: none; }
+
+    .toast {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 30;
+      max-width: min(420px, calc(100vw - 44px));
+      border: 1px solid rgba(255, 255, 255, 0.74);
+      border-radius: 18px;
+      background: rgba(45, 37, 28, 0.92);
+      color: #fff3dd;
+      box-shadow: 0 18px 50px rgba(32, 24, 16, 0.28);
+      padding: 12px 14px;
+      font-size: 13px;
+      font-weight: 900;
+      opacity: 0;
+      transform: translateY(16px);
+      transition: opacity 0.18s ease, transform 0.18s ease;
+      pointer-events: none;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1180px) {
+      .shell {
+        grid-template-columns: minmax(290px, 360px) minmax(0, 1fr);
+      }
+
+      .right-panel {
+        grid-column: 1 / -1;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .top {
+        display: block;
+      }
+
+      .top p {
+        margin-top: 10px;
+        text-align: left;
+      }
+
+      .sticky {
+        position: static;
+        max-height: none;
+      }
+
+      .viewer {
+        height: 68vh;
+        min-height: 420px;
+        padding: 14px;
+      }
+
+      .pdf-toolbar {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="shell">
+      <header class="top">
+        <div>
+          <div class="eyebrow">local pdf desk</div>
+          <h1>听课笔记</h1>
+        </div>
+        <p>直接打开本地资料 PDF，在页面上拖拽标记、写注释，最后打包给笨笨整理。PDF 不上传，笔记存在这个浏览器的 localStorage。</p>
+      </header>
+
+      <aside class="panel sticky">
+        <div class="panel-inner">
+          <div class="section-title">
+            <h2>资料</h2>
+            <small id="saveState">未载入</small>
+          </div>
+
+          <div class="field">
+            <label for="pdfInput">选择本地 PDF</label>
+            <input id="pdfInput" type="file" accept="application/pdf,.pdf" />
+            <p class="tiny">浏览器不能无授权直接读你电脑路径，所以每次换设备/刷新后，要重新选一下 PDF；原来的标记会按文件信息自动匹配回来。</p>
+          </div>
+
+          <div class="field">
+            <label for="titleInput">课程 / 资料名</label>
+            <input id="titleInput" autocomplete="off" placeholder="比如：三农政策讲义" />
+          </div>
+
+          <div class="field grid-2">
+            <div>
+              <label for="videoInput">网课链接</label>
+              <input id="videoInput" autocomplete="off" placeholder="B站链接，可选" />
+            </div>
+            <div>
+              <label for="timeInput">视频时间</label>
+              <input id="timeInput" autocomplete="off" placeholder="12:34" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="goalInput">这轮目标</label>
+            <input id="goalInput" autocomplete="off" placeholder="这次主要看懂什么" />
+          </div>
+
+          <div class="pill-row" id="quickStatus"></div>
+
+          <div class="divider"></div>
+
+          <div class="section-title">
+            <h2>标记颜色</h2>
+            <small>拖 PDF 页面即可标记</small>
+          </div>
+          <div class="chips" id="markChips"></div>
+
+          <div class="field">
+            <label for="defaultNoteInput">新标记默认注释</label>
+            <textarea id="defaultNoteInput" placeholder="拖拽前先写一句；也可以拖完后在右侧单独补。"></textarea>
+          </div>
+
+          <div class="row" style="margin-top: 12px;">
+            <button class="button" id="saveBtn" type="button">保存笔记</button>
+            <button class="button secondary" id="openVideoBtn" type="button">打开网课</button>
+          </div>
+          <div class="row" style="margin-top: 9px;">
+            <button class="button ghost" id="exportJsonBtn" type="button">导出 JSON</button>
+            <button class="button ghost" id="importJsonBtn" type="button">导入</button>
+            <button class="button ghost danger" id="clearBtn" type="button">清空当前资料笔记</button>
+            <input class="hidden" id="importFileInput" type="file" accept="application/json,.json" />
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel pdf-panel">
+        <div class="pdf-toolbar">
+          <div class="pdf-title">
+            <strong id="docTitle">还没选择 PDF</strong>
+            <span id="docMeta">选择本地讲义后，在页面上拖出一块高亮。</span>
+          </div>
+          <div class="pdf-actions">
+            <button class="button secondary" id="zoomOutBtn" type="button">-</button>
+            <button class="button secondary" id="zoomInBtn" type="button">+</button>
+            <button class="button secondary" id="fitWidthBtn" type="button">适宽</button>
+          </div>
+        </div>
+        <div class="viewer" id="viewer">
+          <div class="empty" id="emptyState">
+            <div>
+              <div style="font-size: 34px; line-height: 1;">PDF</div>
+              <div>选一份本地资料，然后直接在页面上标。</div>
+              <div class="tiny">标记是矩形高亮；如果 PDF 有文字层，会尽量自动抓取框内文字。</div>
+            </div>
+          </div>
+          <div class="pdf-pages" id="pages"></div>
+        </div>
+      </section>
+
+      <aside class="panel sticky right-panel">
+        <div class="panel-inner">
+          <div class="section-title">
+            <h2>标记注释</h2>
+            <small id="markCount">0 条</small>
+          </div>
+          <div class="note-list" id="noteList"></div>
+
+          <div class="divider"></div>
+
+          <div class="section-title">
+            <h2>随手记</h2>
+            <small>整份资料</small>
+          </div>
+          <textarea id="freeNotesInput" placeholder="比如：这个专题先看政策背景；第 17 页的图要回看；乡村振兴和基层治理容易一起考。"></textarea>
+
+          <div class="divider"></div>
+
+          <div class="section-title">
+            <h2>交给笨笨整理</h2>
+            <small>材料包</small>
+          </div>
+          <div class="row">
+            <button class="button" id="buildDigestBtn" type="button">生成材料包</button>
+            <button class="button secondary" id="copyDigestBtn" type="button">复制给笨笨</button>
+            <button class="button secondary" id="downloadDigestBtn" type="button">下载材料包</button>
+          </div>
+          <textarea class="output" id="digestOutput" placeholder="材料包会出现在这里：它不是最终整理，而是给笨笨看的证据和要求。"></textarea>
+
+          <div class="divider"></div>
+
+          <div class="section-title">
+            <h2>历史资料</h2>
+            <small id="sessionCount">0 份</small>
+          </div>
+          <div class="history-list" id="historyList"></div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script type="module">
+    import * as pdfjsLib from "./vendor/pdfjs/pdf.mjs";
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.mjs", window.location.href).href;
+
+    const STORAGE_SESSIONS = "lecturePdfNotes.sessions.v1";
+    const STORAGE_CURRENT = "lecturePdfNotes.currentKey.v1";
+    const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
+    const MARK_TYPES = {
+      point: { label: "重点", hint: "考点 / 主干", color: "#f1c447" },
+      confuse: { label: "易混", hint: "容易错", color: "#ee7564" },
+      example: { label: "例子", hint: "案例 / 题眼", color: "#76bd88" },
+      todo: { label: "待查", hint: "知识债", color: "#77a7db" },
+      thought: { label: "想法", hint: "自己的判断", color: "#aa91d6" },
+    };
+
+    const els = {
+      pdfInput: document.getElementById("pdfInput"),
+      title: document.getElementById("titleInput"),
+      video: document.getElementById("videoInput"),
+      time: document.getElementById("timeInput"),
+      goal: document.getElementById("goalInput"),
+      defaultNote: document.getElementById("defaultNoteInput"),
+      freeNotes: document.getElementById("freeNotesInput"),
+      saveState: document.getElementById("saveState"),
+      quickStatus: document.getElementById("quickStatus"),
+      markChips: document.getElementById("markChips"),
+      docTitle: document.getElementById("docTitle"),
+      docMeta: document.getElementById("docMeta"),
+      viewer: document.getElementById("viewer"),
+      emptyState: document.getElementById("emptyState"),
+      pages: document.getElementById("pages"),
+      noteList: document.getElementById("noteList"),
+      markCount: document.getElementById("markCount"),
+      digestOutput: document.getElementById("digestOutput"),
+      historyList: document.getElementById("historyList"),
+      sessionCount: document.getElementById("sessionCount"),
+      toast: document.getElementById("toast"),
+      importFile: document.getElementById("importFileInput"),
+    };
+
+    let sessions = readJson(STORAGE_SESSIONS, {});
+    let currentKey = localStorage.getItem(STORAGE_CURRENT) || "";
+    let session = normalizeSession(sessions[currentKey]) || createBlankSession();
+    let pdfDoc = null;
+    let pdfFile = null;
+    let activeType = "point";
+    let activeMarkId = "";
+    let scale = 1.18;
+    let pageText = {};
+    let pageSizes = {};
+    let saveTimer = 0;
+    let toastTimer = 0;
+    let drag = null;
+
+    function uid() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return "id-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    }
+
+    function nowIso() {
+      return new Date().toISOString();
+    }
+
+    function readJson(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
+    function writeJson(key, value) {
+      localStorage.setItem(key, JSON.stringify(value));
+    }
+
+    function escapeHtml(text) {
+      return String(text || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function cssEscape(value) {
+      if (window.CSS && typeof CSS.escape === "function") return CSS.escape(String(value || ""));
+      return String(value || "").replace(/[^a-zA-Z0-9_-]/g, (char) => "\\" + char);
+    }
+
+    function compact(text, limit) {
+      const clean = String(text || "").replace(/\s+/g, " ").trim();
+      return clean.length > limit ? clean.slice(0, limit - 1) + "…" : clean;
+    }
+
+    function formatDate(value) {
+      const date = new Date(value || Date.now());
+      if (Number.isNaN(date.getTime())) return "刚刚";
+      return date.toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    function createBlankSession(key = "") {
+      const at = nowIso();
+      return {
+        key,
+        title: "",
+        pdfName: "",
+        pdfSize: 0,
+        pdfModified: 0,
+        pageCount: 0,
+        videoUrl: "",
+        goal: "",
+        marks: [],
+        freeNotes: "",
+        createdAt: at,
+        updatedAt: at,
+      };
+    }
+
+    function normalizeSession(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      const at = nowIso();
+      return {
+        key: String(raw.key || ""),
+        title: String(raw.title || ""),
+        pdfName: String(raw.pdfName || ""),
+        pdfSize: Number(raw.pdfSize || 0),
+        pdfModified: Number(raw.pdfModified || 0),
+        pageCount: Number(raw.pageCount || 0),
+        videoUrl: String(raw.videoUrl || ""),
+        goal: String(raw.goal || ""),
+        marks: normalizeMarks(raw.marks),
+        freeNotes: String(raw.freeNotes || ""),
+        createdAt: String(raw.createdAt || at),
+        updatedAt: String(raw.updatedAt || at),
+      };
+    }
+
+    function normalizeMarks(raw) {
+      if (!Array.isArray(raw)) return [];
+      return raw.map((item) => ({
+        id: String(item && item.id || uid()),
+        type: MARK_TYPES[item && item.type] ? item.type : "point",
+        page: Math.max(1, Number(item && item.page || 1)),
+        x: clamp01(Number(item && item.x || 0)),
+        y: clamp01(Number(item && item.y || 0)),
+        w: clamp01(Number(item && item.w || 0.08)),
+        h: clamp01(Number(item && item.h || 0.04)),
+        quote: String(item && item.quote || ""),
+        note: String(item && item.note || ""),
+        videoAt: String(item && item.videoAt || ""),
+        createdAt: String(item && item.createdAt || nowIso()),
+      })).filter((item) => item.w > 0 && item.h > 0);
+    }
+
+    function clamp01(value) {
+      if (!Number.isFinite(value)) return 0;
+      return Math.max(0, Math.min(1, value));
+    }
+
+    function fileKey(file) {
+      return [
+        "pdf",
+        file.name,
+        file.size,
+        file.lastModified || 0,
+      ].join("|");
+    }
+
+    function toast(message) {
+      clearTimeout(toastTimer);
+      els.toast.textContent = message;
+      els.toast.classList.add("show");
+      toastTimer = window.setTimeout(() => els.toast.classList.remove("show"), 1800);
+    }
+
+    function setDirty(label = "自动保存中") {
+      session.updatedAt = nowIso();
+      els.saveState.textContent = label;
+      clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(saveSession, 180);
+    }
+
+    function syncFromInputs() {
+      session.title = els.title.value;
+      session.videoUrl = els.video.value;
+      session.goal = els.goal.value;
+      session.freeNotes = els.freeNotes.value;
+      setDirty();
+    }
+
+    function hydrateInputs() {
+      els.title.value = session.title;
+      els.video.value = session.videoUrl;
+      els.goal.value = session.goal;
+      els.freeNotes.value = session.freeNotes;
+    }
+
+    function saveSession() {
+      if (!session.key) {
+        els.saveState.textContent = "未载入 PDF";
+        return;
+      }
+      syncSessionMeta();
+      sessions[session.key] = normalizeSession(session);
+      writeJson(STORAGE_SESSIONS, sessions);
+      localStorage.setItem(STORAGE_CURRENT, session.key);
+      currentKey = session.key;
+      els.saveState.textContent = "已保存";
+      renderStatus();
+      renderHistory();
+    }
+
+    function syncSessionMeta() {
+      if (!pdfFile) return;
+      session.key = fileKey(pdfFile);
+      session.pdfName = pdfFile.name;
+      session.pdfSize = pdfFile.size;
+      session.pdfModified = pdfFile.lastModified || 0;
+      session.pageCount = pdfDoc ? pdfDoc.numPages : session.pageCount;
+      if (!session.title.trim()) session.title = pdfFile.name.replace(/\.pdf$/i, "");
+    }
+
+    async function loadPdf(file) {
+      if (!file) return;
+      if (file.type && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+        toast("这不是 PDF");
+        return;
+      }
+      pdfFile = file;
+      const key = fileKey(file);
+      session = normalizeSession(sessions[key]) || createBlankSession(key);
+      session.key = key;
+      session.pdfName = file.name;
+      session.pdfSize = file.size;
+      session.pdfModified = file.lastModified || 0;
+      if (!session.title.trim()) session.title = file.name.replace(/\.pdf$/i, "");
+      hydrateInputs();
+      pageText = {};
+      pageSizes = {};
+      activeMarkId = "";
+      els.emptyState.style.display = "none";
+      els.pages.innerHTML = "";
+      els.docTitle.textContent = file.name;
+      els.docMeta.textContent = "正在解析 PDF...";
+      try {
+        const buffer = await file.arrayBuffer();
+        pdfDoc = await pdfjsLib.getDocument({ data: buffer }).promise;
+        session.pageCount = pdfDoc.numPages;
+        saveSession();
+        await renderPdf();
+        toast("PDF 打开了");
+      } catch (error) {
+        console.error(error);
+        pdfDoc = null;
+        els.emptyState.style.display = "grid";
+        els.docMeta.textContent = "PDF 解析失败";
+        toast("PDF 打不开");
+      }
+    }
+
+    async function renderPdf() {
+      if (!pdfDoc) return;
+      els.pages.innerHTML = "";
+      els.docTitle.textContent = session.title || session.pdfName || "PDF";
+      els.docMeta.textContent = `${pdfDoc.numPages} 页 · ${session.marks.length} 条标记 · 缩放 ${Math.round(scale * 100)}%`;
+      for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber += 1) {
+        await renderPage(pageNumber);
+      }
+      renderAllMarks();
+      renderStatus();
+    }
+
+    async function renderPage(pageNumber) {
+      const page = await pdfDoc.getPage(pageNumber);
+      const viewport = page.getViewport({ scale });
+      pageSizes[pageNumber] = { width: viewport.width, height: viewport.height };
+
+      const pageEl = document.createElement("div");
+      pageEl.className = "page";
+      pageEl.dataset.page = String(pageNumber);
+      pageEl.style.setProperty("--page-width", `${viewport.width}px`);
+      pageEl.style.setProperty("--page-height", `${viewport.height}px`);
+      pageEl.style.width = `${viewport.width}px`;
+      pageEl.style.height = `${viewport.height}px`;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.floor(viewport.width * DPR);
+      canvas.height = Math.floor(viewport.height * DPR);
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
+      pageEl.appendChild(canvas);
+
+      const layer = document.createElement("div");
+      layer.className = "mark-layer";
+      layer.dataset.page = String(pageNumber);
+      pageEl.appendChild(layer);
+
+      const badge = document.createElement("div");
+      badge.className = "page-badge";
+      badge.textContent = `P${pageNumber}`;
+      pageEl.appendChild(badge);
+
+      els.pages.appendChild(pageEl);
+
+      await page.render({
+        canvasContext: canvas.getContext("2d"),
+        viewport,
+        transform: DPR !== 1 ? [DPR, 0, 0, DPR, 0, 0] : null,
+      }).promise;
+
+      await cachePageText(page, viewport, pageNumber);
+      bindLayer(layer);
+    }
+
+    async function cachePageText(page, viewport, pageNumber) {
+      try {
+        const content = await page.getTextContent();
+        pageText[pageNumber] = content.items
+          .filter((item) => item && item.str)
+          .map((item) => {
+            const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+            const x = tx[4];
+            const y = tx[5];
+            const height = Math.max(6, Math.hypot(tx[2], tx[3]) || Number(item.height || 10) * scale);
+            const width = Math.max(1, Number(item.width || 0) * scale);
+            return {
+              str: String(item.str || ""),
+              x,
+              y: y - height,
+              width,
+              height,
+            };
+          });
+      } catch {
+        pageText[pageNumber] = [];
+      }
+    }
+
+    function bindLayer(layer) {
+      layer.addEventListener("pointerdown", (event) => {
+        if (!pdfDoc || event.button !== 0) return;
+        const rect = layer.getBoundingClientRect();
+        drag = {
+          page: Number(layer.dataset.page),
+          layer,
+          rect,
+          startX: event.clientX - rect.left,
+          startY: event.clientY - rect.top,
+          box: document.createElement("div"),
+        };
+        drag.box.className = "selection-box";
+        layer.appendChild(drag.box);
+        layer.setPointerCapture(event.pointerId);
+        updateDragBox(event);
+      });
+      layer.addEventListener("pointermove", updateDragBox);
+      layer.addEventListener("pointerup", finishDrag);
+      layer.addEventListener("pointercancel", cancelDrag);
+    }
+
+    function updateDragBox(event) {
+      if (!drag) return;
+      const x = event.clientX - drag.rect.left;
+      const y = event.clientY - drag.rect.top;
+      const left = Math.min(drag.startX, x);
+      const top = Math.min(drag.startY, y);
+      const width = Math.abs(x - drag.startX);
+      const height = Math.abs(y - drag.startY);
+      Object.assign(drag.box.style, {
+        left: `${left}px`,
+        top: `${top}px`,
+        width: `${width}px`,
+        height: `${height}px`,
+      });
+    }
+
+    function finishDrag(event) {
+      if (!drag) return;
+      updateDragBox(event);
+      const layerRect = drag.layer.getBoundingClientRect();
+      const boxRect = drag.box.getBoundingClientRect();
+      const left = boxRect.left - layerRect.left;
+      const top = boxRect.top - layerRect.top;
+      const width = boxRect.width;
+      const height = boxRect.height;
+      drag.box.remove();
+      const page = drag.page;
+      drag = null;
+      if (width < 8 || height < 8) return;
+
+      const mark = {
+        id: uid(),
+        type: activeType,
+        page,
+        x: clamp01(left / layerRect.width),
+        y: clamp01(top / layerRect.height),
+        w: clamp01(width / layerRect.width),
+        h: clamp01(height / layerRect.height),
+        quote: extractQuote(page, left, top, width, height),
+        note: els.defaultNote.value.trim(),
+        videoAt: els.time.value.trim(),
+        createdAt: nowIso(),
+      };
+      session.marks.push(mark);
+      activeMarkId = mark.id;
+      els.defaultNote.value = "";
+      setDirty("已新增标记");
+      renderAllMarks();
+      renderNotes();
+      toast("标上了");
+    }
+
+    function cancelDrag() {
+      if (drag && drag.box) drag.box.remove();
+      drag = null;
+    }
+
+    function extractQuote(page, left, top, width, height) {
+      const items = pageText[page] || [];
+      const right = left + width;
+      const bottom = top + height;
+      const hits = items
+        .filter((item) => intersects(item, left, top, right, bottom))
+        .sort((a, b) => Math.abs(a.y - b.y) > 5 ? a.y - b.y : a.x - b.x)
+        .map((item) => item.str.trim())
+        .filter(Boolean);
+      return compact(hits.join(" ").replace(/\s+([，。；：？！、])/g, "$1"), 220);
+    }
+
+    function intersects(item, left, top, right, bottom) {
+      const aLeft = item.x;
+      const aTop = item.y;
+      const aRight = item.x + item.width;
+      const aBottom = item.y + item.height;
+      return aRight >= left && aLeft <= right && aBottom >= top && aTop <= bottom;
+    }
+
+    function renderMarkChips() {
+      els.markChips.innerHTML = Object.entries(MARK_TYPES).map(([key, meta]) => `
+        <button class="chip" type="button" data-type="${key}" data-active="${activeType === key}" style="--chip-bg: color-mix(in srgb, ${meta.color}, transparent 66%)">
+          ${escapeHtml(meta.label)}
+          <span>${escapeHtml(meta.hint)}</span>
+        </button>
+      `).join("");
+      els.markChips.querySelectorAll(".chip").forEach((button) => {
+        button.addEventListener("click", () => {
+          activeType = button.dataset.type || "point";
+          renderMarkChips();
+        });
+      });
+    }
+
+    function renderAllMarks() {
+      document.querySelectorAll(".mark-layer").forEach((layer) => {
+        layer.querySelectorAll(".rect").forEach((rect) => rect.remove());
+      });
+      for (const mark of session.marks) renderMarkRect(mark);
+      renderNotes();
+    }
+
+    function renderMarkRect(mark) {
+      const layer = document.querySelector(`.mark-layer[data-page="${mark.page}"]`);
+      if (!layer) return;
+      const meta = MARK_TYPES[mark.type] || MARK_TYPES.point;
+      const rect = document.createElement("button");
+      rect.type = "button";
+      rect.className = `rect${mark.id === activeMarkId ? " active" : ""}`;
+      rect.dataset.markId = mark.id;
+      rect.title = `${meta.label} · P${mark.page}${mark.videoAt ? " · " + mark.videoAt : ""}`;
+      rect.style.setProperty("--mark-color", meta.color);
+      rect.style.left = `${mark.x * 100}%`;
+      rect.style.top = `${mark.y * 100}%`;
+      rect.style.width = `${mark.w * 100}%`;
+      rect.style.height = `${mark.h * 100}%`;
+      rect.addEventListener("click", (event) => {
+        event.stopPropagation();
+        activeMarkId = mark.id;
+        renderAllMarks();
+        const card = document.querySelector(`[data-note-id="${cssEscape(mark.id)}"]`);
+        if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      layer.appendChild(rect);
+    }
+
+    function renderNotes() {
+      els.markCount.textContent = `${session.marks.length} 条`;
+      if (!session.marks.length) {
+        els.noteList.innerHTML = `<p class="tiny">还没有标记。在 PDF 页面上拖一块，就会出现在这里。</p>`;
+        return;
+      }
+      const marks = [...session.marks].sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
+      els.noteList.innerHTML = marks.map((mark) => {
+        const meta = MARK_TYPES[mark.type] || MARK_TYPES.point;
+        return `
+          <article class="note-card" data-note-id="${escapeHtml(mark.id)}" data-active="${mark.id === activeMarkId}">
+            <div class="note-head">
+              <span class="note-type"><i class="dot" style="--dot:${meta.color}"></i>${escapeHtml(meta.label)} · P${mark.page}${mark.videoAt ? " · " + escapeHtml(mark.videoAt) : ""}</span>
+              <div class="row">
+                <button class="button ghost" type="button" data-action="locate" data-id="${escapeHtml(mark.id)}">定位</button>
+                <button class="button ghost danger" type="button" data-action="delete" data-id="${escapeHtml(mark.id)}">删</button>
+              </div>
+            </div>
+            <textarea data-action="quote" data-id="${escapeHtml(mark.id)}" placeholder="框内文字；没自动识别就自己补一句">${escapeHtml(mark.quote)}</textarea>
+            <textarea data-action="note" data-id="${escapeHtml(mark.id)}" placeholder="注释：为什么重要、哪里易混、要查什么">${escapeHtml(mark.note)}</textarea>
+          </article>
+        `;
+      }).join("");
+      els.noteList.querySelectorAll("[data-action='quote']").forEach((node) => {
+        node.addEventListener("input", () => {
+          const mark = findMark(node.dataset.id);
+          if (!mark) return;
+          mark.quote = node.value;
+          setDirty();
+        });
+      });
+      els.noteList.querySelectorAll("[data-action='note']").forEach((node) => {
+        node.addEventListener("input", () => {
+          const mark = findMark(node.dataset.id);
+          if (!mark) return;
+          mark.note = node.value;
+          setDirty();
+        });
+      });
+      els.noteList.querySelectorAll("[data-action='delete']").forEach((button) => {
+        button.addEventListener("click", () => {
+          session.marks = session.marks.filter((item) => item.id !== button.dataset.id);
+          if (activeMarkId === button.dataset.id) activeMarkId = "";
+          setDirty("已删除");
+          renderAllMarks();
+          toast("删掉了");
+        });
+      });
+      els.noteList.querySelectorAll("[data-action='locate']").forEach((button) => {
+        button.addEventListener("click", () => {
+          const mark = findMark(button.dataset.id);
+          if (!mark) return;
+          activeMarkId = mark.id;
+          renderAllMarks();
+          const rect = document.querySelector(`.rect[data-mark-id="${cssEscape(mark.id)}"]`);
+          if (rect) rect.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+      });
+    }
+
+    function findMark(id) {
+      return session.marks.find((item) => item.id === id);
+    }
+
+    function renderStatus() {
+      const counts = Object.fromEntries(Object.keys(MARK_TYPES).map((key) => [key, 0]));
+      for (const mark of session.marks) counts[mark.type] = (counts[mark.type] || 0) + 1;
+      const pills = [
+        session.pdfName ? `PDF ${session.pageCount || "?"} 页` : "未载入 PDF",
+        `标记 ${session.marks.length}`,
+        `重点 ${counts.point}`,
+        `易混 ${counts.confuse}`,
+        `待查 ${counts.todo}`,
+      ];
+      els.quickStatus.innerHTML = pills.map((item) => `<span class="pill">${escapeHtml(item)}</span>`).join("");
+      if (pdfDoc) {
+        els.docTitle.textContent = session.title || session.pdfName;
+        els.docMeta.textContent = `${session.pdfName} · ${session.pageCount} 页 · ${session.marks.length} 条标记 · 缩放 ${Math.round(scale * 100)}%`;
+      }
+    }
+
+    function renderHistory() {
+      const rows = Object.values(sessions).map(normalizeSession).filter(Boolean).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      els.sessionCount.textContent = `${rows.length} 份`;
+      if (!rows.length) {
+        els.historyList.innerHTML = `<p class="tiny">打开 PDF 并保存后会出现在这里。</p>`;
+        return;
+      }
+      els.historyList.innerHTML = rows.map((item) => `
+        <button class="history-item" type="button" data-key="${escapeHtml(item.key)}">
+          <strong>${escapeHtml(item.title || item.pdfName || "未命名资料")}</strong>
+          <span>${escapeHtml(item.pdfName || "未选择 PDF")} · ${item.marks.length} 条 · ${formatDate(item.updatedAt)}</span>
+        </button>
+      `).join("");
+      els.historyList.querySelectorAll(".history-item").forEach((button) => {
+        button.addEventListener("click", () => {
+          const next = normalizeSession(sessions[button.dataset.key]);
+          if (!next) return;
+          const sameOpenPdf = Boolean(pdfDoc && pdfFile && next.key === fileKey(pdfFile));
+          session = next;
+          currentKey = next.key;
+          localStorage.setItem(STORAGE_CURRENT, currentKey);
+          if (!sameOpenPdf) {
+            pdfDoc = null;
+            pdfFile = null;
+            pageText = {};
+            pageSizes = {};
+            els.pages.innerHTML = "";
+            els.emptyState.style.display = "grid";
+            els.docTitle.textContent = session.title || session.pdfName || "历史资料";
+            els.docMeta.textContent = "笔记载入了；要显示页面标记，请重新选择同一份 PDF。";
+          }
+          hydrateInputs();
+          renderAllMarks();
+          renderStatus();
+          toast(sameOpenPdf ? "已切到这份资料" : "笔记载入了；要显示 PDF，请重新选择同一份文件");
+        });
+      });
+    }
+
+    function buildBenbenPacket() {
+      syncFromInputs();
+      const rows = [...session.marks].sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
+      const byType = Object.fromEntries(Object.keys(MARK_TYPES).map((key) => [key, rows.filter((mark) => mark.type === key)]));
+      const title = session.title.trim() || session.pdfName || "未命名资料";
+      const lines = [
+        "# 请笨笨整理这份听课资料",
+        "",
+        "## 整理任务",
+        "- 请基于下面的 PDF 标记、框选文字和我的注释，帮我整理成适合备考复习的学习笔记。",
+        "- 输出请包含：核心框架、重点考点、易混点、例子/题眼、知识债清单、可以直接背的压缩版。",
+        "- 如果某条标记没有识别到文字，请根据我的注释和页码提醒我回看，不要凭空补内容。",
+        "- 不要把材料包原样复述一遍，要重新组织、归纳、去重，并指出我下一步最该补什么。",
+        "",
+        "## 资料信息",
+        `标题：${title}`,
+        session.pdfName ? `资料：${session.pdfName}` : "",
+        session.videoUrl.trim() ? `网课：${session.videoUrl.trim()}` : "",
+        session.goal.trim() ? `这轮目标：${session.goal.trim()}` : "",
+        `打包时间：${new Date().toLocaleString("zh-CN")}`,
+        "",
+        "## 我标出来的内容",
+        section("重点", byType.point),
+        section("易混 / 易错", byType.confuse),
+        section("例子 / 题眼", byType.example),
+        section("知识债 / 待查", byType.todo),
+        section("自己的想法", byType.thought),
+        "## 我的随手记",
+        session.freeNotes.trim() || "暂无。",
+      ].filter(Boolean);
+      return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+    }
+
+    function section(title, marks) {
+      const lines = [`## ${title}`];
+      if (!marks.length) {
+        lines.push("- 暂无。");
+      } else {
+        lines.push(...marks.map(markLine));
+      }
+      return lines.join("\n");
+    }
+
+    function markLine(mark) {
+      const meta = MARK_TYPES[mark.type] || MARK_TYPES.point;
+      const parts = [`P${mark.page}`];
+      if (mark.videoAt) parts.push(mark.videoAt);
+      const quote = mark.quote.trim() || "(这块没有识别到文字)";
+      const note = mark.note.trim() ? ` —— ${mark.note.trim()}` : "";
+      return `- [${parts.join(" · ")}] ${meta.label}：${quote}${note}`;
+    }
+
+    async function copyText(text, success) {
+      if (!text.trim()) {
+        toast("没东西可复制");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        toast(success || "复制好了");
+      } catch {
+        window.prompt("复制失败，手动复制这段：", text);
+      }
+    }
+
+    function downloadText(filename, text, type = "text/plain") {
+      const blob = new Blob([text], { type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function safeFilename(name, ext) {
+      const base = String(name || "lecture-pdf-notes").trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").slice(0, 60) || "lecture-pdf-notes";
+      return `${base}.${ext}`;
+    }
+
+    function exportJson() {
+      saveSession();
+      const payload = { version: 1, exportedAt: nowIso(), sessions, currentKey: session.key };
+      downloadText("lecture-pdf-notes-export.json", JSON.stringify(payload, null, 2), "application/json");
+    }
+
+    function importJson(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const payload = JSON.parse(String(reader.result || "{}"));
+          const next = payload.sessions && typeof payload.sessions === "object" ? payload.sessions : null;
+          if (!next) throw new Error("bad sessions");
+          if (!window.confirm("导入会覆盖当前听课笔记数据，继续吗？")) return;
+          sessions = Object.fromEntries(Object.entries(next).map(([key, value]) => [key, normalizeSession(value)]).filter(([, value]) => value));
+          currentKey = String(payload.currentKey || Object.keys(sessions)[0] || "");
+          session = normalizeSession(sessions[currentKey]) || createBlankSession();
+          writeJson(STORAGE_SESSIONS, sessions);
+          localStorage.setItem(STORAGE_CURRENT, currentKey);
+          hydrateInputs();
+          renderAllMarks();
+          renderStatus();
+          renderHistory();
+          toast("导入好了");
+        } catch {
+          toast("JSON 看起来不对");
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function clearCurrent() {
+      if (!session.key) return toast("还没载入资料");
+      if (!window.confirm("清空当前资料的所有标记和注释吗？PDF 不会被删除。")) return;
+      session.marks = [];
+      session.freeNotes = "";
+      els.freeNotes.value = "";
+      activeMarkId = "";
+      setDirty("已清空");
+      renderAllMarks();
+      toast("清空了");
+    }
+
+    function fitWidth() {
+      if (!pdfDoc) return;
+      const first = document.querySelector(".page");
+      if (!first) return;
+      const available = els.viewer.clientWidth - 52;
+      const currentWidth = first.getBoundingClientRect().width;
+      if (currentWidth <= 0) return;
+      scale = Math.max(0.55, Math.min(2.4, scale * (available / currentWidth)));
+      void renderPdf();
+    }
+
+    function bindEvents() {
+      els.pdfInput.addEventListener("change", () => {
+        void loadPdf(els.pdfInput.files && els.pdfInput.files[0]);
+      });
+      [els.title, els.video, els.goal, els.freeNotes].forEach((node) => {
+        node.addEventListener("input", syncFromInputs);
+      });
+      document.getElementById("saveBtn").addEventListener("click", () => {
+        saveSession();
+        toast("保存好了");
+      });
+      document.getElementById("openVideoBtn").addEventListener("click", () => {
+        const url = els.video.value.trim();
+        if (!url) return toast("先填网课链接");
+        window.open(url, "_blank", "noopener,noreferrer");
+      });
+      document.getElementById("zoomOutBtn").addEventListener("click", () => {
+        if (!pdfDoc) return;
+        scale = Math.max(0.55, scale - 0.12);
+        void renderPdf();
+      });
+      document.getElementById("zoomInBtn").addEventListener("click", () => {
+        if (!pdfDoc) return;
+        scale = Math.min(2.4, scale + 0.12);
+        void renderPdf();
+      });
+      document.getElementById("fitWidthBtn").addEventListener("click", fitWidth);
+      document.getElementById("buildDigestBtn").addEventListener("click", () => {
+        els.digestOutput.value = buildBenbenPacket();
+        toast("材料包生成了");
+      });
+      document.getElementById("copyDigestBtn").addEventListener("click", () => {
+        const text = els.digestOutput.value.trim() ? els.digestOutput.value : buildBenbenPacket();
+        els.digestOutput.value = text;
+        void copyText(text, "材料包已复制，发给我就行");
+      });
+      document.getElementById("downloadDigestBtn").addEventListener("click", () => {
+        const text = els.digestOutput.value.trim() ? els.digestOutput.value : buildBenbenPacket();
+        els.digestOutput.value = text;
+        downloadText(safeFilename((session.title || session.pdfName || "lecture-pdf-notes") + "-给笨笨整理", "md"), text, "text/markdown");
+      });
+      document.getElementById("exportJsonBtn").addEventListener("click", exportJson);
+      document.getElementById("importJsonBtn").addEventListener("click", () => els.importFile.click());
+      els.importFile.addEventListener("change", () => {
+        importJson(els.importFile.files && els.importFile.files[0]);
+        els.importFile.value = "";
+      });
+      document.getElementById("clearBtn").addEventListener("click", clearCurrent);
+    }
+
+    function init() {
+      hydrateInputs();
+      renderMarkChips();
+      renderNotes();
+      renderStatus();
+      renderHistory();
+      bindEvents();
+      if (session.pdfName) {
+        els.docTitle.textContent = session.title || session.pdfName;
+        els.docMeta.textContent = "已载入历史笔记；重新选择同一份 PDF 后会显示页面标记。";
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

@@ -9,6 +9,7 @@
 3. 接着读 [`open_source_data_tables.md`](open_source_data_tables.md) 和 [`backend_contracts.md`](backend_contracts.md)：确认默认内容表、运行时存档表、后端规则函数和 GM/DS 边界。
 4. 如果要接完整玩法，再读数值、道具、奖励、副本和怪物系统。
 5. 如果要接入另一个 AI 玩家，再读 [`ai_player_integration.md`](ai_player_integration.md)。
+6. 如果要做开源发布或独立试玩版，再读 [`open_source_distribution.md`](open_source_distribution.md)。
 
 ## 文档地图
 
@@ -25,6 +26,7 @@
 | [`open_source_data_tables.md`](open_source_data_tables.md) | 开源默认内容表与接入方运行时存档表的边界 |
 | [`backend_contracts.md`](backend_contracts.md) | 后端规则函数、状态补丁、内容包和 GM/DS 权限边界 |
 | [`ai_player_integration.md`](ai_player_integration.md) | AI 玩家角色的钱包、背包、上下文、工具和消费流水 |
+| [`open_source_distribution.md`](open_source_distribution.md) | 单 HTML 懒人版、完整开源版、工具桥和 MCP 适配层分工 |
 | [`implementation_checklist.md`](implementation_checklist.md) | 功能实现和测试对齐清单 |
 
 ## 默认内容包

@@ -42,7 +42,6 @@ import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
     public static final String ACTION_OPEN_VOICE_CALL = "com.sumitalk.app.action.OPEN_VOICE_CALL";
-    public static final String ACTION_OPEN_VOICE_WAKE = "com.sumitalk.app.action.OPEN_VOICE_WAKE";
     public static final String EXTRA_VOICE_CALL_INVITE_JSON = "voice_call_invite_json";
     private static final int REQ_RUNTIME_PERMS = 1201;
     private static final String TAG = "SumiTalkMain";
@@ -145,20 +144,14 @@ public class MainActivity extends BridgeActivity {
     private void handleVoiceCallIntent(Intent intent) {
         if (intent == null) return;
         String inviteJson = String.valueOf(intent.getStringExtra(EXTRA_VOICE_CALL_INVITE_JSON) == null ? "" : intent.getStringExtra(EXTRA_VOICE_CALL_INVITE_JSON)).trim();
-        boolean voiceWake = ACTION_OPEN_VOICE_WAKE.equals(intent.getAction());
         boolean voiceCall = ACTION_OPEN_VOICE_CALL.equals(intent.getAction());
-        if (inviteJson.isEmpty() && (voiceCall || voiceWake)) {
+        if (inviteJson.isEmpty() && voiceCall) {
             try {
                 JSONObject fallback = new JSONObject();
-                fallback.put("callId", (voiceWake ? "wake_" : "call_") + System.currentTimeMillis());
+                fallback.put("callId", "call_" + System.currentTimeMillis());
                 fallback.put("callerName", "渡");
-                fallback.put("title", voiceWake ? "叫渡" : "渡来电");
+                fallback.put("title", "渡来电");
                 fallback.put("openingLine", "");
-                if (voiceWake) {
-                    fallback.put("reason", "lockscreen_voice_wake");
-                    fallback.put("autoStartRecording", true);
-                    fallback.put("source", "voice_wake_intent");
-                }
                 inviteJson = fallback.toString();
             } catch (Exception ignored) {
             }
@@ -189,7 +182,7 @@ public class MainActivity extends BridgeActivity {
     private boolean isVoiceLaunchIntent(Intent intent) {
         if (intent == null) return false;
         String action = String.valueOf(intent.getAction() == null ? "" : intent.getAction());
-        if (ACTION_OPEN_VOICE_CALL.equals(action) || ACTION_OPEN_VOICE_WAKE.equals(action)) return true;
+        if (ACTION_OPEN_VOICE_CALL.equals(action)) return true;
         return String.valueOf(intent.getStringExtra(EXTRA_VOICE_CALL_INVITE_JSON) == null ? "" : intent.getStringExtra(EXTRA_VOICE_CALL_INVITE_JSON)).trim().length() > 0;
     }
 

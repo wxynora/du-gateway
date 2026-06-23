@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Lora:ital,wght@0,400;0,500;1,400&family=Playfair+Display:ital,wght@0,400;0,500;1,400&family=Noto+Serif+SC:wght@300;400;500&family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&family=Zeyada&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Inter:wght@300;400;500;600&family=Lora:ital,wght@0,400;0,500;1,400&family=Playfair+Display:ital,wght@0,400;0,500;1,400&family=Noto+Serif+SC:wght@300;400;500&family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&family=Zeyada&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6059,20 +6059,17 @@
 .pixel-home-ref-body-panel {
   position: relative;
   margin: -2px 8px 0;
-  padding: 14px 16px 15px;
-  border-top: 1px solid rgba(113, 95, 86, 0.1);
-  border-bottom: 1px solid rgba(113, 95, 86, 0.08);
-  background: linear-gradient(90deg, rgba(250, 244, 240, 0.28), rgba(255, 255, 255, 0));
+  padding: 6px 0 12px;
 }
 
 .pixel-home-ref-body-label {
   display: block;
-  margin-bottom: 7px;
+  margin-bottom: 5px;
   color: var(--pixel-home-text-muted);
   font-family: "Inter", sans-serif;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  line-height: 1;
+  font-size: 12px;
+  letter-spacing: 0;
+  line-height: 1.35;
 }
 
 .pixel-home-ref-body-inline {

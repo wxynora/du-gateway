@@ -72,7 +72,7 @@ const FILTERS: Array<{ key: FilterKey; label: string }> = [
   { key: "needs", label: "Pending" },
 ];
 
-const serifStyle: React.CSSProperties = { fontFamily: '"Playfair Display", "Times New Roman", serif' };
+const serifStyle: React.CSSProperties = { fontFamily: '"Fraunces", "Noto Serif SC", "Times New Roman", serif' };
 
 export function SecretDrawerTab({ onExit }: { onExit?: () => void }) {
   const toast = useToast();
@@ -236,7 +236,7 @@ export function SecretDrawerTab({ onExit }: { onExit?: () => void }) {
 function SecretSurface({ children, onExit, tone = "paper" }: { children: React.ReactNode; onExit?: () => void; tone?: "paper" | "detail" | "vault" }) {
   const bg = tone === "detail" ? "bg-[#FDFBF7]" : tone === "vault" ? "bg-[#F0EAE3]" : "bg-[#F5F0EB]";
   return (
-    <div className={`fixed inset-0 z-40 min-h-dvh overflow-hidden ${bg} text-[#2D2926]`}>
+    <div className={`fixed inset-0 z-40 min-h-dvh overflow-hidden ${bg} text-[#2D2926]`} style={{ fontFamily: '"Inter", sans-serif' }}>
       <style>{`@keyframes secretPinShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}`}</style>
       <div className="pointer-events-none absolute inset-0 opacity-[0.04]" style={{ backgroundImage: grainBackground() }} />
       {onExit ? <ExitButton onClick={onExit} /> : null}
