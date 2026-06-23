@@ -28,22 +28,30 @@ import {
 } from "./chatMessages";
 import { MAIN_SUMITALK_DISPLAY_WINDOW_ID, buildGroupDisplayWindowId } from "./chatWindowIds";
 import {
+  BrainIconMini,
   BookOpenIcon,
+  CabinetFilingIconMini,
   CalendarIconMini,
   ClockIconMini,
   CodeIcon,
+  CloudUploadIconMini,
   CpuIcon,
   FeatherIcon,
   FileTextIcon,
   GitMergeIcon,
+  GraduationCapIconMini,
+  HeadphonesIconMini,
   HeartIconMini,
   HomeIconMini,
   LogoutIconMini,
   MuteIconMini,
+  NotebookPenIconMini,
   SmartphoneIconMini,
   SpeakerIconMini,
+  StarIconMini,
   SunIconMini,
   ToggleRightIcon,
+  UserRoundCogIconMini,
 } from "./icons";
 import { SumiOverlay } from "../plugins/sumi-overlay";
 import { buildBackgroundDataUrl, fileToDataUrl } from "./imageDataUrl";
@@ -93,7 +101,7 @@ const ReportingManagementScreen = lazy(() => import("./tabs/ReportingManagementS
 const ChatStorageManagementScreen = lazy(() => import("./tabs/ChatStorageManagementScreen").then((m) => ({ default: m.ChatStorageManagementScreen })));
 const SecretDrawerTab = lazy(() => import("./tabs/SecretDrawerTab").then((m) => ({ default: m.SecretDrawerTab })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "study-room" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
 type SilenceModeResponse = {
   ok?: boolean;
@@ -593,9 +601,14 @@ export function AppShell({
               onClick={() => setShowPixelHome(true)}
             />
             <ListRow
-              icon={<CpuIcon />}
+              icon={<StarIconMini />}
               label="记忆星云"
               onClick={() => setShowMemoryNebula(true)}
+            />
+            <ListRow
+              icon={<GraduationCapIconMini />}
+              label="学习"
+              onClick={() => setPanel("study-room")}
             />
             <ListRow
               icon={<BookOpenIcon />}
@@ -603,7 +616,7 @@ export function AppShell({
               onClick={() => setShowCoRead(true)}
             />
             <ListRow
-              icon={<HeartIconMini />}
+              icon={<HeadphonesIconMini />}
               label="和渡一起听"
               onClick={() => {
                 setListenWithDuMounted(true);
@@ -616,12 +629,12 @@ export function AppShell({
               onClick={() => setPanel("budget-checkin")}
             />
             <ListRow
-              icon={<BookOpenIcon />}
+              icon={<NotebookPenIconMini />}
               label="渡的记事本"
               onClick={() => setPanel("du-notebook")}
             />
             <ListRow
-              icon={<FeatherIcon />}
+              icon={<CabinetFilingIconMini />}
               label="秘密抽屉"
               onClick={() => setPanel("secret-drawer")}
               last
@@ -637,22 +650,14 @@ export function AppShell({
           <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
             <ListRow icon={<FileTextIcon />} label="日志" onClick={() => setPanel("logs")} />
             <ListRow icon={<GitMergeIcon />} label="思维链" onClick={() => setPanel("reasoning")} />
-            <ListRow icon={<CpuIcon />} label="记忆调试" onClick={() => setPanel("memory-debug")} />
+            <ListRow icon={<BrainIconMini />} label="记忆调试" onClick={() => setPanel("memory-debug")} />
             <ListRow icon={<HeartIconMini />} label="健康数据" onClick={() => setPanel("health-data")} />
             <ListRow icon={<ClockIconMini />} label="闹钟" onClick={() => setShowAlarm(true)} />
             <ListRow icon={<CalendarIconMini />} label="日历" onClick={() => setShowSchedule(true)} />
             <ListRow icon={<SpeakerIconMini />} label="小爱音箱" onClick={() => setPanel("xiaoai")} />
-            <ListRow icon={<CodeIcon />} label="核心 Prompt" onClick={() => setShowCorePrompt(true)} />
-            <ListRow icon={<ToggleRightIcon />} label="上游切换" onClick={() => setShowSettings(true)} last />
+            <ListRow icon={<UserRoundCogIconMini />} label="核心 Prompt" onClick={() => setShowCorePrompt(true)} last />
           </div>
         </div>
-      );
-    }
-    if (mainTab === "study") {
-      return (
-        <LazyPane>
-          <StudyRoomTab />
-        </LazyPane>
       );
     }
     if (mainTab === "settings") {
@@ -685,7 +690,8 @@ export function AppShell({
             />
             <ListRow icon={<FeatherIcon />} label="个性化" onClick={() => setShowPersonalization(true)} />
             <ListRow icon={<CpuIcon />} label="系统诊断" onClick={() => setShowDiagnostics(true)} />
-            <ListRow icon={<SmartphoneIconMini />} label="上报管理" onClick={() => setPanel("reporting")} />
+            <ListRow icon={<ToggleRightIcon />} label="API管理" onClick={() => setShowSettings(true)} />
+            <ListRow icon={<CloudUploadIconMini />} label="上报管理" onClick={() => setPanel("reporting")} />
             <ListRow icon={<FileTextIcon />} label="记忆存储管理" onClick={() => setPanel("chat-storage")} />
             <ListRow icon={<SmartphoneIconMini />} label="设备管理" onClick={() => onOpenDevices?.()} />
             {onLogout ? <ListRow icon={<LogoutIconMini />} label="退出登录" onClick={onLogout} last /> : null}
@@ -841,6 +847,11 @@ export function AppShell({
           <LazyPane><DuNotebookTab /></LazyPane>
         </FullScreenPane>
       ) : null}
+      {panel === "study-room" ? (
+        <FullScreenPane title="学习" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>
+          <LazyPane><StudyRoomTab /></LazyPane>
+        </FullScreenPane>
+      ) : null}
       {panel === "budget-checkin" ? (
         <FullScreenPane title="存钱打卡" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>
           <LazyPane><BudgetCheckInTab /></LazyPane>
@@ -876,7 +887,7 @@ export function AppShell({
       ) : null}
 
       {showSettings ? (
-        <FullScreenPane title="上游切换" accent="neutral" onBack={() => setShowSettings(false)}>
+        <FullScreenPane title="API管理" accent="neutral" onBack={() => setShowSettings(false)}>
           <LazyPane><SettingsUpstream /></LazyPane>
         </FullScreenPane>
       ) : null}

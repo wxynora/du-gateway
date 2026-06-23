@@ -585,7 +585,6 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
   const [loadingBookKey, setLoadingBookKey] = useState("");
   const [refreshingBook, setRefreshingBook] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [importStatus, setImportStatus] = useState("");
   const [savingMark, setSavingMark] = useState(false);
   const [savingNote, setSavingNote] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -769,7 +768,6 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
 
   async function uploadTxtBookInChunks(bookTitle: string, content: string): Promise<CoReadBook> {
     const totalChunks = Math.max(1, Math.ceil(content.length / CO_READ_UPLOAD_CHUNK_CHARS));
-    setImportStatus(`准备上传 0/${totalChunks}`);
     const start = await apiJson<CoReadUploadResponse>("/miniapp-api/co-read/uploads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -779,7 +777,6 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
     if (!start?.ok || !uploadId) throw new Error(start?.error || "创建分片上传失败");
     for (let index = 0; index < totalChunks; index += 1) {
       const chunk = content.slice(index * CO_READ_UPLOAD_CHUNK_CHARS, (index + 1) * CO_READ_UPLOAD_CHUNK_CHARS);
-      setImportStatus(`上传 ${index + 1}/${totalChunks}`);
       const part = await apiJson<CoReadUploadResponse>(`/miniapp-api/co-read/uploads/${encodeURIComponent(uploadId)}/chunks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -787,7 +784,6 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
       });
       if (!part?.ok) throw new Error(part?.error || `第 ${index + 1} 片上传失败`);
     }
-    setImportStatus("正在切分");
     const finished = await apiJson<CoReadBookResponse>(`/miniapp-api/co-read/uploads/${encodeURIComponent(uploadId)}/finish`, {
       method: "POST",
     });
@@ -803,7 +799,6 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
       return;
     }
     setImporting(true);
-    setImportStatus("");
     try {
       const content = decodeCoReadTxtBytes(await file.arrayBuffer()).trim();
       if (!content) throw new Error("文件里没有可读内容");
@@ -829,7 +824,6 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
       toast(`导入失败：${e?.message || e}`);
     } finally {
       setImporting(false);
-      setImportStatus("");
     }
   }
 
@@ -1378,7 +1372,7 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
         </button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-[112px] pt-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-[calc(env(safe-area-inset-bottom,0px)+24px)] pt-5">
         {loadingBooks ? (
           <div className="flex min-h-[58vh] items-center justify-center font-mono text-[12px] text-[#999999]">loading...</div>
         ) : books.length ? (
@@ -1434,14 +1428,6 @@ export function CoReadScreen({ onBack, windowId }: { onBack: () => void; windowI
         )}
       </div>
 
-      <button
-        type="button"
-        className="fixed inset-x-5 bottom-[calc(env(safe-area-inset-bottom,0px)+20px)] z-40 h-14 rounded-full bg-[#111111] font-mono text-[12px] font-semibold uppercase tracking-[0.08em] text-white shadow-[0_12px_26px_rgba(0,0,0,0.18)] active:scale-[0.99] disabled:opacity-40"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={importing}
-      >
-        {importing ? (importStatus || "正在导入...") : "导入 TXT 资料"}
-      </button>
       <input
         ref={fileInputRef}
         type="file"

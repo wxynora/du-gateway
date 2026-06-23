@@ -288,11 +288,9 @@ function memoryItemId(item: RecalledMemoryItem | RecallScore) {
 export function MemoryDebugTab() {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
-  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
   const [mirrorSyncLoading, setMirrorSyncLoading] = useState(false);
   const [data, setData] = useState<MemoryDebugResp | null>(null);
   const [mirrorData, setMirrorData] = useState<DynamicMemoryMirrorResp | null>(null);
-  const [scope, setScope] = useState<"all" | "target">("all");
   const [tab, setTab] = useState<"summary" | "dynamic" | "core">("summary");
   const [deletingCoreId, setDeletingCoreId] = useState("");
 
@@ -300,7 +298,7 @@ export function MemoryDebugTab() {
     setLoading(true);
     try {
       const [j, mirror] = await Promise.all([
-        apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=10&core_limit=180&scope=${scope}`),
+        apiJson<MemoryDebugResp>(`/miniapp-api/memory-debug?limit=10&core_limit=180&scope=all`),
         apiJson<DynamicMemoryMirrorResp>(`/miniapp-api/dynamic-memory-mirror?limit=8`).catch((e: any) => ({
           ok: false,
           error: String(e?.message || e),
@@ -315,7 +313,7 @@ export function MemoryDebugTab() {
     } finally {
       setLoading(false);
     }
-  }, [toast, scope]);
+  }, [toast]);
 
   useEffect(() => {
     reload();
@@ -347,24 +345,6 @@ export function MemoryDebugTab() {
   const mirrorMeta = mirrorStatus.meta || {};
   const mirrorItems = Array.isArray(mirrorData?.items) ? mirrorData!.items! : [];
   const mirrorConsistent = Number(mirrorStatus.active_count ?? 0) === Number(data?.dynamic_stats?.memory_count ?? -1);
-
-  async function runMaintenance() {
-    setMaintenanceLoading(true);
-    try {
-      const j = await apiJson<{ ok?: boolean; error?: string }>(`/miniapp-api/memory-maintenance`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit_candidates: 20 }),
-      });
-      if (!j?.ok) throw new Error(j?.error || "整理失败");
-      toast("离线整理已执行");
-      await reload();
-    } catch (e: any) {
-      toast(`整理失败：${e?.message || e}`);
-    } finally {
-      setMaintenanceLoading(false);
-    }
-  }
 
   async function syncMirrorKeywords() {
     setMirrorSyncLoading(true);
@@ -419,8 +399,6 @@ export function MemoryDebugTab() {
         .segmented-control { background:#f3f4f6; border-radius:14px; padding:2px; }
         .segmented-item { border-radius:12px; padding:7px 14px; font-size:13px; font-weight:600; transition:.2s; }
         .segmented-item.active { background:#fff; color:#111827; box-shadow:0 1px 2px rgba(0,0,0,.06); }
-        .tab-active { color:#111827; position:relative; }
-        .tab-active::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; background:#111827; border-radius:2px; }
       `}</style>
 
       <HeaderPortal targetId="memory-debug-header-status">
@@ -431,28 +409,28 @@ export function MemoryDebugTab() {
         <div className="flex items-center justify-between">
           <div className="segmented-control flex">
             <button
-              className={`segmented-item ${scope === "all" ? "active text-gray-800" : "text-gray-400"}`}
-              onClick={() => setScope("all")}
+              className={`segmented-item ${tab === "summary" ? "active text-gray-800" : "text-gray-400"}`}
+              onClick={() => setTab("summary")}
               disabled={loading}
             >
-              全部
+              近期
             </button>
             <button
-              className={`segmented-item ${scope === "target" ? "active text-gray-800" : "text-gray-400"}`}
-              onClick={() => setScope("target")}
+              className={`segmented-item ${tab === "dynamic" ? "active text-gray-800" : "text-gray-400"}`}
+              onClick={() => setTab("dynamic")}
               disabled={loading}
             >
-              当前窗口
+              动态
+            </button>
+            <button
+              className={`segmented-item ${tab === "core" ? "active text-gray-800" : "text-gray-400"}`}
+              onClick={() => setTab("core")}
+              disabled={loading}
+            >
+              核心
             </button>
           </div>
           <div className="flex items-center space-x-2">
-            <button
-              className="flex items-center space-x-2 rounded-xl bg-[#1F2937] px-4 py-2 text-[13px] font-medium text-white transition-all active:scale-95 disabled:opacity-50"
-              onClick={runMaintenance}
-              disabled={loading || maintenanceLoading}
-            >
-              <span>{maintenanceLoading ? "整理中..." : "离线整理"}</span>
-            </button>
             <button
               className="rounded-xl border border-gray-100 bg-white p-2.5 text-gray-500 shadow-sm transition-colors active:bg-gray-50"
               onClick={reload}
@@ -466,27 +444,6 @@ export function MemoryDebugTab() {
               </svg>
             </button>
           </div>
-        </div>
-
-        <div className="flex space-x-8 border-b border-gray-50 px-1">
-          <button
-            className={`pb-2 text-[15px] font-bold transition-all ${tab === "summary" ? "tab-active" : "text-gray-300"}`}
-            onClick={() => setTab("summary")}
-          >
-            窗口总结
-          </button>
-          <button
-            className={`pb-2 text-[15px] font-bold transition-all ${tab === "dynamic" ? "tab-active" : "text-gray-300"}`}
-            onClick={() => setTab("dynamic")}
-          >
-            动态记忆
-          </button>
-          <button
-            className={`pb-2 text-[15px] font-bold transition-all ${tab === "core" ? "tab-active" : "text-gray-300"}`}
-            onClick={() => setTab("core")}
-          >
-            核心记忆
-          </button>
         </div>
       </div>
 
@@ -642,15 +599,22 @@ export function MemoryDebugTab() {
               </div>
             </details>
 
-            <div className="space-y-4">
-              <div className="flex items-center justify-between px-1">
+            <details className="space-y-4">
+              <summary className="reminder-card flex cursor-pointer list-none items-center justify-between rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft">
                 <div className="flex items-baseline space-x-2">
                   <h2 className="text-[11px] font-bold uppercase tracking-widest text-gray-400">DS 写入审计</h2>
                   <span className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-bold text-violet-500">
                     {String(dsAuditEvents.length)} / {String(data?.ds_audit?.total_count ?? dsAuditEvents.length)}
                   </span>
                 </div>
-              </div>
+                <div className="flex items-center gap-2 text-[11px] font-medium text-gray-300">
+                  <span>点击展开</span>
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </div>
+              </summary>
+              <div className="space-y-4 pt-1">
               <div className="reminder-card rounded-[28px] border border-gray-100/80 bg-white p-5 shadow-soft">
                 <div className="grid grid-cols-4 gap-2 text-center">
                   <div className="rounded-2xl bg-emerald-50 p-3">
@@ -728,7 +692,8 @@ export function MemoryDebugTab() {
                 );
               })}
               {!dsAuditEvents.length ? <div className="px-1 py-4 text-[12px] text-gray-300">（暂无 DS 写入审计）</div> : null}
-            </div>
+              </div>
+            </details>
 
             <div className="space-y-4">
               <div className="flex items-center justify-between px-1">
