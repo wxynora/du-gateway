@@ -9,6 +9,7 @@ from flask import jsonify, request
 
 from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
 from services.pixel_home import (
+    build_pixel_home_body_event,
     build_pixel_home_event,
     build_pixel_home_state,
     normalize_spot,
@@ -124,6 +125,23 @@ def _pixel_home_wakeup_context() -> tuple[str, str]:
     if not target and uid > 0:
         target = str(uid)
     return window_id, target
+
+
+def _queue_pixel_home_wakeup(event_text: str) -> dict:
+    window_id, target = _pixel_home_wakeup_context()
+    if not window_id:
+        return {"ok": False, "error": "missing_window_id"}
+
+    def _run_pixel_home_wakeup():
+        try:
+            from services.conversation_followup import send_proactive_trigger_wakeup
+
+            send_proactive_trigger_wakeup(window_id=window_id, target=target, event_text=event_text)
+        except Exception as e:
+            get_logger(__name__).warning("pixel home wakeup failed window_id=%s error=%s", window_id, e)
+
+    threading.Thread(target=_run_pixel_home_wakeup, name="pixel-home-wakeup", daemon=True).start()
+    return {"ok": True, "queued": True}
 
 
 def _generate_daily_report(today: str) -> dict:
@@ -426,7 +444,12 @@ def register_routes(bp) -> None:
     def miniapp_pixel_home_du_body_state():
         data = request.get_json(silent=True) or {}
         body_state = save_du_body_state(data or {})
-        return jsonify({"ok": bool(body_state.get("ok")), "du_body_state": body_state, "state": build_pixel_home_state()})
+        event_text = ""
+        wakeup = {"ok": False, "skipped": True}
+        if body_state.get("toy_changed"):
+            event_text = build_pixel_home_body_event(body_state)
+            wakeup = _queue_pixel_home_wakeup(event_text)
+        return jsonify({"ok": bool(body_state.get("ok")), "du_body_state": body_state, "event_text": event_text, "wakeup": wakeup, "state": build_pixel_home_state()})
 
     @bp.route("/pixel-home-event", methods=["POST"])
     def miniapp_pixel_home_event():
@@ -435,20 +458,7 @@ def register_routes(bp) -> None:
         action = str((data or {}).get("action") or (data or {}).get("activity") or "").strip() or "待着"
         actor = save_actor_state("xinyue", spot, action, source="miniapp_event")
         event_text = build_pixel_home_event(spot, action)
-        window_id, target = _pixel_home_wakeup_context()
-        if window_id:
-            def _run_pixel_home_wakeup():
-                try:
-                    from services.conversation_followup import send_proactive_trigger_wakeup
-
-                    send_proactive_trigger_wakeup(window_id=window_id, target=target, event_text=event_text)
-                except Exception as e:
-                    get_logger(__name__).warning("pixel home wakeup failed window_id=%s error=%s", window_id, e)
-
-            threading.Thread(target=_run_pixel_home_wakeup, name="pixel-home-wakeup", daemon=True).start()
-            wakeup = {"ok": True, "queued": True}
-        else:
-            wakeup = {"ok": False, "error": "missing_window_id"}
+        wakeup = _queue_pixel_home_wakeup(event_text)
         return jsonify({"ok": True, "event_text": event_text, "xinyue": actor, "wakeup": wakeup, "state": build_pixel_home_state()})
 
     # 兼容旧前端路径：与 daily-report 行为一致

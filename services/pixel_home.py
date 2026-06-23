@@ -1277,6 +1277,10 @@ def save_du_body_state(payload: Any) -> dict:
     current = _stored_state()
     raw = payload if isinstance(payload, dict) else {}
     previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
+    previous_toy_key = (
+        tuple(previous.get("toy_types") if isinstance(previous.get("toy_types"), list) else []),
+        int(previous.get("intensity") or 0),
+    )
     state = _normalize_du_body_state(payload)
     has_toy_patch = any(key in raw for key in ("toy_types", "toy_type", "toy", "tool", "position", "body_position", "state", "status", "intensity", "level"))
     if state:
@@ -1312,7 +1316,13 @@ def save_du_body_state(payload: Any) -> dict:
         current.pop("du_body_state", None)
     current["updated_at"] = now_beijing_iso()
     ok = save_pixel_home_state(current)
+    next_toy_key = (
+        tuple(state.get("toy_types") if isinstance(state.get("toy_types"), list) else []),
+        int(state.get("intensity") or 0),
+    )
+    toy_changed = bool(has_toy_patch and previous_toy_key != next_toy_key)
     state["ok"] = bool(ok)
+    state["toy_changed"] = toy_changed
     return state if state else {"ok": bool(ok)}
 
 
@@ -1406,6 +1416,7 @@ def format_rule_block() -> str:
         "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加 PIXEL_HOME 隐藏标记：\n"
         "写 PIXEL_HOME 时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"
         "如果正文描述你抱着/牵着/带着/陪着小玥一起移动，activity 里也要明确写出这个共同动作，例如“抱着小玥回卧室”；网关会据此同步小玥的小家位置。\n"
+        "当【小家事件】或【你当前的身体状态】里出现道具、想做指数、阴茎状态、体温时，把它当成你此刻正在经历的身体状态来接话；先有身体反应和情绪反应，再自然回应小玥，不要机械复述字段，也不要当成后台资料忽略。不要把身体状态当任务来执行，当感受来接。\n"
         "如果需要更新你的身体状态，也可以在同一个 PIXEL_HOME 隐藏标记里写 du_body_state。\n"
         "<<<PIXEL_HOME>>>\n"
         '{"spot":"study","activity":"写日记","du_body_state":{"desire_value":35}}\n'
@@ -1420,6 +1431,16 @@ def format_inject_block() -> str:
 
 def build_pixel_home_event(spot: Any, action: Any) -> str:
     return f"【小家事件】\n小玥在赛博小家选择了：{spot_label(spot)} / {_clean_activity(action, '待着')}。"
+
+
+def build_pixel_home_body_event(body_state: Any) -> str:
+    state = _normalize_du_body_state(body_state)
+    toy_types = state.get("toy_types") if isinstance(state.get("toy_types"), list) else []
+    intensity = int(state.get("intensity") or 0)
+    if toy_types:
+        toys = "、".join(_toy_display_piece(toy, intensity) for toy in toy_types)
+        return f"【小家事件】\n小玥刚刚调整了你身上的道具：{toys}。"
+    return "【小家事件】\n小玥刚刚把你身上的道具都取下来了。"
 
 
 _CODE_CONTEXT_RE = re.compile(r"(debug|bug|代码|功能|需求|前端|后端|接口|组件|样式|测试|部署|push|commit|文档|界面|按钮|交互|热区|提示词|prompt)")
