@@ -31,8 +31,20 @@ type PixelHomeStateResp = {
   xinyue?: PixelHomeActor;
   du_dynamics?: PixelHomeDynamic[];
   du_vitals?: Record<string, any>;
+  du_body_state?: DuBodyState;
   spots?: Array<{ key: HomeSpotKey; label: string }>;
   state?: PixelHomeStateResp;
+};
+
+type DuBodyState = {
+  toy_types?: string[];
+  toy_type?: string;
+  intensity?: number;
+  desire_value?: number;
+  desire_level?: number;
+  penis_state?: string;
+  temperature?: string;
+  text?: string;
 };
 
 type Hotspot = {
@@ -102,6 +114,8 @@ const DEFAULT_SPOTS: Array<{ key: HomeSpotKey; label: string }> = [
   { key: "away", label: "离家出走" },
   { key: "out", label: "外出" },
 ];
+
+const BODY_TOY_OPTIONS = ["无", "跳蛋", "震动乳夹", "震动环", "乳夹", "锁精环", "飞机杯", "软绳", "手腕绑带", "眼罩", "口球", "春药"];
 
 const HOTSPOTS: Hotspot[] = [
   {
@@ -516,6 +530,39 @@ function duMoodLabel(vitals: Record<string, any> | undefined) {
   return "😐";
 }
 
+function bodyToyTypes(state: DuBodyState | undefined) {
+  if (Array.isArray(state?.toy_types)) return state.toy_types.filter(Boolean);
+  return state?.toy_type ? [state.toy_type] : [];
+}
+
+function bodyStateText(state: DuBodyState | undefined) {
+  const text = String(state?.text || "").trim();
+  if (text) return text;
+  const parts: string[] = [];
+  const toyTypes = bodyToyTypes(state);
+  if (toyTypes.length) {
+    const details = [];
+    if (Number(state.intensity || 0) > 0) details.push(`档位${Number(state.intensity || 0)}`);
+    parts.push(`道具：${toyTypes.join("、")}${details.length ? `（${details.join("，")}）` : ""}`);
+  }
+  if (typeof state?.desire_value !== "undefined" || typeof state?.desire_level !== "undefined") {
+    const desireLevel = Number(state?.desire_level || 0);
+    parts.push(`想做指数：${desireLevel}/5`);
+    parts.push(`阴茎状态：${state?.penis_state || "放松状态"}`);
+  } else if (state?.penis_state) {
+    parts.push(`阴茎状态：${state.penis_state}`);
+  }
+  if (state?.temperature) parts.push(`体温：${state.temperature}`);
+  return parts.join("；") || "未记录";
+}
+
+function toggleToyType(prev: DuBodyState, item: string): DuBodyState {
+  if (item === "无") return { ...prev, toy_types: [], toy_type: "无" };
+  const current = bodyToyTypes(prev);
+  const next = current.includes(item) ? current.filter((value) => value !== item) : [...current, item];
+  return { ...prev, toy_types: next, toy_type: next[0] || "无" };
+}
+
 function statusText(label: string, activity: string) {
   const clean = String(activity || "").trim().replace(/^正在/, "") || "待着";
   if (clean.startsWith("在")) return clean;
@@ -833,12 +880,17 @@ export function PixelHomeTab() {
   const [savingMyState, setSavingMyState] = useState(false);
   const [sendingAction, setSendingAction] = useState("");
   const [statusEditorOpen, setStatusEditorOpen] = useState(false);
+  const [toyEditorOpen, setToyEditorOpen] = useState(false);
+  const [savingToyState, setSavingToyState] = useState(false);
+  const [toyDraft, setToyDraft] = useState<DuBodyState>({});
+  const [toySaveError, setToySaveError] = useState("");
   const [privateDrawOpen, setPrivateDrawOpen] = useState(false);
 
   const modeMeta = HOME_MODES[mode];
   const spots = homeState?.spots?.length ? homeState.spots : DEFAULT_SPOTS;
   const duStatus = actorText(homeState?.du, "在书房写日记");
   const duMood = duMoodLabel(homeState?.du_vitals);
+  const duBodyStatus = bodyStateText(homeState?.du_body_state);
   const mySpotLabel = spots.find((spot) => spot.key === mySpot)?.label || "离家出走";
   const myStatus = myDirty ? statusText(mySpotLabel, myActivity) : actorText(homeState?.xinyue, "在客厅沙发休息");
   const selectedSpot = useMemo(() => HOTSPOTS.find((spot) => spot.key === selectedSpotKey) || null, [selectedSpotKey]);
@@ -864,6 +916,7 @@ export function PixelHomeTab() {
       setMySpot(nextSpot);
       setMyActivity(String(data?.xinyue?.activity || "休息").trim() || "休息");
     }
+    setToyDraft(data?.du_body_state || {});
   }, [myDirty]);
 
   useEffect(() => {
@@ -922,6 +975,30 @@ export function PixelHomeTab() {
       else await refreshHomeState();
     } finally {
       setSendingAction("");
+    }
+  }
+
+  async function saveToyState() {
+    if (savingToyState) return;
+    setToySaveError("");
+    setSavingToyState(true);
+    try {
+      const payload = {
+        toy_types: bodyToyTypes(toyDraft),
+        intensity: Number(toyDraft.intensity || 0) || 0,
+      };
+      const data = await apiJson<PixelHomeStateResp>("/miniapp-api/pixel-home-state/du-body", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (data?.state) setHomeState(data.state);
+      else await refreshHomeState();
+      setToyEditorOpen(false);
+    } catch (error: any) {
+      setToySaveError(String(error?.message || error || "保存失败"));
+    } finally {
+      setSavingToyState(false);
     }
   }
 
@@ -1020,6 +1097,22 @@ export function PixelHomeTab() {
               <span>我:</span>
               {myStatus}
             </div>
+            <div className="pixel-home-ref-status-row pixel-home-ref-body-row">
+              <span>渡的身体:</span>
+              <button
+                className="pixel-home-ref-body-inline"
+                type="button"
+                aria-label="选择小玩具"
+                onClick={() => {
+                  setToyDraft(homeState?.du_body_state || {});
+                  setToySaveError("");
+                  setToyEditorOpen(true);
+                }}
+              >
+                <b>{duBodyStatus}</b>
+                <i aria-hidden="true">+</i>
+              </button>
+            </div>
           </div>
           <button className="pixel-home-ref-add" type="button" aria-label="设置我的状态" onClick={() => setStatusEditorOpen(true)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -1090,6 +1183,51 @@ export function PixelHomeTab() {
             <button className="pixel-home-ref-save" type="button" disabled={savingMyState || !myActivity.trim()} onClick={() => void saveMyState()}>
               {savingMyState ? "保存中" : "记录此刻"}
             </button>
+          </div>
+        </div>
+      ) : null}
+
+      {toyEditorOpen ? (
+        <div className="pixel-home-ref-modal active" onClick={() => setToyEditorOpen(false)}>
+          <div className="pixel-home-ref-sheet pixel-home-ref-toy-sheet" onClick={(event) => event.stopPropagation()}>
+            <div className="pixel-home-ref-input-group">
+              <label>启用道具</label>
+              <div className="pixel-home-ref-chip-grid">
+                {BODY_TOY_OPTIONS.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    className={`pixel-home-ref-location-chip${
+                      item === "无" ? (bodyToyTypes(toyDraft).length === 0 ? " selected" : "") : bodyToyTypes(toyDraft).includes(item) ? " selected" : ""
+                    }`}
+                    onClick={() => setToyDraft((prev) => toggleToyType(prev, item))}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pixel-home-ref-input-group">
+              <label>强度</label>
+              <div className="pixel-home-ref-level-row">
+                {[1, 2, 3, 4, 5].map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    className={`pixel-home-ref-level${Number(toyDraft.intensity || 0) === level ? " selected" : ""}`}
+                    onClick={() => setToyDraft((prev) => ({ ...prev, intensity: level }))}
+                  >
+                    {level}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button className="pixel-home-ref-save" type="button" disabled={savingToyState} onClick={() => void saveToyState()}>
+              {savingToyState ? "保存中" : "保存"}
+            </button>
+            {toySaveError ? <span className="private-draw-send-error">{toySaveError}</span> : null}
           </div>
         </div>
       ) : null}

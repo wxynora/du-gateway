@@ -6056,6 +6056,58 @@
   stroke: currentColor;
 }
 
+.pixel-home-ref-body-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+}
+
+.pixel-home-ref-body-inline {
+  min-width: 0;
+  flex: 1;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pixel-home-ref-body-inline b {
+  min-width: 0;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.pixel-home-ref-body-inline i {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(113, 95, 86, 0.16);
+  border-radius: 50%;
+  color: var(--pixel-home-text-muted);
+  font-family: "Inter", sans-serif;
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1;
+  transform: translateY(-1px);
+  transition: all 0.25s ease;
+}
+
+.pixel-home-ref-body-inline:active i {
+  transform: translateY(-1px) scale(0.9);
+  background: rgba(232, 196, 184, 0.24);
+}
+
 .pixel-home-ref-feed {
   padding: 0 8px;
 }
@@ -6184,6 +6236,12 @@
   margin-bottom: 32px;
 }
 
+.pixel-home-ref-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .pixel-home-ref-location-chip {
   padding: 10px;
   border: 1px solid var(--pixel-home-border);
@@ -6197,6 +6255,37 @@
 }
 
 .pixel-home-ref-location-chip.selected {
+  border-color: var(--pixel-home-accent);
+  background: var(--pixel-home-accent);
+  color: white;
+}
+
+.pixel-home-ref-toy-sheet {
+  max-height: min(82dvh, 720px);
+  overflow-y: auto;
+}
+
+.pixel-home-ref-level-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pixel-home-ref-level {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--pixel-home-border);
+  border-radius: 999px;
+  background: var(--pixel-home-surface);
+  color: var(--pixel-home-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.3s ease;
+}
+
+.pixel-home-ref-level.selected {
   border-color: var(--pixel-home-accent);
   background: var(--pixel-home-accent);
   color: white;

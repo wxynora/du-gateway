@@ -13,6 +13,7 @@ from services.pixel_home import (
     build_pixel_home_state,
     normalize_spot,
     save_actor_state,
+    save_du_body_state,
 )
 from storage import r2_store
 from utils.log import get_logger
@@ -420,6 +421,12 @@ def register_routes(bp) -> None:
         activity = str((data or {}).get("activity") or (data or {}).get("doing") or "").strip() or "待着"
         actor = save_actor_state("xinyue", spot, activity, source="manual")
         return jsonify({"ok": bool(actor.get("ok")), "xinyue": actor, "state": build_pixel_home_state()})
+
+    @bp.route("/pixel-home-state/du-body", methods=["PUT"])
+    def miniapp_pixel_home_du_body_state():
+        data = request.get_json(silent=True) or {}
+        body_state = save_du_body_state(data or {})
+        return jsonify({"ok": bool(body_state.get("ok")), "du_body_state": body_state, "state": build_pixel_home_state()})
 
     @bp.route("/pixel-home-event", methods=["POST"])
     def miniapp_pixel_home_event():

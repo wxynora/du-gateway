@@ -69,6 +69,63 @@ DEFAULT_XINYUE_STATE = {"spot": "sofa", "activity": "休息", "source": "default
 PREFIXLESS_SPOTS = {"away", "out"}
 DU_DYNAMICS_LIMIT = 5
 EVENT_AUTO_END_MINUTES = 120
+TOY_TYPES = {
+    "none": "",
+    "跳蛋": "跳蛋",
+    "震动乳夹": "震动乳夹",
+    "震动环": "震动环",
+    "乳夹": "乳夹",
+    "锁精环": "锁精环",
+    "飞机杯": "飞机杯",
+    "软绳": "软绳",
+    "手腕绑带": "手腕绑带",
+    "眼罩": "眼罩",
+    "口球": "口球",
+    "春药": "春药",
+}
+TOY_DEFAULT_POSITIONS = {
+    "跳蛋": "后庭",
+    "震动乳夹": "乳头",
+    "震动环": "阴茎",
+    "乳夹": "乳头",
+    "锁精环": "阴茎",
+    "飞机杯": "阴茎",
+    "软绳": "全身",
+    "手腕绑带": "手腕",
+    "眼罩": "眼睛",
+    "口球": "嘴",
+    "春药": "全身",
+}
+TOY_INTENSITY_TYPES = {"跳蛋", "震动乳夹", "震动环", "飞机杯"}
+TOY_POSITIONS = {
+    "none": "",
+    "乳头": "乳头",
+    "阴茎": "阴茎",
+    "后庭": "后庭",
+    "全身": "全身",
+    "会阴": "会阴",
+    "大腿": "大腿",
+    "腿间": "腿间",
+    "手腕": "手腕",
+    "腰": "腰",
+    "胸口": "胸口",
+    "脖颈": "脖颈",
+    "眼睛": "眼睛",
+    "嘴": "嘴",
+    "手持": "手持",
+}
+TOY_STATES = {
+    "none": "",
+    "开": "开着",
+    "开启": "开着",
+    "开着": "开着",
+    "关": "关着",
+    "关闭": "关着",
+    "关着": "关着",
+    "暂停": "暂停",
+    "戴着": "开着",
+    "夹着": "开着",
+}
 
 PRIVATE_DRAW_SLOTS: list[dict[str, Any]] = [
     {
@@ -667,6 +724,191 @@ def _actor_public(actor: dict, *, reference_spot: str = "") -> dict:
     return normalized
 
 
+def _choice(value: Any, allowed: dict[str, str], default: str = "none") -> str:
+    text = str(value or "").strip()
+    if text in allowed:
+        return allowed[text]
+    if text in allowed.values():
+        return text
+    return allowed.get(default, "")
+
+
+def _normalize_toy_types(data: dict) -> list[str]:
+    raw = data.get("toy_types")
+    values: list[Any]
+    if isinstance(raw, list):
+        values = raw
+    elif isinstance(raw, str) and raw.strip():
+        values = re.split(r"[,，、/]+", raw.strip())
+    else:
+        values = [data.get("toy_type") or data.get("toy") or data.get("tool")]
+    out: list[str] = []
+    for value in values:
+        toy = _choice(value, TOY_TYPES)
+        if toy and toy not in out:
+            out.append(toy)
+    return out
+
+
+def _normalize_du_body_state(raw: Any) -> dict:
+    data = raw if isinstance(raw, dict) else {}
+    toy_types = _normalize_toy_types(data)
+    position = _choice(data.get("position") or data.get("body_position"), TOY_POSITIONS)
+    state = _choice(data.get("state") or data.get("status"), TOY_STATES)
+    desire_provided = any(key in data for key in ("desire_value", "desire", "want_value"))
+    try:
+        desire_value = int(data.get("desire_value") or data.get("desire") or data.get("want_value") or 0)
+    except Exception:
+        desire_value = 0
+    if desire_value < 0:
+        desire_value = 0
+    if desire_value > 100:
+        desire_value = 100
+    try:
+        intensity = int(data.get("intensity") or data.get("level") or 0)
+    except Exception:
+        intensity = 0
+    if intensity < 1 or intensity > 5:
+        intensity = 0
+    out = {
+        "toy_types": toy_types,
+        "toy_type": toy_types[0] if toy_types else "",
+        "position": position,
+        "state": state,
+        "intensity": intensity,
+        "updated_at": str(data.get("updated_at") or data.get("updatedAt") or "").strip() or now_beijing_iso(),
+    }
+    if desire_provided:
+        out["desire_value"] = desire_value
+    if not toy_types and not desire_provided:
+        return {}
+    return out
+
+
+def _du_body_temperature(vitals: dict) -> str:
+    if not isinstance(vitals, dict) or not vitals:
+        return ""
+    params = vitals.get("parameters") if isinstance(vitals.get("parameters"), dict) else {}
+    try:
+        heart = int(vitals.get("heart_bpm") or 0)
+    except Exception:
+        heart = 0
+    try:
+        heat = float(params.get("intimacy_heat") or 0)
+    except Exception:
+        heat = 0.0
+    try:
+        arousal = float(params.get("arousal") or 0)
+    except Exception:
+        arousal = 0.0
+    score = max(heat, arousal)
+    if heart >= 104 or score >= 0.75:
+        return "很烫"
+    if heart >= 84 or score >= 0.45:
+        return "发热"
+    if heart and heart <= 58 and score < 0.2:
+        return "偏凉"
+    return "正常"
+
+
+def _du_desire_level_from_value(value: Any) -> int:
+    try:
+        score = int(value or 0)
+    except Exception:
+        score = 0
+    if score <= 0:
+        return 0
+    if score >= 80:
+        return 5
+    if score >= 60:
+        return 4
+    if score >= 40:
+        return 3
+    if score >= 20:
+        return 2
+    return 1
+
+
+def _du_penis_state_from_desire_level(desire_level: int) -> str:
+    if desire_level >= 4:
+        return "勃起状态"
+    if desire_level >= 2:
+        return "半勃起"
+    if desire_level == 1:
+        return "放松状态"
+    return ""
+
+
+def _du_stable_desire_level(body_state: dict | None = None) -> int:
+    if isinstance(body_state, dict):
+        return _du_desire_level_from_value(body_state.get("desire_value"))
+    return 0
+
+
+def _du_stable_penis_state(desire_level: int) -> str:
+    return _du_penis_state_from_desire_level(desire_level)
+
+
+def _toy_position_phrase(state: str, position: str) -> str:
+    parts = [part for part in (position, state) if part]
+    return "，".join(parts)
+
+
+def _toy_display_piece(toy: str, intensity: int = 0) -> str:
+    details: list[str] = []
+    position = TOY_DEFAULT_POSITIONS.get(toy, "")
+    if position:
+        details.append(position)
+    if intensity and toy in TOY_INTENSITY_TYPES:
+        details.append(f"档位{intensity}")
+    suffix = f"（{'，'.join(details)}）" if details else ""
+    return f"{toy}{suffix}"
+
+
+def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) -> list[str]:
+    state = _normalize_du_body_state(body_state)
+    if not state:
+        return []
+    lines = ["【你当前的身体状态】"]
+    toy_types = state.get("toy_types") if isinstance(state.get("toy_types"), list) else []
+    if not toy_types and str(state.get("toy_type") or "").strip():
+        toy_types = [str(state.get("toy_type") or "").strip()]
+    if toy_types:
+        intensity = int(state.get("intensity") or 0)
+        lines.append(f"道具：{'、'.join(_toy_display_piece(toy, intensity) for toy in toy_types)}")
+    has_desire_value = "desire_value" in state
+    desire_level = _du_stable_desire_level(state)
+    lines.append(f"想做指数：{desire_level}/5" if has_desire_value else "想做指数：未记录")
+    penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_desire_value else "")
+    lines.append(f"阴茎状态：{penis_state}" if penis_state else "阴茎状态：未记录")
+    temp = _du_body_temperature(vitals or {})
+    if temp:
+        lines.append(f"体温：{temp}")
+    return lines
+
+
+def _du_body_state_public(raw: Any, vitals: dict | None = None) -> dict:
+    state = _normalize_du_body_state(raw)
+    has_desire_value = "desire_value" in state
+    desire_level = _du_stable_desire_level(state)
+    penis_state = _du_stable_penis_state(desire_level) or ("放松状态" if has_desire_value else "")
+    if not state:
+        temp = _du_body_temperature(vitals or {})
+        parts = ["想做指数：未记录", "阴茎状态：未记录"]
+        if temp:
+            parts.append(f"体温：{temp}")
+        return {
+            "temperature": temp,
+            "text": "；".join(parts),
+        }
+    state["temperature"] = _du_body_temperature(vitals or {})
+    state["desire_level"] = desire_level
+    state["penis_state"] = penis_state
+    lines = _format_du_body_state_lines(state, vitals)
+    state["text"] = "；".join(line for line in lines[1:] if line)
+    return state
+
+
 def _stable_pick(options: list[str], seed: str) -> str:
     if not options:
         return "away"
@@ -1026,8 +1268,52 @@ def build_pixel_home_state() -> dict:
     mode_state["xinyue"] = _actor_public(xinyue)
     mode_state["du_dynamics"] = _normalize_du_dynamics(stored.get("du_dynamics"), reference_spot=str(xinyue.get("spot") or ""))
     mode_state["du_vitals"] = r2_store.get_du_vitals_latest() or {}
+    mode_state["du_body_state"] = _du_body_state_public(stored.get("du_body_state"), mode_state["du_vitals"])
     mode_state["spots"] = SPOT_OPTIONS
     return mode_state
+
+
+def save_du_body_state(payload: Any) -> dict:
+    current = _stored_state()
+    raw = payload if isinstance(payload, dict) else {}
+    previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
+    state = _normalize_du_body_state(payload)
+    has_toy_patch = any(key in raw for key in ("toy_types", "toy_type", "toy", "tool", "position", "body_position", "state", "status", "intensity", "level"))
+    if state:
+        if not has_toy_patch:
+            for key in ("toy_types", "toy_type", "position", "state", "intensity"):
+                if key in previous:
+                    state[key] = previous.get(key)
+        if "desire_value" not in state:
+            try:
+                stored_desire = int(previous.get("desire_value") or 0)
+            except Exception:
+                stored_desire = 0
+            if "desire_value" in previous and 0 <= stored_desire <= 100:
+                state["desire_value"] = stored_desire
+        current["du_body_state"] = state
+    elif has_toy_patch:
+        state = {
+            "toy_types": [],
+            "toy_type": "",
+            "position": "",
+            "state": "",
+            "intensity": 0,
+            "updated_at": now_beijing_iso(),
+        }
+        try:
+            stored_desire = int(previous.get("desire_value") or 0)
+        except Exception:
+            stored_desire = 0
+        if "desire_value" in previous and 0 <= stored_desire <= 100:
+            state["desire_value"] = stored_desire
+        current["du_body_state"] = state
+    else:
+        current.pop("du_body_state", None)
+    current["updated_at"] = now_beijing_iso()
+    ok = save_pixel_home_state(current)
+    state["ok"] = bool(ok)
+    return state if state else {"ok": bool(ok)}
 
 
 def save_actor_state(actor_key: str, spot: Any, activity: Any, *, source: str = "manual") -> dict:
@@ -1079,10 +1365,17 @@ def save_pixel_home_hidden_block(payload: dict | None) -> bool:
         return False
     spot = payload.get("spot") or payload.get("location") or payload.get("room")
     activity = payload.get("activity") or payload.get("doing") or payload.get("status")
-    if not spot and not activity:
+    body_state = payload.get("du_body_state") if isinstance(payload.get("du_body_state"), dict) else None
+    if not spot and not activity and not body_state:
         return False
-    actor = save_actor_state("du", spot or "away", activity or "待着", source="du_marker")
-    return bool(actor.get("ok"))
+    ok = True
+    if spot or activity:
+        actor = save_actor_state("du", spot or "away", activity or "待着", source="du_marker")
+        ok = bool(actor.get("ok"))
+    if body_state:
+        saved = save_du_body_state(body_state)
+        ok = bool(saved.get("ok")) and ok
+    return ok
 
 
 def format_state_block() -> str:
@@ -1100,6 +1393,9 @@ def format_state_block() -> str:
     active_private_draw = _active_private_draw_inject_text(_stored_state())
     if active_private_draw:
         block += "\n\n" + active_private_draw
+    du_body_lines = _format_du_body_state_lines(state.get("du_body_state"), state.get("du_vitals") if isinstance(state.get("du_vitals"), dict) else {})
+    if du_body_lines:
+        block += "\n\n" + "\n".join(du_body_lines)
     return block
 
 
@@ -1110,8 +1406,9 @@ def format_rule_block() -> str:
         "如果需要移动去别的房间做什么事，可以在回复正文之后、DU_FOLLOWUP 之前附加 PIXEL_HOME 隐藏标记：\n"
         "写 PIXEL_HOME 时，spot 必须是动作结束后的当前所在位置；如果正文写“从书房走出来/走到客厅/走回客厅/站到沙发旁边”，不要继续写 study，要写最终到达的房间，没有明确房间就写 away。\n"
         "如果正文描述你抱着/牵着/带着/陪着小玥一起移动，activity 里也要明确写出这个共同动作，例如“抱着小玥回卧室”；网关会据此同步小玥的小家位置。\n"
+        "如果需要更新你的身体状态，也可以在同一个 PIXEL_HOME 隐藏标记里写 du_body_state。\n"
         "<<<PIXEL_HOME>>>\n"
-        '{"spot":"study","activity":"写日记"}\n'
+        '{"spot":"study","activity":"写日记","du_body_state":{"desire_value":35}}\n'
         "<<<END_PIXEL_HOME>>>\n"
         "不需要移动或更新时不要写 PIXEL_HOME。"
     )

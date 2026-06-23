@@ -229,6 +229,7 @@ def format_rule_block(_latest: Optional[dict] = None) -> str:
         f"{MARKER_END}\n"
         "字段含义：activation=被点亮/兴奋程度；focus=头脑风暴或专注；warmth=柔软亲近；tension=紧张/冲突；intimacy_heat=暧昧亲密热度；valence=-1到1，负向为难过/受挫，正向为暖/轻松；arousal=0到1，表示被触动程度；attachment=-1到1，负向为退开，正向为贴近/想修复；tempo 只能是 down/steady/up/spike/settle。\n"
         "例：讨论方案或脑暴时 focus 高、tempo 可 up；亲密暧昧时 warmth 和 intimacy_heat 升；冲突或慌乱时 tension/arousal 升且 valence 可能下降；平静陪伴时 warmth 稳、activation 低、tempo 可 settle；想靠近或修复时 attachment 升。\n"
+        "如果本轮亲密欲望有明显变化，可以同时用 PIXEL_HOME 隐藏标记更新 du_body_state.desire_value；desire_value 是你当下想做的程度，范围 0-100。\n"
         "隐藏标记统一追加在正文后，不要写进正文里。\n"
     )
 
