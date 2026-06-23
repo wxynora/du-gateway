@@ -648,6 +648,9 @@ def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "")
     elif kind in {"proactive_diary", "random_diary"}:
         label = "随机唤醒执行"
         content = "你刚才选择了写日记，现在去写。"
+    elif kind in {"proactive_forum", "random_forum"}:
+        label = "随机唤醒执行"
+        content = "你刚才选择了逛论坛，现在去逛。"
     elif kind in {"proactive_trigger", "pixel_home"} or "[Proactive trigger fact]" in text:
         label = "后端触发"
         content = "这是一次后端触发提醒。"
@@ -689,6 +692,7 @@ def _compact_proactive_decision_for_archive(assistant_msg: dict) -> dict:
         "send_message": "主动发消息",
         "no_contact": "暂时不打扰",
         "diary": "去写日记/记事",
+        "forum": "逛论坛",
         "surf": "随机冲浪",
         "other": "先做其它动作",
     }.get(action, action or "记录判断")

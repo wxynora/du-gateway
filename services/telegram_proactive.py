@@ -123,7 +123,7 @@ class ProactiveDecision:
     should_send: bool
     text: str = ""
     reason: str = ""      # 技术向：contact / no_contact / gateway_status / …
-    action: str = ""      # 业务向：send_message / no_contact / diary / surf / other / error / …
+    action: str = ""      # 业务向：send_message / no_contact / diary / forum / surf / other / error / …
     du_reason: str = ""   # 渡在 JSON 里写的理由
     channel: str = ""           # 发送入口：wechat / qq；SumiTalk 暂不参与主动消息
 
@@ -236,6 +236,7 @@ _ACTION_LABEL_CN = {
     "send_message": "发消息",
     "no_contact": "不发消息",
     "diary": "写日记",
+    "forum": "逛论坛",
     "surf": "随机冲浪",
     "other": "其它",
     "error": "调用失败",
@@ -386,7 +387,7 @@ def _looks_like_control_json_reply(text: str) -> bool:
 def _sanitize_control_reply_for_delivery(text: str) -> str:
     """
     最后一层外发保险：控制 JSON 不能作为用户可见正文发出去。
-    send_message 只取 message；diary/no_contact/surf/other 说明本轮不该发。
+    send_message 只取 message；diary/forum/no_contact/surf/other 说明本轮不该发。
     """
     raw = str(text or "").strip()
     if not raw:
@@ -472,6 +473,12 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
         "browse": "surf",
         "web_surf": "surf",
         "du_surf": "surf",
+        "read_forum": "forum",
+        "browse_forum": "forum",
+        "forum_read_feed": "forum",
+        "forum_open_thread": "forum",
+        "逛论坛": "forum",
+        "看论坛": "forum",
     }
     action = alias.get(action, action)
     none_like = {"no_contact", "none", "silent", "skip"}
@@ -498,6 +505,8 @@ def _parse_proactive_model_reply(raw: str, no_token: str, default_channel: str =
         return ProactiveDecision(True, message, "contact", action="send_message", du_reason=du_reason, channel=channel)
     if action == "diary":
         return ProactiveDecision(False, message, "diary", action="diary", du_reason=du_reason or "（未说明）", channel=channel)
+    if action == "forum":
+        return ProactiveDecision(False, message, "forum", action="forum", du_reason=du_reason or "（未说明）", channel=channel)
     if action == "surf":
         return ProactiveDecision(False, message, "surf", action="surf", du_reason=du_reason or "（未说明）", channel=channel)
     if action == "other":
@@ -655,12 +664,14 @@ def _ask_du_should_contact(window_id: str, hours_since_last: float, now_dt: Opti
         f"这是一次随机唤醒，你现在要不要做点什么。{_describe_recent_exchange(now_ref)}\n"
         f"从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
         "可以选：给她发消息、暂时不打扰、去写日记/记事、逛论坛、上网冲浪找点可聊话题，或其它你认为合适的动作。\n"
+        "如果你想逛论坛但不发消息，action 必须填 forum；不要只在 reason 里说“去逛论坛”。\n"
         "如果你想上网冲浪但不发消息，action 必须填 surf；不要只在 reason 里说“去冲浪”。\n"
         "如果你需要先看到素材再判断要不要发消息，可以先调用 du_surf 抽一个随机话题，看完卡片后再给最终 JSON。\n"
         "如果最终 action 是 surf，后端会执行一次 du_surf 并记录结果；这仍然不会主动打扰她。\n"
+        "如果最终 action 是 forum，后端会追加一轮主网关，让你实际调用论坛工具看看内容；这仍然不会主动打扰她。\n"
         "如果当前状态显示她可能睡着、在忙，或不适合被打扰，可以选择不发消息，转而写日记、逛论坛、surf，或者什么都不做。\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
-        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "surf" | "other" 之一。\n'
+        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "surf" | "other" 之一。\n'
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
         '- message：字符串；当 action 为 send_message 时，填要发给她的正文（可多行、像平时聊天）；其它 action 时可为空或填补充说明。\n'
         + channel_field_desc
@@ -1184,6 +1195,77 @@ def _run_proactive_diary_action(
         return {"ok": False, "error": str(e)[:160], "reply_preview": ""}
 
 
+def _run_proactive_forum_action(
+    *,
+    window_id: str,
+    hours_since_last: float,
+    initial_reason: str,
+    now_dt: Optional[datetime] = None,
+) -> dict:
+    """随机唤醒选择 forum 时，再走一轮主网关，提醒渡直接去逛论坛。"""
+    url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
+    channels = _available_channels()
+    default_channel = _preferred_proactive_channel(channels)
+    now_ref = now_dt or parse_iso_to_beijing(now_beijing_iso()) or datetime.now()
+    user_prompt = (
+        "你刚才在随机唤醒里选择了逛论坛。\n"
+        "现在不是重新做选择，也不要输出 JSON；请直接去论坛看看。\n"
+        "优先调用 forum_read_feed 浏览信息流；如果看到你想继续看的帖子，再调用 forum_open_thread 打开一篇。\n"
+        "看完后用一句很短的话说明你看了什么；如果工具失败，也用一句话说明失败原因。\n"
+        f"{_describe_recent_exchange(now_ref)} 从系统节流角度看，距最近一次消息活动大约 {hours_since_last:.1f} 小时。\n"
+        f"你刚才选择逛论坛的理由：{str(initial_reason or '').strip() or '（未说明）'}"
+    )
+    _marker, sys_content = entry_style_for_channel(default_channel, is_miniapp=False)
+    sys_content = (sys_content or build_telegram_style_system()).strip()
+    body = {
+        "model": _get_chat_model(),
+        "messages": [
+            {"role": "system", "content": sys_content},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Window-Id": window_id,
+        "X-Reply-Channel": default_channel,
+        "X-Reply-Target": str(TELEGRAM_PROACTIVE_TARGET_USER_ID or "").strip(),
+        "X-Force-Last4": "1",
+        "X-DU-GATEWAY-WAKEUP": "1",
+        "X-DU-WAKEUP-KIND": "proactive_forum",
+        "X-Skip-Dynamic-Memory": "1",
+        "X-Skip-Post-Archive-Dynamic-Memory": "1",
+    }
+    try:
+        logger.info(
+            "主动逛论坛执行轮请求 window_id=%s model=%s reason_chars=%s",
+            window_id,
+            body.get("model") or "",
+            len(str(initial_reason or "")),
+        )
+        r = requests.post(url, headers=headers, json=body, timeout=180)
+        if r.status_code != 200:
+            logger.warning(
+                "主动逛论坛执行轮失败 status=%s body_preview=%s",
+                r.status_code,
+                (r.text or "")[:300],
+            )
+            return {
+                "ok": False,
+                "error": f"http_{r.status_code}",
+                "reply_preview": (r.text or "")[:160],
+            }
+        data = r.json() if r.content else None
+        msg = (data or {}).get("choices") and (data.get("choices") or [{}])[0].get("message") or {}
+        content = (msg or {}).get("content")
+        text = (content or "").strip() if isinstance(content, str) else str(content or "").strip()
+        logger.info("主动逛论坛执行轮完成 window_id=%s reply_preview=%s", window_id, text[:120])
+        return {"ok": bool(text), "reply_preview": text[:240], "error": "" if text else "empty_reply"}
+    except Exception as e:
+        logger.warning("主动逛论坛执行轮异常: %s", e)
+        return {"ok": False, "error": str(e)[:160], "reply_preview": ""}
+
+
 def _ask_du_after_surf_result(
     *,
     window_id: str,
@@ -1213,7 +1295,7 @@ def _ask_du_after_surf_result(
         f"你刚才选择冲浪的理由：{str(initial_reason or '').strip() or '（未说明）'}\n\n"
         f"{_format_proactive_surf_result_for_du(surf_result)}\n\n"
         "你必须用 **一个 JSON 对象** 回复，不要用 markdown 代码块包裹，不要其它说明文字。字段如下：\n"
-        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "other" 之一。不要再填 "surf"。\n'
+        '- action：字符串，必须是 "send_message" | "no_contact" | "diary" | "forum" | "other" 之一。不要再填 "surf"。\n'
         '- reason：字符串，简短说明你为什么这么选（必填）。\n'
         '- message：字符串；当 action 为 send_message 时，填要发给她的正文；其它 action 时可为空或填补充说明。\n'
         + channel_field_desc
@@ -1363,6 +1445,8 @@ def proactive_tick(target_user_id: int = 0) -> dict:
     out["du_intent_reason"] = decision.du_reason
     surf_summary = None
     initial_surf_reason = ""
+    forum_summary = None
+    initial_forum_reason = ""
     diary_summary = None
     initial_diary_reason = ""
     if (decision.action or "").strip().lower() == "surf":
@@ -1385,6 +1469,19 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         out["du_reason"] = decision.reason
         out["du_action"] = decision.action
         out["du_intent_reason"] = decision.du_reason
+    if (decision.action or "").strip().lower() == "forum" and not forum_summary:
+        initial_forum_reason = (decision.du_reason or decision.reason or "").strip()
+        forum_summary = _run_proactive_forum_action(
+            window_id=window_id,
+            hours_since_last=hours,
+            initial_reason=initial_forum_reason,
+            now_dt=now_dt,
+        )
+        out["forum"] = forum_summary
+        if not surf_summary:
+            out["du_initial_action"] = "forum"
+            out["du_initial_reason"] = initial_forum_reason
+        out["forum_execution_ok"] = bool((forum_summary or {}).get("ok"))
     if (decision.action or "").strip().lower() == "diary" and not diary_summary:
         initial_diary_reason = (decision.du_reason or decision.reason or "").strip()
         diary_summary = _run_proactive_diary_action(
@@ -1409,8 +1506,12 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         )
         if surf_summary:
             act_store = f"surf->{act_store}"
+        if forum_summary:
+            forum_act = "forum->executed" if forum_summary.get("ok") else "forum->failed"
+            act_store = f"surf->{forum_act}" if surf_summary else forum_act
         if diary_summary:
-            act_store = "diary->executed" if diary_summary.get("ok") else "diary->failed"
+            diary_act = "diary->executed" if diary_summary.get("ok") else "diary->failed"
+            act_store = f"surf->{diary_act}" if surf_summary else diary_act
         reason_store = (decision.du_reason or decision.reason or "").strip() or "—"
         if surf_summary:
             topic = str(surf_summary.get("topic") or "").strip()
@@ -1425,6 +1526,26 @@ def proactive_tick(target_user_id: int = 0) -> dict:
                     pv = "；".join(titles)[:120]
             else:
                 reason_store = f"实际冲浪失败：{str(surf_summary.get('error') or 'unknown')[:80]}；最终决定：{reason_store}"
+        if forum_summary:
+            reply_preview = str(forum_summary.get("reply_preview") or "").strip()
+            if forum_summary.get("ok"):
+                reason_store = (
+                    f"最初想逛论坛：{initial_forum_reason or '（未说明）'}；"
+                    f"已追加执行轮提醒渡去逛论坛。"
+                )
+                if surf_summary:
+                    reason_store = f"先冲浪后决定逛论坛；{reason_store}"
+                if reply_preview:
+                    pv = reply_preview[:120]
+            else:
+                reason_store = (
+                    f"最初想逛论坛：{initial_forum_reason or '（未说明）'}；"
+                    f"追加执行轮失败：{str(forum_summary.get('error') or 'unknown')[:80]}"
+                )
+                if surf_summary:
+                    reason_store = f"先冲浪后决定逛论坛；{reason_store}"
+                if reply_preview and not pv:
+                    pv = reply_preview[:120]
         if diary_summary:
             reply_preview = str(diary_summary.get("reply_preview") or "").strip()
             if diary_summary.get("ok"):
