@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiJson } from "../api";
 import { useToast } from "../toast";
 
@@ -53,27 +53,30 @@ type Layer = "drawer" | "alcove";
 type FilterKey = "all" | "message" | "photo" | "dream" | "note" | "surf" | "misc" | "pinned" | "needs";
 
 const TYPE_LABELS: Record<string, string> = {
-  message: "对话",
-  photo: "图片",
-  dream: "梦境",
-  note: "碎碎念",
-  surf: "冲浪",
-  misc: "其他",
+  message: "Dialogue",
+  photo: "Photo",
+  dream: "Dream",
+  note: "Thought",
+  surf: "Surf",
+  misc: "Note",
 };
 
 const FILTERS: Array<{ key: FilterKey; label: string }> = [
-  { key: "all", label: "全部" },
-  { key: "message", label: "对话" },
-  { key: "photo", label: "图片" },
-  { key: "dream", label: "梦境" },
-  { key: "note", label: "碎碎念" },
-  { key: "surf", label: "冲浪" },
-  { key: "pinned", label: "置顶" },
-  { key: "needs", label: "待整理" },
+  { key: "all", label: "All" },
+  { key: "pinned", label: "Pinned" },
+  { key: "dream", label: "Dreams" },
+  { key: "note", label: "Thoughts" },
+  { key: "message", label: "Dialogues" },
+  { key: "photo", label: "Photos" },
+  { key: "surf", label: "Surf" },
+  { key: "needs", label: "Pending" },
 ];
 
-export function SecretDrawerTab() {
+const serifStyle: React.CSSProperties = { fontFamily: '"Playfair Display", "Times New Roman", serif' };
+
+export function SecretDrawerTab({ onExit }: { onExit?: () => void }) {
   const toast = useToast();
+  const randomTimerRef = useRef<number | null>(null);
   const [config, setConfig] = useState<SecretDrawerConfig | null>(null);
   const [stats, setStats] = useState<SecretDrawerStats | null>(null);
   const [items, setItems] = useState<SecretDrawerItem[]>([]);
@@ -84,9 +87,18 @@ export function SecretDrawerTab() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [drawingId, setDrawingId] = useState<string | null>(null);
 
-  const activeConfigured = layer === "drawer" ? !!config?.configured?.box : !!config?.configured?.sealed;
   const activeUnlocked = layer === "drawer" ? drawerUnlocked : alcoveUnlocked;
+
+  useEffect(() => {
+    setDrawerUnlocked(false);
+    setAlcoveUnlocked(false);
+    setSelected(null);
+    return () => {
+      if (randomTimerRef.current) window.clearTimeout(randomTimerRef.current);
+    };
+  }, []);
 
   const loadConfig = useCallback(async () => {
     const res = await apiJson<{ ok?: boolean; configured?: SecretDrawerConfig["configured"]; updated_at?: string }>("/miniapp-api/secret-drawer/config");
@@ -128,36 +140,36 @@ export function SecretDrawerTab() {
     void loadItems();
   }, [loadItems]);
 
-  const topTags = useMemo(() => {
-    const entries = Object.entries(stats?.by_tag || {});
-    return entries.slice(0, 8).map(([tag, count]) => ({ tag, count }));
-  }, [stats?.by_tag]);
-
-  async function unlockPin(pin: string) {
+  async function unlockPin(pin: string): Promise<boolean> {
     try {
       const res = await apiJson<{ ok?: boolean; unlocked?: boolean }>("/miniapp-api/secret-drawer/unlock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ layer: layer === "alcove" ? "sealed" : "box", pin }),
       });
-      if (!res.unlocked) {
-        toast("PIN 不对");
-        return;
-      }
+      if (!res.unlocked) return false;
       if (layer === "drawer") setDrawerUnlocked(true);
       else setAlcoveUnlocked(true);
-    } catch (e: any) {
-      toast(`解锁失败：${e?.message || e}`);
+      return true;
+    } catch {
+      return false;
     }
   }
 
-  async function openRandomPaper() {
+  function openRandomPaper() {
     const pool = items.filter((item) => layer === "alcove" ? item.sealed : !item.sealed);
     if (!pool.length) {
       toast("现在没有可翻的纸条");
       return;
     }
-    setSelected(pool[Math.floor(Math.random() * pool.length)] || null);
+    const picked = pool[Math.floor(Math.random() * pool.length)];
+    if (!picked) return;
+    setDrawingId(picked.id);
+    if (randomTimerRef.current) window.clearTimeout(randomTimerRef.current);
+    randomTimerRef.current = window.setTimeout(() => {
+      setSelected(picked);
+      setDrawingId(null);
+    }, 620);
   }
 
   function switchLayer(next: Layer) {
@@ -165,13 +177,14 @@ export function SecretDrawerTab() {
     setSelected(null);
     setFilter("all");
     setQuery("");
+    setDrawingId(null);
   }
 
   if (!config) {
     return (
-      <div className="min-h-full bg-[#f8f0e6] px-5 pb-7 pt-8 text-[#352b24]">
-        <EmptyPaper title="打开抽屉中" text="先看一眼锁和纸条。" />
-      </div>
+      <SecretSurface onExit={onExit}>
+        <EmptyVault title="Opening drawer" text="The drawer is waking up." />
+      </SecretSurface>
     );
   }
 
@@ -179,199 +192,167 @@ export function SecretDrawerTab() {
     return (
       <PinGate
         layer={layer}
-        configured={activeConfigured}
-        stats={stats}
-        onSubmit={(pin) => void unlockPin(pin)}
+        onExit={onExit}
+        onSubmit={(pin) => unlockPin(pin)}
         onSwitchLayer={switchLayer}
       />
     );
   }
 
   if (selected) {
+    return <SecretDrawerDetail item={selected} layer={layer} onBack={() => setSelected(null)} />;
+  }
+
+  if (layer === "alcove") {
     return (
-      <SecretDrawerDetail
-        item={selected}
-        layer={layer}
-        onBack={() => setSelected(null)}
+      <AlcoveView
+        items={items}
+        loading={loading}
+        onExit={onExit}
+        onHome={() => switchLayer("drawer")}
+        onSelect={setSelected}
       />
     );
   }
 
   return (
-    <div className="min-h-full overflow-x-hidden bg-[#f8f0e6] text-[#352b24]">
-      <div
-        className="min-h-full px-5 pb-7 pt-5"
-        style={{
-          backgroundImage:
-            "radial-gradient(circle at 1px 1px, rgba(120,91,61,0.12) 1px, transparent 0), linear-gradient(180deg, rgba(255,255,255,0.86), rgba(248,240,230,0.92))",
-          backgroundSize: "18px 18px, 100% 100%",
-        }}
-      >
-        <header className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#a37b4e]">{layer === "drawer" ? "private drawer" : "hidden alcove"}</div>
-            <h2 className="mt-1 text-[26px] font-semibold tracking-tight text-[#2d241f]">{layer === "drawer" ? "秘密抽屉" : "暗格"}</h2>
-            <p className="mt-2 text-[13px] leading-5 text-[#8a7662]">
-              {layer === "drawer" ? summarizeStats(stats) : `暗格里有 ${stats?.sealed || 0} 条，只看真正不想被轻易翻到的东西。`}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="shrink-0 rounded-full border border-[#e7d8c4] bg-[#fffaf1]/90 px-4 py-2 text-[12px] font-semibold text-[#735635] shadow-[0_10px_24px_-20px_rgba(84,55,27,0.7)] active:scale-95"
-            onClick={() => switchLayer(layer === "drawer" ? "alcove" : "drawer")}
-          >
-            {layer === "drawer" ? "进暗格" : "回抽屉"}
-          </button>
-        </header>
+    <DrawerView
+      stats={stats}
+      items={items}
+      filter={filter}
+      query={query}
+      loading={loading}
+      drawingId={drawingId}
+      onExit={onExit}
+      onFilter={setFilter}
+      onQuery={setQuery}
+      onVault={() => switchLayer("alcove")}
+      onRandom={openRandomPaper}
+      onSelect={setSelected}
+    />
+  );
+}
 
-        <section className="mt-5 grid grid-cols-4 gap-2">
-          <Metric label="纸条" value={layer === "drawer" ? stats?.ordinary || 0 : stats?.sealed || 0} />
-          <Metric label="置顶" value={stats?.pinned || 0} />
-          <Metric label="待整理" value={stats?.needs整理 || 0} />
-          <Metric label="图片" value={stats?.by_type?.photo || 0} />
-        </section>
-
-        <section className="mt-5 rounded-[26px] border border-[#ecdcc7] bg-[#fffaf2]/78 p-3 shadow-[0_18px_42px_-34px_rgba(86,56,31,0.85)] backdrop-blur">
-          <div className="flex items-center gap-2">
-            <div className="flex-1 rounded-full bg-white/85 px-4 py-2.5 shadow-inner shadow-[#ead8bf]/70">
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                className="w-full bg-transparent text-[13px] text-[#3a3028] outline-none placeholder:text-[#b8a790]"
-                placeholder="搜标题、标签、内容..."
-              />
-            </div>
-            <button
-              type="button"
-              className="h-10 rounded-full bg-[#2f2722] px-4 text-[13px] font-semibold text-[#fff8ed] shadow-[0_12px_26px_-18px_rgba(47,39,34,0.9)] active:scale-95"
-              onClick={() => void openRandomPaper()}
-            >
-              随机
-            </button>
-          </div>
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch]">
-            {FILTERS.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className={`shrink-0 rounded-full px-3.5 py-2 text-[12px] font-semibold transition ${
-                  filter === item.key ? "bg-[#2f2722] text-[#fff8ed]" : "bg-white/72 text-[#806b56]"
-                }`}
-                onClick={() => setFilter(item.key)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {topTags.length && layer === "drawer" ? (
-          <section className="mt-4 flex flex-wrap gap-2">
-            {topTags.map((tag) => (
-              <span key={tag.tag} className="rounded-full bg-[#efe2cf]/75 px-3 py-1.5 text-[11px] font-semibold text-[#85684a]">
-                {tag.tag} · {tag.count}
-              </span>
-            ))}
-          </section>
-        ) : null}
-
-        <section className="relative mt-5 min-h-[340px] pb-24">
-          {loading ? <EmptyPaper title="翻抽屉中" text="纸条在路上。" /> : null}
-          {!loading && !items.length ? (
-            <EmptyPaper
-              title={layer === "drawer" ? "抽屉还是空的" : "暗格里还空着"}
-              text={layer === "drawer" ? "等后端存进第一张纸条，这里会自然堆起来。" : "暗格只显示被标记为私密的条目。"}
-            />
-          ) : null}
-          <div className="space-y-4">
-            {items.map((item, index) => (
-              <PaperCard key={item.id} item={item} index={index} onClick={() => setSelected(item)} />
-            ))}
-          </div>
-        </section>
-      </div>
+function SecretSurface({ children, onExit, tone = "paper" }: { children: React.ReactNode; onExit?: () => void; tone?: "paper" | "detail" | "vault" }) {
+  const bg = tone === "detail" ? "bg-[#FDFBF7]" : tone === "vault" ? "bg-[#F0EAE3]" : "bg-[#F5F0EB]";
+  return (
+    <div className={`fixed inset-0 z-40 min-h-dvh overflow-hidden ${bg} text-[#2D2926]`}>
+      <style>{`@keyframes secretPinShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}`}</style>
+      <div className="pointer-events-none absolute inset-0 opacity-[0.04]" style={{ backgroundImage: grainBackground() }} />
+      {onExit ? <ExitButton onClick={onExit} /> : null}
+      {children}
     </div>
+  );
+}
+
+function ExitButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="absolute left-4 top-[calc(env(safe-area-inset-top,0px)+12px)] z-30 flex h-10 w-10 items-center justify-center rounded-full bg-black/5 text-[#2D2926]/70 active:bg-black/10"
+      onClick={onClick}
+      aria-label="返回"
+    >
+      <BackGlyph />
+    </button>
   );
 }
 
 function PinGate({
   layer,
-  configured,
-  stats,
   onSubmit,
   onSwitchLayer,
+  onExit,
 }: {
   layer: Layer;
-  configured: boolean;
-  stats: SecretDrawerStats | null;
-  onSubmit: (pin: string) => void;
+  onSubmit: (pin: string) => Promise<boolean>;
   onSwitchLayer: (layer: Layer) => void;
+  onExit?: () => void;
 }) {
   const [pin, setPin] = useState("");
-  const title = layer === "drawer" ? "秘密抽屉" : "暗格";
-  const subtitle = configured ? "输入四位 PIN 偷看一下。" : "默认 PIN 是 0000。";
+  const [shaking, setShaking] = useState(false);
+  const isAlcove = layer === "alcove";
 
   function pushDigit(digit: string) {
     setPin((prev) => (prev + digit).slice(0, 4));
   }
 
   useEffect(() => {
-    if (pin.length === 4) {
-      onSubmit(pin);
-      setPin("");
-    }
-  }, [onSubmit, pin]);
+    if (pin.length !== 4) return;
+    let cancelled = false;
+    void onSubmit(pin).then((ok) => {
+      if (cancelled) return;
+      if (ok) {
+        setPin("");
+        return;
+      }
+      setShaking(true);
+      window.setTimeout(() => {
+        setShaking(false);
+        setPin("");
+      }, isAlcove ? 300 : 420);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAlcove, onSubmit, pin]);
 
   return (
-    <div className="min-h-full bg-[#f8f0e6] px-7 pb-8 pt-8 text-[#352b24]">
-      <div className="mx-auto flex min-h-[calc(100dvh-150px)] max-w-[420px] flex-col justify-center">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[#a37b4e]">private drawer</div>
-        <h2 className="mt-2 text-[30px] font-semibold tracking-tight">{title}</h2>
-        <p className="mt-3 text-[14px] leading-6 text-[#8a7662]">{subtitle}</p>
-
-        <div className="mt-8 rounded-[30px] border border-[#ecdcc7] bg-[#fffaf1]/86 p-6 shadow-[0_24px_58px_-42px_rgba(83,53,30,0.9)]">
-          <div className="mb-7 flex justify-center gap-3">
-            {[0, 1, 2, 3].map((idx) => (
-              <span
-                key={idx}
-                className={`h-3.5 w-3.5 rounded-full border border-[#9a7858] ${idx < pin.length ? "bg-[#3a3028]" : "bg-transparent"}`}
-              />
-            ))}
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            {"123456789".split("").map((digit) => (
-              <NumberButton key={digit} label={digit} onClick={() => pushDigit(digit)} />
-            ))}
-            <button
-              type="button"
-              className="h-14 rounded-full text-[13px] font-semibold text-[#8a7662] active:bg-[#efe2cf]"
-              onClick={() => setPin((prev) => prev.slice(0, -1))}
-            >
-              删除
-            </button>
-            <NumberButton label="0" onClick={() => pushDigit("0")} />
-            <button
-              type="button"
-              className="h-14 rounded-full text-[13px] font-semibold text-[#8a7662] active:bg-[#efe2cf]"
-              onClick={() => setPin("")}
-            >
-              清空
-            </button>
-          </div>
+    <SecretSurface onExit={onExit}>
+      <div className="relative flex h-full flex-col items-center justify-center p-8">
+        <div className="mb-12 text-center">
+          {isAlcove ? (
+            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-amber-200/50 text-amber-700">
+              <LockKeyGlyph />
+            </div>
+          ) : (
+            <CabinetGlyph />
+          )}
+          <h1 className={`${isAlcove ? "text-2xl" : "text-4xl"} mb-2 font-medium tracking-tight`} style={serifStyle}>
+            {isAlcove ? "The Inner Vault" : "Secret Drawer"}
+          </h1>
+          <p className={`${isAlcove ? "text-xs opacity-40" : "text-sm opacity-60"} font-light italic`}>
+            {isAlcove ? "Enter your second signature." : "A quiet place for stray thoughts."}
+          </p>
         </div>
 
-        <div className="mt-5 flex items-center justify-between rounded-full bg-[#efe2cf]/65 px-4 py-3 text-[12px] font-semibold text-[#7d6247]">
-          <span>{layer === "drawer" ? `${stats?.total || 0} 条记录` : "输入 PIN 后查看暗格"}</span>
+        <div className={`mb-12 flex gap-4 ${shaking ? "animate-[secretPinShake_0.32s_ease-in-out]" : ""}`}>
+          {[0, 1, 2, 3].map((idx) => (
+            <span
+              key={idx}
+              className={`h-3 w-3 rounded-full border-[1.5px] border-amber-700/50 transition-colors ${
+                idx < pin.length ? (isAlcove ? "bg-amber-500" : "bg-[#2D2926]") : "bg-transparent"
+              }`}
+            />
+          ))}
+        </div>
+
+        <div className="grid w-full max-w-[240px] grid-cols-3 gap-6">
+          {"123456789".split("").map((digit) => (
+            <NumberButton key={digit} label={digit} onClick={() => pushDigit(digit)} />
+          ))}
+          {isAlcove ? (
+            <button
+              type="button"
+              className="flex h-16 w-16 items-center justify-center rounded-full text-sm text-gray-500 hover:bg-white/5 active:bg-white/10"
+              onClick={() => onSwitchLayer("drawer")}
+            >
+              Cancel
+            </button>
+          ) : (
+            <div />
+          )}
+          <NumberButton label="0" onClick={() => pushDigit("0")} />
           <button
             type="button"
-            className="rounded-full bg-white/70 px-3 py-1.5 active:scale-95"
-            onClick={() => onSwitchLayer(layer === "drawer" ? "alcove" : "drawer")}
+            className="flex h-16 w-16 items-center justify-center rounded-full text-sm font-medium uppercase tracking-widest text-amber-500/60 hover:bg-white/5 active:bg-white/10"
+            onClick={() => setPin("")}
           >
-            {layer === "drawer" ? "去暗格" : "回抽屉"}
+            Clear
           </button>
         </div>
       </div>
-    </div>
+    </SecretSurface>
   );
 }
 
@@ -379,7 +360,7 @@ function NumberButton({ label, onClick }: { label: string; onClick: () => void }
   return (
     <button
       type="button"
-      className="h-14 rounded-full bg-white/85 text-[24px] font-semibold text-[#352b24] shadow-[0_10px_20px_-18px_rgba(59,44,31,0.8)] active:scale-95 active:bg-[#f4eadb]"
+      className="flex h-16 w-16 items-center justify-center rounded-full text-xl font-medium text-[#2D2926] transition-colors hover:bg-white/5 active:bg-white/10"
       onClick={onClick}
     >
       {label}
@@ -387,117 +368,413 @@ function NumberButton({ label, onClick }: { label: string; onClick: () => void }
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function DrawerView({
+  stats,
+  items,
+  filter,
+  query,
+  loading,
+  drawingId,
+  onExit,
+  onFilter,
+  onQuery,
+  onVault,
+  onRandom,
+  onSelect,
+}: {
+  stats: SecretDrawerStats | null;
+  items: SecretDrawerItem[];
+  filter: FilterKey;
+  query: string;
+  loading: boolean;
+  drawingId: string | null;
+  onExit?: () => void;
+  onFilter: (filter: FilterKey) => void;
+  onQuery: (query: string) => void;
+  onVault: () => void;
+  onRandom: () => void;
+  onSelect: (item: SecretDrawerItem) => void;
+}) {
+  const total = stats?.ordinary || items.length || 0;
+  const pending = stats?.needs整理 || 0;
   return (
-    <div className="rounded-[20px] border border-[#ecdcc7] bg-[#fffaf1]/80 px-2 py-3 text-center shadow-[0_14px_30px_-28px_rgba(86,56,31,0.8)]">
-      <div className="text-[18px] font-semibold leading-none text-[#3a3028]">{value}</div>
-      <div className="mt-1 text-[10px] font-semibold text-[#a0866b]">{label}</div>
+    <SecretSurface onExit={onExit}>
+      <div className="relative flex h-full min-h-0 flex-col">
+        <div className="px-6 pb-4 pt-[calc(env(safe-area-inset-top,0px)+48px)]">
+          <div className="mb-6 flex items-end justify-between">
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-amber-800/60">Archive Collections</p>
+              <h2 className="text-3xl font-medium text-[#2D2926]" style={serifStyle}>Your Drawer</h2>
+            </div>
+            <button
+              type="button"
+              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 shadow-[0_0_20px_rgba(217,119,6,0.10)] transition-colors active:bg-amber-200"
+              onClick={onVault}
+              aria-label="Open inner vault"
+            >
+              <LockClosedGlyph />
+            </button>
+          </div>
+
+          <div className="mb-6 flex items-center gap-4">
+            <div className="flex flex-col">
+              <span className="text-lg font-medium text-[#2D2926]">{total}</span>
+              <span className="text-[10px] uppercase tracking-tighter text-gray-400">Total</span>
+            </div>
+            <div className="h-6 w-px bg-gray-200" />
+            <div className="flex flex-col">
+              <span className="text-lg font-medium text-[#2D2926]">{pending}</span>
+              <span className="text-[10px] uppercase tracking-tighter text-gray-400">Pending</span>
+            </div>
+            <div className="relative ml-auto w-full max-w-[200px]">
+              <input
+                value={query}
+                onChange={(e) => onQuery(e.target.value)}
+                className="w-full rounded-full border border-black/5 bg-white/50 px-4 py-2 pr-9 text-xs text-[#2D2926] outline-none focus:border-amber-200"
+                placeholder="Search memories..."
+              />
+              <span className="absolute right-3 top-2.5 text-gray-400"><SearchGlyph /></span>
+            </div>
+          </div>
+
+          <div className="flex gap-2 overflow-x-auto pb-2 [-webkit-overflow-scrolling:touch]">
+            {FILTERS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={`shrink-0 whitespace-nowrap rounded-full px-4 py-1.5 text-[11px] font-medium ${
+                  filter === item.key ? "bg-amber-700 text-white shadow-sm" : "border border-black/5 bg-white text-[#2D2926]"
+                }`}
+                onClick={() => onFilter(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="relative mt-4 min-h-0 flex-1 overflow-hidden" id="stack-container">
+          {loading ? <EmptyVault title="Shuffling papers" text="The drawer is turning over." /> : null}
+          {!loading && !items.length ? <EmptyVault title="No papers yet" text="Stray thoughts will stack here when they arrive." /> : null}
+          {!loading && items.length ? <PaperStack items={items} drawingId={drawingId} onSelect={onSelect} /> : null}
+        </div>
+
+        <div className="pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom,0px)+40px)] left-0 right-0 flex justify-center">
+          <button
+            type="button"
+            className="pointer-events-auto flex items-center gap-3 rounded-full bg-[#2D2926] px-8 py-4 text-white shadow-xl transition-all active:scale-95"
+            onClick={onRandom}
+          >
+            <HandGlyph />
+            <span className="text-sm font-medium tracking-tight">Draw Random Paper</span>
+          </button>
+        </div>
+      </div>
+    </SecretSurface>
+  );
+}
+
+function AlcoveView({
+  items,
+  loading,
+  onExit,
+  onHome,
+  onSelect,
+}: {
+  items: SecretDrawerItem[];
+  loading: boolean;
+  onExit?: () => void;
+  onHome: () => void;
+  onSelect: (item: SecretDrawerItem) => void;
+}) {
+  return (
+    <SecretSurface tone="vault" onExit={onExit}>
+      <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
+        <div className="px-6 pb-4 pt-[calc(env(safe-area-inset-top,0px)+48px)]">
+          <div className="mb-6 flex items-end justify-between text-[#2D2926]/90">
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-amber-700/50">Confidential Compartment</p>
+              <h2 className="text-3xl font-medium" style={serifStyle}>Deep Vault</h2>
+            </div>
+            <button
+              type="button"
+              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-200/50 text-amber-700 transition-colors active:bg-amber-300/60"
+              onClick={onHome}
+              aria-label="Back to drawer"
+            >
+              <HomeGlyph />
+            </button>
+          </div>
+        </div>
+
+        <div className="relative mt-4 min-h-0 flex-1 overflow-hidden">
+          {loading ? <EmptyVault title="Opening vault" text="The chamber is still settling." /> : null}
+          {!loading && !items.length ? (
+            <EmptyVault
+              title=""
+              text="No stray thoughts here yet. This chamber is for the things you only say to the dark."
+              icon={<FeatherGlyph />}
+            />
+          ) : null}
+          {!loading && items.length ? <PaperStack items={items} onSelect={onSelect} compact /> : null}
+        </div>
+      </div>
+    </SecretSurface>
+  );
+}
+
+function PaperStack({
+  items,
+  drawingId,
+  compact = false,
+  onSelect,
+}: {
+  items: SecretDrawerItem[];
+  drawingId?: string | null;
+  compact?: boolean;
+  onSelect: (item: SecretDrawerItem) => void;
+}) {
+  const visible = items.slice(0, compact ? 8 : 12);
+  return (
+    <div className="relative h-full min-h-[420px]">
+      {visible.map((item, index) => (
+        <PaperCard
+          key={item.id}
+          item={item}
+          index={index}
+          drawing={drawingId === item.id}
+          muted={!!drawingId && drawingId !== item.id}
+          onClick={() => onSelect(item)}
+        />
+      ))}
     </div>
   );
 }
 
-function PaperCard({ item, index, onClick }: { item: SecretDrawerItem; index: number; onClick: () => void }) {
-  const rotate = ((index % 5) - 2) * 0.45;
-  const type = TYPE_LABELS[item.type || "misc"] || "其他";
-  const preview = String(item.content || item.why || "这张纸条还没写内容。").replace(/\s+/g, " ").slice(0, 110);
+function PaperCard({
+  item,
+  index,
+  drawing,
+  muted,
+  onClick,
+}: {
+  item: SecretDrawerItem;
+  index: number;
+  drawing?: boolean;
+  muted?: boolean;
+  onClick: () => void;
+}) {
+  const type = TYPE_LABELS[item.type || "misc"] || "Note";
+  const preview = String(item.content || item.why || "This paper is still blank.").replace(/\s+/g, " ").slice(0, 120);
+  const colors = ["bg-white/90", "bg-[#FFFBF2]/95", "bg-[#FDF7EA]/95", "bg-[#F8F1E8]/95"];
+  const rotate = [-1.2, 0.9, -0.45, 1.35, -0.8][index % 5] || 0;
   return (
     <button
       type="button"
-      className="relative w-full rounded-[6px] border border-[#e8d9c6] bg-[#fffdf6] px-5 py-4 text-left shadow-[0_18px_36px_-30px_rgba(67,43,25,0.95)] transition active:scale-[0.985]"
-      style={{ transform: `rotate(${rotate}deg)` }}
+      className={`paper-card absolute left-8 right-8 rounded-sm border border-black/5 p-6 text-left shadow-md transition-all duration-500 ${
+        colors[index % colors.length]
+      } ${drawing ? "scale-[1.04] opacity-100 shadow-xl" : ""} ${muted ? "opacity-30" : "opacity-100"}`}
+      style={{
+        top: `${index * 25 + 20}px`,
+        transform: `rotate(${rotate}deg) ${drawing ? "translateY(-24px)" : ""}`,
+        zIndex: drawing ? 80 : index + 10,
+      }}
       onClick={onClick}
     >
-      <div className="absolute -top-2 left-8 h-4 w-14 rotate-[-2deg] rounded-sm bg-[#ead8bd]/80 shadow-sm" />
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-[#f2e5d3] px-2.5 py-1 text-[10px] font-semibold text-[#86684a]">{type}</span>
-            {item.pinned ? <span className="text-[11px] font-semibold text-[#b9803e]">置顶</span> : null}
-            {item.sealed ? <span className="text-[11px] font-semibold text-[#7a5140]">暗格</span> : null}
-          </div>
-          <h3 className="mt-3 line-clamp-2 text-[17px] font-semibold leading-6 text-[#302722]">{item.title || TYPE_LABELS[item.type || "misc"] || "秘密纸条"}</h3>
-        </div>
-        <span className="shrink-0 text-[11px] font-semibold text-[#b09a82]">{formatShortTime(item.created_at)}</span>
+      <div className="mb-4 flex items-start justify-between">
+        <span className="text-[9px] font-bold uppercase tracking-widest text-amber-800/50">{type}</span>
+        <span className="text-[9px] font-medium text-gray-400">{formatShortTime(item.created_at)}</span>
       </div>
-      <p className="mt-3 line-clamp-3 text-[13px] leading-6 text-[#6f5f50]">{preview}</p>
-      {item.tags?.length ? (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {item.tags.slice(0, 4).map((tag) => (
-            <span key={tag} className="rounded-full bg-[#f6eee4] px-2 py-1 text-[10px] font-semibold text-[#9a8064]">{tag}</span>
-          ))}
-        </div>
-      ) : null}
+      <h3 className="mb-2 text-xl font-medium leading-tight text-[#2D2926]" style={serifStyle}>{item.title || "Untitled Paper"}</h3>
+      <p className="line-clamp-2 text-xs font-light text-gray-500">{preview}</p>
+      {item.pinned ? <div className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-amber-500" /> : null}
+      <div className="mt-4 flex gap-2">
+        <div className="h-1.5 w-1.5 rounded-full bg-gray-100" />
+        <div className="h-1.5 w-1.5 rounded-full bg-gray-100" />
+      </div>
     </button>
-  );
-}
-
-function EmptyPaper({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="rounded-[6px] border border-dashed border-[#d9c4aa] bg-[#fffaf1]/72 px-6 py-10 text-center">
-      <div className="text-[16px] font-semibold text-[#4a3b31]">{title}</div>
-      <div className="mt-2 text-[13px] leading-5 text-[#927a63]">{text}</div>
-    </div>
   );
 }
 
 function SecretDrawerDetail({ item, layer, onBack }: { item: SecretDrawerItem; layer: Layer; onBack: () => void }) {
   const media = item.media_refs || [];
+  const type = TYPE_LABELS[item.type || "misc"] || "Note";
   return (
-    <div className="min-h-full bg-[#f8f0e6] px-5 pb-8 pt-5 text-[#352b24]">
-      <button
-        type="button"
-        className="mb-5 rounded-full bg-[#fffaf1]/85 px-4 py-2 text-[13px] font-semibold text-[#735635] shadow-[0_10px_24px_-20px_rgba(84,55,27,0.7)] active:scale-95"
-        onClick={onBack}
-      >
-        返回纸条堆
-      </button>
-      <article className="rounded-[8px] border border-[#e8d9c6] bg-[#fffdf6] px-5 py-6 shadow-[0_24px_52px_-38px_rgba(67,43,25,0.95)]">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-[#f2e5d3] px-2.5 py-1 text-[10px] font-semibold text-[#86684a]">{TYPE_LABELS[item.type || "misc"] || "其他"}</span>
-          <span className="text-[11px] font-semibold text-[#b09a82]">{formatFullTime(item.created_at)}</span>
-          {layer === "alcove" || item.sealed ? <span className="text-[11px] font-semibold text-[#7a5140]">暗格</span> : null}
+    <SecretSurface tone="detail">
+      <div className="flex h-full min-h-0 flex-col bg-[#FDFBF7]">
+        <div className="flex items-center justify-between px-6 pb-4 pt-[calc(env(safe-area-inset-top,0px)+48px)]">
+          <button type="button" className="flex h-10 w-10 items-center justify-center rounded-full bg-black/5 active:bg-black/10" onClick={onBack} aria-label="Back">
+            <BackGlyph />
+          </button>
+          <div className="flex gap-4 text-gray-400">
+            <ShareGlyph />
+            <DotsGlyph />
+          </div>
         </div>
-        <h2 className="mt-4 text-[24px] font-semibold leading-8 tracking-tight text-[#2f2722]">{item.title || "秘密纸条"}</h2>
-        {item.why ? <p className="mt-3 rounded-[18px] bg-[#f6eee4] px-4 py-3 text-[13px] leading-6 text-[#745d47]">{item.why}</p> : null}
-        {media.length ? (
-          <div className="mt-5 grid grid-cols-1 gap-3">
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-12 [-webkit-overflow-scrolling:touch]">
+          <div className="mb-8 mt-4">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-amber-800">{layer === "alcove" || item.sealed ? "Vault" : type}</span>
+              <span className="text-[10px] text-gray-400">{formatDetailDate(item.created_at)}</span>
+            </div>
+            <h1 className="text-4xl font-medium leading-tight text-[#2D2926]" style={serifStyle}>{item.title || "Untitled Paper"}</h1>
+          </div>
+
+          <div className="space-y-6 text-lg font-light leading-relaxed text-[#2D2926]/80" style={serifStyle}>
+            {item.why ? <p>{item.why}</p> : null}
             {media.map((ref, index) => (
-              <figure key={`${ref.key || ref.url || index}`} className="rounded-[5px] bg-white p-2 shadow-[0_18px_32px_-28px_rgba(67,43,25,0.95)]">
-                <img src={mediaUrl(ref)} alt={ref.name || "secret drawer media"} className="max-h-[420px] w-full rounded-[3px] object-cover" loading="lazy" />
+              <figure key={`${ref.key || ref.url || index}`} className="mx-2 my-8 rotate-[-1deg] bg-white p-2 pb-6 shadow-md">
+                <div className="mb-4 flex aspect-[4/3] items-center justify-center overflow-hidden rounded-sm bg-gray-200">
+                  <img src={mediaUrl(ref)} alt={ref.name || "secret drawer media"} className="h-full w-full object-cover" loading="lazy" />
+                </div>
+                <figcaption className="text-center font-mono text-xs tracking-tighter text-gray-400">{ref.name || ref.kind || "SAVED_IMAGE"}</figcaption>
               </figure>
             ))}
+            {item.content ? <p className="whitespace-pre-wrap">{item.content}</p> : null}
+            {!item.why && !item.content && !media.length ? <p>This paper is quiet for now.</p> : null}
           </div>
-        ) : null}
-        {item.content ? <div className="mt-5 whitespace-pre-wrap text-[15px] leading-8 text-[#4b4037]">{item.content}</div> : null}
-        {item.tags?.length ? (
-          <div className="mt-6 flex flex-wrap gap-2">
-            {item.tags.map((tag) => (
-              <span key={tag} className="rounded-full bg-[#f2e5d3] px-3 py-1.5 text-[11px] font-semibold text-[#85684a]">{tag}</span>
-            ))}
+
+          <div className="mt-12 border-t border-black/5 pt-8">
+            {item.tags?.length ? (
+              <div className="mb-6 flex flex-wrap gap-2">
+                {item.tags.map((tag) => <span key={tag} className="text-[11px] font-medium text-gray-500">#{tag}</span>)}
+              </div>
+            ) : null}
+            <div className="space-y-1 text-[10px] text-gray-400">
+              <p>Saved: {formatFullTime(item.created_at) || "Unknown"}</p>
+              {item.updated_at ? <p>Updated: {formatFullTime(item.updated_at)}</p> : null}
+              {item.source?.channel ? <p>Source: {item.source.channel}</p> : null}
+            </div>
           </div>
-        ) : null}
-        {item.source?.channel || item.source?.url ? (
-          <div className="mt-6 border-t border-[#eadcc9] pt-4 text-[11px] leading-5 text-[#a18a72]">
-            {item.source?.channel ? <div>来源：{item.source.channel}</div> : null}
-            {item.source?.url ? <div className="break-all">{item.source.url}</div> : null}
-          </div>
-        ) : null}
-      </article>
+        </div>
+      </div>
+    </SecretSurface>
+  );
+}
+
+function EmptyVault({ title, text, icon }: { title?: string; text: string; icon?: React.ReactNode }) {
+  return (
+    <div className="flex h-full min-h-[300px] flex-col items-center justify-center px-10 text-center">
+      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-black/5 text-gray-600">
+        {icon || <FeatherGlyph />}
+      </div>
+      {title ? <div className="mb-2 text-sm font-medium text-[#2D2926]/60">{title}</div> : null}
+      <p className="text-sm font-light italic text-[#2D2926]/40">{text}</p>
     </div>
   );
 }
 
-function summarizeStats(stats: SecretDrawerStats | null): string {
-  const total = stats?.total || 0;
-  if (!total) return "这里还没有纸条。";
-  const byType = stats?.by_type || {};
-  return `共 ${total} 条，对话 ${byType.message || 0}，图片 ${byType.photo || 0}，梦境 ${byType.dream || 0}，碎碎念 ${byType.note || 0}。`;
+function CabinetGlyph() {
+  return (
+    <svg className="mx-auto mb-6 h-12 w-12 text-amber-700 opacity-80" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <path d="M9 11h30v26H9z" fill="currentColor" opacity="0.14" />
+      <path d="M10 11h28v26H10zM10 20h28M10 28.5h28" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" />
+      <path d="M22 15.5h4M22 24.2h4M22 32.7h4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function LockKeyGlyph() {
+  return (
+    <svg className="h-10 w-10" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <path d="M14.5 22.5h19v16h-19z" fill="currentColor" opacity="0.14" />
+      <path d="M14.5 22.5h19v16h-19z" stroke="currentColor" strokeWidth="2.4" strokeLinejoin="round" />
+      <path d="M18 22.5v-6.2C18 12.1 20.7 9 24.8 9c3.4 0 5.8 2 6.5 5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+      <path d="M24 28.5v4" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function LockClosedGlyph() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Zm-7-2a2 2 0 0 1 4 0v2h-4V7Z" />
+    </svg>
+  );
+}
+
+function HomeGlyph() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M3 11.4 12 4l9 7.4-1.3 1.5L18 11.5V20H6v-8.5l-1.7 1.4L3 11.4Z" />
+    </svg>
+  );
+}
+
+function BackGlyph() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m15 18-6-6 6-6" />
+    </svg>
+  );
+}
+
+function SearchGlyph() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
+
+function HandGlyph() {
+  return (
+    <svg className="h-5 w-5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12" />
+      <path d="M11 11V4.5a1.5 1.5 0 0 1 3 0V12" />
+      <path d="M14 11V6.5a1.5 1.5 0 0 1 3 0V13" />
+      <path d="M8 13c-1.5-1.5-3-2-3.8-1.2-.8.8-.2 2.1 1.2 3.8L8 19c1 1.3 2.4 2 4 2h2.5A4.5 4.5 0 0 0 19 16.5V11" />
+    </svg>
+  );
+}
+
+function FeatherGlyph() {
+  return (
+    <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20.24 3.76a6 6 0 0 0-8.48 0L4 11.52V20h8.48l7.76-7.76a6 6 0 0 0 0-8.48Z" />
+      <path d="M16 8 2 22" />
+      <path d="M17.5 15H9" />
+    </svg>
+  );
+}
+
+function ShareGlyph() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" />
+    </svg>
+  );
+}
+
+function DotsGlyph() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="19" cy="12" r="1.8" />
+    </svg>
+  );
+}
+
+function grainBackground(): string {
+  return "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E\")";
 }
 
 function formatShortTime(value?: string): string {
   const text = String(value || "");
   const match = text.match(/(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
-  return match ? `${match[1]}/${match[2]} ${match[3]}:${match[4]}` : "";
+  return match ? `${match[1]}/${match[2]}` : "";
+}
+
+function formatDetailDate(value?: string): string {
+  const text = String(value || "");
+  const match = text.match(/(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[1]}.${match[2]}.${match[3]}` : "";
 }
 
 function formatFullTime(value?: string): string {

@@ -542,7 +542,7 @@ function bodyStateText(state: DuBodyState | undefined) {
   const toyTypes = bodyToyTypes(state);
   if (toyTypes.length) {
     const details = [];
-    if (Number(state.intensity || 0) > 0) details.push(`档位${Number(state.intensity || 0)}`);
+    if (Number(state?.intensity || 0) > 0) details.push(`档位${Number(state?.intensity || 0)}`);
     parts.push(`道具：${toyTypes.join("、")}${details.length ? `（${details.join("，")}）` : ""}`);
   }
   if (typeof state?.desire_value !== "undefined" || typeof state?.desire_level !== "undefined") {
@@ -1097,27 +1097,28 @@ export function PixelHomeTab() {
               <span>我:</span>
               {myStatus}
             </div>
-            <div className="pixel-home-ref-status-row pixel-home-ref-body-row">
-              <span>渡的身体:</span>
-              <button
-                className="pixel-home-ref-body-inline"
-                type="button"
-                aria-label="选择小玩具"
-                onClick={() => {
-                  setToyDraft(homeState?.du_body_state || {});
-                  setToySaveError("");
-                  setToyEditorOpen(true);
-                }}
-              >
-                <b>{duBodyStatus}</b>
-                <i aria-hidden="true">+</i>
-              </button>
-            </div>
           </div>
           <button className="pixel-home-ref-add" type="button" aria-label="设置我的状态" onClick={() => setStatusEditorOpen(true)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M12 5V19M5 12H19" strokeLinecap="round" />
             </svg>
+          </button>
+        </section>
+
+        <section className="pixel-home-ref-body-panel">
+          <span className="pixel-home-ref-body-label">渡的身体</span>
+          <button
+            className="pixel-home-ref-body-inline"
+            type="button"
+            aria-label="选择小玩具"
+            onClick={() => {
+              setToyDraft(homeState?.du_body_state || {});
+              setToySaveError("");
+              setToyEditorOpen(true);
+            }}
+          >
+            <b>{duBodyStatus}</b>
+            <i aria-hidden="true">+</i>
           </button>
         </section>
 

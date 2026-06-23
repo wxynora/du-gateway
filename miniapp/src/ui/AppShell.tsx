@@ -12,7 +12,7 @@ import { DiagnosticsScreen } from "./DiagnosticsScreen";
 import { FullScreenPane } from "./FullScreenPane";
 import { MainChatScreen } from "./MainChatScreen";
 import { PersonalizationScreen } from "./PersonalizationScreen";
-import { FloatingBallSettingRow, ListRow, PageCardRow, SwitchSettingRow } from "./SettingsRows";
+import { FloatingBallSettingRow, ListRow, SwitchSettingRow } from "./SettingsRows";
 import {
   BUBBLE_STYLE_KEYS,
   DEFAULT_GROUP_CHAT_TITLE,
@@ -78,6 +78,7 @@ const MemoryDebugTab = lazy(() => import("./tabs/MemoryDebugTab").then((m) => ({
 const MemoryNebulaTab = lazy(() => import("./tabs/MemoryNebulaTab").then((m) => ({ default: m.MemoryNebulaTab })));
 const DuDayTab = lazy(() => import("./tabs/DuDayTab").then((m) => ({ default: m.DuDayTab })));
 const DuNotebookTab = lazy(() => import("./tabs/DuNotebookTab").then((m) => ({ default: m.DuNotebookTab })));
+const BudgetCheckInTab = lazy(() => import("./tabs/BudgetCheckInTab").then((m) => ({ default: m.BudgetCheckInTab })));
 const WenyouTab = lazy(() => import("./tabs/WenyouTab").then((m) => ({ default: m.WenyouTab })));
 const StickersTab = lazy(() => import("./tabs/StickersTab").then((m) => ({ default: m.StickersTab })));
 const CallHubScreen = lazy(() => import("./tabs/CallHubScreen").then((m) => ({ default: m.CallHubScreen })));
@@ -92,7 +93,7 @@ const ReportingManagementScreen = lazy(() => import("./tabs/ReportingManagementS
 const ChatStorageManagementScreen = lazy(() => import("./tabs/ChatStorageManagementScreen").then((m) => ({ default: m.ChatStorageManagementScreen })));
 const SecretDrawerTab = lazy(() => import("./tabs/SecretDrawerTab").then((m) => ({ default: m.SecretDrawerTab })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "budget-checkin" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
 type SilenceModeResponse = {
   ok?: boolean;
@@ -571,33 +572,33 @@ export function AppShell({
       return (
         <div className="bg-[#FDFDFD] px-4 pb-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 44px)" }}>
           <h1 className="mb-6 text-[22px] font-medium tracking-tight text-gray-900">日常</h1>
-          <div className="space-y-4">
-            <PageCardRow
+          <div className="overflow-hidden rounded-[28px] border border-gray-100/60 bg-white shadow-[0_4px_20px_-2px_rgba(0,0,0,0.03)]">
+            <ListRow
               icon={<SunIconMini />}
               label="渡的一天"
               onClick={() => setShowDuDay(true)}
             />
-            <PageCardRow
+            <ListRow
               icon={<HeartIconMini />}
               label="Stay with Du"
               onClick={() => setShowStayWithDu(true)}
             />
-            <PageCardRow
+            <ListRow
               icon={<HomeIconMini />}
               label="小家"
               onClick={() => setShowPixelHome(true)}
             />
-            <PageCardRow
+            <ListRow
               icon={<CpuIcon />}
               label="记忆星云"
               onClick={() => setShowMemoryNebula(true)}
             />
-            <PageCardRow
+            <ListRow
               icon={<BookOpenIcon />}
               label="和渡一起读"
               onClick={() => setShowCoRead(true)}
             />
-            <PageCardRow
+            <ListRow
               icon={<HeartIconMini />}
               label="和渡一起听"
               onClick={() => {
@@ -605,15 +606,21 @@ export function AppShell({
                 setShowListenWithDu(true);
               }}
             />
-            <PageCardRow
+            <ListRow
+              icon={<CalendarIconMini />}
+              label="存钱打卡"
+              onClick={() => setPanel("budget-checkin")}
+            />
+            <ListRow
               icon={<BookOpenIcon />}
               label="渡的记事本"
               onClick={() => setPanel("du-notebook")}
             />
-            <PageCardRow
+            <ListRow
               icon={<FeatherIcon />}
               label="秘密抽屉"
               onClick={() => setPanel("secret-drawer")}
+              last
             />
           </div>
         </div>
@@ -830,10 +837,13 @@ export function AppShell({
           <LazyPane><DuNotebookTab /></LazyPane>
         </FullScreenPane>
       ) : null}
-      {panel === "secret-drawer" ? (
-        <FullScreenPane title="秘密抽屉" accent="neutral" headerMode="simple" contentMode="bleed" onBack={() => setPanel(null)}>
-          <LazyPane><SecretDrawerTab /></LazyPane>
+      {panel === "budget-checkin" ? (
+        <FullScreenPane title="存钱打卡" accent="neutral" headerMode="simple" onBack={() => setPanel(null)}>
+          <LazyPane><BudgetCheckInTab /></LazyPane>
         </FullScreenPane>
+      ) : null}
+      {panel === "secret-drawer" ? (
+        <LazyPane><SecretDrawerTab onExit={() => setPanel(null)} /></LazyPane>
       ) : null}
       {panel === "stickers" ? (
         <FullScreenPane title="表情包" accent="neutral" onBack={() => setPanel(null)}>
