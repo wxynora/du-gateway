@@ -13,6 +13,8 @@ from services.interaction_memory import split_assistant_for_interaction
 from services.pending_thoughts import split_and_apply_tags as split_pending_thought_tags
 from services.pc_command_handler import process_pcmd_in_assistant_text
 from services.pixel_home import save_pixel_home_hidden_block, split_assistant_for_pixel_home
+from services.secret_drawer import save_hidden_block as save_secret_drawer_hidden_block
+from services.secret_drawer import split_all_assistant_for_secret_drawer
 from storage import r2_store
 from utils.log import get_logger
 from utils.time_aware import now_beijing_iso
@@ -116,6 +118,8 @@ def extract_and_store_hidden_sidecars(
     window_id: str = "",
     du_daily_trigger: Optional[dict] = None,
     dynamic_memory_citation_map: Optional[dict] = None,
+    source_messages: Optional[list[dict]] = None,
+    reply_channel: str = "",
 ) -> str:
     visible_after_pcmd, _ = process_pcmd_in_assistant_text(full_text or "")
     visible, thought = split_assistant_for_thought(visible_after_pcmd)
@@ -123,6 +127,7 @@ def extract_and_store_hidden_sidecars(
     visible, interaction = split_assistant_for_interaction(visible)
     visible, du_daily = split_assistant_for_daily(visible)
     visible, pixel_home = split_assistant_for_pixel_home(visible)
+    visible, secret_drawer_blocks = split_all_assistant_for_secret_drawer(visible)
     visible, _pending_ops = split_pending_thought_tags(visible)
     visible, referenced_memory_ids = strip_assistant_memory_citations(visible, dynamic_memory_citation_map)
     if thought:
@@ -159,6 +164,17 @@ def extract_and_store_hidden_sidecars(
             save_pixel_home_hidden_block(pixel_home)
         except Exception as e:
             logger.warning("save_pixel_home_hidden_block 失败 error=%s", e)
+    for secret_drawer in secret_drawer_blocks:
+        try:
+            save_secret_drawer_hidden_block(
+                secret_drawer,
+                window_id=window_id,
+                source_messages=source_messages or [],
+                assistant_text=visible,
+                reply_channel=reply_channel,
+            )
+        except Exception as e:
+            logger.warning("save_secret_drawer_hidden_block 失败 error=%s", e)
     if referenced_memory_ids:
         append_memory_citation_debug_event(window_id, referenced_memory_ids, visible)
         try:
@@ -174,6 +190,8 @@ def apply_hidden_sidecars_to_assistant_response(
     window_id: str = "",
     du_daily_trigger: Optional[dict] = None,
     dynamic_memory_citation_map: Optional[dict] = None,
+    source_messages: Optional[list[dict]] = None,
+    reply_channel: str = "",
 ) -> dict:
     """
     剥离助手回复中的隐藏块（老婆侧不可见）；若存在闭合块则写入 R2。
@@ -195,6 +213,8 @@ def apply_hidden_sidecars_to_assistant_response(
         window_id=window_id,
         du_daily_trigger=du_daily_trigger,
         dynamic_memory_citation_map=dynamic_memory_citation_map,
+        source_messages=source_messages or [],
+        reply_channel=reply_channel,
     )
     if visible != content_text:
         msg["content"] = visible

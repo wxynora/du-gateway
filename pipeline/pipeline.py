@@ -1232,6 +1232,21 @@ def step_inject_pending_thoughts(body: dict, window_id: str) -> dict:
     return _append_to_dynamic_system(body, "\n\n" + block.strip())
 
 
+def step_inject_secret_drawer(body: dict, window_id: str) -> dict:
+    """动态注入：秘密抽屉能力和短概况，不注入具体条目。"""
+    _ = window_id
+    try:
+        from services.secret_drawer import format_inject_block
+
+        block = format_inject_block()
+    except Exception as e:
+        logger.debug("secret_drawer 注入跳过 error=%s", e)
+        return body
+    if not (block or "").strip():
+        return body
+    return _append_to_dynamic_system(body, "\n\n" + block.strip())
+
+
 def step_inject_wakeup_frame(body: dict, window_id: str) -> dict:
     """动态注入：距离上次醒来后，设备感知数据发生的短变化。"""
     try:

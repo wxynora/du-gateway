@@ -46,6 +46,7 @@ from pipeline.pipeline import (
     step_inject_sense_snapshot,
     step_inject_du_thought,
     step_inject_pending_thoughts,
+    step_inject_secret_drawer,
     step_inject_wakeup_frame,
     step_inject_du_vitals,
     step_inject_du_daily,
@@ -1081,6 +1082,8 @@ def _stream_with_r2_archive(
                 window_id=window_id,
                 du_daily_trigger=du_daily_trigger,
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
+                source_messages=body.get("messages") or [],
+                reply_channel=reply_channel,
             )
             full_reasoning = "".join(reasoning_parts).strip()
             stream_sec = time.time() - stream_start
@@ -1280,6 +1283,8 @@ def _stream_with_r2_archive(
             window_id=window_id,
             du_daily_trigger=du_daily_trigger,
             dynamic_memory_citation_map=dynamic_memory_citation_map,
+            source_messages=body.get("messages") or [],
+            reply_channel=reply_channel,
         )
         try:
             cleaned_visible, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=visible)
@@ -1589,6 +1594,8 @@ def chat_completions():
                 window_id=window_id,
                 du_daily_trigger=du_daily_trigger,
                 dynamic_memory_citation_map=dynamic_memory_citation_map,
+                source_messages=body.get("messages") or [],
+                reply_channel=reply_channel,
             )
             if visible_text:
                 yield _sse_delta_chunk_bytes(visible_text)
@@ -1694,6 +1701,7 @@ def chat_completions():
         body = step_inject_pseudo_cot_inner_os(body, window_id)
         body = step_inject_du_thought(body, window_id)
         body = step_inject_pending_thoughts(body, window_id)
+        body = step_inject_secret_drawer(body, window_id)
         body = step_inject_wakeup_frame(body, window_id)
         body = step_inject_du_vitals(body, window_id)
         body = step_inject_du_daily(body, window_id, trigger=du_daily_trigger, maintenance_mode=du_daily_maintenance)
@@ -1934,6 +1942,8 @@ def chat_completions():
             window_id=window_id,
             du_daily_trigger=du_daily_trigger,
             dynamic_memory_citation_map=dynamic_memory_citation_map,
+            source_messages=body.get("messages") or [],
+            reply_channel=reply_channel,
         )
         resp_json = _merge_html_preview_into_nonstream_response(resp_json, body.get("messages") or [])
         if is_sumitalk_request:

@@ -1747,3 +1747,17 @@ npm -C miniapp run android
 - 已完成：`routes/miniapp/reasoning.py` 对历史脏数据做兜底：如果 reasoning 文本本身命中伪 COT 拒绝模式，就不再原样展示，改走“adaptive thinking 未返回可展示正文”的 omitted 提示；已有 `du_inner_os` 的轮次仍展示脑内 OS。
 - 已验证：`python3 -m py_compile services/pseudo_cot.py routes/chat.py routes/miniapp/reasoning.py` 和 `git diff --check -- services/pseudo_cot.py routes/chat.py routes/miniapp/reasoning.py docs/DEBUG_INDEX.md` 通过；本地 smoke 确认 `summary=I cannot... + <DU_INNER_OS>` 时返回体 `reasoning` 会被替换为脑内 OS，App 历史接口会隐藏旧拒绝 summary。
 - 未完成 / 下次继续：本轮未回写修复历史 R2 旧轮次本体；历史接口只是展示层兜底。如果要把旧 R2 对象里的拒绝文本批量替换/清理，需要单独做带备份的数据修正。
+
+当前状态（2026-06-23 渡秘密抽屉后端一期）：
+- 已完成：新增方案文档 `docs/渡秘密抽屉功能方案.md`，收束“渡自己的秘密抽屉”功能边界：保存想留下的对话、图片、梦境、冲浪内容、碎碎念和兜底杂项；它不是动态记忆、不是日记，也不会把具体条目自动注入常规上下文。
+- 已完成：新增 R2 存储层 `storage/secret_drawer_store.py`，使用 `global/du_secret_drawer.json` 存条目、`global/du_secret_drawer_config.json` 存 UI PIN 明文；未单独设置 PIN 时默认按 `0000` 解锁，设置后按配置 PIN；`sealed=true` 默认不出普通列表、搜索和随机翻一个，`deleted=true` 不计入常规统计，待整理定义为标题、标签或 why 任一为空。
+- 已完成：存储层支持类型/标签/关键词/待整理/置顶/软删除/暗格过滤，支持 `restore_item()` 恢复软删除；`stats()` 返回总数、普通数、删除数、分类计数、标签计数、待整理分类、置顶、暗格和最新时间，标签统计默认不泄露暗格标签。
+- 已完成：小工检查后补安全边界：PIN 配置读取失败时 `verify_pin()` fail closed，不再退回默认 `0000`；主抽屉 JSON 读取失败时写入入口 fail closed，不把空抽屉覆盖回 R2；普通 stats 不暴露暗格标签或暗格分类明细，暗格明细只在显式 `include_sealed_details=true` 时返回，且前端只有停在暗格层并已解锁时才请求暗格明细；`sealed_only=true` 会由后端先过滤暗格再 limit/random，避免普通条目太多时暗格列表/随机抽空或混池；JSON bool 统一按 `true/false/1/0/yes/no/on/off` 解析，不把字符串 `"false"` 当 true。
+- 已完成：新增服务层 `services/secret_drawer.py`，统一处理 `<<<DU_SECRET_SAVE>>>...<<<END_DU_SECRET_SAVE>>>` 隐藏保存块；`save_message` 会保存本轮小玥消息、渡可见回复和当前消息图片，`save_photo` 只保存当前消息图片；工具和 API 传入的外部图片会尽量拷到 SumiTalk chat media R2，避免 QQ / TG CDN URL 过期；复制失败的外部临时 URL 不再作为图片引用保存。
+- 已完成：新增 MiniApp 后端 API `routes/miniapp/secret_drawer.py` 并挂到 `/miniapp-api/secret-drawer/*`，支持 stats/config/unlock/items CRUD/restore/random；不暴露前端设置 PIN 的 HTTP 路由，PIN 由渡走 `secret_drawer` 的 `set_pin` 设置；PIN 只用于前端 UI 解锁，后端工具和存储本身无锁。
+- 已完成：MiniApp 前端新增 `miniapp/src/ui/tabs/SecretDrawerTab.tsx` 并在「日常」入口挂「秘密抽屉」；参考 `ui合集/秘密抽屉` 的纸条堆、PIN 键盘、随机翻一张和暗格层次，但去掉样例的固定 375x812 假手机外壳/全局悬浮大卡片，页面在 `FullScreenPane` 内铺满真实 app 内容区。
+- 已完成：聊天注入链新增 `###秘密抽屉` 短概况，只给总数、分类、置顶、暗格和待整理数量以及隐藏保存格式；工具注入只保留一个 `secret_drawer`，schema 只暴露 `action` 和 `payload`，用 `action=stats/list/get/update/delete/restore/random/set_pin` 区分操作；保存当前聊天只走 `DU_SECRET_SAVE` 隐藏标记，不注入保存工具；PIN 由渡自己用 `set_pin` 设置，前端只负责输入 PIN；对渡可见的工具说明统一叫「暗格」，不再叫「锁中锁」。
+- 已完成：隐藏块剥离接入 `services/chat_sidecars.py` 和流式可见文本处理，避免 `DU_SECRET_SAVE` 标记在 App / TG / QQ 正文里露出；非流式 forced SSE 路径会先剥离隐藏块再转发，不重复保存。
+- 已完成：`HiddenBlockParser` 增加 `split_all()`，`DU_SECRET_SAVE` 支持一次回复里多个完整隐藏块；后续块也会剥离并逐个保存，不会露到客户端或进可见正文。
+- 已验证：`.venv/bin/python -m py_compile storage/secret_drawer_store.py services/secret_drawer.py routes/miniapp/secret_drawer.py routes/miniapp_api.py services/chat_sidecars.py services/pc_command_handler.py pipeline/pipeline.py routes/chat.py services/gateway_tools.py services/notion_tools.py` 通过；本地 monkeypatch R2 smoke 覆盖隐藏块剥离、保存本轮消息+图片、工具保存 media_refs、待整理/置顶筛选、标签统计、软删除读取与恢复、MiniApp PIN/items/random/restore；`python3 -m py_compile storage/secret_drawer_store.py routes/miniapp/secret_drawer.py services/secret_drawer.py` 和 `npm -C miniapp run build` 通过并重建 `miniapp_static`。
+- 未完成 / 下次继续：当前前端是偷看/浏览 UI，不提供编辑、删除、恢复；也不提供设置 PIN 的入口，PIN 设置由渡走 `secret_drawer` 的 `set_pin`。后端仍是 R2 JSON 单对象低频写入，只有进程内锁；当前单 worker 可接受，但没有做 D1/SQLite、跨进程版本锁/CAS 或物理删除。

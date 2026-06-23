@@ -62,6 +62,24 @@ class HiddenBlockParser:
         visible = full_text[: match.start()] + full_text[match.end() :]
         return visible.strip(), content if content else None
 
+    def split_all(self, full_text: str) -> tuple[str, list[str]]:
+        """Return visible text and all complete hidden block contents. Unclosed tail blocks are dropped."""
+        if not full_text or not isinstance(full_text, str):
+            return full_text or "", []
+        visible = full_text
+        contents: list[str] = []
+        while True:
+            start = self.start_re.search(visible)
+            if not start:
+                return visible.strip(), contents
+            match = self.block_re.search(visible)
+            if not match:
+                return visible[: start.start()].rstrip(), contents
+            content = (match.group(1) or "").strip()
+            if content:
+                contents.append(content)
+            visible = visible[: match.start()] + visible[match.end() :]
+
     def compute_visible_streaming(self, acc: str) -> str:
         """
         Current visible text while streaming. If a start marker has begun but not closed,
@@ -69,17 +87,22 @@ class HiddenBlockParser:
         """
         if not acc:
             return ""
-        start = self.start_re.search(acc)
-        if not start:
-            return self.strip_partial_start_marker_suffix(acc)
-        end = self.end_re.search(acc, start.end())
-        if not end:
-            return acc[: start.start()].rstrip()
-        before = acc[: start.start()].rstrip()
-        after = acc[end.end() :].lstrip()
-        if before and after:
-            return before + after
-        return before or after
+        visible = acc
+        while True:
+            start = self.start_re.search(visible)
+            if not start:
+                return self.strip_partial_start_marker_suffix(visible)
+            end = self.end_re.search(visible, start.end())
+            if not end:
+                return visible[: start.start()].rstrip()
+            before_raw = visible[: start.start()]
+            after_raw = visible[end.end() :]
+            before = before_raw.rstrip()
+            after = after_raw.lstrip()
+            if before and after:
+                visible = before + " " + after
+            else:
+                visible = before or after
 
     def strip_partial_start_marker_suffix(self, text: str) -> str:
         if not text:

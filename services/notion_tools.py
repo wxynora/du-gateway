@@ -505,10 +505,12 @@ def execute_tool(name: str, arguments: dict) -> str:
     """执行单个工具（Notion、网关、小爱、天气、黄历等），返回给模型的字符串结果。"""
     from services.gateway_tools import (
         DU_SURF_TOOL_NAMES,
+        SECRET_DRAWER_TOOL_NAMES,
         SEX_PLAY_DRAW_TOOL_NAMES,
         VOICE_CALL_TOOL_NAMES,
         XIAOAI_TOOL_NAMES,
         execute_du_surf_tool,
+        execute_secret_drawer_tool,
         execute_sex_play_draw_tool,
         execute_voice_call_tool,
         execute_xiaoai_tool,
@@ -530,6 +532,8 @@ def execute_tool(name: str, arguments: dict) -> str:
         return execute_sex_play_draw_tool(name, arguments)
     if name in DU_SURF_TOOL_NAMES:
         return execute_du_surf_tool(name, arguments)
+    if name in SECRET_DRAWER_TOOL_NAMES:
+        return execute_secret_drawer_tool(name, arguments)
     if name in ("get_time_info", "get_weather", "get_almanac"):
         from services.weather_almanac import execute_weather_almanac_tool
         return execute_weather_almanac_tool(name, arguments)

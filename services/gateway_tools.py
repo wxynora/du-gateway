@@ -23,6 +23,7 @@ XIAOAI_TOOL_NAMES = ("xiaoai_speak", "xiaoai_run_command", "mijia_lamp_get", "mi
 VOICE_CALL_TOOL_NAMES = ("start_voice_call",)
 DU_SURF_TOOL_NAMES = ("du_surf",)
 SEX_PLAY_DRAW_TOOL_NAMES = ("sex_play_draw",)
+SECRET_DRAWER_TOOL_NAMES = ("secret_drawer",)
 
 
 def get_gateway_xiaoai_tools() -> List[dict]:
@@ -265,13 +266,25 @@ def execute_du_surf_tool(name: str, arguments: dict) -> str:
     return execute_du_surf(arguments if isinstance(arguments, dict) else {})
 
 
+def execute_secret_drawer_tool(name: str, arguments: dict) -> str:
+    """执行秘密抽屉工具，返回给渡的 JSON 字符串。"""
+    if name not in SECRET_DRAWER_TOOL_NAMES:
+        return json.dumps({"ok": False, "error": "UNKNOWN_TOOL"}, ensure_ascii=False)
+    from services.secret_drawer import execute_secret_drawer_tool as _execute
+
+    return _execute(name, arguments if isinstance(arguments, dict) else {})
+
+
 def get_gateway_tools_for_inject() -> List[dict]:
     """返回不依赖 Notion 开关的网关工具。"""
+    from services.secret_drawer import get_secret_drawer_tools_for_inject
+
     return [
         *get_gateway_xiaoai_tools(),
         *get_gateway_voice_call_tools(),
         *get_gateway_sex_play_draw_tools(),
         *get_gateway_du_surf_tools(),
+        *get_secret_drawer_tools_for_inject(),
     ]
 
 

@@ -90,8 +90,9 @@ const XiaoAISettingsTab = lazy(() => import("./tabs/XiaoAISettingsTab").then((m)
 const HealthDataScreen = lazy(() => import("./tabs/HealthDataScreen").then((m) => ({ default: m.HealthDataScreen })));
 const ReportingManagementScreen = lazy(() => import("./tabs/ReportingManagementScreen").then((m) => ({ default: m.ReportingManagementScreen })));
 const ChatStorageManagementScreen = lazy(() => import("./tabs/ChatStorageManagementScreen").then((m) => ({ default: m.ChatStorageManagementScreen })));
+const SecretDrawerTab = lazy(() => import("./tabs/SecretDrawerTab").then((m) => ({ default: m.SecretDrawerTab })));
 
-type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
+type PanelId = "logs" | "reasoning" | "memory-debug" | "du-notebook" | "secret-drawer" | "stickers" | "xiaoai" | "health-data" | "reporting" | "chat-storage" | null;
 type AvatarImageKind = "myAvatar" | "duAvatar" | "benbenAvatar";
 type SilenceModeResponse = {
   ok?: boolean;
@@ -609,6 +610,11 @@ export function AppShell({
               label="渡的记事本"
               onClick={() => setPanel("du-notebook")}
             />
+            <PageCardRow
+              icon={<FeatherIcon />}
+              label="秘密抽屉"
+              onClick={() => setPanel("secret-drawer")}
+            />
           </div>
         </div>
       );
@@ -822,6 +828,11 @@ export function AppShell({
       {panel === "du-notebook" ? (
         <FullScreenPane title="渡的记事本" accent="neutral" onBack={() => setPanel(null)}>
           <LazyPane><DuNotebookTab /></LazyPane>
+        </FullScreenPane>
+      ) : null}
+      {panel === "secret-drawer" ? (
+        <FullScreenPane title="秘密抽屉" accent="neutral" headerMode="simple" contentMode="bleed" onBack={() => setPanel(null)}>
+          <LazyPane><SecretDrawerTab /></LazyPane>
         </FullScreenPane>
       ) : null}
       {panel === "stickers" ? (

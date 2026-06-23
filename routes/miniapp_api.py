@@ -26,6 +26,7 @@ from routes.miniapp.panel_auth import register_routes as register_panel_auth_rou
 from routes.miniapp.private_draw import register_routes as register_private_draw_routes
 from routes.miniapp.reasoning import register_routes as register_reasoning_routes
 from routes.miniapp.schedule import register_routes as register_schedule_routes
+from routes.miniapp.secret_drawer import register_routes as register_secret_drawer_routes
 from routes.miniapp.settings import register_routes as register_settings_routes
 from routes.miniapp.stickers import register_routes as register_stickers_routes
 from routes.miniapp.sumitalk_chat_jobs import register_routes as register_sumitalk_chat_job_routes
@@ -53,6 +54,7 @@ register_panel_auth_routes(bp)
 register_private_draw_routes(bp)
 register_reasoning_routes(bp)
 register_schedule_routes(bp)
+register_secret_drawer_routes(bp)
 register_settings_routes(bp)
 register_stickers_routes(bp)
 register_sumitalk_chat_job_routes(bp)
