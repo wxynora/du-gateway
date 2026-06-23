@@ -137,6 +137,7 @@ export function AppShell({
   const [activeScreen, setActiveScreen] = useState<ChatScreenId>(null);
   const wenyouBackHandlerRef = useRef<(() => boolean) | null>(null);
   const callHubBackHandlerRef = useRef<BackHandler | null>(null);
+  const secretDrawerBackHandlerRef = useRef<BackHandler | null>(null);
   const [silenceModeEnabled, setSilenceModeEnabled] = useState(false);
   const [silenceModeSaving, setSilenceModeSaving] = useState(false);
   const [millionPlanModeEnabled, setMillionPlanModeEnabled] = useState(false);
@@ -475,6 +476,9 @@ export function AppShell({
       }
       if (deviceManagerOpen && onCloseDevices) {
         onCloseDevices();
+        return;
+      }
+      if (panel === "secret-drawer" && secretDrawerBackHandlerRef.current?.()) {
         return;
       }
       if (panel) {
@@ -843,7 +847,7 @@ export function AppShell({
         </FullScreenPane>
       ) : null}
       {panel === "secret-drawer" ? (
-        <LazyPane><SecretDrawerTab onExit={() => setPanel(null)} /></LazyPane>
+        <LazyPane><SecretDrawerTab onExit={() => setPanel(null)} backHandlerRef={secretDrawerBackHandlerRef} /></LazyPane>
       ) : null}
       {panel === "stickers" ? (
         <FullScreenPane title="表情包" accent="neutral" onBack={() => setPanel(null)}>

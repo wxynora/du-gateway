@@ -74,7 +74,13 @@ const FILTERS: Array<{ key: FilterKey; label: string }> = [
 
 const serifStyle: React.CSSProperties = { fontFamily: '"Fraunces", "Noto Serif SC", "Times New Roman", serif' };
 
-export function SecretDrawerTab({ onExit }: { onExit?: () => void }) {
+export function SecretDrawerTab({
+  onExit,
+  backHandlerRef,
+}: {
+  onExit?: () => void;
+  backHandlerRef?: React.MutableRefObject<(() => boolean) | null>;
+}) {
   const toast = useToast();
   const randomTimerRef = useRef<number | null>(null);
   const [config, setConfig] = useState<SecretDrawerConfig | null>(null);
@@ -172,17 +178,44 @@ export function SecretDrawerTab({ onExit }: { onExit?: () => void }) {
     }, 620);
   }
 
-  function switchLayer(next: Layer) {
+  const switchLayer = useCallback((next: Layer) => {
     setLayer(next);
     setSelected(null);
     setFilter("all");
     setQuery("");
     setDrawingId(null);
-  }
+  }, []);
+
+  const handleSecretBack = useCallback(() => {
+    if (selected) {
+      setSelected(null);
+      return true;
+    }
+    if (layer === "alcove") {
+      switchLayer("drawer");
+      return true;
+    }
+    return false;
+  }, [layer, selected, switchLayer]);
+
+  const handleExitOrBack = useCallback(() => {
+    if (handleSecretBack()) return;
+    onExit?.();
+  }, [handleSecretBack, onExit]);
+
+  useEffect(() => {
+    if (!backHandlerRef) return;
+    backHandlerRef.current = handleSecretBack;
+    return () => {
+      if (backHandlerRef.current === handleSecretBack) {
+        backHandlerRef.current = null;
+      }
+    };
+  }, [backHandlerRef, handleSecretBack]);
 
   if (!config) {
     return (
-      <SecretSurface onExit={onExit}>
+      <SecretSurface onExit={handleExitOrBack}>
         <EmptyVault title="Opening drawer" text="The drawer is waking up." />
       </SecretSurface>
     );
@@ -192,7 +225,7 @@ export function SecretDrawerTab({ onExit }: { onExit?: () => void }) {
     return (
       <PinGate
         layer={layer}
-        onExit={onExit}
+        onExit={handleExitOrBack}
         onSubmit={(pin) => unlockPin(pin)}
         onSwitchLayer={switchLayer}
       />
@@ -208,7 +241,7 @@ export function SecretDrawerTab({ onExit }: { onExit?: () => void }) {
       <AlcoveView
         items={items}
         loading={loading}
-        onExit={onExit}
+        onExit={handleExitOrBack}
         onHome={() => switchLayer("drawer")}
         onSelect={setSelected}
       />
@@ -223,7 +256,7 @@ export function SecretDrawerTab({ onExit }: { onExit?: () => void }) {
       query={query}
       loading={loading}
       drawingId={drawingId}
-      onExit={onExit}
+      onExit={handleExitOrBack}
       onFilter={setFilter}
       onQuery={setQuery}
       onVault={() => switchLayer("alcove")}
