@@ -41,6 +41,7 @@ import {
   shouldShowGroupTime,
   type ChatAttachment,
   type ChatDraftMessage,
+  type ChatRole,
   type ChatSearchMatch,
   type ChatTimeFormat,
 } from "./chatMessages";
@@ -53,7 +54,6 @@ import {
   ChevronDownMini,
   ChevronLeftIcon,
   ChevronUpMini,
-  CopyIconMini,
   MicIconMini,
   PlusIcon,
   SearchIconMini,
@@ -152,6 +152,36 @@ type ActiveChatRequest = {
   source: ChatSendSource;
   abortController: AbortController;
 };
+type ChatBubbleMenuTargetBase = {
+  id: string;
+  role: ChatRole;
+  content: string;
+  attachments?: ChatAttachment[];
+  transcript: string;
+  transcriptId: string;
+  hasVoice: boolean;
+  canRetry: boolean;
+  operationId?: string;
+  status?: ChatDraftMessage["status"];
+};
+type ChatBubbleMenuTarget = ChatBubbleMenuTargetBase & {
+  x: number;
+  y: number;
+};
+type ChatBubbleQuote = {
+  role: ChatRole;
+  roleLabel: string;
+  text: string;
+};
+type ChatBubbleTouchState = {
+  target: ChatBubbleMenuTargetBase;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  timer: number;
+  menuOpened: boolean;
+};
 const CODEX_GROUP_CHAT_POLL_MS = 1000;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_CREATE_TIMEOUT_MS = 30000;
@@ -200,6 +230,59 @@ function chooseChatHistoryMessage(current: ChatDraftMessage, incoming: ChatDraft
   if (incoming.status === "sent" && current.status === "pending") return incoming;
   if (incoming.status === "failed" && current.status === "pending") return incoming;
   return chatHistoryMessageScore(incoming) >= chatHistoryMessageScore(current) ? incoming : current;
+}
+
+function chatVoiceTranscriptId(item: ChatAttachment): string {
+  return String(item.id || item.remoteKey || item.remoteUrl || "").trim();
+}
+
+function chatRoleQuoteLabel(role: ChatRole): string {
+  if (role === "user") return "我";
+  if (role === "benben") return "笨笨";
+  return "渡";
+}
+
+function bubbleTargetText(target: ChatBubbleMenuTargetBase): string {
+  const content = String(target.content || "").trim();
+  if (content) return content;
+  const transcript = String(target.transcript || "").trim();
+  if (transcript) return transcript;
+  return chatAttachmentPreviewLabel(target.attachments);
+}
+
+function quotePrefix(quote: ChatBubbleQuote): string {
+  return [
+    "【引用消息】",
+    `${quote.roleLabel}：${quote.text}`,
+    "【当前消息】",
+  ].join("\n");
+}
+
+function contentWithQuote(content: string, quote: ChatBubbleQuote): string {
+  return [quotePrefix(quote), String(content || "").trim()].filter(Boolean).join("\n");
+}
+
+function modelContentWithQuote(modelContent: PrivateModelContent, quote: ChatBubbleQuote): PrivateModelContent {
+  const prefix = quotePrefix(quote);
+  if (Array.isArray(modelContent)) {
+    const parts = modelContent.map((part) => ({ ...part }));
+    const textPart = parts.find((part) => part?.type === "text" && typeof part.text === "string");
+    if (textPart) {
+      textPart.text = [prefix, String(textPart.text || "").trim()].filter(Boolean).join("\n");
+      return parts;
+    }
+    return [{ type: "text", text: prefix }, ...parts];
+  }
+  return [prefix, String(modelContent || "").trim()].filter(Boolean).join("\n");
+}
+
+function preparedInputWithQuote(prepared: PreparedPrivateChatInput, quote: ChatBubbleQuote): PreparedPrivateChatInput {
+  return {
+    ...prepared,
+    content: contentWithQuote(prepared.content, quote),
+    displayContent: prepared.displayContent ?? prepared.content,
+    modelContent: modelContentWithQuote(prepared.modelContent, quote),
+  };
 }
 
 function mergeHistorySnapshots(...snapshots: ChatDraftMessage[][]): ChatDraftMessage[] {
@@ -331,6 +414,8 @@ export function MainChatScreen({
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const [openVoiceTranscriptId, setOpenVoiceTranscriptId] = useState("");
+  const [bubbleMenu, setBubbleMenu] = useState<ChatBubbleMenuTarget | null>(null);
+  const [quotedBubble, setQuotedBubble] = useState<ChatBubbleQuote | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -343,6 +428,7 @@ export function MainChatScreen({
   const chatVoicePressingRef = useRef(false);
   const chatVoiceStartPromiseRef = useRef<Promise<boolean> | null>(null);
   const activeChatRequestRef = useRef<ActiveChatRequest | null>(null);
+  const bubbleTouchRef = useRef<ChatBubbleTouchState | null>(null);
 
   const [activeModel, setActiveModel] = useState(() => {
     try {
@@ -358,9 +444,147 @@ export function MainChatScreen({
   const groupDiscussionSnapshotRef = useRef<GroupDiscussionSnapshot | null>(null);
 
   function toggleVoiceTranscript(item: ChatAttachment) {
-    const id = String(item.id || item.remoteKey || item.remoteUrl || "").trim();
+    const id = chatVoiceTranscriptId(item);
     if (!id) return;
     setOpenVoiceTranscriptId((current) => (current === id ? "" : id));
+  }
+
+  function buildBubbleMenuTarget(args: {
+    id: string;
+    role: ChatRole;
+    content: string;
+    attachments?: ChatAttachment[];
+    status?: ChatDraftMessage["status"];
+    operationId?: string;
+  }): ChatBubbleMenuTargetBase {
+    const attachments = normalizeChatAttachments(args.attachments);
+    const audioAttachments = attachments.filter((item) => item.kind === "audio");
+    const transcriptItem = audioAttachments.find((item) => String(item.transcript || "").trim()) || audioAttachments[0];
+    const transcript = String(transcriptItem?.transcript || "").trim();
+    return {
+      id: args.id,
+      role: args.role,
+      content: String(args.content || "").trim(),
+      attachments,
+      transcript,
+      transcriptId: transcriptItem ? chatVoiceTranscriptId(transcriptItem) : "",
+      hasVoice: audioAttachments.length > 0,
+      canRetry: args.role === "assistant" && args.status === "failed" && Boolean(String(args.operationId || "").trim()),
+      operationId: String(args.operationId || "").trim() || undefined,
+      status: args.status,
+    };
+  }
+
+  function clearBubbleLongPressTimer() {
+    const state = bubbleTouchRef.current;
+    if (!state?.timer) return;
+    window.clearTimeout(state.timer);
+    state.timer = 0;
+  }
+
+  function openBubbleMenuAt(target: ChatBubbleMenuTargetBase, clientX: number, clientY: number) {
+    const itemCount = 2 + (target.hasVoice ? 1 : 0) + (target.canRetry ? 1 : 0);
+    const width = Math.max(156, itemCount * 68);
+    const height = 72;
+    const left = Math.max(10, Math.min(clientX - width / 2, window.innerWidth - width - 10));
+    const preferredTop = clientY - height - 14;
+    const top = preferredTop < 70 ? Math.min(clientY + 14, window.innerHeight - height - 10) : preferredTop;
+    setBubbleMenu({ ...target, x: left, y: top });
+  }
+
+  function handleBubbleContextMenu(event: React.MouseEvent<HTMLDivElement>, target: ChatBubbleMenuTargetBase) {
+    event.preventDefault();
+    event.stopPropagation();
+    openBubbleMenuAt(target, event.clientX, event.clientY);
+  }
+
+  function handleBubbleTouchStart(event: React.TouchEvent<HTMLDivElement>, target: ChatBubbleMenuTargetBase) {
+    if (event.touches.length !== 1) return;
+    clearBubbleLongPressTimer();
+    const touch = event.touches[0];
+    const state: ChatBubbleTouchState = {
+      target,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      currentX: touch.clientX,
+      currentY: touch.clientY,
+      timer: 0,
+      menuOpened: false,
+    };
+    state.timer = window.setTimeout(() => {
+      const current = bubbleTouchRef.current;
+      if (!current) return;
+      current.menuOpened = true;
+      openBubbleMenuAt(current.target, current.startX, current.startY);
+    }, 520);
+    bubbleTouchRef.current = state;
+  }
+
+  function handleBubbleTouchMove(event: React.TouchEvent<HTMLDivElement>) {
+    const state = bubbleTouchRef.current;
+    if (!state || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    state.currentX = touch.clientX;
+    state.currentY = touch.clientY;
+    if (Math.abs(state.currentX - state.startX) > 10 || Math.abs(state.currentY - state.startY) > 10) {
+      clearBubbleLongPressTimer();
+    }
+  }
+
+  function quoteBubbleTarget(target: ChatBubbleMenuTargetBase) {
+    const text = bubbleTargetText(target);
+    if (!text) return;
+    setQuotedBubble({
+      role: target.role,
+      roleLabel: chatRoleQuoteLabel(target.role),
+      text,
+    });
+    setBubbleMenu(null);
+  }
+
+  function handleBubbleTouchEnd() {
+    const state = bubbleTouchRef.current;
+    if (!state) return;
+    clearBubbleLongPressTimer();
+    bubbleTouchRef.current = null;
+    if (state.menuOpened) return;
+    const dx = state.currentX - state.startX;
+    const dy = state.currentY - state.startY;
+    if (dx < -46 && Math.abs(dy) < 36) {
+      quoteBubbleTarget(state.target);
+    }
+  }
+
+  function copyBubbleTarget(target: ChatBubbleMenuTargetBase) {
+    const text = bubbleTargetText(target);
+    if (!text) {
+      toast("这条没什么可复制的");
+      setBubbleMenu(null);
+      return;
+    }
+    copyText(text, toast);
+    setBubbleMenu(null);
+  }
+
+  function revealBubbleTranscript(target: ChatBubbleMenuTargetBase) {
+    if (!target.hasVoice) return;
+    if (!target.transcript || !target.transcriptId) {
+      toast("这条语音还没有转文字");
+      setBubbleMenu(null);
+      return;
+    }
+    setOpenVoiceTranscriptId(target.transcriptId);
+    setBubbleMenu(null);
+  }
+
+  function retryBubbleTarget(target: ChatBubbleMenuTargetBase) {
+    if (!target.canRetry || !target.operationId) {
+      toast("这条消息不能重试");
+      setBubbleMenu(null);
+      return;
+    }
+    setBubbleMenu(null);
+    void retrySumiTalkOperation(target.operationId);
   }
 
   useEffect(() => {
@@ -376,6 +600,7 @@ export function MainChatScreen({
       } catch {}
       chatVoiceRecorderRef.current = null;
       chatVoiceChunksRef.current = [];
+      clearBubbleLongPressTimer();
       if (chatVoiceStreamRef.current) {
         chatVoiceStreamRef.current.getTracks().forEach((track) => track.stop());
         chatVoiceStreamRef.current = null;
@@ -1889,12 +2114,16 @@ export function MainChatScreen({
   }
 
   async function sendPreparedPrivateChatInput(prepared: PreparedPrivateChatInput): Promise<boolean> {
-    return sendChatContent(prepared.content, {
-      displayContent: prepared.displayContent,
-      attachments: prepared.attachments,
-      source: prepared.source,
-      modelContent: prepared.modelContent,
+    const quote = quotedBubble;
+    const finalPrepared = quote ? preparedInputWithQuote(prepared, quote) : prepared;
+    const sent = await sendChatContent(finalPrepared.content, {
+      displayContent: finalPrepared.displayContent,
+      attachments: finalPrepared.attachments,
+      source: finalPrepared.source,
+      modelContent: finalPrepared.modelContent,
     });
+    if (sent && quote) setQuotedBubble(null);
+    return sent;
   }
 
   async function cancelActiveSumiTalkSend() {
@@ -2329,7 +2558,7 @@ export function MainChatScreen({
             <React.Fragment key={group.id}>
               {showChatTimestamps && shouldShowGroupTime(group.createdAt, groupedMessages[index - 1]?.lastCreatedAt) ? (
                 <div className="mb-2 flex justify-center">
-                  <span className="rounded-full bg-[#EFEFEF] px-3 py-1 text-[11px] font-medium text-gray-900">
+                  <span className="rounded-full bg-[rgba(239,239,239,0.62)] px-3 py-1 text-[10px] font-medium text-gray-800">
                     {formatClockTime(group.createdAt, chatTimeFormat)}
                   </span>
                 </div>
@@ -2338,22 +2567,35 @@ export function MainChatScreen({
                 <div className="flex items-start justify-end space-x-3 rounded-[22px]">
                   <div className={`mt-[2px] flex ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} flex-col items-end space-y-1.5`}>
                     {groupChatMode ? <div className="px-1 text-[11px] font-medium leading-none text-gray-400">辛玥</div> : null}
-                    {group.parts.map((part, index) => {
-                      const matchId = getChatSearchMatchId(group.id, index);
-                      const isActiveSearchPart = activeSearchMatchId === matchId;
-                      const bubbleSkin = transparentBubbleEnabled ? undefined : resolveBubbleSkin(userBubbleStyle);
-                      const hasText = Boolean(String(part.content || "").trim());
-                      const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
-                      const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
-                      const hasVoice = audioAttachments.length > 0;
-                      return (
-                        <div
-                          key={`${group.id}-${index}`}
-                          ref={(el) => {
-                            searchResultRefs.current[matchId] = el;
-                          }}
-                          className={`flex max-w-full flex-col items-end gap-1.5 ${isActiveSearchPart ? "rounded-[20px] ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
-                        >
+                      {group.parts.map((part, index) => {
+                        const matchId = getChatSearchMatchId(group.id, index);
+                        const isActiveSearchPart = activeSearchMatchId === matchId;
+                        const bubbleSkin = transparentBubbleEnabled ? undefined : resolveBubbleSkin(userBubbleStyle);
+                        const hasText = Boolean(String(part.content || "").trim());
+                        const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
+                        const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
+                        const hasVoice = audioAttachments.length > 0;
+                        const bubbleTarget = buildBubbleMenuTarget({
+                          id: matchId,
+                          role: group.role,
+                          content: part.content,
+                          attachments: part.attachments,
+                          status: part.status,
+                          operationId: part.operationId,
+                        });
+                        return (
+                          <div
+                            key={`${group.id}-${index}`}
+                            ref={(el) => {
+                              searchResultRefs.current[matchId] = el;
+                            }}
+                            className={`flex max-w-full flex-col items-end gap-1.5 ${isActiveSearchPart ? "rounded-[20px] ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+                            onContextMenu={(event) => handleBubbleContextMenu(event, bubbleTarget)}
+                            onTouchStart={(event) => handleBubbleTouchStart(event, bubbleTarget)}
+                            onTouchMove={handleBubbleTouchMove}
+                            onTouchEnd={handleBubbleTouchEnd}
+                            onTouchCancel={handleBubbleTouchEnd}
+                          >
                           <ChatAttachmentBlock attachments={part.attachments} align="right" kinds={["image"]} />
                           {showText ? (
                             <ChatBubbleFrame
@@ -2379,12 +2621,13 @@ export function MainChatScreen({
                               <ChatAttachmentBlock attachments={audioAttachments} align="right" />
                             </ChatBubbleFrame>
                           ) : null}
-                          <ChatVoiceTranscriptBlock
-                            attachments={audioAttachments}
-                            align="right"
-                            openTranscriptId={openVoiceTranscriptId}
-                            onTranscriptToggle={toggleVoiceTranscript}
-                          />
+                            <ChatVoiceTranscriptBlock
+                              attachments={audioAttachments}
+                              align="right"
+                              openTranscriptId={openVoiceTranscriptId}
+                              onTranscriptToggle={toggleVoiceTranscript}
+                              showToggle={false}
+                            />
                         </div>
                       );
                     })}
@@ -2413,24 +2656,37 @@ export function MainChatScreen({
                       const isActiveSearchPart = activeSearchMatchId === matchId;
                       const bubbleSkin = transparentBubbleEnabled || group.role === "benben" ? undefined : resolveBubbleSkin(assistantBubbleStyle);
                       const hasText = Boolean(String(part.content || "").trim());
-                      const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
-                      const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
-                      const hasVoice = audioAttachments.length > 0;
-                      return (
-                        <div
-                          key={`${group.id}-${index}`}
-                          ref={(el) => {
-                            searchResultRefs.current[matchId] = el;
-                          }}
-                          className={`space-y-2 rounded-[20px] ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
-                        >
+                        const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
+                        const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
+                        const hasVoice = audioAttachments.length > 0;
+                        const bubbleTarget = buildBubbleMenuTarget({
+                          id: matchId,
+                          role: group.role,
+                          content: part.content,
+                          attachments: part.attachments,
+                          status: part.status,
+                          operationId: part.operationId,
+                        });
+                        return (
+                          <div
+                            key={`${group.id}-${index}`}
+                            ref={(el) => {
+                              searchResultRefs.current[matchId] = el;
+                            }}
+                            className={`space-y-2 rounded-[20px] ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+                            onContextMenu={(event) => handleBubbleContextMenu(event, bubbleTarget)}
+                            onTouchStart={(event) => handleBubbleTouchStart(event, bubbleTarget)}
+                            onTouchMove={handleBubbleTouchMove}
+                            onTouchEnd={handleBubbleTouchEnd}
+                            onTouchCancel={handleBubbleTouchEnd}
+                          >
                           {part.reasoning ? (
-                            <details className="group max-w-full text-[11px] text-gray-500">
-                              <summary className="flex cursor-pointer list-none items-center gap-1 px-1 text-[11px] font-medium leading-4 text-gray-400 [&::-webkit-details-marker]:hidden">
+                            <details className="group max-w-full text-[10px] text-gray-500">
+                              <summary className="flex cursor-pointer list-none items-center gap-1 px-1 text-[10px] font-medium leading-[14px] text-gray-400 [&::-webkit-details-marker]:hidden">
                                 <span className="transition-transform group-open:rotate-90">&gt;</span>
                                 <span>碎碎念</span>
                               </summary>
-                              <div className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap break-words px-1 pl-4 text-[11px] leading-4 text-gray-500">
+                              <div className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap break-words px-1 pl-4 text-[10px] leading-[15px] text-gray-500">
                                 {part.reasoning}
                               </div>
                             </details>
@@ -2512,41 +2768,22 @@ export function MainChatScreen({
                                   <ChatAttachmentBlock attachments={audioAttachments} align="left" />
                                 </ChatBubbleFrame>
                               ) : null}
-                              <ChatVoiceTranscriptBlock
-                                attachments={audioAttachments}
-                                align="left"
-                                openTranscriptId={openVoiceTranscriptId}
-                                onTranscriptToggle={toggleVoiceTranscript}
-                              />
-                              {showText || hasVoice || (group.role === "assistant" && part.status === "failed" && part.operationId) || (showTokenCount && (part.tokenCount?.input || part.tokenCount?.output)) ? (
-                                <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
-                                  {part.content ? (
-                                    <button
-                                      className="rounded-full p-1 text-gray-500 transition-colors active:bg-gray-100 active:opacity-70"
-                                      onClick={() => copyText(part.content, toast)}
-                                      aria-label="复制"
-                                      title="复制"
-                                    >
-                                      <CopyIconMini />
-                                    </button>
-                                  ) : null}
-                                  {group.role === "assistant" && part.status === "failed" && part.operationId ? (
-                                    <button
-                                      className="rounded-full px-2 py-1 text-[11px] font-medium text-rose-500 transition-colors active:bg-rose-50"
-                                      onClick={() => void retrySumiTalkOperation(part.operationId || "")}
-                                    >
-                                      重试
-                                    </button>
-                                  ) : null}
-                                  {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
+                                <ChatVoiceTranscriptBlock
+                                  attachments={audioAttachments}
+                                  align="left"
+                                  openTranscriptId={openVoiceTranscriptId}
+                                  onTranscriptToggle={toggleVoiceTranscript}
+                                  showToggle={false}
+                                />
+                                {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
+                                  <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
                                     <span>
                                       {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
                                       {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
                                       {part.tokenCount?.output ? `↓${formatTokenCountValue(part.tokenCount.output)}` : ""}
                                     </span>
-                                  ) : null}
-                                </div>
-                              ) : null}
+                                  </div>
+                                ) : null}
                             </>
                           )}
                         </div>
@@ -2576,8 +2813,8 @@ export function MainChatScreen({
       />
       <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
         <div className={`pointer-events-none absolute ${chatFooterFeatherClass}`} aria-hidden="true" />
-        <div className={`relative z-10 overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[142px] opacity-100" : "h-0 opacity-0"}`}>
-          <div className="grid grid-cols-5 gap-x-2 px-4 pb-2 pt-5">
+          <div className={`relative z-10 overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[142px] opacity-100" : "h-0 opacity-0"}`}>
+            <div className="grid grid-cols-5 gap-x-2 px-4 pb-2 pt-5">
               <ChatActionButton label="图片" onClick={openImagePicker} />
               <ChatActionButton label="文档" onClick={openDocumentPicker} />
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
@@ -2595,10 +2832,27 @@ export function MainChatScreen({
                     walk: "medium",
                   });
                 }}
-              />
+                />
+            </div>
           </div>
-        </div>
-        <div className="relative z-10 flex items-end space-x-2 px-3 py-2.5">
+          {quotedBubble ? (
+            <div className="relative z-10 mx-3 mb-1 flex items-center gap-2 rounded-[14px] bg-white/70 px-3 py-2 text-left text-[11px] font-medium text-gray-500 shadow-sm backdrop-blur">
+              <span className="shrink-0 text-gray-700">引用</span>
+              <span className="min-w-0 flex-1 truncate">
+                {quotedBubble.roleLabel}：{quotedBubble.text}
+              </span>
+              <button
+                type="button"
+                className="shrink-0 rounded-full px-1.5 text-[14px] leading-5 text-gray-400 active:bg-gray-100 active:text-gray-700"
+                onClick={() => setQuotedBubble(null)}
+                aria-label="取消引用"
+                title="取消引用"
+              >
+                ×
+              </button>
+            </div>
+          ) : null}
+          <div className="relative z-10 flex items-end space-x-2 px-3 py-2.5">
           <button
             className={`rounded-full p-2.5 text-gray-500 transition-colors ${plusOpen ? "bg-gray-100 text-gray-800" : "active:bg-gray-50"}`}
             onClick={() => setPlusOpen((v) => !v)}
@@ -2652,9 +2906,66 @@ export function MainChatScreen({
               </div>
             </button>
           )}
+          </div>
         </div>
-      </div>
-      {travelFormCard ? (
+        {bubbleMenu ? (
+          <>
+            <button
+              type="button"
+              className="fixed inset-0 z-[70] cursor-default bg-transparent"
+              aria-label="关闭气泡菜单"
+              onClick={() => setBubbleMenu(null)}
+            />
+            <div
+              className="fixed z-[71] rounded-[18px] bg-neutral-800/94 px-2.5 py-2 text-white shadow-2xl backdrop-blur"
+              style={{
+                left: `${bubbleMenu.x}px`,
+                top: `${bubbleMenu.y}px`,
+                gridTemplateColumns: `repeat(${2 + (bubbleMenu.hasVoice ? 1 : 0) + (bubbleMenu.canRetry ? 1 : 0)}, minmax(58px, 1fr))`,
+              }}
+            >
+              <div
+                className="grid gap-1"
+                style={{ gridTemplateColumns: `repeat(${2 + (bubbleMenu.hasVoice ? 1 : 0) + (bubbleMenu.canRetry ? 1 : 0)}, minmax(58px, 1fr))` }}
+              >
+                <button
+                  type="button"
+                  className="rounded-[12px] px-2 py-2.5 text-center text-[12px] font-medium active:bg-white/12"
+                  onClick={() => copyBubbleTarget(bubbleMenu)}
+                >
+                  复制
+                </button>
+                {bubbleMenu.hasVoice ? (
+                  <button
+                    type="button"
+                    className="rounded-[12px] px-2 py-2.5 text-center text-[12px] font-medium active:bg-white/12"
+                    onClick={() => revealBubbleTranscript(bubbleMenu)}
+                  >
+                    转文字
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="rounded-[12px] px-2 py-2.5 text-center text-[12px] font-medium active:bg-white/12"
+                  onClick={() => quoteBubbleTarget(bubbleMenu)}
+                >
+                  引用
+                </button>
+                {bubbleMenu.canRetry ? (
+                  <button
+                    type="button"
+                    className="rounded-[12px] px-2 py-2.5 text-center text-[12px] font-medium text-rose-100 active:bg-white/12"
+                    onClick={() => retryBubbleTarget(bubbleMenu)}
+                  >
+                    重试
+                  </button>
+                ) : null}
+              </div>
+              <span className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[8px] border-t-[9px] border-x-transparent border-t-neutral-800/94" />
+            </div>
+          </>
+        ) : null}
+        {travelFormCard ? (
         <TravelPlanFormModal
           card={travelFormCard}
           sending={sending}

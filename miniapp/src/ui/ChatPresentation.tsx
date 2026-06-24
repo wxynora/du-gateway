@@ -465,11 +465,13 @@ export function ChatVoiceTranscriptBlock({
   align = "left",
   openTranscriptId,
   onTranscriptToggle,
+  showToggle = true,
 }: {
   attachments?: ChatAttachment[];
   align?: "left" | "right";
   openTranscriptId?: string;
   onTranscriptToggle: (item: ChatAttachment) => void;
+  showToggle?: boolean;
 }) {
   const items = Array.isArray(attachments)
     ? attachments.filter((item) => item.kind === "audio" && String(item.transcript || "").trim())
@@ -484,15 +486,17 @@ export function ChatVoiceTranscriptBlock({
         const transcript = String(item.transcript || "").trim();
         return (
           <div key={id || item.remoteUrl || transcript} className={`flex max-w-[260px] flex-col gap-0.5 ${isRight ? "items-end" : "items-start"}`}>
-            <button
-              type="button"
-              className={`text-[10px] font-medium leading-4 transition-colors active:opacity-70 ${
-                open ? "text-gray-700" : "text-gray-400"
-              }`}
-              onClick={() => onTranscriptToggle(item)}
-            >
-              {open ? "收起文字" : "转文字"}
-            </button>
+            {showToggle ? (
+              <button
+                type="button"
+                className={`text-[10px] font-medium leading-4 transition-colors active:opacity-70 ${
+                  open ? "text-gray-700" : "text-gray-400"
+                }`}
+                onClick={() => onTranscriptToggle(item)}
+              >
+                {open ? "收起文字" : "转文字"}
+              </button>
+            ) : null}
             {open ? (
               <div className="whitespace-pre-wrap text-left text-[12px] font-medium leading-5 text-gray-500">
                 {transcript}

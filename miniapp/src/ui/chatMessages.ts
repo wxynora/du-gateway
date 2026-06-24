@@ -425,6 +425,17 @@ export function detectMessageRender(role: ChatRole, content: string): "plain" | 
   return "plain";
 }
 
+function splitLineBubbleSegments(role: ChatRole, content: string): Array<{ content: string; systemCard: null }> {
+  const raw = String(content || "").replace(/\r/g, "").trim();
+  if (!raw) return [{ content: "", systemCard: null }];
+  if (detectMessageRender(role, raw) === "html") return [{ content: raw, systemCard: null }];
+  const lines = raw
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return (lines.length ? lines : [raw]).map((line) => ({ content: line, systemCard: null }));
+}
+
 export function stripInlineBase64Images(content: string): string {
   const raw = String(content || "");
   if (!raw) return "";
@@ -561,9 +572,14 @@ export function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGrou
     const normalizedReasoning = String(msg?.reasoning || "").trim();
     const attachments = normalizeChatAttachments(msg?.attachments);
     if (!normalizedContent && !normalizedReasoning && !attachments.length) continue;
-    const segments = msg.role === "assistant"
+    const rawSegments = msg.role === "assistant"
       ? splitSystemCardSegments(normalizedContent)
       : [{ content: normalizedContent, systemCard: null }];
+    const segments = rawSegments.flatMap((segment) => (
+      segment.systemCard
+        ? [segment]
+        : splitLineBubbleSegments(msg.role, segment.content)
+    ));
     const safeParts = (segments.length ? segments : [{ content: normalizedContent, systemCard: null }])
       .filter((segment, index) => String(segment.content || "").trim() || segment.systemCard || normalizedReasoning || (index === 0 && attachments.length))
       .map((segment, index) => ({
