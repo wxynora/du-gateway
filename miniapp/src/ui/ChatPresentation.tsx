@@ -281,8 +281,26 @@ function BubbleSkinLayer({ skin }: { skin: BubbleSkinKey }) {
 }
 
 export function ChatHeaderStatus({ sending }: { sending: boolean }) {
-  void sending;
-  return <div className="max-w-full truncate text-[8px] font-medium leading-[1.05] text-gray-500">在线</div>;
+  if (!sending) {
+    return <div className="max-w-full truncate text-[8px] font-medium leading-[1.05] text-gray-500">在线</div>;
+  }
+  return (
+    <div className="flex max-w-full min-w-0 items-center justify-center gap-1 text-[8px] font-medium leading-[1.05] text-[#5F6C7B]" aria-label="正在输入中">
+      <span className="min-w-0 truncate">正在输入中</span>
+      <span className="inline-flex shrink-0 items-end gap-0.5">
+        {[0, 1, 2].map((index) => (
+          <span
+            key={index}
+            className="inline-block h-[2.5px] w-[2.5px] animate-pulse rounded-full bg-[#5F6C7B]"
+            style={{
+              animationDelay: `${index * 0.18}s`,
+              animationDuration: "1s",
+            }}
+          />
+        ))}
+      </span>
+    </div>
+  );
 }
 
 export function RichTextBlock({ content }: { content: string }) {
@@ -567,16 +585,11 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   const layerTransition = swipe.phase === "dragging" || settleHandoffRef.current
     ? "none"
     : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease-out";
-  const stackOffsetCount = swipe.phase === "idle"
-    ? Math.min(imageItems.length - 1, 2)
-    : Math.min(Math.max(0, imageItems.length - 2), 2);
-  const stackItems = Array.from({ length: stackOffsetCount }, (_, index) => (swipe.phase === "idle" ? index + 1 : index + 2))
-    .map((offset) => imageItems[(normalizedIndex + swipeDirection * offset + imageItems.length * 2) % imageItems.length])
-    .filter(Boolean);
+  const targetIndex = (normalizedIndex + swipeDirection + imageItems.length) % imageItems.length;
   const targetItem = imageItems[(normalizedIndex + swipeDirection + imageItems.length) % imageItems.length];
   const targetPreviewSrc = targetItem ? attachmentPreviewSrc(targetItem) : "";
 
-  function backPose(depth: number, direction: 1 | -1 = isRight ? -1 : 1) {
+  function backPose(depth: number, direction: 1 | -1) {
     const baseX = depth * direction * 16;
     const baseY = depth * 7;
     const baseScale = 1 - depth * 0.045;
@@ -600,12 +613,33 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   const targetRotate = mix(swapBackPose.rotate, 0, visualProgress);
   const targetOpacity = mix(0.72, 1, visualProgress);
 
-  function stackLayerStyle(depth: number): React.CSSProperties {
-    const pose = backPose(depth);
+  function getOffsetIndex(offset: number): number {
+    return (normalizedIndex + offset + imageItems.length * 4) % imageItems.length;
+  }
+
+  const stackEntries = [-2, -1, 1, 2].reduce<Array<{ item: ChatAttachment; offset: number; sideRank: number }>>((entries, offset) => {
+    const index = getOffsetIndex(offset);
+    if (index === normalizedIndex || (swipe.phase !== "idle" && index === targetIndex)) return entries;
+    if (entries.some((entry) => getOffsetIndex(entry.offset) === index)) return entries;
+    entries.push({ item: imageItems[index], offset, sideRank: entries.length });
+    return entries;
+  }, []);
+
+  function stackLayerStyle(offset: number, sideRank: number): React.CSSProperties {
+    const initialSide = offset > 0 ? 1 : -1;
+    const initialDepth = Math.min(Math.abs(offset), 2);
+    const gatherProgress = swipe.phase === "idle" ? 0 : visualProgress;
+    const gatheredDepth = 2 + sideRank * 0.72;
+    const side = mix(initialSide, swipeDirection, gatherProgress);
+    const depth = mix(initialDepth, gatheredDepth, gatherProgress);
+    const x = side * (14 + depth * 8);
+    const y = 5 + depth * 6;
+    const scale = 1 - Math.min(depth, 4) * 0.038;
+    const rotate = side * (0.9 + depth * 0.5);
     return {
-      transform: `translate(${pose.x}px, ${pose.y}px) scale(${pose.scale}) rotate(${pose.rotate}deg)`,
-      opacity: Math.min(1, 0.64 + (2 - depth) * 0.08),
-      zIndex: 3 + (3 - depth),
+      transform: `translate3d(${x}px, ${y}px, 0) scale(${scale}) rotate(${rotate}deg)`,
+      opacity: Math.max(0.46, 0.74 - initialDepth * 0.08),
+      zIndex: 3 + (4 - Math.ceil(depth)),
       transition: layerTransition,
       willChange: "transform, opacity",
     };
@@ -701,14 +735,13 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
         aria-label={`${imageItems.length} 张图片，滑动切换，点击查看当前第 ${normalizedIndex + 1} 张`}
         style={{ perspective: 800, transformStyle: "preserve-3d" }}
       >
-        {[...stackItems].reverse().map((item, index) => {
+        {[...stackEntries].reverse().map(({ item, offset, sideRank }) => {
           const src = attachmentPreviewSrc(item);
-          const depth = stackItems.length - index;
           return (
             <span
-              key={`${item.id}-stack-${index}`}
+              key={`${item.id}-stack-${offset}`}
               className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
-              style={stackLayerStyle(depth)}
+              style={stackLayerStyle(offset, sideRank)}
               aria-hidden="true"
             >
               <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" draggable={false} />

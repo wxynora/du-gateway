@@ -3123,7 +3123,7 @@ export function MainChatScreen({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex h-[100lvh] min-h-screen w-full max-w-full flex-col overflow-hidden overscroll-none bg-[#F8F9FA]"
+      className="fixed inset-0 z-30 flex h-[100dvh] min-h-[100svh] w-full max-w-full flex-col overflow-hidden overscroll-none bg-[#F8F9FA]"
       style={{
         fontFamily: chatFontFamily,
       }}
