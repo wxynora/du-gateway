@@ -173,6 +173,51 @@ function uniqueNonEmptyStrings(values: string[]): string[] {
   return out;
 }
 
+function chatHistoryMergeKey(message: ChatDraftMessage): string {
+  const id = String(message?.id || "").trim();
+  if (id) return `id:${id}`;
+  const clientRequestId = String(message?.clientRequestId || "").trim();
+  const role = String(message?.role || "").trim();
+  if (clientRequestId && role) return `request:${clientRequestId}:${role}`;
+  return `raw:${role}:${String(message?.createdAt || "").trim()}:${String(message?.content || "").trim()}`;
+}
+
+function chatHistoryMessageScore(message: ChatDraftMessage): number {
+  let score = 0;
+  if (String(message?.content || "").trim()) score += 4;
+  if (String(message?.reasoning || "").trim()) score += 2;
+  if ((message?.attachments || []).length) score += 2;
+  if (message?.tokenCount?.input || message?.tokenCount?.output) score += 1;
+  if (message?.status === "sent") score += 3;
+  if (message?.status === "failed") score += 2;
+  if (message?.status === "pending") score -= 1;
+  return score;
+}
+
+function chooseChatHistoryMessage(current: ChatDraftMessage, incoming: ChatDraftMessage): ChatDraftMessage {
+  if (current.status === "sent" && incoming.status === "pending") return current;
+  if (current.status === "failed" && incoming.status === "pending") return current;
+  if (incoming.status === "sent" && current.status === "pending") return incoming;
+  if (incoming.status === "failed" && current.status === "pending") return incoming;
+  return chatHistoryMessageScore(incoming) >= chatHistoryMessageScore(current) ? incoming : current;
+}
+
+function mergeHistorySnapshots(...snapshots: ChatDraftMessage[][]): ChatDraftMessage[] {
+  const merged = new Map<string, ChatDraftMessage>();
+  for (const snapshot of snapshots) {
+    for (const message of sanitizeHistoryMessages(snapshot || [])) {
+      const key = chatHistoryMergeKey(message);
+      const current = merged.get(key);
+      merged.set(key, current ? chooseChatHistoryMessage(current, message) : message);
+    }
+  }
+  return sanitizeHistoryMessages([...merged.values()]);
+}
+
+function hasNonSeedHistoryMessages(messages: ChatDraftMessage[]): boolean {
+  return sanitizeHistoryMessages(messages).some((message) => !String(message?.id || "").startsWith("seed-"));
+}
+
 async function waitForCodexGroupChatTask(taskId: string): Promise<CodexGroupChatTask> {
   const startedAt = Date.now();
   let lastError = "";
@@ -371,9 +416,26 @@ export function MainChatScreen({
         try {
           const did = await getOrCreatePanelDeviceId();
           const migration = consumePendingPanelDeviceIdMigration();
-          await migrateLocalChatHistoriesToDevice(did);
+          try {
+            await migrateLocalChatHistoriesToDevice(did);
+          } catch (e: any) {
+            logSumiTalkClientEvent("chat_local_history_migration_error", {
+              source: "device_id_sync_all",
+              targetDeviceId: did,
+              error: String(e?.message || e),
+            }, "warning");
+          }
           if (migration?.from && migration.to === did) {
-            await migrateLocalChatHistoryDevice(migration.from, migration.to);
+            try {
+              await migrateLocalChatHistoryDevice(migration.from, migration.to);
+            } catch (e: any) {
+              logSumiTalkClientEvent("chat_local_history_migration_error", {
+                source: "device_id_sync",
+                fromDeviceId: migration.from,
+                toDeviceId: migration.to,
+                error: String(e?.message || e),
+              }, "warning");
+            }
             try {
               const migrated = await apiJson<{ ok?: boolean; panel_token?: string }>("/miniapp-api/sumitalk-history/migrate", {
                 method: "POST",
@@ -410,7 +472,15 @@ export function MainChatScreen({
         if (!deviceId && !cancelled) {
           setDeviceId(resolvedDeviceId);
         }
-        await migrateLocalChatHistoriesToDevice(resolvedDeviceId);
+        try {
+          await migrateLocalChatHistoriesToDevice(resolvedDeviceId);
+        } catch (e: any) {
+          logSumiTalkClientEvent("chat_local_history_migration_error", {
+            source: "history_load",
+            targetDeviceId: resolvedDeviceId,
+            error: String(e?.message || e),
+          }, "warning");
+        }
         const localMessages = sanitizeHistoryMessages(await readLocalChatHistory(resolvedDeviceId, historyWindowId));
         const localRecoveryWindowIds = groupChatMode
           ? uniqueNonEmptyStrings([historyWindowId, displayHistoryWindowId, windowId])
@@ -437,20 +507,37 @@ export function MainChatScreen({
         const recoveredLocalMessages = pickBetterHistory(localCandidateMessages, localMessages, []);
         const fallbackLocalMessages = pickBetterHistory(recoveredLocalMessages, legacyLocalMessages, []);
         if (!cancelled && fallbackLocalMessages.length) {
-          messagesRef.current = fallbackLocalMessages;
-          setMessages(fallbackLocalMessages);
-          await writeLocalChatHistory(resolvedDeviceId, historyWindowId, fallbackLocalMessages);
+          const nextLocalMessages = mergeHistorySnapshots(fallbackLocalMessages, messagesRef.current);
+          messagesRef.current = nextLocalMessages;
+          setMessages(nextLocalMessages);
+          await saveDisplayHistory(nextLocalMessages, {
+            localDeviceId: resolvedDeviceId,
+            source: "history_local_recovery",
+          });
         }
-        const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
+        if (!cancelled) {
+          void recoverActiveSumiTalkOperations(resolvedDeviceId);
+        }
+        let remoteMessages: ChatDraftMessage[] = [];
+        try {
+          const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
+          remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
+        } catch (e: any) {
+          logSumiTalkClientEvent("chat_remote_history_load_error", {
+            error: String(e?.message || e),
+          }, "warning");
+        }
         if (cancelled) return;
-        const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
-        const next = pickBetterHistory(remoteMessages, fallbackLocalMessages, seedMessages);
+        const preferredSnapshot = pickBetterHistory(remoteMessages, fallbackLocalMessages, seedMessages);
+        const next = mergeHistorySnapshots(preferredSnapshot, messagesRef.current);
         messagesRef.current = next;
         setMessages(next);
-        if (next !== seedMessages && next.length) {
-          await writeLocalChatHistory(resolvedDeviceId, historyWindowId, next);
+        if (hasNonSeedHistoryMessages(next)) {
+          await saveDisplayHistory(next, {
+            localDeviceId: resolvedDeviceId,
+            source: "history_remote_merge",
+          });
         }
-        void recoverActiveSumiTalkOperations(resolvedDeviceId);
       } catch (e: any) {
         if (!cancelled) {
           toast(`聊天记录拉取失败：${e?.message || e}`);
@@ -464,12 +551,22 @@ export function MainChatScreen({
 
   async function saveDisplayHistory(
     nextMessages: ChatDraftMessage[],
-    options: { localDeviceId?: string } = {},
+    options: { localDeviceId?: string; strict?: boolean; source?: string } = {},
   ) {
     const sanitizedMessages = sanitizeHistoryMessages(nextMessages);
     const resolvedDeviceId = String(options.localDeviceId || deviceId || "").trim();
     if (resolvedDeviceId && historyWindowId) {
-      await writeLocalChatHistory(resolvedDeviceId, historyWindowId, sanitizedMessages);
+      try {
+        await writeLocalChatHistory(resolvedDeviceId, historyWindowId, sanitizedMessages);
+      } catch (e: any) {
+        logSumiTalkClientEvent("chat_local_history_write_error", {
+          source: options.source || "saveDisplayHistory",
+          error: String(e?.message || e),
+          messages: sanitizedMessages.length,
+          targetDeviceId: resolvedDeviceId,
+        }, "error");
+        if (options.strict) throw e;
+      }
     }
   }
 
@@ -510,6 +607,42 @@ export function MainChatScreen({
     logSumiTalkClientEvent(event, fields, level);
   }
 
+  async function recordChatOperationError(operation: string, action: () => Promise<void>, fields: Record<string, string | number | boolean | undefined | null> = {}) {
+    try {
+      await action();
+    } catch (e: any) {
+      logSumiTalkClientEvent("chat_local_operation_write_error", {
+        operation,
+        error: String(e?.message || e),
+        ...fields,
+      }, "error");
+    }
+  }
+
+  async function attachChatJobBestEffort(operationId: string, jobId: string) {
+    await recordChatOperationError(
+      "attachChatJobToOperation",
+      () => attachChatJobToOperation(operationId, jobId),
+      { operationId, jobId },
+    );
+  }
+
+  async function completeChatOperationBestEffort(operationId: string, assistantMessage: ChatDraftMessage) {
+    await recordChatOperationError(
+      "completeChatOperation",
+      () => completeChatOperation(operationId, assistantMessage),
+      { operationId, assistantMessageId: assistantMessage.id },
+    );
+  }
+
+  async function failChatOperationBestEffort(operationId: string, error: string, assistantMessage?: ChatDraftMessage) {
+    await recordChatOperationError(
+      "failChatOperation",
+      () => failChatOperation(operationId, error, assistantMessage),
+      { operationId, assistantMessageId: assistantMessage?.id },
+    );
+  }
+
   async function persistSumiTalkOperationMessages(nextMessages: ChatDraftMessage[], localDeviceId: string) {
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
@@ -536,9 +669,9 @@ export function MainChatScreen({
         forceCreateJob: Boolean(options.forceCreateJob),
         getMessages: () => messagesRef.current,
         persistMessages: persistSumiTalkOperationMessages,
-        attachJob: attachChatJobToOperation,
-        completeOperation: completeChatOperation,
-        failOperation: failChatOperation,
+        attachJob: attachChatJobBestEffort,
+        completeOperation: completeChatOperationBestEffort,
+        failOperation: failChatOperationBestEffort,
         appendVoiceOutputAudio: (voiceOutput) => {
           void appendAssistantVoiceOutputAudio(voiceOutput);
         },
@@ -1229,7 +1362,7 @@ export function MainChatScreen({
       setMessages(nextMessages);
       await saveDisplayHistory(nextMessages, { localDeviceId: args.localDeviceId });
       if (args.operationId) {
-        await completeChatOperation(args.operationId, nextMessage);
+        await completeChatOperationBestEffort(args.operationId, nextMessage);
       }
       logSumiTalkClientEvent("assistant_voice_tts_ok", {
         clientRequestId: args.clientRequestId,
@@ -1440,36 +1573,89 @@ export function MainChatScreen({
     setSending(true);
     setMessages(draftMessages);
     messagesRef.current = draftMessages;
-    if (shouldRequestDu && assistantPlaceholder && requestBody) {
-      await createChatDraftTurn({
-        deviceId: resolvedDeviceId,
-        windowId: historyWindowId,
-        userMessage: userMsg,
-        assistantMessage: assistantPlaceholder,
-        operation: {
-          id: operationId,
-          clientRequestId,
+    try {
+      if (shouldRequestDu && assistantPlaceholder && requestBody) {
+        await createChatDraftTurn({
           deviceId: resolvedDeviceId,
           windowId: historyWindowId,
-          displayWindowId: remoteHistoryWindowId,
-          replyTarget,
-          model: activeModel,
-          retryPayload: {
-            path: requestPath,
-            body: requestBody,
+          userMessage: userMsg,
+          assistantMessage: assistantPlaceholder,
+          operation: {
+            id: operationId,
+            clientRequestId,
+            deviceId: resolvedDeviceId,
+            windowId: historyWindowId,
+            displayWindowId: remoteHistoryWindowId,
+            replyTarget,
+            model: activeModel,
+            retryPayload: {
+              path: requestPath,
+              body: requestBody,
+            },
+            retryPayloadSize: JSON.stringify(requestBody).length,
+            userMessageId: userMsg.id,
+            assistantMessageId: assistantId,
+            status: "draft",
+            createdAt: new Date(baseTimestamp).toISOString(),
+            updatedAt: new Date(baseTimestamp).toISOString(),
+            retryCount: 0,
+            schemaVersion: 1,
           },
-          retryPayloadSize: JSON.stringify(requestBody).length,
-          userMessageId: userMsg.id,
-          assistantMessageId: assistantId,
-          status: "draft",
-          createdAt: new Date(baseTimestamp).toISOString(),
-          updatedAt: new Date(baseTimestamp).toISOString(),
-          retryCount: 0,
-          schemaVersion: 1,
-        },
-      });
-    } else {
-      await saveDisplayHistory(draftMessages, { localDeviceId: resolvedDeviceId });
+        });
+      } else {
+        await saveDisplayHistory(draftMessages, {
+          localDeviceId: resolvedDeviceId,
+          strict: true,
+          source: "send_draft",
+        });
+      }
+    } catch (e: any) {
+      const errorMessage = String(e?.message || e);
+      logSumiTalkSendStage("chat_local_draft_write_error", {
+        source,
+        attemptId,
+        clientRequestId,
+        operationId,
+        error: errorMessage,
+      }, "error");
+      let failedMessages = draftMessages;
+      if (assistantPlaceholder) {
+        const failedAssistantMessage = groupChatMode
+          ? buildGroupAssistantFailureMessage({
+              assistantId,
+              assistantCreatedAt,
+              clientRequestId,
+              operationId,
+              error: e,
+            })
+          : buildPrivateAssistantFailureMessage({
+              assistantId,
+              assistantCreatedAt,
+              clientRequestId,
+              operationId,
+              cancelled: false,
+              error: e,
+            });
+        failedMessages = applyAssistantTerminalMessage(failedMessages, clientRequestId, failedAssistantMessage);
+      }
+      if (benbenPlaceholder) {
+        failedMessages = applyMessageById(failedMessages, benbenPlaceholderId, {
+          id: benbenPlaceholderId,
+          role: "benben",
+          content: `（笨笨入群失败：${errorMessage}）`,
+          createdAt: benbenPlaceholderCreatedAt,
+          status: "failed",
+          clientRequestId: `${clientRequestId}-benben`,
+        });
+      }
+      messagesRef.current = failedMessages;
+      setMessages(failedMessages);
+      setActiveSendRequestId("");
+      setCancellingSend(false);
+      setActiveSendStageLabel("");
+      setSending(false);
+      toast(`本地聊天存储失败：${errorMessage}`);
+      return false;
     }
     const abortController = shouldRequestDu ? new AbortController() : null;
     if (shouldRequestDu && abortController) {
@@ -1534,7 +1720,7 @@ export function MainChatScreen({
               if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
                 activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
               }
-              await attachChatJobToOperation(operationId, jobId);
+              await attachChatJobBestEffort(operationId, jobId);
               const pendingWithJob = applyMessageById(messagesRef.current, assistantId, {
                 id: assistantId,
                 role: "assistant",
@@ -1553,7 +1739,7 @@ export function MainChatScreen({
           if (!result) return false;
           initialDuReply = result.reply || result.voiceText;
           const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, result.assistantMessage);
-          await completeChatOperation(operationId, result.assistantMessage);
+          await completeChatOperationBestEffort(operationId, result.assistantMessage);
           messagesRef.current = finalMessages;
           setMessages(finalMessages);
           await saveDisplayHistory(finalMessages);
@@ -1584,7 +1770,7 @@ export function MainChatScreen({
               if (activeChatRequestRef.current?.clientRequestId === clientRequestId && isCurrentAttempt()) {
                 activeChatRequestRef.current = { ...activeChatRequestRef.current, jobId };
               }
-              await attachChatJobToOperation(operationId, jobId);
+              await attachChatJobBestEffort(operationId, jobId);
               const pendingWithJob = applyMessageById(messagesRef.current, assistantId, {
                 id: assistantId,
                 role: "assistant",
@@ -1603,7 +1789,7 @@ export function MainChatScreen({
           if (!result) return false;
           initialDuReply = result.reply || result.voiceText;
           const finalMessages = applyAssistantTerminalMessage(messagesRef.current, clientRequestId, result.assistantMessage);
-          await completeChatOperation(operationId, result.assistantMessage);
+          await completeChatOperationBestEffort(operationId, result.assistantMessage);
           messagesRef.current = finalMessages;
           setMessages(finalMessages);
           await saveDisplayHistory(finalMessages, { localDeviceId: replyTarget });
@@ -1675,7 +1861,7 @@ export function MainChatScreen({
         ? applyAssistantTerminalMessage(messagesRef.current, clientRequestId, failedAssistantMessage)
         : messagesRef.current;
       if (shouldRequestDu && operationId) {
-        await failChatOperation(operationId, errorMessage, failedAssistantMessage || undefined);
+        await failChatOperationBestEffort(operationId, errorMessage, failedAssistantMessage || undefined);
       }
       messagesRef.current = failedMessages;
       setMessages(failedMessages);

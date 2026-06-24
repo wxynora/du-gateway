@@ -52,9 +52,21 @@ JSON 字段：
 - 只有明显听见笑、唱、哼、哭腔、气声、压低声音、停顿、语速或音高变化时才标。
 - 停顿属于正文的一部分。超过约 1 秒的停顿要写在它发生的位置，按音频估算实际时长，例如：我就是……（停顿了约3秒）哎呀我反正有事！
 - 很短的犹豫可以用省略号，不要每个喘气或换气都标成停顿。
+- 不要重复同一个词、同一句话或同一个停顿标记；同一声“嗯/啊/哦/呃”只记录一次。
+- 如果音频明显很短，不要写“停顿了约几秒”；一条极短音频不可能包含多个长停顿。
+- `text` 的内容长度要和实际音频长度相称；不要把一两秒语音扩写成多句或长段。
+- 极短音频里如果只听见一声“嗯/啊/哦/呃”，`text` 只写这一声；不要把短音频扩写成多个停顿。
+- 极短音频或听不清时，`audio_observations` 留空；不要为了补充声音细节而推测情绪。
+- 如果只有静音、杂音或无法确认的人声，`text` 留空。
+- `text` 字段只能放最终转写正文，不要把字段名、引号、冒号或 JSON 片段写进正文。
 - 听不准就不要标，不要为了完整而补。
 - 正文要尽量贴近用户真实说法，保留口语感。
 """.strip()
+
+_JSON_TEXT_FIELD_RE = re.compile(r'"text"\s*:\s*"((?:\\.|[^"\\])*)"', flags=re.S)
+_LEAKED_TEXT_PREFIX_RE = re.compile(r'^\s*\{?\s*"?text"?\s*[:：]\s*"?', flags=re.I)
+_PAUSE_NOTE_RE = re.compile(r"（\s*停顿了约\s*\d+(?:\.\d+)?\s*秒\s*）")
+_FILLER_ONLY_RE = re.compile(r"^[嗯啊哦呃呃唔诶哎哼]+$")
 
 
 def _clean_text(value: Any, limit: int = 4000) -> str:
@@ -62,6 +74,72 @@ def _clean_text(value: Any, limit: int = 4000) -> str:
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text[: max(1, int(limit))]
+
+
+def _decode_json_string_literal(value: str) -> str:
+    try:
+        decoded = json.loads(f'"{value}"')
+        return str(decoded or "")
+    except Exception:
+        return str(value or "")
+
+
+def _extract_leaked_text_field(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    parsed = _extract_json_object(raw)
+    if parsed and isinstance(parsed.get("text"), str):
+        return str(parsed.get("text") or "")
+    m = _JSON_TEXT_FIELD_RE.search(raw)
+    if m:
+        return _decode_json_string_literal(m.group(1))
+    if _LEAKED_TEXT_PREFIX_RE.match(raw):
+        tail = _LEAKED_TEXT_PREFIX_RE.sub("", raw, count=1).strip()
+        tail = re.split(r'"\s*,\s*"(?:audio_observations|voice_observations|observations|events)"\s*:', tail, maxsplit=1)[0]
+        tail = re.sub(r'\s*"?\s*\}?\s*$', "", tail).strip()
+        return _decode_json_string_literal(tail.strip('"'))
+    return raw
+
+
+def _compact_pause_repetition(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    pause_count = len(_PAUSE_NOTE_RE.findall(raw))
+    without_pauses = _PAUSE_NOTE_RE.sub("", raw)
+    compact = re.sub(r"[\s，,、。.!！？?…\"'“”‘’（）()：:；;]+", "", without_pauses)
+    if pause_count >= 2 and compact and _FILLER_ONLY_RE.fullmatch(compact):
+        return compact[0]
+    return raw
+
+
+def _clean_transcript_text(value: Any, limit: int = 4000) -> str:
+    text = _clean_text(value, limit=limit)
+    if not text:
+        return ""
+    text = _clean_text(_extract_leaked_text_field(text), limit=limit)
+    text = _compact_pause_repetition(text)
+    return _clean_text(text, limit=limit)
+
+
+def sanitize_transcript_for_duration(text: Any, duration_ms: int = 0) -> str:
+    cleaned = _clean_transcript_text(text, limit=4000)
+    if not cleaned:
+        return ""
+    try:
+        duration = max(0, int(duration_ms or 0))
+    except Exception:
+        duration = 0
+    if 0 < duration <= 2500:
+        pause_count = len(_PAUSE_NOTE_RE.findall(cleaned))
+        without_pauses = _PAUSE_NOTE_RE.sub("", cleaned)
+        compact = re.sub(r"[\s，,、。.!！？?…\"'“”‘’（）()：:；;]+", "", without_pauses)
+        if pause_count >= 2 and compact and _FILLER_ONLY_RE.fullmatch(compact):
+            return compact[0]
+        if pause_count >= 1 and len(cleaned) > 48 and compact and _FILLER_ONLY_RE.fullmatch(compact):
+            return compact[0]
+    return cleaned
 
 
 def _normalize_provider(value: str) -> str:
@@ -191,7 +269,7 @@ def _extract_json_object(text: str) -> Optional[dict]:
 
 
 def _normalize_transcription_payload(data: dict, provider: str) -> Optional[dict]:
-    text = _clean_text(data.get("text") or data.get("transcript") or "", limit=4000)
+    text = _clean_transcript_text(data.get("text") or data.get("transcript") or "", limit=4000)
     if not text:
         return None
     events = data.get("events")

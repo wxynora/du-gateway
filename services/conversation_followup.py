@@ -23,6 +23,7 @@ from services.telegram_bot import (
     send_message_segmented,
 )
 from services.hidden_blocks import HiddenBlockParser
+from services.reply_channel_context import normalize_reply_channel as _shared_normalize_reply_channel
 from storage import r2_store
 from storage.miniapp_panel_store import list_trusted_devices
 from utils.log import get_logger
@@ -59,22 +60,7 @@ def build_followup_system_instruction() -> str:
 
 
 def _normalize_reply_channel(value: str, default: str = "sumitalk", allow_tg: bool = True) -> str:
-    s = str(value or "").strip().lower()
-    alias = {
-        "wx": "wechat",
-        "weixin": "wechat",
-        "sumi": "sumitalk",
-        "sumi-talk": "sumitalk",
-        "sumi_talk": "sumitalk",
-        "telegram": "tg",
-    }
-    s = alias.get(s, s)
-    allowed = {"sumitalk", "wechat", "qq", "xiaoai"}
-    if allow_tg:
-        allowed.add("tg")
-    if s not in allowed:
-        return default
-    return s
+    return _shared_normalize_reply_channel(value, default=default, allow_tg=allow_tg)
 
 
 def _resolve_sumitalk_target_device_id(preferred: str = "") -> str:
@@ -519,6 +505,10 @@ def _send_wakeup_event(
     stable_proactive_channel: bool = False,
     wakeup_kind: str = "",
     system_event: bool = False,
+    preferred_channel_override: str = "",
+    preferred_target_override: str = "",
+    preferred_meta_override: dict | None = None,
+    lock_preferred_channel: bool = False,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -536,6 +526,12 @@ def _send_wakeup_event(
     if not prompt:
         return {"ok": False, "error": "empty_event"}
     preferred_channel, preferred_target, preferred_meta = _choice_dialog_delivery_preference(target)
+    override_channel = _normalize_reply_channel(preferred_channel_override, default="", allow_tg=True)
+    if override_channel:
+        preferred_channel = override_channel
+        preferred_target = str(preferred_target_override or preferred_target or target or "").strip()
+        if isinstance(preferred_meta_override, dict):
+            preferred_meta = preferred_meta_override
     if stable_proactive_channel:
         preferred_channel = _stable_proactive_wakeup_channel(preferred_channel)
         if preferred_channel == "tg" and not preferred_target and context_window_id.startswith("tg_"):
@@ -611,9 +607,12 @@ def _send_wakeup_event(
         text, _followup = extract_followup_marker(text)
         if not text:
             return {"ok": False, "error": "empty_gateway_reply"}
-        from services.telegram_proactive import _available_channels
+        available_channels: list[str] = []
+        if not lock_preferred_channel:
+            from services.telegram_proactive import _available_channels
 
-        channels = _choice_dialog_delivery_channels(preferred_channel, _available_channels(), preferred_target)
+            available_channels = _available_channels()
+        channels = _choice_dialog_delivery_channels(preferred_channel, available_channels, preferred_target)
         if not channels:
             return {"ok": False, "error": "no_proactive_channel", "reply_preview": text[:120]}
         outbound = _sanitize_reply_for_telegram(text).strip()
@@ -636,6 +635,7 @@ def _send_wakeup_event(
                     "attempted_channels": attempted_channels,
                     "preferred_channel": preferred_channel,
                     "preferred_channel_at": str(preferred_meta.get("at") or ""),
+                    "locked_channel": bool(lock_preferred_channel),
                     "reply_preview": outbound[:120],
                     "error": "",
                 }
@@ -645,6 +645,7 @@ def _send_wakeup_event(
             "attempted_channels": attempted_channels,
             "preferred_channel": preferred_channel,
             "preferred_channel_at": str(preferred_meta.get("at") or ""),
+            "locked_channel": bool(lock_preferred_channel),
             "reply_preview": outbound[:120],
             "error": "dispatch_failed",
         }
@@ -653,7 +654,14 @@ def _send_wakeup_event(
         return {"ok": False, "error": str(e)}
 
 
-def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
+def send_choice_dialog_wakeup(
+    window_id: str,
+    target: str,
+    event_text: str,
+    created_at: str | None = None,
+    preferred_channel: str = "",
+    preferred_meta: dict | None = None,
+) -> dict:
     """立即让渡基于 SumiTalk 弹窗回执生成回应，并通过主动消息入口发出。"""
     return _send_wakeup_event(
         window_id=window_id,
@@ -664,10 +672,21 @@ def send_choice_dialog_wakeup(window_id: str, target: str, event_text: str, crea
             "请你现在直接对她回应一两句。不要解释工具、回执或系统流程。"
         ),
         wakeup_kind="choice_dialog",
+        preferred_channel_override=preferred_channel,
+        preferred_target_override=target,
+        preferred_meta_override=preferred_meta,
+        lock_preferred_channel=bool(preferred_channel),
     )
 
 
-def send_private_draw_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
+def send_private_draw_wakeup(
+    window_id: str,
+    target: str,
+    event_text: str,
+    created_at: str | None = None,
+    preferred_channel: str = "",
+    preferred_meta: dict | None = None,
+) -> dict:
     """立即让渡基于小玥发来的 sex play 抽签结果生成回应，并投递到最近聊天入口。"""
     return _send_wakeup_event(
         window_id=window_id,
@@ -681,10 +700,50 @@ def send_private_draw_wakeup(window_id: str, target: str, event_text: str, creat
         ),
         wakeup_kind="private_draw",
         system_event=True,
+        preferred_channel_override=preferred_channel,
+        preferred_target_override=target,
+        preferred_meta_override=preferred_meta,
+        lock_preferred_channel=bool(preferred_channel),
     )
 
 
-def send_screen_check_wakeup(window_id: str, target: str, event_text: str, image_url: str, created_at: str | None = None) -> dict:
+def send_pixel_home_wakeup(
+    window_id: str,
+    target: str,
+    event_text: str,
+    created_at: str | None = None,
+    preferred_channel: str = "",
+    preferred_meta: dict | None = None,
+) -> dict:
+    """立即让渡基于小家事件生成回应，并沿用最近真实聊天入口。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        archive=True,
+        extra_instruction=(
+            "这是小家里的状态或道具事件，不是她在聊天框里说的话。"
+            "请沿用最近真实聊天入口的语气自然回应一两句，不要解释工具或系统流程。"
+        ),
+        wakeup_kind="pixel_home",
+        system_event=True,
+        preferred_channel_override=preferred_channel,
+        preferred_target_override=target,
+        preferred_meta_override=preferred_meta,
+        lock_preferred_channel=bool(preferred_channel),
+    )
+
+
+def send_screen_check_wakeup(
+    window_id: str,
+    target: str,
+    event_text: str,
+    image_url: str,
+    created_at: str | None = None,
+    preferred_channel: str = "",
+    preferred_meta: dict | None = None,
+) -> dict:
     """立即让渡看一张经老婆同意的手机截图，再自然回应。"""
     has_image = bool(str(image_url or "").strip())
     instruction = (
@@ -702,6 +761,10 @@ def send_screen_check_wakeup(window_id: str, target: str, event_text: str, image
         archive=True,
         extra_instruction=instruction,
         wakeup_kind="screen_check",
+        preferred_channel_override=preferred_channel,
+        preferred_target_override=target,
+        preferred_meta_override=preferred_meta,
+        lock_preferred_channel=bool(preferred_channel),
     )
 
 

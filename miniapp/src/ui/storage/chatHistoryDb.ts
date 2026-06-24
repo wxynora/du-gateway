@@ -20,7 +20,7 @@ export type ChatStorageOverview = {
   updatedAt: string;
 };
 
-async function withNative<T>(nativeAction: () => Promise<T>, fallbackValue: T): Promise<T> {
+async function readWithNativeFallback<T>(nativeAction: () => Promise<T>, fallbackValue: T): Promise<T> {
   if (!(await isNativeChatStoreAvailable())) return fallbackValue;
   try {
     return await nativeAction();
@@ -29,29 +29,41 @@ async function withNative<T>(nativeAction: () => Promise<T>, fallbackValue: T): 
   }
 }
 
+async function mutateNativeOrThrow<T>(operation: string, nativeAction: () => Promise<T>, nonAndroidFallback: T): Promise<T> {
+  if (!(await isNativeChatStoreAvailable())) {
+    if (!SumiChatStore.isAndroid()) return nonAndroidFallback;
+    throw new Error(`聊天本地存储不可用：${operation}`);
+  }
+  try {
+    return await nativeAction();
+  } catch (e: any) {
+    throw new Error(`聊天本地存储写入失败：${operation}：${e?.message || e}`);
+  }
+}
+
 export async function readLocalChatHistory(deviceId: string, windowId: string): Promise<ChatHistoryMessage[]> {
-  return withNative(
+  return readWithNativeFallback(
     () => nativeChatStore.readLocalChatHistory(deviceId, windowId),
     [],
   );
 }
 
 export async function readLocalChatHistoryRows(windowIds: string[]): Promise<ChatHistoryRow[]> {
-  return withNative(
+  return readWithNativeFallback(
     () => nativeChatStore.readLocalChatHistoryRows(windowIds),
     [],
   );
 }
 
 export async function readLatestLocalChatHistory(deviceId: string): Promise<ChatHistoryMessage[]> {
-  return withNative(
+  return readWithNativeFallback(
     () => nativeChatStore.readLatestLocalChatHistory(deviceId),
     [],
   );
 }
 
 export async function inspectLocalChatHistoryRows(): Promise<ChatHistoryLocalStatRow[]> {
-  return withNative(
+  return readWithNativeFallback(
     () => nativeChatStore.inspectLocalChatHistoryRows(),
     [],
   );
@@ -91,21 +103,24 @@ export async function inspectChatStorageOverview(deviceId: string): Promise<Chat
 }
 
 export async function writeLocalChatHistory(deviceId: string, windowId: string, messages: ChatHistoryMessage[]): Promise<void> {
-  await withNative(
+  await mutateNativeOrThrow(
+    "writeLocalChatHistory",
     () => nativeChatStore.writeLocalChatHistory(deviceId, windowId, messages),
     undefined,
   );
 }
 
 export async function migrateLocalChatHistoryDevice(oldDeviceId: string, newDeviceId: string): Promise<void> {
-  await withNative(
+  await mutateNativeOrThrow(
+    "migrateLocalChatHistoryDevice",
     () => nativeChatStore.migrateLocalChatHistoryDevice(oldDeviceId, newDeviceId),
     undefined,
   );
 }
 
 export async function migrateLocalChatHistoriesToDevice(deviceId: string): Promise<void> {
-  await withNative(
+  await mutateNativeOrThrow(
+    "migrateLocalChatHistoriesToDevice",
     () => nativeChatStore.migrateLocalChatHistoriesToDevice(deviceId),
     undefined,
   );
@@ -118,42 +133,46 @@ export async function createChatDraftTurn(args: {
   assistantMessage: ChatHistoryMessage;
   operation: ChatOperation;
 }): Promise<ChatOperation | null> {
-  return withNative(
+  return mutateNativeOrThrow(
+    "createChatDraftTurn",
     () => nativeChatStore.createDraftTurn(args),
     null,
   );
 }
 
 export async function attachChatJobToOperation(operationId: string, jobId: string): Promise<void> {
-  await withNative(
+  await mutateNativeOrThrow(
+    "attachChatJobToOperation",
     () => nativeChatStore.attachJob(operationId, jobId),
     undefined,
   );
 }
 
 export async function completeChatOperation(operationId: string, assistantMessage: ChatHistoryMessage): Promise<void> {
-  await withNative(
+  await mutateNativeOrThrow(
+    "completeChatOperation",
     () => nativeChatStore.completeOperation(operationId, assistantMessage),
     undefined,
   );
 }
 
 export async function failChatOperation(operationId: string, error: string, assistantMessage?: ChatHistoryMessage): Promise<void> {
-  await withNative(
+  await mutateNativeOrThrow(
+    "failChatOperation",
     () => nativeChatStore.failOperation(operationId, error, assistantMessage),
     undefined,
   );
 }
 
 export async function getChatOperation(operationId: string): Promise<ChatOperation | null> {
-  return withNative(
+  return readWithNativeFallback(
     () => nativeChatStore.getOperation(operationId),
     null,
   );
 }
 
 export async function listActiveChatOperations(deviceId: string, windowId?: string): Promise<ChatOperation[]> {
-  return withNative(
+  return readWithNativeFallback(
     () => nativeChatStore.listActiveOperations(deviceId, windowId),
     [],
   );

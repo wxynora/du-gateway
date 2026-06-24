@@ -36,7 +36,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | R2 存储 | `storage/r2_store.py` | 会话、summary、动态记忆、设置、贴纸、设备状态、日程等 R2 key |
 | 上游配置 | `storage/upstream_store.py` | active upstream、model cache、models 探测 |
 | 主动消息 | `services/telegram_proactive.py` | 概率主动、主动决策、通道投递、trigger tick |
-| 唤醒/续话 | `services/conversation_followup.py` | 事件唤醒、弹窗回执、查岗回应、延迟续话 |
+| 唤醒/续话 | `services/conversation_followup.py`、`services/reply_channel_context.py` | 事件唤醒、弹窗回执、查岗回应、延迟续话、最近真实聊天入口解析 |
 | 设备工具 | `services/device_action_tools.py` | 弹窗、截图、系统闹钟等工具执行和卡片 |
 | 论坛 MCP 工具 | `services/mcp_forum_tools.py`、`services/forum_mcp_client.py` | 论坛高层工具、`cli/get_guide` 映射、外部 SSE MCP 调用 |
 | 随机冲浪工具 | `services/du_surf.py`、`services/gateway_tools.py`、`services/notion_tools.py` | `du_surf` 网关工具，按兴趣池/时间段抽话题，复用 Tavily 轻搜摘要，清洗成可聊卡片；不作为 `web_search` 精确事实查询 |
@@ -96,6 +96,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 - 主动唤醒生成已固定 QQ 优先，避免 `【入口风格：TG】` / `【入口风格：QQ】` 在同类唤醒里来回跳。
 - 随机主动决策的「近来主动联络记录」和「最近自发动作参考」已从入口风格 system 拆出，作为带 `__dynamic__` 标记的单独 system 进入动态区，避免 cache debug 把可变上下文算进 `QQ入口风格`。
 - 正常 TG/QQ 入站聊天和延迟续话仍按各自真实入口风格处理。
+- 小家事件、私密纸条、弹窗回执、查岗回执属于“手机/小家侧事件”，不更新最近真实聊天入口；生成和投递应沿用 `storage/r2_store.py::get_last_reply_channel()` 记录的最近真实聊天 channel。只有最近真实聊天本来是 SumiTalk，才回 SumiTalk。
 
 常查：
 
@@ -149,6 +150,12 @@ rg -n "_preferred_proactive_channel|_stable_proactive_wakeup_channel|X-Reply-Cha
 - 已完成：`services/pixel_home.py` 和 `miniapp/src/ui/tabs/PixelHomeTab.tsx` 的抽签逻辑改为先抽 `theme`，再按主题过滤 `task/limit`。`女仆主人play`、`成人师生play`、`上司下属play`、`医生检查play`、`秘书老板play`、`成人补课play` 这类默认渡主导的主题，会过滤掉“被小玥命令/小玥决定/交给小玥验收”等小玥控制渡的任务与限制，避免主题和任务自相矛盾。
 - 保留：`小玥说停必须立刻停`、`不准弄疼小玥`、`不准只顾自己爽`、`不准跳过前戏` 等安全/照顾向限制不会因为主题过滤被删；过滤后如果某个 slot 没候选，会回退原池，避免空抽。
 - 未完成 / 下次继续：本轮只做轻量主题一致性过滤，没有把所有主题拆成完整剧本矩阵；如果后续发现某个主题方向不对，优先调整 `PRIVATE_DRAW_DU_LEADS_THEMES` 和过滤词，不要直接改随机工具协议。
+
+当前状态（2026-06-24 小家事件沿用最近聊天入口）：
+- 已完成：新增 `services/reply_channel_context.py` 统一解析最近真实聊天入口；`routes/miniapp/dashboard.py` 的小家状态/道具事件、`routes/miniapp/private_draw.py` 的小纸条发送，以及 `routes/miniapp/device_actions.py` 的弹窗/查岗回执都改为沿用最近真实聊天 channel，不再把小家事件来源当成 SumiTalk，也不再让小家事件固定走 QQ 主动入口；这些事件类回包解析出最近入口后会锁定该 channel，不跨到其它入口兜底。
+- 已完成：`services/conversation_followup.py` 新增 `send_pixel_home_wakeup()`；小家事件按 system event 送入网关，正文提示为“小家里的状态或道具事件，不是她在聊天框里说的话”，避免归档和生成时把它当成小玥普通聊天正文。
+- 已验证：`.venv/bin/python -m py_compile services/reply_channel_context.py services/conversation_followup.py routes/miniapp/private_draw.py routes/miniapp/dashboard.py routes/miniapp/device_actions.py`、`git diff --check -- services/reply_channel_context.py services/conversation_followup.py routes/miniapp/private_draw.py routes/miniapp/dashboard.py routes/miniapp/device_actions.py docs/DEBUG_INDEX.md` 通过；smoke 确认 `TELEGRAM_PROACTIVE_TARGET_USER_ID` 优先于 recent `tg_`，锁定投递时不会追加 QQ/微信 fallback。
+- 未完成 / 下次继续：本轮不改随机主动硬触发固定入口策略，不改普通 SumiTalk 聊天发送链路，也不改前端 UI。
 
 ## 聊天失败 / 上游不可用
 

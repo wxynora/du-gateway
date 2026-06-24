@@ -3,8 +3,8 @@ import threading
 
 from flask import jsonify, request
 
-from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
-from storage import r2_store, whitelist_store
+from services.reply_channel_context import resolve_recent_reply_context
+from storage import r2_store
 
 
 sumitalk_logger = logging.getLogger("sumitalk")
@@ -13,20 +13,6 @@ sumitalk_logger = logging.getLogger("sumitalk")
 def _get_panel_device_id() -> str:
     payload = request.environ.get("miniapp_panel_payload") or {}
     return str(payload.get("device_id") or "").strip()
-
-
-def _resolve_primary_chat_window_id() -> str:
-    recent = whitelist_store.list_recent_windows(limit=200) or []
-    for w in recent:
-        wid = str((w or {}).get("id") or "").strip()
-        if wid.startswith("tg_"):
-            return wid
-    uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
-    if uid > 0:
-        return f"tg_{uid}"
-    if recent:
-        return str((recent[0] or {}).get("id") or "").strip()
-    return ""
 
 
 def _choice_dialog_wakeup_event_text(item: dict) -> str:
@@ -115,7 +101,11 @@ def _wake_du_for_device_action_results(device_id: str, items: list[dict]) -> int
             events.append(screen_event)
     if not events:
         return 0
-    window_id = _resolve_primary_chat_window_id()
+    context = resolve_recent_reply_context(default_target=device_id)
+    window_id = str(context.get("window_id") or "").strip()
+    target = str(context.get("target") or "").strip() or device_id
+    channel = str(context.get("channel") or "").strip().lower()
+    meta = context.get("meta") if isinstance(context.get("meta"), dict) else {}
     if not window_id:
         sumitalk_logger.warning("choice_dialog_wakeup_skip reason=no_window device_id=%s events=%s", device_id, len(events))
         return 0
@@ -129,17 +119,26 @@ def _wake_du_for_device_action_results(device_id: str, items: list[dict]) -> int
                 if event.get("kind") == "screen_check":
                     result = send_screen_check_wakeup(
                         window_id=window_id,
-                        target=device_id,
+                        target=target,
                         event_text=str(event.get("text") or ""),
                         image_url=str(event.get("image_url") or ""),
+                        preferred_channel=channel,
+                        preferred_meta=meta,
                     )
                 else:
-                    result = send_choice_dialog_wakeup(window_id=window_id, target=device_id, event_text=str(event.get("text") or ""))
+                    result = send_choice_dialog_wakeup(
+                        window_id=window_id,
+                        target=target,
+                        event_text=str(event.get("text") or ""),
+                        preferred_channel=channel,
+                        preferred_meta=meta,
+                    )
                 sumitalk_logger.info(
-                    "choice_dialog_wakeup_done ok=%s device_id=%s window_id=%s channel=%s preferred=%s error=%s preview=%s",
+                    "choice_dialog_wakeup_done ok=%s device_id=%s window_id=%s target=%s channel=%s preferred=%s error=%s preview=%s",
                     bool(result.get("ok")),
                     device_id,
                     window_id,
+                    target,
                     str(result.get("channel") or ""),
                     str(result.get("preferred_channel") or ""),
                     str(result.get("error") or ""),

@@ -8,6 +8,7 @@ from datetime import datetime
 from flask import jsonify, request
 
 from config import TELEGRAM_PROACTIVE_TARGET_USER_ID
+from services.reply_channel_context import resolve_recent_reply_context
 from services.pixel_home import (
     build_pixel_home_body_event,
     build_pixel_home_event,
@@ -104,39 +105,34 @@ def _parse_beijing_dt(value: str) -> datetime | None:
     return dt.astimezone(tz=None).astimezone()
 
 
-def _pixel_home_wakeup_context() -> tuple[str, str]:
-    try:
-        meta = r2_store.get_last_reply_channel() or {}
-    except Exception:
-        meta = {}
-    if not isinstance(meta, dict):
-        meta = {}
-    window_id = str(meta.get("window_id") or "").strip()
-    target = str(meta.get("target") or "").strip()
-    channel = str(meta.get("channel") or "").strip().lower()
-    try:
-        uid = int(TELEGRAM_PROACTIVE_TARGET_USER_ID or 0)
-    except Exception:
-        uid = 0
-    if not window_id and uid > 0:
-        window_id = f"tg_{uid}"
-    if not target and channel == "tg" and window_id.startswith("tg_"):
-        target = window_id[3:]
-    if not target and uid > 0:
-        target = str(uid)
-    return window_id, target
+def _pixel_home_wakeup_context() -> tuple[str, str, str, dict]:
+    payload = request.environ.get("miniapp_panel_payload") or {}
+    default_target = str(payload.get("device_id") or "").strip()
+    context = resolve_recent_reply_context(default_target=default_target)
+    return (
+        str(context.get("window_id") or "").strip(),
+        str(context.get("target") or "").strip(),
+        str(context.get("channel") or "").strip().lower(),
+        context.get("meta") if isinstance(context.get("meta"), dict) else {},
+    )
 
 
 def _queue_pixel_home_wakeup(event_text: str) -> dict:
-    window_id, target = _pixel_home_wakeup_context()
+    window_id, target, channel, meta = _pixel_home_wakeup_context()
     if not window_id:
         return {"ok": False, "error": "missing_window_id"}
 
     def _run_pixel_home_wakeup():
         try:
-            from services.conversation_followup import send_proactive_trigger_wakeup
+            from services.conversation_followup import send_pixel_home_wakeup
 
-            send_proactive_trigger_wakeup(window_id=window_id, target=target, event_text=event_text)
+            send_pixel_home_wakeup(
+                window_id=window_id,
+                target=target,
+                event_text=event_text,
+                preferred_channel=channel,
+                preferred_meta=meta,
+            )
         except Exception as e:
             get_logger(__name__).warning("pixel home wakeup failed window_id=%s error=%s", window_id, e)
 
