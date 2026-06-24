@@ -3131,11 +3131,11 @@ export function MainChatScreen({
       {hasCustomChatBackground ? (
         <>
           <div
-            className="pointer-events-none fixed inset-0 z-0 bg-cover bg-center"
+            className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full bg-cover bg-center"
             style={{ backgroundImage: `url(${chatBackgroundImage})` }}
           />
           <div
-            className="pointer-events-none fixed inset-0 z-0"
+            className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full"
             style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})` }}
           />
         </>

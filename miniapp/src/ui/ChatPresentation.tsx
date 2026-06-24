@@ -543,6 +543,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   }>({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
   const dragStartX = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
+  const settleHandoffRef = useRef(false);
   const isRight = align === "right";
   const imageItems = items.filter((item) => attachmentSrc(item));
   const swipeDistance = 136;
@@ -563,7 +564,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     ? Math.pow(swapProgress, 0.92)
     : swapProgress;
   const targetOnTop = visualProgress >= 0.56 || (swipe.phase === "settling" && swipe.accepted);
-  const layerTransition = swipe.phase === "dragging"
+  const layerTransition = swipe.phase === "dragging" || settleHandoffRef.current
     ? "none"
     : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease-out";
   const stackOffsetCount = swipe.phase === "idle"
@@ -653,13 +654,19 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   }
 
   function handleSwipeTransitionEnd(event: React.TransitionEvent<HTMLSpanElement>) {
-    if (event.target !== event.currentTarget || swipe.phase !== "settling") return;
+    if (event.target !== event.currentTarget || event.propertyName !== "transform" || swipe.phase !== "settling") return;
     const direction = swipe.direction;
     const accepted = swipe.accepted;
-    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+    settleHandoffRef.current = true;
     if (accepted) {
       setActiveIndex((index) => (index + direction + imageItems.length) % imageItems.length);
     }
+    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        settleHandoffRef.current = false;
+      });
+    });
   }
 
   function handleClick() {
@@ -674,7 +681,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     <>
       <button
         type="button"
-        className={`group relative block h-[216px] w-[162px] touch-pan-y overflow-visible text-left transition-transform active:scale-[0.99] ${
+        className={`group relative block h-[216px] w-[162px] touch-pan-y overflow-visible text-left ${
           isRight ? "self-end" : "self-start"
         }`}
         onPointerDown={handlePointerDown}
