@@ -245,8 +245,11 @@ function SoftJellyBlueBubbleSkin() {
   return (
     <>
       <span
-        className="pointer-events-none absolute -inset-[2px] rounded-[inherit] bg-[rgba(209,246,255,0.65)] opacity-55 blur-[1px]"
-        style={{ zIndex: -1 }}
+        className="pointer-events-none absolute -inset-[2px] rounded-[inherit]"
+        style={{
+          zIndex: -1,
+          boxShadow: "0 2px 9px rgba(224,241,245,0.58)",
+        }}
         aria-hidden="true"
       />
       <span
