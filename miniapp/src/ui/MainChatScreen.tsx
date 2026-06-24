@@ -557,6 +557,35 @@ function hasNonSeedHistoryMessages(messages: ChatDraftMessage[]): boolean {
   return sanitizeHistoryMessages(messages).some((message) => !String(message?.id || "").startsWith("seed-"));
 }
 
+function historySnapshotSignature(messages: ChatDraftMessage[]): string {
+  return sanitizeHistoryMessages(messages).map((message) => {
+    const attachments = normalizeChatAttachments(message.attachments)
+      .map((attachment) => [
+        attachment.id,
+        attachment.kind,
+        attachment.remoteKey || "",
+        attachment.remoteUrl || "",
+        attachment.thumbUrl || "",
+        attachment.name || "",
+        attachment.size || 0,
+      ].join(":"))
+      .join(",");
+    return [
+      message.id,
+      message.role,
+      message.status || "",
+      message.clientRequestId || "",
+      message.operationId || "",
+      message.jobId || "",
+      message.content || "",
+      message.reasoning || "",
+      message.tokenCount?.input || 0,
+      message.tokenCount?.output || 0,
+      attachments,
+    ].join("\u0001");
+  }).join("\u0002");
+}
+
 async function waitForCodexGroupChatTask(taskId: string): Promise<CodexGroupChatTask> {
   const startedAt = Date.now();
   let lastError = "";
@@ -694,6 +723,7 @@ export function MainChatScreen({
   const privateInputAggregateVersionRef = useRef(0);
   const privateInputAggregateHoldUntilNextInputRef = useRef(false);
   const bubbleTouchRef = useRef<ChatBubbleTouchState | null>(null);
+  const remoteHistorySyncingRef = useRef(false);
 
   function setMediaBusy(next: boolean) {
     mediaBusyRef.current = next;
@@ -1128,6 +1158,30 @@ export function MainChatScreen({
     };
   }, [deviceId, historyWindowId, remoteHistoryWindowId, windowId, groupChatMode]);
 
+  useEffect(() => {
+    if (!historyWindowId) return;
+    let cancelled = false;
+    const recover = (source: string) => {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void recoverSumiTalkBackendState(source);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") recover("visibility_visible");
+    };
+    const onFocus = () => recover("window_focus");
+    const onPageShow = () => recover("page_show");
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pageshow", onPageShow);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [deviceId, historyWindowId, remoteHistoryWindowId, groupChatMode]);
+
   async function saveDisplayHistory(
     nextMessages: ChatDraftMessage[],
     options: { localDeviceId?: string; strict?: boolean; source?: string } = {},
@@ -1154,6 +1208,50 @@ export function MainChatScreen({
     options: { localDeviceId?: string } = {},
   ) {
     void saveDisplayHistory(nextMessages, { localDeviceId: options.localDeviceId }).catch(() => {});
+  }
+
+  async function mergeRemoteDisplayHistory(localDeviceId: string, source: string) {
+    const did = String(localDeviceId || deviceId || "").trim();
+    if (!did || !remoteHistoryWindowId || remoteHistorySyncingRef.current) return;
+    remoteHistorySyncingRef.current = true;
+    try {
+      const current = messagesRef.current;
+      const beforeSignature = historySnapshotSignature(current);
+      const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
+      const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
+      if (!remoteMessages.length) return;
+      const preferredSnapshot = pickBetterHistory(remoteMessages, current, seedMessages);
+      const next = mergeHistorySnapshots(preferredSnapshot, current);
+      if (historySnapshotSignature(next) === beforeSignature) return;
+      messagesRef.current = next;
+      setMessages(next);
+      if (hasNonSeedHistoryMessages(next)) {
+        await saveDisplayHistory(next, {
+          localDeviceId: did,
+          source,
+        });
+      }
+      logSumiTalkClientEvent("chat_remote_history_resync_ok", {
+        source,
+        remoteMessages: remoteMessages.length,
+        mergedMessages: next.length,
+      });
+    } catch (e: any) {
+      logSumiTalkClientEvent("chat_remote_history_resync_error", {
+        source,
+        error: String(e?.message || e),
+      }, "warning");
+    } finally {
+      remoteHistorySyncingRef.current = false;
+    }
+  }
+
+  async function recoverSumiTalkBackendState(source: string, localDeviceId?: string) {
+    const resolvedDeviceId = String(localDeviceId || deviceId || await getOrCreatePanelDeviceId()).trim();
+    if (!resolvedDeviceId) return;
+    if (!deviceId) setDeviceId(resolvedDeviceId);
+    void recoverActiveSumiTalkOperations(resolvedDeviceId);
+    void mergeRemoteDisplayHistory(resolvedDeviceId, source);
   }
 
   function logSumiTalkClientEvent(
@@ -2556,7 +2654,7 @@ export function MainChatScreen({
           await completeChatOperationBestEffort(operationId, result.assistantMessage);
           messagesRef.current = finalMessages;
           setMessages(finalMessages);
-          await saveDisplayHistory(finalMessages);
+          await saveDisplayHistory(finalMessages, { localDeviceId: replyTarget });
           if (result.voiceText) {
             void appendAssistantVoiceOutputAudio({
               assistantId,

@@ -343,6 +343,12 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已验证：临时隔离无关 `MemoryNebulaTab` 改动后，Phase 3 的 `npm -C miniapp run build:android` 已生成并提交 `miniapp_static`；Phase 4 当前已跑 `npx --prefix miniapp tsc --noEmit -p miniapp/tsconfig.json` 通过，尚未重建静态包。
 - 未完成 / 下次继续：笨笨 task 创建/取消/realtime fallback 仍保留在 `MainChatScreen.tsx`；群聊整体入口还在 `sendChatContent` 中分流。SSE/流式、连续发送队列、页面级 reducer、持久化 `cancelled`、Android SQLite schema、独立 outbox/队列都没动，仍延后到后续阶段。
 
+当前状态（2026-06-24 SumiTalk 后台回复自动补回）：
+- 已完成：`MainChatScreen.tsx` 在 `visibilitychange` / `focus` / `pageshow` 时触发 `recoverActiveSumiTalkOperations`，App 退出或回后台期间完成的 SumiTalk job 会按既有 `chat_operations` outbox 恢复，不需要手动补记录。
+- 已完成：同一恢复入口会从 `/miniapp-api/sumitalk-history` 合并后端可展示历史到 Android SQLite 本地历史；只在快照变化时写回，避免回前台重复刷 UI。
+- 已完成：私聊 Du 成功后的最终 `saveDisplayHistory` 明确传 `replyTarget` 作为本地 `deviceId`，避免 `deviceId` state 为空时最终落库变成空写。
+- 已验证：`npm --prefix miniapp run build` 和 `git diff --check` 通过，`miniapp_static` 已随本轮前端重建。
+
 ## 和渡一起听 / 音乐旋律分析
 
 现象：
