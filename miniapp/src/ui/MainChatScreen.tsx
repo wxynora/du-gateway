@@ -573,7 +573,7 @@ export function MainChatScreen({
       setBubbleMenu(null);
       return;
     }
-    setOpenVoiceTranscriptId(target.transcriptId);
+    setOpenVoiceTranscriptId((current) => (current === target.transcriptId ? "" : target.transcriptId));
     setBubbleMenu(null);
   }
 
@@ -2917,7 +2917,7 @@ export function MainChatScreen({
               onClick={() => setBubbleMenu(null)}
             />
             <div
-              className="fixed z-[71] rounded-[18px] bg-neutral-800/94 px-2.5 py-2 text-white shadow-2xl backdrop-blur"
+              className="fixed z-[71] rounded-[18px] bg-[#4b4b4b] px-2.5 py-2 text-white shadow-2xl"
               style={{
                 left: `${bubbleMenu.x}px`,
                 top: `${bubbleMenu.y}px`,
@@ -2930,7 +2930,7 @@ export function MainChatScreen({
               >
                 <button
                   type="button"
-                  className="rounded-[12px] px-2 py-2.5 text-center text-[12px] font-medium active:bg-white/12"
+                  className="rounded-[12px] px-2 py-2.5 text-center text-[13px] font-semibold text-white active:bg-white/15"
                   onClick={() => copyBubbleTarget(bubbleMenu)}
                 >
                   复制
@@ -2938,15 +2938,15 @@ export function MainChatScreen({
                 {bubbleMenu.hasVoice ? (
                   <button
                     type="button"
-                    className="rounded-[12px] px-2 py-2.5 text-center text-[12px] font-medium active:bg-white/12"
+                    className="rounded-[12px] px-2 py-2.5 text-center text-[13px] font-semibold text-white active:bg-white/15"
                     onClick={() => revealBubbleTranscript(bubbleMenu)}
                   >
-                    转文字
+                    {bubbleMenu.transcriptId && openVoiceTranscriptId === bubbleMenu.transcriptId ? "收起文字" : "转文字"}
                   </button>
                 ) : null}
                 <button
                   type="button"
-                  className="rounded-[12px] px-2 py-2.5 text-center text-[12px] font-medium active:bg-white/12"
+                  className="rounded-[12px] px-2 py-2.5 text-center text-[13px] font-semibold text-white active:bg-white/15"
                   onClick={() => quoteBubbleTarget(bubbleMenu)}
                 >
                   引用
@@ -2954,14 +2954,14 @@ export function MainChatScreen({
                 {bubbleMenu.canRetry ? (
                   <button
                     type="button"
-                    className="rounded-[12px] px-2 py-2.5 text-center text-[12px] font-medium text-rose-100 active:bg-white/12"
+                    className="rounded-[12px] px-2 py-2.5 text-center text-[13px] font-semibold text-[#ffe4e4] active:bg-white/15"
                     onClick={() => retryBubbleTarget(bubbleMenu)}
                   >
                     重试
                   </button>
                 ) : null}
               </div>
-              <span className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[8px] border-t-[9px] border-x-transparent border-t-neutral-800/94" />
+              <span className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[8px] border-t-[9px] border-x-transparent border-t-[#4b4b4b]" />
             </div>
           </>
         ) : null}

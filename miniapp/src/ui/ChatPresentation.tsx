@@ -484,9 +484,10 @@ export function ChatVoiceTranscriptBlock({
         const id = String(item.id || item.remoteKey || item.remoteUrl || "").trim();
         const open = Boolean(id && openTranscriptId === id);
         const transcript = String(item.transcript || "").trim();
+        const showTranscriptToggle = showToggle || open;
         return (
           <div key={id || item.remoteUrl || transcript} className={`flex max-w-[260px] flex-col gap-0.5 ${isRight ? "items-end" : "items-start"}`}>
-            {showToggle ? (
+            {showTranscriptToggle ? (
               <button
                 type="button"
                 className={`text-[10px] font-medium leading-4 transition-colors active:opacity-70 ${
