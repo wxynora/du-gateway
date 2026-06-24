@@ -1,5 +1,5 @@
 import { apiFetch, apiJson } from "../api";
-import type { ChatAttachment } from "../chatMessages";
+import { sanitizeVoiceTranscriptText, type ChatAttachment } from "../chatMessages";
 
 const MIME_CANDIDATES = [
   "audio/webm;codecs=opus",
@@ -34,6 +34,9 @@ function audioExt(mimeType: string): string {
 function normalizeAttachment(value: any, fallbackKind: "image" | "audio" | "document"): ChatAttachment {
   const raw = value && typeof value === "object" ? value : {};
   const durationMs = Number(raw.durationMs ?? raw.duration_ms ?? 0) || 0;
+  const transcript = fallbackKind === "audio" || raw.kind === "audio"
+    ? sanitizeVoiceTranscriptText(raw.transcript || raw.text || "", durationMs)
+    : String(raw.transcript || "").trim();
   return {
     id: String(raw.id || raw.remoteKey || raw.remoteUrl || `${fallbackKind}-${Date.now()}`),
     kind: raw.kind === "audio" || raw.kind === "image" || raw.kind === "document" ? raw.kind : fallbackKind,
@@ -43,7 +46,7 @@ function normalizeAttachment(value: any, fallbackKind: "image" | "audio" | "docu
     remoteUrl: String(raw.remoteUrl || ""),
     size: Number(raw.size || 0) || undefined,
     durationMs: durationMs > 0 ? durationMs : undefined,
-    transcript: String(raw.transcript || "").trim() || undefined,
+    transcript: transcript || undefined,
     textPreview: String(raw.textPreview || raw.text || "").trim() || undefined,
     createdAt: String(raw.createdAt || "").trim() || undefined,
   };

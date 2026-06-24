@@ -41,6 +41,81 @@ export type ChatDraftMessage = {
   attachments?: ChatAttachment[];
 };
 
+const JSON_TEXT_FIELD_RE = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/;
+const LEAKED_TEXT_PREFIX_RE = /^\s*\{?\s*"?text"?\s*[:：]\s*"?/i;
+const PAUSE_NOTE_RE = /（\s*停顿了约\s*\d+(?:\.\d+)?\s*秒\s*）/g;
+const FILLER_ONLY_RE = /^[嗯啊哦呃唔诶哎哼]+$/;
+
+function cleanShortText(value: any, limit = 4000): string {
+  const max = Math.max(1, Number(limit) || 4000);
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, max);
+}
+
+function decodeJsonStringLiteral(value: string): string {
+  try {
+    return String(JSON.parse(`"${String(value || "")}"`) || "");
+  } catch {
+    return String(value || "");
+  }
+}
+
+function extractJsonObjectText(value: string): string {
+  let raw = cleanShortText(value);
+  if (!raw) return "";
+  if (raw.startsWith("```")) {
+    raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/g, "").trim();
+  }
+  const candidates = [raw];
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) candidates.push(raw.slice(start, end + 1));
+  for (const item of candidates) {
+    try {
+      const parsed = JSON.parse(item);
+      if (parsed && typeof parsed === "object" && typeof parsed.text === "string") {
+        return String(parsed.text || "");
+      }
+    } catch {
+      // Keep trying loose forms below.
+    }
+  }
+  const match = raw.match(JSON_TEXT_FIELD_RE);
+  if (match) return decodeJsonStringLiteral(match[1] || "");
+  if (LEAKED_TEXT_PREFIX_RE.test(raw)) {
+    let tail = raw.replace(LEAKED_TEXT_PREFIX_RE, "").trim();
+    tail = tail.split(/"\s*,\s*"(?:audio_observations|voice_observations|observations|events)"\s*:/i)[0] || tail;
+    tail = tail.replace(/\s*"?\s*\}?\s*$/g, "").trim();
+    return decodeJsonStringLiteral(tail.replace(/^"+|"+$/g, ""));
+  }
+  return raw;
+}
+
+function compactPauseRepetition(value: string, durationMs = 0): string {
+  const raw = cleanShortText(value);
+  if (!raw) return "";
+  const pauses = raw.match(PAUSE_NOTE_RE) || [];
+  const compact = raw
+    .replace(PAUSE_NOTE_RE, "")
+    .replace(/[\s，,、。.!！？?…"'“”‘’（）()：:；;]+/g, "");
+  const duration = Math.max(0, Number(durationMs) || 0);
+  if (pauses.length >= 2 && compact && FILLER_ONLY_RE.test(compact)) return compact.slice(0, 1);
+  if (duration > 0 && duration <= 2500 && pauses.length >= 1 && raw.length > 48 && compact && FILLER_ONLY_RE.test(compact)) {
+    return compact.slice(0, 1);
+  }
+  return raw;
+}
+
+export function sanitizeVoiceTranscriptText(value: any, durationMs = 0): string {
+  const extracted = extractJsonObjectText(cleanShortText(value));
+  return cleanShortText(compactPauseRepetition(extracted, durationMs));
+}
+
 export function applyAssistantTerminalMessage(
   currentMessages: ChatDraftMessage[],
   clientRequestId: string,
@@ -142,6 +217,10 @@ export function normalizeChatAttachments(value: any): ChatAttachment[] {
       && !String(raw.textPreview || raw.text || "").trim()
     ) continue;
     const id = String(raw.id || remoteKey || remoteUrl || localUrl || `${kind}-${out.length}`).trim();
+    const durationMs = Number(raw.durationMs ?? raw.duration_ms ?? 0) || 0;
+    const transcript = kind === "audio"
+      ? sanitizeVoiceTranscriptText(raw.transcript || raw.text || "", durationMs)
+      : String(raw.transcript || "").trim();
     out.push({
       id,
       kind,
@@ -153,9 +232,9 @@ export function normalizeChatAttachments(value: any): ChatAttachment[] {
       ...(thumbUrl ? { thumbUrl } : {}),
       ...(Number.isFinite(Number(raw.width)) && Number(raw.width) > 0 ? { width: Number(raw.width) } : {}),
       ...(Number.isFinite(Number(raw.height)) && Number(raw.height) > 0 ? { height: Number(raw.height) } : {}),
-      ...(Number.isFinite(Number(raw.durationMs)) && Number(raw.durationMs) > 0 ? { durationMs: Number(raw.durationMs) } : {}),
+      ...(Number.isFinite(durationMs) && durationMs > 0 ? { durationMs } : {}),
       ...(Number.isFinite(Number(raw.size)) && Number(raw.size) > 0 ? { size: Number(raw.size) } : {}),
-      ...(String(raw.transcript || "").trim() ? { transcript: String(raw.transcript || "").trim() } : {}),
+      ...(transcript ? { transcript } : {}),
       ...(String(raw.textPreview || raw.text || "").trim() ? { textPreview: String(raw.textPreview || raw.text || "").trim() } : {}),
       ...(String(raw.alt || "").trim() ? { alt: String(raw.alt || "").trim() } : {}),
       ...(String(raw.createdAt || "").trim() ? { createdAt: String(raw.createdAt || "").trim() } : {}),

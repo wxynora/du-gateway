@@ -1,4 +1,4 @@
-import type { ChatAttachment } from "../chatMessages";
+import { sanitizeVoiceTranscriptText, type ChatAttachment } from "../chatMessages";
 import {
   transcribeChatAudio,
   uploadChatDocument,
@@ -64,13 +64,13 @@ export async function prepareDocumentPrivateChatInput(file: File, content: strin
 
 export async function prepareVoicePrivateChatInput(blob: Blob, mimeType: string, durationMs = 0): Promise<PreparedPrivateChatInput> {
   const result = await transcribeChatAudio(blob, mimeType, durationMs);
-  const transcript = String(result.text || "").trim();
+  const transcript = sanitizeVoiceTranscriptText(result.text || "", durationMs);
   if (!transcript) throw new Error("没识别出内容，再说一遍试试");
   const attachments = [{ ...result.attachment, transcript }];
   return {
     source: "voice",
     content: transcript,
-    displayContent: transcript,
+    displayContent: "",
     attachments,
     modelContent: buildPrivateUserContent(transcript, attachments),
     sttProvider: result.sttProvider || "",

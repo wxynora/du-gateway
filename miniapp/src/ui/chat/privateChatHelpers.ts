@@ -1,5 +1,6 @@
 import {
   normalizeChatAttachments,
+  sanitizeVoiceTranscriptText,
   type ChatAttachment,
 } from "../chatMessages";
 
@@ -75,10 +76,10 @@ export function extractAssistantAttachments(data: any): ChatAttachment[] {
 }
 
 export function isVoiceTranscriptEcho(content: string, attachments: ChatAttachment[]): boolean {
-  const text = String(content || "").trim().replace(/\s+/g, " ");
+  const text = sanitizeVoiceTranscriptText(content).replace(/\s+/g, " ") || String(content || "").trim().replace(/\s+/g, " ");
   if (!text) return false;
   return attachments.some((item) => {
-    const transcript = String(item.transcript || "").trim().replace(/\s+/g, " ");
+    const transcript = sanitizeVoiceTranscriptText(item.transcript, item.durationMs).replace(/\s+/g, " ");
     return transcript && transcript === text;
   });
 }

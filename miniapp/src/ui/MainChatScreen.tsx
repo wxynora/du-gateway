@@ -38,6 +38,7 @@ import {
   normalizeChatAttachments,
   pickBetterHistory,
   sanitizeHistoryMessages,
+  sanitizeVoiceTranscriptText,
   shouldShowGroupTime,
   type ChatAttachment,
   type ChatDraftMessage,
@@ -243,9 +244,10 @@ function chatRoleQuoteLabel(role: ChatRole): string {
 }
 
 function bubbleTargetText(target: ChatBubbleMenuTargetBase): string {
+  const transcript = sanitizeVoiceTranscriptText(target.transcript);
+  if (target.hasVoice && transcript) return transcript;
   const content = String(target.content || "").trim();
   if (content) return content;
-  const transcript = String(target.transcript || "").trim();
   if (transcript) return transcript;
   return chatAttachmentPreviewLabel(target.attachments);
 }
@@ -460,7 +462,7 @@ export function MainChatScreen({
     const attachments = normalizeChatAttachments(args.attachments);
     const audioAttachments = attachments.filter((item) => item.kind === "audio");
     const transcriptItem = audioAttachments.find((item) => String(item.transcript || "").trim()) || audioAttachments[0];
-    const transcript = String(transcriptItem?.transcript || "").trim();
+    const transcript = sanitizeVoiceTranscriptText(transcriptItem?.transcript || "", transcriptItem?.durationMs || 0);
     return {
       id: args.id,
       role: args.role,
@@ -2573,8 +2575,8 @@ export function MainChatScreen({
                         const bubbleSkin = transparentBubbleEnabled ? undefined : resolveBubbleSkin(userBubbleStyle);
                         const hasText = Boolean(String(part.content || "").trim());
                         const audioAttachments = normalizeChatAttachments(part.attachments).filter((item) => item.kind === "audio");
-                        const showText = hasText && !isVoiceTranscriptEcho(part.content, audioAttachments);
                         const hasVoice = audioAttachments.length > 0;
+                        const showText = hasText && !hasVoice && !isVoiceTranscriptEcho(part.content, audioAttachments);
                         const bubbleTarget = buildBubbleMenuTarget({
                           id: matchId,
                           role: group.role,
