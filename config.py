@@ -472,6 +472,17 @@ if not RUNTIME_STATE_DB.is_absolute():
 TELEGRAM_WEBHOOK_WORKER_IDLE_SECONDS = float(os.environ.get("TELEGRAM_WEBHOOK_WORKER_IDLE_SECONDS", "0.5") or "0.5")
 TELEGRAM_WEBHOOK_QUEUE_STALE_SECONDS = float(os.environ.get("TELEGRAM_WEBHOOK_QUEUE_STALE_SECONDS", "300") or "300")
 TELEGRAM_WEBHOOK_QUEUE_MAX_ATTEMPTS = int(float(os.environ.get("TELEGRAM_WEBHOOK_QUEUE_MAX_ATTEMPTS", "8") or "8"))
+# SumiTalk 聊天持久队列：MiniApp 请求只入队，独立 worker 消费，避免 gunicorn 回收/超时杀掉长回复任务
+_SUMITALK_CHAT_QUEUE_DB_STR = os.environ.get("SUMITALK_CHAT_QUEUE_DB", "").strip()
+SUMITALK_CHAT_QUEUE_DB = (
+    Path(_SUMITALK_CHAT_QUEUE_DB_STR)
+    if _SUMITALK_CHAT_QUEUE_DB_STR
+    else DATA_DIR / "sumitalk_chat_queue.sqlite3"
+)
+if not SUMITALK_CHAT_QUEUE_DB.is_absolute():
+    SUMITALK_CHAT_QUEUE_DB = BASE_DIR / SUMITALK_CHAT_QUEUE_DB
+SUMITALK_CHAT_WORKER_IDLE_SECONDS = float(os.environ.get("SUMITALK_CHAT_WORKER_IDLE_SECONDS", "0.5") or "0.5")
+SUMITALK_CHAT_QUEUE_STALE_SECONDS = float(os.environ.get("SUMITALK_CHAT_QUEUE_STALE_SECONDS", str(max(120, STREAM_TIMEOUT_SECONDS + 180))) or str(max(120, STREAM_TIMEOUT_SECONDS + 180)))
 # Bot 调网关的 base URL（如 http://127.0.0.1:5000 或公网网关地址）
 TELEGRAM_GATEWAY_URL = os.environ.get("TELEGRAM_GATEWAY_URL", "http://127.0.0.1:5000").strip().rstrip("/")
 # Telegram MiniApp（WebApp）对外入口：仅用于 ReplyKeyboard 的 web_app 按钮（Telegram 强制要求 HTTPS）

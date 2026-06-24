@@ -46,6 +46,7 @@ import {
   LogoutIconMini,
   MuteIconMini,
   NotebookPenIconMini,
+  PhoneIconMini,
   SmartphoneIconMini,
   SpeakerIconMini,
   StarIconMini,
@@ -56,13 +57,13 @@ import {
 import { SumiOverlay } from "../plugins/sumi-overlay";
 import { buildBackgroundDataUrl, fileToDataUrl } from "./imageDataUrl";
 import chatScriptFontUrl from "../assets/fonts/cookie-regular.ttf?url";
-import openHuninnFontUrl from "../assets/fonts/jf-openhuninn-2.1.ttf?url";
 import { clampStoredNumber, readStoredBoolean, readStoredNumber, readStoredString } from "./uiStorage";
 import {
   VOICE_CALL_PENDING_INVITE_KEY,
   normalizeVoiceCallInvite,
   type IncomingVoiceCallInvite,
 } from "./voiceCallInvite";
+import type { CallHubInitialView } from "./tabs/CallHubScreen";
 
 const LISTEN_BACKGROUND_STORAGE_KEY = "miniapp.listenWithDu.backgroundImage";
 const GROUP_FREE_CHAT_MODE_STORAGE_KEY = "miniapp.ui.groupFreeChatMode";
@@ -139,6 +140,7 @@ export function AppShell({
   const [showListenWithDu, setShowListenWithDu] = useState(false);
   const [listenWithDuMounted, setListenWithDuMounted] = useState(false);
   const [showCallHub, setShowCallHub] = useState(false);
+  const [callHubInitialView, setCallHubInitialView] = useState<CallHubInitialView>("home");
   const [incomingVoiceCallInvite, setIncomingVoiceCallInvite] = useState<IncomingVoiceCallInvite | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [mainTab, setMainTab] = useState<MainTab>("chats");
@@ -261,7 +263,13 @@ export function AppShell({
     const invite = normalizeVoiceCallInvite(raw);
     if (!invite) return;
     setIncomingVoiceCallInvite((prev) => (prev?.callId === invite.callId ? prev : invite));
+    setCallHubInitialView("voice");
     setMainTab("chats");
+    setShowCallHub(true);
+  }, []);
+
+  const openCallHub = useCallback((initialView: CallHubInitialView) => {
+    setCallHubInitialView(initialView);
     setShowCallHub(true);
   }, []);
 
@@ -651,6 +659,7 @@ export function AppShell({
             <ListRow icon={<HeartIconMini />} label="健康数据" onClick={() => setPanel("health-data")} />
             <ListRow icon={<ClockIconMini />} label="闹钟" onClick={() => setShowAlarm(true)} />
             <ListRow icon={<CalendarIconMini />} label="日历" onClick={() => setShowSchedule(true)} />
+            <ListRow icon={<PhoneIconMini />} label="通话记录" onClick={() => openCallHub("records")} />
             <ListRow icon={<SpeakerIconMini />} label="小爱音箱" onClick={() => setPanel("xiaoai")} />
             <ListRow icon={<UserRoundCogIconMini />} label="核心 Prompt" onClick={() => setShowCorePrompt(true)} last />
           </div>
@@ -737,14 +746,6 @@ export function AppShell({
     <div className="relative min-h-dvh safe-bottom overflow-hidden bg-[#FDFDFD] text-gray-900">
       <style>
         {`@font-face {
-          font-family: 'OpenHuninn';
-          src: url("${openHuninnFontUrl}") format("truetype");
-          font-style: normal;
-          font-weight: 400;
-          font-display: swap;
-        }
-
-        @font-face {
           font-family: 'SumiChatScript';
           src: url("${chatScriptFontUrl}") format("truetype");
           font-style: normal;
@@ -776,7 +777,7 @@ export function AppShell({
           chatBackgroundImage={chatBackgroundImage}
           onBack={() => setActiveScreen(null)}
           onOpenStickers={() => setPanel("stickers")}
-          onOpenCall={() => setShowCallHub(true)}
+          onOpenCall={() => openCallHub("voice")}
         />
       ) : null}
       {activeScreen === "group" ? (
@@ -805,7 +806,7 @@ export function AppShell({
           groupFreeChatEnabled={groupFreeChatEnabled}
           onBack={() => setActiveScreen(null)}
           onOpenStickers={() => setPanel("stickers")}
-          onOpenCall={() => setShowCallHub(true)}
+          onOpenCall={() => openCallHub("voice")}
         />
       ) : null}
       {activeScreen === "wenyou" ? (
@@ -975,6 +976,7 @@ export function AppShell({
           <CallHubScreen
             onClose={() => setShowCallHub(false)}
             duAvatarImage={duAvatarImage}
+            initialView={callHubInitialView}
             backHandlerRef={callHubBackHandlerRef}
             incomingInvite={incomingVoiceCallInvite}
             onIncomingInviteConsumed={() => setIncomingVoiceCallInvite(null)}

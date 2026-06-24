@@ -2874,6 +2874,7 @@ export function MainChatScreen({
   const chatSearchShellClass = hasCustomChatBackground
     ? "border border-white/25 bg-white/45 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl"
     : "bg-[#F4F5F7]";
+  const chatMessageColumnWidthClass = showChatAvatars ? "max-w-[70%]" : "max-w-[78%]";
   const chatHeaderWrapClass = hasCustomChatBackground
     ? "absolute top-0 z-20 w-full border-b px-3 pb-2 pt-[calc(env(safe-area-inset-top,0px)+10px)]"
     : "absolute top-0 z-20 w-full border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+20px)]";
@@ -3025,7 +3026,7 @@ export function MainChatScreen({
               ) : null}
               {group.role === "user" ? (
                 <div className="flex items-start justify-end space-x-3 rounded-[22px]">
-                  <div className={`mt-[2px] flex ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} flex-col items-end space-y-1.5`}>
+                  <div className={`mt-[2px] flex ${chatMessageColumnWidthClass} flex-col items-end space-y-1.5`}>
                     {groupChatMode ? <div className="px-1 text-[11px] font-medium leading-none text-gray-400">辛玥</div> : null}
                       {group.parts.map((part, index) => {
                         const matchId = getChatSearchMatchId(group.id, index);
@@ -3105,7 +3106,7 @@ export function MainChatScreen({
                       className={group.role === "benben" ? "bg-[#FFF3D7] text-[#8A5A10]" : avatarClass}
                     />
                   ) : null}
-                  <div className={`mt-[2px] ${showChatAvatars ? "max-w-[78%]" : "max-w-[86%]"} space-y-1.5`}>
+                  <div className={`mt-[2px] ${chatMessageColumnWidthClass} space-y-1.5`}>
                     {groupChatMode ? (
                       <div className="px-1 text-[11px] font-medium leading-none text-gray-400">
                         {group.role === "benben" ? "笨笨" : avatarLabel || "渡"}

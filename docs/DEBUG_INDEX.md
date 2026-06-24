@@ -29,6 +29,7 @@ ssh ali-du 'ss -ltnp 2>/dev/null | grep -E "(:5000|:8082|:8317)"'
 | MiniApp API | `routes/miniapp_api.py` | SumiTalk、设备、思维链、设置、贴纸、日历、上游切换等接口 |
 | MiniApp 前端主壳 | `miniapp/src/ui/App.tsx` | 首页、聊天页、设置页、消息渲染、SumiTalk job |
 | SumiTalk 本地聊天存储 | `miniapp/src/ui/storage/chatHistoryDb.ts`、`miniapp/src/ui/chat/*`、`miniapp/src/plugins/sumi-chat-store.ts`、`miniapp/android/app/src/main/java/com/sumitalk/app/SumiChatStorePlugin.java`、`miniapp/android/app/src/main/java/com/sumitalk/app/chat/*` | Android 原生 SQLite ChatStore、本地历史读写抽象和 outbox 恢复 |
+| SumiTalk 聊天后台队列 | `routes/miniapp/sumitalk_chat_jobs.py`、`services/sumitalk_chat_queue.py`、`scripts/run_sumitalk_chat_worker.py` | App 发消息只入队和轮询 job；独立 worker 消费后调用统一 `/v1/chat/completions`，避免 gunicorn 请求生命周期杀掉长回复 |
 | MiniApp 分页 | `miniapp/src/ui/tabs/*` | 日志、思维链、上游、日历、贴纸、记忆调试等子页 |
 | MiniApp 小家 | `miniapp/src/ui/tabs/PixelHomeTab.tsx`、`services/pixel_home.py`、`storage/pixel_home_store.py`、`routes/miniapp/dashboard.py`、`miniapp/src/assets/life-home-*.png` | 「小家」生活感页面：按 `ui合集/赛博小家` 的单列布局和字体组织，实际小屋图、点击才出现的小点、赛博小家状态注入与事件唤醒 |
 | 文游规则入口 | `docs/wenyou_rules.md`、`docs/wenyou/*.md` | 开源版文游规则入口与拆分文档：核心循环、运行时状态缓存、副本生成、怪物系统、数值成长、奖励经济、后端契约 |
@@ -401,6 +402,23 @@ POST /api/music/listen/chat
 - 已完成：SumiTalk 云端历史文件读取加了进程内 mtime/size 缓存，保存时会按 `SUMITALK_HISTORY_MAX_ROWS` / `SUMITALK_HISTORY_TTL_DAYS` 修剪历史行；realtime fallback 读最新消息复用同一缓存；MiniMax TTS 增加输入字数和返回音频大小上限。
 - 已验证：`python3 -m py_compile` 覆盖 `services/sumitalk_history_file.py`、`routes/miniapp/sumitalk_history.py`、`services/realtime_app.py`、`services/minimax_tts.py`、TG/voice-call 调用侧和 MiniApp media 路由；`.venv/bin/python` 验证超长 `喵` 文本会截断到 800 字。
 - 未完成 / 不要碰：服务器 SSH 仍无法连上，线上 14:30 崩前进程级 I/O 没能抓到；QQ connector、小爱音箱文件、共读文档仍是本地半成品，不属于本次止血改动。
+
+当前状态（2026-06-24 SumiTalk 聊天独立 worker）：
+- 已完成：`routes/miniapp/sumitalk_chat_jobs.py` 不再在 gunicorn worker 内起线程跑回复；`POST /miniapp-api/sumitalk-chat` 和 `/sumitalk-chat-jobs` 只创建/复用 job、写 `data/sumitalk_chat_jobs/*.json` 状态并落 SQLite 队列，前端继续按原 `job_id` 轮询。
+- 已完成：新增 `services/sumitalk_chat_queue.py`，队列默认 `data/sumitalk_chat_queue.sqlite3`，按 `client_request_id + window_id + reply_target` 去重；worker claim 后仍用同一套 `/v1/chat/completions` 流程和 `X-Reply-Channel=sumitalk`，不在 SumiTalk 入口额外注入聊天历史。
+- 已完成：新增 `scripts/run_sumitalk_chat_worker.py` 常驻消费队列，新增 `scripts/install_sumitalk_chat_worker_service.sh` 安装 systemd 服务 `du-sumitalk-chat-worker.service`；worker claim 带 `lease_token`，长请求期间 heartbeat 续租，取消会同步切断 SQLite 队列，终态 JSON 不会被后返回的 worker 覆盖。后端不做自动 retry：失败由前端 `ChatOperation` 标记 failed，用户手动重试或恢复逻辑再创建新 job。配置项：`SUMITALK_CHAT_QUEUE_DB`、`SUMITALK_CHAT_WORKER_IDLE_SECONDS`、`SUMITALK_CHAT_QUEUE_STALE_SECONDS`。
+- 线上安装/重启：
+
+```bash
+sudo -n bash -lc 'cd /root/du-gateway && REPO_ROOT=/root/du-gateway PYTHON_BIN=/root/du-gateway/.venv/bin/python bash scripts/install_sumitalk_chat_worker_service.sh'
+sudo systemctl restart du-gateway.service du-sumitalk-chat-worker.service
+sudo systemctl status du-gateway.service du-sumitalk-chat-worker.service --no-pager -l
+sudo journalctl -u du-sumitalk-chat-worker.service -f
+```
+
+- 部署习惯：以后凡是改到 SumiTalk 聊天后端、`sumitalk_chat_jobs`、`sumitalk_chat_queue`、`run_sumitalk_chat_worker` 或相关 systemd/deploy 配置，线上拉代码后都要同步重启 `du-sumitalk-chat-worker.service`；只重启 `du-gateway.service` 不够。
+- 已验证：`python3 -m py_compile config.py services/sumitalk_chat_queue.py routes/miniapp/sumitalk_chat_jobs.py scripts/run_sumitalk_chat_worker.py` 通过；临时 SQLite smoke 覆盖 job 入队、claim、ack、headers 保持 `X-Reply-Channel=sumitalk`；`.venv/bin/python` 可 import worker 和 Flask app。
+- 未完成 / 下次继续：线上需要启用 `du-sumitalk-chat-worker.service`；worker 只按 `After/Wants=du-gateway.service` 排序启动，不跟随主服务重启退出，避免普通网关重启杀掉正在跑的 App 长回复。当前改动不改 QQ/TG/微信入口上下文、不改前端 job 协议、不改 MiniApp 本地 SQLite 聊天存储。
 
 当前状态（2026-05-13）：
 - 已完成：主动/唤醒外发增加控制 JSON 兜底清洗；`send_message` JSON 只发送 `message` 字段，`diary/no_contact/other` JSON 会被拦截，避免 QQ `/push` 或后端唤醒把 `action/message/channel` 原样发给用户。

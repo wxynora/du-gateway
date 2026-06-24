@@ -32,6 +32,7 @@ type CallRecordDetail = CallRecordSummary & {
 };
 
 type ViewMode = "home" | "voice" | "records" | "record-detail";
+export type CallHubInitialView = "home" | "voice" | "records";
 type BackHandler = () => boolean;
 
 const DEFAULT_CONFIG: VoiceConfig = {
@@ -75,18 +76,20 @@ function RowArrow() {
 export function CallHubScreen({
   onClose,
   duAvatarImage,
+  initialView = "home",
   backHandlerRef,
   incomingInvite,
   onIncomingInviteConsumed,
 }: {
   onClose: () => void;
   duAvatarImage: string;
+  initialView?: CallHubInitialView;
   backHandlerRef?: React.MutableRefObject<BackHandler | null>;
   incomingInvite?: IncomingVoiceCallInvite | null;
   onIncomingInviteConsumed?: () => void;
 }) {
   const toast = useToast();
-  const [view, setView] = useState<ViewMode>("home");
+  const [view, setView] = useState<ViewMode>(initialView);
   const [config, setConfig] = useState<VoiceConfig>(DEFAULT_CONFIG);
   const [dailyWhisper, setDailyWhisper] = useState("");
   const [recordsLoading, setRecordsLoading] = useState(false);
@@ -96,10 +99,15 @@ export function CallHubScreen({
   const grouped = useMemo(() => groupByDate(records), [records]);
 
   const handleBackIntent = useCallback(() => {
+    if (view === "record-detail") {
+      setView("records");
+      return true;
+    }
+    if (view === initialView) return false;
     if (view === "home") return false;
-    setView("home");
+    setView(initialView);
     return true;
-  }, [view]);
+  }, [initialView, view]);
 
   useEffect(() => {
     if (!backHandlerRef) return;
@@ -143,6 +151,11 @@ export function CallHubScreen({
     setView("voice");
   }, [incomingInvite?.callId]);
 
+  useEffect(() => {
+    if (view !== "records") return;
+    void loadRecords();
+  }, [view]);
+
   async function loadRecords() {
     setRecordsLoading(true);
     try {
@@ -157,9 +170,24 @@ export function CallHubScreen({
     }
   }
 
-  async function openRecords() {
+  function openRecords() {
     setView("records");
-    await loadRecords();
+  }
+
+  function handleHeaderBack() {
+    if (view === "home") {
+      onClose();
+      return;
+    }
+    if (view === "record-detail") {
+      setView("records");
+      return;
+    }
+    if (view === initialView) {
+      onClose();
+      return;
+    }
+    setView(initialView);
   }
 
   async function openRecordDetail(id: string) {
@@ -208,7 +236,7 @@ export function CallHubScreen({
       >
         {!isVoiceView ? (
         <div className="sticky top-0 z-10 -mx-4 mb-4 flex items-center justify-between border-b border-gray-100/70 bg-[#FDFDFD]/95 px-4 py-3 backdrop-blur">
-          <button className={iconButton} onClick={view === "home" ? onClose : () => setView("home")} type="button" aria-label={view === "home" ? "关闭" : "返回"}>
+          <button className={iconButton} onClick={handleHeaderBack} type="button" aria-label={view === "home" ? "关闭" : "返回"}>
             {view === "home" ? (
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 6l12 12M18 6 6 18" /></svg>
             ) : (
@@ -267,7 +295,7 @@ export function CallHubScreen({
         {view === "voice" ? (
           <div className="pt-0">
             <VoiceCallScreen
-              onClose={() => setView("home")}
+              onClose={initialView === "voice" ? onClose : () => setView(initialView)}
               duAvatarImage={duAvatarImage}
               incomingInvite={incomingInvite}
               onIncomingInviteConsumed={onIncomingInviteConsumed}
