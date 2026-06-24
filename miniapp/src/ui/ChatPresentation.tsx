@@ -258,11 +258,10 @@ function SoftJellyBlueBubbleSkin() {
         aria-hidden="true"
       />
       <span
-        className="pointer-events-none absolute inset-0 z-0 rounded-[inherit] opacity-50"
+        className="pointer-events-none absolute inset-0 z-0 rounded-[inherit] opacity-35"
         style={{
           background:
-            "radial-gradient(circle at 22% 18%, rgba(255,255,255,0.78), transparent 30%), radial-gradient(circle at 78% 82%, rgba(168,158,144,0.16), transparent 32%)",
-          mixBlendMode: "multiply",
+            "radial-gradient(circle at 22% 18%, rgba(255,255,255,0.82), transparent 32%), radial-gradient(circle at 78% 82%, rgba(255,255,255,0.22), transparent 34%)",
         }}
         aria-hidden="true"
       />
