@@ -248,8 +248,6 @@ export function PersonalizationScreen({
   onToggleShowChatTimestamps,
   chatTimeFormat,
   onCycleChatTimeFormat,
-  showTokenCount,
-  onToggleShowTokenCount,
   expandReasoningByDefault,
   onToggleExpandReasoningByDefault,
   chatBackgroundOpacity,
@@ -285,8 +283,6 @@ export function PersonalizationScreen({
   onToggleShowChatTimestamps: (next: boolean) => void;
   chatTimeFormat: ChatTimeFormat;
   onCycleChatTimeFormat: () => void;
-  showTokenCount: boolean;
-  onToggleShowTokenCount: (next: boolean) => void;
   expandReasoningByDefault: boolean;
   onToggleExpandReasoningByDefault: (next: boolean) => void;
   chatBackgroundOpacity: number;
@@ -505,7 +501,6 @@ export function PersonalizationScreen({
           <div className="rounded-[32px] border border-gray-100/80 bg-white px-6 py-5 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.03)]">
             <PersonalizationSwitchRow title="显示时间戳" enabled={showChatTimestamps} onToggle={onToggleShowChatTimestamps} />
             <PersonalizationRow title="时间格式" value={chatTimeFormat === "hhmm" ? "HH:MM" : "上午/下午 HH:MM"} onClick={onCycleChatTimeFormat} />
-            <PersonalizationSwitchRow title="显示 token" enabled={showTokenCount} onToggle={onToggleShowTokenCount} />
             <PersonalizationSwitchRow title="默认展开思维链" enabled={expandReasoningByDefault} onToggle={onToggleExpandReasoningByDefault} />
           </div>
         </section>

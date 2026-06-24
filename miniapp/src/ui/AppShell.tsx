@@ -171,7 +171,6 @@ export function AppShell({
   const [chatTimeFormat, setChatTimeFormat] = useState<ChatTimeFormat>(() =>
     readStoredString("miniapp.ui.timeFormat", "hhmm", ["hhmm", "ampm"] as const),
   );
-  const [showTokenCount, setShowTokenCount] = useState(() => readStoredBoolean("miniapp.ui.showTokens", true));
   const [expandReasoningByDefault, setExpandReasoningByDefault] = useState(() => readStoredBoolean("miniapp.ui.expandReasoning", false));
   const [chatBackgroundOpacity, setChatBackgroundOpacity] = useState(() =>
     clampStoredNumber(readStoredNumber("miniapp.ui.chatBackgroundOpacity", 100), 20, 100, 100),
@@ -343,7 +342,6 @@ export function AppShell({
       localStorage.setItem("miniapp.ui.chatFont", chatFontKey);
       localStorage.setItem("miniapp.ui.showTimestamps", showChatTimestamps ? "1" : "0");
       localStorage.setItem("miniapp.ui.timeFormat", chatTimeFormat);
-      localStorage.setItem("miniapp.ui.showTokens", showTokenCount ? "1" : "0");
       localStorage.setItem("miniapp.ui.expandReasoning", expandReasoningByDefault ? "1" : "0");
       localStorage.setItem("miniapp.ui.chatBackgroundOpacity", String(chatBackgroundOpacity));
       localStorage.setItem("miniapp.ui.userBubbleStyle", userBubbleStyle);
@@ -364,7 +362,6 @@ export function AppShell({
     chatFontKey,
     showChatTimestamps,
     chatTimeFormat,
-    showTokenCount,
     expandReasoningByDefault,
     chatBackgroundOpacity,
     userBubbleStyle,
@@ -769,7 +766,6 @@ export function AppShell({
           chatFontFamily={resolveChatFontFamily(chatFontKey)}
           showChatTimestamps={showChatTimestamps}
           chatTimeFormat={chatTimeFormat}
-          showTokenCount={showTokenCount}
           expandReasoningByDefault={expandReasoningByDefault}
           chatBackgroundOpacity={chatBackgroundOpacity}
           userBubbleStyle={userBubbleStyle}
@@ -798,7 +794,6 @@ export function AppShell({
           chatFontFamily={resolveChatFontFamily(chatFontKey)}
           showChatTimestamps={showChatTimestamps}
           chatTimeFormat={chatTimeFormat}
-          showTokenCount={showTokenCount}
           expandReasoningByDefault={expandReasoningByDefault}
           chatBackgroundOpacity={chatBackgroundOpacity}
           userBubbleStyle={userBubbleStyle}
@@ -919,8 +914,6 @@ export function AppShell({
             onToggleShowChatTimestamps={setShowChatTimestamps}
             chatTimeFormat={chatTimeFormat}
             onCycleChatTimeFormat={() => setChatTimeFormat((prev) => (prev === "hhmm" ? "ampm" : "hhmm"))}
-            showTokenCount={showTokenCount}
-            onToggleShowTokenCount={setShowTokenCount}
             expandReasoningByDefault={expandReasoningByDefault}
             onToggleExpandReasoningByDefault={setExpandReasoningByDefault}
             chatBackgroundOpacity={chatBackgroundOpacity}

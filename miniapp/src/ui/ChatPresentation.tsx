@@ -280,10 +280,6 @@ function BubbleSkinLayer({ skin }: { skin: BubbleSkinKey }) {
   return <HeartRabbitBubbleSkin />;
 }
 
-export function formatTokenCountValue(value?: number): string {
-  return value ? `${value}tokens` : "";
-}
-
 export function ChatHeaderStatus({ sending }: { sending: boolean }) {
   if (!sending) {
     return <div className="max-w-full truncate text-[8px] font-medium leading-[1.05] text-gray-500">在线</div>;

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { apiJson, consumePendingPanelDeviceIdMigration, getOrCreatePanelDeviceId, setPanelToken } from "./api";
-import { AvatarBubble, ChatActionButton, ChatAttachmentBlock, ChatBubbleFrame, ChatHeaderStatus, ChatVoiceTranscriptBlock, HtmlBlock, PlainTextBlock, RichTextBlock, copyText, formatTokenCountValue } from "./ChatPresentation";
+import { AvatarBubble, ChatActionButton, ChatAttachmentBlock, ChatBubbleFrame, ChatHeaderStatus, ChatVoiceTranscriptBlock, HtmlBlock, PlainTextBlock, RichTextBlock, copyText } from "./ChatPresentation";
 import {
   TRANSPARENT_BUBBLE_CLASS,
   resolveBubbleClass,
@@ -341,7 +341,6 @@ export function MainChatScreen({
   chatFontFamily,
   showChatTimestamps,
   chatTimeFormat,
-  showTokenCount,
   expandReasoningByDefault,
   chatBackgroundOpacity,
   userBubbleStyle,
@@ -368,7 +367,6 @@ export function MainChatScreen({
   chatFontFamily: string;
   showChatTimestamps: boolean;
   chatTimeFormat: ChatTimeFormat;
-  showTokenCount: boolean;
   expandReasoningByDefault: boolean;
   chatBackgroundOpacity: number;
   userBubbleStyle: BubbleStyleKey;
@@ -2777,15 +2775,6 @@ export function MainChatScreen({
                                   onTranscriptToggle={toggleVoiceTranscript}
                                   showToggle={false}
                                 />
-                                {showTokenCount && (part.tokenCount?.input || part.tokenCount?.output) ? (
-                                  <div className="flex items-center gap-3 pl-1 text-[11px] text-gray-500">
-                                    <span>
-                                      {part.tokenCount?.input ? `↑${formatTokenCountValue(part.tokenCount.input)}` : ""}
-                                      {part.tokenCount?.input && part.tokenCount?.output ? " " : ""}
-                                      {part.tokenCount?.output ? `↓${formatTokenCountValue(part.tokenCount.output)}` : ""}
-                                    </span>
-                                  </div>
-                                ) : null}
                             </>
                           )}
                         </div>
