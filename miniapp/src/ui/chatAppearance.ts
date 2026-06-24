@@ -1,8 +1,8 @@
 import type { ChatFontKey } from "./chatMessages";
 
-export const BUBBLE_STYLE_KEYS = ["default", "soft", "outline", "decor", "angry", "peek", "jelly-yellow"] as const;
+export const BUBBLE_STYLE_KEYS = ["default", "soft", "outline", "decor", "angry", "peek", "jelly-yellow", "jelly-blue"] as const;
 export type BubbleStyleKey = typeof BUBBLE_STYLE_KEYS[number];
-export type BubbleSkinKey = "heart-rabbit" | "angry-emoji" | "peek-rabbit" | "soft-jelly-yellow";
+export type BubbleSkinKey = "heart-rabbit" | "angry-emoji" | "peek-rabbit" | "soft-jelly-yellow" | "soft-jelly-blue";
 
 export const TRANSPARENT_BUBBLE_CLASS =
   "bg-gradient-to-br from-white/40 via-white/20 to-white/5 border border-white/50 text-gray-800 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_20px_rgba(0,0,0,0.05)] backdrop-blur-sm";
@@ -34,6 +34,7 @@ export function getBubbleStyleLabel(style: BubbleStyleKey, role: "user" | "assis
   if (style === "angry") return "生气emoji";
   if (style === "peek") return "兔兔探头";
   if (style === "jelly-yellow") return "软萌果冻黄";
+  if (style === "jelly-blue") return "软萌果冻蓝";
   return "默认";
 }
 
@@ -45,6 +46,7 @@ export function resolveBubbleClass(role: "user" | "assistant", style: BubbleStyl
     if (style === "angry") return "border-0 bg-white/80 text-[#56524D] !shadow-none";
     if (style === "peek") return "border border-white bg-white text-[#56524D] !shadow-none";
     if (style === "jelly-yellow") return "border border-[#ebeaea] bg-[rgba(255,250,226,0.46)] text-[#423500] !shadow-none";
+    if (style === "jelly-blue") return "border border-[#e3e3e3] bg-[rgba(209,246,255,0.65)] text-[#2A5560] !shadow-none";
     return "bg-[#2D3748] text-white";
   }
   if (style === "soft") return "bg-[#F4F5F7] text-gray-800";
@@ -53,6 +55,7 @@ export function resolveBubbleClass(role: "user" | "assistant", style: BubbleStyl
   if (style === "angry") return "border-0 bg-white/80 text-[#56524D] !shadow-none";
   if (style === "peek") return "border border-white bg-white text-[#56524D] !shadow-none";
   if (style === "jelly-yellow") return "border border-[#ebeaea] bg-[rgba(255,250,226,0.46)] text-[#423500] !shadow-none";
+  if (style === "jelly-blue") return "border border-[#e3e3e3] bg-[rgba(209,246,255,0.65)] text-[#2A5560] !shadow-none";
   return "border border-gray-100/50 bg-white text-gray-800";
 }
 
@@ -61,5 +64,6 @@ export function resolveBubbleSkin(style: BubbleStyleKey): BubbleSkinKey | undefi
   if (style === "angry") return "angry-emoji";
   if (style === "peek") return "peek-rabbit";
   if (style === "jelly-yellow") return "soft-jelly-yellow";
+  if (style === "jelly-blue") return "soft-jelly-blue";
   return undefined;
 }
