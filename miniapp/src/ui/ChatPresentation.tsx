@@ -506,6 +506,106 @@ export function ChatVoiceTranscriptBlock({
   );
 }
 
+function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; align: "left" | "right" }) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const dragStartX = useRef<number | null>(null);
+  const suppressClickRef = useRef(false);
+  const isRight = align === "right";
+  const imageItems = items.filter((item) => attachmentSrc(item));
+  const countLabel = `展开 ${imageItems.length}`;
+
+  if (imageItems.length < 2) return null;
+  const normalizedIndex = ((activeIndex % imageItems.length) + imageItems.length) % imageItems.length;
+  const activeItem = imageItems[normalizedIndex];
+  const activeSrc = attachmentSrc(activeItem);
+  const stackItems = Array.from({ length: Math.min(imageItems.length - 1, 2) }, (_, index) => index + 1)
+    .map((offset) => imageItems[(normalizedIndex + offset) % imageItems.length])
+    .filter(Boolean);
+
+  function showNext() {
+    setActiveIndex((index) => (index + 1) % imageItems.length);
+  }
+
+  function showPrevious() {
+    setActiveIndex((index) => (index - 1 + imageItems.length) % imageItems.length);
+  }
+
+  function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
+    dragStartX.current = event.clientX;
+    suppressClickRef.current = false;
+  }
+
+  function handlePointerUp(event: React.PointerEvent<HTMLButtonElement>) {
+    const startX = dragStartX.current;
+    dragStartX.current = null;
+    if (startX == null) return;
+    const deltaX = event.clientX - startX;
+    if (Math.abs(deltaX) < 24) return;
+    suppressClickRef.current = true;
+    if (deltaX < 0) showNext();
+    else showPrevious();
+  }
+
+  function handleClick() {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+    window.open(activeSrc, "_blank", "noreferrer");
+  }
+
+  return (
+    <button
+      type="button"
+      className={`group relative block aspect-square w-[min(238px,68vw)] touch-pan-y overflow-visible text-left transition-transform active:scale-[0.99] ${
+        isRight ? "self-end" : "self-start"
+      }`}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={() => {
+        dragStartX.current = null;
+      }}
+      onClick={handleClick}
+      onDragStart={(event) => event.preventDefault()}
+      aria-label={`${countLabel}，滑动切换，点击查看当前第 ${normalizedIndex + 1} 张`}
+    >
+      {[...stackItems].reverse().map((item, index) => {
+        const src = attachmentSrc(item);
+        const depth = stackItems.length - index;
+        return (
+          <span
+            key={`${item.id}-stack-${index}`}
+            className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
+            style={{
+              transform: `translate(${depth * 9}px, ${depth * 4}px) rotate(${depth * 1.2}deg)`,
+              opacity: 0.62 + index * 0.12,
+              zIndex: index,
+            }}
+            aria-hidden="true"
+          >
+            <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" />
+          </span>
+        );
+      })}
+      <span className="absolute inset-0 z-10 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]">
+        <img
+          src={activeSrc}
+          alt={activeItem.alt || "图片"}
+          className="h-full w-full object-cover"
+          loading="lazy"
+        />
+      </span>
+      <span
+        className={`pointer-events-none absolute top-1/2 z-20 -translate-y-1/2 rounded-full bg-gray-100/86 px-3 py-2 text-[13px] font-medium leading-none text-gray-500 shadow-sm backdrop-blur ${
+          isRight ? "left-[-76px]" : "right-[-76px]"
+        }`}
+      >
+        {countLabel}
+      </span>
+    </button>
+  );
+}
+
 export function ChatAttachmentBlock({
   attachments,
   align = "left",
@@ -520,9 +620,12 @@ export function ChatAttachmentBlock({
     ? attachments.filter((item) => attachmentSrc(item) && (!allowed || allowed.has(item.kind)))
     : [];
   if (!items.length) return null;
+  const imageItems = items.filter((item) => item.kind === "image");
+  const nonImageItems = items.filter((item) => item.kind !== "image");
   return (
     <div className={`flex max-w-full flex-col gap-1.5 ${align === "right" ? "items-end" : "items-start"}`}>
-      {items.map((item) => {
+      {imageItems.length >= 2 ? <ImageAttachmentGallery items={imageItems} align={align} /> : null}
+      {(imageItems.length >= 2 ? nonImageItems : items).map((item) => {
         const src = attachmentSrc(item);
         if (item.kind === "image") {
           return (
