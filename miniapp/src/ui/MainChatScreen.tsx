@@ -221,6 +221,62 @@ function normalizePrivateModelContent(value: any): PrivateModelContent {
   return String(value || "").trim();
 }
 
+function isDataImageUrl(value: any): boolean {
+  return /^data:image\/[^;,]+;base64,/i.test(String(value || "").trim());
+}
+
+function localImageUrlsFromAttachments(attachments?: ChatAttachment[]): string[] {
+  return normalizeChatAttachments(attachments)
+    .filter((item) => item.kind === "image")
+    .map((item) => String(item.remoteUrl || "").trim())
+    .filter(Boolean);
+}
+
+function privateModelContentForLocalStorage(modelContent: PrivateModelContent, attachments?: ChatAttachment[]): PrivateModelContent {
+  if (!Array.isArray(modelContent)) return modelContent;
+  const imageUrls = localImageUrlsFromAttachments(attachments);
+  let imageIndex = 0;
+  const parts = modelContent
+    .filter((part) => part && typeof part === "object")
+    .map((part) => {
+      const imageUrl = part.image_url && typeof part.image_url === "object" ? part.image_url : null;
+      const rawUrl = String(imageUrl?.url || "").trim();
+      if (!isDataImageUrl(rawUrl)) return { ...part };
+      const replacementUrl = imageUrls[imageIndex++] || "";
+      if (!replacementUrl) return { type: "text", text: "[图片]" };
+      return {
+        ...part,
+        image_url: {
+          ...imageUrl,
+          url: replacementUrl,
+        },
+      };
+    });
+  return parts.length === 1 && parts[0]?.type === "text" ? String(parts[0].text || "").trim() : parts;
+}
+
+function privateRequestBodyForLocalStorage(body: any, attachments?: ChatAttachment[]): any {
+  if (!body || typeof body !== "object") return body;
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  return {
+    ...body,
+    messages: messages.map((message: any) => {
+      if (!message || typeof message !== "object") return message;
+      return {
+        ...message,
+        content: privateModelContentForLocalStorage(message.content, attachments),
+      };
+    }),
+  };
+}
+
+function queuedPrivateInputForLocalStorage(item: QueuedPrivateInput): QueuedPrivateInput {
+  return {
+    ...item,
+    modelContent: privateModelContentForLocalStorage(item.modelContent, item.attachments),
+  };
+}
+
 function normalizeQueuedPrivateInput(raw: any): QueuedPrivateInput | null {
   if (!raw || typeof raw !== "object") return null;
   const rawUserMessage = sanitizeHistoryMessages([raw.userMessage]).find((message) => message.role === "user");
@@ -509,11 +565,11 @@ export function MainChatScreen({
   const messagesRef = useRef<ChatDraftMessage[]>(seedMessages);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [mediaBusy, setMediaBusy] = useState(false);
+  const [mediaBusy, setMediaBusyValue] = useState(false);
   const [cancellingSend, setCancellingSend] = useState(false);
   const [activeSendRequestId, setActiveSendRequestId] = useState("");
   const [activeSendStageLabel, setActiveSendStageLabel] = useState("");
-  const [recordingChatVoice, setRecordingChatVoice] = useState(false);
+  const [recordingChatVoice, setRecordingChatVoiceValue] = useState(false);
   const [voiceInputOpen, setVoiceInputOpen] = useState(false);
   const [chatVoiceCancelArmed, setChatVoiceCancelArmed] = useState(false);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
@@ -533,6 +589,8 @@ export function MainChatScreen({
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaBusyRef = useRef(false);
+  const recordingChatVoiceRef = useRef(false);
   const chatVoiceStreamRef = useRef<MediaStream | null>(null);
   const chatVoiceRecorderRef = useRef<MediaRecorder | null>(null);
   const chatVoiceChunksRef = useRef<Blob[]>([]);
@@ -548,6 +606,16 @@ export function MainChatScreen({
   const privateInputAggregateVersionRef = useRef(0);
   const privateInputAggregateHoldUntilNextInputRef = useRef(false);
   const bubbleTouchRef = useRef<ChatBubbleTouchState | null>(null);
+
+  function setMediaBusy(next: boolean) {
+    mediaBusyRef.current = next;
+    setMediaBusyValue(next);
+  }
+
+  function setRecordingChatVoice(next: boolean) {
+    recordingChatVoiceRef.current = next;
+    setRecordingChatVoiceValue(next);
+  }
 
   const [activeModel, setActiveModel] = useState(() => {
     try {
@@ -577,7 +645,7 @@ export function MainChatScreen({
         windowId: historyWindowId,
         holdUntilNextInput: Boolean(privateInputAggregateHoldUntilNextInputRef.current),
         updatedAt: new Date().toISOString(),
-        items,
+        items: items.map(queuedPrivateInputForLocalStorage),
       }));
     } catch (e: any) {
       logSumiTalkClientEvent("private_input_aggregate_persist_error", {
@@ -1913,6 +1981,16 @@ export function MainChatScreen({
       schedulePrivateInputAggregateFlush(SUMITALK_PRIVATE_INPUT_BUSY_RETRY_MS, "busy_retry");
       return;
     }
+    if (mediaBusyRef.current || recordingChatVoiceRef.current || chatVoicePressingRef.current) {
+      logSumiTalkClientEvent("private_input_aggregate_wait_media", {
+        parts: privateInputAggregateQueueRef.current.length,
+        mediaBusy: mediaBusyRef.current,
+        recordingVoice: recordingChatVoiceRef.current,
+        pressingVoice: chatVoicePressingRef.current,
+      }, "warning");
+      schedulePrivateInputAggregateFlush(SUMITALK_PRIVATE_INPUT_BUSY_RETRY_MS, "busy_retry");
+      return;
+    }
     const queued = privateInputAggregateQueueRef.current;
     privateInputAggregateQueueRef.current = [];
     if (privateInputAggregateTimerRef.current) {
@@ -2171,6 +2249,9 @@ export function MainChatScreen({
       ...(assistantPlaceholder ? [assistantPlaceholder] : []),
       ...(benbenPlaceholder ? [benbenPlaceholder] : []),
     ];
+    const retryRequestBody = requestBody
+      ? privateRequestBodyForLocalStorage(requestBody, attachments)
+      : null;
     const replyTarget = resolvedDeviceId;
     setInput("");
     setPlusOpen(false);
@@ -2195,9 +2276,9 @@ export function MainChatScreen({
             model: activeModel,
             retryPayload: {
               path: requestPath,
-              body: requestBody,
+              body: retryRequestBody || requestBody,
             },
-            retryPayloadSize: JSON.stringify(requestBody).length,
+            retryPayloadSize: JSON.stringify(retryRequestBody || requestBody).length,
             userMessageId: operationUserMsg.id,
             assistantMessageId: assistantId,
             status: "draft",

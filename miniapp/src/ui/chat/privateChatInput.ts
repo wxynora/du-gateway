@@ -4,6 +4,7 @@ import {
   uploadChatDocument,
   uploadChatImage,
 } from "./chatMedia";
+import { fileToDataUrl } from "../imageDataUrl";
 import {
   buildPrivateUserContent,
   type PrivateModelContent,
@@ -31,19 +32,38 @@ export function prepareTextPrivateChatInput(content: string): PreparedPrivateCha
   };
 }
 
+function buildPrivateImageDataContent(content: string, imageDataUrls: string[]): PrivateModelContent {
+  const text = String(content || "").trim();
+  const imageParts = imageDataUrls
+    .map((url) => String(url || "").trim())
+    .filter((url) => /^data:image\/[^;,]+;base64,/i.test(url))
+    .map((url) => ({
+      type: "image_url",
+      image_url: { url },
+    }));
+  if (!imageParts.length) return buildPrivateUserContent(text, []);
+  const parts: Array<Record<string, any>> = [];
+  if (text) parts.push({ type: "text", text });
+  parts.push(...imageParts);
+  return parts;
+}
+
 export async function prepareImagesPrivateChatInput(files: File[], content: string): Promise<PreparedPrivateChatInput> {
   const text = String(content || "").trim();
   const imageFiles = files.filter(Boolean);
   if (!imageFiles.length) {
     return prepareTextPrivateChatInput(text);
   }
-  const attachments = await Promise.all(imageFiles.map((file) => uploadChatImage(file)));
+  const [attachments, imageDataUrls] = await Promise.all([
+    Promise.all(imageFiles.map((file) => uploadChatImage(file))),
+    Promise.all(imageFiles.map((file) => fileToDataUrl(file))),
+  ]);
   return {
     source: "image",
     content: text,
     displayContent: text,
     attachments,
-    modelContent: buildPrivateUserContent(text, attachments),
+    modelContent: buildPrivateImageDataContent(text, imageDataUrls),
   };
 }
 

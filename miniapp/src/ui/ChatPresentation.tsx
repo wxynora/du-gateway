@@ -518,7 +518,6 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   const suppressClickRef = useRef(false);
   const isRight = align === "right";
   const imageItems = items.filter((item) => attachmentSrc(item));
-  const countLabel = `展开 ${imageItems.length}`;
   const swipeDistance = 136;
   const commitDistance = 42;
 
@@ -550,7 +549,12 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     .map((offset) => imageItems[(normalizedIndex + offset) % imageItems.length])
     .filter(Boolean);
 
+  function stopBubbleGesture(event: React.SyntheticEvent) {
+    event.stopPropagation();
+  }
+
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
+    event.stopPropagation();
     dragStartX.current = event.clientX;
     suppressClickRef.current = false;
     setSwipe({ phase: "dragging", deltaX: 0, direction: 1, accepted: false });
@@ -562,6 +566,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLButtonElement>) {
+    event.stopPropagation();
     const startX = dragStartX.current;
     if (startX == null) return;
     const deltaX = event.clientX - startX;
@@ -571,6 +576,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   }
 
   function handlePointerUp(event: React.PointerEvent<HTMLButtonElement>) {
+    event.stopPropagation();
     const startX = dragStartX.current;
     dragStartX.current = null;
     if (startX == null) return;
@@ -606,7 +612,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   return (
     <button
       type="button"
-      className={`group relative block aspect-square w-[min(238px,68vw)] touch-pan-y overflow-visible text-left transition-transform active:scale-[0.99] ${
+      className={`group relative block h-[216px] w-[162px] touch-pan-y overflow-visible text-left transition-transform active:scale-[0.99] ${
         isRight ? "self-end" : "self-start"
       }`}
       onPointerDown={handlePointerDown}
@@ -616,9 +622,13 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
         dragStartX.current = null;
         setSwipe((current) => ({ ...current, phase: "settling", accepted: false }));
       }}
+      onTouchStart={stopBubbleGesture}
+      onTouchMove={stopBubbleGesture}
+      onTouchEnd={stopBubbleGesture}
+      onTouchCancel={stopBubbleGesture}
       onClick={handleClick}
       onDragStart={(event) => event.preventDefault()}
-      aria-label={`${countLabel}，滑动切换，点击查看当前第 ${normalizedIndex + 1} 张`}
+      aria-label={`${imageItems.length} 张图片，滑动切换，点击查看当前第 ${normalizedIndex + 1} 张`}
     >
       {[...stackItems].reverse().map((item, index) => {
         const src = attachmentSrc(item);
@@ -628,13 +638,13 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
             key={`${item.id}-stack-${index}`}
             className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
             style={{
-              transform: `translate(${depth * 9}px, ${depth * 4}px) rotate(${depth * 1.2}deg)`,
+              transform: `translate(${depth * (isRight ? -13 : 13)}px, ${depth * 5}px) scale(${1 - depth * 0.022}) rotate(${depth * (isRight ? -1.2 : 1.2)}deg)`,
               opacity: 0.62 + index * 0.12,
               zIndex: index,
             }}
             aria-hidden="true"
           >
-            <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" />
+            <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" draggable={false} />
           </span>
         );
       })}
@@ -650,6 +660,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
             alt={activeItem.alt || "图片"}
             className="h-full w-full object-cover"
             loading="lazy"
+            draggable={false}
           />
         </span>
         {swipe.phase !== "idle" && coverItem ? (
@@ -665,16 +676,10 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
               alt={coverItem.alt || "图片"}
               className="h-full w-full object-cover"
               loading="lazy"
+              draggable={false}
             />
           </span>
         ) : null}
-      </span>
-      <span
-        className={`pointer-events-none absolute top-1/2 z-20 -translate-y-1/2 rounded-full bg-gray-100/86 px-3 py-2 text-[13px] font-medium leading-none text-gray-500 shadow-sm backdrop-blur ${
-          isRight ? "left-[-76px]" : "right-[-76px]"
-        }`}
-      >
-        {countLabel}
       </span>
     </button>
   );
