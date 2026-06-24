@@ -15,6 +15,7 @@ export type ChatAttachment = {
   remoteUrl?: string;
   localUrl?: string;
   thumbUrl?: string;
+  previewUrl?: string;
   width?: number;
   height?: number;
   durationMs?: number;
@@ -214,6 +215,13 @@ function sanitizeAttachmentUrl(value: any): string {
   return raw;
 }
 
+function sanitizeAttachmentPreviewUrl(value: any): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^(?:blob:|data:image\/|https?:\/\/|\/)/i.test(raw)) return raw;
+  return "";
+}
+
 export function normalizeChatAttachments(value: any): ChatAttachment[] {
   const list = Array.isArray(value) ? value : [];
   const out: ChatAttachment[] = [];
@@ -224,12 +232,14 @@ export function normalizeChatAttachments(value: any): ChatAttachment[] {
     const remoteUrl = sanitizeAttachmentUrl(raw.remoteUrl || raw.url || raw.src);
     const localUrl = sanitizeAttachmentUrl(raw.localUrl || raw.localUri);
     const thumbUrl = sanitizeAttachmentUrl(raw.thumbUrl || raw.thumbUri);
+    const previewUrl = kind === "image" ? sanitizeAttachmentPreviewUrl(raw.previewUrl || raw.previewUri || raw.localPreviewUrl) : "";
     const remoteKey = String(raw.remoteKey || raw.key || "").trim();
     if (
       !remoteUrl
       && !localUrl
       && !remoteKey
       && !thumbUrl
+      && !previewUrl
       && !String(raw.transcript || "").trim()
       && !String(raw.textPreview || raw.text || "").trim()
     ) continue;
@@ -247,6 +257,7 @@ export function normalizeChatAttachments(value: any): ChatAttachment[] {
       ...(remoteUrl ? { remoteUrl } : {}),
       ...(localUrl ? { localUrl } : {}),
       ...(thumbUrl ? { thumbUrl } : {}),
+      ...(previewUrl ? { previewUrl } : {}),
       ...(Number.isFinite(Number(raw.width)) && Number(raw.width) > 0 ? { width: Number(raw.width) } : {}),
       ...(Number.isFinite(Number(raw.height)) && Number(raw.height) > 0 ? { height: Number(raw.height) } : {}),
       ...(Number.isFinite(durationMs) && durationMs > 0 ? { durationMs } : {}),

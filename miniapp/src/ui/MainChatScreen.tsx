@@ -91,6 +91,7 @@ import {
 } from "./chat/chatMedia";
 import {
   prepareDocumentPrivateChatInput,
+  prepareInstantImagesPrivateChatInput,
   prepareImagesPrivateChatInput,
   prepareTextPrivateChatInput,
   prepareTravelFormPrivateChatInput,
@@ -162,6 +163,7 @@ type QueuedPrivateInput = {
   source: ChatSendSource;
   modelContent: PrivateModelContent;
   userMessage: ChatDraftMessage;
+  imageFiles?: File[];
 };
 type ChatBubbleMenuTargetBase = {
   id: string;
@@ -271,6 +273,27 @@ function privateRequestBodyForLocalStorage(body: any, attachments?: ChatAttachme
   };
 }
 
+function stripPreviewUrlsFromAttachments(attachments?: ChatAttachment[]): ChatAttachment[] {
+  return normalizeChatAttachments(attachments).map((attachment) => {
+    const { previewUrl, ...persistable } = attachment;
+    return persistable;
+  });
+}
+
+function stripPreviewUrlsFromMessages(messages: ChatDraftMessage[]): ChatDraftMessage[] {
+  return messages.map((message) => {
+    const attachments = stripPreviewUrlsFromAttachments(message.attachments);
+    if (!attachments.length) {
+      const { attachments: _attachments, ...rest } = message;
+      return rest;
+    }
+    return {
+      ...message,
+      attachments,
+    };
+  });
+}
+
 async function compressPrivateModelContentDataImages(modelContent: PrivateModelContent): Promise<PrivateModelContent> {
   if (!Array.isArray(modelContent)) return modelContent;
   let changed = false;
@@ -297,6 +320,20 @@ async function compressPrivateModelContentDataImages(modelContent: PrivateModelC
 }
 
 async function compressQueuedPrivateInputImages(item: QueuedPrivateInput): Promise<QueuedPrivateInput> {
+  if (item.imageFiles?.length) {
+    const prepared = await prepareImagesPrivateChatInput(item.imageFiles, item.content);
+    const attachments = normalizeChatAttachments(prepared.attachments);
+    return {
+      ...item,
+      attachments,
+      modelContent: prepared.modelContent,
+      userMessage: {
+        ...item.userMessage,
+        attachments,
+      },
+      imageFiles: undefined,
+    };
+  }
   return {
     ...item,
     modelContent: await compressPrivateModelContentDataImages(item.modelContent),
@@ -313,9 +350,17 @@ function shouldDropPrivateAggregateAfterFailure(source: ChatSendSource, queued: 
 }
 
 function queuedPrivateInputForLocalStorage(item: QueuedPrivateInput): QueuedPrivateInput {
+  const { imageFiles: _imageFiles, ...serializable } = item;
+  const attachments = stripPreviewUrlsFromAttachments(serializable.attachments);
+  const userMessage = {
+    ...serializable.userMessage,
+    attachments: stripPreviewUrlsFromAttachments(serializable.userMessage.attachments),
+  };
   return {
-    ...item,
-    modelContent: privateModelContentForLocalStorage(item.modelContent, item.attachments),
+    ...serializable,
+    attachments,
+    userMessage,
+    modelContent: privateModelContentForLocalStorage(serializable.modelContent, attachments),
   };
 }
 
@@ -629,6 +674,7 @@ export function MainChatScreen({
   const [quotedBubble, setQuotedBubble] = useState<ChatBubbleQuote | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
   const mediaBusyRef = useRef(false);
@@ -657,6 +703,19 @@ export function MainChatScreen({
   function setRecordingChatVoice(next: boolean) {
     recordingChatVoiceRef.current = next;
     setRecordingChatVoiceValue(next);
+  }
+
+  function refocusTextInputSoon() {
+    if (voiceInputOpen) return;
+    const focus = () => {
+      try {
+        textInputRef.current?.focus({ preventScroll: true });
+      } catch {
+        textInputRef.current?.focus();
+      }
+    };
+    window.requestAnimationFrame(focus);
+    window.setTimeout(focus, 60);
   }
 
   const [activeModel, setActiveModel] = useState(() => {
@@ -1073,7 +1132,7 @@ export function MainChatScreen({
     nextMessages: ChatDraftMessage[],
     options: { localDeviceId?: string; strict?: boolean; source?: string } = {},
   ) {
-    const sanitizedMessages = sanitizeHistoryMessages(nextMessages);
+    const sanitizedMessages = stripPreviewUrlsFromMessages(sanitizeHistoryMessages(nextMessages));
     const resolvedDeviceId = String(options.localDeviceId || deviceId || "").trim();
     if (resolvedDeviceId && historyWindowId) {
       try {
@@ -1928,7 +1987,7 @@ export function MainChatScreen({
 
   async function enqueuePrivateInputAggregate(
     rawContent: string,
-    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent } = {},
+    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent; imageFiles?: File[] } = {},
   ): Promise<boolean> {
     const content = String(rawContent || "").trim();
     const attachments = normalizeChatAttachments(options.attachments);
@@ -1985,6 +2044,9 @@ export function MainChatScreen({
     const nextMessages = [...messagesRef.current, userMessage];
     messagesRef.current = nextMessages;
     setMessages(nextMessages);
+    setInput("");
+    setPlusOpen(false);
+    refocusTextInputSoon();
     try {
       await saveDisplayHistory(nextMessages, {
         localDeviceId: resolvedDeviceId,
@@ -1994,6 +2056,10 @@ export function MainChatScreen({
     } catch (e: any) {
       messagesRef.current = previousMessages;
       setMessages(previousMessages);
+      if (displayContent) {
+        setInput((current) => current || displayContent);
+        refocusTextInputSoon();
+      }
       logSumiTalkClientEvent("private_input_aggregate_append_error", {
         source,
         error: String(e?.message || e),
@@ -2008,6 +2074,7 @@ export function MainChatScreen({
       source,
       modelContent: options.modelContent ?? buildPrivateUserContent(content, attachments),
       userMessage,
+      imageFiles: options.imageFiles,
     });
     persistPrivateInputAggregate("enqueue");
     if (sending) {
@@ -2016,8 +2083,6 @@ export function MainChatScreen({
         source,
       }, "warning");
     }
-    setInput("");
-    setPlusOpen(false);
     setActiveSendStageLabel("等待继续输入");
     schedulePrivateInputAggregateFlush();
     return true;
@@ -2097,7 +2162,7 @@ export function MainChatScreen({
 
   async function sendChatContent(
     rawContent: string,
-    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent } = {},
+    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent; imageFiles?: File[] } = {},
   ): Promise<boolean> {
     const attachments = normalizeChatAttachments(options.attachments);
     const source: ChatSendSource = options.source
@@ -2634,7 +2699,8 @@ export function MainChatScreen({
   }
 
   async function sendMessage() {
-    await sendPreparedPrivateChatInput(prepareTextPrivateChatInput(input));
+    const sent = await sendPreparedPrivateChatInput(prepareTextPrivateChatInput(input));
+    if (sent) refocusTextInputSoon();
   }
 
   async function sendPreparedPrivateChatInput(prepared: PreparedPrivateChatInput): Promise<boolean> {
@@ -2645,6 +2711,7 @@ export function MainChatScreen({
       attachments: finalPrepared.attachments,
       source: finalPrepared.source,
       modelContent: finalPrepared.modelContent,
+      imageFiles: finalPrepared.imageFiles,
     });
     if (sent && quote) setQuotedBubble(null);
     return sent;
@@ -2710,14 +2777,17 @@ export function MainChatScreen({
         names: files.map((file) => file.name).slice(0, 8),
         bytes: files.reduce((sum, file) => sum + file.size, 0),
       });
-      const prepared = await prepareImagesPrivateChatInput(files, input);
+      const prepared = groupChatMode
+        ? await prepareImagesPrivateChatInput(files, input)
+        : prepareInstantImagesPrivateChatInput(files, input);
       logSumiTalkClientEvent("image_upload_ok", {
         count: prepared.attachments.length,
         bytes: prepared.attachments.reduce((sum, attachment) => sum + Number(attachment.size || 0), 0),
         hasRemoteUrl: prepared.attachments.some((attachment) => Boolean(attachment.remoteUrl)),
         hasRemoteKey: prepared.attachments.some((attachment) => Boolean(attachment.remoteKey)),
       });
-      await sendPreparedPrivateChatInput(prepared);
+      const sent = await sendPreparedPrivateChatInput(prepared);
+      if (sent) refocusTextInputSoon();
     } catch (e: any) {
       logSumiTalkClientEvent("image_upload_error", { error: String(e?.message || e) }, "error");
       toast(`图片发送失败：${e?.message || e}`);
@@ -2951,7 +3021,6 @@ export function MainChatScreen({
     || isGroupDiscussionContinueCommand(trimmedInput)
   );
   const canCancelSend = sending && Boolean(activeSendRequestId) && !canSubmitWhileBusy;
-  const activeSendStatusLabel = (sending || cancellingSend || groupDiscussionRunning) ? activeSendStageLabel : "";
   const searchMatches = useMemo<ChatSearchMatch[]>(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return [];
@@ -3108,13 +3177,6 @@ export function MainChatScreen({
           <div className="mt-1 flex justify-center">
             <div className="max-w-[72vw] truncate rounded-full bg-amber-50/80 px-3 py-1 text-[10px] font-medium text-amber-700 backdrop-blur">
               {groupDiscussionStatus}
-            </div>
-          </div>
-        ) : null}
-        {activeSendStatusLabel ? (
-          <div className="mt-1 flex justify-center">
-            <div className="max-w-[72vw] truncate rounded-full bg-sky-50/85 px-3 py-1 text-[10px] font-medium text-sky-700 backdrop-blur">
-              {activeSendStatusLabel}
             </div>
           </div>
         ) : null}
@@ -3479,6 +3541,7 @@ export function MainChatScreen({
           ) : (
             <div className={`flex min-h-[32px] flex-1 items-center rounded-full px-3 py-1 ${chatInputShellClass}`}>
               <textarea
+                ref={textInputRef}
                 className="max-h-28 min-h-[22px] w-full resize-none bg-transparent font-medium leading-6 text-gray-900 outline-none placeholder:text-gray-400"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -3523,6 +3586,7 @@ export function MainChatScreen({
           ) : (
             <button
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
+              onPointerDown={(event) => event.preventDefault()}
               onClick={() => void sendMessage()}
               disabled={!trimmedInput || (sending && !canSubmitWhileBusy)}
               aria-label="发送"

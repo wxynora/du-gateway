@@ -281,26 +281,8 @@ function BubbleSkinLayer({ skin }: { skin: BubbleSkinKey }) {
 }
 
 export function ChatHeaderStatus({ sending }: { sending: boolean }) {
-  if (!sending) {
-    return <div className="max-w-full truncate text-[8px] font-medium leading-[1.05] text-gray-500">在线</div>;
-  }
-  return (
-    <div className="flex max-w-full min-w-0 items-center justify-center gap-1 text-[8px] font-medium leading-[1.05] text-[#5F6C7B]" aria-label="正在输入中">
-      <span className="min-w-0 truncate">正在输入中</span>
-      <span className="inline-flex shrink-0 items-end gap-0.5">
-        {[0, 1, 2].map((index) => (
-          <span
-            key={index}
-            className="inline-block h-[2.5px] w-[2.5px] rounded-full bg-[#5F6C7B] animate-pulse"
-            style={{
-              animationDelay: `${index * 0.18}s`,
-              animationDuration: "1s",
-            }}
-          />
-        ))}
-      </span>
-    </div>
-  );
+  void sending;
+  return <div className="max-w-full truncate text-[8px] font-medium leading-[1.05] text-gray-500">在线</div>;
 }
 
 export function RichTextBlock({ content }: { content: string }) {
@@ -349,15 +331,51 @@ export function PlainTextBlock({ content }: { content: string }) {
 }
 
 function attachmentSrc(item: ChatAttachment): string {
-  return String(item.remoteUrl || item.localUrl || item.thumbUrl || "").trim();
+  return String(item.previewUrl || item.remoteUrl || item.localUrl || item.thumbUrl || "").trim();
 }
 
 function attachmentPreviewSrc(item: ChatAttachment): string {
-  return String(item.kind === "image" ? item.thumbUrl || item.remoteUrl || item.localUrl : item.remoteUrl || item.localUrl || item.thumbUrl).trim();
+  return String(item.kind === "image" ? item.previewUrl || item.thumbUrl || item.remoteUrl || item.localUrl : item.remoteUrl || item.localUrl || item.thumbUrl).trim();
 }
 
-function attachmentOpenSrc(item: ChatAttachment): string {
-  return String(item.remoteUrl || item.localUrl || item.thumbUrl || "").trim();
+function ImagePreviewOverlay({
+  src,
+  alt,
+  onClose,
+}: {
+  src: string;
+  alt?: string;
+  onClose: () => void;
+}) {
+  const imageSrc = String(src || "").trim();
+  if (!imageSrc) return null;
+  return (
+    <div
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/28 px-4 py-8 backdrop-blur-[2px]"
+      onClick={onClose}
+    >
+      <div
+        className="relative max-h-[72vh] max-w-[86vw] overflow-hidden rounded-[18px] bg-white/90 p-2 shadow-[0_18px_60px_rgba(15,23,42,0.28)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-white/86 text-[22px] leading-none text-gray-500 shadow-sm active:scale-95"
+          onClick={onClose}
+          aria-label="关闭图片预览"
+        >
+          ×
+        </button>
+        <img
+          src={imageSrc}
+          alt={alt || "图片"}
+          className="block max-h-[68vh] max-w-[82vw] rounded-[14px] object-contain"
+          loading="eager"
+          draggable={false}
+        />
+      </div>
+    </div>
+  );
 }
 
 function formatAudioDuration(ms?: number): string {
@@ -516,6 +534,7 @@ export function ChatVoiceTranscriptBlock({
 
 function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; align: "left" | "right" }) {
   const [activeIndex, setActiveIndex] = useState(0);
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [swipe, setSwipe] = useState<{
     phase: "idle" | "dragging" | "settling";
     deltaX: number;
@@ -533,7 +552,6 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   const normalizedIndex = ((activeIndex % imageItems.length) + imageItems.length) % imageItems.length;
   const activeItem = imageItems[normalizedIndex];
   const activePreviewSrc = attachmentPreviewSrc(activeItem);
-  const activeOpenSrc = attachmentOpenSrc(activeItem);
   const swipeDirection = swipe.direction;
   const swipeProgress = Math.min(Math.abs(swipe.deltaX) / swipeDistance, 1);
   const swapProgress = swipe.phase === "dragging"
@@ -541,7 +559,13 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     : swipe.phase === "settling" && swipe.accepted
       ? 1
       : 0;
-  const layerTransition = swipe.phase === "dragging" ? "none" : "transform 220ms ease-out, opacity 220ms ease-out";
+  const visualProgress = swipe.phase === "dragging"
+    ? Math.pow(swapProgress, 0.92)
+    : swapProgress;
+  const targetOnTop = visualProgress >= 0.56 || (swipe.phase === "settling" && swipe.accepted);
+  const layerTransition = swipe.phase === "dragging"
+    ? "none"
+    : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease-out";
   const stackOffsetCount = swipe.phase === "idle"
     ? Math.min(imageItems.length - 1, 2)
     : Math.min(Math.max(0, imageItems.length - 2), 2);
@@ -552,10 +576,10 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   const targetPreviewSrc = targetItem ? attachmentPreviewSrc(targetItem) : "";
 
   function backPose(depth: number, direction: 1 | -1 = isRight ? -1 : 1) {
-    const baseX = depth * direction * 13;
-    const baseY = depth * 5;
-    const baseScale = 1 - depth * 0.022;
-    const baseRotate = depth * direction * 1.2;
+    const baseX = depth * direction * 16;
+    const baseY = depth * 7;
+    const baseScale = 1 - depth * 0.045;
+    const baseRotate = depth * direction * 1.45;
     return { x: baseX, y: baseY, scale: baseScale, rotate: baseRotate };
   }
 
@@ -564,16 +588,16 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   }
 
   const swapBackPose = backPose(1, swipeDirection);
-  const activeTranslateX = swipe.phase === "idle" ? 0 : mix(0, swapBackPose.x, swapProgress);
-  const activeTranslateY = swipe.phase === "idle" ? 0 : mix(0, swapBackPose.y, swapProgress);
-  const activeScale = swipe.phase === "idle" ? 1 : mix(1, swapBackPose.scale, swapProgress);
-  const activeRotate = swipe.phase === "idle" ? 0 : mix(0, swapBackPose.rotate, swapProgress);
-  const activeOpacity = swipe.phase === "idle" ? 1 : mix(1, 0.72, swapProgress);
-  const targetTranslateX = mix(swapBackPose.x, 0, swapProgress);
-  const targetTranslateY = mix(swapBackPose.y, 0, swapProgress);
-  const targetScale = mix(swapBackPose.scale, 1, swapProgress);
-  const targetRotate = mix(swapBackPose.rotate, 0, swapProgress);
-  const targetOpacity = mix(0.76, 1, swapProgress);
+  const activeTranslateX = swipe.phase === "idle" ? 0 : mix(0, swapBackPose.x, visualProgress);
+  const activeTranslateY = swipe.phase === "idle" ? 0 : mix(0, swapBackPose.y, visualProgress);
+  const activeScale = swipe.phase === "idle" ? 1 : mix(1, swapBackPose.scale, visualProgress);
+  const activeRotate = swipe.phase === "idle" ? 0 : mix(0, swapBackPose.rotate, visualProgress);
+  const activeOpacity = swipe.phase === "idle" ? 1 : mix(1, 0.9, visualProgress);
+  const targetTranslateX = mix(swapBackPose.x, 0, visualProgress);
+  const targetTranslateY = mix(swapBackPose.y, 0, visualProgress);
+  const targetScale = mix(swapBackPose.scale, 1, visualProgress);
+  const targetRotate = mix(swapBackPose.rotate, 0, visualProgress);
+  const targetOpacity = mix(0.72, 1, visualProgress);
 
   function stackLayerStyle(depth: number): React.CSSProperties {
     const pose = backPose(depth);
@@ -582,6 +606,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       opacity: Math.min(1, 0.64 + (2 - depth) * 0.08),
       zIndex: 3 + (3 - depth),
       transition: layerTransition,
+      willChange: "transform, opacity",
     };
   }
 
@@ -642,84 +667,96 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       suppressClickRef.current = false;
       return;
     }
-    window.open(activeOpenSrc || activePreviewSrc, "_blank", "noreferrer");
+    setPreviewImage({ src: activePreviewSrc, alt: activeItem.alt || "图片" });
   }
 
   return (
-    <button
-      type="button"
-      className={`group relative block h-[216px] w-[162px] touch-pan-y overflow-visible text-left transition-transform active:scale-[0.99] ${
-        isRight ? "self-end" : "self-start"
-      }`}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={(event) => {
-        event.stopPropagation();
-        dragStartX.current = null;
-        setSwipe((current) => ({ ...current, phase: "settling", accepted: false }));
-      }}
-      onTouchStart={stopBubbleGesture}
-      onTouchMove={stopBubbleGesture}
-      onTouchEnd={stopBubbleGesture}
-      onTouchCancel={stopBubbleGesture}
-      onClick={handleClick}
-      onDragStart={(event) => event.preventDefault()}
-      aria-label={`${imageItems.length} 张图片，滑动切换，点击查看当前第 ${normalizedIndex + 1} 张`}
-    >
-      {[...stackItems].reverse().map((item, index) => {
-        const src = attachmentPreviewSrc(item);
-        const depth = stackItems.length - index;
-        return (
-          <span
-            key={`${item.id}-stack-${index}`}
-            className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
-            style={stackLayerStyle(depth)}
-            aria-hidden="true"
-          >
-            <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" draggable={false} />
-          </span>
-        );
-      })}
-      <span
-        className="absolute inset-0 z-10 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
-        style={{
-          transform: `translate3d(${activeTranslateX}px, ${activeTranslateY}px, 0) scale(${activeScale}) rotate(${activeRotate}deg)`,
-          opacity: activeOpacity,
-          zIndex: swipe.phase === "idle" ? 12 : 11,
-          transition: layerTransition,
+    <>
+      <button
+        type="button"
+        className={`group relative block h-[216px] w-[162px] touch-pan-y overflow-visible text-left transition-transform active:scale-[0.99] ${
+          isRight ? "self-end" : "self-start"
+        }`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={(event) => {
+          event.stopPropagation();
+          dragStartX.current = null;
+          setSwipe((current) => ({ ...current, phase: "settling", accepted: false }));
         }}
+        onTouchStart={stopBubbleGesture}
+        onTouchMove={stopBubbleGesture}
+        onTouchEnd={stopBubbleGesture}
+        onTouchCancel={stopBubbleGesture}
+        onClick={handleClick}
+        onDragStart={(event) => event.preventDefault()}
+        aria-label={`${imageItems.length} 张图片，滑动切换，点击查看当前第 ${normalizedIndex + 1} 张`}
+        style={{ perspective: 800, transformStyle: "preserve-3d" }}
       >
-        <img
-          src={activePreviewSrc}
-          alt={activeItem.alt || "图片"}
-          className="h-full w-full object-cover"
-          loading="eager"
-          draggable={false}
-        />
-      </span>
-      {swipe.phase !== "idle" && targetItem && targetPreviewSrc ? (
+        {[...stackItems].reverse().map((item, index) => {
+          const src = attachmentPreviewSrc(item);
+          const depth = stackItems.length - index;
+          return (
+            <span
+              key={`${item.id}-stack-${index}`}
+              className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
+              style={stackLayerStyle(depth)}
+              aria-hidden="true"
+            >
+              <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" draggable={false} />
+            </span>
+          );
+        })}
         <span
-          className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_8px_22px_rgba(15,23,42,0.16)]"
+          className="absolute inset-0 z-10 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
           style={{
-            transform: `translate3d(${targetTranslateX}px, ${targetTranslateY}px, 0) scale(${targetScale}) rotate(${targetRotate}deg)`,
-            opacity: targetOpacity,
-            zIndex: 20,
+            transform: `translate3d(${activeTranslateX}px, ${activeTranslateY}px, 0) scale(${activeScale}) rotate(${activeRotate}deg)`,
+            opacity: activeOpacity,
+            zIndex: swipe.phase === "idle" || !targetOnTop ? 20 : 11,
             transition: layerTransition,
+            willChange: "transform, opacity",
           }}
-          onTransitionEnd={handleSwipeTransitionEnd}
-          aria-hidden="true"
         >
           <img
-            src={targetPreviewSrc}
-            alt=""
+            src={activePreviewSrc}
+            alt={activeItem.alt || "图片"}
             className="h-full w-full object-cover"
             loading="eager"
             draggable={false}
           />
         </span>
+        {swipe.phase !== "idle" && targetItem && targetPreviewSrc ? (
+          <span
+            className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_8px_22px_rgba(15,23,42,0.16)]"
+            style={{
+              transform: `translate3d(${targetTranslateX}px, ${targetTranslateY}px, 0) scale(${targetScale}) rotate(${targetRotate}deg)`,
+              opacity: targetOpacity,
+              zIndex: targetOnTop ? 21 : 12,
+              transition: layerTransition,
+              willChange: "transform, opacity",
+            }}
+            onTransitionEnd={handleSwipeTransitionEnd}
+            aria-hidden="true"
+          >
+            <img
+              src={targetPreviewSrc}
+              alt=""
+              className="h-full w-full object-cover"
+              loading="eager"
+              draggable={false}
+            />
+          </span>
+        ) : null}
+      </button>
+      {previewImage ? (
+        <ImagePreviewOverlay
+          src={previewImage.src}
+          alt={previewImage.alt}
+          onClose={() => setPreviewImage(null)}
+        />
       ) : null}
-    </button>
+    </>
   );
 }
 
@@ -732,6 +769,7 @@ export function ChatAttachmentBlock({
   align?: "left" | "right";
   kinds?: ChatAttachmentKind[];
 }) {
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const allowed = kinds?.length ? new Set(kinds) : null;
   const items = Array.isArray(attachments)
     ? attachments.filter((item) => attachmentSrc(item) && (!allowed || allowed.has(item.kind)))
@@ -746,16 +784,24 @@ export function ChatAttachmentBlock({
         const src = attachmentSrc(item);
         if (item.kind === "image") {
           const previewSrc = attachmentPreviewSrc(item);
-          const openSrc = attachmentOpenSrc(item);
           return (
-            <a key={item.id} href={openSrc || previewSrc} target="_blank" rel="noreferrer" className="block max-w-full overflow-hidden rounded-[14px] active:opacity-80">
+            <button
+              key={item.id}
+              type="button"
+              className="block max-w-full overflow-hidden rounded-[14px] text-left active:opacity-80"
+              onClick={(event) => {
+                event.stopPropagation();
+                setPreviewImage({ src: previewSrc, alt: item.alt || "图片" });
+              }}
+              aria-label="预览图片"
+            >
               <img
                 src={previewSrc}
                 alt={item.alt || "图片"}
                 className="max-h-[260px] max-w-full rounded-[14px] object-cover"
                 loading="lazy"
               />
-            </a>
+            </button>
           );
         }
         if (item.kind === "document") {
@@ -783,6 +829,13 @@ export function ChatAttachmentBlock({
         }
         return <ChatVoiceBar key={item.id} item={item} src={src} align={align} />;
       })}
+      {previewImage ? (
+        <ImagePreviewOverlay
+          src={previewImage.src}
+          alt={previewImage.alt}
+          onClose={() => setPreviewImage(null)}
+        />
+      ) : null}
     </div>
   );
 }

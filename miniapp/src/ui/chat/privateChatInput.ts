@@ -19,6 +19,7 @@ export type PreparedPrivateChatInput = {
   attachments: ChatAttachment[];
   modelContent: PrivateModelContent;
   sttProvider?: string;
+  imageFiles?: File[];
 };
 
 export function prepareTextPrivateChatInput(content: string): PreparedPrivateChatInput {
@@ -64,6 +65,32 @@ export async function prepareImagesPrivateChatInput(files: File[], content: stri
     displayContent: text,
     attachments,
     modelContent: buildPrivateImageDataContent(text, imageDataUrls),
+  };
+}
+
+export function prepareInstantImagesPrivateChatInput(files: File[], content: string): PreparedPrivateChatInput {
+  const text = String(content || "").trim();
+  const imageFiles = files.filter(Boolean);
+  if (!imageFiles.length) {
+    return prepareTextPrivateChatInput(text);
+  }
+  const createdAt = new Date().toISOString();
+  const attachments: ChatAttachment[] = imageFiles.map((file, index) => ({
+    id: `local-image-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+    kind: "image",
+    name: file.name || `image-${index + 1}.jpg`,
+    mime: file.type || "image/jpeg",
+    size: file.size || undefined,
+    previewUrl: URL.createObjectURL(file),
+    createdAt,
+  }));
+  return {
+    source: "image",
+    content: text,
+    displayContent: text,
+    attachments,
+    modelContent: buildPrivateUserContent(text, attachments),
+    imageFiles,
   };
 }
 
