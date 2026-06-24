@@ -116,6 +116,23 @@ export function sanitizeVoiceTranscriptText(value: any, durationMs = 0): string 
   return cleanShortText(compactPauseRepetition(extracted, durationMs));
 }
 
+export function sanitizeLeakedVoiceContentText(value: any, durationMs = 0): string {
+  const raw = cleanShortText(value);
+  if (!raw) return "";
+  const cleaned = sanitizeVoiceTranscriptText(raw, durationMs);
+  if (!cleaned) return "";
+  const looksLikeSttJson =
+    /"text"\s*:/i.test(raw)
+    && (
+      LEAKED_TEXT_PREFIX_RE.test(raw)
+      || /"audio_observations"\s*:|"voice_observations"\s*:|"observations"\s*:|"events"\s*:/i.test(raw)
+      || PAUSE_NOTE_RE.test(raw)
+    );
+  PAUSE_NOTE_RE.lastIndex = 0;
+  const pauseSpam = (raw.match(PAUSE_NOTE_RE) || []).length >= 2 && cleaned.length < raw.length;
+  return looksLikeSttJson || pauseSpam ? cleaned : raw;
+}
+
 export function applyAssistantTerminalMessage(
   currentMessages: ChatDraftMessage[],
   clientRequestId: string,
@@ -610,9 +627,11 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
       const status = rawStatus === "pending" || rawStatus === "sent" || rawStatus === "failed"
         ? rawStatus as ChatDraftMessage["status"]
         : undefined;
+      const rawContentText = contentToPlainText(rawContent) || fallbackRawContentText(rawContent);
+      const cleanedContent = sanitizeLeakedVoiceContentText(rawContentText);
       const content = status === "pending" && role === "assistant"
         ? ""
-        : stripInlineBase64Images(contentToPlainText(rawContent) || fallbackRawContentText(rawContent));
+        : stripInlineBase64Images(cleanedContent);
       const attachments = normalizeChatAttachments((msg as any)?.attachments);
       let tokenCount: { input?: number; output?: number } | undefined;
       if (msg?.tokenCount && typeof msg.tokenCount === "object") {
