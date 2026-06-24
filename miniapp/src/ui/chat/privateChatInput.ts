@@ -31,10 +31,13 @@ export function prepareTextPrivateChatInput(content: string): PreparedPrivateCha
   };
 }
 
-export async function prepareImagePrivateChatInput(file: File, content: string): Promise<PreparedPrivateChatInput> {
+export async function prepareImagesPrivateChatInput(files: File[], content: string): Promise<PreparedPrivateChatInput> {
   const text = String(content || "").trim();
-  const attachment = await uploadChatImage(file);
-  const attachments = [attachment];
+  const imageFiles = files.filter(Boolean);
+  if (!imageFiles.length) {
+    return prepareTextPrivateChatInput(text);
+  }
+  const attachments = await Promise.all(imageFiles.map((file) => uploadChatImage(file)));
   return {
     source: "image",
     content: text,
@@ -42,6 +45,10 @@ export async function prepareImagePrivateChatInput(file: File, content: string):
     attachments,
     modelContent: buildPrivateUserContent(text, attachments),
   };
+}
+
+export async function prepareImagePrivateChatInput(file: File, content: string): Promise<PreparedPrivateChatInput> {
+  return prepareImagesPrivateChatInput([file], content);
 }
 
 export async function prepareDocumentPrivateChatInput(file: File, content: string): Promise<PreparedPrivateChatInput> {

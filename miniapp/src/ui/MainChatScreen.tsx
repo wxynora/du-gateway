@@ -55,6 +55,7 @@ import {
   ChevronDownMini,
   ChevronLeftIcon,
   ChevronUpMini,
+  KeyboardIconMini,
   MicIconMini,
   PlusIcon,
   SearchIconMini,
@@ -89,7 +90,7 @@ import {
 } from "./chat/chatMedia";
 import {
   prepareDocumentPrivateChatInput,
-  prepareImagePrivateChatInput,
+  prepareImagesPrivateChatInput,
   prepareTextPrivateChatInput,
   prepareTravelFormPrivateChatInput,
   prepareVoicePrivateChatInput,
@@ -153,6 +154,14 @@ type ActiveChatRequest = {
   source: ChatSendSource;
   abortController: AbortController;
 };
+type QueuedPrivateInput = {
+  content: string;
+  displayContent: string;
+  attachments: ChatAttachment[];
+  source: ChatSendSource;
+  modelContent: PrivateModelContent;
+  userMessage: ChatDraftMessage;
+};
 type ChatBubbleMenuTargetBase = {
   id: string;
   role: ChatRole;
@@ -187,9 +196,74 @@ const CODEX_GROUP_CHAT_POLL_MS = 1000;
 const CODEX_GROUP_CHAT_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_GROUP_CHAT_CREATE_TIMEOUT_MS = 30000;
 const CODEX_GROUP_CHAT_CREATE_RETRY_TIMEOUT_MS = 45000;
+const SUMITALK_PRIVATE_INPUT_IDLE_MS = 15000;
+const SUMITALK_PRIVATE_INPUT_BUSY_RETRY_MS = 1200;
+const SUMITALK_PRIVATE_INPUT_AGGREGATE_STORAGE_PREFIX = "miniapp.chat.privateInputAggregate.v1";
 
 function makeChatAttemptId(clientRequestId: string): string {
   return `attempt-${clientRequestId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function isChatSendSource(value: any): value is ChatSendSource {
+  return ["text", "image", "document", "voice", "travel_form", "group_command", "retry"].includes(String(value || "").trim());
+}
+
+function privateInputAggregateStorageKey(windowId: string): string {
+  return `${SUMITALK_PRIVATE_INPUT_AGGREGATE_STORAGE_PREFIX}:${encodeURIComponent(String(windowId || "default").trim() || "default")}`;
+}
+
+function normalizePrivateModelContent(value: any): PrivateModelContent {
+  if (Array.isArray(value)) {
+    return value
+      .filter((part) => part && typeof part === "object")
+      .map((part) => ({ ...part }));
+  }
+  return String(value || "").trim();
+}
+
+function normalizeQueuedPrivateInput(raw: any): QueuedPrivateInput | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rawUserMessage = sanitizeHistoryMessages([raw.userMessage]).find((message) => message.role === "user");
+  const content = String(raw.content ?? rawUserMessage?.content ?? "").trim();
+  const displayContent = String(raw.displayContent ?? rawUserMessage?.content ?? content).trim();
+  const attachments = normalizeChatAttachments(raw.attachments || rawUserMessage?.attachments);
+  if (!content && !attachments.length) return null;
+  const source: ChatSendSource = isChatSendSource(raw.source)
+    ? raw.source
+    : attachments.some((item) => item.kind === "audio")
+      ? "voice"
+      : attachments.some((item) => item.kind === "image")
+        ? "image"
+        : attachments.some((item) => item.kind === "document")
+          ? "document"
+          : "text";
+  const fallbackUserMessage: ChatDraftMessage = {
+    id: String(rawUserMessage?.id || `user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`),
+    role: "user",
+    content: displayContent,
+    createdAt: String(rawUserMessage?.createdAt || new Date().toISOString()),
+    status: "sent",
+    ...(attachments.length ? { attachments } : {}),
+  };
+  const userMessage: ChatDraftMessage = {
+    ...fallbackUserMessage,
+    ...rawUserMessage,
+    role: "user",
+    content: String(rawUserMessage?.content ?? displayContent).trim(),
+    status: "sent",
+    ...(attachments.length ? { attachments } : {}),
+  };
+  const modelContent = raw.modelContent == null
+    ? buildPrivateUserContent(content, attachments)
+    : normalizePrivateModelContent(raw.modelContent);
+  return {
+    content,
+    displayContent,
+    attachments,
+    source,
+    modelContent,
+    userMessage,
+  };
 }
 
 function uniqueNonEmptyStrings(values: string[]): string[] {
@@ -285,6 +359,43 @@ function preparedInputWithQuote(prepared: PreparedPrivateChatInput, quote: ChatB
     displayContent: prepared.displayContent ?? prepared.content,
     modelContent: modelContentWithQuote(prepared.modelContent, quote),
   };
+}
+
+function privateModelContentToParts(modelContent: PrivateModelContent): Array<Record<string, any>> {
+  if (Array.isArray(modelContent)) return modelContent.map((part) => ({ ...part }));
+  const text = String(modelContent || "").trim();
+  return text ? [{ type: "text", text }] : [];
+}
+
+function mergePrivateModelContents(contents: PrivateModelContent[]): PrivateModelContent {
+  const merged: Array<Record<string, any>> = [];
+  const textBuffer: string[] = [];
+  const flushText = () => {
+    const text = textBuffer.map((item) => String(item || "").trim()).filter(Boolean).join("\n").trim();
+    textBuffer.length = 0;
+    if (text) merged.push({ type: "text", text });
+  };
+  for (const content of contents) {
+    for (const part of privateModelContentToParts(content)) {
+      if (part?.type === "text") {
+        const text = String(part.text || "").trim();
+        if (text) textBuffer.push(text);
+        continue;
+      }
+      flushText();
+      merged.push(part);
+    }
+  }
+  flushText();
+  if (merged.length === 1 && merged[0]?.type === "text") return String(merged[0].text || "").trim();
+  return merged;
+}
+
+function resolveAggregateSource(items: QueuedPrivateInput[]): ChatSendSource {
+  if (items.some((item) => item.attachments.some((attachment) => attachment.kind === "audio"))) return "voice";
+  if (items.some((item) => item.attachments.some((attachment) => attachment.kind === "image"))) return "image";
+  if (items.some((item) => item.attachments.some((attachment) => attachment.kind === "document"))) return "document";
+  return items[items.length - 1]?.source || "text";
 }
 
 function mergeHistorySnapshots(...snapshots: ChatDraftMessage[][]): ChatDraftMessage[] {
@@ -403,6 +514,8 @@ export function MainChatScreen({
   const [activeSendRequestId, setActiveSendRequestId] = useState("");
   const [activeSendStageLabel, setActiveSendStageLabel] = useState("");
   const [recordingChatVoice, setRecordingChatVoice] = useState(false);
+  const [voiceInputOpen, setVoiceInputOpen] = useState(false);
+  const [chatVoiceCancelArmed, setChatVoiceCancelArmed] = useState(false);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
   const [plusOpen, setPlusOpen] = useState(false);
@@ -426,8 +539,14 @@ export function MainChatScreen({
   const chatVoiceMimeRef = useRef("");
   const chatVoiceStartedAtRef = useRef(0);
   const chatVoicePressingRef = useRef(false);
+  const chatVoiceStartYRef = useRef(0);
+  const chatVoiceCancelArmedRef = useRef(false);
   const chatVoiceStartPromiseRef = useRef<Promise<boolean> | null>(null);
   const activeChatRequestRef = useRef<ActiveChatRequest | null>(null);
+  const privateInputAggregateQueueRef = useRef<QueuedPrivateInput[]>([]);
+  const privateInputAggregateTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const privateInputAggregateVersionRef = useRef(0);
+  const privateInputAggregateHoldUntilNextInputRef = useRef(false);
   const bubbleTouchRef = useRef<ChatBubbleTouchState | null>(null);
 
   const [activeModel, setActiveModel] = useState(() => {
@@ -442,6 +561,72 @@ export function MainChatScreen({
   const sumitalkOperationRecoveringRef = useRef<Set<string>>(new Set());
   const groupDiscussionRunRef = useRef(0);
   const groupDiscussionSnapshotRef = useRef<GroupDiscussionSnapshot | null>(null);
+
+  function persistPrivateInputAggregate(reason: string) {
+    if (groupChatMode) return;
+    const storageKey = historyWindowId ? privateInputAggregateStorageKey(historyWindowId) : "";
+    if (!storageKey) return;
+    const items = privateInputAggregateQueueRef.current;
+    try {
+      if (!items.length) {
+        window.localStorage.removeItem(storageKey);
+        return;
+      }
+      window.localStorage.setItem(storageKey, JSON.stringify({
+        schemaVersion: 1,
+        windowId: historyWindowId,
+        holdUntilNextInput: Boolean(privateInputAggregateHoldUntilNextInputRef.current),
+        updatedAt: new Date().toISOString(),
+        items,
+      }));
+    } catch (e: any) {
+      logSumiTalkClientEvent("private_input_aggregate_persist_error", {
+        reason,
+        error: String(e?.message || e),
+      }, "warning");
+    }
+  }
+
+  function restorePrivateInputAggregate() {
+    if (groupChatMode || !historyWindowId) return;
+    const storageKey = privateInputAggregateStorageKey(historyWindowId);
+    let payload: any = null;
+    try {
+      payload = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+    } catch {
+      payload = null;
+    }
+    const items = Array.isArray(payload?.items)
+      ? payload.items.map(normalizeQueuedPrivateInput).filter((item): item is QueuedPrivateInput => Boolean(item))
+      : [];
+    if (!items.length || String(payload?.windowId || "") !== historyWindowId) {
+      try {
+        window.localStorage.removeItem(storageKey);
+      } catch {}
+      return;
+    }
+    privateInputAggregateQueueRef.current = items;
+    privateInputAggregateHoldUntilNextInputRef.current = Boolean(payload?.holdUntilNextInput);
+    logSumiTalkClientEvent("private_input_aggregate_restore", {
+      parts: items.length,
+      holdUntilNextInput: privateInputAggregateHoldUntilNextInputRef.current,
+    }, "warning");
+    if (!privateInputAggregateHoldUntilNextInputRef.current) {
+      setActiveSendStageLabel("等待继续输入");
+      schedulePrivateInputAggregateFlush();
+    }
+  }
+
+  useEffect(() => {
+    restorePrivateInputAggregate();
+    return () => {
+      persistPrivateInputAggregate("cleanup");
+      if (privateInputAggregateTimerRef.current) {
+        window.clearTimeout(privateInputAggregateTimerRef.current);
+        privateInputAggregateTimerRef.current = null;
+      }
+    };
+  }, [groupChatMode, historyWindowId]);
 
   function toggleVoiceTranscript(item: ChatAttachment) {
     const id = chatVoiceTranscriptId(item);
@@ -1606,7 +1791,32 @@ export function MainChatScreen({
     }
   }
 
-  async function sendChatContent(
+  function shouldAggregatePrivateInput(source: ChatSendSource): boolean {
+    return !groupChatMode && source !== "retry" && source !== "travel_form" && source !== "group_command";
+  }
+
+  function schedulePrivateInputAggregateFlush(
+    delayMs = SUMITALK_PRIVATE_INPUT_IDLE_MS,
+    reason: "idle" | "busy_retry" = "idle",
+  ) {
+    if (privateInputAggregateTimerRef.current) {
+      window.clearTimeout(privateInputAggregateTimerRef.current);
+      privateInputAggregateTimerRef.current = null;
+    }
+    const version = privateInputAggregateVersionRef.current + 1;
+    privateInputAggregateVersionRef.current = version;
+    privateInputAggregateTimerRef.current = window.setTimeout(() => {
+      void flushPrivateInputAggregate(version);
+    }, delayMs);
+    logSumiTalkClientEvent("private_input_aggregate_schedule", {
+      parts: privateInputAggregateQueueRef.current.length,
+      delayMs,
+      reason,
+      version,
+    });
+  }
+
+  async function enqueuePrivateInputAggregate(
     rawContent: string,
     options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent } = {},
   ): Promise<boolean> {
@@ -1614,6 +1824,162 @@ export function MainChatScreen({
     const attachments = normalizeChatAttachments(options.attachments);
     const source: ChatSendSource = options.source
       || (attachments.some((item) => item.kind === "audio") ? "voice" : attachments.some((item) => item.kind === "image") ? "image" : attachments.some((item) => item.kind === "document") ? "document" : "text");
+    if (!content && !attachments.length) {
+      logSumiTalkClientEvent("private_input_aggregate_skip", { source, reason: "empty" }, "warning");
+      return false;
+    }
+    if (!windowId) {
+      logSumiTalkClientEvent("private_input_aggregate_skip", { source, reason: "missing_window_id" }, "warning");
+      toast("当前还没拿到聊天窗口 ID，不能接入共享上下文");
+      return false;
+    }
+    if (!activeModel) {
+      logSumiTalkClientEvent("private_input_aggregate_skip", { source, reason: "missing_model" }, "warning");
+      toast("当前还没拿到可用模型，稍后再试");
+      return false;
+    }
+    const resolvedDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
+    if (resolvedDeviceId && resolvedDeviceId !== deviceId) {
+      setDeviceId((prev) => (prev === resolvedDeviceId ? prev : resolvedDeviceId));
+    }
+    const pendingBefore = privateInputAggregateQueueRef.current.length;
+    if (privateInputAggregateHoldUntilNextInputRef.current) {
+      privateInputAggregateHoldUntilNextInputRef.current = false;
+      logSumiTalkClientEvent("private_input_aggregate_resume_after_failure", {
+        pendingBefore,
+        source,
+      }, "warning");
+    }
+    const baseTimestamp = Date.now();
+    const displayContent = String(options.displayContent ?? content).trim();
+    const userMessage: ChatDraftMessage = {
+      id: `user-${baseTimestamp}-${Math.random().toString(36).slice(2, 7)}`,
+      role: "user",
+      content: displayContent,
+      createdAt: new Date(baseTimestamp).toISOString(),
+      status: "sent",
+      ...(attachments.length ? { attachments } : {}),
+    };
+    const previousMessages = messagesRef.current;
+    const nextMessages = [...messagesRef.current, userMessage];
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    try {
+      await saveDisplayHistory(nextMessages, {
+        localDeviceId: resolvedDeviceId,
+        strict: true,
+        source: "private_input_aggregate_append",
+      });
+    } catch (e: any) {
+      messagesRef.current = previousMessages;
+      setMessages(previousMessages);
+      logSumiTalkClientEvent("private_input_aggregate_append_error", {
+        source,
+        error: String(e?.message || e),
+      }, "error");
+      toast(`消息暂存失败：${e?.message || e}`);
+      return false;
+    }
+    privateInputAggregateQueueRef.current.push({
+      content,
+      displayContent,
+      attachments,
+      source,
+      modelContent: options.modelContent ?? buildPrivateUserContent(content, attachments),
+      userMessage,
+    });
+    persistPrivateInputAggregate("enqueue");
+    if (sending) {
+      logSumiTalkClientEvent("private_input_aggregate_enqueue_while_busy", {
+        pendingBefore,
+        source,
+      }, "warning");
+    }
+    setInput("");
+    setPlusOpen(false);
+    setActiveSendStageLabel("等待继续输入");
+    schedulePrivateInputAggregateFlush();
+    return true;
+  }
+
+  async function flushPrivateInputAggregate(expectedVersion: number) {
+    if (expectedVersion !== privateInputAggregateVersionRef.current) return;
+    if (!privateInputAggregateQueueRef.current.length) return;
+    if (privateInputAggregateHoldUntilNextInputRef.current) return;
+    if (sending) {
+      logSumiTalkClientEvent("private_input_aggregate_wait_busy", {
+        parts: privateInputAggregateQueueRef.current.length,
+      }, "warning");
+      schedulePrivateInputAggregateFlush(SUMITALK_PRIVATE_INPUT_BUSY_RETRY_MS, "busy_retry");
+      return;
+    }
+    const queued = privateInputAggregateQueueRef.current;
+    privateInputAggregateQueueRef.current = [];
+    if (privateInputAggregateTimerRef.current) {
+      window.clearTimeout(privateInputAggregateTimerRef.current);
+      privateInputAggregateTimerRef.current = null;
+    }
+    persistPrivateInputAggregate("flush_start");
+    if (!queued.length) return;
+    const content = queued.map((item) => item.content).filter(Boolean).join("\n").trim();
+    const attachments = queued.flatMap((item) => item.attachments);
+    const source = resolveAggregateSource(queued);
+    const modelContent = mergePrivateModelContents(queued.map((item) => item.modelContent));
+    setActiveSendStageLabel("");
+    logSumiTalkClientEvent("private_input_aggregate_flush", {
+      parts: queued.length,
+      contentChars: content.length,
+      attachments: attachments.length,
+      source,
+    });
+    const ok = await sendChatContentNow(content, {
+      displayContent: content,
+      attachments,
+      source,
+      modelContent,
+      aggregateUserMessages: queued.map((item) => item.userMessage),
+    });
+    if (!ok) {
+      privateInputAggregateQueueRef.current = [...queued, ...privateInputAggregateQueueRef.current];
+      privateInputAggregateHoldUntilNextInputRef.current = true;
+      persistPrivateInputAggregate("hold_after_failure");
+      logSumiTalkClientEvent("private_input_aggregate_hold_after_failure", {
+        parts: queued.length,
+        pending: privateInputAggregateQueueRef.current.length,
+        source,
+      }, "warning");
+    } else {
+      privateInputAggregateHoldUntilNextInputRef.current = false;
+      persistPrivateInputAggregate("flush_ok");
+    }
+  }
+
+  async function sendChatContent(
+    rawContent: string,
+    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent } = {},
+  ): Promise<boolean> {
+    const attachments = normalizeChatAttachments(options.attachments);
+    const source: ChatSendSource = options.source
+      || (attachments.some((item) => item.kind === "audio") ? "voice" : attachments.some((item) => item.kind === "image") ? "image" : attachments.some((item) => item.kind === "document") ? "document" : "text");
+    if (shouldAggregatePrivateInput(source)) {
+      return enqueuePrivateInputAggregate(rawContent, { ...options, attachments, source });
+    }
+    return sendChatContentNow(rawContent, { ...options, attachments, source });
+  }
+
+  async function sendChatContentNow(
+    rawContent: string,
+    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent; aggregateUserMessages?: ChatDraftMessage[] } = {},
+  ): Promise<boolean> {
+    const content = String(rawContent || "").trim();
+    const attachments = normalizeChatAttachments(options.attachments);
+    const source: ChatSendSource = options.source
+      || (attachments.some((item) => item.kind === "audio") ? "voice" : attachments.some((item) => item.kind === "image") ? "image" : attachments.some((item) => item.kind === "document") ? "document" : "text");
+    const aggregateUserMessages = !groupChatMode
+      ? (Array.isArray(options.aggregateUserMessages) ? options.aggregateUserMessages : [])
+        .filter((message) => message?.role === "user" && String(message.id || "").trim())
+      : [];
+    const useAggregateUserMessages = aggregateUserMessages.length > 0;
     const effectiveContent = contentWithAttachmentHint(content, attachments);
     const canSendWhileBusy = groupChatMode && (
       isBenbenCancelCommand(content)
@@ -1730,6 +2096,15 @@ export function MainChatScreen({
       operationId: operationId || undefined,
       ...(attachments.length ? { attachments } : {}),
     };
+    const operationUserMessages: ChatDraftMessage[] = useAggregateUserMessages
+      ? aggregateUserMessages.map((message) => ({
+          ...message,
+          clientRequestId,
+          operationId: operationId || undefined,
+          status: "sent" as const,
+        }))
+      : [userMsg];
+    const operationUserMsg = operationUserMessages[operationUserMessages.length - 1] || userMsg;
     const assistantId = shouldRequestDu ? `assistant-${baseTimestamp + 1}` : "";
     const assistantCreatedAt = shouldRequestDu ? new Date(baseTimestamp + 1).toISOString() : "";
     const assistantPlaceholder: ChatDraftMessage | null = shouldRequestDu
@@ -1755,7 +2130,12 @@ export function MainChatScreen({
           clientRequestId: `${clientRequestId}-benben`,
         }
       : null;
-    const nextMessages = [...messagesRef.current, userMsg];
+    const nextMessages = useAggregateUserMessages
+      ? operationUserMessages.reduce(
+          (list, message) => applyMessageById(list, message.id, message),
+          messagesRef.current,
+        )
+      : [...messagesRef.current, userMsg];
     const privateModelContent = !groupChatMode
       ? options.modelContent ?? buildPrivateUserContent(content, attachments)
       : null;
@@ -1803,7 +2183,7 @@ export function MainChatScreen({
         await createChatDraftTurn({
           deviceId: resolvedDeviceId,
           windowId: historyWindowId,
-          userMessage: userMsg,
+          userMessage: operationUserMsg,
           assistantMessage: assistantPlaceholder,
           operation: {
             id: operationId,
@@ -1818,7 +2198,7 @@ export function MainChatScreen({
               body: requestBody,
             },
             retryPayloadSize: JSON.stringify(requestBody).length,
-            userMessageId: userMsg.id,
+            userMessageId: operationUserMsg.id,
             assistantMessageId: assistantId,
             status: "draft",
             createdAt: new Date(baseTimestamp).toISOString(),
@@ -2176,19 +2556,22 @@ export function MainChatScreen({
   }
 
   async function handleImageInputChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] || null;
+    const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("image/"));
     event.target.value = "";
-    if (!file || sending || mediaBusy) return;
+    if (!files.length || sending || mediaBusy) return;
     setMediaBusy(true);
     try {
-      logSumiTalkClientEvent("image_upload_start", { name: file.name, mime: file.type, bytes: file.size });
-      const prepared = await prepareImagePrivateChatInput(file, input);
-      const attachment = prepared.attachments[0];
+      logSumiTalkClientEvent("image_upload_start", {
+        count: files.length,
+        names: files.map((file) => file.name).slice(0, 8),
+        bytes: files.reduce((sum, file) => sum + file.size, 0),
+      });
+      const prepared = await prepareImagesPrivateChatInput(files, input);
       logSumiTalkClientEvent("image_upload_ok", {
-        mime: attachment.mime || file.type,
-        bytes: attachment.size || file.size,
-        hasRemoteUrl: Boolean(attachment.remoteUrl),
-        hasRemoteKey: Boolean(attachment.remoteKey),
+        count: prepared.attachments.length,
+        bytes: prepared.attachments.reduce((sum, attachment) => sum + Number(attachment.size || 0), 0),
+        hasRemoteUrl: prepared.attachments.some((attachment) => Boolean(attachment.remoteUrl)),
+        hasRemoteKey: prepared.attachments.some((attachment) => Boolean(attachment.remoteKey)),
       });
       await sendPreparedPrivateChatInput(prepared);
     } catch (e: any) {
@@ -2265,6 +2648,21 @@ export function MainChatScreen({
     }
   }
 
+  function setChatVoiceCancelIntent(next: boolean) {
+    chatVoiceCancelArmedRef.current = next;
+    setChatVoiceCancelArmed(next);
+  }
+
+  function releaseChatVoicePointer(target: EventTarget & HTMLButtonElement, pointerId: number) {
+    try {
+      if (target.hasPointerCapture(pointerId)) {
+        target.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // Ignore WebView pointer-capture quirks.
+    }
+  }
+
   async function stopChatVoiceRecording() {
     const recorder = chatVoiceRecorderRef.current;
     if (!recorder || recorder.state === "inactive") return;
@@ -2282,6 +2680,7 @@ export function MainChatScreen({
       });
       chatVoiceStartedAtRef.current = 0;
       setRecordingChatVoice(false);
+      chatVoiceRecorderRef.current = null;
       chatVoiceChunksRef.current = [];
       if (blob.size <= 0) throw new Error("录音为空");
       logSumiTalkClientEvent("voice_record_stop", { mime: mimeType, bytes: blob.size });
@@ -2306,11 +2705,46 @@ export function MainChatScreen({
     }
   }
 
+  async function cancelChatVoiceRecording(showToast = true) {
+    chatVoicePressingRef.current = false;
+    setChatVoiceCancelIntent(false);
+    const startPromise = chatVoiceStartPromiseRef.current;
+    chatVoiceStartPromiseRef.current = null;
+    if (startPromise) await startPromise.catch(() => false);
+
+    const recorder = chatVoiceRecorderRef.current;
+    try {
+      if (recorder && recorder.state !== "inactive") {
+        await new Promise<void>((resolve) => {
+          const finalize = () => {
+            recorder.removeEventListener("stop", finalize);
+            resolve();
+          };
+          recorder.addEventListener("stop", finalize);
+          recorder.stop();
+        });
+      }
+      logSumiTalkClientEvent("voice_record_cancel");
+      if (showToast) toast("已取消语音");
+    } catch (e: any) {
+      logSumiTalkClientEvent("voice_record_cancel_error", { error: String(e?.message || e) }, "error");
+    } finally {
+      chatVoiceRecorderRef.current = null;
+      chatVoiceStartedAtRef.current = 0;
+      chatVoiceChunksRef.current = [];
+      setRecordingChatVoice(false);
+      setMediaBusy(false);
+    }
+  }
+
   function handleChatVoicePressStart(event: React.PointerEvent<HTMLButtonElement>) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     event.preventDefault();
     if (sending || mediaBusy || chatVoicePressingRef.current) return;
     chatVoicePressingRef.current = true;
+    chatVoiceStartYRef.current = event.clientY;
+    setChatVoiceCancelIntent(false);
+    setVoiceInputOpen(true);
     setPlusOpen(false);
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -2320,23 +2754,42 @@ export function MainChatScreen({
     chatVoiceStartPromiseRef.current = beginChatVoiceRecording();
   }
 
+  function handleChatVoicePressMove(event: React.PointerEvent<HTMLButtonElement>) {
+    if (!chatVoicePressingRef.current) return;
+    const shouldCancel = chatVoiceStartYRef.current > 0 && chatVoiceStartYRef.current - event.clientY > 52;
+    if (shouldCancel !== chatVoiceCancelArmedRef.current) setChatVoiceCancelIntent(shouldCancel);
+  }
+
   function handleChatVoicePressEnd(event: React.PointerEvent<HTMLButtonElement>) {
     if (!chatVoicePressingRef.current && !chatVoiceStartPromiseRef.current) return;
     event.preventDefault();
     chatVoicePressingRef.current = false;
-    try {
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-    } catch {
-      // Ignore WebView pointer-capture quirks.
-    }
+    releaseChatVoicePointer(event.currentTarget, event.pointerId);
     void (async () => {
+      const shouldCancel = chatVoiceCancelArmedRef.current;
+      setChatVoiceCancelIntent(false);
       const startPromise = chatVoiceStartPromiseRef.current;
       chatVoiceStartPromiseRef.current = null;
       if (startPromise) await startPromise.catch(() => false);
-      await stopChatVoiceRecording();
+      if (shouldCancel) {
+        await cancelChatVoiceRecording(false);
+        toast("已取消语音");
+      } else {
+        await stopChatVoiceRecording();
+      }
     })();
+  }
+
+  function handleChatVoicePressCancel(event: React.PointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    releaseChatVoicePointer(event.currentTarget, event.pointerId);
+    void cancelChatVoiceRecording(false);
+  }
+
+  function toggleVoiceInputPanel() {
+    if (recordingChatVoice || chatVoicePressingRef.current) return;
+    setPlusOpen(false);
+    setVoiceInputOpen((value) => !value);
   }
 
   const avatarClass = accent === "wenyou"
@@ -2402,15 +2855,22 @@ export function MainChatScreen({
     ? "flex h-10 w-[10.5rem] max-w-full min-w-0 flex-col items-center justify-center rounded-full border border-white/35 bg-white/45 px-3 text-center shadow-[0_8px_24px_rgba(15,23,42,0.10)] backdrop-blur-2xl"
     : "flex h-10 w-[10.5rem] max-w-full min-w-0 flex-col items-center justify-center rounded-full border border-gray-100/80 bg-white/85 px-3 text-center shadow-[0_8px_20px_rgba(15,23,42,0.06)] backdrop-blur-xl";
   const chatHeaderTitleFontSize = Math.max(14, Math.min(16, chatTitleFontSize - 2));
-  const chatFooterClass = hasCustomChatBackground
-    ? "overflow-hidden backdrop-blur-xl"
-    : "overflow-hidden";
-  const chatFooterFeatherClass = hasCustomChatBackground
-    ? "inset-0 bg-[linear-gradient(to_bottom,rgba(255,255,255,0)_0%,rgba(255,255,255,0.16)_26%,rgba(255,255,255,0.30)_58%,rgba(255,255,255,0.30)_100%)] backdrop-blur-[3px]"
-    : "inset-0 bg-[linear-gradient(to_bottom,rgba(248,249,250,0)_0%,rgba(255,255,255,0.86)_28%,rgba(255,255,255,1)_62%,rgba(255,255,255,1)_100%)]";
+  const chatFooterClass = "overflow-visible";
+  const chatInputBarClass = hasCustomChatBackground
+    ? "border border-white/40 bg-white/50 shadow-[0_8px_22px_rgba(15,23,42,0.10)] backdrop-blur-2xl"
+    : "border border-white/80 bg-white/75 shadow-[0_8px_22px_rgba(15,23,42,0.08)] backdrop-blur-2xl";
+  const chatFooterIconButtonClass = hasCustomChatBackground
+    ? "bg-white/30 text-gray-700 active:bg-white/50"
+    : "bg-white/45 text-gray-600 active:bg-white/75";
+  const chatFooterIconButtonActiveClass = hasCustomChatBackground
+    ? "bg-white/70 text-gray-900"
+    : "bg-white/85 text-gray-900";
+  const chatPlusPanelClass = hasCustomChatBackground
+    ? "border-white/35 bg-white/50 shadow-[0_8px_22px_rgba(15,23,42,0.10)] backdrop-blur-2xl"
+    : "border-white/80 bg-white/75 shadow-[0_8px_22px_rgba(15,23,42,0.08)] backdrop-blur-2xl";
   const chatInputShellClass = hasCustomChatBackground
-    ? "border border-white/25 bg-white/45 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl"
-    : "bg-[#F4F5F7]";
+    ? "bg-white/10"
+    : "bg-white/20";
   const chatSearchShellClass = hasCustomChatBackground
     ? "border border-white/25 bg-white/45 shadow-[0_8px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl"
     : "bg-[#F4F5F7]";
@@ -2673,7 +3133,7 @@ export function MainChatScreen({
                             ref={(el) => {
                               searchResultRefs.current[matchId] = el;
                             }}
-                            className={`space-y-2 rounded-[20px] ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
+                            className={`flex max-w-full flex-col items-start gap-1.5 rounded-[20px] ${isActiveSearchPart ? "ring-2 ring-amber-300/90 ring-offset-2 ring-offset-transparent" : ""}`}
                             onContextMenu={(event) => handleBubbleContextMenu(event, bubbleTarget)}
                             onTouchStart={(event) => handleBubbleTouchStart(event, bubbleTarget)}
                             onTouchMove={handleBubbleTouchMove}
@@ -2735,7 +3195,7 @@ export function MainChatScreen({
                               {showText ? (
                                 <ChatBubbleFrame
                                   skin={bubbleSkin}
-                                  className={`inline-block w-fit max-w-full rounded-[18px] px-2.5 py-[5px] font-medium leading-[1.42] shadow-sm ${
+                                  className={`block w-fit max-w-full rounded-[18px] px-2.5 py-[5px] font-medium leading-[1.42] shadow-sm ${
                                     transparentBubbleEnabled
                                       ? TRANSPARENT_BUBBLE_CLASS
                                       : group.role === "benben"
@@ -2756,7 +3216,7 @@ export function MainChatScreen({
                               {hasVoice ? (
                                 <ChatBubbleFrame
                                   skin={bubbleSkin}
-                                  className={`inline-block w-fit max-w-full rounded-[18px] px-2 py-[2px] font-medium leading-[1.42] shadow-sm ${
+                                  className={`block w-fit max-w-full rounded-[18px] px-2 py-[2px] font-medium leading-[1.42] shadow-sm ${
                                     transparentBubbleEnabled
                                       ? TRANSPARENT_BUBBLE_CLASS
                                       : group.role === "benben"
@@ -2792,6 +3252,7 @@ export function MainChatScreen({
         ref={imageInputRef}
         type="file"
         accept="image/jpeg,image/png,image/webp,image/gif"
+        multiple
         className="hidden"
         onChange={handleImageInputChange}
       />
@@ -2802,9 +3263,8 @@ export function MainChatScreen({
         className="hidden"
         onChange={handleDocumentInputChange}
       />
-      <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,24px))] ${chatFooterClass}`}>
-        <div className={`pointer-events-none absolute ${chatFooterFeatherClass}`} aria-hidden="true" />
-          <div className={`relative z-10 overflow-hidden transition-all duration-300 ease-in-out ${hasCustomChatBackground ? "bg-white/18 backdrop-blur-xl" : "bg-white"} ${plusOpen ? "h-[142px] opacity-100" : "h-0 opacity-0"}`}>
+      <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] ${chatFooterClass}`}>
+          <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[132px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
             <div className="grid grid-cols-5 gap-x-2 px-4 pb-2 pt-5">
               <ChatActionButton label="图片" onClick={openImagePicker} />
               <ChatActionButton label="文档" onClick={openDocumentPicker} />
@@ -2827,7 +3287,7 @@ export function MainChatScreen({
             </div>
           </div>
           {quotedBubble ? (
-            <div className="relative z-10 mx-3 mb-1 flex items-center gap-2 rounded-[14px] bg-white/70 px-3 py-2 text-left text-[11px] font-medium text-gray-500 shadow-sm backdrop-blur">
+            <div className="relative z-10 mx-5 mb-2 flex items-center gap-2 rounded-[18px] border border-white/45 bg-white/70 px-3 py-2 text-left text-[11px] font-medium text-gray-500 shadow-[0_8px_20px_rgba(15,23,42,0.07)] backdrop-blur-xl">
               <span className="shrink-0 text-gray-700">引用</span>
               <span className="min-w-0 flex-1 truncate">
                 {quotedBubble.roleLabel}：{quotedBubble.text}
@@ -2843,56 +3303,87 @@ export function MainChatScreen({
               </button>
             </div>
           ) : null}
-          <div className="relative z-10 flex items-end space-x-2 px-3 py-2.5">
+          <div className={`relative z-10 mx-4 mb-1 flex items-end gap-2 rounded-full px-2 py-1 ${chatInputBarClass}`}>
           <button
-            className={`rounded-full p-2.5 text-gray-500 transition-colors ${plusOpen ? "bg-gray-100 text-gray-800" : "active:bg-gray-50"}`}
-            onClick={() => setPlusOpen((v) => !v)}
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${plusOpen ? chatFooterIconButtonActiveClass : chatFooterIconButtonClass}`}
+            onClick={() => {
+              setVoiceInputOpen(false);
+              setPlusOpen((v) => !v);
+            }}
           >
             <PlusIcon open={plusOpen} />
           </button>
-          <div className={`flex min-h-[42px] flex-1 items-center rounded-[20px] px-4 py-2.5 ${chatInputShellClass}`}>
-            <textarea
-              className="max-h-28 min-h-[22px] w-full resize-none bg-transparent font-medium leading-6 text-gray-900 outline-none placeholder:text-gray-400"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="输入消息..."
-              rows={1}
-              style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
-            />
+          {voiceInputOpen ? (
             <button
               type="button"
-              className={`ml-2 shrink-0 p-1 text-gray-400 transition-colors active:text-gray-900 ${recordingChatVoice ? "text-rose-500" : ""}`}
-              aria-label={recordingChatVoice ? "松开发送语音" : "按住说话"}
-              title={recordingChatVoice ? "松开发送语音" : "按住说话"}
+              className={`flex min-h-[32px] flex-1 items-center justify-center rounded-full px-3 py-1 text-[14px] font-semibold transition-colors ${
+                chatVoiceCancelArmed
+                  ? "bg-rose-500 text-white"
+                  : recordingChatVoice
+                    ? "bg-gray-900 text-white"
+                    : `${chatInputShellClass} text-gray-700 active:bg-white/70`
+              }`}
               onPointerDown={handleChatVoicePressStart}
+              onPointerMove={handleChatVoicePressMove}
               onPointerUp={handleChatVoicePressEnd}
-              onPointerCancel={handleChatVoicePressEnd}
+              onPointerCancel={handleChatVoicePressCancel}
               onContextMenu={(event) => event.preventDefault()}
             >
-              <MicIconMini className="h-[19px] w-[19px] stroke-[2]" />
+              {chatVoiceCancelArmed ? "松手取消" : recordingChatVoice ? "松开发送，上滑取消" : "按住说话"}
             </button>
-          </div>
-          {canCancelSend ? (
+          ) : (
+            <div className={`flex min-h-[32px] flex-1 items-center rounded-full px-3 py-1 ${chatInputShellClass}`}>
+              <textarea
+                className="max-h-28 min-h-[22px] w-full resize-none bg-transparent font-medium leading-6 text-gray-900 outline-none placeholder:text-gray-400"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="输入消息..."
+                rows={1}
+                style={{ fontFamily: chatFontFamily, fontSize: `${chatContentFontSize}px` }}
+              />
+              <button
+                type="button"
+                className="ml-1.5 shrink-0 rounded-full p-1 text-gray-400 transition-colors active:text-gray-900"
+                aria-label="打开语音输入"
+                title="打开语音输入"
+                onClick={toggleVoiceInputPanel}
+                onContextMenu={(event) => event.preventDefault()}
+              >
+                <MicIconMini className="h-[19px] w-[19px] stroke-[2]" />
+              </button>
+            </div>
+          )}
+          {voiceInputOpen ? (
             <button
-              className="p-2.5 text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
+              type="button"
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${chatFooterIconButtonActiveClass}`}
+              onClick={toggleVoiceInputPanel}
+              aria-label="切回文字输入"
+              title="切回文字输入"
+            >
+              <KeyboardIconMini />
+            </button>
+          ) : canCancelSend ? (
+            <button
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
               onClick={() => void cancelActiveSumiTalkSend()}
               disabled={cancellingSend}
               aria-label="取消发送"
               title="取消发送"
             >
-              <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gray-500">
-                <span className="block h-[12px] w-[12px] rounded-[2px] bg-white" />
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-500">
+                <span className="block h-[11px] w-[11px] rounded-[2px] bg-white" />
               </div>
             </button>
           ) : (
             <button
-              className="p-2.5 text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
               onClick={() => void sendMessage()}
               disabled={!trimmedInput || (sending && !canSubmitWhileBusy)}
               aria-label="发送"
               title="发送"
             >
-              <div className="flex h-[34px] w-[34px] items-center justify-center rounded-full bg-gray-900">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-900">
                 <ArrowUpIcon />
               </div>
             </button>

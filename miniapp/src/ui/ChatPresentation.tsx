@@ -508,31 +508,66 @@ export function ChatVoiceTranscriptBlock({
 
 function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; align: "left" | "right" }) {
   const [activeIndex, setActiveIndex] = useState(0);
+  const [swipe, setSwipe] = useState<{
+    phase: "idle" | "dragging" | "settling";
+    deltaX: number;
+    direction: 1 | -1;
+    accepted: boolean;
+  }>({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
   const dragStartX = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
   const isRight = align === "right";
   const imageItems = items.filter((item) => attachmentSrc(item));
   const countLabel = `展开 ${imageItems.length}`;
+  const swipeDistance = 136;
+  const commitDistance = 42;
 
   if (imageItems.length < 2) return null;
   const normalizedIndex = ((activeIndex % imageItems.length) + imageItems.length) % imageItems.length;
   const activeItem = imageItems[normalizedIndex];
   const activeSrc = attachmentSrc(activeItem);
+  const swipeDirection = swipe.direction;
+  const coverItem = imageItems[(normalizedIndex + swipeDirection + imageItems.length) % imageItems.length];
+  const coverSrc = attachmentSrc(coverItem);
+  const swipeProgress = Math.min(Math.abs(swipe.deltaX) / swipeDistance, 1);
+  const coverTranslatePercent = swipe.phase === "dragging"
+    ? swipeDirection * (100 - swipeProgress * 100)
+    : swipe.phase === "settling" && swipe.accepted
+      ? 0
+      : swipeDirection * 100;
+  const activeTranslatePx = swipe.phase === "dragging"
+    ? -swipeDirection * swipeProgress * 18
+    : swipe.phase === "settling" && swipe.accepted
+      ? -swipeDirection * 18
+      : 0;
+  const activeScale = swipe.phase === "dragging"
+    ? 1 - swipeProgress * 0.025
+    : swipe.phase === "settling" && swipe.accepted
+      ? 0.975
+      : 1;
+  const transitionClass = swipe.phase === "dragging" ? "transition-none" : "transition-transform duration-200 ease-out";
   const stackItems = Array.from({ length: Math.min(imageItems.length - 1, 2) }, (_, index) => index + 1)
     .map((offset) => imageItems[(normalizedIndex + offset) % imageItems.length])
     .filter(Boolean);
 
-  function showNext() {
-    setActiveIndex((index) => (index + 1) % imageItems.length);
-  }
-
-  function showPrevious() {
-    setActiveIndex((index) => (index - 1 + imageItems.length) % imageItems.length);
-  }
-
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
     dragStartX.current = event.clientX;
     suppressClickRef.current = false;
+    setSwipe({ phase: "dragging", deltaX: 0, direction: 1, accepted: false });
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Some embedded WebViews do not expose pointer capture consistently.
+    }
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLButtonElement>) {
+    const startX = dragStartX.current;
+    if (startX == null) return;
+    const deltaX = event.clientX - startX;
+    if (Math.abs(deltaX) > 6) suppressClickRef.current = true;
+    const direction: 1 | -1 = deltaX < 0 ? 1 : -1;
+    setSwipe({ phase: "dragging", deltaX, direction, accepted: false });
   }
 
   function handlePointerUp(event: React.PointerEvent<HTMLButtonElement>) {
@@ -540,10 +575,24 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     dragStartX.current = null;
     if (startX == null) return;
     const deltaX = event.clientX - startX;
-    if (Math.abs(deltaX) < 24) return;
+    if (Math.abs(deltaX) <= 6) {
+      setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+      return;
+    }
+    const direction: 1 | -1 = deltaX < 0 ? 1 : -1;
+    const accepted = Math.abs(deltaX) >= commitDistance;
     suppressClickRef.current = true;
-    if (deltaX < 0) showNext();
-    else showPrevious();
+    setSwipe({ phase: "settling", deltaX, direction, accepted });
+  }
+
+  function handleSwipeTransitionEnd(event: React.TransitionEvent<HTMLSpanElement>) {
+    if (event.target !== event.currentTarget || swipe.phase !== "settling") return;
+    const direction = swipe.direction;
+    const accepted = swipe.accepted;
+    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+    if (accepted) {
+      setActiveIndex((index) => (index + direction + imageItems.length) % imageItems.length);
+    }
   }
 
   function handleClick() {
@@ -561,9 +610,11 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
         isRight ? "self-end" : "self-start"
       }`}
       onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={() => {
         dragStartX.current = null;
+        setSwipe((current) => ({ ...current, phase: "settling", accepted: false }));
       }}
       onClick={handleClick}
       onDragStart={(event) => event.preventDefault()}
@@ -588,12 +639,35 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
         );
       })}
       <span className="absolute inset-0 z-10 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]">
-        <img
-          src={activeSrc}
-          alt={activeItem.alt || "图片"}
-          className="h-full w-full object-cover"
-          loading="lazy"
-        />
+        <span
+          className={`absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 ${transitionClass}`}
+          style={{
+            transform: `translate3d(${activeTranslatePx}px, 0, 0) scale(${activeScale})`,
+          }}
+        >
+          <img
+            src={activeSrc}
+            alt={activeItem.alt || "图片"}
+            className="h-full w-full object-cover"
+            loading="lazy"
+          />
+        </span>
+        {swipe.phase !== "idle" && coverItem ? (
+          <span
+            className={`absolute inset-0 z-10 overflow-hidden rounded-[14px] bg-gray-100 ${transitionClass}`}
+            style={{
+              transform: `translate3d(${coverTranslatePercent}%, 0, 0)`,
+            }}
+            onTransitionEnd={handleSwipeTransitionEnd}
+          >
+            <img
+              src={coverSrc}
+              alt={coverItem.alt || "图片"}
+              className="h-full w-full object-cover"
+              loading="lazy"
+            />
+          </span>
+        ) : null}
       </span>
       <span
         className={`pointer-events-none absolute top-1/2 z-20 -translate-y-1/2 rounded-full bg-gray-100/86 px-3 py-2 text-[13px] font-medium leading-none text-gray-500 shadow-sm backdrop-blur ${
