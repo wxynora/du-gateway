@@ -865,6 +865,151 @@ def _toy_display_piece(toy: str, intensity: int = 0) -> str:
     return f"{toy}{suffix}"
 
 
+def _join_cn(items: list[str]) -> str:
+    clean = [str(item or "").strip() for item in items if str(item or "").strip()]
+    if not clean:
+        return ""
+    if len(clean) == 1:
+        return clean[0]
+    return "、".join(clean)
+
+
+def _join_toy_event_pieces(pieces: list[str]) -> str:
+    clean = [str(piece or "").strip().rstrip("。") for piece in pieces if str(piece or "").strip()]
+    if not clean:
+        return ""
+    if len(clean) == 1:
+        return clean[0]
+    first = clean[0]
+    rest = [re.sub(r"^小玥", "", piece, count=1).lstrip() for piece in clean[1:]]
+    return "，又".join([first, *rest])
+
+
+def _toy_position(toy: str) -> str:
+    return TOY_DEFAULT_POSITIONS.get(toy, "")
+
+
+def _toys_have_intensity(toys: list[str]) -> bool:
+    return any(toy in TOY_INTENSITY_TYPES for toy in toys)
+
+
+def _group_toys_by_position(toys: list[str]) -> list[tuple[str, list[str]]]:
+    grouped: list[tuple[str, list[str]]] = []
+    index_by_position: dict[str, int] = {}
+    for toy in toys:
+        position = _toy_position(toy)
+        key = position or f"__toy__:{toy}"
+        if key not in index_by_position:
+            index_by_position[key] = len(grouped)
+            grouped.append((position, []))
+        grouped[index_by_position[key]][1].append(toy)
+    return grouped
+
+
+def _toy_add_group_event_piece(position: str, toys: list[str]) -> str:
+    names = _join_cn(toys).replace("、", "和")
+    if not names:
+        return ""
+    if position == "阴茎":
+        return f"小玥给你的阴茎套上了{names}"
+    if position == "乳头":
+        return f"小玥把{names}夹上了你的乳头"
+    if position == "后庭":
+        return f"小玥把{names}放进了你的后庭"
+    if position == "手腕":
+        return f"小玥给你的手腕扣上了{names}"
+    if position == "眼睛":
+        return f"小玥给你戴上了{names}"
+    if position == "嘴":
+        return f"小玥把{names}扣进了你嘴里"
+    if position == "全身" and toys == ["软绳"]:
+        return "小玥用软绳给你绑上了龟甲缚"
+    if position == "全身" and toys == ["春药"]:
+        return "小玥给你用了春药"
+    if position:
+        return f"小玥把{names}加在了你的{position}"
+    return f"小玥给你加上了{names}"
+
+
+def _toy_add_event_pieces(toys: list[str]) -> list[str]:
+    pieces = [_toy_add_group_event_piece(position, group) for position, group in _group_toys_by_position(toys)]
+    return [piece for piece in pieces if piece]
+
+
+def _toy_remove_group_event_piece(position: str, toys: list[str]) -> str:
+    names = _join_cn(toys).replace("、", "和")
+    if not names:
+        return ""
+    if position == "阴茎":
+        return f"小玥把{names}从你阴茎上取了下来"
+    if position == "乳头":
+        return f"小玥把{names}从你乳头上取了下来"
+    if position == "后庭":
+        return f"小玥把{names}从你后庭取了出来"
+    if position == "手腕":
+        return f"小玥解开了你的{names}"
+    if position == "眼睛":
+        return f"小玥摘下了你的{names}"
+    if position == "嘴":
+        return f"小玥取下了你嘴里的{names}"
+    if position == "全身" and toys == ["软绳"]:
+        return "小玥解开了你身上的龟甲缚"
+    if position == "全身" and toys == ["春药"]:
+        return "小玥停掉了春药效果"
+    if position:
+        return f"小玥把{names}从你的{position}取了下来"
+    return f"小玥把{names}从你身上取了下来"
+
+
+def _toy_remove_event_pieces(toys: list[str]) -> list[str]:
+    return [
+        piece
+        for position, group in _group_toys_by_position(toys)
+        for piece in [_toy_remove_group_event_piece(position, group)]
+        if piece
+    ]
+
+
+def _build_du_body_toy_event(previous: Any, current: Any) -> str:
+    prev_state = _normalize_du_body_state(previous)
+    next_state = _normalize_du_body_state(current)
+    prev_toys = prev_state.get("toy_types") if isinstance(prev_state.get("toy_types"), list) else []
+    next_toys = next_state.get("toy_types") if isinstance(next_state.get("toy_types"), list) else []
+    prev_intensity = int(prev_state.get("intensity") or 0)
+    next_intensity = int(next_state.get("intensity") or 0)
+
+    added = [toy for toy in next_toys if toy not in prev_toys]
+    removed = [toy for toy in prev_toys if toy not in next_toys]
+    pieces: list[str] = []
+
+    pieces.extend(_toy_add_event_pieces(added))
+    pieces.extend(_toy_remove_event_pieces(removed))
+
+    prev_has_intensity = _toys_have_intensity(prev_toys)
+    next_has_intensity = _toys_have_intensity(next_toys)
+    added_has_intensity = _toys_have_intensity(added)
+    intensity_tail = ""
+    if next_has_intensity and next_intensity > 0:
+        if prev_has_intensity and prev_intensity != next_intensity:
+            direction = "升" if next_intensity > prev_intensity else "降"
+            intensity_tail = f"，档位{direction}到了{next_intensity}"
+        elif added_has_intensity:
+            intensity_tail = f"，档位{next_intensity}"
+
+    if next_has_intensity and prev_has_intensity and prev_intensity != next_intensity and not pieces:
+        if next_intensity > prev_intensity:
+            pieces.append(f"小玥把档位升到了{next_intensity}")
+        elif next_intensity < prev_intensity:
+            pieces.append(f"小玥把档位降到了{next_intensity}")
+        intensity_tail = ""
+
+    if not next_toys and prev_toys and not pieces:
+        pieces.append("小玥把你身上的道具都取下来了")
+    if not pieces:
+        return ""
+    return "【小家事件】\n" + _join_toy_event_pieces(pieces) + intensity_tail + "。"
+
+
 def _format_du_body_state_lines(body_state: dict, vitals: dict | None = None) -> list[str]:
     state = _normalize_du_body_state(body_state)
     if not state:
@@ -1277,9 +1422,10 @@ def save_du_body_state(payload: Any) -> dict:
     current = _stored_state()
     raw = payload if isinstance(payload, dict) else {}
     previous = current.get("du_body_state") if isinstance(current.get("du_body_state"), dict) else {}
+    previous_normalized = _normalize_du_body_state(previous)
     previous_toy_key = (
-        tuple(previous.get("toy_types") if isinstance(previous.get("toy_types"), list) else []),
-        int(previous.get("intensity") or 0),
+        tuple(previous_normalized.get("toy_types") if isinstance(previous_normalized.get("toy_types"), list) else []),
+        int(previous_normalized.get("intensity") or 0),
     )
     state = _normalize_du_body_state(payload)
     has_toy_patch = any(key in raw for key in ("toy_types", "toy_type", "toy", "tool", "position", "body_position", "state", "status", "intensity", "level"))
@@ -1321,8 +1467,11 @@ def save_du_body_state(payload: Any) -> dict:
         int(state.get("intensity") or 0),
     )
     toy_changed = bool(has_toy_patch and previous_toy_key != next_toy_key)
+    toy_event_text = _build_du_body_toy_event(previous, state) if toy_changed else ""
     state["ok"] = bool(ok)
     state["toy_changed"] = toy_changed
+    if toy_event_text:
+        state["toy_event_text"] = toy_event_text
     return state if state else {"ok": bool(ok)}
 
 
@@ -1434,6 +1583,9 @@ def build_pixel_home_event(spot: Any, action: Any) -> str:
 
 
 def build_pixel_home_body_event(body_state: Any) -> str:
+    existing = str((body_state or {}).get("toy_event_text") or "").strip() if isinstance(body_state, dict) else ""
+    if existing:
+        return existing
     state = _normalize_du_body_state(body_state)
     toy_types = state.get("toy_types") if isinstance(state.get("toy_types"), list) else []
     intensity = int(state.get("intensity") or 0)
