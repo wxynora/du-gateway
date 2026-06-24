@@ -13,6 +13,34 @@ export async function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+export async function buildAnthropicImageDataUrlFromDataUrl(src: string): Promise<string> {
+  const img = await loadImageElement(src);
+  const maxLongEdge = 1568;
+  const maxPixels = 1_150_000;
+  const width = Math.max(1, img.naturalWidth || img.width || 1);
+  const height = Math.max(1, img.naturalHeight || img.height || 1);
+  const scale = Math.min(
+    1,
+    maxLongEdge / Math.max(width, height),
+    Math.sqrt(maxPixels / Math.max(1, width * height)),
+  );
+  const outWidth = Math.max(1, Math.floor(width * scale));
+  const outHeight = Math.max(1, Math.floor(height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = outWidth;
+  canvas.height = outHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("图片处理失败");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, outWidth, outHeight);
+  ctx.drawImage(img, 0, 0, outWidth, outHeight);
+  return canvas.toDataURL("image/jpeg", 0.86);
+}
+
+export async function buildAnthropicImageDataUrl(file: File): Promise<string> {
+  return buildAnthropicImageDataUrlFromDataUrl(await fileToDataUrl(file));
+}
+
 export async function loadImageElement(src: string): Promise<HTMLImageElement> {
   return await new Promise((resolve, reject) => {
     const img = new Image();

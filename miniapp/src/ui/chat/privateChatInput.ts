@@ -4,7 +4,7 @@ import {
   uploadChatDocument,
   uploadChatImage,
 } from "./chatMedia";
-import { fileToDataUrl } from "../imageDataUrl";
+import { buildAnthropicImageDataUrl } from "../imageDataUrl";
 import {
   buildPrivateUserContent,
   type PrivateModelContent,
@@ -56,7 +56,7 @@ export async function prepareImagesPrivateChatInput(files: File[], content: stri
   }
   const [attachments, imageDataUrls] = await Promise.all([
     Promise.all(imageFiles.map((file) => uploadChatImage(file))),
-    Promise.all(imageFiles.map((file) => fileToDataUrl(file))),
+    Promise.all(imageFiles.map((file) => buildAnthropicImageDataUrl(file))),
   ]);
   return {
     source: "image",

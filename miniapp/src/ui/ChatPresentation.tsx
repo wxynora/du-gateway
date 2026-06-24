@@ -352,6 +352,14 @@ function attachmentSrc(item: ChatAttachment): string {
   return String(item.remoteUrl || item.localUrl || item.thumbUrl || "").trim();
 }
 
+function attachmentPreviewSrc(item: ChatAttachment): string {
+  return String(item.kind === "image" ? item.thumbUrl || item.remoteUrl || item.localUrl : item.remoteUrl || item.localUrl || item.thumbUrl).trim();
+}
+
+function attachmentOpenSrc(item: ChatAttachment): string {
+  return String(item.remoteUrl || item.localUrl || item.thumbUrl || "").trim();
+}
+
 function formatAudioDuration(ms?: number): string {
   const total = Math.max(0, Math.round(Number(ms || 0) / 1000));
   if (!total) return "";
@@ -524,30 +532,47 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   if (imageItems.length < 2) return null;
   const normalizedIndex = ((activeIndex % imageItems.length) + imageItems.length) % imageItems.length;
   const activeItem = imageItems[normalizedIndex];
-  const activeSrc = attachmentSrc(activeItem);
+  const activePreviewSrc = attachmentPreviewSrc(activeItem);
+  const activeOpenSrc = attachmentOpenSrc(activeItem);
   const swipeDirection = swipe.direction;
-  const coverItem = imageItems[(normalizedIndex + swipeDirection + imageItems.length) % imageItems.length];
-  const coverSrc = attachmentSrc(coverItem);
   const swipeProgress = Math.min(Math.abs(swipe.deltaX) / swipeDistance, 1);
-  const coverTranslatePercent = swipe.phase === "dragging"
-    ? swipeDirection * (100 - swipeProgress * 100)
+  const stackDirection = swipe.phase === "idle" ? 1 : swipeDirection;
+  const stackProgress = swipe.phase === "dragging"
+    ? swipeProgress
     : swipe.phase === "settling" && swipe.accepted
-      ? 0
-      : swipeDirection * 100;
+      ? 1
+      : 0;
+  const exitDistance = 190;
+  const activeDragTranslatePx = Math.max(-exitDistance, Math.min(exitDistance, swipe.deltaX));
   const activeTranslatePx = swipe.phase === "dragging"
-    ? -swipeDirection * swipeProgress * 18
+    ? activeDragTranslatePx
     : swipe.phase === "settling" && swipe.accepted
-      ? -swipeDirection * 18
+      ? -swipeDirection * exitDistance
       : 0;
   const activeScale = swipe.phase === "dragging"
     ? 1 - swipeProgress * 0.025
     : swipe.phase === "settling" && swipe.accepted
       ? 0.975
       : 1;
+  const activeRotate = swipe.phase === "idle" ? 0 : (activeTranslatePx / exitDistance) * 2.5;
+  const activeOpacity = swipe.phase === "idle" ? 1 : 1 - swipeProgress * 0.1;
   const transitionClass = swipe.phase === "dragging" ? "transition-none" : "transition-transform duration-200 ease-out";
   const stackItems = Array.from({ length: Math.min(imageItems.length - 1, 2) }, (_, index) => index + 1)
-    .map((offset) => imageItems[(normalizedIndex + offset) % imageItems.length])
+    .map((offset) => imageItems[(normalizedIndex + stackDirection * offset + imageItems.length * 2) % imageItems.length])
     .filter(Boolean);
+
+  function stackLayerStyle(depth: number, progress = 0): React.CSSProperties {
+    const clampedProgress = Math.max(0, Math.min(1, progress));
+    const baseX = depth * (isRight ? -13 : 13);
+    const baseY = depth * 5;
+    const baseScale = 1 - depth * 0.022;
+    const baseRotate = depth * (isRight ? -1.2 : 1.2);
+    return {
+      transform: `translate(${baseX * (1 - clampedProgress)}px, ${baseY * (1 - clampedProgress)}px) scale(${baseScale + (1 - baseScale) * clampedProgress}) rotate(${baseRotate * (1 - clampedProgress)}deg)`,
+      opacity: Math.min(1, 0.64 + clampedProgress * 0.28 + (2 - depth) * 0.08),
+      zIndex: 3 + (3 - depth),
+    };
+  }
 
   function stopBubbleGesture(event: React.SyntheticEvent) {
     event.stopPropagation();
@@ -606,7 +631,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       suppressClickRef.current = false;
       return;
     }
-    window.open(activeSrc, "_blank", "noreferrer");
+    window.open(activeOpenSrc || activePreviewSrc, "_blank", "noreferrer");
   }
 
   return (
@@ -618,7 +643,8 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onPointerCancel={() => {
+      onPointerCancel={(event) => {
+        event.stopPropagation();
         dragStartX.current = null;
         setSwipe((current) => ({ ...current, phase: "settling", accepted: false }));
       }}
@@ -631,55 +657,35 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       aria-label={`${imageItems.length} 张图片，滑动切换，点击查看当前第 ${normalizedIndex + 1} 张`}
     >
       {[...stackItems].reverse().map((item, index) => {
-        const src = attachmentSrc(item);
+        const src = attachmentPreviewSrc(item);
         const depth = stackItems.length - index;
+        const isTransitionTarget = depth === 1 && swipe.phase !== "idle";
         return (
           <span
             key={`${item.id}-stack-${index}`}
-            className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
-            style={{
-              transform: `translate(${depth * (isRight ? -13 : 13)}px, ${depth * 5}px) scale(${1 - depth * 0.022}) rotate(${depth * (isRight ? -1.2 : 1.2)}deg)`,
-              opacity: 0.62 + index * 0.12,
-              zIndex: index,
-            }}
+            className={`absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_4px_14px_rgba(15,23,42,0.10)] ${transitionClass}`}
+            style={stackLayerStyle(depth, isTransitionTarget ? stackProgress : 0)}
             aria-hidden="true"
           >
             <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" draggable={false} />
           </span>
         );
       })}
-      <span className="absolute inset-0 z-10 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]">
-        <span
-          className={`absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 ${transitionClass}`}
-          style={{
-            transform: `translate3d(${activeTranslatePx}px, 0, 0) scale(${activeScale})`,
-          }}
-        >
-          <img
-            src={activeSrc}
-            alt={activeItem.alt || "图片"}
-            className="h-full w-full object-cover"
-            loading="lazy"
-            draggable={false}
-          />
-        </span>
-        {swipe.phase !== "idle" && coverItem ? (
-          <span
-            className={`absolute inset-0 z-10 overflow-hidden rounded-[14px] bg-gray-100 ${transitionClass}`}
-            style={{
-              transform: `translate3d(${coverTranslatePercent}%, 0, 0)`,
-            }}
-            onTransitionEnd={handleSwipeTransitionEnd}
-          >
-            <img
-              src={coverSrc}
-              alt={coverItem.alt || "图片"}
-              className="h-full w-full object-cover"
-              loading="lazy"
-              draggable={false}
-            />
-          </span>
-        ) : null}
+      <span
+        className={`absolute inset-0 z-10 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)] ${transitionClass}`}
+        style={{
+          transform: `translate3d(${activeTranslatePx}px, 0, 0) scale(${activeScale}) rotate(${activeRotate}deg)`,
+          opacity: activeOpacity,
+        }}
+        onTransitionEnd={handleSwipeTransitionEnd}
+      >
+        <img
+          src={activePreviewSrc}
+          alt={activeItem.alt || "图片"}
+          className="h-full w-full object-cover"
+          loading="lazy"
+          draggable={false}
+        />
       </span>
     </button>
   );
@@ -707,10 +713,12 @@ export function ChatAttachmentBlock({
       {(imageItems.length >= 2 ? nonImageItems : items).map((item) => {
         const src = attachmentSrc(item);
         if (item.kind === "image") {
+          const previewSrc = attachmentPreviewSrc(item);
+          const openSrc = attachmentOpenSrc(item);
           return (
-            <a key={item.id} href={src} target="_blank" rel="noreferrer" className="block max-w-full overflow-hidden rounded-[14px] active:opacity-80">
+            <a key={item.id} href={openSrc || previewSrc} target="_blank" rel="noreferrer" className="block max-w-full overflow-hidden rounded-[14px] active:opacity-80">
               <img
-                src={src}
+                src={previewSrc}
                 alt={item.alt || "图片"}
                 className="max-h-[260px] max-w-full rounded-[14px] object-cover"
                 loading="lazy"

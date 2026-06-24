@@ -77,6 +77,7 @@ import {
 } from "./storage/chatHistoryDb";
 import { useCodexGroupTaskRealtime, type CodexGroupTaskRealtimeTask } from "./hooks/useCodexGroupTaskRealtime";
 import { readMusicBgmContext } from "./listenBgm";
+import { buildAnthropicImageDataUrlFromDataUrl } from "./imageDataUrl";
 import { useToast } from "./toast";
 import {
   apiJsonWithTimeout,
@@ -268,6 +269,47 @@ function privateRequestBodyForLocalStorage(body: any, attachments?: ChatAttachme
       };
     }),
   };
+}
+
+async function compressPrivateModelContentDataImages(modelContent: PrivateModelContent): Promise<PrivateModelContent> {
+  if (!Array.isArray(modelContent)) return modelContent;
+  let changed = false;
+  const parts = await Promise.all(modelContent.map(async (part) => {
+    if (!part || typeof part !== "object") return part;
+    const imageUrl = part.image_url && typeof part.image_url === "object" ? part.image_url : null;
+    const rawUrl = String(imageUrl?.url || "").trim();
+    if (!isDataImageUrl(rawUrl)) return { ...part };
+    try {
+      const compressedUrl = await buildAnthropicImageDataUrlFromDataUrl(rawUrl);
+      if (compressedUrl && compressedUrl !== rawUrl) changed = true;
+      return {
+        ...part,
+        image_url: {
+          ...imageUrl,
+          url: compressedUrl || rawUrl,
+        },
+      };
+    } catch {
+      return { ...part };
+    }
+  }));
+  return changed ? parts : modelContent;
+}
+
+async function compressQueuedPrivateInputImages(item: QueuedPrivateInput): Promise<QueuedPrivateInput> {
+  return {
+    ...item,
+    modelContent: await compressPrivateModelContentDataImages(item.modelContent),
+  };
+}
+
+function shouldDropPrivateAggregateAfterFailure(source: ChatSendSource, queued: QueuedPrivateInput[], messages: ChatDraftMessage[]): boolean {
+  if (source !== "image" && !queued.some((item) => item.attachments.some((attachment) => attachment.kind === "image"))) return false;
+  const tail = messages
+    .slice(-6)
+    .map((message) => String(message.content || ""))
+    .join("\n");
+  return /image\s+too\s+large|图片.{0,12}过大|图像.{0,12}过大/i.test(tail);
 }
 
 function queuedPrivateInputForLocalStorage(item: QueuedPrivateInput): QueuedPrivateInput {
@@ -1912,11 +1954,22 @@ export function MainChatScreen({
     }
     const pendingBefore = privateInputAggregateQueueRef.current.length;
     if (privateInputAggregateHoldUntilNextInputRef.current) {
-      privateInputAggregateHoldUntilNextInputRef.current = false;
-      logSumiTalkClientEvent("private_input_aggregate_resume_after_failure", {
-        pendingBefore,
-        source,
-      }, "warning");
+      const queuedSource = resolveAggregateSource(privateInputAggregateQueueRef.current);
+      if (shouldDropPrivateAggregateAfterFailure(queuedSource, privateInputAggregateQueueRef.current, messagesRef.current)) {
+        privateInputAggregateQueueRef.current = [];
+        privateInputAggregateHoldUntilNextInputRef.current = false;
+        persistPrivateInputAggregate("drop_image_too_large_before_resume");
+        logSumiTalkClientEvent("private_input_aggregate_drop_image_too_large_before_resume", {
+          pendingBefore,
+          source,
+        }, "warning");
+      } else {
+        privateInputAggregateHoldUntilNextInputRef.current = false;
+        logSumiTalkClientEvent("private_input_aggregate_resume_after_failure", {
+          pendingBefore,
+          source,
+        }, "warning");
+      }
     }
     const baseTimestamp = Date.now();
     const displayContent = String(options.displayContent ?? content).trim();
@@ -1991,14 +2044,15 @@ export function MainChatScreen({
       schedulePrivateInputAggregateFlush(SUMITALK_PRIVATE_INPUT_BUSY_RETRY_MS, "busy_retry");
       return;
     }
-    const queued = privateInputAggregateQueueRef.current;
+    const rawQueued = privateInputAggregateQueueRef.current;
     privateInputAggregateQueueRef.current = [];
     if (privateInputAggregateTimerRef.current) {
       window.clearTimeout(privateInputAggregateTimerRef.current);
       privateInputAggregateTimerRef.current = null;
     }
     persistPrivateInputAggregate("flush_start");
-    if (!queued.length) return;
+    if (!rawQueued.length) return;
+    const queued = await Promise.all(rawQueued.map(compressQueuedPrivateInputImages));
     const content = queued.map((item) => item.content).filter(Boolean).join("\n").trim();
     const attachments = queued.flatMap((item) => item.attachments);
     const source = resolveAggregateSource(queued);
@@ -2018,14 +2072,23 @@ export function MainChatScreen({
       aggregateUserMessages: queued.map((item) => item.userMessage),
     });
     if (!ok) {
-      privateInputAggregateQueueRef.current = [...queued, ...privateInputAggregateQueueRef.current];
-      privateInputAggregateHoldUntilNextInputRef.current = true;
-      persistPrivateInputAggregate("hold_after_failure");
-      logSumiTalkClientEvent("private_input_aggregate_hold_after_failure", {
-        parts: queued.length,
-        pending: privateInputAggregateQueueRef.current.length,
-        source,
-      }, "warning");
+      if (shouldDropPrivateAggregateAfterFailure(source, queued, messagesRef.current)) {
+        privateInputAggregateHoldUntilNextInputRef.current = false;
+        persistPrivateInputAggregate("drop_image_too_large");
+        logSumiTalkClientEvent("private_input_aggregate_drop_image_too_large", {
+          parts: queued.length,
+          source,
+        }, "warning");
+      } else {
+        privateInputAggregateQueueRef.current = [...queued, ...privateInputAggregateQueueRef.current];
+        privateInputAggregateHoldUntilNextInputRef.current = true;
+        persistPrivateInputAggregate("hold_after_failure");
+        logSumiTalkClientEvent("private_input_aggregate_hold_after_failure", {
+          parts: queued.length,
+          pending: privateInputAggregateQueueRef.current.length,
+          source,
+        }, "warning");
+      }
     } else {
       privateInputAggregateHoldUntilNextInputRef.current = false;
       persistPrivateInputAggregate("flush_ok");

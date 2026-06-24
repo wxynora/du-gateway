@@ -3575,6 +3575,40 @@ def upload_sumitalk_chat_media_file(kind: str, filename: str, content: bytes, co
         return None
 
 
+def upload_sumitalk_chat_media_thumbnail_file(original_key: str, content: bytes, content_type: str = "image/jpeg") -> Optional[dict]:
+    original = str(original_key or "").strip()
+    if not original.startswith(f"{R2_KEY_SUMITALK_CHAT_MEDIA_PREFIX}/") or not content:
+        return None
+    ctype = (content_type or "image/jpeg").strip().lower()
+    if ctype not in {"image/jpeg", "image/jpg", "image/png", "image/webp"}:
+        ctype = "image/jpeg"
+    ext = ".jpg" if ctype in {"image/jpeg", "image/jpg"} else ".png" if ctype == "image/png" else ".webp"
+    today = today_beijing()
+    stem = Path(original).stem or uuid4().hex
+    key = f"{R2_KEY_SUMITALK_CHAT_MEDIA_PREFIX}/thumb/{today}/{stem}{ext}"
+    client = _s3_client()
+    if not client:
+        return None
+    try:
+        client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=key,
+            Body=content,
+            ContentType=ctype,
+        )
+        return {
+            "key": key,
+            "kind": "image",
+            "name": Path(key).name,
+            "contentType": ctype,
+            "size": len(content),
+            "createdAt": now_beijing_iso(),
+        }
+    except Exception as e:
+        logger.error("upload_sumitalk_chat_media_thumbnail_file 失败 key=%s error=%s", key, e, exc_info=True)
+        return None
+
+
 def get_sumitalk_chat_media_file(key: str) -> tuple[Optional[bytes], str]:
     k = str(key or "").strip()
     if not k.startswith(f"{R2_KEY_SUMITALK_CHAT_MEDIA_PREFIX}/") or ".." in k:

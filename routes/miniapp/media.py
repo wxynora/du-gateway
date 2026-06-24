@@ -16,6 +16,12 @@ from storage import r2_store
 from services.html_preview_store import resolve_preview_base_url_for_http_request
 from utils.time_aware import now_beijing_iso
 
+try:
+    from PIL import Image, ImageOps
+except Exception:
+    Image = None
+    ImageOps = None
+
 logger = logging.getLogger(__name__)
 
 TTS_EMOTION_VALUES = {"", "happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whisper"}
@@ -34,6 +40,7 @@ CHAT_MEDIA_AUDIO_MAX_BYTES = max(1024, int(VOICE_CALL_MAX_BYTES or (12 * 1024 * 
 CHAT_MEDIA_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024
 CHAT_MEDIA_DOCUMENT_MAX_CHARS = 60000
 CHAT_MEDIA_DOCUMENT_MAX_PDF_PAGES = 120
+CHAT_MEDIA_THUMB_LONG_EDGE = 720
 
 
 def _voice_call_default_config() -> dict:
@@ -85,6 +92,13 @@ def _chat_media_attachment(row: dict, *, duration_ms: int = 0, transcript: str =
         "size": int((row or {}).get("size") or 0),
         "createdAt": str((row or {}).get("createdAt") or now_beijing_iso()),
     }
+    thumb_key = str((row or {}).get("thumbnailKey") or "").strip()
+    if thumb_key:
+        item["thumbUrl"] = _chat_media_public_url(thumb_key)
+    if int((row or {}).get("width") or 0) > 0:
+        item["width"] = int((row or {}).get("width") or 0)
+    if int((row or {}).get("height") or 0) > 0:
+        item["height"] = int((row or {}).get("height") or 0)
     if duration_ms > 0:
         item["durationMs"] = int(duration_ms)
     if transcript:
@@ -92,6 +106,34 @@ def _chat_media_attachment(row: dict, *, duration_ms: int = 0, transcript: str =
     if text_preview:
         item["textPreview"] = text_preview
     return item
+
+
+def _build_chat_image_thumbnail(content: bytes, mime_type: str) -> tuple[bytes, str, int, int] | None:
+    if Image is None or ImageOps is None or not content:
+        return None
+    try:
+        img = Image.open(io.BytesIO(content))
+        img = ImageOps.exif_transpose(img)
+        width, height = img.size
+        if width <= 0 or height <= 0:
+            return None
+        scale = min(1.0, CHAT_MEDIA_THUMB_LONG_EDGE / float(max(width, height)))
+        if scale < 0.999:
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            img = img.resize((max(1, int(width * scale)), max(1, int(height * scale))), resample)
+        if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            rgba = img.convert("RGBA")
+            bg.paste(rgba, mask=rgba.getchannel("A"))
+            img = bg
+        else:
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=78, optimize=True)
+        return out.getvalue(), "image/jpeg", width, height
+    except Exception as e:
+        logger.warning("[SumiTalk] chat_media_thumbnail_failed mime=%s bytes=%s err=%s", mime_type, len(content or b""), e)
+        return None
 
 
 def _safe_duration_ms(value: object) -> int:
@@ -670,6 +712,16 @@ def register_routes(bp) -> None:
         row = r2_store.upload_sumitalk_chat_media_file(kind, filename, content, mime_type)
         if not row:
             return jsonify({"ok": False, "error": "上传失败"}), 500
+        if kind == "image":
+            thumb = _build_chat_image_thumbnail(content, mime_type)
+            if thumb:
+                thumb_bytes, thumb_mime, width, height = thumb
+                thumb_row = r2_store.upload_sumitalk_chat_media_thumbnail_file(row.get("key") or "", thumb_bytes, thumb_mime)
+                if thumb_row:
+                    row["thumbnailKey"] = thumb_row.get("key") or ""
+                    row["thumbnailSize"] = thumb_row.get("size") or len(thumb_bytes)
+                row["width"] = width
+                row["height"] = height
         attachment = _chat_media_attachment(row, text_preview=text_preview)
         return jsonify({"ok": True, "media": attachment, "attachment": attachment})
 
