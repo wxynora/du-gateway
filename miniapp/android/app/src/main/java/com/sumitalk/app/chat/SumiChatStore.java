@@ -192,7 +192,7 @@ public class SumiChatStore {
         }
     }
 
-    public JSONObject createDraftTurn(String deviceId, String windowId, JSONObject userMessage, JSONObject assistantMessage, JSONObject operation) throws Exception {
+    public JSONObject createDraftTurn(String deviceId, String windowId, JSONObject userMessage, JSONArray userMessages, JSONObject assistantMessage, JSONObject operation) throws Exception {
         String did = safe(deviceId);
         String wid = safe(windowId);
         JSONObject out = new JSONObject();
@@ -210,9 +210,18 @@ public class SumiChatStore {
             if (stored == null && !opId.isEmpty()) {
                 stored = getOperationByIdLocked(db, opId);
             }
-            if (stored == null && !opId.isEmpty() && userMessage != null && assistantMessage != null) {
+            boolean hasUserMessages = (userMessages != null && userMessages.length() > 0) || userMessage != null;
+            if (stored == null && !opId.isEmpty() && hasUserMessages && assistantMessage != null) {
                 String now = nowIso();
-                db.insertWithOnConflict("chat_messages", null, valuesFromMessage(did, wid, userMessage, now), SQLiteDatabase.CONFLICT_REPLACE);
+                if (userMessages != null && userMessages.length() > 0) {
+                    for (int i = 0; i < userMessages.length(); i += 1) {
+                        JSONObject msg = userMessages.optJSONObject(i);
+                        if (msg == null) continue;
+                        db.insertWithOnConflict("chat_messages", null, valuesFromMessage(did, wid, msg, now), SQLiteDatabase.CONFLICT_REPLACE);
+                    }
+                } else {
+                    db.insertWithOnConflict("chat_messages", null, valuesFromMessage(did, wid, userMessage, now), SQLiteDatabase.CONFLICT_REPLACE);
+                }
                 db.insertWithOnConflict("chat_messages", null, valuesFromMessage(did, wid, assistantMessage, now), SQLiteDatabase.CONFLICT_REPLACE);
                 db.insertWithOnConflict("chat_operations", null, valuesFromOperation(did, wid, operation, now), SQLiteDatabase.CONFLICT_REPLACE);
                 stored = getOperationByIdLocked(db, opId);

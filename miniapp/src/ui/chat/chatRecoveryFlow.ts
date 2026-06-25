@@ -74,6 +74,7 @@ export async function recoverSumiTalkOperationFlow(args: {
   if (!opId || !clientRequestId) throw new Error("缺少可恢复任务");
 
   let jobId = args.forceCreateJob ? "" : String(operation.jobId || "").trim();
+  const hadExistingJob = Boolean(jobId);
   const source = args.forceCreateJob ? "retry" : "recovery";
 
   const logFields = (fields: ClientLogFields = {}) => ({
@@ -153,6 +154,9 @@ export async function recoverSumiTalkOperationFlow(args: {
           error: errorText(e),
         }), "warning");
         jobId = "";
+        if (hadExistingJob && !args.forceCreateJob) {
+          throw new Error("渡回复任务已过期，点重试重新发送");
+        }
       }
     }
 

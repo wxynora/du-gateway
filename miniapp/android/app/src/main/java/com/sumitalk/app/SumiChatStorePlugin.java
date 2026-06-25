@@ -123,9 +123,10 @@ public class SumiChatStorePlugin extends Plugin {
             String deviceId = call.getString("deviceId", "");
             String windowId = call.getString("windowId", "");
             JSONObject userMessage = call.getData().optJSONObject("userMessage");
+            JSONArray userMessages = call.getData().optJSONArray("userMessages");
             JSONObject assistantMessage = call.getData().optJSONObject("assistantMessage");
             JSONObject operation = call.getData().optJSONObject("operation");
-            JSONObject result = getStore().createDraftTurn(deviceId, windowId, userMessage, assistantMessage, operation);
+            JSONObject result = getStore().createDraftTurn(deviceId, windowId, userMessage, userMessages, assistantMessage, operation);
             JSObject out = new JSObject();
             if (result != null && result.optJSONObject("operation") != null) {
                 out.put("operation", result.optJSONObject("operation"));

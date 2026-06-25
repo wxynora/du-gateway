@@ -15,6 +15,7 @@ export interface SumiChatStorePlugin {
     deviceId: string;
     windowId: string;
     userMessage: ChatHistoryMessage;
+    userMessages?: ChatHistoryMessage[];
     assistantMessage: ChatHistoryMessage;
     operation: ChatOperation;
   }): Promise<{ operation?: ChatOperation }>;
@@ -72,6 +73,7 @@ export const SumiChatStore = {
     deviceId: string;
     windowId: string;
     userMessage: ChatHistoryMessage;
+    userMessages?: ChatHistoryMessage[];
     assistantMessage: ChatHistoryMessage;
     operation: ChatOperation;
   }): Promise<{ operation?: ChatOperation }> {

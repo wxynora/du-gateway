@@ -130,6 +130,7 @@ export async function createChatDraftTurn(args: {
   deviceId: string;
   windowId: string;
   userMessage: ChatHistoryMessage;
+  userMessages?: ChatHistoryMessage[];
   assistantMessage: ChatHistoryMessage;
   operation: ChatOperation;
 }): Promise<ChatOperation | null> {

@@ -91,7 +91,6 @@ import {
 } from "./chat/chatMedia";
 import {
   prepareDocumentPrivateChatInput,
-  prepareInstantImagesPrivateChatInput,
   prepareImagesPrivateChatInput,
   prepareTextPrivateChatInput,
   prepareTravelFormPrivateChatInput,
@@ -163,7 +162,6 @@ type QueuedPrivateInput = {
   source: ChatSendSource;
   modelContent: PrivateModelContent;
   userMessage: ChatDraftMessage;
-  imageFiles?: File[];
 };
 type ChatBubbleMenuTargetBase = {
   id: string;
@@ -226,6 +224,27 @@ function normalizePrivateModelContent(value: any): PrivateModelContent {
 
 function isDataImageUrl(value: any): boolean {
   return /^data:image\/[^;,]+;base64,/i.test(String(value || "").trim());
+}
+
+function isFetchableImageUrl(value: any): boolean {
+  const text = String(value || "").trim();
+  return Boolean(text) && !isDataImageUrl(text) && (/^https?:\/\//i.test(text) || text.startsWith("/"));
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function fetchImageAsCompressedDataUrl(url: string): Promise<string> {
+  const resp = await fetch(url, { credentials: "include" });
+  if (!resp.ok) throw new Error(`图片读取失败：HTTP ${resp.status}`);
+  const blob = await resp.blob();
+  return buildAnthropicImageDataUrlFromDataUrl(await blobToDataUrl(blob));
 }
 
 function localImageUrlsFromAttachments(attachments?: ChatAttachment[]): string[] {
@@ -299,12 +318,23 @@ async function compressPrivateModelContentDataImages(modelContent: PrivateModelC
   let changed = false;
   const parts = await Promise.all(modelContent.map(async (part) => {
     if (!part || typeof part !== "object") return part;
-    const imageUrl = part.image_url && typeof part.image_url === "object" ? part.image_url : null;
-    const rawUrl = String(imageUrl?.url || "").trim();
-    if (!isDataImageUrl(rawUrl)) return { ...part };
-    try {
-      const compressedUrl = await buildAnthropicImageDataUrlFromDataUrl(rawUrl);
-      if (compressedUrl && compressedUrl !== rawUrl) changed = true;
+      const imageUrl = part.image_url && typeof part.image_url === "object" ? part.image_url : null;
+      const rawUrl = String(imageUrl?.url || "").trim();
+      if (!isDataImageUrl(rawUrl)) {
+        if (!isFetchableImageUrl(rawUrl)) return { ...part };
+        const compressedUrl = await fetchImageAsCompressedDataUrl(rawUrl);
+        changed = true;
+        return {
+          ...part,
+          image_url: {
+            ...imageUrl,
+            url: compressedUrl,
+          },
+        };
+      }
+      try {
+        const compressedUrl = await buildAnthropicImageDataUrlFromDataUrl(rawUrl);
+        if (compressedUrl && compressedUrl !== rawUrl) changed = true;
       return {
         ...part,
         image_url: {
@@ -320,20 +350,6 @@ async function compressPrivateModelContentDataImages(modelContent: PrivateModelC
 }
 
 async function compressQueuedPrivateInputImages(item: QueuedPrivateInput): Promise<QueuedPrivateInput> {
-  if (item.imageFiles?.length) {
-    const prepared = await prepareImagesPrivateChatInput(item.imageFiles, item.content);
-    const attachments = normalizeChatAttachments(prepared.attachments);
-    return {
-      ...item,
-      attachments,
-      modelContent: prepared.modelContent,
-      userMessage: {
-        ...item.userMessage,
-        attachments,
-      },
-      imageFiles: undefined,
-    };
-  }
   return {
     ...item,
     modelContent: await compressPrivateModelContentDataImages(item.modelContent),
@@ -350,7 +366,7 @@ function shouldDropPrivateAggregateAfterFailure(source: ChatSendSource, queued: 
 }
 
 function queuedPrivateInputForLocalStorage(item: QueuedPrivateInput): QueuedPrivateInput {
-  const { imageFiles: _imageFiles, ...serializable } = item;
+  const serializable = item;
   const attachments = stripPreviewUrlsFromAttachments(serializable.attachments);
   const userMessage = {
     ...serializable.userMessage,
@@ -796,7 +812,7 @@ export function MainChatScreen({
       payload = null;
     }
     const items = Array.isArray(payload?.items)
-      ? payload.items.map(normalizeQueuedPrivateInput).filter((item): item is QueuedPrivateInput => Boolean(item))
+      ? payload.items.map(normalizeQueuedPrivateInput).filter((item: QueuedPrivateInput | null): item is QueuedPrivateInput => Boolean(item))
       : [];
     if (!items.length || String(payload?.windowId || "") !== historyWindowId) {
       try {
@@ -1215,11 +1231,11 @@ export function MainChatScreen({
     if (!did || !remoteHistoryWindowId || remoteHistorySyncingRef.current) return;
     remoteHistorySyncingRef.current = true;
     try {
-      const current = messagesRef.current;
-      const beforeSignature = historySnapshotSignature(current);
       const j = await apiJson<{ ok?: boolean; messages?: ChatDraftMessage[] }>(sumitalkHistoryPath(remoteHistoryWindowId));
       const remoteMessages = sanitizeHistoryMessages(Array.isArray(j?.messages) ? j.messages : []);
       if (!remoteMessages.length) return;
+      const current = messagesRef.current;
+      const beforeSignature = historySnapshotSignature(current);
       const preferredSnapshot = pickBetterHistory(remoteMessages, current, seedMessages);
       const next = mergeHistorySnapshots(preferredSnapshot, current);
       if (historySnapshotSignature(next) === beforeSignature) return;
@@ -2085,7 +2101,7 @@ export function MainChatScreen({
 
   async function enqueuePrivateInputAggregate(
     rawContent: string,
-    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent; imageFiles?: File[] } = {},
+    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent } = {},
   ): Promise<boolean> {
     const content = String(rawContent || "").trim();
     const attachments = normalizeChatAttachments(options.attachments);
@@ -2172,7 +2188,6 @@ export function MainChatScreen({
       source,
       modelContent: options.modelContent ?? buildPrivateUserContent(content, attachments),
       userMessage,
-      imageFiles: options.imageFiles,
     });
     persistPrivateInputAggregate("enqueue");
     if (sending) {
@@ -2215,7 +2230,22 @@ export function MainChatScreen({
     }
     persistPrivateInputAggregate("flush_start");
     if (!rawQueued.length) return;
-    const queued = await Promise.all(rawQueued.map(compressQueuedPrivateInputImages));
+    let queued: QueuedPrivateInput[];
+    try {
+      queued = await Promise.all(rawQueued.map(compressQueuedPrivateInputImages));
+    } catch (e: any) {
+      privateInputAggregateQueueRef.current = [...rawQueued, ...privateInputAggregateQueueRef.current];
+      privateInputAggregateHoldUntilNextInputRef.current = true;
+      setActiveSendStageLabel("等待继续输入");
+      persistPrivateInputAggregate("hold_after_prepare_error");
+      logSumiTalkClientEvent("private_input_aggregate_hold_after_prepare_error", {
+        parts: rawQueued.length,
+        pending: privateInputAggregateQueueRef.current.length,
+        error: String(e?.message || e),
+      }, "error");
+      toast(`消息准备失败：${e?.message || e}，下一条会一起重试`);
+      return;
+    }
     const content = queued.map((item) => item.content).filter(Boolean).join("\n").trim();
     const attachments = queued.flatMap((item) => item.attachments);
     const source = resolveAggregateSource(queued);
@@ -2260,7 +2290,7 @@ export function MainChatScreen({
 
   async function sendChatContent(
     rawContent: string,
-    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent; imageFiles?: File[] } = {},
+    options: { displayContent?: string; attachments?: ChatAttachment[]; source?: ChatSendSource; modelContent?: PrivateModelContent } = {},
   ): Promise<boolean> {
     const attachments = normalizeChatAttachments(options.attachments);
     const source: ChatSendSource = options.source
@@ -2491,6 +2521,7 @@ export function MainChatScreen({
           deviceId: resolvedDeviceId,
           windowId: historyWindowId,
           userMessage: operationUserMsg,
+          userMessages: operationUserMessages,
           assistantMessage: assistantPlaceholder,
           operation: {
             id: operationId,
@@ -2809,7 +2840,6 @@ export function MainChatScreen({
       attachments: finalPrepared.attachments,
       source: finalPrepared.source,
       modelContent: finalPrepared.modelContent,
-      imageFiles: finalPrepared.imageFiles,
     });
     if (sent && quote) setQuotedBubble(null);
     return sent;
@@ -2872,12 +2902,10 @@ export function MainChatScreen({
     try {
       logSumiTalkClientEvent("image_upload_start", {
         count: files.length,
-        names: files.map((file) => file.name).slice(0, 8),
+        names: files.map((file) => file.name).slice(0, 8).join(", "),
         bytes: files.reduce((sum, file) => sum + file.size, 0),
       });
-      const prepared = groupChatMode
-        ? await prepareImagesPrivateChatInput(files, input)
-        : prepareInstantImagesPrivateChatInput(files, input);
+      const prepared = await prepareImagesPrivateChatInput(files, input);
       logSumiTalkClientEvent("image_upload_ok", {
         count: prepared.attachments.length,
         bytes: prepared.attachments.reduce((sum, attachment) => sum + Number(attachment.size || 0), 0),

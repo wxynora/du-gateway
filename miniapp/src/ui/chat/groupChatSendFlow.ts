@@ -67,7 +67,7 @@ export function buildGroupAssistantTerminal(args: {
 }): GroupAssistantTerminal {
   const rawReply = extractAssistantReplyText(args.data);
   const voiceOutput = extractSumiTalkVoiceOutput(rawReply);
-  const reply = voiceOutput.displayText || (voiceOutput.voiceText ? "" : rawReply);
+  const reply = voiceOutput.displayText || voiceOutput.voiceText || rawReply;
   if (!reply && !voiceOutput.voiceText) throw new Error("上游没有返回内容");
   const reasoning = extractAssistantReasoning(args.data);
   const tokenCount = extractTokenCount(args.data);

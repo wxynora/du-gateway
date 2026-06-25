@@ -323,6 +323,13 @@ rg -n "sumitalk-chat|sumitalk-history|daily-whisper|Today note|chat_request_rece
 - 已完成：新增 `miniapp/src/ui/chat/chatMedia.ts`，图片走 `/miniapp-api/chat-media/upload` 上传后作为 `image_url` 参与本轮模型输入；语音走 `/miniapp-api/chat-media/transcribe` 转写成文本后进入普通聊天链路，原音频作为语音附件显示。语音输入只是输入方式，不强制渡用语音回复，也不等待 TTS 后处理。
 - 已完成：`routes/miniapp/media.py` 新增 `/chat-media/upload`、`/chat-media/transcribe`、`/chat-media/tts`、`/chat-media/raw-public`；文件本体存 R2 `sumitalk/chat_media/`，聊天历史和 operation 只存轻量附件元数据，不存 base64/blob。STT/TTS 均打 `[SumiTalk] chat_media_*` 分段日志，只记录 mime、bytes、耗时、文本长度等元数据，不记录正文或音频。
 - 已完成：聊天页加号面板保留“图片”；语音入口挪到输入框内侧，只显示麦克风 SVG，按住录音、松开发送。图片作为独立图片消息直接贴出，不塞进文字气泡；语音显示为 QQ 风格短语音条，不再使用 Android WebView 原生 `<audio controls>` 大播放器；正文等于语音转写时默认只展示语音条，转写仍保留在消息数据里给模型/搜索用。
+
+当前状态（2026-06-24 SumiTalk 聚合/恢复补洞）：
+- 已完成：`MainChatScreen.tsx::mergeRemoteDisplayHistory()` 改为远端历史返回后再读取当前消息，避免它用旧快照覆盖刚恢复出来的后端回复；15 秒聚合 flush 如果图片准备/压缩失败，会把原队列放回并设为等待下一条输入重试，不再先清空后丢失。
+- 已完成：私聊图片不再使用只存在内存的 `File`/`blob:` instant 路径；发送给上游前统一走压缩后的 base64 data URL。聚合队列从本地草稿恢复时，如果 modelContent 里只有远端图片 URL，会先拉回并压缩成 base64 再发。
+- 已完成：`createDraftTurn` 支持可选 `userMessages`，15 秒聚合的多条用户消息会和 pending assistant、operation 一起写进 Android SQLite 事务；纯 `<voice>` 回复会把 voice 文本落进本地消息内容，TTS 失败或 app 退出时不再留下空白回复。
+- 已完成：恢复已有 job 时如果后端提示 job 不存在/过期，自动恢复不会重新创建模型任务，只把原气泡标成失败并提示点重试；显式重试仍可创建新 job。
+- 已验证：`npm --prefix miniapp run build`、`JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew -q :app:compileDebugJavaWithJavac`、`git diff --check` 通过；本轮未提交/部署，且不处理当前工作区里独立的 `services/pixel_home.py` 脏改。
 - 已完成：SumiTalk 入口规则允许渡在想发语音时输出 `<voice>...</voice>`；前端会剥掉控制标签，先展示文字回复，再异步调用 `/chat-media/tts` 把语音挂成附件。用户发语音仍只是输入方式，不会强制渡用语音回复。
 - 已完成：SumiTalk 发送链路新增客户端日志 `/miniapp-api/logs/client`、后端 job 阶段日志和取消发送按钮；日志能看到 `chat_send_start`、`chat_job_create_ok`、`chat_job_status stage=gateway_call_start`、`upstream_post_start/returned`、`chat_media_transcribe_*`、`assistant_voice_tts_*` 等阶段，用于判断卡在前端、STT、job、上游非流式调用、轮询还是 TTS。
 - 已完成：Android 版本升到 `versionName 1.1.9` / `versionCode 11`；Manifest 补 `android.permission.MODIFY_AUDIO_SETTINGS`，匹配 Capacitor WebView 麦克风 `PermissionRequest` 同时检查 `RECORD_AUDIO` 和 `MODIFY_AUDIO_SETTINGS` 的行为，避免按住说话时 `getUserMedia` 直接 `Permission denied`。
