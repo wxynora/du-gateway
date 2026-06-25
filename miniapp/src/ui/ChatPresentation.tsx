@@ -551,18 +551,30 @@ export function ChatVoiceTranscriptBlock({
 }
 
 function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; align: "left" | "right" }) {
+  type StackMotion = {
+    phase: "dragging" | "settling";
+    baseIndex: number;
+    direction: 1 | -1;
+    targetIndex: number | null;
+    progress: number;
+    accepted: boolean;
+  };
+  type CardPose = {
+    x: number;
+    y: number;
+    scale: number;
+    rotate: number;
+    opacity: number;
+  };
+
   const [activeIndex, setActiveIndex] = useState(0);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
-  const [swipe, setSwipe] = useState<{
-    phase: "idle" | "dragging" | "settling";
-    deltaX: number;
-    direction: 1 | -1;
-    accepted: boolean;
-    targetIndex: number | null;
-    targetOnTop: boolean;
-  }>({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null, targetOnTop: false });
+  const [motion, setMotion] = useState<StackMotion | null>(null);
+  const motionRef = useRef<StackMotion | null>(null);
   const dragStartX = useRef<number | null>(null);
+  const dragBaseIndexRef = useRef(0);
   const dragDirectionRef = useRef<1 | -1 | null>(null);
+  const settleTimerRef = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
   const isRight = align === "right";
   const imageItems = items.filter((item) => attachmentSrc(item));
@@ -571,39 +583,53 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   const commitDistance = 42;
 
   if (imageItems.length < 2) return null;
-  const normalizedIndex = Math.max(0, Math.min(activeIndex, imageItems.length - 1));
-  const activeItem = imageItems[normalizedIndex];
-  const activePreviewSrc = attachmentPreviewSrc(activeItem);
-  const swipeDirection = swipe.direction;
-  const canSwipe = (direction: 1 | -1) => {
-    const nextIndex = normalizedIndex + direction;
-    return nextIndex >= 0 && nextIndex < imageItems.length;
-  };
-  const canSwipeDirection = canSwipe(swipeDirection);
-  const swipeProgress = Math.min(Math.abs(swipe.deltaX) / swipeDistance, 1);
-  const swapProgress = swipe.phase === "dragging"
-    ? (canSwipeDirection ? swipeProgress : Math.min(swipeProgress, 0.18))
-    : swipe.phase === "settling" && swipe.accepted
-      ? 1
-      : 0;
-  const visualProgress = swipe.phase === "dragging"
-    ? Math.pow(swapProgress, 0.92)
-    : swapProgress;
-  const targetOnTop = swipe.targetOnTop || (swipe.phase === "settling" && swipe.accepted);
-  const layerTransition = swipe.phase === "dragging"
-    ? "none"
-    : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease-out";
-  const targetIndex = swipe.targetIndex ?? (canSwipeDirection ? normalizedIndex + swipeDirection : -1);
 
-  function visualOffsetForIndex(index: number) {
-    if (swipe.phase !== "idle" && targetIndex >= 0) {
-      if (index === normalizedIndex) return -swipeDirection * visualProgress;
-      if (index === targetIndex) return swipeDirection * (1 - visualProgress);
-    }
-    return index - normalizedIndex;
+  const normalizedIndex = Math.max(0, Math.min(activeIndex, imageItems.length - 1));
+  const baseIndex = Math.max(0, Math.min(motion?.baseIndex ?? normalizedIndex, imageItems.length - 1));
+  const currentItem = imageItems[baseIndex];
+  const targetItem = motion?.targetIndex != null ? imageItems[motion.targetIndex] : null;
+  const activePreviewSrc = attachmentPreviewSrc(currentItem);
+  const activePreviewAlt = currentItem.alt || "图片";
+  const motionProgress = motion
+    ? (motion.phase === "dragging" ? Math.pow(motion.progress, 0.92) : motion.progress)
+    : 0;
+  const movingTransition = motion?.phase === "settling"
+    ? "transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease-out"
+    : "none";
+
+  function setStackMotion(next: StackMotion | null) {
+    motionRef.current = next;
+    setMotion(next);
   }
 
-  function stackPose(offset: number) {
+  function clearSettleTimer() {
+    if (settleTimerRef.current != null) {
+      window.clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+  }
+
+  function finishSettling() {
+    const current = motionRef.current;
+    if (!current || current.phase !== "settling") return;
+    clearSettleTimer();
+    if (current.accepted && current.targetIndex != null) {
+      setActiveIndex(Math.max(0, Math.min(current.targetIndex, imageItems.length - 1)));
+    }
+    setStackMotion(null);
+  }
+
+  function queueSettleFallback() {
+    clearSettleTimer();
+    settleTimerRef.current = window.setTimeout(finishSettling, 320);
+  }
+
+  function canSwipeFrom(index: number, direction: 1 | -1) {
+    const nextIndex = index + direction;
+    return nextIndex >= 0 && nextIndex < imageItems.length;
+  }
+
+  function stackPose(offset: number): CardPose & { zIndex: number } {
     const rawDepth = Math.abs(offset);
     if (rawDepth < 0.001) {
       return { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1, zIndex: 20 };
@@ -621,39 +647,67 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     return { x, y, scale, rotate, opacity, zIndex };
   }
 
-  const stackEntries = imageItems
-    .map((item, index) => ({ item, index, offset: visualOffsetForIndex(index) }))
-    .filter(({ offset }) => Math.abs(offset) <= 3.2)
+  function mixPose(from: CardPose, to: CardPose, progress: number): CardPose {
+    const p = Math.max(0, Math.min(progress, 1));
+    return {
+      x: from.x + (to.x - from.x) * p,
+      y: from.y + (to.y - from.y) * p,
+      scale: from.scale + (to.scale - from.scale) * p,
+      rotate: from.rotate + (to.rotate - from.rotate) * p,
+      opacity: from.opacity + (to.opacity - from.opacity) * p,
+    };
+  }
+
+  function cardLayerStyle(pose: CardPose, zIndex: number, transition = "none"): React.CSSProperties {
+    return {
+      transform: `translate3d(${pose.x}px, ${pose.y}px, 0) scale(${pose.scale}) rotate(${pose.rotate}deg)`,
+      opacity: pose.opacity,
+      zIndex,
+      transition,
+    };
+  }
+
+  const backgroundEntries = imageItems
+    .map((item, index) => ({ item, index, offset: index - baseIndex }))
+    .filter(({ index, offset }) => (
+      index !== baseIndex
+      && index !== motion?.targetIndex
+      && Math.abs(offset) <= 3.2
+    ))
     .sort((a, b) => {
       const depthDelta = Math.abs(b.offset) - Math.abs(a.offset);
       if (Math.abs(depthDelta) > 0.01) return depthDelta;
       return a.index - b.index;
     });
 
-  function stackLayerStyle(offset: number): React.CSSProperties {
-    const pose = stackPose(offset);
-    return {
-      transform: `translate3d(${pose.x}px, ${pose.y}px, 0) scale(${pose.scale}) rotate(${pose.rotate}deg)`,
-      opacity: pose.opacity,
-      zIndex: pose.zIndex,
-      transition: "none",
-    };
-  }
+  const frontPose: CardPose = { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 };
+  const currentExitPose: CardPose = motion?.targetIndex != null
+    ? { x: -motion.direction * 28, y: 4, scale: 0.97, rotate: -motion.direction * 1.1, opacity: 0.86 }
+    : {
+        x: motion ? -motion.direction * 14 : 0,
+        y: motion ? 2 : 0,
+        scale: motion ? 0.98 : 1,
+        rotate: motion ? -motion.direction * 0.7 : 0,
+        opacity: 1,
+      };
+  const currentPose = motion ? mixPose(frontPose, currentExitPose, motionProgress) : frontPose;
+  const targetPose = motion && targetItem
+    ? mixPose(stackPose(motion.direction), frontPose, motionProgress)
+    : frontPose;
 
   function stopBubbleGesture(event: React.SyntheticEvent) {
     event.stopPropagation();
   }
 
-  function resetSwipe(direction: 1 | -1 = 1) {
-    setSwipe({ phase: "idle", deltaX: 0, direction, accepted: false, targetIndex: null, targetOnTop: false });
-  }
-
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
+    if (motionRef.current?.phase === "settling") return;
     event.stopPropagation();
     dragStartX.current = event.clientX;
+    dragBaseIndexRef.current = normalizedIndex;
     dragDirectionRef.current = null;
     suppressClickRef.current = false;
-    resetSwipe();
+    clearSettleTimer();
+    setStackMotion(null);
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -668,27 +722,25 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     const deltaX = event.clientX - startX;
     if (Math.abs(deltaX) > 6) suppressClickRef.current = true;
     if (Math.abs(deltaX) <= dragActivationDistance) {
-      if (swipe.phase !== "idle") resetSwipe(swipe.direction);
       return;
     }
     const direction = dragDirectionRef.current ?? (deltaX < 0 ? 1 : -1);
     dragDirectionRef.current = direction;
+    const base = dragBaseIndexRef.current;
     const directionalDelta = direction === 1 ? -deltaX : deltaX;
     const effectiveDistance = Math.max(0, directionalDelta - dragActivationDistance);
-    const effectiveDeltaX = direction === 1 ? -effectiveDistance : effectiveDistance;
-    const nextIndex = normalizedIndex + direction;
+    const nextIndex = base + direction;
     const hasTarget = nextIndex >= 0 && nextIndex < imageItems.length;
-    const progress = Math.min(effectiveDistance / swipeDistance, 1);
-    const nextTargetOnTop = hasTarget
-      ? (swipe.targetOnTop ? progress > 0.34 : progress >= 0.66)
-      : false;
-    setSwipe({
+    const progress = hasTarget
+      ? Math.min(effectiveDistance / swipeDistance, 1)
+      : Math.min(effectiveDistance / swipeDistance, 0.18);
+    setStackMotion({
       phase: "dragging",
-      deltaX: hasTarget ? effectiveDeltaX : effectiveDeltaX * 0.18,
+      baseIndex: base,
       direction,
-      accepted: false,
       targetIndex: hasTarget ? nextIndex : null,
-      targetOnTop: nextTargetOnTop,
+      progress,
+      accepted: false,
     });
   }
 
@@ -701,43 +753,34 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     if (startX == null) return;
     const deltaX = event.clientX - startX;
     if (!lockedDirection && Math.abs(deltaX) <= 6) {
-      resetSwipe();
       return;
     }
     const direction: 1 | -1 = lockedDirection ?? (deltaX < 0 ? 1 : -1);
+    const base = dragBaseIndexRef.current;
     const directionalDelta = direction === 1 ? -deltaX : deltaX;
     if (directionalDelta <= dragActivationDistance) {
       suppressClickRef.current = true;
-      resetSwipe(direction);
+      setStackMotion(null);
       return;
     }
     const effectiveDistance = directionalDelta - dragActivationDistance;
-    const accepted = effectiveDistance >= commitDistance && canSwipe(direction);
-    const nextIndex = Math.max(0, Math.min(normalizedIndex + direction, imageItems.length - 1));
-    const effectiveDeltaX = direction === 1 ? -effectiveDistance : effectiveDistance;
+    const accepted = effectiveDistance >= commitDistance && canSwipeFrom(base, direction);
+    const nextIndex = base + direction;
     suppressClickRef.current = true;
-    if (!accepted) {
-      resetSwipe(direction);
-      return;
-    }
-    setSwipe({
+    setStackMotion({
       phase: "settling",
-      deltaX: effectiveDeltaX,
+      baseIndex: base,
       direction,
+      targetIndex: canSwipeFrom(base, direction) ? nextIndex : null,
+      progress: accepted ? 1 : 0,
       accepted,
-      targetIndex: nextIndex,
-      targetOnTop: true,
     });
+    queueSettleFallback();
   }
 
   function handleSwipeTransitionEnd(event: React.TransitionEvent<HTMLSpanElement>) {
-    if (event.target !== event.currentTarget || event.propertyName !== "transform" || swipe.phase !== "settling") return;
-    const index = Number((event.currentTarget as HTMLSpanElement).dataset.imageIndex || "-1");
-    const nextIndex = swipe.targetIndex ?? Math.max(0, Math.min(normalizedIndex + swipe.direction, imageItems.length - 1));
-    if (swipe.accepted && index !== nextIndex) return;
-    const accepted = swipe.accepted;
-    if (accepted) setActiveIndex(nextIndex);
-    resetSwipe();
+    if (event.target !== event.currentTarget || event.propertyName !== "transform") return;
+    finishSettling();
   }
 
   function handleClick() {
@@ -745,7 +788,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       suppressClickRef.current = false;
       return;
     }
-    setPreviewImage({ src: activePreviewSrc, alt: activeItem.alt || "图片" });
+    setPreviewImage({ src: activePreviewSrc, alt: activePreviewAlt });
   }
 
   return (
@@ -762,7 +805,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
           event.stopPropagation();
           dragStartX.current = null;
           dragDirectionRef.current = null;
-          resetSwipe();
+          setStackMotion(null);
         }}
         onTouchStart={stopBubbleGesture}
         onTouchMove={stopBubbleGesture}
@@ -773,45 +816,67 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
         aria-label={`${imageItems.length} 张图片，滑动切换，点击查看当前第 ${normalizedIndex + 1} 张`}
         style={{ perspective: 800, transformStyle: "preserve-3d" }}
       >
-        {stackEntries.map(({ item, offset, index }) => {
+        {backgroundEntries.map(({ item, offset, index }) => {
           const src = attachmentPreviewSrc(item);
-          const isActive = index === normalizedIndex;
-          const isTarget = swipe.phase !== "idle" && index === targetIndex;
-          const isFront = Math.abs(offset) < 0.02;
           const nearFront = Math.abs(offset) < 1;
-          const zIndex = isTarget
-            ? (targetOnTop ? 24 : 23)
-            : isActive
-              ? (targetOnTop ? 23 : 24)
-              : stackPose(offset).zIndex;
+          const pose = stackPose(offset);
           return (
             <span
-              key={`${item.id}-stack-${index}`}
+              key={`${item.id}-back-${index}`}
               data-image-index={index}
               className={`pointer-events-none absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 ${
-                isFront
-                  ? "shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
+                nearFront
+                  ? "shadow-[0_6px_18px_rgba(15,23,42,0.11)]"
                   : "shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
               }`}
-              style={{ ...stackLayerStyle(offset), zIndex, transition: layerTransition }}
-              onTransitionEnd={handleSwipeTransitionEnd}
+              style={cardLayerStyle(pose, pose.zIndex)}
               aria-hidden="true"
             >
               <img
                 src={src}
-                alt={isFront ? item.alt || "图片" : ""}
+                alt=""
                 className="h-full w-full object-cover"
-                loading={isFront || nearFront ? "eager" : "lazy"}
+                loading={nearFront ? "eager" : "lazy"}
                 draggable={false}
               />
             </span>
           );
         })}
+        {targetItem && motion ? (
+          <span
+            key={`${targetItem.id}-target-${motion.targetIndex}`}
+            className="pointer-events-none absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
+            style={cardLayerStyle(targetPose, 24, movingTransition)}
+            aria-hidden="true"
+          >
+            <img
+              src={attachmentPreviewSrc(targetItem)}
+              alt=""
+              className="h-full w-full object-cover"
+              loading="eager"
+              draggable={false}
+            />
+          </span>
+        ) : null}
+        <span
+          key={`${currentItem.id}-current-${baseIndex}`}
+          className="pointer-events-none absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
+          style={cardLayerStyle(currentPose, targetItem && motion ? 23 : 24, movingTransition)}
+          onTransitionEnd={handleSwipeTransitionEnd}
+        >
+          <img
+            src={attachmentPreviewSrc(currentItem)}
+            alt={currentItem.alt || "图片"}
+            className="h-full w-full object-cover"
+            loading="eager"
+            draggable={false}
+          />
+        </span>
       </button>
       {previewImage ? (
         <ImagePreviewOverlay
           src={previewImage.src}
-          alt={previewImage.alt}
+          alt={previewImage.alt || activePreviewAlt}
           onClose={() => setPreviewImage(null)}
         />
       ) : null}
