@@ -102,6 +102,7 @@ import {
   type PreparedPrivateChatInput,
   type PrivateModelContent,
 } from "./chat/privateChatInput";
+import { DoodleBoardModal } from "./chat/DoodleBoardModal";
 import {
   buildPrivateUserContent,
   contentWithAttachmentHint,
@@ -770,6 +771,7 @@ export function MainChatScreen({
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
   const [plusOpen, setPlusOpen] = useState(false);
+  const [doodleBoardOpen, setDoodleBoardOpen] = useState(false);
   const [travelFormCard, setTravelFormCard] = useState<TravelPlanFormCard | null>(null);
   const [travelResultCard, setTravelResultCard] = useState<TravelPlanResultCard | null>(null);
   const [travelTransportCard, setTravelTransportCard] = useState<TravelTransportDetailCard | null>(null);
@@ -2282,7 +2284,7 @@ export function MainChatScreen({
     setMessages(nextMessages);
     setInput("");
     setPlusOpen(false);
-    refocusTextInputSoon();
+    if (source === "text") refocusTextInputSoon();
     try {
       await saveDisplayHistory(nextMessages, {
         localDeviceId: resolvedDeviceId,
@@ -3052,6 +3054,40 @@ export function MainChatScreen({
     documentInputRef.current?.click();
   }
 
+  function openDoodleBoard() {
+    if (sending || mediaBusy) return;
+    setVoiceInputOpen(false);
+    setPlusOpen(false);
+    textInputRef.current?.blur();
+    setDoodleBoardOpen(true);
+  }
+
+  async function sendDoodleImage(file: File): Promise<boolean> {
+    if (!file || sending || mediaBusy) return false;
+    setMediaBusy(true);
+    try {
+      const queuedDrafts = pendingImageDraftsRef.current;
+      const files = [...queuedDrafts.map((draft) => draft.file), file];
+      logSumiTalkClientEvent("doodle_send_start", {
+        bytes: file.size,
+        mime: file.type,
+        pendingImages: queuedDrafts.length,
+        totalImages: files.length,
+      });
+      const prepared = await prepareImagesPrivateChatInput(files, input);
+      const sent = await sendPreparedPrivateChatInput(prepared);
+      if (sent && queuedDrafts.length) clearPendingImageDrafts();
+      logSumiTalkClientEvent(sent ? "doodle_send_ok" : "doodle_send_skip", { bytes: file.size, totalImages: files.length });
+      return sent;
+    } catch (e: any) {
+      logSumiTalkClientEvent("doodle_send_error", { error: String(e?.message || e) }, "error");
+      toast(`涂鸦发送失败：${e?.message || e}`);
+      return false;
+    } finally {
+      setMediaBusy(false);
+    }
+  }
+
   async function handleImageInputChange(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("image/"));
     event.target.value = "";
@@ -3764,9 +3800,10 @@ export function MainChatScreen({
         onChange={handleDocumentInputChange}
       />
       <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] ${chatFooterClass}`}>
-          <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[132px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
-            <div className="grid grid-cols-5 gap-x-2 px-4 pb-2 pt-5">
+          <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[218px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
+            <div className="grid grid-cols-3 gap-x-3 gap-y-4 px-5 pb-5 pt-5">
               <ChatActionButton label="图片" onClick={openImagePicker} />
+              <ChatActionButton label="画画" onClick={openDoodleBoard} />
               <ChatActionButton label="文档" onClick={openDocumentPicker} />
               <ChatActionButton label="表情包" onClick={() => { setPlusOpen(false); onOpenStickers(); }} />
               <ChatActionButton label="通话" onClick={() => { setPlusOpen(false); onOpenCall(); }} />
@@ -4011,6 +4048,12 @@ export function MainChatScreen({
             </div>
           </>
         ) : null}
+        <DoodleBoardModal
+          open={doodleBoardOpen}
+          disabled={sending || mediaBusy}
+          onClose={() => setDoodleBoardOpen(false)}
+          onSend={sendDoodleImage}
+        />
         {travelFormCard ? (
         <TravelPlanFormModal
           card={travelFormCard}

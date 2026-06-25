@@ -9,7 +9,7 @@ import softJellyBlueStickerUrl from "../assets/soft-jelly-blue-sticker.png?url";
 import softJellyYellowStickerUrl from "../assets/soft-jelly-yellow-sticker.png?url";
 import sumikaBubbleStickerUrl from "../assets/sumika-bubble-sticker.png?url";
 import type { BubbleSkinKey } from "./chatAppearance";
-import { FileTextIcon, ImageIconMini, MicIconMini, PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
+import { BrushIconMini, FileTextIcon, ImageIconMini, MicIconMini, PhoneIconLarge, RouteIconMini, SmileIconMini } from "./icons";
 import type { ChatAttachment, ChatAttachmentKind } from "./chatMessages";
 
 type BubbleStickerAnchor = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -1089,6 +1089,8 @@ export function ChatActionButton({ label, onClick }: { label: string; onClick: (
     ? <SmileIconMini />
     : label === "出行规划"
       ? <RouteIconMini />
+      : label === "画画"
+        ? <BrushIconMini />
       : label === "图片"
         ? <ImageIconMini />
         : label === "文档"
