@@ -792,14 +792,9 @@ export function MainChatScreen({
   const [openVoiceTranscriptId, setOpenVoiceTranscriptId] = useState("");
   const [bubbleMenu, setBubbleMenu] = useState<ChatBubbleMenuTarget | null>(null);
   const [quotedBubble, setQuotedBubble] = useState<ChatBubbleQuote | null>(null);
-  const chatRootRef = useRef<HTMLDivElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const lastSearchQueryRef = useRef("");
-  const chatViewportHeightRef = useRef(typeof window !== "undefined" ? Math.max(0, Math.round(window.innerHeight)) : 0);
-  const keyboardOffsetRef = useRef(0);
-  const keyboardPaddingOffsetRef = useRef(0);
-  const keyboardSettleTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
@@ -3649,86 +3644,6 @@ export function MainChatScreen({
   }, [messages, searchOpen, voiceInputOpen, plusOpen, quotedBubble]);
 
   useEffect(() => {
-    const viewport = window.visualViewport;
-
-    const setRootVar = (root: HTMLDivElement, name: string, value: string) => {
-      if (root.style.getPropertyValue(name) !== value) {
-        root.style.setProperty(name, value);
-      }
-    };
-
-    const applyKeyboardOffset = () => {
-      keyboardSettleTimerRef.current = null;
-      const visibleHeight = viewport
-        ? Math.round(viewport.height + viewport.offsetTop)
-        : Math.round(window.innerHeight);
-      const layoutHeight = Math.round(window.innerHeight);
-      const baseline = Math.max(chatViewportHeightRef.current || 0, visibleHeight, layoutHeight);
-      const nextOffset = Math.max(0, baseline - visibleHeight);
-      const normalizedOffset = nextOffset > 80 ? Math.round(nextOffset / 4) * 4 : 0;
-
-      if (!normalizedOffset) {
-        const nextHeight = Math.max(visibleHeight, layoutHeight);
-        if (nextHeight > 0) {
-          chatViewportHeightRef.current = nextHeight;
-        }
-      }
-
-      const root = chatRootRef.current;
-      const el = messagesScrollRef.current;
-      const shouldStickToBottom = !searchOpen && el
-        ? el.scrollHeight - el.scrollTop - el.clientHeight < 220
-        : false;
-      const offsetChanged = keyboardOffsetRef.current !== normalizedOffset;
-
-      if (root) {
-        setRootVar(root, "--chat-viewport-height", `${chatViewportHeightRef.current || layoutHeight || visibleHeight}px`);
-        setRootVar(root, "--chat-keyboard-offset", `${normalizedOffset}px`);
-        setRootVar(root, "--chat-keyboard-translate", normalizedOffset ? `-${normalizedOffset}px` : "0px");
-      }
-
-      if (offsetChanged) {
-        keyboardOffsetRef.current = normalizedOffset;
-        keyboardPaddingOffsetRef.current = normalizedOffset;
-        if (shouldStickToBottom && el) {
-          requestAnimationFrame(() => {
-            el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
-          });
-        }
-      }
-    };
-
-    const scheduleKeyboardMeasure = (delay = 90) => {
-      if (keyboardSettleTimerRef.current) {
-        window.clearTimeout(keyboardSettleTimerRef.current);
-      }
-      keyboardSettleTimerRef.current = window.setTimeout(applyKeyboardOffset, delay);
-    };
-
-    const updateKeyboardOffset = () => scheduleKeyboardMeasure(90);
-    const updateKeyboardSoon = () => scheduleKeyboardMeasure(40);
-
-    updateKeyboardSoon();
-    viewport?.addEventListener("resize", updateKeyboardOffset);
-    viewport?.addEventListener("scroll", updateKeyboardOffset);
-    window.addEventListener("resize", updateKeyboardOffset);
-    document.addEventListener("focusin", updateKeyboardSoon, true);
-    document.addEventListener("focusout", updateKeyboardOffset, true);
-
-    return () => {
-      viewport?.removeEventListener("resize", updateKeyboardOffset);
-      viewport?.removeEventListener("scroll", updateKeyboardOffset);
-      window.removeEventListener("resize", updateKeyboardOffset);
-      document.removeEventListener("focusin", updateKeyboardSoon, true);
-      document.removeEventListener("focusout", updateKeyboardOffset, true);
-      if (keyboardSettleTimerRef.current) {
-        window.clearTimeout(keyboardSettleTimerRef.current);
-        keyboardSettleTimerRef.current = null;
-      }
-    };
-  }, [searchOpen]);
-
-  useEffect(() => {
     const query = searchQuery.trim();
     if (!query) {
       lastSearchQueryRef.current = "";
@@ -3759,14 +3674,9 @@ export function MainChatScreen({
 
   return (
     <div
-      ref={chatRootRef}
-      className="fixed left-0 top-0 z-30 flex w-full max-w-full flex-col overflow-hidden overscroll-none bg-transparent"
+      className="fixed inset-0 z-30 flex h-[100dvh] min-h-[100svh] w-full max-w-full flex-col overflow-hidden overscroll-none bg-transparent"
       style={{
         fontFamily: chatFontFamily,
-        "--chat-viewport-height": chatViewportHeightRef.current ? `${chatViewportHeightRef.current}px` : "100dvh",
-        "--chat-keyboard-offset": "0px",
-        "--chat-keyboard-translate": "0px",
-        height: "var(--chat-viewport-height)",
       } as React.CSSProperties}
     >
       <div className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full bg-[#F8F9FA]" />
@@ -3862,7 +3772,6 @@ export function MainChatScreen({
         ref={messagesScrollRef}
         className={`relative z-10 min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-5 ${messagesTopPaddingClass}`}
         style={{
-          paddingBottom: "calc(var(--chat-keyboard-offset, 0px) + 1.25rem)",
           WebkitOverflowScrolling: "touch",
         }}
       >
@@ -4121,10 +4030,7 @@ export function MainChatScreen({
         className="hidden"
         onChange={handleDocumentInputChange}
       />
-      <div
-        className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] transition-transform duration-200 ease-out will-change-transform ${chatFooterClass}`}
-        style={{ transform: "translate3d(0, var(--chat-keyboard-translate, 0px), 0)" }}
-      >
+      <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] ${chatFooterClass}`}>
           <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[194px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
             <div className="grid grid-cols-3 gap-x-3 gap-y-3 px-5 pb-4 pt-4">
               <ChatActionButton label="图片" onClick={openImagePicker} />
