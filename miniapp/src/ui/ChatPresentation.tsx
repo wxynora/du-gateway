@@ -559,8 +559,10 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     direction: 1 | -1;
     accepted: boolean;
     targetIndex: number | null;
-  }>({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
+    targetOnTop: boolean;
+  }>({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null, targetOnTop: false });
   const dragStartX = useRef<number | null>(null);
+  const dragDirectionRef = useRef<1 | -1 | null>(null);
   const suppressClickRef = useRef(false);
   const isRight = align === "right";
   const imageItems = items.filter((item) => attachmentSrc(item));
@@ -587,12 +589,19 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   const visualProgress = swipe.phase === "dragging"
     ? Math.pow(swapProgress, 0.92)
     : swapProgress;
-  const targetOnTop = visualProgress >= 0.56 || (swipe.phase === "settling" && swipe.accepted);
+  const targetOnTop = swipe.targetOnTop || (swipe.phase === "settling" && swipe.accepted);
   const layerTransition = swipe.phase === "dragging"
     ? "none"
     : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease-out";
   const targetIndex = swipe.targetIndex ?? (canSwipeDirection ? normalizedIndex + swipeDirection : -1);
-  const visualIndex = normalizedIndex + swipeDirection * visualProgress;
+
+  function visualOffsetForIndex(index: number) {
+    if (swipe.phase !== "idle" && targetIndex >= 0) {
+      if (index === normalizedIndex) return -swipeDirection * visualProgress;
+      if (index === targetIndex) return swipeDirection * (1 - visualProgress);
+    }
+    return index - normalizedIndex;
+  }
 
   function stackPose(offset: number) {
     const rawDepth = Math.abs(offset);
@@ -613,7 +622,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   }
 
   const stackEntries = imageItems
-    .map((item, index) => ({ item, index, offset: index - visualIndex }))
+    .map((item, index) => ({ item, index, offset: visualOffsetForIndex(index) }))
     .filter(({ offset }) => Math.abs(offset) <= 3.2)
     .sort((a, b) => {
       const depthDelta = Math.abs(b.offset) - Math.abs(a.offset);
@@ -635,11 +644,16 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     event.stopPropagation();
   }
 
+  function resetSwipe(direction: 1 | -1 = 1) {
+    setSwipe({ phase: "idle", deltaX: 0, direction, accepted: false, targetIndex: null, targetOnTop: false });
+  }
+
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
     event.stopPropagation();
     dragStartX.current = event.clientX;
+    dragDirectionRef.current = null;
     suppressClickRef.current = false;
-    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
+    resetSwipe();
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -654,43 +668,66 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     const deltaX = event.clientX - startX;
     if (Math.abs(deltaX) > 6) suppressClickRef.current = true;
     if (Math.abs(deltaX) <= dragActivationDistance) {
-      if (swipe.phase !== "idle") setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
+      if (swipe.phase !== "idle") resetSwipe(swipe.direction);
       return;
     }
-    const direction: 1 | -1 = deltaX < 0 ? 1 : -1;
-    const effectiveDeltaX = deltaX < 0
-      ? deltaX + dragActivationDistance
-      : deltaX - dragActivationDistance;
-    setSwipe({ phase: "dragging", deltaX: effectiveDeltaX, direction, accepted: false, targetIndex: null });
+    const direction = dragDirectionRef.current ?? (deltaX < 0 ? 1 : -1);
+    dragDirectionRef.current = direction;
+    const directionalDelta = direction === 1 ? -deltaX : deltaX;
+    const effectiveDistance = Math.max(0, directionalDelta - dragActivationDistance);
+    const effectiveDeltaX = direction === 1 ? -effectiveDistance : effectiveDistance;
+    const nextIndex = normalizedIndex + direction;
+    const hasTarget = nextIndex >= 0 && nextIndex < imageItems.length;
+    const progress = Math.min(effectiveDistance / swipeDistance, 1);
+    const nextTargetOnTop = hasTarget
+      ? (swipe.targetOnTop ? progress > 0.34 : progress >= 0.66)
+      : false;
+    setSwipe({
+      phase: "dragging",
+      deltaX: hasTarget ? effectiveDeltaX : effectiveDeltaX * 0.18,
+      direction,
+      accepted: false,
+      targetIndex: hasTarget ? nextIndex : null,
+      targetOnTop: nextTargetOnTop,
+    });
   }
 
   function handlePointerUp(event: React.PointerEvent<HTMLButtonElement>) {
     event.stopPropagation();
     const startX = dragStartX.current;
     dragStartX.current = null;
+    const lockedDirection = dragDirectionRef.current;
+    dragDirectionRef.current = null;
     if (startX == null) return;
     const deltaX = event.clientX - startX;
-    if (Math.abs(deltaX) <= 6) {
-      setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
+    if (!lockedDirection && Math.abs(deltaX) <= 6) {
+      resetSwipe();
       return;
     }
-    if (Math.abs(deltaX) <= dragActivationDistance) {
+    const direction: 1 | -1 = lockedDirection ?? (deltaX < 0 ? 1 : -1);
+    const directionalDelta = direction === 1 ? -deltaX : deltaX;
+    if (directionalDelta <= dragActivationDistance) {
       suppressClickRef.current = true;
-      setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
+      resetSwipe(direction);
       return;
     }
-    const direction: 1 | -1 = deltaX < 0 ? 1 : -1;
-    const accepted = Math.abs(deltaX) >= commitDistance && canSwipe(direction);
+    const effectiveDistance = directionalDelta - dragActivationDistance;
+    const accepted = effectiveDistance >= commitDistance && canSwipe(direction);
     const nextIndex = Math.max(0, Math.min(normalizedIndex + direction, imageItems.length - 1));
-    const effectiveDeltaX = deltaX < 0
-      ? deltaX + dragActivationDistance
-      : deltaX - dragActivationDistance;
+    const effectiveDeltaX = direction === 1 ? -effectiveDistance : effectiveDistance;
     suppressClickRef.current = true;
     if (!accepted) {
-      setSwipe({ phase: "idle", deltaX: 0, direction, accepted: false, targetIndex: null });
+      resetSwipe(direction);
       return;
     }
-    setSwipe({ phase: "settling", deltaX: effectiveDeltaX, direction, accepted, targetIndex: nextIndex });
+    setSwipe({
+      phase: "settling",
+      deltaX: effectiveDeltaX,
+      direction,
+      accepted,
+      targetIndex: nextIndex,
+      targetOnTop: true,
+    });
   }
 
   function handleSwipeTransitionEnd(event: React.TransitionEvent<HTMLSpanElement>) {
@@ -700,7 +737,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     if (swipe.accepted && index !== nextIndex) return;
     const accepted = swipe.accepted;
     if (accepted) setActiveIndex(nextIndex);
-    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
+    resetSwipe();
   }
 
   function handleClick() {
@@ -724,7 +761,8 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
         onPointerCancel={(event) => {
           event.stopPropagation();
           dragStartX.current = null;
-          setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
+          dragDirectionRef.current = null;
+          resetSwipe();
         }}
         onTouchStart={stopBubbleGesture}
         onTouchMove={stopBubbleGesture}
@@ -741,14 +779,10 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
           const isTarget = swipe.phase !== "idle" && index === targetIndex;
           const isFront = Math.abs(offset) < 0.02;
           const nearFront = Math.abs(offset) < 1;
-          const zIndex = isFront
-            ? 24
-            : nearFront
-              ? isTarget && targetOnTop
-                ? 23
-                : isActive && !targetOnTop
-                  ? 23
-                  : 22
+          const zIndex = isTarget
+            ? (targetOnTop ? 24 : 23)
+            : isActive
+              ? (targetOnTop ? 23 : 24)
               : stackPose(offset).zIndex;
           return (
             <span

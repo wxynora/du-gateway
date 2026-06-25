@@ -3510,7 +3510,7 @@ export function MainChatScreen({
 
       <div
         ref={messagesScrollRef}
-        className={`relative z-10 min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-3.5 pb-5 ${messagesTopPaddingClass}`}
+        className={`relative z-10 min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-5 ${messagesTopPaddingClass}`}
       >
         <div className="space-y-4">
           {groupedMessages.map((group, index) => (
