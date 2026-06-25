@@ -36,6 +36,7 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const BETA_HEADER = [
   "claude-code-20250219",
   "oauth-2025-04-20",
+  "interleaved-thinking-2025-05-14",
   "prompt-caching-scope-2026-01-05",
   "context-management-2025-06-27",
 ].join(",");

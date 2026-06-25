@@ -1026,6 +1026,7 @@ PY
 当前状态（2026-06-25 Claude beta header 减负实测）：
 - 已备份：本地备份分支 `backup/claude-beta-headers-before-prune-20260625-200237`；远端实际运行文件备份 `/home/nora/claude-proxy/proxy.js.bak-20260625-200435`。
 - 已改动：`scripts/claude_oauth_proxy.js` 的 `anthropic-beta` 删掉 `interleaved-thinking-2025-05-14`、`fine-grained-tool-streaming-2025-05-14`、`token-efficient-tools-2025-02-19`、`effort-2025-11-24`；保留 `claude-code-20250219`、`oauth-2025-04-20`、`prompt-caching-scope-2026-01-05`、`context-management-2025-06-27`。
+- 后续调整：为兼容 Opus 4.5 等旧 Claude 4 模型的工具间 thinking，按用户要求先全局加回 `interleaved-thinking-2025-05-14`；另外三个 beta 仍保持移除。
 - 已验证：`node --check scripts/claude_oauth_proxy.js` 通过；VPS 拉到包含本改动的 main 后同步到 `/home/nora/claude-proxy/proxy.js` 并重启 `claude-oauth-proxy.service`，服务 active、`127.0.0.1:8082` 正常监听。
 - 直打测试：在 VPS 直接请求 `127.0.0.1:8082/v1/models` 返回 9 个模型；直接请求 `127.0.0.1:8082/v1/chat/completions`，`claude-sonnet-4-6` 返回 `测试`，`claude-opus-4-6` 返回 `42` 且 `output_tokens_details.thinking_tokens=0`；未经过 `du-gateway` 聊天转发链路。
 当前状态（2026-06-11 Claude proxy 脱管 node 清理）：
