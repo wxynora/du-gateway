@@ -254,6 +254,15 @@ export function ListenWithDuScreen({
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const sendSeqRef = useRef(0);
   const playAfterSwitchRef = useRef(false);
+  const listenBackgroundHeightRef = useRef(
+    typeof window !== "undefined"
+      ? Math.max(
+          Math.round(window.innerHeight || 0),
+          Math.round(document.documentElement?.clientHeight || 0),
+          Math.round(window.visualViewport?.height || 0),
+        )
+      : 0,
+  );
   const [songs, setSongs] = useState<MusicEntry[]>([]);
   const [songIndex, setSongIndex] = useState(0);
   const [messages, setMessages] = useState<ListenMessage[]>([]);
@@ -327,6 +336,7 @@ export function ListenWithDuScreen({
   const lyricActiveIndex = activeLyricIndex >= 0 ? activeLyricIndex : 0;
   const [lyricTrackOffset, setLyricTrackOffset] = useState(LYRIC_VIEWPORT_HEIGHT / 2);
   const playbackActive = isPlaying || playbackStarting;
+  const listenBackgroundCanvasHeight = listenBackgroundHeightRef.current ? `${listenBackgroundHeightRef.current}px` : "100lvh";
 
   const historyItems = useMemo(
     () => songs.map((item, index) => ({ ...item, active: index === songIndex, durationLabel: formatClock(durationFor(item)) })),
@@ -585,14 +595,23 @@ export function ListenWithDuScreen({
     >
       {backgroundImage ? (
         <div
-          className="pointer-events-none fixed inset-0 bg-cover bg-center"
-          style={{ backgroundImage: `url(${backgroundImage})` }}
+          className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-cover bg-center"
+          style={{ backgroundImage: `url(${backgroundImage})`, height: listenBackgroundCanvasHeight }}
         />
       ) : (
-        <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,#6a9bd1_0%,#9ebadc_48%,#e8d7e1_100%)]" />
+        <div
+          className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-[linear-gradient(180deg,#6a9bd1_0%,#9ebadc_48%,#e8d7e1_100%)]"
+          style={{ height: listenBackgroundCanvasHeight }}
+        />
       )}
-      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(180deg,rgba(37,58,85,0.18)_0%,rgba(62,78,108,0.10)_42%,rgba(232,215,225,0.58)_100%)]" />
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.45),transparent_30%),radial-gradient(circle_at_82%_74%,rgba(255,210,226,0.46),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0))] mix-blend-overlay" />
+      <div
+        className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-[linear-gradient(180deg,rgba(37,58,85,0.18)_0%,rgba(62,78,108,0.10)_42%,rgba(232,215,225,0.58)_100%)]"
+        style={{ height: listenBackgroundCanvasHeight }}
+      />
+      <div
+        className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.45),transparent_30%),radial-gradient(circle_at_82%_74%,rgba(255,210,226,0.46),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0))] mix-blend-overlay"
+        style={{ height: listenBackgroundCanvasHeight }}
+      />
 
       {audioSrc ? (
         <audio
