@@ -2970,7 +2970,6 @@ export function MainChatScreen({
       const sent = await sendPreparedPrivateChatInput(prepared);
       if (sent) {
         clearPendingImageDrafts();
-        refocusTextInputSoon();
       }
       return sent;
     } catch (e: any) {
@@ -3071,7 +3070,6 @@ export function MainChatScreen({
       names: files.map((file) => file.name).slice(0, 8).join(", "),
       bytes: files.reduce((sum, file) => sum + file.size, 0),
     });
-    refocusTextInputSoon();
   }
 
   async function handleDocumentInputChange(event: React.ChangeEvent<HTMLInputElement>) {
