@@ -561,7 +561,6 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   }>({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
   const dragStartX = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
-  const settleHandoffRef = useRef(false);
   const isRight = align === "right";
   const imageItems = items.filter((item) => attachmentSrc(item));
   const swipeDistance = 136;
@@ -587,47 +586,38 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     ? Math.pow(swapProgress, 0.92)
     : swapProgress;
   const targetOnTop = visualProgress >= 0.56 || (swipe.phase === "settling" && swipe.accepted);
-  const layerTransition = swipe.phase === "dragging" || settleHandoffRef.current
+  const layerTransition = swipe.phase === "dragging"
     ? "none"
     : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease-out";
   const targetIndex = canSwipeDirection ? normalizedIndex + swipeDirection : -1;
-  const targetItem = targetIndex >= 0 ? imageItems[targetIndex] : null;
-  const targetPreviewSrc = targetItem ? attachmentPreviewSrc(targetItem) : "";
+  const visualIndex = normalizedIndex + swipeDirection * visualProgress;
 
   function stackPose(offset: number) {
+    const rawDepth = Math.abs(offset);
+    if (rawDepth < 0.001) {
+      return { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1, zIndex: 20 };
+    }
     const side = offset > 0 ? 1 : -1;
-    const depth = Math.min(Math.abs(offset), 3);
-    const x = side * (18 + (depth - 1) * 12);
-    const y = 6 + (depth - 1) * 5;
+    const depth = Math.min(rawDepth, 3);
+    const firstLayer = Math.min(depth, 1);
+    const extraDepth = Math.max(depth - 1, 0);
+    const x = side * (18 * firstLayer + extraDepth * 12);
+    const y = 6 * firstLayer + extraDepth * 5;
     const scale = 1 - depth * 0.04;
-    const rotate = side * (1.15 + (depth - 1) * 0.5);
-    const opacity = Math.max(0.44, 0.82 - depth * 0.12);
-    const zIndex = 10 - depth;
+    const rotate = side * (1.15 * firstLayer + extraDepth * 0.5);
+    const opacity = Math.max(0.44, 1 - depth * 0.18);
+    const zIndex = Math.max(1, 10 - Math.ceil(depth));
     return { x, y, scale, rotate, opacity, zIndex };
   }
 
-  function mix(from: number, to: number, progress: number): number {
-    return from + (to - from) * progress;
-  }
-
-  const activeBackPose = stackPose(-swipeDirection);
-  const targetStartPose = stackPose(swipeDirection);
-  const activeTranslateX = swipe.phase === "idle" ? 0 : mix(0, activeBackPose.x, visualProgress);
-  const activeTranslateY = swipe.phase === "idle" ? 0 : mix(0, activeBackPose.y, visualProgress);
-  const activeScale = swipe.phase === "idle" ? 1 : mix(1, activeBackPose.scale, visualProgress);
-  const activeRotate = swipe.phase === "idle" ? 0 : mix(0, activeBackPose.rotate, visualProgress);
-  const activeOpacity = swipe.phase === "idle" ? 1 : mix(1, activeBackPose.opacity, visualProgress);
-  const targetTranslateX = mix(targetStartPose.x, 0, visualProgress);
-  const targetTranslateY = mix(targetStartPose.y, 0, visualProgress);
-  const targetScale = mix(targetStartPose.scale, 1, visualProgress);
-  const targetRotate = mix(targetStartPose.rotate, 0, visualProgress);
-  const targetOpacity = mix(targetStartPose.opacity, 1, visualProgress);
-
   const stackEntries = imageItems
-    .map((item, index) => ({ item, index, offset: index - normalizedIndex }))
-    .filter(({ index, offset }) => offset !== 0 && !(swipe.phase !== "idle" && index === targetIndex))
-    .filter(({ offset }) => Math.abs(offset) <= 3)
-    .sort((a, b) => Math.abs(b.offset) - Math.abs(a.offset));
+    .map((item, index) => ({ item, index, offset: index - visualIndex }))
+    .filter(({ offset }) => Math.abs(offset) <= 3.2)
+    .sort((a, b) => {
+      const depthDelta = Math.abs(b.offset) - Math.abs(a.offset);
+      if (Math.abs(depthDelta) > 0.01) return depthDelta;
+      return a.index - b.index;
+    });
 
   function stackLayerStyle(offset: number): React.CSSProperties {
     const pose = stackPose(offset);
@@ -687,16 +677,12 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
 
   function handleSwipeTransitionEnd(event: React.TransitionEvent<HTMLSpanElement>) {
     if (event.target !== event.currentTarget || event.propertyName !== "transform" || swipe.phase !== "settling") return;
+    const index = Number((event.currentTarget as HTMLSpanElement).dataset.imageIndex || "-1");
+    if (swipe.accepted && index !== normalizedIndex + swipe.direction) return;
     const direction = swipe.direction;
     const accepted = swipe.accepted;
-    settleHandoffRef.current = true;
     if (accepted) setActiveIndex((index) => Math.max(0, Math.min(index + direction, imageItems.length - 1)));
     setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        settleHandoffRef.current = false;
-      });
-    });
   }
 
   function handleClick() {
@@ -733,57 +719,42 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       >
         {stackEntries.map(({ item, offset, index }) => {
           const src = attachmentPreviewSrc(item);
+          const isActive = index === normalizedIndex;
+          const isTarget = swipe.phase !== "idle" && index === targetIndex;
+          const isFront = Math.abs(offset) < 0.02;
+          const nearFront = Math.abs(offset) < 1;
+          const zIndex = isFront
+            ? 24
+            : nearFront
+              ? isTarget && targetOnTop
+                ? 23
+                : isActive && !targetOnTop
+                  ? 23
+                  : 22
+              : stackPose(offset).zIndex;
           return (
             <span
               key={`${item.id}-stack-${index}`}
-              className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
-              style={stackLayerStyle(offset)}
+              data-image-index={index}
+              className={`absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 ${
+                isFront
+                  ? "shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
+                  : "shadow-[0_4px_14px_rgba(15,23,42,0.10)]"
+              }`}
+              style={{ ...stackLayerStyle(offset), zIndex, transition: layerTransition }}
+              onTransitionEnd={handleSwipeTransitionEnd}
               aria-hidden="true"
             >
-              <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" draggable={false} />
+              <img
+                src={src}
+                alt={isFront ? item.alt || "图片" : ""}
+                className="h-full w-full object-cover"
+                loading={isFront || nearFront ? "eager" : "lazy"}
+                draggable={false}
+              />
             </span>
           );
         })}
-        <span
-          className="absolute inset-0 z-10 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
-          style={{
-            transform: `translate3d(${activeTranslateX}px, ${activeTranslateY}px, 0) scale(${activeScale}) rotate(${activeRotate}deg)`,
-            opacity: activeOpacity,
-            zIndex: swipe.phase === "idle" || !targetOnTop ? 20 : 11,
-            transition: layerTransition,
-            willChange: "transform, opacity",
-          }}
-        >
-          <img
-            src={activePreviewSrc}
-            alt={activeItem.alt || "图片"}
-            className="h-full w-full object-cover"
-            loading="eager"
-            draggable={false}
-          />
-        </span>
-        {swipe.phase !== "idle" && targetItem && targetPreviewSrc ? (
-          <span
-            className="absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 shadow-[0_8px_22px_rgba(15,23,42,0.16)]"
-            style={{
-              transform: `translate3d(${targetTranslateX}px, ${targetTranslateY}px, 0) scale(${targetScale}) rotate(${targetRotate}deg)`,
-              opacity: targetOpacity,
-              zIndex: targetOnTop ? 21 : 12,
-              transition: layerTransition,
-              willChange: "transform, opacity",
-            }}
-            onTransitionEnd={handleSwipeTransitionEnd}
-            aria-hidden="true"
-          >
-            <img
-              src={targetPreviewSrc}
-              alt=""
-              className="h-full w-full object-cover"
-              loading="eager"
-              draggable={false}
-            />
-          </span>
-        ) : null}
       </button>
       {previewImage ? (
         <ImagePreviewOverlay
