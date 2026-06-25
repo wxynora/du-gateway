@@ -5,9 +5,15 @@ import re
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
+
+try:
+    import fcntl
+except Exception:  # pragma: no cover - non-POSIX fallback for local tooling only.
+    fcntl = None
 
 from config import (
     DATA_DIR,
@@ -22,7 +28,8 @@ from utils.time_aware import now_beijing_iso
 sumitalk_logger = logging.getLogger("sumitalk")
 
 _SUMITALK_CHAT_JOB_DIR = DATA_DIR / "sumitalk_chat_jobs"
-_SUMITALK_CHAT_JOB_LOCK = threading.Lock()
+_SUMITALK_CHAT_JOB_LOCK = threading.RLock()
+_SUMITALK_CHAT_JOB_STATE_LOCK_LOCAL = threading.local()
 _SUMITALK_CHAT_JOB_TTL_SECONDS = 30 * 60
 _SUMITALK_CHAT_JOB_STALE_SECONDS = max(60, int(STREAM_TIMEOUT_SECONDS or 300) + 60)
 _SCHEMA_LOCK = threading.Lock()
@@ -30,6 +37,38 @@ _SCHEMA_READY = False
 _ACTIVE_QUEUE_STATUSES = {"pending", "processing"}
 _TERMINAL_JOB_STATUSES = {"done", "error", "cancelled"}
 _QUEUE_HEARTBEAT_SECONDS = 20.0
+_SUMITALK_CHAT_EVENT_LIMIT = max(10, int(os.environ.get("SUMITALK_CHAT_EVENT_LIMIT", "80") or "80"))
+_SUMITALK_CHAT_EVENT_TEXT_LIMIT = max(80, int(os.environ.get("SUMITALK_CHAT_EVENT_TEXT_LIMIT", "1800") or "1800"))
+
+
+@contextmanager
+def _sumitalk_chat_job_state_lock():
+    """Serialize JSON job-state read/modify/write across threads and worker processes."""
+    with _SUMITALK_CHAT_JOB_LOCK:
+        depth = int(getattr(_SUMITALK_CHAT_JOB_STATE_LOCK_LOCAL, "depth", 0) or 0)
+        if depth > 0:
+            _SUMITALK_CHAT_JOB_STATE_LOCK_LOCAL.depth = depth + 1
+            try:
+                yield
+            finally:
+                _SUMITALK_CHAT_JOB_STATE_LOCK_LOCAL.depth = depth
+            return
+
+        _SUMITALK_CHAT_JOB_DIR.mkdir(parents=True, exist_ok=True)
+        lock_path = _SUMITALK_CHAT_JOB_DIR / ".state.lock"
+        fh = lock_path.open("a+", encoding="utf-8")
+        try:
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            _SUMITALK_CHAT_JOB_STATE_LOCK_LOCAL.depth = 1
+            yield
+        finally:
+            _SUMITALK_CHAT_JOB_STATE_LOCK_LOCAL.depth = 0
+            try:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            finally:
+                fh.close()
 
 
 @dataclass(frozen=True)
@@ -152,7 +191,7 @@ def write_sumitalk_chat_job_state(state: dict) -> None:
 
 
 def patch_sumitalk_chat_job_state(job_id: str, patch: dict, *, protect_terminal: bool = False) -> bool:
-    with _SUMITALK_CHAT_JOB_LOCK:
+    with _sumitalk_chat_job_state_lock():
         current = read_sumitalk_chat_job_state(job_id) or {
             "id": job_id,
             "created_ts": time.time(),
@@ -168,6 +207,80 @@ def patch_sumitalk_chat_job_state(job_id: str, patch: dict, *, protect_terminal:
         current["updated_at"] = now_beijing_iso()
         write_sumitalk_chat_job_state(current)
         return True
+
+
+def _short_chat_event_text(value, limit: int = _SUMITALK_CHAT_EVENT_TEXT_LIMIT) -> str:
+    text = str(value if value is not None else "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+    max_len = max(1, int(limit or _SUMITALK_CHAT_EVENT_TEXT_LIMIT))
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip() + "..."
+
+
+def _clean_chat_event_payload(payload: dict) -> dict:
+    out: dict = {}
+    for key, value in (payload or {}).items():
+        clean_key = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(key or "").strip())[:80]
+        if not clean_key:
+            continue
+        if isinstance(value, str):
+            out[clean_key] = _short_chat_event_text(value)
+        elif isinstance(value, (int, float, bool)) or value is None:
+            out[clean_key] = value
+        elif isinstance(value, dict):
+            out[clean_key] = _clean_chat_event_payload(value)
+        elif isinstance(value, list):
+            rows = []
+            for item in value[:20]:
+                if isinstance(item, dict):
+                    rows.append(_clean_chat_event_payload(item))
+                elif isinstance(item, str):
+                    rows.append(_short_chat_event_text(item))
+                elif isinstance(item, (int, float, bool)) or item is None:
+                    rows.append(item)
+                else:
+                    rows.append(_short_chat_event_text(item))
+            out[clean_key] = rows
+        else:
+            out[clean_key] = _short_chat_event_text(value)
+    return out
+
+
+def append_sumitalk_chat_job_event(job_id: str, kind: str, payload: dict | None = None) -> dict | None:
+    job_id = str(job_id or "").strip()
+    event_kind = re.sub(r"[^a-zA-Z0-9_.:-]", "_", str(kind or "").strip())[:80]
+    if not valid_sumitalk_chat_job_id(job_id) or not event_kind:
+        return None
+    with _sumitalk_chat_job_state_lock():
+        current = read_sumitalk_chat_job_state(job_id)
+        if not isinstance(current, dict):
+            return None
+        status = str(current.get("status") or "").strip().lower()
+        if status in _TERMINAL_JOB_STATUSES:
+            return None
+        try:
+            seq = int(current.get("event_seq") or 0) + 1
+        except Exception:
+            seq = 1
+        event = {
+            "seq": seq,
+            "event_id": uuid4().hex,
+            "kind": event_kind,
+            "created_at": now_beijing_iso(),
+            **_clean_chat_event_payload(payload or {}),
+        }
+        events = current.get("events")
+        if not isinstance(events, list):
+            events = []
+        events.append(event)
+        current["events"] = events[-_SUMITALK_CHAT_EVENT_LIMIT:]
+        current["event_seq"] = seq
+        current["updated_ts"] = time.time()
+        current["updated_at"] = now_beijing_iso()
+        write_sumitalk_chat_job_state(current)
+        return event
 
 
 def cleanup_sumitalk_chat_jobs() -> None:
@@ -337,7 +450,7 @@ def cancel_sumitalk_chat_job(job_id: str, reason: str = "client_cancelled") -> b
     if status in _TERMINAL_JOB_STATUSES:
         return True
     elapsed_ms = sumitalk_chat_job_elapsed_ms(state)
-    patch_sumitalk_chat_job_state(
+    cancelled = patch_sumitalk_chat_job_state(
         job_id,
         {
             "status": "cancelled",
@@ -348,9 +461,11 @@ def cancel_sumitalk_chat_job(job_id: str, reason: str = "client_cancelled") -> b
             "error": (reason or "client_cancelled").strip()[:160] or "client_cancelled",
             "cancelled_at": now_beijing_iso(),
         },
+        protect_terminal=True,
     )
-    remove_sumitalk_chat_queue_job(job_id)
-    return True
+    if cancelled:
+        remove_sumitalk_chat_queue_job(job_id)
+    return bool(cancelled)
 
 
 def set_sumitalk_chat_job_stage(job_id: str, stage: str, **fields) -> None:
@@ -366,6 +481,7 @@ def set_sumitalk_chat_job_stage(job_id: str, stage: str, **fields) -> None:
             "stage_elapsed_ms": elapsed_ms,
             "stage_updated_at": now_beijing_iso(),
         },
+        protect_terminal=True,
     )
     sumitalk_logger.info(
         "[SumiTalk] chat_job_stage job_id=%s status=%s stage=%s elapsed_ms=%s %s",
@@ -747,7 +863,7 @@ def build_sumitalk_chat_job_payload(
         "headers": headers,
         "remote_addr": remote_addr or "127.0.0.1",
     }
-    with _SUMITALK_CHAT_JOB_LOCK:
+    with _sumitalk_chat_job_state_lock():
         existing = find_sumitalk_chat_job_by_client_request_id(client_request_id, window_id, reply_target)
         if existing:
             existing_job_id = str(existing.get("id") or "").strip()

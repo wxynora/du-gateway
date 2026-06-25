@@ -143,6 +143,56 @@ def _sumitalk_request_brief() -> dict:
 
 
 def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
+    def _safe_display_parts(value) -> list[dict]:
+        out: list[dict] = []
+        rows = value if isinstance(value, list) else []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            kind = str(raw.get("kind") or raw.get("type") or "").strip()
+            if kind == "text":
+                text = str(raw.get("text") or "").strip()
+                if not text:
+                    continue
+                out.append({
+                    "id": str(raw.get("id") or f"text-{len(out)}").strip(),
+                    "kind": "text",
+                    "text": text[:4000],
+                })
+            elif kind == "tool_call":
+                name = str(raw.get("name") or "工具").strip()[:120] or "工具"
+                state = str(raw.get("state") or "done").strip()
+                if state not in {"running", "done", "error"}:
+                    state = "done"
+                row = {
+                    "id": str(raw.get("id") or raw.get("callId") or f"tool-{len(out)}").strip(),
+                    "kind": "tool_call",
+                    "name": name,
+                    "state": state,
+                }
+                for src, dst, limit in (
+                    ("callId", "callId", 160),
+                    ("argumentsText", "argumentsText", 2400),
+                    ("resultText", "resultText", 2400),
+                ):
+                    text = str(raw.get(src) or "").strip()
+                    if text:
+                        row[dst] = text[:limit]
+                try:
+                    round_no = int(raw.get("round") or 0)
+                    if round_no > 0:
+                        row["round"] = round_no
+                except Exception:
+                    pass
+                try:
+                    duration_ms = int(raw.get("durationMs") or raw.get("duration_ms") or 0)
+                    if duration_ms > 0:
+                        row["durationMs"] = duration_ms
+                except Exception:
+                    pass
+                out.append(row)
+        return out[:80]
+
     out: list[dict] = []
     for item in items or []:
         if not isinstance(item, dict):
@@ -151,13 +201,18 @@ def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
         if role not in {"user", "assistant", "benben"}:
             continue
         content = str(item.get("content") or "").strip()
-        if not content:
+        display_parts = _safe_display_parts(item.get("displayParts") or item.get("display_parts"))
+        if not content and not display_parts:
             continue
         reasoning = str(item.get("reasoning") or "").strip()
-        try:
-            token_count = int(item.get("tokenCount") or 0)
-        except Exception:
-            token_count = 0
+        raw_token_count = item.get("tokenCount")
+        token_count = raw_token_count if isinstance(raw_token_count, dict) else None
+        legacy_token_count = 0
+        if token_count is None:
+            try:
+                legacy_token_count = int(raw_token_count or 0)
+            except Exception:
+                legacy_token_count = 0
         created_at = str(item.get("createdAt") or item.get("created_at") or "").strip() or now_beijing_iso()
         msg_id = str(item.get("id") or "").strip() or f"{role}-{created_at}-{len(out)}"
         row = {
@@ -168,8 +223,12 @@ def _normalize_sumitalk_messages(items: list[dict]) -> list[dict]:
         }
         if reasoning:
             row["reasoning"] = reasoning
-        if token_count > 0:
+        if token_count:
             row["tokenCount"] = token_count
+        elif legacy_token_count > 0:
+            row["tokenCount"] = legacy_token_count
+        if display_parts:
+            row["displayParts"] = display_parts
         out.append(row)
     return out[-_SUMITALK_HISTORY_MAX_MESSAGES:]
 

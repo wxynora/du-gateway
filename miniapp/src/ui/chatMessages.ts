@@ -25,6 +25,24 @@ export type ChatAttachment = {
   alt?: string;
   createdAt?: string;
 };
+export type ChatToolCallState = "running" | "done" | "error";
+export type ChatDisplayPart =
+  | {
+      id: string;
+      kind: "text";
+      text: string;
+    }
+  | {
+      id: string;
+      kind: "tool_call";
+      callId?: string;
+      name: string;
+      argumentsText?: string;
+      resultText?: string;
+      state: ChatToolCallState;
+      round?: number;
+      durationMs?: number;
+    };
 export type ChatDraftMessage = {
   id: string;
   role: ChatRole;
@@ -40,6 +58,7 @@ export type ChatDraftMessage = {
     output?: number;
   };
   attachments?: ChatAttachment[];
+  displayParts?: ChatDisplayPart[];
 };
 
 const JSON_TEXT_FIELD_RE = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/;
@@ -56,6 +75,170 @@ function cleanShortText(value: any, limit = 4000): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, max);
+}
+
+function stableDisplayPartId(...values: any[]): string {
+  const raw = values.map((value) => String(value ?? "")).join("\u0001");
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function displayPartKey(part: ChatDisplayPart): string {
+  if (part.kind === "tool_call") return `tool:${part.callId || part.id || part.name}`;
+  return `text:${stableDisplayPartId(part.text)}`;
+}
+
+export function normalizeChatDisplayParts(value: any): ChatDisplayPart[] {
+  const list = Array.isArray(value) ? value : [];
+  const out: ChatDisplayPart[] = [];
+  const toolIndex = new Map<string, number>();
+  const seenText = new Set<string>();
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const kind = String(raw.kind || raw.type || raw.phase || "").trim();
+    if (kind === "text" || kind === "assistant_text") {
+      const text = cleanShortText(raw.text || raw.content || raw.preview || "", 4000);
+      if (!text) continue;
+      const dedupeKey = text.replace(/\s+/g, " ").trim();
+      if (seenText.has(dedupeKey)) continue;
+      seenText.add(dedupeKey);
+      out.push({
+        id: String(raw.id || raw.event_id || `text-${stableDisplayPartId(text)}`).trim(),
+        kind: "text",
+        text,
+      });
+      continue;
+    }
+    if (kind === "tool_call" || kind === "tool_call_started" || kind === "tool_call_finished" || kind === "tool_call_failed") {
+      const callId = String(raw.callId || raw.call_id || raw.tool_call_id || raw.id || "").trim();
+      const name = cleanShortText(raw.name || raw.tool?.name || raw.function?.name || "工具", 120) || "工具";
+      const state: ChatToolCallState =
+        kind === "tool_call_started" || raw.state === "running"
+          ? "running"
+          : kind === "tool_call_failed" || raw.state === "error" || raw.ok === false
+          ? "error"
+          : "done";
+      const key = callId || `${raw.round || ""}:${name}:${cleanShortText(raw.arguments || raw.argumentsText || "", 240)}`;
+      const part: ChatDisplayPart = {
+        id: String(raw.partId || raw.event_id || raw.id || `tool-${stableDisplayPartId(key)}`).trim(),
+        kind: "tool_call",
+        ...(callId ? { callId } : {}),
+        name,
+        argumentsText: cleanShortText(raw.argumentsText || raw.arguments || raw.args || "", 2400) || undefined,
+        resultText: cleanShortText(raw.resultText || raw.result_preview || raw.result || raw.error || "", 2400) || undefined,
+        state,
+        round: Number(raw.round || 0) || undefined,
+        durationMs: Number(raw.durationMs ?? raw.duration_ms ?? 0) || undefined,
+      };
+      const existingIndex = toolIndex.get(key);
+      if (existingIndex === undefined) {
+        toolIndex.set(key, out.length);
+        out.push(part);
+      } else {
+        const existing = out[existingIndex];
+        out[existingIndex] = {
+          ...existing,
+          ...part,
+          id: existing.id || part.id,
+          state: part.state === "done" || part.state === "error" ? part.state : (existing as any).state || part.state,
+          resultText: part.resultText || (existing as any).resultText,
+        } as ChatDisplayPart;
+      }
+    }
+  }
+  return out;
+}
+
+export function mergeChatDisplayParts(...groups: Array<ChatDisplayPart[] | undefined>): ChatDisplayPart[] {
+  const out: ChatDisplayPart[] = [];
+  const indexByKey = new Map<string, number>();
+  for (const group of groups) {
+    for (const part of normalizeChatDisplayParts(group || [])) {
+      const key = displayPartKey(part);
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex === undefined) {
+        indexByKey.set(key, out.length);
+        out.push(part);
+        continue;
+      }
+      const existing = out[existingIndex];
+      if (part.kind === "tool_call" && existing.kind === "tool_call") {
+        out[existingIndex] = {
+          ...existing,
+          ...part,
+          id: existing.id || part.id,
+          state: part.state === "done" || part.state === "error" ? part.state : existing.state,
+          resultText: part.resultText || existing.resultText,
+        };
+      }
+    }
+  }
+  return out;
+}
+
+export function chatDisplayPartsFromSumiTalkEvents(events: any): ChatDisplayPart[] {
+  const list = Array.isArray(events) ? events : [];
+  return normalizeChatDisplayParts(list.map((event) => {
+    const kind = String(event?.kind || event?.phase || "").trim();
+    if (kind === "assistant_text") {
+      return {
+        id: `event-${event?.seq || event?.event_id || stableDisplayPartId(event?.text)}`,
+        kind: "text",
+        text: event?.text || event?.content || event?.preview || "",
+      };
+    }
+    if (kind.startsWith("tool_call")) {
+      return {
+        id: `event-${event?.tool_call_id || event?.seq || event?.event_id || stableDisplayPartId(event?.name, event?.arguments)}`,
+        kind,
+        callId: event?.tool_call_id,
+        name: event?.name,
+        argumentsText: event?.arguments,
+        resultText: event?.result_preview || event?.error,
+        state: kind === "tool_call_started" ? "running" : kind === "tool_call_failed" ? "error" : "done",
+        round: event?.round,
+        durationMs: event?.duration_ms,
+        ok: event?.ok,
+      };
+    }
+    return event;
+  }));
+}
+
+export function extractAssistantDisplayParts(data: any): ChatDisplayPart[] {
+  const msg = extractAssistantMessage(data);
+  return mergeChatDisplayParts(
+    normalizeChatDisplayParts(msg?.displayParts || msg?.display_parts),
+    chatDisplayPartsFromSumiTalkEvents(data?.sumitalk_chat_events || data?.events),
+  );
+}
+
+export function applySumiTalkChatEventToMessages(currentMessages: ChatDraftMessage[], event: any): ChatDraftMessage[] {
+  const parts = chatDisplayPartsFromSumiTalkEvents([event]);
+  if (!parts.length) return currentMessages;
+  const jid = String(event?.job_id || event?.jobId || "").trim();
+  const cid = String(event?.client_request_id || event?.clientRequestId || "").trim();
+  const list = Array.isArray(currentMessages) ? currentMessages : [];
+  let changed = false;
+  const next = list.map((msg) => {
+    if (msg.role !== "assistant") return msg;
+    const matchesJob = jid && String(msg.jobId || "").trim() === jid;
+    const matchesClient = cid && String(msg.clientRequestId || "").trim() === cid;
+    if (!matchesJob && !matchesClient) return msg;
+    const merged = mergeChatDisplayParts(msg.displayParts, parts);
+    if (JSON.stringify(merged) === JSON.stringify(normalizeChatDisplayParts(msg.displayParts || []))) return msg;
+    changed = true;
+    return {
+      ...msg,
+      ...(jid && !msg.jobId ? { jobId: jid } : {}),
+      ...(cid && !msg.clientRequestId ? { clientRequestId: cid } : {}),
+      displayParts: merged,
+    };
+  });
+  return changed ? next : list;
 }
 
 function decodeJsonStringLiteral(value: string): string {
@@ -142,7 +325,17 @@ export function applyAssistantTerminalMessage(
   const cid = String(clientRequestId || "").trim();
   const list = Array.isArray(currentMessages) ? currentMessages : [];
   if (cid && list.some((msg) => msg.role === "assistant" && msg.clientRequestId === cid && msg.status === "sent")) {
-    return list;
+    return list.map((msg) => {
+      if (msg.role !== "assistant" || msg.clientRequestId !== cid || msg.status !== "sent") return msg;
+      const mergedParts = mergeChatDisplayParts(msg.displayParts, assistantMessage.displayParts);
+      if (!mergedParts.length) return msg;
+      return {
+        ...msg,
+        displayParts: mergedParts,
+        reasoning: assistantMessage.reasoning || msg.reasoning,
+        tokenCount: assistantMessage.tokenCount || msg.tokenCount,
+      };
+    });
   }
   let replaced = false;
   const next = list.map((msg) => {
@@ -154,6 +347,7 @@ export function applyAssistantTerminalMessage(
       createdAt: msg.createdAt,
       clientRequestId: cid,
       jobId: assistantMessage.jobId || msg.jobId,
+      displayParts: mergeChatDisplayParts(msg.displayParts, assistantMessage.displayParts),
     };
   });
   if (!replaced) next.push(assistantMessage);
@@ -168,7 +362,23 @@ export function applyMessageById(currentMessages: ChatDraftMessage[], messageId:
   const next = list.map((msg) => {
     if (msg.id !== targetId) return msg;
     replaced = true;
-    return { ...nextMessage, id: msg.id, createdAt: msg.createdAt };
+    const incomingHasDisplayParts = Object.prototype.hasOwnProperty.call(nextMessage as any, "displayParts");
+    const incomingParts = normalizeChatDisplayParts(nextMessage.displayParts || []);
+    const shouldClearDisplayParts = nextMessage.status === "pending" && incomingHasDisplayParts && incomingParts.length === 0;
+    const mergedParts = shouldClearDisplayParts ? [] : mergeChatDisplayParts(msg.displayParts, nextMessage.displayParts);
+    const replacedMessage: ChatDraftMessage = {
+      ...nextMessage,
+      id: msg.id,
+      createdAt: msg.createdAt,
+    };
+    if (mergedParts.length) {
+      replacedMessage.displayParts = mergedParts;
+    } else {
+      delete (replacedMessage as any).displayParts;
+    }
+    return {
+      ...replacedMessage,
+    };
   });
   if (!replaced) next.push(nextMessage);
   return next;
@@ -389,6 +599,7 @@ export type ChatMessageGroup = {
     tokenCount?: { input?: number; output?: number };
     systemCard?: SumiTalkSystemCard | null;
     attachments?: ChatAttachment[];
+    displayPart?: ChatDisplayPart;
   }>;
 };
 
@@ -555,8 +766,10 @@ export function historyRenderableScore(messages: ChatDraftMessage[]): number {
     const content = String(msg?.content || "").trim();
     const reasoning = String(msg?.reasoning || "").trim();
     const attachments = normalizeChatAttachments(msg?.attachments);
+    const displayParts = normalizeChatDisplayParts((msg as any)?.displayParts || (msg as any)?.display_parts);
     if (content) return score + 2;
     if (attachments.length) return score + 2;
+    if (displayParts.length) return score + 2;
     if (reasoning) return score + 1;
     return score;
   }, 0);
@@ -620,12 +833,13 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
       const role = String((msg as any)?.role || "").trim().toLowerCase();
       const content = contentToPlainText(extractMessageContentSource(msg)) || fallbackRawContentText(extractMessageContentSource(msg));
       const attachments = normalizeChatAttachments((msg as any)?.attachments);
+      const displayParts = normalizeChatDisplayParts((msg as any)?.displayParts || (msg as any)?.display_parts);
       const isSeedId = id.startsWith("seed-");
       const isDefaultGreeting = role === "assistant" && (
         content === "我在。你直接说就好。" ||
         /开着。你直接说就好。$/.test(content)
       );
-      return attachments.length || !(isSeedId || isDefaultGreeting);
+      return attachments.length || displayParts.length || !(isSeedId || isDefaultGreeting);
     }).map((msg) => {
       const rawContent = extractMessageContentSource(msg);
       const rawReasoning = extractMessageReasoningSource(msg);
@@ -640,8 +854,9 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
         : undefined;
       const rawContentText = contentToPlainText(rawContent) || fallbackRawContentText(rawContent);
       const cleanedContent = sanitizeLeakedVoiceContentText(rawContentText);
+      const displayParts = normalizeChatDisplayParts((msg as any)?.displayParts || (msg as any)?.display_parts);
       const content = status === "pending" && role === "assistant"
-        ? ""
+        ? String(cleanedContent || "").trim() && displayParts.length ? stripInlineBase64Images(cleanedContent) : ""
         : stripInlineBase64Images(cleanedContent);
       const attachments = normalizeChatAttachments((msg as any)?.attachments);
       let tokenCount: { input?: number; output?: number } | undefined;
@@ -669,28 +884,55 @@ export function sanitizeHistoryMessages(messages: ChatDraftMessage[]): ChatDraft
         reasoning: reasoning || undefined,
         tokenCount,
         ...(attachments.length ? { attachments } : {}),
+        ...(displayParts.length ? { displayParts } : {}),
       };
     }));
+}
+
+function stripDisplayedTextPrefixes(content: string, displayParts: ChatDisplayPart[]): string {
+  let next = String(content || "").trim();
+  if (!next) return "";
+  for (const part of displayParts) {
+    if (part.kind !== "text") continue;
+    const text = String(part.text || "").trim();
+    if (!text) continue;
+    if (next === text) return "";
+    if (next.startsWith(text)) {
+      next = next.slice(text.length).replace(/^[\s\n。！？.!?,，、；;：:]+/, "").trim();
+    }
+  }
+  return next;
 }
 
 export function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGroup[] {
   const groups: ChatMessageGroup[] = [];
   for (const msg of messages) {
-    if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending") continue;
+    const displayParts = normalizeChatDisplayParts((msg as any)?.displayParts || (msg as any)?.display_parts);
+    if (msg?.role === "assistant" && String(msg?.status || "").trim().toLowerCase() === "pending" && !displayParts.length) continue;
     const normalizedContent = String(msg?.content || "").trim();
     const normalizedReasoning = String(msg?.reasoning || "").trim();
     const attachments = normalizeChatAttachments(msg?.attachments);
-    if (!normalizedContent && !normalizedReasoning && !attachments.length) continue;
+    if (!normalizedContent && !normalizedReasoning && !attachments.length && !displayParts.length) continue;
+    const finalContent = displayParts.length ? stripDisplayedTextPrefixes(normalizedContent, displayParts) : normalizedContent;
+    const displaySegments = displayParts.map((part) => ({
+      content: part.kind === "text" ? part.text : "",
+      systemCard: null as SumiTalkSystemCard | null,
+      displayPart: part,
+    }));
     const rawSegments = msg.role === "assistant"
-      ? splitSystemCardSegments(normalizedContent)
+      ? splitSystemCardSegments(finalContent)
       : [{ content: normalizedContent, systemCard: null }];
     const segments = rawSegments.flatMap((segment) => (
       segment.systemCard
         ? [segment]
         : splitLineBubbleSegments(msg.role, segment.content)
     ));
-    const safeParts = (segments.length ? segments : [{ content: normalizedContent, systemCard: null }])
-      .filter((segment, index) => String(segment.content || "").trim() || segment.systemCard || normalizedReasoning || (index === 0 && attachments.length))
+    const allSegments = [
+      ...displaySegments,
+      ...(segments.length ? segments : (finalContent ? [{ content: finalContent, systemCard: null }] : [])),
+    ];
+    const safeParts = allSegments
+      .filter((segment, index) => String(segment.content || "").trim() || segment.systemCard || (segment as any).displayPart || normalizedReasoning || (index === 0 && attachments.length))
       .map((segment, index) => ({
         messageId: msg.id,
         status: msg.status,
@@ -702,6 +944,7 @@ export function groupChatMessages(messages: ChatDraftMessage[]): ChatMessageGrou
         reasoning: index === 0 ? normalizedReasoning || undefined : undefined,
         tokenCount: index === 0 ? msg.tokenCount : undefined,
         systemCard: segment.systemCard,
+        displayPart: (segment as any).displayPart,
         attachments: index === 0 ? attachments : undefined,
       }));
     const last = groups[groups.length - 1];

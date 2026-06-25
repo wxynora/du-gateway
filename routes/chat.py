@@ -1555,6 +1555,35 @@ def chat_completions():
     window_id = _get_window_id_from_request(body)
     # 未传 id 的客户端（如 RikkaHub）与 R2 主存 __default__ 对齐，否则轮次恒为 1、总结永不触发
     window_id = r2_store.normalize_window_id(window_id)
+    sumitalk_job_id = str(headers.get("X-SumiTalk-Job-Id") or "").strip() if is_sumitalk_request else ""
+    sumitalk_client_request_id = str((body or {}).get("client_request_id") or "").strip() if is_sumitalk_request else ""
+
+    def _emit_sumitalk_chat_event(kind: str, payload: dict | None = None) -> None:
+        if not (is_sumitalk_request and sumitalk_job_id):
+            return
+        try:
+            from services.sumitalk_chat_queue import append_sumitalk_chat_job_event
+            from services.realtime_publish import publish_sumitalk_chat_event
+
+            event = append_sumitalk_chat_job_event(
+                sumitalk_job_id,
+                kind,
+                {
+                    "job_id": sumitalk_job_id,
+                    "client_request_id": sumitalk_client_request_id,
+                    "window_id": window_id,
+                    **(payload or {}),
+                },
+            )
+            if event:
+                publish_sumitalk_chat_event(reply_target, event, window_id=window_id)
+        except Exception:
+            sumitalk_logger.debug(
+                "sumitalk_chat_event_emit_failed job_id=%s kind=%s",
+                sumitalk_job_id,
+                kind,
+                exc_info=True,
+            )
     # 记录最近窗口，供 MiniApp 思维链面板展示可选窗口列表
     try:
         wid_for_recent = window_id if (window_id or "").strip() else "__default__"
@@ -1876,8 +1905,30 @@ def chat_completions():
             if isinstance(msg, dict):
                 _accumulate_nonstream_reasoning(msg)
                 _append_visible_tool_round_content(accumulated_tool_visible_parts, msg.get("content"))
+                visible_tool_content = _normalize_visible_reply_text(get_assistant_content_text(msg))
+                if visible_tool_content:
+                    _emit_sumitalk_chat_event(
+                        "assistant_text",
+                        {
+                            "round": tool_rounds_used + 1,
+                            "text": visible_tool_content,
+                        },
+                    )
             from services.notion_tools import execute_tool
-            body = _append_tool_results_and_continue(body, msg, tool_calls, execute_tool)
+            current_round = tool_rounds_used + 1
+            body = _append_tool_results_and_continue(
+                body,
+                msg,
+                tool_calls,
+                execute_tool,
+                on_tool_event=lambda kind, payload, round_no=current_round: _emit_sumitalk_chat_event(
+                    kind,
+                    {
+                        "round": round_no,
+                        **(payload or {}),
+                    },
+                ),
+            )
             tool_rounds_used += 1
             resp_json, status, err, cache_debug = _forward_to_ai(body, headers, prompt_cache_profile)
             if cache_debug:

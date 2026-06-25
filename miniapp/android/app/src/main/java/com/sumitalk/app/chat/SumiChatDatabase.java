@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteOpenHelper;
 
 public class SumiChatDatabase extends SQLiteOpenHelper {
     private static final String DB_NAME = "sumitalk_chat_store.db";
-    private static final int DB_VERSION = 2;
+    private static final int DB_VERSION = 3;
 
     public SumiChatDatabase(Context context) {
         super(context, DB_NAME, null, DB_VERSION);
@@ -32,6 +32,7 @@ public class SumiChatDatabase extends SQLiteOpenHelper {
                         + "reasoning TEXT,"
                         + "token_count_json TEXT,"
                         + "attachments_json TEXT,"
+                        + "display_parts_json TEXT,"
                         + "remote_key TEXT,"
                         + "local_revision INTEGER DEFAULT 0,"
                         + "deleted_at TEXT"
@@ -77,6 +78,12 @@ public class SumiChatDatabase extends SQLiteOpenHelper {
         if (oldVersion < 2) {
             try {
                 db.execSQL("ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT");
+            } catch (Exception ignored) {
+            }
+        }
+        if (oldVersion < 3) {
+            try {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN display_parts_json TEXT");
             } catch (Exception ignored) {
             }
         }

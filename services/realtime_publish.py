@@ -112,3 +112,16 @@ def publish_codex_group_task(task: dict | None) -> bool:
         "device_id": str(task.get("reply_target") or "").strip(),
         "task": task,
     })
+
+
+def publish_sumitalk_chat_event(device_id: str, event: dict, window_id: str = "") -> bool:
+    did = str(device_id or "").strip()
+    if not did or not isinstance(event, dict):
+        return False
+    return _post_event({
+        "type": "sumitalk_chat_event",
+        "event_id": str(event.get("event_id") or uuid4().hex),
+        "device_id": did,
+        "window_id": str(window_id or event.get("window_id") or "").strip(),
+        "event": event,
+    })

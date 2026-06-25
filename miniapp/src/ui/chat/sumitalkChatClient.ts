@@ -6,6 +6,8 @@ export type SumiTalkChatJobCreateResponse = {
   status?: string;
   response?: any;
   status_code?: number;
+  events?: any[];
+  event_seq?: number;
   error?: string;
 };
 
@@ -16,6 +18,8 @@ export type SumiTalkChatJobStatusResponse = {
   stage_elapsed_ms?: number;
   status_code?: number;
   response?: any;
+  events?: any[];
+  event_seq?: number;
   error?: string;
 };
 
@@ -88,6 +92,15 @@ export async function cancelSumiTalkChatJob(jobId: string, reason = "client_canc
   });
 }
 
+export function attachSumiTalkJobEventsToResponse(response: any, events?: any[]): any {
+  const rows = Array.isArray(events) ? events : [];
+  if (!rows.length || !response || typeof response !== "object") return response || {};
+  return {
+    ...response,
+    sumitalk_chat_events: rows,
+  };
+}
+
 export async function waitForSumiTalkChatJob(
   jobId: string,
   options: {
@@ -116,7 +129,7 @@ export async function waitForSumiTalkChatJob(
       continue;
     }
     options.onStatus?.(job);
-    if (job.status === "done") return job.response || {};
+    if (job.status === "done") return attachSumiTalkJobEventsToResponse(job.response || {}, job.events);
     if (job.status === "cancelled") throw makeAbortError(String(job.error || "已取消发送"));
     if (job.status === "error") {
       const upstreamError = job.response?.error || job.response?.message || "";

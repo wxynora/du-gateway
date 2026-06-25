@@ -20,7 +20,8 @@ def _get_panel_device_id() -> str:
 
 
 def _start_sumitalk_chat_job_from_request(body: dict):
-    reply_target = str(body.get("reply_target") or request.headers.get("X-Reply-Target") or _get_panel_device_id()).strip()
+    panel_device_id = _get_panel_device_id()
+    reply_target = str(panel_device_id or body.get("reply_target") or request.headers.get("X-Reply-Target") or "").strip()
     job_id, error, _result = build_sumitalk_chat_job_payload(
         body,
         reply_target=reply_target,
@@ -49,6 +50,9 @@ def _job_payload(job_id: str, *, mode: str = "job") -> tuple[dict, int]:
         payload["stage"] = job.get("stage")
     if job.get("stage_elapsed_ms") is not None:
         payload["stage_elapsed_ms"] = job.get("stage_elapsed_ms")
+    if isinstance(job.get("events"), list):
+        payload["events"] = job.get("events") or []
+        payload["event_seq"] = int(job.get("event_seq") or 0)
     if status == "done":
         payload["response"] = job.get("response") or {}
         payload["status_code"] = int(job.get("status_code") or 200)

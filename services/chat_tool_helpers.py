@@ -1,6 +1,7 @@
 import copy
 import json
 import re
+import time
 
 from services.reasoning_utils import extract_thinking_from_content
 from utils.log import get_logger
@@ -28,6 +29,10 @@ _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION = (
     "如果还需要信息，直接继续调用工具；如果已经够了，必须直接给用户一条可见的最终回复。\n"
     "不要返回空 content，不要只给 reasoning / thinking。"
 )
+_TOOL_EVENT_SECRET_RE = re.compile(
+    r"(?i)((?:\"|')?(?:api[_-]?key|authorization|cookie|password|passwd|secret|token|access[_-]?token|refresh[_-]?token)(?:\"|')?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^,}\]\s]+)"
+)
+_TOOL_EVENT_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
 
 
 def looks_like_tool_midstream_text(text: str) -> bool:
@@ -183,7 +188,26 @@ def inject_tool_empty_final_retry_instruction(body: dict) -> dict:
     return inject_tool_retry_instruction(body, _TOOL_EMPTY_FINAL_RETRY_INSTRUCTION)
 
 
-def append_tool_results_and_continue(body: dict, assistant_message: dict, tool_calls: list, execute_tool) -> dict:
+def _tool_event_text(value, limit: int = 1800) -> str:
+    text = str(value if value is not None else "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = _TOOL_EVENT_SECRET_RE.sub(lambda m: f"{m.group(1)}\"***\"" if str(m.group(2) or "").startswith("\"") else f"{m.group(1)}***", text)
+    text = _TOOL_EVENT_BEARER_RE.sub("Bearer ***", text)
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _emit_tool_event(on_tool_event, kind: str, payload: dict) -> None:
+    if not on_tool_event:
+        return
+    try:
+        on_tool_event(kind, payload)
+    except Exception:
+        logger.debug("工具事件回调失败 kind=%s", kind, exc_info=True)
+
+
+def append_tool_results_and_continue(body: dict, assistant_message: dict, tool_calls: list, execute_tool, on_tool_event=None) -> dict:
     """执行 tool_calls，将 assistant 消息与各 tool 结果追加到 body["messages"]，返回新 body 供继续请求。"""
     body = copy.deepcopy(body)
     messages = body.get("messages") or []
@@ -205,11 +229,34 @@ def append_tool_results_and_continue(body: dict, assistant_message: dict, tool_c
             args = json.loads(fn.get("arguments") or "{}")
         except Exception:
             args = {}
+        raw_arguments = fn.get("arguments") or ""
+        started_at = time.time()
+        base_event = {
+            "tool_call_id": tid,
+            "name": name,
+            "arguments": _tool_event_text(raw_arguments),
+        }
+        _emit_tool_event(on_tool_event, "tool_call_started", base_event)
         try:
             result = execute_tool(name, args)
         except Exception as _tool_exc:
             logger.warning("execute_tool 异常 name=%s error=%s", name, _tool_exc)
             result = json.dumps({"ok": False, "error": f"工具执行异常: {_tool_exc}"}, ensure_ascii=False)
+            _emit_tool_event(on_tool_event, "tool_call_failed", {
+                **base_event,
+                "ok": False,
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "error": _tool_event_text(_tool_exc, 500),
+                "result_preview": _tool_event_text(result),
+            })
+        else:
+            _emit_tool_event(on_tool_event, "tool_call_finished", {
+                **base_event,
+                "ok": True,
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "result_preview": _tool_event_text(result),
+                "result_chars": len(str(result or "")),
+            })
         messages.append({"role": "tool", "tool_call_id": tid, "content": result})
     body["messages"] = messages
     return body

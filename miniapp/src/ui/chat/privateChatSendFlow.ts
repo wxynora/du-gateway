@@ -1,11 +1,13 @@
 import {
   extractAssistantReasoning,
   extractAssistantReplyText,
+  extractAssistantDisplayParts,
   extractTokenCount,
   type ChatAttachment,
   type ChatDraftMessage,
 } from "../chatMessages";
 import {
+  attachSumiTalkJobEventsToResponse,
   createSumiTalkChatJob,
   waitForSumiTalkChatJob,
   type SumiTalkChatJobStatusResponse,
@@ -76,6 +78,7 @@ export function buildPrivateAssistantTerminal(args: {
   const reasoning = extractAssistantReasoning(args.data);
   const tokenCount = extractTokenCount(args.data);
   const assistantAttachments = extractAssistantAttachments(args.data);
+  const displayParts = extractAssistantDisplayParts(args.data);
   const assistantMessage: ChatDraftMessage = {
     id: args.assistantId,
     role: "assistant",
@@ -88,6 +91,7 @@ export function buildPrivateAssistantTerminal(args: {
     reasoning: reasoning || undefined,
     tokenCount,
     ...(assistantAttachments.length ? { attachments: assistantAttachments } : {}),
+    ...(displayParts.length ? { displayParts } : {}),
   };
   return {
     assistantMessage,
@@ -160,7 +164,7 @@ export async function runPrivateChatSendFlow(args: {
   if (jobId) await args.onJobId?.(jobId);
   const startedStatus = String(started?.status || "").trim();
   const data = startedStatus === "done"
-    ? started?.response || started
+    ? attachSumiTalkJobEventsToResponse(started?.response || started, (started as any)?.events)
     : jobId
     ? await waitForSumiTalkChatJob(jobId, {
         signal: args.abortSignal,

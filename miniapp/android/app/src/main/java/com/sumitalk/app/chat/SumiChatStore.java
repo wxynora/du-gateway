@@ -38,8 +38,15 @@ public class SumiChatStore {
                 String content = text(msg.optString("content"));
                 String status = safe(msg.optString("status", "sent"));
                 JSONArray attachments = msg.optJSONArray("attachments");
+                JSONArray displayParts = msg.optJSONArray("displayParts");
+                if (displayParts == null) displayParts = msg.optJSONArray("display_parts");
                 if (id.isEmpty() || role.isEmpty()) continue;
-                if (content.trim().isEmpty() && (attachments == null || attachments.length() == 0) && !("assistant".equals(role) && "pending".equals(status))) continue;
+                if (
+                        content.trim().isEmpty()
+                                && (attachments == null || attachments.length() == 0)
+                                && (displayParts == null || displayParts.length() == 0)
+                                && !("assistant".equals(role) && "pending".equals(status))
+                ) continue;
                 db.insertWithOnConflict("chat_messages", null, valuesFromMessage(did, wid, msg, now), SQLiteDatabase.CONFLICT_REPLACE);
             }
             db.setTransactionSuccessful();
@@ -370,6 +377,13 @@ public class SumiChatStore {
             } catch (Exception ignored) {
             }
         }
+        String displayPartsJson = safe(c.getString(c.getColumnIndexOrThrow("display_parts_json")));
+        if (!displayPartsJson.isEmpty()) {
+            try {
+                out.put("displayParts", new JSONArray(displayPartsJson));
+            } catch (Exception ignored) {
+            }
+        }
         putOptional(out, "remoteKey", c.getString(c.getColumnIndexOrThrow("remote_key")));
         out.put("localRevision", c.getInt(c.getColumnIndexOrThrow("local_revision")));
         putOptional(out, "deletedAt", c.getString(c.getColumnIndexOrThrow("deleted_at")));
@@ -405,6 +419,9 @@ public class SumiChatStore {
                 if (tokenCount != null) msg.put("tokenCount", tokenCount);
                 JSONArray attachments = assistantMessage.optJSONArray("attachments");
                 if (attachments != null) msg.put("attachments", attachments);
+                JSONArray displayParts = assistantMessage.optJSONArray("displayParts");
+                if (displayParts == null) displayParts = assistantMessage.optJSONArray("display_parts");
+                if (displayParts != null) msg.put("displayParts", displayParts);
                 db.insertWithOnConflict("chat_messages", null, valuesFromMessage(did, wid, msg, now), SQLiteDatabase.CONFLICT_REPLACE);
             }
 
@@ -514,6 +531,8 @@ public class SumiChatStore {
         String id = safe(msg.optString("id"));
         JSONObject tokenCount = msg.optJSONObject("tokenCount");
         JSONArray attachments = msg.optJSONArray("attachments");
+        JSONArray displayParts = msg.optJSONArray("displayParts");
+        if (displayParts == null) displayParts = msg.optJSONArray("display_parts");
         ContentValues values = new ContentValues();
         values.put("message_key", messageKey(did, wid, id));
         values.put("id", id);
@@ -531,6 +550,7 @@ public class SumiChatStore {
         values.put("reasoning", text(msg.optString("reasoning", "")));
         values.put("token_count_json", tokenCount == null ? "" : tokenCount.toString());
         values.put("attachments_json", attachments == null ? "" : attachments.toString());
+        values.put("display_parts_json", displayParts == null ? "" : displayParts.toString());
         values.put("remote_key", safe(msg.optString("remoteKey", msg.optString("remote_key", ""))));
         values.put("local_revision", msg.optInt("localRevision", msg.optInt("local_revision", 0)));
         values.put("deleted_at", safe(msg.optString("deletedAt", msg.optString("deleted_at", ""))));

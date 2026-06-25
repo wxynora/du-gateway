@@ -27,6 +27,7 @@ import {
   type TravelTransportDetailCard,
 } from "./sumitalkSystemCards";
 import {
+  applySumiTalkChatEventToMessages,
   applyAssistantTerminalMessage,
   applyMessageById,
   buildCodexGroupRecentMessages,
@@ -41,6 +42,7 @@ import {
   sanitizeVoiceTranscriptText,
   shouldShowGroupTime,
   type ChatAttachment,
+  type ChatDisplayPart,
   type ChatDraftMessage,
   type ChatRole,
   type ChatSearchMatch,
@@ -55,6 +57,7 @@ import {
   ChevronDownMini,
   ChevronLeftIcon,
   ChevronUpMini,
+  CpuIcon,
   KeyboardIconMini,
   MicIconMini,
   PlusIcon,
@@ -76,6 +79,7 @@ import {
   type ChatOperation,
 } from "./storage/chatHistoryDb";
 import { useCodexGroupTaskRealtime, type CodexGroupTaskRealtimeTask } from "./hooks/useCodexGroupTaskRealtime";
+import { useSumiTalkChatRealtime, type SumiTalkChatRealtimeEvent } from "./hooks/useSumiTalkChatRealtime";
 import { readMusicBgmContext } from "./listenBgm";
 import { buildAnthropicImageDataUrlFromDataUrl } from "./imageDataUrl";
 import { useToast } from "./toast";
@@ -205,6 +209,57 @@ const CODEX_GROUP_CHAT_CREATE_RETRY_TIMEOUT_MS = 45000;
 const SUMITALK_PRIVATE_INPUT_IDLE_MS = 15000;
 const SUMITALK_PRIVATE_INPUT_BUSY_RETRY_MS = 1200;
 const SUMITALK_PRIVATE_INPUT_AGGREGATE_STORAGE_PREFIX = "miniapp.chat.privateInputAggregate.v1";
+
+function ChatToolCallBlock({ part }: { part: ChatDisplayPart }) {
+  const [open, setOpen] = useState(false);
+  if (part.kind !== "tool_call") return null;
+  const name = String(part.name || "工具").trim() || "工具";
+  const state = part.state || "done";
+  const statusLabel = state === "running" ? "调用中" : state === "error" ? "失败" : "完成";
+  const statusClass = state === "running"
+    ? "bg-sky-50 text-sky-700"
+    : state === "error"
+      ? "bg-rose-50 text-rose-700"
+      : "bg-emerald-50 text-emerald-700";
+  const argsText = String(part.argumentsText || "").trim();
+  const resultText = String(part.resultText || "").trim();
+  const durationText = part.durationMs ? `${Math.max(1, Math.round(part.durationMs))}ms` : "";
+  const hasDetails = Boolean(argsText || resultText || durationText);
+
+  return (
+    <div className="w-fit max-w-full overflow-hidden rounded-[14px] border border-gray-200/70 bg-white/72 text-gray-700 shadow-sm backdrop-blur">
+      <button
+        type="button"
+        className="flex max-w-full items-center gap-2 px-2.5 py-1.5 text-left"
+        onClick={() => hasDetails && setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 [&>svg]:h-3.5 [&>svg]:w-3.5">
+          <CpuIcon />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold leading-4">{name}</span>
+        {durationText ? <span className="shrink-0 text-[10px] font-medium text-gray-400">{durationText}</span> : null}
+        <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${statusClass}`}>{statusLabel}</span>
+      </button>
+      {open && hasDetails ? (
+        <div className="space-y-1 border-t border-gray-100 px-2.5 py-2 text-[11px] leading-[15px] text-gray-500">
+          {argsText ? (
+            <div>
+              <div className="mb-0.5 font-semibold text-gray-400">参数</div>
+              <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] bg-gray-50 px-2 py-1 font-mono text-[10px] leading-[14px] text-gray-600">{argsText}</pre>
+            </div>
+          ) : null}
+          {resultText ? (
+            <div>
+              <div className="mb-0.5 font-semibold text-gray-400">结果</div>
+              <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] bg-gray-50 px-2 py-1 font-mono text-[10px] leading-[14px] text-gray-600">{resultText}</pre>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function makeChatAttemptId(clientRequestId: string): string {
   return `attempt-${clientRequestId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -456,6 +511,7 @@ function chatHistoryMessageScore(message: ChatDraftMessage): number {
   if (String(message?.content || "").trim()) score += 4;
   if (String(message?.reasoning || "").trim()) score += 2;
   if ((message?.attachments || []).length) score += 2;
+  if ((message?.displayParts || []).length) score += 2;
   if (message?.tokenCount?.input || message?.tokenCount?.output) score += 1;
   if (message?.status === "sent") score += 3;
   if (message?.status === "failed") score += 2;
@@ -603,6 +659,7 @@ function historySnapshotSignature(messages: ChatDraftMessage[]): string {
       message.tokenCount?.input || 0,
       message.tokenCount?.output || 0,
       attachments,
+      JSON.stringify(message.displayParts || []),
     ].join("\u0001");
   }).join("\u0002");
 }
@@ -1456,6 +1513,7 @@ export function MainChatScreen({
         clientRequestId: operation.clientRequestId,
         operationId: opId,
         jobId: undefined,
+        displayParts: [],
       });
       messagesRef.current = pending;
       setMessages(pending);
@@ -1537,6 +1595,20 @@ export function MainChatScreen({
     deviceId,
     onTask: (task) => {
       void applyBenbenTaskUpdate(task, { localDeviceId: deviceId });
+    },
+  });
+
+  useSumiTalkChatRealtime({
+    enabled: Boolean(deviceId),
+    deviceId,
+    windowId: String(windowId || "__default__").trim() || "__default__",
+    onEvent: (event: SumiTalkChatRealtimeEvent) => {
+      const current = messagesRef.current;
+      const beforeSignature = historySnapshotSignature(current);
+      const nextMessages = applySumiTalkChatEventToMessages(current, event);
+      if (historySnapshotSignature(nextMessages) === beforeSignature) return;
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
     },
   });
 
@@ -2902,7 +2974,7 @@ export function MainChatScreen({
       return sent;
     } catch (e: any) {
       logSumiTalkClientEvent("image_upload_error", { error: String(e?.message || e) }, "error");
-      toast("图片发送失败：" + (e?.message || e));
+      toast(`图片发送失败：${e?.message || e}`);
       return false;
     } finally {
       setMediaBusy(false);
@@ -2986,7 +3058,7 @@ export function MainChatScreen({
     if (!files.length || sending || mediaBusy) return;
     const pickedAt = Date.now();
     const drafts = files.map((file, index) => ({
-      id: "image-draft-" + pickedAt + "-" + index + "-" + Math.random().toString(36).slice(2, 8),
+      id: `image-draft-${pickedAt}-${index}-${Math.random().toString(36).slice(2, 8)}`,
       file,
       previewUrl: URL.createObjectURL(file),
     }));
@@ -3605,6 +3677,9 @@ export function MainChatScreen({
                             />
                           ) : (
                             <>
+                              {part.displayPart?.kind === "tool_call" ? (
+                                <ChatToolCallBlock part={part.displayPart} />
+                              ) : null}
                               {showText ? (
                                 <ChatBubbleFrame
                                   skin={bubbleSkin}
@@ -3700,7 +3775,7 @@ export function MainChatScreen({
             </div>
           </div>
           {pendingImageDrafts.length ? (
-            <div className={"relative z-10 mx-4 mb-2 overflow-hidden rounded-[22px] border " + chatPlusPanelClass}>
+            <div className={`relative z-10 mx-4 mb-2 overflow-hidden rounded-[22px] border ${chatPlusPanelClass}`}>
               <div className="flex items-center justify-between px-3 pb-1 pt-2">
                 <span className="text-[11px] font-semibold text-gray-600">图片顺序</span>
                 <button
@@ -3717,7 +3792,7 @@ export function MainChatScreen({
                     <div className="relative aspect-[3/4] overflow-hidden rounded-[14px] bg-white/60 shadow-[0_4px_14px_rgba(15,23,42,0.10)]">
                       <img
                         src={draft.previewUrl}
-                        alt={"待发送图片 " + (index + 1)}
+                        alt={`待发送图片 ${index + 1}`}
                         className="h-full w-full object-cover"
                         draggable={false}
                       />
