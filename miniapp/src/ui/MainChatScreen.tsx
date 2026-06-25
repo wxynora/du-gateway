@@ -789,17 +789,15 @@ export function MainChatScreen({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
-  const [keyboardOffset, setKeyboardOffset] = useState(0);
-  const [chatViewportHeight, setChatViewportHeight] = useState(() =>
-    typeof window !== "undefined" ? Math.max(0, Math.round(window.innerHeight)) : 0,
-  );
   const [openVoiceTranscriptId, setOpenVoiceTranscriptId] = useState("");
   const [bubbleMenu, setBubbleMenu] = useState<ChatBubbleMenuTarget | null>(null);
   const [quotedBubble, setQuotedBubble] = useState<ChatBubbleQuote | null>(null);
+  const chatRootRef = useRef<HTMLDivElement | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const lastSearchQueryRef = useRef("");
-  const chatViewportHeightRef = useRef(chatViewportHeight);
+  const chatViewportHeightRef = useRef(typeof window !== "undefined" ? Math.max(0, Math.round(window.innerHeight)) : 0);
+  const keyboardOffsetRef = useRef(0);
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
@@ -1093,7 +1091,6 @@ export function MainChatScreen({
       reschedulePrivateInputAggregateWithinDeadline();
       return;
     }
-    const editableText = queued.map(queuedPrivateInputEditableText).filter(Boolean).join("\n").trim();
     const messageIds = new Set(queued.map((item) => item.userMessage.id));
     clearPrivateInputAggregateTimer();
     let nextMessages: ChatDraftMessage[];
@@ -1115,10 +1112,6 @@ export function MainChatScreen({
     privateInputAggregateDeadlineRef.current = 0;
     setActiveSendStageLabel("");
     persistPrivateInputAggregate("cancel");
-    if (editableText) {
-      setInput((current) => [editableText, String(current || "").trim()].filter(Boolean).join("\n"));
-      refocusTextInputSoon();
-    }
     logSumiTalkClientEvent("private_input_aggregate_cancel", { parts: queued.length }, "warning");
   }
 
@@ -3651,12 +3644,14 @@ export function MainChatScreen({
     requestAnimationFrame(() => {
       el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
     });
-  }, [messages, searchOpen, keyboardOffset, voiceInputOpen, plusOpen, quotedBubble]);
+  }, [messages, searchOpen, voiceInputOpen, plusOpen, quotedBubble]);
 
   useEffect(() => {
     const viewport = window.visualViewport;
+    let frame = 0;
 
-    const updateKeyboardOffset = () => {
+    const applyKeyboardOffset = () => {
+      frame = 0;
       const visibleHeight = viewport
         ? Math.round(viewport.height + viewport.offsetTop)
         : Math.round(window.innerHeight);
@@ -3667,13 +3662,32 @@ export function MainChatScreen({
 
       if (!normalizedOffset) {
         const nextHeight = Math.max(visibleHeight, layoutHeight);
-        if (nextHeight > 0 && nextHeight !== chatViewportHeightRef.current) {
+        if (nextHeight > 0) {
           chatViewportHeightRef.current = nextHeight;
-          setChatViewportHeight(nextHeight);
         }
       }
 
-      setKeyboardOffset(normalizedOffset);
+      const root = chatRootRef.current;
+      if (root) {
+        root.style.setProperty("--chat-viewport-height", `${chatViewportHeightRef.current || layoutHeight || visibleHeight}px`);
+        root.style.setProperty("--chat-keyboard-offset", `${normalizedOffset}px`);
+        root.style.setProperty("--chat-keyboard-translate", normalizedOffset ? `-${normalizedOffset}px` : "0px");
+      }
+
+      if (keyboardOffsetRef.current !== normalizedOffset) {
+        keyboardOffsetRef.current = normalizedOffset;
+        if (!searchOpen) {
+          requestAnimationFrame(() => {
+            const el = messagesScrollRef.current;
+            if (el) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+          });
+        }
+      }
+    };
+
+    const updateKeyboardOffset = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(applyKeyboardOffset);
     };
 
     updateKeyboardOffset();
@@ -3685,8 +3699,9 @@ export function MainChatScreen({
       viewport?.removeEventListener("resize", updateKeyboardOffset);
       viewport?.removeEventListener("scroll", updateKeyboardOffset);
       window.removeEventListener("resize", updateKeyboardOffset);
+      if (frame) cancelAnimationFrame(frame);
     };
-  }, []);
+  }, [searchOpen]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -3719,21 +3734,25 @@ export function MainChatScreen({
 
   return (
     <div
+      ref={chatRootRef}
       className="fixed left-0 top-0 z-30 flex w-full max-w-full flex-col overflow-hidden overscroll-none bg-[#F8F9FA]"
       style={{
         fontFamily: chatFontFamily,
-        height: chatViewportHeight ? `${chatViewportHeight}px` : "100dvh",
-      }}
+        "--chat-viewport-height": chatViewportHeightRef.current ? `${chatViewportHeightRef.current}px` : "100dvh",
+        "--chat-keyboard-offset": "0px",
+        "--chat-keyboard-translate": "0px",
+        height: "var(--chat-viewport-height)",
+      } as React.CSSProperties}
     >
       {hasCustomChatBackground ? (
         <>
           <div
             className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-cover bg-center"
-            style={{ backgroundImage: `url(${chatBackgroundImage})`, height: chatViewportHeight ? `${chatViewportHeight}px` : "100lvh" }}
+            style={{ backgroundImage: `url(${chatBackgroundImage})`, height: "var(--chat-viewport-height)" }}
           />
           <div
             className="pointer-events-none absolute left-0 top-0 z-0 w-full"
-            style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})`, height: chatViewportHeight ? `${chatViewportHeight}px` : "100lvh" }}
+            style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})`, height: "var(--chat-viewport-height)" }}
           />
         </>
       ) : null}
@@ -3816,7 +3835,7 @@ export function MainChatScreen({
       <div
         ref={messagesScrollRef}
         className={`relative z-10 min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-5 ${messagesTopPaddingClass}`}
-        style={{ paddingBottom: keyboardOffset ? `calc(${keyboardOffset}px + 1.25rem)` : undefined }}
+        style={{ paddingBottom: "calc(var(--chat-keyboard-offset, 0px) + 1.25rem)" }}
       >
         <div className="space-y-4">
           {groupedMessages.map((group, index) => (
@@ -4075,7 +4094,7 @@ export function MainChatScreen({
       />
       <div
         className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] transition-transform duration-200 ease-out will-change-transform ${chatFooterClass}`}
-        style={{ transform: keyboardOffset ? `translate3d(0, -${keyboardOffset}px, 0)` : undefined }}
+        style={{ transform: "translate3d(0, var(--chat-keyboard-translate, 0px), 0)" }}
       >
           <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[194px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
             <div className="grid grid-cols-3 gap-x-3 gap-y-3 px-5 pb-4 pt-4">
