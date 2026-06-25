@@ -635,8 +635,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       transform: `translate3d(${pose.x}px, ${pose.y}px, 0) scale(${pose.scale}) rotate(${pose.rotate}deg)`,
       opacity: pose.opacity,
       zIndex: pose.zIndex,
-      transition: layerTransition,
-      willChange: "transform, opacity",
+      transition: "none",
     };
   }
 
