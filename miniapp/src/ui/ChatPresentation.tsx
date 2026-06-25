@@ -564,6 +564,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   const isRight = align === "right";
   const imageItems = items.filter((item) => attachmentSrc(item));
   const swipeDistance = 136;
+  const dragActivationDistance = 14;
   const commitDistance = 42;
 
   if (imageItems.length < 2) return null;
@@ -637,7 +638,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     event.stopPropagation();
     dragStartX.current = event.clientX;
     suppressClickRef.current = false;
-    setSwipe({ phase: "dragging", deltaX: 0, direction: 1, accepted: false });
+    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -651,8 +652,15 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     if (startX == null) return;
     const deltaX = event.clientX - startX;
     if (Math.abs(deltaX) > 6) suppressClickRef.current = true;
+    if (Math.abs(deltaX) <= dragActivationDistance) {
+      if (swipe.phase !== "idle") setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+      return;
+    }
     const direction: 1 | -1 = deltaX < 0 ? 1 : -1;
-    setSwipe({ phase: "dragging", deltaX, direction, accepted: false });
+    const effectiveDeltaX = deltaX < 0
+      ? deltaX + dragActivationDistance
+      : deltaX - dragActivationDistance;
+    setSwipe({ phase: "dragging", deltaX: effectiveDeltaX, direction, accepted: false });
   }
 
   function handlePointerUp(event: React.PointerEvent<HTMLButtonElement>) {
@@ -665,14 +673,22 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
       return;
     }
+    if (Math.abs(deltaX) <= dragActivationDistance) {
+      suppressClickRef.current = true;
+      setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+      return;
+    }
     const direction: 1 | -1 = deltaX < 0 ? 1 : -1;
     const accepted = Math.abs(deltaX) >= commitDistance && canSwipe(direction);
+    const effectiveDeltaX = deltaX < 0
+      ? deltaX + dragActivationDistance
+      : deltaX - dragActivationDistance;
     suppressClickRef.current = true;
     if (!accepted) {
       setSwipe({ phase: "idle", deltaX: 0, direction, accepted: false });
       return;
     }
-    setSwipe({ phase: "settling", deltaX, direction, accepted });
+    setSwipe({ phase: "settling", deltaX: effectiveDeltaX, direction, accepted });
   }
 
   function handleSwipeTransitionEnd(event: React.TransitionEvent<HTMLSpanElement>) {
@@ -736,7 +752,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
             <span
               key={`${item.id}-stack-${index}`}
               data-image-index={index}
-              className={`absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 ${
+              className={`pointer-events-none absolute inset-0 overflow-hidden rounded-[14px] bg-gray-100 ${
                 isFront
                   ? "shadow-[0_7px_20px_rgba(15,23,42,0.12)]"
                   : "shadow-[0_4px_14px_rgba(15,23,42,0.10)]"

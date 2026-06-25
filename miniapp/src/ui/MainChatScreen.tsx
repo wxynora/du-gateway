@@ -163,6 +163,11 @@ type QueuedPrivateInput = {
   modelContent: PrivateModelContent;
   userMessage: ChatDraftMessage;
 };
+type PendingImageDraft = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
 type ChatBubbleMenuTargetBase = {
   id: string;
   role: ChatRole;
@@ -704,6 +709,7 @@ export function MainChatScreen({
   const [recordingChatVoice, setRecordingChatVoiceValue] = useState(false);
   const [voiceInputOpen, setVoiceInputOpen] = useState(false);
   const [chatVoiceCancelArmed, setChatVoiceCancelArmed] = useState(false);
+  const [pendingImageDrafts, setPendingImageDrafts] = useState<PendingImageDraft[]>([]);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
   const [plusOpen, setPlusOpen] = useState(false);
@@ -722,6 +728,7 @@ export function MainChatScreen({
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingImageDraftsRef = useRef<PendingImageDraft[]>([]);
   const mediaBusyRef = useRef(false);
   const recordingChatVoiceRef = useRef(false);
   const chatVoiceStreamRef = useRef<MediaStream | null>(null);
@@ -762,6 +769,48 @@ export function MainChatScreen({
     };
     window.requestAnimationFrame(focus);
     window.setTimeout(focus, 60);
+  }
+
+  useEffect(() => {
+    pendingImageDraftsRef.current = pendingImageDrafts;
+  }, [pendingImageDrafts]);
+
+  useEffect(() => {
+    return () => {
+      for (const draft of pendingImageDraftsRef.current) {
+        URL.revokeObjectURL(draft.previewUrl);
+      }
+      pendingImageDraftsRef.current = [];
+    };
+  }, []);
+
+  function clearPendingImageDrafts() {
+    setPendingImageDrafts((current) => {
+      for (const draft of current) {
+        URL.revokeObjectURL(draft.previewUrl);
+      }
+      return [];
+    });
+  }
+
+  function removePendingImageDraft(id: string) {
+    setPendingImageDrafts((current) => {
+      const target = current.find((draft) => draft.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return current.filter((draft) => draft.id !== id);
+    });
+  }
+
+  function movePendingImageDraft(id: string, direction: -1 | 1) {
+    setPendingImageDrafts((current) => {
+      const index = current.findIndex((draft) => draft.id === id);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) return current;
+      const next = [...current];
+      const [draft] = next.splice(index, 1);
+      next.splice(nextIndex, 0, draft);
+      return next;
+    });
   }
 
   const [activeModel, setActiveModel] = useState(() => {
@@ -2827,7 +2876,44 @@ export function MainChatScreen({
     }
   }
 
+  async function sendPendingImageDrafts(): Promise<boolean> {
+    const drafts = pendingImageDraftsRef.current;
+    if (!drafts.length || sending || mediaBusy) return false;
+    const files = drafts.map((draft) => draft.file);
+    setMediaBusy(true);
+    try {
+      logSumiTalkClientEvent("image_upload_start", {
+        count: files.length,
+        names: files.map((file) => file.name).slice(0, 8).join(", "),
+        bytes: files.reduce((sum, file) => sum + file.size, 0),
+      });
+      const prepared = await prepareImagesPrivateChatInput(files, input);
+      logSumiTalkClientEvent("image_upload_ok", {
+        count: prepared.attachments.length,
+        bytes: prepared.attachments.reduce((sum, attachment) => sum + Number(attachment.size || 0), 0),
+        hasRemoteUrl: prepared.attachments.some((attachment) => Boolean(attachment.remoteUrl)),
+        hasRemoteKey: prepared.attachments.some((attachment) => Boolean(attachment.remoteKey)),
+      });
+      const sent = await sendPreparedPrivateChatInput(prepared);
+      if (sent) {
+        clearPendingImageDrafts();
+        refocusTextInputSoon();
+      }
+      return sent;
+    } catch (e: any) {
+      logSumiTalkClientEvent("image_upload_error", { error: String(e?.message || e) }, "error");
+      toast("图片发送失败：" + (e?.message || e));
+      return false;
+    } finally {
+      setMediaBusy(false);
+    }
+  }
+
   async function sendMessage() {
+    if (pendingImageDraftsRef.current.length) {
+      await sendPendingImageDrafts();
+      return;
+    }
     const sent = await sendPreparedPrivateChatInput(prepareTextPrivateChatInput(input));
     if (sent) refocusTextInputSoon();
   }
@@ -2898,28 +2984,21 @@ export function MainChatScreen({
     const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("image/"));
     event.target.value = "";
     if (!files.length || sending || mediaBusy) return;
-    setMediaBusy(true);
-    try {
-      logSumiTalkClientEvent("image_upload_start", {
-        count: files.length,
-        names: files.map((file) => file.name).slice(0, 8).join(", "),
-        bytes: files.reduce((sum, file) => sum + file.size, 0),
-      });
-      const prepared = await prepareImagesPrivateChatInput(files, input);
-      logSumiTalkClientEvent("image_upload_ok", {
-        count: prepared.attachments.length,
-        bytes: prepared.attachments.reduce((sum, attachment) => sum + Number(attachment.size || 0), 0),
-        hasRemoteUrl: prepared.attachments.some((attachment) => Boolean(attachment.remoteUrl)),
-        hasRemoteKey: prepared.attachments.some((attachment) => Boolean(attachment.remoteKey)),
-      });
-      const sent = await sendPreparedPrivateChatInput(prepared);
-      if (sent) refocusTextInputSoon();
-    } catch (e: any) {
-      logSumiTalkClientEvent("image_upload_error", { error: String(e?.message || e) }, "error");
-      toast(`图片发送失败：${e?.message || e}`);
-    } finally {
-      setMediaBusy(false);
-    }
+    const pickedAt = Date.now();
+    const drafts = files.map((file, index) => ({
+      id: "image-draft-" + pickedAt + "-" + index + "-" + Math.random().toString(36).slice(2, 8),
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+    setPendingImageDrafts((current) => [...current, ...drafts]);
+    setPlusOpen(false);
+    logSumiTalkClientEvent("image_queue_add", {
+      count: drafts.length,
+      pending: pendingImageDraftsRef.current.length + drafts.length,
+      names: files.map((file) => file.name).slice(0, 8).join(", "),
+      bytes: files.reduce((sum, file) => sum + file.size, 0),
+    });
+    refocusTextInputSoon();
   }
 
   async function handleDocumentInputChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -3141,6 +3220,7 @@ export function MainChatScreen({
     (msg) => (msg.role === "assistant" || msg.role === "benben") && String(msg.status || "").trim().toLowerCase() === "pending",
   );
   const trimmedInput = input.trim();
+  const hasPendingImageDrafts = pendingImageDrafts.length > 0;
   const canSubmitWhileBusy = groupChatMode && (
     isBenbenCancelCommand(trimmedInput)
     || (groupDiscussionRunning && isGroupDiscussionStopCommand(trimmedInput))
@@ -3357,7 +3437,7 @@ export function MainChatScreen({
                 </div>
               ) : null}
               {group.role === "user" ? (
-                <div className="flex items-start justify-end space-x-3 rounded-[22px]">
+                <div className="flex items-start justify-end space-x-2 rounded-[22px]">
                   <div className={`mt-[2px] flex ${chatMessageColumnWidthClass} flex-col items-end space-y-1.5`}>
                     {groupChatMode ? <div className="px-1 text-[11px] font-medium leading-none text-gray-400">辛玥</div> : null}
                       {group.parts.map((part, index) => {
@@ -3430,7 +3510,7 @@ export function MainChatScreen({
                   ) : null}
                 </div>
               ) : (
-                <div className="flex items-start space-x-3 rounded-[22px]">
+                <div className="flex items-start space-x-2 rounded-[22px]">
                   {showChatAvatars ? (
                     <AvatarBubble
                       image={group.role === "benben" ? benbenAvatarImage : duAvatarImage}
@@ -3619,6 +3699,68 @@ export function MainChatScreen({
                 />
             </div>
           </div>
+          {pendingImageDrafts.length ? (
+            <div className={"relative z-10 mx-4 mb-2 overflow-hidden rounded-[22px] border " + chatPlusPanelClass}>
+              <div className="flex items-center justify-between px-3 pb-1 pt-2">
+                <span className="text-[11px] font-semibold text-gray-600">图片顺序</span>
+                <button
+                  type="button"
+                  className="rounded-full px-2 py-0.5 text-[11px] font-medium text-gray-400 active:bg-white/60 active:text-gray-700"
+                  onClick={clearPendingImageDrafts}
+                >
+                  清空
+                </button>
+              </div>
+              <div className="flex gap-2 overflow-x-auto px-3 pb-3 pt-1 [-webkit-overflow-scrolling:touch]">
+                {pendingImageDrafts.map((draft, index) => (
+                  <div key={draft.id} className="w-[58px] shrink-0">
+                    <div className="relative aspect-[3/4] overflow-hidden rounded-[14px] bg-white/60 shadow-[0_4px_14px_rgba(15,23,42,0.10)]">
+                      <img
+                        src={draft.previewUrl}
+                        alt={"待发送图片 " + (index + 1)}
+                        className="h-full w-full object-cover"
+                        draggable={false}
+                      />
+                      <span className="absolute left-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-black/45 px-1 text-[9px] font-semibold leading-4 text-white">
+                        {index + 1}
+                      </span>
+                      <button
+                        type="button"
+                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-white/85 text-[14px] font-semibold leading-none text-gray-500 shadow-sm active:bg-white"
+                        onClick={() => removePendingImageDraft(draft.id)}
+                        aria-label="移除图片"
+                        title="移除图片"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="mt-1 flex items-center justify-center gap-1">
+                      <button
+                        type="button"
+                        className="flex h-6 w-6 items-center justify-center rounded-full bg-white/55 text-[15px] font-semibold text-gray-500 active:bg-white disabled:opacity-30"
+                        onClick={() => movePendingImageDraft(draft.id, -1)}
+                        disabled={index === 0}
+                        aria-label="前移图片"
+                        title="前移图片"
+                      >
+                        ‹
+                      </button>
+                      <button
+                        type="button"
+                        className="flex h-6 w-6 items-center justify-center rounded-full bg-white/55 text-[15px] font-semibold text-gray-500 active:bg-white disabled:opacity-30"
+                        onClick={() => movePendingImageDraft(draft.id, 1)}
+                        disabled={index === pendingImageDrafts.length - 1}
+                        aria-label="后移图片"
+                        title="后移图片"
+                      >
+                        ›
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {quotedBubble ? (
             <div className="relative z-10 mx-5 mb-2 flex items-center gap-2 rounded-[18px] border border-white/45 bg-white/70 px-3 py-2 text-left text-[11px] font-medium text-gray-500 shadow-[0_8px_20px_rgba(15,23,42,0.07)] backdrop-blur-xl">
               <span className="shrink-0 text-gray-700">引用</span>
@@ -3714,7 +3856,7 @@ export function MainChatScreen({
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
               onPointerDown={(event) => event.preventDefault()}
               onClick={() => void sendMessage()}
-              disabled={!trimmedInput || (sending && !canSubmitWhileBusy)}
+              disabled={(!trimmedInput && !hasPendingImageDrafts) || mediaBusy || (sending && !canSubmitWhileBusy)}
               aria-label="发送"
               title="发送"
             >
