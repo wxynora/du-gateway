@@ -85,7 +85,6 @@ import { buildAnthropicImageDataUrlFromDataUrl } from "./imageDataUrl";
 import { useToast } from "./toast";
 import {
   apiJsonWithTimeout,
-  cancelSumiTalkChatJob,
   isAbortLikeError,
   waitMs,
 } from "./chat/sumitalkChatClient";
@@ -175,6 +174,7 @@ type PendingImageDraft = {
 };
 type ChatBubbleMenuTargetBase = {
   id: string;
+  messageId?: string;
   role: ChatRole;
   content: string;
   attachments?: ChatAttachment[];
@@ -182,6 +182,8 @@ type ChatBubbleMenuTargetBase = {
   transcriptId: string;
   hasVoice: boolean;
   canRetry: boolean;
+  aggregateEditable?: boolean;
+  aggregateCanEditText?: boolean;
   operationId?: string;
   status?: ChatDraftMessage["status"];
 };
@@ -210,6 +212,14 @@ const CODEX_GROUP_CHAT_CREATE_RETRY_TIMEOUT_MS = 45000;
 const SUMITALK_PRIVATE_INPUT_IDLE_MS = 15000;
 const SUMITALK_PRIVATE_INPUT_BUSY_RETRY_MS = 1200;
 const SUMITALK_PRIVATE_INPUT_AGGREGATE_STORAGE_PREFIX = "miniapp.chat.privateInputAggregate.v1";
+
+function privateInputAggregateDeadlineFromPayload(payload: any): number {
+  const expiresAt = Date.parse(String(payload?.expiresAt || ""));
+  if (Number.isFinite(expiresAt) && expiresAt > 0) return expiresAt;
+  const updatedAt = Date.parse(String(payload?.updatedAt || ""));
+  if (Number.isFinite(updatedAt) && updatedAt > 0) return updatedAt + SUMITALK_PRIVATE_INPUT_IDLE_MS;
+  return 0;
+}
 
 function ChatToolCallBlock({ part }: { part: ChatDisplayPart }) {
   const [open, setOpen] = useState(false);
@@ -761,12 +771,12 @@ export function MainChatScreen({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [mediaBusy, setMediaBusyValue] = useState(false);
-  const [cancellingSend, setCancellingSend] = useState(false);
-  const [activeSendRequestId, setActiveSendRequestId] = useState("");
   const [activeSendStageLabel, setActiveSendStageLabel] = useState("");
   const [recordingChatVoice, setRecordingChatVoiceValue] = useState(false);
   const [voiceInputOpen, setVoiceInputOpen] = useState(false);
   const [chatVoiceCancelArmed, setChatVoiceCancelArmed] = useState(false);
+  const [privateInputAggregateCount, setPrivateInputAggregateCount] = useState(0);
+  const [privateInputAggregateCancelable, setPrivateInputAggregateCancelableState] = useState(false);
   const [pendingImageDrafts, setPendingImageDrafts] = useState<PendingImageDraft[]>([]);
   const [groupDiscussionRunning, setGroupDiscussionRunning] = useState(false);
   const [groupDiscussionStatus, setGroupDiscussionStatus] = useState("");
@@ -779,12 +789,17 @@ export function MainChatScreen({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
+  const [chatViewportHeight, setChatViewportHeight] = useState(() =>
+    typeof window !== "undefined" ? Math.max(0, Math.round(window.innerHeight)) : 0,
+  );
   const [openVoiceTranscriptId, setOpenVoiceTranscriptId] = useState("");
   const [bubbleMenu, setBubbleMenu] = useState<ChatBubbleMenuTarget | null>(null);
   const [quotedBubble, setQuotedBubble] = useState<ChatBubbleQuote | null>(null);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const searchResultRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const lastSearchQueryRef = useRef("");
+  const chatViewportHeightRef = useRef(chatViewportHeight);
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
@@ -805,6 +820,8 @@ export function MainChatScreen({
   const privateInputAggregateTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const privateInputAggregateVersionRef = useRef(0);
   const privateInputAggregateHoldUntilNextInputRef = useRef(false);
+  const privateInputAggregateCancelableRef = useRef(false);
+  const privateInputAggregateDeadlineRef = useRef(0);
   const bubbleTouchRef = useRef<ChatBubbleTouchState | null>(null);
   const remoteHistorySyncingRef = useRef(false);
 
@@ -816,6 +833,54 @@ export function MainChatScreen({
   function setRecordingChatVoice(next: boolean) {
     recordingChatVoiceRef.current = next;
     setRecordingChatVoiceValue(next);
+  }
+
+  function setPrivateInputAggregateQueue(items: QueuedPrivateInput[]) {
+    privateInputAggregateQueueRef.current = items;
+    setPrivateInputAggregateCount(items.length);
+  }
+
+  function setPrivateInputAggregateCancelable(next: boolean) {
+    privateInputAggregateCancelableRef.current = next;
+    setPrivateInputAggregateCancelableState(next);
+    if (!next) {
+      setBubbleMenu((current) => (current?.aggregateEditable ? null : current));
+    }
+  }
+
+  function clearPrivateInputAggregateTimer() {
+    if (privateInputAggregateTimerRef.current) {
+      window.clearTimeout(privateInputAggregateTimerRef.current);
+      privateInputAggregateTimerRef.current = null;
+    }
+    privateInputAggregateVersionRef.current += 1;
+  }
+
+  function resetPrivateInputAggregateMemory() {
+    clearPrivateInputAggregateTimer();
+    setPrivateInputAggregateQueue([]);
+    setPrivateInputAggregateCancelable(false);
+    privateInputAggregateHoldUntilNextInputRef.current = false;
+    privateInputAggregateDeadlineRef.current = 0;
+    setActiveSendStageLabel("");
+  }
+
+  function privateInputAggregateRemainingMs() {
+    const deadline = privateInputAggregateDeadlineRef.current;
+    if (!deadline) return 0;
+    return Math.max(0, deadline - Date.now());
+  }
+
+  function reschedulePrivateInputAggregateWithinDeadline(reason: "idle" | "busy_retry" = "idle") {
+    const remaining = privateInputAggregateRemainingMs();
+    if (remaining > 0) {
+      setPrivateInputAggregateCancelable(true);
+      setActiveSendStageLabel("等待继续输入");
+      schedulePrivateInputAggregateFlush(remaining, reason);
+      return;
+    }
+    setPrivateInputAggregateCancelable(false);
+    schedulePrivateInputAggregateFlush(0, reason);
   }
 
   function refocusTextInputSoon() {
@@ -845,6 +910,7 @@ export function MainChatScreen({
   }, []);
 
   function clearPendingImageDrafts() {
+    if (mediaBusyRef.current) return;
     setPendingImageDrafts((current) => {
       for (const draft of current) {
         URL.revokeObjectURL(draft.previewUrl);
@@ -854,6 +920,7 @@ export function MainChatScreen({
   }
 
   function removePendingImageDraft(id: string) {
+    if (mediaBusyRef.current) return;
     setPendingImageDrafts((current) => {
       const target = current.find((draft) => draft.id === id);
       if (target) URL.revokeObjectURL(target.previewUrl);
@@ -862,6 +929,7 @@ export function MainChatScreen({
   }
 
   function movePendingImageDraft(id: string, direction: -1 | 1) {
+    if (mediaBusyRef.current) return;
     setPendingImageDrafts((current) => {
       const index = current.findIndex((draft) => draft.id === id);
       const nextIndex = index + direction;
@@ -900,6 +968,7 @@ export function MainChatScreen({
         schemaVersion: 1,
         windowId: historyWindowId,
         holdUntilNextInput: Boolean(privateInputAggregateHoldUntilNextInputRef.current),
+        expiresAt: privateInputAggregateDeadlineRef.current ? new Date(privateInputAggregateDeadlineRef.current).toISOString() : "",
         updatedAt: new Date().toISOString(),
         items: items.map(queuedPrivateInputForLocalStorage),
       }));
@@ -912,6 +981,7 @@ export function MainChatScreen({
   }
 
   function restorePrivateInputAggregate() {
+    resetPrivateInputAggregateMemory();
     if (groupChatMode || !historyWindowId) return;
     const storageKey = privateInputAggregateStorageKey(historyWindowId);
     let payload: any = null;
@@ -929,16 +999,182 @@ export function MainChatScreen({
       } catch {}
       return;
     }
-    privateInputAggregateQueueRef.current = items;
     privateInputAggregateHoldUntilNextInputRef.current = Boolean(payload?.holdUntilNextInput);
+    privateInputAggregateDeadlineRef.current = privateInputAggregateDeadlineFromPayload(payload);
+    setPrivateInputAggregateQueue(items);
     logSumiTalkClientEvent("private_input_aggregate_restore", {
       parts: items.length,
       holdUntilNextInput: privateInputAggregateHoldUntilNextInputRef.current,
+      remainingMs: privateInputAggregateRemainingMs(),
     }, "warning");
-    if (!privateInputAggregateHoldUntilNextInputRef.current) {
+    if (privateInputAggregateHoldUntilNextInputRef.current) {
+      setPrivateInputAggregateCancelable(false);
       setActiveSendStageLabel("等待继续输入");
-      schedulePrivateInputAggregateFlush();
+    } else {
+      setActiveSendStageLabel("等待继续输入");
+      reschedulePrivateInputAggregateWithinDeadline();
     }
+  }
+
+  function queuedPrivateInputForMessage(messageId?: string): QueuedPrivateInput | null {
+    const id = String(messageId || "").trim();
+    if (!id) return null;
+    return privateInputAggregateQueueRef.current.find((item) => item.userMessage.id === id) || null;
+  }
+
+  function queuedPrivateInputEditableText(item: QueuedPrivateInput | null): string {
+    if (!item || item.source === "voice") return "";
+    return String(item.displayContent || item.content || "").trim();
+  }
+
+  function queuedPrivateInputCanEditText(item: QueuedPrivateInput | null): boolean {
+    return Boolean(item && item.source === "text" && !item.attachments.length && queuedPrivateInputEditableText(item));
+  }
+
+  function clearHeldPrivateInputAggregate(reason: string) {
+    if (!privateInputAggregateHoldUntilNextInputRef.current || !privateInputAggregateQueueRef.current.length) return;
+    clearPrivateInputAggregateTimer();
+    setPrivateInputAggregateQueue([]);
+    setPrivateInputAggregateCancelable(false);
+    privateInputAggregateHoldUntilNextInputRef.current = false;
+    privateInputAggregateDeadlineRef.current = 0;
+    setActiveSendStageLabel("");
+    persistPrivateInputAggregate(reason);
+    logSumiTalkClientEvent("private_input_aggregate_clear_held", {
+      reason,
+    }, "warning");
+  }
+
+  async function saveDisplayHistoryWithoutAggregateMessages(messageIds: Set<string>, source: string): Promise<ChatDraftMessage[]> {
+    const currentMessages = sanitizeHistoryMessages(messagesRef.current);
+    const filteredCurrent = currentMessages.filter((msg) => !messageIds.has(String(msg.id || "")));
+    const localDeviceId = String(deviceId || await getOrCreatePanelDeviceId()).trim();
+    if (!localDeviceId || !historyWindowId) return filteredCurrent;
+    const storedMessages = sanitizeHistoryMessages(await readLocalChatHistory(localDeviceId, historyWindowId));
+    const baseMessages = storedMessages.length
+      ? mergeHistorySnapshots(storedMessages, currentMessages)
+      : currentMessages;
+    const filteredForStorage = baseMessages.filter((msg) => !messageIds.has(String(msg.id || "")));
+    await writeLocalChatHistory(
+      localDeviceId,
+      historyWindowId,
+      stripPreviewUrlsFromMessages(filteredForStorage),
+    );
+    logSumiTalkClientEvent("private_input_aggregate_history_save", {
+      source,
+      removed: messageIds.size,
+      messages: filteredForStorage.length,
+    });
+    return currentMessages.length ? filteredCurrent : filteredForStorage;
+  }
+
+  function applyDisplayHistoryMessages(nextMessages: ChatDraftMessage[]) {
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+  }
+
+  function reschedulePrivateInputAggregateAfterEdit() {
+    if (!privateInputAggregateQueueRef.current.length) {
+      clearPrivateInputAggregateTimer();
+      setPrivateInputAggregateCancelable(false);
+      setActiveSendStageLabel("");
+      privateInputAggregateHoldUntilNextInputRef.current = false;
+      privateInputAggregateDeadlineRef.current = 0;
+      return;
+    }
+    reschedulePrivateInputAggregateWithinDeadline();
+  }
+
+  async function cancelPendingPrivateInputAggregate() {
+    const queued = [...privateInputAggregateQueueRef.current];
+    if (!queued.length || !privateInputAggregateCancelableRef.current) return;
+    if (privateInputAggregateRemainingMs() <= 0) {
+      setPrivateInputAggregateCancelable(false);
+      reschedulePrivateInputAggregateWithinDeadline();
+      return;
+    }
+    const editableText = queued.map(queuedPrivateInputEditableText).filter(Boolean).join("\n").trim();
+    const messageIds = new Set(queued.map((item) => item.userMessage.id));
+    clearPrivateInputAggregateTimer();
+    let nextMessages: ChatDraftMessage[];
+    try {
+      nextMessages = await saveDisplayHistoryWithoutAggregateMessages(messageIds, "private_input_aggregate_cancel");
+    } catch (e: any) {
+      logSumiTalkClientEvent("private_input_aggregate_cancel_history_save_error", {
+        parts: queued.length,
+        error: String(e?.message || e),
+      }, "error");
+      toast(`取消失败：${e?.message || e}`);
+      reschedulePrivateInputAggregateWithinDeadline();
+      return;
+    }
+    applyDisplayHistoryMessages(nextMessages);
+    setPrivateInputAggregateQueue([]);
+    setPrivateInputAggregateCancelable(false);
+    privateInputAggregateHoldUntilNextInputRef.current = false;
+    privateInputAggregateDeadlineRef.current = 0;
+    setActiveSendStageLabel("");
+    persistPrivateInputAggregate("cancel");
+    if (editableText) {
+      setInput((current) => [editableText, String(current || "").trim()].filter(Boolean).join("\n"));
+      refocusTextInputSoon();
+    }
+    logSumiTalkClientEvent("private_input_aggregate_cancel", { parts: queued.length }, "warning");
+  }
+
+  async function deletePendingPrivateInput(target: ChatBubbleMenuTargetBase, mode: "delete" | "edit") {
+    const messageId = String(target.messageId || "").trim();
+    const item = queuedPrivateInputForMessage(messageId);
+    if (!item || !privateInputAggregateCancelableRef.current || privateInputAggregateRemainingMs() <= 0) {
+      if (privateInputAggregateRemainingMs() <= 0) {
+        setPrivateInputAggregateCancelable(false);
+        reschedulePrivateInputAggregateWithinDeadline();
+      }
+      toast("这条已经开始发送，不能改了");
+      setBubbleMenu(null);
+      return;
+    }
+    const editableText = mode === "edit" ? queuedPrivateInputEditableText(item) : "";
+    if (mode === "edit" && !editableText) {
+      toast("这条没有可编辑的文字");
+      setBubbleMenu(null);
+      return;
+    }
+    const messageIds = new Set([messageId]);
+    const nextQueue = privateInputAggregateQueueRef.current.filter((queuedItem) => queuedItem.userMessage.id !== messageId);
+    clearPrivateInputAggregateTimer();
+    let nextMessages: ChatDraftMessage[];
+    try {
+      nextMessages = await saveDisplayHistoryWithoutAggregateMessages(
+        messageIds,
+        mode === "edit" ? "private_input_aggregate_edit_remove" : "private_input_aggregate_delete_one",
+      );
+    } catch (e: any) {
+      logSumiTalkClientEvent("private_input_aggregate_delete_history_save_error", {
+        mode,
+        source: item.source,
+        error: String(e?.message || e),
+      }, "error");
+      toast(`${mode === "edit" ? "编辑" : "删除"}失败：${e?.message || e}`);
+      reschedulePrivateInputAggregateWithinDeadline();
+      setBubbleMenu(null);
+      return;
+    }
+    applyDisplayHistoryMessages(nextMessages);
+    setPrivateInputAggregateQueue(nextQueue);
+    persistPrivateInputAggregate(mode === "edit" ? "edit_remove" : "delete_one");
+    reschedulePrivateInputAggregateAfterEdit();
+    setBubbleMenu(null);
+    if (mode === "edit") {
+      setInput((current) => [editableText, String(current || "").trim()].filter(Boolean).join("\n"));
+      refocusTextInputSoon();
+    } else {
+      toast("已删除");
+    }
+    logSumiTalkClientEvent(mode === "edit" ? "private_input_aggregate_edit_remove" : "private_input_aggregate_delete_one", {
+      remaining: nextQueue.length,
+      source: item.source,
+    }, "warning");
   }
 
   useEffect(() => {
@@ -960,6 +1196,7 @@ export function MainChatScreen({
 
   function buildBubbleMenuTarget(args: {
     id: string;
+    messageId?: string;
     role: ChatRole;
     content: string;
     attachments?: ChatAttachment[];
@@ -970,8 +1207,14 @@ export function MainChatScreen({
     const audioAttachments = attachments.filter((item) => item.kind === "audio");
     const transcriptItem = audioAttachments.find((item) => String(item.transcript || "").trim()) || audioAttachments[0];
     const transcript = sanitizeVoiceTranscriptText(transcriptItem?.transcript || "", transcriptItem?.durationMs || 0);
+    const messageId = String(args.messageId || args.id || "").trim();
+    const aggregateItem = args.role === "user" && privateInputAggregateCancelable
+      ? queuedPrivateInputForMessage(messageId)
+      : null;
+    const aggregateEditable = Boolean(aggregateItem && privateInputAggregateCancelable);
     return {
       id: args.id,
+      messageId,
       role: args.role,
       content: String(args.content || "").trim(),
       attachments,
@@ -979,6 +1222,8 @@ export function MainChatScreen({
       transcriptId: transcriptItem ? chatVoiceTranscriptId(transcriptItem) : "",
       hasVoice: audioAttachments.length > 0,
       canRetry: args.role === "assistant" && args.status === "failed" && Boolean(String(args.operationId || "").trim()),
+      aggregateEditable,
+      aggregateCanEditText: aggregateEditable && queuedPrivateInputCanEditText(aggregateItem),
       operationId: String(args.operationId || "").trim() || undefined,
       status: args.status,
     };
@@ -992,9 +1237,15 @@ export function MainChatScreen({
   }
 
   function openBubbleMenuAt(target: ChatBubbleMenuTargetBase, clientX: number, clientY: number) {
-    const itemCount = 2 + (target.hasVoice ? 1 : 0) + (target.canRetry ? 1 : 0);
-    const width = Math.max(156, itemCount * 68);
-    const height = 72;
+    const itemCount = 2
+      + (target.hasVoice ? 1 : 0)
+      + (target.canRetry ? 1 : 0)
+      + (target.aggregateEditable ? 1 : 0)
+      + (target.aggregateCanEditText ? 1 : 0);
+    const columns = Math.min(3, Math.max(1, itemCount));
+    const rows = Math.ceil(itemCount / columns);
+    const width = Math.min(window.innerWidth - 20, Math.max(156, columns * 68));
+    const height = rows * 44 + 16;
     const left = Math.max(10, Math.min(clientX - width / 2, window.innerWidth - width - 10));
     const preferredTop = clientY - height - 14;
     const top = preferredTop < 70 ? Math.min(clientY + 14, window.innerHeight - height - 10) : preferredTop;
@@ -1522,6 +1773,7 @@ export function MainChatScreen({
       setMessages(pending);
       await saveDisplayHistory(pending, { localDeviceId });
     }
+    clearHeldPrivateInputAggregate("retry_failed_operation");
     void recoverSumiTalkOperation(operation, localDeviceId, { forceCreateJob: true });
   }
 
@@ -2253,8 +2505,10 @@ export function MainChatScreen({
     if (privateInputAggregateHoldUntilNextInputRef.current) {
       const queuedSource = resolveAggregateSource(privateInputAggregateQueueRef.current);
       if (shouldDropPrivateAggregateAfterFailure(queuedSource, privateInputAggregateQueueRef.current, messagesRef.current)) {
-        privateInputAggregateQueueRef.current = [];
+        setPrivateInputAggregateQueue([]);
+        setPrivateInputAggregateCancelable(false);
         privateInputAggregateHoldUntilNextInputRef.current = false;
+        privateInputAggregateDeadlineRef.current = 0;
         persistPrivateInputAggregate("drop_image_too_large_before_resume");
         logSumiTalkClientEvent("private_input_aggregate_drop_image_too_large_before_resume", {
           pendingBefore,
@@ -2305,14 +2559,16 @@ export function MainChatScreen({
       toast(`消息暂存失败：${e?.message || e}`);
       return false;
     }
-    privateInputAggregateQueueRef.current.push({
+    setPrivateInputAggregateQueue([...privateInputAggregateQueueRef.current, {
       content,
       displayContent,
       attachments,
       source,
       modelContent: options.modelContent ?? buildPrivateUserContent(content, attachments),
       userMessage,
-    });
+    }]);
+    privateInputAggregateDeadlineRef.current = Date.now() + SUMITALK_PRIVATE_INPUT_IDLE_MS;
+    setPrivateInputAggregateCancelable(true);
     persistPrivateInputAggregate("enqueue");
     if (sending) {
       logSumiTalkClientEvent("private_input_aggregate_enqueue_while_busy", {
@@ -2329,6 +2585,7 @@ export function MainChatScreen({
     if (expectedVersion !== privateInputAggregateVersionRef.current) return;
     if (!privateInputAggregateQueueRef.current.length) return;
     if (privateInputAggregateHoldUntilNextInputRef.current) return;
+    setPrivateInputAggregateCancelable(false);
     if (sending) {
       logSumiTalkClientEvent("private_input_aggregate_wait_busy", {
         parts: privateInputAggregateQueueRef.current.length,
@@ -2347,7 +2604,9 @@ export function MainChatScreen({
       return;
     }
     const rawQueued = privateInputAggregateQueueRef.current;
-    privateInputAggregateQueueRef.current = [];
+    setPrivateInputAggregateQueue([]);
+    setPrivateInputAggregateCancelable(false);
+    privateInputAggregateDeadlineRef.current = 0;
     if (privateInputAggregateTimerRef.current) {
       window.clearTimeout(privateInputAggregateTimerRef.current);
       privateInputAggregateTimerRef.current = null;
@@ -2358,8 +2617,9 @@ export function MainChatScreen({
     try {
       queued = await Promise.all(rawQueued.map(compressQueuedPrivateInputImages));
     } catch (e: any) {
-      privateInputAggregateQueueRef.current = [...rawQueued, ...privateInputAggregateQueueRef.current];
+      setPrivateInputAggregateQueue([...rawQueued, ...privateInputAggregateQueueRef.current]);
       privateInputAggregateHoldUntilNextInputRef.current = true;
+      privateInputAggregateDeadlineRef.current = 0;
       setActiveSendStageLabel("等待继续输入");
       persistPrivateInputAggregate("hold_after_prepare_error");
       logSumiTalkClientEvent("private_input_aggregate_hold_after_prepare_error", {
@@ -2391,14 +2651,16 @@ export function MainChatScreen({
     if (!ok) {
       if (shouldDropPrivateAggregateAfterFailure(source, queued, messagesRef.current)) {
         privateInputAggregateHoldUntilNextInputRef.current = false;
+        privateInputAggregateDeadlineRef.current = 0;
         persistPrivateInputAggregate("drop_image_too_large");
         logSumiTalkClientEvent("private_input_aggregate_drop_image_too_large", {
           parts: queued.length,
           source,
         }, "warning");
       } else {
-        privateInputAggregateQueueRef.current = [...queued, ...privateInputAggregateQueueRef.current];
+        setPrivateInputAggregateQueue([...queued, ...privateInputAggregateQueueRef.current]);
         privateInputAggregateHoldUntilNextInputRef.current = true;
+        privateInputAggregateDeadlineRef.current = 0;
         persistPrivateInputAggregate("hold_after_failure");
         logSumiTalkClientEvent("private_input_aggregate_hold_after_failure", {
           parts: queued.length,
@@ -2408,6 +2670,7 @@ export function MainChatScreen({
       }
     } else {
       privateInputAggregateHoldUntilNextInputRef.current = false;
+      privateInputAggregateDeadlineRef.current = 0;
       persistPrivateInputAggregate("flush_ok");
     }
   }
@@ -2717,8 +2980,6 @@ export function MainChatScreen({
       }
       messagesRef.current = failedMessages;
       setMessages(failedMessages);
-      setActiveSendRequestId("");
-      setCancellingSend(false);
       setActiveSendStageLabel("");
       setSending(false);
       toast(`本地聊天存储失败：${errorMessage}`);
@@ -2735,7 +2996,6 @@ export function MainChatScreen({
         source,
         abortController,
       };
-      setActiveSendRequestId(clientRequestId);
       logSumiTalkSendStage("chat_send_start", {
         source,
         requestPath,
@@ -2943,8 +3203,6 @@ export function MainChatScreen({
         if (activeChatRequestRef.current?.clientRequestId === clientRequestId) {
           activeChatRequestRef.current = null;
         }
-        setActiveSendRequestId((prev) => (prev === clientRequestId ? "" : prev));
-        setCancellingSend(false);
         setActiveSendStageLabel("");
         setSending(false);
       }
@@ -3003,43 +3261,6 @@ export function MainChatScreen({
     });
     if (sent && quote) setQuotedBubble(null);
     return sent;
-  }
-
-  async function cancelActiveSumiTalkSend() {
-    const active = activeChatRequestRef.current;
-    if (!active || cancellingSend) return;
-    setCancellingSend(true);
-    logSumiTalkSendStage("chat_cancel_click", {
-      source: active.source,
-      attemptId: active.attemptId,
-      clientRequestId: active.clientRequestId,
-      operationId: active.operationId,
-      jobId: active.jobId,
-    }, "warning");
-    try {
-      active.abortController.abort();
-    } catch {}
-    if (active.jobId) {
-      try {
-        await cancelSumiTalkChatJob(active.jobId, "client_cancelled");
-        logSumiTalkSendStage("chat_cancel_post_ok", {
-          source: active.source,
-          attemptId: active.attemptId,
-          clientRequestId: active.clientRequestId,
-          operationId: active.operationId,
-          jobId: active.jobId,
-        }, "warning");
-      } catch (e: any) {
-        logSumiTalkClientEvent("chat_cancel_post_error", {
-          source: active.source,
-          attemptId: active.attemptId,
-          clientRequestId: active.clientRequestId,
-          operationId: active.operationId,
-          jobId: active.jobId,
-          error: String(e?.message || e),
-        }, "warning");
-      }
-    }
   }
 
   function openImagePicker() {
@@ -3328,12 +3549,26 @@ export function MainChatScreen({
   );
   const trimmedInput = input.trim();
   const hasPendingImageDrafts = pendingImageDrafts.length > 0;
+  const canSendCurrentInput = Boolean(trimmedInput || hasPendingImageDrafts);
   const canSubmitWhileBusy = groupChatMode && (
     isBenbenCancelCommand(trimmedInput)
     || (groupDiscussionRunning && isGroupDiscussionStopCommand(trimmedInput))
     || isGroupDiscussionContinueCommand(trimmedInput)
   );
-  const canCancelSend = sending && Boolean(activeSendRequestId) && !canSubmitWhileBusy;
+  const canCancelQueuedSend = !voiceInputOpen
+    && !canSendCurrentInput
+    && !sending
+    && !mediaBusy
+    && privateInputAggregateCancelable
+    && privateInputAggregateCount > 0;
+  const bubbleMenuItemCount = bubbleMenu
+    ? 2
+      + (bubbleMenu.hasVoice ? 1 : 0)
+      + (bubbleMenu.canRetry ? 1 : 0)
+      + (bubbleMenu.aggregateEditable ? 1 : 0)
+      + (bubbleMenu.aggregateCanEditText ? 1 : 0)
+    : 0;
+  const bubbleMenuColumns = Math.min(3, Math.max(1, bubbleMenuItemCount));
   const searchMatches = useMemo<ChatSearchMatch[]>(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return [];
@@ -3416,7 +3651,42 @@ export function MainChatScreen({
     requestAnimationFrame(() => {
       el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
     });
-  }, [messages, searchOpen]);
+  }, [messages, searchOpen, keyboardOffset, voiceInputOpen, plusOpen, quotedBubble]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+
+    const updateKeyboardOffset = () => {
+      const visibleHeight = viewport
+        ? Math.round(viewport.height + viewport.offsetTop)
+        : Math.round(window.innerHeight);
+      const layoutHeight = Math.round(window.innerHeight);
+      const baseline = Math.max(chatViewportHeightRef.current || 0, visibleHeight, layoutHeight);
+      const nextOffset = Math.max(0, baseline - visibleHeight);
+      const normalizedOffset = nextOffset > 80 ? nextOffset : 0;
+
+      if (!normalizedOffset) {
+        const nextHeight = Math.max(visibleHeight, layoutHeight);
+        if (nextHeight > 0 && nextHeight !== chatViewportHeightRef.current) {
+          chatViewportHeightRef.current = nextHeight;
+          setChatViewportHeight(nextHeight);
+        }
+      }
+
+      setKeyboardOffset(normalizedOffset);
+    };
+
+    updateKeyboardOffset();
+    viewport?.addEventListener("resize", updateKeyboardOffset);
+    viewport?.addEventListener("scroll", updateKeyboardOffset);
+    window.addEventListener("resize", updateKeyboardOffset);
+
+    return () => {
+      viewport?.removeEventListener("resize", updateKeyboardOffset);
+      viewport?.removeEventListener("scroll", updateKeyboardOffset);
+      window.removeEventListener("resize", updateKeyboardOffset);
+    };
+  }, []);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -3449,20 +3719,21 @@ export function MainChatScreen({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex h-[100dvh] min-h-[100svh] w-full max-w-full flex-col overflow-hidden overscroll-none bg-[#F8F9FA]"
+      className="fixed left-0 top-0 z-30 flex w-full max-w-full flex-col overflow-hidden overscroll-none bg-[#F8F9FA]"
       style={{
         fontFamily: chatFontFamily,
+        height: chatViewportHeight ? `${chatViewportHeight}px` : "100dvh",
       }}
     >
       {hasCustomChatBackground ? (
         <>
           <div
-            className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full bg-cover bg-center"
-            style={{ backgroundImage: `url(${chatBackgroundImage})` }}
+            className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-cover bg-center"
+            style={{ backgroundImage: `url(${chatBackgroundImage})`, height: chatViewportHeight ? `${chatViewportHeight}px` : "100lvh" }}
           />
           <div
-            className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full"
-            style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})` }}
+            className="pointer-events-none absolute left-0 top-0 z-0 w-full"
+            style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})`, height: chatViewportHeight ? `${chatViewportHeight}px` : "100lvh" }}
           />
         </>
       ) : null}
@@ -3545,6 +3816,7 @@ export function MainChatScreen({
       <div
         ref={messagesScrollRef}
         className={`relative z-10 min-h-0 w-full max-w-full flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pb-5 ${messagesTopPaddingClass}`}
+        style={{ paddingBottom: keyboardOffset ? `calc(${keyboardOffset}px + 1.25rem)` : undefined }}
       >
         <div className="space-y-4">
           {groupedMessages.map((group, index) => (
@@ -3570,6 +3842,7 @@ export function MainChatScreen({
                         const showText = hasText && !hasVoice && !isVoiceTranscriptEcho(part.content, audioAttachments);
                         const bubbleTarget = buildBubbleMenuTarget({
                           id: matchId,
+                          messageId: part.messageId,
                           role: group.role,
                           content: part.content,
                           attachments: part.attachments,
@@ -3654,6 +3927,7 @@ export function MainChatScreen({
                         const hasVoice = audioAttachments.length > 0;
                         const bubbleTarget = buildBubbleMenuTarget({
                           id: matchId,
+                          messageId: part.messageId,
                           role: group.role,
                           content: part.content,
                           attachments: part.attachments,
@@ -3799,9 +4073,12 @@ export function MainChatScreen({
         className="hidden"
         onChange={handleDocumentInputChange}
       />
-      <div className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] ${chatFooterClass}`}>
-          <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[218px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
-            <div className="grid grid-cols-3 gap-x-3 gap-y-4 px-5 pb-5 pt-5">
+      <div
+        className={`relative z-20 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] transition-transform duration-200 ease-out will-change-transform ${chatFooterClass}`}
+        style={{ transform: keyboardOffset ? `translate3d(0, -${keyboardOffset}px, 0)` : undefined }}
+      >
+          <div className={`relative z-10 mx-4 overflow-hidden rounded-[28px] border transition-all duration-300 ease-in-out ${chatPlusPanelClass} ${plusOpen ? "mb-2 h-[194px] opacity-100" : "mb-0 h-0 border-transparent opacity-0"}`}>
+            <div className="grid grid-cols-3 gap-x-3 gap-y-3 px-5 pb-4 pt-4">
               <ChatActionButton label="图片" onClick={openImagePicker} />
               <ChatActionButton label="画画" onClick={openDoodleBoard} />
               <ChatActionButton label="文档" onClick={openDocumentPicker} />
@@ -3829,8 +4106,9 @@ export function MainChatScreen({
                 <span className="text-[11px] font-semibold text-gray-600">图片顺序</span>
                 <button
                   type="button"
-                  className="rounded-full px-2 py-0.5 text-[11px] font-medium text-gray-400 active:bg-white/60 active:text-gray-700"
+                  className="rounded-full px-2 py-0.5 text-[11px] font-medium text-gray-400 active:bg-white/60 active:text-gray-700 disabled:opacity-35"
                   onClick={clearPendingImageDrafts}
+                  disabled={mediaBusy}
                 >
                   清空
                 </button>
@@ -3850,8 +4128,9 @@ export function MainChatScreen({
                       </span>
                       <button
                         type="button"
-                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-white/85 text-[14px] font-semibold leading-none text-gray-500 shadow-sm active:bg-white"
+                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-white/85 text-[14px] font-semibold leading-none text-gray-500 shadow-sm active:bg-white disabled:opacity-35"
                         onClick={() => removePendingImageDraft(draft.id)}
+                        disabled={mediaBusy}
                         aria-label="移除图片"
                         title="移除图片"
                       >
@@ -3863,7 +4142,7 @@ export function MainChatScreen({
                         type="button"
                         className="flex h-6 w-6 items-center justify-center rounded-full bg-white/55 text-[15px] font-semibold text-gray-500 active:bg-white disabled:opacity-30"
                         onClick={() => movePendingImageDraft(draft.id, -1)}
-                        disabled={index === 0}
+                        disabled={mediaBusy || index === 0}
                         aria-label="前移图片"
                         title="前移图片"
                       >
@@ -3873,7 +4152,7 @@ export function MainChatScreen({
                         type="button"
                         className="flex h-6 w-6 items-center justify-center rounded-full bg-white/55 text-[15px] font-semibold text-gray-500 active:bg-white disabled:opacity-30"
                         onClick={() => movePendingImageDraft(draft.id, 1)}
-                        disabled={index === pendingImageDrafts.length - 1}
+                        disabled={mediaBusy || index === pendingImageDrafts.length - 1}
                         aria-label="后移图片"
                         title="后移图片"
                       >
@@ -3963,11 +4242,10 @@ export function MainChatScreen({
             >
               <KeyboardIconMini />
             </button>
-          ) : canCancelSend ? (
+          ) : canCancelQueuedSend ? (
             <button
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
-              onClick={() => void cancelActiveSumiTalkSend()}
-              disabled={cancellingSend}
+              onClick={() => void cancelPendingPrivateInputAggregate()}
               aria-label="取消发送"
               title="取消发送"
             >
@@ -3980,7 +4258,7 @@ export function MainChatScreen({
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-900 transition-opacity active:opacity-50 disabled:opacity-50"
               onPointerDown={(event) => event.preventDefault()}
               onClick={() => void sendMessage()}
-              disabled={(!trimmedInput && !hasPendingImageDrafts) || mediaBusy || (sending && !canSubmitWhileBusy)}
+              disabled={!canSendCurrentInput || mediaBusy || (sending && !canSubmitWhileBusy)}
               aria-label="发送"
               title="发送"
             >
@@ -4004,12 +4282,12 @@ export function MainChatScreen({
               style={{
                 left: `${bubbleMenu.x}px`,
                 top: `${bubbleMenu.y}px`,
-                gridTemplateColumns: `repeat(${2 + (bubbleMenu.hasVoice ? 1 : 0) + (bubbleMenu.canRetry ? 1 : 0)}, minmax(58px, 1fr))`,
+                gridTemplateColumns: `repeat(${bubbleMenuColumns}, minmax(58px, 1fr))`,
               }}
             >
               <div
                 className="grid gap-1"
-                style={{ gridTemplateColumns: `repeat(${2 + (bubbleMenu.hasVoice ? 1 : 0) + (bubbleMenu.canRetry ? 1 : 0)}, minmax(58px, 1fr))` }}
+                style={{ gridTemplateColumns: `repeat(${bubbleMenuColumns}, minmax(58px, 1fr))` }}
               >
                 <button
                   type="button"
@@ -4041,6 +4319,24 @@ export function MainChatScreen({
                     onClick={() => retryBubbleTarget(bubbleMenu)}
                   >
                     重试
+                  </button>
+                ) : null}
+                {bubbleMenu.aggregateCanEditText ? (
+                  <button
+                    type="button"
+                    className="rounded-[12px] px-2 py-2.5 text-center text-[13px] font-semibold text-white active:bg-white/15"
+                    onClick={() => void deletePendingPrivateInput(bubbleMenu, "edit")}
+                  >
+                    编辑
+                  </button>
+                ) : null}
+                {bubbleMenu.aggregateEditable ? (
+                  <button
+                    type="button"
+                    className="rounded-[12px] px-2 py-2.5 text-center text-[13px] font-semibold text-[#ffe4e4] active:bg-white/15"
+                    onClick={() => void deletePendingPrivateInput(bubbleMenu, "delete")}
+                  >
+                    删除
                   </button>
                 ) : null}
               </div>

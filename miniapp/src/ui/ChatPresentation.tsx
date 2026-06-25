@@ -1085,22 +1085,23 @@ export function SummaryBlock({
 }
 
 export function ChatActionButton({ label, onClick }: { label: string; onClick: () => void }) {
+  const actionIconClass = "h-[22px] w-[22px] stroke-[1.6]";
   const icon = label === "表情包"
-    ? <SmileIconMini />
+    ? <SmileIconMini className={actionIconClass} />
     : label === "出行规划"
-      ? <RouteIconMini />
+      ? <RouteIconMini className={actionIconClass} />
       : label === "画画"
-        ? <BrushIconMini />
+        ? <BrushIconMini className={actionIconClass} />
       : label === "图片"
-        ? <ImageIconMini />
+        ? <ImageIconMini className={actionIconClass} />
         : label === "文档"
-          ? <FileTextIcon />
+          ? <FileTextIcon className={actionIconClass} />
         : label === "语音" || label === "发送" || label === "停止"
-          ? <MicIconMini />
-          : <PhoneIconLarge />;
+          ? <MicIconMini className={actionIconClass} />
+          : <PhoneIconLarge className={actionIconClass} />;
   return (
     <button className="group flex flex-col items-center" onClick={onClick}>
-      <div className="mb-2.5 flex h-[60px] w-[60px] items-center justify-center rounded-[20px] bg-[#F8F9FA] text-gray-600 transition-transform active:scale-95">
+      <div className="mb-2 flex h-[52px] w-[52px] items-center justify-center rounded-[18px] bg-[#F8F9FA] text-gray-600 transition-transform active:scale-95">
         {icon}
       </div>
       <span className="text-[11px] font-medium tracking-wide text-gray-500">{label}</span>
