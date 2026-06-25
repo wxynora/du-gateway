@@ -558,7 +558,8 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     deltaX: number;
     direction: 1 | -1;
     accepted: boolean;
-  }>({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+    targetIndex: number | null;
+  }>({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
   const dragStartX = useRef<number | null>(null);
   const suppressClickRef = useRef(false);
   const isRight = align === "right";
@@ -590,7 +591,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
   const layerTransition = swipe.phase === "dragging"
     ? "none"
     : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease-out";
-  const targetIndex = canSwipeDirection ? normalizedIndex + swipeDirection : -1;
+  const targetIndex = swipe.targetIndex ?? (canSwipeDirection ? normalizedIndex + swipeDirection : -1);
   const visualIndex = normalizedIndex + swipeDirection * visualProgress;
 
   function stackPose(offset: number) {
@@ -638,7 +639,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     event.stopPropagation();
     dragStartX.current = event.clientX;
     suppressClickRef.current = false;
-    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -653,14 +654,14 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     const deltaX = event.clientX - startX;
     if (Math.abs(deltaX) > 6) suppressClickRef.current = true;
     if (Math.abs(deltaX) <= dragActivationDistance) {
-      if (swipe.phase !== "idle") setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+      if (swipe.phase !== "idle") setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
       return;
     }
     const direction: 1 | -1 = deltaX < 0 ? 1 : -1;
     const effectiveDeltaX = deltaX < 0
       ? deltaX + dragActivationDistance
       : deltaX - dragActivationDistance;
-    setSwipe({ phase: "dragging", deltaX: effectiveDeltaX, direction, accepted: false });
+    setSwipe({ phase: "dragging", deltaX: effectiveDeltaX, direction, accepted: false, targetIndex: null });
   }
 
   function handlePointerUp(event: React.PointerEvent<HTMLButtonElement>) {
@@ -670,35 +671,36 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
     if (startX == null) return;
     const deltaX = event.clientX - startX;
     if (Math.abs(deltaX) <= 6) {
-      setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+      setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
       return;
     }
     if (Math.abs(deltaX) <= dragActivationDistance) {
       suppressClickRef.current = true;
-      setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+      setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
       return;
     }
     const direction: 1 | -1 = deltaX < 0 ? 1 : -1;
     const accepted = Math.abs(deltaX) >= commitDistance && canSwipe(direction);
+    const nextIndex = Math.max(0, Math.min(normalizedIndex + direction, imageItems.length - 1));
     const effectiveDeltaX = deltaX < 0
       ? deltaX + dragActivationDistance
       : deltaX - dragActivationDistance;
     suppressClickRef.current = true;
     if (!accepted) {
-      setSwipe({ phase: "idle", deltaX: 0, direction, accepted: false });
+      setSwipe({ phase: "idle", deltaX: 0, direction, accepted: false, targetIndex: null });
       return;
     }
-    setSwipe({ phase: "settling", deltaX: effectiveDeltaX, direction, accepted });
+    setSwipe({ phase: "settling", deltaX: effectiveDeltaX, direction, accepted, targetIndex: nextIndex });
   }
 
   function handleSwipeTransitionEnd(event: React.TransitionEvent<HTMLSpanElement>) {
     if (event.target !== event.currentTarget || event.propertyName !== "transform" || swipe.phase !== "settling") return;
     const index = Number((event.currentTarget as HTMLSpanElement).dataset.imageIndex || "-1");
-    if (swipe.accepted && index !== normalizedIndex + swipe.direction) return;
-    const direction = swipe.direction;
+    const nextIndex = swipe.targetIndex ?? Math.max(0, Math.min(normalizedIndex + swipe.direction, imageItems.length - 1));
+    if (swipe.accepted && index !== nextIndex) return;
     const accepted = swipe.accepted;
-    if (accepted) setActiveIndex((index) => Math.max(0, Math.min(index + direction, imageItems.length - 1)));
-    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+    if (accepted) setActiveIndex(nextIndex);
+    setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
   }
 
   function handleClick() {
@@ -722,7 +724,7 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
         onPointerCancel={(event) => {
           event.stopPropagation();
           dragStartX.current = null;
-          setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false });
+          setSwipe({ phase: "idle", deltaX: 0, direction: 1, accepted: false, targetIndex: null });
         }}
         onTouchStart={stopBubbleGesture}
         onTouchMove={stopBubbleGesture}
