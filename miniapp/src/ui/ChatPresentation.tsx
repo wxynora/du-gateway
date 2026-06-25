@@ -635,16 +635,21 @@ function ImageAttachmentGallery({ items, align }: { items: ChatAttachment[]; ali
       return { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1, zIndex: 20 };
     }
     const side = offset > 0 ? 1 : -1;
+    const towardAvatar = side === (isRight ? 1 : -1);
     const depth = Math.min(rawDepth, 3);
     const firstLayer = Math.min(depth, 1);
     const extraDepth = Math.max(depth - 1, 0);
-    const x = side * (18 * firstLayer + extraDepth * 12);
+    const xSpread = towardAvatar
+      ? (8 * firstLayer + extraDepth * 4)
+      : (18 * firstLayer + extraDepth * 12);
     const y = 6 * firstLayer + extraDepth * 5;
     const scale = 1 - depth * 0.04;
-    const rotate = side * (1.15 * firstLayer + extraDepth * 0.5);
-    const opacity = Math.max(0.44, 1 - depth * 0.18);
+    const rotateSpread = towardAvatar
+      ? (0.45 * firstLayer + extraDepth * 0.2)
+      : (1.15 * firstLayer + extraDepth * 0.5);
+    const opacity = Math.max(towardAvatar ? 0.34 : 0.44, 1 - depth * (towardAvatar ? 0.22 : 0.18));
     const zIndex = Math.max(1, 10 - Math.ceil(depth));
-    return { x, y, scale, rotate, opacity, zIndex };
+    return { x: side * xSpread, y, scale, rotate: side * rotateSpread, opacity, zIndex };
   }
 
   function mixPose(from: CardPose, to: CardPose, progress: number): CardPose {
