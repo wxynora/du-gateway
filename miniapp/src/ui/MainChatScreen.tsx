@@ -3760,7 +3760,7 @@ export function MainChatScreen({
   return (
     <div
       ref={chatRootRef}
-      className="fixed left-0 top-0 z-30 flex w-full max-w-full flex-col overflow-hidden overscroll-none bg-[#F8F9FA]"
+      className="fixed left-0 top-0 z-30 flex w-full max-w-full flex-col overflow-hidden overscroll-none bg-transparent"
       style={{
         fontFamily: chatFontFamily,
         "--chat-viewport-height": chatViewportHeightRef.current ? `${chatViewportHeightRef.current}px` : "100dvh",
@@ -3769,15 +3769,16 @@ export function MainChatScreen({
         height: "var(--chat-viewport-height)",
       } as React.CSSProperties}
     >
+      <div className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full bg-[#F8F9FA]" />
       {hasCustomChatBackground ? (
         <>
           <div
-            className="pointer-events-none absolute left-0 top-0 z-0 w-full bg-cover bg-center"
-            style={{ backgroundImage: `url(${chatBackgroundImage})`, height: "var(--chat-viewport-height)" }}
+            className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full bg-cover bg-center"
+            style={{ backgroundImage: `url(${chatBackgroundImage})` }}
           />
           <div
-            className="pointer-events-none absolute left-0 top-0 z-0 w-full"
-            style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})`, height: "var(--chat-viewport-height)" }}
+            className="pointer-events-none fixed left-0 top-0 z-0 h-[100lvh] w-full"
+            style={{ backgroundColor: `rgba(248,249,250,${chatBackgroundOverlayAlpha})` }}
           />
         </>
       ) : null}
