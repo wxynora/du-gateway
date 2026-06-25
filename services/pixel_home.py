@@ -641,6 +641,69 @@ def build_pixel_home_mode_state() -> dict:
     }
 
 
+def _sleep_session_night_date(now_dt: datetime) -> str:
+    if now_dt.hour < PIXEL_HOME_DAY_START_HOUR:
+        return (now_dt.date() - timedelta(days=1)).isoformat()
+    return now_dt.date().isoformat()
+
+
+def build_sleep_wakeup_state(now_dt: datetime | None = None) -> dict:
+    now_ref = now_dt or _now_dt()
+    is_night = now_ref.hour >= PIXEL_HOME_NIGHT_START_HOUR or now_ref.hour < PIXEL_HOME_DAY_START_HOUR
+    sleeping, source = _sleeping_state(now_ref, is_night)
+    night_date = _sleep_session_night_date(now_ref)
+    anchor = ""
+    if sleeping:
+        daily = r2_store.get_du_daily_state() or {}
+        sense = r2_store.get_sense_latest() or {}
+        screen = sense.get("screen") if isinstance(sense.get("screen"), dict) else {}
+        screen_event = str(screen.get("event") or "").strip().lower()
+        screen_interactive = screen.get("interactive") is True or str(screen.get("interactive") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if screen_event in {"screen_on", "user_present"} or (screen_event == "app_active" and screen_interactive):
+            sleeping = False
+            source = "awake_screen_latest"
+            screen = {}
+        screen_off_anchor = ""
+        if str(screen.get("event") or "").strip().lower() == "screen_off":
+            screen_off_anchor = str(
+                screen.get("screenOffSince")
+                or screen.get("lastScreenOffAt")
+                or screen.get("occurredAt")
+                or screen.get("observedAt")
+                or ""
+            ).strip()
+        if source == "screen_off":
+            anchor = screen_off_anchor
+        elif source == "sleep_candidate":
+            anchor = screen_off_anchor or str(daily.get("sleep_candidate_at") or daily.get("sleep_candidate_day") or "").strip()
+        elif source in {"sleep_closed_for_date", "today_finalized_for_date"}:
+            anchor = screen_off_anchor or str(
+                daily.get("sleep_candidate_at")
+                or daily.get("sleep_candidate_day")
+                or daily.get(source)
+                or daily.get("last_trigger_at")
+                or ""
+            ).strip()
+        if not anchor:
+            anchor = night_date
+    session_key = f"{night_date}|{anchor[:32]}" if sleeping else ""
+    return {
+        "ok": True,
+        "is_night": is_night,
+        "is_sleeping": sleeping,
+        "source": source,
+        "night_date": night_date,
+        "sleep_anchor": anchor,
+        "sleep_session_key": session_key,
+        "updated_at": now_ref.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+    }
+
+
 def mode_label(mode: Any) -> str:
     return {"day": "白天", "nightOn": "夜里开灯", "nightOff": "夜里关灯"}.get(str(mode or ""), "白天")
 

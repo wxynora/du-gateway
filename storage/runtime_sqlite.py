@@ -24,6 +24,7 @@ _RUNTIME_TABLES = (
     "schedule_items",
     "schedule_fired_keys",
     "conversation_followups",
+    "spring_dream_sessions",
 )
 
 
@@ -174,6 +175,19 @@ def ensure_schema() -> None:
                     ON conversation_followups(status, trigger_at);
                 CREATE INDEX IF NOT EXISTS idx_conversation_followups_thread
                     ON conversation_followups(thread_key);
+
+                CREATE TABLE IF NOT EXISTS spring_dream_sessions (
+                    sleep_session_key TEXT PRIMARY KEY,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    max_per_sleep INTEGER NOT NULL DEFAULT 3,
+                    last_theme_id TEXT NOT NULL DEFAULT '',
+                    sleep_source TEXT NOT NULL DEFAULT '',
+                    reserved_at TEXT NOT NULL DEFAULT '',
+                    last_sent_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_spring_dream_sessions_updated
+                    ON spring_dream_sessions(updated_at);
                 """
             )
         _SCHEMA_READY = True

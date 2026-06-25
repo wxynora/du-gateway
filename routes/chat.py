@@ -655,6 +655,9 @@ def _compact_gateway_event_for_archive(user_msg: dict, *, wakeup_kind: str = "")
     elif kind in {"proactive_forum", "random_forum"}:
         label = "随机唤醒执行"
         content = "你刚才选择了逛论坛，现在去逛。"
+    elif kind in {"spring_dream", "random_spring_dream"}:
+        label = "随机唤醒"
+        content = "睡眠期随机唤醒触发了一次春梦。"
     elif kind in {"proactive_trigger", "pixel_home"} or "[Proactive trigger fact]" in text:
         label = "后端触发"
         content = "这是一次后端触发提醒。"
@@ -824,6 +827,10 @@ def _million_plan_archived_content(window_id: str, turn_id: str) -> str:
 
 def _should_archive_followup_generation_request() -> bool:
     return (request.headers.get("X-DU-FOLLOWUP-ARCHIVE") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _disable_followup_request() -> bool:
+    return (request.headers.get("X-DU-DISABLE-FOLLOWUP") or "").strip().lower() in ("1", "true", "yes")
 
 
 def _is_delayed_followup_generation_request() -> bool:
@@ -1286,12 +1293,13 @@ def _stream_with_r2_archive(
             source_messages=body.get("messages") or [],
             reply_channel=reply_channel,
         )
-        try:
-            cleaned_visible, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=visible)
-            if queued or cleaned_visible != visible:
-                visible = cleaned_visible
-        except Exception:
-            logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
+        if not _disable_followup_request():
+            try:
+                cleaned_visible, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=visible)
+                if queued or cleaned_visible != visible:
+                    visible = cleaned_visible
+            except Exception:
+                logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
         if tool_rounds_used > 0 and not visible.strip():
             logger.error("工具续轮结束但最终正文仍为空（流式路径） window_id=%s tool_rounds_used=%s", window_id, tool_rounds_used)
         full_reasoning = "".join(reasoning_parts).strip()
@@ -1703,7 +1711,7 @@ def chat_completions():
     )
     body = _inject_million_plan_player_prompt_if_enabled(body)
     body = _inject_channel_nsfw_system(body, reply_channel=reply_channel)
-    if reply_channel != "xiaoai":
+    if reply_channel != "xiaoai" and not _disable_followup_request():
         body = _inject_followup_instruction(
             body,
             is_followup_generation=_is_followup_generation_request(),
@@ -2007,36 +2015,37 @@ def chat_completions():
         # 剥离 content / 结构化 delta 里的 thinking 块，避免泄漏给客户端（RikkaHub / Telegram 等）；
         # R2 存档会从 archive_thinking_blocks_for_r2 回填原始 thinking_blocks。
         resp_json = _strip_thinking_from_response_json(resp_json)
-        try:
-            msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
-            content = msg.get("content")
-            if isinstance(content, str):
-                cleaned_content, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=content)
-                if queued or cleaned_content != content:
-                    msg["content"] = cleaned_content
-                    (resp_json.get("choices") or [{}])[0]["message"] = msg
-            elif isinstance(content, list):
-                merged_text = []
-                changed = False
-                for part in content:
-                    if not isinstance(part, dict):
-                        merged_text.append(part)
-                        continue
-                    if str(part.get("type") or "").strip() != "text":
-                        merged_text.append(part)
-                        continue
-                    text = str(part.get("text") or "")
-                    cleaned_text, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=text)
-                    if queued or cleaned_text != text:
-                        changed = True
-                        merged_text.append({**part, "text": cleaned_text})
-                    else:
-                        merged_text.append(part)
-                if changed:
-                    msg["content"] = merged_text
-                    (resp_json.get("choices") or [{}])[0]["message"] = msg
-        except Exception:
-            logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
+        if not _disable_followup_request():
+            try:
+                msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}
+                content = msg.get("content")
+                if isinstance(content, str):
+                    cleaned_content, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=content)
+                    if queued or cleaned_content != content:
+                        msg["content"] = cleaned_content
+                        (resp_json.get("choices") or [{}])[0]["message"] = msg
+                elif isinstance(content, list):
+                    merged_text = []
+                    changed = False
+                    for part in content:
+                        if not isinstance(part, dict):
+                            merged_text.append(part)
+                            continue
+                        if str(part.get("type") or "").strip() != "text":
+                            merged_text.append(part)
+                            continue
+                        text = str(part.get("text") or "")
+                        cleaned_text, queued = queue_followup(window_id=window_id, headers=headers, assistant_text=text)
+                        if queued or cleaned_text != text:
+                            changed = True
+                            merged_text.append({**part, "text": cleaned_text})
+                        else:
+                            merged_text.append(part)
+                    if changed:
+                        msg["content"] = merged_text
+                        (resp_json.get("choices") or [{}])[0]["message"] = msg
+            except Exception:
+                logger.warning("处理延迟续话标记失败 window_id=%s", window_id, exc_info=True)
         if reply_channel == "tg" and tool_rounds_used > 0:
             try:
                 response_msg = (((resp_json or {}).get("choices") or [{}])[0] or {}).get("message") or {}

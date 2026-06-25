@@ -494,6 +494,46 @@ def _dispatch_choice_dialog_reply(channel: str, target: str, text: str, created_
     return False
 
 
+def _archive_wakeup_after_delivery(
+    *,
+    window_id: str,
+    request_messages: list,
+    assistant_text: str,
+    wakeup_kind: str,
+    reply_channel: str,
+) -> bool:
+    kind = str(wakeup_kind or "").strip().lower()
+    if kind in {"spring_dream", "random_spring_dream"}:
+        archive_user = {"role": "event", "archive_label": "随机唤醒", "content": "睡眠期随机唤醒触发了一次春梦。"}
+    else:
+        archive_user = {"role": "event", "archive_label": "网关提醒", "content": "这是一次网关唤醒提醒。"}
+    archive_assistant = {"role": "assistant", "content": str(assistant_text or "").strip()}
+    if not archive_assistant["content"]:
+        return False
+    try:
+        from pipeline.pipeline import step_archive_round
+        from services.chat_archive_helpers import run_nonstream_post_archive_in_background
+
+        archived = step_archive_round(
+            str(window_id or "").strip(),
+            request_messages if isinstance(request_messages, list) else [],
+            archive_assistant,
+            round_cleaned_for_r2=[archive_user, archive_assistant],
+        )
+        if archived:
+            run_nonstream_post_archive_in_background(
+                window_id=str(window_id or "").strip(),
+                round_index=int(archived.get("round_index") or 0),
+                round_messages=archived.get("round_messages") or [archive_user, archive_assistant],
+                reply_channel=str(reply_channel or "").strip(),
+                skip_dynamic_layer=True,
+            )
+            return True
+    except Exception:
+        logger.warning("后端事件投递后归档失败 window_id=%s kind=%s", window_id, kind, exc_info=True)
+    return False
+
+
 def _send_wakeup_event(
     window_id: str,
     target: str,
@@ -509,6 +549,8 @@ def _send_wakeup_event(
     preferred_target_override: str = "",
     preferred_meta_override: dict | None = None,
     lock_preferred_channel: bool = False,
+    allow_followup: bool = True,
+    archive_after_delivery: bool = False,
 ) -> dict:
     """立即让渡基于一个后端事件生成回应，并通过最近对话入口或主动入口发出。事件唤醒默认归档，避免后续对话断层。"""
     try:
@@ -582,8 +624,10 @@ def _send_wakeup_event(
     kind = str(wakeup_kind or "").strip()
     if kind:
         headers["X-DU-WAKEUP-KIND"] = kind
-    if archive:
+    if archive and not archive_after_delivery:
         headers["X-DU-FOLLOWUP-ARCHIVE"] = "1"
+    if not allow_followup:
+        headers["X-DU-DISABLE-FOLLOWUP"] = "1"
     url = TELEGRAM_GATEWAY_URL.rstrip("/") + TELEGRAM_CHAT_PATH
     try:
         r = requests.post(url, headers=headers, json=body, timeout=120)
@@ -629,6 +673,15 @@ def _send_wakeup_event(
             attempted_channels.append(channel)
             send_target = preferred_target if channel == preferred_channel else str(target or "").strip()
             if _dispatch_choice_dialog_reply(channel, send_target, outbound, created_at=created_at):
+                archive_ok = True
+                if archive and archive_after_delivery:
+                    archive_ok = _archive_wakeup_after_delivery(
+                        window_id=context_window_id,
+                        request_messages=body.get("messages") or [],
+                        assistant_text=outbound,
+                        wakeup_kind=kind,
+                        reply_channel=channel,
+                    )
                 return {
                     "ok": True,
                     "channel": channel,
@@ -636,6 +689,7 @@ def _send_wakeup_event(
                     "preferred_channel": preferred_channel,
                     "preferred_channel_at": str(preferred_meta.get("at") or ""),
                     "locked_channel": bool(lock_preferred_channel),
+                    "archive_ok": bool(archive_ok),
                     "reply_preview": outbound[:120],
                     "error": "",
                 }
@@ -778,6 +832,26 @@ def send_proactive_trigger_wakeup(window_id: str, target: str, event_text: str, 
         archive=True,
         stable_proactive_channel=True,
         wakeup_kind="proactive_trigger",
+    )
+
+
+def send_spring_dream_wakeup(window_id: str, target: str, event_text: str, created_at: str | None = None) -> dict:
+    """睡眠期随机唤醒命中春梦时，让渡基于梦境触发自然生成一条外发。"""
+    return _send_wakeup_event(
+        window_id=window_id,
+        target=target,
+        event_text=event_text,
+        created_at=created_at,
+        archive=True,
+        stable_proactive_channel=True,
+        wakeup_kind="spring_dream",
+        system_event=True,
+        allow_followup=False,
+        archive_after_delivery=True,
+        extra_instruction=(
+            "这是睡眠期随机唤醒触发的一段春梦，不是小玥在聊天框里发来的消息。"
+            "请直接以你梦醒后对小玥说话的口吻自然发出；不要解释系统流程，不要输出 JSON 或工具说明。"
+        ),
     )
 
 

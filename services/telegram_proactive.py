@@ -43,8 +43,9 @@ from services.telegram_bot import (
 )
 from services.entry_style_prompt import entry_style_for_channel
 from services import wakeup_state
-from services.conversation_followup import FOLLOWUP_TICK_SECONDS, tick_conversation_followups
+from services.conversation_followup import FOLLOWUP_TICK_SECONDS, send_spring_dream_wakeup, tick_conversation_followups
 from services.du_daily import infer_sleep_rollover_trigger, request_gateway_maintenance
+from services.spring_dream import maybe_prepare_spring_dream_wakeup, record_spring_dream_sent, release_spring_dream_slot
 
 logger = get_logger(__name__)
 _GATEWAY_DYNAMIC_SYSTEM_MARKER = "__dynamic__"
@@ -1379,6 +1380,67 @@ def _ask_du_after_surf_result(
         )
 
 
+def _try_spring_dream_wakeup(window_id: str, uid: int, now_dt: datetime, now_iso: str) -> dict | None:
+    try:
+        prepared = maybe_prepare_spring_dream_wakeup(now_dt=now_dt)
+    except Exception as e:
+        logger.warning("春梦唤醒准备失败，继续普通随机主动决策 window_id=%s error=%s", window_id, e)
+        return None
+    if not prepared:
+        return None
+    prompt = str(prepared.get("prompt") or "").strip()
+    if not prompt:
+        try:
+            release_spring_dream_slot(prepared)
+        except Exception as e:
+            logger.warning("春梦唤醒 prompt 为空后释放预占名额失败 session=%s error=%s", str(prepared.get("sleep_session_key") or ""), e)
+        return None
+    result = send_spring_dream_wakeup(
+        window_id=window_id,
+        target=str(uid or "").strip(),
+        event_text=prompt,
+        created_at=now_iso,
+    )
+    ok = bool((result or {}).get("ok"))
+    stored = False
+    if not ok:
+        try:
+            release_spring_dream_slot(prepared)
+        except Exception as e:
+            logger.warning("春梦唤醒失败后释放预占名额失败 session=%s error=%s", str(prepared.get("sleep_session_key") or ""), e)
+        logger.warning(
+            "春梦唤醒发送失败，继续普通随机主动决策 window_id=%s error=%s",
+            window_id,
+            str((result or {}).get("error") or ""),
+        )
+        return None
+    try:
+        stored = record_spring_dream_sent(prepared, sent_at=now_iso)
+    except Exception as e:
+        stored = False
+        logger.warning("春梦唤醒已发送但记录发送时间失败 window_id=%s error=%s", window_id, e)
+    archive_ok = bool((result or {}).get("archive_ok", True))
+    if not archive_ok:
+        logger.warning("春梦唤醒已投递但归档失败 window_id=%s channel=%s", window_id, str((result or {}).get("channel") or ""))
+    return {
+        "ok": ok,
+        "sent": ok,
+        "wake_mode": "spring_dream",
+        "spring_dream": {
+            "triggered": True,
+            "stored": stored,
+            "archive_ok": archive_ok,
+            "theme_id": str(prepared.get("theme_id") or ""),
+            "sleep_source": str(prepared.get("sleep_source") or ""),
+            "count": int(prepared.get("count_after") or 0) if ok else int(prepared.get("count_before") or 0),
+            "max_per_sleep": int(prepared.get("max_per_sleep") or 0),
+        },
+        "channel": str((result or {}).get("channel") or ""),
+        "reply_preview": str((result or {}).get("reply_preview") or ""),
+        "error": str((result or {}).get("error") or ""),
+    }
+
+
 def proactive_tick(target_user_id: int = 0) -> dict:
     """
     执行一次调度 tick。
@@ -1434,6 +1496,13 @@ def proactive_tick(target_user_id: int = 0) -> dict:
         return out
 
     window_id = f"tg_{uid}"
+    spring_dream_result = _try_spring_dream_wakeup(window_id, uid, now_dt, now_iso)
+    if spring_dream_result:
+        out.update(spring_dream_result)
+        if bool(spring_dream_result.get("sent")):
+            r2_store.save_last_proactive_contact_at(now_iso)
+        return out
+
     decision = _ask_du_should_contact(window_id=window_id, hours_since_last=hours, now_dt=now_dt)
     out["du_reason"] = decision.reason
     out["du_action"] = decision.action
